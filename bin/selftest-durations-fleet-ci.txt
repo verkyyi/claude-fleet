@@ -89,7 +89,6 @@
 1.9 fleet-client-update-selftest.sh
 4.7 fleet-client-upload-selftest.sh
 4.3 fleet-client-where-selftest.sh
-1.6 fleet-codex-account-selftest.py
 0.1 fleet-codex-attention-selftest.py
 0.2 fleet-codex-model-selftest.py
 22.0 fleet-codex-recovery-selftest.sh

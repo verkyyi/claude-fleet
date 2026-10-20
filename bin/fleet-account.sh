@@ -857,8 +857,7 @@ account_adapter() {
   export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN
   export CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_MODEL FLEET_MODEL_FALLBACK
   export FLEET_FAILOVER_AGENTS FLEET_ACCOUNT_QUOTA_TTL
-  export FLEET_CODEX_ACCOUNTS FLEET_CODEX_HOME FLEET_CODEX_MODEL FLEET_CODEX_SERVER
-  export FLEET_CODEX_MODEL_LIMIT_IDS FLEET_CODEX_MODEL_FALLBACK
+  export FLEET_CODEX_HOME FLEET_CODEX_MODEL FLEET_CODEX_SERVER
   export FLEET_CODEX_PROFILE FLEET_CRED_CODEX_HOMES
   exec python3 "$BIN/.fleet-account.py" "$@"
 }
@@ -1575,7 +1574,12 @@ EOF
 # tests can exercise dur_secs/acct_ttl/… in isolation.
 if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
 case "${1:-list}" in
-  inventory|choose|profile|check-target|target-auth|bench-codex) account_adapter "$@" ;;
+  inventory|choose|check-target|target-auth|bench-codex) account_adapter "$@" ;;
+  # The Codex launch pin (fleet-codex.sh under FLEET_FAILOVER) is retired (T560):
+  # a Codex session's subscription is the pool's pick, else its home's own login.
+  # Prints nothing — an old caller reads «no profile». compat-1v: 下一批删
+  profile)
+    echo "fleet-account: $1 已不用：订阅由池子挑 · no longer used: the pool picks the subscription" >&2; exit 0 ;;
   # The quota failover planner (.fleet-failover.py) is retired (T546): a full
   # subscription is the pool's to change. compat-1v: 下一批删
   reconcile|failover-status)

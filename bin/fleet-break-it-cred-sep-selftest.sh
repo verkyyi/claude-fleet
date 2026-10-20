@@ -34,8 +34,6 @@
 #                              account), tokenledger agent pruneCreds + TypeCreds (issue #3744)
 #   cred-per-login-proxy-left  bin/fleet-credsep.py machine proxies, bin/fleet-doctor.sh
 #                              credproxy row (issues #3744, #4674)
-#   cred-sep-codex-failover-pin  bin/fleet-codex.sh (_fx_sep: no local profile pin through the
-#                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
 #   cred-central-failover-pin  bin/fleet-claude.sh / bin/fleet-codex.sh (a person's pod routes
 #                              central: no planner, no pin) — session-cred-selftest.sh leg J (#3554)
 #   cred-central-trusted-pod   bin/fleet-cred-proxy.py (Router.leases_nothing: a pod with
@@ -717,25 +715,6 @@ FR
   go_half '^TestLeaseCredsepMandatory' ./hub/api; case $? in 0) gohalf="入口一半：go test TestLeaseCredsepMandatory ok（管理员没隔离也拒发）" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="补隔离失败：任务失败并点名、doctor credsep-logins 与本登录 credsep 都是 FAIL；拒了的过宽限期带 --force 再试，失败的等重试间隔；$gohalf"
-}
-
-# ---- cred-sep-codex-failover-pin (#3713): a separated login's Codex keeps no
-# login of its own — the role account's proxy mints for it — but FLEET_FAILOVER=1
-# (the hub pool's default) made fleet-codex.sh pin a local profile first, and
-# every warm / new Codex of a separated login on a Linux managed machine died «Codex profile needs a
-# verified subscription login: default (no account on the login)». Leg I of
-# session-cred-selftest launches one separated under failover (no pin) and one
-# unseparated (the pin still runs).
-drill_cred_sep_codex_failover_pin() {
-  CAP=60; local t0 out
-  t0=$(now)
-  grep -q '_fx_sep' "$BIN/fleet-codex.sh" || { WHY="fleet-codex.sh no longer skips the pin for a separated login"; return 1; }
-  out=$(bash "$BIN/session-cred-selftest.sh" 2>&1)
-  printf '%s\n' "$out" | grep -q '^PASS I: separated + failover — no local profile pin$' \
-    && printf '%s\n' "$out" | grep -q '^PASS I: unseparated + failover — the pin still runs' \
-    || { WHY="session-cred-selftest leg I: $(printf '%s\n' "$out" | grep -m 3 -E '^FAIL|I:' | tr '\n' '|')"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="隔离登录在 FLEET_FAILOVER=1 下开 Codex：不钉本地 profile、直接经代理铸凭据；未隔离的照旧钉"
 }
 
 # ---- cred-central-failover-pin (#3554): a person's own pod (render.py

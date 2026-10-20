@@ -163,7 +163,7 @@ esac
         self.tmp = self.root / "tmp"
         self.cache = self.tmp / ".claude-dash/fleets/example-project"
         self.cache.mkdir(parents=True)
-        for filename in ("fleet-diskguard.sh", "fleet-quotaguard.sh", "fleet-codex-account.sh"):
+        for filename in ("fleet-diskguard.sh", "fleet-quotaguard.sh"):
             self.script(self.bin / filename, '''#!/bin/bash
 [ ! -f "$FLEET_CONF_DIR/blocked" ]
 ''')

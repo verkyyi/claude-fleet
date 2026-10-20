@@ -189,6 +189,7 @@ def start_identity(payload):
             "remote": os.environ.get("FLEET_CODEX_REMOTE", "")}
     if os.environ.get("FLEET_CODEX_VERSION_WARNING"):
         data["version_warning"] = os.environ["FLEET_CODEX_VERSION_WARNING"]
+    # compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
     if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
         subscription = json.loads(os.environ['FLEET_CODEX_SUBSCRIPTION'])
         data['subscription'] = {key: subscription[key] for key in ('account', 'profile', 'home')}
@@ -281,6 +282,7 @@ def hook():
         if os.environ.get("FLEET_CODEX_VERSION_WARNING"):
             # The launcher's warn-once (issue #1079): an unverified Codex version.
             data["version_warning"] = os.environ["FLEET_CODEX_VERSION_WARNING"]
+        # compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
         if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
             subscription = json.loads(os.environ['FLEET_CODEX_SUBSCRIPTION'])
             data['subscription'] = {key: subscription[key] for key in ('account', 'profile', 'home')}

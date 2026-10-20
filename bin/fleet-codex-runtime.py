@@ -249,6 +249,7 @@ class LaunchWitness:
 def run(argv, prepare=None, tick=None):
     options = argv[:argv.index('--')] if '--' in argv else argv
     if '--no-daemon' in options:
+        # compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
         if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
             raise ValueError('a pinned subscription requires the verified private runtime')
         return subprocess.call(['codex', *argv])

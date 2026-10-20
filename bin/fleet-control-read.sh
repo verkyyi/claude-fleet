@@ -538,9 +538,6 @@ case "$mode" in
       if [ "${3:-}" = new ] && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
         printf 'start: this login has no valid Codex login — run `ccquota codex login` first\n' >&2; exit 4
       fi
-      if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
-        bash "$BIN/fleet-codex-account.sh" gate --session "$sess" >&2 || exit 4
-      fi
     else
       bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4
     fi
@@ -896,13 +893,7 @@ print(json.dumps(d))'
     esac
     case "${rkey#scratch-}" in ''|*[!0-9]*) exit 2 ;; esac
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
-    if [ "${FLEET_AGENT:-claude}" = codex ]; then
-      if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
-        bash "$BIN/fleet-codex-account.sh" gate --session "$sess" >&2 || exit 4
-      fi
-    else
-      bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4
-    fi
+    [ "${FLEET_AGENT:-claude}" = codex ] || { bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4; }
     # The key's own repo when it names one, else the ONE hosted repo whose ledger
     # can resume it (issue #1938: the same walk however many repos the fleet
     # hosts) — two that can is ambiguous, and is refused.

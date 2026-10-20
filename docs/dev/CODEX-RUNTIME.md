@@ -464,90 +464,36 @@ sets native reasoning effort. Explicit caller `-c` values win. Policies reach
 both the private app-server and TUI without editing account configuration.
 `FLEET_CODEX_HOME` optionally pins a pre-existing account home for new workers.
 
-## Account homes and quota recovery
+## Which subscription a Codex session runs on
 
-Register separately logged-in homes; Fleet stores their paths, never copies or
-reads their credentials:
-
-```sh
-bin/fleet-codex-account.sh register personal "$HOME/.codex-personal"
-bin/fleet-codex-account.sh register work "$HOME/.codex-work"
-bin/fleet-codex-account.sh refresh
-bin/fleet-codex-account.sh list
-```
-
-Set `FLEET_CODEX_ACCOUNTS="personal work"` in the fleet configuration to select
-new workers by available quota. `FLEET_CODEX_HOME` pins a home instead; an explicit
-`--codex-home` and recorded recovery identity take precedence. Concurrent workers
-keep separate native homes. Each home needs its own login and repository trust.
-An account label names a home, not an assertion that two logins have different
-subscriptions; register separate accounts to gain separate quota.
-To use one Codex subscription from another OS login, log that login in on its
-own (`ccquota codex login <name> --device-auth`) rather than copying
-`auth.json`: the refresh token rotates on use, so two copies log each other out.
-See [SHARED-MACHINE.md step 2b](SHARED-MACHINE.md#2b-optional-join-the-machines-shared-account-pool).
-
-The collector reads `account/rateLimits/read` from bounded, short-lived native
-app servers, including homes with no live worker. It submits no turns. Cached
-readings expire after `FLEET_CODEX_QUOTA_TTL` (300 seconds). Window lengths and
-reset times come from Codex; the primary window can be weekly. Stale, failed,
-reset-expired, or replaced-auth readings are unknown. A transient read failure
-preserves a still-fresh successful reading. Known available accounts outrank
-unknown ones; unknown never means exhausted. Extra model buckets only affect a
-selection when `FLEET_CODEX_MODEL_LIMIT_IDS` explicitly binds the requested model
-to a native bucket. `normalModelSlug` describes alias presentation and is not
-proof that a bucket meters all uses of that normal model.
-
-`FLEET_CODEX_QUOTA_FLOOR` defaults to 5 percent remaining.
-`FLEET_CODEX_QUOTA_GATE=1` holds fresh launches when every configured
-account is below that floor; without the gate, a fully depleted pool still lets
-an operator launch. This gate is independent of Claude's ccquota gate. Quotas are included-usage headroom; Fleet
-does not redeem reset credits or change billing settings. Either way a pool
-that is all below the floor is said at launch, naming when each account comes
-back (issue #4606).
-
-On a credential-separated login (`credsep.json`, `FLEET_CRED_PROXY=1`) the
-default home (`~/.codex`) holds no credential, so a session started there names
-no account: the credential proxy picks one per session, as it does for Claude
-(issue #4606, issue #2412) — skipping an account at its limit, keeping a session
-on its account while it has room, and on a `usage_limit_reached` 429 marking that
-account out until its reset and sending the same request on one with room.
+A Codex launch never picks among this login's accounts (T560, EPIC T542 C5 —
+the same as Claude since T550). Through this login's credential proxy
+(`FLEET_CRED_PROXY=1`) the pool picks: the default home (`~/.codex`) holds no
+credential on a credential-separated login, so a session started there names no
+account and the proxy picks one per session, as it does for Claude (issue #4606,
+issue #2412) — skipping an account at its limit, keeping a session on its account
+while it has room, and on a `usage_limit_reached` 429 marking that account out
+until its reset and sending the same request on one with room.
 `fleet-cred-proxy.sh standing --provider codex` says which accounts a pick may
 land on and when an exhausted one comes back; when none may, the launch prints
-that line, and `FLEET_CODEX_QUOTA_GATE=1` refuses it. A named home
-(`FLEET_CODEX_HOME=~/.codex-accounts/<L>`) stays pinned to `<L>`. The central
-road skips the same accounts on the hub (its pick by headroom and the cluster
-proxy's 429 rebind).
+that line, and `FLEET_CODEX_QUOTA_GATE=1` refuses it. The central road skips the
+same accounts on the hub (its pick by headroom and the cluster proxy's 429
+rebind). With no proxy the session runs on its home's own login.
 
-To recover an idle worker into a healthy account:
-
-```sh
-bin/fleet-codex-account.sh migrate work --session myfleet --window @12 --dry-run
-bin/fleet-codex-account.sh migrate work --session myfleet --window @12
-```
-
-Omit the label to choose a different home with freshly known available quota.
-The native thread must be idle, and the transfer controller rechecks that before
-exiting it. `fleet-transfer.sh --to codex --codex-home DIR` is also available for
-explicit transfers. The target starts a fresh conversation from the durable
-packet; the source rollout and its manual recovery recipe retain the original
-home. No transcript database or credentials move between accounts.
-
-`FLEET_CODEX_QUOTA_MIGRATE=1` opts into the same protected recovery on collector
-ticks: at most one idle depleted worker per fleet per tick, with a five-minute
-retry delay per launcher. Busy workers, pending questions, typing holds and
-unknown destination quotas prevent cutover. Attempt logs live under
-`$FLEET_CONF_DIR/codex/migrations/`. Both quota automation knobs default off.
-
-## Unified subscription failover
-
-With `FLEET_FAILOVER=1`, the existing account commands use ccquota profiles and
-provider-aware budget readings to pick a subscription when a session STARTS;
-their standalone native quota collector gives way. `ccquota codex run` holds the
-profile's shared login lock for the complete launcher/server/TUI lifetime. A
-running session is no longer moved when it fills: the per-session planner is
-retired (T546, see [Session transfer](SESSION-TRANSFER.md#subscription-failover-retired)) —
-the credential pool changes the subscription.
+`FLEET_CODEX_HOME` pins the fleet's home (`~/.codex-accounts/<L>` stays pinned to
+`<L>` through the proxy); an explicit `--codex-home` and a recorded recovery
+identity take precedence; a handoff that NAMED a ccquota profile
+(`--codex-profile`) runs under `ccquota codex run`, which holds the profile's
+login lock for the whole launcher/server/TUI lifetime. Nothing else pins one: the
+`FLEET_FAILOVER=1` launch pin (`fleet-account.sh profile`), the local pool
+(`fleet-codex-account.sh`, `FLEET_CODEX_ACCOUNTS`), its quota collector, gate and
+idle migration are gone — an old conf that still names them changes nothing
+(`fleet-conf.sh migrate` comments them out). To use one Codex subscription from
+another OS login, log that login in on its own (`ccquota codex login <name>
+--device-auth`) or hand it to the hub's pool (`fleet-account.sh add --provider
+codex`) rather than copying `auth.json`: the refresh token rotates on use, so two
+copies log each other out. `fleet-transfer.sh --to codex --codex-home DIR` is
+still there for an explicit transfer.
 
 ## Operator attention and answers
 
@@ -603,7 +549,7 @@ elicitations. Refusal is opt-in; no native approval or permission grant is sent.
 The fleet's default bypass posture normally produces no command/file approval
 prompt, but a stricter caller configuration can.
 
-## Model changes and per-model fallback
+## Model changes
 
 Use the native settings API to change an idle worker without restarting it:
 
@@ -616,27 +562,10 @@ bin/fleet-codex-model.sh limits --session myfleet --window @12
 The switch binds the exact launcher/thread and refuses active work or pending
 handoffs. It changes only the native model setting, reads it back, and leaves
 account, permissions and conversation intact. Native settings notifications also
-update the attached Codex TUI. This requires the private worker server.
-
-Automatic fallback is opt-in: set `FLEET_CODEX_MODEL_FALLBACK` and an explicit
-`FLEET_CODEX_MODEL_LIMIT_IDS` JSON object, such as
-`{"primary-model":"primary-limit-id","fallback-model":"other-limit-id"}`.
-Use verified IDs from native `limits` output; Fleet never guesses a model from
-an opaque bucket ID, display name or alias metadata. Register the account home
-so its quotas are collected even while it has no live worker.
-
-The collector switches at most one worker per fleet per tick, only when the
-native thread is idle, its current model is known low, its fallback has fresh
-available quota, and the account-wide quota is healthy. A stale `working` hook
-stamp cannot hide a natively idle quota-failed turn. The selected model is read
-from the server before changing it. Missing mappings, unknown/stale/reset-expired
-quotas, a shared bucket, explicit blockers or active handoffs leave it alone.
-
-Only when the latest native turn actually failed with a quota/rate-limit error
-does Fleet queue a continuation after the verified switch. Completed tasks get
-no nudge. The controller rechecks the exact failed turn and source identity;
-queue failures are reported instead of claimed as success. Account-wide limits
-continue through the separate home-migration policy.
+update the attached Codex TUI. This requires the private worker server. `limits`
+prints the thread's native quota buckets (usage only). The quota-triggered
+automatic fallback (`FLEET_CODEX_MODEL_FALLBACK` / `FLEET_CODEX_MODEL_LIMIT_IDS`)
+left with the local account registry (T560).
 
 ## Native plugin migration
 

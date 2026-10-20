@@ -375,6 +375,7 @@ def inspect(pane, socket, pid, sid):
     require(process_cwd(pid) == cwd, "kernel cwd differs from original worktree")
     home = scope.get("CODEX_HOME", "")
     require(os.path.isabs(home) and Path(home).is_dir(), "native home is unavailable")
+    # compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
     subscription = json.loads(scope.get("FLEET_CODEX_SUBSCRIPTION", "{}"))
     proof = {k: native[k] for k in ("pid", "birth", "executable")}
     proof.update(worker_id=context["worker_id"], native_session=sid)

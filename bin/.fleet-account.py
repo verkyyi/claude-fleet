@@ -453,9 +453,6 @@ def codex_proxy_auth(home=''):
     except (OSError, subprocess.SubprocessError):
         return dict(row, verdict='refuse', reason='separated Codex login needs its credential proxy enabled')
     home = home or os.environ.get('FLEET_CODEX_HOME', '')
-    if not home and os.environ.get('FLEET_CODEX_ACCOUNTS'):
-        # That selector uses local profiles before the proxy launcher path.
-        return None
     home = Path(home or Path.home() / '.codex').resolve()
     if not home.is_dir():
         return dict(row, verdict='refuse', reason='Codex home missing: ' + str(home))
@@ -484,7 +481,7 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
     ccquota, multi-account off, an unregistered Codex home on an install without
     the failover planner) and the launch behaves exactly as it always did. The
     Codex side mirrors fleet-codex.sh's own home resolution — FLEET_CODEX_HOME,
-    else a FLEET_CODEX_ACCOUNTS pool pick, else ~/.codex — so the verdict is
+    else ~/.codex (no local pool pick since T560) — so the verdict is
     about the profile the launch would actually run."""
     if agent == 'claude':
         # No pick among this login's accounts (T550): a target is a NAMED one.
@@ -514,25 +511,13 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
         return dict(verdict='refuse' if mirrored else 'unknown', agent=agent, key='', login='unknown',
                     reason='no ccquota Codex profile registry here; the login cannot be verified')
     if not (profile_name or home or account):
-        home = os.environ.get('FLEET_CODEX_HOME', '')
-        if not home and os.environ.get('FLEET_CODEX_ACCOUNTS'):
-            pool = [p for p in rows if allowed_codex(p)]
-            good = [p for p in pool if p['login'] in LOGIN_OK and Path(p['home']).is_dir()]
-            if good:
-                p = good[0]
-                return dict(agent=agent, key='codex/' + p['account'], profile=p['profile'], home=p['home'],
-                            login=p['login'], verdict='ok', reason='')
-            states = ', '.join(sorted(set(p['login'] for p in pool))) or 'none registered'
-            return dict(verdict='refuse', agent=agent, key='', login=states,
-                        reason='no Codex profile in the pool can log in (%s)' % states)
-        home = home or str(Path.home() / '.codex')
+        home = os.environ.get('FLEET_CODEX_HOME', '') or str(Path.home() / '.codex')
     found = [p for p in rows if (not profile_name or p['profile'] == profile_name)
              and (not home or p['home'] == str(Path(home).resolve()))
              and (not account or p['account'] == account)]
     if len(found) != 1:
         what = profile_name or account or home
-        if mirrored or os.environ.get('FLEET_FAILOVER', '0') == '1':
-            # fleet-codex.sh asks profile() for this home under the planner and exits 1
+        if mirrored:
             return dict(verdict='refuse', agent=agent, key='', login='unknown',
                         reason='no registered Codex profile for %s; the launcher would refuse' % what)
         return dict(verdict='unknown', agent=agent, key='', login='unknown',
@@ -708,19 +693,7 @@ def inventory(refresh=False):
         for p in local:
             reading = readings.get(p['account'])
             row = normalize_codex(p, reading, scope='codex')
-            row['model_ok'] = True
-            mapping = json.loads(os.environ.get('FLEET_CODEX_MODEL_LIMIT_IDS') or '{}')
-            if not isinstance(mapping,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v for k,v in mapping.items()):
-                raise ValueError('invalid Codex model limit mapping')
-            model = os.environ.get('FLEET_CODEX_MODEL','')
-            if model and mapping.get(model):
-                model_row = normalize_codex(p,reading,scope=mapping[model])
-                row['model_ok'] = model_row['available'] and model_row['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING','85'))
-                fallback = os.environ.get('FLEET_CODEX_MODEL_FALLBACK','')
-                if not row['model_ok'] and fallback and mapping.get(fallback):
-                    alt = normalize_codex(p,reading,scope=mapping[fallback])
-                    row['model_ok'] = alt['available'] and alt['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING','85'))
-                    if row['model_ok']: row['model'] = fallback
+            row['model_ok'] = True   # no per-model fallback any more (T560)
             row['capable'] = os.environ.get('FLEET_CODEX_SERVER', '1') != '0'
             row['limited_until'] = benches.get(row['key'], {}).get('until', 0)
             if not Path(p['home']).is_dir():
@@ -733,19 +706,9 @@ def inventory(refresh=False):
     return {'accounts': accounts, 'errors': errors, 'observed_at': time.time()}
 
 
-def allowed_codex(row):
-    """Honor the existing home/label pool; ccquota remains the login registry."""
-    labels = os.environ.get('FLEET_CODEX_ACCOUNTS', '').split()
-    if not labels:
-        return True
-    legacy = read(Path(os.environ.get('FLEET_CONF_DIR', str(Path.home()/'.config/claude-fleet'))) / 'codex/accounts.json', {})
-    return row.get('profile') in labels or row.get('home') in [legacy.get(label) for label in labels]
-
-
 def eligible(row, now=None):
     now = time.time() if now is None else now
     return (row.get('available') is True and row.get('login') in LOGIN_OK
-            and (row.get('agent') != 'codex' or allowed_codex(row))
             and row.get('model_ok', True) and row.get('capable', True) and number(row.get('utilization')) is not None
             and row['utilization'] < float(os.environ.get('FLEET_ACCOUNT_CEILING', '85'))
             and row.get('limited_until', 0) <= now and row.get('score') is not None)
@@ -818,8 +781,6 @@ def choose_spawn(data, agent, allowed=('claude', 'codex')):
         if (row['agent'] == agent and row.get('login') in LOGIN_OK
                 and row.get('limited_until',0) <= time.time() and row.get('model_ok',True)
                 and row.get('capable',True)):
-            if row['agent'] == 'codex' and not allowed_codex(row):
-                continue
             return {'state':'ready','target':row,'reason':'quota-unknown-spawn'}
     return result
 
@@ -880,6 +841,7 @@ def verify_codex_runtime(remote, source=None, subscription=None, client=None, re
             rpc.close()
 
 
+# compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
 def read_subscription():
     return json.loads(os.environ.get('FLEET_CODEX_SUBSCRIPTION', '{}'))
 
@@ -928,8 +890,6 @@ def main():
             q.add_argument('--current', default='')
             q.add_argument('--allow', default=os.environ.get('FLEET_FAILOVER_AGENTS', 'claude,codex'))
             q.add_argument('--spawn', action='store_true')
-    q = sub.add_parser('profile')
-    q.add_argument('--name', default=''); q.add_argument('--home', default=''); q.add_argument('--account', default='')
     q = sub.add_parser('check-target'); q.add_argument('path')
     sub.add_parser('logins')
     q = sub.add_parser('target-auth')   # issue #1667: may this target account start an agent?
@@ -940,8 +900,7 @@ def main():
     q.add_argument('labels', nargs='+')
     q = sub.add_parser('bench-codex'); q.add_argument('key'); q.add_argument('until', type=int); q.add_argument('reason')
     a = p.parse_args()
-    if a.command == 'profile': result = profile(a.name, a.home, a.account)
-    elif a.command == 'inventory': result = inventory(a.refresh)
+    if a.command == 'inventory': result = inventory(a.refresh)
     elif a.command == 'choose':
         data = inventory(a.refresh)
         result = choose_spawn(data,a.agent,a.allow.split(',')) if a.spawn else choose(data,a.agent,a.exclude,a.current,a.allow.split(','))
