@@ -2366,7 +2366,7 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     # view onto it (`go`)
     clock = fleet_timing.Clock("session")
     try:
-        p = subprocess.run(argv + ["--origin", "hub"] + named + ["--no-desk", "--print", fleet],
+        p = subprocess.run(argv + ["--origin", "hub"] + named + ["--print", fleet],
                            stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
                            errors="replace", timeout=secs)
         rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()

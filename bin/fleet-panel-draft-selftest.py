@@ -206,7 +206,6 @@ class PanelDraftTests(unittest.TestCase):
                 patch.object(fleet_view, "go", return_value=0):
             self.assertEqual(fleet_view.go_new(None, "test-view", agent="codex", draft="literal #42"), 0)
         self.assertEqual(run.call_count, 1)
-        self.assertNotIn("--warm-only", run.call_args_list[0].args[0])
         for call in run.call_args_list:
             arguments = call.args[0]
             self.assertEqual(arguments[arguments.index("--agent") + 1], "codex")

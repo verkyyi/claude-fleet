@@ -80,7 +80,6 @@ save() {
     [ -d "$d" ] || continue
     mf="${d}restore.map"; [ -f "$mf" ] || continue
     sess=${d%/}; sess=${sess##*/}
-    fleet_is_pool_session "$sess" && continue
     # One pass over the map: REAP / FID rows ride with the WIN row they precede;
     # a finished or panel row drops with them; PIN / DESK / OWID / AGENTDEF rows are kept. The map copy keeps restore.map's
     # own format; the TSV is the readable list.

@@ -161,7 +161,7 @@ eq "D: fleet-alerts.sh's _fa_lw agrees with fleet_lw on live rows" "$(fleet_lw '
 # ---- E. a view session is no close and no fleet ------------------------------------
 FLEET_WINDOW_REAP_FG=1 FLEET_WINDOW_REAP_PASSES=0 bash "$BIN/fleet-window-reap.sh" --hook "$V" >/dev/null 2>&1; rc=$?
 eq "E: fleet-window-reap.sh --hook <view session> is a no-op (exit 0, no sweeper lock)" "0 none" "$rc $([ -d "$FLEET_CONF_DIR/diskguard/window-reap.lock" ] && echo lock || echo none)"
-has "E: fleet-restore.sh skips a view session when it walks list-sessions" "$(grep -A1 'fleet_is_pool_session "\$sess" "\$sock" && continue' "$BIN/fleet-restore.sh")" 'fleet_is_view_session "$sess" && continue'
+has "E: fleet-restore.sh skips a view session when it walks list-sessions" "$(grep -B1 'fleet_is_view_session "\$sess" && continue' "$BIN/fleet-restore.sh")" 'fleet_is_view_session "$sess" && continue'
 has "E: the collector skips a view session when it walks list-sessions" "$(grep -A1 "list-sessions -F '#{session_name}' 2>/dev/null); do" "$BIN/tmux-dash-collect.sh")" 'fleet_is_view_session "$sess" && continue'
 has "E: the window-unlinked hook hands the reaper the unlinking session" "$(grep 'window-unlinked\[72\]' "$ROOT/conf/tmux-attention.conf")" "--hook '#{hook_session_name}'"
 

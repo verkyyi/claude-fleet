@@ -3,8 +3,7 @@
 # #1645 C1). On an isolated tmux server, a sandbox conf dir and a fake Claude with
 # a real peer inbox, pins:
 #   A  @fleet_id: fleet_window_fid mints a canonical UUID once and returns the same
-#      one on every later ask; fleet_win_for_fid finds the window by it; a
-#      warm-pool window carrying it never answers; two windows carrying one →
+#      one on every later ask; fleet_win_for_fid finds the window by it; two windows carrying one →
 #      rc 2 AMBIGUOUS, never a pick; fleet_win_for_addr takes a key or an identity.
 #   B  THE RENAME (the issue's 完成判据 + 上线证据): a child spawned by scratch-5
 #      reports to it — then scratch-5's key changes to an issue's (a
@@ -120,9 +119,7 @@ ok; [ "$(lib fleet_win_for_fid "$PF" "$L")" = "$P" ] || fail "A: fleet_win_for_f
 ok; [ "$(lib fleet_win_for_addr "$PF" "$L")" = "$P" ] && [ "$(lib fleet_win_for_addr scratch-5 "$L")" = "$P" ] \
   || fail "A: fleet_win_for_addr takes an identity or a key"
 POOLW=$(tf new-window -d -P -F '#{window_id}' -n pooled 'while :; do sleep 300; done')
-tf set-window-option -t "$POOLW" @pool 1; tf set-window-option -t "$POOLW" @fleet_id "$PF"
-ok; [ "$(lib fleet_win_for_fid "$PF" "$L")" = "$P" ] || fail "A: a warm-pool window carrying the identity never answers"
-tf set-window-option -u -t "$POOLW" @pool
+tf set-window-option -t "$POOLW" @fleet_id "$PF"
 out=$(lib fleet_win_for_fid "$PF" "$L" 2>"$WORK/err"); rc=$?
 ok; [ "$rc" = 2 ] && [ -z "$out" ] && grep -q ambiguous "$WORK/err" || fail "A: two windows carrying one identity → rc 2, no pick" "rc=$rc out=$out $(cat "$WORK/err")"
 tf kill-window -t "$POOLW"

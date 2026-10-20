@@ -113,9 +113,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   (`bin/fleet-lib.sh`; `fleet_worker_locate` layers the cross-machine answer on
   it): rc 0 + the id, rc 1 NOTFOUND, rc 2 AMBIGUOUS with one stderr line — two
   windows answer, or a bare `issue-<N>` in a 2+ repo fleet (the key must carry
-  the repo slug). A warm-pool window left from before T495 (`@pool`, or parked in
-  `<sess>-pool`) never answers; a stamped `@worktree` is
-  never second-guessed by the pane cwd. `fleet-await.sh`, `fleet-peer-send.sh`,
+  the repo slug). A stamped `@worktree` is never second-guessed by the pane cwd. `fleet-await.sh`, `fleet-peer-send.sh`,
   `fleet-mcp.py`, the children digest, the hub relay and report-parent all
   go through it; never add a bare `@issue` / window-name scan beside it. A
   `<sess>:<idx>` position and a bare window NAME are not addresses:
