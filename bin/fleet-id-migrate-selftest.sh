@@ -207,6 +207,9 @@ ok; [ "$(nres)" = "$((n + 1)) failed" ] || fail "GATE: no @launch, switch on ⇒
 
 # ---- WIRE ----------------------------------------------------------------------------
 ok; grep -q 'fleet-id.sh" switch' "$BIN/fleet-cleanup-daemon.sh" || fail "WIRE: the cleanup tick asks the switch"
+# T604: asked on a login with no ids/ yet too — its guard is not the push's
+awk '/^if / { guard = $0 } /fleet-id.sh" switch/ { print guard }' "$BIN/fleet-cleanup-daemon.sh" | grep -q 'FLEET_CONF_DIR/ids' \
+  && fail "WIRE: the switch is asked only where ids/ exists — a login with no ID never hears it (T604)"
 ok; grep -q 'ID_SWITCH' "$BIN/fleet-task-record.sh" || fail "WIRE: fleet-task-record.sh writes the hub's ID_SWITCH down"
 ok; grep -q 'id_switch_on()' "$BIN/fleet_launch.py" || fail "WIRE: the launch reads the switch"
 
