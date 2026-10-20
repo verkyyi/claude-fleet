@@ -16,6 +16,10 @@
 #   G. a redo, and the ID switch (T622): T542's C5 failed once, its redo merged —
 #      the hub's `children` row still says accepted (only the record read projects
 #      the window ID's result), so the newest baton's projected succeeded is done.
+#   H. T662's shape (T692): the plan's `| 波次 | 成员 | 等谁 | 可并行 |` table — the
+#      成员 cell lists several keys, the 等谁 cell several `X ← Y` pairs — holds
+#      C3 C4 on C2, C6 on C3, C7 on C5, C8 on C1; a table that yields no key and a
+#      section line naming `M1` (not a member key) each warn, in --line too.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -201,6 +205,51 @@ eq "G: redo still open ⇒ T542 C5 not done, C4 waits" "waiting T542 C5:False" "
 redo succeeded
 S=$(tick)
 eq "G: redo succeeded (record read only) ⇒ T542 C5 done, C4 due" "T542 C5:True C4 C7" "$(mem C4 '["outside"]' | python3 -c 'import ast,sys; print(" ".join("%s:%s" % (o["ref"], o["done"]) for o in ast.literal_eval(sys.stdin.read())))') $(due)"
+
+# --- H. T662's wave table (T692) ---------------------------------------------------
+CHARTER='<!-- fleet:epic repo=o/r short=减法 cap=8 -->
+- [ ] **C1** 一
+- [ ] **C2** 二
+- [ ] **C3** 三
+- [ ] **C4** 四
+- [ ] **C5** 五
+- [ ] **C6** 六
+- [ ] **C7** 七
+- [ ] **C8** 八
+## 依赖顺序
+| 波次 | 成员 | 等谁 | 可并行 |
+|---|---|---|---|
+| 1 | C1 C2 C5 | — | 三个并行 |
+| 2 | C3 C4 C7 C8 | C3 ← C2；C4 ← C2；C7 ← C5；C8 ← C1 | 四个并行 |
+| 3 | C6 | C3 | 单独 |
+## C3 · 三
+**依赖** 依赖 M2 · 被依赖 M6
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+state "({'T580': $PARENT})"
+S=$(tick)
+eq "H: wave 1 is due, nothing else" "C1 C2 C5" "$(due)"
+eq "H: C3 C4 wait on C2" "['C2'] ['C2']" "$(mem C3 '["waits_on"]') $(mem C4 '["waits_on"]')"
+eq "H: C6 on C3, C7 on C5, C8 on C1" "['C3'] ['C5'] ['C1']" "$(mem C6 '["waits_on"]') $(mem C7 '["waits_on"]') $(mem C8 '["waits_on"]')"
+eq "H: a table that reads warns nothing" "[]" "$(printf '%s' "$S" | jq_ 'd["warnings"]')"
+CHARTER='<!-- fleet:epic repo=o/r short=减法 cap=8 -->
+- [ ] **C1** 一
+- [ ] **C2** 二
+## 依赖顺序
+| 波次 | 成员 | 等谁 |
+|---|---|---|
+| 1 | M1 | — |
+| 2 | M2 | M1 |
+## C2 · 二
+**依赖** 依赖 M1 · 被依赖 无
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+state "({'T580': $PARENT})"
+S=$(tick)
+eq "H: an unreadable table and an M-line each warn" "2" "$(printf '%s' "$S" | jq_ 'len(d["warnings"])')"
+eq "H: the M-line warning names C2" "True" "$(printf '%s' "$S" | jq_ 'any(w.startswith("C2 ") for w in d["warnings"])')"
+L=$(python3 "$BIN/fleet-epic-tick.py" status --task T580 --line)
+case "$L" in *"⚠ 依赖顺序表有 2 行"*) st_count ;; *) bad "H: --line carries the warning: $L" ;; esac
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }

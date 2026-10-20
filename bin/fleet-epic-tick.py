@@ -64,8 +64,9 @@ Per member, off its batons:
              waits on is blocked
   waiting    unstarted, and a member it depends on has not succeeded yet
   unstarted  no baton yet
-Dependencies are the charter's `## 依赖顺序` table (`| C5 | C4 | |`, `C1–C6` a
-range), else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only a BARE `C<n>` is
+Dependencies are the charter's `## 依赖顺序` table — `| C5 | C4 | |`, or the plan's
+`| 波次 | 成员 | 等谁 | 可并行 |` (every key of the 成员 cell waits on the 等谁 cell, or
+its `C2 ← C1；C7 ← C5` pairs; `C1–C6` a range) — else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only a BARE `C<n>` is
 this batch's member. A key behind a `T<n>` — `T542 C5`, `T542 C7、C8` (the prefix
 holds over the keys that follow it, until other words or a `+` / `;`) — is the
 member of ANOTHER batch: released once that parent's child task titled `C5 · …`
@@ -74,6 +75,9 @@ this batch's graph and never let through by the cycle rule (each member's
 `outside` lists them with `done`, so a released one is said, not dropped); a key behind `#<n>`
 (a GitHub ticket) is the driver's to judge and ignored here. A dependency is
 released by its member's newest baton — by ID, not by which record it was (拍板 6).
+`warnings` says a dependency was written but none could be read (a table that
+gave no key, a section line naming `M1` rather than `C1` — T692): the driver holds
+those members by hand; `--line` ends with them (`⚠ …`).
 `next` is what to dispatch now: retries first, then unstarted core members in
 charter order, as many as the free slots (cap − running). `done` is true when
 every core (and added) member is succeeded or blocked and nothing runs.
@@ -358,26 +362,86 @@ def dep_refs(text, self_ref=""):
 
 
 
+DEP_ARROW = re.compile(r"\s*(?:←|⟵|<-+)\s*")
+DEP_CLAUSE = re.compile(r"\s*(?:[；;]|<br\s*/?>)\s*")
+DEP_NONE = re.compile(r"^[\s—–\-无/·.。*]*$")
+
+
+def dep_table_row(cells, cols, known, put):
+    """One row of the `## 依赖顺序` table into `put(key, cell)`: the member column's
+    keys (`C2 C3 C4`, `C5 · C6（并行）`, a range) each wait on the wait column — or,
+    when that cell carries `X ← Y` pairs (`C2 ← C1；C7 ← C5`), each X on its Y (an X
+    need not be in the member column), and a row member no pair names on nothing."""
+    mc, wc = cols
+    if max(mc, wc) >= len(cells):
+        return False
+    keys = [k for sc, k in dep_refs(cells[mc]) if not sc and k in known]
+    wait = cells[wc]
+    if not keys and not DEP_ARROW.search(wait):
+        return False
+    if DEP_ARROW.search(wait):
+        for k in keys:
+            put(k, "")
+        for clause in DEP_CLAUSE.split(wait):
+            parts = DEP_ARROW.split(clause, 1)
+            if len(parts) == 2:
+                for sc, k in dep_refs(parts[0]):
+                    if not sc and k in known:
+                        put(k, parts[1])
+    else:
+        for k in keys:
+            put(k, wait)
+    return True
+
+
 def parse_deps(text, members, self_ref=""):
-    """({key: [keys it waits on]}, {key: [(T<n>, key) of other batches]}) off the
-    `## 依赖顺序` table, else each section's `**依赖**` line; local ones only the
-    charter's own member keys, never itself; `#<n>` ones dropped."""
+    """({key: [keys it waits on]}, {key: [(T<n>, key) of other batches]}, [warnings])
+    off the `## 依赖顺序` table — `| 成员 | 依赖 |` or the plan's `| 波次 | 成员 | 等谁 |`
+    (columns found by the header; see dep_table_row) — else each section's `**依赖**`
+    line; local ones only the charter's own member keys, never itself; `#<n>` ones
+    dropped. A warning says a dependency was written but none could be read from it
+    (a table that gave nothing, a section line naming no key — `M1`): the driver
+    holds those members by hand (T692)."""
     known = {m["key"] for m in members}
-    deps, on = {}, False
+    deps, on, cols, rows, read = {}, False, None, 0, 0
+
+    def put(k, cell):
+        deps[k] = (deps[k] + "；" + cell) if deps.get(k) and cell else (deps.get(k) or cell)
+
     for line in text.splitlines():
         if HEAD.match(line):
-            on = bool(DEPS_HEAD.match(line))
+            on, cols = bool(DEPS_HEAD.match(line)), None
             continue
         if not on or not line.strip().startswith("|"):
+            if on and not line.strip():
+                cols = None
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) >= 2 and cells[0] in known:
-            deps[cells[0]] = cells[1]
+        if all(re.match(r"^:?-+:?$", c) for c in cells if c):
+            continue
+        if cols is None:
+            mc = next((i for i, c in enumerate(cells) if "成员" in c), None)
+            wc = next((i for i, c in enumerate(cells) if i != mc and re.search(r"等谁|等待", c)),
+                      next((i for i, c in enumerate(cells) if i != mc and re.search(r"(?<!被)依赖", c)), None))
+            if mc is not None or wc is not None:
+                cols = (mc if mc is not None else 0, wc if wc is not None else (mc or 0) + 1)
+                continue
+            cols = (0, 1)   # no header: the old `| C5 | C4 |`
+        rows += 1
+        read += dep_table_row(cells, cols, known, put)
+    warn = []
+    if rows and not read:
+        warn.append("依赖顺序表有 %d 行，一个成员键都没读出来——依赖请驱动手动压住" % rows)
+    unread = []
     for m in members:
         if m["key"] not in deps:
             d = DEP_LINE.search(m.get("detail") or "")
             if d:
                 deps[m["key"]] = d.group(1)
+                if not dep_refs(d.group(1)) and not DEP_NONE.match(d.group(1)):
+                    unread.append(m["key"])
+    if unread:
+        warn.append("%s 的 **依赖** 行写了依赖却没有成员键（只认 C<n> / R<n>）——请驱动手动压住" % "、".join(unread))
     out, ext = {}, {}
     for k, cell in deps.items():
         refs = list(dict.fromkeys(dep_refs(cell, self_ref)))
@@ -387,7 +451,7 @@ def parse_deps(text, members, self_ref=""):
             out[k] = got
         if far:
             ext[k] = far
-    return out, ext
+    return out, ext, warn
 
 
 def outside_done(ext):
@@ -683,7 +747,7 @@ def status(parent_ref, cap):
                                 layer="added", detail=""))
     for m in members:
         judge(m, by_key.get(m["key"], []), rows)
-    deps, ext = parse_deps(text, members, (parent_ref, pcode))
+    deps, ext, dep_warn = parse_deps(text, members, (parent_ref, pcode))
     ext_done, names = outside_done(ext)
     hold_on_deps(members, deps, ext, ext_done, names)
     for m in members:   # another batch's members it depends on, and whether each merged
@@ -721,7 +785,7 @@ def status(parent_ref, cap):
                 title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,
                 members=[{k: v for k, v in m.items() if k != "detail"} for m in members],
-                next=nxt, no_repo=norepo,
+                next=nxt, no_repo=norepo, warnings=dep_warn,
                 stalled=[dict(key=m["key"], task=m.get("task", ""), code=m.get("code", ""), short=m.get("short", ""),
                               **m["stall"]) for m in stalled],
                 last_tick=last, last_tick_src=("id" if fam.get("progress") else "record") if last else "",
@@ -743,6 +807,8 @@ def line(s):
                                     for n in s["next"])
     if s["no_repo"]:
         out += " · 没写仓库 " + " ".join(s["no_repo"])
+    for w in s.get("warnings") or []:
+        out += " · ⚠ " + w
     if s["done"]:
         out += " · 核心空了，该写报告" if s.get("report") in ("", "pending") else " · 报告 " + s["report"]
     return out

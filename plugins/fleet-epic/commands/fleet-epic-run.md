@@ -76,7 +76,9 @@ that dies at the boundary. Therefore:
   `YRV3 C5` is ANOTHER batch's member (the parent whose code is YRV3, its child
   `C5 · …` — the charter may write it `YRV3 C5` or the old `T542 C5`; either way
   the answer names it by the code), released once it succeeded and never by the
-  cycle rule; `next` is exactly what to dispatch now (retries first, then
+  cycle rule; `warnings` (the line's `⚠ …`) = a dependency the charter wrote but
+  the tick could not read (a table with no member key, a `**依赖**` line naming
+  `M1` rather than `C1`) — hold those members by hand before dispatching; `next` is exactly what to dispatch now (retries first, then
   unstarted core members, as many as the free slots), each with its `title`,
   `repo`, `agent`, the `body` its session gets and, for a retry, `respawn` — the
   command that restarts it on its own record (below; a pre-switch record with no
