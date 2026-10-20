@@ -710,17 +710,17 @@ printed (`FLEET_LOGIN_OP_ID=<op>`) brings the login back on the source; delete t
 
 ## The door
 
-(issue #3549, EPIC #3500 C4) The cluster has ONE public way in for everyone whose
-home is their own pod: the door. A person connects as always —
-`ssh <login>@<name>.<zone> -p 22022`, their phone or their computer — and
-the door hands them to their own pod. `render.py --door` renders it:
+(issue #3549, EPIC #3500 C4; the jump alone since T647) The cluster has ONE
+public way in for everyone whose home is their own pod: the door. A person's
+`fleet connect` goes through it to their own pod — the door only lets the tunnel
+through, the login happens on the pod. `render.py --door` renders it:
 
 | Object | What |
 |---|---|
 | `Service fleet-door` | `LoadBalancer`, 22022 alone, `externalTrafficPolicy: Local` (the client's own address for `PerSourcePenalties` and the record) |
 | `Deployment fleet-door` | 2 replicas of the image with `FLEET_NODE_PROFILE=door`: no disk, no login, no node program, no Kubernetes token — the supervisor with its entry child in **door mode** |
 
-Door mode is the entry port (#3070) with three changes
+Door mode is the entry port (#3070) with these changes
 (`fleet-node-supervisor.py`, `FLEET_DOOR=1`):
 
 - its table is `GET /v1/node/entry-routes` — every person whose home is a pod
@@ -729,44 +729,34 @@ Door mode is the entry port (#3070) with three changes
   no setting). A login two pods claim is in neither row: the door never guesses.
   The door pulls it every `FLEET_ENTRY_EVERY` (15 s in door mode) — it has no node
   program to hear the push;
+- ONE account, the jump: the door image carries `fleet-jump` (uid 498, `*`,
+  `/usr/sbin/nologin`; never a useradd at run time), and it is the config's whole
+  `AllowUsers`. The door makes no account per person, writes no `keys/<login>`
+  and holds no key into any pod (T647 removed them with `bin/fleet-door.sh`);
 - an empty table (nobody's home is a pod yet — the first deploy) still listens:
-  its probes are tcp on 22022, so the config stays with `AllowUsers fleet-door-closed`,
-  a name no hub login can carry, and nobody gets in until the first route comes
-  (issue #3554, BREAK-IT `door-empty-table`);
-- each login is a **door account** it makes itself (no home, shell `/bin/bash`,
-  group `fleet-door`, GECOS `fleet-door`); a login the machine already had is never
-  taken;
-- its `ForceCommand` is `bin/fleet-door.sh`: it reads the ONE Service the table
-  names for the login sshd let in and runs
-  `ssh <login>@u-<nonce>.<ns>.svc.cluster.local` with the door's own key — the
-  command, sftp and a terminal go on as they came, the person's key fingerprint,
-  label and address ride along (`FLEET_DOOR_*`). Nothing the person sends picks
-  the pod, and the door forwards nothing (`DisableForwarding yes`).
+  its probes are tcp on 22022 and the jump account is always there, so the config
+  stays and nobody gets through until the first route comes (issue #3554); a door
+  without the jump account (an older image) writes no config at all;
+- its sshd ends with a `Match User fleet-jump` block: no session (`ForceCommand
+  /usr/bin/false`, `PermitTTY no`), local forwarding only, and
+  `AuthorizedKeysCommand bin/fleet-door-keys.py` (as `nobody`) answering each key
+  in the door's book with
+  `restrict,port-forwarding,permitopen="u-<nonce>.<ns>.svc.cluster.local:22"` — a
+  tunnel to its owner's own pod and nowhere else (a person's second pod, #3562:
+  one permitopen each). The keys it reads are `entry/jump-keys/<login>` (0644,
+  every routed login's) and `state.json`'s `jump` section; the arrival is logged
+  as kind `jump` with the person's login and the pod.
 
-A user pod's sshd takes the door's key alone (`05-fleet-door.conf`,
-`fleet-node-linux.py`): `AuthorizedKeysFile none`, `AuthorizedKeysCommand /bin/cat
-/run/fleet-door/door.pub` (the Secret `fleet-door-pub`, read at each login — a new
-key works the moment the Secret changes, no pod restarts), no CA, no forwarding,
-and every arrival is `bin/fleet-entry.sh` — no command on a terminal is the 看台,
-as on a home's entry port. The network rules let only the door reach a pod's 22
-(`deploy/k8s/fleet-workers/networkpolicy.yaml`: `user-in`, `door-in`, `door-out`).
-
-**The jump road** (issue #4193, design #4181 A2) — beside the above until the old
-road is removed. The door image carries ONE fixed account, `fleet-jump` (uid 498,
-`*`, `/usr/sbin/nologin`; never a useradd at run time), and its sshd ends with a
-`Match User fleet-jump` block: no session (`ForceCommand /usr/bin/false`,
-`PermitTTY no`), local forwarding only, and `AuthorizedKeysCommand
-bin/fleet-door-keys.py` (as `nobody`) answering each key in the door's book with
-`restrict,port-forwarding,permitopen="u-<nonce>.<ns>.svc.cluster.local:22"` — a
-tunnel to its owner's own pod and nowhere else. The keys it reads are
-`entry/jump-keys/<login>` (0644, every routed login's, account or none) and
-`state.json`'s `jump` section; the arrival is logged as kind `jump` with the
-person's login and the pod. The login itself happens once, on the pod's sshd,
-with the person's own key: `fleet-node-linux.py`'s `PodKeys` pulls
-`/v1/node/entry-keys?jump=1` with the pod's own token every minute (the in-cluster
-hub when `FLEET_HUB_INTERNAL_URL` is set) into `ssh/authorized_keys` on the node
-disk, and `pod_sshd_text` takes on every address that file, a certificate of the
-hub's user CA naming the login, and — until the old road goes — the door's key.
+The login itself happens once, on the pod's sshd, with the person's own key:
+`fleet-node-linux.py`'s `PodKeys` pulls `/v1/node/entry-keys?jump=1` with the
+pod's own token every minute (the in-cluster hub when `FLEET_HUB_INTERNAL_URL` is
+set) into `ssh/authorized_keys` on the node disk, and `pod_sshd_text` takes on
+every address that file and a certificate of the hub's user CA naming the login
+(the relay's, #4149) — no door key, no `FLEET_DOOR_*` environment; every arrival
+is `bin/fleet-entry.sh` (no command on a terminal is the 看台), whose record sees
+the person's own key through `ExposeAuthInfo`. The network rules let only the door
+reach a pod's 22 (`deploy/k8s/fleet-workers/networkpolicy.yaml`: `user-in`,
+`door-in`, `door-out`).
 
 The hub offers it only while both said so lately (`jumpFresh`, 10 min): the door's
 pull carries `?jump=1&ns=<ns>` once its jump block is in its config, the pod's
@@ -776,11 +766,11 @@ and `fleet connect` runs `ssh -o ProxyCommand='ssh -W %h:%p -l fleet-jump <door>
 <login>@<target>` — the door's key under `fleet-<pod>`, the pod's under
 `fleet-<pod>-pod`, never TOFU. It is a pod's ONLY entry route (T643): until both
 said so the pod gets none (the hub logs `door jump to … not offered: <why>`), and
-the console shows no `ssh://` code for a pod home — the door's per-login road is
-no longer handed out (its accounts go with the door's half, C6). The console's 设备 shows the copyable line for a phone's Jump host
-or a bare ssh (`EntryDoor.jump`): `ssh -J fleet-jump@<name>.<zone>:22022
-<login>@u-<nonce>.<ns>.svc.cluster.local`. BREAK-IT `door-jump-other-pod` ·
-`door-jump-shell` · `door-jump-unlisted` · `pod-foreign-key`.
+the console shows no `ssh://` code for a pod home. The console's 设备 shows the
+copyable line for a phone's Jump host or a bare ssh (`EntryDoor.jump`):
+`ssh -J fleet-jump@<name>.<zone>:22022 <login>@u-<nonce>.<ns>.svc.cluster.local`.
+BREAK-IT `door-wrong-pod` · `door-jump-other-pod` · `door-jump-shell` ·
+`door-jump-unlisted` · `pod-foreign-key` drill it on real sshds.
 
 DNS: a person whose home is a pod gets the door's address — the hub's entry-dns
 loop points `<name>.cf` at the first door the outside can reach (`entry reach`,
@@ -792,24 +782,33 @@ Setting it up (once):
 ```sh
 NS=fleet-workers
 ssh-keygen -q -t ed25519 -N '' -C fleet-door-host -f door-host
-ssh-keygen -q -t ed25519 -N '' -C fleet-door -f door-key
 # the door's node token: a join code for a machine named fleet-door, redeemed as root
 TOKEN=$(curl -fsS -X POST "$HUB/v1/node/join" -H 'Content-Type: application/json' \
   -d '{"code":"<码>","hostname":"fleet-door","os_user":"root"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
 kubectl -n $NS create secret generic fleet-door --from-file=host_ed25519_key=door-host \
-  --from-file=id_ed25519=door-key --from-literal=token="$TOKEN"
-kubectl -n $NS create secret generic fleet-door-pub --from-file=door.pub=door-key.pub
-unset TOKEN; rm -f door-host door-key       # the Secret is the only copy
+  --from-literal=token="$TOKEN"
+unset TOKEN; rm -f door-host                # the Secret is the only copy
 # the hub: this machine is the door
 curl -fsS -X PUT "$HUB/v1/fleet/settings" -H "Authorization: Bearer $ADMIN" \
   -d '{"key":"fleet.door","value":"fleet-door"}'
 python3 extras/managed-node/render.py --door --image "$IMAGE" --hub "$HUB" | kubectl apply -f -
 ```
 
-Changing the door's key to the pods: a new pair, both Secrets updated (`kubectl
-create secret … --dry-run=client -o yaml | kubectl apply -f -`), then
-`kubectl -n $NS rollout restart deploy/fleet-door` — every pod takes only the new
-key from its next login. BREAK-IT `door-wrong-pod` drills the door on a real sshd.
+**Removing the old road from a cluster that still has it** (T647 — in this order,
+the door first): roll the door onto an image with this release
+(`kubectl -n $NS set image deploy/fleet-door door=<image>` or the render above),
+and check it holds the jump alone —
+`kubectl -n $NS exec deploy/fleet-door -- sshd -T -f /var/db/fleet-node/entry/sshd_config | grep -iE 'allowusers|acceptenv'`
+names `fleet-jump` and no `FLEET_DOOR_*`. Only then take the door's key to the
+pods out of its Secret and delete the pods' copy:
+
+```sh
+kubectl -n $NS patch secret fleet-door --type json -p '[{"op":"remove","path":"/data/id_ed25519"}]'
+kubectl -n $NS delete secret fleet-door-pub   # the pods mounted it optional: nothing restarts
+```
+
+A pod re-rendered from this release no longer mounts `fleet-door-pub` at all; one
+rendered before keeps an empty optional mount until its next render.
 
 ## Cluster permissions
 
@@ -983,7 +982,7 @@ they already hold one (`tokenledger/hub/api/fleet_user_pod_split.go`):
 |---|---|
 | Made | at the spare pass, once their first pod's login is ready: a pod of their own (the 「现开」 road) under the same principal and the **same login**, a new `u-<nonce>`, its `fleet_cluster_pods` row's `split` = the list; counted in `fleet.node_user_cap.<cluster>`. One second pod per person per cluster; a changed list moves the row's |
 | Placement | a start for a listed repo goes to the second pod when it can take it (else wherever it would have gone — never refused for this); auto never sends anything else there (「这个 pod 只开 …」 in the reason); naming the pod still asks it |
-| The door | each listed repo is one more name, `<login>.<repo>` (the repo's name lower-cased to `a-z 0-9 -`, the whole ≤ 32): routed to the second pod and logged in there as `<login>` (the route's `pod_login`, `bin/fleet-door.sh`). The person's own name stays their first pod; a name two rows claim (two repos of one name) routes neither |
+| The door | each listed repo is one more name, `<login>.<repo>` (the repo's name lower-cased to `a-z 0-9 -`, the whole ≤ 32): routed to the second pod and logged in there as `<login>` (the route's `pod_login`; the jump's permitopen names that pod). The person's own name stays their first pod; a name two rows claim (two repos of one name) routes neither |
 | The list | both pods are the same person's accounts, so the panel and every list show both pods' sessions — nothing to pick |
 
 The person adds the repos to the second pod as on any machine (添加仓库…). An

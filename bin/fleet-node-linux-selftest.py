@@ -724,10 +724,12 @@ class LinuxNode(unittest.TestCase):
                          'ForceCommand /bin/bash /var/db/fleet-node/runtime/current/bin/fleet-entry.sh'):
                 self.assertIn(want + '\n', sshd)
             self.assertNotIn('Include', sshd)
-            # one rule on every address (claude-fleet#4193): the person's keys + the door's
-            # through a command that never fails, the hub's user CA — no Match block
-            self.assertIn('AuthorizedKeysCommand /bin/sh -c "/bin/cat /run/fleet-door/door.pub '
+            # one rule on every address (claude-fleet#4193): the person's own keys through
+            # a command that never fails, the hub's user CA — no Match block, no door key (T647)
+            self.assertIn('AuthorizedKeysCommand /bin/sh -c "/bin/cat '
                           '/var/db/fleet-node/ssh/authorized_keys 2>/dev/null; exit 0"\n', sshd)
+            self.assertNotIn('fleet-door', sshd)
+            self.assertNotIn('FLEET_DOOR', sshd)
             self.assertIn('TrustedUserCAKeys /var/db/fleet-node/ssh/fleet_user_ca.pub\nPermitUserRC', sshd)
             self.assertNotIn('Match', sshd)
             for login, uid in (('root', '10002'), ('sshd', '10002'), ('fleetu7', '0'), ('fleetu7', '100'),
@@ -867,9 +869,10 @@ class LinuxNode(unittest.TestCase):
     def test_door_template(self):
         """#3549 (EPIC #3500 C4): the cluster's one door — ONE LoadBalancer
         (22022 alone, externalTrafficPolicy Local) in front of a 2-replica
-        Deployment in door mode, its Secret shared (host key, key to the pods,
-        token); no disk, no Kubernetes token. A user pod mounts the key's public
-        half and its sshd takes it alone; pod 22 is open to the door only."""
+        Deployment in door mode, its Secret shared (host key, token); no disk,
+        no Kubernetes token. Since T647 the door holds no key into any pod: a
+        user pod mounts nothing of the door's and its sshd takes the person's own
+        keys; pod 22 is open to the door only."""
         img = IMG
         door = [sys.executable, RENDER, '--door']
         items = rendered(door + ['--image', img, '--hub', 'https://hub.example'])
@@ -901,23 +904,20 @@ class LinuxNode(unittest.TestCase):
         for bad in (['--image', 'example/image:latest', '--hub', 'https://hub.example'],
                     ['--image', img, '--hub', 'http://hub.example'], ['--image', img, '--hub', 'https://h', '--door-replicas', '9']):
             self.assertNotEqual(subprocess.run(door + bad, capture_output=True).returncode, 0, bad)
-        # a user pod: the door's public key mounted, read at each login
+        # a user pod (T647): nothing of the door's mounted, no door Secret
         upod = rendered(NODE + ['--user-pod', 'u-drill1', '--login', 'drill1', '--uid', '10002',
                               '--cred-central', CENTRAL])[-1]
         spec = upod['spec']['template']['spec']
-        self.assertIn({'name': 'door', 'secret': {'secretName': 'fleet-door-pub', 'optional': True, 'defaultMode': 0o444}},
-                      spec['volumes'])
-        # the door's key is sshd's (#3757: its own container), never the login's
-        self.assertIn({'name': 'door', 'mountPath': '/run/fleet-door', 'readOnly': True},
-                      spec['containers'][1]['volumeMounts'])
-        self.assertNotIn('/run/fleet-door', json.dumps(spec['containers'][0]['volumeMounts']))
+        self.assertNotIn('fleet-door', json.dumps(spec))
         lin = module('fleet-node-linux')
+        self.assertFalse(hasattr(lin, 'DOOR_' + 'PUB'))
         text = lin.user_pod_sshd_text('/rt')
-        for want in ('AuthorizedKeysFile none', 'AuthorizedKeysCommand /bin/cat /run/fleet-door/door.pub',
+        for want in ('AuthorizedKeysFile none',
+                     'AuthorizedKeysCommand /bin/sh -c "/bin/cat %s 2>/dev/null; exit 0"' % lin.POD_KEYS,
                      'AuthorizedKeysCommandUser nobody', 'TrustedUserCAKeys none', 'DisableForwarding yes',
-                     'ForceCommand /bin/bash /rt/current/bin/fleet-entry.sh',
-                     'AcceptEnv LANG LC_* FLEET_DOOR_FP FLEET_DOOR_SRC FLEET_DOOR_NAME'):
+                     'ForceCommand /bin/bash /rt/current/bin/fleet-entry.sh', 'AcceptEnv LANG LC_*'):
             self.assertIn(want + '\n', text)
+        self.assertNotIn('FLEET_DOOR', text)
         # 05- sorts before every other drop-in (the CA's is 100-): sshd keeps the first value
         self.assertLess(Path(lin.DOOR_SSHD_CONF).name, '100-fleet-user-ca.conf')
         with tempfile.TemporaryDirectory() as d:
@@ -993,15 +993,27 @@ class LinuxNode(unittest.TestCase):
             {'login': 'bob', 'service': 'u-aaaa1'}, {'login': 'bob', 'service': 'u-bbbb2'},
             {'login': 'carol', 'service': 'fleet-linux'}, {'login': 'root;x', 'service': 'u-cccc3'}]})
         self.assertEqual(routes, {'dana': 'u-k3x9q2'})
+        # T647: the door makes no account — its one road is the jump account
+        for gone in ('door_account', 'door_eligible', 'door_unlock', 'door_secrets', 'DOOR_NOBODY'):
+            self.assertFalse(hasattr(s, gone), gone)
         with tempfile.TemporaryDirectory() as d:
-            pw = os.path.join(d, 'passwd')
-            Path(pw).write_text(json.dumps({'other': {'uid': 1001, 'gid': 20, 'home': '/home/other'}}))
-            with patch.dict(os.environ, {'FLEET_NODE_TEST': '1', 'FLEET_NODE_PASSWD': pw}):
-                v = s.door_eligible(['dana', 'other', 'root', 'dave'], {'dana': 'u-k3x9q2', 'other': 'u-oooo1'})
-            self.assertIsNone(v['dana'])
-            self.assertIn('not a door account', v['other'])
-            self.assertTrue(v['root'] and v['dave'])
-            self.assertEqual(json.loads(Path(pw).read_text())['dana']['gecos'], 'fleet-door')
+            p = s.Paths()
+            p.runtime, p.state = d, d
+            ep = s.EntryPaths(p)
+            with patch.object(s, 'door_on', return_value=True), \
+                    patch.object(s, 'door_jump', return_value=('fleet-jump', '/usr/bin/python3', '/rt/k.py')):
+                cfg = s.entry_config(ep, 22022, ['fleet-jump'], p)
+            lines = cfg.splitlines()
+            self.assertIn('AllowUsers fleet-jump', lines)
+            self.assertEqual([l for l in lines if l.startswith('AllowUsers')], ['AllowUsers fleet-jump'])
+            for want in ('AuthorizedKeysFile none', 'ForceCommand /usr/bin/false', 'Match User fleet-jump',
+                         'DisableForwarding yes'):
+                self.assertIn(want, lines)
+            for gone in ('door.sh', 'FLEET_DOOR_', 'AcceptEnv', '/keys/%u', 'SetEnv'):
+                self.assertNotIn(gone, cfg)
+            # no jump account ⇒ no config: nobody is let in some other way
+            with patch.object(s, 'door_on', return_value=True), patch.object(s, 'door_jump', return_value=None):
+                self.assertIsNone(s.entry_config(ep, 22022, [], p))
 
     def test_door_second_pod_route(self):
         """#3562: a person's second pod is <login>.<repo> on the door, logged in

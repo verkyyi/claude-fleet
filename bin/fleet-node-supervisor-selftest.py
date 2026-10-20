@@ -70,18 +70,15 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      连得上 / 连不上 + why (carrier NAT, the port to forward to which LAN address); a
      router that never answers or refuses costs seconds, never the report; the hub
      away keeps the last verdict; off / nobody's home = no row
-  W  door-account-locked (#4161): a door account (new, or one an older door made)
-     leaves shadow `*`, never useradd's `!` — the door's `UsePAM no` sshd refuses a
-     locked account even with its key; a machine login is never touched
   Y  the idle beat (#4359, EPIC #4354 共同约定 1 · 4): with every login's published
      working state idle for FLEET_NODE_IDLE_HOLD a task under the cap runs on its
      stretched clock (×3, at least 60 s; a table's idle_every; memguard only while
      memory is calm; `"idle": false`, a 300 s task unchanged); a login working, a
      stale row, a state change since the snapshot or a CI job puts every clock
      back at once — a fake clock, no wait; status's `idle` line says which
-  X  door-strictmodes (#4161): the state dir (the door's 0777 emptyDir) loses its
-     group / other write on every entry pass — `StrictModes yes` refuses a key
-     under a writable dir; never widened, a sticky dir left
+  X  the entry's state dir (#4161) loses its group / other write on every entry
+     pass — `StrictModes yes` refuses a key under a writable dir (an emptyDir is
+     0777); never widened, a sticky dir left
 """
 import importlib.util
 import json
@@ -3803,10 +3800,10 @@ class Y_IdleBeat(unittest.TestCase):
         self.assertNotIn("idle", self.sup.state)
 
 
-class X_DoorStrictModes(unittest.TestCase):
-    """door-strictmodes (#4161): the door's state dir is an emptyDir, which
-    Kubernetes mounts 0777; with `StrictModes yes` sshd refuses every key under
-    it. Each pass takes its group / other write away; the keys dir stays 0755."""
+class X_EntryStateDir(unittest.TestCase):
+    """#4161: an entry's state dir mounted as an emptyDir is 0777; with
+    `StrictModes yes` sshd refuses every key under it. Each pass takes its group
+    / other write away; the keys dir stays 0755."""
 
     def test_world_writable_state_dir_is_closed(self):
         d = tempfile.mkdtemp()
@@ -3832,81 +3829,6 @@ class X_DoorStrictModes(unittest.TestCase):
         i = src.index("def entry_converge(")
         self.assertIn("_entry_state_dir(paths.state)", src[i:i + 1200],
                       "entry_converge no longer closes the state dir before the keys")
-
-
-class W_DoorAccountLocked(unittest.TestCase):
-    """door-account-locked (#4161): useradd leaves a door account's shadow field
-    `!` (locked), and the door's `UsePAM no` sshd then refuses it even with its
-    key — 0 Accepted publickey. A new door account and an existing one alike
-    leave `*`; an account already `*` is not touched; a login the door did not
-    make is never touched."""
-
-    def setUp(self):
-        self.d = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.d, True)
-        self.shadow = os.path.join(self.d, "shadow")
-        self.users = {}
-        self.calls = []
-        env = {k: v for k, v in os.environ.items() if k not in ("FLEET_NODE_TEST", "FLEET_NODE_PASSWD")}
-        for p in (mock.patch.dict(os.environ, env, clear=True),
-                  mock.patch.object(fns, "DOOR_SHADOW", self.shadow),
-                  mock.patch.object(fns.pwd, "getpwnam", self.getpwnam),
-                  mock.patch.object(fns.subprocess, "run", self.run_)):
-            p.start()
-            self.addCleanup(p.stop)
-
-    def write(self, rows):
-        put(self.shadow, "".join("%s:%s:19000:0:99999:7:::\n" % kv for kv in rows.items()))
-
-    def field(self, login):
-        return fns.door_shadow(login)
-
-    def getpwnam(self, login):
-        if login not in self.users:
-            raise KeyError(login)
-        return mock.Mock(pw_gecos=self.users[login])
-
-    def run_(self, argv, **kw):
-        self.calls.append(list(argv))
-        rows = {}
-        with open(self.shadow) as f:
-            for line in f:
-                parts = line.split(":")
-                rows[parts[0]] = parts[1]
-        if argv[0] == "useradd":
-            self.users[argv[-1]] = fns.DOOR_GECOS
-            rows[argv[-1]] = "!"            # what Debian's useradd writes
-        elif argv[0] == "usermod":
-            rows[argv[-1]] = argv[argv.index("--password") + 1]
-        self.write(rows)
-        return mock.Mock(returncode=0, stdout="")
-
-    def test_new_door_account_is_not_locked(self):
-        self.write({"root": "*"})
-        self.assertIsNone(fns.door_account("24acme"))
-        self.assertEqual(self.field("24acme"), "*")
-
-    def test_existing_locked_door_account_heals(self):
-        self.users["drillcn"] = fns.DOOR_GECOS
-        self.write({"drillcn": "!"})
-        self.assertIsNone(fns.door_account("drillcn"))
-        self.assertEqual(self.field("drillcn"), "*")
-        self.calls.clear()
-        self.assertIsNone(fns.door_account("drillcn"))   # already `*`: nothing to change
-        self.assertFalse(any(c[0] == "usermod" for c in self.calls))
-
-    def test_machine_login_untouched(self):
-        self.users["alice"] = "Alice"
-        self.write({"alice": "!"})
-        self.assertIsNotNone(fns.door_account("alice"))
-        self.assertEqual(self.field("alice"), "!")
-        self.assertEqual(self.calls, [])
-
-    def test_usermod_failure_is_named(self):
-        self.users["bob"] = fns.DOOR_GECOS
-        self.write({"bob": "!"})
-        with mock.patch.object(fns.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="no shadow")):
-            self.assertEqual(fns.door_account("bob"), "usermod: no shadow")
 
 
 if __name__ == "__main__":

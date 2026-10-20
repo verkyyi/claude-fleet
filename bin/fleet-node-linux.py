@@ -1352,17 +1352,14 @@ def pod_sshd_text(login, runtime='/var/db/fleet-node/runtime'):
     key made at each start, no PAM. Who it takes (claude-fleet#4193, design
     #4181 A2), one rule on every address: the person's own keys (POD_KEYS, the
     hub's entry list for this pod), a certificate of the hub's user CA naming
-    the login (the relay's, #4149, and a jump's), and — until the door's old
-    road is gone — the door's key. The keys come through one command that never
-    fails: a list not pulled yet leaves the door's key alone, as before."""
-    keys = ('AuthorizedKeysCommand /bin/sh -c "/bin/cat %s %s 2>/dev/null; exit 0"' % (DOOR_PUB, POD_KEYS))
+    the login (the relay's, #4149, and a jump's). No door key: the door logs
+    in nowhere (T647). The keys come through one command that never fails: a
+    list not pulled yet is no key at all."""
     rules = []
     for l in user_pod_sshd_text(runtime).splitlines():
         if l.startswith('#'):
             continue
-        if l.startswith('AuthorizedKeysCommand '):
-            l = keys
-        elif l == 'TrustedUserCAKeys none':
+        if l == 'TrustedUserCAKeys none':
             l = 'TrustedUserCAKeys ' + POD_USER_CA
         rules.append(l)
     return ''.join(l + '\n' for l in [
@@ -1415,29 +1412,28 @@ def pod_etc(a):
     return 0
 
 
-# One person's pod (#3549, EPIC #3500 C4): its sshd takes the cluster door's key
-# alone — read at each login from the mounted Secret (so a new door key works the
-# moment the Secret changes), never ~/.ssh or the hub's CA — and every arrival is
-# bin/fleet-entry.sh, as a home's entry port. 05- sorts before every other drop-in
-# (sshd keeps the first value it reads; the CA's is 100-).
+# One person's pod (#3549, EPIC #3500 C4): its sshd takes the person's own keys
+# (POD_KEYS, claude-fleet#4193 — the door holds none of its own since T647), never
+# ~/.ssh — and every arrival is bin/fleet-entry.sh, as a home's entry port. 05-
+# sorts before every other drop-in (sshd keeps the first value it reads; the CA's
+# is 100-).
 DOOR_SSHD_CONF = '/etc/ssh/sshd_config.d/05-fleet-door.conf'
-DOOR_PUB = '/run/fleet-door/door.pub'
 
 
 def user_pod_sshd_text(runtime='/var/db/fleet-node/runtime'):
     return ''.join(l + '\n' for l in [
-        '# claude-fleet user pod (issue #3549): only the cluster door comes in here',
+        '# claude-fleet user pod (issue #3549): the person\'s own keys, through the door\'s jump',
         'PubkeyAuthentication yes',
         'AuthenticationMethods publickey',
         'AuthorizedKeysFile none',
-        'AuthorizedKeysCommand /bin/cat ' + DOOR_PUB,
+        'AuthorizedKeysCommand /bin/sh -c "/bin/cat %s 2>/dev/null; exit 0"' % POD_KEYS,
         'AuthorizedKeysCommandUser nobody',
         'AuthorizedPrincipalsFile none',
         'TrustedUserCAKeys none',
         'PermitUserRC no',
         'PermitUserEnvironment no',
         'ExposeAuthInfo yes',
-        'AcceptEnv LANG LC_* FLEET_DOOR_FP FLEET_DOOR_SRC FLEET_DOOR_NAME',
+        'AcceptEnv LANG LC_*',
         'SetEnv FLEET_USER_POD=1',
         'DisableForwarding yes',
         'PermitTunnel no',

@@ -119,7 +119,7 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 	}
 	var own []string
 	if pod && door != m.Hostname {
-		// the door ends the ssh itself (fleet-door.sh): the key a person's
+		// the person's ssh meets the door first (its jump hop): the key their
 		// ssh meets under fleet-<pod> is the door's, never the pod's own —
 		// whatever that pod's image carried (#4127). None known ⇒ none
 		// listed: ssh asks once rather than refuse on a wrong one.

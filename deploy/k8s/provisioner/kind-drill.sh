@@ -16,7 +16,7 @@
 #   root-in-user-pod          a person's pod running: `id` and `ps` in its fleet
 #                             container are the login alone, in sshd root alone
 #                             until a login, then root + the login; /etc/passwd
-#                             read-only; a real ssh login with the door's key
+#                             read-only; a real ssh login with the person's own key
 #                             lands as the login, root's is refused (#3757)
 #   job-sees-keys             a test and an untrusted Job (#3552): no token, no
 #                             credential, nothing mounted, not root; untrusted
@@ -446,14 +446,16 @@ echo "u-drill1 bound, destroyed (Deployment · Service · PVC · join Secret gon
 { echo; echo "### spare-pod-leaks"; echo "u-drill1: bound → destroyed, nothing left; u-drill2: new claim, new join Secret"; } | summary
 
 step "root-in-user-pod: a person's pod, running"
-ssh-keygen -q -t ed25519 -N '' -f "$tmp/door" -C door
-K create secret generic fleet-door-pub --from-file=door.pub="$tmp/door.pub" >/dev/null
+# the person's own key (T647: the door holds none): what PodKeys pulls into the node disk
+ssh-keygen -q -t ed25519 -N '' -f "$tmp/person" -C person
 K apply -f "$tmp/live.json" >/dev/null
 for _ in $(seq 1 90); do lpod=$(K get pod -l fleet/pod=u-live1 -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) && [ -n "$lpod" ] && break; sleep 1; done
 [ -n "${lpod:-}" ] || fail "the live user pod never appeared"
 K wait --for=jsonpath='{.status.containerStatuses[?(@.name=="sshd")].ready}'=true "pod/$lpod" --timeout=300s >/dev/null \
   || { K describe pod "$lpod" | tail -30; K logs "$lpod" -c pod-etc 2>&1 | tail -5; fail "the live user pod's sshd never came up"; }
 users() { K exec "$lpod" -c "$1" -- sh -c 'ps -o user= -e | sort -u | tr "\n" " "'; }
+K exec -i "$lpod" -c fleet -- sh -c 'mkdir -p /var/db/fleet-node/ssh && cat > /var/db/fleet-node/ssh/.ak && chmod 644 /var/db/fleet-node/ssh/.ak && mv /var/db/fleet-node/ssh/.ak /var/db/fleet-node/ssh/authorized_keys' \
+  < "$tmp/person.pub" || fail "could not put the person's key on the pod's node disk"
 fid=$(K exec "$lpod" -c fleet -- id -un):$(K exec "$lpod" -c fleet -- id -u)
 [ "$fid" = live1:10002 ] || fail "the fleet container runs as $fid, not live1:10002"
 fu=$(users fleet); su=$(users sshd)
@@ -465,7 +467,7 @@ fi
 K exec "$lpod" -c sshd -- /usr/sbin/sshd -t -f /etc/ssh/sshd_config || fail "the pod's sshd config does not check"
 K port-forward "pod/$lpod" 12222:2222 >/dev/null 2>&1 & pf2=$!
 for _ in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/12222) 2>/dev/null && break; sleep 0.2; done
-sshp() { ssh -i "$tmp/door" -p 12222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+sshp() { ssh -i "$tmp/person" -p 12222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   -o LogLevel=ERROR -o BatchMode=yes "$@"; }
 landed=$(sshp live1@127.0.0.1 2>&1 || true)
 # pod-sshd-tty-audit (#4167): a login that asks for a terminal (the thin client's
@@ -474,7 +476,7 @@ tty=$(sshp -tt live1@127.0.0.1 2>&1 || true)
 asroot=$(sshp root@127.0.0.1 true 2>&1 && echo IN || true)
 kill "$pf2" 2>/dev/null || true
 echo "$landed"
-case "$landed" in "ENTRY live1 10002 | "*) ;; *) fail "an ssh login with the door's key: '$landed'" ;; esac
+case "$landed" in "ENTRY live1 10002 | "*) ;; *) fail "an ssh login with the person's own key: '$landed'" ;; esac
 case "$landed" in *"| live1 root "*|*"| root live1 "*) ;; *) fail "ps in sshd during a login: '$landed' (want root + live1)" ;; esac
 case "$asroot" in *IN) fail "root logged in over ssh" ;; esac
 case "$tty" in *"ENTRY live1 10002 | "*) ;; *) fail "a terminal login was dropped: '$tty'" ;; esac
