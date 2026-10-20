@@ -198,17 +198,21 @@ fi
 # and BUSY, of a wait NOT climbing) — each as a subshell with files of its own
 # ($L: its await's out/err, its stub's peer log); they share the tmux server and
 # the ledger, where every row names its child. Printed in order after the wait.
+# (The dispatch stands alone — selftest-partitions-selftest.sh runs it with stub
+# groups and no $WORK — so its files go to a dir of its own when there is none.)
+LANES=${WORK:-}
+[ -n "$LANES" ] || { LANES=$(mktemp -d "${TMPDIR:-/tmp}/await-stall-lanes.XXXXXX") || exit 2; trap 'rm -rf "$LANES"' EXIT; }
 for group in $groups; do
-  ( L=".$group"; export PEER_LOG="$WORK/peer$L"; : > "$PEER_LOG"; CHECKS=0
-    "$group"; echo "$CHECKS" > "$WORK/checks$L" ) > "$WORK/log.$group" 2>&1 &
+  ( L=".$group"; export PEER_LOG="$LANES/peer$L"; : > "$PEER_LOG"; CHECKS=0
+    "$group"; echo "$CHECKS" > "$LANES/checks$L" ) > "$LANES/log.$group" 2>&1 &
   eval "pid_$group=\$!"
 done
 rc=0
 for group in $groups; do
   eval "wait \$pid_$group" || rc=1
   printf 'group %s: %s\n' "$part" "$group"
-  cat "$WORK/log.$group"
-  [ -s "$WORK/checks.$group" ] && CHECKS=$((CHECKS + $(cat "$WORK/checks.$group")))
+  cat "$LANES/log.$group"
+  [ -s "$LANES/checks.$group" ] && CHECKS=$((CHECKS + $(cat "$LANES/checks.$group")))
 done
 [ "$rc" = 0 ] || exit 1
 printf 'fleet-await-stall selftest: OK (%d checks; part %s)\n' "$CHECKS" "$part"
