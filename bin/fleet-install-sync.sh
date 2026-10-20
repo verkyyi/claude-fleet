@@ -740,11 +740,13 @@ doctor_fail_tags() {
 # settle <epoch> — before the doctor after a switch, the daemons the apply
 # (re)loaded get to write once (issue #2655): the hub-sessions loop is started if
 # none runs, and the sleep tick (every 60 s) is awaited until logs/sleep.log is
-# newer than the switch, at most FLEET_INSTALL_SETTLE_SECS (90). No sleep.log →
-# no wait. A tick that never comes is not a verdict: the doctor judges what it has.
+# newer than the switch, at most FLEET_INSTALL_SETTLE_SECS (90), looked at every
+# FLEET_INSTALL_SETTLE_POLL (5) seconds. No sleep.log → no wait. A tick that never
+# comes is not a verdict: the doctor judges what it has.
 settle() {
-  local t0="$1" budget="${FLEET_INSTALL_SETTLE_SECS:-90}" end slog m
+  local t0="$1" budget="${FLEET_INSTALL_SETTLE_SECS:-90}" poll="${FLEET_INSTALL_SETTLE_POLL:-5}" end slog m
   case "$budget" in ''|*[!0-9]*) budget=90 ;; esac
+  case "$poll" in ''|*[!0-9.]*|.*|*.*.*) poll=5 ;; esac
   [ -f "$ROOT/bin/fleet-hub-sessions.sh" ] \
     && bash "$ROOT/bin/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 </dev/null
   slog="$CONF_DIR/logs/sleep.log"
@@ -755,7 +757,7 @@ settle() {
     case "$m" in ''|*[!0-9]*) return 0 ;; esac
     [ "$m" -gt "$t0" ] && return 0
     [ "$(now)" -lt "$end" ] || break
-    sleep 5
+    sleep "$poll"
   done
   say "no sleep tick within ${budget}s of the switch — the doctor judges what it has"
   return 0

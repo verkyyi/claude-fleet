@@ -852,7 +852,7 @@ eq "S: settle: switched" switched "$(st result)"
 contains "S: settle: no tick within the budget is said, not judged" "$OUT" "no sleep tick within 0s of the switch"
 touch -t 200001010000 "$CONF/logs/sleep.log"
 ( sleep 2; touch "$CONF/logs/sleep.log" ) &
-stable "$S4"; t0=$(date +%s); OUT=$(FLEET_INSTALL_SETTLE_SECS=30 bash "$IS" --root "$CO" 2>&1); t1=$(date +%s); wait
+stable "$S4"; t0=$(date +%s); OUT=$(FLEET_INSTALL_SETTLE_SECS=30 FLEET_INSTALL_SETTLE_POLL=0.5 bash "$IS" --root "$CO" 2>&1); t1=$(date +%s); wait
 eq "S: settle: switched after the tick" switched "$(st result)"
 not_contains "S: settle: the tick came" "$OUT" "no sleep tick within"
 [ $((t1 - t0)) -lt 25 ] || fail "S: settle waited the whole budget ($((t1 - t0))s) though the tick came"; CHECKS=$((CHECKS + 1))
