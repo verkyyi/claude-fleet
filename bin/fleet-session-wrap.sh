@@ -319,7 +319,7 @@ while :; do
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi
   rc=$?
-  unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # a resume requires its own one-shot reservation
+  unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # retired (C8): an old spawner's never rides a resume
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
     unset FLEET_WORKER_CRED
