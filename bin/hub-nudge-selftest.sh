@@ -38,8 +38,8 @@ HOOK="$BIN/set-claude-state.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'hub-nudge selftest: python3 absent — SKIP'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubnudge-selftest.XXXXXX")" || exit 2
-SRV_PID=''
-cleanup() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null; rm -rf "$WORK"; }
+SRV_PID='' LANE_E=''
+cleanup() { [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null; [ -n "$LANE_E" ] && kill "$LANE_E" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 unset CCQUOTA_FLEET CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD FLEET_NODE_ALIASES \
       FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE FLEET_HUB_SESSIONS_EVERY FLEET_HUB_SESSIONS_WATCHED_EVERY \
@@ -262,6 +262,18 @@ eq  "D: …and keeps the validator of the rows on disk" '"C"' "$(head -n1 "$G/hu
 # ============================================================================
 # E. cadence: 2 s while someone is attached, 10 s otherwise
 # ============================================================================
+# E's loops run as a lane beside F's (each loop is its own seconds of wall clock):
+# a subshell with its own TMPDIR (so its own .claude-dash), conf dir, attached
+# marker and watch socket — the two share nothing but the shim. Its checks come
+# back in $WORK/checks.E; a FAIL exits the lane, and the wait below fails the test.
+lane_E() {
+  WORK="$WORK/e"; G="$WORK/.claude-dash/global"
+  mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/conf/global"
+  cp "$FLEET_CONF_DIR/fleets/$S/conf" "$WORK/conf/fleets/$S/conf"
+  export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" ATTACHED="$WORK/attached" \
+         SETOPT_LOG="$WORK/setopt.log" WATCH_SOCKET="$WORK/watch.sock"
+  python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$WATCH_SOCKET"
+  chmod 600 "$WATCH_SOCKET"
 unset CCQUOTA_HUB_URL
 export FLEET_HUB_SESSIONS_CMD="printf x >> '$WORK/fetches'; printf '%s' '{\"machines\":[],\"count\":0,\"sessions\":[]}'"
 export FLEET_HUB_SESSIONS_LOOP_SECS=5
@@ -283,6 +295,9 @@ rm -f "$WORK/fetches" "$G/hubsess.pid"
 CCQUOTA_FLEET='' PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 absent "E: off — the loop fetches nothing" "$WORK/fetches"
 absent "E: off — and leaves no pid file"  "$G/hubsess.pid"
+echo "$CHECKS" > "$WORK/../checks.E"
+}
+( CHECKS=0; lane_E ) & LANE_E=$!
 
 # ============================================================================
 # F. long poll (issue #1526) against a loopback hub that holds — or ignores — wait
@@ -381,6 +396,9 @@ view_off
 FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 eq  "F: unwatched — one ask, no wait"          'GET inm="B" wait=- held=n' "$(cat "$WORK/hub2.log")"
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
+
+wait "$LANE_E" || fail "E: the cadence lane failed (its FAIL line is above)"
+CHECKS=$((CHECKS + $(cat "$WORK/checks.E")))
 
 printf 'PASS: hub-nudge — %d checks (nudge file + mtime, hook change-only, ETag/304 with #ts re-stamp, 2 s viewed / 60 s idle, long poll)\n' "$CHECKS"
 exit 0

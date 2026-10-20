@@ -95,8 +95,31 @@ ok()   { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
 
 # survivors — how many marked processes are still alive. Given a moment first:
-# a tree that is dying is not a tree that leaked.
-survivors() { sleep 2; pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' '; }
+# a tree that is dying is not a tree that leaked — up to 2s, read every 0.1s, so
+# a tree already gone answers at once and a leak still answers its count at 2s.
+survivors() {
+  local n i=0
+  while :; do
+    n=$(pgrep -f "$MARK" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$n" = 0 ] || [ "$i" -ge 20 ]; then break; fi
+    sleep 0.1; i=$((i+1))
+  done
+  printf '%s\n' "$n"
+}
+
+# lane <name> — the checks below run as lanes at once (each costs its budget in
+# wall clock): a lane is a subshell with a marker and a helper of its own — the
+# run's marker plus `.<name>`, so its survivor counts see only its own trees and
+# the EXIT trap's pkill of the run's marker still reaches every lane. Its lines
+# are printed in order after the wait; its failures come back as its exit code.
+lane() {
+  ( MARK="$MARK.$1"; HELPER="${TMPDIR:-/tmp}/$MARK.sleeper"
+    printf '#!/bin/bash\nexec -a "%s" sleep 120\n' "$MARK" > "$HELPER" && chmod +x "$HELPER" || exit 99
+    fails=0; "lane_$1"; rm -f "$HELPER"; exit "$fails" ) > "$LANES/$1" 2>&1 &
+  eval "lane_pid_$1=\$!"
+}
+LANES=$(mktemp -d "${TMPDIR:-/tmp}/tbkill-lanes.XXXXXX") || exit 2
+trap 'cleanup; rm -f "$HELPER"; rm -rf "$LANES"' EXIT
 
 BUDGET=3
 CEILING=20     # clear of BUDGET + kill grace, far below a leaked child's 120s
@@ -112,6 +135,7 @@ CEILING=20     # clear of BUDGET + kill grace, far below a leaked child's 120s
 forker()   { while :; do "$HELPER" & sleep 0.3; done; }
 stubborn() { bash -c "trap '' TERM; bash -c \"trap '' TERM; '$HELPER'\""; }
 
+lane_1() {
 # --- 1. A tree that keeps forking is gone when the budget blows -------------------
 t0=$SECONDS; fleet_timebox "$BUDGET" forker >/dev/null 2>&1; rc=$?; el=$(( SECONDS - t0 ))
 n=$(survivors)
@@ -125,7 +149,9 @@ else
   ok "a continuously-forking tree is fully gone after its budget (${el}s, 0 orphans)"
 fi
 cleanup
+}
 
+lane_2() {
 # --- 2. A tree that ignores SIGTERM still dies (the SIGKILL round) ----------------
 t0=$SECONDS; fleet_timebox "$BUDGET" stubborn >/dev/null 2>&1; rc=$?; el=$(( SECONDS - t0 ))
 n=$(survivors)
@@ -137,7 +163,9 @@ else
   ok "a tree that traps SIGTERM is still killed (${el}s, 0 orphans)"
 fi
 cleanup
+}
 
+lane_3() {
 # --- 3. THE INCIDENT: a blown budget inside $( ) does not hang the caller ---------
 # The collector reads `sockets` exactly this way. Pre-fix this took 123s for a 3s
 # budget, because the orphan kept the substitution's pipe open; that unbounded
@@ -154,6 +182,8 @@ else
   ok "a budget blown inside \$( ) returns at the budget, pipe closed (${el}s, 0 orphans)"
 fi
 cleanup
+}
+lane 1; lane 2; lane 3
 
 # --- 4. fleet_kill_tree's verdict is a READ, not an assumption --------------------
 # It used to `return 0` unconditionally, which is how "killed" and "still running"
@@ -195,7 +225,9 @@ fleet_kill_tree "" 1 && ok "an empty pid is refused" || fail "4: an empty pid mu
 # completing and over-budget phases rather than twenty copies of §1 — a tick that
 # alternates is what the daemons actually do, and residue from a clean round would
 # be invisible in an all-timeout soak. Cost: ~40s, the bulk of it fleet_timebox's
-# 1s poll granularity, which every round pays whether or not it times out.
+# 1s poll granularity, which every round pays whether or not it times out — so it
+# runs as a lane of its own, beside §1-§3 and §4.
+lane_5() {
 SOAK_ROUNDS=20
 SOAK_BUDGET=1
 SOAK_CEILING=$(( SOAK_ROUNDS * 5 ))   # 5s/round: far above the ~2s a bounded round
@@ -237,6 +269,14 @@ else
   ok "$SOAK_ROUNDS rounds ($timeouts over budget, $cleans clean) leave 0 residue and never ratchet (${soak_el}s, peak $peak)"
 fi
 cleanup
+}
+lane 5
+
+for l in 1 2 3 5; do
+  eval "wait \$lane_pid_$l"; rc=$?
+  cat "$LANES/$l"
+  [ "$rc" = 0 ] || { [ "$rc" = 99 ] && printf '  FAIL lane %s: cannot write its helper\n' "$l"; fails=$((fails + (rc == 99 ? 1 : rc))); }
+done
 
 printf '\n'
 if [ "$fails" -gt 0 ]; then

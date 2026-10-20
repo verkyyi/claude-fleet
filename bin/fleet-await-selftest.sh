@@ -93,11 +93,15 @@ collect() { wait "$AWAIT_PID"; RC=$?; OUT=$(cat "$WORK/out"); }
 # Wait (bounded) until the awaited window exists — the spawn is synchronous in the
 # waiter, but the waiter itself is in the background.
 until_win() { local i=0; while [ -z "$(win_of "$1")" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done; win_of "$1"; }
+# Wait (bounded, 10s) until the waiter has taken its baseline read and entered its
+# loop — it says `… waiting up to …` on stderr right after — so a report written
+# next is news to it, never "already reported" (this was a fixed 1.5s sleep).
+until_waiting() { local i=0; while ! grep -q 'waiting up to' "$WORK/err" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done; }
 
 # SPAWN → MERGED
 await 101 --timeout 30
 W=$(until_win 101); [ -n "$W" ] || fail "no window spawned for #101" "$(cat "$WORK/err")"
-sleep 1.5
+until_waiting
 report --win "$W" --state merged --pr 501 --summary 'landed the thing'
 collect
 eq "MERGED exits 0" 0 "$RC"
@@ -115,7 +119,7 @@ eq "…and spawns nothing" 1 "$(wc -l < "$STUB_LOG" | tr -d ' ')"
 
 # LIVE → BLOCKED, with a not-yet FAILED (fixing) and WAITING first.
 await 102 --timeout 30
-W=$(until_win 102); sleep 1.5
+W=$(until_win 102); until_waiting
 report --win "$W" --state failed --pr 502 --summary 'RED: CI failure or merge conflict; fixing it'
 report --win "$W" --state waiting --pr 502
 sleep 2.5
@@ -130,7 +134,7 @@ has "…with the blocker" 'needs a token' "$OUT"
 # A live worker is waited on, not re-spawned: --no-spawn finds it; REAPED ends it.
 n=$(wc -l < "$STUB_LOG" | tr -d ' ')
 TM set-window-option -t "$W" @claude_state working
-await 102 --timeout 30 --no-spawn; sleep 1.5
+await 102 --timeout 30 --no-spawn; until_waiting
 report --win "$W" --state reaped --verdict unmerged --summary 'worktree reaped with commits'
 TM kill-window -t "$W"
 collect
@@ -140,7 +144,7 @@ eq "…and a live worker is never re-spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -
 
 # GONE: the window closes with no report at all.
 await 103 --timeout 30
-W=$(until_win 103); sleep 1.5; TM kill-window -t "$W"
+W=$(until_win 103); until_waiting; TM kill-window -t "$W"
 collect
 eq "a window gone without a report is GONE, exit 4" "4 GONE" "$RC $(printf '%s\n' "$OUT" | head -1)"
 
@@ -162,7 +166,7 @@ CHECKS=$((CHECKS + 1))
 # ADOPT: a hub-spawned (parentless) worker is re-parented onto the waiter.
 A=$(TM new-window -d -P -F '#{window_id}' -n issue-105 "sleep 600")
 TM set-window-option -t "$A" @issue 105; TM set-window-option -t "$A" @claude_state working
-await 105 --timeout 30 --no-spawn; sleep 1.5
+await 105 --timeout 30 --no-spawn; until_waiting
 eq "a parentless worker is adopted" scratch-7 "$(TM display-message -p -t "$A" '#{@origin}')"
 report --win "$A" --state merged --pr 505
 collect
@@ -174,7 +178,7 @@ B=$(TM new-window -d -P -F '#{window_id}' -n issue-107 "sleep 600")
 TM set-window-option -t "$B" @issue 107; TM set-window-option -t "$B" @claude_state working
 TM set-window-option -t "$B" @origin scratch-7
 bash "$AW" 107 -L "$LBL" --parent scratch-7 --interval 1 --timeout 60 --no-spawn --interval 30 > "$WORK/out" 2> "$WORK/err" & AWAIT_PID=$!
-sleep 2
+until_waiting
 report --win "$B" --state merged --pr 507
 SECONDS=0; collect
 eq "a report mid-interval ends the wait" "0 MERGED" "$RC $(printf '%s\n' "$OUT" | head -1)"
@@ -223,7 +227,7 @@ STUB
 chmod +x "$SB/fleet-task-record.sh"
 await T9 --timeout 30
 W=$(until_win 407); [ -n "$W" ] || fail "no window spawned for T9's #407" "$(cat "$WORK/err")"
-sleep 1.5
+until_waiting
 report --win "$W" --state merged --summary 'landed T9'   # no --pr: a known repo's PR is asked of GitHub (#1247)
 collect
 eq "T<n> → its issue's worker, MERGED exits 0" "0 MERGED" "$RC $(printf '%s\n' "$OUT" | head -1)"
