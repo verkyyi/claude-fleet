@@ -587,6 +587,13 @@ fleet doctor --json
 - **是什么**：会话的订阅凭据走哪条路（中心代理还是本机），通不通。
 - **WARN / FAIL 怎么办**：照说明修中转或凭据代理。
 
+#### `上游`
+
+来自 `fleet doctor`。
+
+- **是什么**：本机凭据代理到上游（Anthropic / OpenAI）近 1 小时、24 小时各类失败的次数和最近一次：连接被拒、被重置、超时、TLS、DNS、429 限流、5xx、529 过载。会话里卡在「Waiting for API response · will retry」时，看这一行就知道是哪一段出的问题。
+- **WARN / FAIL 怎么办**：WARN = 近 1 小时连接类或上游出错的失败 ≥ 3 次且 ≥ 20 %。`fleet-cred-proxy.sh upstream --since 24h` 看每一次的时间、类别、账号和会话：连接类多是这台机器的出口或网络，5xx / 529 是上游过载（等它过去），429 是账号限流。
+
 #### `credsep`
 
 来自 `fleet doctor` 和 `fleet doctor --machine`。

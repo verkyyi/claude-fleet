@@ -587,6 +587,13 @@ From `fleet doctor`.
 - **What it is**: which road sessions' subscription credentials take (the central proxy or this machine), and whether it works.
 - **On WARN / FAIL**: fix the relay or the credential proxy as the explanation says.
 
+#### `上游`
+
+From `fleet doctor`.
+
+- **What it is**: how often this machine's credential proxy failed to reach the provider (Anthropic / OpenAI) in the last hour and 24 hours, by kind — connection refused, reset, timed out, TLS, DNS, 429 rate limited, 5xx, 529 overloaded — and the latest one. When a session sits on "Waiting for API response · will retry", this row says which part failed.
+- **On WARN / FAIL**: WARN = in the last hour at least 3 connection or provider failures, and at least 20 % of the attempts. `fleet-cred-proxy.sh upstream --since 24h` lists each one with its time, kind, account and session: connection kinds are usually this machine's network or egress, 5xx / 529 the provider being overloaded (wait it out), 429 an account's rate limit.
+
 #### `credsep`
 
 From `fleet doctor` and `fleet doctor --machine`.
