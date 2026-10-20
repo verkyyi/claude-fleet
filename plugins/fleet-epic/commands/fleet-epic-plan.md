@@ -203,32 +203,30 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
     as the decider sees it (folds stripped, each card one line) plus a `WARN`
     line per machine-visible miss. Walk rules 16–22 against that output; a WARN is
     a question, not a verdict, and rules 16, 17 and 21 are yours to read.
-24. **A visual member ships a clickable prototype, not a sketch** (issue #1754).
-    A member is **visual** when it changes anything the user sees — a dash /
-    侧栏 row, the 状态栏, a 弹出菜单, a 网页, a 小程序 page, a report page's
-    样式. For each one, build **one single-file HTML prototype** in your
-    scratchpad (`<scratchpad>/proto-<slug>-<key>.html`), served beside the
-    design page, and put the frame's
-    `<p class="proto"><a href="…">▶ 打开可交互原型</a></p>` in that card's
-    **upper layer** (under 怎么算成功 — never in the 技术细节 fold). The
-    prototype must:
-    - use the **real shape of the data** — real rows, names, states; no lorem;
-    - **switch the key scenarios** (another device, 失联, 空态, 出错 …);
-    - compare **现在 / 改后** side by side or by a toggle;
-    - make the main interactions **clickable and keyable**;
-    - work at **phone width**;
-    - **explain itself** — someone who never opened the design page gets it.
+24. **A visual member carries its 改前 / 改后 IN its card — no separate prototype page**
+    (issue #1754, T699). A member is **visual** when it changes anything the user
+    sees — a dash / 侧栏 row, the 状态栏 / 顶栏, a 弹出菜单, a 网页, a 小程序 page,
+    a report page's 样式. Its card's **upper layer** (under 怎么算成功 — never in the
+    技术细节 fold) carries the frame's 改前 / 改后 block, written by the ONE
+    renderer the task page uses:
 
-    The 「客户端新建与位置」 prototype is the reference: a dark terminal frame
-    whose sidebar, status bar and popup menu are real DOM, scenario + 现在 / 改后
-    switches along the top, keyboard and taps both drive it. An ASCII sketch or a
-    still screenshot is **not** a delivery. When the design page changes, the
-    prototype changes with it — edit the same file, so the link already on
-    the page stays valid. `--lint` (rule 23) WARNs
-    `prototype` for a card that reads visual (侧栏 / 状态栏 / 菜单 / 页面 / 界面 /
-    样式 …) with no such link; a non-visual card that trips it is yours to wave
-    through, a visual one is not. At step 5 the link goes into the
-    member's charter section beside its 上线证据.
+    ```sh
+    ~/.claude/fleet/bin/fleet-task-page.py compare <member>.json   # → <div class="cmp">…</div>, paste it in
+    ```
+
+    `{"before": {"html"|"img": …, "note": "…"}, "after": {…}}` — or `"states":
+    [{"label": "…", "html"|"img": …, "note": "…"}, …]` for several 改后 scenarios
+    (另一台电脑, 失联, 空态, 出错, 手机宽 …), switched by buttons; an `img` is a path
+    beside the page. Its own look (a dark terminal frame, a sidebar …) is a
+    `<style>` of your own after the frame's. The prototype is **high fidelity —
+    the style and the words that will go live**; 改前 is taken from today (a real
+    capture, real rows, real names — no lorem, no ASCII sketch). No
+    `proto-*.html`, no `p.proto` link. When the design changes, regenerate the
+    block. `--lint` (rule 23) WARNs `compare` for a card that reads visual (侧栏 /
+    状态栏 / 顶栏 / 菜单 / 页面 / 界面 / 样式 …) with no block, or for any card
+    still linking a prototype page; a non-visual card that trips the first is
+    yours to wave through. At step 5 the block goes into the member's charter
+    section as words — one line per state (`- 改后 · <标签>：<说明>`), never HTML.
 
 Visible order, top to bottom: title → number band → `#metrics` → `#charter` →
 `#members` → `#risks` → `#signoff` → `#preflight` (only with something to
@@ -331,7 +329,7 @@ Self-check the surface (rule 23), fix what it shows, then **publish it to 活页
 private** and put it in front of the operator with **one sentence** (issue #4957):
 
 1. `mcp__space__publish_file` — `title` 「EPIC 提案：<主题>」, `filename`
-   `epic-plan-<slug>.html`, `content` the page (a page with prototypes beside it:
+   `epic-plan-<slug>.html`, `content` the page (a page with pictures beside it:
    `files`, each by its relative path). A new page starts **private** — only the
    operator's workspace can open it; never make it public or passcode-shared
    yourself. Keep the returned `proposal_id` and link.
@@ -433,7 +431,8 @@ this order:
    **依赖** 依赖 C1 · 被依赖 C3 C4
    **完成判据** …
    上线证据：<the one line, verbatim from the page>
-   交互原型：<the card's ▶ 打开可交互原型 link — visual members only, drop the line otherwise>
+   **改前 / 改后**
+   - 改前：<note> · - 改后 · <标签>：<note> … — visual members only, one line per state (what `fleet-task-page.py body` writes); drop it otherwise
    ```
 
    - **`上线证据` is a LABELLED LINE** (`上线证据：…`): one line, one label, one

@@ -68,7 +68,7 @@ words. Top to bottom:
 | `#cause` 原因 | `cause.lede` · `cause.steps` · `cause.evidence` | one-sentence lede; the 一步 / 发生了什么 walk; 证据 folded (code lines, logs, the scene) |
 | `#metrics` 指标 | `metrics` · `metrics_how` | 指标 / 现在 / 目标, numbers only; 「怎么量」 folded |
 | `#charter` 目标与范围 | `charter.do` · `charter.dont` | 做 / 不做, short plain items |
-| `#members` 改法 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `proto` |
+| `#members` 改法 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `compare` (改前 / 改后, below) |
 | `#risks` | `risks` · `risks_tech` | 「会出什么事 — 我们怎么兜住」 |
 | `#signoff` 需要你定的事 | `signoff` | 事项 / 建议, a default on every row; the line under it says 「点头即全部按建议」 |
 | `#evidence` 上线证据 | `evidence` | ONE line, folded: what the worker captures after the switch to prove it |
@@ -76,8 +76,15 @@ words. Top to bottom:
 The **two-layer rules are epic-page's** (`skills/epic-page/SKILL.md`, rules 0 and
 16–24 of `/fleet-epic-plan` step 4): plain words, no keys, file names or
 implementation nouns on the surface; every technical field one tap down, complete.
-**A visual change ships a clickable prototype** (rule 24): a single-file HTML
-beside the page, its relative path in the card's `proto`.
+**A visual change carries its 改前 / 改后 in its card** (rule 24, T699): the
+member's `compare` — `{"before": {"html"|"img": …, "note": "…"}, "after": {…}}`, or
+`"states": [{"label": "…", "html"|"img": …, "note": "…"}, …]` for several 改后
+scenarios the reader switches with buttons. 改前 is taken from today (a real
+capture); 改后 is high fidelity — the look and the words that will go live, not a
+sketch. A pane's own look goes in the spec's `css`; an `img` is a path beside the
+page. No separate prototype page: `proto` still renders for an old spec, and the
+lint WARNs it (`compare`). The task's words carry the block as text — one line per
+state (`- 改后 · <标签>：<说明>`), never its HTML.
 
 ## 3. Self-check
 
@@ -87,13 +94,14 @@ beside the page, its relative path in the card's `proto`.
 
 The surface as the operator reads it, plus a `WARN` per machine-visible miss —
 epic-page's rules, and the task page's own: `task-section` (a section missing),
-`task-evidence` (a 原因 with no folded 证据), `task-signoff` (no 「点头即全部按建议」).
+`task-evidence` (a 原因 with no folded 证据), `task-signoff` (no 「点头即全部按建议」), and epic-page's `compare` (a visual change
+with no 改前 / 改后, or a link to a separate prototype page).
 A WARN is a question, not a verdict; fix what is real.
 
 ## 4. Publish privately, push, wait
 
 1. `mcp__space__publish_file` — `title` 「任务设计：<标题>」, `filename`
-   `task-<slug>.html`, `content` the page (with a prototype: `files`, each by its
+   `task-<slug>.html`, `content` the page (with pictures: `files`, each by its
    relative path). New pages start **private**; never widen that yourself. Keep
    the `proposal_id` and link.
 2. `mcp__space__push_to_wechat` — that `proposal_id`, `to` omitted (the operator only).
