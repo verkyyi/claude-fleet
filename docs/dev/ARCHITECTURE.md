@@ -31,21 +31,21 @@ Each fleet has an identity **`FLEET_ID` = its tmux session name** (e.g.
 ### Window identity — the tmux options a fleet stamps, and `@wid` (issue #566)
 
 Everything a fleet knows about a window lives in tmux **window options**, read
-back through `#{@…}` formats. They are the substrate the dash, the reapers, the
-bridge and the migrator all agree on:
+back through `#{@…}` formats. They are the substrate the task list, the reapers
+and the migrator all agree on:
 
 | option | meaning |
 |---|---|
 | `@wid` | **the window's handle** — `a1`…`z9`, unique among this fleet's live windows |
-| `@issue` | the GitHub issue this worker is bound to (absent ⇒ not a worker) |
+| `@issue` | the GitHub issue a worker was spawned on, if any (a task session carries `@task` `T<n>` instead) |
 | `@raw` | `1` ⇒ a scratch session: no issue, its own `scratch-<N>` worktree |
 | `@worktree` | the git worktree the window owns (survives the pane `cd`-ing away) |
 | `@repo` | the hosted repo (`owner/name`) the window belongs to — stamped at spawn, derived once from `@worktree` for an older window (#789) |
 | `@norepo` | `1` ⇒ a session that deliberately belongs to no repo: runs in `$HOME`, no worktree, never reaped automatically (#789) |
 | `@origin` | spawn provenance — `issue-<N>` / `scratch-<N>` / `autofill` / … — and, since #574, an **address**: `fleet_win_for_key` resolves it back to the parent's live window. The parent's key also names its children ledger (`$FLEET_STATE/children/<key>.ndjson`, #937), which `bin/fleet-children.sh` reads — the one command a parent uses to check its children (#940) |
 | `@reported` | `1` ⇒ this window already pushed its outcome to its `@origin` parent (the reap-time backstop skips it) |
-| `@expand` | `1` ⇒ this window's `@origin` children are UNFOLDED on the dash. Absent ⇒ folded, which is the default: the dash shows one line per parent and `←`/`→` open and shut the block. Inverted against `@pin` on purpose — a window nobody has touched must start collapsed |
-| `@repo_fold` | the one **session** option in this table (issue #1037): the space-separated slugs of the repo groups FOLDED on the dash (`o-tokenledger none`), set by `←` on a repo heading and unset once `→` opens the last one. Absent ⇒ every group open, the list as it always was. A session option so it is per-fleet for free, dies with the fleet, and — because tmux resolves `#{@repo_fold}` through a window's session — rides the renderer's one `list-windows` call with no extra fork |
+| `@expand` | `1` ⇒ this window's `@origin` children are UNFOLDED in the task list. Absent ⇒ folded, which is the default: the list shows one line per parent and `→`/`←` open and shut the block. Inverted against `@pin` on purpose — a window nobody has touched must start collapsed |
+| `@repo_fold` | the one **session** option in this table (issue #1037): the space-separated slugs of the repo groups FOLDED in the task list (`o-tokenledger none`). Absent ⇒ every group open, the list as it always was. A session option so it is per-fleet for free, dies with the fleet, and — because tmux resolves `#{@repo_fold}` through a window's session — rides the renderer's one `list-windows` call with no extra fork |
 | `@claude_state`, `@claude_state_ts` | the state glyph + when it last changed |
 | `@cc_account`, `@cc_agent` | which subscription account / which agent it runs |
 
@@ -66,12 +66,11 @@ and hide these handles. The full list gives the reclaimed four columns to names.
 - **Scope: this fleet's live windows.** A handle is **reused** once its window is
   gone, which is what keeps it two characters forever. Durable identity for
   history/the ledger stays the session/transcript id; `@wid` never appears there.
-  The landed (`⌃t`) view shares the live list's layout without an `id` column.
 - **Allocation is stateless** — no counter file. `fleet_wid_stamp` reads `@wid`
   off every window on the fleet's socket and takes the lowest unused one, under a
   short mkdir-lock in `fleets/<session>/wid.lock`. Nothing to corrupt, self-healing
   after a crash, correct across `fleet-up`/`fleet-down`. On lock timeout it fails
-  **open** (no handle) and the dash's render-time **backfill** assigns one on the
+  **open** (no handle) and the row producer's render-time **backfill** assigns one on the
   next repaint — which is also how every window that predates #566 gets one.
 - **It survives re-creation.** `fleet-migrate.sh` re-stamps the same handle onto
   the replacement window (taking the next free one if something claimed it in the
@@ -115,7 +114,7 @@ repo-specific pieces are **per-fleet**.
 | `git_<key>`, `ctx_<key>` cache | shared (`global/`) | per-worktree / per-Claude-session, already machine-wide |
 | `prmap` / `issues` cache | **per-repo** | the only per-repo data → written under `fleets/<slug>/` (issue #181) |
 | **Config (`fleet.conf`)** | **per-fleet** | each fleet = a different repo + checkout → `fleets/<session>/conf` |
-| **Dash / status / backlog** | **per-fleet view** | reads shared globals **+** its own repo's `fleets/<slug>/` files |
+| **Task list / status** | **per-fleet view** | reads shared globals **+** its own repo's `fleets/<slug>/` files |
 | **Hub** | **per-fleet** | triage / ledger are stateful per repo; "one writer per ledger" |
 
 *Collector shared, hub not* is the right split — remember it that way.
@@ -154,8 +153,8 @@ launchd-per-fleet plumbing.
 The collector's tick is a serial chain of phases — quota watch, sockets, sessmap,
 issues, git, ctx, usage, scrape, banner, escalate, snapshot. launchd never overlaps
 a `StartInterval` job, so **tick duration IS the collector's real cadence**: a tick
-that runs 454s against a 60s interval means every cache on the dash is minutes old,
-which is not an empty dash but a frozen one.
+that runs 454s against a 60s interval means every cache the task list reads is minutes
+old, which is not an empty list but a frozen one.
 
 Budgeting the phases one at a time turned out to be a losing game. #552 boxed the
 `git` phase (571s → 56s) and the very next tick measured
@@ -269,7 +268,6 @@ name, so a fleet is a self-contained, equal unit (`ls .../fleets/` = the fleets)
     conf              # per-fleet overlay — same keys as fleet.conf.example
     repos/<slug>.conf # a further repo this fleet hosts (issue #788) — see below
     restore.map       # crash-recovery snapshot (fleet-restore.sh)
-    bridge/{seen,since}   # issue-bridge dedup set + watermark (per repo)
     sweep.due         # /sweep scheduling ledger
   accounts/           # GLOBAL — multi-account tokens (unchanged)
   diskguard/          # GLOBAL — disk-guard + runaway forensics; orphan-seen /
@@ -290,12 +288,12 @@ estate (`<session>.conf`, `restore/<session>.map`, `issue-bridge/bridge_<slug>.*
 …) into this layout **idempotently**, and every reader **dual-reads** both layouts
 so a fleet keeps working across the land→migrate window.
 
-**Config layers, as the `prefix+c` modal sees them (issue #1102).** Read order is
+**Config layers (issue #1102).** Read order is
 install `fleet.conf` < `~/.config/claude-fleet/fleet.settings` (the login's one
 settings file, #979) < the fleet `conf` < a hosted repo's `repos/<slug>.conf`.
 One login runs one fleet (#977), so `fleet.settings` and the fleet `conf` are one
-layer to the user — **this fleet** — and the modal's ⌃s picks only *this fleet ⇄ a
-repo*. A key's `@scope=global` tag still picks the FILE (such keys go to
+layer to the user — **this fleet** — beside one layer per repo. A key's
+`@scope=global` tag still picks the FILE (such keys go to
 `fleet.settings`, because `fleet_load_conf` strips them from a fleet `conf`), but
 it is never a scope to switch to nor a reason to refuse an edit. The install's
 `fleet.conf` is a read-only legacy layer: read, so an old install loads unchanged,
@@ -312,12 +310,11 @@ fleet conf keeps the fleet-wide defaults. All hosted repos are equal — there i
 main repo. `bin/fleet-repo.sh add|remove|list` manages them (`remove` takes an
 overlay; the conf's own repo only when it is the login's seed, issue #1172 — then
 another hosted repo is promoted into the conf's slot); from inside the fleet,
-the dash's ⌃z (`repo-add` in `dash-keymap.sh`) and the task sidebar's row menu `g`
-open the same popup, `bin/dash-repo-add.sh` (issue #1103): it asks only
+`bin/dash-repo-add.sh` (issue #1103) is a popup over the same `add`: it asks only
 `owner/name`, runs `fleet-repo.sh add --session <sess>` with the checkout defaulted
 to `~/projects/<name>`, reads the result token off its stdout and holds the verdict
-until dismissed. The two entries are a UI over the one registration — nothing is
-gated on the fleet already hosting two, since the popup is how the second gets in.
+until dismissed. It is a UI over the one registration — nothing is gated on the
+fleet already hosting two, since the popup is how the second gets in.
 
 `add` is `fleet_repo_register` in `bin/fleet-lib.sh` (issue #1104) — the one
 implementation of "add a repo", and the checkout step (`fleet_repo_checkout`) and
@@ -350,8 +347,8 @@ only — `fleet_repos`, `fleet_window_repo`, `fleet_load_repo_conf` — never an
 ad-hoc `git remote` parse.
 A no-repo session has no key, so it is stopped by its identity:
 `fleet-worker-stop.sh <sess> fid:<@fleet_id>` (#1873) — the fid is the 4th column of
-`dash-raw-session.sh --print` — and dash ⌃x on a done/exited no-repo row runs the
-same graceful stop (a busy one is `skip:live`).
+`dash-raw-session.sh --print` — and closing a done/exited no-repo row from the
+看台 runs the same graceful stop (a busy one is `skip:live`).
 `fleet_window_repo` reads `@repo`, else derives it once from `@worktree`'s git
 origin and stamps it, else takes the fleet's only repo, else answers **nothing**
 — and the consumer skips the window rather than guess.
@@ -360,22 +357,21 @@ origin and stamps it, else takes the fleet's only repo, else answers **nothing**
 window resolves to a hosted repo, that repo's overlay is applied on top (any
 other repo's identity + deploy keys are dropped first, so they never leak across).
 That one change moves every in-pane consumer — hooks, `commands/*.md`, the
-launcher's trust/model/MCP, the claim brief. A fleet conf that still names a repo
+launcher's trust/model/MCP, the brief. A fleet conf that still names a repo
 (the old layout) is not read (issue #4806); `fleet-conf.sh migrate` moves it into
 `repos/`. A fleet with no `repos/` dir returns before any tmux call. The collector fetches
-`issues` for every hosted repo, and `hooks/base-readonly-guard.py`
+`issues` for every hosted GitHub repo, and `hooks/base-readonly-guard.py`
 protects every hosted repo's `FLEET_MAIN`.
 
 PR status joins on **(repo, branch)**, never the branch alone (issue #792) — two
 hosted repos can each have an `issue-3`. In every fleet (issues #1940, #1941),
 a reader matches each window against
-its own repo's `fleets/<slug>/prmap` (its GitHub writer, pr-refresh, left with #4899) (stamping `@repo` through `fleet_window_repo`
-for a window that has none), and the dash's row producer reads `@repo`/`@norepo`
+its own repo's `fleets/<slug>/prmap` (stamping `@repo` through `fleet_window_repo`
+for a window that has none), and the task list's row producer reads `@repo`/`@norepo`
 off its one `list-windows` and keys the frame's narrowed haystack
 `<slug>\t<branch>` — still one awk per frame, so #662's bound holds. `deploy_<sha>`
 is read from the window repo's dir. A window with no repo, or an unknown one in a
-2+ repo fleet, gets no PR cell. A second repo arriving changes no row of the first
-(`bin/dash-rows-multirepo-pr-selftest.sh`).
+2+ repo fleet, gets no PR cell. A second repo arriving changes no row of the first.
 
 **Cleanup stays inside its own repo (issue #791).** A reaper acts on a window,
 so it takes its repo FROM that window (`fleet_load_window_conf`), never from the
@@ -384,12 +380,12 @@ a bare number: repo A's merged #12 cannot reach repo B's #12 window or worktree.
 The cleanup daemon runs one pass per hosted repo (that repo's MAIN, its own
 `fleets/<slug>/prmap`, its own lease, one shared per-tick cap) and hands the
 janitor `fleet-cleanup.sh <pr> --repo <r>`; idle close runs one pass per repo;
-SessionEnd, dash ⌃x and `fleet-worker-stop.sh` use the target window's repo; the
+SessionEnd, a close from the 看台 (`dash-reap.sh`) and `fleet-worker-stop.sh` use the target window's repo; the
 worktree janitor sweeps every hosted MAIN; transfer/migrate accept a worktree
 registered to ANY hosted repo (`fleet_worktree_repo`). A window whose repo is
 unknown, or `@norepo 1`, is **never reaped automatically** — its worktree is left
-alone. ⌃x still closes a `@norepo` session (there is no worktree to drop); ⌃x on
-an issue window whose repo cannot be told is refused until its `@repo` is set,
+alone. A close still closes a `@norepo` session (there is no worktree to drop); a
+close on an issue window whose repo cannot be told is refused until its `@repo` is set,
 and a SessionEnd there closes the window without touching any worktree.
 One road (issue #1943): a one-repo fleet joins on (repo, issue) too —
 `bin/fleet-cleanup-multirepo-selftest.sh` pins both.
@@ -399,8 +395,7 @@ One road (issue #1943): a one-repo fleet joins on (repo, issue) too —
 worktree comes off that repo's checkout: `dash-issue-session.sh` takes `--repo`,
 else the fleet's only repo, and refuses (asks) when there are several
 (`fleet_target_repo` asked with no pane, issue #1943);
-`dash-raw-session.sh` takes the highlighted row's or heading's repo, else makes
-a **no-repo** session; `dash-restore-session.sh` takes the row's repo.
+`dash-raw-session.sh` takes `--repo`, else makes a **no-repo** session; `dash-restore-session.sh` takes the row's repo.
 Every worker window is stamped `@repo` + `@worktree`, and stamps them on ITSELF as
 the first thing its command runs (`fleet_win_stamp_cmd`),
 because the launcher's window-aware `fleet_load_conf` would otherwise race a
@@ -428,10 +423,9 @@ number keys on the pair, however many repos the fleet hosts (issue #1939):
 `fleet_issue_key` / `fleet_window_key` spell it `<owner/name>#<N>`, and
 `fleet_bound_windows` lists a fleet's bound windows by that key. A window whose
 repo is unknown gets `#<N>` — equal to no real key, so no join picks it by
-guesswork. The joins: the backlog's bound map,
-the issue bridge's target window, ledger-watch (snapshot keyed by the pair, the
+guesswork. The joins: ledger-watch (snapshot keyed by the pair, the
 row written to its own repo's ledger), the destructive reap target (a bare `#12`
-that matches two windows is refused; `<repo>#12` names one), the dash's grouping
+that matches two windows is refused; `<repo>#12` names one), the task list's grouping
 keys (`<slug>:issue-<N>`, the spelling a multi-repo spawn stamps into `@origin`),
 the landed view (a ledger is one repo's, so it drops its own `<slug>:` from the
 origin column, and keeps one fold file per repo), and the Fleet Hub adapter
@@ -440,13 +434,11 @@ key). A one-repo fleet keeps the bare keys everywhere —
 `bin/multirepo-identity-selftest.sh` pins both halves.
 
 **One view: `all` (issues #793, #980, #1034).** Every hosted repo shows at once,
-grouped under a heading per repo; a heading (or the highlighted row) picks where a
-new session goes. #793 added a footer repo picker (`fleet-pick.sh`, behind a tap on
-the fleet name and the dash's ⌃z) that narrowed the view to one repo; #1034 removed
-it, since everything since #977/#997 assumes `all` (⌃z is the add-a-repo popup
-since #1103). #1038 then pruned every "a single repo is picked" branch its readers
-(new session, restore, history, issue-file, backlog, raw-session, the dash rows
-and fold toggle) still carried, and `fleet_current_repo` with them — there is no
+grouped under a heading per repo; a new session names its repo. #793 added a
+footer repo picker that narrowed the view to one repo; #1034 removed it, since
+everything since #977/#997 assumes `all`. #1038 then pruned every "a single repo is
+picked" branch its readers (new session, restore, history, raw-session, the rows)
+still carried, and `fleet_current_repo` with them — there is no
 current repo, only `all`; a stale `current-repo` file on disk is read by nothing,
 and `fleet-up.sh` deletes it. The footer's
 middle chip is not a tap target, and since #1099 it names the login (`@login`,
@@ -463,8 +455,8 @@ another fleet from a fleet pane (a headless caller still names its fleet). Sever
 fleets on one machine means several logins, each with its own — the per-fleet
 sockets (#159) remain the blast-radius rail between them.
 
-The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
-`dash-fold-toggle.sh`) read one `fleet_dash_repo_frame` per frame:
+The row producer (`tmux-dashboard-rows.sh`, and with it the task list) reads one
+`fleet_dash_repo_frame` per frame:
 - `all` groups the rows by repo (issue #974): one inert heading row per hosted
   repo — idle ones too, as `tokenledger (0)` (issue #998) — `tokenledger (1)`,
   the repo's bare name (`fleet_repo_name`; owner/name
@@ -475,50 +467,28 @@ The dash renderers (`tmux-dashboard-rows.sh`, and with it the sidebar, plus
   #998, operator call: its purple / dim-bold paint already sets it apart), and the
   sidebar's carries its owner/name in the row's state field, the one field the
   new-session path may read. A heading's
-  key fields read `hdr`, so every dash bind target no-ops on it and the sidebar's
-  cursor steps over it; its count includes children a collapsed parent hides;
-- **a heading folds its group** (issue #1037) — the per-repo focus now that the
-  picker is gone (#1034): `←` on a heading hides every row under it and leaves
-  `▸ tokenledger (2)`, its count still the rows it hides; `→` brings them back.
-  The same helper as the parent fold, `dash-fold-toggle.sh` — the hub hands it
-  `hdr` + the heading's 4th-field spawn target, the sidebar its `hdr:<target>`
-  cursor key (`folds()`) — and the same two rails: a `needs` row shows through,
-  and the sidebar keeps its current window. The bit is the `@repo_fold` session
-  option (window-identity table above); a parent's own `@expand` is untouched
-  underneath, so unfolding the group restores it as it was left. A one-repo
-  fleet has no heading and writes nothing: `bin/dash-repo-fold-selftest.sh`
-  pins both frames byte-identical with the option set by hand;
+  key fields read `hdr`, so every action no-ops on it and the cursor steps over it; its count includes children a collapsed parent hides;
+- **a folded heading hides its group** (issue #1037): the `@repo_fold` session
+  option (window-identity table above) names the folded groups, the heading reads
+  `▸ tokenledger (2)`, its count still the rows it hides, and a `needs` row shows
+  through. A parent's own `@expand` is untouched underneath, so unfolding the group
+  restores it as it was left. A one-repo fleet has no heading;
 - grouping keeps #790's repo-qualified keys, so a child folds under its parent
   across repos.
 
 The short tag (`fleet_repo_short`: `FLEET_REPO_SHORT` in the repo's conf, else its
-initials or first two letters, full name on a collision) is the dash badge only.
+initials or first two letters, full name on a collision) is the row badge only.
 Window names stay bare in a 2+ repo fleet too (`issue-12`, issue #1023 — #793
 used to prefix them `tl·issue-12`); identity is `@repo`/`@issue`, never the name,
 so a bare `issue-12` of repo A never blocks repo B's #12.
 `bin/repo-view-all-selftest.sh` pins the one view: the picker gone, the footer
-byte-identical in a one-repo fleet, a stale `current-repo` ignored, the dash
+byte-identical in a one-repo fleet, a stale `current-repo` ignored, the row
 grouping, and the per-spawn ask.
-
-**Backlog for any repo (issue #794).** The backlog lists every hosted repo
-(`fleet_backlog_repos`, in `fleet_repos` order) and `tmux-issues-rows.sh` reads each one's own
-`fleets/<slug>/issues|labels|parents` (`fleet_backlog_cache`), one sorted block per
-repo, each title led by its short tag under `all`. A row gains a 4th field, its
-repo; only that repo's windows mark it bound, so repo A's #12 never hides repo B's.
-Every row action passes the row's repo on as `--repo=` (`{4}` in the fzf binds):
-the preview, ⌃x close, ⌃y priority, comment, ⌃o open, and Enter/⌃g spawn
-(`dash-issue-session.sh --repo`). `fleet_backlog_repo` resolves an action's repo:
-the row's (it must be hosted), else `CF_REPO` through a popup, else nothing — the
-caller refuses. A new task has no row: the hub's ⌃n takes
-the highlighted row's or heading's repo, and with neither asks first with
-`fleet-repo-ask.sh` (repo rows only, in the same popup). A one-repo
-fleet takes none of these branches: three-field rows, the per-session cache, and
-binds with no `--repo`. `bin/backlog-repo-selftest.sh` pins both halves.
 
 **Proven end to end, then switched on (issue #795).** `bin/multirepo-e2e-selftest.sh`
 runs the whole path on one throwaway fleet hosting two repos — `fleet-repo.sh add`
 (no gate), issue #12 and a scratch in both repos plus a no-repo session, a real
-collector + pr-refresh tick, A's PR merging, one cleanup tick, the dash and backlog
+collector tick, A's PR merging, one cleanup tick, the rows
 under `all` (a stale `current-repo` file changing nothing), and a snapshot → kill → restore round-trip —
 with a one-repo fleet beside it on the same road, and (issue #1943) a one-repo
 fleet that gains a second repo and loses it again while its sessions' keys, rows,
@@ -613,14 +583,14 @@ at that window (`FLEET_HANDOFF_DEFER_SECS`).
 
 ### Runtime cache layout
 
-The **runtime** cache is ephemeral (regenerated each collector/pr-refresh tick),
+The **runtime** cache is ephemeral (regenerated each collector tick),
 split the same way — one directory per fleet (keyed by repo `slug`) plus a
 `global/` bucket for machine-wide state:
 
 ```
 $TMPDIR/.claude-dash/
   fleets/<slug>/       # per repo (slug = owner-name)
-    issues  issues.ts  #   backlog cache (+ fetch-complete marker)
+    issues  issues.ts  #   open-issue cache (+ fetch-complete marker)
     prmap   prmap.ts   #   PR/CI map
     deploy_<sha>       #   deploy verdict per merge sha (live/deploying/failed/unknown, #541)
     labels             #   #num → labels (fleet watcher)
@@ -634,7 +604,7 @@ $TMPDIR/.claude-dash/
     collect.phase.cursor #  the phase the tick was truncated at; next tick resumes there (#653)
     ctx_<key>          #   per Claude session
     usage · ratelimit  #   account-global usage proxies
-    account.* · collapsed · dash_view_* · …   # dash + account UI state
+    account.* · collapsed · dash_view_* · …   # list + account UI state
     collect.pid · collect.heartbeat           # collector overlap guard + per-phase heartbeat (#551)
     <unit>.tick                               # each interval daemon's SCHEDULING stamp (#639)
     <unit>.kick.ts · <unit>.kick.lock/        # per-unit self-heal: rate limit + dash trace (#636, #639)
@@ -652,7 +622,7 @@ the SINGLE slug-resolution truth. **All fleets are equal (issue #180): no fleet 
 "primary."** A cold-start / unresolved session returns a non-existent path so the
 reader shows "loading" until the fetch lands. The `git_`/`ctx_` caches
 are keyed by a globally-unique worktree path (so they cannot
-collide across fleets) and live under `global/`, keeping the fork-free dashboard
+collide across fleets) and live under `global/`, keeping the fork-free row
 hot path a single slug lookup per repaint.
 
 #### Daemon liveness lives in that bucket too (issue #639)
@@ -660,7 +630,7 @@ hot path a single slug lookup per repaint.
 Every fleet daemon except two is a `StartInterval` unit, and launchd has been
 observed to simply stop scheduling *all* of them in a user domain at once — no
 error, no exit code, every log freezing inside the same two minutes. Nothing
-breaks loudly: the dash serves a two-hour-old world, workers stop being reaped,
+breaks loudly: the task list serves a two-hour-old world, workers stop being reaped,
 autofill stops, the base stops fast-forwarding, `--to-worker` comments reach
 nobody. So each daemon stamps `global/<unit>.tick` at the top of its script
 (before any early exit — "launchd never spawned me" must stay distinguishable
@@ -728,9 +698,7 @@ Two details are the difference between this working and not:
 - **The cooldown therefore is the period.** `launchctl kickstart` is an *explicit*
   command, so it keeps working when nothing is being scheduled — which makes the
   self-heal's cooldown every daemon's real cadence. A flat 600s (sized for the 60s
-  units) turned `issue-bridge` and `pr-refresh`, both `StartInterval=15`, into
-  ten-minute daemons: a `--to-worker` relay that should land in 15s took up to ten
-  minutes. It now scales — `max(3 × interval, 60s)` — which keeps it at or below
+  units) turned the 15-second units into ten-minute daemons. It now scales — `max(3 × interval, 60s)` — which keeps it at or below
   every unit's staleness threshold, handing the rate-limiting back to that
   already-per-unit number.
 
@@ -763,9 +731,9 @@ Where "existing or newly-created checkout" is handled:
 3. Write `$FLEET_CONF_DIR/fleets/<session>/conf` (`FLEET_REPO`, `FLEET_MAIN`,
    `FLEET_BASE_BRANCH`).
 4. `tmux new-session -d -s <session> -c <dir>`; open the standard windows (a
-   `work` shell + the `plan` hub, which holds the dash and nothing else — a
-   fresh fleet no longer comes up with a hub Claude session).
-5. Kick the collector so the dash has data on first paint.
+   `home` shell the task list draws beside — a fresh fleet no longer comes up
+   with a hub Claude session).
+5. Kick the collector so the task list has data on first paint.
 
 #### The base branch is the repo's TRUNK, never "the branch you're standing on" (issue #603)
 
@@ -808,7 +776,7 @@ back on its own conversation and re-arms the auto-restore that down turned off.
 
 | Command | What it does |
 |---|---|
-| `fleet-up.sh [<owner/repo>] [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open `work`+`dash` windows, kick the collector. No `<owner/repo>` → infer from the current checkout (see `cf`) |
+| `fleet-up.sh [<owner/repo>] [<dir>] [--name <s>] [--base <b>]` | bring up a fleet: reuse-or-clone the checkout, write the per-fleet conf, open the `home` window, kick the collector. No `<owner/repo>` → infer from the current checkout (see `cf`) |
 | `fleet-attach.sh` | fast-path (re)attach to an already-running fleet — the no-arg `cf` tries this first (single → straight in, a leftover second → the most recently active, never a picker #980); exits 10 when nothing is live so `cf` falls through to `fleet-up.sh` (issue #212) |
 | `fleet-down.sh <session> [--yes] [--purge]` | kill the session after a typed confirmation (`--yes` for a script); `--purge` also drops the conf + slug'd cache; `fleet-up.sh --undo` takes the last down back |
 | `fleet-list.sh` | list fleets — `●` live / `○` down · name · repo · checkout, then `↳` each further repo the fleet hosts |
@@ -819,14 +787,14 @@ back on its own conversation and re-arms the auto-restore that down turned off.
 
 **Phase 1 ✅ — multi-repo data (the load-bearing change).** Collector writes
 `sessmap` + `prmap_<slug>`/`issues_<slug>` (repo set enumerated from live tmux
-sessions); `fleet-lib.sh` resolves session→repo→slug; dash/status/backlog read
+sessions); `fleet-lib.sh` resolves session→repo→slug; the task list and status read
 the slug'd files via `fleet_cache`. Every fleet is equal — no "primary" flat
 mirror (issue #180); the un-slug'd name is only `fleet_cache`'s cold-start
 fallback and is never written.
 
 **Phase 2 ✅ — per-fleet config + bootstrap.** `$FLEET_CONF_DIR/<id>.conf`
 overlay (`fleet_load_conf`); `fleet-up.sh` / `fleet-down.sh` / `fleet-list.sh`;
-session-spawn (`dash-new-session`/`dash-issue-session`) targets the current
+session-spawn (`dash-raw-session`/`dash-issue-session`) targets the current
 fleet's repo+checkout.
 
 **Phase 3 ✅ — reach + robustness.** Configured-conf **pin**

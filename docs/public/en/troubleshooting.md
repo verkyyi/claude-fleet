@@ -57,6 +57,31 @@ On a computer with only the client installed (it watches sessions, runs none), `
 - The hub records this computer as a client, so `fleet-repo.sh add`, `fleet host on` and opening a session here are refused. Starting tasks still works: the hub sends them to a managed node, and you watch and talk to them from here.
 - If this computer really should run tasks (it is a managed machine, say), ask your admin to change its type on the hub.
 
+### When GitHub is unreachable
+
+In fleet, GitHub does one thing: it hosts the code and the pull requests. Tasks, sessions, subscriptions and the view all go through the hub, so most things carry on when GitHub is down; only the steps that deliver code wait.
+
+**Carries on:**
+
+- **Tasks**: dispatching on the ⚡ line, the Tasks page and the T-numbered records live on the hub and are not affected.
+- **Sessions**: running sessions keep working; new sessions still open — fleet spends up to 20 seconds fetching the latest main branch from GitHub, and when it cannot, opens the session off the version this machine fetched last.
+- **Subscriptions and credentials**: the subscription credentials a session uses come from the hub, and so do the quota readings.
+- **The view**: the ⌘P panel, switching sessions, answering questions and following along on a phone all go through the hub and the links between machines.
+
+**Waits:**
+
+- **Pushing code, opening a pull request, reading CI, merging**: these need GitHub. The session says it is waiting for GitHub; the merge gate reads "not determined yet", which is not a failure and is never counted as red.
+- **Keeping the main branch current**: the main branch on the machine stays at the version fetched last.
+- **"Waiting for GitHub" on the Tasks page**: shown beside a work result whose pull request is not confirmed merged yet. Nothing for you to do.
+
+**Picks up by itself once GitHub is back:**
+
+- A background job fast-forwards the main branch to GitHub's latest every minute.
+- A session waiting on the merge gate gets its answer on its next read and merges as usual when it is green; the cleanup after a merge (closing the window, removing the worktree) runs in the background as usual.
+- "Waiting for GitHub" goes away once the pull request is confirmed merged.
+
+The check-up's `gh` row says only whether `gh` is installed and signed in on this machine, not whether GitHub can be reached right now.
+
 ### Sending diagnostics to your admin
 
 ```sh
@@ -110,7 +135,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: sessions read issues, open pull requests and read CI with the GitHub command line `gh`.
+- **What it is**: sessions push code, open pull requests, read CI and merge with the GitHub command line `gh`.
 - **On WARN / FAIL**: FAIL = not installed: `brew install gh`; WARN = not signed in: `gh auth login`. If you touch no GitHub repository you can leave it.
 
 #### `claude`

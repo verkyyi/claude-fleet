@@ -569,13 +569,13 @@ A request that records the same state and reason `FLEET_FAILOVER_STUCK_ATTEMPTS`
 times in a row (default 5, one per ~60s tick; digits are ignored so a countdown
 is one reason) is **stuck**: `FLEET_NOTIFY_CMD` fires once for that episode with
 the window, account, reason and the `fleet-account.sh migrate` command that
-unsticks it, the window is stamped `@quota_stuck=1` (dash: `⚠ stuck`), and
+unsticks it, the window is stamped `@quota_stuck=1` (task list: `⚠ stuck`), and
 doctor's `failover-stuck` line counts it. A new reason restarts the count and
 clears the mark; so does the request ending.
-The unstick is one key (issue #873): the dash's migrate key (`DASH_KEY_MIGRATE`,
-default ⌃l) on the row opens a confirm popup with `fleet-migrate.sh`'s own dry
-run — the account it would land on and every background command the move will
-stop — and `y` runs `fleet-migrate.sh --force-bg --toast <window>`. `--force-bg`
+The unstick is one action (issue #873): switching the row's subscription
+(`dash-migrate.sh`, the hub's `worker_switch` for a row on another machine) shows
+`fleet-migrate.sh`'s own dry run — the account it would land on and every
+background command the move will stop — and a confirm runs `fleet-migrate.sh --force-bg --toast <window>`. `--force-bg`
 takes the same inventory as the hard-wall grace before `/exit`, stops the
 survivors after it (fingerprint checked) and names them in the resume nudge.
 `fleet-account.sh migrate --stuck [--force-bg] [--dry-run]` does the same for

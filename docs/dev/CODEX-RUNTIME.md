@@ -406,23 +406,19 @@ optional evidence/detail fields do not stop later writes; non-Stop events still
 invalidate old completion evidence, and Stop still evaluates all wait reasons.
 The hook's state label is not proof that the native turn has completed.
 
-## Startup and warm scratch panes
+## Startup
 
 The terminal panel's new-task row opens its composer. Activating **Open with
 draft** opens a scratch with the typed text as an **unsent draft**. It does not
-file an issue, start a worker flow, or press Enter.
+start a worker flow or press Enter.
 Repository drafts retain hub placement and a dedicated `draft` field preserves
 the text independently of the shorter window label. The client uses the `draft`
 placement action so an older hub refuses instead of silently losing the text;
 an older node rejects the unsupported field. Upgrade hub and nodes before clients.
-Explicit issue creation, automation, and `--prompt` starts keep their seeded
-behavior. Drafts and submitted seeds cannot be combined.
+Task dispatches, automation, and `--prompt` starts keep their seeded behavior. Drafts and submitted seeds cannot be combined.
 
-Panel opens try the matching warm slot even when an agent is selected explicitly.
 The panel forwards its resolved agent even when it matches the default, avoiding
 a second selection lookup after Enter. Node-side policy checks still apply.
-Claims still check repository, provider, account home, size and age; a missing
-entry falls back to cold startup. This changes reuse, not pool capacity.
 
 While a launch is pending, the panel checks its result at most every 50 ms within
 the existing input/redraw deadline. Idle polling and redraw frequency are
@@ -445,8 +441,8 @@ provider checks remain on the launch path.
 Measure panel acceptance to **draft ready**, then deliberate Enter to first token
 and complete reply separately. Human editing time is not runtime latency. A
 window appearing is not agent readiness, and draft-only opening is not a completed
-model response. Cold and warm samples, model, effort, MCP configuration and
-concurrent workload must accompany any five-second claim.
+model response. Model, effort, MCP configuration and concurrent workload must
+accompany any five-second claim.
 
 Credential-free session homes keep `app-server-control` private, just like
 temporary runtime state. Linking that directory from the real account home makes
@@ -466,19 +462,6 @@ stop the launch instead of silently loading the full MCP set.
 sets native reasoning effort. Explicit caller `-c` values win. Policies reach
 both the private app-server and TUI without editing account configuration.
 `FLEET_CODEX_HOME` optionally pins a pre-existing account home for new workers.
-
-The warm scratch pool that pre-started either provider is gone (T495): every
-session is a cold launch.
-
-Scheduled refills (`ensure --soon` / `--delay`) coalesce per fleet/repository/agent
-and retry a resource hold at most three times, after 15, 30 and 60 seconds.
-Each pass reloads configuration and credentials and samples CPU afresh; explicit
-CPU probe overrides remain authoritative. The refill worker releases the slot's
-mutation lock between passes, so ordinary maintenance can fill it sooner. This
-is a bounded worker, not a new periodic daemon. Disabled pools do not wait or
-retry. Authentication, admission, readiness and full MCP defaults are unchanged.
-This shared mechanism applies to Claude and Codex; it does not guarantee a
-sub-second cold start or a five-second model response.
 
 ## Account homes and quota recovery
 
@@ -517,8 +500,7 @@ proof that a bucket meters all uses of that normal model.
 `FLEET_CODEX_QUOTA_FLOOR` defaults to 5 percent remaining.
 `FLEET_CODEX_QUOTA_GATE=1` holds fresh launches when every configured
 account is below that floor; without the gate, a fully depleted pool still lets
-an operator launch. This gate is independent of Claude's ccquota gate. Warm
-claims use the same selected home. Quotas are included-usage headroom; Fleet
+an operator launch. This gate is independent of Claude's ccquota gate. Quotas are included-usage headroom; Fleet
 does not redeem reset credits or change billing settings. Either way a pool
 that is all below the floor is said at launch, naming when each account comes
 back (issue #4606).

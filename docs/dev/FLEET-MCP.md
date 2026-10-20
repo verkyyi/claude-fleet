@@ -19,7 +19,7 @@ A tool only **checks** its arguments, then runs the existing script **unchanged*
   `exit <rc> · <script>` then the output). A non-zero exit is data, not an error:
   `spawn` exit 2 is "at capacity", `await` exit 3 is "still running".
 
-Caps, claim dedup, the origin gate and every guard live in the scripts — once.
+Caps, the origin gate and every guard live in the scripts — once.
 No hub is needed for any tool (EPIC #1813 rule 1): with no hub configured all of
 them are listed and run locally.
 
@@ -27,21 +27,20 @@ them are listed and run locally.
 
 The same script serves two servers. Every session mounts the **core**, `fleet`
 (`conf/mcp-worker.json`): what a session works with — `status` · `repos` · `agents` ·
-`brief` · `gh` · `comment` · `file_issue` · `ask` · `report` · `pr_verdict` ·
-`pr_merge` · `evidence` · `handoff` · `context` · `transfer` · `where` · `open` ·
-`show` · `set_reap`. The **dispatch group** —
+`brief` · `ask` · `report` · `pr_verdict` · `pr_merge` · `handoff` · `context` ·
+`transfer` · `where` · `open` · `show` · `set_reap`. The **dispatch group** —
 `spawn` · `await` · `children` · `answer_dialog` · `send` · `task` — is listed only by
 `fleet-mcp.py --group orch`, the server **`fleet-orch`** (`conf/mcp-orch.json`). It
 ships with the core (issue #4334): no plugin registers it. Claude shows its tools as
 `mcp__fleet-orch__<tool>`; Codex shows them on its `fleet-orch` server.
 
 - **Every session has it** (issue #4703, after #4591 — any session may spawn; the
-  session caps and the claim dedup, in the scripts, are the only bounds). The launcher
+  session caps, in the scripts, are the only bounds). The launcher
   (`bin/fleet-claude.sh`; `bin/fleet-codex.sh` asks `fleet-mcp.py --bridge-seat`, 0 in
   any fleet pane) mounts `fleet-orch` for every launch and says `FLEET_MCP_ORCH=1`.
   `@agent_spawn` is still stamped (the agent file's grant) but gates nothing; EPIC
   #4333 C1's `@agent_spawn 1` switch (issue #4334) is gone. No plugin, seat or role
-  name is asked (issue #3118). `file_issue` with `spawn: true` always spawns.
+  name is asked (issue #3118).
 - **A session launched before #4703 without the group** (`FLEET_MCP_ORCH` unset)
   needs no reopen: its `fleet` server, once it takes over the new version (#1898's
   exec + `tools/list_changed`), lists the dispatch group itself, and answers it
@@ -50,7 +49,7 @@ ships with the core (issue #4334): no plugin registers it. Claude shows its tool
   left with the role seats (issue #4340, EPIC #4333 C7): an old session that listed it
   keeps a call that answers 「retired」 (exit 2, nothing marked) for one version
   (`# compat-1v`). A role is a session template now: `spawn` with `agent:orchestrator`.
-- **There is no `rule`** on `task` and `file_issue` (issue #4340: the dispatch rule
+- **There is no `rule`** on `task` (issue #4340: the dispatch rule
   table is gone; nothing writes 「按规则 N 派发」 or a `fleet:rule` marker).
 - **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`
   still ANSWERS every dispatch-group call under its old name; the call log marks it
@@ -74,15 +73,15 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `children` | — | `fleet-children.sh --json` | the script's |
 | `repos` | — | `fleet-repo.sh list` (`structuredContent.repos` = the parsed `owner/name` list) | the script's |
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
-| `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
+| `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` | 0 spawned / window exists · 2 at capacity · 3 closed or already has a PR · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
 | `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; an issue number whose window is an accepted launch waits on that window's `T<n>` (no `@task`: NO-WORKER), and a hub-authority repo never spawns by number (NO-WORKER — use `task`, issue #4398); legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
 | `task` 派 | `title`, `body`?, `repo`?, `spawn`?, `reap`?, `agent`?, `coding_agent`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--spawn] [--reap P] [--as A] [--agent claude|codex]` — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's session bound to the record alone (issue #4897: `dash-raw-session.sh --repo R --task T<n> --reap merged`, no issue — its SessionStart flow reads the record with `brief`, it lands its PR and `report merged` closes the record; reaped once the record is closed), or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). Nothing is filed as an issue (#4898). No hub: exit 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
-| `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
+| `send` | `to` (`issue:<N>` · `<slug>:issue-<N>` · `scratch-<N>` · `agent:<name>` · `T-<code>` · `fid:<uuid>` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
 ### 报 问 记 合 (issue #1808, EPIC #1813 C6)
 
-The rest of a worker's day — the commands the old claim skill had it type. Each argument is one flag of the script; a body or a doc travels on
+The rest of a worker's day. Each argument is one flag of the script; a body or a doc travels on
 **stdin**, never through argv. Arguments that only make sense together are checked
 together (refused, nothing ran): `slug` is
 `path`'s, `doc` / `issue` are `check`'s; `until_merged` / `timeout` need `wait`.
@@ -903,7 +902,7 @@ included:
 | `status` `children` `repos` `agents` | read: this session's view |
 | `spawn` `await` | only as **itself** the parent — the script stamps the child's `@origin` from this pane, and the pane is pinned to the credential's session |
 | `send` | only within **this fleet**: local keys (`issue:<N>` / `scratch-<N>` / `parent`), never a `wid:` address |
-| `report` `ask` `evidence` `handoff` | only **itself** — `fleet-report-parent.sh` reports the calling pane, pinned the same way |
+| `report` `ask` `handoff` | only **itself** — `fleet-report-parent.sh` reports the calling pane, pinned the same way |
 
 **No credential** (a person in a shell, a session launched before this, `FLEET_MCP=0`):
 the call runs as before, by the window's options — and is logged `via=marker`.

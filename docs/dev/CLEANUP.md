@@ -30,7 +30,7 @@ cleanup: com.claude-fleet.cleanup (~60s) sees the MERGED PR still has a worktree
               └─ teardown: kill window → DROP worktree → delete branch
                            (drop = mv into .fleet-trash/ + prune; the bytes go to
                             the tick-end budgeted sweep — issue #586)
-resume:  /fleet-history (or the dash ⌃t landed view) → claude --resume <session>
+resume:  /fleet-history → claude --resume <session>
 ```
 
 The merge source does not matter: the worker's own `gh pr merge`, a human clicking
@@ -57,7 +57,7 @@ still lists cache candidates without fetching their merge times. Automatic CLOSE
 requires explicit `done`, shared process liveness, and a clean strict ancestor
 of the remote base. Manual CLOSED cleanup retains its existing policy. This delay does not prove that a
 worker is idle. Automatic MERGED cleanup also requires exactly one resolved
-window in explicit `done` state and passes the shared dash process gate: a
+window in explicit `done` state and passes the shared process gate: a
 Claude/Codex descendant in any pane younger than `FLEET_REAP_MIN_AGE` (default
 300 seconds), unreadable metadata, or an active transfer defers with `skip:live`.
 Missing/ambiguous windows are retained; windowless work belongs to
@@ -71,11 +71,11 @@ cleanup refuses callers inside the target window/worktree and never queues a
 detached teardown. Manual cleanup retains its existing self-cleanup behavior.
 Automatic MERGED cleanup also requires a readable clean worktree whose current
 HEAD is exactly the PR's merged head. Dirty work or commits made after the merge
-are retained. The dashboard activity cell displays an amber `rNm` countdown before
+are retained. The task list's activity cell displays an amber `rNm` countdown before
 reaping. The notice is tied to the done-state timestamp and PR head: resumed work
 invalidates it. A newly eligible or stale candidate gets at least 60 seconds of
 visible notice, even when its merge grace has already elapsed. Notices expire from
-the dash after 180 seconds without a confirming cleanup tick.
+the list after 180 seconds without a confirming cleanup tick.
 
 ### A merged PR is not a finished task (issue #1156)
 
@@ -86,7 +86,7 @@ task is over: either the MERGED PR's `closingIssuesReferences` names (repo, #N) 
 free, it rides in on the existing `gh pr view` — or `gh issue view` says #N is no
 longer OPEN. Otherwise `fleet-cleanup.sh --auto` returns `skip:issue-open` (MERGED
 and CLOSED-unmerged alike; an unknown state defers too), touches nothing, and the
-dash activity cell shows an amber `iss open` instead of a countdown (the window's
+list's activity cell shows an amber `iss open` instead of a countdown (the window's
 `@reap_hold` carries `PR #P merged · #N still open — continue or close?`). Close
 #N and the next tick reaps normally. The check runs before the merged grace, so a
 reap that cannot happen never counts down. Manual cleanup and non-issue heads are
@@ -164,7 +164,7 @@ when no report has been delivered. Active loops and handoffs suppress that fallb
 Every report is also appended to the parent's children ledger
 (`$FLEET_STATE/children/<parent-key>.ndjson`, issue #937), delivered or not. A
 parent verifies a report — or asks how all its children are doing — with ONE
-read of `bin/fleet-children.sh` (ledger + live window state + the dash's PR
+read of `bin/fleet-children.sh` (ledger + live window state + the PR
 cache), never a `gh pr list` + `capture-pane` per report; `/fleet-epic-run` says
 so (issue #940).
 The reporting selftest uses two local windows and the actual inbox transport.
@@ -172,11 +172,11 @@ The reporting selftest uses two local windows and the actual inbox transport.
 | Piece | What |
 |---|---|
 | the worker's ship + land step | After opening the PR, the worker polls `bin/fleet-pr-verdict.sh <PR>` and, on `READY`, runs `gh pr merge <PR> --<FLEET_MERGE_METHOD> --delete-branch` (default `squash`) then re-reads the verdict to confirm `MERGED` (issue #441). `FAILING`/`CONFLICT`/`BEHIND` are the worker's to fix; `BLOCKED` (branch protection) is a real gate it must not force— it asks (`ask`), reports blocked and stops. 
-| `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the dash's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
+| `bin/fleet-pr-verdict.sh <PR>` | The **merge gate**, read-only: ONE `gh` call folded through `land_classify`/`land_verdict` (bin/fleet-land-lease.sh) into one token — `READY` · `PENDING` · `BEHIND` · `FAILING` · `CONFLICT` · `BLOCKED` · `DRAFT` · `MERGED` · `CLOSED`. Exit 0 only for `READY`, 1 for any other verdict, 2 on error. Stricter than the task list's glance on purpose: a red or still-running check outranks a `CLEAN` mergeStateStatus, because `CLEAN` only means nothing *required* blocks the merge. |
 | `bin/fleet-cleanup.sh <PR>` | The mechanical, no-LLM, **no-merge** janitor. `bin/fleet-land.sh` MINUS the merge: for a MERGED (or CLOSED-unmerged) PR it records the ledger first, fast-forwards the base under the shared land lease, and tears down window → worktree → branch (the worktree is **dropped**, not deleted — see below). Idempotent; an already-reaped PR is a no-op. A **CLOSED**-unmerged PR goes through the [liveness gate](#closed-unmerged-is-not-proof-of-abandonment-issue-544) first. Result tokens: `cleaned:<sha>` · `cleaned:closed` · `skip:not-final` · `skip:nothing` · `skip:grace` · `skip:notice` · `skip:issue-open` · `skip:live` · `skip:dirty` · `error:<reason>`. |
-| `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache pr-refresh already writes (`--state all`, so MERGED/CLOSED rows are present — ZERO extra `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each, **each under a wall-clock budget** (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s). Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
+| `com.claude-fleet.cleanup` (`bin/fleet-cleanup-daemon.sh`, ~60s) | Scans the `prmap` cache (MERGED/CLOSED rows; git's own for a repo with no GitHub — ZERO `gh`) for final PRs whose `issue-<N>` still has a live worktree or window, and drives `fleet-cleanup.sh` for each, **each under a wall-clock budget** (`FLEET_CLEANUP_CANDIDATE_TIMEOUT`, 120s). Single-writer per repo + disk-gated. **ON by default** (opt out per fleet with `FLEET_CLEANUP=0`) — it merges nothing and relaxes no gate. |
 | *reap now* from the hub | The manual escape hatch: clean up one merged/closed PR *now* instead of waiting a daemon tick, by running `FLEET_SESSION=$S bash bin/fleet-cleanup.sh <PR>` from the hub pane. Same mechanical core. |
-| `gh pr merge <PR>` from the hub | **Land by hand** — for a PR whose worker is gone (window closed, context exhausted, blocked) or one the operator simply wants in now. `--auto` still works if you'd rather let GitHub merge it when green; the old dash `⌃l` arming affordance (`dash-arm-merge.sh`) was pruned in #289. Either way the cleanup daemon reaps afterwards. |
+| `gh pr merge <PR>` from the hub | **Land by hand** — for a PR whose worker is gone (window closed, context exhausted, blocked) or one the operator simply wants in now. `--auto` still works if you'd rather let GitHub merge it when green. Either way the cleanup daemon reaps afterwards. |
 | `bin/fleet-land-lease.sh` | Kept for the per-repo **base fast-forward** serialization (renamed conceptually to a base lease). `fleet-cleanup.sh` takes it only for the quick base pull — no hold-through-green. |
 | `com.claude-fleet.base-sync` (`bin/fleet-base-sync.sh`, ~60s; issue #327) | The **merge-independent base fast-forward** — see below. |
 
@@ -249,14 +249,13 @@ that survives the pane vanishing and can remove the cwd it stood in — mirrorin
 (`reason=clear`/`resume`) is a **no-op** — the same window continues — so it never
 fires on a handoff; only a genuine `prompt_input_exit`/`logout` acts. Scoped to
 issue-bound workers (a raw `@raw` scratch → **window-close only**); panels
-(dash/plan/backlog) and the hub pane are never touched. It **reacts, never
-blocks** (SessionEnd can't veto an exit). Idempotent (`fleet_reap_record` +
-`gh issue close` dedup), so racing the cleanup daemon / ledger-watch still yields one
-row and one close. **ON by default, globally** — set `FLEET_CLOSE_ON_EXIT=0` in the
+and the hub pane are never touched. It **reacts, never
+blocks** (SessionEnd can't veto an exit). Idempotent (`fleet_reap_record`
+dedup), so racing the cleanup daemon / ledger-watch still yields one row. **ON by default, globally** — set `FLEET_CLOSE_ON_EXIT=0` in the
 **global** `~/.claude/fleet/fleet.conf` to disable it machine-wide. The value is
 **global-authoritative** (snapshotted before the per-fleet overlay), so a stray
 per-fleet `FLEET_CLOSE_ON_EXIT` is ignored — the switch is global-only, not per-fleet.
-It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
+It is equivalent to auto-firing the confirmed close (`dash-reap.sh`) on exit.
 
 **Since issue #1784 an exit no longer closes the window by itself.** Every session
 is opened through `bin/fleet-session-wrap.sh`, and while that wrapper holds the pane
@@ -357,7 +356,7 @@ unsticks it — gating the sweep on free disk is the one ordering that can deadl
 | `bin/worktree-autoclean.sh` | `fleet_worktree_drop` with **no** `--force` — its liveness/merged gates already proved the worktree clean, and the drop's own dirty gate is the last check |
 | `bin/fleet-cleanup-daemon.sh` | `fleet_trash_sweep`, once per tick, before the disk gate |
 
-Interactive teardowns (`dash-reap.sh` ⌃x, `bin/session-end-hook.sh`) still call
+Interactive teardowns (`dash-reap.sh`, `bin/session-end-hook.sh`) still call
 `git worktree remove` directly — a human is watching there, and a follow-up issue
 tracks moving them over.
 
@@ -400,9 +399,9 @@ squash failed on a conflict, but the pipeline's exit code was `tail`'s `0`, so t
 noticed, started `git merge origin/master`, and was four minutes into resolving
 `UU README.md` when the next 60s cleanup tick read `state=CLOSED`, `kill-window`'d
 it (transcript ends at `Exit code 137` — SIGKILL) and `worktree remove --force`'d
-the uncommitted resolution along with it. Restoring the session with `⌃o` put a
+the uncommitted resolution along with it. Restoring the session put a
 fresh window on the same issue; the next tick killed that one too, and every one
-after it — `⌃o` restore was simply unusable while a PR sat `CLOSED`.
+after it — restore was simply unusable while a PR sat `CLOSED`.
 
 So the reap now has to prove the **session** is gone, not merely that the PR is.
 Every check is a read (so `--dry-run` runs them too and classifies honestly), and
@@ -429,7 +428,7 @@ Three consequences worth stating outright:
 
 **The `closedAt` comparison has no timeout.** "Has this session spoken since the
 PR closed?" is the question that separates *abandoned* from *working on the close*,
-and a grace period cannot express it. This is also what makes `⌃o` restore work
+and a grace period cannot express it. This is also what makes restore work
 again: a deliberately restored window keeps talking, so it keeps deferring, for as
 long as it is in use.
 
@@ -442,7 +441,7 @@ refuses a tree that went dirty after the gate ran.
 
 **The session is recorded before it is reaped.** This path used to write no ledger
 row at all — "not a landed session" — so a reaped closed-unmerged worker vanished
-from `/fleet-history` and `⌃t` with it: no transcript pointer, no worktree sha, no
+from `/fleet-history` with it: no transcript pointer, no worktree sha, no
 way back. It now funnels through the same `fleet_reap_record` choke point the
 merged path uses (issue #384) with the `unmerged` outcome, which routes to
 `record-closed`, written while the worktree path still resolves to a transcript
@@ -511,11 +510,11 @@ assertions in `bin/orphan-proc-reap-selftest.sh`.
 
 Everything above is addressed by `issue-<N>`: the daemon's candidate filter, the
 "live worktree/window" set, and `fleet-cleanup.sh`'s teardown. So a session that
-started as a **scratch** (dash `⌃s` → a `scratch-<N>` worktree and branch), talked
+started as a **scratch** (`dash-raw-session.sh` → a `scratch-<N>` worktree and branch), talked
 its way into real work, and shipped a PR is **never reaped** — not because the
 pipeline is stuck, but because it was never addressable. `worktree-autoclean.sh`
 is no backstop here: it only reaps a worktree whose *window is already gone*, and
-the window is exactly what never closes. Two such windows were found on one dash
+the window is exactly what never closes. Two such windows were found on one fleet
 long after their PRs merged, holding 1.2 GB and 5.4 GB of worktree.
 
 Relaxing this unconditionally is not an option. **#543/#544 protects a non-issue
@@ -581,8 +580,7 @@ The reaped session still lands in `/fleet-history`: with no issue number,
 ## Resume
 
 The resume path is unchanged and now complete for **every** merge: `fleet-cleanup.sh`
-records the history ledger before teardown, so `/fleet-history` and the dash's
-live⇄landed **⌃t** view can resume any landed session with `claude --resume`. See
+records the history ledger before teardown, so `/fleet-history` can resume any landed session with `claude --resume`. See
 `bin/fleet-history.sh`.
 
 **Closed-but-unlanded sessions** (issue #320): a worker window closed by hand /
@@ -595,10 +593,10 @@ so it too is browsable + resumable via `/fleet-history`. Such a worktree is
 unmerged, so worktree-autoclean keeps it → resume just reuses the on-disk worktree.
 It **records only** — never a reaper.
 
-**The dash ⌃x reaper** (issue #471): ⌃x is the one disposal path no other writer
+**The confirmed close** (`dash-reap.sh`, issue #471) is the one disposal path no other writer
 covers in time — the SessionEnd hook does not fire (a `kill-window` is not a
 walk-away exit) and ledger-watch only notices ~60s later, by which point the
-worktree is gone and the row it writes has no sha to rebuild from. So ⌃x records
+worktree is gone and the row it writes has no sha to rebuild from. So it records
 the row itself, before it removes anything: a merged-PR reap writes a `landed`
 row (PR resolved from the branch), and ancestor / force-reaped-unmerged / dirty
 write `closed-unlanded`. The gate verdict is computed on the interactive pass and
@@ -611,9 +609,8 @@ deleted, so the rebuild works only until `git gc` prunes it (~2 weeks).
 by an issue number could index it — its transcript used to be dropped on the floor
 the moment its window closed (and its clean worktree pruned silently). It is now
 recorded like any worker, keyed by its `scratch-<N>` slug (the name of both its
-branch and its worktree) in the same ledger column, and shows in `/fleet-history` +
-the dash ⌃t view as `~<N>`. Every reaper records it before disposing of anything:
-the ledger-watch daemon, the SessionEnd hook, the dash **⌃x** reaper and the
+branch and its worktree) in the same ledger column, and shows in `/fleet-history` as `~<N>`. Every reaper records it before disposing of anything:
+the ledger-watch daemon, the SessionEnd hook, the confirmed close and the
 worktree janitor all go through `fleet_reap_record`. Because a scratch's worktree is
 usually the thing that gets removed (a clean scratch is pruned silently by #290's
 rules), the closed row also stores the worktree's **HEAD sha** — captured while it

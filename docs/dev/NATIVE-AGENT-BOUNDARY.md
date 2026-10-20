@@ -43,7 +43,7 @@
 
 | 入口/能力 | 现状 | 替换条件 |
 |---|---|---|
-| `bin/dash-raw-session.sh` | 先做 authority/admission，再尝试池或分配目录，随后创建窗口；存在准入 reservation 时禁止复用旧原生进程 | 保持准入与身份绑定；原生 Worktree 启动也必须经过此边界，不能删 `_pool_ok` 限制来实现快路径 |
+| `bin/dash-raw-session.sh` | 先做 authority/admission，再分配目录，随后创建窗口；存在准入 reservation 时禁止复用旧原生进程 | 保持准入与身份绑定；原生 Worktree 启动也必须经过此边界 |
 | `fleet_scratch_alloc` / `fleet_worktree_create`（`bin/fleet-lib.sh`） | 同步 fetch，分配 `scratch-N`，创建 Git worktree 并运行 setup | 原生创建后不再调用一次 Fleet 创建；必须迁移所需 setup 配置，不能无意丢失项目文件、依赖或完整 MCP |
 | `fleet_seat` / `fleet_scratch_key` 与 `bin/fleet-worktree.sh` | 部分座位、路径和身份使用历史命名约定 | 原生目录映射使用明确元数据与 Git 身份验证，不把任意目录前缀当授权 |
 | `hooks/base-readonly-guard.py` | 保护主检出及其真实路径下的后代 | Codex 本次实测生成主检出之外的目录，现有守卫允许；不能因为 Claude 的嵌套布局未适配，就整体放行 `.claude` / `.codex` |

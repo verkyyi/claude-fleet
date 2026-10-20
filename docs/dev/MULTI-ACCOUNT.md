@@ -132,7 +132,7 @@ the pick is a starting point, and every spawn re-picks on ccquota headroom
 (issue #513, below) and rotates past a limited account. The old green
 `◉ <account>` chip mirrored `global/account.active`, which is now re-written
 per spawn — a stale snapshot. Per-window truth lives in the window's
-`@cc_account` (the dash) and `fleet-account.sh whoami [<window-id>]` — with no
+`@cc_account` (the task list) and `fleet-account.sh whoami [<window-id>]` — with no
 window id it reports the pane you run it in.
 
 ### One session, one kind of subscription (`--account`, issue #1540)
@@ -178,7 +178,7 @@ OFF the helpers fall back to that ambient login, which is then correct.
 
 ```
 spawn a session ──► bin/fleet-claude.sh ──► exports CLAUDE_CODE_OAUTH_TOKEN
-   (dash/backlog/cw)   (the launcher)        for the ACTIVE account, stamps the
+   (task/spawn/cw)     (the launcher)        for the ACTIVE account, stamps the
                                              window's @cc_account label, exec claude
                                              │
 collector (every ~60s) ── scrapes each window ┘
@@ -763,7 +763,7 @@ fleet-account.sh migrate --account work     # everything running on `work`
 fleet-account.sh migrate @12 @15            # these windows, whatever they run on
 fleet-account.sh migrate --stuck            # every window whose failover request is ⚠ stuck (#872)
 fleet-account.sh migrate --force-bg @12     # move despite background commands: stop them,
-                                            # name them in the resume nudge (#873; = dash ⌃l)
+                                            # name them in the resume nudge (#873; = dash-migrate.sh)
 fleet-account.sh migrate --dry-run --all    # print the plan only
 fleet-account.sh whoami @12                 # the account a window REALLY runs (token truth;
                                             # heals a stale @cc_account stamp)
@@ -772,7 +772,7 @@ fleet-account.sh whoami                     # …and bare: the pane you ran it i
                                             # of that fleet it exits 2, never silently empty
 ```
 
-Never touched: panels (`dash`/`plan`/`backlog`), the operator hub (`@hub`),
+Never touched: panels (`home`, `dash`/`plan`/`backlog` of an older fleet), the operator hub (`@hub`),
 windows with no Claude process, and a raw scratch parked at `FLEET_MAIN`
 without a registry session id. Windows move one at a time (each is a cold
 `claude` boot). From outside tmux pass `--session <fleet>`.

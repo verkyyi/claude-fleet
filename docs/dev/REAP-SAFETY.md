@@ -89,13 +89,11 @@ become a strict ancestor. The separate liveness guards remain necessary.
 
 ## The issue is not the reaper's to close
 
-A reap disposes of a window and a worktree (issue #1542, from #1309 and #867).
-A **landed** row (`merged-pr` / `ancestor`) leaves the issue exactly as it is:
-the PR's `Closes #N` closed it, and one still open is a worker that said "keep
-open until the read-back". An **unlanded** row (`unmerged` / `dirty`, only after
-a confirm or `--yes`) leaves the issue OPEN, removes the `@me` assignee (the
-claim) and posts one no-relay note — naming a zero-commit worker "never started"
-— so the EPIC report never counts a reaped attempt as `CLOSED/COMPLETED`.
+A reap disposes of a window and a worktree (issue #1542, from #1309 and #867),
+never a ticket: a GitHub issue is left exactly as it is (the PR's `Closes #N`
+closes it), and a task record is closed only by its session's report — an
+**unlanded** row (`unmerged` / `dirty`, only after a confirm or `--yes`) leaves it
+open, so the EPIC report never counts a reaped attempt as done.
 
 The cleanup daemon separately enforces a [merged grace](CLEANUP.md#the-pieces)
 of 600 seconds by default. The same daemon implements idle-scratch window cleanup and the dashboard `rNm`

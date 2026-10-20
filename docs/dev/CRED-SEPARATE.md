@@ -46,8 +46,7 @@ rails now:
 4. **It is red until it holds** — the login's `credsep` row is FAIL for a node
    login not separated (a login with no `node.env` is leased nothing: no row); the
    machine's `credsep-logins` row (`fleet-credsep.sh machine enforced`, anyone)
-   FAILs naming every one with the daemon's last word; the steward's health watch
-   files a new FAIL row as an issue; the hub's `cred-ttl` gate item counts every
+   FAILs naming every one with the daemon's last word; the hub's `cred-ttl` gate item counts every
    login that leases, not only managed ones.
 
 BREAK-IT rows `cred-new-login-unseparated`, `cred-existing-unseparated`,

@@ -68,7 +68,7 @@ Fleet 是模型与 Agent 服务的轻量接入和托管层。
 
 近期优先提供原生 Agent 的云端托管，用户从网页（对话、会话）或终端接入，并按实际需求提供模型接口接入。不重做厂商已有的交互体验。
 
-常驻 orchestrator、steward 和 backlog autofill 已移除（EPIC #4333）：编排只是人按需起的会话模板（`spawn agent:orchestrator`）；管家模板也已去掉（#4900）。EPIC 等工作流仅作为可选扩展，不成为使用前提。
+产品只做两件事：**订阅共享**和**云端 Runtime**（EPIC #4895）。任务和会话由 hub 的任务记录 `T<n>` 管，**任务归人，不归仓库**；GitHub 只托管代码和 PR。编排只是人按需起的会话模板（`spawn agent:orchestrator`），EPIC 等工作流仅作为可选扩展（一个 EPIC 是 hub 的父任务），不成为使用前提。
 
 长期以稳定 Sandbox 为基础，利用厂商 SDK 和标准扩展提供可选的 Role 与托管执行能力，通过 MCP 供其他 Agent 调用。外部 Agent 负责规划与协作，Fleet 负责可靠执行，不重新引入常驻编排层。
 
