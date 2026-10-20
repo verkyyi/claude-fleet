@@ -1,7 +1,8 @@
 #!/bin/bash
-# fleet-peer-send.sh — deliver a message to a LIVE Claude session over its local
-# inbox socket: the same channel the SendMessage / ListAgents tools use between
-# sessions on this machine (issue #513). The recipient sees it as a message from
+# fleet-peer-send.sh — deliver a message to a LIVE session of any agent. A window
+# goes the one road (fleet_agent_deliver, T626): a Claude over its local inbox
+# socket — the same channel the SendMessage / ListAgents tools use between
+# sessions on this machine (issue #513) — a Codex into its window's thread queue. The recipient sees it as a message from
 # another session on its next turn (queued while it is mid-turn). This is the
 # sanctioned way for fleet tooling — the quota watch, an operator script — to talk
 # to a running session; raw `tmux send-keys` into a prompt is not (issue #437).
@@ -456,33 +457,24 @@ queue_here() {
   echo "queued → $tgt${label:+ ($label)} — $1; delivered when it can take it"
   exit 3
 }
+# A window: the one road into a live session of any agent (T626, EPIC T580 C6) —
+# fleet_agent_deliver asks the adapter how this agent takes a message; held (a
+# Codex window not on the thread it names yet, a pane with no reachable Claude)
+# waits in this fleet's peer queue for the window's identity, replayed, never «sent».
 case "$tgt" in
   @*|%*)
-    evidence=$("${tm[@]}" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
-    if [ -n "$evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
-      session=$("${tm[@]}" display-message -p -t "$tgt" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
-      err=$(printf '%s' "$text" | python3 "$BIN/fleet_worker_life.py" deliver --session "$session" "$tgt" 2>&1 >/dev/null); rc=$?
-      [ "$rc" -eq 0 ] || die 1 "${err:-delivery to $tgt failed (exit $rc)}"
-      echo "sent → $tgt via delivery ($label)"; exit 0
-    fi
-    agent=$("${tm[@]}" display-message -p -t "$tgt" '#{@cc_agent}' 2>/dev/null)
-    if [ "$agent" = codex ]; then
-      out=$(printf '%s' "$text" | python3 "$BIN/fleet-codex-session.py" send --pane "$tgt" --socket "$SOCK" 2>&1); rc=$?
-      # 4 = held (T540): the window is not on the thread it names (a /clear not
-      # followed yet) — queued for its identity, replayed, never «sent».
-      [ "$rc" -eq 4 ] && queue_here "${out#fleet-codex-session: }"
-      [ "$rc" -eq 0 ] || die 1 "${out:-Codex queue to $tgt failed (exit $rc)}"
-      echo "sent → codex ${out##* } ($label)"; exit 0
-    fi ;;
+    fleet_agent_deliver "$tgt" "$SOCK" "$text"; rc=$?
+    case "$rc" in
+      0) echo "sent → $FLEET_DELIVER_NOTE ($label)"; exit 0 ;;
+      "${FLEET_DELIVER_HELD:-3}") queue_here "$FLEET_DELIVER_NOTE" ;;
+    esac
+    die 1 "$FLEET_DELIVER_NOTE" ;;
 esac
 
 pid=""
 case "$tgt" in
   ''|*[!0-9]*)
-    case "$tgt" in
-      @*|%*) pid=$(fleet_pane_claude_pid "$tgt" "$SOCK") ;;
-      *-*-*-*-*) pid=$(fleet_cc_pid_for_session "$tgt") ;;
-    esac ;;
+    case "$tgt" in *-*-*-*-*) pid=$(fleet_cc_pid_for_session "$tgt") ;; esac ;;
   *) pid="$tgt" ;;
 esac
 [ -n "$pid" ] || queue_here "no live Claude session for '$tgt'"

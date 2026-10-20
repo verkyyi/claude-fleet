@@ -311,10 +311,18 @@ account home, transcript provenance and worktree. See [session transfer](SESSION
 
 ## Messaging
 
-`fleet-peer-send.sh -L SOCKET %PANE 'message'` and `fleet-report-parent.sh`
-recognise Codex targets. They use the recorded UUID and CODEX_HOME and propagate
-queue failures. Child reports are marked delivered only after a successful
-queue operation.
+Every message into a live session — `fleet-peer-send.sh -L SOCKET %PANE 'message'`,
+`fleet-report-parent.sh`, a digest, the peer queue's replay, a hub relay — takes ONE
+road for both agents: `fleet_agent_deliver` (`bin/fleet-lib.sh`, T626). Only «how it
+is put in» differs, and that is the agent adapter table's `deliver` column
+(`bin/fleet_agent_adapter.py`): a Claude takes it on its process's peer inbox
+(`inbox`), a Codex window on its app-server thread queue (`queue`,
+`fleet-codex-session.py send`, the recorded thread and CODEX_HOME). One outcome code
+for both: 0 handed over · 3 held (nobody there to take it now — a Codex window not on
+the thread it names after a /clear, a server that does not answer, a Claude whose
+inbox will not answer: queued for the window's identity and replayed) · 1 refused.
+The Codex sender's held code was 4; readers take 4 for one more version. Child
+reports are marked delivered only after a successful hand-over.
 
 Fleet pane launches now create one private local app-server and connect the TUI
 to its `unix://PATH` endpoint. Hook commands inherit that pane's environment;

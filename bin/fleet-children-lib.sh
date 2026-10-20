@@ -183,26 +183,16 @@ print(m)' "$f" 2>/dev/null)
     && mv -f "${f%.ndjson}.cursor.$$" "${f%.ndjson}.cursor" 2>/dev/null
 }
 
-# children_send <sess> <sock> <parent-win> <msg> — the ONE delivery path, shared by
-# a per-report send (fleet-report-parent.sh) and a digest (fleet-children-flush.sh).
-# A window whose Stop hook left its evidence goes through fleet_worker_life.py
-# deliver (the journaled direct send); a Codex pane through its own sender; a live Claude through the peer
-# inbox (#513) — never tmux send-keys (#437). Returns 0 only when it was handed over.
+# children_send <sess> <sock> <parent-win> <msg> — the delivery a per-report send
+# (fleet-report-parent.sh), a digest (fleet-children-flush.sh) and the peer queue's
+# replay share. It is the one road into a live session of any agent,
+# fleet_agent_deliver (fleet-lib.sh, T626): the journaled route of a window whose
+# Stop hook left its evidence, else the adapter's deliver column — never tmux
+# send-keys (#437). Returns 0 only when it was handed over, 3 held (nobody there to
+# take it now: queue it for the window's identity), else 1; FLEET_DELIVER_NOTE says
+# who took it or why not. <sess> is read off the window now; kept for its callers.
 children_send() {
-  local sess="${1:-}" sock="${2:-}" pwin="${3:-}" msg="${4:-}" agent ev pid
+  local pwin="${3:-}"
   [ -n "$pwin" ] || return 1
-  _cs_tm() { if [ -n "$sock" ]; then tmux -L "$sock" "$@"; else tmux "$@"; fi; }
-  agent=$(_cs_tm display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
-  ev=$(_cs_tm display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
-  if [ -n "$ev" ] && [ -f "$_CHILDREN_BIN/fleet_worker_life.py" ]; then
-    printf '%s' "$msg" | python3 "$_CHILDREN_BIN/fleet_worker_life.py" deliver --session "$sess" "$pwin"
-    return $?
-  fi
-  if [ "$agent" = codex ]; then
-    printf '%s' "$msg" | python3 "$_CHILDREN_BIN/fleet-codex-session.py" send --pane "$pwin" --socket "$sock"
-    return $?
-  fi
-  pid=$(fleet_pane_claude_pid "$pwin" "$sock" 2>/dev/null) || return 1
-  [ -n "$pid" ] || return 1
-  fleet_peer_send "$pid" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"
+  fleet_agent_deliver "$pwin" "${2:-}" "${4:-}" "${FLEET_REPORT_FROM:-fleet-report}"
 }

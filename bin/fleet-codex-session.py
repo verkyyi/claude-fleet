@@ -353,7 +353,8 @@ FOLLOW_OPT_OUT = ('item/agentMessage/delta', 'item/reasoning/textDelta', 'item/r
 
 
 class Held(ValueError):
-    """The message is not handed over (exit 4): every caller queues it for replay."""
+    """The message is not handed over (exit 3, the one held code of every agent's
+    deliverer — T626; it was 4 before): every caller queues it for replay."""
 
 
 def created_ms(value):
@@ -397,7 +398,7 @@ def current_thread(client, sid, own=()):
             continue
         thread = (client.call("thread/read", {"threadId": tid}) or {}).get("thread") or {}
         if thread.get("id") == tid and tui_root(thread, own):
-            return "the window moved on to thread %s (a /clear or /new not yet followed)" % tid
+            return "the window moved on to a new Codex thread %s (a /clear or /new not yet followed)" % tid
     return ""
 
 
@@ -593,7 +594,12 @@ def send(args):
     # follower has not stamped yet holds it — queued by the caller, replayed once
     # the window names its new thread — never a false DELIVERED. The launch's
     # pinned thread too: a /clear before its first turn leaves the pin behind.
-    why = check_current(remote, data["session_id"])
+    # A server that does not answer is the Claude inbox that will not answer (T626):
+    # nobody there to take it now — held for the window's identity, never refused.
+    try:
+        why = check_current(remote, data["session_id"])
+    except (OSError, EOFError) as exc:
+        raise Held("the window's Codex server is not answering (%s)" % exc) from None
     if why:
         raise Held(why)
     env = dict(os.environ, CODEX_HOME=data["home"])
@@ -672,7 +678,7 @@ def main():
         return context(args) if args.command == "context" else send(args)
     except Held as exc:
         print("fleet-codex-session: held, not delivered: " + str(exc), file=sys.stderr)
-        return 4
+        return 3
     except EOFError as exc:
         print("fleet-codex-session: the window's Codex server closed: " + str(exc), file=sys.stderr)
         return 1
