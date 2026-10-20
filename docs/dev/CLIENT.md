@@ -116,6 +116,8 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
                                925 zoom · 927 quickopen · 928 new · 929 fold ·
                                931 quit · 932 dispatch
+                      ⌘\ (home, EPIC T651 C3) sends ⌃\'s own byte 0x1c instead:
+                      tmux drops a private code while a popup is up
 
 924 (⌘J), 926 (⌘/) and 930 (⌘K, issue #3185) are retired (issue #2362) and never reused: a profile
 written before the update still sends them, and the conf catches both and does

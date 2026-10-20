@@ -27,14 +27,18 @@
 #      back on the session, ⌃\ there selects the same one (one a session); the
 #      session's window gone takes its shell along. Another machine's: a channel
 #      on C5's link (`ssh -S <link> -l <login> mac-a … shell-here <wid>`), its prompt
-#      in the far worktree. A direct attach: no shell window. Issue #3183: in ⌘P,
-#      ⌃\ on a lit row opens THAT session's shell though it is not on screen, in
+#      in the far worktree. A direct attach: no shell window. Issue #3183: `do
+#      shell --target` (a row's Tab page) opens THAT session's shell though it is not on screen, in
 #      the directory its agent is in (@agent_cwd — its last Bash call's cwd — else
 #      the agent pane's: cd'd into bin/ → …/bin; both gone → @worktree; `do shell
 #      --target <window | fleet_id>`), ⌘P from the
-#      shell lights its session (↵ back), a second ⌃\ selects the one open, and
+#      shell lights its session (↵ back), a second one selects the one open, and
 #      `exit` closes the shell window alone — the session's window, its
 #      @claude_state and its process unchanged
+#   H  ⌘\ · ⌃\ (EPIC T651 C3): the home shell — this machine's login shell in
+#      $HOME, one window of the 看台 (`@view_shell home`), from a session, from
+#      ⌘P's list and its 新会话 box (⌘\ sends ⌃\'s byte), back and forth;
+#      `do home`; a direct attach: nothing
 #   P  ⌘P's one entry (issue #3327, EPIC #3178 ④ — 方案 B; #3180 before it): the
 #      search line is the only input; under the sessions ONE ⚡ row (「⚡ 新会话」)
 #      then ⏻ 退出 — no other command row; FLEET_PANEL_COMMANDS `none` takes them
@@ -320,7 +324,8 @@ done
 prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)"'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*farwt'" \
   || st_fail "S: mac-a's shell is not in its worktree: $(to capture-pane -p -t o:view | tail -5)"
-# issue #3183: ⌃\ on a lit row of ⌘P — gamma, not on screen, its agent in bin/
+# issue #3183: a session not on screen — gamma, its agent in bin/ (the row's Tab
+# page 命令行 = `do shell --target`; ⌃\ in ⌘P is the home shell since EPIC T651 C3)
 # (the cd runs in the pane's own process: tmux reads the cwd of the pane's
 # foreground process group LEADER, and dash keeps a `sh -c` wrapper as that)
 W3=$(ti new-window -d -P -F '#{window_id}' -t fl -n gamma "cd '$W/wt-gamma/bin' && stty -isig 2>/dev/null; exec cat > '$W/pane3.in'")
@@ -330,9 +335,7 @@ row "$W3" working x gamma ' ' '' 0 '' '' '#33' - 50% ok 'Gamma task' merged '' '
 P3=$(ti display-message -p -t "$W3" '#{pane_pid}')
 ti select-window -t "=fl@view-v1:$W2"; now_on "$W2"
 listed() { tmux -S "$OUT" capture-pane -p -t o:view | grep -q 'Gamma task'; }
-to send-keys -t o:view -H 1b 5b 39 32 37 7e
-waitfor 20 listed || st_fail "S: ⌘P listed no gamma: $(to capture-pane -p -t o:view)"
-to send-keys -t o:view -l gamma; sleep 0.4; to send-keys -t o:view 'C-\'
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target "$W3" || st_fail "S: do shell --target $W3 exited non-zero"
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" \
   || st_fail "S: ⌃\\ on gamma's row made no shell for it: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}') $(to capture-pane -p -t o:view | tail -3)"
 SG=$(ti list-windows -t fl -F "#{window_id} #{@view_shell}" | awk -v k="nodeA@$ME:$W3" '$2 == k { print $1 }')
@@ -347,11 +350,9 @@ sleep 0.3
 to capture-pane -p -t o:view | grep -q '  .*Gamma task' || st_fail "S: ⌘P in gamma's shell does not light gamma: $(to capture-pane -p -t o:view | grep -n 'Gamma task')"
 to send-keys -t o:view Enter
 waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$W3' ]" || st_fail "S: ↵ from the shell's ⌘P is not back on gamma ($(cur))"
-# again from the panel: the one open, selected
-to send-keys -t o:view -H 1b 5b 39 32 37 7e
-waitfor 20 listed || st_fail "S: ⌘P (again) listed no gamma"
-to send-keys -t o:view -l gamma; sleep 0.4; to send-keys -t o:view 'C-\'
-waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SG' ]" || st_fail "S: a second ⌃\\ on gamma did not select its shell ($(cur))"
+# again: the one open, selected
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target "$W3" || st_fail "S: do shell --target $W3 (again) exited non-zero"
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$SG' ]" || st_fail "S: a second do shell on gamma did not select its shell ($(cur))"
 [ "$(ti list-windows -t fl -F '#{@view_shell}' | grep -cx "nodeA@$ME:$W3")" = 1 ] || st_fail "S: a second shell window for gamma"
 # exit: the shell window alone goes
 to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
@@ -360,7 +361,7 @@ ti list-windows -t fl -F '#{window_id}' | grep -qx "$W3" || st_fail "S: exit in 
 [ "$(ti display-message -p -t "$W3" '#{@claude_state}|#{pane_pid}|#{pane_dead}')" = "working|$P3|0" ] \
   || st_fail "S: gamma changed under its shell's exit: $(ti display-message -p -t "$W3" '#{@claude_state}|#{pane_pid}|#{pane_dead}') (was working|$P3|0)"
 [ -s "$W/pane3.in" ] && st_fail "S: the shell sent keys to gamma's pane: $(od -c "$W/pane3.in" | head -2)"
-# the cwd its last Bash call left (@agent_cwd) outranks the pane's; `do shell --target`
+# the cwd its last Bash call left (@agent_cwd) outranks the pane's
 mkdir -p "$W/wt-gamma/lib"; ti set-option -w -t "$W3" @agent_cwd "$W/wt-gamma/lib"
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' shell --view fl@view-v1 --target "$W3" || st_fail "S: do shell --target $W3 exited non-zero"
 waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -qx 'nodeA@$ME:$W3'" || st_fail "S: --target $W3 made no shell for gamma"
@@ -377,7 +378,60 @@ waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -q
 prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=.*wt-delta=='" \
   || st_fail "S: delta's agent directory gone, the shell is not in its @worktree: $(to capture-pane -p -t o:view | grep -v '^$'; ti list-windows -t fl -F '#{window_id} #{@view_shell} mode=#{pane_in_mode} cmd=#{pane_current_command}')"
-st_ok_all "S  ⌃\\: the session's shell in its worktree (here; mac-a over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; ⌘P's ⌃\\ on a session off screen — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
+st_ok_all "S  ⌃\\: the session's shell in its worktree (here; mac-a over the link's shell-here), ⌃\\ back and forth, one a session, gone with the session; nothing in a direct attach; a session off screen (do shell --target) — where its agent is (@agent_cwd, else its pane's bin/, else @worktree), ↵ back from its shell, exit closes the shell alone (#3183)"
+
+# --- H: ⌘\ · ⌃\ — the home shell (EPIC T651 C3) ---------------------------------------------
+# ⌘\ — the iTerm2 profile sends ⌃\'s byte, 0x1c (a private code would never reach
+# a popup) — from a session: ONE window of the 看台 marked `@view_shell home`, a
+# login shell in $HOME; ⌘\ there is back where you were, ⌘\ again the same window;
+# in ⌘P — the list and the 新会话 box — the same key. A direct attach: nothing. The
+# default keys: leg S's FLEET_KEYS_EXTRA (⌃\ = the session's shell) dropped first.
+ti set-option -gu @fleet_view_keys_extra
+FLEET_KEYS_EXTRA='' TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-keys || st_fail "H: view-keys (defaults) exited non-zero"
+cmdbs() { to send-keys -t o:view -H 1c; }
+homew() { ti list-windows -t fl -F '#{window_id} #{@view_shell} #{@peer_view}' | awk '$2 == "home" && $3 == "v1" { print $1 }'; }
+ti select-window -t "=fl@view-v1:$W2"; now_on "$W2"
+before=$(nwin)
+to send-keys -t o:direct -H 1c
+sleep 1
+[ "$(nwin)" = "$before" ] || st_fail "H: ⌘\\ opened a window from a direct attach"
+cmdbs
+waitfor 20 sh -c "[ -n \"\$(tmux -S '$IN' list-windows -t fl -F '#{@view_shell}' | grep -x home)\" ]" \
+  || st_fail "H: ⌘\\ made no home shell: $(ti list-windows -t fl -F '#{window_id} #{@view_shell}')"
+HW=$(homew)
+now_on "$HW"; [ "$(cur)" = "$HW" ] || st_fail "H: the 看台 is not on the home shell ($(cur))"
+[ "$(ti display-message -p -t "$HW" '#{@fleet_role}')" = panel ] || st_fail "H: the home shell is not a panel window"
+prompt_ready; to send-keys -t o:view -l 'echo "AT=$(pwd)=="'; to send-keys -t o:view Enter
+waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'AT=$W/home=='" \
+  || st_fail "H: the home shell is not in \$HOME ($W/home): $(to capture-pane -p -t o:view | grep -v '^$' | tail -5)"
+cmdbs
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$W2' ]" || st_fail "H: ⌘\\ in the home shell is not back on the session ($(cur))"
+cmdbs
+waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$HW' ]" || st_fail "H: ⌘\\ again did not select the home shell ($(cur))"
+[ "$(homew | grep -c .)" = 1 ] || st_fail "H: a second home shell window"
+# from ⌘P: on the list and in the 新会话 box
+for how in list box; do
+  cmdbs; now_on "$W2"
+  to send-keys -t o:view -H 1b 5b 39 32 37 7e
+  waitfor 20 listed || st_fail "H: ⌘P listed nothing ($how)"
+  if [ "$how" = box ]; then
+    to send-keys -t o:view -l zzqqxx; sleep 0.3; to send-keys -t o:view Enter
+    waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '仓库'" || st_fail "H: ↵ on words that hit nothing opened no 新会话 box: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
+  fi
+  cmdbs
+  waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$HW' ]" \
+    || st_fail "H: ⌘\\ in ⌘P ($how) did not go to the home shell ($(cur)): $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
+done
+[ "$(homew | grep -c .)" = 1 ] || st_fail "H: ⌘P made a second home shell window"
+# `do home` from outside a key; exit: the window alone goes
+cmdbs; now_on "$W2"
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' home --view fl@view-v1 || st_fail "H: do home exited non-zero"
+now_on "$HW"; [ "$(cur)" = "$HW" ] || st_fail "H: do home is not on the home shell ($(cur))"
+prompt_ready; to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
+waitfor 20 sh -c "! tmux -S '$IN' list-windows -t fl -F '#{window_id}' | grep -qx '$HW'" || st_fail "H: exit left the home shell window"
+# the legs below press the extras again (⌘Q = quit)
+TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-keys || st_fail "H: view-keys (extras back) exited non-zero"
+st_ok_all "H  ⌘\\ · ⌃\\: the home shell — one window (@view_shell home) in \$HOME, back and forth, from ⌘P's list and 新会话 box, nothing in a direct attach, exit closes it (EPIC T651 C3)"
 
 # --- P: anchored composer; existing placement routes (#4416) -------------------
 vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }

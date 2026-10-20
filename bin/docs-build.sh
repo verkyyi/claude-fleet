@@ -317,10 +317,12 @@ GEN_RE = re.compile(r'(<!-- docs-gen:([a-z-]+) -->\n)(.*?)(<!-- /docs-gen:\2 -->
 GEN_WORDS = {
     'zh': {'where': '在哪', 'press': '按', 'mac': 'Mac 上的 iTerm2', 'phone': '手机（Termius）或别的终端',
            'or': ' 或 ', 'then': '再按', 'key': '键', 'does': '做什么', 'nokey': '—',
-           'action': '名字', 'mac_x': 'Mac 上（⌘）', 'phone_x': '手机上（⌃] 再按）', 'space': '空格'},
+           'action': '名字', 'mac_x': 'Mac 上（⌘）', 'phone_x': '手机上（⌃] 再按）', 'space': '空格',
+           'home': '任何画面：家里这台机器的命令行（$HOME），不需要会话、不需要 hub；再按一次回来'},
     'en': {'where': 'Where', 'press': 'Press', 'mac': 'iTerm2 on a Mac', 'phone': 'A phone (Termius) or another terminal',
            'or': ' or ', 'then': 'then', 'key': 'Key', 'does': 'What it does', 'nokey': '—',
-           'action': 'Name', 'mac_x': 'On a Mac (⌘)', 'phone_x': 'On a phone (⌃] then)', 'space': 'Space'},
+           'action': 'Name', 'mac_x': 'On a Mac (⌘)', 'phone_x': 'On a phone (⌃] then)', 'space': 'Space',
+           'home': 'From any screen: the home machine\'s command line ($HOME), no session or hub needed; again to come back'},
 }
 _GEN_CACHE = {}
 
@@ -333,6 +335,10 @@ def _gen_inputs():
         letters = dict(l.split()[:2] for l in view.splitlines() if len(l.split()) >= 2)
         _GEN_CACHE['keys'] = (fleet_keys, letters)
     return _GEN_CACHE['keys']
+
+def _keymap_rows():
+    return subprocess.run(['bash', os.path.join(REPO, 'bin', 'dash-keymap.sh'), '--panel', 'switch', 'list'],
+                          capture_output=True, text=True).stdout.splitlines()
 
 def _ui(lang):
     if lang not in _GEN_CACHE:
@@ -380,6 +386,9 @@ def gen_block(name, lang):
                 rows.append('| %s | %s |' % (code(head), rest))
             else:
                 rows.append('| %s | %s |' % (w['nokey'], item))
+        # ⌘\ · ⌃\ (EPIC T651 C3): the home shell — dash-keymap.sh's `home` row, fleet_keys.HOME_CHORD
+        mac = next((l.split()[1] for l in _keymap_rows() if l.split()[:1] == ['home']), '')
+        rows.append('| %s | %s |' % (w['or'].join(code(k) for k in (mac, glyph(fk.HOME_CHORD, lang)) if k), w['home']))
         return '\n'.join(rows) + '\n'
     if name == 'keys-extra':
         rows = ['| %s | %s | %s | %s |' % (w['action'], w['does'], w['mac_x'], w['phone_x']), '|---|---|---|---|']

@@ -23,6 +23,7 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | `?` | legend |
 | `esc` | close |
 | `↑` | to ⚡ |
+| `⌘\` or `⌃\` | From any screen: the home machine's command line ($HOME), no session or hub needed; again to come back |
 <!-- /docs-gen:keys -->
 
 The panel looks roughly like this (sample data):
