@@ -630,6 +630,115 @@ class Journal(Receipts):
             self.assertEqual(len(count), 1)
 
 
+class HardLinkedBinary(Receipts):
+    """T524: one release binary under several hard-linked names. macOS
+    proc_pidpath answers the name the vnode cache saw last, so a version switch
+    reading <sha>/.release/artifacts/claude-<ver>-… renamed every running Claude:
+    the supervisor lost the receipt it had (T510) and the hook refused a
+    «non-native» ancestor without a word (T522)."""
+
+    def test_artifact_names_are_the_provider(self):
+        for path, tool in (("/r/tools/claude/ab/claude", "claude"), ("/v/2.1.295", "claude"),
+                           ("/r/x/.release/artifacts/claude-2.1.295-darwin-arm64", "claude"),
+                           ("/r/x/.release/artifacts/codex-0.162.1-darwin-arm64", "codex"),
+                           ("/usr/bin/codex", "codex"),
+                           ("/r/x/.release/artifacts/codex-code-mode-host-0.162.1-darwin-arm64", ""),
+                           ("/r/x/.release/artifacts/tmux-3.7c-darwin-arm64", ""), ("/bin/zsh", "")):
+            self.assertEqual(launch.native_tool(path), tool, path)
+            self.assertEqual(launch.native_name(path), bool(tool), path)
+
+    def test_renamed_hard_link_is_the_same_process(self):
+        with tempfile.TemporaryDirectory() as d:
+            tool = Path(d) / "claude"
+            tool.write_bytes(b"binary")
+            artifact = Path(d) / "claude-2.1.295-darwin-arm64"
+            os.link(tool, artifact)
+            other = Path(d) / "other"
+            other.write_bytes(b"binary")
+            receipt = dict(self.receipt, executable=str(tool))
+            with mock.patch.object(launch, "process", return_value=dict(receipt, executable=str(artifact))):
+                self.assertTrue(launch.same_process(receipt))
+            with mock.patch.object(launch, "process", return_value=dict(receipt, executable=str(other))):
+                self.assertFalse(launch.same_process(receipt))
+                self.assertIn("executable", launch.identity_diff(receipt))
+            with mock.patch.object(launch, "process", return_value=dict(receipt, birth="new-birth",
+                                                                       executable=str(artifact))):
+                self.assertFalse(launch.same_process(receipt))
+                self.assertIn("birth differs", launch.identity_diff(receipt))
+
+    def test_hook_finds_claude_under_its_artifact_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            artifact = Path(d) / "claude-2.1.295-darwin-arm64"
+            artifact.write_text("#!/bin/sh\necho '2.1.295 (Claude Code)'\n")
+            artifact.chmod(0o755)
+            claude = dict(pid=50, ppid=49, birth="b", executable=str(artifact))
+            with mock.patch.object(launch.os, "getppid", return_value=50), \
+                 mock.patch.object(launch, "process", return_value=claude):
+                self.assertEqual(launch.native_parent()["actual_provider"], "claude")
+
+    def test_a_refused_hook_says_why_on_the_window_and_in_the_log(self):
+        opts, logged = {}, []
+        def tmux(*args, **kw):
+            opts[args[4]] = args[5]
+            return ""
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_LAUNCH_CONTEXT": json.dumps(self.context)}), \
+             mock.patch.object(launch, "native_parent", side_effect=ValueError("no verified native provider")), \
+             mock.patch.object(launch, "tmux", side_effect=tmux), \
+             mock.patch.object(launch, "launch_log", side_effect=logged.append):
+            with self.assertRaises(ValueError):
+                launch.hook(dict(hook_event_name="SessionStart", session_id=self.receipt["native_session"]))
+        self.assertIn("no verified native provider", opts["@launch_hook_error"])
+        self.assertIn("no verified native provider", logged[0])
+
+    def failed_launch(self, opts_after_start, process_view=None):
+        opts = {"@launch": json.dumps(self.context), "@fleet_id": self.context["worker_id"].split("/")[1],
+                "window_id": "@7", "pane_pid": "11"}
+        child = mock.Mock(pid=12, returncode=None)
+        child.poll.return_value = None
+        logged = []
+        def popen(argv, **kw):
+            opts.update(opts_after_start)
+            return child
+        def tmux(*args, **kw):
+            if args[0] == "set-option":
+                if args[1] == "-wu":
+                    opts.pop(args[4], None)
+                else:
+                    opts[args[4]] = args[5]
+            return ""
+        ticks = iter(range(1000))
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), \
+             mock.patch.object(launch, "option", side_effect=lambda p, k, *a: opts.get(k, "")), \
+             mock.patch.object(launch, "tmux", side_effect=tmux), \
+             mock.patch.object(launch, "process", return_value=process_view or dict(self.receipt, pid=12)), \
+             mock.patch.object(launch, "descendant", return_value=True), \
+             mock.patch.object(launch, "current_task"), \
+             mock.patch.object(launch, "publish") as publish, \
+             mock.patch.object(launch, "stop_created"), \
+             mock.patch.object(launch, "launch_log", side_effect=logged.append), \
+             mock.patch.object(launch.subprocess, "Popen", side_effect=popen), \
+             mock.patch.object(launch.time, "monotonic", side_effect=lambda: next(ticks)), \
+             mock.patch.object(launch.time, "sleep"):
+            with self.assertRaises(ValueError) as caught:
+                launch.supervise(["launcher", "--agent", "codex"])
+            publish.assert_not_called()
+        self.assertEqual(opts["@launch_error"], str(caught.exception))
+        self.assertIn(str(caught.exception), logged[0])
+        return str(caught.exception)
+
+    def test_failure_names_the_refused_hook(self):
+        why = self.failed_launch({"@launch_hook_error": "ValueError: no verified native provider in hook ancestry"})
+        self.assertIn("the SessionStart hook refused — ValueError: no verified native provider", why)
+
+    def test_failure_names_the_identity_field(self):
+        why = self.failed_launch({"@launch_receipt": json.dumps(self.receipt)},
+                                 dict(self.receipt, executable="/elsewhere/codex"))
+        self.assertIn("executable /elsewhere/codex, receipt /fixture/codex", why)
+
+    def test_failure_with_no_receipt_says_so(self):
+        self.assertIn("no receipt: the native SessionStart hook recorded none", self.failed_launch({}))
+
+
 if __name__ == "__main__":
     unittest.main()
 

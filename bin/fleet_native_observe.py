@@ -305,7 +305,7 @@ def inspect(pane, socket, pid, sid):
     row = binding(pane, socket)
     socket = row["socket"]
     native = kernel(pid)
-    require(Path(native["executable"]).name == "codex", "selected PID is not native Codex")
+    require(launch.native_tool(native["executable"]) == "codex", "selected PID is not native Codex")
     version = subprocess.run([native["executable"], "--version"], stdin=subprocess.DEVNULL,
                              text=True, capture_output=True, timeout=5)
     require(version.returncode == 0 and bool(re.fullmatch(r"codex-cli \S+\s*", version.stdout)),
@@ -354,7 +354,7 @@ def inspect(pane, socket, pid, sid):
     clients = []
     for child in children.stdout.split():
         p = kernel(int(child))
-        if Path(p['executable']).name != 'codex':
+        if launch.native_tool(p['executable']) != 'codex':
             continue
         args = process_argv(p['pid'])
         require('--remote' in args and args[args.index('--remote') + 1] == remote,

@@ -293,7 +293,7 @@ def read(pane, socket="", readers=None, legacy_reader=None, pr=None):
             native = pi.get("native") or {}
             matched = (pi.get("worker") == i.get("worker_id", "").split("/")[-1]
                        and pi.get("sid") == i.get("native_session")
-                       and all(native.get(k) == i.get(k) for k in ("pid", "birth", "executable")))
+                       and launch.same_identity(native, i))
             layers["pending_tool"] = dict(version=1, identity=i, source="fleet_pending_tool.observe",
                 observed_at=o["observed_at"], expires_at=o["expires_at"], value=o,
                 unknown=not matched or o["code"] == 4, reason=o["reason"] if matched else "pending_identity_unavailable")

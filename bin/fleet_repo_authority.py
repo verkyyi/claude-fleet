@@ -190,7 +190,7 @@ def prove_stopped(proof):
         pass
     else:
         observed = launch.process(proof["pid"])
-        if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
+        if launch.same_identity(observed, proof):
             raise ValueError("native execution is still alive")
     proof["execution_stopped"] = True
     return proof
@@ -258,7 +258,7 @@ def observe_native(payload, codex_identity=None):
             if previous.get("native_worktree") != intent:
                 raise ValueError("late local hook cannot replace native creation intent")
             previous_proof = previous.get("native_identity", {})
-            if any(previous_proof.get(key) != native[key] for key in ("pid", "birth", "executable")) \
+            if not launch.same_identity(previous_proof, native) \
                     or previous_proof.get("native_session") != payload["session_id"]:
                 raise ValueError("late local hook cannot replace native identity")
             binding = previous.get("worktree", binding)

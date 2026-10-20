@@ -287,10 +287,49 @@ def process(pid, *, ps_row=None):
     return dict(pid=int(pid), ppid=int(row[0]), birth=row[1], executable=executable)
 
 
-def same_process(receipt):
+def same_executable(a, b):
+    """One executable FILE, whatever name the kernel gives it (T524).
+
+    A release hard-links one binary under several names (tools/claude/<sha>/claude,
+    every <sha>/.release/artifacts/claude-<ver>-<os>-<arch>), and macOS
+    proc_pidpath answers whichever name the vnode cache last saw — so reading an
+    artifact during a version switch renames every running Claude. The identity
+    is the inode: the same path, or two paths naming the same file."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    if a == b:
+        return True
+    try:
+        return os.path.isabs(a) and os.path.isabs(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def same_identity(a, b):
+    """pid + birth + executable of two kernel observations name one process."""
+    try:
+        return (a["pid"] == b["pid"] and a["birth"] == b["birth"]
+                and same_executable(a["executable"], b["executable"]))
+    except (KeyError, TypeError):
+        return False
+
+
+def identity_diff(receipt):
+    """Which of pid / birth / executable no longer matches — for the failure line."""
     try:
         current = process(receipt["pid"])
-        return all(current[k] == receipt[k] for k in ("pid", "birth", "executable"))
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return "pid %s is gone" % receipt.get("pid")
+    if current["birth"] != receipt["birth"]:
+        return "pid %d birth differs" % receipt["pid"]
+    if not same_executable(current["executable"], receipt["executable"]):
+        return "executable %s, receipt %s" % (current["executable"], receipt["executable"])
+    return "matches"
+
+
+def same_process(receipt):
+    try:
+        return same_identity(process(receipt["pid"]), receipt)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         return False
 
@@ -308,9 +347,21 @@ def descendant(pid, parent):
     return False
 
 
-def native_name(path):
+def native_tool(path):
+    """claude | codex | '' — the provider a binary's NAME says it is.
+
+    Besides `claude` / `codex` and Claude's numeric version files, a release's
+    artifact name (`claude-2.1.295-darwin-arm64`, `codex-0.162.1-darwin-arm64`)
+    is the same binary under a hard link (T524: macOS may report that name)."""
     base = Path(path).name
-    return base in ("codex", "claude") or bool(re.fullmatch(r"\d+\.\d+\.\d+", base))
+    m = re.fullmatch(r"(claude|codex)(?:-\d+\.\d+\.\d+(?:-[A-Za-z0-9_]+)*)?", base)
+    if m:
+        return m.group(1)
+    return "claude" if re.fullmatch(r"\d+\.\d+\.\d+", base) else ""
+
+
+def native_name(path):
+    return bool(native_tool(path))
 
 
 def root_native(p, supervisor):
@@ -355,11 +406,36 @@ def native_parent():
     raise ValueError("no verified native provider in hook ancestry")
 
 
+def launch_log(line):
+    """One line in $FLEET_CONF_DIR/logs/launch.log: why a launch proof failed (T524)."""
+    try:
+        conf = os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet")
+        path = Path(conf) / "logs" / "launch.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as out:
+            out.write("%s pane=%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                           os.environ.get("TMUX_PANE", "-"), line.replace("\n", " ")))
+    except OSError:
+        pass
+
+
 def hook(payload):
     raw = os.environ.get("FLEET_LAUNCH_CONTEXT", "")
     if not raw or payload.get("hook_event_name") != "SessionStart":
         return
-    record(validate_context(json.loads(raw)), native_parent(), payload)
+    try:
+        record(validate_context(json.loads(raw)), native_parent(), payload)
+    except Exception as e:
+        # The hook's caller swallows a failure (telemetry never fails a turn), so
+        # the supervisor would only see «no receipt»: say why, on the window and
+        # in the log (T522 refused silently).
+        why = "%s: %s" % (type(e).__name__, e)
+        launch_log("hook refused: " + why)
+        try:
+            tmux("set-option", "-w", "-t", os.environ["TMUX_PANE"], "@launch_hook_error", why[:300])
+        except (OSError, KeyError, subprocess.SubprocessError):
+            pass
+        raise
 
 
 def witness_codex(server_pid, payload, remote):
@@ -409,7 +485,7 @@ def record(c, p, payload, remote=None):
         raise ValueError("resume changed native session identity")
     check_receipt(c, receipt)
     if previous:
-        if any(previous[k] != receipt[k] for k in ("pid", "birth", "executable", "native_session")):
+        if previous["native_session"] != receipt["native_session"] or not same_identity(previous, receipt):
             raise ValueError("late or nested hook cannot replace launch identity")
         if "worktree" in previous and previous["worktree"] != receipt.get("worktree"):
             raise ValueError("late hook cannot replace worktree identity")
@@ -426,8 +502,10 @@ def inspect(context, pane, socket=""):
     if json.loads(option(pane, "@launch", socket)) != c:
         raise ValueError("window no longer holds this launch")
     receipt = check_receipt(c, json.loads(option(pane, "@launch_receipt", socket)))
-    if option(pane, "@fleet_id", socket) != c["worker_id"].split("/")[1] or not same_process(receipt):
-        raise ValueError("interrupted: native process identity was lost")
+    if option(pane, "@fleet_id", socket) != c["worker_id"].split("/")[1]:
+        raise ValueError("interrupted: native process identity was lost (window @fleet_id differs)")
+    if not same_process(receipt):
+        raise ValueError("interrupted: native process identity was lost (" + identity_diff(receipt) + ")")
     if not descendant(receipt["pid"], int(option(pane, "pane_pid", socket))):
         raise ValueError("interrupted: native process no longer belongs to this pane")
     if "worktree" in receipt:
@@ -705,6 +783,8 @@ def supervise_guarded(argv, pane, c, guard):
         argv += ["--worktree", native_worktree["name"], "--name", native_worktree["name"]]
         directory = native_worktree["root"]
     tmux("set-option", "-wu", "-t", pane, "@launch_receipt")
+    tmux("set-option", "-wu", "-t", pane, "@launch_hook_error")
+    tmux("set-option", "-wu", "-t", pane, "@launch_error")
     tmux("set-option", "-w", "-t", pane, "@launch_started", "1")
     if not option(pane, "@task"):
         # A reopened window (restore, migrate, a history resume) is the same
@@ -718,8 +798,14 @@ def supervise_guarded(argv, pane, c, guard):
         root = process(child.pid)
         deadline = time.monotonic() + 45
         receipt = None
+        why = "no receipt: the native SessionStart hook recorded none"
         while child.poll() is None and time.monotonic() < deadline:
             try:
+                if not option(pane, "@launch_receipt"):
+                    refused = option(pane, "@launch_hook_error")
+                    if refused:
+                        why = "no receipt: the SessionStart hook refused — " + refused
+                    raise LookupError(why)
                 receipt = inspect(c, pane)
                 if native_worktree:
                     if receipt.get("native_worktree") != native_worktree:
@@ -730,18 +816,32 @@ def supervise_guarded(argv, pane, c, guard):
                     raise ValueError("native launch did not prove the expected worktree")
                 if descendant(receipt["pid"], child.pid):
                     break
+                why = "pid ancestry: native %d is not under this launch's process %d" % (receipt["pid"], child.pid)
                 receipt = None
-            except (OSError, ValueError, subprocess.SubprocessError):
+            except LookupError:
+                receipt = None
+            except (OSError, ValueError, subprocess.SubprocessError) as e:
+                why = str(e) or type(e).__name__
                 receipt = None
             time.sleep(0.1)
+        if child.poll() is not None:
+            why = "the native process exited first (rc %s)" % child.returncode
         if receipt is None or child.poll() is not None:
-            raise ValueError("unknown: no matching process/native-session receipt; task input withheld")
+            # Say WHICH proof did not match (T524), on the window and in the log.
+            line = "unknown: no matching process/native-session receipt (%s); task input withheld" % why
+            launch_log("%s %s: %s" % (c["task"], c["operation_id"], line))
+            try:
+                tmux("set-option", "-w", "-t", pane, "@launch_error", line[:400])
+            except (OSError, subprocess.SubprocessError):
+                pass
+            raise ValueError(line)
         publish(c, receipt)
         if seed:
             # A final process/identity comparison immediately precedes native
             # inbox delivery. No keystrokes, alternate provider or queued retry.
             final = inspect(c, pane)
-            if any(final[k] != receipt[k] for k in (*IDENTITY, "native_session", "pid", "birth", "executable")):
+            if (any(final[k] != receipt[k] for k in (*IDENTITY, "native_session"))
+                    or not same_identity(final, receipt)):
                 raise ValueError("launch identity changed before input")
             if final.get("worktree") != receipt.get("worktree"):
                 raise ValueError("worktree identity changed before input")

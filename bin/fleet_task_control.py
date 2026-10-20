@@ -351,7 +351,7 @@ def finalize(pane):
         pass
     else:
         observed = launch.process(proof["pid"])
-        if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
+        if launch.same_identity(observed, proof):
             raise ValueError("native execution is still alive")
     evidence = json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")}, sort_keys=True)
     # Record the stopped native even if a cancel request/result was accepted

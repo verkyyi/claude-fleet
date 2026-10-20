@@ -71,7 +71,7 @@ def snapshot(payload):
     processes = {name: launch.process(int(pid)) for name, pid in
                  (('native', native['pid']), ('launcher', owner), ('supervisor', context['supervisor']),
                   ('pane', row['pane_pid']), ('server', row['pid']))}
-    require(all(processes['native'][k] == native[k] for k in ('pid', 'birth', 'executable'))
+    require(launch.same_identity(processes['native'], native)
             and processes['launcher']['ppid'] == context['supervisor']
             and launch.root_native(native, context['supervisor'])
             and launch.descendant(native['pid'], int(owner))
