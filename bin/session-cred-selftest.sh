@@ -301,7 +301,7 @@ PY
 ( python3 "$SB/dbin/fake-codex-app-server.py" "$GH/tmp/daemon.sock" "$SB/daemon.up" </dev/null >/dev/null 2>&1 & echo $! > "$SB/daemon.pid" )
 DPID=$(cat "$SB/daemon.pid")
 i=0; while [ ! -s "$SB/daemon.up" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-rows() { ( . "$BIN/fleet-lib.sh"; _fleet_codex_cred_daemons ) | awk -F'\t' -v p="$DPID" '$1==p {print $3 " " $4}'; }
+rows() { ( . "$BIN/fleet-lib.sh"; _fleet_agent_cred_daemons ) | awk -F'\t' -v p="$DPID" '$1==p {print $3 " " $4}'; }
 check "G: a live session's daemon is not a candidate" "" "$(rows)"
 bash "$BIN/fleet-session-cred.sh" revoke --sid sG
 check "G: the session's .revoked mark" yes "$([ -e "$GH/.revoked" ] && echo yes || echo no)"

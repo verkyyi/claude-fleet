@@ -362,6 +362,19 @@ changed identity, an unavailable endpoint or an incomplete native inventory
 also retain it. A legacy embedded launch without a private endpoint therefore
 needs a normal session recovery before this gate can establish that it is idle.
 
+Reaping is one road for both agents (T631, EPIC T580 C8): where they differ is
+the adapter table's (`bin/fleet_agent_adapter.py`), never a branch on the name.
+`end` says how the walk-away is heard — Claude's SessionEnd hook
+(`prompt_input_exit|logout`), Codex's launcher exit 0 (`fleet_launch_end` →
+`session-end-hook.sh --agent-exit codex <pid>`; `--codex-exit` forwards one
+version) — and both then pass the same gates and the same close. `procs` /
+`proc_js` name the agent processes `fleet-reap-live.py` looks for; `bg_probe` is how `fleet_window_bg_busy` asks a finished turn's
+leftover work (`pid`: the agent's Bash-tool children; `native`: the inventory
+above, unknown ⇒ kept); `daemon` / `cred_home` let `_fleet_agent_cred_daemons`
+sweep the app-server a proxied session leaves behind once its credential is
+revoked. `bin/fleet-agent-end-selftest.py` runs exit · killed · daemon · work
+once per agent.
+
 Native `--worktree` is local-session-only in the tested CLI releases and cannot
 be added to this private `--remote` path. The runtime refuses that combination
 before starting its server or invoking launch preparation; it does not silently

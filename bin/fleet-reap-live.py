@@ -23,6 +23,10 @@ _HERE = Path(__file__).absolute().parent
 LOOPMARK = runpy.run_path(str(next(
     (d / "fleet_loop_mark.py" for d in (_HERE, Path(__file__).resolve().parent)
      if (d / "fleet_loop_mark.py").is_file()), _HERE / "fleet_loop_mark.py")))
+# Which processes are agents is the adapter table's (T631, EPIC T580 C8).
+ADAPTER = runpy.run_path(str(next(
+    (d / "fleet_agent_adapter.py" for d in (_HERE, Path(__file__).resolve().parent)
+     if (d / "fleet_agent_adapter.py").is_file()), _HERE / "fleet_agent_adapter.py")))
 LIB = next((d / "fleet-lib.sh" for d in (_HERE, Path(__file__).resolve().parent)
             if (d / "fleet-lib.sh").is_file()), _HERE / "fleet-lib.sh")
 
@@ -62,15 +66,8 @@ def age_seconds(value):
 
 
 def agent_name(comm, command):
-    name = Path(comm).name
-    if name in ("claude", "codex", "codex-real"):
-        return name
-    if re.fullmatch(r"node\d*|bun", name):
-        if re.search(r"claude-code/cli\.js|/claude(?:\s|$)", command):
-            return "claude"
-        if re.search(r"@openai/codex/|/codex\.js(?:\s|$)", command):
-            return "codex"
-    return None
+    hit = ADAPTER["agent_of_process"](comm, command)
+    return hit[1] if hit else None
 
 
 def merged_in_life(merged_at, age, now):

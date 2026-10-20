@@ -4406,45 +4406,52 @@ fleet_reap_orphan_listeners() {
 # FLEET_WINDOW_REAP_ROOT (selftests) narrows the sweep to tops whose cwd is under it.
 FLEET_WINDOW_REAP_EXEMPT_RE_DEFAULT='/bin/(session-end-hook|dash-reap|fleet-[a-z0-9-]+|worktree-autoclean|tmux-[a-z0-9-]+)\.(sh|py)'
 
-# _fleet_codex_cred_daemons — the fourth anchor (issue #1972, EPIC #1967 C5): a
-# Codex session launched through the credential proxy runs in its own
-# credential-free CODEX_HOME, $FLEET_CONF_DIR/cred-proxy/codex-homes/<sid>, and
-# interactive Codex leaves a `codex app-server` daemon behind that carries the
-# session credential in its environment. An agent is never a tree top above, so
-# this asks the daemon's own CODEX_HOME instead (macOS: what it holds open there): a PPID=1 app-server of ours whose
-# home is such a dir and whose session is over (the wrapper's revoke marked it
-# `.revoked`, or no session record is left) is a candidate — kind `codexhome`, key
-# the sid. A live session's daemon (record present, not revoked) is never one.
+# _fleet_agent_cred_daemons — the fourth anchor (issue #1972, EPIC #1967 C5): a
+# session launched through the credential proxy whose agent leaves a service behind
+# (the adapter table's `daemon` column — Codex's `codex app-server`) runs in its own
+# credential-free home, $FLEET_CONF_DIR/cred-proxy/<cred_home>/<sid>, and that
+# service carries the session credential in its environment. An agent is never a
+# tree top above, so this asks the daemon's own home instead (macOS: what it holds
+# open there): a PPID=1 daemon of ours whose home is such a dir and whose session is
+# over (the wrapper's revoke marked it `.revoked`, or no session record is left) is
+# a candidate — kind `<agent>home` (codexhome), key the sid. A live session's daemon
+# (record present, not revoked) is never one. Every agent the table gives a daemon
+# AND a cred_home is swept the same way (T631, EPIC T580 C8); none ⇒ nothing.
 # Same row shape as fleet_orphan_trees. FLEET_WINDOW_REAP_ROOT narrows it too.
-_fleet_codex_cred_daemons() {
-  local me st pid ppid uid et cmdline home sid age
+_fleet_agent_cred_daemons() {
+  local me st ag dm ch hd pid ppid uid et cmdline home sid age
   me="$(id -u 2>/dev/null)"; [ -n "$me" ] || return 0
+  command -v fleet_agent_get >/dev/null 2>&1 || return 0
   st="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/cred-proxy"
-  [ -d "$st/codex-homes" ] || return 0
-  ps -eo pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" '
-    $2 == 1 && $3 == me && $0 ~ /app-server/ && $0 ~ /codex/ { print }' \
-  | while read -r pid ppid uid et cmdline; do
-      # Its home: the environment where the OS shows it (Linux), else a file it
-      # holds open inside the session dir (macOS keeps another process's
-      # environment to itself; the dir's own `tmp` — never linked — holds its socket).
-      home=''
-      if [ -r "/proc/$pid/environ" ]; then
-        home="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^CODEX_HOME=//p' | head -n 1)"
-      fi
-      if [ -z "$home" ] && command -v lsof >/dev/null 2>&1; then
-        home="$(lsof -w -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | grep -F "$st/codex-homes/" | head -n 1)"
-      fi
-      case "$home" in "$st/codex-homes/"*) ;; *) continue ;; esac
-      sid="${home#"$st/codex-homes/"}"; sid="${sid%%/*}"
-      [ -n "$sid" ] || continue
-      if [ -n "${FLEET_WINDOW_REAP_ROOT:-}" ]; then
-        case "$home" in "$FLEET_WINDOW_REAP_ROOT"|"$FLEET_WINDOW_REAP_ROOT"/*) ;; *) continue ;; esac
-      fi
-      [ -e "$st/codex-homes/$sid/.revoked" ] || [ ! -e "$st/sessions/$sid" ] || continue
-      age="$(printf '%s' "$et" | awk -F'[-:]' '{ if (NF==4) print $1*86400+$2*3600+$3*60+$4
-        else if (NF==3) print $1*3600+$2*60+$3; else if (NF==2) print $1*60+$2; else print 0 }')"
-      printf '%s\t%s\tcodexhome\t%s\t%s\t%s\n' "$pid" "$age" "$sid" "$home" "$cmdline"
-    done
+  for ag in $FLEET_AGENTS; do
+    dm=$(fleet_agent_get "$ag" daemon); ch=$(fleet_agent_get "$ag" cred_home)
+    [ -n "$dm" ] && [ -n "$ch" ] && [ -d "$st/$ch" ] || continue
+    hd="$st/$ch"
+    ps -eo pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" -v dm="$dm" -v ag="$ag" '
+      $2 == 1 && $3 == me && index($0, dm) && index($0, ag) { print }' \
+    | while read -r pid ppid uid et cmdline; do
+        # Its home: the environment where the OS shows it (Linux), else a file it
+        # holds open inside the session dir (macOS keeps another process's
+        # environment to itself; the dir's own `tmp` — never linked — holds its socket).
+        home=''
+        if [ -r "/proc/$pid/environ" ]; then
+          home="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^[A-Z_]*=//p' | grep -F "$hd/" | head -n 1)"
+        fi
+        if [ -z "$home" ] && command -v lsof >/dev/null 2>&1; then
+          home="$(lsof -w -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | grep -F "$hd/" | head -n 1)"
+        fi
+        case "$home" in "$hd/"*) ;; *) continue ;; esac
+        sid="${home#"$hd/"}"; sid="${sid%%/*}"
+        [ -n "$sid" ] || continue
+        if [ -n "${FLEET_WINDOW_REAP_ROOT:-}" ]; then
+          case "$home" in "$FLEET_WINDOW_REAP_ROOT"|"$FLEET_WINDOW_REAP_ROOT"/*) ;; *) continue ;; esac
+        fi
+        [ -e "$hd/$sid/.revoked" ] || [ ! -e "$st/sessions/$sid" ] || continue
+        age="$(printf '%s' "$et" | awk -F'[-:]' '{ if (NF==4) print $1*86400+$2*3600+$3*60+$4
+          else if (NF==3) print $1*3600+$2*60+$3; else if (NF==2) print $1*60+$2; else print 0 }')"
+        printf '%s\t%s\t%shome\t%s\t%s\t%s\n' "$pid" "$age" "$ag" "$sid" "$home" "$cmdline"
+      done
+  done
 }
 
 # fleet_orphan_trees — the candidates, one row per tree:
@@ -4452,7 +4459,7 @@ _fleet_codex_cred_daemons() {
 fleet_orphan_trees() {
   local me tops cwds
   me="$(id -u 2>/dev/null)"; [ -n "$me" ] || return 0
-  _fleet_codex_cred_daemons
+  _fleet_agent_cred_daemons
   command -v lsof >/dev/null 2>&1 || return 0
   local re="$FLEET_LISTEN_EXEMPT_RE_DEFAULT|$FLEET_WINDOW_REAP_EXEMPT_RE_DEFAULT${FLEET_WINDOW_REAP_EXEMPT_RE:+|$FLEET_WINDOW_REAP_EXEMPT_RE}"
   # PPID=1 tops of ours that are neither a tmux server nor an agent, and whose
@@ -9259,10 +9266,13 @@ fleet_handoff_cycle_live() {
 # the cheap necessary condition — a Claude agent counts ONLY a Bash-tool shell
 # (`…/shell-snapshots/snapshot-…` in its argv) among its direct children, exactly
 # fleet_worker_life.py's non-strict walk — so a pane with none never pays the python walk.
-# [reap]=1 additionally requires native idle and retains unknown Codex identity.
+# [reap]=1 additionally requires native idle and retains unknown native identity.
 # A Stop hook must only ask about jobs: its own native turn is still in progress.
+# How the leftover work is asked is the adapter table's `bg_probe` (T631, EPIC T580
+# C8): `pid` walks the agent process's Bash-tool children; `native` asks the agent's
+# own inventory, and at reap anything but a clean «idle» keeps the window (#4318).
 fleet_window_bg_busy() {
-  local sess="${1:-}" win="${2:-}" quick="${3:-}" reap="${4:-}" bin sock='' agent pid='' rc out
+  local sess="${1:-}" win="${2:-}" quick="${3:-}" reap="${4:-}" bin sock='' agent probe pid='' rc out
   [ -n "$win" ] || return 1
   [ "$reap" = 1 ] || reap=''
   [ -n "$sess" ] || sess=$(fleet_current_session)
@@ -9270,12 +9280,17 @@ fleet_window_bg_busy() {
   [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
+  probe=$(fleet_agent_get "$(fleet_agent_or_default "$agent" 2>/dev/null)" bg_probe 2>/dev/null)
+  if [ -z "$probe" ]; then   # no table beside this lib: a reap is never authorized blind
+    [ "$reap" = 1 ] && [ -n "$agent" ] && return 0
+    probe=pid
+  fi
   if ! { [ -f "$bin/fleet_worker_life.py" ] && command -v python3 >/dev/null 2>&1; }; then
-    [ "$agent" = codex ] && [ "$reap" = 1 ] && return 0
+    [ "$probe" = native ] && [ "$reap" = 1 ] && return 0
     return 1
   fi
-  [ "$agent" = codex ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
-  [ "$agent" = codex ] || [ -n "$pid" ] || return 1
+  [ "$probe" = native ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
+  [ "$probe" = native ] || [ -n "$pid" ] || return 1
   if [ "$quick" = 1 ] && [ -n "$pid" ]; then
     ps -axo ppid=,command= 2>/dev/null \
       | awk -v p="$pid" '$1 == p && index($0, "/shell-snapshots/snapshot-") { f = 1 } END { exit !f }' \
@@ -9283,9 +9298,9 @@ fleet_window_bg_busy() {
   fi
   if out=$(python3 "$bin/fleet_worker_life.py" busy --session "$sess" ${pid:+--pid "$pid"} ${reap:+--reap} "$win" \
       2>&1 </dev/null); then return 0; else rc=$?; fi
-  # busy: 1 alone proves idle. In particular a missing/stale Codex identity,
+  # busy: 1 alone proves idle. In particular a missing/stale native identity,
   # lost native endpoint or failed inventory (2) must never authorize disposal.
-  if [ "$agent" = codex ] && [ "$reap" = 1 ]; then
+  if [ "$probe" = native ] && [ "$reap" = 1 ]; then
     # An interpreter/import crash can also exit 1, with a diagnostic. The normal
     # idle result is exactly exit 1 with no output, never an exception traceback.
     [ "$rc" = 1 ] && [ -z "$out" ] || return 0

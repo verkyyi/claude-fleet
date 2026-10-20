@@ -359,7 +359,7 @@ ok "F no prompt → no positional; a trailing flag is a flag"
 run
 owner=$(awk '/@cc_launcher_pid/{print $NF}' "$WORK/tmuxlog")
 case "$owner" in ''|*[!0-9]*) fail "F2 launcher ownership must be stamped" ;; esac
-[ "$(cat "$WORK/close")" = "--codex-exit $owner" ] \
+[ "$(cat "$WORK/close")" = "--agent-exit codex $owner" ] \
   || fail "F2 successful CLI exit must request cleanup with the stamped owner" "$(cat "$WORK/close" 2>/dev/null)"
 ok "F2 normal Codex exit requests cleanup after the process ends, with its owner PID"
 

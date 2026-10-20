@@ -1,10 +1,15 @@
 #!/bin/bash
-# session-end-hook.sh — close-on-exit for Claude hooks and the Codex launcher.
+# session-end-hook.sh — close-on-exit: ONE close for every agent (T631, EPIC T580 C8).
 #
-# --codex-exit <launcher-pid> is called ONLY after fleet-codex.sh's foreground
-# CLI exits successfully (#730). Codex SessionEnd(reason=other) also fires for
-# thread lifecycle changes, so it must never trigger window cleanup. The launcher
-# must still own this pane; the shared scope, opt-out, and reap gates below apply.
+# How the fleet hears the walk-away is the adapter table's `end` column
+# (bin/fleet_agent_adapter.py): `hook` — the agent's SessionEnd hook, reason
+# prompt_input_exit|logout (Claude: its launcher execs it, there is no exit code);
+# `exit` — `--agent-exit <agent> <launcher-pid>`, which the launcher's
+# fleet_launch_end calls ONLY after the agent exits 0 (Codex: its SessionEnd says
+# reason=other for thread lifecycle changes too, so a hook must never close, #730).
+# The launcher must still own this pane; the shared scope, opt-out, and reap gates
+# below apply to both. `--codex-exit <pid>` is the old spelling of
+# `--agent-exit codex <pid>` (compat-1v: 下一批删).
 #
 # Runs under BASH (wired `bash …` in settings-hooks.json, NOT `sh`): it sources
 # fleet-lib.sh, which uses process substitution `< <(…)` that bash-as-/bin/sh
@@ -320,17 +325,22 @@ fi
 #    stdin JSON ({"...","reason":"prompt_input_exit",...}). Guard against a tty so a
 #    manual invocation without a piped payload never hangs on cat (mirrors the
 #    SessionStart hook handoff-latch-reset).
-codex_exit=0
+agent_exit=0
+# compat-1v: 下一批删 — a launcher started before T631 still calls --codex-exit <pid>
+[ "${1:-}" = --codex-exit ] && set -- --agent-exit codex "${2:-}"
 if [ "${1:-}" = --recycle ]; then
   # The recovery page's `q` (issue #1784): the operator asked for exactly what a
   # manual exit used to do — gate-reap the worktree, record the row, close the
   # window. fleet-session-wrap.sh runs this in the pane, the agent already gone.
   reason=recycle
-elif [ "${1:-}" = --codex-exit ]; then
-  case "${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
-  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)" = codex ] || exit 0
-  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_launcher_pid}' 2>/dev/null)" = "$2" ] || exit 0
-  codex_exit=1
+elif [ "${1:-}" = --agent-exit ]; then
+  # only an agent whose end the table says is its exit code, in a pane its
+  # launcher (this pid) still owns
+  [ "$(fleet_agent_get "${2:-}" end 2>/dev/null)" = exit ] || exit 0
+  case "${3:-}" in ''|*[!0-9]*) exit 0 ;; esac
+  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)" = "$2" ] || exit 0
+  [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_launcher_pid}' 2>/dev/null)" = "$3" ] || exit 0
+  agent_exit=1
   reason=process_exit
 elif [ -n "${FLEET_SESSION_END_REASON:-}" ]; then
   reason="$FLEET_SESSION_END_REASON"
@@ -346,7 +356,7 @@ fi
 #    matcher already pre-filters to prompt_input_exit|logout; this is defense-in-depth.
 case "$reason" in
   prompt_input_exit|logout|recycle) : ;;
-  process_exit) [ "$codex_exit" = 1 ] || exit 0 ;;
+  process_exit) [ "$agent_exit" = 1 ] || exit 0 ;;
   *) exit 0 ;;
 esac
 

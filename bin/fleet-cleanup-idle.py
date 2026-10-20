@@ -58,6 +58,10 @@ def minutes():
     return int(value) if re.fullmatch(r"\d{1,6}", value) else 30
 
 
+# fleet-history.sh resume's verdicts that reopen a conversation in place, one per
+# place a transcript lives (the adapter table's `transcript` column): RESUME = the
+# login's project dir, CODEX-RESUME = the agent's own home (T631, EPIC T580 C8).
+RESUMABLE = ("RESUME", "CODEX-RESUME")
 DONE_NO_PR_DEFAULT = 2 * 3600    # 发起人拍板 3
 
 
@@ -97,7 +101,6 @@ class Cleaner:
 
     def snapshot(self, window):
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
-                 "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
@@ -530,12 +533,7 @@ class Cleaner:
             "--title", snap["window_name"],
             "--summary", ("Automatically closed after idle done grace" if pol is None else
                           "Automatically closed by its reap policy " + snap["@reap_policy"]))
-        resume = run("bash", history, "resume", "--repo", self.args.repo,
-                     "--main", self.args.main, key).split("\t")
-        if len(resume) < 4 or resume[0] not in ("RESUME", "CODEX-RESUME") or resume[1] != wt:
-            # A transcript-less/review-only row cannot authorize reap — said, not
-            # swallowed (issue #1832: it was why a done scratch sat for days).
-            self.say(window, "skip:no-resume", key + " " + (resume[0] if resume else "?"))
+        if not self.reopens(window, key, wt):
             return False
         # A stopped turn that restarted, changed account/session or moved to a
         # different checkout must not inherit the old permission to close.
@@ -544,6 +542,19 @@ class Cleaner:
                           and run("git", "-C", wt, "rev-parse", "HEAD") == head):
             return False
         print("reaped-idle:" + window + ("" if pol is None else " policy=" + snap["@reap_policy"]))
+        return True
+
+    def reopens(self, window, key, wt):
+        """The history row just recorded reopens its conversation in this worktree —
+        whichever agent ran it (T631, EPIC T580 C8): fleet-history.sh resume's
+        verdict is one of RESUMABLE and names `wt`. A transcript-less / review-only
+        row cannot authorize a reap — said, not swallowed (issue #1832: it was why a
+        done scratch sat for days)."""
+        resume = run("bash", str(BIN / "fleet-history.sh"), "resume", "--repo", self.args.repo,
+                     "--main", self.args.main, key).split("\t")
+        if len(resume) < 4 or resume[0] not in RESUMABLE or resume[1] != wt:
+            self.say(window, "skip:no-resume", key + " " + (resume[0] if resume else "?"))
+            return False
         return True
 
     @staticmethod
@@ -607,10 +618,7 @@ class Cleaner:
         run("bash", history, "record-closed", "--repo", self.args.repo, "--session", self.args.session,
             "--key", key, "--worktree", wt, "--win", window, "--title", snap["window_name"],
             "--summary", "Automatically closed: task " + task + " is closed")
-        resume = run("bash", history, "resume", "--repo", self.args.repo,
-                     "--main", self.args.main, key).split("\t")
-        if len(resume) < 4 or resume[0] not in ("RESUME", "CODEX-RESUME") or resume[1] != wt:
-            self.say(window, "skip:no-resume", key + " " + (resume[0] if resume else "?"))
+        if not self.reopens(window, key, wt):
             return False
         if not self.close(window, snap, lambda: not self.busy(window, snap)):
             return False  # re-checked right before the close
@@ -774,12 +782,8 @@ class Cleaner:
             "--key", key, "--worktree", wt or "", "--win", window, "--title", snap["window_name"],
             "--summary", ("Automatically closed: finished, its ticket closed, every PR final (done-no-pr)" if prs
                           else "Automatically closed: finished with no PR (done-no-pr)"))
-        if present:
-            resume = run("bash", history, "resume", "--repo", self.args.repo,
-                         "--main", self.args.main, key).split("\t")
-            if len(resume) < 4 or resume[0] not in ("RESUME", "CODEX-RESUME") or resume[1] != wt:
-                self.say(window, "skip:no-resume", key + " " + (resume[0] if resume else "?"))
-                return False
+        if present and not self.reopens(window, key, wt):
+            return False
         # Re-checked right before the close: a turn that restarted, moved or
         # committed since the first look has not earned this close.
         if not self.close(window, snap, lambda: not self.busy(window, snap)

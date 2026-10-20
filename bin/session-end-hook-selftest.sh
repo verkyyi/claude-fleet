@@ -465,6 +465,27 @@ grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must honor an in-progress 
 rm "$LEASE_FILE"
 st_pass "Codex close-on-exit honors the global switch, hub/panel scope, and transfer protection"
 
+# T631 (EPIC T580 C8): one close for both agents — each reaches it by the road the
+# adapter table's `end` column names (hook: SessionEnd prompt_input_exit; exit: the
+# launcher's --agent-exit after an exit 0), and never by the other agent's road.
+for ag in claude codex; do
+  end=$(bash -c '. "$1"; fleet_agent_get "$2" end' _ "$(dirname "$SRC")/fleet-agent-adapter.sh" "$ag")
+  clr
+  if [ "$end" = hook ]; then AGENT=$ag LAUNCH_PID=123 REASON=prompt_input_exit ISS=2 run_hook
+  else AGENT=$ag LAUNCH_PID=123 ISS=2 run_hook --agent-exit "$ag" 123; fi
+  grep -q 'KILL' "$TMLOG" || fail "$ag ($end): its walk-away must run the one close"
+  [ -d "$WT2" ] || fail "$ag ($end): the close must keep unmerged work"
+  clr
+  if [ "$end" = hook ]; then AGENT=$ag LAUNCH_PID=123 ISS=2 run_hook --agent-exit "$ag" 123
+  else AGENT=$ag LAUNCH_PID=123 REASON=other ISS=2 run_hook; fi
+  grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "$ag ($end): the other agent's end road must not close it"
+  clr; AGENT=$ag LAUNCH_PID=456 ISS=2 run_hook --agent-exit "$ag" 123
+  grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "$ag: a launcher that no longer owns the pane must not close it"
+done
+clr; AGENT=codex LAUNCH_PID=123 ISS=2 run_hook --agent-exit nosuch 123
+grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "an agent the table does not know must close nothing"
+st_pass "T631: claude (hook) and codex (exit) each reach the one close by their table's end road only"
+
 # GitHub connecting but never answering (issue #4842, EPIC #4839 C3): the exit itself
 # makes no GitHub call — the in-pane gate returns at once — and the detached --exec
 # closes the window within a key's bound (5 s a read, fleet_timebox), not gh's

@@ -37,6 +37,12 @@ _fa_claude_armed_cycle='1'
 _fa_claude_native_cron='1'
 _fa_claude_bind_proof='session'
 _fa_claude_account_resume='1'
+_fa_claude_end='hook'
+_fa_claude_procs='claude'
+_fa_claude_proc_js='claude-code/cli\.js|/claude(?:\s|$)'
+_fa_claude_bg_probe='pid'
+_fa_claude_daemon=''
+_fa_claude_cred_home=''
 _fa_codex_launcher='fleet-codex.sh'
 _fa_codex_model_env='FLEET_CODEX_MODEL'
 _fa_codex_model_flag='-m'
@@ -68,12 +74,18 @@ _fa_codex_armed_cycle='0'
 _fa_codex_native_cron='0'
 _fa_codex_bind_proof='process'
 _fa_codex_account_resume='0'
+_fa_codex_end='exit'
+_fa_codex_procs='codex codex-real'
+_fa_codex_proc_js='@openai/codex/|/codex\.js(?:\s|$)'
+_fa_codex_bg_probe='native'
+_fa_codex_daemon='app-server'
+_fa_codex_cred_home='codex-homes'
 fleet_agent_known() { case "${1:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac; case " $FLEET_AGENTS " in *" $1 "*) return 0 ;; esac; return 1; }
 fleet_agent_or_default() { if fleet_agent_known "${1:-}"; then printf '%s' "$1"; else printf claude; fi; }
 fleet_agent_get() {   # <agent> <column> — prints the value; exit 1 unknown
   fleet_agent_known "${1:-}" || return 1
   case "${2:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac
-  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp deliver sid_source clear_said transcript from_pr_flag transfer_source home_flag account_env loop_settled exit_paste armed_cycle native_cron bind_proof account_resume " in *" $2 "*) : ;; *) return 1 ;; esac
+  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume ready_check trust mcp deliver sid_source clear_said transcript from_pr_flag transfer_source home_flag account_env loop_settled exit_paste armed_cycle native_cron bind_proof account_resume end procs proc_js bg_probe daemon cred_home " in *" $2 "*) : ;; *) return 1 ;; esac
   eval "printf '%s' \"\${_fa_${1}_${2}}\""
 }
 fleet_agent_session_id() {   # <agent> <reader> [window|fallback] — the window's current conversation id;
