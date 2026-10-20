@@ -34,7 +34,6 @@
 #   node-person-cert-expired                        bin/fleet-hub-write.sh (the node-token door), fleet-lib.sh
 #                                                   (fleet_node_pair, fleet_hub_reap), fleet-doctor.sh (personcert);
 #                                                   tokenledger/hub/api fleet_write_signed.go (go test)
-#   view-node-restart                               bin/fleet-remote-view.sh (run: exit 3 waits)
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/hub/api judge() (go test, when a toolchain is here)
@@ -425,15 +424,6 @@ drill_switch_no_session_save() {
     || { WHY="fleet-node-update J_OneSwitch: $(printf '%s' "$out" | grep -m1 -E 'Error|FAIL')"; return 1; }
   SECS=$(since "$t0")
   WHAT="换版只切 current：会话不存不开，只改 bin/ 的一版不进任何登录，登录的 ~/.claude/fleet 已是新版"
-}
-
-drill_view_node_restart() {
-  CAP=90; local t0 out
-  t0=$(now)
-  out=$(bash "$BIN/remote-view-run-selftest.sh" 2>&1) \
-    || { WHY="remote-view-run-selftest: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="会话暂时不在：说「机器在重启，稍等」，每 5s 再连同一地址，2 分钟后才说已不在"
 }
 
 # hub-read-refused-silent (issue #2630): a node login with no viewer token read

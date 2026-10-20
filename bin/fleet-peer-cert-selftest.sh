@@ -2,8 +2,8 @@
 # fleet-peer-cert-selftest.sh — machine-to-machine access through the hub
 # (issue #1626, EPIC #1615 C9): bin/fleet-peer-cert.sh asks the hub for a
 # five-minute certificate per connection, and fleet-move.sh /
-# fleet-node-upgrade.sh / fleet-remote-view.sh ride it and never fall back to a
-# standing key. The hub is
+# fleet-node-upgrade.sh ride it and never fall back to a standing key (the
+# 看台's peer link, fleet-peerlink.py, is fleet-peerlink-selftest's). The hub is
 # stubbed through FLEET_HUB_CURL, ssh through PATH — no hub, no network, no tmux.
 # (The hub half — owner-only, five minutes, audited, a real sshd refusing an
 # expired one — is the Go gate's: TestPeerCertOwnerOnlyShortAndAudited,
@@ -45,9 +45,8 @@
 #                   that file, before -l; the cache keeps them; an older .meta
 #                   (no alias field) or an alias whose lines are gone is a miss;
 #                   no keys / a bad alias → no such option, as before
-#   I. lint         every ssh fleet-move.sh / fleet-node-upgrade.sh /
-#                   fleet-remote-view.sh opens to another machine carries the
-#                   peer options
+#   I. lint         every ssh fleet-move.sh / fleet-node-upgrade.sh opens to
+#                   another machine carries the peer options
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$BIN/fleet-peer-cert.sh"
@@ -236,7 +235,6 @@ ok
 bad=$(grep -n 'ssh -o BatchMode=yes' "$BIN/fleet-move.sh" "$BIN/fleet-node-upgrade.sh" | grep -v 'PEER\[@\]')
 [ -z "$bad" ] || fail "I: an ssh without the peer certificate:
 $bad"
-grep -q 'ControlPersist=no \${peer\[@\]+"\${peer\[@\]}"}' "$BIN/fleet-remote-view.sh" || fail "I: fleet-remote-view.sh's master ssh lost the peer options"
 ok
 
 # J. cache (issue #1631)

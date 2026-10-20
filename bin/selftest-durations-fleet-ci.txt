@@ -217,7 +217,6 @@
 1.2 fleet-release-lib-selftest.sh
 0.4 fleet-release-publish-selftest.sh
 9.5 fleet-release-selftest.sh
-12.7 fleet-remote-view-selftest.sh
 1.7 fleet-repo-selftest.sh
 13.0 fleet-repo-session-selftest.sh#1
 15.1 fleet-report-parent-selftest.sh
@@ -300,7 +299,6 @@
 1.4 precompact-hook-selftest.sh
 0.9 refocus-hook-selftest.sh
 4.2 release-tree-selftest.sh
-7.1 remote-view-run-selftest.sh
 3.9 repo-settings-selftest.sh
 1.5 repo-view-all-selftest.sh
 1.0 run-selftests-changed-selftest.sh
@@ -314,7 +312,6 @@
 8.9 session-end-hook-selftest.sh
 2.6 session-title-selftest.sh
 9.5 session-wrap-selftest.sh
-0.2 sidebar-machine-tag-selftest.sh
 0.3 skill-tools-selftest.sh
 1.2 spawn-origin-gate-selftest.sh
 23.2 spinner-rate-selftest.sh
