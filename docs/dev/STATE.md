@@ -292,7 +292,7 @@ an older window's screen-read verdict — is left), and rewrites only `done` ↔
 `@claude_wait` — never `working`/`needs`, never a sleep transition, never
 `@claude_state_ts` (nothing ran in the pane); the write re-checks the state
 server-side. `bin/fleet-wait-reeval.sh` drives it from three places: every
-`fleet-sleep-daemon.sh` tick right after the #806 reconcile, the
+`fleet-reconcile-tick.sh` tick right after the #806 reconcile, the
 `fleet-install-apply.sh` `reeval:` step after `loopmark` (`N of M idle window(s)
 changed`), and a child's own Stop (`--parent-of`, detached) so the parent flips the
 moment its last child goes idle. A pass that changed something runs again (≤ 3) so
@@ -310,8 +310,8 @@ report, the hooks, recorded waits, native status and pending requests.
 ## The floor — native-truth reconcile (#806)
 
 The demoter below reads *activity*; this pass reads the **agent**. Every tick of the
-sleep daemon ([`bin/fleet-sleep-daemon.sh`](../../bin/fleet-sleep-daemon.sh), 60s, its
-own launchd/systemd unit — not the spinner) runs
+reconcile unit ([`bin/fleet-reconcile-tick.sh`](../../bin/fleet-reconcile-tick.sh), 60s,
+`com.claude-fleet.reconcile` / `claude-fleet-reconcile.timer` — not the spinner) runs
 [`bin/fleet-state-reconcile.py`](../../bin/fleet-state-reconcile.py) first, over every
 live fleet socket, whatever `FLEET_SLEEP` says:
 
@@ -510,7 +510,7 @@ Four writers, one option, exactly one source of truth per window:
 | Writer | When | Writes |
 |---|---|---|
 | `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` (+ the `@claude_needs` reason) |
-| `fleet-state-reconcile.py` (sleep daemon tick, #806) | a `working` window whose agent is natively idle since after the stamp, or has no agent process | `done` (reason **cleared**) |
+| `fleet-state-reconcile.py` (reconcile tick, #806) | a `working` window whose agent is natively idle since after the stamp, or has no agent process | `done` (reason **cleared**) |
 | `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s (fallback) | `done` (reason **cleared**) |
 | `tmux-spinner.sh` needs-reconcile | a `needs` window the transcript contradicts, ≥2 checks running | `done` / *(empty)*, or the **reason** re-settled — never a new `needs` |
 
@@ -532,7 +532,7 @@ set-claude-state.sh  ─►  @claude_state + @claude_state_ts + @claude_needs  (
       │                        └──────────────► (@attn_other_windows — unrendered since #980)
       ▲
       │
-   native-truth reconcile (sleep daemon, #806): a working window whose agent's own
+   native-truth reconcile (reconcile tick, #806): a working window whose agent's own
                                           registry/RPC says idle since the stamp → done
    stuck-working demote (spinner, #101): a working pane frozen ≥120s → done (fallback)
    stale-needs reconcile (spinner, #658): a `needs` the TRANSCRIPT contradicts → cleared

@@ -376,7 +376,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: whether the reconciliation of session states (who is working, who is idle) is running, and how accurate it is.
-- **On WARN / FAIL**: check that the sleep service (`com.claude-fleet.sleep`) is running, and read its log.
+- **On WARN / FAIL**: check that the state-reconcile service (`com.claude-fleet.reconcile`, on Linux `claude-fleet-reconcile.timer`) is running, and read its log (`logs/reconcile.launchd.log`).
 
 #### `metrics`
 

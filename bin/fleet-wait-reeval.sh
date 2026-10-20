@@ -11,7 +11,7 @@
 #
 # Three callers:
 #   fleet-install-apply.sh `reeval` step   once per sync, every live fleet
-#   fleet-sleep-daemon.sh                  every tick, after the #806 reconcile
+#   fleet-reconcile-tick.sh                every tick, after the #806 reconcile
 #   set-claude-state.sh (a child's Stop)   --parent-of <win>: the parent of a window
 #                                          that just stopped, so it need not wait
 #                                          for the tick

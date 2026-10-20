@@ -39,7 +39,7 @@ ledger-watch	unit	login	the login's child-report ledgers
 memguard	unit	machine	the machine's memguard template: never run per login (the machine table's memguard is the one copy)
 peerlink	unit	login	the login's links into other machines' views
 quotawatch	unit	login	the login's account quota policy and its sessions' warnings
-sleep	unit	login	hibernates the login's idle sessions
+reconcile	unit	login	the login's session-state reconcile (working / idle / looping, cfg-stale reopen); still runs the worker-sleep scan until C8
 spinner	unit	session	animates the login's session windows: nothing to animate with no session
 worktree-autoclean	unit	login	the login's stale worktrees
 cred-proxy-shared	machine	machine	the shared credential proxy, one for every login

@@ -3153,14 +3153,16 @@ else
   pass handoff "stuck-working demoter alive (heartbeat ${hb_age}s ago)"
 fi
 # --- state reconcile (issue #806) — the native-truth floor under the demoter ------
-# The sleep daemon's 60s tick runs bin/fleet-state-reconcile.py first: a `working`
+# The reconcile unit's 60s tick (bin/fleet-reconcile-tick.sh, T544) runs
+# bin/fleet-state-reconcile.py first: a `working`
 # window whose Claude session registry says idle (or whose bound Codex thread is
 # idle) past the grace, with an equally old working stamp, is demoted to done —
 # a Stop that never fired, or a classifier misread promoted after the TUI had
 # already stopped. Unlike the activity
 # heuristic above it is not fooled by an idle TUI repainting its footer, and it does
 # not share the spinner's process, so a wedged spinner no longer means `working`
-# forever. Silence here means com.claude-fleet.sleep itself is not ticking.
+# forever. Silence here means com.claude-fleet.reconcile (claude-fleet-reconcile.timer)
+# itself is not ticking.
 rhb="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/reconcile.heartbeat"
 rhb_age=''
 if [ -f "$rhb" ]; then
@@ -3168,9 +3170,9 @@ if [ -f "$rhb" ]; then
   case "$rhb_at" in ''|*[!0-9]*) ;; *) rhb_age=$(( $(date +%s 2>/dev/null || echo 0) - rhb_at )) ;; esac
 fi
 if [ -z "$rhb_age" ]; then
-  warn state "no state-reconcile heartbeat (global/reconcile.heartbeat) — bin/fleet-sleep-daemon.sh has not run bin/fleet-state-reconcile.py yet (#806); a \`working\` window whose Stop never fired is caught only by the spinner's activity heuristic"
+  warn state "no state-reconcile heartbeat (global/reconcile.heartbeat) — bin/fleet-reconcile-tick.sh has not run bin/fleet-state-reconcile.py yet (#806); a \`working\` window whose Stop never fired is caught only by the spinner's activity heuristic"
 elif [ "$rhb_age" -gt 180 ]; then
-  warn state "state reconcile last ran ${rhb_age}s ago (the sleep daemon's 60s tick runs it) — check com.claude-fleet.sleep and logs/sleep.launchd.log (#806)"
+  warn state "state reconcile last ran ${rhb_age}s ago (the reconcile unit's 60s tick runs it) — check com.claude-fleet.reconcile (claude-fleet-reconcile.timer) and logs/reconcile.launchd.log (#806)"
 else
   rhb_get() { sed -n "s/^$1=//p" "$rhb" | head -n1; }
   rhb_note=''

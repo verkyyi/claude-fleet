@@ -1352,7 +1352,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # registry (~/.claude/sessions/<pid>.json) or bound Codex thread reports idle for
 # at least this long, while the working stamp is equally old, is demoted to done and
 # re-classified — the floor the activity demoter above cannot provide for an idle
-# TUI that keeps repainting its footer. Runs first on the sleep daemon's 60s tick,
+# TUI that keeps repainting its footer. Runs first on the reconcile unit's 60s tick,
 # independent of the spinner. 0 disables the pass.
 # @label=Reconcile native-idle working after @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_STATE_IDLE_SECS=30

@@ -376,7 +376,7 @@ fleet doctor --json
 来自 `fleet doctor`。
 
 - **是什么**：会话状态对账（谁在干活、谁空闲）有没有在跑、判得准不准。
-- **WARN / FAIL 怎么办**：看睡眠服务（`com.claude-fleet.sleep`）在不在跑和它的日志。
+- **WARN / FAIL 怎么办**：看状态对账服务（`com.claude-fleet.reconcile`，Linux 上 `claude-fleet-reconcile.timer`）在不在跑和它的日志（`logs/reconcile.launchd.log`）。
 
 #### `metrics`
 

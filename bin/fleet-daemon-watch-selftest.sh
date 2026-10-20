@@ -338,7 +338,7 @@ for pair in 'tmux-dash-collect.sh collect' 'fleet-quotawatch.sh quotawatch' \
             'fleet-cleanup-daemon.sh cleanup' \
             'fleet-base-sync.sh base-sync' 'fleet-diskguard.sh diskguard' \
             'fleet-ledger-watch.sh ledger-watch' 'worktree-autoclean.sh worktree-autoclean' \
-            'fleet-install-sync.sh install-sync'; do
+            'fleet-install-sync.sh install-sync' 'fleet-reconcile-tick.sh reconcile'; do
   set -- $pair
   [ "$(stamps_for "$1" "$2")" -ge 1 ] \
     || fail "10: $1 no longer stamps its scheduling heartbeat (unit $2) — its alarm is unarmed"; ok

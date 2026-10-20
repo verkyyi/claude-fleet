@@ -1,5 +1,5 @@
 [Unit]
-Description=claude-fleet idle worker scan (every 60s)
+Description=claude-fleet session state reconcile (every 60s)
 
 [Timer]
 OnStartupSec=25
