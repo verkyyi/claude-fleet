@@ -45,6 +45,9 @@ func TestNodeTaskIDs(t *testing.T) {
 		_, r := nodeTaskCall(t, h, bob, http.MethodPost, NodeTasksPath, map[string]any{"token": fmt.Sprintf("orch:a%d", i), "title": "x"})
 		f, _ := r["fid"].(string)
 		p := store.FleetIDCode(f)[:2]
+		if store.ParseTaskRef(p) > 0 {
+			continue // `T8` reads as the alias T8, never a code
+		}
 		if _, ok := seen[p]; ok {
 			pair = p
 		}
