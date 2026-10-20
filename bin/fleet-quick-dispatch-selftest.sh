@@ -161,6 +161,7 @@ cat > "$WORK/task.sh" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" > "$WORK/task-args"
 [ -n "\${H_FAIL:-}" ] && { printf 'fleet-task-record: the hub refused\n' >&2; exit 1; }
+[ -n "\${H_CODE:-}" ] && printf 'K7W0\n'   # a hub with task codes (EPIC T644 C3)
 printf 'T77\n@31\tclaude-fleet-scratch-9\t/tmp/wt\tfid\n'
 EOF
 chmod +x "$WORK/auth.sh" "$WORK/task.sh"
@@ -186,6 +187,9 @@ st_has 'H: long words: a clipped title' "$(cat "$WORK/task-args")" "--body-file 
 CHECKS=$((CHECKS + 1)); grep -q "$long" "$WORK/task-args" && st_fail "H: long words went whole as the title"
 out=$(H_FAIL=1 H send --title '修' --repo acme/web 2>&1) && st_fail "H: a refused dispatch exited 0" "$out"
 st_has 'H: a refused dispatch says why' "$out" 'the hub refused'
+out=$(H_CODE=1 H send --view 'fleet@view-t1' --title '修' --repo acme/web 2>&1) || st_fail "H: a coded dispatch exited non-zero" "$out"
+st_has 'H: a hub with task codes: the receipt names the code' "$out" 'K7W0'
+CHECKS=$((CHECKS + 1)); printf '%s' "$out" | grep -q 'T77' && st_fail "H: …and no T<n>" "$out"
 out=$(H_MODE=legacy H send --title '看日志' --repo acme/web 2>&1) || st_fail "H: a legacy send exited non-zero" "$out"
 CHECKS=$((CHECKS + 1)); [ -f "$WORK/sent.json" ] || st_fail "H: legacy authority left the place road"
 

@@ -14,12 +14,23 @@
 #                       下一批删); an older hub answers `T<n>` alone. The same
 #                       token twice is the same record.
 #   fleet-task-record.sh get <code|ID|T<n>> → the record + its session's live word
-#                       (JSON); a code naming several tasks exits 1 — the hub's
+#                       (JSON); a code naming several tasks exits 2 — the hub's
 #                       409 body (its candidates) on stdout, never a pick
-#   fleet-task-record.sh children T<n>     → the record's children
-#   fleet-task-record.sh mutate T<n>       ← a cancel of a record no window ever
+#   Every <ref> below is the same three (the hub resolves it): the code is what a
+#   person reads; `T<n>` is read for one more version (compat-1v: 下一批删).
+#   fleet-task-record.sh resolve <ref>     → the task's code on the first line, its
+#                       `T<n>` on the second (an older hub: `T<n>` alone) — the ONE
+#                       local reader of a task reference (EPIC T644 C3). A code
+#                       naming several tasks exits 2 with one stderr line per
+#                       candidate (`K5H0 · title · state`), never a pick; none ⇒ 1.
+#   fleet-task-record.sh code <ref>        → the task's written code (K5H0), off this
+#                       login's book first (ids/task-codes.tsv — every answer that
+#                       carries one writes it down), else the hub; rc 1 when no
+#                       code is known (an older hub)
+#   fleet-task-record.sh children <ref>    → the record's children
+#   fleet-task-record.sh mutate <ref>      ← a cancel of a record no window ever
 #                       opened (fleet_task_control.py cancel, EPIC T497 C13), JSON on stdin
-#   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
+#   fleet-task-record.sh set <ref> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
 #   fleet-task-record.sh settle --repo o/n|--no-repo [--apply] [--drained]
@@ -43,12 +54,13 @@
 #                       holds is cancelled. Dry unless --apply; the hub's JSON
 #                       (unfinished · ended · cancelled · kept · left · items).
 #                       --undo puts every record it cancelled back.
-#   fleet-task-record.sh attach T<n> [<window>]
+#   fleet-task-record.sh attach <ref> [<window>]
 #                     → the record names the window's session (its key + worker_id)
+#                       set / attach print the task's code (else T<n>) on stdout
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
 #                     [--spawn] [--reap P] [--agent A] [--session S] [--origin O] [--via V] [--print]
-#                     → the `task` tool: the record FIRST (`T<n>` on
-#                       stdout), then — a repo named, i.e. a development task —
+#                     → the `task` tool: the record FIRST (its code, then
+#                       `T<n>` on stdout — `T<n>` alone from an older hub), then — a repo named, i.e. a development task —
 #                       + --spawn: its session in a worktree of that repo, bound
 #                       to the record alone (no issue: dash-raw-session.sh --repo
 #                       --task, reaped `merged` = the record closed — issue
@@ -75,7 +87,7 @@
 # tasks — issue #4957), and fleet-await.sh (`T<n>` → the record's session).
 #
 # Exit: 0 done · 1 the hub refused or did not answer (stderr says which) · 2 usage
-# · 3 not applicable — no hub here (CCQUOTA_FLEET off for this fleet, or no node
+# (and, for get / resolve, a code naming several tasks) · 3 not applicable — no hub here (CCQUOTA_FLEET off for this fleet, or no node
 # token): nothing is sent, nothing printed, so every caller stays byte for byte
 # what it was without a hub.
 # Seams: FLEET_HUB_CURL (default curl), FLEET_HUB_TIMEOUT (default 10 s).
@@ -86,7 +98,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-task-record: %s\n' "$2" >&2; exit "$1"; }
-usage() { die 2 "usage: fleet-task-record.sh new|get|set|attach|of|find-issue … (see the header)"; }
+usage() { die 2 "usage: fleet-task-record.sh new|get|resolve|code|set|attach|of|find-issue … (see the header)"; }
 
 TREF_RE='^T[1-9][0-9]{0,9}$'
 is_tref() { printf '%s' "${1:-}" | grep -Eq "$TREF_RE"; }
@@ -156,6 +168,59 @@ d=json.load(sys.stdin)
 for k in sys.argv[1].split("."):
     d=(d or {}).get(k) if isinstance(d, dict) else None
 print(d if d is not None else "")' "$1" 2>/dev/null; }
+
+# The book of codes (EPIC T644 C3): `T<n><TAB><code><TAB><ID>` per task this login
+# heard a code for, so a report header or a verdict names a task by its code
+# without asking the hub again — a task's written code is its for life.
+CODES="${FLEET_ID_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids}/task-codes.tsv"   # fleet_id.py task_code reads it
+# remember <answer JSON> → book the record's code (a {task:…} answer or a bare record)
+remember() {
+  python3 -c 'import json, os, re, sys
+path, raw = sys.argv[1], sys.argv[2]
+try:
+    d = json.loads(raw)
+except ValueError:
+    sys.exit(0)
+t = d.get("task") if isinstance(d, dict) and isinstance(d.get("task"), dict) else d
+if not isinstance(t, dict):
+    sys.exit(0)
+ref, short, fid = t.get("id") or "", t.get("short") or "", t.get("fid") or ""
+if not re.match(r"^T[1-9][0-9]{0,9}$", ref):
+    ref = t.get("task") or ""
+if not (re.match(r"^T[1-9][0-9]{0,9}$", ref) and re.match(r"^[A-Z][0-9A-Z]{1,25}$", short)):
+    sys.exit(0)
+have = open(path).read().splitlines() if os.path.exists(path) else []
+if any(l.split("\t")[:1] == [ref] for l in have):
+    sys.exit(0)
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "a") as f:
+    f.write("%s\t%s\t%s\n" % (ref, short, fid))' "$CODES" "$1" 2>/dev/null || :
+}
+# booked <T<n>|code> → that task's booked code; rc 1 when the book has none
+booked() {
+  [ -f "$CODES" ] || return 1
+  awk -F'\t' -v r="$1" -v u="$(printf '%s' "${1#\#}" | tr 'a-z' 'A-Z')" \
+    '$1 == r || $2 == u { print $2; f = 1; exit } END { exit !f }' "$CODES"
+}
+# code_line <answer JSON> → the record's code, else its T<n> (an older hub)
+code_line() {
+  local c
+  c=$(printf '%s' "$1" | field task.short); [ -n "$c" ] || c=$(printf '%s' "$1" | field short)
+  [ -n "$c" ] || c=$(printf '%s' "$1" | field task.id); [ -n "$c" ] || c=$(printf '%s' "$1" | field id)
+  printf '%s\n' "$c"
+}
+# ambiguous <body> → rc 0 when it is the hub's 409 AMBIGUOUS, one stderr line per
+# candidate (code · title · state)
+ambiguous() {
+  case "$1" in *'"code":"AMBIGUOUS"'*) ;; *) return 1 ;; esac
+  printf '%s' "$1" | python3 -c 'import json,sys
+try:
+    for c in json.load(sys.stdin).get("candidates") or []:
+        print("fleet-task-record: %s · %s · %s" % (c.get("short") or c.get("task") or c.get("id"), c.get("title", ""), c.get("state", "")))
+except Exception:
+    pass' >&2 || :
+  return 0
+}
 
 # win_of [<window>] → the window to read (the caller's own pane when none).
 win_of() {
@@ -261,6 +326,10 @@ d.update(task=t["id"],generation=t["generation"],attempt_id=t["attempt_id"])
 print(json.dumps(d,separators=(",", ":")))
 JSON
     ) || exit 1
+    # the task's code first (EPIC T644 C3), then T<n>; an older hub: T<n> alone
+    remember "$accepted"
+    short=$(printf '%s' "$accepted" | field short)
+    [ -n "$short" ] && printf '%s\n' "$short"
     printf '%s\n' "$t"
   }
   export FLEET_DISPATCH="$dispatch"
@@ -291,7 +360,7 @@ fi
 # reads it as the next baton of the same member. Never a new T<n>. What
 # `fleet-epic-tick.py`'s and `await`'s hint names (fleet_id.start_hint).
 if [ "$cmd" = respawn ]; then
-  t="${1:-}"; is_tref "$t" || usage; shift
+  t="${1:-}"; is_task_ref "$t" || usage; shift   # its code too (EPIC T644 C3)
   prev='' origin='' pwin='' tsess=''
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -305,7 +374,8 @@ if [ "$cmd" = respawn ]; then
   done
   [ -z "$prev" ] || fleet_is_fid "$prev" || die 2 "--prev wants a full ID"
   applicable || die 3 "no hub here: no record to respawn"
-  got=$(call GET "/v1/node/tasks/$t") || exit 1
+  got=$(call GET "/v1/node/tasks/${t#\#}") || exit 1
+  remember "$got"; t=$(printf '%s' "$got" | field task.id); is_tref "$t" || die 1 "the hub's answer names no record"
   plan=$(printf '%s' "$got" | python3 -c '
 import json, sys
 d = json.load(sys.stdin); t = d.get("task") or {}
@@ -340,6 +410,8 @@ print(p.get("body") or "", end="")') || die 1 "$t: cannot respawn"
   [ -z "$tsess" ] || ra+=("$tsess")
   exec bash "${FLEET_TASK_RESPAWN:-$BIN/dash-raw-session.sh}" ${ra[@]+"${ra[@]}"}
 fi
+# A code the book already holds needs no hub (and works where none answers now).
+if [ "$cmd" = code ] && is_task_ref "${1:-}" && c=$(booked "$1"); then printf '%s\n' "$c"; exit 0; fi
 
 applicable || exit 3
 
@@ -350,14 +422,29 @@ if [ "$cmd" = authority ]; then
 fi
 case "$cmd" in
   children)
-    is_tref "${1:-}" || usage
-    call GET "/v1/node/tasks/$1/children"
+    is_task_ref "${1:-}" || usage
+    call GET "/v1/node/tasks/${1#\#}/children"
     exit $? ;;
   mutate)
-    is_tref "${1:-}" || usage
+    is_task_ref "${1:-}" || usage
     mutation=$(python3 -c 'import json,sys; print(json.dumps({"authority_version":1,"mutation":json.load(sys.stdin)}))') || exit 2
-    call POST "/v1/node/tasks/$1" "$mutation"
+    call POST "/v1/node/tasks/${1#\#}" "$mutation"
     exit $? ;;
+  resolve|code)
+    is_task_ref "${1:-}" || usage
+    # the book answers a task it has heard a code for — no hub round trip
+    if is_tref "$1" && c=$(booked "$1"); then printf '%s\n%s\n' "$c" "$1"; exit 0; fi
+    out=$(call GET "/v1/node/tasks/${1#\#}" 2>/dev/null); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      ambiguous "$out" && { printf 'fleet-task-record: %s names more than one task — name it longer\n' "$1" >&2; exit 2; }
+      printf 'fleet-task-record: no task answers to %s\n' "$1" >&2; exit 1
+    fi
+    remember "$out"
+    t=$(printf '%s' "$out" | field task.id); short=$(printf '%s' "$out" | field task.short)
+    is_tref "$t" || die 1 "the hub's answer names no record"
+    if [ "$cmd" = code ]; then [ -n "$short" ] || exit 1; printf '%s\n' "$short"; exit 0; fi
+    [ -n "$short" ] && printf '%s\n' "$short"
+    printf '%s\n' "$t" ;;
   new)
     title='' token='' via='' repo='' issue='' key='' wid='' state=''
     while [ $# -gt 0 ]; do
@@ -379,12 +466,16 @@ case "$cmd" in
             issue="$issue" key="$key" worker_id="$wid" state="$state")") || exit 1
     t=$(printf '%s' "$out" | field id)
     is_tref "$t" || die 1 "the hub's answer names no record"
+    remember "$out"
     short=$(printf '%s' "$out" | field short)
     [ -n "$short" ] && printf '%s\n' "$short"
     printf '%s\n' "$t" ;;
   get)
     is_task_ref "${1:-}" || usage
-    call GET "/v1/node/tasks/${1#\#}" || exit 1 ;;
+    out=$(call GET "/v1/node/tasks/${1#\#}"); rc=$?
+    printf '%s\n' "$out"
+    if [ "$rc" -ne 0 ]; then [ "$rc" = 3 ] && exit 3; ambiguous "$out" 2>/dev/null && exit 2; exit 1; fi
+    remember "$out" ;;
   settle)
     repo='' apply=false drained=false norepo=false
     while [ $# -gt 0 ]; do
@@ -416,8 +507,8 @@ case "$cmd" in
     done
     call POST /v1/node/tasks/reconcile "$(python3 -c 'import json,sys; d={"apply":sys.argv[1]=="true"}; d.update({"before":sys.argv[2]} if sys.argv[2] else {}); d.update({"undo":True} if sys.argv[3]=="true" else {}); print(json.dumps(d))' "$apply" "$before" "$undo")" || exit 1 ;;
   set)
-    is_tref "${1:-}" || usage
-    t="$1"; shift
+    is_task_ref "${1:-}" || usage
+    t="${1#\#}"; shift
     args=()
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -435,15 +526,17 @@ case "$cmd" in
       shift
     done
     [ "${#args[@]}" -gt 0 ] || usage
-    call POST "/v1/node/tasks/$t" "$(json ${args[@]+"${args[@]}"})" >/dev/null || exit 1 ;;
+    out=$(call POST "/v1/node/tasks/$t" "$(json ${args[@]+"${args[@]}"})") || exit $?
+    remember "$out"; code_line "$out" ;;
   attach)
-    is_tref "${1:-}" || usage
-    t="$1"
+    is_task_ref "${1:-}" || usage
+    t="${1#\#}"
     sess=$(fleet_current_session 2>/dev/null) || die 1 "no fleet session here"
     w=$(win_of "${2:-}") || die 1 "no window to attach"
     k=$(fleet_window_okey "$sess" "$w")
     wid=$(fleet_worker_id "$sess" "$w" 2>/dev/null) || wid=''
     [ -n "$k" ] || [ -n "$wid" ] || die 1 "window $w has no session key"
-    call POST "/v1/node/tasks/$t" "$(json key="$k" worker_id="$wid" state=open)" >/dev/null || exit 1 ;;
+    out=$(call POST "/v1/node/tasks/$t" "$(json key="$k" worker_id="$wid" state=open)") || exit $?
+    remember "$out"; code_line "$out" ;;
   *) usage ;;
 esac

@@ -2,6 +2,7 @@
 # fleet-await.sh — hand an issue to a worker and WAIT for its outcome (issue #812).
 #
 #   fleet-await.sh <N | wid:<worker_id> | T<n>> [--timeout <secs>] [--interval <secs>] [--no-spawn]
+#   fleet-await.sh --task <code | ID | T<n>> [--timeout <secs>] [--interval <secs>]
 #                      [--parent <key>] [--repo <owner/name>] [-L <socket>]
 #
 # The one thing a subagent gave that a worker did not: a result that comes BACK.
@@ -82,9 +83,13 @@
 # `fleet-id.sh await` — MERGED / SUCCEEDED 0 · FAILED / BLOCKED 1 · TIMEOUT 3 ·
 # EXITED 4 (closed with no result); never a spawn.
 #
-# `T<n>` (issue #3330) is a hub task record: the record's issue (a development task
+# `--task <ref>` (EPIC T644 C3) is a hub task record by its code (K5H0 — what the
+# `task` tool answers), its ID or `T<n>` (a bare `T<n>` too, one more version):
+# `fleet-task-record.sh resolve` reads it — a code naming several tasks exits 2 with
+# the candidates on stderr, never a pick — and the verdict names it by its code
+# (`task: K5H0`; an older hub: `T<n>`). The record's issue (a development task
 # a session dispatched, or an EPIC member) is waited on exactly as `<N>`
-# with its repo, and the verdict carries a `task: T<n>` line. A record with no
+# with its repo. A record with no
 # issue yet — a no-repo session — is NO-WORKER (5) naming its session: its report
 # lands in your ledger all the same (children). No hub here: NO-WORKER too.
 #
@@ -100,9 +105,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 usage() { sed -n '2,85p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { printf 'fleet-await: %s\n' "$1" >&2; exit "${2:-2}"; }
 
-NUM='' TIMEOUT=7200 INTERVAL=60 SPAWN=1 KEY='' REPO_ARG='' SOCK=''
+NUM='' TIMEOUT=7200 INTERVAL=60 SPAWN=1 KEY='' REPO_ARG='' SOCK='' TREF='' TCODE_IN=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --task)       shift; TREF="${1:-}"; [ -n "$TREF" ] || die "--task wants a task's code, ID or T<n>" ;;
+    --task=*)     TREF="${1#--task=}" ;;
+    --task-code)  shift; TCODE_IN="${1:-}" ;;   # the alarm re-exec's carry of the code
     --timeout)    shift; TIMEOUT="${1:-}" ;;
     --timeout=*)  TIMEOUT="${1#--timeout=}" ;;
     --interval)   shift; INTERVAL="${1:-}" ;;
@@ -130,6 +138,19 @@ esac
 case "$NUM" in wid:*|fid:*|[Tt]-*|*-*) IDCODE='' ;; esac
 [ -z "$IDCODE" ] || case "$NUM" in *[!0-9A-Za-z]*|*[Uu]*) IDCODE='' ;; esac
 [ -z "$IDCODE" ] || [ "${#NUM}" -le 26 ] || IDCODE=''
+# A task by its code / ID / T<n> (EPIC T644 C3) → its T<n>, its code the verdict's name.
+TCODE=$TCODE_IN
+if [ -n "$TREF" ]; then
+  [ -z "$NUM" ] || die "--task names the task — no issue number beside it"
+  res=$(bash "$BIN/fleet-task-record.sh" resolve "${TREF#\#}"); rrc=$?
+  case "$rrc" in
+    0) NUM=$(printf '%s\n' "$res" | sed -n '$p'); TCODE=$(printf '%s\n' "$res" | sed -n '1p')
+       case "$NUM" in T[1-9]*) ;; *) die "the hub's answer for $TREF names no task" 1 ;; esac ;;
+    2) printf 'AMBIGUOUS\ntask: %s\nnote: names more than one task (candidates on stderr) — name it longer\n' "$TREF"; exit 2 ;;
+    3) printf 'NO-WORKER\ntask: %s\nnote: no hub here — a task lives on the hub\n' "$TREF"; exit 5 ;;
+    *) printf 'UNKNOWN\ntask: %s\nnote: no task answers to %s (or the hub did not answer)\n' "$TREF" "$TREF"; exit 3 ;;
+  esac
+fi
 case "$NUM" in wid:?*|T[1-9]*|[Tt]-?*|fid:?*|????????-????-????-????-????????????) ;; *)
   [ -n "$IDCODE" ] || case "$NUM" in ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) die "--timeout wants a positive number of seconds" ;; esac
@@ -138,6 +159,7 @@ case "$INTERVAL" in ''|*[!0-9]*|0) die "--interval wants a positive number of se
 # version), `fid:<ID>` or the full ID — wait until it has a result or closes, off its
 # ledger (the hub mirror's record for one on another machine). Never spawns: an ID is
 # a window that already exists.
+[ -z "$TREF" ] || IDCODE=''
 [ -z "$IDCODE" ] || exec bash "$BIN/fleet-id.sh" await "$NUM" --timeout "$TIMEOUT" --interval "$INTERVAL"
 case "$NUM" in
   [Tt]-?*|fid:?*|????????-????-????-????-????????????)
@@ -149,6 +171,7 @@ esac
 # $SECONDS bound below is the whole deadline.
 if [ -z "${FLEET_AWAIT_ARMED:-}" ] && command -v perl >/dev/null 2>&1; then
   rearg=("$NUM" --timeout "$TIMEOUT" --interval "$INTERVAL")
+  [ -n "$TCODE" ] && [ "$TCODE" != "$NUM" ] && rearg+=(--task-code "$TCODE")
   [ -n "$KEY" ] && rearg+=(--parent "$KEY")
   [ -n "$REPO_ARG" ] && rearg+=(--repo "$REPO_ARG")
   [ -n "$SOCK" ] && rearg+=(-L "$SOCK")
@@ -170,7 +193,7 @@ CPU_PCT="${FLEET_AWAIT_CPU_PCT:-10}";   case "$CPU_PCT" in ''|*[!0-9]*) CPU_PCT=
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 # A hub task record (issue #3330) → its issue, or a refusal naming its session.
-TASK=''
+TASK='' TNAME=''
 case "$NUM" in T*)
   TASK=$NUM
   case "${TASK#T}" in *[!0-9]*) die "usage: fleet-await.sh <issue-number | T<n>> [--timeout s] [--no-spawn]" ;; esac
@@ -178,8 +201,11 @@ case "$NUM" in T*)
   tget() { printf '%s' "$trec" | python3 -c 'import json,sys
 try: print((json.load(sys.stdin).get("task") or {}).get(sys.argv[1]) or "")
 except ValueError: pass' "$1" 2>/dev/null; }
+  # how the verdict names it (EPIC T644 C3): its code, else T<n> (an older hub)
+  [ -n "$TCODE" ] || TCODE=$(tget short)
+  TNAME=${TCODE:-$TASK}
   if [ "$trc" -ne 0 ] && [ "$trc" -ne 3 ]; then
-    printf 'UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized\n' "$TASK"
+    printf 'UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized\n' "$TNAME"
     exit 3
   fi
   if [ "$(tget authority_version)" = 1 ]; then
@@ -191,13 +217,13 @@ except ValueError: pass' "$1" 2>/dev/null; }
     */*'#'[1-9]*) NUM=${tiss##*#}; [ -n "$REPO_ARG" ] || REPO_ARG=${tiss%#*} ;;
     *)
       case "$trc" in
-        0) note="$TASK has no issue and no session yet"
-           [ -n "$tkey" ] && note="$TASK has no issue — its session $tkey has no repo: its report lands in your ledger (children)" ;;
-        3) note="no hub here — $TASK is a hub task record" ;;
-        *) note="the hub did not answer for $TASK" ;;
+        0) note="$TNAME has no issue and no session yet"
+           [ -n "$tkey" ] && note="$TNAME has no issue — its session $tkey has no repo: its report lands in your ledger (children)" ;;
+        3) note="no hub here — $TNAME is a hub task record" ;;
+        *) note="the hub did not answer for $TNAME" ;;
       esac
       printf 'fleet-await: %s\n' "$note" >&2
-      printf 'NO-WORKER\ntask: %s\nnote: %s\n' "$TASK" "$note"
+      printf 'NO-WORKER\ntask: %s\nnote: %s\n' "$TNAME" "$note"
       exit 5 ;;
   esac ;;
 esac
@@ -349,7 +375,7 @@ finish() {  # <OUTCOME> [<note>]
   esac
   printf '%s\n' "$1"
   printf 'issue: #%s%s\n' "$NUM" "${P_TITLE:+ · $P_TITLE}"
-  [ -n "$TASK" ] && printf 'task: %s\n' "$TASK"
+  [ -n "$TASK" ] && printf 'task: %s\n' "${TNAME:-$TASK}"
   [ -n "$P_PR" ] && printf 'pr: #%s\n' "${P_PR#\#}"
   [ -n "$P_SUM" ] && printf 'summary: %s\n' "$P_SUM"
   [ -n "${2:-}" ] && printf 'note: %s\n' "$2"

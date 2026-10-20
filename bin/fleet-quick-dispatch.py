@@ -297,16 +297,19 @@ def task_send(data, view="", client=""):
         return False, tr("compose_failed_fmt", str(error))
     lines = (out.stdout or "").splitlines()
     t = next((l.strip() for l in lines if l.strip()[:1] == "T" and l.strip()[1:].isdigit()), "")
+    # the task's code first when the hub has one (EPIC T644 C3) — the name a person reads
+    head = lines[0].strip() if lines else ""
+    name = head if t and head != t and head[:1].isalpha() and head.isalnum() and head.isupper() else t
     if out.returncode != 0 or not t:
         err = [l.strip() for l in (out.stderr or "").splitlines() if l.strip()]
         why = (err[-1] if err else "") or "rc=%d" % out.returncode
         failed(data, view, why)
-        return False, tr("compose_failed_fmt", (tr("dispatch_task_made_fmt", t) + " · " if t else "") + why)
+        return False, tr("compose_failed_fmt", (tr("dispatch_task_made_fmt", name) + " · " if t else "") + why)
     compose.compose_log("dispatch_task", id=data.get("id"), repo=repo, agent=data.get("agent"), view=view, task=t)
     win = next((l.split("\t", 1)[0].strip() for l in lines if l.startswith("@")), "")
     if view and win:
         go(view, win, client)
-    return True, tr("dispatch_task_done_fmt", t, repo)
+    return True, tr("dispatch_task_done_fmt", name, repo)
 
 
 def go(view, win, client=""):

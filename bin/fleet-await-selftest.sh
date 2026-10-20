@@ -241,10 +241,18 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; : > "$FLEET_CONF_DIR/fleets/$LBL/conf"; 
 rm -f "$SB/fleet-task-record.sh"
 cat > "$SB/fleet-task-record.sh" <<'STUB'
 #!/bin/bash
+if [ "$1" = resolve ]; then   # EPIC T644 C3: a task's code → code + T<n>
+  case "$2" in
+    K10X|k10x|T10) printf 'K10X\nT10\n' ;;
+    K9) echo 'fleet-task-record: K9QX · a · open' >&2; echo 'fleet-task-record: K9R2 · b · open' >&2; exit 2 ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
 [ "$1" = get ] || exit 2
 case "$2" in
   T9)  printf '{"task":{"id":"T9","issue":"acme/app#407","session_key":""}}\n' ;;
-  T10) printf '{"task":{"id":"T10","issue":"","session_key":"scratch-12"}}\n' ;;
+  T10) printf '{"task":{"id":"T10","short":"K10X","issue":"","session_key":"scratch-12"}}\n' ;;
   *)   exit 3 ;;
 esac
 STUB
@@ -263,6 +271,22 @@ has "…naming its session" 'scratch-12' "$(cat "$WORK/out")"
 bash "$AW" T11 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
 eq "no hub here: exits 5" 5 "$?"
 has "…saying so" 'no hub here' "$(cat "$WORK/out")"
+# ONE CODE (EPIC T644 C3): --task takes the task's code (or its T<n>); the verdict
+# names it by its code, never its T<n>; a code naming several is never picked.
+for ref in K10X '#k10x' T10; do
+  bash "$AW" --task "$ref" -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+  eq "--task $ref: the record with no issue exits 5" 5 "$?"
+  has "…the verdict names it by its code ($ref)" 'task: K10X' "$(cat "$WORK/out")"
+  printf '%s' "$(cat "$WORK/out")" | grep -q 'T10' && fail "--task $ref: a T<n> in the verdict" "$(cat "$WORK/out")"
+  CHECKS=$((CHECKS + 1))
+done
+bash "$AW" T10 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+has "a bare T<n> (one more version): the verdict still names the code" 'task: K10X' "$(cat "$WORK/out")"
+bash "$AW" --task K9 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "--task K9 naming two tasks exits 2" 2 "$?"
+has "…AMBIGUOUS, the candidates named" 'K9R2' "$(cat "$WORK/out")"
+bash "$AW" --task KZZZ -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "--task naming nothing: UNKNOWN, exit 3" 3 "$?"
 
 # ACCEPTED (issue #4398): in a hub-authority login a new start is a task (the
 # `task` tool), never a spawn by issue number. (Its @launch leg — an accepted
