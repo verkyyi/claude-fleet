@@ -292,13 +292,13 @@ def main():
         owned.append(tool_identity)
         report['mcp_before_removal'] = {x['name']: continuation.MCP.runtime_ready(x)
                                         for x in rpc_call('mcpServerStatus/list', {})['data']}
-        import fleet_sleep_argv
+        import fleet_agent_argv
         children = [int(c) for c in subprocess.run(['pgrep', '-P', str(pid)], capture_output=True, text=True).stdout.split()]
         mcp_env = {}
         for child in children:
             argv = observe.process_argv(child)
             if len(argv) > 1 and Path(argv[1]).name == 'fleet-mcp.py':
-                mcp_env[' '.join(argv[2:]) or 'core'] = sorted(fleet_sleep_argv.process_env(child, set())['names'])
+                mcp_env[' '.join(argv[2:]) or 'core'] = sorted(fleet_agent_argv.process_env(child, set())['names'])
         report['mcp_child_env_names'] = mcp_env
         native_only = {'FLEET_CRED_SID', 'FLEET_CODEX_SESSION_CRED', 'FLEET_AUTHORITY_CONTEXT', 'PYTHONPYCACHEPREFIX', 'GIT_CONFIG_GLOBAL'}
         assert mcp_env and all(not native_only & set(names) for names in mcp_env.values()), mcp_env

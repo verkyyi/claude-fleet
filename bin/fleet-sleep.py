@@ -13,14 +13,12 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import runpy
 import select
 import shlex
 import signal
 import subprocess
 import sys
-import tempfile
 import termios
 import time
 import uuid
@@ -28,35 +26,17 @@ import uuid
 BIN = Path(__file__).absolute().parent
 
 
-class LazyModule(dict):
-    def __init__(self, filename):
-        super().__init__()
-        self.filename = filename
-        self.loaded = False
-
-    def load(self):
-        if not self.loaded:
-            self.update(runpy.run_path(str(BIN / self.filename)))
-            self.loaded = True
-
-    def __missing__(self, key):
-        self.load()
-        if key not in self:
-            raise KeyError(key)
-        return self[key]
-
-    def copy(self):
-        self.load()
-        return super().copy()
-
-
-TRANSFER = LazyModule('.fleet-transfer.py')
-INPUT = LazyModule('fleet-input.py')
-CODEX = LazyModule('fleet-codex-session.py')
-RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
-ARGV = LazyModule('fleet_sleep_argv.py')
+# Delivery, busy, reap and restore moved to fleet_worker_life.py (T545, EPIC
+# T542 C7); this module keeps hibernation and shares the life module's helpers
+# and dependency handles (one TRANSFER / ARGV / MCP — a patch on one is seen by both).
+LIFE = runpy.run_path(str(BIN / 'fleet_worker_life.py'))
+LazyModule = LIFE['LazyModule']
+TRANSFER, INPUT, CODEX, RPC, ARGV, MCP = (LIFE[k] for k in ('TRANSFER', 'INPUT', 'CODEX', 'RPC', 'ARGV', 'MCP'))
+NotAWorker, run, save, root, lock, alive = (LIFE[k] for k in ('NotAWorker', 'run', 'save', 'root', 'lock', 'alive'))
+process_state, process_start, source_alive, SESSION_FMT = (LIFE[k] for k in ('process_state', 'process_start', 'source_alive', 'SESSION_FMT'))
+quiet_native_children, codex_idle_turn, codex_busy_binding = (LIFE[k] for k in ('quiet_native_children', 'codex_idle_turn', 'codex_busy_binding'))
+quiet_processes, tool_shell, child_busy, hook = (LIFE[k] for k in ('quiet_processes', 'tool_shell', 'child_busy', 'hook'))
 LOOP = LazyModule('fleet-loop.py')
-MCP = LazyModule('fleet_sleep_mcp.py')
 PARK = LazyModule('fleet_sleep_park.py')
 LOOPMARK = LazyModule('fleet_loop_mark.py')
 
@@ -85,11 +65,6 @@ def digest_argv():
             os.environ.get('FLEET_SLEEP_DIGEST_MODEL') or 'haiku']
 
 
-class NotAWorker(ValueError):
-    """A window that structurally cannot be a worker (a panel or the hub): the
-    scan skips it silently instead of logging a per-tick skip record for it."""
-
-
 def wake_on_view():
     """FLEET_SLEEP_WAKE=dwell restores the old wake-on-arrival (issue #822's 2s
     navigation dwell, the scan's viewed-window wake, entering mid-sleep). The
@@ -98,63 +73,9 @@ def wake_on_view():
     return os.environ.get('FLEET_SLEEP_WAKE','confirm').strip()=='dwell'
 
 
-def run(argv, **kwargs):
-    # errors='replace' (issue #3129): a child's stderr may hold raw bytes it
-    # echoed (macOS awk's «illegal byte sequence»), never a reason to fail.
-    return subprocess.check_output([str(x) for x in argv], text=True, errors='replace',
-                                   stderr=subprocess.PIPE, timeout=kwargs.pop('timeout', 15), **kwargs).strip()
-
-
-def save(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.sleep-')
-    try:
-        with os.fdopen(fd, 'w') as out:
-            json.dump(data, out, ensure_ascii=False)
-            out.flush(); os.fsync(out.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp): os.unlink(tmp)
-
-
-def root(session):
-    if not re.fullmatch(r'[A-Za-z0-9_.-]+', session):
-        raise ValueError('invalid fleet session')
-    return Path(os.environ.get('FLEET_CONF_DIR', str(Path.home()/'.config/claude-fleet'))) / 'fleets' / session / 'sleep'
-
-
-@contextmanager
-def lock(path):
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with open(path, 'a') as fd:
-        os.chmod(path, 0o600)
-        try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: raise ValueError('another sleep/wake/delivery owns this worker') from None
-        yield
-
-
-def alive(pid):
-    if int(pid) <= 0: return False
-    try: os.kill(int(pid), 0); return True
-    except ProcessLookupError: return False
-
-
-def process_state(pid):
-    # (state, start) — the start fingerprint stays comparable across calls.
-    if int(pid)<=0: return '',''
-    try: fields=run(['ps','-p',str(pid),'-o','stat=','-o','lstart=','-o','comm=']).split(None,1)
-    except subprocess.CalledProcessError: return '',''
-    return fields[0], (fields[1] if len(fields)>1 else '')
-
-
-def process_start(pid):
-    return process_state(pid)[1]
-
-
 # The code a park process runs: its entry point plus every module it loads.
-PARK_CODE=('fleet-sleep.py','fleet_sleep_park.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py',
-           'fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py')
+PARK_CODE=('fleet-sleep.py','fleet_worker_life.py','fleet_sleep_park.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py',
+           'fleet-codex-rpc.py','fleet_agent_argv.py','fleet-loop.py','fleet_agent_mcp.py')
 
 
 def process_age_start(pid):
@@ -167,15 +88,6 @@ def process_age_start(pid):
     seconds=0
     for x in parts: seconds=seconds*60+x
     return time.time()-seconds-int(days or 0)*86400
-
-
-def source_alive(data):
-    # An exited agent stays a zombie until its parent (tmux) reaps it. BSD ps
-    # renames the command to <defunct>; Linux procps prints the zombie's
-    # lstart/comm exactly like the live process, so the state must be read.
-    if not data.get('source_start'): return False
-    state,start=process_state(data['source']['pid'])
-    return start==data['source_start'] and not state.startswith('Z')
 
 
 def wake_blocker(data):
@@ -205,50 +117,10 @@ def process_tree_rss(pid):
     return total
 
 
-# bin/fleet-lib.sh's FLEET_SESSION_FMT: the fleet's own name from any window or
-# pane, never a grouped view session's (issue #1489).
-SESSION_FMT='#{?#{session_group},#{session_group},#{session_name}}'
-
-
-class Worker:
+class Worker(LIFE['Worker']):
     def __init__(self, session, target):
-        self.session = session
-        identity = self.tm('display-message', '-p', '-t', target,
-                           '#{window_id}|' + SESSION_FMT).split('|', 1)
-        if len(identity) != 2: raise ValueError('unknown window')
-        self.window, owner_session = identity
-        if not re.fullmatch(r'@\d+', self.window): raise ValueError('unknown window')
-        # The fleet a window belongs to is its session's GROUP when it has one
-        # (issue #2622): with a client on a grouped view session
-        # (`<fleet>@view-<id>`) tmux answers a bare #{session_name} with the
-        # view's name, and every worker read `wrong fleet` — nothing slept.
-        if owner_session != session: raise ValueError('wrong fleet')
-        panes = self.tm('list-panes', '-t', self.window, '-F', '#{pane_id} #{@sidebar} #{@dash}').splitlines()
-        workers = [p.split()[0] for p in panes if len(p.split()) == 1]
-        if len(workers) != 1: raise NotAWorker('requires exactly one worker pane')
-        self.pane = workers[0]
-        metadata = self.tm('display-message', '-p', '-t', self.pane,
-                           '#{==:#{@hub},1}|#{!=:#{@remote},}|#{@issue}|#{@raw}|#{window_name}').split('|', 4)
-        if len(metadata) != 5: raise ValueError('worker metadata unavailable')
-        hub, remote, issue, raw, name = metadata
-        if name in ('dash','plan','backlog','home') or hub == '1':
-            raise NotAWorker('panel/hub is not a worker')
-        if remote == '1':
-            raise NotAWorker('a proxy onto another machine is not a worker here')
-        if not issue.isdigit() and raw != '1':
-            raise ValueError('not an issue or scratch worker')
-        self.directory = root(session)
-        self.lockfile = self.directory / ('window-' + self.window[1:] + '.lock')
+        super().__init__(session, target)
         self.quota_directory = self.directory.parents[2] / 'handoffs' / 'quota-requests'
-
-    def tm(self, *args):
-        return run(['tmux', '-L', self.session, *args], timeout=5)
-
-    def opt(self, name):
-        return self.tm('display-message','-p','-t',getattr(self,'pane',self.window),'#{'+name+'}')
-
-    def stamp(self, name, value):
-        self.tm('set-option','-w','-t',self.window,name,str(value))
 
     def command(self,action,*extra):
         # The page's language and digest knobs (issue #1237) ride along when set:
@@ -304,10 +176,6 @@ class Worker:
             except OSError: pass
         return {'digest':'ok' if digest else record['error']}
 
-    def inspect(self):
-        return json.loads(run(['bash',BIN/'fleet-transfer.sh','--session',self.session,
-                              '--window',self.pane,'--to','codex','--inspect'],timeout=30))
-
     def visible(self):
         return self.window in self.tm('list-clients','-F','#{window_id}').splitlines()
 
@@ -315,15 +183,6 @@ class Worker:
         # The session's current window — what the navigation hook fired for —
         # not a client's, so a detached select-window still counts as settling.
         return self.tm('display-message','-p','-t',self.session+':','#{window_id}')==self.window
-
-    def record(self):
-        path = Path(self.opt('@sleep_record'))
-        if path.parent != self.directory or not path.name.endswith('.json'):
-            raise ValueError('missing durable sleep record')
-        data = json.loads(path.read_text())
-        if data['session'] != self.session or data['pane'] != self.pane or data['window'] != self.window:
-            raise ValueError('sleep record belongs to another worker')
-        return path, data
 
     def phase(self, path, data, state, error=''):
         # `since` (issue #1051) is when this sleep began: kept across a re-entry
@@ -372,18 +231,6 @@ class Worker:
 
     def source_key(self, source):
         return tuple(source[k] for k in ('agent','session_id','pid','worktree','home'))
-
-    def holds_exit(self,data):
-        # Some Claude versions unregister their session before SessionEnd. The
-        # already-validated process fingerprint remains authoritative until exit.
-        if (data['state']!='preparing' or not 0<=time.time()-data['updated']<90
-                or self.opt('@worker_lifecycle')!='preparing' or not source_alive(data)):
-            return False
-        root_pid=int(self.opt('pane_pid'));pid=int(data['source']['pid'])
-        rows=TRANSFER['process_rows']();seen=set()
-        while pid!=root_pid and pid not in seen and pid in rows:
-            seen.add(pid);pid=rows[pid][0]
-        return pid==root_pid
 
     def cheap_vetoes(self):
         # The window-option gates that need no native inspection: the common
@@ -796,20 +643,22 @@ class Worker:
         try:return MCP['verify_resume'](source,MCP['inventory'](client))
         finally:client.close()
 
-    def dispose(self):
-        """Retire this sleeper's record ahead of a reap (issue #1244): the window
-        is about to be killed WITHOUT a wake, so the record must stop describing a
-        retained worker — fleet-restore's `restore` refuses any state but the
-        retained ones. Under the worker lock, so a concurrent wake cannot start an
-        agent the reap would then kill; refuses unless the original agent is gone."""
-        with lock(self.lockfile):
-            state=self.opt('@worker_lifecycle')
-            if state not in ('sleeping','failed'): raise ValueError('not a sleeping worker: '+(state or 'awake'))
-            path,data=self.record()
-            if source_alive(data): raise ValueError('the original agent is still running')
-            data.update(state='reaped',updated=time.time())
-            save(path,data)
-            return {'state':'reaped','record':str(path)}
+    def restore(self,record):
+        """Put a saved sleep record back on this (restored) window: its park page,
+        never an agent. fleet_worker_life.py's `restore` asks for it."""
+        path=Path(record)
+        if path.parent!=self.directory: raise ValueError('restore record is outside this fleet')
+        data=json.loads(path.read_text())
+        if data['session']!=self.session or data['state'] not in ('sleeping','preparing','waking','failed'):
+            raise ValueError('record does not describe a retained worker')
+        # PID numbers from a dead server/previous boot are never kill authority.
+        data.update(window=self.window,pane=self.pane)
+        data['source']['pid']=0
+        self.stamp('@sleep_record',path)
+        self.phase(path,data,'sleeping')
+        command=self.command('park')
+        self.replaceable()
+        self.tm('respawn-pane','-k','-t',self.pane,'-c',data['source']['worktree'],command)
 
     def scheduled_wake(self,path,data):
         snapshot=data['source'].get('sleep_loop')
@@ -827,44 +676,6 @@ class Worker:
         if os.environ.get('FLEET_FAILOVER','0')!='1':return False
         allowed=os.environ.get('FLEET_FAILOVER_AGENTS','claude,codex').split(',')
         return bool(account['choose'](inventory,data['source']['agent'],[key],allowed=allowed)['target'])
-
-    def deliver(self,text):
-        if not text.strip(): raise ValueError('empty message')
-        # Record before waking. A timeout leaves reviewable pending data, never a
-        # successful acknowledgement or an automatic duplicate of uncertain work.
-        queue=self.inbox()
-        token=hashlib.sha256(text.encode()).hexdigest()
-        msgpath=queue/(token+'.json')
-        with lock(self.lockfile):
-            if self.opt('@worker_lifecycle'):
-                _,saved=self.record();expected=saved['source']['session_id']
-            else:expected=self.inspect()['session_id']
-            message=json.loads(msgpath.read_text()) if msgpath.exists() else dict(text=text,state='pending',created=time.time(),session_id=expected)
-            if message['state']=='uncertain': raise ValueError('previous delivery is uncertain; inspect '+str(msgpath))
-            save(msgpath,message)
-            if self.opt('@worker_lifecycle'):
-                path,data=self.record()
-                if not self.wake_locked(path,data,over_cap=False):
-                    # Already saved above: the scan's drain delivers it once a slot frees.
-                    print('fleet-sleep: queued — fleet at its session limit; delivers when a slot frees',file=sys.stderr)
-                    return 'queued'
-            source=self.inspect()
-            if message['session_id']!=source['session_id']:raise ValueError('pending message belongs to an earlier conversation')
-            self.stamp('@sleep_evidence','')
-            try:
-                if source['agent']=='codex':
-                    run(['python3',BIN/'fleet-codex-session.py','send','--pane',self.pane,'--socket',self.session],input=text,timeout=20)
-                else:
-                    run(['bash','-c','. "$1"; text=$(cat); fleet_peer_send "$2" "$text" "${FLEET_REPORT_FROM:-fleet}"',
-                         'sleep-delivery',BIN/'fleet-lib.sh',str(source['pid'])],input=text,timeout=20)
-            except subprocess.TimeoutExpired:
-                message['state']='uncertain'; save(msgpath,message); raise
-            msgpath.unlink()
-
-    def inbox(self):
-        record=self.opt('@sleep_record')
-        key=Path(record).stem if record else 'window-'+self.window[1:]
-        return self.directory/('inbox-'+key)
 
     def drain(self):
         for path in sorted(self.inbox().glob('*.json'))[:4]:
@@ -929,221 +740,6 @@ def drain_peer_queue(w):
     except (OSError,ValueError,subprocess.SubprocessError): pass
 
 
-def quiet_native_children(client,session_id):
-    loaded=client.call('thread/loaded/list',{})
-    if loaded.get('nextCursor') or not isinstance(loaded.get('data'),list):
-        raise ValueError('loaded thread inventory is incomplete')
-    if session_id not in loaded['data']:
-        raise ValueError('native session is no longer loaded')
-    for sid in loaded['data']:
-        if sid==session_id:continue
-        child=client.call('thread/read',{'threadId':sid,'includeTurns':False})['thread']
-        if child.get('status',{}).get('type')!='idle':
-            raise ValueError('another thread/subagent is active or unknown')
-        goal=client.call('thread/goal/get',{'threadId':sid}).get('goal')
-        if goal and goal.get('status')!='complete':
-            raise ValueError('another thread/subagent has an unfinished goal')
-
-
-def codex_idle_turn(client, source):
-    """The existing sleep native-idle proof, also used by the busy reader.
-
-    This is a synchronous native read, not a cached runtime/task snapshot. The
-    shared observation contract (#4434) remains the delivery controller's owner.
-    """
-    sid = source['session_id']
-    thread = client.call('thread/read', {'threadId': sid, 'includeTurns': True})['thread']
-    if thread.get('id') != sid or thread.get('status', {}).get('type') != 'idle':
-        raise ValueError('Codex is not natively idle')
-    if (not thread.get('cwd') or not thread.get('path')
-            or Path(thread['cwd']).resolve() != Path(source['worktree']).resolve()
-            or Path(thread['path']).resolve() != Path(source['transcript']).resolve()):
-        raise ValueError('Codex native worktree/history does not match this worker')
-    turns = thread.get('turns') or []
-    if not turns or turns[-1].get('status') != 'completed':
-        raise ValueError('no completed Codex turn')
-    last = turns[-1]
-    if any(item.get('status') not in (None, 'completed', 'failed', 'declined', 'interrupted')
-           for item in last.get('items', [])):
-        raise ValueError('Codex tool is still active or unknown')
-    goal = client.call('thread/goal/get', {'threadId': sid}).get('goal')
-    if goal and goal.get('status') != 'complete':
-        raise ValueError('Codex goal is unfinished')
-    quiet_native_children(client, sid)
-    return last
-
-
-def codex_busy_binding(w, source):
-    # Reuse C3's kernel birth/ownership proof; no new identity store or adapter.
-    from fleet_launch import process, inspect
-    data = source['codex_identity']
-    if (data.get('owner') != str(source['pid']) or data.get('session_id') != source['session_id']
-            or data.get('home') != source['home'] or not data.get('remote', '').startswith('unix:///')):
-        raise ValueError('no current Codex native binding')
-    launch = w.opt('@launch')
-    receipt = inspect(json.loads(launch), w.pane, w.session) if launch else None
-    if receipt and receipt['native_session'] != source['session_id']:
-        raise ValueError('Codex launch belongs to another native session')
-    return (tuple(source[k] for k in ('pid', 'session_id', 'home', 'worktree', 'transcript')),
-            data.get('remote'), process(source['pid']), receipt)
-
-
-def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None):
-    # background=None is hibernation's contract: any unverified child vetoes.
-    # A list collects those pids instead (still walking their descendants) —
-    # failover's hard-wall grace passes one (#871), and so does child_busy (#864);
-    # every other veto still raises. strict=False is child_busy's question — "is
-    # the agent still running WORK?" — asked from inside its own Stop hook: the
-    # MCP restartability contract is dropped (see fleet_sleep_mcp.classify), the
-    # caller's own ancestry (the hook chain) is never work, and under Claude only
-    # a Bash-tool shell counts — concurrent Stop hooks and caffeinate are Claude's
-    # own per-turn machinery, not a job the worker left running.
-    rows=TRANSFER['process_rows']()
-    pending=[source['pid']]; seen=set()
-    lenient={} if strict else {'strict':False}   # hibernation's call shape unchanged
-    if remounted:
-        # The continuation's proven remount (issue #4775, fleet_sleep_mcp.classify);
-        # strict only, and only Codex reports the services it names.
-        if not strict or source['agent']!='codex': raise ValueError('remounted MCP services need a strict Codex walk')
-        lenient['remounted']=frozenset(remounted)
-    if not strict:
-        pid=os.getpid()
-        while pid in rows and pid not in seen and pid!=source['pid']:
-            seen.add(pid);pid=rows[pid][0]
-    mcp_pids=set()
-    helpers=set()
-    helper_dir=None
-    if not strict and source['agent']=='codex':
-        root_argv=ARGV['process_argv'](source['pid'])
-        if len(root_argv)>1 and Path(root_argv[1]).name=='fleet-codex.sh':
-            helper_dir=Path(root_argv[1]).resolve().parent
-    # Non-strict Claude needs no inventory: only a Bash-tool shell counts there,
-    # and no MCP server is one — so a missing/odd ~/.claude.json cannot blind it.
-    if strict and source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
-        # Claude starts its stdio MCP servers as direct children and has no RPC
-        # to enumerate them; the effective config is rebuilt from its own argv
-        # and store (issue #784). Nothing else beneath Claude is infrastructure.
-        inventory=MCP['claude_inventory'](ARGV['process_argv'](source['pid']),source['worktree'],config_home)
-        mcp_pids=MCP['classify'](source,inventory,rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],**lenient)
-    if source['agent']=='codex' and rows.get(source['pid'],(0,''))[1] in ('codex','codex-real'):
-        # A bound native server can itself be the root, rather than a child of
-        # the shell launcher. It needs the same inventory as a nested server.
-        argv=ARGV['process_argv'](source['pid'])
-        remote=source['codex_identity'].get('remote','')
-        if 'app-server' in argv and '--listen' in argv:
-            if not remote or argv[argv.index('--listen')+1:argv.index('--listen')+2]!=[remote]:
-                raise ValueError('bound Codex server owns a different endpoint')
-            client=RPC(remote,timeout=5)
-            # A measured Codex release only: its MCP children's environment is what
-            # shell_exec_argv can account for (issue #4537); Claude's call passes none.
-            try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
-            finally:client.close()
-    while pending:
-        parent=pending.pop()
-        if parent in seen: continue
-        seen.add(parent)
-        for pid,(pp,comm) in rows.items():
-            if pp!=parent or pid==parent or pid in seen: continue
-            if (not strict and source['agent']=='claude' and parent==source['pid']
-                    and pid not in mcp_pids and not tool_shell(pid)): continue
-            pending.append(pid)
-            if source['agent']=='claude':
-                if pid in mcp_pids: continue
-                if background is not None: background.append(pid); continue
-                try:name=ARGV['process_executable'](pid).name
-                except OSError:name='unknown'
-                raise ValueError('Claude owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
-            argv=ARGV['process_argv'](pid)
-            remote=source['codex_identity'].get('remote','')
-            native=comm in ('codex','codex-real')
-            npm=(comm=='node' and len(argv)>1 and
-                 str(Path(argv[1]).resolve()).endswith('/@openai/codex/bin/codex.js'))
-            if native or npm:
-                # Only this worker's TUI/server are infrastructure. A separately
-                # spawned Codex command is background work, regardless of name.
-                for flag in ('--remote','--listen'):
-                    if flag in argv and argv[argv.index(flag)+1:argv.index(flag)+2]==[remote]:break
-                else:raise ValueError('another Codex process owns a different endpoint')
-                if native and 'app-server' in argv:
-                    children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
-                    if children:
-                        client=RPC(remote,timeout=5)
-                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
-                        finally:client.close()
-                continue
-            if pid in mcp_pids:continue
-            runtime=len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py'
-            bridge=len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge'
-            if runtime or bridge:
-                if strict: continue  # sleep's existing restartability contract
-                if (helper_dir and Path(argv[1]).resolve()==helper_dir/Path(argv[1]).name
-                        and (parent==source['pid'] or (runtime and '--guard' in argv and parent in helpers))):
-                    helpers.add(pid)
-                    continue
-            if comm in ('codex-code-mode-host','codex-code-mode'):
-                parent_args=ARGV['process_argv'](parent)
-                remote=source['codex_identity'].get('remote','')
-                # The bundled persistent JS host is infrastructure only when
-                # directly owned by this exact app-server and from its release.
-                # Its descendants are still visited and may veto sleep.
-                if ('app-server' in parent_args and '--listen' in parent_args
-                        and parent_args[parent_args.index('--listen')+1:parent_args.index('--listen')+2]==[remote]
-                        and ARGV['process_executable'](pid)==
-                            ARGV['process_executable'](parent).with_name('codex-code-mode-host')):
-                    continue
-            if background is not None: background.append(pid); continue
-            try:name=ARGV['process_executable'](pid).name
-            except OSError:name='unknown'
-            raise ValueError('Codex owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
-
-
-def tool_shell(pid):
-    # Claude's Bash tool (foreground, run_in_background, Monitor) runs every
-    # command as `<shell> -c source <config>/shell-snapshots/snapshot-…`; no hook,
-    # MCP server or helper Claude starts on its own sources one.
-    try:return any('/shell-snapshots/snapshot-' in arg for arg in ARGV['process_argv'](pid))
-    except OSError:return False
-
-
-def child_busy(session,target,pid=0,reap=False):
-    """The pids a worker's agent still owns beyond its MCP services (issue #864).
-
-    A child whose turn ended while a run_in_background test or a PR-gate waiter
-    (`tools/await-pr.sh`) still runs under it has not STOPPED — it is waiting, and
-    its parent must not hear otherwise. Same walk hibernation vetoes on, minus the
-    restartability contract: an uncontracted MCP server is not work in progress.
-    A known Claude pid (fleet_pane_claude_pid) skips the native inspect.
-    reap=True adds native-idle proof only at disposal; a Stop hook runs before
-    the native turn completes and must not wait on its own completion.
-    """
-    w=Worker(session,target)
-    if pid:
-        source=dict(agent='claude',pid=pid,codex_identity={},
-                    worktree=w.opt('@worktree') or w.opt('pane_current_path'))
-    else:
-        source=w.inspect()
-    try:config_home=json.loads(w.opt('@sleep_evidence') or '{}').get('config_home')
-    except ValueError:config_home=None
-    background=[]
-    if source['agent']=='codex' and reap:
-        binding=codex_busy_binding(w,source)
-        client=RPC(source['codex_identity']['remote'],timeout=5)
-        try:
-            turn=codex_idle_turn(client,source)
-            if not turn.get('id'):raise ValueError('no completed Codex turn identity')
-            quiet_processes(source,config_home,background=background,strict=False)
-            # No cached idle or stale launch can waive the process gate. A turn
-            # starting or a replacement session during classification vetoes.
-            if codex_busy_binding(w,w.inspect())!=binding:
-                raise ValueError('Codex binding changed during busy check')
-            if codex_idle_turn(client,source).get('id')!=turn.get('id'):
-                raise ValueError('Codex turn changed during busy check')
-        finally:client.close()
-    else:
-        quiet_processes(source,config_home or os.environ.get('CLAUDE_CONFIG_DIR'),background=background,strict=False)
-    return background
-
-
 def source_options(source):
     pid=source['pid']
     if source['agent']=='codex':
@@ -1184,23 +780,6 @@ def hook_trust(response,options):
             raise ValueError('Codex hooks require review before resume')
         trusted[hook['key']]={'trusted_hash':hook['currentHash']}
     return trusted
-
-
-def hook():
-    if not os.environ.get('TMUX') or not os.environ.get('TMUX_PANE'): return
-    if os.environ.get('CLAUDE_CODE_ENTRYPOINT','cli')!='cli': return
-    payload=json.load(sys.stdin)
-    if payload.get('hook_event_name')!='Stop': return
-    pane=os.environ['TMUX_PANE']
-    session=run(['tmux','display-message','-p','-t',pane,SESSION_FMT])
-    w=Worker(session,pane)
-    source=w.inspect()
-    if payload.get('session_id')!=source['session_id']: return
-    evidence={k:payload.get(k) for k in ('session_id','background_tasks','session_crons','stop_hook_active','permission_mode')}
-    evidence.update(at=time.time(),pid=source['pid'],pane=pane,
-                    config_home=os.environ.get('CLAUDE_CONFIG_DIR'),
-                    accounts_dir=os.environ.get('FLEET_ACCOUNTS_DIR'))
-    w.stamp('@sleep_evidence',json.dumps(evidence,separators=(',',':')))
 
 
 def launch(w):
@@ -1421,10 +1000,9 @@ def main():
     p.add_argument('--force',action='store_true',help='repark: replace every sleeping page, not only stale ones')
     p.add_argument('--over-cap',action='store_true',help='wake: the operator\'s own wake — goes even at the session limit (issue #1058)')
     a=p.parse_intermixed_args()
-    if a.action=='hook':
-        try: hook()
-        except (ValueError,KeyError,OSError,subprocess.SubprocessError): pass
-        return 0
+    # compat-1v: 下一批删 — moved to fleet_worker_life.py (T545); an older session's
+    # Stop hook and a caller from before the move still name this file.
+    if a.action in LIFE['ACTIONS']: return LIFE['main']()
     if a.action=='repark' and not a.window:
         # Every retained worker of this fleet (issue #1064): run after a sync.
         for window in run(['tmux','-L',a.session,'list-windows','-t',a.session,'-F','#{window_id}']).splitlines():
@@ -1472,48 +1050,14 @@ def main():
             record=dict(session=a.session,window=window,at=time.strftime('%Y-%m-%dT%H:%M:%S'),**result)
             print(json.dumps(record,ensure_ascii=False),flush=True)
         return 0
-    if a.action=='busy':
-        # Exit 0 = busy (prints the pids), 1 = idle, 2 = cannot tell (fleet-sleep:
-        # on stderr). Unknown retains the window, never permission to reap.
-        try:pids=child_busy(a.session,a.window or '',a.pid,reap=a.reap)
-        except Exception as exc:
-            print('fleet-sleep: '+str(exc),file=sys.stderr)
-            return 2
-        if not pids: return 1
-        print(' '.join(map(str,pids)))
-        return 0
     w=Worker(a.session,a.window or '')
     if a.action=='why': print(json.dumps({'window':w.window,'reasons':w.unmet_reasons()},ensure_ascii=False))
     elif a.action=='sleep': print(json.dumps(w.sleep(manual=True,dry=a.dry_run)))
-    elif a.action=='holds-exit':
-        _,data=w.record()
-        return 0 if w.holds_exit(data) else 1
     elif a.action=='wake':
         w.wake(dwell=a.dwell,nav=a.nav,over_cap=a.over_cap)
         drain_peer_queue(w)
-    # 3 = held, not delivered (issue #1647): the sleeper waits for a slot with it,
-    # and the sender must say «queued», never «reported».
-    elif a.action=='deliver': return 3 if w.deliver(sys.stdin.read())=='queued' else 0
-    elif a.action=='restore':
-        path=Path(a.record)
-        if path.parent!=w.directory: raise ValueError('restore record is outside this fleet')
-        data=json.loads(path.read_text())
-        if data['session']!=w.session or data['state'] not in ('sleeping','preparing','waking','failed'):
-            raise ValueError('record does not describe a retained worker')
-        # PID numbers from a dead server/previous boot are never kill authority.
-        data.update(window=w.window,pane=w.pane)
-        data['source']['pid']=0
-        w.stamp('@sleep_record',path)
-        w.phase(path,data,'sleeping')
-        command=w.command('park')
-        w.replaceable()
-        w.tm('respawn-pane','-k','-t',w.pane,'-c',data['source']['worktree'],command)
     elif a.action=='repark': print(json.dumps(w.repark(force=a.force),ensure_ascii=False))
     elif a.action=='digest': print(json.dumps(w.digest(a.record or w.opt('@sleep_record'),a.pid),ensure_ascii=False))
-    elif a.action=='dispose': print(json.dumps(w.dispose(),ensure_ascii=False))
-    # A reap HOLD (issue #1244): fleet-reap-live.py retains a held worker, so no
-    # automatic cleanup and no ⌃x takes it until `release`.
-    elif a.action in ('hold','release'): w.stamp('@reap_hold','1' if a.action=='hold' else '')
     elif a.action=='park': park(w)
     elif a.action=='launch': launch(w)
     else: w.stamp('@sleep_keep_awake','1' if a.action=='keep-awake' else '')

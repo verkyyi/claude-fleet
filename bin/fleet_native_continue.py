@@ -23,14 +23,14 @@ import time
 import uuid
 
 import fleet_native_observe as observe
-import fleet_sleep_mcp as MCP
-from fleet_sleep_argv import process_env
+import fleet_agent_mcp as MCP
+from fleet_agent_argv import process_env
 
 BIN = Path(__file__).resolve().parent
 require = observe.require
 launch = observe.launch
 authority = observe.authority
-SLEEP = runpy.run_path(str(BIN / 'fleet-sleep.py'))
+SLEEP = runpy.run_path(str(BIN / 'fleet_worker_life.py'))
 INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 ROUTING = ('@fleet_id', '@repo', '@issue', '@raw', '@worktree', '@task', '@origin',
@@ -350,7 +350,7 @@ def native_ready(plan):
         mounts = remounted(configured)
         # The fleet's own servers are mounted afresh by the resumed lifetime, so
         # their old config path and readiness do not matter: identity and an
-        # empty process tree beneath them still do (fleet_sleep_mcp.classify).
+        # empty process tree beneath them still do (fleet_agent_mcp.classify).
         SLEEP['quiet_processes'](source, remounted=mounts)
         require(observe.kernel(proof['pid']) == plan['processes']['native'], 'native kernel lifetime changed')
         # Config hashes prove unchanged effective config. shell-exec is only

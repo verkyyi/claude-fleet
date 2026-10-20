@@ -194,7 +194,7 @@ nudged "$out" && fail 'Codex below the configured threshold must not hand off'
 out="$(GPCT=60 FAKE_CTX=-1 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
 nudged "$out" && fail 'Unknown Codex context must not hand off'
 
-cat > "$WORK/inst/bin/fleet-sleep.py" <<'PYSLEEP'
+cat > "$WORK/inst/bin/fleet_worker_life.py" <<'PYSLEEP'
 import os, sys
 from pathlib import Path
 if sys.argv[1:2] == ['hook']:
@@ -216,7 +216,7 @@ for fixture in '1 unix:///test codex skip' '0 unix:///test codex hook' '1 tcp://
     [ -f "$WORK/sleep-hook.log" ] || fail 'Claude, legacy and non-private Codex must retain Stop evidence'
   fi
 done
-rm -f "$WORK/inst/bin/fleet-sleep.py"
+rm -f "$WORK/inst/bin/fleet_worker_life.py"
 
 # ---- UNSET = OFF: native Agent compaction owns the default --------------------
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"

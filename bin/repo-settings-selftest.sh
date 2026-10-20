@@ -14,7 +14,7 @@
 #             hook (lib spawn path + the `cw` shim, fleet-worktree.sh)
 #   basesync  fleet-base-sync.sh walks every hosted repo, each with its own deps
 #   sleep     FLEET_SLEEP_MCP_RESTARTABLE resolved per window/worktree repo
-#             (fleet_sleep_mcp.restartable), the hint naming the repo's conf
+#             (fleet_agent_mcp.restartable), the hint naming the repo's conf
 #   switches  FLEET_CLEANUP (cleanup daemon), FLEET_CHECK_REQUIRED (the check
 #             gate)
 #
@@ -192,7 +192,7 @@ wtb=$( fleet_load_repo_conf $M o/b && fleet_worktree_dir "$WORK/mainB" issue-1 )
 restartable() { # restartable <session> <window> <worktree> → "names|conf"
   FLEET_SLEEP_MCP_RESTARTABLE="$4" python3 - "$BIN" "$1" "$2" "$3" <<'PY'
 import runpy, sys
-m = runpy.run_path(sys.argv[1] + '/fleet_sleep_mcp.py')
+m = runpy.run_path(sys.argv[1] + '/fleet_agent_mcp.py')
 src = {k: v for k, v in (('session', sys.argv[2]), ('window', sys.argv[3]), ('worktree', sys.argv[4])) if v}
 names, conf = m['restartable'](src)
 print(','.join(sorted(names)) + '|' + str(conf))
@@ -206,7 +206,7 @@ eq 'degenerate' "$(restartable $D '@9' '' cmcp)" "cmcp|$(fleet_repo_conf_file $D
 hint=$(python3 - "$BIN" "$(fleet_repo_conf_file $M o/b)" <<'PY'
 import runpy, sys
 from pathlib import Path
-m = runpy.run_path(sys.argv[1] + '/fleet_sleep_mcp.py')
+m = runpy.run_path(sys.argv[1] + '/fleet_agent_mcp.py')
 print(m['contract_hint']({'session': 'M'}, {'bmcp'}, 'x', Path(sys.argv[2])))
 PY
 )

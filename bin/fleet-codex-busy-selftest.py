@@ -19,7 +19,7 @@ import json
 sys.dont_write_bytecode = True
 BIN = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(BIN))
-LIB = runpy.run_path(str(BIN / 'fleet-sleep.py'))
+LIB = runpy.run_path(str(BIN / 'fleet_worker_life.py'))
 
 
 class CodexBusy(unittest.TestCase):
@@ -235,7 +235,7 @@ def fixture(mode, record):
         try: time.sleep(120)
         finally: stop()
         return
-    # Entry used ONLY by the isolated test's fleet-sleep.py. Process identity,
+    # Entry used ONLY by the isolated test's fleet_worker_life.py. Process identity,
     # helper argv, shell/reap/children gates and disposal remain production code.
     rec = json.loads(path.read_text())
     native = int((path.parent / 'native.pid').read_text())
@@ -274,7 +274,7 @@ def fixture(mode, record):
     LIB['ARGV']['process_argv'] = argv
     LIB['Worker'].inspect = inspect
     LIB['child_busy'].__globals__['RPC'] = Client
-    sys.argv = ['fleet-sleep.py', *sys.argv[4:]]
+    sys.argv = ['fleet_worker_life.py', *sys.argv[4:]]
     return LIB['main']()
 
 
@@ -301,11 +301,11 @@ class ReapIntegration(unittest.TestCase):
                 (conf / 'conf').write_text('FLEET_FORGE=none\n')
                 testbin = root / 'bin'; testbin.mkdir()
                 for f in BIN.iterdir():
-                    if f.is_file() and f.name != 'fleet-sleep.py': (testbin / f.name).symlink_to(f)
+                    if f.is_file() and f.name != 'fleet_worker_life.py': (testbin / f.name).symlink_to(f)
                 wrapper = ('import runpy,sys\nsys.argv=[' + repr(__file__) + ',' + repr(str(BIN))
                            + ',"--fixture","probe",' + repr(str(root / 'native.json'))
                            + ']+sys.argv[1:]\nrunpy.run_path(' + repr(__file__) + ',run_name="__main__")\n')
-                (testbin / 'fleet-sleep.py').write_text(wrapper)
+                (testbin / 'fleet_worker_life.py').write_text(wrapper)
                 command = shlex.join([sys.executable, __file__, str(BIN), '--fixture', 'agent', str(root / 'native.json')])
                 child = tm('new-window', '-d', '-P', '-F', '#{window_id}', '-t', socket, '-n', 'scratch-2', command)
                 pane = tm('display-message', '-p', '-t', child, '#{pane_id}')
@@ -344,7 +344,7 @@ class ReapIntegration(unittest.TestCase):
                 stamp(child, '@codex_identity', '')
                 self.assertIn('retained:bg', why(child))
                 stamp(child, '@codex_identity', json.dumps(identity))
-                probe = subprocess.run([sys.executable, str(testbin / 'fleet-sleep.py'), 'busy',
+                probe = subprocess.run([sys.executable, str(testbin / 'fleet_worker_life.py'), 'busy',
                                         '--session', socket, '--reap', child], capture_output=True, text=True, env=env)
                 if probe.returncode != 1:
                     ids = {n: (root / (n + '.pid')).read_text() for n in ('agent', 'native', 'service')}

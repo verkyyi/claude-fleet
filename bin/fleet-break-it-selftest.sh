@@ -5712,7 +5712,7 @@ drill_native_continue_stop_loop() {
 drill_native_continue_mcp_remount() {
   CAP=30; local t0 out
   t0=$(now)
-  out=$(python3 "$BIN/fleet-sleep-selftest.py" "$BIN" McpRestartTest.test_remounted_skips_only_contract_and_readiness \
+  out=$(python3 "$BIN/fleet-worker-life-selftest.py" "$BIN" McpRestartTest.test_remounted_skips_only_contract_and_readiness \
         McpRestartTest.test_shell_exec_is_offered_to_codex_only 2>&1) || { WHY="$out"; return 1; }
   out=$(python3 "$BIN/fleet_native_continue_test.py" Readiness.test_only_the_current_launchers_exact_mount_is_remounted 2>&1) \
     || { WHY="$out"; return 1; }

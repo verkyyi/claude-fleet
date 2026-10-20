@@ -12,7 +12,7 @@
 #      the book says DELIVERED for each, the queue is empty.
 #   C  a drain for another identity (--fid) leaves an item alone; an item whose
 #      recipient is not live stays queued.
-#   D  a sleeping parent at a full fleet (fleet-sleep.py deliver exit 3): the
+#   D  a sleeping parent at a full fleet (fleet_worker_life.py deliver exit 3): the
 #      report is `queued →`, exit 3 — never `reported` — and not double-queued.
 #   E  a recipient that never comes back: after FLEET_PEER_QUEUE_TTL the drain
 #      drops it and the book says EXPIRED.
@@ -43,12 +43,12 @@ INBOX_PID=''
 cleanup() { tmux -L "$L" kill-server 2>/dev/null; [ -n "$INBOX_PID" ] && kill "$INBOX_PID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
-# A shadow bin/: every script a symlink to the real one, except fleet-sleep.py — a
+# A shadow bin/: every script a symlink to the real one, except fleet_worker_life.py — a
 # fake whose `deliver` records the message and answers 3 (held at a full fleet).
 SB="$WORK/bin"; mkdir -p "$SB"
 for f in "$BIN"/*; do ln -s "$f" "$SB/$(basename "$f")"; done
-rm -f "$SB/fleet-sleep.py"
-cat > "$SB/fleet-sleep.py" <<'PY'
+rm -f "$SB/fleet_worker_life.py"
+cat > "$SB/fleet_worker_life.py" <<'PY'
 import os, sys
 if "deliver" in sys.argv:
     with open(os.path.join(os.environ["FLEET_CONF_DIR"], "sleep-held"), "a") as f:

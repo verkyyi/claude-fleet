@@ -61,7 +61,7 @@ export FLEET_CONF_DIR="$WORK/conf"
 mkdir -p "$FLEET_CONF_DIR/fleets/$LBL" "$WORK/bin"  "$FLEET_CONF_DIR/logs" "$WORK/shim" "$WORK/tmp"
 : > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 cp "$SPIN_SRC" "$WORK/bin/tmux-spinner.sh"
-cp "$BIN/tmux-spinner.py" "$BIN/fleet-render-watch.py" "$BIN/fleet_pending_tool.py" "$BIN/fleet_launch.py" "$BIN/fleet_sleep_argv.py" "$BIN/fleet_runtime.py" "$BIN/fleet-codex-rpc.py" "$BIN/fleet-codex-session.py" "$WORK/bin/"
+cp "$BIN/tmux-spinner.py" "$BIN/fleet-render-watch.py" "$BIN/fleet_pending_tool.py" "$BIN/fleet_launch.py" "$BIN/fleet_agent_argv.py" "$BIN/fleet_runtime.py" "$BIN/fleet-codex-rpc.py" "$BIN/fleet-codex-session.py" "$WORK/bin/"
 printf '#!/bin/sh\nprintf '\''{"state":"none"}\\n'\''\n' > "$WORK/bin/fleet-client-where.sh"
 CALLS="$WORK/calls"; : > "$CALLS"
 cat > "$WORK/shim/tmux" <<EOF

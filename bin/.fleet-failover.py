@@ -169,7 +169,7 @@ def quiet_processes(source, background=None):
     # be able to migrate a done worker whose only children are contract-listed
     # MCP servers, exactly as sleep can hibernate it. A pre-#784 blanket veto
     # here left every MCP-carrying Claude worker unable to fail over OR sleep.
-    sleep = runpy.run_path(str(BIN / 'fleet-sleep.py'))
+    sleep = runpy.run_path(str(BIN / 'fleet_worker_life.py'))
     if source['agent'] == 'codex':
         rpc = RPC(source['codex_identity'].get('remote', ''), timeout=5)
         try: sleep['quiet_native_children'](rpc, source['session_id'])
@@ -211,7 +211,7 @@ def background_inventory(source):
     subagent) still raises."""
     pids = []
     quiet_processes(source, background=pids)
-    argv = runpy.run_path(str(BIN / 'fleet_sleep_argv.py'))['process_argv']
+    argv = runpy.run_path(str(BIN / 'fleet_agent_argv.py'))['process_argv']
     entries = []
     for pid in pids:
         state, start = process_start(pid)

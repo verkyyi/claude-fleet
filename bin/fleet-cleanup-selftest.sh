@@ -425,12 +425,12 @@ tok="$(FAKE_AGENT_AGE=04:00 run_clean merged --auto)"
 ok 'default FLEET_REAP_MIN_AGE is 300s: 6-minute agent reaped, 4-minute agent kept'
 
 # Issue #1244: a SLEEPING merged worker is cleaned without a wake — its sleep
-# record retired (fleet-sleep.py dispose) BEFORE the kill; a hold, an agent under
+# record retired (fleet_worker_life.py dispose) BEFORE the kill; a hold, an agent under
 # the sleeper, or a refused dispose all leave it standing.
 REAL_PY3=$(command -v python3)
 cat > "$WORK/fakebin/python3" <<PYFAKE
 #!/bin/bash
-case "\${1:-}" in *fleet-sleep.py)
+case "\${1:-}" in *fleet_worker_life.py)
   printf 'dispose %s\n' "\${!#}" >> "$ORDER_LOG"
   [ "\${DISPOSE_FAILS:-0}" = 1 ] && exit 1; exit 0 ;; esac
 exec "$REAL_PY3" "\$@"

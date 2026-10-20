@@ -917,8 +917,8 @@ if [ "$sem" = 'done' ] && [ -n "${_stop_payload:-}" ]; then
   if [ "${FLEET_CODEX_NATIVE_COMPLETION:-}" = 1 ] && [ "${_agent:-}" = codex ]; then
     case "${FLEET_CODEX_REMOTE:-}" in unix:///*) _native_completion=1 ;; esac
   fi
-  if [ "$_native_completion" != 1 ] && [ -f "$_bin/fleet-sleep.py" ]; then
-    printf '%s' "$_stop_payload" | python3 "$_bin/fleet-sleep.py" hook >/dev/null 2>&1 || :
+  if [ "$_native_completion" != 1 ] && [ -f "$_bin/fleet_worker_life.py" ]; then
+    printf '%s' "$_stop_payload" | python3 "$_bin/fleet_worker_life.py" hook >/dev/null 2>&1 || :
   fi
 fi
 exit 0

@@ -84,7 +84,7 @@
 # SLEEPING workers (issue #1244) are reaped WITHOUT a wake: fleet-reap-live.py passes
 # a sleeper with no agent under it (no state/age gate — there is nothing to
 # protect), the sleep record is retired (fleet_sleep_dispose) and the window killed.
-# A reap HOLD (`fleet-sleep.py hold <@id>`) retains any worker until `release`.
+# A reap HOLD (`fleet_worker_life.py hold <@id>`) retains any worker until `release`.
 #
 # A worker that SHIPPED ITS OWN PR (issue #1542): the merged PR's mergedAt is
 # handed to the liveness probe, which then waives the 30-minute young-agent gate

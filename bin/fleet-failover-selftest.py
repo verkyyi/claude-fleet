@@ -726,7 +726,7 @@ class HardWallBackground(unittest.TestCase):
         self.argv={42:['claude'],43:['/bin/zsh','-c','next dev -p 3117'],44:['node','next','dev']}
         self.hard=True
         env={k:v for k,v in os.environ.items() if k!='FLEET_FAILOVER_BG_GRACE'}
-        mods={'fleet-sleep.py':vars(self.sleep),'fleet_sleep_argv.py':{'process_argv':lambda pid:self.argv[pid]}}
+        mods={'fleet_worker_life.py':vars(self.sleep),'fleet_agent_argv.py':{'process_argv':lambda pid:self.argv[pid]}}
         # patch.dict copies (and loads) lazy sleep dependencies. Finish that
         # before mocking shared runpy for failover's two module lookups (#4475).
         for p in (patch.dict(self.sleep.TRANSFER,process_rows=lambda:rows),

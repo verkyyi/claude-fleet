@@ -3112,7 +3112,7 @@ fleet_sleep_dispose() {
   _life=$(tmux -L "$(fleet_socket "$_sess")" display-message -p -t "$_win" '#{@worker_lifecycle}' 2>/dev/null) || return 0
   [ "$_life" = sleeping ] || return 0
   _bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  python3 "$_bin/fleet-sleep.py" dispose --session "$_sess" "$_win" >/dev/null
+  python3 "$_bin/fleet_worker_life.py" dispose --session "$_sess" "$_win" >/dev/null
 }
 
 # The "clean + merged?" gate shared by the worktree janitor (worktree-autoclean.sh)
@@ -3651,7 +3651,7 @@ EOF
 # it. tmux 3.4 (the Linux CI runner) sometimes never handles SIGCHLD for a pane
 # process, so an agent that quit on /exit lingers as `Z` for 40s+ and every
 # `kill -0` wait times out on a process that is already gone (issue #842, same
-# root as #781's `source_alive` in fleet-sleep.py). A zombie is exited. Only a
+# root as #781's `source_alive` in fleet_worker_life.py). A zombie is exited. Only a
 # positive `Z` reads as exited: a failed `ps` keeps the kill -0 answer (alive),
 # so a caller that launches a replacement on "exited" can never be told so early.
 fleet_pid_alive() {
@@ -9146,7 +9146,7 @@ fleet_pane_claude_pid() {
 # working (issue #864)? Prints the reason and exits 0 when it is; prints nothing
 # and exits 1 when it is not (or there is no repo/branch to ask GitHub about):
 #   bg       its agent still owns a Bash-tool job — a run_in_background test, a
-#            PR-gate waiter (`tools/await-pr.sh`). fleet-sleep.py `busy`: the walk
+#            PR-gate waiter (`tools/await-pr.sh`). fleet_worker_life.py `busy`: the walk
 #            hibernation vetoes on, minus the MCP contract and the calling hook.
 #   tool     a fleet tool call it made is still running (fleet_window_tool_busy,
 #            issue #1880) — an `await`, a `pr_verdict --wait` Claude Code moved to
@@ -9356,7 +9356,7 @@ fleet_handoff_cycle_live() {
 # reapers' "still waiting" answer (issue #1370). Exit 0 = busy. [quick]=1 first asks
 # the cheap necessary condition — a Claude agent counts ONLY a Bash-tool shell
 # (`…/shell-snapshots/snapshot-…` in its argv) among its direct children, exactly
-# fleet-sleep.py's non-strict walk — so a pane with none never pays the python walk.
+# fleet_worker_life.py's non-strict walk — so a pane with none never pays the python walk.
 # [reap]=1 additionally requires native idle and retains unknown Codex identity.
 # A Stop hook must only ask about jobs: its own native turn is still in progress.
 fleet_window_bg_busy() {
@@ -9368,7 +9368,7 @@ fleet_window_bg_busy() {
   [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
-  if ! { [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1; }; then
+  if ! { [ -f "$bin/fleet_worker_life.py" ] && command -v python3 >/dev/null 2>&1; }; then
     [ "$agent" = codex ] && [ "$reap" = 1 ] && return 0
     return 1
   fi
@@ -9379,7 +9379,7 @@ fleet_window_bg_busy() {
       | awk -v p="$pid" '$1 == p && index($0, "/shell-snapshots/snapshot-") { f = 1 } END { exit !f }' \
       || return 1
   fi
-  if out=$(python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} ${reap:+--reap} "$win" \
+  if out=$(python3 "$bin/fleet_worker_life.py" busy --session "$sess" ${pid:+--pid "$pid"} ${reap:+--reap} "$win" \
       2>&1 </dev/null); then return 0; else rc=$?; fi
   # busy: 1 alone proves idle. In particular a missing/stale Codex identity,
   # lost native endpoint or failed inventory (2) must never authorize disposal.

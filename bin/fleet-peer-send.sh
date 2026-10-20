@@ -460,9 +460,9 @@ case "$tgt" in
   @*|%*)
     lifecycle=$("${tm[@]}" display-message -p -t "$tgt" '#{@worker_lifecycle}' 2>/dev/null)
     evidence=$("${tm[@]}" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
-    if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet-sleep.py" ]; then
+    if [ -n "$lifecycle$evidence" ] && [ -f "$BIN/fleet_worker_life.py" ]; then
       session=$("${tm[@]}" display-message -p -t "$tgt" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
-      err=$(printf '%s' "$text" | python3 "$BIN/fleet-sleep.py" deliver --session "$session" "$tgt" 2>&1 >/dev/null); rc=$?
+      err=$(printf '%s' "$text" | python3 "$BIN/fleet_worker_life.py" deliver --session "$session" "$tgt" 2>&1 >/dev/null); rc=$?
       # A sleeper at a full fleet keeps the message and wakes when a slot frees
       # (#1058): queued, exit 3 — never «sent» (issue #1647).
       if [ "$rc" -eq 3 ]; then
