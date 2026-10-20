@@ -130,6 +130,10 @@ Explicit `untrusted` and `FLEET_PRETRUST=0` never grant a missing HOME entry.
 
 Both dry-run and cutover refuse a busy source, pending handoff, missing target
 launcher/hooks, invalid target auth, unknown scheduling or unreadable input.
+One exception (T521): a `--dry-run` asked from the source's OWN pane — the
+`transfer check` of `/fleet-handoff --to`, run mid-turn — is not refused for
+`working`; the `--after-turn` arm that follows waits for the real Stop. Identity,
+target auth and scheduling are checked as for any dry-run.
 The no-repo target must bind its native identity in the retained pane, with the
 same lifelong identity, role and routing. A live process alone is insufficient.
 A target still running without a proven binding is retained for inspection;

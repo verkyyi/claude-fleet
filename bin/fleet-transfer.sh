@@ -440,7 +440,20 @@ if [ "$NOREPO" = 1 ]; then
     [ ! -s "$_plan" ] || LOOP=$_plan
   fi
 fi
-if [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
+# IN_TURN — a --dry-run asked from the source pane itself (the `transfer check`
+# of /fleet-handoff §T, issue T521): the source is mid-turn by definition, so
+# its idleness is not judged here — the --after-turn arm that follows waits for
+# the real Stop. Identity and the target's login are checked as for any dry-run.
+# A dry-run from another pane / the panel still requires source_ready.
+IN_TURN=0
+_caller_tmux="${TMUX:-}"
+if [ "$DRY" = 1 ] && [ "$INSPECT" != 1 ] && [ -n "${TMUX_PANE:-}" ] && [ "${TMUX_PANE:-}" = "$PANE" ] \
+    && [ "${_caller_tmux%%,*}" = "$(opt '#{socket_path}')" ]; then
+  IN_TURN=1
+fi
+if [ "$NOREPO" = 1 ] && [ "$IN_TURN" = 1 ]; then
+  python3 "$BIN/.fleet-transfer-norepo.py" schedule-readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT" || exit 1
+elif [ "$NOREPO" = 1 ] && [ "$AFTER" != 1 ]; then
   _ready_rc=0
   INPUT_VIEW=$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT") || _ready_rc=$?
   if [ "$_ready_rc" != 0 ]; then
@@ -464,7 +477,7 @@ if [ "$NOREPO" = 1 ] && [ "$TO" = codex ]; then
 fi
 if [ "$DRY" = 1 ]; then
   target_support
-  source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
+  [ "$IN_TURN" = 1 ] || source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
   # The target's login, first (issue #1667): a dry-run that says «would switch»
   # onto an account that cannot log in is the plan that lost the 10-05 session.
   if target_auth; then printf 'target auth: %s\n' "$TARGET_AUTH"
@@ -472,7 +485,11 @@ if [ "$DRY" = 1 ]; then
     printf 'target auth: REFUSED · %s\n' "$TARGET_AUTH_WHY"
     die "target-auth: $TARGET_AUTH_WHY — a cutover would not switch; log in to the target first"
   fi
+  if [ "$IN_TURN" = 1 ]; then
+    printf 'dry-run (in turn): arm with --after-turn; after this turn'"'"'s Stop, save a provenance package, /exit the source, then launch %s in %s.\n' "$TO" "$PANE"
+  else
   printf 'dry-run: save a provenance package, /exit the source, then launch %s in %s (state=%s).\n' "$TO" "$PANE" "${STATE:-unknown}"
+  fi
   exit 0
 fi
 

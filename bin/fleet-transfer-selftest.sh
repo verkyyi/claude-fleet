@@ -784,6 +784,21 @@ ok; kill -0 "$PID" || fail 'missing registry must keep source running'
 mv "$WORK/registry-saved" "$WORK/sessions/$PID.json"
 TM set-option -w -t "$WIN" @claude_state working
 transfer && fail 'busy source must refuse cutover'; ok
+# T521: /fleet-handoff §T's `transfer check` runs INSIDE the source's own turn —
+# a dry-run from the source pane is not refused for `working` (the --after-turn
+# arm waits for Stop); from another pane, or an immediate cutover, it still is.
+transfer --dry-run && fail 'busy dry-run from another pane must refuse'
+printf '%s' "$OUT" | grep -q 'not safely idle' || fail "busy dry-run refusal must say why: $OUT"; ok
+SP=$(TM display-message -p -t "$PANE" '#{socket_path}')
+NPKG=$(find "$FLEET_CONF_DIR/handoffs" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+OUT=$(TMUX="$SP,0,0" TMUX_PANE="$PANE" bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to codex --dry-run 2>&1) \
+  || fail "in-turn check from the source pane must pass while working: $OUT"
+printf '%s' "$OUT" | grep -q 'dry-run (in turn)' || fail "in-turn check must say it arms after the turn: $OUT"
+kill -0 "$PID" || fail 'in-turn check touched the source'
+[ "$(find "$FLEET_CONF_DIR/handoffs" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" = "$NPKG" ] || fail 'in-turn check wrote a handoff'; ok
+OUT=$(TMUX="$SP,0,0" TMUX_PANE="$PANE" bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to codex 2>&1) \
+  && fail 'an immediate cutover from the busy source pane must still refuse'
+printf '%s' "$OUT" | grep -q 'not safely idle' || fail "in-pane immediate cutover must refuse on idleness: $OUT"; ok
 TM set-option -w -t "$WIN" @claude_state looping
 transfer && fail 'a looping CLAUDE source is not a settled Codex round'; ok
 TM set-option -w -t "$WIN" @claude_state "done"
