@@ -34,7 +34,7 @@ FLEET_BASE_BRANCH="main"
 #FLEET_AGENT="claude"
 # Jump to new worker windows
 #FLEET_SPAWN_FOCUS=0
-# Auto-merge method
+# Merge method
 #FLEET_MERGE_METHOD="squash"
 # Worker seed prompt
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
@@ -56,8 +56,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # ── status ──
 # Tmux UI language
 #FLEET_UI_LANG=auto
-# Closing a task lands on the next task
-#FLEET_CLOSE_LANDS_NEXT=1
 
 # ── notify ──
 # Notification command

@@ -1,13 +1,12 @@
 #!/bin/bash
 # conf-surface-selftest.sh — the config surface cannot quietly grow back (issue #1101).
 #
-# conf/fleet.conf.reference is the ONE list of settings (and their defaults); the prefix+c
-# modal renders it. #1101 cut the modal's face from 178 rows to ≤ 120 by tagging
-# pacing/budget/timeout knobs @tier=internal — but a list trimmed once grows back
-# one undocumented `${FLEET_X:-5}` at a time. This pins both directions:
+# conf/fleet.conf.reference is the ONE list of settings (and their defaults). A list
+# trimmed once grows back one undocumented `${FLEET_X:-5}` at a time, and keeps a
+# row whose reader is gone. This pins both directions:
 #
-#   A  every key in conf/fleet.conf.reference has a READER outside the example + the
-#      modal plumbing (a dead key would be a row that does nothing);
+#   A  every key in conf/fleet.conf.reference has a READER — a non-comment line
+#      outside the reference (a dead key would be a row that does nothing);
 #   B  every `${FLEET_X:-…}` / `${FLEET_X-…}` / `${FLEET_X:=…}` a script in bin/ or
 #      hooks/ reads is either a key in the example (any @tier) or listed in
 #      conf/fleet-env-internal.list (env handoffs, test seams, paths, knobs);
@@ -38,7 +37,7 @@ find -L "$BIN" "$ROOT/hooks" -maxdepth 1 -type f ! -name '*selftest*' 2>/dev/nul
 # generically.
 { cat "$WORK/scripts"
   find -L "$ROOT/commands" "$ROOT/skills" "$ROOT/plugins" "$ROOT/conf" "$ROOT/extras" "$ROOT/shell" -type f 2>/dev/null
-} | grep -vE '/(fleet_config_write\.py|fleet-env-internal\.list)$' \
+} | grep -vE '/(fleet_config_write\.py|fleet-env-internal\.list|fleet\.conf\.reference)$' \
   | grep -vE '/[^/]*selftest[^/]*$' > "$WORK/readers"   # basename only: the shadow root's own path says "selftest"
 
 grep -oE '^#?[[:space:]]*FLEET_[A-Z0-9_]+=' "$EX" | sed -E 's/^#?[[:space:]]*//; s/=$//' | sort -u > "$WORK/example"
@@ -67,9 +66,14 @@ $new
 ok
 
 # --- A + C: every documented key and every listed name is read somewhere -----
-tr '\n' '\0' < "$WORK/readers" | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null | sort -u > "$WORK/mentioned"
+# A comment does not read a key ("FLEET_X left with #N"), and the reference itself
+# is not its own reader: both once kept a dead row alive (issue #4905).
+mentions() { xargs -0 grep -hwE 'FLEET_[A-Z0-9_]+' 2>/dev/null | grep -vE '^[[:space:]]*#' \
+               | grep -owE 'FLEET_[A-Z0-9_]+' | sort -u; }
+tr '\n' '\0' < "$WORK/readers" | mentions > "$WORK/mentioned"
 dead=$(comm -23 "$WORK/example" "$WORK/mentioned")
 [ -z "$dead" ] || fail "in conf/fleet.conf.reference but read by nothing (a dead row): $dead"; ok
+# (C counts a comment: B reads one too, so a name only a comment spells stays listed.)
 cat "$WORK/scripts" "$WORK/readers" | tr '\n' '\0' | xargs -0 grep -ohwE 'FLEET_[A-Z0-9_]+' 2>/dev/null \
   | sort -u > "$WORK/mentioned.all"
 stale=$(comm -23 "$WORK/listed.u" "$WORK/mentioned.all")

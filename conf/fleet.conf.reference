@@ -1,41 +1,34 @@
 # claude-fleet configuration — the REFERENCE: every key, its default and its help.
 # Not a file to copy: the short sample is ../fleet.conf.example (generated from
 # this file by bin/fleet-conf-example.sh); your settings live in
-# $FLEET_CONF_DIR/fleet.conf (`fleet-conf.sh`), and prefix+c edits them.
+# $FLEET_CONF_DIR/fleet.conf (`fleet-conf.sh`).
 # Sourced by the fleet scripts (plain shell; keep it assignments-only).
 #
 # TAG LINES (the "# @label=… @group=… @tier=… @scope=… @edit=… @unit=…" line
-# directly above each key) are the DECLARATIVE source of truth for the prefix+c
-# config modal (issue #89). One reviewable file drives the whole UI — there is
-# no hardcoded key list in the scripts. Each key carries three independent
-# attributes:
-#   @scope  which file holds it:  identity (view-only) · global (the login's
-#           ~/.config/claude-fleet/fleet.settings; stripped from a fleet conf) ·
-#           fleet (the fleet's conf). To you both are "this fleet" — one login
-#           runs one fleet — so the modal's ⌃s only picks THIS FLEET ⇄ a hosted
-#           REPO (issue #1102) and routes each key to its file itself. This
-#           install fleet.conf is still read, as a legacy layer under both,
-#           but the modal never writes it.
-#   @tier   modal visibility:     common (default view) · advanced (collapsed) ·
-#           internal (pacing/budget/timeout knobs, issue #1101: NOT listed by the
-#           config panel unless you open "show all". Still read at
-#           runtime, still hand-overridable in any conf; defaults stay here).
-#   @edit   editor + validation:  no · bool · int · enum · path · str · regex.
-# @label is the friendly name shown in the modal; @group buckets rows into
-# sections; @unit is an optional display suffix. Adding a key here (with a tag
-# line) makes it appear in the modal automatically — nothing to keep in sync.
+# directly above each key) describe each key; bin/conf-surface-selftest.sh holds
+# the file to them:
+#   @scope  which file holds it:  identity (the repo's own conf) · global (the
+#           login's settings; stripped from a fleet conf — fleet-lib.sh's
+#           _FLEET_GLOBAL_ONLY is exactly these keys) · fleet (the fleet's conf,
+#           or a hosted repo's repos/<slug>.conf).
+#   @tier   common (copied into fleet.conf.example) · advanced · internal
+#           (pacing/budget/timeout knobs, issue #1101: still read at runtime,
+#           still hand-overridable in any conf; defaults stay here).
+#   @edit   the value's kind:     no · bool · int · enum · path · str · regex.
+# @label is the friendly name (the example's comment line); @group buckets keys
+# into sections; @unit is an optional display suffix.
 
 # ── Identity ────────────────────────────────────────────────────────────────
-# These pin WHICH repo/checkout this fleet is. They are view-only in the modal
-# (@edit=no): change them by editing fleet.conf and re-provisioning, not live.
+# These pin WHICH repo/checkout a hosted repo is (repos/<slug>.conf, written by
+# `fleet-repo.sh add`): change them by re-adding the repo, not live.
 
-# The GitHub repo whose issues are your backlog (owner/name). Required for the
-# backlog panel, issue-bound sessions, and PR/CI cells.
+# The repo (owner/name) — where its code, branches and PRs live. Tasks are hub
+# records (T<n>), never this repo's issues.
 # @label=GitHub repo @group=identity @tier=common @scope=identity @edit=no
 FLEET_REPO="you/your-repo"
 
-# Main checkout of that repo — issue worktrees are created as SIBLINGS of this
-# directory (your-repo-issue-123 next to your-repo).
+# Main checkout of that repo (read-only) — task worktrees are created as SIBLINGS
+# of this directory (your-repo-scratch-12 next to your-repo).
 # @label=Base checkout path @group=identity @tier=common @scope=identity @edit=no
 FLEET_MAIN="$HOME/projects/your-repo"
 
@@ -43,14 +36,13 @@ FLEET_MAIN="$HOME/projects/your-repo"
 # @label=Base branch (locked) @group=identity @tier=common @scope=identity @edit=no
 FLEET_BASE_BRANCH="main"
 
-# Directory holding the per-fleet config overlays (<session>.conf), which the
-# modal writes when its scope is set to per-fleet. Defaults to
+# Directory holding the fleet state and its config overlays. Defaults to
 # $HOME/.config/claude-fleet; override only if you relocate the fleet state dir.
 # @label=Per-fleet config dir @group=identity @tier=internal @scope=identity @edit=no
 #FLEET_CONF_DIR="$HOME/.config/claude-fleet"
 
-# A repo's short tag in a fleet that hosts 2+ repos (issue #793): the dash badge
-# under "all" and the window-name prefix (`tl·issue-12`). Set it in the repo's own
+# A repo's short tag in a fleet that hosts 2+ repos (issue #793): the list's badge
+# and the window-name prefix (`tl·scratch-12`). Set it in the repo's own
 # conf — this fleet conf for its repo, repos/<slug>.conf for any other. Empty = the
 # name's initials (claude-fleet → cf), or its first two letters (tokenledger → to).
 # @label=Repo short tag @group=identity @tier=advanced @scope=fleet @edit=no
@@ -343,9 +335,8 @@ FLEET_CTX_WINDOW=200000
 # Default: opus — so a new window never silently falls back to sonnet. Set empty
 # to defer to your own `claude` default; an explicit --model in the spawn still
 # wins. Honored globally here or per-fleet in $FLEET_CONF_DIR/<session>.conf.
-# The prefix+c config modal edits this as an fzf picker of the CLI's latest-of-tier
-# aliases — opus, sonnet, haiku, fable, opusplan, default — plus a custom claude-*
-# entry, so you choose instead of type.
+# Takes the CLI's latest-of-tier aliases — opus, sonnet, haiku, fable, opusplan,
+# default — or a full claude-* model id.
 # A worker's default model is its agent file's (`model:` in ~/.claude/agents/
 # fleet-worker.md — edit your copy, issue #3122); this line still wins over it.
 # @label=Worker model @group=spawn @tier=common @scope=fleet @edit=enum
@@ -356,8 +347,8 @@ FLEET_CTX_WINDOW=200000
 # is no settings.json key). Overrides even the pinned built-ins (claude-code-guide
 # runs haiku, statusline-setup runs sonnet by default). Defaults to FLEET_MODEL
 # (so subagents follow the session onto opus). Set to "inherit" to let each
-# subagent resolve normally, or empty to leave the env var untouched. The config
-# modal offers the same alias picker as FLEET_MODEL, plus an `inherit` entry.
+# subagent resolve normally, or empty to leave the env var untouched. Takes the
+# same aliases as FLEET_MODEL, plus `inherit`.
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
@@ -429,9 +420,8 @@ FLEET_CTX_WINDOW=200000
 #FLEET_MODEL_CAP_PCT=100
 
 # SYSTEM-WIDE ceiling on how many Claude working sessions may run at once across
-# ALL fleets on this machine. Every spawn path — the new-session box and the
-# backlog's Enter — refuses once this many are live (panels — the dash/plan/
-# backlog windows — don't count). Default 0 = off (issue #1831): a per-login number
+# ALL fleets on this machine. Every spawn path refuses once this many are live
+# (panel windows — home and the like — don't count). Default 0 = off (issue #1831): a per-login number
 # does not add up across logins and the real limit is memory, so the machine
 # admission below decides. Set one only to cap hard.
 # @label=Max sessions — all fleets @group=caps @tier=common @scope=global @edit=int @unit=sessions
@@ -496,8 +486,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Fleet tool service @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_MCP=1
 
-# Which agent CLI a spawned session runs (issue #547). Every spawn path — the
-# backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch — funnels through bin/fleet-claude.sh, which branches here:
+# Which agent CLI a spawned session runs (issue #547). Every spawn path — a hub
+# task, ⌘N, the spawn tool, dash-raw-session.sh — funnels through bin/fleet-claude.sh,
+# which branches here:
 #   claude   (default) Claude Code, exactly as before — the default fleet's spawn
 #            argv is byte-for-byte unchanged.
 #   codex    OpenAI Codex CLI (`codex`, 0.154+), via bin/fleet-codex.sh. Modern
@@ -506,20 +497,15 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #            synced; old Codex / unsynced homes still fall back to the prose
 #            prompt (conf/codex-preamble.md + commands/<cmd>.md). The
 #            fleet's Stop / PostToolUse / PreToolUse hooks ride inline as `-c hooks.*`
-#            (dash state + the bash-guard and base-checkout guard — Codex's hook
+#            (session state + the bash-guard and base-checkout guard — Codex's hook
 #            schema is Claude Code's); CLAUDE.md is read as the project doc; and
 #            Claude model aliases and OAuth tokens stay Claude-only; MCP policy
 #            is translated and Codex has native skills/subagent knobs. Codex auth is `codex login`, not the
 #            fleet's account files. Runs full-access (`--dangerously-bypass-
 #            approvals-and-sandbox`), the same posture as a bypassPermissions Claude
 #            worker: the hooks are the rails.
-# The dash prompt line shows the EFFECTIVE value — `claude ▸ ` / `codex ▸ ` — and
-# ⌃v in the dash flips it here, in this fleet's conf (issue #554), so every spawn
-# path follows and the dash shows the truth.
-# Pick it with the dash toggle key (⌃v, or its ⌥ twin when ⌃v is your tmux
-# prefix — the `?` sheet shows the real one), prefix+c, or this key. There is NO
-# prompt-line prefix (issue #559): `codex: fix parser` typed on the dash is a
-# scratch NAMED "codex: fix parser" on the fleet's default agent. Per-spawn
+# The client's new-session question and an agent file's `fleet: agent` pick per
+# session; this key is the fleet's default. Per-spawn
 # override for scripts: `--agent codex|claude` on dash-issue-session.sh /
 # dash-raw-session.sh. A `--resume` /
 # `--continue` / `--from-pr` launch without an explicit agent resumes Claude
@@ -876,8 +862,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Also reap a MERGED PR whose head branch is NOT `issue-<N>` (issue #589). OFF by
 # default, and the default is the historic behavior byte for byte. The whole reap
 # chain is addressed by `issue-<N>`, so a session that started as a scratch
-# (dash ⌃s → a `scratch-<N>` branch) and grew into a PR is NEVER cleaned up: its
-# window hangs on the dash forever and its worktree keeps the disk (two were found
+# (a `scratch-<N>` branch) and grew into a PR is NEVER cleaned up: its
+# window hangs on the list forever and its worktree keeps the disk (two were found
 # at 1.2 GB and 5.4 GB, both long merged). That protection is deliberate (#543/#544)
 # — a scratch window is routinely the OPERATOR's own workbench, so reaping on head
 # branch alone would kill live work. Set to 1 and the reap is allowed, but only
@@ -956,20 +942,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # deploy — every emit path reads it from the environment just as happily.
 # @label=Session lifecycle token @group=bridge @tier=advanced @scope=fleet @edit=str
 #FLEET_EMIT_TOKEN=""
-# Advanced env-only knobs (NOT in this modal): `FLEET_EMIT_QUEUE_MAX`, the spool cap
+# Advanced env-only knobs (NOT keys here): `FLEET_EMIT_QUEUE_MAX`, the spool cap
 # in events (default 500 — on overflow the OLDEST are dropped, so a permanently
 # dead endpoint costs bounded disk and keeps the fresh tail), and
 # `FLEET_EMIT_TIMEOUT`, the per-POST curl timeout in seconds (default 5).
 
-# Seconds the backlog panel's issue preview (⌃p) caches each issue's detail
-# before re-fetching from gh. Lower = fresher body/comments, more API chatter.
-# GLOBAL: read by the preview tool from the global env — a per-fleet override
-# would be a silent no-op, so this is machine-wide.
-# @label=Issue cache lifetime @group=cache @tier=advanced @scope=global @edit=int @unit=sec
-#FLEET_ISSUE_TTL=180
-
-# Seconds the collector caches its open-issue fetch before re-fetching.
-# Lower = fresher backlog data, more gh API chatter.
+# Seconds the collector caches its open-issue fetch (the issue titles a window
+# bound to an issue still shows) before re-fetching. Lower = fresher, more gh API
+# chatter.
 # GLOBAL: the collector is ONE daemon serving every fleet and sets this once —
 # it is not per-fleet overridable.
 # @label=GitHub cache lifetime @group=cache @tier=common @scope=global @edit=int @unit=sec
@@ -1175,8 +1155,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # interval unit is being pended right alongside its patient.
 
 # Staleness MULTIPLIER: a unit is stale once its last tick is this many times its
-# own StartInterval old. Relative, because the units differ by 240× (15s for
-# issue-bridge, 3600s for worktree-autoclean) and because DEGRADATION — not a
+# own StartInterval old. Relative, because the units differ by two orders of
+# magnitude (60s for collect, 3600s for worktree-autoclean) and because DEGRADATION — not a
 # clean stop — is the usual shape, which no single absolute number can see. 5 is
 # well clear of one slow tick yet far below the 7–14-minute cadence #639
 # measured; raise it on a fleet whose ticks are genuinely long. GLOBAL.
@@ -1191,7 +1171,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Idle gate (issue #1077): once this login has had NO live fleet for this many
 # seconds, collect and quotawatch do a full tick only once per this many seconds
 # (≤ 12 an hour at 300, instead of 60), and the spinner naps 60s instead of 2s.
-# Any live fleet socket, or a spawn (fleet-up, the dash, dispatch, cw), wakes all
+# Any live fleet socket, or a spawn (fleet-up, a new session), wakes all
 # three at once. launchd's `runs =` still counts every start — a gated tick exits
 # after one stamp. 0 = off: every tick works, as before #1077. GLOBAL.
 # @label=Idle daemon gate @group=cache @tier=internal @scope=global @edit=int @unit=sec
@@ -1201,8 +1181,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # FLEET_DAEMON_STALE_<UNIT>=<seconds>, the unit name uppercased with `-` → `_`
 # (so `base-sync` is FLEET_DAEMON_STALE_BASE_SYNC). Use it for a unit whose real
 # cadence is not its StartInterval; FLEET_COLLECT_STALE above is the same thing
-# for `collect`. Deliberately not listed as a key here — the set is per unit, so
-# the config modal would show ten arbitrary rows nobody edits. The same shape
+# for `collect`. Deliberately not listed as a key here — the set is per unit, ten
+# arbitrary rows nobody edits. The same shape
 # exists for the kick cooldown (FLEET_DAEMON_KICK_COOLDOWN_<UNIT>) and for a host
 # that templated a different cadence (FLEET_DAEMON_INTERVAL_<UNIT>).
 
@@ -1438,14 +1418,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Keys as in a local Claude @group=status @tier=internal @scope=global @edit=bool
 #FLEET_KEYS_PARITY=1
 
-# Closing the task you are on (reap, exit, kill) lands on its NEIGHBOUR in the
-# task sidebar — the next row, or the previous one when it was the last — instead
-# of tmux's pick, which is usually the hub (issue #900). A sleeping task is
-# skipped, never woken; with no other task left you land on the hub as before.
-# F9 / ⌂ / prefix g are never rewritten. 0 = today's behaviour exactly.
-# @label=Closing a task lands on the next task @group=status @tier=common @scope=fleet @edit=bool
-#FLEET_CLOSE_LANDS_NEXT=1
-
 
 
 # Subscription-limit severity in the usage + account modal (prefix u; issue
@@ -1463,21 +1435,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # stale limit % is worse than none. Shared with the collector's scrape.
 # @label=Ratelimit staleness @group=status @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_RATELIMIT_TTL=21600
-
-# Handoff destination (/fleet-handoff, commands/fleet-handoff.md, issue #275).
-# Where the handoff doc is STORED so a cleared session can resume from it:
-#   comment  (default) — when the pane is issue-bound (a worker's @issue),
-#            post the doc as a durable
-#            `<!-- fleet:handoff -->`-marked issue COMMENT. It outlives the
-#            worktree teardown a committed doc/handoff/*.md does not, and pickup
-#            self-resolves it from the pane's @issue (no path to remember). A raw
-#            scratch / no-issue pane still falls back to a local file.
-#   file     — force the local-file convention for EVERY pane (no comment ever).
-#            Use on a SENSITIVE repo where even a scrubbed handoff must not be
-#            pushed to a public issue thread.
-# Empty is treated as the default (comment).
-# @label=Handoff destination (comment|file) @group=handoff @tier=advanced @scope=fleet @edit=enum
-#FLEET_HANDOFF_DEST=comment
 
 # Handoff length line (issue #1322). Every line of a handoff doc is context the
 # pickup session spends before it works, so /fleet-handoff runs
@@ -1946,13 +1903,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 
 # --- Auto-refuse a blocked command (No only; OFF by default) -----------------
 # A `needs` window may be parked on a PERMISSION prompt, and a permission prompt is
-# mid-turn for its whole life: a SendMessage queues underneath it, the issue bridge
-# only relays a message, and a message cannot press a key (issue #640). So an
+# mid-turn for its whole life: a SendMessage queues underneath it, and a message
+# cannot press a key (issue #640). So an
 # unattended worker can sit there until a human walks over.
 #
 # bin/fleet-permission.sh --show always works and needs no knob: it makes the
 # blocked command and the prompt's own reason readable WITHOUT attaching to the
-# pane (dash ⌃k falls through to it on a `⊘` row).
+# pane.
 #
 # This knob arms the other half — `--deny`, which presses **No, and only ever No**.
 # Refusing a blocked operation destroys nothing; it hands control back to the
@@ -2170,7 +2127,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   • ORPHAN — PPID=1 + fleet cwd + > ORPHAN_MB + older than ORPHAN_SECS → ORPHAN_ACTION.
 # `bin/fleet-memguard.sh --once --dry-run` shows what it would do right now.
 # Evidence: ~/.config/claude-fleet/diskguard/incident-mem-*.log. All @tier=internal:
-# the defaults are the design, and the modal's default view is at its row cap.
+# the defaults are the design.
 # @label=Memory guard on @group=disk @tier=internal @scope=global @edit=bool
 #FLEET_MEMGUARD=1                  # 0 = the daemon idles
 # @label=Memory spike growth MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
@@ -2197,15 +2154,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_CLAUDE_RSS_WARN_MB=4096     # 0 = off
 
 # Machine admission (issue #1090, EPIC #1291 C4): every path that opens a NEW
-# session (dash, backlog Enter, bridge, /fleet-epic-run, the
-# scratch pool) asks fleet_session_cap_ok, which now also asks whether the
+# session (a hub task, ⌘N, the spawn tool, /fleet-epic-run) asks fleet_session_cap_ok, which now also asks whether the
 # MACHINE has room — not just whether the session count does. Memory pressure at
 # or above FLEET_ADMIT_PRESSURE, avail% under FLEET_ADMIT_MEM_FREE_PCT, or 1-min
 # load/core over FLEET_ADMIT_LOAD_PER_CORE → the spawn is refused as "at
 # capacity" (exit 2), the caller retries next tick, and spawns resume on their own
 # when the reading drops. Running sessions are untouched; crash restore, quota
-# migration and a handoff's continuation never pass this gate. The backlog header
-# shows 「暂停开新：内存紧张」 / 「暂停开新：负载过高（…）」 while it holds.
+# migration and a handoff's continuation never pass this gate. A refused start
+# says 「暂停开新：内存紧张」 / 「暂停开新：负载过高（…）」 while it holds.
 # @label=Machine admission gate @group=disk @tier=internal @scope=global @edit=bool
 #FLEET_ADMIT=1                      # 0 = admit on session counts alone (pre-#1090)
 # @label=Admission min free memory % @group=disk @tier=internal @scope=global @edit=int @unit=%
@@ -2257,7 +2213,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # every session admitted in the last FLEET_ADMIT_SETTLE_SECS (or still building
 # its window) — so a burst of spawns cannot all read the same free memory. After a
 # hold, FLEET_ADMIT_HYST_MB more must free up before it reopens. `fleet-doctor`'s
-# `admit` row and the backlog's 「余≈N」 show the room left.
+# `admit` row shows the room left.
 # @label=Admission reserve MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
 #FLEET_ADMIT_RESERVE_MB=2048        # never hand out the last this-many MB (the % floor above wins when larger)
 # @label=Admission recovery MB @group=disk @tier=internal @scope=global @edit=int @unit=MB
@@ -2465,14 +2421,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # --- Spawn ergonomics -------------------------------------------------------
 # By default a newly spawned worker window is created in the background (tmux
 # new-window -d) and NOT selected — you stay on your current window, and the new
-# session surfaces via the dash + urgency sorter. Set to 1 to restore the old
-# behavior: interactive spawns (backlog Enter / new-session box) jump to the new
+# session surfaces in the task list. Set to 1 to restore the old
+# behavior: interactive spawns (the new-session box) jump to the new
 # window. Headless spawns never steal focus regardless.
 # @label=Jump to new worker windows @group=spawn @tier=common @scope=fleet @edit=bool
 #FLEET_SPAWN_FOCUS=0
 
 # --- Worktree location (bin/fleet-lib.sh fleet_worktree_dir, issue #886) ------
-# Where NEW worktrees are created — issue spawns, scratch sessions (⌃s) and a
+# Where NEW worktrees are created — task and scratch sessions and a
 # manual `cw` all ask the same function. Empty (default) = a sibling of
 # the base checkout (`<main>-issue-N` next to `<main>`), the historic layout.
 #
@@ -2571,7 +2527,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # ~550MB of idle agent plus a worktree per slot, rebuilt every 30 minutes and after
 # every upgrade, and opened with no hub task record. `fleet-conf.sh migrate`
 # comments a line that still sets one out. The work now is making the cold start
-# itself fast — measured on ⌃s: ~7s to the first keystroke that survives, of which
+# itself fast — measured on a new session: ~7s to the first keystroke that survives, of which
 # `git fetch` + `git worktree add` ~3.2s, claude's boot ~1.7s, and a ~1.1s window in
 # which Claude Code's TUI has painted its `❯` box but still discards what is typed.
 
@@ -2592,13 +2548,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=In-flight spawn TTL (s) @group=spawn @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INFLIGHT_TTL=180
 
-# --- Auto-merge strategy (issue #283) ---------------------------------------
-# The GitHub auto-merge strategy the fleet ARMS. THE FLEET NEVER MERGES — the
-# worker's ship step (and the dash ⌃l arm) run
-# `gh pr merge --auto --<method>`; GitHub performs the merge when the PR is green.
+# --- Merge method (issue #283) ---------------------------------------------
+# The merge method a session lands its PR with: `pr_merge` (bin/fleet-pr-merge.sh)
+# merges a READY PR — never a red one — with `gh pr merge --<method>`.
 # squash (default) | merge | rebase. An unset/typo'd value falls back to squash so
-# arming never breaks on a bad key. Per-fleet ▸ global ▸ default.
-# @label=Auto-merge method @group=spawn @tier=common @scope=fleet @edit=enum
+# merging never breaks on a bad key. Per-fleet ▸ global ▸ default.
+# @label=Merge method @group=spawn @tier=common @scope=fleet @edit=enum
 #FLEET_MERGE_METHOD="squash"
 
 # --- Worker seed prompt (issue #234) ----------------------------------------
@@ -2609,7 +2564,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # T<n> or the issue number) and {repo} are substituted; a trailing sentence-ender
 # is stripped. Per-fleet ▸ global ▸ default like any @scope=fleet key.
 # A value of the form "@<path>" names a FILE whose contents are the body instead —
-# for a long or multi-line template the single-line modal editor can't hold (a
+# for a long or multi-line template one conf line can't hold (a
 # leading ~/ is expanded; unreadable ⇒ the spawn warns and uses the default). The
 # retired FLEET_WORKER_PROMPT_FILE=<path> is still read and wins when set (#1101).
 # @label=Worker seed prompt @group=spawn @tier=common @scope=fleet @edit=str
