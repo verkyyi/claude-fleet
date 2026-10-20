@@ -30,17 +30,13 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-machine-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
+# mkbox — the sandbox under $WORK: the doctor's copy and the fakes (their paths
+# baked in), the fixtures they read. The legs below run as lanes at once, each
+# in a box of its own (mkbox again with its own $WORK).
+mkbox() {
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf"
 for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
-
-ME="$(id -un)"
-CHECKS=0
-fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- machine line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
-ok() { CHECKS=$((CHECKS + 1)); }
-has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
-
-# --- fake sysctl: the load average and core count are switchable per case.
 cat > "$WORK/fakepath/sysctl" <<EOF
 #!/bin/sh
 case "\$*" in
@@ -83,6 +79,16 @@ EOF
 echo Darwin > "$WORK/os"
 printf '  9120  0.2 01:14:57 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd\n' > "$WORK/fsev"
 chmod +x "$WORK/fakepath/sysctl" "$WORK/fakepath/nproc" "$WORK/fakepath/getconf" "$WORK/fakepath/ps" "$WORK/fakepath/uname"
+}
+mkbox
+
+ME="$(id -un)"
+CHECKS=0
+fail() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- machine line ---\n%s\n' "${2:-(none)}" >&2; exit 1; }
+ok() { CHECKS=$((CHECKS + 1)); }
+has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac; }
+
+# --- fake sysctl: the load average and core count are switchable per case.
 
 # The doctor's `machine` line, plus a marker proving the run got PAST it.
 run_doctor() {
@@ -106,6 +112,17 @@ survived()     { printf '%s\n' "$1" | grep -qaE '^[[:space:]]+(PASS|WARN)[[:spac
 #    the operator learns to scroll past the real one.
 quiet()        { CHECKS=$((CHECKS + 1)); [ -s "$WORK/stderr" ] && fail "$1" "$(cat "$WORK/stderr")"; return 0; }
 
+# lane <n> <legs…> — a subshell in a box of its own ($WORK/lane<n>), running the
+# legs given; its count of checks comes back in a file, a FAIL as its exit code.
+lane() {
+  local n=$1; shift
+  ( WORK="$WORK/lane$n"; mkbox; CHECKS=0
+    for leg in "$@"; do "leg_$leg"; done
+    echo "$CHECKS" > "$WORK/checks" ) > "$WORK/lane$n.log" 2>&1 &
+  eval "lane_pid_$n=\$!"
+}
+
+leg_1() {
 # ============================================================================
 # 1. Quiet machine, no orphans → PASS naming load + cores.
 # ============================================================================
@@ -175,12 +192,15 @@ ok
 survived "$out" || fail "4: the doctor did not survive the unreadable-load WARN" "$l"
 quiet "4: the unreadable-load WARN must print NOTHING on stderr"
 
+}
+
 # ============================================================================
 # 5. fseventsd (issue #889). Every `machine` line, not just the first.
 # ============================================================================
 mlines() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+machine([[:space:]]|$)'; }
 fsline() { mlines "$1" | grep -a fseventsd | head -1; }
 capline() { mlines "$1" | grep -a 'sessions:' | head -1; }
+leg_5() {
 echo 8 > "$WORK/cores"; echo "1.20" > "$WORK/load"; : > "$WORK/pstable"
 out="$(run_doctor)"; l="$(fsline "$out")"
 has "PASS" "$l" "5a: an 8 MB fseventsd must PASS"
@@ -214,6 +234,8 @@ out="$(run_doctor)"
 CHECKS=$((CHECKS + 1))
 [ -z "$(fsline "$out")" ] || fail "5f: no fseventsd running must print no line" "$(fsline "$out")"
 
+}
+
 # ============================================================================
 # 6. Session caps vs cores (issue #889) — STATED, never warned (issue #952).
 #    The operator owns FLEET_MAX_SESSIONS / FLEET_GLOBAL_MAX_SESSIONS; the line
@@ -227,6 +249,8 @@ stated_only() {
   lacks "over the" "$1" "$2: the sessions line must not draw a line to be over"
   lacks "≤" "$1" "$2: the sessions line must not name a ceiling to aim for"
 }
+leg_6() {
+echo "1.20" > "$WORK/load"; : > "$WORK/pstable"
 mkdir -p "$WORK/conf/fleets/fa" "$WORK/conf/fleets/fb" "$WORK/conf/fleets/fc"
 echo 10 > "$WORK/cores"
 printf 'FLEET_REPO=o/a\nFLEET_MAX_SESSIONS=9\n' > "$WORK/conf/fleets/fa/conf"
@@ -283,6 +307,7 @@ out="$(run_doctor)"; l="$(mlines "$out" | grep -a 'tmux call' | head -1)"
 has "41.5" "$l" "7b: the heartbeat's tmux_calls_per_s must be reported"
 quiet "7b: the tmux-rate line must print NOTHING on stderr"
 rm -rf "$WORK/conf/logs"
+}
 
 # ============================================================================
 # 8. The diskguard --watch share: remind ONCE per day, never kill, re-arm on
@@ -327,9 +352,12 @@ printf '%s\n' \
   "  503   500 $uid_me 1024 00:10:00 /bin/sleep 9" \
   "  600     1 $uid_me 20971520 05:00:00 /Applications/Safari.app/Contents/MacOS/Safari" > "$WORK/memps"
 res_doctor() {
-  FLEET_MEM_PS_CMD="cat $WORK/memps" FLEET_MEM_PROBE_CMD="$1" FLEET_FILES_PROBE_CMD="$2" \
+  FLEET_MEM_PS_CMD="cat $MEMPS" FLEET_MEM_PROBE_CMD="$1" FLEET_FILES_PROBE_CMD="$2" \
   FLEET_PTY_PROBE_CMD="$3" run_doctor
 }
+MEMPS="$WORK/memps"
+leg_9() {
+echo 10 > "$WORK/cores"; echo "1.20" > "$WORK/load"; : > "$WORK/pstable"; : > "$WORK/fsev"
 out="$(res_doctor 'echo 1 63 5 6' 'echo 22000 491520' 'echo 38 511')"
 l="$(rline memory "$out")"
 has "PASS" "$l" "9a: normal pressure must PASS"
@@ -360,6 +388,8 @@ for k in memory files pty; do
 done
 survived "$out" || fail "9e: the doctor did not survive unreadable resources" "$(rline memory "$out")"
 quiet "9e: unreadable resources must print NOTHING on stderr"
+}
+lane 1 1; lane 5 5; lane 6 6; lane 9 9   # the doctor legs, at once; 8 above and 10 below meanwhile
 
 # ============================================================================
 # 10. The diskguard --watch share for memory / files / pty: notify on the EDGE
@@ -395,5 +425,13 @@ has "pty table at 88%" "$(cat "$WORK/notified")" "10f: the pty notice must state
 printf 'garbled\n' > "$WORK/rmem"; : > "$WORK/rfiles"; printf 'n/a 511\n' > "$WORK/rpty"; rwatch
 CHECKS=$((CHECKS + 1)); [ "$(nnot)" = 5 ] || fail "10g: unreadable or garbled readings must never notify" "$(cat "$WORK/notified")"
 quiet "10: the memory watch must print NOTHING on stderr"
+
+rc=0
+for n in 1 5 6 9; do
+  eval "wait \$lane_pid_$n" || rc=1
+  cat "$WORK/lane$n.log"
+  [ -s "$WORK/lane$n/checks" ] && CHECKS=$((CHECKS + $(cat "$WORK/lane$n/checks")))
+done
+[ "$rc" = 0 ] || exit 1
 
 printf 'selftest OK: fleet-doctor machine line (%s assertions — load, cores, orphan naming, fseventsd, session caps, tmux rate, memory/files/pty + edge notices, render-survival, stderr silence)\n' "$CHECKS"

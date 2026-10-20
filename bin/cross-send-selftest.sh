@@ -84,6 +84,10 @@ hub_ok() { (cd "$BIN" && python3 -c 'import sys, fleet_hub_common as h; sys.exit
 
 # --- G: a keyless session sends as its identity (its key, issue #4341) ----------------------------------------------
 export FLEET_PEER_RECEIPT_SECS=0
+# No agent takes the outbox file in G or I, so a send's wait for it (3 s) only
+# ever times out — the same «not handed over yet» queue either way; 0 skips the
+# wait. H, where a stand-in agent DOES take it, waits as the default does.
+export FLEET_HUB_SENT_WAIT=0
 from_pane "$po" "wid:$F/issue-42" 'hello from the orchestrator'
 f=$(outbox | head -1)
 fid=$(tf display-message -p -t "$wo" '#{@fleet_id}')
@@ -101,6 +105,7 @@ ok; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/acme-app:issue-7
 rm -f "$OUTBOX"/*.json
 
 # --- H: the hub refused it ----------------------------------------------------------------
+unset FLEET_HUB_SENT_WAIT
 # The agent's half, by hand: take the relay out of the outbox into refused/, then
 # write its reason (the agent renames first, writes .why after).
 ( for _ in $(seq 1 40); do
@@ -122,6 +127,7 @@ ok; tail -1 "$BOOK" 2>/dev/null | grep -q '"state": "FAILED".*refused by the hub
 rm -rf "$OUTBOX"/*.json "$OUTBOX/refused"
 
 # --- I: a send still queued after the receipt window is told to its sender -------------------
+export FLEET_HUB_SENT_WAIT=0
 notices() { grep -l -F '[delivery]' "$QDIR"/*.json 2>/dev/null | wc -l | tr -d ' '; }
 FLEET_PEER_RECEIPT_SECS=1 from_pane "$p7" "wid:$F/issue-42" 'ping that never lands'
 ok; [ "$rc" = 3 ] || fail "I: queued (exit 3)" "rc=$rc out=$out err=$err"
