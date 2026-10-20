@@ -149,7 +149,7 @@ verb = a[0] if a else ""
 if verb == "display-message" or (verb == "list-panes" and "list-panes" in FLAGS):
     d = load(); fmt = a[-1]
     if verb == "display-message" and "session-S" in FLAGS:
-        fmt = fmt.replace("#S", "#{session_name}")
+        fmt = fmt.replace("#S", "#{session_name}")   # view-ok: a selftest fixture
     print(_fx(d, fmt))
 elif verb == "set-window-option" or (verb == "set-option" and "set-option" in FLAGS):
     d = load(); unset = "-u" in a
