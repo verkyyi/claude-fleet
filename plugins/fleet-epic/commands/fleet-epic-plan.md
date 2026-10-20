@@ -396,7 +396,9 @@ this order:
    ### 备选 — dispatched only when the person (or the driver, within scope) adds one
    - [ ] **R1** <名称>
    ## 依赖顺序
-   <the #order table, as a markdown table>
+   <the #order table, as a markdown table — a bare `C4` is THIS batch's member;
+    another batch's member carries its parent: `T542 C5` (`T542 C7、C8` — the
+    prefix holds until other words or a `+`), released once that member merged>
    ## 风险与拆分理由
    <the surface risks, then the fold's technical risks + 为什么这样切>
    ## 待决

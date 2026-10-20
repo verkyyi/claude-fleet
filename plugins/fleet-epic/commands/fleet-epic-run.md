@@ -32,7 +32,7 @@ from the hub every tick, never from this conversation.
 ```sh
 P=$(bash ~/.claude/fleet/bin/fleet-task-record.sh of) || P=''      # this session's own task
 echo "parent=${P:-none}"
-python3 ~/.claude/fleet/bin/fleet-epic-tick.py status ${P:+--task "$P"} --line
+python3 ~/.claude/fleet/bin/fleet-epic-tick.py status ${P:+--task=$P} --line   # one word in zsh too
 ```
 
 - **`parent=none`** and no `--task T<n>` in `$ARGUMENTS` → STOP in one line: a
@@ -65,7 +65,9 @@ that dies at the boundary. Therefore:
   `short` (`T-xxxxx`), its `ids` (every baton, a redo's `prev` naming the one it
   replaced), its child tasks, its PR; `waiting` = a member the charter's 依赖顺序
   says waits on one that has not succeeded (`waits_on`) — released by that
-  member's newest ID, never dispatched before (拍板 6); `next` is exactly what to
+  member's newest ID, never dispatched before (拍板 6); a `waits_on` entry
+  `T542 C5` is ANOTHER batch's member (that parent's child `C5 · …`), released
+  once it succeeded and never by the cycle rule; `next` is exactly what to
   dispatch now (retries first, then unstarted core members, as many as the free
   slots), each with its `title`, `repo`, `agent`, the `body` its session gets and,
   for a retry, the `prev` ID it continues. It reads the hub — the parent's record,
