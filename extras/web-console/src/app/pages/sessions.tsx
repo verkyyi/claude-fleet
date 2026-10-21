@@ -1,11 +1,19 @@
-// sessions.tsx — 我的会话 (EPIC #3923 C4, issue #3927): one list of cards,
-// filtered 全部 · 在跑 · 在问你 · 已结束; a card opens a Sheet that 回收s a live
-// session (an AlertDialog asks first) or 接回s an ended one. Every session on
-// every machine wears the same card — the machine is a plain word in its line
-// (EPIC #3923 拍板 13). Stock shadcn/ui only.
-import { useEffect, useMemo, useState, type FC } from "react";
-import { Link } from "react-router";
-import { Layers, Loader, RotateCcw, Trash2, TerminalSquare } from "lucide-react";
+// sessions.tsx — 会话 (EPIC #3923 C4, issue #3927; T769): everything the person
+// sent out and every session they have, ONE list — a task and its session one
+// row (src/app/work.ts joins them), grouped as ⌘P's panel groups them: ✦ 消息 ·
+// 等你 · 在干活 · 排队中 · 已收起 (folded), an EPIC's members under it. A row
+// opens its details beside the list (from 1024 px) or in a sheet (below): what
+// it asks, the person's own words, its report, its PR, its members, its
+// session, the ways in, and every field the old 任务 page showed, folded.
+// 新建 opens a task through the write door (worker_start with a coding agent:
+// the hub writes the record first). /tasks (and its ?q=) lands here, the row
+// opened. Stock shadcn/ui only.
+import { useEffect, useMemo, useState, type FC, type ReactNode } from "react";
+import { Link, useSearchParams } from "react-router";
+import {
+  ArrowUpRight, ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot, CircleX, Clock, GitPullRequest,
+  Layers, Loader, MessageCircle, Plus, RotateCcw, Search, Sparkles, TerminalSquare, Trash2, type LucideIcon,
+} from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -13,246 +21,477 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { lang, tr } from "@/shared/i18n";
-import { sessionWrite, useSessions, type Group, type SessionRow } from "@/shared/sessions";
-import { usePage } from "../Shell";
-import { Empty, Failed, Loading, PageHeader } from "../parts";
+import { sendJSON } from "@/shared/api";
+import { fmtTokens, tr } from "@/shared/i18n";
+import { sessionWrite, useSessions } from "@/shared/sessions";
 import { terminalLink } from "@/shared/terminal";
+import { viewAs } from "@/shared/viewAs";
+import { usePage } from "../Shell";
+import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
+import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, writtenCode, type Task } from "../task-state";
+import { findTask, useTasks } from "../use-tasks";
+import { GROUPS, buildRows, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Glyph, type Row, type Tone } from "../work";
 
-type Filter = "all" | Group;
-
-const STATE: Record<string, { label: [string, string]; tone: string }> = {
-  working: { label: ["在干活", "Working"], tone: "text-[var(--fleet-ok)]" },
-  needs: { label: ["在问你", "Asking you"], tone: "text-clay border-clay-line bg-clay-soft" },
-  blocked: { label: ["被卡住", "Blocked"], tone: "text-clay border-clay-line bg-clay-soft" },
-  idle: { label: ["空闲", "Idle"], tone: "text-muted-foreground" },
-  done: { label: ["做完了", "Done"], tone: "text-muted-foreground" },
-  ended: { label: ["已结束", "Ended"], tone: "text-muted-foreground" },
-  unknown: { label: ["状态未知", "Unknown"], tone: "text-muted-foreground" },
+const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin [animation-duration:2.4s]", className)} />;
+const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
+  ask: CircleAlert, fail: CircleX, work: Spin, pr: GitPullRequest, done: CircleCheck, idle: CircleDot, wait: Clock,
 };
-const stateOf = (s: string) => STATE[s] || STATE.unknown;
+const TONE: Record<Tone, string> = {
+  ask: "text-clay", fail: "text-destructive", ok: "text-ok", muted: "text-muted-foreground",
+};
+const BADGE: Record<Tone, string> = {
+  ask: "text-clay border-clay-line bg-clay-soft", fail: "text-destructive border-destructive/40", ok: "text-ok", muted: "text-muted-foreground",
+};
 const ASK_KIND: Record<string, [string, string]> = {
   permission: ["它在请你批准", "It asks your permission"],
   question: ["它在问你", "It asks you"],
   auth: ["它要你登录", "It needs you to sign in"],
 };
+const STATUS: Record<string, [string, string]> = {
+  accepted: ["已接收", "Accepted"], starting: ["正在开", "Starting"], running: ["在做", "Working"], waiting: ["等待中", "Waiting"],
+  succeeded: ["已完成", "Completed"], failed: ["失败", "Failed"], cancelled: ["已取消", "Cancelled"], refused: ["没开成", "Didn't start"],
+  unknown: ["还不清楚", "Unknown"],
+};
+const statusWords = (state: string) => tr(...(STATUS[state] || STATUS.unknown));
+const unknown = () => statusWords("unknown");
 
-const fmtTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
-const hhmm = (d: Date) => d.toLocaleTimeString(lang === "zh" ? "zh-CN" : "en", { hour: "2-digit", minute: "2-digit", hour12: false });
-function when(d: Date) {
-  const days = Math.floor((Date.now() - d.getTime()) / 864e5);
-  if (days < 1 && new Date().getDate() === d.getDate()) return hhmm(d);
-  if (days < 2) return tr(`昨天 ${hhmm(d)}`, `yesterday ${hhmm(d)}`);
-  return d.toLocaleDateString(lang === "zh" ? "zh-CN" : "en", { month: "numeric", day: "numeric" });
-}
-function metaLine(r: SessionRow) {
-  const parts = [r.ended ? tr(`结束于 ${when(new Date(r.ended))}`, `ended ${when(new Date(r.ended))}`)
-    : r.born ? tr(`开始于 ${when(new Date(r.born * 1000))}`, `started ${when(new Date(r.born * 1000))}`) : ""];
-  if (r.machine) parts.push(r.machine);
-  if (r.tokens) parts.push(tr(`今天 ${fmtTokens(r.tokens)} tokens`, `${fmtTokens(r.tokens)} tokens today`));
-  return parts.filter(Boolean).join(" · ");
+const when = (r: Row) => (r.live?.born ? ago(new Date(r.live.born * 1000).toISOString()) : r.ended?.ended ? ago(r.ended.ended) : ago(r.task?.created_at));
+const machineOf = (r: Row) => r.live?.machine || r.ended?.machine || r.task?.machine || "";
+function metaOf(r: Row, standalone: boolean) {
+  const pr = r.task ? taskPR(r.task) : null;
+  return [r.kids.length ? tr(`${r.kids.length} 项`, `${r.kids.length} items`) : "",
+    standalone && r.parentTitle ? tr(`属于「${r.parentTitle}」`, `in “${r.parentTitle}”`) : "",
+    machineOf(r), pr ? `PR #${pr.n}` : "", when(r)].filter(Boolean).join(" · ");
 }
 
-const StateBadge: FC<{ state: string }> = ({ state }) => {
-  const s = stateOf(state);
+const RowLine: FC<{ r: Row; on: boolean; open: boolean; onOpen: () => void; onFold?: () => void; child?: boolean }> = ({ r, on, open, onOpen, onFold, child }) => {
+  const Icon = GLYPH[r.glyph];
+  const kids = nestedKids(r);
   return (
-    <Badge variant="outline" className={cn("shrink-0 rounded-full", s.tone)}>
-      {state === "working" ? <Loader className="animate-spin [animation-duration:2.4s]" aria-hidden /> : null}
-      {tr(...s.label)}
-    </Badge>
+    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(); } }}
+      data-row={r.code || r.id} data-group={r.group} {...(r.task ? { "data-task-id": r.task.fid || r.task.id } : {})} aria-current={on || undefined}
+      className={cn("hover:bg-muted/60 aria-[current]:bg-muted flex cursor-pointer gap-2.5 px-3 py-3 text-left transition-colors", child && "ps-9")}>
+      <span className="flex w-4 shrink-0 justify-center pt-0.5">
+        {kids.length ? (
+          <button type="button" aria-label={tr("展开 / 收起成员", "Show / hide members")} aria-expanded={open}
+            onClick={(e) => { e.stopPropagation(); onFold?.(); }} className="text-muted-foreground hover:text-foreground">
+            {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+          </button>
+        ) : <Icon className={cn("size-4", TONE[r.tone])} aria-hidden />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          {r.code ? <span className="text-clay shrink-0 font-mono text-xs" title={r.task ? writtenCode(r.task) : undefined}>{r.code}</span> : null}
+          <span className="min-w-0 flex-1 truncate font-medium">{r.title}</span>
+          <Badge variant="outline" className={cn("shrink-0 rounded-full", BADGE[r.tone])}>
+            {kids.length ? <Icon className="size-3" aria-hidden /> : null}{tr(...r.tag)}
+          </Badge>
+        </span>
+        {r.line ? <span className={cn("mt-0.5 block text-sm break-words", r.quote ? "text-foreground line-clamp-2" : "text-muted-foreground truncate")}>
+          {r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</span> : null}
+        {r.task && agentMismatch(r.task) ? <span className="text-destructive mt-0.5 block text-[12.5px]">{tr("代理不一致", "Agent mismatch")}</span> : null}
+        <span className="text-muted-foreground mt-0.5 block truncate text-[12.5px]">{metaOf(r, !child)}</span>
+      </span>
+    </div>
   );
 };
 
-const SessionCard: FC<{ r: SessionRow; onOpen: () => void }> = ({ r, onOpen }) => (
-  <Card role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(); } }}
-    data-session={r.key} data-group={r.group}
-    className={cn("hover:border-clay-line cursor-pointer gap-0 py-4 transition-colors", r.group === "ask" && "border-clay-line")}>
-    <CardContent className="space-y-1.5 px-4">
-      <div className="flex items-center gap-2">
-        <p className="min-w-0 flex-1 truncate font-medium">{r.title}</p>
-        <StateBadge state={r.state} />
-      </div>
-      {r.ask?.msg ? <p className="text-foreground line-clamp-3 text-sm break-words">{tr(`「${r.ask.msg}」`, `“${r.ask.msg}”`)}</p> : null}
-      <p className="text-muted-foreground truncate text-[13px]">{metaLine(r)}</p>
-      {r.group !== "ended" ? <Button asChild size="sm" variant="outline" onClick={(e) => e.stopPropagation()}>
-        <Link to={terminalLink(r.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link>
-      </Button> : null}
-    </CardContent>
-  </Card>
+// ✦ 消息 (⌘P's first row): asks, failures, and what finished today — one line
+// each, a tap opens its row.
+const Messages: FC<{ rows: Row[]; onOpen: (r: Row) => void }> = ({ rows, onOpen }) => {
+  const [open, setOpen] = useState(false);
+  const msgs = messagesOf(rows);
+  if (!msgs.length) return null;
+  const n = (k: string) => msgs.filter((m) => m.kind === k).length;
+  const glyph = { ask: ["!", "text-clay"], fail: ["✖", "text-destructive"], done: ["✓", "text-ok"] } as const;
+  return (
+    <Card className="gap-0 py-0">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+        className="hover:bg-muted/60 flex w-full items-center gap-2.5 rounded-xl px-3 py-3 text-left">
+        <Sparkles className="text-clay size-4" aria-hidden />
+        <span className="font-medium">{tr("消息", "Messages")}</span>
+        <span className="bg-clay text-primary-foreground rounded-full px-1.5 font-mono text-xs leading-5">{msgs.length}</span>
+        <span className="text-muted-foreground min-w-0 flex-1 truncate text-sm">
+          {[n("ask") ? tr(`${n("ask")} 个在等你`, `${n("ask")} waiting on you`) : "", n("fail") ? tr(`${n("fail")} 个没做成`, `${n("fail")} failed`) : "",
+            n("done") ? tr(`${n("done")} 个做完了`, `${n("done")} done`) : ""].filter(Boolean).join(" · ")}
+        </span>
+        {open ? <ChevronDown className="text-muted-foreground size-4" /> : <ChevronRight className="text-muted-foreground size-4" />}
+      </button>
+      {open ? <div className="border-t">
+        {msgs.map((m) => (
+          <button key={m.row.id + m.kind} type="button" onClick={() => onOpen(m.row)} className="hover:bg-muted/60 flex w-full gap-2.5 px-3 py-2 text-left text-sm">
+            <span className={cn("w-4 text-center font-mono", glyph[m.kind][1])}>{glyph[m.kind][0]}</span>
+            {m.row.code ? <span className="text-clay font-mono text-xs leading-5">{m.row.code}</span> : null}
+            <span className="min-w-0 flex-1 truncate">{m.row.line || m.row.title}</span>
+          </button>
+        ))}
+      </div> : null}
+    </Card>
+  );
+};
+
+const Field: FC<{ label: string; children: ReactNode }> = ({ label, children }) => (
+  <section className="space-y-1">
+    <h3 className="text-muted-foreground text-xs font-medium">{label}</h3>
+    <div className="text-sm break-words">{children}</div>
+  </section>
 );
 
-// nothing under this filter: what it holds, and for an empty list the way in
-const NoSessions: FC<{ filter: Filter }> = ({ filter }) => (
-  <Empty icon={<Layers />}
-    title={filter === "all" ? tr("还没有会话", "No sessions yet") : tr("这里没有会话", "Nothing here")}
-    body={filter === "all" ? tr("在「对话」里说一件要做的事，就会开出第一个会话。", "Ask for something in Chat and the first session opens.")
-      : filter === "ended" ? tr("近 14 天回收或做完收起的会话会在这里，可以接回。", "Sessions closed in the last 14 days show here, ready to resume.")
-        : tr("换个筛选看看。", "Try another filter.")}
-    action={filter === "all" ? <Button asChild size="sm" className="no-underline"><Link to="/">{tr("去说一句", "Go to Chat")}</Link></Button> : undefined} />
-);
+const linkCls = "text-clay hover:text-clay/80 no-underline";
+
+// The old 任务 page's fields, all of them, folded under the details.
+const TaskFacts: FC<{ t: Task; stale: boolean }> = ({ t, stale }) => {
+  const st = taskStatus(t);
+  const blockers = taskBlockerItems(t);
+  const observed = () => {
+    if (!t.live?.state) return tr("无当前会话观测", "No current session observation");
+    if (t.live.needs || t.live.state.startsWith("needs")) return tr("在问你", "Asking you");
+    const words: Record<string, [string, string]> = {
+      working: ["在做", "Working"], idle: ["空闲", "Idle"], done: ["本轮结束", "Turn ended"], exited: ["会话退出", "Session exited"], blocked: ["被卡住", "Blocked"],
+    };
+    return tr(...(words[t.live.state] || STATUS.unknown));
+  };
+  return (
+    <details className="text-muted-foreground text-[13px]">
+      <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">{tr("技术详情", "Technical details")}</summary>
+      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 [&>dd]:break-words">
+        <dt>{tr("编号", "Code")}</dt><dd className="font-mono">{writtenCode(t)}{t.fid ? <span className="break-all"> · {t.fid}</span> : null}</dd>
+        {t.short ? <><dt>{tr("旧编号", "Old number")}</dt><dd className="font-mono">{t.task || t.id}</dd></> : null}
+        <dt>{tr("任务状态", "Task state")}</dt><dd>{statusWords(st)}</dd>
+        <dt>{tr("请求代理", "Requested agent")}</dt><dd>{t.requested_agent || unknown()}</dd>
+        <dt>{tr("确定代理", "Resolved agent")}</dt><dd>{t.resolved_agent || unknown()}</dd>
+        <dt>{tr("已核实代理", "Verified actual agent")}</dt><dd>{t.actual_agent || unknown()}</dd>
+        <dt>{tr("会话观测", "Session observation")}</dt><dd>
+          {t.live?.stale || stale ? tr("陈旧 / last-known · ", "Stale / last-known · ") : ""}{observed()}
+          {" · "}{t.live?.source || "unknown"}{" · "}{t.live?.observed_at || "unknown"}
+        </dd>
+        <dt>{tr("运行证据", "Runtime evidence")}</dt><dd>{tr("未知 · inventory 未提供原生同源快照", "Unknown · inventory has no shared native snapshot")}</dd>
+        <dt>{tr("接受/投递", "Acceptance/delivery")}</dt><dd>{tr("未知 · 缺少 controller 回执", "Unknown · controller receipt unavailable")}</dd>
+        <dt>{tr("循环计划", "Loop schedule")}</dt><dd>{tr("未知 · 未提供计划证据，运行不表示已接受", "Unknown · schedule evidence unavailable; running does not mean accepted")}</dd>
+        <dt>{tr("回收保留", "Reap retention")}</dt><dd>{tr("未知 · 未提供同源 proof；不授权关闭", "Unknown · shared proof unavailable; no permission to close")}</dd>
+        <dt>{tr("部署 / 现场", "Deployment / live")}</dt><dd>{tr("未知 · PR 合并不等于上线", "Unknown · PR merged does not mean deployed")}</dd>
+        <dt>{tr("来源", "Source")}</dt><dd>{tr("任务：hub 权威 GET；会话：inventory（与 native runtime 独立）", "Task: authoritative hub GET; session: inventory (separate from native runtime)")}</dd>
+        <dt>{tr("任务更新于", "Task updated")}</dt><dd>{t.updated_at || unknown()}</dd>
+        <dt>{tr("任务阻塞", "Task blockers")}</dt><dd>
+          {stale ? <p>{tr("陈旧 · 以下仅为 last-known，不代表阻塞已解除", "Stale · last-known only; no blocker resolution inferred")}</p> : null}
+          {blockers === null ? tr("未知 · 缺少本代 task-blockers.v1", "Unknown · current task-blockers.v1 unavailable")
+            : blockers.length === 0 ? tr("本代没有显式阻塞；会话提问和批准独立保留", "No explicit blockers in this generation; questions and approvals remain independent")
+            : blockers.map((b) => <p key={b.blocker_id} className="break-words">
+              {b.blocker_id}{" · "}{b.state}{b.reason ? ` · ${b.reason}` : ""}{" · "}{b.resolved_at || b.revoked_at || b.created_at || unknown()}
+            </p>)}
+        </dd>
+        {t.asked ? <><dt>{tr("提问 / 批准", "Question / approval")}</dt><dd>{t.asked}</dd></> : null}
+        {t.generation ? <><dt>{tr("执行代次", "Attempt")}</dt><dd>{t.generation}</dd></> : null}
+        {t.worker_id ? <><dt>{tr("会话身份", "Session identity")}</dt><dd className="break-all!">{t.worker_id}</dd></> : null}
+        {t.cancel_request && st !== "cancelled" ? <><dt>{tr("取消", "Cancellation")}</dt><dd>{tr("已请求，尚未确认停止", "Requested; stopping is not confirmed")}</dd></> : null}
+        {t.parked ? <><dt>{tr("停放", "Parked")}</dt><dd>{t.parked}</dd></> : null}
+      </dl>
+    </details>
+  );
+};
+
+// One row's details: what it asks, the person's words, its report, its PR,
+// its members, its session, the ways in.
+const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => void; onReap: (r: Row) => void; onResume: (r: Row) => void }> = ({ r, stale, busy, onOpen, onReap, onResume }) => {
+  const t = r.task, s = r.live || r.ended;
+  const pr = t ? taskPR(t) : null;
+  const landing = t ? taskLanding(t) : "";
+  const ticket = t ? taskTicket(t) : null;
+  const asking = r.live && (r.live.state === "needs" || r.live.state === "blocked");
+  const words = t ? taskWords(t) : "";
+  return (
+    <div className="space-y-5">
+      <div className="space-y-1">
+        <div className="flex items-baseline gap-2">
+          {r.code ? <span className="text-clay font-mono text-sm">{r.code}</span> : null}
+          <h2 className="font-display text-xl leading-snug font-semibold break-words">{r.title}</h2>
+        </div>
+        <p className="text-muted-foreground text-sm">{[tr(...r.tag), machineOf(r), t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
+        {r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
+      </div>
+      {asking && r.live ? (
+        <Card className="border-clay-line bg-clay-soft gap-2 py-3">
+          <CardContent className="space-y-2 px-4">
+            <p className="text-muted-foreground text-xs">{tr(...(ASK_KIND[r.live.ask?.kind || ""] || ASK_KIND.question))}</p>
+            {r.live.ask?.msg ? <p className="text-sm break-words whitespace-pre-wrap">{r.live.ask.msg}</p> : null}
+            <Button asChild size="sm" className="w-full"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Link></Button>
+            <p className="text-muted-foreground font-mono text-[12px] break-all select-all">fleet answer {r.live.key}</p>
+          </CardContent>
+        </Card>
+      ) : t?.asked && r.group === "ask" ? (
+        <Card className="border-clay-line bg-clay-soft gap-0 py-3"><CardContent className="px-4">
+          <p className="text-muted-foreground mb-1 text-xs">{tr("它在等你", "It's waiting on you")}</p>
+          <p className="text-sm break-words">{t.asked}</p>
+        </CardContent></Card>
+      ) : null}
+      {t && agentMismatch(t) ? <p className="text-destructive text-sm">{tr("代理不一致：实际运行与选择不符。", "Agent mismatch: the verified agent differs from the selection.")}</p> : null}
+      {t ? <Field label={tr("你的原话", "Your words")}>
+        <p className="bg-muted rounded-lg px-3 py-2 whitespace-pre-wrap">{words}</p>
+        <p className="text-muted-foreground mt-1 text-xs">{[t.via, t.device, ago(t.created_at)].filter(Boolean).join(" · ")}</p>
+      </Field> : null}
+      {t?.evidence ? <Field label={tr("它的回报", "Its report")}>{t.evidence}</Field> : null}
+      {pr ? <Field label="PR">
+        <a href={pr.url} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>{pr.repo}#{pr.n} <ArrowUpRight className="inline size-3.5" aria-hidden /></a>
+        <span className="text-muted-foreground"> · {landing === "merged" ? tr("PR 已合并", "PR merged") : landing === "waiting" ? tr("等待 GitHub · PR 尚未确认合并", "Waiting for GitHub · PR merge is not confirmed") : tr("PR 合并状态未知", "PR merge status unknown")}</span>
+      </Field> : null}
+      {ticket ? <Field label={tr("GitHub 单", "GitHub issue")}>
+        {/^[\w.-]+\/[\w.-]+$/.test(ticket.repo) ? <a href={`https://github.com/${ticket.repo}/issues/${ticket.n}`} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>
+          {ticket.repo}#{ticket.n} <ArrowUpRight className="inline size-3.5" aria-hidden /></a> : <span className="break-all">{ticket.repo}#{ticket.n}</span>}
+      </Field> : null}
+      {r.kids.length ? <Field label={tr(`成员 ${r.kids.length}`, `Members ${r.kids.length}`)}>
+        <div className="divide-y rounded-lg border">
+          {r.kids.map((k) => {
+            const Icon = GLYPH[k.glyph];
+            return <button key={k.id} type="button" onClick={() => onOpen(k)} className="hover:bg-muted/60 flex w-full items-center gap-2 px-3 py-2 text-left">
+              <Icon className={cn("size-4 shrink-0", TONE[k.tone])} aria-hidden /><span className="text-clay font-mono text-xs">{k.code}</span>
+              <span className="min-w-0 flex-1 truncate">{k.title}</span><span className="text-muted-foreground shrink-0 text-xs">{tr(...k.tag)}</span>
+            </button>;
+          })}
+        </div>
+      </Field> : null}
+      <Field label={tr("会话", "Session")}>
+        {s ? <p>{[s.machine, s.key, r.live?.born ? tr(`开始于 ${ago(new Date(r.live.born * 1000).toISOString())}`, `started ${ago(new Date(r.live.born * 1000).toISOString())}`)
+          : r.ended ? tr(`收起于 ${ago(r.ended.ended)}`, `put away ${ago(r.ended.ended)}`) : "",
+          r.live?.tokens ? tr(`今天 ${fmtTokens(r.live.tokens)} tokens`, `${fmtTokens(r.live.tokens)} tokens today`) : ""].filter(Boolean).join(" · ")}</p>
+          : <p className="text-muted-foreground">{t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
+      </Field>
+      <div className="flex flex-wrap gap-2">
+        {r.live ? <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
+        {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
+        {t ? <Button asChild variant="outline" className="flex-1"><Link to={`/?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
+        {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("回收", "Close")} title={tr("回收", "Close")}><Trash2 /></Button> : null}
+      </div>
+      {t ? <TaskFacts t={t} stale={stale} /> : null}
+    </div>
+  );
+};
+
+// 新建: the person's words, an optional repo, the agent — one task through the
+// write door: worker_start with a coding agent, so the hub writes the record
+// first. A repo makes it a task that lands its own PR; none, a session of no repo.
+const NewDialog: FC<{ open: boolean; onOpenChange: (o: boolean) => void; repos: string[]; onDone: (ok: boolean, text: string) => void }> = ({ open, onOpenChange, repos, onDone }) => {
+  const [w, setW] = useState("");
+  const [repo, setRepo] = useState("none");
+  const [agent, setAgent] = useState("claude");
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    const words = w.trim();
+    if (!words) return;
+    setBusy(true);
+    const title = words.split("\n").map((l) => l.trim()).find(Boolean)!.slice(0, 120);
+    const idem = "web-" + (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9-]/g, "");
+    const args = repo === "none"
+      ? { kind: "scratch", no_repo: true, body: words, coding_agent: agent, idempotency_key: idem }
+      : { kind: "new", title, body: words, repo, coding_agent: agent, idempotency_key: idem };
+    const r = await sendJSON<{ status?: string; result?: { error?: { message?: string } } }>("POST", "/v1/fleet/write", { tool: "worker_start", args_json: JSON.stringify(args) });
+    setBusy(false);
+    const why = !r.ok ? r.error || `HTTP ${r.status}` : r.data?.status === "failed" ? r.data.result?.error?.message || "failed" : "";
+    if (why) { onDone(false, tr(`没能开始：${why}`, `Couldn't start it: ${why}`)); return; }
+    setW("");
+    onOpenChange(false);
+    onDone(true, tr("已派出 —— 它带着编号出现在列表里，开好会话就开始做。", "Sent — it shows in the list with its code and starts once its session opens."));
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{tr("新建", "New")}</DialogTitle>
+          <DialogDescription>{tr("说一件要做的事。它会有一个编号，开一个会话去做，在这一页跟着看。", "Say what needs doing. It gets a code and a session of its own; follow it on this page.")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <Textarea value={w} onChange={(e) => setW(e.target.value)} rows={4} aria-label={tr("要做什么", "What to do")}
+            placeholder={tr("比如：把 sales-w41.xlsx 做成看板，按区域分，发给团队", "e.g. Turn sales-w41.xlsx into a dashboard by region and send it to the team")} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>{tr("在哪个仓库做", "Which repo")}</Label>
+              <Select value={repo} onValueChange={setRepo}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{tr("不用仓库", "No repo")}</SelectItem>
+                  {repos.map((x) => <SelectItem key={x} value={x}>{x}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>{tr("谁来做", "Who does it")}</Label>
+              <ToggleGroup type="single" variant="outline" value={agent} onValueChange={(v) => v && setAgent(v)} className="w-full">
+                <ToggleGroupItem value="claude" className="flex-1">Claude</ToggleGroupItem>
+                <ToggleGroupItem value="codex" className="flex-1">Codex</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+          </div>
+          <p className="text-muted-foreground text-xs">
+            {repo === "none" ? tr("不用仓库：开一个会话，做完回报给你。", "No repo: a session opens, and reports back when done.")
+              : tr("选了仓库：在仓库里改，做完自己开 PR、门禁绿了就合并。", "With a repo: it changes the repo, opens a PR and merges it once checks pass.")}
+          </p>
+        </div>
+        <DialogFooter><Button disabled={!w.trim() || busy} onClick={start} className="w-full sm:w-auto">
+          {busy ? <Loader className="animate-spin" aria-hidden /> : null}{tr("开始", "Start")}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// the details sit beside the list from 1024 px up, in a sheet below that
+function useNarrow() {
+  const q = "(max-width: 1023px)";
+  const [n, setN] = useState(() => matchMedia(q).matches);
+  useEffect(() => { const m = matchMedia(q); const f = () => setN(m.matches); m.addEventListener("change", f); return () => m.removeEventListener("change", f); }, []);
+  return n;
+}
 
 export default function SessionsPage() {
   usePage(tr("会话", "Sessions"));
-  const { live, ended, failed, reload } = useSessions();
-  // what this page just did, until the lists say it too: a reaped session shows
-  // as ended at once, a resumed one leaves 已结束 at once
-  const [reaped, setReaped] = useState<SessionRow[]>([]);
-  const [resumed, setResumed] = useState<string[]>([]);
-  const [filter, setFilter] = useState<Filter | null>(null);
-  const [open, setOpen] = useState<SessionRow | null>(null);
-  const [confirm, setConfirm] = useState<SessionRow | null>(null);
+  const tasks = useTasks();
+  const { live, ended, failed, reload } = useSessions(tasks.accept, tasks.reload);
+  const narrow = useNarrow();
+  const [params, setParams] = useSearchParams();
+  const [q, setQ] = useState("");
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  const [goneOpen, setGoneOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  const [sheet, setSheet] = useState(false);
+  const [confirm, setConfirm] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [found, setFound] = useState<Row | null>(null);
+  const stale = !!(tasks.failed || tasks.data?.stale);
 
-  // once the lists say it themselves, the page's own word goes
+  const rows = useMemo(() => (live && tasks.data ? buildRows(tasks.data.tasks, live, ended || []) : null), [live, ended, tasks.data]);
+  const repos = useMemo(() => [...new Set((rows || []).map((r) => r.task?.repo || r.live?.repo || "").filter((x) => /^[\w.-]+\/[\w.-]+$/.test(x)))].sort(), [rows]);
+  const ref = params.get("open") || params.get("q") || "";
+  const picked = rows && ref ? findRow(rows, ref) || (found && findRow([found], ref) ? found : undefined) : undefined;
+
+  // a code a link names that the list does not hold (older than 14 days): the
+  // hub's resolver, the row drawn from the record alone
   useEffect(() => {
-    const endedIDs = new Set((ended || []).map((r) => `${r.machine}\t${r.key}`));
-    const liveIDs = new Set((live || []).map((r) => `${r.machine}\t${r.key}`));
-    setReaped((x) => (x.some((r) => endedIDs.has(`${r.machine}\t${r.key}`)) ? x.filter((r) => !endedIDs.has(`${r.machine}\t${r.key}`)) : x));
-    setResumed((x) => (x.some((k) => liveIDs.has(k)) ? x.filter((k) => !liveIDs.has(k)) : x));
-  }, [live, ended]);
+    if (!rows || !ref || findRow(rows, ref)) return;
+    let on = true;
+    findTask(ref).then((f) => { if (on && f.kind === "one") setFound(rowOf(f.task, undefined, undefined, writtenCode(f.task))); });
+    return () => { on = false; };
+  }, [rows, ref]);
+  // a link that names a row on a phone opens its sheet
+  const pickedID = picked?.id;
+  useEffect(() => { if (narrow && pickedID) setSheet(true); }, [narrow, pickedID]);
 
-  const rows = useMemo(() => {
-    if (!live) return null;
-    const liveKeys = new Set(live.map((r) => `${r.machine}\t${r.key}`));
-    const gone = new Set(reaped.map((r) => `${r.machine}\t${r.key}`));
-    const out = live.filter((r) => !gone.has(`${r.machine}\t${r.key}`));
-    const endedKeys = new Set<string>();
-    for (const r of ended || []) {
-      const k = `${r.machine}\t${r.key}`;
-      if (liveKeys.has(k) || resumed.includes(k)) continue;
-      endedKeys.add(k);
-      out.push(r);
-    }
-    for (const r of reaped) {
-      const k = `${r.machine}\t${r.key}`;
-      if (!endedKeys.has(k) && !liveKeys.has(k)) out.push({ ...r, state: "ended", group: "ended", ask: null, ended: new Date().toISOString(), tokens: 0 });
-    }
-    return out;
-  }, [live, ended, reaped, resumed]);
-
-  const count = (g: Group) => (rows ? rows.filter((r) => r.group === g).length : 0);
-  // a person who opens the page while something asks them lands on it
-  const f: Filter = filter ?? (rows && count("ask") ? "ask" : "all");
-  const shown = (rows || []).filter((r) => f === "all" || r.group === f);
-
-  const act = async (r: SessionRow, tool: "worker_reap" | "worker_resume") => {
-    setBusy(true);
-    setNote(null);
-    const why = await sessionWrite(tool, r.id);
-    setBusy(false);
-    setOpen(null);
-    setConfirm(null);
-    if (why) {
-      setNote({ ok: false, text: tool === "worker_reap" ? tr(`没能回收：${why}`, `Could not close it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
-      return;
-    }
-    if (tool === "worker_reap") {
-      setReaped((x) => [...x, r]);
-      setNote({ ok: true, text: tr("已回收，放进「已结束」——之后还能接回。", "Closed — it is under Ended and can be resumed.") });
-    } else {
-      setResumed((x) => [...x, `${r.machine}\t${r.key}`]);
-      setReaped((x) => x.filter((y) => !(y.machine === r.machine && y.key === r.key)));
-      setNote({ ok: true, text: tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
-    }
-    reload();
+  const match = (r: Row) => !q.trim() || `${r.code} ${r.task ? writtenCode(r.task) : ""} ${r.title}`.toLowerCase().includes(q.trim().toLowerCase());
+  const visible = (rows || []).filter((r) => match(r) || r.kids.some(match));
+  const current = picked || (!narrow && rows ? rowsIn(visible, "ask")[0] || rowsIn(visible, "work")[0] || visible[0] : undefined);
+  const open = (r: Row) => {
+    setParams((p) => { p.delete("q"); p.set("open", r.code ? (r.task ? writtenCode(r.task) : r.code) : r.id); return p; }, { replace: true });
+    if (narrow) setSheet(true);
   };
 
-  const tabs: [Filter, string, number | null][] = [
-    ["all", tr("全部", "All"), rows ? rows.length : null],
-    ["run", tr("在跑", "Running"), rows ? count("run") : null],
-    ["ask", tr("在问你", "Asking"), rows ? count("ask") : null],
-    ["ended", tr("已结束", "Ended"), rows ? count("ended") : null],
-  ];
+  const act = async (r: Row, tool: "worker_reap" | "worker_resume") => {
+    const id = tool === "worker_reap" ? r.live?.id : r.ended?.id;
+    if (!id) return;
+    setBusy(true);
+    setNote(null);
+    const why = await sessionWrite(tool, id);
+    setBusy(false);
+    setConfirm(null);
+    if (why) setNote({ ok: false, text: tool === "worker_reap" ? tr(`没能回收：${why}`, `Could not close it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
+    else setNote({ ok: true, text: tool === "worker_reap" ? tr("已回收，放进「已收起」——之后还能接回。", "Closed — it is under Put away and can be resumed.")
+      : tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
+    reload();
+    tasks.reload();
+  };
 
-  return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-5 md:px-6 md:py-8">
-      <PageHeader title={tr("我的会话", "My sessions")} sub={tr("每件事一个会话，关掉页面也照常跑", "One session per job — they keep running when you close the page")} />
-      <Button asChild variant="outline" className="self-start"><Link to="/terminal"><TerminalSquare />{tr("我的终端", "My Terminal")}</Link></Button>
-      <Tabs value={f} onValueChange={(v) => setFilter(v as Filter)}>
-        <TabsList className="w-full sm:w-auto">
-          {tabs.map(([v, label, n]) => (
-            <TabsTrigger key={v} value={v} className="px-2.5">
-              {label}{n === null ? null : <span className="text-muted-foreground font-mono text-xs">{n}</span>}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-      {note ? <p role="status" className={cn("text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
-      {rows === null ? (
-        failed ? <Failed what={tr("会话", "your sessions")} onRetry={reload} /> : <Loading />
-      ) : shown.length ? (
-        <div className="space-y-3">{shown.map((r) => <SessionCard key={`${r.group}:${r.machine}:${r.key}`} r={r} onOpen={() => setOpen(r)} />)}</div>
-      ) : (
-        <NoSessions filter={f} />
-      )}
-
-      <Sheet open={!!open} onOpenChange={(o) => !o && setOpen(null)}>
-        <SheetContent side="bottom" className="mx-auto max-h-[85svh] max-w-xl overflow-y-auto rounded-t-2xl">
-          {open ? (
-            <>
-              <SheetHeader>
-                <SheetTitle className="font-display pe-6 text-xl">{open.title}</SheetTitle>
-                <SheetDescription>
-                  {[tr(...stateOf(open.state).label), open.machine, open.repo].filter(Boolean).join(" · ")}
-                </SheetDescription>
-              </SheetHeader>
-              <div className="space-y-3 px-4 text-sm">
-                {open.ask?.msg ? (
-                  <Card className="border-clay-line bg-clay-soft gap-0 py-3">
-                    <CardContent className="px-4">
-                      <p className="text-muted-foreground mb-1 text-xs">{tr(...(ASK_KIND[open.ask.kind] || ASK_KIND.question))}</p>
-                      <p className="break-words whitespace-pre-wrap">{open.ask.msg}</p>
-                    </CardContent>
-                  </Card>
-                ) : null}
-                <p className="text-muted-foreground text-[13px]">{metaLine(open)}</p>
-                {open.group !== "ended" ? (
-                  <>
-                    <div className="bg-muted rounded-lg p-3 font-mono text-[12px] break-all select-all">
-                      {open.group === "ask" ? `fleet answer ${open.key}` : `fleet open ${open.key}`}
+  const retry = () => { reload(); tasks.reload(); };
+  const list = rows === null ? ((failed && !live) || (tasks.failed && !tasks.data) ? <Failed what={tr("会话", "your sessions")} onRetry={retry} /> : <Loading />)
+    : !rows.length ? <Empty icon={<Layers />} title={stale ? tr("数量未知", "Count unknown") : tr("还没有会话", "Nothing yet")}
+      body={stale ? tr("当前来源不可用，请重试读取。空的陈旧快照不代表没有任务。", "The source is unavailable. Retry the read; an empty stale snapshot does not mean zero tasks.")
+        : tr("点「新建」说一件要做的事，或者在「对话」里说一句。", "Tap New and say what needs doing, or ask in Chat.")}
+      action={stale ? <Button size="sm" variant="outline" onClick={retry}>{tr("重试读取", "Retry read")}</Button>
+        : <Button size="sm" disabled={!!viewAs} onClick={() => setNewOpen(true)}><Plus />{tr("新建", "New")}</Button>} />
+    : (
+      <div className="space-y-4">
+        <Messages rows={rows} onOpen={open} />
+        {GROUPS.map(({ g, label }) => {
+          const rs = rowsIn(visible, g);
+          if (!rs.length) return null;
+          const fold = g === "gone" && !goneOpen && !q.trim();
+          return (
+            <section key={g} className="space-y-1.5" aria-label={tr(...label)}>
+              <h2 className="text-muted-foreground flex items-center gap-1.5 px-1 text-xs font-medium">
+                {g === "gone" ? <button type="button" onClick={() => setGoneOpen(!goneOpen)} className="hover:text-foreground flex items-center gap-1" aria-expanded={!fold}>
+                  {fold ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}{tr(...label)}
+                </button> : tr(...label)}
+                <span className="font-mono">{rs.length}</span>
+                {g === "gone" ? <span>· {tr("近 14 天", "last 14 days")}</span> : null}
+              </h2>
+              {fold ? null : <Card className={cn("gap-0 divide-y overflow-hidden py-0", g === "ask" && "border-clay-line")}>
+                {rs.map((r) => {
+                  const kidsOpen = !folded[r.id];
+                  return (
+                    <div key={r.id} className="divide-y">
+                      <RowLine r={r} on={!narrow && current?.id === r.id} open={kidsOpen} onOpen={() => open(r)} onFold={() => setFolded({ ...folded, [r.id]: kidsOpen })} />
+                      {kidsOpen ? nestedKids(r).filter(match).map((k) =>
+                        <RowLine key={k.id} r={k} child on={!narrow && current?.id === k.id} open={false} onOpen={() => open(k)} />) : null}
                     </div>
-                    <p className="text-muted-foreground text-xs">
-                      {open.group === "ask" ? tr("在电脑的终端里粘贴这一行，回答它。", "Paste this in a terminal on your computer to answer it.")
-                        : tr("在电脑的终端里粘贴这一行，接着这个会话。", "Paste this in a terminal on your computer to pick the session up.")}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-muted-foreground text-xs">{tr("接回会在原来那台机器上重新开起这个会话，接着它做过的事。", "Resuming reopens it on the same machine, where it left off.")}</p>
-                )}
-              </div>
-              <SheetFooter className="flex-row gap-2">
-                {open.group !== "ended" ? <Button asChild className="flex-1"><Link to={terminalLink(open.id)} state={{ title: open.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
-                {open.group === "ended" ? (
-                  <Button className="flex-1" disabled={busy} onClick={() => act(open, "worker_resume")}>
-                    <RotateCcw />{tr("接回", "Resume")}
-                  </Button>
-                ) : (
-                  <Button variant="outline" className="flex-1" disabled={busy} onClick={() => { setConfirm(open); setOpen(null); }}>
-                    <Trash2 />{tr("回收", "Close")}
-                  </Button>
-                )}
-              </SheetFooter>
-            </>
-          ) : null}
+                  );
+                })}
+              </Card>}
+            </section>
+          );
+        })}
+      </div>
+    );
+
+  const detail = current ? <Detail key={current.id} r={current} stale={stale} busy={busy} onOpen={open} onReap={setConfirm} onResume={(r) => act(r, "worker_resume")} /> : null;
+  return (
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
+      <PageHeader title={tr("会话", "Sessions")} sub={tr("你派出的每件事和开着的会话，一件一行", "Everything you sent out and every open session, one line each")}
+        action={<Button disabled={!!viewAs} onClick={() => setNewOpen(true)}><Plus />{tr("新建", "New")}</Button>} />
+      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-6">
+        <div className="min-w-0 space-y-4">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Search className="text-muted-foreground pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2" aria-hidden />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("找编号或标题，如 K5", "Find a code or title, e.g. K5")}
+                aria-label={tr("找编号或标题", "Find a code or title")} className="ps-8" autoComplete="off" spellCheck={false} />
+            </div>
+            <Button asChild variant="outline"><Link to="/terminal"><TerminalSquare />{tr("我的终端", "My Terminal")}</Link></Button>
+          </div>
+          {tasks.data && stale ? <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <p role="status" className="text-clay">{tr("暂时无法更新 · 保留上次确认的状态", "Stale information · showing the last confirmed state")}
+              {" · "}<time dateTime={tasks.data.observed_at}>{tasks.data.observed_at || unknown()}</time></p>
+            <Button size="sm" variant="outline" disabled={tasks.loading} onClick={retry}>{tasks.loading ? tr("正在读取…", "Reading…") : tr("重试读取", "Retry read")}</Button>
+          </div> : null}
+          {note ? <p role="status" className={cn("text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
+          {list}
+        </div>
+        {!narrow && detail ? <aside aria-label={tr("详情", "Details")}>
+          <Card className="sticky top-6 py-5"><CardContent className="px-5">{detail}</CardContent></Card>
+        </aside> : null}
+      </div>
+      <Sheet open={narrow && sheet && !!current} onOpenChange={(o) => { setSheet(o); if (!o) setParams((p) => { p.delete("open"); p.delete("q"); return p; }, { replace: true }); }}>
+        <SheetContent side="bottom" className="max-h-[88svh] overflow-y-auto rounded-t-2xl">
+          <SheetHeader className="sr-only"><SheetTitle>{current?.title}</SheetTitle><SheetDescription>{current ? tr(...current.tag) : ""}</SheetDescription></SheetHeader>
+          {narrow ? <div className="px-4 pt-5 pb-6">{detail}</div> : null}
         </SheetContent>
       </Sheet>
-
+      <NewDialog open={newOpen} onOpenChange={setNewOpen} repos={repos} onDone={(ok, text) => { setNote({ ok, text }); if (ok) { tasks.reload(); reload(); } }} />
       <AlertDialog open={!!confirm} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{tr(`回收「${confirm?.title ?? ""}」？`, `Close “${confirm?.title ?? ""}”?`)}</AlertDialogTitle>
             <AlertDialogDescription>
-              {tr("会话停下、腾出位置。它做过的事都留着，之后可以在「已结束」里接回。",
-                "The session stops and frees its place. Its work is kept; you can resume it from Ended.")}
+              {tr("会话停下、腾出位置。它做过的事都留着，之后可以在「已收起」里接回。",
+                "The session stops and frees its place. Its work is kept; you can resume it from Put away.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>{tr("先不", "Not now")}</AlertDialogCancel>
-            <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); if (confirm) act(confirm, "worker_reap"); }}>
+            <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); if (confirm) void act(confirm, "worker_reap"); }}>
               {busy ? <Loader className="animate-spin" aria-hidden /> : null}{tr("回收", "Close")}
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getJSON } from "@/shared/api";
 import { taskRead, type Task, type TaskRead, type TasksResponse } from "./task-state";
 
-// One demand-driven read, and the existing read-only retry. Keep this page's
-// last answer in memory on a failed refresh; no disk cache, timer or new start.
+// One read, the existing read-only retry, and `accept` for a body the push
+// channel brought (the stream's tasks topic, T769) — the same taskRead rules.
+// Keep this page's last answer in memory on a failed refresh; no disk cache.
 export function useTasks() {
   const [s, set] = useState<TaskRead>({ data: null, failed: false });
   const [n, setN] = useState(0);
@@ -18,7 +19,9 @@ export function useTasks() {
     });
     return () => { live = false; };
   }, [n]);
-  return { ...s, loading, reload: () => setN((x) => x + 1) };
+  const accept = useCallback((body: unknown) =>
+    set((previous) => taskRead(previous, body as TasksResponse, new Date().toISOString())), []);
+  return { ...s, loading, reload: useCallback(() => setN((x) => x + 1), []), accept };
 }
 
 // A typed code goes to the hub's one resolver (EPIC T644 C1, convention 4: a

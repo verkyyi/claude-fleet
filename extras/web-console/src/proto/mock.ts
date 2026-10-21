@@ -94,11 +94,19 @@ export async function install(): Promise<string> {
   const task = (id: string, title: string, via: string, device: string, min: number, x: Record<string, unknown>) =>
     ({ id, owner: me.person, title, via, device, repo: "", agent: "claude", machine: "mac-mini", login: me.login, worker_id: "",
       session_key: "", operation_id: "", state: "open", note: "", issue: "", pr: "", asked: "", parked: "", created_at: ago(min), updated_at: ago(min), ...x });
+  const W1 = "5b1e0000-0000-4000-8000-00000000f001", W2 = "5b1e0000-0000-4000-8000-00000000f002";
+  const v1 = (x: Record<string, unknown>) => ({ authority_version: 1, generation: 1, ...x });
+  const words = (w: string) => JSON.stringify({ action: "worker_start", node: "auto", params: { body: w } });
   const tasks = state === "normal" ? [
-    task("T118", "活动报名页：收集姓名、公司、手机号，发布后给我链接", "⌘P", "iPhone", 39, { session_key: "scratch-14", live: { key: "scratch-14", state: "working" } }),
-    task("T117", "把 sales-w41.xlsx 做成看板，按区域分，发给团队", "对话", "MacBook Air", 120, { repo: "linxiao/reports", issue: "linxiao/reports#42", session_key: "scratch-12", live: { key: "scratch-12", state: "needs", needs: "ask" } }),
-    task("T112", "十月培训幻灯片，12 页，配讲稿", "⌘P", "MacBook Air", 1440, { repo: "linxiao/training", issue: "linxiao/training#7", session_key: "issue-7" }),
-    task("T109", "官网首屏改写三版给我挑", "⌘P", "iPhone", 4320, { parked: "等你挑一版" }),
+    task("T121", "活动报名页：收集姓名、公司、手机号，发布后给我链接", "⌘P", "iPhone", 39, v1({ fid: "3f2a9c10-1b2c-4d3e-8f40-1a2b3c4d5e01", short: "D7KQ", task_state: "running", repo: "linxiao/event-signup", worker_id: `${W1}/a91f`, session_key: "scratch-14", request_payload: words("活动报名页：收集姓名、公司、手机号，发布后给我链接。配色跟官网一致，手机上好填。"), live: { key: "scratch-14", state: "needs", needs: "ask", status_kind: "question" } })),
+    task("T119", "十月报表", "⌘P", "MacBook Air", 300, v1({ fid: "7c11d2e3-aaaa-4bbb-8ccc-0d1e2f3a4b02", short: "P3MX", task_state: "running", repo: "linxiao/sales-dash", worker_id: `${W1}/e001`, session_key: "scratch-30", request_payload: words("十月的三份报表：销售周报看板、月报导出 PDF、渠道对比。一份一个任务，做完一份合一份。"), live: { key: "scratch-30", state: "working" } })),
+    task("T120", "销售周报看板：按区域分，发给团队", "批次", "", 240, v1({ fid: "7c22e3f4-bbbb-4ccc-8ddd-1e2f3a4b5c03", short: "P3NA", task_state: "running", repo: "linxiao/sales-dash", parent_task: "7c11d2e3-aaaa-4bbb-8ccc-0d1e2f3a4b02", worker_id: `${W1}/77c0`, session_key: "task-p3na", request_payload: words("把 sales-w41.xlsx 做成看板，按华东 / 华南 / 华北分，发给团队。"), live: { key: "task-p3na", state: "working" } })),
+    task("T122", "月报导出 PDF，每月 1 号自动发", "批次", "", 230, v1({ fid: "7c33f4a5-cccc-4ddd-8eee-2f3a4b5c6d04", short: "P3RT", task_state: "accepted", repo: "linxiao/sales-dash", parent_task: "7c11d2e3-aaaa-4bbb-8ccc-0d1e2f3a4b02", request_payload: words("月报导出成 PDF，每月 1 号早上 9 点自动发到群里。") })),
+    task("T112", "十月培训幻灯片，12 页，配讲稿", "⌘P", "MacBook Air", 1440, v1({ fid: "9e44a5b6-dddd-4eee-8fff-3a4b5c6d7e05", short: "W8GE", task_state: "running", repo: "linxiao/training-deck", worker_id: `${W2}/0d3e`, session_key: "task-w8ge", pr: "linxiao/training-deck#12", pr_state: "waiting", evidence: "12 页做完，讲稿在每页备注里；PR #12 等合并。", request_payload: words("十月培训幻灯片，12 页，配讲稿，风格简洁。"), live: { key: "task-w8ge", state: "done" } })),
+    task("T109", "官网首屏改写三版给我挑", "⌘P", "iPhone", 4320, v1({ fid: "b155b6c7-eeee-4fff-8aaa-4b5c6d7e8f06", short: "H2VB", task_state: "waiting", asked: "三版写好了，等你挑一版（A 稳 · B 活泼 · C 短）", request_payload: words("官网首屏的标题和副题改写三版给我挑。") })),
+    task("T107", "客户名单去重", "对话", "MacBook Air", 5760, v1({ fid: "c266c7d8-ffff-4aaa-8bbb-5c6d7e8f9a07", short: "M5TC", outcome: "failed", repo: "linxiao/crm-clean", worker_id: `${W2}/3e02`, session_key: "task-m5tc", evidence: "表里 1,204 行有 37 行手机号格式不一，没敢自动合并。", request_payload: words("客户名单去重，同一个手机号只留一行。") })),
+    task("T104", "新品发布 · 预告短片", "⌘P", "iPhone", 8640, v1({ fid: "d377d8e9-aaaa-4bbb-8ccc-6d7e8f9a0b08", short: "R9QD", outcome: "succeeded", repo: "linxiao/launch-video", worker_id: `${W1}/9c01`, session_key: "scratch-9", pr: "linxiao/launch-video#4", pr_state: "merged", evidence: "30 秒预告片已导出，链接发到群里了。", request_payload: words("新品发布的 30 秒预告短片。") })),
+    task("T123", "新品发布季", "⌘P", "MacBook Air", 20, v1({ fid: "e488e9fa-bbbb-4ccc-8ddd-7e8f9a0b1c09", short: "F6JS", task_state: "accepted", request_payload: words("新品发布季的几件事，先开个批次，成员晚点加。") })),
   ] : [];
   // 设备 (C7): one computer, one phone key, two machines, the home on the first
   const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString();
@@ -138,16 +146,26 @@ export async function install(): Promise<string> {
   const sess = (machine: string, fleet: string, w: Record<string, unknown>, tokens = 0) =>
     ({ worker_id: w.worker_id, machine_name: machine, os_user: me.login, fleet_id: fleet, fleet_name: "fleet", availability: "online", worker: w, observed_at: before(2e4), age_sec: 20, ...(tokens ? { tokens_today: tokens } : {}) });
   let live = state === "empty" ? [] : [
-    sess("office-mac", FLEET, { worker_id: `${FLEET}/a91f`, key: "scratch-14", repo: "linxiao/event-signup", title: "活动报名页", state: asking ? "needs" : "working", agent: "claude", born: (Date.now() - 38 * 6e4) / 1e3,
-      ...(asking ? { status_kind: "question", status_msg: "报名页用哪套配色？陶土橙（和官网一致）还是墨蓝（更正式）" } : {}) }, 169200),
-    sess("office-mac", FLEET, { worker_id: `${FLEET}/77c0`, key: "issue-42", repo: "linxiao/sales-dash", title: "销售周报看板", state: "working", agent: "claude", born: (Date.now() - 2.2 * H) / 1e3 }, 186200),
-    sess("build-box", FLEET2, { worker_id: `${FLEET2}/0d3e`, key: "issue-7", repo: "linxiao/training-deck", title: "十月培训幻灯片", state: "done", agent: "codex", born: (Date.now() - 5 * H) / 1e3 }, 66400),
+    sess("office-mac", FLEET, { worker_id: `${FLEET}/a91f`, key: "scratch-14", repo: "linxiao/event-signup", title: "活动报名页", state: "needs", agent: "claude", born: (Date.now() - 38 * 6e4) / 1e3,
+      status_kind: "question", status_msg: "报名页用哪套配色？陶土橙（和官网一致）还是墨蓝（更正式）" }, 169200),
+    sess("office-mac", FLEET, { worker_id: `${FLEET}/e001`, key: "scratch-30", repo: "linxiao/sales-dash", title: "十月报表", state: "working", agent: "claude", born: (Date.now() - 5 * H) / 1e3, status_msg: "第 1 份在做，第 2 份排着" }, 21800),
+    sess("office-mac", FLEET, { worker_id: `${FLEET}/77c0`, key: "task-p3na", repo: "linxiao/sales-dash", title: "销售周报看板", state: "working", agent: "claude", born: (Date.now() - 2.2 * H) / 1e3, status_msg: "正在画华南的柱状图" }, 186200),
+    sess("build-box", FLEET2, { worker_id: `${FLEET2}/0d3e`, key: "task-w8ge", repo: "linxiao/training-deck", title: "十月培训幻灯片", state: "done", agent: "codex", born: (Date.now() - 5 * H) / 1e3 }, 66400),
+    sess("office-mac", FLEET, { worker_id: `${FLEET}/5aa0`, key: "scratch-20", repo: "", title: "试一段 Python 脚本", state: "idle", agent: "claude", born: (Date.now() - 50 * 6e4) / 1e3 }, 8200),
   ];
   let ended = state === "empty" ? [] : [
-    { worker_id: `${FLEET}/9c01`, resume_id: `${FLEET}/scratch-9`, key: "scratch-9", title: "新品发布 · 预告短片", repo: "linxiao/launch-video", machine_name: "office-mac", fleet_id: FLEET, state: "closed", ended_at: before(1.6 * 864e5) },
-    { worker_id: `${FLEET2}/3e02`, resume_id: `${FLEET2}/issue-3`, key: "issue-3", title: "客户名单去重", repo: "linxiao/crm-clean", machine_name: "build-box", fleet_id: FLEET2, state: "landed", ended_at: before(4 * 864e5) },
+    { worker_id: `${FLEET2}/3e02`, resume_id: `${FLEET2}/task-m5tc`, key: "task-m5tc", title: "客户名单去重", repo: "linxiao/crm-clean", machine_name: "build-box", fleet_id: FLEET2, state: "closed", ended_at: before(3.9 * 864e5) },
+    { worker_id: `${FLEET}/9c01`, resume_id: `${FLEET}/scratch-9`, key: "scratch-9", title: "新品发布 · 预告短片", repo: "linxiao/launch-video", machine_name: "office-mac", fleet_id: FLEET, state: "landed", ended_at: before(5.8 * 864e5) },
+    { worker_id: `${FLEET}/4b07`, resume_id: `${FLEET}/scratch-5`, key: "scratch-5", title: "周报模板", repo: "", machine_name: "office-mac", fleet_id: FLEET, state: "closed", ended_at: before(8 * 864e5) },
   ];
-  const write = (tool: string, wid: string) => {
+  const write = (tool: string, wid: string, args: Record<string, unknown> = {}) => {
+    // 新建 (T769): a dispatched task — its record first, a session on its way
+    if (tool === "worker_start") {
+      const body = String(args.body || "");
+      tasks.unshift(task(`T${200 + tasks.length}`, String(args.title || body.split("\n")[0]).slice(0, 120), "网页", "", 0,
+        v1({ fid: crypto.randomUUID(), task_state: "starting", repo: String(args.repo || ""), request_payload: JSON.stringify({ action: "worker_start", node: "auto", params: args }) })));
+      return ok({ operation_id: "op-2", action: tool, status: "pending" });
+    }
     if (tool === "worker_reap") {
       const s = live.find((x) => x.worker_id === wid);
       if (!s) return ok({ error: { code: "NOT_FOUND", message: "no such session" } }, 404);
@@ -180,7 +198,8 @@ export async function install(): Promise<string> {
     }
     if (p === "/v1/fleet/write") {
       const b = JSON.parse(String(init?.body || "{}"));
-      return write(b.tool, JSON.parse(b.args_json || "{}").worker_id);
+      const args = JSON.parse(b.args_json || "{}");
+      return write(b.tool, args.worker_id, args);
     }
     // 加载中: the page's own reads never answer, so its loading state stays on screen
     if (state === "loading" && (/^\/v1\/fleet\/tasks/.test(p) || (sc.page === "/usage" && p === "/v1/me/usage"))) return new Promise<Response>(() => {});

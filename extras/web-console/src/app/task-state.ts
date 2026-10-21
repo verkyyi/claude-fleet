@@ -11,6 +11,7 @@ export type Task = {
   task_blockers?: { version: number; generation: number; items: TaskBlocker[] };
   requested_agent?: string; resolved_agent?: string; actual_agent?: string;
   pr?: string; pr_state?: string;
+  machine?: string; agent?: string; parent_task?: string; request_payload?: string; evidence?: string;
   live?: { key?: string; state?: string; needs?: string; status_kind?: string;
     observed_at?: string; source?: string; stale?: boolean } | null;
 };

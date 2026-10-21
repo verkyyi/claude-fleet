@@ -5,8 +5,8 @@
 // connected, the limit used up. The conversation service and /v1/chat are
 // unchanged. Every piece is a stock shadcn/ui or assistant-ui component.
 import { createContext, useContext, useEffect, type FC } from "react";
-import { Link } from "react-router";
-import { AssistantRuntimeProvider, type ToolCallMessagePartComponent } from "@assistant-ui/react";
+import { Link, useSearchParams } from "react-router";
+import { AssistantRuntimeProvider, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector.aui";
@@ -240,6 +240,20 @@ const StillHere: FC<{ open: boolean; secs: number; onStay: () => void; onPause: 
   </AlertDialog>
 );
 
+// 「在对话里说」 on a 会话 row (T769): /app/?about=<code> starts the composer
+// with 「关于 <code>：」, once; the address is left clean after.
+const AboutPrefill: FC = () => {
+  const aui = useAui();
+  const [params, setParams] = useSearchParams();
+  const about = params.get("about") || "";
+  useEffect(() => {
+    if (!/^[A-Za-z0-9-]{2,40}$/.test(about)) return;
+    aui.composer().setText(tr(`关于 ${about}：`, `About ${about}: `));
+    setParams((p) => { p.delete("about"); return p; }, { replace: true });
+  }, [aui, about, setParams]);
+  return null;
+};
+
 export default function ChatPage() {
   // the entry's word decides: a view it did not take (one's own row) is no view
   const { me } = useShell();
@@ -281,6 +295,7 @@ function LiveChat() {
   return (
     <ChatCtx.Provider value={{ ...chat, home, quota }}>
       <AssistantRuntimeProvider runtime={runtime}>
+        <AboutPrefill />
         <TooltipProvider>
           <div className="flex h-full flex-col">
             <BindWeChatBanner unbound={!!me?.reach && !me.reach.wechat} />

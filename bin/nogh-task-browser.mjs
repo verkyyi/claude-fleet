@@ -1,4 +1,5 @@
 // A9/A12: committed portal build, local API fixtures, desktop/mobile + keyboard.
+// Since T769 the tasks live on the one 会话 page (/app/tasks lands there).
 // No native provider or deployed UI claim; screenshots are fixture evidence.
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -21,6 +22,9 @@ const tasks = [
 let offline = false;
 const requests = [];
 const origin = 'http://127.0.0.1:9876';
+// T1's session is still up: its record's result stands beside it (T644 C4)
+const sessions = { sessions: [{ machine_name: 'fixture-mac', worker: { worker_id: 'fixture-fleet/fixture-session', key: 'task-t1',
+  title: 'Retained native, explicit success', state: 'working', born: Date.parse(observed) / 1000 } }] };
 async function fixture(route) {
   const req = route.request();
   const url = new URL(req.url());
@@ -29,7 +33,10 @@ async function fixture(route) {
   requests.push({ method: req.method(), path });
   if (path.startsWith('/v1/')) {
     if (path === '/v1/fleet/tasks' && offline) { await route.fulfill({ status: 503, json: {} }); return; }
+    // no push channel here: the page's own 10 s poll stands in (sessions.ts)
+    if (path === '/v1/fleet/stream') { await route.fulfill({ status: 503, json: {} }); return; }
     const data = path === '/v1/fleet/tasks' ? { tasks, observed_at: observed }
+      : path === '/v1/fleet/sessions' ? (url.searchParams.get('state') === 'ended' ? { sessions: [] } : sessions)
       : path === '/v1/me' ? { name: 'Fixture', login: 'fixture', role: 'user' } : {};
     await route.fulfill({ json: data }); return;
   }
@@ -56,26 +63,36 @@ try {
     page.setDefaultTimeout(8000);
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    await page.goto(`${origin}/app/tasks?lang=en`);
-    const card = id => page.locator(`[data-task-id="${id}"]`);
-    await card('T1').waitFor();
-    assert.match(await card('T1').innerText(), /Completed/);
-    assert.match(await card('T1').innerText(), /Waiting for GitHub/);
-    assert.match(await card('T2').innerText(), /Agent mismatch/);
-    assert.match(await card('T3').innerText(), /Unknown/);
-    assert.match(await card('T4').innerText(), /Working[\s\S]*PR merged/);
-    assert.match(await card('T1').getByRole('link', { name: /Session/ }).getAttribute('href'), /terminal/);
-    await card('T1').locator('summary').focus();
+    // 任务 is one list with 会话 since T769: the old address opens the row there
+    await page.goto(`${origin}/app/tasks?q=T1&lang=en`);
+    const row = id => page.locator(`[data-task-id="${id}"]`);
+    // the details: beside the list on a computer, a sheet on a phone
+    const detail = viewport.width >= 1024 ? page.locator('aside') : page.getByRole('dialog');
+    await row('T1').waitFor();
+    assert.match(page.url(), /\/app\/sessions\?q=T1/);
+    assert.match(await row('T1').innerText(), /Completed/);
+    assert.match(await detail.innerText(), /Waiting for GitHub/);
+    assert.match(await detail.getByRole('link', { name: /Terminal/ }).first().getAttribute('href'), /terminal/);
+    if (viewport.width < 1024) await page.keyboard.press('Escape');
+    assert.match(await row('T2').innerText(), /Agent mismatch/);
+    assert.match(await row('T3').innerText(), /Unknown/);
+    await row('T4').focus();
     await page.keyboard.press('Enter');
-    assert.equal(await card('T1').locator('details').getAttribute('open'), '');
-    assert.match(await card('T1').innerText(), /Verified actual agent/);
+    await detail.locator('h2:visible', { hasText: 'Merged PR, still working' }).waitFor();
+    assert.match(await detail.innerText(), /PR merged/);
+    await detail.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await detail.locator('details').getAttribute('open'), '');
+    assert.match(await detail.innerText(), /Task state\s*Working/);
+    assert.match(await detail.innerText(), /Verified actual agent/);
+    if (viewport.width < 1024) await page.keyboard.press('Escape');
     offline = true;
-    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-    await page.getByRole('button', { name: 'Retry read', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Retry read', exact: true }).waitFor({ timeout: 15000 });
     assert.match(await page.locator('main').innerText(), /Stale information/);
     assert.equal(await page.locator('time').getAttribute('datetime'), observed);
-    assert.match(await card('T1').innerText(), /Completed/);
-    assert.ok(await page.locator('a[href="/app/tasks"]:visible').count() > 0, 'existing navigation missing');
+    assert.match(await row('T1').innerText(), /Completed/);
+    assert.ok(await page.locator('a[href="/app/sessions"]:visible').count() > 0, 'existing navigation missing');
+    assert.equal(await page.locator('a[href="/app/tasks"]').count(), 0, 'a separate Tasks page is still linked');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal overflow');
     await page.screenshot({ path: resolve(work, `evidence/tasks-${viewport.width}.png`), fullPage: true });
     evidence.push({ viewport, observed_at: observed, retained_result: 'succeeded', pr: 'waiting', keyboard: 'PASS', errors });
@@ -84,7 +101,7 @@ try {
   }
   assert.ok(requests.every(r => r.method === 'GET'), 'view wrote task state');
   await writeFile(resolve(work, 'evidence/browser-snapshots.json'), JSON.stringify({ fixture: true, evidence, requests }, null, 2));
-  console.log('PASS committed portal: desktop/mobile navigation, keyboard details, stale confirmed timestamp, honest outcome and PR separation');
+  console.log('PASS committed portal: one 会话 list, /tasks lands on its row, desktop/mobile details, keyboard, stale confirmed timestamp, honest outcome and PR separation');
 } finally {
   if (browser) await browser.close();
 }

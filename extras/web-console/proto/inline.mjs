@@ -46,7 +46,7 @@ const APP = { dark: ${JSON.stringify(html.replaceAll("@media (prefers-color-sche
   light: ${JSON.stringify(html.replaceAll("@media (prefers-color-scheme: dark)", "@media not all").replaceAll("@media (prefers-color-scheme:dark)", "@media not all")).replace(/<\//g, "<\\/")} };
 const S = { page: ${JSON.stringify(process.env.PROTO_PAGE || "/")}, role: "user", state: "normal", sub: "none", trial: "", width: 390, lang: "zh" };
 const OPTS = {
-  page: [["/", "对话"], ["/sessions", "会话"], ["/tasks", "任务"], ["/usage", "用量"], ["/devices?tab=pc", "设备·电脑"], ["/devices?tab=phone", "设备·手机"], ["/devices?tab=keys", "设备·公钥"], ["/devices?tab=home", "设备·我的机器"], ["/me", "我的"], ["/settings", "设置"]],
+  page: [["/", "对话"], ["/sessions", "会话（含任务）"], ["/usage", "用量"], ["/devices?tab=pc", "设备·电脑"], ["/devices?tab=phone", "设备·手机"], ["/devices?tab=keys", "设备·公钥"], ["/devices?tab=home", "设备·我的机器"], ["/me", "我的"], ["/settings", "设置"]],
   role: [["user", "成员 林晓"], ["admin", "管理员 周宁"], ["view", "周宁以林晓的视角看（只读预览）"]],
   state: [["normal", "平常"], ["ask", "有会话在问你"], ["empty", "新来的（空）"], ["no_home", "还没有家"], ["over", "额度用完"], ["loading", "加载中"], ["error", "出错"], ["unlimited", "不限额"], ["entry_off", "直连没开"]],
   sub: [["none", "空（没接）"], ["login", "登录中"], ["connected", "已接上"], ["paused", "已暂停"], ["reauth", "要重新登录"], ["error", "读不到"]],

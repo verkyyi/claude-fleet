@@ -1,9 +1,11 @@
-// sessions.ts — 我的会话's data (EPIC #3923 C4, issue #3927): the person's own
+// sessions.ts — 会话's data (EPIC #3923 C4, issue #3927; T769): the person's own
 // live sessions (/v1/fleet/sessions, kept fresh by the push channel's
 // `sessions` topic, /v1/fleet/stream, under a watchdog — a 10 s poll when the
 // channel is not there), their ended ones of the last 14 days (?state=ended), and the two
 // writes through the write door (/v1/fleet/write): 回收 = worker_reap, 接回 =
-// worker_resume. Every read is already cut to the person by the hub.
+// worker_resume. Every read is already cut to the person by the hub. With
+// onTasks the same channel carries the person's task records too (`tasks`,
+// T769) — one stream, one watchdog; the poll that stands in reads both.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getJSON, sendJSON } from "./api";
 import { withAs } from "./viewAs";
@@ -28,10 +30,12 @@ export type SessionRow = {
   born: number;         // epoch s, a live row
   ended: string;        // ISO, an ended row
   tokens: number;       // today's pool tokens, a live row
+  say?: string;         // its last word while working (status_msg)
+  wid?: string;         // an ended row's worker_id: the task record's join
 };
 
 type LiveBody = { sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[] };
-type EndedBody = { sessions?: { resume_id: string; key: string; title?: string; repo?: string; machine_name?: string; ended_at?: string }[] };
+type EndedBody = { sessions?: { worker_id?: string; resume_id: string; key: string; title?: string; repo?: string; machine_name?: string; ended_at?: string }[] };
 
 const ASK_KINDS = ["permission", "question", "auth"];
 const NEEDS_KIND: Record<string, string> = { perm: "permission", ask: "question", auth: "auth" };
@@ -58,6 +62,7 @@ export function liveRows(body: LiveBody | null): SessionRow[] {
       id: str(w.worker_id) || key, key, title: str(w.title) || str(w.name) || key, repo: str(w.repo),
       machine: s.machine_name || "", state, group: asking ? "ask" : "run", ask: asking ? askOf(w) : null,
       born: Number(w.born) || 0, ended: "", tokens: Number(s.tokens_today) > 0 ? Number(s.tokens_today) : 0,
+      say: asking ? "" : str(w.status_msg).slice(0, 200),
     });
   }
   return out.sort((a, b) => b.born - a.born || a.key.localeCompare(b.key));
@@ -66,7 +71,7 @@ export function liveRows(body: LiveBody | null): SessionRow[] {
 export function endedRows(body: EndedBody | null): SessionRow[] {
   return (body?.sessions || []).map((e) => ({
     id: e.resume_id, key: e.key, title: e.title || e.key, repo: e.repo || "", machine: e.machine_name || "",
-    state: "ended", group: "ended" as const, ask: null, born: 0, ended: e.ended_at || "", tokens: 0,
+    state: "ended", group: "ended" as const, ask: null, born: 0, ended: e.ended_at || "", tokens: 0, wid: e.worker_id || "",
   }));
 }
 
@@ -74,7 +79,7 @@ const keysOf = (rows: SessionRow[]) => new Set(rows.map((r) => `${r.machine}\t${
 
 export type SessionsState = { live: SessionRow[] | null; ended: SessionRow[] | null; failed: boolean; reload: () => void };
 
-export function useSessions(): SessionsState {
+export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () => void): SessionsState {
   const [live, setLive] = useState<SessionRow[] | null>(null);
   const [ended, setEnded] = useState<SessionRow[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -105,7 +110,9 @@ export function useSessions(): SessionsState {
     reload();
     let es: EventSource | null = null;
     let poll = 0, dog = 0, retry = 0, silent = 0, tries = 0, gone = false;
-    const startPoll = () => { if (!poll) poll = window.setInterval(() => getJSON<LiveBody>("/v1/fleet/sessions").then((b) => b && onLive(b)), 10000); };
+    const startPoll = () => {
+      if (!poll) poll = window.setInterval(() => { getJSON<LiveBody>("/v1/fleet/sessions").then((b) => b && onLive(b)); pollTasks?.(); }, 10000);
+    };
     const stopPoll = () => { if (poll) { clearInterval(poll); poll = 0; } };
     const drop = () => { es?.close(); es = null; clearTimeout(dog); };
     const later = (ms: number) => { clearTimeout(retry); retry = window.setTimeout(open, ms); };
@@ -122,12 +129,16 @@ export function useSessions(): SessionsState {
     function open() {
       if (gone) return;
       if (typeof EventSource === "undefined") { startPoll(); return; }
-      es = new EventSource(withAs("/v1/fleet/stream?topics=sessions"));
+      es = new EventSource(withAs(onTasks ? "/v1/fleet/stream?topics=sessions,tasks" : "/v1/fleet/stream?topics=sessions"));
       dog = window.setTimeout(quiet, WATCHDOG_MS);
       es.addEventListener("ping", alive);
       es.addEventListener("sessions", (e) => {
         alive();
         try { const f = JSON.parse((e as MessageEvent).data); if (f?.body) onLive(f.body); } catch { /* the next event */ }
+      });
+      if (onTasks) es.addEventListener("tasks", (e) => {
+        alive();
+        try { const f = JSON.parse((e as MessageEvent).data); if (f?.body) onTasks(f.body); } catch { /* the next event */ }
       });
       // a stream the hub or a proxy will not hold: the route's own poll
       // meanwhile, the stream again after a backoff (its first event the
@@ -143,6 +154,7 @@ export function useSessions(): SessionsState {
     open();
     const t = timers.current;
     return () => { gone = true; drop(); stopPoll(); clearTimeout(retry); t.forEach(clearTimeout); };
+    // onTasks / pollTasks are read once, at the stream's opening
   }, [reload, onLive]);
 
   return { live, ended, failed, reload };
