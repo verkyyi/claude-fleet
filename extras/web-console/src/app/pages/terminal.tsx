@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { Layers, List, Palette, TerminalSquare } from "lucide-react";
+import { ArrowLeft, Layers, List, Palette, TerminalSquare } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -16,7 +16,7 @@ import { connectTerminal, forgetTerminalGeneration, type TerminalState, FLEET_ME
 import { touchWheel } from "@/shared/touch-wheel";
 import { FONT_SIZES, MIN_CONTRAST, SCHEMES, onTermPick, setTermPick, termPick, xtermTheme, type TermPick } from "@/shared/term-theme";
 import { webGoTarget } from "@/shared/web-go";
-import { usePage } from "../Shell";
+import { useBack, usePage } from "../Shell";
 import { LIST_PATH, shellPath } from "../legacy";
 import { meTab } from "../routes";
 import { continueCommand, continueProvider } from "@/app/chat/continue";
@@ -371,8 +371,11 @@ export function TerminalView({ worker, cont = null, title, name, toolsInto, comp
     <TermLook pick={pick} onPick={setTermPick} compact={icons} />
   </>;
   const inWorkspace = toolsInto !== undefined;
-  return <div data-terminal-view hidden={hidden} className={inWorkspace ? `flex h-full min-h-0 flex-col ${compact ? "gap-1 p-1" : "gap-3 p-2 md:p-4"}` : "flex h-full min-h-80 flex-col gap-3 p-4 md:p-6"}>
+  const back = useBack();
+  return <div data-terminal-view hidden={hidden} className={inWorkspace ? `flex h-full min-h-0 flex-col ${compact ? "gap-1 p-1" : "gap-3 p-2 md:p-4"}` : "flex h-full min-h-80 flex-col gap-3 p-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] md:p-6"}>
     {inWorkspace ? (toolsInto && !hidden ? createPortal(tools, toolsInto) : null) : <header className="flex flex-wrap items-center gap-2">
+      {/* a phone's whole screen (GR5E C7): 返回 to the screen before */}
+      <Button variant="ghost" size="icon" className="-ms-3 size-11 md:hidden" aria-label={tr("返回", "Back")} onClick={back}><ArrowLeft /></Button>
       <h1 className="min-w-0 flex-1 truncate font-display text-lg" title={view.destination}>
         {title}
         <span className="text-muted-foreground ms-2 font-sans text-xs">{view.destination}</span>
