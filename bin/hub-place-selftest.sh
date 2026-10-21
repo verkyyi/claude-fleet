@@ -889,7 +889,9 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw --no-repo
 # --body-file, a plugin's shipped agent file (epic-driver) with it.
 rm -f "$WORK/place.body"
 T42_DISPATCH='{"version":1,"request_id":"t42-req","requested_agent":"default","resolved_agent":"claude","agent_source":"default","task":"T42","generation":1,"attempt_id":"task:T42:g1"}'
-PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH run_raw --no-repo --task T42 --as epic-driver --prompt 'drive the batch'
+printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
+PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
+  run_raw --no-repo --task T42 --as epic-driver --prompt 'drive the batch'
 [ "$(rc)" = 0 ] && place_has '--node auto ' && place_has "  scratch $UUID" && ! place_has 'acme/widgets' \
   && place_has '--as epic-driver' && [ "$(cat "$WORK/place.body" 2>/dev/null)" = 'drive the batch' ] \
                                                  || fail "SCRATCH-NOREPO-TASK a no-repo task asks the hub with no repo (rc=$(rc))" "$(cat "$PLACE_LOG"; cat "$WORK/spawn.err")"

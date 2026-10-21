@@ -188,11 +188,13 @@ func TestNodePlaceNoRepoScratch(t *testing.T) {
 	macC := connectWriteNodeCaps(t, h, h.enroll(t, "mac-c"), caps...)
 	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
 	f4 := fakeFleet(t, machineB, "fleet-mac-c", "acme/other", "/u/frank/other", 2)
-	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5) // busy
-	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)  // idle, hosts none of mac-d's repos
+	macD.beatLoad("mac-d", "frank", machineA, 6, 3, f5) // busy, still eligible
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4) // idle, hosts none of mac-d's repos
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
 	})
+	waitLoad(t, h, "mac-d", 6)
+	waitLoad(t, h, "mac-c", 1)
 	macC.setOpGet(startedFixture)
 	tok := h.tokens["mac-d"]
 
