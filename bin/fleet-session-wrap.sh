@@ -339,6 +339,9 @@ while :; do
   # the last one's working directory (@agent_cwd, issue #3183): a new agent starts
   # where it is launched.
   [ "$intmux" = 1 ] && { wset -u @agent_status; wset -u @agent_status_ts; wset -u @agent_cwd; }
+  # The new session's clock (T716) is its FIRST agent's: a relaunch here (a
+  # resume off the recovery page, a cfg-restart) is not that start's 能打字.
+  [ "$intmux" = 1 ] && [ -n "$(opt @timing_ready)" ] && { wset -u @timing_t0; wset -u @timing_ready; }
   # A durable task handover that rewrites this HOME's native task table holds
   # every new Claude here until it is settled (issue #4280): the launch gate.
   if [ -f "$PCONF/transfer-durable/launch.gate" ]; then

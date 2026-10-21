@@ -241,15 +241,19 @@ class PanelDraftTests(unittest.TestCase):
                 patch.object(fleet_view, "new_authority", return_value="hub"), \
                 patch.object(fleet_view, "toast") as toast, \
                 patch.object(fleet_view.fleet_timing, "add") as add, \
+                patch.object(fleet_view.fleet_timing, "wait_seg", return_value=1250.0) as wait, \
+                patch.dict(os.environ, FLEET_VIEW_INPUT_WAIT_FG="1"), \
                 patch.object(fleet_view, "say", side_effect=lambda key, *a: "%s:%s" % (key, "|".join(a))), \
                 patch.object(fleet_view.subprocess, "run", side_effect=run):
             self.assertEqual(fleet_view.go_new(None, "v1", "/dev/ttys1", repo="acme/web", agent="codex",
                                                t0="%.3f" % (time.time() - 1.25)), 0)
-        # the start is clocked from the box's ↵ (T684): typeable + total under that
-        # run, and the seconds it took said once on the client
+        # the start is clocked from the box's ↵ (T684): `switched` under that run
+        # (T716), then the agent's input box (`input`, its relay's) waited for and
+        # said once on the client — the person's real wait, not the switch's
         segs = [seg for call in add.call_args_list for seg, _ in call.args[1]]
-        self.assertEqual(segs, ["typeable", "total"])
+        self.assertEqual(segs, ["switched"])
         self.assertGreaterEqual(add.call_args_list[0].args[1][0][1], 1200)
+        self.assertEqual(wait.call_args.args[2], "input")
         toast.assert_called_once()
         self.assertRegex(toast.call_args.args[1], r"^view_new_timing_fmt:1\.[23]$")
         self.assertEqual(len(runs), 1)
@@ -265,7 +269,7 @@ class PanelDraftTests(unittest.TestCase):
                 patch.object(fleet_view, "toast") as toast, patch.object(fleet_view.fleet_timing, "add"), \
                 patch.object(fleet_view.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="✗ 没开成\n", stderr="")):
             self.assertEqual(fleet_view.go_new(None, "v1", "c", repo="acme/web", agent="claude"), 3)
-        toast.assert_called_once_with("c", "✗ 没开成")
+        toast.assert_called_once_with("c", "✗ 没开成", "error")
 
     def test_dispatch_blank_send_records_the_placeholder_and_no_words(self):
         calls = []

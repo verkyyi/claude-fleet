@@ -75,8 +75,7 @@
 #           hub off ⇒ byte-identical and --node mac-a refused; REMOTE / done /
 #           LOCAL / no machine / named-refused / DECLINED / UNKNOWN / hub down
 #           branch as an issue spawn's do, with NO lease at any point; local /
-#           this host's alias never ask; a no-repo scratch with no task record
-#           never travels, one bound to its record does with no repo (T742), a
+#           this host's alias never ask; a no-repo scratch never travels, a
 #           seeded one (--prompt) does, its words as --body-file (T672), and so
 #           does --as fleet-worker (a shipped file); a start the hub sent (--origin hub --node local
 #           --origin-wid) is never placed again, stamps the parent verbatim and
@@ -879,30 +878,9 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw --as fleet-worker
 [ "$(rc)" = 0 ] && place_has '--node auto ' && place_has '--as fleet-worker' \
                                                  || fail "SCRATCH-AS --as fleet-worker with no --node asks the hub (rc=$(rc))" "$(cat "$PLACE_LOG")"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --no-repo
-[ "$(rc)" = 1 ] && err_has 'a no-repo scratch with no task record opens on this machine only' || fail "SCRATCH-NOREPO --no-repo + --node mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 1 ] && err_has 'a no-repo scratch opens on this machine only' || fail "SCRATCH-NOREPO --no-repo + --node mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-NOREPO must not ask the hub"
-PLACE_ANSWER="$REMOTE_LINE" run_raw --no-repo
-[ "$(rc)" = 0 ] && [ ! -s "$PLACE_LOG" ] && tmux_has 'new-window' \
-                                                 || fail "SCRATCH-NOREPO with no record (⌘N) opens here, never asking (rc=$(rc))" "$(cat "$PLACE_LOG")"
-# A no-repo session bound to its task record is the hub's to place (T742): no repo
-# to place by (an empty repo argument — any machine of the person's), its words as
-# --body-file, a plugin's shipped agent file (epic-driver) with it.
-rm -f "$WORK/place.body"
-T42_DISPATCH='{"version":1,"request_id":"t42-req","requested_agent":"default","resolved_agent":"claude","agent_source":"default","task":"T42","generation":1,"attempt_id":"task:T42:g1"}'
-printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
-PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
-  run_raw --no-repo --task T42 --as epic-driver --prompt 'drive the batch'
-[ "$(rc)" = 0 ] && place_has '--node auto ' && place_has "  scratch $UUID" && ! place_has 'acme/widgets' \
-  && place_has '--as epic-driver' && [ "$(cat "$WORK/place.body" 2>/dev/null)" = 'drive the batch' ] \
-                                                 || fail "SCRATCH-NOREPO-TASK a no-repo task asks the hub with no repo (rc=$(rc))" "$(cat "$PLACE_LOG"; cat "$WORK/spawn.err")"
-tmux_has 'new-window'                            && fail "SCRATCH-NOREPO-TASK placed elsewhere must not open here too"
-PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH run_raw --node mac-a --no-repo --task T42
-[ "$(rc)" = 0 ] && place_has '--node mac-a ' && err_has 'scratch → mac-a' \
-                                                 || fail "SCRATCH-NOREPO-TASK a named machine takes a no-repo task (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T42_DISPATCH run_raw --no-repo --task T42
-[ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has '@norepo' \
-                                                 || fail "SCRATCH-NOREPO-TASK LOCAL opens it here, still no repo (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-ok "SCRATCH a seeded scratch, the shipped fleet-worker and a no-repo task travel; a record-less no-repo one stays here"
+ok "SCRATCH a seeded scratch and the shipped fleet-worker travel; a no-repo one is refused elsewhere"
 
 PLACE_ANSWER="$REMOTE_LINE" run_raw testsess --origin hub --origin-wid "$MACHINE/issue-77" --node local --print --name '试一下'
 [ "$(rc)" = 0 ]                                  || fail "SCRATCH-HUBSENT exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"

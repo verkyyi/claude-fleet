@@ -252,12 +252,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "kind must be issue or scratch")
 		return
 	}
-	// A scratch that names no repo (claude-fleet T742): a no-repo session — an
-	// EPIC driver, an orchestrator, a design page — placed like any other,
-	// among every machine of this person's (pickNode with no repo filter), and
-	// opened there with no_repo (dash-raw-session.sh --no-repo).
-	noRepo := scratch && req.Repo == ""
-	if !noRepo && !leaseRepoRE.MatchString(req.Repo) {
+	if !leaseRepoRE.MatchString(req.Repo) {
 		httpError(w, http.StatusBadRequest, "repo must be owner/name")
 		return
 	}
@@ -369,13 +364,8 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	taskOwnsIssueLease := false
 	if req.Dispatch != nil {
-		input := map[string]any{"node": req.Node, "idempotency_key": req.Dispatch.RequestID,
+		input := map[string]any{"repo": req.Repo, "node": req.Node, "idempotency_key": req.Dispatch.RequestID,
 			"agent": req.Agent, "dispatch": req.Dispatch}
-		if noRepo {
-			input["no_repo"] = true
-		} else {
-			input["repo"] = req.Repo
-		}
 		if scratch {
 			input["kind"] = "scratch"
 			if req.Name != "" {
@@ -552,12 +542,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		if try > 1 {
 			idem = retryIdem(baseIdem, try) // a new start, not the declined one again
 		}
-		args := map[string]any{"fleet_id": pl.FleetID, "node": req.Node, "idempotency_key": idem}
-		if noRepo {
-			args["no_repo"] = true
-		} else {
-			args["repo"] = req.Repo
-		}
+		args := map[string]any{"fleet_id": pl.FleetID, "repo": req.Repo, "node": req.Node, "idempotency_key": idem}
 		if scratch {
 			args["kind"] = "scratch"
 			if req.Name != "" {
