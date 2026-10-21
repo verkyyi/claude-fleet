@@ -104,7 +104,7 @@ A WARN is a question, not a verdict; fix what is real.
    `task-<slug>.html`, `content` the page (with pictures: `files`, each by its
    relative path). New pages start **private**; never widen that yourself. Keep
    the `proposal_id` and link.
-2. `mcp__space__push_to_wechat` — that `proposal_id`, `to` omitted (the operator only).
+2. **Make sure it reaches their WeChat exactly once** (T765): the publish receipt's `notify.self` is `true` ⇒ the workspace's automatic push already sends it to them — do NOT call `mcp__space__push_to_wechat` (it would arrive twice); say 已自动推送. No such field? Ask `mcp__space__set_publish_notify` (no arguments: `auto_push` + `include_me`; with the `proposal_id`: `page_notify` off overrides) — both on ⇒ the same. Otherwise call `mcp__space__push_to_wechat` once — that `proposal_id`, `to` omitted (the operator only). A `quiet` update is never pushed, by hand or otherwise.
 3. One sentence: *"任务设计页 <link>（已推到你微信，仅你可见）— 根本原因 n · 要改 m 处 ·
    需要你定 k 件。改哪条直接说；点头即全部按建议，开任务。"*
 
