@@ -470,7 +470,7 @@ drill_hub_read_refused_silent() {
 
 # A cross-machine report whose parent never comes back (T887): the hub's relay TTL
 # ran out, its EXPIRED receipt reached the sender's book — and that was the end of
-# it, nobody told (2026-10-19..21: 7 on mini2, more QUEUED on macmini). The drill
+# it, nobody told (2026-10-19..21: 7 on one managed Mac, more QUEUED on another). The drill
 # queues a report with its words, lets the hub's receipt say EXPIRED, and passes
 # when the person holds it: a reminder row with the words, a note on its task
 # record, one notice, the book's last word HANDED, no EXPIRED.
