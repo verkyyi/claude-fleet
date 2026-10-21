@@ -36,6 +36,7 @@ import { ListUiProvider, NewButton, SearchButton, SessionRows } from "./SessionL
 import { NetBar } from "./NetBar";
 import { TrialBar } from "./TrialBar";
 import { WorkRowsProvider } from "./work-rows";
+import { clearBrowserCache } from "./chat/local";
 
 // What every page reads: who is signed in, what is left of their limit and
 // their trial's (claude-fleet T796) — both bumped after each conversation turn.
@@ -74,7 +75,12 @@ const QuotaPill: FC<{ quota: Quota | null }> = ({ quota }) =>
 
 const SignOut: FC<{ children?: ReactNode; formRef?: Ref<HTMLFormElement> }> = ({ children, formRef }) => (
   // back to the site's front page after (claude-fleet#3798): to=site, a fixed word
-  <form ref={formRef} method="post" action="/app/logout">
+  // the conversation this browser kept goes first (task KSQG), then the form
+  <form ref={formRef} method="post" action="/app/logout" onSubmit={(e) => {
+    e.preventDefault();
+    const f = e.currentTarget;
+    void clearBrowserCache().finally(() => f.submit());
+  }}>
     <input type="hidden" name="to" value={document.documentElement.lang === "en" ? "site-en" : "site"} />
     {children}
   </form>

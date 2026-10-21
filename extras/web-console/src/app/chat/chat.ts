@@ -15,6 +15,9 @@ import { tr } from "@/shared/i18n";
 import { attachedPics, MAX_PICS, packPics, type SentPic } from "./pics";
 import { linkFiles, picSrc, type Pic as MediaPic } from "./media";
 import { cachedCopy } from "./copy";
+import { browserCache, mayCache, mayShow, trim, type Layer } from "./local";
+import { meOnce } from "@/shared/api";
+import { viewAs } from "@/shared/viewAs";
 
 // The console's conversation is the entry's /v1/chat (claude-fleet#3926: moved
 // here from extras/web-chat/ui's site build, its protocol unchanged).
@@ -86,6 +89,20 @@ const modelKey = (p: Provider) => (p === "claude" ? "fwc-model" : `fwc-model-${p
 const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
+// The first history on screen after the page opened, and which layer drew it
+// (task KSQG's measure): performance marks chat:first:<layer>, and the first
+// one on window.__fleetChatFirst = { layer, ms } for a test to read.
+const marked = new Set<string>();
+function markFirst(layer: "local" | "copy" | "home") {
+  if (marked.has(layer)) return;
+  marked.add(layer);
+  try {
+    performance.mark(`chat:first:${layer}`);
+    const w = window as unknown as { __fleetChatFirst?: { layer: string; ms: number } };
+    w.__fleetChatFirst ??= { layer, ms: Math.round(performance.now()) };
+  } catch { /* no performance API */ }
+}
+
 // how often a page on screen reads the home again by itself (task Y393)
 const POLL_MS = 30_000;
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
@@ -259,6 +276,16 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   const [providers, setProviders] = useState<Provider[]>(["claude"]);
   const [last, setLast] = useState("");
   const hadCopy = useRef(false);
+  // the history this browser kept (task KSQG) is on the page, before copy or home
+  const hadLocal = useRef(false);
+  const localTried = useRef(false);
+  // the highest layer on the page so far (local < copy < home)
+  const top = useRef<Layer | null>(null);
+  // what the local layer drew, to tell a copy that says the same thing
+  const localDrawn = useRef("");
+  // whose history this page may keep in the browser ("" = none: a view, a ticket, unknown)
+  const [keeper, setKeeper] = useState("");
+  const homeDefault = useRef("");
   // the home has answered this page once: from then on only the home is shown
   const homeSeen = useRef(false);
   const turnEnd = useRef(onTurnEnd);
@@ -276,6 +303,34 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     const signal = transport.current.signal;
     if (signal.aborted || !navigator.onLine || streaming.current) return;
     const read = ++historyRead.current;
+    if (!localTried.current && !homeSeen.current) {
+      // first of all, what this browser kept (no network but /v1/me, which the
+      // shell has in flight already): drawn only while neither copy nor home has
+      // answered — a lower layer never replaces a higher one
+      localTried.current = true;
+      const kept = browserCache()?.readAny(provider).catch(() => null) ?? Promise.resolve(null);
+      void meOnce().then(async (me) => {
+        if (!mayCache(me, viewAs)) return;
+        setKeeper(me!.person!);
+        const any = await kept;
+        const snap = any && any.principal === me!.person ? any.snap : null;
+        if (!snap || !snap.items.length || signal.aborted || !mayShow("local", top.current)) return;
+        hadLocal.current = true;
+        top.current = "local";
+        localDrawn.current = JSON.stringify(snap.items);
+        markFirst("local");
+        setModels((snap.models as Model[]) || []);
+        setModelState((m) => {
+          if (m) return m;
+          const saved = localStorage.getItem(modelKey(provider));
+          return ((snap.models as Model[]) || []).some((x) => x.id === saved) ? saved! : snap.default || "";
+        });
+        setItems(snap.items as Item[]);
+        setResume(snap.session ? { id: snap.session, cwd: snap.cwd || "" } : null);
+        setSync("syncing");
+        setLoaded(true);
+      }).catch(() => {});
+    }
     if (!hadCopy.current && !homeSeen.current) {
       // first read: the entry's copy, at once, while the home's answer travels.
       // The copy is never newer than the home: once the home has answered (this
@@ -284,8 +339,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
         if (!c.ok || signal.aborted || read !== historyRead.current || homeSeen.current) return;
         // no copy kept yet (a first visit): nothing to show, the home's answer comes
         const j = cachedCopy(c.ok, await c.json().catch(() => null));
-        if (!j || read !== historyRead.current || homeSeen.current) return;
+        if (!j || read !== historyRead.current || homeSeen.current || !mayShow("copy", top.current)) return;
         hadCopy.current = true;
+        top.current = "copy";
+        // the copy says what this browser already drew: no second render of it
+        if (localDrawn.current && JSON.stringify(trim(j.items || [])) === localDrawn.current) { setSync("syncing"); return; }
+        markFirst("copy");
         setModels(j.models || []);
         setModelState((m) => {
           if (m) return m;
@@ -307,13 +366,13 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       const code = String(j.code || "");
       if (code === "home_reconnecting") {
         // the hub moved under the home's link (a deploy): it is back in seconds
-        if (hadCopy.current) setSync("syncing");
+        if (hadCopy.current || hadLocal.current) setSync("syncing");
         else setNotice(tr("正在重连你的家，稍候…", "Reconnecting to your machine, one moment…"));
         setLoaded(true);
         follow.current = window.setTimeout(load, 3000);
         return;
       }
-      if (hadCopy.current && (code === "home_down" || !r)) {
+      if ((hadCopy.current || hadLocal.current) && (code === "home_down" || !r)) {
         // the home is out of reach: the copy stays on the page, said so
         setSync("offline");
         setLoaded(true);
@@ -327,9 +386,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       return;
     }
     homeSeen.current = true;
+    top.current = "home";
+    markFirst("home");
     setNotice("");
     setGate(null);
-    if (hadCopy.current) setSync("synced");
+    if (hadCopy.current || hadLocal.current) setSync("synced");
+    homeDefault.current = String(j.default || "");
     setBudget(j.budget && typeof j.budget === "object" ? j.budget : { blocked: false });
     setModels(j.models || []);
     setModelState((m) => {
@@ -372,6 +434,19 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       document.removeEventListener("visibilitychange", vis); window.removeEventListener("focus", vis); window.removeEventListener("online", online);
     };
   }, [load]);
+
+  // keep what the home said (and what a turn added since) in this browser, for
+  // the next opening — only once the home has answered, never mid-answer
+  useEffect(() => {
+    if (!homeSeen.current || busy || !keeper) return;
+    const who = keeper;
+    const t = window.setTimeout(() => {
+      void browserCache()?.write(who, provider, {
+        session: resume?.id || "", cwd: resume?.cwd, models, default: homeDefault.current, items,
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [items, busy, resume, models, provider, keeper]);
 
   const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem(modelKey(provider), m); }, [provider]);
 

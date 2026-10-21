@@ -20,15 +20,17 @@ export type Me = {
   logins?: { machine: string; login: string }[]; // the (machine, login) pairs that are theirs
   reach?: { wechat: boolean }; // can the notices find them (claude-fleet#4057); absent = the service account's road is off
   view_as?: { person: string; name: string; by: string }; // an admin looking through their eyes, read-only (claude-fleet#3944)
+  read_only?: boolean; // a read-only console ticket (task T844)
 };
 export type MeState = { me: Me | null; loading: boolean };
 let meCache: Promise<Me | null> | null = null;
+// meOnce: the page's one /v1/me read, shared by every caller
+export const meOnce = () => (meCache ??= getJSON<Me>("/v1/me"));
 export function useMe(): MeState {
   const [s, set] = useState<MeState>({ me: null, loading: true });
   useEffect(() => {
-    meCache ??= getJSON<Me>("/v1/me");
     let live = true;
-    meCache.then((me) => live && set({ me, loading: false }));
+    meOnce().then((me) => live && set({ me, loading: false }));
     return () => { live = false; };
   }, []);
   return s;
