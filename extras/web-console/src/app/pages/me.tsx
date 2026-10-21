@@ -20,8 +20,8 @@ export default function MePage() {
   return (
     <Tabs value={cur.id} onValueChange={(v) => nav(`/me/${v}`, { replace: true })} className="gap-0">
       <div className={cn("mx-auto w-full px-4 pt-4 md:px-6 md:pt-6", cur.wide ? "max-w-3xl" : "max-w-2xl")}>
-        <TabsList className="grid w-full grid-cols-4 sm:inline-flex sm:w-auto" aria-label={tr("我的", "Me")}>
-          {ME_TABS.map((t) => <TabsTrigger key={t.id} value={t.id} className="px-2"><t.icon />{t.label}</TabsTrigger>)}
+        <TabsList className="grid w-full grid-cols-4 max-sm:group-data-[orientation=horizontal]/tabs:h-[50px] sm:inline-flex sm:w-auto" aria-label={tr("我的", "Me")}>
+          {ME_TABS.map((t) => <TabsTrigger key={t.id} value={t.id} className="px-2 max-sm:h-11"><t.icon />{t.label}</TabsTrigger>)}
         </TabsList>
       </div>
       <TabsContent value={cur.id}>

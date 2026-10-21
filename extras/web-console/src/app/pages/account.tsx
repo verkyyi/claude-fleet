@@ -67,7 +67,7 @@ export default function AccountPage() {
       ) : null}
       {me?.can_logout ? (
         <SignOut>
-          <Button type="submit" variant="outline" className="h-10 w-full rounded-full">
+          <Button type="submit" variant="outline" className="h-11 w-full rounded-full md:h-10">
             <LogOut />{tr("退出登录", "Sign out")}
           </Button>
         </SignOut>
