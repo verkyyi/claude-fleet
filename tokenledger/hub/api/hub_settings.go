@@ -188,6 +188,8 @@ var hubSettings = map[string]hubSetting{
 		check: onOff(TrialOnceKey, "on")},
 	TrialCredAllowKey: {def: `"*"`, help: "the subscriptions a trial person may use (they are never listed one by one): \"*\" every one the trial is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, [] none — trials then wait 「试用暂时没有可用订阅」; approval writes it as the new member's own list (claude-fleet#4260)",
 		check: checkTrialCredAllow},
+	TrialSourcesKey: {def: trialSourcesDefault, help: "which subscription sources a trial identity (立即体验, a member on trial terms, a scanned trial code) may spend — a comma list of pool (the shared pool: subscription + api), subscription (the pool's personal subscriptions), api (the pool's commercial API keys) and byo (the person's own, 自带); pool,byo = every source, as before; byo = only their own — with none connected the try page offers 「接上我自己的订阅」 and the proxy refuses with that reason; a full member is never limited (WACK C1)",
+		check: checkTrialSources},
 	SpareCredAllowKey: {def: `"*"`, help: "the subscriptions a spare login may use, and only while its own create / reset is in flight (its readiness check's one reply — a spare is minted by the hub and never listed one by one): \"*\" every one it is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, [] none — new spares then fail their check; a ready spare and a claimed one get nothing from it (claude-fleet NKTP)",
 		check: checkSpareCredAllow},
 	TrialMaxSecsKey: {def: "900", help: "a trial's time on a machine, in seconds — whichever of this and fleet.trial.max_msgs comes first ends it and gives the machine back (claude-fleet#4059)",

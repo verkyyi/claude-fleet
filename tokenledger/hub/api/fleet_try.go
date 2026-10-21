@@ -56,6 +56,9 @@ const (
 	TryClaimPath  = "/v1/try/claim"
 	TryTimingPath = "/v1/try/timing"
 	TryStatsPath  = "/v1/fleet/try/stats"
+	// TryOwnPagePath is where a trial connects its own subscription: the
+	// console's usage page, which carries 我自己的订阅 (WACK C1).
+	TryOwnPagePath = AppPrefix + "/me/usage"
 
 	// trialInviter is the created_by of a trial invite: no person made it.
 	trialInviter = "trial"
@@ -115,7 +118,7 @@ type tryAnswer struct {
 	Next     string `json:"next,omitempty"`     // where to go now
 	Position int    `json:"position,omitempty"` // people ahead in line
 	ETASecs  int    `json:"eta_secs,omitempty"` // roughly how long until a seat
-	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota · nosub · no_spare
+	Reason   string `json:"reason,omitempty"`   // why waiting: full · busy · load · quota · nosub · byo · no_spare
 	// Applied is a tried person's request state (pending · approved ·
 	// rejected · withdrawn), "" for none.
 	Applied string `json:"applied,omitempty"`
@@ -253,6 +256,11 @@ func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAn
 	}
 	host, noSpare := s.trialMachine(now)
 	why := s.trialHold(host, now)
+	if s.trialNeedsOwn(pid) {
+		// fleet.trial.sources leaves it only its own subscription, and it
+		// has none: a seat would only answer the proxy's refusal (WACK C1).
+		why = trialWaitBYO
+	}
 	if why == trialWaitBusyNoHost && noSpare {
 		why = trialWaitNoSpare
 		s.trialNoSpareAlert(now)
@@ -448,6 +456,7 @@ var tryTmpl = template.Must(template.New("try").Funcs(pageFuncs(i18n.EN)).Parse(
  data-w-dayfull="{{t "try.dayfull"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
  data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-r-nosub="{{t "try.r.nosub"}}"
  data-w-r-no_spare="{{t "try.r.no_spare"}}" data-w-reach="{{t "try.reach"}}"
+ data-w-r-byo="{{t "try.r.byo"}}" data-w-own="{{t "try.own"}}"
  data-w-paused="{{t "try.paused"}}" data-w-resume="{{t "try.resume"}}" data-w-resuming="{{t "try.resuming"}}" data-w-capped="{{t "try.capped"}}">
 <h1>{{t "try.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{t "try.lead"}}</p>
@@ -542,7 +551,7 @@ const tryScript = `(function () {
       })
       .catch(function () { say(w("fail")); go.disabled = false; });
   };
-  var paused = false, resumeAt = 0;
+  var paused = false, own = false, resumeAt = 0;
   var claim = function (resume) {
     step(2);
     if (resume) { resumeAt = Date.now(); say(w("resuming")); }
@@ -573,6 +582,13 @@ const tryScript = `(function () {
           go.textContent = j.applied ? w("see") : w("apply"); go.disabled = false;
           return;
         }
+        if (j.reason === "byo") {
+          // only their own subscription may be spent, and none is connected
+          own = true; clock.hidden = true;
+          say(w("r-byo"));
+          go.textContent = w("own"); go.disabled = false;
+          return;
+        }
         if (j.state === "day_full") { say(w("dayfull")); setTimeout(function () { claim(false); }, 60000); return; }
         var mins = Math.max(1, Math.round((j.eta_secs || 60) / 60));
         var why = j.reason ? w("r-" + j.reason) : "";
@@ -583,7 +599,8 @@ const tryScript = `(function () {
       .catch(function () { say(w("fail")); go.disabled = false; });
   };
   go.addEventListener("click", function () {
-    if (done) location.assign("` + ApplyPath + `");
+    if (own) location.assign("` + TryOwnPagePath + `");
+    else if (done) location.assign("` + ApplyPath + `");
     else if (paused) { paused = false; go.disabled = true; claim(true); }
     else start();
   });
@@ -618,6 +635,8 @@ func init() {
 		"try.r.busy":  {i18n.EN: "The machines are busy right now.", i18n.ZhCN: "机器这会儿正忙。"},
 		"try.r.load":  {i18n.EN: "The machines are under load right now.", i18n.ZhCN: "机器这会儿负载高。"},
 		"try.r.quota": {i18n.EN: "The shared subscription is running low for now.", i18n.ZhCN: "共用的订阅额度这会儿偏紧。"},
+		"try.r.byo":   {i18n.EN: "The trial now runs on your own subscription only, and you have not connected one yet.", i18n.ZhCN: "试用现在只用你自己的订阅，你还没有接上。"},
+		"try.own":     {i18n.EN: "Connect my own subscription", i18n.ZhCN: "接上我自己的订阅"},
 		"try.r.nosub": {i18n.EN: "The trial has no subscription to use right now.", i18n.ZhCN: "试用暂时没有可用订阅。"},
 		"try.reach":   {i18n.EN: "Following 二四网络科技? We'll tell you on WeChat when it's your turn.", i18n.ZhCN: "关注了「二四网络科技」的，排到时微信通知你。"},
 

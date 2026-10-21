@@ -444,7 +444,7 @@ func optional(s string, ok bool) string {
 // PrincipalID is a person, or store.PoolPrincipal ("pool") for a shared-pool
 // account every active principal may lease.
 type FleetCredentialRequest struct {
-	Action      string           `json:"action"` // put | delete | bind | plan
+	Action      string           `json:"action"` // put | delete | bind | plan | source
 	PrincipalID string           `json:"principal_id"`
 	Provider    string           `json:"provider"`
 	Account     string           `json:"account"`
@@ -457,6 +457,9 @@ type FleetCredentialRequest struct {
 	// provider's own value (max, pro, prolite …), never a label. "" clears.
 	Plan          string `json:"plan,omitempty"`
 	RateLimitTier string `json:"rate_limit_tier,omitempty"`
+	// SourceClass is source's argument (WACK C1): subscription or api, for
+	// a pool row; "" clears.
+	SourceClass string `json:"source_class,omitempty"`
 }
 
 // planValueRE is a provider plan value or tier: lower-case words, as the
@@ -516,6 +519,9 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			PlanSource   string      `json:"plan_source,omitempty"`
 			PlanAt       *time.Time  `json:"plan_at,omitempty"`
 			PlanTier     string      `json:"plan_tier,omitempty"`
+			// Source: the row's source class as fleet.trial.sources reads
+			// it (subscription · api · byo — WACK C1).
+			Source string `json:"source"`
 			// What the plan costs a month now (subscription_plans, by plan ×
 			// provider — claude-fleet EEJD); absent when nobody priced it.
 			MonthlyCost *float64 `json:"monthly_cost,omitempty"`
@@ -548,7 +554,7 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 					planAt = &c.CreatedAt
 				}
 			}
-			row := credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view, Plan: plan, PlanSource: source, PlanAt: planAt}
+			row := credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view, Plan: plan, PlanSource: source, PlanAt: planAt, Source: c.Source()}
 			if source == "admin" {
 				row.PlanTier = s.Vault.PlanTier(c)
 			}
@@ -670,14 +676,33 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 				audit.Detail += " tier=" + tier
 			}
 			audit.Detail += " · "
+		case "source":
+			// Record what a pool subscription is (WACK C1): a personal
+			// subscription or a commercial API key — what fleet.trial.sources
+			// chooses by. "" clears it (read as a subscription).
+			class := strings.TrimSpace(req.SourceClass)
+			if req.PrincipalID != store.PoolPrincipal || req.Provider == credvault.GitHub || (class != "" && !store.ValidPoolSource(class)) {
+				httpError(w, http.StatusBadRequest, "source needs a pool claude or codex subscription and source_class subscription or api (\"\" clears it); a person's own subscription is always byo")
+				return
+			}
+			if err := s.setCredentialSource(req.PrincipalID, req.Provider, req.Account, class, time.Now()); err != nil {
+				code := http.StatusInternalServerError
+				if errors.Is(err, store.ErrNoCredential) {
+					code = http.StatusNotFound
+				}
+				httpError(w, code, err.Error())
+				return
+			}
+			audit.Action = store.CredSource
+			audit.Detail = "source_class=" + class + " · "
 		default:
-			httpError(w, http.StatusBadRequest, "action must be put, delete, bind or plan")
+			httpError(w, http.StatusBadRequest, "action must be put, delete, bind, plan or source")
 			return
 		}
 		// Who did it (claude-fleet#1990): the audit page names the admin.
 		audit.Detail += "by " + actorOf(r)
 		_ = s.Store.AddCredAudit(audit)
-		if req.Action != "bind" && req.Action != "plan" {
+		if req.Action != "bind" && req.Action != "plan" && req.Action != "source" {
 			s.BroadcastCreds("credential " + req.Action) // every node leases now (#3744)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})
