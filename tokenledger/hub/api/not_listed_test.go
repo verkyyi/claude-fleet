@@ -13,7 +13,7 @@ import (
 // 名单外那一页 (claude-fleet#4050): GitHub, WeChat and a proven mail the list
 // does not name all end the same way — 302 /apply with the applicant note,
 // no hub_users row, no principal, no session — and /apply is the page that
-// says where they stand, with 申请使用 as its first button (trial off).
+// is the form, the invite link a line under it (trial off — T794).
 func TestNotListedEveryWayLandsOnApply(t *testing.T) {
 	h := newWaysHarness(t)
 	people := func() int {
@@ -80,17 +80,15 @@ func TestNotListedEveryWayLandsOnApply(t *testing.T) {
 				t.Fatal(err)
 			}
 			body := readAll(t, resp)
-			if resp.StatusCode != http.StatusOK || !strings.Contains(body, "你还不在名单上") ||
-				!strings.Contains(body, "目前限定开放") || !strings.Contains(body, w.shown) {
+			// Nothing to choose (the trial off): the form is the page (T794),
+			// the invite link and another way one line each.
+			if resp.StatusCode != http.StatusOK || !strings.Contains(body, `action="/apply"`) ||
+				!strings.Contains(body, "目前限定开放") || !strings.Contains(body, strings.TrimPrefix(w.shown, "@")) {
 				t.Fatalf("/apply = %d:\n%s", resp.StatusCode, body)
-			}
-			first := strings.Index(body, `class="btn primary"`)
-			if first < 0 || !strings.HasPrefix(body[first:], `class="btn primary" href="/apply?new=1">申请使用`) {
-				t.Fatalf("the first button is not 申请使用:\n%s", body)
 			}
 			if strings.Contains(body, "先试 15 分钟") || !strings.Contains(body, `href="/apply?invite=1"`) ||
 				!strings.Contains(body, `href="/app/signin"`) {
-				t.Fatalf("buttons:\n%s", body)
+				t.Fatalf("links:\n%s", body)
 			}
 		})
 	}

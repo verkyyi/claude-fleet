@@ -253,7 +253,7 @@ func TestWeChatFirstScanOpensNoAccount(t *testing.T) {
 		t.Fatalf("a first scan hung the WeChat on %s", pid)
 	}
 	resp, body := stranger.do(http.MethodGet, h.http.URL+ApplyPath, nil)
-	if resp.StatusCode != 200 || !strings.Contains(body, "陌生人") || !strings.Contains(body, `href="/apply?new=1"`) {
+	if resp.StatusCode != 200 || !strings.Contains(body, "陌生人") || !strings.Contains(body, `action="/apply"`) {
 		t.Fatalf("/apply after the first scan = %d:\n%s", resp.StatusCode, body)
 	}
 	// Forcing a bind anyway opens nothing.

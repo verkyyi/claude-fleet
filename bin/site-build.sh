@@ -227,7 +227,8 @@ for l, _ in LANGS:
 TIMED_KEYS = ('description', 'og_description', 'try', 'sub', 'steps_h', 'end_h')
 # The apply-only variant (issue #4269): these words say <key>_apply instead.
 APPLY_KEYS = ('description', 'og_description', 'try', 'sub', 'fine', 's1', 'end_h', 'offer',
-              'price_trial', 'price_trial_p', 'price_trial_d', 'llms_summary')
+              'price_trial', 'price_trial_p', 'price_trial_d', 'llms_summary',
+              'join_h', 'join_p', 'join_flow', 'ph_h', 'ph_flow', 'price_line')
 for _k in APPLY_KEYS:
     if _k + '_apply' not in keys:
         fail('strings.zh.json: no %s_apply (the page with the trial off says it)' % _k)

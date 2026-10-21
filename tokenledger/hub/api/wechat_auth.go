@@ -116,6 +116,8 @@ type wechatFlow struct {
 	Exp   int64  `json:"e"`
 	// Link is the person a ?link=1 start was made by (登录方式 · 加微信).
 	Link string `json:"l,omitempty"`
+	// Next is the website's front page a silent start came from (T794).
+	Next string `json:"n,omitempty"`
 }
 
 // wechatBind is the binding cookie's body: a WeChat nobody's account
@@ -153,8 +155,9 @@ func (s *Server) handleWeChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if relay {
 		// Inside WeChat through workbench's relay: no secret of ours, no
-		// prompt (claude-fleet#4055).
-		s.wxRelayStart(w, r)
+		// prompt (claude-fleet#4055). ?next= a front page: the website asked
+		// who is looking, and the answer goes back there (T794).
+		s.wxRelayStart(w, r, homeNext(r.URL.Query().Get("next")))
 		return
 	}
 	road := wechatRoadWeb

@@ -47,57 +47,47 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .btn-p:hover{background:var(--fleet-clay-hi);border-color:var(--fleet-clay-hi)}
 .btn svg{width:19px;height:19px}
 
-/* nav */
+/* nav — one quiet row: the language is a small link, not a control (T794) */
 .nav{position:sticky;top:0;z-index:30;background:rgba(25,24,42,.84);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--fleet-line-2)}
-.nav .wrap{display:flex;align-items:center;height:64px;gap:14px}
+.nav .wrap{display:flex;align-items:center;height:60px;gap:14px}
 .brand{display:flex;align-items:center;gap:10px;font:750 19px/1 var(--fleet-font-display)}
-.brand svg{width:32px;height:32px}
-.nav-r{margin-left:auto;display:flex;align-items:center;gap:10px}
-.lang{display:inline-flex;border:1px solid var(--fleet-line);border-radius:999px;padding:3px;font:500 13px/1 var(--fleet-font-mono)}
-.lang a{color:var(--fleet-muted);padding:7px 10px;border-radius:999px}
-.lang a[aria-current=page]{background:var(--fleet-surface-2);color:var(--fleet-ink)}
-.nav .btn{height:40px;padding:0 18px;font-size:15px}
-.signin{font-size:15px;color:var(--fleet-ink-2);padding:0 6px}
-/* signed in (claude-fleet#3798): 进入控制台 · 退出 instead of 登录 · 试用 */
+.brand svg{width:30px;height:30px}
+.nav-r{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px}
+.nav-r a{color:var(--fleet-ink-2)} .nav-r a:hover{color:var(--fleet-ink)}
+.lang{display:inline-flex;align-items:center;gap:5px;font:400 13px/1 var(--fleet-font-ui);color:var(--fleet-muted)!important}
+.lang svg{width:14px;height:14px}
+.nav .btn{height:38px;padding:0 16px;font-size:14.5px;color:var(--fleet-on-clay)}
 .nav-r [hidden]{display:none}
-.out{margin:0}.out button{font:inherit;font-size:15px;color:var(--fleet-ink-2);background:none;border:0;padding:0 6px;cursor:pointer;white-space:nowrap}
-.links{display:flex;gap:22px;margin-right:10px;font-size:15px}
-.links a{color:var(--fleet-ink-2)}
-.links a:hover{color:var(--fleet-ink)}
+.out{margin:0}.out button{font:inherit;font-size:15px;color:var(--fleet-ink-2);background:none;border:0;padding:0;cursor:pointer;white-space:nowrap}
 
-/* hero */
-.hero{position:relative;padding:84px 0 48px;text-align:center;overflow:hidden}
-.hero::before{content:"";position:absolute;left:50%;top:180px;transform:translateX(-50%);width:1100px;height:700px;background:radial-gradient(closest-side,rgba(217,118,90,.16),transparent 72%);pointer-events:none}
-.hero h1{position:relative;font-size:72px;line-height:1.05;font-weight:750;letter-spacing:-.02em}
-html[lang=zh-CN] .hero h1{font-size:66px;line-height:1.15;letter-spacing:0}
+/* hero: everything on one screen — the words and the replay left, the way in right */
+.hero{position:relative;padding:30px 0 22px;overflow:hidden}
+.hero::before{content:"";position:absolute;left:30%;top:120px;transform:translateX(-50%);width:1000px;height:640px;background:radial-gradient(closest-side,rgba(217,118,90,.14),transparent 72%);pointer-events:none}
+.grid{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 360px;grid-template-areas:"say join" "demo join";column-gap:44px;align-items:start}
+.say{grid-area:say}.demo{grid-area:demo}.join{grid-area:join}
+.kick{display:inline-flex;align-items:center;gap:8px;font:500 13px/1 var(--fleet-font-mono);color:var(--fleet-sand);background:rgba(236,211,184,.07);border:1px solid rgba(236,211,184,.2);padding:7px 12px;border-radius:999px}
+.kick i{width:6px;height:6px;border-radius:50%;background:var(--fleet-clay)}
+.hero h1{margin-top:16px;font-size:58px;line-height:1.06;font-weight:750;letter-spacing:-.02em}
+html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .hero h1 em{font-style:normal;color:var(--fleet-clay)}
-.sub{position:relative;margin-top:18px;font-size:21px;color:var(--fleet-ink-2)}
-.sub b{color:var(--fleet-ink);font-weight:600}
-.cta{position:relative;display:flex;gap:12px;justify-content:center;margin-top:32px;flex-wrap:wrap}
-.fine{position:relative;margin-top:16px;font:400 13.5px var(--fleet-font-mono);color:var(--fleet-muted)}
+.sub{margin-top:14px;font-size:17px;line-height:1.6;color:var(--fleet-ink-2);max-width:700px}
+.trust{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:16px 0 0;padding:0}
+.trust li{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--fleet-ink);background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:999px;padding:6px 12px 6px 10px}
+.trust svg{width:16px;height:16px;color:var(--fleet-clay)}
+.can{margin-top:10px;font-size:14px;color:var(--fleet-muted)}
 
-/* demo stage */
-.stage{position:relative;margin:56px auto 0;max-width:1000px}
-.dev-tabs{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--fleet-line);border-radius:999px;background:var(--fleet-bg-2);margin-bottom:18px}
-.dev-tabs button{border:0;background:none;color:var(--fleet-muted);font:500 14px var(--fleet-font-ui);padding:8px 16px;border-radius:999px;cursor:pointer;display:inline-flex;gap:7px;align-items:center}
-.dev-tabs button svg{width:16px;height:16px}
-.dev-tabs button[aria-pressed=true]{background:var(--fleet-surface-2);color:var(--fleet-ink)}
-
-.screen{position:relative;margin:0 auto;background:var(--fleet-term);border:1px solid var(--fleet-line);box-shadow:0 50px 100px -40px rgba(0,0,0,.75),0 0 0 1px rgba(255,255,255,.02) inset;overflow:hidden;text-align:left;font:400 15px/1.6 var(--fleet-font-mono);color:#d9d3e2;transition:width .35s,height .35s,border-radius .35s}
-.stage[data-dev=pc] .screen{width:100%;height:540px;border-radius:14px}
-.stage[data-dev=phone] .screen{width:360px;height:640px;border-radius:44px;border-width:10px;border-color:#2b2940;font-size:13px}
+/* the replay, one size */
+.demo{margin-top:20px}
+.screen{position:relative;background:var(--fleet-term);border:1px solid var(--fleet-line);border-radius:12px;box-shadow:0 40px 80px -40px rgba(0,0,0,.75);overflow:hidden;height:250px;font:400 12.5px/1.5 var(--fleet-font-mono);color:#d9d3e2}
 .chrome{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:#1b1a2b;border-bottom:1px solid #26243b;font:500 12.5px var(--fleet-font-ui);color:var(--fleet-muted)}
 .chrome i{width:11px;height:11px;border-radius:50%;background:#3a3753}
 .chrome span{margin-left:10px}
-.stage[data-dev=phone] .chrome{justify-content:center;height:34px}
-.stage[data-dev=phone] .chrome i{display:none}
 .topline{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 16px;background:#16152a;border-bottom:1px solid #22203a;font-size:.86em;white-space:nowrap;overflow:hidden}
 .topline .l{display:flex;gap:8px;align-items:center;overflow:hidden;text-overflow:ellipsis}
 .topline .st{font-weight:600}
 .topline .st.w{color:#8bd5ca} .topline .st.d{color:var(--fleet-blue)}
 .topline .t{color:#a9b1d6;font-weight:600;overflow:hidden;text-overflow:ellipsis}
 .topline .r{color:var(--fleet-muted)}
-.stage[data-dev=phone] .topline .r{display:none}
 .term{padding:18px 20px;display:flex;flex-direction:column;gap:10px;height:calc(100% - 38px - 33px);overflow:hidden}
 .ln{opacity:0;transform:translateY(4px);transition:.25s}
 .ln.on{opacity:1;transform:none}
@@ -122,194 +112,164 @@ html[lang=zh-CN] .hero h1{font-size:66px;line-height:1.15;letter-spacing:0}
 .panel .grp{padding:8px 14px 2px;color:var(--fleet-muted);font-size:.85em}
 .panel .sep{border-top:1px solid #2c2a44;margin:4px 0}
 .panel .n{color:var(--fleet-blue)}
-.stage[data-dev=phone] .panel{top:80px;width:88%}
 .key{position:absolute;right:18px;bottom:64px;font:600 15px var(--fleet-font-mono);color:var(--fleet-ink);background:#2a2841;border:1px solid #47436a;border-bottom-width:3px;border-radius:9px;padding:7px 12px;opacity:0;transform:scale(.9);transition:.15s}
 .key.on{opacity:1;transform:none}
-.replay{justify-content:center;margin-top:14px;font:500 12px var(--fleet-font-mono);color:var(--fleet-muted);display:flex;gap:6px;align-items:center}
-.replay i{width:6px;height:6px;border-radius:50%;background:var(--fleet-clay)}
-.case{max-width:640px;margin:14px auto 0;color:var(--fleet-ink-2);font-size:15px;line-height:1.6}
-.case b{color:var(--fleet-clay);font-weight:600;margin-right:8px}
-.case .who{color:var(--fleet-ink);font-weight:600;margin-right:8px}
-.case a{color:var(--fleet-ink);white-space:nowrap}
+.term{padding:10px 16px;gap:5px}
+.card{padding:8px 12px}
+.card .kp b{font-size:15px}
+.prompt{padding:6px 12px}
+.panel{top:58px}
+.case{margin-top:10px;color:var(--fleet-muted);font-size:13.5px;line-height:1.55}
+.case b{color:var(--fleet-clay);font-weight:600;margin-right:6px}
+.case .who{color:var(--fleet-ink-2);font-weight:600;margin-right:6px}
 
-/* sections */
-section.sec{padding:120px 0}
-.sh{text-align:center;max-width:760px;margin:0 auto 56px}
-.sh h2{font-size:48px;line-height:1.1;font-weight:750;letter-spacing:-.015em}
-html[lang=zh-CN] .sh h2{font-size:44px;line-height:1.25;letter-spacing:0}
-.sh h2 em{font-style:normal;color:var(--fleet-clay)}
-
-/* steps */
-.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;list-style:none;margin:0;padding:0}
-.step{background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:16px;overflow:hidden}
-.shot{height:200px;background:var(--fleet-term);border-bottom:1px solid var(--fleet-line-2);display:flex;align-items:center;justify-content:center;padding:18px;position:relative}
-.step-f{display:flex;align-items:center;gap:12px;padding:18px 20px}
-.num{width:30px;height:30px;border-radius:50%;background:var(--fleet-clay-soft);border:1px solid var(--fleet-clay-line);color:var(--fleet-clay);display:grid;place-items:center;font:600 14px var(--fleet-font-mono);flex:none}
-.step-f h3{font:600 18px/1.3 var(--fleet-font-ui);flex:1}
-.sec-t{font:600 14px var(--fleet-font-mono);color:var(--fleet-sand);background:rgba(236,211,184,.08);border:1px solid rgba(236,211,184,.2);padding:4px 9px;border-radius:999px}
-.s-login{width:100%;max-width:250px;background:#1d1c30;border:1px solid #2c2a44;border-radius:12px;padding:16px;text-align:center;font-size:13px;color:var(--fleet-ink-2)}
-.s-login .gh{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--fleet-ink);color:#141322;border-radius:8px;padding:9px;font-weight:600;margin-top:10px}
-.s-login .gh svg{width:16px;height:16px}
-.s-login .or{margin-top:9px;font-size:12px;color:var(--fleet-muted)}
-.s-ready{width:100%;max-width:270px;font:400 12.5px/1.8 var(--fleet-font-mono);color:var(--fleet-ink-2)}
-.s-ready .bar{height:6px;border-radius:9px;background:#2a2841;overflow:hidden;margin:8px 0 10px}
-.s-ready .bar i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--fleet-clay-deep),var(--fleet-clay))}
-.term-shot{margin:0;align-self:stretch;width:100%;overflow:hidden;white-space:pre;font:400 10.5px/1.45 var(--fleet-font-mono);color:#d9d3e2;display:flex;flex-direction:column;justify-content:flex-end}
-.s-first{width:100%;max-width:280px;font:400 12.5px/1.75 var(--fleet-font-mono);color:#d9d3e2}
-.clock{margin-top:22px;display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center;background:var(--fleet-bg-2);border:1px solid var(--fleet-line-2);border-radius:16px;padding:22px 26px}
-.big{font:600 56px/1 var(--fleet-font-mono);letter-spacing:-.02em;color:var(--fleet-ink);display:flex;align-items:baseline;gap:12px}
-.big small{font:500 14px var(--fleet-font-ui);color:var(--fleet-muted);letter-spacing:0}
-.track{position:relative;height:12px;border-radius:999px;background:#26243b;display:flex;overflow:hidden}
-.track i{display:block;height:100%}
-.track .a{background:#8f4b3a}.track .b{background:var(--fleet-clay-deep)}.track .c{background:var(--fleet-clay)}
-.ticks{display:flex;justify-content:space-between;font:400 12px var(--fleet-font-mono);color:var(--fleet-muted);margin-top:8px}
-.src{font:400 12px var(--fleet-font-mono);color:var(--fleet-muted);margin-top:8px}
-
-/* gallery */
-.gal{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;list-style:none;margin:0;padding:0}
-.tile{border-radius:14px;overflow:hidden;border:1px solid var(--fleet-line-2);background:var(--fleet-surface)}
-.thumb{aspect-ratio:4/3;position:relative;overflow:hidden}
-.tile p{padding:12px 14px;font-weight:600;font-size:15.5px}
-.t1{background:#f6f1ea;padding:14px}
-.t1 .h{height:8px;width:46%;background:#2a2841;border-radius:4px;margin-bottom:10px}
-.t1 .k{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px}
-.t1 .k i{height:26px;border-radius:5px;background:#fff;border:1px solid #e6ddd1}
-.t1 .b{display:flex;gap:5px;align-items:flex-end;height:56px}
-.t1 .b i{flex:1;background:var(--fleet-clay);border-radius:2px 2px 0 0}
-.t1 .b i:nth-child(even){background:#e8b9a8}
-.t2{background:linear-gradient(160deg,#2b2140,var(--fleet-bg));padding:16px;display:flex;flex-direction:column;gap:8px}
-.t2 .h{height:12px;width:70%;background:var(--fleet-ink);border-radius:4px}
-.t2 .h2{height:12px;width:45%;background:var(--fleet-clay);border-radius:4px}
-.t2 .s{height:6px;width:80%;background:#4a4664;border-radius:3px}
-.t2 .btnx{margin-top:auto;height:20px;width:38%;background:var(--fleet-clay);border-radius:99px}
-.t3{background:#20203a;display:grid;place-items:center}
-.t3 .sl{width:72%;aspect-ratio:16/9;background:#f3ede6;border-radius:6px;padding:10%;display:flex;flex-direction:column;gap:6%;box-shadow:12px 12px 0 -2px #3a3753}
-.t3 .sl i{display:block;height:9%;background:#2a2841;border-radius:3px}
-.t3 .sl i:first-child{width:60%;height:14%;background:var(--fleet-clay)}
-.t3 .sl i:nth-child(3){width:70%}
-.t4{background:#120f1f;display:grid;place-items:center}
-.t4 .orb{width:46%;aspect-ratio:1;border-radius:50%;background:conic-gradient(from 0deg,var(--fleet-clay),#7b3fa0,var(--fleet-blue),var(--fleet-clay));animation:spin 6s linear infinite;filter:blur(.3px)}
-.t4 .play{position:absolute;width:42px;height:42px;border-radius:50%;background:rgba(0,0,0,.45);display:grid;place-items:center}
-.t4 .play::after{content:"";border-left:13px solid #fff;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px}
+/* the way in: WeChat first. One card, one state at a time (html[data-j]):
+   scan (a computer) · phone (a phone's browser: open it in WeChat) · wait / member / apply
+   (inside WeChat: who you are comes from the silent authorisation, no code) · in (signed in) */
+.join{margin-top:6px;background:var(--fleet-surface);border:1px solid var(--fleet-line);border-radius:20px;padding:24px 24px 18px;box-shadow:0 40px 90px -50px rgba(0,0,0,.8)}
+.join h2{font:700 22px/1.3 var(--fleet-font-display)}
+.j-scan .m,html[data-j=phone] .j-scan .d{display:none} html[data-j=phone] .j-scan .m{display:inline}
+.j{display:none} html:not([data-j]) .j-scan,html[data-j=scan] .j-scan,html[data-j=phone] .j-scan,html[data-j=wait] .j-wait,html[data-j=member] .j-member,html[data-j=apply] .j-apply,html[data-j=in] .j-in{display:block}
+.qrbox{margin:16px auto 0;width:212px;height:212px;border-radius:14px;background:#fff;display:grid;place-items:center;position:relative;color:#57536b;font-size:13px;text-align:center}
+.qrbox>svg{width:184px;height:184px;display:block}
+.qrbox .wx{position:absolute;left:50%;top:50%;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:10px;background:#07c160;border:3px solid #fff;display:grid;place-items:center}
+.qrbox .wx svg{width:24px;height:24px}
+.qrbox a{color:var(--fleet-clay-deep);text-decoration:underline}
+.qrbox.sm{width:132px;height:132px;margin:0;flex:none}.qrbox.sm>svg{width:116px;height:116px}.qrbox.sm .wx{width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:7px;border-width:2px}.qrbox.sm .wx svg{width:16px;height:16px}
+.scan{margin-top:12px;text-align:center;font-size:14.5px;font-weight:600}
+.flow{margin-top:14px;padding-top:12px;border-top:1px solid var(--fleet-line-2);font-size:13.5px;line-height:1.55;color:var(--fleet-ink-2);text-align:center}
+.wxbtn,.orqr,.okline{display:none}
+.wxbtn{width:100%;margin-top:16px;background:#07c160;border-color:#07c160;color:#fff}
+.wxbtn:hover{background:#06ad56;border-color:#06ad56}
+.wxbtn svg{width:22px;height:22px}
+.wide{width:100%;margin-top:14px}
+.orqr{margin:12px auto 0;background:none;border:0;color:var(--fleet-muted);font:inherit;font-size:13px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.okline{margin-top:10px;font-size:13px;color:var(--fleet-ok);line-height:1.5}
+html[data-j=phone] .wxbtn,html[data-j=phone] .orqr{display:flex}
+html[data-j=phone] .okline:not([hidden]){display:block}
+html[data-j=phone] .j-scan .qrbox,html[data-j=phone] .j-scan .scan{display:none}
+html[data-j=phone].qr .j-scan .qrbox{display:grid} html[data-j=phone].qr .j-scan .scan{display:block} html[data-j=phone].qr .orqr{display:none}
+.alt{margin-top:10px;text-align:center;font-size:14px}.alt a{color:var(--fleet-clay);text-decoration:underline;text-underline-offset:3px}
+.timed{margin-top:10px;text-align:center;font-size:13px;color:var(--fleet-ink-2)}.timed em{font-style:normal;color:var(--fleet-clay)}.timed b{font:600 13px var(--fleet-font-mono);margin:0 4px}.timed small{display:block;color:var(--fleet-muted);font-size:12px}
+.sec-t{font:600 12px var(--fleet-font-mono);color:var(--fleet-sand);margin:0 2px}
+.other{display:block;margin-top:12px;text-align:center;font-size:13px;color:var(--fleet-muted)!important;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--fleet-line)}
+.wait{display:flex;gap:10px;align-items:center;justify-content:center;padding:28px 0;color:var(--fleet-ink-2);font-size:15px}
+.wait i{width:16px;height:16px;border-radius:50%;border:2px solid var(--fleet-line);border-top-color:var(--fleet-clay);animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.jwho{display:flex;gap:12px;align-items:center}
+.jwho .av{flex:none;width:44px;height:44px;border-radius:50%;background:var(--fleet-clay-soft);border:1px solid var(--fleet-clay-line);color:var(--fleet-clay);display:grid;place-items:center;font:600 18px var(--fleet-font-ui)}
+.jwho b{display:block;font:700 19px/1.3 var(--fleet-font-display)}
+.jwho small{display:block;margin-top:3px;font-size:13.5px;line-height:1.5;color:var(--fleet-ink-2)}
+.j-apply .unf,html.unfollowed .j-apply .fol{display:none} html.unfollowed .j-apply .unf{display:block}
+.use{display:block;width:100%;margin-top:14px;resize:vertical;min-height:62px;background:var(--fleet-bg-2);border:1px solid var(--fleet-line);border-radius:12px;padding:10px 12px;color:var(--fleet-ink);font:400 15px/1.5 var(--fleet-font-ui)}
+.use::placeholder{color:var(--fleet-muted)}
+.use:focus{outline:2px solid var(--fleet-clay-line);border-color:var(--fleet-clay)}
+.follow{display:none;margin-top:14px;gap:12px;align-items:center;background:var(--fleet-bg-2);border:1px dashed var(--fleet-line);border-radius:14px;padding:10px}
+.follow p{font-size:13.5px;line-height:1.5;color:var(--fleet-ink-2)}
+html.unfollowed .follow{display:flex}
 
-/* trust */
-.trust{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--fleet-line-2);border-radius:16px;overflow:hidden;list-style:none;margin:0;padding:0}
-.trust li{padding:26px 22px;border-left:1px solid var(--fleet-line-2);display:flex;flex-direction:column;gap:10px}
-.trust li:first-child{border-left:0}
-.trust svg{width:24px;height:24px;color:var(--fleet-clay)}
-.trust b{font:600 17px/1.3 var(--fleet-font-ui)}
-.price{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:820px;margin:0 auto}
-.price .pc{background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:18px;padding:26px 26px 24px}
-.price .pc.hl{border-color:var(--fleet-clay-line);background:linear-gradient(0deg,var(--fleet-clay-soft),var(--fleet-clay-soft)),var(--fleet-surface)}
-.price h3{font-family:var(--fleet-font-display);font-size:22px;margin:0 0 6px}
-.price .pp{font-family:var(--fleet-font-display);font-size:34px;font-weight:700;margin:4px 0 10px}
-.price p{margin:0;color:var(--fleet-ink-2);font-size:15.5px}
-.price-note{text-align:center;color:var(--fleet-muted);font-size:14px;margin-top:18px}
-
-/* faq */
-.faq{max-width:760px;margin:0 auto}
-details{border-top:1px solid var(--fleet-line-2)}
-details:last-child{border-bottom:1px solid var(--fleet-line-2)}
-summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:16px;padding:20px 0;font:600 17.5px/1.4 var(--fleet-font-ui)}
-summary::-webkit-details-marker{display:none}
-summary i{color:var(--fleet-clay);font-style:normal;transition:.2s}
-details[open] summary i{transform:rotate(45deg)}
-details p{padding:0 0 20px;color:var(--fleet-ink-2);font-size:16px}
-
-/* end */
-.end{text-align:center;padding:40px 0 120px}
-.end h2{font-size:52px;line-height:1.15;font-weight:750}
-html[lang=zh-CN] .end h2{font-size:46px}
-.end .cta{margin-top:28px}
-footer{border-top:1px solid var(--fleet-line-2);background:var(--fleet-bg-2);padding:30px 0;font-size:14px;color:var(--fleet-muted)}
-footer .wrap{display:flex;gap:24px;align-items:center;flex-wrap:wrap}
-footer nav{display:flex;gap:8px 20px;margin-left:auto;flex-wrap:wrap}
-footer nav a{padding:6px 0}
-footer a:hover{color:var(--fleet-ink)}
-.oss{flex-basis:100%;margin:6px 0 0;font-size:14px;color:var(--fleet-muted)}
-.oss b{color:var(--fleet-ink-2);font-weight:500;margin-right:8px}
-.oss a{color:var(--fleet-sand);border-bottom:1px solid rgba(236,211,184,.35);margin-left:6px}
-.disc{width:100%;font-size:12.5px}
+/* one line for price, one for the rest */
+.strip{border-top:1px solid var(--fleet-line-2);padding:11px 0;font-size:14px;color:var(--fleet-ink-2)}
+footer{border-top:1px solid var(--fleet-line-2);background:var(--fleet-bg-2);padding:13px 0;font-size:13.5px;color:var(--fleet-muted)}
+footer .wrap{display:flex;gap:10px 22px;align-items:center;flex-wrap:wrap}
+footer a:hover,footer summary:hover{color:var(--fleet-ink)}
+footer .disc{margin-left:auto;font-size:12.5px}
+.faq summary{list-style:none;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary i{font-style:normal;color:var(--fleet-clay);transition:.2s}
+.faq[open] summary i{transform:rotate(45deg)}
+.faq[open]{flex-basis:100%;order:9}
+.faq .qa{max-width:760px;margin-top:6px}
+.faq .qa details{border-top:1px solid var(--fleet-line-2)}
+.faq .qa summary{display:flex;justify-content:space-between;width:100%;padding:12px 0;font:600 15px/1.4 var(--fleet-font-ui);color:var(--fleet-ink)}
+.faq .qa p{padding:0 0 12px;color:var(--fleet-ink-2);font-size:14.5px}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-@media (max-width:860px){
+@media (max-width:900px){
   body{font-size:16px}
   .wrap{padding:0 20px}
-  .nav .wrap{height:58px;gap:8px}
-  .signin{display:none}
-  .links{display:none}
-  .out button{padding:0 2px}
+  .nav .wrap{height:56px;gap:8px}
+  .nav-r{gap:16px;font-size:14px}
+  .nav-r .docs{display:none}
   .brand{font-size:17px} .brand svg{width:28px;height:28px}
-  .nav .btn{height:38px;padding:0 14px;font-size:14px}
-  .lang a{padding:6px 8px}
-  .hero{padding:52px 0 0}
-  .hero h1,html[lang=zh-CN] .hero h1{font-size:42px;line-height:1.15}
-  .sub{font-size:17.5px}
-  .cta .btn{width:100%}
-  .stage{margin-top:40px}
-  .stage[data-dev=pc] .screen{height:470px;font-size:12.5px;border-radius:12px}
-  .stage[data-dev=pc] .topline .r{display:none}
-  .stage[data-dev=phone] .screen{width:100%;max-width:340px;height:600px}
-  .term{padding:14px}
-  section.sec{padding:80px 0}
-  .sh{margin-bottom:36px}
-  .sh h2,html[lang=zh-CN] .sh h2{font-size:31px;line-height:1.25}
-  .steps{grid-template-columns:1fr;gap:14px}
-  .shot{height:170px}
-  .clock{grid-template-columns:1fr;gap:16px;padding:20px}
-  .big{font-size:46px}
-  .gal{grid-template-columns:1fr 1fr;gap:12px}
-  .tile p{font-size:14.5px;padding:10px 12px}
-  .trust{grid-template-columns:1fr 1fr}
-  .trust li{padding:20px 16px}
-  .trust li:nth-child(3){border-left:0}
-  .trust li:nth-child(n+3){border-top:1px solid var(--fleet-line-2)}
-  .price{grid-template-columns:1fr}
-  .end{padding:20px 0 80px}
-  .end h2,html[lang=zh-CN] .end h2{font-size:32px}
-  footer nav{margin-left:0}
-}
-@media (max-width:440px){
-  /* signed in, a phone's nav holds 进入控制台 · 退出: the mark stands for the name */
-  html.in .brand{font-size:0;gap:0}
-  html.in .nav .btn{padding:0 12px}
+  .hero{padding:24px 0 20px}
+  .grid{grid-template-columns:1fr;grid-template-areas:"say" "join" "demo"}
+  .hero h1,html[lang=zh-CN] .hero h1{font-size:40px;margin-top:14px}
+  .sub{font-size:16px;margin-top:12px}
+  .trust{margin-top:14px;gap:6px}
+  .trust li{font-size:13px;padding:5px 10px 5px 8px}
+  .join{margin-top:22px;padding:20px 18px 14px}
+  .demo{margin-top:22px}
+  .screen{height:250px;font-size:12px}
+  .topline .r{display:none}
+  footer .disc{margin-left:0;flex-basis:100%}
 }
 </style>
 </head>
 <body>
 <a class="skip" href="#top">{{skip}}</a>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mk" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)"/><polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></symbol></svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mk" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)"/><polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="wxm" viewBox="0 0 24 24"><path fill="#fff" d="M9.2 4C5.2 4 2 6.7 2 10.1c0 1.9 1 3.6 2.6 4.7l-.6 2 2.3-1.2c.9.3 1.9.4 2.9.4h.6a5.4 5.4 0 0 1-.2-1.5c0-3.3 3.1-5.9 7-5.9h.6C16.6 5.9 13.2 4 9.2 4zM6.8 7.6a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm4.8 0a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zM16.6 10c-3.3 0-6 2.2-6 5s2.7 5 6 5c.7 0 1.4-.1 2-.3l1.9 1-.5-1.6c1.3-.9 2.6-2.4 2.6-4.1 0-2.8-2.7-5-6-5zm-2 2.6a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm4 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/></symbol></svg>
 
 <header class="nav"><div class="wrap">
   <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>ClaudeFleet</a>
   <div class="nav-r">
-    <nav class="links" aria-label="{{links_group}}"><a href="#what">{{nav_what}}</a><a href="#start">{{nav_start}}</a><a href="#price">{{nav_price}}</a></nav>
-    <nav class="lang" aria-label="{{lang_group}}"><a href="/" hreflang="zh-CN" lang="zh-CN" data-set="zh"{{cur_zh}}>中</a><a href="/en/" hreflang="en" lang="en" data-set="en"{{cur_en}}>EN</a></nav>
-    <a class="signin" href="/app" data-out>{{signin}}</a>
-    <a class="btn btn-p" href="{{try_href}}" data-out>{{try}}</a>
+    <a class="docs" href="{{docs_path}}">{{docs}}</a>
+    <a href="/app" data-out>{{signin}}</a>
     <a class="btn btn-p" href="/app" id="to-app" hidden>{{console}}</a>
     <form class="out" id="sign-out" method="post" action="/logout" hidden><input type="hidden" name="to" value="{{logout_to}}"><button type="submit">{{signout}}</button></form>
+    <a class="lang" href="{{other_path}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}" data-set="{{other_key}}" aria-label="{{lang_group}}: {{other_name}}"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{lang_switch}}</a>
   </div>
 </div></header>
 
 <main id="top">
-<section class="hero"><div class="wrap">
-  <h1>{{h1}}</h1>
-  <p class="sub">{{sub}}</p>
-  <div class="cta">
-    <a class="btn btn-p" href="{{try_href}}"><!--trial--><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg><!--/trial-->{{try}}</a>
-<!--trial-->
-    <a class="btn" href="/apply" data-out>{{apply}}</a>
-<!--/trial-->
+<section class="hero"><div class="wrap"><div class="grid">
+  <div class="say">
+    <p class="kick"><i></i>{{fine}}</p>
+    <h1>{{h1}}</h1>
+    <p class="sub">{{sub}}</p>
+    <ul class="trust">
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg>{{t1}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{t2}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>{{t3}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg>{{t4}}</li>
+    </ul>
+    <p class="can">{{can}}</p>
   </div>
-  <p class="fine">{{fine}}</p>
 
-  <div class="stage" id="stage" data-dev="pc">
-    <div class="dev-tabs" role="group" aria-label="{{dev_group}}">
-      <button type="button" data-dev="pc" aria-pressed="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>{{dev_pc}}</button>
-      <button type="button" data-dev="phone" aria-pressed="false"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/></svg>{{dev_phone}}</button>
+  <aside class="join" aria-labelledby="join-h">
+    <div class="j j-scan">
+      <h2 id="join-h"><span class="d">{{join_h}}</span><span class="m">{{ph_h}}</span></h2>
+      <button class="btn wxbtn" type="button" id="phopen"><svg aria-hidden="true"><use href="#wxm"/></svg>{{ph_open}}</button>
+      <p class="okline" id="phcopied" hidden>{{ph_copied}}</p>
+      <button class="orqr" type="button" id="orqr">{{ph_orqr}}</button>
+      <div class="qrbox" id="qr" data-p="{{join_p}}"><span>{{join_load}}</span></div>
+      <p class="scan">{{join_scan}}</p>
+      <p class="flow"><span class="d">{{join_flow}}</span><span class="m">{{ph_flow}}</span></p>
+<!--trial-->
+      <p class="alt"><a href="{{try_href}}" data-out>{{try}}</a> · <a href="/apply" data-out>{{apply}}</a></p>
+<!--/trial-->
+<!--timed-->
+      <p class="timed">{{steps_h}} {{t_login}}{{t_machine}}{{t_first}} <b>{{clock}}</b><small>{{drill_src}}</small></p>
+<!--/timed-->
+      <a class="other" href="/app">{{join_other}}</a>
     </div>
+    <div class="j j-wait"><p class="wait"><i></i>{{wx_wait}}</p></div>
+    <div class="j j-member">
+      <p class="jwho"><span class="av" data-av></span><span><b data-hi="{{wx_hi}}"></b><small>{{wx_member_lead}}</small></span></p>
+      <a class="btn btn-p wide" href="/app">{{console}}</a>
+    </div>
+    <form class="j j-apply" method="post" action="/apply">
+      <p class="jwho"><span class="av" data-av></span><span><b data-hi="{{wx_apply_h}}" data-anon="{{wx_apply_h_anon}}"></b><small class="fol">{{wx_apply_lead}}</small><small class="unf">{{wx_follow_lead}}</small></span></p>
+      <textarea class="use" name="use" maxlength="500" rows="2" placeholder="{{wx_use_ph}}"></textarea>
+      <input type="hidden" name="notify" value="wechat">
+      <button class="btn btn-p wide" type="submit">{{wx_apply_btn}}</button>
+      <div class="follow"><div class="qrbox sm" id="fqr"></div><p>{{wx_follow_qr}}</p></div>
+      <p class="flow">{{wx_fine}}</p>
+    </form>
+    <div class="j j-in"><a class="btn btn-p wide" href="/app">{{console}}</a></div>
+  </aside>
+
+  <div class="demo">
     <div class="screen" role="img" aria-label="{{replay_label}}">
       <div aria-hidden="true">
       <div class="chrome"><i></i><i></i><i></i><span class="ttl">iTerm2 — ClaudeFleet</span></div>
@@ -321,7 +281,6 @@ footer a:hover{color:var(--fleet-ink)}
         <div class="ln" data-t="s3"><span class="okc">⏺</span> {{r_s3}}</div>
         <div class="ln card" data-t="card">
           <div class="kp"><span>{{r_total}}<b>+1,928 -19</b></span><span>{{r_orders}}<b>37</b></span><span class="okc" style="align-self:end">PR #3767 ✓</span></div>
-          <span class="link">claude-fleet · PR #3767</span>
         </div>
         <div class="prompt"><span>❯ <span class="cursor"></span></span><kbd class="kh">⌘P</kbd></div>
       </div>
@@ -332,99 +291,22 @@ footer a:hover{color:var(--fleet-ink)}
         <div class="sep"></div>
         <div class="grp">{{p_wait}}</div>
         <div class="row"><span class="clay">!</span>{{p_wait1}}</div>
-        <div class="grp">{{p_recent}}</div>
-        <div class="row"><span class="n">✓</span>{{p_r1}}</div>
-        <div class="row"><span class="n">✓</span>{{p_r2}}</div>
       </div>
       <div class="key" id="key">⌘P</div>
       </div>
     </div>
-    <p class="replay"><i></i>{{replay_note}}</p>
     <p class="case"><b>{{case_tag}}</b><span class="who">{{case_who}}</span>{{case_line}}</p>
   </div>
-</div></section>
-
-<section class="sec" id="start"><div class="wrap">
-  <div class="sh"><h2>{{steps_h}}</h2></div>
-  <ol class="steps">
-    <li class="step">
-      <div class="shot" aria-hidden="true"><!--shot:login--><div class="s-login"><svg width="34" height="34"><use href="#mk"/></svg>
-        <div class="gh"><svg class="i" viewBox="0 0 24 24"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>{{s1_gh}}</div>
-        <div class="or">{{s1_or}}</div></div><!--/shot--></div>
-      <div class="step-f"><span class="num" aria-hidden="true">1</span><h3>{{s1}}</h3>{{t_login}}</div>
-    </li>
-    <li class="step">
-      <div class="shot" aria-hidden="true"><!--shot:machine--><div class="s-ready">
-        <div><span class="okc">✓</span> {{s2_ready}}</div>
-        <div class="bar"><i></i></div>
-        <div class="dim">Claude Code · {{s2_kit}}</div>
-        <div class="dim">mac-a · {{s2_own}}</div></div><!--/shot--></div>
-      <div class="step-f"><span class="num" aria-hidden="true">2</span><h3>{{s2}}</h3>{{t_machine}}</div>
-    </li>
-    <li class="step">
-      <div class="shot" aria-hidden="true"><!--shot:first--><div class="s-first">
-        <div><span class="clay">❯</span> {{s3_you}}</div>
-        <div><span class="okc">⏺</span> {{s3_a}}</div>
-        <div class="dim" style="padding-left:16px">{{s3_q1}}</div>
-        <div class="dim" style="padding-left:16px">{{s3_q2}}</div></div><!--/shot--></div>
-      <div class="step-f"><span class="num" aria-hidden="true">3</span><h3>{{s3}}</h3>{{t_first}}</div>
-    </li>
-  </ol>
-<!--timed-->
-  <div class="clock">
-    <p class="big">{{clock}}<small>{{measured}}</small></p>
-    <div>
-      <div class="track" aria-hidden="true"><i class="a" style="width:{{w_login}}%"></i><i class="b" style="width:{{w_machine}}%"></i><i class="c" style="width:{{w_first}}%"></i></div>
-      <div class="ticks" aria-hidden="true"><span>0s</span><span>{{tick1}}</span><span>{{tick2}}</span><span>{{tick3}}</span><span>{{tick4}}s</span></div>
-      <p class="src">{{drill_src}}</p>
-    </div>
-  </div>
-<!--/timed-->
-</div></section>
-
-<section class="sec" id="what" style="padding-top:0"><div class="wrap">
-  <div class="sh"><h2>{{what_h}}</h2></div>
-  <ul class="gal">
-    <li class="tile"><div class="thumb t1" aria-hidden="true"><div class="h"></div><div class="k"><i></i><i></i><i></i></div><div class="b"><i style="height:50%"></i><i style="height:80%"></i><i style="height:62%"></i><i style="height:95%"></i><i style="height:70%"></i><i style="height:84%"></i></div></div><p>{{g1}}</p></li>
-    <li class="tile"><div class="thumb t2" aria-hidden="true"><div class="h"></div><div class="h2"></div><div class="s"></div><div class="s" style="width:60%"></div><div class="btnx"></div></div><p>{{g2}}</p></li>
-    <li class="tile"><div class="thumb t3" aria-hidden="true"><div class="sl"><i></i><i></i><i></i><i></i></div></div><p>{{g3}}</p></li>
-    <li class="tile"><div class="thumb t4" aria-hidden="true"><div class="orb"></div><div class="play"></div></div><p>{{g4}}</p></li>
-  </ul>
-</div></section>
-
-<section class="sec" id="open" style="padding-top:0"><div class="wrap">
-  <ul class="trust">
-    <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg><b>{{t1}}</b></li>
-    <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><b>{{t2}}</b></li>
-    <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><b>{{t3}}</b></li>
-    <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg><b>{{t4}}</b></li>
-  </ul>
-</div></section>
-
-<section class="sec" id="price" style="padding-top:0" aria-labelledby="price-h"><div class="wrap">
-  <div class="sh"><h2 id="price-h">{{price_h}}</h2></div>
-  <div class="price">
-    <div class="pc hl"><h3>{{price_trial}}</h3><p class="pp">{{price_trial_p}}</p><p>{{price_trial_d}}</p></div>
-    <div class="pc"><h3>{{price_own}}</h3><p class="pp">{{price_own_p}}</p><p>{{price_own_d}}</p></div>
-  </div>
-  <p class="price-note">{{price_note}}</p>
-</div></section>
-
-<section class="sec" id="faq" style="padding-top:0" aria-labelledby="faq-h"><div class="wrap faq">
-  <h2 class="sr" id="faq-h">{{faq_h}}</h2>
-{{faq_items}}
-</div></section>
-
-<section class="end"><div class="wrap">
-  <h2>{{end_h}}</h2>
-  <div class="cta"><a class="btn btn-p" href="{{try_href}}"><!--trial--><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg><!--/trial-->{{try}}</a></div>
-</div></section>
+</div></div></section>
+<div class="strip" id="price"><div class="wrap">{{price_line}}</div></div>
 </main>
 
 <footer><div class="wrap">
-  <a class="brand" href="{{path}}" style="font-size:15px"><svg style="width:24px;height:24px" aria-hidden="true"><use href="#mk"/></svg>ClaudeFleet</a>
-  <nav aria-label="ClaudeFleet"><a href="{{docs_path}}">{{docs}}</a><a href="{{security_path}}">{{security}}</a><a href="https://github.com/verkyyi/claude-fleet">{{oss}}</a><a href="/app">{{signin}}</a></nav>
-  <p class="oss"><b>{{oss}}</b>{{oss_line}}<a href="https://github.com/verkyyi/claude-fleet">{{oss_github}}</a><a href="{{selfhost_path}}">{{oss_selfhost}}</a></p>
+  <details class="faq" id="faq"><summary>{{faq_more}}<i aria-hidden="true">+</i></summary><div class="qa">
+<h2 class="sr">{{faq_h}}</h2>
+{{faq_items}}
+  </div></details>
+  <a href="{{docs_path}}">{{docs}}</a><a href="{{security_path}}">{{security}}</a><a class="oss" href="https://github.com/verkyyi/claude-fleet">{{oss}}</a><a href="{{other_path}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}" data-set="{{other_key}}">{{lang_switch}}</a>
   <p class="disc">{{disc}}</p>
 </div></footer>
 
@@ -432,35 +314,84 @@ footer a:hover{color:var(--fleet-ink)}
 (function(){
   /* language: the URL is the language (/ 中文, /en/ English). A first visit with
      no choice remembered goes once to the browser's language and remembers it;
-     a click on 中 / EN is the choice from then on. A crawler is never moved. */
+     a click on the other language is the choice from then on. A crawler is never moved. */
   var KEY='cf-lang',here='{{lang_key}}',saved=null;
   try{saved=localStorage.getItem(KEY)}catch(e){}
-  document.querySelectorAll('.lang a').forEach(function(a){a.addEventListener('click',function(){try{localStorage.setItem(KEY,a.dataset.set)}catch(e){}})});
-  if(!saved&&!navigator.webdriver&&!/bot|crawl|spider|slurp|preview|lighthouse/i.test(navigator.userAgent)){
+  document.querySelectorAll('a[data-set]').forEach(function(a){a.addEventListener('click',function(){try{localStorage.setItem(KEY,a.dataset.set)}catch(e){}})});
+  var bot=!!navigator.webdriver||/bot|crawl|spider|slurp|preview|lighthouse/i.test(navigator.userAgent);
+  if(!saved&&!bot){
     var nav=(navigator.languages&&navigator.languages[0])||navigator.language||'';
     var want=/^zh/i.test(nav)?'zh':'en';
     try{localStorage.setItem(KEY,want)}catch(e){}
     if(want!==here){location.replace((want==='zh'?'/':'/en/')+location.search+location.hash);return}
   }
+  var root=document.documentElement,$=function(s){return document.querySelector(s)};
+  var ua=navigator.userAgent,inwx=/MicroMessenger/i.test(ua),phone=!inwx&&/Mobi|Android|iPhone|iPad/i.test(ua);
+  function state(j){root.dataset.j=j}
+  function J(u){return fetch(u,{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).catch(function(){return null})}
+  function hi(name){var n=(name||'').trim();
+    document.querySelectorAll('[data-av]').forEach(function(e){e.textContent=n?n.charAt(0):'微'});
+    document.querySelectorAll('[data-hi]').forEach(function(e){e.textContent=n?e.dataset.hi.replace('{name}',n):(e.dataset.anon||e.dataset.hi.replace('{name}，','').replace('{name}, ',''))})}
+  state(inwx?'wait':phone?'phone':'scan');
 
-  /* signed in: the nav says 进入控制台 · 退出 (claude-fleet#3798). The page is
-     the same for everyone (cached); who is looking is asked of /v1/me. */
-  if(window.fetch)fetch('/v1/me',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).then(function(me){
-    if(!me)return;
-    document.documentElement.classList.add('in');
-    document.querySelectorAll('[data-out]').forEach(function(e){e.hidden=true});
-    document.getElementById('to-app').hidden=false;
-    if(me.can_logout)document.getElementById('sign-out').hidden=false;
-  }).catch(function(){});
+  /* signed in: 进入控制台 · 退出 (claude-fleet#3798); the page is the same for
+     everyone (cached), who is looking is asked of /v1/me. */
+  var me=window.fetch?fetch('/v1/me',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).catch(function(){return null}):Promise.resolve(null);
+  me.then(function(m){
+    if(m){root.classList.add('in');
+      document.querySelectorAll('[data-out]').forEach(function(e){e.hidden=true});
+      $('#to-app').hidden=false;if(m.can_logout)$('#sign-out').hidden=false;
+      if(inwx){hi(m.name);state('member')}else state('in');return}
+    if(inwx)return wechat();
+    code($('#qr'));
+  });
 
-  var stage=document.getElementById('stage'),$=function(s){return document.querySelector(s)};
-  function setDev(d){stage.dataset.dev=d;
-    document.querySelectorAll('.dev-tabs button').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.dev===d))});
-    var k=d==='phone'?'⌃␣':'⌘P';$('#key').textContent=k;$('.kh').textContent=k;
-    $('.ttl').textContent=d==='phone'?'Termius':'iTerm2 — ClaudeFleet';}
-  document.querySelectorAll('.dev-tabs button').forEach(function(b){b.onclick=function(){setDev(b.dataset.dev);run()}});
-  var qd=(location.search.match(/[?&]dev=(pc|phone)/)||[])[1];
-  setDev(qd||'pc');
+  /* inside WeChat (T794): who you are comes from the service account's silent
+     authorisation (snsapi_base: no prompt, no code) — once a visit, back to
+     this page. A member is in already; anyone else is an applicant the hub
+     knows (/apply/me: name, followed): one tap applies, and someone who
+     has not followed gets the code to long-press. The hop failing ⇒ the code. */
+  function wechat(){
+    J('/apply/me').then(function(a){
+      if(a){hi(a.name);if(!a.followed){root.classList.add('unfollowed');code($('#fqr'),'login')}
+        if(a.applied){location.replace('/apply');return}state('apply');return}
+      var k='cf-wx-hop';try{if(sessionStorage.getItem(k)){state('scan');code($('#qr'));return}sessionStorage.setItem(k,'1')}catch(e){}
+      location.replace('/auth/wechat/start?next='+encodeURIComponent(location.pathname));
+    });
+  }
+
+  /* a phone's browser: open the page in WeChat (the link copied), the code folded */
+  $('#phopen').onclick=function(){var u=location.origin+location.pathname;
+    (navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).catch(function(){}).then(function(){$('#phcopied').hidden=false})};
+  $('#orqr').onclick=function(){root.classList.add('qr');code($('#qr'))};
+
+  /* the WeChat code, drawn here (T794): the same road as the sign-in page —
+     /auth/wechat/qr for this browser, polled, then the poll as a page finishes
+     the sign-in (on the list ⇒ /app, not yet ⇒ /apply). No code (off, busy,
+     no script) ⇒ a link to the sign-in page. */
+  function code(box,purpose){
+    if(!box||box.dataset.on)return;box.dataset.on='1';
+    var p=purpose||box.dataset.p||'login',timer=null,poll=!purpose;
+    function fallback(){box.innerHTML='<a href="{{try_href}}">{{join_open}}</a>'}
+    if(bot||!window.fetch){fallback();return}
+    function draw(){
+      fetch('/auth/wechat/qr',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'purpose='+encodeURIComponent(p)})
+      .then(function(r){if(!r.ok)throw 0;return r.json()}).then(function(j){
+        box.innerHTML=j.qr+'<span class="wx"><svg><use href="#wxm"/></svg></span>';
+        if(!poll)return;
+        var q='/auth/wechat/poll?s='+j.s+(p==='trial'?'&p=trial':'');
+        clearInterval(timer);timer=setInterval(function(){
+          if(document.hidden)return;
+          fetch(q,{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.json()}).then(function(a){
+            if(a.s==='ready'){clearInterval(timer);location.href=q}
+            else if(a.s==='expired'){clearInterval(timer);draw()}
+            else if(a.s==='down'){clearInterval(timer);fallback()}
+          }).catch(function(){});
+        },2000);
+      }).catch(fallback);
+    }
+    draw();
+  }
 
   /* the replay: the same steps a real session takes (⌘P → ⚡ → work → result) */
   var timers=[],st=$('#tl-st'),typed=$('#typed'),txt=typed.dataset.text;
