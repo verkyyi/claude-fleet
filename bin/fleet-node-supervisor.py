@@ -5880,6 +5880,19 @@ def entry_settings(paths):
     return on, port, me
 
 
+def entry_machine_port(paths, port):
+    """FLEET_ENTRY_MACHINE_PORT (T743): a second port the entry sshd also listens
+    on — THIS machine's own (the router forwards a per-machine public port to
+    it, while the home's 22022 follows the home), so one address is always one
+    machine. The daemon's environment, else machine.env; not a port, or the
+    entry port itself ⇒ None (one Port line, as before)."""
+    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    v = (os.environ.get("FLEET_ENTRY_MACHINE_PORT") or me.get("FLEET_ENTRY_MACHINE_PORT") or "").strip()
+    if not v.isdigit() or not 0 < int(v) < 65536 or int(v) == port:
+        return None
+    return int(v)
+
+
 def entry_sshd():
     return env("FLEET_ENTRY_SSHD", "/usr/sbin/sshd")
 
@@ -6263,6 +6276,7 @@ def entry_config(ep, port, allow, paths=None):
     import shlex
     disp = entry_dispatch(paths) if paths is not None else None
     sftp = next((s for s in ENTRY_SFTP_SERVERS if os.access(s, os.X_OK)), None)
+    mport = entry_machine_port(paths, port) if paths is not None else None
     extra = []
     door = paths is not None and door_on(paths)
     # the drill's seam (FLEET_NODE_TEST only) — ONE SetEnv line: sshd keeps only the first
@@ -6318,6 +6332,7 @@ def entry_config(ep, port, allow, paths=None):
         "# claude-fleet entry port (issue #3070) — written by fleet-node-supervisor.py; every",
         "# change passes `sshd -t` first. The system's sshd and ~/.ssh/authorized_keys are not read.",
         "Port %d" % port,
+    ] + (["Port %d" % mport] if mport else []) + [
         "HostKey %s" % ep.hostkey,
     ] + _entry_hostcert_lines(ep) + [
         "PidFile %s" % ep.pid,

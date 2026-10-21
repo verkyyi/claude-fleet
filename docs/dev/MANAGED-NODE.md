@@ -610,6 +610,10 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 - **开关**：`FLEET_ENTRY=1`（端口 `FLEET_ENTRY_PORT`，默认 22022），写在 `<state>/machine.env`——launchd 不给守护环境变量，
   所以 `FLEET_ENTRY=1 sudo fleet node install` 的「入口」一步把它写进去（`FLEET_ENTRY=0` 去掉），再跑一遍 `entry ensure`。
   没开 ⇒ 不建任何东西、不监听，`status` 逐字节如前。
+- **按机器的端口**（T743）：`FLEET_ENTRY_MACHINE_PORT=<n>`（同样写进 machine.env，`fleet node install` 带上即写，`=0` 去掉）
+  让入口 sshd 再听一个**这台机器自己的**端口——路由器把按机器的公网端口转到它（比如一台 22122、另一台 22123，与公网同号），
+  而 22022 是跟着家走的方便入口。这样一个地址永远对应一台机器（有的家用网关不许两个公网端口映射到同一设备的同一内部端口）。
+  没设 ⇒ 只有一行 `Port`，与以前一字不差。
 - **进程**：守护的子进程 `sshd -D -e -f <state>/entry/sshd_config`，自己的主机钥匙（`<state>/entry/ssh_host_ed25519_key`，
   和系统 sshd 的不同），配置一变发 SIGHUP（sshd 原 pid 重读，已有连接不断）。配置先过 `sshd -t`，再看 `sshd -T` 里
   密码 / 键盘交互 / root 都是 no、`PerSourcePenalties` 在（OpenSSH 9.8+）——不过就留原样；没有每来源惩罚的老 sshd 根本不起，

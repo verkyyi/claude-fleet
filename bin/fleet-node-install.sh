@@ -83,7 +83,8 @@
 #             through the core's exec-as); =0 puts it back on root
 #             — whose `spotlight` task turns Spotlight off at its start (#3402,
 #             docs/dev/MANAGED-NODE.md §19)
-#   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>] on the
+#   入口      the entry port (#3070): FLEET_ENTRY=1 [FLEET_ENTRY_PORT=<n>]
+#             [FLEET_ENTRY_MACHINE_PORT=<n>: also this machine's own port, T743] on the
 #             command writes the switch into machine.env (FLEET_ENTRY=0 takes it
 #             out), then `fleet-node-supervisor.py entry ensure` (not on ⇒ 跳过)
 #   开号      Linux only (#3210): FLEET_NODE_ACCOUNT_OPS=1 in machine.env — the
@@ -713,19 +714,29 @@ fi
 # environment), FLEET_ENTRY=0 takes it out; otherwise machine.env's own word
 # stands. On: one converge pass now (host key, keys files, config through sshd -t)
 # — the listener is the daemon's child, up once a login has its home here.
-ewant="" eport="${FLEET_ENTRY_PORT:-}"
+ewant="" eport="${FLEET_ENTRY_PORT:-}" emport="${FLEET_ENTRY_MACHINE_PORT:-}"
 case "${FLEET_ENTRY:-}" in
   1) ewant=on ;;
   0) ewant=off ;;
   *) grep -q '^FLEET_ENTRY=1$' "$ENVF" 2>/dev/null && ewant=keep ;;
 esac
 case "$eport" in ''|[0-9]*) ;; *) fail 入口 "FLEET_ENTRY_PORT=$eport 不是端口号" ;; esac
+# FLEET_ENTRY_MACHINE_PORT=<n> (T743): the entry also listens on this machine's
+# own port (the router's per-machine forward); =0 takes it out; unset keeps
+case "$emport" in ''|[0-9]*) ;; *) fail 入口 "FLEET_ENTRY_MACHINE_PORT=$emport 不是端口号" ;; esac
 if [ -z "$ewant" ]; then
   skip 入口 "没开（要开：FLEET_ENTRY=1 ${RERUN}）"
 else
-  { [ -r "$ENVF" ] && grep -Ev '^(FLEET_ENTRY|FLEET_ENTRY_PORT)=' "$ENVF"
+  { [ -r "$ENVF" ] && grep -Ev '^(FLEET_ENTRY|FLEET_ENTRY_PORT|FLEET_ENTRY_MACHINE_PORT)=' "$ENVF"
     if [ "$ewant" = on ]; then echo FLEET_ENTRY=1; [ -z "$eport" ] || echo "FLEET_ENTRY_PORT=$eport"
-    elif [ "$ewant" = keep ]; then grep -E '^(FLEET_ENTRY|FLEET_ENTRY_PORT)=' "$ENVF"; fi; } > "$WORK/machine.env"
+    elif [ "$ewant" = keep ]; then grep -E '^(FLEET_ENTRY|FLEET_ENTRY_PORT)=' "$ENVF"; fi
+    if [ "$ewant" != off ]; then
+      case "$emport" in
+        '') grep -E '^FLEET_ENTRY_MACHINE_PORT=' "$ENVF" 2>/dev/null ;;
+        0) ;;
+        *) echo "FLEET_ENTRY_MACHINE_PORT=$emport" ;;
+      esac
+    fi; } > "$WORK/machine.env"
   echanged=""
   cmp -s "$WORK/machine.env" "$ENVF" || { put "$WORK/machine.env" "$ENVF" 600 || fail 入口 "写不了 $ENVF"; seat_env_own; echanged=1; }
   rm -f "$WORK/machine.env"
