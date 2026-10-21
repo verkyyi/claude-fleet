@@ -226,6 +226,35 @@ ORPHAN_ID_RE = re.compile(r"[0-9a-f]{12}")
 ORPHAN_STATES = ("MERGED", "BLOCKED", "FAILED", "STOPPED", "REAPED", "WAITING", "IDLE")
 
 
+NOTICE_KINDS = ("notice", "session", "alert")
+NOTICE_LEVELS = ("error", "warn", "info")
+
+
+def notices_cell(cell):
+    """Column 33's cell (T701) → {mark, rows: [{id, ts, level, kind, sub, wid, text}]}:
+    the login's read mark and its messages not seen yet (bin/fleet_notice.py cell),
+    `mark` RS then entries `id US ts US level US kind US sub US wid US text`; at most
+    10, a text at most 200 characters with no control character. Junk is dropped,
+    never a protocol error; None when there is no mark."""
+    parts = (cell or "").split("\x1e")
+    if not parts or not re.fullmatch(r"[0-9]{1,11}", parts[0]):
+        return None
+    out = []
+    for entry in parts[1:11]:
+        p = entry.split("\x1f")
+        if len(p) != 7:
+            continue
+        rid, ts, level, kind, sub, wid, text = p
+        if not ORPHAN_ID_RE.fullmatch(rid) or not ts.isdigit() or level not in NOTICE_LEVELS \
+                or kind not in NOTICE_KINDS:
+            continue
+        out.append(dict(id=rid, ts=int(ts), level=level, kind=kind,
+                        sub=sub if re.fullmatch(r"[a-z]{0,16}", sub) else "",
+                        wid=wid if re.fullmatch(r"[A-Za-z0-9_.:/#-]{0,120}", wid) else "",
+                        text=re.sub(r"[\x00-\x1f\x7f]", " ", text)[:200]))
+    return dict(mark=int(parts[0]), rows=out)
+
+
 def orphan_rep_cell(cell):
     """Column 31's cell (issue #3369) → [{id, ts, repo, child, state, pr, summary}]:
     the login's unread orphaned child reports (bin/fleet-orphan-reports.py cell),
@@ -326,9 +355,16 @@ def inventory_row(parts):
     on every row alike (like epic_stale); absent when empty. The sidebar and the
     hub's overview list them for the person.
     Column 32 (issue #3517): `pin=1` — the window is pinned (@pin): `pin: true`,
-    so every other machine's list draws it in its 置顶 group. Absent otherwise."""
+    so every other machine's list draws it in its 置顶 group. Absent otherwise.
+    Column 33 (T701): `notices=` — the login's read mark and messages not seen yet
+    (notices_cell): `notices`, on every row alike; absent when empty. Another home's
+    ⌘P 消息 and message row read them (bin/fleet-hub-sessions.sh notices_<fleet>)."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 33 and parts[-1].startswith("notices="):
+        nt = notices_cell(parts.pop()[8:])
+        if nt:
+            extra["notices"] = nt
     if len(parts) >= 32 and parts[-1].startswith("pin="):
         if parts.pop()[4:] == "1":
             extra["pin"] = True

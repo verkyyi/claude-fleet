@@ -30,7 +30,9 @@ fleet-client-actions.py notify — terminal-notifier, a Bark push — went with
 that client, issue #3008.)
 
 Every event is one line of logs/notify.ndjson (ts · key · state · sent | skip),
-written by the sender once it knows what happened — the metric's source.
+written by the sender once it knows what happened — the metric's source — and a
+message in the one book (bin/fleet_notice.py, T701: kind session, its wid), which
+⌘P's 消息 lists and the 看台's message row shows.
 
   python3 fleet_notify.py quiet [HH:MM]   exit 0 inside quiet hours (tests)
 """
@@ -245,8 +247,29 @@ def beat(rows, gdir, session, now=None, sender=None):
         del batches[b]
     save(path, {"rows": seen, "done": batches, "ts": now})
     for ev in events:
+        book(ev)
         send(ev, session, sender)
     return events
+
+
+LEVEL = {"ask": "warn", "stuck": "error", "done": "info"}
+
+
+def book(ev):
+    """The event in the one book too (T701, bin/fleet_notice.py): ⌘P's 消息 lists
+    it and the 看台's message row shows it — recorded only, the terminal's
+    notification above is its sound; never fails the beat."""
+    if os.environ.get("FLEET_NOTIFY_BOOK") == "0":
+        return
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import fleet_notice
+        text = " · ".join(x for x in (ev.get("title"), ev.get("body")) if x)
+        fleet_notice.notify(LEVEL.get(ev["kind"], "info"), text, source="notify:" + ev["kind"], draw_it=False,
+                            kind="session", sub=ev["kind"], wid=ev["key"])
+    except Exception:   # noqa: BLE001
+        pass
 
 
 def main(argv):

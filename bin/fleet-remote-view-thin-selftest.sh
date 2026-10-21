@@ -48,8 +48,8 @@
 #                   no word given leaves it alone; a bad name is recorded as none.
 #                   Issue #3329: FLEET_VIEW_LANG in the 看台 session's environment,
 #                   and English detected for a device the first time ⇒ an info
-#                   notice on the 看台 (@view_notice, the top line's 8 s line —
-#                   T675) — once per device
+#                   notice on the 看台 (@view_notice — T675; drawn on the message
+#                   row, status-format[1], T701) — once per device
 #   R. restoring  — a `--resume` while a restore holds its lock and the 看台's
 #                   session is not back yet: rc 3, no 看台 (issue #3511)
 #   M. mtime      — a row with no left= is kept by its file's mtime, read portably
@@ -429,7 +429,9 @@ waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' show-options -qv -t '=$(vs devl
 st_eq "G: FLEET_VIEW_LANG in the 看台 session's environment" "FLEET_VIEW_LANG=en_US.UTF-8" "$(venv devl1)"
 st_has "G: … the first time, the one-time line (D8)" "$(vflash devl1)" "Using English from your system (LANG=en_US.UTF-8)"
 [ -e "$FLEET_CONF_DIR/entry/devl1.lang-hinted" ] || st_miss "G: the device was not stamped as hinted"
-st_has "G: … the top line's format reads it" "$(tn show-options -qv -t "=$(vs devl1):" 'status-format[0]')" "nt=#{@view_notice}"
+st_has "G: … the message row draws it (T701)" "$(tn show-options -qv -t "=$(vs devl1):" 'status-format[1]')" "fleet-topbar.py' inbox --node"
+st_eq "G: … the 看台 wears the message row" "1" "$(tn show-options -qv -t "=$(vs devl1):" @view_inbox)"
+st_has "G: … the top line opens and folds it" "$(tn show-options -qv -t "=$(vs devl1):" 'status-format[0]')" "ib=1 st=#{status}"
 tt kill-window -t "=$TL:lang1"
 tt new-window -d -t "=$TL:" -n lang1b "env -u TMUX FLEET_CLIENT_LANG= FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devl1 --resume --device $DEV --route entry --token tl3; sleep 300"
 waitfor 5 sh -c "tr '\\t' '\\n' < '$FLEET_CONF_DIR/remote-views/devl1' 2>/dev/null | grep -qx token=tl3" || st_miss "G: the resume never registered"

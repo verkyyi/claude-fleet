@@ -436,7 +436,7 @@ fleet_client_refuse() {
 # [--sock <label>] [--all] [--source <name>] [--secs N] — THE one way a script
 # tells the person something on screen (T675): error red, on the 看台's top line
 # until the first key after 10 s; warn yellow 6 s; info grey 3 s; every one a row
-# of $FLEET_CONF_DIR/logs/notices.ndjson, read back from ⌘P (最近消息) / `fleet notices`.
+# of $FLEET_CONF_DIR/logs/notices.ndjson, read back from ⌘P (✦ 消息) / `fleet notices`.
 # Never a bare `display-message` beside it (portability-selftest row `notice`).
 # bin/fleet_notice.py is the one implementation; this never fails its caller.
 fleet_notice() {

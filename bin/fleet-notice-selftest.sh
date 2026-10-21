@@ -1,25 +1,28 @@
 #!/bin/bash
-# fleet-notice-selftest.sh — the fleet's one on-screen notice (T675):
-# bin/fleet_notice.py (fleet-notice.sh, fleet_notice in fleet-client-core.sh) and
-# the 看台's top line that draws it (bin/fleet-topbar.py).
+# fleet-notice-selftest.sh — the fleet's one on-screen notice and its one book (T675,
+# T701): bin/fleet_notice.py (fleet-notice.sh, fleet_notice in fleet-client-core.sh),
+# the 看台's message row that draws it (bin/fleet-topbar.py inbox), and what feeds
+# the book (bin/fleet_notify.py, bin/fleet_hub_common.py notices_cell).
 #
 #   A. RECORD   every notice a row of $FLEET_CONF_DIR/logs/notices.ndjson; the same
 #               level + text within 10 s one row; a row older than 7 days goes on the
 #               next write; `list` newest first, `--n`; `unread` counts errors since
 #               `read` (the page opening); `seen <tag>`.
-#   B. TIERS    fleet-topbar.py notice: warn 6 s, info 3 s, `--secs` only lengthens;
-#               an error stays past its 10 s while no key came after its hold
-#               (ack=0), a key inside the 10 s does not clear it, one after does;
-#               「还有 N 条 · ⌘P 看全部」 beside it; the line fits its width; the normal
-#               line's unread count (fit … ur=N).
+#   B. ROW      fleet-topbar.py inbox-text: an error until seen, a warn 6 s; 「✦ N ·
+#               ⌘P」, a phone's 「✦ N」 in 45 columns; FLEET_GLYPHS=ascii; seen, it
+#               folds; the top line (fit) says no reminder at 45 / 80 / 140.
+#   D. PANEL    ⌘P's FIRST row 「✦ 消息 N」, found by the words 消息 / message; a
+#               click on the message row opens the page — fleet binds no key for it.
+#   E. BOOK     a notice, an alert, ask · stuck · done (fleet_notify.book), a result
+#               nobody took: six unseen in five classes; read <id> one fewer, an
+#               orphan read in its own book too; the cell → fleet_hub_common → a
+#               cache line counted by another home, a later read mark seeing it.
 #   C. CLIENTS  on an isolated server with two 看台 and a plain client, each a pty:
 #               --client draws on that 看台 only (@view_notice + hold), a second
 #               notice while the first is live says more=1, --all reaches both
 #               看台, a plain client gets a display-message HELD for its tier
 #               (never tmux's ~0.75 s default), fleet_notice (fleet-client-core.sh)
 #               and fleet-notice.sh reach the same road.
-#   D. PANEL    ⌘P's bottom row (above ⏻) 「✉ 最近消息 · 未读错误 N」, found by the
-#               words 消息 / message — fleet binds no key of its own for it.
 # tmux absent → C SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -43,7 +46,7 @@ python3 "$NP" notify error 'first one' --no-draw --next 'do this' --tag T1
 [ "$(wc -l < "$LOG" | tr -d ' ')" = 2 ] || fail "A a repeat within 10 s is one row; another level is its own" "$(cat "$LOG")"
 python3 "$NP" seen T1 || fail "A seen T1: the tagged row is there"
 python3 "$NP" seen T2 && fail "A seen T2: no such tag"
-[ "$(python3 "$NP" unread)" = 1 ] || fail "A one error unread"
+[ "$(python3 "$NP" unread)" = 2 ] || fail "A both rows unseen (every kind counts, T701)"
 python3 "$NP" read
 [ "$(python3 "$NP" unread)" = 0 ] || fail "A read clears the unread count"
 python3 "$NP" notify info 'second' --no-draw
@@ -60,35 +63,36 @@ grep -q ancient "$LOG" && fail "A a row older than 7 days goes on the next write
   || fail "A list --json is every row"
 [ "$fails" = 0 ] && st_pass "A every notice recorded once, a week kept, newest first, unread / read / seen"
 
-# --- B. the tiers on the top line --------------------------------------------------------
+# --- B. the message row (T701): tiers, fit, the top line clean -------------------------
 f0=$fails
-enc() { python3 -c 'import base64,json,sys; print(base64.b64encode(json.dumps(json.loads(sys.argv[1]), ensure_ascii=False).encode()).decode())' "$1"; }
-T0=1000000
-W=$(enc '{"level":"warn","text":"heads up","ts":1000000,"until":1000006,"hold":1000006,"more":0}')
-I=$(enc '{"level":"info","text":"fyi","ts":1000000,"until":1000003,"hold":1000003,"more":0}')
-E=$(enc '{"level":"error","text":"暂停开新：内存紧张","next":"关掉一个会话再试","ts":1000000,"until":1000010,"hold":1000010,"more":2}')
-nl() { python3 "$TB" notice "$1" "$2" "ack=$3" "now=$4"; }
-case "$(nl 80 "$W" 0 $((T0 + 5)))" in *'! heads up'*'⌘P 看全部'*) ;; *) fail "B a warn is on the line at 5 s" "$(nl 80 "$W" 0 $((T0 + 5)))" ;; esac
-[ "$(nl 80 "$W" 0 $((T0 + 7)))" = - ] || fail "B a warn is gone at 7 s"
-case "$(nl 80 "$I" 1 $((T0 + 2)))" in *'i fyi'*) ;; *) fail "B an info is on the line at 2 s" ;; esac
-[ "$(nl 80 "$I" 1 $((T0 + 4)))" = - ] || fail "B an info is gone at 4 s"
-case "$(nl 80 "$E" 0 $((T0 + 100)))" in *'✗ 暂停开新：内存紧张 — 关掉一个会话再试'*'还有 2 条 · ⌘P 看全部'*) ;;
-  *) fail "B an error no key answered stays — reason · next · 还有 N 条 · ⌘P 看全部" "$(nl 80 "$E" 0 $((T0 + 100)))" ;; esac
-case "$(nl 80 "$E" 1 $((T0 + 5)))" in *暂停开新*) ;; *) fail "B a key inside the 10 s does not clear an error" ;; esac
-[ "$(nl 80 "$E" 1 $((T0 + 11)))" = - ] || fail "B a key after the 10 s clears the error"
-w=$(python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.argv[1]))' "$(nl 45 "$E" 0 $((T0 + 1)))")
-[ "$w" -le 45 ] || fail "B the line fits a 45-column phone (got $w)"
-python3 "$NP" notify info x --no-draw --no-record --secs 1 >/dev/null || fail "B --secs below a tier is no error"
-printf '{"title":"t","state":"working"}' > "$WORK/rec.json"
-case "$(python3 "$TB" fit 100 "$WORK/rec.json" ur=2)" in *'未读错误 2 · ⌘P'*) ;;
-  *) fail "B the normal line carries the unread count" "$(python3 "$TB" fit 100 "$WORK/rec.json" ur=2)" ;; esac
-case "$(python3 "$TB" fit 100 "$WORK/rec.json")" in *未读*) fail "B no unread, no count" ;; esac
-[ "$fails" = "$f0" ] && st_pass "B warn 6 s, info 3 s, an error until a key after 10 s; 还有 N 条 · ⌘P 看全部; fits 45 columns; the unread count"
+export FLEET_STATUS_G="$WORK/g"; mkdir -p "$FLEET_STATUS_G"
+B2="$WORK/b2"; mkdir -p "$B2"
+ib() { FLEET_CONF_DIR="$B2" python3 "$TB" inbox-text "$1" "now=$2"; }
+FLEET_CONF_DIR="$B2" python3 "$NP" notify warn 'heads up' --no-draw
+T0=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["ts"])' "$B2/logs/notices.ndjson")
+case "$(ib 80 "$T0")" in *'▲ heads up'*'✦ 1 · ⌘P'*) ;; *) fail "B a warn is on the message row with ✦ 1 · ⌘P" "$(ib 80 "$T0")" ;; esac
+[ "$(ib 80 "$(python3 -c "print($T0 + 7)")")" = - ] || fail "B a warn folds after 6 s"
+FLEET_CONF_DIR="$B2" python3 "$NP" notify error '暂停开新：内存紧张' --next '关掉一个会话再试' --no-draw
+case "$(ib 140 "$(python3 -c "print($T0 + 1000)")")" in *'✖ 暂停开新：内存紧张 — 关掉一个会话再试'*'✦ 2 · ⌘P'*) ;;
+  *) fail "B an error stays until seen — reason · next · ✦ N" "$(ib 140 "$(python3 -c "print($T0 + 1000)")")" ;; esac
+w=$(python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.argv[1]))' "$(ib 45 "$T0")")
+[ "$w" -le 45 ] || fail "B the row fits a 45-column phone (got $w)"
+case "$(ib 45 "$T0")" in *⌘P*) fail "B a phone's row says ✦ N, no ⌘P" "$(ib 45 "$T0")" ;; esac
+FLEET_CONF_DIR="$B2" python3 "$NP" read
+[ "$(ib 80 "$(python3 -c "print($T0 + 1000)")")" = - ] || fail "B seen, the row folds"
+printf '{"title":"t","state":"working","orphans":3}' > "$WORK/rec.json"
+for c in 45 80 140; do
+  case "$(python3 "$TB" fit "$c" "$WORK/rec.json")" in *未读*|*无主*|*✦*|*✖*) fail "B the top line ($c cols) says a reminder" "$(python3 "$TB" fit "$c" "$WORK/rec.json")" ;; esac
+done
+FLEET_GLYPHS=ascii FLEET_CONF_DIR="$B2" python3 "$NP" notify error 'ascii one' --no-draw
+case "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 2000)")")" in *' x ascii one'*'* 1'*) ;;
+  *) fail "B FLEET_GLYPHS=ascii: letters" "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 2000)")")" ;; esac
+[ "$fails" = "$f0" ] && st_pass "B the message row: error until seen, warn 6 s, ✦ N · ⌘P, fits 45 columns, ascii; the top line says no reminder"
 
-# --- D. ⌘P's 最近消息 row (fleet takes no key of its own for it) ----------------------
+# --- D. ⌘P's first row 「✦ 消息」 (fleet takes no key of its own for it) ------------------
 f0=$fails
 python3 "$NP" notify error 'one unread' --no-draw
-out=$(FLEET_STATUS_G="$WORK/g" python3 - "$BIN" <<'PY'
+out=$(python3 - "$BIN" <<'PY2'
 import sys
 sys.path.insert(0, sys.argv[1])
 import fleet_view as fv
@@ -97,15 +101,72 @@ print(" ".join(e.get("cmd", "?") for e in rows))
 print(next((e["text"] for e in rows if e.get("cmd") == "notices"), "-"))
 for q in ("消息", "message", "zzz"):
     print(q, "notices" in [e.get("cmd") for e in fv.panel_rows([], q, set(), cmds=("new", "quit"))])
-PY
+PY2
 )
-case "$(printf '%s\n' "$out" | sed -n 1p)" in *'notices quit') ;; *) fail "D the 最近消息 row sits at the panel's bottom, above ⏻" "$out" ;; esac
-printf '%s\n' "$out" | sed -n 2p | grep -q '最近消息 · 未读错误 1' || fail "D the row counts the unread errors" "$out"
+case "$(printf '%s\n' "$out" | sed -n 1p)" in 'notices '*) ;; *) fail "D the 消息 row is the panel's first" "$out" ;; esac
+n=$(python3 "$NP" unread)
+printf '%s\n' "$out" | sed -n 2p | grep -q "✦ 消息 $n" || fail "D the row counts the unseen ($n)" "$out"
 printf '%s\n' "$out" | grep -qx '消息 True' || fail "D the words 消息 find it" "$out"
 printf '%s\n' "$out" | grep -qx 'message True' || fail "D the words message find it" "$out"
 printf '%s\n' "$out" | grep -qx 'zzz False' || fail "D other words do not" "$out"
 grep -q 'notices' "$BIN/dash-keymap.sh" && fail "D dash-keymap.sh names a notices key — fleet takes no key for it"
-[ "$fails" = "$f0" ] && st_pass "D ⌘P's bottom row 「最近消息 · 未读错误 N」, found by 消息 / message; no key of its own"
+grep -q "mouse_status_range},inbox" "$BIN/fleet_view.py" || fail "D a click on the message row opens the page"
+[ "$fails" = "$f0" ] && st_pass "D ⌘P's first row 「✦ 消息 N」, found by 消息 / message, a click on the row; no key of its own"
+
+# --- E. one book (T701): six kinds, read by id, the other machines --------------------
+f0=$fails
+E2="$WORK/e2"; mkdir -p "$E2/global"; G2="$WORK/g2"; mkdir -p "$G2"
+en() { FLEET_CONF_DIR="$E2" FLEET_STATUS_G="$G2" python3 "$NP" "$@"; }
+en notify info '一条提示' --no-draw
+en notify error '告警：磁盘红线' --no-draw --kind alert --source alert:appear
+FLEET_CONF_DIR="$E2" FLEET_STATUS_G="$G2" FLEET_NOTIFY=1 python3 - "$BIN" <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_notify as fn
+for k, t in (("ask", "#1 在问你"), ("stuck", "#2 卡住了"), ("done", "#3 做完了")):
+    fn.book({"kind": k, "title": t, "body": "mac-a", "key": "u/" + k})
+PY2
+printf '{"ts":%s,"child_key":"r:issue-9","state":"REAPED","pr":"","summary":"nobody"}\n' "$(date +%s)" > "$E2/global/orphan-reports.ndjson"
+page=$(FLEET_CONF_DIR="$E2" FLEET_STATUS_G="$G2" python3 "$NP" list --json >/dev/null; en unread)
+[ "$page" = 6 ] || fail "E six kinds, six unseen (got $page)" "$(en list)"
+pg=$(FLEET_CONF_DIR="$E2" FLEET_STATUS_G="$G2" python3 - "$BIN" <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_notice as N
+ms = N.inbox()
+print(" ".join(sorted({m["cls"] for m in ms})))
+print([m["id"] for m in ms if m["cls"] == "info"][0])
+print([m["wid"] for m in ms if m["cls"] == "ask"][0])
+PY2
+)
+[ "$(printf '%s\n' "$pg" | sed -n 1p)" = "ask done error info orphan" ] || fail "E the classes ask error orphan done info (+ the alert's error)" "$pg"
+[ "$(printf '%s\n' "$pg" | sed -n 3p)" = u/ask ] || fail "E a session's message keeps its wid (g goes there)" "$pg"
+en read "$(printf '%s\n' "$pg" | sed -n 2p)"
+[ "$(en unread)" = 5 ] || fail "E read <id>: one fewer" "$(en unread)"
+oid=$(FLEET_CONF_DIR="$E2" python3 "$BIN/fleet-orphan-reports.py" list | cut -f1)
+en read "$oid"
+[ "$(FLEET_CONF_DIR="$E2" python3 "$BIN/fleet-orphan-reports.py" count)" = 0 ] || fail "E read on a result nobody took reads it in its own book too"
+[ "$(en unread)" = 4 ] || fail "E … and it is seen" "$(en unread)"
+# the inventory cell → the hub's parse → another home's cache line
+cellv=$(en cell)
+row=$(python3 - "$BIN" "$cellv" <<'PY2'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_hub_common as H
+n = H.notices_cell(sys.argv[2])
+print(len(n["rows"]), n["mark"])
+r = n["rows"][0]
+print("\x1f".join(str(v) for v in (r["id"], "mac-b", n["mark"], r["ts"], r["level"], r["kind"], r["sub"], r["wid"], r["text"], "0")))
+PY2
+)
+[ "$(printf '%s\n' "$row" | sed -n 1p | cut -d' ' -f1)" = 4 ] || fail "E the cell carries the four unseen (no orphan)" "$row"
+printf '%s\n' "$row" | sed -n 2p > "$G2/notices_fl"
+F2="$WORK/f2"; mkdir -p "$F2"
+[ "$(FLEET_CONF_DIR="$F2" FLEET_STATUS_G="$G2" python3 "$NP" unread)" = 1 ] || fail "E another home counts the far machine's message" "$(cat "$G2/notices_fl")"
+# that machine read later than its message: seen everywhere (the latest mark wins)
+python3 -c 'import sys; p=sys.argv[1]; f=open(p).read().split("\x1f"); f[2]=str(int(f[3])+5); f[0]="-"; open(p,"a").write("\x1f".join(f))' "$G2/notices_fl"
+[ "$(FLEET_CONF_DIR="$F2" FLEET_STATUS_G="$G2" python3 "$NP" unread)" = 0 ] || fail "E a later read mark on any machine sees it here" "$(cat "$G2/notices_fl")"
+[ "$fails" = "$f0" ] && st_pass "E one book: a notice, an alert, ask · stuck · done, a result nobody took; read <id>; the cell → the hub → another home, the latest mark"
 
 # --- C. who sees it ---------------------------------------------------------------------
 if [ -z "$RT" ]; then

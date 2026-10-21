@@ -667,7 +667,7 @@ inputs = [sys.argv[14], user, host, aliases, via, login,
           [(p, digest_file(p)) for p in parent_paths]]
 key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 outputs = [wpath, str(Path(gdir) / "fleet_logins"), str(Path(gdir) / "wid_ids")] + [str(Path(gdir) / (pre + f["sess"]))
-           for f in local for pre in ("remote_", "epicstale_", "orphanrep_")]
+           for f in local for pre in ("remote_", "epicstale_", "orphanrep_", "notices_")]
 def output_digests():
     return {p: digest_file(p, rows=Path(p).name.startswith("remote_")) for p in outputs}
 try:
@@ -784,6 +784,23 @@ def stale_of(w):
     return out
 
 
+def notices_of(w):
+    """The login's read mark and messages not seen yet (T701): the worker's
+    `notices` — the same on every row of that login — as (mark, [(id, ts, level,
+    kind, sub, wid, text)]) kept valid; (0, []) when none."""
+    n = w.get("notices") if isinstance(w.get("notices"), dict) else {}
+    mark = n.get("mark") if type(n.get("mark")) is int else 0
+    out = []
+    for e in (n.get("rows") if isinstance(n.get("rows"), list) else [])[:10]:
+        if not isinstance(e, dict) or not isinstance(e.get("id"), str) or type(e.get("ts")) is not int:
+            continue
+        if not re.fullmatch(r"[0-9a-f]{12}", e["id"]):
+            continue
+        out.append((e["id"], e["ts"]) + tuple(e.get(k) if isinstance(e.get(k), str) else ""
+                                              for k in ("level", "kind", "sub", "wid", "text")))
+    return mark, out
+
+
 def orphans_of(w):
     """The login's unread results of sessions whose spawner was gone (issue
     #3369): the worker's `orphan_reports` — the same list on every row of that
@@ -863,7 +880,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(?:[1-9][0-9]{0,9}|T[1-9][0-9]{0,9}|[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25})(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(?:[1-9][0-9]{0,9}|T[1-9][0-9]{0,9}|[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25})(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), notices=notices_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      tok=tok_of(s), pin=w.get("pin") is True, local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -1030,6 +1047,28 @@ for f in local:
             or_lines.append("\x1f".join(clean(v) for v in (rid, r["node"], r["av"], ts, orepo, child, state, pr,
                                                          summ[:300], "1" if r["local"] else "0")) + "\n")
     write(os.path.join(gdir, "orphanrep_" + f["sess"]), "".join(or_lines))
+    # The messages not seen yet (T701): `notices_<sess>`, one line per (machine,
+    # message) — `<id> US <machine> US <its read mark> US <ts> US <level> US <kind>
+    # US <sub> US <wid> US <text> US <local 1|0>` — off any row of that machine.
+    # bin/fleet_notice.py reads the other machines' (local 0) beside its own book,
+    # and takes the latest read mark of all: another home sees the same messages.
+    seen_nt, nt_lines = set(), []
+    for r in rows:
+        if r["local"] and r["local"] != f["sess"]:
+            continue
+        mark, nts = r.get("notices") or (0, [])
+        for rid, ts, lvl, kind, sub, wid, text in nts:
+            if (r["node"], rid) in seen_nt:
+                continue
+            seen_nt.add((r["node"], rid))
+            nt_lines.append("\x1f".join(clean(v) for v in (rid, r["node"], mark, ts, lvl, kind, sub, wid, text[:200],
+                                                         "1" if r["local"] else "0")) + "\n")
+        if not nts and mark and (r["node"], "mark") not in seen_nt:
+            # a machine with nothing unseen still says how far it has read
+            seen_nt.add((r["node"], "mark"))
+            nt_lines.append("\x1f".join(clean(v) for v in ("-", r["node"], mark, "", "", "", "", "", "",
+                                                         "1" if r["local"] else "0")) + "\n")
+    write(os.path.join(gdir, "notices_" + f["sess"]), "".join(nt_lines))
 # A session needs you (issue #2759, EPIC #2756 C3), decided here on every round
 # that brought rows (bin/fleet_notify.py is the one rule; it can never cost the
 # cache above) — on a thin client's home (issue #3005, EPIC #2999 C8): every row

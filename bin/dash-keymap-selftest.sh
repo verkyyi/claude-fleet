@@ -72,8 +72,10 @@ $ndiff"; }
   # fleet-view = the node's root, copied (the 看台's mouse: tmux does not fall back
   # to root for a key a session's key-table lacks), + the 看台's keys — by default
   # ONE action, the panel (issue #3185, EPIC #3178 C7; T685): User927 (⌘P), ⌃] p;
-  # ⌃] itself; ⌃\ (sent on to the session unless a web PTY's home shell).
-  fv_ours='$4 ~ /^User9[0-9][0-9]$/ || $4 == "C-]" || $4 == "C-\\\\" || $4 == "C-Space" || $4 == "F12"'
+  # ⌃] itself; ⌃\ (sent on to the session unless a web PTY's home shell); a click
+  # on the status line (the message row's range opens ⌘P's 消息, T701 — any other
+  # click root's own, carried inside that bind).
+  fv_ours='$4 ~ /^User9[0-9][0-9]$/ || $4 == "C-]" || $4 == "C-\\\\" || $4 == "C-Space" || $4 == "F12" || $4 == "MouseDown1Status"'
   fv_copy=$(awk '$3 == "fleet-view" && !('"$fv_ours"') { $3 = "root"; $1 = $1; print }' "$KW/node.keys")
   [ "$fv_copy" = "$(awk '$3 == "root" && !('"$fv_ours"') { $1 = $1; print }' "$KW/node.keys")" ] \
     || st_fail "8: the 看台's fleet-view is not a copy of the node's root: $(diff <(printf '%s\n' "$fv_copy") <(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys") | head -5)"

@@ -74,7 +74,7 @@
 #   fleet show|open <会话>      one session's fields · the client onto it
 #   fleet rename <会话> <新名>  · fleet close <会话> [--yes]
 #   fleet reap <会话> <方式>    · fleet answer [<会话>] [<回答>]
-#   fleet notices [--json]      最近消息 — what the 看台's top line said (⌘J, T675)
+#   fleet notices [--json]      ⌘P's ✦ 消息 — every message in the one book (T675, T701)
 #                               <会话> = a name (or part), #单号, or the key;
 #                               two matches = the candidates and exit 4, never
 #                               a guess. `fleet open <url|:port|file>` and

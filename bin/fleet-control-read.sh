@@ -225,7 +225,12 @@ case "$mode" in
     # no fork) when the file does not exist — the common case.
     # Column 32 (issue #3517): `pin=1` on a pinned window (@pin), else `pin=` — so
     # another machine's list puts it in its 置顶 group, and the hub's worker_pin can
-    # read back what it wrote. A row ends at pin=; an older node's at orphanrep=.
+    # read back what it wrote.
+    # Column 33 (T701): `notices=` — the login's messages not seen yet but the
+    # results nobody took (those are orphanrep=): bin/fleet_notice.py cell — its
+    # read mark, then `id\037ts\037level\037kind\037sub\037wid\037text`, \036-joined,
+    # at most 10. The LOGIN's, on every row alike; empty (and no fork) when its book
+    # does not exist. A row ends at notices=; an older node's at pin=.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -242,6 +247,9 @@ case "$mode" in
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
     orep=${orep//$'\t'/ }; orep=${orep//$'\n'/ }
+    ntc=''
+    [ -s "$FLEET_CONF_DIR/logs/notices.ndjson" ] && ntc=$(python3 "$BIN/fleet_notice.py" cell 2>/dev/null)
+    ntc=${ntc//$'\t'/ }; ntc=${ntc//$'\n'/ }
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
       [ -n "$_sr" ] || continue
@@ -339,7 +347,7 @@ case "$mode" in
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
       orole=''   # column 20 is always empty (issue #4341)
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\tnotices=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin" "$ntc"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------

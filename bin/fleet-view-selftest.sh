@@ -101,8 +101,11 @@ diff -q "$W/root.now" "$W/root.stock" >/dev/null || st_fail "A: root differs fro
 ti list-keys -T prefix | norm > "$W/pfx.now"; grep -- ' -T prefix ' "$W/stock.keys" | norm > "$W/pfx.stock"
 diff -q "$W/pfx.now" "$W/pfx.stock" >/dev/null || st_fail "A: prefix differs from tmux's"
 ti list-keys -T fleet-view | norm > "$W/fv.1"
-copy=$(grep -v -E ' User9[0-9][0-9] | C-\] | C-\\\\ | C-Space | F12 ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
-[ "$copy" = "$(grep -v -E ' C-Space | F12 ' "$W/root.now")" ] || st_fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
+# MouseDown1Status is the 看台's own (T701: the message row's click opens ⌘P's 消息,
+# root's own click carried inside it) — compared apart, like the codes
+copy=$(grep -v -E ' User9[0-9][0-9] | C-\] | C-\\\\ | C-Space | F12 | MouseDown1Status ' "$W/fv.1" | sed 's/ -T fleet-view / -T root /')
+grep -q ' MouseDown1Status .*mouse_status_range},inbox' "$W/fv.1" || st_fail "A: the message row's click is not fleet-view's"
+[ "$copy" = "$(grep -v -E ' C-Space | F12 | MouseDown1Status ' "$W/root.now")" ] || st_fail "A: fleet-view's copy is not root: $(diff <(printf '%s\n' "$copy") "$W/root.now" | head -5)"
 table=$(bash "$BIN/dash-keymap.sh" --panel switch list)
 vtable=$(bash "$BIN/dash-keymap.sh" --panel switch view)
 [ "$(awk '{ print $2 }' <<< "$vtable" | sort | uniq -d)" = '' ] || st_fail "A: two 看台 actions share a ⌃] letter: $vtable"
@@ -179,7 +182,9 @@ done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
 # section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
-grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the first line is not 等你: $(head -4 "$W/popup.txt")"
+# the first row is ✦ 消息 (T701), the sessions' first group 等你 right under it
+grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '✦ 消息' || st_fail "B: the first line is not ✦ 消息: $(head -4 "$W/popup.txt")"
+grep -A2 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the line under ✦ 消息 is not 等你: $(head -5 "$W/popup.txt")"
 [ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话' "$W/popup.txt" || st_fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do

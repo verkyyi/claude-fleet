@@ -8,10 +8,12 @@ its record, switch-bar.json, went with issue #3008.)
 
     fleet-topbar.py render --node view=<id> s=<fleet> reg=<dir> g=<dir> sock=<socket> cw= w= [pc=] [pd=]
         the line, as tmux format — see render_node below
-    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=] [ups=1] [ur=N]
+    fleet-topbar.py fit <cols> <record.json> [down=] [rr=] [now=] [ups=1]
         the plain text of layout() for a record (selftest)
-    fleet-topbar.py notice <cols> <@view_notice> [ack=1] [now=]
-        the plain text of the notice line, `-` when none is live (selftest)
+    fleet-topbar.py inbox --node cw= [vl=]
+        the message row under the line (T701) — see render_inbox below
+    fleet-topbar.py inbox-text <cols> [now=] [g=<cache dir>]
+        its plain text, `-` when the row is folded (selftest)
 
 Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
 and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
@@ -22,7 +24,9 @@ tokens_today — none ⇒ nothing, never 0). The title is clipped with `…`. Th
 colours are fleet_view.py's table (! x » ✓ ∙ ?, FLEET_GLYPHS=ascii, NO_COLOR):
 the whole line red while the session waits on you (its question in the title's
 place), grey with ? while its machine is out of reach or on the relay — the only
-time the machine is written.
+time the machine is written. The line says the session and nothing else (T701):
+every reminder is the message row's, a second status line that is there only
+while a message not seen yet is live (bin/fleet_notice.py's book).
 """
 import json
 import base64
@@ -178,7 +182,7 @@ def upstream_text():
     return say("topbar_upstream_fmt", say("topbar_up_" + b[0]), b[1]) if b else ""
 
 
-def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream="", unread=0):
+def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
     glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· 上游连不上) (· machine) (· ⌘P).
@@ -210,15 +214,8 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
         # what the session used today on the pool (issue #3377): the hub's count,
         # never a 0 when none is recorded
         right.append([(say("topbar_today_fmt", FV.tokens_short(tok)), DIM, "")])
-    orphans = rec.get("orphans")
-    if isinstance(orphans, int) and orphans > 0:
-        # results nobody took (T660): their rows are ⌘P's, under the repo heading
-        right.append([(say("topbar_orphan_fmt", orphans), WARN, "")])
     if upstream:
         right.append([(upstream, BAD, "upstream")])
-    if unread:
-        # errors the person has not read back yet (T675): ⌘P's 最近消息 reads them
-        right.append([(say("topbar_unread_fmt" if cols >= MID else "topbar_unread_short_fmt", unread), BAD, "notices")])
     if trouble:
         right.append([(trouble, WARN, "machine")])
     if cols >= WIDE:
@@ -238,8 +235,8 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
     return parts + rtext, bg
 
 
-def fit(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream="", unread=0):
-    parts, bg = layout(rec, cols, down, route, now, via, pin, tries, upstream, unread)
+def fit(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
+    parts, bg = layout(rec, cols, down, route, now, via, pin, tries, upstream)
     return "".join(t for t, _, _ in parts), bg
 
 
@@ -247,13 +244,13 @@ def tmux_text(text):
     return text.replace("#", "##")
 
 
-def render(args):
+def render(args, inbox=False):
     kv = dict(a.split("=", 1) for a in args if "=" in a)
     cols = int(kv["cw"]) if kv.get("cw", "").isdigit() else 80
     if "--node" not in args:
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         return 2
-    return render_node(kv, cols)
+    return render_inbox(kv, cols) if inbox else render_node(kv, cols)
 
 
 def paint(parts, bg):
@@ -493,25 +490,6 @@ def render_upload(kv, cols):
         return None
 
 
-def orphan_count():
-    """Unread results nobody took (global/orphan-reports.ndjson, T660), through its
-    one reader loaded in-process — no fork, and nothing read when the file is empty."""
-    conf = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
-    try:
-        if os.path.getsize(os.path.join(conf, "global", "orphan-reports.ndjson")) == 0:
-            return 0
-    except OSError:
-        return 0
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("fleet_orphan_reports", str(BIN / "fleet-orphan-reports.py"))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return len(mod.unread(10 ** 6))
-    except Exception:   # noqa: BLE001 — the line never dies for a reminder
-        return 0
-
-
 def render_node(kv, cols):
     # this connection's language (issue #3329): the 看台's `@view_lang`, when the
     # door recorded one (`vl=1:<locale>`) — fleet-ui-lang.sh weighs it after the
@@ -523,65 +501,83 @@ def render_node(kv, cols):
     if upload is not None:
         print(upload)
         return 0
-    notice = render_notice(kv, cols)
-    if notice is not None:
-        print(notice)
-        return 0
+    settle_rows(kv)
     # an older 看台's one-time line (its format still says fl= / flu=; compat-1v: 下一批删)
     flu = kv.get("flu", "")
     if kv.get("fl") and flu.isdigit() and time.time() < int(flu):
         print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
         return 0
     rec, down, rr, via = node_record(kv)
-    rec["orphans"] = orphan_count()
-    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "",
-                       unread=unread_errors())
+    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "")
     print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0
 
 
-# --- the notice (T675, bin/fleet_notice.py) -----------------------------------------
-# `nt=` is the 看台's @view_notice (base64 JSON), `ack=1` once a key came after its
-# hold (#{client_activity} ≥ @view_notice_hold, computed by tmux in the format). The
-# whole line while it is live: an error until a key after 10 s, warn 6 s, info 3 s
-# (the 2 s status interval rounds it up); the newest only, 「还有 N 条 · ⌘P 看全部」
-# beside it — ⌘P's 最近消息 row, at its bottom, lists them all.
+# --- the message row (T701, bin/fleet_notice.py) -----------------------------------
+# A 看台 dressed with it (`@view_inbox 1`, rv_thin_dress) carries status-format[1] =
+# `inbox --node`: drawn only while tmux's `status` is 2. The top line's own tick is
+# what opens and folds it (settle_rows): `ib=1 st=#{status} vs=#{session_id}` — 2
+# while a message not seen yet is live, else on; written only when it changes, so
+# the session area moves when the row comes and goes, never per message. A notice
+# opens it at once too (fleet_notice.draw), opening ⌘P's 消息 folds it
+# (fleet_notice.settle).
 
-def unread_errors():
+def notice_mod():
     try:
         import fleet_notice
-        return fleet_notice.unread()
-    except Exception:
+        return fleet_notice
+    except Exception:   # noqa: BLE001 — the line never dies for a reminder
+        return None
+
+
+def settle_rows(kv):
+    if kv.get("ib") != "1" or not re.fullmatch(r"\$[0-9]+", kv.get("vs") or ""):
+        return
+    N = notice_mod()
+    if N is None:
+        return
+    want = "2" if N.line_state(None, kv.get("g") or None)[0] is not None else "on"
+    if kv.get("st") != want and kv.get("sock"):
+        subprocess.run(["tmux", "-S", kv["sock"], "set-option", "-t", kv["vs"] + ":", "status", want],
+                       capture_output=True, stdin=subprocess.DEVNULL, timeout=5)
+
+
+MSG_COL = {"ask": BAD, "error": BAD, "warn": WARN, "orphan": WARN, "done": OK, "info": DIM}
+
+
+def inbox_parts(m, n, cols, now=None):
+    """The row as (text, colour) parts: the newest live message — its class's glyph,
+    one line of it, its time — and 「✦ N · ⌘P」 at the right (a phone: 「✦ N」)."""
+    N = notice_mod()
+    g = FV.msg_glyphs()
+    right = "%s %d" % (g["inbox"], n) + (" · ⌘P" if cols >= MID else "")
+    stamp = "" if cols < MID or N is None else " · " + N.when(m["ts"], now)
+    room = cols - 3 - cells(right) - 2 - cells(stamp)
+    text = m.get("text", "") + ((" — " + m["next"]) if m.get("next") and cols >= MID else "")
+    if m.get("node") and cols >= WIDE:
+        text += " · " + m["node"]
+    body = clip(FV.one_line(text), max(0, room))
+    pad = max(1, cols - 3 - cells(body) - cells(stamp) - cells(right) - 1)
+    col = MSG_COL.get(m.get("cls"), FG)
+    return [(" %s " % g.get(m.get("cls"), "∙"), col), (body, BAD if m.get("cls") in ("ask", "error") else FG),
+            (stamp, DIM), (" " * pad, None), (right, WARN), (" ", None)]
+
+
+def render_inbox(kv, cols):
+    vl = kv.get("vl", "")
+    if vl.startswith("1:"):
+        os.environ["FLEET_VIEW_LANG"] = vl[2:]
+    N = notice_mod()
+    m, n = N.line_state(None, kv.get("g") or None) if N is not None else (None, 0)
+    if m is None:
+        print("")
         return 0
-
-
-def notice_line(n, cols):
-    """The notice `n` as tmux format, `cols` wide."""
-    lvl = n.get("level")
-    glyph, colour = {"error": ("✗", BAD), "warn": ("!", WARN)}.get(lvl, ("i", DIM))
-    text = n.get("text") or ""
-    nxt = n.get("next") or ""
-    more = n.get("more") or 0
-    tail = (say("topbar_notice_more_fmt", more) + " · " if more else "") + say("topbar_notice_all")
-    room = cols - 4 - cells(tail) - 2
-    body = text + (" — " + nxt if nxt else "")
-    body = clip(body, max(0, room))
-    pad = max(1, cols - 3 - cells(body) - cells(tail) - 1)
-    return "#[fg=%s,bold] %s #[fg=%s]%s#[nobold]%s#[fg=%s]%s #[default]" % (
-        colour, glyph, colour if lvl == "error" else FG, tmux_text(body), " " * pad, DIM, tmux_text(tail))
-
-
-def render_notice(kv, cols, now=None):
-    """The notice line, or None when there is none live."""
-    try:
-        import fleet_notice
-    except Exception:
-        return None
-    n = fleet_notice.decode(kv.get("nt", ""))
-    now = time.time() if now is None else now
-    if not fleet_notice.live(n, now, kv.get("ack") == "1"):
-        return None
-    return notice_line(n, cols)
+    out = "#[range=user|inbox]"
+    for text, colour in inbox_parts(m, n, cols):
+        if text:
+            out += ("#[fg=%s]%s" % (colour, tmux_text(text))) if colour else tmux_text(text)
+    print(out + "#[norange]#[default]")
+    return 0
 
 
 # --- the line belongs to ONE window (issue #3532) ----------------------------------
@@ -666,20 +662,22 @@ def say(key, *args):
 def main(argv):
     if argv[:1] == ["render"]:
         return render(argv[1:])
+    if argv[:1] == ["inbox"]:
+        return render(argv[1:], inbox=True)
     if argv[:1] == ["fit"] and len(argv) >= 3:
         rec = read_record(Path(argv[2])) or {}
         kv = dict(a.split("=", 1) for a in argv[3:] if "=" in a)
         text, bg = fit(rec, int(argv[1]), kv.get("down", ""), kv.get("rr", ""),
                        int(kv["now"]) if kv.get("now", "").isdigit() else None,
-                       upstream=upstream_text() if kv.get("ups") == "1" else "",
-                       unread=int(kv["ur"]) if kv.get("ur", "").isdigit() else 0)
+                       upstream=upstream_text() if kv.get("ups") == "1" else "")
         print("%s\t%s" % ({None: "-", BG_ASK: "red", BG_DOWN: "grey"}[bg], text))
         return 0
-    if argv[:1] == ["notice"] and len(argv) >= 3:
-        kv = dict(a.split("=", 1) for a in argv[3:] if "=" in a)
-        line = render_notice({"nt": argv[2], "ack": kv.get("ack", "")}, int(argv[1]),
-                             float(kv["now"]) if kv.get("now") else None)
-        print("-" if line is None else re.sub(r"#\[[^\]]*\]", "", line).replace("##", "#"))
+    if argv[:1] == ["inbox-text"] and len(argv) >= 2:
+        kv = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
+        now = float(kv["now"]) if kv.get("now") else None
+        N = notice_mod()
+        m, n = N.line_state(now, kv.get("g") or None) if N is not None else (None, 0)
+        print("-" if m is None else "".join(t for t, _ in inbox_parts(m, n, int(argv[1]), now)))
         return 0
     print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
     return 2
