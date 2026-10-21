@@ -1975,7 +1975,9 @@ opening on any replica). Opening it sets a session cookie marked `ro`
 That session is the person's own, as a member — an admin's ticket opens no admin
 page and looks through nobody else's eyes; `viewAsGuard` refuses every method but
 GET/HEAD, a websocket and the conversation's relay (403 只读票据), exactly as the
-admin's 以他的视角看 preview; it is never renewed; and every reader but the
+admin's 以他的视角看 preview — but for the person's own terminal session read
+along (task YP39: `GET /v1/chat/view`, `/v1/chat/file?worker=`), so an acceptance
+session can photograph it; it is never renewed; and every reader but the
 gate's two doors (`personAdmit`, `sshRelayHTTPIdentity`) takes it for no session
 (`personSessionAny`). `/v1/me` says `read_only`. Each issuance is a `fleet_audit`
 row `console_ticket` with the session's worker id, each opening one

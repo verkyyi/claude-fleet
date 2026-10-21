@@ -10,15 +10,19 @@ export type Pic = { ref?: string; w?: number; h?: number; thumb?: string };
 // assistant-ui keeps an image part only when its URL is https:, blob: or data:
 // (fromThreadMessageLike drops "/v1/…" with a console warning and nothing on the
 // page) — else the copy's preview (a data: URL).
-export function picSrc(g: Pic, base: string = location.href): string {
-  return g.ref ? new URL(`${FILE}?ref=${encodeURIComponent(g.ref)}`, base).href : g.thumb || "";
+// `worker`: a terminal session read along (task YP39) — its files are on the
+// machine it runs on, not the home, so the entry is told which session.
+export function picSrc(g: Pic, base: string = location.href, worker = ""): string {
+  return g.ref ? fileHref(g.ref, base, worker) : g.thumb || "";
 }
+const fileHref = (ref: string, base: string, worker: string) =>
+  new URL(`${FILE}?ref=${encodeURIComponent(ref)}${worker ? `&worker=${encodeURIComponent(worker)}` : ""}`, base).href;
 
 // a reply's Markdown link / image target the home gave a ref for → that file's address
-export function linkFiles(text: string, files: Map<string, string>, base: string = location.href): string {
+export function linkFiles(text: string, files: Map<string, string>, base: string = location.href, worker = ""): string {
   if (!files.size) return text;
   return text.replace(/\]\(\s*<?([^)\s<>]+)>?((?:\s+"[^"]*")?\s*)\)/g, (all, target: string, rest: string) => {
     const ref = files.get(target);
-    return ref ? `](${new URL(`${FILE}?ref=${encodeURIComponent(ref)}`, base).href}${rest})` : all;
+    return ref ? `](${fileHref(ref, base, worker)}${rest})` : all;
   });
 }

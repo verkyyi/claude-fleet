@@ -186,9 +186,16 @@ func TestConsoleTicketRefusesEveryWrite(t *testing.T) {
 	if n < 40 {
 		t.Fatalf("walked %d writes; the table looks empty", n)
 	}
-	for _, p := range []string{ChatPathPrefix + "conversation", ChatPathPrefix + "turn"} {
+	for _, p := range []string{ChatPathPrefix + "conversation", ChatPathPrefix + "turn", ChatPathPrefix + "file?ref=x", ChatPathPrefix + "takeover"} {
 		if code, _ := viewAsDo(t, h, ro, http.MethodGet, p, ""); code != http.StatusForbidden {
 			t.Errorf("ticket GET %s = %d; want 403", p, code)
+		}
+	}
+	// a terminal session read along (task YP39): past the guard (the route's own
+	// answer — here no such session — not the ticket's refusal)
+	for _, p := range []string{ChatPathPrefix + "view?worker=x", ChatPathPrefix + "file?ref=x&worker=x"} {
+		if code, b := viewAsDo(t, h, ro, http.MethodGet, p, ""); strings.Contains(string(b), "只读票据") {
+			t.Errorf("ticket GET %s = %d %s; want past the read-only guard", p, code, b)
 		}
 	}
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/me", nil)

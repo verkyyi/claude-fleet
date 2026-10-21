@@ -72,7 +72,7 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			// 只读 (task F481): one state, one batch of items, as the service streams them
 			w.Header().Set("Content-Type", "text/event-stream")
 			io.WriteString(w, `data: {"t":"state","agent":"claude","busy":true}`+"\n\n")
-			io.WriteString(w, "id: 1\ndata: "+`{"t":"items","from":0,"items":[{"t":"text","d":"hi"}],"q":`+strconvQuote(r.URL.RawQuery)+"}\n\n")
+			io.WriteString(w, "id: 1\ndata: "+`{"t":"items","replace":true,"session":"s1","from":0,"items":[{"t":"text","d":"hi"},{"t":"tool_result","id":"x","text":"SECRET-OUTPUT"}],"q":`+strconvQuote(r.URL.RawQuery)+"}\n\n")
 			w.(http.Flusher).Flush()
 		case "/api/takeover", "/api/giveback":
 			// 接管 / 交回 (task VV8F): the body the hub wrote, echoed
