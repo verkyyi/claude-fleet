@@ -284,17 +284,28 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 		owner = "" // the operator's door, or an admin asking for everyone's
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ts, err := s.Store.FleetTasksFor(owner, limit)
+	out, err := s.tasksBody(owner, limit)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	out["observed_at"] = time.Now().UTC().Format(time.RFC3339)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// tasksBody is the list's body for owner ("" = everyone's): the records,
+// newest first, each with its session's live word — GET /v1/fleet/tasks and
+// the stream's tasks topic alike (T769).
+func (s *Server) tasksBody(owner string, limit int) (map[string]any, error) {
+	ts, err := s.Store.FleetTasksFor(owner, limit)
+	if err != nil {
+		return nil, err
 	}
 	out, err := s.taskViews(ts)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": out, "observed_at": time.Now().UTC().Format(time.RFC3339)})
+	return map[string]any{"tasks": out}, nil
 }
 
 // faultStatus is the HTTP status a fleet fault answers with on this page's

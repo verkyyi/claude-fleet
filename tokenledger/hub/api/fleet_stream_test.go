@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -325,7 +327,10 @@ func TestFleetStreamPing(t *testing.T) {
 
 func TestFleetStreamTopicsArg(t *testing.T) {
 	if got, err := streamTopicsArg(""); err != nil || strings.Join(got, ",") != "nodes,sessions,usage" {
-		t.Errorf("empty = %v %v; want all", got, err)
+		t.Errorf("empty = %v %v; want the default three", got, err)
+	}
+	if got, err := streamTopicsArg("tasks,sessions"); err != nil || strings.Join(got, ",") != "sessions,tasks" {
+		t.Errorf("tasks,sessions = %v %v", got, err)
 	}
 	if got, err := streamTopicsArg("usage, nodes"); err != nil || strings.Join(got, ",") != "nodes,usage" {
 		t.Errorf("usage,nodes = %v %v", got, err)
@@ -347,5 +352,45 @@ func TestStreamValidatorIgnoresClock(t *testing.T) {
 	}
 	if streamValidator(b) == streamValidator(c) {
 		t.Error("a load change did not move the validator")
+	}
+}
+
+// The tasks topic (T769) is asked by name only, and carries the viewer's own
+// records: alice's stream never names bob's task; a stream that names no
+// topic carries no tasks event, as before.
+func TestFleetStreamTasksOwn(t *testing.T) {
+	streamTiming(t, 50*time.Millisecond, fleetStreamPing)
+	h := newFleetHarness(t)
+	h.srv.fleetScopeHook = func(*http.Request) (func(string, string) bool, error) {
+		return func(string, string) bool { return false }, nil
+	}
+	now := time.Now()
+	for _, who := range []string{"alice", "bob"} {
+		if _, err := h.srv.Store.CreateFleetTask(store.FleetTask{Owner: who, Title: who + "'s task", Via: "⌘P"}, "test:"+who, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.srv.handleFleetStream(w, r.WithContext(withPrincipal(r.Context(), r.Header.Get("X-Test-Principal"))))
+	}))
+	t.Cleanup(srv.Close)
+	open := func(who, query string) <-chan sseEvent {
+		return openStream(t, &harness{http: srv}, who, query)
+	}
+	ev := nextEvent(t, open("alice", "?topics=sessions,tasks"), "tasks", 3*time.Second)
+	if !strings.Contains(ev.data, "alice's task") || strings.Contains(ev.data, "bob's task") {
+		t.Errorf("alice's tasks event = %s; want her own record only", ev.data)
+	}
+	ch := open("alice", "")
+	deadline := time.After(400 * time.Millisecond)
+	for done := false; !done; {
+		select {
+		case ev := <-ch:
+			if ev.name == "tasks" {
+				t.Fatalf("a stream naming no topic sent tasks: %s", ev.data)
+			}
+		case <-deadline:
+			done = true
+		}
 	}
 }
