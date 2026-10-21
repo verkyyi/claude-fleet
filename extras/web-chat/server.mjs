@@ -160,7 +160,12 @@ function sdk() {
   return sdkP;
 }
 
-// ---- the session credential: one per turn, revoked when the turn ends -------
+// ---- the session credential: one per conversation, reused by every turn --------
+// (task V9DJ C1: minting one took p50 8 s / p90 18 s on a busy home — a route
+// probe and a mint, each its own shell + python — and revoking another 2 s, on
+// every turn before the model was even asked). Minted on the first need (or when
+// the page reads the conversation, ahead of a turn), dropped when a turn fails
+// on something else than a budget or the stop key, revoked when the service exits.
 let turnSeq = 0;
 function run(cmd, args, extraEnv = {}) {
   return new Promise((resolve) => {
@@ -184,6 +189,19 @@ async function revokeCred(c) {
   if (!c?.mint) return;
   await run(SESSION_CRED, ["revoke", "--sid", c.sid]);
   liveCreds.delete(c.mint.cred);
+}
+let credP = null;
+function credFor() {
+  if (!credP) credP = mintCred().catch((e) => { credP = null; throw e; });
+  return credP;
+}
+async function dropCred(why) {
+  const p = credP;
+  credP = null;
+  if (!p) return;
+  const c = await p.catch(() => null);
+  if (c?.mint) log("cred_drop", { cred_sid: c.sid, why });
+  await revokeCred(c);
 }
 
 // ---- http helpers -----------------------------------------------------------
@@ -322,7 +340,7 @@ let ridSeq = 0;
 // One query() through a fresh session credential; onMsg sees every SDK message.
 async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers }, onMsg) {
   const S = await sdk();
-  const cred = await mintCred();
+  const cred = await credFor();
   log("query", { cred_sid: cred.sid, route: cred.route, model, resume: !!resume });
   try {
     const q = S.query({ prompt, options: {
@@ -347,8 +365,12 @@ async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers
       }
       onMsg(m);
     }
+  } catch (e) {
+    // a failed turn may be the credential's (the proxy forgot it, a rebind): the
+    // next turn mints a fresh one. A budget refusal or the stop key is not.
+    if (!ac?.signal?.aborted && !e?.budget && !e?.tooLong && !budgetRefusal([String(e?.message || "")]) && !TOO_LONG.test(String(e?.message || ""))) await dropCred("turn failed");
+    throw e;
   } finally {
-    await revokeCred(cred);
     saveConv();
   }
 }
@@ -645,6 +667,8 @@ async function handle(req, res) {
     return send(res, 404, { error: "not found" });
   }
   if (p === "/api/conversation" && req.method === "GET") {
+    // a page reading the conversation is about to talk: have the credential ready
+    if (SDK_PATH && !live) credFor().catch(() => {});
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",
       asks: live ? [...live.asks.entries()].map(([rid, a]) => askEvent(rid, a)) : [],
@@ -712,11 +736,17 @@ if (SOCKET) {
   });
 }
 server.on("connection", (c) => { touch(); c.on("close", touch); });
-function shutdown(code, ev) {
+let stopping = false;
+async function shutdown(code, ev) {
+  if (stopping) return;
+  stopping = true;
   log(ev);
   carryOut();
   server.close();
   if (SOCKET) { try { unlinkSync(SOCK); } catch { /* gone */ } }
+  // the conversation's credential goes with the service (bounded: a stuck proxy
+  // never holds the exit — the proxy drops it with this pid anyway)
+  await Promise.race([dropCred(ev), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(code);
 }
 if (SOCKET && IDLE_SECS > 0) {
