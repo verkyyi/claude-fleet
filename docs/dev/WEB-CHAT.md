@@ -98,6 +98,11 @@ bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move 
 整个请求连同副本令牌交给持链副本（`chatRelayPeer`），由它认人、开转发、审计，不再二跳；节点的回拨落在没开这条
 转发的副本上，在**验签之前**按请求自称的身份（FleetSig keyid 或 bearer，`claimedEndpoint`）转给持链副本——签名的
 nonce 只在真正处理它的副本上花一次。单入口逐字节不变。BREAK-IT `chat-relay-replica-hop`
+
+**对话只有一份，记录在家里**（Y393）：入口数据库里那份按人加密的副本（`cached=1`）只在页面第一次读、家还没答时上屏，
+家答过一次后再晚到的副本一律丢掉（`homeSeen`）；副本按「家回答的时刻」落库，`updated_at` 只进不退，两个副本上乱序
+结束的两次读留下的是新的那份。同一人开几个浏览器看的是同一份：一边发的消息只流给发的那边，另一边聚焦即重读家、
+在屏时每 30 s 自己重读一次。BREAK-IT `chat-copy-order`。
 （`tokenledger/hub/api/chat_relay_replica_test.go`）。
 
 ### 入口的路由（#3645，EPIC #3642 C3）

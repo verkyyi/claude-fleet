@@ -69,6 +69,8 @@ export type Sync = "" | "syncing" | "synced" | "offline";
 const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
+// how often a page on screen reads the home again by itself (task Y393)
+const POLL_MS = 30_000;
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
 type Msg = { id: string; role: "user" | "assistant"; content: Part[]; status?: ThreadMessageLike["status"] };
 
@@ -224,6 +226,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   // the home answers; the home's answer replaces it. "" = no copy in play.
   const [sync, setSync] = useState<Sync>("");
   const hadCopy = useRef(false);
+  // the home has answered this page once: from then on only the home is shown
+  const homeSeen = useRef(false);
   const turnEnd = useRef(onTurnEnd);
   turnEnd.current = onTurnEnd;
   const reply = useRef(onReply);
@@ -239,12 +243,14 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     const signal = transport.current.signal;
     if (signal.aborted || !navigator.onLine || streaming.current) return;
     const read = ++historyRead.current;
-    if (!hadCopy.current) {
-      // first read: the entry's copy, at once, while the home's answer travels
+    if (!hadCopy.current && !homeSeen.current) {
+      // first read: the entry's copy, at once, while the home's answer travels.
+      // The copy is never newer than the home: once the home has answered (this
+      // read or an earlier one) a copy that lands later is dropped (task Y393).
       void fetch(`${API}/conversation?cached=1`, { headers: H, signal }).then(async (c) => {
-        if (!c.ok || signal.aborted || read !== historyRead.current) return;
+        if (!c.ok || signal.aborted || read !== historyRead.current || homeSeen.current) return;
         const j = await c.json().catch(() => null);
-        if (!j || read !== historyRead.current) return;
+        if (!j || read !== historyRead.current || homeSeen.current) return;
         hadCopy.current = true;
         setModels(j.models || []);
         setModelState((m) => {
@@ -284,6 +290,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
       setLoaded(true);
       return;
     }
+    homeSeen.current = true;
     setNotice("");
     setGate(null);
     if (hadCopy.current) setSync("synced");
@@ -309,9 +316,18 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     load();
     const vis = () => { if (!document.hidden && !streaming.current) load(); };
     document.addEventListener("visibilitychange", vis);
+    window.addEventListener("focus", vis);
     const online = () => { if (!streaming.current) load(); };
     window.addEventListener("online", online);
-    return () => { transport.current.abort(); clearTimeout(follow.current); document.removeEventListener("visibilitychange", vis); window.removeEventListener("online", online); };
+    // The same person may have the chat open in another browser (task Y393):
+    // what that one does reaches the home, never this page's stream — so a
+    // page on screen reads the home again by itself every POLL_MS, and at once
+    // when it comes back into view or focus.
+    const poll = window.setInterval(() => { if (!document.hidden && !streaming.current) load(); }, POLL_MS);
+    return () => {
+      transport.current.abort(); clearTimeout(follow.current); clearInterval(poll);
+      document.removeEventListener("visibilitychange", vis); window.removeEventListener("focus", vis); window.removeEventListener("online", online);
+    };
   }, [load]);
 
   const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem("fwc-model", m); }, []);
