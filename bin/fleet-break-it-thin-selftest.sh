@@ -445,7 +445,7 @@ drill_notice_test_into_real_book() {
   # a drill against the live install: a hub this login does not talk to
   out=$(ui_fail CCQUOTA_HUB_URL=https://127.0.0.1:9)
   n=$(nb); [ "$n" = 0 ] || { WHY="a drill's notice (a fake hub) reached the person's record"; return 1; }
-  out=$(env -u FLEET_NOTICE_FORBID FLEET_CONF_DIR="$d/conf" FLEET_NOTICE_OWN_BOOK="$book" CCQUOTA_HUB_URL=https://127.0.0.1:9 \
+  out=$(env -u FLEET_NOTICE_FORBID -u FLEET_NOTICE_FORBID_HIT FLEET_CONF_DIR="$d/conf" FLEET_NOTICE_OWN_BOOK="$book" CCQUOTA_HUB_URL=https://127.0.0.1:9 \
         python3 "$BIN/fleet_notice.py" notify error 'x' 2>&1); rc=$?
   [ "$rc" = 4 ] || { WHY="fleet_notice.py notify under a fake hub: rc $rc, want 4"; return 1; }
   case "$out" in *'not recorded'*'127.0.0.1:9'*) ;; *) WHY="the refusal says nothing on stderr: $out"; return 1 ;; esac

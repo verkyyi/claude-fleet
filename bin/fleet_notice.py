@@ -44,7 +44,7 @@ any row is written or drawn — a book named in FLEET_NOTICE_FORBID (run-selftes
 sets it to the login's real record, and FLEET_NOTICE_FORBID_HIT to a file the
 refusal touches so the runner reds the test), or this login's own record while
 the process talks to a hub this login does not (CCQUOTA_HUB_URL other than
-node.env / node.pub.env / fleet.conf name — T672's drill ran dash-raw-session.sh against https://127.0.0.1:9 and
+node.env / node.pub.env / fleet.conf name — T672's drill started a session against https://127.0.0.1:9 and
 its refusal reached the person's 消息), or FLEET_DRILL=1. One stderr line says
 which; nothing is written, nothing drawn.
 

@@ -167,7 +167,16 @@ def main():
                       "%d window moved to under the popup is held" % width)
                 check(b"BACKGROUND" not in chunk and "龘".encode() not in chunk,
                       "%d window moved to: no background output through popup" % width)
-                frame()
+                # nothing of the background inside the frame (the frame's own
+                # cells are left out: select-window repaints the whole screen, and
+                # tmux 3.7c misdraws a wide glyph straddling a 90% popup's edge —
+                # with or without the freeze)
+                lines = capture().splitlines()
+                top = next(i for i, line in enumerate(lines) if "╭" in line)
+                bottom = next(i for i, line in enumerate(lines) if "╰" in line)
+                inside = ["│".join(line.split("│")[1:-1]) for line in lines[top + 1:bottom]]
+                check(not any("BACKGROUND" in t or "龘" in t for t in inside),
+                      "%d window moved to: nothing of it inside the frame" % width)
                 tm(inner, "select-window", "-t", "fl:0")
                 tm(inner, "kill-window", "-t", "fl:1")
                 time.sleep(0.4)
