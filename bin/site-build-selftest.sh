@@ -33,6 +33,12 @@
 #      zh/en pairs as xhtml:link; llms.txt / llms-zh.txt are llmstxt.org-shaped
 #      (H1 · > summary · ## lists of [links](…)), every link answered; llms-full
 #      carries every doc's title; a doc added to docs/public/ is in all of them
+#   L  the legal pages (T883, EPIC WACK C2): /terms /privacy /en/terms /en/privacy
+#      built from site/legal/, each in its language with its draft line, its
+#      twin as hreflang, and the front page's footer; both front pages' footers
+#      carry 用户协议 · 隐私政策 (Terms · Privacy), the company and the ICP number
+#      linked to beian.miit.gov.cn — every footer key in both string tables; a
+#      legal source missing in one language fails the build
 #   T  fleet.trial off (issue #4269): the apply/ pages and llms files offer no
 #      trial — the scan card is 申请使用 → /apply (T794), no drill seconds — and
 #      the trial pages keep theirs
@@ -118,6 +124,10 @@ for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，先试
         u = u.split('?')[0].split('#')[0]
         if u in ('/', '/en/', '/app', '/app/try', '/apply') or u.startswith(('/docs/', '/en/docs/')):
             continue
+        if u in ('/terms', '/privacy', '/en/terms', '/en/privacy'):   # the legal pages (T883)
+            if not os.path.isfile(os.path.join(OUT, u.lstrip('/'), 'index.html')):
+                bad.append('H %s: %s is not in the build' % (rel, u))
+            continue
         f = {'/favicon.svg': 'logo.svg'}.get(u) or (u[len('/site/'):] if u.startswith('/site/') else u.lstrip('/'))
         if u not in ('/favicon.ico', '/favicon.svg', '/apple-touch-icon.png') and not u.startswith('/site/'):
             bad.append('H %s: links %s, which the site does not serve' % (rel, u))
@@ -195,7 +205,7 @@ PY
 # S — the hero speaks of a service (#3940): no GitHub / 开源 / open source / MIT in
 #     the header, the first section or the meta description; the app is a
 #     BusinessApplication. The page keeps only what it must (T872): the nav is
-#     文档 · 登录 · the language, the footer GitHub · © — one language switch, one
+#     文档 · 登录 · the language, the footer GitHub · © (+ the legal line, leg L) — one language switch, one
 #     docs link, the GitHub link only in the footer, no 能交给它 / 价格 / FAQ /
 #     安全 / trademark line, and the share words name no price or trial length
 if [ -f "$T/d/index.html" ]; then
@@ -220,7 +230,8 @@ for f in sys.argv[1:]:
     nav = re.search(r'<div class="nav-r">.*?</div>', body, re.S).group(0)
     links = re.findall(r'<a [^>]*>', re.sub(r'<aside.*?</aside>', ' ', body, flags=re.S))
     outside = [a for a in links if 'class="brand"' not in a and 'class="skip"' not in a
-               and 'id="to-app"' not in a]
+               and 'id="to-app"' not in a
+               and not re.search(r'href="(/en)?/(terms|privacy)"|beian\.miit', a)]   # the footer legal line, T883 leg L
     if len(outside) != 4:
         bad.append('%s: %d entries outside the scan card, not 4 (文档 · 登录 · language · GitHub): %s'
                    % (f, len(outside), outside))
@@ -425,9 +436,63 @@ if not bad:
 sys.exit(1 if bad else 0)
 PY
 
+# L — the legal pages and the footer (T883)
+python3 - "$T/a" "$ROOT" <<'PY' || fail=1
+import json, os, re, sys
+OUT, ROOT = sys.argv[1], sys.argv[2]
+bad = []
+S = {l: json.load(open(os.path.join(ROOT, 'site', 'strings.%s.json' % l), encoding='utf-8')) for l in ('zh', 'en')}
+for k in ('terms', 'privacy', 'terms_path', 'privacy_path', 'company', 'icp', 'legal_home', 'terms_desc', 'privacy_desc'):
+    for l in S:
+        if not S[l].get(k):
+            bad.append('L strings.%s.json: no %s' % (l, k))
+for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
+    p = open(os.path.join(OUT, home), encoding='utf-8').read()
+    foot = re.search(r'<footer>.*?</footer>', p, re.S)
+    foot = foot.group(0) if foot else ''
+    for want in ('href="%s">%s</a>' % (S[l]['terms_path'], S[l]['terms']),
+                 'href="%s">%s</a>' % (S[l]['privacy_path'], S[l]['privacy']),
+                 S[l]['company'], 'href="https://beian.miit.gov.cn/"', '粤ICP备13087700号'):
+        if want not in foot:
+            bad.append('L %s footer: no %s' % (home, want))
+    for doc in ('terms', 'privacy'):
+        path = S[l][doc + '_path']
+        f = os.path.join(OUT, path.lstrip('/'), 'index.html')
+        if not os.path.isfile(f):
+            bad.append('L %s is not built' % path)
+            continue
+        q = open(f, encoding='utf-8').read()
+        twin = S['en' if l == 'zh' else 'zh'][doc + '_path']
+        need = ['<html lang="%s">' % S[l]['lang'], '<link rel="canonical" href="__ORIGIN__%s">' % path,
+                'href="__ORIGIN__%s"' % twin, '<h1>', '草稿' if l == 'zh' else 'Draft',
+                'href="%s" aria-current="page"' % path, S[l]['company'], '粤ICP备13087700号']
+        for w in need:
+            if w not in q:
+                bad.append('L %s: lacks %s' % (path, w))
+        if '{{' in q:
+            bad.append('L %s: an unfilled slot' % path)
+        for u in re.findall(r'href="(/[^"]*)"', q):
+            u = u.split('#')[0]
+            if u in ('/', '/en/') or u.startswith(('/favicon', '/apple-touch')):
+                continue
+            if not os.path.isfile(os.path.join(OUT, u.lstrip('/'), 'index.html')):
+                bad.append('L %s: links %s, which is not built' % (path, u))
+for x in bad:
+    print('FAIL ' + x)
+if not bad:
+    print('ok   L /terms /privacy /en/terms /en/privacy built, drafts, twins · footers carry both links, the company and the ICP number')
+sys.exit(1 if bad else 0)
+PY
+mkdir -p "${T:?}/lsite"; cp -R "$ROOT/site/." "${T:?}/lsite/"; rm -f "${T:?}/lsite/legal/privacy.en.md"
+if out="$("$BUILD" --site "$T/lsite" --out "$T/l" --drill "$T/none.json" --now "$NOW" 2>&1)"; then
+  bad "L a missing site/legal/privacy.en.md still built"
+elif printf '%s' "$out" | grep -q 'privacy.en.md is missing'; then st_ok_all "L a legal page missing in one language fails the build"
+else bad "L missing legal page: $out"; fi
+
 # I — no internal names in what the hub serves (the rule table, its #@keep words kept)
 if [ -f "$ROOT/conf/oss-scan.rules" ]; then
   hits=$(python3 - "$ROOT/conf/oss-scan.rules" "$T/a/index.html" "$T/a/en/index.html" "$T/d/index.html" \
+    "$T/a/terms/index.html" "$T/a/privacy/index.html" "$T/a/en/terms/index.html" "$T/a/en/privacy/index.html" \
     "$T/a/robots.txt" "$T/a/sitemap.xml" "$T/a/llms.txt" "$T/a/llms-zh.txt" "$T/a/llms-full.txt" <<'PY2'
 import re, sys
 rules, keep = [], []

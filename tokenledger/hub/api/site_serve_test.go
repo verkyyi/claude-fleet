@@ -18,21 +18,25 @@ func siteFixture() (fstest.MapFS, fstest.MapFS) {
 		return &fstest.MapFile{Data: []byte(`<html lang="` + lang + `"><link rel="canonical" href="__ORIGIN__/x">` + lang + `</html>`)}
 	}
 	site := fstest.MapFS{
-		"index.html":           page("zh-CN"),
-		"en/index.html":        page("en"),
-		"build.json":           {Data: []byte(`{"timed":false}`)},
-		".gitkeep":             {},
-		"logo.svg":             {Data: []byte("<svg/>")},
-		"favicon.ico":          {Data: []byte("ICO")},
-		"apple-touch-icon.png": {Data: []byte("PNG-apple")},
-		"og/cover-zh.png":      {Data: []byte("PNG-zh")},
-		"fonts/a-latin.woff2":  {Data: []byte("WOFF2")},
-		"fonts/OFL-a.txt":      {Data: []byte("OFL")},
-		"robots.txt":           {Data: []byte("User-agent: *\nDisallow: /app/\nSitemap: __ORIGIN__/sitemap.xml\n")},
-		"sitemap.xml":          {Data: []byte(`<?xml version="1.0"?><urlset><url><loc>__ORIGIN__/</loc></url></urlset>`)},
-		"llms.txt":             {Data: []byte("# ClaudeFleet\n- [FAQ](__ORIGIN__/en/docs/faq.md)\n")},
-		"llms-zh.txt":          {Data: []byte("# ClaudeFleet\n- [常见问题](__ORIGIN__/docs/faq.md)\n")},
-		"llms-full.txt":        {Data: []byte("# ClaudeFleet — full documentation\nSource: __ORIGIN__/docs/faq\n")},
+		"index.html":            page("zh-CN"),
+		"en/index.html":         page("en"),
+		"terms/index.html":      page("zh-CN"),
+		"privacy/index.html":    page("zh-CN"),
+		"en/terms/index.html":   page("en"),
+		"en/privacy/index.html": page("en"),
+		"build.json":            {Data: []byte(`{"timed":false}`)},
+		".gitkeep":              {},
+		"logo.svg":              {Data: []byte("<svg/>")},
+		"favicon.ico":           {Data: []byte("ICO")},
+		"apple-touch-icon.png":  {Data: []byte("PNG-apple")},
+		"og/cover-zh.png":       {Data: []byte("PNG-zh")},
+		"fonts/a-latin.woff2":   {Data: []byte("WOFF2")},
+		"fonts/OFL-a.txt":       {Data: []byte("OFL")},
+		"robots.txt":            {Data: []byte("User-agent: *\nDisallow: /app/\nSitemap: __ORIGIN__/sitemap.xml\n")},
+		"sitemap.xml":           {Data: []byte(`<?xml version="1.0"?><urlset><url><loc>__ORIGIN__/</loc></url></urlset>`)},
+		"llms.txt":              {Data: []byte("# ClaudeFleet\n- [FAQ](__ORIGIN__/en/docs/faq.md)\n")},
+		"llms-zh.txt":           {Data: []byte("# ClaudeFleet\n- [常见问题](__ORIGIN__/docs/faq.md)\n")},
+		"llms-full.txt":         {Data: []byte("# ClaudeFleet — full documentation\nSource: __ORIGIN__/docs/faq\n")},
 	}
 	docs := fstest.MapFS{
 		"zh/index.html":       {Data: []byte("DOCS-ZH")},
@@ -65,6 +69,11 @@ func TestSitePaths(t *testing.T) {
 	for _, c := range []struct{ path, body, ctype string }{
 		{"/", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
 		{"/en/", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
+		// the legal pages (T883)
+		{"/terms", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
+		{"/privacy", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
+		{"/en/terms", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
+		{"/en/privacy", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
 		{"/favicon.ico", "ICO", "image/x-icon"},
 		{"/favicon.svg", "<svg/>", "image/svg+xml"},
 		{"/apple-touch-icon.png", "PNG-apple", "image/png"},
@@ -127,7 +136,7 @@ func TestSitePaths(t *testing.T) {
 	}
 	for _, path := range []string{
 		"/site/index.html", "/site/en/index.html", "/site/build.json", "/site/.gitkeep", "/site/../index.html",
-		"/site/nope.png", "/site/robots.txt", "/site/llms.txt", "/docs/nope", "/docs/nope.md", "/en/docs/admin/", "/docs/a//b",
+		"/site/nope.png", "/site/robots.txt", "/site/terms/index.html", "/site/llms.txt", "/docs/nope", "/docs/nope.md", "/en/docs/admin/", "/docs/a//b",
 	} {
 		if rec := do(http.MethodGet, path, nil); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d; want 404", path, rec.Code)
@@ -154,7 +163,7 @@ func TestSitePathsOffAddNothing(t *testing.T) {
 	h.srv.SiteFS, h.srv.DocsFS = siteFixture()
 	bare := h.srv.logRequests(h.srv.readOnlyGate(h.srv.routes()))
 	mounted := h.srv.Handler()
-	paths := []string{"/en", "/en/", "/favicon.ico", "/favicon.svg", "/apple-touch-icon.png",
+	paths := []string{"/en", "/en/", "/terms", "/en/privacy", "/favicon.ico", "/favicon.svg", "/apple-touch-icon.png",
 		"/site/og/cover-zh.png", "/docs", "/docs/", "/docs/faq", "/en/docs/faq",
 		"/robots.txt", "/sitemap.xml", "/llms.txt", "/llms-zh.txt", "/llms-full.txt"}
 	for _, site := range []bool{false, true} {

@@ -337,6 +337,92 @@ for lang, sub_dir in LANGS:
             fail('%s: the page with the trial off still carries %s' % (lang, bad))
     apply_pages[lang] = (os.path.join('apply', sub_dir), page)
 
+# --- the legal pages (T883, EPIC WACK C2) -----------------------------------
+# site/legal/<doc>.<lang>.md → /terms /privacy (中文) and /en/terms /en/privacy,
+# each in site/legal.html's frame with the front page's own footer (cut from
+# template.html, so the two never drift). The Markdown is the subset the texts
+# use: headings, paragraphs, lists, a blockquote, a table, **bold**, [links](…).
+LEGAL_DOCS = ('terms', 'privacy')
+
+def md_inline(s):
+    s = html.escape(s, quote=False)
+    s = re.sub(r'\[([^\]]+)\]\(([^)\s]+)\)', lambda m: '<a href="%s">%s</a>' % (html.escape(m.group(2)), m.group(1)), s)
+    return re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', s)
+
+def md_render(text):
+    lines, out, i = text.split('\n'), [], 0
+    starts = lambda l: re.match(r'\s*(#{1,6}\s|>|[-*]\s|\d+\.\s|\|)', l)
+    while i < len(lines):
+        l = lines[i]
+        if not l.strip():
+            i += 1
+            continue
+        m = re.match(r'(#{1,6})\s+(.+?)\s*$', l)
+        if m:
+            out.append('<h%d>%s</h%d>' % (len(m.group(1)), md_inline(m.group(2)), len(m.group(1))))
+            i += 1
+        elif l.startswith('>'):
+            body = []
+            while i < len(lines) and lines[i].startswith('>'):
+                body.append(lines[i][1:].strip()); i += 1
+            out.append('<blockquote><p>%s</p></blockquote>' % md_inline(' '.join(body)))
+        elif l.startswith('|'):
+            cells = lambda r: [c.strip() for c in r.strip().strip('|').split('|')]
+            head, rows = cells(l), []
+            i += 2
+            while i < len(lines) and lines[i].startswith('|'):
+                rows.append(cells(lines[i])); i += 1
+            out.append('<table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>' % (
+                ''.join('<th>%s</th>' % md_inline(c) for c in head),
+                ''.join('<tr>%s</tr>' % ''.join('<td>%s</td>' % md_inline(c) for c in r) for r in rows)))
+        elif re.match(r'([-*]|\d+\.)\s', l):
+            tag = 'ol' if l[0].isdigit() else 'ul'
+            items = []
+            while i < len(lines) and re.match(r'([-*]|\d+\.)\s', lines[i]):
+                items.append(re.sub(r'^([-*]|\d+\.)\s+', '', lines[i])); i += 1
+            out.append('<%s>%s</%s>' % (tag, ''.join('<li>%s</li>' % md_inline(x) for x in items), tag))
+        else:
+            body = []
+            while i < len(lines) and lines[i].strip() and not starts(lines[i]):
+                body.append(lines[i].strip()); i += 1
+            out.append('<p>%s</p>' % md_inline(' '.join(body)))
+    return '\n'.join(out)
+
+legal_pages = {}   # served path → page
+LEGAL_FRAME = os.path.join(SITE, 'legal.html')
+FOOTER = re.search(r'<footer>.*?</footer>', tmpl, flags=re.S)
+if not os.path.isfile(LEGAL_FRAME) or not FOOTER:
+    fail('site/legal.html (the legal pages\' frame) or template.html\'s <footer> is missing')
+else:
+    frame = open(LEGAL_FRAME, encoding='utf-8').read()
+    frame = frame.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG)
+    for lang, _ in LANGS:
+        S = tables[lang]
+        other = 'en' if lang == 'zh' else 'zh'
+        for doc in LEGAL_DOCS:
+            src = os.path.join(SITE, 'legal', '%s.%s.md' % (doc, lang))
+            if not os.path.isfile(src):
+                fail('site/legal/%s.%s.md is missing (every legal page has both languages)' % (doc, lang))
+                continue
+            md = open(src, encoding='utf-8').read()
+            title = re.search(r'^#\s+(.+?)\s*$', md, flags=re.M)
+            if not title:
+                fail('site/legal/%s.%s.md has no # title' % (doc, lang))
+                continue
+            v = dict(S)
+            path = S[doc + '_path']
+            v.update(legal_title=title.group(1), legal_desc=S[doc + '_desc'], legal_path=path,
+                     legal_zh=tables['zh'][doc + '_path'], legal_en=tables['en'][doc + '_path'],
+                     legal_other=tables[other][doc + '_path'], legal_body=md_render(md),
+                     footer=FOOTER.group(0).replace('href="{{%s_path}}"' % doc, 'href="{{%s_path}}" aria-current="page"' % doc))
+            page = frame.replace('{{footer}}', v['footer'])
+            def lsub(m, v=v, doc=doc, lang=lang):
+                if m.group(1) not in v:
+                    fail('%s %s: legal slot {{%s}} has no string' % (lang, doc, m.group(1)))
+                    return ''
+                return v[m.group(1)]
+            legal_pages[path] = re.sub(r'\{\{([a-z0-9_]+)\}\}', lsub, page)
+
 if errs:
     for e in errs:
         print('site-build: ' + e, file=sys.stderr)
@@ -373,7 +459,7 @@ def font_range(page):
 def page_chars():
     spans = font_range(pages['en'][1])
     chars = set(range(0x20, 0x7f))   # all of printable ASCII, used or not
-    for _, page in list(pages.values()) + list(apply_pages.values()):
+    for _, page in list(pages.values()) + list(apply_pages.values()) + [('', p) for p in legal_pages.values()]:
         chars |= {ord(c) for c in html.unescape(page)
                   if ord(c) >= 0x20 and any(a <= ord(c) <= b for a, b in spans)}
     return chars
@@ -422,6 +508,12 @@ os.makedirs(OUT)
 open(os.path.join(OUT, '.gitkeep'), 'w').close()
 for lang, (sub_dir, page) in list(pages.items()) + list(apply_pages.items()):
     d = os.path.join(OUT, sub_dir)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, 'index.html'), 'w', encoding='utf-8') as fh:
+        fh.write(page)
+
+for path, page in legal_pages.items():
+    d = os.path.join(OUT, path.strip('/'))
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, 'index.html'), 'w', encoding='utf-8') as fh:
         fh.write(page)
