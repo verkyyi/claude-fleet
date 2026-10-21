@@ -113,9 +113,19 @@ claude_bin() { # the login's own claude for the SDK (deps has no native binary).
   return 1
 }
 
+codex_bin() { # the login's own codex for the conversation's Codex side (task R9A2); none ⇒ Claude only
+  local d
+  [ -n "${FLEET_CODEX_BIN:-}" ] && [ -x "$FLEET_CODEX_BIN" ] && { printf '%s' "$FLEET_CODEX_BIN"; return 0; }
+  command -v codex 2>/dev/null && return 0
+  for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; do
+    [ -x "$d/codex" ] && { printf '%s' "$d/codex"; return 0; }
+  done
+  return 1
+}
+
 server_env() {
   env -u TMUX -u TMUX_PANE -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT \
-    FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(claude_bin || true)" \
+    FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(claude_bin || true)" FLEET_WEBCHAT_CODEX="$(codex_bin || true)" \
     FLEET_WEBCHAT_SESSION_CRED="$BIN/fleet-session-cred.sh" "$@"
 }
 
