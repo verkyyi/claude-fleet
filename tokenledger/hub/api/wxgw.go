@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -280,6 +281,15 @@ func wxTrialSceneInRange(n int64) bool { return n >= wxTrialSceneMin && n < wxTr
 
 // wxTempMax is the longest a temporary code lives (WeChat's own bound).
 const wxTempMax = 30 * 24 * time.Hour
+
+// fromWorkbench says r carries workbench's gate — the same token the hub
+// sends it — on its way in (a 试用二维码 scan handed over, wx_trial_scan.go):
+// compared in constant time, never logged.
+func (g *WxGateway) fromWorkbench(r *http.Request) bool {
+	got := r.Header.Get("x-internal-token")
+	want := strings.TrimSpace(g.Token)
+	return g.ready() && got != "" && hmac.Equal([]byte(got), []byte(want))
+}
 
 // qrCreateTrial draws a trial code for scene: permanent (ttl 0,
 // QR_LIMIT_STR_SCENE — the account holds 100 000 of those in all) or

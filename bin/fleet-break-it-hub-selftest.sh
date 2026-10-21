@@ -2510,7 +2510,7 @@ drill_trial_host_no_spare() {
 drill_trial_scan_forged() {
   CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
   t0=$(now)
-  grep -q 'hmac.Equal(\[\]byte(got), \[\]byte(strings.TrimSpace(s.WxGW.Token)))' "$tl/api/wx_trial_scan.go" 2>/dev/null \
+  grep -q 's.WxGW.fromWorkbench(r)' "$tl/api/wx_trial_scan.go" 2>/dev/null \
     || { WHY="the trial-scan door no longer checks the internal token (wx_trial_scan.go handleWxTrialScan)"; return 1; }
   c11_go_tests wx_trial_scan_test.go TestTrialCodeGates || return 1
   WHAT='试用码扫码的门只认 workbench 的内部令牌；段外 scene / 坏 openid 拒（测试按名核对在，Go 门跑它）'

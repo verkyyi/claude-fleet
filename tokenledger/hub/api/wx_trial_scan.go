@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/hmac"
 	"encoding/json"
 	"errors"
 	"log"
@@ -19,7 +18,7 @@ import (
 // The service account's events reach only the company's workbench; a scan in
 // the fleet-trial range (wxTrialSceneMin..Max) is handed to us at once
 //
-//	POST /internal/wx/trial-scan   x-internal-token: <CCQUOTA_WX_INTERNAL_TOKEN>
+//	POST /internal/wx/trial-scan   (workbench's gate header, wxgw.go fromWorkbench)
 //	{"scene": "2800001", "openid": "…", "event": "subscribe" | "SCAN"}
 //
 // and what we answer — {"news": {title, description, picUrl, url}} or
@@ -29,8 +28,8 @@ import (
 // answer (placePrincipal), and the card it sends lands on the chat, where 「正在
 // 准备」 shows until it is ready.
 //
-// The gate is the same token workbench holds and the hub already sends it
-// (wxgw.go), compared in constant time; it never enters a log.
+// The gate is the same token workbench holds and the hub already sends it,
+// checked where it is read (wxgw.go fromWorkbench); it never enters a log.
 //
 // One trial per WeChat, ever (fleet_trial_grants' key: wx:<unionid>, else
 // mp:<openid>). A trial is the approval road (admitRequest + the code's
@@ -113,8 +112,7 @@ func (s *Server) handleWxTrialScan(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	got := r.Header.Get("x-internal-token")
-	if got == "" || !hmac.Equal([]byte(got), []byte(strings.TrimSpace(s.WxGW.Token))) {
+	if !s.WxGW.fromWorkbench(r) {
 		httpError(w, http.StatusUnauthorized, "not workbench")
 		return
 	}
