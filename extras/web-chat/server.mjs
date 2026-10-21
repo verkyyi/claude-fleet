@@ -460,7 +460,8 @@ async function openWarm({ model, cwd, resume }) {
 function prewarm() {
   if (!WARM_IDLE_MS || !SDK_PATH || live || maint || warm || warmOpening || !conv.session) return;
   warmOpening = openWarm({ model: lastModel, cwd: conv.cwd, resume: conv.session })
-    .then((w) => { if (live || maint) { warm = w; closeWarm("busy"); } else warm = w; })
+    // a turn that came in meanwhile waits on this and takes it; a compact does not
+    .then((w) => { warm = w; if (maint) closeWarm("busy"); })
     .catch((e) => log("warm_failed", { msg: String(e?.message || e).slice(0, 200) }))
     .finally(() => { warmOpening = null; });
 }
