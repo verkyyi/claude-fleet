@@ -660,7 +660,8 @@ envelope() {
     if [ -z "$WIN" ] && fleet_is_fid "$selffid"; then
       _code=$(bash "$BIN/fleet-id.sh" short "$selffid" 2>/dev/null) || _code=''
     fi
-    sum=$(printf '%s' "$SUMMARY" | python3 "$BIN/fleet_report_clip.py" "$_code")
+    sum=$(printf '%s' "$SUMMARY" | python3 "$BIN/fleet_report_clip.py" "$_code" 2>/dev/null) \
+      || sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)   # no clipper: the old cut
     [ -n "$sum" ] && msg="$msg"$'\n'"summary: $sum"
   fi
   # The language rule (issue #620) rides ON the `no reply needed` line rather than
