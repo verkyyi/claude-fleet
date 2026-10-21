@@ -15,10 +15,10 @@ SHELLPY="$BIN/fleet-shell.py"
 now=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))')
 ago3h=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()-3*3600-60)))')
 cat > "$WORK/pick.json" <<EOF
-{"machine":"m5","hostname":"macmini","reason":"","login":"zoe","machines":[
- {"alias":"m5","hostname":"macmini","login":"zoe","status":"online","seen_at":"$now"},
- {"alias":"m4","hostname":"mini2","login":"zoe","status":"online","seen_at":"$ago3h"},
- {"alias":"myMac","hostname":"myMac","login":"zc","status":"lost","seen_at":""},
+{"machine":"ma","hostname":"mac-home","reason":"","login":"zoe","machines":[
+ {"alias":"ma","hostname":"mac-home","login":"zoe","status":"online","seen_at":"$now"},
+ {"alias":"mb","hostname":"mac-two","login":"zoe","status":"online","seen_at":"$ago3h"},
+ {"alias":"laptop-x","hostname":"laptop-x","login":"zc","status":"lost","seen_at":""},
  {"alias":"7","hostname":"seven","login":"zoe","status":"","seen_at":""}]}
 EOF
 cat > "$WORK/argv.sh" <<'SH'
@@ -34,25 +34,25 @@ run() { env SL_T="$WORK" FLEET_SHELL_PICK_CMD="cat $WORK/pick.json" FLEET_SHELL_
 out=$(run --list); rc=$?
 st_eq list-rc 0 "$rc"
 st_has list-head "$out" "#  机器"
-st_has list-home "$out" "m5 (macmini)"
-st_has list-home-mark "$(printf '%s\n' "$out" | grep 'm5 (macmini)')" "← 家"
-st_has list-online-now "$(printf '%s\n' "$out" | grep 'm5 (macmini)')" "在线"
-st_has list-just-now "$(printf '%s\n' "$out" | grep 'm5 (macmini)')" "刚刚"
-st_has list-hours "$(printf '%s\n' "$out" | grep 'm4 (mini2)')" "3 小时前"
-st_has list-lost "$(printf '%s\n' "$out" | grep myMac)" "离线"
-st_hasnt list-not-home "$(printf '%s\n' "$out" | grep 'm4 (mini2)')" "← 家"
+st_has list-home "$out" "ma (mac-home)"
+st_has list-home-mark "$(printf '%s\n' "$out" | grep 'ma (mac-home)')" "← 家"
+st_has list-online-now "$(printf '%s\n' "$out" | grep 'ma (mac-home)')" "在线"
+st_has list-just-now "$(printf '%s\n' "$out" | grep 'ma (mac-home)')" "刚刚"
+st_has list-hours "$(printf '%s\n' "$out" | grep 'mb (mac-two)')" "3 小时前"
+st_has list-lost "$(printf '%s\n' "$out" | grep laptop-x)" "离线"
+st_hasnt list-not-home "$(printf '%s\n' "$out" | grep 'mb (mac-two)')" "← 家"
 st_has list-hint "$out" "fleet shell 2"
 
 : > "$WORK/asked"; run 2 --print >/dev/null
-st_eq number-picks-row "m4" "$(tail -n 1 "$WORK/asked")"
+st_eq number-picks-row "mb" "$(tail -n 1 "$WORK/asked")"
 : > "$WORK/asked"; run 7 --print >/dev/null
 st_eq name-wins-over-number "7" "$(tail -n 1 "$WORK/asked")"
 : > "$WORK/asked"; run 9 --print >/dev/null; rc=$?
 st_eq past-the-list-rc 2 "$rc"
 st_has past-the-list-said "$(cat "$WORK/err")" "没有第 9 台"
 st_eq past-the-list-not-asked "" "$(cat "$WORK/asked")"
-: > "$WORK/asked"; run mini2 --print >/dev/null
-st_eq name-as-is "mini2" "$(tail -n 1 "$WORK/asked")"
+: > "$WORK/asked"; run mac-two --print >/dev/null
+st_eq name-as-is "mac-two" "$(tail -n 1 "$WORK/asked")"
 
 out=$(env FLEET_SHELL_PICK_CMD=false python3 "$SHELLPY" --list 2>&1); rc=$?
 st_eq no-pick-rc 1 "$rc"
