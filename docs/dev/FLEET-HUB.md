@@ -1957,6 +1957,31 @@ done                                   # logins/ changed ⇒ the machine's node 
 # the hub (an admin): PUT /v1/fleet/settings {"key": "fleet.svc.logins", "value": "mac-a:fleetsvc1"}
 ```
 
+## 只读控制台票据: an acceptance session opens its person's /app (task T844)
+
+An acceptance session must photograph production's console signed in as the
+person who dispatched it (the A300 card: phone 390 + desktop 1440), and may not
+sign in itself. `bin/fleet-console-ticket.sh [--next /app/<page>] [--ttl SECS]`
+asks `POST /v1/node/console-ticket` with the node token AND the session's own
+worker assertion (`X-Fleet-Worker`, the pair `/v1/fleet/session-cred` takes).
+The hub reads the login's owner (`principalForLease`; none ⇒ 403), requires them
+on the list (user or admin), not revoked on that machine and the machine not off
+for them, and answers a one-time link `/auth/ticket?t=fct1.…` (HMAC under the
+session key's own label, 2 minutes, its id spent in `fleet_sig_nonces` so one
+opening on any replica). Opening it sets a session cookie marked `ro`
+(`authz.Session.RO`) for `ttl_sec` (default 900, 60…1800) and goes to `next`
+(a console page only — never another site).
+
+That session is the person's own, as a member — an admin's ticket opens no admin
+page and looks through nobody else's eyes; `viewAsGuard` refuses every method but
+GET/HEAD, a websocket and the conversation's relay (403 只读票据), exactly as the
+admin's 以他的视角看 preview; it is never renewed; and every reader but the
+gate's two doors (`personAdmit`, `sshRelayHTTPIdentity`) takes it for no session
+(`personSessionAny`). `/v1/me` says `read_only`. Each issuance is a `fleet_audit`
+row `console_ticket` with the session's worker id, each opening one
+`console_ticket_used` (`OK …` / `refused:already used`). The `/v1/access` door
+`ticket` lists it. `console_ticket_test.go`, `fleet-console-ticket-selftest.sh`.
+
 ## Validation and next increments
 
 Run the hermetic regression suite through the normal shadow-root gate:

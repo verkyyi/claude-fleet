@@ -190,9 +190,17 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	}
 	// A GitHub person (claude-fleet#1984), on the list right now — the
 	// session as a cookie, or (a CLI holds no cookie jar) as a bearer.
-	sess, pid, ok := s.personSession(r)
+	sess, pid, ok := s.personSessionTicket(r)
 	if !ok {
 		sess, pid, ok = s.personSessionValue(bearer(r))
+	}
+	if ok && sess.RO {
+		// A read-only console ticket (task T844): the person's own reads,
+		// never an admin's every machine; viewAsGuard holds it to reads.
+		if role, err := s.personRole(pid); err == nil && role != "" && (role != roleTrial || trialRoute(r.URL.Path)) {
+			return sshRelayIdentity{Principal: sess.UID, Actor: sess.UID}, true
+		}
+		return sshRelayIdentity{}, false
 	}
 	if ok {
 		if role, err := s.personRole(pid); err == nil && role == roleAdmin {

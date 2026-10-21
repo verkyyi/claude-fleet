@@ -248,17 +248,38 @@ func (s *Server) personSession(r *http.Request) (*authz.Session, string, bool) {
 	return s.personSessionValue(c.Value)
 }
 
+// personSessionTicket is personSession that also takes a read-only console
+// ticket's session (task T844) — for the gate's two doors only (personAdmit,
+// sshRelayHTTPIdentity), which hold it to reads. Everywhere else such a
+// cookie reads as no session at all.
+func (s *Server) personSessionTicket(r *http.Request) (*authz.Session, string, bool) {
+	if !s.signinOn() {
+		return nil, "", false
+	}
+	c, err := r.Cookie(authz.CookieName)
+	if err != nil {
+		return nil, "", false
+	}
+	return s.personSessionAny(c.Value, true)
+}
+
 // personSessionValue verifies one session value — a cookie's, or a CLI's
 // bearer (sshRelayHTTPIdentity) — and reads the person out of it: the
 // session's UID is their principal, its Sub the way they signed in
 // (claude-fleet#3603). A cookie from before says Sub "github" and UID
 // gh:<id> — exactly a GitHub sign-in's today, so it reads as one.
 func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
+	return s.personSessionAny(v, false)
+}
+
+// personSessionAny is personSessionValue; ro says a read-only ticket's
+// session (authz.Session.RO) is taken too.
+func (s *Server) personSessionAny(v string, ro bool) (*authz.Session, string, bool) {
 	if !s.signinOn() || v == "" {
 		return nil, "", false
 	}
 	sess, err := authz.VerifySession(v, s.sessionKey(), time.Now())
-	if err != nil || !store.SignInKind(sess.Sub) || !isPerson(sess.UID) {
+	if err != nil || !store.SignInKind(sess.Sub) || !isPerson(sess.UID) || (sess.RO && !ro) {
 		return nil, "", false
 	}
 	// Cut off with «sign out everywhere» (claude-fleet#3701): a value signed
@@ -282,7 +303,7 @@ func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
 // carries no person's session (the gate goes on to its other doors);
 // handled=true when it answered the request itself (a refusal or an error).
 func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx context.Context, ok, handled bool) {
-	sess, pid, ok := s.personSession(r)
+	sess, pid, ok := s.personSessionTicket(r)
 	if !ok {
 		return nil, false, false
 	}
@@ -306,6 +327,11 @@ func (s *Server) personAdmit(w http.ResponseWriter, r *http.Request) (ctx contex
 		// (claude-fleet#4058): everything else is an unknown address.
 		s.notFoundPage(w, r)
 		return nil, true, true
+	}
+	if sess.RO {
+		// A read-only console ticket (task T844): the person's own pages,
+		// reads only, never an admin's, never renewed, never a view.
+		return s.consoleTicketAdmit(w, r, sess, role)
 	}
 	s.slideSession(w, r, sess, role)
 	if role == roleAdmin {

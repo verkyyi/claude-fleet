@@ -54,6 +54,7 @@ var routeAccess = map[string]string{
 	"/auth/wechat/start": accessPublic, "/auth/wechat/callback": accessPublic, "/auth/wechat/bind": accessPublic,
 	wxQRPath: accessPublic, wxPollPath: accessPublic, wxRelayCBPath: accessPublic,
 	"/auth/email/start": accessPublic, "/auth/email/link": accessPublic, "/auth/email/code": accessPublic,
+	ConsoleTicketPath: accessPublic, ConsoleTicketNodePath: accessSelf,
 	// The applicant note (ccq_applicant) is its own credential, read only
 	// here (claude-fleet#4051).
 	ApplyPath: accessSelf, ApplyEditPath: accessSelf, ApplyWithdrawPath: accessSelf, ApplicantPath: accessSelf,
