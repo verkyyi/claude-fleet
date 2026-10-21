@@ -16,7 +16,12 @@
 # A window of the attempt's name already open (a run the daemon lost when it
 # restarted) is ADOPTED, never opened twice. The session is the login's own fleet's,
 # opened the way every headless caller opens one:
-#   dash-raw-session.sh --no-repo --origin hub --print --name <window> --prompt <p> <fleet>
+#   dash-raw-session.sh --no-repo --origin hub --reap-origin probe --reap <FLEET_TASK_REAP>
+#                       --print --name <window> --prompt <p> <fleet>
+# `probe` (fleet_reap_policy.py ORIGINS: 定时任务) makes it nobody's home session, so
+# its finished turn closes it after the grace (FLEET_TASK_REAP, default done:15m) —
+# without it fleet-cleanup-idle.py's norepo() read it as a person's own session and
+# waited for an /exit a scheduled run never types (T862: a daily brief open 21 h).
 #
 # The daemon hands it everything in the environment (fleet-node-supervisor.py
 # task_entry): FLEET_TASK_PROMPT · FLEET_TASK_WINDOW · FLEET_TASK_DONE_FILE ·
@@ -52,6 +57,7 @@ DONE=${FLEET_TASK_DONE_FILE:-}
 TO=${FLEET_TASK_TIMEOUT:-3600}
 IDLE=${FLEET_TASK_IDLE:-600}
 POLL=${FLEET_TASK_POLL:-30}
+REAP=${FLEET_TASK_REAP:-done:15m}
 SPAWN=${FLEET_TASK_SPAWN:-$HOME/.claude/fleet/bin/dash-raw-session.sh}
 say "--- slot ${FLEET_TASK_SLOT:-?} attempt ${FLEET_TASK_ATTEMPT:-1} window $W"
 [ -n "$P" ] && [ -n "$W" ] || { say "no prompt / window"; exit 10; }
@@ -78,7 +84,7 @@ wid=$(win_by_name "$W")
 if [ -n "$wid" ]; then
   say "adopted the open window $wid ($W) — not opening a second"
 else
-  out=$("$SPAWN" --no-repo --origin hub --print --name "$W" --prompt "$P" "$SESS" 2>&1)
+  out=$("$SPAWN" --no-repo --origin hub --reap-origin probe --reap "$REAP" --print --name "$W" --prompt "$P" "$SESS" 2>&1)
   rc=$?
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  spawn: /'
   [ "$rc" = 0 ] || { say "the session did not open (spawner exit $rc)"; exit 11; }
