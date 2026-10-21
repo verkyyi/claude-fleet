@@ -146,6 +146,7 @@ FLEET_PLACE_REQUEST_ID             handoff: stable client placement key across l
 FLEET_DISPATCH_GO_CMD              seam: replaces fleet-view-go.sh when a 看台's ⌘T goes to the window it opened (fleet-quick-dispatch.py, #3097)
 FLEET_ENTRY                        knob: a managed machine's entry port on/off — machine.env (root 0600), written by `fleet node install`, not a fleet.conf key (#3070)
 FLEET_ENTRY_PORT                   knob: the entry port's port (22022) — machine.env beside FLEET_ENTRY (#3070)
+FLEET_ENTRY_MACHINE_PORT           knob: a second port the entry sshd also listens on — the machine's own, for the router's per-machine forward; machine.env beside FLEET_ENTRY, written by `fleet node install` (T743)
 FLEET_ENTRY_BOOK                   handoff: the entry sshd's SetEnv to fleet-entry.sh — the entry book (root 0644) that names each key (#3071)
 FLEET_ENTRY_VIEW                   seam: the drill's 看台 stand-in for fleet-entry.sh, set only through FLEET_ENTRY_TEST_SETENV under FLEET_NODE_TEST (#3071)
 FLEET_POOL_SESSION_CRED            seam: the stand-in fleet-session-cred.sh for fleet-pool-run.sh (task KEA0)
