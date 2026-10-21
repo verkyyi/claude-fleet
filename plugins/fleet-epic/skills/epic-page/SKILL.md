@@ -232,7 +232,7 @@ cursor — and each item's last row handed to the session that made the page. A
 withdraw is handed on too; if that session already acted on the item, it says
 whether it can go back and either does or reports why not.
 
-What the 活页 does not give yet (asked of 24haowan): a row's server time / id in
+What the 活页 does not give yet (asked of the 活页 team): a row's server time / id in
 `GET` (hence the page's own `at`), which member wrote it (`_author` is a flag),
 the author's own held rows, a reader deleting their own row (hence `withdraw`
 rows). The 活页's own comment box (bottom right, a selected sentence) reaches the
