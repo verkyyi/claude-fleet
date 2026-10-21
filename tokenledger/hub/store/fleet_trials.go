@@ -289,6 +289,19 @@ func (s *Store) TrialsWaiting(fresh time.Time) (int, error) {
 	return n, err
 }
 
+// OldestTrialWaiting is when the longest-waiting trial person still seen at
+// or after fresh started waiting, and how many such people wait; zero when
+// none (claude-fleet QSSW: queue_long).
+func (s *Store) OldestTrialWaiting(fresh time.Time) (since time.Time, n int, err error) {
+	var oldest sql.NullInt64
+	err = s.write.QueryRow(`SELECT MIN(waiting_since), COUNT(*) FROM fleet_trials WHERE state = ? AND last_seen >= ?`,
+		TrialWaiting, fresh.Unix()).Scan(&oldest, &n)
+	if err != nil || n == 0 || !oldest.Valid {
+		return time.Time{}, n, err
+	}
+	return unixOrZero(oldest.Int64), n, nil
+}
+
 // PlaceTrial records that pid was handed a login on host.
 func (s *Store) PlaceTrial(pid, host string, now time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_trials SET state = ?, placed_at = ?, host = ?, last_seen = ?, queue_reason = '',

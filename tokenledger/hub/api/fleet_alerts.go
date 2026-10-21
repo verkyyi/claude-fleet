@@ -132,12 +132,17 @@ func (s *Server) NodeAlertTick(since, now time.Time) {
 	s.PoolUsageSilentTick(now, false)
 	s.SpareAlertTick(since, now)
 	s.SvcAlertTick(now)
+	s.QueueLongTick(now)
+	s.StartFailedTick(now)
 	// person pods onto the new image (claude-fleet#4174): its own goroutine —
 	// each roll waits on the cluster's ops link
 	go s.PodRollTick(now, false)
 	if err := s.Store.PruneFleetAlerts(now.Add(-fleetAlertKeep)); err != nil {
 		log.Printf("fleet alerts: prune: %v", err)
 	}
+	// Every alert to the admins (claude-fleet QSSW), last: this pass's raises
+	// go out on it.
+	s.AlertNotifyTick(since, now)
 }
 
 // nodeBack clears a node's node_lost: called on every heartbeat.

@@ -66,6 +66,24 @@ const (
 	// the old one now refuses that machine. Subject its hostname; detail the
 	// old and new fingerprints. Cleared by the operator once they know why.
 	AlertEntryHostKeyChanged = "entry_hostkey_changed"
+	// AlertQueueLong: someone has waited in the trial line — the one line a
+	// person waits in for a seat — longer than queueLongAfter (claude-fleet
+	// QSSW, EPIC WACK C7). Subject "trial"; cleared once nobody still on the
+	// page has waited that long.
+	AlertQueueLong = "queue_long"
+	// AlertStartFailed: at least startFailedMin session starts failed hub-wide
+	// within startFailedWindow, whoever asked (claude-fleet QSSW). Subject
+	// "hub"; cleared once the window holds fewer.
+	AlertStartFailed = "start_failed"
+)
+
+// How a raised row was handed to the hub's notifier (claude-fleet QSSW): ""
+// not yet, sent, quiet (its kind was sent within fleet.alert.quiet_mins) or
+// self (its raiser tells people its own way).
+const (
+	AlertNotifySent  = "sent"
+	AlertNotifyQuiet = "quiet"
+	AlertNotifySelf  = "self"
 )
 
 // FleetAlert is one row.
@@ -76,13 +94,20 @@ type FleetAlert struct {
 	Detail    string     `json:"detail"`
 	RaisedAt  time.Time  `json:"raised_at"`
 	ClearedAt *time.Time `json:"cleared_at,omitempty"`
+	// Notify is how the raise reached the notifier ("" not yet), NotifiedAt
+	// when (claude-fleet QSSW).
+	Notify     string     `json:"notify,omitempty"`
+	NotifiedAt *time.Time `json:"notified_at,omitempty"`
 }
 
 func (s *Store) ensureFleetAlerts() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetAlertsSchema)); err != nil {
 		return fmt.Errorf("create fleet_alerts table: %w", err)
 	}
-	return nil
+	if err := s.addColumn("fleet_alerts", "notify", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.addColumn("fleet_alerts", "notified_at", "TEXT")
 }
 
 // RaiseFleetAlert opens (kind, subject) unless an open row exists. raised
@@ -186,7 +211,7 @@ func (s *Store) FleetAlerts(limit int) ([]FleetAlert, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.read.Query(`SELECT id, kind, subject, detail, raised_at, cleared_at FROM fleet_alerts
+	rows, err := s.read.Query(`SELECT id, kind, subject, detail, raised_at, cleared_at, notify, notified_at FROM fleet_alerts
 		ORDER BY (cleared_at IS NULL) DESC, id DESC LIMIT ` + strconv.Itoa(limit))
 	if err != nil {
 		return nil, err
@@ -196,15 +221,77 @@ func (s *Store) FleetAlerts(limit int) ([]FleetAlert, error) {
 	for rows.Next() {
 		var a FleetAlert
 		var raised string
-		var cleared sql.NullString
-		if err := rows.Scan(&a.ID, &a.Kind, &a.Subject, &a.Detail, &raised, &cleared); err != nil {
+		var cleared, notified sql.NullString
+		if err := rows.Scan(&a.ID, &a.Kind, &a.Subject, &a.Detail, &raised, &cleared, &a.Notify, &notified); err != nil {
 			return nil, err
 		}
 		a.RaisedAt, _ = time.Parse(rfc, raised)
 		a.ClearedAt = parseTimePtr(cleared)
+		a.NotifiedAt = parseTimePtr(notified)
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// UnnotifiedFleetAlerts are the rows raised at or after since that no
+// notifier pass has handled yet, oldest first (claude-fleet QSSW).
+func (s *Store) UnnotifiedFleetAlerts(since time.Time) ([]FleetAlert, error) {
+	// The text bound (second precision, no zone) only narrows the scan; the
+	// exact cut is the time compare below.
+	rows, err := s.read.Query(`SELECT id, kind, subject, detail, raised_at FROM fleet_alerts
+		WHERE notify = '' AND raised_at >= ? ORDER BY id`, since.UTC().Format("2006-01-02T15:04:05"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FleetAlert
+	for rows.Next() {
+		var a FleetAlert
+		var raised string
+		if err := rows.Scan(&a.ID, &a.Kind, &a.Subject, &a.Detail, &raised); err != nil {
+			return nil, err
+		}
+		a.RaisedAt, _ = time.Parse(rfc, raised)
+		// Compared as time: RFC3339Nano text does not sort.
+		if !a.RaisedAt.Before(since) {
+			out = append(out, a)
+		}
+	}
+	return out, rows.Err()
+}
+
+// MarkFleetAlertNotified records how row id reached the notifier; false when
+// another pass already did.
+func (s *Store) MarkFleetAlertNotified(id int64, how string, at time.Time) (bool, error) {
+	res, err := s.write.Exec(`UPDATE fleet_alerts SET notify = ?, notified_at = ? WHERE id = ? AND notify = ''`,
+		how, at.UTC().Format(rfc), id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// LastFleetAlertSent is when a row of kind was last sent to the notifier —
+// zero when never (or pruned).
+func (s *Store) LastFleetAlertSent(kind string) (time.Time, error) {
+	rows, err := s.read.Query(`SELECT notified_at FROM fleet_alerts WHERE kind = ? AND notify = ? AND notified_at IS NOT NULL`,
+		kind, AlertNotifySent)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer rows.Close()
+	var last time.Time
+	for rows.Next() {
+		var at string
+		if err := rows.Scan(&at); err != nil {
+			return time.Time{}, err
+		}
+		if t, err := time.Parse(rfc, at); err == nil && t.After(last) {
+			last = t.UTC()
+		}
+	}
+	return last, rows.Err()
 }
 
 // PruneFleetAlerts deletes cleared rows cleared before cutoff. Open rows stay.
