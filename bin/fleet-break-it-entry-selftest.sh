@@ -49,6 +49,10 @@
 #                         certificate from reach.json is shown by the entry sshd —
 #                         known through one @cert-authority line — and one for
 #                         another key is never installed
+#   entry-machine-port    entry_machine_port + entry_config (T743): with
+#                         FLEET_ENTRY_MACHINE_PORT the entry also listens on the
+#                         machine's own port, the same host key on both; unset ⇒
+#                         one Port line, as before
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -788,6 +792,28 @@ drill_entry_host_cert() {
   sys_same || { edown; return 1; }
   edown
   WHAT="入口挂上 hub 签的主机证书：只信一行 @cert-authority 就认得它；给别的钥匙签的证书不装"
+}
+
+drill_entry_machine_port() {
+  CAP=20
+  local t0 mp a b
+  erig machport
+  mp="$(free_port)"
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  [ "$(grep -c '^Port ' "$E/db/entry/sshd_config")" = 1 ] || { WHY="unset, yet more than one Port line"; edown; return 1; }
+  printf 'FLEET_ENTRY_MACHINE_PORT=%s\n' "$mp" >> "$E/db/machine.env"
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  until_ok 10 python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "$mp" \
+    || { WHY="nothing on the machine's own port $mp: $(grep '^Port' "$E/db/entry/sshd_config" | tr '\n' ' ')"; edown; return 1; }
+  a=$(ssh-keyscan -T 3 -t ed25519 -p "$EPORT" 127.0.0.1 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')
+  b=$(ssh-keyscan -T 3 -t ed25519 -p "$mp" 127.0.0.1 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}')
+  [ -n "$a" ] && [ "$a" = "$b" ] || { WHY="the two ports answer different keys: [$a] [$b]"; edown; return 1; }
+  etry k1 "$ME" -p "$mp" || { WHY="the registered key was refused on the machine's port: $(cat "$E/ssh.err")"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口再听这台机器自己的端口：两个端口答同一把钥匙，登记过的钥匙两边都进；没设只有一行 Port"
 }
 
 drill_entry_forward_out() {
