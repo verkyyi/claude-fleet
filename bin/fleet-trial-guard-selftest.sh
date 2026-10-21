@@ -97,7 +97,7 @@ tick
 grep '"kind": "abuse"' "$WORK/alerts" | grep -q '"what": "miner"' || fail "a miner was not written up"; ok
 grep -q '^.* pause tria (miner' "$WORK/trial/actions.log" || fail "the miner's login was not paused"; ok
 : > "$WORK/ps-extra"; reset_tria
-printf '10.0.0.9:443\n198.51.100.7:3333\n' > "$WORK/net"
+printf '192.0.2.9:443\n198.51.100.7:3333\n' > "$WORK/net"
 tick
 grep '"kind": "abuse"' "$WORK/alerts" | grep -q '"what": "pool"' || fail "a pool port was not written up"; ok
 reset_tria; : > "$WORK/net"; tick
