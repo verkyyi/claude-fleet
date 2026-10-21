@@ -46,6 +46,7 @@
 0.2 cfg-reopen-loop
 0.5 chat-budget-bypass
 0.1 chat-claude-bare-path
+0.5 service-orphan-holds-socket
 0.1 chat-direct-admission
 0.1 chat-first-open-cold
 5.7 chat-home-moved

@@ -323,6 +323,21 @@ def cmd_doctor():
     return 0
 
 
+def next_step(r):
+    """What the person does next, said on the alert (task BZGP): «已退出·待重启» alone
+    told nobody that the log names why, or that the daemon keeps retrying."""
+    n, st = r.get("name") or "<name>", r.get("state")
+    if st == "down":
+        return "守护每 30 s 重起一次；原因看 fleet service logs %s" % n
+    if st == "failed":
+        return "重试已用完；原因看 fleet %s logs %s" % ("task" if r.get("kind") == "task" else "service", n)
+    if st == "invalid":
+        return "条目坏了：fleet service add %s 重新登记" % n
+    if st == "no_login":
+        return "登录已不在：fleet service rm %s" % n
+    return ""
+
+
 def cmd_alerts():
     rows, _ts, alerts = table_rows()
     since = {}
@@ -335,7 +350,8 @@ def cmd_alerts():
         aid = "service-" + "-".join(x.replace("/", "_") for x in (short(h), r.get("login") or "", r.get("name") or ""))
         value = "%s@%s %s" % (r.get("name") or "?", label, STATE_SAY.get(r.get("state"), r.get("state")))
         detail = (r.get("last_log_line") or r.get("why") or "").replace("\t", " ").replace("\n", " ")
-        print("\t".join((aid, value, str(since.get(sub, 0)), detail[:120])))
+        say = " — ".join(x for x in (detail[:120], next_step(r)) if x)
+        print("\t".join((aid, value, str(since.get(sub, 0)), say)))
     return 0
 
 

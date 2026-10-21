@@ -846,7 +846,12 @@ function sockLive() {
 }
 if (SOCKET) {
   if (existsSync(SOCK)) {
-    if (await sockLive()) { console.error(`fleet-webchat: another server already answers on ${SOCK}`); process.exit(3); }
+    if (await sockLive()) {
+      let holder = "";
+      try { holder = ` (pid ${readFileSync(join(STATE, "pid"), "utf8").trim()})`; } catch { /* no pid file */ }
+      console.error(`fleet-webchat: another server already answers on ${SOCK}${holder} — not taken over (fleet-webchat.sh serve stops an orphan of this service first)`);
+      process.exit(3);
+    }
     unlinkSync(SOCK);
   }
   // born 0600: no window in which another login could connect

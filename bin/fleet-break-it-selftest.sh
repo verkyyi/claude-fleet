@@ -6591,6 +6591,43 @@ drill_chat_claude_bare_path() {
   SECS=$(since "$t0")
 }
 
+# service-orphan-holds-socket (task BZGP, mini2 2026-10-21): an old webchat
+# server — a release switch left it, PPID 1, the old code path — kept answering
+# on chat.sock, so the managed copy exited 3 every 30 s («已退出·待重启» on the
+# bar). serve now stops an orphan of the service first (TERM, then KILL), and
+# names any other holder instead of only exiting.
+drill_service_orphan_holds_socket() {
+  CAP=20; local d t0 hp reaper out
+  d=$(mktemp -d /tmp/bzgp.XXXXXX) || { WHY="no temp dir"; return 1; }
+  t0=$(now)
+  mkdir -p "$d/home" "$d/tools" "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk"
+  chmod 700 "$d/conf/webchat"
+  printf '#!/bin/sh\nexit 0\n' > "$d/tools/npm"
+  printf '#!/bin/sh\necho started > "%s/node.ran"\n' "$d" > "$d/tools/node"
+  chmod +x "$d/tools/npm" "$d/tools/node"
+  : > "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+  cp "$ROOT/extras/web-chat/package-lock.json" "$d/conf/webchat/deps/"
+  printf '%s\n' 'import os, signal, socket, sys' 'signal.alarm(60)' \
+    's = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)' \
+    'open(sys.argv[2], "w").write("%d\n" % os.getpid())' \
+    'while True:' '    c, _ = s.accept(); c.close()' > "$d/old.py"
+  ( python3 "$d/old.py" "$d/conf/webchat/chat.sock" "$d/conf/webchat/pid" \
+      /old/runtime/extras/web-chat/server.mjs --socket </dev/null >/dev/null 2>&1 & )
+  for _ in $(seq 1 50); do [ -s "$d/conf/webchat/pid" ] && break; sleep 0.1; done
+  hp=$(cat "$d/conf/webchat/pid" 2>/dev/null)
+  [ -n "$hp" ] || { WHY="the old orphan did not come up"; rm -rf "$d"; return 1; }
+  reaper=$(ps -o ppid= -p "$hp" | tr -d ' ')
+  out=$(env -i HOME="$d/home" PATH="$d/tools:/usr/bin:/bin" FLEET_CONF_DIR="$d/conf" \
+        FLEET_SERVICE_TAKEOVER_REAPER="$reaper" FLEET_SERVICE_TAKEOVER_WAIT=2 \
+        bash "$ROOT/bin/fleet-webchat.sh" serve 2>&1)
+  if kill -0 "$hp" 2>/dev/null; then kill -9 "$hp" 2>/dev/null; WHY="the old orphan still holds the socket: $out"; rm -rf "$d"; return 1; fi
+  [ -f "$d/node.ran" ] || { WHY="serve did not start the server after the takeover: $out"; rm -rf "$d"; return 1; }
+  case "$out" in *"停掉了旧孤儿（pid ${hp} · "*) ;; *) WHY="serve did not say what it stopped: $out"; rm -rf "$d"; return 1 ;; esac
+  rm -rf "$d"
+  WHAT='旧版留下的对话服务孤儿（PPID 1）占着 chat.sock：serve 先停掉它（TERM，不走再 KILL）、说清停了谁，再起受管的那份'
+  SECS=$(since "$t0")
+}
+
 drill_chat_home_moved() {
   CAP=40
   if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
