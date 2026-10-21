@@ -454,6 +454,16 @@ this order:
    - `cap=` is how many members run at once (default 4).
    - The record's body is capped (16 KB with its envelope): a charter over ~12 KB
      moves its longest technical folds to the page and names the page there.
+   - **Never point a member at a file on this machine as where its detail lives**
+     (T793: EPIC B2VA's members read 「细节（必读）~/fleet-drafts/…/C3.md」, 15 of 18
+     were placed on another machine, and each had to ask its driver to paste the
+     file). The charter and its sections ARE the detail. A text file the charter
+     still names (`~/…` · `.md` / `.txt`, outside any checkout) is carried into
+     the record by the dispatch (`bin/fleet_local_refs.py`) while it fits, and the
+     driver's tick hands each member its own carried file and the 共同约定 — on
+     whichever machine it runs; one that does not fit is said on stderr and in the
+     body (「没能随单带上」) and the tick warns it. When the dispatch says so,
+     write that detail into the member's section instead, and open again.
 
 3. **Open the parent task — it starts the driver** (one call):
    `mcp__fleet-orch__task` with `title` 「EPIC: <主题>」, `body` the charter file's
@@ -466,7 +476,9 @@ this order:
    its final report comes back here. The hub places the driver like any session —
    on whichever of the person's machines has room (T742) — so the charter names
    no file on this machine (the scratchpad copy is yours alone); what it needs
-   beyond the record lives on the design page. No hub ⇒ exit 3: say so and stop.
+   beyond the record lives on the design page. A `uncarried … · 不在这台机器 / 放不下`
+   line on stderr means a member would start without a file it was told to read:
+   fix the charter before the driver dispatches it. No hub ⇒ exit 3: say so and stop.
 4. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC <code>` (`EPIC K5H0`), republished to
    the same page (`publish_file` with its `proposal_id`), so the link the operator
    holds says what it became.

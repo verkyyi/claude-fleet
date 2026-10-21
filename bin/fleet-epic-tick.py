@@ -22,6 +22,12 @@ The charter (written by /fleet-epic-plan, the parent's body):
   - [ ] **C2** <owner/name> — <title> (codex) one in another repo, on Codex
   - [ ] **R1** <title>                       reserve: never dispatched by itself
   ## C1 · <title>                            its detail, handed to its session
+  ## 共同约定                                  handed to every member's session too
+
+A member's body carries the local files its words name (T793,
+fleet_local_refs.py: `~/fleet-drafts/…/C3.md` read on this machine, else off the
+charter's own carried copy); one that cannot come is that item's `uncarried` and
+a line of `warnings` — the session would be placed where the file is not.
 
 A member's child task is titled `<key> · <title>`; a child whose title carries a
 key the charter does not list (`C5 · …`, a member added within scope) is a
@@ -115,6 +121,8 @@ import sys
 from pathlib import Path
 
 BIN = Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN))
+import fleet_local_refs  # noqa: E402 — the one carrying rule (T793)
 TREF = re.compile(r"^T[1-9][0-9]{0,9}$")
 # a task's reference as a person writes it: its code (`K5H0`, `#k5h0`), its full ID
 # or T<n> — what fleet-task-record.sh's one resolver reads (EPIC T644 C3)
@@ -338,6 +346,20 @@ def detail(text, key):
         if on:
             out.append(line)
     return "\n".join(out).strip()
+
+
+def shared_of(text):
+    """The charter's `## 共同约定` — every member works under it (T793)."""
+    out, on = [], False
+    for line in text.splitlines():
+        if re.match(r"^##\s", line):
+            if on:
+                break
+            on = bool(re.match(r"^##\s+共同约定", line))
+        if on:
+            out.append(line)
+    body = "\n".join(out[1:]).strip()
+    return "## 共同约定（全批）\n" + body if body else ""
 
 
 def dep_refs(text, self_ref=""):
@@ -694,7 +716,7 @@ def hold_on_deps(members, deps, ext=None, ext_done=None, names=None):
                 m["cycle"] = True
 
 
-def dispatch_of(parent, member):
+def dispatch_of(parent, member, text=""):
     title = "%s · %s" % (member["key"], member["title"])
     if len(title) > TITLE_MAX:
         title = title[:TITLE_MAX - 1] + "…"
@@ -703,6 +725,9 @@ def dispatch_of(parent, member):
             "做完开 PR，门禁绿了自己合并，然后 report merged；做不成就 report failed 写清原因。"]
     if member.get("detail"):
         body += ["", member["detail"]]
+    shared = shared_of(text)
+    if shared:
+        body += ["", shared]
     retry = member["state"] == "retry"
     if retry:
         who = member.get("code") or member["task"] or member.get("short") or "上一棒"
@@ -711,13 +736,17 @@ def dispatch_of(parent, member):
             # the spawner reads this into the new window's ledger as its prev
             # (dash-raw-session.sh): the redo is the next baton of the same member
             body += ["<!-- fleet:prev %s -->" % member["id"]]
+    # the local files its words name ride with it (T793): read here, else off the
+    # charter's own carried copy — the driver may run on another machine than the plan
+    words, uncarried = fleet_local_refs.carry("\n".join(body), have=fleet_local_refs.carried(text))
     # a retry on its own record keeps its code (EPIC T644 C5): `respawn` is the whole
     # dispatch — no new task; `body` / `prev` are the old road's (a record with no code)
     return dict(key=member["key"], title=title, repo=member["repo"], agent=member["agent"],
                 retry_of=(member.get("code") or member["task"]) if retry else "",
                 prev=member.get("id", "") if retry else "",
                 respawn=member.get("redo", "") if retry else "",
-                body="\n".join(body))
+                uncarried=["%s（%s）" % m for m in uncarried],
+                body=words.rstrip("\n"))
 
 
 def status(parent_ref, cap):
@@ -766,7 +795,10 @@ def status(parent_ref, cap):
     stalled = [m for m in members if m["state"] == "stalled"]
     free = max(0, cap - running - len(stalled))
     pending = [m for m in counted if m["state"] == "retry"] + [m for m in counted if m["state"] == "unstarted"]
-    nxt = [dispatch_of(parent, m) for m in pending if m["repo"]][:free]
+    nxt = [dispatch_of(parent, m, text) for m in pending if m["repo"]][:free]
+    for n in nxt:   # said before the dispatch, so the driver never hands out a dead path
+        dep_warn = dep_warn + ["%s 的本机文件没能随单带上：%s" % (n["key"], "、".join(n["uncarried"]))] \
+            if n["uncarried"] else dep_warn
     norepo = [m["key"] for m in pending if not m["repo"]]
     counts = dict(core=len(counted), succeeded=0, running=0, stalled=0, retry=0, blocked=0, unstarted=0, waiting=0)
     for m in counted:
