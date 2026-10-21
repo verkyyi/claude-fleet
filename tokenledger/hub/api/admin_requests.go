@@ -52,7 +52,8 @@ const (
 // signs in by the service account with no page in between, so the admin who
 // tapped 「新申请待审核」 lands on that request's drawer, not the console's
 // front page.
-var adminRequestPageRe = regexp.MustCompile(`^/admin/requests(/rq-[A-Za-z0-9_-]{1,64})?$`)
+// A paused 试用二维码's notice links to its code the same way (MRGB).
+var adminRequestPageRe = regexp.MustCompile(`^/admin/(requests(/rq-[A-Za-z0-9_-]{1,64})?|trial-codes(/tc-[A-Za-z0-9_-]{1,64})?)$`)
 
 // rememberAdminReturn is adminGate's signed-out step: a request page asked
 // for before signing in is where loginReturn sends the browser after. Never
@@ -353,12 +354,17 @@ func (s *Server) adminRequestApprove(w http.ResponseWriter, r *http.Request, id 
 		httpError(w, http.StatusInternalServerError, "approved, but putting them on the list failed — approve again: "+err.Error())
 		return
 	}
+	limits := body.Limits
+	if limits == "" {
+		limits = s.trialTermsOf(req) // a 试用二维码's request: that code's trial
+	}
 	if !newcomer {
-	} else if err := s.writeMemberLimits(pid, body.Limits, by, now); err != nil {
+	} else if err := s.writeMemberLimits(pid, limits, by, now); err != nil {
 		log.Printf("approve %s: limits: %v", req.ID, err)
 		httpError(w, http.StatusInternalServerError, "approved, but recording their limits failed — approve again: "+err.Error())
 		return
 	}
+	s.trialApproved(req, pid, now)
 	s.notifyResult(req)
 	s.writeRequestDetail(w, http.StatusOK, req)
 }

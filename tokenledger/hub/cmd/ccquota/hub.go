@@ -976,6 +976,7 @@ func runHub(args []string) error {
 	// new requests to the admins — WeChat, else a mail. Every replica runs
 	// it; a notice is claimed with a lease, so it goes out once.
 	go srv.RunNotify(ctx)
+	go srv.RunTrialQueue(ctx) // 试用二维码 line (claude-fleet MRGB)
 	if srv.Releases != nil {
 		// the canary first, the rest once it passes (claude-fleet#4915): a
 		// tick that does nothing while fleet.release_canary is unset

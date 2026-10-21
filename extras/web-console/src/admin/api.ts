@@ -304,3 +304,58 @@ export type ServiceNotice = {
   delivery: { pending: number; sent: number; undelivered: number; via: Record<string, number> };
 };
 export type NoticesList = { notices: ServiceNotice[]; today: number; limit: number; members: NoticeMember[] };
+
+// 试用二维码 (claude-fleet MRGB): /v1/admin/trial-codes
+export type TrialFunnel = {
+  scans: number;
+  follows: number;
+  granted: number;
+  queued: number;
+  pending: number;
+  first: number;
+  converted: number;
+  p50_secs: number; // scan → first line in the chat, median (0 = none yet)
+};
+export type TrialCode = {
+  id: string;
+  scene: number;
+  channel: string;
+  terms: string; // "" = fleet.apply.trial
+  terms_words: string;
+  terms_words_en: string;
+  cap: number; // 0 = no cap
+  until: string; // zero time = no end
+  approval: boolean;
+  kind: "limit" | "temp";
+  state: "live" | "stopped" | "paused";
+  paused_why?: string;
+  url: string;
+  image: string;
+  created_by: string;
+  created_at: string;
+  funnel: TrialFunnel;
+};
+export type TrialCodePerson = {
+  principal: string;
+  login: string;
+  state: "granted" | "queued" | "pending";
+  member: boolean;
+  scanned_at: string;
+  granted_at: string;
+  first_at: string;
+};
+export type TrialCodeDetail = TrialCode & { people: TrialCodePerson[] };
+export type TrialCodesList = {
+  codes: TrialCode[];
+  totals: TrialFunnel;
+  days: number;
+  ready: boolean;
+  terms: string;
+  terms_words: string;
+  terms_words_en: string;
+  cap: number;
+  daily: number;
+  today: number;
+  burst: number;
+  temp_days_max: number;
+};

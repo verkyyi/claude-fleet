@@ -20,6 +20,9 @@ const (
 	// NotifyKindUpgrade is a trial member's 申请转正 → an admin; refs = the
 	// member's principal (claude-fleet T805).
 	NotifyKindUpgrade = "upgrade"
+	// NotifyKindQRBurst is a 试用二维码 that paused itself on a burst → an
+	// admin; refs = the code's id (claude-fleet MRGB).
+	NotifyKindQRBurst = "qrburst"
 )
 
 // The states of a notice.

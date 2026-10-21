@@ -698,3 +698,64 @@ CREATE TABLE IF NOT EXISTS hub_notices (
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hub_notices_created ON hub_notices(created_at);
+
+-- 试用二维码 (claude-fleet MRGB): an admin's channel code on the service
+-- account — scan and follow, and the trial starts with no request to approve.
+-- scene is the code's number in workbench's fleet-trial range (a numeric
+-- scene_str); terms the trial's limits ('' = fleet.apply.trial); cap how many
+-- people it gives a trial (0 = no cap); until_at when it stops giving (0 =
+-- never); approval 1 = a scan only files a pending request. kind limit (a
+-- permanent code) | temp (a temporary one, at most 30 days); state live |
+-- stopped | paused (paused = stopped by the burst alarm, paused_why says it).
+-- Times are unix seconds.
+CREATE TABLE IF NOT EXISTS fleet_trial_codes (
+  id          TEXT PRIMARY KEY,
+  scene       INTEGER NOT NULL,
+  channel     TEXT NOT NULL,
+  terms       TEXT NOT NULL DEFAULT '',
+  cap         INTEGER NOT NULL DEFAULT 0,
+  until_at    INTEGER NOT NULL DEFAULT 0,
+  approval    INTEGER NOT NULL DEFAULT 0,
+  kind        TEXT NOT NULL DEFAULT 'limit',
+  state       TEXT NOT NULL DEFAULT 'live',
+  paused_why  TEXT NOT NULL DEFAULT '',
+  qr_url      TEXT NOT NULL DEFAULT '',
+  ticket      TEXT NOT NULL DEFAULT '',
+  created_by  TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_trial_codes_scene ON fleet_trial_codes(scene);
+-- One row per WeChat that a trial code reached (who = wx:<unionid> else
+-- mp:<openid>): the one trial a WeChat ever gets. state granted | queued (the
+-- machines were full; released in order) | pending (an approval code's
+-- request). scanned_at is the scan that gave it, first_at the person's first
+-- line in the chat (0 = none yet) — the two the 60-second metric measures.
+CREATE TABLE IF NOT EXISTS fleet_trial_grants (
+  who         TEXT PRIMARY KEY,
+  code_id     TEXT NOT NULL,
+  principal   TEXT NOT NULL DEFAULT '',
+  openid      TEXT NOT NULL,
+  state       TEXT NOT NULL,
+  lang        TEXT NOT NULL DEFAULT '',
+  scanned_at  INTEGER NOT NULL,
+  granted_at  INTEGER NOT NULL DEFAULT 0,
+  first_at    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_trial_grants_code ON fleet_trial_grants(code_id, state);
+CREATE INDEX IF NOT EXISTS idx_fleet_trial_grants_principal ON fleet_trial_grants(principal);
+CREATE INDEX IF NOT EXISTS idx_fleet_trial_grants_granted ON fleet_trial_grants(state, granted_at);
+-- Every scan of a trial code: event subscribe (a new follow) | SCAN (already
+-- following); outcome what the scanner was answered (granted · queued ·
+-- pending · tried · member · stopped · full · expired · daily · refused ·
+-- again). The funnel's scans and follows are counted here.
+CREATE TABLE IF NOT EXISTS fleet_trial_scans (
+  id       TEXT PRIMARY KEY,
+  code_id  TEXT NOT NULL,
+  openid   TEXT NOT NULL,
+  event    TEXT NOT NULL,
+  outcome  TEXT NOT NULL,
+  at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_trial_scans_code ON fleet_trial_scans(code_id, at);
+CREATE INDEX IF NOT EXISTS idx_fleet_trial_scans_who ON fleet_trial_scans(openid, code_id, at);

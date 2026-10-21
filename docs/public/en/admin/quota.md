@@ -91,6 +91,21 @@ They see it themselves at the top of the console and the chat — "Trial · 6 da
 - A `usd=` written before is turned into tokens by database migration 6 (150,000 per dollar).
 - Approving again never resets limits already written.
 
+## Trial QR codes: scan, follow, try
+
+**Trial QR codes**, under People in the admin console: make a code — a channel name (only admins see it), the trial plan (`fleet.apply.trial` above by default, changeable), how many people it gives a trial at most (200 by default, 0 = no cap), until when, and whether it needs approval (no by default). Two kinds: **permanent** (the default; never expires, stopped from here — the service account holds 100,000 in all, shared with the company's other products) and **temporary** (at most 30 days, then void). Download the picture as soon as it is made, for a poster, a slide or a group chat.
+
+Someone scans it with WeChat and follows the service account (one already following just scans), and the account answers at once with a "Your trial is on" card; tapping it opens the chat inside WeChat — no sign-in, no request. They are on the list like a person approved from "Ask to use", with this code's trial limits and subscriptions; the request record says this code approved it.
+
+- **One trial per WeChat, ever**: the same WeChat scanning another code is told "your trial is running" or "you have tried" (tap to ask to become a member); a member is told to tap and go on.
+- **Each code has a cap**; once given out it answers "every trial is given". A stopped or expired code says so and points at "Ask to use".
+- **A day's cap across every code**: `fleet hub set fleet.qr.daily 100` (100 by default, Beijing days); past it, "scan again tomorrow".
+- **Machines or the pool busy: a line**. The scanner gets "In line · n ahead of you" first, and a "Your turn" message when it is.
+- **Farming alarm**: a code that starts more than `fleet.qr.burst` (30 by default) trials in 10 minutes pauses itself and every admin is told; resume or stop it from the console once you have looked.
+- **A code that needs approval** only files a waiting request in Requests; approving it uses that code's trial plan.
+
+Each code is a row: given / cap, the funnel scan › follow › start › first line › member, its state; on top, the last 7 days' totals and the median time from scan to first line. Open a code to see who it reached; stop one person in People as usual.
+
 ## Seeing who used how much
 
 - **Usage by person** (admins): each person's usage today and over 7 days, their personal limit, what they mostly work on, how many sessions; open a row to see which subscriptions and machines they used.

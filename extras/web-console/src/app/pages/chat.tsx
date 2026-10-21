@@ -6,7 +6,7 @@
 // unchanged. Every piece is a stock shadcn/ui or assistant-ui component.
 import { createContext, useContext, useEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { AssistantRuntimeProvider, makeAssistantDataUI, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, makeAssistantDataUI, ThreadPrimitive, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { ExternalLinkIcon, GlobeIcon, SquarePenIcon, TerminalSquareIcon } from "lucide-react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
@@ -228,8 +228,21 @@ const GATE_WORDS = (): Record<string, { title: string; body: string; href?: stri
     href: "/app/signin", action: tr("登录", "Sign in"),
   },
 });
+// the hub's 「正在为你开家」 (fleet_accounts.go noHomeWhy): a home on its way —
+// a trial a 试用二维码 just started is here before its machine is (claude-fleet MRGB)
+const OPENING = "正在为你开家";
+const OPENING_WORDS = (): { title: string; body: string; href?: string; action?: string } => ({
+  title: tr("正在给你准备一台电脑", "Getting a computer ready for you"),
+  body: tr("通常 1 分钟内好。好了会自动进入对话，不用刷新。", "Usually within a minute. The chat opens on its own when it is ready — no need to reload."),
+});
 const GatePage: FC<{ gate: Gate; home: Home | null; onRetry: () => void }> = ({ gate, home, onRetry }) => {
-  const w = GATE_WORDS()[gate.code] || { title: tr("这里打不开", "This cannot open"), body: gate.msg || tr("稍后再试。", "Try again later.") };
+  const opening = gate.code === "no_home" && gate.msg.startsWith(OPENING);
+  useEffect(() => {
+    if (!opening) return;
+    const t = setInterval(onRetry, 5000); // ask again until the home is there
+    return () => clearInterval(t);
+  }, [opening, onRetry]);
+  const w = opening ? OPENING_WORDS() : GATE_WORDS()[gate.code] || { title: tr("这里打不开", "This cannot open"), body: gate.msg || tr("稍后再试。", "Try again later.") };
   return (
     <div className="mx-auto flex h-full max-w-md flex-col items-start justify-center gap-4 px-6">
       <Logo className="size-12" />
@@ -249,19 +262,46 @@ const GatePage: FC<{ gate: Gate; home: Home | null; onRetry: () => void }> = ({ 
 };
 
 const PROVIDER_NAME: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
-// the empty conversation: the site's mark and its display type
-const Welcome: FC = () => (
-  <div className="mb-8 flex flex-col items-start gap-4 px-2">
-    <Logo className="size-12" />
-    <h2 className="font-display text-[28px] leading-tight font-semibold tracking-tight">
-      {tr("说第一句话吧", "Say something")}<span className="text-clay">{tr("。", ".")}</span>
-    </h2>
-    <p className="text-muted-foreground text-[15px]">
-      {tr(`这是你和 ${PROVIDER_NAME[useChat().provider]} 的那一条对话：往上翻是历史，关掉页面也不会停。`,
-        `This is your one conversation with ${PROVIDER_NAME[useChat().provider]}: scroll up for history; closing the page does not stop it.`)}
-    </p>
-  </div>
-);
+// the empty conversation: the site's mark and its display type — a trial
+// member (one a 试用二维码 let in, claude-fleet MRGB) is greeted with what to
+// say and three lines to start from; a tap puts one in the box, nothing is sent
+const Welcome: FC = () => {
+  const { trial } = useShell();
+  const provider = PROVIDER_NAME[useChat().provider];
+  return (
+    <div className="mb-8 flex flex-col items-start gap-4 px-2">
+      <Logo className="size-12" />
+      <h2 className="font-display text-[28px] leading-tight font-semibold tracking-tight">
+        {trial ? tr("你好，想让我帮你做什么？", "Hi — what can I do for you?") : <>{tr("说第一句话吧", "Say something")}<span className="text-clay">{tr("。", ".")}</span></>}
+      </h2>
+      <p className="text-muted-foreground text-[15px]">
+        {trial
+          ? tr("直接说就行：写文案、整理表格、做一页网页、查资料……做完的东西会留在这里。", "Just say it: write copy, tidy a sheet, make a web page, look something up… what I make stays here.")
+          : tr(`这是你和 ${provider} 的那一条对话：往上翻是历史，关掉页面也不会停。`,
+            `This is your one conversation with ${provider}: scroll up for history; closing the page does not stop it.`)}
+      </p>
+      {trial && (
+        <div className="grid w-full gap-2 pt-2">
+          {STARTERS.map(([zh, en, zhSub, enSub]) => (
+            <ThreadPrimitive.Suggestion key={zh} prompt={tr(zh, en)} send={false} asChild>
+              <button type="button" className="rounded-xl border bg-card px-4 py-3 text-start text-[14px] transition-colors hover:bg-muted">
+                {tr(zh, en)}
+                <span className="text-muted-foreground block text-xs">{tr(zhSub, enSub)}</span>
+              </button>
+            </ThreadPrimitive.Suggestion>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// the empty conversation's three starting lines: 中文, English, and what each brings
+const STARTERS: [string, string, string, string][] = [
+  ["把这段会议录音整理成要点", "Turn these meeting notes into key points", "粘一段文字，或发个文件", "paste text or send a file"],
+  ["帮我做一页活动报名网页", "Make a sign-up page for my event", "做好给你一个能发到群里的链接", "you get a link to share"],
+  ["比较三款扫地机器人，列个表", "Compare three robot vacuums in a table", "会去网上查，给出来源", "it searches the web and cites sources"],
+];
 
 // the trial's clock (issue #3590): running until the first reply, then the time
 const TryClock: FC<{ clock: ReturnType<typeof useTryClock> }> = ({ clock }) => {

@@ -565,6 +565,8 @@ func (s *Server) routes() *routeMux {
 	// Follow the service account to sign in (claude-fleet#4054): 404 when off.
 	mux.HandleFunc(wxQRPath, s.handleWxQR)
 	mux.HandleFunc(wxPollPath, s.handleWxPoll)
+	// A 试用二维码's scan, handed over by workbench (claude-fleet MRGB).
+	mux.HandleFunc(WxTrialScanPath, s.handleWxTrialScan)
 	mux.HandleFunc("/auth/email/start", s.handleEmailStart)
 	mux.HandleFunc("/auth/email/link", s.handleEmailLink)
 	mux.HandleFunc("/auth/email/code", s.handleEmailCode)
@@ -731,6 +733,9 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(adminRequestsPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
 		// 管理侧「发通知」(claude-fleet#4063): the same 404 to a member.
 		mux.Handle(AdminNoticesPath, s.viewerOnly(http.HandlerFunc(s.handleAdminNotices)))
+		// 管理侧「试用二维码」(claude-fleet MRGB): the same 404 to a member.
+		mux.Handle(AdminTrialCodesPath, s.viewerOnly(http.HandlerFunc(s.handleAdminTrialCodes)))
+		mux.Handle(adminTrialCodesPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminTrialCodes)))
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
