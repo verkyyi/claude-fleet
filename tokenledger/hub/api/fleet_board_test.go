@@ -24,8 +24,8 @@ func TestBoardOneRowPerTask(t *testing.T) {
 		return rec
 	}
 	pushID := func(id string, lines ...map[string]any) {
-		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep1", Machine: "mini2",
-			Login: "verky", ID: id, Events: lines}); err != nil {
+		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep1", Machine: "mac-b",
+			Login: "alice", ID: id, Events: lines}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestBoardOneRowPerTask(t *testing.T) {
 		for k, v := range extra {
 			w[k] = v
 		}
-		return FleetSession{WorkerID: &wid, MachineName: "mini2", OSUser: "verky", Availability: "online", Worker: w}
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: "online", Worker: w}
 	}
 	live := []FleetSession{
 		sess(running.FID, "o-r:scratch-1", "working", 300, nil),

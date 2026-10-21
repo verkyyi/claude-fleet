@@ -988,9 +988,9 @@ unset -f stamp_option
 # answer goes to logs/task-attach.log rather than nowhere.
 [ -n "$TASK_REF" ] && [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
   && ( mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" 2>/dev/null
-       { printf '%s %s %s ' "$(date -u +%FT%TZ)" "$TASK_REF" "$win"
-         bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" 2>&1 >/dev/null || :; echo; } \
-         >> "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/task-attach.log" 2>/dev/null & )
+       alog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/task-attach.log"
+       printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$TASK_REF" "$win" >> "$alog" 2>/dev/null
+       bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>>"$alog" & )
 # The parent's worker_id (#1420): given verbatim when the parent is on another
 # machine (a hub-placed start, #1541), else derived from the key; a parent on
 # another machine has no generation here (#1538).
