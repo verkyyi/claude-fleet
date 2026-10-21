@@ -115,6 +115,18 @@ class Cleaner:
         except (OSError, subprocess.SubprocessError):
             pass
 
+    def end_id(self, fid, why="reaped"):
+        """A window this reaper killed ends its ID (EPIC T497 C4) — the ledger's
+        `closed`, pushed to the hub. Without it the hub kept every reaped session
+        open for good (BCYB). worker-stop's road closes its own (`stopped`)."""
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return
+        try:
+            subprocess.run(["python3", str(BIN / "fleet_id.py"), "close", fid, "--reason", why],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def snapshot(self, window):
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
@@ -293,6 +305,7 @@ class Cleaner:
                 return False
             self.retire(window)
             self.tm("kill-window", "-t", window)
+            self.end_id(snap["@fleet_id"])
             return True
         finally:
             self.untransition(lock)
@@ -412,10 +425,14 @@ class Cleaner:
         ledger key — so no history row; @norepo_sid stays fleet-history's resume.
         Without a policy it is never closed automatically (#791), as before.
         A no-repo session another SESSION spawned (@origin / @origin_fid — a batch
-        driver, a design-page writer, issue #2623) is nobody's home session: its
-        done / loop-end / at policy closes it like any other, a finished turn too."""
+        driver, a design-page writer, issue #2623) — or a probe (BCYB) — is nobody's
+        home session: its done / loop-end / at policy closes it like any other, a
+        finished turn too."""
         pol = self.policy(snap)
-        spawned = bool(snap["@origin"] or snap["@origin_fid"])
+        # a probe (BCYB: placement demos 「空会话，可关」 opened through the hub carry
+        # no @origin) is nobody's home session either: a finished turn counts —
+        # without this D1–D13's done:10m waited for an /exit that never came
+        spawned = bool(snap["@origin"] or snap["@origin_fid"]) or self.origin(snap) == "probe"
         kinds = ("done", "idle", "loop-end", "at") if spawned else ("done", "idle")
         # `idle:<dur>` (T694): a finished turn idle that long — a person's own
         # home session (idle:2h) too, resumed by its @norepo_sid.

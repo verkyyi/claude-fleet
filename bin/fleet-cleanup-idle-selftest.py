@@ -2,7 +2,7 @@
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
 # selftest-part: 5 HomeReap.test_exited_two_hours_closes_an_idle_turn_never HomeReap.test_spawned_norepo_without_policy_is_never_closed PinIsOrder.test_dry_run_migrates_nothing PolicyGrammar.test_origin_table_and_the_policy_in_force ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
+# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn TestIdentity.test_probe_origin_closes_after_a_finished_turn
 # selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
 # selftest-part: 8 RoundTrip.test_real_close_and_restore
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
@@ -1076,6 +1076,12 @@ class PolicyGrammar(unittest.TestCase):
             ("orchestrator",), ("fleet-epic:epic-driver",), ("", "", "", "1"), ("", "scratch-3"),
             ("", "hub"), ("", "", "u/f"), ("", ""), ("", "scratch-3", "", "", "decide"))],
             ["orchestrator", "driver", "probe", "dispatched", "person", "dispatched", "person", "decide"])
+        # BCYB: a title that says it is a probe makes it one — never «演练» alone
+        # (a task about drills is work), never over an orchestrator / a driver
+        self.assertEqual([rp.origin_of(*a) for a in (
+            ("", "hub", "", "", "", "T672 放置计时 D2（空会话，可关）"), ("", "scratch-3", "", "", "", "探针：放置 4xx"),
+            ("", "scratch-3", "", "", "", "C5 · 重复的故障演练合并"), ("orchestrator", "", "", "", "", "可关"))],
+            ["probe", "probe", "dispatched", "orchestrator"])
         self.assertEqual([rp.effective(*a) for a in (
             ("done:5m", "1"), ("", "", "orchestrator"), ("keep", "", "", "session", True),
             ("keep", "", "", "session", False), ("keep", "", "", "", True), ("merged",))],
@@ -1500,6 +1506,21 @@ class TestIdentity(Rig):
         self.tm("set-option", "-w", "-t", busy, "@claude_state", "done")
         self.assertIn("reaped-test:" + busy, self.clean())        # done 4000 s ago
         self.assertFalse(self.alive(busy))
+
+    def test_probe_origin_closes_after_a_finished_turn(self):
+        # BCYB: a placement demo opened through the hub carries no @origin — its
+        # @reap_origin probe makes it nobody's home session, so done:10m closes it
+        # after a finished turn (D1–D13 waited for an /exit that never came).
+        done = {"@claude_state": "done", "@claude_state_ts": str(int(time.time()) - 900)}
+        probe = self.norepo(False, **dict(done, **{"@reap_origin": "probe"}))
+        mine = self.norepo(False, **done)                          # a person's home session: waits for the exit
+        self.clean()                                              # the countdown starts …
+        if self.tm("display-message", "-p", "-t", probe, "#{@reap_due}").strip().isdigit():
+            self.tm("set-option", "-w", "-t", probe, "@reap_due", str(int(time.time()) - 1))
+        out = self.clean()                                        # … and runs out
+        self.assertIn("reaped-idle:" + probe + " policy=done:10m norepo", out)
+        self.assertFalse(self.alive(probe))
+        self.assertTrue(self.alive(mine))
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")

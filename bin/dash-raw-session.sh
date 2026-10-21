@@ -953,7 +953,7 @@ stamp_option @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 [ -n "$ID_TASK" ] && stamp_option @task "$ID_TASK" 2>/dev/null    # a continued ID's record (C18)
 [ -n "$REAP_ORIGIN" ] || REAP_ORIGIN=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" \
-  "$TEST_ID" "$_idpar" "${REOPEN_FID:-$PREV_ID}")
+  "$TEST_ID" "$_idpar" "${REOPEN_FID:-$PREV_ID}" "$NAME")
 if [ -z "$REAP" ]; then
   _rk=scratch; case "$PROMPT" in /loop|/loop[[:space:]]*) _rk=loop ;; esac
   REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${REAP_ORIGIN:-person}" --kind "$_rk") || REAP=done:15m

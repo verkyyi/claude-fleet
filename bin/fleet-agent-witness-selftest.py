@@ -100,6 +100,8 @@ class WitnessTests(unittest.TestCase):
             os.environ.pop(k, None)
         os.environ.update(TMUX=sock + ',1,0', TMUX_PANE=self.pane, FLEET_ID_DIR=str(self.tmp / 'ids'),
                           FLEET_ID_PUSH='0', FLEET_CONF_DIR=str(self.tmp / 'conf'), CODEX_HOME=str(self.tmp / 'codex'))
+        # the server is this sandbox login's fleet: the hook lazily opens an ID only there (BCYB)
+        (self.tmp / 'conf' / 'fleets' / self.label).mkdir(parents=True)
         self.servers = []
 
     def tearDown(self):
