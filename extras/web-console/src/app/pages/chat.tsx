@@ -10,6 +10,7 @@ import { AssistantRuntimeProvider, useAui, type ToolCallMessagePartComponent } f
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector.aui";
+import { ComposerAddAttachment } from "@/components/assistant-ui/elements/attachment.aui";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
@@ -67,6 +68,11 @@ const ModelPicker: FC = () => {
     />
   );
 };
+
+// the composer's start: 发图片 (task T773 ③), then the model
+const ComposerTools: FC = () => (
+  <div className="flex items-center gap-1"><ComposerAddAttachment /><ModelPicker /></div>
+);
 
 // the limit is used up: one band over a greyed composer, until it frees up
 const QuotaBanner: FC = () => {
@@ -310,7 +316,7 @@ function LiveChat() {
             <div className="min-h-0 flex-1">
               {over ? <TrialOver trial={trial} /> : gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
                 <Thread autoFocus={false} placeholder={chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
-                  components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ModelPicker, ComposerTop: QuotaBanner }} />
+                  components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ComposerTools, ComposerTop: QuotaBanner }} />
               )}
             </div>
           </div>

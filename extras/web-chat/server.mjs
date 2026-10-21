@@ -239,6 +239,10 @@ const DENY_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" co
 const MEDIA = join(STATE, "media");
 const IMAGE_MAX = Number(E.FLEET_WEBCHAT_IMAGE_MAX || 10 * 1024 * 1024);
 const IMAGES_PER_REPLY = Number(E.FLEET_WEBCHAT_IMAGES_PER_REPLY || 20);
+// what a person may send with one line: PICS_PER_TURN pictures, the whole request
+// within the chat transport's one-request bound (the page shrinks them to fit)
+const PICS_PER_TURN = 4;
+const TURN_MAX = 1024 * 1024 + 64 * 1024;
 const THUMB_MAX = 24 * 1024;
 const THUMBS_SHOWN = 60;
 const mediaSize = new Map();                              // ref → {w, h}
@@ -555,7 +559,15 @@ function account(m) {
 }
 
 // One query() through the conversation's session credential; onMsg sees every SDK message.
+// A prompt that is content blocks (pictures with the words, task T773 ③) goes in as
+// the one user message of an input stream — query() takes a string or a stream.
 async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers }, onMsg) {
+  if (Array.isArray(prompt)) {
+    const one = inputStream();
+    one.push({ type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null, session_id: resume || "" });
+    one.end();
+    prompt = one;
+  }
   const S = await sdk();
   const cred = await credFor();
   log("query", { cred_sid: cred.sid, route: cred.route, model, resume: !!resume });
@@ -773,11 +785,22 @@ function askEvent(rid, a) {
 }
 
 async function turn(req, res, person) {
-  const body = await readJson(req);
+  let body;
+  try { body = await readJson(req, TURN_MAX); } catch { return send(res, 413, { error: "图太大：一条消息连图带字最多 1 MB" }); }
   const text = String(body.text || "").trim();
   const model = body.model == null || body.model === "" ? DEFAULT_MODEL : String(body.model);
   if (!modelAllowed(model)) { log("model_refused", { model: model.slice(0, 64) }); return send(res, 400, { error: "model not allowed" }); }
-  if (!text) return send(res, 400, { error: "empty" });
+  // the person's pictures (task T773 ③): a few, of a type the page shows, each a real image
+  const pics = Array.isArray(body.images) ? body.images : [];
+  if (pics.length > PICS_PER_TURN) return send(res, 400, { error: `一条消息最多 ${PICS_PER_TURN} 张图` });
+  const images = [];
+  for (const g of pics) {
+    const b = { type: "image", source: { type: "base64", media_type: String(g?.media_type || ""), data: String(g?.data || "") } };
+    const img = imageBlockBytes(b);
+    if (!img || !imageSize(img.buf, img.ext).w) return send(res, 400, { error: "不是能看的图片（png / jpeg / gif / webp）" });
+    images.push(b);
+  }
+  if (!text && !images.length) return send(res, 400, { error: "empty" });
   if (live) return send(res, 409, { error: "还在回复上一句" });
   const S = await sdk().catch((e) => e);
   if (S instanceof Error) return send(res, 503, { error: S.message });
@@ -864,7 +887,8 @@ async function turn(req, res, person) {
       // the one-line context goes in on a session's first turn and again only when it changed
       const head = where && (!conv.session || conv.ctxKey !== where.key) ? contextBlock(where.line) : "";
       try {
-        await warmQuery(seed + head + text, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
+        const words = seed + head + text;
+        await warmQuery(images.length ? [...images, ...(words ? [{ type: "text", text: words }] : [])] : words, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
           canUseTool, details }, onMsg);
         if (seed) conv.seed = "";
         if (head) conv.ctxKey = where.key;

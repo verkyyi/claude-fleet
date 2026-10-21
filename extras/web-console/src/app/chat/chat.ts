@@ -9,8 +9,10 @@ import {
   type AppendMessage,
   type RespondToToolApprovalOptions,
   type ThreadMessageLike,
+  SimpleImageAttachmentAdapter,
 } from "@assistant-ui/react";
 import { tr } from "@/shared/i18n";
+import { attachedPics, MAX_PICS, packPics, type SentPic } from "./pics";
 
 // The console's conversation is the entry's /v1/chat (claude-fleet#3926: moved
 // here from extras/web-chat/ui's site build, its protocol unchanged).
@@ -312,18 +314,25 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
 
   const onNew = useCallback(async (message: AppendMessage) => {
     const text = message.content.map((p) => (p.type === "text" ? p.text : "")).join("").trim();
-    if (!text) return;
+    const shown = attachedPics(message);
+    if (!text && !shown.length) return;
+    if (shown.length > MAX_PICS) setNotice(tr(`一次最多发 ${MAX_PICS} 张图，只发了前 ${MAX_PICS} 张。`, `At most ${MAX_PICS} pictures a message; the first ${MAX_PICS} went.`));
+    let images: SentPic[] = [];
+    try { images = await packPics(shown.slice(0, MAX_PICS), text); } catch {
+      setNotice(tr("这张图读不出来，换一张试试。", "That picture could not be read; try another."));
+      return;
+    }
     clearTimeout(follow.current);
     ++historyRead.current;
     streaming.current = true;
     setLoaded(true);
-    setItems((xs) => [...xs, { t: "user", text }]);
+    setItems((xs) => [...xs, { t: "user", text, ...(images.length ? { images: images.map((g) => ({ thumb: `data:${g.media_type};base64,${g.data}` })) } : {}) }]);
     setAsks([]);
     setBusy(true);
     let lost = false;
     let replied = false;
     try {
-      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model }) });
+      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}) }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
@@ -423,6 +432,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     onNew,
     onCancel,
     onRespondToToolApproval,
+    // pictures to send (task T773 ③): the composer's 发图片 and a pasted one
+    adapters: { attachments: new SimpleImageAttachmentAdapter() },
   });
 
   return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync };
