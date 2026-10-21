@@ -44,8 +44,9 @@ var chatRoutes = map[string]string{
 	"file": http.MethodGet,
 }
 
-// chatFileRef is the one query a file request carries: the service's media name.
-var chatFileRef = regexp.MustCompile(`^[0-9a-f]{32}\.(?:png|jpg|gif|webp)$`)
+// chatFileRef is the one query a file request carries: the service's media name,
+// or the opaque ref of a file a reply linked to (task T773 ②) — never a path.
+var chatFileRef = regexp.MustCompile(`^(?:[0-9a-f]{32}\.(?:png|jpg|gif|webp)|f[0-9a-f]{32})$`)
 
 // chatHomeRoute is the one route the entry answers itself (claude-fleet#3646):
 // where the person's conversation runs, for the page's top bar — no relay.

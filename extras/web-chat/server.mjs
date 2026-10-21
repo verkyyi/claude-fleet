@@ -60,7 +60,7 @@ import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
-  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME } from "./lib.mjs";
+  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -339,6 +339,84 @@ async function sendMedia(req, res, ref) {
   res.end(body);
 }
 
+// ---- the files a reply links to (task T773 ②) ---------------------------------------
+// A reply's Markdown link to a file on this machine ("改动在 [form.css](/Users/…)")
+// points nowhere in a browser. Each such file under $HOME or the session's
+// directory — a regular file, ≤ LINK_MAX, never a key / configuration / secret
+// (lib.mjs fileDenied) — gets an opaque ref (f + 32 hex, kept in <state>/refs.json
+// for LINK_DAYS) and the page gets {t:"files", files: {<target as written>: ref}}
+// after the reply's text; it rewrites those link targets to /v1/chat/file?ref=.
+// The entry never sees a path. Served: an image as itself, anything else (HTML and
+// SVG included) as a download — under a sandbox CSP, so nothing the agent wrote
+// ever runs on the entry's site.
+const LINK_MAX = Number(E.FLEET_WEBCHAT_LINK_MAX || 20 * 1024 * 1024);
+const LINK_DAYS = Number(E.FLEET_WEBCHAT_LINK_DAYS || 7);
+const REFS_FILE = join(STATE, "refs.json");
+const LINK_REF_RE = /^f[0-9a-f]{32}$/;
+let fileRefs = {};                                       // ref → { path, exp }
+try { fileRefs = JSON.parse(readFileSync(REFS_FILE, "utf8")) || {}; } catch { fileRefs = {}; }
+let refsDirty = false;
+function saveRefs() {
+  if (!refsDirty) return;
+  refsDirty = false;
+  const now = Date.now();
+  for (const [k, v] of Object.entries(fileRefs)) if (!(v.exp + 30 * 864e5 > now)) delete fileRefs[k];   // an expired one still says so for 30 days
+  try { writeFileSync(REFS_FILE + ".tmp", JSON.stringify(fileRefs), { mode: 0o600 }); renameSync(REFS_FILE + ".tmp", REFS_FILE); }
+  catch (e) { log("refs_failed", { msg: String(e?.message || e).slice(0, 200) }); }
+}
+// the real path of a file the page may open, or "" (outside the roots, denied, not a file, too big)
+function linkable(target, cwd) {
+  let p = target;
+  if (/^file:\/\//i.test(p)) { try { p = fileURLToPath(p); } catch { return ""; } }
+  else if (p.startsWith("~/")) p = join(E.HOME || "", p.slice(2));
+  else if (!p.startsWith("/")) p = join(cwd || CWD, p);
+  try { p = decodeURIComponent(p); } catch { /* as written */ }
+  let real;
+  try { real = realpathSync(p); } catch { return ""; }
+  const roots = [E.HOME, cwd].filter(Boolean).map((r) => { try { return realpathSync(r); } catch { return ""; } }).filter(Boolean);
+  const root = roots.find((r) => real.startsWith(r + sep));
+  if (!root) return "";
+  const home = roots[0] && real.startsWith(roots[0] + sep) ? roots[0] : root;
+  if (fileDenied(real.slice(home.length + 1))) return "";
+  let st;
+  try { st = statSync(real); } catch { return ""; }
+  return st.isFile() && st.size <= LINK_MAX ? real : "";
+}
+// {target: ref} for every linkable file a text names
+function filesOf(text, cwd) {
+  const out = {};
+  const now = Date.now();
+  for (const t of linkTargets(text)) {
+    const real = linkable(t, cwd);
+    if (!real) continue;
+    let ref = Object.keys(fileRefs).find((k) => fileRefs[k].path === real && fileRefs[k].exp > now + 864e5);
+    if (!ref) { ref = "f" + randomHex(); fileRefs[ref] = { path: real, exp: now + LINK_DAYS * 864e5 }; refsDirty = true; }
+    out[t] = ref;
+  }
+  return Object.keys(out).length ? out : null;
+}
+const randomHex = () => createHash("sha256").update(newSecret(32)).digest("hex").slice(0, 32);
+async function sendLinked(req, res, ref) {
+  const r = fileRefs[ref];
+  const head = { "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox",
+    "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY", "Cache-Control": "private, no-store" };
+  if (!r) return send(res, 404, { error: "not found" });
+  if (!(r.exp > Date.now())) {
+    res.writeHead(410, { ...head, "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("这个文件链接已过期（7 天）。让 Agent 再给一次。\nThis file link has expired; ask the agent for it again.\n");
+  }
+  // checked again at the read: the path may have become a link out, a secret's name, a directory
+  const real = linkable(r.path, conv.cwd);
+  if (real !== r.path) return send(res, 404, { error: "not found" });
+  let body;
+  try { body = await fsp.readFile(real); } catch { return send(res, 404, { error: "not found" }); }
+  const name = real.split(sep).pop();
+  const t = linkedType(name);
+  res.writeHead(200, { ...head, "Content-Type": t.type, "Content-Length": body.length,
+    "Content-Disposition": `${t.inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(name)}` });
+  res.end(body);
+}
+
 // ---- transcripts → the page's items ------------------------------------------
 const SEED_RE = /^<fleet-webchat-relay>[\s\S]*?<\/fleet-webchat-relay>\s*/;
 function blocks(content) { return typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : []; }
@@ -369,7 +447,11 @@ async function readItems(id, cwd) {
         const text = b.text.replace(SEED_RE, "").replace(CTX_RE, "");
         if (text || pics.length) out.push({ t: "user", text, ...(pics.length ? { images: pics } : {}) });
         pics = [];
-      } else if (m.type === "assistant" && b.type === "text" && b.text) out.push({ t: "text", d: b.text });
+      } else if (m.type === "assistant" && b.type === "text" && b.text) {
+        out.push({ t: "text", d: b.text });
+        const files = filesOf(b.text, cwd);
+        if (files) out.push({ t: "files", files });
+      }
       else if (m.type === "assistant" && b.type === "image") out.push(...imageItems([b]));
       else if (m.type === "assistant" && b.type === "tool_use") out.push({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
       else if (m.type === "user" && b.type === "tool_result") {
@@ -385,6 +467,7 @@ async function conversationItems() {
   const out = [];
   for (const s of conv.chain) out.push(...await readItems(s.id, s.cwd));
   if (conv.session) out.push(...await readItems(conv.session, conv.cwd));
+  saveRefs();
   return capImages(out);
 }
 
@@ -750,6 +833,10 @@ async function turn(req, res, person) {
         if (b.type === "text" && b.text && !sawDelta) emitAll({ t: "text", d: b.text });
         if (b.type === "tool_use") emitAll({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
         if (b.type === "image") emitImages([b]);
+        if (b.type === "text" && b.text) {
+          const files = filesOf(b.text, conv.cwd || CWD);
+          if (files) { emitAll({ t: "files", files }); saveRefs(); }
+        }
       }
       sawDelta = false;
       return;
@@ -935,7 +1022,10 @@ async function handle(req, res) {
       models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600) });
   }
   if (p === "/api/turn" && req.method === "POST") return turn(req, res, person);
-  if (p === "/api/file" && req.method === "GET") return sendMedia(req, res, u.searchParams.get("ref"));
+  if (p === "/api/file" && req.method === "GET") {
+    const ref = u.searchParams.get("ref") || "";
+    return LINK_REF_RE.test(ref) ? sendLinked(req, res, ref) : sendMedia(req, res, ref);
+  }
   if (SOCKET && p === "/api/export" && req.method === "GET") { log("export", { person }); return send(res, 200, await exportConv()); }
   if (SOCKET && p === "/api/import" && req.method === "POST") {
     const [code, msg] = await importConv(await readJson(req, EXPORT_MAX + 1024 * 1024));

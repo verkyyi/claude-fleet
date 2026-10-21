@@ -288,3 +288,36 @@ export function imageSize(buf, ext) {
   } catch { /* a short or odd header */ }
   return {};
 }
+
+// ---- the home's files a reply links to (task T773 ②) ---------------------------------
+// A reply's Markdown link / image target that names a file on this machine:
+// an absolute path, ~/…, file://…, or one relative to the session's directory —
+// never a URL with another scheme, an anchor or a query.
+export function linkTargets(text) {
+  const out = new Set();
+  for (const m of String(text || "").matchAll(/\]\(\s*<?([^)\s<>]+)>?(?:\s+"[^"]*")?\s*\)/g)) {
+    const t = m[1];
+    if (/^file:\/\//i.test(t) || /^~\//.test(t) || t.startsWith("/") || (!/^[a-z][a-z0-9+.-]*:/i.test(t) && !/^[#?]/.test(t))) out.add(t);
+  }
+  return [...out];
+}
+// A path the page may never open, whatever links to it: the login's keys and
+// configuration, and any file named like a secret. `rel` is the path under $HOME.
+const DENY_DIRS = [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".config", ".claude", ".codex", ".local/share/keyrings",
+  ".password-store", "Library/Keychains", "Library/Cookies", ".netrc", ".npmrc", ".pypirc", ".git-credentials"];
+const DENY_NAME = /(^\.env($|\.)|\.(pem|key|p12|pfx|keystore|jks|kdbx)$|^id_(rsa|dsa|ecdsa|ed25519)|(^|[._-])(secrets?|credentials?|tokens?|passwords?|private)([._-]|$))/i;
+export function fileDenied(rel) {
+  const parts = String(rel).split("/").filter(Boolean);
+  if (!parts.length || parts.includes("..")) return true;
+  const joined = parts.join("/");
+  if (DENY_DIRS.some((d) => joined === d || joined.startsWith(d + "/"))) return true;
+  return parts.some((p) => DENY_NAME.test(p));
+}
+// How a linked file goes back: an image as itself, anything else a download.
+export function linkedType(name) {
+  const ext = String(name).toLowerCase().split(".").pop();
+  const img = IMAGE_EXT_MIME[ext === "jpeg" ? "jpg" : ext];
+  if (img) return { type: img, inline: true };
+  if (ext === "pdf") return { type: "application/pdf", inline: false };
+  return { type: "application/octet-stream", inline: false };
+}

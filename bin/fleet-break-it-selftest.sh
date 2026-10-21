@@ -6565,6 +6565,18 @@ drill_chat_budget_bypass() {
   WHAT="凭据代理 403 person_budget_exceeded：流里一行 code:budget + until，原话不上页面；/api/conversation 说被挡（重启也记得），走通一轮后放开"
 }
 
+# chat-file-escape (task T773 ②): a reply's link to a file on the home is the one
+# road from the entry to the home's disk — a key, a secret's name, a link out of
+# $HOME, a file swapped for one after the ref was given, an HTML file run on the
+# entry's site: none of them may get through.
+drill_chat_file_escape() {
+  CAP=30
+  if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi
+  webchat_part links "Q live: a ref for the three files under" "Q the refs are opaque" "Q an HTML file is only a download" \
+    "Q a ref nobody was given: 404" "Q a file that became a link out of \$HOME is refused at the read" "Q refs.json is 0600" "Q an expired ref says so" || return 1
+  WHAT="回复里的本机文件链接：钥匙 / .env / 链出 \$HOME / 不存在的不给号；号是不透明的；HTML 只下载（sandbox）；读时再认（换成软链的拒）；过期 410"
+}
+
 # chat-claude-bare-path (issue #3648, EPIC #3642 C6): the daemon starts the chat
 # service with a bare PATH (no ~/.local/bin); the SDK is installed without its
 # native binary, so a service that could not find the login's own claude failed

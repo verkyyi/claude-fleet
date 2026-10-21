@@ -267,6 +267,16 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 预览 `thumb`（≤ 24 KB 的 JPEG data URL，后台用 macOS `sips` 或 ImageMagick 做，都没有就不带）；国内那份副本
 （`chat_mirror.go`）对图**只存预览**——不存 ref、不存原图，全部预览 ≤ 2 MB、新的优先——家连不上时页面先显示预览。
 
+### 回复里指向家机器文件的链接（T773 ②）
+
+回复里的 Markdown 链接 / 图片目标若是本机文件（绝对路径、`~/…`、`file://…`、相对会话目录），服务在那段文字后面给一条
+`{t:"files", files:{<原样的目标>: <ref>}}`，页面把这些目标改成 `/v1/chat/file?ref=<ref>`。ref 是 `f` + 32 位十六进制
+的随机号，记在 `<state>/refs.json`（0600，7 天，`FLEET_WEBCHAT_LINK_DAYS`；过期后 30 天内回 410「已过期」），入口
+只见号、不见路径。给号与读取各认一次：只放 `$HOME` 或会话目录下的普通文件、≤ 20 MB（`FLEET_WEBCHAT_LINK_MAX`），
+`lib.mjs` `fileDenied` 名单（`.ssh` `.config` `.claude` `.aws` `Library/Keychains` …，`.env*`、`*.pem`、`id_rsa`、
+名字带 secret / token / credential / password 的）一律不给；读的时候若已变成链到外面的软链，拒。图片原样回，其余
+（含 HTML、SVG）一律下载，`sandbox` CSP——Agent 写的东西不在入口的域名下运行。BREAK-IT `chat-file-escape`。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，
