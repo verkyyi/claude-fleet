@@ -52,12 +52,29 @@ export function quotaOf(limit: Record<string, unknown> | undefined): Quota | nul
   const over = limit.over ? rows.find((r) => r.window === limit.window) : undefined;
   return over ? { ...over, over: true, pct: 0 } : rows[0];
 }
-export function useQuota(key: unknown = 0) {
-  const [q, setQ] = useState<Quota | null>(null);
+// A trial member's own limits off /v1/me/usage's `trial` (claude-fleet T796,
+// me_trial.go): when it ends, the tokens used against its ceiling (counted as
+// every limit counts them), the session count — and one state the bar colours
+// by. Absent = not on a trial.
+export type Trial = {
+  state: "ok" | "soon" | "expired" | "spent";
+  since?: string; until?: string; days_left?: number;
+  tokens?: number; used_tokens: number;
+  usd?: number; spent_usd?: number; // a ceiling written before T796
+  sessions?: number; sessions_now: number;
+  upgrade_asked?: string;
+};
+export type UsageHead = { quota: Quota | null; trial: Trial | null };
+export function useUsageHead(key: unknown = 0): UsageHead & { setTrial: (t: Trial | null) => void } {
+  const [h, setH] = useState<UsageHead>({ quota: null, trial: null });
   useEffect(() => {
-    getJSON<{ limit?: Record<string, unknown> }>("/v1/me/usage?range=today").then((j) => setQ(quotaOf(j?.limit)));
+    getJSON<{ limit?: Record<string, unknown>; trial?: Trial }>("/v1/me/usage?range=today")
+      .then((j) => setH({ quota: quotaOf(j?.limit), trial: j?.trial ?? null }));
   }, [key]);
-  return q;
+  return { ...h, setTrial: (trial) => setH((x) => ({ ...x, trial })) };
+}
+export function useQuota(key: unknown = 0) {
+  return useUsageHead(key).quota;
 }
 
 // /v1/fleet/devices: the person's own registered computers (a revoked one, or

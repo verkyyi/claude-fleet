@@ -119,7 +119,7 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 			}
 			nodePeople[u.Node][p.ID] = true
 		}
-		lim, err := s.meUsageLimit(p.ID, now)
+		lim, _, err := s.meUsageLimit(p.ID, now)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return

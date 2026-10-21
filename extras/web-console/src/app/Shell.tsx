@@ -24,14 +24,15 @@ import { cn } from "@/lib/utils";
 import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
-import { isAdmin, useMe, useQuota, type Me, type Quota } from "@/shared/api";
+import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { ADMIN_HREF, PAGES, type PageDef } from "./routes";
+import { TrialBar } from "./TrialBar";
 
-// What every page reads: who is signed in, and what is left of their limit
-// (bumped after each conversation turn).
-type ShellCtx = { me: Me | null; quota: Quota | null; bumpQuota: () => void };
-const Ctx = createContext<ShellCtx>({ me: null, quota: null, bumpQuota: () => {} });
+// What every page reads: who is signed in, what is left of their limit and
+// their trial's (claude-fleet T796) — both bumped after each conversation turn.
+type ShellCtx = { me: Me | null; quota: Quota | null; trial: Trial | null; bumpQuota: () => void };
+const Ctx = createContext<ShellCtx>({ me: null, quota: null, trial: null, bumpQuota: () => {} });
 export const useShell = () => useContext(Ctx);
 
 // usePage(title): a page names itself — the tab's title.
@@ -229,18 +230,19 @@ function useNav(): Nav {
 // between the bars; a page that scrolls scrolls inside <main>.
 export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: () => void }> = ({ children, quotaKey, bumpQuota }) => {
   const { me } = useMe();
-  const quota = useQuota(quotaKey);
+  const { quota, trial, setTrial } = useUsageHead(quotaKey);
   const [sideOpen, setSideOpen] = useSideOpen();
   const nav = useNav();
   // typing, or moving through the thread, folds the bar the person brought back
   const fold = () => { if (nav.folds && nav.open) nav.setOpen(false); };
   return (
-    <Ctx.Provider value={{ me, quota, bumpQuota }}>
+    <Ctx.Provider value={{ me, quota, trial, bumpQuota }}>
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none" style={{ height: "var(--app-h, 100dvh)" }}>
         <Side />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <ViewAsBar />
           <TopBar nav={nav} />
+          <TrialBar trial={trial} onAsked={setTrial} />
           <main className="min-h-0 flex-1 overflow-y-auto" data-immersive={nav.folds && !nav.open}
             onFocusCapture={(e) => { if (e.target instanceof HTMLTextAreaElement) fold(); }}
             onWheelCapture={fold} onTouchMoveCapture={fold}>{children}</main>

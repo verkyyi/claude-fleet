@@ -81,11 +81,14 @@ Self-hosted, with the operator token, `fleet config budget` works too: with no a
 
 ## A new member's trial limits
 
-A person let in through an approved request starts with trial limits: **7 days**, **$20** of shared-pool usage priced at API rates, and **1 session at a time**. Past the end or the dollars, their next request is refused and their session says which ("试用期已于 … 结束" / "试用额度已用完"); a start past the session count is refused with the reason.
+A person let in through an approved request starts with trial limits: **7 days**, **3M tokens** of the shared pool (counted like a person's limit: input + cache write + output, a cache read not counted), and **1 session at a time**. Past the end or the tokens, their next request is refused and their session says which ("试用期已于 … 结束" / "试用额度已用完"); a start past the session count is refused with the reason.
 
-- The default: `fleet hub set fleet.apply.trial "days=7,usd=20,sessions=1"`; `off` approves a full member with no limits.
-- Per approval: the approve request's body carries `{"limits": "days=14,usd=50,sessions=2"}`, or `"off"`.
-- Afterwards: `fleet hub set fleet.member_limits.<principal> "until=2026-11-01T00:00:00Z,usd=50,sessions=2"`; `fleet hub unset fleet.member_limits.<principal>` makes them a full member.
+They see it themselves at the top of the console and the chat — "Trial · 6 days left · 120k / 3M tokens · 1 session at a time" — coloured within a day of the end or at 80% used; ended or used up, it says why and offers "Ask to become a member", which marks their row in the admin's People list. Admins see each person's trial limits and usage in People, and change them or make the person a member from the row.
+
+- The default: `fleet hub set fleet.apply.trial "days=7,tokens=3000000,sessions=1"` (`3M` and `3000k` work too); `off` approves a full member with no limits.
+- Per approval: the approve request's body carries `{"limits": "days=14,tokens=3M,sessions=2"}`, or `"off"`.
+- Afterwards: `fleet hub set fleet.member_limits.<principal> "until=2026-11-01T00:00:00Z,tokens=3M,sessions=2"` (or edit it in People); `fleet hub unset fleet.member_limits.<principal>` makes them a full member.
+- A `usd=` written before is turned into tokens by database migration 6 (150,000 per dollar).
 - Approving again never resets limits already written.
 
 ## Seeing who used how much

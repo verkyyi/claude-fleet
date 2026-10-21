@@ -188,7 +188,8 @@ var routeAccess = map[string]string{
 	meWxBindQRPath: accessUser, meWxBindPollPath: accessUser, // claude-fleet#4057
 	// 我的用量 in one answer (claude-fleet#3227): their limit, days, models
 	// and where it went, off pool_usage under their principal.
-	"/v1/me/usage": accessUser,
+	"/v1/me/usage":     accessUser,
+	MeTrialUpgradePath: accessUser, // 申请转正 (claude-fleet T796)
 	// 我自己的订阅 (claude-fleet#4035): each person their own rows only.
 	AdminSubsLoginPath: accessAdmin, AdminSubsFinishPath: accessAdmin, AdminSubsTokenPath: accessAdmin, AdminSubsRefreshPath: accessAdmin,
 	MeSubsPath: accessUser, MeSubsLoginPath: accessUser, MeSubsFinishPath: accessUser,

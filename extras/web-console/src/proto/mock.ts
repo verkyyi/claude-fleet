@@ -13,7 +13,9 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   // unbound = a GitHub member the notices cannot find yet (claude-fleet#4057)
   wx?: "unbound";
   // 试用中 (claude-fleet#4059): a trial person — running, its last line, spent
-  trial?: "running" | "last" | "capped" };
+  trial?: "running" | "last" | "capped";
+  // 试用成员 (claude-fleet T796): an approved member's trial limits on /v1/me/usage
+  member?: "ok" | "soon" | "spent" | "expired" };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -33,6 +35,13 @@ export async function install(): Promise<string> {
   // 只读预览: the entry answers as 林晓, says who looks, and has nothing to sign out
   if (sc.role === "view") Object.assign(me, { view_as: { person: "p:linxiao", name: "林晓", by: "周宁" }, can_logout: false });
   const wxBind = { unbound: sc.wx === "unbound", polls: 0 };
+  const m = sc.member, D = 864e5;
+  const memberTrial: Record<string, unknown> = {
+    state: m || "ok", sessions: 1, sessions_now: 1, tokens: 3_000_000,
+    used_tokens: m === "spent" ? 3_012_000 : m === "soon" ? 2_520_000 : 120_000,
+    until: new Date(Date.now() + (m === "expired" ? -D / 3 : m === "soon" ? D / 2 : 6 * D - 3600e3)).toISOString(),
+    days_left: m === "expired" ? 0 : m === "soon" ? 1 : 6,
+  };
   if (sc.trial) Object.assign(me, { role: "trial", pages: ["chat"] });
   const trialState = () => ({ state: sc.trial === "capped" ? "ended" : "running", secs_left: sc.trial === "capped" ? 0 : 680,
     msgs_left: sc.trial === "last" ? 0 : sc.trial === "capped" ? 4 : 16, max_secs: 900, max_msgs: 20,
@@ -262,7 +271,10 @@ export async function install(): Promise<string> {
         return ok({ s: "bound" });
       case "/v1/me/usage":
         if (state === "error" && sc.page === "/usage") return ok({ error: "unavailable" }, 503);
-        return ok(usage(/[?&]range=([^&]+)/.exec(url)?.[1] || "7d"));
+        return ok({ ...usage(/[?&]range=([^&]+)/.exec(url)?.[1] || "7d"), ...(sc.member ? { trial: memberTrial } : {}) });
+      case "/v1/me/trial/upgrade":
+        memberTrial.upgrade_asked = new Date().toISOString();
+        return ok({ upgrade_asked: memberTrial.upgrade_asked });
       case "/v1/fleet/devices": return ok({ mine: true, idle_sec: 0, devices: devices.filter((d) => !d.revoked_at), audit: [] });
       case "/v1/fleet/devices/revoke": {
         const fp = JSON.parse(String(init?.body || "{}")).fingerprint;

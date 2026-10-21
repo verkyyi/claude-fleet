@@ -136,6 +136,13 @@ type PersonBudgetState struct {
 	TrialUntil    *time.Time `json:"trial_until,omitempty"`
 	TrialUSD      float64    `json:"trial_usd,omitempty"`
 	TrialSpentUSD float64    `json:"trial_spent_usd,omitempty"`
+	// …and, since T796, its token ceiling, the tokens used against it, its
+	// session count, when it started, and when the person asked to 转正.
+	TrialTokens     int64      `json:"trial_tokens,omitempty"`
+	TrialUsedTokens int64      `json:"trial_used_tokens,omitempty"`
+	TrialSessions   int        `json:"trial_sessions,omitempty"`
+	TrialSince      *time.Time `json:"trial_since,omitempty"`
+	UpgradeAsked    *time.Time `json:"upgrade_asked,omitempty"`
 }
 
 func (s *Server) budgetClock() time.Time {
@@ -201,6 +208,7 @@ func (s *Server) personBudgetStates(principal string, now time.Time) ([]PersonBu
 		st := budgetState(id, budgets[id], by[id], now)
 		if l, ok := memberLimitsOf(settings, id); ok {
 			s.applyMemberLimits(&st, l, now)
+			st.UpgradeAsked = upgradeAskedOf(settings, id)
 		}
 		out = append(out, st)
 	}

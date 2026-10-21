@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,6 +35,89 @@ var migrations = []migration{
 	{ID: 3, Name: "remove-spot-nodes", Run: removeSpotNodes},
 	{ID: 4, Name: "remove-hub-tickets", Run: removeHubTickets},
 	{ID: 5, Name: "remove-pool-move-when-full", Run: removePoolMoveWhenFull},
+	{ID: 6, Name: "member-limits-tokens", Run: memberLimitsTokens},
+}
+
+// TrialTokensPerUSD is what migration 6 turns a trial's dollar ceiling into
+// (claude-fleet T796): $20 → 3,000,000 tokens, the trial the operator chose.
+// A token here is counted as every limit counts it — input + cache write +
+// output, a cache read not.
+const TrialTokensPerUSD = 150_000
+
+// memberLimitsTokens is migration 6 (claude-fleet T796): a trial member's
+// limits are read in tokens, so every fleet.member_limits.<principal> and the
+// fleet.apply.trial terms still holding usd=<dollars> get tokens=<dollars ×
+// TrialTokensPerUSD> in its place (a value with tokens= already just loses
+// its usd=). detail counts the rows rewritten. Rolling back is the previous
+// image, which refuses tokens= and so reads no limit for those rows — put
+// the old values back from hub-deploy's snapshot.
+func memberLimitsTokens(d dialect, tx *sql.Tx) (map[string]int64, error) {
+	done := map[string]int64{}
+	if ok, err := d.tableExists(tx, "fleet_settings"); err != nil || !ok {
+		return done, err
+	}
+	rows, err := tx.Query(`SELECT key, value FROM fleet_settings WHERE key LIKE 'fleet.member_limits.%' OR key = 'fleet.apply.trial'`)
+	if err != nil {
+		return nil, err
+	}
+	type kv struct{ k, v string }
+	var change []kv
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if k != "fleet.apply.trial" && !strings.HasPrefix(k, "fleet.member_limits.") {
+			continue
+		}
+		if nv, ok := usdToTokens(v); ok {
+			change = append(change, kv{k, nv})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, c := range change {
+		if _, err := tx.Exec(`UPDATE fleet_settings SET value = ? WHERE key = ?`, c.v, c.k); err != nil {
+			return nil, fmt.Errorf("rewrite %s: %w", c.k, err)
+		}
+	}
+	if len(change) > 0 {
+		done["rewritten.fleet_settings"] = int64(len(change))
+	}
+	return done, nil
+}
+
+// usdToTokens rewrites one limits value's usd= part; ok false = nothing to do.
+func usdToTokens(v string) (string, bool) {
+	parts := strings.Split(v, ",")
+	hasTokens := false
+	for _, p := range parts {
+		if strings.HasPrefix(strings.TrimSpace(p), "tokens=") {
+			hasTokens = true
+		}
+	}
+	changed := false
+	out := parts[:0:0]
+	for _, p := range parts {
+		k, val, _ := strings.Cut(strings.TrimSpace(p), "=")
+		if k != "usd" {
+			out = append(out, p)
+			continue
+		}
+		changed = true
+		if hasTokens {
+			continue
+		}
+		f, err := strconv.ParseFloat(strings.TrimPrefix(val, "$"), 64)
+		if err != nil || f <= 0 {
+			continue
+		}
+		out = append(out, "tokens="+strconv.FormatInt(int64(math.Round(f*TrialTokensPerUSD)), 10))
+	}
+	return strings.Join(out, ","), changed
 }
 
 // RetiredSettings are hub settings no reader takes any more: a stored row is

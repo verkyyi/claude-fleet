@@ -48,9 +48,12 @@ const (
 
 // MeUsage is GET /v1/me/usage's answer.
 type MeUsage struct {
-	Range     string         `json:"range"`
-	Since     time.Time      `json:"since"`
-	Limit     MeUsageLimit   `json:"limit"`
+	Range string       `json:"range"`
+	Since time.Time    `json:"since"`
+	Limit MeUsageLimit `json:"limit"`
+	// Trial is the viewer's trial limits and what stands against them
+	// (claude-fleet T796, me_trial.go); absent = not on a trial.
+	Trial     *MeUsageTrial  `json:"trial,omitempty"`
 	Today     int64          `json:"today"`
 	TodayPrev int64          `json:"today_prev"`
 	Week      int64          `json:"week"`
@@ -190,7 +193,7 @@ func (s *Server) meUsage(ctx context.Context, principal, rng string, now time.Ti
 		if rows, err = s.personEventUsage(principal, from); err != nil {
 			return out, err
 		}
-		if out.Limit, err = s.meUsageLimit(principal, now); err != nil {
+		if out.Limit, out.Trial, err = s.meUsageLimit(principal, now); err != nil {
 			return out, err
 		}
 	} else {
@@ -351,19 +354,21 @@ func (s *Server) meUsageSessions(rows []store.PoolUsage, today, weekCut time.Tim
 
 // meUsageLimit is principal's limit, from the same state the proxies are
 // held to (personBudgetState), so 「剩」 is what they may still use.
-func (s *Server) meUsageLimit(principal string, now time.Time) (MeUsageLimit, error) {
+// The trial (T796) comes off the same state.
+func (s *Server) meUsageLimit(principal string, now time.Time) (MeUsageLimit, *MeUsageTrial, error) {
 	st, err := s.personBudgetState(principal, now)
 	if err != nil {
-		return MeUsageLimit{}, err
+		return MeUsageLimit{}, nil, err
 	}
+	trial := s.meTrial(st, now)
 	l := MeUsageLimit{Set: st.LimitWeek > 0 || st.Limit5h > 0, UsedWeek: st.UsedWeek, Used5h: st.Used5h,
 		Over: st.Over, Window: st.Window}
 	if !l.Set {
-		return l, nil
+		return l, trial, nil
 	}
 	buckets, err := s.Store.PersonUsageSince(principal, now.Add(-budgetWindowWeek))
 	if err != nil {
-		return l, err
+		return l, trial, err
 	}
 	// A rolling window frees up as its oldest bucket leaves it; over, the
 	// budget's own answer says when enough has.
@@ -396,7 +401,7 @@ func (s *Server) meUsageLimit(principal string, now time.Time) (MeUsageLimit, er
 		v := st.Limit5h
 		l.Limit5h, l.Remaining5h, l.Reset5h = &v, left(v, st.Used5h), reset(budgetWindow5h, "5h")
 	}
-	return l, nil
+	return l, trial, nil
 }
 
 // meUsageModels sums rows by the model's human name, largest first.
