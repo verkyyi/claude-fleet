@@ -209,6 +209,19 @@ type EntryHomeRoute struct {
 // sshd logs the person in only with a DoorSessionCert for its own login.
 const DoorHomePath = "/v1/node/door-home"
 
+// DoorHomeViaParam / DoorHomeViaIDParam: a door with a relay listener of its
+// own adds ?via=<its ws(s) relay URL>&via_id=<id> and the header
+// X-Relay-Secret to DoorHomePath. When the home's agent listed CapRelayVia the
+// hub asks it to dial <via>?id=<id> with that secret (SSHRelayOpen.URL) and
+// answers the door {"type":"via"} — the bytes then never pass the hub; an
+// agent without it gets the stream through the hub as before ("ready").
+const (
+	DoorHomeViaParam   = "via"
+	DoorHomeViaIDParam = "via_id"
+	// DoorRelayPath is a door's relay listener's path (ccquota door --relay-listen).
+	DoorRelayPath = "/relay"
+)
+
 // DoorSessionPath is POST with the door's machine token (A5SQ): the door
 // hands the hub what a person signed to log in to the door, and the hub —
 // having checked the signature against that person's registered key and

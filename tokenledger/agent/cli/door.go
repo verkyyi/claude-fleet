@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/agent/door"
 )
@@ -27,6 +29,8 @@ func runDoor(args []string) error {
 	envFile := fs.String("env", "/var/db/fleet-node/machine.env", "machine.env: CCQUOTA_HUB_URL and CCQUOTA_TOKEN")
 	auditFile := fs.String("audit", "", "append one JSON line per login here (default: the log)")
 	ns := fs.String("namespace", envOr("FLEET_DOOR_NAMESPACE", "fleet-workers"), "the pods' namespace (the jump's tunnels)")
+	relayListen := fs.String("relay-listen", os.Getenv("FLEET_DOOR_RELAY_LISTEN"), "where homes' agents dial back (e.g. :22443); \"\" = every stream home goes through the hub")
+	relayURL := fs.String("relay-url", os.Getenv("FLEET_DOOR_RELAY_URL"), "the relay listener as a home dials it (ws://<this door's address>:22443/relay)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -55,7 +59,10 @@ func runDoor(args []string) error {
 		defer f.Close()
 		audit = f
 	}
-	d, err := door.New(door.Config{Hub: hub, Token: tok, HostKey: hk, Audit: audit, Namespace: *ns})
+	if (*relayListen == "") != (*relayURL == "") {
+		return errors.New("--relay-listen and --relay-url go together")
+	}
+	d, err := door.New(door.Config{Hub: hub, Token: tok, HostKey: hk, Audit: audit, Namespace: *ns, RelayURL: *relayURL})
 	if err != nil {
 		return err
 	}
@@ -66,6 +73,22 @@ func runDoor(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	fmt.Fprintf(os.Stderr, "ccquota door: %s on %s (host key %s)\n", hub, ln.Addr(), door.PublicKeyLine(hk))
+	if *relayListen != "" {
+		// homes' dial-back (CapRelayVia): the bytes of a session reach the
+		// home from here, not through the hub's region
+		rl, err := net.Listen("tcp", *relayListen)
+		if err != nil {
+			return err
+		}
+		hs := &http.Server{Handler: d.RelayHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() { <-ctx.Done(); hs.Close() }()
+		go func() {
+			if err := hs.Serve(rl); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintf(os.Stderr, "ccquota door: relay listener: %v\n", err)
+			}
+		}()
+		fmt.Fprintf(os.Stderr, "ccquota door: homes dial back at %s (%s)\n", *relayURL, rl.Addr())
+	}
 	return d.Serve(ctx, ln)
 }
 

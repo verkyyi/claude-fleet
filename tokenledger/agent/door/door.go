@@ -38,6 +38,7 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -96,6 +97,14 @@ type Config struct {
 	// JumpTargets (tests only) maps a pod's Service to the address its
 	// tunnel dials instead; the tunnel's NAME is still the in-cluster one.
 	JumpTargets map[string]string
+	// RelayURL is this door's own relay listener as a home's agent dials it
+	// (ws://host:port/relay — RelayHandler): set, the door offers it on every
+	// stream home and an agent that can (CapRelayVia) brings the home's bytes
+	// here directly instead of through the hub; a home that does not arrive
+	// within ViaWait is taken through the hub as before. "" = off.
+	RelayURL string
+	// ViaWait bounds the wait for a home's dial-back (default 8 s).
+	ViaWait time.Duration
 }
 
 // Server is a running door.
@@ -108,6 +117,16 @@ type Server struct {
 	pulled  time.Time
 	pending chan struct{}
 	auditMu sync.Mutex
+	relayMu sync.Mutex
+	relays  map[string]*viaSlot // a relay id the door offered → its slot
+}
+
+// viaSlot is one offered dial-back: the secret the agent must bring and where
+// its stream goes.
+type viaSlot struct {
+	secret string
+	conn   chan net.Conn // buffered 1: the handler never blocks on it
+	failed chan struct{} // closed when a claimed dial-back could not start
 }
 
 type home struct {
@@ -141,8 +160,18 @@ func New(cfg Config) (*Server, error) {
 	if cfg.JumpUser == "" {
 		cfg.JumpUser = "fleet-jump"
 	}
+	if cfg.ViaWait <= 0 {
+		cfg.ViaWait = 8 * time.Second
+	}
+	if cfg.RelayURL != "" {
+		u, err := url.Parse(cfg.RelayURL)
+		if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" || u.RawQuery != "" || u.User != nil {
+			return nil, fmt.Errorf("door: the relay URL %q is not ws(s)://host[:port]/path", cfg.RelayURL)
+		}
+	}
 	cfg.Hub = strings.TrimRight(cfg.Hub, "/")
-	return &Server{cfg: cfg, book: map[string]home{}, jump: map[string][]string{}, pending: make(chan struct{}, cfg.MaxPending)}, nil
+	return &Server{cfg: cfg, book: map[string]home{}, jump: map[string][]string{}, pending: make(chan struct{}, cfg.MaxPending),
+		relays: map[string]*viaSlot{}}, nil
 }
 
 // Pull reads the book once.
@@ -351,6 +380,7 @@ type auditLine struct {
 	FP        string `json:"fp,omitempty"`
 	Session   string `json:"session,omitempty"`
 	Home      string `json:"home,omitempty"`
+	Via       string `json:"via,omitempty"` // how the bytes reach the home: "door" (the agent dialled here) or "hub"
 	Result    string `json:"result"`
 	Why       string `json:"why,omitempty"`
 }
@@ -400,7 +430,7 @@ func (s *Server) serve(ctx context.Context, nc net.Conn) {
 		s.serveJump(sconn, chans, reqs, strings.Split(tg, ","), line)
 		return
 	}
-	homeConn, cert, err := s.goHome(ctx, sconn)
+	homeConn, cert, via, err := s.goHome(ctx, sconn)
 	_ = nc.SetDeadline(time.Time{})
 	release() // past the handshake: it no longer counts against MaxPending
 	if err != nil {
@@ -410,40 +440,40 @@ func (s *Server) serve(ctx context.Context, nc net.Conn) {
 		return
 	}
 	defer homeConn.Close()
-	line.Result, line.Home = "home", cert.Login+"@"+cert.Machine
+	line.Result, line.Home, line.Via = "home", cert.Login+"@"+cert.Machine, via
 	s.audit(line)
 	proxy(sconn, chans, reqs, homeConn)
 }
 
 // goHome gets the hop's certificate and logs in to the person's home with it.
-func (s *Server) goHome(ctx context.Context, sconn *ssh.ServerConn) (*ssh.Client, control.DoorSessionCert, error) {
+func (s *Server) goHome(ctx context.Context, sconn *ssh.ServerConn) (*ssh.Client, control.DoorSessionCert, string, error) {
 	ext := sconn.Permissions.Extensions
 	_, dpriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, control.DoorSessionCert{}, err
+		return nil, control.DoorSessionCert{}, "", err
 	}
 	dsigner, err := ssh.NewSignerFromKey(dpriv)
 	if err != nil {
-		return nil, control.DoorSessionCert{}, err
+		return nil, control.DoorSessionCert{}, "", err
 	}
 	req := control.DoorSessionRequest{Key: ext[extKey], User: sconn.User(),
 		SessionID: base64.StdEncoding.EncodeToString(sconn.SessionID()), Algo: ext[extAlgo], Sig: ext[extSig],
 		DoorKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(dsigner.PublicKey())))}
 	cert, err := s.session(ctx, req)
 	if err != nil {
-		return nil, cert, err
+		return nil, cert, "", err
 	}
 	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cert.Cert))
 	if err != nil {
-		return nil, cert, fmt.Errorf("the hub's certificate: %w", err)
+		return nil, cert, "", fmt.Errorf("the hub's certificate: %w", err)
 	}
 	c, ok := pk.(*ssh.Certificate)
 	if !ok {
-		return nil, cert, errors.New("the hub's certificate is not a certificate")
+		return nil, cert, "", errors.New("the hub's certificate is not a certificate")
 	}
 	signer, err := ssh.NewCertSigner(c, dsigner)
 	if err != nil {
-		return nil, cert, err
+		return nil, cert, "", err
 	}
 	var known []ssh.PublicKey
 	for _, hk := range cert.HostKeys {
@@ -452,11 +482,11 @@ func (s *Server) goHome(ctx context.Context, sconn *ssh.ServerConn) (*ssh.Client
 		}
 	}
 	if len(known) == 0 {
-		return nil, cert, errors.New("入口还不知道你家的主机钥匙（家还没报过）")
+		return nil, cert, "", errors.New("入口还不知道你家的主机钥匙（家还没报过）")
 	}
-	stream, err := s.stream(ctx, cert.Principal)
+	stream, via, err := s.homeStream(ctx, cert.Principal)
 	if err != nil {
-		return nil, cert, err
+		return nil, cert, "", err
 	}
 	hc, hchans, hreqs, err := ssh.NewClientConn(stream, cert.Machine, &ssh.ClientConfig{
 		User: cert.Login, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -468,9 +498,9 @@ func (s *Server) goHome(ctx context.Context, sconn *ssh.ServerConn) (*ssh.Client
 	})
 	if err != nil {
 		stream.Close()
-		return nil, cert, fmt.Errorf("log in at your home: %w", err)
+		return nil, cert, "", fmt.Errorf("log in at your home: %w", err)
 	}
-	return ssh.NewClient(hc, hchans, hreqs), cert, nil
+	return ssh.NewClient(hc, hchans, hreqs), cert, via, nil
 }
 
 // plainHostKeyAlgos is the host key algorithms of known, plain (never a
@@ -539,34 +569,154 @@ func (s *Server) session(ctx context.Context, req control.DoorSessionRequest) (c
 	return out, nil
 }
 
-// stream opens DoorHomePath for person: a net.Conn onto their home's entry port.
-func (s *Server) stream(ctx context.Context, person string) (net.Conn, error) {
+// viaOffer is the door's offer to take the home's bytes itself.
+type viaOffer struct{ id, secret string }
+
+// stream opens DoorHomePath for person: a net.Conn onto their home's entry
+// port through the hub — or, when offer is set and the hub answers "via", no
+// conn: the home's agent was asked to dial the door's relay listener.
+func (s *Server) stream(ctx context.Context, person string, offer *viaOffer) (net.Conn, bool, error) {
 	u := s.cfg.Hub + control.DoorHomePath + "?principal=" + url.QueryEscape(person)
+	h := http.Header{"Authorization": {"Bearer " + s.cfg.Token}}
+	if offer != nil {
+		u += "&" + control.DoorHomeViaParam + "=" + url.QueryEscape(s.cfg.RelayURL) +
+			"&" + control.DoorHomeViaIDParam + "=" + url.QueryEscape(offer.id)
+		h.Set("X-Relay-Secret", offer.secret)
+	}
 	u = "ws" + strings.TrimPrefix(u, "http")
 	dctx, cancel := context.WithTimeout(ctx, s.cfg.HandshakeTimeout)
 	defer cancel()
-	c, resp, err := websocket.Dial(dctx, u, &websocket.DialOptions{HTTPClient: s.cfg.HTTP,
-		HTTPHeader: http.Header{"Authorization": {"Bearer " + s.cfg.Token}}})
+	c, resp, err := websocket.Dial(dctx, u, &websocket.DialOptions{HTTPClient: s.cfg.HTTP, HTTPHeader: h})
 	if err != nil {
 		if resp != nil {
-			return nil, fmt.Errorf("入口不接（HTTP %d）", resp.StatusCode)
+			return nil, false, fmt.Errorf("入口不接（HTTP %d）", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("入口连不上：%w", err)
+		return nil, false, fmt.Errorf("入口连不上：%w", err)
 	}
 	c.SetReadLimit(1 << 20)
 	var hello control.SSHRelayHello
 	if err := wsjson.Read(dctx, c, &hello); err != nil {
 		c.CloseNow()
-		return nil, fmt.Errorf("入口没回话：%w", err)
+		return nil, false, fmt.Errorf("入口没回话：%w", err)
 	}
-	if hello.Type != "ready" {
+	switch {
+	case hello.Type == "via" && offer != nil:
+		c.Close(websocket.StatusNormalClosure, "")
+		return nil, true, nil
+	case hello.Type != "ready":
 		c.CloseNow()
 		if hello.Message != "" {
-			return nil, errors.New(hello.Message)
+			return nil, false, errors.New(hello.Message)
 		}
-		return nil, fmt.Errorf("入口说 %s %s", hello.Type, hello.Code)
+		return nil, false, fmt.Errorf("入口说 %s %s", hello.Type, hello.Code)
 	}
-	return websocket.NetConn(context.Background(), c, websocket.MessageBinary), nil
+	return websocket.NetConn(context.Background(), c, websocket.MessageBinary), false, nil
+}
+
+// homeStream is the stream to person's home and how it came: "door" when
+// their agent dialled this door's relay listener, else "hub". A door with no
+// RelayURL, a home whose agent cannot dial back, or one that does not arrive
+// within ViaWait goes through the hub.
+func (s *Server) homeStream(ctx context.Context, person string) (net.Conn, string, error) {
+	if s.cfg.RelayURL == "" {
+		c, _, err := s.stream(ctx, person, nil)
+		return c, "hub", err
+	}
+	offer := &viaOffer{id: randToken(18), secret: randToken(24)}
+	slot := &viaSlot{secret: offer.secret, conn: make(chan net.Conn, 1), failed: make(chan struct{})}
+	s.relayMu.Lock()
+	s.relays[offer.id] = slot
+	s.relayMu.Unlock()
+	unoffer := func() bool { // true: the agent had not claimed it yet
+		s.relayMu.Lock()
+		defer s.relayMu.Unlock()
+		_, ok := s.relays[offer.id]
+		delete(s.relays, offer.id)
+		return ok
+	}
+	c, via, err := s.stream(ctx, person, offer)
+	if err != nil || !via {
+		unoffer()
+		return c, "hub", err
+	}
+	t := time.NewTimer(s.cfg.ViaWait)
+	defer t.Stop()
+	select {
+	case nc := <-slot.conn:
+		return nc, "door", nil
+	case <-ctx.Done():
+		unoffer()
+		return nil, "", ctx.Err()
+	case <-t.C:
+	}
+	if !unoffer() {
+		// claimed just now: its stream is on the way, or it failed to start
+		select {
+		case nc := <-slot.conn:
+			return nc, "door", nil
+		case <-slot.failed:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	log.Printf("door: %s's home did not dial back within %s — through the hub", person, s.cfg.ViaWait)
+	c, _, err = s.stream(ctx, person, nil)
+	return c, "hub", err
+}
+
+// RelayHandler serves control.DoorRelayPath: a home agent's dial-back
+// (CapRelayVia) for a relay this door offered, ?id= with X-Relay-Secret. Each
+// offer is taken once; anything else is 404. Its stream carries the door's
+// SSH login to the home's entry sshd, pinned by the door — a stream someone
+// else attached reaches nothing.
+func (s *Server) RelayHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != control.DoorRelayPath || r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		id, secret := r.URL.Query().Get("id"), r.Header.Get("X-Relay-Secret")
+		s.relayMu.Lock()
+		slot := s.relays[id]
+		if slot != nil && subtle.ConstantTimeCompare([]byte(secret), []byte(slot.secret)) == 1 {
+			delete(s.relays, id)
+		} else {
+			slot = nil
+		}
+		s.relayMu.Unlock()
+		if slot == nil {
+			http.Error(w, "no such relay", http.StatusNotFound)
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(slot.failed)
+			return
+		}
+		c.SetReadLimit(1 << 20)
+		done := make(chan struct{})
+		slot.conn <- &notifyConn{Conn: websocket.NetConn(context.Background(), c, websocket.MessageBinary), done: done}
+		<-done
+	})
+}
+
+// notifyConn closes done when it is closed: the relay handler holds the
+// agent's request open until the door is through with its stream.
+type notifyConn struct {
+	net.Conn
+	done chan struct{}
+	once sync.Once
+}
+
+func (n *notifyConn) Close() error {
+	err := n.Conn.Close()
+	n.once.Do(func() { close(n.done) })
+	return err
+}
+
+func randToken(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // tellAndClose answers the person's first session with why, then ends it all.

@@ -730,6 +730,24 @@ carried on the same port by the same rules (`agent/door`). Unset, or no ccquota
 in the runtime: the listener is OpenSSH, byte for byte as before. Switching is a
 door rollout only (no pod changes); going back is the same flag off.
 
+**A second door away from the hub** (JXBE, the US door): the same `ccquota door`
+can run on a small machine of its own (a systemd unit, the cluster door's
+Secret copied — the same host key, the same token, so the hub and the person's
+phone see one door) and the one address resolves by region (DNSPod 境外 line →
+that machine). Its hop home would still cross to the hub's region, so it adds
+`--relay-listen :22443 --relay-url ws://<its address>:22443/relay`
+(`FLEET_DOOR_RELAY_LISTEN` / `FLEET_DOOR_RELAY_URL`): every stream home offers
+that listener, and a home whose agent lists `CapRelayVia` is asked
+(`SSHRelayOpen.URL`) to dial its data half there — the session's bytes go
+phone → door → home, the hub only signs the hop's certificate. The agent sends
+only the relay's one-time secret, never its token; the stream carries the
+door's SSH login, which the door pins and the home admits only with the door
+session certificate. A home that does not dial back within 8 s is taken through
+the hub as before; the audit line says `via` door / hub (BREAK-IT
+`door-via-unreachable`). No flags = byte for byte as before. The pods' jump does
+not work there (no cluster DNS): a pod's route names the cluster door's own
+address (`CCQUOTA_FLEET_NODE_ROUTES`), never the shared name.
+
 Door mode is the entry port (#3070) with these changes
 (`fleet-node-supervisor.py`, `FLEET_DOOR=1`):
 

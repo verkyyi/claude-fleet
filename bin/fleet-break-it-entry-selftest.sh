@@ -116,6 +116,11 @@
 #                         for the pinned plain key and takes a certificate only for
 #                         that key; a refused hop tells the phone why on its screen
 #                         (go test TestDoorTakesEachPersonHome, ./e2e)
+#   door-via-unreachable  a door with its own relay listener (the US door, JXBE):
+#                         the home's agent dials the session's bytes straight
+#                         there; a home that cannot reach it is taken through
+#                         the hub within the door's wait, never left hanging
+#                         (go test TestDoorHomeDialsBackToTheDoor, ./e2e)
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1372,6 +1377,18 @@ drill_door_home_hostcert() {
   go_half '^TestDoorTakesEachPersonHome$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="家的本机入口同时带主机证书：门只要入口钉住的那把明钥匙、证书只认里面是那把钥匙的，照样落到家；钉的钥匙不对时拒，并把原因打到手机屏幕上；$gohalf"
+}
+
+drill_door_via_unreachable() {
+  CAP=200
+  local t0 gohalf; t0=$(now)
+  grep -q 'func (s \*Server) homeStream' "$ROOT/tokenledger/agent/door/door.go" \
+    || { WHY="the door no longer offers its relay listener"; return 1; }
+  grep -q 'through the hub' "$ROOT/tokenledger/agent/door/door.go" || { WHY="the door no longer falls back to the hub"; return 1; }
+  gohalf="no go toolchain here — the Go gate runs TestDoorHomeDialsBackToTheDoor"
+  go_half '^TestDoorHomeDialsBackToTheDoor$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门自带回拨口：家的 agent 把会话直接拨到门（via door）；拨不到时门等满就改走入口中转（via hub），照样落到家；$gohalf"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
