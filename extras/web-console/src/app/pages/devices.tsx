@@ -351,6 +351,15 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
             </div>
           ))}
           {d.qr ? <p className="text-muted-foreground pt-2 text-[13px]">{tr("用手机相机扫左边的码，在 App 里打开就填好这三项。", "Scan the code with your phone's camera to open these three in the app.")}</p> : null}
+          {d.host_fp ? (
+            <p className="text-muted-foreground pt-2 text-[13px]">
+              {tr(`主机钥匙（${d.home_name || "你的家"}的入口）：`, `Host key (${d.home_name || "your home"}'s entry): `)}<span className="font-mono break-all">{d.host_fp}</span>
+            </p>
+          ) : null}
+          {d.shared ? (
+            <p className="text-muted-foreground pt-1 text-[13px]">{tr("这条直连跟着家走：换家后它后面是新家那台机器，主机钥匙会不同——对上这里的指纹再接受。",
+              "This direct way follows your home: after a home move it reaches the new machine, with another host key — accept it only when it matches the one here.")}</p>
+          ) : null}
         </div>
       </div>
       {d.jump ? (
