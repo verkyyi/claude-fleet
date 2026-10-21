@@ -22,7 +22,9 @@
 #                  eligible window to `--cfg-stale`, never the working one, at most
 #                  FLEET_CFG_RESTART_MAX, the Codex one on a later tick, not again
 #                  within the idle span; off /
-#                  ask reopen nothing (ask marks @cfg_asked); --count / --list
+#                  ask reopen nothing (ask marks @cfg_asked); --count / --list;
+#                  one reopen per identity (@fleet_id) a day — the reopened
+#                  window answers held:day (T761)
 #   E. history   — fleet-history.sh resumed --reason cfg-stale: one `reason=cfg-stale`
 #                  row after a closed-unlanded one, after the hook's own resumed one,
 #                  or built from --key/--worktree/--title; hidden from every listing
@@ -265,6 +267,31 @@ st_has "D: …the other waits" "$o" "later: $S:"
 o=$(FLEET_CFG_RESTART_MAX=2 tick)
 st_eq "D: …the next tick takes the rest" "1" "$(printf '%s\n' "$o" | grep -c '^reopen:')"
 : "$WIDLE2$WIDLE3"
+# Once a day per session (T761): the train moves stable every few minutes and the
+# reopen is a NEW window carrying the same @fleet_id, so a finished session came
+# back every release. The hold is its identity's, in the ledger.
+FA=aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa FB=bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+WDA=$(mk dayA done bbbbbbbbbbbb); T set-option -w -t "$WDA" @fleet_id "$FA"
+: > "$MLOG"
+o=$(tick)
+st_has "D: a session with an identity is reopened" "$o" "reopen: $S:dayA ($WDA)"
+st_has "D: …and its identity lands in the ledger" "$(cat "$WORK/conf/global/cfg-restart.ledger")" " $FA"
+waitlog || st_fail "D: the fake migrate never ran for dayA" "$o"
+T kill-window -t "$WDA"
+WDA2=$(mk dayA2 done bbbbbbbbbbbb); T set-option -w -t "$WDA2" @fleet_id "$FA"   # the reopened window, next release
+: > "$MLOG"
+o=$(tick)
+st_hasnt "D: the reopened window (same identity) is not reopened again the same day" "$o" "reopen: $S:dayA2"
+st_has "D: …--list says why" "$(tick --list)" "$WDA2	dayA2	held:day"
+WDB=$(mk dayB done bbbbbbbbbbbb); T set-option -w -t "$WDB" @fleet_id "$FB"
+o=$(tick)
+st_has "D: another identity is reopened as before" "$o" "reopen: $S:dayB ($WDB)"
+o=$(FLEET_CFG_RESTART_DAY=0 tick)
+st_has "D: FLEET_CFG_RESTART_DAY=0 — no daily cap" "$o" "reopen: $S:dayA2 ($WDA2)"
+printf '%s %s\n' $(( $(date +%s) - 90000 )) "$FB" > "$WORK/conf/global/cfg-restart.ledger"
+st_eq "D: a reopen older than a day holds nothing" "reopen" \
+   "$(tick --list | awk -F'\t' -v w="$WDB" '$2 == w { print $4 }')"
+T kill-window -t "$WDA2"; T kill-window -t "$WDB"
 
 # ============================================================================
 # E. history — the reopen's own row

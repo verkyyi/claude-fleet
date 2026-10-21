@@ -705,6 +705,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_CFG_RESTART_IDLE=600
 # @label=Stale reopens per fleet per tick @group=spawn @tier=internal @scope=global @edit=int
 #FLEET_CFG_RESTART_MAX=1
+# One reopen per session (its @fleet_id) per this many seconds for 配置旧 / 待换新:
+# stable moves every few minutes, and a finished session came back every release
+# (T761). 会坏 is never held. 0 = no cap.
+# @label=Seconds between two reopens of one session @group=spawn @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_CFG_RESTART_DAY=86400
 
 # --- (Autofill dispatcher — retired, issue #3120) -----------------------------
 # FLEET_AUTOFILL / FLEET_AUTOFILL_MAX_PER_TICK / FLEET_AUTOFILL_NODE and the

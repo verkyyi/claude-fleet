@@ -9,7 +9,10 @@
 #                              [--via local|hub] [--detail <text>]   → one row in the delivery book
 #   fleet-peer-queue.sh wait   -L <sess> --rid <id> [--secs <n>]    → 0 DELIVERED · 1 FAILED/EXPIRED
 #                                                                     · 3 nothing yet (prints the state)
-#   fleet-peer-queue.sh status -L <sess>                            → one line per queued item
+#   fleet-peer-queue.sh status -L <sess>                            → one line per queued item: the
+#                                                                     local queue AND every hub-relayed
+#                                                                     send whose last row reads QUEUED
+#                                                                     (those live only in the book)
 #   fleet-peer-queue.sh pending -L <sess> --to <label>              → how many sends to <label>
 #                                                                     still read QUEUED (issue #3520:
 #                                                                     the sender's 「第 N 条」)
@@ -17,7 +20,12 @@
 #                                                                     kind alert) for the sends whose
 #                                                                     last row has read QUEUED longer
 #                                                                     than <n> (FLEET_PEER_QUEUE_ALERT_SECS,
-#                                                                     60) — each send said once
+#                                                                     60) — each send said once; a
+#                                                                     hub-relayed send QUEUED longer than
+#                                                                     FLEET_PEER_QUEUE_DEAD_SECS (86400)
+#                                                                     is undeliverable: EXPIRED in the book,
+#                                                                     one line in logs/peer-queue-dead.log,
+#                                                                     never said (again)
 #
 # A child's report or a message whose recipient is on THIS machine but cannot take
 # it right now — a window with no live Claude under it, an inbox that will not
@@ -66,6 +74,12 @@ DIR="$(fleet_state_dir "$SESS")"
 Q="$DIR/peer-queue"
 BOOK="$DIR/delivery.ndjson"
 TTL="${FLEET_PEER_QUEUE_TTL:-604800}"; case "$TTL" in ''|*[!0-9]*) TTL=604800 ;; esac
+# A send relayed through the hub that nobody took in a day is undeliverable (T761):
+# its recipient's ID closed, or its machine left the hub's map — the 2026-10-20
+# book on a managed Mac kept four 6-day-old sends to sessions of a machine the hub no longer
+# listed, «对方能收时自动补送» forever. 0 = never.
+DEAD="${FLEET_PEER_QUEUE_DEAD_SECS:-86400}"; case "$DEAD" in ''|*[!0-9]*) DEAD=86400 ;; esac
+DEADLOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/peer-queue-dead.log"
 
 # note <rid> <state> <to> <kind> <via> <detail> — one row, one write (O_APPEND).
 note() {
@@ -140,13 +154,36 @@ PY
     case "$rc" in 0|1|3) exit "$rc" ;; *) echo QUEUED; exit 3 ;; esac ;;
 
   status)
-    [ -d "$Q" ] || exit 0
-    for f in "$Q"/*.json; do
-      [ -f "$f" ] || continue
-      python3 -c 'import json, sys, time
+    # The local queue, then every hub-relayed send still QUEUED in the book (T761: a
+    # cross-machine send has no queue file, so `status` listed nothing for it).
+    if [ -d "$Q" ]; then
+      for f in "$Q"/*.json; do
+        [ -f "$f" ] || continue
+        python3 -c 'import json, sys, time
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 print("%s\t%s → %s\tqueued %dm ago" % (d.get("rid", "?"), d.get("kind", "?"), d.get("to", "?"), (time.time() - d.get("created", 0)) // 60))' "$f" 2>/dev/null
-    done
+      done
+    fi
+    [ -f "$BOOK" ] || exit 0
+    python3 - "$BOOK" "$TTL" <<'PY' 2>/dev/null
+import json, sys, time
+last, first = {}, {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        r = json.loads(line)
+    except ValueError:
+        continue
+    if r.get("rid") and (r.get("state") != "QUEUED" or last.get(r["rid"], {}).get("state", "QUEUED") == "QUEUED"):
+        last[r["rid"]] = r
+    if r.get("rid") and r.get("state") == "QUEUED":     # its age counts from the first QUEUED row
+        first.setdefault(r["rid"], r.get("ts") or 0)
+now = time.time()
+for rid, r in last.items():
+    age = now - (first.get(rid) or r.get("ts") or now)
+    if r.get("state") == "QUEUED" and r.get("via") != "local" and age <= int(sys.argv[2]):
+        print("%s\t%s → %s\tqueued %dm ago · via %s%s" % (rid, r.get("kind", "?"), r.get("to", "?"), age // 60,
+              r.get("via") or "?", (" · " + r["detail"]) if r.get("detail") else ""))
+PY
     exit 0 ;;
 
   pending)
@@ -182,10 +219,11 @@ PY
     _as="${FLEET_PEER_QUEUE_ALERT_SECS:-60}"; case "$_as" in ''|*[!0-9]*) _as=60 ;; esac
     [ -n "$SECS_SET" ] && _as=$SECS
     [ "$_as" -gt 0 ] || exit 0
-    python3 - "$BOOK" "$DIR/delivery.alerted" "$_as" "$TTL" "$BIN" <<'PY'
-import json, subprocess, sys, time
+    python3 - "$BOOK" "$DIR/delivery.alerted" "$_as" "$TTL" "$BIN" "$DEAD" "$DEADLOG" <<'PY'
+import json, os, subprocess, sys, time
 book, alerted, secs, ttl, bindir = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
-last = {}
+dead_secs, deadlog = int(sys.argv[6]), sys.argv[7]
+last, first = {}, {}
 try:
     for line in open(book, encoding="utf-8"):
         try:
@@ -197,6 +235,8 @@ try:
             # sender's own QUEUED note (its wait gave up a moment too early)
             if r.get("state") != "QUEUED" or last.get(r["rid"], {}).get("state", "QUEUED") == "QUEUED":
                 last[r["rid"]] = r
+            if r.get("state") == "QUEUED":        # a send's age counts from its first QUEUED row
+                first.setdefault(r["rid"], r.get("ts") or 0)
 except OSError:
     sys.exit(0)
 try:
@@ -204,16 +244,47 @@ try:
 except OSError:
     done = set()
 now = time.time()
+def since(r):
+    return now - (first.get(r["rid"]) or r.get("ts") or now)
+# Undeliverable first (T761): a hub-relayed send nobody took in DEAD seconds is
+# EXPIRED in the book with one audit line, and never said — the local queue's
+# items stay the drain's (their window may still come back).
+dead = [r for rid, r in last.items() if dead_secs > 0 and r.get("state") == "QUEUED"
+        and r.get("via") != "local" and since(r) > dead_secs]
+if dead:
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    with open(book, "a", encoding="utf-8") as f:
+        for r in dead:
+            f.write(json.dumps({"ts": int(now), "rid": r["rid"], "kind": r.get("kind", ""), "to": r.get("to", ""),
+                                "state": "EXPIRED", "via": r.get("via", ""),
+                                "detail": "undeliverable: nobody took it in %dh (%s)" % (
+                                    since(r) // 3600, r.get("detail") or "no receipt")},
+                               ensure_ascii=False) + "\n")
+    try:
+        os.makedirs(os.path.dirname(deadlog), exist_ok=True)
+        with open(deadlog, "a", encoding="utf-8") as f:
+            for r in dead:
+                f.write("%s dropped %s %s → %s queued %ds via %s: %s\n" % (
+                    stamp, r["rid"], r.get("kind", "?"), r.get("to", "?"), int(since(r)),
+                    r.get("via") or "?", " ".join(str(r.get("detail") or "no receipt").split())[:200]))
+    except OSError:
+        pass
+    print("peer-queue: dropped %d undeliverable send(s) older than %ds" % (len(dead), dead_secs))
+    done.update(r["rid"] for r in dead)
+bound = min(ttl, dead_secs) if dead_secs > 0 else ttl
 hits = [r for rid, r in last.items() if r.get("state") == "QUEUED" and rid not in done
-        and secs <= now - (r.get("ts") or now) <= ttl]
+        and secs <= since(r) <= bound]
 if not hits:
     sys.exit(0)
 def who(r):
     t = str(r.get("to") or "?")
-    t = t.split("/", 1)[-1] if "/" in t else t
+    if t.startswith("/"):                                 # a path-shaped key: its last part
+        t = t.rstrip("/").rsplit("/", 1)[-1] or t
+    elif "/" in t and len(t.split("/", 1)[0]) == 36:      # <fleet UUID>/<fleet_id|key>
+        t = t.split("/", 1)[1]
     return t[:8] if len(t) == 36 else t[:40]
 kinds = sorted({"回报" if r.get("kind") in ("report", "child_report") else "消息" for r in hits})
-oldest = max(int(now - (r.get("ts") or now)) for r in hits)
+oldest = max(int(since(r)) for r in hits)
 text = "%d 条%s排队 %d 秒还没送达：→ %s" % (len(hits), "/".join(kinds), oldest,
                                      "、".join(sorted({who(r) for r in hits}))[:160])
 detail = sorted({str(r.get("detail") or "") for r in hits} - {""})
