@@ -95,6 +95,41 @@ with patch.object(fc, "load_cache", return_value=copy.deepcopy(cache)), patch.ob
     assert selected["target_host_keys"] == [old_key]
 EOF
 
+# ── 1b — ssh ended 255 on a direct route: was it the key? (T743) ──────────────
+python3 - "$BIN/fleet-connect.py" "$HOSTPUB" "$OTHERPUB" > "$WORK/1b.out" 2>&1 <<'EOF2'
+import importlib.util, io, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+new, old = sys.argv[2], sys.argv[3]
+route = {"kind": "direct", "name": "entry", "host": "203.0.113.7", "port": 22022}
+def run(scan, hub_keys, rcs):
+    m = {"hostname": "mini", "alias": "mac-a", "host_keys": [old]}
+    err = io.StringIO()
+    with patch.object(fc, "fleet_clientlog", object()), patch.object(fc, "clog"), \
+         patch.object(fc, "scan_host_keys", return_value=scan), \
+         patch.object(fc, "fetch_routes", return_value={"machines": [dict(m, host_keys=hub_keys)]}), \
+         patch.object(fc, "run_logged", side_effect=list(rcs)) as rl, patch.object(sys, "stderr", err):
+        rc = fc.run_ssh(m, route, "alice", "https://hub.example", False, [])
+    return rc, rl.call_count, err.getvalue(), "".join(l for l in open(fc.known_hosts_path()) if l.startswith("fleet-mac-a "))
+# the hub's fresh word names the answering key: rewritten, one retry, a grey line
+rc, n, err, kh = run([new], [new], [255, 0])
+assert (rc, n) == (0, 2) and "已按 hub 更新" in err and new in kh and old not in kh, (rc, n, err, kh)
+# the answering key is nobody fleet knows: stop, words, no retry
+rc, n, err, kh = run([new], [old], [255, 0])
+assert (rc, n) == (255, 1) and "停下了：203.0.113.7:22022 给出的钥匙不是 fleet 记的 mac-a" in err \
+    and fc.key_fp(new) in err and fc.key_fp(old) in err, (rc, n, err)
+# the listed key answers: not a key problem, ssh's own 255 stands
+rc, n, err, kh = run([old], [old], [255, 0])
+assert (rc, n, err) == (255, 1, ""), (rc, n, err)
+# nothing answers the scan, or the check is off: left to ssh
+rc, n, err, kh = run([], [new], [255, 0])
+assert (rc, n, err) == (255, 1, ""), (rc, n, err)
+print("ok")
+EOF2
+[ "$(tail -1 "$WORK/1b.out")" = ok ] \
+  && st_ok_all "ssh 255 on a direct route: hub names the new key → rewritten + one retry; nobody's key → stopped with both fingerprints; a listed key / no answer → ssh's own" \
+  || st_miss "host-key diagnosis: $(tail -5 "$WORK/1b.out")"
+
 # ── 2 — a real sshd ─────────────────────────────────────────────────────────
 SSHD=/usr/sbin/sshd
 if [ ! -x "$SSHD" ] || ! command -v ssh >/dev/null 2>&1; then
