@@ -79,7 +79,11 @@ member of ANOTHER batch: released once that parent's child task titled `C5 · �
 succeeded, waited on otherwise (`waits_on` names it `T542 C5`), never a node of
 this batch's graph and never let through by the cycle rule (each member's
 `outside` lists them with `done`, so a released one is said, not dropped); a key behind `#<n>`
-(a GitHub ticket) is the driver's to judge and ignored here. A dependency is
+(a GitHub ticket) is the driver's to judge and ignored here — but `PR #<n>` (`PR
+#5182 #5189 #5192`: every `#<n>` right after `PR`) is an in-flight PR gate (T843):
+gh reads it in the member's repo, and a member still to start waits (`waits_on`
+names it `PR #5189`) until it is MERGED; one gh cannot read, or closed unmerged, is
+held and said in `warnings`. A dependency is
 released by its member's newest baton — by ID, not by which record it was (拍板 6).
 `warnings` says a dependency was written but none could be read (a table that
 gave no key, a section line naming `M1` rather than `C1` — T692): the driver holds
@@ -147,6 +151,9 @@ DEP_TOK = re.compile(r"(?<![A-Za-z0-9])(?:(?P<scope>T[1-9][0-9]{0,9}(?![0-9A-Za-
                      r"|(?P<a>[CR])(?P<lo>[1-9][0-9]*)(?:\s*[–—~-]\s*[CR]?(?P<hi>[1-9][0-9]*))?)(?![0-9])")
 DEP_GLUE = re.compile(r"^[\s、,，/:：]*$")
 DEP_LINE = re.compile(r"\*\*依赖\*\*\s*依赖\s*(.*?)(?:·|$)")
+# an in-flight PR gate in a dependency cell (T843): `PR #5191`, `PR #5182 #5189、#5192`
+# — every `#<n>` right after `PR` (glue only between them) is a PR of the member's repo
+PR_GATE = re.compile(r"(?<![A-Za-z])PRs?\s*((?:#[1-9][0-9]*(?![0-9A-Za-z])(?:[\s、,，/和及与&+]*(?=#[1-9]))?)+)", re.I)
 FAILED = ("failed", "refused", "exited")
 KEYED = re.compile(r"^([CR][1-9][0-9]*)\s*·\s*(.*)$")
 TITLE_MAX = 200
@@ -383,6 +390,48 @@ def dep_refs(text, self_ref=""):
     return out
 
 
+def pr_refs(text):
+    """[n] of every `PR #n` gate in a dependency cell, in order (T843)."""
+    return list(dict.fromkeys(int(n) for m in PR_GATE.finditer(text)
+                              for n in re.findall(r"#([1-9][0-9]*)", m.group(1))))
+
+
+def pr_state(repo, n, cache):
+    """A PR's state as gh says it (MERGED / OPEN / CLOSED), '' when it cannot be read.
+    `FLEET_EPIC_TICK_GH` names the gh to run (a selftest's stub)."""
+    if (repo, n) not in cache:
+        try:
+            p = subprocess.run([os.environ.get("FLEET_EPIC_TICK_GH") or "gh", "pr", "view", str(n), "-R", repo,
+                                "--json", "state", "-q", ".state"], capture_output=True, text=True, timeout=30,
+                               stdin=subprocess.DEVNULL)
+            st = p.stdout.strip().upper() if p.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            st = ""
+        cache[(repo, n)] = st if st in ("MERGED", "OPEN", "CLOSED") else ""
+    return cache[(repo, n)]
+
+
+def pr_gates(members, prs, repo=""):
+    """({key: ['PR #n' not merged yet]}, [warnings]) — only for a member still to
+    start (unstarted / waiting); a PR that cannot be read is held AND said, a closed
+    unmerged one held and said: the driver decides."""
+    open_, warn, cache = {}, [], {}
+    for m in members:
+        ns = prs.get(m["key"])
+        if not ns or m["state"] not in ("unstarted", "waiting"):
+            continue
+        r = m.get("repo") or repo
+        for n in ns:
+            st = pr_state(r, n, cache) if r else ""
+            if st == "MERGED":
+                continue
+            open_.setdefault(m["key"], []).append("PR #%d" % n)
+            if not st:
+                warn.append("%s 等的 PR #%d 读不出状态（%s）——请驱动手动压住" % (m["key"], n, r or "没写仓库"))
+            elif st == "CLOSED":
+                warn.append("%s 等的 PR #%d 已关闭却没合——请驱动判断" % (m["key"], n))
+    return open_, warn
+
 
 DEP_ARROW = re.compile(r"\s*(?:←|⟵|<-+)\s*")
 DEP_CLAUSE = re.compile(r"\s*(?:[；;]|<br\s*/?>)\s*")
@@ -417,11 +466,12 @@ def dep_table_row(cells, cols, known, put):
 
 
 def parse_deps(text, members, self_ref=""):
-    """({key: [keys it waits on]}, {key: [(T<n>, key) of other batches]}, [warnings])
+    """({key: [keys it waits on]}, {key: [(T<n>, key) of other batches]},
+    {key: [PR numbers it waits on]}, [warnings])
     off the `## 依赖顺序` table — `| 成员 | 依赖 |` or the plan's `| 波次 | 成员 | 等谁 |`
     (columns found by the header; see dep_table_row) — else each section's `**依赖**`
     line; local ones only the charter's own member keys, never itself; `#<n>` ones
-    dropped. A warning says a dependency was written but none could be read from it
+    dropped; `PR #<n>` ones are PR gates (T843). A warning says a dependency was written but none could be read from it
     (a table that gave nothing, a section line naming no key — `M1`): the driver
     holds those members by hand (T692)."""
     known = {m["key"] for m in members}
@@ -460,12 +510,14 @@ def parse_deps(text, members, self_ref=""):
             d = DEP_LINE.search(m.get("detail") or "")
             if d:
                 deps[m["key"]] = d.group(1)
-                if not dep_refs(d.group(1)) and not DEP_NONE.match(d.group(1)):
+                if not dep_refs(d.group(1)) and not pr_refs(d.group(1)) and not DEP_NONE.match(d.group(1)):
                     unread.append(m["key"])
     if unread:
         warn.append("%s 的 **依赖** 行写了依赖却没有成员键（只认 C<n> / R<n>）——请驱动手动压住" % "、".join(unread))
-    out, ext = {}, {}
+    out, ext, prs = {}, {}, {}
     for k, cell in deps.items():
+        if pr_refs(cell):
+            prs[k] = pr_refs(cell)
         refs = list(dict.fromkeys(dep_refs(cell, self_ref)))
         got = [x for sc, x in refs if not sc and x in known and x != k]
         far = [(sc, x) for sc, x in refs if sc and not sc.startswith("#")]
@@ -473,7 +525,7 @@ def parse_deps(text, members, self_ref=""):
             out[k] = got
         if far:
             ext[k] = far
-    return out, ext, warn
+    return out, ext, prs, warn
 
 
 def outside_done(ext):
@@ -668,24 +720,27 @@ def redo_of(last):
     return "fleet-task-record.sh respawn %s%s" % (code, " --redo" if last.get("rec_outcome") in FAILED else "")
 
 
-def hold_on_deps(members, deps, ext=None, ext_done=None, names=None):
+def hold_on_deps(members, deps, ext=None, ext_done=None, names=None, prs_open=None):
     """An unstarted member whose dependencies have not all succeeded waits; one whose
     dependency is blocked is blocked too. Another batch's member (`ext`) holds it
     until `ext_done` says it succeeded. A cycle among this batch's own members
     (everything waiting, nothing to run) is let through rather than stalled — never
     a member still waiting on another batch, directly or through this batch's
-    members it waits on: both halves must hold before a member is due."""
-    ext, ext_done, names = ext or {}, ext_done or {}, names or {}
+    members it waits on: both halves must hold before a member is due. A PR gate not
+    merged yet (`prs_open`, `PR #n`) holds it like another batch's member (T843)."""
+    ext, ext_done, names, prs_open = ext or {}, ext_done or {}, names or {}, prs_open or {}
     by = {m["key"]: m for m in members}
     for _ in range(len(members) + 1):
         moved = False
         for m in members:
-            if m["state"] not in ("unstarted", "waiting") or (m["key"] not in deps and m["key"] not in ext):
+            if m["state"] not in ("unstarted", "waiting") or (m["key"] not in deps and m["key"] not in ext
+                                                             and m["key"] not in prs_open):
                 continue
             ds = [by[d] for d in deps.get(m["key"], []) if d in by]
             stuck = [d["key"] for d in ds if d["state"] == "blocked"]
             open_ = [d["key"] for d in ds if d["state"] != "succeeded"]
             open_ += ["%s %s" % (names.get(r[0], r[0]), r[1]) for r in ext.get(m["key"], []) if not ext_done.get(tuple(r))]
+            open_ += prs_open.get(m["key"], [])
             if stuck:
                 new = dict(state="blocked", blocked_by=stuck)
             elif open_:
@@ -776,9 +831,11 @@ def status(parent_ref, cap):
                                 layer="added", detail=""))
     for m in members:
         judge(m, by_key.get(m["key"], []), rows)
-    deps, ext, dep_warn = parse_deps(text, members, (parent_ref, pcode))
+    deps, ext, prs, dep_warn = parse_deps(text, members, (parent_ref, pcode))
     ext_done, names = outside_done(ext)
-    hold_on_deps(members, deps, ext, ext_done, names)
+    prs_open, pr_warn = pr_gates(members, prs, meta.get("repo", ""))
+    dep_warn = dep_warn + pr_warn
+    hold_on_deps(members, deps, ext, ext_done, names, prs_open)
     for m in members:   # another batch's members it depends on, and whether each merged
         if ext.get(m["key"]):
             m["outside"] = [dict(ref="%s %s" % (names.get(r[0], r[0]), r[1]), done=bool(ext_done.get(tuple(r))))
