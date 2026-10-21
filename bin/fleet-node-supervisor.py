@@ -6334,14 +6334,28 @@ def _entry_sshd_check(text, ep):
 
 
 def _entry_hostkey(ep):
-    if os.path.exists(ep.hostkey) and os.path.exists(ep.hostkey + ".pub"):
+    """The entry's host key is made ONCE and kept for the machine's life (T743):
+    every client pinned it, so a new one is 「REMOTE HOST IDENTIFICATION HAS
+    CHANGED」 on every phone. A present private key is never replaced — a lost
+    .pub is derived back from it; one that will not read is an error, not a new
+    key. Only a missing private key makes one."""
+    keygen = env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen")
+    pub = ep.hostkey + ".pub"
+    if os.path.exists(ep.hostkey):
+        if os.path.exists(pub):
+            return ""
+        r = subprocess.run([keygen, "-y", "-f", ep.hostkey], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+        if r.returncode != 0 or not r.stdout.strip():
+            return "ssh-keygen -y (the host key is kept, not replaced): %s" % r.stderr.strip()
+        line = r.stdout.strip().split()
+        _entry_put(pub, " ".join(line[:2] + ["fleet-entry"]) + "\n", 0o644)
         return ""
-    for f in (ep.hostkey, ep.hostkey + ".pub"):
-        try:
-            os.remove(f)
-        except OSError:
-            pass
-    r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-q", "-t", "ed25519", "-N", "",
+    try:
+        os.remove(pub)
+    except OSError:
+        pass
+    r = subprocess.run([keygen, "-q", "-t", "ed25519", "-N", "",
                         "-C", "fleet-entry", "-f", ep.hostkey],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
     return "" if r.returncode == 0 else "ssh-keygen: %s" % r.stdout.strip()
