@@ -188,7 +188,7 @@ US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 # The 看台's actions off dash-keymap.sh --panel switch: the verb each one runs.
 # Only ⌘P is bound by default (T685); every other is bound only when the person
-# names it (#3185) — and each has its row in ⌘P's panel (新会话 · 回家命令行 · 退出).
+# names it (#3185) — and each has its row in ⌘P's panel (新会话 · 命令行 · 退出).
 # ⌘N ⌘Q are C7's (issue #3004);
 # ⌘N opens the 「新会话」 box, both values chosen (T670, EPIC T651 C2) — the panel's
 # forward of `new`, for a chord the person named;
@@ -2430,6 +2430,22 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     return segs
 
 
+# the icon column (T774): a 1-cell gutter, then a 2-cell slot a narrow glyph sits
+# at the right of (where a session row's state glyph is) and a wide one (⚡) fills,
+# a space — so every label starts at TEXT_X, a session's ID too
+TEXT_X = 4
+
+
+def cmd_line(text, cells):
+    """A command row (✦ 消息 · ⚡ 新会话 · $ 命令行 · 置顶 · ◐ · ⏻ …) with its icon in
+    the one column and its words at TEXT_X, by display cells; a row with no icon
+    (its first word is not a lone symbol) keeps the slot blank."""
+    icon, sep, rest = text.partition(" ")
+    if not sep or len(icon) != 1 or icon.isalnum() or cells(icon) > 2:
+        icon, rest = "", text
+    return " " + " " * (2 - cells(icon)) + icon + " " + rest
+
+
 def paint(shown, at, width, cells, clip):
     """The list's lines as segments [(text, style)] — style a tuple of: bold ·
     lit · dim · c<N> (a 16-colour palette number). Kept off curses so the
@@ -2447,7 +2463,7 @@ def paint(shown, at, width, cells, clip):
                            ("lit",) if lit else ())])
             continue
         if e["kind"] == "cmd":
-            lines.append([(clip("  " + e["text"], width), ("lit",) if lit else ())])
+            lines.append([(clip(cmd_line(e["text"], cells), width), ("lit",) if lit else ())])
             continue
         if e["kind"] == "grid":
             # the ⚡ row's cells (issue #3327): the one Tab is on lit, the rest plain
@@ -3776,7 +3792,7 @@ ACTIONS = [
     {"id": "quit", "label": lambda r: say("view_cmd_quit"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "quit", "far": None, "ask": "key", "prompt": lambda r: say("view_ask_quit"),
      "keys": "yYnN", "yes": True},
-    # 回家命令行 (T685; EPIC T651 C3's ⌘\ before): this machine's shell in $HOME
+    # $ 命令行 (T685, T774; EPIC T651 C3's ⌘\ before): this machine's shell in $HOME
     {"id": "home", "label": lambda r: say("view_cmd_home"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "home", "far": None, "ask": None},
     # ✦ 消息 (T675, T701): every message in the one book — the popup's Enter opens the page
@@ -4105,6 +4121,11 @@ def lang_row(query):
             "foot": say("view_lang_nolang_fmt", here_label({})) if lang_said_none() else say("view_lang_foot")}
 
 
+def compose_title(cells):
+    """The 「新会话」 box's first line (T774): ⚡ 新会话, its icon in the one column."""
+    return cmd_line("⚡ " + say("view_composer"), cells)
+
+
 def notices_row(query):
     """「✦ 消息 N」 (T675, T701): every reminder in the one book — asking you, stuck,
     done, an alert, a result nobody took, a notice — N the ones not seen yet, on any
@@ -4325,7 +4346,7 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     q = query.strip()
     rows = visible(items, query, opened)
     # ONE order (T762): what is drawn top to bottom is what ↓ walks and ↑ walks
-    # back — ✦ 消息 · ⚡ 新会话 · ⌂ 回家 on top, the sessions, then 置顶 · ◐ · ⏻
+    # back — ✦ 消息 · ⚡ 新会话 · $ 命令行 on top, the sessions, then 置顶 · ◐ · ⏻
     top, bottom = [], []
     nr = notices_row(query) if words else None
     if nr:
@@ -4341,9 +4362,9 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
                         "text": say("view_cmd_blank"),
                         "foot": say("view_nomatch") if q and not hit else ""})
     if "quit" in words and (not q or panel_hit(q, say("view_cmd_home"), HOME_WORDS)):
-        # 回家命令行 (T685): typed words that name it keep it in view, lit
+        # $ 命令行 (T685, T774): typed words that name it keep it in view, lit
         top.append({"kind": "cmd", "cmd": "home", "act": "home", "row": {}, "text": say("view_cmd_home"),
-                    "hit": bool(q)})
+                    "foot": say("view_cmd_home_foot"), "hit": bool(q)})
     pr = pin_row(items, query, cur) if words else None
     if pr:
         bottom.append(pr)   # under the sessions (issue #3517)
@@ -4451,13 +4472,13 @@ def panel_key(screen, timeout_ms, completed=None, inputs=None):
 # iTerm2 (fleet_keys.RETIRED): an older profile's code is swallowed, nothing opens.
 # The one message below says so once per login.
 KEYS_NOTICE = "keys-notice-T685"
-# T762 moved ⚡ 新会话 and ⌂ 回家 to the top (⌘P ↑ ↵ no longer reaches ⚡ from the
+# T762 moved ⚡ 新会话 and $ 命令行 to the top (⌘P ↑ ↵ no longer reaches ⚡ from the
 # list's top): the footer says so for a week from the first ⌘P that drew it
 ORDER_NOTICE, ORDER_NOTICE_SECS = "panel-order-T762", 7 * 86400
 
 
 def order_notice(now=None):
-    """「新会话、回家命令行在最上面」 for ORDER_NOTICE_SECS after this login first saw
+    """「新会话、命令行在最上面」 for ORDER_NOTICE_SECS after this login first saw
     the new order; "" after that (or when the file cannot be kept)."""
     now = time.time() if now is None else now
     path = conf_dir() / ORDER_NOTICE
@@ -4838,8 +4859,13 @@ def _popup(screen, qo, vid, client, forward=""):
         remote_unknown = hub_stale() or (os.environ.get("CCQUOTA_FLEET") == "1" and hub_age() is None)
         count = session_count(items, query, remote_unknown)
         count_x = max(2, width - 2 - qo.cells(count))
-        panel.put(screen, 0, 0, "› " + (query or say("view_search_ph")), count_x - 1, qo.clip)
-        panel.put(screen, 0, count_x, count, width - count_x - 1, qo.clip, attr(("bold",)))
+        if page and mode == "compose":
+            # the 「新会话」 box's own first line stands where 搜索会话 stood (T774),
+            # as ✦ 消息's page puts its title there; esc gives the search back
+            panel.put(screen, 0, 0, compose_title(qo.cells), width - 1, qo.clip, attr(("bold",)))
+        else:
+            panel.put(screen, 0, 0, "› " + (query or say("view_search_ph")), count_x - 1, qo.clip)
+            panel.put(screen, 0, count_x, count, width - count_x - 1, qo.clip, attr(("bold",)))
         if ban:
             try:
                 screen.addnstr(1, 0, qo.clip(ban, width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
@@ -4876,15 +4902,18 @@ def _popup(screen, qo, vid, client, forward=""):
             # draws it, or ⚡ 新任务 — a rule, then one item a line, list-styled
             w = width - 1
             head = page.row if mode != "compose" else None
-            if head and head.get("kind") == "sess":
+            if mode == "compose":
+                hsegs = []      # its title is row 0's (T774)
+            elif head and head.get("kind") == "sess":
                 hsegs = row_segs(head, w, qo.cells, qo.clip)
             else:
-                hsegs = [("  " + ("⚡ " + say("view_composer") if mode == "compose" else (head or {}).get("text") or mtitle), ("bold",))]
+                hsegs = [(cmd_line((head or {}).get("text") or mtitle, qo.cells), ("bold",))]
             x = 0
             for text, style in hsegs:
                 panel.put(screen, off, x, text, w - x, qo.clip, attr(style))
                 x += qo.cells(text)
-            panel.put(screen, off + 1, 0, "─" * w, w, qo.clip, attr(("dim",)))
+            pg = off + (1 if hsegs else 0)     # the rule, then the page's lines
+            panel.put(screen, pg, 0, "─" * w, w, qo.clip, attr(("dim",)))
             lines, selected, cursor = [], None, None
             if mode in ("menu", "choice"):
                 n = 0
@@ -4933,20 +4962,20 @@ def _popup(screen, qo, vid, client, forward=""):
                 if note:
                     lines.append(("  " + note, ("dim",)))
                 keys = say("view_compose_keys")
-            area = max(1, body - 2)
+            area = max(1, body - 1 - (pg - off))
             page.scroll = panel.clamp_top(page.scroll, len(lines), area)
             if page.follow and selected is not None:
                 page.scroll = panel.reveal(page.scroll, selected, area)
             page.follow = False
             for k, (text, style) in enumerate(lines[page.scroll:page.scroll + area]):
-                y = off + 2 + k
+                y = pg + 1 + k
                 text = qo.clip(text, w)
                 panel.put(screen, y, 0, text + " " * max(0, w - qo.cells(text)), w, qo.clip, attr(style))
                 hits[y] = page.scroll + k
             if cursor and page.scroll <= cursor[0] < page.scroll + area:
                 try:
                     curses.curs_set(1)
-                    screen.move(off + 2 + cursor[0] - page.scroll, min(w - 1, cursor[1]))
+                    screen.move(pg + 1 + cursor[0] - page.scroll, min(w - 1, cursor[1]))
                 except curses.error:
                     pass
             else:

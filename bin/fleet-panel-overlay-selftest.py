@@ -232,15 +232,21 @@ class NativeTests(unittest.TestCase):
             self.keys("Escape")
             after = self.wait("Tab 操作").splitlines()
             self.assertEqual(before[1:-2], after[1:-2])
-            # ↑↑ from the first session goes by ⌂ to New (T762: the order drawn);
+            # ↑↑ from the first session goes by $ to New (T762: the order drawn);
             # Enter opens the box without any action.
             self.keys("Up", "Up", "Enter")
             box = self.wait("开 ↵")
             self.evidence.append("COMPOSER %d columns\n%s" % (width, box))
             self.assertEqual(len([x for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))]), 3)
+            # T774: the box's own first line stands where 搜索会话 stood, once
+            top = box.splitlines()[0]
+            self.assertEqual(top.strip(), "⚡ 新会话", box)
+            self.assertNotIn("›", top)
+            self.assertEqual(box.count("新会话"), 1, box)
             self.assertEqual(self.actions(), [])
             self.keys("Escape")
-            # Cancel restores source (New); ↓↓ goes by ⌂ 回家命令行 back to the first session (T762).
+            self.assertTrue(self.wait("Tab 操作").splitlines()[0].startswith("› "), self.screen())
+            # Cancel restores source (New); ↓↓ goes by $ 命令行 back to the first session (T762).
             self.keys("Down", "Down")
         self.keys("Up", "Up", "Enter")
         self.wait("开 ↵")

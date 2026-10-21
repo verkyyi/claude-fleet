@@ -53,16 +53,16 @@ fi
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
 # keys live in docs/dev/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
 # an iTerm2 profile written before still sends them (the conf swallows both).
-# `home` (EPIC T651 C3): ⌘\, 回家命令行 — this machine's login shell in $HOME from
+# `home` (EPIC T651 C3): ⌘\, $ 命令行 (回家命令行 before T774) — this machine's login shell in $HOME from
 # any screen of the 看台, no session and no hub needed (fleet_view.open_home_shell).
 # Its «code» is `x1c`: the profile sends ⌃\'s own byte (0x1c, «Send Hex Code»),
 # not a private code — tmux (3.7c) drops a user key while a popup is up, so a code
 # would never reach ⌘P's list or its 新会话 box; the byte does, and in a window it
 # is the 看台's ⌃\ binding (fleet_keys.HOME_CHORD), the same key for a terminal
-# with no ⌘. Since T685 it is the panel's 「回家命令行」 row; ⌘\ / ⌃\ only when named.
+# with no ⌘. Since T685 it is the panel's 「$ 命令行」 row; ⌘\ / ⌃\ only when named.
 # The LAST column (issue #3185, EPIC #3178 C7; T685): `1` = bound by default — ONLY
 # quickopen (⌘P, the panel). The 看台 takes one key (操作者 2026-10-20, T685): every
-# other action is a row of ⌘P's panel (新会话 · 回家命令行 · 退出 fleet …), and every
+# other action is a row of ⌘P's panel (新会话 · 命令行 · 退出 fleet …), and every
 # other row here is bound only when the person names it (fleet.conf [client]
 # FLEET_KEYS_EXTRA, bin/fleet_keys.py) — ⌘\ home too. `list` prints the first five
 # columns as it always did; `full` all six; `default` the default actions.

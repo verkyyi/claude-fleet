@@ -435,8 +435,8 @@ fleet_ui_t() {
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
     # T685: the one key left — said once per login (keys_notice)
-    zh:view_order_moved) printf '新会话和回家命令行现在在列表最上面' ;;
-    en:view_order_moved) printf 'New session and Home command line are at the top of the list now' ;;
+    zh:view_order_moved) printf '新会话和命令行现在在列表最上面' ;;
+    en:view_order_moved) printf 'New session and Shell are at the top of the list now' ;;
     zh:view_keys_moved) printf 'fleet 只用 ⌘P（手机 F12 或 ⌃] p），其余都在面板里' ;;
     en:view_keys_moved) printf 'fleet uses one key, ⌘P (phone: F12 or ⌃] p) — everything else is in its panel' ;;
     zh:view_web_far) printf '浏览器里请从「会话」打开这个会话' ;;
@@ -560,8 +560,11 @@ fleet_ui_t() {
     en:view_cmd_quit) printf '⏻ Quit fleet (sessions keep running)' ;;
     zh:view_ask_quit) printf '退出 fleet？会话在后台继续 (y/n) ' ;;
     en:view_ask_quit) printf 'Quit fleet? Sessions keep running (y/n) ' ;;
-    zh:view_cmd_home) printf '⌂ 回家命令行（本机 shell）' ;;
-    en:view_cmd_home) printf '⌂ Home command line (this machine'"'"'s shell)' ;;
+    # T774: the label is short; the row's subtitle says what it is ($ under ascii too)
+    zh:view_cmd_home) printf '$ 命令行' ;;
+    en:view_cmd_home) printf '$ Shell' ;;
+    zh:view_cmd_home_foot) printf '这台机器的 shell，在家目录' ;;
+    en:view_cmd_home_foot) printf "this machine's shell, in your home directory" ;;
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress
     zh:view_keys_match_fmt) printf '↵ 切到 %s  ↑ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
     en:view_keys_match_fmt) printf '↵ go to %s  ↑ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;

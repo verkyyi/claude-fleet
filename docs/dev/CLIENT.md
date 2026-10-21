@@ -23,7 +23,7 @@ with ↑↓ ↵ or reached by typing a few of their words:
 | Row | Does | Type |
 |---|---|---|
 | ⚡ 新会话 | the 「新会话」 box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — already chosen, so ↵ opens it; nothing is typed there, the first message is said in the session (and renames its row and record) | words that hit no session |
-| ⌂ 回家命令行 | this machine's login shell in `$HOME`, no session and no hub (EPIC T651 C3); the panel again comes back | `回家` · `home` · `shell` |
+| $ 命令行 | this machine's login shell in `$HOME`, no session and no hub (EPIC T651 C3); the panel again comes back | `回家` · `home` · `shell` |
 | ◐ 语言 / Language | the interface language | `语言` · `lang` |
 | ✦ 消息 | the panel's FIRST row (T701): every message in the one book `$FLEET_CONF_DIR/logs/notices.ndjson` (7 days) — a top-line notice (T675), a session asking / stuck / done (`fleet_notify.py`), an alert appearing / healing (`fleet-alerts.sh`), a result nobody took (`fleet-orphan-reports.py`'s own book) — and the other machines' (the hub caches `notices_<fleet>` / `orphanrep_<fleet>`, union by id, the latest read mark of any machine); `bin/fleet_notice.py page`, grouped, ↵ the whole text, g its session, r mark read, f hand a result nobody took to the orchestrator; ` N` while some are unseen; the 看台's message row under its top line (`status-format[1]`, `fleet-topbar.py inbox`, a click opens the page) is there only while one is live; `fleet notices` prints the same on a device | `消息` · `message` · `notice` |
 | ⏻ 退出 fleet | ends the connection, the sessions run on — after a y / n | `退出` · `quit` |
@@ -237,7 +237,7 @@ your Mac). The few that do something else on purpose say so below.
 | 拖文件 | 得到文件路径 | 一样 | 客户端先把文件送过去（#2757） | |
 | 选中 / ⌘C | 复制到本机 | 一样 | 见上一节「复制」（#2758，`clipboard-osc52-selftest.sh`） | |
 | ⌃D | 空输入时退出 | 有意不同 | 原样给会话；离开客户端用面板的「退出 fleet」 | `04` |
-| ⌃\ | （本地没有用途） | 一样 | T685 起原样给会话；会话 shell 在 Tab 页、本机 shell 是面板的「回家命令行」，要键在 FLEET_KEYS_EXTRA 配 | `1c` |
+| ⌃\ | （本地没有用途） | 一样 | T685 起原样给会话；会话 shell 在 Tab 页、本机 shell 是面板的「$ 命令行」，要键在 FLEET_KEYS_EXTRA 配 | `1c` |
 | ⌘K | iTerm2 清屏 | 一样 | #3185 起还给 iTerm2（默认只绑 ⌘P） | |
 | ⌘T ⌘N ⌘Q | iTerm2 新标签 / 新窗口 / 退出 | 一样 | T685 起还给 iTerm2；新会话、退出 fleet 在面板里 | |
 

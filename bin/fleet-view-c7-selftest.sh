@@ -256,13 +256,13 @@ log="$W/conf/logs/view-switch.ndjson"
 pn=$(python3 "$BIN/fleet_timing.py" check | sed -n 's/^panel n=\([0-9]*\) .*/\1/p'); pn=${pn:-0}
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
 ok=''; for _ in $(seq 1 80); do
-  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '  ⚡ 新会话' "$W/dispatch.txt" && { ok=1; break; }
+  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '│ ⚡ 新会话' "$W/dispatch.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "T: ⌘T in the 看台 did not open the panel lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
 grep -q '已并进' "$W/dispatch.txt" && st_fail "T: ⌘T still says 「已并进 ⌘P」 (the hint went with T685)"
 grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && st_fail "T: ⌘T still opened the 派一件事 popup"
-# the panel's own rows (T685): 回家命令行 and 退出 fleet stand in it
-grep -q '⌂ 回家命令行' "$W/dispatch.txt" || st_fail "T: the panel has no 回家命令行 row: $(grep -v '^$' "$W/dispatch.txt")"
+# the panel's own rows (T685): 命令行 and 退出 fleet stand in it
+grep -qF '$ 命令行' "$W/dispatch.txt" || st_fail "T: the panel has no 命令行 row: $(grep -v '^$' "$W/dispatch.txt")"
 grep -q '⏻ 退出 fleet' "$W/dispatch.txt" || st_fail "T: the panel has no 退出 fleet row"
 # the panel clock (issue #3551): the frame drawn ⇒ one run boot · read · frame · total
 waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^panel n=$((pn + 1)) '" \
@@ -276,11 +276,11 @@ to send-keys -t o:view Enter
 waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '(y/n)'" || st_fail "T: ↵ on ⏻ did not ask first: $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
 to send-keys -t o:view n
 sleep 0.5; [ -n "$(to list-panes -t o:view -F '#{pane_dead}' | grep -x 0)" ] || st_fail "T: n on 退出's question ended the connection"
-to send-keys -t o:view Escape; to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⚡'"
+to send-keys -t o:view Escape; to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '│ ⚡'"
 lines=$(grep -c . "$log" 2>/dev/null || echo 0)
 to send-keys -t o:view -H 1b 5b 39 33 30 7e
 sleep 1.5
-to capture-pane -p -t o:view | grep -q '  ⚡' && st_fail "T: ⌘K (retired code 930) opened the panel (T685: it does nothing)"
+to capture-pane -p -t o:view | grep -q '│ ⚡' && st_fail "T: ⌘K (retired code 930) opened the panel (T685: it does nothing)"
 [ "$(grep -c . "$log" 2>/dev/null || echo 0)" = "$lines" ] || st_fail "T: ⌘K (930) left a line in view-switch.ndjson: $(tail -1 "$log")"
 grep -q '"how":"old:' "$log" 2>/dev/null && st_fail "T: a press is still logged how=old:<action> (the forwards went with T685)"
 # the one message after the update (fleet-remote-view.sh attach --thin runs view-notice):
@@ -294,7 +294,7 @@ python3 "$BIN/fleet-quick-dispatch.py" send --title '看日志' --repo acme/web 
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agent"))' "$W/sent.json")" = codex ] \
   || st_fail "T: --agent codex did not ride the payload: $(cat "$W/sent.json")"
 rm -f "$W/sent.json"
-st_ok_all "T  ⌘T (an extra): the panel lit on ⚡, no hint; ⌂ 回家命令行 and ⏻ 退出 fleet rows, 退出 typed lands on ⏻ and asks y/n; ⌘K (retired 930) does nothing (T685); nothing in a direct attach"
+st_ok_all "T  ⌘T (an extra): the panel lit on ⚡, no hint; $ 命令行 and ⏻ 退出 fleet rows, 退出 typed lands on ⏻ and asks y/n; ⌘K (retired 930) does nothing (T685); nothing in a direct attach"
 
 # --- S: ⌃\ -----------------------------------------------------------------------------------
 ti select-window -t "=fl@view-v1:$W1"; now_on "$W1"
@@ -436,15 +436,15 @@ for how in list box; do
     || st_fail "H: ⌘\\ in ⌘P ($how) did not go to the home shell ($(cur)): $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
 done
 [ "$(homew | grep -c .)" = 1 ] || st_fail "H: ⌘P made a second home shell window"
-# the panel's 回家命令行 row (T685: the road with no key): ⌘P, type 回家, ↵
+# the panel's 命令行 row (T685: the road with no key): ⌘P, type 回家, ↵
 cmdbs; now_on "$W2"
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || st_fail "H: ⌘P listed nothing (row)"
 to send-keys -t o:view -l '回家'
-waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⌂ 回家命令行'" || st_fail "H: typing 回家 did not light ⌂ 回家命令行: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -qF '  $ 命令行'" || st_fail "H: typing 回家 did not light $ 命令行: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
 to send-keys -t o:view Enter
 waitfor 12 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$HW' ]" \
-  || st_fail "H: ↵ on ⌂ 回家命令行 did not go to the home shell ($(cur))"
+  || st_fail "H: ↵ on $ 命令行 did not go to the home shell ($(cur))"
 # `do home` from outside a key; exit: the window alone goes
 cmdbs; now_on "$W2"
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" 'do' home --view fl@view-v1 || st_fail "H: do home exited non-zero"
@@ -453,14 +453,14 @@ prompt_ready; to send-keys -t o:view -l 'exit'; to send-keys -t o:view Enter
 waitfor 20 sh -c "! tmux -S '$IN' list-windows -t fl -F '#{window_id}' | grep -qx '$HW'" || st_fail "H: exit left the home shell window"
 # the legs below press the extras again (⌘Q = quit)
 TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-keys || st_fail "H: view-keys (extras back) exited non-zero"
-st_ok_all "H  ⌘\\ · ⌃\\ (named, T685) · the panel's ⌂ 回家命令行 row: the home shell — one window (@view_shell home) in \$HOME, back and forth, from ⌘P's list and 新会话 box, nothing in a direct attach, exit closes it (EPIC T651 C3)"
+st_ok_all "H  ⌘\\ · ⌃\\ (named, T685) · the panel's $ 命令行 row: the home shell — one window (@view_shell home) in \$HOME, back and forth, from ⌘P's list and 新会话 box, nothing in a direct attach, exit closes it (EPIC T651 C3)"
 
 # --- P: anchored composer; existing placement routes (#4416) -------------------
 vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@view-v1 "$@"; }
 ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 vp > "$W/panel.txt" || st_fail "P: view-panel"
 grep -qx "cmd${T}pin${T}置顶当前会话" "$W/panel.txt" || st_fail "P: plain pin row missing"
-[ "$(head -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:notices cmd:new cmd:home " ] || st_fail "P: top commands (✦ · ⚡ · ⌂ 回家命令行 — T762): $(head -3 "$W/panel.txt")"
+[ "$(head -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:notices cmd:new cmd:home " ] || st_fail "P: top commands (✦ · ⚡ · $ 命令行 — T762): $(head -3 "$W/panel.txt")"
 [ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:pin cmd:lang cmd:quit " ] || st_fail "P: bottom commands (置顶 · 语言 · ⏻ — T762): $(tail -3 "$W/panel.txt")"
 [ "$(grep -m1 -E '^(cmd|sess|sec)' "$W/panel.txt" | cut -f1,2 | tr '\t' ':')" = "cmd:notices" ] || st_fail "P: ✦ 消息 is the first row (T701)"
 grep -q '^grid' "$W/panel.txt" && st_fail "P: composer controls still inserted in list"
@@ -469,8 +469,8 @@ for word in 语言 lang english 中文; do vp "$word" | grep -q "^cmd${T}lang" |
 vp Gamma | grep -q "^cmd${T}lang" && st_fail "P: unrelated language row in search"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && st_fail "P: none still has commands"
 [ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "notices new home pin lang quit " ] || st_fail "P: retired commands"
-for word in 回家 home shell; do vp "$word" | grep -q "^cmd${T}home" || st_fail "P: 回家命令行 search ($word)"; done
-vp Gamma | grep -q "^cmd${T}home" && st_fail "P: unrelated 回家命令行 row in search"
+for word in 回家 home shell; do vp "$word" | grep -q "^cmd${T}home" || st_fail "P: 命令行 search ($word)"; done
+vp Gamma | grep -q "^cmd${T}home" && st_fail "P: unrelated 命令行 row in search"
 for word in 消息 message; do vp "$word" | grep -q "^cmd${T}notices" || st_fail "P: ✦ 消息 search ($word, T675)"; done
 vp Gamma | grep -q "^cmd${T}notices" && st_fail "P: unrelated ✦ 消息 row in search"
 # The box's defaults are fleet-quick-dispatch.py's (T670; its selftest holds the

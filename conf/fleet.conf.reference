@@ -355,7 +355,7 @@ FLEET_CTX_WINDOW=200000
 # open one; nothing opens, reopens or keeps one, and no setting here names it.
 
 # Keys (issue #3185, EPIC #3178 C7; T685): a new install takes ONE key — the panel;
-# 新会话 · 回家命令行 · 退出 fleet are rows of it.
+# 新会话 · 命令行 · 退出 fleet are rows of it.
 # The CLIENT's two ([client] section): FLEET_KEY_PANEL is the panel's chord (cmd+p;
 # another, e.g. cmd+' · off = none); FLEET_KEYS_EXTRA brings back any other, one
 # `action=chord` each — actions next prev back fwd new dispatch quit home shell (the

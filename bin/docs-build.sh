@@ -389,8 +389,11 @@ def gen_block(name, lang):
                 rows.append('| %s | %s |' % (code(head), rest))
             else:
                 rows.append('| %s | %s |' % (w['nokey'], item))
-        # T685: every other action is a row of the panel — 新会话 · 回家命令行 · 退出 fleet
+        # T685: every other action is a row of the panel — 新会话 · 命令行 · 退出 fleet;
+        # $ 命令行's words are its subtitle on screen (T774), its parenthesis here
         panel_rows = [ui.get(k, '') for k in ('view_cmd_blank', 'view_cmd_home', 'view_cmd_quit')]
+        if panel_rows[1] and ui.get('view_cmd_home_foot'):
+            panel_rows[1] += ('（%s）' if lang == 'zh' else ' (%s)') % ui['view_cmd_home_foot']
         rows.append('| %s | %s |' % (w['nokey'], w['rows'] + ' · '.join(r for r in panel_rows if r)))
         return '\n'.join(rows) + '\n'
     if name == 'keys-extra':
