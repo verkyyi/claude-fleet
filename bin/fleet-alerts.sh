@@ -525,6 +525,34 @@ EOF
 # fleet_alerts_write [--kick] — compute, merge with the previous file (carry each
 # row's `since`; turn a cleared alarm/warning into a ↻ healed row for
 # FLEET_ALERTS_TRACE), and publish atomically.
+# _fa_entry_hostkey — this machine's entry host key changed and the hub's alert
+# about it is still open (T743): its answer to the entry reach report carries
+# host_key_changed into <state>/entry/reach.json (0644), and each login records
+# ONE error-level message per new key in its own book. No file (a client, an
+# unmanaged machine) ⇒ nothing, and no fork.
+_fa_entry_hostkey() {
+  local f="${FLEET_NODE_STATE:-/var/db/fleet-node}/entry/reach.json" d="" new="" old="" seen re_new re_old
+  [ -r "$f" ] || return 0
+  IFS= read -r -d '' d < "$f" 2>/dev/null || :
+  case "$d" in *'"host_key_changed"'*) ;; *) return 0 ;; esac
+  re_new='"host_key_changed"[^}]*"new": *"(SHA256:[A-Za-z0-9+/=]+)"'
+  re_old='"host_key_changed"[^}]*"old": *"(SHA256:[A-Za-z0-9+/=]+|[?])"'
+  [[ $d =~ $re_new ]] || return 0
+  new=${BASH_REMATCH[1]}
+  [[ $d =~ $re_old ]] && old=${BASH_REMATCH[1]}
+  seen="$(fleet_usage_cache_dir)/entry-hostkey.seen"
+  if [ -f "$seen" ]; then
+    local was=""
+    IFS= read -r was < "$seen" 2>/dev/null
+    [ "$was" = "$new" ] && return 0
+  fi
+  mkdir -p "${seen%/*}" 2>/dev/null
+  printf '%s\n' "$new" > "$seen" 2>/dev/null || return 0
+  _fa_notice error "这台机器的入口主机钥匙换了：${old:-?} → ${new}" \
+    --next "手机 / Termius 连它会报「钥匙变了」；不是你换的家或重装，就先别认新钥匙，查那个地址后面是谁" \
+    --source entry --kind alert --tag "entry-hostkey-${new}"
+}
+
 fleet_alerts_write() {
   local f cur prev="" now trace line row id sev su co va si ac he ta de out="" ids="|" carry=0 pid act="|" said=""
   f=$(fleet_alerts_file)
@@ -532,6 +560,7 @@ fleet_alerts_write() {
   now=$(fleet_now)
   trace="${FLEET_ALERTS_TRACE:-1800}"
   cur=$(fleet_alerts_compute "$@")
+  _fa_entry_hostkey
   [ -f "$f" ] && prev=$(<"$f")   # builtin read: the bar's render path execs no cat (#888)
   # what was standing last tick: an alarm / warning that appears or heals is a
   # message in the one book (T701) — only then, never every tick

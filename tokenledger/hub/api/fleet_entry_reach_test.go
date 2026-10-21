@@ -333,12 +333,17 @@ func TestEntryHostKeyChangeIsAlerted(t *testing.T) {
 	h := entryHarness(t)
 	_, tok := rootNode(t, h, "root9", "mac-k", control.CapEntryKeys)
 	k1, k2 := reachKey(t), reachKey(t)
+	var told []string
+	h.srv.Notify = func(m string) { told = append(told, m) }
+	var last control.EntryReachVerdict
 	post := func(k ssh.PublicKey) {
 		t.Helper()
 		h.srv.entryReachAt.Delete("mac-k")
-		if code, _, raw := reachPost(t, h, tok, control.EntryReachReport{Port: closedPort(t), HostKey: reachKeyLine(k), Listening: true}, ""); code != 200 {
+		code, v, raw := reachPost(t, h, tok, control.EntryReachReport{Port: closedPort(t), HostKey: reachKeyLine(k), Listening: true}, "")
+		if code != 200 {
 			t.Fatalf("report: HTTP %d %s", code, raw)
 		}
+		last = v
 	}
 	open := func() []string {
 		t.Helper()
@@ -350,10 +355,19 @@ func TestEntryHostKeyChangeIsAlerted(t *testing.T) {
 	}
 	post(k1)
 	post(k1)
-	if subs := open(); len(subs) != 0 {
-		t.Fatalf("the same key raised %v", subs)
+	if subs := open(); len(subs) != 0 || len(told) != 0 || last.HostKeyChanged != nil {
+		t.Fatalf("the same key raised %v, told %v, verdict %+v", subs, told, last.HostKeyChanged)
 	}
 	post(k2)
+	// the machine hears it while the alert is open (its logins' messages), the
+	// operator's WeChat once — not again on the next report
+	post(k2)
+	if c := last.HostKeyChanged; c == nil || c.New != ssh.FingerprintSHA256(k2) || c.Old != ssh.FingerprintSHA256(k1) {
+		t.Fatalf("verdict host_key_changed = %+v, want %s → %s", last.HostKeyChanged, ssh.FingerprintSHA256(k1), ssh.FingerprintSHA256(k2))
+	}
+	if len(told) != 1 || !strings.Contains(told[0], ssh.FingerprintSHA256(k2)) {
+		t.Fatalf("notified %v, want one message naming the new key", told)
+	}
 	if subs := open(); len(subs) != 1 || subs[0] != "mac-k" {
 		t.Fatalf("a new entry key raised %v, want [mac-k]", subs)
 	}

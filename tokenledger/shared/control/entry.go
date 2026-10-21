@@ -140,6 +140,18 @@ type EntryReachVerdict struct {
 	Addrs    []EntryReachAddr `json:"addrs"`
 	// Throttled: a report inside the last check's window, answered from it.
 	Throttled bool `json:"throttled,omitempty"`
+	// HostKeyChanged: this machine's entry host key changed and the hub's
+	// alert about it is still open (claude-fleet T743) — the machine's logins
+	// each record one error-level message from it (fleet-alerts.sh).
+	HostKeyChanged *EntryHostKeyChange `json:"host_key_changed,omitempty"`
+}
+
+// EntryHostKeyChange is the old and new fingerprints of a changed entry host
+// key and when the hub first saw it.
+type EntryHostKeyChange struct {
+	Old   string    `json:"old"`
+	New   string    `json:"new"`
+	Since time.Time `json:"since"`
 }
 
 // EntryRoutesNodePath is GET with the door's token (claude-fleet#3549, EPIC

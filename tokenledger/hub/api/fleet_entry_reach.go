@@ -393,6 +393,7 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v := control.EntryReachVerdict{CheckedAt: now, NoPublic: noPublic, Addrs: entryReachAddrs(written)}
+	v.HostKeyChanged = s.entryHostKeyChangeOpen(host)
 	if src.IsValid() {
 		v.Source = src.String()
 	}
@@ -514,7 +515,8 @@ func (s *Server) entryHostKeyChanged(host, prev string, now ssh.PublicKey, at ti
 	}
 	newFP := ssh.FingerprintSHA256(now)
 	b, _ := json.Marshal(map[string]string{"old": oldFP, "new": newFP})
-	if _, err := s.Store.RaiseFleetAlert(store.AlertEntryHostKeyChanged, strings.ToLower(host), string(b), at); err != nil {
+	raised, err := s.Store.RaiseFleetAlert(store.AlertEntryHostKeyChanged, strings.ToLower(host), string(b), at)
+	if err != nil {
 		log.Printf("fleet alerts: raise %s %s: %v", store.AlertEntryHostKeyChanged, host, err)
 	}
 	line := fmt.Sprintf("entry host key of %s changed: %s → %s", host, oldFP, newFP)
@@ -522,4 +524,23 @@ func (s *Server) entryHostKeyChanged(host, prev string, now ssh.PublicKey, at ti
 	if err := s.Store.HubAudit("hub", "entry.hostkey", strings.ToLower(host), "changed", line, at); err != nil {
 		log.Printf("fleet alerts: audit entry.hostkey %s: %v", host, err)
 	}
+	if raised {
+		// the operator's WeChat (FLEET_NOTIFY_CMD) — once per change
+		s.notify(fmt.Sprintf("fleet 告警 · %s 的入口主机钥匙换了：%s → %s。手机 / Termius 连它会报「钥匙变了」；"+
+			"若不是你换的家或重装，先别认新钥匙，查是谁在那个地址后面。", host, oldFP, newFP))
+	}
+}
+
+// entryHostKeyChangeOpen is the open entry_hostkey_changed alert of <host> as
+// a reach verdict carries it, nil when none is open.
+func (s *Server) entryHostKeyChangeOpen(host string) *control.EntryHostKeyChange {
+	detail, since, ok, err := s.Store.OpenFleetAlert(store.AlertEntryHostKeyChanged, strings.ToLower(host))
+	if err != nil || !ok {
+		return nil
+	}
+	var d struct{ Old, New string }
+	if json.Unmarshal([]byte(detail), &d) != nil || d.New == "" {
+		return nil
+	}
+	return &control.EntryHostKeyChange{Old: d.Old, New: d.New, Since: since}
 }

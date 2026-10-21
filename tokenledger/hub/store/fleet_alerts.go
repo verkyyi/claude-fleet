@@ -120,6 +120,22 @@ func (s *Store) ClearFleetAlert(kind, subject string, at time.Time) (cleared boo
 	return n > 0, nil
 }
 
+// OpenFleetAlert is the open (kind, subject) row's detail and when it was
+// raised; ok false when none is open.
+func (s *Store) OpenFleetAlert(kind, subject string) (detail string, raised time.Time, ok bool, err error) {
+	var at string
+	err = s.read.QueryRow(`SELECT detail, raised_at FROM fleet_alerts WHERE kind = ? AND subject = ? AND cleared_at IS NULL
+		ORDER BY id DESC LIMIT 1`, kind, subject).Scan(&detail, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, err
+	}
+	raised, _ = time.Parse(rfc, at)
+	return detail, raised, true, nil
+}
+
 // LastFleetAlertRaised is when (kind, subject) was last raised, open or
 // cleared — zero when never (or pruned).
 func (s *Store) LastFleetAlertRaised(kind, subject string) (time.Time, error) {
