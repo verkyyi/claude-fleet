@@ -37,7 +37,7 @@ func runDoor(args []string) error {
 	// XX79: browser terminals through this door (TLS: a page on https)
 	browserListen := fs.String("browser-listen", os.Getenv("FLEET_DOOR_BROWSER_LISTEN"), "where browsers and homes join a terminal's pipe (e.g. :443); \"\" = off")
 	browserCert := fs.String("browser-cert", os.Getenv("FLEET_DOOR_BROWSER_CERT"), "the browser listener's certificate chain (PEM; re-read when it changes)")
-	browserKey := fs.String("browser-key", os.Getenv("FLEET_DOOR_BROWSER_KEY"), "the browser listener's private key (PEM)")
+	browserKey := secretEnvFlag(fs, "browser-key", "FLEET_DOOR_BROWSER_KEY", "the browser listener's private key `file` (PEM)")
 	browserOrigin := fs.String("browser-origin", os.Getenv("FLEET_DOOR_BROWSER_ORIGIN"), "the pages a browser half may come from (comma-separated https://host)")
 	doorID := fs.String("door-id", os.Getenv("FLEET_DOOR_ID"), "this door's name in the hub's fleet.term_doors (us)")
 	if err := fs.Parse(args); err != nil {
