@@ -36,6 +36,9 @@
 #                         a phone that sends no LANG still reaches the 看台 in UTF-8 —
 #                         a real tmux client draws Chinese to its terminal — and a
 #                         locale the client does send wins
+#   entry-hostkey-regenerated  _entry_hostkey (T743): the entry's host key is made
+#                         once — a lost .pub is derived back from the private key,
+#                         never a new pair; what the port answers is the same key
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -656,6 +659,30 @@ PY
   sys_same || { edown; return 1; }
   edown
   WHAT="地址可解析但没人应、或应的是别的钥匙：不进 reachable（只剩真入口 sshd 那一个）；体检 public 行 WARN「外面连不上：… 超时 · 在路由器上把 TCP 端口转发到 192.168.1.249」；入口照常进；$gohalf"
+}
+
+drill_entry_hostkey_regenerated() {
+  CAP=20   # the listener's start + a converge pass after the .pub goes
+  local t0 fp0 fp1 priv0
+  erig hostkey
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  ehk() { ssh-keyscan -T 3 -t ed25519 -p "$EPORT" 127.0.0.1 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}'; }
+  fp0=$(ehk); priv0=$(cksum < "$E/db/entry/ssh_host_ed25519_key")
+  [ -n "$fp0" ] || { WHY="no host key answered on the entry port"; edown; return 1; }
+  rm -f "$E/db/entry/ssh_host_ed25519_key.pub"
+  until_ok 10 test -s "$E/db/entry/ssh_host_ed25519_key.pub" || { WHY="the .pub never came back: $(tail -3 "$E/sup.err")"; edown; return 1; }
+  [ "$(cksum < "$E/db/entry/ssh_host_ed25519_key")" = "$priv0" ] || { WHY="the private key was replaced"; edown; return 1; }
+  [ "$(ssh-keygen -lf "$E/db/entry/ssh_host_ed25519_key.pub" | awk '{print $2}')" = "$fp0" ] \
+    || { WHY="the rebuilt .pub is another key"; edown; return 1; }
+  fp1=$(ehk)
+  [ "$fp1" = "$fp0" ] || { WHY="the entry port now answers $fp1, was $fp0"; edown; return 1; }
+  etry k1 || { WHY="the registered key was refused after: $(cat "$E/ssh.err")"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口钥匙生成一次就不换：删掉 .pub 后从私钥补回，私钥一字不变，入口端口答的还是 $fp0"
 }
 
 drill_entry_forward_out() {
