@@ -447,12 +447,13 @@ eq "stale: FLEET_STALE_CLAIM_SECS moves the bar" 0 \
 # --- 7. SUCCEEDED END TO END (T886) ------------------------------------------------
 # The same-machine road: report-parent --outcome succeeded (a task window) → children_append → the
 # parent's book. Before T886 the append was refused and nothing was written.
-mkdir -p "$WORK/repo-scratch-9"
+mkdir -p "$WORK/repo-scratch-9" "$WORK/repo-scratch-10"
 new_win '任务父'; opt "$WID" @raw 1; opt "$WID" @worktree "$WORK/repo-scratch-9"; opt "$WID" @claude_state idle
-new_win kid-task; K9="$WID"; opt "$K9" @origin "${P}scratch-9"; opt "$K9" @claude_state 'done'; opt "$K9" @task T886
+new_win kid-task; K9="$WID"; opt "$K9" @raw 1; opt "$K9" @worktree "$WORK/repo-scratch-10"; opt "$K9" @origin "${P}scratch-9"; opt "$K9" @claude_state 'done'; opt "$K9" @task T886
 bash "$RP" -L "$LBL" --win "$K9" --state waiting --outcome succeeded --summary "task done" >"$WORK/k9.out" 2>&1
 L9="$FLEET_CONF_DIR/fleets/$LBL/children/${P}scratch-9.ndjson"
-eq "succeeded: the report lands in the parent's book" SUCCEEDED \
-  "$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readlines()[-1])["state"])' "$L9" 2>/dev/null)"
+got9=$(python3 -c 'import json,sys; e=json.loads(open(sys.argv[1]).readlines()[-1]); print(e["state"], e["child"], e.get("task"))' "$L9" 2>/dev/null)
+[ "$got9" = "SUCCEEDED acme-app:scratch-10 T886" ] || st_fail "succeeded: the report lands in the parent's book" "got [$got9]; report-parent said: $(cat "$WORK/k9.out")"
+CHECKS=$((CHECKS + 1))
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"
