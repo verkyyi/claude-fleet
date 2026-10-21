@@ -319,7 +319,7 @@ func TestPhonePageLeadsWithTheOneAddress(t *testing.T) {
 	if b := entryDoor(t, r.h, pBob); b.Shared != nil {
 		t.Fatalf("a pod's person: %+v", b.Shared)
 	}
-	for v, ok := range map[string]bool{"door.example.com": true, "door.example.com:2222": true, "10.0.0.1:22022": true,
+	for v, ok := range map[string]bool{"door.example.com": true, "door.example.com:2222": true, "192.0.2.10:22022": true,
 		"door..example.com": false, "door.example.com:0": false, "door.example.com:99999": false, "-x.example": false, "a b": false} {
 		if _, _, got := doorAddress(v); got != ok {
 			t.Errorf("doorAddress(%q) = %v, want %v", v, got, ok)
