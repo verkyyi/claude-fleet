@@ -72,6 +72,15 @@ assert.equal(await c.read('p:a', 'codex'), null);
 assert.ok([...b.map.keys()].every((k) => k.includes('p:b')), 'one person per browser');
 assert.equal(await c.read('', 'claude'), null, 'no principal: nothing');
 
+// read before /v1/me: the one person kept, for the caller to match against /v1/me
+const any = await c.readAny('claude');
+assert.equal(any.principal, 'p:b', "the kept person's name rides along");
+assert.deepEqual(any.snap.items, [{ t: 'user', text: 'mine' }]);
+assert.equal(await c.readAny('codex'), null, 'nothing kept on that side');
+b.map.set('cur\u001fp:x\u001fclaude', 'z');
+assert.equal(await c.readAny('claude'), null, 'two people kept (never written so): nothing drawn');
+b.map.delete('cur\u001fp:x\u001fclaude');
+
 // sign-out: everything goes
 await c.clear();
 assert.equal(b.map.size, 0, 'sign-out clears it all');

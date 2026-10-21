@@ -136,6 +136,16 @@ export function chatCache(b: Backend) {
       const s = (await b.get(recordKey(principal, provider, cur))) as Snapshot | undefined;
       return s && Array.isArray(s.items) && (s.session || "") === cur ? s : null;
     },
+    // the one person this browser keeps (write drops every other's) and their
+    // history on this side — read BEFORE /v1/me answers, so the two run side by
+    // side; the caller draws it only when /v1/me names that same person
+    async readAny(provider: string): Promise<{ principal: string; snap: Snapshot } | null> {
+      const ks = (await b.keys()).filter((k) => k.startsWith(`cur${sep}`) && k.endsWith(`${sep}${provider}`));
+      if (ks.length !== 1) return null;
+      const principal = principalOf(ks[0]);
+      const snap = await this.read(principal, provider);
+      return snap ? { principal, snap } : null;
+    },
     // keep the home's answer: this session becomes the current one; this side's
     // older sessions and every other person's records go
     async write(principal: string, provider: string, snap: Omit<Snapshot, "items" | "at"> & { items: unknown[] }, now = Date.now()): Promise<void> {

@@ -15,7 +15,7 @@ import { tr } from "@/shared/i18n";
 import { attachedPics, MAX_PICS, packPics, type SentPic } from "./pics";
 import { linkFiles, picSrc, type Pic as MediaPic } from "./media";
 import { cachedCopy } from "./copy";
-import { browserCache, mayCache, mayShow, type Layer } from "./local";
+import { browserCache, mayCache, mayShow, trim, type Layer } from "./local";
 import { meOnce } from "@/shared/api";
 import { viewAs } from "@/shared/viewAs";
 
@@ -281,6 +281,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   const localTried = useRef(false);
   // the highest layer on the page so far (local < copy < home)
   const top = useRef<Layer | null>(null);
+  // what the local layer drew, to tell a copy that says the same thing
+  const localDrawn = useRef("");
   // whose history this page may keep in the browser ("" = none: a view, a ticket, unknown)
   const [keeper, setKeeper] = useState("");
   const homeDefault = useRef("");
@@ -306,13 +308,16 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       // shell has in flight already): drawn only while neither copy nor home has
       // answered — a lower layer never replaces a higher one
       localTried.current = true;
+      const kept = browserCache()?.readAny(provider).catch(() => null) ?? Promise.resolve(null);
       void meOnce().then(async (me) => {
         if (!mayCache(me, viewAs)) return;
         setKeeper(me!.person!);
-        const snap = await browserCache()?.read(me!.person!, provider).catch(() => null);
+        const any = await kept;
+        const snap = any && any.principal === me!.person ? any.snap : null;
         if (!snap || !snap.items.length || signal.aborted || !mayShow("local", top.current)) return;
         hadLocal.current = true;
         top.current = "local";
+        localDrawn.current = JSON.stringify(snap.items);
         markFirst("local");
         setModels((snap.models as Model[]) || []);
         setModelState((m) => {
@@ -337,6 +342,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
         if (!j || read !== historyRead.current || homeSeen.current || !mayShow("copy", top.current)) return;
         hadCopy.current = true;
         top.current = "copy";
+        // the copy says what this browser already drew: no second render of it
+        if (localDrawn.current && JSON.stringify(trim(j.items || [])) === localDrawn.current) { setSync("syncing"); return; }
         markFirst("copy");
         setModels(j.models || []);
         setModelState((m) => {
