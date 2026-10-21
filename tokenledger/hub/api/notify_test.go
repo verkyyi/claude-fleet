@@ -564,3 +564,74 @@ func TestNotifyTemplateFields(t *testing.T) {
 	check(t, newReqMsg(three, true, "").Tpl, map[string]string{"thing1": "ClaudeFleet",
 		"thing2": "一个名字特别特别特别特… +2", "time6": "2026-10-14 09:02", "character_string10": "3"})
 }
+
+// claude-fleet T805: a trial member's 申请转正 reaches every admin once, on the
+// new-request template, tapping through to that person's drawer in 成员; a
+// second ask — or one after the ask was cleared — pushes nothing more, and a
+// person made a member before it went out is told to nobody.
+func TestNotifyTrialUpgrade(t *testing.T) {
+	h := newNotifyHarness(t)
+	ctx := context.Background()
+	now := time.Now()
+	admin, _ := newPersonPrincipal()
+	for _, u := range []store.HubUser{
+		{PrincipalID: admin, Login: "admin", Role: store.RoleAdmin, AddedBy: "test", AddedAt: now},
+		{PrincipalID: "gh:42", Login: "bob", Role: store.RoleUser, AddedBy: "test", AddedAt: now},
+		{PrincipalID: "gh:43", Login: "carol", Role: store.RoleUser, AddedBy: "test", AddedAt: now},
+	} {
+		if err := h.srv.Store.UpsertHubUser(u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.srv.Store.SetHubReach(store.HubReach{Owner: admin, Channel: store.ReachWeChatMP, Addr: "o-admin", Followed: true, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	asked := now.Add(-time.Minute).UTC().Format(time.RFC3339)
+	for _, pid := range []string{"gh:42", "gh:43"} {
+		setHubSetting(t, h.srv, MemberLimitsPrefix+pid, MemberLimits{Until: now.Add(48 * time.Hour), Tokens: 3_000_000}.String())
+		setHubSetting(t, h.srv, MemberUpgradePrefix+pid, asked)
+	}
+	h.srv.notifyUpgrade("gh:42")
+	h.srv.notifyUpgrade("gh:42")
+	h.srv.notifyPass(ctx, time.Now())
+	setHubSetting(t, h.srv, MemberUpgradePrefix+"gh:42", "")
+	h.srv.notifyUpgrade("gh:42")
+	h.srv.notifyPass(ctx, time.Now())
+	if ns, _ := h.srv.Store.NoticesOf(admin, store.NotifyKindUpgrade); len(ns) != 1 {
+		t.Fatalf("the admin's 转正 notices = %+v; want one", ns)
+	}
+	h.wb.mu.Lock()
+	if len(h.wb.tpl) != 1 {
+		h.wb.mu.Unlock()
+		t.Fatalf("templates sent = %d; want 1", len(h.wb.tpl))
+	}
+	b, _ := json.Marshal(h.wb.tpl[0])
+	if h.wb.tpl[0]["template_id"] != "tpl-newreq" || h.wb.tpl[0]["touser"] != "o-admin" ||
+		h.wb.tpl[0]["url"] != "https://fleet.example/admin/people/gh:42" ||
+		!strings.Contains(string(b), `"thing2":{"value":"bob · 转正"}`) || !strings.Contains(string(b), `"character_string10":{"value":"1"}`) {
+		h.wb.mu.Unlock()
+		t.Fatalf("template = %s", b)
+	}
+	h.wb.mu.Unlock()
+
+	// carol is made a member before her notice goes out: nothing to say
+	h.srv.notifyUpgrade("gh:43")
+	setHubSetting(t, h.srv, MemberLimitsPrefix+"gh:43", "")
+	h.srv.notifyPass(ctx, time.Now())
+	if tpl, _ := h.wb.sent(); tpl != 1 {
+		t.Fatalf("a member's stale ask was pushed: %d templates", tpl)
+	}
+	if n := h.notice(t, "nt-upgrade-gh:43-"+admin); n.State != store.NoticeUndelivered {
+		t.Fatalf("carol's notice = %+v", n)
+	}
+
+	en := upgradeMsg("gh:42", "bob", now, true, "https://fleet.example")
+	if en.Subject != "ClaudeFleet: bob asks to become a member" || !strings.Contains(en.Text, "https://fleet.example/admin/people/gh:42") {
+		t.Fatalf("english = %+v", en)
+	}
+	for k, v := range en.Tpl {
+		if strings.HasPrefix(k, "thing") && utf8.RuneCountInString(v) > 20 {
+			t.Fatalf("%s = %q over 20 runes", k, v)
+		}
+	}
+}

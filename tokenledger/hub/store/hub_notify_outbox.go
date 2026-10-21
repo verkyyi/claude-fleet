@@ -17,6 +17,9 @@ import (
 const (
 	NotifyKindReview = "review" // a request's result → its person
 	NotifyKindNewReq = "newreq" // requests waiting → an admin
+	// NotifyKindUpgrade is a trial member's 申请转正 → an admin; refs = the
+	// member's principal (claude-fleet T805).
+	NotifyKindUpgrade = "upgrade"
 )
 
 // The states of a notice.

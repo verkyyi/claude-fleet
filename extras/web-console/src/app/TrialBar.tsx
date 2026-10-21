@@ -3,8 +3,10 @@
 // 已用 12 万 / 300 万 tokens · 同时 1 个会话」. A day or less left, or 80 % of the
 // tokens used, turns it clay; ended or used up, red, saying why. From 将到期 on
 // it offers 申请转正 (POST /v1/me/trial/upgrade), which marks the person's row
-// in the admin's 成员 list; asked, it says so. Off /v1/me/usage's `trial`;
-// nothing when the person is on no trial.
+// in the admin's 成员 list and tells every admin on WeChat (T805); asked, it
+// says so. Before that the 用量 page carries a quiet 申请转正 of its own
+// (UpgradeAsk). Off /v1/me/usage's `trial`; nothing when the person is on no
+// trial.
 import { useState, type FC } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -35,6 +37,32 @@ function trialWhy(t: Trial): string {
   return "";
 }
 
+// askUpgrade is 申请转正, said as a toast; both entries go through it.
+export async function askUpgrade(trial: Trial, onAsked: (t: Trial) => void) {
+  const r = await sendJSON<{ upgrade_asked: string }>("POST", "/v1/me/trial/upgrade", {});
+  if (r.ok) {
+    onAsked({ ...trial, upgrade_asked: r.data.upgrade_asked });
+    toast.success(tr("已提交转正申请，管理员会尽快处理", "Asked — an admin will take it from here"));
+  } else toast.error(r.error || tr("没提交上，稍后再试", "Could not send it — try again later"));
+}
+
+// UpgradeAsk: the 用量 page's quiet 申请转正 while the trial runs normally —
+// one muted line under the limit; asked, it says so.
+export const UpgradeAsk: FC<{ trial: Trial; onAsked: (t: Trial) => void }> = ({ trial, onAsked }) => {
+  const [busy, setBusy] = useState(false);
+  if (trial.upgrade_asked)
+    return <p className="text-muted-foreground px-1 text-xs" data-upgrade="asked">{tr(`已于 ${fmtWhen(trial.upgrade_asked)} 申请转正，等管理员处理`, `Asked to become a member ${fmtWhen(trial.upgrade_asked)} — waiting on an admin`)}</p>;
+  return (
+    <p className="text-muted-foreground px-1 text-xs" data-upgrade="ask">
+      {tr("想一直用下去？", "Want to keep using it?")}{" "}
+      <button type="button" className="underline underline-offset-2 hover:text-foreground disabled:opacity-50" disabled={busy || !!viewAs}
+        onClick={async () => { setBusy(true); await askUpgrade(trial, onAsked); setBusy(false); }}>
+        {tr("申请转正", "Ask to become a member")}
+      </button>
+    </p>
+  );
+};
+
 export const TrialBar: FC<{ trial: Trial | null; onAsked: (t: Trial) => void }> = ({ trial, onAsked }) => {
   const [busy, setBusy] = useState(false);
   if (!trial) return null;
@@ -42,12 +70,8 @@ export const TrialBar: FC<{ trial: Trial | null; onAsked: (t: Trial) => void }> 
   const soon = trial.state === "soon";
   const ask = async () => {
     setBusy(true);
-    const r = await sendJSON<{ upgrade_asked: string }>("POST", "/v1/me/trial/upgrade", {});
+    await askUpgrade(trial, onAsked);
     setBusy(false);
-    if (r.ok) {
-      onAsked({ ...trial, upgrade_asked: r.data.upgrade_asked });
-      toast.success(tr("已提交转正申请，管理员会尽快处理", "Asked — an admin will take it from here"));
-    } else toast.error(r.error || tr("没提交上，稍后再试", "Could not send it — try again later"));
   };
   return (
     <div role="status" data-trial={trial.state}
