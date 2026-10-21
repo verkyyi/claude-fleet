@@ -149,7 +149,7 @@ def panel(h):
 want, _ = panel("B")
 assert any(r[0] == "hdr" for r in want), want
 drv = [r for r in want if r[1] == D]
-assert drv and json.loads(drv[0][8]) == {"done": 1, "total": 2, "needs": 1, "fail": 0}, want
+assert drv and json.loads(drv[0][8]) == {"done": 1, "total": 2, "rows": 2, "needs": 1, "fail": 0}, want
 
 # --- B: home A, nothing cached — a placeholder, the IDs asked for in the background
 got, it = panel("A")
