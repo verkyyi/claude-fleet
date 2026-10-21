@@ -40,6 +40,9 @@ var chatRoutes = map[string]string{
 	"turn":         http.MethodPost,
 	"stop":         http.MethodPost,
 	"answer":       http.MethodPost,
+	// 在这里继续 (claude-fleet T810): the page takes the conversation back from
+	// an idle terminal session; the home refuses while the terminal answers
+	"take": http.MethodPost,
 	// an image the conversation holds (task T773), by its ref — never a path
 	"file": http.MethodGet,
 }

@@ -139,7 +139,9 @@ class Cleaner:
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
                  "@task", "@task_flow", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid",
                  # T694 (回收 B): where it came from, and what keeps it
-                 "@reap_keep_by", "@reap_origin", "@origin_wid", "@reap_unreported")
+                 "@reap_keep_by", "@reap_origin", "@origin_wid", "@reap_unreported",
+                 # T810: handed to WebChat — the window is the way back (↵), kept
+                 "@handoff_web")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -182,6 +184,8 @@ class Cleaner:
         B — fleet_reap_policy.effective): a pinned window or an orchestrator is
         `keep` whatever is stamped; a `keep` the session set for itself lapses to
         `merged` once its work is over."""
+        if snap.get("@handoff_web") == "1":
+            return fleet_reap_policy.parse("keep")
         raw = snap["@reap_policy"]
         selfkeep = raw.strip() == "keep" and snap.get("@reap_keep_by") == "session"
         eff = fleet_reap_policy.effective(raw, snap.get("@pin", ""), snap.get("@agent_def", ""),
@@ -1072,7 +1076,7 @@ class Cleaner:
     def room_tier(self, window, snap, shown, here):
         """0 done · 1 idle long enough · None never folded to make room."""
         pol = self.policy(snap)
-        if (snap["@pin"] == "1" or snap["@agent_def"] in self.KEEP_DEFS
+        if (snap["@pin"] == "1" or snap.get("@handoff_web") == "1" or snap["@agent_def"] in self.KEEP_DEFS
                 or (pol is not None and pol[0] == "keep")
                 or snap["@norepo"] == "1" or snap["@fleet_role"] in ("home", "panel")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")

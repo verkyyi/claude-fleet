@@ -144,7 +144,7 @@ st_ok_all "A  every sidebar menu item is an action here (or row-less, C2 / C7); 
 # --- B: which actions a row gets -----------------------------------------------------
 ids() { qo view-menu --view fl@view-v1 "$1" | awk -F '\t' '{ print $1 }' | tr '\n' ' '; }
 m1=$(ids "$W1")
-for a in enter shell pr message rename pin reappol stop agent reap; do
+for a in enter shell pr message rename pin reappol stop agent webchat reap; do
   case " $m1 " in *" $a "*) ;; *) st_fail "B: done row lacks $a: $m1" ;; esac
 done
 for a in answer wake awake resume sub; do case " $m1 " in *" $a "*) st_fail "B: done row has $a: $m1" ;; esac; done
@@ -159,7 +159,8 @@ grep -q $'^resume\t恢复' <<< "$m3" || st_fail "B: ended exited row lacks 恢�
 # 换 Codex on another machine's row (issue #4184): its hub writes; pr stays this
 # machine's (no PR on a far row). No 换账号 / 换到可用订阅 on any row since T550:
 # the pool picks.
-[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent reap " ] || st_fail "B: another machine's row: $(ids "$MU/far1")"
+# 在 WebChat 里继续 (T810) is listed there too, grey: page_of says why (not this login's)
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent webchat reap " ] || st_fail "B: another machine's row: $(ids "$MU/far1")"
 mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
 grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || st_fail "B: a far row's agent item: $mf"
 grep -q '换到可用订阅\|换账号' <<< "$mf$(qo view-menu --view fl@view-v1 "$W1")" && st_fail "B: a row still offers 换账号 / 换到可用订阅 (T550): $mf"

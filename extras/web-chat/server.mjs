@@ -92,6 +92,12 @@ const PROJECTS = join(E.CLAUDE_CONFIG_DIR || join(E.HOME || "", ".claude"), "pro
 const IDLE_SECS = Number(E.FLEET_WEBCHAT_IDLE_SECS ?? 7200);
 const IDLE_RC = 75;
 const CARRY = join(STATE, "transcripts");
+// The terminal and this page taking turns on one conversation (task T810): who
+// holds it is bin/fleet-convo-lock.py's record, <dir>/<agent>-<sid>.json (read
+// here, written only by that script and bin/fleet-webchat-handoff.sh, which also
+// reads whether the terminal is answering). No record = never handed over.
+const HANDOFF = E.FLEET_WEBCHAT_HANDOFF || join(HERE, "../../bin/fleet-webchat-handoff.sh");
+const LOCK_DIR = E.FLEET_WEBCHAT_LOCKDIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "convo-lock");
 // The page is the built UI (issue #3637): ui/dist, made by `npm run build` in
 // extras/web-chat/ui and committed — served from here, every byte local.
 const UI = E.FLEET_WEBCHAT_UI || join(HERE, "ui", "dist");
@@ -480,6 +486,60 @@ async function conversationItems() {
   if (conv.session) out.push(...await readItems(conv.session, conv.cwd));
   saveRefs();
   return capImages(out);
+}
+
+// ---- the terminal ⇄ this page (task T810) --------------------------------------
+function lockHolder() {
+  if (!conv.session) return "";
+  try { return JSON.parse(readFileSync(join(LOCK_DIR, `claude-${conv.session}.json`), "utf8")).holder || ""; } catch { return ""; }
+}
+let ownerSeen = { at: 0, v: null };
+// the terminal holds it: where, and whether it is answering (read live, ≤ 1 s old)
+async function ownerNow() {
+  if (lockHolder() !== "terminal") return null;
+  if (Date.now() - ownerSeen.at < 1000) return ownerSeen.v;
+  const r = await run(HANDOFF, ["owner", "--agent", "claude", "--sid", conv.session]);
+  let o = null;
+  try { const j = JSON.parse(r.stdout); if (j.holder === "terminal") o = { where: "terminal", busy: !!j.busy, label: j.label || "", machine: j.machine || "", agent: "claude" }; } catch { /* none */ }
+  ownerSeen = { at: Date.now(), v: o };
+  return o;
+}
+// a session's transcript wherever Claude Code put it, and the cwd it ran in
+async function findTranscript(id) {
+  let dirs = [];
+  try { dirs = await fsp.readdir(PROJECTS); } catch { return null; }
+  for (const d of dirs) {
+    const f = join(PROJECTS, d, `${id}.jsonl`);
+    let raw; try { raw = await fsp.readFile(f, "utf8"); } catch { continue; }
+    for (const line of raw.split("\n")) {
+      if (!line.includes('"cwd"')) continue;
+      try { const m = JSON.parse(line); if (typeof m.cwd === "string" && m.cwd) return { file: f, cwd: m.cwd }; } catch { /* next */ }
+    }
+  }
+  return null;
+}
+// 在 WebChat 里继续: the terminal's session becomes this page's Claude conversation;
+// the one it had is put away and kept, the same rule as 新对话
+async function adoptConv(body) {
+  const agent = String(body?.agent || "claude"), id = String(body?.session || "");
+  if (agent !== "claude") return [409, "WebChat has no Codex yet", "no_codex"];
+  if (!SID_RE.test(id)) return [400, "not a session id"];
+  if (live || maint) return [409, "还在回复上一句", "busy"];
+  if (id === conv.session) return [200, "already"];
+  const t = await findTranscript(id);
+  if (!t) return [404, "no transcript for this session here"];
+  if (warmOpening) await warmOpening.catch(() => {});
+  closeWarm("adopt");
+  // put away and kept — 新对话's own rule (R9A2's newClaude): never lost
+  const putAway = [...(conv.put_away || []), ...(conv.session || conv.chain.length
+    ? [{ session: conv.session, cwd: conv.cwd, chain: conv.chain, at: new Date().toISOString() }] : [])].slice(-200);
+  const label = String(body?.label || "").slice(0, 80);
+  conv = { session: id, cwd: t.cwd, chain: [], seed: "", ctx: { used: 0, window: conv.ctx.window }, home: E.HOME || "", ctxKey: "",
+    note: "", last: "", put_away: putAway, handed: { from: "terminal", label, at: new Date().toISOString() } };
+  saveConv();
+  carryOut();
+  log("adopted", { label, machine: String(body?.machine || "").slice(0, 60) });
+  return [200, "adopted"];
 }
 
 // ---- the one conversation ------------------------------------------------------
@@ -917,6 +977,7 @@ async function turn(req, res, person) {
   const model = body.model == null || body.model === "" ? DEFAULT_MODEL : String(body.model);
   if (!modelAllowed(model)) { log("model_refused", { model: model.slice(0, 64) }); return send(res, 400, { error: "model not allowed" }); }
   if (live) return send(res, 409, { error: "还在回复上一句" });
+  if (lockHolder() === "terminal") return send(res, 409, { error: "这段对话在终端里", code: "terminal" });
   const S = await sdk().catch((e) => e);
   if (S instanceof Error) return send(res, 503, { error: S.message });
   // where the person is talking from (issue #4034): the page's own report + the
@@ -1013,7 +1074,9 @@ async function turn(req, res, person) {
         if (seed) conv.seed = "";
         if (head) conv.ctxKey = where.key;
         if (note) conv.note = WEB_NOTE_V;
-        if (seed || head || note) saveConv();
+        const handed = !!conv.handed;                     // said once: the first turn here ends it
+        if (handed) delete conv.handed;
+        if (seed || head || note || handed) saveConv();
         break;
       } catch (e) {
         if (attempt === 0 && !live.ac.signal.aborted && (e.tooLong || TOO_LONG.test(String(e?.message || e)))) {
@@ -1203,9 +1266,11 @@ async function handle(req, res) {
   if (p === "/api/new" && req.method === "POST") { const ok = newClaude(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
   if (p === "/api/conversation" && req.method === "GET") {
     // a page reading the conversation is about to talk: have the credential ready
-    if (SDK_PATH && !live) { credFor().catch(() => {}); prewarm(); }
+    const owner = await ownerNow();
+    if (SDK_PATH && !live && !owner) { credFor().catch(() => {}); prewarm(); }
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",
+      ...(owner ? { owner } : {}), ...(conv.handed && !owner ? { handed: conv.handed } : {}),
       asks: live ? [...live.asks.entries()].map(([rid, a]) => askEvent(rid, a)) : [],
       models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600),
       last: conv.last || "", ...(codex.available() ? { providers: sides().providers, others: { codex: codex.side() } } : {}) });
@@ -1219,6 +1284,26 @@ async function handle(req, res) {
   if (SOCKET && p === "/api/import" && req.method === "POST") {
     const [code, msg] = await importConv(await readJson(req, EXPORT_MAX + 1024 * 1024));
     return send(res, code, code === 200 ? { ok: true, msg } : { error: msg });
+  }
+  // the terminal ⇄ this page (task T810): adopt / state / release are this
+  // machine's own (fleet-webchat-handoff.sh over the socket); take is the page's
+  if (SOCKET && p === "/api/state" && req.method === "GET") return send(res, 200, { busy: !!live || !!maint, session: conv.session });
+  if (SOCKET && p === "/api/adopt" && req.method === "POST") {
+    const [code, msg, why] = await adoptConv(await readJson(req));
+    return send(res, code, code === 200 ? { ok: true, msg } : { error: msg, ...(why ? { code: why } : {}) });
+  }
+  if (SOCKET && p === "/api/release" && req.method === "POST") {
+    const b = await readJson(req);
+    if (String(b.session || "") === conv.session) { closeWarm("terminal took it"); ownerSeen = { at: 0, v: null }; }
+    return send(res, 200, { ok: true });
+  }
+  if (p === "/api/take" && req.method === "POST") {
+    if (!conv.session) return send(res, 404, { error: "no conversation" });
+    const r = await run(HANDOFF, ["to-webchat-take", "--agent", "claude", "--sid", conv.session]);
+    ownerSeen = { at: 0, v: null };
+    const said = (r.stderr || r.stdout || "").trim().split("\n").pop();
+    if (r.rc === 0) { log("taken"); return send(res, 200, { ok: true }); }
+    return send(res, r.rc === 3 ? 409 : 500, { error: said || "could not take it over", ...(r.rc === 3 ? { code: "terminal_busy" } : {}) });
   }
   if (p === "/api/stop" && req.method === "POST") {
     const ok = !!live && String((await readJson(req)).turn || "") === live.tid;
