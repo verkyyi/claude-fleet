@@ -57,7 +57,12 @@
 //      bytes in the JSON; /api/file serves each by its ref (its type, a sandbox CSP, kept
 //      0600 under a 0700 media/), a ref that is not one 404s; one over the size bound is
 //      {big:true}; past the per-reply bound the rest are counted on one image_more
-//   --only=socket|budget|context|home|idle|trial|media|local (comma list) runs those parts only — the drills' road.
+//   Q  the home's files a reply links to (task T773 ②): a file under $HOME / the session's dir
+//      gets an opaque ref ({t:"files"} after the text, live and read back) — never its path
+//      on the wire; ~/.ssh, a secret's name, a link out of $HOME, a missing file get none;
+//      /api/file serves an image as itself, HTML as a download under a sandbox CSP; an
+//      expired ref says so (410); a file that became a link out is refused at the read
+//   --only=socket|budget|context|home|idle|trial|media|links|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -75,7 +80,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,links,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -155,6 +160,16 @@ async function* one(prompt, options) {
     const tr2 = { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu-pic", content: [{ type: "text", text: "读了" }, png("one")] }] } };
     const tr3 = { type: "assistant", message: { content: [{ type: "text", text: "看图" }, png("two"), png("x".repeat(400)), png("one")] } };
     for (const m of [tr1, tr2, tr3]) { appendFileSync(tr, JSON.stringify(m) + "\\n"); yield { ...m, session_id: SID }; }
+    yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
+    return;
+  }
+  if (prompt === "link") {               // links (Q): the reply names files on this machine
+    const H = env.HOME;
+    const text = "改好了：[form.css](" + H + "/proj/form.css)、![shot](~/proj/shot.png)、[页面](proj/page.html)、" +
+      "[钥匙](" + H + "/.ssh/id_rsa)、[密](" + H + "/proj/.env)、[外](" + H + "/proj/out.txt)、[无](" + H + "/proj/none.txt)、[网](https://example.com/a)";
+    const m = { type: "assistant", message: { content: [{ type: "text", text }] } };
+    appendFileSync(tr, JSON.stringify(m) + "\\n");
+    yield { ...m, session_id: SID };
     yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
     return;
   }
@@ -509,6 +524,59 @@ if (part("media")) {
     ok(th.length >= 1, `P a later read carries the small preview (thumb) the entry's copy keeps (${th.length})`);
   } else console.log("note P: no sips / ImageMagick here — no previews to check");
   await sstop(m);
+}
+// ---- Q: the home's files a reply links to (task T773 ②) ---------------------------------
+if (part("links")) {
+  const H = homeOf("l");
+  for (const d of ["proj", ".ssh"]) mkdirSync(join(H, d), { recursive: true });
+  writeFileSync(join(H, "proj", "form.css"), ".row{align-items:center}");
+  writeFileSync(join(H, "proj", "shot.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+  writeFileSync(join(H, "proj", "page.html"), "<script>alert(1)</script>");
+  writeFileSync(join(H, ".ssh", "id_rsa"), "KEY");
+  writeFileSync(join(H, "proj", ".env"), "TOKEN=x");
+  const outside = join(HT, "outside.txt"); writeFileSync(outside, "outside");
+  spawnSync("ln", ["-s", outside, join(H, "proj", "out.txt")]);
+  SSTATE = stateOf("l"); SOCK = join(SSTATE, "chat.sock");
+  const l = (await sstart(["--socket"], { ...asHome("l"), FLEET_WEBCHAT_CWD: H })).p;
+  const live = (await sturn("link")).lines;
+  const files = live.find((o) => o.t === "files")?.files || {};
+  const H2 = realpathSync(H);
+  ok(Object.keys(files).sort().join(" ") === [H + "/proj/form.css", "~/proj/shot.png", "proj/page.html"].sort().join(" ") ||
+     Object.keys(files).sort().join(" ") === [H2 + "/proj/form.css", "~/proj/shot.png", "proj/page.html"].sort().join(" "),
+    `Q live: a ref for the three files under $HOME, none for a key, a secret's name, a link out, a missing file, a URL (${Object.keys(files).join(" ")})`);
+  ok(Object.values(files).every((r) => /^f[0-9a-f]{32}$/.test(r)) && !JSON.stringify(live.filter((o) => o.t === "files")).includes("/proj/form.css\":\"/"),
+    "Q the refs are opaque");
+  const get = (ref) => new Promise((resolve, reject) => {
+    const r = http.request({ socketPath: SOCK, path: "/api/file?ref=" + ref, headers: { Host: "webchat" } }, (res) => {
+      const parts = []; res.on("data", (d) => parts.push(d)); res.on("end", () => resolve({ status: res.statusCode, h: res.headers, body: Buffer.concat(parts).toString() }));
+    });
+    r.on("error", reject); r.end();
+  });
+  const byName = (n) => Object.entries(files).find(([k]) => k.endsWith(n))?.[1];
+  const css = await get(byName("form.css"));
+  ok(css.status === 200 && css.body === ".row{align-items:center}" && /attachment/.test(css.h["content-disposition"] || ""), "Q a CSS file comes back as a download");
+  const png = await get(byName("shot.png"));
+  ok(png.status === 200 && png.h["content-type"] === "image/png" && /inline/.test(png.h["content-disposition"] || ""), "Q an image comes back as itself");
+  const html = await get(byName("page.html"));
+  ok(html.status === 200 && html.h["content-type"] === "application/octet-stream" && /attachment/.test(html.h["content-disposition"] || "") &&
+    /sandbox/.test(html.h["content-security-policy"] || ""), "Q an HTML file is only a download, under a sandbox CSP");
+  ok((await get("f" + "0".repeat(32))).status === 404, "Q a ref nobody was given: 404");
+  const back = JSON.parse((await sreq("/api/conversation")).body).items.find((i) => i.t === "files");
+  ok(back && back.files[Object.keys(files)[0]] === files[Object.keys(files)[0]], "Q read back: the same refs");
+  // the file turned into a link out of $HOME after it was given: refused at the read
+  unlinkSync(join(H, "proj", "form.css")); spawnSync("ln", ["-s", outside, join(H, "proj", "form.css")]);
+  ok((await get(byName("form.css"))).status === 404, "Q a file that became a link out of $HOME is refused at the read");
+  await sstop(l);
+  // expired: the refs written with a date in the past
+  const refsF = join(SSTATE, "refs.json");
+  const refs = JSON.parse(readFileSync(refsF, "utf8"));
+  ok((statSync(refsF).mode & 0o777) === 0o600 && !Object.values(refs).some((v) => /id_rsa|\.env|outside/.test(v.path)), "Q refs.json is 0600 and holds no denied path");
+  for (const v of Object.values(refs)) v.exp = Date.now() - 1000;
+  writeFileSync(refsF, JSON.stringify(refs));
+  const l2 = (await sstart(["--socket"], { ...asHome("l"), FLEET_WEBCHAT_CWD: H })).p;
+  const ex = await get(byName("shot.png"));
+  ok(ex.status === 410 && /过期/.test(ex.body), `Q an expired ref says so (${ex.status})`);
+  await sstop(l2);
 }
 if (!part("local")) {
   proxy.close();

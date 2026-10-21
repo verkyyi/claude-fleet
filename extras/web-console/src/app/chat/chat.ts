@@ -24,6 +24,8 @@ type Item =
   // copy beside the entry carries only its preview (thumb); big = over the bound
   | { t: "image"; id?: string; ref?: string; w?: number; h?: number; thumb?: string; big?: boolean }
   | { t: "image_more"; n: number }
+  // the home's files the reply before it links to (task T773 ②): target as written → ref
+  | { t: "files"; files: Record<string, string> }
   | { t: "text"; d: string }
   | { t: "tool"; id: string; name: string; summary?: string }
   | { t: "tool_result"; id: string; text?: string; error?: boolean }
@@ -33,6 +35,14 @@ type Item =
 type Pic = { ref?: string; w?: number; h?: number; thumb?: string };
 // where the page reads an image: the home's file by its ref, else the copy's preview
 const picSrc = (g: Pic) => (g.ref ? `${API}/file?ref=${encodeURIComponent(g.ref)}` : g.thumb || "");
+// a reply's Markdown link / image target the home gave a ref for → that file's address
+function linkFiles(text: string, files: Map<string, string>) {
+  if (!files.size) return text;
+  return text.replace(/\]\(\s*<?([^)\s<>]+)>?((?:\s+"[^"]*")?\s*)\)/g, (all, target: string, rest: string) => {
+    const ref = files.get(target);
+    return ref ? `](${API}/file?ref=${encodeURIComponent(ref)}${rest})` : all;
+  });
+}
 
 type Question = {
   question: string;
@@ -71,6 +81,8 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
   const out: Msg[] = [];
   let cur: Msg | null = null;
   const tools = new Map<string, Record<string, unknown>>();
+  const files = new Map<string, string>();
+  for (const it of items) if (it.t === "files") for (const [k, v] of Object.entries(it.files || {})) files.set(k, v);
   const assistant = (i: number) => {
     if (!cur) { cur = { id: `a${i}`, role: "assistant", content: [] }; out.push(cur); }
     return cur;
@@ -87,8 +99,8 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
       case "text": {
         const m = assistant(i);
         const last = m.content[m.content.length - 1] as { type: string; text?: string } | undefined;
-        if (last?.type === "text") m.content[m.content.length - 1] = { type: "text", text: (last.text || "") + it.d };
-        else m.content.push({ type: "text", text: it.d });
+        if (last?.type === "text") m.content[m.content.length - 1] = { type: "text", text: linkFiles((last.text || "") + it.d, files) };
+        else m.content.push({ type: "text", text: linkFiles(it.d, files) });
         break;
       }
       case "tool": {
