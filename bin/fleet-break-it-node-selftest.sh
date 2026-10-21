@@ -56,6 +56,9 @@
 #                         one / retired while a registered task of it still runs
 #   task-fail-silent      bin/fleet-node-supervisor.py's agent tasks + bin/fleet-task-run.sh
 #                         (#2529): a scheduled agent task's session will not open, every try
+#   task-window-never-reaped bin/fleet-task-run.sh + bin/fleet-cleanup-idle.py norepo()
+#                         (T862): a scheduled task's finished session stayed open for good —
+#                         read as a person's home session, it waited for an /exit
 #   service-failed-unseen bin/fleet-services.py (#2526): a registered service that
 #                         keeps dying reads red in the doctor + the alert bar
 #   services-elsewhere-rollback bin/fleet-services.py --doctor (#3978): the same person's
@@ -425,6 +428,29 @@ drill_tcc_disclaim_sigpipe() {
   [ "$rc" = 0 ] && [ "${#out}" = 24 ] || { WHY="gen_password with SIGPIPE ignored: rc $rc, out '$out'"; return 1; }
   SECS=$(since "$t0")
   WHAT="经 fleet-tcc-disclaim.py 起的脚本 SIGPIPE 是默认处置：\`tr </dev/urandom | head -c 1\` ≤ 1 秒结束；gen_password 即使在忽略 SIGPIPE 时也有界、照样出 24 位"
+}
+
+drill_task_window_never_reaped() {
+  CAP=10
+  local sb t0 pol
+  sb="$WORK/taskreap"; mkdir -p "$sb"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf "@7\\tdaily\\t\\tfid\\n"\n' "$sb" > "$sb/spawn.sh"
+  chmod +x "$sb/spawn.sh"
+  t0=$(now)
+  FLEET_TASK_SPAWN="$sb/spawn.sh" FLEET_TASK_PROMPT=/daily-report FLEET_TASK_WINDOW=daily-2026-10-21 \
+    FLEET_TASK_FLEET=drill-sandbox FLEET_SERVICE=daily bash "$BIN/fleet-task-run.sh" >"$sb/run.out" 2>&1 \
+    || { WHY="the run failed: $(tail -2 "$sb/run.out" | tr '\n' ' ')"; return 1; }
+  # the spawn must say where it came from: a scheduled task is a probe, never a person's own
+  grep -A1 -x -- '--reap-origin' "$sb/argv" | grep -qx probe \
+    || { WHY="no --reap-origin probe on the spawn: $(tr '\n' ' ' < "$sb/argv")"; return 1; }
+  pol=$(grep -A1 -x -- '--reap' "$sb/argv" | tail -1)
+  [ "$pol" = done:15m ] || { WHY="the spawn's policy is '$pol', not done:15m"; return 1; }
+  # and the reaper's own reading: a probe with no @origin is nobody's home session
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_reap_policy as p
+assert p.origin_of(stamp="probe") == "probe" and p.origin_of() == "person"' "$BIN" 2>"$sb/py.err" \
+    || { WHY="origin_of: $(tail -1 "$sb/py.err")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="定时 agent 任务开的会话带 --reap-origin probe --reap done:15m：收割器不再当它是人的主会话等 /exit，做完 15 分钟收起；没有来源的人自己的会话照旧只在退出后收"
 }
 
 drill_task_fail_silent() {

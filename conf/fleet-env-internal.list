@@ -644,6 +644,7 @@ FLEET_TASK_WINDOW                  handoff: the session's window name for this a
 FLEET_TASK_DONE_FILE               handoff: done_when.file, the output a run must leave (empty = opening the session is success), daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_TIMEOUT                 handoff: the entry's timeout (s) for a run with a done file, daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_IDLE                    handoff: the entry's idle (s): a session not working that long without its done file has failed, daemon → fleet-task-run.sh (#2529)
+FLEET_TASK_REAP                    knob: an agent task session's reap policy (default done:15m), spawned --reap-origin probe so a finished turn closes it (fleet-task-run.sh, T862)
 FLEET_TASK_FLEET                   handoff: the entry's fleet (empty = the login's only one), daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_ATTEMPT                 handoff: the attempt number of this slot, daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_SLOT                    handoff: the slot's day (YYYY-MM-DD), daemon → fleet-task-run.sh (#2529)
