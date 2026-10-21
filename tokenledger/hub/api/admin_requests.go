@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -288,7 +289,26 @@ func (s *Server) trialConvoUntil(pid string) *time.Time { return nil }
 // with a new member's defaults; the way hung on them. Approving one that is
 // approved already runs the admission again (a retry after a failure half
 // way) and decides nothing twice.
+//
+// The body may carry {"limits": "days=7,usd=20,sessions=1"} — or "off" for a
+// full member — in place of fleet.apply.trial (claude-fleet T789); an empty
+// body takes the setting.
 func (s *Server) adminRequestApprove(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Limits string `json:"limits"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			httpError(w, http.StatusBadRequest, `the body is empty or {"limits": "days=7,usd=20,sessions=1" | "off"}`)
+			return
+		}
+	}
+	if body.Limits != "" {
+		if _, err := parseTrialTerms(body.Limits); err != nil {
+			httpError(w, http.StatusBadRequest, "limits: "+err.Error())
+			return
+		}
+	}
 	now := time.Now()
 	by := principalOf(r.Context())
 	rq := s.Store.Requests()
@@ -318,10 +338,25 @@ func (s *Server) adminRequestApprove(w http.ResponseWriter, r *http.Request, id 
 		req = got
 		_ = s.Store.HubAudit(by, "request.approve", target, "ok", req.ID, now)
 	}
-	if _, err := s.admitRequest(req, by, now); err != nil {
+	// Only a newcomer starts with limits: an existing member's request
+	// (another way in) changes none of theirs.
+	newcomer := true
+	if pre, err := s.Store.IdentityPrincipal(req.Kind, req.Subject); err == nil && pre != "" {
+		if role, err := s.personRole(pre); err == nil && role != "" && role != roleTrial {
+			newcomer = false
+		}
+	}
+	pid, err := s.admitRequest(req, by, now)
+	if err != nil {
 		log.Printf("approve %s: %v", req.ID, err)
 		_ = s.Store.HubAudit(by, "user.add", target, "error", req.ID+": "+err.Error(), now)
 		httpError(w, http.StatusInternalServerError, "approved, but putting them on the list failed — approve again: "+err.Error())
+		return
+	}
+	if !newcomer {
+	} else if err := s.writeMemberLimits(pid, body.Limits, by, now); err != nil {
+		log.Printf("approve %s: limits: %v", req.ID, err)
+		httpError(w, http.StatusInternalServerError, "approved, but recording their limits failed — approve again: "+err.Error())
 		return
 	}
 	s.notifyResult(req)
@@ -376,6 +411,10 @@ func (s *Server) admitRequest(req *store.AccessRequest, by string, now time.Time
 	}
 	// Their trial turns over: the conversation goes on (claude-fleet#4059).
 	s.convertTrial(pid, req.Display, by, now)
+	// One who never had a trial gets the same subscriptions a converted
+	// trial does (claude-fleet T789): in strict mode «no list» is none, and
+	// their new home answered every turn with the proxy's 403.
+	s.trialCredOnConvert(pid, by, now)
 	_ = s.Store.HubAudit(by, "user.add", target, "ok", "as user, request "+req.ID, now)
 	return pid, nil
 }

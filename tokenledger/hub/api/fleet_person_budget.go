@@ -131,6 +131,11 @@ type PersonBudgetState struct {
 	ResetAt     *time.Time `json:"reset_at,omitempty"`
 	Error       string     `json:"error,omitempty"`   // person_budget_exceeded, when over
 	Message     string     `json:"message,omitempty"` // the line the session shows
+	// A trial member's limits (claude-fleet T789): when the trial ends, its
+	// dollar ceiling and what their pool usage since approval comes to.
+	TrialUntil    *time.Time `json:"trial_until,omitempty"`
+	TrialUSD      float64    `json:"trial_usd,omitempty"`
+	TrialSpentUSD float64    `json:"trial_spent_usd,omitempty"`
 }
 
 func (s *Server) budgetClock() time.Time {
@@ -181,6 +186,11 @@ func (s *Server) personBudgetStates(principal string, now time.Time) ([]PersonBu
 		for id := range by {
 			seen[id] = true
 		}
+		for k := range settings {
+			if strings.HasPrefix(k, MemberLimitsPrefix) {
+				seen[k[len(MemberLimitsPrefix):]] = true
+			}
+		}
 		for id := range seen {
 			ids = append(ids, id)
 		}
@@ -188,7 +198,11 @@ func (s *Server) personBudgetStates(principal string, now time.Time) ([]PersonBu
 	}
 	out := make([]PersonBudgetState, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, budgetState(id, budgets[id], by[id], now))
+		st := budgetState(id, budgets[id], by[id], now)
+		if l, ok := memberLimitsOf(settings, id); ok {
+			s.applyMemberLimits(&st, l, now)
+		}
+		out = append(out, st)
 	}
 	return out, nil
 }

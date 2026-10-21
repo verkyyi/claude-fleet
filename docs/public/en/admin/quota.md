@@ -79,6 +79,15 @@ Self-hosted, with the operator token, `fleet config budget` works too: with no a
 
 **Quota is counted only when a session goes through the credential proxy.** On hosted machines it is on for every account by default; on a self-hosted machine an admin runs `fleet cred-proxy enable --machine` once — every account becomes a tenant of the machine's one proxy. An account not on it is neither counted nor stopped.
 
+## A new member's trial limits
+
+A person let in through an approved request starts with trial limits: **7 days**, **$20** of shared-pool usage priced at API rates, and **1 session at a time**. Past the end or the dollars, their next request is refused and their session says which ("试用期已于 … 结束" / "试用额度已用完"); a start past the session count is refused with the reason.
+
+- The default: `fleet hub set fleet.apply.trial "days=7,usd=20,sessions=1"`; `off` approves a full member with no limits.
+- Per approval: the approve request's body carries `{"limits": "days=14,usd=50,sessions=2"}`, or `"off"`.
+- Afterwards: `fleet hub set fleet.member_limits.<principal> "until=2026-11-01T00:00:00Z,usd=50,sessions=2"`; `fleet hub unset fleet.member_limits.<principal>` makes them a full member.
+- Approving again never resets limits already written.
+
 ## Seeing who used how much
 
 - **Usage by person** (admins): each person's usage today and over 7 days, their personal limit, what they mostly work on, how many sessions; open a row to see which subscriptions and machines they used.

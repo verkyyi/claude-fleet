@@ -192,7 +192,7 @@ func (s *Server) handleTermHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || home.Machine == "" || home.Login == "" {
-		refuseJSON(w, http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
+		refuseJSON(w, http.StatusConflict, "no_home", s.noHomeWhy(person))
 		return
 	}
 	if peer, ok := s.termRelayPeer(r, home.Machine, home.Login); ok {
@@ -249,7 +249,7 @@ func (s *Server) handleTermConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || home.Machine == "" || home.Login == "" {
-		s.termRefuse(w, person, "connect", http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
+		s.termRefuse(w, person, "connect", http.StatusConflict, "no_home", s.noHomeWhy(person))
 		return
 	}
 	logical, target, dest, status, code, msg := s.termTarget(r.URL.Query(), home)

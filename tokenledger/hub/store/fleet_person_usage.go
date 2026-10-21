@@ -89,3 +89,30 @@ func (s *Store) PersonUsageSince(principal string, since time.Time) ([]PersonUsa
 	}
 	return out, rows.Err()
 }
+
+// PersonModelUsage is one person's pool usage for one model, by kind.
+type PersonModelUsage struct {
+	Provider, Model                string
+	In, CacheWrite, CacheRead, Out int64
+}
+
+// PersonModelUsageSince sums principal's pool_usage at or after since, per
+// (provider, model) — what a member's dollar limit prices (claude-fleet T789).
+func (s *Store) PersonModelUsageSince(principal string, since time.Time) ([]PersonModelUsage, error) {
+	rows, err := s.write.Query(`SELECT provider, model, SUM(tokens_in), SUM(cache_write), SUM(cache_read), SUM(tokens_out)
+		FROM pool_usage WHERE principal = ? AND at_unix >= ? GROUP BY provider, model ORDER BY provider, model`,
+		principal, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PersonModelUsage
+	for rows.Next() {
+		var r PersonModelUsage
+		if err := rows.Scan(&r.Provider, &r.Model, &r.In, &r.CacheWrite, &r.CacheRead, &r.Out); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

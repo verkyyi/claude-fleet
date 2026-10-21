@@ -150,6 +150,11 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		// its claim, in line order, and only into a ready spare.
 		return nil
 	}
+	if s.placesOne() && s.holdsLogin(principal) {
+		// least-busy opens ONE login (claude-fleet T789): every sign-in
+		// picked the least busy machine again and opened another there.
+		return nil
+	}
 	hosts := s.autoAssign()
 	if len(hosts) == 0 && s.invitedPrincipal(principal) {
 		// Came in on an invite (claude-fleet#2261): their login is opened
@@ -256,7 +261,7 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // leastBusyMachine is fleet.auto_assign=least-busy's pick
 // (claude-fleet#2069): among the machines the roster hears right now —
 // online (not 维护中, not lost), not only-coordinating, not a person's own
-// computer, with a connected admin node to open the login
+// computer, not one person's pod, with a connected admin node to open the login
 // and a session count it can read, and — a machine's own node program
 // opening it (a Linux machine) — one the relay trusts, since its create ends
 // by fetching the login's relay credential (claude-fleet#3294) — and one where
@@ -311,6 +316,12 @@ func (s *Server) pickMachine(now time.Time, spareOnly bool, skip []string) (stri
 	for _, m := range snap.Machines {
 		if m.Status != "online" || m.ComputeOff || m.Personal ||
 			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] || hasFold(skip, m.Hostname) {
+			continue
+		}
+		// One person's pod is theirs alone (claude-fleet T789): its node
+		// program refuses any other login (exit 3), so a newcomer placed there
+		// never gets a home — u-drillcn4150 took two that way.
+		if isUserPodName(m.Hostname) {
 			continue
 		}
 		if cv := newLoginCompute(snap, m.Hostname, settings, now); cv.Off {
@@ -899,18 +910,91 @@ func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID str
 	// whether the answer landed (a stale or foreign op_id is acked unapplied).
 	log.Printf("fleet: %s %s answered by %s (op %s): ok=%v exit=%d → %s applied=%v",
 		res.Op, res.Login, epID, m.OpID, res.OK, res.Exit, state, applied)
+	if applied && state == store.AccountFailed && res.Op == control.AccountCreate {
+		go s.replaceFailedCreate(m.OpID, time.Now())
+	}
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_ = wire.write(wctx, ack)
 }
 
+// replaceMax is how many machines a person's first login is tried on before
+// the hub stops and leaves it to the operator.
+const replaceMax = 3
+
+// replaceFailedCreate is the next machine for a person whose only login's
+// create failed (claude-fleet T789): least-busy placement picked a machine
+// that would not open it, and the person — approved, signed in — heard only
+// 「你还没有家」 for good. Only a person the hub places by least-busy (the
+// setting, or an invite with none named) — a named fleet.auto_assign is the
+// operator's list; never while a login of theirs is active or on its way,
+// never on a machine one of theirs already failed on, at most replaceMax
+// machines in all.
+func (s *Server) replaceFailedCreate(opID string, now time.Time) {
+	a, err := s.Store.AccountByOp(opID)
+	if err != nil || a == nil || a.Op != control.AccountCreate || !isPerson(a.PrincipalID) {
+		return
+	}
+	if v := strings.TrimSpace(s.setting(AutoAssignKey)); !strings.EqualFold(v, leastBusyValue) &&
+		!(v == "" && s.invitedPrincipal(a.PrincipalID)) {
+		return
+	}
+	accts, err := s.Store.FleetAccounts(a.PrincipalID)
+	if err != nil {
+		log.Printf("fleet: re-place %s: %v", a.PrincipalID, err)
+		return
+	}
+	var failed []string
+	for _, o := range accts {
+		switch o.State {
+		case store.AccountFailed:
+			failed = append(failed, o.Hostname)
+		case store.AccountRemoved:
+		default:
+			return // a login of theirs is there, or on its way
+		}
+	}
+	if len(failed) >= replaceMax {
+		log.Printf("fleet: re-place %s: failed on %d machines (%s); left to the operator",
+			a.PrincipalID, len(failed), strings.Join(failed, ", "))
+		return
+	}
+	host := s.leastBusyMachine(now, failed...)
+	if host == "" {
+		log.Printf("fleet: re-place %s: no other machine fit after %s failed", a.PrincipalID, a.Hostname)
+		return
+	}
+	p, err := s.Store.Principal(a.PrincipalID)
+	if err != nil || p == nil {
+		return
+	}
+	if err := s.creatableLogin(p, host); err != nil {
+		log.Printf("fleet: re-place %s on %s: %v", p.Login, host, err)
+		return
+	}
+	created, err := s.Store.RequestAccount(p, host, false, now)
+	if err != nil {
+		log.Printf("fleet: re-place %s on %s: %v", p.Login, host, err)
+		return
+	}
+	if created {
+		log.Printf("fleet: create of %s failed on %s: queued it on %s", p.Login, a.Hostname, host)
+		s.dispatchAccounts()
+	}
+}
+
 // applyAccountRefusal records a node refusing an op outright (not an admin,
 // arguments off its whitelist): the op did not run.
 func (s *Server) applyAccountRefusal(epID string, m control.Message) {
-	if _, err := s.Store.FinishAccountOp(m.OpID, epID, store.AccountFailed,
-		"node refused: "+m.Error.Code+": "+m.Error.Message, time.Now()); err != nil {
+	applied, err := s.Store.FinishAccountOp(m.OpID, epID, store.AccountFailed,
+		"node refused: "+m.Error.Code+": "+m.Error.Message, time.Now())
+	if err != nil {
 		log.Printf("fleet: record account refusal %s: %v", m.OpID, err)
+		return
+	}
+	if applied {
+		go s.replaceFailedCreate(m.OpID, time.Now())
 	}
 }
 
@@ -1281,4 +1365,51 @@ func (s *Server) changeAccount(req FleetAccountRequest, actor string) error {
 	default:
 		return errors.New("action must be assign, retry, remove, adopt, forget, relogin or rekey")
 	}
+}
+
+// noHomeWhy is the sentence a person with no home hears (claude-fleet T789):
+// where their first login stands — on its way, failed and left to the
+// operator — rather than one line that told an approved newcomer to pick a
+// machine they cannot pick.
+func (s *Server) noHomeWhy(person string) string {
+	const pick = "你还没有家：先在「我的连接」里选一台机器"
+	accts, err := s.Store.FleetAccounts(person)
+	if err != nil || len(accts) == 0 {
+		return pick
+	}
+	failed := false
+	for _, a := range accts {
+		switch a.State {
+		case store.AccountPending, store.AccountCreating, store.AccountUnknown:
+			return "正在为你开家（" + a.Hostname + "），通常一两分钟，稍后刷新"
+		case store.AccountFailed:
+			failed = true
+		}
+	}
+	if failed {
+		return "给你开家没有成功，管理员会看到并处理；稍后再来看看"
+	}
+	return pick
+}
+
+// placesOne says a newcomer's login is placed on one picked machine —
+// fleet.auto_assign=least-busy, or unset (an invite's least-busy) — rather
+// than on each machine of a named list.
+func (s *Server) placesOne() bool {
+	v := strings.TrimSpace(s.setting(AutoAssignKey))
+	return v == "" || strings.EqualFold(v, leastBusyValue)
+}
+
+// holdsLogin says principal has a login somewhere, or one on its way.
+func (s *Server) holdsLogin(principal string) bool {
+	accts, err := s.Store.FleetAccounts(principal)
+	if err != nil {
+		return false
+	}
+	for _, a := range accts {
+		if a.State != store.AccountFailed && a.State != store.AccountRemoved {
+			return true
+		}
+	}
+	return false
 }
