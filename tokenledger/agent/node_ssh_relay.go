@@ -68,6 +68,18 @@ func entryRelayOK() bool { return !podRelay() }
 // sshRelayDialTimeout bounds the data stream's dial and the sshd connect.
 const sshRelayDialTimeout = 15 * time.Second
 
+// relayViaDialTimeout bounds a dial-back to a door: shorter than the door's
+// wait for it, so a door this machine cannot reach falls back to the hub.
+const relayViaDialTimeout = 5 * time.Second
+
+// relayViaURLOK: a door's relay URL is ws(s)://host[:port]/path?id=…, no
+// userinfo, no fragment.
+func relayViaURLOK(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "ws" || u.Scheme == "wss") && u.Host != "" && u.User == nil &&
+		u.Fragment == "" && u.Query().Get("id") != "" && len(raw) <= 512
+}
+
 // sshRelayDataURL is the data stream's ws(s) URL for relay id.
 func sshRelayDataURL(hub, id string) string {
 	u := nodeURL(hub)
@@ -83,15 +95,36 @@ func (a *Agent) openSSHRelay(ctx context.Context, m control.Message) {
 	}
 	dctx, cancel := context.WithTimeout(ctx, sshRelayDialTimeout)
 	defer cancel()
-	ws, _, err := websocket.Dial(dctx, sshRelayDataURL(a.cfg.hub(), ro.RelayID), &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"Authorization":  []string{a.authValue(http.MethodGet, sshRelayDataURL(a.cfg.hub(), ro.RelayID))},
-			"X-Relay-Secret": []string{ro.Secret},
-		},
-	})
-	if err != nil {
-		log.Printf("relay %s: dial the hub: %v", short(ro.RelayID), err)
-		return
+	var ws *websocket.Conn
+	var err error
+	if ro.URL != "" {
+		// a door's own relay listener (CapRelayVia): only for the entry
+		// port, only ws(s), and it gets the relay's secret — never this
+		// agent's credential
+		if ro.Target != control.SSHRelayTargetEntry || !entryRelayOK() || !relayViaURLOK(ro.URL) {
+			log.Printf("relay %s: refused a dial-back to %q", short(ro.RelayID), ro.URL)
+			return
+		}
+		vctx, vcancel := context.WithTimeout(ctx, relayViaDialTimeout)
+		ws, _, err = websocket.Dial(vctx, ro.URL, &websocket.DialOptions{
+			HTTPHeader: http.Header{"X-Relay-Secret": []string{ro.Secret}},
+		})
+		vcancel()
+		if err != nil {
+			log.Printf("relay %s: dial the door: %v", short(ro.RelayID), err)
+			return
+		}
+	} else {
+		ws, _, err = websocket.Dial(dctx, sshRelayDataURL(a.cfg.hub(), ro.RelayID), &websocket.DialOptions{
+			HTTPHeader: http.Header{
+				"Authorization":  []string{a.authValue(http.MethodGet, sshRelayDataURL(a.cfg.hub(), ro.RelayID))},
+				"X-Relay-Secret": []string{ro.Secret},
+			},
+		})
+		if err != nil {
+			log.Printf("relay %s: dial the hub: %v", short(ro.RelayID), err)
+			return
+		}
 	}
 	defer ws.CloseNow()
 	ws.SetReadLimit(1 << 20)

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -463,7 +464,62 @@ func (s *Server) handleDoorHome(w http.ResponseWriter, r *http.Request) {
 		refuse(err)
 		return
 	}
+	if via, id, secret, ok := doorRelayVia(r); ok && nc.canRelayVia {
+		s.doorHomeVia(ctx, conn, actor, machine, epID, nc, via, id, secret, refuse)
+		return
+	}
 	s.serveSSHRelay(ctx, conn, actor, machine, epID, nc, control.SSHRelayTargetEntry, refuse)
+}
+
+var doorViaIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
+
+// doorRelayVia reads a door's offer to take the home's data half itself
+// (control.DoorHomeViaParam): its relay URL (ws:// or wss://, no query,
+// userinfo or fragment), the relay's id and secret. ok false = no offer, or
+// one that does not parse: the stream goes through the hub as before.
+func doorRelayVia(r *http.Request) (via, id, secret string, ok bool) {
+	q := r.URL.Query()
+	via, id, secret = q.Get(control.DoorHomeViaParam), q.Get(control.DoorHomeViaIDParam), r.Header.Get("X-Relay-Secret")
+	if via == "" || !doorViaIDRE.MatchString(id) || len(secret) < 16 || len(secret) > 128 || len(via) > 256 {
+		return "", "", "", false
+	}
+	u, err := url.Parse(via)
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" || u.User != nil ||
+		u.RawQuery != "" || u.Fragment != "" {
+		return "", "", "", false
+	}
+	return u.String() + "?id=" + url.QueryEscape(id), id, secret, true
+}
+
+// doorHomeVia asks the home's agent to dial its data half straight to the
+// door's own relay listener (via, already carrying the id) and tells the door
+// so ({"type":"via"}); the bytes never pass the hub. The audit row is the
+// same relay table's, outcome "via".
+func (s *Server) doorHomeVia(ctx context.Context, conn *websocket.Conn, actor, host, epID string, nc *nodeConn,
+	via, id, secret string, refuse func(error)) {
+	row := store.SSHRelay{ID: control.NewOpID(), Actor: actor, Hostname: host, EndpointID: epID,
+		OSUser: nc.user(), StartedAt: time.Now(), Outcome: "open"}
+	if err := s.Store.SSHRelayStarted(row); err != nil {
+		refuse(fmt.Errorf("record the relay: %w", err))
+		return
+	}
+	outcome, detail := "via", "door relay "+id
+	defer func() {
+		if err := s.Store.SSHRelayEnded(row.ID, outcome, detail, 0, 0, time.Now()); err != nil {
+			log.Printf("relay %s: record its end: %v", row.ID, err)
+		}
+	}()
+	open, _ := control.New(control.TypeSSHRelayOpen, control.SSHRelayOpen{RelayID: id, Secret: secret,
+		Target: control.SSHRelayTargetEntry, URL: via})
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.SendNodeWrite(wctx, epID, open); err != nil {
+		outcome, detail = "failed", "ask the agent: "+err.Error()
+		refuse(sshRelayRefusal("NODE_OFFLINE", "%s's agent did not take the request: %v", host, err))
+		return
+	}
+	_ = wsjson.Write(wctx, conn, control.SSHRelayHello{Type: "via"})
+	conn.Close(websocket.StatusNormalClosure, "via")
 }
 
 // DoorAddressKey is the hub setting naming the door's one address for

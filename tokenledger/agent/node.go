@@ -212,6 +212,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		if entryRelayOK() {
 			// The door's way home (A5SQ): a relay to the entry port.
 			caps = append(caps, control.CapEntryRelay)
+			// ... and its data half straight to the door that asked (the US door)
+			caps = append(caps, control.CapRelayVia)
 		}
 	}
 	if a.cfg.FleetChat {

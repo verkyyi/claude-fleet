@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +99,20 @@ func doorHomeSSHD(t *testing.T, ca ssh.PublicKey, login string) (string, string)
 // home agent's stream onto its entry port — and the home sees a door-session
 // certificate, never the person's key. Bob's key as alice, and alice as a
 // login the book does not take home, are refused at the door.
-func TestDoorTakesEachPersonHome(t *testing.T) {
+// doorE2E is one door in front of one hub, alice's home a machine whose
+// agent relays to a home sshd: login(user, key) runs "hostname" through it.
+type doorE2E struct {
+	h          *harness
+	host       string
+	dca        *sshca.CA
+	alice, bob ssh.Signer
+	audit      *syncBuf
+	login      func(user string, key ssh.Signer) (string, error)
+}
+
+// newDoorE2E builds it; tune adjusts the door's config, and a door with a
+// RelayURL serves its relay listener on relayAddr.
+func newDoorE2E(t *testing.T, relayAddr string, tune func(*door.Config)) doorE2E {
 	h := newFleetHarness(t)
 	k := newCertKit(t)
 	h.Srv.SSHCA = sshca.New(k.ca)
@@ -149,7 +163,11 @@ func TestDoorTakesEachPersonHome(t *testing.T) {
 	_, dk, _ := ed25519.GenerateKey(rand.Reader)
 	dhost, _ := door.NewHostKey(dk)
 	audit := &syncBuf{b: &bytes.Buffer{}}
-	d, err := door.New(door.Config{Hub: h.HTTP.URL, Token: h.Tokens["door"], HostKey: dhost, Audit: audit})
+	dcfg := door.Config{Hub: h.HTTP.URL, Token: h.Tokens["door"], HostKey: dhost, Audit: audit}
+	if tune != nil {
+		tune(&dcfg)
+	}
+	d, err := door.New(dcfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +178,15 @@ func TestDoorTakesEachPersonHome(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go d.Serve(ctx, ln)
+	if relayAddr != "" {
+		rl, err := net.Listen("tcp", relayAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hs := &http.Server{Handler: d.RelayHandler()}
+		t.Cleanup(func() { hs.Close() })
+		go hs.Serve(rl)
+	}
 	waitFor(t, 5*time.Second, "the door's book", func() bool { return d.Homes() == 1 })
 
 	login := func(user string, key ssh.Signer) (string, error) {
@@ -176,6 +203,13 @@ func TestDoorTakesEachPersonHome(t *testing.T) {
 		out, err := s.CombinedOutput("hostname")
 		return string(out), err
 	}
+	return doorE2E{h: h, host: host, dca: dca, alice: alice, bob: bob, audit: audit, login: login}
+}
+
+func TestDoorTakesEachPersonHome(t *testing.T) {
+	r := newDoorE2E(t, "", nil)
+	h, host, dca, alice, bob, audit, login := r.h, r.host, r.dca, r.alice, r.bob, r.audit, r.login
+	now := time.Now()
 	out, err := login("alice", alice)
 	if err != nil || out != "home-of-alice" {
 		t.Fatalf("alice through the door: %q %v\naudit: %s", out, err, audit.String())
@@ -217,3 +251,47 @@ type syncBuf struct {
 func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
 
 func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// The US door (JXBE): a door with its own relay listener offers it on every
+// stream home, and the home's agent (CapRelayVia) dials its data half there
+// instead of through the hub — the login works and the door records via
+// "door". A listener the agent cannot reach falls back to the hub within the
+// door's wait: still home, via "hub".
+func TestDoorHomeDialsBackToTheDoor(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayAddr := ln.Addr().String()
+	ln.Close()
+	r := newDoorE2E(t, relayAddr, func(c *door.Config) { c.RelayURL = "ws://" + relayAddr + control.DoorRelayPath })
+	out, err := r.login("alice", r.alice)
+	if err != nil || out != "home-of-alice" {
+		t.Fatalf("alice through the door's own relay: %q %v\naudit: %s", out, err, r.audit.String())
+	}
+	if a := r.audit.String(); !strings.Contains(a, `"via":"door"`) {
+		t.Fatalf("the home's bytes did not come straight to the door: %s", a)
+	}
+	if _, err := r.login("alice", r.bob); err == nil {
+		t.Fatal("bob's key as alice went through")
+	}
+
+	// nothing listens where the door says it does: the hub carries it
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	r2 := newDoorE2E(t, "", func(c *door.Config) {
+		c.RelayURL = "ws://" + deadAddr + control.DoorRelayPath
+		c.ViaWait = 2 * time.Second
+	})
+	out, err = r2.login("alice", r2.alice)
+	if err != nil || out != "home-of-alice" {
+		t.Fatalf("alice when the home cannot dial back: %q %v\naudit: %s", out, err, r2.audit.String())
+	}
+	if a := r2.audit.String(); !strings.Contains(a, `"via":"hub"`) {
+		t.Fatalf("the fallback did not go through the hub: %s", a)
+	}
+}

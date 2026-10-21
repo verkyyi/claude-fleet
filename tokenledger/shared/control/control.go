@@ -1452,6 +1452,12 @@ const (
 	// the door's way home (A5SQ). Never in a pod.
 	CapEntryRelay = "entry_relay"
 
+	// CapRelayVia is listed beside CapEntryRelay by an agent that honours
+	// SSHRelayOpen.URL: it dials the data half of an entry relay at the door
+	// that asked for it (DoorHomeViaParam) instead of at the hub, so a home
+	// near a door is not reached through the hub's region (the US door).
+	CapRelayVia = "relay_via"
+
 	// SSHRelayTargetEntry names the machine's entry port as a relay's target.
 	SSHRelayTargetEntry = "entry"
 
@@ -1699,6 +1705,15 @@ type SSHRelayOpen struct {
 	// only to an agent that listed CapEntryRelay. The agent picks the port
 	// itself; the hub never names an address.
 	Target string `json:"target,omitempty"`
+	// URL, when set, is where the agent dials the data half instead of the
+	// hub's SSHRelayDataPath: a door's own relay listener (a ws:// or wss://
+	// URL carrying the relay's id), named by that door on DoorHomePath. Sent
+	// only with Target SSHRelayTargetEntry, only to an agent that listed
+	// CapRelayVia; the agent sends it the Secret alone — never its own
+	// credential. The stream carries the door's SSH login to the home's entry
+	// sshd, which the door pins and the home admits only with a
+	// DoorSessionCert: a stream someone else attached reaches nothing.
+	URL string `json:"url,omitempty"`
 }
 
 // SSHRelayHello is the client-side handshake on SSHRelayPath, one JSON text frame
