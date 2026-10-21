@@ -91,7 +91,8 @@ try {
     assert.match(await page.locator('main').innerText(), /Stale information/);
     assert.equal(await page.locator('time').getAttribute('datetime'), observed);
     assert.match(await row('T1').innerText(), /Completed/);
-    assert.ok(await page.locator('a[href="/app/sessions"]:visible').count() > 0, 'existing navigation missing');
+    // the session list is the one way in (GR5E C2): the mark leads back to it
+    assert.ok(await page.locator('a[href="/app"]:visible').count() > 0, 'existing navigation missing');
     assert.equal(await page.locator('a[href="/app/tasks"]').count(), 0, 'a separate Tasks page is still linked');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal overflow');
     await page.screenshot({ path: resolve(work, `evidence/tasks-${viewport.width}.png`), fullPage: true });
