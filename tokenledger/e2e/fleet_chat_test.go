@@ -68,7 +68,7 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			w.Header().Set("Content-Type", "image/png")
 			w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
 			io.WriteString(w, fakePNG)
-		case "/api/stop", "/api/answer":
+		case "/api/stop", "/api/answer", "/api/new":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)
 		default:

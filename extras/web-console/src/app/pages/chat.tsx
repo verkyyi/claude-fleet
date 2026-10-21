@@ -7,7 +7,7 @@
 import { createContext, useContext, useEffect, useState, type FC } from "react";
 import { Link, useSearchParams } from "react-router";
 import { AssistantRuntimeProvider, makeAssistantDataUI, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
-import { ExternalLinkIcon, GlobeIcon } from "lucide-react";
+import { ExternalLinkIcon, GlobeIcon, SquarePenIcon, TerminalSquareIcon } from "lucide-react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector.aui";
@@ -15,7 +15,7 @@ import { ComposerAddAttachment } from "@/components/assistant-ui/elements/attach
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { useFleetChat, type Gate, type PageCard, type Sync } from "@/app/chat/chat";
+import { useFleetChat, PROVIDERS, type Gate, type PageCard, type Provider, type Sync } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
 import { fmtClock, resumedSecs, useTrial, useTrialBeat, useTryClock, type TrialState } from "@/app/chat/try";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -24,6 +24,7 @@ import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
+import { continueLink } from "@/app/chat/continue";
 import { BindWeChatBanner } from "../WeChatBind";
 import { viewAs } from "@/shared/viewAs";
 
@@ -214,6 +215,7 @@ const GatePage: FC<{ gate: Gate; home: Home | null; onRetry: () => void }> = ({ 
   );
 };
 
+const PROVIDER_NAME: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
 // the empty conversation: the site's mark and its display type
 const Welcome: FC = () => (
   <div className="mb-8 flex flex-col items-start gap-4 px-2">
@@ -222,7 +224,8 @@ const Welcome: FC = () => (
       {tr("说第一句话吧", "Say something")}<span className="text-clay">{tr("。", ".")}</span>
     </h2>
     <p className="text-muted-foreground text-[15px]">
-      {tr("这是你的那一条对话：往上翻是历史，关掉页面也不会停。", "This is your one conversation: scroll up for history; closing the page does not stop it.")}
+      {tr(`这是你和 ${PROVIDER_NAME[useChat().provider]} 的那一条对话：往上翻是历史，关掉页面也不会停。`,
+        `This is your one conversation with ${PROVIDER_NAME[useChat().provider]}: scroll up for history; closing the page does not stop it.`)}
     </p>
   </div>
 );
@@ -344,10 +347,81 @@ const AboutPrefill: FC = () => {
   return null;
 };
 
+// 「Claude Code ｜ Codex」 (task R9A2): two assistants, one conversation each on
+// the same home. The page opens on the side used last; the other side's tab
+// wears a dot while it runs or holds a reply this page has not shown.
+const PROVIDER_KEY = "fwc-provider";
+const seenKey = (p: Provider) => `fwc-seen-${p}`;
+function lastProvider(): Provider {
+  const p = localStorage.getItem(PROVIDER_KEY);
+  return p === "codex" ? "codex" : "claude";
+}
+
+const ProviderBar: FC<{ onSwitch: (p: Provider) => void }> = ({ onSwitch }) => {
+  const { provider, providers, others, last, startNew, busy, resume } = useChat();
+  const [asking, setAsking] = useState(false);
+  // what is on screen is read
+  useEffect(() => { if (last) localStorage.setItem(seenKey(provider), last); }, [provider, last]);
+  const dot = (p: Provider) => {
+    if (p === provider) return "";
+    const o = others[p];
+    if (o?.busy) return "busy";
+    return o?.last && o.last !== localStorage.getItem(seenKey(p)) ? "new" : "";
+  };
+  // a home that offers one assistant shows no switch (as before this bar existed)
+  if (!providers.includes("codex") && provider === "claude") return null;
+  return (
+    <div className="mx-auto flex w-full max-w-[44rem] items-center gap-2 px-4 pt-3" data-testid="provider-bar">
+      <div role="tablist" aria-label={tr("选助手", "Pick the assistant")}
+        className="border-border bg-card inline-flex rounded-full border p-0.5 shadow-xs">
+        {PROVIDERS.map((p) => {
+          const d = dot(p);
+          return (
+            <button key={p} role="tab" type="button" aria-selected={p === provider} data-provider={p}
+              onClick={() => p !== provider && onSwitch(p)}
+              className={`relative rounded-full px-3.5 py-1 text-[13px] font-medium transition-colors ${p === provider ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}>
+              {PROVIDER_NAME[p]}
+              {d ? <span aria-label={d === "busy" ? tr("正在回复", "Replying") : tr("有新回复", "New reply")}
+                className={`bg-clay absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-[var(--background)] ${d === "busy" ? "animate-pulse" : ""}`} /> : null}
+            </button>
+          );
+        })}
+      </div>
+      {/* 在终端里继续: the same conversation in the home's shell — never while a turn runs here */}
+      <Button asChild={!busy && !!resume} variant="ghost" size="sm" className="text-muted-foreground ms-auto rounded-full" disabled={busy || !resume}
+        title={busy ? tr("正在回复，答完再接", "Replying — continue once it is done") : tr("在网页终端里接着这段对话", "Continue this conversation in the web terminal")}>
+        {!busy && resume
+          ? <Link to={continueLink(provider)} className="no-underline"><TerminalSquareIcon className="size-4" /><span className="hidden sm:inline">{tr("在终端里继续", "Continue in terminal")}</span></Link>
+          : <span><TerminalSquareIcon className="size-4" /><span className="hidden sm:inline">{tr("在终端里继续", "Continue in terminal")}</span></span>}
+      </Button>
+      <Button variant="ghost" size="sm" className="text-muted-foreground rounded-full" disabled={busy} onClick={() => setAsking(true)}>
+        <SquarePenIcon className="size-4" />{tr("新对话", "New chat")}
+      </Button>
+      <AlertDialog open={asking} onOpenChange={setAsking}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{tr(`和 ${PROVIDER_NAME[provider]} 开一段新对话？`, `Start a new chat with ${PROVIDER_NAME[provider]}?`)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {tr(`这边的旧对话收起，不再接着聊；${PROVIDER_NAME[provider === "claude" ? "codex" : "claude"]} 那边不受影响。`,
+                `This side's old conversation is put away and not carried on; ${PROVIDER_NAME[provider === "claude" ? "codex" : "claude"]} is not touched.`)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{tr("取消", "Cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void startNew()}>{tr("开新对话", "Start new")}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+};
+
 export default function ChatPage() {
   // the entry's word decides: a view it did not take (one's own row) is no view
   const { me } = useShell();
-  return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat />;
+  const [provider, setProvider] = useState<Provider>(lastProvider);
+  const pick = (p: Provider) => { localStorage.setItem(PROVIDER_KEY, p); setProvider(p); };
+  return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat key={provider} provider={provider} onSwitch={pick} />;
 }
 
 // The copy beside the entry (task V9DJ D): where the history on screen stands.
@@ -364,7 +438,7 @@ function SyncChip({ sync }: { sync: Sync }) {
   );
 }
 
-function LiveChat() {
+function LiveChat({ provider, onSwitch }: { provider: Provider; onSwitch: (p: Provider) => void }) {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
   const { me, quota, bumpQuota } = useShell();
@@ -374,12 +448,15 @@ function LiveChat() {
     onReply: clock.stop,
     blockedBy: quota?.over ? { blocked: true, ...(quota.reset ? { until: quota.reset } : {}) } : null,
     onTurnEnd: () => { bumpQuota(); void readTrial(); },
+    provider,
   });
   // spent (time · lines) ends here; a pause, a hidden page or no input went
   // back to /app/try with the conversation kept (issue #4060)
   const over = trial?.state === "ended" && (trial.ended === "time" || trial.ended === "msgs");
   const { runtime, notice, gate } = chat;
   const home = useHome(gate?.code);
+  // the Codex side is not on this home: the Claude side
+  useEffect(() => { if (gate?.code === "no_provider") onSwitch("claude"); }, [gate?.code, onSwitch]);
   const beat = useTrialBeat(me?.role === "trial" && !over, chat.busy);
   const resumed = resumedSecs();
   return (
@@ -396,6 +473,7 @@ function LiveChat() {
               {tr(`已在一台干净的机器上续上你的对话 · 用了 ${resumed} 秒`, `Picked your conversation up on a clean machine · took ${resumed} s`)}
             </p> : null}
             <StillHere open={!!beat.beat?.warn} secs={beat.beat?.pause_in_secs ?? 0} onStay={beat.stillHere} onPause={beat.pause} />
+            {!over && !gate ? <ProviderBar onSwitch={onSwitch} /> : null}
             <SyncChip sync={chat.sync} />
             {chat.handed && !chat.owner ? <p role="status" data-testid="handed" className="text-muted-foreground px-4 pt-2 text-center text-[13px]">
               {tr("已从终端接过来", "Picked up from the terminal")}{chat.handed.label ? <span className="font-mono text-[12px]"> · {chat.handed.label}</span> : null}
