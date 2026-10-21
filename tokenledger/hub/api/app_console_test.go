@@ -345,7 +345,8 @@ func TestConsoleTableNamesRoutes(t *testing.T) {
 }
 
 // The member side (claude-fleet#3926, C3): the conversation is /app itself,
-// 我的 is /app/me, 用量 /app/usage (claude-fleet#3929, C6) — each the console's
+// 我的 is /app/me (its tabs /app/me/<tab>, GR5E C1), 用量 /app/usage
+// (claude-fleet#3929, C6) — each the console's
 // index.html for a signed-in person, with the console's own-origin policy;
 // /chat/ is one 301 to /app, /app/quota and the bare /usage one 301 to
 // /app/usage; a stranger is asked to sign in; and a hub with no console
@@ -358,7 +359,8 @@ func TestConsoleMemberSide(t *testing.T) {
 	}
 	hd := h.srv.Handler()
 	for _, who := range []*http.Cookie{user, admin} {
-		for _, p := range []string{AppPrefix, AppPrefix + "/", AppPrefix + mePagePath, AppPrefix + "?x=1", AppPrefix + "/usage", AppPrefix + "/usage?range=today"} {
+		for _, p := range []string{AppPrefix, AppPrefix + "/", AppPrefix + mePagePath, AppPrefix + "?x=1", AppPrefix + "/usage", AppPrefix + "/usage?range=today",
+			AppPrefix + mePagePath + "/usage", AppPrefix + mePagePath + "/settings?e=x", AppPrefix + mePagePath + "/devices?tab=home"} {
 			got := consoleDo(hd, http.MethodGet, p, who)
 			if got.Code != http.StatusOK || got.Body.String() != "APP-ENTRY" {
 				t.Errorf("GET %s = %d %.60q; want the console's page", p, got.Code, got.Body.String())
