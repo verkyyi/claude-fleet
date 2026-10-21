@@ -232,16 +232,17 @@ class NativeTests(unittest.TestCase):
             self.keys("Escape")
             after = self.wait("Tab 操作").splitlines()
             self.assertEqual(before[1:-2], after[1:-2])
-            # ↑ from the first row goes to New; Enter opens the box without any action.
-            self.keys("Up", "Enter")
+            # ↑↑ from the first session goes by ⌂ to New (T762: the order drawn);
+            # Enter opens the box without any action.
+            self.keys("Up", "Up", "Enter")
             box = self.wait("开 ↵")
             self.evidence.append("COMPOSER %d columns\n%s" % (width, box))
             self.assertEqual(len([x for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))]), 3)
             self.assertEqual(self.actions(), [])
             self.keys("Escape")
-            # Cancel restores source (New); down wraps via 回家命令行 (T685)/language/quit to ✦ 消息 (T701, the first row).
-            self.keys("Down", "Down", "Down", "Down", "Down")
-        self.keys("Up", "Enter")
+            # Cancel restores source (New); ↓↓ goes by ⌂ 回家命令行 back to the first session (T762).
+            self.keys("Down", "Down")
+        self.keys("Up", "Up", "Enter")
         self.wait("开 ↵")
         self.literal("中e\u0301文")       # nothing to type into: the words go nowhere
         self.keys("Up", "Up", "Right")
@@ -315,7 +316,7 @@ class NativeTests(unittest.TestCase):
     def test_unusable_default_agent_falls_to_a_usable_one(self):
         (self.root / "nomodel").touch()
         self.start()
-        self.keys("Up", "Enter")
+        self.keys("Up", "Up", "Enter")
         box = self.wait("开 ↵")
         # the repo's agent (Codex) is not usable here: the box opens on Claude
         self.assertIn("Agent ‹Claude›", box)
@@ -348,7 +349,7 @@ class NativeTests(unittest.TestCase):
         self.evidence.append("PASS ⌘N opens the box on the session in view's repo + its agent; ↵ opens; esc closes")
 
     def test_paste_never_activates_controls(self):
-        self.keys("Up", "Enter")
+        self.keys("Up", "Up", "Enter")
         self.wait("开 ↵")
         # the box opens on 开: a pasted Enter / Tab is text nobody types, never a key
         self.literal("\x1b[200~literal\n\ttext\n\x1b[201~")
@@ -360,7 +361,7 @@ class NativeTests(unittest.TestCase):
         self.evidence.append("PASS a bracketed paste in the box dispatches nothing")
 
     def test_box_three_items_submit_once_and_persistence(self):
-        self.keys("Up", "Enter")
+        self.keys("Up", "Up", "Enter")
         box = self.wait("开 ↵")
         # three items, opened chosen: the defaults' repo, that repo's agent
         self.assertEqual([x.strip() for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))],

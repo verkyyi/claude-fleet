@@ -6450,6 +6450,54 @@ drill_home_moved_panel_differs() {
   WHAT='家在 A、会话在 B：短码、名字、分组、EPIC 父子与 已完成/总数 与家在 B 逐行相同；缓存没有先占位、后台补齐；hub 不答照旧缓存画'
 }
 
+# ⌘P's ↑ walked its own loop (T762): it skipped ✦ 消息 and went round to ⚡, so four
+# rows were never reached and ↑ was not ↓'s way back. Break it for real — a nav_step
+# that skips a row — and the one-order check sees it; the popup steps through
+# nav_step only, with no row named in its arrow handler.
+drill_panel_order_split() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(FLEET_CONF_DIR="$WORK/panel-order" FLEET_UI_LANG=zh python3 - "$BIN" 2>&1 <<'PY'
+import importlib.util, sys
+B = sys.argv[1]
+spec = importlib.util.spec_from_file_location("fv", B + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+fv.notices_row = lambda q: {"kind": "cmd", "cmd": "notices", "act": "notices", "row": {}, "text": "✦ 消息"}
+fv.lang_row = lambda q: None
+items = [{"kind": "hdr", "group": "work", "text": "在干活 2"},
+         {"kind": "sess", "target": "@1", "text": "a", "group": "work"},
+         {"kind": "sess", "target": "@2", "text": "b", "group": "work"},
+         {"kind": "sec", "sec": "gone", "text": "已收起 1 个", "n": 1, "older": 0}]
+def one_order(step, shown):
+    stops = [i for i, e in enumerate(shown) if fv.pickable(e)]
+    for k, at in enumerate(stops):
+        if step(shown, at, 1) != stops[(k + 1) % len(stops)] or step(shown, at, -1) != stops[k - 1]:
+            return False
+    return True
+shown = fv.panel_rows(items, "", set(), cmds=["new", "quit"])
+assert [e.get("cmd") for e in shown[:3]] == ["notices", "new", "home"], shown[:3]
+assert shown[-1].get("cmd") == "quit", shown[-1]
+assert one_order(fv.nav_step, shown), "the live nav_step is not one order"
+def broken(sh, at, d):       # the old ↑: skip ✦ 消息, round to ⚡
+    if d > 0:
+        return fv.nav_step(sh, at, d)
+    sel = [i for i, e in enumerate(sh) if fv.pickable(e)]
+    up = [i for i in sel if i < at and sh[i].get("cmd") != "notices"]
+    return up[-1] if up else next(i for i, e in enumerate(sh) if e.get("cmd") == "new")
+assert not one_order(broken, shown), "a skipping ↑ passed the one-order check"
+src = open(B + "/fleet_view.py", encoding="utf-8").read()
+h = src[src.index('if ch in (curses.KEY_UP, "\\x10", curses.KEY_DOWN, "\\x0e"):'):]
+h = h[:h.index("continue")]
+assert "nav_step(" in h and '"notices"' not in h and "bolt_at" not in h, h
+print("ok")
+PY
+) || { WHY="one order broke: $out"; return 1; }
+  [ "$out" = ok ] || { WHY="one order: $out"; return 1; }
+  suite_holds fleet-view-selftest.sh 'ONE order (T762)' 'fv.nav_step(shown, at, -1)' || return 1
+  WHAT='⌘P 只有一份行序：画在屏幕上的顺序就是 ↓ 走的顺序、↑ 原路倒回、首尾相接（nav_step）；把 ↑ 改回「跳过 ✦ 消息、绕到 ⚡」的实测被一份行序检查认出；箭头键只经 nav_step，不点名任何一行（fleet-view-selftest.sh 的 ONE order 腿按名守住）'
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

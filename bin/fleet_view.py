@@ -1703,13 +1703,22 @@ def epic_tree(groups, ended, fleet, refresh=True, marks=None):
             m.pop("sec", None)
             m["depth"], m["fold"], m["group"] = 0, d["target"], d["group"]
         done = sum(1 for c in recs.values() if (c.get("outcome") or c.get("state")) in EPIC_DONE)
-        d["epic"] = {"done": done, "total": len(recs),
+        # rows: the member rows hung under it (an open window's; a folded-away one is
+        # never here) — 0 ⇒ an ordinary row, no ▸ to open (T762)
+        d["epic"] = {"done": done, "total": len(recs), "rows": len(members),
                      "needs": sum(1 for m in members if m.get("sym") == "needs"),
                      "fail": sum(1 for m in members if m.get("sym") == "fail")}
         d["expanded"] = (d["target"] in far_open) if d.get("far") else marks[d["target"]][1] == "1"
         lst = groups[d["group"]]
         i = next(n for n, e in enumerate(lst) if e is d)
         lst[i + 1:i + 1] = members
+
+
+def epic_folds(e):
+    """A driver with member rows under it: its ▸ / ▾, → / ← and the click fold it
+    (T762) — one with none is drawn and keyed as an ordinary row."""
+    ep = e.get("epic")
+    return bool(ep) and ep.get("rows", 1) > 0
 
 
 def epic_hidden(e, drivers):
@@ -2300,7 +2309,7 @@ def visible(items, query, opened):
             if e.get("target") in asks and not e.get("sec"):
                 out.append(dict(asks[e["target"]], depth=0))
         return out
-    drivers = {e["target"]: e for e in items if e.get("epic")}
+    drivers = {e["target"]: e for e in items if epic_folds(e)}
     hide = {e["target"] for e in items if e["kind"] == "sess" and epic_hidden(e, drivers)}
     out = [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
            for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)
@@ -2395,7 +2404,8 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     ep = e.get("epic")
     after = []
     if ep:
-        lead = ("▾ " if e.get("expanded") else "▸ ") + lead
+        if epic_folds(e):
+            lead = ("▾ " if e.get("expanded") else "▸ ") + lead
         after.append((" %d/%d" % (ep["done"], ep["total"]), base + ("dim",)))
         red = base + ((("c%d" % GLYPH_COLORS["needs"], "bold") if col and not e.get("lost") else ()))
         for k in ("needs", "fail"):
@@ -2431,8 +2441,10 @@ def paint(shown, at, width, cells, clip):
             lines.append([(clip("─ " + e["text"] + " ", width), ("bold",))])
             continue
         if e["kind"] == "sec":
-            lines.append([(clip(("▸ " if e.get("closed", True) else "▾ ") + e["text"], width),
-                           ("bold", "lit") if lit else ("bold",))])
+            # a row the cursor stops on (T762): indented like one; only a ─ heading
+            # starts at the left edge
+            lines.append([(clip("  " + ("▸ " if e.get("closed", True) else "▾ ") + e["text"], width),
+                           ("lit",) if lit else ())])
             continue
         if e["kind"] == "cmd":
             lines.append([(clip("  " + e["text"], width), ("lit",) if lit else ())])
@@ -2456,6 +2468,28 @@ def paint(shown, at, width, cells, clip):
             continue
         lines.append(row_segs(e, width, cells, clip, lit))
     return lines
+
+
+def nav_step(shown, at, d):
+    """↓ (d=1) / ↑ (d=-1) in the popup's list (T762): the next / previous row the
+    cursor stops on, as drawn, round from the last to the first and back — the ONE
+    rule, so ↑ walks exactly ↓'s way back. `at` itself when nothing stops."""
+    sel = [i for i, e in enumerate(shown) if pickable(e)]
+    if not sel:
+        return at
+    if d > 0:
+        return next((i for i in sel if i > at), sel[0])
+    return next((i for i in reversed(sel) if i < at), sel[-1])
+
+
+def row_gone_at(shown, at):
+    """Where the cursor goes when its row left the list: the nearest session, else
+    ⚡ (T762: the commands sit above and below the sessions, so the old index
+    would land on one of them), else the old index kept in range."""
+    sess = [i for i, e in enumerate(shown) if e["kind"] == "sess"]
+    if sess:
+        return min(sess, key=lambda i: abs(i - at))
+    return next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), min(at, max(0, len(shown) - 1)))
 
 
 def session_order(items):
@@ -4289,33 +4323,37 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     if "landed" in words:
         items = landed_first(items)
     q = query.strip()
-    out = visible(items, query, opened)
+    rows = visible(items, query, opened)
+    # ONE order (T762): what is drawn top to bottom is what ↓ walks and ↑ walks
+    # back — ✦ 消息 · ⚡ 新会话 · ⌂ 回家 on top, the sessions, then 置顶 · ◐ · ⏻
+    top, bottom = [], []
     nr = notices_row(query) if words else None
     if nr:
-        out.insert(0, nr)   # the FIRST row (T701): every message is two steps away
-    pr = pin_row(items, query, cur) if words else None
-    if pr:
-        out.append(pr)      # under the sessions, above ⚡ (issue #3517)
+        top.append(nr)      # the FIRST row (T701): every message is two steps away
     if "new" in words:
         st = bolt or bolt_new()
         if busy:
-            out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {}, "busy": True,
+            top.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {}, "busy": True,
                         "text": say("view_task_starting_fmt", busy["title"]) if busy["title"] else say("view_task_opening")})
         else:
-            hit = any(e["kind"] == "sess" for e in out)
-            out.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {},
+            hit = any(e["kind"] == "sess" for e in rows)
+            top.append({"kind": "cmd", "cmd": "new", "act": "new", "row": {},
                         "text": say("view_cmd_blank"),
                         "foot": say("view_nomatch") if q and not hit else ""})
     if "quit" in words and (not q or panel_hit(q, say("view_cmd_home"), HOME_WORDS)):
-        # 回家命令行 (T685): under ⚡ — typed words that name it keep it in view, lit
-        out.append({"kind": "cmd", "cmd": "home", "act": "home", "row": {}, "text": say("view_cmd_home"),
+        # 回家命令行 (T685): typed words that name it keep it in view, lit
+        top.append({"kind": "cmd", "cmd": "home", "act": "home", "row": {}, "text": say("view_cmd_home"),
                     "hit": bool(q)})
+    pr = pin_row(items, query, cur) if words else None
+    if pr:
+        bottom.append(pr)   # under the sessions (issue #3517)
     lr = lang_row(query) if words else None
     if lr:
-        out.append(lr)      # under ⚡, above ⏻ (issue #3329)
+        bottom.append(lr)   # above ⏻ (issue #3329)
     if "quit" in words:
-        out.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit"),
-                    "hit": bool(q) and panel_hit(q, say("view_cmd_quit"), QUIT_WORDS)})
+        bottom.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit"),
+                       "hit": bool(q) and panel_hit(q, say("view_cmd_quit"), QUIT_WORDS)})
+    out = top + rows + bottom
     return out
 
 
@@ -4413,6 +4451,26 @@ def panel_key(screen, timeout_ms, completed=None, inputs=None):
 # iTerm2 (fleet_keys.RETIRED): an older profile's code is swallowed, nothing opens.
 # The one message below says so once per login.
 KEYS_NOTICE = "keys-notice-T685"
+# T762 moved ⚡ 新会话 and ⌂ 回家 to the top (⌘P ↑ ↵ no longer reaches ⚡ from the
+# list's top): the footer says so for a week from the first ⌘P that drew it
+ORDER_NOTICE, ORDER_NOTICE_SECS = "panel-order-T762", 7 * 86400
+
+
+def order_notice(now=None):
+    """「新会话、回家命令行在最上面」 for ORDER_NOTICE_SECS after this login first saw
+    the new order; "" after that (or when the file cannot be kept)."""
+    now = time.time() if now is None else now
+    path = conf_dir() / ORDER_NOTICE
+    try:
+        first = float(path.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        first = now
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("%d\n" % now)
+        except OSError:
+            return ""
+    return say("view_order_moved") if now - first < ORDER_NOTICE_SECS else ""
 
 
 def keys_notice(vid, client=""):
@@ -4541,7 +4599,7 @@ def _popup(screen, qo, vid, client, forward=""):
     fleet = view_fleet(vid)
     view_lang_env(vid)
     cmds = panel_commands()
-    query, opened, msg, show_legend = "", set(), "", False
+    query, opened, msg, show_legend = "", set(), order_notice(), False
     msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
@@ -4589,6 +4647,8 @@ def _popup(screen, qo, vid, client, forward=""):
             query, opened, _, _ = page.snapshot
             shown = listing()
             query, opened, at, top = page.restore(shown)
+            if not any(key_of(e) == page.origin for e in shown):
+                at = row_gone_at(shown, at)
         mode, mrow, mitems, mat, pend, page = "", None, [], 0, None, None
         stack.clear()
         follow_list = True
@@ -4757,7 +4817,7 @@ def _popup(screen, qo, vid, client, forward=""):
             items = new
             shown = listing()
             at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
-                      min(at, max(0, len(shown) - 1)))
+                      row_gone_at(shown, at))
         if msg and not msg_until:
             msg_until = time.time() + 3
         heal.tick(screen)
@@ -4808,7 +4868,7 @@ def _popup(screen, qo, vid, client, forward=""):
             foot = say("view_narrow")
         panel.put(screen, height - 2, 0, foot, width - 1, qo.clip, attr(fstyle))
         keys = say("view_keys_sending") if busy else say("view_keys_short")
-        if not busy and not page and lit_e.get("epic") and not query.split():
+        if not busy and not page and epic_folds(lit_e) and not query.split():
             keys = say("view_keys_epic") + "  " + keys
         hits, controls = {}, {}
         if page:
@@ -4978,7 +5038,7 @@ def _popup(screen, qo, vid, client, forward=""):
                     top = panel.clamp_top(top + wheel, len(shown), body)
                     continue
                 i = top + my - off
-                if i < len(shown) and shown[i].get("epic") and not query.split() and \
+                if i < len(shown) and epic_folds(shown[i]) and not query.split() and \
                         buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED) and \
                         0 <= mx - name_col(width - 1) < 2:
                     # a click on the driver's ▸ / ▾ folds it (T507)
@@ -5069,25 +5129,16 @@ def _popup(screen, qo, vid, client, forward=""):
                     bolt_run(argv, job)
                 continue
             continue
-        sel = [i for i, e in enumerate(shown) if pickable(e)]
-        if ch in (curses.KEY_UP, "\x10"):
-            # from the top it goes round to ⚡ (issue #3327: ⌘P ↑ ↵ = a new session) —
-            # the ✦ 消息 row above the sessions is not in the way (T701): ↓ round from
-            # the bottom, or the words 消息, reach it
-            up = [i for i in sel if i < at and shown[i].get("cmd") != "notices"]
+        if ch in (curses.KEY_UP, "\x10", curses.KEY_DOWN, "\x0e"):
+            # as drawn, both ways round (T762) — no row is skipped or jumped to
+            at = nav_step(shown, at, 1 if ch in (curses.KEY_DOWN, "\x0e") else -1)
             follow_list = True
-            at = up[-1] if up else (bolt_at() if bolt_at() >= 0 else (sel[-1] if sel else at))
-            continue
-        if ch in (curses.KEY_DOWN, "\x0e"):
-            down = [i for i in sel if i > at]
-            follow_list = True
-            at = down[0] if down else (sel[0] if sel else at)
             continue
         if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and 0 <= at < len(shown) and shown[at]["kind"] == "sess" \
-                and not query.split() and (shown[at].get("epic") or (shown[at].get("fold") and ch == curses.KEY_LEFT)):
+                and not query.split() and (epic_folds(shown[at]) or (shown[at].get("fold") and ch == curses.KEY_LEFT)):
             # an EPIC (T507): → opens the driver, ← shuts it; ← on a member goes up
             # to its driver and shuts it — ↵ still goes to the session
-            tgt = shown[at]["target"] if shown[at].get("epic") else shown[at]["fold"]
+            tgt = shown[at]["target"] if epic_folds(shown[at]) else shown[at]["fold"]
             epic_toggle(items, fleet, tgt, ch == curses.KEY_RIGHT)
             shown = listing()
             at = next((i for i, x in enumerate(shown) if x["kind"] == "sess" and x.get("target") == tgt), at)

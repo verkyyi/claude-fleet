@@ -182,9 +182,12 @@ done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
 # section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
-# the first row is ✦ 消息 (T701), the sessions' first group 等你 right under it
+# the first rows are ✦ 消息 (T701) · ⚡ 新会话 · ⌂ 回家 (T762), the sessions' first
+# group 等你 right under them
 grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '✦ 消息' || st_fail "B: the first line is not ✦ 消息: $(head -4 "$W/popup.txt")"
-grep -A2 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the line under ✦ 消息 is not 等你: $(head -5 "$W/popup.txt")"
+grep -A2 '│› ' "$W/popup.txt" | tail -1 | grep -q '⚡ 新会话' || st_fail "B: the second line is not ⚡: $(head -5 "$W/popup.txt")"
+grep -A3 '│› ' "$W/popup.txt" | tail -1 | grep -q '⌂ ' || st_fail "B: the third line is not ⌂: $(head -6 "$W/popup.txt")"
+grep -A4 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
 [ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话' "$W/popup.txt" || st_fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
@@ -617,6 +620,8 @@ from pathlib import Path
 B = sys.argv[1]
 spec = importlib.util.spec_from_file_location("fv", B + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+qs = importlib.util.spec_from_file_location("qo", B + "/fleet-quickopen.py")
+qo = importlib.util.module_from_spec(qs); qs.loader.exec_module(qo)
 US, E = "\x1f", "\x1b["
 TX, GY, R = E + "38;2;169;177;214m", E + "38;2;86;95;137m", E + "0m"
 now = int(time.time())
@@ -683,11 +688,44 @@ v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
     ["@10", "landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
-# the panel (view-panel's rows): the same lines, ⚡ and ⏻ after them
+# the panel (view-panel's rows): ✦ ⚡ ⌂ above the same lines, ◐ ⏻ after them (T762)
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])
 kinds = [e.get("cmd") or e.get("target") for e in p if e["kind"] in ("cmd", "sess")]
 h = kinds.index("history")
-assert kinds[h - 1:h + 2] == ["landed:905@o/r", "history", "new"] and kinds[-1] == "quit", kinds
+assert kinds[:3] == ["notices", "new", "home"], kinds
+assert kinds[h - 1:h + 2] == ["landed:905@o/r", "history", "lang"] and kinds[-1] == "quit", kinds
+# ONE order (T762): ↓ from any row walks the drawn stops round, ↑ walks them back;
+# a stop is drawn indented, only a ─ heading starts at the left edge — any width,
+# a query, 已收起 open or shut, the pin row there or not
+for q, op, cur in (("", set(), ""), ("", {"ended", "gone"}, "@8"), ("old", set(), ""), ("退出", set(), "")):
+    shown = fv.panel_rows(it, q, op, cmds=["new", "quit"], cur=cur)
+    stops = [i for i, e in enumerate(shown) if fv.pickable(e)]
+    assert stops, (q, shown)
+    for at in stops:
+        k = stops.index(at)
+        assert fv.nav_step(shown, at, 1) == stops[(k + 1) % len(stops)], (q, at)
+        assert fv.nav_step(shown, at, -1) == stops[k - 1], (q, at)
+    a, walk = stops[0], []
+    for _ in stops:
+        a = fv.nav_step(shown, a, 1); walk.append(a)
+    assert walk == stops[1:] + stops[:1], (q, walk, stops)
+    back = []
+    for _ in stops:
+        a = fv.nav_step(shown, a, -1); back.append(a)
+    assert back == list(reversed(stops)), (q, back, stops)
+    for width in (45, 140):
+        for e, segs in zip(shown, fv.paint(shown, -1, width, qo.cells, qo.clip)):
+            line = "".join(t for t, _ in segs)
+            if fv.pickable(e):
+                assert line.startswith("  "), (width, line)
+            elif e["kind"] == "hdr":
+                assert line.startswith("─"), (width, line)
+# its row gone (T762): the nearest session, else ⚡ — never a command the old index hits
+empty = fv.panel_rows([], "", set(), cmds=["new", "quit"])
+assert empty[fv.row_gone_at(empty, len(empty) - 2)].get("cmd") == "new", empty
+full = fv.panel_rows(it, "", set(), cmds=["new", "quit"])
+assert full[fv.row_gone_at(full, len(full) - 1)]["kind"] == "sess", full
+
 # the window is a setting: 1.5 h ⇒ one listed, seven older; fleet.conf's line when no env
 Path(sys.argv[2], "fleet.conf").write_text("FLEET_VIEW_CLOSED_HOURS=1.5\n")
 it2 = fv.entries("v1")

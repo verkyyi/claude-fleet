@@ -272,8 +272,8 @@ fleet_ui_t() {
     # the 看台's switcher (issue #3000, EPIC #2999 C2; #2752: no word to guess)
     zh:view_title) printf '会话' ;;
     en:view_title) printf 'Sessions' ;;
-    zh:view_keys) printf '↵ 切过去  Tab 操作  ↑↓ 选  打字筛选  ? 图例  esc 关  ↑ 到 ⚡' ;;
-    en:view_keys) printf '↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close  ↑ to ⚡' ;;
+    zh:view_keys) printf '↵ 切过去  Tab 操作  ↑↓ 选  打字筛选  ? 图例  esc 关' ;;
+    en:view_keys) printf '↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close' ;;
     zh:view_grp_pin_fmt) printf '置顶 %s' "${1:-}" ;;
     en:view_grp_pin_fmt) printf 'Pinned %s' "${1:-}" ;;
     zh:view_grp_ask_fmt) printf '等你 %s' "${1:-}" ;;
@@ -435,6 +435,8 @@ fleet_ui_t() {
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
     # T685: the one key left — said once per login (keys_notice)
+    zh:view_order_moved) printf '新会话和回家命令行现在在列表最上面' ;;
+    en:view_order_moved) printf 'New session and Home command line are at the top of the list now' ;;
     zh:view_keys_moved) printf 'fleet 只用 ⌘P（手机 F12 或 ⌃] p），其余都在面板里' ;;
     en:view_keys_moved) printf 'fleet uses one key, ⌘P (phone: F12 or ⌃] p) — everything else is in its panel' ;;
     zh:view_web_far) printf '浏览器里请从「会话」打开这个会话' ;;
@@ -561,8 +563,8 @@ fleet_ui_t() {
     zh:view_cmd_home) printf '⌂ 回家命令行（本机 shell）' ;;
     en:view_cmd_home) printf '⌂ Home command line (this machine'"'"'s shell)' ;;
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress
-    zh:view_keys_match_fmt) printf '↵ 切到 %s  ↓ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
-    en:view_keys_match_fmt) printf '↵ go to %s  ↓ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;
+    zh:view_keys_match_fmt) printf '↵ 切到 %s  ↑ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
+    en:view_keys_match_fmt) printf '↵ go to %s  ↑ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;
     zh:view_keys_epic) printf '→ 展开 / ← 收起' ;;
     en:view_keys_epic) printf '→ expand / ← collapse' ;;
     zh:view_keys_short) printf '↵ 进入/编辑  Tab 操作  ↑↓ 选  esc 关' ;;

@@ -13,6 +13,8 @@
 #      the name column only (glyph, ID, Agent, repo columns where they were)
 #   D  a search still finds a folded member; the first frame (hub=False) reads the
 #      kept copy only, never the hub; no driver ⇒ the list as before
+#   E  a driver with no member row under it (every child closed — T762) is an
+#      ordinary row: no ▸ / ▾, epic_folds false, its N/N kept
 # Exit 0 = pass.
 set -uo pipefail
 
@@ -94,7 +96,8 @@ it = fv.entries("v1")
 assert open(asked).read().split() == ["T497"], open(asked).read()
 by = {e["target"]: e for e in it if e["kind"] == "sess"}
 d = by["@10"]
-assert d["epic"] == {"done": 3, "total": 6, "needs": 1, "fail": 1}, d["epic"]
+assert d["epic"] == {"done": 3, "total": 6, "rows": 4, "needs": 1, "fail": 1}, d["epic"]
+assert fv.epic_folds(d)
 assert not d["expanded"]
 seq = [e["target"] for e in it if e["kind"] == "sess"]
 i = seq.index("@10")
@@ -155,11 +158,24 @@ assert n10 == n13 == fv.name_col(W_), (n10, n13, fv.name_col(W_))
 hits = fv.visible(it, "技能", set())
 assert [e["target"] for e in hits if e["kind"] == "sess"] == ["@11"] and not hits[0].get("tree"), hits
 
+# --- E (T762): a driver no open member hangs under — every child closed — is an
+# ordinary row: no ▸ / ▾, nothing to fold, its N/N still there
+full_rows = rows
+rows = "\n".join(l for l in full_rows.split("\n") if not any(l.startswith(w + US) for w in ("@11", "@12", "@13", "@15"))) + "\n"
+it = fv.entries("v1")
+d = [e for e in it if e.get("epic")][0]
+assert d["epic"]["rows"] == 0 and d["epic"]["total"] == 6 and not fv.epic_folds(d), d["epic"]
+sh = fv.visible(it, "", set())
+segs = fv.paint(sh, -1, W_, qo.cells, qo.clip)[[e.get("target") for e in sh].index("@10")]
+assert segs[5][0].startswith("EPIC 会话T 驱动") and "▸" not in "".join(t for t, _ in segs), segs
+assert segs[6] == (" 3/6", ("dim",)), segs[6]
+rows = full_rows
+
 # no driver mark ⇒ the list as before
 marks.clear()
 it = fv.entries("v1")
 assert not any(e.get("epic") or e.get("fold") for e in it), [(e.get("target"), e.get("epic"), e.get("fold")) for e in it if e.get("epic") or e.get("fold")]
 flat = [e["target"] for e in fv.visible(it, "", set()) if e["kind"] == "sess"]
 assert flat == ["@13", "@15", "@11", "@14", "@10", "@12"], flat
-print("ok   A only an EPIC hangs · B folded ! / ✗, N/N, @expand · C paint · D search, first frame, no driver")
+print("ok   A only an EPIC hangs · B folded ! / ✗, N/N, @expand · C paint · D search, first frame, no driver · E empty EPIC plain")
 PY

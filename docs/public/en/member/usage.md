@@ -22,16 +22,18 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | — | type to filter |
 | `?` | legend |
 | `esc` | close |
-| `↑` | to ⚡ |
 | — | Rows of the panel (pick one, ↵ — or type its name): ⚡ New session · ⌂ Home command line (this machine's shell) · ⏻ Quit fleet (sessions keep running) |
 <!-- /docs-gen:keys -->
 
 **The top line is the session's; messages get a row of their own.** The 看台's top line says the session only: its state, title, change number and quota. Whatever fleet has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. An error (red ✖) and a result nobody took (yellow ✓) stay until you have seen them; a warning (yellow ▲) fades after 6 seconds, a note (grey ∙) after 3. Once you have seen everything the row folds away. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
 
-The panel looks roughly like this (sample data):
+The panel looks roughly like this (sample data). The order on screen, top to bottom, is the order ↑↓ walk; ↓ at the bottom goes round to the top, ↑ at the top to the bottom. The cursor stops on indented rows; a line starting with ─ is a group heading.
 
 ```text
 › Search sessions                 Sessions 8
+  ✦ Messages
+  ⚡ New session
+  ⌂ Home command line (this machine's shell)
 ─ Waiting on you 1
   ! T128     Claude  Login page redesign         web-app
                      keep the old redirect?
@@ -40,14 +42,15 @@ The panel looks roughly like this (sample data):
   ↻          Claude  Weekly report data
 ─ Queued 1
   ✓ T127     Claude  Upgrade dependencies        web-app  waiting for the release train
-▸ Folded away (4)
-  ⚡ New session
-↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close  ↑ to ⚡
+  ▸ Folded away (4)
+  ◐ Language / 语言
+  ⏻ Quit fleet (sessions keep running)
+↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close
 ```
 
 ### Open a session
 
-- **Open a new session**: pick “⚡ New session” and press Enter (↑ from the top of the list gets there) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. The defaults: the repository of the session you are looking at (when it has none, the one you chose last time — “No repo” counts), and the agent that repository last opened with; `⌘N` opens this box directly, Enter then opens the session, Escape closes it. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
+- **Open a new session**: pick “⚡ New session” and press Enter (at the top of the list, under Messages) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. The defaults: the repository of the session you are looking at (when it has none, the one you chose last time — “No repo” counts), and the agent that repository last opened with; `⌘N` opens this box directly, Enter then opens the session, Escape closes it. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
 - **Switch sessions**: type part of a title or ticket number, select a session with ↑↓, and press Enter.
 
 The actions page, a question such as a rename, and the new-session box are whole pages: the list area is replaced, the top line names what it is about (the session, or “⚡ New session”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new-session box; items on a page are clickable (click a repository or agent again for the next one, click “Open” to open).

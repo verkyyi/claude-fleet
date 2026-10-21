@@ -37,7 +37,7 @@ def panel(state):
     view.entries = entries
     view.current = lambda _: "@0"
     view.view_fleet = lambda _: "fl"
-    view.grid_read = lambda _: view.bolt_new()["g"]
+    view.grid_read = lambda *_: view.bolt_new()["g"]
     view.view_lang_env = lambda _: None
     curses.wrapper(view.popup, qo, "test", "")
 

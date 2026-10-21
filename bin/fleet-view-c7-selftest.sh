@@ -460,14 +460,15 @@ vp() { TMUX="$IN,0,0" python3 "$BIN/fleet-quickopen.py" view-panel --view fl@vie
 ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 vp > "$W/panel.txt" || st_fail "P: view-panel"
 grep -qx "cmd${T}pin${T}置顶当前会话" "$W/panel.txt" || st_fail "P: plain pin row missing"
-[ "$(tail -4 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:new cmd:home cmd:lang cmd:quit " ] || st_fail "P: command order (⚡ · ⌂ 回家命令行 · 语言 · ⏻ — T685)"
+[ "$(head -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:notices cmd:new cmd:home " ] || st_fail "P: top commands (✦ · ⚡ · ⌂ 回家命令行 — T762): $(head -3 "$W/panel.txt")"
+[ "$(tail -3 "$W/panel.txt" | cut -f1,2 | tr '\t\n' ': ')" = "cmd:pin cmd:lang cmd:quit " ] || st_fail "P: bottom commands (置顶 · 语言 · ⏻ — T762): $(tail -3 "$W/panel.txt")"
 [ "$(grep -m1 -E '^(cmd|sess|sec)' "$W/panel.txt" | cut -f1,2 | tr '\t' ':')" = "cmd:notices" ] || st_fail "P: ✦ 消息 is the first row (T701)"
 grep -q '^grid' "$W/panel.txt" && st_fail "P: composer controls still inserted in list"
 for word in 置顶 pin; do vp "$word" | grep -q "^cmd${T}pin" || st_fail "P: pin search"; done
 for word in 语言 lang english 中文; do vp "$word" | grep -q "^cmd${T}lang" || st_fail "P: language search"; done
 vp Gamma | grep -q "^cmd${T}lang" && st_fail "P: unrelated language row in search"
 FLEET_PANEL_COMMANDS=none vp | grep -q '^cmd' && st_fail "P: none still has commands"
-[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "notices pin new home lang quit " ] || st_fail "P: retired commands"
+[ "$(FLEET_PANEL_COMMANDS='new shell newsess' vp | grep '^cmd' | cut -f2 | tr '\n' ' ')" = "notices new home pin lang quit " ] || st_fail "P: retired commands"
 for word in 回家 home shell; do vp "$word" | grep -q "^cmd${T}home" || st_fail "P: 回家命令行 search ($word)"; done
 vp Gamma | grep -q "^cmd${T}home" && st_fail "P: unrelated 回家命令行 row in search"
 for word in 消息 message; do vp "$word" | grep -q "^cmd${T}notices" || st_fail "P: ✦ 消息 search ($word, T675)"; done
@@ -511,11 +512,11 @@ pclosed
 waitfor 10 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["repo"]=="acme/app" and d["agent_by_repo"]["acme/app"]=="claude", d' "$W/state/compose-state.json" 2>/dev/null \
   || st_fail "P: the box did not remember its repo and agent: $(cat "$W/state/compose-state.json")"
 [ -e "$W/conf/panel-drafts" ] && st_fail "P: the box still writes panel-drafts"
-# Search hit still enters the session; ↓ lights ⚡, Tab opens the box too
+# Search hit still enters the session; ↑ lights ⚡ (above the hits — T762), Tab opens the box too
 ti select-window -t "=fl@view-v1:$W3"; now_on "$W3"
 popen
 to send-keys -t o:view -l Gamma; sleep 0.3
-to send-keys -t o:view Down Tab
+to send-keys -t o:view Up Tab
 waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开 ↵'" || st_fail "P: Tab on ⚡ did not open the box"
 to send-keys -t o:view Escape; sleep 0.2; to send-keys -t o:view Escape
 pclosed
