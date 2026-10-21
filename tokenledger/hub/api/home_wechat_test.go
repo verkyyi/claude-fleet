@@ -47,6 +47,9 @@ func TestWxRelayNextFrontPage(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &a) != nil || a.Name != "" || !a.Followed || a.Applied {
 		t.Fatalf("/apply/me = %d %s", resp.StatusCode, body)
 	}
+	if _, body := newBrowser(t, wechatUA).do(http.MethodGet, h.http.URL+ApplicantPath, nil); !strings.Contains(body, `"silent":true`) {
+		t.Fatalf("relay on, no note: %s", body)
+	}
 	// Anywhere else is not a front page: the old landing.
 	b3 := newBrowser(t, wechatUA)
 	if resp := h.relayBack(t, b3, start(b3, "https://evil.example/"), "open-new-0123456789ab", "gate-secret", time.Now()); resp.Header.Get("Location") != applicantPath {
@@ -97,8 +100,10 @@ func TestApplyOneTap(t *testing.T) {
 		t.Fatalf("/apply/me after = %s", body)
 	}
 	// No note: nobody.
-	if resp, _ := newApplyClient(t, h, "", "", "", "").do(http.MethodGet, ApplicantPath, nil); resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("no note = %d", resp.StatusCode)
+	// …and with no relay road the page must not hop: it draws the code.
+	if resp, body := newApplyClient(t, h, "", "", "", "").do(http.MethodGet, ApplicantPath, nil); resp.StatusCode != http.StatusUnauthorized ||
+		!strings.Contains(body, `"silent":false`) {
+		t.Fatalf("no note = %d %s", resp.StatusCode, body)
 	}
 	if applicantName("微信用户·1a2b") != "" || applicantName("WeChat user·1a2b") != "" || applicantName("林小满") != "林小满" {
 		t.Fatal("applicantName")
