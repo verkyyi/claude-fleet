@@ -1303,6 +1303,16 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
             with self.assertRaises(Fault):
                 validate_write("worker_start", bad)
 
+    def test_start_carries_its_agent_file(self):
+        # issue T672: the hub sends the agent file a placed start opens as (a
+        # shipped one — fleet-worker); a node that refused the field declined
+        # every task dispatch placed on it.
+        validate_write("worker_start", {"kind": "scratch", "repo": "acme/web", "task": "T9", "as": "fleet-worker"})
+        validate_write("worker_start", {"issue": 3, "as": "fleet-epic:epic-driver"})
+        for bad in ("../x", "-rf", "a b", "", 7):
+            with self.assertRaises(Fault):
+                validate_write("worker_start", {"kind": "scratch", "as": bad})
+
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.
         with self.assertRaises(Fault):

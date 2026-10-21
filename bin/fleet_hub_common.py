@@ -515,12 +515,18 @@ def validate_gh_read(params):
 
 
 TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
+AGENT_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 
 
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref"))
+                            "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref",
+                            "as"))
+        # as (issue T672): the agent file the start opens as — one the release
+        # ships, found here by name (FLEET_CONTROL_AS → --as); the hub's rule.
+        if "as" in params and not (isinstance(params["as"], str) and AGENT_FILE_RE.fullmatch(params["as"])):
+            raise Fault("INVALID_ARGUMENT", "as must be an agent file's name")
         # compat-1v: 下一批删 — a hub from before C8 (EPIC T497) with its ID switch
         # off still sends its launch contract; nothing here reads it any more.
         if "ticket_ref" in params:
