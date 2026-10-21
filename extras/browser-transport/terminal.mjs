@@ -43,7 +43,9 @@ try {
   await page.goto(`${origin}/app/sessions`)
   await page.getByRole('link', { name: 'Terminal', exact: true }).first().click()
   await ready()
-  assert.equal(new URL(page.url()).searchParams.get('worker'), worker)
+  // a session's terminal is its page's 终端 view (GR5E C9)
+  assert.equal(decodeURIComponent(new URL(page.url()).pathname), `/app/s/${worker}`)
+  assert.equal(new URL(page.url()).searchParams.get('view'), 'term')
   const screen = await page.locator('.xterm-screen').boundingBox()
   assert(screen)
   await page.mouse.move(screen.x + 1, screen.y + 8)
@@ -94,13 +96,14 @@ try {
   // Route leave must release the attachment; no pending composition can travel
   // into the next target. Native OS IME candidate behavior remains manual.
   await input().dispatchEvent('compositionstart', { data: '未提交' })
-  await page.getByRole('link', { name: 'Sessions', exact: true }).last().click()
+  // back to 会话 (the terminal's own 会话 button opens the list now)
+  await page.goBack()
   await page.getByRole('link', { name: 'My Terminal', exact: true }).last().click()
   await ready()
-  assert.equal(new URL(page.url()).searchParams.has('worker'), false)
+  assert.equal(new URL(page.url()).pathname, '/app/s/shell')
   assert.equal(await bytes(), '')
   received.push('route cleanup during synthetic composition: no stale text to personal target')
-  await page.getByRole('link', { name: 'Sessions', exact: true }).last().click()
+  await page.goBack()
   // Empty list keeps the personal entry. Isolated fixture only, API unchanged.
   await page.route('**/v1/fleet/sessions*', route => route.fulfill({ json: { sessions: [] } }))
   await page.route('**/v1/fleet/stream*', route => route.abort())

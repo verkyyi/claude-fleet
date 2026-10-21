@@ -24,5 +24,22 @@
       "sizes": "180x180",
       "type": "image/png"
     }
+  ],
+  "shortcuts": [
+    {
+      "name": "新建会话",
+      "short_name": "新建",
+      "url": "/app/new"
+    },
+    {
+      "name": "我的 Shell",
+      "short_name": "Shell",
+      "url": "/app/s/shell?view=term"
+    },
+    {
+      "name": "我的用量",
+      "short_name": "用量",
+      "url": "/app/me/usage"
+    }
   ]
 }

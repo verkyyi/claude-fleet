@@ -184,7 +184,7 @@ export async function install(): Promise<string> {
   ];
   const flows: Record<string, { provider: string; account: string; again: boolean }> = {};
   const subsAt = (b: { provider?: string; account?: string }) => subs.find((x) => x.provider === b.provider && x.account === b.account);
-  if (subSc === "login") sc.page = (sc.page || "/usage") + (String(sc.page || "").includes("?") ? "&" : "?") + "connect=claude";
+  if (subSc === "login") sc.page = (sc.page || "/me/usage") + (String(sc.page || "").includes("?") ? "&" : "?") + "connect=claude";
   // 我的会话 (#3927): three live sessions on two machines, two ended ones
   const H = 36e5, FLEET = "5b1e0000-0000-4000-8000-00000000f001", FLEET2 = "5b1e0000-0000-4000-8000-00000000f002";
   const before = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -248,13 +248,13 @@ export async function install(): Promise<string> {
       return write(b.tool, args.worker_id, args);
     }
     // 加载中: the page's own reads never answer, so its loading state stays on screen
-    if (state === "loading" && (/^\/v1\/fleet\/tasks/.test(p) || (sc.page === "/usage" && p === "/v1/me/usage"))) return new Promise<Response>(() => {});
+    if (state === "loading" && (/^\/v1\/fleet\/tasks/.test(p) || (sc.page === "/me/usage" && p === "/v1/me/usage"))) return new Promise<Response>(() => {});
     // 设备's reads in the review's loading / error / door-off states
     const devRead = /^\/v1\/(fleet\/(connect|devices|entry\/)|nodes)/.test(p);
     if (devRead && state === "loading") return new Promise<Response>(() => {});
     if (devRead && state === "error") return ok({ error: "演示：入口出错" }, 502);
     // 设置's reads (#3931): the same two states
-    if ((p === "/v1/me/identities" || p === "/v1/fleet/person-bundle") && sc.page === "/settings") {
+    if ((p === "/v1/me/identities" || p === "/v1/fleet/person-bundle") && sc.page === "/me/settings") {
       if (state === "loading") return new Promise<Response>(() => {});
       if (state === "error") return ok({ error: "演示：入口出错" }, 502);
     }
@@ -307,7 +307,7 @@ export async function install(): Promise<string> {
         ids.push({ kind: "wechat-mp", subject: "o-mp-" + me.login, label: "o-mp-" + me.login, verified_at: new Date().toISOString() });
         return ok({ s: "bound" });
       case "/v1/me/usage":
-        if (state === "error" && sc.page === "/usage") return ok({ error: "unavailable" }, 503);
+        if (state === "error" && sc.page === "/me/usage") return ok({ error: "unavailable" }, 503);
         return ok({ ...usage(/[?&]range=([^&]+)/.exec(url)?.[1] || "7d"), ...(sc.member ? { trial: memberTrial } : {}) });
       case "/v1/me/trial/upgrade":
         memberTrial.upgrade_asked = new Date().toISOString();

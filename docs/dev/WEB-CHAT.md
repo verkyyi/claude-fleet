@@ -267,7 +267,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 
 - 会话号与目录：`GET /api/conversation[?provider=codex]` 的 `session`（Claude 的 session id / Codex 的 thread id）和 `cwd`。
   终端里接上：Claude `cd <cwd> && claude --resume <session>`，Codex `cd <cwd> && codex resume <session>`。
-- 网页上的「在终端里继续」：`/app/terminal?continue=claude|codex`——个人终端从家读这一边的 `session` / `cwd` / `busy`（不从地址里拿），
+- 网页上的「在终端里继续」：`/app/s/shell?view=term&continue=claude|codex`——个人终端从家读这一边的 `session` / `cwd` / `busy`（不从地址里拿），
   在跑就不接；否则开 看台 的 shell（⌃\）敲 `cd '<cwd>' && fleet run claude --resume <session>`（Codex：`fleet run codex resume <session>`）。
 - 正在跑：同一响应的 `busy`（及 `turn`）；`busy` 为真时不要在别处接着写这一段。这一版的锁只在服务进程里（`live`），
   终端那一侧的锁由另一个任务接上。

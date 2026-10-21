@@ -19,7 +19,7 @@ import tailwindcss from "@tailwindcss/vite";
 // (the hub's AppManifestPath), the ONE manifest of the hub (/term links it too).
 // The icons are the theme's PNG cut of logo.svg (bin/site-images.sh), hashed
 // into assets/; the colour is the theme's --fleet-bg. No service worker, no
-// offline cache.
+// offline cache. Its shortcuts open the new addresses (GR5E C9, src/app/legacy.ts).
 const repo = path.resolve(import.meta.dirname, "../..");
 function homeScreen(base: string): Plugin {
   const href = `${base}manifest.webmanifest`;
@@ -46,6 +46,12 @@ function homeScreen(base: string): Plugin {
         background_color: bg, theme_color: bg, lang: "zh-CN",
         icons: [icon("icon-192.png", "192x192"), icon("icon-512.png", "512x512"),
           icon("apple-touch-icon.png", "180x180")],
+        // a long press on the home-screen icon (GR5E C9): the new addresses only
+        shortcuts: [
+          { name: "新建会话", short_name: "新建", url: "/app/new" },
+          { name: "我的 Shell", short_name: "Shell", url: "/app/s/shell?view=term" },
+          { name: "我的用量", short_name: "用量", url: "/app/me/usage" },
+        ],
       };
       this.emitFile({ type: "asset", fileName: "manifest.webmanifest", source: JSON.stringify(manifest, null, 2) + "\n" });
     },

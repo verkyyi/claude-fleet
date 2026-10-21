@@ -29,6 +29,7 @@ import { sessionWrite } from "@/shared/sessions";
 import { terminalLink } from "@/shared/terminal";
 import { viewAs } from "@/shared/viewAs";
 import { usePage } from "../Shell";
+import { shellPath } from "../legacy";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
 import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, writtenCode, type Task } from "../task-state";
 import { findTask } from "../use-tasks";
@@ -415,7 +416,7 @@ export default function SessionsPage() {
               <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("找编号或标题，如 K5", "Find a code or title, e.g. K5")}
                 aria-label={tr("找编号或标题", "Find a code or title")} className="ps-8" autoComplete="off" spellCheck={false} />
             </div>
-            <Button asChild variant="outline"><Link to="/terminal"><TerminalSquare />{tr("我的终端", "My Terminal")}</Link></Button>
+            <Button asChild variant="outline"><Link to={shellPath()}><TerminalSquare />{tr("我的终端", "My Terminal")}</Link></Button>
           </div>
           {tasks.data && stale ? <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <p role="status" className="text-clay">{tr("暂时无法更新 · 保留上次确认的状态", "Stale information · showing the last confirmed state")}

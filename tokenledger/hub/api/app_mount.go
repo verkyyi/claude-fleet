@@ -92,6 +92,17 @@ func isMeTab(p string) bool {
 	return strings.HasPrefix(p, AppPrefix+mePagePath+"/")
 }
 
+// isSessionPage says whether p is one of the session list's own addresses
+// (claude-fleet GR5E C2 · C3 · C9): /app/chat (the web conversation's row),
+// /app/new (新建会话) and /app/s/<ref> (one session — its 对话 | 终端; your
+// Shell is /app/s/shell, an old /app/terminal lands there) — the console's
+// pages, which draw them. Opened straight (a bookmark, a refresh, a notice's
+// link, a home-screen shortcut), each is the console's page, never a 404.
+func isSessionPage(p string) bool {
+	const one = AppPrefix + "/s/"
+	return p == AppPrefix+"/chat" || p == AppPrefix+"/new" || (strings.HasPrefix(p, one) && len(p) > len(one))
+}
+
 // devicesPagePath is 设备 (C7): the computer's install, the phone's way in,
 // the keys and the person's own machines, one tab each (?tab=pc|phone|keys|home).
 // It takes over 设备与 SSH, 从手机连, 我的连接 and 我的机器.
@@ -555,7 +566,7 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) {
-				if (consoleNewLive(strings.TrimSuffix(p, "/")) || isMeTab(p)) && s.consoleBuilt("app") {
+				if (consoleNewLive(strings.TrimSuffix(p, "/")) || isMeTab(p) || isSessionPage(p)) && s.consoleBuilt("app") {
 					// a page the new console has taken over (claude-fleet#3926)
 					s.appSide().ServeHTTP(w, r)
 					return

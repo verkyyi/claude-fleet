@@ -13,5 +13,5 @@ assert.equal(continueCommand('codex', 'abc', '/a\nb'), null, 'a newline in the d
 assert.equal(continueProvider('codex'), 'codex');
 assert.equal(continueProvider('gemini'), null);
 assert.equal(continueProvider(null), null);
-assert.equal(continueLink('codex'), '/terminal?continue=codex');
+assert.equal(continueLink('codex'), '/s/shell?view=term&continue=codex');
 console.log('chat-continue: ok');

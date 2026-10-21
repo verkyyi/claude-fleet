@@ -43,7 +43,7 @@ Closing the terminal window does not stop your sessions; type `fleet` in a termi
 Sign in to the portal, open Sessions, and choose **Terminal** on a running session
 to open that session directly. **My Terminal** in the sidebar and Sessions header
 opens your personal terminal. Ended sessions keep their **Resume** action.
-The page is `/app/terminal`; old `/term?worker=…` links redirect here and keep the target.
+Your own terminal is `/app/s/shell?view=term`, a session's is `/app/s/<session>?view=term`; old `/term?worker=…` and `/app/terminal` links redirect there and keep the target.
 
 A dropped connection (network, a hub update, your machine restarting, a phone in the background) is never given up on: the last screen stays, input pauses, and the page tries again at once when it is back in front or the network returns — always reconnecting to the same terminal. Uncertain input is never resent.
 **Open shell** selects your persistent personal shell. Exiting a nested shell with `exit` or EOF returns to its parent. If the session you last viewed has ended, you land back in your personal terminal with a note; if the personal shell itself exited (or your machine's tmux went), the page opens a new personal terminal by itself — exited commands and workers are not restarted.

@@ -2,9 +2,11 @@
 // list opens — its workspace (C4, Workspace.tsx), 对话 | 终端 switched in place
 // by ?view=, 详情 in a drawer. <ref> is a code, a task's ID or a session's
 // identity (work.ts findRow); one the list no longer holds is asked of the
-// hub's resolver.
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router";
+// hub's resolver. Your Shell is /s/shell?view=term, and a session's terminal
+// the list does not hold (a worker of another machine, ⌘P's web-go) opens on
+// its own page — GR5E C9: the old /terminal(?worker=) lands on these.
+import { lazy, useEffect, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
@@ -15,9 +17,20 @@ import { findTask } from "../use-tasks";
 import { findRow, rowOf, type Row } from "../work";
 import { useWorkRows } from "../work-rows";
 import { Workspace } from "../Workspace";
+import { SHELL_REF } from "../legacy";
+
+const TerminalPage = lazy(() => import("./terminal"));
+// a session's identity (<fleet>/<id>) is a worker its terminal opens as it is
+const isWorker = (ref: string) => ref.includes("/");
 
 export default function SessionPage() {
   const { ref = "" } = useParams();
+  if (ref === SHELL_REF) return <TerminalPage key={SHELL_REF} worker={null} />;
+  return <OneSession key={ref} ref_={ref} />;
+}
+
+function OneSession({ ref_: ref }: { ref_: string }) {
+  const [params] = useSearchParams();
   const { rows, markSeen } = useWorkRows();
   const [found, setFound] = useState<Row | null | undefined>(undefined);
   const inList = rows ? findRow(rows, ref) : undefined;
@@ -35,6 +48,7 @@ export default function SessionPage() {
   useEffect(() => { if (inList) markSeen(inList); }, [mark]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!rows || (!inList && found === undefined)) return <div className="mx-auto max-w-3xl px-4 py-6"><Loading /></div>;
+  if (!r && isWorker(ref) && params.get("view") === "term") return <TerminalPage worker={ref} />;
   if (!r) return (
     <div className="mx-auto max-w-3xl px-4 py-6">
       <Empty icon={<ArrowLeft />} title={tr("没找到这个会话", "No such session")}
