@@ -136,6 +136,7 @@ FLEET_LAUNCH_CREATE                legacy: retired with the launch proof / start
 FLEET_ROLLBACK_GH                  seam: the gh command bin/fleet-release-rollback.sh runs (#4663)
 FLEET_ID_DIR                       path: the ID ledgers dir ($FLEET_CONF_DIR/ids — fleet_id.py ledger_dir; fleet_cfg_work_over, T569)
 FLEET_TASK_CLOSED_CMD              seam: answers `<T<n>>` instead of fleet_task_control.py closed — 0 closed · 1 open · 3 unknown (fleet_task_closed, fleet-cleanup-idle.py, #4897)
+FLEET_TASK_DUP_OK                  knob: 1 = dash-raw-session.sh opens a window for a record a window here already runs (T847 refuses by default)
 FLEET_TASK_RECORD                  seam: the task-record script fleet-brief.sh asks `get T<n>` of (#4897, #4898)
 FLEET_TASK_FID                     handoff: `T<n>=<ID>` — the task's own ID fleet-task-record.sh dispatch hands its spawner, read only for that record (fleet_task_fid; EPIC T644 C2)
 FLEET_TASK_FID_TIMEOUT             knob: seconds the spawner waits on the hub for a task's ID (fleet_task_fid / fleet_task_take; default 5; EPIC T644 C2)
