@@ -227,17 +227,43 @@ def render_list(lines, i, out):
     return i
 
 # ---- the page frame --------------------------------------------------------
-CSS = """
-:root{--bg:#f4f6f5;--panel:#fff;--ink:#15201d;--ink-2:#3c4945;--muted:#6a7773;--line:#e0e6e3;--line-2:#ecf0ee;
---brand:#0e6e5e;--brand-soft:#e1f1ec;--term:#0d1513;--term-ink:#cfe3dd;--warn-soft:#fbefd6;
---f-display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;
---f-ui:"IBM Plex Sans","PingFang SC","Segoe UI",system-ui,sans-serif;--f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#0e1412;--panel:#151d1b;--ink:#e5ece9;--ink-2:#c1ccc8;--muted:#8b9894;--line:#26302d;--line-2:#1e2725;
---brand:#3fc2a6;--brand-soft:#16302a;--term:#080c0b;--warn-soft:#33290f;color-scheme:dark}}
+# The look is extras/fleet-theme's (issue #3924; EPIC SGS6 C4): its tokens and the
+# shadcn light / dark blocks inlined as they are, the fonts at /site/fonts/ (the
+# site's copy), and every colour below a var() of them — none is defined here
+# (fleet-theme-selftest.sh). The brand — the mark and its name, logo.svg's <title> —
+# comes from the same package.
+THEME = os.path.join(REPO, 'extras', 'fleet-theme')
+
+def theme_css():
+    t = open(os.path.join(THEME, 'theme.css'), encoding='utf-8').read()
+    a, b = t.find('/* fleet:tokens */'), t.find('@theme inline')
+    if a < 0 or b < a:
+        print('docs-build: extras/fleet-theme/theme.css: no fleet:tokens block before @theme', file=sys.stderr)
+        sys.exit(1)
+    fonts = open(os.path.join(THEME, 'fonts.css'), encoding='utf-8').read().replace('url(./fonts/', 'url(/site/fonts/')
+    tidy = lambda c: re.sub(r'\s+', ' ', re.sub(r'/\*.*?\*/', '', c, flags=re.S)).strip()
+    return '\n'.join(tidy(c) for c in re.findall(r'@font-face\s*\{[^}]*\}', fonts)) + '\n' + tidy(t[a:b])
+
+def theme_brand():
+    svg = open(os.path.join(THEME, 'logo.svg'), encoding='utf-8').read().strip()
+    m = re.search(r'<title>([^<]+)</title>', svg)
+    if not m:
+        print('docs-build: extras/fleet-theme/logo.svg has no <title> (the brand name)', file=sys.stderr)
+        sys.exit(1)
+    mark = re.sub(r'<title>[^<]*</title>', '', svg).replace('<svg ', '<svg class="mark" aria-hidden="true" ', 1)
+    return html.unescape(m.group(1)), mark
+
+BRAND, MARK = theme_brand()
+CSS = theme_css() + """
+:root{--bg:var(--background);--panel:var(--card);--ink:var(--foreground);--ink-2:var(--foreground);--muted:var(--muted-foreground);
+--line:var(--border);--line-2:var(--code-bg);--brand:var(--link);--brand-soft:var(--accent);--term:var(--fleet-term);--term-ink:var(--fleet-ink);
+--f-display:var(--fleet-font-display);--f-ui:var(--fleet-font-ui);--f-mono:var(--fleet-font-mono);--warn-soft:#fbefd6}
+@media (prefers-color-scheme:dark){:root{--warn-soft:#33290f}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15.5px/1.7 var(--f-ui);-webkit-font-smoothing:antialiased}
 a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
-header .brand{font:600 17px var(--f-display);color:var(--ink)}
+header .brand{display:inline-flex;align-items:center;gap:9px;font:700 17px var(--f-display);color:var(--ink)}header .brand:hover{text-decoration:none}
+header .brand .mark{width:26px;height:26px;flex:none}
 header nav{display:flex;flex-wrap:wrap;gap:4px}header nav a{padding:4px 10px;border-radius:7px;color:var(--ink-2);font-size:14px}
 header nav a.aux{margin-left:10px;color:var(--muted)}header nav a.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
 header .lang{margin-left:auto;font-size:14px}
@@ -246,7 +272,7 @@ aside{font-size:14px}aside h4{margin:18px 0 6px;font-size:12px;letter-spacing:.0
 aside a{display:block;padding:3px 0;color:var(--ink-2)}aside a.on{color:var(--brand);font-weight:600}
 main{min-width:0}main h1{font:650 30px/1.25 var(--f-display);margin:0 0 18px}main h2{font:620 21px/1.3 var(--f-display);margin:34px 0 10px;padding-top:8px;border-top:1px solid var(--line-2)}
 main h3{font-size:17px;margin:24px 0 8px}main p,main ul,main ol{margin:0 0 14px}main li{margin:4px 0}
-code{font-family:var(--f-mono);font-size:.88em;background:var(--line-2);padding:1px 5px;border-radius:5px}
+code{font-family:var(--f-mono);font-size:.88em;background:var(--code-bg);color:var(--code-fg);padding:1px 5px;border-radius:5px}
 pre{background:var(--term);color:var(--term-ink);padding:14px 16px;border-radius:9px;overflow:auto;line-height:1.55}
 pre code{background:none;padding:0;color:inherit}
 blockquote{margin:0 0 14px;padding:10px 14px;border-left:3px solid var(--brand);background:var(--brand-soft);border-radius:0 8px 8px 0}
@@ -275,7 +301,7 @@ def reader_of(p):
     head = p.split('/', 1)[0]
     return head if head in READERS and '/' in p else None
 
-def frame(lang, page, title, body, all_titles, pending=False):
+def frame(lang, page, title, body, all_titles, pending=False, ld=''):
     ui = UI[lang]
     cur = reader_of(page)
     nav = ''.join('<a href="%s" class="%s">%s</a>' % (html.escape(rel(page, r + '/quickstart')),
@@ -303,14 +329,14 @@ def frame(lang, page, title, body, all_titles, pending=False):
     head_lang = 'zh-CN' if lang == 'zh' else 'en'
     return ('<!doctype html><html lang="%s"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>%s · fleet</title><link rel="icon" href="/favicon.ico" sizes="32x32">'
+            '<title>%s · %s</title><link rel="icon" href="/favicon.ico" sizes="32x32">'
             '<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">'
             '<link rel="alternate" type="text/markdown" href="%s">'
-            '<link rel="alternate" hreflang="%s" href="%s"><style>%s</style></head><body>'
-            '<header><a class="brand" href="%s">fleet</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
+            '<link rel="alternate" hreflang="%s" href="%s"><style>%s</style>%s</head><body>'
+            '<header><a class="brand" href="%s">%s%s</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
             '<div class="wrap"><aside>%s</aside><main>%s<footer><a href="%s">%s</a></footer></main></div></body></html>\n') % (
-        head_lang, html.escape(title), html.escape(src), 'en' if other == 'en' else 'zh-CN', other_url, CSS,
-        html.escape(rel(page, 'index')), nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
+        head_lang, html.escape(title), html.escape(BRAND), html.escape(src), 'en' if other == 'en' else 'zh-CN', other_url, CSS,
+        ld, html.escape(rel(page, 'index')), MARK, html.escape(BRAND), nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
 
 # ---- generated blocks (issue #3580) -------------------------------------------
 GEN_RE = re.compile(r'(<!-- docs-gen:([a-z-]+) -->\n)(.*?)(<!-- /docs-gen:\2 -->)', re.S)
@@ -484,6 +510,27 @@ if os.path.isdir(OUT):
 # keeps that compiling in a checkout that never built the docs (issue #3584)
 os.makedirs(OUT)
 open(os.path.join(OUT, '.gitkeep'), 'w').close()
+# the FAQ as data, off the same faq.md (bin/docs-faq.py is its one reader): faq.json
+# beside the page, and the page's FAQPage JSON-LD — the docs are its ONE home (EPIC
+# SGS6 C4: the site's front page carries no FAQ of its own)
+faq_raw = {}
+for l in LANGS:
+    if 'faq' in src[l]:
+        r = subprocess.run([sys.executable, os.path.join(REPO, 'bin', 'docs-faq.py'), 'json', '--lang', l,
+                            '--src', SRC], capture_output=True, text=True)
+        if r.returncode != 0:
+            print('docs-build: %s/faq.md: %s' % (l, r.stderr.strip()), file=sys.stderr)
+            sys.exit(1)
+        faq_raw[l] = r.stdout
+
+def faq_ld(l):
+    items = json.loads(faq_raw[l])['items']
+    ld = {'@context': 'https://schema.org', '@type': 'FAQPage', 'inLanguage': 'zh-CN' if l == 'zh' else 'en',
+          'mainEntity': [{'@type': 'Question', 'name': it['q'],
+                          'acceptedAnswer': {'@type': 'Answer', 'text': it['a']}} for it in items]}
+    return ('<script type="application/ld+json">%s</script>'
+            % json.dumps(ld, ensure_ascii=False, separators=(',', ':')).replace('</', '<\\/'))
+
 rows = []
 for l in LANGS:
     all_titles = {}
@@ -501,22 +548,17 @@ for l in LANGS:
                     + '<h1>%s</h1>' % html.escape(titles[('zh', p)]))
             state = 'pending'
         with open(dest + '.html', 'w', encoding='utf-8') as fh:
-            fh.write(frame(l, p, all_titles[p], body, all_titles, state == 'pending'))
+            fh.write(frame(l, p, all_titles[p], body, all_titles, state == 'pending',
+                           faq_ld(l) if p == 'faq' and state == 'page' and l in faq_raw else ''))
         with open(dest + '.md', 'w', encoding='utf-8') as fh:
             fh.write(md)
         rows.append('%s\t%s\t%s\t%s' % (l, p, all_titles[p], state))
 with open(os.path.join(OUT, 'pages.tsv'), 'w', encoding='utf-8') as fh:
     fh.write('\n'.join(rows) + '\n')
-# the FAQ as data, off the same faq.md (bin/docs-faq.py is its one reader)
 for l in LANGS:
-    if 'faq' in src[l]:
-        r = subprocess.run([sys.executable, os.path.join(REPO, 'bin', 'docs-faq.py'), 'json', '--lang', l,
-                            '--src', SRC], capture_output=True, text=True)
-        if r.returncode != 0:
-            print('docs-build: %s/faq.md: %s' % (l, r.stderr.strip()), file=sys.stderr)
-            sys.exit(1)
+    if l in faq_raw:
         with open(os.path.join(OUT, l, 'faq.json'), 'w', encoding='utf-8') as fh:
-            fh.write(r.stdout)
+            fh.write(faq_raw[l])
 print('docs-build: %d pages (%d zh, %d en of which %d pending) → %s' % (
     len(rows), len(src['zh']), len(src['zh']), sum(r.endswith('\tpending') for r in rows), OUT))
 PY

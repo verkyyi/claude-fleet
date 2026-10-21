@@ -47,7 +47,6 @@ import os, re, sys
 root, listing = sys.argv[1:3]
 PKG = 'extras/fleet-theme/'
 EXEMPT = {   # a page the batch replaces, and the member that does
-    'bin/docs-build.sh': 'C18 #3941 帮助文档',
     'plugins/fleet-epic/skills/epic-page/template.html': 'EPIC 设计页（会话里开给人看，不是产品页面）',
 }
 # built output (a Vite build of the package, committed), tests and their fixtures

@@ -1,4 +1,4 @@
-# fleet help
+# ClaudeFleet help
 
 Sign in, say in a chat what you need done, and a session does it and tells you when it is finished — on your computer or your phone. Find where to start by who you are.
 
