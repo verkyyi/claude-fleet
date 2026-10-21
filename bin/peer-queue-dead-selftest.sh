@@ -28,10 +28,11 @@ st_tally
 
 U=c7d372cf-903b-5229-8e55-3e286e9c026d
 NOW=$(date +%s)
-row() {  # <ts> <rid> <to> <via> <detail>
+row() {  # <ts> <rid> <to> <via> <detail> — a MESSAGE: a report nobody took is
+         # handed to the person instead (T887, bin/peer-hand-selftest.sh)
   python3 -c 'import json, sys
 ts, rid, to, via, det = sys.argv[1:6]
-print(json.dumps({"ts": int(ts), "rid": rid, "kind": "report", "to": to, "state": "QUEUED", "via": via, "detail": det}))' "$@" >> "$BOOK"
+print(json.dumps({"ts": int(ts), "rid": rid, "kind": "message", "to": to, "state": "QUEUED", "via": via, "detail": det}))' "$@" >> "$BOOK"
 }
 pq() { bash "$BIN/fleet-peer-queue.sh" "$@" -L "$L" 2>&1; }
 
@@ -55,7 +56,7 @@ o=$(pq stale)
 st_has "B: stale drops the undeliverable send" "$o" "dropped 1 undeliverable"
 st_eq "B: one EXPIRED row for it" "1" "$(grep -c '"rid": "old-hub".*"state": "EXPIRED"' "$BOOK")"
 st_has "B: …saying why" "$(grep '"state": "EXPIRED"' "$BOOK")" "undeliverable: nobody took it in 152h"
-st_eq "B: one audit line" "1" "$(grep -c 'dropped old-hub report' "$DEADLOG" 2>/dev/null)"
+st_eq "B: one audit line" "1" "$(grep -c 'dropped old-hub message' "$DEADLOG" 2>/dev/null)"
 st_hasnt "B: the local item is not dropped by stale" "$(cat "$DEADLOG")" "old-local"
 n=$(grep -c '"source":"peer-queue"' "$NOTICES" 2>/dev/null)
 st_eq "B: one ⌘P 消息 — for the fresh send only" "1" "$n"
