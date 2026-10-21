@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -14,9 +16,69 @@ import (
 // hands each entry to whoever may see its (machine, login), and a failed entry
 // is a service_failed alert until a beat says it is not.
 
+// serviceAlertHold is how long an entry stays failed — every beat in between
+// saying so — before it is an alert, and how long it stays well before its
+// alert clears (task CVC4): a service the daemon restarts every few minutes
+// rose and fell 7 times in 37 minutes, one alert each way per restart.
+const serviceAlertHold = 10 * time.Minute
+
+// serviceHoldBook is each subject's run: since when its beats said failed
+// (failed) or, with an alert open, said well (well). In memory: a restarted
+// hub starts each run again, an open alert staying open meanwhile.
+type serviceHoldBook struct {
+	mu     sync.Mutex
+	hold   time.Duration // 0 = serviceAlertHold; < 0 = on the first beat (tests)
+	failed map[string]time.Time
+	well   map[string]time.Time
+}
+
+func (b *serviceHoldBook) setHold(d time.Duration) {
+	b.mu.Lock()
+	b.hold = d
+	b.mu.Unlock()
+}
+
+// held marks sub's run (book: failed or well, the other one ended) and says
+// whether it has lasted the hold.
+func (b *serviceHoldBook) held(sub string, isFailed bool, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failed == nil {
+		b.failed, b.well = map[string]time.Time{}, map[string]time.Time{}
+	}
+	book, other := b.failed, b.well
+	if !isFailed {
+		book, other = b.well, b.failed
+	}
+	delete(other, sub)
+	since, ok := book[sub]
+	if !ok {
+		since = now
+		book[sub] = now
+	}
+	hold := b.hold
+	if hold == 0 {
+		hold = serviceAlertHold
+	}
+	return hold < 0 || now.Sub(since) >= hold
+}
+
+// forget drops what the book holds under prefix for subjects keep says no to.
+func (b *serviceHoldBook) forget(prefix string, keep func(sub string) bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, m := range []map[string]time.Time{b.failed, b.well} {
+		for sub := range m {
+			if strings.HasPrefix(sub, prefix) && !keep(sub) {
+				delete(m, sub)
+			}
+		}
+	}
+}
+
 // serviceAlerts raises service_failed for every entry of hostname's register
-// that wants a person, and clears the open ones a beat no longer lists as
-// failed — a removed entry included.
+// that has wanted a person for serviceAlertHold, and clears the open ones a
+// beat has no longer listed as failed — a removed entry included — for as long.
 func (s *Server) serviceAlerts(hostname string, svcs []control.ServiceStatus, now time.Time) {
 	if hostname == "" {
 		return
@@ -29,6 +91,9 @@ func (s *Server) serviceAlerts(hostname string, svcs []control.ServiceStatus, no
 		}
 		sub := prefix + sv.Login + "/" + sv.Name
 		failing[sub] = true
+		if !s.serviceHold.held(sub, true, now) {
+			continue
+		}
 		detail, _ := json.Marshal(map[string]any{
 			"hostname": hostname, "os_user": sv.Login, "name": sv.Name, "kind": sv.Kind,
 			"state": sv.State, "last_rc": sv.LastRC, "why": sv.Why, "last_log_line": sv.LastLogLine,
@@ -45,8 +110,15 @@ func (s *Server) serviceAlerts(hostname string, svcs []control.ServiceStatus, no
 		log.Printf("fleet alerts: read service_failed %s: %v", hostname, err)
 		return
 	}
+	isOpen := map[string]bool{}
 	for _, sub := range open {
-		if failing[sub] {
+		isOpen[sub] = true
+	}
+	// a run that ended with nothing to clear is forgotten: well again before
+	// the hold, the next failure starts from nought
+	s.serviceHold.forget(prefix, func(sub string) bool { return failing[sub] || isOpen[sub] })
+	for _, sub := range open {
+		if failing[sub] || !s.serviceHold.held(sub, false, now) {
 			continue
 		}
 		if cleared, err := s.Store.ClearFleetAlert(store.AlertServiceFailed, sub, now); err != nil {

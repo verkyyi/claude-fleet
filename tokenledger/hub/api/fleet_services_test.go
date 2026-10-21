@@ -14,6 +14,7 @@ import (
 // a service_failed alert — on the summary too — until a beat says it is not.
 func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 	h, n := machineRig(t)
+	h.srv.serviceHold.setHold(-1) // this test is about the road; the hold has its own below
 	for _, l := range []string{"alpha", "beta"} {
 		n.beat(l, control.Heartbeat{Hostname: "mac-c", OSUser: l, NCPU: 10, ObservedAt: time.Now()})
 	}
@@ -98,6 +99,7 @@ func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 // register.
 func TestLoginBeatCarriesNoServiceAlert(t *testing.T) {
 	h, n := machineRig(t)
+	h.srv.serviceHold.setHold(-1)
 	n.beat("alpha", control.Heartbeat{Hostname: "mac-c", OSUser: "alpha", NCPU: 10, ObservedAt: time.Now(),
 		Services: []control.ServiceStatus{{Name: "x", Kind: "service", Login: "beta", State: "down"}}})
 	waitFor(t, 3*time.Second, "alpha online", func() bool {
@@ -114,5 +116,91 @@ func TestLoginBeatCarriesNoServiceAlert(t *testing.T) {
 	}
 	if open := openAlerts(t, h, store.AlertServiceFailed); len(open) != 0 {
 		t.Fatalf("a login's beat raised %+v", open)
+	}
+}
+
+// Task CVC4: a service the daemon restarts every few minutes (down, running,
+// down…) rose and fell an alert per restart — 7 and 7 in 37 minutes. An
+// alert now rises only after 10 minutes of failed beats and falls only after
+// 10 minutes of well ones: half an hour of failing and recovering is no alert,
+// and a real outage is one rise and one fall.
+func TestServiceAlertHoldsTenMinutes(t *testing.T) {
+	h := newFleetHarness(t)
+	s := h.srv
+	down := []control.ServiceStatus{{Name: "webchat", Kind: "service", Login: "alpha", State: "down"}}
+	up := []control.ServiceStatus{{Name: "webchat", Kind: "service", Login: "alpha", State: "running"}}
+	t0 := time.Now().Add(-2 * time.Hour)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	count := func() (open, all int) {
+		rows, err := s.Store.FleetAlerts(200)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range rows {
+			if a.Kind == store.AlertServiceFailed {
+				all++
+				if a.ClearedAt == nil {
+					open++
+				}
+			}
+		}
+		return
+	}
+
+	// 30 minutes: 4 minutes down, 2 up, a beat a minute ⇒ no alert at all.
+	for m := 0; m < 30; m++ {
+		svcs := down
+		if m%6 >= 4 {
+			svcs = up
+		}
+		s.serviceAlerts("mac-c", svcs, at(m))
+	}
+	if open, all := count(); open != 0 || all != 0 {
+		t.Fatalf("failing and recovering for 30 min raised %d (%d open)", all, open)
+	}
+
+	// Down for good: nothing at 9 minutes, one alert at 10.
+	for m := 30; m <= 39; m++ {
+		s.serviceAlerts("mac-c", down, at(m))
+	}
+	if open, _ := count(); open != 0 {
+		t.Fatalf("raised after 9 min down")
+	}
+	for m := 40; m <= 50; m++ {
+		s.serviceAlerts("mac-c", down, at(m))
+	}
+	if open, all := count(); open != 1 || all != 1 {
+		t.Fatalf("10+ min down: %d alerts, %d open — want one", all, open)
+	}
+
+	// Up again, with one failed beat in between: the alert stays open until
+	// 10 well minutes in a row, then clears once.
+	for m := 51; m <= 55; m++ {
+		s.serviceAlerts("mac-c", up, at(m))
+	}
+	s.serviceAlerts("mac-c", down, at(56))
+	for m := 57; m <= 66; m++ {
+		s.serviceAlerts("mac-c", up, at(m))
+	}
+	if open, _ := count(); open != 1 {
+		t.Fatalf("cleared before 10 well minutes in a row")
+	}
+	for m := 67; m <= 70; m++ {
+		s.serviceAlerts("mac-c", up, at(m))
+	}
+	if open, all := count(); open != 0 || all != 1 {
+		t.Fatalf("after 10 well minutes: %d alerts, %d open — want one, cleared", all, open)
+	}
+
+	// A removed entry counts as well; a fresh failure starts from nought.
+	for m := 71; m <= 79; m++ {
+		s.serviceAlerts("mac-c", down, at(m))
+	}
+	s.serviceAlerts("mac-c", nil, at(80))
+	for m := 81; m <= 89; m++ {
+		s.serviceAlerts("mac-c", down, at(m))
+	}
+	if open, all := count(); open != 0 || all != 1 {
+		t.Fatalf("a run broken by a removed entry raised: %d alerts, %d open", all, open)
 	}
 }
