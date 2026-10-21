@@ -865,6 +865,8 @@ func (s *Server) routes() *routeMux {
 		// 我的用量 in one answer (claude-fleet#3227): the viewer's own limit,
 		// days, models and where it went — off pool_usage, never the pool.
 		mux.Handle("/v1/me/usage", s.viewerOnly(http.HandlerFunc(s.handleMeUsage)))
+		// 申请转正 (claude-fleet T796): a trial member asks; the admin's 成员 list shows it.
+		mux.Handle(MeTrialUpgradePath, s.viewerOnly(http.HandlerFunc(s.handleMeTrialUpgrade)))
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by

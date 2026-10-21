@@ -153,6 +153,7 @@ kubectl -n new-deploy logs deploy/ccquota-hub -c ccquota | grep 'store: migratio
 | 3 | `remove-spot-nodes`（#4797） | SPOT 执行节点下线：丢掉 `fleet_spot_nodes` 表；删掉只有它读的设置 `fleet.spot` / `fleet.spot_weight` / `hub.legacy_migrated.fleet.spot` / `spot.want`；`detail` 另记还标着 `node_kind=ephemeral` 的端点数（原样保留，已无人读） | 镜像换回迁移前的 tag：旧镜像启动时 `CREATE TABLE IF NOT EXISTS` 把空表建回来，设置读回默认（`fleet.spot` = off）；要原来的行就用这次发布前的快照恢复（上面「恢复」一节）。上线时表里是 0 行 |
 | 4 | `remove-hub-tickets`（T477，#4898 续） | hub 自己的单据下线：丢掉 `fleet_tickets` / `fleet_ticket_comments` / `fleet_ticket_seq` / `fleet_ticket_index` 四张表，`detail` 记每张表丢掉的行数；任务记录 `fleet_tasks` 不动 | 镜像换回迁移前的 tag：旧镜像启动时 `CREATE TABLE IF NOT EXISTS` 把空表建回来；要原来的行就用这次发布前的快照恢复（上面「恢复」一节） |
 | 5 | `remove-pool-move-when-full`（T543） | 设置「满了就挪会话」下线：删掉 `fleet_settings` 里的 `pool.move_when_full` 与 `hub.legacy_migrated.pool.move_when_full` 两行，`detail` 记删了几行 | 镜像换回迁移前的 tag：旧镜像读不到这行就按默认 off；要原值用这次发布前的快照恢复 |
+| 6 | `member-limits-tokens`（T796） | 试用限额改按 token 计：`fleet_settings` 里每个 `fleet.member_limits.<principal>` 与 `fleet.apply.trial` 的 `usd=<美元>` 换成 `tokens=<美元 × 75000>`（$20 → 150 万；已有 `tokens=` 的只去掉 `usd=`），其余部分原样，`detail` 记改了几行 | 镜像换回迁移前的 tag：旧镜像不认 `tokens=`，这几行读成「无限额」；要原值用这次发布前的快照恢复 |
 
 **发布前演练**（#2050）：`hub-deploy` 拍完快照、apply 之前，把新镜像作为临时容器（ephemeral
 container）塞进正在跑的 hub pod，挂 `/data`，对快照的一份拷贝跑 `ccquota hub --migrate-only`。

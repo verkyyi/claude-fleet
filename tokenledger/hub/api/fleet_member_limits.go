@@ -15,17 +15,22 @@ import (
 // /apply used to become a member with nothing held against them: no end, no
 // spend ceiling, no session count. Approval now writes
 //
-//	fleet.member_limits.<principal> = "until=<RFC 3339>,usd=<dollars>,sessions=<n>,since=<RFC 3339>"
+//	fleet.member_limits.<principal> = "until=<RFC 3339>,tokens=<n>,sessions=<n>,since=<RFC 3339>"
 //
-// from fleet.apply.trial ("days=7,usd=20,sessions=1" by default; "off" =
+// from fleet.apply.trial ("days=7,tokens=1500000,sessions=1" by default; "off" =
 // approve as a full member) or the approval's own `limits`. Any part may be
 // left out; "" removes the key — the person 转正, nothing held. Held:
 //
 //   - until: past it, every request either proxy carries for them is refused
 //     with person_budget_exceeded and 「试用期已到」.
-//   - usd: their pool usage since `since`, priced at API rates
-//     (pricing.RatesFor; a model the table lacks at the Opus tier, so the
-//     ceiling still binds), at or past it the same refusal.
+//   - tokens: their pool tokens since `since`, counted as every limit here
+//     counts them (input + cache write + output — store.PoolUsage.Tokens; a
+//     cache read is not counted), at or past it the same refusal (T796: a
+//     person reads tokens, and a dollar figure moves with the model).
+//   - usd: the old ceiling (T789), still read and held for a value written
+//     before migration 6 turned it into tokens: their pool usage since
+//     `since`, priced at API rates (pricing.RatesFor; a model the table lacks
+//     at the Opus tier, so the ceiling still binds).
 //   - sessions: a hub-placed start or resume on their login refused at that
 //     many running sessions.
 //
@@ -34,7 +39,7 @@ import (
 const (
 	MemberLimitsPrefix  = "fleet.member_limits."
 	ApplyTrialKey       = "fleet.apply.trial"
-	applyTrialDefault   = "days=7,usd=20,sessions=1"
+	applyTrialDefault   = "days=7,tokens=1500000,sessions=1"
 	memberLimitsMaxDays = 365
 )
 
@@ -45,18 +50,22 @@ var unpricedRates = pricing.Rates{Input: 5, Output: 25, CacheWrite5m: 6.25, Cach
 type MemberLimits struct {
 	Until    time.Time
 	Since    time.Time
+	Tokens   int64
 	USD      float64
 	Sessions int
 }
 
 func (l MemberLimits) empty() bool {
-	return l.Until.IsZero() && l.USD <= 0 && l.Sessions <= 0
+	return l.Until.IsZero() && l.Tokens <= 0 && l.USD <= 0 && l.Sessions <= 0
 }
 
 func (l MemberLimits) String() string {
 	var p []string
 	if !l.Until.IsZero() {
 		p = append(p, "until="+l.Until.UTC().Format(time.RFC3339))
+	}
+	if l.Tokens > 0 {
+		p = append(p, "tokens="+strconv.FormatInt(l.Tokens, 10))
 	}
 	if l.USD > 0 {
 		p = append(p, "usd="+strconv.FormatFloat(l.USD, 'f', -1, 64))
@@ -91,6 +100,14 @@ func parseUSD(v string) (float64, error) {
 	return f, nil
 }
 
+func parseLimitTokens(v string) (int64, error) {
+	n, err := parseTokens(v)
+	if err != nil {
+		return 0, fmt.Errorf("tokens is a token count (e.g. 1500000, 1500k, 1.5M)")
+	}
+	return n, nil
+}
+
 func parseSessions(v string) (int, error) {
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 || n > 100 {
@@ -118,6 +135,10 @@ func parseMemberLimits(v string) (MemberLimits, error) {
 			} else {
 				l.Since = t
 			}
+		case "tokens":
+			if l.Tokens, err = parseLimitTokens(f[1]); err != nil {
+				return l, err
+			}
 		case "usd":
 			if l.USD, err = parseUSD(f[1]); err != nil {
 				return l, err
@@ -127,16 +148,18 @@ func parseMemberLimits(v string) (MemberLimits, error) {
 				return l, err
 			}
 		default:
-			return l, fmt.Errorf("%q: the parts are until, usd, sessions, since", f[0])
+			return l, fmt.Errorf("%q: the parts are until, tokens, sessions, since", f[0])
 		}
 	}
 	return l, nil
 }
 
-// trialTerms is an approval's terms: "days=7,usd=20,sessions=1", or "off".
+// trialTerms is an approval's terms: "days=7,tokens=1500000,sessions=1", or
+// "off" (usd= is still read, for a value written before T796).
 type trialTerms struct {
 	Off      bool
 	Days     int
+	Tokens   int64
 	USD      float64
 	Sessions int
 }
@@ -153,7 +176,7 @@ func parseTrialTerms(v string) (trialTerms, error) {
 		return t, err
 	}
 	if len(fs) == 0 {
-		return t, fmt.Errorf(`want days=<n>,usd=<dollars>,sessions=<n>, or "off"`)
+		return t, fmt.Errorf(`want days=<n>,tokens=<n>,sessions=<n>, or "off"`)
 	}
 	for _, f := range fs {
 		switch f[0] {
@@ -163,6 +186,10 @@ func parseTrialTerms(v string) (trialTerms, error) {
 				return t, fmt.Errorf("days is 0..%d", memberLimitsMaxDays)
 			}
 			t.Days = n
+		case "tokens":
+			if t.Tokens, err = parseLimitTokens(f[1]); err != nil {
+				return t, err
+			}
 		case "usd":
 			if t.USD, err = parseUSD(f[1]); err != nil {
 				return t, err
@@ -172,7 +199,7 @@ func parseTrialTerms(v string) (trialTerms, error) {
 				return t, err
 			}
 		default:
-			return t, fmt.Errorf("%q: the parts are days, usd, sessions", f[0])
+			return t, fmt.Errorf("%q: the parts are days, tokens, sessions", f[0])
 		}
 	}
 	return t, nil
@@ -185,6 +212,9 @@ func (t trialTerms) String() string {
 	var p []string
 	if t.Days > 0 {
 		p = append(p, "days="+strconv.Itoa(t.Days))
+	}
+	if t.Tokens > 0 {
+		p = append(p, "tokens="+strconv.FormatInt(t.Tokens, 10))
 	}
 	if t.USD > 0 {
 		p = append(p, "usd="+strconv.FormatFloat(t.USD, 'f', -1, 64))
@@ -202,7 +232,7 @@ func (t trialTerms) limits(now time.Time) MemberLimits {
 	if t.Off {
 		return MemberLimits{}
 	}
-	l := MemberLimits{USD: t.USD, Sessions: t.Sessions, Since: now}
+	l := MemberLimits{Tokens: t.Tokens, USD: t.USD, Sessions: t.Sessions, Since: now}
 	if t.Days > 0 {
 		l.Until = now.Add(time.Duration(t.Days) * 24 * time.Hour)
 	}
@@ -211,7 +241,7 @@ func (t trialTerms) limits(now time.Time) MemberLimits {
 
 func init() {
 	hubSettings[ApplyTrialKey] = hubSetting{def: applyTrialDefault,
-		help: "limits a person approved through /apply starts with: days=<n>,usd=<dollars of pool usage>,sessions=<n>, or off (claude-fleet T789)",
+		help: "limits a person approved through /apply starts with: days=<n>,tokens=<pool tokens: input + cache write + output>,sessions=<n>, or off (claude-fleet T789, T796)",
 		check: func(_ *Server, v string) (string, string) {
 			t, err := parseTrialTerms(v)
 			if err != nil {
@@ -291,15 +321,40 @@ func priceUsage(rows []store.PersonModelUsage) float64 {
 	return usd
 }
 
+// memberTokens counts pid's pool tokens since since, as every limit counts
+// them (store.PoolUsage.Tokens: a cache read is not counted).
+func (s *Server) memberTokens(pid string, since time.Time) (int64, error) {
+	rows, err := s.Store.PersonModelUsageSince(pid, since)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, r := range rows {
+		n += r.In + r.CacheWrite + r.Out
+	}
+	return n, nil
+}
+
 // applyMemberLimits turns st over when pid's trial has ended or its dollars
 // are spent; a budget already over keeps its own message.
 func (s *Server) applyMemberLimits(st *PersonBudgetState, l MemberLimits, now time.Time) {
-	st.TrialUntil, st.TrialUSD = nil, 0
+	st.TrialUntil, st.TrialUSD, st.TrialTokens = nil, 0, 0
 	if !l.Until.IsZero() {
 		u := l.Until
 		st.TrialUntil = &u
 	}
-	st.TrialUSD = l.USD
+	st.TrialUSD, st.TrialTokens, st.TrialSessions = l.USD, l.Tokens, l.Sessions
+	if !l.Since.IsZero() {
+		since := l.Since
+		st.TrialSince = &since
+	}
+	if l.Tokens > 0 {
+		used, err := s.memberTokens(st.Principal, l.Since)
+		if err != nil {
+			log.Printf("fleet: member limits of %s: %v", st.Principal, err)
+		}
+		st.TrialUsedTokens = used
+	}
 	if l.USD > 0 {
 		spent, err := s.memberSpendUSD(st.Principal, l.Since)
 		if err != nil {
@@ -315,6 +370,10 @@ func (s *Server) applyMemberLimits(st *PersonBudgetState, l MemberLimits, now ti
 		st.Over, st.Window, st.Error = true, "trial", PersonBudgetExceeded
 		st.Message = "试用期已于 " + l.Until.In(chinaTZ).Format("2006-01-02 15:04") +
 			" 结束：请联系管理员转正后继续使用（" + PersonBudgetExceeded + "）"
+	case l.Tokens > 0 && st.TrialUsedTokens >= l.Tokens:
+		st.Over, st.Window, st.Error = true, "trial_tokens", PersonBudgetExceeded
+		st.Message = fmt.Sprintf("试用额度已用完：已用 %s / 上限 %s tokens，请联系管理员转正或加额度（%s）",
+			zhTokens(st.TrialUsedTokens), zhTokens(l.Tokens), PersonBudgetExceeded)
 	case l.USD > 0 && st.TrialSpentUSD >= l.USD:
 		st.Over, st.Window, st.Error = true, "trial_usd", PersonBudgetExceeded
 		st.Message = fmt.Sprintf("试用额度已用完：已用约 $%.2f / 上限 $%s，请联系管理员转正或加额度（%s）",
@@ -323,6 +382,14 @@ func (s *Server) applyMemberLimits(st *PersonBudgetState, l MemberLimits, now ti
 }
 
 var chinaTZ = time.FixedZone("CST", 8*3600)
+
+// zhTokens is a token count as the refusal says it: 120 万, 3500.
+func zhTokens(n int64) string {
+	if n >= 10000 {
+		return strconv.FormatFloat(float64(n)/10000, 'f', -1, 64) + " 万"
+	}
+	return strconv.FormatInt(n, 10)
+}
 
 // checkMemberSessions refuses a start or resume that would take a trial
 // member past their session count on that login.

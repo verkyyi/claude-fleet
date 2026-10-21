@@ -84,6 +84,16 @@ export type PersonBudget = {
   used_5h?: number;
   used_week?: number;
   over?: boolean;
+  window?: string; // 5h | week | trial | trial_tokens | trial_usd, when over
+  // a trial member's limits (claude-fleet T789 / T796)
+  trial_until?: string;
+  trial_since?: string;
+  trial_tokens?: number;
+  trial_used_tokens?: number;
+  trial_usd?: number;
+  trial_spent_usd?: number;
+  trial_sessions?: number;
+  upgrade_asked?: string;
 };
 
 export type NodeMachine = { hostname?: string; spare?: number; spare_target?: number; logins_used?: number; login_cap?: number };

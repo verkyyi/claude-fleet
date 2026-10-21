@@ -4,7 +4,8 @@
 // invite, remove, sign out everywhere, which subscriptions they may use; how
 // many spare logins wait. Only today's reads and writes: /v1/fleet/users ·
 // /v1/fleet/invites · /v1/fleet/users/sessions · /v1/fleet/person-usage ·
-// /v1/nodes (spares) · /v1/fleet/cred-policy — every write audited by the hub.
+// /v1/nodes (spares) · /v1/fleet/cred-policy · /v1/fleet/settings (a trial
+// member's limits, claude-fleet T796) — every write audited by the hub.
 import * as React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useNavigate, useParams } from "react-router";
@@ -14,6 +15,8 @@ import { Badge } from "@/components/ui/badge";
 import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -21,10 +24,11 @@ import { AdminTablePage, type Filter } from "../AdminTablePage";
 import { ConfirmByName } from "../ConfirmByName";
 import { api, type HubUser, type Invite, type NodeMachine, type PersonBudget, type UsersList } from "../api";
 import { ago, t, when, type MsgKey } from "../i18n";
+import { fmtTokens } from "@/shared/i18n";
 import { NewPersonDialog } from "./NewPersonDialog";
 import { PolicyEditor } from "./PolicyEditor";
 
-type Status = "ok" | "near" | "over" | "never" | "invited";
+type Status = "ok" | "near" | "over" | "trialOver" | "never" | "invited";
 
 type Row = {
   id: string; // a person's principal, or an invite's id
@@ -37,6 +41,7 @@ type Row = {
   limitWeek?: number;
   seen?: string;
   status: Status;
+  budget?: PersonBudget; // carries a trial member's limits (T796)
   user?: HubUser;
   invite?: Invite;
 };
@@ -46,7 +51,8 @@ const NEAR = 80;
 function rowOf(u: HubUser, b?: PersonBudget): Row {
   const home = u.logins.find((l) => l.home) || u.logins.find((l) => l.kind === "node");
   const week = b?.limit_week ? Math.min(100, Math.round(((b.used_week || 0) / b.limit_week) * 100)) : null;
-  const status: Status = b?.over || (week ?? 0) >= 100 ? "over" : (week ?? 0) >= NEAR ? "near" : !u.last_seen ? "never" : "ok";
+  const trialOver = !!b?.over && (b.window || "").startsWith("trial");
+  const status: Status = trialOver ? "trialOver" : b?.over || (week ?? 0) >= 100 ? "over" : (week ?? 0) >= NEAR ? "near" : !u.last_seen ? "never" : "ok";
   return {
     id: u.principal || `gh:${u.github_id}`,
     name: u.login,
@@ -58,6 +64,7 @@ function rowOf(u: HubUser, b?: PersonBudget): Row {
     limitWeek: b?.limit_week,
     seen: u.last_seen,
     status,
+    budget: b,
     user: u,
   };
 }
@@ -79,6 +86,7 @@ const STATUS: Record<Status, { key: MsgKey; cls: string }> = {
   ok: { key: "status.ok", cls: "border-ok/40 text-ok" },
   near: { key: "status.near", cls: "border-warn/50 text-warn" },
   over: { key: "status.over", cls: "border-destructive/50 text-destructive" },
+  trialOver: { key: "status.trialOver", cls: "border-destructive/50 text-destructive" },
   never: { key: "status.never", cls: "text-muted-foreground" },
   invited: { key: "status.invited", cls: "border-clay-line bg-clay-soft text-clay" },
 };
@@ -97,6 +105,33 @@ function WeekBar({ r }: { r: Row }) {
     <div className="flex items-center gap-2">
       <Progress value={r.week} className={cn("h-1.5 w-20", r.week >= NEAR && "[&>[data-slot=progress-indicator]]:bg-warn")} />
       <span className="font-mono text-xs text-muted-foreground tabular-nums">{r.week}%</span>
+    </div>
+  );
+}
+
+// A trial member's limits, one cell: 剩 6 天 · 12 万 / 150 万 · 同时 1 个, and
+// 申请转正 when they asked (claude-fleet T796).
+const onTrial = (b?: PersonBudget) => !!b && !!(b.trial_until || b.trial_tokens || b.trial_usd || b.trial_sessions);
+const daysLeft = (iso?: string) => (iso ? Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 864e5)) : null);
+
+function TrialCell({ b }: { b?: PersonBudget }) {
+  if (!onTrial(b)) return <span className="text-muted-foreground">{t("trial.none")}</span>;
+  const d = daysLeft(b!.trial_until);
+  const parts: string[] = [];
+  if (d != null) parts.push(d > 0 ? t("trial.days", { n: d }) : t("trial.ended"));
+  if (b!.trial_tokens) parts.push(t("trial.tokens", { used: fmtTokens(b!.trial_used_tokens || 0), limit: fmtTokens(b!.trial_tokens) }));
+  else if (b!.trial_usd) parts.push(`$${(b!.trial_spent_usd || 0).toFixed(2)} / $${b!.trial_usd}`);
+  if (b!.trial_sessions) parts.push(t("trial.sessions", { n: b!.trial_sessions }));
+  const pct = b!.trial_tokens ? ((b!.trial_used_tokens || 0) / b!.trial_tokens) * 100 : 0;
+  const hot = (d != null && d <= 1) || pct >= NEAR;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className={cn("font-mono text-xs tabular-nums", hot ? "text-clay" : "text-muted-foreground")}>{parts.join(" · ")}</span>
+      {b!.upgrade_asked && (
+        <Badge variant="outline" className="border-clay-line bg-clay-soft font-normal text-clay" title={t("trial.askedAt", { when: when(b!.upgrade_asked) })}>
+          {t("trial.asked")}
+        </Badge>
+      )}
     </div>
   );
 }
@@ -125,6 +160,12 @@ const columns: ColumnDef<Row, any>[] = [
   { accessorKey: "home", header: () => t("col.home"), cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span> },
   { accessorKey: "week", header: () => t("col.week"), sortUndefined: "last", cell: ({ row }) => <WeekBar r={row.original} /> },
   {
+    id: "trial",
+    accessorFn: (r) => (onTrial(r.budget) ? Date.parse(r.budget!.trial_until || "") || 1 : 0),
+    header: () => t("col.trial"),
+    cell: ({ row: { original: r } }) => (r.invite ? <span className="text-muted-foreground">—</span> : <TrialCell b={r.budget} />),
+  },
+  {
     id: "seen",
     accessorFn: (r) => (r.seen ? Date.parse(r.seen) : 0),
     header: () => t("col.seen"),
@@ -136,6 +177,7 @@ const columns: ColumnDef<Row, any>[] = [
 const filters: Filter<Row>[] = [
   { key: "admin", label: t("filter.admin"), test: (r) => r.admin },
   { key: "near", label: t("filter.near"), test: (r) => r.status === "near" || r.status === "over" },
+  { key: "trial", label: t("filter.trial"), test: (r) => onTrial(r.budget) },
   { key: "invited", label: t("filter.invited"), test: (r) => r.status === "invited" },
 ];
 
@@ -262,6 +304,9 @@ function PersonDrawer({ r, close, reload }: { r: Row; close: () => void; reload:
         </section>
 
         <Separator />
+        <TrialEditor r={r} reload={reload} />
+
+        <Separator />
         <PolicyEditor id={key} />
       </div>
       <SheetFooter className="mt-auto flex-row justify-end gap-2 border-t p-4">
@@ -351,5 +396,91 @@ function InviteDrawer({ r, close, reload }: { r: Row; close: () => void; reload:
         </ConfirmByName>
       </SheetFooter>
     </>
+  );
+}
+
+// A trial member's limits, changed in place (claude-fleet T796):
+// fleet.member_limits.<principal> through /v1/fleet/settings, keeping when the
+// trial started so the tokens already used still count; 转正 removes the key.
+const pad = (n: number) => String(n).padStart(2, "0");
+const dateOf = (iso?: string) => {
+  const ms = Date.parse(iso || "");
+  if (!Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+function TrialEditor({ r, reload }: { r: Row; reload: () => void }) {
+  const b = r.budget;
+  const has = onTrial(b);
+  const [until, setUntil] = React.useState(dateOf(b?.trial_until));
+  const [tokens, setTokens] = React.useState(b?.trial_tokens ? String(b.trial_tokens) : "");
+  const [sessions, setSessions] = React.useState(b?.trial_sessions ? String(b.trial_sessions) : "");
+  const [busy, setBusy] = React.useState(false);
+  const put = async (value: string, done: string) => {
+    setBusy(true);
+    try {
+      await api("/v1/fleet/settings", { method: "PUT", json: { key: `fleet.member_limits.${r.id}`, value } });
+      toast.success(done);
+      reload();
+    } catch (e) {
+      toast.error(t("err.action", { e: (e as Error).message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => {
+    const p: string[] = [];
+    if (until) {
+      // the end of that day, where the admin is
+      const [y, m, d] = until.split("-").map(Number);
+      p.push(`until=${new Date(y, m - 1, d, 23, 59, 59).toISOString().replace(/\.\d{3}Z$/, "Z")}`);
+    }
+    if (tokens.trim()) p.push(`tokens=${tokens.trim().replace(/,/g, "")}`);
+    if (sessions.trim()) p.push(`sessions=${sessions.trim()}`);
+    if (!p.length) return toast.error(t("drawer.trialBad"));
+    if (b?.trial_since) p.push(`since=${b.trial_since.replace(/\.\d+Z$/, "Z")}`);
+    put(p.join(","), t("drawer.trialSaved"));
+  };
+  return (
+    <section className="grid gap-3">
+      <div className="flex items-center gap-2">
+        <h3 className="font-display text-base font-semibold">{t("drawer.trial")}</h3>
+        {b?.upgrade_asked && (
+          <Badge variant="outline" className="border-clay-line bg-clay-soft font-normal text-clay">
+            {t("trial.askedAt", { when: when(b.upgrade_asked) })}
+          </Badge>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">{has ? t("drawer.trialLead") : t("drawer.trialNone")}</p>
+      {has && (
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t("drawer.trialUsed")}</span>
+          <TrialCell b={b} />
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="grid gap-1">
+          <Label htmlFor="trial-until" className="text-xs">{t("drawer.trialUntil")}</Label>
+          <Input id="trial-until" type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor="trial-tokens" className="text-xs">{t("drawer.trialTokens")}</Label>
+          <Input id="trial-tokens" inputMode="numeric" placeholder="1.5M" title={t("drawer.trialTokensHint")} value={tokens} onChange={(e) => setTokens(e.target.value)} />
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor="trial-sessions" className="text-xs">{t("drawer.trialSessions")}</Label>
+          <Input id="trial-sessions" type="number" min={0} max={100} value={sessions} onChange={(e) => setSessions(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy} onClick={save}>{has ? t("drawer.trialSave") : t("drawer.trialSet")}</Button>
+        {has && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => put("", t("drawer.trialMemberDone", { name: r.name }))}>
+            {t("drawer.trialMember")}
+          </Button>
+        )}
+      </div>
+    </section>
   );
 }

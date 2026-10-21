@@ -494,3 +494,59 @@ func TestMigration5_RemovesPoolMoveWhenFull(t *testing.T) {
 		}
 	}
 }
+
+// Migration 6 (claude-fleet T796): a trial's usd= becomes tokens=, the other
+// parts byte for byte; a value with tokens= already only loses its usd=; a
+// second run changes nothing.
+func TestMigration6_MemberLimitsTokens(t *testing.T) {
+	s := newStore(t)
+	if err := s.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for k, v := range map[string]string{
+		"fleet.member_limits.p:a": "until=2026-10-28T07:35:47Z,usd=20,sessions=1,since=2026-10-21T07:35:47Z",
+		"fleet.member_limits.p:b": "tokens=500000,usd=3",
+		"fleet.member_limits.p:c": "sessions=2",
+		"fleet.apply.trial":       "days=7,usd=20,sessions=1",
+		"pool.skip_pct":           "usd=20",
+	} {
+		if err := s.SetFleetSetting(k, v, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db := s.DB()
+	if _, err := db.Exec(`DELETE FROM hub_migrations WHERE id = 6`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := runMigrations(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.FleetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"fleet.member_limits.p:a": "until=2026-10-28T07:35:47Z,tokens=1500000,sessions=1,since=2026-10-21T07:35:47Z",
+		"fleet.member_limits.p:b": "tokens=500000",
+		"fleet.member_limits.p:c": "sessions=2",
+		"fleet.apply.trial":       "days=7,tokens=1500000,sessions=1",
+		"pool.skip_pct":           "usd=20",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q; want %q", k, got[k], v)
+		}
+	}
+	ms, err := s.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		if m.ID == 6 && !strings.Contains(m.Detail, `"rewritten.fleet_settings":3`) {
+			t.Errorf("migration 6 detail %s", m.Detail)
+		}
+	}
+}

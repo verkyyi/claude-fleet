@@ -2094,7 +2094,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		case strings.HasPrefix(body.Key, MemberLimitsPrefix) && principalKeyRE.MatchString(body.Key[len(MemberLimitsPrefix):]):
 			// A trial member's limits (claude-fleet T789):
-			// until=…,usd=…,sessions=…,since=…; "" removes them (= 转正).
+			// until=…,tokens=…,sessions=…,since=…; "" removes them (= 转正).
 			if body.Value != "" {
 				l, err := parseMemberLimits(body.Value)
 				if err != nil {
