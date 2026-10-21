@@ -71,6 +71,14 @@
 #                         pod's link — the machine check reads the other replica's
 #                         link, the jump readiness is in the store, and a route
 #                         without the jump says which end is missing (go test)
+#   door-session-no-sig   one address for everyone (A5SQ): the hub signs the door's
+#                         hop home only for the person's own signature over THIS
+#                         session as THIS user (go test TestDoorSessionNeedsTheirSignature)
+#   door-session-replay   …and once: the same session handed in again is refused,
+#                         on every replica (go test TestDoorSessionOnce)
+#   door-home-not-door    the stream to a person's home: the door's token only, a
+#                         machine home only, onto its entry port (go test
+#                         TestDoorHomeStreamOnlyTheDoor)
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1097,6 +1105,34 @@ drill_door_jump_two_replicas() {
   go_half "^($tests)\$" ./hub/api; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="入口两副本：pod 的链路在 A，它拉钥匙落到 B 照样 200、普通登录两边都 403；门和 pod 的就绪两副本都看得到、过期不算、重启不丢；路线不带 jump 时说出缺哪一头；$gohalf"
+}
+
+# The door-session drills (A5SQ): the hub half is the whole of them for now —
+# the door's own SSH server lands in a later PR and adds its legs here.
+door_session_go() {  # door_session_go <Go test> <what it proves>
+  local t0 gohalf; t0=$(now)
+  grep -q "^func $1(" "$ROOT/tokenledger/hub/api/fleet_door_home_test.go" 2>/dev/null \
+    || { WHY="the hub half's test $1 is gone"; return 1; }
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml) runs $1"
+  go_half "^$1\$" ./hub/api; case $? in 0) gohalf="go test $1 ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="$2；$gohalf"
+}
+
+drill_door_session_no_sig() {
+  CAP=150
+  door_session_go TestDoorSessionNeedsTheirSignature \
+    "门会话证书只凭本人这次登录的签名：门用自己的钥匙签、签名换会话、换用户名、没有签名、不是门的令牌都拒；证书只一个主体名、两分钟、只许回环、门会话 CA 签"
+}
+
+drill_door_session_replay() {
+  CAP=150
+  door_session_go TestDoorSessionOnce "同一份签名第二次（换一把临时钥匙也一样）409，落库的会话标识两副本共用"
+}
+
+drill_door_home_not_door() {
+  CAP=150
+  door_session_go TestDoorHomeStreamOnlyTheDoor "接到家的流只认门的令牌、只到家在机器上的人，落在家的本机入口端口（target=entry）"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

@@ -155,6 +155,9 @@ type nodeConn struct {
 	// canPodRelay is the hello's CapPodRelay: in a person's pod, its relay
 	// reaches the pod's sshd (claude-fleet#4149). Set once, before publish.
 	canPodRelay bool
+	// canEntryRelay is the hello's CapEntryRelay: its relay can reach this
+	// machine's entry port — the door's way home (A5SQ). Set once, before publish.
+	canEntryRelay bool
 	// canSvcRun is the hello's CapSvcRun: a service login that takes service
 	// run attempts (claude-fleet#4086). Set once, before publish.
 	canSvcRun bool
@@ -633,7 +636,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), canTermRenew: hp.HasCap(control.CapTermRenew), attachmentGeneration: hp.AttachmentGeneration,
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
-		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
+		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay), canEntryRelay: hp.HasCap(control.CapEntryRelay),
 		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),

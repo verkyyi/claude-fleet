@@ -186,3 +186,28 @@ func TestPodSSHDKeyReadOffTheSSHD(t *testing.T) {
 		t.Fatalf("not a pod: %q", got)
 	}
 }
+
+// The door's way home (A5SQ): an entry relay goes to the machine's entry port
+// — FLEET_ENTRY_PORT, else 22022 — never the hub's word for an address, and a
+// pod offers none.
+func TestEntryRelayTarget(t *testing.T) {
+	t.Setenv("FLEET_USER_POD", "")
+	t.Setenv("FLEET_ENTRY_PORT", "")
+	if got := entryRelayTarget(); got != "127.0.0.1:22022" || !entryRelayOK() {
+		t.Fatalf("default: %s ok=%v", got, entryRelayOK())
+	}
+	t.Setenv("FLEET_ENTRY_PORT", "2201")
+	if got := entryRelayTarget(); got != "127.0.0.1:2201" {
+		t.Fatalf("FLEET_ENTRY_PORT=2201: %s", got)
+	}
+	for _, bad := range []string{"0", "70000", "x", "1.2.3.4:22"} {
+		t.Setenv("FLEET_ENTRY_PORT", bad)
+		if got := entryRelayTarget(); got != "127.0.0.1:22022" {
+			t.Fatalf("FLEET_ENTRY_PORT=%q: %s, want the default", bad, got)
+		}
+	}
+	t.Setenv("FLEET_USER_POD", "1")
+	if entryRelayOK() {
+		t.Fatal("a pod offers the entry relay")
+	}
+}

@@ -2,6 +2,7 @@ package sshca
 
 import (
 	"crypto/ed25519"
+	"encoding/pem"
 	"crypto/rand"
 	"strings"
 	"testing"
@@ -210,6 +211,71 @@ func TestSignPeer(t *testing.T) {
 	} {
 		if _, err := ca.SignPeer(bad, now); err == nil {
 			t.Errorf("signed %+v", bad)
+		}
+	}
+}
+
+// The door-session CA (A5SQ): computed from the CA's own private key, the
+// same on every load, its own key — a certificate of one is never the other's.
+func TestDeriveIsStableAndApart(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	blk, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := Parse(pem.EncodeToMemory(blk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Parse(pem.EncodeToMemory(blk))
+	da, err := a.Derive("door-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, _ := b.Derive("door-session")
+	if da.PublicKey() != db.PublicKey() {
+		t.Fatal("the same CA key derived two door-session CAs")
+	}
+	if da.PublicKey() == a.PublicKey() {
+		t.Fatal("the door-session CA is the CA itself")
+	}
+	if other, _ := a.Derive("other"); other.PublicKey() == da.PublicKey() {
+		t.Fatal("two labels, one CA")
+	}
+	n, _ := newCA(t).Derive("door-session")
+	if n.PublicKey() == da.PublicKey() {
+		t.Fatal("two CA keys, one door-session CA")
+	}
+}
+
+// A door-session certificate: one principal, two minutes, loopback only, a
+// key id naming the person and the session, no agent forwarding.
+func TestSignDoorSession(t *testing.T) {
+	ca, _ := newCA(t).Derive("door-session")
+	key, _ := userKey(t)
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	iss, err := ca.SignDoorSession(DoorSessionRequest{Key: key, Principal: "gh:1", Login: "alice", Session: "ab12cd34", TTL: 2 * time.Minute}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := iss.Cert
+	if c.KeyId != "door:gh:1:ab12cd34" || len(c.ValidPrincipals) != 1 || c.ValidPrincipals[0] != "alice" {
+		t.Fatalf("key id %q principals %v", c.KeyId, c.ValidPrincipals)
+	}
+	if got := time.Unix(int64(c.ValidBefore), 0).Sub(now); got != 2*time.Minute {
+		t.Fatalf("lifetime %s", got)
+	}
+	if c.CriticalOptions["source-address"] != "127.0.0.1/32,::1/128" {
+		t.Fatalf("critical options %v", c.CriticalOptions)
+	}
+	if _, ok := c.Extensions["permit-agent-forwarding"]; ok {
+		t.Fatal("agent forwarding on a door-session certificate")
+	}
+	for _, bad := range []DoorSessionRequest{{Key: key, Login: "a", Session: "s", TTL: time.Minute},
+		{Key: key, Principal: "p", Session: "s", TTL: time.Minute}, {Key: key, Principal: "p", Login: "a", TTL: time.Minute},
+		{Key: key, Principal: "p", Login: "a", Session: "s"}, {Principal: "p", Login: "a", Session: "s", TTL: time.Minute}} {
+		if _, err := ca.SignDoorSession(bad, now); err == nil {
+			t.Fatalf("signed %+v", bad)
 		}
 	}
 }

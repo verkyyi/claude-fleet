@@ -209,6 +209,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			// In a person's pod the relay reaches the pod's sshd (claude-fleet#4149).
 			caps = append(caps, control.CapPodRelay)
 		}
+		if entryRelayOK() {
+			// The door's way home (A5SQ): a relay to the entry port.
+			caps = append(caps, control.CapEntryRelay)
+		}
 	}
 	if a.cfg.FleetChat {
 		caps = append(caps, control.CapChat, control.CapChatAttachment)

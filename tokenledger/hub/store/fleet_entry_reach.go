@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS fleet_entry_jump (
   namespace TEXT NOT NULL,
   seen_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS fleet_door_sessions (
+  session TEXT PRIMARY KEY,
+  person  TEXT NOT NULL,
+  seen_at TEXT NOT NULL
+);
 `
 
 // EntryReach is one address of a machine the hub tried.

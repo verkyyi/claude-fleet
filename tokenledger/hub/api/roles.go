@@ -96,6 +96,7 @@ var routeAccess = map[string]string{
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,
 	// … its reach, and the cluster door's table (claude-fleet#3549).
 	control.EntryReachNodePath: accessSelf, control.EntryRoutesNodePath: accessSelf,
+	control.DoorHomePath: accessSelf, control.DoorSessionPath: accessSelf,
 	// … and a person's own keys, name and home; the handler scopes them.
 	control.EntryKeysPath: accessUser, control.EntryKeysPath + "/": accessUser,
 	control.EntryNamePath: accessUser, control.EntryHomePath: accessUser,

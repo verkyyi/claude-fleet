@@ -1446,6 +1446,15 @@ const (
 	// listens on.
 	CapPodRelay = "pod_relay"
 
+	// CapEntryRelay is listed beside CapSSHRelay by an agent that takes
+	// SSHRelayOpen.Target == SSHRelayTargetEntry: the relay goes to this
+	// machine's entry port (FLEET_ENTRY_PORT, 22022) instead of its sshd —
+	// the door's way home (A5SQ). Never in a pod.
+	CapEntryRelay = "entry_relay"
+
+	// SSHRelayTargetEntry names the machine's entry port as a relay's target.
+	SSHRelayTargetEntry = "entry"
+
 	// SSHRelaySigNamespace is the ssh-keygen -Y namespace a client signs the
 	// hub's relay challenge under. A signature made for anything else (git
 	// commits use "git", files "file") is never accepted as a relay login.
@@ -1685,6 +1694,11 @@ type SSHRelayOpen struct {
 	// header, so a data stream cannot be attached to someone else's relay by
 	// another endpoint that guessed its id.
 	Secret string `json:"secret,omitempty"`
+	// Target is which local listener the agent dials: "" its sshd (the
+	// relay as it always was), SSHRelayTargetEntry its entry port — sent
+	// only to an agent that listed CapEntryRelay. The agent picks the port
+	// itself; the hub never names an address.
+	Target string `json:"target,omitempty"`
 }
 
 // SSHRelayHello is the client-side handshake on SSHRelayPath, one JSON text frame
