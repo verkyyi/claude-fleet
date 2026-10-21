@@ -390,7 +390,7 @@ def render(spec):
         o.append(fold("技术风险", ul(g("risks_tech"))))
     o.append("</section>\n\n")
     o.append('<section id="signoff">\n<span id="open"></span>\n<h2>需要你定的事</h2>\n')
-    if g("signoff") and FB:                              # T764: each row answerable — folded until 「我要逐条改」
+    if g("signoff") and FB:                              # T764: each row answers on its own (a small 改)
         o.append('<div class="sol">\n' + "".join(
             '<div class="so"><div class="sk">%s</div><div class="sv">%s</div>\n%s</div>\n'
             % (k, v, choose_form("signoff-%d" % i)) for i, (k, v) in enumerate(g("signoff"), 1)) + "</div>\n")
@@ -398,7 +398,7 @@ def render(spec):
         o.append(table(["事项", "建议"], g("signoff")))
     o.append('<p class="lede" style="margin-top:14px">%s</p>\n'
              % (g("signoff_note") or "点头即全部按建议，派一个执行会话做，一个改动说明合并。"))
-    if FB:      # one button shows; every per-row / per-card entry waits behind 「我要逐条改」
+    if FB:      # one 全部按建议; every item answers on its own
         o.append('<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议">'
                  '<button>全部按建议</button><span class="st"></span></form><span class="fbs"></span></div>\n%s' % done_mark("nod"))
         o.append('<p class="fb-note">ⓘ 每一项都能单独改、单独撤回；你的表态存在本页，编排每 %s读一次、转给做这件事的会话，'
