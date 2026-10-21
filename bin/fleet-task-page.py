@@ -6,7 +6,7 @@ words, stamp its number (T661).
       → the page: epic-page's <head> (template.html's <style>, verbatim) + the
         task layout — eyebrow · title · subtitle · number band · #problem ·
         #cause · #metrics · #charter · #members · #risks · #signoff(+#open) ·
-        #evidence (folded). The spec's strings are HTML fragments (<code>,
+        #evidence (上线后怎么验收). The spec's strings are HTML fragments (<code>,
         <strong> welcome); the frame is this script's, never re-typed.
   fleet-task-page.py body <page.html> [--link URL] [--nod TEXT] [--max BYTES]
       → the task's words (markdown), BOTH layers: every fold written out. The
@@ -25,13 +25,30 @@ words, stamp its number (T661).
       → the section ids a task page carries, one per line.
 
 The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole one):
-  repo · date · title · sub · kind ("fix" | "feature": a feature's #cause is
-  「为什么要做」) · band [{n,k}] · problem [li] · cause {lede, steps [[step, what]],
-  evidence [li]} · metrics [[指标, 现在, 目标]] · metrics_how [li] ·
+  repo · date · title (≤ 16 字) · sub (one sentence ≤ 30 字: where it stops) ·
+  kind ("fix" | "feature": a feature's #cause is 「为什么要做」) · band [{n,k}] ·
+  problem [li] (one fact a line, ≤ 25 字, the number first) ·
+  cause {lede, steps [{step, what, evidence [li]}], other [{kind, title, ref?,
+  excerpt?, text?}]} · metrics [{name, now, target, how [li] | str}] ·
   charter {do [li], dont [li]} · members [{key, name, line, what, compare?,
   tech [[label, text]]}] · risks [{head, text}] · risks_tech [li] ·
-  signoff [[事项, 建议]] · signoff_note · evidence (one line) · footer ·
-  css (the prototypes' own rules, one <style> after the frame's).
+  signoff [[事项, 建议]] · signoff_note · evidence [{what, where, pass, status
+  (pending | done | failed), proof? {img | text | html | url, caption}}] ·
+  evidence_note · feedback {table, version, poll} · replies_done {item: {state
+  (adopted | declined), note}} · footer · css (the prototypes' own rules, one
+  <style> after the frame's).
+  T764: each 原因 step opens on ITS evidence and each 指标 row on how IT is
+  measured — a step / row / card with nothing to open is a plain line, no ▸;
+  evidence no step owns goes in `other`, grouped by kind (code · log · scene ·
+  ref). The 上线证据 is the 「上线后怎么验收」 card: one item per proof, its 通过标准,
+  a status and a slot the worker fills after the switch — the report's 已上线.
+  `feedback` makes the page answer itself (a live page): 「有意见」 under every step
+  and card, 按建议 / 改成… on every 需要你定的事 row, one 点头 button — each POSTs
+  {item, choice, note, version} to ./_data/<table> (members-only); item keys are
+  cause-<step> · card-<key> · signoff-<n> · nod.
+  Old specs still render: steps [[step, what]] + cause.evidence (one fold),
+  metrics [[指标, 现在, 目标]] + metrics_how, evidence (one line) — the lint WARNs
+  them (fold-row · accept).
   compare (T699) = {before: PANE, after: PANE | [STATE…], states?: [STATE…]}:
   PANE = {html | img (a path beside the page), alt?, note}; STATE = PANE + label.
   More than one 改后 state ⇒ buttons switch them (no JS: the first shows; printed:
@@ -90,6 +107,144 @@ def table(head_row, rows, num_cols=()):
     return "".join(out)
 
 
+def xrows(kind, head_row, rows, num_cols=(), say=None):
+    """A table whose every row opens on its OWN detail (T764): a row with a detail is a
+    <details class="xr"> (▸ at the end), a row without one a plain <div class="xr"> — no
+    arrow, nothing to tap. rows = [(cells, detail_html)]. say(i) ⇒ the row's feedback
+    key: a 「有意见」 button in the row and its one-line form right under it."""
+    def cells(cs, i):
+        c = "".join('<span class="%s">%s</span>' % ("num" if j in num_cols else "c", x) for j, x in enumerate(cs))
+        return c + (say_btn(say(i)) if say else "")
+    fb = " fb" if say else ""
+    out = ['<div class="xt %s%s">\n<div class="xh">%s%s<i></i></div>\n'
+           % (kind, fb, "".join("<span>%s</span>" % h for h in head_row), "<span></span>" if say else "")]
+    for i, (cs, det) in enumerate(rows):
+        if det:
+            out.append('<details class="xr"><summary>%s<i></i></summary>\n<div class="xd">\n%s</div>\n</details>\n'
+                       % (cells(cs, i), det))
+        else:
+            out.append('<div class="xr">%s<i></i></div>\n' % cells(cs, i))
+        if say:
+            out.append(say_form(say(i)))
+    out.append("</div>\n")
+    return "".join(out)
+
+
+# ---- 页内反馈 (T764) ------------------------------------------------------------
+# The page is a live page: the operator answers ON it. Every form POSTs one row
+# {item, choice, note, version} to the page's own data table (./_data/<table>,
+# members_only — only the workspace's people); the orchestrator reads them with
+# list_data_rows since=<next_since> and hands each to the session doing the work.
+FB = {}
+
+
+def say_btn(item):
+    return '<button type="button" class="say-btn" data-say="%s">有意见</button>' % html.escape(item, quote=True)
+
+
+def done_mark(item):
+    d = (FB.get("done") or {}).get(item)
+    if not d:
+        return ""
+    word, cls = {"adopted": ("已采纳", ""), "declined": ("未采纳", "muted")}.get(d.get("state"), (d.get("state", ""), "muted"))
+    return '<p class="fb-done"><span class="pill %s">%s</span> %s</p>\n' % (cls, word, d.get("note", ""))
+
+
+def say_form(item):
+    """The one-line 「有意见」 form: hidden until its button is tapped."""
+    e = html.escape(item, quote=True)
+    return ('<form class="fbf say" id="say-%s" data-item="%s" hidden><input name="note" placeholder="一句话写意见" '
+            'maxlength="300"><button>提交</button><span class="st"></span></form>\n%s' % (e, e, done_mark(item)))
+
+
+def choose_form(item):
+    """A 需要你定的事 row: 按建议 / 改成… + an optional note."""
+    e = html.escape(item, quote=True)
+    return ('<form class="fbf pick" data-item="%s"><label><input type="radio" name="choice" value="按建议"> 按建议</label>'
+            '<label><input type="radio" name="choice" value="改成"> 改成…</label>'
+            '<input name="note" placeholder="改成什么 / 备注（可选）" maxlength="300"><button>提交</button>'
+            '<span class="st"></span></form>\n%s' % (e, done_mark(item)))
+
+
+
+
+def detail(v):
+    """A row's detail: a list ⇒ <ul>, a string ⇒ one <p>, empty ⇒ nothing (no fold)."""
+    if not v:
+        return ""
+    return ul(v) if isinstance(v, list) else "<p>%s</p>\n" % v
+
+
+STATUS = {"pending": ("待取", "muted"), "done": ("已取", ""), "failed": ("未通过", "crit")}
+
+
+def proof(p):
+    """The evidence slot: empty ⇒ a dashed 待回填 box; else the picture, the terminal
+    output or the link the worker filled in after the switch."""
+    if not p:
+        return '<div class="slot">待回填：截图 / 终端输出 / 链接</div>\n'
+    o = ""
+    if p.get("img"):
+        o += '<img src="%s" alt="%s" loading="lazy">' % (html.escape(p["img"], quote=True), html.escape(p.get("alt", ""), quote=True))
+    if p.get("text"):
+        o += "<pre>%s</pre>" % html.escape(p["text"])
+    if p.get("html"):
+        o += p["html"]
+    if p.get("url"):
+        o += '<a href="%s">%s</a>' % (html.escape(p["url"], quote=True), html.escape(p.get("label") or p["url"]))
+    if p.get("caption"):
+        o += "<figcaption>%s</figcaption>" % p["caption"]
+    return '<figure class="got">%s</figure>\n' % o
+
+
+def accept(items, lede, live=True):
+    """上线后怎么验收 (T764): one card per piece of evidence — what · where / how · pass.
+    The plan (live False) lists just those; once building / reporting (spec `phase`
+    build | report) each item also wears its status and the slot the worker fills
+    after the switch — the filled card IS the report's 已上线 column."""
+    o = ['<h2>上线后怎么验收</h2>\n<p class="lede">%s</p>\n<div class="acc">\n' % lede]
+    for i, e in enumerate(items, 1):
+        word, cls = STATUS.get(e.get("status") or "pending", (e.get("status"), "muted"))
+        o.append('<div class="ev"><div class="eh"><span class="en">%d</span><strong>%s</strong>%s</div>\n<dl class="kv">\n'
+                 % (i, e.get("what", ""), '<span class="pill %s">%s</span>' % (cls, word) if live else ""))
+        if e.get("where"):
+            o.append("  <dt>在哪取</dt><dd>%s</dd>\n" % e["where"])
+        o.append('  <dt>通过标准</dt><dd>%s</dd>\n</dl>\n' % (e.get("pass") or '<span class="miss">（未写）</span>'))
+        o.append((proof(e.get("proof")) if live else "") + "</div>\n")
+    o.append("</div>\n")
+    return "".join(o)
+
+
+KINDS = [("code", "代码"), ("log", "日志"), ("scene", "现场"), ("ref", "外部资料")]
+
+
+def other(items):
+    """Evidence no step / metric / card owns (T764): grouped by kind, one title line each,
+    tap for the original — a code item shows file:line and a line or two of it."""
+    if not any(isinstance(x, dict) for x in items):
+        return fold("其他证据", ul(items))                      # compat: a plain list
+    o = ['<div class="oth"><h3>其他证据</h3>\n']
+    for k, word in KINDS + [("", "其他")]:
+        grp = [x for x in items if isinstance(x, dict) and (x.get("kind") or "") == k
+               or (k == "" and isinstance(x, dict) and x.get("kind") not in dict(KINDS))]
+        if not grp:
+            continue
+        o.append('<div class="og"><span class="ok">%s</span>\n' % word)
+        for x in grp:
+            inner = ""
+            if x.get("ref"):
+                inner += '<p class="oref"><code>%s</code></p>' % html.escape(x["ref"])
+            if x.get("excerpt"):
+                inner += "<pre>%s</pre>" % html.escape(x["excerpt"])
+            if x.get("text"):
+                inner += "<p>%s</p>" % x["text"]
+            o.append('<details class="oi"><summary>%s</summary><div class="xd">%s</div></details>\n' % (x.get("title", ""), inner)
+                     if inner else '<div class="oi">%s</div>\n' % x.get("title", ""))
+        o.append("</div>\n")
+    o.append("</div>\n")
+    return "".join(o)
+
+
 def fold(summary, inner):
     return '<details class="fold">\n<summary>%s</summary>\n%s</details>\n' % (summary, inner)
 
@@ -144,11 +299,19 @@ def compare(c):
 
 def render(spec):
     g = spec.get
+    FB.clear()
+    if g("feedback"):
+        FB.update(g("feedback"))
+        FB["done"] = g("replies_done") or {}
     feature = g("kind") == "feature"
     h = head("%s" % g("title", "任务设计"))
     if g("css"):
         h = h.replace("</head>", "<style>\n%s\n</style>\n</head>" % g("css"), 1)
-    o = [h, "\n<body>\n<div class=\"wrap\">\n\n"]
+    body_tag = "<body>"
+    if FB:      # the frame's script posts the forms to this table, stamped with this version
+        body_tag = '<body data-fb-table="%s" data-fb-version="%s">' % (
+            html.escape(str(FB.get("table") or "replies"), quote=True), html.escape(str(FB.get("version") or ""), quote=True))
+    o = [h, "\n%s\n<div class=\"wrap\">\n\n" % body_tag]
     o.append('<p class="eyebrow">任务设计 · %s · %s</p>\n' % (g("repo", ""), g("date", "")))
     o.append("<h1>%s</h1>\n" % g("title", ""))
     o.append('<p class="sub">%s</p>\n\n' % g("sub", ""))
@@ -156,33 +319,54 @@ def render(spec):
         o.append('<div class="verdict">\n' + "".join(
             '  <div class="v"><div class="n">%s</div><div class="k">%s</div></div>\n' % (b["n"], b["k"])
             for b in g("band")) + "</div>\n\n")
-    o.append('<section id="problem">\n<h2>%s</h2>\n%s</section>\n\n'
-             % ("现在的样子" if feature else "现象", ul(g("problem") or [])))
+    # T764: 现象 and 原因 are ONE section (问题与原因): the symptom first — one sentence, or a few
+    # short facts — then the cause step by step; #cause stays as an anchor inside it
+    pb = g("problem") or []
+    o.append('<section id="problem">\n<h2>%s</h2>\n%s<span id="cause"></span>\n'
+             % ("现在的样子与为什么要做" if feature else "问题与原因",
+                '<p class="sym">%s</p>\n' % pb if isinstance(pb, str) else ul(pb)))
     c = g("cause") or {}
-    o.append('<section id="cause">\n<h2>%s</h2>\n' % ("为什么要做" if feature else "原因"))
     if c.get("lede"):
         o.append('<p class="lede">%s</p>\n' % c["lede"])
     if c.get("points"):
         o.append(ul(c["points"]))
-    if c.get("steps"):
-        o.append(table(["一步", "发生了什么"], c["steps"]))
-    if c.get("evidence"):
+    steps = c.get("steps") or []
+    if any(isinstance(st, dict) for st in steps):      # T764: each step carries its own evidence
+        o.append(xrows("c2", ["一步", "发生了什么"], [
+            ((st.get("step", ""), st.get("what", "")), detail(st.get("evidence"))) if isinstance(st, dict)
+            else (tuple(st), "") for st in steps],
+            say=(lambda i: "cause-%s" % plain(steps[i]["step"] if isinstance(steps[i], dict) else steps[i][0])) if FB else None))
+    elif steps:
+        o.append(table(["一步", "发生了什么"], steps))
+    if c.get("evidence"):                               # compat: the old one fold for every step
         o.append(fold("证据（代码与现场）" if not feature else "依据", ul(c["evidence"])))
+    if c.get("other"):
+        o.append(other(c["other"]))
     o.append("</section>\n\n")
-    o.append('<section id="metrics">\n<h2>指标</h2>\n')
-    o.append(table(["指标", "现在", "目标"], g("metrics") or [["⟨指标⟩", "本批不量", "本批不量"]], (1, 2)))
-    if g("metrics_how"):
+    # T764: 指标 and 目标与范围 are ONE section (目标): the metric rows, then 做 / 不做
+    o.append('<section id="metrics">\n<h2>目标</h2>\n')
+    ms = g("metrics") or [["⟨指标⟩", "本批不量", "本批不量"]]
+    if any(isinstance(m, dict) for m in ms):            # T764: each row carries how it is measured
+        o.append(xrows("c3", ["指标", "现在", "目标"], [
+            ((m.get("name", ""), m.get("now", ""), m.get("target", "")), detail(m.get("how"))) if isinstance(m, dict)
+            else (tuple(m), "") for m in ms], (1, 2)))
+    else:
+        o.append(table(["指标", "现在", "目标"], ms, (1, 2)))
+    if g("metrics_how"):                                # compat: the old one 怎么量 fold
         o.append(fold("怎么量", ul(g("metrics_how"))))
-    o.append("</section>\n\n")
     ch = g("charter") or {}
-    o.append('<section id="charter">\n<h2>目标与范围</h2>\n<h3>做</h3>\n%s<h3>不做</h3>\n%s</section>\n\n'
+    o.append('<span id="charter"></span>\n<h3>做</h3>\n%s<h3>不做</h3>\n%s</section>\n\n'
              % (ul(ch.get("do") or []), ul(ch.get("dont") or [])))
-    o.append('<section id="members">\n<h2>改法</h2>\n\n')
+    o.append('<section id="members">\n<h2>解决方案</h2>\n\n')
     for m in g("members") or []:
+        ct = '<span class="ct"><strong>%s</strong><span class="cg">%s</span></span>' % (m.get("name", ""), m.get("line", ""))
+        if not any(m.get(k) for k in ("what", "compare", "proto", "tech")):   # T764: nothing to open ⇒ no ▸
+            o.append('<div class="ob" id="m-%s">\n<div class="card">%s</div>\n</div>\n\n' % (m.get("key", ""), ct))
+            continue
         o.append('<div class="ob" id="m-%s">\n<details class="card">\n' % m.get("key", ""))
-        o.append('<summary><span class="ct"><strong>%s</strong><span class="cg">%s</span></span></summary>\n'
-                 % (m.get("name", ""), m.get("line", "")))
-        o.append('<dl>\n  <dt>做什么</dt><dd>%s</dd>\n</dl>\n' % m.get("what", ""))
+        o.append("<summary>%s</summary>\n" % ct)
+        if m.get("what"):
+            o.append('<dl>\n  <dt>做什么</dt><dd>%s</dd>\n</dl>\n' % m["what"])
         if m.get("compare"):
             o.append(compare(m["compare"]))
         if m.get("proto"):
@@ -190,6 +374,8 @@ def render(spec):
         if m.get("tech"):
             o.append(fold("技术细节", "<dl>\n" + "".join(
                 "  <dt>%s</dt><dd>%s</dd>\n" % (k, v) for k, v in m["tech"]) + "</dl>\n"))
+        if FB:
+            o.append('<p class="say-row">%s</p>\n%s' % (say_btn("card-" + m.get("key", "")), say_form("card-" + m.get("key", ""))))
         o.append("</details>\n</div>\n\n")
     o.append("</section>\n\n")
     o.append('<section id="risks">\n<h2>可能出的问题</h2>\n')
@@ -198,11 +384,29 @@ def render(spec):
         o.append(fold("技术风险", ul(g("risks_tech"))))
     o.append("</section>\n\n")
     o.append('<section id="signoff">\n<span id="open"></span>\n<h2>需要你定的事</h2>\n')
-    if g("signoff"):
+    if g("signoff") and FB:                              # T764: each row answerable — folded until 「我要逐条改」
+        o.append('<div class="sol">\n' + "".join(
+            '<div class="so"><div class="sk">%s</div><div class="sv">%s</div>\n%s</div>\n'
+            % (k, v, choose_form("signoff-%d" % i)) for i, (k, v) in enumerate(g("signoff"), 1)) + "</div>\n")
+    elif g("signoff"):
         o.append(table(["事项", "建议"], g("signoff")))
-    o.append('<p class="lede" style="margin-top:14px">%s</p>\n</section>\n\n'
+    o.append('<p class="lede" style="margin-top:14px">%s</p>\n'
              % (g("signoff_note") or "点头即全部按建议，派一个执行会话做，一个改动说明合并。"))
-    o.append('<section id="evidence">\n%s</section>\n\n' % fold("上线证据", "<pre>%s</pre>\n" % g("evidence", "")))
+    if FB:      # one button shows; every per-row / per-card entry waits behind 「我要逐条改」
+        o.append('<div class="fb-bar"><form class="fbf nod" data-item="nod" data-choice="全部按建议">'
+                 '<button>全部按建议</button><span class="st"></span></form>'
+                 '<button type="button" class="fb-more" aria-expanded="false">我要逐条改</button></div>\n%s' % done_mark("nod"))
+        o.append('<p class="fb-note">ⓘ 你在本页的表态进本页的意见表，编排每 %s读一次、转给做这件事的会话；下一版逐条标已采纳 / 未采纳。</p>\n'
+                 % FB.get("poll", "12 分钟"))
+    o.append("</section>\n\n")
+    ev = g("evidence")
+    if isinstance(ev, list):                            # T764: the acceptance card, by phase
+        live = (g("phase") or "plan") != "plan"
+        o.append('<section id="evidence">\n%s</section>\n\n' % accept(ev, g("evidence_note") or (
+            "换版后执行会话逐条取证、回填到下面的空位；全部「已取」且达标，这一栏就是报告的「已上线」。" if live
+            else "上线后逐条取这些证据；每条都达到通过标准，才算上线。"), live))
+    else:                                               # compat: one line, folded
+        o.append('<section id="evidence">\n%s</section>\n\n' % fold("上线证据", "<pre>%s</pre>\n" % (ev or "")))
     o.append("<footer>%s</footer>\n\n</div>\n</body>\n</html>\n" % (g("footer") or "本页私密，仅你可见。"))
     return "".join(o)
 
@@ -231,6 +435,9 @@ class Words(HTMLParser):
         self.divs = []         # open <div>s' first class
         self.band = []         # the number band's n, k, n, k …
         self.cmp = 0           # inside a 改前 / 改后 block: its <div> depth
+        self.xrow = False      # inside a div.xt row (T764): its spans are cells, joined by ·
+        self.xd = 0            # inside a row's own detail: its lines are indented
+        self.spans = []        # open <span>s' first class
 
     def kind(self):
         kinds = [k for k, _ in self.stack]
@@ -251,23 +458,45 @@ class Words(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         cls = (a.get("class") or "").split()
-        if tag in ("head", "style", "script"):
+        if tag in ("head", "style", "script", "button", "form"):   # a page control is not words
             self.skip += 1
             return
-        if tag == "section":
-            self.section = a.get("id", "")
+        if tag == "section" or (tag == "span" and a.get("id") in ("cause", "charter")):
+            self.section = a.get("id", "")     # T764: #cause / #charter are anchors inside a merged section
         if not self.skip and ((tag == "p" and "eyebrow" in cls) or tag == "footer"):
             self.skip += 1; self.unskip = tag; return
         if tag == "div":
             self.divs.append(cls[0] if cls else "")
             if self.divs[-1] in ("n", "k"):
                 self.buf = []
+            d = self.divs[-1]
+            if d == "xh":                          # the head row: the words carry no header
+                self.skip += 1
+            elif not self.skip and d in ("xr", "eh", "sk", "sv", "slot"):
+                self.buf = []; self.xrow = d == "xr"
+            elif d == "xd" and not self.skip:
+                drop = ("evidence" if self.section == "cause" else "other") in self.drop
+                if drop:                            # moved off: one line says where it is
+                    self.emit("  （%s：见设计页）" % ("证据" if self.section == "cause" else "细节"))
+                    self.divs[-1] = "xd-drop"; self.skip += 1
+                else:
+                    self.xd += 1
             if self.divs[-1] == "cmp" and not self.skip:
                 self.emit("**改前 / 改后**")      # the block as words: one line per state
                 self.cmp = len(self.divs)
                 self.skip += 1
         if self.cmp and a.get("data-say"):
             self.emit("- " + a["data-say"])
+        if tag == "span":
+            self.spans.append(cls[0] if cls else "")
+            if not self.skip and self.spans[-1] == "ok" and self.divs and self.divs[-1] == "og":
+                self.buf = []
+            if not self.skip and self.spans[-1] == "pill" and self.divs and self.divs[-1] == "eh":
+                self.buf.append(" · ")
+        if tag == "details" and "xr" in cls:      # a row that opens on its own detail (T764)
+            self.stack.append(["xr", True])
+            if self.skip: self.skip += 1
+            return
         if tag == "details":
             k = "card" if "card" in cls else self.kind()
             if self.skip:
@@ -292,6 +521,8 @@ class Words(HTMLParser):
             self.buf = []
         elif tag in self.BLOCK:
             self.buf = []
+            if tag == "summary" and self.stack and self.stack[-1][0] == "xr":
+                self.xrow = True
 
     def handle_endtag(self, tag):
         if self.unskip == tag:
@@ -301,8 +532,22 @@ class Words(HTMLParser):
                 self.cmp = 0
                 self.skip -= 1
             c = self.divs.pop() if self.divs else ""
+            if c in ("xh", "xd-drop"):
+                self.skip -= 1
+                return
+            if c == "xd" and not self.skip:
+                self.xd -= 1
+                return
             if self.skip:
                 return
+            if c in ("xr", "eh"):
+                self.emit("- " + self.text().strip(" ·"))
+                self.xrow = False
+                return
+            if c == "sk":
+                self.emit("- **%s**" % self.text()); return
+            if c in ("sv", "slot"):
+                self.emit("  " + self.text()); return
             if c in ("n", "k"):
                 self.band.append(self.text())
             elif c == "verdict" and self.band:
@@ -310,8 +555,19 @@ class Words(HTMLParser):
                 self.emit(" · ".join("%s %s" % (b[i + 1], b[i]) for i in range(0, len(b) - 1, 2)))
                 self.band = []
             return
-        if tag in ("head", "style", "script"):
+        if tag in ("head", "style", "script", "button", "form"):
             self.skip = max(0, self.skip - 1)
+            return
+        if tag == "span":
+            c = self.spans.pop() if self.spans else ""
+            if self.skip:
+                return
+            if self.xrow and c in ("c", "num"):
+                self.buf.append(" · ")
+            elif c == "en":
+                self.buf.append(". ")
+            elif c == "ok" and self.divs and self.divs[-1] == "og":
+                self.emit("*%s*" % self.text())
             return
         if tag == "details":
             d = self.stack.pop() if self.stack else ["", False]
@@ -339,7 +595,10 @@ class Words(HTMLParser):
         elif tag == "summary":
             t = self.text()
             top = self.stack[-1] if self.stack else None
-            if top and top[0] == "card":
+            if top and top[0] == "xr":
+                self.emit("- " + t.strip(" ·"))
+                self.xrow = False
+            elif top and top[0] == "card":
                 self.emit("### " + re.sub(r"^\*\*(.*?)\*\*\s*(?=.)", r"\1 — ", t))
             elif top and len(top) > 2:       # a dropped fold: its name, then nothing
                 self.emit("（%s：见设计页）" % t)
@@ -347,12 +606,14 @@ class Words(HTMLParser):
             elif t:
                 self.emit("**%s**" % t)
         elif tag == "pre":
+            t = self.text()                   # read while still inside: a <pre> keeps its lines
             self.pre -= 1
-            self.emit("```\n" + self.text().strip("\n") + "\n```")
+            self.emit("```\n" + t.strip("\n") + "\n```")
         elif tag == "dt":
             self.dt = self.text()
         elif tag == "dd":
-            self.emit("**%s** %s" % (self.dt, self.text()) if self.dt else self.text())
+            ind = "  " if "ev" in self.divs else ""     # an acceptance item's fields sit under it
+            self.emit(ind + ("**%s** %s" % (self.dt, self.text()) if self.dt else self.text()))
             self.dt = ""
         elif tag == "h1":
             self.title = self.text()
@@ -362,11 +623,11 @@ class Words(HTMLParser):
         elif tag == "h3":
             self.emit("### " + self.text())
         elif tag == "li":
-            self.emit("- " + self.text())
+            self.emit(("  - " if self.xd else "- ") + self.text())
         elif tag in ("p", "footer"):
             t = self.text()
             if t:
-                self.emit(t)
+                self.emit(("  " if self.xd else "") + t)
 
     def handle_data(self, d):
         if not self.skip:

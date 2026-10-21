@@ -182,23 +182,55 @@ read as one family. It is not a copy of `template.html`: the layout is
 `bin/fleet-task-page.py`'s (`render <spec.json>`; `task-page.example.json` here is
 a whole approved one), which takes the `<head>` from `template.html` verbatim.
 Top to bottom: eyebrow 「任务设计 · repo · date」 (stamped 「任务 <ID>」 once opened)
-→ title + subtitle (what · where it stops) → number band (根本原因 / 要改的地方 /
-影响面) → `#problem` 现象 → `#cause` 原因 (lede · the step walk · 证据 folded; a
-feature: 为什么要做) → `#metrics` → `#charter` 目标与范围 (做 / 不做) → `#members`
-改法 (one card per place, 技术细节 folded) → `#risks` → `#signoff` 需要你定的事
-(+`#open`; 「点头即全部按建议」) → `#evidence` 上线证据 (folded).
+→ title (≤ 16 字) + subtitle (one sentence ≤ 30 字: where it stops) → number band
+(根本原因 / 要改的地方 / 影响面) → `#problem` 问题与原因 (the symptom, then the
+`#cause` anchor: lede · the step walk, **each step opening on its own evidence**,
+leftovers grouped by kind; a feature: 现在的样子与为什么要做) → `#metrics` 目标 (metric
+rows, **each opening on how it is measured**, then the `#charter` anchor: 做 / 不做)
+→ `#members` 解决方案 (one card per place, 技术细节 folded) → `#risks` → `#signoff`
+需要你定的事 (+`#open`; 「点头即全部按建议」, and 页内反馈 below) → `#evidence`
+上线后怎么验收 (是什么 · 在哪取 · 通过标准; status and the proof slot only once building).
 `epic-page-surface.sh --lint` holds it to the frame (`task-section`,
-`task-evidence`, `task-signoff`); `fleet-task-page.py body` turns it into the
-task's words, both layers, inside the record's 16 KB.
+`task-evidence`, `task-signoff`, `brevity`, `fold-row`, `accept`, `empty-fold`);
+`fleet-task-page.py body` turns it into the task's words, both layers, inside the
+record's 16 KB.
+
+## Rows that open on their own detail (T764)
+
+Both page kinds. A table whose rows carry detail is a `div.xt` (`c2` for 一步 /
+发生了什么, `c3` for 指标 / 现在 / 目标, `c4` for the report's 指标 / 之前 / 现在 / 目标):
+a row WITH a detail is `<details class="xr"><summary>…cells…<i></i></summary><div
+class="xd">…</div></details>`, a row WITHOUT one a plain `<div class="xr">` — no ▸,
+nothing to tap. The same rule for a card: nothing past its one line ⇒ `<div
+class="card">`, no fold; an empty 技术细节 is dropped, never shown. The lint's
+`empty-fold` names an arrow onto nothing, `fold-row` the old shared 证据 / 怎么量 folds.
+
+## 页内反馈 — the page answers itself (T764)
+
+A page published as a 活页 takes the operator's answer where they read it. The
+`<body>` carries `data-fb-table="replies" data-fb-version="v<N>"`; the frame's
+script posts every `form.fbf` as `{item, choice, note, version}` to
+`./_data/replies`, a members-only table made once after the first publish
+(`mcp__space__set_data`: `append_open` + `members_only`). On the page ONE
+「全部按建议」 shows (`item` `nod`); 「我要逐条改」 (`body.fb-open`) brings out a 按建议 /
+改成… choice on each 需要你定的事 row (`signoff-<n>`) and a 「有意见」 line under each
+step (`cause-<step>`) and card (`card-<key>`). One small ⓘ line says where it goes.
+**The orchestrator's rule** (its agent file, 「方案页的意见表」): every plan page's
+`replies` table is read in its routine poll — `list_data_rows` `since` the last
+cursor — and each row handed to the session that made the page; that session's
+next version marks the row 已采纳 / 未采纳 (`replies_done`) and bumps the version.
+The 活页's own comment box (bottom right, anchored to a selected sentence) also
+reaches it: `list_feedback` returns the sentence, `reply_feedback` answers on the
+page.
 
 ## The sections
 
 | id | page | what goes there |
 |---|---|---|
 | `#delivered` | report | **first section**: what a user can do now that they could not before — capabilities in the reader's words, not PR counts, no keys |
-| `#metrics` | both | 指标 — surface 指标 / 现在 / 目标 (report: 之前 / 现在 / 目标), numbers only; the 「怎么量」 fold carries 成员 / 多久能读出来 / 读数口径. The plan writes it from the theme's diagnosis (「本批不量」 when there is none, never blank, never invented); the report fills 现在 row by row (「⟨date⟩ 再看」 / 「本批未声明指标」, never back-filled) |
-| `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded), then 范围 — 做 / 不做 as short plain items; 共同约定 folded — verbatim into the parent body |
-| `#members` | both | 要做的事 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); a visual member adds its `div.cmp` 改前 / 改后 block here (`fleet-task-page.py compare`); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the member's charter section, both layers |
+| `#metrics` | both | 目标 — the metric rows 指标 / 现在 / 目标 (report: 之前 / 现在 / 目标, `xt c4`), numbers only; each row opens on ITS 成员 / 多久能读出来 / 读数口径 (T764); the plan's 范围 (做 / 不做) follows under the rows. The plan writes it from the theme's diagnosis (「本批不量」 when there is none, never blank, never invented); the report fills 现在 row by row (「⟨date⟩ 再看」 / 「本批未声明指标」, never back-filled) |
+| `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded); 共同约定 folded — verbatim into the parent body. 范围 moved under `#metrics` (T764) |
+| `#members` | both | 解决方案 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); a visual member adds its `div.cmp` 改前 / 改后 block here (`fleet-task-page.py compare`); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the member's charter section, both layers |
 | `#gaps` | report | **还差什么 · 下一步** (issue #929) — one two-column table 还差什么 / 建议下一步, one row per gap, one short clause per cell; an empty kind (待部署, 要人做的) is no row; the next-batch suggestion is a row (「下一批主题：…」); no lede, no trailing note, no 这批不做. Carries the `#next` anchor. The band's 还差什么 = its row count |
 | `#risks` | plan | 可能出的问题 — one plain sentence each; technical risks + why this split in the fold |
 | `#signoff` | plan | 需要你定的事 — 待决 + 发起人拍板 in one 事项 / 建议 table, a default on every row, 「（批后）」 marks; carries the `#open` anchor. Recorded with the date after the nod |

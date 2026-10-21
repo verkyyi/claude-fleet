@@ -142,8 +142,9 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
 2. **The preflight says only the problem** — one sentence on what to handle
    before the run; the preflight screen itself goes into a fold.
 3. **How a number is read is hidden** — 读数口径, the measuring command, paths,
-   log names: all in the metrics section's 「怎么量」 fold. No command, path or
-   log name anywhere on the surface.
+   log names: each in its OWN metric row's detail (T764: the row opens on how it
+   is measured; no shared 「怎么量」 fold). No command, path or log name anywhere
+   on the surface.
 4. **One page shows the whole batch; each item opens on demand** — the member
    list IS the overview (rule 11): every card is one line until tapped, tap once
    for the upper layer, again for 技术细节.
@@ -159,8 +160,9 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
    list, same one-line cards.
 9. **The metric table is numbers or ranges** — header 指标 / 现在 / 目标, almost
    no words in the cells.
-10. **Order: 指标 → 范围 → 要做的事**, and 范围 is short items.
-11. **要做的事 and the member cards are ONE list** — grouped by theme (e.g.
+10. **Order: 目标 (指标 rows, then 范围) → 解决方案**, and 范围 is short items (T764:
+    指标 + 范围 are ONE section 「目标」, the member list is 「解决方案」).
+11. **解决方案 and the member cards are ONE list** — grouped by theme (e.g.
     少写文件 / 少起进程 / 看得见 / 有空再做, `<h3 class="grp">`), each card one line
     (名称 + one sentence of 解决什么) until tapped. No separate overview table.
 12. **能不能开跑 comes last** among the visible sections — after 需要你定的事 —
@@ -245,7 +247,7 @@ The sections, as the template lays them out:
    | 真实读者 / 30 天 | 62 | > 100 |
    | 新会话启动 | 5–13 秒 | ≤ 6 秒 |
 
-   and in its 「怎么量」 fold, per row: which member moves it (by name, or 全批),
+   and each row opening on its own detail (`div.xt` rows, T764): which member moves it (by name, or 全批),
    **多久能读出来**, and the **读数口径** — the data source, the filter rules
    (whose traffic is excluded, how duplicates are dropped, which timezone), the
    exact command. Without the 口径 the report cannot re-read the same number.
@@ -264,7 +266,7 @@ The sections, as the template lays them out:
    member shares (*"this batch does not change conf format"*) — in a fold. It is
    horizontal instruction for the workers and can be as technical as it needs to
    be. All of it goes verbatim into the parent body later.
-3. **`#members`** — **要做的事**: one card per member, core (6–8) grouped by theme,
+3. **`#members`** — **解决方案**: one card per member, core (6–8) grouped by theme,
    then reserve (8–10) as the last group 「有空再做」, `id="m-<key>"` (`C1`…,
    `R1`…) — the id carries the key so the page stays addressable, the title does
    not. Each card is a `<details class="card">` whose summary is **名称 + one

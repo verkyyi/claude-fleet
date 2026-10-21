@@ -3,7 +3,7 @@
  "date": "2026-10-20",
  "kind": "fix",
  "title": "批次报告送不到你手里",
- "sub": "定位「无主回报」的原因并修好：开批次的那一层会话关掉后，批次的完成报告照样送到还活着的上一层——今天丢的 3 份能补送、以后 0 份丢失就停。",
+ "sub": "上层会话关掉后批次报告照样送到，0 份丢失就停",
  "band": [
   {
    "n": "1",
@@ -19,57 +19,69 @@
   }
  ],
  "problem": [
-  "今天 3 个批次跑完都写了报告，但完成通知<strong>一个都没到</strong>编排会话：去掉本机换号（03:52）、自测瘦身（12:02）、E4 残留清理（13:01）。",
-  "它们都被记进了一个没人看的「无主回报」文件；这个文件里一共已经躺着 <strong>15 条</strong>。",
-  "你只能在批次窗口里自己看，或者等我去翻。"
+  "3 个批次的完成通知一个都没到编排",
+  "15 条回报躺在没人看的无主文件里",
+  "只能自己去批次窗口里翻"
  ],
  "cause": {
   "lede": "批次是「编排 → 计划页会话 → 批次驱动」三层开出来的；计划页会话出完页面就关了，它占用的临时编号随后被别的新会话重新领走——驱动报完成时，老规矩把它判成「上一代的孩子」，直接记成无主，<strong>没有再按身份编号往上找到还活着的编排会话</strong>。",
   "steps": [
-   [
-    "1",
-    "编排开出「计划页会话」（如 E4 的 JWGS，临时编号 scratch-50）"
-   ],
-   [
-    "2",
-    "你点头后，计划页会话开出批次驱动（E4 的 YRV3），驱动记下「我的上一层是 scratch-50，身份 JWGS」"
-   ],
-   [
-    "3",
-    "计划页会话结束、窗口关闭；scratch-50 这个临时编号被后来的新会话重新领用"
-   ],
-   [
-    "4",
-    "重新领用时，系统把驱动的「上一层」改记为「scratch-50 的上一代（已退役）」"
-   ],
-   [
-    "5",
-    "驱动报完成：看到「上一层已退役」就直接记进退役账本 + 无主回报，<strong>结束</strong>"
-   ],
-   [
-    "6",
-    "本该走的路——按身份 JWGS 往上找：JWGS 已关 → 它的上一层是编排会话 → 编排还活着 → 送达——<strong>根本没走到</strong>"
-   ]
+   {
+    "step": "1",
+    "what": "编排开出「计划页会话」（如 E4 的 JWGS，临时编号 scratch-50）"
+   },
+   {
+    "step": "2",
+    "what": "你点头后，计划页会话开出批次驱动（E4 的 YRV3），驱动记下「我的上一层是 scratch-50，身份 JWGS」"
+   },
+   {
+    "step": "3",
+    "what": "计划页会话结束、窗口关闭；scratch-50 这个临时编号被后来的新会话重新领用"
+   },
+   {
+    "step": "4",
+    "what": "重新领用时，系统把驱动的「上一层」改记为「scratch-50 的上一代（已退役）」",
+    "evidence": [
+     "现场：E4 驱动窗口 @1197 的选项只有 <code>@origin_fid 6776af0c…</code>（JWGS）与 <code>@origin_retired \"verkyyi-claude-fleet:scratch-50#1792490283.78940\"</code>，<code>@origin</code> 已被 <code>fleet_scratch_gen_new</code>（<code>bin/fleet-lib.sh:7331</code> 起）移走。"
+    ]
+   },
+   {
+    "step": "5",
+    "what": "驱动报完成：看到「上一层已退役」就直接记进退役账本 + 无主回报，<strong>结束</strong>",
+    "evidence": [
+     "<code>bin/fleet-report-parent.sh:300-305</code>：窗口有 <code>@origin_retired</code> 时置 <code>RETIRED_GEN</code>；<code>:728-750</code>「earlier generation's child」分支记退役账本、调 <code>orphan</code>、<code>exit 0</code>——在 <code>:778-797</code> 按身份路由（<code>fleet_id_take</code>，EPIC T497 C4）<strong>之前</strong>就退出了。",
+     "无主文件 <code>~/.config/claude-fleet/global/orphan-reports.ndjson</code>：15 行；今天 3 行的 <code>parent</code> 分别是 scratch-43 / scratch-34 / scratch-50（都已被重新领用）。"
+    ]
+   },
+   {
+    "step": "6",
+    "what": "本该走的路——按身份 JWGS 往上找：JWGS 已关 → 它的上一层是编排会话 → 编排还活着 → 送达——<strong>根本没走到</strong>",
+    "evidence": [
+     "身份路由本身是对的：<code>fleet-id.sh route 6776af0c…</code> 现在就返回 <code>178b03b8…（编排）· parent</code>，<code>fleet_id_window</code> 也找得到编排窗口 @1016。"
+    ]
+   }
   ],
-  "evidence": [
-   "<code>bin/fleet-report-parent.sh:300-305</code>：窗口有 <code>@origin_retired</code> 时置 <code>RETIRED_GEN</code>；<code>:728-750</code>「earlier generation's child」分支记退役账本、调 <code>orphan</code>、<code>exit 0</code>——在 <code>:778-797</code> 按身份路由（<code>fleet_id_take</code>，EPIC T497 C4）<strong>之前</strong>就退出了。",
-   "现场：E4 驱动窗口 @1197 的选项只有 <code>@origin_fid 6776af0c…</code>（JWGS）与 <code>@origin_retired \"verkyyi-claude-fleet:scratch-50#1792490283.78940\"</code>，<code>@origin</code> 已被 <code>fleet_scratch_gen_new</code>（<code>bin/fleet-lib.sh:7331</code> 起）移走。",
-   "身份路由本身是对的：<code>fleet-id.sh route 6776af0c…</code> 现在就返回 <code>178b03b8…（编排）· parent</code>，<code>fleet_id_window</code> 也找得到编排窗口 @1016。",
-   "无主文件 <code>~/.config/claude-fleet/global/orphan-reports.ndjson</code>：15 行；今天 3 行的 <code>parent</code> 分别是 scratch-43 / scratch-34 / scratch-50（都已被重新领用）。",
-   "为什么以前没事：「退役一代」规则（#1538）早于身份编号（T497）；那时没有别的办法认出老父亲，只能记无主。现在每个会话都有不会重复的身份编号，这条规则对有身份的孩子已经不需要了。"
+  "other": [
+   {
+    "kind": "ref",
+    "title": "为什么以前没事：「退役一代」规则早于身份编号",
+    "text": "为什么以前没事：「退役一代」规则（#1538）早于身份编号（T497）；那时没有别的办法认出老父亲，只能记无主。现在每个会话都有不会重复的身份编号，这条规则对有身份的孩子已经不需要了。"
+   }
   ]
  },
  "metrics": [
-  [
-   "上一层还有活着的会话、回报却成了无主",
-   "今天 3 次",
-   "0 次"
-  ],
-  [
-   "已经躺在无主文件里、还没去处的回报",
-   "15 条",
-   "0 条"
-  ]
+  {
+   "name": "上一层还有活着的会话、回报却成了无主",
+   "now": "今天 3 次",
+   "target": "0 次",
+   "how": "无主回报文件里，上一层身份仍有活着祖先的新增行，按天数；演练时 C 的那一行不该出现。"
+  },
+  {
+   "name": "已经躺在无主文件里、还没去处的回报",
+   "now": "15 条",
+   "target": "0 条",
+   "how": "无主回报文件的行数：补送后剩下的、没有活着祖先可送的行。"
+  }
  ],
  "charter": {
   "do": [
@@ -180,5 +192,29 @@
    "<strong>只补送今天 3 份批次报告</strong>，其余 12 条列给你看后清掉。"
   ]
  ],
- "evidence": "换版后：让一个演练会话 A 开 B、B 开 C，关掉 B 并让新会话重新领用 B 的临时编号，C 报完成 —— 贴 A 窗口收到的回报（capture-pane）+ orphan-reports.ndjson 行数不变"
+ "evidence": [
+  {
+   "what": "三层演练：上一层关掉后回报照样送到",
+   "where": "演练会话 A 开 B、B 开 C；关掉 B 并让新会话领用 B 的临时编号；C 报完成，抓下 A 窗口收到的那一条",
+   "pass": "A 窗口收到 C 的完成回报，原文一字不差",
+   "status": "pending"
+  },
+  {
+   "what": "无主回报不再增加",
+   "where": "演练前后各数一次无主回报文件的行数",
+   "pass": "前后行数相同",
+   "status": "pending"
+  },
+  {
+   "what": "今天丢的 3 份补送到了",
+   "where": "补送后看编排窗口",
+   "pass": "3 份完成通知都在，无主文件里这 3 行已标送达",
+   "status": "pending"
+  }
+ ],
+ "feedback": {
+  "table": "replies",
+  "version": "v1",
+  "poll": "12 分钟"
+ }
 }

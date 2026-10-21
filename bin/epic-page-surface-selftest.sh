@@ -13,6 +13,9 @@
 #      改前 / 改后 block (div.cmp, fleet-task-page.py compare) — or any card linking a
 #      separate prototype page — fires `compare`; one with the block, or a non-visual
 #      card, does not (issue #1754).
+#   3c. T764: the shared 证据 / 怎么量 folds (fold-row), a fold that opens on nothing
+#      (empty-fold), a title over 16 / a subtitle over 30 or bracketed (brevity), an
+#      acceptance item with no 通过标准 (accept); a div.xt row is a metric row too.
 #   4. the shared template's surface still reads through it (the frame and the
 #      tool agree on the fold classes), and the skill + plan command point at it.
 set -uo pipefail
@@ -37,7 +40,10 @@ page() {  # <file> <为谁> <metric-row> <card-summary> <signoff-row> <extra-sur
 <section id="metrics"><h2>指标</h2><table>
 <thead><tr><th>指标</th><th>现在</th><th>目标</th></tr></thead>
 <tbody>$3</tbody></table>
-<details class="fold"><summary>怎么量</summary><p>FOLDED-METRIC 读 fleet.conf 的 FLEET_REPO，命令 \`gh api\`</p></details>
+<div class="xt c3"><div class="xh"><span>指标</span><span>现在</span><span>目标</span><i></i></div>
+<details class="xr"><summary><span class="c">切仓库的次数</span><span class="num">5 次</span><span class="num">0 次</span><i></i></summary>
+<div class="xd"><p>FOLDED-METRIC 读 fleet.conf 的 FLEET_REPO，命令 \`gh api\`</p></div></details>
+<div class="xr"><span class="c">要等的人</span><span class="num">2 个</span><span class="num">0 个</span><i></i></div></div>
 </section>
 <section id="charter"><h2>范围</h2><h3>做</h3><ul><li>一个窗口看所有仓库</li></ul>$6
 <details class="fold"><summary>共同约定</summary><ol><li>FOLDED-CHARTER 不改 conf 格式</li></ol></details></section>
@@ -65,6 +71,7 @@ OUT=$("$S" "$GOOD" </dev/null); rc=$?
 CHECKS=$((CHECKS + 1)); [ "$rc" -eq 0 ] || st_fail "surface of the good page exited $rc"
 for want in '# 一个 hub 管几个仓库' '一个窗口看所有仓库；两个仓库的试跑通过就停。' \
   '| 已知的「做到别的仓库去」的情况 | 9 种 | 0 种 |' '## 要做的事' \
+  '| 切仓库的次数 | 5 次 | 0 次 |' '| 要等的人 | 2 个 | 0 个 |' \
   '▸ 一个窗口装得下几个仓库 — 今天一个窗口只认一个仓库。' \
   '| 新开的会话放进哪个仓库 | 放进你正在看的仓库 |'; do
   CHECKS=$((CHECKS + 1))
@@ -111,6 +118,26 @@ lint_fires for-whom '维护团队'     '维护团队' "$OKM" "$OKC" "$OKD"
 lint_fires decision '代码或路径'   "$OKW" "$OKM" "$OKC" '<tr><td>数据放哪</td><td><code>./_data/表名.json</code></td></tr>'
 lint_fires decision '不做'         "$OKW" "$OKM" "$OKC" '<tr><td>不做：视频预览</td><td>这批不碰</td></tr>'
 
+# 3c. T764: the old shared folds, a fold with nothing in it, a long title / subtitle, an
+#     acceptance item with no 通过标准 — and a metric row of a div.xt is still a metric row
+t764() {  # <rule> <needle> <file>
+  CHECKS=$((CHECKS + 1))
+  local err; err=$("$S" --lint "$3" 2>&1 >/dev/null </dev/null)
+  printf '%s\n' "$err" | grep "^WARN $1:" | grep -q -F -- "$2" || st_fail "lint did not fire $1 on [$2]; got: $err"
+}
+sed 's#<div class="xt c3">#<details class="fold"><summary>怎么量</summary><p>口径</p></details>&#' "$GOOD" >"$TMP/old-how.html"
+t764 fold-row '量法没挂到行' "$TMP/old-how.html"
+sed 's#</section>#<details class="fold"><summary>技术细节</summary>  </details>&#' "$GOOD" >"$TMP/empty.html"
+t764 empty-fold '技术细节' "$TMP/empty.html"
+sed 's#<h1>一个 hub 管几个仓库</h1>#<h1>一个 hub 管几个仓库，再也不用来回切换窗口了</h1>#' "$GOOD" >"$TMP/long.html"
+t764 brevity '标题 24 字' "$TMP/long.html"
+sed 's#<p class="sub">[^<]*</p>#<p class="sub">一个窗口看所有仓库（两个仓库试跑通过就停）</p>#' "$GOOD" >"$TMP/sub.html"
+t764 brevity '副标题' "$TMP/sub.html"
+sed 's#</body>#<section id="evidence"><div class="ev"><div class="eh"><strong>窗口截图</strong></div><dl class="kv"><dt>在哪取</dt><dd>手机</dd></dl></div></section>&#' "$GOOD" >"$TMP/acc.html"
+t764 accept '验收项缺通过标准' "$TMP/acc.html"
+sed 's#<span class="num">0 次</span>#<span class="num">首跑定</span>#' "$GOOD" >"$TMP/xmetric.html"
+t764 metric '目标没有数' "$TMP/xmetric.html"
+
 # 3b. a visual member with no 改前 / 改后 block, or any card linking a prototype page, fires `compare` (#1754, T699)
 vpage() {  # <file> <card-name> <upper-extra> <fold-extra>
   cat >"$1" <<EOF
@@ -150,7 +177,7 @@ vlint 0 'not a visual member'           '新会话启动更快' '' ''
 
 # 4. the frame reads through the tool; the docs point at it
 TS=$("$S" "$T" </dev/null) || st_fail "surface of template.html failed"
-for want in '## 指标' '## 要做的事' '## 需要你定的事' '▸ ⟨名称⟩ — ⟨一句：解决什么⟩'; do
+for want in '## 目标' '## 解决方案' '## 需要你定的事' '▸ ⟨名称⟩ — ⟨一句：解决什么⟩'; do
   CHECKS=$((CHECKS + 1))
   printf '%s\n' "$TS" | grep -q -F -- "$want" || st_fail "template surface is missing: $want"
 done
