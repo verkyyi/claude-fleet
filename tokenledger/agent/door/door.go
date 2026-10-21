@@ -21,6 +21,12 @@
 //  4. every channel and request the person opens is carried to the home and
 //     back, byte for byte.
 //
+// The door also carries the pods' jump (claude-fleet#4193, design #4181 A2) on
+// the same port: the account JumpUser, no session, and each person's key may
+// open ONE kind of tunnel — direct-tcpip to their own pod's sshd
+// (<svc>.<namespace>.svc.cluster.local:22) — where the pod's sshd does the
+// login with that same key. bin/fleet-door-keys.py's rule, on OpenSSH's door.
+//
 // The door holds no key into any home: without a fresh signature of the
 // person's there is no certificate. Its own host key is the door's (every
 // replica the same one) — what a phone trusts once and never again.
@@ -41,6 +47,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -81,13 +88,22 @@ type Config struct {
 	// Audit gets one JSON line per login attempt that reached a decision (nil = the log).
 	Audit io.Writer
 	HTTP  *http.Client
+	// Namespace is the pods' namespace (default fleet-workers): a jump's
+	// tunnel goes to <svc>.<Namespace>.svc.cluster.local:22.
+	Namespace string
+	// JumpUser is the jump account's name (default fleet-jump).
+	JumpUser string
+	// JumpTargets (tests only) maps a pod's Service to the address its
+	// tunnel dials instead; the tunnel's NAME is still the in-cluster one.
+	JumpTargets map[string]string
 }
 
 // Server is a running door.
 type Server struct {
 	cfg     Config
 	mu      sync.RWMutex
-	book    map[string]home // login → the person whose home login it is
+	book    map[string]home     // login → the person whose home login it is
+	jump    map[string][]string // a key's fingerprint → the pod sshds it may tunnel to
 	version int
 	pulled  time.Time
 	pending chan struct{}
@@ -116,13 +132,25 @@ func New(cfg Config) (*Server, error) {
 	if cfg.HTTP == nil {
 		cfg.HTTP = &http.Client{Timeout: 15 * time.Second}
 	}
+	if cfg.Namespace == "" {
+		cfg.Namespace = "fleet-workers"
+	}
+	if !nsRE.MatchString(cfg.Namespace) {
+		return nil, fmt.Errorf("door: %q is not a namespace name", cfg.Namespace)
+	}
+	if cfg.JumpUser == "" {
+		cfg.JumpUser = "fleet-jump"
+	}
 	cfg.Hub = strings.TrimRight(cfg.Hub, "/")
-	return &Server{cfg: cfg, book: map[string]home{}, pending: make(chan struct{}, cfg.MaxPending)}, nil
+	return &Server{cfg: cfg, book: map[string]home{}, jump: map[string][]string{}, pending: make(chan struct{}, cfg.MaxPending)}, nil
 }
 
 // Pull reads the book once.
 func (s *Server) Pull(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.Hub+control.EntryRoutesNodePath+"?home=1", nil)
+	// jump=1&ns=: this door carries the pods' jump (the hub offers it only
+	// while a door says so); home=1: and people's homes
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.cfg.Hub+control.EntryRoutesNodePath+"?jump=1&ns="+url.QueryEscape(s.cfg.Namespace)+"&home=1", nil)
 	req.Header.Set("Authorization", "Bearer "+s.cfg.Token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.cfg.HTTP.Do(req)
@@ -155,10 +183,49 @@ func (s *Server) Pull(ctx context.Context) error {
 		}
 		book[h.Login] = hm
 	}
+	// the pods' jump: every routed login's keys, each to its own pod; a login
+	// two routes name tunnels to neither
+	seen := map[string]int{}
+	for _, r := range lst.Routes {
+		seen[r.Login]++
+	}
+	jump := map[string][]string{}
+	for _, r := range lst.Routes {
+		if seen[r.Login] != 1 || !serviceRE.MatchString(r.Service) || r.Login == "root" {
+			continue
+		}
+		tgt := r.Service + "." + s.cfg.Namespace + ".svc.cluster.local:22"
+		for _, k := range lst.Logins[r.Login].Keys {
+			if !containsString(jump[k.FP], tgt) {
+				jump[k.FP] = append(jump[k.FP], tgt)
+			}
+		}
+	}
 	s.mu.Lock()
-	s.book, s.version, s.pulled = book, lst.Version, time.Now()
+	s.book, s.jump, s.version, s.pulled = book, jump, lst.Version, time.Now()
 	s.mu.Unlock()
 	return nil
+}
+
+var (
+	nsRE      = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	serviceRE = regexp.MustCompile(`^u-[a-z0-9]{4,20}$`)
+)
+
+func containsString(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// jumpTargets is the pods a key may tunnel to through the jump account.
+func (s *Server) jumpTargets(fp string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.jump[fp]...)
 }
 
 // Homes is how many people the book takes home (status, tests).
@@ -166,6 +233,13 @@ func (s *Server) Homes() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.book)
+}
+
+// JumpKeys is how many keys the jump lets through (status, tests).
+func (s *Server) JumpKeys() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.jump)
 }
 
 func (s *Server) lookup(login, fp string) (string, bool) {
@@ -225,6 +299,7 @@ const (
 	extSig       = "fleet-door-sig"
 	extAlgo      = "fleet-door-algo"
 	extKey       = "fleet-door-key"
+	extJump      = "fleet-door-jump"
 )
 
 func (s *Server) serverConfig() *ssh.ServerConfig {
@@ -235,6 +310,13 @@ func (s *Server) serverConfig() *ssh.ServerConfig {
 		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if _, cert := key.(*ssh.Certificate); cert {
 				return nil, errors.New("certificates are not taken here")
+			}
+			if c.User() == s.cfg.JumpUser {
+				tg := s.jumpTargets(ssh.FingerprintSHA256(key))
+				if len(tg) == 0 {
+					return nil, errors.New("not a key the jump lets through")
+				}
+				return &ssh.Permissions{Extensions: map[string]string{extJump: strings.Join(tg, ",")}}, nil
 			}
 			p, ok := s.lookup(c.User(), ssh.FingerprintSHA256(key))
 			if !ok {
@@ -309,6 +391,14 @@ func (s *Server) serve(ctx context.Context, nc net.Conn) {
 	sum := sconn.SessionID()
 	if len(sum) >= 8 {
 		line.Session = base64.RawURLEncoding.EncodeToString(sum[:8])
+	}
+	if tg := ext[extJump]; tg != "" && line.FP != "" {
+		_ = nc.SetDeadline(time.Time{})
+		release()
+		line.Result, line.Home = "jump", tg
+		s.audit(line)
+		s.serveJump(sconn, chans, reqs, strings.Split(tg, ","), line)
+		return
 	}
 	homeConn, cert, err := s.goHome(ctx, sconn)
 	_ = nc.SetDeadline(time.Time{})
@@ -555,4 +645,71 @@ func carry(nch ssh.NewChannel, home *ssh.Client) {
 	ch.Close()
 	hch.Close()
 	go wg.Wait()
+}
+
+// serveJump is the jump account's connection: no session, no global
+// request, and direct-tcpip only to one of allowed (its owner's pod sshds).
+func (s *Server) serveJump(sconn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, allowed []string, line auditLine) {
+	go func() {
+		for r := range reqs {
+			if r.WantReply {
+				r.Reply(false, nil)
+			}
+		}
+	}()
+	for nch := range chans {
+		if nch.ChannelType() != "direct-tcpip" {
+			nch.Reject(ssh.Prohibited, "the jump opens a tunnel to your own pod, nothing else")
+			continue
+		}
+		var d struct {
+			Host  string
+			Port  uint32
+			OHost string
+			OPort uint32
+		}
+		if err := ssh.Unmarshal(nch.ExtraData(), &d); err != nil {
+			nch.Reject(ssh.ConnectionFailed, "bad direct-tcpip request")
+			continue
+		}
+		tgt := net.JoinHostPort(d.Host, fmt.Sprint(d.Port))
+		// against the book as it is NOW: a key the hub took away opens no
+		// new tunnel on a connection it already holds
+		if !containsString(allowed, tgt) || !containsString(s.jumpTargets(line.FP), tgt) {
+			l := line
+			l.Result, l.Home, l.Why = "tunnel-refused", tgt, "not this key's own pod"
+			s.audit(l)
+			nch.Reject(ssh.Prohibited, "not your own pod")
+			continue
+		}
+		go s.tunnel(nch, tgt)
+	}
+}
+
+// tunnel splices one direct-tcpip channel onto tgt (in the cluster).
+func (s *Server) tunnel(nch ssh.NewChannel, tgt string) {
+	dial := tgt
+	if svc, _, ok := strings.Cut(tgt, "."); ok && s.cfg.JumpTargets[svc] != "" {
+		dial = s.cfg.JumpTargets[svc]
+	}
+	c, err := net.DialTimeout("tcp", dial, s.cfg.HandshakeTimeout)
+	if err != nil {
+		nch.Reject(ssh.ConnectionFailed, "your pod does not answer")
+		return
+	}
+	ch, creqs, err := nch.Accept()
+	if err != nil {
+		c.Close()
+		return
+	}
+	go ssh.DiscardRequests(creqs)
+	go func() {
+		_, _ = io.Copy(c, ch)
+		if cw, ok := c.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+	}()
+	_, _ = io.Copy(ch, c)
+	ch.Close()
+	c.Close()
 }

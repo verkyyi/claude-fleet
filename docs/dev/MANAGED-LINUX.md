@@ -720,6 +720,16 @@ through, the login happens on the pod. `render.py --door` renders it:
 | `Service fleet-door` | `LoadBalancer`, 22022 alone, `externalTrafficPolicy: Local` (the client's own address for `PerSourcePenalties` and the record) |
 | `Deployment fleet-door` | 2 replicas of the image with `FLEET_NODE_PROFILE=door`: no disk, no login, no node program, no Kubernetes token — the supervisor with its entry child in **door mode** |
 
+**The listener can be `ccquota door` instead of OpenSSH** (A5SQ, design
+docs/dev/DOOR-SIMPLIFY.md §5): `render.py --door --door-server ccquota` adds
+`FLEET_DOOR_SERVER=ccquota`, and the supervisor's entry child runs
+`<runtime>/bin/ccquota door` (its host key, machine.env, `--namespace`, an audit
+line per login in `<log>/door-audit.ndjson`) — one address for everyone, each
+person taken to their own home by username and key, with the pods' jump below
+carried on the same port by the same rules (`agent/door`). Unset, or no ccquota
+in the runtime: the listener is OpenSSH, byte for byte as before. Switching is a
+door rollout only (no pod changes); going back is the same flag off.
+
 Door mode is the entry port (#3070) with these changes
 (`fleet-node-supervisor.py`, `FLEET_DOOR=1`):
 

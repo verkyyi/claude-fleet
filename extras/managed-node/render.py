@@ -786,7 +786,7 @@ DOOR_EPHEMERAL = {'requests': '2Gi', 'limits': '6Gi'}
 
 
 def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec='slb.s1.small',
-                   pull_secrets=('acr-pull',), entry_host=''):
+                   pull_secrets=('acr-pull',), entry_host='', server='openssh'):
     """The door: its LoadBalancer Service (22022 alone, externalTrafficPolicy
     Local — the client's own address for PerSourcePenalties and the record) and
     its Deployment. No disk, no login, no Kubernetes credential. entry_host is
@@ -808,6 +808,8 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
         raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
     if entry_host and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', entry_host):
         raise ValueError('--entry-host is a host name or an IPv4 address, not %r' % entry_host)
+    if server not in ('openssh', 'ccquota'):
+        raise ValueError('--door-server is openssh or ccquota, not %r' % server)
     labels = {'app.kubernetes.io/name': 'fleet-door', 'fleet/role': 'door'}
     meta = {'name': DOOR_NAME, 'namespace': namespace, 'labels': labels}
     env = [{'name': 'FLEET_HUB_URL', 'value': hub},
@@ -820,6 +822,10 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
            {'name': 'FLEET_DOOR_SECRET', 'value': '/run/fleet-door'}]
     if entry_host:
         env.append({'name': 'CCQUOTA_FLEET_NODE_ROUTES', 'value': 'entry=%s:%d' % (entry_host, ENTRY_PORT)})
+    if server == 'ccquota':
+        # the door's listener is `ccquota door` (A5SQ): one address routed by
+        # username, the pods' jump on the same port; openssh = as before
+        env.append({'name': 'FLEET_DOOR_SERVER', 'value': 'ccquota'})
     tcp = {'tcpSocket': {'port': ENTRY_PORT}}
     container = {
         'name': 'door', 'image': image, 'env': env,
@@ -1269,6 +1275,8 @@ if __name__ == '__main__':
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
     p.add_argument('--door-replicas', type=int, default=2)
+    p.add_argument('--door-server', default='openssh', choices=('openssh', 'ccquota'),
+                   help="the door's listener: openssh (the jump account) or ccquota (`ccquota door`: one address routed by username, A5SQ)")
     p.add_argument('--ops', default='', metavar='CLUSTER',
                    help="the cluster's one fleet-ops, named as the hub knows the cluster (#3734)")
     p.add_argument('--provisioner', default='', metavar='URL',
@@ -1318,7 +1326,8 @@ if __name__ == '__main__':
             raise SystemExit(0)
         if args.door:
             items = door_resources(args.image, args.hub, args.namespace, args.door_replicas, args.entry_lb_spec,
-                                   pull_secrets=args.pull_secrets or ['acr-pull'], entry_host=args.entry_host)
+                                   pull_secrets=args.pull_secrets or ['acr-pull'], entry_host=args.entry_host,
+                                   server=args.door_server)
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         if args.ops:
