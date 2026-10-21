@@ -2,7 +2,7 @@
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
 # selftest-part: 5 HomeReap.test_exited_two_hours_closes_an_idle_turn_never HomeReap.test_spawned_norepo_without_policy_is_never_closed PinIsOrder.test_dry_run_migrates_nothing PolicyGrammar.test_origin_table_and_the_policy_in_force ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn TestIdentity.test_probe_origin_closes_after_a_finished_turn
+# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
 # selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
 # selftest-part: 8 RoundTrip.test_real_close_and_restore
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
@@ -1171,6 +1171,31 @@ class TaskSession(Rig):
         self.assertTrue(self.wt.is_dir())
         self.assertIn("task T42 is closed", (self.root / "ledger.tsv").read_text())
 
+    def test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does(self):
+        """T859: seven finished task windows stayed open for days on a worktree
+        whose only «dirt» was the agent's untracked tool output (.playwright-mcp/,
+        shots/). A closed record closes with untracked files only — kept on disk;
+        a tracked change still keeps the window."""
+        self.answer.write_text("0\n")
+        tracked = self.wt / "tracked.txt"
+        tracked.write_text("v1\n")
+        self.call("git", "-C", str(self.wt), "add", "tracked.txt")
+        self.call("git", "-C", str(self.wt), "-c", "user.email=t@t", "-c", "user.name=t",
+                  "commit", "-qm", "tracked")
+        tracked.write_text("v2\n")                       # a tracked change: kept
+        out = self.due()
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.call("git", "-C", str(self.wt), "checkout", "--", "tracked.txt")
+        (self.wt / ".playwright-mcp").mkdir()
+        (self.wt / ".playwright-mcp" / "console.log").write_text("x")
+        (self.wt / "shots").mkdir()
+        (self.wt / "shots" / "a.png").write_text("png")
+        out = self.due()
+        self.assertRegex(out, "reaped-(task|over):" + re.escape(self.win) + " ")   # either road
+        self.assertFalse(self.exists())
+        self.assertTrue((self.wt / "shots" / "a.png").is_file())   # the bytes stay
+
     def test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped(self):
         """claude-fleet T569: a ver-stale reopen (fleet-migrate.sh --cfg-stale)
         and this close raced on T477 — the reaper closed the old window 12 s into
@@ -1299,6 +1324,7 @@ class DispatchedSession(TaskSession):
 
     test_open_or_unknown_record_keeps_the_session = None
     test_closed_record_reaps_after_grace_keeping_the_worktree = None
+    test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does = None
     test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped = None
     test_a_final_id_result_is_done_while_the_record_still_reads_open = None
     test_now_watcher_closes_about_its_grace_after_the_turn = None

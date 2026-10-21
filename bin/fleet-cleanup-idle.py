@@ -396,7 +396,13 @@ class Cleaner:
         records = run("git", "-C", self.args.main, "worktree", "list", "--porcelain").split("\n\n")
         if not any("worktree " + wt in record.splitlines() for record in records):
             return False
-        if run("git", "-C", wt, "status", "--porcelain"):
+        # A task session whose work is over (its record closed / its ID's final
+        # result — task=True) is closed even with UNTRACKED files only (T859): the
+        # close keeps the worktree byte for byte, and what an agent leaves there is
+        # tool output (.playwright-mcp/, screenshots, a page draft) — it held seven
+        # finished windows open for days. A tracked change still keeps it.
+        status = run("git", "-C", wt, "status", "--porcelain")
+        if status and not (task and all(l.startswith("?? ") for l in status.splitlines())):
             return False
         # Reuse the transfer lease's PID/TTL semantics rather than only trusting
         # window metadata during a migration gap.
