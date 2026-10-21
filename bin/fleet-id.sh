@@ -76,6 +76,16 @@
 #                                            (the panel, get, children, family, resolve) read
 #                                            the cache, never the hub: rc 0 · 3 no hub here ·
 #                                            75 the hub did not answer (the cache stays)
+#   fleet-id.sh live [--dry] [--json]       tell the hub which IDs this login's windows
+#                                            carry now (task BCYB, POST /v1/node/ids/live):
+#                                            it closes this machine's open IDs the list
+#                                            leaves out (quiet 10 min: hub:gone, a probe's
+#                                            hub:probe), the reserved IDs of ended tasks
+#                                            (hub:task-over), and reopens one of its closes
+#                                            named again. --dry says what it would close.
+#                                            The cleanup tick runs it after push. rc 0 ·
+#                                            3 no hub · 75 no fleet server answered / the
+#                                            hub did not answer (nothing changed)
 #   fleet-id.sh migrate [--apply] [--only T1,T2] [--json]
 #                                            the old T records onto IDs (EPIC T497 C6, design
 #                                            §5): each record's verdict by one rule — 已终态 ⇒
@@ -125,7 +135,7 @@ esac
 # start_word reads as 「窗口在、agent 不在」. FLEET_ID_NOAGENT_CMD is its seam.
 live='' scanned='' noagent=''
 case "$1" in
-  open|short|display|resolve|get|native|result|progress|start-word|of-task|close|status|route|children|family|await|history|continue|reopen)
+  open|short|display|resolve|get|native|result|progress|start-word|of-task|close|status|route|children|family|await|history|continue|reopen|live)
     rows=''
     if [ -n "${FLEET_ID_LIVE_CMD:-}" ]; then live=$(eval "$FLEET_ID_LIVE_CMD") && scanned=1
       [ -z "${FLEET_ID_NOAGENT_CMD:-}" ] || noagent=$(eval "$FLEET_ID_NOAGENT_CMD")
@@ -172,6 +182,14 @@ $(fleet_sockets 2>/dev/null)
 EOF
     fi
     FLEET_ID_WINDOWS="$wins" FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" push "$@" ;;
+  live)
+    # BCYB: only a scan a tmux server answered says which IDs are gone — none ⇒
+    # nothing sent (a fleet that is down is not a fleet with no windows)
+    [ -n "$scanned" ] || { echo "fleet-id: no fleet server answered — nothing reported" >&2; exit 75; }
+    if [ -z "${FLEET_ID_HUB_POST:-}" ]; then
+      fleet_node_pair >/dev/null 2>&1 || exit 3
+    fi
+    FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" live "$@" ;;
   pull)
     if [ -z "${FLEET_ID_HUB_POST:-}" ]; then
       fleet_node_pair >/dev/null 2>&1 || exit 3

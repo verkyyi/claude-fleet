@@ -1802,6 +1802,37 @@ if [ -f "$_str" ] && command -v tmux >/dev/null 2>&1; then
   fi
 fi
 
+# --- the hub's open IDs against the windows (task BCYB) -----------------------------
+# A window that went without its ID closing stayed open on the hub for good (272
+# open beside ~17 windows), and every panel reading the hub counted it. The cleanup
+# tick's `fleet-id.sh live` reconciles them; its last answer ($ids/.hub/live.json)
+# says how many of THIS machine's IDs the hub still holds open against the windows
+# this login carries. WARN past FLEET_DOCTOR_IDS_SLACK more (default 10), or when
+# the reconcile has not answered for an hour. No answer yet (no hub) ⇒ no row.
+_ilv="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids/.hub/live.json"
+if [ -f "$_ilv" ]; then
+  _ilr=$(python3 - "$_ilv" "${FLEET_DOCTOR_IDS_SLACK:-10}" <<'PY' 2>/dev/null
+import json, sys, time
+d = json.load(open(sys.argv[1]))
+try:
+    slack = int(sys.argv[2])
+except ValueError:
+    slack = 10
+op = d.get("open") or {}
+live, kept = int(d.get("live") or 0), int(d.get("kept") or 0)
+age = int(time.time() - int(d.get("at") or 0))
+tot = sum(int(v) for v in op.values())
+parts = " · ".join("%s %d" % (k or "无机器", int(v)) for k, v in sorted(op.items()))
+lvl = "warn" if kept - live > slack or age > 3600 else "pass"
+print("%s\thub 上没关的 ID %d（%s）· 本机这批 %d 个、活窗口 %d · 上次对账 %d 分钟前" % (lvl, tot, parts or "-", kept, live, age // 60))
+PY
+)
+  case "$_ilr" in
+    warn*) warn hubids "${_ilr#*	} — 窗口没了 ID 还开着：cleanup tick 的 \`fleet-id.sh live\` 会关（缺席 10 分钟），\`fleet-id.sh live --dry\` 看它要关哪些" ;;
+    pass*) pass hubids "${_ilr#*	}" ;;
+  esac
+fi
+
 # --- remote clients of this machine (issue #1907) ---------------------------------
 # A shell / proxy client of this machine sits on a view session of its own
 # (`<fleet>@view-<id>`, #1489): one on the FLEET session shows the node's status

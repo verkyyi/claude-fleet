@@ -82,7 +82,17 @@ ORIGINS = {
 REPORTING = ("dispatched", "member", "driver")
 
 
-def origin_of(agent_def="", origin="", origin_wid="", test_identity="", stamp=""):
+# A probe by its words (BCYB): a session a person or a session opened to measure
+# or try something — never work to keep. The same pattern as the hub's
+# store.IsProbeTitle (its reconcile closes one as hub:probe).
+PROBE_RE = re.compile(r"(可关|探针|空会话|放置演示|放置计时|\bprobe\b)", re.I)
+
+
+def is_probe_title(title):
+    return bool(PROBE_RE.search(title or ""))
+
+
+def origin_of(agent_def="", origin="", origin_wid="", test_identity="", stamp="", title=""):
     """The origin word: the stamped `@reap_origin` when it is one, else read off
     the window — its agent file (orchestrator · epic-driver), a test identity, a
     parent session (@origin other than the hub, @origin_fid, @origin_wid), else a
@@ -94,7 +104,7 @@ def origin_of(agent_def="", origin="", origin_wid="", test_identity="", stamp=""
         return "orchestrator"
     if name == "epic-driver":
         return "driver"
-    if test_identity == "1":
+    if test_identity == "1" or is_probe_title(title):
         return "probe"
     if (origin and origin != "hub") or origin_wid:
         return "dispatched"
@@ -317,7 +327,7 @@ def main(argv):
                 i += 1
         if cmd == "origin":
             print(origin_of(kv.get("agent-def", ""), kv.get("origin", ""), kv.get("origin-wid", ""),
-                            kv.get("test-identity", ""), kv.get("stamp", "")))
+                            kv.get("test-identity", ""), kv.get("stamp", ""), kv.get("title", "")))
             return 0
         if cmd == "origin-default":
             out = origin_default(pos[0] if pos else "", kv.get("kind", ""))

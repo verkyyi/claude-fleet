@@ -1076,6 +1076,12 @@ class PolicyGrammar(unittest.TestCase):
             ("orchestrator",), ("fleet-epic:epic-driver",), ("", "", "", "1"), ("", "scratch-3"),
             ("", "hub"), ("", "", "u/f"), ("", ""), ("", "scratch-3", "", "", "decide"))],
             ["orchestrator", "driver", "probe", "dispatched", "person", "dispatched", "person", "decide"])
+        # BCYB: a title that says it is a probe makes it one — never «演练» alone
+        # (a task about drills is work), never over an orchestrator / a driver
+        self.assertEqual([rp.origin_of(*a) for a in (
+            ("", "hub", "", "", "", "T672 放置计时 D2（空会话，可关）"), ("", "scratch-3", "", "", "", "探针：放置 4xx"),
+            ("", "scratch-3", "", "", "", "C5 · 重复的故障演练合并"), ("orchestrator", "", "", "", "", "可关"))],
+            ["probe", "probe", "dispatched", "orchestrator"])
         self.assertEqual([rp.effective(*a) for a in (
             ("done:5m", "1"), ("", "", "orchestrator"), ("keep", "", "", "session", True),
             ("keep", "", "", "session", False), ("keep", "", "", "", True), ("merged",))],
@@ -1620,6 +1626,20 @@ class HomeReap(ReapPolicy):
         self.set("@claude_state", "done")
         out = self.due()
         self.assertIn("reaped-idle:" + self.win + " policy=done:5m norepo", out)
+        self.assertFalse(self.exists())
+
+    def test_probe_norepo_closes_after_a_finished_turn(self):
+        # BCYB: a placement demo opened through the hub carries no @origin — its
+        # @reap_origin probe makes it nobody's home session, so done:10m closes it
+        # after a finished turn (D1–D13 waited for an /exit that never came).
+        self.policy("done:10m")
+        self.set("@claude_state", "done")
+        self.set("@claude_state_ts", str(int(time.time()) - 900))
+        self.due()
+        self.assertTrue(self.exists())               # a person's home session: waits for the exit
+        self.set("@reap_origin", "probe")
+        out = self.due()
+        self.assertIn("reaped-idle:" + self.win + " policy=done:10m norepo", out)
         self.assertFalse(self.exists())
 
     def test_spawned_norepo_without_policy_is_never_closed(self):

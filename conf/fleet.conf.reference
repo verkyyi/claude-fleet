@@ -1965,6 +1965,17 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # …or this many dead socket files.
 # @label=Doctor dead-socket limit @group=disk @tier=internal @scope=global @edit=int
 #FLEET_DOCTOR_TESTTMUX_DEAD=50
+# The hub's open IDs (task BCYB): each cleanup tick, after the ID push, tells the hub
+# which IDs this login's windows carry (`fleet-id.sh live`); the hub closes this
+# machine's open IDs no window carries any more once quiet 10 minutes (hub:gone ·
+# hub:probe), the reserved IDs of ended tasks (hub:task-over), and reopens one named
+# again. 0 = no report (the hub then keeps every ID a window left without a close).
+# @label=ID reconcile @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_ID_RECONCILE=1
+# `fleet-doctor`'s `hubids` line WARNs when the hub holds this many more of this
+# machine's IDs open than it has windows, or the reconcile is an hour old.
+# @label=Doctor open-ID slack @group=disk @tier=internal @scope=global @edit=int
+#FLEET_DOCTOR_IDS_SLACK=10
 # @label=Orphan listener sweep interval @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ORPHAN_LISTEN_EVERY=300     # min seconds between sweeps
 # @label=Listener exemptions @group=disk @tier=internal @scope=global @edit=str

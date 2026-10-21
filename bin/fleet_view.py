@@ -1514,6 +1514,16 @@ def gone_sids(text):
     return out
 
 
+def probe_title(title):
+    """A probe's / placement demo's title (fleet_reap_policy.is_probe_title, BCYB):
+    已收起 never lists one — it is closed, not work to resume."""
+    try:
+        import fleet_reap_policy
+    except ImportError:
+        return False
+    return fleet_reap_policy.is_probe_title(title)
+
+
 def id_gone_alone(have, now, keep):
     """The closed ledgers no history row and no window answers to (a no-repo task,
     a session /clear or a relay left — T593), closed within `keep`: [(fid, rec)],
@@ -1525,6 +1535,8 @@ def id_gone_alone(have, now, keep):
             continue
         rec = id_record(fid)
         ts = ((rec or {}).get("closed") or {}).get("ts") or 0
+        if ts and probe_title((rec.get("opened") or {}).get("title") or ""):
+            continue   # BCYB: 已收起 lists no probe
         # a dead record closed with nothing in it (C13's sweep) is no session
         if ts and now - ts < keep and (rec.get("segments") or (rec.get("opened") or {}).get("title")):
             out.append((ts, fid, rec))
@@ -1961,6 +1973,8 @@ def entries(vid, now=None, hub=True):
     for target, glyph, label, name, title, act, pr, when in gone_rows(gtext):
         if label.startswith("#") and label in open_issues:
             continue
+        if probe_title(title or name):
+            continue   # a probe / placement demo is not work to come back to (BCYB)
         age = gone_age(when, act, now)
         if age is None or age >= keep:
             older += 1

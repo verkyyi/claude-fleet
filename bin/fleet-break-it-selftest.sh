@@ -4517,6 +4517,89 @@ drill_selftest_tmux_leak() {
   WHAT="测试漏掉的服务器（-f /dev/null、无客户端、超龄）被收掉，死 socket 删掉，fleet* 不动；跑测试的入口给每个测试一个自己的 socket 目录、跑完清空"
 }
 
+# A window went without its ID closing — a reaper that only marked it retired, a
+# kill — and the hub kept the ID open for good: 272 open beside ~17 windows (BCYB).
+# The node now tells the hub which IDs its windows carry (`fleet-id.sh live`, the
+# cleanup tick after the push); a scan no tmux server answered tells it nothing.
+drill_id_window_gone_open() {
+  CAP=20; local t0 c L F1 F2 hub out rc
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  c="$WORK/idgone"; L="brkidg$$"; mkdir -p "$c/fleets/$L" "$c/ids"; : > "$c/fleets/$L/conf"
+  F1=$(python3 -c 'import uuid; print(uuid.uuid4())'); F2=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  printf '{"ev":"opened","title":"gone","id":"%s","seq":1,"ts":1}\n' "$F2" > "$c/ids/$F2.ndjson"
+  "$REAL_TMUX" -L "$L" -f /dev/null new-session -d -s "$L" 'sleep 120' 2>/dev/null || { WHY="tmux"; return 1; }
+  "$REAL_TMUX" -L "$L" set-window-option -t "$L:" @fleet_id "$F1" 2>/dev/null
+  hub="$WORK/idgone-hub.sh"
+  cat > "$hub" <<HUB
+#!/bin/bash
+cat > "$c/body.\$1"; printf '200\n{"closed":[{"id":"$F2","short":"X","reason":"hub:gone"}],"reopened":[],"kept":1,"live":1,"open":{}}\n'
+HUB
+  t0=$(now)
+  out=$(FLEET_CONF_DIR="$c" FLEET_ID_HUB_POST="bash $hub" FLEET_ID_PULL=0 env -u TMUX -u TMUX_PANE bash "$BIN/fleet-id.sh" live 2>&1); rc=$?
+  "$REAL_TMUX" -L "$L" kill-server 2>/dev/null
+  [ "$rc" = 0 ] && grep -q "\"$F1\"" "$c/body.POST" 2>/dev/null && ! grep -q "$F2" "$c/body.POST" \
+    || { WHY="the live list does not name the window's ID alone (rc=$rc $out · $(cat "$c/body.POST" 2>/dev/null))"; return 1; }
+  [ -f "$c/ids/.hub/live.json" ] || { WHY="the hub's answer was not kept for the doctor"; return 1; }
+  rm -f "$c/body.POST"
+  out=$(FLEET_CONF_DIR="$c" FLEET_ID_HUB_POST="bash $hub" env -u TMUX -u TMUX_PANE bash "$BIN/fleet-id.sh" live 2>&1); rc=$?
+  [ "$rc" = 75 ] && [ ! -e "$c/body.POST" ] || { WHY="with no fleet server up it still reported (rc=$rc) — a down fleet would close every ID"; return 1; }
+  grep -q 'fleet-id.sh" live' "$BIN/fleet-cleanup-daemon.sh" || { WHY="the cleanup tick never runs the reconcile"; return 1; }
+  grep -q 'self.end_id(snap\["@fleet_id"\])' "$BIN/fleet-cleanup-idle.py" || { WHY="the idle reaper's kill-window still leaves the ID open"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="节点每拍把活窗口的 ID 报给 hub（不在的由 hub 关成 hub:gone，再出现就恢复）；没有服务器回答就不报；空闲回收关窗口时写上 closed"
+}
+
+# A test's / a drill's tmux server run with the real FLEET_CONF_DIR lazily opened
+# IDs on the login's ledger that no window of the fleet ever carried (BCYB: 53).
+drill_id_test_server_lazy() {
+  CAP=15; local t0 c L F
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  c="$WORK/idlazy"; L="brkidl$$"; mkdir -p "$c/ids"
+  F=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  "$REAL_TMUX" -L "$L" -f /dev/null new-session -d -s "$L" 'sleep 120' 2>/dev/null || { WHY="tmux"; return 1; }
+  "$REAL_TMUX" -L "$L" set-window-option -t "$L:" @fleet_id "$F" 2>/dev/null
+  local sp pid pane
+  sp=$("$REAL_TMUX" -L "$L" display-message -p '#{socket_path}'); pid=$("$REAL_TMUX" -L "$L" display-message -p '#{pid}')
+  pane=$("$REAL_TMUX" -L "$L" display-message -p -t "$L:" '#{pane_id}')
+  t0=$(now)
+  printf '{"source":"startup","session_id":"brk-lazy-1"}' | FLEET_CONF_DIR="$c" FLEET_ID_PUSH=0 TMUX="$sp,$pid,0" TMUX_PANE="$pane" \
+    bash "$BIN/fleet-id.sh" hook >/dev/null 2>&1
+  if [ -e "$c/ids/$F.ndjson" ]; then "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; WHY="a server no fleet of this login runs opened an ID"; return 1; fi
+  mkdir -p "$c/fleets/$L"
+  printf '{"source":"startup","session_id":"brk-lazy-2"}' | FLEET_CONF_DIR="$c" FLEET_ID_PUSH=0 TMUX="$sp,$pid,0" TMUX_PANE="$pane" \
+    bash "$BIN/fleet-id.sh" hook >/dev/null 2>&1
+  "$REAL_TMUX" -L "$L" kill-server 2>/dev/null
+  grep -q '"lazy": *true' "$c/ids/$F.ndjson" 2>/dev/null || { WHY="a fleet's own window opened before its ledger no longer gets one"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="不是本登录 fleet 的 tmux 服务器（测试、演练）上的会话不在真账本上懒开 ID；fleet 自己的窗口照旧补开"
+}
+
+# A drill's tmux server died (kill-server, SIGKILL) and left its socket file, named
+# `fleet-…` — which the hourly sweep skipped as a fleet's own (BCYB: 19
+# `fleet-drill-drill<pid>`). A configured fleet's socket is still never touched.
+drill_drill_socket_left() {
+  CAP=20; local tt s t0 pid c
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  tt=$(mktemp -d /tmp/brkds.XXXXXX) || { WHY="mktemp"; return 1; }
+  s="$tt/tmux-$(id -u)"; c="$tt/conf"; mkdir -p "$c/fleets/fleet-mine$$"
+  for n in "fleet-drill-x$$" "fleet-mine$$" "fleet-young$$"; do
+    TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "$n" -f /dev/null new-session -d 'sleep 60' 2>/dev/null || { rm -rf "$tt"; WHY="tmux $n"; return 1; }
+    pid=$(TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "$n" display-message -p '#{pid}' 2>/dev/null)
+    kill -9 "$pid" 2>/dev/null
+  done
+  sleep 0.3
+  [ -S "$s/fleet-drill-x$$" ] || { rm -rf "$tt"; WHY="SIGKILL left no socket to sweep (cannot drill)"; return 1; }
+  touch -t 202001010000 "$s/fleet-drill-x$$" "$s/fleet-mine$$"
+  t0=$(now)
+  FLEET_CONF_DIR="$c" FLEET_SELFTEST_REAP_SOCKDIR="$s" FLEET_SELFTEST_REAP_ROOTS="$tt/none" bash "$BIN/fleet-selftest-reap.sh" >/dev/null 2>&1
+  SECS=$(since "$t0")
+  [ ! -e "$s/fleet-drill-x$$" ] || { rm -rf "$tt"; WHY="a dead drill socket named fleet-… is still there"; return 1; }
+  [ -e "$s/fleet-mine$$" ] || { rm -rf "$tt"; WHY="a configured fleet's socket was removed"; return 1; }
+  [ -e "$s/fleet-young$$" ] || { rm -rf "$tt"; WHY="a fresh fleet-… socket was removed inside the age gate"; return 1; }
+  rm -rf "$tt"
+  WHAT="演练死掉留下的 fleet-… 死 socket 过了年龄线就删；配置过的 fleet 的 socket、刚死的不碰"
+}
+
 # A PVC carries old process/update state into a new container (#3022).
 drill_node_container_restart() {
   CAP=15; local t0
