@@ -13,6 +13,7 @@ import {
 } from "@assistant-ui/react";
 import { tr } from "@/shared/i18n";
 import { attachedPics, MAX_PICS, packPics, type SentPic } from "./pics";
+import { linkFiles, picSrc, type Pic as MediaPic } from "./media";
 
 // The console's conversation is the entry's /v1/chat (claude-fleet#3926: moved
 // here from extras/web-chat/ui's site build, its protocol unchanged).
@@ -36,19 +37,9 @@ type Item =
   | { t: "stopped" }
   | { t: "error"; msg: string; code?: string };
 
-type Pic = { ref?: string; w?: number; h?: number; thumb?: string };
+type Pic = MediaPic;
 export type PageCard = { t: "page"; id?: string; title: string; url?: string; status: string; proposal?: string;
   version?: number; preview?: string; note?: string; embed?: string; embed_exp?: string };
-// where the page reads an image: the home's file by its ref, else the copy's preview
-const picSrc = (g: Pic) => (g.ref ? `${API}/file?ref=${encodeURIComponent(g.ref)}` : g.thumb || "");
-// a reply's Markdown link / image target the home gave a ref for → that file's address
-function linkFiles(text: string, files: Map<string, string>) {
-  if (!files.size) return text;
-  return text.replace(/\]\(\s*<?([^)\s<>]+)>?((?:\s+"[^"]*")?\s*)\)/g, (all, target: string, rest: string) => {
-    const ref = files.get(target);
-    return ref ? `](${API}/file?ref=${encodeURIComponent(ref)}${rest})` : all;
-  });
-}
 
 type Question = {
   question: string;
@@ -101,7 +92,7 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
       case "user":
         cur = null;
         out.push({ id: `u${i}`, role: "user", content: [
-          ...(it.images || []).filter(picSrc).map((g) => ({ type: "image", image: picSrc(g) }) as Part),
+          ...(it.images || []).filter((g) => picSrc(g)).map((g) => ({ type: "image", image: picSrc(g) }) as Part),
           ...(it.text || !it.images?.length ? [{ type: "text", text: it.text } as Part] : []),
         ] });
         break;
