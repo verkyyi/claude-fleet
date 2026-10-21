@@ -2768,6 +2768,15 @@ def go_far(vid, fleet, g, target, meta, client):
     return "peer-wait", 3, m, l, extra
 
 
+def far_miss(vid, row, rc):
+    """The line a go that did not land says: a browser 看台 cannot reach another
+    machine's session at all (go's `unsupported`) — never 「<machine> 这台还没接上」,
+    which sent the person looking for a broken link (C8X3)."""
+    if rc == 3 and vid.startswith("wt-") and row.get("far"):
+        return say("view_web_far")
+    return say("view_far_fmt", row.get("machine") or "?") if rc == 3 else say("view_gone")
+
+
 def webterm_switch(vid, window):
     if not vid.startswith("wt-"):
         return None
@@ -3514,7 +3523,11 @@ def key_lines(me, extra=None, browser=False):
                   "bind-key -T fleet-webterm C-] switch-client -T fleet-webterm-pfx",
                   "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen"),
                   "bind-key -T fleet-webterm-pfx C-] send-keys C-]",
-                  "bind-key -T fleet-webterm WheelUpPane copy-mode -e",
+                  # root's own wheel (iTerm2's 看台 has it): an app that asked for the
+                  # mouse — Claude Code's fullscreen transcript, no tmux history —
+                  # scrolls itself; only a plain pane goes into copy-mode (C8X3)
+                  "bind-key -T fleet-webterm WheelUpPane if-shell -F '#{||:#{pane_in_mode},#{mouse_any_flag}}'"
+                  " { send-keys -M } { copy-mode -e }",
                   "bind-key -T fleet-webterm WheelDownPane send-keys -M"]
     return lines
 
@@ -3900,7 +3913,7 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         return 1, lost_msg(r), False
     if argv == "go":
         rc = go(qo, vid, r["target"], "menu", client, r)
-        return rc, "" if rc == 0 else (say("view_far_fmt", r.get("machine") or "?") if rc == 3 else say("view_gone")), rc == 0
+        return rc, "" if rc == 0 else far_miss(vid, r, rc), rc == 0
     if argv == "shell":
         # C5's road (issue #3183): a shell beside that session, where its agent is
         rc = open_shell(qo, vid, client, r["target"], r)
@@ -5234,7 +5247,7 @@ def _popup(screen, qo, vid, client, forward=""):
             rc = go(qo, vid, target, "popup", client, e)
             if rc == 0:
                 return 0
-            msg = say("view_far_fmt", e.get("machine") or "?") if rc == 3 else say("view_gone")
+            msg = far_miss(vid, e, rc)
             continue
         if ch == "\x14":
             # ⌃T (issue #3517): 置顶 / 取消置顶 the lit session, as its Tab menu would
