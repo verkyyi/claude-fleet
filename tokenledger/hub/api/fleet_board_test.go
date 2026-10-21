@@ -191,7 +191,7 @@ func TestBoardLiveAskedIsAsk(t *testing.T) {
 		if why != "" {
 			w["reap_why"] = why
 		}
-		return FleetSession{WorkerID: &wid, MachineName: "macmini", OSUser: "verky", Availability: "online", Worker: w}
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: "online", Worker: w}
 	}
 	at := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
 	live := []FleetSession{
@@ -213,12 +213,12 @@ func TestBoardLiveAskedIsAsk(t *testing.T) {
 		order = append(order, r.Group+":"+r.Tag)
 	}
 	want := map[string][3]string{
-		asked.FID:   {"ask", "waiting_you", "在等你回话 · 3 小时后停放，回话即唤醒"},
-		keep.FID:    {"ask", "waiting_you", "在等你回话 · 2 小时后停放，回话即唤醒"},
-		parked.FID:  {"ask", "parked", "已停放 · 在等你点头，回话即唤醒"},
-		stopped.FID: {"ask", "stopped", "出错停住：服务端临时出错 · 4 分钟后自动重试"},
-		poster.FID:  {"queue", "completed", "还没收：做完了，后台的活还在跑 · 18 分钟后收"},
-		busy.FID:    {"work", "working", ""},
+		asked.FID:                              {"ask", "waiting_you", "在等你回话 · 3 小时后停放，回话即唤醒"},
+		keep.FID:                               {"ask", "waiting_you", "在等你回话 · 2 小时后停放，回话即唤醒"},
+		parked.FID:                             {"ask", "parked", "已停放 · 在等你点头，回话即唤醒"},
+		stopped.FID:                            {"ask", "stopped", "出错停住：服务端临时出错 · 4 分钟后自动重试"},
+		poster.FID:                             {"queue", "completed", "还没收：做完了，后台的活还在跑 · 18 分钟后收"},
+		busy.FID:                               {"work", "working", ""},
 		"0b7e8c1a-1111-4222-8333-444455556699": {"gone", "exited", ""},
 	}
 	for id, w := range want {
@@ -248,16 +248,16 @@ func TestBoardWhyCopy(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	in := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
 	for _, c := range []struct{ raw, zh, en, tone string }{
-		{"bg:" + in(18 * time.Minute), "还没收：做完了，后台的活还在跑 · 18 分钟后收", "Not closed yet: done, but a background job is still running · closes in 18 min", "grey"},
-		{"timer:" + in(5 * time.Minute), "还没收：计时中 · 5 分钟后收", "Not closed yet: closes in 5 min", "grey"},
+		{"bg:" + in(18*time.Minute), "还没收：做完了，后台的活还在跑 · 18 分钟后收", "Not closed yet: done, but a background job is still running · closes in 18 min", "grey"},
+		{"timer:" + in(5*time.Minute), "还没收：计时中 · 5 分钟后收", "Not closed yet: closes in 5 min", "grey"},
 		{"dirty", "不会自动收：有没提交的改动", "Won't close on its own: uncommitted changes", "grey"},
 		{"keep", "不会自动收：你设了保留", "Won't close on its own: kept by you", "grey"},
 		{"task-open", "还没收：任务还没收口", "Not closed yet: its task is still open", "grey"},
 		{"live", "先不收：有人正在看或在输入", "Not now: someone is looking or typing", "grey"},
 		{"moving", "先不收：正在换机器", "Not now: moving to another machine", "grey"},
-		{"waiting:" + in(3 * time.Hour), "在等你回话 · 3 小时后停放，回话即唤醒", "Waiting for your reply · parks in 3 h — reply to wake it", "orange"},
+		{"waiting:" + in(3*time.Hour), "在等你回话 · 3 小时后停放，回话即唤醒", "Waiting for your reply · parks in 3 h — reply to wake it", "orange"},
 		{"parked", "已停放 · 在等你点头，回话即唤醒", "Parked · waiting for your go-ahead — reply to wake it", "orange"},
-		{"error-retry:" + in(4 * time.Minute), "出错停住：服务端临时出错 · 4 分钟后自动重试", "Stopped on an error: a temporary server error · retrying in 4 min", "red"},
+		{"error-retry:" + in(4*time.Minute), "出错停住：服务端临时出错 · 4 分钟后自动重试", "Stopped on an error: a temporary server error · retrying in 4 min", "red"},
 		{"error-retried", "出错停住：自动重试过 1 次仍出错 · 要你看一下", "Stopped on an error: retried once, still failing · needs a look", "red"},
 		{"error", "出错停住：要你看一下", "Stopped on an error: needs a look", "red"},
 		{"timer:" + in(-time.Hour), "还没收：计时中 · 1 分钟后收", "Not closed yet: closes in 1 min", "grey"},
