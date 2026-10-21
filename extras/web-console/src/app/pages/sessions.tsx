@@ -63,9 +63,10 @@ function metaOf(r: Row, standalone: boolean) {
     machineOf(r), pr ? `PR #${pr.n}` : "", when(r)].filter(Boolean).join(" · ");
 }
 
-const RowLine: FC<{ r: Row; on: boolean; open: boolean; onOpen: () => void; onFold?: () => void; child?: boolean }> = ({ r, on, open, onOpen, onFold, child }) => {
+// `kids`: the members drawn under it (its own group's, the search's) — none ⇒ no
+// ▸, the glyph instead, and a tap opens the EPIC itself (C25B)
+const RowLine: FC<{ r: Row; kids?: Row[]; on: boolean; open: boolean; onOpen: () => void; onFold?: () => void; child?: boolean }> = ({ r, kids = [], on, open, onOpen, onFold, child }) => {
   const Icon = GLYPH[r.glyph];
-  const kids = nestedKids(r);
   return (
     <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(); } }}
       data-row={r.code || r.id} data-group={r.group} {...(r.task ? { "data-task-id": r.task.fid || r.task.id } : {})} aria-current={on || undefined}
@@ -386,10 +387,11 @@ export default function SessionsPage() {
               {fold ? null : <Card className={cn("gap-0 divide-y overflow-hidden py-0", g === "ask" && "border-clay-line")}>
                 {rs.map((r) => {
                   const kidsOpen = !folded[r.id];
+                  const kids = nestedKids(r).filter(match);
                   return (
                     <div key={r.id} className="divide-y">
-                      <RowLine r={r} on={!narrow && current?.id === r.id} open={kidsOpen} onOpen={() => open(r)} onFold={() => setFolded({ ...folded, [r.id]: kidsOpen })} />
-                      {kidsOpen ? nestedKids(r).filter(match).map((k) =>
+                      <RowLine r={r} kids={kids} on={!narrow && current?.id === r.id} open={kidsOpen} onOpen={() => open(r)} onFold={() => setFolded({ ...folded, [r.id]: kidsOpen })} />
+                      {kidsOpen ? kids.map((k) =>
                         <RowLine key={k.id} r={k} child on={!narrow && current?.id === k.id} open={false} onOpen={() => open(k)} />) : null}
                     </div>
                   );

@@ -390,6 +390,15 @@ FLEET_CTX_WINDOW=200000
 # @label=Just-landed window @group=status @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_VIEW_LANDED_SECS=86400
 
+# Where a connection lands when it names no session to go back to — a phone in
+# Termius, `ssh` to the entry, `fleet connect`, a plain `fleet` whose last session
+# is gone (task Q1A8): `panel` — ⌘P's list, the cursor on your most recently
+# active session on any machine (↵ goes back to it); `last` — straight onto that
+# session; `new` — a new session every time (the old road). With no session
+# anywhere it is always a new one.
+# @label=Landing on connect @group=status @tier=common @scope=global @edit=enum
+#FLEET_VIEW_LAND=panel
+
 # When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
 # Sep 6 …" / "You've reached your Fable limit …") while its subscription still
 # has 5h/7d headroom, the fleet does NOT bench the account. It records the

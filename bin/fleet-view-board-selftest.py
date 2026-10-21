@@ -118,5 +118,49 @@ class Diff(unittest.TestCase):
         self.assertEqual(got["diff"], 2)
 
 
+class EpicOnBoard(unittest.TestCase):
+    """C25B: on the board an EPIC opens only onto members in its own group, and
+    they sit right under it — never above it, never a ▸ onto nothing."""
+
+    def board_epic(self, kid_groups):
+        groups = {g: [] for g in v.GROUPS}
+        drv = sess("@1", "f-drv", "work", task="T10", expanded=True,
+                   epic={"done": 0, "total": len(kid_groups), "rows": len(kid_groups), "needs": 0, "fail": 0})
+        kids = [sess("@%d" % (2 + i), "f-k%d" % i, g, task="T%d" % (11 + i), fold="@1")
+                for i, g in enumerate(kid_groups)]
+        other = sess("@9", "f-oth", "work")
+        rows = []
+        # the board's order: a member in another group first, the EPIC below it
+        for i, g in enumerate(kid_groups):
+            if g != "work":
+                rows.append({"id": "f-k%d" % i, "group": g, "tag": "asking", "at": 20 - i})
+        rows.append({"id": "f-drv", "group": "work", "tag": "working", "at": 10})
+        rows.append({"id": "f-oth", "group": "work", "tag": "working", "at": 9})
+        for i, g in enumerate(kid_groups):
+            if g == "work":     # an older hub, or a stray: below another row
+                rows.append({"id": "f-k%d" % i, "group": "work", "tag": "working", "at": 8 - i})
+        for e in [drv, other] + kids:
+            groups[e["group"]].append(e)
+        out, out_gone = v.board_apply({"rows": rows}, groups, [], [], "m", "u")
+        v.epic_rehang(out, out_gone)
+        items = [e for g in v.GROUPS for e in out[g]]
+        return items, drv
+
+    def test_members_right_under(self):
+        items, drv = self.board_epic(["work", "work"])
+        self.assertEqual([e["target"] for e in items], ["@1", "@2", "@3", "@9"])
+        self.assertTrue(v.epic_folds(drv))
+        shown = [e["target"] for e in v.visible(items, "", set())]
+        self.assertEqual(shown, ["@1", "@2", "@3", "@9"], "drawn below the EPIC, in the walk order")
+
+    def test_no_member_here_no_mark(self):
+        items, drv = self.board_epic(["ask"])
+        self.assertFalse(v.epic_folds(drv), "no member under it ⇒ no ▸")
+        self.assertEqual([e["target"] for e in items], ["@2", "@1", "@9"])
+        self.assertNotIn("fold", items[0], "a member elsewhere is an ordinary row")
+        drv["expanded"] = False
+        self.assertIn("@2", [e["target"] for e in v.visible(items, "", set())], "never hidden by a fold")
+
+
 if __name__ == "__main__":
     unittest.main()

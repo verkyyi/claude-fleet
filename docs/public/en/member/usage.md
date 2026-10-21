@@ -2,7 +2,7 @@
 
 This page is about every day: one key opens the panel, where you open sessions, see how they are doing and answer their questions; and how to say when something is wrong. Connecting from a computer or phone has its own page: [Connecting from a computer or phone](connect.md). Using it for the first time, follow [Member · Quickstart](quickstart.md) to your first session.
 
-Remember one sentence: **sessions run on fleet's machines, not on your computer.** Close the terminal, shut the laptop, go offline — sessions keep working; come back, type `fleet`, and everything is as you left it.
+Remember one sentence: **sessions run on fleet's machines, not on your computer.** Close the terminal, shut the laptop, go offline — sessions keep working; come back, type `fleet`, and everything is as you left it — you land on the session you looked at last; if it has closed, ⌘P's list opens with the cursor on your most recently active session (Enter goes back to it), and only when you have no session on any machine is a new one opened (setting `FLEET_VIEW_LAND`: `panel` default · `last` straight back to the most recent · `new` a new one every time).
 
 ## One key: the panel
 

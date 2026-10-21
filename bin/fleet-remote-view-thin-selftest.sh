@@ -188,7 +188,7 @@ st_has "A: its line is fleet-topbar.py render --node" "$(tn show-options -qv -t 
 st_eq "A: no destroy-unattached" "off" "$(tn show-options -qv -t "$V" destroy-unattached)"
 st_eq "A: marked @view_thin" "dev1" "$(tn show-options -qv -t "$V" @view_thin)"
 st_eq "A: no cur= to go back to: the session's own current window, nothing special" "$HW" "$(vcur dev1)"
-waitfor 5 sh -c "grep -q 'do new --view $RS@view-dev1' '$WORK/first.log'" || st_miss "A: …and the first screen handed to ⌘N's road" "$(cat "$WORK/first.log")"
+waitfor 5 sh -c "grep -q 'do land --view $RS@view-dev1' '$WORK/first.log'" || st_miss "A: …and the first screen handed to ⌘N's road" "$(cat "$WORK/first.log")"
 st_eq "A: the fleet session's current window never moved" "home" "$(tn display-message -p -t "=$RS:" '#{window_name}')"
 st_eq "A: row kind thin" "thin" "$(row dev1 | cut -f2-3 | cut -f2)"
 st_eq "A: row session" "$RS" "$(row dev1 | cut -f2)"
@@ -327,15 +327,15 @@ st_eq "E: …and its row" "" "$(row dev1)"
 termf thin3 "--thin --view dev1 --resume --device $DEV --route lan --token t2k"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '$V' 2>/dev/null" || st_miss "E: no 看台 on a resume after the reap"
 # the session exists a moment before attach --thin selects its window: wait for it
-waitfor 5 sh -c "grep -q 'do new --view $RS@view-dev1' '$WORK/first.log'" \
+waitfor 5 sh -c "grep -q 'do land --view $RS@view-dev1' '$WORK/first.log'" \
   || st_miss "E: --resume with no cur= hands the first screen to ⌘N's road" "$(cat "$WORK/first.log")"
-# a first use: the attach hands the first screen to ⌘N's road (`do new`), never a
+# a first use: the attach hands the first screen to ⌘N's road (`do land`: a new session only when there is none anywhere, Q1A8), never a
 # bare home shell (issue #3007)
 tt kill-window -t "=$TL:thin3"
 rm -f "$FLEET_CONF_DIR/remote-views/.last"   # a first use: no last session (H tests one)
 : > "$WORK/first.log"
 termf thin3b "--thin --view dev9 --device $DEV --route lan --token t9k"
-waitfor 5 sh -c "grep -q 'do new --view' '$WORK/first.log'" || st_miss "E: a first use → the first screen was not handed to ⌘N's road: $(cat "$WORK/first.log")"
+waitfor 5 sh -c "grep -q 'do land --view' '$WORK/first.log'" || st_miss "E: a first use → the first screen was not handed to ⌘N's road: $(cat "$WORK/first.log")"
 st_has "E: … for this 看台" "$(cat "$WORK/first.log")" "--view $RS@view-dev9"
 tt kill-window -t "=$TL:thin3b"
 term thin4 "--thin --view dev2 --want $U/fid-7 --device $DEV --route lan --token t3k"
@@ -358,7 +358,7 @@ tn set-window-option -t "$OW" @fleet_role_def orchestrator
 rm -f "$FLEET_CONF_DIR/remote-views/.last"
 : > "$WORK/first.log"
 termf thin4h "--thin --view dev5 --device $DEV --route lan --token t5k"
-waitfor 5 sh -c "grep -q 'do new --view $RS@view-dev5' '$WORK/first.log'" \
+waitfor 5 sh -c "grep -q 'do land --view $RS@view-dev5' '$WORK/first.log'" \
   || st_miss "E: a leftover role mark made a window home" "$(cat "$WORK/first.log")"
 st_hasnt "E: …and not on that window" "$(vcur dev5)" "$OW"
 tt kill-window -t "=$TL:thin4h"
@@ -374,7 +374,7 @@ LAST="$FLEET_CONF_DIR/remote-views/.last"
 lastis() { [ "$(cat "$LAST" 2>/dev/null)" = "$1" ]; }
 rm -f "$LAST"; : > "$WORK/first.log"
 termf lasth1 "--thin --view devh1 --device $DEV --route lan --token th1"
-waitfor 5 sh -c "grep -q 'do new --view $RS@view-devh1' '$WORK/first.log'" \
+waitfor 5 sh -c "grep -q 'do land --view $RS@view-devh1' '$WORK/first.log'" \
   || st_miss "H: first use (no last session): ⌘N's road" "$(cat "$WORK/first.log")"
 tn select-window -t "=$(vs devh1):$OW"
 waitfor 8 lastis "$U/fid-orch" || st_miss "H: the session in view was not kept as the last one" "$(cat "$LAST" 2>/dev/null)"
@@ -394,7 +394,7 @@ st_eq "H: …and opens no new session" "0" "$(grep -c 'devh2' "$WORK/first.log")
 tt kill-window -t "=$TL:lasth2"
 printf '%s/fid-gone\n' "$U" > "$LAST"
 termf lasth3 "--thin --view devh3 --device $DEV --route lan --token th3"
-waitfor 5 sh -c "grep -q 'do new --view $RS@view-devh3' '$WORK/first.log'" \
+waitfor 5 sh -c "grep -q 'do land --view $RS@view-devh3' '$WORK/first.log'" \
   || st_miss "H: the last session is gone, yet no new session was opened" "$(cat "$WORK/first.log")"
 st_hasnt "H: …and not on another session" "$(vcur devh3)" "$OW"
 tt kill-window -t "=$TL:lasth3"

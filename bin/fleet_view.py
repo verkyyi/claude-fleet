@@ -1714,6 +1714,42 @@ def epic_tree(groups, ended, fleet, refresh=True, marks=None):
         lst[i + 1:i + 1] = members
 
 
+def epic_rehang(groups, gone):
+    """After the board's re-lay (C25B): an EPIC's members in its own group sit
+    right under it, in the board's order — the order drawn is the order ↑↓ walk —
+    and only they are what its ▸ opens; a member the board put in another group
+    or 已收起 is an ordinary row where it stands, never hidden by the fold. No
+    member left under it ⇒ no ▸ (an ordinary row, T762)."""
+    drivers = {e["target"]: e for g in GROUPS for e in groups[g] if e.get("epic")}
+    if not drivers:
+        return
+    for g in GROUPS:
+        hung = {}
+        for e in groups[g]:
+            f = e.get("fold")
+            if f in drivers and drivers[f].get("group") == g and e is not drivers[f]:
+                hung.setdefault(f, []).append(e)
+        moved = {id(m) for ms in hung.values() for m in ms}
+        lst = [e for e in groups[g] if id(e) not in moved]
+        for t, ms in hung.items():
+            i = next(n for n, e in enumerate(lst) if e is drivers[t])
+            for m in ms:
+                m["depth"] = 0
+            lst[i + 1:i + 1] = ms
+        for e in lst:
+            if e.get("fold") in drivers and e.get("fold") not in hung:
+                e.pop("fold", None)
+                e["depth"] = 0
+        groups[g] = lst
+    for e in gone:
+        if e.get("fold") in drivers:
+            e.pop("fold", None)
+    for t, d in drivers.items():
+        ms = [e for e in groups[d["group"]] if e.get("fold") == t]
+        d["epic"] = dict(d["epic"], rows=len(ms), needs=sum(1 for m in ms if m.get("sym") == "needs"),
+                         fail=sum(1 for m in ms if m.get("sym") == "fail"))
+
+
 def epic_folds(e):
     """A driver with member rows under it: its ▸ / ▾, → / ← and the click fold it
     (T762) — one with none is drawn and keyed as an ordinary row."""
@@ -1913,7 +1949,7 @@ def entries(vid, now=None, hub=True):
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
-             "today": today,
+             "today": today, "act": act,
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
@@ -2051,6 +2087,7 @@ def entries(vid, now=None, hub=True):
         groups, gone = board_apply(board, groups, shut, gone, here, me)
         shut, older = [], int(board.get("gone_more") or 0)
         ended = [e for e in groups["queue"] if e.get("ended")]
+        epic_rehang(groups, gone)
     id_display(dict(groups, shut=shut))
     multi = len(set(repos)) >= 2
     out = []
@@ -2172,6 +2209,8 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
+        if not e.get("act") and isinstance(r.get("at"), (int, float)):
+            e["act"] = int(r["at"])             # the hub's last word for it (Q1A8: the landing's pick)
         e["word"] = board_words(r)
         e["depth"] = int(r.get("depth") or 0)
         e["foot"] = " · ".join(x for x in (e.get("text") or "", e["word"], " · ".join(
@@ -3022,6 +3061,8 @@ def do(qo, verb, vid, client="", target=None, new=None):
         return open_home_shell(qo, vid, client)
     if verb == "new":
         return go_new(qo, vid, client, **(new or {}))
+    if verb == "land":
+        return land(qo, vid, client)
     if verb == "quit":
         return quit_view(vid, client)
     if verb == "shell":
@@ -3072,6 +3113,74 @@ def do(qo, verb, vid, client="", target=None, new=None):
 
 
 # --- ⌘N ⌘Q ⌃\ (issue #3004, EPIC #2999 C7) ----------------------------------------------
+
+def land_pick(items):
+    """(any, pick) for a first screen with nowhere named (task Q1A8): any — the
+    person has a session up anywhere (the list's own count, counted_rows: the hub's
+    board when fresh, so every machine's; a task record with no session yet is not
+    one); pick — the most recently active of them (its `act`, ties in the list's
+    order), one whose machine is not lost first. (False, None) ⇒ none at all."""
+    rows = [e for e in counted_rows(items).values() if not e.get("record_only")]
+    if not rows:
+        return False, None
+    order = {id(e): n for n, e in enumerate(items)}
+    pool = [e for e in rows if not e.get("lost")] or rows
+    return True, max(pool, key=lambda e: (int(e.get("act") or 0), -order.get(id(e), 0)))
+
+
+def land_how():
+    """FLEET_VIEW_LAND (the environment, else fleet.conf): `panel` (default) — ⌘P's
+    list, its cursor on the pick · `last` — straight onto the pick · `new` — the
+    old first screen, a new session every time."""
+    how = (conf_word("FLEET_VIEW_LAND") or "panel").strip()
+    return how if how in ("panel", "last", "new") else "panel"
+
+
+def land(qo, vid, client=""):
+    """The first screen of an attach with nowhere named to go back to (task Q1A8:
+    a phone in Termius, `ssh` to the entry, `fleet connect`, a plain `fleet` whose
+    last session is gone): a new session ONLY when the person has none anywhere;
+    with one, ⌘P's panel opens on its client, the cursor on the most recently
+    active (↵ goes back to it) — or, FLEET_VIEW_LAND=last, the 看台 goes there.
+    An explicit new session (the panel's 「新会话」, ⌘N) is go_new as always."""
+    how = land_how()
+    if how == "new":
+        return go_new(qo, vid, client)
+    has, pick = land_pick(entries(vid))
+    if not has:
+        return go_new(qo, vid, client)
+    fleet = view_fleet(vid)
+    if not fleet:
+        return 2
+    g = "%s@view-%s" % (fleet, vid)
+    if how == "last" and pick is not None and not pick.get("lost"):
+        rc = go(qo, vid, pick["target"], "land", client,
+                {k: pick.get(k) for k in ("machine", "login") if pick.get(k)})
+        if rc in (0, 3):
+            return rc
+    # the panel needs the client on: an attach's first word comes before it is up
+    clients = [client] if client else []
+    for _ in range(20):
+        if clients:
+            break
+        _, out = tm("list-clients", "-t", "=" + g, "-F", "#{client_name}")
+        clients = [c for c in out.splitlines() if c]
+        if not clients:
+            time.sleep(0.25)
+    if not clients:
+        return 1
+    c = clients[0]
+    _, width = tm("display-message", "-p", "-c", c, "#{client_width}")
+    narrow = not width.isdigit() or int(width) < NARROW
+    me = os.path.normpath(os.path.abspath(qo.__file__))
+    popup_sh = str(Path(me).parent / "dash-popup.sh")
+    cmd = ("bash %s --client %s --no-inline --freeze -w %s -h %s --title view_title -- python3 %s --view %s "
+           "--client %s --at %s >/dev/null 2>&1 || :") % (
+        shlex.quote(popup_sh), shlex.quote(c), "100%" if narrow else "90%", "100%" if narrow else "80%",
+        shlex.quote(me), shlex.quote(g), shlex.quote(c), shlex.quote(pick["target"]))
+    rc, _ = tm("run-shell", "-b", "-t", g + ":", cmd.replace("#", "##"))
+    return 0 if rc == 0 else 1
+
 
 def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
@@ -4728,18 +4837,18 @@ def sel_color(cs):
     return SEL_RGB[view_theme()][1] if cs.COLORS >= 256 else cs.COLOR_BLUE
 
 
-def popup(screen, qo, vid, client, forward=""):
+def popup(screen, qo, vid, client, forward="", land_at=""):
     # Scope paste mode to this popup's terminal, including exceptions/close.
     sys.stdout.write("\x1b[?2004h")
     sys.stdout.flush()
     try:
-        return _popup(screen, qo, vid, client, forward)
+        return _popup(screen, qo, vid, client, forward, land_at)
     finally:
         sys.stdout.write("\x1b[?2004l")
         sys.stdout.flush()
 
 
-def _popup(screen, qo, vid, client, forward=""):
+def _popup(screen, qo, vid, client, forward="", land_at=""):
     # raw: ⌃\ is a key here (the home shell), never SIGQUIT
     import fleet_panel as panel
     inputs = panel.Input()
@@ -4826,9 +4935,11 @@ def _popup(screen, qo, vid, client, forward=""):
     def bolt_at():
         return next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), -1)
     shown = listing()
-    at = next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
-              next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
-                   next((i for i, e in enumerate(shown) if pickable(e)), 0)))
+    # --at (task Q1A8's landing): the cursor on that session, else as always
+    at = next((i for i, e in enumerate(shown) if land_at and e.get("target") == land_at and e["kind"] == "sess"),
+              next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
+                   next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
+                        next((i for i, e in enumerate(shown) if pickable(e)), 0))))
     top = 0
     # The popup door's --freeze contains background output. Repair after resize
     # only: a periodic last-row scroll otherwise repaints the frame at rest.
@@ -5550,4 +5661,4 @@ def main(argv, qo):
             os.environ.pop("TMUX", None)
         return keys_notice(vid, client)
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(popup, qo, vid, client, opt(argv, "--forward"))
+    return curses.wrapper(popup, qo, vid, client, opt(argv, "--forward"), opt(argv, "--at"))
