@@ -444,7 +444,7 @@ func optional(s string, ok bool) string {
 // PrincipalID is a person, or store.PoolPrincipal ("pool") for a shared-pool
 // account every active principal may lease.
 type FleetCredentialRequest struct {
-	Action      string           `json:"action"` // put | delete | bind
+	Action      string           `json:"action"` // put | delete | bind | plan
 	PrincipalID string           `json:"principal_id"`
 	Provider    string           `json:"provider"`
 	Account     string           `json:"account"`
@@ -452,7 +452,16 @@ type FleetCredentialRequest struct {
 	// AccountUUID is bind's one argument (claude-fleet#2169): which usage
 	// account an existing credential belongs to. No secret travels with it.
 	AccountUUID string `json:"account_uuid,omitempty"`
+	// Plan and RateLimitTier are plan's arguments (claude-fleet EEJD): the
+	// subscription an existing credential is on, as an admin says — the
+	// provider's own value (max, pro, prolite …), never a label. "" clears.
+	Plan          string `json:"plan,omitempty"`
+	RateLimitTier string `json:"rate_limit_tier,omitempty"`
 }
+
+// planValueRE is a provider plan value or tier: lower-case words, as the
+// providers spell them (max, prolite, default_claude_max_20x).
+var planValueRE = regexp.MustCompile(`^[a-z0-9_]{1,48}$`)
 
 var (
 	claudeAccountUUIDRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -506,7 +515,13 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			Plan         string      `json:"plan,omitempty"`
 			PlanSource   string      `json:"plan_source,omitempty"`
 			PlanAt       *time.Time  `json:"plan_at,omitempty"`
+			PlanTier     string      `json:"plan_tier,omitempty"`
+			// What the plan costs a month now (subscription_plans, by plan ×
+			// provider — claude-fleet EEJD); absent when nobody priced it.
+			MonthlyCost *float64 `json:"monthly_cost,omitempty"`
+			Currency    string   `json:"currency,omitempty"`
 		}
+		now := time.Now()
 		rows := make([]credRow, 0, len(creds))
 		for _, c := range creds {
 			view, err := s.credentialLimits(c)
@@ -522,7 +537,21 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 					planAt = &c.CreatedAt
 				}
 			}
-			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view, Plan: plan, PlanSource: source, PlanAt: planAt})
+			row := credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view, Plan: plan, PlanSource: source, PlanAt: planAt}
+			if source == "admin" {
+				row.PlanTier = s.Vault.PlanTier(c)
+			}
+			if plan != "" {
+				price, err := s.Store.PlanPriceAt(plan, c.Provider, now)
+				if err != nil {
+					httpError(w, http.StatusInternalServerError, "plan price read failed")
+					return
+				}
+				if price != nil {
+					row.MonthlyCost, row.Currency = &price.MonthlyCost, price.Currency
+				}
+			}
+			rows = append(rows, row)
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		// paused: the pool accounts an admin paused (claude-fleet#1990).
@@ -597,14 +626,43 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			}
 			audit.Action = store.CredBind
 			audit.Detail = "account_uuid=" + uuid + " · "
+		case "plan":
+			// Record the subscription an existing credential is on
+			// (claude-fleet EEJD): a setup token cannot say. No secret
+			// travels, none in the audit.
+			plan, tier := strings.TrimSpace(req.Plan), strings.TrimSpace(req.RateLimitTier)
+			if (plan != "" && !planValueRE.MatchString(plan)) || (tier != "" && !planValueRE.MatchString(tier)) || (plan == "" && tier != "") || req.Provider == credvault.GitHub {
+				httpError(w, http.StatusBadRequest, "plan needs a claude or codex credential and the provider's plan value (e.g. max, prolite) and optionally rate_limit_tier (e.g. default_claude_max_20x); an empty plan clears it")
+				return
+			}
+			if s.vaultLocked(w) {
+				return
+			}
+			if err := s.Vault.SetPlan(req.PrincipalID, req.Provider, req.Account, plan, tier); err != nil {
+				code := http.StatusInternalServerError
+				switch {
+				case errors.Is(err, store.ErrNoCredential):
+					code = http.StatusNotFound
+				case errors.Is(err, credvault.ErrLocked):
+					code = http.StatusServiceUnavailable
+				}
+				httpError(w, code, err.Error())
+				return
+			}
+			audit.Action = store.CredPlan
+			audit.Detail = "plan=" + plan
+			if tier != "" {
+				audit.Detail += " tier=" + tier
+			}
+			audit.Detail += " · "
 		default:
-			httpError(w, http.StatusBadRequest, "action must be put, delete or bind")
+			httpError(w, http.StatusBadRequest, "action must be put, delete, bind or plan")
 			return
 		}
 		// Who did it (claude-fleet#1990): the audit page names the admin.
 		audit.Detail += "by " + actorOf(r)
 		_ = s.Store.AddCredAudit(audit)
-		if req.Action != "bind" {
+		if req.Action != "bind" && req.Action != "plan" {
 			s.BroadcastCreds("credential " + req.Action) // every node leases now (#3744)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})

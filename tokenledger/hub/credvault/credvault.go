@@ -73,6 +73,7 @@ type Secret struct {
 	AccountID                string     `json:"account_id,omitempty"`
 	Scopes                   []string   `json:"scopes,omitempty"`
 	SubscriptionType         string     `json:"subscription_type,omitempty"`
+	RateLimitTier            string     `json:"rate_limit_tier,omitempty"` // admin-supplied with SubscriptionType (claude-fleet EEJD)
 	Token                    string     `json:"token,omitempty"`
 	User                     string     `json:"user,omitempty"`
 	AccountUUID              string     `json:"account_uuid,omitempty"`
@@ -472,6 +473,25 @@ func (v *Vault) BindAccountUUID(principal, provider, account, uuid string) error
 	if provider == GitHub {
 		return errors.New("a GitHub credential has no usage account")
 	}
+	return v.editSecret(principal, provider, account, func(s *Secret) { s.AccountUUID = uuid })
+}
+
+// SetPlan records what subscription an EXISTING credential is on, as an admin
+// says (claude-fleet EEJD): a Claude setup token carries no plan and cannot be
+// asked for one, so the pool page would otherwise show it as unknown and its
+// price could not be read. PlanMetadata reports it as "admin"; a plan the
+// provider itself reports (a Codex id_token) still wins. "" clears it.
+func (v *Vault) SetPlan(principal, provider, account, plan, tier string) error {
+	if provider == GitHub {
+		return errors.New("a GitHub credential has no subscription plan")
+	}
+	return v.editSecret(principal, provider, account, func(s *Secret) { s.SubscriptionType, s.RateLimitTier = plan, tier })
+}
+
+// editSecret opens a credential's sealed secret, lets edit change its
+// non-secret fields, and seals it back at the same version — the token itself
+// is untouched and never leaves here.
+func (v *Vault) editSecret(principal, provider, account string, edit func(*Secret)) error {
 	sl, err := v.sealer()
 	if err != nil {
 		return err
@@ -487,7 +507,7 @@ func (v *Vault) BindAccountUUID(principal, provider, account, uuid string) error
 	if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 		return err
 	}
-	s.AccountUUID = uuid
+	edit(&s)
 	blob, err := sl.Seal(s, principal, provider, account, "secret")
 	if err != nil {
 		return err

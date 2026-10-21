@@ -147,3 +147,18 @@ func (v *Vault) PlanMetadata(c store.Credential) (plan, source string) {
 	}
 	return "", ""
 }
+
+// PlanTier is the rate-limit tier an admin recorded beside the plan
+// (claude-fleet EEJD: Max 5× or Max 20×), "" when none was. Only meaningful
+// with an "admin" plan — a provider-read plan names no tier here.
+func (v *Vault) PlanTier(c store.Credential) string {
+	sl, err := v.sealer()
+	if err != nil {
+		return ""
+	}
+	var sec Secret
+	if sl.Open(c.SecretSealed, &sec, c.PrincipalID, c.Provider, c.Account, "secret") != nil {
+		return ""
+	}
+	return sec.RateLimitTier
+}
