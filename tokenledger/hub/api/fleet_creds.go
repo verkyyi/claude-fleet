@@ -242,7 +242,7 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		deny(http.StatusForbidden, LeaseComputeOff, "", osUser+" on "+host+" only coordinates — "+cv.Reason()+": no credentials are leased to it")
 		return
 	}
-	principal, err := s.principalOnNode(ep.ID, host, osUser)
+	principal, err := s.principalForLease(ep.ID, host, osUser, time.Now())
 	if errors.Is(err, store.ErrNoPrincipal) {
 		deny(http.StatusForbidden, LeaseNoPrincipal, "", "no active fleet account is "+osUser+" on "+host)
 		return

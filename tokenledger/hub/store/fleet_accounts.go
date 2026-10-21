@@ -834,3 +834,25 @@ func (s *Store) PrincipalForEndpointLogin(endpointID, login string) (string, err
 	}
 	return id, err
 }
+
+// AccountOpInFlight is hostname's account row for login while a create or a
+// reset is in flight for it (creating / resetting, sent: an op_id and the node
+// it went to), its UpdatedAt the moment it was sent (MarkAccountSent) —
+// claude-fleet D0JC: the login's readiness check leases inside that op.
+// ErrNoPrincipal when no such op is in flight.
+func (s *Store) AccountOpInFlight(hostname, login string) (*FleetAccount, error) {
+	rows, err := s.read.Query(fleetAccountColumns+` WHERE hostname = ? AND login = ? AND state IN (?, ?)
+		AND op IN ('create', 'reset') AND op_id <> '' AND endpoint_id <> ''`,
+		hostname, login, AccountCreating, AccountResetting)
+	if err != nil {
+		return nil, err
+	}
+	out, err := scanFleetAccounts(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrNoPrincipal
+	}
+	return &out[0], nil
+}

@@ -267,6 +267,82 @@ func (s *Server) principalOnNode(endpointID, host, login string) (string, error)
 	return p, err
 }
 
+// accountOpLeaseWindow bounds the lease an account op's own login is answered
+// inside the op (principalForLease): the node runs each op for up to 15
+// minutes (loginJoinCodeTTL's note), so the window is that op's own run.
+const accountOpLeaseWindow = 15 * time.Minute
+
+// principalForLease is principalOnNode for the roads that hand a login
+// credentials — the node lease, a session pass (mint, bind, renew), the relay
+// credential — plus ONE more answer (claude-fleet D0JC): the login a create or
+// a reset is opening RIGHT NOW. fleet-login-ready.sh (#4673) proves the login
+// with a first reply inside the op, while the hub's row is still creating /
+// resetting, so with active alone every new login failed its own check.
+//
+// The in-flight answer is the op's row only, and only when all of these hold —
+// anything else is ErrNoPrincipal, as before:
+//   - the row is creating / resetting with the op sent (op_id + the node it
+//     went to); a dropped link or a restarted hub has already made it unknown;
+//   - it was sent at most accountOpLeaseWindow ago;
+//   - the caller is not the op's node itself (an admin never leases as the
+//     login it opens), is not retired, is that login, on that machine;
+//   - a create: the caller enrolled at or after the send — with the op's own
+//     join code, never a token from before;
+//   - a reset: the row is a spare's (a login being washed back into a spare —
+//     never a person's credentials handed to the login that drops them).
+func (s *Server) principalForLease(endpointID, host, login string, now time.Time) (string, error) {
+	p, err := s.principalOnNode(endpointID, host, login)
+	if !errors.Is(err, store.ErrNoPrincipal) {
+		return p, err
+	}
+	if p, ok := s.leaseInFlight(endpointID, host, login, now); ok {
+		return p, nil
+	}
+	return "", store.ErrNoPrincipal
+}
+
+// leaseInFlight is principalForLease's in-flight answer: the op's principal and
+// true, else "" and false.
+func (s *Server) leaseInFlight(endpointID, host, login string, now time.Time) (string, bool) {
+	if endpointID == "" || login == "" {
+		return "", false
+	}
+	a, err := s.Store.AccountOpInFlight(host, login)
+	if err != nil {
+		return "", false
+	}
+	sent := a.UpdatedAt
+	if now.Before(sent.Add(-time.Minute)) || now.Sub(sent) > accountOpLeaseWindow {
+		return "", false
+	}
+	if endpointID == a.EndpointID {
+		return "", false
+	}
+	ep, err := s.Store.EndpointByID(endpointID)
+	if err != nil || ep.RetiredAt != nil {
+		return "", false
+	}
+	if ep.OSUser != "" && ep.OSUser != login {
+		return "", false
+	}
+	if h := s.endpointHost(*ep); h == "" || !sameMachine(a.Hostname, h) && !sameMachine(h, a.Hostname) {
+		return "", false
+	}
+	switch a.Op {
+	case "create":
+		if ep.EnrolledAt.Before(sent.Truncate(time.Second)) {
+			return "", false
+		}
+	case "reset":
+		if !store.IsSparePrincipal(a.PrincipalID) {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	return a.PrincipalID, true
+}
+
 // recordLoginAccount is 登录即认人 (claude-fleet#2212): the system login the
 // person ran `fleet login` under, on the computer they confirmed it on, is
 // theirs — one active fleet_accounts row, by computer (never the global

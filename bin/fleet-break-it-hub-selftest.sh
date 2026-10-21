@@ -175,6 +175,9 @@
 #                                                   fleet-login-new.sh 8c / fleet-login-reset.sh → the agent's readyResult →
 #                                                   tokenledger fleet_spare.go (recordAccountCheck / spareChecked) + store
 #                                                   ClaimSpare's spareCheckedSQL; the script for real, go test
+#   spare-ready-lease-inflight                      tokenledger/hub/api fleet_login_node.go (principalForLease /
+#                                                   leaseInFlight on the lease · session-pass · relay roads) + store
+#                                                   AccountOpInFlight; go test
 #   trial-no-subscription                           tokenledger/hub/api fleet_trial_cred.go (trialUserAllow in
 #                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
 #                                                   convertTrial writes the member's own list); go test
@@ -2355,6 +2358,26 @@ drill_spare_ready_unverified() {
 # the proxy's 403 «this login holds no claude account». Now its person
 # allowance is fleet.trial.cred_allow ("*" by default); [] makes the trial wait
 # 「试用暂时没有可用订阅」 instead of placing it onto a 403.
+# ---- spare-ready-lease-inflight (D0JC): the readiness check (#4673) leases
+# INSIDE the create / reset that opens the login, while the hub's row is still
+# creating / resetting; the lease knew only active rows, so every new login
+# failed its own check (403 no_principal). The lease now answers that op's own
+# login — fresh, on its machine, inside the op's window; a spare's wash only —
+# and still refuses another login, another machine, an old token, the op's
+# own node, a dropped op and one past its window.
+drill_spare_ready_lease_inflight() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
+  t0=$(now)
+  grep -q 'principal, err := s.principalForLease(ep.ID, host, osUser, time.Now())' "$tl/api/fleet_creds.go" 2>/dev/null \
+    || { WHY="the node lease no longer answers a login inside its own op (fleet_creds.go principalForLease)"; return 1; }
+  grep -q 'principal, err := s.principalForLease(ep.ID, host, user, now)' "$tl/api/fleet_session_cred.go" 2>/dev/null \
+    || { WHY="a session pass no longer answers a login inside its own op (fleet_session_cred.go)"; return 1; }
+  c11_go_tests fleet_lease_inflight_test.go TestLeaseInsideCreateOp TestLeaseInsideCreateOpRefusesStaleOrOld TestLeaseInsideResetOnlyForSpare || return 1
+  WHAT='开号 / 洗备用中的就绪检查能租到凭据；别的登录、别的机器、op 之前的令牌、op 自己的节点、断线或超窗的 op 仍拒（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='creating 中以 op 的 join 新入网的登录租到 200（principal = 该行）；admin 自己 / mac-d 同名 / carol / op 前的令牌 / 超 15 分钟 / unknown / failed 均 403 no_principal；洗备用 200、洗人 403（go test 三条）'
+  SECS=$(since "$t0")
+}
+
 drill_trial_no_subscription() {
   CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
   t0=$(now)
