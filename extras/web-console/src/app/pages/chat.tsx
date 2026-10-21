@@ -27,6 +27,7 @@ import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 import { continueLink } from "@/app/chat/continue";
+import { composerPlaceholder } from "@/app/chat/placeholder";
 import { BindWeChatBanner } from "../WeChatBind";
 import { viewAs } from "@/shared/viewAs";
 
@@ -688,7 +689,7 @@ const HeldChat: FC<{ provider: Provider; session: string; worker: string; label?
               {other ? <p role="status" className="text-muted-foreground p-6 text-center text-[13px]">
                 {tr("网页这边已经开了另一段对话；交回终端后，这个会话在终端里接着说。", "The web has moved on to another conversation; give this session back to carry on in its terminal.")}
               </p> : <Thread autoFocus={false}
-                placeholder={chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
+                placeholder={composerPlaceholder(null, chat.budget)}
                 components={{ Welcome: Empty, ToolFallback: ToolStep, ComposerStart: ComposerTools, ComposerTop: QuotaBanner }} />}
             </div>
           </div>
@@ -774,9 +775,7 @@ function LiveChat({ provider, onSwitch }: { provider: Provider; onSwitch: (p: Pr
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">
               {over ? <TrialOver trial={trial} /> : gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
-                <Thread autoFocus={false} placeholder={chat.owner
-                    ? (chat.owner.busy ? tr("终端里正在回答，这里只读", "The terminal is answering; read-only here") : tr("点「在这里继续」接过来再说", "Tap “Continue here” to take it over"))
-                    : chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
+                <Thread autoFocus={false} placeholder={composerPlaceholder(chat.owner, chat.budget)}
                   components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ComposerTools, ComposerTop }} />
               )}
             </div>

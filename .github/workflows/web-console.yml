@@ -60,6 +60,8 @@ jobs:
         run: node --experimental-strip-types test/session-view.mjs
       - name: 接管 / 交回 — one side talks at a time (VV8F)
         run: node --experimental-strip-types test/session-handover.mjs
+      - name: The composer's empty box speaks the page's language (T841)
+        run: node --experimental-strip-types test/chat-placeholder.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build
