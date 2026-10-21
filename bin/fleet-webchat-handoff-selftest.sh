@@ -161,7 +161,7 @@ set +e; python3 "$LOCK" set --agent claude --sid "$SID" --holder terminal --if-h
 st_eq 'a move from a holder that is not: rc 3' 3 "$rc"
 set +e; python3 "$LOCK" get --agent claude --sid '../x' >/dev/null 2>&1; rc=$?; set -e
 st_eq 'a bad session id: rc 2' 2 "$rc"
-st_eq 'the record is 0600' 600 "$(stat -f %Lp "$WORK/conf/convo-lock/claude-$SID.json" 2>/dev/null || stat -c %a "$WORK/conf/convo-lock/claude-$SID.json")"
+st_eq 'the record is 0600' 600 "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$WORK/conf/convo-lock/claude-$SID.json")"
 
 # 9 · the end page a handed window stops on
 out=$(FLEET_UI_LANG=zh LANG=zh_CN.UTF-8 python3 "$WORK/bin/fleet-session-page.py" --handed web --print | sed 's/\x1b\[[0-9;]*m//g')
