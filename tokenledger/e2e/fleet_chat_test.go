@@ -74,6 +74,11 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			io.WriteString(w, `data: {"t":"state","agent":"claude","busy":true}`+"\n\n")
 			io.WriteString(w, "id: 1\ndata: "+`{"t":"items","from":0,"items":[{"t":"text","d":"hi"}],"q":`+strconvQuote(r.URL.RawQuery)+"}\n\n")
 			w.(http.Flusher).Flush()
+		case "/api/takeover", "/api/giveback":
+			// 接管 / 交回 (task VV8F): the body the hub wrote, echoed
+			body, _ := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ok":true,"agent":"claude","got":`+strconvQuote(string(body))+`}`)
 		case "/api/stop", "/api/answer", "/api/new":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)

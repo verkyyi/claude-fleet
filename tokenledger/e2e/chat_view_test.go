@@ -106,3 +106,69 @@ func TestChatViewOldAgent(t *testing.T) {
 		t.Fatalf("code %q, want old_agent", c)
 	}
 }
+
+// 接管 / 交回 (task VV8F): POST /v1/chat/takeover|giveback?worker=<id> reaches the
+// person's home as /api/takeover|giveback with the hub's own body {"fid"}; a GET,
+// a call without X-Fleet-Webchat, another person's worker and the operator's
+// door never reach it.
+func TestChatHandover(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	enablePeople(t, h, pCarol)
+	const fuid, fid = "66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"
+	wid := fuid + "/" + fid
+	ws, _ := json.Marshal([]map[string]any{{"key": "issue-1", "state": "done", "worker_id": wid}})
+	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
+		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(ws)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	setChatHome(t, h, pAlice, host, login)
+	setChatHome(t, h, pCarol, "elsewhere", "carol")
+	alice := personCookie(pAlice, "alice")
+	page := map[string]string{"X-Fleet-Webchat": "1"}
+
+	for _, route := range []string{"takeover", "giveback"} {
+		resp := chatDo(t, h, "POST", "/v1/chat/"+route+"?worker="+wid, alice, page, "")
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `\"fid\":\"`+fid+`\"`) {
+			t.Fatalf("%s: %d %s", route, resp.StatusCode, b)
+		}
+	}
+	cases := []struct {
+		name, method, query string
+		cookie              *http.Cookie
+		hdr                 map[string]string
+		status              int
+		code                string
+	}{
+		{"a GET", "GET", "worker=" + wid, alice, page, http.StatusMethodNotAllowed, ""},
+		{"not from the page", "POST", "worker=" + wid, alice, nil, http.StatusForbidden, "forbidden"},
+		{"signed out", "POST", "worker=" + wid, nil, page, http.StatusUnauthorized, ""},
+		{"another person's session", "POST", "worker=" + wid, personCookie(pCarol, "carol"), page, http.StatusNotFound, "not_yours"},
+		{"the personal terminal", "POST", "target=personal", alice, page, http.StatusBadRequest, "bad_target"},
+		{"the operator's door", "POST", "worker=" + wid, nil, map[string]string{"Authorization": "Bearer " + viewerToken, "X-Fleet-Webchat": "1"}, http.StatusForbidden, "operator"},
+	}
+	for _, c := range cases {
+		resp := chatDo(t, h, c.method, "/v1/chat/takeover?"+c.query, c.cookie, c.hdr, "")
+		if resp.StatusCode != c.status {
+			t.Errorf("%s: %d; want %d", c.name, resp.StatusCode, c.status)
+			continue
+		}
+		if c.code != "" {
+			if got := chatCode(t, resp); got != c.code {
+				t.Errorf("%s: code %q; want %q", c.name, got, c.code)
+			}
+		}
+	}
+	n := 0
+	for _, s := range svc.seen() {
+		if strings.Contains(s, "/api/takeover") || strings.Contains(s, "/api/giveback") {
+			if !strings.Contains(s, "person="+pAlice) {
+				t.Errorf("the service saw %q", s)
+			}
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("handovers at the service: %d, want 2", n)
+	}
+}

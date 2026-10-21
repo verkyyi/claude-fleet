@@ -72,7 +72,10 @@
 //   V  只读 (task F481): /api/view?fid= follows a terminal session's record as SSE — the
 //      state, the record so far (id = its count), a line added after in under 3 s; ?from=
 //      sends nothing twice; busy and a closed window are said; a Codex rollout reads too
-//   --only=socket|budget|context|home|idle|trial|view|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
+//   X  接管 / 交回 (task VV8F): /api/takeover · /api/giveback by a window's fid — refused
+//      while the terminal answers, one of two at once (409 taking), to-web without a page,
+//      give-back by the window; done twice is 200 already
+//   --only=socket|budget|context|home|idle|trial|view|handover|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -90,7 +93,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,media,links,send,pages,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,media,links,send,pages,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -662,6 +665,45 @@ echo "no such window" >&2; exit 2
     `V a Codex session: its rollout's lines (${JSON.stringify(items(f.evs)[0])})`);
   ok(/"ev":"view"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "V the log says view");
   await sstop(v);
+}
+// ---- X: 接管 / 交回 (task VV8F) — /api/takeover · /api/giveback by window -------------
+if (part("handover")) {
+  mkdirSync(homeOf("x"), { recursive: true });
+  SSTATE = stateOf("x"); SOCK = join(SSTATE, "chat.sock");
+  const XV = join(HT, "xview.json"), XLOG = join(HT, "xhandoff.log"), xsh = join(HT, "xhandoff.sh"), FID = "abcdef12-1234-4234-8234-123456789abc";
+  // bin/fleet-webchat-handoff.sh's view-of · to-web · give-back, stubbed on a state file
+  writeFileSync(xsh, `#!/bin/bash
+V=${JSON.stringify(XV)}
+echo "$*" >> ${JSON.stringify(XLOG)}
+case "$1" in
+  view-of) [ "$2" = fid:${FID} ] && { cat "$V"; exit 0; }; exit 2 ;;
+  to-web) sleep 0.4; sed -i.bak 's/"holder": ""/"holder": "webchat"/' "$V"; echo ok ;;
+  give-back) sed -i.bak 's/"holder": "webchat"/"holder": "terminal"/' "$V"; echo ok ;;
+esac
+`, { mode: 0o755 });
+  const put = (o) => writeFileSync(XV, JSON.stringify({ agent: "claude", sid: "77777777-6666-4555-8444-333333333333", busy: false, state: "done", label: "scratch-9", holder: "", ...o }).replace(/":/g, '": '));
+  put({ busy: true, state: "working" });
+  const x = (await sstart(["--socket"], { ...asHome("x"), FLEET_WEBCHAT_HANDOFF: xsh })).p;
+  const post = (p, fid = FID, hdr = { "X-Fleet-Webchat": "1" }) => sreq(p, { method: "POST", headers: { "Content-Type": "application/json", ...hdr }, body: { fid } });
+  ok((await post("/api/takeover", FID, {})).status === 403, "X a takeover not from the page is 403");
+  ok((await post("/api/takeover", "../x")).status === 400, "X a fid that is not one is 400");
+  ok((await post("/api/takeover", "00000000-0000-4000-8000-000000000000")).status === 404, "X a window not here is 404");
+  let r = await post("/api/takeover");
+  ok(r.status === 409 && JSON.parse(r.body).code === "terminal_busy", `X the terminal answering: 409 terminal_busy (${r.body})`);
+  put({});
+  const [a, b] = await Promise.all([post("/api/takeover"), post("/api/takeover")]);
+  const codes = [a, b].map((q) => q.status).sort().join(",");
+  ok(codes === "200,409" && [a, b].some((q) => JSON.parse(q.body).code === "taking"), `X two at once: one taken, the other 409 taking (${a.body} | ${b.body})`);
+  ok(readFileSync(XLOG, "utf8").split("\n").filter((l) => l.startsWith("to-web")).length === 1 &&
+    readFileSync(XLOG, "utf8").includes(`to-web fid:${FID} --no-open`), "X one to-web, without opening a page");
+  r = await post("/api/takeover");
+  ok(r.status === 200 && JSON.parse(r.body).already === true, "X taken already: 200 already");
+  r = await post("/api/giveback");
+  ok(r.status === 200 && JSON.parse(r.body).agent === "claude" && readFileSync(XLOG, "utf8").includes(`give-back fid:${FID}`), `X 交回: give-back by the window (${r.body})`);
+  r = await post("/api/giveback");
+  ok(r.status === 200 && JSON.parse(r.body).already === true, "X given back already: 200 already");
+  ok(/"ev":"took over"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")) && /"ev":"gave back"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "X the log says took over / gave back");
+  await sstop(x);
 }
 // ---- P: images (task T773) -------------------------------------------------------------
 if (part("media")) {

@@ -4,7 +4,7 @@
 // and says so when there is no conversation to reach: no home yet, the home not
 // connected, the limit used up. The conversation service and /v1/chat are
 // unchanged. Every piece is a stock shadcn/ui or assistant-ui component.
-import { createContext, useContext, useEffect, useRef, useState, type FC } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AssistantRuntimeProvider, makeAssistantDataUI, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { ExternalLinkIcon, GlobeIcon, SquarePenIcon, TerminalSquareIcon } from "lucide-react";
@@ -18,6 +18,7 @@ import { Alert } from "@/components/ui/alert";
 import { useFleetChat, PROVIDERS, type Gate, type PageCard, type Provider, type Sync } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
 import { useSessionView } from "@/app/chat/view";
+import { handover, stageOf, SURE_MS, type Mine, type Stage } from "@/app/chat/handover";
 import { fmtClock, resumedSecs, useTrial, useTrialBeat, useTryClock, type TrialState } from "@/app/chat/try";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -450,7 +451,7 @@ export default function ChatPage() {
 // <ChatThread source> (GR5E C4): the conversation a session's workspace shows
 // under 对话. `web` is the person's own conversation on one side (the page
 // above, as /chat draws it); `session` is a session running in a terminal —
-// read along only, never typed into from here: the terminal holds it. Its live
+// read along while the terminal holds it, written here once taken over (VV8F). Its live
 // record streams in by its worker id (task F481, view.ts); a session that is
 // not running (no worker) shows where it was and what it said last.
 export type ThreadSource =
@@ -472,7 +473,7 @@ export function ChatThread({ source, last, onTerminal }: { source: ThreadSource;
 type SessionProps = { source: Extract<ThreadSource, { kind: "session" }>; last?: string; onTerminal?: () => void };
 
 // the band on top: read-only, where it runs, and the way to talk to it
-const ReadOnlyBand: FC<SessionProps & { live?: boolean }> = ({ source, onTerminal, live }) => (
+const ReadOnlyBand: FC<SessionProps & { live?: boolean; take?: ReactNode }> = ({ source, onTerminal, live, take }) => (
   <div className="px-4 pt-3">
     <div role="status" data-testid="read-only"
       className="border-border bg-card mx-auto flex w-full max-w-xl items-center gap-2 rounded-3xl border py-1.5 ps-4 pe-1.5 text-[13px] leading-snug shadow-xs">
@@ -481,8 +482,8 @@ const ReadOnlyBand: FC<SessionProps & { live?: boolean }> = ({ source, onTermina
         {tr("只读 · 这个会话在终端里跑，这里实时看。", "Read-only · this session runs in a terminal; follow it here.")}
         {source.machine ? <span className="text-muted-foreground hidden font-mono text-[12px] sm:inline"> · {source.machine}</span> : null}
       </span>
-      {onTerminal ? <Button size="sm" variant="outline" className="shrink-0 rounded-full" onClick={onTerminal}>
-        <TerminalSquareIcon className="size-4" />{tr("到终端里说", "Talk in the terminal")}</Button> : null}
+      {take ?? (onTerminal ? <Button size="sm" variant="outline" className="shrink-0 rounded-full" onClick={onTerminal}>
+        <TerminalSquareIcon className="size-4" />{tr("到终端里说", "Talk in the terminal")}</Button> : null)}
     </div>
   </div>
 );
@@ -500,9 +501,92 @@ const VIEW_WORDS = (): Record<string, string> => ({
   home_down: tr("那台机器现在连不上，连回来后接着看。", "That machine is out of reach; this carries on once it is back."),
 });
 
+// 接管 / 交回 (task VV8F, EPIC GR5E C6): why a handover did not happen, in one sentence
+const HANDOVER_WORDS = (): Record<string, string> => ({
+  terminal_busy: tr("终端正在回答，等它说完再接管。", "The terminal is answering; take over once it is done."),
+  web_busy: tr("网页正在回答，等它说完再交回。", "The web is answering; give it back once it is done."),
+  taking: tr("另一处正在接管这个会话，稍后再看。", "Somewhere else is taking this session over; look again in a moment."),
+  not_home: tr("这个会话不在你的家机器上，网页接管不了；请到它的终端里说。", "This session is not on your home machine, so the web cannot take it over; talk to it in its terminal."),
+  old_agent: tr("这台机器还旧，接管不了；更新后就能，现在请用终端。", "This machine is too old to hand it over; update it, and use the terminal for now."),
+  old_service: tr("这台机器的网页对话服务还旧，接管不了；更新后就能，现在请用终端。", "This machine's chat service is too old to hand it over; update it, and use the terminal for now."),
+  home_down: tr("连不上那台机器，稍后再试。", "That machine is out of reach; try again later."),
+  offline: tr("连不上，稍后再试。", "Not connected; try again later."),
+  no_session: tr("这个会话已经不在那台机器上了。", "This session is no longer on that machine."),
+});
+const handoverWhy = (code: string, error: string) => HANDOVER_WORDS()[code] || error || tr("没办成，稍后再试。", "That did not work; try again.");
+
+// 接管: confirm, then the terminal stops onto its end page and this page writes.
+// While the terminal answers the button waits for the turn (等它说完); on a phone
+// the confirmation rises from the bottom.
+const TakeOver: FC<{ worker: string; stage: Stage; onTook: () => void }> = ({ worker, stage, onTook }) => {
+  const [open, setOpen] = useState(false);
+  const [going, setGoing] = useState(false);
+  const [why, setWhy] = useState("");
+  const wait = stage === "wait";
+  const go = async () => {
+    setGoing(true); setWhy("");
+    const r = await handover(worker, "takeover");
+    setGoing(false);
+    if (r.ok) { setOpen(false); onTook(); } else setWhy(handoverWhy(r.code, r.error));
+  };
+  return (
+    <>
+      <Button size="sm" className="shrink-0 rounded-full" data-testid="take-over" disabled={wait}
+        onClick={() => { setWhy(""); setOpen(true); }}>
+        {wait ? tr("等它说完", "Wait for it") : tr("接管", "Take over")}
+      </Button>
+      <AlertDialog open={open} onOpenChange={(o) => { if (!going) setOpen(o); }}>
+        <AlertDialogContent data-testid="take-over-confirm"
+          className="max-sm:top-auto max-sm:bottom-0 max-sm:max-w-full max-sm:translate-y-0 max-sm:rounded-b-none max-sm:pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{tr("接管这个会话？", "Take this session over?")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {tr("接管后在网页里说话，终端停下来只读；随时可以交回终端，接着同一段对话。",
+                "You talk to it here and the terminal stops, read-only; give it back any time to carry on the same conversation there.")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {wait || why ? <p role="alert" className="text-destructive text-[13px]">
+            {wait ? HANDOVER_WORDS().terminal_busy : why}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={going}>{tr("取消", "Cancel")}</AlertDialogCancel>
+            <AlertDialogAction disabled={going || wait} data-testid="take-over-go" onClick={(e) => { e.preventDefault(); void go(); }}>
+              {going ? tr("接管中…", "Taking over…") : tr("接管", "Take over")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+};
+
+// the workspace's 对话 of a running session: read along while the terminal holds
+// it, written here once this page took it over (the holder rides the 只读 stream)
 const SessionView: FC<SessionProps> = (props) => {
-  const { source, last } = props;
+  const { source } = props;
+  const { me } = useShell();
   const v = useSessionView(source.worker || "");
+  const [mine, setMine] = useState<Mine>(null);
+  const [, setTick] = useState(0);
+  // a handover made here is believed SURE_MS at most: look again then
+  useEffect(() => {
+    if (!mine) return;
+    const t = setTimeout(() => setTick((n) => n + 1), SURE_MS + 50);
+    return () => clearTimeout(t);
+  }, [mine]);
+  const stage = stageOf(v.state, mine, Date.now());
+  // a view-as preview never writes, and never takes anything over
+  const preview = viewAs && (!me || me.view_as);
+  if (stage === "held" && v.state?.session && !preview) return (
+    <HeldChat provider={v.state.agent === "codex" ? "codex" : "claude"} session={v.state.session}
+      worker={source.worker || ""} label={v.state.label} onGave={() => setMine({ held: false, at: Date.now() })} />
+  );
+  return <ReadView {...props} v={v} stage={stage === "held" ? "read" : stage}
+    take={source.worker && !preview && !v.gate && v.state ? <TakeOver worker={source.worker} stage={stage}
+      onTook={() => setMine({ held: true, at: Date.now() })} /> : undefined} />;
+};
+
+const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; stage: Stage; take?: ReactNode }> = (props) => {
+  const { last, v, take } = props;
   const busy = !!v.state?.busy;
   // nothing read yet and a refusal: the sentence, and the last word if there is one
   if (v.gate && !v.count) return (
@@ -538,7 +622,7 @@ const SessionView: FC<SessionProps> = (props) => {
       <TooltipProvider>
         <PageCardUI />
         <div className="flex h-full flex-col" data-testid="session-view" data-live={v.live ? "" : undefined}>
-          <ReadOnlyBand {...props} live={v.live} />
+          <ReadOnlyBand {...props} live={v.live} take={take} />
           <div className="min-h-0 flex-1">
             <Thread autoFocus={false}
               placeholder={tr("只读：这个会话在终端里跑，要说话请到终端里。", "Read-only: this session runs in a terminal; talk to it there.")}
@@ -557,6 +641,62 @@ const ClosedComposer: FC = () => (
     </div>
   </div>
 );
+
+// taken over: this page's conversation on that assistant's side IS the session
+// (WebChat adopted it), written here; 交回终端 hands it back — never mid-answer
+const HeldChat: FC<{ provider: Provider; session: string; worker: string; label?: string; onGave: () => void }> = ({ provider, session, worker, label, onGave }) => {
+  const { quota, bumpQuota } = useShell();
+  const chat = useFleetChat({ provider, onTurnEnd: bumpQuota,
+    blockedBy: quota?.over ? { blocked: true, ...(quota.reset ? { until: quota.reset } : {}) } : null });
+  const [going, setGoing] = useState(false);
+  const [why, setWhy] = useState("");
+  // the web side moved on to another conversation since (新对话): this one is not it
+  const other = chat.loaded && !!chat.resume?.id && chat.resume.id !== session;
+  const give = async () => {
+    setGoing(true); setWhy("");
+    const r = await handover(worker, "giveback");
+    setGoing(false);
+    if (r.ok) onGave(); else setWhy(handoverWhy(r.code, r.error));
+  };
+  const Empty: FC = () => (
+    <div className="mx-auto flex w-full max-w-[44rem] flex-1 flex-col justify-end px-4 py-6">
+      <p className="text-muted-foreground text-center text-[14px]">{chat.loaded ? tr("接着说吧。", "Go on.") : tr("正在读它的对话…", "Reading its conversation…")}</p>
+    </div>
+  );
+  return (
+    <ChatCtx.Provider value={{ ...chat, home: null, quota }}>
+      <AssistantRuntimeProvider runtime={chat.runtime}>
+        <TooltipProvider>
+          <PageCardUI />
+          <div className="flex h-full flex-col" data-testid="session-held">
+            <div className="px-4 pt-3">
+              <div role="status" data-testid="held"
+                className="border-border bg-card mx-auto flex w-full max-w-xl items-center gap-2 rounded-3xl border py-1.5 ps-4 pe-1.5 text-[13px] leading-snug shadow-xs">
+                <span className={`size-2 shrink-0 rounded-full ${chat.busy ? "bg-clay animate-pulse" : "bg-emerald-500"}`} />
+                <span className="min-w-0 flex-1">
+                  {chat.busy ? tr("已接管 · 正在回答…", "Taken over · answering…") : tr("已接管 · 在这里说，终端只读", "Taken over · talk here; the terminal is read-only")}
+                  {label ? <span className="text-muted-foreground hidden font-mono text-[12px] sm:inline"> · {label}</span> : null}
+                </span>
+                <Button size="sm" variant="outline" className="shrink-0 rounded-full" data-testid="give-back" disabled={chat.busy || going} onClick={() => void give()}>
+                  <TerminalSquareIcon className="size-4" />
+                  {chat.busy ? tr("等它说完", "Wait for it") : going ? tr("交回中…", "Giving back…") : tr("交回终端", "Give back")}
+                </Button>
+              </div>
+            </div>
+            {why || chat.notice ? <p role="alert" className="text-destructive px-4 pt-2 text-center text-sm">{why || chat.notice}</p> : null}
+            <div className="min-h-0 flex-1">
+              {other ? <p role="status" className="text-muted-foreground p-6 text-center text-[13px]">
+                {tr("网页这边已经开了另一段对话；交回终端后，这个会话在终端里接着说。", "The web has moved on to another conversation; give this session back to carry on in its terminal.")}
+              </p> : <Thread autoFocus={false}
+                placeholder={chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
+                components={{ Welcome: Empty, ToolFallback: ToolStep, ComposerStart: ComposerTools, ComposerTop: QuotaBanner }} />}
+            </div>
+          </div>
+        </TooltipProvider>
+      </AssistantRuntimeProvider>
+    </ChatCtx.Provider>
+  );
+};
 
 const SessionThread: FC<SessionProps> = (props) => {
   const { source, last } = props;

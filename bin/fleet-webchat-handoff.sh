@@ -24,6 +24,11 @@
 #   fleet-webchat-handoff.sh to-terminal --agent A --sid S --fid F
 #       the end page's ↵ (fleet-session-wrap.sh): WebChat must be idle; the record
 #       says terminal. No record ⇒ rc 0, nothing written.
+#   fleet-webchat-handoff.sh give-back fid:<fleet_id>
+#       the session workspace's 「交回终端」(task VV8F, EPIC GR5E C6): WebChat must be
+#       idle; the window's end page gets its own ↵ — to-terminal and the same
+#       conversation resumed there, the one road back. No window ⇒ the record
+#       alone says terminal.
 #
 # rc 0 done · 2 cannot (no conversation id, not this agent, no WebChat here) ·
 # 3 the other side is answering (its one line says where) · 1 anything else.
@@ -116,6 +121,18 @@ hub_app_url() {
   printf '%s/app/%s' "${url%/}" "${1:-}"
 }
 
+# one handover of a window at a time (task VV8F): two pages, or a page and ⌘P,
+# pressing 接管 together — the second is refused (rc 3), never both
+take_guard() { # <fid>
+  local d="$CONF/convo-lock"
+  mkdir -p "$d" 2>/dev/null
+  GUARD="$d/.taking-$1"
+  # a guard older than a handover can take is a crashed one
+  if [ -d "$GUARD" ] && [ -n "$(find "$GUARD" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then rmdir "$GUARD" 2>/dev/null; fi
+  mkdir "$GUARD" 2>/dev/null || return 1
+  trap 'rmdir "$GUARD" 2>/dev/null' EXIT
+}
+
 to_web() {
   local addr=${1:-} open=1
   [ "${2:-}" = --no-open ] && open=0
@@ -128,6 +145,7 @@ to_web() {
   [ -n "$sid" ] || die "$(fleet_ui_t webchat_no_sid)" 2
   # Codex in WebChat is the page's Codex side (R9A2); FLEET_WEBCHAT_CODEX=0 turns it off here
   [ "$agent" = claude ] || { [ "$agent" = codex ] && [ "${FLEET_WEBCHAT_CODEX:-1}" = 1 ]; } || die "$(fleet_ui_t webchat_no_codex)" 2
+  take_guard "$fid" || die "$(fleet_ui_t webchat_taking)" 3
   [ "$(wopt @claude_state)" = exited ] && [ "$(wopt @handoff_web)" = 1 ] && die "$(fleet_ui_t webchat_already)" 2
   term_busy && die "$(fleet_ui_t webchat_term_busy)" 3
   label=$(wopt @raw); [ -n "$label" ] || label=$(TM display-message -p -t "$WIN" '#{window_name}' 2>/dev/null)
@@ -240,11 +258,42 @@ to_terminal() {
   return 0
 }
 
+# the workspace's 「交回终端」: the window's end page takes its own ↵
+give_back() {
+  local fid=${1#fid:}
+  fleet_is_fid "$fid" || die "usage: fleet-webchat-handoff.sh give-back fid:<fleet_id>" 2
+  find_win "$fid" || die "$(fleet_ui_t webchat_gone)" 2
+  local agent sid holder
+  agent=$(fleet_agent_or_default "$(wopt @cc_agent)")
+  sid=$(fleet_agent_session_id "$agent" wopt window)
+  [ -n "$sid" ] || die "$(fleet_ui_t webchat_no_sid)" 2
+  holder=$(jval "$(lock_get "$agent" "$sid")" holder)
+  [ "$holder" = webchat ] || { echo ok; return 0; }
+  take_guard "$fid" || die "$(fleet_ui_t webchat_taking)" 3
+  chat_busy "$agent" && die "$(fleet_ui_t webchat_web_busy_wait)" 3
+  if [ "$(wopt @claude_state)" != exited ] || [ "$(wopt @handoff_web)" != 1 ]; then
+    # no end page waiting (a window that went on otherwise): the record alone
+    to_terminal --agent "$agent" --sid "$sid" --fid "$fid"
+    echo ok; return 0
+  fi
+  local pane; pane=$(TM display-message -p -t "$WIN" '#{pane_id}' 2>/dev/null)
+  [ -n "$pane" ] || die "$(fleet_ui_t webchat_gone)" 2
+  FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$pane" Enter
+  # the page runs to-terminal and unmarks the window once the record says terminal
+  local i=0
+  while [ "$i" -lt $((EXIT_WAIT * 5)) ]; do
+    [ "$(wopt @handoff_web)" = 1 ] || { echo ok; return 0; }
+    sleep 0.2; i=$((i + 1))
+  done
+  die "$(fleet_ui_t webchat_web_busy_wait)" 3
+}
+
 case "${1:-}" in
   to-web) shift; to_web "$@" ;;
+  give-back) shift; give_back "$@" ;;
   owner) shift; owner "$@" ;;
   to-webchat-take) shift; webchat_take "$@" ;;
   to-terminal) shift; to_terminal "$@" ;;
   view-of) shift; view_of "$@" ;;
-  *) die "usage: fleet-webchat-handoff.sh to-web fid:<id> [--no-open] | view-of fid:<id> | owner|to-webchat-take|to-terminal --agent A --sid S [--fid F]" 2 ;;
+  *) die "usage: fleet-webchat-handoff.sh to-web fid:<id> [--no-open] | give-back fid:<id> | view-of fid:<id> | owner|to-webchat-take|to-terminal --agent A --sid S [--fid F]" 2 ;;
 esac
