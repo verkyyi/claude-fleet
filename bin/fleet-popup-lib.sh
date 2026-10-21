@@ -100,47 +100,65 @@ fleet_popup_freeze() {
   return 0
 }
 
-# _fleet_popup_hold <window id> → the ids of the panes it put in copy-mode (a
-# pane already in a mode is left alone), one line
+# _fleet_popup_hold <window id> [<book>] — put its panes in copy-mode (a pane
+# already in a mode is left alone). No <book>: print the ids it froze, one line.
+# With <book> (the watcher): each id is written there BEFORE its pane is frozen, so
+# a thaw that reads the book never misses a pane this froze.
 _fleet_popup_hold() {
   local p m out=''
   while read -r p m; do
     [ "$m" = 0 ] || continue
-    tmux copy-mode -H -t "$p" 2>/dev/null && out="$out $p"
+    if [ -n "${2:-}" ]; then
+      printf '%s\n' "$p" >> "$2"
+      tmux copy-mode -H -t "$p" 2>/dev/null
+    else
+      tmux copy-mode -H -t "$p" 2>/dev/null && out="$out $p"
+    fi
   done <<EOF_FZ
 $(tmux list-panes -t "$1" -F '#{pane_id} #{pane_in_mode}' 2>/dev/null)
 EOF_FZ
-  printf '%s\n' "$out"
+  [ -n "${2:-}" ] || printf '%s\n' "$out"
 }
 
-# _fleet_popup_follow <client> <window> <file> <door pid> — the freeze's watcher:
-# a window the client moves to while the popup is up is held too (its panes
-# appended to <file>) and the client redrawn once. Ends with the door (its pid
-# gone) or the client; thaw also kills it.
+# _fleet_popup_follow <client> <window> <book> <door pid> — the freeze's watcher:
+# a window the client moves to while the popup is up is held too (its panes in
+# <book>) and the client redrawn once. It ends when <book>.stop appears (the thaw
+# asks, then waits for it), the door's pid is gone, or the client is.
 _fleet_popup_follow() {
-  local cl=$1 cur=$2 f=$3 door=$4 w got n=0
+  local cl=$1 cur=$2 f=$3 door=$4 w n=0
   while kill -0 "$door" 2>/dev/null; do
     sleep "${FLEET_POPUP_FOLLOW_SECS:-0.15}"
-    w=$(tmux display-message -p -c "$cl" '#{window_id}' 2>/dev/null) || return 0
+    [ ! -e "$f.stop" ] || return 0
+    # read off list-clients, never `display-message -c`: tmux 3.7c repaints the
+    # client a display-message names, and every repaint redraws the frozen pane
+    # round the popup (900 wide glyphs in 1.8 s at this pace)
+    w=$(tmux list-clients -F '#{client_name}	#{window_id}' 2>/dev/null | awk -F '\t' -v c="$cl" '$1 == c { print $2; exit }')
     case "$w" in @[0-9]*) ;; *) return 0 ;; esac
     [ "$w" = "$cur" ] && continue
+    [ ! -e "$f.stop" ] || return 0
     cur=$w
-    got=$(_fleet_popup_hold "$w")
-    printf '%s\n' "$got" >> "$f"
+    _fleet_popup_hold "$w" "$f"
     tmux refresh-client -t "$cl" 2>/dev/null
     n=$((n + 1)); [ "$n" -lt 50 ] || return 0   # a bounded watcher, whatever happens
   done
 }
 
 fleet_popup_thaw() {
-  local p
-  [ -z "${FPOP_FOLLOW:-}" ] || { kill "$FPOP_FOLLOW" 2>/dev/null; wait "$FPOP_FOLLOW" 2>/dev/null; }
+  local p i=0
+  # the watcher first: asked to stop and waited for (a tmux command of its in
+  # flight finishes first), so its book is whole when read; killed only if it
+  # does not end within ~3 s
+  if [ -n "${FPOP_FOLLOW:-}" ]; then
+    [ -z "${FPOP_FROZEN_FILE:-}" ] || : > "$FPOP_FROZEN_FILE.stop" 2>/dev/null
+    while kill -0 "$FPOP_FOLLOW" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 0.05; i=$((i + 1)); done
+    kill -9 "$FPOP_FOLLOW" 2>/dev/null; wait "$FPOP_FOLLOW" 2>/dev/null
+  fi
   [ -n "${FPOP_FROZEN_FILE:-}" ] && [ -f "$FPOP_FROZEN_FILE" ] && FPOP_FROZEN="$FPOP_FROZEN $(tr '\n' ' ' < "$FPOP_FROZEN_FILE")"
   for p in ${FPOP_FROZEN:-}; do
     [ "$(tmux display-message -p -t "$p" '#{pane_mode}' 2>/dev/null)" = copy-mode ] \
       && tmux send-keys -X -t "$p" cancel 2>/dev/null
   done
-  [ -z "${FPOP_FROZEN_FILE:-}" ] || rm -f "$FPOP_FROZEN_FILE" 2>/dev/null
+  [ -z "${FPOP_FROZEN_FILE:-}" ] || rm -f "$FPOP_FROZEN_FILE" "$FPOP_FROZEN_FILE.stop" 2>/dev/null
   FPOP_FROZEN='' FPOP_FOLLOW='' FPOP_FROZEN_FILE=''
   return 0
 }

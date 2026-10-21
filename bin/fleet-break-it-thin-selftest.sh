@@ -392,10 +392,11 @@ PY
   until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="$w: the popup never drew its frame"; return 1; }
   SECS=$(python3 -c 'import sys; print(max(float(sys.argv[1]), float(sys.argv[2])))' "${SECS:-0}" "$(since "$t0")")
   # the window behind closes and tmux moves the client on to window 1 …
+  # (the message row folds and opens meanwhile: a whole repaint, which draws the
+  # held pane's still frame round a 90% popup — so the count starts after it)
   TT kill-window -t fl:0
-  sleep 0.6; n0=$(grep -ao '龘' "$B/out" | wc -l)
-  TT set -g status on; sleep 0.5; TT set -g status 2; sleep 0.5
-  n1=$(grep -ao '龘' "$B/out" | wc -l)
+  TT set -g status on; sleep 0.4; TT set -g status 2
+  sleep 0.6; n0=$(grep -ao '龘' "$B/out" | wc -l); sleep 1; n1=$(grep -ao '龘' "$B/out" | wc -l)
   [ "$n1" = "$n0" ] || { WHY="$w: the window tmux moved the client to (the one behind closed) streamed $((n1 - n0)) wide glyphs onto the terminal"; return 1; }
   # … then the 看台 goes onto window 2 under the popup (what the ⚡ job's go does)
   TT select-window -t fl:2
