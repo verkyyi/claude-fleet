@@ -29,6 +29,7 @@ import { setThemePick, themePick, type ThemePick } from "@/shared/theme";
 import { SignOut, usePage, useShell } from "../Shell";
 import { BindWeChatDialog, toastBound } from "../WeChatBind";
 import { Failed, PageHeader, ago } from "../parts";
+import { clearBrowserCache } from "../chat/local";
 
 declare const __PROTO__: boolean;
 
@@ -433,6 +434,32 @@ const ChatCopyCard: FC = () => {
   );
 };
 
+// 清除本机缓存 (task KSQG): the conversation this browser keeps so the chat
+// opens at once — deleted here, and by every sign-out.
+const LocalCacheCard: FC = () => {
+  const [st, setSt] = useState<"" | "busy" | "done" | "fail">("");
+  const go = async () => { setSt("busy"); setSt((await clearBrowserCache(3000)) ? "done" : "fail"); };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{tr("本机缓存", "This device's cache")}</CardTitle>
+        <CardDescription>
+          {tr("这台设备的浏览器存着你最近的对话（每边最近 200 条，图片只存缩略图），再打开对话立刻显示，随后以你的机器为准。退出登录时自动清空。",
+            "This browser keeps your recent conversation (the latest 200 items per side, images as previews only) so the chat shows at once, then follows your machine. Signing out clears it.")}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground text-xs" role="status">
+          {st === "done" ? tr("已清除", "Cleared") : st === "fail" ? tr("没清掉，稍后再试", "Not cleared; try again") : ""}
+        </span>
+        <Button type="button" variant="outline" size="sm" disabled={st === "busy"} onClick={() => void go()}>
+          {tr("清除本机缓存", "Clear this device's cache")}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+};
+
 export default function SettingsPage() {
   usePage(tr("设置", "Settings"));
   const { me } = useShell();
@@ -440,7 +467,7 @@ export default function SettingsPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-5 md:px-6 md:py-8">
       <PageHeader title={tr("设置", "Settings")} />
       <Profile />
-      {me?.person ? <><SignInWays /><MyConfig /><ChatCopyCard /></> : null}
+      {me?.person ? <><SignInWays /><MyConfig /><ChatCopyCard /><LocalCacheCard /></> : null}
       <Look />
       {me?.can_logout ? (
         <SignOut>
