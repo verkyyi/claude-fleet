@@ -95,6 +95,11 @@ func taskEnd(t store.FleetTask) string {
 		case store.TaskSucceeded, store.TaskFailed, store.TaskCancelled, store.TaskRefused:
 			return t.Outcome
 		}
+		// an old record moved onto IDs ended as closed with the migration's own
+		// word (exited · …): ended, never 排着 (G5AH)
+		if t.State == store.TaskClosed {
+			return store.TaskClosed
+		}
 		return ""
 	}
 	switch t.State {

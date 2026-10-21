@@ -37,6 +37,12 @@ func TestBoardOneRowPerTask(t *testing.T) {
 		return m
 	}
 	running, queued, exited, ended := v1("run"), v1("queue"), v1("exit"), v1("end")
+	// G5AH: a record the ID migration ended (state closed, outcome exited) is put away, never 排着
+	migrated := v1("migrated")
+	if _, err := st.DB().Exec(`UPDATE fleet_tasks SET state = 'closed', outcome = 'exited', fid = '' WHERE id = ?`,
+		store.ParseTaskRef(migrated.Ref)); err != nil {
+		t.Fatal(err)
+	}
 	pushID(running.FID, ev("opened", running.FID, 1, "agent", "claude"))
 	pushID(exited.FID, ev("opened", exited.FID, 1, "agent", "claude"))
 	pushID(ended.FID, ev("opened", ended.FID, 1, "agent", "claude"), ev("closed", ended.FID, 2, "reason", "reaped"))
@@ -76,6 +82,7 @@ func TestBoardOneRowPerTask(t *testing.T) {
 		running.FID: {"work", "working"}, plain: {"pin", "looping"}, exited.FID: {"gone", "exited"},
 		queued.FID: {"queue", "queued"}, ended.FID: {"gone", "ended_no_result"},
 		"0b7e8c1a-1111-4222-8333-444455556688": {"queue", "turn_done"},
+		migrated.Ref:                           {"gone", "ended"},
 	}
 	for id, w := range want {
 		if r := got[id]; r.Group != w[0] || r.Tag != w[1] {
@@ -88,8 +95,8 @@ func TestBoardOneRowPerTask(t *testing.T) {
 	if r := got[running.FID]; r.Task != running.Ref || r.Title != "task run" || r.WorkerID != fleet+"/o-r:scratch-1" {
 		t.Fatalf("the running task's row = %+v", r)
 	}
-	if b.Count != 4 || b.Groups["gone"] != 2 {
-		t.Fatalf("count = %d groups = %v; want 4 counted (pin · work · 2 queue), 2 put away", b.Count, b.Groups)
+	if b.Count != 4 || b.Groups["gone"] != 3 {
+		t.Fatalf("count = %d groups = %v; want 4 counted (pin · work · 2 queue), 3 put away", b.Count, b.Groups)
 	}
 	if order[0] != "pin:looping" || order[1] != "work:working" || order[len(order)-1][:5] != "gone:" {
 		t.Fatalf("order = %v", order)
