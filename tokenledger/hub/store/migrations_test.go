@@ -529,10 +529,10 @@ func TestMigration6_MemberLimitsTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"fleet.member_limits.p:a": "until=2026-10-28T07:35:47Z,tokens=1500000,sessions=1,since=2026-10-21T07:35:47Z",
+		"fleet.member_limits.p:a": "until=2026-10-28T07:35:47Z,tokens=3000000,sessions=1,since=2026-10-21T07:35:47Z",
 		"fleet.member_limits.p:b": "tokens=500000",
 		"fleet.member_limits.p:c": "sessions=2",
-		"fleet.apply.trial":       "days=7,tokens=1500000,sessions=1",
+		"fleet.apply.trial":       "days=7,tokens=3000000,sessions=1",
 		"pool.skip_pct":           "usd=20",
 	}
 	for k, v := range want {

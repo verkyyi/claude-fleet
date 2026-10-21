@@ -110,12 +110,12 @@ func TestFailedCreateStopsAndSays(t *testing.T) {
 func TestMemberLimitsParse(t *testing.T) {
 	now := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
 	tt, err := parseTrialTerms(applyTrialDefault)
-	if err != nil || tt.Days != 7 || tt.Tokens != 1_500_000 || tt.USD != 0 || tt.Sessions != 1 {
+	if err != nil || tt.Days != 7 || tt.Tokens != 3_000_000 || tt.USD != 0 || tt.Sessions != 1 {
 		t.Fatalf("default = %+v %v", tt, err)
 	}
 	l := tt.limits(now)
 	back, err := parseMemberLimits(l.String())
-	if err != nil || !back.Until.Equal(now.Add(7*24*time.Hour)) || back.Tokens != 1_500_000 || back.Sessions != 1 || !back.Since.Equal(now) {
+	if err != nil || !back.Until.Equal(now.Add(7*24*time.Hour)) || back.Tokens != 3_000_000 || back.Sessions != 1 || !back.Since.Equal(now) {
 		t.Fatalf("round trip %q = %+v %v", l.String(), back, err)
 	}
 	if off, _ := parseTrialTerms("off"); !off.limits(now).empty() {
@@ -188,7 +188,7 @@ func TestApproveWritesLimitsAndSubscriptions(t *testing.T) {
 	}
 	p1 := approve("rq-t1", map[string]any{})
 	l, ok := memberLimitsOf(settings(), p1)
-	if !ok || l.Tokens != 1_500_000 || l.Sessions != 1 || l.Until.Sub(now) < 6*24*time.Hour {
+	if !ok || l.Tokens != 3_000_000 || l.Sessions != 1 || l.Until.Sub(now) < 6*24*time.Hour {
 		t.Fatalf("default limits = %+v %v", l, ok)
 	}
 	if v := settings()[credUserKey(p1)]; v != `"*"` {

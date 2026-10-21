@@ -17,7 +17,7 @@ import (
 //
 //	fleet.member_limits.<principal> = "until=<RFC 3339>,tokens=<n>,sessions=<n>,since=<RFC 3339>"
 //
-// from fleet.apply.trial ("days=7,tokens=1500000,sessions=1" by default; "off" =
+// from fleet.apply.trial ("days=7,tokens=3000000,sessions=1" by default; "off" =
 // approve as a full member) or the approval's own `limits`. Any part may be
 // left out; "" removes the key — the person 转正, nothing held. Held:
 //
@@ -39,7 +39,7 @@ import (
 const (
 	MemberLimitsPrefix  = "fleet.member_limits."
 	ApplyTrialKey       = "fleet.apply.trial"
-	applyTrialDefault   = "days=7,tokens=1500000,sessions=1"
+	applyTrialDefault   = "days=7,tokens=3000000,sessions=1"
 	memberLimitsMaxDays = 365
 )
 
@@ -103,7 +103,7 @@ func parseUSD(v string) (float64, error) {
 func parseLimitTokens(v string) (int64, error) {
 	n, err := parseTokens(v)
 	if err != nil {
-		return 0, fmt.Errorf("tokens is a token count (e.g. 1500000, 1500k, 1.5M)")
+		return 0, fmt.Errorf("tokens is a token count (e.g. 3000000, 3000k, 3M)")
 	}
 	return n, nil
 }
@@ -154,7 +154,7 @@ func parseMemberLimits(v string) (MemberLimits, error) {
 	return l, nil
 }
 
-// trialTerms is an approval's terms: "days=7,tokens=1500000,sessions=1", or
+// trialTerms is an approval's terms: "days=7,tokens=3000000,sessions=1", or
 // "off" (usd= is still read, for a value written before T796).
 type trialTerms struct {
 	Off      bool

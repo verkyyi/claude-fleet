@@ -37,8 +37,8 @@ export async function install(): Promise<string> {
   const wxBind = { unbound: sc.wx === "unbound", polls: 0 };
   const m = sc.member, D = 864e5;
   const memberTrial: Record<string, unknown> = {
-    state: m || "ok", sessions: 1, sessions_now: 1, tokens: 1_500_000,
-    used_tokens: m === "spent" ? 1_512_000 : m === "soon" ? 1_260_000 : 120_000,
+    state: m || "ok", sessions: 1, sessions_now: 1, tokens: 3_000_000,
+    used_tokens: m === "spent" ? 3_012_000 : m === "soon" ? 2_520_000 : 120_000,
     until: new Date(Date.now() + (m === "expired" ? -D / 3 : m === "soon" ? D / 2 : 6 * D - 3600e3)).toISOString(),
     days_left: m === "expired" ? 0 : m === "soon" ? 1 : 6,
   };

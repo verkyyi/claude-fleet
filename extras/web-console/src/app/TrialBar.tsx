@@ -1,6 +1,6 @@
 // TrialBar.tsx — a trial member's own limits, always in sight (claude-fleet
 // T796): one line over every page, phone and computer alike — 「试用 · 剩 6 天 ·
-// 已用 12 万 / 150 万 tokens · 同时 1 个会话」. A day or less left, or 80 % of the
+// 已用 12 万 / 300 万 tokens · 同时 1 个会话」. A day or less left, or 80 % of the
 // tokens used, turns it clay; ended or used up, red, saying why. From 将到期 on
 // it offers 申请转正 (POST /v1/me/trial/upgrade), which marks the person's row
 // in the admin's 成员 list; asked, it says so. Off /v1/me/usage's `trial`;

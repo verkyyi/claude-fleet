@@ -109,7 +109,7 @@ function WeekBar({ r }: { r: Row }) {
   );
 }
 
-// A trial member's limits, one cell: 剩 6 天 · 12 万 / 150 万 · 同时 1 个, and
+// A trial member's limits, one cell: 剩 6 天 · 12 万 / 300 万 · 同时 1 个, and
 // 申请转正 when they asked (claude-fleet T796).
 const onTrial = (b?: PersonBudget) => !!b && !!(b.trial_until || b.trial_tokens || b.trial_usd || b.trial_sessions);
 const daysLeft = (iso?: string) => (iso ? Math.max(0, Math.ceil((Date.parse(iso) - Date.now()) / 864e5)) : null);
@@ -466,7 +466,7 @@ function TrialEditor({ r, reload }: { r: Row; reload: () => void }) {
         </div>
         <div className="grid gap-1">
           <Label htmlFor="trial-tokens" className="text-xs">{t("drawer.trialTokens")}</Label>
-          <Input id="trial-tokens" inputMode="numeric" placeholder="1.5M" title={t("drawer.trialTokensHint")} value={tokens} onChange={(e) => setTokens(e.target.value)} />
+          <Input id="trial-tokens" inputMode="numeric" placeholder="3M" title={t("drawer.trialTokensHint")} value={tokens} onChange={(e) => setTokens(e.target.value)} />
         </div>
         <div className="grid gap-1">
           <Label htmlFor="trial-sessions" className="text-xs">{t("drawer.trialSessions")}</Label>

@@ -39,11 +39,10 @@ var migrations = []migration{
 }
 
 // TrialTokensPerUSD is what migration 6 turns a trial's dollar ceiling into
-// (claude-fleet T796): $20 → 1,500,000 tokens. A token here is counted as
-// every limit counts it — input + cache write + output, a cache read not —
-// and at an Opus-tier Claude Code mix (cache writes most of it, the cache
-// reads beside them priced in) that is about $13–15 a million.
-const TrialTokensPerUSD = 75_000
+// (claude-fleet T796): $20 → 3,000,000 tokens, the trial the operator chose.
+// A token here is counted as every limit counts it — input + cache write +
+// output, a cache read not.
+const TrialTokensPerUSD = 150_000
 
 // memberLimitsTokens is migration 6 (claude-fleet T796): a trial member's
 // limits are read in tokens, so every fleet.member_limits.<principal> and the

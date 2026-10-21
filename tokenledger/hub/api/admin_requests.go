@@ -290,7 +290,7 @@ func (s *Server) trialConvoUntil(pid string) *time.Time { return nil }
 // approved already runs the admission again (a retry after a failure half
 // way) and decides nothing twice.
 //
-// The body may carry {"limits": "days=7,tokens=1500000,sessions=1"} — or "off" for a
+// The body may carry {"limits": "days=7,tokens=3000000,sessions=1"} — or "off" for a
 // full member — in place of fleet.apply.trial (claude-fleet T789); an empty
 // body takes the setting.
 func (s *Server) adminRequestApprove(w http.ResponseWriter, r *http.Request, id string) {
@@ -299,7 +299,7 @@ func (s *Server) adminRequestApprove(w http.ResponseWriter, r *http.Request, id 
 	}
 	if r.Body != nil {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-			httpError(w, http.StatusBadRequest, `the body is empty or {"limits": "days=7,tokens=1500000,sessions=1" | "off"}`)
+			httpError(w, http.StatusBadRequest, `the body is empty or {"limits": "days=7,tokens=3000000,sessions=1" | "off"}`)
 			return
 		}
 	}
