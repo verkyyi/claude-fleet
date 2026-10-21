@@ -512,8 +512,14 @@ fi
 # directory test per fleet.
 if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-peer-queue.sh" ]; then
   for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
-    [ -d "$FLEET_CONF_DIR/fleets/$s/peer-queue" ] || continue
-    qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" drain -L "$s")
+    if [ -d "$FLEET_CONF_DIR/fleets/$s/peer-queue" ]; then
+      qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" drain -L "$s")
+      [ -z "$qout" ] || log "$s: $qout"
+    fi
+    # A send still QUEUED past FLEET_PEER_QUEUE_ALERT_SECS — here or through the hub —
+    # is said once in ⌘P's 消息 (issue T756).
+    [ -f "$FLEET_CONF_DIR/fleets/$s/delivery.ndjson" ] || continue
+    qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" stale -L "$s")
     [ -z "$qout" ] || log "$s: $qout"
   done
 fi

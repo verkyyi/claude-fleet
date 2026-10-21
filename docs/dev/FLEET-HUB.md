@@ -159,12 +159,16 @@ ccquota agent's control channel is this machine's only door to the hub.
   cleanup tick and a sleeper's wake). The sender hands a full worker_id over even
   when its map is stale — the hub routes on the fleet UUID — and says
   `queued → …` (exit 3) unless the hub's **receipt** says delivered within
-  `FLEET_HUB_RECEIPT_WAIT` (4 s): once a relay settles (delivered / failed /
+  `FLEET_HUB_RECEIPT_WAIT` (10 s — the round trip is 4–7 s on a loaded pair of
+  machines; every tier waits, a silent report's receipt meaning «in the parent's
+  ledger», issue T756): once a relay settles (delivered / failed /
   expired after 7 days) the hub pushes a `receipt` relay back down the SENDER's
   channel, and its `deliver` writes the row into that fleet's delivery book,
   `fleets/<sess>/delivery.ndjson` (`QUEUED` → `DELIVERED` / `FAILED` / `EXPIRED`).
   `reported` / `sent` therefore always means it arrived; a receipt that says the
-  target's machine merely holds it stays `QUEUED`.
+  target's machine merely holds it stays `QUEUED`. A send whose last word is still
+  `QUEUED` after `FLEET_PEER_QUEUE_ALERT_SECS` (60 s) is said once in ⌘P's 消息 by
+  the cleanup tick (`fleet-peer-queue.sh stale`, T756).
 - **One progress stream per parent** (issue #1648). The hub appends, under the
   parent's worker_id, every state of a placement it made for it (the `worker_start`
   operation: `accepted` → `running` → `done` / `refused` / `failed`) and every

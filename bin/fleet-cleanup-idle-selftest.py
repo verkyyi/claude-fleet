@@ -1319,6 +1319,22 @@ class DispatchedSession(TaskSession):
 
     def test_unreported_is_nudged_once_then_closed(self):
         self.answer.write_text("1\n")
+        # T756 first: an ID that said `waiting` at its turn's end — the report maybe
+        # still on its way to a parent on another machine — is no 「没报结果」: no
+        # nudge, no red mark (one from before is lifted), no close. (Folded in here:
+        # a new case would regroup the explicit parts #4..#8.)
+        said = "6a7b8c9d-0e1f-4a2b-8c3d-000000000756"
+        self.call("python3", str(BIN / "fleet_id.py"), "result", said, "--state", "waiting", "--summary", "t756")
+        self.set("@fleet_id", said)
+        self.set("@claude_state_ts", str(int(time.time()) - 700))
+        self.set("@reap_unreported", str(int(time.time()) - 700))
+        out = self.due()
+        self.assertIn("skip:reported " + self.win, out)
+        self.assertNotIn("nudged", out)
+        self.assertNotIn("reaped", out)
+        self.assertFalse(self.nudges.exists())
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_unreported}").strip(), "")
+        self.set("@fleet_id", self.FID)
         self.set("@claude_state_ts", str(int(time.time()) - 300))
         self.assertNotIn("nudged", self.clean())          # idle 5 min < 10
         self.set("@claude_state_ts", str(int(time.time()) - 700))

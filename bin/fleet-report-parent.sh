@@ -97,7 +97,8 @@
 # and the band is written into the ledger event. loud = someone must act (BLOCKED,
 # FAILED not being fixed, REAPED unmerged/dirty, a true STOPPED, a child in
 # `needs`); quiet = worth knowing (MERGED, FAILED while fixing, other reaps);
-# silent = a turn boundary (WAITING, IDLE) — RECORDED, never sent, never stamped.
+# silent = a turn boundary (WAITING, IDLE) — RECORDED, never sent, never stamped;
+# a session's OWN `waiting` (no --win) is its word to the parent and goes quiet (T756).
 # FLEET_CHILD_REPORT=immediate (the default; legacy `1`) delivers loud + quiet one
 # by one, exactly as before. `batch` (C5, #939) only RECORDS a quiet report; the
 # digest (bin/fleet-children-flush.sh) delivers it later, merged with its siblings
@@ -529,6 +530,15 @@ else
   TIER=loud
 fi
 UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
+# A session's OWN `waiting` (no --win: the report tool, a person's shell) is its word
+# to the parent — «方案好了，等你点头» — not a turn boundary a hook filed (issue T756:
+# an orchestrator never saw a dispatched child's waiting, here or across machines,
+# because silent is ledger only). It is delivered as quiet; a parent that is gone
+# still makes it no reminder of the person's (OWNWAIT keeps orphan() silent for it).
+OWNWAIT=''
+if [ -z "$WIN" ] && [ "$STATE" = waiting ] && [ "$TIER" = silent ]; then
+  TIER=quiet; OWNWAIT=1
+fi
 
 # orphan <why> — nobody can take this report (issue #3117): the parent is gone and no
 # live ancestor stands in. A report that would wake someone becomes the person's
@@ -536,7 +546,7 @@ UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
 # through bin/fleet-orphan-reports.py — issue #3369)
 # plus one alert on the fleet's existing channel. Silent: as before, nothing.
 orphan() {
-  [ "$TIER" = silent ] && quiet "$1 (tier=silent · $UST — ledger only)"
+  { [ "$TIER" = silent ] || [ -n "$OWNWAIT" ]; } && quiet "$1 (tier=$TIER${OWNWAIT:+ · own waiting} · $UST — ledger only)"
   local f="$FLEET_CONF_DIR/global/orphan-reports.ndjson" sockl="${SOCK:-}" prn="${PR//[^0-9]/}" new
   if [ "$DRY" = 1 ]; then
     printf 'fleet-report-parent: %s — would file %s for the person (%s) and raise one alert
@@ -609,7 +619,7 @@ print("new " + hashlib.sha1(("%s|%s|%s|%s" % (row["ts"], row["child_key"], row["
 # person takes the report (orphan's book + alert) and the caller hears it was not
 # delivered — exit 1.
 if [ -n "$LOSTADDR" ]; then
-  [ "$TIER" = silent ] && quiet "parent address '$worigin' lost (tier=silent · $UST — not sent)"
+  { [ "$TIER" = silent ] || [ -n "$OWNWAIT" ]; } && quiet "parent address '$worigin' lost (tier=silent · $UST — not sent)"
   ORPHAN_RC=1 orphan "parent '$worigin' cannot be addressed (its identity was cut short and no @origin_wid names its machine)"
 fi
 
@@ -691,19 +701,36 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
         if _f=$(fleet_hub_put child_report "$_self" "$owid" "$_suf" "$_payload"); then
           [ "$TIER" = silent ] || TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
           # Reported only on the hub's receipt that the parent's machine delivered
-          # it — an online node, the outbox emptied, the receipt within
-          # FLEET_HUB_RECEIPT_WAIT. Anything less is queued, and says so.
+          # it — the outbox emptied, the receipt within FLEET_HUB_RECEIPT_WAIT (10 s:
+          # the round trip through the hub is 4–7 s on a loaded pair of machines,
+          # and the old 4 s queued most of them — issue T756). Every tier waits: a
+          # silent report's receipt says it reached the parent's ledger, and that is
+          # «reported» exactly as the local ledger-only answer is (it used to print
+          # «queued», exit 3, unconditionally). A stale map or a lost node is asked
+          # too — the hub routes on the fleet UUID, and a receipt is the only word.
+          # Anything less is queued, and says so.
           _rid="$_self#$_suf"; _how=''
           if fleet_hub_wait_sent "$_f" "${FLEET_HUB_SENT_WAIT:-3}"; then
+            if _why=$(fleet_hub_refused "$_f"); then
+              bash "$BIN/fleet-peer-queue.sh" note -L "$sess" --rid "$_rid" --state FAILED --to "$owid" \
+                --kind report --via hub --detail "refused by the hub: $_why" 2>/dev/null || :
+              printf 'undelivered → %s: %s — the hub refused it: %s\n' "${owid#*/}" "$st" "$_why"
+              exit 1
+            fi
+            if bash "$BIN/fleet-peer-queue.sh" wait -L "$sess" --rid "$_rid" \
+                 --secs "${FLEET_HUB_RECEIPT_WAIT:-10}" >/dev/null 2>&1; then
+              if [ "$TIER" = silent ]; then
+                printf 'reported → %s on %s (in its ledger — tier=silent, not sent to its window): %s\n' \
+                  "${owid#*/}" "${_node:-its machine}" "$st"
+              else
+                printf 'reported → %s on %s (delivered): %s\n' "${owid#*/}" "${_node:-its machine}" "$st"
+              fi
+              exit 0
+            fi
             case "$_node" in
               '') _how='its machine is not in a fresh hub map' ;;
               *:lost) _how='its machine is offline' ;;
-              *) if [ "$TIER" != silent ] && bash "$BIN/fleet-peer-queue.sh" wait -L "$sess" --rid "$_rid" \
-                      --secs "${FLEET_HUB_RECEIPT_WAIT:-4}" >/dev/null 2>&1; then
-                   printf 'reported → %s on %s (delivered): %s\n' "${owid#*/}" "$_node" "$st"
-                   exit 0
-                 fi
-                 _how='not delivered yet' ;;
+              *) _how='not delivered yet' ;;
             esac
           else
             _how='the hub is not reachable from here; this machine sends it when it is'

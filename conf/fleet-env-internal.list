@@ -291,7 +291,7 @@ FLEET_HANDOFF_RETRY_AFTER          knob: internal pacing/limit, safe in-code def
 FLEET_HANDOFF_VERIFY_TIMEOUT       knob: internal pacing/limit, safe in-code default (fleet-handoff-cycle.sh)
 FLEET_HEAVY_BIN                    seam: the fleet-heavy.sh path bash-guard.py prefixes (fleet-heavy-selftest.sh)
 FLEET_HEAVY_DIR                    path: the machine-wide heavy-slot dir (default /Users/Shared/claude-fleet/heavy)
-FLEET_HUB_RECEIPT_WAIT             knob: seconds a cross-machine send waits for the hub's delivery receipt before saying queued (fleet-report-parent.sh / fleet-peer-send.sh, 4, #1647)
+FLEET_HUB_RECEIPT_WAIT             knob: seconds a cross-machine send waits for the hub's delivery receipt before saying queued (fleet-report-parent.sh / fleet-peer-send.sh, 10 — the hub round trip is 4–7 s, T756; #1647)
 FLEET_HUB_SENT_WAIT                seam: seconds a cross-machine send waits for the agent to take its outbox file (fleet-report-parent.sh / fleet-peer-send.sh, 3; hub-relay-selftest.sh sets 0 — no agent there)
 FLEET_PEER_RECEIPT_SECS            knob: seconds after a queued cross-machine send before a pane sender is told it is still not delivered (fleet-peer-send.sh, 60, 0 = off, #2729)
 FLEET_INSTALL_NO_HUB               handoff: = fleet-install.sh --no-hub, from the environment (#1712); one version: the answer 「不接」 ahead (#1804)
@@ -456,6 +456,7 @@ FLEET_NEEDS_STRIKE_TTL             knob: internal pacing/limit, safe in-code def
 FLEET_NEEDS_TRACE                  knob: debug trace for the needs-reconcile spinner
 FLEET_ORIGIN_GATE                  seam: 0 skips the spawn's live-parent gate (fleet_origin_gate, issue #1355) — tests whose parent key has no window
 FLEET_PEER_MODE                    handoff: the sender's permission mode stamped on a cross-session message
+FLEET_PEER_QUEUE_ALERT_SECS        knob: seconds a send may read QUEUED before the cleanup tick says it in ⌘P 消息 (fleet-peer-queue.sh stale, 60; 0 = off, T756)
 FLEET_PEER_QUEUE_TTL               knob: seconds a queued report/message waits for its recipient before EXPIRED (fleet-peer-queue.sh, 604800 = the hub relay TTL, #1647)
 FLEET_PULLBACK                     knob: 0 turns off --auto pulling back a session window killed while its fleet is up (fleet-restore.sh, #1840, default on)
 FLEET_PULLBACK_RETIRED_DIR         seam: where fleet_win_retire marks the fleet's own closes (default $FLEET_CONF_DIR/global/retired; #1840)

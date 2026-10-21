@@ -87,6 +87,10 @@ def unreported_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else UNREPORTED_DEFAULT
 
 
+# A result written this long before the turn that ended counts as that turn's word
+# (a report, then a few more steps before the prompt) — T756's unreported rule.
+REPORTED_SLACK = 600
+
 FID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -626,6 +630,16 @@ class Cleaner:
         else:
             first = unreported_secs()
             nudged = snap.get("@reap_unreported", "")
+            # It DID say something at this turn's end (issue T756): a `waiting` /
+            # `blocked` report on its ID — whether the parent's window has it yet
+            # (a cross-machine report the hub still carries) or not. That is no
+            # 「闲了 30 分钟没报结果」: no nudge, no red mark, no close on this road.
+            said = self.id_said_at(snap["@fleet_id"])
+            if said and said >= int(stamp) - REPORTED_SLACK:
+                if not self.args.dry_run and nudged:
+                    self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
+                self.say(window, "skip:reported", origin)
+                return False
             if not nudged.isdigit():
                 if int(stamp) + first > self.now:
                     return False
@@ -786,6 +800,22 @@ class Cleaner:
             return json.loads(out or "{}").get("state") in ("done", "failed")
         except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
             return False
+
+    @staticmethod
+    def id_said_at(fid):
+        """When the window's ID last took a result of its own (fleet_id.py status
+        → result.ts), any state; 0 = none, or unreadable."""
+        if not FID_RE.fullmatch(fid or ""):
+            return 0
+        env = dict(os.environ)
+        env.pop("FLEET_ID_LIVE", None)
+        try:
+            out = subprocess.run(["python3", str(BIN / "fleet_id.py"), "status", fid], env=env,
+                                 capture_output=True, text=True, timeout=15).stdout
+            ts = (json.loads(out or "{}").get("result") or {}).get("ts")
+            return int(ts) if isinstance(ts, (int, float)) else 0
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            return 0
 
     def task_closed(self, task):
         """0 closed (收口) · 1 open · 3 unknown — fleet_task_control.py closed,

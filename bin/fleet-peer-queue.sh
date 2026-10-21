@@ -13,6 +13,11 @@
 #   fleet-peer-queue.sh pending -L <sess> --to <label>              → how many sends to <label>
 #                                                                     still read QUEUED (issue #3520:
 #                                                                     the sender's 「第 N 条」)
+#   fleet-peer-queue.sh stale  -L <sess> [--secs <n>]               → one ⌘P 消息 (fleet_notice,
+#                                                                     kind alert) for the sends whose
+#                                                                     last row has read QUEUED longer
+#                                                                     than <n> (FLEET_PEER_QUEUE_ALERT_SECS,
+#                                                                     60) — each send said once
 #
 # A child's report or a message whose recipient is on THIS machine but cannot take
 # it right now — a window with no live Claude under it, an inbox that will not
@@ -37,7 +42,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 die() { printf 'fleet-peer-queue: %s\n' "$2" >&2; exit "$1"; }
 
 ACT="${1:-}"; [ $# -gt 0 ] && shift
-SESS='' FID='' TKEY='' KIND='' RID='' TO='' STATE='' VIA='' DETAIL='' SECS=4
+SESS='' FID='' TKEY='' KIND='' RID='' TO='' STATE='' VIA='' DETAIL='' SECS=4 SECS_SET=
 while [ $# -gt 0 ]; do
   case "$1" in
     -L) SESS="${2:-}"; shift ;;
@@ -49,7 +54,7 @@ while [ $# -gt 0 ]; do
     --state) STATE="${2:-}"; shift ;;
     --via) VIA="${2:-}"; shift ;;
     --detail) DETAIL="${2:-}"; shift ;;
-    --secs) SECS="${2:-}"; shift ;;
+    --secs) SECS="${2:-}"; SECS_SET=1; shift ;;
     *) die 2 "unknown argument $1" ;;
   esac
   shift
@@ -102,31 +107,37 @@ print(json.dumps({"rid": rid, "kind": kind, "to_fid": fid, "to_key": key, "to": 
 
   wait)
     [ -n "$RID" ] || die 2 "wait needs --rid"
-    i=0
-    while :; do
-      st=$(python3 - "$BOOK" "$RID" <<'PY' 2>/dev/null
-import json, sys
-st = ""
-try:
-    for line in open(sys.argv[1], encoding="utf-8"):
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        if r.get("rid") == sys.argv[2] and r.get("state") != "QUEUED":
-            st = r.get("state", "")
-except OSError:
-    pass
-print(st)
+    # ONE interpreter polls the book every 0.2 s up to a real deadline (issue T756:
+    # a python start per poll on a loaded machine stretched «4 s» to 20+, and a
+    # loop counted in polls, not seconds, is no bound at all). --secs 0 = one look.
+    python3 - "$BOOK" "$RID" "$SECS" <<'PY' 2>/dev/null
+import json, sys, time
+book, rid, secs = sys.argv[1], sys.argv[2], int(sys.argv[3])
+end = time.monotonic() + secs
+while True:
+    st = ""
+    try:
+        for line in open(book, encoding="utf-8"):
+            if rid not in line:
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("rid") == rid and r.get("state") != "QUEUED":
+                st = r.get("state", "")
+    except OSError:
+        pass
+    if st == "DELIVERED":
+        print(st); sys.exit(0)
+    if st in ("FAILED", "EXPIRED"):
+        print(st); sys.exit(1)
+    if time.monotonic() >= end:
+        print("QUEUED"); sys.exit(3)
+    time.sleep(0.2)
 PY
-)
-      case "$st" in
-        DELIVERED) echo DELIVERED; exit 0 ;;
-        FAILED|EXPIRED) echo "$st"; exit 1 ;;
-      esac
-      [ "$i" -ge $((SECS * 5)) ] && { echo QUEUED; exit 3; }
-      sleep 0.2; i=$((i + 1))
-    done ;;
+    rc=$?
+    case "$rc" in 0|1|3) exit "$rc" ;; *) echo QUEUED; exit 3 ;; esac ;;
 
   status)
     [ -d "$Q" ] || exit 0
@@ -152,7 +163,9 @@ try:
         except ValueError:
             continue
         if r.get("to") == sys.argv[2] and r.get("rid"):
-            last[r["rid"]] = r
+            # settled once ANY row says so (a receipt may precede the QUEUED note)
+            if r.get("state") != "QUEUED" or last.get(r["rid"], {}).get("state", "QUEUED") == "QUEUED":
+                last[r["rid"]] = r
 except OSError:
     pass
 cut = time.time() - int(sys.argv[3])
@@ -160,8 +173,64 @@ print(sum(1 for r in last.values() if r.get("state") == "QUEUED" and (r.get("ts"
 PY
     exit 0 ;;
 
+  stale)
+    # A send that stays QUEUED is SAID (issue T756): the sender's one line is easy to
+    # miss and a cross-machine report sat «queued» with nobody told. The cleanup tick
+    # runs this for every fleet with a book; each rid is said once
+    # (delivery.alerted beside the book), one notice per tick for all of them.
+    [ -f "$BOOK" ] || exit 0
+    _as="${FLEET_PEER_QUEUE_ALERT_SECS:-60}"; case "$_as" in ''|*[!0-9]*) _as=60 ;; esac
+    [ -n "$SECS_SET" ] && _as=$SECS
+    [ "$_as" -gt 0 ] || exit 0
+    python3 - "$BOOK" "$DIR/delivery.alerted" "$_as" "$TTL" "$BIN" <<'PY'
+import json, subprocess, sys, time
+book, alerted, secs, ttl, bindir = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+last = {}
+try:
+    for line in open(book, encoding="utf-8"):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("rid"):
+            # settled once ANY row says so: the hub's receipt can land before the
+            # sender's own QUEUED note (its wait gave up a moment too early)
+            if r.get("state") != "QUEUED" or last.get(r["rid"], {}).get("state", "QUEUED") == "QUEUED":
+                last[r["rid"]] = r
+except OSError:
+    sys.exit(0)
+try:
+    done = set(open(alerted, encoding="utf-8").read().split())
+except OSError:
+    done = set()
+now = time.time()
+hits = [r for rid, r in last.items() if r.get("state") == "QUEUED" and rid not in done
+        and secs <= now - (r.get("ts") or now) <= ttl]
+if not hits:
+    sys.exit(0)
+def who(r):
+    t = str(r.get("to") or "?")
+    t = t.split("/", 1)[-1] if "/" in t else t
+    return t[:8] if len(t) == 36 else t[:40]
+kinds = sorted({"回报" if r.get("kind") in ("report", "child_report") else "消息" for r in hits})
+oldest = max(int(now - (r.get("ts") or now)) for r in hits)
+text = "%d 条%s排队 %d 秒还没送达：→ %s" % (len(hits), "/".join(kinds), oldest,
+                                     "、".join(sorted({who(r) for r in hits}))[:160])
+detail = sorted({str(r.get("detail") or "") for r in hits} - {""})
+nxt = (detail[0] + " · " if detail else "") + "对方能收时自动补送；fleet-peer-queue.sh status 看队列"
+rc = subprocess.run(["python3", bindir + "/fleet_notice.py", "notify", "warn", text, "--next", nxt,
+                     "--kind", "alert", "--source", "peer-queue", "--tag", "peerq-stale", "--no-draw"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=20).returncode
+if rc == 0:
+    with open(alerted, "a", encoding="utf-8") as f:
+        f.write("".join(r["rid"] + "\n" for r in hits))
+    print("peer-queue: said %d queued send(s) older than %ds" % (len(hits), secs))
+PY
+    exit 0 ;;
+
   drain) ;;
-  *) die 2 "usage: fleet-peer-queue.sh put|drain|note|wait|status|pending -L <sess> …" ;;
+  *) die 2 "usage: fleet-peer-queue.sh put|drain|note|wait|status|pending|stale -L <sess> …" ;;
 esac
 
 # --- drain -------------------------------------------------------------------------
