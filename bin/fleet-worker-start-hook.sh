@@ -102,6 +102,10 @@ ctx = head + (
     "READY; never merge red.\n"
     "4. Report: the fleet tool `report` (`state: merged`, `pr`, `summary`) right after the merge — "
     "%s. Blocked: `ask`, then `report` (`state: blocked`). Then stop.\n"
+    "If the task has a design page whose 上线后怎么验收 card you fill: after the switch shoot each "
+    "item you mark done / passed on PRODUCTION (Playwright on the live URL, phone 390 + desktop "
+    "1440, its `screenshots`), publish them with the page to the same 活页, and run "
+    "`epic-page-surface.sh --lint` on it — a `task-evidence-shot` WARN must be fixed before you report.\n"
     "Never claim, comment on or close a GitHub issue yourself, and never file one: the fleet keeps "
     "no issue state (issue #4898). Do it yourself; never ask the person to run anything."
 ) % (names, closes)

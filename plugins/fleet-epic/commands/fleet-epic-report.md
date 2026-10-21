@@ -266,8 +266,9 @@ Item 3 in detail — the evidence grid (issue #810):
   - **已上线** is yours, once. When the member's repo has a deploy signal
     (`FLEET_DEPLOY_REF` / `FLEET_DEPLOY_CHECK`, #541 — per repo in a multi-repo
     fleet, from its `repos/<slug>.conf`, #805) and the member's deploy state
-    is green, capture ONE shot from prod along the same line the worker followed
-    and save it beside the report page (`<dir>/evidence/<key>/live-….png`). No deploy
+    is green, capture the shot from prod along the same line the worker followed —
+    Playwright on the live URL, phone 390 AND desktop 1440 (A300) — and save the
+    pair beside the report page (`<dir>/evidence/<key>/live-390.png`, `live-1440.png`). No deploy
     signal, not yet green, or prod unreachable from this machine → a `.none` cell
     reading **未取到** and the reason — try once, report what happened.
   - **Getting the files into the page**: copy each PR's images into

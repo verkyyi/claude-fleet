@@ -202,7 +202,15 @@
    "what": "三层演练：上一层关掉后回报照样送到",
    "where": "演练会话 A 开 B、B 开 C；关掉 B 并让新会话领用 B 的临时编号；C 报完成，抓下 A 窗口收到的那一条",
    "pass": "A 窗口收到 C 的完成回报，原文一字不差",
-   "status": "pending"
+   "status": "pending",
+   "screenshots": [
+    {
+     "url": "https://⟨线上地址⟩",
+     "mobile": "shots/1-390.png",
+     "desktop": "shots/1-1440.png",
+     "caption": "A 窗口收到的那一条"
+    }
+   ]
   },
   {
    "what": "无主回报不再增加",

@@ -33,7 +33,8 @@ The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole 
   charter {do [li], dont [li]} · members [{key, name, line, what, compare?,
   tech [[label, text]]}] · risks [{head, text}] · risks_tech [li] ·
   signoff [[事项, 建议] | {q, rec, default, options [..]}] · signoff_note · evidence [{what, where, pass, status
-  (pending | done | failed), proof? {img | text | html | url, caption}}] ·
+  (pending | done | passed | failed), proof? {img | text | html | url, caption}, screenshots?
+  [{url, mobile, desktop, caption?, at?}]}] ·
   evidence_note · feedback {table, version, poll} · replies_done {item: {state
   (adopted | declined), note}} · footer · css (the prototypes' own rules, one
   <style> after the frame's).
@@ -42,6 +43,10 @@ The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole 
   evidence no step owns goes in `other`, grouped by kind (code · log · scene ·
   ref). The 上线证据 is the 「上线后怎么验收」 card: one item per proof, its 通过标准,
   a status and a slot the worker fills after the switch — the report's 已上线.
+  A300: an item done / passed carries `screenshots` — the PRODUCTION page shot after
+  the switch (Playwright on the live URL), phone 390 + desktop 1440 as a pair, each a
+  path beside the page or a file of the same live page; drawn as thumbnails that open
+  full size. Without them the lint WARNs task-evidence-shot.
   `feedback` makes the page answer itself (a live page): 「有意见」 under every step
   and card, 按建议 / 改成… on every 需要你定的事 row, one 点头 button — each POSTs
   {item, choice, note, version} to ./_data/<table> (members-only); item keys are
@@ -196,7 +201,33 @@ def detail(v):
     return ul(v) if isinstance(v, list) else "<p>%s</p>\n" % v
 
 
-STATUS = {"pending": ("待取", "muted"), "done": ("已取", ""), "failed": ("未通过", "crit")}
+STATUS = {"pending": ("待取", "muted"), "done": ("已取", ""), "passed": ("已通过", ""), "failed": ("未通过", "crit")}
+VIEWPORTS = (("mobile", "390", "手机 390"), ("desktop", "1440", "桌面 1440"))
+
+
+def shots(items):
+    """线上实拍 (A300): each item a pair {url, mobile, desktop, caption} — the production page
+    shot after the switch at 390 and 1440 wide, a path beside the page or a file of the same
+    live page. Each picture is a thumbnail that opens full size; a lone string is one shot."""
+    if not items:
+        return ""
+    o = ['<div class="shots">\n']
+    for s in items:
+        s = {"desktop": s} if isinstance(s, str) else s
+        o.append('<div class="sp">')
+        for key, vp, word in VIEWPORTS:
+            if s.get(key):
+                src = html.escape(s[key], quote=True)
+                o.append('<a class="shot" href="%s" target="_blank" rel="noopener"><img src="%s" alt="%s" data-vp="%s" loading="lazy"><span>%s</span></a>'
+                         % (src, src, word, vp, word))
+        cap = s.get("caption", "")
+        if s.get("url"):
+            cap += (" · " if cap else "") + '<a href="%s">线上地址</a>' % html.escape(s["url"], quote=True)
+        if s.get("at"):
+            cap += (" · " if cap else "") + html.escape(s["at"])
+        o.append('<p class="scap">线上实拍%s</p></div>\n' % ("：" + cap if cap else ""))
+    o.append("</div>\n")
+    return "".join(o)
 
 
 def proof(p):
@@ -226,12 +257,13 @@ def accept(items, lede, live=True):
     o = ['<h2>上线后怎么验收</h2>\n<p class="lede">%s</p>\n<div class="acc">\n' % lede]
     for i, e in enumerate(items, 1):
         word, cls = STATUS.get(e.get("status") or "pending", (e.get("status"), "muted"))
-        o.append('<div class="ev"><div class="eh"><span class="en">%d</span><strong>%s</strong>%s</div>\n<dl class="kv">\n'
-                 % (i, e.get("what", ""), '<span class="pill %s">%s</span>' % (cls, word) if live else ""))
+        o.append('<div class="ev"%s><div class="eh"><span class="en">%d</span><strong>%s</strong>%s</div>\n<dl class="kv">\n'
+                 % (' data-status="%s"' % html.escape(e.get("status") or "pending", quote=True) if live else "",
+                    i, e.get("what", ""), '<span class="pill %s">%s</span>' % (cls, word) if live else ""))
         if e.get("where"):
             o.append("  <dt>在哪取</dt><dd>%s</dd>\n" % e["where"])
         o.append('  <dt>通过标准</dt><dd>%s</dd>\n</dl>\n' % (e.get("pass") or '<span class="miss">（未写）</span>'))
-        o.append((proof(e.get("proof")) if live else "") + "</div>\n")
+        o.append((proof(e.get("proof")) + shots(e.get("screenshots")) if live else "") + "</div>\n")
     o.append("</div>\n")
     return "".join(o)
 
@@ -646,7 +678,7 @@ class Words(HTMLParser):
         elif tag in ("p", "footer"):
             t = self.text()
             if t:
-                self.emit(("  " if self.xd else "") + t)
+                self.emit(("  " if self.xd or "ev" in self.divs else "") + t)
 
     def handle_data(self, d):
         if not self.skip:
