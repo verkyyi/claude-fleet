@@ -1,13 +1,21 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -53,14 +61,33 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, chatViewRoute, status, code, msg)
 		return
 	}
-	from := 0
-	if f := r.URL.Query().Get("from"); f != "" {
-		n, err := strconv.Atoi(f)
-		if err != nil || n < 0 {
-			s.chatRefuse(w, person, chatViewRoute, http.StatusBadRequest, "bad_from", "from is a count")
+	// where the page is in the record (task YP39): ?at=<byte>&s=<conversation> a
+	// page back from a drop, ?before=<byte> one page further back (JSON) — each a
+	// byte offset, s a conversation id; ?from=<count> is an older page's, passed on
+	fwd := url.Values{}
+	for _, k := range []string{"at", "before", "from"} {
+		if v := r.URL.Query().Get(k); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err != nil || n < 0 {
+				s.chatRefuse(w, person, chatViewRoute, http.StatusBadRequest, "bad_from", k+" is a byte offset")
+				return
+			}
+			fwd.Set(k, v)
+		}
+	}
+	// ?tool=<id>: one step's whole output, when the page opens it (JSON)
+	if v := r.URL.Query().Get("tool"); v != "" {
+		if !chatViewTool.MatchString(v) {
+			s.chatRefuse(w, person, chatViewRoute, http.StatusBadRequest, "bad_target", "tool is a step id")
 			return
 		}
-		from = n
+		fwd.Set("tool", v)
+	}
+	if v := r.URL.Query().Get("s"); v != "" {
+		if !chatViewSID.MatchString(v) {
+			s.chatRefuse(w, person, chatViewRoute, http.StatusBadRequest, "bad_from", "s is a conversation id")
+			return
+		}
+		fwd.Set("s", v)
 	}
 	home, ok, err := s.Store.EntryHomeOf(person)
 	if err != nil {
@@ -79,6 +106,12 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fid := target[len(control.TermWorkerTarget("")):]
+	// the copy beside the entry (task YP39): what the page drew last time, from
+	// here, before the session's machine is reached at all
+	if r.URL.Query().Get("cached") == "1" {
+		s.handleChatViewCached(w, r, person, wid)
+		return
+	}
 	where := dest.Machine + "/" + dest.Login
 	if peer, ok := s.chatRelayPeer(r, dest.Machine, dest.Login); ok {
 		s.proxyRelay(w, r, peer, "a chat view to "+where)
@@ -130,13 +163,28 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 			out := pr.Out
 			out.URL.Scheme, out.URL.Host, out.Host = "http", "webchat", "webchat"
 			out.URL.Path, out.URL.RawPath = "/api/view", ""
-			out.URL.RawQuery = url.Values{"fid": {fid}, "from": {strconv.Itoa(from)}}.Encode()
+			q := url.Values{"fid": {fid}}
+			for k, v := range fwd {
+				q[k] = v
+			}
+			out.URL.RawQuery = q.Encode()
 			out.Header = http.Header{}
 			out.Header.Set("Accept", "text/event-stream")
 			out.Header.Set(control.ChatPersonHeader, person)
 		},
 		Transport:     one,
 		FlushInterval: -1,
+		ModifyResponse: func(resp *http.Response) error {
+			// the first frame of a fresh read — the newest stretch, in place — is
+			// kept as the copy (the record stays the session's machine's)
+			if resp.StatusCode == http.StatusOK && fwd.Get("before") == "" && fwd.Get("tool") == "" && viewAsAsked(r) == "" && !s.consoleTicketCookie(r) && s.chatMirrorOn(person) {
+				taken := time.Now()
+				resp.Body = &chatViewTee{ReadCloser: resp.Body, done: func(b []byte) {
+					s.chatViewKeep(person, wid, b, taken)
+				}}
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			var re *sshRelayError
 			switch {
@@ -153,7 +201,68 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	rp.ServeHTTP(w, r)
+	gz := &chatViewGzip{ResponseWriter: w}
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		rp.ModifyResponse = chainModify(rp.ModifyResponse, func(resp *http.Response) error {
+			if resp.StatusCode == http.StatusOK && resp.Header.Get("Content-Encoding") == "" {
+				resp.Header.Del("Content-Length")
+				resp.Header.Set("Content-Encoding", "gzip")
+				resp.Header.Add("Vary", "Accept-Encoding")
+				gz.on = true
+			}
+			return nil
+		})
+	}
+	rp.ServeHTTP(gz, r)
+	gz.close()
+}
+
+// chatViewGzip compresses a view's answer on its way to the page (task YP39:
+// the entry is far from the person; a first frame is mostly repeated words),
+// flushed event by event so the stream stays live. Off until the answer is
+// one to compress, so a refusal goes out as written.
+type chatViewGzip struct {
+	http.ResponseWriter
+	on bool
+	zw *gzip.Writer
+}
+
+func (g *chatViewGzip) Write(b []byte) (int, error) {
+	if !g.on {
+		return g.ResponseWriter.Write(b)
+	}
+	if g.zw == nil {
+		g.zw = gzip.NewWriter(g.ResponseWriter)
+	}
+	return g.zw.Write(b)
+}
+
+func (g *chatViewGzip) Flush() {
+	if g.zw != nil {
+		_ = g.zw.Flush()
+	}
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (g *chatViewGzip) close() {
+	if g.zw != nil {
+		_ = g.zw.Close()
+	}
+}
+
+// chainModify runs a, then b, on a proxied answer.
+func chainModify(a, b func(*http.Response) error) func(*http.Response) error {
+	if a == nil {
+		return b
+	}
+	return func(resp *http.Response) error {
+		if err := a(resp); err != nil {
+			return err
+		}
+		return b(resp)
+	}
 }
 
 // chatViewRecheck ends a view once its person no longer signs in or the
@@ -181,4 +290,116 @@ func (s *Server) chatViewRecheck(ctx context.Context, stop func(), r *http.Reque
 			return
 		}
 	}
+}
+
+// chatViewSID is a conversation id as the session's machine names one;
+// chatViewTool a step's id.
+var (
+	chatViewSID  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
+	chatViewTool = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,120}$`)
+)
+
+// chatViewFirstMax bounds the first frame the entry reads to copy.
+const chatViewFirstMax = 2 << 20
+
+// chatViewTee passes a view's stream through to the page and hands its first
+// fresh frame ({"t":"items","replace":true,…}) to done, once.
+type chatViewTee struct {
+	io.ReadCloser
+	buf  bytes.Buffer
+	done func([]byte)
+}
+
+func (t *chatViewTee) Read(p []byte) (int, error) {
+	n, err := t.ReadCloser.Read(p)
+	if n > 0 && t.done != nil {
+		t.buf.Write(p[:n])
+		for t.done != nil {
+			i := bytes.Index(t.buf.Bytes(), []byte("\n\n"))
+			if i < 0 {
+				if t.buf.Len() > chatViewFirstMax {
+					t.done, t.buf = nil, bytes.Buffer{}
+				}
+				break
+			}
+			ev := t.buf.Next(i + 2)
+			for _, line := range bytes.Split(ev, []byte("\n")) {
+				data, ok := bytes.CutPrefix(line, []byte("data: "))
+				if !ok || !bytes.HasPrefix(data, []byte(`{"t":"items"`)) {
+					continue
+				}
+				var f struct {
+					Replace bool `json:"replace"`
+				}
+				d := t.done
+				t.done, t.buf = nil, bytes.Buffer{}
+				// a page come back gets what was added only: nothing to copy
+				if json.Unmarshal(data, &f) == nil && f.Replace {
+					d(append([]byte(nil), data...))
+				}
+				break
+			}
+			if t.done == nil {
+				break
+			}
+		}
+	}
+	return n, err
+}
+
+// chatViewKeep copies a terminal session's first frame for person, the
+// conversation copy's rules item for item (chatMirrorItem: words, replies, one
+// line a step — never a step's output), sealed to them under its worker id.
+func (s *Server) chatViewKeep(person, wid string, frame []byte, now time.Time) {
+	var in struct {
+		Session string            `json:"session"`
+		Items   []json.RawMessage `json:"items"`
+	}
+	if json.Unmarshal(frame, &in) != nil {
+		return
+	}
+	doc := chatMirrorDoc{Session: in.Session, Items: []json.RawMessage{}}
+	left := chatMirrorThumbMax
+	for i := len(in.Items) - 1; i >= 0; i-- {
+		if it, ok := chatMirrorItem(in.Items[i], &left); ok {
+			doc.Items = append(doc.Items, it)
+		}
+	}
+	slices.Reverse(doc.Items)
+	sealed, err := s.Vault.SealPerson(doc, person, chatMirrorPurpose)
+	if err != nil {
+		log.Printf("fleet: chat view copy of %s: seal: %v", person, err)
+		return
+	}
+	if err := s.Store.PutChatMirrorOf(person, store.ChatMirrorViewPrefix+wid, sealed, now.Add(chatMirrorKeep), now); err != nil {
+		log.Printf("fleet: chat view copy of %s: keep: %v", person, err)
+	}
+}
+
+// handleChatViewCached answers GET /v1/chat/view?worker=<id>&cached=1: the
+// person's copy of that session, as JSON — or no items and "mirror": null.
+func (s *Server) handleChatViewCached(w http.ResponseWriter, r *http.Request, person, wid string) {
+	w.Header().Set("Cache-Control", "no-store")
+	if viewAsAsked(r) != "" {
+		s.chatRefuse(w, person, chatViewRoute+" cached", http.StatusForbidden, "not_yours", "only your own conversation")
+		return
+	}
+	if !s.chatMirrorOn(person) {
+		chatNoCopy(w)
+		return
+	}
+	c, err := s.Store.ChatMirrorOf(person, store.ChatMirrorViewPrefix+wid, time.Now())
+	if err != nil || c == nil {
+		chatNoCopy(w)
+		return
+	}
+	var doc chatMirrorDoc
+	if err := s.Vault.OpenPerson(c.Sealed, &doc, person, chatMirrorPurpose); err != nil {
+		chatNoCopy(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": doc.Session, "items": doc.Items,
+		"mirror": map[string]any{"at": c.UpdatedAt.UTC().Format(time.RFC3339)},
+	})
 }

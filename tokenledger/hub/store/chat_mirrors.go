@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -109,8 +110,17 @@ func (s *Store) DeleteChatMirror(pid string) error {
 			return err
 		}
 	}
-	return nil
+	// the copies of terminal sessions' conversations read along (task YP39),
+	// one row a session: <pid>#view:<worker id>
+	lo := ChatMirrorKey(pid, ChatMirrorViewPrefix)
+	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(lo)
+	_, err := s.write.Exec(`DELETE FROM hub_chat_mirrors WHERE principal LIKE ? ESCAPE '\'`, esc+"%")
+	return err
 }
+
+// ChatMirrorViewPrefix is the provider a terminal session's copy is kept
+// under, followed by its worker id (task YP39).
+const ChatMirrorViewPrefix = "view:"
 
 // ChatMirrorOff says whether pid turned the copy off.
 func (s *Store) ChatMirrorOff(pid string) (bool, error) {

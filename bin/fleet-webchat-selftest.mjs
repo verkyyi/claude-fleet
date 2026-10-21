@@ -70,8 +70,11 @@
 //      version and a preview kept as an image; a link that is not https is dropped;
 //      pages.json remembers the folder and the file's page, which page_target answers
 //   V  只读 (task F481): /api/view?fid= follows a terminal session's record as SSE — the
-//      state, the record so far (id = its count), a line added after in under 3 s; ?from=
-//      sends nothing twice; busy and a closed window are said; a Codex rollout reads too
+//      state, the newest stretch in place (at = the byte read to), a line added after in
+//      under 3 s; ?at= sends nothing twice; a long record's first answer is its newest 200,
+//      ?before= the page before, a step's output its start (?tool= the whole) (task YP39);
+//      busy and a closed window are said; a Codex
+//      rollout reads too
 //   X  接管 / 交回 (task VV8F): /api/takeover · /api/giveback by a window's fid — refused
 //      while the terminal answers, one of two at once (409 taking), to-web without a page,
 //      give-back by the window; done twice is 200 already
@@ -630,7 +633,9 @@ echo "no such window" >&2; exit 2
   ok(nf.status === 404 && JSON.parse(nf.body).code === "no_session", "V a window not on this login is 404 no_session");
   // the record so far, then a line the terminal adds, within the 3 s the page promises
   const items = (evs) => evs.filter((e) => e.t === "items");
-  const grow = setTimeout(() => appendFileSync(join(vdir, VID + ".jsonl"),
+  const VFILE = join(vdir, VID + ".jsonl");
+  const size0 = statSync(VFILE).size;
+  const grow = setTimeout(() => appendFileSync(VFILE,
     line({ type: "assistant", message: { content: [{ type: "text", text: "又说了一句" }] } })), 600);
   const t0 = Date.now();
   let f = await follow(`fid=${FID}`, (evs) => items(evs).some((e) => e.items.some((i) => i.d === "又说了一句")));
@@ -638,19 +643,61 @@ echo "no such window" >&2; exit 2
   const first = items(f.evs)[0];
   ok(f.evs[0]?.t === "state" && f.evs[0].agent === "claude" && f.evs[0].session === VID && f.evs[0].label === "scratch-7",
     `V first the state: which agent, which conversation (${JSON.stringify(f.evs[0])})`);
-  ok(first?.from === 0 && first.id === 4 && first.items.map((i) => i.t).join(",") === "user,tool,tool_result,text",
-    `V then the record so far, id = its count (${JSON.stringify(first)})`);
+  ok(first?.replace === true && first.at === size0 && first.id === size0 && first.older === 0 && first.session === VID &&
+    first.items.map((i) => i.t).join(",") === "user,tool,tool_result,text",
+    `V then the record so far, in place of what the page had; at = the byte read to (${JSON.stringify(first)})`);
+  const size1 = statSync(VFILE).size;
   const added = items(f.evs).find((e) => e.items.some((i) => i.d === "又说了一句"));
-  ok(added?.from === 4 && added.id === 5 && Date.now() - t0 < 3000, `V a line the terminal adds arrives, from 4, in under 3 s (${Date.now() - t0} ms)`);
-  // back from a drop with ?from=: nothing twice; then it answers — the state says so
+  ok(added && !added.replace && added.at === size1 && added.items.length === 1 && Date.now() - t0 < 3000,
+    `V a line the terminal adds arrives alone, at its end, in under 3 s (${Date.now() - t0} ms)`);
+  // back from a drop with ?at= (same conversation): nothing twice; then it answers — the state says so
   setTimeout(() => writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: VID, busy: true, state: "working", label: "scratch-7", holder: "" })), 300);
-  f = await follow(`fid=${FID}&from=5`, (evs) => evs.some((e) => e.t === "state" && e.busy));
-  ok(items(f.evs).length === 1 && items(f.evs)[0].from === 5 && items(f.evs)[0].items.length === 0 && items(f.evs)[0].id === 5 && !f.evs.some((e) => e.t === "reset"),
-    `V ?from=5: no line again (${JSON.stringify(items(f.evs))})`);
+  f = await follow(`fid=${FID}&at=${size1}&s=${VID}`, (evs) => evs.some((e) => e.t === "state" && e.busy));
+  ok(items(f.evs).length === 1 && !items(f.evs)[0].replace && items(f.evs)[0].items.length === 0 && items(f.evs)[0].at === size1 && !f.evs.some((e) => e.t === "reset"),
+    `V ?at=: no line again (${JSON.stringify(items(f.evs))})`);
   ok(f.evs.some((e) => e.t === "state" && e.busy === true && e.state === "working"), "V the terminal answering: a state with busy");
+  // ?at= of another conversation: from this one's end, in place
+  f = await follow(`fid=${FID}&at=3&s=99999999-6666-4555-8444-333333333333`, (evs) => items(evs).length > 0);
+  ok(items(f.evs)[0]?.replace === true && items(f.evs)[0].items.length === 5, "V ?at= of another conversation: the newest stretch, in place");
+  // a long record (task YP39): the first answer is the newest 200 items read from its end; ?before= the page before
+  const LID = "77777777-6666-4555-8444-444444444444";
+  let long = "";
+  for (let i = 0; i < 400; i++) long += line({ type: i % 2 ? "assistant" : "user", message: { content: i % 2 ? [{ type: "text", text: `答 ${i}` }] : `问 ${i}` } });
+  writeFileSync(join(vdir, LID + ".jsonl"), long);
+  writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: LID, busy: false, state: "done", label: "scratch-7", holder: "" }));
+  f = await follow(`fid=${FID}`, (evs) => items(evs).some((e) => e.session === LID));
+  const lf = items(f.evs).find((e) => e.session === LID);
+  ok(lf?.replace && lf.items.length === 200 && (lf.items[0].text || lf.items[0].d) === "问 200" && lf.older > 0,
+    `V a long record: the newest 200, older from byte ${lf?.older} (${lf?.items.length} · ${JSON.stringify(lf?.items[0])})`);
+  const old1 = JSON.parse((await sreq(`/api/view?fid=${FID}&before=${lf.older}`)).body);
+  ok(old1.items.length === 200 && (old1.items.at(-1).text || old1.items.at(-1).d) === "答 199" && old1.older === 0 && old1.session === LID,
+    `V ?before=: the 200 before, joined end to end, then none older (${old1.items.length} · ${old1.older})`);
+  ok((await sreq(`/api/view?fid=${FID}&before=-1`)).status === 400, "V a bad ?before= is 400");
+  // a step's output: its start read along, the whole when it is opened (?tool=)
+  const TID2 = "77777777-6666-4555-8444-666666666666", big = "x".repeat(1000) + "END";
+  writeFileSync(join(vdir, TID2 + ".jsonl"), line({ type: "user", message: { content: "跑一下" } }) +
+    line({ type: "assistant", message: { content: [{ type: "tool_use", id: "tb1", name: "Bash", input: { command: "yes" } }] } }) +
+    line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tb1", content: big }] } }));
+  writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: TID2, busy: false, state: "done", label: "scratch-7", holder: "" }));
+  f = await follow(`fid=${FID}`, (evs) => items(evs).some((e) => e.session === TID2));
+  const tr = items(f.evs).find((e) => e.session === TID2)?.items.find((i) => i.t === "tool_result");
+  ok(tr?.more === true && tr.text.length < 200 && !tr.text.includes("END"), `V a long step output: its start only, marked more (${tr?.text.length})`);
+  const whole = await sreq(`/api/view?fid=${FID}&tool=tb1`);
+  ok(whole.status === 200 && JSON.parse(whole.body).text.endsWith("END"), "V ?tool=: the step's whole output");
+  ok((await sreq(`/api/view?fid=${FID}&tool=nope`)).status === 404 && (await sreq(`/api/view?fid=${FID}&tool=a%20b`)).status === 400,
+    "V ?tool= of no step is 404, of a bad id 400");
+  // a session that has said nothing yet: an empty first answer at once, its record once there
+  const NID = "77777777-6666-4555-8444-555555555555";
+  writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: NID, busy: false, state: "idle", label: "scratch-7", holder: "" }));
+  setTimeout(() => writeFileSync(join(vdir, NID + ".jsonl"), line({ type: "user", message: { content: "第一句" } })), 500);
+  f = await follow(`fid=${FID}`, (evs) => items(evs).some((e) => e.items.some((i) => i.text === "第一句")), 8000);
+  // (the window's last answer comes first — the conversation it ran a moment ago — then this one's)
+  const nr = items(f.evs).filter((e) => e.session === NID);
+  ok(nr[0]?.replace && nr[0].items.length === 0 && nr.some((e) => e.replace && e.items.some((i) => i.text === "第一句")),
+    `V no record yet: an empty first answer, then its first line in place (${JSON.stringify(nr)})`);
   // the window closed while watched: gone, and the stream ends
   setTimeout(() => unlinkSync(VIEW), 300);
-  f = await follow(`fid=${FID}&from=5`, (evs) => evs.some((e) => e.t === "gone"));
+  f = await follow(`fid=${FID}`, (evs) => evs.some((e) => e.t === "gone"));
   ok(f.evs.some((e) => e.t === "gone"), "V the window closed: {t:gone}");
   // a Codex session: its rollout, read the same way (R9A2's reader)
   const THR = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001", rdir = join(CODEXH, "sessions", "2026", "10", "21");

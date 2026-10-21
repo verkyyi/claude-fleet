@@ -511,19 +511,42 @@ async function ownerNow(agent = "claude", sid = conv.session) {
   ownerSeen[agent] = { at: Date.now(), sid, v: o };
   return o;
 }
-// a session's transcript wherever Claude Code put it, and the cwd it ran in
+// a session's transcript wherever Claude Code put it, and the cwd it ran in.
+// Every project dir is asked at once (a stat, not a read: 699 dirs took 160–220
+// ms read one by one — task YP39); the cwd is the first line that names one,
+// looked for in the head before the whole file.
 async function findTranscript(id) {
   let dirs = [];
   try { dirs = await fsp.readdir(PROJECTS); } catch { return null; }
-  for (const d of dirs) {
-    const f = join(PROJECTS, d, `${id}.jsonl`);
-    let raw; try { raw = await fsp.readFile(f, "utf8"); } catch { continue; }
-    for (const line of raw.split("\n")) {
-      if (!line.includes('"cwd"')) continue;
-      try { const m = JSON.parse(line); if (typeof m.cwd === "string" && m.cwd) return { file: f, cwd: m.cwd }; } catch { /* next */ }
-    }
+  const hits = await Promise.all(dirs.map((d) => fsp.stat(join(PROJECTS, d, `${id}.jsonl`)).then((st) => st.isFile(), () => false)));
+  for (let i = 0; i < dirs.length; i++) {
+    if (!hits[i]) continue;
+    const f = join(PROJECTS, dirs[i], `${id}.jsonl`);
+    const cwd = await headCwd(f, (line) => { const m = JSON.parse(line); return typeof m.cwd === "string" ? m.cwd : ""; }, '"cwd"');
+    if (cwd) return { file: f, cwd };
   }
   return null;
+}
+// the first value `pick` finds on a line of the file's head (256 KB), else of the whole
+async function headCwd(file, pick, needle = "") {
+  const scan = (text) => {
+    for (const line of text.split("\n")) {
+      if (!line || (needle && !line.includes(needle))) continue;
+      try { const v = pick(line); if (v) return v; } catch { /* next */ }
+    }
+    return "";
+  };
+  let fh;
+  try {
+    fh = await fsp.open(file, "r");
+    const buf = Buffer.alloc(256 * 1024);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    const head = buf.subarray(0, bytesRead);
+    const nl = head.lastIndexOf(10);
+    const v = scan(head.subarray(0, nl >= 0 ? nl : 0).toString("utf8"));
+    if (v || bytesRead < buf.length) return v;
+  } catch { return ""; } finally { await fh?.close().catch(() => {}); }
+  try { return scan(await fsp.readFile(file, "utf8")); } catch { return ""; }
 }
 // 在 WebChat 里继续: the terminal's session becomes this page's Claude conversation;
 // the one it had is put away and kept, the same rule as 新对话
@@ -562,18 +585,138 @@ const FID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const VIEW_POLL_MS = Number(E.FLEET_WEBCHAT_VIEW_POLL_MS || 500);
 const VIEW_STATE_MS = Number(E.FLEET_WEBCHAT_VIEW_STATE_MS || 2000);
 const VIEW_PING_MS = 15000;
-const VIEW_FIRST = 600;                                    // the first answer: at most the last 600 items
+// The first answer (task YP39): the newest items only, read from the record's
+// end — the whole record was read and parsed before, 0.1–0.4 s and 136–400 KB
+// on a long one. Older ones come a page at a time (?before=).
+const VIEW_FIRST = Number(E.FLEET_WEBCHAT_VIEW_FIRST || 200);
+const VIEW_TAIL = 512 * 1024;                              // the first read's reach back, ×4 until it holds VIEW_FIRST
+const VIEW_TAIL_MAX = 64 * 1024 * 1024;
 const VIEW_READ_MAX = 8 * 1024 * 1024;                     // one read of a growing record
+// A step's output is the bulk of a record (60–75% of a first answer): read along,
+// a step carries its start only, and the rest when it is opened (?tool=<id>).
+const VIEW_RESULT_MAX = 160;
+const TOOL_ID_RE = /^[A-Za-z0-9_.:-]{1,120}$/;
+const VIEW_LOOK_MS = 3000;                                 // a record not found yet, looked for again
+const VIEW_KNOWN_MS = 10 * 60 * 1000;                      // a window's last answer, used at once while this fresh
+const viewKnown = new Map();                               // fid → { w, at }
+const viewFiles = new Map();                               // agent:sid → { file, cwd }
 // null: no such window here; undefined: could not tell
 async function viewOf(fid) {
   const r = await run(HANDOFF, ["view-of", `fid:${fid}`]);
-  if (r.rc === 2) return null;
-  try { const j = JSON.parse(r.stdout); return j && typeof j === "object" ? j : undefined; } catch { return undefined; }
+  if (r.rc === 2) { viewKnown.delete(fid); return null; }
+  try {
+    const j = JSON.parse(r.stdout);
+    if (!j || typeof j !== "object") return undefined;
+    viewKnown.set(fid, { w: j, at: Date.now() });
+    if (viewKnown.size > 500) viewKnown.delete(viewKnown.keys().next().value);
+    return j;
+  } catch { return undefined; }
 }
 async function viewSource(agent, sid) {
   if (!sid || !SID_RE.test(sid)) return null;
-  if (agent === "codex") return codex.viewFile(sid);
-  return findTranscript(sid);
+  const key = `${agent}:${sid}`, known = viewFiles.get(key);
+  if (known) { try { await fsp.stat(known.file); return known; } catch { viewFiles.delete(key); } }
+  let src = null;
+  if (agent === "codex") {
+    const f = codex.viewFile(sid);
+    if (f) src = { file: f.file, cwd: await headCwd(f.file, (line) => codex.viewItems([line], "").cwd || "", "cwd") };
+  } else src = await findTranscript(sid);
+  if (src) { viewFiles.set(key, src); if (viewFiles.size > 500) viewFiles.delete(viewFiles.keys().next().value); }
+  return src;
+}
+// one stretch of the record → the page's items
+function viewParse(agent, lines, cwd) {
+  const out = agent === "codex" ? codex.viewItems(lines, cwd).items : linesItems(lines, cwd || CWD);
+  if (agent !== "codex") saveRefs();
+  return out.map((i) => i.t === "tool_result" && typeof i.text === "string" && i.text.length > VIEW_RESULT_MAX
+    ? { ...i, text: i.text.slice(0, VIEW_RESULT_MAX) + "…", more: true } : i);
+}
+async function viewRead(file, start, end) {
+  const buf = Buffer.alloc(Math.max(0, end - start));
+  if (!buf.length) return buf;
+  const fh = await fsp.open(file, "r");
+  try { await fh.read(buf, 0, buf.length, start); } finally { await fh.close(); }
+  return buf;
+}
+// The newest VIEW_FIRST items before byte `end`, whole lines only: { items,
+// older } — older is where the oldest line read begins (0: the record's start),
+// the next ?before=. A Claude transcript is cut line by line to just enough; a
+// Codex rollout is read as one stretch (its reader pairs lines).
+async function viewTail(agent, src, end) {
+  for (let span = VIEW_TAIL; ; span *= 4) {
+    let start = Math.max(0, end - span);
+    const buf = await viewRead(src.file, start, end);
+    let from = 0;
+    if (start > 0) {
+      const nl = buf.indexOf(10);
+      if (nl < 0) { if (span < VIEW_TAIL_MAX) continue; return { items: [], older: 0 }; }
+      from = nl + 1;
+      start += from;
+    }
+    const stop = buf.lastIndexOf(10);
+    const text = stop >= from ? buf.subarray(from, stop).toString("utf8") : "";
+    const whole = start === 0 || span >= VIEW_TAIL_MAX;
+    if (agent === "codex") {
+      const items = viewParse(agent, text.split("\n"), src.cwd);
+      if (items.length >= VIEW_FIRST || whole) return { items, older: start };
+      continue;
+    }
+    // per line, newest first, until there are enough
+    const lines = text.split("\n");
+    const offs = [];
+    let o = start;
+    for (const l of lines) { offs.push(o); o += Buffer.byteLength(l) + 1; }
+    const parts = [];
+    let n = 0, i = lines.length - 1;
+    for (; i >= 0 && n < VIEW_FIRST; i--) { const it = viewParse(agent, [lines[i]], src.cwd); parts.push(it); n += it.length; }
+    if (n >= VIEW_FIRST || whole) return { items: parts.reverse().flat(), older: i >= 0 ? offs[i + 1] : start };
+  }
+}
+// ?tool=<id>: one step's whole output (as the chat shows it), the record read
+// back from its end until the line that carries it
+async function viewTool(res, fid, id) {
+  const k = viewKnown.get(fid);
+  const w = k ? k.w : await viewOf(fid);
+  if (w === null) return send(res, 404, { error: "这个会话不在这台机器上了", code: "no_session" });
+  if (!w) return send(res, 503, { error: "could not read the session", code: "unreadable" });
+  const src = await viewSource(w.agent, w.sid);
+  if (!src) return send(res, 404, { error: "no such step", code: "no_step" });
+  const find = (items) => items.find((i) => i.t === "tool_result" && i.id === id);
+  if (w.agent === "codex") {
+    const it = find(codex.viewItems((await fsp.readFile(src.file, "utf8")).split("\n"), src.cwd).items);
+    return it ? send(res, 200, { id, text: it.text || "", error: !!it.error }) : send(res, 404, { error: "no such step", code: "no_step" });
+  }
+  const needle = JSON.stringify(id);
+  let end = 0;
+  try { end = (await fsp.stat(src.file)).size; } catch { /* gone */ }
+  let carry = Buffer.alloc(0);
+  while (end > 0) {
+    const start = Math.max(0, end - 1024 * 1024);
+    const buf = Buffer.concat([await viewRead(src.file, start, end), carry]);
+    const nl = start > 0 ? buf.indexOf(10) : -1;
+    carry = nl >= 0 ? buf.subarray(0, nl) : Buffer.alloc(0);
+    const lines = buf.subarray(nl + 1).toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes(needle) || !lines[i].includes("tool_result")) continue;
+      const it = find(linesItems([lines[i]], src.cwd || CWD));
+      if (it) return send(res, 200, { id, text: it.text || "", error: !!it.error });
+    }
+    end = start;
+  }
+  return send(res, 404, { error: "no such step", code: "no_step" });
+}
+// ?before=<byte>: one page further back, as JSON
+async function viewOlder(res, fid, before) {
+  const k = viewKnown.get(fid);
+  const w = k ? k.w : await viewOf(fid);
+  if (w === null) return send(res, 404, { error: "这个会话不在这台机器上了", code: "no_session" });
+  if (!w) return send(res, 503, { error: "could not read the session", code: "unreadable" });
+  const src = await viewSource(w.agent, w.sid);
+  if (!src) return send(res, 200, { items: [], older: 0, session: w.sid || "" });
+  let size = 0;
+  try { size = (await fsp.stat(src.file)).size; } catch { /* gone: nothing older */ }
+  const r = await viewTail(w.agent, src, Math.min(before, size));
+  return send(res, 200, { ...r, session: w.sid || "" });
 }
 // 接管 / 交回 (task VV8F, EPIC GR5E C6): the session workspace hands a terminal
 // session's conversation to this page and back, by its window — the same roads
@@ -610,9 +753,21 @@ async function handover(req, res, person, how) {
 async function viewStream(req, res, u, person) {
   const fid = u.searchParams.get("fid") || "";
   if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
-  let from = Number(u.searchParams.get("from") || 0);
-  if (!Number.isSafeInteger(from) || from < 0) from = 0;
-  let w = await viewOf(fid);
+  const num = (k) => { const v = u.searchParams.get(k); if (v == null || v === "") return null; const n = Number(v); return Number.isSafeInteger(n) && n >= 0 ? n : NaN; };
+  const before = num("before");
+  if (Number.isNaN(before)) return send(res, 400, { error: "before is a byte offset", code: "bad_from" });
+  if (before != null) return viewOlder(res, fid, before);
+  const tool = u.searchParams.get("tool");
+  if (tool != null) return TOOL_ID_RE.test(tool) ? viewTool(res, fid, tool) : send(res, 400, { error: "not a step", code: "bad_target" });
+  // ?at=<byte> (and the conversation it was in): a page back from a drop carries on there
+  let at = num("at");
+  if (Number.isNaN(at)) return send(res, 400, { error: "at is a byte offset", code: "bad_from" });
+  const atSid = u.searchParams.get("s") || "";
+  // the window's last answer, when there is a fresh one: the first frame does not
+  // wait the second it takes to ask again (task YP39) — asked again at once below
+  const k = viewKnown.get(fid);
+  const knew = !!k && Date.now() - k.at < VIEW_KNOWN_MS;
+  let w = knew ? k.w : await viewOf(fid);
   if (w === null) return send(res, 404, { error: "这个会话不在这台机器上了", code: "no_session" });
   if (!w) return send(res, 503, { error: "could not read the session", code: "unreadable" });
   if (w.agent !== "claude" && w.agent !== "codex") return send(res, 409, { error: "this agent's conversation cannot be read here", code: "agent" });
@@ -624,12 +779,13 @@ async function viewStream(req, res, u, person) {
     label: w.label || "", holder: w.holder || "" });
   let said = stateOf();
   res.write(`data: ${said}\n\n`);
-  log("view", { agent: w.agent, person });
-  let src = null, off = 0, cwd = "", n = 0, first = true;
-  let asking = null, askedAt = Date.now(), pinged = Date.now(), next = null;
-  const restart = () => { src = null; off = 0; n = 0; from = 0; first = true; ev({ t: "reset" }); };
+  log("view", { agent: w.agent, person, known: knew });
+  if (at != null && atSid !== (w.sid || "")) at = null;      // another conversation now: from its end
+  let src = null, off = 0, first = true, lookedAt = 0, nothingYet = false;
+  let asking = null, askedAt = knew ? 0 : Date.now(), pinged = Date.now(), next = null;
+  const restart = () => { src = null; off = 0; at = null; first = true; lookedAt = 0; nothingYet = false; ev({ t: "reset" }); };
   while (!closed) {
-    // another conversation in that window now (a /clear, a resume): from its start
+    // another conversation in that window now (a /clear, a resume): from its end
     if (next) {
       const x = next; next = null;
       if ((x.sid || "") !== (w.sid || "") || x.agent !== w.agent) restart();
@@ -637,42 +793,41 @@ async function viewStream(req, res, u, person) {
       const now = stateOf();
       if (now !== said) { said = now; ev(JSON.parse(now)); }
     }
-    if (!src && w.sid) {
-      src = await viewSource(w.agent, w.sid);
-      if (src) { off = 0; n = 0; cwd = src.cwd || ""; }
-    }
-    let fresh = [], more = false;
-    const start = n;
-    if (src) {
-      let size = -1;
-      try { size = (await fsp.stat(src.file)).size; } catch { src = null; }
-      if (size >= 0 && size < off) { restart(); continue; }  // rewritten
-      if (size > off) {
-        // the first read takes the whole record; later ones what was added, bounded
-        const len = first ? size - off : Math.min(size - off, VIEW_READ_MAX);
-        const buf = Buffer.alloc(len);
-        const fh = await fsp.open(src.file, "r");
-        try { await fh.read(buf, 0, len, off); } finally { await fh.close(); }
-        const end = buf.lastIndexOf(10);
-        if (end >= 0) {
-          off += end + 1;
-          more = off < size && len === VIEW_READ_MAX;
-          const lines = buf.subarray(0, end).toString("utf8").split("\n");
-          if (w.agent === "codex") { const r = codex.viewItems(lines, cwd); if (!cwd) cwd = r.cwd || ""; fresh = r.items; }
-          else { fresh = linesItems(lines, cwd || CWD); saveRefs(); }
+    // the record, once it is there (a session that has said nothing has none):
+    // looked for again every few seconds, never on every poll
+    if (!src && w.sid && Date.now() - lookedAt >= VIEW_LOOK_MS) { lookedAt = Date.now(); src = await viewSource(w.agent, w.sid); }
+    if (nothingYet && src) { nothingYet = false; first = true; at = null; }    // there now: its newest stretch
+    let size = -1;
+    if (src) { try { size = (await fsp.stat(src.file)).size; } catch { src = null; } }
+    let more = false;
+    if (src && size >= 0) {
+      if (first && (at == null || at > size)) {
+        // the newest stretch, whole lines: the page draws it in place of what it had
+        off = await viewLastLine(src.file, size);
+        const r = await viewTail(w.agent, src, off);
+        ev({ t: "items", replace: true, items: r.items, at: off, older: r.older, session: w.sid || "" }, off);
+        first = false;
+      } else {
+        if (first) { off = at; first = false; }
+        if (size < off) { restart(); continue; }            // rewritten
+        const add = [];
+        if (size > off) {
+          const len = Math.min(size - off, VIEW_READ_MAX);
+          const buf = await viewRead(src.file, off, off + len);
+          const end = buf.lastIndexOf(10);
+          if (end >= 0) {
+            off += end + 1;
+            more = off < size && len === VIEW_READ_MAX;
+            add.push(...viewParse(w.agent, buf.subarray(0, end).toString("utf8").split("\n"), src.cwd));
+          }
         }
+        // the first frame of a page come back says so even with nothing new
+        if (add.length || at != null) { ev({ t: "items", items: add, at: off, session: w.sid || "" }, off); at = null; }
       }
-    }
-    n += fresh.length;
-    if (first) {
-      // the page asked from past what there is (another conversation now): all of it again
-      if (from > n) { from = 0; ev({ t: "reset" }); }
-      const s0 = Math.max(from, n - VIEW_FIRST, 0);
-      ev({ t: "items", from: s0, items: fresh.slice(s0 - start) }, n);
-      first = false;
-    } else {
-      const skip = Math.max(0, from - start), out = fresh.slice(skip);
-      if (out.length) ev({ t: "items", from: start + skip, items: out }, n);
+    } else if (first) {
+      // nothing to read yet: the page says so instead of waiting
+      ev({ t: "items", replace: true, items: [], at: 0, older: 0, session: w.sid || "" }, 0);
+      first = false; nothingYet = true;
     }
     // the window's state, asked in the background (the script takes ~1 s)
     if (!asking && Date.now() - askedAt >= VIEW_STATE_MS) {
@@ -687,6 +842,16 @@ async function viewStream(req, res, u, person) {
     if (!more) await new Promise((r) => setTimeout(r, VIEW_POLL_MS));
   }
   if (!res.writableEnded) res.end();
+}
+// where the last whole line before `end` ends (a line still being written stays unread)
+async function viewLastLine(file, end) {
+  for (let span = 64 * 1024; ; span *= 4) {
+    const start = Math.max(0, end - span);
+    const buf = await viewRead(file, start, end);
+    const nl = buf.lastIndexOf(10);
+    if (nl >= 0) return start + nl + 1;
+    if (start === 0) return 0;
+  }
 }
 
 // ---- the one conversation ------------------------------------------------------

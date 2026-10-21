@@ -2,12 +2,15 @@ package e2e
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
 // An image in the conversation (task T773): the page fetches it by its ref
@@ -119,5 +122,54 @@ func TestChatMirrorImages(t *testing.T) {
 	}
 	if !strings.Contains(b, `"title":"周报"`) || !strings.Contains(b, `"url":"https://w.example/s/x"`) || !strings.Contains(b, `"version":2`) {
 		t.Errorf("the copy lost the page card (task T773 ④): %s", b)
+	}
+}
+
+// A file a terminal session's record names (task YP39): ?worker= reads it on the
+// login that session runs on — another of the person's own logins too, never
+// their home by default — and another person's worker is 404 not_yours, before
+// any service.
+func TestChatFileOfSession(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	enablePeople(t, h, pCarol)
+	const fuid, kfid = "66666666-6666-4666-8666-666666666666", "99999999-9999-4999-8999-999999999999"
+	kwid := fuid + "/o-r:scratch-3"
+	ws, _ := json.Marshal([]map[string]any{{"key": "o-r:scratch-3", "state": "done", "worker_id": kwid, "identity": kfid}})
+	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
+		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(ws)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// alice's home is another machine; the session's login is hers all the same
+	setChatHome(t, h, pAlice, "elsewhere", "alice")
+	if _, err := h.Srv.Store.AdoptPrincipal(pAlice, "alice", "alice", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := h.Srv.Store.DB().Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, requested_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		pAlice, host, login, store.AccountActive, now, now); err != nil {
+		t.Fatal(err)
+	}
+	setChatHome(t, h, pCarol, "elsewhere", "carol")
+	ref := strings.Repeat("ab", 16) + ".png"
+	get := func(c *http.Cookie, q string) *http.Response {
+		req, _ := http.NewRequest("GET", h.HTTP.URL+"/v1/chat/file"+q, nil)
+		req.AddCookie(c)
+		resp, err := h.HTTP.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp
+	}
+	if r := get(personCookie(pAlice, "alice"), "?ref="+ref+"&worker="+kwid); r.StatusCode != http.StatusOK {
+		t.Fatalf("alice's session's image: %d", r.StatusCode)
+	}
+	n := len(svc.seen())
+	if r := get(personCookie(pCarol, "carol"), "?ref="+ref+"&worker="+kwid); r.StatusCode != http.StatusNotFound {
+		t.Errorf("carol reading alice's session's file: %d; want 404", r.StatusCode)
+	}
+	if len(svc.seen()) != n {
+		t.Errorf("a refused file request reached the service")
 	}
 }

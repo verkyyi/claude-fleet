@@ -25,4 +25,11 @@ const files = new Map([['/Users/x/form.css', 'f' + 'a'.repeat(32)]]);
 assert.equal(linkFiles('改在 [form.css](/Users/x/form.css) 和 [网](https://e.com)', files, base),
   `改在 [form.css](https://hub.example.com/v1/chat/file?ref=f${'a'.repeat(32)}) 和 [网](https://e.com)`);
 assert.equal(linkFiles('[a](/Users/x/other.css)', files, base), '[a](/Users/x/other.css)');
+// a terminal session read along (task YP39): its files are read from the
+// machine it runs on — the entry is told which session
+const w = 'c7d372cf-903b-5229-8e55-3e286e9c026d/o-r:scratch-3';
+assert.equal(picSrc({ ref }, base, w), `https://hub.example.com/v1/chat/file?ref=${ref}&worker=${encodeURIComponent(w)}`);
+assert.equal(linkFiles('[form.css](/Users/x/form.css)', files, base, w),
+  `[form.css](https://hub.example.com/v1/chat/file?ref=f${'a'.repeat(32)}&worker=${encodeURIComponent(w)})`);
+assert.equal(kept('assistant', picSrc({ ref }, base, w)), 1, 'a session image must survive the converter');
 console.log('chat-media: ok');

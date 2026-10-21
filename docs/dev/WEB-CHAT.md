@@ -301,22 +301,32 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 会话工作区（`/app/s/<编号>?view=chat`）的「对话」看法：一个跑在终端里的会话，网页只读实时看它的记录——
 你说的、它答的、工具步骤，上方「正在终端里回答…」；发送框关着，要说话到终端里，或者接管（下一节）。
 
-- **页面**：`GET /v1/chat/view?worker=<worker id>&from=<n>`（`extras/web-console/src/app/chat/view.ts`）。浏览器只报
-  worker id，从不报机器、登录或会话号。
-- **入口**（`tokenledger/hub/api/chat_view.go`）：谁 = `termPerson`（本人，管理员也只看自己的；共用口令、只读预览都拒）；
-  会话是不是你的 = 终端的同一个 `termTarget`（家登录或你自己的另一个在线登录上报的 worker，否则一律 404
-  `not_yours`——别人的和不存在的同一个答案）；然后 `dialChatRelay` 到会话所在的那个登录，转成
-  `/api/view?fid=<窗口的 @fleet_id>&from=<n>`。那台机器的 agent 没有 chat relay = 409 `old_agent`（「这台机器还旧」一句话）；
-  维护中 / 连不上 = 503 `home_down`。每人同时最多 3 个这样的流（`<person>\x00view` 自己一条线，不占对话的名额）。
-- **家机器服务**（`server.mjs viewStream`）：`fleet-webchat-handoff.sh view-of fid:<id>` 说窗口跑的哪个 agent、哪段会话、
-  在不在答（只读，什么都不写）；记录是 Claude Code 的 transcript（`findTranscript`）或 Codex 的 rollout（`findRollout`，
-  R9A2 的读法），按字节偏移跟着读、新行即发。Server-Sent Events：`{t:"state"}` 变了才发，`{t:"items", from, items}`
-  的 `id` 是到此为止的条数；页面掉线、切后台回来带 `?from=<手里的条数>`，一条不重。窗口里换了会话（/clear、resume）=
-  `{t:"reset"}` 从头再来；窗口关了 = `{t:"gone"}`。第一次最多发最后 600 条。轮询：文件 0.5 s、窗口状态 2 s
-  （`FLEET_WEBCHAT_VIEW_POLL_MS` / `FLEET_WEBCHAT_VIEW_STATE_MS`）。
+- **页面**：`GET /v1/chat/view?worker=<worker id>`（`extras/web-console/src/app/chat/view.ts`）。浏览器只报
+  worker id，从不报机器、登录或会话号。打开时三层先后（YP39，与 KSQG 同一套 `chat/local.ts`）：本机 IndexedDB
+  里这个会话上次的记录（一侧一个会话：`view:<worker id>`；只读票据、以他的视角看不读不写）→ 入口副本
+  `?cached=1` → 那台机器的流，它的答案总是替换前两层；前两层在屏上时顶上一行「本机记录 / 上次的记录 · 同步中…」。
+  首帧画出的时刻打点 `view:first:<layer>` / `window.__fleetViewFirst`（从进会话算）。
+- **入口**（`tokenledger/hub/api/chat_view.go`）：谁 = `termPerson`（本人，管理员也只看自己的；共用口令、只读预览都拒；
+  只读控制台票据可以只读看，见 FLEET-HUB.md）；会话是不是你的 = 终端的同一个 `termTarget`（家登录或你自己的另一个
+  在线登录上报的 worker，否则一律 404 `not_yours`——别人的和不存在的同一个答案）。窗口身份取 worker 行的
+  `fleet_id`，没有就取 `identity`（清单里一直是这一项——YP39 之前带编号的 scratch-N / issue-N 会话全被 404），再没有才取
+  编号后半段。然后 `dialChatRelay` 到会话所在的那个登录，转成 `/api/view?fid=<窗口的 @fleet_id>`，带上页面的
+  `at` / `s` / `before`。那台机器的 agent 没有 chat relay = 409 `old_agent`；维护中 / 连不上 = 503 `home_down`。每人同时
+  最多 3 个这样的流。流的第一帧（新读的那一段）按对话副本的规则（只文字 + 每步一行，不存工具输出）按人密封存一份
+  （`hub_chat_mirrors` 行 `<person>#view:<worker id>`，90 天无读即删，「我的」里关掉对话副本的开关一并删）。
+- **会话所在机器的服务**（`server.mjs viewStream`）：`fleet-webchat-handoff.sh view-of fid:<id>` 说窗口跑的哪个 agent、
+  哪段会话、在不在答（约 1 s）；上次的答案 10 分钟内直接用、后台立刻再问（`viewKnown`）。记录是 Claude Code 的
+  transcript（`findTranscript`：所有项目目录同时 stat，cwd 只读文件头）或 Codex 的 rollout，路径记在 `viewFiles`。
+  第一帧 `{t:"items", replace:true, items, at, older, session}`：从文件尾倒读到够最近 200 条（`FLEET_WEBCHAT_VIEW_FIRST`），
+  整行为界；`at` = 读到的字节，`older` = 这一段开头的字节（0 = 没有更早的）。之后 `{t:"items", items, at}` 只发新增。
+  工具输出在网页里只带前 1500 字（终端里全有）。页面掉线、切后台回来带 `?at=<字节>&s=<会话>`，一条不重；换了会话
+  （/clear、resume）= `{t:"reset"}` 再从尾读；窗口关了 = `{t:"gone"}`。`?before=<字节>` 回 JSON 的再早一页（assistant-ui
+  自带的「更早的消息」）。轮询：文件 0.5 s、窗口状态 2 s（`FLEET_WEBCHAT_VIEW_POLL_MS` / `FLEET_WEBCHAT_VIEW_STATE_MS`）。
+- **图片和文件**：会话记录里的图片、文件链接的编号是会话所在那台机器的服务发的，页面取它们时带 `&worker=<id>`：
+  `/v1/chat/file?ref=…&worker=…` 按同一个 `termTarget` 送到那台机器（不带 worker 的照旧去家）。
 - 老服务没有 `/api/view`：页面收到 404 没有 code，说「这台机器的网页对话服务还旧」一句话。
-- 测试：`fleet-webchat-selftest.mjs --only=view`、`fleet-webchat-handoff-selftest.sh` 1b、e2e `TestChatView*`、
-  `extras/web-console/test/session-view.mjs`。
+- 测试：`fleet-webchat-selftest.mjs --only=view`、`fleet-webchat-handoff-selftest.sh` 1b、e2e `TestChatView*` /
+  `TestChatFileOfSession`、`console_ticket_test.go`、`extras/web-console/test/session-view.mjs` / `chat-media.mjs`。
 
 ### 接管与交回：同一时刻只有一边在说（VV8F，EPIC GR5E C6）
 

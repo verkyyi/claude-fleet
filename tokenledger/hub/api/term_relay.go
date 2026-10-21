@@ -138,8 +138,14 @@ func (s *Server) termTarget(q url.Values, home store.EntryHome) (logical, target
 			continue
 		}
 		// The window is found on the node by its @fleet_id: the row's, else
-		// the id's own second half when that is one (not a key alias).
+		// its "identity" — what the inventory sends it as, a keyed session's
+		// id being <fleet>/<key> (task YP39: every scratch-N / issue-N was
+		// 404 not_yours) — else the id's own second half when that is one
+		// (not a key alias).
 		fid, _ := wk["fleet_id"].(string)
+		if ident, _ := wk["identity"].(string); fid == "" && fleetid.IsUUID(ident) {
+			fid = ident
+		}
 		if fid == "" && !strings.ContainsAny(second, ":") && !strings.HasPrefix(second, "issue-") && !strings.HasPrefix(second, "scratch-") {
 			fid = second
 		}

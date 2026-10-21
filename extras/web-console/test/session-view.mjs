@@ -1,25 +1,36 @@
 // session-view.mjs — 只读 (task F481, src/app/chat/view-stream.ts): the
-// service's SSE blocks read, and each batch laid onto what the page holds — the
-// first answer may start past 0 (the last 600), a page back from a drop asks
-// ?from=<what it holds> and an overlap never shows twice.
+// service's SSE blocks read, and each frame laid onto what the page holds — the
+// first answer is the newest stretch in place (task YP39: read from the record's
+// end), a page back from a drop asks ?at=<the byte it holds> and what it held
+// is never shown twice; ?before= draws the page before above it.
 // Run: node --experimental-strip-types test/session-view.mjs
 import assert from 'node:assert/strict';
-import { mergeView, parseEvent } from '../src/app/chat/view-stream.ts';
+import { NOTHING, applyFrame, parseEvent, prependOlder } from '../src/app/chat/view-stream.ts';
 
-assert.deepEqual(parseEvent('id: 7\ndata: {"t":"items","from":5}'), { id: 7, data: { t: 'items', from: 5 } });
+assert.deepEqual(parseEvent('id: 7\ndata: {"t":"items","at":5}'), { id: 7, data: { t: 'items', at: 5 } });
 assert.deepEqual(parseEvent('data: {"t":"state","busy":true}'), { id: undefined, data: { t: 'state', busy: true } });
 assert.deepEqual(parseEvent(': ping'), { id: undefined });
 assert.deepEqual(parseEvent('data: {broken'), { id: undefined });
 
-let h = { base: 0, n: 0 };
-let m = mergeView(h, 0, ['a', 'b']);
-assert.deepEqual(m, { replace: false, held: { base: 0, n: 2 }, fresh: ['a', 'b'] }, 'from the start');
-m = mergeView(m.held, 2, ['c']);
-assert.deepEqual(m.fresh, ['c'], 'appended');
-m = mergeView(m.held, 1, ['b', 'c', 'd']);
-assert.deepEqual(m, { replace: false, held: { base: 0, n: 4 }, fresh: ['d'] }, 'an overlap shows only the new');
-m = mergeView(m.held, 4, []);
-assert.deepEqual(m.fresh, [], 'nothing new after a reconnect');
-assert.deepEqual(mergeView({ base: 0, n: 0 }, 900, ['x']), { replace: true, held: { base: 900, n: 1 }, fresh: ['x'] }, 'the last 600 only');
-assert.deepEqual(mergeView({ base: 0, n: 3 }, 9, ['y']), { replace: true, held: { base: 9, n: 1 }, fresh: ['y'] }, 'a gap starts over there');
+// a local record or a copy on screen, then the machine's first answer: in place
+let m = applyFrame(NOTHING, ['local-a', 'local-b'], { replace: true, items: ['a', 'b'], at: 100, older: 40, session: 's1' });
+assert.deepEqual(m, { held: { at: 100, session: 's1', older: 40 }, items: ['a', 'b'] }, 'the first answer replaces what was drawn');
+let cur = m.items;
+m = applyFrame(m.held, cur, { items: ['c'], at: 130, session: 's1' });
+assert.deepEqual(m, { held: { at: 130, session: 's1', older: 40 }, items: ['a', 'b', 'c'] }, 'appended');
+cur = m.items;
+// back from a drop at 130: nothing new, and a frame for a byte already read changes nothing
+assert.equal(applyFrame(m.held, cur, { items: [], at: 130, session: 's1' }).items, null, 'nothing new after a reconnect');
+assert.equal(applyFrame(m.held, cur, { items: ['c'], at: 120, session: 's1' }).items, null, 'never twice');
+// another conversation in that window: its stretch, in place, even without replace
+m = applyFrame(m.held, cur, { items: ['x'], at: 9, session: 's2' });
+assert.deepEqual(m, { held: { at: 9, session: 's2', older: 0 }, items: ['x'] }, 'a new conversation starts over');
+
+// the page before: only the one asked for, of the same conversation
+const h = { at: 100, session: 's1', older: 40 };
+assert.deepEqual(prependOlder(h, ['a'], 40, { items: ['y', 'z'], older: 0, session: 's1' }),
+  { held: { at: 100, session: 's1', older: 0 }, items: ['y', 'z', 'a'] }, 'the page before, above');
+assert.equal(prependOlder(h, ['a'], 30, { items: ['y'], older: 0, session: 's1' }), null, 'a stale page is dropped');
+assert.equal(prependOlder(h, ['a'], 40, { items: ['y'], older: 0, session: 's9' }), null, 'another conversation\'s page is dropped');
+assert.equal(prependOlder(NOTHING, ['a'], 0, { items: ['y'], session: '' }), null, 'nothing from the machine yet: no page before');
 console.log('session-view: ok');

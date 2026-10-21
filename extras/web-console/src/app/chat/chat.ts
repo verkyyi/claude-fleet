@@ -37,7 +37,8 @@ export type Item =
   | PageCard
   | { t: "text"; d: string }
   | { t: "tool"; id: string; name: string; summary?: string }
-  | { t: "tool_result"; id: string; text?: string; error?: boolean }
+  // more: a terminal session read along carries its output's start only (task YP39)
+  | { t: "tool_result"; id: string; text?: string; error?: boolean; more?: boolean }
   | { t: "stopped" }
   | { t: "error"; msg: string; code?: string };
 
@@ -110,7 +111,9 @@ export type Msg = { id: string; role: "user" | "assistant"; content: Part[]; sta
 
 // items → messages: a user line is one message, everything after it up to the
 // next user line is the assistant's (text, folded tool steps, the asks).
-export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>): Msg[] {
+// `worker`: the items are a terminal session's, read along (task YP39) — its
+// images and files are fetched from the machine it runs on
+export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>, worker = ""): Msg[] {
   const out: Msg[] = [];
   let cur: Msg | null = null;
   const tools = new Map<string, Record<string, unknown>>();
@@ -128,15 +131,15 @@ export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Ans
       case "user":
         cur = null;
         out.push({ id: `u${i}`, role: "user", content: [
-          ...(it.images || []).filter((g) => picSrc(g)).map((g) => ({ type: "image", image: picSrc(g) }) as Part),
+          ...(it.images || []).filter((g) => picSrc(g, undefined, worker)).map((g) => ({ type: "image", image: picSrc(g, undefined, worker) }) as Part),
           ...(it.text || !it.images?.length ? [{ type: "text", text: it.text } as Part] : []),
         ] });
         break;
       case "text": {
         const m = assistant(i);
         const last = m.content[m.content.length - 1] as { type: string; text?: string } | undefined;
-        if (last?.type === "text") m.content[m.content.length - 1] = { type: "text", text: linkFiles((last.text || "") + it.d, files) };
-        else m.content.push({ type: "text", text: linkFiles(it.d, files) });
+        if (last?.type === "text") m.content[m.content.length - 1] = { type: "text", text: linkFiles((last.text || "") + it.d, files, undefined, worker) };
+        else m.content.push({ type: "text", text: linkFiles(it.d, files, undefined, worker) });
         break;
       }
       case "tool": {
@@ -155,10 +158,11 @@ export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Ans
         }
         p.result = it.text || tr("(空)", "(empty)");
         p.isError = !!it.error;
+        if (it.more) p.artifact = { more: true };
         break;
       }
       case "image": {
-        const src = it.big ? "" : picSrc(it);
+        const src = it.big ? "" : picSrc(it, undefined, worker);
         if (src) assistant(i).content.push({ type: "image", image: src } as Part);
         else assistant(i).content.push({ type: "text", text: it.big
           ? tr("\n\n*（一张图超过 10 MB，网页里不显示）*\n\n", "\n\n*(An image over 10 MB is not shown here.)*\n\n")
@@ -167,7 +171,7 @@ export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Ans
       }
       case "page": {
         const p = it.proposal ? { ...it, ...latest.get(it.proposal), id: it.id } : it;
-        const card = { ...p, ...(p.preview ? { preview: picSrc({ ref: p.preview }) } : {}) };
+        const card = { ...p, ...(p.preview ? { preview: picSrc({ ref: p.preview }, undefined, worker) } : {}) };
         assistant(i).content.push({ type: "data", name: "fleet-page", data: card } as unknown as Part);
         break;
       }

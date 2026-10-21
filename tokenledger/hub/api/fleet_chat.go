@@ -6,11 +6,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -311,6 +313,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// A file a terminal session's record names (task YP39): its ref was given
+	// by the service on the login that session runs on, so it is read there —
+	// the session the person's own (termTarget, as the read-along view), else
+	// 404 not_yours. No worker ⇒ the home's, as before.
+	away := false
+	if name == "file" && r.URL.Query().Get("worker") != "" {
+		if !ok {
+			home = store.EntryHome{}
+		}
+		home.Person = person
+		_, _, dest, status, code, msg := s.termTarget(url.Values{"worker": {r.URL.Query().Get("worker")}}, home)
+		if code != "" {
+			s.chatRefuse(w, person, name, status, code, msg)
+			return
+		}
+		away = dest.Machine != home.Machine || dest.Login != home.Login
+		home, ok = dest, true
+	}
 	if !ok || home.Machine == "" || home.Login == "" {
 		s.chatRefuse(w, person, name, http.StatusConflict, "no_home", s.noHomeWhy(person))
 		return
@@ -418,7 +438,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// lease, claude-fleet#4408): signed out, another home, maintenance ⇒ cut.
 	ctx, stop := context.WithCancel(context.WithValue(r.Context(), chatDialKey{}, holder))
 	defer stop()
-	go s.chatRecheck(ctx, stop, r, person, home.Machine, home.Login)
+	if away {
+		go s.chatViewRecheck(ctx, stop, r, person, home.Machine)
+	} else {
+		go s.chatRecheck(ctx, stop, r, person, home.Machine, home.Login)
+	}
 	r = r.WithContext(ctx)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {

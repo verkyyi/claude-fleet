@@ -75,6 +75,35 @@ const ModelPicker: FC = () => {
   );
 };
 
+// a terminal session's step read along carries its output's start only (task
+// YP39): the whole of it when the person asks, from the session's own machine
+const ViewWorker = createContext("");
+const ViewToolStep: ToolCallMessagePartComponent = (p) => {
+  const worker = useContext(ViewWorker);
+  const [full, setFull] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const more = !!(p.artifact as { more?: boolean } | undefined)?.more && full === null && !!worker;
+  const load = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/v1/chat/view?worker=${encodeURIComponent(worker)}&tool=${encodeURIComponent(p.toolCallId)}`, { cache: "no-store" });
+      const j = r.ok ? await r.json() : null;
+      if (typeof j?.text === "string") setFull(j.text);
+    } catch { /* the button stays */ } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <ToolStep {...p} result={full ?? p.result} />
+      {more ? (
+        <button type="button" disabled={busy} onClick={() => void load()} data-testid="view-tool-more"
+          className="text-muted-foreground hover:text-foreground -mt-1 mb-2 self-start text-[12px] underline underline-offset-2">
+          {busy ? tr("读取中…", "Loading…") : tr("显示全部输出", "Show all output")}
+        </button>
+      ) : null}
+    </>
+  );
+};
+
 // a web page the agent published to the person's 活页 (task T773 ④): one tap opens it,
 // in a new window (活页 is not framed here until it allows the entry to)
 const PAGE_STATE = (): Record<string, string> => ({
@@ -610,7 +639,9 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; stage:
         {busy ? tr("正在终端里回答…", "Answering in the terminal…") : tr("在终端里 · 这里只读", "In the terminal · read-only here")}
         {v.state?.label ? <span className="text-muted-foreground font-mono text-[12px]"> · {v.state.label}</span> : null}
       </span>
-      {v.gate ? <span className="text-muted-foreground shrink-0 text-[12px]">{tr("重连中…", "Reconnecting…")}</span> : null}
+      {v.gate ? <span className="text-muted-foreground shrink-0 text-[12px]">{tr("重连中…", "Reconnecting…")}</span>
+        : v.layer && v.layer !== "home" ? <span className="text-clay shrink-0 text-[12px]" data-testid="view-sync">
+          {v.layer === "local" ? tr("本机记录 · 同步中…", "On this device · syncing…") : tr("上次的记录 · 同步中…", "Last seen · syncing…")}</span> : null}
     </div>
   );
   const Empty: FC = () => (
@@ -619,6 +650,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; stage:
     </div>
   );
   return (
+    <ViewWorker.Provider value={props.source.worker || ""}>
     <AssistantRuntimeProvider runtime={v.runtime}>
       <TooltipProvider>
         <PageCardUI />
@@ -627,11 +659,12 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; stage:
           <div className="min-h-0 flex-1">
             <Thread autoFocus={false}
               placeholder={tr("只读：这个会话在终端里跑，要说话请到终端里。", "Read-only: this session runs in a terminal; talk to it there.")}
-              components={{ Welcome: Empty, ToolFallback: ToolStep, ComposerTop: Top }} />
+              components={{ Welcome: Empty, ToolFallback: ViewToolStep, ComposerTop: Top }} />
           </div>
         </div>
       </TooltipProvider>
     </AssistantRuntimeProvider>
+    </ViewWorker.Provider>
   );
 };
 

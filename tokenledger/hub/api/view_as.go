@@ -81,11 +81,29 @@ func viewAsReadable(r *http.Request) bool {
 	return true
 }
 
+// ticketReadsSession is a read a read-only console ticket may make beyond a
+// view's (task YP39): the person's own terminal session read along — its
+// conversation (/v1/chat/view, never a takeover) and the files it names
+// (/v1/chat/file?worker=) — so an acceptance session can photograph it.
+// Never the person's own chat conversation, never a write or an upgrade.
+func ticketReadsSession(r *http.Request) bool {
+	if r.Method != http.MethodGet || r.Header.Get("Upgrade") != "" {
+		return false
+	}
+	switch r.URL.Path {
+	case ChatPathPrefix + chatViewRoute:
+		return true
+	case ChatPathPrefix + "file":
+		return r.URL.Query().Get("worker") != ""
+	}
+	return false
+}
+
 // viewAsGuard refuses anything but a read to an admin's session asking for a
 // view, before any route sees it. Nothing asked ⇒ nothing read, byte for byte.
 func (s *Server) viewAsGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !viewAsReadable(r) && s.consoleTicketCookie(r) {
+		if !viewAsReadable(r) && !ticketReadsSession(r) && s.consoleTicketCookie(r) {
 			// A read-only console ticket's session (task T844): reads only,
 			// whatever the route — the same rule as a view.
 			httpError(w, http.StatusForbidden, consoleTicketRefusal)

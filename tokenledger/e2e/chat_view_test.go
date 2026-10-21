@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
@@ -19,9 +21,14 @@ func TestChatViewReadsOwnSession(t *testing.T) {
 	enablePeople(t, h, pCarol)
 	const fuid, fid = "66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"
 	wid := fuid + "/" + fid
-	ws, _ := json.Marshal([]map[string]any{{"key": "issue-1", "state": "working", "worker_id": wid}})
+	// a keyed session (scratch-N / issue-N) is listed as <fleet>/<key>, its
+	// window as "identity" (task YP39: these were all 404 not_yours)
+	const kfid = "99999999-9999-4999-8999-999999999999"
+	kwid := fuid + "/o-r:scratch-3"
+	ws, _ := json.Marshal([]map[string]any{{"key": "issue-1", "state": "working", "worker_id": wid},
+		{"key": "o-r:scratch-3", "state": "done", "worker_id": kwid, "identity": kfid}})
 	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
-		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(ws)}}, time.Now()); err != nil {
+		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 2, WorkersJSON: string(ws)}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	setChatHome(t, h, pAlice, host, login)
@@ -33,10 +40,18 @@ func TestChatViewReadsOwnSession(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("view: %d %s %s", resp.StatusCode, resp.Header.Get("Content-Type"), b)
 	}
+	if !resp.Uncompressed {
+		t.Errorf("the view went out uncompressed (task YP39: gzip, flushed per event)")
+	}
 	b, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(b), `"t":"state"`) || !strings.Contains(string(b), "id: 1\n") ||
 		!strings.Contains(string(b), `fid=`+fid) || !strings.Contains(string(b), `from=5`) {
 		t.Fatalf("stream = %s", b)
+	}
+	kresp := chatDo(t, h, "GET", "/v1/chat/view?worker="+kwid, personCookie(pAlice, "alice"), nil, "")
+	kb, _ := io.ReadAll(kresp.Body)
+	if kresp.StatusCode != http.StatusOK || !strings.Contains(string(kb), `fid=`+kfid) {
+		t.Fatalf("a keyed session: %d %s", kresp.StatusCode, kb)
 	}
 	var hit string
 	for _, s := range svc.seen() {
@@ -81,7 +96,7 @@ func TestChatViewReadsOwnSession(t *testing.T) {
 			n++
 		}
 	}
-	if n != 1 {
+	if n != 2 {
 		t.Fatalf("a refused view reached the service: %d views there", n)
 	}
 }
@@ -170,5 +185,61 @@ func TestChatHandover(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("handovers at the service: %d, want 2", n)
+	}
+}
+
+// The copy beside the entry (task YP39): a view's first fresh frame is kept,
+// sealed to its person, the conversation copy's rules (no step's output);
+// ?cached=1 answers it from here, only to that person; the switch deletes it.
+func TestChatViewCopy(t *testing.T) {
+	h, _, host, login := chatHarness(t)
+	enablePeople(t, h, pCarol)
+	sealer, err := credvault.NewSealer(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Srv.Vault = &credvault.Vault{Store: h.Srv.Store, Sealer: sealer}
+	const fuid, kfid = "66666666-6666-4666-8666-666666666666", "99999999-9999-4999-8999-999999999999"
+	kwid := fuid + "/o-r:scratch-3"
+	ws, _ := json.Marshal([]map[string]any{{"key": "o-r:scratch-3", "state": "done", "worker_id": kwid, "identity": kfid}})
+	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
+		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(ws)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	setChatHome(t, h, pAlice, host, login)
+	setChatHome(t, h, pCarol, "elsewhere", "carol")
+	alice := personCookie(pAlice, "alice")
+	read := func(c *http.Cookie, q string) (int, string) {
+		resp := chatDo(t, h, "GET", "/v1/chat/view?worker="+kwid+q, c, nil, "")
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if st, b := read(alice, "&cached=1"); st != http.StatusOK || !strings.Contains(b, `"mirror":null`) {
+		t.Fatalf("no copy yet: %d %s", st, b)
+	}
+	if st, b := read(alice, "&at=12&s=s1"); st != http.StatusOK || !strings.Contains(b, "at=12") || !strings.Contains(b, "s=s1") {
+		t.Fatalf("the cursor did not reach the service: %d %s", st, b)
+	}
+	var b string
+	waitFor(t, 5e9, "copy kept", func() bool { _, b = read(alice, "&cached=1"); return strings.Contains(b, `"d":"hi"`) })
+	if strings.Contains(b, "SECRET-OUTPUT") || !strings.Contains(b, `"session":"s1"`) {
+		t.Errorf("the copy: %s; want the reply and the conversation, never a step's output", b)
+	}
+	if st, _ := read(personCookie(pCarol, "carol"), "&cached=1"); st != http.StatusNotFound {
+		t.Errorf("carol reading alice's copy: %d; want 404", st)
+	}
+	if st, b := read(alice, "&tool=toolu_01"); st != http.StatusOK || !strings.Contains(b, "tool=toolu_01") {
+		t.Errorf("a step's output: %d %s", st, b)
+	}
+	for _, bad := range []string{"&at=-1", "&before=x", "&s=../x", "&tool=a%20b"} {
+		if st, _ := read(alice, bad); st != http.StatusBadRequest {
+			t.Errorf("%s: %d; want 400", bad, st)
+		}
+	}
+	if err := h.Srv.Store.SetChatMirrorOff(pAlice, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := h.Srv.Store.ChatMirrorOf(pAlice, store.ChatMirrorViewPrefix+kwid, time.Now()); err != nil || c != nil {
+		t.Errorf("the switch off left the view copy: %v %v", c, err)
 	}
 }

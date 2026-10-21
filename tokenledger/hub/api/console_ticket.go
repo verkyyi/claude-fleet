@@ -45,7 +45,9 @@ import (
 //   - the person's own, as a member (an admin's ticket never opens an admin
 //     page, never looks through anyone else's eyes);
 //   - reads only, whatever the route: viewAsGuard refuses every method but
-//     GET/HEAD, a websocket and the conversation's relay, exactly as a view;
+//     GET/HEAD, a websocket and the conversation's relay, exactly as a view —
+//     but for the person's own terminal session read along (ticketReadsSession,
+//     task YP39), so an acceptance session can photograph it;
 //   - never renewed and never anything else's: every reader but the gate's two
 //     doors (personAdmit, sshRelayHTTPIdentity) takes it for no session.
 //
@@ -367,7 +369,7 @@ func (s *Server) consoleTicketAdmit(w http.ResponseWriter, r *http.Request, sess
 		s.notFoundPage(w, r)
 		return nil, true, true
 	}
-	if !viewAsReadable(r) {
+	if !viewAsReadable(r) && !ticketReadsSession(r) {
 		httpError(w, http.StatusForbidden, consoleTicketRefusal)
 		return nil, true, true
 	}
