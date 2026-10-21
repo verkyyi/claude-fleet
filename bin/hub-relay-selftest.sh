@@ -140,6 +140,11 @@ ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || st_miss "F: a s
 printf '%s/issue-42\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"
 deliver "$(relay 1700000000.6 child_report "$F/issue-42" "$U/issue-7" '{"child":"issue-42","state":"MERGED","pr":"9","tier":"quiet","msg":"m"}')"
 ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || st_miss "F: a MERGED report releases the parent"
+# T886: a task's `outcome succeeded` report from another machine is ledgered and
+# delivered — before, fleet-children.py refused SUCCEEDED and deliver died 1.
+deliver "$(relay 1700000000.61 child_report "$F/issue-44" "$U/issue-7" '{"child":"issue-44","state":"SUCCEEDED","summary":"task done","tier":"quiet","msg":"[child-report] issue-44\nstate: SUCCEEDED"}')"
+ok; [ "$rc" = 0 ] && grep -q '"child": "acme-app:issue-44".*"state": "SUCCEEDED"' "$LEDGER" \
+  || st_miss "F: a SUCCEEDED report from another machine is ledgered, not refused" "rc=$rc $err"
 
 # --- D: report-parent to a parent elsewhere ---------------------------------------------
 wc=$(tf new-window -d -P -F '#{window_id}' -n issue-20 'while :; do sleep 300; done')

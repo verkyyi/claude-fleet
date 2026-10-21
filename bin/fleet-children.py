@@ -68,7 +68,10 @@ import os
 import sys
 import time
 
-STATES = ('MERGED', 'BLOCKED', 'FAILED', 'STOPPED', 'REAPED', 'WAITING', 'IDLE', 'DEGENERATE')
+# SUCCEEDED (T886): a task's outcome on the ID road (fleet-report-parent.sh, #4989) —
+# a done child like MERGED; before it was listed every such report was refused.
+STATES = ('MERGED', 'SUCCEEDED', 'BLOCKED', 'FAILED', 'STOPPED', 'REAPED', 'WAITING', 'IDLE', 'DEGENERATE')
+DONE = ('MERGED', 'SUCCEEDED')
 FIELDS = ('child', 'state', 'pr', 'verdict', 'summary', 'title', 'tier')
 # report_tier's three bands (issue #938, fleet-children-lib.sh); '' = a pre-#938 event.
 TIERS = ('loud', 'quiet', 'silent')
@@ -390,7 +393,7 @@ def settled(evs, prs=''):
         return None
     last = evs[-1]
     for e in reversed(evs):
-        if e.get('state') == 'MERGED':
+        if e.get('state') in DONE:
             return e
         if e.get('state') not in QUIET_AFTER:
             break
@@ -404,8 +407,8 @@ def progress_of(live, st, disp):
     → pr → merged / reaped, or failed / blocked / refused: the report when it
     says, else the live window, else the placement's last state."""
     lst = (st or {}).get('state', '')
-    if lst == 'MERGED':
-        return 'merged'
+    if lst in DONE:
+        return lst.lower()
     if lst in ('BLOCKED', 'FAILED'):
         return lst.lower()
     if lst == 'REAPED':
@@ -533,7 +536,7 @@ def bucket(live, last, disp=None):
         # Quiet is not finished (issue #1331): a sleeper, a preparing/waking worker
         # and a `looping` one sort quiet on the dash, but only `done` is a ✓.
         return '✓' if live['state'] == 'done' else '▸'
-    if lst == 'MERGED' or (lst == 'REAPED' and (last.get('verdict') or '').startswith('merged')):
+    if lst in DONE or (lst == 'REAPED' and (last.get('verdict') or '').startswith('merged')):
         return '✓'
     if lst in ('BLOCKED', 'FAILED'):
         return '!'

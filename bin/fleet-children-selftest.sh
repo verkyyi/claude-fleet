@@ -24,6 +24,9 @@
 #   TASK      (issue #3330) a child carrying a hub task record (@task T218) writes
 #             `task` on its rows; `--json` carries it on the child, the text view
 #             puts it before the title; a child without one is byte for byte.
+#   SUCCEEDED (T886) a task's `--outcome succeeded` report (fleet-report-parent.sh,
+#             #4989) is ledgered — it was refused as an unknown
+#             state — and reads as done: ✓, progress `succeeded`.
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159). The dash half replays that server's window list through a PATH shim,
@@ -70,6 +73,15 @@ ap '{"child":"issue-1","state":"MERGED","pr":"7"}' >/dev/null
 eq "a repeat of the latest (child,state,pr) adds nothing" 1 "$(wc -l < "$F" | tr -d ' ')"
 printf '%s' '{"child":"issue-1","state":"SHIPPED"}' | python3 "$BIN/fleet-children.py" append --file "$F" >/dev/null 2>&1
 eq "an unknown state is refused" 2 "$?"
+ap '{"child":"issue-2","state":"succeeded","summary":"task done"}' >/dev/null
+eq "SUCCEEDED (T886): a task's outcome is ledgered, not refused" 0 "$?"
+SJ=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "${F%/*}" --parent pure --json)
+python3 - "$SJ" <<'PY' || st_fail "SUCCEEDED reads as done: ✓, progress succeeded" "$SJ"
+import json, sys
+k = {c["child"]: c for c in json.loads(sys.argv[1])["children"]}
+assert k["issue-2"]["bucket"] == "✓" and k["issue-2"]["progress"] == "succeeded", k["issue-2"]
+PY
+CHECKS=$((CHECKS + 1))
 
 # --- TIER (issue #938): report_tier is the ONE place the bands are decided -------
 # Every state → its band, plus the three modifiers (a fixing FAILED, an unlanded
@@ -431,5 +443,16 @@ eq "stale: a hub that said nothing proves nothing" 0 \
   "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --json | grep -c '"claim"')"
 eq "stale: FLEET_STALE_CLAIM_SECS moves the bar" 0 \
   "$(printf '' | FLEET_STALE_CLAIM_SECS=7200 python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --hub-cache "$SD/g/remote_s" --json | grep -c '"claim"')"
+
+# --- 7. SUCCEEDED END TO END (T886) ------------------------------------------------
+# The same-machine road: report-parent --outcome succeeded (a task window) → children_append → the
+# parent's book. Before T886 the append was refused and nothing was written.
+mkdir -p "$WORK/repo-scratch-9"
+new_win '任务父'; opt "$WID" @raw 1; opt "$WID" @worktree "$WORK/repo-scratch-9"; opt "$WID" @claude_state idle
+new_win kid-task; K9="$WID"; opt "$K9" @origin "${P}scratch-9"; opt "$K9" @claude_state 'done'; opt "$K9" @task T886
+bash "$RP" -L "$LBL" --win "$K9" --state waiting --outcome succeeded --summary "task done" >"$WORK/k9.out" 2>&1
+L9="$FLEET_CONF_DIR/fleets/$LBL/children/${P}scratch-9.ndjson"
+eq "succeeded: the report lands in the parent's book" SUCCEEDED \
+  "$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readlines()[-1])["state"])' "$L9" 2>/dev/null)"
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

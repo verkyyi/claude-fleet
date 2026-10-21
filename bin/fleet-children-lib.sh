@@ -32,7 +32,7 @@
 #
 # <json> carries {child, state, pr, verdict, summary, title, tier}; seq and ts are
 # stamped here, under a lock, so two children reporting at once never share a seq.
-# state ∈ MERGED BLOCKED FAILED STOPPED REAPED WAITING IDLE DEGENERATE. A write whose
+# state ∈ MERGED SUCCEEDED BLOCKED FAILED STOPPED REAPED WAITING IDLE DEGENERATE. A write whose
 # (child, state, pr) equals that child's LATEST event is a no-op — the reaper's
 # backstop repeating the ship path's report adds nothing.
 #
