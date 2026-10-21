@@ -2793,6 +2793,34 @@ def far_miss(vid, row, rc):
     return say("view_far_fmt", row.get("machine") or "?") if rc == 3 else say("view_gone")
 
 
+WEB_GO_RE = re.compile(r"[A-Za-z0-9-]{1,64}/[A-Za-z0-9._:-]{1,128}")
+
+
+def web_go(g, client, target):
+    """A browser 看台's go to another machine's session (task C8X3): `ESC ] 7502 ;
+    web-go ; w=<worker id> BEL` on its client's own tty — the page
+    (extras/web-console terminal.tsx) opens /terminal?worker=<id>, which the hub
+    admits only on one of the person's own logins. True when it was written."""
+    if not WEB_GO_RE.fullmatch(target or ""):
+        return False
+    if client:
+        _, tty = tm("display-message", "-p", "-c", client, "#{client_tty}")
+    else:
+        _, out = tm("list-clients", "-t", "=" + g, "-F", "#{client_tty}")
+        tty = (out.splitlines() or [""])[0]
+    if not tty.startswith("/dev/"):
+        return False
+    try:
+        fd = os.open(tty, os.O_WRONLY | os.O_NOCTTY)
+        try:
+            os.write(fd, ("\x1b]7502;web-go;w=%s\x07" % target).encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+    return True
+
+
 def webterm_switch(vid, window):
     if not vid.startswith("wt-"):
         return None
@@ -2820,8 +2848,11 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         meta = (cached[1].get(target) if cached else None) or meta
     extra = {}
     if far and vid.startswith("wt-"):
-        method, rc = "unsupported", 3
-        toast(client, say("view_web_far"))
+        # a browser 看台 has no peer window (no ssh of its own): its page opens
+        # that session's own terminal through the hub instead (task C8X3)
+        method, rc = ("web-go", 0) if web_go(g, client, target) else ("unsupported", 3)
+        if rc:
+            toast(client, say("view_web_far"))
     elif far:
         method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client)
         meta = dict(meta, machine=fm or meta.get("machine") or "", login=fl or meta.get("login") or "")

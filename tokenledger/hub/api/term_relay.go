@@ -21,11 +21,12 @@ import (
 
 // The hub half of the browser terminal (claude-fleet#3838, EPIC #3836 C1): the
 // chat relay's road (openLoginRelay, the same table shape, the same keying) to
-// a terminal on the person's OWN home login.
+// a terminal on the person's OWN home login — or, for a session they name, the
+// one of their own active logins it runs on (task C8X3).
 //
 //	browser ──wss TermConnectPath?worker=<id> | ?target=personal (same origin, signed in)──▶ hub
 //	hub: who (a person as themselves — never the operator's door, never a view-as)
-//	     · their home (EntryHomeOf) · the target theirs (a worker of a fleet on that login)
+//	     · their home (EntryHomeOf) · the target theirs (a worker of a fleet on home or on one of their active logins)
 //	hub ──TypeTermOpen──▶ that login's agent (CapTerm only) ──wss TermDataPath──▶ hub
 //	hub ──{"grant": ftg1…} (person · login · relay · target · 2 min)──▶ agent ──▶ PTY
 //
@@ -95,32 +96,41 @@ func (s *Server) termPerson(r *http.Request) (person string, status int, code, m
 	return person, status, code, msg
 }
 
-// termTarget resolves the browser's selector against person's home: exactly
-// one of target=personal or worker=<worker id>, and a worker only when a fleet
-// on that very login reports it. Anything else is not_yours — the same answer
+// termTarget resolves the browser's selector: exactly one of target=personal
+// (the personal terminal, on home) or worker=<worker id>, a worker only when a
+// fleet on the person's home login or on another of their OWN active logins
+// (ownScope — task C8X3: a session on their second machine) reports it. dest is
+// the login the terminal goes to. Anything else is not_yours — the same answer
 // for another person's worker and for one that does not exist.
-func (s *Server) termTarget(q url.Values, home store.EntryHome) (logical, target string, status int, code, msg string) {
+func (s *Server) termTarget(q url.Values, home store.EntryHome) (logical, target string, dest store.EntryHome, status int, code, msg string) {
 	t, w := strings.TrimSpace(q.Get("target")), strings.TrimSpace(q.Get("worker"))
 	switch {
 	case (t == "") == (w == ""):
-		return "", "", http.StatusBadRequest, "bad_target", "name exactly one of target=personal or worker=<id>"
+		return "", "", home, http.StatusBadRequest, "bad_target", "name exactly one of target=personal or worker=<id>"
 	case t != "":
 		if t != control.TermTargetPersonal {
-			return "", "", http.StatusBadRequest, "bad_target", "target is personal or nothing"
+			return "", "", home, http.StatusBadRequest, "bad_target", "target is personal or nothing"
 		}
-		return control.TermTargetPersonal, control.TermTargetPersonal, 0, "", ""
+		return control.TermTargetPersonal, control.TermTargetPersonal, home, 0, "", ""
 	}
-	notYours := func() (string, string, int, string, string) {
-		return "", "", http.StatusNotFound, "not_yours", "no such session of yours"
+	notYours := func() (string, string, store.EntryHome, int, string, string) {
+		return "", "", home, http.StatusNotFound, "not_yours", "no such session of yours"
 	}
 	fuid, second, err := fleetid.ParseWorkerID(w)
 	if err != nil {
 		return notYours()
 	}
 	f, err := s.Store.Fleet(fuid)
-	if err != nil || !f.Present || f.Hostname != home.Machine || f.OSUser != home.Login {
+	if err != nil || !f.Present {
 		return notYours()
 	}
+	if f.Hostname != home.Machine || f.OSUser != home.Login {
+		own, err := s.ownScope(home.Person)
+		if err != nil || home.Person == "" || !own(f.Hostname, f.OSUser) {
+			return notYours()
+		}
+	}
+	dest = store.EntryHome{Person: home.Person, Machine: f.Hostname, Login: f.OSUser}
 	var ws []map[string]any
 	_ = json.Unmarshal([]byte(f.WorkersJSON), &ws)
 	for _, wk := range ws {
@@ -136,7 +146,7 @@ func (s *Server) termTarget(q url.Values, home store.EntryHome) (logical, target
 		if fid == "" || !control.ValidTermTarget(control.TermWorkerTarget(fid)) {
 			return notYours()
 		}
-		return w, control.TermWorkerTarget(fid), 0, "", ""
+		return w, control.TermWorkerTarget(fid), dest, 0, "", ""
 	}
 	return notYours()
 }
@@ -242,12 +252,15 @@ func (s *Server) handleTermConnect(w http.ResponseWriter, r *http.Request) {
 		s.termRefuse(w, person, "connect", http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
 		return
 	}
-	where := home.Machine + "/" + home.Login
-	logical, target, status, code, msg := s.termTarget(r.URL.Query(), home)
+	logical, target, dest, status, code, msg := s.termTarget(r.URL.Query(), home)
+	where := dest.Machine + "/" + dest.Login
 	if code != "" {
 		s.termRefuse(w, person, "connect "+where, status, code, msg)
 		return
 	}
+	// From here on the terminal's login is dest: home itself, or another of the
+	// person's own logins where the session they named runs.
+	home = dest
 	// The login's link ends in another replica: hand it the whole upgrade; it
 	// admits the person again and serves the terminal as its own.
 	if peer, ok := s.termRelayPeer(r, home.Machine, home.Login); ok {
@@ -347,8 +360,11 @@ func (s *Server) handleTermConnect(w http.ResponseWriter, r *http.Request) {
 		recheck := func() bool {
 			p, _, c, _ := s.termPerson(r)
 			h, ok, err := s.Store.EntryHomeOf(person)
-			if c == "" && p == person && err == nil && ok && h.Machine == home.Machine && h.Login == home.Login {
-				return true
+			if c == "" && p == person && err == nil && ok {
+				l, t, d, _, tc, _ := s.termTarget(r.URL.Query(), h)
+				if tc == "" && l == logical && t == target && d.Machine == home.Machine && d.Login == home.Login {
+					return true
+				}
 			}
 			sendErr("revoked", "你的登录已失效：终端已关闭")
 			return false

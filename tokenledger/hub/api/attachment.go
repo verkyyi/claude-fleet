@@ -63,11 +63,13 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		refuse(409, "no_home", "choose your home first")
 		return
 	}
-	logical, target, status, code, msg := s.termTarget(r.URL.Query(), home)
+	logical, target, dest, status, code, msg := s.termTarget(r.URL.Query(), home)
 	if code != "" {
 		refuse(status, code, msg)
 		return
 	}
+	// The login the session runs on: home, or another of the person's own (C8X3).
+	home = dest
 	if peer, ok := s.termRelayPeer(r, home.Machine, home.Login); ok {
 		s.proxyRelay(w, r, peer, "attachment")
 		return
@@ -113,7 +115,7 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	recheck := func() bool {
 		p, _, c, _ := s.termPerson(r)
 		h, ok, e := s.Store.EntryHomeOf(person)
-		if c != "" || p != person || e != nil || !ok || h.Machine != home.Machine || h.Login != home.Login || s.nodes.get(epID) != nc || !s.attachmentSessionLive(r) {
+		if c != "" || p != person || e != nil || !ok || s.nodes.get(epID) != nc || !s.attachmentSessionLive(r) {
 			return false
 		}
 		settings, e := s.Store.FleetSettings()
@@ -123,8 +125,8 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		if _, maintenance := maintenanceOf(home.Machine, settings); maintenance {
 			return false
 		}
-		l, t, _, c, _ := s.termTarget(r.URL.Query(), h)
-		return c == "" && l == logical && t == target
+		l, t, d, _, c, _ := s.termTarget(r.URL.Query(), h)
+		return c == "" && l == logical && t == target && d.Machine == home.Machine && d.Login == home.Login
 	}
 	if !recheck() {
 		refuse(403, "revoked", "attachment not authorized")
