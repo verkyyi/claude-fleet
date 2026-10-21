@@ -32,7 +32,8 @@ import (
 //	                unknown · its record already ended), or a record whose
 //	                session is starting / not seen
 //	gone  已收起   ended within boardGoneDays: an agent exited with its window
-//	                still up, a closed session, a closed record — never counted
+//	                still up, a closed session, a closed record, a session on a
+//	                machine lost past boardLostAfter — never counted
 //
 // Within a group newest first (a session's birth, a record's creation, an end's
 // time); an EPIC member right under its parent while both sit in one group.
@@ -41,6 +42,11 @@ import (
 const (
 	boardGoneDays = 7
 	boardGoneMax  = 300
+	// boardLostAfter: a session last heard on a machine lost this long is put
+	// away (gone · lost), never left in 排队中 (T859: a deleted drill login's
+	// last inventory sat there for nine days, 21 rows); past boardGoneDays it is
+	// not listed. A machine back within it keeps its rows where they were.
+	boardLostAfter = 6 * time.Hour
 )
 
 // BoardRow is one row of the list.
@@ -82,6 +88,7 @@ var boardWords = map[string][2]string{
 	"idle": {"空闲", "Idle"}, "unknown": {"状态未知", "Unknown"}, "starting": {"正在开", "Starting"},
 	"queued": {"排着", "Queued"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
 	"ended": {"已结束", "Ended"}, "ended_no_result": {"结束·没交回结果", "Ended · no result"},
+	"lost": {"机器失联", "Machine lost"},
 }
 
 var boardGroupOrder = map[string]int{"pin": 0, "ask": 1, "work": 2, "queue": 3, "gone": 4}
@@ -189,6 +196,10 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if t == nil && wid != "" {
 			t = byWID[wid]
 		}
+		lostFor := fs.Availability == "lost" && !fs.ObservedAt.IsZero() && now.Sub(fs.ObservedAt) > boardLostAfter
+		if lostFor && fs.ObservedAt.Before(since) {
+			continue // not listed; its record (if any) is listed on its own below
+		}
 		r := row(t, b)
 		r.ID = ident
 		if r.ID == "" {
@@ -228,6 +239,8 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			end = taskEnd(*t)
 		}
 		switch st := r.State; {
+		case lostFor:
+			r.Group, r.Tag, r.At = "gone", "lost", fs.ObservedAt.Unix()
 		case w["pin"] == true:
 			r.Group, r.Tag = "pin", boardStateTag(st)
 		case st == "needs" || st == "blocked":

@@ -1171,6 +1171,31 @@ class TaskSession(Rig):
         self.assertTrue(self.wt.is_dir())
         self.assertIn("task T42 is closed", (self.root / "ledger.tsv").read_text())
 
+    def test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does(self):
+        """T859: seven finished task windows stayed open for days on a worktree
+        whose only «dirt» was the agent's untracked tool output (.playwright-mcp/,
+        shots/). A closed record closes with untracked files only — kept on disk;
+        a tracked change still keeps the window."""
+        self.answer.write_text("0\n")
+        tracked = self.wt / "tracked.txt"
+        tracked.write_text("v1\n")
+        self.call("git", "-C", str(self.wt), "add", "tracked.txt")
+        self.call("git", "-C", str(self.wt), "-c", "user.email=t@t", "-c", "user.name=t",
+                  "commit", "-qm", "tracked")
+        tracked.write_text("v2\n")                       # a tracked change: kept
+        out = self.due()
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.call("git", "-C", str(self.wt), "checkout", "--", "tracked.txt")
+        (self.wt / ".playwright-mcp").mkdir()
+        (self.wt / ".playwright-mcp" / "console.log").write_text("x")
+        (self.wt / "shots").mkdir()
+        (self.wt / "shots" / "a.png").write_text("png")
+        out = self.due()
+        self.assertRegex(out, "reaped-(task|over):" + re.escape(self.win) + " ")   # either road
+        self.assertFalse(self.exists())
+        self.assertTrue((self.wt / "shots" / "a.png").is_file())   # the bytes stay
+
     def test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped(self):
         """claude-fleet T569: a ver-stale reopen (fleet-migrate.sh --cfg-stale)
         and this close raced on T477 — the reaper closed the old window 12 s into

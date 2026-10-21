@@ -112,3 +112,47 @@ func TestBoardOneRowPerTask(t *testing.T) {
 		t.Fatalf("another owner's list = %+v", o.Rows)
 	}
 }
+
+// T859: a machine lost past boardLostAfter puts its sessions away (gone · lost)
+// instead of leaving them in 排队中; past boardGoneDays they are not listed. A
+// machine lost a moment ago keeps its rows where they were.
+func TestBoardLostMachineIsPutAway(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	sess := func(key, state, avail string, heard time.Time) FleetSession {
+		wid := "42f8e358-7cc0-5856-a353-8983a4b4c9a1/" + key
+		w := map[string]any{"key": key, "state": state, "name": key, "worker_id": wid}
+		return FleetSession{WorkerID: &wid, MachineName: "mini2", OSUser: "drill1", Availability: avail,
+			ObservedAt: heard, Worker: w}
+	}
+	live := []FleetSession{
+		sess("scratch-1", "done", "lost", now.Add(-10*time.Minute)),   // a blip: stays
+		sess("scratch-2", "done", "lost", now.Add(-8*time.Hour)),      // put away
+		sess("scratch-3", "needs", "lost", now.Add(-2*24*time.Hour)),  // put away, asking or not
+		sess("scratch-4", "done", "lost", now.Add(-9*24*time.Hour)),   // not listed
+		sess("scratch-5", "done", "online", now.Add(-9*24*time.Hour)), // heard machine: as before
+	}
+	b, err := s.buildBoard("gh:1", live, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range b.Rows {
+		got[r.ID] = r.Group + ":" + r.Tag
+	}
+	p := "42f8e358-7cc0-5856-a353-8983a4b4c9a1/"
+	want := map[string]string{p + "scratch-1": "queue:turn_done", p + "scratch-2": "gone:lost",
+		p + "scratch-3": "gone:lost", p + "scratch-5": "queue:turn_done"}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %v; want %v", got, want)
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Fatalf("row %s = %s; want %s (all %v)", id, got[id], w, got)
+		}
+	}
+	if b.Groups["queue"] != 2 || b.Groups["ask"] != 0 {
+		t.Fatalf("groups = %v", b.Groups)
+	}
+}

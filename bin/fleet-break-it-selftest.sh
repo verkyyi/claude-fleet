@@ -155,6 +155,7 @@
 #   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
 #   done-window-lingers                             bin/fleet-cleanup-idle.py (id_over, --only/--grace),
 #                                                   fleet-cleanup-idle.sh --now, fleet_reap_soon (fleet-lib.sh)
+#   done-window-untracked                           bin/fleet-cleanup-idle.py (eligible: untracked-only, task=True)
 #   stop-no-exit-hangs                              bin/fleet-worker-stop.sh (stopped:forced, fleet_kill_tree)
 #   admit-tight-done-windows                        fleet_session_cap_ok / fleet_admit_make_room (fleet-lib.sh),
 #                                                   fleet-cleanup-idle.sh --make-room, fleet-cleanup-idle.py --plan-room/--fold
@@ -6032,6 +6033,19 @@ drill_done_window_lingers() {
     || { WHY="a finished session still lingers: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="ID 有了成功 / 失败结果即算做完（记录还停在已接受也一样），结果一落就盯住窗口、回合结束约 1 分钟收起"
+}
+
+# A finished task window whose worktree only held untracked tool output (T859:
+# .playwright-mcp/, shots/) read as dirty and was never closed. Now untracked-only
+# closes it (the worktree stays); a tracked change still keeps it.
+drill_done_window_untracked() {
+  CAP=60; local t0 d="$WORK/dwu"
+  mkdir -p "$d"; t0=$(now)
+  python3 "$BIN/fleet-cleanup-idle-selftest.py" "$BIN" \
+    TaskSession.test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does >"$d/out" 2>&1 \
+    || { WHY="a finished window with untracked files still lingers: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="任务收口的窗口，工作树只有未跟踪文件也照样收起（工作树原样留着）；已跟踪的改动仍留窗"
 }
 
 # A stop whose /exit never landed (T680: T580's old driver, a loop that would not
