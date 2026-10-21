@@ -39,6 +39,9 @@
 #   entry-hostkey-regenerated  _entry_hostkey (T743): the entry's host key is made
 #                         once — a lost .pub is derived back from the private key,
 #                         never a new pair; what the port answers is the same key
+#   pod-hostkey-rebuilt   render.py's POD_SSHD_KEY_SCRIPT (T743): a person's pod's sshd
+#                         key lives on their disk — the script run as a rebuilt pod
+#                         runs it (fresh /run, same disk) answers with the same key
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -683,6 +686,30 @@ drill_entry_hostkey_regenerated() {
   sys_same || { edown; return 1; }
   edown
   WHAT="入口钥匙生成一次就不换：删掉 .pub 后从私钥补回，私钥一字不变，入口端口答的还是 $fp0"
+}
+
+drill_pod_hostkey_rebuilt() {
+  CAP=10
+  local t0 d a b c
+  t0=$(now); d="$EB/podkey"; mkdir -p "$d/keep" "$d/run1" "$d/run2" "$d/run3"
+  podkey() {  # podkey <run dir>: the rendered script, its paths in the sandbox (no chown off root)
+    python3 - "$ROOT/extras/managed-node" "$d/keep" "$1" > "$d/s.sh" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import render
+s = render.POD_SSHD_KEY_SCRIPT.replace(render.POD_SSHD_KEEP, sys.argv[2]).replace('/run/sshd-key', sys.argv[3])
+print(s if __import__('os').geteuid() == 0 else s.replace('chown 0:0', 'true'))
+PY
+    sh -e "$d/s.sh" && ssh-keygen -lf "$1/host.pub" | awk '{print $2}'
+  }
+  a=$(podkey "$d/run1") || { WHY="the pod's key script failed on a fresh disk"; return 1; }
+  b=$(podkey "$d/run2") || { WHY="the pod's key script failed on the second start"; return 1; }
+  rm -f "${d:?}/keep/host.pub"
+  c=$(podkey "$d/run3") || { WHY="the pod's key script failed with the .pub lost"; return 1; }
+  [ -n "$a" ] && [ "$a" = "$b" ] && [ "$b" = "$c" ] || { WHY="the pod's sshd key changed: ${a} → ${b} → ${c}"; return 1; }
+  cmp -s "$d/run1/host" "$d/run3/host" || { WHY="the private key differs between starts"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="pod 重建（/run 全新、盘还是那块）答的还是同一把：${a}；.pub 丢了从私钥补回"
 }
 
 drill_entry_forward_out() {
