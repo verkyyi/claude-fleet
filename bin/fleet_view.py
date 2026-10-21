@@ -2166,6 +2166,11 @@ def board_apply(board, groups, shut, gone, here, me):
             used.add(id(e))
             if r.get("title"):
                 e["text"] = r["title"]
+            if g != "gone" and e.get("gone"):
+                # a closed session here, its record still open on the hub: the
+                # record's row (counted, nothing to act on — it is not running)
+                e.pop("gone", None)
+                e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
         e["word"] = board_words(r)
         e["depth"] = int(r.get("depth") or 0)
