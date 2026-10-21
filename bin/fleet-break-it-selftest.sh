@@ -4548,19 +4548,19 @@ while time.time() < end:
   cp=$(side a tmux display-message -p -t "$cw" '#{pane_id}')
   side a tmux set-option -w -t "$cw" @norepo 1 \; set-option -w -t "$cw" @fleet_id "$cf" \; \
     set-option -w -t "$cw" @origin "$pf" \; set-option -w -t "$cw" @origin_fid "$pf" \; set-option -w -t "$cw" @origin_wid "$ub/$pf"
-  printf '%s/%s\tmini2\t\n%s/%s\tmacmini\t%s/%s\n' "$ub" "$pf" "$ua" "$cf" "$ub" "$pf" > "$d/a/conf/control/hub-workers.tsv"
+  printf '%s/%s\tmac-b\t\n%s/%s\tmac-a\t%s/%s\n' "$ub" "$pf" "$ua" "$cf" "$ub" "$pf" > "$d/a/conf/control/hub-workers.tsv"
   mkdir -p "$d/a/conf/control/hub-outbox"
   # the hub and both agents: A's relay → B's deliver; B's answer → a receipt on A
-  hubpump() { ( local end=$(( $(date +%s) + 30 )) g rid err rc2 det
+  hubpump() { ( local end=$(( $(date +%s) + 30 )) g err rc2
     while [ "$(date +%s)" -lt "$end" ]; do
       g=$(ls "$d/a/conf/control/hub-outbox"/*.json 2>/dev/null | head -1)
       if [ -z "$g" ]; then sleep 0.1; continue; fi
-      python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); r["from_node"] = "macmini"; print(json.dumps(r))' "$g" > "$d/relay.json"
+      python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); r["from_node"] = "mac-a"; print(json.dumps(r))' "$g" > "$d/relay.json"
       err=$(side b bash "$BIN/fleet-hub-node.sh" deliver < "$d/relay.json" 2>&1 >/dev/null); rc2=$?
       rm -f "$g"
       [ "$rc2" = 0 ] || continue          # «not now»: the hub would hold it
       python3 -c 'import json, sys; r = json.load(open(sys.argv[1]))
-print(json.dumps(dict(id=r["id"], kind="receipt", **{"from": r["to"]}, to=r["from"], from_node="mini2",
+print(json.dumps(dict(id=r["id"], kind="receipt", **{"from": r["to"]}, to=r["from"], from_node="mac-b",
                       payload=dict(rid=r["id"], kind=r["kind"], to=r["to"], status="delivered", detail=sys.argv[2]))))' \
         "$d/relay.json" "$err" | side a bash "$BIN/fleet-hub-node.sh" deliver >/dev/null 2>&1
       exit 0
