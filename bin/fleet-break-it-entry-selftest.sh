@@ -42,6 +42,9 @@
 #   pod-hostkey-rebuilt   render.py's POD_SSHD_KEY_SCRIPT (T743): a person's pod's sshd
 #                         key lives on their disk — the script run as a rebuilt pod
 #                         runs it (fresh /run, same disk) answers with the same key
+#   hostkey-changed-silent  handleNodeEntryReach's entryHostKeyChanged (T743): a machine
+#                         reporting another entry host key raises entry_hostkey_changed
+#                         (old / new fingerprints) — the hub half's Go test
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -708,7 +711,7 @@ drill_entry_hostkey_regenerated() {
 }
 
 drill_pod_hostkey_rebuilt() {
-  CAP=10
+  CAP=20   # four ssh-keygen runs; a busy runner took 9 s
   local t0 d a b c
   t0=$(now); d="$EB/podkey"; mkdir -p "$d/keep" "$d/run1" "$d/run2" "$d/run3"
   podkey() {  # podkey <run dir>: the rendered script, its paths in the sandbox (no chown off root)
@@ -729,6 +732,18 @@ PY
   cmp -s "$d/run1/host" "$d/run3/host" || { WHY="the private key differs between starts"; return 1; }
   SECS=$(since "$t0")
   WHAT="pod 重建（/run 全新、盘还是那块）答的还是同一把：${a}；.pub 丢了从私钥补回"
+}
+
+drill_hostkey_changed_silent() {
+  CAP=150   # the hub half's go test
+  local t0 f gohalf
+  t0=$(now)
+  f="$ROOT/tokenledger/hub/api/fleet_entry_reach_test.go"
+  grep -q '^func TestEntryHostKeyChangeIsAlerted(' "$f" 2>/dev/null || { WHY="the hub half's test TestEntryHostKeyChangeIsAlerted is gone"; return 1; }
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml) runs TestEntryHostKeyChangeIsAlerted"
+  go_half '^TestEntryHostKeyChangeIsAlerted$' ./hub/api; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="机器报上来的入口钥匙换了：hub 开一条 entry_hostkey_changed 告警（新旧指纹）+ 审计一行，同一把再报不再响；$gohalf"
 }
 
 drill_entry_forward_out() {

@@ -462,5 +462,31 @@ rm -f "$WORK/shim/ccquota" "$WORK/shim/tmux"
 # the flash whitelist names the kind, in the ONE place it is written
 eq "14: account-reauth is a flash kind" 1 "$(grep -c "^FLEET_ALERT_FLASH_KINDS='.*account-reauth" "$FA")"
 
-printf 'selftest PASS: %d assertions (counts · quota · since · mute · actions · accounts · needs · degenerate · act · events · lint · machine · wording · reauth)
+# ------------------------------------------- 15. entry host key changed (T743) ----
+# the hub's answer to the entry reach report carries host_key_changed into
+# reach.json: each login records ONE error message per new key in its own book
+N15="$WORK/node15"; mkdir -p "$N15/entry"
+reach15() {  # reach15 <new fp> — as the supervisor's write_json lays it out
+  python3 - "$N15/entry/reach.json" "$1" <<'PY'
+import json, sys
+json.dump({"verdict": {"addrs": [], "host_key_changed": {"new": sys.argv[2], "old": "SHA256:oldOLDold1", "since": "2026-10-20T00:00:00Z"}}},
+          open(sys.argv[1], "w"), indent=1, sort_keys=True)
+PY
+}
+n15() { grep -c "\"entry-hostkey-$1\"" "$WORK/conf/logs/notices.ndjson" 2>/dev/null || echo 0; }
+reach15 'SHA256:newNEWnew1'
+FLEET_NODE_STATE="$N15" fa write
+eq "15: a changed entry key → one error message in this login's book" 1 "$(n15 'SHA256:newNEWnew1')"
+grep -q '"level": *"error"' <(grep 'entry-hostkey-SHA256:newNEWnew1' "$WORK/conf/logs/notices.ndjson") \
+  && st_count || st_fail "15: the message is not error-level" "$(grep entry-hostkey "$WORK/conf/logs/notices.ndjson")"
+FLEET_NODE_STATE="$N15" fa write
+eq "15: the same change again → still one" 1 "$(n15 'SHA256:newNEWnew1')"
+reach15 'SHA256:newNEWnew2'
+FLEET_NODE_STATE="$N15" fa write
+eq "15: another new key → its own message" 1 "$(n15 'SHA256:newNEWnew2')"
+python3 -c 'import json,sys; json.dump({"verdict": {"addrs": []}}, open(sys.argv[1], "w"))' "$N15/entry/reach.json"
+FLEET_NODE_STATE="$N15" fa write
+eq "15: alert cleared → nothing new" 2 "$(grep -c entry-hostkey "$WORK/conf/logs/notices.ndjson")"
+
+printf 'selftest PASS: %d assertions (counts · quota · since · mute · actions · accounts · needs · degenerate · act · events · lint · machine · wording · reauth · entry host key)
 ' "$CHECKS"

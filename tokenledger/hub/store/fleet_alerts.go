@@ -57,6 +57,11 @@ const (
 	// AlertTrialNoSpare: a trial waits because no fit machine holds a ready
 	// spare (claude-fleet#4259) — subject "hub"; cleared by the next claim.
 	AlertTrialNoSpare = "trial_no_spare"
+	// AlertEntryHostKeyChanged: a machine reported an entry host key other
+	// than the one the hub held (claude-fleet T743) — every client that pinned
+	// the old one now refuses that machine. Subject its hostname; detail the
+	// old and new fingerprints. Cleared by the operator once they know why.
+	AlertEntryHostKeyChanged = "entry_hostkey_changed"
 )
 
 // FleetAlert is one row.
@@ -113,6 +118,22 @@ func (s *Store) ClearFleetAlert(kind, subject string, at time.Time) (cleared boo
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// OpenFleetAlert is the open (kind, subject) row's detail and when it was
+// raised; ok false when none is open.
+func (s *Store) OpenFleetAlert(kind, subject string) (detail string, raised time.Time, ok bool, err error) {
+	var at string
+	err = s.read.QueryRow(`SELECT detail, raised_at FROM fleet_alerts WHERE kind = ? AND subject = ? AND cleared_at IS NULL
+		ORDER BY id DESC LIMIT 1`, kind, subject).Scan(&detail, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, err
+	}
+	raised, _ = time.Parse(rfc, at)
+	return detail, raised, true, nil
 }
 
 // LastFleetAlertRaised is when (kind, subject) was last raised, open or
