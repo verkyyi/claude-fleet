@@ -6925,6 +6925,42 @@ drill_term_personal_renew() {
   SECS=$(since "$t0")
 }
 
+# term-last-worker-reaped (RMVE): the session last looked at went; the
+# personal terminal goes home, same generation, never «ended».
+drill_term_last_worker_reaped() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --worker-gone 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='上次看的会话被关后再进个人终端：回到家窗口、同一代、家 shell 不变，不说 ended'
+  SECS=$(since "$t0")
+}
+
+# term-hub-rollout (RMVE): a replica going away tells its terminals and drops
+# its row; a holder that refuses connections is passed over, not 503ed.
+drill_term_hub_rollout() {
+  CAP=240; local t0
+  t0=$(now)
+  term_go 'TestDrainForgetsReplica TestStateHolderUnreachablePassedOver TestTermHealthNumbers' 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' \
+    '副本关停先通知终端并删自己的行；连不上的持有者被跳过，GET 不再 503' || return 1
+  SECS=$(since "$t0")
+}
+
+# term-browser-gives-up (RMVE): the page never stops trying, and an «ended»
+# personal terminal is reconnected, then renewed once — the rules' own test.
+drill_term_browser_gives_up() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  command -v node >/dev/null 2>&1 || { WHAT='没有 node：网页的恢复规则由 web-console 门（test/terminal.mjs）跑'; SECS=$(since "$t0"); return 0; }
+  out=$(cd "$ROOT/extras/web-console" && node --experimental-strip-types test/terminal.mjs 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  grep -q 'failures >= 6' "$ROOT/extras/web-console/src/shared/terminal.ts" && { WHY='the page still gives up after 6 tries'; return 1; }
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --own-lease 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='第 51 次仍 ≤15 s 再试；hub_restart 立即重连；ended 先重连、再对同一代 renew 一次；重连只接回自己上一条的租约'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_auto_select() {
   CAP=60; local t0 out rc
   t0=$(now)

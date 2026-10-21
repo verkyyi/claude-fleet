@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -83,6 +85,9 @@ func (s *Server) replicaStarted() time.Time {
 
 // beatReplica writes this replica's row.
 func (s *Server) beatReplica(now time.Time) error {
+	if s.Draining() {
+		return nil // going away: the row is gone and stays gone (RMVE)
+	}
 	return s.Store.BeatReplica(store.ReplicaRow{Name: s.Replica.Name, URL: s.Replica.URL,
 		StartedAt: s.replicaStarted(), SeenAt: now})
 }
@@ -119,7 +124,7 @@ func (s *Server) replicasUp(now time.Time) []store.ReplicaRow {
 	out := make([]store.ReplicaRow, 0, len(rows)+1)
 	placed := false
 	for _, r := range rows {
-		if r.Name == self.Name {
+		if r.Name == self.Name || s.replicaUnreachable(r.Name, now) {
 			continue
 		}
 		if !placed && (self.StartedAt.Before(r.StartedAt) || (self.StartedAt.Equal(r.StartedAt) && self.Name < r.Name)) {
@@ -160,8 +165,41 @@ func (s *Server) stateRoute(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		s.proxyState(w, r, holder)
+		s.proxyState(w, r, holder, func(w http.ResponseWriter, r *http.Request) {
+			// The holder did not answer at all (a rolling release took it):
+			// pass it over and serve from the next one up — or here — rather
+			// than answer 503 until its row ages out (RMVE).
+			s.markReplicaUnreachable(holder.Name, time.Now())
+			if next, ok := s.stateHolder(time.Now()); ok && next.Name != holder.Name {
+				s.proxyState(w, r, next, nil)
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
 	})
+}
+
+// replicaGone is how long a replica that refused a connection is passed over.
+const replicaGone = 30 * time.Second
+
+func (s *Server) markReplicaUnreachable(name string, now time.Time) {
+	s.replicaDown.Store(name, now.Add(replicaGone))
+}
+
+func (s *Server) replicaUnreachable(name string, now time.Time) bool {
+	v, ok := s.replicaDown.Load(name)
+	return ok && now.Before(v.(time.Time))
+}
+
+// stateRetryable is a request that may be sent again whole: nothing read yet.
+func stateRetryable(r *http.Request) bool {
+	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && (r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0)
+}
+
+// unreached is an error that says the holder never got the request.
+func unreached(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }
 
 func (s *Server) stateRouteFunc(f http.HandlerFunc) http.Handler { return s.stateRoute(f) }
@@ -169,7 +207,7 @@ func (s *Server) stateRouteFunc(f http.HandlerFunc) http.Handler { return s.stat
 // proxyState hands r to holder. The holder sees the request the client sent:
 // its Host (the verification URI, the same-origin check), its scheme, its
 // cookies and body; a long-poll streams through.
-func (s *Server) proxyState(w http.ResponseWriter, r *http.Request, holder store.ReplicaRow) {
+func (s *Server) proxyState(w http.ResponseWriter, r *http.Request, holder store.ReplicaRow, unreachable http.HandlerFunc) {
 	target, err := url.Parse(holder.URL)
 	if err != nil {
 		httpError(w, http.StatusBadGateway, "replica "+holder.Name+": bad address: "+err.Error())
@@ -192,6 +230,11 @@ func (s *Server) proxyState(w http.ResponseWriter, r *http.Request, holder store
 		},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if unreachable != nil && unreached(err) && stateRetryable(r) {
+				log.Printf("fleet: hand %s to state holder %s: %v; passing it over", r.URL.Path, holder.Name, err)
+				unreachable(w, r)
+				return
+			}
 			log.Printf("fleet: hand %s to state holder %s: %v", r.URL.Path, holder.Name, err)
 			w.Header().Set("Retry-After", strconv.Itoa(stateRetryAfter))
 			httpError(w, http.StatusServiceUnavailable, "the hub replica holding this state could not be reached; retry shortly")

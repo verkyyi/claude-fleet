@@ -45,6 +45,12 @@ type FleetTermSession struct {
 	EchoP50   int       `json:"echo_p50_ms,omitempty"`
 	EchoP95   int       `json:"echo_p95_ms,omitempty"`
 	EchoN     int       `json:"echo_n,omitempty"`
+	// RMVE: why the browser connected (first · auto · manual · take · renew),
+	// the connection it follows, and when a path was selected — how often a
+	// drop came back by itself, and how fast, are read off these.
+	Cause      string    `json:"cause,omitempty"`
+	Previous   string    `json:"previous,omitempty"`
+	SelectedAt time.Time `json:"selected_at,omitempty"`
 }
 
 func (s *Store) ensureFleetTermSessions() error {
@@ -54,6 +60,12 @@ func (s *Store) ensureFleetTermSessions() error {
 	// the browser's own echo measure (XX79): key → next output, ms
 	for _, c := range []string{"echo_p50_ms", "echo_p95_ms", "echo_n"} {
 		if err := s.addColumn("fleet_term_sessions", c, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	// RMVE: how a connection came about and when it got a path
+	for _, c := range []string{"cause", "previous", "selected_at"} {
+		if err := s.addColumn("fleet_term_sessions", c, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
 	}
@@ -78,8 +90,8 @@ func (s *Store) RecordTermEcho(id string, p50, p95, n int) error {
 // RecordTermOpen writes a terminal's row as it opens.
 func (s *Store) RecordTermOpen(t FleetTermSession) error {
 	_, err := s.write.Exec(`INSERT INTO fleet_term_sessions (id, person, machine, login, target, mode,
-		opened_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.Person, t.Machine, t.Login, t.Target, t.Mode, t.OpenedAt.UTC().Format(rfc))
+		opened_at, cause, previous) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.Person, t.Machine, t.Login, t.Target, t.Mode, t.OpenedAt.UTC().Format(rfc), t.Cause, t.Previous)
 	return err
 }
 
@@ -93,7 +105,7 @@ func (s *Store) RecordTermClose(id, outcome string, up, down int64, at time.Time
 
 // RecordTermMode commits the selected path without putting payload in the audit.
 func (s *Store) RecordTermMode(id, mode string) error {
-	_, err := s.write.Exec(`UPDATE fleet_term_sessions SET mode = ? WHERE id = ?`, mode, id)
+	_, err := s.write.Exec(`UPDATE fleet_term_sessions SET mode = ?, selected_at = ? WHERE id = ?`, mode, time.Now().UTC().Format(rfc), id)
 	return err
 }
 
@@ -102,14 +114,25 @@ func (s *Store) FleetTermSessions(person string, limit int) ([]FleetTermSession,
 	if limit <= 0 {
 		limit = 50
 	}
-	q := `SELECT id, person, machine, login, target, mode, opened_at, closed_at, outcome, bytes_up,
-		bytes_down, echo_p50_ms, echo_p95_ms, echo_n FROM fleet_term_sessions`
 	var args []any
+	where := ""
 	if person != "" {
-		q += ` WHERE person = ?`
+		where = ` WHERE person = ?`
 		args = append(args, person)
 	}
-	rows, err := s.read.Query(q+` ORDER BY opened_at DESC, id LIMIT `+strconv.Itoa(limit), args...)
+	return s.termSessions(where+` ORDER BY opened_at DESC, id LIMIT `+strconv.Itoa(limit), args...)
+}
+
+// FleetTermSessionsSince is every terminal opened at or after since, oldest
+// first — the window the terminal health numbers are read from (RMVE).
+func (s *Store) FleetTermSessionsSince(since time.Time) ([]FleetTermSession, error) {
+	return s.termSessions(` WHERE opened_at >= ? ORDER BY opened_at, id`, since.UTC().Format(rfc))
+}
+
+func (s *Store) termSessions(tail string, args ...any) ([]FleetTermSession, error) {
+	q := `SELECT id, person, machine, login, target, mode, opened_at, closed_at, outcome, bytes_up,
+		bytes_down, echo_p50_ms, echo_p95_ms, echo_n, cause, previous, selected_at FROM fleet_term_sessions`
+	rows, err := s.read.Query(q+tail, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -117,13 +140,14 @@ func (s *Store) FleetTermSessions(person string, limit int) ([]FleetTermSession,
 	out := []FleetTermSession{}
 	for rows.Next() {
 		var t FleetTermSession
-		var opened, closed string
+		var opened, closed, selected string
 		if err := rows.Scan(&t.ID, &t.Person, &t.Machine, &t.Login, &t.Target, &t.Mode, &opened, &closed,
-			&t.Outcome, &t.BytesUp, &t.BytesDown, &t.EchoP50, &t.EchoP95, &t.EchoN); err != nil {
+			&t.Outcome, &t.BytesUp, &t.BytesDown, &t.EchoP50, &t.EchoP95, &t.EchoN, &t.Cause, &t.Previous, &selected); err != nil {
 			return nil, err
 		}
 		t.OpenedAt, _ = time.Parse(rfc, opened)
 		t.ClosedAt, _ = time.Parse(rfc, closed)
+		t.SelectedAt, _ = time.Parse(rfc, selected)
 		out = append(out, t)
 	}
 	return out, rows.Err()

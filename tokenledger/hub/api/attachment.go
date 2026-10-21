@@ -112,24 +112,44 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		refuse(409, "interrupted", "the node generation changed")
 		return
 	}
-	recheck := func() bool {
+	// checkWhy is "" while this attachment may go on, else the browser's word
+	// for why not: only a sign-in or a home that changed is «revoked» (final);
+	// a node that relinked or a machine in maintenance comes back (RMVE).
+	checkWhy := func() string {
 		p, _, c, _ := s.termPerson(r)
+		if c != "" || p != person || !s.attachmentSessionLive(r) {
+			return "revoked"
+		}
 		h, ok, e := s.Store.EntryHomeOf(person)
-		if c != "" || p != person || e != nil || !ok || s.nodes.get(epID) != nc || !s.attachmentSessionLive(r) {
-			return false
+		if e != nil {
+			return "home_down"
+		}
+		if !ok {
+			return "revoked"
+		}
+		if s.nodes.get(epID) != nc {
+			return "node_unavailable"
 		}
 		settings, e := s.Store.FleetSettings()
 		if e != nil {
-			return false
+			return "home_down"
 		}
 		if _, maintenance := maintenanceOf(home.Machine, settings); maintenance {
-			return false
+			return "maintenance"
 		}
 		l, t, d, _, c, _ := s.termTarget(r.URL.Query(), h)
-		return c == "" && l == logical && t == target && d.Machine == home.Machine && d.Login == home.Login
+		if c == "" && l == logical && t == target && d.Machine == home.Machine && d.Login == home.Login {
+			return ""
+		}
+		return "revoked"
 	}
-	if !recheck() {
-		refuse(403, "revoked", "attachment not authorized")
+	recheck := func() bool { return checkWhy() == "" }
+	if why := checkWhy(); why != "" {
+		if why == "revoked" {
+			refuse(403, "revoked", "attachment not authorized")
+		} else {
+			refuse(503, why, "the terminal's machine is not reachable right now")
+		}
 		return
 	}
 	max, perMin := s.TermMaxPerPerson, s.TermPerMinute
@@ -151,7 +171,7 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	s.serveAttachment(w, r, attachmentAdmission{person: person, home: home, logical: logical,
 		target: target, epID: epID, node: nc, generation: gen, previous: previous,
 		termResume: resume, termTake: take, termRenew: renew, service: "term", table: &s.termRelays, max: termRelayMax(s.TermRelayMaxPerLogin),
-		rate: s.TermRelayRateBPS, recheck: recheck, doors: doors})
+		rate: s.TermRelayRateBPS, recheck: recheck, why: checkWhy, doors: doors})
 }
 
 // Service adapters share negotiation and leases, never their admission, data
@@ -168,9 +188,11 @@ type attachmentAdmission struct {
 	max                                                          int
 	rate                                                         int64
 	recheck                                                      func() bool
-	request                                                      control.ChatAttachmentRequest
-	dispatched                                                   func()
-	result                                                       func(control.AttachmentSignal)
+	// why recheck failed, as the browser's word (RMVE); nil = «revoked»
+	why        func() string
+	request    control.ChatAttachmentRequest
+	dispatched func()
+	result     func(control.AttachmentSignal)
 	// doors a terminal's payload may go through (XX79); nil = none offered
 	doors []termDoor
 }
@@ -253,14 +275,20 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 		return
 	}
 	if a.service == "term" {
-		if err := s.Store.RecordTermOpen(store.FleetTermSession{ID: or.id, Person: person, Machine: home.Machine, Login: home.Login, Target: logical, Mode: "negotiating", OpenedAt: time.Now()}); err != nil {
+		if err := s.Store.RecordTermOpen(store.FleetTermSession{ID: or.id, Person: person, Machine: home.Machine, Login: home.Login, Target: logical, Mode: "negotiating", OpenedAt: time.Now(), Cause: termCause(r.URL.Query().Get("cause")), Previous: previous}); err != nil {
 			return
 		}
 	}
 	var up, down int64
 	outcome := "closed"
+	// why a terminal ended (RMVE): who went — the browser, the node, this hub
+	// restarting — or the node's own word; appended to the path in outcome
+	reason := ""
 	defer func() {
 		if a.service == "term" {
+			if reason != "" {
+				outcome += "; " + reason
+			}
 			s.Store.RecordTermClose(or.id, outcome, up, down, time.Now())
 		} else {
 			s.Store.CloseChatRequest(a.request.ID, outcome, up, down)
@@ -341,8 +369,16 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 	for {
 		select {
 		case <-ctx.Done():
+			reason = "browser_closed"
 			return
 		case <-or.ctx.Done():
+			reason = "node_closed"
+			return
+		case <-s.drainCh():
+			// This hub is going away (a rolling release): tell the page to come
+			// back at once — to the other replica — not to wait out a dead socket.
+			reason = "hub_restart"
+			send(control.AttachmentSignal{T: "error", Error: "hub_restart"})
 			return
 		case <-deadline.C:
 			if !selected {
@@ -352,8 +388,14 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 			}
 		case <-ticker.C:
 			if !recheck() {
-				outcome = "revoked"
-				send(control.AttachmentSignal{T: "error", Error: "revoked"})
+				// only a sign-in that really went says «revoked»: a node that
+				// relinked or a machine put into maintenance is a reconnect (RMVE)
+				why := "revoked"
+				if a.why != nil {
+					why = a.why()
+				}
+				outcome, reason = why, ""
+				send(control.AttachmentSignal{T: "error", Error: why})
 				return
 			}
 			grant.Iat = time.Now().Unix()
@@ -363,6 +405,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 			}
 		case f := <-bc:
 			if f.err != nil {
+				reason = "browser_closed"
 				return
 			}
 			var sig control.AttachmentSignal
@@ -417,6 +460,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 			}
 		case f := <-ac:
 			if f.err != nil {
+				reason = "node_closed"
 				return
 			}
 			var sig control.AttachmentSignal
@@ -437,6 +481,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 					}
 					continue
 				case "error":
+					reason = termReason(sig.Error)
 					send(control.AttachmentSignal{T: "error", Error: sig.Error, Term: sig.Term, TermGen: sig.TermGen})
 					return
 				case "answer":

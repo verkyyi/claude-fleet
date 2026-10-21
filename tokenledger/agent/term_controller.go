@@ -25,6 +25,8 @@ type termController struct {
 	Epoch uint64 `json:"epoch"`
 	Lock  string `json:"lock"`
 	Lease string `json:"lease"`
+	// what the page says once (RMVE); only a word the browser knows is passed
+	Notice string `json:"notice"`
 }
 
 var readTermAdmission = func(r io.Reader) (termController, error) {
@@ -43,5 +45,9 @@ var readTermAdmission = func(r io.Reader) (termController, error) {
 }
 
 func (c termController) ready() control.TermControl {
-	return control.TermControl{T: "ready", Term: c.Term, Gen: c.Gen, Epoch: c.Epoch}
+	r := control.TermControl{T: "ready", Term: c.Term, Gen: c.Gen, Epoch: c.Epoch}
+	if c.Notice == "worker_gone" {
+		r.Notice = c.Notice
+	}
+	return r
 }

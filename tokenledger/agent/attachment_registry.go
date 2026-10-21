@@ -17,7 +17,13 @@ type attachmentEntry struct {
 type attachmentRegistry struct {
 	mu       sync.Mutex
 	active   map[string]*attachmentEntry
-	replaced map[string]time.Time
+	replaced map[string]replacement
+}
+
+// replacement is who took a predecessor's place, and when.
+type replacement struct {
+	at time.Time
+	by string
 }
 
 // A late transport failure needs a fresh authorization. Its successor first
@@ -27,10 +33,10 @@ func (r *attachmentRegistry) begin(ctx context.Context, g control.AttachmentGran
 	r.mu.Lock()
 	if r.active == nil {
 		r.active = map[string]*attachmentEntry{}
-		r.replaced = map[string]time.Time{}
+		r.replaced = map[string]replacement{}
 	}
-	for k, at := range r.replaced {
-		if time.Since(at) > termGrantSpentTTL {
+	for k, rp := range r.replaced {
+		if time.Since(rp.at) > termGrantSpentTTL {
 			delete(r.replaced, k)
 		}
 	}
@@ -40,7 +46,10 @@ func (r *attachmentRegistry) begin(ctx context.Context, g control.AttachmentGran
 	}
 	var old *attachmentEntry
 	if g.Previous != "" {
-		if _, used := r.replaced[g.Previous]; used {
+		// Two successors never both win one predecessor. A successor that is
+		// gone already (its try answered interrupted / ended) won nothing: the
+		// page retrying with the same predecessor gets through (RMVE).
+		if rp, used := r.replaced[g.Previous]; used && r.active[rp.by] != nil {
 			r.mu.Unlock()
 			return nil, errors.New("attachment already replaced")
 		}
@@ -49,7 +58,7 @@ func (r *attachmentRegistry) begin(ctx context.Context, g control.AttachmentGran
 			r.mu.Unlock()
 			return nil, errors.New("replacement target differs")
 		}
-		r.replaced[g.Previous] = time.Now()
+		r.replaced[g.Previous] = replacement{at: time.Now(), by: g.Conn}
 	}
 	e := &attachmentEntry{grant: g, cancel: cancel, done: make(chan struct{})}
 	r.active[g.Conn] = e

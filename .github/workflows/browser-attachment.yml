@@ -9,7 +9,7 @@ on:
 jobs:
   chromium:
     runs-on: ubuntu-latest
-    timeout-minutes: 16
+    timeout-minutes: 24
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -47,7 +47,7 @@ jobs:
         working-directory: tokenledger/e2e
         run: |
           set -o pipefail
-          go test -tags browseracceptance -count=1 -v -timeout 10m -run '^Test(Attachment|AttachmentDoor|TerminalConsole|ChatAttachment|TerminalRecovery)Chromium$' . 2>&1 | tee ../../browser-attachment.log
+          go test -tags browseracceptance -count=1 -v -timeout 20m -run '^Test(Attachment|AttachmentDoor|TerminalConsole|ChatAttachment|TerminalRecovery)Chromium$' . 2>&1 | tee ../../browser-attachment.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

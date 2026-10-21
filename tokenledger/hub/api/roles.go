@@ -63,6 +63,7 @@ var routeAccess = map[string]string{
 	"/v1/fleet/release/":   accessPublic, // signed node releases (claude-fleet#2335)
 	control.AccountKeyPath: accessPublic, // the admin seat's ticket key (claude-fleet#3557)
 	ReleaseStatsPath:       accessAdmin,  // the release ledger (claude-fleet#3140)
+	TermHealthPath:         accessAdmin,  // the browser terminals' numbers (RMVE)
 	ReleaseKeysPath:        accessAdmin,  // the signing keys' state, 404 to a member (claude-fleet#3937)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic,

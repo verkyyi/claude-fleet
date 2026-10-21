@@ -29,6 +29,8 @@ export type AttachmentState = {
   terminal?: string
   terminalGeneration?: string
   controllerEpoch?: number
+  /** a word the terminal says once on arrival (RMVE: worker_gone) */
+  notice?: string
   error?: string
   status?: number
   message?: string
@@ -214,7 +216,7 @@ export class BrowserAttachment {
     ws.binaryType = 'arraybuffer'
     const a: Attempt = { ws, offerSent: false, ready: false, ended: false, doors: [] }
     this.attempt = a
-    this.publish({ state: 'connecting', mode: undefined, door: undefined, echo: undefined, pair: undefined, connection: undefined, error: undefined })
+    this.publish({ state: 'connecting', mode: undefined, door: undefined, echo: undefined, pair: undefined, connection: undefined, error: undefined, notice: undefined })
     // Covers a failed upgrade, ICE, target startup and a lost ready handshake.
     a.timer = setTimeout(() => this.end(a, 'attachment_timeout'), 20000)
     ws.onclose = () => this.end(a, 'connection_closed')
@@ -341,11 +343,11 @@ export class BrowserAttachment {
     const n = typeof data === 'string' ? new TextEncoder().encode(data).byteLength : data.byteLength
     if (n > FRAME_MAX) { this.end(a, 'oversized_frame', true); return }
     if (!a.ready) {
-      let ready = false, meta: { term?: string; gen?: string; epoch?: number } = {}
+      let ready = false, meta: { term?: string; gen?: string; epoch?: number; notice?: string } = {}
       try { if (typeof data === 'string') { meta = JSON.parse(data); ready = JSON.parse(data).t === 'ready' } } catch { /* rejected below */ }
       if (!ready || !a.choice) { this.end(a, 'data_before_ready', true); return }
       a.ready = true; clearTimeout(a.timer); clearTimeout(a.doorTimer)
-      this.publish({ state: 'ready', mode: a.choice, terminal: meta.term, terminalGeneration: meta.gen, controllerEpoch: meta.epoch })
+      this.publish({ state: 'ready', mode: a.choice, terminal: meta.term, terminalGeneration: meta.gen, controllerEpoch: meta.epoch, notice: typeof meta.notice === 'string' ? meta.notice : undefined })
       clearInterval(this.echoTimer)
       let tick = 0
       this.echoTimer = setInterval(() => {
