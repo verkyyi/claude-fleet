@@ -562,6 +562,8 @@ func (s *Server) routes() *routeMux {
 	// 申请 (claude-fleet#4051): a person the list does not name asks to be
 	// let in; 404 when no way in is configured.
 	mux.HandleFunc(ApplyPath, s.handleApply)
+	// The front page asks who the applicant inside WeChat is (T794).
+	mux.HandleFunc(ApplicantPath, s.handleApplicant)
 	mux.HandleFunc(ApplyEditPath, s.handleApplyEdit)
 	mux.HandleFunc(ApplyWithdrawPath, s.handleApplyWithdraw)
 	// Who may sign in with GitHub (claude-fleet#1986): the admin's, with or

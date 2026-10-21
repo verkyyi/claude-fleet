@@ -33,8 +33,8 @@
 #      (H1 · > summary · ## lists of [links](…)), every link answered; llms-full
 #      carries every doc's title; a doc added to docs/public/ is in all of them
 #   T  fleet.trial off (issue #4269): the apply/ pages and llms files offer no
-#      trial — every CTA 申请使用 → /apply, no drill seconds — and the trial pages
-#      keep theirs
+#      trial — the scan card is 申请使用 → /apply (T794), no drill seconds — and
+#      the trial pages keep theirs
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/bin/selftest-lib.sh"
@@ -166,7 +166,7 @@ def told(p):
     body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', p, flags=re.S)
     return html.unescape(' '.join([title, metas, ld, re.sub(r'<[^>]+>', ' ', body)]))
 TRIAL = re.compile(r'立即体验|试用|先试|Try it|\btrial\b|15\s*(分钟|minutes)|\d+\s*(秒|seconds?\b)|\b\d\d:\d\d\b', re.I)
-for rel, applyw in (('index.html', '申请使用'), ('en/index.html', 'Apply for access')):
+for rel, applyw in (('index.html', '申请使用'), ('en/index.html', 'to apply')):
     f = os.path.join(OUT, 'apply', rel)
     if not os.path.isfile(f):
         bad.append('T apply/%s not built' % rel); continue
@@ -176,8 +176,10 @@ for rel, applyw in (('index.html', '申请使用'), ('en/index.html', 'Apply for
         bad.append('T apply/%s says "%s"' % (rel, t[max(0, m.start() - 15):m.end() + 5].strip()))
     if '/app/try' in p or '<!--trial' in p or '<!--/trial' in p:
         bad.append('T apply/%s still links /app/try or keeps a trial marker' % rel)
-    if p.count('href="/apply"') < 3 or applyw not in t:
-        bad.append('T apply/%s: the nav, hero and end CTAs are not %s → /apply' % (rel, applyw))
+    # The way in is the scan card (T794): its code is drawn for a sign-in that
+    # lands on /apply, and WeChat's one tap posts to /apply.
+    if 'data-p="login"' not in p or 'action="/apply"' not in p or applyw not in t:
+        bad.append('T apply/%s: the scan card is not a %s → /apply' % (rel, applyw))
     ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', p, flags=re.S).group(1))
     app = [g for g in ld['@graph'] if g['@type'] == 'SoftwareApplication'][0]
     if app['potentialAction']['target'] != '__ORIGIN__/apply':

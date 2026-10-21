@@ -78,14 +78,14 @@ func wxRelaySig(key, target, nonce, openid, ts string) string {
 
 // wxRelayStart sends WeChat's browser to the silent authorisation, its
 // nonce bound to this browser by the flow cookie.
-func (s *Server) wxRelayStart(w http.ResponseWriter, r *http.Request) {
+func (s *Server) wxRelayStart(w http.ResponseWriter, r *http.Request, next string) {
 	nonce, err := randomToken(24)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "could not start sign-in")
 		return
 	}
 	g := s.WxGW
-	f := wechatFlow{State: nonce, Road: wechatRoadRelay, Exp: time.Now().Add(wxRelaySkew).Unix()}
+	f := wechatFlow{State: nonce, Road: wechatRoadRelay, Exp: time.Now().Add(wxRelaySkew).Unix(), Next: next}
 	flow, _ := json.Marshal(f)
 	http.SetCookie(w, &http.Cookie{
 		Name: wechatFlowCookie, Value: signBlob(flow, s.sessionKey()), Path: wechatFlowPath,
@@ -163,6 +163,9 @@ func (s *Server) handleWxRelayCB(w http.ResponseWriter, r *http.Request) {
 		log.Printf("wechat relay: user/info: %v", err)
 		http.Redirect(w, r, appURL("/signin")+"?e=wechat-down", http.StatusFound)
 		return
+	}
+	if flow.Next != "" {
+		w = &homeReturn{ResponseWriter: w, next: flow.Next}
 	}
 	s.wxLand(w, r, u, s.trialAsked(r), now)
 }

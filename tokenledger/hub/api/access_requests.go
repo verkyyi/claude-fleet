@@ -195,9 +195,12 @@ func (s *Server) applyGet(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 				return
 			}
-			if last == nil && q.Get("new") != "1" && !v.FromTrial {
-				// Just turned away at the door, nothing asked yet: where they
-				// stand and what they can do (not_listed.go, #4050).
+			if last == nil && q.Get("new") != "1" && !v.FromTrial &&
+				(q.Get("invite") == "1" || (s.trialOn() && !s.applicantTried(a))) {
+				// Just turned away at the door, nothing asked yet, and a
+				// choice to make (a trial, or an invite link): where they
+				// stand and what they can do (not_listed.go, #4050). With
+				// nothing to choose the form is the page (T794).
 				s.applyNotListed(w, r, loc, a)
 				return
 			}
@@ -379,6 +382,9 @@ type applyView struct {
 	UseBad, TeamBad, RefBad bool
 	Notify                  []notifyOpt
 	Editing                 bool
+	// NotifyFold: a WeChat sign-in's result goes to that WeChat — one line,
+	// the other channel folded under it (T794); NotifyOpen when it is chosen.
+	NotifyFold, NotifyOpen bool
 
 	// the status
 	Title, When, Waited, Dest string
@@ -478,6 +484,8 @@ func (v *applyView) fillNotify(loc string, a applicant, channel, addr string, ad
 		channel = chs[0]
 	}
 	v.Notify = nil
+	v.NotifyFold = isWeChatKind(a.Kind) && len(chs) > 1
+	v.NotifyOpen = v.NotifyFold && (channel != store.NotifyWeChat || addrBad)
 	for _, ch := range chs {
 		o := notifyOpt{Value: ch, Checked: ch == channel}
 		switch ch {
@@ -514,7 +522,9 @@ func (v *applyView) readForm(loc string, a applicant, form url.Values) (store.Re
 	channel := form.Get("notify")
 	addr := store.NormIdentitySubject(store.IdentityEmail, form.Get("email"))
 	var problems []string
-	if n := utf8.RuneCountInString(v.Use); n < applyUseMin {
+	// Empty is allowed (T794: one tap from WeChat applies, the words can
+	// come later by an edit); a few words are not.
+	if n := utf8.RuneCountInString(v.Use); n > 0 && n < applyUseMin {
 		v.UseBad = true
 		v.UseHint = pageT(loc, "apply.err.short")
 	} else if n > applyUseMax {
@@ -651,20 +661,23 @@ const (
 const applyWhoCard = `<div class="who"><span class="av" aria-hidden="true">{{.Initial}}</span><span><div class="n">{{.Display}}</div><div class="m">` + userIcon + `{{.Way}}</div></span><a href="/app/signin">{{t "apply.switch"}}</a></div>`
 
 var applyTmpl = template.Must(template.New("apply").Funcs(pageFuncs(i18n.EN)).Parse(entryHead + `
-<title>{{if eq .Screen "form"}}{{t "apply.title"}}{{else}}{{t "apply.mine.title"}}{{end}}</title></head><body><div class="page">` + entryTop + `
+<title>{{if eq .Screen "form"}}{{t "apply.title"}}{{else}}{{t "apply.mine.title"}}{{end}}</title>
+<style>details.fold{margin:0 0 20px}details.fold>summary{cursor:pointer;list-style:none;font-size:14px;font-weight:500;color:var(--muted-foreground)}details.fold>summary::-webkit-details-marker{display:none}details.fold>summary b{font-weight:500;text-decoration:underline;text-underline-offset:3px}details.fold[open]>summary{margin-bottom:12px}details.fold .field:last-child{margin-bottom:0}</style></head><body><div class="page">` + entryTop + `
 {{if eq .Screen "form"}}<main class="col lift"><h1>{{if .Editing}}{{t "apply.h1.edit"}}{{else}}{{t "apply.h1"}}{{end}}<span class="dot">.</span></h1><p class="lead">{{.Lead}}</p>
 {{if .Alert}}<p class="alert{{if .AlertBad}} bad{{end}}" role="alert">` + alertIcon + `<span>{{.Alert}}</span></p>{{end}}
 ` + applyWhoCard + `
 <form method="post" action="{{.Action}}">{{if .ID}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
 <div class="field"><label for="use">{{t "apply.use"}}</label><textarea class="input area{{if .UseBad}} bad{{end}}" id="use" name="use" required minlength="10" maxlength="500" placeholder="{{t "apply.use.ph"}}"{{if .UseBad}} aria-invalid="true"{{end}} aria-describedby="use-hint">{{.Use}}</textarea>
 <div class="hint{{if .UseBad}} bad{{end}}" id="use-hint"><span>{{.UseHint}}</span><span>{{.UseCount}}/500</span></div></div>
+<details class="fold"{{if or .Team .Referrer .TeamBad .RefBad}} open{{end}}><summary>+ {{t "apply.more"}}</summary>
 <div class="field"><label for="team">{{t "apply.team"}}<small>{{t "apply.optional"}}</small></label><input class="input{{if .TeamBad}} bad{{end}}" id="team" name="team" maxlength="80" value="{{.Team}}" placeholder="{{t "apply.team.ph"}}"></div>
-<div class="field"><label for="referrer">{{t "apply.ref"}}<small>{{t "apply.optional"}}</small></label><input class="input{{if .RefBad}} bad{{end}}" id="referrer" name="referrer" maxlength="80" value="{{.Referrer}}" placeholder="{{t "apply.ref.ph"}}"></div>
-<fieldset class="field" style="border:0;padding:0;margin:0 0 24px;min-width:0"><legend style="padding:0;margin-bottom:6px;font-size:14px;font-weight:500">{{t "apply.notify"}}</legend><div class="opts" role="radiogroup">
+<div class="field"><label for="referrer">{{t "apply.ref"}}<small>{{t "apply.optional"}}</small></label><input class="input{{if .RefBad}} bad{{end}}" id="referrer" name="referrer" maxlength="80" value="{{.Referrer}}" placeholder="{{t "apply.ref.ph"}}"></div></details>
+{{if .NotifyFold}}<details class="fold"{{if .NotifyOpen}} open{{end}}><summary>{{t "apply.n.line"}} · <b>{{t "apply.n.change"}}</b></summary>{{end}}<fieldset class="field" style="border:0;padding:0;margin:0 0 24px;min-width:0"><legend style="padding:0;margin-bottom:6px;font-size:14px;font-weight:500">{{t "apply.notify"}}</legend><div class="opts" role="radiogroup">
 {{range .Notify}}<label class="opt"><input type="radio" name="notify" value="{{.Value}}"{{if .Checked}} checked{{end}}><span class="dot"></span><span class="b">{{.Title}}<div class="s">{{.Sub}}</div>{{if .Field}}<input class="input{{if .AddrBad}} bad{{end}}" type="email" name="email" value="{{.Addr}}" placeholder="you@example.com" autocomplete="email" aria-label="{{$.EmailLabel}}">{{end}}</span></label>
-{{end}}</div></fieldset>
+{{end}}</div></fieldset>{{if .NotifyFold}}</details>{{end}}
 {{if .Editing}}<div class="twin"><a class="btn outline" href="/apply">{{t "apply.cancel"}}</a><button class="btn primary" type="submit">{{.Submit}}</button></div>{{else}}<button class="btn primary" type="submit">{{.Submit}}</button>{{end}}
 </form>
+{{if not (or .Editing .FromTrial)}}<p class="fine">{{t "apply.invited.q"}} <a href="/apply?invite=1" style="text-decoration:underline">{{t "apply.invited.go"}}</a></p>{{end}}
 <p class="fine">{{t "apply.keep"}}</p></main>
 {{else if eq .Screen "pending"}}<main class="col lift" style="padding-top:32px"><div class="tile wait">` + clockIcon + `</div><h1>{{t "apply.pending.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{.PendingLead}}</p>
@@ -672,7 +685,7 @@ var applyTmpl = template.Must(template.New("apply").Funcs(pageFuncs(i18n.EN)).Pa
 <ol class="steps"><li class="done"><span class="k"></span><span><div class="t">{{t "apply.step.sent"}}</div><div class="s">{{.When}}</div></span></li>
 <li class="now"><span class="k"></span><span><div class="t">{{t "apply.step.review"}}</div><div class="s">{{.WaitedLine}}</div></span></li>
 <li class="later"><span class="k"></span><span><div class="t">{{.ResultLine}}</div></span></li></ol>
-<div class="card"><p class="label">{{t "apply.you.wrote"}}</p><p class="pre">{{.R.Use}}</p>{{if .R.Team}}<p class="label">{{t "apply.team.short"}}</p><p>{{.R.Team}}</p>{{end}}{{if .R.Referrer}}<p class="label">{{t "apply.ref.short"}}</p><p>{{.R.Referrer}}</p>{{end}}</div>
+<div class="card">{{if .R.Use}}<p class="label">{{t "apply.you.wrote"}}</p><p class="pre">{{.R.Use}}</p>{{end}}{{if .R.Team}}<p class="label">{{t "apply.team.short"}}</p><p>{{.R.Team}}</p>{{end}}{{if .R.Referrer}}<p class="label">{{t "apply.ref.short"}}</p><p>{{.R.Referrer}}</p>{{end}}</div>
 <div class="twin"><a class="btn outline" href="/apply?edit=1">{{t "apply.edit"}}</a><a class="btn ghost" href="/apply?withdraw=1">{{t "apply.withdraw"}}</a></div>
 <p class="fine">{{t "apply.pending.fine"}}</p></main>
 {{if .Confirm}}<div class="scrim"><div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="wd-h"><h2 id="wd-h">{{t "apply.wd.h"}}</h2><p>{{t "apply.wd.p"}}</p><div class="twin"><a class="btn outline" href="/apply">{{t "apply.cancel"}}</a><form method="post" action="/apply/withdraw"><input type="hidden" name="id" value="{{.R.ID}}"><button class="btn primary" type="submit">{{t "apply.wd.go"}}</button></form></div></div></div>{{end}}
@@ -733,6 +746,11 @@ func init() {
 		"apply.use.hint":     {i18n.EN: "The more concrete, the faster the review", i18n.ZhCN: "说得具体，审核更快"},
 		"apply.use.carried":  {i18n.EN: "Carried over from your trial — change it as you like", i18n.ZhCN: "从你的试用里带过来的，可以改"},
 		"apply.optional":     {i18n.EN: "optional", i18n.ZhCN: "选填"},
+		"apply.more":         {i18n.EN: "Add your team or who sent you (optional)", i18n.ZhCN: "补充团队、推荐人（选填）"},
+		"apply.n.line":       {i18n.EN: "We'll tell you on the WeChat you signed in with", i18n.ZhCN: "结果发到你登录用的这个微信"},
+		"apply.n.change":     {i18n.EN: "use email instead", i18n.ZhCN: "改用邮箱"},
+		"apply.invited.q":    {i18n.EN: "Got an invite link?", i18n.ZhCN: "收到过邀请链接？"},
+		"apply.invited.go":   {i18n.EN: "Use it instead", i18n.ZhCN: "用邀请链接进入"},
 		"apply.team":         {i18n.EN: "Your team or company", i18n.ZhCN: "你在哪个团队或公司"},
 		"apply.team.ph":      {i18n.EN: "For example: an e-commerce company in Hangzhou · ops", i18n.ZhCN: "比如：杭州一家电商公司 · 运营"},
 		"apply.team.short":   {i18n.EN: "Team", i18n.ZhCN: "团队"},
