@@ -136,8 +136,10 @@ var consolePages = []consolePage{
 	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
 	{old: "/term", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},
 	{old: AppPrefix + "/terminal", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},
-	// 任务 (C5); its tickets tab and pages left with the hub's tickets (claude-fleet#4898)
-	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
+	// 任务 (C5) is one list with 会话 since T769: its address, a code's ?q=
+	// carried along, opens that row there. Its tickets tab and pages left with
+	// the hub's tickets (claude-fleet#4898).
+	{old: AppPrefix + TasksPagePath, new: AppPrefix + "/sessions", side: sideMe, owner: "T769"},
 	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6"},
 	// 我的额度 is folded into 我的用量 already; the page only moved on in
 	// the browser, a second hop.

@@ -14,8 +14,10 @@ import (
 // The app's push channel (claude-fleet#2794, EPIC #2792 C2).
 //
 // One Server-Sent Events connection per tab carries every topic a page may
-// draw from: `nodes` (the body of /v1/nodes), `sessions` (fleet_sessions) and
-// `usage` (/v1/live) — each cut by the SAME scope its own route applies
+// draw from: `nodes` (the body of /v1/nodes), `sessions` (fleet_sessions),
+// `usage` (/v1/live) and, asked by name only, `tasks` (the body of GET
+// /v1/fleet/tasks: the person's own records, claude-fleet T769) — each cut by
+// the SAME scope its own route applies
 // (FleetScope through fleetScope, UserScope for live), here on the hub, so a
 // person's stream never carries another login's machine, session or usage
 // (EPIC #2512's rule; the page filters nothing). A topic is sent when the
@@ -27,7 +29,7 @@ import (
 // silence, a beat that reached another replica). One topic is sent at most
 // once a second: a burst of beats is one event.
 //
-//	GET /v1/fleet/stream?topics=nodes,sessions,usage
+//	GET /v1/fleet/stream?topics=nodes,sessions,usage,tasks
 //	event: <topic>   data: {"observed_at": …, "sent_at": …, "body": …}
 //	event: ping      data: {"sent_at": …}            every 20 s
 //
@@ -40,7 +42,12 @@ import (
 const FleetStreamPath = "/v1/fleet/stream"
 
 // fleetStreamTopics are the topics a stream may carry, in send order.
-var fleetStreamTopics = []string{"nodes", "sessions", "usage"}
+var fleetStreamTopics = []string{"nodes", "sessions", "usage", "tasks"}
+
+// fleetStreamDefault is what a stream that names no topic carries: the topics
+// it carried before `tasks` (T769), so an older page's stream is byte for byte
+// as it was.
+var fleetStreamDefault = []string{"nodes", "sessions", "usage"}
 
 // fleetStreamRecheck re-reads every topic with no event behind it.
 var fleetStreamRecheck = 5 * time.Second
@@ -74,7 +81,7 @@ type streamFrame struct {
 // topic is an error, never silently dropped.
 func streamTopicsArg(q string) ([]string, error) {
 	if strings.TrimSpace(q) == "" {
-		return fleetStreamTopics, nil
+		return fleetStreamDefault, nil
 	}
 	want := map[string]bool{}
 	for _, t := range strings.Split(q, ",") {
@@ -98,7 +105,7 @@ func streamTopicsArg(q string) ([]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return fleetStreamTopics, nil
+		return fleetStreamDefault, nil
 	}
 	return out, nil
 }
@@ -226,6 +233,20 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// The tasks topic is GET /v1/fleet/tasks' own cut: the viewer's records
+	// (everyone's only at the operator's door), never ?all=1's.
+	var tasksOwner string
+	if want["tasks"] {
+		p, err := s.FleetPrincipal(r)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		tasksOwner = p.Actor
+		if p.Person == "" {
+			tasksOwner = ""
+		}
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		httpError(w, http.StatusInternalServerError, "streaming unsupported")
@@ -239,6 +260,9 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 		case "sessions":
 			out, err := s.FleetSessions(sessR)
 			return out, sessionsObserved(out), err
+		case "tasks":
+			out, err := s.tasksBody(tasksOwner, 0)
+			return out, time.Time{}, err
 		default:
 			l := s.liveStore()
 			return s.FilterLiveFor(l.Snapshot(), account, source, who), l.LastHeard(), nil
@@ -361,7 +385,8 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 		case <-nodesC:
 			dirty["nodes"] = true
 		case <-sessC:
-			dirty["sessions"] = true
+			// a task row carries its session's live word, so it moves too
+			dirty["sessions"], dirty["tasks"] = true, want["tasks"]
 		case <-live:
 			dirty["usage"] = true
 		case <-recheck.C:
