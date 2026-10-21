@@ -92,7 +92,7 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     `fleet notices` reads neither) and fleet_notify.py fleet-report-parent.sh
 #     (named as the book's writers, which run on a machine)
 #   words fleet-ui-lang.sh only prints (a hint naming a machine's command):
-#     dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
+#     dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh fleet-webchat.sh
 #   承载's, each behind a presence test that says so or takes the client road:
 #     fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh
 #     fleet-login-bootstrap.sh fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py
@@ -103,7 +103,7 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
   tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh fleet-peerlink.py
   fleet-node-supervisor.py fleet-topbar.py fleet-alerts.sh fleet-orphan-reports.py fleet-view-go.sh
-  fleet_notify.py fleet-report-parent.sh dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
+  fleet_notify.py fleet-report-parent.sh dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh fleet-webchat.sh
   fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh fleet-login-bootstrap.sh
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
   fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh
