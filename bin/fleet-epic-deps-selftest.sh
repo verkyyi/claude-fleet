@@ -20,6 +20,10 @@
 #      成员 cell lists several keys, the 等谁 cell several `X ← Y` pairs — holds
 #      C3 C4 on C2, C6 on C3, C7 on C5, C8 on C1; a table that yields no key and a
 #      section line naming `M1` (not a member key) each warn, in --line too.
+#   I. in-flight PR gates (T843): GR5E's `C2 等 C1 + PR #5191 已合` and `C3 等 C2 +
+#      PR #5182 #5189 #5192 全部已合` — a member is due only when its members merged
+#      AND gh says every PR it names is MERGED (`waits_on` names `PR #5189`); a PR gh
+#      cannot read, or closed unmerged, holds it and warns.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -250,6 +254,72 @@ eq "H: an unreadable table and an M-line each warn" "2" "$(printf '%s' "$S" | jq
 eq "H: the M-line warning names C2" "True" "$(printf '%s' "$S" | jq_ 'any(w.startswith("C2 ") for w in d["warnings"])')"
 L=$(python3 "$BIN/fleet-epic-tick.py" status --task T580 --line)
 case "$L" in *"⚠ 依赖顺序表有 2 行"*) st_count ;; *) bad "H: --line carries the warning: $L" ;; esac
+
+# --- I. in-flight PR gates (T843) --------------------------------------------------
+cat > "$WORK/gh" <<'SH'
+#!/bin/sh
+# a stub gh: `gh pr view <n> -R <repo> --json state -q .state` off $STUB_PRS (n=STATE lines)
+[ "$1 $2" = "pr view" ] || exit 1
+echo "$*" >> "$STUB_PRS.calls"
+st=$(sed -n "s/^$3=//p" "$STUB_PRS")
+[ -n "$st" ] || { echo "no such PR" >&2; exit 1; }
+echo "$st"
+SH
+chmod +x "$WORK/gh"
+export FLEET_EPIC_TICK_GH="$WORK/gh" STUB_PRS="$WORK/prs"
+CHARTER='<!-- fleet:epic repo=o/r short=网页 cap=4 -->
+- [ ] **C1** 一
+- [ ] **C2** 二
+- [ ] **C3** 三
+- [ ] **C4** 四
+## 依赖顺序
+| 成员 | 依赖 |
+|---|---|
+| C2 | C1 + PR #5191 已合 |
+| C3 | C2 + PR #5182 #5189、#5192 全部已合 |
+## C4 · 四
+**依赖** 依赖 PR #77 已合
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+gates() { # gates <C1 outcome> <C2 outcome>
+  state "({'T580': $PARENT}
+   | ({'T611': dict(id='T611', parent_task='T580', title='C1 · 一', outcome='$1')} if '$1' else {})
+   | ({'T612': dict(id='T612', parent_task='T580', title='C2 · 二', outcome='$2')} if '$2' else {}))"
+}
+prs() { python3 -c '
+import importlib.util, os, sys
+s = importlib.util.spec_from_file_location("t", os.path.join(os.environ["BIN"], "fleet-epic-tick.py"))
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(m.pr_refs(sys.argv[1]))' "$1"; }
+eq "I: every #<n> right after PR" "[5182, 5189, 5192]" "$(prs 'C2 + PR #5182 #5189、#5192 全部已合')"
+eq "I: a bare ticket is no PR gate" "[]" "$(prs '依赖 #12 C3')"
+eq "I: PR#77 glued" "[77]" "$(prs '依赖 PR#77')"
+in_due() { due | tr ' ' '\n' | grep -x "$1"; }
+printf '5191=OPEN\n5182=MERGED\n5189=OPEN\n5192=MERGED\n77=MERGED\n' > "$STUB_PRS"
+gates "" ""
+S=$(tick)
+eq "I: C1 and C4 (its PR merged) due" "C1 C4" "$(due)"
+eq "I: C2 waits on C1 and PR #5191" "waiting ['C1', 'PR #5191']" "$(mem C2 '["state"]') $(mem C2 '["waits_on"]')"
+eq "I: every PR reads, no warning" "[]" "$(printf '%s' "$S" | jq_ 'd["warnings"]')"
+grep -q -- '-R o/r' "$STUB_PRS.calls"; eq "I: gh asked in the charter's repo" 0 "$?"
+gates succeeded ""
+S=$(tick)
+eq "I: C1 merged, PR #5191 open ⇒ C2 waits on the PR alone" "waiting ['PR #5191']" "$(mem C2 '["state"]') $(mem C2 '["waits_on"]')"
+printf '5191=MERGED\n5182=MERGED\n5189=OPEN\n5192=MERGED\n77=MERGED\n' > "$STUB_PRS"
+gates succeeded succeeded
+S=$(tick)
+eq "I: C2 merged, #5189 open ⇒ C3 waits on PR #5189 (GR5E's case)" "waiting ['PR #5189'] False" "$(mem C3 '["state"]') $(mem C3 '["waits_on"]') $(mem C3 '.get("cycle", False)')"
+eq "I: the cycle rule never lets a PR gate through" "" "$(in_due C3)"
+printf '5191=MERGED\n5182=MERGED\n5189=MERGED\n5192=MERGED\n77=MERGED\n' > "$STUB_PRS"
+S=$(tick)
+eq "I: every PR merged ⇒ C3 due" "C3" "$(in_due C3)"
+printf '5182=MERGED\n5189=CLOSED\n5192=MERGED\n' > "$STUB_PRS"
+S=$(tick)
+eq "I: closed unmerged and unreadable both hold" "waiting ['PR #5189'] waiting ['PR #77']" "$(mem C3 '["state"]') $(mem C3 '["waits_on"]') $(mem C4 '["state"]') $(mem C4 '["waits_on"]')"
+eq "I: and both warn" "True True" "$(printf '%s' "$S" | jq_ 'str(any("PR #5189 已关闭" in w for w in d["warnings"])) + " " + str(any("PR #77 读不出" in w for w in d["warnings"]))')"
+L=$(python3 "$BIN/fleet-epic-tick.py" status --task T580 --line)
+case "$L" in *"⚠ C4 等的 PR #77 读不出状态"*) st_count ;; *) bad "I: --line carries the PR warning: $L" ;; esac
+unset FLEET_EPIC_TICK_GH
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }
