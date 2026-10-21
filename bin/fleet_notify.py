@@ -11,9 +11,15 @@ What counts, per row (a session on any machine — no session is special: the
 old decision-sheet count left with the resident seat, issue #3118):
   ask    `needs` perm / ask / auth / anything but blocked — 在问你; sound; the phone too
   stuck  `needs` blocked, or `failed` — 卡住; sound; the phone too
-  done   `done` from anything else — 做完; no sound, never
-         the phone; one batch's dones within FLEET_NOTIFY_DONE_MERGE (600 s) are
-         ONE notification (the same group, its count growing)
+  done   the session handed in a RESULT (T894) — its ID's newest result of the
+         current attempt is merged / succeeded (bin/fleet_id.py: a report, which is
+         also what closes a task record); 做完 + the result; no sound, never the
+         phone. Once per (ID, attempt, PR): a turn that stops is no 做完, nor is a
+         session that stopped with no result (the reaper's 挂着 rule has it); a
+         probe (a test identity, a probe's title — fleet_reap_policy's PROBE_RE —
+         or the probe origin's `done:1m`) never. One batch's dones within
+         FLEET_NOTIFY_DONE_MERGE (600 s) are ONE notification (the same group,
+         its count growing)
 A notification is for ENTERING one of them: the key (worker id, kind, a hash of
 what it asks) differs from the row's last one. Asked, answered, asked again is
 two; the same question every beat is one; a row the hub briefly lost keeps its
@@ -47,6 +53,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 STATE = "notify.state.json"
 KEEP = 3600            # a row not seen for this long is forgotten
 DONE_MERGE = 600       # one batch's dones in this window are one notification
+SENT_KEEP = 2 * 86400  # a result told is remembered this long (the same thing is said once)
 
 
 def env_on(name, default="1"):
@@ -97,8 +104,6 @@ def classify(r):
         return "ask", {"permission": "perm", "question": "ask"}.get(sub, sub), words
     if st == "failed":
         return "stuck", "failed", words
-    if st == "done":
-        return "done", "", ""
     return None
 
 
@@ -120,6 +125,77 @@ def subject(r):
     if code:
         return code + (" · " + name if name else "")
     return name or r.get("wid") or "?"
+
+
+def _mod(name):
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        return __import__(name)
+    except Exception:
+        return None
+
+
+def fid_of(r, gdir):
+    """A row's ID: the hub's pair (`wid_ids`, written beside the caches by
+    fleet-hub-sessions.sh), else the worker_id's own tail when it is one."""
+    wid = r.get("wid") or ""
+    try:
+        with open(os.path.join(gdir, "wid_ids"), encoding="utf-8") as f:
+            for line in f:
+                w, _, fid = line.rstrip("\n").partition("\t")
+                if w == wid and fid:
+                    return fid
+    except OSError:
+        pass
+    return wid.rpartition("/")[2]
+
+
+def result_of(r, gdir):
+    """(key, state, pr, title, parent) of the result this row's session handed in —
+    the newest of its current attempt, merged / succeeded — else None."""
+    fi = _mod("fleet_id")
+    fid = fid_of(r, gdir)
+    if fi is None or not fi.is_fid(fid):
+        return None
+    try:
+        rec = fi.record(fid)
+    except Exception:
+        return None
+    if not rec:
+        return None
+    cur = rec.get("attempt", 1)
+    res = [x for x in rec.get("results") or [] if x.get("attempt", 1) >= cur
+           and x.get("state") not in fi.SILENT_STATES]
+    if not res or res[-1].get("state") not in fi.DONE_STATES:
+        return None
+    x, o = res[-1], rec.get("opened") or {}
+    pr = str(x.get("pr") or "").lstrip("#")
+    return ("%s:%s:%s" % (fid, cur, pr), x.get("state"), pr, o.get("title") or "", o.get("parent") or "")
+
+
+def is_probe(r, title=""):
+    """A probe or a test: never a 做完 (fleet_reap_policy is the one reader of a
+    probe's words and its origin's policy)."""
+    if r.get("test") is True:
+        return True
+    rp = _mod("fleet_reap_policy")
+    if rp is not None and r.get("reap") == rp.ORIGINS.get("probe"):
+        return True
+    return rp is not None and any(rp.is_probe_title(t) for t in (title, r.get("title"), r.get("name")) if t)
+
+
+def batch_name(b, parent):
+    """A batch as the person reads it: its parent's title, else its ref (`#K5H0`)."""
+    fi = _mod("fleet_id")
+    if parent and fi is not None and fi.is_fid(parent):
+        try:
+            t = ((fi.record(parent) or {}).get("opened") or {}).get("title") or ""
+        except Exception:
+            t = ""
+        if t:
+            return t
+    return b[b.find("#"):] if "#" in b else b
 
 
 def batch_of(r):
@@ -194,6 +270,7 @@ def beat(rows, gdir, session, now=None, sender=None):
     st = st or {}
     seen = st.get("rows") if isinstance(st.get("rows"), dict) else {}
     batches = st.get("done") if isinstance(st.get("done"), dict) else {}
+    sent = st.get("sent") if isinstance(st.get("sent"), dict) else {}
     hush = quiet(now)
     events = []
     here = set()
@@ -206,50 +283,73 @@ def beat(rows, gdir, session, now=None, sender=None):
         key = ""
         if c:
             key = "%s:%s" % (c[0], hashlib.sha1(("%s\x1f%s" % (c[1], c[2])).encode("utf-8")).hexdigest()[:12])
+        res = result_of(r, gdir)
+        dkey = res[0] if res else ""
         prev = seen.get(wid)
-        seen[wid] = {"k": key, "t": now}
+        seen[wid] = {"k": key, "d": dkey or (prev or {}).get("d", ""), "t": now}
+        who = subject(r)
+        node = r.get("node") or ""
+        fresh = seed or prev is None or "d" not in prev   # first seen (or by an older beat): only remembered
+        if dkey and not fresh and prev.get("d") != dkey and dkey not in sent:
+            sent[dkey] = now
+            ev = done_event(r, res, who, node, batches, now)
+            if ev is not None:
+                events.append(ev)
+        elif dkey and fresh:
+            sent.setdefault(dkey, now)     # nothing happened in front of you
         if seed or not c or (prev and prev.get("k") == key):
             continue
         kind, sub, words = c
-        if kind == "done" and prev is None:
-            continue                       # a row first seen finished: nothing happened in front of you
-        who = subject(r)
-        node = r.get("node") or ""
         ev = {"key": wid, "kind": kind, "jump": "wid:" + wid, "group": "fleet-%s" % wid,
-              "sound": kind != "done" and not hush, "phone": kind != "done" and not hush}
-        if kind == "done":
-            if not env_on("FLEET_NOTIFY_DONE"):
-                log({"key": wid, "state": kind, "skip": "done-off"})
-                continue
-            b = batch_of(r)
-            merge = int(os.environ.get("FLEET_NOTIFY_DONE_MERGE") or DONE_MERGE)
-            if b:
-                cur = batches.get(b)
-                if not cur or now - int(cur.get("t", 0)) > merge:
-                    cur = {"t": now, "n": 0}
-                cur["n"] = int(cur.get("n", 0)) + 1
-                batches[b] = cur
-                ev["group"] = "fleet-done-%s" % b
-                if cur["n"] > 1:
-                    ev["title"] = ui("notify_done_batch", b[b.find("#"):] if "#" in b else b, cur["n"])
-                    ev["body"] = ui("notify_done_last", who) + (" · " + node if node else "")
-                    events.append(ev)
-                    continue
-            ev["title"] = ui("notify_done", who)
-            ev["body"] = node
-        else:
-            ev["title"] = ui(TITLE.get((kind, sub), "notify_ask"), who)
-            ev["body"] = " · ".join(x for x in (words, node) if x)
+              "sound": not hush, "phone": not hush}
+        ev["title"] = ui(TITLE.get((kind, sub), "notify_ask"), who)
+        ev["body"] = " · ".join(x for x in (words, node) if x)
         events.append(ev)
     for wid in [w for w, v in seen.items() if w not in here and now - int(v.get("t", 0)) > KEEP]:
         del seen[wid]
     for b in [b for b, v in batches.items() if now - int(v.get("t", 0)) > 2 * KEEP]:
         del batches[b]
-    save(path, {"rows": seen, "done": batches, "ts": now})
+    for k in [k for k, t in sent.items() if now - int(t) > SENT_KEEP]:
+        del sent[k]
+    save(path, {"rows": seen, "done": batches, "sent": sent, "ts": now})
     for ev in events:
         book(ev)
         send(ev, session, sender)
     return events
+
+
+def done_event(r, res, who, node, batches, now):
+    """The 做完 of one handed-in result (T894): `✓ 做完 · <what> · PR #N 已合并 ·
+    <machine>`, or the batch's one notification grown; None when it is a probe's
+    or 做完 is off (logged)."""
+    wid = r.get("wid") or ""
+    _, state, pr, title, parent = res
+    what = title or r.get("title") or r.get("name") or who
+    if is_probe(r, title):
+        log({"key": wid, "state": "done", "skip": "probe"})
+        return None
+    if not env_on("FLEET_NOTIFY_DONE"):
+        log({"key": wid, "state": "done", "skip": "done-off"})
+        return None
+    ev = {"key": wid, "kind": "done", "jump": "wid:" + wid, "group": "fleet-%s" % wid,
+          "sound": False, "phone": False}
+    b = batch_of(r)
+    if b:
+        merge = int(os.environ.get("FLEET_NOTIFY_DONE_MERGE") or DONE_MERGE)
+        cur = batches.get(b)
+        if not cur or now - int(cur.get("t", 0)) > merge:
+            cur = {"t": now, "n": 0}
+        cur["n"] = int(cur.get("n", 0)) + 1
+        batches[b] = cur
+        ev["group"] = "fleet-done-%s" % b
+        if cur["n"] > 1:
+            ev["title"] = ui("notify_done_batch", batch_name(b, parent), cur["n"])
+            ev["body"] = ui("notify_done_last", what)
+            return ev
+    ev["title"] = ui("notify_done", what)
+    said = ui("notify_done_merged", pr) if pr and state == "merged" else ("PR #%s" % pr if pr else "")
+    ev["body"] = " · ".join(x for x in (said, node) if x)
+    return ev
 
 
 LEVEL = {"ask": "warn", "stuck": "error", "done": "info"}
