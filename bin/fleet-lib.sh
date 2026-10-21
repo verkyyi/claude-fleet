@@ -8354,7 +8354,9 @@ fleet_scratch_alloc() {
     if [ -n "$gd" ]; then
       ck="$gd/fleet-claim.$cand"
       if ! mkdir "$ck" 2>/dev/null; then
-        if [ -n "$(find "$ck" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        if [ ! -d "$ck" ]; then
+          ck=''   # nowhere to claim (a read-only git dir): the `-b` race alone, as before
+        elif [ -n "$(find "$ck" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
           rmdir "$ck" 2>/dev/null; mkdir "$ck" 2>/dev/null || { n=$((n + 1)); continue; }
         else
           n=$((n + 1)); continue
