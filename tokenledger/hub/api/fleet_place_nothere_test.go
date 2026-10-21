@@ -142,3 +142,37 @@ func TestNodePlaceDispatchDeclinedTriesNext(t *testing.T) {
 		t.Fatal("retryKeyOf")
 	}
 }
+
+// A task whose repo has capitals (claude-fleet T672: GuangZhouShanyouGame/…):
+// its record keeps the repo lower-cased, the start names it as the fleet
+// registered it — one repo, so the placement goes ahead (it answered 409
+// «owner, generation or provider does not match» before).
+func TestNodePlaceTaskRepoCase(t *testing.T) {
+	mixed := "Verkyyi/Claude-Fleet" // as the fleets registered it
+	h := newFleetHarness(t)
+	caps := []string{control.CapRead, control.CapWrite, control.CapLaunch}
+	macD := connectWriteNodeCaps(t, h, h.enroll(t, "mac-d"), caps...)
+	macC := connectWriteNodeCaps(t, h, h.enroll(t, "mac-c"), caps...)
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", mixed, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", mixed, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
+	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
+	})
+	macC.setOpGet(startedFixture)
+	tok := h.tokens["mac-d"]
+	d := map[string]any{"version": 1, "request_id": "case-1", "requested_agent": "claude", "resolved_agent": "claude", "agent_source": "explicit"}
+	st, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath, map[string]any{"authority_version": 1, "token": "case-1",
+		"title": "case", "repo": writeRepo, "requested_agent": "claude", "resolved_agent": "claude",
+		"request_payload": map[string]any{"dispatch": d, "title": "case", "repo": writeRepo}})
+	if st != 200 {
+		t.Fatalf("accept: %d %v", st, rec)
+	}
+	d["task"], d["generation"], d["attempt_id"] = rec["id"], rec["generation"], rec["attempt_id"]
+	st, out := placeCall(t, h, tok, map[string]any{"repo": mixed, "kind": "scratch", "fleet_id": f5.FleetID,
+		"dispatch": d, "idempotency_key": "case-1"})
+	if st != 200 || macC.count() != 1 {
+		t.Fatalf("place(%s) = %d %v; want the task placed", mixed, st, out)
+	}
+}

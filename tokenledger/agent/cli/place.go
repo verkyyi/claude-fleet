@@ -280,7 +280,18 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		} `json:"attempts"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return 1, fmt.Errorf("hub answered HTTP %d with something that is not JSON", resp.StatusCode)
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		if len(text) > 300 {
+			text = text[:300]
+		}
+		// The hub's own refusal in plain text (claude-fleet T672): it said no
+		// before placing anything — REFUSED with its words, never an
+		// «unreachable» that hides why.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && text != "" {
+			fmt.Fprintf(stdout, "REFUSED HTTP_%d\t%s\n", resp.StatusCode, text)
+			return placeRefused, nil
+		}
+		return 1, fmt.Errorf("hub answered HTTP %d: %s", resp.StatusCode, text)
 	}
 	if path := os.Getenv("FLEET_DISPATCH_RESULT"); path != "" && len(out.Dispatch) > 0 && string(out.Dispatch) != "null" {
 		if err := os.WriteFile(path, out.Dispatch, 0600); err != nil {
