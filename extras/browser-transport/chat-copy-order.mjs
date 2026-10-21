@@ -34,7 +34,7 @@ async function open(context, { conv, copy }) {
     if (path === '/v1/chat/home') return json({ state: 'ok', direct: false })
     if (path === '/v1/me') return json({ person: 'test-person', name: 'Alice', role: 'member' })
     if (path.startsWith('/v1/') || path.startsWith('/api/')) return json({})
-    const file = path === '/' ? 'index.html' : path === '/app' || path === '/app/' ? 'app/index.html' : path.slice(1)
+    const file = path === '/' ? 'index.html' : path === '/app' || path === '/app/' || path === '/app/chat' ? 'app/index.html' : path.slice(1)
     try { await route.fulfill({ path: fileURLToPath(new URL(file, root)) }) } catch { await route.fulfill({ status: 404, body: '' }) }
   })
   return { page, seen }
@@ -53,7 +53,7 @@ try {
         conv: async () => convo(['q-old', 'a-old'], ['q-new', 'a-new']),
         copy: async () => { await late; return { ...convo(['q-old', 'a-old']), busy: false, mirror: { at: '2026-10-20T00:00:00Z' } } },
       })
-      await page.goto(origin + '/app')
+      await page.goto(origin + '/app/chat')
       await page.getByText('a-new', { exact: true }).waitFor()
       release()
       await page.waitForLoadState('networkidle')
@@ -72,7 +72,7 @@ try {
       let state = convo(['q1', 'a1'])
       await context.clock.install()
       const { page, seen } = await open(context, { conv: async () => state, copy: async () => null })
-      await page.goto(origin + '/app')
+      await page.goto(origin + '/app/chat')
       await page.getByText('a1', { exact: true }).waitFor()
       // the other browser's turn lands at the home
       state = convo(['q1', 'a1'], ['q2', 'a2'])
