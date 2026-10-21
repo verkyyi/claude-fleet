@@ -1332,6 +1332,23 @@ class DispatchedSession(TaskSession):
         self.assertIn("unreported", (self.root / "ledger.tsv").read_text())
         self.assertEqual(len(self.nudges.read_text().splitlines()), 2)
 
+    def test_a_reported_waiting_is_not_unreported(self):
+        """T756: a session that said `waiting` at its turn's end — its report maybe
+        still on its way to a parent on another machine — is no 「没报结果」: no
+        nudge, no red mark (a mark from before it is lifted), no close."""
+        self.answer.write_text("1\n")
+        self.result("waiting")
+        self.set("@claude_state_ts", str(int(time.time()) - 700))
+        out = self.clean()
+        self.assertNotIn("nudged", out)
+        self.assertIn("skip:reported " + self.win, out)
+        self.assertFalse(self.nudges.exists())
+        self.set("@reap_unreported", str(int(time.time()) - 700))
+        out = self.due()
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_unreported}").strip(), "")
+
     def test_working_or_a_person_s_own_is_not_this_road(self):
         self.answer.write_text("1\n")
         self.result("merged")

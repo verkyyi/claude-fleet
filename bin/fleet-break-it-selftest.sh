@@ -4483,6 +4483,113 @@ drill_cross_send_refused_unseen() {
   WHAT="没有键的会话用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
 }
 
+# cross-report-queued-unseen (issue T756): a child placed on ANOTHER machine said
+# `report waiting` to its orchestrator. The hub carried it and the parent's machine
+# ledgered it within a second or two — but a waiting report was tier silent, and
+# the cross-machine branch skipped the receipt wait for silent and printed 「已排队 ·
+# not delivered」, exit 3, unconditionally; the parent's window never got it (silent
+# = ledger only), and the receipt wait itself was 4 s against a 4–7 s hub round trip.
+# Two machines here: two conf dirs (two fleet UUIDs), two tmux servers, and the hub +
+# both agents played by a pump that hands the child machine's outbox relay to the
+# parent machine's real `fleet-hub-node.sh deliver` and its receipt back to the
+# child's. The parent pane runs a fake Claude with an inbox: the report must reach
+# it, the child must say `reported` within 10 s; with the hub silent the child says
+# queued and the next tick says so in ⌘P 消息.
+drill_cross_report_queued_unseen() {
+  CAP=20; local d="$WORK/xr" t0 ua ub pw cw cp pid out rc ipid pump
+  local pf=0f1e2d3c-4b5a-4978-8a9b-000000000756 cf=1a2b3c4d-5e6f-4a7b-8c9d-000000000756
+  mkdir -p "$d/a/conf/fleets/xa" "$d/b/conf/fleets/xb" "$d/a/bin" "$d/b/bin" "$d/b/sessions"
+  : > "$d/a/conf/fleets/xa/conf"; : > "$d/b/conf/fleets/xb/conf"
+  fx_repo "$d/a/conf" xa acme/app FLEET_MAIN="$d/a/main"
+  fx_repo "$d/b/conf" xb acme/app FLEET_MAIN="$d/b/main"
+  local m
+  for m in a b; do
+    printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$d/$m/sock" > "$d/$m/bin/tmux"; chmod +x "$d/$m/bin/tmux"
+  done
+  # side <a|b> <cmd…> — this machine's conf dir, tmux server and (b) its Claude registry
+  side() { local m=$1; shift
+    env PATH="$d/$m/bin:$PATH" FLEET_CONF_DIR="$d/$m/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 \
+      FLEET_CC_SESSIONS_DIR="$d/$m/sessions" FLEET_CLAUDE_COMM=FLEETFAKECLAUDE FLEET_PEER_RECEIPT_SECS=0 \
+      FLEET_ID_PUSH=0 FLEET_ID_DIR="$d/$m/ids" "$@"; }
+  side a tmux -f /dev/null new-session -d -s xa -n home 'exec sleep 600' || { WHY="cannot start machine A's tmux server"; return 1; }
+  side b tmux -f /dev/null new-session -d -s xb -n home 'exec sleep 600' || { WHY="cannot start machine B's tmux server"; return 1; }
+  for m in a b; do
+    (cd "$BIN" && side "$m" python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/$m/conf") >/dev/null 2>&1
+  done
+  ua=$(side a bash -c '. "$1/fleet-lib.sh"; fleet_uuid xa' _ "$BIN"); ub=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_uuid xb' _ "$BIN")
+  [ -n "$ua" ] && [ -n "$ub" ] && [ "$ua" != "$ub" ] || { WHY="no two fleet UUIDs ([$ua] [$ub])"; return 1; }
+  # machine B: the orchestrator (keyless — its key is its identity), a fake Claude with an inbox
+  pw=$(side b tmux new-window -d -P -F '#{window_id}' -t xb -n orch "bash -c ': FLEETFAKECLAUDE; exec sleep 600'")
+  side b tmux set-option -w -t "$pw" @norepo 1 \; set-option -w -t "$pw" @fleet_id "$pf" \; set-option -w -t "$pw" @cc_agent claude
+  until_ok 5 sh -c "[ -n \"\$(env PATH='$d/b/bin:$PATH' FLEET_CLAUDE_COMM=FLEETFAKECLAUDE bash -c '. \"\$1/fleet-lib.sh\"; fleet_pane_claude_pid \"\$2\"' _ '$BIN' '$pw')\" ]" \
+    || { WHY="rig: no fake Claude under the parent's pane"; return 1; }
+  pid=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_pane_claude_pid "$2"' _ "$BIN" "$pw")
+  python3 -c 'import json, sys; d, pid, s = sys.argv[1:4]
+open("%s/%s.json" % (d, pid), "w").write(json.dumps(dict(pid=int(pid), sessionId="5c4b3a29-1807-4f6e-8d5c-4b3a29180756", cwd="/x", messagingSocketPath=s, name="orch")))
+open("%s/%s.k.key" % (d, pid), "w").write(json.dumps(dict(peerToken="tok-756")))' "$d/b/sessions" "$pid" "$d/b/inbox.sock"
+  python3 -c 'import os, socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(4); s.settimeout(0.5); end = time.time() + 60
+while time.time() < end:
+    try:
+        c, _ = s.accept()
+    except OSError:
+        continue
+    c.settimeout(2); buf = b""
+    try:
+        while True:
+            b = c.recv(65536)
+            if not b: break
+            buf += b
+    except OSError:
+        pass
+    open(sys.argv[2], "ab").write(buf); c.close()' "$d/b/inbox.sock" "$d/b/inbox.got" & ipid=$!
+  # machine A: the child, placed here by the orchestrator over there
+  cw=$(side a tmux new-window -d -P -F '#{window_id}' -t xa -n kid 'exec sleep 600')
+  cp=$(side a tmux display-message -p -t "$cw" '#{pane_id}')
+  side a tmux set-option -w -t "$cw" @norepo 1 \; set-option -w -t "$cw" @fleet_id "$cf" \; \
+    set-option -w -t "$cw" @origin "$pf" \; set-option -w -t "$cw" @origin_fid "$pf" \; set-option -w -t "$cw" @origin_wid "$ub/$pf"
+  printf '%s/%s\tmini2\t\n%s/%s\tmacmini\t%s/%s\n' "$ub" "$pf" "$ua" "$cf" "$ub" "$pf" > "$d/a/conf/control/hub-workers.tsv"
+  mkdir -p "$d/a/conf/control/hub-outbox"
+  # the hub and both agents: A's relay → B's deliver; B's answer → a receipt on A
+  hubpump() { ( local end=$(( $(date +%s) + 30 )) g rid err rc2 det
+    while [ "$(date +%s)" -lt "$end" ]; do
+      g=$(ls "$d/a/conf/control/hub-outbox"/*.json 2>/dev/null | head -1)
+      if [ -z "$g" ]; then sleep 0.1; continue; fi
+      python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); r["from_node"] = "macmini"; print(json.dumps(r))' "$g" > "$d/relay.json"
+      err=$(side b bash "$BIN/fleet-hub-node.sh" deliver < "$d/relay.json" 2>&1 >/dev/null); rc2=$?
+      rm -f "$g"
+      [ "$rc2" = 0 ] || continue          # «not now»: the hub would hold it
+      python3 -c 'import json, sys; r = json.load(open(sys.argv[1]))
+print(json.dumps(dict(id=r["id"], kind="receipt", **{"from": r["to"]}, to=r["from"], from_node="mini2",
+                      payload=dict(rid=r["id"], kind=r["kind"], to=r["to"], status="delivered", detail=sys.argv[2]))))' \
+        "$d/relay.json" "$err" | side a bash "$BIN/fleet-hub-node.sh" deliver >/dev/null 2>&1
+      exit 0
+    done ) & pump=$!; }
+  t0=$(now)
+  hubpump
+  out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" bash "$BIN/fleet-report-parent.sh" --state waiting \
+    --summary '方案好了，等你点头' 2>&1 </dev/null); rc=$?
+  wait "$pump" 2>/dev/null
+  case "$rc|$out" in "0|"*'reported → '*'(delivered)'*) ;;
+    *) kill "$ipid" 2>/dev/null; WHY="the child's waiting report ended $rc: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1 ;; esac
+  le "$(since "$t0")" 10 || { kill "$ipid" 2>/dev/null; WHY="reported, but only after $(since "$t0")s (want ≤10 s)"; return 1; }
+  until_ok 5 sh -c "grep -q 'WAITING' '$d/b/inbox.got' 2>/dev/null" \
+    || { kill "$ipid" 2>/dev/null; WHY="the parent's window never got the report (inbox: $(head -c 200 "$d/b/inbox.got" 2>/dev/null))"; return 1; }
+  grep -q '方案好了' "$d/b/inbox.got" || { kill "$ipid" 2>/dev/null; WHY="the parent got the report without its summary"; return 1; }
+  SECS=$(since "$t0")
+  # the hub says nothing: queued, and the tick says it in ⌘P 消息
+  out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" FLEET_HUB_SENT_WAIT=1 FLEET_HUB_RECEIPT_WAIT=1 \
+    bash "$BIN/fleet-report-parent.sh" --state waiting --summary 'second word' 2>&1 </dev/null); rc=$?
+  kill "$ipid" 2>/dev/null
+  [ "$rc" = 3 ] || { WHY="with no hub answer the report ended $rc, want 3 (queued): $out"; return 1; }
+  sleep 1.2
+  side a bash "$BIN/fleet-peer-queue.sh" stale -L xa --secs 1 >/dev/null 2>&1
+  grep -q '"source":"peer-queue".*"kind":"alert"' "$d/a/conf/logs/notices.ndjson" 2>/dev/null \
+    || { WHY="a report queued past the alert bound left no ⌘P 消息: $(tail -1 "$d/a/conf/logs/notices.ndjson" 2>/dev/null)"; return 1; }
+  side a tmux kill-server 2>/dev/null; side b tmux kill-server 2>/dev/null
+  WHAT="另一台机器上的子会话 report waiting：经入口送进父窗口、≤10 s 回 reported；入口不答时 exit 3、排队过时在 ⌘P 消息里说"
+}
+
 # A migrate opened the new window with its identity but not its @fleet_role /
 # @reap_policy; and a window with no policy bound to a closed ticket was «never»
 # — under worker sleep (gone since T548) not even looked at (#2970).
