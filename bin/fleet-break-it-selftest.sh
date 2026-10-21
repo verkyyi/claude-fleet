@@ -6791,7 +6791,7 @@ drill_chat_copy_order() {
     WHAT='迟到的副本不盖住家里的回答；两次读乱序落库只留新的；另一浏览器聚焦即同步、在屏 30 s 内自己跟上'
   else
     term_go 'TestChatMirrorKeepsNewest' './hub/store' '乱序落库只留新的（Go）' || return 1
-    WHAT="$WHAT；无 Playwright/Chromium：browser-attachment 门运行真实页面演练"
+    WHAT="${WHAT}；无 Playwright/Chromium：browser-attachment 门运行真实页面演练"
   fi
   SECS=$(since "$t0")
 }
