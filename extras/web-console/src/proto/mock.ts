@@ -17,7 +17,11 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   // 试用成员 (claude-fleet T796): an approved member's trial limits on /v1/me/usage
   member?: "ok" | "soon" | "spent" | "expired";
   // 终端 ⇄ WebChat (claude-fleet T810): a terminal session holds the conversation, answering or idle; or it was just handed here
-  own?: "term_busy" | "term_idle" | "handed" };
+  own?: "term_busy" | "term_idle" | "handed";
+  // WebChat 加 Codex (claude-fleet R9A2): which side the page opens on, and what
+  // the Codex side is doing — asking to run a command, replying in the
+  // background, or holding a reply the page has not shown
+  chat?: "claude" | "codex"; codex?: "ask" | "busy" | "new" };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -108,6 +112,29 @@ export async function install(): Promise<string> {
   let bundle = state === "empty" ? { version: 0, bundle: {} as Record<string, unknown> } as { version: number; created?: string; bundle: Record<string, unknown> } : { version: 3, created: "2026-10-09T10:12:00Z", bundle: { mcp: { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } }, ui_lang: "zh" } as Record<string, unknown> };
   const idView = () => ({ person: me.person, identities: ids, can_add: ["email"] });
   const models = [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }];
+  // the Codex side (R9A2): its own conversation, its own models
+  if (sc.chat) localStorage.setItem("fwc-provider", sc.chat);
+  localStorage.setItem("fwc-seen-codex", "turn-c1"); localStorage.setItem("fwc-seen-claude", "turn-a1");
+  const chartSvg = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270" viewBox="0 0 480 270"><rect width="480" height="270" fill="#fbf8f4"/>` +
+    `<text x="24" y="36" font-family="sans-serif" font-size="16" fill="#2a2620">报名人数 · 近 7 天</text>` +
+    [42, 68, 55, 91, 120, 104, 138].map((v, i) => `<rect x="${32 + i * 62}" y="${240 - v * 1.4}" width="40" height="${v * 1.4}" rx="4" fill="#d9765a"/>` +
+      `<text x="${52 + i * 62}" y="${232 - v * 1.4}" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#6b6457">${v}</text>`).join("") + `</svg>`)));
+  const codexModels = [{ id: "gpt-5.4-codex", label: "GPT-5.4 Codex" }, { id: "gpt-5.4-codex-mini", label: "GPT-5.4 Codex mini" }];
+  const codexItems: Record<string, unknown>[] = state === "normal" ? [
+    { t: "user", text: "报名页的手机号校验老是误报，修一下，再画一张近 7 天报名人数的图" },
+    { t: "tool", id: "c1", name: "commandExecution", summary: "命令 · npm test -- signup" },
+    { t: "tool_result", id: "c1", text: "1 failed: rejects +86 138 0013 8000", error: true },
+    { t: "tool", id: "c2", name: "fileChange", summary: "改文件 · src/phone.ts" },
+    { t: "tool_result", id: "c2", text: "+4 −2" },
+    { t: "tool", id: "c3", name: "commandExecution", summary: "命令 · python3 chart.py" },
+    { t: "tool_result", id: "c3", text: "wrote chart.png" },
+    { t: "text", d: "修好了：原来的正则不认带 **+86** 和空格的写法，现在先去掉空格和区号再校验，测试全过。\n\n近 7 天报名人数：\n\n" },
+    { t: "image", thumb: chartSvg, w: 480, h: 270 },
+    { t: "text", d: "\n\n要我把修复推上去吗？" },
+    ...(sc.codex === "ask" ? [{ t: "user", text: "推吧" }, { t: "tool", id: "c4", name: "commandExecution", summary: "命令 · git push origin fix/phone" }] : []),
+  ] : [];
+  const codexAsks = sc.codex === "ask" ? [{ t: "ask", rid: "r1", id: "c4", kind: "permission", tool: "commandExecution", summary: "命令 · git push origin fix/phone" }] : [];
   // 任务 (C5): /v1/fleet/tasks
   const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
   const task = (id: string, title: string, via: string, device: string, min: number, x: Record<string, unknown>) =>
@@ -340,11 +367,22 @@ export async function install(): Promise<string> {
         return ok(bundle);
       }
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
-      case "/v1/chat/conversation":
+      case "/v1/chat/conversation": {
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);
-        return ok({ items: sc.own ? [...items, ...termItems] : items, asks: [], models, default: "opus", busy: false, ...(state === "over" ? { budget: { blocked: true, until: reset.toISOString() } } : {}),
-          ...(sc.own === "term_busy" || sc.own === "term_idle" ? { owner: { where: "terminal", busy: sc.own === "term_busy", label: "scratch-20", machine: "mac-mini", agent: "claude" } } : {}),
-          ...(sc.own === "handed" ? { handed: { from: "terminal", label: "scratch-20", at: new Date().toISOString() } } : {}) });
+        const codex = url.includes("provider=codex");
+        const budget = state === "over" ? { budget: { blocked: true, until: reset.toISOString() } } : {};
+        const codexSide = { busy: sc.codex === "busy" || sc.codex === "ask", last: sc.codex === "new" ? "turn-c2" : "turn-c1" };
+        return codex
+          ? ok({ items: codexItems, asks: codexAsks, models: codexModels, default: "gpt-5.4-codex", busy: sc.codex === "ask", last: "turn-c1", others: { claude: { last: "turn-a1" } },
+            providers: ["claude", "codex"], ...(codexItems.length ? { session: "01a15e12-ec43-7222-9fbc-6b6b19f3835a", cwd: "/Users/" + me.login } : {}), ...budget })
+          : ok({ items: sc.own ? [...items, ...termItems] : items, asks: [], models, default: "opus", busy: false, last: "turn-a1", others: { codex: codexSide },
+            providers: ["claude", "codex"], ...(items.length ? { session: "5b1e0000-0000-4000-8000-0000000000a1", cwd: "/Users/" + me.login } : {}), ...budget,
+            ...(sc.own === "term_busy" || sc.own === "term_idle" ? { owner: { where: "terminal", busy: sc.own === "term_busy", label: "scratch-20", machine: "mac-mini", agent: "claude" } } : {}),
+            ...(sc.own === "handed" ? { handed: { from: "terminal", label: "scratch-20", at: new Date().toISOString() } } : {}) });
+      }
+      case "/v1/chat/new":
+        if (url.includes("provider=codex")) codexItems.length = 0; else items.length = 0;
+        return ok({ ok: true });
       case "/v1/chat/turn": {
         const text = JSON.parse(String(init?.body || "{}")).text || "";
         const words = `收到：「${text}」。这是原型里的演示回复——上线后是你家机器上的 Claude 在答。`;

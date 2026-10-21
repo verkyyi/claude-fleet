@@ -31,3 +31,37 @@ func TestChatMirrorKeepsNewest(t *testing.T) {
 		t.Fatalf("a newer answer did not replace the copy: %+v", c)
 	}
 }
+
+// A person's two conversations (task R9A2) are two copies: neither replaces the
+// other, each keeps the newer-wins rule, the switch deletes both.
+func TestChatMirrorPerProvider(t *testing.T) {
+	s := newStore(t)
+	if err := s.ensureFleetTrials(); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Unix(1_800_000_000, 0)
+	exp := t0.Add(time.Hour)
+	if err := s.PutChatMirrorOf("p1", "claude", []byte("claude"), exp, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutChatMirrorOf("p1", "codex", []byte("codex"), exp, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutChatMirrorOf("p1", "codex", []byte("codex-old"), exp, t0); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := s.ChatMirror("p1", t0); c == nil || string(c.Sealed) != "claude" {
+		t.Fatalf("claude copy = %+v", c)
+	}
+	if c, _ := s.ChatMirrorOf("p1", "codex", t0); c == nil || string(c.Sealed) != "codex" {
+		t.Fatalf("codex copy = %+v (the older answer must not replace it)", c)
+	}
+	if err := s.SetChatMirrorOff("p1", true, t0); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ChatMirrorProviders {
+		if c, _ := s.ChatMirrorOf("p1", p, t0); c != nil {
+			t.Fatalf("%s copy kept after the switch went off", p)
+		}
+	}
+}

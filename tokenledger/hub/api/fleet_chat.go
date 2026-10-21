@@ -45,6 +45,22 @@ var chatRoutes = map[string]string{
 	"take": http.MethodPost,
 	// an image the conversation holds (task T773), by its ref — never a path
 	"file": http.MethodGet,
+	// 新对话 (task R9A2): that assistant's conversation starts over, the other kept
+	"new": http.MethodPost,
+}
+
+// chatProvider is which of the person's two conversations a request is for
+// (task R9A2): "" — Claude Code's, the one there always was — or "codex". The
+// one query besides a file's ref the service is handed; anything else is refused.
+func chatProvider(r *http.Request) (string, bool) {
+	switch p := r.URL.Query().Get("provider"); p {
+	case "", "claude":
+		return "", true
+	case "codex":
+		return p, true
+	default:
+		return "", false
+	}
 }
 
 // chatFileRef is the one query a file request carries: the service's media name,
@@ -255,6 +271,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, method+" only")
 		return
 	}
+	provider, known := chatProvider(r)
+	if !known {
+		httpError(w, http.StatusBadRequest, "provider: claude or codex")
+		return
+	}
 	person, status, code, msg := s.chatPerson(r)
 	if code == "" {
 		_ = s.Store.TouchTrial(person, time.Now()) // a trial in use is not idle (claude-fleet#3590)
@@ -274,7 +295,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// The copy beside the entry (task V9DJ D) is answered here, home or not.
 	if name == "conversation" && r.URL.Query().Get("cached") == "1" {
-		s.handleChatCached(w, r, person)
+		s.handleChatCached(w, r, person, provider)
 		return
 	}
 	home, ok, err := s.Store.EntryHomeOf(person)
@@ -398,6 +419,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			out.URL.Path, out.URL.RawPath, out.URL.RawQuery = "/api/"+name, "", ""
 			if name == "file" {
 				out.URL.RawQuery = "ref=" + pr.In.URL.Query().Get("ref")
+			} else if provider != "" {
+				out.URL.RawQuery = "provider=" + provider
 			}
 			// Nothing of the browser's goes on but what the service reads: never
 			// its cookies, never a person it names.
@@ -427,7 +450,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				// replaces the newer copy, whichever replica finishes last (task Y393)
 				taken := time.Now()
 				resp.Body = &chatMirrorTee{ReadCloser: resp.Body, done: func(b []byte) {
-					s.chatMirrorKeepBody(person, append([]byte(nil), b...), taken)
+					s.chatMirrorKeepBody(person, provider, append([]byte(nil), b...), taken)
 				}}
 			}
 			if refund == nil {

@@ -74,6 +74,15 @@ export type Owner = { where: "terminal"; busy: boolean; label?: string; machine?
 export type Handed = { from: "terminal"; label?: string; at?: string } | null;
 // how often a page reads the conversation while a terminal session holds it
 const OWNER_POLL_MS = 3000;
+// Which assistant this conversation talks to (task R9A2): each has its own one
+// conversation on the same home. Claude's is addressed as before (no parameter).
+export type Provider = "claude" | "codex";
+export const PROVIDERS: Provider[] = ["claude", "codex"];
+// The other side, as the home says it: running now, and its last finished turn
+// (the page marks it read when it was last on screen).
+export type Side = { busy?: boolean; last?: string };
+const at = (path: string, p: Provider) => (p === "claude" ? path : `${path}${path.includes("?") ? "&" : "?"}provider=${p}`);
+const modelKey = (p: Provider) => (p === "claude" ? "fwc-model" : `fwc-model-${p}`);
 const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
@@ -218,7 +227,7 @@ async function readLines(r: Response, onItems: (items: Record<string, unknown>[]
 // blockedBy: a limit the page knows of before the service refuses a turn (the
 // website reads the person's own off /v1/me/usage); onTurnEnd: a turn ended here;
 // onReply: the first text of a reply arrived (the trial's clock, issue #3590).
-export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blockedBy?: Budget | null; onTurnEnd?: () => void; onReply?: () => void } = {}) {
+export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = "claude" }: { blockedBy?: Budget | null; onTurnEnd?: () => void; onReply?: () => void; provider?: Provider } = {}) {
   const [items, setItems] = useState<Item[]>([]);
   const [asks, setAsks] = useState<Ask[]>([]);
   const [answered, setAnswered] = useState<Map<string, Answered>>(new Map());
@@ -235,6 +244,10 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   const [sync, setSync] = useState<Sync>("");
   const [owner, setOwner] = useState<Owner>(null);
   const [handed, setHanded] = useState<Handed>(null);
+  const [others, setOthers] = useState<Partial<Record<Provider, Side>>>({});
+  // the assistants the home offers (an older home, or one without codex: none said ⇒ Claude only)
+  const [providers, setProviders] = useState<Provider[]>(["claude"]);
+  const [last, setLast] = useState("");
   const hadCopy = useRef(false);
   // the home has answered this page once: from then on only the home is shown
   const homeSeen = useRef(false);
@@ -257,7 +270,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
       // first read: the entry's copy, at once, while the home's answer travels.
       // The copy is never newer than the home: once the home has answered (this
       // read or an earlier one) a copy that lands later is dropped (task Y393).
-      void fetch(`${API}/conversation?cached=1`, { headers: H, signal }).then(async (c) => {
+      void fetch(at(`${API}/conversation?cached=1`, provider), { headers: H, signal }).then(async (c) => {
         if (!c.ok || signal.aborted || read !== historyRead.current || homeSeen.current) return;
         // no copy kept yet (a first visit): nothing to show, the home's answer comes
         const j = cachedCopy(c.ok, await c.json().catch(() => null));
@@ -266,7 +279,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
         setModels(j.models || []);
         setModelState((m) => {
           if (m) return m;
-          const saved = localStorage.getItem("fwc-model");
+          const saved = localStorage.getItem(modelKey(provider));
           return (j.models || []).some((x: Model) => x.id === saved) ? saved! : j.default;
         });
         setItems(j.items || []);
@@ -275,7 +288,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
         setLoaded(true);
       }).catch(() => {});
     }
-    const r = await chatFetch(`${API}/conversation`, { headers: H, signal }).catch(() => null);
+    const r = await chatFetch(at(`${API}/conversation`, provider), { headers: H, signal }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     // A newer read or local turn owns the transcript, even after that turn ends.
     if (signal.aborted || read !== historyRead.current) return;
@@ -296,6 +309,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
         setLoaded(true);
         return;
       }
+      // this side is not on the home (no codex there, or an older home): back to Claude
+      if (provider !== "claude" && r?.status === 404) { setGate({ code: "no_provider", msg: "" }); setLoaded(true); return; }
       if (SITE && GATES.has(code)) setGate({ code, msg: String(j.error || "") });
       else setNotice(j.error || tr("读不到对话", "Could not read the conversation"));
       setLoaded(true);
@@ -309,7 +324,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     setModels(j.models || []);
     setModelState((m) => {
       if (m) return m;
-      const saved = localStorage.getItem("fwc-model");
+      const saved = localStorage.getItem(modelKey(provider));
       return (j.models || []).some((x: Model) => x.id === saved) ? saved! : j.default;
     });
     setItems(j.items || []);
@@ -319,12 +334,15 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     const o = j.owner && j.owner.where === "terminal" ? j.owner : null;
     setOwner(o ? { where: "terminal", busy: !!o.busy, label: o.label, machine: o.machine, agent: o.agent } : null);
     setHanded(j.handed && j.handed.from === "terminal" ? j.handed : null);
+    setOthers(j.others && typeof j.others === "object" ? j.others : {});
+    setProviders(Array.isArray(j.providers) ? j.providers.filter((p: string): p is Provider => PROVIDERS.includes(p as Provider)) : ["claude"]);
+    setLast(String(j.last || ""));
     turnId.current = j.turn || null;
     setLoaded(true);
     // a turn this page did not start (or lost): follow it; a terminal holding it: follow that
     if (j.busy && !streaming.current) follow.current = window.setTimeout(load, 2500);
     else if (o) follow.current = window.setTimeout(load, OWNER_POLL_MS);
-  }, []);
+  }, [provider]);
 
   useEffect(() => {
     transport.current = new AbortController();
@@ -345,7 +363,15 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     };
   }, [load]);
 
-  const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem("fwc-model", m); }, []);
+  const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem(modelKey(provider), m); }, [provider]);
+
+  // 新对话: this side starts over; the other side and the history file stay
+  const startNew = useCallback(async () => {
+    const r = await chatFetch(at(`${API}/new`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: "{}" }).catch(() => null);
+    if (!r?.ok) { setNotice(tr("没能开新对话，稍后再试。", "Could not start a new conversation; try again.")); return; }
+    setItems([]); setAsks([]); setResume(null);
+    await load();
+  }, [provider, load]);
 
   const onNew = useCallback(async (message: AppendMessage) => {
     const text = message.content.map((p) => (p.type === "text" ? p.text : "")).join("").trim();
@@ -367,7 +393,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     let lost = false;
     let replied = false;
     try {
-      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}), origin: location.origin }) });
+      const r = await chatFetch(at(`${API}/turn`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}), origin: location.origin }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
@@ -416,7 +442,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   const onCancel = useCallback(async () => {
     if (!turnId.current) return;
     try {
-      const r = await chatFetch(`${API}/stop`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ turn: turnId.current }) });
+      const r = await chatFetch(at(`${API}/stop`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ turn: turnId.current }) });
       if (!r.ok) throw new Error("stop refused");
     } catch { await load(); setNotice("无法确认是否已停止，请查看对话后重试。"); }
   }, [load]);
@@ -439,7 +465,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
       payload = { allow: o.approved };
     }
     try {
-      const r = await chatFetch(`${API}/answer`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ rid: a.rid, ...payload }) });
+      const r = await chatFetch(at(`${API}/answer`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ rid: a.rid, ...payload }) });
       if (!r.ok) throw new Error("answer refused");
       setAnswered((m) => new Map(m).set(a.rid, { approved: a.kind === "question" ? true : o.approved, ...(answers ? { answers } : {}) }));
     } catch { await load(); setNotice("无法确认回答是否送达，请查看对话后重试。"); }
@@ -463,13 +489,13 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   const takeOver = useCallback(async () => {
     setTaking(true);
     try {
-      const r = await chatFetch(`${API}/take`, { method: "POST", headers: H, body: "{}" });
+      const r = await chatFetch(at(`${API}/take`, provider), { method: "POST", headers: H, body: "{}" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) setNotice(j.error || tr("没接过来，稍后再试", "Could not take it over; try again"));
     } catch { setNotice(tr("没接过来，稍后再试", "Could not take it over; try again")); }
     setTaking(false);
     await load();
-  }, [load]);
+  }, [load, provider]);
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages,
@@ -484,5 +510,6 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     adapters: { attachments: new SimpleImageAttachmentAdapter() },
   });
 
-  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync, owner, handed, takeOver, taking };
+  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync, owner, handed, takeOver, taking,
+    provider, providers, others, last, startNew };
 }

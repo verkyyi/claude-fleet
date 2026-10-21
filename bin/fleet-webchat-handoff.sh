@@ -57,10 +57,12 @@ chat_up() { # the service started on demand, as a person opening the page does
   bash "$BIN/fleet-webchat.sh" ensure >/dev/null 2>&1 || true
   [ -S "$CHAT_SOCK" ]
 }
-# is WebChat answering right now? (no service = no)
-chat_busy() {
+# the WebChat side an agent's conversation is on: Claude's (no query) or Codex's (task R9A2)
+side_q() { [ "${1:-claude}" = codex ] && printf '?provider=codex'; }
+# is WebChat answering right now, on that agent's side? (no service = no)
+chat_busy() { # [agent]
   local out
-  out=$(chat GET /api/state 2>/dev/null) || return 1
+  out=$(chat GET "/api/state$(side_q "${1:-claude}")" 2>/dev/null) || return 1
   case "$(printf '%s' "$out" | tail -n 1)" in 200) ;; *) return 1 ;; esac
   printf '%s' "$out" | sed '$d' | python3 -c 'import json,sys
 sys.exit(0 if json.load(sys.stdin).get("busy") is True else 1)' 2>/dev/null
@@ -120,14 +122,14 @@ to_web() {
   agent=$(fleet_agent_or_default "$(wopt @cc_agent)")
   sid=$(fleet_agent_session_id "$agent" wopt window)
   [ -n "$sid" ] || die "$(fleet_ui_t webchat_no_sid)" 2
-  # Codex in WebChat comes with the page's Codex side (R9A2): until then, say so
-  [ "$agent" = claude ] || [ "${FLEET_WEBCHAT_CODEX:-0}" = 1 ] || die "$(fleet_ui_t webchat_no_codex)" 2
+  # Codex in WebChat is the page's Codex side (R9A2); FLEET_WEBCHAT_CODEX=0 turns it off here
+  [ "$agent" = claude ] || { [ "$agent" = codex ] && [ "${FLEET_WEBCHAT_CODEX:-1}" = 1 ]; } || die "$(fleet_ui_t webchat_no_codex)" 2
   [ "$(wopt @claude_state)" = exited ] && [ "$(wopt @handoff_web)" = 1 ] && die "$(fleet_ui_t webchat_already)" 2
   term_busy && die "$(fleet_ui_t webchat_term_busy)" 3
   label=$(wopt @raw); [ -n "$label" ] || label=$(TM display-message -p -t "$WIN" '#{window_name}' 2>/dev/null)
   machine=$(hostname -s 2>/dev/null)
   chat_up || die "$(fleet_ui_t webchat_down)" 2
-  chat_busy && die "$(fleet_ui_t webchat_web_busy)" 3
+  chat_busy "$agent" && die "$(fleet_ui_t webchat_web_busy)" 3
   local body out code
   body=$(python3 -c 'import json,sys; print(json.dumps({"agent":sys.argv[1],"session":sys.argv[2],"label":sys.argv[3],"machine":sys.argv[4],"fid":sys.argv[5]}))' \
     "$agent" "$sid" "$label" "$machine" "$fid")
@@ -208,11 +210,11 @@ to_terminal() {
   holder=$(jval "$rec" holder)
   [ -n "$holder" ] || return 0
   [ "$holder" = terminal ] && return 0
-  chat_busy && die "$(fleet_ui_t webchat_web_busy_wait)" 3
+  chat_busy "$AGENT" && die "$(fleet_ui_t webchat_web_busy_wait)" 3
   python3 "$LOCK" set --agent "$AGENT" --sid "$SID" --holder terminal ${FID:+--fid "$FID"} --if-holder webchat >/dev/null \
     || die "$(fleet_ui_t webchat_web_busy_wait)" 3
   # WebChat lets go of its warm process on this session at its next read
-  chat POST /api/release "{\"agent\":\"$AGENT\",\"session\":\"$SID\"}" >/dev/null 2>&1 || true
+  chat POST "/api/release$(side_q "$AGENT")" "{\"agent\":\"$AGENT\",\"session\":\"$SID\"}" >/dev/null 2>&1 || true
   return 0
 }
 

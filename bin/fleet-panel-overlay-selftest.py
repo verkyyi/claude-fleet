@@ -224,9 +224,8 @@ class NativeTests(unittest.TestCase):
             # a whole page: the session line on top, a rule, one numbered item a line
             self.assertIn("源中文", opened[1])
             self.assertTrue(opened[2].startswith("───"), opened[2])
-            self.assertEqual([x.strip() for x in opened[3:6]] + [opened[7].strip()], ["1  进入", "2  改名…", "3  换成 Claude", "4  回收…"])
-            # 在 WebChat 里继续 (T810): a Codex session's is grey, unnumbered, saying why
-            self.assertTrue(opened[6].strip().startswith("在 WebChat 里继续"), opened[6])
+            # 在 WebChat 里继续 (T810): a Codex session's too, since the page has a Codex side (R9A2)
+            self.assertEqual([x.strip() for x in opened[3:8]], ["1  进入", "2  改名…", "3  换成 Claude", "4  在 WebChat 里继续", "5  回收…"])
             self.assertNotIn("会话 02", "\n".join(opened))
             self.assertIn("会话 42", opened[0])
             self.assertNotIn("DO NOT REPEAT", "\n".join(opened))
@@ -279,7 +278,7 @@ class NativeTests(unittest.TestCase):
         self.keys("Tab", "2")
         self.wait("新名字›")
         self.keys("Escape")
-        self.wait("4  回收…")
+        self.wait("5  回收…")
         self.keys("Escape")
         self.wait("Tab 操作")
         self.keys("Up", "Tab")

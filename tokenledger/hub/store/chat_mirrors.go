@@ -14,7 +14,9 @@ import (
 // principal's own read opens it (ChatMirror takes the caller's principal, never
 // an id); a row not refreshed for its keep is deleted, ciphertext and all. A
 // principal in hub_chat_mirror_off keeps no copy (their switch); turning it off
-// deletes theirs.
+// deletes theirs. A person talks to two assistants (task R9A2): the Claude
+// conversation's row is keyed by the principal as before, the Codex one's by
+// ChatMirrorKey — one copy each, the newer-wins rule per row.
 var chatMirrorsSchema = []string{`
 CREATE TABLE IF NOT EXISTS hub_chat_mirrors (
   principal  TEXT PRIMARY KEY,
@@ -48,6 +50,23 @@ type ChatMirrorCopy struct {
 // newer copy). Expired copies of anyone go with it. Nothing is kept for a
 // principal whose switch is off.
 func (s *Store) PutChatMirror(pid string, sealed []byte, expires, now time.Time) error {
+	return s.PutChatMirrorOf(pid, "", sealed, expires, now)
+}
+
+// ChatMirrorProviders are the assistants a person's conversations are kept for;
+// "claude" (or "") is the principal's own row.
+var ChatMirrorProviders = []string{"claude", "codex"}
+
+// ChatMirrorKey is the row a provider's copy of pid's conversation is kept under.
+func ChatMirrorKey(pid, provider string) string {
+	if provider == "" || provider == "claude" {
+		return pid
+	}
+	return pid + "#" + provider
+}
+
+// PutChatMirrorOf is PutChatMirror for one provider's conversation.
+func (s *Store) PutChatMirrorOf(pid, provider string, sealed []byte, expires, now time.Time) error {
 	if off, err := s.ChatMirrorOff(pid); err != nil || off {
 		return err
 	}
@@ -58,16 +77,21 @@ func (s *Store) PutChatMirror(pid string, sealed []byte, expires, now time.Time)
 		VALUES (?, ?, ?, ?) ON CONFLICT(principal) DO UPDATE SET sealed = excluded.sealed,
 		expires_at = excluded.expires_at, updated_at = excluded.updated_at
 		WHERE hub_chat_mirrors.updated_at <= excluded.updated_at`,
-		pid, sealed, expires.Unix(), now.Unix())
+		ChatMirrorKey(pid, provider), sealed, expires.Unix(), now.Unix())
 	return err
 }
 
 // ChatMirror is pid's own copy when it has not expired at now; nil, nil for none.
 func (s *Store) ChatMirror(pid string, now time.Time) (*ChatMirrorCopy, error) {
+	return s.ChatMirrorOf(pid, "", now)
+}
+
+// ChatMirrorOf is ChatMirror for one provider's conversation.
+func (s *Store) ChatMirrorOf(pid, provider string, now time.Time) (*ChatMirrorCopy, error) {
 	var c ChatMirrorCopy
 	var up int64
 	err := s.write.QueryRow(`SELECT sealed, updated_at FROM hub_chat_mirrors
-		WHERE principal = ? AND expires_at > ?`, pid, now.Unix()).Scan(&c.Sealed, &up)
+		WHERE principal = ? AND expires_at > ?`, ChatMirrorKey(pid, provider), now.Unix()).Scan(&c.Sealed, &up)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -78,10 +102,14 @@ func (s *Store) ChatMirror(pid string, now time.Time) (*ChatMirrorCopy, error) {
 	return &c, nil
 }
 
-// DeleteChatMirror forgets pid's copy.
+// DeleteChatMirror forgets pid's copies, every provider's.
 func (s *Store) DeleteChatMirror(pid string) error {
-	_, err := s.write.Exec(`DELETE FROM hub_chat_mirrors WHERE principal = ?`, pid)
-	return err
+	for _, p := range ChatMirrorProviders {
+		if _, err := s.write.Exec(`DELETE FROM hub_chat_mirrors WHERE principal = ?`, ChatMirrorKey(pid, p)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ChatMirrorOff says whether pid turned the copy off.

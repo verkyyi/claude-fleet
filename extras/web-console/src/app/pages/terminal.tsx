@@ -16,6 +16,7 @@ import { touchWheel } from "@/shared/touch-wheel";
 import { FONT_SIZES, MIN_CONTRAST, SCHEMES, onTermPick, setTermPick, termPick, xtermTheme, type TermPick } from "@/shared/term-theme";
 import { webGoTarget } from "@/shared/web-go";
 import { usePage } from "../Shell";
+import { continueCommand, continueProvider } from "@/app/chat/continue";
 
 type View = TerminalState & { destination?: string };
 const errors: Record<string, [string, string]> = {
@@ -97,6 +98,9 @@ export default function TerminalPage() {
   const [query] = useSearchParams();
   // An explicit empty/invalid worker remains explicit and is refused server-side.
   const worker = query.get("worker");
+  // 「在终端里继续」 (task R9A2): the personal terminal picks a web conversation up
+  const cont = worker === null ? continueProvider(query.get("continue")) : null;
+  const [contNote, setContNote] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
   const go = useRef(navigate); go.current = navigate;
@@ -235,6 +239,24 @@ export default function TerminalPage() {
       size(); current.focus();
     };
     send.current = (text) => { if (!composing) { input(text); term?.focus(); } };
+    // once ready: the side's session and directory read from the home, then its
+    // shell (the 看台's ⌃\) and the one command — never while a turn runs there
+    let contDone = !cont;
+    const continueHere = async () => {
+      if (contDone) return;
+      contDone = true;
+      const name = cont === "codex" ? "Codex" : "Claude Code";
+      const r = await fetch(`/v1/chat/conversation${cont === "codex" ? "?provider=codex" : ""}`, { signal: abort.signal, credentials: "same-origin", headers: { Accept: "application/json" } }).catch(() => null);
+      const j = r?.ok ? await r.json().catch(() => null) : null;
+      if (dead) return;
+      if (!j?.session) { setContNote(tr(`${name} 这边还没有对话可以接。`, `There is no ${name} conversation to continue yet.`)); return; }
+      if (j.busy) { setContNote(tr(`${name} 这边正在回复，等它答完再来接。`, `${name} is replying; continue here once it is done.`)); return; }
+      const cmd = continueCommand(cont!, String(j.session), String(j.cwd || ""));
+      if (!cmd) { setContNote(tr("这段对话的记录看不懂，没有接。", "Could not read that conversation; nothing was run.")); return; }
+      setContNote(tr(`正在接上 ${name} 的对话…`, `Continuing the ${name} conversation…`));
+      input(FLEET_SHELL);
+      setTimeout(() => { if (!dead) { input(cmd + "\r"); setContNote(""); } }, 800);
+    };
     const resize = new ResizeObserver(size); resize.observe(host);
     // the page turning light / dark, or a new pick, repaints at once
     const repaint = () => {
@@ -254,7 +276,7 @@ export default function TerminalPage() {
           if (state.notice) setNotice(noticeText(state.notice));
           if (!["connecting", "reconnecting", "ready"].includes(state.state)) { client?.close(); client = undefined; setOffers([]); return; }
           if (state.state === "ready") {
-            if (!ready) { disposeTerminal(); ready = true; createTerminal(); }
+            if (!ready) { disposeTerminal(); ready = true; createTerminal(); void continueHere(); }
             if (!client) client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => { client = undefined; if (!dead) setOffers([]); });
           }
         },
@@ -299,7 +321,7 @@ export default function TerminalPage() {
       window.removeEventListener("online", homeBack); document.removeEventListener("visibilitychange", homeBack);
       resize.disconnect(); theme.disconnect(); unpick(); disposeTerminal();
     };
-  }, [worker, attempt]);
+  }, [worker, attempt, cont]);
 
   const again = () => { manual.current = true; setView({ state: "connecting" }); retry((n) => n + 1); };
   const status = view.state === "reconnecting" ? tr("正在接回…", "Reconnecting…") : view.state === "open-elsewhere" ? tr("在另一处使用", "Open elsewhere") : view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state !== "ready" ? tr("已断开", "Disconnected")
@@ -329,6 +351,7 @@ export default function TerminalPage() {
           : !["ended", "unsupported"].includes(view.error || "") && view.state !== "unsupported" ? <Button size="sm" onClick={again}>{tr("重新连接", "Reconnect")}</Button>
             : <Button asChild size="sm"><Link to="/sessions">{tr("查看会话", "View sessions")}</Link></Button>}
     </div> : null}
+    {contNote ? <p role="status" className="text-muted-foreground text-sm">{contNote}</p> : null}
     {offers.map((offer) => <p key={offer.id} role="status" className="text-sm break-all">
       {offer.url ? <a href={offer.url} target="_blank" rel="noopener noreferrer" className="underline">{tr("打开链接：", "Open link: ")}{offer.url}</a>
         : tr("此操作需要本地终端：浏览器暂不支持端口转发、文件传送或登录回调。", "This action needs a local terminal: browser port forwarding, file transfer and login callbacks are not supported.")}

@@ -127,7 +127,7 @@ func (s *Server) chatMirrorOn(person string) bool {
 }
 
 // chatMirrorKeepBody copies a home's conversation answer for person.
-func (s *Server) chatMirrorKeepBody(person string, body []byte, now time.Time) {
+func (s *Server) chatMirrorKeepBody(person, provider string, body []byte, now time.Time) {
 	var in struct {
 		Session string            `json:"session"`
 		Cwd     string            `json:"cwd"`
@@ -151,7 +151,7 @@ func (s *Server) chatMirrorKeepBody(person string, body []byte, now time.Time) {
 		log.Printf("fleet: chat copy of %s: seal: %v", person, err)
 		return
 	}
-	if err := s.Store.PutChatMirror(person, sealed, now.Add(chatMirrorKeep), now); err != nil {
+	if err := s.Store.PutChatMirrorOf(person, provider, sealed, now.Add(chatMirrorKeep), now); err != nil {
 		log.Printf("fleet: chat copy of %s: keep: %v", person, err)
 	}
 }
@@ -187,7 +187,7 @@ func (t *chatMirrorTee) Read(p []byte) (int, error) {
 // copy, marked as one — or, with none to give (the copy off, not written yet,
 // or sealed under a key that moved on), 200 with no items and "mirror": null
 // (task J091): a first visit is no error, the page just waits for the home.
-func (s *Server) handleChatCached(w http.ResponseWriter, r *http.Request, person string) {
+func (s *Server) handleChatCached(w http.ResponseWriter, r *http.Request, person, provider string) {
 	if viewAsAsked(r) != "" {
 		s.chatRefuse(w, person, "conversation cached", http.StatusForbidden, "not_yours", "only your own conversation")
 		return
@@ -196,7 +196,7 @@ func (s *Server) handleChatCached(w http.ResponseWriter, r *http.Request, person
 		chatNoCopy(w)
 		return
 	}
-	c, err := s.Store.ChatMirror(person, time.Now())
+	c, err := s.Store.ChatMirrorOf(person, provider, time.Now())
 	if err != nil || c == nil {
 		chatNoCopy(w)
 		return
