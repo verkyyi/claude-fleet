@@ -8,7 +8,7 @@
 // create, stop and resume.
 import * as React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { AlertTriangle, Download, QrCode, WifiOff } from "lucide-react";
+import { AlertTriangle, Download, Image as ImageIcon, QrCode, WifiOff } from "lucide-react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { AdminTablePage, type Filter } from "../AdminTablePage";
 import { api, type TrialCode, type TrialCodeDetail, type TrialCodesList, type TrialFunnel } from "../api";
 import { lang, t, when, type MsgKey } from "../i18n";
+import { TrialPoster } from "./TrialPoster";
 
 const BASE = "/v1/admin/trial-codes";
 const zeroTime = (iso?: string) => !iso || iso.startsWith("0001-");
@@ -148,6 +149,8 @@ const columns: ColumnDef<TrialCode, any>[] = [
     cell: ({ row: { original: c } }) => (
       <span className="whitespace-nowrap text-sm font-medium text-clay" onClick={(e) => e.stopPropagation()}>
         <a href={c.image} download={`${c.channel}.png`} className="hover:underline">{t("tc.op.download")}</a>
+        {" · "}
+        <TrialPoster c={c} defaultTerms={defaultTerms} trigger={<button type="button" className="hover:underline">{t("tc.op.poster")}</button>} />
         {" · "}
         <button type="button" className="hover:underline" onClick={() => rowFlip?.(c)}>
           {t(c.state === "live" ? "tc.op.stop" : "tc.op.resume")}
@@ -288,12 +291,24 @@ function CodeDrawer({ c, close, reload }: { c: TrialCode; close: () => void; rel
       <div className="grid gap-6 p-6">
         <div className="flex items-center gap-4">
           <img src={c.image} alt={c.channel} className="size-36 rounded-lg border bg-white p-2" />
-          <Button variant="outline" asChild>
-            <a href={c.image} download={`${c.channel}.png`}>
-              <Download />
-              {t("tc.d.download")}
-            </a>
-          </Button>
+          <div className="grid gap-2">
+            <Button variant="outline" asChild>
+              <a href={c.image} download={`${c.channel}.png`}>
+                <Download />
+                {t("tc.d.download")}
+              </a>
+            </Button>
+            <TrialPoster
+              c={c}
+              defaultTerms={defaultTerms}
+              trigger={
+                <Button>
+                  <ImageIcon />
+                  {t("tc.d.poster")}
+                </Button>
+              }
+            />
+          </div>
         </div>
         {state === "paused" && c.paused_why && (
           <Alert variant="destructive">

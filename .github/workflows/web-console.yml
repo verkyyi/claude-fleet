@@ -66,6 +66,8 @@ jobs:
         run: node --experimental-strip-types test/session-handover.mjs
       - name: The composer's empty box speaks the page's language (T841)
         run: node --experimental-strip-types test/chat-placeholder.mjs
+      - name: The 试用海报's words and layout (CHZ0)
+        run: node --experimental-strip-types test/poster.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build
