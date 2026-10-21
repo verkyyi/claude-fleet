@@ -748,7 +748,10 @@ the hub as before; the audit line says `via` door / hub (BREAK-IT
 browser terminals (XX79, docs/dev/WEB-TERMINAL.md «走最近的门»): `--browser-listen :443
 --browser-cert <fullchain> --browser-key <key> --door-id us [--browser-origin https://<console>]`
 (`FLEET_DOOR_BROWSER_LISTEN` / `_CERT` / `_KEY` / `_ORIGIN`, `FLEET_DOOR_ID`) serves
-`/v1/door/pipe` and `/healthz` over TLS, and the hub's `fleet.term_doors` names it. The pods' jump does
+`/v1/door/pipe` and `/healthz` over TLS, and the hub's `fleet.term_doors` names it. Give it the
+relay's own address (`--browser-listen :22443 --relay-listen :22443`) and one port carries
+both: a TLS ClientHello goes to the browser listener, anything else to the homes' relay
+(`door.SplitTLS`) — the US door's firewall opens only 22022 and 22443. The pods' jump does
 not work there (no cluster DNS): a pod's route names the cluster door's own
 address (`CCQUOTA_FLEET_NODE_ROUTES`), never the shared name.
 

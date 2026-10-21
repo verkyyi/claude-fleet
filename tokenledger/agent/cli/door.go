@@ -82,12 +82,23 @@ func runDoor(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	fmt.Fprintf(os.Stderr, "ccquota door: %s on %s (host key %s)\n", hub, ln.Addr(), door.PublicKeyLine(hk))
+	// the browser listener may share the relay's port (a door whose firewall
+	// opens only that one): one socket, split by the first byte (XX79)
+	var rl, bl net.Listener
+	if *browserListen != "" && *browserListen == *relayListen {
+		shared, err := net.Listen("tcp", *relayListen)
+		if err != nil {
+			return err
+		}
+		bl, rl = door.SplitTLS(shared, 10*time.Second)
+	}
 	if *relayListen != "" {
 		// homes' dial-back (CapRelayVia): the bytes of a session reach the
 		// home from here, not through the hub's region
-		rl, err := net.Listen("tcp", *relayListen)
-		if err != nil {
-			return err
+		if rl == nil {
+			if rl, err = net.Listen("tcp", *relayListen); err != nil {
+				return err
+			}
 		}
 		hs := &http.Server{Handler: d.RelayHandler(), ReadHeaderTimeout: 10 * time.Second}
 		go func() { <-ctx.Done(); hs.Close() }()
@@ -116,9 +127,10 @@ func runDoor(args []string) error {
 		if _, err := certs.get(nil); err != nil {
 			return fmt.Errorf("the browser listener's certificate: %w", err)
 		}
-		bl, err := net.Listen("tcp", *browserListen)
-		if err != nil {
-			return err
+		if bl == nil {
+			if bl, err = net.Listen("tcp", *browserListen); err != nil {
+				return err
+			}
 		}
 		hs := &http.Server{Handler: pipes.Handler(), ReadHeaderTimeout: 10 * time.Second,
 			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: certs.get}}
