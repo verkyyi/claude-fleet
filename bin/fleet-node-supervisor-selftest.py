@@ -2464,7 +2464,7 @@ class K_AgentTasks(Sandbox):
         time.sleep(1.5)
         calls = self.ncalls()
         self.assertEqual(len(calls), 1, calls)
-        self.assertEqual(calls[0], "--no-repo|--origin|hub|--print|--name|daily-%s|--prompt|/daily-report %s|fns-sandbox|"
+        self.assertEqual(calls[0], "--no-repo|--origin|hub|--reap-origin|probe|--reap|done:15m|--print|--name|daily-%s|--prompt|/daily-report %s|fns-sandbox|"
                          % (self.DAY, self.DAY))
         row = self.row()
         self.assertEqual((row["status"], row["last_result"], row["last_window"]), ("ok", "ok", "daily-" + self.DAY))
