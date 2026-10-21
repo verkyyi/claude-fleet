@@ -6737,7 +6737,7 @@ drill_chat_relay_replica_hop() {
 term_go() {
   local tests="$1" pkgs="$2" ok="$3" out rc t
   for t in $tests; do
-    grep -q "^func $t(" "$ROOT"/tokenledger/hub/api/*_test.go "$ROOT"/tokenledger/e2e/*_test.go "$ROOT"/tokenledger/agent/*_test.go \
+    grep -q "^func $t(" "$ROOT"/tokenledger/hub/api/*_test.go "$ROOT"/tokenledger/hub/store/*_test.go "$ROOT"/tokenledger/e2e/*_test.go "$ROOT"/tokenledger/agent/*_test.go \
       "$ROOT"/tokenledger/shared/control/*_test.go "$ROOT"/tokenledger/shared/attachment/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
@@ -6769,6 +6769,29 @@ drill_chat_late_history() {
     WHAT='迟到的旧对话不抹掉已完成的新消息；官网和本地各只提交一次'
   else
     WHAT='无 Playwright/Chromium：browser-attachment 门运行真实页面演练'
+  fi
+  SECS=$(since "$t0")
+}
+
+# chat-copy-order (task Y393): the entry's copy that lands after the home's answer
+# never puts the older conversation back, two reads finishing out of order never
+# leave the older copy, and a second browser of the person follows the first.
+drill_chat_copy_order() {
+  CAP=180; local t0 out rc
+  t0=$(now)
+  grep -q 'homeSeen.current' "$ROOT/extras/web-console/src/app/chat/chat.ts" 2>/dev/null \
+    || { WHY="the console lets a copy replace the home's answer"; return 1; }
+  grep -q 'WHERE hub_chat_mirrors.updated_at <= excluded.updated_at' "$ROOT/tokenledger/hub/store/chat_mirrors.go" 2>/dev/null \
+    || { WHY="an older read's copy replaces a newer one"; return 1; }
+  [ -f "$ROOT/extras/browser-transport/chat-copy-order.mjs" ] || { WHY='missing copy-order browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/chat-copy-order.mjs" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || { WHY="the page went back to an older conversation: $out"; return 1; }
+    term_go 'TestChatMirrorKeepsNewest' './hub/store' '' || return 1
+    WHAT='迟到的副本不盖住家里的回答；两次读乱序落库只留新的；另一浏览器聚焦即同步、在屏 30 s 内自己跟上'
+  else
+    term_go 'TestChatMirrorKeepsNewest' './hub/store' '乱序落库只留新的（Go）' || return 1
+    WHAT="${WHAT}；无 Playwright/Chromium：browser-attachment 门运行真实页面演练"
   fi
   SECS=$(since "$t0")
 }

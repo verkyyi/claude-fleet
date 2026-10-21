@@ -416,8 +416,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				w.Header().Del("Cache-Control")
 			}
 			if name == "conversation" && resp.StatusCode == http.StatusOK && viewAsAsked(r) == "" && s.chatMirrorOn(person) {
+				// the copy is stamped with when the home answered, not when its
+				// body ended: of two reads in flight, the older answer never
+				// replaces the newer copy, whichever replica finishes last (task Y393)
+				taken := time.Now()
 				resp.Body = &chatMirrorTee{ReadCloser: resp.Body, done: func(b []byte) {
-					s.chatMirrorKeepBody(person, append([]byte(nil), b...), time.Now())
+					s.chatMirrorKeepBody(person, append([]byte(nil), b...), taken)
 				}}
 			}
 			if refund == nil {

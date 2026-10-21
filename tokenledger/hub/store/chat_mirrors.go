@@ -42,9 +42,11 @@ type ChatMirrorCopy struct {
 	UpdatedAt time.Time
 }
 
-// PutChatMirror keeps sealed as pid's copy until expires, replacing the last;
-// expired copies of anyone go with it. Nothing is kept for a principal whose
-// switch is off.
+// PutChatMirror keeps sealed as pid's copy until expires, replacing the last —
+// unless the last was taken later than now (task Y393: two reads of one person,
+// on two replicas, finish out of order; the older answer never replaces the
+// newer copy). Expired copies of anyone go with it. Nothing is kept for a
+// principal whose switch is off.
 func (s *Store) PutChatMirror(pid string, sealed []byte, expires, now time.Time) error {
 	if off, err := s.ChatMirrorOff(pid); err != nil || off {
 		return err
@@ -54,7 +56,8 @@ func (s *Store) PutChatMirror(pid string, sealed []byte, expires, now time.Time)
 	}
 	_, err := s.write.Exec(`INSERT INTO hub_chat_mirrors (principal, sealed, expires_at, updated_at)
 		VALUES (?, ?, ?, ?) ON CONFLICT(principal) DO UPDATE SET sealed = excluded.sealed,
-		expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
+		expires_at = excluded.expires_at, updated_at = excluded.updated_at
+		WHERE hub_chat_mirrors.updated_at <= excluded.updated_at`,
 		pid, sealed, expires.Unix(), now.Unix())
 	return err
 }
