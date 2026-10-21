@@ -196,7 +196,11 @@ data:
         { "plan": "max",     "source": "claude", "monthly_cost": 200, "currency": "USD",
           "effective_from": "2026-07-09T00:00:00Z" },
         { "plan": "prolite", "source": "codex",  "monthly_cost": 200, "currency": "USD",
-          "effective_from": "2026-01-31T00:00:00Z" }
+          "effective_from": "2026-01-31T00:00:00Z" },
+        { "plan": "prolite", "source": "codex",  "monthly_cost": 100, "currency": "USD",
+          "effective_from": "2026-10-21T00:00:00Z" },
+        { "plan": "promax",  "source": "codex",  "monthly_cost": 500, "currency": "USD",
+          "effective_from": "2026-10-21T00:00:00Z" }
       ],
       "gateway": {
         "rates_as_of": "2026-09-14",
