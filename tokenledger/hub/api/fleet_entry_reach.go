@@ -394,6 +394,9 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 	}
 	v := control.EntryReachVerdict{CheckedAt: now, NoPublic: noPublic, Addrs: entryReachAddrs(written)}
 	v.HostKeyChanged = s.entryHostKeyChangeOpen(host)
+	if want != nil {
+		v.HostCert = s.signEntryHostCert(host, want, now)
+	}
 	if src.IsValid() {
 		v.Source = src.String()
 	}

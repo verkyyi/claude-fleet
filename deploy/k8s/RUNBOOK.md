@@ -301,7 +301,25 @@ hub 开了 `CCQUOTA_FLEET=1` 之后多挂两把密钥，**各自独立 Secret，
 | Secret（ns new-deploy） | key | 挂到 | 是什么 | 生成 |
 |---|---|---|---|---|
 | `ccquota-ssh-ca` | `ca` | `/secrets/ssh-ca/ca`（`CCQUOTA_FLEET_SSH_CA_KEY`） | SSH 用户 CA **私钥**（OpenSSH、无口令），hub 用它签 12 小时的用户证书 | `ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca` |
+| `ccquota-ssh-host-ca` | `ca` | `/secrets/ssh-host-ca/ca`（`CCQUOTA_FLEET_SSH_HOST_CA_KEY`） | SSH **主机** CA 私钥（T743）：独立生成、**不由用户 CA 推出**，hub 用它给每台家机器的入口钥匙签 30 天的主机证书。可选：没建这把 Secret ⇒ 不签主机证书，其余照旧；是用户 CA 那把 ⇒ hub 拒绝启动 | 见下「主机 CA」 |
 | `ccquota-fleet-cred-key` | `key` | `/secrets/cred-key/key`（`CCQUOTA_FLEET_CRED_KEY_FILE`） | 凭据保险箱的 AES-256-GCM 密钥，32 字节 base64 | `openssl rand -base64 32 > key` |
+
+**主机 CA（T743）**——在运维自己的机器上生成，私钥不进任何会话 / 日志 / 单子 / PR：
+
+```bash
+umask 077
+ssh-keygen -t ed25519 -N '' -C fleet-host-ca -f host-ca          # 独立的一把，与用户 CA 无关
+kubectl -n new-deploy create secret generic ccquota-ssh-host-ca --from-file=ca=./host-ca
+kubectl -n new-deploy label secret ccquota-ssh-host-ca app=ccquota-hub
+# 加密备份交运维保险箱（口令另存，不与备份放一起），然后删明文
+openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -in host-ca -out host-ca.enc
+shred -u host-ca 2>/dev/null || rm -P host-ca
+kubectl -n new-deploy rollout restart deployment/ccquota-hub
+```
+
+`host-ca.pub` 不是秘密（hub 也经路线表的 `host_ca` 发给客户端）。**轮换**：生成新的一把、换 Secret、重启——
+客户端下次 `fleet connect` 写入新的 `@cert-authority` 行，各家机器入口在下一次可达上报（≤5 分钟）拿到新证书；
+新旧之间没签上的那几分钟，客户端仍按 hub 列出的逐把钥匙认。**吊销某台机器**：证书 30 天自然过期；要立即作废就轮换主机 CA。
 
 ```bash
 kubectl -n new-deploy create secret generic ccquota-ssh-ca --from-file=ca=./ca

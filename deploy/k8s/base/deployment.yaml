@@ -89,6 +89,11 @@ spec:
               value: "/secrets/cred-key/key"
             - name: CCQUOTA_FLEET_SSH_CA_KEY
               value: "/secrets/ssh-ca/ca"
+            # The HOST CA (claude-fleet T743): its own key and Secret, signs home
+            # machines' entry host keys. The Secret is optional: not made yet ⇒
+            # no host certificates, the hub starts as before.
+            - name: CCQUOTA_FLEET_SSH_HOST_CA_KEY
+              value: "/secrets/ssh-host-ca/ca"
             - name: CCQUOTA_FLEET_OAUTH_REFRESH_VIA
               value: "node"
             # The chat entry's city database, baked into the image at a pinned
@@ -159,6 +164,9 @@ spec:
             - name: ssh-ca
               mountPath: /secrets/ssh-ca
               readOnly: true
+            - name: ssh-host-ca
+              mountPath: /secrets/ssh-host-ca
+              readOnly: true
             - name: cred-key
               mountPath: /secrets/cred-key
               readOnly: true
@@ -177,3 +185,10 @@ spec:
           secret:
             secretName: ccquota-fleet-cred-key
             defaultMode: 0440
+        # The host CA (claude-fleet T743, ../RUNBOOK.md): optional — the one
+        # Secret here whose absence only turns a feature off (host certificates).
+        - name: ssh-host-ca
+          secret:
+            secretName: ccquota-ssh-host-ca
+            defaultMode: 0440
+            optional: true

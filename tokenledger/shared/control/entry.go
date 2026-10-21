@@ -144,6 +144,10 @@ type EntryReachVerdict struct {
 	// alert about it is still open (claude-fleet T743) — the machine's logins
 	// each record one error-level message from it (fleet-alerts.sh).
 	HostKeyChanged *EntryHostKeyChange `json:"host_key_changed,omitempty"`
+	// HostCert is the reported entry host key signed by the hub's host CA
+	// (claude-fleet T743), one "<cert type> <base64> host:<machine>" line —
+	// the entry sshd shows it (HostCertificate). "" when the hub has no CA.
+	HostCert string `json:"host_cert,omitempty"`
 }
 
 // EntryHostKeyChange is the old and new fingerprints of a changed entry host

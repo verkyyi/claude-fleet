@@ -1207,7 +1207,39 @@ def write_known_hosts(machine):
     the hub does not list is still refused (ssh's own "host key has changed").
     The file is the hub's: this machine's lines are replaced, the others kept.
     False when the hub listed no keys — ssh then checks as it always did."""
-    return write_host_keys("fleet-" + (machine.get("alias") or machine.get("hostname")), host_keys(machine))
+    keys = write_host_keys("fleet-" + (machine.get("alias") or machine.get("hostname")), host_keys(machine))
+    return write_host_ca(machine.get("host_ca") if isinstance(machine, dict) else None) or keys
+
+
+HOST_CA_PATTERN = "fleet-*"
+
+
+def write_host_ca(cas):
+    """The hub's host CA (claude-fleet T743) as ~/.ssh/fleet-known-hosts'
+    `@cert-authority fleet-* <key>` lines — the fleet's lines replaced, every
+    other kept. A machine showing a certificate it signed is then known under
+    its HostKeyAlias whatever its key. False when the hub gave none."""
+    cas = [k for k in cas or [] if isinstance(k, str) and HOST_KEY_RE.match(k)] if isinstance(cas, list) else []
+    if not cas:
+        return False
+    mark = "@cert-authority %s " % HOST_CA_PATTERN
+    path = known_hosts_path()
+    try:
+        with open(path) as f:
+            keep = [l for l in f.read().splitlines() if l.strip() and not l.startswith(mark)]
+    except OSError:
+        keep = []
+    text = "\n".join(keep + [mark + k for k in cas]) + "\n"
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
 
 
 def write_host_keys(alias, keys):

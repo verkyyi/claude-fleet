@@ -333,6 +333,10 @@ type Server struct {
 	// never the database. Nil: no certificates, and no node is asked to trust
 	// a CA.
 	SSHCA *sshca.CA
+	// SSHHostCA signs home machines' entry host keys (claude-fleet T743),
+	// loaded from CCQUOTA_FLEET_SSH_HOST_CA_KEY — its own key and Secret, never
+	// derived from SSHCA. Nil: no host certificates, no HostCA handed out.
+	SSHHostCA *sshca.CA
 
 	// FleetRoutes is the machines people connect to and the ways in
 	// (CCQUOTA_FLEET_ROUTES), for the 连接 page and the ssh config snippet.

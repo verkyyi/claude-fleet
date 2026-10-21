@@ -183,6 +183,38 @@ EOF
     [ "$r" = "matched - - -" ] && st_ok_all "sshd: the hub's key → matched on the first connection, no question" || st_miss "listed key: $r"
     r=$(try "$OTHERPUB")
     [ "$r" = "- refused - changed" ] && st_ok_all "sshd: a key the hub did not list → still refused" || st_miss "changed key: $r"
+    # T743: the sshd shows a certificate signed by the hub's host CA — known with
+    # NO key listed (its key could be any), refused for another name / another CA
+    ssh-keygen -q -t ed25519 -N '' -C host-ca -f "$WORK/hostca" && ssh-keygen -q -t ed25519 -N '' -C ca2 -f "$WORK/ca2" || exit 2
+    ssh-keygen -q -s "$WORK/hostca" -h -I host:selftest -n fleet-selftest-2983 -V -5m:+1d "$WORK/host.pub" 2>/dev/null || exit 2
+    awk -v c="HostCertificate $WORK/host-cert.pub" '{print} /^HostKey /{print c}' "$WORK/sshd_config" > "$WORK/sshd_config.cert"
+    tryca() {   # tryca <CA .pub> [alias]
+      python3 - "$BIN/fleet-connect.py" "$WORK" "$(id -un)" "$(cut -d' ' -f1-2 "$1")" "${2:-selftest-2983}" <<'EOF2'
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+w, me, ca, alias = sys.argv[2:6]
+m = {"hostname": alias, "alias": alias, "host_ca": [ca]}
+try:
+    os.unlink(fc.known_hosts_path())
+except OSError:
+    pass
+route = {"kind": "direct", "name": "entry", "host": "127.0.0.1", "port": 22}
+opts = ["BatchMode=yes", "GlobalKnownHostsFile=/dev/null", "IdentitiesOnly=yes", "IdentityFile=" + w + "/user",
+        "ProxyCommand=/usr/sbin/sshd -i -f " + w + "/sshd_config.cert"]
+cmd = fc.ssh_command(m, route, me, "", opts, known_hosts=fc.write_known_hosts(m))
+cmd = cmd[:1] + ["-F", "/dev/null", "-v"] + cmd[1:] + ["true"]
+p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+e = p.stderr
+print("ok" if "matches the ED25519-CERT host certificate" in e else "-", "refused" if "Host key verification failed" in e else "-",
+      "asked" if "authenticity of host" in e else "-")
+EOF2
+    }
+    r=$(tryca "$WORK/hostca.pub")
+    [ "$r" = "ok - -" ] && st_ok_all "sshd: a certificate from the hub's host CA → known with no key listed, no question" || st_miss "host CA: $r"
+    r=$(tryca "$WORK/ca2.pub")
+    [ "$r" = "- refused -" ] && st_ok_all "sshd: another CA → refused" || st_miss "another CA: $r"
+    r=$(tryca "$WORK/hostca.pub" other-machine)
+    [ "${r#* }" = "refused -" ] && st_ok_all "sshd: the certificate under another machine's name → refused" || st_miss "another name: $r"
   fi
 fi
 
