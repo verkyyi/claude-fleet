@@ -39,6 +39,13 @@
 #      A300: a done / passed item shows its production screenshots (phone 390 +
 #      desktop 1440) as thumbnails that open full size; one without the pair draws
 #      task-evidence-shot; pending / failed items need none.
+#   H  T869: the frame's comments and scripts never spell a page tag (body / head /
+#      html), so a text 「replace the first body tag」 cannot hit one; a frame that
+#      still says it in a head script comment, assembled with `fb-body`, keeps its
+#      body full (check 0, lint clean of ERROR); the same frame assembled the old
+#      way — the first spelling replaced — puts the page into the head: `check`
+#      exits 1 and the lint says ERROR body; an empty body is an ERROR too; render
+#      refuses a frame whose head would swallow the page.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -322,5 +329,52 @@ print(json.dumps(d, ensure_ascii=False))
 PY3
 )
 st_has "a long 做 item draws brevity" "$w" 'WARN brevity: 做 / 不做一项一句、≤ 20 字'
+
+# ---- H ------------------------------------------------------------------------
+export ST_LEG=H
+TAGS=$(python3 - "$T" <<'PY3'
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+# comments and script / style bodies: where a text replace could land by mistake
+inner = re.findall(r"<!--.*?-->", s, re.S) + re.findall(r"<(script|style)[^>]*>(.*?)</\1>", s, re.S)
+inner = [x if isinstance(x, str) else x[1] for x in inner]
+print(sum(len(re.findall(r"</?(?:body|head|html)\b", x, re.I)) for x in inner))
+PY3
+)
+st_eq "the frame's comments and scripts spell no page tag" "0" "$TAGS"
+# a frame that still carries the 2026-10-21 comment in its head script
+python3 - "$T" "$TMP/bad-frame.html" <<'PY3'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+s = s.replace("<script>", "<script>\n/* on a page whose <body> says data-fb-table, every item answers */", 1)
+open(sys.argv[2], "w", encoding="utf-8").write(s)
+PY3
+st_has "fixture carries the comment" "$(cat "$TMP/bad-frame.html")" 'page whose <body> says'
+python3 "$P" fb-body "$TMP/bad-frame.html" replies v1 -o "$TMP/fb.html" || st_fail "fb-body"
+FB=$(cat "$TMP/fb.html")
+st_has "fb-body set the real tag" "$FB" $'</head>\n<body data-fb-table="replies" data-fb-version="v1">'
+st_has "fb-body left the comment alone" "$FB" 'page whose <body> says'
+python3 "$P" check "$TMP/fb.html"; st_eq "fb-body page: check 0" "0" "$?"
+w=$(bash "$L" --lint "$TMP/fb.html" 2>&1 >/dev/null)
+st_hasnt "fb-body page: no ERROR" "$w" 'ERROR body'
+# the old assembly: the first spelling replaced and the page put after it
+python3 - "$TMP/bad-frame.html" "$TMP/old.html" <<'PY3'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+s = s.replace("<body>", '<body data-fb-table="replies" data-fb-version="v1">\n<div class="wrap"><h1>标题</h1><section id="problem"><p>正文</p></section></div>', 1)
+open(sys.argv[2], "w", encoding="utf-8").write(s)
+PY3
+python3 "$P" check "$TMP/old.html" 2>/dev/null; st_eq "old assembly: check 1" "1" "$?"
+w=$(bash "$L" --lint "$TMP/old.html" 2>&1 >/dev/null); rc=$?
+st_eq "old assembly: lint exits 1" "1" "$rc"
+st_has "old assembly: lint says ERROR body" "$w" 'ERROR body: 正文落在 <head> 里'
+python3 "$P" fb-body "$TMP/old.html" replies v2 >/dev/null 2>&1; st_eq "fb-body refuses a swallowed page" "1" "$?"
+w=$(printf '<html><head><title>x</title></head><body></body></html>' | bash "$L" --lint - 2>&1 >/dev/null)
+st_has "an empty body is an ERROR" "$w" 'ERROR body: body 是空的'
+FLEET_TASK_PAGE_TEMPLATE="$TMP/bad-frame.html" python3 "$P" render "$EX" >/dev/null 2>&1
+st_eq "render through a comment-carrying frame stays whole" "0" "$?"
+printf '<html><head><script>/* ends at </head> */</script></head><body></body></html>\n' > "$TMP/swallow.html"
+FLEET_TASK_PAGE_TEMPLATE="$TMP/swallow.html" python3 "$P" render "$EX" >/dev/null 2>&1
+st_eq "render refuses a frame whose head swallows the page" "1" "$?"
 
 st_done

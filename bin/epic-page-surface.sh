@@ -52,10 +52,15 @@
 #   empty-fold     a fold / card / row that opens on nothing (no ▸ without a detail)
 #   task-evidence-shot  an acceptance item marked done / passed with no production
 #                  screenshots — phone 390 AND desktop 1440 (A300: 验收报告要有线上真实截图)
+# and one ERROR, above every rule (T869) — the page as a browser builds it:
+#   ERROR body     no body tag, an empty body, or page content inside <head> (a
+#                  「replace the first <body>」 that hit a script comment put the whole
+#                  page into the head's script: it opened blank). fleet-task-page.py
+#                  fb-body sets the feedback attributes on the real tag.
 # It is a checklist aid, not a judge: a clean lint does not make a page good —
 # rules like "the surface answers the theme's question" are yours to read.
 #
-# Exit: 0 clean (or no --lint) · 1 lint warnings · 2 usage / unreadable input.
+# Exit: 0 clean (or no --lint) · 1 lint warnings / an ERROR · 2 usage / unreadable input.
 set -uo pipefail
 
 usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -231,6 +236,28 @@ if not LINT: sys.exit(0)
 warns = []
 def warn(rule, text): warns.append((rule, text))
 
+# T869 — the body holds the page (the same shape fleet-task-page.py check reads)
+class Shape(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.body, self.children, self.where, self.leak = False, 0, [], False
+    def handle_starttag(self, tag, attrs):
+        if tag == "head": self.where.append("head")
+        elif tag == "body" and not self.body: self.body, self.where = True, ["body"]
+        elif "body" in self.where: self.children += 1
+        elif "head" in self.where and tag in ("section","h1","h2","main","article"): self.leak = True
+    handle_startendtag = handle_starttag
+    def handle_endtag(self, tag):
+        if tag == "head" and "head" in self.where: self.where.remove("head")
+    def handle_data(self, d):
+        if "head" in self.where and re.search(r"<(?:section|h1|h2|main|article)[\s>]", d): self.leak = True
+sh = Shape(); sh.feed(RAW); sh.close()
+errors = []
+if not sh.body: errors.append("页面没有 body 标签")
+elif not sh.children: errors.append("body 是空的：正文没进 body，打开是空白")
+if sh.leak: errors.append("正文落在 <head> 里（脚本或注释吞掉了它）：用 fleet-task-page.py fb-body 改真正的 body 标签")
+for e in errors: print("ERROR body: " + e, file=sys.stderr)
+
 JARGON = ["接口","注入","渲染","埋点","回执","域名","状态码","字段","参数","脚本","配置项","回调",
           "鉴权","令牌","中间件","沙箱","缓存","数据库","哈希","正则","重定向","序列化","钩子",
           "进程","守护","子单","worker","hook","daemon","CSP","SDK","API","CDN","JSON","HTML","iframe",
@@ -333,5 +360,5 @@ for rule, text in warns:
     if (rule, text) in seen: continue
     seen.add((rule, text))
     print("WARN %s: %s" % (rule, text), file=sys.stderr)
-sys.exit(1 if warns else 0)
+sys.exit(1 if warns or errors else 0)
 ' <<<"$HTML"

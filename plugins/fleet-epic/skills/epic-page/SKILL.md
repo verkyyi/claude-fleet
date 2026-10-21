@@ -240,7 +240,11 @@ class="card">`, no fold; an empty 技术细节 is dropped, never shown. The lint
 ## 页内反馈 — the page answers itself (T764)
 
 A page published as a 活页 takes the operator's answer where they read it, item by
-item. The `<body>` carries `data-fb-table="replies" data-fb-version="v<N>"`; each
+item. The body tag carries `data-fb-table="replies" data-fb-version="v<N>"` — set it with
+`~/.claude/fleet/bin/fleet-task-page.py fb-body <page.html> replies v<N> -o <page.html>`,
+which edits only the REAL tag; never a text「replace the first `<body>`」: the frame's own
+comments once said the word, the page went into the head's script and opened blank (T869).
+`epic-page-surface.sh --lint` says `ERROR body` on such a page — fix it before publishing. Each
 answerable item is a `div.fbi` (`data-item`, `data-kind` pick · say · nod) holding
 its state line `.fbs` and its form — a 需要你定的事 row with its options in the row
 (`signoff-<n>`, `data-default`: the default first, marked 「默认」 and drawn as what

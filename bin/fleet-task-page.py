@@ -23,6 +23,14 @@ words, stamp its number (T661).
         upper layer; template.html carries the CSS and the state switch.
   fleet-task-page.py ids
       → the section ids a task page carries, one per line.
+  fleet-task-page.py fb-body <page.html> <table> <version> [-o out]
+      → the page's REAL body tag (the one a parser sees — never the tag's spelling
+        inside a comment or a script) carries data-fb-table / data-fb-version.
+        Refuses a page whose body is empty or whose content sits in its head.
+  fleet-task-page.py check <page.html>
+      → exit 0 when the body holds the content; else one line per problem, exit 1
+        (T869: a 「replace the first <body>」 once hit a script comment and put the
+        whole page into the head's script — the page opened blank).
 
 The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole one):
   repo · date · title (≤ 16 字) · sub (one sentence ≤ 30 字: where it stops) ·
@@ -60,7 +68,7 @@ The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole 
   all). `proto` (a link to a separate prototype page) still renders, and the lint
   WARNs it.
 
-Exit: 0 done · 1 over the cap (body) · 2 usage / unreadable input.
+Exit: 0 done · 1 over the cap (body) / a broken page (check, fb-body, render) · 2 usage / unreadable input.
 """
 import html
 import json
@@ -715,6 +723,69 @@ def body(page, link, nod, cap):
     die(1, "the words stay over %d bytes with every fold on the page (%d) — shorten the page's surface" % (cap, size(w)))
 
 
+# ---- shape (T869) --------------------------------------------------------------
+
+class Shape(HTMLParser):
+    """Where the real body tag is, how many elements it holds, and whether page
+    content leaked into the head (a script there swallowing the page)."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.body = None       # (line, col, start tag text) of the real body tag
+        self.children = 0      # elements opened inside it
+        self.where = []        # open head / body
+        self.leak = False      # page content inside the head
+    def handle_starttag(self, tag, attrs):
+        if tag == "head":
+            self.where.append("head")
+        elif tag == "body" and self.body is None:
+            self.body = self.getpos() + (self.get_starttag_text(),)
+            self.where = ["body"]
+        elif "body" in self.where:
+            self.children += 1
+        elif "head" in self.where and tag in ("section", "h1", "h2", "main", "article"):
+            self.leak = True
+    handle_startendtag = handle_starttag
+    def handle_endtag(self, tag):
+        if tag == "head" and "head" in self.where:
+            self.where.remove("head")
+    def handle_data(self, d):
+        if "head" in self.where and re.search(r"<(?:section|h1|h2|main|article)[\s>]", d):
+            self.leak = True
+
+
+def shape(page):
+    sh = Shape()
+    sh.feed(page)
+    sh.close()
+    return sh
+
+
+def problems(page):
+    sh, out = shape(page), []
+    if sh.body is None:
+        out.append("no body tag a parser can see")
+    elif sh.children == 0:
+        out.append("the body is empty — its content is not inside it")
+    if sh.leak:
+        out.append("page content sits inside the head (a script or comment there swallowed it)")
+    return out
+
+
+def fb_body(page, table, version):
+    bad = problems(page)
+    if bad:
+        die(1, "; ".join(bad))
+    line, col, tag = shape(page).body
+    lines = page.split("\n")
+    at = sum(len(x) + 1 for x in lines[:line - 1]) + col
+    if page[at:at + len(tag)] != tag:
+        die(2, "cannot place the body tag")
+    attrs = re.sub(r"\s+data-fb-(?:table|version)=(\"[^\"]*\"|'[^']*'|\S+)", "", tag[len("<body"):-1])
+    new = '<body%s data-fb-table="%s" data-fb-version="%s">' % (
+        attrs, html.escape(table, quote=True), html.escape(version, quote=True))
+    return page[:at] + new + page[at + len(tag):]
+
+
 # ---- stamp --------------------------------------------------------------------
 
 def stamp(page, tid):
@@ -757,7 +828,11 @@ def main(argv):
             spec = json.loads(read(rest[0]))
         except ValueError as e:
             die(2, "spec is not JSON (%s)" % e)
-        write(render(spec))
+        page = render(spec)
+        bad = problems(page)
+        if bad:
+            die(1, "rendered page is broken: " + "; ".join(bad))
+        write(page)
     elif cmd == "body" and rest:
         link = nod = ""
         cap = 13000
@@ -774,10 +849,17 @@ def main(argv):
         if page is None:
             die(2, "body <page.html>")
         write(body(read(page), link, nod, cap))
+    elif cmd == "fb-body" and len(rest) == 3:
+        write(fb_body(read(rest[0]), rest[1], rest[2]))
+    elif cmd == "check" and len(rest) == 1:
+        bad = problems(read(rest[0]))
+        for b in bad:
+            print("fleet-task-page: " + b, file=sys.stderr)
+        sys.exit(1 if bad else 0)
     elif cmd == "stamp" and len(rest) == 2:
         write(stamp(read(rest[0]), rest[1]))
     else:
-        die(2, "usage: render <spec> | body <page> | stamp <page> <id> | compare <json> | ids")
+        die(2, "usage: render <spec> | body <page> | stamp <page> <id> | compare <json> | fb-body <page> <table> <version> | check <page> | ids")
 
 
 if __name__ == "__main__":

@@ -346,7 +346,7 @@ document.addEventListener("click",function(e){
   [].forEach.call(ss,function(s,j){s.hidden=j!==i});
   [].forEach.call(bs,function(x,j){x.classList.toggle("on",j===i);x.setAttribute("aria-pressed",j===i?"true":"false")});
 });
-/* 页内反馈 (T764): on a page whose <body> says data-fb-table, every item answers on its own. A form.fbf POSTs
+/* 页内反馈 (T764): on a page whose body element carries data-fb-table, every item answers on its own. A form.fbf POSTs
    {item, choice, note, version, at} to ./_data/<table> (the page's own members-only table); on load the page
    reads that table back (GET returns its reviewed rows; this device's unsynced ones from localStorage), takes
    each item's LAST row and draws it: what you chose, when, 改 · 撤回 (a withdraw is a row with choice
@@ -737,8 +737,9 @@ if(document.readyState==="loading") document.addEventListener("DOMContentLoaded"
 </table>
 </div>
 <p class="lede" style="margin-top:14px">⟨before the nod: 「点头即全部按建议。」 · after: 「发起人 @login YYYY-MM-DD 拍板：全部按建议执行，worker 照做，不再讨论方向。」⟩</p>
-<!-- 页内反馈 (T764) — a page published as a live page answers ON the page: <body data-fb-table="replies"
-     data-fb-version="v⟨N⟩">, the table made members-only (set_data … append_open members_only, columns
+<!-- 页内反馈 (T764) — a page published as a live page answers ON the page: the body element carries
+     data-fb-table="replies" data-fb-version="v⟨N⟩" (set it with `fleet-task-page.py fb-body`, which edits only the
+     real tag — a comment or script never says the tag's own spelling: T869), the table made members-only (set_data … append_open members_only, columns
      item / choice / note / version / at). Each item answers on its own: a div.fbi per row of the table
      above (its options in the row — the default first, marked 默认, then the others, then 改成… — a tap posts it), a 「有意见」 (say-btn + div.fbi with form.say) under any card,
      one 全部按建议. The frame's script posts them, reads them back on load and draws each item's state
