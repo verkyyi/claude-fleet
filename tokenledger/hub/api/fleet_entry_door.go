@@ -298,7 +298,8 @@ func entryWhen(t, now time.Time) string {
 // entryReturnTo is where the GitHub sign-in sends a browser the cookie names,
 // "" for any other; the cookie is spent. The old pages' addresses stay on the
 // list for a cookie set before they went: they move on from there. An admin
-// request's page (claude-fleet#4062) sets its own.
+// request's page (claude-fleet#4062) sets its own, and so does any console
+// page opened signed out (appReturnOK, claude-fleet T842).
 func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	c, err := r.Cookie(entryReturnCookie)
 	if err != nil {
@@ -309,7 +310,7 @@ func entryReturnTo(w http.ResponseWriter, r *http.Request) string {
 	case EntryPagePath, EntryConnPath, ChatPagePath, TryPagePath:
 		return c.Value
 	}
-	if adminRequestPageRe.MatchString(c.Value) {
+	if adminRequestPageRe.MatchString(c.Value) || appReturnOK(c.Value) {
 		return c.Value
 	}
 	return ""
