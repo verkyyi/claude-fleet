@@ -636,7 +636,19 @@ export function codexSide(d) {
     d.log("adopted", { provider: "codex", label, machine: String(body?.machine || "").slice(0, 60) });
     return [200, "adopted"];
   }
+  // 只读 view of a terminal's Codex session (task F481): its rollout, and its
+  // lines read as the page's steps — a chunk at a time, as the file grows
+  function viewFile(thread) {
+    const f = rolloutFile(thread);
+    return f ? { file: f, cwd: "" } : null;
+  }
+  function viewItems(lines, cwd) {
+    const r = rolloutRead(lines.join("\n"));
+    const out = fromRollout(r.items, cwd || r.cwd || d.CWD);
+    d.saveRefs();
+    return { items: out, cwd: r.cwd };
+  }
   function close() { clearTimeout(idleT); srv?.kill(); const c = cred; cred = null; return revoke(c); }
-  return { available, conversation, turn, stop, answer, newConversation, close, state, release, adopt,
+  return { available, conversation, turn, stop, answer, newConversation, close, state, release, adopt, viewFile, viewItems,
     busy: () => !!live, last: () => conv.last, side: () => ({ busy: !!live, last: conv.last }) };
 }

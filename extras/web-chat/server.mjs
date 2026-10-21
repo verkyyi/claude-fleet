@@ -449,8 +449,12 @@ function transcriptPath(id, cwd) {
 async function readItems(id, cwd) {
   let raw = "";
   try { raw = await fsp.readFile(transcriptPath(id, cwd), "utf8"); } catch { return []; }
+  return linesItems(raw.split("\n"), cwd);
+}
+// one transcript line at a time: what 只读 view (task F481) reads as the file grows
+function linesItems(lines, cwd) {
   const out = [];
-  for (const line of raw.split("\n")) {
+  for (const line of lines) {
     if (!line) continue;
     let m; try { m = JSON.parse(line); } catch { continue; }
     if ((m.type !== "user" && m.type !== "assistant") || m.isSidechain || m.isMeta || m.isCompactSummary) continue;
@@ -544,6 +548,113 @@ async function adoptConv(body) {
   carryOut();
   log("adopted", { label, machine: String(body?.machine || "").slice(0, 60) });
   return [200, "adopted"];
+}
+
+// ---- 只读: a terminal session's conversation, read along (task F481) -------------
+// The page names a session by its window's @fleet_id (the entry resolved it to
+// this login and the person's own); fleet-webchat-handoff.sh view-of says which
+// agent and conversation it runs and whether it is answering. Its record — Claude
+// Code's transcript, Codex's rollout — is read as it grows and sent as Server-Sent
+// Events: {t:"state"} when that changes, {t:"items", from, items} with id = the
+// count so far, so a page that comes back asks ?from=<id> and gets nothing twice.
+// Nothing here writes to the session; it never takes the conversation.
+const FID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const VIEW_POLL_MS = Number(E.FLEET_WEBCHAT_VIEW_POLL_MS || 500);
+const VIEW_STATE_MS = Number(E.FLEET_WEBCHAT_VIEW_STATE_MS || 2000);
+const VIEW_PING_MS = 15000;
+const VIEW_FIRST = 600;                                    // the first answer: at most the last 600 items
+const VIEW_READ_MAX = 8 * 1024 * 1024;                     // one read of a growing record
+// null: no such window here; undefined: could not tell
+async function viewOf(fid) {
+  const r = await run(HANDOFF, ["view-of", `fid:${fid}`]);
+  if (r.rc === 2) return null;
+  try { const j = JSON.parse(r.stdout); return j && typeof j === "object" ? j : undefined; } catch { return undefined; }
+}
+async function viewSource(agent, sid) {
+  if (!sid || !SID_RE.test(sid)) return null;
+  if (agent === "codex") return codex.viewFile(sid);
+  return findTranscript(sid);
+}
+async function viewStream(req, res, u, person) {
+  const fid = u.searchParams.get("fid") || "";
+  if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
+  let from = Number(u.searchParams.get("from") || 0);
+  if (!Number.isSafeInteger(from) || from < 0) from = 0;
+  let w = await viewOf(fid);
+  if (w === null) return send(res, 404, { error: "这个会话不在这台机器上了", code: "no_session" });
+  if (!w) return send(res, 503, { error: "could not read the session", code: "unreadable" });
+  if (w.agent !== "claude" && w.agent !== "codex") return send(res, 409, { error: "this agent's conversation cannot be read here", code: "agent" });
+  res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
+  let closed = false;
+  res.on("close", () => { closed = true; });
+  const ev = (o, id) => { if (!closed) { touch(); res.write(`${id != null ? `id: ${id}\n` : ""}data: ${JSON.stringify(o)}\n\n`); } };
+  const stateOf = () => JSON.stringify({ t: "state", agent: w.agent, session: w.sid || "", busy: !!w.busy, state: w.state || "",
+    label: w.label || "", holder: w.holder || "" });
+  let said = stateOf();
+  res.write(`data: ${said}\n\n`);
+  log("view", { agent: w.agent, person });
+  let src = null, off = 0, cwd = "", n = 0, first = true;
+  let asking = null, askedAt = Date.now(), pinged = Date.now(), next = null;
+  const restart = () => { src = null; off = 0; n = 0; from = 0; first = true; ev({ t: "reset" }); };
+  while (!closed) {
+    // another conversation in that window now (a /clear, a resume): from its start
+    if (next) {
+      const x = next; next = null;
+      if ((x.sid || "") !== (w.sid || "") || x.agent !== w.agent) restart();
+      w = x;
+      const now = stateOf();
+      if (now !== said) { said = now; ev(JSON.parse(now)); }
+    }
+    if (!src && w.sid) {
+      src = await viewSource(w.agent, w.sid);
+      if (src) { off = 0; n = 0; cwd = src.cwd || ""; }
+    }
+    let fresh = [], more = false;
+    const start = n;
+    if (src) {
+      let size = -1;
+      try { size = (await fsp.stat(src.file)).size; } catch { src = null; }
+      if (size >= 0 && size < off) { restart(); continue; }  // rewritten
+      if (size > off) {
+        // the first read takes the whole record; later ones what was added, bounded
+        const len = first ? size - off : Math.min(size - off, VIEW_READ_MAX);
+        const buf = Buffer.alloc(len);
+        const fh = await fsp.open(src.file, "r");
+        try { await fh.read(buf, 0, len, off); } finally { await fh.close(); }
+        const end = buf.lastIndexOf(10);
+        if (end >= 0) {
+          off += end + 1;
+          more = off < size && len === VIEW_READ_MAX;
+          const lines = buf.subarray(0, end).toString("utf8").split("\n");
+          if (w.agent === "codex") { const r = codex.viewItems(lines, cwd); if (!cwd) cwd = r.cwd || ""; fresh = r.items; }
+          else { fresh = linesItems(lines, cwd || CWD); saveRefs(); }
+        }
+      }
+    }
+    n += fresh.length;
+    if (first) {
+      // the page asked from past what there is (another conversation now): all of it again
+      if (from > n) { from = 0; ev({ t: "reset" }); }
+      const s0 = Math.max(from, n - VIEW_FIRST, 0);
+      ev({ t: "items", from: s0, items: fresh.slice(s0 - start) }, n);
+      first = false;
+    } else {
+      const skip = Math.max(0, from - start), out = fresh.slice(skip);
+      if (out.length) ev({ t: "items", from: start + skip, items: out }, n);
+    }
+    // the window's state, asked in the background (the script takes ~1 s)
+    if (!asking && Date.now() - askedAt >= VIEW_STATE_MS) {
+      asking = viewOf(fid).then((x) => { asking = null; askedAt = Date.now(); return x; });
+      asking.then((x) => {
+        if (closed) return;
+        if (x === null) { ev({ t: "gone" }); closed = true; res.end(); return; }
+        if (x) next = x;
+      });
+    }
+    if (Date.now() - pinged >= VIEW_PING_MS) { pinged = Date.now(); if (!closed) res.write(": ping\n\n"); }
+    if (!more) await new Promise((r) => setTimeout(r, VIEW_POLL_MS));
+  }
+  if (!res.writableEnded) res.end();
 }
 
 // ---- the one conversation ------------------------------------------------------
@@ -1256,6 +1367,8 @@ async function handle(req, res) {
     if (f) return sendFile(req, res, f, p.startsWith("/assets/") ? "private, max-age=31536000, immutable" : "private, max-age=3600");
     return send(res, 404, { error: "not found" });
   }
+  // 只读 (task F481): a terminal session of this login, read along
+  if (p === "/api/view" && req.method === "GET") return viewStream(req, res, u, person);
   // the Codex side (task R9A2): ?provider=codex; none or claude = the Claude side, as before
   const provider = u.searchParams.get("provider") || "claude";
   if (p.startsWith("/api/") && !PROVIDERS_RE.test(provider)) return send(res, 400, { error: "unknown provider" });

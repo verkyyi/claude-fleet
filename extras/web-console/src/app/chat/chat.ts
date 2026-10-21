@@ -22,7 +22,7 @@ import { fetchChat as chatFetch } from "../../../../browser-transport/chat";
 const API = "/v1/chat";
 const SITE = true;
 
-type Item =
+export type Item =
   | { t: "user"; text: string; images?: Pic[] }
   // an image in a reply or a tool's result (task T773): fetched by its ref; the
   // copy beside the entry carries only its preview (thumb); big = over the bound
@@ -89,11 +89,11 @@ const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
 // how often a page on screen reads the home again by itself (task Y393)
 const POLL_MS = 30_000;
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
-type Msg = { id: string; role: "user" | "assistant"; content: Part[]; status?: ThreadMessageLike["status"] };
+export type Msg = { id: string; role: "user" | "assistant"; content: Part[]; status?: ThreadMessageLike["status"] };
 
 // items → messages: a user line is one message, everything after it up to the
 // next user line is the assistant's (text, folded tool steps, the asks).
-function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>): Msg[] {
+export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>): Msg[] {
   const out: Msg[] = [];
   let cur: Msg | null = null;
   const tools = new Map<string, Record<string, unknown>>();

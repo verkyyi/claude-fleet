@@ -69,12 +69,15 @@
 //      show_page call becomes a {t:"page"} card (live and read back) with its link, state,
 //      version and a preview kept as an image; a link that is not https is dropped;
 //      pages.json remembers the folder and the file's page, which page_target answers
-//   --only=socket|budget|context|home|idle|trial|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
+//   V  只读 (task F481): /api/view?fid= follows a terminal session's record as SSE — the
+//      state, the record so far (id = its count), a line added after in under 3 s; ?from=
+//      sends nothing twice; busy and a closed window are said; a Codex rollout reads too
+//   --only=socket|budget|context|home|idle|trial|view|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, chmodSync, unlinkSync, mkdirSync,
+import { appendFileSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, chmodSync, unlinkSync, mkdirSync,
   renameSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -87,7 +90,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,media,links,send,pages,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,media,links,send,pages,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -575,6 +578,90 @@ esac
   ok(st.busy === false && st.session === TID, "T /api/state: not answering, this session");
   ok(/"ev":"adopted"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "T the log says adopted");
   await sstop(hs);
+}
+// ---- V: 只读 — a terminal session followed from the web (task F481) ------------------------
+if (part("view")) {
+  mkdirSync(homeOf("v"), { recursive: true });
+  SSTATE = stateOf("v"); SOCK = join(SSTATE, "chat.sock");
+  const VIEW = join(HT, "view.json"), vsh = join(HT, "view.sh"), FID = "12345678-1234-4234-8234-123456789abc";
+  // bin/fleet-webchat-handoff.sh view-of, stubbed: the window's agent and conversation
+  writeFileSync(vsh, `#!/bin/bash
+[ "$1" = view-of ] && [ "$2" = fid:${FID} ] && [ -f ${JSON.stringify(VIEW)} ] && { cat ${JSON.stringify(VIEW)}; exit 0; }
+echo "no such window" >&2; exit 2
+`, { mode: 0o755 });
+  const VID = "77777777-6666-4555-8444-333333333333", VCWD = join(homeOf("v"), "proj");
+  mkdirSync(VCWD, { recursive: true });
+  const vdir = join(homeOf("v"), ".claude", "projects", mangle(VCWD));
+  mkdirSync(vdir, { recursive: true });
+  const line = (m) => JSON.stringify({ cwd: VCWD, ...m }) + "\n";
+  writeFileSync(join(vdir, VID + ".jsonl"), line({ type: "user", message: { role: "user", content: "终端里问一句" } }) +
+    line({ type: "assistant", message: { content: [{ type: "tool_use", id: "v1", name: "Bash", input: { command: "ls" } }] } }) +
+    line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "v1", content: "a.txt" }] } }) +
+    line({ type: "assistant", message: { content: [{ type: "text", text: "终端答了" }] } }));
+  writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: VID, busy: false, state: "done", label: "scratch-7", holder: "" }));
+  const CODEXH = join(HT, "codexhome");
+  const v = (await sstart(["--socket"], { ...asHome("v"), FLEET_WEBCHAT_HANDOFF: vsh, CODEX_HOME: CODEXH,
+    FLEET_WEBCHAT_VIEW_POLL_MS: "100", FLEET_WEBCHAT_VIEW_STATE_MS: "300" })).p;
+  // one view: its events as they come, until `until` says enough or it times out
+  const follow = (q, until, ms = 5000) => new Promise((resolve, reject) => {
+    const evs = [];
+    const r = http.request({ socketPath: SOCK, path: "/api/view?" + q, headers: { Host: "webchat" } }, (res) => {
+      if (res.statusCode !== 200) { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => resolve({ status: res.statusCode, body: b, evs })); return; }
+      let buf = "";
+      const t = setTimeout(() => { r.destroy(); resolve({ status: 200, evs, timedOut: true }); }, ms);
+      res.on("data", (d) => {
+        buf += d; let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const blk = buf.slice(0, i); buf = buf.slice(i + 2);
+          const id = (blk.match(/^id: (\d+)$/m) || [])[1], data = (blk.match(/^data: (.*)$/m) || [])[1];
+          if (data) evs.push({ id: id == null ? null : Number(id), ...JSON.parse(data) });
+        }
+        if (until(evs)) { clearTimeout(t); r.destroy(); resolve({ status: 200, evs }); }
+      });
+    });
+    r.on("error", (e) => (e.code === "ECONNRESET" ? null : reject(e)));
+    r.end();
+  });
+  ok((await sreq("/api/view?fid=../x")).status === 400, "V a fid that is not one is 400");
+  const nf = await sreq("/api/view?fid=00000000-0000-4000-8000-000000000000");
+  ok(nf.status === 404 && JSON.parse(nf.body).code === "no_session", "V a window not on this login is 404 no_session");
+  // the record so far, then a line the terminal adds, within the 3 s the page promises
+  const items = (evs) => evs.filter((e) => e.t === "items");
+  const grow = setTimeout(() => appendFileSync(join(vdir, VID + ".jsonl"),
+    line({ type: "assistant", message: { content: [{ type: "text", text: "又说了一句" }] } })), 600);
+  const t0 = Date.now();
+  let f = await follow(`fid=${FID}`, (evs) => items(evs).some((e) => e.items.some((i) => i.d === "又说了一句")));
+  clearTimeout(grow);
+  const first = items(f.evs)[0];
+  ok(f.evs[0]?.t === "state" && f.evs[0].agent === "claude" && f.evs[0].session === VID && f.evs[0].label === "scratch-7",
+    `V first the state: which agent, which conversation (${JSON.stringify(f.evs[0])})`);
+  ok(first?.from === 0 && first.id === 4 && first.items.map((i) => i.t).join(",") === "user,tool,tool_result,text",
+    `V then the record so far, id = its count (${JSON.stringify(first)})`);
+  const added = items(f.evs).find((e) => e.items.some((i) => i.d === "又说了一句"));
+  ok(added?.from === 4 && added.id === 5 && Date.now() - t0 < 3000, `V a line the terminal adds arrives, from 4, in under 3 s (${Date.now() - t0} ms)`);
+  // back from a drop with ?from=: nothing twice; then it answers — the state says so
+  setTimeout(() => writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: VID, busy: true, state: "working", label: "scratch-7", holder: "" })), 300);
+  f = await follow(`fid=${FID}&from=5`, (evs) => evs.some((e) => e.t === "state" && e.busy));
+  ok(items(f.evs).length === 1 && items(f.evs)[0].from === 5 && items(f.evs)[0].items.length === 0 && items(f.evs)[0].id === 5 && !f.evs.some((e) => e.t === "reset"),
+    `V ?from=5: no line again (${JSON.stringify(items(f.evs))})`);
+  ok(f.evs.some((e) => e.t === "state" && e.busy === true && e.state === "working"), "V the terminal answering: a state with busy");
+  // the window closed while watched: gone, and the stream ends
+  setTimeout(() => unlinkSync(VIEW), 300);
+  f = await follow(`fid=${FID}&from=5`, (evs) => evs.some((e) => e.t === "gone"));
+  ok(f.evs.some((e) => e.t === "gone"), "V the window closed: {t:gone}");
+  // a Codex session: its rollout, read the same way (R9A2's reader)
+  const THR = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001", rdir = join(CODEXH, "sessions", "2026", "10", "21");
+  mkdirSync(rdir, { recursive: true });
+  const rl = (o) => JSON.stringify(o) + "\n";
+  writeFileSync(join(rdir, `rollout-2026-10-21T00-00-00-${THR}.jsonl`), rl({ type: "session_meta", payload: { cwd: VCWD } }) +
+    rl({ type: "event_msg", payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "text", text: "Codex 里问" }] } } }) +
+    rl({ type: "event_msg", payload: { type: "item_completed", item: { type: "AgentMessage", content: [{ type: "text", text: "Codex 答" }] } } }));
+  writeFileSync(VIEW, JSON.stringify({ agent: "codex", sid: THR, busy: false, state: "done", label: "scratch-8", holder: "" }));
+  f = await follow(`fid=${FID}`, (evs) => items(evs).length > 0);
+  ok(f.evs[0]?.agent === "codex" && items(f.evs)[0]?.items.map((i) => i.text || i.d).join("|") === "Codex 里问|Codex 答",
+    `V a Codex session: its rollout's lines (${JSON.stringify(items(f.evs)[0])})`);
+  ok(/"ev":"view"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "V the log says view");
+  await sstop(v);
 }
 // ---- P: images (task T773) -------------------------------------------------------------
 if (part("media")) {

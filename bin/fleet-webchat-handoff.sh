@@ -17,6 +17,10 @@
 #   fleet-webchat-handoff.sh to-webchat-take --agent A --sid S
 #       WebChat's 「在这里继续」: the terminal must be idle; its agent stops onto the
 #       end page, the record says webchat.
+#   fleet-webchat-handoff.sh view-of fid:<fleet_id>
+#       WebChat's /api/view (task F481): the session a window runs, to read along
+#       — {"agent", "sid", "busy", "state", "label", "holder"} as JSON; rc 2 = no
+#       such window on this login.
 #   fleet-webchat-handoff.sh to-terminal --agent A --sid S --fid F
 #       the end page's ↵ (fleet-session-wrap.sh): WebChat must be idle; the record
 #       says terminal. No record ⇒ rc 0, nothing written.
@@ -202,6 +206,24 @@ webchat_take() {
   echo ok
 }
 
+# WebChat's 只读 view of a terminal session (task F481): which agent, which
+# conversation, whether it is answering — read live, nothing written
+view_of() {
+  local fid=${1#fid:}
+  fleet_is_fid "$fid" || die "usage: fleet-webchat-handoff.sh view-of fid:<fleet_id>" 2
+  find_win "$fid" || die "no such window" 2
+  local agent sid st busy=false label holder=''
+  agent=$(fleet_agent_or_default "$(wopt @cc_agent)")
+  sid=$(fleet_agent_session_id "$agent" wopt)
+  st=$(wopt @claude_state)
+  term_busy && busy=true
+  label=$(wopt @raw); [ -n "$label" ] || label=$(TM display-message -p -t "$WIN" '#{window_name}' 2>/dev/null)
+  [ -n "$sid" ] && holder=$(jval "$(lock_get "$agent" "$sid")" holder)
+  python3 -c 'import json,sys
+print(json.dumps({"agent":sys.argv[1],"sid":sys.argv[2],"busy":sys.argv[3]=="true","state":sys.argv[4],"label":sys.argv[5],"holder":sys.argv[6]},ensure_ascii=False))' \
+    "$agent" "$sid" "$busy" "$st" "$label" "$holder"
+}
+
 # the end page's ↵: back to the terminal
 to_terminal() {
   parse_as "$@"
@@ -223,5 +245,6 @@ case "${1:-}" in
   owner) shift; owner "$@" ;;
   to-webchat-take) shift; webchat_take "$@" ;;
   to-terminal) shift; to_terminal "$@" ;;
-  *) die "usage: fleet-webchat-handoff.sh to-web fid:<id> [--no-open] | owner|to-webchat-take|to-terminal --agent A --sid S [--fid F]" 2 ;;
+  view-of) shift; view_of "$@" ;;
+  *) die "usage: fleet-webchat-handoff.sh to-web fid:<id> [--no-open] | view-of fid:<id> | owner|to-webchat-take|to-terminal --agent A --sid S [--fid F]" 2 ;;
 esac

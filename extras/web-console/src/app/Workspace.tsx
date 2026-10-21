@@ -80,7 +80,7 @@ export function Workspace({ r }: { r: Row }) {
       </header>
       <div className="relative min-h-0 flex-1">
         {chatOn ? <div hidden={view !== "chat"} className="h-full">
-          <ChatThread source={{ kind: "session", machine: rowMachine(r), key: r.live?.key || r.ended?.key || "", agent }}
+          <ChatThread source={{ kind: "session", machine: rowMachine(r), key: r.live?.key || r.ended?.key || "", agent, worker: r.live?.id || "" }}
             last={r.line} onTerminal={term.kind === "live" ? () => setView("term") : undefined} />
         </div> : null}
         {termOn && term.kind === "live"

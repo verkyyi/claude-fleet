@@ -402,6 +402,23 @@ export async function install(): Promise<string> {
         return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
       }
       case "/v1/chat/stop": case "/v1/chat/answer": case "/v1/chat/take": return ok({ ok: true });
+      // 只读 (task F481): a terminal session's record, as the service streams it —
+      // what it said, then one more line while it answers
+      case "/v1/chat/view": {
+        const from = Number(new URL(url, location.href).searchParams.get("from") || 0);
+        const enc = new TextEncoder();
+        const ev = (o: unknown, id?: number) => enc.encode(`${id != null ? `id: ${id}\n` : ""}data: ${JSON.stringify(o)}\n\n`);
+        const said = [...termItems, { t: "user", text: "华南的数字再核对一遍" }, { t: "tool", id: "tt2", name: "Bash", summary: "Bash · python3 check.py sales-w41.xlsx" }];
+        const stream = new ReadableStream({
+          async start(c) {
+            c.enqueue(ev({ t: "state", agent: "claude", session: "5b1e0000-0000-4000-8000-0000000000b2", busy: true, state: "working", label: "scratch-20", holder: "" }));
+            c.enqueue(ev({ t: "items", from, items: said.slice(from) }, said.length));
+            await new Promise((r) => setTimeout(r, 1500));
+            c.enqueue(ev({ t: "items", from: said.length, items: [{ t: "tool_result", id: "tt2", text: "3 个城市都对上了" }] }, said.length + 1));
+          },
+        });
+        return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+      }
     }
     return real(input, init);
   };
