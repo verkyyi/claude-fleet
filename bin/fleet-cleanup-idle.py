@@ -131,6 +131,20 @@ class Cleaner:
         except (OSError, subprocess.SubprocessError):
             pass
 
+    def shared(self, window, fid):
+        """Another window still carrying this ID (T847) — `<socket>\t<window>`, else
+        "": its reap then closes this window only, never the ID (or the record it
+        carries). fleet_fid_shared is the one reader."""
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return ""
+        try:
+            r = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh" && fleet_fid_shared "$2" "$3" "$4"', "_",
+                                str(BIN), fid, self.args.socket_name or "", window],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return r.stdout.strip() if r.returncode == 0 else ""
+
     def snapshot(self, window):
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
@@ -311,9 +325,14 @@ class Cleaner:
         try:
             if self.snapshot(window) != snap or not recheck():
                 return False
-            self.retire(window)
+            other = self.shared(window, snap["@fleet_id"])
+            if other:
+                self.say(window, "id-shared", other.split("\t")[-1])
+            else:
+                self.retire(window)
             self.tm("kill-window", "-t", window)
-            self.end_id(snap["@fleet_id"])
+            if not other:
+                self.end_id(snap["@fleet_id"])
             return True
         finally:
             self.untransition(lock)

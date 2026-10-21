@@ -4977,6 +4977,21 @@ drill_restart_done_not_pinned() {
   WHAT="save 钉住所有开着的会话（done、no-repo 也算，exited 不算）；kill-server 后 restore 带 RESTORE_KEEP_DONE=1，同名、同目录、同一段对话回来（fleet-sessions-snapshot-selftest.sh 真跑，这里按名守住）"
 }
 
+# ---- task-window-duplicate (T847): a second window opened on a record that still
+# had one shared its ID; the copy's reap closed it and the hub ended the record.
+drill_task_window_duplicate() {
+  CAP=40; local t0
+  t0=$(now)
+  suite_holds task-one-window-selftest.sh 'D5: no window opened' 'B2: the ID stays open while the original runs' \
+    'E3: the spawner was called for a running record' 'F9: the hub'"'"'s record is back' || return 1
+  grep -q 'fleet_task_running "$TASK_REF"' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh no longer asks whether the record already runs"; return 1; }
+  grep -q 'fleet_fid_shared' "$BIN/fleet-cleanup-idle.py" \
+    || { WHY="the idle reaper no longer keeps an ID another window carries"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="同一条记录不开第二个窗口（本机 / hub 在线都算）；副本回收只关窗、不结束共享的 ID；误关的 revive 回来（task-one-window-selftest.sh 真跑，这里按名守住）"
+}
+
 # ---- linux-recreate-route-lost (#3421): credsep's root settings live in the image
 # layer; a recreated pod rewrote only the primary login's relay route, so a login
 # `login open` made went `route: direct` (unsupported_region from the CN egress).

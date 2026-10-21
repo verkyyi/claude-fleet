@@ -6005,11 +6005,18 @@ fleet_fleet_login_put() {
 }
 
 fleet_win_retire() {
-  local w="${1:-}" sock="${2:-}" why="${3:-}" f d
+  local w="${1:-}" sock="${2:-}" why="${3:-}" f d o
   [ -n "$w" ] || return 0
   if [ -n "$sock" ]; then f=$(tmux -L "$sock" show-options -wqv -t "$w" @fleet_id 2>/dev/null)
   else f=$(tmux show-options -wqv -t "$w" @fleet_id 2>/dev/null); fi
   fleet_is_fid "$f" || return 0
+  # Another window still carries this ID (T847): it is not over — neither mark it
+  # retired nor end it; the last window to go does.
+  o=$sock; [ -n "$o" ] || { o=${TMUX:-}; o=${o%%,*}; o=${o##*/}; }
+  if [ -n "$why" ] && o=$(fleet_fid_shared "$f" "$o" "$w"); then
+    printf 'fleet: %s 还在 %s 跑 — 不结束这个 ID（%s 只关这一个窗口）\n' "$f" "${o#*	}" "$w" >&2
+    return 0
+  fi
   d=$(fleet_retired_dir)
   [ -d "$d" ] || mkdir -p "$d" 2>/dev/null
   : > "$d/$f" 2>/dev/null
@@ -6031,6 +6038,62 @@ fleet_id_window() {
     [ -n "$w" ] && { printf '%s\t%s\n' "$s" "$w"; return 0; }
   done <<EOF
 $(fleet_sockets 2>/dev/null)
+EOF
+  return 1
+}
+# One record, one window (T847). A second window opened on a record that still had
+# one took the same @fleet_id (the record's ID, EPIC T644 C2); when the copy was
+# reaped its close ended the ID — and the hub ended the record — while the first
+# window still worked (T842 / T844, 2026-10-21). These are the readers both rails use:
+# a spawner asks fleet_task_running before it opens a window for a record, and a
+# close asks fleet_fid_shared before it ends an ID another window still carries.
+#   fleet_task_windows <T<n>> [<ID>] → every window on this login's fleets that runs
+#       the record — its @task is <T<n>>, or its @fleet_id is <ID>:
+#       `<socket>\t<window>\t<claude_state>` a line; rc 1 none
+#   fleet_task_running <T<n>> [<ID>] → the first of them whose agent has not exited:
+#       `<socket>\t<window>`; rc 1 none
+#   fleet_fid_shared <ID> <socket> <window> → another window (not <window> on
+#       <socket>) carrying <ID>: `<socket>\t<window>`; rc 1 none
+fleet_task_windows() {
+  local t="${1:-}" f="${2:-}" s wid wt wf st out=''
+  case "$t" in T[1-9]*) ;; *) t='' ;; esac
+  fleet_is_fid "$f" || f=''
+  [ -n "$t$f" ] || return 1
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    while IFS='|' read -r wid wt wf st; do
+      [ -n "$wid" ] || continue
+      { [ -n "$t" ] && [ "$wt" = "$t" ]; } || { [ -n "$f" ] && [ "$wf" = "$f" ]; } || continue
+      out="$out$s	$wid	$st
+"
+    done <<EOF
+$(fleet_lw '#{window_id}|#{@task}|#{@fleet_id}|#{@claude_state}' tmux -L "$s" 2>/dev/null)
+EOF
+  done <<EOF
+$(fleet_sockets 2>/dev/null)
+EOF
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+fleet_task_running() {
+  local s w st
+  while IFS='	' read -r s w st; do
+    [ -n "$w" ] && [ "$st" != exited ] || continue
+    printf '%s\t%s\n' "$s" "$w"; return 0
+  done <<EOF
+$(fleet_task_windows "${1:-}" "${2:-}")
+EOF
+  return 1
+}
+fleet_fid_shared() {
+  local f="${1:-}" xs="${2:-}" xw="${3:-}" s w st
+  fleet_is_fid "$f" || return 1
+  while IFS='	' read -r s w st; do
+    [ -n "$w" ] || continue
+    [ "$s" = "$xs" ] && [ "$w" = "$xw" ] && continue
+    printf '%s\t%s\n' "$s" "$w"; return 0
+  done <<EOF
+$(fleet_task_windows '' "$f")
 EOF
   return 1
 }

@@ -81,7 +81,7 @@
 #                     → a blank session's record renamed ONCE (T652): from its
 #                       placeholder F to its first prompt's first line T — the
 #                       hub compares on F, so a second rename changes nothing.
-#   fleet-task-record.sh respawn T<n> [--prev <ID>] [--redo] [--origin O] [--print] [<session>]
+#   fleet-task-record.sh respawn T<n> [--prev <ID>] [--redo] [--force] [--origin O] [--print] [<session>]
 #                     → a record whose session never came up (or went down, its
 #                       window gone) opened again on the SAME record (T642): its
 #                       words, repo, agent and reap; the new ID continues --prev.
@@ -89,7 +89,18 @@
 #                       attempt (EPIC T644 C5 — a batch member's retry keeps its
 #                       code; the window takes the task's ID, C2), its first turn
 #                       saying so.
+#                       A record whose session still runs (a window here carries
+#                       it, or the hub sees it live elsewhere) is not opened again:
+#                       「已在 <where> 跑」 on stderr, exit 0 (--force opens anyway —
+#                       T847). The new window's parent is the record's own
+#                       (--origin-wid), never the caller's, unless --origin says.
 #                       FLEET_TASK_RESPAWN is the spawner seam.
+#   fleet-task-record.sh revive <ref> [<window>]
+#                     → a record its session's ID close ended (cancelled 「结束·没交回
+#                       结果」) while a window here still carries that ID goes on:
+#                       the ID reopened on that window, the hub puts the record back
+#                       (T847). Refused (1) for a record ended by its result, or no
+#                       window here carrying it.
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
 #
@@ -425,11 +436,12 @@ fi
 # hub's write-through lets that attempt's end replace the failure (C6).
 if [ "$cmd" = respawn ]; then
   t="${1:-}"; is_task_ref "$t" || usage; shift   # its code too (EPIC T644 C3)
-  prev='' origin='' pwin='' tsess='' redo=0
+  prev='' origin='' pwin='' tsess='' redo=0 force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --prev) prev="${2:-}"; shift ;;
       --redo) redo=1 ;;
+      --force) force=1 ;;
       --origin) origin="${2:-}"; shift ;;
       --print) pwin=--print ;;
       -*) usage ;;
@@ -457,11 +469,34 @@ disp = dict(p.get("dispatch") or {})
 if disp:
     disp.update(task=t["id"], generation=t.get("generation", 1), attempt_id=t.get("attempt_id", ""))
 agent = t.get("resolved_agent") if t.get("resolved_agent") in ("claude", "codex") else ""
+# its session, as the hub last saw it on ANY machine (T847): a live one is not respawned
+lv = d.get("live") if isinstance(d.get("live"), dict) else {}
+live = "-"
+if lv and not lv.get("stale") and lv.get("state") not in ("exited", "", None):
+    live = (lv.get("key") or "?") + "@" + (t.get("machine") or "?")
+psess = t.get("parent_session") or "-"
 print("\t".join([" ".join((t.get("title") or "-").split()), (p.get("repo") or t.get("repo") or "-").lower(), p.get("reap") or "-",
-                 p.get("template") or "-", agent or "-", json.dumps(disp, separators=(",", ":")) if disp else "-"]))
+                 p.get("template") or "-", agent or "-", json.dumps(disp, separators=(",", ":")) if disp else "-",
+                 t.get("fid") or "-", live, psess if all(c.isalnum() or c in "/:._-" for c in psess) else "-"]))
 print(p.get("body") or "", end="")' "$redo") || die 1 "$t: cannot respawn"
-  IFS=$'\t' read -r r_title r_repo r_reap r_as r_agent r_disp <<< "$(printf '%s\n' "$plan" | head -n 1)"
+  IFS=$'\t' read -r r_title r_repo r_reap r_as r_agent r_disp r_fid r_live r_psess <<< "$(printf '%s\n' "$plan" | head -n 1)"
   r_body=$(printf '%s\n' "$plan" | sed '1d')
+  # One record, one window (T847): a record whose session still runs — a window
+  # here, or the hub's live word for it on another machine — is answered with
+  # where it runs, never a second window (a copy shares its ID; the copy's reap
+  # ended the record). --force opens one anyway.
+  if [ "$force" = 0 ]; then
+    [ "$r_fid" = - ] && r_fid=''
+    if run=$(fleet_task_running "$t" "$r_fid"); then
+      printf 'fleet-task-record: %s 已在 %s:%s 跑 — 不再开窗（--force 照开）\n' "$t" "${run%%	*}" "${run#*	}" >&2
+      [ -z "$pwin" ] || tmux -L "${run%%	*}" display-message -p -t "${run#*	}" '#{window_id}	#{window_name}	#{@worktree}	#{@fleet_id}' 2>/dev/null
+      exit 0
+    fi
+    if [ "$r_live" != - ]; then
+      printf 'fleet-task-record: %s 已在 %s 跑（hub 的在线记录）— 不再开窗（--force 照开）\n' "$t" "$r_live" >&2
+      exit 0
+    fi
+  fi
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
   [ "$r_title" = - ] && r_title=$t
   if [ -n "$r_body" ]; then printf '%s\n\n%s\n' "$r_title" "$r_body" > "$pf"; else printf '%s\n' "$r_title" > "$pf"; fi
@@ -476,11 +511,54 @@ print(p.get("body") or "", end="")' "$redo") || die 1 "$t: cannot respawn"
   [ "$r_as" = - ] || ra+=(--as "$r_as")
   [ "$r_agent" = - ] || ra+=(--agent "$r_agent")
   [ -z "$prev" ] || ra+=(--prev "$prev")
-  [ -z "$origin" ] || ra+=(--origin "$origin")
+  # The record's own parent (T847): a placement is checked against the parent the
+  # record was accepted with (409 「parent differs」), so a respawn from another
+  # session still opens the window for the record's parent — unless --origin says.
+  if [ -n "$origin" ]; then ra+=(--origin "$origin")
+  elif [ "$r_psess" != - ]; then ra+=(--origin-wid "$r_psess"); fi
   [ -z "$pwin" ] || ra+=("$pwin")
   ra+=("--prompt-file=$pf")
   [ -z "$tsess" ] || ra+=("$tsess")
   exec bash "${FLEET_TASK_RESPAWN:-$BIN/dash-raw-session.sh}" ${ra[@]+"${ra[@]}"}
+fi
+# revive <ref> [<window>] (T847): a record its session's ID CLOSE ended (cancelled,
+# 「结束·没交回结果」) while a window here still carries that ID — a copy opened on
+# the same record shared the ID, and the copy's reap closed it — goes on: the ID's
+# ledger takes one `reopened` event naming that window (fleet_id.py revive), pushed
+# now; the hub clears the close and puts the record back to the state it had. Only
+# that end is undone: a record ended by its result, or one no window here carries,
+# is refused (exit 1), a record still open is said and left (exit 0).
+if [ "$cmd" = revive ]; then
+  t="${1:-}"; is_task_ref "$t" || usage
+  wsel="${2:-}"
+  case "$wsel" in ''|@[0-9]*) ;; *) usage ;; esac
+  applicable || die 3 "no hub here: no record to revive"
+  got=$(call GET "/v1/node/tasks/${t#\#}") || exit 1
+  remember "$got"
+  IFS=$'\t' read -r t fid state outcome obs <<< "$(printf '%s' "$got" | python3 -c '
+import json, sys
+t = (json.load(sys.stdin).get("task") or {})
+print("\t".join((str(t.get(k) or "-")) for k in ("id", "fid", "state", "outcome", "observation")))')"
+  is_tref "$t" || die 1 "the hub's answer names no record"
+  fleet_is_fid "$fid" || die 1 "$t has no ID of its own: nothing to revive"
+  if [ "$outcome" = - ]; then printf '%s\n' "$t"; printf 'fleet-task-record: %s is still open (%s) — nothing to revive\n' "$t" "$state" >&2; exit 0; fi
+  case "$state:$obs" in
+    "cancelled:id_closed:$fid:"*) ;;
+    *) die 1 "$t ended $outcome ($obs) — only an end its ID's close made is revived" ;;
+  esac
+  # the window named, else the first carrying the ID whose agent has not exited
+  if [ -n "$wsel" ]; then w=$(fleet_task_windows '' "$fid" | awk -F'\t' -v w="$wsel" '$2 == w { print $2; exit }')
+  else w=$(fleet_task_windows '' "$fid" | awk -F'\t' '$3 != "exited" { print $2; exit }'); fi
+  [ -n "$w" ] || die 1 "no window here carries $t's ID ${fid}${wsel:+ as $wsel} — revive it on the machine that runs it"
+  FLEET_ID_PUSH=0 python3 "$BIN/fleet_id.py" revive "$fid" --window "$w" >/dev/null || exit 1
+  bash "$BIN/fleet-id.sh" push "$fid" >/dev/null 2>&1
+  got=$(call GET "/v1/node/tasks/$t") || exit 1
+  remember "$got"
+  state=$(printf '%s' "$got" | field task.state)
+  [ "$state" != cancelled ] || die 1 "$t: the ID is reopened here but the hub still says cancelled (fleet-id.sh push $fid, then look again)"
+  code_line "$got" 2>/dev/null || printf '%s\n' "$t"
+  printf 'fleet-task-record: %s 恢复为 %s — 由 %s 接着跑\n' "$t" "$state" "$w" >&2
+  exit 0
 fi
 # A code the book already holds needs no hub (and works where none answers now).
 if [ "$cmd" = code ] && is_task_ref "${1:-}" && c=$(booked "$1"); then printf '%s\n' "$c"; exit 0; fi

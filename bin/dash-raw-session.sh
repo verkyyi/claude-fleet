@@ -344,6 +344,23 @@ TM() { tmux -L "$SOCK" "$@"; }
 # (retry later), 1 = infrastructure, 4 = no live parent (issue #1355), matching
 # dash-issue-session.sh.
 refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK fleet_ui_fail "$1"; }
+# One record, one window (T847): a record a window here still runs is answered
+# with THAT window, never a second one — a copy takes the same @fleet_id, and its
+# reap once ended the record the first still worked (T842 / T844). A reopen of the
+# same ID (--fid) and a parked session's wake (--resume) are that window's own
+# return; FLEET_TASK_DUP_OK=1 opens one anyway.
+if [ -n "$TASK_REF" ] && [ -z "$REOPEN_FID$RESUME_SID" ] && [ "${FLEET_TASK_DUP_OK:-0}" != 1 ]; then
+  _tfid=''; case "${FLEET_TASK_FID:-}" in "$TASK_REF="*) _tfid=${FLEET_TASK_FID#"$TASK_REF="} ;; esac
+  if _run=$(fleet_task_running "$TASK_REF" "$_tfid"); then
+    _rs=${_run%%	*}; _rw=${_run#*	}
+    printf 'dash-raw-session: %s 已在 %s:%s 跑 — 不再开第二个窗口\n' "$TASK_REF" "$_rs" "$_rw" >&2
+    if [ "$PRINT_WIN" = 1 ]; then
+      tmux -L "$_rs" display-message -p -t "$_rw" '#{window_id}	#{window_name}	#{@worktree}	#{@fleet_id}' 2>/dev/null
+    fi
+    exit 0
+  fi
+  unset _tfid _run _rs _rw
+fi
 # No spawning into ANOTHER fleet (issue #980): a caller sitting in a fleet pane may
 # name only its own fleet. A caller outside any fleet (no pane, or an ad-hoc
 # session with no fleet conf) is headless and names the fleet it means.
