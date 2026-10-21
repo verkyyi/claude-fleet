@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The asker's own admission says no (claude-fleet T672): an idle mac-c that
@@ -101,5 +103,42 @@ func TestNodePlaceSaysAfterPick(t *testing.T) {
 	resp.Body.Close()
 	if v := resp.Header.Get(AfterPickHeader); resp.StatusCode != 200 || v == "" {
 		t.Fatalf("= %d, %s %q; want the after-pick time", resp.StatusCode, AfterPickHeader, v)
+	}
+}
+
+// An accepted dispatch (a task) is tried on the next machine too (claude-fleet
+// T672): mac-c's spawn declines, m3 opens it as its own operation of the same
+// task; the answer names mac-c's try.
+func TestNodePlaceDispatchDeclinedTriesNext(t *testing.T) {
+	h, macD, macC, f5, _ := twoNodesCaps(t, control.CapLaunch)
+	m3 := connectWriteNodeCaps(t, h, h.enroll(t, "m3"), control.CapRead, control.CapWrite, control.CapLaunch)
+	f3 := fakeFleet(t, machineC, "fleet-m3", writeRepo, "/u/frank/claude-fleet", 3)
+	m3.beatLoad("m3", "frank", machineC, 6, 1, f3)
+	waitFor(t, 3*time.Second, "three fleets registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 3
+	})
+	waitLoad(t, h, "m3", 6)
+	macC.setOpGet(declines(2, "暂停开新：内存紧张"))
+	m3.setOpGet(startedFixture)
+	st, out := placeCall(t, h, h.tokens["mac-d"], map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID,
+		"coding_agent": "claude", "idempotency_key": "task-retry-1", "tries": 3})
+	if st != 200 || out["placement"].(map[string]any)["machine"] != "m3" {
+		t.Fatalf("place = %d %v; want the task on m3 after mac-c declined", st, out)
+	}
+	if as := attemptsOf(t, out); len(as) != 1 || as[0]["machine"] != "mac-c" {
+		t.Fatalf("attempts = %v; want mac-c's decline", as)
+	}
+	if macD.count() != 0 || macC.count() != 1 || m3.count() != 1 {
+		t.Fatalf("writes mac-d=%d mac-c=%d m3=%d", macD.count(), macC.count(), m3.count())
+	}
+	d := out["dispatch"].(map[string]any)
+	if m3.writes[0]["params"].(map[string]any)["task"] != d["task"] || macC.writes[0]["params"].(map[string]any)["task"] != d["task"] {
+		t.Fatal("both tries must carry the one accepted task")
+	}
+	if m3.writes[0]["operation_id"] == macC.writes[0]["operation_id"] {
+		t.Fatal("the next try is its own operation")
+	}
+	if !retryKeyOf("task-retry-1:try2", "task-retry-1") || retryKeyOf("task-retry-1:tryx", "task-retry-1") || retryKeyOf("other:try2", "task-retry-1") {
+		t.Fatal("retryKeyOf")
 	}
 }

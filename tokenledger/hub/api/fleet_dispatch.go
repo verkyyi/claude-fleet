@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -46,7 +47,7 @@ func resolveDispatch(coding, legacy string, raw any, key string) (*dispatchChoic
 			return bad()
 		}
 	}
-	if d.Version != 1 || !idemRE.MatchString(d.RequestID) || (key != "" && key != d.RequestID) || !codingAgentOK(d.ResolvedAgent) ||
+	if d.Version != 1 || !idemRE.MatchString(d.RequestID) || (key != "" && key != d.RequestID && !retryKeyOf(key, d.RequestID)) || !codingAgentOK(d.ResolvedAgent) ||
 		(d.RequestedAgent != "default" && !codingAgentOK(d.RequestedAgent)) {
 		return bad()
 	}
@@ -201,4 +202,20 @@ func dispatchRaw(d *dispatchChoice) any {
 func dispatchPayload(w *writeRequest) string {
 	b, _ := json.Marshal(map[string]any{"action": w.action, "node": w.node, "params": w.params})
 	return string(b)
+}
+
+// retryKeyOf says whether key is a placement's later try of the dispatch
+// requestID (claude-fleet T672): retryIdem's `<id>:try<N>` — the same accepted
+// work sent to the next machine after one declined, its own operation.
+func retryKeyOf(key, requestID string) bool {
+	base := requestID[:min(len(requestID), 120)] + ":try"
+	if !strings.HasPrefix(key, base) || len(key) == len(base) {
+		return false
+	}
+	for _, c := range key[len(base):] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
