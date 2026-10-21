@@ -6703,7 +6703,7 @@ drill_service_orphan_holds_socket() {
   SECS=$(since "$t0")
 }
 
-# service-orphan-shell-holds-socket (task CVC4, macmini 2026-10-21): the old
+# service-orphan-shell-holds-socket (task CVC4, a managed Mac 2026-10-21): the old
 # copy's node child was NOT itself an orphan — its `fleet-webchat.sh serve`
 # shell was (PPID 1), the node under it still answering chat.sock — so BZGP's
 # takeover called it «不是本服务的孤儿» and the managed copy exited 3 for hours.
