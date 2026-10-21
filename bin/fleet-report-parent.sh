@@ -53,7 +53,8 @@
 # a stale hub map, a sleeper at a full fleet, a window with no live Claude, an inbox
 # that will not answer), so it waits — on the hub for the parent's identity, or in
 # this machine's peer queue (bin/fleet-peer-queue.sh) — and is delivered when the
-# parent can take it, or EXPIRED after 7 days in this fleet's delivery book; and
+# parent can take it, or — nobody ever took it — HANDED to the person (T887: the
+# reminder and the task record, bin/fleet-peer-hand.py), never a quiet EXPIRED; and
 # exit 1 — refused: nothing reached anyone and nothing waits. Never `reported`
 # without a delivery. A queued report stamps @reported like a sent one: it WILL
 # arrive, and the reaper's backstop must not queue a second.
@@ -743,8 +744,13 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
           else
             _how='the hub is not reachable from here; this machine sends it when it is'
           fi
+          # The report's words ride its QUEUED row (T887): a parent that never takes
+          # it leaves it to the person — the reminder and the task record — not to an
+          # EXPIRED row nobody reads (bin/fleet-peer-hand.py).
+          _hrep=$(python3 -c 'import json,sys; print(json.dumps({k: v for k, v in zip(("child","state","pr","summary","title","repo","task"), sys.argv[1:]) if v}, ensure_ascii=False))' \
+            "$selfkey" "$UST" "${PR//[^0-9]/}" "$SUMMARY" "$wname" "$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)" "${wtask:-}" 2>/dev/null)
           bash "$BIN/fleet-peer-queue.sh" note -L "$sess" --rid "$_rid" --state QUEUED --to "$owid" \
-            --kind report --via hub --detail "$_how" 2>/dev/null || :
+            --kind report --via hub --detail "$_how" ${_hrep:+--report "$_hrep"} 2>/dev/null || :
           # Which one it is in that parent's queue (issue #3520) — the hub pushes
           # them again the beat the parent is live, and each receipt turns its row
           # DELIVERED in this book.

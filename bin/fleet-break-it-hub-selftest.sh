@@ -30,6 +30,8 @@
 #   hub-shape-extra-volume                          .github/actions/hub-release/release.sh shape (the data disk is
 #                                                   the claim mounted at /data, not any PVC)
 #   hub-read-refused-silent                         bin/fleet-account.sh (quota_budget_json), fleet-lib.sh
+#   report-expired-unseen                           bin/fleet-peer-queue.sh (note · stale · drain), fleet-peer-hand.py,
+#                                                   fleet-report-parent.sh (the QUEUED row's `report`)
 #                                                   (fleet_hub_auth_note), fleet-doctor.sh (hubauth)
 #   node-person-cert-expired                        bin/fleet-hub-write.sh (the node-token door), fleet-lib.sh
 #                                                   (fleet_node_pair, fleet_hub_reap), fleet-doctor.sh (personcert);
@@ -464,6 +466,33 @@ drill_hub_read_refused_silent() {
   l=$(hrr bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^ *FAIL +hubauth ')
   case "$l" in *"quota refused"*"node token is here"*) ;; *) WHY="the doctor's hubauth row is not a FAIL naming the fix: [$l]"; return 1 ;; esac
   SECS=$(since "$t0"); WHAT="401 的额度读：ccquota 拿到节点 token，hub_auth_fail 记一行，doctor hubauth FAIL 并给出修法"
+}
+
+# A cross-machine report whose parent never comes back (T887): the hub's relay TTL
+# ran out, its EXPIRED receipt reached the sender's book — and that was the end of
+# it, nobody told (2026-10-19..21: 7 on mini2, more QUEUED on macmini). The drill
+# queues a report with its words, lets the hub's receipt say EXPIRED, and passes
+# when the person holds it: a reminder row with the words, a note on its task
+# record, one notice, the book's last word HANDED, no EXPIRED.
+drill_report_expired_unseen() {
+  CAP=10; local t0 d="$WORK/rex" rid="c7d372cf-903b-5229-8e55-3e286e9c026d/scratch-56#1792622849.1"
+  mkdir -p "$d/conf/fleets/rx"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/task.log"\n' "$d" > "$d/task.sh"
+  printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\n' "'$d/notice.log'" > "$d/notice.py"
+  rex() { env FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_PEER_HAND_TASK_CMD="$d/task.sh" \
+            FLEET_PEER_HAND_NOTICE_CMD="$d/notice.py" bash "$BIN/fleet-peer-queue.sh" "$@" -L rx; }
+  t0=$(now)
+  rex note --rid "$rid" --state QUEUED --to "x/598b0309-961d-4fde-b7d4-5440a0228155" --kind report --via hub \
+    --detail 'its machine is not in a fresh hub map' \
+    --report '{"child":"scratch-56","state":"MERGED","summary":"合了 PR #5150","task":"T761"}' >/dev/null 2>&1
+  rex note --rid "$rid" --state EXPIRED --kind child_report --via hub --detail 'no node took it within the relay TTL' >/dev/null 2>&1
+  SECS=$(since "$t0")
+  grep -q '"state": "EXPIRED"' "$d/conf/fleets/rx/delivery.ndjson" && { WHY="the book still says EXPIRED"; return 1; }
+  tail -1 "$d/conf/fleets/rx/delivery.ndjson" | grep -q '"state": "HANDED"' || { WHY="the book's last word is not HANDED: $(tail -1 "$d/conf/fleets/rx/delivery.ndjson")"; return 1; }
+  grep -q '合了 PR #5150' "$d/conf/global/orphan-reports.ndjson" 2>/dev/null || { WHY="no reminder row carries the report's words"; return 1; }
+  grep -q 'set T761 --note' "$d/task.log" 2>/dev/null || { WHY="its task record was not written"; return 1; }
+  grep -q '有 1 份回报没人收' "$d/notice.log" 2>/dev/null || { WHY="no notice 「有 N 份回报没人收」"; return 1; }
+  WHAT="上层不在、hub 回执 EXPIRED 的回报：进了你的提醒（带原话）、任务记录记一笔、一条「有 1 份回报没人收」，账本最后一行 HANDED、没有 EXPIRED"
 }
 
 # A separated node's where (issue #2665): node.env is the role account's, the
