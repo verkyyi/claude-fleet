@@ -472,7 +472,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	// goes now: done=true means the answer was written (LOCAL, or every
 	// machine declined); false with pl moved means try pl.
 	next := func(a placeAttempt) (done bool, ok bool) {
-		if req.Dispatch != nil || req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
+		// An accepted dispatch is tried on the next machine too (claude-fleet
+		// T672): each try its own operation (retryIdem), the same work.
+		if req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
 			return false, false
 		}
 		attempts = append(attempts, a)
