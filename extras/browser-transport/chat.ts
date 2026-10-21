@@ -6,7 +6,13 @@ export class UncertainChatRequest extends Error {
 
 /** One independently admitted request. No HTTP retry, outgoing replay queue,
  * or successor attachment exists after this call begins. Local/old-node HTTP
- * selection belongs to the caller, before any attachment is opened. */
+ * selection belongs to the caller, before any attachment is opened.
+ *
+ * A chat request goes over the hub relay unless the caller asks for direct
+ * (preferRelay: false): its payload is a few KB of text, and the peer-to-peer
+ * attempt cost 2–11 s per request before it fell back anyway — a macOS home
+ * offers more ICE candidates than the 32 an answer may carry, and no STUN is
+ * configured for a browser in China to reach a home abroad (task V9DJ). */
 export function chatRequest(target: string, body = '', options: {
   signal?: AbortSignal; preferRelay?: boolean; requestId?: string
   onState?: (state: AttachmentState) => void
@@ -35,7 +41,7 @@ export function chatRequest(target: string, body = '', options: {
       cancel() { ended = true; connection?.close() },
     }, { highWaterMark: BUFFER_MAX, size: chunk => chunk.byteLength })
     connection = new BrowserAttachment({ url, signal: options.signal,
-      reconnect: false, preferRelay: options.preferRelay,
+      reconnect: false, preferRelay: options.preferRelay ?? true,
       onState(state) {
         options.onState?.(state)
         if (state.trialLeft) trialLeft = state.trialLeft
