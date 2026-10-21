@@ -521,6 +521,28 @@ if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR
   fi
   unset _mt
 fi
+# The shared pool at a managed login's shell (task KEA0): `claude` / `codex` typed
+# after an ssh in run on the fleet's subscriptions (shell/fleet-pool.zsh →
+# bin/fleet-pool-run.sh). A managed login's ~/.zshrc carries ONE marked block
+# sourcing it; a login no longer managed has the block taken out. Only the block
+# is ever written; ~/.fleet-pool-off keeps the plain programs.
+if [ "$DRY" != 1 ] && [ -f "$ROOT/shell/fleet-pool.zsh" ]; then
+  _zr="$HOME/.zshrc"
+  _pb='# >>> fleet-pool: claude / codex on the shared subscriptions (touch ~/.fleet-pool-off to stop) >>>'
+  _pe='# <<< fleet-pool <<<'
+  if fleet_node_manages "$LOGIN"; then
+    if ! grep -qF '# >>> fleet-pool' "$_zr" 2>/dev/null; then
+      { [ ! -s "$_zr" ] || [ -z "$(tail -c 1 "$_zr")" ] || echo
+        printf '%s\n%s\n%s\n' "$_pb" '[ -r ~/.claude/fleet/shell/fleet-pool.zsh ] && source ~/.claude/fleet/shell/fleet-pool.zsh' "$_pe"
+      } >> "$_zr" 2>/dev/null && say 'pool: ~/.zshrc — claude / codex use the shared subscriptions'
+    fi
+  elif grep -qF '# >>> fleet-pool' "$_zr" 2>/dev/null; then
+    awk '/^# >>> fleet-pool/{skip=1} !skip{print} /^# <<< fleet-pool/{skip=0}' "$_zr" > "$_zr.fleet-pool.$$" \
+      && cat "$_zr.fleet-pool.$$" > "$_zr" && say 'pool: ~/.zshrc block taken out (not a managed login)'
+    rm -f "$_zr.fleet-pool.$$"
+  fi
+  unset _zr _pb _pe
+fi
 # The login's records leave the install (issue #4668): the install is read-only,
 # every log / heartbeat / ledger is $FLEET_CONF_DIR/logs. <install>/logs is moved
 # there, every apply, until nothing is left in it: an entry the conf dir

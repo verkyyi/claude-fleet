@@ -199,6 +199,10 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 	if out.Machines[0].Relay {
 		t.Fatal("relay offered with no agent connected")
 	}
+	// its life off the roster (task KEA0: `fleet shell --list`)
+	if m := out.Machines[0]; m.Status != "online" || m.SeenAt == nil || now.Sub(*m.SeenAt) > time.Minute {
+		t.Fatalf("mac-c life = %q %v, want online and seen just now", m.Status, m.SeenAt)
+	}
 
 	for name, req := range map[string]RoutesRequest{
 		"stale timestamp": signed(good, control.RoutesSigNamespace, now.Add(-10*time.Minute).Unix()),
@@ -224,5 +228,10 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 	code, out, _ = postRoutes(t, h, asOperator, nil)
 	if code != 200 || out.Login != "" || len(out.Machines) != 2 {
 		t.Fatalf("operator: HTTP %d %+v, want both machines", code, out)
+	}
+	for _, m := range out.Machines {
+		if m.Hostname == "mac-e" && (m.Status != "" || m.SeenAt != nil) {
+			t.Fatalf("mac-e has no agent, yet life = %q %v", m.Status, m.SeenAt)
+		}
 	}
 }
