@@ -1240,6 +1240,11 @@ const ResetClean = "clean"
 // older script refused it (exit 3) and the remove read failed.
 const RemoveExitNoLogin = 4
 
+// AccountCutOffMark is in the detail of an account op the node agent's own
+// restart cut off (claude-fleet#2918's cutOffResult): the op did not refuse,
+// it was interrupted — the hub retries a spare's (claude-fleet NKTP).
+const AccountCutOffMark = "stopped while this op ran"
+
 // AccountOp is the payload of TypeAccountOp.
 type AccountOp struct {
 	Op       string `json:"op"`

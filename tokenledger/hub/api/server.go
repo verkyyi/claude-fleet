@@ -432,6 +432,10 @@ type Server struct {
 	// one scan per spareScanEvery, whichever beat comes first.
 	spareMu     sync.Mutex
 	spareScanAt time.Time
+	// spareCut* count the hub's own retries of a spare an agent restart cut
+	// off (claude-fleet NKTP), by principal: at most spareCutOffTries.
+	spareCutMu    sync.Mutex
+	spareCutTries map[string]int
 	// spareAlert* pace the spare alerts (claude-fleet#3509): when the last
 	// pass ran, and since when each place has held no ready spare.
 	spareAlertMu    sync.Mutex

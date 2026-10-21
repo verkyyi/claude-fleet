@@ -773,6 +773,31 @@ func (s *Store) FinishAccountOp(opID, endpointID, state, detail string, at time.
 	return n > 0, nil
 }
 
+// SpareOpInFlight is a spare principal's account row while its create or
+// reset is in flight (creating / resetting, sent: an op_id and the node it
+// went to), its UpdatedAt the moment it was sent — claude-fleet NKTP: the
+// readiness check's subscription allowance lasts exactly that long.
+// ErrNoPrincipal when principalID is no spare or no such op is in flight.
+func (s *Store) SpareOpInFlight(principalID string) (*FleetAccount, error) {
+	if !IsSparePrincipal(principalID) {
+		return nil, ErrNoPrincipal
+	}
+	rows, err := s.read.Query(fleetAccountColumns+` WHERE `+s.d.eqNocase("principal_id")+` AND state IN (?, ?)
+		AND op IN ('create', 'reset') AND op_id <> '' AND endpoint_id <> ''`,
+		principalID, AccountCreating, AccountResetting)
+	if err != nil {
+		return nil, err
+	}
+	out, err := scanFleetAccounts(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrNoPrincipal
+	}
+	return &out[0], nil
+}
+
 // LoseAccountOps marks every op in flight through endpointID unknown: its link
 // is gone and nobody can say whether the op ran.
 func (s *Store) LoseAccountOps(endpointID string, at time.Time) error {

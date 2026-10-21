@@ -146,8 +146,10 @@ type spareMachine struct {
 	Resetting int  // spares being washed for the next person (never ready)
 	FailedN   int  // spares that failed (never ready)
 	Unchecked int  // active spares whose check did not pass (never ready, claude-fleet#4673)
+	CutOff    int  // spares whose op an agent restart / dropped link cut off: retried, never Failed (NKTP)
 	spares    []store.FleetAccount
 	unchecked []store.FleetAccount
+	cutoff    []store.FleetAccount
 	checks    map[string]store.AccountCheck // by op_id
 }
 
@@ -218,6 +220,9 @@ func (s *Server) sparePicture(machines ...string) (map[string]*spareMachine, err
 			m.unchecked = append(m.unchecked, a)
 		case a.State == store.AccountActive:
 			m.Ready++
+		case a.State == store.AccountFailed && s.spareCutOffRetry(a):
+			m.CutOff++
+			m.cutoff = append(m.cutoff, a)
 		case a.State == store.AccountFailed:
 			m.Failed = true
 			m.FailedN++
@@ -353,6 +358,7 @@ func (s *Server) replenishSpares(now time.Time, force bool) bool {
 		m := pic[strings.ToLower(host)]
 		// only where the machine is up to answer the wash (claude-fleet#4673)
 		queued = s.healUncheckedSpares(m, now) || queued
+		queued = s.healCutOffSpares(m, now) || queued
 		if m.Failed {
 			continue // the operator looks at why first (fleet hub accounts)
 		}

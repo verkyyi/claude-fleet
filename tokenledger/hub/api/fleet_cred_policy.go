@@ -300,6 +300,10 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 		return credPolicy{}, err
 	}
 	s.trialUserAllow(settings, &pol) // a trial person: fleet.trial.cred_allow (#4260)
+	// a spare inside its own create / reset: fleet.spare.cred_allow (NKTP)
+	if err := s.spareUserAllow(settings, &pol, time.Now()); err != nil {
+		return credPolicy{}, err
+	}
 	return pol, nil
 }
 
