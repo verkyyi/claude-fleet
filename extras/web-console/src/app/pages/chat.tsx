@@ -446,6 +446,55 @@ export default function ChatPage() {
   return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat key={provider} provider={provider} onSwitch={pick} />;
 }
 
+// <ChatThread source> (GR5E C4): the conversation a session's workspace shows
+// under 对话. `web` is the person's own conversation on one side (the page
+// above, as /chat draws it); `session` is a session running in a terminal —
+// read along only, never typed into from here: the terminal holds it. Its live
+// record is read in by the session's own view (C5); until it arrives this says
+// where the session is and what it said last.
+export type ThreadSource =
+  | { kind: "web"; provider: Provider }
+  | { kind: "session"; machine: string; key: string; agent: string };
+
+export function ChatThread({ source, last, onTerminal }: { source: ThreadSource; last?: string; onTerminal?: () => void }) {
+  const { me } = useShell();
+  const [provider, setProvider] = useState<Provider>(source.kind === "web" ? source.provider : "claude");
+  if (source.kind === "web") {
+    const pick = (p: Provider) => { rememberProvider(p); setProvider(p); };
+    return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat key={provider} provider={provider} onSwitch={pick} />;
+  }
+  return <SessionThread source={source} last={last} onTerminal={onTerminal} />;
+}
+
+const SessionThread: FC<{ source: Extract<ThreadSource, { kind: "session" }>; last?: string; onTerminal?: () => void }> = ({ source, last, onTerminal }) => (
+  <div className="flex h-full flex-col" data-testid="session-thread">
+    <div className="px-4 pt-3">
+      <div role="status" data-testid="read-only"
+        className="border-border bg-card mx-auto flex w-full max-w-xl items-center gap-2 rounded-3xl border py-1.5 ps-4 pe-1.5 text-[13px] leading-snug shadow-xs">
+        <span className="bg-muted-foreground/50 size-2 shrink-0 rounded-full" />
+        <span className="min-w-0 flex-1">
+          {tr("只读 · 这个会话在终端里跑，这里实时看。", "Read-only · this session runs in a terminal; follow it here.")}
+          {source.machine ? <span className="text-muted-foreground hidden font-mono text-[12px] sm:inline"> · {source.machine}</span> : null}
+        </span>
+        {onTerminal ? <Button size="sm" variant="outline" className="shrink-0 rounded-full" onClick={onTerminal}>
+          <TerminalSquareIcon className="size-4" />{tr("到终端里说", "Talk in the terminal")}</Button> : null}
+      </div>
+    </div>
+    <div className="mx-auto flex w-full max-w-[44rem] min-h-0 flex-1 flex-col justify-end gap-3 px-4 py-6">
+      {last ? <div className="bg-muted max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px] break-words whitespace-pre-wrap" data-testid="last-word">{last}</div>
+        : <p className="text-muted-foreground text-center text-[14px]">{tr("它还没说话。", "Nothing said yet.")}</p>}
+      <p className="text-muted-foreground text-center text-[12px]">
+        {tr(`${source.agent || "会话"}的对话记录在它的终端里；这里显示它最近说的一句。`, `${source.agent || "The session"}'s conversation is in its terminal; this is the last thing it said.`)}
+      </p>
+    </div>
+    <div className="px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+      <div aria-disabled className="border-border text-muted-foreground mx-auto flex w-full max-w-[44rem] items-center rounded-3xl border px-4 py-3 text-[14px] opacity-60">
+        {tr("只读：这个会话在终端里跑，要说话请到终端里。", "Read-only: this session runs in a terminal; talk to it there.")}
+      </div>
+    </div>
+  </div>
+);
+
 // The copy beside the entry (task V9DJ D): where the history on screen stands.
 function SyncChip({ sync }: { sync: Sync }) {
   if (!sync) return null;

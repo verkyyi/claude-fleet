@@ -190,7 +190,9 @@ const TaskFacts: FC<{ t: Task; stale: boolean }> = ({ t, stale }) => {
 
 // One row's details: what it asks, the person's words, its report, its PR,
 // its members, its session, the ways in.
-const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => void; onReap: (r: Row) => void; onResume: (r: Row) => void }> = ({ r, stale, busy, onOpen, onReap, onResume }) => {
+// onTerminal (GR5E C4): inside a session's workspace its terminal is a switch
+// away — the buttons switch there instead of opening /terminal
+const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => void; onReap: (r: Row) => void; onResume: (r: Row) => void; onTerminal?: () => void }> = ({ r, stale, busy, onOpen, onReap, onResume, onTerminal }) => {
   const t = r.task, s = r.live || r.ended;
   const pr = t ? taskPR(t) : null;
   const landing = t ? taskLanding(t) : "";
@@ -212,7 +214,8 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           <CardContent className="space-y-2 px-4">
             <p className="text-muted-foreground text-xs">{tr(...(ASK_KIND[r.live.ask?.kind || ""] || ASK_KIND.question))}</p>
             {r.live.ask?.msg ? <p className="text-sm break-words whitespace-pre-wrap">{r.live.ask.msg}</p> : null}
-            <Button asChild size="sm" className="w-full"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Link></Button>
+            {onTerminal ? <Button size="sm" className="w-full" onClick={onTerminal}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Button>
+              : <Button asChild size="sm" className="w-full"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Link></Button>}
             <p className="text-muted-foreground font-mono text-[12px] break-all select-all">fleet answer {r.live.key}</p>
           </CardContent>
         </Card>
@@ -254,7 +257,8 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           : <p className="text-muted-foreground">{t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
       </Field>
       <div className="flex flex-wrap gap-2">
-        {r.live ? <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
+        {r.live ? onTerminal ? <Button className="flex-1" onClick={onTerminal}><TerminalSquare />{tr("终端", "Terminal")}</Button>
+          : <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
         {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
         {t ? <Button asChild variant="outline" className="flex-1"><Link to={`/chat?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
         {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("回收", "Close")} title={tr("回收", "Close")}><Trash2 /></Button> : null}
@@ -266,7 +270,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
 
 // One row's details with their two writes (回收 · 接回) and what came of them —
 // 会话's side panel and a session's own page (/s/:ref, GR5E C2) alike.
-export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void }> = ({ r, onOpen }) => {
+export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () => void }> = ({ r, onOpen, onTerminal }) => {
   const { stale, reload } = useWorkRows();
   const [confirm, setConfirm] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
@@ -287,7 +291,7 @@ export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void }> = ({ r, onOpen }
   return (
     <>
       {note ? <p role="status" className={cn("mb-4 text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
-      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={setConfirm} onResume={(x) => act(x, "worker_resume")} />
+      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={setConfirm} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} />
       <AlertDialog open={!!confirm} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
