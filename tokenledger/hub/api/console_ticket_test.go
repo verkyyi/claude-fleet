@@ -14,8 +14,8 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
-	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // 只读控制台票据 (task T844): an acceptance session opens its own person's

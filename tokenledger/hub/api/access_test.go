@@ -43,6 +43,7 @@ func TestAccess_ListsEveryDoorIncludingTheOneThatIsNotHTTP(t *testing.T) {
 		"github":    "http",
 		"wechat":    "http",
 		"email":     "http",
+		"ticket":    "http",
 		"api":       "http",
 		"mcp":       "http",
 		"ingest":    "http",
