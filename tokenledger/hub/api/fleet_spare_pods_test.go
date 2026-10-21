@@ -415,3 +415,46 @@ func TestSparePodSettings(t *testing.T) {
 		}
 	}
 }
+
+// A pod handed to someone whose 家 is already on a machine where their login
+// is active leaves that 家 where it is (task KEA0): the pod's claim took a Mac
+// mini home off its person, and with the pod asleep the web chat, terminal and
+// door all said home_down.
+func TestSparePodKeepsMachineHome(t *testing.T) {
+	h, ops := podRig(t)
+	h.srv.replenishSpares(time.Now(), true)
+	a1, a2 := ops.expect(control.ClusterCreateUserPod), ops.expect(control.ClusterCreateUserPod)
+	bootPod(t, h, a1, control.CredsepCentral)
+	bootPod(t, h, a2, control.CredsepCentral)
+	waitAccount(t, h, a1.Pod, store.AccountActive)
+	waitAccount(t, h, a2.Pod, store.AccountActive)
+
+	const jia = "gh:7101"
+	now := time.Now()
+	enablePeople(t, h, jia)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: jia, Hostname: "mac-h", Login: "jia"}); code != 200 {
+		t.Fatalf("adopt: HTTP %d", code)
+	}
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: jia, Machine: "mac-h", Login: "jia", SetBy: "auto", SetAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if a := h.srv.claimClusterSpare(jia, "Jia", jia, testCluster, now); a == nil {
+		t.Fatal("no pod handed")
+	}
+	if home, ok, _ := h.srv.Store.EntryHomeOf(jia); !ok || home.Machine != "mac-h" || home.Login != "jia" {
+		t.Fatalf("甲's 家 = %+v %v; want it kept on mac-h/jia", home, ok)
+	}
+
+	// A 家 whose login there is gone is not kept: the pod becomes it.
+	const yi = "gh:7102"
+	if _, err := h.srv.Store.SetEntryHome(store.EntryHome{Person: yi, Machine: "mac-h", Login: "yi", SetBy: "auto", SetAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	b := h.srv.claimClusterSpare(yi, "Yi", yi, testCluster, now)
+	if b == nil {
+		t.Fatal("no pod handed to 乙")
+	}
+	if home, ok, _ := h.srv.Store.EntryHomeOf(yi); !ok || home.Machine != b.Hostname {
+		t.Fatalf("乙's 家 = %+v %v; want the pod %s", home, ok, b.Hostname)
+	}
+}
