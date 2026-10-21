@@ -4,8 +4,8 @@
 // and says so when there is no conversation to reach: no home yet, the home not
 // connected, the limit used up. The conversation service and /v1/chat are
 // unchanged. Every piece is a stock shadcn/ui or assistant-ui component.
-import { createContext, useContext, useEffect, useState, type FC } from "react";
-import { Link, useSearchParams } from "react-router";
+import { createContext, useContext, useEffect, useRef, useState, type FC } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { AssistantRuntimeProvider, makeAssistantDataUI, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
 import { ExternalLinkIcon, GlobeIcon, SquarePenIcon, TerminalSquareIcon } from "lucide-react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
@@ -33,8 +33,9 @@ const ChatCtx = createContext<Chat | null>(null);
 const useChat = () => useContext(ChatCtx)!;
 
 // iOS Safari keeps the layout viewport when the keyboard opens; size the app
-// to the visual one so the composer stays above the keyboard.
-function useVisualViewport() {
+// to the visual one so the composer stays above the keyboard (the new-session
+// screen's 开始 too, GR5E C3).
+export function useVisualViewport() {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -347,10 +348,31 @@ const AboutPrefill: FC = () => {
   return null;
 };
 
+// The new-session screen's first words (GR5E C3): it started a new conversation
+// and comes here with { say }; once the conversation has loaded (no gate) they
+// are sent as the first turn, once — the address's state is cleared after.
+const FirstWords: FC<{ ready: boolean }> = ({ ready }) => {
+  const aui = useAui();
+  const { state, pathname, search } = useLocation();
+  const go = useNavigate();
+  const sent = useRef(false);
+  const say = typeof (state as { say?: unknown } | null)?.say === "string" ? (state as { say: string }).say.trim() : "";
+  useEffect(() => {
+    if (!ready || !say || sent.current) return;
+    sent.current = true;
+    aui.composer().setText(say);
+    aui.composer().send();
+    go(`${pathname}${search}`, { replace: true, state: null });
+  }, [aui, ready, say, go, pathname, search]);
+  return null;
+};
+
 // 「Claude Code ｜ Codex」 (task R9A2): two assistants, one conversation each on
 // the same home. The page opens on the side used last; the other side's tab
 // wears a dot while it runs or holds a reply this page has not shown.
 const PROVIDER_KEY = "fwc-provider";
+// the side the page opens on next: the new-session screen picks it (GR5E C3)
+export const rememberProvider = (p: Provider) => localStorage.setItem(PROVIDER_KEY, p);
 const seenKey = (p: Provider) => `fwc-seen-${p}`;
 function lastProvider(): Provider {
   const p = localStorage.getItem(PROVIDER_KEY);
@@ -420,7 +442,7 @@ export default function ChatPage() {
   // the entry's word decides: a view it did not take (one's own row) is no view
   const { me } = useShell();
   const [provider, setProvider] = useState<Provider>(lastProvider);
-  const pick = (p: Provider) => { localStorage.setItem(PROVIDER_KEY, p); setProvider(p); };
+  const pick = (p: Provider) => { rememberProvider(p); setProvider(p); };
   return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat key={provider} provider={provider} onSwitch={pick} />;
 }
 
@@ -463,6 +485,7 @@ function LiveChat({ provider, onSwitch }: { provider: Provider; onSwitch: (p: Pr
     <ChatCtx.Provider value={{ ...chat, home, quota }}>
       <AssistantRuntimeProvider runtime={runtime}>
         <AboutPrefill />
+        <FirstWords ready={chat.loaded && !gate && !over && !chat.owner} />
         <TooltipProvider>
           <PageCardUI />
           <div className="flex h-full flex-col">

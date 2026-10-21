@@ -224,6 +224,16 @@ async function readLines(r: Response, onItems: (items: Record<string, unknown>[]
   }
 }
 
+// newChat: one side starts over (R9A2's 新对话) — the chat page's button and
+// the new-session screen (GR5E C3) both go through it. code is the entry's word
+// when it refused (no_home · home_down · …), "" when it could not be asked.
+export async function newChat(p: Provider, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; code: string; error: string }> {
+  const r = await chatFetch(at(`${API}/new`, p), { method: "POST", headers: H, signal, body: "{}" }).catch(() => null);
+  if (r?.ok) return { ok: true };
+  const j = r ? await r.json().catch(() => ({})) : {};
+  return { ok: false, code: String(j.code || ""), error: String(j.error || (r ? `HTTP ${r.status}` : "")) };
+}
+
 // blockedBy: a limit the page knows of before the service refuses a turn (the
 // website reads the person's own off /v1/me/usage); onTurnEnd: a turn ended here;
 // onReply: the first text of a reply arrived (the trial's clock, issue #3590).
@@ -367,8 +377,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
 
   // 新对话: this side starts over; the other side and the history file stay
   const startNew = useCallback(async () => {
-    const r = await chatFetch(at(`${API}/new`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: "{}" }).catch(() => null);
-    if (!r?.ok) { setNotice(tr("没能开新对话，稍后再试。", "Could not start a new conversation; try again.")); return; }
+    if (!(await newChat(provider, transport.current.signal)).ok) { setNotice(tr("没能开新对话，稍后再试。", "Could not start a new conversation; try again.")); return; }
     setItems([]); setAsks([]); setResume(null);
     await load();
   }, [provider, load]);
@@ -511,5 +520,5 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   });
 
   return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync, owner, handed, takeOver, taking,
-    provider, providers, others, last, startNew };
+    provider, providers, others, last, startNew, loaded };
 }

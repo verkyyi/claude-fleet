@@ -1,6 +1,6 @@
 // NewDialog.tsx — 新建 (moved out of 会话, GR5E C2): the person's words, an
-// optional repo, the agent — one task through the write door. The session
-// list's 新建 opens it until the new-session screen (C3) takes its place.
+// optional repo, the agent — one task through the write door. 会话's 新建 opens
+// it (a task in a repo); the list's 新建 is the new-session screen (C3, /new).
 import { useState, type FC } from "react";
 import { Loader } from "lucide-react";
 import { Button } from "@/components/ui/button";

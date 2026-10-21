@@ -1,0 +1,118 @@
+// new-session.ts — the new-session screen's rules (GR5E C3): what a person
+// picks (对话 | 终端 · Claude Code | Codex | 只开 Shell · a machine · a line),
+// what is remembered of it, which machines a start can go to, why it cannot
+// start now, the one write a terminal start is, and the row it became. Pure:
+// no React, so test/new-session.mjs runs it as it is.
+import { tr } from "../shared/i18n.ts"; // .ts: the test runs this file as it is
+import type { Row } from "./work.ts";
+
+export type Mode = "chat" | "term";
+export type Agent = "claude" | "codex" | "shell";
+export type Choice = { mode: Mode; agent: Agent; machine: string }; // machine "" = the home
+
+// startSession's one shape (the design page's interface): what the screen hands on.
+export type Start = Choice & { words: string };
+
+export const AGENTS: Record<Mode, Agent[]> = { chat: ["claude", "codex"], term: ["claude", "codex", "shell"] };
+
+// A choice that holds: 只开 Shell is the terminal's only; a chat runs on the home only.
+export function fixChoice(c: Partial<Choice> | null | undefined): Choice {
+  const mode: Mode = c?.mode === "term" ? "term" : "chat";
+  const agent: Agent = AGENTS[mode].includes(c?.agent as Agent) ? (c!.agent as Agent) : "claude";
+  const machine = mode === "term" && agent !== "shell" && typeof c?.machine === "string" ? c.machine : "";
+  return { mode, agent, machine };
+}
+
+// What is remembered of the last start (this browser): the choice, never the words.
+export const CHOICE_KEY = "fleet.console.new";
+export function readChoice(raw: string | null): Choice {
+  try { return fixChoice(JSON.parse(raw || "null")); } catch { return fixChoice(null); }
+}
+
+// The home, as /v1/chat/home answers it.
+export type Home = { machine?: string; login?: string; state: string; why?: string };
+export const hasHome = (h: Home | null): h is Home & { machine: string } => !!h?.machine && h.state !== "no_home";
+
+// The person's machines a session can open on (/v1/nodes): their own logins
+// on it, never a client computer or a machine's link row; the home first.
+type Node = { hostname: string; os_user: string; status: string; machine_link?: boolean; compute_off?: boolean };
+type Nodes = { nodes?: Node[]; machines?: { hostname: string; alias?: string; role?: string }[] };
+export type Machine = { hostname: string; label: string; state: "on" | "maint" | "lost"; home: boolean };
+const same = (a: string, b: string) => a.toLowerCase().split(".")[0] === b.toLowerCase().split(".")[0];
+
+export function machinesOf(snap: Nodes | null, logins: { machine: string; login: string }[] | undefined, home: Home | null): Machine[] {
+  const alias = new Map((snap?.machines || []).map((m) => [m.hostname, m.alias || ""]));
+  const client = new Set((snap?.machines || []).filter((m) => m.role === "client").map((m) => m.hostname));
+  const by = new Map<string, Node[]>();
+  for (const n of snap?.nodes || []) {
+    if (n.machine_link || n.compute_off || client.has(n.hostname)) continue;
+    if (logins?.length && !logins.some((p) => p.machine === n.hostname && p.login === n.os_user)) continue;
+    by.set(n.hostname, [...(by.get(n.hostname) || []), n]);
+  }
+  const out: Machine[] = [...by.entries()].map(([hostname, ns]) => ({
+    hostname, label: alias.get(hostname) || hostname,
+    state: ns.some((n) => n.status !== "lost" && n.status !== "maintenance") ? "on" : ns.some((n) => n.status === "maintenance") ? "maint" : "lost",
+    home: hasHome(home) && same(hostname, home.machine),
+  }));
+  if (hasHome(home) && !out.some((m) => m.home)) {
+    out.push({ hostname: home.machine, label: home.machine, state: home.state === "ok" ? "on" : home.state === "maintenance" ? "maint" : "lost", home: true });
+  }
+  return out.sort((a, b) => Number(b.home) - Number(a.home) || a.label.localeCompare(b.label));
+}
+
+// Where a choice opens: a chat and the Shell on the home, always; an agent in
+// a terminal on the machine picked, else the home.
+export function targetOf(c: Choice, machines: Machine[]): Machine | null {
+  if (c.mode === "term" && c.agent !== "shell" && c.machine) {
+    const m = machines.find((x) => same(x.hostname, c.machine));
+    if (m) return m;
+  }
+  return machines.find((m) => m.home) || null;
+}
+
+// Why it cannot start now — said under the cards — or "" when it can.
+export function blocker(c: Choice, machines: Machine[], home: Home | null): string {
+  const t = targetOf(c, machines);
+  if (!t) {
+    if (c.mode === "term" && c.agent !== "shell" && machines.length) return "";
+    return home?.why || tr("你还没有家：家是你有登录、上面开着 fleet 的那台机器。先在一台机器上把 fleet 开起来，再回来新建。",
+      "You have no home yet: it is a machine with your login and fleet running on it. Start fleet on one, then come back.");
+  }
+  // the home's own word wins for the home (the chat's service answers there)
+  const st = t.home && home?.state ? home.state : t.state === "on" ? "ok" : t.state === "maint" ? "maintenance" : "offline";
+  if (st === "maintenance") return t.home
+    ? tr(`你的家 ${t.label} 正在维护，维护结束后就能开。`, `Your home ${t.label} is under maintenance; you can start once it is done.`)
+    : tr(`${t.label} 正在维护，换一台或等它结束。`, `${t.label} is under maintenance; pick another or wait.`);
+  if (st === "offline" || st === "home_down") return t.home
+    ? tr(`你的家 ${t.label} 现在连不上。${c.mode === "chat" ? "对话" : c.agent === "shell" ? "Shell" : "会话"}只在它连着时能开，它一上线就行。`,
+      `Your home ${t.label} is unreachable. ${c.mode === "chat" ? "A chat" : c.agent === "shell" ? "The shell" : "A session"} opens only while it is connected — as soon as it is back.`)
+    : tr(`${t.label} 现在连不上，换一台机器。`, `${t.label} is unreachable; pick another machine.`);
+  if (st === "old_agent" && c.mode === "chat") return tr(`你的家 ${t.label} 上的 fleet 太旧，还不能开对话。更新后再来。`,
+    `fleet on your home ${t.label} is too old for a chat. Update it, then come back.`);
+  return "";
+}
+
+// A terminal session with an agent: one task through the write door, the
+// same road 会话's 新建 takes (worker_start with a coding agent — the hub writes
+// the record first). No words is a plain session that waits for its first line.
+export function startArgs(c: Choice, words: string, target: Machine | null, idem: string): Record<string, unknown> {
+  const w = words.trim();
+  return {
+    kind: "scratch", no_repo: true, coding_agent: c.agent, idempotency_key: idem,
+    ...(w ? { body: w } : {}),
+    ...(target ? { node: target.hostname } : {}),
+  };
+}
+
+// The row a start became: the task record the hub wrote for this idempotency
+// key (its dispatch's request_id — the record is written before the start is
+// placed, so it is in the list at once).
+export function rowForRequest(rows: Row[] | null, idem: string): Row | null {
+  for (const r of rows || []) {
+    try {
+      const p = JSON.parse(r.task?.request_payload || "{}")?.params || {};
+      if (p.dispatch?.request_id === idem) return r;
+    } catch { /* not this one */ }
+  }
+  return null;
+}
