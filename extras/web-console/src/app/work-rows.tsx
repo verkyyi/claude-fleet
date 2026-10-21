@@ -5,11 +5,12 @@
 // list, a session's page and 会话 all read it here; none reads its own copy.
 // It also keeps which rows the person has opened (this browser), so a new or
 // moved-on row reads bold.
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FC, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FC, type ReactNode } from "react";
 import { useSessions, type Board, type SessionRow } from "@/shared/sessions";
 import { useTasks } from "./use-tasks";
 import { boardRows, buildRows, type Row } from "./work";
 import { seenMark } from "./session-list";
+import { NET_BACK } from "@/shared/net";
 
 type WorkRows = {
   rows: Row[] | null;
@@ -27,6 +28,8 @@ const Ctx = createContext<WorkRows | null>(null);
 export const useWorkRows = () => useContext(Ctx)!;
 
 const SEEN_KEY = "fleet.console.seen";
+// hidden this long, the list is read again on the way back
+const BACK_AFTER_MS = 15_000;
 function readSeen(): Record<string, string> | null {
   try { const v = JSON.parse(localStorage.getItem(SEEN_KEY) || "null"); return v && typeof v === "object" ? v : null; } catch { return null; }
 }
@@ -62,6 +65,23 @@ export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }, [seen, rows]);
 
   const reloadAll = useCallback(() => { reload(); tasks.reload(); }, [reload, tasks]);
+  // back from the background (WeChat freezes a hidden page: its stream and
+  // timers stop) or the network back (NetBar): read the list again at once,
+  // so what shows is now, not when the page left (GR5E C8)
+  const again = useRef(reloadAll);
+  again.current = reloadAll;
+  useEffect(() => {
+    let hidAt = 0;
+    const now = () => again.current();
+    const vis = () => {
+      if (document.visibilityState === "hidden") { hidAt = Date.now(); return; }
+      if (hidAt && Date.now() - hidAt >= BACK_AFTER_MS) now();
+      hidAt = 0;
+    };
+    document.addEventListener("visibilitychange", vis);
+    window.addEventListener(NET_BACK, now);
+    return () => { document.removeEventListener("visibilitychange", vis); window.removeEventListener(NET_BACK, now); };
+  }, []);
   const value: WorkRows = {
     rows, board, boardAt, live, tasks, seen, markSeen, reload: reloadAll,
     failed: (failed && !live) || (tasks.failed && !tasks.data), stale: !!(tasks.failed || tasks.data?.stale),
