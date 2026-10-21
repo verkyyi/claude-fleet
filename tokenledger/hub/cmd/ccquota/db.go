@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
 // defaultDBFile is where the hub keeps its database unless told otherwise. It
@@ -46,6 +48,11 @@ func resolveExistingDB(flagValue string) (string, error) {
 	path, err := resolveDB(flagValue)
 	if err != nil {
 		return "", err
+	}
+	if store.UsesPostgres() {
+		// The database is the server CCQUOTA_DB_URL names (claude-fleet#2120),
+		// which only `ccquota hub` creates; store.Open does not use the path.
+		return path, nil
 	}
 	switch _, err := os.Stat(path); {
 	case err == nil:

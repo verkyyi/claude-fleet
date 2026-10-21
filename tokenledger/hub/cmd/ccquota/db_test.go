@@ -100,3 +100,18 @@ func TestResolveExistingDB_HonoursEnvAndDefault(t *testing.T) {
 		t.Errorf("default: got %q, %v; want %q", got, err, defaultDB)
 	}
 }
+
+// On a Postgres hub (CCQUOTA_DB_URL) there is no file to find: the commands
+// that change the hub's database — `ccquota plan` among them — run against the
+// server, not refuse for a missing SQLite path (claude-fleet EEJD).
+func TestResolveExistingDBPostgres(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent.db")
+	t.Setenv("CCQUOTA_DB_URL", "")
+	if _, err := resolveExistingDB(missing); err == nil {
+		t.Fatal("SQLite: a missing database was accepted")
+	}
+	t.Setenv("CCQUOTA_DB_URL", "postgres://hub@db.invalid/ccquota")
+	if got, err := resolveExistingDB(missing); err != nil || got != missing {
+		t.Fatalf("Postgres: %q, %v", got, err)
+	}
+}

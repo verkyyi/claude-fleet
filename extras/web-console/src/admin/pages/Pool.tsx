@@ -64,7 +64,7 @@ import {
   type Target,
   type Window,
 } from "../pool";
-import { planName } from "../plan";
+import { monthlyLabel, planName } from "../plan";
 import { AddSubscriptionDialog } from "./AddSubscriptionDialog";
 
 const POLICY = "/v1/fleet/cred-policy";
@@ -122,7 +122,8 @@ function Bar({ w, skip, wide }: { w: Window | null; skip: number; wide?: boolean
 }
 
 const serviceOf = (s: Sub) => s.prov === "codex" ? "Codex" : "Claude Code";
-const planOf = (s: Sub) => planName(s.prov, s.plan, s.planTier) || t(s.plan ? "pool.plan.unknown" : "pool.plan.none");
+const priceOf = (s: Sub) => monthlyLabel(s.monthly, s.currency, t("pool.plan.per"));
+const planOf = (s: Sub) => [planName(s.prov, s.plan, s.planTier) || t(s.plan ? "pool.plan.unknown" : "pool.plan.none"), priceOf(s)].filter(Boolean).join(" · ");
 // ownerName is a member's own subscription's owner as the people page names them (claude-fleet#4035).
 const ownerName = (w: World, principal: string) => w.users.find((u) => u.principal_id === principal)?.login || principal;
 const uuidOf = (s: Sub) => s.cred?.account_uuid || s.cred?.credential_id || (s.id.startsWith("cred:") || s.id.startsWith("own:") ? String(s.cred?.account_uuid || "").toLowerCase() : s.id.toLowerCase());
@@ -389,6 +390,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
         )}
         <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2.5 text-sm">
           <Field k="pool.plan.raw">{r.plan || "—"}{r.planTier && ` · ${r.planTier}`}</Field>
+          <Field k="pool.plan.monthly">{priceOf(r) || t("pool.plan.none")}</Field>
           <Field k="pool.plan.source">{t(!r.plan ? "pool.plan.none" : r.planSource === "provider" ? "pool.plan.provider" : r.planSource === "admin" ? "pool.plan.admin" : "pool.plan.legacy")}</Field>
           <Field k="pool.plan.observed">{r.planAt ? when(r.planAt) : t("pool.plan.none")}</Field>
           <Field k="pool.web.expiry">{r.cred?.secret_expires_at ? when(r.cred.secret_expires_at) : t("pool.plan.none")}</Field>

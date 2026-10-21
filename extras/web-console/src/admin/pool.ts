@@ -29,6 +29,9 @@ export type PoolCredential = Credential & {
   plan?: string;
   plan_source?: PlanSource;
   plan_at?: string;
+  plan_tier?: string;
+  monthly_cost?: number;
+  currency?: string;
   reauth_required?: boolean;
   refresh_error?: string;
   secret_expires_at?: string;
@@ -72,6 +75,8 @@ export type Sub = {
   planSource?: PlanSource;
   planAt?: string;
   planTier?: string;
+  monthly: number | null; // the plan's price a month now (claude-fleet EEJD)
+  currency: string;
   h5: Window | null;
   h7: Window | null;
   available: boolean;
@@ -103,7 +108,8 @@ export function pct(u: unknown): number | null {
   return Math.min(100, Math.round(n <= 1 ? n * 100 : n));
 }
 
-// windowsOf is a LimitsView's 5-hour and weekly windows, Codex's included.
+// windowsOf is a LimitsView's 5-hour and weekly windows, Codex's included —
+// whole percents, like every percent the console shows (claude-fleet EEJD).
 export function windowsOf(lim?: LimitsBody, percent = false): { h5: Window | null; h7: Window | null } {
   if (!lim || lim.available === false) return { h5: null, h7: null };
   let h5 = lim.five_hour || null;
@@ -113,7 +119,7 @@ export function windowsOf(lim?: LimitsBody, percent = false): { h5: Window | nul
     if (!h5 && (mins === 300 || /5h|five|primary/i.test(w.id || w.label || ""))) h5 = w;
     else if (!h7 && (mins === 10080 || /week|seven|secondary/i.test(w.id || w.label || ""))) h7 = w;
   }
-  const v = (w: any): Window | null => (w ? { p: percent && w.utilization != null ? Math.min(100, Math.max(0, Number(w.utilization))) : pct(w.utilization), resets: w.resets_at || null } : null);
+  const v = (w: any): Window | null => (w ? { p: percent && w.utilization != null ? Math.min(100, Math.max(0, Math.round(Number(w.utilization)))) : pct(w.utilization), resets: w.resets_at || null } : null);
   return { h5: v(h5), h7: v(h7) };
 }
 
@@ -144,7 +150,8 @@ export function subscriptions(p: {
     return { id, label, prov, plan: lim?.plan || c?.plan || meta?.subscription_type || "",
       planSource: lim?.plan ? "provider" : c?.plan_source || "legacy",
       planAt: lim?.plan ? lim.observed_at || "" : c?.plan_at || "",
-      planTier: meta?.rate_limit_tier || "", h5: w.h5, h7: w.h7,
+      planTier: meta?.rate_limit_tier || c?.plan_tier || "",
+      monthly: c?.monthly_cost ?? null, currency: c?.currency || "USD", h5: w.h5, h7: w.h7,
       available: !!lim && lim.available !== false, reason: lim?.reason || "",
       sessions: (p.live?.sessions || []).filter(s => s.account === id).length,
       cred: c, paused: !!c && !owner && paused.has(c.account), managed: !!c,

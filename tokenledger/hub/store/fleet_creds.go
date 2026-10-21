@@ -83,6 +83,9 @@ const (
 	// credential belongs to (claude-fleet#2169) — no secret changed hands.
 	// Detail names the account_uuid, never anything sealed.
 	CredBind = "bind"
+	// CredPlan: an admin recorded which subscription plan (and tier) an
+	// existing credential is on (claude-fleet EEJD). Detail names the plan.
+	CredPlan = "plan"
 	// CredPolicy: an admin set or cleared a subscription allowlist
 	// (claude-fleet#3043) — a machine's or a person's. Detail names the
 	// scope and the subscription IDs, never a secret.
