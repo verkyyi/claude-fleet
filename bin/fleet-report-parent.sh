@@ -651,9 +651,17 @@ envelope() {
     # formatting nicety — every line here is context the parent did not choose to
     # spend. header + state + summary + `no reply needed` ⇒ 4 lines for the usual
     # one-line summary, 6 at the absolute widest.
-    # `<`/`>` stripped for the same reason the title is: a summary is model-written
-    # text and must not be able to close the peer envelope it rides inside.
-    sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)
+    # Cut by CHARACTER at a sentence end (bin/fleet_report_clip.py, T803 — `cut -c`
+    # counted bytes on a Mac and split Chinese mid-character); a cut summary ends
+    # with 「（全文：fleet-id.sh get <code>）」 when this session's own result (id_result,
+    # below) records the whole text. `<`/`>` stripped for the same reason the title
+    # is: a summary is model-written text and must not close the peer envelope.
+    _code=''
+    if [ -z "$WIN" ] && fleet_is_fid "$selffid"; then
+      _code=$(bash "$BIN/fleet-id.sh" short "$selffid" 2>/dev/null) || _code=''
+    fi
+    sum=$(printf '%s' "$SUMMARY" | python3 "$BIN/fleet_report_clip.py" "$_code" 2>/dev/null) \
+      || sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)   # no clipper: the old cut
     [ -n "$sum" ] && msg="$msg"$'\n'"summary: $sum"
   fi
   # The language rule (issue #620) rides ON the `no reply needed` line rather than

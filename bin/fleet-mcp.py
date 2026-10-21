@@ -1401,7 +1401,7 @@ TOOLS = {
             "outcome": {"type": "string", "enum": ["succeeded", "failed"],
                         "description": "Explicit final work result for an accepted task, including no-PR tasks. Needs summary; does not stop its native session."},
             "pr": {"type": "integer", "minimum": 1, "description": "The PR number (merged / failed)."},
-            "summary": {"type": "string", "description": "1-3 lines: what changed, what the parent must know."},
+            "summary": {"type": "string", "description": "1-3 lines. Line 1 (≤120 chars): result · PR · what the person must do · where the screenshots / evidence are; detail after. The envelope keeps ≤200 chars a line and points at the full text."},
             "dry_run": {"type": "boolean", "description": "Print the target and the envelope; send nothing."}},
             "required": ["state"], "additionalProperties": False}}),
     "ask": (tool_ask, {

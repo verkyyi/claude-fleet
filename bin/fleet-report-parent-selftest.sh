@@ -509,6 +509,32 @@ assert "state: FAILED · branch issue-517" in c, "a failed report must render FA
 PY
 ok
 
+# --- a long Chinese summary is cut by CHARACTER, at a sentence end (T803) --------
+# `cut -c1-200` counted bytes on a Mac: ~65 Chinese characters kept, the last one
+# split in half. bin/fleet_report_clip.py counts characters and ends at 。 with …
+b=$(frames)
+zh=$(python3 -c 'print("合并 PR #5200：回报按字符截断，不切半个字。" * 20, end="")')
+RUN --win "$CHILD" --state merged --summary "$zh" >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(frames)" -gt "$b" ] && break; sleep 0.3; done
+python3 - "$INBOX_LOG" <<'PY' || fail "a long Chinese summary must be cut by character at a sentence end (see above)"
+import json, sys
+frames = [json.loads(l) for l in open(sys.argv[1]).read().split("\n") if l.strip()]
+c = [f for f in frames if f.get("type") == "user"][-1]["message"]["content"]
+line = [l for l in c.split("\n") if l.startswith("summary: ")][0][len("summary: "):]
+assert "�" not in c, "no half character: %r" % line
+assert 150 <= len(line) <= 200, "kept by character, not byte (~65 before): %d %r" % (len(line), line)
+assert line.endswith("。…"), "cut at a sentence end and marked: %r" % line
+assert "全文" not in line, "--win (a reaper's backstop) records no result to point at: %r" % line
+PY
+ok
+# …and the pointer to the whole text rides only a summary that was cut
+CLIP="$BIN/fleet_report_clip.py"
+eq "a short summary is untouched" '短的回报' "$(printf '短的回报' | python3 "$CLIP" K3F9)"
+out=$(printf '%s' "$zh" | python3 "$CLIP" K3F9)
+has '。…（全文：fleet-id.sh get K3F9）' "$out" || fail "a cut summary must name its full text" "$out"
+out=$(printf 'a\nb\nc\nd' | python3 "$CLIP" K3F9)
+eq "a 4th line is cut and pointed at" "$(printf 'a\nb\nc（全文：fleet-id.sh get K3F9）')" "$out"
+
 # --- the frame cannot be closed from inside it ----------------------------------
 # A window name is operator-renameable (⌃e) and a summary is model-written: neither
 # may close the "…" title or the <cross-session-message> envelope it rides in.
