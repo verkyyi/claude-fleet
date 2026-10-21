@@ -62,6 +62,7 @@ import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCoo
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
   CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType, WEB_NOTE_V, webNoteBlock, NOTE_RE } from "./lib.mjs";
+import { codexSide } from "./codex.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -79,6 +80,8 @@ const BIND = "127.0.0.1";                              // never configurable
 const HOSTS = (E.FLEET_WEBCHAT_HOSTS || "").split(",").map((s) => s.trim()).filter(Boolean);
 const CWD = E.FLEET_WEBCHAT_CWD || E.HOME;
 const CLAUDE = E.FLEET_WEBCHAT_CLAUDE || "";
+// the login's own codex (task R9A2): the conversation's Codex side; none ⇒ Claude only, as before
+const CODEX = E.FLEET_WEBCHAT_CODEX || "";
 const SESSION_CRED = E.FLEET_WEBCHAT_SESSION_CRED || join(HERE, "../../bin/fleet-session-cred.sh");
 const SDK_PATH = E.FLEET_WEBCHAT_SDK || "";
 const ASK_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_ASK_SECS || 1800) * 1000;
@@ -819,6 +822,17 @@ function pageItem(id, i, cwd) {
   return it;
 }
 const SHOW_PAGE = "mcp__fleet_chat__show_page";
+// page_target's answer and show_page's bookkeeping — both sides' (the Codex side calls them as its own tools)
+function pageTarget(file) {
+  const real = (() => { try { return realpathSync(String(file || "")); } catch { return String(file || ""); } })();
+  return { folder: PAGE_FOLDER, folder_id: pages.folder_id || null, proposal_id: pages.files[real] || null,
+    visibility: "private (never change it)", embed_origin: pageOrigin || null };
+}
+function pageShown(a) {
+  if (a?.folder_id && !pages.folder_id) pages.folder_id = String(a.folder_id).slice(0, 64);
+  if (a?.file && a?.proposal_id) { try { pages.files[realpathSync(String(a.file))] = String(a.proposal_id).slice(0, 64); } catch { /* gone */ } }
+  savePages();
+}
 let zodP = null;
 // zod, the SDK's own (its tool() takes a zod shape); null where it is not beside it
 function zod() {
@@ -842,11 +856,7 @@ async function pageTools(S) {
     "Once it is ready and embed_origin is answered: call space preview_version(version_id, embed_origin) and pass its " +
     "embed.url and embed.expires_at to show_page as embed_url / embed_expires — the card previews the page in place.",
     shape((z) => ({ file: z.string().describe("absolute path of the HTML file") })),
-    async (a) => {
-      const real = (() => { try { return realpathSync(String(a?.file || "")); } catch { return String(a?.file || ""); } })();
-      return { content: [{ type: "text", text: JSON.stringify({ folder: PAGE_FOLDER, folder_id: pages.folder_id || null,
-        proposal_id: pages.files[real] || null, visibility: "private (never change it)", embed_origin: pageOrigin || null }) }] };
-    });
+    async (a) => ({ content: [{ type: "text", text: JSON.stringify(pageTarget(a?.file)) }] }));
   const show = S.tool("show_page",
     "Show the person a card for a web page you published to their 活页: they tap it to open the page. Call it after " +
     "publish_file (status ready, or review while it waits), with the page's link (its default_url / url), the proposal_id and " +
@@ -858,12 +868,7 @@ async function pageTools(S) {
       folder_id: z.string().optional(), preview: z.string().optional(), note: z.string().optional(),
       embed_url: z.string().optional(), embed_expires: z.string().optional(),
     })),
-    async (a) => {
-      if (a?.folder_id && !pages.folder_id) pages.folder_id = String(a.folder_id).slice(0, 64);
-      if (a?.file && a?.proposal_id) { try { pages.files[realpathSync(String(a.file))] = String(a.proposal_id).slice(0, 64); } catch { /* gone */ } }
-      savePages();
-      return { content: [{ type: "text", text: "shown to the person as a card" }] };
-    });
+    async (a) => { pageShown(a); return { content: [{ type: "text", text: "shown to the person as a card" }] }; });
   return { fleet_chat: S.createSdkMcpServer({ name: "fleet_chat", version: "1.0.0", tools: [info, show] }) };
 }
 async function chatTools(S, details) {
@@ -884,25 +889,33 @@ function askEvent(rid, a) {
     : { t: "ask", rid, ...id, kind: "permission", tool: a.name, summary: toolSummary(a.name, a.input) };
 }
 
-async function turn(req, res, person) {
+// a turn's request: its words, the person's pictures (task T773 ③: a few, of a
+// type the page shows, each a real image) — or the refusal already sent
+async function turnBody(req, res) {
   let body;
-  try { body = await readJson(req, TURN_MAX); } catch { return send(res, 413, { error: "图太大：一条消息连图带字最多 1 MB" }); }
+  try { body = await readJson(req, TURN_MAX); } catch { send(res, 413, { error: "图太大：一条消息连图带字最多 1 MB" }); return null; }
   const text = String(body.text || "").trim();
-  const model = body.model == null || body.model === "" ? DEFAULT_MODEL : String(body.model);
-  if (!modelAllowed(model)) { log("model_refused", { model: model.slice(0, 64) }); return send(res, 400, { error: "model not allowed" }); }
-  // the person's pictures (task T773 ③): a few, of a type the page shows, each a real image
   const pics = Array.isArray(body.images) ? body.images : [];
-  if (pics.length > PICS_PER_TURN) return send(res, 400, { error: `一条消息最多 ${PICS_PER_TURN} 张图` });
+  if (pics.length > PICS_PER_TURN) { send(res, 400, { error: `一条消息最多 ${PICS_PER_TURN} 张图` }); return null; }
   const images = [];
   for (const g of pics) {
     const b = { type: "image", source: { type: "base64", media_type: String(g?.media_type || ""), data: String(g?.data || "") } };
     const img = imageBlockBytes(b);
-    if (!img || !imageSize(img.buf, img.ext).w) return send(res, 400, { error: "不是能看的图片（png / jpeg / gif / webp）" });
+    if (!img || !imageSize(img.buf, img.ext).w) { send(res, 400, { error: "不是能看的图片（png / jpeg / gif / webp）" }); return null; }
     images.push(b);
   }
-  if (!text && !images.length) return send(res, 400, { error: "empty" });
+  if (!text && !images.length) { send(res, 400, { error: "empty" }); return null; }
   // the page's own origin: the one a 活页 embed link is minted for (task T773 ④)
   if (typeof body.origin === "string" && ORIGIN_RE.test(body.origin)) pageOrigin = body.origin;
+  return { body, text, images };
+}
+
+async function turn(req, res, person) {
+  const tb = await turnBody(req, res);
+  if (!tb) return;
+  const { body, text, images } = tb;
+  const model = body.model == null || body.model === "" ? DEFAULT_MODEL : String(body.model);
+  if (!modelAllowed(model)) { log("model_refused", { model: model.slice(0, 64) }); return send(res, 400, { error: "model not allowed" }); }
   if (live) return send(res, 409, { error: "还在回复上一句" });
   const S = await sdk().catch((e) => e);
   if (S instanceof Error) return send(res, 503, { error: S.message });
@@ -1025,6 +1038,8 @@ async function turn(req, res, person) {
     const ls = live.listeners;
     live = null;
     for (const r of ls) if (!r.writableEnded) r.end();
+    conv.last = tid;                                     // the page's 「new reply」 mark (task R9A2)
+    saveConv();
     log("turn_end", { session: conv.session, used: conv.ctx.used, window: conv.ctx.window });
     carryOut();
     touch();
@@ -1095,6 +1110,34 @@ async function importConv(body) {
 }
 
 // ---- routes -------------------------------------------------------------------
+// ---- the Codex side (task R9A2): its own conversation on the same home ------------
+const codex = codexSide({ E, STATE, CWD, CODEX, SESSION_CRED, MEDIA, IMAGE_EXT_MIME, IMAGES_PER_REPLY, ASK_TIMEOUT_MS, WARM_IDLE_MS,
+  run, log, parseMint, liveCreds, newSecret, send, touch,
+  redactLine: (o) => redact(JSON.stringify(o), [...liveCreds, ADMIN]),
+  keepImage, imageItems, capImages, filesOf, saveRefs, pageItem, pageTarget, pageShown,
+  budgetRefusal, setBudget, budgetView, budget: () => budget });
+const PROVIDERS_RE = /^(claude|codex)$/;
+// what a side's page shows of the other one: running now · its last finished turn
+const sides = () => ({ providers: codex.available() ? ["claude", "codex"] : ["claude"],
+  claude: { busy: !!live, last: conv.last || "" }, codex: codex.side() });
+async function codexTurn(req, res, person) {
+  const tb = await turnBody(req, res);
+  if (!tb) return;
+  const model = tb.body.model == null ? "" : String(tb.body.model).slice(0, 80);
+  return codex.turn(res, { text: tb.text, model, images: tb.images, person });
+}
+// 新对话 on the Claude side: the session (and its chain) put away, kept; the next
+// turn starts a new one. The Codex side is not touched.
+function newClaude() {
+  if (live || maint) return false;
+  if (conv.session || conv.chain.length) conv.put_away = [...(conv.put_away || []), { session: conv.session, cwd: conv.cwd, chain: conv.chain, at: new Date().toISOString() }].slice(-200);
+  closeWarm("new conversation");
+  Object.assign(conv, { session: "", chain: [], seed: "", ctx: { used: 0, window: 0 }, ctxKey: "", note: "", last: "" });
+  saveConv();
+  log("new_conversation", { provider: "claude" });
+  return true;
+}
+
 async function handle(req, res) {
   const port = SOCKET ? 0 : server.address().port;
   if (!SOCKET && !hostAllowed(req.headers.host, port, HOSTS)) return send(res, 421, { error: "unknown host" });
@@ -1145,13 +1188,27 @@ async function handle(req, res) {
     if (f) return sendFile(req, res, f, p.startsWith("/assets/") ? "private, max-age=31536000, immutable" : "private, max-age=3600");
     return send(res, 404, { error: "not found" });
   }
+  // the Codex side (task R9A2): ?provider=codex; none or claude = the Claude side, as before
+  const provider = u.searchParams.get("provider") || "claude";
+  if (p.startsWith("/api/") && !PROVIDERS_RE.test(provider)) return send(res, 400, { error: "unknown provider" });
+  if (provider === "codex") {
+    const sd = sides();
+    if (!codex.available() && p !== "/api/file") return send(res, 404, { error: "这台机器上没有 Codex" });
+    if (p === "/api/conversation" && req.method === "GET") return send(res, 200, { ...await codex.conversation(), providers: sd.providers, others: { claude: sd.claude } });
+    if (p === "/api/turn" && req.method === "POST") return codexTurn(req, res, person);
+    if (p === "/api/stop" && req.method === "POST") { const ok = await codex.stop(String((await readJson(req)).turn || "")); return send(res, ok ? 200 : 404, { ok }); }
+    if (p === "/api/answer" && req.method === "POST") { const ok = codex.answer(await readJson(req)); return send(res, ok ? 200 : 404, { ok }); }
+    if (p === "/api/new" && req.method === "POST") { const ok = codex.newConversation(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
+  }
+  if (p === "/api/new" && req.method === "POST") { const ok = newClaude(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
   if (p === "/api/conversation" && req.method === "GET") {
     // a page reading the conversation is about to talk: have the credential ready
     if (SDK_PATH && !live) { credFor().catch(() => {}); prewarm(); }
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",
       asks: live ? [...live.asks.entries()].map(([rid, a]) => askEvent(rid, a)) : [],
-      models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600) });
+      models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600),
+      last: conv.last || "", ...(codex.available() ? { providers: sides().providers, others: { codex: codex.side() } } : {}) });
   }
   if (p === "/api/turn" && req.method === "POST") return turn(req, res, person);
   if (p === "/api/file" && req.method === "GET") {
@@ -1235,13 +1292,13 @@ async function shutdown(code, ev) {
   if (SOCKET) { try { unlinkSync(SOCK); } catch { /* gone */ } }
   // the conversation's credential goes with the service (bounded: a stuck proxy
   // never holds the exit — the proxy drops it with this pid anyway)
-  await Promise.race([dropCred(ev), new Promise((r) => setTimeout(r, 5000))]);
+  await Promise.race([Promise.all([dropCred(ev), codex.close()]), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(code);
 }
 if (SOCKET && IDLE_SECS > 0) {
   setInterval(() => {
-    if (live || maint || Date.now() - lastBusy < IDLE_SECS * 1000) return;
-    server.getConnections((err, n) => { if (!err && n === 0 && !live && !maint) shutdown(IDLE_RC, "idle_exit"); });
+    if (live || maint || codex.busy() || Date.now() - lastBusy < IDLE_SECS * 1000) return;
+    server.getConnections((err, n) => { if (!err && n === 0 && !live && !maint && !codex.busy()) shutdown(IDLE_RC, "idle_exit"); });
   }, Math.min(60, Math.max(0.2, IDLE_SECS / 4)) * 1000).unref();
 }
 for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => shutdown(0, "stop"));

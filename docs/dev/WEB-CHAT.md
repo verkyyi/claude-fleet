@@ -224,6 +224,47 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 这些都是 Claude Code 自己的记录（`~/.claude/projects/<目录>/<id>.jsonl`）。在终端里用
   `cd <目录> && claude --resume <id>` 可以读到、接着用：本机页面底部写着这条命令，官网 `/chat` 收在头像菜单里。
 
+## 两个助手：Claude Code 与 Codex（R9A2，issue #4370 B）
+
+页面顶部「Claude Code ｜ Codex」切换，每个助手各一段持续对话，同一个家、同一本额度账。家机器这一半是
+`extras/web-chat/codex.mjs`（`server.mjs` 只多一个路由分支）：
+
+- **怎么区分**：请求带 `?provider=codex` 就是 Codex 那一段；不带（或 `claude`）就是 Claude，和以前一字不差。
+  别的值 400；这台机器没有 codex（`fleet-webchat.sh` 的 `codex_bin`，传进 `FLEET_WEBCHAT_CODEX`）时
+  `?provider=codex` 一律 404，Claude 的 `/api/conversation` 也不带 `providers` / `others`——页面据此不显示切换排。
+- **跑在哪**：`codex app-server`（stdio 上的 JSON-RPC）。第一轮（或页面第一次读 Codex 那一段、要模型列表）才起，
+  最后一轮结束后 `FLEET_WEBCHAT_WARM_SECS`（600 s）空闲就关；服务的 2 小时空闲退出把它也算上。不新增常驻进程。
+- **凭据**：每次起 app-server 时 `fleet-session-cred.sh mint --provider codex`，再 `codex-home` 一个不含凭据的
+  `CODEX_HOME`，`model_provider="fleet"` 指向代理的 `/codex`（`env_key=FLEET_CODEX_SESSION_CRED`）——与
+  `bin/fleet-codex.sh` 同一条路；凭据只在子进程环境里，app-server 关时 revoke。代理不在（rc 3/4）就用这个登录自己的 Codex。
+- **批准与提问**：`sandbox=workspace-write` + `approval_policy=on-request`——家目录里放手做，要出去（联网、写家目录以外）
+  才问（发起人在设计页定的）。`item/commandExecution/requestApproval` · `item/fileChange/requestApproval` ·
+  `item/permissions/requestApproval` → `{t:"ask", kind:"permission", id:<item id>}`；`item/tool/requestUserInput` →
+  `kind:"question"`，答案按问题的 id 回填。允许 = `accept`，拒绝 = `decline`（不给 decline 时 `cancel`）；
+  `ASK_TIMEOUT` 没人点按拒绝。
+- **流**：与 Claude 一样的词：`agentMessage` 增量 → `text`；`commandExecution` → `Shell · <命令>`，`fileChange` → `Edit · <路径>`，
+  MCP / 网页搜索各一步；`imageView`（view_image）、`imageGeneration`、MCP 结果里的图 → `image`（存进 `media/`）；
+  `page_target` / `show_page` 是 thread 开始时给的 dynamic tools（`initialize` 打开 `experimentalApi`），`show_page` → `page` 卡片；
+  `turn/completed` → `done` / `stopped` / `error`。停止键 = `turn/interrupt`。
+- **额度**：代理的 403 `person_budget_exceeded` 在 Codex 那里是 `error` 通知 / `turn/completed` 的 `error.message`，
+  交给同一个 `budgetRefusal` → 一行 `{t:"error", code:"budget"}`，写同一个 `budget.json`：两边一起显示「额度用完」。
+- **对话与历史**：`conversation-codex.json`（`thread` · `cwd` · `put_away` · `last` · `model`）；每一轮页面看到的步骤
+  追加进 `codex/<thread>.ndjson`（0600，随 `service move` 一起搬），读回就读它。Codex 自己的记录照常在
+  `~/.codex/sessions/**/rollout-*-<thread>.jsonl`：终端里 `cd <cwd> && codex resume <thread>` 接得上。
+  重启服务后下一轮 `thread/resume` 同一个 thread。模型列表是 app-server 的 `model/list`（缓存在 `codex-models.json`），
+  默认是它标的默认——跟家机器的 Codex 设置走。
+- **新对话**：`POST /api/new[?provider=codex]` 只动那一边：Codex 的 thread、Claude 的 session（连同 chain）记进
+  `put_away`（留档，不删），下一轮新开；另一边一字不动。正在回复时 409。
+- **另一边的状态**：每一边的 `/api/conversation` 带 `last`（最后一轮的号）和 `others.<另一边>` `{busy, last}`，
+  页面据此在另一边的标签上亮点（在跑：跳动；有没看过的回复：静止）。
+
+### 接口约定（给「在终端里继续」与两边互斥）
+
+- 会话号与目录：`GET /api/conversation[?provider=codex]` 的 `session`（Claude 的 session id / Codex 的 thread id）和 `cwd`。
+  终端里接上：Claude `cd <cwd> && claude --resume <session>`，Codex `cd <cwd> && codex resume <session>`。
+- 正在跑：同一响应的 `busy`（及 `turn`）；`busy` 为真时不要在别处接着写这一段。这一版的锁只在服务进程里（`live`），
+  终端那一侧的锁由另一个任务接上。
+
 ## 浏览器上下文（#4034）
 
 模型知道人此刻从哪儿、用什么在说话：
@@ -360,6 +401,10 @@ A–G 在 `FLEET_WEBCHAT_LOCAL=1` 下跑。H：socket 0600 / 目录 0700（放�
 同一浏览器再问不加、换城市再加，页面上看不到这一行，`browser_context` 答得出完整 IP 和 UA，`server.log` 里都没有。
 入口那一半（浏览器伪造的 `X-Fleet-Client` 被换掉、XFF 取哪一个、xdb 读法）是 Go 的 `chat_client_test.go`。
 `--only=socket|budget|context|local` 只跑其中几段（演练用）。
+
+Codex 那一边是 `bin/fleet-webchat-codex-selftest.sh`：假的 `codex app-server`（按 0.162 实录的 JSON-RPC 讲话）驱动
+`server.mjs` + `codex.mjs`——两边各自的对话、凭据只在子进程环境里、workspace-write + on-request、流里的每一种步骤、
+读回、批准（accept / decline / cancel）、提问按 id 回填、停止、额度、新对话只清一边、重启接着同一个 thread、凭据不出现在任何响应或文件里。
 
 ## 不在这一版
 
