@@ -623,3 +623,47 @@ func send(t *testing.T, c *websocket.Conn, typ websocket.MessageType, b []byte) 
 		t.Fatal(err)
 	}
 }
+
+// term-own-second-machine (task C8X3): a session on another of the person's OWN
+// active logins — their second machine, not their home — opens in the browser
+// terminal; the same session, the login not theirs, stays not_yours.
+func TestTermRelayReachesOwnWorkerOffHome(t *testing.T) {
+	r := newTermRig(t, true)
+	setChatHome(t, r.h, pAlice, "elsewhere", "alice") // home is another machine now
+	if c, st, code := r.dialTerm(t, "worker="+r.wid, r.alice, r.origin, nil); c != nil || st != http.StatusNotFound || code != "not_yours" {
+		if c != nil {
+			c.CloseNow()
+		}
+		t.Fatalf("a login not hers: %d %s, want 404 not_yours", st, code)
+	}
+	person, err := r.h.Srv.Store.AdoptPrincipal(pAlice, r.login, "Second machine", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.h.Srv.Store.AdoptAccount(person, r.host, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	c, st, code := r.dialTerm(t, "worker="+r.wid, r.alice, r.origin, nil)
+	if c == nil {
+		t.Fatalf("her own second machine refused: %d %s", st, code)
+	}
+	readCtl(t, c, "ready")
+	send(t, c, websocket.MessageBinary, []byte("off-home\n"))
+	readOut(t, c, "got:off-home")
+	c.Close(websocket.StatusNormalClosure, "")
+	// the personal terminal still goes home only — never to the second machine
+	if c, _, code := r.dialTerm(t, "target=personal", r.alice, r.origin, nil); c != nil || code != "home_down" {
+		if c != nil {
+			c.CloseNow()
+		}
+		t.Fatalf("personal went off home: code %q, want home_down", code)
+	}
+	var rows []store.FleetTermSession
+	waitFor(t, 5*time.Second, "the audit row", func() bool {
+		rows, _ = r.h.Srv.Store.FleetTermSessions(pAlice, 5)
+		return len(rows) >= 1
+	})
+	if rows[0].Machine != r.host || rows[0].Login != r.login {
+		t.Fatalf("audit row = %+v, want %s/%s", rows[0], r.host, r.login)
+	}
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { Layers, List, TerminalSquare } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -8,8 +8,9 @@ import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
 import { browserClient, type BrowserOffer } from "@/shared/terminal-client";
-import { connectTerminal, forgetTerminalGeneration, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey } from "@/shared/terminal";
+import { connectTerminal, forgetTerminalGeneration, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey, terminalLink } from "@/shared/terminal";
 import { touchWheel } from "@/shared/touch-wheel";
+import { webGoTarget } from "@/shared/web-go";
 import { usePage } from "../Shell";
 
 type View = TerminalState & { destination?: string };
@@ -46,6 +47,8 @@ export default function TerminalPage() {
   // An explicit empty/invalid worker remains explicit and is refused server-side.
   const worker = query.get("worker");
   const location = useLocation();
+  const navigate = useNavigate();
+  const go = useRef(navigate); go.current = navigate;
   const title = worker === null ? tr("我的终端", "My Terminal")
     : typeof location.state?.title === "string" ? location.state.title : tr("会话终端", "Session terminal");
   const [attempt, retry] = useState(0);
@@ -107,6 +110,12 @@ export default function TerminalPage() {
       current.open(host);
       current.attachCustomKeyEventHandler((event) => terminalKey(event, composing));
       current.onData((text) => { if (term === current) input(text); });
+      // ⌘P picked a session on another of your machines (C8X3): open its terminal
+      current.parser.registerOscHandler(7502, (data) => {
+        const to = term === current ? webGoTarget(data) : null;
+        if (to) go.current(terminalLink(to));
+        return true;
+      });
       current.textarea?.addEventListener("compositionstart", () => { composing = true; });
       current.textarea?.addEventListener("compositionend", () => { composing = false; });
       // A phone's drag is the wheel while tmux reads the mouse (C8X3): history
@@ -137,8 +146,10 @@ export default function TerminalPage() {
       if (response.status === 401) { fail("login"); return; }
       const home = await response.json();
       if (!response.ok) { fail(home.code || "refused"); return; }
-      setView((v) => ({ ...v, destination: home.machine }));
-      if (home.state !== "ok") { fail(home.state || "refused"); return; }
+      // A session's terminal goes where the session runs — home or another of
+      // your machines (C8X3): only the personal terminal waits on home.
+      if (worker === null) setView((v) => ({ ...v, destination: home.machine }));
+      if (worker === null && home.state !== "ok") { fail(home.state || "refused"); return; }
       connection = connectTerminal(worker, {
         signal: abort.signal, renew,
         onState(state) {
