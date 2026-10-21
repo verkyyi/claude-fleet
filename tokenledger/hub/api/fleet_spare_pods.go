@@ -493,8 +493,8 @@ func (s *Server) claimClusterSpare(principal, displayName, actor, cluster string
 // DNS name follows (fleet_door.go). Pushed at once. A 家 they already have on
 // a machine where their login is still active stays where it is (task KEA0):
 // a home only moves by hand (entryEnsureHome) — a pod handed beside it once
-// took Arvin's 家 off his Mac mini, and with the pod asleep his web chat, web
-// terminal and door all answered home_down while his machine sat idle.
+// took a member's 家 off their machine, and with the pod asleep their web
+// chat, web terminal and door all answered home_down.
 func (s *Server) homeOnPod(person, pod, login string, now time.Time) {
 	if cur, ok, err := s.Store.EntryHomeOf(person); err == nil && ok && s.homeHeld(person, cur) {
 		log.Printf("fleet: %s's 家 stays on %s/%s (pod %s handed beside it)", person, cur.Machine, cur.Login, pod)
