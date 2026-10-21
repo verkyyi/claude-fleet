@@ -134,6 +134,9 @@ type Server struct {
 	podRoll         podRollBook
 	podRollStable   func() string
 	podRollRuntimes func(now time.Time) map[string]podRuntime
+	// serviceHold is each service_failed subject's failed / well run
+	// (fleet_services.go, task CVC4).
+	serviceHold serviceHoldBook
 	// podGone is when each cluster pod was last seen standing
 	// (fleet_cluster_pod_gone.go, claude-fleet#4887).
 	podGone podGoneBook

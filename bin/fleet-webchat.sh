@@ -138,9 +138,11 @@ serve() { # the service's command: the socket, in the foreground
   deps
   cd "$STATE" || die "cannot enter $STATE"
   # an old orphan of this service still answering on the socket (a release switch
-  # left it, PPID 1) is stopped first; anything else holding it is named, rc 3 (BZGP)
+  # left it, PPID 1) is stopped first — or one whose `fleet-webchat.sh serve` shell
+  # init adopted, its node child still on the socket (CVC4); anything else
+  # holding it is named, rc 3 (BZGP)
   python3 -I "$BIN/fleet-service-takeover.py" --name webchat --socket "$STATE/chat.sock" --pidfile "$STATE/pid" \
-    --match extras/web-chat/server.mjs --match --socket || exit 3
+    --match extras/web-chat/server.mjs --match --socket --shell-match fleet-webchat.sh --shell-match serve || exit 3
   server_env "$NODE" "$APP/server.mjs" --socket
 }
 

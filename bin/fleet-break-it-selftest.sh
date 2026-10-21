@@ -6703,6 +6703,66 @@ drill_service_orphan_holds_socket() {
   SECS=$(since "$t0")
 }
 
+# service-orphan-shell-holds-socket (task CVC4, macmini 2026-10-21): the old
+# copy's node child was NOT itself an orphan — its `fleet-webchat.sh serve`
+# shell was (PPID 1), the node under it still answering chat.sock — so BZGP's
+# takeover called it «不是本服务的孤儿» and the managed copy exited 3 for hours.
+# serve now walks the holder's parents: an init-adopted ancestor whose argv is
+# the service's shell (fleet-webchat.sh serve, our uid) makes it an orphan too.
+drill_service_orphan_shell_holds_socket() {
+  CAP=20; local d t0 hp sp reaper out
+  d=$(mktemp -d /tmp/cvc4.XXXXXX) || { WHY="no temp dir"; return 1; }
+  t0=$(now)
+  mkdir -p "$d/home" "$d/tools" "$d/old/bin" "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk"
+  chmod 700 "$d/conf/webchat"
+  printf '#!/bin/sh\nexit 0\n' > "$d/tools/npm"
+  printf '#!/bin/sh\necho started > "%s/node.ran"\n' "$d" > "$d/tools/node"
+  chmod +x "$d/tools/npm" "$d/tools/node"
+  : > "$d/conf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+  cp "$ROOT/extras/web-chat/package-lock.json" "$d/conf/webchat/deps/"
+  printf '%s\n' 'import os, signal, socket, sys' 'signal.alarm(60)' \
+    's = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)' \
+    'open(sys.argv[2], "w").write("%d\n" % os.getpid())' \
+    'while True:' '    c, _ = s.accept(); c.close()' > "$d/old.py"
+  # the old copy: its serve shell, the server its child (not exec'd)
+  printf '#!/bin/bash\npython3 "%s" "%s" "%s" /old/runtime/extras/web-chat/server.mjs --socket\n: done\n' \
+    "$d/old.py" "$d/conf/webchat/chat.sock" "$d/conf/webchat/pid" > "$d/old/bin/fleet-webchat.sh"
+  ( bash "$d/old/bin/fleet-webchat.sh" serve </dev/null >/dev/null 2>&1 & )
+  for _ in $(seq 1 50); do [ -s "$d/conf/webchat/pid" ] && break; sleep 0.1; done
+  hp=$(cat "$d/conf/webchat/pid" 2>/dev/null)
+  [ -n "$hp" ] || { WHY="the old copy did not come up"; rm -rf "$d"; return 1; }
+  sp=$(ps -o ppid= -p "$hp" | tr -d ' ')
+  reaper=$(ps -o ppid= -p "$sp" | tr -d ' ')
+  out=$(env -i HOME="$d/home" PATH="$d/tools:/usr/bin:/bin" FLEET_CONF_DIR="$d/conf" \
+        FLEET_SERVICE_TAKEOVER_REAPER="$reaper" FLEET_SERVICE_TAKEOVER_WAIT=2 \
+        bash "$ROOT/bin/fleet-webchat.sh" serve 2>&1)
+  if kill -0 "$hp" 2>/dev/null; then kill -9 "$hp" "$sp" 2>/dev/null; WHY="the old copy still holds the socket: $out"; rm -rf "$d"; return 1; fi
+  for _ in $(seq 1 25); do kill -0 "$sp" 2>/dev/null || break; sleep 0.2; done
+  if kill -0 "$sp" 2>/dev/null; then kill -9 "$sp" 2>/dev/null; WHY="the old serve shell still runs: $out"; rm -rf "$d"; return 1; fi
+  [ -f "$d/node.ran" ] || { WHY="serve did not start the server after the takeover: $out"; rm -rf "$d"; return 1; }
+  case "$out" in *"停掉了旧孤儿（pid ${hp} · "*) ;; *) WHY="serve did not say what it stopped: $out"; rm -rf "$d"; return 1 ;; esac
+  rm -rf "$d"
+  WHAT='旧副本的 serve 壳成了孤儿（PPID 1）、它的 node 子进程还占着 chat.sock：serve 沿父链认出是本服务留下的，停掉 node 和壳、说清停了谁，再起受管的那份'
+  SECS=$(since "$t0")
+}
+
+# service-alert-flaps (task CVC4): a service the daemon restarts every few
+# minutes raised and cleared service_failed once each per restart (7 and 7 in
+# 37 minutes). The hub now holds a run 10 minutes each way — Go
+# (TestServiceAlertHoldsTenMinutes), held by name, run when a toolchain is here.
+drill_service_alert_flaps() {
+  CAP=120; local t0
+  t0=$(now)
+  grep -q '^func TestServiceAlertHoldsTenMinutes(' "$ROOT/tokenledger/hub/api/fleet_services_test.go" 2>/dev/null \
+    || { WHY="the hub's test TestServiceAlertHoldsTenMinutes is gone"; return 1; }
+  go_half '^TestServiceAlertHoldsTenMinutes$' ./hub/api; case $? in
+    0) WHAT='失败 / 恢复交替 30 分钟：0 条 service_failed；连着失败满 10 分钟起一条，连着好满 10 分钟落一次' ;;
+    1) return 1 ;;
+    *) WHAT='这台没有 Go 工具链 / 模块缓存：测试按名核对在，Go 门（tokenledger.yml）跑它' ;;
+  esac
+  SECS=$(since "$t0")
+}
+
 drill_chat_home_moved() {
   CAP=40
   if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi

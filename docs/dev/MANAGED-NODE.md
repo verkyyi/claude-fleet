@@ -434,7 +434,7 @@ curl -fsSL <入口>/install/bin/fleet-node-install.sh | sudo bash -s -- --hub <�
   心跳带 `services[]`（`name, kind, login, state, started_at, last_run, next_run, last_log_line`，日志末行只读该登录
   自己的、非链接的文件，≤ 200 字节）；入口把它挂在 `/v1/nodes` 的机器行上（`services` / `services_at`），**按
   (机器, 登录) 裁给本人**；`state` 为 `down · failed · invalid · no_login` 的记 `service_failed` 告警（主题
-  `<机器>/<登录>/<名>`，恢复或删掉即清），`/v1/fleet/summary` 带 `alerts`。登录自己的心跳带的 `services` 入口不收。
+  `<机器>/<登录>/<名>`；连着失败满 10 分钟才起，恢复或删掉后连着好满 10 分钟才清——一会儿坏一会儿好的不再一次重起一起一落，CVC4），`/v1/fleet/summary` 带 `alerts`。登录自己的心跳带的 `services` 入口不收。
   客户端的刷新循环把它存成 `global/hub_services`，读它的只有一个 `bin/fleet-services.py`：
   `fleet ls --services [--json]`（机器 · 登录 · 名称 · 类型 · 状态 · 上次 · 下次 · 最近日志，失败的标红）、
   体检 `services` 行（失败 FAIL，全在跑 PASS，无登记 INFO）、告警栏一条 ✖ `service · failed`（`FLEET_ALERTS_SERVICES=0` 关）。

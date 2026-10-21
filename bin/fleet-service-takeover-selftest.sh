@@ -14,6 +14,10 @@
 #   E  an orphan whose argv is not the service's ⇒ left alone, exit 3
 #   F  usage ⇒ exit 2
 #   G  the alert line says the next step (fleet-services.py --alerts)
+#   H  (task CVC4) the holder's parent is alive but is itself an orphan of the
+#      service's shell (`fleet-webchat.sh serve`, PPID init, our uid) ⇒ both
+#      stopped, exit 0, the socket answers no more
+#   I  the same with a shell that is not the service's ⇒ left alone, exit 3
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -61,7 +65,8 @@ holder() {
 }
 alive() { kill -0 "$1" 2>/dev/null; }
 tk() { FLEET_SERVICE_TAKEOVER_WAIT=${WAIT:-10} FLEET_SERVICE_TAKEOVER_REAPER=${REAPER:-1} \
-       python3 -I "$TK" --name webchat --socket "$SOCK" --pidfile "$PIDF" --match extras/web-chat/server.mjs --match --socket; }
+       python3 -I "$TK" --name webchat --socket "$SOCK" --pidfile "$PIDF" --match extras/web-chat/server.mjs --match --socket \
+       --shell-match fleet-webchat.sh --shell-match serve; }
 answers() { python3 -c 'import socket,sys
 s=socket.socket(socket.AF_UNIX)
 try: s.connect(sys.argv[1])
@@ -119,5 +124,36 @@ cat > "$WORK/state.json" <<EOF
 EOF
 a=$(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$WORK/state.json" FLEET_SERVICES_HOST=box python3 "$BIN/fleet-services.py" --alerts)
 has "G: the alert says the daemon retries and where the reason is" "守护每 30 s 重起一次；原因看 fleet service logs webchat" "$a"
+
+# ------------------------------------------------------------------------- H ----
+# <script name> — an orphaned shell (PPID init) running the holder as its child
+shell_holder() {
+  rm -f "$SOCK" "$PIDF"
+  printf '#!/bin/bash\npython3 "%s" "%s" "%s" 0 /old/extras/web-chat/server.mjs --socket\n: done\n' \
+    "$WORK/h.py" "$SOCK" "$PIDF" > "$WORK/$1"
+  ( bash "$WORK/$1" serve </dev/null >/dev/null 2>&1 & )
+  wait_pid; HP=$(cat "$PIDF"); PIDS+=("$HP")
+  SP=$(ps -o ppid= -p "$HP" | tr -d ' '); PIDS+=("$SP")
+  REAPER=$(ps -o ppid= -p "$SP" | tr -d ' ')
+  [ "$REAPER" != "$$" ] || fail "the shell's parent is this shell"
+  case "$(ps -o args= -p "$SP")" in *"$1"*) ;; *) fail "the holder's parent is not the shell";; esac
+}
+shell_holder fleet-webchat.sh
+out=$(tk 2>&1); rc=$?
+eq "H: a holder whose shell is an orphan of the service: exit 0" 0 "$rc"
+alive "$HP" && fail "H: the holder still runs"; st_count
+for _ in $(seq 1 25); do alive "$SP" || break; sleep 0.2; done
+alive "$SP" && fail "H: the orphaned shell still runs"; st_count
+has "H: the line says what it stopped" "接管 ${SOCK}：停掉了旧孤儿（pid $HP · " "$out"
+answers && fail "H: the socket still answers"; st_count
+
+# ------------------------------------------------------------------------- I ----
+shell_holder other-launcher.sh
+out=$(tk 2>&1); rc=$?
+eq "I: a holder under an orphaned shell that is not the service's: exit 3" 3 "$rc"
+alive "$HP" || fail "I: the holder was stopped"; st_count
+alive "$SP" || fail "I: the shell was stopped"; st_count
+has "I: …named, not the service's" "不是本服务的孤儿" "$out"
+kill -9 "$HP" "$SP" 2>/dev/null
 
 echo "fleet-service-takeover-selftest: PASS ($CHECKS checks)"

@@ -10,13 +10,20 @@ exit every 30 s forever («已退出·待重启» on the alert bar, 2026-10-21:
 an old `server.mjs --socket` from 10-15 on the old code path). So:
 
     fleet-service-takeover.py --name <svc> --socket <path> [--pidfile <file>]
-                              --match <argv word>…
+                              --match <argv word>… [--shell-match <argv word>…]
 
   * nobody answers on <path>                ⇒ exit 0, nothing done
   * the holder is an orphan of <svc>        ⇒ TERM, wait FLEET_SERVICE_TAKEOVER_WAIT
     (PPID 1, every --match in its argv,       (10 s), then KILL; one line on stderr
     our own uid, not this process's own       naming what it stopped; exit 0
     ancestor)
+  * the holder's launching SHELL is the    ⇒ the same, the holder first, then the
+    orphan (task CVC4: `fleet-webchat.sh     shell if it is still there
+    serve` re-parented to init, its node
+    child still on the socket): the holder
+    has every --match, an ancestor with
+    PPID 1 has every --shell-match, both
+    our uid
   * anything else (a person's own copy in a ⇒ left alone; one line naming the holder
     terminal, another managed copy, a          (pid · command · started) and the next
     holder we cannot find)                    step; exit 3
@@ -97,15 +104,39 @@ def describe(pid):
     return "pid %d · %s · 起于 %s" % (pid, ps(pid, "args")[:300] or "?", ps(pid, "lstart") or "?")
 
 
-def orphan(pid, words):
+def reaped(pid):
     # PPID 1 = re-parented to init; a Linux sandbox whose orphans land on a
     # subreaper names it (FLEET_SERVICE_TAKEOVER_REAPER, the selftests' seam)
-    if ps(pid, "ppid") not in ("1", os.environ.get("FLEET_SERVICE_TAKEOVER_REAPER") or "1"):
-        return False
+    return ps(pid, "ppid") in ("1", os.environ.get("FLEET_SERVICE_TAKEOVER_REAPER") or "1")
+
+
+def ours(pid, words):
     args = ps(pid, "args")
-    if not args or not all(w in args for w in words):
-        return False
-    return ps(pid, "uid") == str(os.getuid())
+    return bool(args) and all(w in args for w in words) and ps(pid, "uid") == str(os.getuid())
+
+
+def orphan(pid, words, shell_words=(), me=()):
+    """The pids to stop, holder first — [] when it is not an orphan of ours.
+    Either the holder itself is re-parented (PPID 1, argv the service's), or
+    its launching shell is (CVC4): the holder's argv is the service's and the
+    nearest ancestor that init adopted carries every --shell-match."""
+    if not ours(pid, words):
+        return []
+    if reaped(pid):
+        return [pid]
+    if not shell_words:
+        return []
+    p = pid
+    for _ in range(8):
+        pp = ps(p, "ppid")
+        if not pp.isdigit() or int(pp) <= 1:
+            return []
+        p = int(pp)
+        if p in me:
+            return []
+        if reaped(p):
+            return [pid, p] if ours(p, shell_words) else []
+    return []
 
 
 def stop(pid, wait):
@@ -131,7 +162,7 @@ def stop(pid, wait):
 
 def main(argv):
     name = sock = pidfile = None
-    words = []
+    words, shell = [], []
     it = iter(argv)
     for a in it:
         v = next(it, None)
@@ -145,16 +176,18 @@ def main(argv):
             pidfile = v
         elif a == "--match":
             words.append(v)
+        elif a == "--shell-match":
+            shell.append(v)
         else:
             break
     else:
         if name and sock and words:
-            return run(name, sock, pidfile, words)
+            return run(name, sock, pidfile, words, shell)
     print(__doc__.split("\n\n")[2], file=sys.stderr)
     return 2
 
 
-def run(name, sock, pidfile, words):
+def run(name, sock, pidfile, words, shell=()):
     if not os.path.exists(sock) or not answers(sock):
         return 0
     try:
@@ -162,13 +195,18 @@ def run(name, sock, pidfile, words):
     except ValueError:
         wait = 10.0
     pids = holders(sock, pidfile)
-    orph = [p for p in pids if orphan(p, words)]
+    me = ancestors()
+    orph = []
+    for p in pids:
+        orph += [q for q in orphan(p, words, shell, me) if q not in orph]
     if not orph:
         who = " ； ".join(describe(p) for p in pids) or "找不到是哪个进程（无 pid 文件，lsof 也没看到）"
         print("fleet-service %s: %s 被占着：%s — 不是本服务的孤儿，没动它；它是手动起的就停掉它（kill <pid>），"
               "是另一个受管副本就 fleet service stop %s 只留一个" % (name, sock, who, name), file=sys.stderr)
         return 3
     for p in orph:
+        if not alive(p):  # a shell that ended with its child
+            continue
         d = describe(p)
         how = stop(p, wait)
         print("fleet-service %s: 接管 %s：停掉了旧孤儿（%s，%s）" % (name, sock, d, how), file=sys.stderr)
