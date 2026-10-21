@@ -3429,7 +3429,7 @@ def key_lines(me, extra=None, browser=False):
     # other status click stays root's own
     stock = next((l.split("MouseDown1Status", 1)[1].strip() for l in lines
                   if l.startswith("bind-key") and " -T fleet-view " in l and re.search(r"\sMouseDown1Status\s", l)), "")
-    page = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline -w %s -h %s --title notice_page_title "
+    page = ("run-shell -b \"bash '%s' --client '#{client_name}' --no-inline --freeze -w %s -h %s --title notice_page_title "
             "-- python3 '%s' page --view '#{session_name}' --client '#{client_name}' >/dev/null 2>&1 || :\"") % (  # view-ok: the 看台
         popup, size(90), size(80), str(Path(me).parent / "fleet_notice.py"))
     binds[("fleet-view", "MouseDown1Status")] = "if-shell -F '#{==:#{mouse_status_range},inbox}' { %s }%s" % (
