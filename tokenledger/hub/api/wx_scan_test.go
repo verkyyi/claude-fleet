@@ -32,6 +32,9 @@ type fakeWorkbench struct {
 	down    bool // workbench answers 502
 	gone    bool // WeChat says the next token is no longer good (once)
 	headers []string
+	// 试用二维码 (MRGB): codes drawn ("<action>:<scene_str>"), cards sent
+	trialDrawn []string
+	customs    []string
 }
 
 func newFakeWorkbench(t *testing.T) *fakeWorkbench {
@@ -103,11 +106,23 @@ func newFakeWorkbench(t *testing.T) *fakeWorkbench {
 			Action     string `json:"action_name"`
 			ActionInfo struct {
 				Scene struct {
-					ID int64 `json:"scene_id"`
+					ID  int64  `json:"scene_id"`
+					Str string `json:"scene_str"`
 				} `json:"scene"`
 			} `json:"action_info"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if (body.Action == "QR_LIMIT_STR_SCENE" || body.Action == "QR_STR_SCENE") && body.ActionInfo.Scene.Str != "" {
+			// a 试用二维码 (MRGB): a permanent code, or a temporary one ≤ 30 days
+			if body.Action == "QR_STR_SCENE" && (body.Expire <= 0 || body.Expire > 30*86400) {
+				writeJSON(w, http.StatusOK, map[string]any{"errcode": 40097})
+				return
+			}
+			f.trialDrawn = append(f.trialDrawn, body.Action+":"+body.ActionInfo.Scene.Str)
+			writeJSON(w, http.StatusOK, map[string]any{"ticket": "tk-" + body.ActionInfo.Scene.Str,
+				"url": "http://weixin.qq.com/q/trial" + body.ActionInfo.Scene.Str})
+			return
+		}
 		if body.Action != "QR_SCENE" || body.Expire != 600 {
 			writeJSON(w, http.StatusOK, map[string]any{"errcode": 40097})
 			return
@@ -115,6 +130,16 @@ func newFakeWorkbench(t *testing.T) *fakeWorkbench {
 		f.drawn = append(f.drawn, body.ActionInfo.Scene.ID)
 		writeJSON(w, http.StatusOK, map[string]any{"ticket": "tk", "expire_seconds": 600,
 			"url": "http://weixin.qq.com/q/fleet" + strconv.FormatInt(body.ActionInfo.Scene.ID, 10)})
+	})
+	mux.HandleFunc("/cgi-bin/message/custom/send", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if !tokenOK(w, r) {
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		f.customs = append(f.customs, string(b))
+		writeJSON(w, http.StatusOK, map[string]any{"errcode": 0})
 	})
 	mux.HandleFunc("/cgi-bin/user/info", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -134,6 +159,9 @@ func newFakeWorkbench(t *testing.T) *fakeWorkbench {
 		out := map[string]any{"subscribe": sub, "openid": u.OpenID}
 		if u.UnionID != "" {
 			out["unionid"] = u.UnionID
+		}
+		if u.Language != "" {
+			out["language"] = u.Language
 		}
 		writeJSON(w, http.StatusOK, out)
 	})

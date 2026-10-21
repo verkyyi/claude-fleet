@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -266,6 +267,63 @@ func (g *WxGateway) qrCreate(ctx context.Context, scene int64, ttl time.Duration
 	return out.URL, nil
 }
 
+// The scene range of the 试用二维码 (claude-fleet MRGB), registered as kind
+// fleet-trial in workbench's wxSceneRanges.js: a scan of one of these codes is
+// handed to us at once (POST /internal/wx/trial-scan, wx_trial_scan.go) and
+// our answer is the passive reply. A numeric scene_str — anything else lands
+// in workbench's fallback and gets a merchant account made.
+const (
+	wxTrialSceneMin = 2800000
+	wxTrialSceneMax = 2900000 // exclusive
+)
+
+func wxTrialSceneInRange(n int64) bool { return n >= wxTrialSceneMin && n < wxTrialSceneMax }
+
+// wxTempMax is the longest a temporary code lives (WeChat's own bound).
+const wxTempMax = 30 * 24 * time.Hour
+
+// fromWorkbench says r carries workbench's gate — the same token the hub
+// sends it — on its way in (a 试用二维码 scan handed over, wx_trial_scan.go):
+// compared in constant time, never logged.
+func (g *WxGateway) fromWorkbench(r *http.Request) bool {
+	got := r.Header.Get("x-internal-token")
+	want := strings.TrimSpace(g.Token)
+	return g.ready() && got != "" && hmac.Equal([]byte(got), []byte(want))
+}
+
+// qrCreateTrial draws a trial code for scene: permanent (ttl 0,
+// QR_LIMIT_STR_SCENE — the account holds 100 000 of those in all) or
+// temporary for ttl (QR_STR_SCENE, at most 30 days). What the code encodes,
+// and its ticket (the picture's address at showqrcode).
+func (g *WxGateway) qrCreateTrial(ctx context.Context, scene int64, ttl time.Duration) (string, string, error) {
+	if !wxTrialSceneInRange(scene) {
+		return "", "", fmt.Errorf("scene %d is not a trial code's", scene)
+	}
+	if ttl > wxTempMax {
+		ttl = wxTempMax
+	}
+	var out struct {
+		wxErr
+		Ticket string `json:"ticket"`
+		URL    string `json:"url"`
+	}
+	body := map[string]any{
+		"action_name": "QR_LIMIT_STR_SCENE",
+		"action_info": map[string]any{"scene": map[string]any{"scene_str": strconv.FormatInt(scene, 10)}},
+	}
+	if ttl > 0 {
+		body["action_name"] = "QR_STR_SCENE"
+		body["expire_seconds"] = int(ttl.Seconds())
+	}
+	if err := g.call(ctx, "/cgi-bin/qrcode/create", body, &out); err != nil {
+		return "", "", err
+	}
+	if out.URL == "" || out.Ticket == "" {
+		return "", "", errWxDown
+	}
+	return out.URL, out.Ticket, nil
+}
+
 // scanOpenid is who scanned code scene: the openid, "" while nobody has (or
 // it expired — workbench cannot tell those apart). Only ClaudeFleet's range
 // is ever asked about (BREAK-IT fleet-scene-cross).
@@ -294,6 +352,7 @@ type wxUser struct {
 	UnionID  string // "" when the account is not bound to the open platform, or they don't follow
 	Followed bool
 	Nickname string // WeChat no longer sends one; kept for a stand-in that does
+	Language string // their WeChat's language (zh_CN, en, …); "" unknown
 }
 
 // userInfo asks WeChat about openid.
@@ -303,13 +362,14 @@ func (g *WxGateway) userInfo(ctx context.Context, openid string) (wxUser, error)
 		Subscribe int    `json:"subscribe"`
 		UnionID   string `json:"unionid"`
 		Nickname  string `json:"nickname"`
+		Language  string `json:"language"`
 	}
 	q := url.Values{"openid": {openid}, "lang": {"zh_CN"}}
 	if err := g.call(ctx, "/cgi-bin/user/info?"+q.Encode(), nil, &out); err != nil {
 		return wxUser{}, err
 	}
 	return wxUser{OpenID: openid, UnionID: strings.TrimSpace(out.UnionID), Followed: out.Subscribe == 1,
-		Nickname: strings.TrimSpace(out.Nickname)}, nil
+		Nickname: strings.TrimSpace(out.Nickname), Language: strings.TrimSpace(out.Language)}, nil
 }
 
 // wxTplField is one value of a template message.
@@ -331,6 +391,23 @@ func (g *WxGateway) templateSend(ctx context.Context, openid, tpl, link string, 
 	}
 	var out wxErr
 	return g.call(ctx, "/cgi-bin/message/template/send", body, &out)
+}
+
+// wxArticle is one card of a news message (a customer-service message, or
+// the passive reply workbench sends for us).
+type wxArticle struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	PicURL      string `json:"picurl"`
+}
+
+// customNews sends one card to openid as a customer-service message (the
+// same 48-hour window as customSend).
+func (g *WxGateway) customNews(ctx context.Context, openid string, a wxArticle) error {
+	body := map[string]any{"touser": openid, "msgtype": "news", "news": map[string]any{"articles": []wxArticle{a}}}
+	var out wxErr
+	return g.call(ctx, "/cgi-bin/message/custom/send", body, &out)
 }
 
 // customSend sends text to openid as a customer-service message: allowed

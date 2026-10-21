@@ -7,7 +7,7 @@
 // made-up people and numbers. Only `vite build --mode proto` imports it; the
 // scenario comes from the review page in window.name.
 type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking through 林晓's eyes (claude-fleet#3944)
-  state?: "normal" | "empty" | "no_home" | "over" | "unlimited" | "error" | "loading" | "entry_off" | "ask"; page?: string;
+  state?: "normal" | "empty" | "no_home" | "opening" | "over" | "unlimited" | "error" | "loading" | "entry_off" | "ask"; page?: string;
   // 我自己的订阅 (C21): none = the empty state; login = the dialog open at the sign-in; error = the read fails
   sub?: "none" | "login" | "connected" | "paused" | "reauth" | "error";
   // unbound = a GitHub member the notices cannot find yet (claude-fleet#4057)
@@ -375,6 +375,8 @@ export async function install(): Promise<string> {
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
       case "/v1/chat/conversation": {
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);
+        // a trial a 试用二维码 just started: its home on its way (claude-fleet MRGB)
+        if (state === "opening") return ok({ code: "no_home", error: "正在为你开家（mac-1），通常一两分钟，稍后刷新" }, 409);
         const codex = url.includes("provider=codex");
         const budget = state === "over" ? { budget: { blocked: true, until: reset.toISOString() } } : {};
         const codexSide = { busy: sc.codex === "busy" || sc.codex === "ask", last: sc.codex === "new" ? "turn-c2" : "turn-c1" };

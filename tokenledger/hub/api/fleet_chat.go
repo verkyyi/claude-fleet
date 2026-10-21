@@ -289,6 +289,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	person, status, code, msg := s.chatPerson(r)
 	if code == "" {
 		_ = s.Store.TouchTrial(person, time.Now()) // a trial in use is not idle (claude-fleet#3590)
+		if name == "turn" {
+			s.trialFirstLine(person, time.Now()) // a 试用二维码's 60 seconds end here (MRGB)
+		}
 	}
 	if code != "" {
 		if status == http.StatusUnauthorized {

@@ -57,6 +57,10 @@ const (
 	// AlertTrialNoSpare: a trial waits because no fit machine holds a ready
 	// spare (claude-fleet#4259) — subject "hub"; cleared by the next claim.
 	AlertTrialNoSpare = "trial_no_spare"
+	// AlertTrialCodeBurst: a 试用二维码 started more than fleet.qr.burst trials
+	// in 10 minutes and paused itself (claude-fleet MRGB) — subject the code's
+	// id; cleared when an admin resumes it.
+	AlertTrialCodeBurst = "trial_code_burst"
 	// AlertEntryHostKeyChanged: a machine reported an entry host key other
 	// than the one the hub held (claude-fleet T743) — every client that pinned
 	// the old one now refuses that machine. Subject its hostname; detail the

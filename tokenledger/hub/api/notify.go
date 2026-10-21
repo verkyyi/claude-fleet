@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -109,6 +110,9 @@ type Fields struct {
 	Request string
 	// Person is the trial member who asked to 转正 (NotifyKindUpgrade).
 	Person string
+	// Code is the 试用二维码 that paused itself (NotifyKindQRBurst), At when.
+	Code string
+	At   time.Time
 }
 
 // Tell is 共同约定 9's Notify (the name is the svc alert seam's, server.go):
@@ -117,8 +121,11 @@ type Fields struct {
 // it how often; an admin's notice gathers (notifyGather).
 func (s *Server) Tell(ctx context.Context, to Recipient, kind string, f Fields) error {
 	ref := f.Request
-	if kind == store.NotifyKindUpgrade {
+	switch kind {
+	case store.NotifyKindUpgrade:
 		ref = f.Person
+	case store.NotifyKindQRBurst:
+		ref = f.Code
 	}
 	if s.Store == nil || to.Owner == "" || ref == "" {
 		return nil
@@ -131,6 +138,15 @@ func (s *Server) Tell(ctx context.Context, to Recipient, kind string, f Fields) 
 		// one per (member, admin), ever: asking again, or after an admin
 		// cleared the ask, pushes nothing more
 		n.ID = "nt-upgrade-" + ref + "-" + to.Owner
+		if err := s.Store.EnqueueNotice(n, now); err != nil {
+			if isDupNotice(s, n.ID) {
+				return nil
+			}
+			return err
+		}
+	case store.NotifyKindQRBurst:
+		// one per (pause, admin): a code resumed and paused again says so again
+		n.ID = "nt-qrburst-" + ref + "-" + strconv.FormatInt(f.At.Unix(), 10) + "-" + to.Owner
 		if err := s.Store.EnqueueNotice(n, now); err != nil {
 			if isDupNotice(s, n.ID) {
 				return nil
@@ -399,7 +415,7 @@ func wxWhy(code int) string {
 
 func (s *Server) wxTemplate(kind string) string {
 	switch kind {
-	case store.NotifyKindNewReq, store.NotifyKindUpgrade:
+	case store.NotifyKindNewReq, store.NotifyKindUpgrade, store.NotifyKindQRBurst:
 		return s.WxGW.TplNewReq
 	case store.NotifyKindNotice:
 		return s.WxGW.TplNotice
@@ -551,6 +567,18 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 			}
 		}
 		return upgradeMsg(pid, name, *at, en, base), true, nil
+	case store.NotifyKindQRBurst:
+		if len(n.Refs) == 0 {
+			return noticeMsg{}, false, nil
+		}
+		code, err := s.Store.TrialCode(n.Refs[0])
+		if err != nil {
+			return noticeMsg{}, false, err
+		}
+		if code == nil || code.State != store.TrialCodePaused {
+			return noticeMsg{}, false, nil // resumed already
+		}
+		return qrBurstMsg(code, en, base), true, nil
 	}
 	return noticeMsg{}, false, errors.New("no notice of kind " + n.Kind)
 }
@@ -721,6 +749,37 @@ func upgradeMsg(pid, name string, at time.Time, en bool, base string) noticeMsg 
 			m.Body += "\n去处理：" + m.Link + "\n"
 		}
 		m.Body += "\n你收到这封信，是因为你是 ClaudeFleet 的管理员，有试用成员申请转正。\n"
+	}
+	m.Text = head + "\n" + advice
+	if m.Link != "" {
+		m.Text += "\n" + m.Link
+	}
+	return m
+}
+
+// qrBurstMsg: a 试用二维码 paused itself on a burst of trials.
+func qrBurstMsg(code *store.TrialCode, en bool, base string) noticeMsg {
+	m := noticeMsg{}
+	if base != "" {
+		m.Link = base + AdminPrefix + "/trial-codes/" + url.PathEscape(code.ID)
+	}
+	ch := clipRunes(oneLine(code.Channel), 20)
+	var head, advice string
+	if en {
+		head, advice = "ClaudeFleet: trial code "+ch+" paused itself", "Too many trials too fast — check it, then resume or keep it stopped"
+	} else {
+		head, advice = "ClaudeFleet：试用码「"+ch+"」已自动暂停", "开通太快，像是有人在刷号——看看再决定恢复还是停用"
+	}
+	m.Tpl = map[string]string{
+		"thing1":             "ClaudeFleet",
+		"thing2":             clipRunes(ch+ternary(en, " · paused", " · 已暂停"), 20),
+		"time6":              noticeTime(code.UpdatedAt, false),
+		"character_string10": "1",
+	}
+	m.Subject = head
+	m.Body = head + "\n\n" + burstWords(code.PausedWhy, en) + "\n"
+	if m.Link != "" {
+		m.Body += "\n" + ternary(en, "Open: ", "去处理：") + m.Link + "\n"
 	}
 	m.Text = head + "\n" + advice
 	if m.Link != "" {

@@ -193,6 +193,10 @@
 #   trial-host-no-spare                             tokenledger/hub/api fleet_accounts.go (trialMachine: only
 #                                                   machines with a ready spare) + fleet_try.go (no_spare,
 #                                                   trial_no_spare); go test, when a toolchain is here
+#   trial-scan-forged                               tokenledger/hub/api wx_trial_scan.go (handleWxTrialScan: the
+#                                                   internal token, the fleet-trial range); go test
+#   trial-code-burst                                tokenledger/hub/api wx_trial_scan.go (trialBurstCheck:
+#                                                   fleet.qr.burst pauses the code, trial_code_burst); go test
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -2497,6 +2501,36 @@ drill_trial_host_no_spare() {
   c11_go_tests fleet_try_spare_test.go TestTrialPicksAMachineWithASpare || return 1
   WHAT='试用只在有就绪备用的机器里挑；都没有 ⇒ reason=no_spare + 告警 trial_no_spare（测试按名核对在，Go 门跑它）'
   [ "$GO_RAN" = 1 ] && WHAT='A 有余量 0 备用、B 过 CPU 线 1 备用 ⇒ 领到 B；再来一人 ⇒ waiting no_spare、审计 trial.queued reason=no_spare、告警 trial_no_spare（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-scan-forged (MRGB): a scan handed to /internal/wx/trial-scan by anyone
+# but workbench would start a trial for an openid nobody scanned with. Only the
+# internal token passes; a scene off the fleet-trial range or a bad openid is 400.
+drill_trial_scan_forged() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
+  t0=$(now)
+  grep -q 's.WxGW.fromWorkbench(r)' "$tl/api/wx_trial_scan.go" 2>/dev/null \
+    || { WHY="the trial-scan door no longer checks the internal token (wx_trial_scan.go handleWxTrialScan)"; return 1; }
+  c11_go_tests wx_trial_scan_test.go TestTrialCodeGates || return 1
+  WHAT='试用码扫码的门只认 workbench 的内部令牌；段外 scene / 坏 openid 拒（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='无令牌 / 错令牌 ⇒ 401，登录段 scene / 坏 openid ⇒ 400，码的开通数仍 0（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- trial-code-burst (MRGB): a batch of WeChat accounts farming one trial code.
+# One trial per WeChat, a cap per code, a day's cap; past fleet.qr.burst in ten
+# minutes the code pauses itself, trial_code_burst is raised and the admins told.
+drill_trial_code_burst() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
+  t0=$(now)
+  grep -q 'AlertTrialCodeBurst = "trial_code_burst"' "$tl/store/fleet_alerts.go" 2>/dev/null \
+    || { WHY="no trial_code_burst alert kind (store/fleet_alerts.go)"; return 1; }
+  grep -q 's.trialBurstCheck(code, now)' "$tl/api/wx_trial_scan.go" 2>/dev/null \
+    || { WHY="a trial no longer checks its code's burst (wx_trial_scan.go)"; return 1; }
+  c11_go_tests wx_trial_scan_test.go TestTrialCodeBurstPauses TestTrialCodeOncePerWeChat || return 1
+  WHAT='试用码 10 分钟超告警线即自动暂停 + 告警 trial_code_burst + 通知管理员；每个微信号只发一次（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='告警线 2、3 个号连扫 ⇒ 码 paused、告警 1 条、管理员通知 1 条，第 4 个回「已停用」；同一微信换码再扫不再发（go test）'
   SECS=$(since "$t0")
 }
 

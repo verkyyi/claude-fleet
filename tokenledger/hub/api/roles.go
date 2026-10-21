@@ -53,6 +53,8 @@ var routeAccess = map[string]string{
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/auth/wechat/start": accessPublic, "/auth/wechat/callback": accessPublic, "/auth/wechat/bind": accessPublic,
 	wxQRPath: accessPublic, wxPollPath: accessPublic, wxRelayCBPath: accessPublic,
+	// workbench handing over a 试用二维码 scan (MRGB): its own gate, the internal token
+	WxTrialScanPath:     accessPublic,
 	"/auth/email/start": accessPublic, "/auth/email/link": accessPublic, "/auth/email/code": accessPublic,
 	ConsoleTicketPath: accessPublic, ConsoleTicketNodePath: accessSelf,
 	// The applicant note (ccq_applicant) is its own credential, read only
@@ -149,6 +151,8 @@ var routeAccess = map[string]string{
 	AdminRequestsPath: accessAdmin, adminRequestsPrefix: accessAdmin,
 	// 管理侧「发通知」(claude-fleet#4063): 404 to a member, as the requests
 	AdminNoticesPath: accessAdmin,
+	// 管理侧「试用二维码」(claude-fleet MRGB): 404 to a member, as the requests
+	AdminTrialCodesPath: accessAdmin, adminTrialCodesPrefix: accessAdmin,
 	// A person's task authority (claude-fleet#4896): a node token or a person's own sign-in.
 	FleetAuthorityPath: accessSelf, FleetAuthorityPath + "/": accessSelf,
 	control.RoutesPath: accessSelf,

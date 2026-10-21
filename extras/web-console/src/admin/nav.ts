@@ -3,7 +3,7 @@
 // (`to`); one still on the old console links to its old address (`href`) until
 // its own ticket (C11–C15) lands it and swaps the line to `to`.
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, CreditCard, Inbox, Megaphone, Rocket, ScrollText, Server, Settings, Users } from "lucide-react";
+import { BarChart3, CreditCard, Inbox, Megaphone, QrCode, Rocket, ScrollText, Server, Settings, Users } from "lucide-react";
 import type { MsgKey } from "./i18n";
 
 // count: a read answering {pending: n}, drawn beside the item when n > 0
@@ -17,6 +17,8 @@ export const NAV: NavGroup[] = [
       { key: "page.people", icon: Users, to: "/people" },
       // 申请 (claude-fleet#4052, EPIC #4048 C4), with how many wait
       { key: "page.requests", icon: Inbox, to: "/requests", count: "/v1/admin/requests?state=pending&count=1" },
+      // 试用二维码 (claude-fleet MRGB): scan and follow, the trial starts
+      { key: "page.trialCodes", icon: QrCode, to: "/trial-codes" },
       // 发通知 (claude-fleet#4063, EPIC #4048 R1)
       { key: "page.notices", icon: Megaphone, to: "/notices" },
     ],
