@@ -38,7 +38,7 @@ assert.equal(minutesAgo(0, 3 * 60_000 + 5), 3);
 assert.equal(minutesAgo(10, 0), 0, 'never negative');
 
 const api = readFileSync(new URL('../src/shared/api.ts', import.meta.url), 'utf8');
-assert.equal((api.match(/if \(r\) netOk\(\); else netMiss\(\);/g) || []).length, 2, 'getJSON and sendJSON both report');
+assert.equal((api.match(/if \(r\) netOk\(\); else netMiss\(\);/g) || []).length, 3, 'getJSON, getJSONIf (T47B) and sendJSON all report');
 const bar = readFileSync(new URL('../src/app/NetBar.tsx', import.meta.url), 'utf8');
 assert.match(bar, /网络不太好，正在重连… 下面是 \$\{n\} 分钟前的样子/, 'the band says the design page\'s words');
 const rows = readFileSync(new URL('../src/app/work-rows.tsx', import.meta.url), 'utf8');

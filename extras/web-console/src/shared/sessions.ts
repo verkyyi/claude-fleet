@@ -7,7 +7,7 @@
 // onTasks the same channel carries the person's task records too (`tasks`,
 // T769) — one stream, one watchdog; the poll that stands in reads both.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getJSON, sendJSON } from "./api";
+import { getJSON, getJSONIf, sendJSON } from "./api";
 import { withAs } from "./viewAs";
 
 // The push channel's watchdog (BREAK-IT hub-stream-silent): no event for
@@ -46,7 +46,7 @@ export type BoardRow = {
 };
 export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string };
 
-type LiveBody = { sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[]; board?: Board };
+type LiveBody = { etag?: string; sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[]; board?: Board };
 type EndedBody = { sessions?: { worker_id?: string; resume_id: string; key: string; title?: string; repo?: string; machine_name?: string; ended_at?: string }[] };
 
 const ASK_KINDS = ["permission", "question", "auth"];
@@ -90,7 +90,14 @@ export function endedRows(body: EndedBody | null): SessionRow[] {
 const keysOf = (rows: SessionRow[]) => new Set(rows.map((r) => `${r.machine}\t${r.key}`));
 
 export type SessionsState = { live: SessionRow[] | null; ended: SessionRow[] | null; board: Board | null; boardAt: number;
-  failed: boolean; reload: () => void };
+  failed: boolean; reload: () => void;
+  etag: string;        // the live answer's ETag (what the list kept in this browser sends back)
+  fresh: boolean;      // the hub has answered on this page (false: what this browser kept)
+  prime: (kept: Primed) => boolean };
+
+// What this browser kept (task T47B, app/list-local.ts): drawn until the hub
+// answers, never over an answer.
+export type Primed = { live: SessionRow[]; ended: SessionRow[] | null; board: Board | null; etag: string; at: number };
 
 // The answer's list, when the hub sent one (an older hub: none — the console's
 // own join stands in).
@@ -105,15 +112,21 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
   const [failed, setFailed] = useState(false);
   const [board, setBoard] = useState<Board | null>(null);
   const [boardAt, setBoardAt] = useState(0);
+  const [fresh, setFresh] = useState(false);
   const prev = useRef<Set<string>>(new Set());
   const timers = useRef<number[]>([]);
+  const etag = useRef("");
+  const answered = useRef(false);
 
   const readEnded = useCallback(() => {
     getJSON<EndedBody>("/v1/fleet/sessions?state=ended").then((b) => { if (b) setEnded(endedRows(b)); });
   }, []);
   // a session that left the live list is reaped: its machine hands the hub its
   // history row a moment later, so the ended list is read again twice
-  const onLive = useCallback((b: LiveBody) => {
+  const onLive = useCallback((b: LiveBody, tag?: string) => {
+    answered.current = true;
+    etag.current = tag || (typeof b.etag === "string" ? b.etag : "");
+    setFresh(true);
     const rows = liveRows(b);
     const now = keysOf(rows);
     let gone = false;
@@ -125,17 +138,34 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
     setFailed(false);
     if (gone) for (const ms of [1500, 6000]) timers.current.push(window.setTimeout(readEnded, ms));
   }, [readEnded]);
+  // the live read carries the ETag of the list on the page: a 304 says it
+  // still holds — the list this browser kept is then the hub's answer too
+  const readLive = useCallback(() => getJSONIf<LiveBody>("/v1/fleet/sessions", etag.current).then((r) => {
+    if (r === "same") { answered.current = true; setFresh(true); setBoardAt(Date.now()); setFailed(false); return true; }
+    if (r) onLive(r.body, r.etag);
+    return !!r;
+  }), [onLive]);
   const reload = useCallback(() => {
-    getJSON<LiveBody>("/v1/fleet/sessions").then((b) => (b ? onLive(b) : setFailed(true)));
+    readLive().then((ok) => { if (!ok) setFailed(true); });
     readEnded();
-  }, [onLive, readEnded]);
+  }, [readLive, readEnded]);
+  const prime = useCallback((k: Primed) => {
+    if (answered.current) return false;
+    etag.current = k.etag;
+    prev.current = keysOf(k.live);
+    setLive(k.live);
+    setEnded((e) => e ?? k.ended);
+    setBoard(k.board);
+    setBoardAt(k.at); // the list's clock says when it was read, not now
+    return true;
+  }, []);
 
   useEffect(() => {
     reload();
     let es: EventSource | null = null;
     let poll = 0, dog = 0, retry = 0, silent = 0, tries = 0, gone = false;
     const startPoll = () => {
-      if (!poll) poll = window.setInterval(() => { getJSON<LiveBody>("/v1/fleet/sessions").then((b) => b && onLive(b)); pollTasks?.(); }, 10000);
+      if (!poll) poll = window.setInterval(() => { void readLive(); pollTasks?.(); }, 10000);
     };
     const stopPoll = () => { if (poll) { clearInterval(poll); poll = 0; } };
     const drop = () => { es?.close(); es = null; clearTimeout(dog); };
@@ -179,9 +209,9 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
     const t = timers.current;
     return () => { gone = true; drop(); stopPoll(); clearTimeout(retry); t.forEach(clearTimeout); };
     // onTasks / pollTasks are read once, at the stream's opening
-  }, [reload, onLive]);
+  }, [reload, onLive, readLive]);
 
-  return { live, ended, board, boardAt, failed, reload };
+  return { live, ended, board, boardAt, failed, reload, etag: etag.current, fresh, prime };
 }
 
 // One write through the write door, as the signed-in person. Resolves to null

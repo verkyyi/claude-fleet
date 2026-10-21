@@ -4,7 +4,8 @@ import { taskRead, type Task, type TaskRead, type TasksResponse } from "./task-s
 
 // One read, the existing read-only retry, and `accept` for a body the push
 // channel brought (the stream's tasks topic, T769) — the same taskRead rules.
-// Keep this page's last answer in memory on a failed refresh; no disk cache.
+// Keep this page's last answer in memory on a failed refresh; the disk's copy
+// is the session list's (list-local.ts), handed in by `seed`.
 export function useTasks() {
   const [s, set] = useState<TaskRead>({ data: null, failed: false });
   const [n, setN] = useState(0);
@@ -21,7 +22,9 @@ export function useTasks() {
   }, [n]);
   const accept = useCallback((body: unknown) =>
     set((previous) => taskRead(previous, body as TasksResponse, new Date().toISOString())), []);
-  return { ...s, loading, reload: useCallback(() => setN((x) => x + 1), []), accept };
+  // what this browser kept (task T47B): drawn until the hub answers, never over it
+  const seed = useCallback((data: TasksResponse) => set((previous) => (previous.data ? previous : { data, failed: false })), []);
+  return { ...s, loading, reload: useCallback(() => setN((x) => x + 1), []), accept, seed };
 }
 
 // A typed code goes to the hub's one resolver (EPIC T644 C1, convention 4: a

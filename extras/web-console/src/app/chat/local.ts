@@ -38,7 +38,11 @@ export function mayCache(me: { person?: string; read_only?: boolean; view_as?: u
   return !!me?.person && !me.read_only && !me.view_as && !viewAs;
 }
 
-const sep = "\u001f";
+// KEY_SEP joins a key's parts; its second part is always the principal, so a
+// write for one person drops every other person's keys — the list's too
+// (list-local.ts keeps «lst · principal» in this same store).
+export const KEY_SEP = "\u001f";
+const sep = KEY_SEP;
 export const pointerKey = (principal: string, provider: string) => `cur${sep}${principal}${sep}${provider}`;
 export const recordKey = (principal: string, provider: string, session: string) =>
   `rec${sep}${principal}${sep}${provider}${sep}${session || "-"}`;
@@ -196,14 +200,21 @@ function idbBackend(): Backend | null {
   };
 }
 
+let backend: Backend | null | undefined;
+// the browser's one store (the chat's and the session list's), or null
+export function browserBackend(): Backend | null {
+  if (backend === undefined) backend = idbBackend();
+  return backend;
+}
 let shared: ReturnType<typeof chatCache> | null | undefined;
 // the browser's cache, or null where there is none
 export function browserCache(): ReturnType<typeof chatCache> | null {
-  if (shared === undefined) { const b = idbBackend(); shared = b ? chatCache(b) : null; }
+  if (shared === undefined) { const b = browserBackend(); shared = b ? chatCache(b) : null; }
   return shared;
 }
 
-// clearBrowserCache: sign-out and 「清除本机缓存」 — everything this browser kept.
+// clearBrowserCache: sign-out and 「清除本机缓存」 — everything this browser kept
+// (the conversation and the session list: one store).
 // Bounded: a sign-out waits at most `ms` for it, then goes anyway.
 export async function clearBrowserCache(ms = 800): Promise<boolean> {
   const c = browserCache();
