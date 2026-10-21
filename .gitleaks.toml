@@ -216,3 +216,11 @@ condition = "AND"
 targetRules = ["curl-auth-header"]
 commits = ["f7a0ede2fb3d284502be596620aaaa5d152473a7"]
 paths = ['''^tokenledger/hub/api/fleet_service_log_test\.go$''']
+
+[[allowlists]]
+description = "A5SQ · tokenledger/agent/internal/xssh/keys.go — the verbatim golang.org/x/crypto/ssh copy (bin/xssh-sync.sh --check holds it to upstream): `pk1.Keytype = KeyAlgoED25519` assigns a key-type NAME constant; no credential. Path + rule + this exact line, so any other finding in the copy is still reported"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tokenledger/agent/internal/xssh/keys\.go$''']
+regexTarget = "line"
+regexes = ['''^\s*pk1\.Keytype = KeyAlgoED25519$''']
