@@ -35,7 +35,7 @@ export const isAdmin = (me: Me | null) => !!me && me.role !== undefined && me.ro
 
 // The person's own limit (fleet.person_budget) off /v1/me/usage — the one the
 // proxies hold their sessions to and the conversation too. Null = no limit set.
-export type Quota = { pct: number; window: "week" | "5h"; over: boolean; reset?: string };
+export type Quota = { pct: number; window: "week" | "5h" | "trial"; over: boolean; reset?: string };
 export function quotaOf(limit: Record<string, unknown> | undefined): Quota | null {
   if (!limit || !limit.set) return null;
   const rows: Quota[] = [];
@@ -64,12 +64,23 @@ export type Trial = {
   sessions?: number; sessions_now: number;
   upgrade_asked?: string;
 };
+// A trial's tokens as a Quota (claude-fleet T796), so the pill and 用量 read
+// one limit: the stricter of the trial's and the weekly budget's.
+export function trialQuota(t: Trial | null | undefined): Quota | null {
+  if (!t) return null;
+  const over = t.state === "expired" || t.state === "spent";
+  const lim = Number(t.tokens) || 0;
+  if (!lim && !over) return null;
+  const left = lim ? Math.max(0, Math.min(100, Math.round(((lim - (Number(t.used_tokens) || 0)) / lim) * 100))) : 100;
+  return { pct: over ? 0 : left, window: "trial", over, ...(t.until ? { reset: t.until } : {}) };
+}
+const stricter = (a: Quota | null, b: Quota | null) => (!a ? b : !b ? a : b.over || b.pct < a.pct ? b : a);
 export type UsageHead = { quota: Quota | null; trial: Trial | null };
 export function useUsageHead(key: unknown = 0): UsageHead & { setTrial: (t: Trial | null) => void } {
   const [h, setH] = useState<UsageHead>({ quota: null, trial: null });
   useEffect(() => {
     getJSON<{ limit?: Record<string, unknown>; trial?: Trial }>("/v1/me/usage?range=today")
-      .then((j) => setH({ quota: quotaOf(j?.limit), trial: j?.trial ?? null }));
+      .then((j) => setH({ quota: stricter(quotaOf(j?.limit), trialQuota(j?.trial)), trial: j?.trial ?? null }));
   }, [key]);
   return { ...h, setTrial: (trial) => setH((x) => ({ ...x, trial })) };
 }
