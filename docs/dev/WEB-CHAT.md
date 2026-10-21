@@ -299,7 +299,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 ### 终端里的会话，网页里只读看（F481，EPIC GR5E C5）
 
 会话工作区（`/app/s/<编号>?view=chat`）的「对话」看法：一个跑在终端里的会话，网页只读实时看它的记录——
-你说的、它答的、工具步骤，上方「正在终端里回答…」；发送框关着，要说话到终端里（接管是 C6 的事）。
+你说的、它答的、工具步骤，上方「正在终端里回答…」；发送框关着，要说话到终端里，或者接管（下一节）。
 
 - **页面**：`GET /v1/chat/view?worker=<worker id>&from=<n>`（`extras/web-console/src/app/chat/view.ts`）。浏览器只报
   worker id，从不报机器、登录或会话号。
@@ -317,6 +317,31 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 老服务没有 `/api/view`：页面收到 404 没有 code，说「这台机器的网页对话服务还旧」一句话。
 - 测试：`fleet-webchat-selftest.mjs --only=view`、`fleet-webchat-handoff-selftest.sh` 1b、e2e `TestChatView*`、
   `extras/web-console/test/session-view.mjs`。
+
+### 接管与交回：同一时刻只有一边在说（VV8F，EPIC GR5E C6）
+
+会话工作区的「对话」看法里，只读跟着的终端会话可以**接管**到网页里说，说完**交回终端**。谁拿着只看 T810 的锁记录
+（`convo-lock/<agent>-<sid>.json` 的 `holder`），它随只读流的 `{t:"state"}.holder` 推到页面：`webchat` = 网页在说、终端停在结束页只读；
+别的 = 终端拿着、网页只读。
+
+- **页面**（`extras/web-console/src/app/chat/handover.ts`、`pages/chat.tsx` 的 `TakeOver` / `HeldChat`）：只读条上「接管」→
+  确认框（手机从底部升起，带安全区）→ 接管成功即显示「已接管 · 在这里说，终端只读」，对话就是网页那一边（Claude Code / Codex 按会话的 agent）
+  的对话——WebChat 已把这段会话接成它的对话，`useFleetChat` 照常可写。条上「交回终端」。终端在答时按钮是「等它说完」、不可点；
+  网页在答时「交回终端」同样等这一轮。自己刚接管 / 交回的结果先信（≤6 s），之后以流里的 holder 为准。只读预览（view-as）不显示接管。
+- **入口**（`tokenledger/hub/api/chat_take.go`）：`POST /v1/chat/takeover?worker=<id>` · `POST /v1/chat/giveback?worker=<id>`，要
+  `X-Fleet-Webchat: 1`；谁 = `termPerson`，会话是不是你的 = `termTarget`，还必须在**家登录**上（网页的对话只在家里，别的登录上的会话只能看，
+  409 `not_home`）。转给家的 `/api/takeover|giveback`，body 由入口写 `{"fid": <窗口>}`——浏览器只报 worker id。旧服务没有这两条 = 409
+  `old_service`；旧 agent = 409 `old_agent`。
+- **家机器服务**（`server.mjs handover`）：先 `view-of` 看窗口；接管：已是 webchat = 200 `already`，终端在答 = 409 `terminal_busy`，
+  网页那一边在答 = 409 `web_busy`，否则 `fleet-webchat-handoff.sh to-web fid:<id> --no-open`（⌘P「在 WebChat 里继续」同一条路，不在人的屏幕上开页）。
+  交回：不是 webchat 拿着 = 200 `already`，网页在答 = 409 `web_busy`，否则 `give-back fid:<id>`。同一个窗口同时只办一件：
+  第二个 409 `taking`。
+- **两处同时接管只一个成功**：服务进程里按窗口一把（两个网页）；`fleet-webchat-handoff.sh` 里按窗口一个目录锁
+  `convo-lock/.taking-<fid>`（网页和 ⌘P 一起按），第二个 rc 3「另一处正在接管这个会话」。
+- **交回** = `give-back`：网页不在答，就给窗口结束页按它自己的 ↵——结束页跑 `to-terminal`（锁改回 terminal、WebChat 放掉热进程）并按原样续同一个会话号，
+  终端马上能打字；窗口没停在结束页就只改锁。
+- 测试：`fleet-webchat-handoff-selftest.sh` 7b、`fleet-webchat-selftest.mjs --only=handover`（X）、e2e `TestChatHandover`、
+  `extras/web-console/test/session-handover.mjs`。
 
 ## 浏览器上下文（#4034）
 

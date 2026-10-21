@@ -165,8 +165,36 @@ st_eq '在这里继续: WebChat holds it' webchat "$(field "$(rec)" holder)"
 st_eq '在这里继续: the terminal stopped onto its end page' exited "$(T show-options -wqv -t "$WIN" @claude_state)"
 st_eq '在这里继续: the window is marked handed' 1 "$(T show-options -wqv -t "$WIN" @handoff_web)"
 
+# 7b · 交回终端 from the session workspace (task VV8F): the end page gets its own ↵
+cat > "$WORK/page.sh" <<EOF2
+#!/bin/bash
+stty -echo 2>/dev/null
+read -r _
+bash "$H" to-terminal --agent claude --sid "$SID" --fid "$FID" && tmux set-option -wu -t "\$TMUX_PANE" @handoff_web
+exec sleep 600
+EOF2
+T respawn-pane -k -t "$WIN" "bash $WORK/page.sh"
+mkdir -p "$WORK/conf/convo-lock/.taking-$FID"
+set +e; out=$(bash "$H" give-back "fid:$FID" 2>&1); rc=$?; set -e
+st_eq '交回 while another handover runs: rc 3' 3 "$rc"
+st_has '交回 while another handover runs: said' "$out" '另一处正在接管'
+set +e; out=$(bash "$H" to-web "fid:$FID" 2>&1); rc=$?; set -e
+st_eq '接管 while another handover runs: rc 3' 3 "$rc"
+rmdir "$WORK/conf/convo-lock/.taking-$FID"
+: > "$WORK/webbusy"
+set +e; out=$(bash "$H" give-back "fid:$FID" 2>&1); rc=$?; set -e
+st_eq '交回 while WebChat answers: rc 3' 3 "$rc"
+st_eq '交回 refused: WebChat keeps it' webchat "$(field "$(rec)" holder)"
+rm -f "${WORK:?}/webbusy"
+bash "$H" give-back "fid:$FID" >/dev/null
+st_eq '交回: the terminal holds it' terminal "$(field "$(rec)" holder)"
+st_eq '交回: the end page took its ↵' '' "$(T show-options -wqv -t "$WIN" @handoff_web)"
+st_has '交回: WebChat lets go of its warm agent' "$(tail -n 1 "$WORK/chat.log")" "/api/release 1 "
+st_eq '交回 again: nothing to do' ok "$(bash "$H" give-back "fid:$FID")"
+st_eq '交回 left no guard behind' '' "$(ls -A "$WORK/conf/convo-lock" | grep taking || true)"
+
 # 8 · the record itself
-set +e; python3 "$LOCK" set --agent claude --sid "$SID" --holder terminal --if-holder terminal >/dev/null; rc=$?; set -e
+set +e; python3 "$LOCK" set --agent claude --sid "$SID" --holder webchat --if-holder webchat >/dev/null; rc=$?; set -e
 st_eq 'a move from a holder that is not: rc 3' 3 "$rc"
 set +e; python3 "$LOCK" get --agent claude --sid '../x' >/dev/null 2>&1; rc=$?; set -e
 st_eq 'a bad session id: rc 2' 2 "$rc"

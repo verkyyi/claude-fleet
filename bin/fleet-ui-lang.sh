@@ -656,6 +656,8 @@ fleet_ui_t() {
     en:webchat_no_codex)        printf 'WebChat has no Codex yet — keep this one in the terminal' ;;
     zh:webchat_already)         printf '这段对话已经在 WebChat 里了' ;;
     en:webchat_already)         printf 'This conversation is already in WebChat' ;;
+    zh:webchat_taking)          printf '另一处正在接管这个会话' ;;
+    en:webchat_taking)          printf 'Someone else is taking this session over right now' ;;
     zh:webchat_gone)            printf '找不到这个会话的窗口' ;;
     en:webchat_gone)            printf "Cannot find this session's window" ;;
     zh:webchat_down)            printf '这台机器上的 WebChat 起不来（fleet-webchat.sh status）' ;;

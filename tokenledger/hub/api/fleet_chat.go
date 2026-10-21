@@ -265,6 +265,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.handleChatView(w, r)
 		return
 	}
+	if _, ok := chatHandoverRoutes[name]; ok {
+		s.handleChatHandover(w, r, name)
+		return
+	}
 	method, ok := chatRoutes[name]
 	if !ok {
 		httpError(w, http.StatusNotFound, "no such chat route")

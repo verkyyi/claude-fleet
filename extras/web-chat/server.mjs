@@ -575,6 +575,38 @@ async function viewSource(agent, sid) {
   if (agent === "codex") return codex.viewFile(sid);
   return findTranscript(sid);
 }
+// 接管 / 交回 (task VV8F, EPIC GR5E C6): the session workspace hands a terminal
+// session's conversation to this page and back, by its window — the same roads
+// as ⌘P's 在 WebChat 里继续 (to-web) and the end page's ↵ (give-back presses it).
+// One handover per window at a time: a second, here or from the terminal, is 409
+// taking. Neither side is ever cut off mid-answer: 409 terminal_busy / web_busy.
+const handing = new Set();
+const sideBusy = (agent) => agent === "codex" ? !!codex.state().busy : !!live || !!maint;
+async function handover(req, res, person, how) {
+  const fid = String((await readJson(req)).fid || "");
+  if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
+  if (handing.has(fid)) return send(res, 409, { error: "另一处正在接管这个会话", code: "taking" });
+  handing.add(fid);
+  try {
+    const w = await viewOf(fid);
+    if (w === null) return send(res, 404, { error: "这个会话不在这台机器上了", code: "no_session" });
+    if (!w) return send(res, 503, { error: "could not read the session", code: "unreadable" });
+    if (w.agent !== "claude" && w.agent !== "codex") return send(res, 409, { error: "this agent cannot be taken over here", code: "agent" });
+    if (w.agent === "codex" && !codex.available()) return send(res, 409, { error: "这台机器上没有 Codex", code: "no_codex" });
+    const ok = (extra = {}) => send(res, 200, { ok: true, agent: w.agent, session: w.sid || "", ...extra });
+    if (how === "take") {
+      if (w.holder === "webchat") return ok({ already: true });
+      if (w.busy) return send(res, 409, { error: "正在终端里回答，等它说完", code: "terminal_busy" });
+    } else if (w.holder !== "webchat") return ok({ already: true });
+    if (sideBusy(w.agent)) return send(res, 409, { error: "网页正在回答，等它说完", code: "web_busy" });
+    const r = await run(HANDOFF, how === "take" ? ["to-web", `fid:${fid}`, "--no-open"] : ["give-back", `fid:${fid}`]);
+    ownerSeen = {};
+    const said = (r.stderr || r.stdout || "").trim().split("\n").pop();
+    if (r.rc === 0) { log(how === "take" ? "took over" : "gave back", { agent: w.agent, person }); return ok(); }
+    if (r.rc === 3) return send(res, 409, { error: said, code: how === "take" ? (/接管|taking/i.test(said) ? "taking" : "terminal_busy") : "web_busy" });
+    return send(res, r.rc === 2 ? 409 : 500, { error: said || "could not hand it over", code: "cannot" });
+  } finally { handing.delete(fid); }
+}
 async function viewStream(req, res, u, person) {
   const fid = u.searchParams.get("fid") || "";
   if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
@@ -1369,6 +1401,9 @@ async function handle(req, res) {
   }
   // 只读 (task F481): a terminal session of this login, read along
   if (p === "/api/view" && req.method === "GET") return viewStream(req, res, u, person);
+  // 接管 / 交回 (task VV8F): the same session, this page ⇄ its terminal
+  if (p === "/api/takeover" && req.method === "POST") return handover(req, res, person, "take");
+  if (p === "/api/giveback" && req.method === "POST") return handover(req, res, person, "give");
   // the Codex side (task R9A2): ?provider=codex; none or claude = the Claude side, as before
   const provider = u.searchParams.get("provider") || "claude";
   if (p.startsWith("/api/") && !PROVIDERS_RE.test(provider)) return send(res, 400, { error: "unknown provider" });

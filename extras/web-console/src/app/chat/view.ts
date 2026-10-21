@@ -4,7 +4,7 @@
 // {t:"state"} — which agent, answering or not — and {t:"items", from, items}
 // with id = the count so far. The page keeps the count it holds and comes back
 // with ?from= after a drop or a hidden tab, so nothing shows twice. Never a
-// turn, never a take: the terminal holds it (接管 is its own step).
+// turn, never a take: 接管 is its own step (handover.ts, task VV8F).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
 import { toMessages, type Item, type Msg } from "./chat";

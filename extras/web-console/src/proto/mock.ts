@@ -21,7 +21,13 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   // WebChat 加 Codex (claude-fleet R9A2): which side the page opens on, and what
   // the Codex side is doing — asking to run a command, replying in the
   // background, or holding a reply the page has not shown
-  chat?: "claude" | "codex"; codex?: "ask" | "busy" | "new" };
+  chat?: "claude" | "codex"; codex?: "ask" | "busy" | "new";
+  // 接管 (claude-fleet VV8F): the followed terminal session idle (接管 can go) or answering (等它说完)
+  view?: "idle" | "busy" };
+
+// 接管 / 交回 (VV8F): whether this page holds the followed session now
+const VIEW_SID = "5b1e0000-0000-4000-8000-0000000000b2";
+let viewHeld = false;
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
@@ -376,7 +382,7 @@ export async function install(): Promise<string> {
           ? ok({ items: codexItems, asks: codexAsks, models: codexModels, default: "gpt-5.4-codex", busy: sc.codex === "ask", last: "turn-c1", others: { claude: { last: "turn-a1" } },
             providers: ["claude", "codex"], ...(codexItems.length ? { session: "01a15e12-ec43-7222-9fbc-6b6b19f3835a", cwd: "/Users/" + me.login } : {}), ...budget })
           : ok({ items: sc.own ? [...items, ...termItems] : items, asks: [], models, default: "opus", busy: false, last: "turn-a1", others: { codex: codexSide },
-            providers: ["claude", "codex"], ...(items.length ? { session: "5b1e0000-0000-4000-8000-0000000000a1", cwd: "/Users/" + me.login } : {}), ...budget,
+            providers: ["claude", "codex"], ...(viewHeld ? { session: VIEW_SID, cwd: "/Users/" + me.login } : items.length ? { session: "5b1e0000-0000-4000-8000-0000000000a1", cwd: "/Users/" + me.login } : {}), ...budget,
             ...(sc.own === "term_busy" || sc.own === "term_idle" ? { owner: { where: "terminal", busy: sc.own === "term_busy", label: "scratch-20", machine: "mac-mini", agent: "claude" } } : {}),
             ...(sc.own === "handed" ? { handed: { from: "terminal", label: "scratch-20", at: new Date().toISOString() } } : {}) });
       }
@@ -402,6 +408,11 @@ export async function install(): Promise<string> {
         return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
       }
       case "/v1/chat/stop": case "/v1/chat/answer": case "/v1/chat/take": return ok({ ok: true });
+      case "/v1/chat/takeover": case "/v1/chat/giveback": {
+        await new Promise((r) => setTimeout(r, 600));
+        viewHeld = p === "/v1/chat/takeover";
+        return ok({ ok: true, agent: "claude", session: VIEW_SID });
+      }
       // 只读 (task F481): a terminal session's record, as the service streams it —
       // what it said, then one more line while it answers
       case "/v1/chat/view": {
@@ -411,10 +422,15 @@ export async function install(): Promise<string> {
         const said = [...termItems, { t: "user", text: "华南的数字再核对一遍" }, { t: "tool", id: "tt2", name: "Bash", summary: "Bash · python3 check.py sales-w41.xlsx" }];
         const stream = new ReadableStream({
           async start(c) {
-            c.enqueue(ev({ t: "state", agent: "claude", session: "5b1e0000-0000-4000-8000-0000000000b2", busy: true, state: "working", label: "scratch-20", holder: "" }));
+            const busy = !viewHeld && sc.view !== "idle";
+            c.enqueue(ev({ t: "state", agent: "claude", session: VIEW_SID, busy, state: viewHeld ? "exited" : busy ? "working" : "done", label: "scratch-20", holder: viewHeld ? "webchat" : "" }));
             c.enqueue(ev({ t: "items", from, items: said.slice(from) }, said.length));
             await new Promise((r) => setTimeout(r, 1500));
             c.enqueue(ev({ t: "items", from: said.length, items: [{ t: "tool_result", id: "tt2", text: "3 个城市都对上了" }] }, said.length + 1));
+            // the holder changes on a handover: the page comes back for the new state
+            const was = viewHeld;
+            while (was === viewHeld) await new Promise((r) => setTimeout(r, 300));
+            c.close();
           },
         });
         return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
