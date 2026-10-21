@@ -1040,7 +1040,7 @@ class Core(object):
             # root's (the core's own uid: 0 on a machine, the sandbox's in a test)
             if len(parts) < 3 or not parts[0].isdigit() or parts[1] != str(os.geteuid()):
                 continue
-            pid, cmd = int(parts[0]), parts[2].strip()
+            pid, cmd = int(parts[0]), sup.proc_title_cmd(ent["cmd"][0], parts[2].strip())
             if pid == os.getpid():
                 continue
             if cmd == full or (tail and cmd.endswith(" " + tail) and os.path.basename(ent["cmd"][0]) in cmd) \

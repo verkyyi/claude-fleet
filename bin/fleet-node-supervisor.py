@@ -609,6 +609,22 @@ def script_process_is(script, args, cmd):
                              r"(?:[^\s]+/)?(?:python[0-9.]*|Python)(?: -(?:I|u|B|E|s|S|O|OO))*", prefix))
 
 
+# An OpenSSH listener rewrites its own title (T702): ps shows
+# `sshd: /usr/sbin/sshd -D -e -f <cfg> [listener] 0 of 10-60 startups`.
+SSHD_TITLE_RE = re.compile(r"^sshd: (.+?) \[listener\]")
+
+
+def proc_title_cmd(argv0, cmd):
+    """The command a process of a job whose argv[0] is <argv0> was started with,
+    from what ps shows: an sshd listener's rewritten title gives back its argv;
+    anything else is cmd as it is."""
+    if os.path.basename(argv0) == "sshd":
+        m = SSHD_TITLE_RE.match(cmd)
+        if m:
+            return m.group(1)
+    return cmd
+
+
 def shared_proxy_pid(ent):
     """The shared launcher's exec'd role-account process, by its public pid
     record AND exact installed script/tenant paths/uid. Root uses this both at
@@ -7372,6 +7388,57 @@ def entry_route(paths, me):
     return "", 0
 
 
+def entry_listener(port, hostkey, child_pid=None):
+    """What answers on this machine's entry port (T702): (state, held_by).
+    state "ours" — 127.0.0.1:<port> answers with the entry's own host key;
+    "other" — something else answers there (held_by: who, as far as lsof can
+    tell); "" — nothing answers; None — no ssh-keyscan here (FLEET_ENTRY_KEYSCAN
+    =off too), so the old reading (the child's pid) stands. With "ours", held_by
+    names the listener when the daemon's own child (<child_pid>) is not running."""
+    scan = env("FLEET_ENTRY_KEYSCAN", "/usr/bin/ssh-keyscan")
+    if scan == "off" or not os.path.exists(scan):
+        return None, ""
+    want = (hostkey.split() + ["", ""])[:2]
+    try:
+        out = subprocess.run([scan, "-T", "3", "-t", want[0] or "ed25519", "-p", str(port), "127.0.0.1"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True,
+                             timeout=15).stdout
+    except Exception:
+        return None, ""
+    got = [ln.split()[1:3] for ln in out.splitlines() if ln.strip() and not ln.startswith("#") and len(ln.split()) >= 3]
+    holder = _entry_holder(port)
+    if not got:
+        return "", ""
+    if want[1] and any(g == want for g in got):
+        if holder and not pid_alive(child_pid):
+            # the daemon's own entry is not running, yet the port answers with its
+            # key: a listener an earlier daemon left (the seated book's pid is the
+            # core's stand-in, never sshd's — only a dead one says anything)
+            return "ours", "pid %s: %s" % holder
+        return "ours", ""
+    return "other", ("pid %s: %s" % holder) if holder else "another program (host key %s)" % got[0][0]
+
+
+def _entry_holder(port):
+    """(pid, command) of the process listening on TCP <port> (lsof; as root it
+    sees every login's), or None."""
+    try:
+        lsof = env("FLEET_ENTRY_LSOF", "/usr/sbin/lsof" if os.path.exists("/usr/sbin/lsof") else "/usr/bin/lsof")
+        out = subprocess.check_output([lsof, "-nP", "-iTCP:%d" % int(port), "-sTCP:LISTEN", "-Fp"],
+                                      stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+    except Exception:
+        return None
+    pids = [ln[1:] for ln in out.splitlines() if ln.startswith("p") and ln[1:].isdigit()]
+    if not pids:
+        return None
+    try:
+        cmd = subprocess.check_output(["ps", "-o", "command=", "-p", pids[0]], stderr=subprocess.DEVNULL,
+                                      universal_newlines=True, timeout=10).strip()
+    except Exception:
+        cmd = "?"
+    return pids[0], cmd[:200]
+
+
 def entry_reach(paths):
     """One report: 0 the hub answered · 1 it did not (reach.json says why) · 3 entry off."""
     on, port, me = entry_settings(paths)
@@ -7382,11 +7449,22 @@ def entry_reach(paths):
     _entry_root_dir(ep.dir, 0o755)
     book = read_json(ep.book, {}) or {}
     cs = (read_json(paths.state_file, {}).get("children") or {}).get("entry") or {}
-    listening = bool(book.get("allow")) and pid_alive(cs.get("pid"))
+    hostkey = " ".join((_entry_read(ep.hostkey + ".pub") or "").split()[:2])
+    # T702: what really answers on the port, not only whether the child's pid
+    # lives — a listener an earlier daemon left holds it while the child dies on
+    # every start (its pid stays empty), and that is said, not read as "deaf"
+    probe, held_by = (None, "") if not book.get("allow") else entry_listener(port, hostkey, cs.get("pid"))
+    if probe == "ours":
+        listening = True
+    elif probe == "other":
+        listening = False
+    else:
+        listening = bool(book.get("allow")) and pid_alive(cs.get("pid"))
     gw, default_if = entry_default_route()
     lan, v6 = entry_addrs(entry_ifaddrs(), default_if)
-    hostkey = " ".join((_entry_read(ep.hostkey + ".pub") or "").split()[:2])
     rep = {"port": port, "host_key": hostkey, "listening": listening, "v6": v6, "lan": lan}
+    if held_by:
+        rep["held_by"] = held_by
     ent_host, ent_port = entry_route(paths, me)
     if ent_port:
         rep.update(entry_host=ent_host, entry_port=ent_port)
@@ -7394,7 +7472,7 @@ def entry_reach(paths):
     if listening and mode != "off":
         rep["portmap"] = entry_portmap(lan, port, gw)
     out = {"at": now(), "port": port, "listening": listening, "lan": lan, "v6": v6, "default_if": default_if,
-           "entry_host": ent_host, "entry_port": ent_port,
+           "entry_host": ent_host, "entry_port": ent_port, "held_by": held_by,
            "portmap": rep.get("portmap"), "portmap_mode": mode, "verdict": None, "error": ""}
     hub, token = (me.get("CCQUOTA_HUB_URL") or "").rstrip("/"), me.get("CCQUOTA_TOKEN") or ""
     if not hub or not token:
@@ -7437,6 +7515,11 @@ def entry_reach_check(paths):
         if not book.get("allow"):
             return 2, "nobody's home here"
         return 1, "外面能不能连上还没查过（节点程序每 5 分钟查一次；现在查：sudo fleet-node-supervisor.py entry reach）"
+    if r.get("held_by") and book.get("allow"):
+        # T702: another listener holds the port — the entry answers with a stale
+        # list, or not at all
+        return 1, ("入口端口 %d 被另一个程序占着（%s），新入口起不来、名单也不生效："
+                   "以管理员停掉它（sudo kill <pid>），守护一分钟内重新起入口" % (port, r["held_by"]))
     if not r.get("listening"):
         return 2, "the entry is not listening"
     lan = (r.get("lan") or [None])[0]

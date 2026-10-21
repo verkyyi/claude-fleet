@@ -38,6 +38,10 @@
 #                             whose chain moves the pin to a new root, fetched by the
 #                             seated updater; a chain / op / key that would let the
 #                             seat move the machine's trust anchor itself
+#   entry-orphan-holds-port   bin/fleet-node-core.py strays / proc_title_cmd (T702): the
+#                             entry sshd the root daemon left before the seat (PPID 1),
+#                             wearing sshd's own listener title — the core sees it, a
+#                             hup reaches it, a start replaces it on the port
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -538,6 +542,67 @@ drill_seated_forget_core_job() {
   printf '%s' "$out" | grep -q '"refused"' || { WHY="the core started alice's job again after forget: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT="入座守护的机器上删号：stand-in 被杀、作业还挂在 root core 下跑；account forget 自己按 uid 找出 core 下该登录的作业、以 root 停掉，core 不再为它起新的"
+}
+
+# entry-orphan-holds-port (T702): the entry sshd the root daemon started before the
+# seat outlives it (PPID 1) and holds the port. sshd rewrites its own title to
+# `sshd: <argv> [listener] 0 of 10-60 startups`, so a core that matched the table's
+# command verbatim never saw it: no hup reached it (it ran a stale AllowUsers), and
+# every start of the seat's entry died on `Address already in use`. Here a stand-in
+# sshd (perl, the same title, the port its config names) is the orphan: the core's
+# hup must signal it, and a start must stop it and take the port.
+drill_entry_orphan_holds_port() {
+  CAP=30
+  local sb t0 out port fake cfg orphan ppid i new
+  sb="$WORK/entryorphan"; core_sandbox "$sb"
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+  fake="$sb/root/rt/bin/sshd"; cfg="$sb/db/sshd_config"
+  printf 'Port %s\n' "$port" > "$cfg"
+  cat > "$fake" <<'SH'
+#!/bin/bash
+# a stand-in sshd: listens on its config's Port and wears sshd's listener title
+port=$(awk '$1 == "Port" {print $2}' "$4")
+exec -a "sshd: $0 $* [listener] 0 of 10-60 startups" perl -MIO::Socket::INET -e '
+  my $s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $ARGV[0], Listen => 5) or exit 255;
+  $SIG{HUP} = sub { open(my $f, ">>", $ARGV[1]); print $f "hup\n"; close $f };
+  $SIG{TERM} = sub { exit 0 };
+  sleep 1 while 1' "$port" "$4.hup.$$"
+SH
+  chmod 755 "$fake"
+  printf '{"children": [{"name": "entry", "cmd": ["%s", "-D", "-e", "-f", "%s"], "reload_signal": "HUP"}], "tasks": [], "account": []}\n' \
+    "$fake" "$cfg" > "$sb/table.json"
+  # what the root daemon left: started in a subshell that is gone at once
+  ( "$fake" -D -e -f "$cfg" </dev/null >/dev/null 2>&1 & echo $! > "$sb/orphan.pid" )
+  orphan=$(cat "$sb/orphan.pid")
+  for i in $(seq 1 50); do nc -z 127.0.0.1 "$port" 2>/dev/null && break; sleep 0.1; done
+  ps -o command= -p "$orphan" | grep -q '^sshd: .*\[listener\]' \
+    || { kill "$orphan" 2>/dev/null; WHY="the stand-in does not wear sshd's title: $(ps -o command= -p "$orphan")"; return 1; }
+  core_serve "$sb" || { kill "$orphan" 2>/dev/null; WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  t0=$(now)
+  out=$(core_call "$sb" machine '{"job": "entry", "action": "hup"}')
+  case "$out" in *'"signalled": 1'*) ;; *) kill "$orphan" 2>/dev/null; WHY="a hup did not reach the orphan sshd: $out"; return 1 ;; esac
+  for i in $(seq 1 30); do [ -s "$cfg.hup.$orphan" ] && break; sleep 0.1; done
+  [ -s "$cfg.hup.$orphan" ] || { kill "$orphan" 2>/dev/null; WHY="the orphan never got its SIGHUP"; return 1; }
+  ppid=$(ps -o ppid= -p "$orphan" | tr -d ' ')
+  if [ "$ppid" != 1 ]; then
+    # a subreaper took it (some CI containers): the start leaves a live parent's
+    # copy alone by design — stop clears it instead
+    out=$(core_call "$sb" machine '{"job": "entry", "action": "stop"}')
+    case "$out" in *'"strays": 1'*) ;; *) kill "$orphan" 2>/dev/null; WHY="stop did not find the orphan sshd: $out"; return 1 ;; esac
+  fi
+  core_call "$sb" machine '{"job": "entry", "action": "start"}' --follow >"$sb/start.out" 2>&1 &
+  CORE_PIDS+=("$!")
+  for i in $(seq 1 100); do grep -q '"pid"' "$sb/start.out" 2>/dev/null && break; sleep 0.1; done
+  new=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["pid"])' "$sb/start.out" 2>/dev/null)
+  [ -n "$new" ] || { kill "$orphan" 2>/dev/null; WHY="no fresh entry started: $(cat "$sb/start.out") $(tail -2 "$sb/core.log")"; return 1; }
+  CORE_PIDS+=("$new")
+  for i in $(seq 1 50); do kill -0 "$orphan" 2>/dev/null || break; sleep 0.1; done
+  kill -0 "$orphan" 2>/dev/null && { kill "$orphan" 2>/dev/null; WHY="the orphan sshd outlived the start"; return 1; }
+  for i in $(seq 1 50); do kill -0 "$new" 2>/dev/null && nc -z 127.0.0.1 "$port" 2>/dev/null && break; sleep 0.1; done
+  kill -0 "$new" 2>/dev/null && nc -z 127.0.0.1 "$port" 2>/dev/null \
+    || { WHY="the fresh entry did not take the port: $(cat "$sb/start.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="入座前留下的入口 sshd（改写过的 listener 标题、PPID 1）占着端口：core 认得它，hup 送到，start 停掉它、新入口拿到端口"
 }
 
 cred_run_drills "$0"

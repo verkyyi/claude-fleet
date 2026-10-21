@@ -63,7 +63,7 @@ type Connect = {
 type EntryKey = { id: string; fp: string; type: string; name: string; created: string; last_used?: string; revoked_at?: string };
 type Door = {
   domain?: string; address?: string; port: number; login?: string; home_name?: string; home_why?: string;
-  home_down?: string; state: string; why?: string; qr?: string[]; jump?: string;
+  home_down?: string; state: string; why?: string; qr?: string[]; jump?: string; host_fp?: string;
 };
 type HomeChoice = { machine: string; login: string; online: boolean; name?: string };
 type Entry = {
@@ -357,6 +357,12 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
             {d.qr ? <p className="text-muted-foreground pt-2 text-[13px]">{tr("用手机相机扫左边的码，在 App 里打开就填好这三项。", "Scan the code with your phone's camera to open these three in the app.")}</p> : null}
           </div>
         </div>
+        {d.host_fp ? (
+          <p className="text-muted-foreground text-[13px]">
+            {tr("主机钥匙指纹（第一次连、或换家后 App 会问一次，对得上再接受）：", "Host key fingerprint (the app asks once — on the first connection or after a home move; accept only if it matches): ")}
+            <span className="text-foreground font-mono break-all">{d.host_fp}</span>
+          </p>
+        ) : null}
         {d.jump ? (
           <div className="flex flex-col gap-1 text-sm">
             <span className="text-muted-foreground text-[13px]">{tr("经门跳转（App 里的 Jump host，或电脑上直接 ssh）：", "Through the door's jump (an app's Jump host, or plain ssh):")}</span>
@@ -501,8 +507,8 @@ const HomeTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void; setAs
   const homeOnline = home ? (choices.find((c) => same(c.machine, home.machine) && c.login === home.login)?.online ?? (hm ? hm.takes !== "lost" : false)) : false;
   const moveTo = (c: HomeChoice) => setAsk({
     title: tr(`把家换到 ${c.name || c.machine}？`, `Make ${c.name || c.machine} your home?`),
-    body: tr("你的地址几分钟内指向它，对话也在它上面跑；两台在同一个路由器后面时端口会变；手机第一次连会说主机钥匙变了，接受一次。",
-      "Your address points to it within minutes and your conversation runs there; behind one router the port may change; your phone asks once to trust its new host key."),
+    body: tr("你的地址几分钟内指向它，对话也在它上面跑。和现在的家在同一个路由器后面时，要把路由器的公网端口转发改到新家（换完后这页会写出新家的局域网地址）；手机第一次连会说主机钥匙变了，核对这页的指纹后接受一次。",
+      "Your address points to it within minutes and your conversation runs there. Behind the same router as your current home, point the router's public port forward at the new one (this page then shows its LAN address); your phone asks once to trust its new host key — check it against the fingerprint here."),
     yes: tr("换过去", "Move"),
     run: async () => {
       const r = await sendJSON("PUT", "/v1/fleet/entry/home", { machine: c.machine, login: c.login });

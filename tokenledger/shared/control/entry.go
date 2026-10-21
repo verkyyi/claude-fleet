@@ -98,6 +98,10 @@ type EntryReachReport struct {
 	// dials the source address — and the host's own addresses — on it.
 	EntryHost string `json:"entry_host,omitempty"`
 	EntryPort int    `json:"entry_port,omitempty"`
+	// HeldBy names another listener holding the entry port ("pid N: <command>"),
+	// or one an earlier daemon left that answers with the entry's key while the
+	// daemon's own entry is not running (claude-fleet T702); "" otherwise.
+	HeldBy string `json:"held_by,omitempty"`
 }
 
 // Entry reach reasons: why an address did not count.
