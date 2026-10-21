@@ -62,7 +62,10 @@
 //      on the wire; ~/.ssh, a secret's name, a link out of $HOME, a missing file get none;
 //      /api/file serves an image as itself, HTML as a download under a sandbox CSP; an
 //      expired ref says so (410); a file that became a link out is refused at the read
-//   --only=socket|budget|context|home|idle|trial|media|links|local (comma list) runs those parts only — the drills' road.
+//   R  pictures from the page (task T773 ③): a turn's images reach the agent as image
+//      blocks before the words (and with no words at all); read back they ride on the
+//      person's line; a fifth picture, a non-image, a request past the bound are refused
+//   --only=socket|budget|context|home|idle|trial|media|links|send|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -80,7 +83,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,links,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,links,send,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -577,6 +580,45 @@ if (part("links")) {
   const ex = await get(byName("shot.png"));
   ok(ex.status === 410 && /过期/.test(ex.body), `Q an expired ref says so (${ex.status})`);
   await sstop(l2);
+}
+// ---- R: pictures from the page (task T773 ③) --------------------------------------------
+if (part("send")) {
+  mkdirSync(homeOf("s"), { recursive: true });
+  SSTATE = stateOf("s"); SOCK = join(SSTATE, "chat.sock");
+  const sv = (await sstart(["--socket"], asHome("s"))).p;
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const post = (body) => new Promise((resolve, reject) => {
+    const r = http.request({ socketPath: SOCK, path: "/api/turn", method: "POST",
+      headers: { Host: "webchat", "X-Fleet-Webchat": "1", "Content-Type": "application/json" } }, (res) => {
+      let b = "", buf = "";
+      res.on("data", (d) => { b += d; buf += d; let i; while ((i = buf.indexOf("\n")) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1);
+        try { const o = JSON.parse(l); if (o.t === "ask") sreq("/api/answer", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: { rid: o.rid, answers: { "猫还是狗？": "狗" } } }); } catch { /* not a line */ }
+      } });
+      res.on("end", () => resolve({ status: res.statusCode, body: b }));
+    });
+    r.on("socket", (sk) => sk.on("error", () => {}));     // the server answers 413 before it reads the rest
+    r.on("error", (e) => (e.code === "EPIPE" || e.code === "ECONNRESET" ? resolve({ status: 413, body: "" }) : reject(e)));
+    r.end(typeof body === "string" ? body : JSON.stringify(body));
+  });
+  const before = existsSync(PROMPTLOG) ? readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).length : 0;
+  const a = await post({ text: "看这张", images: [{ media_type: "image/png", data: PNG }] });
+  ok(a.status === 200 && /"t":"done"/.test(a.body), `R a turn with a picture streams to done (${a.status})`);
+  const got = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).slice(before);
+  const pr = got[0]?.prompt;
+  ok(Array.isArray(pr) && pr[0]?.type === "image" && pr[0].source?.data === PNG && pr.at(-1)?.type === "text" && pr.at(-1).text.endsWith("看这张"),
+    "R the agent got the picture as an image block, then the words");
+  const b = await post({ text: "", images: [{ media_type: "image/png", data: PNG }] });
+  const pr2 = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).at(-1).prompt;
+  ok(b.status === 200 && Array.isArray(pr2) && pr2.length === 1 && pr2[0].type === "image", "R a picture with no words goes too");
+  const items = JSON.parse((await sreq("/api/conversation")).body).items;
+  const mine = items.find((i) => i.t === "user" && i.text === "看这张");
+  ok(mine?.images?.length === 1 && /^[0-9a-f]{32}\.png$/.test(mine.images[0].ref) && items.some((i) => i.t === "user" && i.text === "" && i.images?.length === 1),
+    "R read back: each picture rides on the person's line");
+  ok((await post({ text: "x", images: Array(5).fill({ media_type: "image/png", data: PNG }) })).status === 400, "R a fifth picture is refused");
+  ok((await post({ text: "x", images: [{ media_type: "image/png", data: Buffer.from("<script>").toString("base64") }] })).status === 400 &&
+    (await post({ text: "x", images: [{ media_type: "image/svg+xml", data: PNG }] })).status === 400, "R a non-image (or an SVG) is refused");
+  ok((await post(JSON.stringify({ text: "x".repeat(1200 * 1024) }))).status === 413, "R a request past the bound is refused 413");
+  await sstop(sv);
 }
 if (!part("local")) {
   proxy.close();

@@ -40,6 +40,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
 import { cn } from "@/lib/utils";
+import { tr } from "@/shared/i18n";
 
 type AttachmentPreviewProps = {
   src: string;
@@ -275,12 +276,12 @@ export const ComposerAddAttachment: FC = () => {
   return (
     <ComposerPrimitive.AddAttachment asChild>
       <TooltipIconButton
-        tooltip="Add Attachment"
+        tooltip={tr("发图片", "Add a picture")}
         side="bottom"
         variant="ghost"
         size="icon"
         className="aui-composer-add-attachment text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full active:scale-[0.96] motion-reduce:transition-none"
-        aria-label="Add Attachment"
+        aria-label={tr("发图片", "Add a picture")}
       >
         <PlusIcon className="aui-attachment-add-icon size-4" />
       </TooltipIconButton>

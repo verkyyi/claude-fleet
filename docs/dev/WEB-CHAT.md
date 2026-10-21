@@ -277,6 +277,15 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 名字带 secret / token / credential / password 的）一律不给；读的时候若已变成链到外面的软链，拒。图片原样回，其余
 （含 HTML、SVG）一律下载，`sandbox` CSP——Agent 写的东西不在入口的域名下运行。BREAK-IT `chat-file-escape`。
 
+### 发图给 Agent（T773 ③）
+
+输入框左下「＋」（`ComposerAddAttachment`，assistant-ui 的 `SimpleImageAttachmentAdapter`）选图、拍照或粘贴；发送前
+浏览器用自己的 canvas 把每张缩到长边 ≤ 1568 px（Claude 看图的上限）、转 JPEG，逐级降质量 / 尺寸，直到全部图加字放得进
+对话这条路**一次请求的 1 MB**（`control.ChatBodyMax`，节点的帧缓冲按它定，不放宽）。一条最多 4 张。`/turn` 的请求体多一个
+`images:[{media_type, data}]`；服务只收 png / jpeg / gif / webp 且读得出尺寸的，超过 4 张或不是图回 400，整条超界 413；
+给 Agent 的是内容块 `[image…, text]`（暖会话直接推，冷路径包成一条消息的输入流）。图随后按「图片」一节落 media、挂在人那
+一行上。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，
