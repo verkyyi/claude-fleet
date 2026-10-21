@@ -48,6 +48,9 @@ export type Budget = { blocked: boolean; msg?: string; until?: string };
 // Why there is no conversation to show: the entry's refusal (issue #3645) —
 // no_home, home_down, operator, … — or any other read that failed.
 export type Gate = { code: string; msg: string };
+// The copy beside the entry: being checked against the home · matches it ·
+// the home is out of reach (the copy is what shows).
+export type Sync = "" | "syncing" | "synced" | "offline";
 const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
@@ -172,6 +175,10 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   const [notice, setNotice] = useState("");
   const [gate, setGate] = useState<Gate | null>(null);
   const [budget, setBudget] = useState<Budget>({ blocked: false });
+  // The copy beside the entry (task V9DJ D): shown first, marked syncing until
+  // the home answers; the home's answer replaces it. "" = no copy in play.
+  const [sync, setSync] = useState<Sync>("");
+  const hadCopy = useRef(false);
   const turnEnd = useRef(onTurnEnd);
   turnEnd.current = onTurnEnd;
   const reply = useRef(onReply);
@@ -187,6 +194,25 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     const signal = transport.current.signal;
     if (signal.aborted || !navigator.onLine || streaming.current) return;
     const read = ++historyRead.current;
+    if (!hadCopy.current) {
+      // first read: the entry's copy, at once, while the home's answer travels
+      void fetch(`${API}/conversation?cached=1`, { headers: H, signal }).then(async (c) => {
+        if (!c.ok || signal.aborted || read !== historyRead.current) return;
+        const j = await c.json().catch(() => null);
+        if (!j || read !== historyRead.current) return;
+        hadCopy.current = true;
+        setModels(j.models || []);
+        setModelState((m) => {
+          if (m) return m;
+          const saved = localStorage.getItem("fwc-model");
+          return (j.models || []).some((x: Model) => x.id === saved) ? saved! : j.default;
+        });
+        setItems(j.items || []);
+        setResume(j.session ? { id: j.session, cwd: j.cwd } : null);
+        setSync("syncing");
+        setLoaded(true);
+      }).catch(() => {});
+    }
     const r = await chatFetch(`${API}/conversation`, { headers: H, signal }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     // A newer read or local turn owns the transcript, even after that turn ends.
@@ -194,6 +220,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     if (!r || !r.ok) {
       if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
       const code = String(j.code || "");
+      if (hadCopy.current && (code === "home_down" || !r)) {
+        // the home is out of reach: the copy stays on the page, said so
+        setSync("offline");
+        setLoaded(true);
+        return;
+      }
       if (SITE && GATES.has(code)) setGate({ code, msg: String(j.error || "") });
       else setNotice(j.error || tr("读不到对话", "Could not read the conversation"));
       setLoaded(true);
@@ -201,6 +233,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     }
     setNotice("");
     setGate(null);
+    if (hadCopy.current) setSync("synced");
     setBudget(j.budget && typeof j.budget === "object" ? j.budget : { blocked: false });
     setModels(j.models || []);
     setModelState((m) => {
@@ -281,7 +314,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     }
     // the line dropped; the turn goes on — pick it back up. A finished turn
     // reloads too: the transcript is the record, the stream was only its preview.
-    if (lost) { await load(); setNotice("连接中断，消息可能已送达。请查看对话，再决定是否重试。"); } else setAsks([]);
+    if (lost) { await load(); setNotice("连接中断，消息可能已送达。请查看对话，再决定是否重试。"); }
+    else {
+      setAsks([]);
+      // the copy beside the entry follows the home: read the finished turn back
+      if (hadCopy.current) void load();
+    }
   }, [model, load]);
 
   const onCancel = useCallback(async () => {
@@ -340,5 +378,5 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     onRespondToToolApproval,
   });
 
-  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy };
+  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync };
 }

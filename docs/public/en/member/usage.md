@@ -181,3 +181,5 @@ For accepted remote tasks, Fleet verifies the selected agent before delivering t
 Webchat goes through the hub to your home node. The hub keeps one connection to your node open, so each request is a single round trip rather than a fresh connection. The conversation still runs only on your home node, with the same conversation and quota rules; the local page works as before.
 
 If the connection drops after submission, the page reloads the conversation and says that the message may already have arrived. Review the recovered conversation before retrying. Messages, stop requests and answers are never sent again automatically.
+
+The hub keeps a copy of your conversation in China (your words, the replies' text and one line per tool step; never a tool's output), encrypted and readable only by you. The chat shows this copy first, marked "Syncing", and replaces it with your home node's answer, marked "In sync"; while your node is out of reach you can still read the history ("Syncing · your machine is out of reach"). A copy not refreshed for 90 days is deleted; you can turn it off under Settings → Conversation history, which deletes it at once.

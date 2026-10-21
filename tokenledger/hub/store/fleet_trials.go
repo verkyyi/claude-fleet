@@ -123,6 +123,9 @@ func (s *Store) ensureFleetTrials() error {
 	if _, err := s.write.Exec(s.d.ddl(trialConvosSchema)); err != nil {
 		return fmt.Errorf("create trial conversations table: %w", err)
 	}
+	if err := s.ensureChatMirrors(); err != nil {
+		return err
+	}
 	if _, err := s.write.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_trials_way
 		ON fleet_trials(kind, subject) WHERE kind <> ''`); err != nil {
 		return fmt.Errorf("create fleet trials way index: %w", err)

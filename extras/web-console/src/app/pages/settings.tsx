@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { lang, tr } from "@/shared/i18n";
 import { isAdmin, sendJSON, useLoad } from "@/shared/api";
 import { setThemePick, themePick, type ThemePick } from "@/shared/theme";
@@ -395,6 +396,43 @@ const Look: FC = () => {
   );
 };
 
+// 对话历史在国内存一份 (task V9DJ D): the person's switch for the copy of their
+// conversation the entry keeps (sealed, theirs alone, 90 days); off deletes it.
+type ChatCopy = { available: boolean; on: boolean; at?: string };
+const ChatCopyCard: FC = () => {
+  const st = useLoad<ChatCopy>("/v1/chat/mirror");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  if (!st.data?.available) return null;
+  const flip = async (on: boolean) => {
+    setBusy(true); setErr("");
+    const r = await fetch("/v1/chat/mirror", { method: "PUT", headers: { "Content-Type": "application/json", "X-Fleet-Webchat": "1" },
+      body: JSON.stringify({ on }) }).catch(() => null);
+    setBusy(false);
+    if (!r?.ok) { setErr(tr("没改成，稍后再试", "Not changed; try again later")); return; }
+    st.reload();
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{tr("对话历史", "Conversation history")}</CardTitle>
+        <CardDescription>
+          {tr("在国内存一份你的对话（你说的话、回复的文字、每个工具步骤的一行），加密存放，只有你能看；打开对话时先显示它，家机器连不上也能看。保留 90 天；关掉立即删除。",
+            "Keep a copy of your conversation in China (your words, the replies' text, one line per tool step), encrypted and readable only by you; the chat shows it first, even while your machine is out of reach. Kept 90 days; turning it off deletes it at once.")}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="chat-copy">{tr("对话历史在国内存一份", "Keep a copy in China")}</Label>
+          <Switch id="chat-copy" checked={st.data.on} disabled={busy} onCheckedChange={(v) => void flip(v)} />
+        </div>
+        {st.data.on && st.data.at ? <p className="text-muted-foreground text-xs">{tr("上次同步 ", "Last synced ")}{ago(st.data.at)}</p> : null}
+        {err ? <p className="text-destructive text-xs">{err}</p> : null}
+      </CardContent>
+    </Card>
+  );
+};
+
 export default function SettingsPage() {
   usePage(tr("设置", "Settings"));
   const { me } = useShell();
@@ -402,7 +440,7 @@ export default function SettingsPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-5 md:px-6 md:py-8">
       <PageHeader title={tr("设置", "Settings")} />
       <Profile />
-      {me?.person ? <><SignInWays /><MyConfig /></> : null}
+      {me?.person ? <><SignInWays /><MyConfig /><ChatCopyCard /></> : null}
       <Look />
       {me?.can_logout ? (
         <SignOut>

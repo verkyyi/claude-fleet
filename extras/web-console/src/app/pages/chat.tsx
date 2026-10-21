@@ -13,7 +13,7 @@ import { ModelSelector } from "@/components/assistant-ui/elements/model-selector
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { useFleetChat, type Gate } from "@/app/chat/chat";
+import { useFleetChat, type Gate, type Sync } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
 import { fmtClock, resumedSecs, useTrial, useTrialBeat, useTryClock, type TrialState } from "@/app/chat/try";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -246,6 +246,20 @@ export default function ChatPage() {
   return viewAs && (!me || me.view_as) ? <PreviewChat /> : <LiveChat />;
 }
 
+// The copy beside the entry (task V9DJ D): where the history on screen stands.
+function SyncChip({ sync }: { sync: Sync }) {
+  if (!sync) return null;
+  const off = sync === "offline";
+  const words = sync === "synced" ? tr("已同步", "In sync")
+    : off ? tr("同步中 · 家机器暂时连不上", "Syncing · your machine is out of reach") : tr("同步中", "Syncing");
+  return (
+    <div className="flex flex-col items-end gap-1 px-4 pt-2" role="status">
+      <span className={`rounded-full px-2 py-px text-[12px] ${sync === "synced" ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" : "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300"}`}>{words}</span>
+      {off ? <span className="text-muted-foreground text-[12px]">{tr("可以看历史；家机器连回来后才能发新话", "You can read the history; send once your machine is back")}</span> : null}
+    </div>
+  );
+}
+
 function LiveChat() {
   usePage(tr("对话", "Chat"));
   useVisualViewport();
@@ -276,6 +290,7 @@ function LiveChat() {
               {tr(`已在一台干净的机器上续上你的对话 · 用了 ${resumed} 秒`, `Picked your conversation up on a clean machine · took ${resumed} s`)}
             </p> : null}
             <StillHere open={!!beat.beat?.warn} secs={beat.beat?.pause_in_secs ?? 0} onStay={beat.stillHere} onPause={beat.pause} />
+            <SyncChip sync={chat.sync} />
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">
               {over ? <TrialOver trial={trial} /> : gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (

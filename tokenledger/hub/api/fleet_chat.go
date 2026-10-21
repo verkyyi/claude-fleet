@@ -221,6 +221,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.handleChatHome(w, r)
 		return
 	}
+	if name == chatMirrorRoute {
+		s.handleChatMirror(w, r)
+		return
+	}
 	method, ok := chatRoutes[name]
 	if !ok {
 		httpError(w, http.StatusNotFound, "no such chat route")
@@ -246,6 +250,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// header, a cross-site form cannot (the service checks it again).
 	if r.Method == http.MethodPost && r.Header.Get("X-Fleet-Webchat") != "1" {
 		s.chatRefuse(w, person, name, http.StatusForbidden, "forbidden", "X-Fleet-Webchat: 1 is required")
+		return
+	}
+	// The copy beside the entry (task V9DJ D) is answered here, home or not.
+	if name == "conversation" && r.URL.Query().Get("cached") == "1" {
+		s.handleChatCached(w, r, person)
 		return
 	}
 	home, ok, err := s.Store.EntryHomeOf(person)
@@ -375,6 +384,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// NDJSON: each line reaches the page as the service writes it.
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
+			if name == "conversation" && resp.StatusCode == http.StatusOK && viewAsAsked(r) == "" && s.chatMirrorOn(person) {
+				resp.Body = &chatMirrorTee{ReadCloser: resp.Body, done: func(b []byte) {
+					s.chatMirrorKeepBody(person, append([]byte(nil), b...), time.Now())
+				}}
+			}
 			if refund == nil {
 				return nil
 			}

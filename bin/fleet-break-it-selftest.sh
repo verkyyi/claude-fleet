@@ -6685,6 +6685,17 @@ drill_chat_direct_admission() {
   SECS=$(since "$t0")
 }
 
+# chat-mirror-other-person (task V9DJ D): the copy of a person's conversation the
+# entry keeps is sealed to them, holds no tool output, opens for nobody else (a
+# view-as read included) and is gone once they turn it off.
+drill_chat_mirror_other_person() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestChatMirror' './e2e' \
+    '入口那份对话：密文落库、不含工具输出、只本人能读、看他视角被拒、关掉即删' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_term_controller_ready() {
   CAP=180; local t0
   t0=$(now)
