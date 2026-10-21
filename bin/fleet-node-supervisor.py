@@ -6091,11 +6091,38 @@ def door_hostkey(ep):
     return ""
 
 
+def door_server(paths):
+    """Which program is the door's listener: "ccquota" — `ccquota door`, the one
+    address routed by username (A5SQ) that also carries the pods' jump — when
+    FLEET_DOOR_SERVER=ccquota (environment or machine.env) and the runtime has
+    its ccquota; else "openssh", byte for byte as before. Never on a home."""
+    if paths is None or not door_on(paths):
+        return "openssh"
+    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    want = os.environ.get("FLEET_DOOR_SERVER") or me.get("FLEET_DOOR_SERVER") or ""
+    if want == "ccquota" and os.access(door_ccquota(paths), os.X_OK):
+        return "ccquota"
+    return "openssh"
+
+
+def door_ccquota(paths):
+    return env("FLEET_DOOR_CCQUOTA", os.path.join(paths.runtime, "bin", "ccquota"))
+
+
 def entry_child(paths):
     """The listener, as a child: started once its config exists, stopped when the
     config goes (no login has its home here), and told SIGHUP — sshd re-execs on
-    the new file, its live connections untouched — whenever the config changes."""
+    the new file, its live connections untouched — whenever the config changes.
+    On a door with FLEET_DOOR_SERVER=ccquota the listener is `ccquota door` (A5SQ):
+    it reads its own book from the hub, so a new config needs no signal."""
     ep = EntryPaths(paths)
+    if door_server(paths) == "ccquota":
+        _on, port, _me = entry_settings(paths)
+        return {"name": "entry", "cmd": [door_ccquota(paths), "door", "--listen", ":%d" % port,
+                                         "--host-key", ep.hostkey, "--env", os.path.join(paths.state, "machine.env"),
+                                         "--namespace", door_namespace(),
+                                         "--audit", os.path.join(paths.log, "door-audit.ndjson")],
+                "requires": [ep.cfg, ep.hostkey], "note": "A5SQ · #3549"}
     return {"name": "entry", "cmd": [entry_sshd(), "-D", "-e", "-f", ep.cfg],
             "requires": [ep.cfg], "reload": ep.cfg, "reload_signal": "HUP",
             "note": "#3070"}

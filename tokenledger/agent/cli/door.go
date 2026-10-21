@@ -26,6 +26,7 @@ func runDoor(args []string) error {
 	hostKey := fs.String("host-key", "/run/fleet-door/host", "the door's host key (OpenSSH private key)")
 	envFile := fs.String("env", "/var/db/fleet-node/machine.env", "machine.env: CCQUOTA_HUB_URL and CCQUOTA_TOKEN")
 	auditFile := fs.String("audit", "", "append one JSON line per login here (default: the log)")
+	ns := fs.String("namespace", envOr("FLEET_DOOR_NAMESPACE", "fleet-workers"), "the pods' namespace (the jump's tunnels)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func runDoor(args []string) error {
 		defer f.Close()
 		audit = f
 	}
-	d, err := door.New(door.Config{Hub: hub, Token: tok, HostKey: hk, Audit: audit})
+	d, err := door.New(door.Config{Hub: hub, Token: tok, HostKey: hk, Audit: audit, Namespace: *ns})
 	if err != nil {
 		return err
 	}

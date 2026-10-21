@@ -98,6 +98,12 @@
 #   door-xssh-drift       the door's copy of golang.org/x/crypto/ssh: one changed
 #                         byte, or a file upstream does not have, and
 #                         bin/xssh-sync.sh --check is red naming it
+#   door-jump-ccquota     the door's listener switched to `ccquota door` (A5SQ ④,
+#                         FLEET_DOOR_SERVER=ccquota): the pods' jump on it tunnels a
+#                         key only to its owner's pod sshd — no session, no other pod,
+#                         no address of the client's choosing, no remote forward, a
+#                         key the hub took away opens no new tunnel (go test
+#                         TestJumpOnlyToTheirOwnPod); unset, the listener stays sshd
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1271,6 +1277,35 @@ drill_door_xssh_drift() {
   case $out in *extra.go*) ;; *) WHY="the check did not name extra.go: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="门带的 x/crypto/ssh 副本：改一个字节、多一个上游没有的文件，xssh-sync.sh --check 都红并点名；干净的副本是 go.mod 要的版本 + fleet.patch"
+}
+
+drill_door_jump_ccquota() {
+  CAP=120
+  local t0 gohalf out; t0=$(now)
+  grep -q '^func TestJumpOnlyToTheirOwnPod(' "$ROOT/tokenledger/agent/door/door_test.go" 2>/dev/null \
+    || { WHY="the test TestJumpOnlyToTheirOwnPod is gone"; return 1; }
+  # the switch: openssh unless FLEET_DOOR_SERVER=ccquota and the runtime has its ccquota
+  out=$(python3 - "$SUP" "$EB/doorswitch" <<'PY'
+import importlib.util, os, sys
+d = sys.argv[2]; os.makedirs(d + "/rt/bin", exist_ok=True); os.makedirs(d + "/db", exist_ok=True)
+open(d + "/db/machine.env", "w").write("FLEET_DOOR=1\nFLEET_ENTRY=1\n")
+os.environ.update(FLEET_NODE_STATE=d + "/db", FLEET_NODE_RUNTIME=d + "/rt", FLEET_NODE_LOG=d, FLEET_DOOR="1", FLEET_ENTRY="1")
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1]); sup = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sup)
+p = sup.Paths()
+a = sup.entry_child(p)["cmd"][0]
+os.environ["FLEET_DOOR_SERVER"] = "ccquota"
+b = sup.entry_child(p)["cmd"][0]                      # no ccquota in the runtime: still sshd
+open(d + "/rt/bin/ccquota", "w").write("#!/bin/sh\n"); os.chmod(d + "/rt/bin/ccquota", 0o755)
+c = sup.entry_child(p)["cmd"]
+print(" ".join([os.path.basename(a), os.path.basename(b), os.path.basename(c[0]), c[1]]))
+PY
+)
+  [ "$out" = "sshd sshd ccquota door" ] || { WHY="the listener switch: [$out], want [sshd sshd ccquota door]"; return 1; }
+  gohalf="no go toolchain here — the Go gate runs TestJumpOnlyToTheirOwnPod"
+  go_half '^TestJumpOnlyToTheirOwnPod$' ./agent/door; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门的监听换成 ccquota door：跳转账号只把钥匙接到它主人自己 pod 的 sshd，不开会话、不到别的 pod、不到客户端随便点的地址、不许反向转发，钥匙被撤后这条连接也开不了新隧道；不设 FLEET_DOOR_SERVER（或 runtime 里没有 ccquota）就照旧是 sshd；$gohalf"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

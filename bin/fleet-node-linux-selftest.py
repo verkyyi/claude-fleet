@@ -904,6 +904,12 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual({v['name']: v['emptyDir'] for v in pod['volumes'] if 'emptyDir' in v},
                          {'state': {'sizeLimit': '4Gi'}, 'logs': {'sizeLimit': '1Gi'}})
         self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', env)
+        # A5SQ: the listener is OpenSSH unless asked; --door-server ccquota adds the one env
+        self.assertNotIn('FLEET_DOOR_SERVER', env)
+        cq = rendered(door + ['--image', img, '--hub', 'https://hub.example', '--door-server', 'ccquota'])[1]
+        cenv = {e['name']: e['value'] for e in cq['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(cenv.pop('FLEET_DOOR_SERVER'), 'ccquota')
+        self.assertEqual(cenv, env)
         # the load balancer's address, once it has one: the door's reach knocks
         # there, not on the NAT (#4112)
         lb = rendered(door + ['--image', img, '--hub', 'https://hub.example', '--entry-host', '203.0.113.7'])[1]
