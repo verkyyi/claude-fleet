@@ -154,7 +154,7 @@ func (s *Server) trialScan(ctx context.Context, scene int64, openid, event strin
 		log.Printf("trial code: scene %d: %v", scene, err)
 	}
 	if code == nil {
-		return trialScanAnswer{Reply: qrText("", qrStopped, nil)}
+		return trialScanAnswer{Reply: s.qrText("", qrStopped, nil)}
 	}
 	if n, err := s.Store.TrialScansSince(code.ID, openid, now.Add(-qrRescanGap)); err == nil && n > 0 {
 		s.recordScan(code.ID, openid, event, qrAgain, now)
@@ -203,7 +203,7 @@ func trialWho(u wxUser) string {
 
 func (s *Server) trialScanDecide(ctx context.Context, code *store.TrialCode, u wxUser, lang string, now time.Time) (string, trialScanAnswer) {
 	text := func(outcome string) (string, trialScanAnswer) {
-		return outcome, trialScanAnswer{Reply: qrText(lang, outcome, code)}
+		return outcome, trialScanAnswer{Reply: s.qrText(lang, outcome, code)}
 	}
 	// A WeChat a code reached before: its one trial, wherever it stands.
 	who := trialWho(u)
@@ -278,7 +278,7 @@ func (s *Server) trialScanDecide(ctx context.Context, code *store.TrialCode, u w
 func (s *Server) trialScanApproval(code *store.TrialCode, u wxUser, kind, subject, lang string, now time.Time) (string, trialScanAnswer) {
 	rid, err := randomToken(12)
 	if err != nil {
-		return qrRefused, trialScanAnswer{Reply: qrText(lang, qrRefused, code)}
+		return qrRefused, trialScanAnswer{Reply: s.qrText(lang, qrRefused, code)}
 	}
 	req := store.AccessRequest{ID: "rq-" + rid, Kind: kind, Subject: subject, Display: wxDisplay(lang, u.OpenID),
 		Use: qrUse(code), Referrer: trialReferrer(code.ID), NotifyChannel: store.NotifyWeChat, CreatedAt: now}
@@ -287,12 +287,12 @@ func (s *Server) trialScanApproval(code *store.TrialCode, u wxUser, kind, subjec
 	var cool *store.CooldownError
 	switch {
 	case errors.As(err, &cool):
-		return qrRefused, trialScanAnswer{Reply: qrText(lang, qrRefused, code)}
+		return qrRefused, trialScanAnswer{Reply: s.qrText(lang, qrRefused, code)}
 	case errors.Is(err, store.ErrRequestPending):
-		return qrPending, trialScanAnswer{Reply: qrText(lang, qrPending, code)}
+		return qrPending, trialScanAnswer{Reply: s.qrText(lang, qrPending, code)}
 	case err != nil:
 		log.Printf("trial code %s: request: %v", code.ID, err)
-		return qrRefused, trialScanAnswer{Reply: qrText(lang, qrRefused, code)}
+		return qrRefused, trialScanAnswer{Reply: s.qrText(lang, qrRefused, code)}
 	}
 	_ = rq.SetLang(got.ID, lang)
 	if err := s.Store.SetHubReach(store.HubReach{Owner: store.ApplicantReachOwner(kind, subject), Channel: store.ReachWeChatMP,
@@ -301,11 +301,11 @@ func (s *Server) trialScanApproval(code *store.TrialCode, u wxUser, kind, subjec
 	}
 	if _, err := s.Store.ClaimTrialGrant(store.TrialGrant{Who: trialWho(u), CodeID: code.ID, OpenID: u.OpenID,
 		State: store.GrantPending, Lang: lang, ScannedAt: now}, code.Cap); errors.Is(err, store.ErrTrialCodeFull) {
-		return qrFull, trialScanAnswer{Reply: qrText(lang, qrFull, code)}
+		return qrFull, trialScanAnswer{Reply: s.qrText(lang, qrFull, code)}
 	}
 	_ = s.Store.HubAudit("qr:"+code.ID, "request.submit", req.Display+" ("+kind+")", "ok", got.ID+" · 试用码 "+code.Channel, now)
 	s.notifyAdmins(got)
-	return qrPending, trialScanAnswer{Reply: qrText(lang, qrPending, code)}
+	return qrPending, trialScanAnswer{Reply: s.qrText(lang, qrPending, code)}
 }
 
 // inCooldown: kind/subject's last request was turned down and its cooldown
@@ -572,18 +572,19 @@ func termsWords(t trialTerms, en bool) string {
 }
 
 // qrText is a scan's answer in words, for the outcomes with no card.
-func qrText(lang, outcome string, code *store.TrialCode) string {
+func (s *Server) qrText(lang, outcome string, code *store.TrialCode) string {
 	en := lang == "en"
+	apply := strings.TrimRight(s.FleetPublicURL, "/") + ApplyPath
 	switch outcome {
 	case qrStopped:
-		return ternary(en, "This trial code has stopped. To use ClaudeFleet, ask here — the answer comes to this chat: https://claudefleet.24haowan.com/apply",
-			"这张试用码已停用。想用 ClaudeFleet 可以点下面申请，结果会推到这里：https://claudefleet.24haowan.com/apply")
+		return ternary(en, "This trial code has stopped. To use ClaudeFleet, ask here — the answer comes to this chat: "+apply,
+			"这张试用码已停用。想用 ClaudeFleet 可以点下面申请，结果会推到这里："+apply)
 	case qrExpired:
-		return ternary(en, "This trial code has expired. To use ClaudeFleet, ask here — the answer comes to this chat: https://claudefleet.24haowan.com/apply",
-			"这张试用码已过期。想用 ClaudeFleet 可以点下面申请，结果会推到这里：https://claudefleet.24haowan.com/apply")
+		return ternary(en, "This trial code has expired. To use ClaudeFleet, ask here — the answer comes to this chat: "+apply,
+			"这张试用码已过期。想用 ClaudeFleet 可以点下面申请，结果会推到这里："+apply)
 	case qrFull:
-		return ternary(en, "This trial code has given every trial it had. To use ClaudeFleet, ask here — the answer comes to this chat: https://claudefleet.24haowan.com/apply",
-			"这张试用码的名额已经发完了。想用 ClaudeFleet 可以点下面申请，结果会推到这里：https://claudefleet.24haowan.com/apply")
+		return ternary(en, "This trial code has given every trial it had. To use ClaudeFleet, ask here — the answer comes to this chat: "+apply,
+			"这张试用码的名额已经发完了。想用 ClaudeFleet 可以点下面申请，结果会推到这里："+apply)
 	case qrDaily:
 		return ternary(en, "Today's trials are all given out. Scan again tomorrow.",
 			"今天的试用名额发完了，明天再扫一次就好。")
@@ -591,8 +592,8 @@ func qrText(lang, outcome string, code *store.TrialCode) string {
 		return ternary(en, "Got it — your request to try ClaudeFleet is with us. The answer comes to this chat.",
 			"收到，你的 ClaudeFleet 试用申请已提交，结果会推到这里。")
 	}
-	return ternary(en, "ClaudeFleet cannot start a trial for you right now. You can ask here — the answer comes to this chat: https://claudefleet.24haowan.com/apply",
-		"ClaudeFleet 暂时不能为你开通试用。可以点下面申请，结果会推到这里：https://claudefleet.24haowan.com/apply")
+	return ternary(en, "ClaudeFleet cannot start a trial for you right now. You can ask here — the answer comes to this chat: "+apply,
+		"ClaudeFleet 暂时不能为你开通试用。可以点下面申请，结果会推到这里："+apply)
 }
 
 // RunTrialQueue serves the line: every qrQueueTick, while nothing holds,

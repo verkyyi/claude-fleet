@@ -376,7 +376,7 @@ export async function install(): Promise<string> {
       case "/v1/chat/conversation": {
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);
         // a trial a 试用二维码 just started: its home on its way (claude-fleet MRGB)
-        if (state === "opening") return ok({ code: "no_home", error: "正在为你开家（mini2），通常一两分钟，稍后刷新" }, 409);
+        if (state === "opening") return ok({ code: "no_home", error: "正在为你开家（mac-1），通常一两分钟，稍后刷新" }, 409);
         const codex = url.includes("provider=codex");
         const budget = state === "over" ? { budget: { blocked: true, until: reset.toISOString() } } : {};
         const codexSide = { busy: sc.codex === "busy" || sc.codex === "ask", last: sc.codex === "new" ? "turn-c2" : "turn-c1" };
