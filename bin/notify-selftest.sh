@@ -12,11 +12,15 @@
 #               none; working → needs → working → needs = 2; a new question
 #               while still asking = a new one
 #   B. stuck    needs/blocked → 卡住 with a sound; failed → 失败了
-#   C. done     working → done: 做完, no sound, never the phone; a second of the
-#               same batch within 10 minutes → ONE notification grown (same
-#               group, 「做完了 2 个」); FLEET_NOTIFY_DONE=0 → none, logged skip
+#   C. done     a done turn is no 做完 (T894): only a handed-in RESULT is — the
+#               ID's merged report → ONE 「✓ 做完 · <title>」「PR #N 已合并 · node」,
+#               no sound, never the phone; more done turns, the same result →
+#               nothing more; a stop with no result → nothing; a probe / a test
+#               identity → nothing (logged skip); English wording; a second of
+#               the same batch within 10 minutes → ONE notification grown (same
+#               group, 「✓ 批次 <parent title> 做完 2 件」); FLEET_NOTIFY_DONE=0 → none
 #   D. quiet    inside FLEET_NOTIFY_QUIET: still notified, no sound, no phone
-#   E. orch     an old orchestrator row is ordinary (issue #3118): done → 做完
+#   E. orch     an old orchestrator row is ordinary (issue #3118): its result → 做完
 #   H. off      FLEET_NOTIFY=0: nothing — no notification, no state, no log
 # No network, no live fleet. Exit 0 = pass.
 #
@@ -88,24 +92,55 @@ st_eq "B: needs/blocked → 卡住, with a sound" 1 "$(grep -c '^#1909 被卡住
 st_eq "B: failed → 失败了, with a sound" 1 "$(grep -c '^#7 失败了|mac-b|1$' "$NOTIFY_OUT")"
 
 # ============================================================================ C
+IDS="$FLEET_CONF_DIR/ids"; mkdir -p "$IDS"
+fid() { printf '%08d-0000-4000-8000-000000000000' "$1"; }
+P=$(fid 2756)
+for n in 1909 7 8 10; do printf '%s/issue-%s\t%s\n' "$F" "$n" "$(fid "$n")"; done > "$G/wid_ids"
+# ledger <n> <title> [parent] — an ID's opening; result <n> <state> [pr] — its report
+ledger() { printf '{"ev":"opened","title":"%s","parent":"%s"}\n' "$2" "${3:-}" > "$IDS/$(fid "$1").ndjson"; }
+result() { printf '{"ev":"result","state":"%s","pr":"%s","ts":%s}\n' "$2" "${3:-}" "$(date +%s)" >> "$IDS/$(fid "$1").ndjson"; }
+printf '{"ev":"opened","title":"EPIC 网页终端"}\n' > "$IDS/$P.ndjson"
+ledger 1909 '做完的会话还挂着'; ledger 7 '接管与交回' "$P"; ledger 8 '收消息' "$P"; ledger 10 '放置计时探针'
 E=',"epic":"o/r#2756:1/3"'
-answer "$(row issue-1909 working '' '' "$E")" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working)"; round
-answer "$(row issue-1909 'done' '' '' "$E")" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working)"; round; settle 6
-st_eq "C: working → done: 做完, no sound" "#1909 做完了|mac-b|" "$(last)"
-answer "$(row issue-1909 'done' '' '' "$E")" "$(row issue-7 'done' '' '' "$E")" "$(row issue-8 working)"; round; settle 7
-st_eq "C: the same batch within 10 minutes → its one notification grown" "#2756 做完了 2 个|最新：#7 · mac-b|" "$(last)"
-answer "$(row issue-1909 'done' '' '' "$E")" "$(row issue-7 'done' '' '' "$E")" "$(row issue-8 'done')"
-FLEET_NOTIFY_DONE=0 round; sleep 0.5
-st_eq "C: FLEET_NOTIFY_DONE=0 → no 做完" 7 "$(lines)"
-st_has "C: …logged as a skip" "$(tail -1 "$WORK/notify.ndjson")" '"skip": "done-off"'
+answer "$(row issue-1909 working)" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"; round
+n0=$(lines)
+answer "$(row issue-1909 'done')" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"; round
+answer "$(row issue-1909 working)" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"; round
+answer "$(row issue-1909 'done')" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"; round; sleep 0.5
+st_eq "C: done turns with no result → no 做完 (a turn is not a done task)" "$n0" "$(lines)"
+result 1909 merged 5223; round; settle $((n0 + 1))
+st_eq "C: its merged report → ONE 做完 with the result, no sound" "✓ 做完 · 做完的会话还挂着|PR #5223 已合并 · mac-b|" "$(last)"
+for _ in 1 2 3; do
+  answer "$(row issue-1909 working)" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"; round
+  answer "$(row issue-1909 'done')" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"; round
+done; sleep 0.5
+st_eq "C: three more done turns, the same result → still ONE" "$((n0 + 1))" "$(lines)"
+result 10 merged 9; round; sleep 0.5
+st_eq "C: a probe's result → nothing" "$((n0 + 1))" "$(lines)"
+st_has "C: …logged as a skip" "$(tail -1 "$WORK/notify.ndjson")" '"skip": "probe"'
+result 7 succeeded; round; settle $((n0 + 2))
+st_eq "C: a batch member's result → 做完 (first of its batch)" "✓ 做完 · 接管与交回|mac-b|" "$(last)"
+result 8 merged 12; round; settle $((n0 + 3))
+st_eq "C: the same batch within 10 minutes → its one notification grown" "✓ 批次 EPIC 网页终端 做完 2 件|最后：收消息|" "$(last)"
 st_eq "C: a done never asks for the phone" 0 "$(grep -c '做完' "$PHONE")"
+ledger 1909 '做完的会话还挂着'; result 1909 merged 5300
+FLEET_UI_LANG=en round; settle $((n0 + 4))
+st_eq "C: English: ✓ Done · <title> · PR #N merged" "✓ Done · 做完的会话还挂着|PR #5300 merged · mac-b|" "$(last)"
+ledger 1909 '做完的会话还挂着'; result 1909 merged 5301
+FLEET_NOTIFY_DONE=0 round; sleep 0.5
+st_eq "C: FLEET_NOTIFY_DONE=0 → no 做完" "$((n0 + 4))" "$(lines)"
+st_has "C: …logged as a skip" "$(tail -1 "$WORK/notify.ndjson")" '"skip": "done-off"'
+# a test identity's row: its result is never a 做完
+answer "$(row issue-1909 'done' '' '' ',"test":true')" "$(row issue-7 working '' '' "$E")" "$(row issue-8 working '' '' "$E")" "$(row issue-10 working)"
+ledger 1909 '做完的会话还挂着'; result 1909 merged 5302; round; sleep 0.5
+st_eq "C: a test identity's result → nothing" "$((n0 + 4))" "$(lines)"
 
 # ============================================================================ D
 answer "$(row issue-1909 working)" "$(row issue-7 working)" "$(row issue-8 working)"; round
 answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-7 working)" "$(row issue-8 working)"
 q=$(python3 -c 'import time; t=time.localtime(); h=t.tm_hour; print("%02d:00-%02d:00" % (h, (h + 2) % 24))')
 : > "$PHONE"
-FLEET_NOTIFY_QUIET=$q round; settle 8
+FLEET_NOTIFY_QUIET=$q round; settle $((n0 + 5))
 st_eq "D: quiet hours: still notified, no sound" "#1909 在问你|夜里的问题 · mac-b|" "$(last)"
 st_eq "D: …and no phone asked" "" "$(cat "$PHONE")"
 
@@ -113,9 +148,10 @@ st_eq "D: …and no phone asked" "" "$(cat "$PHONE")"
 # an old orchestrator row (issue #3118: no session is special) is a row like any other
 O='"role":"orchestrator"'
 answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 working '' '' ",$O")"; round
-answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")"; round; settle 9
-st_eq "E: an old orchestrator's row is an ordinary row — its done is 做完, no decide count" "#90 做完了|mac-b|" "$(last)"
-answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")" "$(row issue-91 needs ask '合不合？')"; round; settle 10
+printf '%s/issue-90\t%s\n' "$F" "$(fid 90)" >> "$G/wid_ids"; ledger 90 '编排'; result 90 succeeded
+answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")"; round; settle $((n0 + 6))
+st_eq "E: an old orchestrator's row is an ordinary row — its result is 做完, no decide count" "✓ 做完 · 编排|mac-b|" "$(last)"
+answer "$(row issue-1909 needs ask '夜里的问题')" "$(row issue-90 'done' '' '' ",$O,\"orch_decide\":2")" "$(row issue-91 needs ask '合不合？')"; round; settle $((n0 + 7))
 st_eq "E: …and a new ask beside it rings" "#91 在问你|合不合？ · mac-b|1" "$(last)"
 st_eq "E: …and asks for the phone (outside quiet hours)" "#91 在问你" "$(cat "$PHONE")"
 
