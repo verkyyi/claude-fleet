@@ -178,9 +178,9 @@ eq "D: an unknown parent is not a batch" 1 "$RC"
 # The plan names ~/fleet-drafts/… files; the parent's dispatch carries them, and a
 # driver on ANOTHER machine (the drafts gone) still hands each member its own file
 # and the 共同约定 — and says a file nobody carried.
-mkdir -p "$WORK/mini2/fleet-drafts/t696/members" "$WORK/macmini"
-printf '约定：不改 conf 格式。\n' > "$WORK/mini2/fleet-drafts/t696/sections.md"
-printf 'C1 细节：开关叫 drafts。\n' > "$WORK/mini2/fleet-drafts/t696/members/C1.md"
+mkdir -p "$WORK/home-a/fleet-drafts/t696/members" "$WORK/home-b"
+printf '约定：不改 conf 格式。\n' > "$WORK/home-a/fleet-drafts/t696/sections.md"
+printf 'C1 细节：开关叫 drafts。\n' > "$WORK/home-a/fleet-drafts/t696/members/C1.md"
 cat > "$WORK/charter2" <<'EOF2'
 <!-- fleet:epic repo=o/r short=草稿 cap=4 -->
 # EPIC: 草稿批次
@@ -198,13 +198,13 @@ cat > "$WORK/charter2" <<'EOF2'
 ## C2 · 细节没带上的一项
 细节（必读）~/fleet-drafts/t696/members/C2.md
 EOF2
-P=$(HOME="$WORK/mini2" bash "$BIN/fleet-task-record.sh" dispatch --title "EPIC: 草稿批次" --body-file "$WORK/charter2" 2>"$WORK/perr" | head -1)
+P=$(HOME="$WORK/home-a" bash "$BIN/fleet-task-record.sh" dispatch --title "EPIC: 草稿批次" --body-file "$WORK/charter2" 2>"$WORK/perr" | head -1)
 has "F: the plan's dispatch says the file it could not carry" "$(cat "$WORK/perr")" "members/C2.md · 不在这台机器"
-S=$(HOME="$WORK/macmini" tick)
+S=$(HOME="$WORK/home-b" tick)
 B1=$(printf '%s' "$S" | jq_ '[n["body"] for n in d["next"] if n["key"]=="C1"][0]')
 has "F: on another machine, C1 still gets its own file" "$B1" "C1 细节：开关叫 drafts。"
 has "F: and the 共同约定, file and all" "$B1" "约定：不改 conf 格式。"
-has "F: the line warns about C2's file" "$(HOME="$WORK/macmini" tick --line)" "C2 的本机文件没能随单带上"
+has "F: the line warns about C2's file" "$(HOME="$WORK/home-b" tick --line)" "C2 的本机文件没能随单带上"
 
 # --- E. no GitHub ---------------------------------------------------------------------
 [ -e "$WORK/denied" ] && bad "E: a GitHub road ran: $(cat "$WORK/denied")" || ok
