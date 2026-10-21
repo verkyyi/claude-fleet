@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:extras/web-console/dist/app/assets/key-round-qVzPopPi.js
-import{Zt as e}from"./index-KQ5Zl_Kb.js";var t={name:`key-round`,size:24,node:[[`path`,{d:`M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z`,key:`1s6t7t`}],[`circle`,{cx:`16.5`,cy:`7.5`,r:`.5`,fill:`currentColor`,key:`w0ekpg`}]]};t.node;var n=e(t);export{n as t};
-========
-import{Xt as e}from"./index-CAV0pUDz.js";var t={name:`key-round`,size:24,node:[[`path`,{d:`M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z`,key:`1s6t7t`}],[`circle`,{cx:`16.5`,cy:`7.5`,r:`.5`,fill:`currentColor`,key:`w0ekpg`}]]};t.node;var n=e(t);export{n as t};
->>>>>>>> e4ecfa642 (XX79: browser terminals through the nearest door — not Shenzhen twice per key):extras/web-console/dist/app/assets/key-round-DLLQX6dC.js
