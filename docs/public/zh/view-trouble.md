@@ -19,6 +19,8 @@
 fleet shell            # 家里那台机器的命令行（$HOME），不经过看台
 fleet shell mac-a      # 点名别的机器
 fleet shell --print    # 只打印一行等价的 ssh 命令，给手机 / iPad 上的 ssh App 用
+fleet shell --list     # 你名下的机器：序号 · 机器 · 登录 · 在线 · 最近活跃 · 哪台是家
+fleet shell 2          # 列表里的第 2 台
 ```
 
 - 走的是看台同一张连接证书、同一条线路；不开新端口，不加长期钥匙。

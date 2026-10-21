@@ -104,6 +104,17 @@ case "$out" in
   *) bad phone-lands "[$out] $(cat "$E/ssh.err")" ;;
 esac
 
+# 2b. Termius with LC_FLEET_ENTRY=shell in its host environment ⇒ the login shell (task KEA0)
+: > "$E/view.args"
+out=$(printf 'echo SHELL-HERE; exit\n' | ssh "${sshopts[@]}" -tt -o SetEnv=LC_FLEET_ENTRY=shell -i "$E/phone" "$ME@127.0.0.1" 2>"$E/ssh.err")
+case "$out" in
+  *VIEW-STAND-IN*) bad phone-asks-shell "LC_FLEET_ENTRY=shell still opened the 看台" ;;
+  *SHELL-HERE*) if grep -q '"how":"shell-asked"' "$E/conf/logs/entry.ndjson" 2>/dev/null; then
+      ok phone-asks-shell "带 LC_FLEET_ENTRY=shell ⇒ 登录 shell（不进看台，记 shell-asked）"
+    else bad phone-asks-shell "no shell-asked line in entry.ndjson"; fi ;;
+  *) bad phone-asks-shell "[$out] $(cat "$E/ssh.err")" ;;
+esac
+
 # 3. the hub goes away and the home restarts: the last list stands
 hub_down
 kill "$ESUP" 2>/dev/null; wait "$ESUP" 2>/dev/null

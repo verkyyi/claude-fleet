@@ -45,4 +45,6 @@ After that, on the phone:
 - Open the panel: `F12` or `⌃] p` (Ctrl+], then p). Add `F12` to the extra-keys row above Termius's keyboard and one tap opens it.
 - On a narrow screen the panel fills the screen; tap a row to switch to it.
 - New phone, or lost it: revoke that key on the hub's **My connection** page and it can no longer connect, at once.
+- A command line only, no panel: add an environment variable `LC_FLEET_ENTRY` with the value `shell` to that host in Termius, and connecting lands at your own command line on your home machine (from a computer: `ssh -p <port> -o SetEnv=LC_FLEET_ENTRY=shell <username>@<your address>`). Type `fleet` there for the panel.
+- At your home machine's command line, `claude` and `codex` run on the fleet's shared subscriptions (the first line says so); `touch ~/.fleet-pool-off` to use your own account instead.
 - Moved your home to another machine: the phone asks once to trust a new host key — accept it only if it matches the fingerprint on the **Connect from your phone** page. If the two machines sit behind the same router, point the router's port forward at the new one; the page names its address on your home network.

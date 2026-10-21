@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -152,6 +153,12 @@ type RouteMachine struct {
 	// else their account's. Empty for the operator, who brings their own; an
 	// older client ignores it and takes RoutesResponse.Login.
 	Login string `json:"login,omitempty"`
+	// Status and SeenAt are the machine's life as the roster has it (task KEA0:
+	// `fleet shell --list`): online · maintenance · lost, and the newest heartbeat
+	// of an agent there — the person's own login's when one answers. Empty when
+	// the roster has no agent of that machine; an older client ignores both.
+	Status string     `json:"status,omitempty"`
+	SeenAt *time.Time `json:"seen_at,omitempty"`
 }
 
 // RoutesResponse is the body of control.RoutesPath.
@@ -254,5 +261,34 @@ func (s *Server) routeMachine(m FleetMachine, relayReady func(string) bool, logi
 	}
 	rm := RouteMachine{FleetMachine: s.withEntryReachRelay(m, now, relay), Relay: relay, Login: login}
 	rm.HostCA = s.hostCAKeys()
+	if nodes, err := s.Store.Nodes(); err == nil {
+		settings, _ := s.Store.FleetSettings()
+		rm.Status, rm.SeenAt = machineLife(nodes, settings, m.Hostname, login, now)
+	}
 	return rm
+}
+
+// machineLife is one machine's status and newest heartbeat off the roster: the
+// agent of login there when one answers, else the newest agent of the machine.
+func machineLife(nodes []store.Node, settings map[string]string, hostname, login string, now time.Time) (string, *time.Time) {
+	var best *store.Node
+	for i := range nodes {
+		n := &nodes[i]
+		if !sameMachine(n.Hostname, hostname) && !sameMachine(hostname, n.Hostname) {
+			continue
+		}
+		mine := login != "" && n.OSUser == login
+		bestMine := best != nil && login != "" && best.OSUser == login
+		switch {
+		case best == nil, mine && !bestMine:
+			best = n
+		case mine == bestMine && n.LastHeartbeat != nil &&
+			(best.LastHeartbeat == nil || n.LastHeartbeat.After(*best.LastHeartbeat)):
+			best = n
+		}
+	}
+	if best == nil {
+		return "", nil
+	}
+	return nodeAvail(best.Hostname, best.LastHeartbeat, best.HeartbeatMS, settings, now), best.LastHeartbeat
 }

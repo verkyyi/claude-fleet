@@ -1862,7 +1862,10 @@ def pick_json(m, info, reason=""):
     """--pick's one line (claude-fleet#1484): the machine `fleet` would enter,
     and every machine the person may reach — alias + hostname — so a caller
     can label rows the way the hub does without a second question."""
-    machines = [{"alias": x.get("alias") or x.get("hostname") or "", "hostname": x.get("hostname") or ""}
+    # login · status · seen_at: `fleet shell --list`'s columns (task KEA0), "" from an older hub
+    machines = [{"alias": x.get("alias") or x.get("hostname") or "", "hostname": x.get("hostname") or "",
+                 "login": x.get("login") or (info or {}).get("login") or "",
+                 "status": x.get("status") or "", "seen_at": x.get("seen_at") or ""}
                 for x in (info or {}).get("machines") or [] if isinstance(x, dict)]
     out = {"machine": (m or {}).get("alias") or (m or {}).get("hostname") or "",
            "hostname": (m or {}).get("hostname") or "", "reason": reason or "",

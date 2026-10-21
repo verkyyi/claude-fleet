@@ -17,6 +17,9 @@
 #     shell (FLEET_NO_VIEW=1: no 看台 started again there; `fleet` goes back).
 #   no command, no terminal (`ssh -T`)
 #                                  ⇒ the login shell
+#   no command, a terminal, LC_FLEET_ENTRY=shell (task KEA0: Termius' host
+#     environment, `ssh -o SetEnv=LC_FLEET_ENTRY=shell`; AcceptEnv LC_* carries it)
+#                                  ⇒ the login shell, asked for — no 看台
 #
 # The view id is the KEY's, not the connection's: `<its name>-<6 hex of its
 # fingerprint>`, so the same phone comes back to the same 看台 (`--resume`), and
@@ -113,6 +116,13 @@ fi
 
 # --- no command, no terminal: the login shell ------------------------------------
 [ -n "${SSH_TTY:-}" ] && [ -t 0 ] && [ -t 1 ] || login_shell shell
+
+# --- no command, a terminal, the person asked for the shell (task KEA0) ------------
+if [ "${LC_FLEET_ENTRY:-}" = shell ]; then
+  unset LC_FLEET_ENTRY
+  export FLEET_NO_VIEW=1
+  login_shell shell-asked
+fi
 
 # --- no command, a terminal: the 看台 --------------------------------------------
 VIEWER="${FLEET_ENTRY_VIEW:-$HOME/.claude/fleet/bin/fleet-remote-view.sh}"

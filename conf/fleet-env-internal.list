@@ -147,6 +147,8 @@ FLEET_ENTRY                        knob: a managed machine's entry port on/off �
 FLEET_ENTRY_PORT                   knob: the entry port's port (22022) — machine.env beside FLEET_ENTRY (#3070)
 FLEET_ENTRY_BOOK                   handoff: the entry sshd's SetEnv to fleet-entry.sh — the entry book (root 0644) that names each key (#3071)
 FLEET_ENTRY_VIEW                   seam: the drill's 看台 stand-in for fleet-entry.sh, set only through FLEET_ENTRY_TEST_SETENV under FLEET_NODE_TEST (#3071)
+FLEET_POOL_SESSION_CRED            seam: the stand-in fleet-session-cred.sh for fleet-pool-run.sh (task KEA0)
+FLEET_SHELL_POOL                   knob: 0 = claude / codex typed at a managed login's shell run plain, this shell only (fleet-pool-run.sh, task KEA0)
 FLEET_ENTRY_PORTMAP                knob: auto (NAT-PMP, then UPnP) | off — whether `entry reach` asks the home's router to forward the entry port; machine.env beside FLEET_ENTRY (#3072)
 FLEET_ENTRY_REACH_SECS             knob: how long `entry reach` waits for the hub's dials (30 s) (#3072)
 FLEET_ENTRY_REACH_EVERY            knob: how often the cluster door's resident loop runs `entry reach` (300 s; 0 = off) — a door has no node program to (#4112)

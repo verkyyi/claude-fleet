@@ -19,6 +19,8 @@ On your Mac (or any computer with `fleet`):
 fleet shell            # your home machine's command line ($HOME), no view
 fleet shell mac-a      # another machine, by name
 fleet shell --print    # just print the equivalent ssh command, for an ssh app on a phone / iPad
+fleet shell --list     # your machines: number · machine · login · online · last heard · which is home
+fleet shell 2          # the second one on that list
 ```
 
 - It uses the view's own connection certificate and route: no new port, no standing key.

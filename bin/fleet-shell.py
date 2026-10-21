@@ -6,6 +6,9 @@ machine's command line, no 看台 (EPIC T651 C5).
     fleet shell mac-a        that machine's instead
     fleet shell --print      the same as one ssh command line, run nothing —
                              for a phone's / iPad's ssh app
+    fleet shell --list       your machines: number · machine · login · status ·
+                             last heard · which is your home (task KEA0)
+    fleet shell 2            the second of that list (a name wins over a number)
 
 The emergency way in, for when the 看台 will not open at all, or for one quick
 command on the machine. It opens a command line and nothing else: no session,
@@ -43,7 +46,8 @@ import sys
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 REMOTE = 'cd && FLEET_NO_VIEW=1 exec "${SHELL:-/bin/sh}" -l'
-USAGE = "usage: fleet shell [<machine>] [--print]"
+USAGE = "usage: fleet shell [<machine>|<number>] [--print] | fleet shell --list"
+STATUS_WORDS = {"online": "在线", "maintenance": "维护中", "lost": "离线"}
 
 
 def say(text):
@@ -74,6 +78,97 @@ def argv_answer(machine, offline):
     if isinstance(j, dict) and isinstance(j.get("opening"), dict):
         say("入口正在为你开第一台机器，还没有能进的命令行；开好后再 fleet shell")
     return None, r.returncode or 1
+
+
+def pick_answer():
+    """`fleet-connect.py --pick`'s one line: the certificate renewed, the hub's
+    home pick and every machine the person may reach (login · status · seen_at
+    on a hub that sends them) — or None. FLEET_SHELL_PICK_CMD is the seam."""
+    seam = os.environ.get("FLEET_SHELL_PICK_CMD")
+    cmd = shlex.split(seam) if seam else [sys.executable or "python3", os.path.join(BIN, "fleet-connect.py"), "--pick"]
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, timeout=120)
+        j = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+    return j if isinstance(j, dict) and isinstance(j.get("machines"), list) else None
+
+
+def ago(iso, now=None):
+    """「刚刚」/「N 分钟前」/「N 小时前」/「MM-DD HH:MM」 for an RFC 3339 time, "-" for none."""
+    import datetime
+    if not iso:
+        return "-"
+    try:
+        t = datetime.datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return "-"
+    secs = ((now or datetime.datetime.now(datetime.timezone.utc)) - t).total_seconds()
+    if secs < 120:
+        return "刚刚"
+    if secs < 3600:
+        return "%d 分钟前" % (secs // 60)
+    if secs < 86400:
+        return "%d 小时前" % (secs // 3600)
+    return t.astimezone().strftime("%m-%d %H:%M")
+
+
+def width(text):
+    return sum(2 if ord(c) > 0x2e80 else 1 for c in text)
+
+
+def pad(text, w):
+    return text + " " * max(0, w - width(text))
+
+
+def machine_rows(j):
+    """[(n, alias, label, login, status word, last heard, home?)] in the hub's order."""
+    home = j.get("hostname") or ""
+    out = []
+    for i, m in enumerate(j.get("machines") or [], 1):
+        alias, host = m.get("alias") or m.get("hostname") or "?", m.get("hostname") or ""
+        label = alias if not host or host == alias else "%s (%s)" % (alias, host)
+        out.append((i, alias, label, m.get("login") or "-", STATUS_WORDS.get(m.get("status") or "", "-"),
+                    ago(m.get("seen_at") or ""), bool(home) and host == home))
+    return out
+
+
+def list_machines():
+    j = pick_answer()
+    if j is None:
+        say("没拿到你的机器列表（入口连不上或还没登录：先敲 fleet 一次）")
+        return 1
+    rows = machine_rows(j)
+    if not rows:
+        say("你名下还没有能进的机器")
+        return 1
+    head = ("#", "机器", "登录", "状态", "最近活跃")
+    cells = [(str(r[0]), r[2], r[3], r[4], r[5]) for r in rows]
+    ws = [max(width(c[k]) for c in cells + [head]) for k in range(5)]
+    print("  " + "  ".join(pad(h, w) for h, w in zip(head, ws)).rstrip())
+    for r, c in zip(rows, cells):
+        print(("  " + "  ".join(pad(x, w) for x, w in zip(c, ws))).rstrip() + ("  ← 家" if r[6] else ""))
+    other = next((r for r in rows if not r[6]), rows[0])
+    print("连：fleet shell %d   或  fleet shell %s" % (other[0], other[1]))
+    return 0
+
+
+def by_number(arg):
+    """A bare number names the list's row — unless a machine is called that.
+    None: no such row (said)."""
+    if not arg.isdigit():
+        return arg
+    j = pick_answer()
+    if j is None:
+        return arg
+    if any(arg in (m.get("alias"), m.get("hostname")) for m in j.get("machines") or []):
+        return arg
+    rows = machine_rows(j)
+    n = int(arg)
+    if 1 <= n <= len(rows):
+        return rows[n - 1][1]
+    say("没有第 %d 台（fleet shell --list 看你的机器）" % n)
+    return None
 
 
 def hub_answers():
@@ -116,11 +211,17 @@ def main(argv):
             return 0
         if a == "--print":
             print_only = True
+        elif a == "--list":
+            return list_machines()
         elif a.startswith("-") or machine:
             say("%s（%s）" % (USAGE, a))
             return 2
         else:
             machine = a
+    if machine:
+        machine = by_number(machine)
+        if machine is None:
+            return 2
     j, rc = argv_answer(machine, False)
     if j is None:
         if hub_answers() is not False:
