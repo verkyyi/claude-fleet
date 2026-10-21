@@ -24,6 +24,11 @@
 #      PR #5182 #5189 #5192 全部已合` — a member is due only when its members merged
 #      AND gh says every PR it names is MERGED (`waits_on` names `PR #5189`); a PR gh
 #      cannot read, or closed unmerged, holds it and warns.
+#   J. VTBH's table (T851): `| 波次 | 成员 | 等谁 | 可并行 |` whose 等谁 cell says
+#      `C1 等操作者…；C2 不等` and `C6 等 C2 C3 C4；C8 等 C2 C3 C5`, and a reserve row
+#      `核心全部合并（R2 若…，等 C4）` — no C1↔C2 cycle, wave 1 alone is due, C6 / C8
+#      wait on exactly their own keys, the reserves on every core member, never a
+#      same-row R; the 可并行 column and a card's 被依赖 are never read.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -320,6 +325,56 @@ eq "I: and both warn" "True True" "$(printf '%s' "$S" | jq_ 'str(any("PR #5189 �
 L=$(python3 "$BIN/fleet-epic-tick.py" status --task T580 --line)
 case "$L" in *"⚠ C4 等的 PR #77 读不出状态"*) st_count ;; *) bad "I: --line carries the PR warning: $L" ;; esac
 unset FLEET_EPIC_TICK_GH
+
+# --- J. VTBH's table (T851) -------------------------------------------------------
+CHARTER='<!-- fleet:epic repo=o/r short=域名 cap=8 -->
+- [ ] **C1** 一
+- [ ] **C2** 二
+- [ ] **C3** 三
+- [ ] **C4** 四
+- [ ] **C5** 五
+- [ ] **C6** 六
+- [ ] **C7** 七
+- [ ] **C8** 八
+  - [ ] **R1** 甲
+  - [ ] **R2** 乙
+  - [ ] **R3** 丙
+  - [ ] **R4** 丁
+## 依赖顺序
+| 波次 | 成员 | 等谁 | 可并行 |
+|---|---|---|---|
+| 1 | C1 C2 | C1 等操作者给测试网址（ask 挂起）；C2 不等 | 两个并行；C1 不通即停，回报 |
+| 2 | C3 C4 C5 | C1 C2 | 三个并行 |
+| 3 | C6 C8 | C6 等 C2 C3 C4；C8 等 C2 C3 C5 | 两个并行 |
+| 4 | C7 | C2 C5 C6 | 单独 |
+| 储备 | R1 R2 R3 R4 | 核心全部合并（R2 若拍板第 2 条改选「海外跳转」则升为核心，等 C4） | 互相独立 |
+
+## C1 · 一
+**依赖** 依赖 无（要操作者给测试网址：开工即 ask 挂起）· 被依赖 C3 C4 C5（C2 补状态映射）
+## C3 · 三
+**依赖** 依赖 C1 C2 · 被依赖 C6 C8
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+state "({'T580': $PARENT})"
+S=$(tick)
+eq "J: wave 1 alone is due (no C1↔C2 cycle)" "C1 C2" "$(due)"
+eq "J: C1 C2 wait on nothing" "None None" "$(mem C1 '.get("waits_on")') $(mem C2 '.get("waits_on")')"
+eq "J: C3 C4 C5 on C1 C2" "['C1', 'C2'] ['C1', 'C2'] ['C1', 'C2']" "$(mem C3 '["waits_on"]') $(mem C4 '["waits_on"]') $(mem C5 '["waits_on"]')"
+eq "J: C6 on C2 C3 C4, C8 on C2 C3 C5" "['C2', 'C3', 'C4'] ['C2', 'C3', 'C5']" "$(mem C6 '["waits_on"]') $(mem C8 '["waits_on"]')"
+eq "J: C7 on C2 C5 C6" "['C2', 'C5', 'C6']" "$(mem C7 '["waits_on"]')"
+for r in R1 R3 R4; do
+  eq "J: $r on every core member, never R2" "['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8']" "$(mem $r '["waits_on"]')"
+done
+eq "J: nothing marked a cycle" "False" "$(printf '%s' "$S" | jq_ 'any(m.get("cycle") for m in d["members"])')"
+eq "J: the table reads, no warning" "[]" "$(printf '%s' "$S" | jq_ 'd["warnings"]')"
+row_c3() { python3 -c '
+import importlib.util, os, sys
+s = importlib.util.spec_from_file_location("t", os.path.join(os.environ["BIN"], "fleet-epic-tick.py"))
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+out = {}
+m.dep_table_row(["3", "C3", sys.argv[1]], (1, 2), {"C1", "C2", "C3"}, lambda k, c: out.setdefault(k, c))
+print([k for sc, k in m.dep_refs(out["C3"])])' "$1"; }
+eq "J: \`C1 C2 等全部合并\` in another row is a whole-cell wait" "['C1', 'C2']" "$(row_c3 'C1 C2 等全部合并')"
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }
