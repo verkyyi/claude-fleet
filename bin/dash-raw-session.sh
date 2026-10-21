@@ -518,7 +518,6 @@ fi
 # the hub just placed it (the hub gated that placement itself, a moment ago).
 # FLEET_AUTHORITY_FRESH_SECS (30): how long a handed-down answer stands; 0 asks
 # every time, as before.
-AUTH_AT=''
 _auth_fresh() {   # <epoch s> → rc 0 when younger than the fresh window
   local f="${FLEET_AUTHORITY_FRESH_SECS:-30}" n
   case "$f$1" in *[!0-9]*|'') return 1 ;; esac
@@ -527,12 +526,9 @@ _auth_fresh() {   # <epoch s> → rc 0 when younger than the fresh window
 }
 _seen=${FLEET_AUTHORITY_SEEN:-} && _seen_mode=${_seen%% *} _seen_at=${_seen##* }
 if [ "$NOREPO" != 1 ]; then
-  if case "$_seen_mode" in hub|legacy) _auth_fresh "$_seen_at" ;; *) false ;; esac; then
-    AUTH_AT=$_seen_at
-  else
+  if ! case "$_seen_mode" in hub|legacy) _auth_fresh "$_seen_at" ;; *) false ;; esac; then
     fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --gate "$SESS" >/dev/null \
       || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
-    AUTH_AT=$(date +%s)
   fi
 fi
 unset _seen _seen_mode _seen_at
