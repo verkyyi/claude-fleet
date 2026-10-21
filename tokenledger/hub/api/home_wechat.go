@@ -68,7 +68,9 @@ func (s *Server) handleApplicant(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	a, ok := s.applicantFrom(r)
 	if !ok {
-		httpError(w, http.StatusUnauthorized, "no applicant here")
+		// silent: whether a WeChat browser may ask who it is (the relay
+		// road is configured) — without it the page draws the code.
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no applicant here", "silent": s.wxRelayOn()})
 		return
 	}
 	out := applicantInfo{Name: applicantName(a.Display)}

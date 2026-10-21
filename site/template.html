@@ -137,6 +137,8 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .qrbox a{color:var(--fleet-clay-deep);text-decoration:underline}
 .qrbox.sm{width:132px;height:132px;margin:0;flex:none}.qrbox.sm>svg{width:116px;height:116px}.qrbox.sm .wx{width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:7px;border-width:2px}.qrbox.sm .wx svg{width:16px;height:16px}
 .scan{margin-top:12px;text-align:center;font-size:14.5px;font-weight:600}
+.wxhint{display:none;margin-top:12px;text-align:center;font-size:14.5px;font-weight:600}
+html.inwx[data-j=scan] .j-scan .scan{display:none} html.inwx[data-j=scan] .wxhint{display:block}
 .flow{margin-top:14px;padding-top:12px;border-top:1px solid var(--fleet-line-2);font-size:13.5px;line-height:1.55;color:var(--fleet-ink-2);text-align:center}
 .wxbtn,.orqr,.okline{display:none}
 .wxbtn{width:100%;margin-top:16px;background:#07c160;border-color:#07c160;color:#fff}
@@ -244,6 +246,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
       <button class="orqr" type="button" id="orqr">{{ph_orqr}}</button>
       <div class="qrbox" id="qr" data-p="{{join_p}}"><span>{{join_load}}</span></div>
       <p class="scan">{{join_scan}}</p>
+      <p class="wxhint">{{wx_follow_qr}}</p>
       <p class="flow"><span class="d">{{join_flow}}</span><span class="m">{{ph_flow}}</span></p>
 <!--trial-->
       <p class="alt"><a href="{{try_href}}" data-out>{{try}}</a> · <a href="/apply" data-out>{{apply}}</a></p>
@@ -328,7 +331,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
   var root=document.documentElement,$=function(s){return document.querySelector(s)};
   var ua=navigator.userAgent,inwx=/MicroMessenger/i.test(ua),phone=!inwx&&/Mobi|Android|iPhone|iPad/i.test(ua);
   function state(j){root.dataset.j=j}
-  function J(u){return fetch(u,{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).catch(function(){return null})}
+  if(inwx)root.classList.add('inwx');
   function hi(name){var n=(name||'').trim();
     document.querySelectorAll('[data-av]').forEach(function(e){e.textContent=n?n.charAt(0):'微'});
     document.querySelectorAll('[data-hi]').forEach(function(e){e.textContent=n?e.dataset.hi.replace('{name}',n):(e.dataset.anon||e.dataset.hi.replace('{name}，','').replace('{name}, ',''))})}
@@ -343,7 +346,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
       $('#to-app').hidden=false;if(m.can_logout)$('#sign-out').hidden=false;
       if(inwx){hi(m.name);state('member')}else state('in');return}
     if(inwx)return wechat();
-    code($('#qr'));
+    if(!phone)code($('#qr'));
   });
 
   /* inside WeChat (T794): who you are comes from the service account's silent
@@ -352,10 +355,11 @@ footer .disc{margin-left:auto;font-size:12.5px}
      knows (/apply/me: name, followed): one tap applies, and someone who
      has not followed gets the code to long-press. The hop failing ⇒ the code. */
   function wechat(){
-    J('/apply/me').then(function(a){
-      if(a){hi(a.name);if(!a.followed){root.classList.add('unfollowed');code($('#fqr'),'login')}
+    fetch('/apply/me',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.json().then(function(j){return r.ok?j:{none:1,silent:!!j.silent}})}).catch(function(){return {none:1}}).then(function(a){
+      if(!a.none){hi(a.name);if(!a.followed){root.classList.add('unfollowed');code($('#fqr'),'login')}
         if(a.applied){location.replace('/apply');return}state('apply');return}
-      var k='cf-wx-hop';try{if(sessionStorage.getItem(k)){state('scan');code($('#qr'));return}sessionStorage.setItem(k,'1')}catch(e){}
+      var k='cf-wx-hop',tried=!a.silent;try{tried=tried||!!sessionStorage.getItem(k);if(!tried)sessionStorage.setItem(k,'1')}catch(e){}
+      if(tried){state('scan');code($('#qr'));return}
       location.replace('/auth/wechat/start?next='+encodeURIComponent(location.pathname));
     });
   }
