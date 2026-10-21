@@ -28,3 +28,7 @@ spec:
             # optional: a web origin whose page may read /meter.json; unset = none
             - name: CCQUOTA_METER_ORIGINS
               value: "https://www.example.com"
+            # optional: what a web-chat card may frame — the pages service the
+            # agents publish to, through its embed links (task T773); unset = none
+            - name: CCQUOTA_FLEET_CHAT_FRAME_ORIGINS
+              value: "https://pages.example.com"

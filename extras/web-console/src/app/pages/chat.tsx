@@ -4,9 +4,10 @@
 // and says so when there is no conversation to reach: no home yet, the home not
 // connected, the limit used up. The conversation service and /v1/chat are
 // unchanged. Every piece is a stock shadcn/ui or assistant-ui component.
-import { createContext, useContext, useEffect, type FC } from "react";
+import { createContext, useContext, useEffect, useState, type FC } from "react";
 import { Link, useSearchParams } from "react-router";
-import { AssistantRuntimeProvider, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, makeAssistantDataUI, useAui, type ToolCallMessagePartComponent } from "@assistant-ui/react";
+import { ExternalLinkIcon, GlobeIcon } from "lucide-react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui";
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector.aui";
@@ -14,7 +15,7 @@ import { ComposerAddAttachment } from "@/components/assistant-ui/elements/attach
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
-import { useFleetChat, type Gate, type Sync } from "@/app/chat/chat";
+import { useFleetChat, type Gate, type PageCard, type Sync } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
 import { fmtClock, resumedSecs, useTrial, useTrialBeat, useTryClock, type TrialState } from "@/app/chat/try";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -68,6 +69,60 @@ const ModelPicker: FC = () => {
     />
   );
 };
+
+// a web page the agent published to the person's 活页 (task T773 ④): one tap opens it,
+// in a new window (活页 is not framed here until it allows the entry to)
+const PAGE_STATE = (): Record<string, string> => ({
+  ready: tr("仅你可见", "Only you can see it"), review: tr("审核中，好了自动能点", "Under review; opens once it passes"),
+  publishing: tr("正在发布…", "Publishing…"), failed: tr("没发出去", "Not published"),
+  unavailable: tr("这台机器还没连活页", "This machine is not connected to LivePage"),
+});
+// 在这里预览: 活页's embed link for this page, framed under a sandbox while it lasts
+const PagePreview: FC<{ p: PageCard }> = ({ p }) => {
+  const [open, setOpen] = useState(false);
+  if (!p.embed || !(Date.parse(p.embed_exp || "") > Date.now())) return null;
+  return (
+    <div className="my-1 max-w-2xl">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="text-clay text-[13px] font-medium">
+        {open ? tr("收起预览", "Hide the preview") : tr("在这里预览", "Preview here")}
+      </button>
+      {open ? (
+        <iframe src={p.embed} title={p.title} referrerPolicy="no-referrer" loading="lazy"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          className="border-border mt-2 h-[70vh] w-full rounded-xl border bg-white" />
+      ) : null}
+    </div>
+  );
+};
+const PageCardUI = makeAssistantDataUI<PageCard>({
+  name: "fleet-page",
+  render: ({ data: p }) => {
+    const open = p.status === "ready" && p.url;
+    const body = (
+      <>
+        {p.preview ? <img src={p.preview} alt="" className="border-border h-auto max-h-28 w-28 shrink-0 border-e object-cover object-left-top" /> : null}
+        <span className="flex min-w-0 flex-1 flex-col justify-center gap-1 px-3.5 py-3">
+          <span className="text-muted-foreground flex items-center gap-1 text-[12px]"><GlobeIcon className="size-3.5" />
+            {tr("网页 · 活页", "Web page · LivePage")}{p.version && p.version > 1 ? tr(` · 第 ${p.version} 版`, ` · version ${p.version}`) : ""}</span>
+          <span className="text-foreground truncate text-[15px] font-semibold">{p.title}</span>
+          <span className="text-muted-foreground flex items-center gap-1 text-[12px]">
+            {p.status === "failed" && p.note ? `${PAGE_STATE().failed} · ${p.note}` : PAGE_STATE()[p.status] || p.status}
+            {open ? <span className="text-clay ms-auto flex items-center gap-0.5 font-medium">{tr("打开", "Open")}<ExternalLinkIcon className="size-3.5" /></span> : null}
+          </span>
+        </span>
+      </>
+    );
+    const cls = "border-border bg-card my-2 flex max-w-md overflow-hidden rounded-2xl border no-underline shadow-xs";
+    return (
+      <>
+        {open
+          ? <a href={p.url} target="_blank" rel="noopener noreferrer" className={`${cls} hover:bg-accent/40 transition-colors`}>{body}</a>
+          : <div className={cls}>{body}</div>}
+        {open ? <PagePreview p={p} /> : null}
+      </>
+    );
+  },
+});
 
 // the composer's start: 发图片 (task T773 ③), then the model
 const ComposerTools: FC = () => (
@@ -303,6 +358,7 @@ function LiveChat() {
       <AssistantRuntimeProvider runtime={runtime}>
         <AboutPrefill />
         <TooltipProvider>
+          <PageCardUI />
           <div className="flex h-full flex-col">
             <BindWeChatBanner unbound={!!me?.reach && !me.reach.wechat} />
             {trial && !over ? <TrialBar trial={trial} secsLeft={secsLeft} /> : null}

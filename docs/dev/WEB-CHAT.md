@@ -286,6 +286,24 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 给 Agent 的是内容块 `[image…, text]`（暖会话直接推，冷路径包成一条消息的输入流）。图随后按「图片」一节落 media、挂在人那
 一行上。
 
+### Agent 做的网页：发到活页，对话里一张卡片（T773 ④）
+
+对话服务给 Agent 两个进程内工具（`fleet_chat` 服务）：`page_target({file})` 答这一页该放哪——活页文件夹「WebChat 产物」
+（第一次由 Agent `create_folder`，之后记在 `<state>/pages.json`，0600）和这个文件上次发成的 `proposal_id`（再发就是同一链接的
+新版本）；`show_page({title, url, status, proposal_id, version, file, folder_id?, preview?})` 让页面多一张卡片
+（`{t:"page"}`，从对话记录里这次调用的输入重建，非 https 的链接丢掉，`preview` 是本机一张图、按「图片」一节落 media）。
+发布本身用这个登录自己连好的 `space` MCP（凭据是 Claude Code 自己的，不经这个进程、不进对话记录），默认私密、工具不改可见
+范围。每个会话第一句前有一段 `<fleet-webchat-note>`（页面不显示）告诉 Agent 这些规矩。卡片在控制台用 `makeAssistantDataUI`
+画：可点（`ready`）时「打开」新开一页；`review` / `publishing` / `failed` / `unavailable`（这台机器没连活页）不可点；同一
+`proposal` 的卡片都显示最新一次的状态与版本。「在这里预览」用活页的嵌入链接（QVTF：工作区白名单
+`embed_origins` 里有入口的 origin 时，`preview_version(version_id, embed_origin)` 给一个 ≤ 60 分钟、只读、免登录的
+`embed.url`，只有它回 `frame-ancestors <入口>`）：页面每轮把自己的 `location.origin` 交给服务，`page_target` 答
+`embed_origin`，Agent 铸好后连同 `expires_at` 交给 `show_page`（`embed_url` / `embed_expires`），卡片在过期前多一个
+「在这里预览」，点开是 `sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"` 的
+iframe；过期就只剩「打开」。入口控制台只在部署给了 `CCQUOTA_FLEET_CHAT_FRAME_ORIGINS`（逗号分隔的 https origin，填活页的嵌入链接所在的源；
+生产的值在私有部署覆盖层里）时加 `frame-src`，否则什么都不嵌。国内副本存卡片的标题、链接、状态，
+不存预览。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，

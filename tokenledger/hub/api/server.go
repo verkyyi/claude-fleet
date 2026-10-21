@@ -209,6 +209,9 @@ type Server struct {
 	// ChatPerMinute bounds how many chat relays one person opens a minute
 	// (0: 60; negative: unlimited).
 	ChatPerMinute int
+	// ChatFrameOrigins are the origins the console may frame: a page the
+	// person's agent published, previewed in its chat card (task T773 ④).
+	ChatFrameOrigins []string
 	// ChatRelayKeepSecs keeps a person's chat relay open this long idle, for
 	// the next request to reuse (task V9DJ B; 0: one relay per request).
 	ChatRelayKeepSecs int

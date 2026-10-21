@@ -1532,6 +1532,11 @@ func sshRelayConfig(srv *api.Server) error {
 		}
 	}
 	srv.ChatGeoDB = os.Getenv("CCQUOTA_FLEET_CHAT_GEO_DB")
+	frames, err := api.ParseChatFrameOrigins(os.Getenv("CCQUOTA_FLEET_CHAT_FRAME_ORIGINS"))
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_CHAT_FRAME_ORIGINS: %w", err)
+	}
+	srv.ChatFrameOrigins = frames
 	srv.ChatRelayKeepSecs = 90 // a chat relay is kept for the next request (task V9DJ B)
 	for _, kv := range []struct {
 		name string

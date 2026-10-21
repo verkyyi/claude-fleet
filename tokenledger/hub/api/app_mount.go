@@ -3,10 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -385,8 +387,39 @@ func (s *Server) serveAppManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 // consoleCSP is the console's policy: every byte its own — same origin only,
-// no CDN, no font or script from anywhere else (EPIC #3923 rule 4).
+// no CDN, no font or script from anywhere else (EPIC #3923 rule 4). The one
+// thing it may frame is a page the person's agent published (task T773 ④):
+// ChatFrameOrigins (CCQUOTA_FLEET_CHAT_FRAME_ORIGINS), none by default.
 const consoleCSP = chatCSP
+
+// consolePolicy is consoleCSP with the origins a chat card may frame.
+func (s *Server) consolePolicy() string {
+	if len(s.ChatFrameOrigins) == 0 {
+		return consoleCSP
+	}
+	return consoleCSP + "; frame-src " + strings.Join(s.ChatFrameOrigins, " ")
+}
+
+// chatFrameOrigin is the shape an origin a card may frame takes: https, a host
+// (a leading *. allowed), an optional port — nothing a policy could be bent with.
+var chatFrameOrigin = regexp.MustCompile(`^https://(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::[0-9]{1,5})?$`)
+
+// ParseChatFrameOrigins reads CCQUOTA_FLEET_CHAT_FRAME_ORIGINS: comma-separated
+// origins; one that is not an https origin refuses the whole value.
+func ParseChatFrameOrigins(v string) ([]string, error) {
+	var out []string
+	for _, o := range strings.Split(v, ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		if !chatFrameOrigin.MatchString(o) {
+			return nil, fmt.Errorf("not an https origin: %q", o)
+		}
+		out = append(out, o)
+	}
+	return out, nil
+}
 
 // serveConsole serves the new console's side ("app" or "admin"): a file
 // under assets/ as it is, any other path the side's index.html (its router
@@ -408,7 +441,7 @@ func (s *Server) serveConsole(w http.ResponseWriter, r *http.Request, side, rest
 	if strings.HasSuffix(name, "/index.html") {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", consoleCSP)
+		h.Set("Content-Security-Policy", s.consolePolicy())
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Content-Type-Options", "nosniff")

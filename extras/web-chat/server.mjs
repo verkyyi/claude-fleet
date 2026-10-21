@@ -56,11 +56,12 @@ import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, exi
   statSync, copyFileSync } from "node:fs";
 import { join, dirname, extname, normalize, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
-  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType } from "./lib.mjs";
+  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType, WEB_NOTE_V, webNoteBlock, NOTE_RE } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -448,7 +449,7 @@ async function readItems(id, cwd) {
     let pics = m.type === "user" ? imageItems(m.message?.content).filter((g) => g.ref).map(({ ref, w, h }) => ({ ref, w, h })) : [];
     for (const b of blocks(m.message?.content)) {
       if (m.type === "user" && b.type === "text" && b.text && !/^\s*<(command|local-command|system-reminder)/.test(b.text)) {
-        const text = b.text.replace(SEED_RE, "").replace(CTX_RE, "");
+        const text = b.text.replace(SEED_RE, "").replace(CTX_RE, "").replace(NOTE_RE, "");
         if (text || pics.length) out.push({ t: "user", text, ...(pics.length ? { images: pics } : {}) });
         pics = [];
       } else if (m.type === "assistant" && b.type === "text" && b.text) {
@@ -457,7 +458,10 @@ async function readItems(id, cwd) {
         if (files) out.push({ t: "files", files });
       }
       else if (m.type === "assistant" && b.type === "image") out.push(...imageItems([b]));
-      else if (m.type === "assistant" && b.type === "tool_use") out.push({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
+      else if (m.type === "assistant" && b.type === "tool_use") {
+        out.push({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
+        if (b.name === SHOW_PAGE) out.push(pageItem(b.id, b.input, cwd));
+      }
       else if (m.type === "user" && b.type === "tool_result") {
         out.push({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
         out.push(...imageItems(b.content, { id: b.tool_use_id }));
@@ -641,7 +645,7 @@ async function openWarm({ model, cwd, resume }) {
     cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
     ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources],
     canUseTool: (n, i, o) => (w.canUse ? w.canUse(n, i, o) : Promise.resolve({ behavior: "deny", message: "no turn is running" })),
-    mcpServers: browserTools(S, () => w.details),
+    mcpServers: { ...browserTools(S, () => w.details), ...await pageTools(S) },
     abortController: w.ac, ...(CLAUDE ? { pathToClaudeCodeExecutable: CLAUDE } : {}),
     stderr: () => {},
   } });
@@ -683,7 +687,7 @@ function prewarm() {
 // this turn; resolves on its result, throws on an error or the stop key).
 async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details }, onMsg) {
   lastModel = model;
-  if (!WARM_IDLE_MS) return runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers: details ? browserTools(await sdk(), details) : undefined }, onMsg);
+  if (!WARM_IDLE_MS) return runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers: await chatTools(await sdk(), details) }, onMsg);
   if (warmOpening) await warmOpening;
   let w = warm;
   if (w && (w.closed || w.cur || w.cwd !== cwd || w.session !== (resume || ""))) { closeWarm("other session"); w = null; }
@@ -769,6 +773,102 @@ function browserTools(S, details) {
     {}, async () => ({ content: [{ type: "text", text: JSON.stringify(now()) }] }));
   return { fleet_browser: S.createSdkMcpServer({ name: "fleet_browser", version: "1.0.0", tools: [t] }) };
 }
+// ---- the agent's web pages (task T773 ④) ---------------------------------------------------
+// A page the agent makes goes to the person's own 活页 (LivePage) workspace — the
+// login's `space` MCP server, its credential Claude Code's own, never in this
+// process or a transcript — private, in one folder 「WebChat 产物」. The agent then
+// calls show_page and the conversation shows a card: the title, its state, 「打开」
+// in a new window (活页 refuses to be framed until it allows the entry: a later
+// change). <state>/pages.json remembers the folder and each file's page, so a
+// change is a new version at the same link. A preview is a picture file the agent
+// names, kept as an image (media/), shown on the card.
+const PAGES_FILE = join(STATE, "pages.json");
+const PAGE_FOLDER = "WebChat 产物";
+let pages = { folder_id: "", files: {} };                // files: local path → proposal_id
+try { pages = { folder_id: "", files: {}, ...JSON.parse(readFileSync(PAGES_FILE, "utf8")) }; } catch { /* none yet */ }
+function savePages() {
+  try { writeFileSync(PAGES_FILE + ".tmp", JSON.stringify(pages), { mode: 0o600 }); renameSync(PAGES_FILE + ".tmp", PAGES_FILE); }
+  catch (e) { log("pages_failed", { msg: String(e?.message || e).slice(0, 200) }); }
+}
+const PAGE_STATES = new Set(["publishing", "review", "ready", "failed", "unavailable"]);
+// the page's origin, as the last turn said it: an embed link is minted for it
+const ORIGIN_RE = /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d{1,5})?$/;
+let pageOrigin = "";
+// the card a show_page call makes, from its input — the same off a transcript and live
+function pageItem(id, i, cwd) {
+  const o = i || {};
+  const url = /^https:\/\/[^\s"<>]+$/.test(String(o.url || "")) ? String(o.url) : "";
+  const status = PAGE_STATES.has(o.status) ? o.status : url ? "ready" : "unavailable";
+  const it = { t: "page", id, title: String(o.title || "网页").slice(0, 120), status, ...(url ? { url } : {}),
+    ...(o.proposal_id ? { proposal: String(o.proposal_id).slice(0, 64) } : {}),
+    ...(Number(o.version) > 0 ? { version: Math.floor(Number(o.version)) } : {}),
+    ...(o.note ? { note: String(o.note).slice(0, 200) } : {}) };
+  // an embed link (活页 preview_version with embed_origin): the card previews it in place until it expires
+  const exp = Date.parse(String(o.embed_expires || ""));
+  if (/^https:\/\/[^\s"<>]+$/.test(String(o.embed_url || "")) && exp > 0) { it.embed = String(o.embed_url); it.embed_exp = new Date(exp).toISOString(); }
+  if (o.preview) {
+    const real = linkable(String(o.preview), cwd);
+    const ext = real ? real.toLowerCase().split(".").pop().replace("jpeg", "jpg") : "";
+    if (real && IMAGE_EXT_MIME[ext]) {
+      try {
+        const k = keepImage({ type: "image", source: { type: "base64", media_type: IMAGE_EXT_MIME[ext], data: readFileSync(real).toString("base64") } });
+        if (k?.ref) it.preview = k.ref;
+      } catch { /* no preview */ }
+    }
+  }
+  return it;
+}
+const SHOW_PAGE = "mcp__fleet_chat__show_page";
+let zodP = null;
+// zod, the SDK's own (its tool() takes a zod shape); null where it is not beside it
+function zod() {
+  if (!zodP) zodP = (async () => {
+    try { return (await import(pathToFileURL(createRequire(SDK_PATH).resolve("zod")).href)).z; } catch { return null; }
+  })();
+  return zodP;
+}
+async function pageTools(S) {
+  if (typeof S.createSdkMcpServer !== "function" || typeof S.tool !== "function") return {};
+  const z = await zod();
+  const shape = (f) => (z ? f(z) : {});
+  const info = S.tool("page_target",
+    "Before publishing a web page you made for the person (an HTML file), ask where it goes. Answers the 活页 (LivePage) " +
+    `folder for this conversation's pages (「${PAGE_FOLDER}」, its folder_id once made) and, for this file, the proposal_id it was ` +
+    "published as before. The rules: publish with the `space` tools (publish_file; files over 2 MB through its CLI). FIRST " +
+    `time: create_folder 「${PAGE_FOLDER}」 and pass its folder_id to show_page. A file published before: publish to the SAME ` +
+    "proposal_id (a new version, the same link). Never change a page's visibility — it stays private, only the person sees it. " +
+    "If the publish is held for review, call show_page with status review, poll get_version, then show_page again with ready. " +
+    "No `space` tools here: tell the person this machine is not connected to 活页 and call show_page with status unavailable. " +
+    "Once it is ready and embed_origin is answered: call space preview_version(version_id, embed_origin) and pass its " +
+    "embed.url and embed.expires_at to show_page as embed_url / embed_expires — the card previews the page in place.",
+    shape((z) => ({ file: z.string().describe("absolute path of the HTML file") })),
+    async (a) => {
+      const real = (() => { try { return realpathSync(String(a?.file || "")); } catch { return String(a?.file || ""); } })();
+      return { content: [{ type: "text", text: JSON.stringify({ folder: PAGE_FOLDER, folder_id: pages.folder_id || null,
+        proposal_id: pages.files[real] || null, visibility: "private (never change it)", embed_origin: pageOrigin || null }) }] };
+    });
+  const show = S.tool("show_page",
+    "Show the person a card for a web page you published to their 活页: they tap it to open the page. Call it after " +
+    "publish_file (status ready, or review while it waits), with the page's link (its default_url / url), the proposal_id and " +
+    "version, the HTML file it came from, and the folder_id when you just made the folder. A picture of the page (a screenshot " +
+    "file) may go in preview.",
+    shape((z) => ({
+      title: z.string(), url: z.string().optional(), status: z.enum(["publishing", "review", "ready", "failed", "unavailable"]),
+      proposal_id: z.string().optional(), version: z.number().optional(), file: z.string().optional(),
+      folder_id: z.string().optional(), preview: z.string().optional(), note: z.string().optional(),
+      embed_url: z.string().optional(), embed_expires: z.string().optional(),
+    })),
+    async (a) => {
+      if (a?.folder_id && !pages.folder_id) pages.folder_id = String(a.folder_id).slice(0, 64);
+      if (a?.file && a?.proposal_id) { try { pages.files[realpathSync(String(a.file))] = String(a.proposal_id).slice(0, 64); } catch { /* gone */ } }
+      savePages();
+      return { content: [{ type: "text", text: "shown to the person as a card" }] };
+    });
+  return { fleet_chat: S.createSdkMcpServer({ name: "fleet_chat", version: "1.0.0", tools: [info, show] }) };
+}
+async function chatTools(S, details) {
+  return { ...(details ? browserTools(S, details) || {} : {}), ...await pageTools(S) };
+}
 const TOO_LONG = /prompt is too long|context (?:window|length)|too many tokens/i;
 
 // ---- a turn: NDJSON lines to every page that is watching ----------------------
@@ -801,6 +901,8 @@ async function turn(req, res, person) {
     images.push(b);
   }
   if (!text && !images.length) return send(res, 400, { error: "empty" });
+  // the page's own origin: the one a 活页 embed link is minted for (task T773 ④)
+  if (typeof body.origin === "string" && ORIGIN_RE.test(body.origin)) pageOrigin = body.origin;
   if (live) return send(res, 409, { error: "还在回复上一句" });
   const S = await sdk().catch((e) => e);
   if (S instanceof Error) return send(res, 503, { error: S.message });
@@ -854,7 +956,10 @@ async function turn(req, res, person) {
       // its text already went out as deltas when the partial stream carried them
       for (const b of blocks(m.message?.content)) {
         if (b.type === "text" && b.text && !sawDelta) emitAll({ t: "text", d: b.text });
-        if (b.type === "tool_use") emitAll({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
+        if (b.type === "tool_use") {
+          emitAll({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
+          if (b.name === SHOW_PAGE) emitAll(pageItem(b.id, b.input, conv.cwd || CWD));
+        }
         if (b.type === "image") emitImages([b]);
         if (b.type === "text" && b.text) {
           const files = filesOf(b.text, conv.cwd || CWD);
@@ -887,12 +992,15 @@ async function turn(req, res, person) {
       // the one-line context goes in on a session's first turn and again only when it changed
       const head = where && (!conv.session || conv.ctxKey !== where.key) ? contextBlock(where.line) : "";
       try {
-        const words = seed + head + text;
+        // how a web page's person sees things (task T773): once in each session
+        const note = conv.note !== WEB_NOTE_V || !conv.session ? webNoteBlock() : "";
+        const words = seed + head + note + text;
         await warmQuery(images.length ? [...images, ...(words ? [{ type: "text", text: words }] : [])] : words, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
           canUseTool, details }, onMsg);
         if (seed) conv.seed = "";
         if (head) conv.ctxKey = where.key;
-        if (seed || head) saveConv();
+        if (note) conv.note = WEB_NOTE_V;
+        if (seed || head || note) saveConv();
         break;
       } catch (e) {
         if (attempt === 0 && !live.ac.signal.aborted && (e.tooLong || TOO_LONG.test(String(e?.message || e)))) {

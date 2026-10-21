@@ -2511,6 +2511,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   CCQUOTA_FLEET_PUBLIC_URL / CCQUOTA_PUBLIC_URL   its public address
 #   CCQUOTA_FLEET_CRED_RELAY_URL                    the relay it signs passes for
 #   CCQUOTA_METER_ORIGINS   web origins whose page may read /meter.json; unset = none
+#   CCQUOTA_FLEET_CHAT_FRAME_ORIGINS  https origins a web-chat card may frame (the
+#                           pages service's embed links, task T773); unset = none
 #   CCQUOTA_DNS_CONTACT     the contact DNSPod's User-Agent names; unset = none
 # The relays' own (their systemd units / pod environment):
 #   GH_RELAY_SOURCES        extras/gh-relay — the cluster egress it serves; unset = nobody

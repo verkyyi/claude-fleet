@@ -94,6 +94,15 @@ func chatMirrorItem(raw json.RawMessage, left *int) (json.RawMessage, bool) {
 		}
 	case "image_more":
 		it = map[string]any{"t": "image_more", "n": it["n"]}
+	case "page":
+		// a web page's card (task T773 ④): its title, link and state — not its preview
+		kept := map[string]any{"t": "page"}
+		for _, k := range []string{"id", "title", "url", "status", "proposal", "version", "note"} {
+			if v, ok := it[k]; ok {
+				kept[k] = v
+			}
+		}
+		it = kept
 	case "text", "stopped", "error":
 	case "tool":
 		delete(it, "input")
