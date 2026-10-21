@@ -38,6 +38,9 @@ jobs:
       - name: A late copy never puts an older conversation back; a second browser follows
         run: node chat-copy-order.mjs
         working-directory: extras/browser-transport
+      - name: Opening the conversation lands on its newest message, and stays there (JDHN)
+        run: node chat-scroll.mjs
+        working-directory: extras/browser-transport
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Actual browser to node adapter, UDP denial, no replay and cleanup
         # the联调 tests' block since claude-fleet#4814 (a real node against a real hub)

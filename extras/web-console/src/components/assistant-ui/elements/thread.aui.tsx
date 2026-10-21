@@ -215,8 +215,14 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean; placeholder: string
         ["--composer-padding" as string]: "8px",
       }}
     >
+      {/* turnAnchor="top" turns assistant-ui's autoScroll off by default: only
+          the first frame was scrolled, so the home's answer replacing the copy,
+          an image loading late or a keyboard opening left the view at the old
+          bottom — the middle (task JDHN). Follow the bottom until the person
+          scrolls up; a running turn still pins its question at the top. */}
       <ThreadPrimitive.Viewport
         turnAnchor="top"
+        autoScroll
         data-slot="aui_thread-viewport"
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
       >
