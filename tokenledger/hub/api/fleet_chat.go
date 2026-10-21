@@ -261,6 +261,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.handleChatMirror(w, r)
 		return
 	}
+	if name == chatViewRoute {
+		s.handleChatView(w, r)
+		return
+	}
 	method, ok := chatRoutes[name]
 	if !ok {
 		httpError(w, http.StatusNotFound, "no such chat route")

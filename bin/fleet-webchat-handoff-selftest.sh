@@ -87,6 +87,15 @@ st_eq 'no conversation id: rc 2' 2 "$rc"
 st_has 'no conversation id: said' "$out" '还没有对话号'
 T set-option -w -t "$WIN" @cc_session_id "$SID"
 
+# 1b · 只读 (task F481): view-of says which conversation a window runs, nothing written
+out=$(bash "$H" view-of "fid:$FID")
+st_has 'view-of: the agent and its conversation' "$out" '"agent": "claude", "sid": "'"$SID"'", "busy": false, "state": "done", "label": "scratch-20"'
+set +e; bash "$H" view-of fid:99999999-2222-4333-8444-555555555555 >/dev/null 2>&1; rc=$?; set -e
+st_eq 'view-of: no such window here, rc 2' 2 "$rc"
+set +e; bash "$H" view-of 'fid:../x' >/dev/null 2>&1; rc=$?; set -e
+st_eq 'view-of: not a fleet id, rc 2' 2 "$rc"
+st_eq 'view-of wrote no record' '{}' "$(python3 "$LOCK" get --agent claude --sid "$SID")"
+
 # 2 · the terminal is answering
 T set-option -w -t "$WIN" @claude_state working
 set +e; out=$(bash "$H" to-web "fid:$FID" 2>&1); rc=$?; set -e

@@ -68,6 +68,12 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			w.Header().Set("Content-Type", "image/png")
 			w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
 			io.WriteString(w, fakePNG)
+		case "/api/view":
+			// 只读 (task F481): one state, one batch of items, as the service streams them
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, `data: {"t":"state","agent":"claude","busy":true}`+"\n\n")
+			io.WriteString(w, "id: 1\ndata: "+`{"t":"items","from":0,"items":[{"t":"text","d":"hi"}],"q":`+strconvQuote(r.URL.RawQuery)+"}\n\n")
+			w.(http.Flusher).Flush()
 		case "/api/stop", "/api/answer", "/api/new":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)

@@ -296,6 +296,28 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   handoff 一侧默认放行 Codex，`FLEET_WEBCHAT_CODEX=0` 关掉；这台机器没有 codex 时 adopt 回 409 `no_codex`。
 - 测试：`bin/fleet-webchat-handoff-selftest.sh`（隔离 tmux socket + 桩 agent + 桩 WebChat）、`fleet-webchat-selftest.sh --only=handoff`。
 
+### 终端里的会话，网页里只读看（F481，EPIC GR5E C5）
+
+会话工作区（`/app/s/<编号>?view=chat`）的「对话」看法：一个跑在终端里的会话，网页只读实时看它的记录——
+你说的、它答的、工具步骤，上方「正在终端里回答…」；发送框关着，要说话到终端里（接管是 C6 的事）。
+
+- **页面**：`GET /v1/chat/view?worker=<worker id>&from=<n>`（`extras/web-console/src/app/chat/view.ts`）。浏览器只报
+  worker id，从不报机器、登录或会话号。
+- **入口**（`tokenledger/hub/api/chat_view.go`）：谁 = `termPerson`（本人，管理员也只看自己的；共用口令、只读预览都拒）；
+  会话是不是你的 = 终端的同一个 `termTarget`（家登录或你自己的另一个在线登录上报的 worker，否则一律 404
+  `not_yours`——别人的和不存在的同一个答案）；然后 `dialChatRelay` 到会话所在的那个登录，转成
+  `/api/view?fid=<窗口的 @fleet_id>&from=<n>`。那台机器的 agent 没有 chat relay = 409 `old_agent`（「这台机器还旧」一句话）；
+  维护中 / 连不上 = 503 `home_down`。每人同时最多 3 个这样的流（`<person>\x00view` 自己一条线，不占对话的名额）。
+- **家机器服务**（`server.mjs viewStream`）：`fleet-webchat-handoff.sh view-of fid:<id>` 说窗口跑的哪个 agent、哪段会话、
+  在不在答（只读，什么都不写）；记录是 Claude Code 的 transcript（`findTranscript`）或 Codex 的 rollout（`findRollout`，
+  R9A2 的读法），按字节偏移跟着读、新行即发。Server-Sent Events：`{t:"state"}` 变了才发，`{t:"items", from, items}`
+  的 `id` 是到此为止的条数；页面掉线、切后台回来带 `?from=<手里的条数>`，一条不重。窗口里换了会话（/clear、resume）=
+  `{t:"reset"}` 从头再来；窗口关了 = `{t:"gone"}`。第一次最多发最后 600 条。轮询：文件 0.5 s、窗口状态 2 s
+  （`FLEET_WEBCHAT_VIEW_POLL_MS` / `FLEET_WEBCHAT_VIEW_STATE_MS`）。
+- 老服务没有 `/api/view`：页面收到 404 没有 code，说「这台机器的网页对话服务还旧」一句话。
+- 测试：`fleet-webchat-selftest.mjs --only=view`、`fleet-webchat-handoff-selftest.sh` 1b、e2e `TestChatView*`、
+  `extras/web-console/test/session-view.mjs`。
+
 ## 浏览器上下文（#4034）
 
 模型知道人此刻从哪儿、用什么在说话：
