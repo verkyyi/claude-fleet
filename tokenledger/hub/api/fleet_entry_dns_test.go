@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/dns"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
@@ -327,5 +329,65 @@ func TestEntryDNSPortIsTheHomes(t *testing.T) {
 	}
 	if d := entryDoor(t, h, pAlice); d.Port != 22123 {
 		t.Fatalf("home mac-e-mac-c: the door's port is %d, not 22123", d.Port)
+	}
+}
+
+// T702: a home's entry port held by a listener an earlier daemon left, and a
+// router forwarding the port to the wrong place on the right machine — the door
+// says each as it is (not "入口没在听"), names where on the home's own network
+// to forward to, and gives the host key's fingerprint to check once.
+func TestEntryDoorSaysWhatHoldsTheHome(t *testing.T) {
+	h := entryHarness(t)
+	entryCall(t, h, http.MethodPut, control.EntryNamePath, asSession(pAlice), map[string]any{"name": "alice"})
+	_ = entryDoor(t, h, pAlice)
+	home, ok, err := h.srv.Store.EntryHomeOf(pAlice)
+	if err != nil || !ok {
+		t.Fatalf("no home: %v", err)
+	}
+	if code, raw := entryCall(t, h, http.MethodPost, control.EntryKeysPath, asSession(pAlice), map[string]any{"public_key": entryKeyLine(t, "p")}); code != http.StatusCreated {
+		t.Fatalf("add a key: HTTP %d %s", code, raw)
+	}
+	old := entryOpenGrace
+	entryOpenGrace = 0
+	t.Cleanup(func() { entryOpenGrace = old })
+	m := strings.ToLower(home.Machine)
+	door := func(what, state string, why ...string) EntryDoor {
+		t.Helper()
+		d := entryDoor(t, h, pAlice)
+		if d.State != state {
+			t.Fatalf("%s: door %+v; want %s", what, d, state)
+		}
+		for _, w := range why {
+			if !strings.Contains(d.Why, w) {
+				t.Fatalf("%s: door says %q; want %q in it", what, d.Why, w)
+			}
+		}
+		return d
+	}
+	now := time.Now().UTC()
+	// the router forwards the port to something that is not the entry (the home's own sshd)
+	if _, err := h.srv.Store.SetEntryReach(m, []store.EntryReach{{Machine: m, Addr: "198.51.100.213", Port: 22022,
+		Family: "ipv4", Via: "source", Reason: control.ReachHostKey, CheckedAt: now}}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.entryReachSeen.Store(m, entryReachSeen{At: now, Listening: true, LAN: "192.168.1.79", Port: 22022})
+	door("forwarded elsewhere", "far", "普通 SSH", "192.168.1.79:22022")
+	// a listener an earlier daemon left holds the port: said, even when the outside reaches it
+	dnsReach(t, h, m, now, true, "198.51.100.213")
+	h.srv.entryReachSeen.Store(m, entryReachSeen{At: now, Listening: true, HeldBy: "pid 32849: sshd: /usr/sbin/sshd -D [listener]", Port: 22022})
+	door("held", "far", "被另一个程序占着", "pid 32849")
+	// cleared: reachable again
+	h.srv.entryReachSeen.Store(m, entryReachSeen{At: now, Listening: true, Port: 22022})
+	d := door("cleared", "ok")
+	if d.HostFP != "" {
+		t.Fatalf("no host key seen, yet a fingerprint %q", d.HostFP)
+	}
+	key := entryKeyLine(t, "")
+	if err := h.srv.Store.SetEntryHostKey(m, strings.TrimSpace(key), now); err != nil {
+		t.Fatal(err)
+	}
+	pk, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(key))
+	if d := entryDoor(t, h, pAlice); d.HostFP != ssh.FingerprintSHA256(pk) {
+		t.Fatalf("host_fp %q; want %q", d.HostFP, ssh.FingerprintSHA256(pk))
 	}
 }

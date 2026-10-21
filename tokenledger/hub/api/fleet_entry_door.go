@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -125,6 +127,10 @@ type EntryDoor struct {
 	// Jump: for a home that is a pod behind the door, the one line a phone's
 	// Jump host or a bare ssh copies (claude-fleet#4193); "" otherwise.
 	Jump string `json:"jump,omitempty"`
+	// HostFP: the SHA256 fingerprint of the host key the address answers with
+	// (the home's entry, or the door's for a pod) — what a phone is asked to
+	// trust once after a home move (T702); "" until one was seen.
+	HostFP string `json:"host_fp,omitempty"`
 }
 
 // entryDoorOf is v's door, as fillEntryBook lays it out.
@@ -136,6 +142,7 @@ func (s *Server) entryDoorOf(v EntryView, now time.Time) EntryDoor {
 		HomeDown: page.HomeDown, State: page.State, Why: page.Why}
 	if page.Home != nil {
 		d.Login, d.HomeName = page.Home.Login, page.Home.Display
+		d.HostFP = s.entryHostFP(s.entryAddrMachine(page.Home.Machine, now))
 		pod := s.podBehindDoor(page.Home.Machine)
 		if d.Address != "" && !pod {
 			d.QR = qrMatrix(entrySSHURL(d.Login, d.Address, d.Port))
@@ -148,6 +155,20 @@ func (s *Server) entryDoorOf(v EntryView, now time.Time) EntryDoor {
 		}
 	}
 	return d
+}
+
+// entryHostFP is the SHA256 fingerprint of machine's entry host key, "" when
+// none is known.
+func (s *Server) entryHostFP(machine string) string {
+	k, err := s.Store.EntryHostKey(machine)
+	if err != nil || k == "" {
+		return ""
+	}
+	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(k))
+	if err != nil {
+		return ""
+	}
+	return ssh.FingerprintSHA256(pk)
 }
 
 // entrySSHURL is the address a phone's terminal app opens: ssh://login@host:port.
@@ -169,6 +190,14 @@ func (s *Server) entryDoorState(page *entryBook, changed, now time.Time) (string
 		return "down", ""
 	}
 	m := page.Home.Machine
+	name := page.Home.Display
+	last, seen := s.entryLastReport(m)
+	if seen && last.HeldBy != "" {
+		// T702: another listener holds the port — the new list never reaches it,
+		// whatever the outside sees
+		return "far", "家机器 " + name + " 的入口端口被另一个程序占着（" + last.HeldBy + "），新名单没有生效。" +
+			"请管理员在 " + name + " 上停掉它（fleet doctor 的 public 一行写着怎么做），一分钟内入口按新名单起来。"
+	}
 	if reach, err := s.EntryReachable(m, now); err == nil && len(reach) > 0 {
 		return "ok", ""
 	}
@@ -179,7 +208,6 @@ func (s *Server) entryDoorState(page *entryBook, changed, now time.Time) (string
 			checked = r.CheckedAt
 		}
 	}
-	last, seen := s.entryLastReport(m)
 	// The newest word: a report that said nothing listens, else the dials.
 	deaf := seen && !last.Listening && !last.At.Before(checked)
 	if seen && last.At.After(checked) {
@@ -188,7 +216,6 @@ func (s *Server) entryDoorState(page *entryBook, changed, now time.Time) (string
 	if now.Sub(changed) < entryOpenGrace && (checked.Before(changed) || deaf) {
 		return "opening", ""
 	}
-	name := page.Home.Display
 	switch {
 	case !seen && len(rows) == 0:
 		return "far", "家机器 " + name + " 还没报告它的入口（每 5 分钟报一次）。一直这样，多半是那台的直连入口没开：请管理员在它上面看 fleet doctor 的 entry 一行。"
@@ -202,13 +229,19 @@ func (s *Server) entryDoorState(page *entryBook, changed, now time.Time) (string
 	if r.Family == "ipv6" {
 		at = fmt.Sprintf("[%s]:%d", r.Addr, r.Port)
 	}
+	there := name
+	if seen && last.LAN != "" && last.Port > 0 {
+		// the address on the home's own network (T702): two homes behind one
+		// router share the public address, so "转到 macmini" alone does not say where
+		there = fmt.Sprintf("%s（%s:%d）", name, last.LAN, last.Port)
+	}
 	switch r.Reason {
 	case control.ReachHostKey:
-		return "far", "从外面敲 " + at + "，应答的是另一台机器：路由器的端口 " + strconv.Itoa(r.Port) + " 转到了别处，请管理员改成转到 " + name + "。"
+		return "far", "从外面敲 " + at + "，应答的不是 " + name + " 的入口：路由器的端口 " + strconv.Itoa(r.Port) + " 转到了别处（另一台机器，或这台的普通 SSH），请管理员改成转到 " + there + "。"
 	case control.ReachNotSSH:
 		return "far", "从外面敲 " + at + "，应答的不是入口：端口 " + strconv.Itoa(r.Port) + " 被别的程序占着，请管理员看一眼。"
 	}
-	return "far", "从外面敲 " + at + " 没有回应：路由器还没把端口 " + strconv.Itoa(r.Port) + " 转到 " + name + "。请管理员在路由器上开这个端口（或看那台 fleet doctor 的 public 一行）。"
+	return "far", "从外面敲 " + at + " 没有回应：路由器还没把端口 " + strconv.Itoa(r.Port) + " 转到 " + there + "。请管理员在路由器上开这个端口（或看那台 fleet doctor 的 public 一行）。"
 }
 
 // entryMachineName is how a person knows a machine: its short name, else its

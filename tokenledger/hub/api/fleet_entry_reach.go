@@ -330,7 +330,17 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	key := strings.ToLower(host)
-	s.entryReachSeen.Store(key, entryReachSeen{At: now, Listening: rep.Listening})
+	seen := entryReachSeen{At: now, Listening: rep.Listening, HeldBy: strings.TrimSpace(rep.HeldBy), Port: rep.Port}
+	if len(seen.HeldBy) > 200 {
+		seen.HeldBy = seen.HeldBy[:200]
+	}
+	for _, l := range rep.LAN {
+		if a, err := netip.ParseAddr(strings.TrimSpace(l)); err == nil && a.Is4() && a.IsPrivate() {
+			seen.LAN = a.String()
+			break
+		}
+	}
+	s.entryReachSeen.Store(key, seen)
 	if last, ok := s.entryReachAt.Load(key); ok && now.Sub(last.(time.Time)) < entryReachGap {
 		v, err := s.entryReachVerdict(host, now)
 		if err != nil {
@@ -435,6 +445,11 @@ func (s *Server) entryReachVerdict(machine string, now time.Time) (control.Entry
 type entryReachSeen struct {
 	At        time.Time
 	Listening bool
+	// HeldBy: another listener on the entry port (T702); LAN / Port: where on
+	// the machine's own network the router must forward to.
+	HeldBy string
+	LAN    string
+	Port   int
 }
 
 // entryLastReport is machine's last report since the hub started, ok=false

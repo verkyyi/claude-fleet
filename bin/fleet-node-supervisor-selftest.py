@@ -3071,7 +3071,8 @@ class S_EntryReach(Sandbox):
                     self.router.sendto(struct.pack("!BBHIHHI", 0, 130, 0, 1, ip_, ip_, 7200), src)
         threading.Thread(target=serve, daemon=True).start()
         self.env.update(FLEET_ENTRY_IFADDRS=ifs, FLEET_ENTRY_GATEWAY="127.0.0.1", FLEET_ENTRY_DEFAULT_IF="en0",
-                        FLEET_ENTRY_NATPMP_PORT=str(self.router.getsockname()[1]), FLEET_ENTRY_SSDP="off")
+                        FLEET_ENTRY_NATPMP_PORT=str(self.router.getsockname()[1]), FLEET_ENTRY_SSDP="off",
+                        FLEET_ENTRY_KEYSCAN="off")   # the port as this machine answers it: per test (T702)
 
     def tearDown(self):
         self.hub.shutdown()
@@ -3184,6 +3185,58 @@ class S_EntryReach(Sandbox):
         self.answer["body"] = {"checked_at": "x", "addrs": []}
         self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
         self.assertNotIn("portmap", self.posts[0]["body"])
+
+    def fake_port(self, key, holder=None):
+        """What answers on 127.0.0.1:22022: ssh-keyscan prints <key>, lsof names
+        <holder> (pid, command) as the listener (T702)."""
+        scan, lsof = os.path.join(self.d, "keyscan"), os.path.join(self.d, "lsof")
+        put(scan, "#!/bin/sh\n" + ("echo \"[127.0.0.1]:22022 %s\"\n" % key if key else "") + "exit 0\n", 0o755)
+        if holder:
+            put(lsof, "#!/bin/sh\necho p%s\n" % holder, 0o755)
+        else:
+            put(lsof, "#!/bin/sh\nexit 1\n", 0o755)
+        self.env.update(FLEET_ENTRY_KEYSCAN=scan, FLEET_ENTRY_LSOF=lsof)
+
+    def own_key(self):
+        with open(os.path.join(self.d, "db", "entry", "ssh_host_ed25519_key.pub")) as f:
+            return " ".join(f.read().split()[:2])
+
+    def test_listening_is_what_answers_the_port(self):
+        """T702: the child's pid alone said "not listening" while a listener an
+        earlier daemon left held the port with the entry's own key — and "deaf"
+        made the hub dial nothing. Now: the entry's key on the port is listening,
+        whatever the pid; another key there is not, and who holds it is said."""
+        self.answer["body"] = {"checked_at": "x", "addrs": []}
+        self.sshd.kill()
+        self.sshd.wait()
+        stray = subprocess.Popen(["/bin/sleep", "300"])
+        self.procs.append(stray)
+        self.fake_port(self.own_key(), stray.pid)
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        b = self.posts[-1]["body"]
+        self.assertTrue(b["listening"], b)
+        self.assertTrue(b.get("held_by", "").startswith("pid %d:" % stray.pid), b)
+        self.check_reach(1, "被另一个程序占着", "pid %d" % stray.pid)
+        # another program's key on the port: not the entry, not listening
+        self.fake_port("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherOtherOtherOtherOtherOtherOtherOther0")
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        b = self.posts[-1]["body"]
+        self.assertFalse(b["listening"], b)
+        self.assertIn("another program", b.get("held_by", ""), b)
+        self.assertNotIn("portmap", b, "the router was asked to forward to a port the entry does not hold")
+
+    def test_own_child_on_the_port_says_nothing_more(self):
+        """The daemon's own child answering with the entry's key: listening, no held_by."""
+        self.answer["body"] = {"checked_at": "x", "addrs": []}
+        self.fake_port(self.own_key(), self.sshd.pid)
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        b = self.posts[-1]["body"]
+        self.assertTrue(b["listening"], b)
+        self.assertNotIn("held_by", b)
+        # nothing answers yet (a listener still starting): the child's pid decides, as before
+        self.fake_port("")
+        self.assertEqual(self.run_sup("entry", "reach").returncode, 0)
+        self.assertTrue(self.posts[-1]["body"]["listening"])
 
     def test_off_or_nobody_home_is_no_row(self):
         fns.write_json(os.path.join(self.d, "db", "entry", "state.json"), {"on": True, "allow": []})

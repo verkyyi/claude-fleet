@@ -45,3 +45,4 @@ After that, on the phone:
 - Open the panel: `F12` or `⌃] p` (Ctrl+], then p). Add `F12` to the extra-keys row above Termius's keyboard and one tap opens it.
 - On a narrow screen the panel fills the screen; tap a row to switch to it.
 - New phone, or lost it: revoke that key on the hub's **My connection** page and it can no longer connect, at once.
+- Moved your home to another machine: the phone asks once to trust a new host key — accept it only if it matches the fingerprint on the **Connect from your phone** page. If the two machines sit behind the same router, point the router's port forward at the new one; the page names its address on your home network.
