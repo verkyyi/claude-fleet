@@ -705,7 +705,7 @@ drill_entry_hostkey_regenerated() {
 }
 
 drill_pod_hostkey_rebuilt() {
-  CAP=10
+  CAP=20   # four ssh-keygen runs; a busy runner took 9 s
   local t0 d a b c
   t0=$(now); d="$EB/podkey"; mkdir -p "$d/keep" "$d/run1" "$d/run2" "$d/run3"
   podkey() {  # podkey <run dir>: the rendered script, its paths in the sandbox (no chown off root)
