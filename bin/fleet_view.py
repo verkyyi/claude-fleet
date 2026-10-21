@@ -2482,6 +2482,16 @@ def nav_step(shown, at, d):
     return next((i for i in reversed(sel) if i < at), sel[-1])
 
 
+def row_gone_at(shown, at):
+    """Where the cursor goes when its row left the list: the nearest session, else
+    ⚡ (T762: the commands sit above and below the sessions, so the old index
+    would land on one of them), else the old index kept in range."""
+    sess = [i for i, e in enumerate(shown) if e["kind"] == "sess"]
+    if sess:
+        return min(sess, key=lambda i: abs(i - at))
+    return next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), min(at, max(0, len(shown) - 1)))
+
+
 def session_order(items):
     """The order ⌘↓ / ⌘↑ walk: every session line of the list, as it is drawn."""
     return [e["target"] for e in items if e["kind"] == "sess" and e.get("target") and not e.get("gone")]
@@ -4637,6 +4647,8 @@ def _popup(screen, qo, vid, client, forward=""):
             query, opened, _, _ = page.snapshot
             shown = listing()
             query, opened, at, top = page.restore(shown)
+            if not any(key_of(e) == page.origin for e in shown):
+                at = row_gone_at(shown, at)
         mode, mrow, mitems, mat, pend, page = "", None, [], 0, None, None
         stack.clear()
         follow_list = True
@@ -4804,12 +4816,8 @@ def _popup(screen, qo, vid, client, forward=""):
             lit = key_of(shown[at]) if 0 <= at < len(shown) else (None, None)
             items = new
             shown = listing()
-            # its row gone: the nearest session, else ⚡ (T762: the commands sit
-            # above and below the sessions, so the old index lands on one of them)
-            sess = [i for i, e in enumerate(shown) if e["kind"] == "sess"]
             at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
-                      min(sess, key=lambda i: abs(i - at)) if sess else
-                      next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), min(at, max(0, len(shown) - 1))))
+                      row_gone_at(shown, at))
         if msg and not msg_until:
             msg_until = time.time() + 3
         heal.tick(screen)

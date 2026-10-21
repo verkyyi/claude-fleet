@@ -720,6 +720,11 @@ for q, op, cur in (("", set(), ""), ("", {"ended", "gone"}, "@8"), ("old", set()
                 assert line.startswith("  "), (width, line)
             elif e["kind"] == "hdr":
                 assert line.startswith("─"), (width, line)
+# its row gone (T762): the nearest session, else ⚡ — never a command the old index hits
+empty = fv.panel_rows([], "", set(), cmds=["new", "quit"])
+assert empty[fv.row_gone_at(empty, len(empty) - 2)].get("cmd") == "new", empty
+full = fv.panel_rows(it, "", set(), cmds=["new", "quit"])
+assert full[fv.row_gone_at(full, len(full) - 1)]["kind"] == "sess", full
 
 # the window is a setting: 1.5 h ⇒ one listed, seven older; fleet.conf's line when no env
 Path(sys.argv[2], "fleet.conf").write_text("FLEET_VIEW_CLOSED_HOURS=1.5\n")
