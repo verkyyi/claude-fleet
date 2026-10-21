@@ -181,6 +181,7 @@ class Writer(threading.Thread):
         self.pane = pane
         self.q = queue.Queue()
         self.last_verb = None
+        self.input_seen = False
 
     def put(self, rec):
         self.q.put(rec)
@@ -208,6 +209,18 @@ class Writer(threading.Thread):
         js = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
         tmux(["set-option", "-w", "-t", self.pane, "@agent_status", js, ";",
               "set-option", "-w", "-t", self.pane, "@agent_status_ts", str(rec["ts"])])
+        if not self.input_seen and rec["state"] in ("idle", "done", "working", "blocked") and not rec.get("id"):
+            # the agent's first word of its own (T716): its input box is up — idle
+            # when it waits for the person, working when a first turn it was
+            # started with is already on its way — `input`, the new session's
+            # clock to 能打字 (fleet_timing.py)
+            self.input_seen = True
+            try:
+                sys.path.insert(0, BIN)
+                import fleet_timing
+                fleet_timing.input_once(self.pane)
+            except Exception:  # noqa: BLE001 — a clock never costs the relay
+                pass
         verb = claude_verb(rec) if rec["state"] != "exited" else None
         # The same verb as last time is written again only when another writer has
         # taken the window since (issue #2537): a guess made while the agent was

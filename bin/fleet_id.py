@@ -1752,17 +1752,20 @@ def hook_retry_flush(pane, fid):
 
 
 def hook_timing_ready(pane):
-    """A 看台's new session (T684): the window's @timing_t0 is its ↵; the agent's
-    native session is up now — `ready` under that run (fleet_timing.py), once."""
+    """A new session clocked from its ↵ (T684): the window's @timing_t0 is that ↵;
+    the agent's native session is up now — `ready` under that run (fleet_timing.py),
+    once: @timing_ready remembers it. The stamp stays for `input` (T716), which
+    clears both; @timing_what names a node-clocked run (`session.node`)."""
     t0 = wopt(pane, "@timing_t0")
-    if not t0:
+    if not t0 or wopt(pane, "@timing_ready") == t0:
         return
-    wset(pane, "@timing_t0")
+    wset(pane, "@timing_ready", t0)
+    what = wopt(pane, "@timing_what")
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import fleet_timing
         if 0 < time.time() - float(t0) < 3600:
-            fleet_timing.Run("session", float(t0)).at("ready")
+            fleet_timing.Run(what if what == "session.node" else "session", float(t0)).at("ready")
     except (ImportError, ValueError):
         pass
 

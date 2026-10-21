@@ -198,6 +198,29 @@ def trust_launch_hooks(remote, cwd, rpc_client=None):
         client.close()
 
 
+def input_ready(pane):
+    """True once the Codex thread in <pane> is up and its `input` stage written
+    (fleet_timing.input_once); a window with no clock is done at once."""
+    try:
+        out = subprocess.run(['tmux', 'display-message', '-p', '-t', pane, '#{@timing_t0}\t#{@codex_session_id}'],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, timeout=5).stdout.rstrip('\n')
+    except (OSError, subprocess.SubprocessError):
+        return True
+    t0, _, sid = out.partition('\t')
+    if not t0:
+        return True
+    if not sid:
+        return False
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fleet_timing
+        fleet_timing.input_once(pane)
+    except Exception:  # noqa: BLE001 — a clock never costs the session
+        pass
+    return True
+
+
 def run(argv, prepare=None, tick=None):
     options = argv[:argv.index('--')] if '--' in argv else argv
     if '--no-daemon' in options:
@@ -282,7 +305,16 @@ def run(argv, prepare=None, tick=None):
                 print('fleet-codex-runtime: could not pre-trust the fleet hooks: ' + str(exc), file=sys.stderr)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         next_tick = time.monotonic()
+        # T716: the new session's clock to 能打字 — the TUI's thread is up (its
+        # SessionStart stamped @codex_session_id) ⇒ `input` under @timing_t0, once
+        clock_pane = env.get('TMUX_PANE', '') if env.get('TMUX') else ''
+        clock_until = time.monotonic() + 120 if clock_pane else 0
         while client.poll() is None and guardian.poll() is None and not ended:
+            if clock_until and time.monotonic() < clock_until:
+                if input_ready(clock_pane):
+                    clock_until = 0
+            elif clock_until:
+                clock_until = 0
             if time.monotonic() >= next_tick:
                 if monitor: monitor.tick()
                 if meter is not None: meter.tick()

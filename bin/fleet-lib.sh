@@ -6685,24 +6685,14 @@ fleet_hub_place() {
   return 1
 }
 
-# fleet_agent_file_travels <name> — rc 0 when the agent file is one the release
-# ships: the core's (conf/agent-defaults/claude/agents/<name>.md: fleet-worker,
-# orchestrator) or a plugin's (plugins/<plugin>/agents/<name>.md, `<name>` or
-# `<plugin>:<name>` — epic-driver, T742), so every machine has it and a session
-# started as it may open on any of them (issue T672; T604 — the template travels
-# with the release). A machine whose login lacks the plugin declines the start and
-# the hub tries the next one. A file only this machine has (the repo's, the
-# login's own) is rc 1.
+# fleet_agent_file_travels <name> — rc 0 when the agent file is one the core ships
+# with the release (conf/agent-defaults/claude/agents/<name>.md: fleet-worker,
+# orchestrator), so every machine's ~/.claude/agents has it and a session started
+# as it may open on any of them (issue T672; T604 — the template travels with the
+# release). A file only this machine has (the repo's, the login's own) is rc 1.
 fleet_agent_file_travels() {
-  local n="${1:-}" pl f
-  case "$n" in ''|*[!A-Za-z0-9_.:-]*|.*|*:*:*|*/*) return 1 ;; esac
-  case "$n" in *:*)
-    pl=${n%%:*}; n=${n#*:}
-    [ -n "$pl" ] && [ -n "$n" ] && [ -f "$_FLEET_LIB_DIR/../plugins/$pl/agents/$n.md" ]; return ;;
-  esac
-  [ -f "$_FLEET_LIB_DIR/../conf/agent-defaults/claude/agents/$n.md" ] && return 0
-  for f in "$_FLEET_LIB_DIR"/../plugins/*/agents/"$n".md; do [ -f "$f" ] && return 0; done
-  return 1
+  case "${1:-}" in ''|*[!A-Za-z0-9_.:-]*|.*) return 1 ;; esac
+  [ -f "$_FLEET_LIB_DIR/../conf/agent-defaults/claude/agents/$1.md" ]
 }
 
 # _fleet_place_log <what> <node> <rc> <ms> <answer> [<not here>] [<total ms>] — one
@@ -8268,6 +8258,23 @@ fleet_scratch_free() {
   git -C "$1" worktree remove --force "$3" >/dev/null 2>&1
   git -C "$1" branch -D "$2" >/dev/null 2>&1
   git -C "$1" worktree prune >/dev/null 2>&1
+  return 0
+}
+
+# fleet_timing_at <seg> [what] — one stage of the new session's clock (T716,
+# bin/fleet_timing.py's `at`, without its Python start): <seg> = now − the ↵ in
+# $FLEET_TIMING_T0, one {ts, what, seg, ms} line under that run (<what> defaults
+# to $FLEET_TIMING_WHAT, else `session`). No T0 (or not a
+# number, or older than an hour) ⇒ nothing; never fails the caller.
+fleet_timing_at() {
+  case "${FLEET_TIMING_T0:-}" in ''|*[!0-9.]*) return 0 ;; esac
+  local d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/timing"
+  mkdir -p "$d" 2>/dev/null || return 0
+  perl -MTime::HiRes=time -e '
+    my ($t0, $what, $seg) = @ARGV; my $ms = (time() - $t0) * 1000;
+    exit 0 if $ms < 0 || $ms > 3600000;
+    printf "{\"ts\": %.3f, \"what\": \"%s\", \"seg\": \"%s\", \"ms\": %.1f}\n", $t0, $what, $seg, $ms;
+  ' "$FLEET_TIMING_T0" "${2:-${FLEET_TIMING_WHAT:-session}}" "$1" >> "$d/${2:-${FLEET_TIMING_WHAT:-session}}.ndjson" 2>/dev/null
   return 0
 }
 

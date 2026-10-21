@@ -20,9 +20,14 @@
 #   H  the doctor's 「新建耗时」 row (spawn-time): the four stages' p90 in seconds;
 #      nothing in 24 h ⇒ no row
 #   I  `ready`: fleet_id.hook_timing_ready writes it under the window's @timing_t0
-#      once and clears the stamp; dash-raw-session.sh stamps @timing_t0 off
-#      FLEET_TIMING_T0, fleet-task-record.sh writes `placed`, fleet-quick-dispatch.py
-#      `window`, fleet_view.go_new carries the ↵ (`do new --t0`)
+#      once (@timing_ready) and keeps the stamp for `input`; each road's writer is
+#      where it belongs (T716): dash-raw-session.sh stamps @timing_t0 and writes
+#      `placed` / `window`, fleet-task-record.sh `record` (and starts a dispatch's
+#      clock), fleet_view.go_new carries the ↵ and writes `switched`, a start the
+#      hub sent a node is `session.node`, a relaunch drops the old clock
+#   J  `input` (T716): the agent's input box — the relay's first 7501 idle/done,
+#      once, the stamp cleared; Codex's runtime too; check judges input over
+#      total; wait_seg; the bash fleet_timing_at writes the Python at's line
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -152,11 +157,11 @@ for i in range(10):
 t.add("session", [("placed", 99000), ("typeable", 99000)], ts=now - 2 * 86400)
 t.add("session", [("start", 50000), ("go", 10), ("total", 50010)], ts=now - 30)
 line = t.spawn_p90("session", 24)
-assert line == "n=10 placed=1800 window=2800 typeable=3800 ready=6800", line
+assert line == "n=10 placed=1800 window=2800 switched=3800 ready=6800", line   # `typeable` read as switched (T716)
 assert t.spawn_p90("session", 0.001) == "", t.spawn_p90("session", 0.001)
 PY
 out=$(T p90 session --hours 24)
-[ "$out" = "n=10 placed=1800 window=2800 typeable=3800 ready=6800" ] || st_miss "G p90 CLI: $out"
+[ "$out" = "n=10 placed=1800 window=2800 switched=3800 ready=6800" ] || st_miss "G p90 CLI: $out"
 [ -z "$(FLEET_CONF_DIR="$WORK/none" T p90)" ] || st_miss "G p90 with no file printed something"
 [ -z "$(FLEET_TIMING_T0='' T at session x; ls "$WORK/none" 2>/dev/null)" ] || st_miss "G at without T0 wrote"
 
@@ -164,13 +169,13 @@ out=$(T p90 session --hours 24)
 sed -n '/^# --- 新建耗时/,/^# --- perl/p' "$BIN/fleet-doctor.sh" | sed "s#\$(dirname \"\$0\")#$BIN#" > "$WORK/row2.sh"
 row2() { bash -c 'info() { echo "INFO $1 $2"; }; . "$1"' _ "$WORK/row2.sh"; }
 out=$(row2)
-printf '%s\n' "$out" | grep -qx 'INFO spawn-time 新建耗时 近 24 小时 10 次 · 九成 · hub 结论 1.8s · 开窗 2.8s · 能打字 3.8s · agent 就绪 6.8s — fleet_timing.py table session shows each run'"'"'s stages' \
+printf '%s\n' "$out" | grep -qx 'INFO spawn-time 新建耗时 近 24 小时 10 次 · 九成 · hub 结论 1.8s · 开窗 2.8s · 切过去 3.8s · agent 就绪 6.8s — fleet_timing.py table session shows each run'"'"'s stages' \
   && [ -z "$(FLEET_CONF_DIR="$WORK/none" row2)" ] \
-  && st_ok "H doctor 新建耗时: the four stages' p90 in seconds, no row with nothing in 24 h" \
+  && st_ok "H doctor 新建耗时: each stage's p90 in seconds, no row with nothing in 24 h" \
   || st_miss "H doctor spawn-time: $out"
 
 # --- I ---------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' && st_ok "I ready: under the window's @timing_t0, once, the stamp cleared" || st_miss "I ready"
+python3 - "$BIN" <<'PY' && st_ok "I ready: under the window's @timing_t0, once (@timing_ready), the stamp kept for input" || st_miss "I ready"
 import os, sys, time
 sys.path.insert(0, sys.argv[1])
 import fleet_id, fleet_timing as t
@@ -183,13 +188,97 @@ fleet_id.hook_timing_ready("%1")
 fleet_id.hook_timing_ready("%1")                        # a later SessionStart (/clear): nothing
 rs = t.runs("session", 10)
 assert len(rs) == 1 and list(rs[0]) == ["ready"] and 4150 <= rs[0]["ready"] < 9000, rs
-assert "@timing_t0" not in opts, opts
+assert opts.get("@timing_t0") == "%.3f" % t0 and opts.get("@timing_ready") == "%.3f" % t0, opts
+opts["@timing_what"] = "session.node"; opts["@timing_t0"] = "%.3f" % (t0 + 1)
+fleet_id.hook_timing_ready("%1")                        # a node-clocked start: its own file
+assert [list(r) for r in t.runs("session.node", 10)] == [["ready"]], t.runs("session.node", 10)
 PY
 grep -q 'fleet_win_stamp_cmd @timing_t0 "$FLEET_TIMING_T0"' "$BIN/dash-raw-session.sh" \
-  && grep -q 'fleet_timing.py" at session placed' "$BIN/fleet-task-record.sh" \
-  && grep -q 'timing_at("window")' "$BIN/fleet-quick-dispatch.py" \
+  && grep -q '^fleet_timing_at window' "$BIN/dash-raw-session.sh" \
+  && grep -q 'fleet_timing_at placed' "$BIN/dash-raw-session.sh" \
+  && grep -q 'fleet_timing_at record' "$BIN/fleet-task-record.sh" \
+  && grep -q 'export FLEET_TIMING_T0' "$BIN/fleet-task-record.sh" \
   && grep -q '"--t0", "%.3f" % time.time()' "$BIN/fleet_view.py" \
+  && grep -q 'run.at("switched")' "$BIN/fleet_view.py" \
   && grep -q 'hook_timing_ready(pane)' "$BIN/fleet_id.py" \
+  && grep -q 'fleet_timing.input_once(self.pane)' "$BIN/fleet-status-7501.py" \
+  && grep -q 'fleet_timing.input_once(pane)' "$BIN/fleet-codex-runtime.py" \
+  && grep -q 'env\["FLEET_TIMING_WHAT"\] = "session.node"' "$BIN/fleet_control.py" \
+  && grep -q 'wset -u @timing_t0; wset -u @timing_ready' "$BIN/fleet-session-wrap.sh" \
   || st_miss "I a stage's writer is gone from its road"
+
+# --- J ---------------------------------------------------------------------------
+# `input` (T716): the agent's input box — Claude's first 7501 idle/done in the relay,
+# once; the window's stamp cleared; a stale or missing stamp writes nothing; the
+# doctor's check judges input over total; wait_seg sees it; fleet_timing_at (bash)
+# writes the same line the Python `at` does, under FLEET_TIMING_WHAT
+python3 - "$BIN" <<'PY' && st_ok "J input: the relay's first idle, once; stamp cleared; check judges it; wait_seg sees it" || st_miss "J input"
+import importlib.util, os, sys, time
+sys.path.insert(0, sys.argv[1])
+import fleet_timing as t
+for f in ("session.ndjson", "session.node.ndjson"):
+    try: os.remove(os.path.join(t.timing_dir(), f))
+    except OSError: pass
+t0 = round(time.time() - 2.5, 3)
+opts = {"@timing_t0": "%.3f" % t0, "@timing_ready": "%.3f" % t0, "@timing_what": ""}
+calls = []
+def tm(args):
+    calls.append(args)
+    if args[0] == "display-message":
+        return "%s\t%s" % (opts.get("@timing_t0", ""), opts.get("@timing_what", ""))
+    if args[:2] == ["set-option", "-wu"]:
+        for i, a in enumerate(args):
+            if a in ("@timing_t0", "@timing_ready"): opts.pop(a, None)
+    return ""
+ms = t.input_once("%1", tm)
+assert ms is not None and 2450 <= ms < 9000, ms
+assert "@timing_t0" not in opts and "@timing_ready" not in opts, opts
+assert t.input_once("%1", tm) is None                    # once
+r = t.run_of("session", t0)
+assert set(r) == {"input", "total"} and r["input"] == r["total"], r
+assert t.wait_seg("session", t0, "input", 0.1) == r["input"]
+assert t.wait_seg("session", t0, "nope", 0.15) is None
+opts.update({"@timing_t0": "%.3f" % (time.time() - 7200)})
+assert t.input_once("%1", tm) is None and "@timing_t0" not in opts   # stale: cleared, nothing
+assert t.input_once("", tm) is None
+# check: input over total (a run that has one), total else
+os.remove(os.path.join(t.timing_dir(), "session.ndjson"))
+t.add("session", [("switched", 500), ("input", 1500), ("total", 1500)], ts=1000.0)
+t.add("session", [("typeable", 400), ("total", 400)], ts=1001.0)       # an old-form run: total
+t.add("session", [("input", 2500), ("total", 2500)], ts=1002.0)
+import io, contextlib
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf): t.check(10)
+assert "session n=3 p50=1500 " in buf.getvalue(), buf.getvalue()
+# the relay: its Writer writes input on the first idle/done with no sub-task id, once
+spec = importlib.util.spec_from_file_location("relay", os.path.join(sys.argv[1], "fleet-status-7501.py"))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+seen = []
+m.tmux = lambda a: None
+m.subprocess.run = lambda *a, **k: m.subprocess.CompletedProcess([], 0, "", "")
+m.window_src = lambda pane: "7501"
+t.input_once = lambda pane, tmux=None: seen.append(pane)
+w = m.Writer("%9")
+w.write({"state": "idle", "kind": "", "msg": "", "app": "", "ts": 1, "id": "sub1"})   # a sub-task: not it
+w.write({"state": "clear", "kind": "", "msg": "", "app": "", "ts": 1})                 # not a word of its own
+assert seen == [], seen
+w.write({"state": "working", "kind": "", "msg": "", "app": "", "ts": 2})              # a seeded start's first turn
+w.write({"state": "idle", "kind": "", "msg": "", "app": "", "ts": 3})
+assert seen == ["%9"], seen
+PY
+rm -f "$FLEET_CONF_DIR/timing/session.ndjson" "$FLEET_CONF_DIR/timing/session.node.ndjson"
+t0=$(python3 -c 'import time; print("%.3f" % (time.time() - 1.2))')
+bash -c '. "$1/fleet-lib.sh"; FLEET_TIMING_T0=$2 fleet_timing_at placed; FLEET_TIMING_T0=$2 FLEET_TIMING_WHAT=session.node fleet_timing_at window
+         FLEET_TIMING_T0= fleet_timing_at x; FLEET_TIMING_T0=junk fleet_timing_at y' _ "$BIN" "$t0"
+python3 - "$BIN" "$t0" <<'PY' && st_ok "J fleet_timing_at: the same line as the Python at, under FLEET_TIMING_WHAT; no / bad T0 ⇒ nothing" || st_miss "J fleet_timing_at"
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import fleet_timing as t
+r = t.run_of("session", float(sys.argv[2]))
+assert list(r) == ["placed"] and 1150 <= r["placed"] < 9000, r
+assert list(t.run_of("session.node", float(sys.argv[2]))) == ["window"]
+for line in open(os.path.join(t.timing_dir(), "session.ndjson")):
+    assert set(json.loads(line)) == {"ts", "what", "seg", "ms"}, line
+PY
 
 st_done

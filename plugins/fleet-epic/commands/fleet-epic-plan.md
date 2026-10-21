@@ -458,10 +458,7 @@ this order:
    members' IDs name as `parent` (EPIC T497 C5).
    The driver opens bound to that record — it
    reads the charter off it every tick, its children are this batch's members, and
-   its final report comes back here. The hub places the driver like any session —
-   on whichever of the person's machines has room (T742) — so the charter names
-   no file on this machine (the scratchpad copy is yours alone); what it needs
-   beyond the record lives on the design page. No hub ⇒ exit 3: say so and stop.
+   its final report comes back here. No hub ⇒ exit 3: say so and stop.
 4. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC <code>` (`EPIC K5H0`), republished to
    the same page (`publish_file` with its `proposal_id`), so the link the operator
    holds says what it became.
