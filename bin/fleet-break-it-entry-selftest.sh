@@ -45,6 +45,10 @@
 #   hostkey-changed-silent  handleNodeEntryReach's entryHostKeyChanged (T743): a machine
 #                         reporting another entry host key raises entry_hostkey_changed
 #                         (old / new fingerprints) — the hub half's Go test
+#   entry-host-cert       _entry_hostcert + entry_config (T743): the hub's host
+#                         certificate from reach.json is shown by the entry sshd —
+#                         known through one @cert-authority line — and one for
+#                         another key is never installed
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -744,6 +748,36 @@ drill_hostkey_changed_silent() {
   go_half '^TestEntryHostKeyChangeIsAlerted$' ./hub/api; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="机器报上来的入口钥匙换了：hub 开一条 entry_hostkey_changed 告警（新旧指纹）+ 审计一行，同一把再报不再响；$gohalf"
+}
+
+drill_entry_host_cert() {
+  CAP=30   # the listener's start + converge passes picking the certificate up
+  local t0 hk
+  erig hostcert
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  hk="$E/db/entry/ssh_host_ed25519_key"
+  ssh-keygen -q -t ed25519 -N '' -C host-ca -f "$E/hostca"; ssh-keygen -q -t ed25519 -N '' -C stranger -f "$E/stranger"
+  # a certificate for ANOTHER key first: never installed
+  ssh-keygen -q -s "$E/hostca" -h -I host:drill -n fleet-drill -V -5m:+30d "$E/stranger.pub" 2>/dev/null
+  printf '{"verdict":{"host_cert":"%s"}}\n' "$(tr -d '\n' < "$E/stranger-cert.pub")" > "$E/db/entry/reach.json"
+  sleep 3
+  [ -e "$hk-cert.pub" ] && { WHY="a certificate for another key was installed"; edown; return 1; }
+  cp "$hk.pub" "$E/entry.pub"
+  ssh-keygen -q -s "$E/hostca" -h -I host:drill -n fleet-drill -V -5m:+30d "$E/entry.pub" 2>/dev/null
+  printf '{"verdict":{"host_cert":"%s"}}\n' "$(tr -d '\n' < "$E/entry-cert.pub")" > "$E/db/entry/reach.json"
+  until_ok 10 grep -q "^HostCertificate $hk-cert.pub" "$E/db/entry/sshd_config" \
+    || { WHY="the config never named the certificate: $(tail -3 "$E/sup.err")"; edown; return 1; }
+  printf '@cert-authority fleet-* %s\n' "$(cut -d' ' -f1-2 "$E/hostca.pub")" > "$E/kh-ca"
+  until_ok 10 sh -c 'ssh -F /dev/null -v -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -i "$1/k1" \
+      -o HostKeyAlias=fleet-drill -o UserKnownHostsFile="$1/kh-ca" -o GlobalKnownHostsFile=/dev/null \
+      -o ConnectTimeout=5 -p "$2" "$3@127.0.0.1" true 2>&1 </dev/null | grep -q "matches the ED25519-CERT host certificate"' \
+      _ "$E" "$EPORT" "$ME" || { WHY="ssh did not find the entry's certificate under the host CA"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口挂上 hub 签的主机证书：只信一行 @cert-authority 就认得它；给别的钥匙签的证书不装"
 }
 
 drill_entry_forward_out() {

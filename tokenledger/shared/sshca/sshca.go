@@ -278,6 +278,31 @@ func (c *CA) sign(key ssh.PublicKey, keyID string, logins []string, ttl time.Dur
 }
 
 func (c *CA) signCrit(key ssh.PublicKey, keyID string, logins []string, ttl time.Duration, crit, ext map[string]string, now time.Time) (*Issued, error) {
+	return c.signTyped(ssh.UserCert, key, keyID, logins, ttl, crit, ext, now)
+}
+
+// HostTTL is how long a host certificate lives (claude-fleet T743): a machine
+// asks for a new one well before (its entry's reach report, every few
+// minutes, keeps one with a week left) — short enough that a revoked machine
+// falls out on its own.
+const HostTTL = 30 * 24 * time.Hour
+
+// SignHost issues a HOST certificate for a machine's sshd key (claude-fleet
+// T743): key id "host:<machine>", the names a client checks it under
+// (principals — fleet-<alias> as fleet connect's HostKeyAlias spells it). A
+// client that trusts this CA (@cert-authority) never asks about, nor refuses,
+// a machine whose key changed but is signed.
+func (c *CA) SignHost(key ssh.PublicKey, machine string, principals []string, ttl time.Duration, now time.Time) (*Issued, error) {
+	if key == nil {
+		return nil, errors.New("no key to sign")
+	}
+	if machine == "" || len(principals) == 0 || ttl <= 0 {
+		return nil, errors.New("a host certificate needs a machine, its names and a lifetime")
+	}
+	return c.signTyped(ssh.HostCert, key, "host:"+machine, principals, ttl, nil, nil, now)
+}
+
+func (c *CA) signTyped(certType uint32, key ssh.PublicKey, keyID string, logins []string, ttl time.Duration, crit, ext map[string]string, now time.Time) (*Issued, error) {
 	var sb [8]byte
 	if _, err := rand.Read(sb[:]); err != nil {
 		return nil, err
@@ -289,7 +314,7 @@ func (c *CA) signCrit(key ssh.PublicKey, keyID string, logins []string, ttl time
 	cert := &ssh.Certificate{
 		Key:             key,
 		Serial:          serial,
-		CertType:        ssh.UserCert,
+		CertType:        certType,
 		KeyId:           keyID,
 		ValidPrincipals: append([]string(nil), logins...),
 		ValidAfter:      uint64(after.Unix()),

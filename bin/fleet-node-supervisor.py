@@ -5847,6 +5847,8 @@ class EntryPaths(object):
         self.dir = os.path.join(paths.state, "entry")
         self.cfg = os.path.join(self.dir, "sshd_config")
         self.hostkey = os.path.join(self.dir, "ssh_host_ed25519_key")
+        # the hub's host certificate for it (T743): HostCertificate in the config
+        self.hostcert = self.hostkey + "-cert.pub"
         self.keys = os.path.join(self.dir, "keys")
         self.pid = os.path.join(self.dir, "sshd.pid")
         # 0644 — versions, logins, fingerprints, never a key's text (any doctor reads it)
@@ -6317,6 +6319,7 @@ def entry_config(ep, port, allow, paths=None):
         "# change passes `sshd -t` first. The system's sshd and ~/.ssh/authorized_keys are not read.",
         "Port %d" % port,
         "HostKey %s" % ep.hostkey,
+    ] + _entry_hostcert_lines(ep) + [
         "PidFile %s" % ep.pid,
         "AllowUsers %s" % " ".join(sorted(allow)),
         "AuthenticationMethods publickey",
@@ -6426,6 +6429,88 @@ def _entry_hostkey(ep):
                         "-C", "fleet-entry", "-f", ep.hostkey],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
     return "" if r.returncode == 0 else "ssh-keygen: %s" % r.stdout.strip()
+
+
+ENTRY_HOSTCERT_KEEP = 7 * 86400   # a certificate with less left is replaced by the hub's newer one
+
+
+def _entry_cert_facts(path):
+    """(fingerprint of the key it certifies, valid-until epoch) of a HOST
+    certificate file, None when it is not one (ssh-keygen -L)."""
+    try:
+        r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-L", "-f", path],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    typ = fp = until = None
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Type:"):
+            typ = line
+        elif line.startswith("Public key:"):
+            fp = line.split()[-1]
+        elif line.startswith("Valid:"):
+            w = line.split()
+            if "to" in w and w.index("to") + 1 < len(w):
+                try:
+                    until = time.mktime(time.strptime(w[w.index("to") + 1], "%Y-%m-%dT%H:%M:%S"))
+                except ValueError:
+                    until = None
+    if not typ or "host certificate" not in typ or not fp or until is None:
+        return None
+    return fp, until
+
+
+def _entry_hostcert(ep):
+    """The hub's host certificate for the entry key (T743), from the last reach
+    answer (reach.json's verdict.host_cert): one already here for this key with
+    a week left is kept; else the hub's, when it is a host certificate of THIS
+    key not yet expired; else none (a stale or foreign one is taken away).
+    Returns True when the file changed."""
+    pub = _entry_read(ep.hostkey + ".pub") or ""
+    r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-l", "-f", ep.hostkey + ".pub"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30) \
+        if pub else None
+    mine = r.stdout.split()[1] if r is not None and r.returncode == 0 and len(r.stdout.split()) > 1 else ""
+    t = now()
+    have = _entry_cert_facts(ep.hostcert) if os.path.exists(ep.hostcert) else None
+    if have and mine and have[0] == mine and have[1] - t > ENTRY_HOSTCERT_KEEP:
+        return False
+    rep = read_json(os.path.join(ep.dir, "reach.json"), {}) or {}
+    line = ((rep.get("verdict") or {}).get("host_cert") or "").strip()
+    if line and "\n" not in line and mine:
+        tmp = ep.hostcert + ".new"
+        _entry_put(tmp, line + "\n", 0o644)
+        got = _entry_cert_facts(tmp)
+        if got and got[0] == mine and got[1] > t and (not have or got[1] > have[1] or have[0] != mine):
+            if _entry_read(ep.hostcert) != line + "\n":
+                os.replace(tmp, ep.hostcert)
+                return True
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if have and (have[0] != mine or have[1] <= t):
+        try:
+            os.remove(ep.hostcert)
+        except OSError:
+            pass
+        return True
+    return False
+
+
+def _entry_hostcert_lines(ep):
+    """HostCertificate for the entry sshd while a certificate is here, with its
+    digest in a comment: a new certificate changes the config, so sshd is told
+    (the child's reload is the config's)."""
+    import hashlib
+    text = _entry_read(ep.hostcert)
+    if not text:
+        return []
+    return ["HostCertificate %s" % ep.hostcert,
+            "# host certificate %s" % hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]]
 
 
 def _entry_b64s(text):
@@ -6636,6 +6721,8 @@ def _entry_converge(paths, ep, port, lst, force):
         book["error"] = why
         write_json(ep.book, book)
         return book
+    if not door:
+        _entry_hostcert(ep)
     rows = door_route_rows(lst) if door else {}
     # the door-session CA (A5SQ): a home's only — the door itself trusts no CA
     entry_door_ca_file(ep, {} if door else lst)
