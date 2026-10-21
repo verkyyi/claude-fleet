@@ -77,10 +77,15 @@ func TestAppReturnRefusesElsewhere(t *testing.T) {
 	for _, v := range []string{"//evil.example/app/s/X", "https://evil.example/app/s/X", "/app", "/apps/x",
 		`/app/\evil.example`, "/app/../admin/people", "/app/./s/X", "/app//evil.example", "/app/signin",
 		"/app/logout", "/app/assets/x.js", "/fleet/login?code=AAAA", "/app/s/X\r\nSet-Cookie:x", "/app/s/中", "/app/%2e%2e/admin/people", "/app/%2F%2Fevil.example"} {
+		// The check itself, on the raw value: a cookie header would have
+		// lost a backslash or CR/LF before it got here.
+		if appReturnOK(v) {
+			t.Errorf("appReturnOK(%q) = true; want refused", v)
+		}
 		r := httptest.NewRequest(http.MethodGet, "/auth/wechat/callback", nil)
 		r.AddCookie(&http.Cookie{Name: entryReturnCookie, Value: v})
-		if got := loginReturn(httptest.NewRecorder(), r); got != AppPrefix {
-			t.Errorf("return %q → %q; want %s", v, got, AppPrefix)
+		if got := loginReturn(httptest.NewRecorder(), r); !appReturnOK(got) && got != AppPrefix {
+			t.Errorf("return %q → %q; want %s or a console path", v, got, AppPrefix)
 		}
 	}
 	for _, v := range []string{"/app/s/D7KQ?view=term", "/app/sessions?q=a%20b", "/app/me/usage"} {
