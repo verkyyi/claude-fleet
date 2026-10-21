@@ -75,52 +75,43 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .trust li{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--fleet-ink);background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:999px;padding:6px 12px 6px 10px}
 .trust svg{width:16px;height:16px;color:var(--fleet-clay)}
 
-/* the replay, one size */
+/* the replay: the web app as it looks signed in (C3) — a browser frame, the
+   console's light tokens (.screen carries theme.css's light shadcn block) */
 .demo{margin-top:20px}
-.screen{position:relative;background:var(--fleet-term);border:1px solid var(--fleet-line);border-radius:12px;box-shadow:0 40px 80px -40px rgba(0,0,0,.75);overflow:hidden;height:250px;font:400 12.5px/1.5 var(--fleet-font-mono);color:#d9d3e2}
-.chrome{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:#1b1a2b;border-bottom:1px solid #26243b;font:500 12.5px var(--fleet-font-ui);color:var(--fleet-muted)}
-.chrome i{width:11px;height:11px;border-radius:50%;background:#3a3753}
-.chrome span{margin-left:10px}
-.topline{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 16px;background:#16152a;border-bottom:1px solid #22203a;font-size:.86em;white-space:nowrap;overflow:hidden}
-.topline .l{display:flex;gap:8px;align-items:center;overflow:hidden;text-overflow:ellipsis}
-.topline .st{font-weight:600}
-.topline .st.w{color:#8bd5ca} .topline .st.d{color:var(--fleet-blue)}
-.topline .t{color:#a9b1d6;font-weight:600;overflow:hidden;text-overflow:ellipsis}
-.topline .r{color:var(--fleet-muted)}
-.term{padding:18px 20px;display:flex;flex-direction:column;gap:10px;height:calc(100% - 38px - 33px);overflow:hidden}
-.ln{opacity:0;transform:translateY(4px);transition:.25s}
-.ln.on{opacity:1;transform:none}
-.you{color:var(--fleet-ink)} .you b{color:var(--fleet-clay);font-weight:500}
-.dim{color:var(--fleet-muted)}
-.okc{color:var(--fleet-ok)} .clay{color:var(--fleet-clay)}
-.prompt{margin-top:auto;border:1px solid #2c2a44;border-radius:8px;padding:9px 12px;color:var(--fleet-muted);display:flex;justify-content:space-between}
-.prompt kbd{font:500 12px var(--fleet-font-mono);border:1px solid #3a3753;border-radius:5px;padding:1px 6px;color:var(--fleet-ink-2)}
-.cursor{display:inline-block;width:8px;height:1.1em;background:var(--fleet-clay);vertical-align:-3px;animation:blink 1s steps(1) infinite}
-@keyframes blink{50%{opacity:0}}
-.card{display:grid;grid-template-columns:1fr;gap:10px;align-items:end;border:1px solid #2c2a44;border-radius:10px;background:#17162a;padding:12px;max-width:520px;font-family:var(--fleet-font-ui)}
-.card .kp{display:flex;flex-wrap:wrap;gap:6px 22px;white-space:nowrap;font-size:12px;color:var(--fleet-muted)}
-.card .kp b{display:block;font:650 17px var(--fleet-font-display);color:var(--fleet-ink)}
-.link{font:400 12.5px var(--fleet-font-mono);color:var(--fleet-sand)}
-/* ⌘P panel — same groups and words as fleet-quickopen.py */
-.panel{position:absolute;left:50%;top:92px;width:min(560px,86%);transform:translate(-50%,-8px) scale(.98);opacity:0;pointer-events:none;background:#1d1c30;border:1px solid #3a3753;border-radius:12px;box-shadow:0 30px 70px -20px #000;transition:.2s;font-size:.93em;overflow:hidden}
-.panel.on{opacity:1;transform:translate(-50%,0) scale(1)}
-.panel .q{padding:11px 14px;border-bottom:1px solid #2c2a44;color:var(--fleet-ink)}
-.panel .q .ph{color:var(--fleet-muted)}
-.panel .row{padding:6px 14px;display:flex;gap:10px;color:var(--fleet-ink-2)}
-.panel .row.sel{background:rgba(217,118,90,.16);color:var(--fleet-ink)}
-.panel .grp{padding:8px 14px 2px;color:var(--fleet-muted);font-size:.85em}
-.panel .sep{border-top:1px solid #2c2a44;margin:4px 0}
-.panel .n{color:var(--fleet-blue)}
-.key{position:absolute;right:18px;bottom:64px;font:600 15px var(--fleet-font-mono);color:var(--fleet-ink);background:#2a2841;border:1px solid #47436a;border-bottom-width:3px;border-radius:9px;padding:7px 12px;opacity:0;transform:scale(.9);transition:.15s}
-.key.on{opacity:1;transform:none}
-.term{padding:10px 16px;gap:5px}
-.card{padding:8px 12px}
-.card .kp b{font-size:15px}
-.prompt{padding:6px 12px}
-.panel{top:58px}
+.screen{position:relative;background:var(--background);color:var(--foreground);border:1px solid var(--border);border-radius:12px;box-shadow:0 40px 80px -40px rgba(0,0,0,.75);overflow:hidden;height:300px;font:400 13px/1.5 var(--fleet-font-ui)}
+.screen>div{height:100%}
+.bar{display:flex;align-items:center;gap:7px;height:36px;padding:0 12px;background:var(--muted);border-bottom:1px solid var(--border)}
+.bar i{width:10px;height:10px;border-radius:50%;background:var(--border)}
+.bar .url{display:flex;align-items:center;gap:6px;width:min(380px,62%);height:26px;margin-left:24px;padding:0 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--muted-foreground);font-size:12px;white-space:nowrap;overflow:hidden}
+.bar .url svg{flex:none;width:11px;height:11px}
+.app{display:grid;grid-template-columns:200px minmax(0,1fr);height:calc(100% - 36px)}
+.sb{border-right:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:2px}
+.sb .bd{display:flex;align-items:center;gap:9px;padding:0 6px 10px;font:750 14px/1 var(--fleet-font-display)}
+.sb .bd svg{width:22px;height:22px}
+.sb .it{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb .it.on{background:var(--accent)}
+.sb .it.end{color:var(--muted-foreground)}
+.sb .it.end span{width:11px;text-align:center}
+.ok{color:color-mix(in srgb,var(--fleet-ok),var(--foreground) 18%)}
+.spin{flex:none;width:11px;height:11px;border-radius:50%;border:2px solid color-mix(in srgb,var(--fleet-ok) 30%,transparent);border-top-color:var(--fleet-ok);animation:spin 1s linear infinite}
+.chat{display:flex;flex-direction:column;gap:5px;padding:14px 18px 12px;font-size:13.5px;min-width:0;overflow:hidden}
+.you{align-self:flex-end;max-width:85%;background:var(--accent);border-radius:14px;padding:7px 13px;margin-bottom:5px}
+.ln{display:none}.ln.on{display:block;animation:in .25s}
+.you.on,.card.on{display:flex}
+@keyframes in{from{opacity:0;transform:translateY(4px)}}
+.wk{color:var(--muted-foreground)}
+.card{gap:6px 22px;align-items:flex-end;flex-wrap:wrap;width:max-content;max-width:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:12px;color:var(--muted-foreground)}
+.card b{display:block;font:650 16px var(--fleet-font-display);color:var(--foreground)}
+.card .ok{font-weight:600}
+.say-in{display:flex;align-items:center;justify-content:space-between;margin-top:auto;height:42px;padding:0 6px 0 12px;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--muted-foreground)}
+.say-in i{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--primary);color:var(--card)}
+.say-in i svg{width:14px;height:14px;stroke-width:2.4}
 .case{margin-top:10px;color:var(--fleet-muted);font-size:13.5px;line-height:1.55}
 .case b{color:var(--fleet-clay);font-weight:600;margin-right:6px}
 .case .who{color:var(--fleet-ink-2);font-weight:600;margin-right:6px}
+.devline{margin-top:4px;color:var(--fleet-muted);font-size:13.5px}
+.devline a{color:var(--fleet-ink-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--fleet-line)}
+.devline a:hover{color:var(--fleet-ink)}
 
 /* the way in: WeChat first. One card, one state at a time (html[data-j]):
    scan (a computer) · phone (a phone's browser: open it in WeChat) · wait / member / apply
@@ -190,8 +181,9 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
   .trust li{font-size:13px;padding:5px 10px 5px 8px}
   .join{margin-top:22px;padding:20px 18px}
   .demo{margin-top:22px}
-  .screen{height:250px;font-size:12px}
-  .topline .r{display:none}
+  .app{grid-template-columns:1fr}
+  .sb{display:none}
+  .bar .url{flex:1;width:auto;margin-left:14px}
 }
 </style>
 </head>
@@ -262,30 +254,29 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
   <div class="demo">
     <div class="screen" role="img" aria-label="{{replay_label}}">
       <div aria-hidden="true">
-      <div class="chrome"><i></i><i></i><i></i><span class="ttl">iTerm2 — ClaudeFleet</span></div>
-      <div class="topline"><span class="l"><span class="st w" id="tl-st" data-w="{{st_working}}" data-d="{{st_done}}">{{st_working}}</span><span class="dim">·</span><span class="t">{{tl_title}}</span></span><span class="r">{{tl_right}}</span></div>
-      <div class="term" id="term">
-        <div class="ln you" data-t="you"><b>❯</b> {{r_you}}</div>
-        <div class="ln" data-t="s1"><span class="okc">⏺</span> {{r_s1}}</div>
-        <div class="ln" data-t="s2"><span class="okc">⏺</span> {{r_s2}}</div>
-        <div class="ln" data-t="s3"><span class="okc">⏺</span> {{r_s3}}</div>
-        <div class="ln card" data-t="card">
-          <div class="kp"><span>{{r_total}}<b>+1,928 -19</b></span><span>{{r_orders}}<b>37</b></span><span class="okc" style="align-self:end">PR #3767 ✓</span></div>
+      <div class="bar"><i></i><i></i><i></i><span class="url"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>__HOST__/app</span></div>
+      <div class="app">
+        <div class="sb">
+          <div class="bd"><svg><use href="#mk"/></svg>ClaudeFleet</div>
+          <div class="it on"><span class="spin" id="sb-1"></span>{{sb_1}}</div>
+          <div class="it"><span class="ok">✓</span>{{sb_2}}</div>
+          <div class="it"><span class="ok">✓</span>{{sb_3}}</div>
+          <div class="it end"><span>›</span>{{sb_end}}</div>
         </div>
-        <div class="prompt"><span>❯ <span class="cursor"></span></span><kbd class="kh">⌘P</kbd></div>
+        <div class="chat">
+          <div class="ln you" data-t="you">{{r_you}}</div>
+          <div class="ln" data-t="s1"><span class="ok">✓</span> {{r_s1}}</div>
+          <div class="ln" data-t="s2"><span class="ok">✓</span> {{r_s2}}</div>
+          <div class="ln" data-t="s3"><span class="ok">✓</span> {{r_s3}}</div>
+          <div class="ln wk" data-t="wk"><span id="wk-d">⠋</span> {{r_work}}</div>
+          <div class="ln card" data-t="card"><span>{{r_total}}<b>+1,928 -19</b></span><span>{{r_orders}}<b>37</b></span><span class="ok">PR #3767 ✓</span></div>
+          <div class="say-in">{{r_say}}<i><svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></i></div>
+        </div>
       </div>
-      <div class="panel" id="panel">
-        <div class="q">› <span id="typed" data-text="{{r_typed}}"></span><span class="ph" id="ph">{{p_ph}}</span></div>
-        <div class="row sel">{{p_task}}</div>
-        <div class="row">{{p_new}}</div>
-        <div class="sep"></div>
-        <div class="grp">{{p_wait}}</div>
-        <div class="row"><span class="clay">!</span>{{p_wait1}}</div>
-      </div>
-      <div class="key" id="key">⌘P</div>
       </div>
     </div>
     <p class="case"><b>{{case_tag}}</b><span class="who">{{case_who}}</span>{{case_line}}</p>
+    <p class="devline">{{dev_line}} <a href="{{dev_path}}">{{dev_link}}</a></p>
   </div>
 </div></div></section>
 </main>
@@ -381,30 +372,25 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
     draw();
   }
 
-  /* the replay: the same steps a real session takes (⌘P → ⚡ → work → result) */
-  var timers=[],st=$('#tl-st'),typed=$('#typed'),txt=typed.dataset.text;
+  /* the replay: the same steps a real session takes, as the web app shows them
+     (a sentence → the steps one by one → the result → the session's ✓) */
+  var timers=[],sb=$('#sb-1'),dots='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏',di=0,spin=null;
   var still=/[?&]still=1/.test(location.search)||matchMedia('(prefers-reduced-motion: reduce)').matches;
   function at(ms,f){timers.push(setTimeout(f,ms))}
-  function setState(s){st.className='st '+s;st.textContent=s==='d'?st.dataset.d:st.dataset.w}
-  function show(t){var e=document.querySelector('[data-t='+t+']');e&&e.classList.add('on')}
+  function show(t,on){var e=document.querySelector('[data-t='+t+']');e&&e.classList.toggle('on',on!==false)}
+  function done(d){sb.className=d?'ok':'spin';sb.textContent=d?'✓':''}
   function reset(){timers.forEach(clearTimeout);timers=[];
-    document.querySelectorAll('.ln').forEach(function(e){e.classList.remove('on')});
-    $('#panel').classList.remove('on');$('#key').classList.remove('on');typed.textContent='';$('#ph').style.display='';
-    setState('w');}
+    document.querySelectorAll('.ln').forEach(function(e){e.classList.remove('on')});done(false)}
   function run(){reset();
-    if(still){['you','s1','s2','s3','card'].forEach(show);setState('d');return}
-    at(700,function(){$('#key').classList.add('on')});
-    at(1100,function(){$('#panel').classList.add('on')});
-    at(1500,function(){$('#key').classList.remove('on');$('#ph').style.display='none'});
-    for(var i=1;i<=txt.length;i++)(function(i){at(1500+i*55,function(){typed.textContent=txt.slice(0,i)})})(i);
-    var t=1500+txt.length*55+500;
-    at(t,function(){$('#panel').classList.remove('on')});
-    at(t+300,function(){show('you')});
-    at(t+1300,function(){show('s1')});
-    at(t+2300,function(){show('s2')});
-    at(t+3300,function(){show('s3');show('card')});
-    at(t+3700,function(){setState('d')});
-    at(t+8000,run);}
+    if(still){['you','s1','s2','s3','card'].forEach(function(t){show(t)});done(true);return}
+    at(300,function(){show('you')});
+    at(900,function(){show('wk')});
+    at(1900,function(){show('s1')});
+    at(3100,function(){show('s2')});
+    at(4300,function(){show('wk',false);show('s3');show('card')});
+    at(4800,function(){done(true)});
+    at(8000,run);}
+  if(!still)spin=setInterval(function(){$('#wk-d').textContent=dots.charAt(di=(di+1)%dots.length)},90);
   run();
 })();
 </script>

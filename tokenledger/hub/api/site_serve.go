@@ -35,9 +35,23 @@ import (
 //
 // A page's absolute addresses (canonical, hreflang, og:url, JSON-LD) are built
 // with the placeholder siteOrigin and become this hub's address (hubURL) as
-// the page is served, so no hub's address is written in the repo.
+// the page is served, so no hub's address is written in the repo. The
+// replay's address bar says siteHost: the same address without its scheme.
 
-const siteOrigin = "__ORIGIN__"
+const (
+	siteOrigin = "__ORIGIN__"
+	siteHost   = "__HOST__"
+)
+
+// siteFill puts this hub's address where the build left its placeholders.
+func (s *Server) siteFill(r *http.Request, b []byte) []byte {
+	o := s.hubURL(r)
+	b = bytes.ReplaceAll(b, []byte(siteOrigin), []byte(o))
+	if i := strings.Index(o, "://"); i >= 0 {
+		o = o[i+3:]
+	}
+	return bytes.ReplaceAll(b, []byte(siteHost), []byte(o))
+}
 
 // siteCSP: the pages load nothing from anywhere else.
 const siteCSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
@@ -127,7 +141,7 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang str
 	if err != nil {
 		return false
 	}
-	b = bytes.ReplaceAll(b, []byte(siteOrigin), []byte(s.hubURL(r)))
+	b = s.siteFill(r, b)
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Language", lang)
@@ -150,7 +164,7 @@ func (s *Server) siteCrawlFile(w http.ResponseWriter, r *http.Request, name stri
 		http.NotFound(w, r)
 		return
 	}
-	b = bytes.ReplaceAll(b, []byte(siteOrigin), []byte(s.hubURL(r)))
+	b = s.siteFill(r, b)
 	h := w.Header()
 	h.Set("Content-Type", siteTypes[path.Ext(name)])
 	h.Set("Cache-Control", "public, max-age=3600")
