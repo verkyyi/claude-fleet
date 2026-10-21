@@ -983,8 +983,14 @@ TM ${window_stamps[@]+"${window_stamps[@]}"} 2>/dev/null
 unset window_stamps
 unset -f stamp_option
 # Attach only after the task and provenance stamps are visible to the reader.
+# A version-1 record refuses it (its session is named by identity — the window's
+# @fleet_id IS the record's ID, and the hub joins them by that, A4G2); the
+# answer goes to logs/task-attach.log rather than nowhere.
 [ -n "$TASK_REF" ] && [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
-  && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & )
+  && ( mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" 2>/dev/null
+       { printf '%s %s %s ' "$(date -u +%FT%TZ)" "$TASK_REF" "$win"
+         bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" 2>&1 >/dev/null || :; echo; } \
+         >> "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/task-attach.log" 2>/dev/null & )
 # The parent's worker_id (#1420): given verbatim when the parent is on another
 # machine (a hub-placed start, #1541), else derived from the key; a parent on
 # another machine has no generation here (#1538).

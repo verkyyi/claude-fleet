@@ -78,6 +78,8 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 				continue
 			}
 			s.NodeAlertTick(start, now)
+			// A record whose session is over ends (A4G2), every taskSweepEvery.
+			go s.TaskSweepTick(now)
 			// A trial's machine back on its budget (claude-fleet#4059) or on
 			// hidden · idle (claude-fleet#4060), off the tick: a release waits
 			// on its conversation's export.

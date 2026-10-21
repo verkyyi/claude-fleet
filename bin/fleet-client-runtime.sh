@@ -108,7 +108,7 @@ NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_vi
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
   fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh
   fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
-  fleet-node-probe.sh"
+  fleet-node-probe.sh fleet-board-diff.py"
 
 check() {
   local list=${1:-$LIST_DEF} man=${2:-$MANIFEST_DEF}

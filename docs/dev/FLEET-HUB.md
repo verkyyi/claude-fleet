@@ -447,6 +447,25 @@ and treats a 304 as «the rows stand»: it re-stamps the cache's `#ts` line (and
 `hub-workers.tsv`'s mtime) so nothing reads 失联 while the hub is answering. A
 hub without ETags is fetched in full every time, as before.
 
+**One session list** (claude-fleet A4G2). A person's `fleet_sessions` answer (their
+own rows — a member, an admin on a daily route, a node token's person; everything
+at the operator's door; never an admin's everyone's view) also carries `board`:
+the list the console's 会话 and the ⌘P panel both draw, built once by
+`buildBoard` (`tokenledger/hub/api/fleet_board.go`). A row is one piece of work
+keyed by its session's ID — a version-1 record's own ID is its window's
+`@fleet_id`, so a record and the session doing it are one row even though the
+record never learned a worker_id. Groups 置顶 · 等你 · 在干活 · 排队中 · 已收起
+(近 7 天, an exited agent's window included, never counted), newest first, an
+EPIC's members under their parent, `count` over the first four on machines not
+lost; the board's digest is folded into the ETag. The panel takes it from
+`global/hubsess.body` while `hub_ok` is fresh (`fleet_view.board_apply`; stale or
+absent ⇒ its own list, `FLEET_VIEW_BOARD=0` to switch off); `fleet board diff`
+(`bin/fleet-board-diff.py`, the doctor's `board` row) prints how far the two are
+apart. A record ends with its session: an ID closing with no result cancels it
+(「结束·没交回结果」, `id_closed:`), `reopened` puts it back, a later result wins,
+and the alerts leader sweeps every 5 min (`ReconcileClosedTasks`: closed before,
+never started within 24 h) — BREAK-IT `task-record-never-closes`.
+
 **…and the watcher is told at once** (issue #1526, EPIC #1524 C7). While someone
 is looking and a validator is held, the ask also carries `wait` (seconds, ≤ 25 —
 under an ingress's 60 s idle timeout): `?wait=` on the token's `GET`, a `"wait"`

@@ -322,6 +322,15 @@ case $cmd in
     echo
     bash "$here/fleet-client-who.sh"
     exit $rc ;;
+  # how far the ⌘P panel is from the hub's one session list, now (A4G2) — a
+  # machine that runs the panel has it
+  board)
+    if [ "${2:-}" = diff ] && [ -f "$here/fleet-board-diff.py" ]; then
+      shift 2
+      exec python3 "$here/fleet-board-diff.py" "$@"
+    fi
+    echo "fleet · fleet board diff 比的是这台机器上的 ⌘P 面板和 hub 的会话清单：在开了承载的机器上敲" >&2
+    exit 3 ;;
   # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
   ls|show|open|rename|close|reap|answer|notices)

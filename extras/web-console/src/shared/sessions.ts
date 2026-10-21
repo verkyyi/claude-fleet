@@ -32,9 +32,21 @@ export type SessionRow = {
   tokens: number;       // today's pool tokens, a live row
   say?: string;         // its last word while working (status_msg)
   wid?: string;         // an ended row's worker_id: the task record's join
+  ident?: string;       // a live row's identity (its window's @fleet_id)
 };
 
-type LiveBody = { sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[] };
+// The one session list (claude-fleet A4G2): the hub builds it once — rows,
+// their groups and order, the count — inside every fleet_sessions answer, and
+// the console and the ⌘P panel both draw it as it is.
+export type BoardGroup = "pin" | "ask" | "work" | "queue" | "gone";
+export type BoardRow = {
+  id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;
+  words: [string, string]; state?: string; worker_id?: string; machine?: string; login?: string; repo?: string;
+  parent?: string; depth?: number; lost?: boolean; at: number;
+};
+export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string };
+
+type LiveBody = { sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[]; board?: Board };
 type EndedBody = { sessions?: { worker_id?: string; resume_id: string; key: string; title?: string; repo?: string; machine_name?: string; ended_at?: string }[] };
 
 const ASK_KINDS = ["permission", "question", "auth"];
@@ -62,7 +74,7 @@ export function liveRows(body: LiveBody | null): SessionRow[] {
       id: str(w.worker_id) || key, key, title: str(w.title) || str(w.name) || key, repo: str(w.repo),
       machine: s.machine_name || "", state, group: asking ? "ask" : "run", ask: asking ? askOf(w) : null,
       born: Number(w.born) || 0, ended: "", tokens: Number(s.tokens_today) > 0 ? Number(s.tokens_today) : 0,
-      say: asking ? "" : str(w.status_msg).slice(0, 200),
+      say: asking ? "" : str(w.status_msg).slice(0, 200), ident: str(w.identity) || undefined,
     });
   }
   return out.sort((a, b) => b.born - a.born || a.key.localeCompare(b.key));
@@ -77,12 +89,22 @@ export function endedRows(body: EndedBody | null): SessionRow[] {
 
 const keysOf = (rows: SessionRow[]) => new Set(rows.map((r) => `${r.machine}\t${r.key}`));
 
-export type SessionsState = { live: SessionRow[] | null; ended: SessionRow[] | null; failed: boolean; reload: () => void };
+export type SessionsState = { live: SessionRow[] | null; ended: SessionRow[] | null; board: Board | null; boardAt: number;
+  failed: boolean; reload: () => void };
+
+// The answer's list, when the hub sent one (an older hub: none — the console's
+// own join stands in).
+export function boardOf(body: LiveBody | null): Board | null {
+  const b = body?.board;
+  return b && Array.isArray(b.rows) && typeof b.count === "number" ? b : null;
+}
 
 export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () => void): SessionsState {
   const [live, setLive] = useState<SessionRow[] | null>(null);
   const [ended, setEnded] = useState<SessionRow[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [board, setBoard] = useState<Board | null>(null);
+  const [boardAt, setBoardAt] = useState(0);
   const prev = useRef<Set<string>>(new Set());
   const timers = useRef<number[]>([]);
 
@@ -98,6 +120,8 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
     prev.current.forEach((k) => { if (!now.has(k)) gone = true; });
     prev.current = now;
     setLive(rows);
+    setBoard(boardOf(b));
+    setBoardAt(Date.now());
     setFailed(false);
     if (gone) for (const ms of [1500, 6000]) timers.current.push(window.setTimeout(readEnded, ms));
   }, [readEnded]);
@@ -157,7 +181,7 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
     // onTasks / pollTasks are read once, at the stream's opening
   }, [reload, onLive]);
 
-  return { live, ended, failed, reload };
+  return { live, ended, board, boardAt, failed, reload };
 }
 
 // One write through the write door, as the signed-in person. Resolves to null

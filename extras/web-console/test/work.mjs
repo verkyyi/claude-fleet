@@ -84,3 +84,28 @@ const kinds = messagesOf(rows).map((m) => `${m.kind}:${m.row.title}`).sort();
 assert.deepEqual(kinds, ['ask:asks', 'ask:waits on you', 'done:done', 'fail:failed']);
 
 console.log('ok work.mjs');
+
+// A4G2: the hub's one list — the page draws its rows, groups, order and words as
+// they are (the same the ⌘P panel draws); a record and its session are one row
+// even when the record never learned a worker_id (joined by the hub, by identity).
+{
+  const { boardRows } = await import('../src/app/work.ts');
+  const ts = [v1({ id: 'T20', fid: fid(20), title: 'running task', task_state: 'accepted' }),
+    v1({ id: 'T21', fid: fid(21), title: 'member', task_state: 'accepted', parent_task: fid(20) })];
+  const lv = [sess('k20', 'working', { say: 'step 2' })];
+  const board = { count: 3, groups: { pin: 1, work: 2, gone: 1 }, gone_days: 7, digest: 'x', rows: [
+    { id: 'p1', title: '编排', group: 'pin', tag: 'looping', words: ['在循环', 'Looping'], at: 50 },
+    { id: fid(20), task: 'T20', task_id: fid(20), title: 'running task', group: 'work', tag: 'working', words: ['在干活', 'Working'], worker_id: `${F}/k20`, at: 40 },
+    { id: fid(21), task: 'T21', task_id: fid(21), title: 'member', group: 'work', tag: 'working', words: ['在干活', 'Working'], parent: fid(20), depth: 1, at: 30 },
+    { id: 'g1', title: 'old', group: 'gone', tag: 'ended_no_result', words: ['结束·没交回结果', 'Ended · no result'], at: 10 },
+  ] };
+  const br = boardRows(board, ts, lv);
+  assert.deepEqual(br.map((r) => r.group), ['pin', 'work', 'work', 'gone'], 'the hub order and groups stand');
+  assert.equal(br[1].live.key, 'k20', 'the row joins its live session by worker_id');
+  assert.equal(br[1].task.id, 'T20', 'and its record by the record ID');
+  assert.equal(br[1].line, 'step 2');
+  assert.deepEqual(br[3].tag, ['结束·没交回结果', 'Ended · no result'], 'the hub words');
+  assert.deepEqual(rowsIn(br, 'work').map((r) => r.title), ['running task'], 'a member sits under its parent');
+  assert.deepEqual(nestedKids(br[1]).map((r) => r.title), ['member']);
+  console.log('ok — the one list (A4G2)');
+}

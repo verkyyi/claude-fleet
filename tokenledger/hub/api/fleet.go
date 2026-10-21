@@ -582,8 +582,32 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 		nodeList = append(nodeList, *n)
 	}
 	sort.Slice(nodeList, func(a, b int) bool { return nodeList[a].MachineName < nodeList[b].MachineName })
-	return map[string]any{"machines": hosts, "count": len(out), "sessions": out, "nodes": nodeList,
-		"etag": fleetSessionsETag(latest, len(out), lost, tokens)}, nil
+	res := map[string]any{"machines": hosts, "count": len(out), "sessions": out, "nodes": nodeList,
+		"etag": fleetSessionsETag(latest, len(out), lost, tokens)}
+	// The one session list (A4G2): the caller's own records and sessions, as the
+	// console and the ⌘P panel both draw it — a person's own (their own rows), or
+	// everything at the operator's door; never an admin's everyone's view.
+	if owner, ok := boardOwner(req.Context(), p); ok {
+		if b, err := s.buildBoard(owner, out, now); err == nil {
+			res["board"] = b
+			res["etag"] = strings.TrimSuffix(res["etag"].(string), "\"") + "-b" + b.Digest + "\""
+		} else {
+			log.Printf("fleet_sessions: the session list: %v", err)
+		}
+	}
+	return res, nil
+}
+
+// boardOwner is whose records the list is built from: the person's own when the
+// rows are cut to them, everyone's at the operator's door; ok=false otherwise.
+func boardOwner(ctx context.Context, p fleetPrincipal) (string, bool) {
+	if p.Person == "" {
+		return "", true
+	}
+	if cutToSelf(ctx) {
+		return p.Person, true
+	}
+	return "", false
 }
 
 // fleetSessionsETag is the validator of one fleet_sessions answer

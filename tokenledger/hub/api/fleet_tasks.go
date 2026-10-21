@@ -188,10 +188,16 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 var taskLiveFields = []string{"key", "state", "needs", "status_kind", "status_msg", "ctx_left", "title", "repo", "issue", "observed_at", "stale", "source"}
 
 func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) map[string]any {
-	if t.WorkerID == "" {
+	wid := t.WorkerID
+	if wid == "" {
+		// A version-1 record's session is named by its identity (A4G2): the
+		// window's @fleet_id IS the record's ID, so its worker is <fleet>/<fid>.
+		wid = s.workerOfIdentity(t.Owner, t.FID)
+	}
+	if wid == "" {
 		return nil
 	}
-	fid, _, err := fleetid.ParseWorkerID(t.WorkerID)
+	fid, _, err := fleetid.ParseWorkerID(wid)
 	if err != nil {
 		return nil
 	}
@@ -216,7 +222,7 @@ func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) 
 		rows[fid] = ws
 	}
 	for _, w := range ws {
-		if id, _ := w["worker_id"].(string); id != t.WorkerID {
+		if id, _ := w["worker_id"].(string); id != wid && !(t.WorkerID == "" && identityOf(w) == t.FID) {
 			continue
 		}
 		out := map[string]any{}
@@ -354,4 +360,44 @@ func fleetHosts(f store.FleetRow, repo string) bool {
 		}
 	}
 	return false
+}
+
+// identityOf is an inventory worker's lifelong identity (its window's @fleet_id).
+func identityOf(w map[string]any) string {
+	i, _ := w["identity"].(string)
+	return i
+}
+
+// workerOfIdentity finds the live session whose identity is id — the ID's
+// machine's fleets first (fleet_ids keeps which endpoint holds it) — and
+// answers its worker_id (<fleet UUID>/<key or identity>); "" when none holds it.
+func (s *Server) workerOfIdentity(owner, id string) string {
+	if id == "" || !fleetid.IsUUID(id) {
+		return ""
+	}
+	rec, err := s.Store.FleetIDOf(owner, id)
+	if err != nil || rec.ClosedAt != 0 || rec.Seq == 0 {
+		return ""
+	}
+	fleets, err := s.Store.Fleets()
+	if err != nil {
+		return ""
+	}
+	for _, f := range fleets {
+		if !f.Present || f.EndpointID != rec.EndpointID {
+			continue
+		}
+		var ws []map[string]any
+		_ = json.Unmarshal([]byte(f.WorkersJSON), &ws)
+		for _, w := range ws {
+			if identityOf(w) != id {
+				continue
+			}
+			if v, _ := w["worker_id"].(string); v != "" {
+				return v
+			}
+			return f.FleetID + "/" + id
+		}
+	}
+	return ""
 }

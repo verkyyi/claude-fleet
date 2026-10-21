@@ -78,10 +78,12 @@ func writeTaskResult(tx *sql.Tx, owner, id, taskID string, refs []int64, state, 
 		where, args = append(where, "id = ?"), append(args, n)
 	}
 	q := `UPDATE fleet_tasks SET state = ?, outcome = ?, pr = CASE WHEN pr = '' THEN ? ELSE pr END,
-		observation = ?, updated_at = ? WHERE owner = ? AND (` + strings.Join(where, " OR ") + `)
-		AND (outcome = '' OR observation LIKE ?) AND state NOT IN (?, ?, ?)`
-	res, err := tx.Exec(q, append([]any{out, out, pr, ObsIDResult + id + "#" + strconv.Itoa(seq), now.UTC().Format(rfc), owner},
-		append(args, ObsIDResult+"%", TaskCancelled, TaskRefused, TaskClosed)...)...)
+		observation = ?, evidence = CASE WHEN evidence LIKE ? THEN '' ELSE evidence END, updated_at = ? WHERE owner = ? AND (` + strings.Join(where, " OR ") + `)
+		AND (((outcome = '' OR observation LIKE ?) AND state NOT IN (?, ?, ?)) OR observation LIKE ? OR observation LIKE ?)`
+	// an end its session's close wrote (A4G2: id_closed / never_started) gives way to a real result
+	res, err := tx.Exec(q, append([]any{out, out, pr, ObsIDResult + id + "#" + strconv.Itoa(seq), TaskEndedNoResult + "%",
+		now.UTC().Format(rfc), owner},
+		append(args, ObsIDResult+"%", TaskCancelled, TaskRefused, TaskClosed, ObsIDClosed+"%", ObsNeverStarted+"%")...)...)
 	if err != nil {
 		return 0, fmt.Errorf("write the result onto its task: %w", err)
 	}
