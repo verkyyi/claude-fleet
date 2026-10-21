@@ -191,7 +191,7 @@ st_eq '交回: the terminal holds it' terminal "$(field "$(rec)" holder)"
 st_eq '交回: the end page took its ↵' '' "$(T show-options -wqv -t "$WIN" @handoff_web)"
 st_has '交回: WebChat lets go of its warm agent' "$(tail -n 1 "$WORK/chat.log")" "/api/release 1 "
 st_eq '交回 again: nothing to do' ok "$(bash "$H" give-back "fid:$FID")"
-st_eq '交回 left no guard behind' '' "$(ls -A "$WORK/conf/convo-lock" | grep taking || true)"
+st_eq '交回 left no guard behind' 0 "$(find "$WORK/conf/convo-lock" -name '.taking-*' | wc -l | tr -d ' ')"
 
 # 8 · the record itself
 set +e; python3 "$LOCK" set --agent claude --sid "$SID" --holder webchat --if-holder webchat >/dev/null; rc=$?; set -e
