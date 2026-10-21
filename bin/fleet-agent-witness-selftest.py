@@ -89,7 +89,8 @@ class WitnessTests(unittest.TestCase):
     def setUp(self):
         self.saved = {k: os.environ.get(k) for k in ENV_KEYS}
         self.tmp = Path(tempfile.mkdtemp(prefix='fw-', dir='/tmp'))
-        self.label = 'witness%d' % os.getpid()
+        # a label per test: a kill-server still shutting down must not meet the next new-session
+        self.label = 'witness%d-%s' % (os.getpid(), self._testMethodName[-24:].replace('_', '-'))
         self.tm = ['tmux', '-L', self.label]
         self.call('new-session', '-d', '-s', self.label, '-n', 'w', 'sleep 120')
         self.pane = self.call('display-message', '-p', '#{pane_id}')
