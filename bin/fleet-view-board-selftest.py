@@ -71,7 +71,8 @@ class Board(unittest.TestCase):
         stray = sess("@6", "f-new", "work")                                 # here, not heard by the hub yet
         groups["pin"], groups["queue"], groups["work"] = [pin], [run], [stray]
         shut = [sess("@7", "f-exit", "folded", sec="gone", shut=True, state="exited")]
-        gone = [sess("id:f-local", "f-local", "folded", gone=True, sec="gone")]   # only this machine remembers it
+        gone = [sess("id:f-local", "f-local", "folded", gone=True, sec="gone"),    # only this machine remembers it
+                sess("id:f-rec", "f-rec", "folded", gone=True, sec="gone", ledger=True)]  # closed here, its record open
         out, out_gone = v.board_apply(BOARD, groups, shut, gone, "m", "u")
         self.assertEqual([e["target"] for e in out["pin"]], ["fu/f-pin"])
         self.assertEqual([e["target"] for e in out["work"]], ["@5", "@6"], "the hub's row first, a stray at the end")
@@ -80,6 +81,7 @@ class Board(unittest.TestCase):
         self.assertEqual(out["work"][0]["word"], "在干活")
         rec = out["queue"][0]
         self.assertTrue(rec["record_only"] and rec["target"] == "id:f-rec" and rec["word"] == "排着")
+        self.assertFalse(rec.get("gone"), "an open record is drawn and counted even when its session closed here")
         self.assertEqual(v.menu_of(rec), [], "a record with no session has nothing to act on")
         self.assertEqual([e["fid"] for e in out_gone], ["f-exit", "f-end"], "the hub's 已收起, in its order")
         self.assertNotIn("f-local", [e["fid"] for e in out_gone])

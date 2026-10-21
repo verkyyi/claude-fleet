@@ -184,6 +184,8 @@ export function messagesOf(rows: Row[], now = Date.now()): Message[] {
   const out: Message[] = [];
   for (const r of rows) {
     if (r.group === "ask") out.push({ row: r, kind: r.tone === "fail" ? "fail" : "ask" });
+    // a record that failed with no session left sits in 已收起 (A4G2): said for a day
+    else if (r.tone === "fail" && now - r.at < 864e5) out.push({ row: r, kind: "fail" });
     else if (r.task && taskStatus(r.task) === "succeeded" && now - ms(r.task.updated_at || r.task.created_at) < 864e5) out.push({ row: r, kind: "done" });
   }
   return out;
