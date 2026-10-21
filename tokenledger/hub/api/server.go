@@ -643,6 +643,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
 		// …and the cluster's one door reads its table (claude-fleet#3549).
 		mux.HandleFunc(control.EntryRoutesNodePath, s.handleNodeEntryRoutes)
+		// …and the trial logins' way out (WACK C3): mode + logins, machine token.
+		mux.HandleFunc(control.TrialEgressNodePath, s.handleNodeTrialEgress)
 		// one address, routed by username (A5SQ): the door's own token — its
 		// stream to a person's home (a websocket) and that hop's certificate
 		mux.HandleFunc(control.DoorHomePath, s.handleDoorHome)

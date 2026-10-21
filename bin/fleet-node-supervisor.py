@@ -3453,6 +3453,31 @@ class Supervisor(object):
         self.state["tenants"] = cur
         self.dirty = True
 
+    # -- a trial login's way out (WACK C3, bin/fleet_trial_egress.py)
+    def tend_egress(self, t):
+        """Every FLEET_TRIAL_EGRESS_EVERY (60 s) on a Mac: one pass of the pf anchor
+        `fleet-trial` — the hub's mode and trial logins, rebuilt whole. Seated, the
+        root core's `egress` op does it (pf is root's)."""
+        if not MAC or t - (self.state.get("egress_at") or 0) < env_num("FLEET_TRIAL_EGRESS_EVERY", 60):
+            return
+        self.state["egress_at"] = t
+        if self.seated:
+            r = core_ask("egress", {}, 120)
+            b = r.get("result") if r.get("ok") else None
+            if b is None and (r.get("error") or r.get("refused")):
+                self.log("egress: the core: %s" % (r.get("error") or r.get("why")))
+        else:
+            b = egress_pass(self.p)
+        if not b:
+            return
+        line = "%s · %s" % (b.get("mode"), ", ".join(b.get("logins") or []) or "no trial login")
+        if b.get("error") or b.get("note"):
+            line += " · " + (b.get("error") or b.get("note"))
+        if line != self.state.get("egress_line"):
+            self.log("egress: " + line)
+        self.state["egress_line"] = line
+        self.dirty = True
+
     # -- the entry port (issue #3070)
     def tend_entry(self, t, force=False):
         """Every FLEET_ENTRY_EVERY (60 s) while the entry is on: one converge pass —
@@ -3736,6 +3761,11 @@ class Supervisor(object):
                 self.tend_entry(t)
             except Exception as e:  # the entry must never take the daemon down
                 self.log("entry: %s" % e)
+            self.at("egress")
+            try:
+                self.tend_egress(t)
+            except Exception as e:  # the trial egress must never take the daemon down
+                self.log("egress: %s" % e)
             if self.sweep_due(t):
                 self.at("sweep")
                 if wd > 0:
@@ -7850,6 +7880,25 @@ def seated_self():
         return True
     s = seat_ident()
     return s is not None and os.geteuid() == s[0]
+
+
+def egress_ctx(paths):
+    """The trial egress pass's view of this machine (fleet_trial_egress.Ctx)."""
+    import fleet_trial_egress as egress
+    def managed():
+        return [l for l, rec in accounts_read(paths).items() if (rec or {}).get("managed")]
+    def uid_of(login):
+        ident = account_ident(login)
+        return ident[0] if ident and ident[0] != 0 else None
+    return egress.Ctx(paths.state, paths.log, paths.runtime,
+                      lambda: _env_file(os.path.join(paths.state, "machine.env"), 0) or {}, managed, uid_of)
+
+
+def egress_pass(paths):
+    """One pass of the pf anchor `fleet-trial` (root's): its book, JSON-safe."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fleet_trial_egress as egress
+    return egress.converge(egress_ctx(paths))
 
 
 def core_ask(op, args, timeout=60):

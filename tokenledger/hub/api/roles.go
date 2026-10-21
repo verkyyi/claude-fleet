@@ -98,6 +98,7 @@ var routeAccess = map[string]string{
 	AdminTokenNodePath:     accessSelf, // the admin role account's token (claude-fleet#3724)
 	// The direct door (claude-fleet#3068): a machine's own list and record.
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,
+	control.TrialEgressNodePath: accessSelf,
 	// … its reach, and the cluster door's table (claude-fleet#3549).
 	control.EntryReachNodePath: accessSelf, control.EntryRoutesNodePath: accessSelf,
 	control.DoorHomePath: accessSelf, control.DoorSessionPath: accessSelf,

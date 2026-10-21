@@ -38,6 +38,10 @@
 #                             whose chain moves the pin to a new root, fetched by the
 #                             seated updater; a chain / op / key that would let the
 #                             seat move the machine's trust anchor itself
+#   trial-egress-stuck        bin/fleet_trial_egress.py converge + the core's op_egress
+#                             (WACK C3): a trial login's pf rules stay after its
+#                             login was recycled, or after the hub went quiet — the
+#                             next person on that login shut out
 #   entry-orphan-holds-port   bin/fleet-node-core.py strays / proc_title_cmd (T702): the
 #                             entry sshd the root daemon left before the seat (PPID 1),
 #                             wearing sshd's own listener title — the core sees it, a
@@ -57,7 +61,7 @@ core_sandbox() {
   local sb="$1"
   mkdir -p "$sb/root/rt/bin" "$sb/db" "$sb/Users/alice"
   for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-release-verify.py fleet-node-supervisor.py fleet-node-update.py \
-      fleet_node_codesign.py; do
+      fleet_node_codesign.py fleet_trial_egress.py; do
     cp "$BIN/$f" "$sb/root/rt/bin/"
   done
   printf '{"alice": {"uid": %d, "gid": %d, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
@@ -544,6 +548,79 @@ drill_seated_forget_core_job() {
   WHAT="入座守护的机器上删号：stand-in 被杀、作业还挂在 root core 下跑；account forget 自己按 uid 找出 core 下该登录的作业、以 root 停掉，core 不再为它起新的"
 }
 
+
+# trial-egress-stuck (WACK C3): fleet.trial.egress=block puts a trial login's uid in
+# the pf anchor `fleet-trial`. The login is then recycled (its home cleared on the
+# hub) and handed to a member — or the hub goes quiet and the list can no longer be
+# checked. Rules left behind would shut the next person out. The core's `egress`
+# pass rebuilds the anchor WHOLE from the hub's answer (a login gone from it is gone
+# from the anchor) and flushes it once the last answer is older than
+# FLEET_TRIAL_EGRESS_STALE_SECS — open is the default. Real core, real HTTP, fake pfctl.
+drill_trial_egress_stuck() {
+  CAP=20
+  local sb t0 out port hubpid
+  sb="$WORK/core-egress"; core_sandbox "$sb"
+  mkdir -p "$sb/pf" "$sb/root/rt/conf" "$sb/log"
+  cat > "$sb/pfctl" <<'SH'
+#!/bin/bash
+d="$PFDIR"; a="$*"
+case "$a" in
+  "-a fleet-trial -s rules") grep -v '^table ' "$d/anchor" 2>/dev/null ;;
+  "-a fleet-trial -vv -s rules") grep -v '^table ' "$d/anchor" 2>/dev/null | awk '{print "@" NR-1 " " $0}' ;;
+  "-a fleet-trial -f -") cat > "$d/anchor" ;;
+  "-a fleet-trial -F all") : > "$d/anchor" ;;
+  "-s rules") cat "$d/main" 2>/dev/null ;;
+  "-f -") cat > "$d/main" ;;
+  "-E") echo "Token : 7" >&2 ;;
+  *) : ;;
+esac
+SH
+  printf '#!/bin/sh\nexec sleep 60\n' > "$sb/tcpdump"; printf '#!/bin/sh\nexit 0\n' > "$sb/ifconfig"
+  chmod +x "$sb/pfctl" "$sb/tcpdump" "$sb/ifconfig"
+  printf '198.51.100.0/24\n' > "$sb/root/rt/conf/trial-egress.allow"
+  printf 'anchor "com.apple/*"\n' > "$sb/pf.conf"
+  # the hub: whatever $sb/answer holds, at /v1/node/trial-egress; gone once killed
+  port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+  printf '{"mode": "block", "logins": ["alice"]}' > "$sb/answer"
+  python3 - "$port" "$sb/answer" >/dev/null 2>&1 <<'PY' &
+import http.server, sys
+port, ans = int(sys.argv[1]), sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = open(ans, "rb").read()
+        self.send_response(200 if self.path == "/v1/node/trial-egress" else 404)
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+  hubpid=$!; CORE_PIDS+=("$hubpid")
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=t\n' "$port" > "$sb/db/machine.env"
+  export PFDIR="$sb/pf" FLEET_PFCTL="$sb/pfctl" FLEET_TCPDUMP="$sb/tcpdump" FLEET_IFCONFIG="$sb/ifconfig" \
+    FLEET_PF_CONF="$sb/pf.conf" FLEET_TRIAL_EGRESS_STALE_SECS=2
+  unset FLEET_TRIAL_EGRESS
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  for _ in $(seq 1 50); do nc -z 127.0.0.1 "$port" 2>/dev/null && break; sleep 0.1; done
+  out=$(core_call "$sb" egress '{}')
+  grep -q "user $(id -u)" "$sb/pf/anchor" 2>/dev/null || { WHY="block never named the trial login: $out"; return 1; }
+  t0=$(now)
+  # recycled: the hub no longer lists alice — one pass and she is out of the anchor
+  printf '{"mode": "block", "logins": []}' > "$sb/answer"
+  out=$(core_call "$sb" egress '{}')
+  [ ! -s "$sb/pf/anchor" ] || { WHY="a recycled login's rules stayed: $(cat "$sb/pf/anchor") $out"; return 1; }
+  # listed again, then the hub goes quiet: the last list holds while fresh, then flushes
+  printf '{"mode": "block", "logins": ["alice"]}' > "$sb/answer"
+  core_call "$sb" egress '{}' >/dev/null
+  [ -s "$sb/pf/anchor" ] || { WHY="block did not come back"; return 1; }
+  kill "$hubpid" 2>/dev/null; wait "$hubpid" 2>/dev/null
+  sleep 3
+  out=$(core_call "$sb" egress '{}')
+  [ ! -s "$sb/pf/anchor" ] || { WHY="a stale list kept the rules: $out"; return 1; }
+  case "$out" in *stale*) ;; *) WHY="the pass did not say the list is stale: $out"; return 1 ;; esac
+  pkill -f "$sb/tcpdump" 2>/dev/null
+  unset PFDIR FLEET_PFCTL FLEET_TCPDUMP FLEET_IFCONFIG FLEET_PF_CONF FLEET_TRIAL_EGRESS_STALE_SECS
+  SECS=$(since "$t0")
+  WHAT="试用账号回收或入口失联后 pf 规则不留：核心 egress 一次按入口名单整段重建、名单过期即撤净（默认放开）"
+}
 # entry-orphan-holds-port (T702): the entry sshd the root daemon started before the
 # seat outlives it (PPID 1) and holds the port. sshd rewrites its own title to
 # `sshd: <argv> [listener] 0 of 10-60 startups`, so a core that matched the table's
