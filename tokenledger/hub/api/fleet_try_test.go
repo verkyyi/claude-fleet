@@ -455,7 +455,7 @@ func TestTrySweepEndsASpentTrial(t *testing.T) {
 
 // What is left (claude-fleet#4059): GET /v1/try/state counts the time held
 // and the lines sent; every line's answer carries the same two numbers; the
-// settings move the budget; fleet.trial off 404s.
+// settings move the budget; fleet.trial off answers none.
 func TestTryStateCountsDown(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
@@ -505,9 +505,14 @@ func TestTryStateCountsDown(t *testing.T) {
 	if code, _, _ := h.srv.trialTurn(&nopWriter{h: http.Header{}}, "gh:7399", now); code != "" {
 		t.Fatalf("a member's line = %q", code)
 	}
+	// Off: no error for a signed-in page (task J091) — 200 none; no session 401.
 	setHubSetting(t, h.srv, TrialKey, "off")
-	if code, _ := get(); code != http.StatusNotFound {
-		t.Fatalf("state with the trial off = %d; want 404", code)
+	if code, st := get(); code != http.StatusOK || st.State != "none" {
+		t.Fatalf("state with the trial off = %d %+v; want 200 none", code, st)
+	}
+	c = &http.Cookie{Name: "nobody", Value: "x"}
+	if code, _ := get(); code != http.StatusUnauthorized {
+		t.Fatalf("state with no session = %d; want 401", code)
 	}
 }
 

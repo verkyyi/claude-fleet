@@ -203,7 +203,9 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 > **搬到了 `/app`（#3926，EPIC #3923 C3），官网版拆了（#3939，C16）**：对话是控制台 `extras/web-console` 的首页——同一套界面（`src/app/chat/chat.ts` · `src/app/pages/chat.tsx`），接口仍是 `/v1/chat/*`，服务与中继不动。`/chat/` 和 `/chat` 只剩一跳 301 到 `/app`（带 query，`consolePages`，永久保留）；`/chat/assets/*`、`npm run build:site` 和 `bin/web-chat-pack.sh` 随旧控制台一起删了。本机服务那份（`dist/`）照旧。
 
 - **家**：`GET /v1/chat/home` 入口自己答，不转发：`{machine, login, state}`，state 是 `ok` · `offline`
-  （那个登录没连着）· `maintenance` · `old_agent`（连着但没有对话转发）；没家 409 `no_home`。
+  （那个登录没连着）· `maintenance` · `old_agent`（连着但没有对话转发）；没家 200 `state: no_home` + `why`
+  （J091：页头每次打开都问，不算报错；挡页面的是对话自己的 409 `no_home`）。`?cached=1` 没副本也是 200
+  `{items: [], mirror: null}`；`/v1/try/state` 试用关着答 200 `{state: "none"}`，页面只有试用身份才问。
 - **额度**：小条读本人的 `fleet.person_budget`（`/v1/me/usage` 的 `limit`，剩得最少的那个窗口；没设限额
   就不画）—— `/v1/me/quota` 是订阅池的、只给管理员，不是这个人的额度。用完（这里说用完，或者服务
   回了 `{t:"error", code:"budget"}` / 对话里的 `budget.blocked`）：输入框上方一条「这周的额度用完了，

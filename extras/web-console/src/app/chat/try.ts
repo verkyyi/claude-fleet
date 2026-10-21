@@ -39,7 +39,7 @@ export function useTryClock() {
 // open, every 15 seconds and after each line (refresh), the seconds counted
 // down here in between. null for anyone who is not on a trial.
 export type TrialState = {
-  state: "running" | "waiting" | "ended" | "member";
+  state: "running" | "waiting" | "ended" | "member" | "none";
   secs_left: number;
   msgs_left: number;
   max_secs: number;
@@ -53,7 +53,11 @@ export function useTrial(on: boolean) {
   const [st, setSt] = useState<TrialState | null>(null);
   const [at, setAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
+  // only a trial person asks (task J091): a member's turn end calls refresh too
+  const onRef = useRef(on);
+  onRef.current = on;
   const refresh = useCallback(async () => {
+    if (!onRef.current) return;
     try {
       const r = await fetch("/v1/try/state", { credentials: "same-origin", headers: { Accept: "application/json" } });
       if (!r.ok) return;
@@ -73,7 +77,7 @@ export function useTrial(on: boolean) {
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [running]);
-  if (!on || !st || st.state === "member") return { trial: null, secsLeft: 0, refresh };
+  if (!on || !st || st.state === "member" || st.state === "none") return { trial: null, secsLeft: 0, refresh };
   const secsLeft = running ? Math.max(0, st.secs_left - Math.floor(Math.max(0, now - at) / 1000)) : st.secs_left;
   return { trial: st, secsLeft, refresh };
 }
