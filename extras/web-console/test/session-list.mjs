@@ -99,4 +99,7 @@ assert.ok(/\{kids\.length \? \(\s*<button[^>]*aria-expanded/.test(line), '▸ on
 const loop = page.slice(page.indexOf('const kids = nestedKids(r).filter(match);'));
 assert.ok(loop.indexOf('<RowLine r={r} kids={kids}') < loop.indexOf('kids.map((k) =>'), 'members drawn below their EPIC');
 
+// 我的对话 is pinned: the first row of the list, before what asks (C25B)
+assert.ok(/<List>\{web\}\{open\.map\(row\)\}<\/List>/.test(src), 'the web conversation is the first row');
+
 console.log('ok session-list.mjs');
