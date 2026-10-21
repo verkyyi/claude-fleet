@@ -232,7 +232,7 @@ func (s *Server) entryDoorState(page *entryBook, changed, now time.Time) (string
 	there := name
 	if seen && last.LAN != "" && last.Port > 0 {
 		// the address on the home's own network (T702): two homes behind one
-		// router share the public address, so "转到 macmini" alone does not say where
+		// router share the public address, so "转到 <机器名>" alone does not say where
 		there = fmt.Sprintf("%s（%s:%d）", name, last.LAN, last.Port)
 	}
 	switch r.Reason {

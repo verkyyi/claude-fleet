@@ -370,8 +370,8 @@ func TestEntryDoorSaysWhatHoldsTheHome(t *testing.T) {
 		Family: "ipv4", Via: "source", Reason: control.ReachHostKey, CheckedAt: now}}); err != nil {
 		t.Fatal(err)
 	}
-	h.srv.entryReachSeen.Store(m, entryReachSeen{At: now, Listening: true, LAN: "192.168.1.79", Port: 22022})
-	door("forwarded elsewhere", "far", "普通 SSH", "192.168.1.79:22022")
+	h.srv.entryReachSeen.Store(m, entryReachSeen{At: now, Listening: true, LAN: "192.168.1.79", Port: 22022}) // oss-ok: 私网段是这条用例要验的（家机器在家里网络的地址）
+	door("forwarded elsewhere", "far", "普通 SSH", "192.168.1.79:22022")                                        // oss-ok: 私网段是这条用例要验的（家机器在家里网络的地址）
 	// a listener an earlier daemon left holds the port: said, even when the outside reaches it
 	dnsReach(t, h, m, now, true, "198.51.100.213")
 	h.srv.entryReachSeen.Store(m, entryReachSeen{At: now, Listening: true, HeldBy: "pid 32849: sshd: /usr/sbin/sshd -D [listener]", Port: 22022})
