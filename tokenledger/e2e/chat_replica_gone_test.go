@@ -32,7 +32,7 @@ func TestChatReplicaGone(t *testing.T) {
 
 	// The link's holder is gone: a replica that never beat, at an address
 	// nothing answers.
-	if _, err := ha.Srv.Store.DB().Exec(`UPDATE fleet_node_conns SET replica = 'gone-replica-0', url = 'http://10.255.255.1:9'
+	if _, err := ha.Srv.Store.DB().Exec(`UPDATE fleet_node_conns SET replica = 'gone-replica-0', url = 'http://192.0.2.1:9'
 		WHERE endpoint_id = ?`, "ep_chat-gone"); err != nil {
 		t.Fatal(err)
 	}
