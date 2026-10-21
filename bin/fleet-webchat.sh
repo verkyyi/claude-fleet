@@ -123,6 +123,10 @@ serve() { # the service's command: the socket, in the foreground
   mkdir -p "$STATE" && chmod 700 "$STATE"
   deps
   cd "$STATE" || die "cannot enter $STATE"
+  # an old orphan of this service still answering on the socket (a release switch
+  # left it, PPID 1) is stopped first; anything else holding it is named, rc 3 (BZGP)
+  python3 -I "$BIN/fleet-service-takeover.py" --name webchat --socket "$STATE/chat.sock" --pidfile "$STATE/pid" \
+    --match extras/web-chat/server.mjs --match --socket || exit 3
   server_env "$NODE" "$APP/server.mjs" --socket
 }
 

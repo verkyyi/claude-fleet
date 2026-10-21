@@ -119,9 +119,10 @@ has "C2: …and FAIL for that login on that machine (the hub's FQDN matches the 
 # ------------------------------------------------------------------------- D ----
 a=$(svc --alerts)
 eq "D: one line per failed entry" 2 "$(printf '%s\n' "$a" | grep -c .)"
-eq "D: the hub's: since = its raised_at" "service-mac-d-carol-daily-report	daily-report@mac-d 失败	1791529260	give up: skill not found" \
+eq "D: the hub's: since = its raised_at" "service-mac-d-carol-daily-report	daily-report@mac-d 失败	1791529260	give up: skill not found — 重试已用完；原因看 fleet task logs daily-report" \
    "$(printf '%s\n' "$a" | grep daily-report)"
 has "D: the daemon's: since unknown (0)" "service-box-$ME-web	web@box 已退出·待重启	0	listening on" "$a"
+has "D: …and the next step (task BZGP)" "listening on 127.0.0.1:8080 — 守护每 30 s 重起一次；原因看 fleet service logs web" "$a"
 
 # ------------------------------------------------------------------------- E ----
 cli() { FLEET_SERVICES_CACHE="$WORK/hub.json" FLEET_SERVICES_STATE='' FLEET_SERVICES_HOST=mac-d FLEET_SERVICES_NOW=$NOW \
