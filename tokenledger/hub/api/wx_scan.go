@@ -202,6 +202,15 @@ func (s *Server) handleWxQR(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "purpose must be login (or trial, with the trial on)")
 		return
 	}
+	if purpose == wxPurposeTrial {
+		if code := s.siteTrialCode(time.Now()); code != nil {
+			// The website's channel code (claude-fleet C2): scanned, it is
+			// MRGB's road — followed, the trial opens and the chat is in
+			// WeChat — so there is no scene for this browser to poll.
+			writeJSON(w, http.StatusOK, map[string]any{"qr": string(qrSVG(code.URL)), "channel": code.Channel})
+			return
+		}
+	}
 	c, err := s.wxScene(r.Context(), w, r, purpose, "", time.Now())
 	if err != nil {
 		if !errors.Is(err, errWxBusy) {
@@ -211,6 +220,27 @@ func (s *Server) handleWxQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"s": c.Scene, "qr": string(qrSVG(c.QRURL)), "expires_at": c.ExpiresAt.Unix()})
+}
+
+// siteTrialChannel names the 试用二维码 (MRGB) the website shows: an admin
+// draws one with this channel, and the front page's scan card hands it out.
+const siteTrialChannel = "site"
+
+// siteTrialCode is the newest code of the website's channel that gives a
+// trial with no approval right now; nil ⇒ the page draws its own code.
+func (s *Server) siteTrialCode(now time.Time) *store.TrialCode {
+	codes, err := s.Store.TrialCodes()
+	if err != nil {
+		log.Printf("wechat scan: trial codes: %v", err)
+		return nil
+	}
+	for _, c := range codes {
+		if strings.EqualFold(c.Channel, siteTrialChannel) && c.State == store.TrialCodeLive && !c.Approval &&
+			c.URL != "" && (c.Until.IsZero() || now.Before(c.Until)) {
+			return &c
+		}
+	}
+	return nil
 }
 
 // handleWxPoll answers the page's script with a code's state, and finishes a

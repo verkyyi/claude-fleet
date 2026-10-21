@@ -12,7 +12,8 @@
 # One template, one string table per language, nothing typed twice:
 #
 #   site/template.html            the page: {{key}} slots, <!--timed-->…<!--/timed-->,
-#                                 <!--trial-->…<!--/trial--> (the trial variant only)
+#                                 <!--trial-->…<!--/trial--> (the trial variant only),
+#                                 <!--apply-->…<!--/apply--> (the apply variant only)
 #   site/strings.{zh,en}.json     every word on the page, per language (C15's llms.txt
 #                                 reads the same tables)
 #   docs/public/                  the docs, for the sitemap and the llms files (the
@@ -213,7 +214,7 @@ for l, _ in LANGS:
 TIMED_KEYS = ('description', 'og_description', 'try', 'sub', 'steps_h', 'end_h')
 # The apply-only variant (issue #4269): these words say <key>_apply instead.
 APPLY_KEYS = ('description', 'og_description', 'try', 'sub', 'fine', 's1', 'end_h', 'llms_summary',
-              'join_h', 'join_p', 'join_flow', 'ph_h', 'ph_flow')
+              'join_h', 'join_p', 'join_lead', 'ph_h')
 for _k in APPLY_KEYS:
     if _k + '_apply' not in keys:
         fail('strings.zh.json: no %s_apply (the page with the trial off says it)' % _k)
@@ -224,8 +225,10 @@ def render(lang, S, variant='trial'):
     v = dict(S)
     if variant == 'apply':
         base = re.sub(r'<!--trial-->.*?<!--/trial-->\n?', '', tmpl, flags=re.S)
+        base = re.sub(r'<!--/?apply-->\n?', '', base)
     else:
-        base = re.sub(r'<!--/?trial-->\n?', '', tmpl)
+        base = re.sub(r'<!--apply-->.*?<!--/apply-->\n?', '', tmpl, flags=re.S)
+        base = re.sub(r'<!--/?trial-->\n?', '', base)
     timed = drill if variant == 'trial' else None
     v['lang_key'] = lang
     v['cur_zh'] = ' aria-current="page"' if lang == 'zh' else ''

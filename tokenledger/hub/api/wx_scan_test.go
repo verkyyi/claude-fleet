@@ -596,3 +596,52 @@ func TestWxScanStartsATrial(t *testing.T) {
 		t.Fatalf("second trial claim = %+v, %v; want tried", a, err)
 	}
 }
+
+// The front page's scan card (claude-fleet C2): with the trial on, a trial
+// code is the website's 试用二维码 (MRGB, channel site) when one is live with
+// no approval — no scene, nothing to poll, the trial and the chat are
+// MRGB's in WeChat — else a code of the page's own, as before.
+func TestWxQRTrialIsTheSiteCode(t *testing.T) {
+	h := newWxHarness(t)
+	h.srv.Fleet = true
+	setHubSetting(t, h.srv, TrialKey, "on")
+	draw := func() map[string]any {
+		t.Helper()
+		r, body := newBrowser(t, "").do(http.MethodPost, h.http.URL+wxQRPath, url.Values{"purpose": {"trial"}})
+		var out map[string]any
+		if r.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil {
+			t.Fatalf("draw = %d %s", r.StatusCode, body)
+		}
+		return out
+	}
+	if out := draw(); out["s"] == nil || out["channel"] != nil {
+		t.Fatalf("no site code: %v; want a scene of the page's own", out)
+	}
+	now := time.Now()
+	for _, c := range []store.TrialCode{
+		{ID: "tc-ad", Scene: 3500001, Channel: "ad", URL: "http://weixin.qq.com/q/ad"},
+		{ID: "tc-ap", Scene: 3500002, Channel: "site", Approval: true, URL: "http://weixin.qq.com/q/ap"},
+		{ID: "tc-old", Scene: 3500003, Channel: "site", Until: now.Add(-time.Hour), URL: "http://weixin.qq.com/q/old"},
+		{ID: "tc-off", Scene: 3500004, Channel: "site", State: store.TrialCodeStopped, URL: "http://weixin.qq.com/q/off"},
+	} {
+		c.CreatedAt = now
+		if err := h.srv.Store.CreateTrialCode(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := draw(); out["s"] == nil {
+		t.Fatalf("an approval / expired / stopped / other channel's code was handed out: %v", out)
+	}
+	if err := h.srv.Store.CreateTrialCode(store.TrialCode{ID: "tc-site", Scene: 3500005, Channel: "site",
+		URL: "http://weixin.qq.com/q/site", CreatedAt: now.Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	out := draw()
+	if out["s"] != nil || out["channel"] != "site" || out["qr"] != string(qrSVG("http://weixin.qq.com/q/site")) {
+		t.Fatalf("site code live: %v; want its qr, no scene", out)
+	}
+	// A login code stays the page's own.
+	if r, body := newBrowser(t, "").do(http.MethodPost, h.http.URL+wxQRPath, url.Values{"purpose": {"login"}}); !strings.Contains(body, `"s":`) {
+		t.Fatalf("login draw = %d %s", r.StatusCode, body)
+	}
+}
