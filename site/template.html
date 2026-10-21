@@ -74,7 +74,6 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .trust{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:16px 0 0;padding:0}
 .trust li{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--fleet-ink);background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:999px;padding:6px 12px 6px 10px}
 .trust svg{width:16px;height:16px;color:var(--fleet-clay)}
-.can{margin-top:10px;font-size:14px;color:var(--fleet-muted)}
 
 /* the replay, one size */
 .demo{margin-top:20px}
@@ -170,21 +169,12 @@ html[data-j=phone].qr .j-scan .qrbox{display:grid} html[data-j=phone].qr .j-scan
 .follow p{font-size:13.5px;line-height:1.5;color:var(--fleet-ink-2)}
 html.unfollowed .follow{display:flex}
 
-/* one line for price, one for the rest */
-.strip{border-top:1px solid var(--fleet-line-2);padding:11px 0;font-size:14px;color:var(--fleet-ink-2)}
 footer{border-top:1px solid var(--fleet-line-2);background:var(--fleet-bg-2);padding:13px 0;font-size:13.5px;color:var(--fleet-muted)}
-footer .wrap{display:flex;gap:10px 22px;align-items:center;flex-wrap:wrap}
-footer a:hover,footer summary:hover{color:var(--fleet-ink)}
+footer .wrap{display:flex;gap:10px 22px;align-items:center}
+footer a:hover{color:var(--fleet-ink)}
+footer .gh{display:inline-flex;gap:6px;align-items:center}
+footer .gh svg{width:16px;height:16px}
 footer .disc{margin-left:auto;font-size:12.5px}
-.faq summary{list-style:none;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
-.faq summary::-webkit-details-marker{display:none}
-.faq summary i{font-style:normal;color:var(--fleet-clay);transition:.2s}
-.faq[open] summary i{transform:rotate(45deg)}
-.faq[open]{flex-basis:100%;order:9}
-.faq .qa{max-width:760px;margin-top:6px}
-.faq .qa details{border-top:1px solid var(--fleet-line-2)}
-.faq .qa summary{display:flex;justify-content:space-between;width:100%;padding:12px 0;font:600 15px/1.4 var(--fleet-font-ui);color:var(--fleet-ink)}
-.faq .qa p{padding:0 0 12px;color:var(--fleet-ink-2);font-size:14.5px}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media (max-width:900px){
@@ -192,7 +182,6 @@ footer .disc{margin-left:auto;font-size:12.5px}
   .wrap{padding:0 20px}
   .nav .wrap{height:56px;gap:8px}
   .nav-r{gap:16px;font-size:14px}
-  .nav-r .docs{display:none}
   .brand{font-size:17px} .brand svg{width:28px;height:28px}
   .hero{padding:24px 0 20px}
   .grid{grid-template-columns:1fr;grid-template-areas:"say" "join" "demo"}
@@ -204,7 +193,6 @@ footer .disc{margin-left:auto;font-size:12.5px}
   .demo{margin-top:22px}
   .screen{height:250px;font-size:12px}
   .topline .r{display:none}
-  footer .disc{margin-left:0;flex-basis:100%}
 }
 </style>
 </head>
@@ -235,7 +223,6 @@ footer .disc{margin-left:auto;font-size:12.5px}
       <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>{{t3}}</li>
       <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg>{{t4}}</li>
     </ul>
-    <p class="can">{{can}}</p>
   </div>
 
   <aside class="join" aria-labelledby="join-h">
@@ -301,15 +288,10 @@ footer .disc{margin-left:auto;font-size:12.5px}
     <p class="case"><b>{{case_tag}}</b><span class="who">{{case_who}}</span>{{case_line}}</p>
   </div>
 </div></div></section>
-<div class="strip" id="price"><div class="wrap">{{price_line}}</div></div>
 </main>
 
 <footer><div class="wrap">
-  <details class="faq" id="faq"><summary>{{faq_more}}<i aria-hidden="true">+</i></summary><div class="qa">
-<h2 class="sr">{{faq_h}}</h2>
-{{faq_items}}
-  </div></details>
-  <a href="{{docs_path}}">{{docs}}</a><a href="{{security_path}}">{{security}}</a><a class="oss" href="https://github.com/verkyyi/claude-fleet">{{oss}}</a><a href="{{other_path}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}" data-set="{{other_key}}">{{lang_switch}}</a>
+  <a class="gh" href="https://github.com/verkyyi/claude-fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>GitHub</a>
   <p class="disc">{{disc}}</p>
 </div></footer>
 
