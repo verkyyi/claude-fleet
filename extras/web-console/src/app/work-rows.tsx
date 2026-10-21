@@ -63,7 +63,7 @@ export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
       const any = await kept;
       if (gone || !any || any.principal !== me!.person) return;
       const s = any.snap;
-      if (prime({ live: s.live, ended: s.ended, board: s.board, etag: s.etag })) tasks.seed(s.tasks);
+      if (prime({ live: s.live, ended: s.ended, board: s.board, etag: s.etag, at: s.at })) tasks.seed(s.tasks);
     }).catch(() => {});
     return () => { gone = true; };
     // once, at the page's opening

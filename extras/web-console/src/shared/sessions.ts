@@ -97,7 +97,7 @@ export type SessionsState = { live: SessionRow[] | null; ended: SessionRow[] | n
 
 // What this browser kept (task T47B, app/list-local.ts): drawn until the hub
 // answers, never over an answer.
-export type Primed = { live: SessionRow[]; ended: SessionRow[] | null; board: Board | null; etag: string };
+export type Primed = { live: SessionRow[]; ended: SessionRow[] | null; board: Board | null; etag: string; at: number };
 
 // The answer's list, when the hub sent one (an older hub: none — the console's
 // own join stands in).
@@ -156,6 +156,7 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
     setLive(k.live);
     setEnded((e) => e ?? k.ended);
     setBoard(k.board);
+    setBoardAt(k.at); // the list's clock says when it was read, not now
     return true;
   }, []);
 
