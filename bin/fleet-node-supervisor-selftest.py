@@ -1365,13 +1365,17 @@ class G_DefaultTable(Sandbox):
         with mock.patch.dict(os.environ, {k: v for k, v in e.items() if k.startswith("FLEET_NODE_")}):
             t = fns.default_table(fns.Paths())
         names = [x["name"] for x in t["tasks"]]
-        self.assertEqual(names, ["diskguard", "memguard", "orphans", "shared-dirs", "machine-reading"]
+        self.assertEqual(names, ["diskguard", "memguard", "trial-guard", "orphans", "shared-dirs", "machine-reading"]
                          + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update", "credsep-enforce"])
         by = {x["name"]: x for x in t["tasks"]}
         # #4607: every fleet login separated by the daemon itself, root's job
         self.assertEqual(by["credsep-enforce"]["cmd"][-2:], ["machine", "enforce"])
         self.assertTrue(by["credsep-enforce"]["cmd"][-3].endswith("/fleet-credsep.py"))
         self.assertNotIn("seat", by["credsep-enforce"], "root's job, never the seat's")
+        # WACK C4: the trial guard is root's too (the machine's token, the core's op)
+        self.assertEqual(by["trial-guard"]["cmd"][-1], "tick")
+        self.assertTrue(by["trial-guard"]["cmd"][-2].endswith("/fleet-trial-guard.py"))
+        self.assertNotIn("seat", by["trial-guard"], "root's job, never the seat's")
         self.assertIsNone(t["account"], "the account table is the runtime's templates")
         self.assertEqual(by["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
         self.assertEqual(by["orphans"]["env"]["FLEET_ORPHAN_ALL_USERS"], "1")

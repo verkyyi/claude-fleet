@@ -903,6 +903,7 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
   | 入口：host key、`<state>/entry/keys/*`、`sshd -t`、`com.apple.access_ssh`、审计 | `entry {}`（一次 converge + audit） |
   | FDA 探针、tenants 的 sudo 读、各登录 lane 的拒绝 | `report {kind}`：`table` · `fda`（核心这条链有没有完全磁盘访问——删号的是它）· `tenants` · `lanes`，只读、不收参数 |
   | memguard、Spotlight | 已在表里（`memguard` · `power`） |
+  | 试用登录的降优先级 / 暂停 / 恢复（WACK C4，`fleet-trial-guard.py`） | `trial {login, action}`：renice · pause · resume，进程由核心按那个托管登录的 uid 自己读，不收 pid（BREAK-IT `root-core-trial-op`） |
   | 更新器（#3670） | 以 `_fleetnode` 自己跑（任务表里 `"seat": true`）：取发布、验签进 `<state>/staging/<sha>/`（工具不进根缓存，`staged.json` 记下每个工具链接要哪个工件），切换 / 回滚请核心 `switch` / `rollback`；root 的一半——启动缓存、管理员 agent 的 ccquota 副本与 kickstart、各登录的工具链接、credsep 代码副本、清理旧版本——请 `update {step}`；各登录指向 current 与 apply、会话快照、读登录家里的安装状态经 `exec-as`（`point` · `sessions` · `install-state`）；没有核心就一轮都不跑 |
   | account adopt / release / forget | 不在表里，维持：只有人用 sudo 做 |
 

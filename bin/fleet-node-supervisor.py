@@ -857,6 +857,15 @@ def default_table(paths):
             {"name": "memguard", "every": 10,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-memguard.sh"), "--once"],
              "core": {"op": "memguard", "args": {"level": "once"}}},
+            # Every trial login held to its share of the machine (claude-fleet WACK
+            # C4): the hub's fleet.trial.limits, renice → pause on sustained full
+            # load, a miner / pool / scan paused at once, home over its size warned
+            # and past 120 % paused — the actions through the core's `trial` op.
+            # Root's job (the hub's list with the machine's token); nobody on trial
+            # here = one GET and nothing else.
+            {"name": "trial-guard", "every": env_num("FLEET_TRIAL_GUARD_EVERY", 60), "timeout": 300,
+             "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-trial-guard.py"), "tick"],
+             "env": {"FLEET_NODE_STATE": paths.state}},
             {"name": "orphans", "every": 60,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-diskguard.sh"), "--orphan-watch"],
              "env": {"FLEET_ORPHAN_ALL_USERS": "1"}},

@@ -350,6 +350,8 @@
 0.8 root-core-unsigned-switch
 0.5 root-core-update-step
 6.0 trial-egress-stuck
+1.0 root-core-trial-op
+12.0 trial-runaway
 0.3 root-core-wrong-peer
 0.7 root-in-user-pod
 0.4 root-log-in-home

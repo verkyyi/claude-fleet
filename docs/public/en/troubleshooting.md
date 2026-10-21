@@ -336,6 +336,13 @@ From `fleet doctor`.
 - **What it is**: whether a taken-over login has administrator rights or sudo. They must not.
 - **On WARN / FAIL**: FAIL: take that login out of the admin group and the sudoers.
 
+#### `trial-limits`
+
+From `fleet doctor`.
+
+- **What it is**: whether every trial login on this managed machine is watched: each trial person gets 4 cores · 8 GB · a 20 GB home (the hub setting `fleet.trial.limits`). Sustained full CPU is renice'd, then paused; memory over the line stops its largest process; a home over its size is warned about and past 120 % its sessions are paused; a miner, a mining-pool port or a burst of new connections is paused at once, and the admins are told. Members are never touched.
+- **On WARN / FAIL**: a WARN names each paused trial login and why: once you know, an admin runs `sudo python3 ~/.claude/fleet/bin/fleet-trial-guard.py resume <login>` on that machine; 「上次巡检 N 分钟前」 (last pass N minutes ago) means the machine daemon's trial-guard task is not running — re-run `sudo fleet node install`.
+
 #### `rootlog`
 
 From `fleet doctor`.

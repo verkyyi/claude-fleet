@@ -42,6 +42,12 @@
 #                             (WACK C3): a trial login's pf rules stay after its
 #                             login was recycled, or after the hub went quiet — the
 #                             next person on that login shut out
+#   root-core-trial-op        bin/fleet-node-core.py op_trial + bin/fleet_trial.py (WACK
+#                             C4): the trial guard's renice / pause steered at a pid, root,
+#                             an unmanaged login, an action outside the three
+#   trial-runaway             bin/fleet-trial-guard.py + bin/fleet-loadgen.sh (WACK C4):
+#                             a trial login pins the CPU beside a member's — renice +
+#                             trial_runaway, then pause; the member's work untouched
 #   entry-orphan-holds-port   bin/fleet-node-core.py strays / proc_title_cmd (T702): the
 #                             entry sshd the root daemon left before the seat (PPID 1),
 #                             wearing sshd's own listener title — the core sees it, a
@@ -680,6 +686,89 @@ SH
     || { WHY="the fresh entry did not take the port: $(cat "$sb/start.out")"; return 1; }
   SECS=$(since "$t0")
   WHAT="入座前留下的入口 sshd（改写过的 listener 标题、PPID 1）占着端口：core 认得它，hup 送到，start 停掉它、新入口拿到端口"
+}
+
+# root-core-trial-op (claude-fleet WACK C4): the trial guard's renice / pause go
+# through the core's `trial` op. The node daemon fooled into steering it: a pid of
+# its own choosing, root, a login the daemon does not manage, an action outside
+# the three, a key too many. Each is refused and runs nothing; a listed pause
+# stops exactly that login's processes, read by the core itself, and resume
+# brings them back.
+drill_root_core_trial_op() {
+  CAP=20
+  local sb t0 out line v
+  sb="$WORK/core-trial"; core_sandbox "$sb"; cp "$BIN/fleet_trial.py" "$sb/root/rt/bin/"
+  ( exec sleep 120 ) & v=$!; disown "$v" 2>/dev/null; CORE_PIDS+=("$v")
+  # the core reads alice's processes off ps; in the sandbox alice is this uid, so
+  # only the sleep above is listed — never the drill's own shell
+  export FLEET_TRIAL_PS_CMD="ps -A -ww -o pid=,uid=,pcpu=,rss=,args= | awk '\$1 == $v'"
+  core_serve "$sb" || { WHY="the core never listened: $(cat "$sb/core.err")"; return 1; }
+  unset FLEET_TRIAL_PS_CMD
+  t0=$(now)
+  for line in "{\"op\": \"trial\", \"args\": {\"login\": \"alice\", \"action\": \"pause\", \"pid\": $$}}" \
+              '{"op": "trial", "args": {"login": "root", "action": "pause"}}' \
+              '{"op": "trial", "args": {"login": "bob", "action": "pause"}}' \
+              '{"op": "trial", "args": {"login": "alice", "action": "kill"}}' \
+              '{"op": "trial", "args": {"login": "alice; touch /tmp/x", "action": "pause"}}' \
+              '{"op": "trial", "args": {"login": "alice"}}'; do
+    out=$(core_raw "$sb" "$line")
+    printf '%s' "$out" | grep -q '"refused"' || { WHY="not refused: $line → $out"; return 1; }
+  done
+  case "$(ps -o stat= -p "$v" | tr -d ' ')" in T*) WHY="a refused request stopped the process"; return 1 ;; esac
+  out=$(core_raw "$sb" '{"op": "trial", "args": {"login": "alice", "action": "pause"}}')
+  printf '%s' "$out" | grep -q '"pids": 1' || { WHY="a listed pause was not answered for the one process: $out"; return 1; }
+  case "$(ps -o stat= -p "$v" | tr -d ' ')" in T*) ;; *) WHY="the managed login's process was not stopped"; return 1 ;; esac
+  out=$(core_raw "$sb" '{"op": "trial", "args": {"login": "alice", "action": "resume"}}')
+  case "$(ps -o stat= -p "$v" | tr -d ' ')" in T*) WHY="resume left it stopped: $out"; return 1 ;; esac
+  grep -q 'op=trial .*refused' "$sb/core.log" || { WHY="no refused trial line: $(tail -3 "$sb/core.log")"; return 1; }
+  kill "$v" 2>/dev/null
+  SECS=$(since "$t0")
+  WHAT="让核心对试用登录动手时塞 pid、root、没托管的登录、表外动作、多一个键：全部 refused、什么都没动；表里的 pause 只停那个登录自己的进程（核心自己读），resume 放回来"
+}
+
+# trial-runaway (claude-fleet WACK C4): a trial login pins the CPU beside a
+# member's work. Real fleet-loadgen.sh burners — two on the trial login's 1-core
+# share, one on the member's — and the trial guard ticking: the trial's are
+# renice'd and trial_runaway is written, then paused; the member's keep nice 0 and
+# run on. A home past 120 % of its size is paused the same way.
+drill_trial_runaway() {
+  CAP=60
+  local d t0 n p tb mb tag="brk$$"
+  d="$WORK/trial-runaway"; mkdir -p "$d/db"
+  printf '{"on": true, "limits": "cpu=1,mem=8G,disk=1G", "cpu": 1, "mem_bytes": 8589934592, "disk_bytes": 1073741824, "logins": {"tria": "wx-tria"}}\n' > "$d/list.json"
+  printf '{"tria": {"uid": 9001, "home": "%s"}, "memb": {"uid": 9002, "home": "%s"}}\n' "$d" "$d" > "$d/passwd.json"
+  echo 1 > "$d/du"
+  t0=$(now)
+  bash "$BIN/fleet-loadgen.sh" 1 60 --force --tag "${tag}m" --detach >/dev/null 2>&1 || { WHY="loadgen (member) refused"; return 1; }
+  bash "$BIN/fleet-loadgen.sh" 2 60 --force --tag "${tag}t" --detach >/dev/null 2>&1 || { WHY="loadgen (trial) refused"; return 1; }
+  tb=$(pgrep -f "FLEET_LOADGEN_BURNER#${tag}t" | tr '\n' ' '); mb=$(pgrep -f "FLEET_LOADGEN_BURNER#${tag}m" | tr '\n' ' ')
+  _tr_tick() {
+    env FLEET_NODE_TEST=1 FLEET_NODE_CORE=0 FLEET_TRIAL_DIR="$d/trial" FLEET_NODE_STATE="$d/db" \
+      FLEET_TRIAL_LIST="$d/list.json" FLEET_TRIAL_PASSWD="$d/passwd.json" FLEET_TRIAL_ALERT_LOG="$d/alerts" \
+      FLEET_TRIAL_NET_CMD=true FLEET_TRIAL_DU_CMD="cat $d/du" FLEET_TRIAL_CPU_STRIKES=2 FLEET_TRIAL_PAUSE_STRIKES=2 \
+      FLEET_TRIAL_PS_CMD="ps -A -ww -o pid=,uid=,pcpu=,rss=,args= | awk '/${tag}t/ && !/awk/ { \$2 = 9001; print; next } /${tag}m/ && !/awk/ { \$2 = 9002; print }'" \
+      python3 "$BIN/fleet-trial-guard.py" tick
+  }
+  _tr_stop() { for p in $tb $mb; do kill -CONT "$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null; done; }
+  n=0; while [ "$n" -lt 20 ]; do _tr_tick; grep -q '"pause"' "$d/alerts" 2>/dev/null && break; sleep 1; n=$((n + 1)); done
+  grep '"kind": "runaway"' "$d/alerts" 2>/dev/null | grep -q '"renice"' || { _tr_stop; WHY="no trial_runaway renice: $(cat "$d/alerts" 2>/dev/null)"; return 1; }
+  for p in $tb; do
+    [ "$(ps -o nice= -p "$p" | tr -d ' ')" -ge 10 ] || { _tr_stop; WHY="trial burner $p not renice'd"; return 1; }
+    case "$(ps -o stat= -p "$p" | tr -d ' ')" in T*) ;; *) _tr_stop; WHY="trial burner $p still running after the pause"; return 1 ;; esac
+  done
+  for p in $mb; do
+    [ "$(ps -o nice= -p "$p" | tr -d ' ')" = 0 ] || { _tr_stop; WHY="the member's burner $p was renice'd"; return 1; }
+    case "$(ps -o stat= -p "$p" | tr -d ' ')" in T*) _tr_stop; WHY="the member's burner $p was paused"; return 1 ;; esac
+  done
+  _tr_stop
+  # the home past 120 %: paused (the processes are gone; the guard says so)
+  printf '{"on": true, "limits": "cpu=4", "cpu": 4, "mem_bytes": 8589934592, "disk_bytes": 1073741824, "logins": {"tria": "wx-tria"}}\n' > "$d/list.json"
+  python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["logins"]["tria"].pop("paused", None); json.dump(s, open(p, "w"))' "$d/trial/state.json"
+  echo $(( 1300 * 1024 )) > "$d/du"
+  FLEET_TRIAL_DISK_EVERY=0 _tr_tick
+  grep '"what": "disk"' "$d/alerts" | grep -q '"pause"' || { WHY="a home past 120% was not paused: $(tail -2 "$d/alerts")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="试用登录 2 个满载进程（1 核份额）旁边一个成员的满载进程：试用的先 renice、写 trial_runaway，再暂停；成员的 nice 0、照跑；家目录超 120% 也暂停"
 }
 
 cred_run_drills "$0"

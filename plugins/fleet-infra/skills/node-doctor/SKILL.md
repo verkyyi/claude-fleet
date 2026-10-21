@@ -174,6 +174,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `statusln` | node | [node-doctor] | 状态行缺 jq / 窗口没心跳：`brew install jq`，或重开那些窗口 |
 | `team` | node | [release-rules] | 团队层没同步：`fleet-agent-team.py sync` |
 | `tenants` | node | [login-lifecycle] | 接管的登录有管理员 / sudo：移出 admin 组与 sudoers |
+| `trial-limits` | node | [login-lifecycle] | 试用登录的份额（`fleet.trial.limits`）：WARN 点名已暂停的和原因，查清后管理员 `sudo python3 ~/.claude/fleet/bin/fleet-trial-guard.py resume <登录>`；巡检太久没跑 ⇒ 重跑 `sudo fleet node install` |
 | `testtmux` | node | [node-doctor] | 自测没清掉的 tmux 服务器：照行内清 |
 | `overrides` | node | [node-doctor] | 只报状态：列出这个仓库在 `repos/<slug>.conf` 里自己改过的设置（凭据样的值不显示）；要改就改行尾点名的文件 |
 | `tls` | node | [mac-node-prep] | python 验不了入口证书：装 CA（certifi），或换系统 python |

@@ -61,6 +61,13 @@ const (
 	// in 10 minutes and paused itself (claude-fleet MRGB) — subject the code's
 	// id; cleared when an admin resumes it.
 	AlertTrialCodeBurst = "trial_code_burst"
+	// AlertTrialRunaway / AlertTrialAbuse: a trial login over its share of a
+	// machine (cpu · mem · disk, fleet.trial.limits) or mining / scanning, as
+	// that machine's trial guard reported it and what it did (claude-fleet
+	// WACK C4) — subject "<hostname>/<login>"; cleared by the machine once it
+	// is back under, or by the operator.
+	AlertTrialRunaway = "trial_runaway"
+	AlertTrialAbuse   = "trial_abuse"
 	// AlertEntryHostKeyChanged: a machine reported an entry host key other
 	// than the one the hub held (claude-fleet T743) — every client that pinned
 	// the old one now refuses that machine. Subject its hostname; detail the
