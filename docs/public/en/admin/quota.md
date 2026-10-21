@@ -104,6 +104,7 @@ Someone scans it with WeChat and follows the service account (one already follow
 - **A day's cap across every code**: `fleet hub set fleet.qr.daily 100` (100 by default, Beijing days); past it, "scan again tomorrow".
 - **Machines or the pool busy: a line**. The scanner gets "In line · n ahead of you" first, and a "Your turn" message when it is.
 - **Farming alarm**: a code that starts more than `fleet.qr.burst` (30 by default) trials in 10 minutes pauses itself and every admin is told; resume or stop it from the console once you have looked.
+- **A stuck trial reaches you**: someone in line over 10 minutes (`queue_long`), 3 or more session starts failing within 15 minutes (`start_failed`, whoever asked), a machine lost (`node_lost`) — these and every other fleet alert are pushed to the admins' WeChat (the hub's `FLEET_NOTIFY_KF_*`); one kind at most once in `fleet.alert.quiet_mins` (30 by default), and the ones not pushed are still in `GET /v1/fleet/fleet_alerts`.
 - **A code that needs approval** only files a waiting request in Requests; approving it uses that code's trial plan.
 
 Each code is a row: given / cap, the funnel scan › follow › start › first line › member, its state; on top, the last 7 days' totals and the median time from scan to first line. Open a code to see who it reached; stop one person in People as usual.
