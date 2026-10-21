@@ -76,7 +76,7 @@ T() { tmux -L "$SOCKET" "$@"; }
 T set-option -w -t "$WIN" @fleet_id "$FID"
 T set-option -w -t "$WIN" @cc_agent claude
 T set-option -w -t "$WIN" @raw scratch-20
-T set-option -w -t "$WIN" @claude_state done
+T set-option -w -t "$WIN" @claude_state 'done'
 T set-option -w -t "$WIN" @claude_state_ts "$(date +%s)"
 rec() { python3 "$LOCK" get --agent claude --sid "$SID"; }
 field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2],""))' "$1" "$2"; }
@@ -92,7 +92,7 @@ T set-option -w -t "$WIN" @claude_state working
 set +e; out=$(bash "$H" to-web "fid:$FID" 2>&1); rc=$?; set -e
 st_eq 'terminal answering: rc 3' 3 "$rc"
 st_has 'terminal answering: says where' "$out" '正在终端里回答'
-T set-option -w -t "$WIN" @claude_state done
+T set-option -w -t "$WIN" @claude_state 'done'
 
 # 3 · WebChat is answering
 : > "$WORK/webbusy"
@@ -107,7 +107,7 @@ st_eq 'nothing handed yet: no record' '{}' "$(rec)"
 set +e; out=$(bash "$H" to-web "fid:$FID" 2>&1); rc=$?; set -e
 st_eq 'adopt refused: rc 1' 1 "$rc"
 st_has 'adopt refused: WebChat says why' "$out" 'WebChat 没接'
-st_eq 'adopt refused: the agent still runs' done "$(T show-options -wqv -t "$WIN" @claude_state)"
+st_eq 'adopt refused: the agent still runs' 'done' "$(T show-options -wqv -t "$WIN" @claude_state)"
 rm -f "$WORK/refuse"
 
 # 5 · handed over
@@ -149,7 +149,7 @@ st_has 'owner: the terminal is answering' "$(bash "$H" owner --agent claude --si
 set +e; out=$(bash "$H" to-webchat-take --agent claude --sid "$SID" 2>&1); rc=$?; set -e
 st_eq '在这里继续 while the terminal answers: rc 3' 3 "$rc"
 st_eq 'refused: the terminal keeps it' terminal "$(field "$(rec)" holder)"
-T set-option -w -t "$WIN" @claude_state done
+T set-option -w -t "$WIN" @claude_state 'done'
 st_has 'owner: the terminal is idle' "$(bash "$H" owner --agent claude --sid "$SID")" '"holder": "terminal", "busy": false'
 bash "$H" to-webchat-take --agent claude --sid "$SID" >/dev/null
 st_eq '在这里继续: WebChat holds it' webchat "$(field "$(rec)" holder)"
