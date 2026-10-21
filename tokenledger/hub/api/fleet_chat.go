@@ -425,12 +425,12 @@ type chatDialKey struct{}
 type chatDialHolder struct{ err error }
 
 // chatRecheckEvery is how often a running chat request is held to its person.
-var chatRecheckEvery = 5 * time.Second
+var chatRecheckEvery = newDurKnob(5 * time.Second)
 
 // chatRecheck cancels a request still running once its person no longer
 // signs in, their home moved or went into maintenance.
 func (s *Server) chatRecheck(ctx context.Context, stop func(), r *http.Request, person, machine, login string) {
-	t := time.NewTicker(chatRecheckEvery)
+	t := time.NewTicker(chatRecheckEvery.Get())
 	defer t.Stop()
 	for {
 		select {

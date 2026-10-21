@@ -226,9 +226,9 @@ func (c *nodeConn) CloseLinkForTest(code websocket.StatusCode, reason string) {
 
 // SetChatRecheckForTest makes a running chat request's recheck tick every d.
 func SetChatRecheckForTest(d time.Duration) (restore func()) {
-	old := chatRecheckEvery
-	chatRecheckEvery = d
-	return func() { chatRecheckEvery = old }
+	old := chatRecheckEvery.Get()
+	chatRecheckEvery.Set(d)
+	return func() { chatRecheckEvery.Set(old) }
 }
 
 // CloseKeptChatRelaysForTest closes every kept relay (a test's «released»).
