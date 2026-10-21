@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS fleet_credentials (
   kind             TEXT NOT NULL DEFAULT '',
   secret_expires_at TEXT,
   reauth_required_at TEXT,
+  source_class     TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (principal_id, provider, account)
 );
 CREATE TABLE IF NOT EXISTS fleet_pool_login_used (
@@ -86,6 +87,9 @@ const (
 	// CredPlan: an admin recorded which subscription plan (and tier) an
 	// existing credential is on (claude-fleet EEJD). Detail names the plan.
 	CredPlan = "plan"
+	// CredSource: an admin recorded a pool subscription's source class
+	// (WACK C1). Detail names the class.
+	CredSource = "source"
 	// CredPolicy: an admin set or cleared a subscription allowlist
 	// (claude-fleet#3043) — a machine's or a person's. Detail names the
 	// scope and the subscription IDs, never a secret.
@@ -123,8 +127,37 @@ type Credential struct {
 	// is the same fact as the status word the pages and the agent read.
 	ReauthRequiredAt *time.Time `json:"reauth_required_at,omitempty"`
 	ReauthRequired   bool       `json:"reauth_required,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// SourceClass is what an admin recorded a POOL row as (WACK C1):
+	// SourceSubscription or SourceAPI; "" = not recorded (read as a
+	// subscription). A person's own row is always SourceBYO — see
+	// Credential.Source.
+	SourceClass string    `json:"source_class,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Source classes (WACK C1): where a subscription's quota comes from — the
+// shared pool's personal subscriptions, the pool's commercial API keys, or a
+// person's own (自带).
+const (
+	SourceSubscription = "subscription"
+	SourceAPI          = "api"
+	SourceBYO          = "byo"
+)
+
+// ValidPoolSource says whether v may be recorded on a pool row.
+func ValidPoolSource(v string) bool { return v == SourceSubscription || v == SourceAPI }
+
+// Source is c's class: a person's own row is byo; a pool row is what was
+// recorded, else a subscription.
+func (c Credential) Source() string {
+	if c.PrincipalID != PoolPrincipal {
+		return SourceBYO
+	}
+	if ValidPoolSource(c.SourceClass) {
+		return c.SourceClass
+	}
+	return SourceSubscription
 }
 
 // CredAudit is one audit row.
@@ -168,7 +201,8 @@ func (s *Store) ensureFleetCreds() error {
 	for _, c := range []struct{ column, spec string }{
 		{"kind", "TEXT NOT NULL DEFAULT ''"},
 		{"secret_expires_at", "TEXT"},
-		{"reauth_required_at", "TEXT"}, // claude-fleet#2007
+		{"reauth_required_at", "TEXT"},               // claude-fleet#2007
+		{"source_class", "TEXT NOT NULL DEFAULT ''"}, // WACK C1
 	} {
 		if err := s.addColumn("fleet_credentials", c.column, c.spec); err != nil {
 			return err
@@ -178,14 +212,14 @@ func (s *Store) ensureFleetCreds() error {
 }
 
 const credColumns = `SELECT principal_id, provider, account, secret_sealed, access_sealed, access_expires_at,
-	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at, reauth_required_at FROM fleet_credentials`
+	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at, reauth_required_at, source_class FROM fleet_credentials`
 
 func scanCred(sc interface{ Scan(...any) error }) (Credential, error) {
 	var c Credential
 	var exp, ref, sexp, reauth sql.NullString
 	var created, updated string
 	if err := sc.Scan(&c.PrincipalID, &c.Provider, &c.Account, &c.SecretSealed, &c.AccessSealed, &exp,
-		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp, &reauth); err != nil {
+		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp, &reauth, &c.SourceClass); err != nil {
 		return c, err
 	}
 	c.ReauthRequiredAt = parseTimePtr(reauth)
@@ -332,6 +366,26 @@ func (s *Store) DropAccess(principalID, provider, account string, version int64,
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrCredConflict
+	}
+	return nil
+}
+
+// SetCredentialSource records what a pool row is (ValidPoolSource; ""
+// clears it). A person's own row has no recorded class: refused.
+func (s *Store) SetCredentialSource(principalID, provider, account, class string, at time.Time) error {
+	if principalID != PoolPrincipal {
+		return errors.New("only a pool subscription has a recorded source class (a person's own is byo)")
+	}
+	if class != "" && !ValidPoolSource(class) {
+		return fmt.Errorf("source class %q: subscription or api", class)
+	}
+	res, err := s.write.Exec(`UPDATE fleet_credentials SET source_class = ?, updated_at = ?
+		WHERE principal_id = ? AND provider = ? AND account = ?`, class, fmtTime(at), principalID, provider, account)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoCredential
 	}
 	return nil
 }

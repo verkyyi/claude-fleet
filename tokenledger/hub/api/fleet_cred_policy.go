@@ -112,6 +112,9 @@ type credPolicy struct {
 	// PodProviders: the machine is a cluster pod and only these providers may
 	// be used on it (fleet.cred_pod_providers, claude-fleet#4601); nil = no gate.
 	PodProviders map[string]bool
+	// Sources: a trial identity limited by fleet.trial.sources to these
+	// source classes (store.Source*, WACK C1); nil = no gate.
+	Sources map[string]bool
 }
 
 // normSubID is a subscription ID as compared: a Claude UUID lowercased.
@@ -227,7 +230,7 @@ func credPolicyOf(settings map[string]string, machine, principal string) credPol
 
 // Restricted says whether anything narrows this (machine, person).
 func (p credPolicy) Restricted() bool {
-	return p.Node.Set || p.User.Set || p.NodeUnknown || p.PodProviders != nil
+	return p.Node.Set || p.User.Set || p.NodeUnknown || p.PodProviders != nil || p.Sources != nil
 }
 
 // check is "" when subscription uuid of provider may be used, else why not.
@@ -299,7 +302,8 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 	if err := s.userPodNodeAllow(settings, &pol); err != nil {
 		return credPolicy{}, err
 	}
-	s.trialUserAllow(settings, &pol) // a trial person: fleet.trial.cred_allow (#4260)
+	s.trialUserAllow(settings, &pol)    // a trial person: fleet.trial.cred_allow (#4260)
+	s.trialSourcesAllow(settings, &pol) // a trial identity: fleet.trial.sources (WACK C1)
 	// a spare inside its own create / reset: fleet.spare.cred_allow (NKTP)
 	if err := s.spareUserAllow(settings, &pol, time.Now()); err != nil {
 		return credPolicy{}, err
@@ -360,6 +364,12 @@ func (s *Server) userPodNodeAllow(settings map[string]string, p *credPolicy) err
 func (s *Server) credVerdict(c store.Credential, p credPolicy) (uuid, why string) {
 	if c.Provider == credvault.GitHub || !p.Restricted() {
 		return "", ""
+	}
+	if why := p.sourcesWhy(c); why != "" {
+		if s.Vault != nil {
+			uuid = s.Vault.CredentialID(c)
+		}
+		return uuid, why
 	}
 	if s.Vault != nil {
 		uuid = s.Vault.CredentialID(c)

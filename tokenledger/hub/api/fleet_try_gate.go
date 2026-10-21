@@ -232,11 +232,16 @@ func (s *Server) trialHold(host string, now time.Time) string {
 }
 
 // trialRoute is what a trial person may reach: the chat (/app, its API, and
-// /v1/me which draws it), their trial. /apply answers its own credential.
+// /v1/me which draws it), their trial, their own subscriptions. /apply answers its own credential.
 func trialRoute(p string) bool {
 	switch p {
 	case "/", AppPrefix, AppPrefix + "/", ChatPagePath, "/v1/me", "/v1/me/usage",
 		TryPagePath, TryClaimPath, TryTimingPath, TryStatePath, TryBeatPath, TryPausePath:
+		return true
+	case TryOwnPagePath, MeSubsPath, MeSubsLoginPath, MeSubsFinishPath, MeSubsPausePath, MeSubsDeletePath:
+		// 接上我自己的订阅 (WACK C1): with fleet.trial.sources=byo a trial
+		// spends only a subscription of its own — the console's usage page
+		// is where one is connected.
 		return true
 	}
 	return strings.HasPrefix(p, ChatPathPrefix)
