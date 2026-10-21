@@ -181,8 +181,8 @@ func TestReleaseDigest(t *testing.T) {
 func TestNoticePRs(t *testing.T) {
 	for text, want := range map[string]int{
 		"已上线 abc · 含 PR #1 #2 · 合并→生效 3 分钟 · https://github.com/o/r/actions/runs/1#x": 2,
-		"已上线 abc · 含 PR #1 #2 等 30 个": 30,
-		"已上线 abc":                     0,
+		"已上线 abc · 含 PR #1 #2 等 30 个":                                                 30,
+		"已上线 abc": 0,
 	} {
 		if got := noticePRs(text); got != want {
 			t.Errorf("%q: %d, want %d", text, got, want)
