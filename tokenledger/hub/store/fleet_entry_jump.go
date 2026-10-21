@@ -26,3 +26,25 @@ func (s *Store) EntryJump(machine string) (namespace string, at time.Time, err e
 	at, err = time.Parse(rfc, seen)
 	return namespace, at, err
 }
+
+// DoorSessionKeep is how long a door session's identifier is remembered: far
+// longer than a door-session certificate lives (A5SQ).
+const DoorSessionKeep = 10 * time.Minute
+
+// ClaimDoorSession records that session (a hash of an SSH session identifier)
+// was presented for person; false when it was presented before — a
+// signature the door hands in twice is refused the second time, on every
+// replica. Rows older than DoorSessionKeep go first.
+func (s *Store) ClaimDoorSession(session, person string, now time.Time) (bool, error) {
+	if _, err := s.write.Exec(`DELETE FROM fleet_door_sessions WHERE seen_at < ?`,
+		now.Add(-DoorSessionKeep).UTC().Format(rfc)); err != nil {
+		return false, err
+	}
+	res, err := s.write.Exec(`INSERT INTO fleet_door_sessions (session, person, seen_at) VALUES (?, ?, ?)
+		ON CONFLICT(session) DO NOTHING`, session, person, now.UTC().Format(rfc))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}

@@ -617,6 +617,10 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
 		// …and the cluster's one door reads its table (claude-fleet#3549).
 		mux.HandleFunc(control.EntryRoutesNodePath, s.handleNodeEntryRoutes)
+		// one address, routed by username (A5SQ): the door's own token — its
+		// stream to a person's home (a websocket) and that hop's certificate
+		mux.HandleFunc(control.DoorHomePath, s.handleDoorHome)
+		mux.HandleFunc(control.DoorSessionPath, s.handleDoorSession)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.

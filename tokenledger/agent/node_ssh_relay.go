@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,23 @@ func defaultSSHRelayTarget() string {
 	return "127.0.0.1:22"
 }
 
+// entryRelayTarget is the machine's entry port (A5SQ): the door's way home
+// lands here, on the sshd the supervisor runs for the entry (keys only, the
+// person's own). FLEET_ENTRY_PORT as the supervisor reads it, else 22022 —
+// never an address the hub names.
+func entryRelayTarget() string {
+	if p := os.Getenv("FLEET_ENTRY_PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 && n < 65536 {
+			return "127.0.0.1:" + p
+		}
+	}
+	return "127.0.0.1:22022"
+}
+
+// entryRelayOK: this agent offers CapEntryRelay — a relay agent anywhere but
+// a person's pod (whose one sshd is the pod's own).
+func entryRelayOK() bool { return !podRelay() }
+
 // sshRelayDialTimeout bounds the data stream's dial and the sshd connect.
 const sshRelayDialTimeout = 15 * time.Second
 
@@ -78,12 +96,28 @@ func (a *Agent) openSSHRelay(ctx context.Context, m control.Message) {
 	defer ws.CloseNow()
 	ws.SetReadLimit(1 << 20)
 
+	target, what := sshRelayTarget, "sshd"
+	switch ro.Target {
+	case "":
+	case control.SSHRelayTargetEntry:
+		if !entryRelayOK() {
+			ws.Close(websocket.StatusPolicyViolation, "no entry port in a pod")
+			return
+		}
+		target, what = entryRelayTarget(), "the entry port"
+		if entryRelayTargetTest != "" {
+			target = entryRelayTargetTest
+		}
+	default:
+		ws.Close(websocket.StatusPolicyViolation, "unknown relay target")
+		return
+	}
 	var d net.Dialer
-	tcp, err := d.DialContext(dctx, "tcp", sshRelayTarget)
+	tcp, err := d.DialContext(dctx, "tcp", target)
 	if err != nil {
 		// The hub passes the reason on to the person, who otherwise sees
 		// only "connection closed" from ssh.
-		ws.Close(websocket.StatusInternalError, "sshd unreachable on this machine")
+		ws.Close(websocket.StatusInternalError, what+" unreachable on this machine")
 		return
 	}
 	cancel()
@@ -122,6 +156,12 @@ func short(id string) string {
 	}
 	return id
 }
+
+// entryRelayTargetTest overrides entryRelayTarget (tests only).
+var entryRelayTargetTest string
+
+// SetEntryRelayTargetForTest points entry relays at addr ("" = the entry port).
+func SetEntryRelayTargetForTest(addr string) { entryRelayTargetTest = addr }
 
 // SetSSHRelayTargetForTest points relays at addr instead of the local sshd ("" =
 // back to 127.0.0.1:22). For the hub's end-to-end tests only.

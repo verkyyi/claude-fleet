@@ -896,7 +896,7 @@ func (s *Server) handleNodeEntryKeys(w http.ResponseWriter, r *http.Request) {
 // entryNodeList is host's list: every login homed on it — never a fleet
 // admin's — with its owner's live keys.
 func (s *Server) entryNodeList(host string) (control.EntryNodeList, error) {
-	out := control.EntryNodeList{Logins: map[string]control.EntryNodeLogin{}}
+	out := control.EntryNodeList{Logins: map[string]control.EntryNodeLogin{}, DoorCA: s.doorCAFor()}
 	// The version first: a change racing this read makes the node pull again.
 	v, err := s.Store.EntryVersion()
 	if err != nil {

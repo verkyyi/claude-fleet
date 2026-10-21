@@ -175,3 +175,22 @@ Match User fleet-jump
 - 第 2 步重渲染真实用户 pod 的时间。
 
 确认后按第 3 节拆单（pod 侧、门侧、入口+客户端、探针、删旧路各一张）。
+
+## 5. 统一地址：门按用户名接到各自的家（A5SQ，设计第 2 版）
+
+所有人在 Termius 里填同一个地址（`ssh.<入口的域名>:22022`）+ 自己的登录名 + 自己的钥匙。SSH 的用户名在
+加密建立之后才发，所以按用户名分路 = 门终结这条 SSH；门看得见经它的会话，但**门不持进家的钥匙**：
+
+1. 门用书（`GET /v1/node/entry-routes?home=1` 的 `homes`：家在机器上的人 · 登录名 · 钥匙）认人；
+2. 门把手机这次 publickey 登录的签名交给入口（`POST /v1/node/door-session`）。入口按 RFC 4252 §7
+   自己重建被签内容（会话标识 · 用户名 · 钥匙），用登记的公钥验，钥匙必须属于「家登录 = 这个用户名」的那一个人，
+   会话标识落库去重（`fleet_door_sessions`），才给门这次的临时钥匙签一张门会话证书：一个主体名（家的登录）、
+   两分钟、`source-address` 只许回环；门会话 CA 由入口的 SSH CA 派生（`sshca.Derive("door-session")`，
+   不另加 Secret），公钥随家的名单下发（`EntryNodeList.door_ca`）；
+3. 门开 `GET /v1/node/door-home?principal=` 的流，入口让家里报了 `CapEntryRelay` 的 agent 接本机入口端口
+   （`SSHRelayOpen.Target = entry`，端口是 agent 自己的 `FLEET_ENTRY_PORT`），门用那张证书登进去。
+
+门被攻下：只能动那段时间里正经它登录的人；没在登录的人的家进不去（没有他们的签名就没有证书）。
+分批：①入口 + agent 这一半（本节的三个接口，BREAK-IT `door-session-no-sig` · `door-session-replay` ·
+`door-home-not-door`）；②家的本机入口认门会话 CA；③门自己的 SSH 服务器（`ccquota door`）；④网页「手机」页
+一行地址；⑤美国侧的门（同名按地区解析）；打洞 / STUN 留作高级。

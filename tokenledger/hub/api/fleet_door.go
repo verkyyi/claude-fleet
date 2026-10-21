@@ -142,6 +142,13 @@ func (s *Server) handleNodeEntryRoutes(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// the way home (A5SQ): only to a door that says it carries it
+	if s.noteDoorHome(r, host, time.Now()) {
+		if out.Homes, err = s.doorHomeRoutes(); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
