@@ -189,11 +189,29 @@ leftovers grouped by kind; a feature: 现在的样子与为什么要做) → `#m
 rows, **each opening on how it is measured**, then the `#charter` anchor: 做 / 不做)
 → `#members` 解决方案 (one card per place, 技术细节 folded) → `#risks` → `#signoff`
 需要你定的事 (+`#open`; 「点头即全部按建议」, and 页内反馈 below) → `#evidence`
-上线后怎么验收 (是什么 · 在哪取 · 通过标准; status and the proof slot only once building).
+上线后怎么验收 (是什么 · 在哪取 · 通过标准; status and the proof slot only once building,
+and on a done / passed item its 线上实拍 — `screenshots`, phone 390 + desktop 1440 thumbnails).
 `epic-page-surface.sh --lint` holds it to the frame (`task-section`,
-`task-evidence`, `task-signoff`, `brevity`, `fold-row`, `accept`, `empty-fold`);
+`task-evidence`, `task-signoff`, `brevity`, `fold-row`, `accept`, `empty-fold`,
+`task-evidence-shot`);
 `fleet-task-page.py body` turns it into the task's words, both layers, inside the
 record's 16 KB.
+
+## 验收要有线上真实截图 (A300)
+
+Both page kinds. Every item the worker marks `done` / `passed` carries
+`screenshots` `[{url, mobile, desktop, caption?, at?}]` — the PRODUCTION page shot
+AFTER the switch, never a local build or a mock: Playwright against the live URL,
+once at 390 wide (phone) and once at 1440 (desktop), a full-page PNG each
+(`page.setViewportSize({width: 390, height: 844})` → `screenshot({fullPage: true})`,
+then 1440 × 900). Keep them beside the page (`shots/<n>-390.png`, `shots/<n>-1440.png`)
+and reference them by relative path, or by a file of the same live page; they are
+published WITH the page to the same 活页 (`publish_file` `files`: the page plus each
+`shots/…`; a picture over the text limit goes by `url` or `create_upload_link`). The
+page draws each as a thumbnail that opens full size. A done / passed item without
+both is the lint's `task-evidence-shot` — a must-fix before the worker reports.
+On an EPIC report the 已上线 cell is the same rule: the shot is taken on production,
+at both widths, and published with the report.
 
 ## Rows that open on their own detail (T764)
 

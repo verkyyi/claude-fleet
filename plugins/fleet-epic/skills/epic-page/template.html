@@ -251,6 +251,14 @@
   .ev figure.got{margin-top:10px}
   .ev figure.got img{display:block;max-width:100%;height:auto;border:1px solid var(--rule);border-radius:8px}
   .ev figure.got pre{max-height:16rem;font-size:.7rem}
+  /* 线上实拍 (A300): an item done / passed shows the production page as a pair — phone 390 and
+     desktop 1440 — each a thumbnail that opens full size. */
+  .ev .shots{margin-top:10px;display:grid;gap:8px}
+  .ev .sp{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+  .ev a.shot{display:flex;flex-direction:column;gap:3px;text-decoration:none;color:var(--ink-3);font-size:.72rem}
+  .ev a.shot img{display:block;height:9rem;width:auto;max-width:100%;object-fit:cover;object-position:top;
+                 border:1px solid var(--rule);border-radius:8px;background:var(--surface-2)}
+  .ev .scap{flex-basis:100%;margin:0;font-size:.74rem;color:var(--ink-3)}
   .pill.crit{background:color-mix(in srgb,var(--crit) 10%,var(--surface));color:var(--crit);border-color:color-mix(in srgb,var(--crit) 35%,transparent)}
   /* 其他证据 (T764) — only what no step / metric / card owns, grouped by kind (代码 · 日志 · 现场 · 外部资料),
      one title line each; tap for the original (a code item: file:line and a line or two). */

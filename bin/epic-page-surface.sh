@@ -50,6 +50,8 @@
 #                  instead of each step / row opening on its own
 #   accept         上线证据 still one folded line, or an acceptance item with no 通过标准
 #   empty-fold     a fold / card / row that opens on nothing (no ▸ without a detail)
+#   task-evidence-shot  an acceptance item marked done / passed with no production
+#                  screenshots — phone 390 AND desktop 1440 (A300: 验收报告要有线上真实截图)
 # It is a checklist aid, not a judge: a clean lint does not make a page good —
 # rules like "the surface answers the theme's question" are yours to read.
 #
@@ -310,9 +312,18 @@ for sid, summ, what in (("cause", "证据（代码与现场）", "证据没挂�
 m = re.search(r"<section id=\"evidence\">(.*?)</section>", RAW, re.S)
 if TASK and m and re.search(r"<summary>上线证据</summary>", m.group(1)):
     warn("accept", "上线证据还是一行折叠：改成「上线后怎么验收」卡（evidence: [{what, where, pass, status, proof}]）")
-for ev in re.findall(r"<div class=\"ev\">(.*?<dl class=\"kv\">.*?</dl>)", RAW, re.S):
+for ev in re.findall(r"<div class=\"ev\"[^>]*>(.*?<dl class=\"kv\">.*?</dl>)", RAW, re.S):
     if "class=\"miss\"" in ev or "通过标准" not in ev:
         warn("accept", "验收项缺通过标准  ← " + txt(re.sub(r"<dl.*", "", ev, flags=re.S)))
+# A300 — an acceptance item that passed carries the production page as shot after the switch,
+# phone 390 + desktop 1440 (fleet-task-page.py evidence[].screenshots)
+for st, ev in re.findall(r"<div class=\"ev\"(?: data-status=\"([^\"]*)\")?>(.*?)(?=<div class=\"ev\"|</section>|\Z)", RAW, re.S):
+    done = st in ("done", "passed") or (not st and re.search(r"<span class=\"pill [^\"]*\">(已取|已通过)</span>", ev))
+    vps = set(re.findall(r"<img[^>]*data-vp=\"(390|1440)\"", ev))
+    if done and vps != {"390", "1440"}:
+        name = txt(re.search(r"<strong>(.*?)</strong>", ev, re.S).group(1)) if "<strong>" in ev else "（未命名）"
+        warn("task-evidence-shot", "已通过的验收项没有线上实拍（手机 390 + 桌面 1440 成对，缺 %s）  ← %s"
+             % (" / ".join(v for v in ("390", "1440") if v not in vps), name))
 for cls, summ, inner in re.findall(r"<details class=\"(fold|card|xr|oi)\"[^>]*>\s*<summary>(.*?)</summary>(.*?)</details>", RAW, re.S):
     if not txt(inner) and "<img" not in inner:
         warn("empty-fold", "点开是空的：没有可展开的内容就不放 ▸  ← " + (txt(summ) or cls))

@@ -307,7 +307,10 @@ The sections, as the template lays them out:
      the `rNm` marker*; *截图 `/solutions/space` 首屏 (匿名态)*; *`curl -s …/api/x |
      jq .count` 的输出*. This line is `/fleet-epic-report`'s input (issue #810):
      the worker captures 改动后 along it and puts it in its PR, and the report
-     follows the same line. Write it so neither has to ask.
+     follows the same line. Write it so neither has to ask. A web surface's line
+     names the production URL: its proof is a Playwright shot of THAT page after
+     the switch, phone 390 + desktop 1440, published with the page (A300 — epic-page
+     「验收要有线上真实截图」).
 
    **Reserve items left untouched do not count as unfinished** — they exist so a
    batch that runs faster than expected does not idle, not to inflate the scope.

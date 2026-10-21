@@ -36,6 +36,9 @@
 #      the table back on load (+ localStorage), draws each item's last row with 改 ·
 #      撤回 (withdraw = a row) and reads <table>_done; replies_done marks it too;
 #      an OLD spec still renders its shared folds and draws fold-row / accept.
+#      A300: a done / passed item shows its production screenshots (phone 390 +
+#      desktop 1440) as thumbnails that open full size; one without the pair draws
+#      task-evidence-shot; pending / failed items need none.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -227,6 +230,7 @@ g["members"] = d["members"] + [{"key": "Z", "name": "只有一句", "line": "没
 ev = [dict(e) for e in d["evidence"]]
 ev[0].update(status="done", proof={"text": "A 收到：C 完成", "caption": "04:52Z"})
 ev[1]["status"] = "failed"
+ev[2].update(status="passed", screenshots=[{"mobile": "shots/3-390.png"}])
 g["evidence"] = ev
 json.dump(g, open(sys.argv[2], "w"), ensure_ascii=False)
 o = {k: v for k, v in d.items() if k != "feedback"}
@@ -277,6 +281,28 @@ st_has "build: status" "$G" '<span class="pill ">已取</span>'
 st_has "build: a failed item" "$G" '<span class="pill crit">未通过</span>'
 st_has "build: an empty slot" "$G" '<div class="slot">待回填：截图 / 终端输出 / 链接</div>'
 st_has "build: the proof filled in" "$G" '<figure class="got"><pre>A 收到：C 完成</pre><figcaption>04:52Z</figcaption></figure>'
+# A300 — a passed item carries the production page, phone 390 + desktop 1440, as thumbnails
+st_has "build: the item says its status" "$G" '<div class="ev" data-status="done">'
+st_has "build: a phone shot opens full size" "$G" '<a class="shot" href="shots/1-390.png" target="_blank" rel="noopener"><img src="shots/1-390.png" alt="手机 390" data-vp="390" loading="lazy">'
+st_has "build: and its desktop pair" "$G" '<img src="shots/1-1440.png" alt="桌面 1440" data-vp="1440"'
+st_has "build: the shot's caption and live URL" "$G" '<p class="scap">线上实拍：A 窗口收到的那一条 · <a href="https://⟨线上地址⟩">线上地址</a></p>'
+st_has "the frame styles the thumbnails" "$(cat "$T")" '.ev a.shot img{'
+st_hasnt "plan: no shots" "$PAGE" 'class="shots"'
+w=$(printf '%s' "$G" | bash "$L" --lint - 2>&1 >/dev/null)
+st_has "a passed item with half a pair warns" "$w" 'WARN task-evidence-shot: 已通过的验收项没有线上实拍（手机 390 + 桌面 1440 成对，缺 1440）  ← 今天丢的 3 份补送到了'
+st_hasnt "a done item with the pair is clean" "$w" '← 三层演练'
+st_hasnt "a failed item needs no shot" "$w" '← 无主回报不再增加'
+w=$(python3 - "$TMP/g.json" <<'PY3' | python3 "$P" render - | bash "$L" --lint - 2>&1 >/dev/null
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+for e in d["evidence"]:
+    e.pop("screenshots", None)
+d["evidence"][1]["status"] = "pending"
+print(json.dumps(d, ensure_ascii=False))
+PY3
+)
+st_has "a done item with no shot warns" "$w" 'WARN task-evidence-shot: 已通过的验收项没有线上实拍（手机 390 + 桌面 1440 成对，缺 390 / 1440）  ← 三层演练'
+st_hasnt "a pending item needs no shot yet" "$w" '← 无主回报不再增加'
 st_has "replies_done marks the row" "$G" '<p class="fb-done" data-for="signoff-1"><span class="pill muted">未采纳</span> 先不推微信'
 st_has "a card with nothing to open has no fold" "$G" '<div class="ob" id="m-Z">
 <div class="card">'

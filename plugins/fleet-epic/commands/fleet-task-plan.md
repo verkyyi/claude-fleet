@@ -71,7 +71,7 @@ words. Top to bottom:
 | `#members` 解决方案 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `compare` (改前 / 改后, below). A card with nothing past its line has no ▸ |
 | `#risks` | `risks` · `risks_tech` | 「会出什么事 — 我们怎么兜住」 |
 | `#signoff` 需要你定的事 | `signoff` | `{q, rec, default, options}` — 事项, 建议, the DEFAULT (what counts when nobody picks; old `[事项, 建议]` rows default to 按建议) and the other options; the line under it says 「点头即全部按建议」 |
-| `#evidence` 上线后怎么验收 | `evidence[]` · `phase` | one item per proof `{what, where, pass, status, proof}`: 是什么 · 在哪取 · 通过标准. The plan (`phase` plan, the default) shows only those three; the worker renders `phase: build` and fills each `status` (pending · done · failed) and `proof` ({img · text · url · html, caption}) — the filled card is the report's 已上线 |
+| `#evidence` 上线后怎么验收 | `evidence[]` · `phase` | one item per proof `{what, where, pass, status, proof}`: 是什么 · 在哪取 · 通过标准. The plan (`phase` plan, the default) shows only those three; the worker renders `phase: build` and fills each `status` (pending · done · passed · failed), `proof` ({img · text · url · html, caption}) and, on every done / passed item, `screenshots` (the production page, phone 390 + desktop 1440 — below) — the filled card is the report's 已上线 |
 | 页内反馈 | `feedback` · `replies_done` | `{table: "replies", version: "v<N>", poll: "12 分钟"}` — below |
 
 **Nothing to open, no ▸** (T764): a step, a metric row or a card with no detail
@@ -125,8 +125,21 @@ epic-page's rules, and the task page's own: `task-section` (a section missing),
 with no 改前 / 改后, or a link to a separate prototype page), `brevity` (标题 > 16 字,
 副题 > 30 字 or bracketed, a 现象 line > 25 字), `fold-row` (the old shared 证据 /
 怎么量 folds), `accept` (上线证据 still one line, or an item with no 通过标准),
-`empty-fold` (an arrow onto nothing).
+`empty-fold` (an arrow onto nothing), `task-evidence-shot` (an item marked done /
+passed with no production screenshots, phone 390 + desktop 1440 — below).
 A WARN is a question, not a verdict; fix what is real.
+
+**线上真实截图 (A300)**: every item the worker marks `done` / `passed` carries
+`screenshots` `[{url, mobile, desktop, caption?, at?}]` — the PRODUCTION page shot
+AFTER the switch, never a local build or a mock: Playwright against the live URL,
+once at 390 wide (phone) and once at 1440 (desktop), a full-page PNG each
+(`page.setViewportSize({width: 390, height: 844})` → `screenshot({fullPage: true})`,
+then 1440 × 900). Keep them beside the page (`shots/<n>-390.png`, `shots/<n>-1440.png`)
+and reference them by relative path, or by a file of the same live page; they are
+published WITH the page to the same 活页 (`publish_file` `files`: the page plus each
+`shots/…`; a picture over the text limit goes by `url` or `create_upload_link`). The
+page draws each as a thumbnail that opens full size. A done / passed item without
+both is the lint's `task-evidence-shot` — a must-fix before the worker reports.
 
 ## 4. Publish privately, push, wait
 
