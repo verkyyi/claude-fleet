@@ -476,6 +476,9 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 			r.EndpointID, r.Machine, r.Login = p.EndpointID, p.Machine, p.Login
 			if strings.HasPrefix(r.CloseReason, IDHubClose) {
 				r.ClosedAt, r.CloseReason = 0, "" // a reconcile closed it unclaimed (BCYB): taken after all
+				if err := reopenTasksOnID(tx, r.Owner, r.ID, time.Now()); err != nil {
+					return FleetIDPushed{}, err
+				}
 			}
 		} else if r.EndpointID != p.EndpointID {
 			moved := false
@@ -638,6 +641,10 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 		// the node's own word wins over a reconcile's (BCYB: hub:gone …)
 		if r.ClosedAt == 0 || strings.HasPrefix(r.CloseReason, IDHubClose) {
 			r.ClosedAt, r.CloseReason = ts, evStr(ev, "reason", 200)
+			// A4G2: the session is over — a record it carries with no result ends too
+			if _, err := endTasksOnIDClose(tx, r.Owner, r.ID, r.taskID, taskRefsOf(r.Task, r.Aliases), r.CloseReason, time.Now()); err != nil {
+				return err
+			}
 			if r.natives > 0 {
 				_, err := tx.Exec(`UPDATE fleet_id_natives SET end_at = ? WHERE id = ? AND n = ? AND end_at = 0`, ts, r.ID, r.natives)
 				return err
@@ -646,6 +653,9 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 	case "reopened":
 		// 「恢复这个窗口」 (EPIC T497 C4): the same ID goes on in a new window.
 		r.ClosedAt, r.CloseReason = 0, ""
+		if err := reopenTasksOnID(tx, r.Owner, r.ID, time.Now()); err != nil {
+			return err
+		}
 		if w := evStr(ev, "window", 32); w != "" {
 			r.Window = w
 		}

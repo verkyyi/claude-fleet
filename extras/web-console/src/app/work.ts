@@ -7,10 +7,10 @@
 // (taskStatus), its session's word only what the session says now — neither is
 // inferred from the other (claude-fleet T644/C4: a session done is not a task
 // succeeded). Pure: no React, so test/work.mjs runs it as it is.
-import type { SessionRow } from "@/shared/sessions";
+import type { Board, BoardRow, SessionRow } from "@/shared/sessions";
 import { displayCodes, taskOpen, taskPR, taskStatus, writtenCode, type Task } from "./task-state.ts"; // .ts: test/work.mjs runs this file as it is
 
-export type Group = "ask" | "work" | "queue" | "gone";
+export type Group = "pin" | "ask" | "work" | "queue" | "gone";
 export type Tone = "ask" | "fail" | "ok" | "muted";
 export type Glyph = "ask" | "fail" | "work" | "pr" | "done" | "idle" | "wait";
 
@@ -31,9 +31,11 @@ export type Row = {
   parentTitle?: string;
   kids: Row[];            // an EPIC's members (every one, whatever their group)
   at: number;             // epoch ms: newest first within a group
+  board?: BoardRow;       // the hub's row this one draws (A4G2)
 };
 
 export const GROUPS: { g: Group; label: [string, string] }[] = [
+  { g: "pin", label: ["置顶", "Pinned"] },
   { g: "ask", label: ["等你", "Needs you"] },
   { g: "work", label: ["在干活", "Working"] },
   { g: "queue", label: ["排队中", "Queued"] },
@@ -119,6 +121,41 @@ export function buildRows(tasks: Task[], live: SessionRow[], ended: SessionRow[]
     else r.parent = undefined;
   }
   return rows.sort((a, b) => b.at - a.at);
+}
+
+// The hub's one list (A4G2) → the page's rows: the hub's rows, groups, order
+// and words as they are — the same the ⌘P panel draws; each joined to its
+// record (by the record's ID) and its live session (by worker_id) only for the
+// detail beside it. An EPIC's members sit under their parent (the hub's parent).
+const GLYPH_OF: Record<string, Glyph> = {
+  asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "work", looping: "work",
+  completed: "done", turn_done: "done", ended: "done", starting: "wait", queued: "wait", not_seen: "wait",
+};
+const TONE_OF: Record<string, Tone> = {
+  asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "ok", looping: "ok", completed: "ok",
+};
+export function boardRows(board: Board, tasks: Task[], live: SessionRow[]): Row[] {
+  const codes = displayCodes(tasks);
+  const byFID = new Map(tasks.filter((t) => t.fid).map((t) => [t.fid!, t]));
+  const byRef = new Map(tasks.map((t) => [t.id, t]));
+  const liveBy = new Map(live.map((l) => [l.id, l]));
+  const rows: Row[] = board.rows.map((b: BoardRow) => {
+    const t = (b.task_id && byFID.get(b.task_id)) || (b.task && byRef.get(b.task)) || undefined;
+    const l = b.worker_id ? liveBy.get(b.worker_id) : undefined;
+    const asking = b.tag === "asking" || b.tag === "waiting_you";
+    const line = asking ? (l?.ask?.msg || t?.asked || "").trim() : b.group === "work" ? (l?.say || "").trim() : (t?.evidence || "").trim();
+    return {
+      id: b.id, code: t ? codes.get(t) || writtenCode(t) : b.code || "", title: b.title, group: b.group,
+      tag: b.words, glyph: GLYPH_OF[b.tag] || "idle", tone: TONE_OF[b.tag] || "muted", line, quote: asking && !!line,
+      task: t, live: l, parent: b.parent || undefined, kids: [], at: b.at * 1000, board: b,
+    };
+  });
+  const byID = new Map(rows.map((r) => [r.id, r]));
+  for (const r of rows) {
+    const p = r.parent ? byID.get(r.parent) : undefined;
+    if (p && p !== r) { r.parentTitle = p.title; p.kids.push(r); } else r.parent = undefined;
+  }
+  return rows;
 }
 
 // A group's rows, top level: a member nested under its parent leaves the top.

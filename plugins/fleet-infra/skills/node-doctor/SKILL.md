@@ -131,6 +131,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `launchd` | node | [mac-node-prep] | launchd 的 gui 域坏了：机器层面——注销重登或重启 |
 | `ledger` | node | [mac-node-enroll] | 守护没装上：重跑 `sudo fleet node install` |
 | `listen` | node | [node-doctor] | 有 fleet 进程监听在局域网：改成 127.0.0.1，或停掉它 |
+| `board` | node | [node-doctor] | ⌘P 面板和网页「会话」差了几条：`fleet board diff` 看是哪几条；新开的窗口下一轮就对上 |
 | `login-tree` | machine | [login-lifecycle] [release-rules] | 登录的 ~/.claude/fleet 指向已不在的版本：更新器下一轮重建链接树 |
 | `machine` | node | [mac-node-prep] | 负载过高 / 有失控孤儿进程：`fleet-diskguard.sh --orphans` 点名 |
 | `main` | node | [node-doctor] | 仓库配置：`FLEET_MAIN` 不在 / 不是 git / origin 不对 |

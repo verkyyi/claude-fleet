@@ -1781,6 +1781,19 @@ else
   pass listen "no fleet process listening on the LAN"
 fi
 
+# --- the one session list (A4G2) ----------------------------------------------
+# The console's 会话 and the ⌘P panel draw the hub's one list; this line reads
+# both now (fleet-board-diff.py) and WARNs on any difference. No hub list here (no
+# hub, an older hub, the hub silent) ⇒ no row.
+if [ -f "$(dirname "$0")/fleet-board-diff.py" ]; then
+  bdj=$(python3 "$(dirname "$0")/fleet-board-diff.py" --json 2>/dev/null); bdrc=$?
+  if [ "$bdrc" = 0 ]; then
+    pass board "the ⌘P panel and the console draw the same list ($(printf '%s' "$bdj" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("count_hub"))' 2>/dev/null) sessions)"
+  elif [ "$bdrc" = 1 ]; then
+    warn board "the ⌘P panel and the console differ by $(printf '%s' "$bdj" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("diff"))' 2>/dev/null) row(s) — \`fleet board diff\` names them (a window the hub has not heard of yet clears on its next round)"
+  fi
+fi
+
 # --- selftest tmux debris (issue #2970) -------------------------------------------
 # A selftest's isolated tmux server left running, and the dead socket files beside
 # the fleets' own in the tmux socket dir (two machines held 6 live servers and ~250

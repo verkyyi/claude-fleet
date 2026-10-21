@@ -2044,6 +2044,13 @@ def entries(vid, now=None, hub=True):
             for e in moved:
                 e.pop("fold", None)
             groups["ask"] += moved
+    # A4G2: the hub's one list, when fresh — the same entries, groups and order
+    # the console draws
+    board = board_read(now) if fleet else None
+    if board:
+        groups, gone = board_apply(board, groups, shut, gone, here, me)
+        shut, older = [], int(board.get("gone_more") or 0)
+        ended = [e for e in groups["queue"] if e.get("ended")]
     id_display(dict(groups, shut=shut))
     multi = len(set(repos)) >= 2
     out = []
@@ -2083,9 +2090,114 @@ def entries(vid, now=None, hub=True):
     return out
 
 
+# The one session list (claude-fleet A4G2): the hub builds it once — rows,
+# groups, order, count — inside every fleet_sessions answer (`board`), which
+# fleet-hub-sessions.sh keeps as global/hubsess.body; the console's 会话 draws
+# the same one. While it is fresh (hub_ok within FLEET_HUB_SESSIONS_STALE) the
+# list takes its entries, groups, order and words from it: a window here only
+# lends its row (state, actions), a row with no window is drawn from the board
+# (a record not started yet: no actions). Stale or absent ⇒ the list as before.
+_BOARD = {}
+
+
+def board_read(now=None):
+    """The hub's list off global/hubsess.body, or None (no hub, an older hub, stale)."""
+    if os.environ.get("FLEET_VIEW_BOARD", "1") == "0" or hub_stale(now) or hub_age(now) is None:
+        return None
+    path = dash_global() / "hubsess.body"
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    sig = (st.st_mtime_ns, st.st_size)
+    if _BOARD.get("sig") != sig:
+        try:
+            b = json.loads(path.read_text(encoding="utf-8")).get("board")
+        except (OSError, ValueError, AttributeError):
+            b = None
+        _BOARD.update(sig=sig, board=b if isinstance(b, dict) and isinstance(b.get("rows"), list) else None)
+    return _BOARD.get("board")
+
+
+def board_words(r):
+    w = r.get("words") or ["", ""]
+    if "lang" not in _BOARD:
+        _BOARD["lang"] = ui_lang()
+    return (w[1] if _BOARD["lang"] == "en" and len(w) > 1 else w[0]) or r.get("tag", "")
+
+
+BOARD_SYM = {"asking": "needs", "waiting_you": "needs", "failed": "fail", "refused": "fail", "working": "work",
+             "looping": "work", "completed": "done", "turn_done": "done", "ended": "done", "exited": "exited"}
+
+
+def board_apply(board, groups, shut, gone, here, me):
+    """Re-lay the list on the hub's one list: (groups, gone) in its order. A row
+    is matched to an entry by its session's ID (fid), else its worker_id (another
+    machine's target); a window here the hub has not heard of yet stays at the
+    end of its group (the next round lists it); a closed row only this machine
+    remembers is left out — the hub's 已收起 is the list's."""
+    items = [e for g in GROUPS for e in groups[g]] + shut + gone
+    by_fid, by_wid = {}, {}
+    for e in items:
+        if e.get("fid"):
+            by_fid.setdefault(e["fid"], e)
+        if e.get("far") and e.get("target"):
+            by_wid.setdefault(e["target"], e)
+    used = set()
+    out = {g: [] for g in GROUPS}
+    out_gone = []
+    for r in board.get("rows") or []:
+        g = r.get("group") or "queue"
+        e = by_fid.get(r.get("id") or "") or by_wid.get(r.get("worker_id") or "")
+        if e is not None and id(e) in used:
+            e = None
+        if e is None:
+            title = r.get("title") or ""
+            e = {"kind": "sess", "target": "id:" + r["id"], "far": True, "record_only": True, "ledger": True,
+                 "machine": r.get("machine") or "", "login": r.get("login") or "", "open": True,
+                 "state": r.get("state") or r.get("tag") or "", "text": title, "name": title, "reap": "",
+                 "issue": "", "depth": 0, "detail": "", "sym": BOARD_SYM.get(r.get("tag"), "idle"),
+                 "lost": bool(r.get("lost")), "lost_secs": None, "ask": "", "tags": [],
+                 "repo": (r.get("repo") or "").rpartition("/")[2], "today": "", "task": r.get("task") or "",
+                 "code": r.get("code") or "", "id": (r.get("code") or "")[:4], "fid": r.get("id")}
+            if g == "gone":
+                e["gone"] = True
+        else:
+            used.add(id(e))
+            if r.get("title"):
+                e["text"] = r["title"]
+        e["board"] = r.get("id")
+        e["word"] = board_words(r)
+        e["depth"] = int(r.get("depth") or 0)
+        e["foot"] = " · ".join(x for x in (e.get("text") or "", e["word"], " · ".join(
+            x for x in (e.get("machine") or here, e.get("login") or me) if x)) if x)
+        if g == "gone":
+            e.update(group="folded", sec="gone")
+            out_gone.append(e)
+        else:
+            e.pop("sec", None)
+            e.pop("shut", None)
+            e["group"] = g if g in out else "queue"
+            out[e["group"]].append(e)
+    for g in GROUPS:
+        for e in groups[g]:
+            if id(e) not in used and not e.get("far"):
+                e["unboarded"] = True
+                out[g].append(e)
+    return out, out_gone
+
+
+def counted_rows(items):
+    """The rows the count counts, one per (far, target): a session up — never one
+    put away, and never an exited agent's window folded into 已收起 (sec gone,
+    A4G2: the hub's list counts the same)."""
+    return {(bool(e.get("far")), e.get("target")): e for e in items
+            if e.get("kind") == "sess" and e.get("target") and not e.get("gone") and e.get("open", True)
+            and e.get("sec") != "gone"}
+
+
 def session_count(items, query="", remote_unknown=False):
-    rows = {(bool(e.get("far")), e.get("target")): e for e in items
-            if e.get("kind") == "sess" and e.get("target") and not e.get("gone") and e.get("open", True)}
+    rows = counted_rows(items)
     known = [e for e in rows.values() if not e.get("lost")]
     unknown = remote_unknown or any(e.get("lost") for e in rows.values())
     total = str(len(known)) + ("+?" if unknown else "")
@@ -3890,6 +4002,8 @@ def act_row(fleet, e):
 
 def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
+    if r.get("record_only"):
+        return []     # a record with no session yet (A4G2): nothing to act on here
     out = []
     for a in ACTIONS:
         if a.get("rowless") or (a["far"] if r.get("far") else a["local"]) is None:

@@ -2457,6 +2457,29 @@ drill_browser_import_access_crossed() {
   SECS=$(since "$t0")
 }
 
+# task-record-never-closes (A4G2): a session reaped / exited / put away without
+# a result closed its ID and left its record `accepted` for good — 「排着」 on the
+# console beside the session's own row, cleaned by hand (20 on 2026-10-21). The
+# hub now ends it with the ID (store.endTasksOnIDClose, `id_closed:`), puts it
+# back when the ID goes on, lets a later result win, and sweeps what closed
+# before or never started (ReconcileClosedTasks, every 5 min on the alerts
+# leader); the console and ⌘P draw one list joined by identity (fleet_board.go).
+drill_task_record_never_closes() {
+  CAP=120; local t0 f
+  t0=$(now)
+  for f in "store/fleet_task_close_test.go:TestTaskEndsWhenItsSessionCloses" "store/fleet_task_close_test.go:TestSweepEndsWhatIsOver" \
+           "api/fleet_board_test.go:TestBoardOneRowPerTask"; do
+    grep -q "^func ${f#*:}(" "$ROOT/tokenledger/hub/${f%%:*}" 2>/dev/null || { WHY="the hub half's test ${f#*:} is gone"; return 1; }
+  done
+  grep -q 'TaskSweepTick' "$ROOT/tokenledger/hub/api/fleet_alerts.go" || { WHY="the alerts tick no longer runs the task sweep"; return 1; }
+  WHAT='会话结束没交结果 ⇒ 记录同一事务收尾（结束·没交回结果），编号续上就恢复、之后的结果照样算数；5 分钟一次的对账收掉之前关的与 24 小时没起来的；一份清单按身份把记录和会话拼成一行（测试按名核对在，Go 门跑它）'
+  go_half '^(TestTaskEndsWhenItsSessionCloses|TestSweepEndsWhatIsOver|TestBoardOneRowPerTask)$' ./hub/store ./hub/api; case $? in
+    0) WHAT='关编号 ⇒ 记录 cancelled + id_closed、reopened ⇒ 回到 accepted、迟到的 merged 改成 succeeded；对账：早关的收、在跑的不动、24 h 没起来的收、二次跑不动；清单：一件事一行、退出的进已收起不计数（go test）' ;;
+    1) return 1 ;;
+  esac
+  SECS=$(since "$t0")
+}
+
 # This file runs part 1/3 using bin/break-it-durations.txt; the rest are its
 # part files (issue #2694). A weight change must select the whole family.
 : "${BREAK_PART:=1/3}"

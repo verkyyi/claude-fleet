@@ -876,6 +876,13 @@ From `fleet doctor`.
 - **What it is**: whether a fleet process has a port open on the local network (which shares a directory with everyone on that network).
 - **On WARN / FAIL**: make it listen on `127.0.0.1` only, or stop it.
 
+#### `board`
+
+From `fleet doctor`.
+
+- **What it is**: whether the ⌘P panel on this machine and the console's Sessions page draw the same list (the same sessions, in the same order, with one count).
+- **On WARN / FAIL**: run `fleet board diff` to see which rows differ; a window opened a moment ago reaches the hub on its next round (seconds), so look again shortly; if it stays, send those lines to your admin.
+
 ### Repositories
 
 #### `repos`

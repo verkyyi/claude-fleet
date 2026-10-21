@@ -10,11 +10,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { lang, tr } from "@/shared/i18n";
 
 // A page's heading: its name with the site's clay full stop, one line under it.
-export const PageHeader: FC<{ title: string; sub?: string; action?: ReactNode }> = ({ title, sub, action }) => (
+export const PageHeader: FC<{ title: string; sub?: string; action?: ReactNode; count?: number }> = ({ title, sub, action, count }) => (
   <div className="mb-4 flex items-end justify-between gap-3">
     <div className="min-w-0">
       <h1 className="font-display text-[26px] leading-tight font-semibold tracking-tight">
         {title}<span className="text-clay">.</span>
+        {count !== undefined ? <span className="bg-primary text-primary-foreground ms-2 inline-block rounded-full px-2 align-middle font-mono text-sm leading-6" aria-label={tr(`共 ${count} 个`, `${count} in all`)}>{count}</span> : null}
       </h1>
       {sub ? <p className="text-muted-foreground mt-1 text-sm">{sub}</p> : null}
     </div>

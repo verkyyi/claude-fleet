@@ -38,7 +38,7 @@ import { usePage } from "../Shell";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
 import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, writtenCode, type Task } from "../task-state";
 import { findTask, useTasks } from "../use-tasks";
-import { GROUPS, buildRows, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Glyph, type Row, type Tone } from "../work";
+import { GROUPS, boardRows, buildRows, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Glyph, type Row, type Tone } from "../work";
 
 const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin [animation-duration:2.4s]", className)} />;
 const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
@@ -348,10 +348,12 @@ function useNarrow() {
   return n;
 }
 
+const clock = (ms: number) => (ms ? new Date(ms).toLocaleTimeString("zh-CN", { hour12: false }) : "");
+
 export default function SessionsPage() {
   usePage(tr("会话", "Sessions"));
   const tasks = useTasks();
-  const { live, ended, failed, reload } = useSessions(tasks.accept, tasks.reload);
+  const { live, ended, board, boardAt, failed, reload } = useSessions(tasks.accept, tasks.reload);
   const narrow = useNarrow();
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState("");
@@ -365,7 +367,10 @@ export default function SessionsPage() {
   const [found, setFound] = useState<Row | null>(null);
   const stale = !!(tasks.failed || tasks.data?.stale);
 
-  const rows = useMemo(() => (live && tasks.data ? buildRows(tasks.data.tasks, live, ended || []) : null), [live, ended, tasks.data]);
+  // the hub's one list (A4G2) — the same the ⌘P panel draws; an older hub sends
+  // none, and the page's own join stands in
+  const rows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live)
+    : buildRows(tasks.data.tasks, live, ended || [])) : null), [live, ended, board, tasks.data]);
   const repos = useMemo(() => [...new Set((rows || []).map((r) => r.task?.repo || r.live?.repo || "").filter((x) => /^[\w.-]+\/[\w.-]+$/.test(x)))].sort(), [rows]);
   const ref = params.get("open") || params.get("q") || "";
   const picked = rows && ref ? findRow(rows, ref) || (found && findRow([found], ref) ? found : undefined) : undefined;
@@ -426,7 +431,7 @@ export default function SessionsPage() {
                   {fold ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}{tr(...label)}
                 </button> : tr(...label)}
                 <span className="font-mono">{rs.length}</span>
-                {g === "gone" ? <span>· {tr("近 14 天", "last 14 days")}</span> : null}
+                {g === "gone" ? <span>· {board ? tr(`近 ${board.gone_days} 天 · 不计数`, `last ${board.gone_days} days · not counted`) : tr("近 14 天", "last 14 days")}</span> : null}
               </h2>
               {fold ? null : <Card className={cn("gap-0 divide-y overflow-hidden py-0", g === "ask" && "border-clay-line")}>
                 {rs.map((r) => {
@@ -449,7 +454,9 @@ export default function SessionsPage() {
   const detail = current ? <Detail key={current.id} r={current} stale={stale} busy={busy} onOpen={open} onReap={setConfirm} onResume={(r) => act(r, "worker_resume")} /> : null;
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
-      <PageHeader title={tr("会话", "Sessions")} sub={tr("你派出的每件事和开着的会话，一件一行", "Everything you sent out and every open session, one line each")}
+      <PageHeader title={tr("会话", "Sessions")} count={board ? board.count : undefined}
+        sub={board ? tr(`和 ⌘P 面板同一份清单 · ${clock(boardAt)}`, `The same list as the ⌘P panel · ${clock(boardAt)}`)
+          : tr("你派出的每件事和开着的会话，一件一行", "Everything you sent out and every open session, one line each")}
         action={<Button disabled={!!viewAs} onClick={() => setNewOpen(true)}><Plus />{tr("新建", "New")}</Button>} />
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-6">
         <div className="min-w-0 space-y-4">
