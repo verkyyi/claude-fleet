@@ -45,6 +45,9 @@ HELPER="$BIN/dash-popup.sh"
 st_real_tmux
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dp-selftest.XXXXXX")" || exit 2
+# its notices (the URL fallback's toast, a refused popup's line) are its own: run
+# by hand outside the runner they landed in the person's real record (T741)
+export FLEET_CONF_DIR="$WORK/conf"
 
 # Isolate every tmux call onto a private socket so we never touch the user's live
 # server. A PATH shim routes the plain `tmux` dash-popup.sh calls to it.

@@ -133,7 +133,7 @@ def main():
             print("ENV %s TERM=xterm-256color -> tmux-256color; repository palette; Cmg/Clmg disabled" %
                   tm(inner, "-V"), flush=True)
             widths = [int(sys.argv[sys.argv.index("--width") + 1])] if "--width" in sys.argv \
-                else [120] if "--idle" in sys.argv else [120, 100, 80, 40]
+                else [120] if "--idle" in sys.argv else [140, 100, 80, 45]
             for width in widths:
                 tm(outer, "resize-window", "-t", "out:0", "-x", width, "-y", 32)
                 until(lambda: tm(inner, "display", "-p", "-c", client, "#{client_width}") == str(width))
@@ -154,6 +154,32 @@ def main():
                 check(b"BACKGROUND" not in chunk and "龘".encode() not in chunk,
                       "%d no background output through popup" % width)
                 check(frame() == before_frame, "%d idle frame cells stable" % width)
+                # the 看台's window changes under the open panel (T741: the ⚡ job's
+                # go, the window behind closed): the freeze follows the client, so
+                # the window it moved to writes nothing either
+                tm(inner, "new-window", "-d", "-t", "fl:1", shlex.join([sys.executable, str(ME), "--background"]))
+                tm(inner, "select-window", "-t", "fl:1")
+                time.sleep(0.6)  # the watcher's tick + its one redraw
+                start = len(data())
+                time.sleep(1.0)
+                chunk = data()[start:]
+                check(tm(inner, "display", "-p", "-t", "fl:1", "#{pane_in_mode}") == "1",
+                      "%d window moved to under the popup is held" % width)
+                check(b"BACKGROUND" not in chunk and "龘".encode() not in chunk,
+                      "%d window moved to: no background output through popup" % width)
+                # nothing of the background inside the frame (the frame's own
+                # cells are left out: select-window repaints the whole screen, and
+                # tmux 3.7c misdraws a wide glyph straddling a 90% popup's edge —
+                # with or without the freeze)
+                lines = capture().splitlines()
+                top = next(i for i, line in enumerate(lines) if "╭" in line)
+                bottom = next(i for i, line in enumerate(lines) if "╰" in line)
+                inside = ["│".join(line.split("│")[1:-1]) for line in lines[top + 1:bottom]]
+                check(not any("BACKGROUND" in t or "龘" in t for t in inside),
+                      "%d window moved to: nothing of it inside the frame" % width)
+                tm(inner, "select-window", "-t", "fl:0")
+                tm(inner, "kill-window", "-t", "fl:1")
+                time.sleep(0.4)
 
                 if "--idle" not in sys.argv:
                     # Real list refresh still paints changed content.
@@ -238,4 +264,4 @@ if __name__ == "__main__":
     elif "--idle" in sys.argv or "--width" in sys.argv:
         sys.exit(main())
     else:
-        sys.exit(lanes([120, 100, 80, 40]))
+        sys.exit(lanes([140, 100, 80, 45]))

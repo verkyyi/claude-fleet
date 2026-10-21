@@ -38,6 +38,16 @@ id · level · text · next · source · client · view · tag · kind · sub ·
 10 s is one row. Nothing is ever a credential: callers say what happened, never
 what a token was.
 
+NOT A TEST'S, NOT A DRILL'S (T741). The record is the person's: a selftest or a
+drill run against the live install never lands in it. `refused()` is asked before
+any row is written or drawn — a book named in FLEET_NOTICE_FORBID (run-selftests.sh
+sets it to the login's real record, and FLEET_NOTICE_FORBID_HIT to a file the
+refusal touches so the runner reds the test), or this login's own record while
+the process talks to a hub this login does not (CCQUOTA_HUB_URL other than
+node.env / node.pub.env / fleet.conf name — T672's drill started a session against https://127.0.0.1:9 and
+its refusal reached the person's 消息), or FLEET_DRILL=1. One stderr line says
+which; nothing is written, nothing drawn.
+
 THE MESSAGE ROW (T701). A notice the person has not seen — after the read mark
 (logs/notices.read, moved by opening the page) and not in logs/notices.readids
 (one marked read) — is unseen. The row under the 看台's top line is there while
@@ -77,6 +87,74 @@ def conf_dir():
 
 def log_path():
     return conf_dir() / "logs" / "notices.ndjson"
+
+
+def own_book():
+    """The login's own record: its passwd home's, whatever HOME / FLEET_CONF_DIR say
+    (FLEET_NOTICE_OWN_BOOK: a drill's stand-in, never the person's)."""
+    if os.environ.get("FLEET_NOTICE_OWN_BOOK"):
+        return Path(os.environ["FLEET_NOTICE_OWN_BOOK"])
+    try:
+        import pwd
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError):
+        home = os.path.expanduser("~")
+    return Path(home) / ".config" / "claude-fleet" / "logs" / "notices.ndjson"
+
+
+def _same(a, b):
+    try:
+        return os.path.realpath(str(a)) == os.path.realpath(str(b))
+    except OSError:
+        return False
+
+
+def _own_hubs():
+    """The hubs this login talks to — CCQUOTA_HUB_URL / FLEET_HUB_URL as node.env,
+    node.pub.env and fleet.conf write them (an empty set when none can be read)."""
+    got = set()
+    for name in ("node.env", "node.pub.env", "fleet.conf"):
+        try:
+            text = (conf_dir() / name).read_text()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = re.match(r"\s*(?:export\s+)?(?:CCQUOTA_HUB_URL|FLEET_HUB_URL)=(\S+)", line)
+            if m:
+                v = m.group(1).strip("'\"").rstrip("/")
+                if v.startswith(("http://", "https://")):
+                    got.add(v)
+    return got
+
+
+def refused(path=None):
+    """Why this process may not write the record at `path` (T741), "" when it may:
+    a test's (FLEET_NOTICE_FORBID names it) or a drill's (FLEET_DRILL=1, or a hub
+    other than this login's own while the book is the login's own)."""
+    path = log_path() if path is None else path
+    for f in filter(None, os.environ.get("FLEET_NOTICE_FORBID", "").split(":")):
+        if _same(path, f):
+            return "a selftest writes to the person's real message record (%s) — give it its own FLEET_CONF_DIR" % f
+    if not _same(path, own_book()):
+        return ""
+    if os.environ.get("FLEET_DRILL") == "1":
+        return "a drill (FLEET_DRILL=1) — the person's message record is not its"
+    url = os.environ.get("CCQUOTA_HUB_URL", "").rstrip("/")
+    own = _own_hubs() if url else set()
+    if url and own and url not in own:
+        return "a drill: this process talks to %s, not this login's hub — the person's message record is not its" % url
+    return ""
+
+
+def _refuse(why):
+    sys.stderr.write("fleet_notice: not recorded — %s\n" % why)
+    hit = os.environ.get("FLEET_NOTICE_FORBID_HIT", "")
+    if hit:
+        try:
+            with open(hit, "a", encoding="utf-8") as fh:
+                fh.write(why + "\n")
+        except OSError:
+            pass
 
 
 def read_mark():
@@ -154,6 +232,10 @@ def record(level, text, nxt="", source="", client="", view="", tag="", now=None,
     """Append one row; False when it was a repeat (same level + text within DEDUP)."""
     now = time.time() if now is None else now
     path = log_path()
+    why = refused(path)
+    if why:
+        _refuse(why)
+        return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a+", encoding="utf-8") as fh:
@@ -532,6 +614,11 @@ def notify(level, text, nxt="", client="", sock="", everyone=False, source="", s
     if not text:
         return 2
     tag = tag or os.environ.get("FLEET_NOTICE_TAG", "")
+    why = refused()
+    if why:
+        # a test's or a drill's: neither the person's record nor their screen
+        _refuse(why)
+        return 4
     if record_it:
         record(level, text, nxt, source, client, "", tag, kind=kind, sub=clean(sub, 16),
                ref=ref if ID_RE.fullmatch(ref or "") else "", wid=clean(wid, 120))

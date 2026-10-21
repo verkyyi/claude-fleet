@@ -24,6 +24,18 @@
 #                          window whose pane is a nested tmux, on a home server whose
 #                          fleet-view an older release built (bare display-popup):
 #                          attach's view-keys --if-stale rebuilds it
+#   view-popup-window-moves  the panel open on a phone (45 columns, the message row
+#                          opening and folding — T701's status 2 ↔ on) or a 140-column
+#                          terminal, and the 看台's window changes under it (T741): a
+#                          select-window (the ⚡ job's go), then the window behind
+#                          closed — bin/fleet-popup-lib.sh's freeze follows the client,
+#                          not one wide glyph of the new window reaches the terminal;
+#                          the node conf keeps DECSLRM margins off (#2362, lost in #4423)
+#   notice-test-into-real-book  bin/fleet_notice.py's refused() (T741): a selftest whose
+#                          FLEET_CONF_DIR is the person's (run-selftests.sh's
+#                          FLEET_NOTICE_FORBID), and a drill run against the live install
+#                          with a fake hub (T672's https://127.0.0.1:9), each through
+#                          fleet_ui_fail — dash-raw-session.sh's refusal road
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
@@ -319,6 +331,132 @@ drill_view_popup_wide_bleed() {
     [ "$rc" = 0 ] || return 1
   done
   WHAT="会话背后一直在刷折行的中文（本机的、和看台里别的机器的 tmux）：看台的弹窗键都带 --freeze，别的版本建的旧表由 attach 的 view-keys --if-stale 重建；弹窗 ≤${SECS}s 画出来，开着的 1.9s 里背后一个宽字也没送到终端；关掉后退出 copy-mode、接着刷"
+}
+
+# view-popup-window-moves — the freeze held the window of the press only, so the
+# moment the 看台's window changed under an open popup (the ⚡ box's job going onto
+# its new session; the window behind closed and tmux moving the client on) the new
+# window streamed live under it and tmux 3.7c's wide-glyph bug broke the frame
+# (T741, on Termius: 「面板后面的字会透过去」). One leg per width: a real terminal
+# (a pty recording every byte), the 看台's status on top as attach sets it, the
+# message row opening and folding while the popup is up; window 0 (the press) is
+# quiet, 1 and 2 stream CJK.
+popup_follow_leg() {
+  local w=$1 t0 cl n0 n1 p
+  B=$(mktemp -d /tmp/thb.XXXXXX); printf '%s\n' "$B" >> "$WORK/thin-boxes"
+  mkdir -p "$B/s" "$B/bin"
+  printf '#!/bin/bash\nexec "%s" -S "%s/s/fl" "$@"\n' "$RT" "$B" > "$B/bin/tmux"; chmod +x "$B/bin/tmux"
+  cat > "$B/cjk.sh" <<'EOS'
+#!/bin/bash
+s=$(printf '龘%.0s' $(seq 80)); n=0
+while :; do printf '\033[H'; for r in $(seq 0 33); do printf '%*s%s' $(( (r + n) % 4 )) '' "$s"; [ $r -lt 33 ] && printf '\r\n'; done; n=$((n+1)); sleep 0.1; done
+EOS
+  chmod +x "$B/cjk.sh"
+  TT() { "$RT" -S "$B/s/fl" "$@"; }
+  # window 0 quiet (where the panel was opened), 1 and 2 stream CJK
+  TT -f /dev/null new-session -d -s fl -x "$w" -y 38 "sleep 300"
+  TT new-window -d -t fl:1 "$B/cjk.sh"; TT new-window -d -t fl:2 "$B/cjk.sh"
+  TT set -g status 2 \; set -g status-position top \; set -g status-interval 1 \
+    \; set -g 'status-format[1]' '✦ 消息 · 入口不通 中文中文中文 #(date +%S)'
+  # the node conf's margins row, set on this server as the conf sets it
+  local mg
+  mg=$(awk '$1=="set" && $2=="-s" && $3=="terminal-overrides[90]" {v=$4} END {print v}' "$BIN/../conf/tmux-attention.conf" | tr -d "\"'")
+  [ "$mg" = '*:Cmg@:Clmg@' ] || { WHY="$w: the node conf leaves the terminal's left/right margins on (#2362): ${mg:-no row}"; return 1; }
+  TT set -s 'terminal-overrides[90]' "$mg"
+  cat > "$B/term.py" <<'PY'
+import os, pty, select, sys, time, fcntl, termios, struct
+tmux, sock, out, cols = sys.argv[1:5]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"; os.environ["LANG"] = "en_US.UTF-8"
+    os.execvp(tmux, [tmux, "-u", "-S", sock, "attach", "-t", "fl"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 38, int(cols), 0, 0))
+o, end = open(out, "ab", buffering=0), time.time() + 40
+while time.time() < end:
+    if select.select([fd], [], [], 0.05)[0]:
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            break
+        if not d:
+            break
+        o.write(d)
+os.kill(pid, 9)
+PY
+  python3 "$B/term.py" "$RT" "$B/s/fl" "$B/out" "$w" & printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 5 sh -c '[ -n "$("$1" -S "$2" list-clients -F x)" ]' _ "$RT" "$B/s/fl" || { WHY="$w: the terminal did not attach"; return 1; }
+  cl=$(TT list-clients -F '#{client_name}' | head -n 1)
+  t0=$(now)
+  ( env TMUX="$B/s/fl,0,0" PATH="$B/bin:$PATH" bash "$BIN/dash-popup.sh" --client "$cl" \
+      --no-inline --freeze -w 100% -h 100% -- sleep 8 >/dev/null 2>&1 & )
+  until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="$w: the popup never drew its frame"; return 1; }
+  SECS=$(python3 -c 'import sys; print(max(float(sys.argv[1]), float(sys.argv[2])))' "${SECS:-0}" "$(since "$t0")")
+  # the window behind closes and tmux moves the client on to window 1 …
+  # (the message row folds and opens meanwhile: a whole repaint, which draws the
+  # held pane's still frame round a 90% popup — so the count starts after it)
+  TT kill-window -t fl:0
+  TT set -g status on; sleep 0.4; TT set -g status 2
+  sleep 0.6; n0=$(grep -ao '龘' "$B/out" | wc -l); sleep 1; n1=$(grep -ao '龘' "$B/out" | wc -l)
+  [ "$n1" = "$n0" ] || { WHY="$w: the window tmux moved the client to (the one behind closed) streamed $((n1 - n0)) wide glyphs onto the terminal"; return 1; }
+  # … then the 看台 goes onto window 2 under the popup (what the ⚡ job's go does)
+  TT select-window -t fl:2
+  sleep 0.6; n0=$(grep -ao '龘' "$B/out" | wc -l); sleep 1; n1=$(grep -ao '龘' "$B/out" | wc -l)
+  [ "$n1" = "$n0" ] || { WHY="$w: the window the 看台 moved to under the popup streamed $((n1 - n0)) wide glyphs onto the terminal"; return 1; }
+  p=$(TT list-panes -t fl:2 -F '#{pane_id}')
+  [ "$(TT display -p -t "$p" '#{pane_in_mode}')" = 1 ] || { WHY="$w: the window moved to is not held"; return 1; }
+  until_ok 10 sh -c '[ "$("$1" -S "$2" display -p -t "$3" "#{pane_in_mode}")" = 0 ]' _ "$RT" "$B/s/fl" "$p" \
+    || { WHY="$w: the pane was left in copy-mode after the popup closed"; return 1; }
+  sleep 0.5; [ "$(grep -ao '龘' "$B/out" | wc -l)" -gt "$n1" ] || { WHY="$w: the session never drew again after the popup closed"; return 1; }
+}
+drill_view_popup_window_moves() {
+  CAP=6   # popup open → its frame on the terminal (each width)
+  local w
+  SECS=0
+  for w in 45 140; do
+    popup_follow_leg "$w"; local rc=$?
+    th_done
+    [ "$rc" = 0 ] || return 1
+  done
+  WHAT="面板开着（45 列手机、140 列；顶栏下的消息行开开合合），看台的窗口在它底下换了（⚡ 的 go、背后的窗口关了 tmux 把客户端挪走）：冻结跟着客户端走，新窗口一个宽字也没送到终端；节点 conf 关着左右边距；弹窗 ≤${SECS}s 画出来，关掉后退出 copy-mode、接着刷"
+}
+
+# notice-test-into-real-book — 2026-10-20 18:18 PDT a worker ran a drill by hand on
+# the live fleet (CCQUOTA_HUB_URL=https://127.0.0.1:9 bash dash-raw-session.sh …):
+# its refusal went through fleet_ui_fail into the person's record and their ⌘P 消息
+# (T741). Three legs on a sandbox record standing in for the person's: a test's
+# (FLEET_NOTICE_FORBID, the runner's hit marker touched), a drill's (a hub this
+# login does not talk to), and the person's own road (no override), which records.
+drill_notice_test_into_real_book() {
+  CAP=10
+  local t0 d book hit out rc n
+  d=$(mktemp -d /tmp/ntb.XXXXXX); printf '%s\n' "$d" >> "$WORK/thin-boxes"
+  mkdir -p "$d/conf/logs"; book="$d/conf/logs/notices.ndjson"; hit="$d/hit"
+  printf 'FLEET_HUB_URL="https://hub.example.test"\n' > "$d/conf/fleet.conf"
+  t0=$(now)
+  nb() { [ -f "$book" ] && wc -l < "$book" | tr -d ' ' || echo 0; }
+  ui_fail() {  # <env…> — dash-raw-session.sh's refuse() road, its words
+    env -u FLEET_NOTICE_FORBID -u FLEET_NOTICE_FORBID_HIT FLEET_CONF_DIR="$d/conf" FLEET_NOTICE_OWN_BOOK="$book" "$@" \
+      bash -c '. "$1/fleet-ui-lang.sh"; BIN=$1; FLEET_UI_LANG=zh fleet_ui_fail "repo authority: 入口不通 — https://127.0.0.1:9: [Errno 61] Connection refused"' _ "$BIN" 2>&1
+  }
+  # a test: its conf IS the person's record
+  out=$(ui_fail FLEET_NOTICE_FORBID="$book" FLEET_NOTICE_FORBID_HIT="$hit")
+  n=$(nb); [ "$n" = 0 ] || { WHY="a test's notice reached the person's record ($n rows)"; return 1; }
+  [ -s "$hit" ] || { WHY="the runner's marker was not touched — the test would stay green"; return 1; }
+  # a drill against the live install: a hub this login does not talk to
+  out=$(ui_fail CCQUOTA_HUB_URL=https://127.0.0.1:9)
+  n=$(nb); [ "$n" = 0 ] || { WHY="a drill's notice (a fake hub) reached the person's record"; return 1; }
+  out=$(env -u FLEET_NOTICE_FORBID -u FLEET_NOTICE_FORBID_HIT FLEET_CONF_DIR="$d/conf" FLEET_NOTICE_OWN_BOOK="$book" CCQUOTA_HUB_URL=https://127.0.0.1:9 \
+        python3 "$BIN/fleet_notice.py" notify error 'x' 2>&1); rc=$?
+  [ "$rc" = 4 ] || { WHY="fleet_notice.py notify under a fake hub: rc $rc, want 4"; return 1; }
+  case "$out" in *'not recorded'*'127.0.0.1:9'*) ;; *) WHY="the refusal says nothing on stderr: $out"; return 1 ;; esac
+  # the person's own road (their hub, no forbid) records as before
+  out=$(ui_fail CCQUOTA_HUB_URL=https://hub.example.test)
+  n=$(nb); [ "$n" = 1 ] || { WHY="the person's own refusal was not recorded ($n rows): $out"; return 1; }
+  # the runner names the forbid list and the marker
+  grep -q 'export FLEET_NOTICE_FORBID' "$BIN/run-selftests.sh" && grep -q 'FLEET_NOTICE_FORBID_HIT=' "$BIN/run-selftests.sh" \
+    || { WHY="run-selftests.sh no longer guards the person's record"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="dash-raw-session 的拒绝（fleet_ui_fail）：测试（FLEET_NOTICE_FORBID）写不进真实消息记录、标记让测试变红；对着假入口（127.0.0.1:9）的演练也写不进；本人自己的入口照常记一条"
 }
 
 drill_view_far_reaped() {

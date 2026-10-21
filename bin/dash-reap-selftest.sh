@@ -364,7 +364,9 @@ rm "$WORK/fakepath/python3" "$WORK/noconf/fleets/s1/conf"
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok "" "@9"
 grep -q 'MSG.*no issue' "$TMLOG" || st_fail "no-issue row should refuse with 'no issue'"
-[ "$(grep '^MSG' "$TMLOG" | grep -cv ' -p ')" = 1 ] || st_fail "a refusal is EXACTLY one line (issue #1618)" "$(cat "$TMLOG")"
+# (fleet_notice.py's has-session — "is there a server to draw on" with no $TMUX —
+# draws nothing; only CI, which has no $TMUX, ever saw it)
+[ "$(grep '^MSG' "$TMLOG" | grep -v ' has-session' | grep -cv ' -p ')" = 1 ] || st_fail "a refusal is EXACTLY one line (issue #1618)" "$(cat "$TMLOG")"
 grep -q 'MSG.*✗ reap' "$TMLOG" || st_fail "the refusal goes through fleet_ui_fail ('✗ reap: …', issue #1618)" "$(cat "$TMLOG")"
 [ "$TOK" = "refused:no-issue" ] || st_fail "a refusal must print refused:no-issue (got [$TOK]) (#596)"
 [ "$RC" = 4 ] || st_fail "a refusal must exit 4, not a blanket 0 (got $RC) (#596)"
