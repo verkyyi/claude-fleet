@@ -13,10 +13,12 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
+import { viewAs } from "@/shared/viewAs";
 import { ChatThread } from "./pages/chat";
 import { RowPanel } from "./pages/sessions";
 import { TerminalView } from "./pages/terminal";
 import { Empty } from "./parts";
+import { useBack } from "./Shell";
 import { rowAgent, rowMachine, rowMeta } from "./session-list";
 import { sessionPath } from "./SessionList";
 import type { Row } from "./work";
@@ -50,30 +52,30 @@ export function Workspace({ r }: { r: Row }) {
   }, [view, termOn]);
   const [chatOn, setChatOn] = useState(view === "chat");
   useEffect(() => { if (view === "chat") setChatOn(true); }, [view]);
-  const back = () => (history.length > 1 ? go(-1) : go("/"));
+  const back = useBack();
   const agent = rowAgent(r);
 
   return (
     <div data-workspace={view} data-full={full ? "" : undefined}
       className={cn("bg-background flex flex-col", full ? "fixed inset-0 z-40 ps-[env(safe-area-inset-left)] pe-[env(safe-area-inset-right)]" : "h-full min-h-0")}>
-      <header className={cn("border-border/70 flex shrink-0 gap-2 border-b", full ? "items-center px-2 py-1" : "flex-col px-3 py-2 md:flex-row md:items-center md:px-4")}>
+      <header className={cn("border-border/70 flex shrink-0 gap-2 border-b", full ? "items-center px-2 py-1" : cn("flex-col px-3 pb-2 md:flex-row md:items-center md:px-4 md:pt-2", viewAs ? "pt-1" : "pt-[calc(env(safe-area-inset-top)+0.25rem)]"))}>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Button variant="ghost" size="icon" className={cn("size-8 shrink-0", !full && "-ms-1 md:hidden")} aria-label={tr("返回", "Back")} onClick={back}><ArrowLeft /></Button>
+          <Button variant="ghost" size="icon" className={cn("shrink-0", full ? "size-8" : "-ms-2 size-11 md:hidden")} aria-label={tr("返回", "Back")} onClick={back}><ArrowLeft /></Button>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-[15px] font-semibold leading-tight" title={r.title}>{r.title || r.code}</h1>
             {full ? null : <p className="text-muted-foreground truncate text-xs" data-testid="ws-meta">{rowMeta(r)}</p>}
           </div>
-          <Button variant="ghost" size={full ? "icon-sm" : "sm"} className="shrink-0" aria-label={tr("详情", "Details")} onClick={() => setDetails(true)}>
+          <Button variant="ghost" size={full ? "icon-sm" : "sm"} className={cn("shrink-0", !full && "h-11 min-w-11 md:h-8 md:min-w-0")} aria-label={tr("详情", "Details")} onClick={() => setDetails(true)}>
             <Info />{full ? null : <span className="hidden sm:inline">{tr("详情", "Details")}</span>}
           </Button>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className={cn("flex min-w-0 shrink-0 items-center gap-2", !full && "flex-wrap")}>
           <ToggleGroup type="single" variant="outline" size="sm" value={view} onValueChange={(v) => { if (v) setView(v as View); }} aria-label={tr("看法", "View")}>
-            <ToggleGroupItem value="chat" aria-label={tr("对话", "Chat")} className="px-3"><MessageCircle />{full ? null : tr("对话", "Chat")}</ToggleGroupItem>
-            <ToggleGroupItem value="term" aria-label={tr("终端", "Terminal")} className="px-3"><TerminalSquare />{full ? null : tr("终端", "Terminal")}</ToggleGroupItem>
+            <ToggleGroupItem value="chat" aria-label={tr("对话", "Chat")} className={cn("px-3", !full && "h-11 md:h-8")}><MessageCircle />{full ? null : tr("对话", "Chat")}</ToggleGroupItem>
+            <ToggleGroupItem value="term" aria-label={tr("终端", "Terminal")} className={cn("px-3", !full && "h-11 md:h-8")}><TerminalSquare />{full ? null : tr("终端", "Terminal")}</ToggleGroupItem>
           </ToggleGroup>
           {/* the terminal's own tools — Fleet 菜单 · 打开 Shell · 配色 / 字号 — land here */}
-          <div ref={setTools} className="flex items-center gap-2 empty:hidden" data-testid="ws-tools" />
+          <div ref={setTools} className={cn("flex items-center gap-2 empty:hidden", !full && "max-md:[&_button]:size-11")} data-testid="ws-tools" />
         </div>
       </header>
       <div className="relative min-h-0 flex-1">

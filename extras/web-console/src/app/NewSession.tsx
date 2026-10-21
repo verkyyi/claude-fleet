@@ -27,7 +27,7 @@ import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { newChat } from "./chat/chat";
 import { rememberProvider, useVisualViewport } from "./pages/chat";
-import { usePage, useShell } from "./Shell";
+import { useBack, usePage, useShell } from "./Shell";
 import { sessionPath, WEB_CHAT_PATH } from "./SessionList";
 import { shellPath } from "./legacy";
 import {
@@ -65,6 +65,7 @@ export default function NewSession() {
   usePage(tr("新建会话", "New session"));
   useVisualViewport();
   const go = useNavigate();
+  const back = useBack();
   const { me } = useShell();
   const { rows, reload, markSeen } = useWorkRows();
   const homeRead = useLoad<Home>("/v1/chat/home");
@@ -140,10 +141,10 @@ export default function NewSession() {
   return (
     <div className="flex h-full flex-col" data-testid="new-session">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-4 pt-3 pb-4 md:px-6 md:pt-10">
+        <div className={cn("mx-auto w-full max-w-2xl px-4 pb-4 md:px-6 md:pt-10", viewAs ? "pt-1" : "pt-[calc(env(safe-area-inset-top)+0.25rem)]")}>
           <div className="mb-4 flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="-ms-2 size-8 md:hidden" aria-label={tr("返回", "Back")}
-              onClick={() => (history.length > 1 ? go(-1) : go("/"))}><ArrowLeft /></Button>
+            <Button variant="ghost" size="icon" className="-ms-3 size-11 md:hidden" aria-label={tr("返回", "Back")}
+              onClick={back}><ArrowLeft /></Button>
             <h1 className="font-display text-[24px] leading-tight font-semibold tracking-tight md:text-[28px]">
               {tr("新建会话", "New session")}<span className="text-clay">{tr("。", ".")}</span>
             </h1>
@@ -163,14 +164,14 @@ export default function NewSession() {
             <Label>{tr("助手", "Assistant")}</Label>
             <ToggleGroup type="single" variant="outline" value={choice.agent} onValueChange={(v) => v && setChoice({ agent: v as Agent })}
               className="w-full" disabled={!!viewAs}>
-              {AGENTS[choice.mode].map((a) => <ToggleGroupItem key={a} value={a} className="flex-1">{AGENT_NAME[a]()}</ToggleGroupItem>)}
+              {AGENTS[choice.mode].map((a) => <ToggleGroupItem key={a} value={a} className="h-11 flex-1 md:h-9">{AGENT_NAME[a]()}</ToggleGroupItem>)}
             </ToggleGroup>
           </div>
 
           <div className="mt-4 space-y-1.5">
             <Label htmlFor="new-machine">{tr("机器", "Machine")}</Label>
             <Select value={target?.hostname || ""} onValueChange={(v) => setChoice({ machine: v })} disabled={homeOnly || !!viewAs || machines.length < 2}>
-              <SelectTrigger id="new-machine" className="w-full">
+              <SelectTrigger id="new-machine" className="w-full data-[size=default]:h-11 md:data-[size=default]:h-9">
                 <SelectValue placeholder={loading ? tr("读取中…", "Loading…") : tr("没有能用的机器", "No machine to use")} />
               </SelectTrigger>
               <SelectContent>
@@ -199,7 +200,7 @@ export default function NewSession() {
               : choice.mode === "chat" ? tr("先说一句（可以不写）", "Say something first (optional)")
               : tr("要它做什么（可以不写）", "What should it do (optional)")}
             className="max-h-40 min-h-11 flex-1 resize-none border-0 bg-transparent px-0 py-2 text-base shadow-none focus-visible:ring-0 dark:bg-transparent" />
-          <Button size="icon" className="size-10 shrink-0 rounded-full" disabled={!canStart} onClick={start} data-testid="new-start"
+          <Button size="icon" className="size-11 shrink-0 rounded-full md:size-10" disabled={!canStart} onClick={start} data-testid="new-start"
             aria-label={tr("开始", "Start")} title={tr("开始", "Start")}>
             {busy || waiting ? <Loader className="animate-spin" aria-hidden /> : <ArrowUp />}
           </Button>
