@@ -29,7 +29,7 @@ sys.path.insert(0, str(BIN))
 import fleet_control as control
 import fleet_hub as hub_module
 from fleet_config_write import revision, write
-from fleet_hub_common import Fault, PROTOCOL, SCOPE_OF, canonical, now, parse_worker_id, validate_write
+from fleet_hub_common import Fault, PROTOCOL, SCOPE_OF, canonical, check_text, now, parse_worker_id, validate_write
 
 try:
     HAS_MCP_SDK = version("mcp") == "2.2.0"
@@ -932,6 +932,22 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         two = self.lifecycle("worker_message", idem="msg-two", text="anyone?")
         self.assertEqual((two["status"], two["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
         self.assertEqual(len(self.node.calls("peer")), 2)
+
+    def test_check_text_passes_only_a_batch_marker_line(self):
+        # T815: an EPIC's charter carries <!-- fleet:epic … --> on its own line (a redo
+        # <!-- fleet:prev <ID> -->) and is placed; every other comment is refused —
+        # the hub's TestCheckTextBatchMark, case for case.
+        for text in ("<!-- fleet:epic repo=verkyyi/claude-fleet short=活页域名 agent=claude cap=3 -->\n## 成员",
+                     "the words\n  <!-- fleet:prev 9f1c2d3e-0a1b-4c2d-8e3f-1234567890ab -->\n",
+                     "<!--fleet:epic-->"):
+            with self.subTest(text=text):
+                check_text(text, "body")
+        for text in ("hi <!-- fleet:x -->", "<!-- fleet:no-relay -->", "<!-- fleet:epic-member C1 -->",
+                     "<!-- fleet:only issue-2 -->", "text <!-- fleet:epic cap=3 -->",
+                     "<!-- fleet:epic cap=3 --> <!-- fleet:from x -->", "<!-- fleet:epic cap=3\n-->",
+                     "<!-- just a note -->", "<!-- fleet:epic --><!-- fleet:no-relay -->"):
+            with self.subTest(text=text), self.assertRaises(Fault):
+                check_text(text, "body")
 
     def gh_grant(self, *scopes):
         return self.hub.grant("ipad", [self.fleet], ["fleet:read", *scopes])["token"]

@@ -303,6 +303,13 @@ func checkIssueTitle(v any) (string, error) {
 	return strings.TrimSpace(t), nil
 }
 
+// batchMarkRE is the one comment a text may carry (T815): a whole line
+// holding a batch's own marker — <!-- fleet:epic k=v … --> on an EPIC's
+// charter, <!-- fleet:prev <ID> --> on a redo — read by fleet-epic-tick.py.
+// No other fleet: name (no-relay, from, only, carried, handoff …) passes, so
+// the bridge's rails stay unforgeable. check_text's BATCH_MARK, letter for letter.
+var batchMarkRE = regexp.MustCompile(`(?m)^[ \t]*<!--[ \t]*fleet:(?:epic|prev)(?:[ \t]+[^\s<>]+)*[ \t]*-->[ \t]*$`)
+
 // checkText is check_text: 1–4000 characters, not blank, and nothing that
 // could forge the bridge's <!-- fleet:… --> markers or drive a pane.
 func checkText(v any, what string) (string, error) {
@@ -310,7 +317,7 @@ func checkText(v any, what string) (string, error) {
 	if !ok || strings.TrimSpace(t) == "" || len([]rune(t)) > maxFleetText {
 		return "", fault("INVALID_ARGUMENT", fmt.Sprintf("%s must be 1-%d characters", what, maxFleetText))
 	}
-	if strings.Contains(t, "<!--") {
+	if strings.Contains(batchMarkRE.ReplaceAllString(t, ""), "<!--") {
 		return "", fault("INVALID_ARGUMENT", what+" must not contain HTML comments or control characters")
 	}
 	for _, c := range t {
