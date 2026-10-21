@@ -111,6 +111,11 @@
 #                         no address of the client's choosing, no remote forward, a
 #                         key the hub took away opens no new tunnel (go test
 #                         TestJumpOnlyToTheirOwnPod); unset, the listener stays sshd
+#   door-home-hostcert    the door's hop home when the home's entry sshd also carries
+#                         a host certificate (A5SQ go-live, 2026-10-21): the door asks
+#                         for the pinned plain key and takes a certificate only for
+#                         that key; a refused hop tells the phone why on its screen
+#                         (go test TestDoorTakesEachPersonHome, ./e2e)
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1355,6 +1360,18 @@ PY
   go_half '^TestJumpOnlyToTheirOwnPod$' ./agent/door; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="门的监听换成 ccquota door：跳转账号只把钥匙接到它主人自己 pod 的 sshd，不开会话、不到别的 pod、不到客户端随便点的地址、不许反向转发，钥匙被撤后这条连接也开不了新隧道；不设 FLEET_DOOR_SERVER（或 runtime 里没有 ccquota）就照旧是 sshd；$gohalf"
+}
+
+drill_door_home_hostcert() {
+  CAP=200
+  local t0 gohalf; t0=$(now)
+  grep -q 'ssh.HostCert' "$ROOT/tokenledger/e2e/door_test.go" 2>/dev/null \
+    || { WHY="the e2e home no longer presents a host certificate"; return 1; }
+  grep -q 'func pinnedHostKey' "$ROOT/tokenledger/agent/door/door.go" || { WHY="the door's pin no longer looks through a certificate"; return 1; }
+  gohalf="no go toolchain here — the Go gate runs TestDoorTakesEachPersonHome"
+  go_half '^TestDoorTakesEachPersonHome$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="家的本机入口同时带主机证书：门只要入口钉住的那把明钥匙、证书只认里面是那把钥匙的，照样落到家；钉的钥匙不对时拒，并把原因打到手机屏幕上；$gohalf"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
