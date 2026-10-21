@@ -13,7 +13,7 @@ const F = '5b1e0000-0000-4000-8000-00000000f001';
 const fid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const v1 = (x) => ({ authority_version: 1, generation: 1, created_at: new Date().toISOString(), title: 'x', ...x });
 const now = Date.now();
-const sess = (id, state, x = {}) => ({ id: `${F}/${id}`, key: id, title: id, repo: '', machine: 'mini2', state, group: 'run',
+const sess = (id, state, x = {}) => ({ id: `${F}/${id}`, key: id, title: id, repo: '', machine: 'build-box', state, group: 'run',
   ask: null, born: (now - 3 * 3600e3) / 1000, ended: '', tokens: 0, say: '', ...x });
 
 const tasks = [
@@ -25,7 +25,7 @@ const tasks = [
 const live = [sess('a', 'needs', { ask: { kind: 'question', msg: '设计页已发布，等你点头' } }), sess('e', 'working')];
 const W = (tag, words) => ({ tag, words });
 const board = { count: 5, groups: {}, gone_days: 7, digest: 'x', rows: [
-  { id: fid(30), task: 'T30', task_id: fid(30), title: 'webchat codex', group: 'ask', ...W('asking', ['在问你', 'Asking you']), worker_id: `${F}/a`, machine: 'mini2', at: 90 },
+  { id: fid(30), task: 'T30', task_id: fid(30), title: 'webchat codex', group: 'ask', ...W('asking', ['在问你', 'Asking you']), worker_id: `${F}/a`, machine: 'build-box', at: 90 },
   { id: fid(31), task: 'T31', task_id: fid(31), title: 'epic', group: 'work', ...W('working', ['在干活', 'Working']), worker_id: `${F}/e`, at: 80 },
   { id: fid(32), task: 'T32', task_id: fid(32), title: 'member', group: 'work', ...W('working', ['在干活', 'Working']), parent: fid(31), depth: 1, at: 70 },
   { id: 'loose', title: 'a loose shell', group: 'work', ...W('working', ['在干活', 'Working']), machine: 'office-mac', at: 60 },
@@ -68,7 +68,7 @@ assert.equal(searchRows(rows, '').length, rows.length);
 
 // the one detail line: code · machine · agent · where · how long
 // (node's language is the machine's: either one)
-assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · mini2 · Claude Code · (在终端里|in a terminal) · (开了 3 小时|open 3 h)$`));
+assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · build-box · Claude Code · (在终端里|in a terminal) · (开了 3 小时|open 3 h)$`));
 assert.match(rowMeta(gone[0], now), /^(已结束|ended)$/);
 assert.match(openFor(now - 5 * 60e3, now), /^(开了 5 分钟|open 5 min)$/);
 assert.equal(openFor(0, now), '');
