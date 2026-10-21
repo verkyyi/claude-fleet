@@ -460,21 +460,54 @@ func (s *Server) goHome(ctx context.Context, sconn *ssh.ServerConn) (*ssh.Client
 	}
 	hc, hchans, hreqs, err := ssh.NewClientConn(stream, cert.Machine, &ssh.ClientConfig{
 		User: cert.Login, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			for _, k := range known {
-				if bytes.Equal(k.Marshal(), key.Marshal()) {
-					return nil
-				}
-			}
-			return errors.New("your home answered with a host key the hub does not know")
-		},
-		Timeout: s.cfg.HandshakeTimeout,
+		// ask for the plain keys the hub pinned: a home whose entry sshd also
+		// carries a host certificate would otherwise answer with that first
+		HostKeyAlgorithms: plainHostKeyAlgos(known),
+		HostKeyCallback:   pinnedHostKey(known),
+		Timeout:           s.cfg.HandshakeTimeout,
 	})
 	if err != nil {
 		stream.Close()
 		return nil, cert, fmt.Errorf("log in at your home: %w", err)
 	}
 	return ssh.NewClient(hc, hchans, hreqs), cert, nil
+}
+
+// plainHostKeyAlgos is the host key algorithms of known, plain (never a
+// certificate's), RSA as its SHA-2 signatures.
+func plainHostKeyAlgos(known []ssh.PublicKey) []string {
+	var out []string
+	add := func(a string) {
+		if !containsString(out, a) {
+			out = append(out, a)
+		}
+	}
+	for _, k := range known {
+		if k.Type() == ssh.KeyAlgoRSA {
+			add(ssh.KeyAlgoRSASHA512)
+			add(ssh.KeyAlgoRSASHA256)
+			continue
+		}
+		add(k.Type())
+	}
+	return out
+}
+
+// pinnedHostKey accepts the home's host key only when it is one the hub gave
+// — or a host certificate whose key is (the pin is the key; the certificate
+// is the home's own business).
+func pinnedHostKey(known []ssh.PublicKey) ssh.HostKeyCallback {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if c, ok := key.(*ssh.Certificate); ok {
+			key = c.Key
+		}
+		for _, k := range known {
+			if bytes.Equal(k.Marshal(), key.Marshal()) {
+				return nil
+			}
+		}
+		return errors.New("your home answered with a host key the hub does not know")
+	}
 }
 
 // session asks the hub for the hop's certificate.
@@ -554,15 +587,32 @@ func tellAndClose(chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, why str
 		if err != nil {
 			return
 		}
+		// the reason is written once the client has asked for its shell /
+		// command — a phone's app shows nothing it received before that —
+		// on stdout (a terminal app shows it) and stderr (a plain ssh keeps it)
+		told := make(chan struct{})
 		go func() {
+			once := false
 			for r := range creqs {
+				start := r.Type == "shell" || r.Type == "exec" || r.Type == "subsystem"
 				if r.WantReply {
-					r.Reply(r.Type == "pty-req" || r.Type == "shell" || r.Type == "exec" || r.Type == "env", nil)
+					r.Reply(start || r.Type == "pty-req" || r.Type == "env", nil)
+				}
+				if start && !once {
+					once = true
+					close(told)
 				}
 			}
 		}()
+		select {
+		case <-told:
+		case <-t.C:
+		}
+		fmt.Fprintf(ch, "%s\r\n", why)
 		fmt.Fprintf(ch.Stderr(), "%s\r\n", why)
 		ch.SendRequest("exit-status", false, ssh.Marshal(struct{ S uint32 }{1}))
+		ch.CloseWrite()
+		time.Sleep(200 * time.Millisecond)
 		ch.Close()
 	case <-t.C:
 	}

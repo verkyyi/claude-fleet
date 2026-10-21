@@ -37,6 +37,18 @@ func doorHomeSSHD(t *testing.T, ca ssh.PublicKey, login string) (string, string)
 		return checker.Authenticate(c, key)
 	}}
 	cfg.AddHostKey(signer)
+	// as a home whose entry sshd also carries a host certificate (the "host
+	// key never changes" work): a client that asks for certificates first gets one
+	_, hcak, _ := ed25519.GenerateKey(rand.Reader)
+	hca, _ := ssh.NewSignerFromKey(hcak)
+	hc := &ssh.Certificate{Key: signer.PublicKey(), CertType: ssh.HostCert, KeyId: "host:home",
+		ValidPrincipals: []string{"home"}, ValidBefore: ssh.CertTimeInfinity}
+	if err := hc.SignCert(rand.Reader, hca); err != nil {
+		t.Fatal(err)
+	}
+	if cs, err := ssh.NewCertSigner(hc, signer); err == nil {
+		cfg.AddHostKey(cs)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +185,13 @@ func TestDoorTakesEachPersonHome(t *testing.T) {
 	}
 	if _, err := login("bob", bob); err == nil {
 		t.Fatal("bob, whose home the book does not take, went through")
+	}
+	// the hub's pin for the home is wrong: refused, and the client is told why
+	if err := h.Srv.Store.SetEntryHostKey(host, dca.PublicKey(), now); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := login("alice", alice); !strings.Contains(out, "fleet 门：接不到你的家") || !strings.Contains(out, "host key") {
+		t.Fatalf("a refused hop told the client %q", out)
 	}
 	if a := audit.String(); !strings.Contains(a, `"result":"home"`) || !strings.Contains(a, `"home":"alice@`+host+`"`) {
 		t.Fatalf("audit: %s", audit.String())
