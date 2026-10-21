@@ -52,7 +52,12 @@
 //      login B puts it back — the page reads the same history under B's home, the next
 //      turn is a NEW session seeded with the last words — and an import onto a login
 //      that already has a conversation is refused 409 (BREAK-IT trial-transcript-cross)
-//   --only=socket|budget|context|home|idle|trial|local (comma list) runs those parts only — the drills' road.
+//   P  images (task T773), in the socket mode: a tool result's image, a reply's image and the
+//      person's own picture come out as {t:"image"} items (live and read back) — never their
+//      bytes in the JSON; /api/file serves each by its ref (its type, a sandbox CSP, kept
+//      0600 under a 0700 media/), a ref that is not one 404s; one over the size bound is
+//      {big:true}; past the per-reply bound the rest are counted on one image_more
+//   --only=socket|budget|context|home|idle|trial|media|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -70,7 +75,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -142,6 +147,15 @@ async function* one(prompt, options) {
     const api = 'API Error: 403 {"type":"error","error":{"type":"permission_error","message":"cred-proxy: 已达个人额度：近 5 小时已用 250k / 上限 200k token（person_budget_exceeded）","code":"person_budget_exceeded","reset_at":"2030-01-01T05:00:00Z"}}';
     yield { type: "assistant", session_id: SID, message: { content: [{ type: "text", text: api }] } };
     yield { type: "result", subtype: "success", is_error: true, result: api, session_id: SID, duration_ms: 1 };
+    return;
+  }
+  if (prompt === "pic") {                // images (P): a tool result's, the reply's, one too big, one past the bound
+    const png = (tail) => ({ type: "image", source: { type: "base64", media_type: "image/png", data: Buffer.concat([Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"), Buffer.from(tail)]).toString("base64") } });
+    const tr1 = { type: "assistant", message: { content: [{ type: "tool_use", id: "tu-pic", name: "Read", input: { file_path: "/x/a.png" } }] } };
+    const tr2 = { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu-pic", content: [{ type: "text", text: "读了" }, png("one")] }] } };
+    const tr3 = { type: "assistant", message: { content: [{ type: "text", text: "看图" }, png("two"), png("x".repeat(400)), png("one")] } };
+    for (const m of [tr1, tr2, tr3]) { appendFileSync(tr, JSON.stringify(m) + "\\n"); yield { ...m, session_id: SID }; }
+    yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
     return;
   }
   if (prompt === "slow") {
@@ -449,6 +463,52 @@ if (part("trial")) {
     "N a second import onto B is refused 409");
   ok(/"ev":"imported"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "N the log says imported");
   await sstop(b);
+}
+// ---- P: images (task T773) -------------------------------------------------------------
+if (part("media")) {
+  mkdirSync(homeOf("m"), { recursive: true });
+  SSTATE = stateOf("m"); SOCK = join(SSTATE, "chat.sock");
+  const m = (await sstart(["--socket"], { ...asHome("m"), FLEET_WEBCHAT_IMAGE_MAX: "200", FLEET_WEBCHAT_IMAGES_PER_REPLY: "3" })).p;
+  const live = (await sturn("pic")).lines;
+  const imgs = live.filter((o) => o.t === "image");
+  ok(imgs.length === 3 && imgs[0].id === "tu-pic" && imgs[0].w === 1 && imgs[0].h === 1 && /^[0-9a-f]{32}\.png$/.test(imgs[0].ref) &&
+    imgs[1].ref && imgs[1].ref !== imgs[0].ref && imgs[2].big === true && !imgs[2].ref, `P live: the tool's image, the reply's, one too big (${JSON.stringify(imgs)})`);
+  ok(live.filter((o) => o.t === "image_more").length === 1, "P live: the fourth image is counted, not shown");
+  ok(!live.some((o) => JSON.stringify(o).includes("iVBOR")), "P live: no image bytes in the stream");
+  const f = await new Promise((resolve, reject) => {
+    const r = http.request({ socketPath: SOCK, path: "/api/file?ref=" + imgs[0].ref, headers: { Host: "webchat" } }, (res) => {
+      const parts = []; res.on("data", (d) => parts.push(d)); res.on("end", () => resolve({ status: res.statusCode, h: res.headers, body: Buffer.concat(parts) }));
+    });
+    r.on("error", reject); r.end();
+  });
+  ok(f.status === 200 && f.h["content-type"] === "image/png" && f.body.subarray(0, 8).toString("hex") === "89504e470d0a1a0a" && f.body.toString().endsWith("one"),
+    `P /api/file: the image's own bytes, as image/png (${f.status} ${f.h["content-type"]})`);
+  ok(/sandbox/.test(f.h["content-security-policy"] || "") && f.h["x-content-type-options"] === "nosniff" && /immutable/.test(f.h["cache-control"] || ""),
+    "P /api/file: a sandbox CSP, nosniff, kept by the browser");
+  for (const bad of ["../conversation.json", imgs[0].ref.replace(".png", ".html"), "0".repeat(32) + ".png", ""]) {
+    ok((await sreq("/api/file?ref=" + encodeURIComponent(bad))).status === 404, `P /api/file refuses ${JSON.stringify(bad)}`);
+  }
+  const media = join(SSTATE, "media");
+  ok(mode(media) === 0o700 && readdirSync(media).filter((x) => !/thumb/.test(x)).every((x) => mode(join(media, x)) === 0o600), "P media/ is 0700, each image 0600");
+  // the person's own picture, as a later turn will write it (C): on their line
+  const tr = join(homeOf("m"), ".claude", "projects", mangle(homeOf("m")), SID + ".jsonl");
+  const pic = readFileSync(tr, "utf8").match(/"data":"([^"]+)"/)[1];
+  writeFileSync(tr, readFileSync(tr, "utf8") + JSON.stringify({ type: "user", message: { role: "user", content: [
+    { type: "image", source: { type: "base64", media_type: "image/png", data: pic } }, { type: "text", text: "这张呢" }] } }) + "\n");
+  const items = JSON.parse((await sreq("/api/conversation")).body).items;
+  const mine = items.find((i) => i.t === "user" && i.text === "这张呢");
+  ok(mine?.images?.length === 1 && mine.images[0].ref === imgs[0].ref, "P read back: the person's picture rides on their line");
+  ok(items.filter((i) => i.t === "image").length === 3 && items.some((i) => i.t === "image_more") && !JSON.stringify(items).includes("iVBOR"),
+    "P read back: the same images, the same count past the bound, no bytes");
+  if (["/usr/bin/sips", "/usr/bin/convert", "/usr/bin/magick", "/opt/homebrew/bin/magick", "/usr/local/bin/magick"].some((x) => existsSync(x))) {
+    let th = [];
+    for (let i = 0; i < 20 && !th.length; i++) {
+      await new Promise((r) => setTimeout(r, 300));
+      th = JSON.parse((await sreq("/api/conversation")).body).items.filter((i) => i.t === "image" && /^data:image\/jpeg;base64,/.test(i.thumb || ""));
+    }
+    ok(th.length >= 1, `P a later read carries the small preview (thumb) the entry's copy keeps (${th.length})`);
+  } else console.log("note P: no sips / ImageMagick here — no previews to check");
+  await sstop(m);
 }
 if (!part("local")) {
   proxy.close();

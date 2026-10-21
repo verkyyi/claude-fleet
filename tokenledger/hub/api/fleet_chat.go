@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,12 @@ var chatRoutes = map[string]string{
 	"turn":         http.MethodPost,
 	"stop":         http.MethodPost,
 	"answer":       http.MethodPost,
+	// an image the conversation holds (task T773), by its ref — never a path
+	"file": http.MethodGet,
 }
+
+// chatFileRef is the one query a file request carries: the service's media name.
+var chatFileRef = regexp.MustCompile(`^[0-9a-f]{32}\.(?:png|jpg|gif|webp)$`)
 
 // chatHomeRoute is the one route the entry answers itself (claude-fleet#3646):
 // where the person's conversation runs, for the page's top bar — no relay.
@@ -112,6 +118,9 @@ const (
 	defaultChatPerPerson = 4
 	// defaultChatPerMinute bounds how many relays one person opens a minute.
 	defaultChatPerMinute = 60
+	// chatFilePerPerson / chatFilePerMinute bound one person's image loads (task T773).
+	chatFilePerPerson = 6
+	chatFilePerMinute = 300
 	// chatBodyMax bounds a POST: a turn's words, an answer.
 	chatBodyMax = 1 << 20
 )
@@ -296,11 +305,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if perMin == 0 {
 		perMin = defaultChatPerMinute
 	}
-	if why := s.chatGate.admit(person, max, perMin, time.Now()); why != "" {
+	// A page loads a reply's images side by side: they wait in their own line,
+	// never taking the slots a turn and its stream hold (task T773).
+	gateKey := person
+	if name == "file" {
+		if !chatFileRef.MatchString(r.URL.Query().Get("ref")) {
+			httpError(w, http.StatusNotFound, "no such file")
+			return
+		}
+		gateKey, max, perMin = person+"\x00file", chatFilePerPerson, chatFilePerMinute
+	}
+	if why := s.chatGate.admit(gateKey, max, perMin, time.Now()); why != "" {
 		s.chatRefuse(w, person, name, http.StatusTooManyRequests, why, "too many chat requests; wait a moment")
 		return
 	}
-	defer s.chatGate.release(person)
+	defer s.chatGate.release(gateKey)
 	// A trial line counted for this turn goes back when the turn gets no reply
 	// (claude-fleet#4248); nil for anything else.
 	var refund func(why string)
@@ -370,6 +389,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			out := pr.Out
 			out.URL.Scheme, out.URL.Host, out.Host = "http", "webchat", "webchat"
 			out.URL.Path, out.URL.RawPath, out.URL.RawQuery = "/api/"+name, "", ""
+			if name == "file" {
+				out.URL.RawQuery = "ref=" + pr.In.URL.Query().Get("ref")
+			}
 			// Nothing of the browser's goes on but what the service reads: never
 			// its cookies, never a person it names.
 			in := pr.In.Header
@@ -388,6 +410,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// NDJSON: each line reaches the page as the service writes it.
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
+			if name == "file" {
+				// an image by its content's name never changes: the page may keep it
+				w.Header().Del("Cache-Control")
+			}
 			if name == "conversation" && resp.StatusCode == http.StatusOK && viewAsAsked(r) == "" && s.chatMirrorOn(person) {
 				resp.Body = &chatMirrorTee{ReadCloser: resp.Body, done: func(b []byte) {
 					s.chatMirrorKeepBody(person, append([]byte(nil), b...), time.Now())

@@ -33,6 +33,7 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 		f.mu.Lock()
 		f.hits = append(f.hits, r.Method+" "+r.URL.Path+" person="+r.Header.Get("X-Fleet-Person")+" cookie="+r.Header.Get("Cookie"))
 		f.clients = append(f.clients, r.Header.Get("X-Fleet-Client"))
+		f.queries = append(f.queries, r.URL.RawQuery)
 		f.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/conversation":
@@ -63,6 +64,10 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			case <-time.After(10 * time.Second):
 			}
 			io.WriteString(w, `{"t":"done"}`+"\n")
+		case "/api/file":
+			w.Header().Set("Content-Type", "image/png")
+			w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
+			io.WriteString(w, fakePNG)
 		case "/api/stop", "/api/answer":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)
@@ -74,6 +79,9 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 	t.Cleanup(func() { srv.Close() })
 	return f
 }
+
+// fakePNG is what the fake service answers /api/file with.
+const fakePNG = "\x89PNG\r\n\x1a\nfake-image-bytes"
 
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
@@ -255,6 +263,7 @@ type fakeChatService struct {
 	mu           sync.Mutex
 	hits         []string // "<method> <path> person=<X-Fleet-Person> cookie=<Cookie>"
 	clients      []string // each request's X-Fleet-Client (claude-fleet#4034)
+	queries      []string // each request's raw query (task T773: a file's ref)
 	release      chan struct{}
 	conversation func(w http.ResponseWriter)
 	turn         func(w http.ResponseWriter) // set: /api/turn answers this way instead
