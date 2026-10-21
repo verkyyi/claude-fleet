@@ -1,20 +1,24 @@
 // Shell.tsx — the member side's frame (EPIC #3923 C3): on a phone (< 768) a
-// top bar (the mark, what is left of the person's limit) and the bottom bar of
-// the pages marked `tab` — 对话 · 会话 · 用量 · 我的 (任务 joined 会话, T769);
-// on a computer shadcn's Sidebar —
-// the pages, 管理后台 for an admin, the person and sign-out at its foot.
-// Stock shadcn/ui only; a page draws inside <main>.
+// top bar (the mark, what is left of the person's limit, the avatar into 我的)
+// and the bottom bar of the pages marked `tab` (任务 joined 会话, T769); on a
+// computer shadcn's Sidebar — the pages, 管理后台 for an admin, the person at
+// its foot, whose menu opens 用量 · 设备 · 设置 · 我的 · 管理后台 · 退出. Those
+// live in 我的 since GR5E C1, never in either bar. Stock shadcn/ui only; a
+// page draws inside <main>.
 //
 // The conversation is immersive (issue #3996): on a phone the bottom bar folds
 // away on 对话 — it takes no room — and the top bar's 菜单 brings it back;
 // typing or moving the thread folds it again, and every other page shows it
 // always. On a computer the sidebar folds to its icon strip (shadcn's
 // collapsible="icon"), the choice kept in this browser.
-import { createContext, useCallback, useContext, useEffect, useState, type ComponentProps, type FC, type ReactNode } from "react";
-import { Link, NavLink, useLocation } from "react-router";
-import { Eye, LayoutGrid, LogOut, ShieldCheck } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentProps, type FC, type ReactNode, type Ref } from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router";
+import { ChevronsUpDown, CircleUserRound, Eye, LayoutGrid, LogOut, ShieldCheck } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { NavigationMenu, NavigationMenuItem, NavigationMenuLink, NavigationMenuList } from "@/components/ui/navigation-menu";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader,
@@ -26,7 +30,7 @@ import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
-import { ADMIN_HREF, PAGES, type PageDef } from "./routes";
+import { ADMIN_HREF, ME_TABS, PAGES, meTab, type PageDef } from "./routes";
 import { TrialBar } from "./TrialBar";
 
 // What every page reads: who is signed in, what is left of their limit and
@@ -43,13 +47,13 @@ export function usePage(title: string) {
 export const quotaWords = (q: Quota) =>
   q.over ? tr("额度用完", "Limit reached") : `${tr("剩余", "Left")} ${q.pct}%`;
 
-// The limit capsule: what is left, a link to 用量.
+// The limit capsule: what is left, a link to 我的 · 用量.
 const QuotaPill: FC<{ quota: Quota | null }> = ({ quota }) =>
   quota ? (
     <Button asChild size="sm" variant="outline"
       className={cn("h-6 rounded-full px-2.5 font-mono text-[11px] no-underline",
         quota.over ? "border-clay-line text-clay" : "text-foreground")}>
-      <Link to="/usage" title={tr("我的用量", "My usage")}>{quotaWords(quota)}</Link>
+      <Link to={meTab("usage").path} title={tr("我的用量", "My usage")}>{quotaWords(quota)}</Link>
     </Button>
   ) : null;
 
@@ -65,19 +69,70 @@ function useActive() {
   return (p: PageDef) => !!p.page && (p.path === "/" ? pathname === "/" : pathname.startsWith(p.path));
 }
 
-const SignOut: FC<{ children: ReactNode }> = ({ children }) => (
+const SignOut: FC<{ children?: ReactNode; formRef?: Ref<HTMLFormElement> }> = ({ children, formRef }) => (
   // back to the site's front page after (claude-fleet#3798): to=site, a fixed word
-  <form method="post" action="/app/logout">
+  <form ref={formRef} method="post" action="/app/logout">
     <input type="hidden" name="to" value={document.documentElement.lang === "en" ? "site-en" : "site"} />
     {children}
   </form>
 );
 export { SignOut };
 
-const Side: FC = () => {
+const initial = (name: string) => (name[0] || "·").toUpperCase();
+
+// The person at the sidebar's foot, and their menu: 我的's tabs, 我的 itself,
+// 管理后台 for an admin, sign-out.
+const PersonMenu: FC = () => {
   const { me, quota } = useShell();
-  const active = useActive();
+  const go = useNavigate();
+  const out = useRef<HTMLFormElement>(null);
   const name = me?.name || me?.login || "";
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <SidebarMenuButton size="lg" tooltip={tr("我的", "Me")} aria-label={tr("我的", "Me")}
+              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+              <Avatar className="size-8"><AvatarFallback className="text-xs">{initial(name)}</AvatarFallback></Avatar>
+              <span className="grid min-w-0 flex-1 text-start leading-tight">
+                <span className="truncate text-sm font-medium">{name}</span>
+                {quota ? <span className="text-muted-foreground truncate font-mono text-[11px]">{quotaWords(quota)}</span> : null}
+              </span>
+              <ChevronsUpDown className="text-muted-foreground ms-auto size-4" />
+            </SidebarMenuButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="start" className="w-(--radix-dropdown-menu-trigger-width) min-w-52">
+            <DropdownMenuLabel className="truncate font-normal">
+              <span className="block truncate text-sm font-medium">{name}</span>
+              {quota ? <span className="text-muted-foreground block font-mono text-[11px]">{quotaWords(quota)}</span> : null}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {ME_TABS.filter((t) => t.id !== "account").map((t) => (
+              <DropdownMenuItem key={t.id} onSelect={() => go(t.path)}><t.icon />{t.label}</DropdownMenuItem>
+            ))}
+            <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
+            {isAdmin(me) ? (
+              <DropdownMenuItem asChild className="text-clay focus:text-clay [&_svg]:!text-clay">
+                <a href={ADMIN_HREF} className="no-underline"><ShieldCheck />{tr("管理后台", "Admin")}</a>
+              </DropdownMenuItem>
+            ) : null}
+            {me?.can_logout ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => out.current?.requestSubmit()}><LogOut />{tr("退出登录", "Sign out")}</DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {me?.can_logout ? <SignOut formRef={out} /> : null}
+      </SidebarMenuItem>
+    </SidebarMenu>
+  );
+};
+
+const Side: FC = () => {
+  const active = useActive();
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border">
       <SidebarHeader className="flex-row items-center gap-1 px-4 pt-4 pb-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-2">
@@ -103,32 +158,8 @@ const Side: FC = () => {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="px-3 pb-3">
-        {isAdmin(me) ? (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild tooltip={tr("管理后台", "Admin")} className="text-clay hover:text-clay">
-                <a href={ADMIN_HREF}><ShieldCheck />{tr("管理后台", "Admin")}</a>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        ) : null}
         <SidebarSeparator className="mx-0" />
-        <div className="flex items-center gap-2.5 px-1 pt-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-0">
-          <Link to="/me" className="text-foreground flex min-w-0 flex-1 items-center gap-2.5 no-underline" aria-label={tr("我的", "Me")}>
-            <Avatar className="size-8"><AvatarFallback className="text-xs">{(name[0] || "·").toUpperCase()}</AvatarFallback></Avatar>
-            <span className="min-w-0 group-data-[collapsible=icon]:hidden">
-              <span className="block truncate text-sm font-medium">{name}</span>
-              {quota ? <span className="text-muted-foreground block font-mono text-[11px]">{quotaWords(quota)}</span> : null}
-            </span>
-          </Link>
-          {me?.can_logout ? (
-            <SignOut>
-              <Button type="submit" variant="ghost" size="icon" className="size-8 group-data-[collapsible=icon]:hidden" aria-label={tr("退出登录", "Sign out")} title={tr("退出登录", "Sign out")}>
-                <LogOut />
-              </Button>
-            </SignOut>
-          ) : null}
-        </div>
+        <PersonMenu />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
@@ -162,7 +193,7 @@ const ViewAsBar: FC = () => {
 type Nav = { folds: boolean; open: boolean; setOpen: (o: boolean) => void };
 
 const TopBar: FC<{ nav: Nav }> = ({ nav }) => {
-  const { quota } = useShell();
+  const { me, quota } = useShell();
   return (
     <header className={cn("border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pb-2.5 backdrop-blur-md md:hidden",
       viewAs ? "pt-2.5" : "pt-[calc(env(safe-area-inset-top)+0.6rem)]")}>
@@ -177,6 +208,9 @@ const TopBar: FC<{ nav: Nav }> = ({ nav }) => {
           <LayoutGrid />
         </Button>
       ) : null}
+      <Link to={meTab("account").path} className="rounded-full no-underline" aria-label={tr("我的", "Me")} title={tr("我的", "Me")}>
+        <Avatar className="size-8"><AvatarFallback className="text-xs">{initial(me?.name || me?.login || "")}</AvatarFallback></Avatar>
+      </Link>
     </header>
   );
 };

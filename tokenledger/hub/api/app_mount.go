@@ -85,6 +85,13 @@ func isAppPage(p string) bool {
 // only: no old page answers at it.
 const mePagePath = "/me"
 
+// isMeTab says whether p is one of 我的's tabs (claude-fleet GR5E C1):
+// /app/me/usage · devices · settings · account — the console's page, which
+// draws the tab itself (an unknown one goes to 账号 there).
+func isMeTab(p string) bool {
+	return strings.HasPrefix(p, AppPrefix+mePagePath+"/")
+}
+
 // devicesPagePath is 设备 (C7): the computer's install, the phone's way in,
 // the keys and the person's own machines, one tab each (?tab=pc|phone|keys|home).
 // It takes over 设备与 SSH, 从手机连, 我的连接 and 我的机器.
@@ -548,7 +555,7 @@ func (s *Server) appMount(next http.Handler) http.Handler {
 		case p == AppPrefix || strings.HasPrefix(p, AppPrefix+"/"):
 			w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 			s.moveOn(w, r, func(w http.ResponseWriter, r *http.Request) {
-				if consoleNewLive(strings.TrimSuffix(p, "/")) && s.consoleBuilt("app") {
+				if (consoleNewLive(strings.TrimSuffix(p, "/")) || isMeTab(p)) && s.consoleBuilt("app") {
 					// a page the new console has taken over (claude-fleet#3926)
 					s.appSide().ServeHTTP(w, r)
 					return

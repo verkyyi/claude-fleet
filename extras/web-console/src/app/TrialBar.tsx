@@ -91,7 +91,7 @@ export const TrialBar: FC<{ trial: Trial | null; onAsked: (t: Trial) => void }> 
           {tr("申请转正", "Ask to become a member")}
         </Button>
       ) : (
-        <Link to="/usage" className="shrink-0 underline-offset-2 hover:underline">{tr("用量", "Usage")}</Link>
+        <Link to="/me/usage" className="shrink-0 underline-offset-2 hover:underline">{tr("用量", "Usage")}</Link>
       )}
     </div>
   );
