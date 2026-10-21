@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/authz"
 )
 
 // 页头显示当前登录用户 + 退出登录（claude-fleet#1467）。页头从 /v1/me 一个答案画出来：
@@ -83,6 +86,53 @@ func TestLogout_ClearsTheHubsCookiesAndShowsTheSignedOutPage(t *testing.T) {
 	resp = h.raw(t, "/app/devices", map[string]string{"Accept": "text/html"})
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/signin" {
 		t.Fatalf("退出后 /app/devices = %d → %q; want 302 → /app/signin", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// 退出 ends that browser's sign-in on the hub too (task J091), not only its
+// cookie: the value — a copy of it, and the renewal it got — is refused
+// afterwards; another browser of the same person is untouched.
+func TestLogout_RevokesThatSignInOnTheHub(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h, pAlice)
+	phone, laptop := personCookie(pAlice, "alice-gh"), personCookie(pAlice, "alice-gh")
+	me := func(c *http.Cookie) *http.Response {
+		return h.raw(t, "/v1/me", map[string]string{"Accept": "application/json", "Cookie": c.Name + "=" + c.Value})
+	}
+	// The phone's value renews (an hour left of a day): the renewal keeps its sid.
+	resp := me(phone)
+	var renewed *http.Cookie
+	for _, ck := range resp.Cookies() {
+		if ck.Name == authz.CookieName {
+			renewed = ck
+		}
+	}
+	if resp.StatusCode != http.StatusOK || renewed == nil {
+		t.Fatalf("renewal = %d %v", resp.StatusCode, renewed)
+	}
+	key := (&GitHubAuth{ClientSecret: testGitHubSecret}).sessionKey()
+	s0, _ := authz.VerifySession(phone.Value, key, time.Now())
+	s1, _ := authz.VerifySession(renewed.Value, key, time.Now())
+	if s0 == nil || s1 == nil || s0.Sid == "" || s1.Sid != s0.Sid {
+		t.Fatalf("renewal sid %+v → %+v; want kept", s0, s1)
+	}
+	if l, _ := authz.VerifySession(laptop.Value, key, time.Now()); l == nil || l.Sid == s0.Sid {
+		t.Fatalf("two sign-ins share a sid: %+v", l)
+	}
+
+	if r := h.postForm(t, "/logout", map[string]string{"Cookie": phone.Name + "=" + phone.Value, "Origin": h.http.URL}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST /logout = %d", r.StatusCode)
+	}
+	for name, c := range map[string]*http.Cookie{"the signed-out value": phone, "its renewal": renewed} {
+		if code := me(c).StatusCode; code == http.StatusOK {
+			t.Errorf("%s after 退出 = 200; want refused", name)
+		}
+	}
+	if code := me(laptop).StatusCode; code != http.StatusOK {
+		t.Errorf("another browser after 退出 = %d; want 200", code)
+	}
+	if code := me(personCookie(pAlice, "alice-gh")).StatusCode; code != http.StatusOK {
+		t.Errorf("signing in again after 退出 = %d; want 200", code)
 	}
 }
 

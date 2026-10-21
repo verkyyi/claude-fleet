@@ -141,7 +141,7 @@ func (s *Server) viewAsAdmit(w http.ResponseWriter, r *http.Request, sess *authz
 	if !strings.HasPrefix(r.URL.Path, "/v1/") {
 		s.auditViewAs(v, r.URL.Path)
 	}
-	as := &authz.Session{Sub: sess.Sub, Aud: sess.Aud, Exp: sess.Exp, Iat: sess.Iat, UID: target, Name: v.Name, Role: role}
+	as := &authz.Session{Sub: sess.Sub, Aud: sess.Aud, Exp: sess.Exp, Iat: sess.Iat, Sid: sess.Sid, UID: target, Name: v.Name, Role: role}
 	ctx = context.WithValue(withViewer(r.Context(), admin+" as "+target), principalKey{}, target)
 	ctx = context.WithValue(ctx, viewAsKey{}, v)
 	return withRole(withDoor(withSession(ctx, as), doorGitHub), role), true, false

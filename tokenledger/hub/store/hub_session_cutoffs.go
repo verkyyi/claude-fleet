@@ -29,3 +29,28 @@ func (s *Store) SessionCutoff(principal string) (int64, error) {
 	}
 	return nb, err
 }
+
+// RevokeSession refuses every session value carrying sid until exp, when it
+// would lapse anyway (task J091: 退出). Rows past their exp are swept here.
+func (s *Store) RevokeSession(sid, principal string, exp, now time.Time) error {
+	if sid == "" {
+		return errors.New("a revocation needs a sid")
+	}
+	if _, err := s.write.Exec(`DELETE FROM hub_session_revoked WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return err
+	}
+	_, err := s.write.Exec(`INSERT INTO hub_session_revoked (sid, principal_id, expires_at, at)
+		VALUES (?, ?, ?, ?) ON CONFLICT(sid) DO UPDATE SET expires_at = excluded.expires_at, at = excluded.at`,
+		sid, principal, exp.Unix(), fmtTime(now))
+	return err
+}
+
+// SessionRevoked reports whether sid's sign-in was ended by 退出.
+func (s *Store) SessionRevoked(sid string) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT 1 FROM hub_session_revoked WHERE sid = ?`, sid).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}

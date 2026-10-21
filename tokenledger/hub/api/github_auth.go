@@ -268,6 +268,12 @@ func (s *Server) personSessionValue(v string) (*authz.Session, string, bool) {
 		if nb, err := s.Store.SessionCutoff(sess.UID); err != nil || (nb > 0 && sess.Iat <= nb) {
 			return nil, "", false
 		}
+		// Revoked by 退出 (task J091): every value of that browser's sign-in.
+		if sess.Sid != "" {
+			if gone, err := s.Store.SessionRevoked(sess.Sid); err != nil || gone {
+				return nil, "", false
+			}
+		}
 	}
 	return sess, sess.UID, true
 }
@@ -330,14 +336,24 @@ func (s *Server) slideSession(w http.ResponseWriter, r *http.Request, sess *auth
 	if time.Unix(sess.Exp, 0).Sub(now) >= time.Duration(float64(ttl)*sessionSlide) {
 		return
 	}
-	http.SetCookie(w, s.personCookie(r, sess.Sub, sess.UID, sess.Name, role, now))
+	sid := sess.Sid
+	if sid == "" {
+		sid = authz.NewSid()
+	}
+	http.SetCookie(w, s.sidCookie(r, sid, sess.Sub, sess.UID, sess.Name, role, now))
 }
 
-// personCookie is the session cookie for a person signed in by kind.
+// personCookie is the session cookie for a person signed in by kind: a new
+// sign-in, so a new Sid.
 func (s *Server) personCookie(r *http.Request, kind, pid, name, role string, now time.Time) *http.Cookie {
+	return s.sidCookie(r, authz.NewSid(), kind, pid, name, role, now)
+}
+
+// sidCookie is personCookie for the sign-in sid.
+func (s *Server) sidCookie(r *http.Request, sid, kind, pid, name, role string, now time.Time) *http.Cookie {
 	return &http.Cookie{
 		Name:  authz.CookieName,
-		Value: authz.SignRole(kind, pid, name, role, s.sessionKey(), now, s.sessionTTL()),
+		Value: authz.SignSid(sid, kind, pid, name, role, s.sessionKey(), now, s.sessionTTL()),
 		Path:  "/",
 		// Host-only: no Domain.
 		HttpOnly: true,

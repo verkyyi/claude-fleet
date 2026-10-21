@@ -4,6 +4,7 @@ import (
 	"context"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -179,6 +180,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusServiceUnavailable, "could not close browser attachments; retry sign-out")
 			return
 		}
+		if err := s.revokeSession(r); err != nil {
+			httpError(w, http.StatusServiceUnavailable, "could not end this sign-in; retry sign-out")
+			return
+		}
 		for _, name := range []string{authz.CookieName, viewerCookie, loginCookie} {
 			http.SetCookie(w, &http.Cookie{
 				Name: name, Value: "", Path: "/", MaxAge: -1,
@@ -200,6 +205,23 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
 	}
+}
+
+// revokeSession ends the sign-in the request's cookie carries on the hub's
+// side too (task J091): clearing the cookie alone left the value — a copy of
+// it — good until its exp. A value with a Sid revokes that browser's sign-in
+// (its renewals too) and no other; one from before Sid moves the person's
+// cut-off instead, which ends every older value of theirs. No session: nothing.
+func (s *Server) revokeSession(r *http.Request) error {
+	sess, pid, ok := s.personSession(r)
+	if !ok || s.Store == nil {
+		return nil
+	}
+	now := time.Now()
+	if sess.Sid != "" {
+		return s.Store.RevokeSession(sess.Sid, pid, time.Unix(sess.Exp, 0), now)
+	}
+	return s.Store.CutSessions(pid, pid, now)
 }
 
 // logoutTo is where a signed-out browser goes: the signed-out page, or — when

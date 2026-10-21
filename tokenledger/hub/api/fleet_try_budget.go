@@ -78,7 +78,8 @@ func (s *Server) trialLeft(t *store.Trial, now time.Time) (secs, msgs int) {
 // trialState is what the chat's top bar reads.
 type trialState struct {
 	// State: running (holding a machine) · waiting · ended · member (a
-	// member, or approved: no trial to show).
+	// member, or approved: no trial to show) — and none, alone, when the
+	// trial is off.
 	State    string `json:"state"`
 	SecsLeft int    `json:"secs_left"`
 	MsgsLeft int    `json:"msgs_left"`
@@ -119,11 +120,9 @@ func (s *Server) trialStateOf(pid string, now time.Time) (trialState, error) {
 }
 
 // handleTryState answers GET TryStatePath for the signed-in trial person.
+// With the trial off it is {"state":"none"}, 200 (task J091): a signed-in page
+// asking is no error — only a request with no session is refused (401).
 func (s *Server) handleTryState(w http.ResponseWriter, r *http.Request) {
-	if !s.trialOn() {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		httpError(w, http.StatusMethodNotAllowed, "GET only")
@@ -133,6 +132,10 @@ func (s *Server) handleTryState(w http.ResponseWriter, r *http.Request) {
 	_, pid, ok := s.personSession(r)
 	if !ok {
 		refuseJSON(w, http.StatusUnauthorized, "signin", "sign in first")
+		return
+	}
+	if !s.trialOn() {
+		writeJSON(w, http.StatusOK, map[string]string{"state": "none"})
 		return
 	}
 	st, err := s.trialStateOf(pid, time.Now())

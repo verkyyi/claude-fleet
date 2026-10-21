@@ -54,16 +54,19 @@ const chatHomeRoute = "home"
 
 // ChatHome is GET /v1/chat/home's answer. State: ok · reconnecting (its link
 // was on a replica a deploy took; its agent is reconnecting) · offline (the login is
-// not connected) · maintenance · old_agent (connected, without the chat relay).
+// not connected) · maintenance · old_agent (connected, without the chat relay)
+// · no_home (none yet: Why says so — task J091, the top bar's read is no error).
 type ChatHome struct {
 	Machine string `json:"machine"`
 	Login   string `json:"login"`
 	State   string `json:"state"`
+	Why     string `json:"why,omitempty"`
 	Direct  bool   `json:"direct,omitempty"`
 }
 
 // handleChatHome answers the person's home and whether a turn could reach it
-// now; no home is 409 no_home, as for every other route.
+// now; no home is 200 state no_home (task J091) — the top bar asks on every
+// open, and the conversation's own 409 no_home is the page's gate.
 func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -81,7 +84,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || home.Machine == "" || home.Login == "" {
-		refuseJSON(w, http.StatusConflict, "no_home", s.noHomeWhy(person))
+		writeJSON(w, http.StatusOK, ChatHome{State: "no_home", Why: s.noHomeWhy(person)})
 		return
 	}
 	// The person's login is linked to another replica (claude-fleet#3847):

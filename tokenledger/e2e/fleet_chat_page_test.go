@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -60,7 +59,7 @@ func TestChatHome(t *testing.T) {
 		_ = json.Unmarshal(b, &v)
 		return resp.StatusCode, v, string(b)
 	}
-	if code, _, body := home(); code != http.StatusConflict || !strings.Contains(body, "no_home") {
+	if code, v, body := home(); code != http.StatusOK || v.State != "no_home" || v.Machine != "" || v.Why == "" {
 		t.Fatalf("no home: %d %s", code, body)
 	}
 	setChatHome(t, h, pAlice, host, login)
