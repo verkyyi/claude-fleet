@@ -54,6 +54,11 @@ const pw = windowsOf({ five_hour: { utilization: 7.000000000000001 }, seven_day:
 assert.equal(pw.h5.p, 7);
 assert.equal(pw.h7.p, 53);
 assert.equal(windowsOf({ five_hour: { utilization: 0.236 } }).h5.p, 24);
+// A Codex weekly-only window named "primary" is the weekly one, by its length.
+const cw = windowsOf({ windows: [{ id: "primary", minutes: 10080, utilization: 29 }] }, true);
+assert.equal(cw.h5, null);
+assert.equal(cw.h7.p, 29);
+assert.equal(windowsOf({ windows: [{ id: "primary", utilization: 10 }] }, true).h5.p, 10);
 // An admin-set plan carries its tier and the hub's monthly price.
 const charlie = subscriptions({ creds: { credentials: [{ principal_id: "pool", provider: "claude", account: "Charlie_20X", credential_id: "cred:c",
   plan: "max", plan_source: "admin", plan_tier: "default_claude_max_20x", monthly_cost: 200, currency: "USD" }] } })[0];

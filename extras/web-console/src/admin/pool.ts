@@ -116,8 +116,11 @@ export function windowsOf(lim?: LimitsBody, percent = false): { h5: Window | nul
   let h7 = lim.seven_day || null;
   for (const w of Array.isArray(lim.windows) ? lim.windows : []) {
     const mins = Number(w.minutes) || 0;
-    if (!h5 && (mins === 300 || /5h|five|primary/i.test(w.id || w.label || ""))) h5 = w;
-    else if (!h7 && (mins === 10080 || /week|seven|secondary/i.test(w.id || w.label || ""))) h7 = w;
+    // A window's length decides it; the name only when no length came (a
+    // Codex weekly-only plan calls its weekly window "primary" — EEJD).
+    const name = mins ? "" : String(w.id || w.label || "");
+    if (!h5 && (mins === 300 || /5h|five|primary/i.test(name))) h5 = w;
+    else if (!h7 && (mins === 10080 || /week|seven|secondary/i.test(name))) h7 = w;
   }
   const v = (w: any): Window | null => (w ? { p: percent && w.utilization != null ? Math.min(100, Math.max(0, Math.round(Number(w.utilization)))) : pct(w.utilization), resets: w.resets_at || null } : null);
   return { h5: v(h5), h7: v(h7) };

@@ -522,6 +522,17 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			Currency    string   `json:"currency,omitempty"`
 		}
 		now := time.Now()
+		// A credential the vault holds no plan for is priced by its usage
+		// account's plan — the one the pool page names it by (EEJD).
+		accts, err := s.Store.ListAccounts()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		acctPlan := make(map[string]string, len(accts))
+		for _, a := range accts {
+			acctPlan[a.AccountUUID] = a.SubscriptionType
+		}
 		rows := make([]credRow, 0, len(creds))
 		for _, c := range creds {
 			view, err := s.credentialLimits(c)
@@ -541,8 +552,12 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			if source == "admin" {
 				row.PlanTier = s.Vault.PlanTier(c)
 			}
-			if plan != "" {
-				price, err := s.Store.PlanPriceAt(plan, c.Provider, now)
+			priced := plan
+			if priced == "" {
+				priced = acctPlan[row.AccountUUID]
+			}
+			if priced != "" {
+				price, err := s.Store.PlanPriceAt(priced, c.Provider, now)
 				if err != nil {
 					httpError(w, http.StatusInternalServerError, "plan price read failed")
 					return

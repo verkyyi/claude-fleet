@@ -97,6 +97,19 @@ func TestCredentialSetPlan(t *testing.T) {
 		t.Fatalf("no plan audit row: %+v", audit)
 	}
 
+	// A credential with no plan of its own is priced by its account's plan,
+	// the one the pool page names it by.
+	putPool(t, h, credvault.Claude, "gmail", credvault.Secret{SetupToken: "sk-ant-oat01-OTHER", ExpiresAt: &exp, AccountUUID: icloudUUID})
+	if err := h.srv.Store.UpsertAccount(model.Identity{AccountUUID: icloudUUID, Source: "claude"}, "max", "default_claude_max_20x"); err != nil {
+		t.Fatal(err)
+	}
+	h.getJSON(t, "/v1/fleet/credentials?principal_id=pool", &list)
+	for _, c := range list.Credentials {
+		if c.Account == "gmail" && (c.Plan != "" || c.MonthlyCost == nil || *c.MonthlyCost != 200) {
+			t.Fatalf("account-priced: %+v", c)
+		}
+	}
+
 	// An empty plan clears it: unpriced again, nothing left to name.
 	if code := set(credvault.Claude, "Charlie_20X", "", ""); code != http.StatusOK {
 		t.Fatalf("clear: %d", code)
