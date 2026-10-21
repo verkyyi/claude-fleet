@@ -94,13 +94,13 @@ type ClientLineStats struct {
 	// after one (an `up` with reason net — ms from the change) and those times'
 	// p50 / p95; ManualAfterDrop: a drop the person ended by hand (a quit before
 	// the next up) — the reconnect page's goal is 0.
-	ReconnectP95MS  int64 `json:"reconnect_p95_ms"`
-	NetChanges      int   `json:"net_changes"`
-	NetReconnects   int   `json:"net_reconnects"`
-	NetP50MS        int64 `json:"net_p50_ms"`
-	NetP95MS        int64 `json:"net_p95_ms"`
-	ManualAfterDrop int   `json:"manual_after_drop"`
-	LastAt               *time.Time     `json:"last_at,omitempty"`
+	ReconnectP95MS  int64      `json:"reconnect_p95_ms"`
+	NetChanges      int        `json:"net_changes"`
+	NetReconnects   int        `json:"net_reconnects"`
+	NetP50MS        int64      `json:"net_p50_ms"`
+	NetP95MS        int64      `json:"net_p95_ms"`
+	ManualAfterDrop int        `json:"manual_after_drop"`
+	LastAt          *time.Time `json:"last_at,omitempty"`
 }
 
 // ClientEventsReport is the GET's answer.
