@@ -20,6 +20,10 @@ const DefaultCurrency = "USD"
 // least stable, whereas "30 days" drifts a week per year.
 const averageMonth = time.Duration(365.2425 / 12 * 24 * float64(time.Hour))
 
+// ErrPlanPriceBehind: a price dated before the newest one already recorded for
+// its plan — refused, never inserted behind it (SetPlanPrice).
+var ErrPlanPriceBehind = errors.New("a newer price is already recorded")
+
 // SetPlanPrice records what a plan costs from a moment onward.
 //
 // Appends, it does not overwrite: the open row for this plan is closed at the
@@ -64,8 +68,8 @@ func (s *Store) SetPlanPrice(p model.SubscriptionPlan) error {
 		switch {
 		case from.Before(latest):
 			return fmt.Errorf(
-				"%s/%s already has a price starting %s; effective-dated prices are appended, not inserted behind an existing one",
-				source, p.Plan, fmtTime(latest))
+				"%s/%s already has a price starting %s; effective-dated prices are appended, not inserted behind an existing one: %w",
+				source, p.Plan, fmtTime(latest), ErrPlanPriceBehind)
 		case from.Equal(latest):
 			// A correction to the figure for a period already recorded.
 			_, err := tx.Exec(`UPDATE subscription_plans SET monthly_cost = ?, currency = ?

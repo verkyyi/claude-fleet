@@ -775,13 +775,22 @@ func runHub(args []string) error {
 		if err != nil {
 			return err
 		}
+		// A file price dated before one recorded since (an admin's price on
+		// the pool page, claude-fleet EEJD) is skipped: the newer price stands,
+		// and a hub that refused to start on it went down on its next restart
+		// (2026-10-21, codex/prolite). Any other refusal still stops the start.
+		recorded := 0
 		for _, pl := range plans {
-			if err := st.SetPlanPrice(pl); err != nil {
+			if err := st.SetPlanPrice(pl); errors.Is(err, store.ErrPlanPriceBehind) {
+				log.Printf("pricing: %s/%s from %s skipped: %v", pl.Source, pl.Plan, *pricingFile, err)
+				continue
+			} else if err != nil {
 				return fmt.Errorf("--pricing: record %s/%s: %w", pl.Source, pl.Plan, err)
 			}
+			recorded++
 		}
-		if len(plans) > 0 {
-			log.Printf("pricing: recorded %d subscription plan price(s) from %s", len(plans), *pricingFile)
+		if recorded > 0 {
+			log.Printf("pricing: recorded %d subscription plan price(s) from %s", recorded, *pricingFile)
 		}
 	}
 

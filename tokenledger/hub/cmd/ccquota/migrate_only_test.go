@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // `ccquota hub --migrate-only` (claude-fleet#2050): hub-deploy's rehearsal on
@@ -94,5 +96,42 @@ func TestHubCheck(t *testing.T) {
 	}
 	if err := runHub(args("--migrate-only")); err == nil {
 		t.Error("--check with --migrate-only was accepted")
+	}
+}
+
+// A --pricing price dated before one recorded since (an admin's price on the
+// pool page, claude-fleet EEJD) is skipped, never a refused start: the hub
+// crash-looped on it (2026-10-21, codex/prolite). The newer price stands.
+func TestHubStartSkipsAPricingPriceBehindARecordedOne(t *testing.T) {
+	for _, k := range []string{"CCQUOTA_FLEET", "CCQUOTA_GITHUB_CLIENT_ID", "CCQUOTA_GITHUB_CLIENT_SECRET", "CCQUOTA_GITHUB_ADMINS", "CCQUOTA_FLEET_PRINCIPAL_LOGINS", "CCQUOTA_DB"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("CCQUOTA_VIEWER_TOKEN", "viewer")
+	dir := t.TempDir()
+	db := filepath.Join(dir, "copy.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetPlanPrice(model.SubscriptionPlan{Plan: "prolite", Source: "codex", MonthlyCost: 100, Currency: "USD",
+		EffectiveFrom: time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	pricing := filepath.Join(dir, "pricing.json")
+	if err := os.WriteFile(pricing, []byte(`{"plans":[{"plan":"prolite","source":"codex","monthly_cost":200,"currency":"USD","effective_from":"2026-01-31T00:00:00Z"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHub([]string{"--check", "--db", db, "--addr", "0.0.0.0:1", "--pricing", pricing}); err != nil {
+		t.Fatalf("a file price behind a recorded one refused the start: %v", err)
+	}
+	st, err = store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	all, err := st.ListPlanPrices()
+	if err != nil || len(all) != 1 || all[0].MonthlyCost != 100 {
+		t.Fatalf("the recorded price should stand alone: %+v %v", all, err)
 	}
 }

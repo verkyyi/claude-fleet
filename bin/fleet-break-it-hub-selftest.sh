@@ -184,6 +184,8 @@
 #   spare-cutoff-held                               tokenledger/hub/api fleet_spare_cutoff.go (spareCutOffRetry /
 #                                                   healCutOffSpares in replenishSpares) + control.AccountCutOffMark
 #                                                   in the agent's cutOffResult; go test
+#   hub-pricing-behind-crash                        tokenledger/hub/cmd/ccquota hub.go (--pricing skips a price behind
+#                                                   a recorded one: store.ErrPlanPriceBehind); go test
 #   trial-no-subscription                           tokenledger/hub/api fleet_trial_cred.go (trialUserAllow in
 #                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
 #                                                   convertTrial writes the member's own list); go test
@@ -2390,6 +2392,24 @@ drill_spare_cutoff_held() {
   c11_go_tests fleet_spare_cred_test.go TestSpareCutOffIsRetriedNotHeld || return 1
   WHAT='agent 重启打断的洗号不再算失败挡补池：入口自己重洗（开号则移除重开），至多 2 次，之后照旧留给运维（测试按名核对在，Go 门跑它）'
   [ "$GO_RAN" = 1 ] && WHAT='打断的洗号两次都回 reset_pending、不挡补池；第三次照旧 failed 挡住；拒绝（ready FAIL）与人的号不当打断（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- hub-pricing-behind-crash (NKTP): the hub records the --pricing file's plan
+# prices at every start, and SetPlanPrice refuses a price dated before one
+# recorded since (an admin's price on the pool page, EEJD) — the start died on
+# it, so every new hub pod crash-looped and the release rolled back. Now such
+# a file price is skipped with a log line; the newer price stands.
+drill_hub_pricing_behind_crash() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
+  t0=$(now)
+  grep -q 'errors.Is(err, store.ErrPlanPriceBehind)' "$tl/cmd/ccquota/hub.go" 2>/dev/null \
+    || { WHY="the hub's start no longer skips a --pricing price behind a recorded one (hub.go)"; return 1; }
+  grep -q '^func TestHubStartSkipsAPricingPriceBehindARecordedOne(' "$tl/cmd/ccquota/migrate_only_test.go" 2>/dev/null \
+    || { WHY="the test TestHubStartSkipsAPricingPriceBehindARecordedOne is not in hub/cmd/ccquota/migrate_only_test.go"; return 1; }
+  go_half '^TestHubStartSkipsAPricingPriceBehindARecordedOne$' ./hub/cmd/ccquota; case $? in 0) GO_RAN=1 ;; 1) return 1 ;; esac
+  WHAT='库里已有更新的套餐价时，--pricing 里更早的价跳过、入口照常起（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='库里 codex/prolite 10-21 的价在、文件 01-31 的价：hub --check 照常过，库里只留 10-21 那一条（go test）'
   SECS=$(since "$t0")
 }
 
