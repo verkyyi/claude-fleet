@@ -7,7 +7,9 @@ import { chromium } from 'playwright'
 const origin = 'http://127.0.0.1:18961'
 const browser = await chromium.launch()
 try {
-  for (const local of [false, true]) {
+  // copy: the entry's copy (task V9DJ D) exists too and is held as long as the
+  // home's read — a late copy must not erase the new turn either
+  for (const [local, copy] of [[false, false], [true, false], [false, true]]) {
     const context = await browser.newContext()
     try {
       const page = await context.newPage()
@@ -22,6 +24,12 @@ try {
         assert.equal(url.origin, origin, 'the page must remain same-origin')
         const path = url.pathname
         const json = body => route.fulfill({ json: body })
+        // the entry's copy (task V9DJ D): none kept in this drill
+        if (path === `${api}/conversation` && url.searchParams.get('cached') === '1') {
+          if (!copy) return route.fulfill({ status: 404, json: { code: 'no_copy', error: 'no copy kept' } })
+          await held
+          return json({ session: 's1', items: [{ t: 'user', text: 'old-copy' }], busy: false, mirror: { at: '2026-10-20T00:00:00Z' } })
+        }
         if (path === `${api}/conversation`) {
           reads++
           sawRead()
@@ -54,8 +62,9 @@ try {
       assert.equal(await page.getByText('ui-once', { exact: true }).count(), 1, 'late history erased the user message')
       assert.equal(await page.getByText('中文-once', { exact: true }).count(), 1, 'late history erased the reply')
       assert.equal(turns, 1, 'a history race must never replay a turn')
+      assert.equal(await page.getByText('old-copy', { exact: true }).count(), 0, 'a late copy came back over the new turn')
       assert.equal(reads, 1, 'the stale read must not trigger a retry loop')
-      console.log(`PASS ${local ? 'local' : 'console'}: late initial history preserves one user message and one Chinese reply after turn completion`)
+      console.log(`PASS ${local ? 'local' : 'console'}${copy ? ' (late copy)' : ''}: late initial history preserves one user message and one Chinese reply after turn completion`)
     } finally { await context.close() }
   }
 } finally { await browser.close() }
