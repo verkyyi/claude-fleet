@@ -5859,6 +5859,8 @@ class EntryPaths(object):
         # ids and serials, never a key
         self.revs = os.path.join(self.dir, "revocations.json")
         self.krl = os.path.join(self.dir, "revoked.krl")
+        # the door-session CA (A5SQ): the hub's list names it; one public key, 0644
+        self.door_ca = os.path.join(self.dir, "door-ca.pub")
         self.rev_ca = os.path.join(self.dir, "revocations-ca.pub")
         # the door's jump account (#4193): each routed login's keys, 0644 — what
         # bin/fleet-door-keys.py reads as `nobody`
@@ -6141,6 +6143,37 @@ def _entry_state_dir(d):
         os.chmod(d, mode & ~0o022)
 
 
+def entry_door_ca(lst):
+    """The door-session CA's public key from the hub's list (A5SQ) as one
+    `ssh-ed25519 <b64>` line, else "" — any other shape is not trusted."""
+    v = str((lst or {}).get("door_ca") or "").strip() if isinstance(lst, dict) else ""
+    parts = v.split()
+    if len(parts) != 2 or entry_key_line({"type": parts[0], "b64": parts[1], "fp": "door-ca"}) is None \
+            or parts[0] != "ssh-ed25519":
+        return ""
+    return "%s %s\n" % (parts[0], parts[1])
+
+
+def entry_door_ca_file(ep, lst):
+    """Converge ep.door_ca to the list's (root 0644), or remove it."""
+    want = entry_door_ca(lst)
+    if not want:
+        try:
+            os.remove(ep.door_ca)
+        except OSError:
+            pass
+        return
+    try:
+        st = os.lstat(ep.door_ca)
+    except OSError:
+        st = None
+    if st is None or os.path.islink(ep.door_ca) or _entry_read(ep.door_ca) != want or st.st_mode & 0o7777 != 0o644 \
+            or (os.geteuid() == 0 and (st.st_uid != 0 or st.st_gid != 0)):
+        if st is not None and (os.path.islink(ep.door_ca) or os.path.isdir(ep.door_ca)):
+            shutil.rmtree(ep.door_ca) if os.path.isdir(ep.door_ca) and not os.path.islink(ep.door_ca) else os.remove(ep.door_ca)
+        _entry_put(ep.door_ca, want, 0o644)
+
+
 def entry_key_line(k):
     """One key of the hub's list as its keys-file line `<type> <b64> fleet:<fp>`,
     or None when it is not a plain public key of a kind the entry takes. A plain
@@ -6265,9 +6298,16 @@ def entry_config(ep, port, allow, paths=None):
         "KbdInteractiveAuthentication no",
         "PermitRootLogin no",
         "AuthorizedKeysFile %s/%%u" % ep.keys,
+        # a door-session certificate (A5SQ): only the door-session CA, only with the
+        # login's own name as its principal (AuthorizedPrincipalsFile none), only
+        # from loopback (the certificate's source-address — the hub's relay)
         "AuthorizedPrincipalsFile none",
-        "TrustedUserCAKeys none",
+        "TrustedUserCAKeys %s" % (ep.door_ca if os.path.isfile(ep.door_ca) else "none"),
     ] + (
+        # the door's sessions all arrive from loopback (the home's agent): one failed
+        # login there must not lock every person's next one out of this home
+        ["PerSourcePenaltyExemptList 127.0.0.1/32,::1/128"] if os.path.isfile(ep.door_ca) else []
+    ) + (
         # the hub's revocation list as a KRL (issue #3560): sshd reads it on every
         # authentication, so a new list needs no restart. Only once it exists — a
         # RevokedKeys file sshd cannot read refuses every key.
@@ -6570,6 +6610,8 @@ def _entry_converge(paths, ep, port, lst, force):
         write_json(ep.book, book)
         return book
     rows = door_route_rows(lst) if door else {}
+    # the door-session CA (A5SQ): a home's only — the door itself trusts no CA
+    entry_door_ca_file(ep, {} if door else lst)
     # the door's logins are its jump rows (below): no account, no keys/<login> of its own
     verdict = {} if door else entry_eligible(paths, sorted(lst["logins"]))
     want, logins_book, skipped = {}, {}, 0

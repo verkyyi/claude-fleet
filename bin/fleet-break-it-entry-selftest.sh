@@ -82,6 +82,11 @@
 #   door-home-not-door    the stream to a person's home: the door's token only, a
 #                         machine home only, onto its entry port (go test
 #                         TestDoorHomeStreamOnlyTheDoor)
+#   door-session-other-home  a home's entry port and the door-session CA (A5SQ):
+#                         a certificate of that CA lands only as its own principal,
+#                         only from loopback; another CA's, another login's, one
+#                         from elsewhere, and any at all once the list stops naming
+#                         the CA, are refused — the person's own key still lands
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1160,6 +1165,45 @@ drill_door_session_replay() {
 drill_door_home_not_door() {
   CAP=150
   door_session_go TestDoorHomeStreamOnlyTheDoor "接到家的流只认门的令牌、只到家在机器上的人，落在家的本机入口端口（target=entry）"
+}
+
+drill_door_session_other_home() {
+  CAP=30   # one sshd, five certificates, two lists
+  local t0 l1 l0 c bad=""; t0=$(now)
+  erig doorca
+  ssh-keygen -q -t ed25519 -N '' -C drill-door-ca -f "$E/dca"; ssh-keygen -q -t ed25519 -N '' -C drill-other-ca -f "$E/oca"
+  for c in cme cother cfar cforeign; do ssh-keygen -q -t ed25519 -N '' -C "drill-$c" -f "$E/$c"; done
+  ssh-keygen -q -s "$E/dca" -I "door:gh:$ME:aa" -n "$ME" -O source-address=127.0.0.1/32,::1/128 -V +2m "$E/cme.pub"
+  ssh-keygen -q -s "$E/dca" -I "door:gh:$ME:bb" -n other -O source-address=127.0.0.1/32,::1/128 -V +2m "$E/cother.pub"
+  ssh-keygen -q -s "$E/dca" -I "door:gh:$ME:cc" -n "$ME" -O source-address=192.0.2.7/32 -V +2m "$E/cfar.pub"
+  ssh-keygen -q -s "$E/oca" -I "door:gh:$ME:dd" -n "$ME" -O source-address=127.0.0.1/32,::1/128 -V +2m "$E/cforeign.pub"
+  l1=$(elist 1 "$ME=k1" "other=k2")
+  python3 - "$l1" "$E/dca.pub" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["door_ca"] = " ".join(open(sys.argv[2]).read().split()[:2])
+json.dump(d, open(sys.argv[1], "w"))
+PY
+  eapply "$l1" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  grep -q '^TrustedUserCAKeys .*door-ca.pub$' "$E/db/entry/sshd_config" || { WHY="the config does not trust the door-session CA"; edown; return 1; }
+  eup
+  until_ok 10 listening || { WHY="the entry sshd never listened: $(tail -3 "$E/sup.err")"; edown; return 1; }
+  etry k1 || bad="$bad own-key-refused[$(cat "$E/ssh.err")]"
+  etry cme "$ME" -o CertificateFile="$E/cme-cert.pub" || bad="$bad door-cert-refused[$(cat "$E/ssh.err")]"
+  etry cother "$ME" -o CertificateFile="$E/cother-cert.pub" && bad="$bad other-login-cert-landed"
+  etry cfar "$ME" -o CertificateFile="$E/cfar-cert.pub" && bad="$bad far-cert-landed"
+  etry cforeign "$ME" -o CertificateFile="$E/cforeign-cert.pub" && bad="$bad other-ca-landed"
+  # the list stops naming the CA ⇒ no certificate at all
+  l0=$(elist 2 "$ME=k1" "other=k2")
+  eapply "$l0" || { WHY="entry apply v2 failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  until_ok 10 grep -q '^TrustedUserCAKeys none$' "$E/db/entry/sshd_config" || bad="$bad ca-stayed"
+  sleep 1
+  etry cme "$ME" -o CertificateFile="$E/cme-cert.pub" && bad="$bad cert-landed-after-ca-gone"
+  [ ! -e "$E/db/entry/door-ca.pub" ] || bad="$bad ca-file-stayed"
+  [ -z "$bad" ] || { WHY="the entry port:$bad"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="家的本机入口：门会话 CA 签的证书只以自己的主体名、只从回环进得来；别的登录名的、从别处来的、别的 CA 签的进不来；名单不再给 CA，证书一律进不来；本人钥匙照常"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
