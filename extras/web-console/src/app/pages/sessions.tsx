@@ -407,7 +407,7 @@ export default function SessionsPage() {
 
   const retry = () => { reload(); tasks.reload(); };
   const list = rows === null ? ((failed && !live) || (tasks.failed && !tasks.data) ? <Failed what={tr("会话", "your sessions")} onRetry={retry} /> : <Loading />)
-    : !rows.length ? <Empty icon={<Layers />} title={stale ? tr("数量未知", "Count unknown") : tr("还没有会话", "Nothing yet")}
+    : !rows.length ? <Empty icon={<Layers />} title={stale ? tr("数量未知", "Count unknown") : tr("还没有会话", "No sessions yet")}
       body={stale ? tr("当前来源不可用，请重试读取。空的陈旧快照不代表没有任务。", "The source is unavailable. Retry the read; an empty stale snapshot does not mean zero tasks.")
         : tr("点「新建」说一件要做的事，或者在「对话」里说一句。", "Tap New and say what needs doing, or ask in Chat.")}
       action={stale ? <Button size="sm" variant="outline" onClick={retry}>{tr("重试读取", "Retry read")}</Button>
