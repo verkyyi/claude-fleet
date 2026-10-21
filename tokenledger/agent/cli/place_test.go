@@ -71,9 +71,13 @@ func TestPlaceCLIContract(t *testing.T) {
 			ts := answer(c.status, c.body)
 			defer ts.Close()
 			var out, errb bytes.Buffer
-			code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--origin-wid", "p/issue-1", "o/r", "7", wid}, &out, &errb)
+			code, err := place([]string{"--hub", ts.URL, "--token", "tok", "--origin-wid", "p/issue-1", "o/r", "7", wid}, &out, &errb)
 			if code != c.code || strings.TrimRight(out.String(), "\n") != c.out {
 				t.Fatalf("code %d out %q, want %d %q", code, out.String(), c.code, c.out)
+			}
+			// the hub's own words reach the caller (claude-fleet T672)
+			if c.name == "not a hub fleet" && (err == nil || !strings.Contains(err.Error(), "fleet x is not registered to this node")) {
+				t.Fatalf("err = %v; want the hub's words", err)
 			}
 		})
 	}

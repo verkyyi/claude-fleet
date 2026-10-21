@@ -105,7 +105,9 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 			return fault("INVALID_ARGUMENT", "task differs from accepted dispatch")
 		}
 		t, err = s.Store.FleetTask(store.ParseTaskRef(d.Task))
-		if err != nil || t.Owner != owner || t.Repo != w.repo || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
+		// A repo is one repo whatever its case (claude-fleet T672): the record
+		// keeps it lower-cased, a start names it as the fleet registered it.
+		if err != nil || t.Owner != owner || store.NormRepo(t.Repo) != store.NormRepo(w.repo) || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
 			t.RequestedAgent != d.RequestedAgent || t.ResolvedAgent != d.ResolvedAgent || t.AttemptID != d.AttemptID {
 			return fault("INVALID_STATE", "accepted dispatch task owner, generation or provider does not match")
 		}
@@ -136,6 +138,9 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 					if k != "task" && k != "dispatch" {
 						dst[k] = v
 					}
+				}
+				if r, ok := dst["repo"].(string); ok {
+					dst["repo"] = store.NormRepo(r)
 				}
 				b, _ := json.Marshal(dst)
 				return string(b)
