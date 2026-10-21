@@ -297,6 +297,11 @@ if [ "$cmd" = dispatch ]; then
   done
   [ -n "$title" ] || usage
   [ "$blank" = 0 ] || [ -z "$bodyf" ] || die 2 "--blank takes no words"
+  # a dispatch that opens its session is clocked from here when no ↵ came with it
+  # (T716, fleet_timing.py): every stage to its agent's input box under one run
+  if [ "$spawn" = 1 ] && [ -z "${FLEET_TIMING_T0:-}" ]; then
+    FLEET_TIMING_T0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time()' 2>/dev/null) && export FLEET_TIMING_T0
+  fi
   applicable || die 3 "no hub here: a task has nowhere to be recorded (issue #4898)"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
@@ -359,8 +364,9 @@ JSON
     short=$(printf '%s' "$accepted" | field short)
     [ -n "$short" ] && printf '%s\n' "$short"
     printf '%s\n' "$t"
-    # a 看台's new session is clocked from its ↵ (T684): the hub's answer is `placed`
-    [ -z "${FLEET_TIMING_T0:-}" ] || python3 "$BIN/fleet_timing.py" at session placed 2>/dev/null || :
+    # a new session is clocked from its ↵ (T684): the hub's record is `record`
+    # (T716 — `placed` is the placement's answer, dash-raw-session.sh)
+    fleet_timing_at record
   }
   export FLEET_DISPATCH="$dispatch"
   # The task's own ID (EPIC T644 C1) rides to the spawner, bound to THIS record: its

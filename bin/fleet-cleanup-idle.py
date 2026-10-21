@@ -87,6 +87,10 @@ def unreported_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else UNREPORTED_DEFAULT
 
 
+# A result written this long before the turn that ended counts as that turn's word
+# (a report, then a few more steps before the prompt) — T756's unreported rule.
+REPORTED_SLACK = 600
+
 FID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -112,6 +116,18 @@ class Cleaner:
                 d = retired_dir()
                 d.mkdir(parents=True, exist_ok=True)
                 (d / fid).touch()
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def end_id(self, fid, why="reaped"):
+        """A window this reaper killed ends its ID (EPIC T497 C4) — the ledger's
+        `closed`, pushed to the hub. Without it the hub kept every reaped session
+        open for good (BCYB). worker-stop's road closes its own (`stopped`)."""
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return
+        try:
+            subprocess.run(["python3", str(BIN / "fleet_id.py"), "close", fid, "--reason", why],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
         except (OSError, subprocess.SubprocessError):
             pass
 
@@ -293,6 +309,7 @@ class Cleaner:
                 return False
             self.retire(window)
             self.tm("kill-window", "-t", window)
+            self.end_id(snap["@fleet_id"])
             return True
         finally:
             self.untransition(lock)
@@ -412,10 +429,14 @@ class Cleaner:
         ledger key — so no history row; @norepo_sid stays fleet-history's resume.
         Without a policy it is never closed automatically (#791), as before.
         A no-repo session another SESSION spawned (@origin / @origin_fid — a batch
-        driver, a design-page writer, issue #2623) is nobody's home session: its
-        done / loop-end / at policy closes it like any other, a finished turn too."""
+        driver, a design-page writer, issue #2623) — or a probe (BCYB) — is nobody's
+        home session: its done / loop-end / at policy closes it like any other, a
+        finished turn too."""
         pol = self.policy(snap)
-        spawned = bool(snap["@origin"] or snap["@origin_fid"])
+        # a probe (BCYB: placement demos 「空会话，可关」 opened through the hub carry
+        # no @origin) is nobody's home session either: a finished turn counts —
+        # without this D1–D13's done:10m waited for an /exit that never came
+        spawned = bool(snap["@origin"] or snap["@origin_fid"]) or self.origin(snap) == "probe"
         kinds = ("done", "idle", "loop-end", "at") if spawned else ("done", "idle")
         # `idle:<dur>` (T694): a finished turn idle that long — a person's own
         # home session (idle:2h) too, resumed by its @norepo_sid.
@@ -609,6 +630,16 @@ class Cleaner:
         else:
             first = unreported_secs()
             nudged = snap.get("@reap_unreported", "")
+            # It DID say something at this turn's end (issue T756): a `waiting` /
+            # `blocked` report on its ID — whether the parent's window has it yet
+            # (a cross-machine report the hub still carries) or not. That is no
+            # 「闲了 30 分钟没报结果」: no nudge, no red mark, no close on this road.
+            said = self.id_said_at(snap["@fleet_id"])
+            if said and said >= int(stamp) - REPORTED_SLACK:
+                if not self.args.dry_run and nudged:
+                    self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
+                self.say(window, "skip:reported", origin)
+                return False
             if not nudged.isdigit():
                 if int(stamp) + first > self.now:
                     return False
@@ -769,6 +800,22 @@ class Cleaner:
             return json.loads(out or "{}").get("state") in ("done", "failed")
         except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
             return False
+
+    @staticmethod
+    def id_said_at(fid):
+        """When the window's ID last took a result of its own (fleet_id.py status
+        → result.ts), any state; 0 = none, or unreadable."""
+        if not FID_RE.fullmatch(fid or ""):
+            return 0
+        env = dict(os.environ)
+        env.pop("FLEET_ID_LIVE", None)
+        try:
+            out = subprocess.run(["python3", str(BIN / "fleet_id.py"), "status", fid], env=env,
+                                 capture_output=True, text=True, timeout=15).stdout
+            ts = (json.loads(out or "{}").get("result") or {}).get("ts")
+            return int(ts) if isinstance(ts, (int, float)) else 0
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            return 0
 
     def task_closed(self, task):
         """0 closed (收口) · 1 open · 3 unknown — fleet_task_control.py closed,

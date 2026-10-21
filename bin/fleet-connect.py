@@ -1207,7 +1207,39 @@ def write_known_hosts(machine):
     the hub does not list is still refused (ssh's own "host key has changed").
     The file is the hub's: this machine's lines are replaced, the others kept.
     False when the hub listed no keys — ssh then checks as it always did."""
-    return write_host_keys("fleet-" + (machine.get("alias") or machine.get("hostname")), host_keys(machine))
+    keys = write_host_keys("fleet-" + (machine.get("alias") or machine.get("hostname")), host_keys(machine))
+    return write_host_ca(machine.get("host_ca") if isinstance(machine, dict) else None) or keys
+
+
+HOST_CA_PATTERN = "fleet-*"
+
+
+def write_host_ca(cas):
+    """The hub's host CA (claude-fleet T743) as ~/.ssh/fleet-known-hosts'
+    `@cert-authority fleet-* <key>` lines — the fleet's lines replaced, every
+    other kept. A machine showing a certificate it signed is then known under
+    its HostKeyAlias whatever its key. False when the hub gave none."""
+    cas = [k for k in cas or [] if isinstance(k, str) and HOST_KEY_RE.match(k)] if isinstance(cas, list) else []
+    if not cas:
+        return False
+    mark = "@cert-authority %s " % HOST_CA_PATTERN
+    path = known_hosts_path()
+    try:
+        with open(path) as f:
+            keep = [l for l in f.read().splitlines() if l.strip() and not l.startswith(mark)]
+    except OSError:
+        keep = []
+    text = "\n".join(keep + [mark + k for k in cas]) + "\n"
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
 
 
 def write_host_keys(alias, keys):
@@ -1352,6 +1384,8 @@ def net_note():
 def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, ssh_opts=()):
     """info: a route list already in hand (the home answer, #1470) — the hub
     is not asked again for it."""
+    global CONNECT_TOKEN
+    CONNECT_TOKEN = token or ""
     probes = max(1, env_num("FLEET_CONNECT_PROBES", 3, int))
     timeout = env_num("FLEET_CONNECT_TIMEOUT", 4.0)
     ttl = env_num("FLEET_CONNECT_CACHE_SECS", 600.0)
@@ -1603,7 +1637,81 @@ def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin="
             os.execvp(cmd[0], cmd)
         except OSError as e:
             die("cannot run ssh: %s" % e, 1)
-    return run_logged(cmd, alias, route, login)
+    rc = run_logged(cmd, alias, route, login)
+    if rc == 255 and hostkey_diagnose(machine, route, hub) == "retry":
+        rc = run_logged(cmd, alias, route, login)
+    return rc
+
+
+CONNECT_TOKEN = ""   # connect()'s token: hostkey_diagnose asks the hub again with it
+
+
+def scan_host_keys(host, port, timeout=4):
+    """What <host>:<port> answers as its host keys, "<type> <base64>" each
+    (ssh-keyscan); [] when nothing answers."""
+    try:
+        out = subprocess.run(["ssh-keyscan", "-T", str(int(timeout)), "-p", str(int(port or 22)), host],
+                             capture_output=True, text=True, timeout=timeout + 4).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    keys = []
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 3 and HOST_KEY_RE.match(f[1] + " " + f[2]):
+            keys.append(f[1] + " " + f[2])
+    return keys
+
+
+def key_fp(key):
+    """SHA256:… of "<type> <base64>", as ssh prints it."""
+    import base64
+    import hashlib
+    try:
+        raw = base64.b64decode(key.split()[1])
+    except (IndexError, ValueError):
+        return "?"
+    return "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
+
+
+def hostkey_diagnose(machine, route, hub):
+    """ssh ended 255 on a direct route (claude-fleet T743): was it the host key?
+    The route is scanned; a key the hub listed answering ⇒ not a key problem
+    (""). Otherwise the hub is asked again — its fresh word naming the answering
+    key ⇒ fleet-known-hosts rewritten and one more try ("retry", a grey line
+    says so); still not listed ⇒ the person is told, in words, which address
+    answered with which key and what fleet expects ("stop"). A route through a
+    jump or the relay, or FLEET_CONNECT_HOSTKEY_CHECK=0, is left to ssh."""
+    if os.environ.get("FLEET_CONNECT_HOSTKEY_CHECK") == "0" or route.get("kind") != "direct" \
+            or not route.get("host") or jump_of(route):
+        return ""
+    seen = scan_host_keys(route["host"], route.get("port") or 22)
+    if not seen or set(seen) & set(host_keys(machine)):
+        return ""
+    alias = machine.get("alias") or machine.get("hostname") or "?"
+    fresh = None
+    if hub:
+        try:
+            info = fetch_routes(hub, CONNECT_TOKEN)
+            fresh = pick_machine(info.get("machines") or [], alias, None)
+        except (Refused, OSError, ValueError, AttributeError):
+            fresh = None
+    if fresh and set(seen) & set(host_keys(fresh)):
+        machine["host_keys"] = host_keys(fresh)
+        if write_known_hosts(machine):
+            match = sorted(set(seen) & set(host_keys(fresh)))[0]
+            sys.stderr.write("\033[2mfleet connect · %s 的主机钥匙已按 hub 更新（%s），重连\033[0m\n"
+                             % (alias, key_fp(match)))
+            clog("hostkey", alias, route["kind"], "", "refreshed", key_fp(match))
+            return "retry"
+    want = host_keys(fresh or machine)
+    where = "%s:%s" % (route["host"], route.get("port") or 22)
+    sys.stderr.write("✗ 停下了：%s 给出的钥匙不是 fleet 记的 %s\n" % (where, alias))
+    sys.stderr.write("  对端   %s\n" % "  ".join(key_fp(k) for k in seen))
+    sys.stderr.write("  fleet  %s\n" % ("  ".join(key_fp(k) for k in want) or "（hub 没有列出这台的钥匙）"))
+    sys.stderr.write("  可能是路由器把这个端口转去了别的机器，或有人冒充。\n")
+    sys.stderr.write("  核对：网页「设备」页 · 或运行 fleet route %s\n" % alias)
+    clog("hostkey", alias, route["kind"], "", "mismatch", "%s answers %s" % (where, key_fp(seen[0])))
+    return "stop"
 
 
 def run_logged(cmd, alias, route, login):

@@ -1802,6 +1802,37 @@ if [ -f "$_str" ] && command -v tmux >/dev/null 2>&1; then
   fi
 fi
 
+# --- the hub's open IDs against the windows (task BCYB) -----------------------------
+# A window that went without its ID closing stayed open on the hub for good (272
+# open beside ~17 windows), and every panel reading the hub counted it. The cleanup
+# tick's `fleet-id.sh live` reconciles them; its last answer ($ids/.hub/live.json)
+# says how many of THIS machine's IDs the hub still holds open against the windows
+# this login carries. WARN past FLEET_DOCTOR_IDS_SLACK more (default 10), or when
+# the reconcile has not answered for an hour. No answer yet (no hub) ⇒ no row.
+_ilv="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids/.hub/live.json"
+if [ -f "$_ilv" ]; then
+  _ilr=$(python3 - "$_ilv" "${FLEET_DOCTOR_IDS_SLACK:-10}" <<'PY' 2>/dev/null
+import json, sys, time
+d = json.load(open(sys.argv[1]))
+try:
+    slack = int(sys.argv[2])
+except ValueError:
+    slack = 10
+op = d.get("open") or {}
+live, kept = int(d.get("live") or 0), int(d.get("kept") or 0)
+age = int(time.time() - int(d.get("at") or 0))
+tot = sum(int(v) for v in op.values())
+parts = " · ".join("%s %d" % (k or "无机器", int(v)) for k, v in sorted(op.items()))
+lvl = "warn" if kept - live > slack or age > 3600 else "pass"
+print("%s\thub 上没关的 ID %d（%s）· 本机这批 %d 个、活窗口 %d · 上次对账 %d 分钟前" % (lvl, tot, parts or "-", kept, live, age // 60))
+PY
+)
+  case "$_ilr" in
+    warn*) warn hubids "${_ilr#*	} — 窗口没了 ID 还开着：cleanup tick 的 \`fleet-id.sh live\` 会关（缺席 10 分钟），\`fleet-id.sh live --dry\` 看它要关哪些" ;;
+    pass*) pass hubids "${_ilr#*	}" ;;
+  esac
+fi
+
 # --- remote clients of this machine (issue #1907) ---------------------------------
 # A shell / proxy client of this machine sits on a view session of its own
 # (`<fleet>@view-<id>`, #1489): one on the FLEET session shows the node's status
@@ -3570,8 +3601,9 @@ fi
 
 # --- timing: ⌘P → 面板 and ⌘N / ⚡ → 能打字 (issue #3551, EPIC #3500 C6) ---------
 # fleet_timing.py's `check` over the last 10 runs of each, the medians against
-# FLEET_TIMING_PANEL_MS (500) and FLEET_TIMING_SESSION_MS (8000; a `cold` run from
-# before the warm pool left, T495, is counted apart). Nothing measured yet ⇒ no row.
+# FLEET_TIMING_PANEL_MS (500) and FLEET_TIMING_SESSION_MS (8000; a session judged
+# by its `input` — the agent's input box, T716 — else its `total`; a `cold` run
+# from before the warm pool left, T495, is counted apart). Nothing measured ⇒ no row.
 # The segment table is `fleet_timing.py table`.
 if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [ -n "$_tm" ]; then
   _tmsg=$(printf '%s\n' "$_tm" | awk '{
@@ -3589,15 +3621,16 @@ if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [
 fi
 
 # --- 新建耗时: every new session's stages, the 九成分位 of the last 24 h (T684) ----
-# fleet_timing.py p90: each stage since the 看台's ↵ — hub 结论 (placed) · 开窗
-# (window) · 能打字 (typeable) · agent 就绪 (ready); a report, never a verdict (the
+# fleet_timing.py p90: each stage since the ↵ — 记任务 (record) · hub 结论 (placed) ·
+# 开窗 (window) · 切过去 (switched) · agent 就绪 (ready) · 能打字 (input, the agent's
+# input box — T716); a report, never a verdict (the
 # `timing` row above judges the median). No new-form run in 24 h ⇒ no row.
 if _sp=$(python3 "$(dirname "$0")/fleet_timing.py" p90 session --hours 24 2>/dev/null) && [ -n "$_sp" ]; then
   info spawn-time "$(printf '%s\n' "$_sp" | awk '{
     for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
     s = "新建耗时 近 24 小时 " v["n"] " 次 · 九成"
-    split("placed window typeable ready", k, " "); split("hub 结论|开窗|能打字|agent 就绪", w, "|")
-    for (j = 1; j <= 4; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
+    split("record placed window switched ready input", k, " "); split("记任务|hub 结论|开窗|切过去|agent 就绪|能打字", w, "|")
+    for (j = 1; j <= 6; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
     print s }') — fleet_timing.py table session shows each run's stages"
 fi
 

@@ -323,7 +323,15 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 		refuse(err)
 		return
 	}
+	s.serveSSHRelay(ctx, conn, id.Actor, host, epID, nc, "", refuse)
+}
 
+// serveSSHRelay is a relay's second half, once who asks and where to is
+// settled: ask the agent (epID) for its stream to target ("" its sshd,
+// control.SSHRelayTargetEntry its entry port), wait for it, splice the two.
+// The audit row is written before the agent is asked.
+func (s *Server) serveSSHRelay(ctx context.Context, conn *websocket.Conn, actor, host, epID string, nc *nodeConn,
+	target string, refuse func(error)) {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	p := &pendingSSHRelay{id: control.NewOpID(), secret: control.NewOpID(), endpointID: epID, node: nc,
@@ -333,7 +341,7 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 	defer s.sshRelays.drop(p.id)
 
 	started := time.Now()
-	row := store.SSHRelay{ID: p.id, Actor: id.Actor, Hostname: host, EndpointID: epID,
+	row := store.SSHRelay{ID: p.id, Actor: actor, Hostname: host, EndpointID: epID,
 		OSUser: nc.user(), StartedAt: started, Outcome: "open"}
 	// Recorded before the agent is asked: a relay that crashes the hub
 	// still leaves its row.
@@ -348,12 +356,12 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 			log.Printf("relay %s: record its end: %v", p.id, err)
 		}
 		log.Printf("relay %s: %s -> %s via %s: %s after %s, %d up / %d down %s",
-			p.id[:8], id.Actor, host, nc.user(), outcome, time.Since(started).Round(time.Second), up, down, detail)
+			p.id[:8], actor, host, nc.user(), outcome, time.Since(started).Round(time.Second), up, down, detail)
 	}()
 
-	open, _ := control.New(control.TypeSSHRelayOpen, control.SSHRelayOpen{RelayID: p.id, Secret: p.secret})
+	open, _ := control.New(control.TypeSSHRelayOpen, control.SSHRelayOpen{RelayID: p.id, Secret: p.secret, Target: target})
 	wctx, wcancel := context.WithTimeout(rctx, 5*time.Second)
-	err = s.SendNodeWrite(wctx, epID, open)
+	err := s.SendNodeWrite(wctx, epID, open)
 	wcancel()
 	if err != nil {
 		outcome, detail = "failed", "ask the agent: "+err.Error()
@@ -379,7 +387,7 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 	if rd == 0 {
 		rd = defaultSSHRelayRateBPS
 	}
-	lim := s.sshRelays.limiter(id.Actor, rd)
+	lim := s.sshRelays.limiter(actor, rd)
 	wctx, wcancel = context.WithTimeout(rctx, 5*time.Second)
 	err = wsjson.Write(wctx, conn, control.SSHRelayHello{Type: "ready"})
 	wcancel()

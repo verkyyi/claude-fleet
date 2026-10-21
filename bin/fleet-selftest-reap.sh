@@ -135,7 +135,14 @@ if [ -d "$SOCKDIR" ]; then
     [ -e "$sock" ] || continue                       # empty glob → literal, skip
     name="$(basename "$sock")"
     [ "$name" = default ] && continue                # hard rail: never the prod server
-    case "$name" in fleet*) continue ;; esac         # nor any fleet's own socket (issue #2970)
+    # nor any fleet's own socket (issue #2970) — a configured fleet, the client's
+    # fleet-shell servers. Any other `fleet*` label is a drill's / test's (BCYB:
+    # 19 `fleet-drill-drill<pid>` left behind): its dead socket goes, once past
+    # the age gate (a server only busy for a moment is never taken for dead).
+    case "$name" in
+      fleet|fleet-shell*) continue ;;
+      fleet*) { [ ! -S "$sock" ] || [ -d "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$name" ] || ! stale "$sock" || alive "$sock"; } && continue ;;
+    esac
     if ! alive "$sock"; then
       # dead server → the socket file is litter; remove it regardless of age.
       say "dead socket   $name"

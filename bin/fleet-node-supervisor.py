@@ -5847,6 +5847,8 @@ class EntryPaths(object):
         self.dir = os.path.join(paths.state, "entry")
         self.cfg = os.path.join(self.dir, "sshd_config")
         self.hostkey = os.path.join(self.dir, "ssh_host_ed25519_key")
+        # the hub's host certificate for it (T743): HostCertificate in the config
+        self.hostcert = self.hostkey + "-cert.pub"
         self.keys = os.path.join(self.dir, "keys")
         self.pid = os.path.join(self.dir, "sshd.pid")
         # 0644 — versions, logins, fingerprints, never a key's text (any doctor reads it)
@@ -5859,6 +5861,8 @@ class EntryPaths(object):
         # ids and serials, never a key
         self.revs = os.path.join(self.dir, "revocations.json")
         self.krl = os.path.join(self.dir, "revoked.krl")
+        # the door-session CA (A5SQ): the hub's list names it; one public key, 0644
+        self.door_ca = os.path.join(self.dir, "door-ca.pub")
         self.rev_ca = os.path.join(self.dir, "revocations-ca.pub")
         # the door's jump account (#4193): each routed login's keys, 0644 — what
         # bin/fleet-door-keys.py reads as `nobody`
@@ -6089,11 +6093,38 @@ def door_hostkey(ep):
     return ""
 
 
+def door_server(paths):
+    """Which program is the door's listener: "ccquota" — `ccquota door`, the one
+    address routed by username (A5SQ) that also carries the pods' jump — when
+    FLEET_DOOR_SERVER=ccquota (environment or machine.env) and the runtime has
+    its ccquota; else "openssh", byte for byte as before. Never on a home."""
+    if paths is None or not door_on(paths):
+        return "openssh"
+    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
+    want = os.environ.get("FLEET_DOOR_SERVER") or me.get("FLEET_DOOR_SERVER") or ""
+    if want == "ccquota" and os.access(door_ccquota(paths), os.X_OK):
+        return "ccquota"
+    return "openssh"
+
+
+def door_ccquota(paths):
+    return env("FLEET_DOOR_CCQUOTA", os.path.join(paths.runtime, "bin", "ccquota"))
+
+
 def entry_child(paths):
     """The listener, as a child: started once its config exists, stopped when the
     config goes (no login has its home here), and told SIGHUP — sshd re-execs on
-    the new file, its live connections untouched — whenever the config changes."""
+    the new file, its live connections untouched — whenever the config changes.
+    On a door with FLEET_DOOR_SERVER=ccquota the listener is `ccquota door` (A5SQ):
+    it reads its own book from the hub, so a new config needs no signal."""
     ep = EntryPaths(paths)
+    if door_server(paths) == "ccquota":
+        _on, port, _me = entry_settings(paths)
+        return {"name": "entry", "cmd": [door_ccquota(paths), "door", "--listen", ":%d" % port,
+                                         "--host-key", ep.hostkey, "--env", os.path.join(paths.state, "machine.env"),
+                                         "--namespace", door_namespace(),
+                                         "--audit", os.path.join(paths.log, "door-audit.ndjson")],
+                "requires": [ep.cfg, ep.hostkey], "note": "A5SQ · #3549"}
     return {"name": "entry", "cmd": [entry_sshd(), "-D", "-e", "-f", ep.cfg],
             "requires": [ep.cfg], "reload": ep.cfg, "reload_signal": "HUP",
             "note": "#3070"}
@@ -6139,6 +6170,37 @@ def _entry_state_dir(d):
     mode = os.stat(d).st_mode & 0o7777
     if mode & 0o022 and not mode & stat.S_ISVTX:
         os.chmod(d, mode & ~0o022)
+
+
+def entry_door_ca(lst):
+    """The door-session CA's public key from the hub's list (A5SQ) as one
+    `ssh-ed25519 <b64>` line, else "" — any other shape is not trusted."""
+    v = str((lst or {}).get("door_ca") or "").strip() if isinstance(lst, dict) else ""
+    parts = v.split()
+    if len(parts) != 2 or entry_key_line({"type": parts[0], "b64": parts[1], "fp": "door-ca"}) is None \
+            or parts[0] != "ssh-ed25519":
+        return ""
+    return "%s %s\n" % (parts[0], parts[1])
+
+
+def entry_door_ca_file(ep, lst):
+    """Converge ep.door_ca to the list's (root 0644), or remove it."""
+    want = entry_door_ca(lst)
+    if not want:
+        try:
+            os.remove(ep.door_ca)
+        except OSError:
+            pass
+        return
+    try:
+        st = os.lstat(ep.door_ca)
+    except OSError:
+        st = None
+    if st is None or os.path.islink(ep.door_ca) or _entry_read(ep.door_ca) != want or st.st_mode & 0o7777 != 0o644 \
+            or (os.geteuid() == 0 and (st.st_uid != 0 or st.st_gid != 0)):
+        if st is not None and (os.path.islink(ep.door_ca) or os.path.isdir(ep.door_ca)):
+            shutil.rmtree(ep.door_ca) if os.path.isdir(ep.door_ca) and not os.path.islink(ep.door_ca) else os.remove(ep.door_ca)
+        _entry_put(ep.door_ca, want, 0o644)
 
 
 def entry_key_line(k):
@@ -6257,6 +6319,7 @@ def entry_config(ep, port, allow, paths=None):
         "# change passes `sshd -t` first. The system's sshd and ~/.ssh/authorized_keys are not read.",
         "Port %d" % port,
         "HostKey %s" % ep.hostkey,
+    ] + _entry_hostcert_lines(ep) + [
         "PidFile %s" % ep.pid,
         "AllowUsers %s" % " ".join(sorted(allow)),
         "AuthenticationMethods publickey",
@@ -6265,9 +6328,16 @@ def entry_config(ep, port, allow, paths=None):
         "KbdInteractiveAuthentication no",
         "PermitRootLogin no",
         "AuthorizedKeysFile %s/%%u" % ep.keys,
+        # a door-session certificate (A5SQ): only the door-session CA, only with the
+        # login's own name as its principal (AuthorizedPrincipalsFile none), only
+        # from loopback (the certificate's source-address — the hub's relay)
         "AuthorizedPrincipalsFile none",
-        "TrustedUserCAKeys none",
+        "TrustedUserCAKeys %s" % (ep.door_ca if os.path.isfile(ep.door_ca) else "none"),
     ] + (
+        # the door's sessions all arrive from loopback (the home's agent): one failed
+        # login there must not lock every person's next one out of this home
+        ["PerSourcePenaltyExemptList 127.0.0.1/32,::1/128"] if os.path.isfile(ep.door_ca) else []
+    ) + (
         # the hub's revocation list as a KRL (issue #3560): sshd reads it on every
         # authentication, so a new list needs no restart. Only once it exists — a
         # RevokedKeys file sshd cannot read refuses every key.
@@ -6334,17 +6404,113 @@ def _entry_sshd_check(text, ep):
 
 
 def _entry_hostkey(ep):
-    if os.path.exists(ep.hostkey) and os.path.exists(ep.hostkey + ".pub"):
+    """The entry's host key is made ONCE and kept for the machine's life (T743):
+    every client pinned it, so a new one is 「REMOTE HOST IDENTIFICATION HAS
+    CHANGED」 on every phone. A present private key is never replaced — a lost
+    .pub is derived back from it; one that will not read is an error, not a new
+    key. Only a missing private key makes one."""
+    keygen = env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen")
+    pub = ep.hostkey + ".pub"
+    if os.path.exists(ep.hostkey):
+        if os.path.exists(pub):
+            return ""
+        r = subprocess.run([keygen, "-y", "-f", ep.hostkey], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+        if r.returncode != 0 or not r.stdout.strip():
+            return "ssh-keygen -y (the host key is kept, not replaced): %s" % r.stderr.strip()
+        line = r.stdout.strip().split()
+        _entry_put(pub, " ".join(line[:2] + ["fleet-entry"]) + "\n", 0o644)
         return ""
-    for f in (ep.hostkey, ep.hostkey + ".pub"):
-        try:
-            os.remove(f)
-        except OSError:
-            pass
-    r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-q", "-t", "ed25519", "-N", "",
+    try:
+        os.remove(pub)
+    except OSError:
+        pass
+    r = subprocess.run([keygen, "-q", "-t", "ed25519", "-N", "",
                         "-C", "fleet-entry", "-f", ep.hostkey],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=60)
     return "" if r.returncode == 0 else "ssh-keygen: %s" % r.stdout.strip()
+
+
+ENTRY_HOSTCERT_KEEP = 7 * 86400   # a certificate with less left is replaced by the hub's newer one
+
+
+def _entry_cert_facts(path):
+    """(fingerprint of the key it certifies, valid-until epoch) of a HOST
+    certificate file, None when it is not one (ssh-keygen -L)."""
+    try:
+        r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-L", "-f", path],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    typ = fp = until = None
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Type:"):
+            typ = line
+        elif line.startswith("Public key:"):
+            fp = line.split()[-1]
+        elif line.startswith("Valid:"):
+            w = line.split()
+            if "to" in w and w.index("to") + 1 < len(w):
+                try:
+                    until = time.mktime(time.strptime(w[w.index("to") + 1], "%Y-%m-%dT%H:%M:%S"))
+                except ValueError:
+                    until = None
+    if not typ or "host certificate" not in typ or not fp or until is None:
+        return None
+    return fp, until
+
+
+def _entry_hostcert(ep):
+    """The hub's host certificate for the entry key (T743), from the last reach
+    answer (reach.json's verdict.host_cert): one already here for this key with
+    a week left is kept; else the hub's, when it is a host certificate of THIS
+    key not yet expired; else none (a stale or foreign one is taken away).
+    Returns True when the file changed."""
+    pub = _entry_read(ep.hostkey + ".pub") or ""
+    r = subprocess.run([env("FLEET_ENTRY_KEYGEN", "/usr/bin/ssh-keygen"), "-l", "-f", ep.hostkey + ".pub"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=30) \
+        if pub else None
+    mine = r.stdout.split()[1] if r is not None and r.returncode == 0 and len(r.stdout.split()) > 1 else ""
+    t = now()
+    have = _entry_cert_facts(ep.hostcert) if os.path.exists(ep.hostcert) else None
+    if have and mine and have[0] == mine and have[1] - t > ENTRY_HOSTCERT_KEEP:
+        return False
+    rep = read_json(os.path.join(ep.dir, "reach.json"), {}) or {}
+    line = ((rep.get("verdict") or {}).get("host_cert") or "").strip()
+    if line and "\n" not in line and mine:
+        tmp = ep.hostcert + ".new"
+        _entry_put(tmp, line + "\n", 0o644)
+        got = _entry_cert_facts(tmp)
+        if got and got[0] == mine and got[1] > t and (not have or got[1] > have[1] or have[0] != mine):
+            if _entry_read(ep.hostcert) != line + "\n":
+                os.replace(tmp, ep.hostcert)
+                return True
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    if have and (have[0] != mine or have[1] <= t):
+        try:
+            os.remove(ep.hostcert)
+        except OSError:
+            pass
+        return True
+    return False
+
+
+def _entry_hostcert_lines(ep):
+    """HostCertificate for the entry sshd while a certificate is here, with its
+    digest in a comment: a new certificate changes the config, so sshd is told
+    (the child's reload is the config's)."""
+    import hashlib
+    text = _entry_read(ep.hostcert)
+    if not text:
+        return []
+    return ["HostCertificate %s" % ep.hostcert,
+            "# host certificate %s" % hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]]
 
 
 def _entry_b64s(text):
@@ -6555,7 +6721,11 @@ def _entry_converge(paths, ep, port, lst, force):
         book["error"] = why
         write_json(ep.book, book)
         return book
+    if not door:
+        _entry_hostcert(ep)
     rows = door_route_rows(lst) if door else {}
+    # the door-session CA (A5SQ): a home's only — the door itself trusts no CA
+    entry_door_ca_file(ep, {} if door else lst)
     # the door's logins are its jump rows (below): no account, no keys/<login> of its own
     verdict = {} if door else entry_eligible(paths, sorted(lst["logins"]))
     want, logins_book, skipped = {}, {}, 0

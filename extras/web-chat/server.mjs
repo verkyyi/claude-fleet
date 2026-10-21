@@ -160,7 +160,12 @@ function sdk() {
   return sdkP;
 }
 
-// ---- the session credential: one per turn, revoked when the turn ends -------
+// ---- the session credential: one per conversation, reused by every turn --------
+// (task V9DJ C1: minting one took p50 8 s / p90 18 s on a busy home — a route
+// probe and a mint, each its own shell + python — and revoking another 2 s, on
+// every turn before the model was even asked). Minted on the first need (or when
+// the page reads the conversation, ahead of a turn), dropped when a turn fails
+// on something else than a budget or the stop key, revoked when the service exits.
 let turnSeq = 0;
 function run(cmd, args, extraEnv = {}) {
   return new Promise((resolve) => {
@@ -184,6 +189,19 @@ async function revokeCred(c) {
   if (!c?.mint) return;
   await run(SESSION_CRED, ["revoke", "--sid", c.sid]);
   liveCreds.delete(c.mint.cred);
+}
+let credP = null;
+function credFor() {
+  if (!credP) credP = mintCred().catch((e) => { credP = null; throw e; });
+  return credP;
+}
+async function dropCred(why) {
+  const p = credP;
+  credP = null;
+  if (!p) return;
+  const c = await p.catch(() => null);
+  if (c?.mint) log("cred_drop", { cred_sid: c.sid, why });
+  await revokeCred(c);
 }
 
 // ---- http helpers -----------------------------------------------------------
@@ -319,10 +337,25 @@ let live = null;          // the running turn: { tid, ac, listeners, asks, model
 let maint = null;         // a compact / relay between turns (the next turn waits for it)
 let ridSeq = 0;
 
-// One query() through a fresh session credential; onMsg sees every SDK message.
+// the context's size, off every message of a query
+function account(m) {
+  if (m.type === "assistant" && m.message?.usage) {
+    const u = m.message.usage;
+    conv.ctx.used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+  }
+  if (m.type === "result") {
+    for (const mu of Object.values(m.modelUsage || {})) if (mu?.contextWindow) conv.ctx.window = mu.contextWindow;
+  }
+  if (m.type === "system" && m.subtype === "compact_boundary") {
+    conv.ctx.used = m.compact_metadata?.post_tokens || 0;
+    log("compacted", { trigger: m.compact_metadata?.trigger, pre: m.compact_metadata?.pre_tokens });
+  }
+}
+
+// One query() through the conversation's session credential; onMsg sees every SDK message.
 async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers }, onMsg) {
   const S = await sdk();
-  const cred = await mintCred();
+  const cred = await credFor();
   log("query", { cred_sid: cred.sid, route: cred.route, model, resume: !!resume });
   try {
     const q = S.query({ prompt, options: {
@@ -334,21 +367,140 @@ async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers
     } });
     for await (const m of q) {
       if (m.session_id && !resume && !conv.session) { conv.session = m.session_id; conv.cwd = cwd; saveConv(); }
-      if (m.type === "assistant" && m.message?.usage) {
-        const u = m.message.usage;
-        conv.ctx.used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-      }
-      if (m.type === "result") {
-        for (const mu of Object.values(m.modelUsage || {})) if (mu?.contextWindow) conv.ctx.window = mu.contextWindow;
-      }
-      if (m.type === "system" && m.subtype === "compact_boundary") {
-        conv.ctx.used = m.compact_metadata?.post_tokens || 0;
-        log("compacted", { trigger: m.compact_metadata?.trigger, pre: m.compact_metadata?.pre_tokens });
-      }
+      account(m);
       onMsg(m);
     }
+  } catch (e) {
+    // a failed turn may be the credential's (the proxy forgot it, a rebind): the
+    // next turn mints a fresh one. A budget refusal or the stop key is not.
+    if (!ac?.signal?.aborted && !e?.budget && !e?.tooLong && !budgetRefusal([String(e?.message || "")]) && !TOO_LONG.test(String(e?.message || ""))) await dropCred("turn failed");
+    throw e;
   } finally {
-    await revokeCred(cred);
+    saveConv();
+  }
+}
+
+// ---- the warm agent (task V9DJ C2) ---------------------------------------------
+// Starting Claude Code and resuming the conversation took ~6 s of every turn
+// (p50, a busy home) before the model was asked. One query() is kept open on
+// the conversation instead, fed by an input stream: a turn pushes its words and
+// ends on that turn's result. It closes on the stop key, before a compact or a
+// relay, on a model the SDK cannot switch, on any error, and after
+// FLEET_WEBCHAT_WARM_SECS idle (default 600; 0 = off: every turn starts its own,
+// as before) — the next turn opens it again. A page reading the conversation
+// opens it ahead of the turn.
+const WARM_IDLE_MS = Number(E.FLEET_WEBCHAT_WARM_SECS ?? 600) * 1000;
+let warm = null;          // { q, input, ac, cwd, resume, session, model, cur, details, canUse, idle, closed }
+let warmOpening = null;
+let lastModel = DEFAULT_MODEL;
+function inputStream() {
+  const buf = [];
+  let wake = null, ended = false;
+  return {
+    push(m) { buf.push(m); wake?.(); wake = null; },
+    end() { ended = true; wake?.(); wake = null; },
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        while (buf.length) yield buf.shift();
+        if (ended) return;
+        await new Promise((r) => { wake = r; });
+      }
+    },
+  };
+}
+function closeWarm(why) {
+  const w = warm;
+  warm = null;
+  if (!w || w.closed) return;
+  w.closed = true;
+  clearTimeout(w.idle);
+  log("warm_close", { why });
+  w.input.end();
+  w.ac.abort();
+}
+async function openWarm({ model, cwd, resume }) {
+  const S = await sdk();
+  const cred = await credFor();
+  const w = { input: inputStream(), ac: new AbortController(), cwd, resume: resume || "", session: resume || "", model,
+    cur: null, details: null, canUse: null, idle: null, closed: false };
+  w.q = S.query({ prompt: w.input, options: {
+    cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
+    ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources],
+    canUseTool: (n, i, o) => (w.canUse ? w.canUse(n, i, o) : Promise.resolve({ behavior: "deny", message: "no turn is running" })),
+    mcpServers: browserTools(S, () => w.details),
+    abortController: w.ac, ...(CLAUDE ? { pathToClaudeCodeExecutable: CLAUDE } : {}),
+    stderr: () => {},
+  } });
+  log("warm_open", { cred_sid: cred.sid, route: cred.route, model, resume: !!resume });
+  (async () => {
+    try {
+      for await (const m of w.q) {
+        if (m.session_id && !w.session) {
+          w.session = m.session_id;
+          if (!conv.session) { conv.session = m.session_id; conv.cwd = cwd; saveConv(); }
+        }
+        account(m);
+        const c = w.cur;
+        if (!c) continue;
+        try { c.onMsg(m); } catch (e) { w.cur = null; c.reject(e); closeWarm("turn error"); return; }
+        if (m.type === "result") { w.cur = null; c.resolve(); w.idle = setTimeout(() => { if (warm === w && !w.cur) closeWarm("idle"); }, WARM_IDLE_MS); }
+      }
+      throw new Error("the agent ended");
+    } catch (e) {
+      const c = w.cur;
+      w.cur = null;
+      c?.reject(e);
+    } finally {
+      if (warm === w) closeWarm("ended");
+    }
+  })();
+  return w;
+}
+// a page is about to talk: have the agent ready (never while a turn or a compact runs)
+function prewarm() {
+  if (!WARM_IDLE_MS || !SDK_PATH || live || maint || warm || warmOpening || !conv.session) return;
+  warmOpening = openWarm({ model: lastModel, cwd: conv.cwd, resume: conv.session })
+    // a turn that came in meanwhile waits on this and takes it; a compact does not
+    .then((w) => { warm = w; if (maint) closeWarm("busy"); })
+    .catch((e) => log("warm_failed", { msg: String(e?.message || e).slice(0, 200) }))
+    .finally(() => { warmOpening = null; });
+}
+// One turn on the warm agent (runQuery's contract: onMsg sees every message of
+// this turn; resolves on its result, throws on an error or the stop key).
+async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details }, onMsg) {
+  lastModel = model;
+  if (!WARM_IDLE_MS) return runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers: details ? browserTools(await sdk(), details) : undefined }, onMsg);
+  if (warmOpening) await warmOpening;
+  let w = warm;
+  if (w && (w.closed || w.cur || w.cwd !== cwd || w.session !== (resume || ""))) { closeWarm("other session"); w = null; }
+  if (w && w.model !== model) {
+    if (typeof w.q.setModel === "function") {
+      try { await w.q.setModel(model); w.model = model; } catch { closeWarm("model"); w = null; }
+    } else { closeWarm("model"); w = null; }
+  }
+  try {
+    if (!w) warm = w = await openWarm({ model, cwd, resume });
+  } catch (e) {
+    if (!e?.budget) await dropCred("agent failed to start");
+    throw e;
+  }
+  clearTimeout(w.idle);
+  w.details = details || null;
+  w.canUse = canUseTool;
+  const stop = () => { if (warm === w) closeWarm("stopped"); };
+  ac.signal.addEventListener("abort", stop, { once: true });
+  try {
+    await new Promise((resolve, reject) => {
+      w.cur = { onMsg, resolve, reject };
+      if (w.session) onMsg({ type: "system", subtype: "init", session_id: w.session });
+      w.input.push({ type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null, session_id: w.session });
+    });
+  } catch (e) {
+    if (!ac.signal.aborted && !e?.budget && !e?.tooLong && !budgetRefusal([String(e?.message || "")]) && !TOO_LONG.test(String(e?.message || ""))) await dropCred("turn failed");
+    throw e;
+  } finally {
+    ac.signal.removeEventListener("abort", stop);
+    w.canUse = null;
     saveConv();
   }
 }
@@ -359,6 +511,8 @@ function maintain(why) {
   if (maint) return maint;
   maint = (async () => {
     log("maintain", { why, used: conv.ctx.used, window: conv.ctx.window });
+    if (warmOpening) await warmOpening.catch(() => {});
+    closeWarm("maintain");
     let ok = false;
     try {
       await runQuery("/compact", { model: DEFAULT_MODEL, resume: conv.session, cwd: conv.cwd, ac: new AbortController() },
@@ -393,11 +547,12 @@ async function relay() {
 // turn, holding only that turn's browser — the person's own, nobody else's.
 function browserTools(S, details) {
   if (typeof S.createSdkMcpServer !== "function" || typeof S.tool !== "function") return undefined;
+  const now = () => (typeof details === "function" ? details() : details) || {};
   const t = S.tool("browser_context",
     "The browser the person is talking from right now: full IP address, approximate place, full user agent and " +
     "client hints, languages, time zone, screen and viewport, touch, network type. Call it only when the answer needs a detail " +
     "the one-line browser summary at the start of the conversation does not give.",
-    {}, async () => ({ content: [{ type: "text", text: JSON.stringify(details) }] }));
+    {}, async () => ({ content: [{ type: "text", text: JSON.stringify(now()) }] }));
   return { fleet_browser: S.createSdkMcpServer({ name: "fleet_browser", version: "1.0.0", tools: [t] }) };
 }
 const TOO_LONG = /prompt is too long|context (?:window|length)|too many tokens/i;
@@ -429,7 +584,7 @@ async function turn(req, res, person) {
   const browser = cleanBrowser(body.client);
   const place = SOCKET ? parseClient(req.headers["x-fleet-client"]) : {};
   const where = contextLine(browser, place);
-  const mcpServers = browser || place.ip ? browserTools(S, contextDetails(browser, place)) : undefined;
+  const details = browser || place.ip ? contextDetails(browser, place) : null;
 
   const tid = newSecret(9);
   live = { tid, ac: new AbortController(), listeners: new Set([res]), asks: new Map(), model };
@@ -495,8 +650,8 @@ async function turn(req, res, person) {
       // the one-line context goes in on a session's first turn and again only when it changed
       const head = where && (!conv.session || conv.ctxKey !== where.key) ? contextBlock(where.line) : "";
       try {
-        await runQuery(seed + head + text, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
-          canUseTool, mcpServers }, onMsg);
+        await warmQuery(seed + head + text, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
+          canUseTool, details }, onMsg);
         if (seed) conv.seed = "";
         if (head) conv.ctxKey = where.key;
         if (seed || head) saveConv();
@@ -645,6 +800,8 @@ async function handle(req, res) {
     return send(res, 404, { error: "not found" });
   }
   if (p === "/api/conversation" && req.method === "GET") {
+    // a page reading the conversation is about to talk: have the credential ready
+    if (SDK_PATH && !live) { credFor().catch(() => {}); prewarm(); }
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",
       asks: live ? [...live.asks.entries()].map(([rid, a]) => askEvent(rid, a)) : [],
@@ -712,11 +869,18 @@ if (SOCKET) {
   });
 }
 server.on("connection", (c) => { touch(); c.on("close", touch); });
-function shutdown(code, ev) {
+let stopping = false;
+async function shutdown(code, ev) {
+  if (stopping) return;
+  stopping = true;
   log(ev);
+  closeWarm(ev);
   carryOut();
   server.close();
   if (SOCKET) { try { unlinkSync(SOCK); } catch { /* gone */ } }
+  // the conversation's credential goes with the service (bounded: a stuck proxy
+  // never holds the exit — the proxy drops it with this pid anyway)
+  await Promise.race([dropCred(ev), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(code);
 }
 if (SOCKET && IDLE_SECS > 0) {

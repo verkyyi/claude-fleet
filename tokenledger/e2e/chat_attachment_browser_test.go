@@ -74,11 +74,11 @@ func TestChatAttachmentChromium(t *testing.T) {
 			if err := h.Srv.Store.DB().QueryRow(`SELECT COALESCE(SUM(bytes_up),0), COALESCE(SUM(bytes_down),0) FROM fleet_chat_requests`).Scan(&up, &down); err != nil {
 				t.Fatal(err)
 			}
-			if !blocked && (up != 0 || down != 0) {
-				t.Fatalf("direct payload traversed hub: %d/%d", up, down)
-			}
-			if blocked && (up == 0 || down == 0) {
-				t.Fatal("fallback counters missing")
+			// A chat request's default is the relay (task V9DJ), so both runs carry
+			// payload through the hub; the browser asserts the four requests that
+			// asked for direct were direct.
+			if up == 0 || down == 0 {
+				t.Fatal("relay counters missing")
 			}
 			t.Logf("node requests=%d model-turn stand-ins=%d hub payload up=%d down=%d chat relay entries=0 Safari=pending", len(svc.seen()), turns, up, down)
 		})

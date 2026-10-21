@@ -1514,6 +1514,16 @@ def gone_sids(text):
     return out
 
 
+def probe_title(title):
+    """A probe's / placement demo's title (fleet_reap_policy.is_probe_title, BCYB):
+    已收起 never lists one — it is closed, not work to resume."""
+    try:
+        import fleet_reap_policy
+    except ImportError:
+        return False
+    return fleet_reap_policy.is_probe_title(title)
+
+
 def id_gone_alone(have, now, keep):
     """The closed ledgers no history row and no window answers to (a no-repo task,
     a session /clear or a relay left — T593), closed within `keep`: [(fid, rec)],
@@ -1525,6 +1535,8 @@ def id_gone_alone(have, now, keep):
             continue
         rec = id_record(fid)
         ts = ((rec or {}).get("closed") or {}).get("ts") or 0
+        if ts and probe_title((rec.get("opened") or {}).get("title") or ""):
+            continue   # BCYB: 已收起 lists no probe
         # a dead record closed with nothing in it (C13's sweep) is no session
         if ts and now - ts < keep and (rec.get("segments") or (rec.get("opened") or {}).get("title")):
             out.append((ts, fid, rec))
@@ -1961,6 +1973,8 @@ def entries(vid, now=None, hub=True):
     for target, glyph, label, name, title, act, pr, when in gone_rows(gtext):
         if label.startswith("#") and label in open_issues:
             continue
+        if probe_title(title or name):
+            continue   # a probe / placement demo is not work to come back to (BCYB)
         age = gone_age(when, act, now)
         if age is None or age >= keep:
             older += 1
@@ -2864,7 +2878,8 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     seeded starts.
     Every start is clocked (T684, fleet_timing.py's `session`): `t0` is the box's
     ↵ (`--t0`; none ⇒ now), carried down the road as FLEET_TIMING_T0 so each
-    stage — placed · window · typeable · ready — is its time since that ↵."""
+    stage — record · placed · window · switched · ready · input — is its time
+    since that ↵ (T716: `input`, the agent's input box, is the one judged)."""
     fleet = view_fleet(vid)
     if not fleet:
         return 2
@@ -2905,7 +2920,6 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     except OSError as error:
         rc, w, why = 1, "", str(error)
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
-        run.at("window")
         if chosen and not prompt:
             new_remember(repo, agent)
         went = go(qo, vid, w, "new", client)
@@ -2932,11 +2946,23 @@ def fleet_timing_t0(t0):
 
 
 def new_typeable(run, client):
-    """The 看台 is on the new session: `typeable` (and `total`, the doctor's
-    `timing` row) under the run, and the time it took, briefly, on the client."""
-    ms = run.at("typeable")
-    fleet_timing.add("session", [("total", ms)], ts=run.t0)
-    toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)), "info")
+    """The 看台 is on the new session: `switched` under the run (T716 — `typeable`
+    before); then the person's real wait, the agent's input box (`input`, which
+    its relay writes), on the client: 「新会话 N 秒就能打字」. An agent whose
+    input box the clock never sees within FLEET_VIEW_INPUT_WAIT (20 s) says
+    nothing more — the switch's own time is not that number."""
+    run.at("switched")
+    secs = fenv("FLEET_VIEW_INPUT_WAIT", 20)
+    # the wait is a child of its own: `do new` (its popup waits on it) ends now
+    if secs <= 0 or os.environ.get("FLEET_VIEW_INPUT_WAIT_FG") != "1" and os.fork():
+        return
+    try:
+        ms = fleet_timing.wait_seg("session", run.t0, "input", secs)
+        if ms is not None:
+            toast(client, say("view_new_timing_fmt", "%.1f" % (ms / 1000.0)), "info")
+    finally:
+        if os.environ.get("FLEET_VIEW_INPUT_WAIT_FG") != "1":
+            os._exit(0)
 
 
 def new_remember(repo, agent):

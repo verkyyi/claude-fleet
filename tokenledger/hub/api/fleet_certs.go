@@ -82,6 +82,10 @@ type FleetMachine struct {
 	// (claude-fleet#4193) — the pod's own sshd host keys, checked on the
 	// inner hop (fleet-<alias>-pod); HostKeys stays the door's.
 	TargetHostKeys []string `json:"target_host_keys,omitempty"`
+	// HostCA is the hub's host CA (claude-fleet T743): fleet connect trusts it
+	// as one @cert-authority line, so a machine showing a certificate it signed
+	// is known whatever its key. Absent when the hub has no SSH CA.
+	HostCA []string `json:"host_ca,omitempty"`
 }
 
 // FleetRoute is one way in: LAN, tailnet, public port. The first route is the

@@ -412,6 +412,7 @@ func (s *Server) serveConsole(w http.ResponseWriter, r *http.Request, side, rest
 		h.Set("X-Content-Type-Options", "nosniff")
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		b = consoleAsset(w, r, name, b)
 	}
 	http.ServeContent(w, r, path.Base(name), time.Time{}, bytes.NewReader(b))
 }

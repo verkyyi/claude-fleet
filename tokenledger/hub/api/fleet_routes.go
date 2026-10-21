@@ -252,5 +252,7 @@ func (s *Server) routeMachine(m FleetMachine, relayReady func(string) bool, logi
 	if relay && s.podBehindDoor(m.Hostname) {
 		relay = s.podRelayReady(m.Hostname)
 	}
-	return RouteMachine{FleetMachine: s.withEntryReachRelay(m, now, relay), Relay: relay, Login: login}
+	rm := RouteMachine{FleetMachine: s.withEntryReachRelay(m, now, relay), Relay: relay, Login: login}
+	rm.HostCA = s.hostCAKeys()
+	return rm
 }

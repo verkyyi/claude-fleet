@@ -1448,6 +1448,42 @@ def push(ids, call=None):
     return rc
 
 
+def live_report(ids, dry=False, call=None, as_json=False):
+    """Tell the hub which IDs this login's windows carry now (task BCYB): POST
+    /v1/node/ids/live. The hub closes this machine's open IDs the list leaves out
+    and answers what it closed / reopened; the answer is kept in $ids/.hub/live.json
+    (the doctor's `ids` row). → 0 · 3 no hub here · 75 the hub did not answer."""
+    call = call or _poster()
+    code, ans = call("POST", "/v1/node/ids/live", {"ids": sorted(i for i in ids if is_fid(i)), "dry": bool(dry)})
+    if code == -3:
+        return 3
+    if code != 200 or not isinstance(ans, dict):
+        if code in (404, 405):
+            return 0   # an older hub: no reconcile road
+        print("fleet-id: the hub did not take the live list (HTTP %s)" % code, file=sys.stderr)
+        return 75
+    ans["at"] = int(time.time())
+    if not dry:
+        os.makedirs(hub_dir(), exist_ok=True)
+        tmp = os.path.join(hub_dir(), ".live.%d" % os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(ans, fh, ensure_ascii=False)
+        os.replace(tmp, os.path.join(hub_dir(), "live.json"))
+        if ans.get("closed") or ans.get("reopened"):
+            pull_later()
+    if as_json:
+        print(json.dumps(ans, ensure_ascii=False))
+        return 0
+    word = "would close" if dry else "closed"
+    print("%s %d · reopened %d · kept %d · live %d" % (word, len(ans.get("closed") or []),
+                                                      len(ans.get("reopened") or []), ans.get("kept", 0), ans.get("live", 0)))
+    for x in ans.get("closed") or []:
+        print("  %-6s %-10s %-15s %s" % (x.get("short", ""), x.get("machine") or "-", x.get("reason", ""), x.get("title", "")))
+    for x in ans.get("reopened") or []:
+        print("  reopened %-6s %s" % (x.get("short", ""), x.get("title", "")))
+    return 0
+
+
 def push_later(fid):
     """Hand one ID to `fleet-id.sh push` in the background — never waited for."""
     if os.environ.get("FLEET_ID_PUSH", "1") == "0":
@@ -1752,19 +1788,30 @@ def hook_retry_flush(pane, fid):
 
 
 def hook_timing_ready(pane):
-    """A 看台's new session (T684): the window's @timing_t0 is its ↵; the agent's
-    native session is up now — `ready` under that run (fleet_timing.py), once."""
+    """A new session clocked from its ↵ (T684): the window's @timing_t0 is that ↵;
+    the agent's native session is up now — `ready` under that run (fleet_timing.py),
+    once: @timing_ready remembers it. The stamp stays for `input` (T716), which
+    clears both; @timing_what names a node-clocked run (`session.node`)."""
     t0 = wopt(pane, "@timing_t0")
-    if not t0:
+    if not t0 or wopt(pane, "@timing_ready") == t0:
         return
-    wset(pane, "@timing_t0")
+    wset(pane, "@timing_ready", t0)
+    what = wopt(pane, "@timing_what")
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import fleet_timing
         if 0 < time.time() - float(t0) < 3600:
-            fleet_timing.Run("session", float(t0)).at("ready")
+            fleet_timing.Run(what if what == "session.node" else "session", float(t0)).at("ready")
     except (ImportError, ValueError):
         pass
+
+
+def fleet_server():
+    """Whether this pane's tmux server is one of this login's fleets: its socket's
+    label names a configured fleet ($FLEET_CONF_DIR/fleets/<label>)."""
+    sock = os.environ.get("TMUX", "").split(",")[0]
+    label = os.path.basename(sock)
+    return bool(label) and os.path.isdir(os.path.join(conf_dir(), "fleets", label))
 
 
 def hook(stdin):
@@ -1793,6 +1840,11 @@ def hook(stdin):
     try:
         if not os.path.exists(ledger_path(fid)):
             # A window opened before the ledger, or by a road that wrote no `opened`.
+            # Only on one of this login's fleets (BCYB): a test's or a drill's tmux
+            # server run with the real FLEET_CONF_DIR wrote 53 IDs here that no
+            # window of the fleet ever carried, and the hub kept them open.
+            if not fleet_server():
+                return
             open_id(fid, {"lazy": True, "agent": agent, "window": tmux(["display-message", "-p", "-t", pane, "#{window_id}"])})
         hook_retry_flush(pane, fid)
         ev = record_native(fid, agent, native, source, hint)
@@ -1879,6 +1931,9 @@ def main(argv):
         return 0
     if cmd == "push":
         return push([a for a in args if is_fid(a)])
+    if cmd == "live":
+        return live_report([x for x in os.environ.get("FLEET_ID_LIVE", "").split() if is_fid(x)],
+                           dry="--dry" in args, as_json="--json" in args)
     if cmd == "pull":
         return pull([a for a in args if is_fid(a)], full="--full" in args)
     if cmd == "switch":

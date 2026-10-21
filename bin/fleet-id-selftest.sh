@@ -269,6 +269,16 @@ hook "$PR" compact ffff0001
 st_count; [ "$(segs "$FR")" = "claude:ffff0001:startup:1" ] && [ -z "$(opt "$WR" @id_retry)" ] \
   || st_miss "HOOK: the next hook flushes the kept segment first" "$(segs "$FR") retry=$(opt "$WR" @id_retry)"
 st_count; python3 "$BIN/fleet_id.py" get "$FR" --json | grep -q '"lazy": true' || st_miss "HOOK: a window no spawn recorded gets a lazy opened"
+# BCYB: a tmux server that is not one of this login's fleets (a test's, a drill's)
+# never lazily opens an ID on the real ledger
+FN=$(mkfid); read -r WN PN <<EOF
+$(newwin "$FN")
+EOF
+mv "$FLEET_CONF_DIR/fleets/$L" "$FLEET_CONF_DIR/fleets/.$L.away"
+hook "$PN" startup abab0001
+mv "$FLEET_CONF_DIR/fleets/.$L.away" "$FLEET_CONF_DIR/fleets/$L"
+st_count; [ ! -e "$FLEET_CONF_DIR/ids/$FN.ndjson" ] || st_miss "HOOK: a server no fleet of this login runs opens no ID (BCYB)" "$(cat "$FLEET_CONF_DIR/ids/$FN.ndjson")"
+tf kill-window -t "$WN" 2>/dev/null
 
 # ---- WIRE --------------------------------------------------------------------------
 st_count; python3 - "$BIN/../hooks/settings-hooks.json" <<'PY' || st_miss "WIRE: the SessionStart table runs fleet-id.sh hook (no matcher: every source)"

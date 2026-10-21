@@ -658,6 +658,14 @@ class LinuxNode(unittest.TestCase):
         fm = {x['mountPath']: x for x in c['volumeMounts']}
         self.assertEqual((fm['/run/sshd-key']['name'], fm['/run/sshd-key']['readOnly']), ('sshd-key', True))
         self.assertIn('chmod 711 /run/sshd-key\n', sshd['command'][2])
+        # T743: the key itself lives on the person's disk, only sshd mounts it — a
+        # rebuilt pod answers with the same key; the login's container never sees it
+        sm = {x['mountPath']: x for x in sshd['volumeMounts']}
+        self.assertEqual((sm['/var/lib/fleet-sshd-key']['name'], sm['/var/lib/fleet-sshd-key']['subPath']),
+                         ('data', 'sshd-hostkey'))
+        self.assertNotIn('sshd-hostkey', json.dumps(c['volumeMounts']))
+        self.assertNotIn('rm -f /run/sshd-key/host', sshd['command'][2])
+        self.assertIn('if [ ! -s "$K/host" ]', sshd['command'][2])
         # no login, a reserved one, root's number, no central route: not rendered
         for bad in (base[:base.index('--login')] + base[base.index('--uid') + 2:],
                     [x if x != 'fleetu7' else 'root' for x in base], [x if x != '10002' else '0' for x in base],
@@ -896,6 +904,12 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual({v['name']: v['emptyDir'] for v in pod['volumes'] if 'emptyDir' in v},
                          {'state': {'sizeLimit': '4Gi'}, 'logs': {'sizeLimit': '1Gi'}})
         self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', env)
+        # A5SQ: the listener is OpenSSH unless asked; --door-server ccquota adds the one env
+        self.assertNotIn('FLEET_DOOR_SERVER', env)
+        cq = rendered(door + ['--image', img, '--hub', 'https://hub.example', '--door-server', 'ccquota'])[1]
+        cenv = {e['name']: e['value'] for e in cq['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(cenv.pop('FLEET_DOOR_SERVER'), 'ccquota')
+        self.assertEqual(cenv, env)
         # the load balancer's address, once it has one: the door's reach knocks
         # there, not on the NAT (#4112)
         lb = rendered(door + ['--image', img, '--hub', 'https://hub.example', '--entry-host', '203.0.113.7'])[1]

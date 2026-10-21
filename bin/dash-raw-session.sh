@@ -293,10 +293,7 @@ fi
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
-  # the agent file is on this machine — unless the release ships it, then every
-  # machine has it and the hub may place it (T672, fleet_agent_file_travels)
-  *) [ -z "$NODE_ARG" ] && [ ! -f "$(cd "$(dirname "$0")" && pwd)/../conf/agent-defaults/claude/agents/$AS_ARG.md" ] \
-       && NODE_ARG=local ;;
+  *) ;;
 esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 EXPLICIT_AGENT=$AGENT
@@ -319,6 +316,10 @@ fi
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
+# The agent file is on this machine — unless the release ships it (the core's or a
+# plugin's, e.g. epic-driver), then every machine has it and the hub may place it
+# (T672, T742: fleet_agent_file_travels).
+[ -n "$AS_ARG" ] && [ -z "$NODE_ARG" ] && ! fleet_agent_file_travels "$AS_ARG" && NODE_ARG=local
 
 # A machine name is one token (it is embedded in the --bg re-exec and handed to
 # the hub); anything else is refused rather than guessed.
@@ -561,19 +562,22 @@ fi
 # here gives (2 full · 1 else); no final state ⇒ exit 1, never a success. A hub
 # that cannot be asked, or no machine that can take it, falls back to opening it
 # here for `auto` — and refuses for a machine named explicitly. Never placed: a
-# no-repo scratch (no repo to place by) and a seeded one (--prompt rides the
-# launch argument, here only) — named elsewhere they are refused, under `auto`
-# they open here. Hub module off: nothing runs unless --node names another machine.
+# draft (--draft: its words are typed, never sent) and a no-repo scratch with no
+# task record (⌘N, the guide, a scheduled agent task — nothing on the hub to read
+# it back by) — named elsewhere they are refused, under `auto` they open here.
+# Hub module off: nothing runs unless --node names another machine.
 # A seeded scratch travels (issue T672): its words ride the start as the
 # scratch's body — a task's past the hub's 4000 characters cut, the record keeps
-# them all. An agent file only this machine has keeps it here.
+# them all. A no-repo one bound to its record travels too (T742: an EPIC driver,
+# an orchestrator's no-repo task) — any machine of the person's may take it, no
+# repo to filter by. An agent file only this machine has keeps it here.
 PLACE_AS=''
 if [ "$PLACING" = 1 ] && [ -n "$AS_ARG" ]; then
   if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG; else _as_here=1; fi
 fi
 if [ "$PLACING" = 1 ]; then
-  if [ "$NOREPO" = 1 ] || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ]; then
-    _why='a no-repo scratch'
+  if { [ "$NOREPO" = 1 ] && [ -z "$TASK_REF" ]; } || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ]; then
+    _why='a no-repo scratch with no task record'
     [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
     [ -n "${_as_here:-}" ] && _why="a session as $AS_ARG (the agent file is here)"
     if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
@@ -590,6 +594,7 @@ if [ "$PLACING" = 1 ]; then
     _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
   fi
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
+  [ "$NOREPO" = 1 ] && _prepo=''   # no repo to place by: any of the person's machines (T742)
   python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
   _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
   _body=''
@@ -609,6 +614,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
     FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
     fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
+  fleet_timing_at placed   # the hub's placement answered (T716; nothing without a ↵)
   [ -n "$_body" ] && rm -f "$_body"
   _place_note=''
   if [ "$_place_err" != /dev/null ]; then
@@ -856,11 +862,14 @@ fi
   # the hub reads too)
   [ -n "$TASK_FID" ] && stamp="$stamp$(fleet_win_stamp_cmd @fleet_id "$TASK_FID")"
   [ "$TASK_TAKE" = here ] && python3 "$BIN/fleet_id.py" attempt "$TASK_FID" >/dev/null 2>&1
-  # a 看台's new session is clocked from its ↵ (T684, fleet_timing.py): the window
-  # carries it so the agent's start (fleet_id.hook) writes `ready` under that run
+  # a new session is clocked from its ↵ (T684, fleet_timing.py): the window
+  # carries it so the agent's start (fleet_id.hook) writes `ready` and its first
+  # wait for the person `input` (T716) under that run; a start the hub sent here
+  # is a `session.node` run (FLEET_TIMING_WHAT, fleet_control.py)
   case "${FLEET_TIMING_T0:-}" in
     ''|*[!0-9.]*) : ;;
-    *) stamp="$stamp$(fleet_win_stamp_cmd @timing_t0 "$FLEET_TIMING_T0")" ;;
+    *) stamp="$stamp$(fleet_win_stamp_cmd @timing_t0 "$FLEET_TIMING_T0")"
+       [ "${FLEET_TIMING_WHAT:-}" = session.node ] && stamp="$stamp$(fleet_win_stamp_cmd @timing_what session.node)" ;;
   esac
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
@@ -868,6 +877,7 @@ fi
          # the hub's DECLINED / UNKNOWN answer as the refusal.
          _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
          refuse "raw: new-window failed in $SESS$_why"; exit 1; }
+fleet_timing_at window   # the window is open (T716: its one writer, every road)
 fleet_admit_confirm >/dev/null   # the window is open: its admission holds on its own (#2502)
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
@@ -948,7 +958,7 @@ stamp_option @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 [ -n "$ID_TASK" ] && stamp_option @task "$ID_TASK" 2>/dev/null    # a continued ID's record (C18)
 [ -n "$REAP_ORIGIN" ] || REAP_ORIGIN=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" \
-  "$TEST_ID" "$_idpar" "${REOPEN_FID:-$PREV_ID}")
+  "$TEST_ID" "$_idpar" "${REOPEN_FID:-$PREV_ID}" "$NAME")
 if [ -z "$REAP" ]; then
   _rk=scratch; case "$PROMPT" in /loop|/loop[[:space:]]*) _rk=loop ;; esac
   REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${REAP_ORIGIN:-person}" --kind "$_rk") || REAP=done:15m

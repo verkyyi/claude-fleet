@@ -1,0 +1,31 @@
+--- a/server.go	2026-10-20 19:27:18
++++ b/server.go	2026-10-20 19:27:18
+@@ -222,6 +222,15 @@
+ 	// are included in the list of methods that can be attempted by the client.
+ 	VerifiedPublicKeyCallback func(conn ConnMetadata, key PublicKey, permissions *Permissions,
+ 		signatureAlgorithm string) (*Permissions, error)
++
++	// xssh-patch begin (claude-fleet A5SQ)
++	// SignedPublicKeyCallback, if non-nil, is called after a client's
++	// publickey signature verified (and after VerifiedPublicKeyCallback),
++	// with that signature: the door hands it to the hub, which signs the
++	// hop home only for a signature the person made over THIS session.
++	SignedPublicKeyCallback func(conn ConnMetadata, key PublicKey, permissions *Permissions,
++		signatureAlgorithm string, sig *Signature) (*Permissions, error)
++	// xssh-patch end
+ 
+ 	// KeyboardInteractiveCallback, if non-nil, is called when
+ 	// keyboard-interactive authentication is selected (RFC
+@@ -836,7 +845,12 @@
+ 					// and successfully verified. If authErr is non-nil, the key is not
+ 					// considered verified and the callback must not run.
+ 					perms, authErr = config.VerifiedPublicKeyCallback(s, pubKey, perms, algo)
++				}
++				// xssh-patch begin (claude-fleet A5SQ): the verified signature itself
++				if authErr == nil && config.SignedPublicKeyCallback != nil {
++					perms, authErr = config.SignedPublicKeyCallback(s, pubKey, perms, algo, sig)
+ 				}
++				// xssh-patch end
+ 				if authErr == nil && perms != nil && perms.CriticalOptions != nil {
+ 					if saco := perms.CriticalOptions[sourceAddressCriticalOption]; saco != "" {
+ 						if err := checkSourceAddress(s.RemoteAddr(), saco); err != nil {

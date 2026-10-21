@@ -443,6 +443,13 @@ From `fleet doctor`.
 - **What it is**: whether the list of sessions on other machines is being refreshed.
 - **On WARN / FAIL**: fix it as the explanation says: is the hub there, is the token right.
 
+#### `hubids`
+
+From `fleet doctor`.
+
+- **What it is**: whether the session IDs the hub still holds open match the windows this machine really has (a session that is gone keeps showing in the panel otherwise).
+- **On WARN / FAIL**: it usually heals itself: every cleanup pass tells the hub which windows are gone and it closes their IDs (after 10 minutes away). To see what it would close: `~/.claude/fleet/bin/fleet-id.sh live --dry`.
+
 #### `hub-image`
 
 From `fleet doctor`.

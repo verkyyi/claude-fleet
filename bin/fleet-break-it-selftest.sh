@@ -68,6 +68,9 @@
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   norepo-never-placed                             dash-raw-session.sh (a no-repo task asks with no repo),
+#                                                   fleet_agent_file_travels (fleet-lib.sh: a plugin's agent file);
+#                                                   the hub half is tokenledger/hub/api fleet_place.go (go test)
 #   place-full-no-next / place-slow-bypass          fleet_hub_place (fleet-lib.sh: --not-here, rc 11, place_ms,
 #                                                   fleet_hub_place_ms), dash-issue-session.sh / dash-raw-session.sh
 #                                                   (CAP_HELD → the ask), fleet_agent_file_travels; the hub half is
@@ -156,6 +159,8 @@
 #   admit-tight-done-windows                        fleet_session_cap_ok / fleet_admit_make_room (fleet-lib.sh),
 #                                                   fleet-cleanup-idle.sh --make-room, fleet-cleanup-idle.py --plan-room/--fold
 #   reopen-folding-session                          fleet_cfg_restart_why (fleet-lib.sh: @reap_due / @reap_seen)
+#   peerq-undeliverable-forever                     bin/fleet-peer-queue.sh stale / status (FLEET_PEER_QUEUE_DEAD_SECS)
+#   reopen-every-release                            bin/fleet-cfg-restart.sh (cfg-restart.ledger, FLEET_CFG_RESTART_DAY)
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 #   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
@@ -4282,6 +4287,24 @@ drill_place_slow_bypass() {
   WHAT="带种子的会话（dispatch --spawn）与 --as fleet-worker 一样先问入口；入口调用走 agent 保温的转发口（多次一条连接）；每次放置记 place_ms，日志读 p90（${out}）"
 }
 
+drill_norepo_never_placed() {
+  CAP=30; local t0 out
+  t0=$(now)
+  # the record-less rule only: a no-repo session bound to its task is the hub's
+  grep -q '{ \[ "\$NOREPO" = 1 \] && \[ -z "\$TASK_REF" \]; }' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh keeps every no-repo session here again, past the hub"; return 1; }
+  grep -q "\[ \"\$NOREPO\" = 1 \] && _prepo=''" "$BIN/dash-raw-session.sh" \
+    || { WHY="a no-repo session asks the hub with the fleet's repo — only that repo's machines"; return 1; }
+  # a plugin's shipped agent file (the EPIC driver) travels like the core's
+  out=$(bash -c '. "$1/fleet-lib.sh"; for n in epic-driver fleet-epic:epic-driver fleet-worker; do
+      fleet_agent_file_travels "$n" || echo "no:$n"; done
+    for n in nosuch fleet-epic:nosuch ../x a:b:c; do fleet_agent_file_travels "$n" && echo "yes:$n"; done; :' _ "$BIN")
+  [ -z "$out" ] || { WHY="fleet_agent_file_travels: $out"; return 1; }
+  go_half '^TestNodePlaceNoRepoScratch$' ./hub/api; [ $? = 1 ] && return 1
+  SECS=$(since "$t0")
+  WHAT="带任务记录的不绑仓库会话问入口、不按仓库筛候选、开到别台带 no_repo；epic-driver 这类插件模板随发布旅行；无记录的仍本机开"
+}
+
 # ---- one primary state source (issue #2537, EPIC #2535 C2) ------------------------
 # The agent's own OSC 7501 report (bin/fleet-status-7501.py, its pipe mode here)
 # outranks the hooks (bin/set-claude-state.sh); the screen classifier that guessed
@@ -4462,6 +4485,113 @@ drill_cross_send_refused_unseen() {
   WHAT="没有键的会话用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
 }
 
+# cross-report-queued-unseen (issue T756): a child placed on ANOTHER machine said
+# `report waiting` to its orchestrator. The hub carried it and the parent's machine
+# ledgered it within a second or two — but a waiting report was tier silent, and
+# the cross-machine branch skipped the receipt wait for silent and printed 「已排队 ·
+# not delivered」, exit 3, unconditionally; the parent's window never got it (silent
+# = ledger only), and the receipt wait itself was 4 s against a 4–7 s hub round trip.
+# Two machines here: two conf dirs (two fleet UUIDs), two tmux servers, and the hub +
+# both agents played by a pump that hands the child machine's outbox relay to the
+# parent machine's real `fleet-hub-node.sh deliver` and its receipt back to the
+# child's. The parent pane runs a fake Claude with an inbox: the report must reach
+# it, the child must say `reported` within 10 s; with the hub silent the child says
+# queued and the next tick says so in ⌘P 消息.
+drill_cross_report_queued_unseen() {
+  CAP=20; local d="$WORK/xr" t0 ua ub pw cw cp pid out rc ipid pump
+  local pf=0f1e2d3c-4b5a-4978-8a9b-000000000756 cf=1a2b3c4d-5e6f-4a7b-8c9d-000000000756
+  mkdir -p "$d/a/conf/fleets/xa" "$d/b/conf/fleets/xb" "$d/a/bin" "$d/b/bin" "$d/b/sessions"
+  : > "$d/a/conf/fleets/xa/conf"; : > "$d/b/conf/fleets/xb/conf"
+  fx_repo "$d/a/conf" xa acme/app FLEET_MAIN="$d/a/main"
+  fx_repo "$d/b/conf" xb acme/app FLEET_MAIN="$d/b/main"
+  local m
+  for m in a b; do
+    printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$d/$m/sock" > "$d/$m/bin/tmux"; chmod +x "$d/$m/bin/tmux"
+  done
+  # side <a|b> <cmd…> — this machine's conf dir, tmux server and (b) its Claude registry
+  side() { local m=$1; shift
+    env PATH="$d/$m/bin:$PATH" FLEET_CONF_DIR="$d/$m/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 \
+      FLEET_CC_SESSIONS_DIR="$d/$m/sessions" FLEET_CLAUDE_COMM=FLEETFAKECLAUDE FLEET_PEER_RECEIPT_SECS=0 \
+      FLEET_ID_PUSH=0 FLEET_ID_DIR="$d/$m/ids" "$@"; }
+  side a tmux -f /dev/null new-session -d -s xa -n home 'exec sleep 600' || { WHY="cannot start machine A's tmux server"; return 1; }
+  side b tmux -f /dev/null new-session -d -s xb -n home 'exec sleep 600' || { WHY="cannot start machine B's tmux server"; return 1; }
+  for m in a b; do
+    (cd "$BIN" && side "$m" python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/$m/conf") >/dev/null 2>&1
+  done
+  ua=$(side a bash -c '. "$1/fleet-lib.sh"; fleet_uuid xa' _ "$BIN"); ub=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_uuid xb' _ "$BIN")
+  [ -n "$ua" ] && [ -n "$ub" ] && [ "$ua" != "$ub" ] || { WHY="no two fleet UUIDs ([$ua] [$ub])"; return 1; }
+  # machine B: the orchestrator (keyless — its key is its identity), a fake Claude with an inbox
+  pw=$(side b tmux new-window -d -P -F '#{window_id}' -t xb -n orch "bash -c ': FLEETFAKECLAUDE; while :; do sleep 300; done'")
+  side b tmux set-option -w -t "$pw" @norepo 1 \; set-option -w -t "$pw" @fleet_id "$pf" \; set-option -w -t "$pw" @cc_agent claude
+  until_ok 5 sh -c "[ -n \"\$(env PATH='$d/b/bin:$PATH' FLEET_CLAUDE_COMM=FLEETFAKECLAUDE bash -c '. \"\$1/fleet-lib.sh\"; fleet_pane_claude_pid \"\$2\"' _ '$BIN' '$pw')\" ]" \
+    || { WHY="rig: no fake Claude under the parent's pane"; return 1; }
+  pid=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_pane_claude_pid "$2"' _ "$BIN" "$pw")
+  python3 -c 'import json, sys; d, pid, s = sys.argv[1:4]
+open("%s/%s.json" % (d, pid), "w").write(json.dumps(dict(pid=int(pid), sessionId="5c4b3a29-1807-4f6e-8d5c-4b3a29180756", cwd="/x", messagingSocketPath=s, name="orch")))
+open("%s/%s.k.key" % (d, pid), "w").write(json.dumps(dict(peerToken="tok-756")))' "$d/b/sessions" "$pid" "$d/b/inbox.sock"
+  python3 -c 'import os, socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(4); s.settimeout(0.5); end = time.time() + 60
+while time.time() < end:
+    try:
+        c, _ = s.accept()
+    except OSError:
+        continue
+    c.settimeout(2); buf = b""
+    try:
+        while True:
+            b = c.recv(65536)
+            if not b: break
+            buf += b
+    except OSError:
+        pass
+    open(sys.argv[2], "ab").write(buf); c.close()' "$d/b/inbox.sock" "$d/b/inbox.got" & ipid=$!
+  # machine A: the child, placed here by the orchestrator over there
+  cw=$(side a tmux new-window -d -P -F '#{window_id}' -t xa -n kid 'exec sleep 600')
+  cp=$(side a tmux display-message -p -t "$cw" '#{pane_id}')
+  side a tmux set-option -w -t "$cw" @norepo 1 \; set-option -w -t "$cw" @fleet_id "$cf" \; \
+    set-option -w -t "$cw" @origin "$pf" \; set-option -w -t "$cw" @origin_fid "$pf" \; set-option -w -t "$cw" @origin_wid "$ub/$pf"
+  printf '%s/%s\tmac-b\t\n%s/%s\tmac-a\t%s/%s\n' "$ub" "$pf" "$ua" "$cf" "$ub" "$pf" > "$d/a/conf/control/hub-workers.tsv"
+  mkdir -p "$d/a/conf/control/hub-outbox"
+  # the hub and both agents: A's relay → B's deliver; B's answer → a receipt on A
+  hubpump() { ( local end=$(( $(date +%s) + 30 )) g err rc2
+    while [ "$(date +%s)" -lt "$end" ]; do
+      g=$(ls "$d/a/conf/control/hub-outbox"/*.json 2>/dev/null | head -1)
+      if [ -z "$g" ]; then sleep 0.1; continue; fi
+      python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); r["from_node"] = "mac-a"; print(json.dumps(r))' "$g" > "$d/relay.json"
+      err=$(side b bash "$BIN/fleet-hub-node.sh" deliver < "$d/relay.json" 2>&1 >/dev/null); rc2=$?
+      rm -f "$g"
+      [ "$rc2" = 0 ] || continue          # «not now»: the hub would hold it
+      python3 -c 'import json, sys; r = json.load(open(sys.argv[1]))
+print(json.dumps(dict(id=r["id"], kind="receipt", **{"from": r["to"]}, to=r["from"], from_node="mac-b",
+                      payload=dict(rid=r["id"], kind=r["kind"], to=r["to"], status="delivered", detail=sys.argv[2]))))' \
+        "$d/relay.json" "$err" | side a bash "$BIN/fleet-hub-node.sh" deliver >/dev/null 2>&1
+      exit 0
+    done ) & pump=$!; }
+  t0=$(now)
+  hubpump
+  out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" bash "$BIN/fleet-report-parent.sh" --state waiting \
+    --summary 'plan ready, waiting for your nod' 2>&1 </dev/null); rc=$?
+  wait "$pump" 2>/dev/null
+  case "$rc|$out" in "0|"*'reported → '*'(delivered)'*) ;;
+    *) kill "$ipid" 2>/dev/null; WHY="the child's waiting report ended $rc: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1 ;; esac
+  le "$(since "$t0")" 10 || { kill "$ipid" 2>/dev/null; WHY="reported, but only after $(since "$t0")s (want ≤10 s)"; return 1; }
+  until_ok 5 sh -c "grep -q 'WAITING' '$d/b/inbox.got' 2>/dev/null" \
+    || { kill "$ipid" 2>/dev/null; WHY="the parent's window never got the report (inbox: $(head -c 200 "$d/b/inbox.got" 2>/dev/null))"; return 1; }
+  grep -q 'waiting for your nod' "$d/b/inbox.got" || { kill "$ipid" 2>/dev/null; WHY="the parent got the report without its summary"; return 1; }
+  SECS=$(since "$t0")
+  # the hub says nothing: queued, and the tick says it in ⌘P 消息
+  out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" FLEET_HUB_SENT_WAIT=1 FLEET_HUB_RECEIPT_WAIT=1 \
+    bash "$BIN/fleet-report-parent.sh" --state waiting --summary 'second word' 2>&1 </dev/null); rc=$?
+  kill "$ipid" 2>/dev/null
+  [ "$rc" = 3 ] || { WHY="with no hub answer the report ended $rc, want 3 (queued): $out"; return 1; }
+  sleep 1.2
+  side a bash "$BIN/fleet-peer-queue.sh" stale -L xa --secs 1 >/dev/null 2>&1
+  grep -q '"source":"peer-queue".*"kind":"alert"' "$d/a/conf/logs/notices.ndjson" 2>/dev/null \
+    || { WHY="a report queued past the alert bound left no ⌘P 消息: $(tail -1 "$d/a/conf/logs/notices.ndjson" 2>/dev/null)"; return 1; }
+  side a tmux kill-server 2>/dev/null; side b tmux kill-server 2>/dev/null
+  WHAT="另一台机器上的子会话 report waiting：经入口送进父窗口、≤10 s 回 reported；入口不答时 exit 3、排队过时在 ⌘P 消息里说"
+}
+
 # A migrate opened the new window with its identity but not its @fleet_role /
 # @reap_policy; and a window with no policy bound to a closed ticket was «never»
 # — under worker sleep (gone since T548) not even looked at (#2970).
@@ -4515,6 +4645,89 @@ drill_selftest_tmux_leak() {
   [ -e "$s/fleet-gone$$" ] || { rm -rf "$tt"; WHY="a fleet* socket was removed"; return 1; }
   rm -rf "$tt"
   WHAT="测试漏掉的服务器（-f /dev/null、无客户端、超龄）被收掉，死 socket 删掉，fleet* 不动；跑测试的入口给每个测试一个自己的 socket 目录、跑完清空"
+}
+
+# A window went without its ID closing — a reaper that only marked it retired, a
+# kill — and the hub kept the ID open for good: 272 open beside ~17 windows (BCYB).
+# The node now tells the hub which IDs its windows carry (`fleet-id.sh live`, the
+# cleanup tick after the push); a scan no tmux server answered tells it nothing.
+drill_id_window_gone_open() {
+  CAP=20; local t0 c L F1 F2 hub out rc
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  c="$WORK/idgone"; L="brkidg$$"; mkdir -p "$c/fleets/$L" "$c/ids"; : > "$c/fleets/$L/conf"
+  F1=$(python3 -c 'import uuid; print(uuid.uuid4())'); F2=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  printf '{"ev":"opened","title":"gone","id":"%s","seq":1,"ts":1}\n' "$F2" > "$c/ids/$F2.ndjson"
+  "$REAL_TMUX" -L "$L" -f /dev/null new-session -d -s "$L" 'sleep 120' 2>/dev/null || { WHY="tmux"; return 1; }
+  "$REAL_TMUX" -L "$L" set-window-option -t "$L:" @fleet_id "$F1" 2>/dev/null
+  hub="$WORK/idgone-hub.sh"
+  cat > "$hub" <<HUB
+#!/bin/bash
+cat > "$c/body.\$1"; printf '200\n{"closed":[{"id":"$F2","short":"X","reason":"hub:gone"}],"reopened":[],"kept":1,"live":1,"open":{}}\n'
+HUB
+  t0=$(now)
+  out=$(FLEET_CONF_DIR="$c" FLEET_ID_HUB_POST="bash $hub" FLEET_ID_PULL=0 env -u TMUX -u TMUX_PANE bash "$BIN/fleet-id.sh" live 2>&1); rc=$?
+  "$REAL_TMUX" -L "$L" kill-server 2>/dev/null
+  [ "$rc" = 0 ] && grep -q "\"$F1\"" "$c/body.POST" 2>/dev/null && ! grep -q "$F2" "$c/body.POST" \
+    || { WHY="the live list does not name the window's ID alone (rc=$rc $out · $(cat "$c/body.POST" 2>/dev/null))"; return 1; }
+  [ -f "$c/ids/.hub/live.json" ] || { WHY="the hub's answer was not kept for the doctor"; return 1; }
+  rm -f "$c/body.POST"
+  out=$(FLEET_CONF_DIR="$c" FLEET_ID_HUB_POST="bash $hub" env -u TMUX -u TMUX_PANE bash "$BIN/fleet-id.sh" live 2>&1); rc=$?
+  [ "$rc" = 75 ] && [ ! -e "$c/body.POST" ] || { WHY="with no fleet server up it still reported (rc=$rc) — a down fleet would close every ID"; return 1; }
+  grep -q 'fleet-id.sh" live' "$BIN/fleet-cleanup-daemon.sh" || { WHY="the cleanup tick never runs the reconcile"; return 1; }
+  grep -q 'self.end_id(snap\["@fleet_id"\])' "$BIN/fleet-cleanup-idle.py" || { WHY="the idle reaper's kill-window still leaves the ID open"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="节点每拍把活窗口的 ID 报给 hub（不在的由 hub 关成 hub:gone，再出现就恢复）；没有服务器回答就不报；空闲回收关窗口时写上 closed"
+}
+
+# A test's / a drill's tmux server run with the real FLEET_CONF_DIR lazily opened
+# IDs on the login's ledger that no window of the fleet ever carried (BCYB: 53).
+drill_id_test_server_lazy() {
+  CAP=15; local t0 c L F
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  c="$WORK/idlazy"; L="brkidl$$"; mkdir -p "$c/ids"
+  F=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  "$REAL_TMUX" -L "$L" -f /dev/null new-session -d -s "$L" 'sleep 120' 2>/dev/null || { WHY="tmux"; return 1; }
+  "$REAL_TMUX" -L "$L" set-window-option -t "$L:" @fleet_id "$F" 2>/dev/null
+  local sp pid pane
+  sp=$("$REAL_TMUX" -L "$L" display-message -p '#{socket_path}'); pid=$("$REAL_TMUX" -L "$L" display-message -p '#{pid}')
+  pane=$("$REAL_TMUX" -L "$L" display-message -p -t "$L:" '#{pane_id}')
+  t0=$(now)
+  printf '{"source":"startup","session_id":"brk-lazy-1"}' | FLEET_CONF_DIR="$c" FLEET_ID_PUSH=0 TMUX="$sp,$pid,0" TMUX_PANE="$pane" \
+    bash "$BIN/fleet-id.sh" hook >/dev/null 2>&1
+  if [ -e "$c/ids/$F.ndjson" ]; then "$REAL_TMUX" -L "$L" kill-server 2>/dev/null; WHY="a server no fleet of this login runs opened an ID"; return 1; fi
+  mkdir -p "$c/fleets/$L"
+  printf '{"source":"startup","session_id":"brk-lazy-2"}' | FLEET_CONF_DIR="$c" FLEET_ID_PUSH=0 TMUX="$sp,$pid,0" TMUX_PANE="$pane" \
+    bash "$BIN/fleet-id.sh" hook >/dev/null 2>&1
+  "$REAL_TMUX" -L "$L" kill-server 2>/dev/null
+  grep -q '"lazy": *true' "$c/ids/$F.ndjson" 2>/dev/null || { WHY="a fleet's own window opened before its ledger no longer gets one"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="不是本登录 fleet 的 tmux 服务器（测试、演练）上的会话不在真账本上懒开 ID；fleet 自己的窗口照旧补开"
+}
+
+# A drill's tmux server died (kill-server, SIGKILL) and left its socket file, named
+# `fleet-…` — which the hourly sweep skipped as a fleet's own (BCYB: 19
+# `fleet-drill-drill<pid>`). A configured fleet's socket is still never touched.
+drill_drill_socket_left() {
+  CAP=20; local tt s t0 pid c
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  tt=$(mktemp -d /tmp/brkds.XXXXXX) || { WHY="mktemp"; return 1; }
+  s="$tt/tmux-$(id -u)"; c="$tt/conf"; mkdir -p "$c/fleets/fleet-mine$$"
+  for n in "fleet-drill-x$$" "fleet-mine$$" "fleet-young$$"; do
+    TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "$n" -f /dev/null new-session -d 'sleep 60' 2>/dev/null || { rm -rf "$tt"; WHY="tmux $n"; return 1; }
+    pid=$(TMUX_TMPDIR="$tt" "$REAL_TMUX" -L "$n" display-message -p '#{pid}' 2>/dev/null)
+    kill -9 "$pid" 2>/dev/null
+  done
+  sleep 0.3
+  [ -S "$s/fleet-drill-x$$" ] || { rm -rf "$tt"; WHY="SIGKILL left no socket to sweep (cannot drill)"; return 1; }
+  touch -t 202001010000 "$s/fleet-drill-x$$" "$s/fleet-mine$$"
+  t0=$(now)
+  FLEET_CONF_DIR="$c" FLEET_SELFTEST_REAP_SOCKDIR="$s" FLEET_SELFTEST_REAP_ROOTS="$tt/none" bash "$BIN/fleet-selftest-reap.sh" >/dev/null 2>&1
+  SECS=$(since "$t0")
+  [ ! -e "$s/fleet-drill-x$$" ] || { rm -rf "$tt"; WHY="a dead drill socket named fleet-… is still there"; return 1; }
+  [ -e "$s/fleet-mine$$" ] || { rm -rf "$tt"; WHY="a configured fleet's socket was removed"; return 1; }
+  [ -e "$s/fleet-young$$" ] || { rm -rf "$tt"; WHY="a fresh fleet-… socket was removed inside the age gate"; return 1; }
+  rm -rf "$tt"
+  WHAT="演练死掉留下的 fleet-… 死 socket 过了年龄线就删；配置过的 fleet 的 socket、刚死的不碰"
 }
 
 # A PVC carries old process/update state into a new container (#3022).
@@ -5863,6 +6076,33 @@ drill_reopen_folding_session() {
     || { WHY="a release still reopens a window a reaper counts down: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="回收正在倒计时的闲置会话（@reap_due 新鲜）换版不重开；倒计时停了、被拦下（hold）照旧"
+}
+
+# A cross-machine send whose recipient's ID closed and whose machine left the hub's
+# map sat QUEUED for days, «对方能收时自动补送» forever, and `status` listed nothing
+# (T761: four 6-day-old sends on a managed Mac). Past FLEET_PEER_QUEUE_DEAD_SECS it is
+# EXPIRED with one audit line and never said again.
+drill_peerq_undeliverable_forever() {
+  CAP=30; local t0 d="$WORK/pqu"
+  mkdir -p "$d"; t0=$(now)
+  bash "$BIN/peer-queue-dead-selftest.sh" >"$d/out" 2>&1 \
+    || { WHY="an undeliverable send still waits forever: $(grep -E '^(FAIL|not ok)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="经入口的发送排队过一天判送不到：账本 EXPIRED + 一行审计、不再提醒；status 列得出跨机排队的"
+}
+
+# A finished session was reopened by every release (T761: stable moves every 10-30
+# minutes; the reopen is a new window, so @cfg_restart_ts started empty each time —
+# a reopen notice and an «is done» on the person's panel ~70 times a day).
+drill_reopen_every_release() {
+  CAP=10; local t0
+  t0=$(now)
+  grep -q 'held_today "\$ident"' "$BIN/fleet-cfg-restart.sh" && grep -q 'ledger_add "\$ident"' "$BIN/fleet-cfg-restart.sh" \
+    || { WHY="fleet-cfg-restart.sh no longer holds a session's second reopen by its identity"; return 1; }
+  suite_holds cfg-stale-selftest.sh 'held:day' 'FLEET_CFG_RESTART_DAY=0' \
+    'the reopened window (same identity) is not reopened again the same day' || return 1
+  SECS=$(since "$t0")
+  WHAT="同一会话（@fleet_id）一天只换版重开一次：新窗口带同一 ID、答 held:day；会坏不受限（cfg-stale-selftest.sh 真跑，这里按名守住）"
 }
 
 # A stop sent over ssh / the peerlink runs with a bare PATH (/usr/bin:/bin): no tmux

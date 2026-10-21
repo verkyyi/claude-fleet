@@ -95,6 +95,41 @@ with patch.object(fc, "load_cache", return_value=copy.deepcopy(cache)), patch.ob
     assert selected["target_host_keys"] == [old_key]
 EOF
 
+# ── 1b — ssh ended 255 on a direct route: was it the key? (T743) ──────────────
+python3 - "$BIN/fleet-connect.py" "$HOSTPUB" "$OTHERPUB" > "$WORK/1b.out" 2>&1 <<'EOF2'
+import importlib.util, io, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+new, old = sys.argv[2], sys.argv[3]
+route = {"kind": "direct", "name": "entry", "host": "203.0.113.7", "port": 22022}
+def run(scan, hub_keys, rcs):
+    m = {"hostname": "mini", "alias": "mac-a", "host_keys": [old]}
+    err = io.StringIO()
+    with patch.object(fc, "fleet_clientlog", object()), patch.object(fc, "clog"), \
+         patch.object(fc, "scan_host_keys", return_value=scan), \
+         patch.object(fc, "fetch_routes", return_value={"machines": [dict(m, host_keys=hub_keys)]}), \
+         patch.object(fc, "run_logged", side_effect=list(rcs)) as rl, patch.object(sys, "stderr", err):
+        rc = fc.run_ssh(m, route, "alice", "https://hub.example", False, [])
+    return rc, rl.call_count, err.getvalue(), "".join(l for l in open(fc.known_hosts_path()) if l.startswith("fleet-mac-a "))
+# the hub's fresh word names the answering key: rewritten, one retry, a grey line
+rc, n, err, kh = run([new], [new], [255, 0])
+assert (rc, n) == (0, 2) and "已按 hub 更新" in err and new in kh and old not in kh, (rc, n, err, kh)
+# the answering key is nobody fleet knows: stop, words, no retry
+rc, n, err, kh = run([new], [old], [255, 0])
+assert (rc, n) == (255, 1) and "停下了：203.0.113.7:22022 给出的钥匙不是 fleet 记的 mac-a" in err \
+    and fc.key_fp(new) in err and fc.key_fp(old) in err, (rc, n, err)
+# the listed key answers: not a key problem, ssh's own 255 stands
+rc, n, err, kh = run([old], [old], [255, 0])
+assert (rc, n, err) == (255, 1, ""), (rc, n, err)
+# nothing answers the scan, or the check is off: left to ssh
+rc, n, err, kh = run([], [new], [255, 0])
+assert (rc, n, err) == (255, 1, ""), (rc, n, err)
+print("ok")
+EOF2
+[ "$(tail -1 "$WORK/1b.out")" = ok ] \
+  && st_ok_all "ssh 255 on a direct route: hub names the new key → rewritten + one retry; nobody's key → stopped with both fingerprints; a listed key / no answer → ssh's own" \
+  || st_miss "host-key diagnosis: $(tail -5 "$WORK/1b.out")"
+
 # ── 2 — a real sshd ─────────────────────────────────────────────────────────
 SSHD=/usr/sbin/sshd
 if [ ! -x "$SSHD" ] || ! command -v ssh >/dev/null 2>&1; then
@@ -148,6 +183,38 @@ EOF
     [ "$r" = "matched - - -" ] && st_ok_all "sshd: the hub's key → matched on the first connection, no question" || st_miss "listed key: $r"
     r=$(try "$OTHERPUB")
     [ "$r" = "- refused - changed" ] && st_ok_all "sshd: a key the hub did not list → still refused" || st_miss "changed key: $r"
+    # T743: the sshd shows a certificate signed by the hub's host CA — known with
+    # NO key listed (its key could be any), refused for another name / another CA
+    ssh-keygen -q -t ed25519 -N '' -C host-ca -f "$WORK/hostca" && ssh-keygen -q -t ed25519 -N '' -C ca2 -f "$WORK/ca2" || exit 2
+    ssh-keygen -q -s "$WORK/hostca" -h -I host:selftest -n fleet-selftest-2983 -V -5m:+1d "$WORK/host.pub" 2>/dev/null || exit 2
+    awk -v c="HostCertificate $WORK/host-cert.pub" '{print} /^HostKey /{print c}' "$WORK/sshd_config" > "$WORK/sshd_config.cert"
+    tryca() {   # tryca <CA .pub> [alias]
+      python3 - "$BIN/fleet-connect.py" "$WORK" "$(id -un)" "$(cut -d' ' -f1-2 "$1")" "${2:-selftest-2983}" <<'EOF2'
+import importlib.util, os, subprocess, sys
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1]); fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+w, me, ca, alias = sys.argv[2:6]
+m = {"hostname": alias, "alias": alias, "host_ca": [ca]}
+try:
+    os.unlink(fc.known_hosts_path())
+except OSError:
+    pass
+route = {"kind": "direct", "name": "entry", "host": "127.0.0.1", "port": 22}
+opts = ["BatchMode=yes", "GlobalKnownHostsFile=/dev/null", "IdentitiesOnly=yes", "IdentityFile=" + w + "/user",
+        "ProxyCommand=/usr/sbin/sshd -i -f " + w + "/sshd_config.cert"]
+cmd = fc.ssh_command(m, route, me, "", opts, known_hosts=fc.write_known_hosts(m))
+cmd = cmd[:1] + ["-F", "/dev/null", "-v"] + cmd[1:] + ["true"]
+p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+e = p.stderr
+print("ok" if "matches the ED25519-CERT host certificate" in e else "-", "refused" if "Host key verification failed" in e else "-",
+      "asked" if "authenticity of host" in e else "-")
+EOF2
+    }
+    r=$(tryca "$WORK/hostca.pub")
+    [ "$r" = "ok - -" ] && st_ok_all "sshd: a certificate from the hub's host CA → known with no key listed, no question" || st_miss "host CA: $r"
+    r=$(tryca "$WORK/ca2.pub")
+    [ "$r" = "- refused -" ] && st_ok_all "sshd: another CA → refused" || st_miss "another CA: $r"
+    r=$(tryca "$WORK/hostca.pub" other-machine)
+    [ "${r#* }" = "refused -" ] && st_ok_all "sshd: the certificate under another machine's name → refused" || st_miss "another name: $r"
   fi
 fi
 

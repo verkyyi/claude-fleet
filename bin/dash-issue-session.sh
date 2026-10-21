@@ -901,7 +901,7 @@ _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 # policy (fleet_reap_policy.py ORIGINS) — an issue session a person or a session
 # opened keeps its historic `merged`, an orchestrator / a driver its own.
 _rorig=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" "" \
-  "$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK" 2>/dev/null)")
+  "$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK" 2>/dev/null)" "" "$WIN_TITLE")
 [ -n "$REAP" ] || REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${_rorig:-person}" --kind issue) || REAP=merged
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
 [ -n "$_rorig" ] && _sw+=(\; set-window-option -t "$win" @reap_origin "$_rorig")

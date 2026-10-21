@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -36,6 +37,14 @@ import (
 //	GET  /v1/node/ids/<ID|T-code> → the record; a code two IDs share is 409
 //	                         {code: AMBIGUOUS, candidates} — never a pick
 //
+//	POST /v1/node/ids/live   {ids:[…], dry} → {closed, reopened, kept, live, open}:
+//	                         the IDs this node's windows carry now (task BCYB,
+//	                         store.ReconcileFleetIDs): the hub closes this
+//	                         endpoint's open IDs it leaves out (quiet past
+//	                         IDLiveGrace) and the reserved IDs of ended tasks,
+//	                         reopens one of its own closes the list names again;
+//	                         `open` is the owner's open IDs per machine after it
+//
 // A node reads and writes only its owner's IDs (nodeTaskOwner). No hub, no call:
 // the node's ledger is the record and this is its mirror.
 const NodeIDsPath = "/v1/node/ids"
@@ -57,6 +66,8 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case ref == "live" && r.Method == http.MethodPost:
+		s.nodeIDsLive(w, r, ep, owner)
 	case ref == "" && r.Method == http.MethodPost:
 		var in nodeIDPush
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -164,4 +175,39 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST")
 		httpError(w, http.StatusMethodNotAllowed, "POST "+NodeIDsPath+", GET "+NodeIDsPath+"[/<ID|T-code>]")
 	}
+}
+
+type nodeIDLive struct {
+	IDs []string `json:"ids"`
+	Dry bool     `json:"dry"`
+}
+
+// nodeIDsLive is POST /v1/node/ids/live (task BCYB): one node's live IDs.
+func (s *Server) nodeIDsLive(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, owner string) {
+	var in nodeIDLive
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil || in.IDs == nil {
+		httpError(w, http.StatusBadRequest, "the body is one JSON object {ids:[…], dry}")
+		return
+	}
+	if len(in.IDs) > store.IDLiveMax {
+		httpError(w, http.StatusBadRequest, "ids: at most 2000")
+		return
+	}
+	got, err := s.Store.ReconcileFleetIDs(owner, ep.ID, in.IDs, time.Now(), store.IDLiveGrace, !in.Dry)
+	if err != nil {
+		log.Printf("fleet ids live %s: %v", ep.ID, err)
+		httpError(w, http.StatusInternalServerError, "could not reconcile the IDs")
+		return
+	}
+	open, err := s.Store.FleetIDOpenCount(owner)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !in.Dry && len(got.Closed)+len(got.Reopened) > 0 {
+		_ = s.Store.FleetAuditWorker("node:"+ep.ID, "", "", "id", "", "reconcile",
+			fmt.Sprintf("closed %d · reopened %d", len(got.Closed), len(got.Reopened)), time.Now())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"closed": got.Closed, "reopened": got.Reopened, "kept": got.Kept,
+		"live": got.Live, "open": open, "dry": in.Dry})
 }

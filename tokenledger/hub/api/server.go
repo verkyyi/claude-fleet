@@ -333,6 +333,10 @@ type Server struct {
 	// never the database. Nil: no certificates, and no node is asked to trust
 	// a CA.
 	SSHCA *sshca.CA
+	// SSHHostCA signs home machines' entry host keys (claude-fleet T743),
+	// loaded from CCQUOTA_FLEET_SSH_HOST_CA_KEY — its own key and Secret, never
+	// derived from SSHCA. Nil: no host certificates, no HostCA handed out.
+	SSHHostCA *sshca.CA
 
 	// FleetRoutes is the machines people connect to and the ways in
 	// (CCQUOTA_FLEET_ROUTES), for the 连接 page and the ssh config snippet.
@@ -617,6 +621,10 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
 		// …and the cluster's one door reads its table (claude-fleet#3549).
 		mux.HandleFunc(control.EntryRoutesNodePath, s.handleNodeEntryRoutes)
+		// one address, routed by username (A5SQ): the door's own token — its
+		// stream to a person's home (a websocket) and that hop's certificate
+		mux.HandleFunc(control.DoorHomePath, s.handleDoorHome)
+		mux.HandleFunc(control.DoorSessionPath, s.handleDoorSession)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.

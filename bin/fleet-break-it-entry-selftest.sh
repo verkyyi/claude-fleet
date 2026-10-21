@@ -36,6 +36,19 @@
 #                         a phone that sends no LANG still reaches the 看台 in UTF-8 —
 #                         a real tmux client draws Chinese to its terminal — and a
 #                         locale the client does send wins
+#   entry-hostkey-regenerated  _entry_hostkey (T743): the entry's host key is made
+#                         once — a lost .pub is derived back from the private key,
+#                         never a new pair; what the port answers is the same key
+#   pod-hostkey-rebuilt   render.py's POD_SSHD_KEY_SCRIPT (T743): a person's pod's sshd
+#                         key lives on their disk — the script run as a rebuilt pod
+#                         runs it (fresh /run, same disk) answers with the same key
+#   hostkey-changed-silent  handleNodeEntryReach's entryHostKeyChanged (T743): a machine
+#                         reporting another entry host key raises entry_hostkey_changed
+#                         (old / new fingerprints) — the hub half's Go test
+#   entry-host-cert       _entry_hostcert + entry_config (T743): the hub's host
+#                         certificate from reach.json is shown by the entry sshd —
+#                         known through one @cert-authority line — and one for
+#                         another key is never installed
 #   entry-public-unreachable  entry_reach + the hub's handleNodeEntryReach (#3072): an
 #                         address that resolves but nothing answers at is never in
 #                         reachable(machine) — the hub half's Go test dials THIS
@@ -71,6 +84,33 @@
 #                         pod's link — the machine check reads the other replica's
 #                         link, the jump readiness is in the store, and a route
 #                         without the jump says which end is missing (go test)
+#   door-session-no-sig   one address for everyone (A5SQ): the hub signs the door's
+#                         hop home only for the person's own signature over THIS
+#                         session as THIS user (go test TestDoorSessionNeedsTheirSignature)
+#   door-session-replay   …and once: the same session handed in again is refused,
+#                         on every replica (go test TestDoorSessionOnce)
+#   door-home-not-door    the stream to a person's home: the door's token only, a
+#                         machine home only, onto its entry port (go test
+#                         TestDoorHomeStreamOnlyTheDoor)
+#   door-session-other-home  a home's entry port and the door-session CA (A5SQ):
+#                         a certificate of that CA lands only as its own principal,
+#                         only from loopback; another CA's, another login's, one
+#                         from elsewhere, and any at all once the list stops naming
+#                         the CA, are refused — the person's own key still lands
+#   door-user-wrong-key   the door's own SSH server (A5SQ ③): an ordinary ssh client
+#                         to the door as alice with alice's key lands at alice's
+#                         home; bob's key as alice, and a login the book does not
+#                         take home, are refused at the door (go test
+#                         TestDoorTakesEachPersonHome, ./e2e)
+#   door-xssh-drift       the door's copy of golang.org/x/crypto/ssh: one changed
+#                         byte, or a file upstream does not have, and
+#                         bin/xssh-sync.sh --check is red naming it
+#   door-jump-ccquota     the door's listener switched to `ccquota door` (A5SQ ④,
+#                         FLEET_DOOR_SERVER=ccquota): the pods' jump on it tunnels a
+#                         key only to its owner's pod sshd — no session, no other pod,
+#                         no address of the client's choosing, no remote forward, a
+#                         key the hub took away opens no new tunnel (go test
+#                         TestJumpOnlyToTheirOwnPod); unset, the listener stays sshd
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -650,6 +690,96 @@ PY
   WHAT="地址可解析但没人应、或应的是别的钥匙：不进 reachable（只剩真入口 sshd 那一个）；体检 public 行 WARN「外面连不上：… 超时 · 在路由器上把 TCP 端口转发到 192.168.1.249」；入口照常进；$gohalf"
 }
 
+drill_entry_hostkey_regenerated() {
+  CAP=20   # the listener's start + a converge pass after the .pub goes
+  local t0 fp0 fp1 priv0
+  erig hostkey
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  ehk() { ssh-keyscan -T 3 -t ed25519 -p "$EPORT" 127.0.0.1 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}'; }
+  fp0=$(ehk); priv0=$(cksum < "$E/db/entry/ssh_host_ed25519_key")
+  [ -n "$fp0" ] || { WHY="no host key answered on the entry port"; edown; return 1; }
+  rm -f "$E/db/entry/ssh_host_ed25519_key.pub"
+  until_ok 10 test -s "$E/db/entry/ssh_host_ed25519_key.pub" || { WHY="the .pub never came back: $(tail -3 "$E/sup.err")"; edown; return 1; }
+  [ "$(cksum < "$E/db/entry/ssh_host_ed25519_key")" = "$priv0" ] || { WHY="the private key was replaced"; edown; return 1; }
+  [ "$(ssh-keygen -lf "$E/db/entry/ssh_host_ed25519_key.pub" | awk '{print $2}')" = "$fp0" ] \
+    || { WHY="the rebuilt .pub is another key"; edown; return 1; }
+  fp1=$(ehk)
+  [ "$fp1" = "$fp0" ] || { WHY="the entry port now answers $fp1, was $fp0"; edown; return 1; }
+  etry k1 || { WHY="the registered key was refused after: $(cat "$E/ssh.err")"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口钥匙生成一次就不换：删掉 .pub 后从私钥补回，私钥一字不变，入口端口答的还是 $fp0"
+}
+
+drill_pod_hostkey_rebuilt() {
+  CAP=20   # four ssh-keygen runs; a busy runner took 9 s
+  local t0 d a b c
+  t0=$(now); d="$EB/podkey"; mkdir -p "$d/keep" "$d/run1" "$d/run2" "$d/run3"
+  podkey() {  # podkey <run dir>: the rendered script, its paths in the sandbox (no chown off root)
+    python3 - "$ROOT/extras/managed-node" "$d/keep" "$1" > "$d/s.sh" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import render
+s = render.POD_SSHD_KEY_SCRIPT.replace(render.POD_SSHD_KEEP, sys.argv[2]).replace('/run/sshd-key', sys.argv[3])
+print(s if __import__('os').geteuid() == 0 else s.replace('chown 0:0', 'true'))
+PY
+    sh -e "$d/s.sh" && ssh-keygen -lf "$1/host.pub" | awk '{print $2}'
+  }
+  a=$(podkey "$d/run1") || { WHY="the pod's key script failed on a fresh disk"; return 1; }
+  b=$(podkey "$d/run2") || { WHY="the pod's key script failed on the second start"; return 1; }
+  rm -f "${d:?}/keep/host.pub"
+  c=$(podkey "$d/run3") || { WHY="the pod's key script failed with the .pub lost"; return 1; }
+  [ -n "$a" ] && [ "$a" = "$b" ] && [ "$b" = "$c" ] || { WHY="the pod's sshd key changed: ${a} → ${b} → ${c}"; return 1; }
+  cmp -s "$d/run1/host" "$d/run3/host" || { WHY="the private key differs between starts"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="pod 重建（/run 全新、盘还是那块）答的还是同一把：${a}；.pub 丢了从私钥补回"
+}
+
+drill_hostkey_changed_silent() {
+  CAP=150   # the hub half's go test
+  local t0 f gohalf
+  t0=$(now)
+  f="$ROOT/tokenledger/hub/api/fleet_entry_reach_test.go"
+  grep -q '^func TestEntryHostKeyChangeIsAlerted(' "$f" 2>/dev/null || { WHY="the hub half's test TestEntryHostKeyChangeIsAlerted is gone"; return 1; }
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml) runs TestEntryHostKeyChangeIsAlerted"
+  go_half '^TestEntryHostKeyChangeIsAlerted$' ./hub/api; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="机器报上来的入口钥匙换了：hub 开一条 entry_hostkey_changed 告警（新旧指纹）+ 审计一行，同一把再报不再响；$gohalf"
+}
+
+drill_entry_host_cert() {
+  CAP=30   # the listener's start + converge passes picking the certificate up
+  local t0 hk
+  erig hostcert
+  eapply "$(elist 1 "$ME=k1")" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  t0=$(now); eup
+  until_ok 10 listening || { WHY="the entry sshd never listened"; edown; return 1; }
+  hk="$E/db/entry/ssh_host_ed25519_key"
+  ssh-keygen -q -t ed25519 -N '' -C host-ca -f "$E/hostca"; ssh-keygen -q -t ed25519 -N '' -C stranger -f "$E/stranger"
+  # a certificate for ANOTHER key first: never installed
+  ssh-keygen -q -s "$E/hostca" -h -I host:drill -n fleet-drill -V -5m:+30d "$E/stranger.pub" 2>/dev/null
+  printf '{"verdict":{"host_cert":"%s"}}\n' "$(tr -d '\n' < "$E/stranger-cert.pub")" > "$E/db/entry/reach.json"
+  sleep 3
+  [ -e "$hk-cert.pub" ] && { WHY="a certificate for another key was installed"; edown; return 1; }
+  cp "$hk.pub" "$E/entry.pub"
+  ssh-keygen -q -s "$E/hostca" -h -I host:drill -n fleet-drill -V -5m:+30d "$E/entry.pub" 2>/dev/null
+  printf '{"verdict":{"host_cert":"%s"}}\n' "$(tr -d '\n' < "$E/entry-cert.pub")" > "$E/db/entry/reach.json"
+  until_ok 10 grep -q "^HostCertificate $hk-cert.pub" "$E/db/entry/sshd_config" \
+    || { WHY="the config never named the certificate: $(tail -3 "$E/sup.err")"; edown; return 1; }
+  printf '@cert-authority fleet-* %s\n' "$(cut -d' ' -f1-2 "$E/hostca.pub")" > "$E/kh-ca"
+  until_ok 10 sh -c 'ssh -F /dev/null -v -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -i "$1/k1" \
+      -o HostKeyAlias=fleet-drill -o UserKnownHostsFile="$1/kh-ca" -o GlobalKnownHostsFile=/dev/null \
+      -o ConnectTimeout=5 -p "$2" "$3@127.0.0.1" true 2>&1 </dev/null | grep -q "matches the ED25519-CERT host certificate"' \
+      _ "$E" "$EPORT" "$ME" || { WHY="ssh did not find the entry's certificate under the host CA"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="入口挂上 hub 签的主机证书：只信一行 @cert-authority 就认得它；给别的钥匙签的证书不装"
+}
+
 drill_entry_forward_out() {
   CAP=20   # the listener + four forwards + one drop
   local t0 dst lp fwd out wid got; local -a eopts
@@ -1097,6 +1227,134 @@ drill_door_jump_two_replicas() {
   go_half "^($tests)\$" ./hub/api; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="入口两副本：pod 的链路在 A，它拉钥匙落到 B 照样 200、普通登录两边都 403；门和 pod 的就绪两副本都看得到、过期不算、重启不丢；路线不带 jump 时说出缺哪一头；$gohalf"
+}
+
+# The door-session drills (A5SQ): the hub half is the whole of them for now —
+# the door's own SSH server lands in a later PR and adds its legs here.
+door_session_go() {  # door_session_go <Go test> <what it proves>
+  local t0 gohalf; t0=$(now)
+  grep -q "^func $1(" "$ROOT/tokenledger/hub/api/fleet_door_home_test.go" 2>/dev/null \
+    || { WHY="the hub half's test $1 is gone"; return 1; }
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml) runs $1"
+  go_half "^$1\$" ./hub/api; case $? in 0) gohalf="go test $1 ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="$2；$gohalf"
+}
+
+drill_door_session_no_sig() {
+  CAP=150
+  door_session_go TestDoorSessionNeedsTheirSignature \
+    "门会话证书只凭本人这次登录的签名：门用自己的钥匙签、签名换会话、换用户名、没有签名、不是门的令牌都拒；证书只一个主体名、两分钟、只许回环、门会话 CA 签"
+}
+
+drill_door_session_replay() {
+  CAP=150
+  door_session_go TestDoorSessionOnce "同一份签名第二次（换一把临时钥匙也一样）409，落库的会话标识两副本共用"
+}
+
+drill_door_home_not_door() {
+  CAP=150
+  door_session_go TestDoorHomeStreamOnlyTheDoor "接到家的流只认门的令牌、只到家在机器上的人，落在家的本机入口端口（target=entry）"
+}
+
+drill_door_session_other_home() {
+  CAP=30   # one sshd, five certificates, two lists
+  local t0 l1 l0 c bad=""; t0=$(now)
+  erig doorca
+  ssh-keygen -q -t ed25519 -N '' -C drill-door-ca -f "$E/dca"; ssh-keygen -q -t ed25519 -N '' -C drill-other-ca -f "$E/oca"
+  for c in cme cother cfar cforeign; do ssh-keygen -q -t ed25519 -N '' -C "drill-$c" -f "$E/$c"; done
+  ssh-keygen -q -s "$E/dca" -I "door:gh:$ME:aa" -n "$ME" -O source-address=127.0.0.1/32,::1/128 -V +2m "$E/cme.pub"
+  ssh-keygen -q -s "$E/dca" -I "door:gh:$ME:bb" -n other -O source-address=127.0.0.1/32,::1/128 -V +2m "$E/cother.pub"
+  ssh-keygen -q -s "$E/dca" -I "door:gh:$ME:cc" -n "$ME" -O source-address=192.0.2.7/32 -V +2m "$E/cfar.pub"
+  ssh-keygen -q -s "$E/oca" -I "door:gh:$ME:dd" -n "$ME" -O source-address=127.0.0.1/32,::1/128 -V +2m "$E/cforeign.pub"
+  l1=$(elist 1 "$ME=k1" "other=k2")
+  python3 - "$l1" "$E/dca.pub" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["door_ca"] = " ".join(open(sys.argv[2]).read().split()[:2])
+json.dump(d, open(sys.argv[1], "w"))
+PY
+  eapply "$l1" || { WHY="entry apply failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  grep -q '^TrustedUserCAKeys .*door-ca.pub$' "$E/db/entry/sshd_config" || { WHY="the config does not trust the door-session CA"; edown; return 1; }
+  eup
+  until_ok 10 listening || { WHY="the entry sshd never listened: $(tail -3 "$E/sup.err")"; edown; return 1; }
+  etry k1 || bad="$bad own-key-refused[$(cat "$E/ssh.err")]"
+  etry cme "$ME" -o CertificateFile="$E/cme-cert.pub" || bad="$bad door-cert-refused[$(cat "$E/ssh.err")]"
+  etry cother "$ME" -o CertificateFile="$E/cother-cert.pub" && bad="$bad other-login-cert-landed"
+  etry cfar "$ME" -o CertificateFile="$E/cfar-cert.pub" && bad="$bad far-cert-landed"
+  etry cforeign "$ME" -o CertificateFile="$E/cforeign-cert.pub" && bad="$bad other-ca-landed"
+  # the list stops naming the CA ⇒ no certificate at all
+  l0=$(elist 2 "$ME=k1" "other=k2")
+  eapply "$l0" || { WHY="entry apply v2 failed: $(tail -2 "$E/apply.out")"; edown; return 1; }
+  until_ok 10 grep -q '^TrustedUserCAKeys none$' "$E/db/entry/sshd_config" || bad="$bad ca-stayed"
+  sleep 1
+  etry cme "$ME" -o CertificateFile="$E/cme-cert.pub" && bad="$bad cert-landed-after-ca-gone"
+  [ ! -e "$E/db/entry/door-ca.pub" ] || bad="$bad ca-file-stayed"
+  [ -z "$bad" ] || { WHY="the entry port:$bad"; edown; return 1; }
+  SECS=$(since "$t0")
+  sys_same || { edown; return 1; }
+  edown
+  WHAT="家的本机入口：门会话 CA 签的证书只以自己的主体名、只从回环进得来；别的登录名的、从别处来的、别的 CA 签的进不来；名单不再给 CA，证书一律进不来；本人钥匙照常"
+}
+
+drill_door_user_wrong_key() {
+  CAP=200   # the e2e package's build + one test
+  local t0 gohalf; t0=$(now)
+  grep -q '^func TestDoorTakesEachPersonHome(' "$ROOT/tokenledger/e2e/door_test.go" 2>/dev/null \
+    || { WHY="the test TestDoorTakesEachPersonHome is gone"; return 1; }
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml, e2e) runs TestDoorTakesEachPersonHome"
+  go_half '^TestDoorTakesEachPersonHome$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门自己的 SSH 服务器：普通 ssh 以 alice 的钥匙连门、落到 alice 的家（家只见门会话证书）；bob 的钥匙冒充 alice、书里没有的登录名都在门上被拒；$gohalf"
+}
+
+drill_door_xssh_drift() {
+  CAP=60
+  local t0 d out rc; t0=$(now); d="$EB/xssh"; rm -rf "$d"; mkdir -p "$d"
+  cp -R "$ROOT/tokenledger/agent/internal/xssh/." "$d/"
+  out=$(XSSH_DEST="$d" bash "$ROOT/bin/xssh-sync.sh" --check 2>&1); rc=$?
+  case $rc in
+    3) SECS=$(since "$t0"); WHAT="此处没有 go 工具链：xssh-sync-selftest.sh 在 Go 门上核对"; return 0 ;;
+    0) ;;
+    *) case $out in *'not in the module cache'*) SECS=$(since "$t0"); WHAT="此处没有模块缓存：Go 门核对"; return 0 ;; esac
+       WHY="the tree's own copy is not clean: $out"; return 1 ;;
+  esac
+  printf '\n// a hand edit\n' >> "$d/server.go"
+  out=$(XSSH_DEST="$d" bash "$ROOT/bin/xssh-sync.sh" --check 2>&1) && { WHY="a hand edit passed the check"; return 1; }
+  case $out in *server.go*) ;; *) WHY="the check did not name server.go: $out"; return 1 ;; esac
+  cp "$ROOT/tokenledger/agent/internal/xssh/server.go" "$d/server.go"; printf 'package ssh\n' > "$d/extra.go"
+  out=$(XSSH_DEST="$d" bash "$ROOT/bin/xssh-sync.sh" --check 2>&1) && { WHY="a file upstream lacks passed the check"; return 1; }
+  case $out in *extra.go*) ;; *) WHY="the check did not name extra.go: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门带的 x/crypto/ssh 副本：改一个字节、多一个上游没有的文件，xssh-sync.sh --check 都红并点名；干净的副本是 go.mod 要的版本 + fleet.patch"
+}
+
+drill_door_jump_ccquota() {
+  CAP=120
+  local t0 gohalf out; t0=$(now)
+  grep -q '^func TestJumpOnlyToTheirOwnPod(' "$ROOT/tokenledger/agent/door/door_test.go" 2>/dev/null \
+    || { WHY="the test TestJumpOnlyToTheirOwnPod is gone"; return 1; }
+  # the switch: openssh unless FLEET_DOOR_SERVER=ccquota and the runtime has its ccquota
+  out=$(python3 - "$SUP" "$EB/doorswitch" <<'PY'
+import importlib.util, os, sys
+d = sys.argv[2]; os.makedirs(d + "/rt/bin", exist_ok=True); os.makedirs(d + "/db", exist_ok=True)
+open(d + "/db/machine.env", "w").write("FLEET_DOOR=1\nFLEET_ENTRY=1\n")
+os.environ.update(FLEET_NODE_STATE=d + "/db", FLEET_NODE_RUNTIME=d + "/rt", FLEET_NODE_LOG=d, FLEET_DOOR="1", FLEET_ENTRY="1")
+spec = importlib.util.spec_from_file_location("sup", sys.argv[1]); sup = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sup)
+p = sup.Paths()
+a = sup.entry_child(p)["cmd"][0]
+os.environ["FLEET_DOOR_SERVER"] = "ccquota"
+b = sup.entry_child(p)["cmd"][0]                      # no ccquota in the runtime: still sshd
+open(d + "/rt/bin/ccquota", "w").write("#!/bin/sh\n"); os.chmod(d + "/rt/bin/ccquota", 0o755)
+c = sup.entry_child(p)["cmd"]
+print(" ".join([os.path.basename(a), os.path.basename(b), os.path.basename(c[0]), c[1]]))
+PY
+)
+  [ "$out" = "sshd sshd ccquota door" ] || { WHY="the listener switch: [$out], want [sshd sshd ccquota door]"; return 1; }
+  gohalf="no go toolchain here — the Go gate runs TestJumpOnlyToTheirOwnPod"
+  go_half '^TestJumpOnlyToTheirOwnPod$' ./agent/door; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门的监听换成 ccquota door：跳转账号只把钥匙接到它主人自己 pod 的 sshd，不开会话、不到别的 pod、不到客户端随便点的地址、不许反向转发，钥匙被撤后这条连接也开不了新隧道；不设 FLEET_DOOR_SERVER（或 runtime 里没有 ccquota）就照旧是 sshd；$gohalf"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

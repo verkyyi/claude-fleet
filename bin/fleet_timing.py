@@ -16,6 +16,12 @@ they can type into.
                                                $FLEET_TIMING_T0 (epoch seconds — the
                                                ↵): <seg> = now − T0, written under
                                                that run; no T0 ⇒ nothing (T684)
+    fleet_timing.py input <pane>               the agent in <pane> can take input:
+                                               `input` (= total) under its window's
+                                               @timing_t0, once (T716)
+    fleet_timing.py wait <what> <t0> <seg> [secs]
+                                               block until run <t0> has <seg> (or
+                                               secs, 20); print its ms, else nothing
     fleet_timing.py p90 [<what>] [--hours H]   the 九成分位 of each stage over the
                                                last H hours (24) of <what> (session),
                                                one line for fleet-doctor's 「新建耗时」:
@@ -27,25 +33,36 @@ seconds, ms precision), and a `total` segment for end to end. The two writers:
     panel    fleet_view.popup (the 看台's ⌘P):
              boot (the process start → the panel's code loaded) · read (the rows
              off the cache) · frame (the first frame drawn) · total
-    session  every new session from the 看台 (⌘N / the 「新会话」 box, T684 —
-             EPIC 启动提速 C): each stage is its time SINCE THE ↵ (the box's
-             keypress, `do new --t0`), all under one run whose ts is that ↵:
-               placed    the hub's record answered (fleet-task-record.sh; hub road)
+    session  every new session (⌘N / the 「新会话」 box, T684; a dispatch --spawn
+             and every other road that carries the ↵, T716): each stage is its
+             time SINCE THE ↵ (the box's keypress, `do new --t0`; a dispatch's
+             own start), all under one run whose ts is that ↵:
+               record    the hub's task record answered (fleet-task-record.sh)
+               placed    the hub's placement answered (dash-raw-session.sh, off
+                         `ccquota place`; hub road only)
                window    the window opened (go_new / fleet-quick-dispatch.py)
-               typeable  the 看台 on it — the person can type (= total)
+               switched  the 看台 on it (`typeable` before T716 — read as this)
                ready     the agent's native session up (fleet_id.hook, Claude and
                          Codex alike, off the window's @timing_t0)
+               input     the agent's input box usable — the person can type to
+                         it: Claude's first OSC 7501 idle/done (fleet-status-7501.py),
+                         Codex's thread up under its private runtime
+                         (fleet-codex-runtime.py); = total
              The ↵ travels as FLEET_TIMING_T0 down the road; dash-raw-session.sh
-             stamps it on the window as @timing_t0 for `ready`. A run written
-             before T684 carries start · go (durations), and one before the warm
-             pool left (T495) `claim` or `cold`; a `cold` run is counted apart.
+             stamps it on the window as @timing_t0 for `ready` and `input` (the
+             latter clears it). A run written before T684 carries start · go
+             (durations), and one before the warm pool left (T495) `claim` or
+             `cold`; a `cold` run is counted apart. A start the hub sends to a
+             node (worker_start) is clocked there from the node's acceptance,
+             under `session.node` (its ↵ is on another machine).
 A file past MAX_LINES keeps its newest half. Writing never raises and never
 blocks the person: a full disk or a read-only home costs the line, nothing else.
 
 The limits (`check`, the doctor's `timing` row): FLEET_TIMING_PANEL_MS (500) on
 the median panel total, FLEET_TIMING_SESSION_MS (8000 — a session is started
 cold since the warm pool left, T495; making that fast is the work now) on the
-median session total. No file ⇒ nothing printed.
+median session `input` (a run without one — a road that has none yet, an older
+run — is judged by its `total`). No file ⇒ nothing printed.
 """
 import json
 import os
@@ -148,6 +165,46 @@ def at_env(seg, what="session"):
         Run(what, t0).at(seg)
 
 
+ALIAS = {"typeable": "switched"}   # the 看台-on-it stage's name before T716
+
+
+def _seg(name):
+    name = str(name)
+    return ALIAS.get(name, name)
+
+
+def _tmux(args):
+    import subprocess
+    try:
+        return subprocess.run(["tmux"] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def input_once(pane, tmux=None):
+    """The agent in <pane> can take input now (T716): `input` and `total` under the
+    run its window's @timing_t0 names (`session`, or `session.node` when the
+    window says so — @timing_what), then the stamp goes, so a later idle, a /clear
+    or a relaunch writes nothing. No stamp, a stale one or no pane ⇒ nothing; the
+    ms written. Never raises."""
+    if not pane:
+        return None
+    tm = tmux or _tmux
+    try:
+        t0, what = (tm(["display-message", "-p", "-t", pane, "#{@timing_t0}\t#{@timing_what}"]) + "\t").split("\t")[:2]
+        t0 = float(t0)
+    except (ValueError, TypeError):
+        return None
+    tm(["set-option", "-wu", "-t", pane, "@timing_t0", ";", "set-option", "-wu", "-t", pane, "@timing_ready"])
+    if not 0 < time.time() - t0 < 3600:
+        return None
+    what = what if what in ("session", "session.node") else "session"
+    ms = max(0.0, (time.time() - t0) * 1000)
+    add(what, [("input", ms), ("total", ms)], ts=round(t0, 3))
+    return ms
+
+
 def runs(what, last=10):
     """The last <last> runs of <what>: [{seg: ms}], oldest first."""
     by = {}
@@ -156,7 +213,7 @@ def runs(what, last=10):
             for line in f:
                 try:
                     r = json.loads(line)
-                    by.setdefault(r["ts"], {})[str(r["seg"])] = float(r["ms"])
+                    by.setdefault(r["ts"], {})[_seg(r["seg"])] = float(r["ms"])
                 except (ValueError, KeyError, TypeError):
                     continue
     except OSError:
@@ -173,12 +230,40 @@ def runs_since(what, since):
                 try:
                     r = json.loads(line)
                     if float(r["ts"]) >= since:
-                        by.setdefault(r["ts"], {})[str(r["seg"])] = float(r["ms"])
+                        by.setdefault(r["ts"], {})[_seg(r["seg"])] = float(r["ms"])
                 except (ValueError, KeyError, TypeError):
                     continue
     except OSError:
         return []
     return [by[k] for k in sorted(by)]
+
+
+def run_of(what, t0):
+    """The stages run <t0> (its ↵, epoch seconds) has so far: {seg: ms}."""
+    t0 = round(float(t0), 3)
+    out = {}
+    try:
+        with open(os.path.join(timing_dir(), what + ".ndjson")) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    if abs(float(r["ts"]) - t0) < 0.0005:
+                        out[_seg(r["seg"])] = float(r["ms"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def wait_seg(what, t0, seg, secs=20.0):
+    """Block until run <t0> of <what> has <seg>, at most <secs>: its ms, or None."""
+    deadline = time.time() + secs
+    while True:
+        ms = run_of(what, t0).get(seg)
+        if ms is not None or time.time() >= deadline:
+            return ms
+        time.sleep(0.1)
 
 
 def p90(xs):
@@ -189,7 +274,7 @@ def p90(xs):
     return xs[max(0, -(-9 * len(xs) // 10) - 1)]
 
 
-STAGES = ("placed", "window", "typeable", "ready")
+STAGES = ("record", "placed", "window", "switched", "ready", "input")
 
 
 def spawn_p90(what="session", hours=24.0):
@@ -267,7 +352,7 @@ def check(last):
             continue
         lim = limit(what)
         judged = [r for r in rs if "cold" not in r]
-        p50 = median([r["total"] for r in judged if "total" in r])
+        p50 = median([r.get("input", r.get("total")) for r in judged if "input" in r or "total" in r])
         over = bool(lim and p50 is not None and p50 > lim)
         over_any = over_any or over
         print("%s n=%d p50=%s limit=%s over=%d cold=%d" % (what, len(rs), fmt(p50), lim or "-", int(over),
@@ -307,6 +392,17 @@ def main(argv):
         if t0 is not None:
             Run(argv[1], t0).at(argv[2])
         return 0
+    if argv[:1] == ["input"] and len(argv) == 2:
+        input_once(argv[1])
+        return 0
+    if argv[:1] == ["wait"] and len(argv) in (4, 5):
+        try:
+            ms = wait_seg(argv[1], float(argv[2]), argv[3], float(argv[4]) if len(argv) == 5 else 20.0)
+        except ValueError:
+            return 2
+        if ms is not None:
+            print("%.0f" % ms)
+        return 0 if ms is not None else 1
     if argv[:1] == ["p90"]:
         rest, hours = argv[1:], 24.0
         if "--hours" in rest[:-1]:

@@ -474,6 +474,9 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 			// machine holds it yet, so the owner's first machine to push it
 			// takes it — the window opened for the task.
 			r.EndpointID, r.Machine, r.Login = p.EndpointID, p.Machine, p.Login
+			if strings.HasPrefix(r.CloseReason, IDHubClose) {
+				r.ClosedAt, r.CloseReason = 0, "" // a reconcile closed it unclaimed (BCYB): taken after all
+			}
 		} else if r.EndpointID != p.EndpointID {
 			moved := false
 			for _, ev := range evs {
@@ -632,7 +635,8 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 		_, err := writeTaskResult(tx, r.Owner, r.ID, r.taskID, taskRefsOf(r.Task, r.Aliases), st, pr, seq, time.Now())
 		return err
 	case "closed":
-		if r.ClosedAt == 0 {
+		// the node's own word wins over a reconcile's (BCYB: hub:gone …)
+		if r.ClosedAt == 0 || strings.HasPrefix(r.CloseReason, IDHubClose) {
 			r.ClosedAt, r.CloseReason = ts, evStr(ev, "reason", 200)
 			if r.natives > 0 {
 				_, err := tx.Exec(`UPDATE fleet_id_natives SET end_at = ? WHERE id = ? AND n = ? AND end_at = 0`, ts, r.ID, r.natives)

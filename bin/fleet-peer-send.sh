@@ -171,7 +171,7 @@ hub_send() {
       '') how='its machine is not in a fresh hub map' ;;
       *:lost) how='its machine is offline' ;;
       *) if bash "$BIN/fleet-peer-queue.sh" wait -L "$mysess" --rid "$me#$suf" \
-              --secs "${FLEET_HUB_RECEIPT_WAIT:-4}" >/dev/null 2>&1; then
+              --secs "${FLEET_HUB_RECEIPT_WAIT:-10}" >/dev/null 2>&1; then
            printf 'sent → %s on %s (delivered)\n' "${full#*/}" "$node"
            exit 0
          fi

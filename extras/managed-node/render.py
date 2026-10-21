@@ -601,6 +601,16 @@ def _user_pod_container_resources(limits):
 POD_SSHD_PORT = 2222
 POD_SSHD_CAPS = ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL', 'AUDIT_WRITE']
 POD_ETC_UID = 65534
+# where a pod's sshd keeps its host key across rebuilds (T743): a subPath of the
+# person's own disk that only the sshd container (root) mounts
+POD_SSHD_KEEP = '/var/lib/fleet-sshd-key'
+POD_SSHD_KEY_SCRIPT = (
+    'K=%(k)s\nchmod 700 "$K"\n'
+    'if [ ! -s "$K/host" ]; then rm -f "$K/host.pub"; ssh-keygen -q -t ed25519 -N "" -C fleet-pod -f "$K/host"; fi\n'
+    'if [ ! -s "$K/host.pub" ]; then ssh-keygen -y -f "$K/host" > "$K/host.pub.tmp"; mv "$K/host.pub.tmp" "$K/host.pub"; fi\n'
+    'chown 0:0 "$K/host" "$K/host.pub"; chmod 600 "$K/host"; chmod 644 "$K/host.pub"\n'
+    'chmod 711 /run/sshd-key\ncp "$K/host" /run/sshd-key/host; cp "$K/host.pub" /run/sshd-key/host.pub\n'
+    'chmod 600 /run/sshd-key/host; chmod 644 /run/sshd-key/host.pub\n') % {'k': POD_SSHD_KEEP}
 POD_UID_RANGE = (1000, 60000)
 POD_LOGIN_RE = r'(?=[a-z0-9]*[a-z])[a-z0-9]{2,16}'
 POD_RESERVED = ('root', 'admin', 'daemon', 'nobody', 'guest', 'shared', 'fleetcred', 'sshd', 'fleet')
@@ -693,13 +703,14 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                            # meets that sshd, so the heartbeat carries its key
                            {'name': 'sshd-key', 'mountPath': '/run/sshd-key', 'readOnly': True}],
     }, **_probes())
-    # sshd: a host key of its own each start (the hub hands it on — the jump's
-    # inner login checks it, #4193), the config pod-etc wrote
+    # sshd: a host key of its own, made ONCE and kept on the person's disk (T743 —
+    # a new one each start was 「REMOTE HOST IDENTIFICATION HAS CHANGED」 on every
+    # pod rebuild): only this container mounts its subPath; a lost .pub is derived
+    # back, a present key never replaced. The copy in /run/sshd-key is what sshd
+    # reads and the heartbeat hands on (the jump's inner login checks it, #4193)
     sshd = {
         'name': 'sshd', 'image': image,
-        'command': ['/bin/sh', '-ec', 'chmod 711 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
-                    'ssh-keygen -q -t ed25519 -N "" -f /run/sshd-key/host\n'
-                    'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
+        'command': ['/bin/sh', '-ec', POD_SSHD_KEY_SCRIPT + 'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
         'resources': _ephemeral({'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
                                 USER_POD_EPHEMERAL['sshd']),
         'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
@@ -711,7 +722,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
         'volumeMounts': [m for m in data if m['subPath'] == 'homes']
                         + [dict(m, readOnly=True) for m in data if m['subPath'] == 'node']
                         + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env', 'sshd_config'])
-                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'}],
+                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'},
+                           {'name': 'data', 'mountPath': POD_SSHD_KEEP, 'subPath': 'sshd-hostkey'}],
     }
     etc = {
         'name': 'pod-etc', 'image': image,
@@ -774,7 +786,7 @@ DOOR_EPHEMERAL = {'requests': '2Gi', 'limits': '6Gi'}
 
 
 def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec='slb.s1.small',
-                   pull_secrets=('acr-pull',), entry_host=''):
+                   pull_secrets=('acr-pull',), entry_host='', server='openssh'):
     """The door: its LoadBalancer Service (22022 alone, externalTrafficPolicy
     Local — the client's own address for PerSourcePenalties and the record) and
     its Deployment. No disk, no login, no Kubernetes credential. entry_host is
@@ -796,6 +808,8 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
         raise ValueError('--entry-lb-spec is a CLB spec (slb.s1.small) or clcu')
     if entry_host and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,252}', entry_host):
         raise ValueError('--entry-host is a host name or an IPv4 address, not %r' % entry_host)
+    if server not in ('openssh', 'ccquota'):
+        raise ValueError('--door-server is openssh or ccquota, not %r' % server)
     labels = {'app.kubernetes.io/name': 'fleet-door', 'fleet/role': 'door'}
     meta = {'name': DOOR_NAME, 'namespace': namespace, 'labels': labels}
     env = [{'name': 'FLEET_HUB_URL', 'value': hub},
@@ -808,6 +822,10 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
            {'name': 'FLEET_DOOR_SECRET', 'value': '/run/fleet-door'}]
     if entry_host:
         env.append({'name': 'CCQUOTA_FLEET_NODE_ROUTES', 'value': 'entry=%s:%d' % (entry_host, ENTRY_PORT)})
+    if server == 'ccquota':
+        # the door's listener is `ccquota door` (A5SQ): one address routed by
+        # username, the pods' jump on the same port; openssh = as before
+        env.append({'name': 'FLEET_DOOR_SERVER', 'value': 'ccquota'})
     tcp = {'tcpSocket': {'port': ENTRY_PORT}}
     container = {
         'name': 'door', 'image': image, 'env': env,
@@ -1257,6 +1275,8 @@ if __name__ == '__main__':
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
     p.add_argument('--door-replicas', type=int, default=2)
+    p.add_argument('--door-server', default='openssh', choices=('openssh', 'ccquota'),
+                   help="the door's listener: openssh (the jump account) or ccquota (`ccquota door`: one address routed by username, A5SQ)")
     p.add_argument('--ops', default='', metavar='CLUSTER',
                    help="the cluster's one fleet-ops, named as the hub knows the cluster (#3734)")
     p.add_argument('--provisioner', default='', metavar='URL',
@@ -1306,7 +1326,8 @@ if __name__ == '__main__':
             raise SystemExit(0)
         if args.door:
             items = door_resources(args.image, args.hub, args.namespace, args.door_replicas, args.entry_lb_spec,
-                                   pull_secrets=args.pull_secrets or ['acr-pull'], entry_host=args.entry_host)
+                                   pull_secrets=args.pull_secrets or ['acr-pull'], entry_host=args.entry_host,
+                                   server=args.door_server)
             print(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}, indent=2))
             raise SystemExit(0)
         if args.ops:

@@ -59,6 +59,10 @@ type EntryNodeLogin struct {
 type EntryNodeList struct {
 	Version int                       `json:"version"`
 	Logins  map[string]EntryNodeLogin `json:"logins"`
+	// DoorCA is the door-session CA's public key (A5SQ) when this hub has a
+	// door and a CA: the home's entry sshd trusts it, for each login its own
+	// name alone (DoorSessionCert). "" = absent, the list as before.
+	DoorCA string `json:"door_ca,omitempty"`
 }
 
 // EntryReachNodePath is POST EntryReachReport with the machine's token
@@ -136,6 +140,22 @@ type EntryReachVerdict struct {
 	Addrs    []EntryReachAddr `json:"addrs"`
 	// Throttled: a report inside the last check's window, answered from it.
 	Throttled bool `json:"throttled,omitempty"`
+	// HostKeyChanged: this machine's entry host key changed and the hub's
+	// alert about it is still open (claude-fleet T743) — the machine's logins
+	// each record one error-level message from it (fleet-alerts.sh).
+	HostKeyChanged *EntryHostKeyChange `json:"host_key_changed,omitempty"`
+	// HostCert is the reported entry host key signed by the hub's host CA
+	// (claude-fleet T743), one "<cert type> <base64> host:<machine>" line —
+	// the entry sshd shows it (HostCertificate). "" when the hub has no CA.
+	HostCert string `json:"host_cert,omitempty"`
+}
+
+// EntryHostKeyChange is the old and new fingerprints of a changed entry host
+// key and when the hub first saw it.
+type EntryHostKeyChange struct {
+	Old   string    `json:"old"`
+	New   string    `json:"new"`
+	Since time.Time `json:"since"`
 }
 
 // EntryRoutesNodePath is GET with the door's token (claude-fleet#3549, EPIC
@@ -164,4 +184,74 @@ type EntryRouteList struct {
 	Version int                       `json:"version"`
 	Routes  []EntryRoute              `json:"routes"`
 	Logins  map[string]EntryNodeLogin `json:"logins"`
+	// Homes is every person whose home is a machine of their own (not a pod)
+	// — the door's one address, routed by username (A5SQ): only when the
+	// door's pull asked ?home=1, else absent, so an older door reads the
+	// list byte for byte.
+	Homes []EntryHomeRoute `json:"homes,omitempty"`
 }
+
+// EntryHomeRoute is one person the door takes home (A5SQ): Login is the
+// username they give the door and the login on their home, Keys theirs. The
+// door terminates their SSH with these keys; the hop to the home is a
+// DoorSessionCert the hub signs only for a signature of theirs.
+type EntryHomeRoute struct {
+	Principal string         `json:"principal"`
+	Login     string         `json:"login"`
+	Keys      []EntryNodeKey `json:"keys"`
+}
+
+// DoorHomePath is the door's stream to a person's home (A5SQ): a websocket,
+// GET ?principal=<person> with the door's own machine token. The hub finds
+// that person's home — a machine, never a pod — and splices the stream onto
+// the home's entry port through its agent (TypeSSHRelayOpen, Target
+// SSHRelayTargetEntry). The stream reaches only a handshake: the home's entry
+// sshd logs the person in only with a DoorSessionCert for its own login.
+const DoorHomePath = "/v1/node/door-home"
+
+// DoorSessionPath is POST with the door's machine token (A5SQ): the door
+// hands the hub what a person signed to log in to the door, and the hub —
+// having checked the signature against that person's registered key and
+// that this session was never presented before — signs a short-lived
+// certificate for the door's one-off key, admitting only that person's home
+// login. The door holds no key into any home: without a fresh signature of
+// the person's, there is no certificate.
+const DoorSessionPath = "/v1/node/door-session"
+
+// DoorSessionRequest is DoorSessionPath's body. The hub rebuilds the signed
+// data itself (RFC 4252 §7) from SessionID, User and Key: the door cannot
+// hand it anything else to verify.
+type DoorSessionRequest struct {
+	// Key is the person's public key as they offered it (authorized_keys form).
+	Key string `json:"key"`
+	// User is the username they gave the door (their home login).
+	User string `json:"user"`
+	// SessionID is the SSH session identifier of their connection to the door, base64.
+	SessionID string `json:"session_id"`
+	// Algo is the public key algorithm named in their request (ssh-ed25519, rsa-sha2-256, …).
+	Algo string `json:"algo"`
+	// Sig is their signature, the SSH wire form (string format, string blob), base64.
+	Sig string `json:"sig"`
+	// DoorKey is the door's one-off key for this hop (authorized_keys form).
+	DoorKey string `json:"door_key"`
+}
+
+// DoorSessionCert is DoorSessionPath's answer.
+type DoorSessionCert struct {
+	// Cert is the user certificate for DoorKey (authorized_keys form).
+	Cert      string `json:"cert"`
+	Principal string `json:"principal"`
+	Login     string `json:"login"`
+	Machine   string `json:"machine"`
+	// HostKeys are the home entry sshd's host keys as the home reported them:
+	// the door checks the hop against these, never trusting on first use.
+	HostKeys    []string  `json:"host_keys"`
+	ValidBefore time.Time `json:"valid_before"`
+}
+
+// DoorSessionTTL is how long a door-session certificate lives: one login.
+const DoorSessionTTL = 2 * time.Minute
+
+// DoorSessionKeyIDPrefix starts every door-session certificate's key id:
+// "door:<person>:<session hash>" — what the home's sshd logs on the login.
+const DoorSessionKeyIDPrefix = "door:"

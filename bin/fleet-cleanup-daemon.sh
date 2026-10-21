@@ -512,8 +512,14 @@ fi
 # directory test per fleet.
 if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-peer-queue.sh" ]; then
   for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
-    [ -d "$FLEET_CONF_DIR/fleets/$s/peer-queue" ] || continue
-    qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" drain -L "$s")
+    if [ -d "$FLEET_CONF_DIR/fleets/$s/peer-queue" ]; then
+      qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" drain -L "$s")
+      [ -z "$qout" ] || log "$s: $qout"
+    fi
+    # A send still QUEUED past FLEET_PEER_QUEUE_ALERT_SECS — here or through the hub —
+    # is said once in ⌘P's 消息 (issue T756).
+    [ -f "$FLEET_CONF_DIR/fleets/$s/delivery.ndjson" ] || continue
+    qout=$(fleet_timebox 30 bash "$BIN/fleet-peer-queue.sh" stale -L "$s")
     [ -z "$qout" ] || log "$s: $qout"
   done
 fi
@@ -535,8 +541,17 @@ fi
 # Exit 3 (no hub, no node token) and 75 (the hub did not answer) say nothing — the
 # next tick resumes.
 if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-id.sh" ] && [ -d "$FLEET_CONF_DIR/ids" ]; then
-  iout=$(fleet_timebox 60 bash "$BIN/fleet-id.sh" push 2>&1)
+  iout=$(fleet_timebox 60 bash "$BIN/fleet-id.sh" push 2>&1); irc=$?
   [ -z "$iout" ] || log "ids: $iout"
+  # …then which IDs this login's windows carry now (task BCYB): the hub closes this
+  # machine's open IDs no window carries any more (quiet 10 min — hub:gone /
+  # hub:probe), the reserved IDs of ended tasks, and reopens one named again. Only
+  # after a push that went through (the node's own closes land first, with their
+  # reasons); FLEET_ID_RECONCILE=0 turns it off.
+  if [ "$irc" = 0 ] && [ "${FLEET_ID_RECONCILE:-1}" != 0 ]; then
+    lout=$(fleet_timebox 30 bash "$BIN/fleet-id.sh" live 2>/dev/null | head -n 1)
+    case "$lout" in ''|'closed 0 · reopened 0 '*) ;; *) log "ids live: $lout" ;; esac
+  fi
   # …and every machine's records back into this one's ID cache (EPIC T644 C7): the
   # panel shows another machine's session — its code, its EPIC parent, its result —
   # off the same record that machine's panel reads, whichever machine is home.

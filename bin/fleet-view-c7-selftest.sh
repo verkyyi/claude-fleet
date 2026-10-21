@@ -17,7 +17,8 @@
 #      (logged how=new) — never the window holding the orchestrator, even with
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing;
-#      each ⌘N one run in timing/session.ndjson (#3551, T684): window · typeable · total
+#      each ⌘N one run in timing/session.ndjson (#3551, T684): `switched` (T716 — the
+#      window and `input` are dash-raw-session.sh's and the agent's, faked here)
 #   T  ⌘T and ⌘K, keys issue #3328 folded into ⌘P: the panel (its first
 #      frame one run in timing/panel.ndjson, #3551) — ⌘T lit on
 #      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
@@ -134,7 +135,7 @@ printf 'acme/app\nacme/web\n' > "$W/g/hub_repos"
 : > "$W/rows.txt"
 
 export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
-  FLEET_VIEW_ORCH_CMD="sh $W/ensure.sh" FLEET_VIEW_NEW_CMD="sh $W/newsess.sh" FLEET_DISPATCH_SEND_CMD="sh $W/send.sh" FLEET_DISPATCH_AGENTS_HERE=claude \
+  FLEET_VIEW_ORCH_CMD="sh $W/ensure.sh" FLEET_VIEW_NEW_CMD="sh $W/newsess.sh" FLEET_VIEW_INPUT_WAIT=0 FLEET_DISPATCH_SEND_CMD="sh $W/send.sh" FLEET_DISPATCH_AGENTS_HERE=claude \
   FLEET_DISPATCH_AUTHORITY_CMD="$W/legacy.sh" \
   FLEET_SWITCH_STATE="$W/state" FLEET_AGENT=claude FLEET_SESSION_SHELL_WATCH=1 FLEET_PEERLINK_SSH="$W/fakessh.sh" \
   SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="cat '$W/rows.txt'"
@@ -221,17 +222,18 @@ waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{wi
   || st_fail "N: the second ⌘N did not land on its new session (now $(cur), it is $N2)"
 [ -e "$W/orch.called" ] && st_fail "N: ⌘N ran an orchestrator script"
 # the session clock (issue #3551, T684): every ⌘N a run in timing/session.ndjson —
-# window · typeable · total, each since the ↵ (a session starts cold, T495)
+# `switched` since the ↵ (T716: `window` is dash-raw-session.sh's, `input` the
+# agent's — neither runs under this fake; a session starts cold, T495)
 waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^session n=2 .* cold=0\$'" \
   || st_fail "N: the two ⌘N are not two session runs: $(python3 "$BIN/fleet_timing.py" check)"
-python3 - "$FLEET_CONF_DIR/timing/session.ndjson" <<'PY' || st_fail "N: a ⌘N's run is not window · typeable · total"
+python3 - "$FLEET_CONF_DIR/timing/session.ndjson" <<'PY' || st_fail "N: a ⌘N's run is not its switched stage"
 import json, sys
 runs = {}
 for line in open(sys.argv[1]):
     r = json.loads(line)
     assert set(r) == {"ts", "what", "seg", "ms"} and r["what"] == "session", r
     runs.setdefault(r["ts"], []).append(r["seg"])
-sys.exit(0 if all(v == ["window", "typeable", "total"] for v in runs.values()) else 1)
+sys.exit(0 if runs and all(v == ["switched"] for v in runs.values()) else 1)
 PY
 rm -f "$W/g/orch_fl"
 # another machine's C4 window (made here, link up) — the S and Q legs use it
