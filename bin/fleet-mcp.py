@@ -1701,6 +1701,14 @@ def tool_call(table, name, args):
     return tool_result(name, data)
 
 
+OUT_LOCK = threading.Lock()   # one writer at a time: a gateway reopen notifies from a thread (T716)
+
+
+def emit(msg):
+    with OUT_LOCK:
+        print(json.dumps(msg, separators=(",", ":"), ensure_ascii=False), flush=True)
+
+
 def respond(request, result=None, error=None):
     if "id" not in request:
         return
@@ -1709,7 +1717,27 @@ def respond(request, result=None, error=None):
         msg["error"] = error
     else:
         msg["result"] = result
-    print(json.dumps(msg, separators=(",", ":"), ensure_ascii=False), flush=True)
+    emit(msg)
+
+
+# The MCP servers a session opens when it needs them (T716 F, bin/fleet_mcp_gateway.py):
+# the core server serves mcp_list / mcp_enable / mcp_disable and every opened
+# server's tools as <server>__<tool>. FLEET_MCP_GATEWAY=0 serves none of it.
+GATEWAY = {"gw": None}
+
+
+def gateway(table):
+    if table is not TOOLS or os.environ.get("FLEET_MCP_GATEWAY", "1") == "0":
+        return None
+    if GATEWAY["gw"] is None:
+        try:
+            sys.path.insert(0, str(BIN))
+            import fleet_mcp_gateway
+        except ImportError:
+            return None
+        GATEWAY["gw"] = fleet_mcp_gateway.Gateway(
+            notify=lambda method: emit({"jsonrpc": "2.0", "method": method}))
+    return GATEWAY["gw"]
 
 
 def handle(request, table, name):
@@ -1721,9 +1749,14 @@ def handle(request, table, name):
                 "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": name, "version": VERSION}}
     if method == "tools/list":
-        return {"tools": [{"name": n, **spec} for n, (_, spec) in listing(table, served=True).items()]}
+        gw = gateway(table)
+        return {"tools": [{"name": n, **spec} for n, (_, spec) in listing(table, served=True).items()]
+                + (gw.tools() if gw else [])}
     if method == "tools/call":
         params = request.get("params") or {}
+        gw = gateway(table)
+        if gw and params.get("name") not in table and gw.owns(params.get("name") or ""):
+            return gw.call(params.get("name"), params.get("arguments"))
         return tool_call(table, params.get("name"), params.get("arguments"))
     if method == "ping":
         return {}
@@ -1838,7 +1871,8 @@ def reload_due():
 def reload_exec(sig, carry):
     """Become the new version: same pid, same stdin/stdout. Returns only on failure."""
     import tempfile
-    state = {"from": RELOAD["sig"], "to": sig, "list": "all" if SERVING["list_all"] else "group"}
+    state = {"from": RELOAD["sig"], "to": sig, "list": "all" if SERVING["list_all"] else "group",
+             "mcp": GATEWAY["gw"].names() if GATEWAY["gw"] else []}
     if carry:
         fd, path = tempfile.mkstemp(prefix="fleet-mcp-carry.")
         with os.fdopen(fd, "wb") as fh:
@@ -1846,6 +1880,8 @@ def reload_exec(sig, carry):
         state["carry"] = path
     os.environ[RELOAD_ENV] = json.dumps(state)
     sys.stdout.flush()
+    if GATEWAY["gw"]:
+        GATEWAY["gw"].close()   # the new process opens the same ones again (state "mcp")
     reload_log("exec", "%s -> %s" % (RELOAD["sig"], sig))
     try:
         os.execv(sys.executable, [sys.executable, SELF] + sys.argv[1:])   # --group rides along
@@ -1874,6 +1910,8 @@ def reload_resume():
     # No "list" in the handover = the old process predates the groups (issue #3113):
     # its session was handed every tool, so it keeps them.
     SERVING["list_all"] = (state.get("list") if isinstance(state, dict) else None) != "group"
+    if isinstance(state, dict) and state.get("mcp"):
+        GATEWAY["reopen"] = state["mcp"]
     RELOAD["ready"] = True
     print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
                      separators=(",", ":")), flush=True)
@@ -1914,6 +1952,17 @@ def serve(table, name):
     # release's own path takes the live one at its first request (T598)
     RELOAD["sig"] = file_sig(os.path.abspath(__file__)) if watch else None
     buf = reload_resume() if watch else b""
+    # the servers this session had opened (T716): carried by a reload-exec, else
+    # remembered for its window across a relaunch of the same conversation —
+    # opened off the request loop, the client told when they are up
+    gw = gateway(table)
+    if gw is not None:
+        names = GATEWAY.get("reopen")
+        if names is None:
+            import fleet_mcp_gateway
+            names = fleet_mcp_gateway.remembered()
+        if names:
+            threading.Thread(target=gw.reopen, args=(names,), daemon=True).start()
     for raw, rest in read_lines(buf, watch):
         if watch:
             sig = reload_due()

@@ -8285,18 +8285,46 @@ _fleet_holders_note() {
 # at the deadline (git's transport helper / ssh with it); no terminal prompt.
 # Exit 124 = timed out: origin/<base> stays what it was, and the caller goes on
 # with the base it already has. Silent on both streams.
+# One fetch is enough for the starts of a minute (T716): origin/<base> fetched
+# within FLEET_FETCH_FRESH_SECS (60; 0 = always fetch) is used as it is, and
+# while one start's fetch of a repo runs the others wait for it (a mkdir lock
+# beside FETCH_HEAD, taken over once older than the bound) instead of each
+# fetching again.
 fleet_fetch_bounded() {
-  local main="$1" base="$2" secs="${FLEET_POOL_FETCH_SECS:-20}"
+  local main="$1" base="$2" secs="${FLEET_POOL_FETCH_SECS:-20}" fresh="${FLEET_FETCH_FRESH_SECS:-60}"
+  local gd lk now at rc i=0
   case "$secs" in ''|*[!0-9]*) secs=20 ;; esac
+  case "$fresh" in ''|*[!0-9]*) fresh=60 ;; esac
+  gd=$(git -C "$main" rev-parse --git-common-dir 2>/dev/null)
+  case "$gd" in '') ;; /*) ;; *) gd="$main/$gd" ;; esac
+  if [ -n "$gd" ] && [ "$fresh" -gt 0 ] && [ -f "$gd/FETCH_HEAD" ] \
+     && git -C "$main" show-ref --verify --quiet "refs/remotes/origin/$base" 2>/dev/null; then
+    now=$(date +%s); at=$(stat -f %m "$gd/FETCH_HEAD" 2>/dev/null || stat -c %Y "$gd/FETCH_HEAD" 2>/dev/null)
+    case "$at" in ''|*[!0-9]*) ;; *) [ $((now - at)) -lt "$fresh" ] && return 0 ;; esac
+  fi
+  lk=''
+  if [ -n "$gd" ]; then
+    lk="$gd/fleet-fetch.lock"
+    if ! mkdir "$lk" 2>/dev/null; then
+      # another start is fetching this repo: its fetch is ours
+      while [ -d "$lk" ] && [ "$i" -lt $(( (secs > 0 ? secs : 20) * 10 + 50 )) ]; do sleep 0.1; i=$((i + 1)); done
+      [ -d "$lk" ] || return 0
+      rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null || lk=''
+    fi
+  fi
   if [ "$secs" = 0 ] || ! command -v perl >/dev/null 2>&1; then
-    git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1; return $?
+    git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1; rc=$?
+    [ -n "$lk" ] && rmdir "$lk" 2>/dev/null
+    return "$rc"
   fi
   GIT_TERMINAL_PROMPT=0 perl -e '
     my $s = shift; my $p = fork; defined $p or exit 1;
     if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 }
     $SIG{ALRM} = sub { kill "TERM", -$p; select(undef, undef, undef, 0.5); kill "KILL", -$p; waitpid($p, 0); exit 124 };
     alarm $s; waitpid($p, 0); exit($? & 127 ? 1 : $? >> 8)' \
-    "$secs" git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1
+    "$secs" git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1; rc=$?
+  [ -n "$lk" ] && rmdir "$lk" 2>/dev/null
+  return "$rc"
 }
 
 # ---- scratch worktree allocation (the ⌃s spawner) ------------------------------

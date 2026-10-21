@@ -4,6 +4,7 @@ import contextlib
 import copy
 import io
 import json
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -42,6 +43,13 @@ class RepoAuthorityTests(unittest.TestCase):
         names = {line.split("=", 1)[0] for line in out.stdout.splitlines()}
         self.assertIn("FLEET_KEPT", names)
         self.assertFalse(names & set(migration.RETIRED_ENV))
+
+    def test_the_wrapper_drops_the_same_retired_environment(self):
+        # fleet-session-wrap.sh execs the launcher with `env -u` (T716) instead of
+        # the --supervise hop: its list is RETIRED_ENV, name for name.
+        wrap = (Path(migration.__file__).parent / "fleet-session-wrap.sh").read_text()
+        block = wrap[wrap.index('env -u FLEET_LAUNCH '):wrap.index('"$LAUNCH" ${cmd[@]+')]
+        self.assertEqual(set(re.findall(r"-u (FLEET_[A-Z_]+)", block)), set(migration.RETIRED_ENV))
     def test_manifest_apply_repeat_rollback_and_repo_b(self):
         # The cutover is the person's (issue #4901): it writes this login's
         # fleet.conf [node] line and no repo overlay, A's or B's.

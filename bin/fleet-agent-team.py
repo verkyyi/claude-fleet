@@ -156,8 +156,9 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
+# urllib.request / urllib.error are imported by http() (T716): they pull in
+# http.client, email and ssl — seconds on a busy disk — and `session`, run before
+# every agent start, never asks the hub.
 
 try:  # the ONE TLS context for the hub: every CA source this computer has (claude-fleet#2878)
     import fleet_tls
@@ -429,6 +430,8 @@ def cert_proof(ns=SIG_NS, word="fleet-team"):
 
 def http(url, method, headers, body, timeout, got=None):
     """(status, body); `got` (a dict) receives the response's headers."""
+    import urllib.error
+    import urllib.request
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:

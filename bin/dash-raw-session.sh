@@ -478,9 +478,13 @@ if [ -n "$AS_ARG" ]; then
   if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG" && ! fleet_agent_file_travels "$AS_ARG"; then
     refuse "raw: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit 1
   fi
-  if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
+  # the dispatch that called us read this very file a moment ago (T716): its answer
+  if [ -n "${FLEET_AS_KV:-}" ] && [ "${FLEET_AS_KV_FOR:-}" = "$AS_ARG	$AS_FOR	$_asdir" ]; then
+    AS_KV=$FLEET_AS_KV
+  elif ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
     refuse "raw: ${AS_KV##*fleet-agent-def: }"; exit 1
   fi
+  unset FLEET_AS_KV FLEET_AS_KV_FOR
   unset _asdir
 fi
 as_kv() { printf '%s\n' "$AS_KV" | awk -F'\t' -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }'; }
@@ -501,8 +505,33 @@ if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
-[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --gate "$SESS" >/dev/null \
-  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
+# The base is fetched while the hub is asked (T716): the allocation below waits
+# for this fetch (or finds it fresh) instead of starting its own after every
+# answer is in. Bounded like it (FLEET_POOL_FETCH_SECS); a start that ends
+# elsewhere or is refused leaves only a fetched ref behind.
+if [ "$NOREPO" != 1 ] && [ -z "$WT_ARG" ] && [ -n "$MAIN" ] && [ -d "$MAIN/.git" ]; then
+  ( fleet_fetch_bounded "$MAIN" "$BASE" ) </dev/null >/dev/null 2>&1 &
+fi
+# The person's authority is asked ONCE a start (T716): a 看台 that asked it a
+# moment ago hands its answer down (FLEET_AUTHORITY_SEEN="<mode> <epoch s>", go_new),
+# and the --finish below — the last look before the window — is skipped only when
+# the hub just placed it (the hub gated that placement itself, a moment ago).
+# FLEET_AUTHORITY_FRESH_SECS (30): how long a handed-down answer stands; 0 asks
+# every time, as before.
+_auth_fresh() {   # <epoch s> → rc 0 when younger than the fresh window
+  local f="${FLEET_AUTHORITY_FRESH_SECS:-30}" n
+  case "$f$1" in *[!0-9]*|'') return 1 ;; esac
+  [ "$f" -gt 0 ] || return 1
+  n=$(date +%s); [ $((n - $1)) -ge 0 ] && [ $((n - $1)) -lt "$f" ]
+}
+_seen=${FLEET_AUTHORITY_SEEN:-} && _seen_mode=${_seen%% *} _seen_at=${_seen##* }
+if [ "$NOREPO" != 1 ]; then
+  if ! case "$_seen_mode" in hub|legacy) _auth_fresh "$_seen_at" ;; *) false ;; esac; then
+    fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --gate "$SESS" >/dev/null \
+      || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
+  fi
+fi
+unset _seen _seen_mode _seen_at
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
 # cap, MAIN) have passed synchronously, so a refusal is immediate and lands on the
@@ -752,8 +781,10 @@ fi
 # A task's window is admitted by its own ID (EPIC T497 C8): nothing is claimed,
 # a --resume with --task is the same session back (its ID's ledger names the
 # conversation), and the gate below asks only the person's authority.
-[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
-  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
+if [ "$NOREPO" != 1 ] && [ "$PLACED" != hub ]; then
+  fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
+    || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
+fi
 win=""; slug=""; wt=""
 
 # --- allocate a scratch worktree off the base branch (issue #290) -------------

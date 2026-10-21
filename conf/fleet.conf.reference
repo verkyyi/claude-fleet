@@ -489,6 +489,21 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=MCP servers for this fleet @group=spawn @tier=advanced @scope=fleet @edit=str
 #FLEET_MCP_CONFIG=""
 
+# A WORKER starts lean (T716): with no FLEET_MCP_CONFIG above, a fleet-worker
+# session connects only the fleet's own servers, GitHub and the remote (http)
+# connectors — every other server the login configured is one call away in the
+# session itself (the `fleet` server's mcp_list / mcp_enable / mcp_disable,
+# bin/fleet_mcp_gateway.py: started then, its tools served in that very session,
+# no reopen). FLEET_MCP_EXTRA names the servers a worker connects at its start
+# anyway (space- or comma-separated, e.g. "playwright context7"), per repo in its
+# overlay; `fleet_mcp_gateway.py stats` shows which ones a repo's sessions enable.
+# FLEET_MCP_LEAN=0 connects everything at the start, as before (Claude; a Codex
+# worker is not narrowed yet).
+# @label=MCP servers a worker connects at start @group=spawn @tier=advanced @scope=fleet @edit=str
+#FLEET_MCP_EXTRA=""
+# @label=Lean worker MCP start @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_MCP_LEAN=1
+
 # The fleet's own tool service (issue #1807, docs/dev/FLEET-MCP.md): every Claude and
 # Codex session mounts bin/fleet-mcp.py as the MCP server `fleet` — status ·
 # children · repos · agents · spawn · await · send, the same tools for both

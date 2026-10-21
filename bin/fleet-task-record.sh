@@ -336,18 +336,24 @@ if [ "$cmd" = dispatch ]; then
   # A development task's session starts as the worker template, as
   # dash-issue-session.sh gives an issue worker (#3122): the shipped fleet-worker
   # when this login has it, else a plain session (issue #4897).
+  # The file is read ONCE a start (T716): the probe's answer is the launch's, and
+  # it rides to the spawner (FLEET_AS_KV, keyed by FLEET_AS_KV_FOR) so
+  # dash-raw-session.sh does not read it again.
+  as_for=claude; [ "${agent:-${FLEET_AGENT:-claude}}" = codex ] && as_for=codex   # #4726
+  kv=''
   if [ -n "$repo" ] && [ -z "$as_agent" ] && [ "$spawn" = 1 ] \
-     && python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" \
-          --for "${agent:-${FLEET_AGENT:-claude}}" >/dev/null 2>&1; then
+     && kv=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" \
+          --for "$as_for" 2>/dev/null); then
     as_agent=fleet-worker
   fi
   # Resolve the definition's provider before acceptance, independently of its
   # tools/body. Explicit --agent wins. Every retry retains the full input.
   template=''
   if [ -n "$as_agent" ]; then
-    as_for=claude; [ "${agent:-${FLEET_AGENT:-claude}}" = codex ] && as_for=codex   # #4726
-    kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "${FLEET_MAIN:-$PWD}" --for "$as_for") || exit 2
+    [ -n "$kv" ] || kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "${FLEET_MAIN:-$PWD}" --for "$as_for") || exit 2
     template=$(printf '%s\n' "$kv" | awk -F'\t' '$1 == "agent" {print $2; exit}')
+    FLEET_AS_KV=$kv FLEET_AS_KV_FOR="$as_agent	$as_for	${FLEET_MAIN:-$PWD}"
+    export FLEET_AS_KV FLEET_AS_KV_FOR
   fi
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
