@@ -43,6 +43,8 @@ export type BoardRow = {
   id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;
   words: [string, string]; state?: string; worker_id?: string; machine?: string; login?: string; repo?: string;
   parent?: string; depth?: number; lost?: boolean; at: number;
+  // why it is still open (E101): the card's third line, 中文 / English, and its tone
+  why?: [string, string]; why_tone?: "grey" | "orange" | "red";
 };
 export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string };
 

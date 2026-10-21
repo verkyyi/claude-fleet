@@ -20,6 +20,7 @@ const row = (o) => ({ id: 'x', code: 'K3F9', title: 't', group: 'work', tag: [''
 assert.deepEqual(termOf(row({ live: { id: 'fleet/abc' } })), { kind: 'live', worker: 'fleet/abc' });
 assert.deepEqual(termOf(row({})), { kind: 'opening' }, 'started from 新建, not up yet');
 assert.deepEqual(termOf(row({ group: 'gone' })), { kind: 'ended' });
+assert.deepEqual(termOf(row({ group: 'ask', board: { tag: 'parked' } })), { kind: 'ended' }, 'parked (E101): closed on purpose, not opening');
 
 assert.match(LANDSCAPE, /orientation: landscape/);
 console.log('workspace-view: ok');

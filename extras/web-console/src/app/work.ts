@@ -12,6 +12,7 @@ import { displayCodes, taskOpen, taskPR, taskStatus, writtenCode, type Task } fr
 
 export type Group = "pin" | "ask" | "work" | "queue" | "gone";
 export type Tone = "ask" | "fail" | "ok" | "muted";
+export type WhyTone = "grey" | "orange" | "red";
 export type Glyph = "ask" | "fail" | "work" | "pr" | "done" | "idle" | "wait";
 
 export type Row = {
@@ -32,6 +33,8 @@ export type Row = {
   kids: Row[];            // an EPIC's members (every one, whatever their group)
   at: number;             // epoch ms: newest first within a group
   board?: BoardRow;       // the hub's row this one draws (A4G2)
+  why?: [string, string]; // why it is still open, 中文 / English (E101 — the hub's words)
+  whyTone?: WhyTone;
 };
 
 export const GROUPS: { g: Group; label: [string, string] }[] = [
@@ -127,27 +130,36 @@ export function buildRows(tasks: Task[], live: SessionRow[], ended: SessionRow[]
 // and words as they are — the same the ⌘P panel draws; each joined to its
 // record (by the record's ID) and its live session (by worker_id) only for the
 // detail beside it. An EPIC's members sit under their parent (the hub's parent).
+// E101: parked (停放, waiting on you, its window closed) is a clock in the ask
+// colour; stopped (its agent's error stopped it) a red cross.
 const GLYPH_OF: Record<string, Glyph> = {
   asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "work", looping: "work",
   completed: "done", turn_done: "done", ended: "done", starting: "wait", queued: "wait", not_seen: "wait",
+  parked: "wait", stopped: "fail",
 };
 const TONE_OF: Record<string, Tone> = {
   asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "ok", looping: "ok", completed: "ok",
+  parked: "ask", stopped: "fail",
 };
-export function boardRows(board: Board, tasks: Task[], live: SessionRow[]): Row[] {
+export function boardRows(board: Board, tasks: Task[], live: SessionRow[], ended: SessionRow[] = []): Row[] {
   const codes = displayCodes(tasks);
   const byFID = new Map(tasks.filter((t) => t.fid).map((t) => [t.fid!, t]));
   const byRef = new Map(tasks.map((t) => [t.id, t]));
   const liveBy = new Map(live.map((l) => [l.id, l]));
+  const endedBy = new Map(ended.filter((r) => r.wid).map((r) => [r.wid!, r]));
   const rows: Row[] = board.rows.map((b: BoardRow) => {
     const t = (b.task_id && byFID.get(b.task_id)) || (b.task && byRef.get(b.task)) || undefined;
     const l = b.worker_id ? liveBy.get(b.worker_id) : undefined;
+    // a parked row's session ended on purpose (E101): its 接回 is the wake
+    const e = !l && b.tag === "parked" && t?.worker_id ? endedBy.get(t.worker_id) : undefined;
     const asking = b.tag === "asking" || b.tag === "waiting_you";
     const line = asking ? (l?.ask?.msg || t?.asked || "").trim() : b.group === "work" ? (l?.say || "").trim() : (t?.evidence || "").trim();
+    const why = Array.isArray(b.why) && b.why.length === 2 ? b.why : undefined;
     return {
       id: b.id, code: t ? codes.get(t) || writtenCode(t) : b.code || "", title: b.title, group: b.group,
       tag: b.words, glyph: GLYPH_OF[b.tag] || "idle", tone: TONE_OF[b.tag] || "muted", line, quote: asking && !!line,
-      task: t, live: l, parent: b.parent || undefined, kids: [], at: b.at * 1000, board: b,
+      task: t, live: l, ended: e, parent: b.parent || undefined, kids: [], at: b.at * 1000, board: b,
+      why, whyTone: why ? b.why_tone || "grey" : undefined,
     };
   });
   const byID = new Map(rows.map((r) => [r.id, r]));

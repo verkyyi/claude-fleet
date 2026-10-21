@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
-# selftest-part: 5 HomeReap.test_exited_two_hours_closes_an_idle_turn_never HomeReap.test_spawned_norepo_without_policy_is_never_closed PinIsOrder.test_dry_run_migrates_nothing PolicyGrammar.test_origin_table_and_the_policy_in_force ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
-# selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
-# selftest-part: 8 RoundTrip.test_real_close_and_restore
+# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_only_its_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn PinIsOrder.test_a_pin_set_later_keeps_its_window PolicyGrammar.test_norm_default_label StuckReaps.test_another_repos_pass_leaves_the_countdown
+# selftest-part: 6 ReapPolicy.test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work TaskSession.test_closed_record_reaps_after_grace_keeping_the_worktree TaskSession.test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does
+# selftest-part: 7 RoundTrip.test_codex_close_and_restore_keeps_exact_identity
+# selftest-part: 8 RoundTrip.test_missing_transcript_and_failed_ledger_do_not_close
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
 import time
@@ -1254,11 +1254,11 @@ class TaskSession(Rig):
     def test_a_final_id_result_is_done_while_the_record_still_reads_open(self):
         """T680: one «做完» — the ID's final result (merged / succeeded / failed)
         closes the session even while the record is still 已接受; a non-final one
-        (blocked) does not."""
+        (blocked) does not — it waits on its person (E101: the waiting road)."""
         self.answer.write_text("1\n")
         self.result("blocked")
         out = self.due()
-        self.assertIn("skip:task-open " + self.win + " T42", out)
+        self.assertIn("skip:waiting " + self.win, out)
         self.assertTrue(self.exists())
         self.result("merged")
         out = self.due()
@@ -1302,6 +1302,136 @@ class TaskSession(Rig):
         out = self.due()
         self.assertNotIn("skip:task", out)               # done: the idle road decides
         self.assertIn("reaped-idle:" + self.win, out)
+
+
+class HoldsAndWhy(TaskSession):
+    """E101: a finished task's background job holds its window only
+    FLEET_REAP_BG_GRACE past its last turn; a session waiting on its person is
+    parked after FLEET_REAP_PARK_SECS (a keep it set itself too, a person's never);
+    a window its agent's error stopped is never closed; and every window the pass
+    leaves open carries why (@reap_why), cleared once it is working."""
+
+    def setUp(self):
+        super().setUp()
+        self.parks = self.root / "parks"
+        seam = self.root / "park"
+        seam.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> " + shlex.quote(str(self.parks)) + "\n")
+        seam.chmod(0o755)
+        self.env["FLEET_TASK_PARK_CMD"] = str(seam)
+        self.env["FLEET_REAP_PARK_SECS"] = "3600"
+        self.asked = self.root / "asked"
+        closed = self.root / "task-closed"           # the record's hold words too (fleet_task_control.py closed)
+        closed.write_text("#!/bin/sh\nread rc < " + shlex.quote(str(self.answer)) + "\n"
+                          "[ \"$1\" = T42 ] || exit 3\n"
+                          "case \"$rc\" in 0) echo SUCCEEDED ;; 1) echo WAITING ;; esac\n"
+                          "[ -f " + shlex.quote(str(self.asked)) + " ] && [ \"$rc\" = 1 ] && echo 'asked: 1'\n"
+                          "exit \"$rc\"\n")
+
+    test_open_or_unknown_record_keeps_the_session = None
+    test_closed_record_reaps_after_grace_keeping_the_worktree = None
+    test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does = None
+    test_a_reopen_in_flight_holds_the_close_and_its_new_window_is_reaped = None
+    test_a_final_id_result_is_done_while_the_record_still_reads_open = None
+    test_now_watcher_closes_about_its_grace_after_the_turn = None
+    test_other_policy_or_no_flow_takes_the_ordinary_roads = None
+
+    def why(self):
+        return self.tm("display-message", "-p", "-t", self.win, "#{@reap_why}").strip()
+
+    def test_a_background_job_holds_a_done_task_only_its_grace(self):
+        """Y794: a preview server kept a closed task's window 12 hours."""
+        self.answer.write_text("0\n")
+        self.set("@loop", "kind=wakeup next=%d ttl=600" % (int(time.time()) + 6000))   # its job still pending
+        self.set("@claude_state_ts", str(int(time.time()) - 1000))
+        out = self.due()
+        self.assertIn("skip:bg-job " + self.win, out)
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.assertRegex(self.why(), r"^bg:\d+$")
+        self.assertAlmostEqual(int(self.why()[3:]), int(time.time()) - 1000 + 1800, delta=60)
+        self.answer.write_text("1\n")                    # work not over: the job holds it, as before
+        self.set("@claude_state_ts", str(int(time.time()) - 4000))
+        self.assertNotIn("reaped", self.due())
+        self.assertEqual(self.why(), "task-open")
+        self.answer.write_text("0\n")                    # over, 30 min past its turn: closed, job and all
+        out = self.due()
+        self.assertIn("reaped-task:" + self.win + " T42 bg-over", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())
+
+    def test_every_open_window_says_why_and_a_working_one_nothing(self):
+        self.answer.write_text("1\n")
+        self.due()
+        self.assertEqual(self.why(), "task-open")
+        self.answer.write_text("0\n")
+        self.set("@claude_state_ts", str(int(time.time()) - 5))
+        self.assertNotIn("reaped", self.clean())       # inside its 60 s grace
+        self.assertRegex(self.why(), r"^timer:\d+$")
+        self.set("@claude_state", "working")
+        self.clean()
+        self.assertEqual(self.why(), "")
+
+    def test_waiting_on_its_person_parks_after_its_hours(self):
+        """B2XT / CRFW: a session that asked its person sat in 排队中 for a day."""
+        self.answer.write_text("1\n")
+        self.result("waiting")
+        turn = int(time.time()) - 600
+        self.set("@claude_state_ts", str(turn))
+        for keep_by in ("", "session"):            # no policy of its own · a keep it set itself
+            with self.subTest(keep_by=keep_by):
+                if keep_by:
+                    self.set("@reap_policy", "keep")
+                    self.set("@reap_keep_by", keep_by)
+                self.set("@reap_skip", "")
+                out = self.due()
+                self.assertIn("skip:waiting " + self.win, out)
+                self.assertTrue(self.exists())
+                self.assertEqual(self.why(), "waiting:%d" % (turn + 3600))
+        self.set("@reap_keep_by", "person")        # a person's keep: never parked, says so
+        self.set("@reap_skip", "")
+        out = self.due()
+        self.assertNotIn("waiting", out)
+        self.assertEqual(self.why(), "keep")
+        self.set("@reap_keep_by", "session")
+        self.set("@claude_state_ts", str(int(time.time()) - 4000))
+        out = self.due()
+        self.assertIn("parked:" + self.win + " scratch-7 T42", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())
+        self.assertEqual(self.parks.read_text(), "T42\n")
+        self.assertIn("Parked: waiting on its person's reply", (self.root / "ledger.tsv").read_text())
+
+    def test_the_record_asking_is_waiting_too(self):
+        self.answer.write_text("1\n")
+        self.set("@claude_state_ts", str(int(time.time()) - 600))
+        self.asked.write_text("")
+        self.due()
+        self.assertTrue(self.why().startswith("waiting:"))
+        self.asked.unlink()
+        self.set("@reap_skip", "")
+        self.due()
+        self.assertEqual(self.why(), "task-open")
+
+    def test_an_error_stop_is_never_closed_and_says_which(self):
+        """FQBW: a 502 left its window on the recovery page, put away for 16 hours."""
+        self.answer.write_text("0\n")
+        self.set("@claude_state", "exited")
+        self.set("@agent_status", '{"state":"error","msg":"API Error: 502 upstream unreachable"}')
+        at = int(time.time()) + 300
+        for k, v, want in (("@auto_resume_at", str(at), "error-retry:%d" % at),
+                           ("@auto_resume_at", "", "error"), ("@auto_resumed", "1", "error-retried")):
+            with self.subTest(want=want):
+                if v:
+                    self.set(k, v)
+                else:
+                    self.tm("set-option", "-wu", "-t", self.win, k)
+                out = self.due()
+                self.assertNotIn("reaped", out)
+                self.assertTrue(self.exists())
+                self.assertEqual(self.why(), want)
+        self.set("@agent_status", '{"state":"done"}')       # not an error: the ordinary roads close it
+        self.set("@claude_state", "done")
+        self.assertIn("reaped-task:" + self.win, self.due())
 
 
 class DispatchedSession(TaskSession):
@@ -1355,7 +1485,7 @@ class DispatchedSession(TaskSession):
         self.set("@claude_state_ts", str(int(time.time()) - 700))
         self.set("@reap_unreported", str(int(time.time()) - 700))
         out = self.due()
-        self.assertIn("skip:reported " + self.win, out)
+        self.assertIn("skip:waiting " + self.win, out)     # E101: it waits on its person
         self.assertNotIn("nudged", out)
         self.assertNotIn("reaped", out)
         self.assertFalse(self.nudges.exists())

@@ -110,6 +110,12 @@ FLEET_BASE_BRANCH="main"
 # countdown: the line waits for a key, as before.
 # @label=Close an exited session after @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_EXIT_CLOSE_SECS=10
+# An agent a temporary server error stopped (its last OSC 7501 word `error`, its
+# words a 5xx / a broken connection — E101): the recovery page presses ↵ by itself
+# this many seconds on, once a window; a second error waits for its person. 0 =
+# never retries by itself.
+# @label=Retry a session a temporary error stopped after @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_AUTO_RESUME_SECS=300
 
 # Every repo your machines host, on this one too (T673, 节点选择 C): a managed login
 # reads the person's set from the hub (the union of what each of their machines
@@ -857,6 +863,18 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Default 1800 (30 min).
 # @label=Nudge an unreported dispatched session after @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_UNREPORTED_SECS=1800
+# A session whose work is over (its record closed, its ID's result final) keeps a
+# background job (a preview server, a /loop) holding its window only this many
+# seconds past its last turn (E101); then the window closes and the job goes with
+# it. A session still working is never touched. Default 1800 (30 min).
+# @label=A finished session's background job holds it for @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
+#FLEET_REAP_BG_GRACE=1800
+# A finished session waiting on its person (its ID's result `waiting` / `blocked`,
+# or its record asked them) is parked after this many seconds past its last turn
+# (E101): the window closes, the conversation, worktree and record stay, the list
+# keeps its row in 等你 and 接回 brings it back. Default 14400 (4 h).
+# @label=Park a session waiting on you after @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
+#FLEET_REAP_PARK_SECS=14400
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota
 # move). Empty by default. Exact configured stdio launchers/package entrypoints

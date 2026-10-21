@@ -26,7 +26,7 @@ import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
 import { listItem, listRows, rowMeta, rowRef, searchRows } from "./session-list";
 import { useWorkRows } from "./work-rows";
-import type { Glyph, Row, Tone } from "./work";
+import type { Glyph, Row, Tone, WhyTone } from "./work";
 
 const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin [animation-duration:2.4s]", className)} />;
 export const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
@@ -35,6 +35,11 @@ export const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
 export const TONE: Record<Tone, string> = {
   ask: "text-clay", fail: "text-destructive", ok: "text-ok", muted: "text-muted-foreground",
 };
+// 「为什么还没收」's colour (E101): grey says what holds it, orange it waits on you,
+// red its error stopped it
+const WHY_TONE: Record<WhyTone, string> = { grey: "", orange: "text-clay font-medium", red: "text-destructive font-medium" };
+export const RowWhy: FC<{ r: Row; className?: string }> = ({ r, className }) =>
+  r.why ? <span data-testid="row-why" className={cn("block", WHY_TONE[r.whyTone || "grey"], className)}>{tr(r.why[0], r.why[1])}</span> : null;
 
 export const sessionPath = (r: Row, view?: "chat" | "term") => `/s/${encodeURIComponent(rowRef(r))}${view ? `?view=${view}` : ""}`;
 // the web conversation, one row of the list (its own page until C3 makes it a session)
@@ -140,6 +145,7 @@ const RowDetail: FC<{ r: Row }> = ({ r }) => (
   <>
     <span className="block text-sm font-semibold break-words">{r.title}</span>
     <span className="block opacity-80">{rowMeta(r)}</span>
+    <RowWhy r={r} className="mt-1 text-[13px]" />
     {r.line ? <span className="mt-0.5 block line-clamp-3">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</span> : null}
   </>
 );
@@ -198,6 +204,7 @@ const PressSheet: FC<{ r: Row | null; onClose: () => void }> = ({ r, onClose }) 
           <SheetHeader className="gap-1 px-5 pt-5 pb-3">
             <SheetTitle className="text-base leading-snug break-words">{r.title}</SheetTitle>
             <SheetDescription>{rowMeta(r)}</SheetDescription>
+            <RowWhy r={r} className="text-sm" />
             {r.line ? <p className="text-foreground text-sm break-words">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</p> : null}
           </SheetHeader>
           <div className="grid grid-cols-2 gap-3 px-5">

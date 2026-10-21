@@ -131,6 +131,11 @@ def closed(task):
         return 3
     state = verdict(t)
     print("%s\ntask: %s" % (state, code(t, task)))
+    # an open record's hold words (E101): the idle reaper parks a session that
+    # asked its person and was not answered
+    for k in ("asked", "parked"):
+        if state == "WAITING" and str(t.get(k) or "").strip():
+            print("%s: 1" % k)
     return 1 if state == "WAITING" else 0
 
 

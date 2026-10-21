@@ -277,6 +277,34 @@ close_secs() {
   printf '%s' "$v"
 }
 
+# How the agent's last own word reads (E101): `transient` — its 7501 report is
+# `error` and its words a temporary server error (a 5xx, an overload, a connection
+# that broke or never came up); `error` — any other error; nothing — no error.
+agent_error() {  # <@agent_status JSON>
+  printf '%s' "$1" | python3 -c 'import json, re, sys
+try: r = json.load(sys.stdin)
+except Exception: sys.exit(0)
+if not isinstance(r, dict) or r.get("state") != "error": sys.exit(0)
+t = re.search(r"API Error: 5[0-9][0-9]|overloaded|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|unreachable|"
+              r"timed? ?out|network|connection (?:error|reset|refused)|SSLCertVerification", str(r.get("msg") or ""), re.I)
+print("transient" if t else "error")' 2>/dev/null
+}
+
+# How long the page waits before its one automatic retry (E101): close_secs's
+# road — FLEET_AUTO_RESUME_SECS from the environment, else the machine's
+# fleet.conf, else 300. 0 = never by itself.
+auto_resume_secs() {
+  local v
+  if [ -n "${FLEET_AUTO_RESUME_SECS+x}" ]; then v=$FLEET_AUTO_RESUME_SECS
+  else
+    v=$( [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf" >/dev/null 2>&1
+         [ -f "$PCONF/fleet.conf" ] && . "$PCONF/fleet.conf" >/dev/null 2>&1
+         printf '%s' "${FLEET_AUTO_RESUME_SECS-300}" )
+  fi
+  case "$v" in ''|*[!0-9]*) v=300 ;; esac
+  printf '%s' "$v"
+}
+
 PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''
@@ -453,9 +481,24 @@ while :; do
   # failed relaunch or a refused launch (the page must stay to say why). Every
   # session alike: nothing reopens a role's window any more (issue #4341).
   close_n=0
+  aerr=$(agent_error "$(opt @agent_status)")
   case "$rc" in 0|130)
-    [ -z "$failed" ] && close_n=$(close_secs) ;;
+    # an agent its error stopped did not exit on its person's word (E101)
+    [ -z "$failed" ] && [ -z "$aerr" ] && close_n=$(close_secs) ;;
   esac
+  # A temporary server error (E101: FQBW's 502 sat 16 h on this page): the page
+  # presses ↵ by itself once — FLEET_AUTO_RESUME_SECS (300) on, the same
+  # conversation in the same window; a second one, or any other error, waits for
+  # its person (the list's 等你 · 出错停住). @auto_resume_at is the clock the idle
+  # reaper's 「为什么还没收」 counts down to, @auto_resumed the one retry spent.
+  auto=''
+  if [ "$aerr" = transient ] && [ -z "$failed" ] && [ "$handed" != 1 ] && [ "$(opt @auto_resumed)" != 1 ]; then
+    ain=$(auto_resume_secs)
+    if [ "$ain" -gt 0 ]; then
+      auto=1; pargs+=(--resume-in "$ain")
+      wset @auto_resume_at "$(( $(date +%s) + ain ))"
+    fi
+  fi
   [ "$handed" = 1 ] && close_n=0 && pargs+=(--handed web)
   [ "$close_n" -gt 0 ] && pargs+=(--close-in "$close_n")
   # The personal layer (#1862): absent on this login → nothing passed, the page as before.
@@ -522,6 +565,13 @@ while :; do
   fi
   # Back from the page: a relaunch is a fresh turn as far as the list knows.
   wset -u @wrap_exit_rc
+  # the one automatic retry (E101) is spent once the page resumed after offering it
+  if [ -n "$auto" ]; then
+    wset -u @auto_resume_at
+    [ "$act" = 10 ] && wset @auto_resumed 1
+    [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s auto-resume act=%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$act" >> "$xlog" 2>/dev/null
+  fi
   # p — ↵ without the personal layer, for this window from now on (#1862)
   [ "$act" = 13 ] && { export FLEET_PERSONAL=0; act=10; }
   # ↵ after a refused FIRST launch — the agent never ran: the same launch again.

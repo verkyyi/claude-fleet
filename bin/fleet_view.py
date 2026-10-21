@@ -2163,8 +2163,20 @@ def board_words(r):
     return (w[1] if _BOARD["lang"] == "en" and len(w) > 1 else w[0]) or r.get("tag", "")
 
 
+def board_why(r):
+    """The hub's 「为什么还没收」 line for the row (E101, BoardRow.why), in the
+    panel's language — the console's words, one source; "" when none."""
+    w = r.get("why")
+    if not isinstance(w, list) or len(w) != 2:
+        return ""
+    if "lang" not in _BOARD:
+        _BOARD["lang"] = ui_lang()
+    return str(w[1] if _BOARD["lang"] == "en" else w[0])
+
+
 BOARD_SYM = {"asking": "needs", "waiting_you": "needs", "failed": "fail", "refused": "fail", "working": "work",
-             "looping": "work", "completed": "done", "turn_done": "done", "ended": "done", "exited": "exited"}
+             "looping": "work", "completed": "done", "turn_done": "done", "ended": "done", "exited": "exited",
+             "parked": "needs", "stopped": "fail"}
 
 
 def board_apply(board, groups, shut, gone, here, me):
@@ -2215,6 +2227,11 @@ def board_apply(board, groups, shut, gone, here, me):
         e["depth"] = int(r.get("depth") or 0)
         e["foot"] = " · ".join(x for x in (e.get("text") or "", e["word"], " · ".join(
             x for x in (e.get("machine") or here, e.get("login") or me) if x)) if x)
+        why = board_why(r)
+        if why:
+            e["why"] = why
+        else:
+            e.pop("why", None)
         if g == "gone":
             e.update(group="folded", sec="gone")
             out_gone.append(e)
@@ -2422,10 +2439,11 @@ def match_why(e, query):
 def note_of(e):
     """The lit session's bottom line (plan B): what its row no longer carries — lost,
     a broken configuration (red: a person has to act), k/N, the PR's step, the
-    repo when 2+. (text, red)."""
+    repo when 2+ — and, first, why the hub says it is still open (E101: the
+    console card's 「为什么还没收」 line, one source). (text, red)."""
     tags = [t for t in (e.get("tags") or []) if t and t != e.get("repo")]
     red = any(say("view_tag_cfg_broken") in t for t in tags)
-    return " · ".join(tags), red
+    return " · ".join(([e["why"]] if e.get("why") else []) + tags), red
 
 
 def score(query, e):

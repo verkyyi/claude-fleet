@@ -109,3 +109,28 @@ console.log('ok work.mjs');
   assert.deepEqual(nestedKids(br[1]).map((r) => r.title), ['member']);
   console.log('ok — the one list (A4G2)');
 }
+
+// E101: what the hub says is still holding a row rides on it as it is (its
+// words, its tone); a parked row is a clock in the ask colour and joins its
+// ended session (接回 wakes it); a stopped one is a red cross.
+{
+  const { boardRows } = await import('../src/app/work.ts');
+  const ts = [v1({ id: 'T30', fid: fid(30), title: 'parked', task_state: 'running', worker_id: `${F}/w-p` }),
+    v1({ id: 'T31', fid: fid(31), title: 'poster', outcome: 'succeeded', worker_id: `${F}/k31` })];
+  const board = { count: 2, groups: { ask: 2, queue: 1 }, gone_days: 7, digest: 'x', rows: [
+    { id: fid(30), task: 'T30', task_id: fid(30), title: 'parked', group: 'ask', tag: 'parked', words: ['已停放 · 等你', 'Parked · waiting on you'], at: 40,
+      why: ['已停放 · 在等你点头，回话即唤醒', 'Parked · waiting for your go-ahead — reply to wake it'], why_tone: 'orange' },
+    { id: 'st', title: 'stopped', group: 'ask', tag: 'stopped', words: ['出错停住', 'Stopped on an error'], at: 30,
+      why: ['出错停住：要你看一下', 'Stopped on an error: needs a look'], why_tone: 'red' },
+    { id: fid(31), task: 'T31', task_id: fid(31), title: 'poster', group: 'queue', tag: 'completed', words: ['已完成', 'Completed'], worker_id: `${F}/k31`, at: 20,
+      why: ['还没收：做完了，后台的活还在跑 · 18 分钟后收', 'Not closed yet: done, but a background job is still running · closes in 18 min'] },
+  ] };
+  const br = boardRows(board, ts, [sess('k31', 'looping')], [gone('p')]);
+  assert.deepEqual([br[0].glyph, br[0].tone, br[0].whyTone], ['wait', 'ask', 'orange'], 'parked: a clock in the ask colour');
+  assert.equal(br[0].ended?.wid, `${F}/w-p`, 'parked joins its ended session — its 接回');
+  assert.deepEqual([br[1].glyph, br[1].tone, br[1].whyTone], ['fail', 'fail', 'red'], 'stopped: a red cross');
+  assert.equal(br[2].why[0], '还没收：做完了，后台的活还在跑 · 18 分钟后收');
+  assert.equal(br[2].whyTone, 'grey', 'no tone said: grey');
+  assert.equal(boardRows({ ...board, rows: [{ ...board.rows[2], why: undefined }] }, ts, []).at(0).why, undefined, 'nothing said, no line');
+  console.log('ok — why it is still open (E101)');
+}

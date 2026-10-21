@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -154,5 +155,119 @@ func TestBoardLostMachineIsPutAway(t *testing.T) {
 	}
 	if b.Groups["queue"] != 2 || b.Groups["ask"] != 0 {
 		t.Fatalf("groups = %v", b.Groups)
+	}
+}
+
+// E101: a session that waits on you is 等你 even with its window up (its record
+// asked, or the node says its ID's result waits); a parked record keeps its row
+// in 等你 (a clock); a window its agent's error stopped is 等你 · 出错停住, never
+// 已收起; each 等你 / 排队中 row carries the node's 「为什么还没收」 line — and a
+// waiting row sits above a stopped one.
+func TestBoardLiveAskedIsAsk(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	v1 := func(token string) store.FleetTask {
+		rec, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "task " + token, AuthorityVersion: 1,
+			RequestedAgent: "default", ResolvedAgent: "claude"}, token, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	set := func(rec store.FleetTask, q string, args ...any) {
+		if _, err := st.DB().Exec(q, append(args, rec.ID)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asked, keep, stopped, parked, poster, busy := v1("asked"), v1("keep"), v1("stopped"), v1("parked"), v1("poster"), v1("busy")
+	set(asked, `UPDATE fleet_tasks SET asked = ? WHERE id = ?`, "⛔ blocked: 请选一个 A / B")
+	set(parked, `UPDATE fleet_tasks SET parked = ? WHERE id = ?`, "停放：等你回话满 4 小时")
+	set(poster, `UPDATE fleet_tasks SET state = 'closed', outcome = 'succeeded' WHERE id = ?`)
+	fleet := "42f8e358-7cc0-5856-a353-8983a4b4c9a1"
+	sess := func(ident, key, state string, born int64, why string) FleetSession {
+		wid := fleet + "/" + key
+		w := map[string]any{"identity": ident, "key": key, "state": state, "name": key, "born": float64(born), "worker_id": wid}
+		if why != "" {
+			w["reap_why"] = why
+		}
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: "online", Worker: w}
+	}
+	at := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
+	live := []FleetSession{
+		sess(stopped.FID, "o-r:scratch-1", "exited", 900, "error-retry:"+at(4*time.Minute)),
+		sess(asked.FID, "o-r:scratch-2", "done", 100, "waiting:"+at(3*time.Hour)),
+		sess(keep.FID, "o-r:scratch-3", "done", 200, "waiting:"+at(90*time.Minute)),
+		sess(poster.FID, "o-r:scratch-4", "looping", 300, "bg:"+at(18*time.Minute)),
+		sess(busy.FID, "o-r:scratch-5", "working", 400, "timer:"+at(time.Minute)),
+		sess("0b7e8c1a-1111-4222-8333-444455556699", "o-r:scratch-6", "exited", 500, ""),
+	}
+	b, err := s.buildBoard("gh:1", live, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BoardRow{}
+	var order []string
+	for _, r := range b.Rows {
+		got[r.ID] = r
+		order = append(order, r.Group+":"+r.Tag)
+	}
+	want := map[string][3]string{
+		asked.FID:                              {"ask", "waiting_you", "在等你回话 · 3 小时后停放，回话即唤醒"},
+		keep.FID:                               {"ask", "waiting_you", "在等你回话 · 2 小时后停放，回话即唤醒"},
+		parked.FID:                             {"ask", "parked", "已停放 · 在等你点头，回话即唤醒"},
+		stopped.FID:                            {"ask", "stopped", "出错停住：服务端临时出错 · 4 分钟后自动重试"},
+		poster.FID:                             {"queue", "completed", "还没收：做完了，后台的活还在跑 · 18 分钟后收"},
+		busy.FID:                               {"work", "working", ""},
+		"0b7e8c1a-1111-4222-8333-444455556699": {"gone", "exited", ""},
+	}
+	for id, w := range want {
+		r := got[id]
+		zh := ""
+		if len(r.Why) == 2 {
+			zh = r.Why[0]
+		}
+		if r.Group != w[0] || r.Tag != w[1] || zh != w[2] {
+			t.Fatalf("row %s = %s/%s %q; want %s/%s %q (all %v)", id, r.Group, r.Tag, zh, w[0], w[1], w[2], order)
+		}
+	}
+	if r := got[stopped.FID]; r.WhyTone != "red" || r.Why[1] != "Stopped on an error: a temporary server error · retrying in 4 min" {
+		t.Fatalf("the stopped row = %+v", r)
+	}
+	if r := got[parked.FID]; r.WhyTone != "orange" || r.Words != [2]string{"已停放 · 等你", "Parked · waiting on you"} {
+		t.Fatalf("the parked row = %+v", r)
+	}
+	// 等你: the waiting rows (newest first) and the parked one, then the stopped one
+	if len(order) < 4 || order[3] != "ask:stopped" || order[0][:4] != "ask:" {
+		t.Fatalf("order = %v", order)
+	}
+}
+
+// E101's copy table, letter for letter: every code the node writes, both languages.
+func TestBoardWhyCopy(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	in := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
+	for _, c := range []struct{ raw, zh, en, tone string }{
+		{"bg:" + in(18*time.Minute), "还没收：做完了，后台的活还在跑 · 18 分钟后收", "Not closed yet: done, but a background job is still running · closes in 18 min", "grey"},
+		{"timer:" + in(5*time.Minute), "还没收：计时中 · 5 分钟后收", "Not closed yet: closes in 5 min", "grey"},
+		{"dirty", "不会自动收：有没提交的改动", "Won't close on its own: uncommitted changes", "grey"},
+		{"keep", "不会自动收：你设了保留", "Won't close on its own: kept by you", "grey"},
+		{"task-open", "还没收：任务还没收口", "Not closed yet: its task is still open", "grey"},
+		{"live", "先不收：有人正在看或在输入", "Not now: someone is looking or typing", "grey"},
+		{"moving", "先不收：正在换机器", "Not now: moving to another machine", "grey"},
+		{"waiting:" + in(3*time.Hour), "在等你回话 · 3 小时后停放，回话即唤醒", "Waiting for your reply · parks in 3 h — reply to wake it", "orange"},
+		{"parked", "已停放 · 在等你点头，回话即唤醒", "Parked · waiting for your go-ahead — reply to wake it", "orange"},
+		{"error-retry:" + in(4*time.Minute), "出错停住：服务端临时出错 · 4 分钟后自动重试", "Stopped on an error: a temporary server error · retrying in 4 min", "red"},
+		{"error-retried", "出错停住：自动重试过 1 次仍出错 · 要你看一下", "Stopped on an error: retried once, still failing · needs a look", "red"},
+		{"error", "出错停住：要你看一下", "Stopped on an error: needs a look", "red"},
+		{"timer:" + in(-time.Hour), "还没收：计时中 · 1 分钟后收", "Not closed yet: closes in 1 min", "grey"},
+	} {
+		w, tone := boardWhy(c.raw, now)
+		if len(w) != 2 || w[0] != c.zh || w[1] != c.en || tone != c.tone {
+			t.Fatalf("boardWhy(%q) = %q %s; want %q %q %s", c.raw, w, tone, c.zh, c.en, c.tone)
+		}
+	}
+	if w, tone := boardWhy("", now); w != nil || tone != "" {
+		t.Fatalf("no reason = %q %s; want nothing", w, tone)
 	}
 }

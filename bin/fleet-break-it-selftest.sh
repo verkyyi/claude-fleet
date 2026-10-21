@@ -378,7 +378,10 @@ while [ ! -e "$CTL/go" ]; do
   sleep 0.05
 done
 rm -f "$CTL/go"
-case "$(cat "$CTL/mode")" in rc0) exit 0 ;; rc130) exit 130 ;; kill) kill -9 $$ ;; esac
+# $CTL/error: the agent's last own word (OSC 7501, @agent_status) before it leaves —
+# an API error (E101)
+[ -s "$CTL/error" ] && tmux set-option -w -t "$TMUX_PANE" @agent_status "$(cat "$CTL/error")"
+case "$(cat "$CTL/mode")" in rc0) exit 0 ;; rc1) exit 1 ;; rc130) exit 130 ;; kill) kill -9 $$ ;; esac
 EOF
 chmod +x "$WORK/wbin/session-end-hook.sh" "$WORK/fake-agent"
 
@@ -416,7 +419,7 @@ o()  { nt display-message -p -t "$1" "#{$2}" 2>/dev/null; }
 # wrapped <session> <win> <ctl> — a window running the wrapper as every spawner does
 wrapped() {
   mkdir -p "$3"; : > "$3/argv"
-  local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=${WRAP_FAST:-0} FLEET_UI_LANG=zh"
+  local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=${WRAP_FAST:-0} FLEET_UI_LANG=zh ${WRAP_ENV:-}"
   [ -n "${PERS_CONF:-}" ] && cmd="$cmd FLEET_CONF_DIR='$PERS_CONF'"
   cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude ${WRAP_ARGS:-}'the seed'; exec sleep 600"
   if nt has-session -t "$1" 2>/dev/null; then nt new-window -d -t "$1:" -n "$2" "$cmd"
@@ -512,6 +515,37 @@ drill_resume_fails_fast() {
   nt list-windows -t sx -F '#{window_name}' 2>/dev/null | grep -qx w || { WHY="the window closed"; return 1; }
   page_says '找不到这个对话' || { WHY="the page does not say why (找不到这个对话)"; return 1; }
   SECS=$(since "$t0"); WHAT="续对话 1 秒内失败，窗口留在恢复页写「找不到这个对话」"
+}
+
+# session-exited-transient (E101): an agent a temporary server error stopped (FQBW's
+# 502 sat 16 h on its recovery page, put away in 已结束) — the page presses ↵ by
+# itself once (FLEET_AUTO_RESUME_SECS), the same conversation in the same window;
+# a second error waits for its person: no second retry, and never the 10-second
+# auto-close a person's own /exit gets, even at rc 0.
+drill_session_exited_transient() {
+  CAP=10; BREAK_SOCK="$WORK/sock-et"; local c="$WORK/et" t0 at
+  WRAP_ENV="FLEET_AUTO_RESUME_SECS=2 FLEET_EXIT_CLOSE_SECS=2" wrapped sx w "$c" \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
+  printf '{"state":"error","msg":"API Error: 502 cred-proxy: upstream direct unreachable"}' > "$c/error"
+  t0=$(now); printf rc1 > "$c/mode"; : > "$c/go"
+  until_ok 10 page_says '秒后' \
+    || { WHY="no retry countdown — the window shows: $(nt capture-pane -p -t sx:w 2>/dev/null | grep . | tail -2 | tr '\n' ' ')"; return 1; }
+  at=$(o sx:w @auto_resume_at)
+  case "$at" in ''|*[!0-9]*) WHY="no @auto_resume_at for the reaper's 「N 分钟后自动重试」"; return 1 ;; esac
+  until_ok 8 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="the page never retried by itself"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(sed -n 2p "$c/argv")" = "--agent claude --resume SID-1" ] || { WHY="the retry ran [$(sed -n 2p "$c/argv")], not the same conversation"; return 1; }
+  until_ok 5 sh -c "[ \"\$('$REAL_TMUX' -S '$BREAK_SOCK' display-message -p -t sx:w '#{@auto_resumed}')\" = 1 ]" \
+    || { WHY="the retry was not marked spent (@auto_resumed)"; return 1; }
+  printf rc0 > "$c/mode"; : > "$c/go"                 # the same error again, rc 0 this time
+  until_ok 10 page_says '⌘P 回列表' || { WHY="no recovery page after the second error"; return 1; }
+  sleep 3.5                                          # past both the retry's and the close's 2 s
+  [ "$(grep -c . "$c/argv")" = 2 ] || { WHY="a second error retried again — one retry a window"; return 1; }
+  nt list-windows -t sx -F '#{window_name}' 2>/dev/null | grep -qx w || { WHY="the error exit closed its window by the /exit countdown"; return 1; }
+  page_says '秒后' && { WHY="the second page still counts down (a retry, or the /exit close)"; return 1; }
+  [ -z "$(o sx:w @auto_resume_at)" ] || { WHY="@auto_resume_at left set after the retry was spent"; return 1; }
+  WHAT="服务端临时出错退出：恢复页 ${SECS}s 内自动续上同一对话一次；再出错不再重试、不自动关窗，等人看"
 }
 
 # A Codex session with no recorded id: ↵ must never `resume --last` — in a shared
@@ -4675,7 +4709,7 @@ HUB
   out=$(FLEET_CONF_DIR="$c" FLEET_ID_HUB_POST="bash $hub" env -u TMUX -u TMUX_PANE bash "$BIN/fleet-id.sh" live 2>&1); rc=$?
   [ "$rc" = 75 ] && [ ! -e "$c/body.POST" ] || { WHY="with no fleet server up it still reported (rc=$rc) — a down fleet would close every ID"; return 1; }
   grep -q 'fleet-id.sh" live' "$BIN/fleet-cleanup-daemon.sh" || { WHY="the cleanup tick never runs the reconcile"; return 1; }
-  grep -q 'self.end_id(snap\["@fleet_id"\])' "$BIN/fleet-cleanup-idle.py" || { WHY="the idle reaper's kill-window still leaves the ID open"; return 1; }
+  grep -Eq 'self\.end_id\(snap\["@fleet_id"\](, why)?\)' "$BIN/fleet-cleanup-idle.py" || { WHY="the idle reaper's kill-window still leaves the ID open"; return 1; }
   SECS=$(since "$t0")
   WHAT="节点每拍把活窗口的 ID 报给 hub（不在的由 hub 关成 hub:gone，再出现就恢复）；没有服务器回答就不报；空闲回收关窗口时写上 closed"
 }
