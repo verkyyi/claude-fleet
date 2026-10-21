@@ -15,7 +15,7 @@ import (
 // lay them out, small.
 func siteFixture() (fstest.MapFS, fstest.MapFS) {
 	page := func(lang string) *fstest.MapFile {
-		return &fstest.MapFile{Data: []byte(`<html lang="` + lang + `"><link rel="canonical" href="__ORIGIN__/x">` + lang + `</html>`)}
+		return &fstest.MapFile{Data: []byte(`<html lang="` + lang + `"><link rel="canonical" href="__ORIGIN__/x"><i>__HOST__/app</i>` + lang + `</html>`)}
 	}
 	site := fstest.MapFS{
 		"index.html":            page("zh-CN"),
@@ -67,13 +67,13 @@ func TestSitePaths(t *testing.T) {
 		return rec
 	}
 	for _, c := range []struct{ path, body, ctype string }{
-		{"/", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
-		{"/en/", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
+		{"/", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x"><i>hub.example.com/app</i>`, "text/html; charset=utf-8"},
+		{"/en/", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x"><i>hub.example.com/app</i>`, "text/html; charset=utf-8"},
 		// the legal pages (T883)
-		{"/terms", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
-		{"/privacy", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
-		{"/en/terms", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
-		{"/en/privacy", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x">`, "text/html; charset=utf-8"},
+		{"/terms", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x"><i>hub.example.com/app</i>`, "text/html; charset=utf-8"},
+		{"/privacy", `<html lang="zh-CN"><link rel="canonical" href="https://hub.example.com/x"><i>hub.example.com/app</i>`, "text/html; charset=utf-8"},
+		{"/en/terms", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x"><i>hub.example.com/app</i>`, "text/html; charset=utf-8"},
+		{"/en/privacy", `<html lang="en"><link rel="canonical" href="https://hub.example.com/x"><i>hub.example.com/app</i>`, "text/html; charset=utf-8"},
 		{"/favicon.ico", "ICO", "image/x-icon"},
 		{"/favicon.svg", "<svg/>", "image/svg+xml"},
 		{"/apple-touch-icon.png", "PNG-apple", "image/png"},
@@ -97,7 +97,7 @@ func TestSitePaths(t *testing.T) {
 		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), c.body) || rec.Header().Get("Content-Type") != c.ctype {
 			t.Errorf("GET %s = %d %q %q; want 200 %q %q", c.path, rec.Code, rec.Header().Get("Content-Type"), rec.Body.String(), c.ctype, c.body)
 		}
-		if strings.Contains(rec.Body.String(), siteOrigin) || rec.Header().Get("X-Robots-Tag") != "" {
+		if strings.Contains(rec.Body.String(), siteOrigin) || strings.Contains(rec.Body.String(), siteHost) || rec.Header().Get("X-Robots-Tag") != "" {
 			t.Errorf("GET %s: placeholder left or not indexable: %q robots %q", c.path, rec.Body.String(), rec.Header().Get("X-Robots-Tag"))
 		}
 		if head := do(http.MethodHead, c.path, nil); head.Code != http.StatusOK || head.Body.Len() != 0 {
@@ -105,7 +105,7 @@ func TestSitePaths(t *testing.T) {
 		}
 	}
 	// A browser that takes gzip gets the pages gzip'd; a font stays as it is.
-	for path, want := range map[string]string{"/en/": "hub.example.com/x\">en<", "/docs/faq": "FAQ-ZH", "/site/fonts/a-latin.woff2": ""} {
+	for path, want := range map[string]string{"/en/": "hub.example.com/app</i>en<", "/docs/faq": "FAQ-ZH", "/site/fonts/a-latin.woff2": ""} {
 		enc := ""
 		if want != "" {
 			enc = "gzip"

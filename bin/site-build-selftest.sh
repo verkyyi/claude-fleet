@@ -207,7 +207,9 @@ PY
 #     BusinessApplication. The page keeps only what it must (T872): the nav is
 #     文档 · 登录 · the language, the footer GitHub · © (+ the legal line, leg L) — one language switch, one
 #     docs link, the GitHub link only in the footer, no 能交给它 / 价格 / FAQ /
-#     安全 / trademark line, and the share words name no price or trial length
+#     安全 / trademark line, and the share words name no price or trial length.
+#     The replay is the web app (C3): no iTerm2 / ⌘P, its address bar __HOST__/app,
+#     and one developer line under it to /docs/member/connect
 if [ -f "$T/d/index.html" ]; then
   if out="$(python3 - "$T/d/index.html" "$T/d/en/index.html" <<'PY'
 import re, sys
@@ -232,6 +234,16 @@ for f in sys.argv[1:]:
     outside = [a for a in links if 'class="brand"' not in a and 'class="skip"' not in a
                and 'id="to-app"' not in a
                and not re.search(r'href="(/en)?/(terms|privacy)"|beian\.miit', a)]   # the footer legal line, T883 leg L
+    # the replay's one line for a developer (C3): the terminal is a doc, once
+    dev = re.findall(r'<p class="devline">[^<]*<a href="(/(?:en/)?docs/member/connect)">', body)
+    if len(dev) != 1:
+        bad.append('%s: the developer line under the replay is not once, to /docs/member/connect: %s' % (f, dev))
+    outside = [a for a in outside if not (dev and a == '<a href="%s">' % dev[0])]
+    # the replay is the web app (C3): no terminal window, no ⌘P, its address the hub's
+    for w in re.findall(r'iTerm2|⌘P|class="topline"|id="panel"', s):
+        bad.append('%s: the replay still shows %s' % (f, w))
+    if '__HOST__/app</span>' not in s:
+        bad.append('%s: the replay address bar is not __HOST__/app' % f)
     if len(outside) != 4:
         bad.append('%s: %d entries outside the scan card, not 4 (文档 · 登录 · language · GitHub): %s'
                    % (f, len(outside), outside))

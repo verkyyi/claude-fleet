@@ -180,7 +180,8 @@ def time_text(S):
 # --- the theme (issue #3924) -------------------------------------------------
 # The page's colours and fonts are extras/fleet-theme's, inlined: its fleet:tokens
 # block and its fonts.css, comments out, whitespace folded, the font files at
-# /site/fonts/. The template defines none of its own (fleet-theme-selftest.sh).
+# /site/fonts/, and the light shadcn block as the replay's own (.screen). The
+# template defines none of its own (fleet-theme-selftest.sh).
 THEME = os.path.join(REPO, 'extras', 'fleet-theme')
 
 def theme_css():
@@ -194,7 +195,14 @@ def theme_css():
         return '', ''
     fonts = open(os.path.join(THEME, 'fonts.css'), encoding='utf-8').read().replace('url(./fonts/', 'url(/site/fonts/')
     bg = re.search(r'--fleet-bg:\s*(#[0-9a-fA-F]{6})', m.group(1))
-    return '\n'.join(tidy(c) for c in re.findall(r'@font-face\s*\{[^}]*\}', fonts)) + '\n' + tidy(m.group(1)), bg.group(1) if bg else ''
+    # the replay is the web app as it looks signed in (C3): theme.css's light
+    # shadcn block — the console's own tokens — scoped to the demo's screen
+    light = re.search(r'/\* shadcn — light[^*]*\*/\s*:root\s*(\{.*?\n\})', t, re.S)
+    if not light:
+        fail('extras/fleet-theme/theme.css has no shadcn light :root block')
+        return '', ''
+    return ('\n'.join(tidy(c) for c in re.findall(r'@font-face\s*\{[^}]*\}', fonts)) + '\n' + tidy(m.group(1))
+            + '\n' + tidy('.screen' + light.group(1)), bg.group(1) if bg else '')
 
 # --- one page ---------------------------------------------------------------
 THEME_CSS, THEME_BG = theme_css()

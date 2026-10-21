@@ -5,8 +5,8 @@
  * theme colour or font family defined outside extras/fleet-theme/.
  *
  *   fleet:tokens   the site v2 design variables (--fleet-*), dark — the site's own
- *                  values. bin/site-build.sh inlines this block (and fonts.css)
- *                  into the website; it reads nothing else of this file.
+ *                  values. bin/site-build.sh inlines this block, fonts.css and the
+ *                  light shadcn block (scoped to the replay) into the website.
  *   shadcn         the standard shadcn/ui tokens (--background, --primary, …) mapped
  *                  onto them: light by default, dark under prefers-color-scheme.
  *   @theme         Tailwind v4: colours, radius, spacing, the three families.
