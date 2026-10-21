@@ -2916,7 +2916,7 @@ WEB_GO_RE = re.compile(r"[A-Za-z0-9-]{1,64}/[A-Za-z0-9._:-]{1,128}")
 def web_go(g, client, target):
     """A browser 看台's go to another machine's session (task C8X3): `ESC ] 7502 ;
     web-go ; w=<worker id> BEL` on its client's own tty — the page
-    (extras/web-console terminal.tsx) opens /terminal?worker=<id>, which the hub
+    (extras/web-console terminal.tsx) opens /s/<id>?view=term, which the hub
     admits only on one of the person's own logins. True when it was written."""
     if not WEB_GO_RE.fullmatch(target or ""):
         return False

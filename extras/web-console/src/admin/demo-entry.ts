@@ -27,7 +27,7 @@ const audit: AuditEvent[] = [
   { at: ago(60 * 3), kind: "dev", source: "device", actor: "林晓", action: "revoke", target: "p:7c1e · SHA256:x2Lq…iPhone", detail: "iPhone · Termius (旧)" },
   { at: ago(60 * 5), kind: "set", source: "hub", actor: ME, action: "setting", target: "fleet.auto_assign", outcome: "ok", detail: "least-busy → mac-mini" },
   { at: ago(60 * 9), kind: "mach", source: "fleet", actor: "mac-studio", action: "node_join", target: "mac-studio", outcome: "ok" },
-  { at: ago(60 * 12), kind: "user", source: "fleet", actor: ME, action: "view_as", target: "person:p:linxiao", outcome: "OK", detail: "/app/sessions" },
+  { at: ago(60 * 12), kind: "user", source: "fleet", actor: ME, action: "view_as", target: "person:p:linxiao", outcome: "OK", detail: "/app/" },
   { at: ago(60 * 15), kind: "user", source: "fleet", actor: "test-drill-07 (gh:3003)", action: "role_denied", target: "/admin/people", outcome: "refused" },
   { at: ago(60 * 26), kind: "sub", source: "credential", actor: ME, action: "add", target: "claude · pool-max-2 · pool", detail: "by zhouning (gh:1001)" },
   { at: ago(60 * 30), kind: "sess", source: "fleet", actor: "阿梅 (p:9a2d)", action: "spawn", target: "issue-412", outcome: "ok" },

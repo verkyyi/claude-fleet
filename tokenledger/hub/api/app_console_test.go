@@ -360,7 +360,10 @@ func TestConsoleMemberSide(t *testing.T) {
 	hd := h.srv.Handler()
 	for _, who := range []*http.Cookie{user, admin} {
 		for _, p := range []string{AppPrefix, AppPrefix + "/", AppPrefix + mePagePath, AppPrefix + "?x=1", AppPrefix + "/usage", AppPrefix + "/usage?range=today",
-			AppPrefix + mePagePath + "/usage", AppPrefix + mePagePath + "/settings?e=x", AppPrefix + mePagePath + "/devices?tab=home"} {
+			AppPrefix + mePagePath + "/usage", AppPrefix + mePagePath + "/settings?e=x", AppPrefix + mePagePath + "/devices?tab=home",
+			// the session list's own addresses, opened straight (GR5E C9)
+			AppPrefix + "/chat", AppPrefix + "/new", AppPrefix + "/s/K3F9", AppPrefix + "/s/K3F9?view=term",
+			AppPrefix + "/s/shell?view=term&continue=claude", AppPrefix + "/s/fleet-uuid%2Ff-1?view=term"} {
 			got := consoleDo(hd, http.MethodGet, p, who)
 			if got.Code != http.StatusOK || got.Body.String() != "APP-ENTRY" {
 				t.Errorf("GET %s = %d %.60q; want the console's page", p, got.Code, got.Body.String())
@@ -400,7 +403,11 @@ func TestConsoleMemberSide(t *testing.T) {
 	}
 	// no build: nothing to show — the old overview is gone (claude-fleet#3939)
 	h.srv.ConsoleFS = nil
-	for _, p := range []string{AppPrefix, AppPrefix + mePagePath, AppPrefix + "/usage"} {
+	// /app/s/ alone is no session
+	if got := consoleDo(hd, http.MethodGet, AppPrefix+"/s/", user); got.Code == http.StatusOK && got.Body.String() == "APP-ENTRY" {
+		t.Errorf("GET /app/s/ = the console's page; want no page")
+	}
+	for _, p := range []string{AppPrefix, AppPrefix + mePagePath, AppPrefix + "/usage", AppPrefix + "/s/K3F9", AppPrefix + "/new"} {
 		if got := consoleDo(hd, http.MethodGet, p, user); got.Code != http.StatusNotFound {
 			t.Errorf("no console build: GET %s = %d; want 404", p, got.Code)
 		}

@@ -146,7 +146,7 @@ const QuotaBanner: FC = () => {
     <div role="status" className="border-clay-line bg-clay-soft mx-auto rounded-full border px-4 py-2 text-center text-[13px] leading-snug">
       {what}
       {when ? <>{tr("，", ", back ")}<b className="font-semibold">{when}</b>{tr(" 恢复", "")}</> : null}{tr("。", ".")}
-      <a href="/app/usage" className="text-foreground ms-1 no-underline">{tr("看用量 ›", "See usage ›")}</a>
+      <a href="/app/me/usage" className="text-foreground ms-1 no-underline">{tr("看用量 ›", "See usage ›")}</a>
     </div>
   );
 };
@@ -309,7 +309,7 @@ const PreviewChat: FC = () => {
         {tr(`这是${name || "他"}自己的那一条对话，只读预览不打开它。会话、任务、用量、设备和设置都和${name || "他"}看到的一样。`,
           `This is ${name || "their"}${name ? "’s" : ""} own conversation; a read-only preview does not open it. Sessions, tasks, usage, devices and settings are exactly as ${name || "they"} see${name ? "s" : ""} them.`)}
       </p>
-      <Button asChild className="rounded-full"><Link to="/sessions" className="no-underline">{tr("看会话", "See sessions")}</Link></Button>
+      <Button asChild className="rounded-full"><Link to="/" className="no-underline">{tr("看会话", "See sessions")}</Link></Button>
     </div>
   );
 };

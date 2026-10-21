@@ -50,7 +50,7 @@ const wait = async predicate => {
 try {
   for (const target of ['personal', 'worker']) {
     const page = await context.newPage()
-    const url = `${origin}/app/terminal${target === 'worker' ? `?worker=${encodeURIComponent(worker)}` : ''}`
+    const url = `${origin}/app/s/${target === 'worker' ? encodeURIComponent(worker) : 'shell'}?view=term`
     await page.goto(url)
     const first = await ready(page)
     assert(first?.term && first.gen && first.epoch, 'ready must carry logical identity and controller epoch')
@@ -108,7 +108,7 @@ try {
     evidence.push({ independentBrowserProfiles: true, target, first, resumed, taken, commandCount: 1, homePID: snapshot.home_pid, workerPID: snapshot.worker_pid, pairs })
     if (target === 'personal') {
       const directEntry = await context.newPage()
-      await directEntry.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
+      await directEntry.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
       await ready(directEntry)
       await second.getByText(ELSEWHERE, { exact: true }).waitFor()
       await directEntry.close()
@@ -116,7 +116,7 @@ try {
     await second.close()
   }
   let page = await context.newPage()
-  await page.goto(`${origin}/app/terminal`)
+  await page.goto(`${origin}/app/s/shell?view=term`)
   // Reopening takes the terminal (RMVE) — never restarts the shell.
   const before = await ready(page)
   assert.equal(before.gen, evidence[0].first.gen, 'closing all pages and reopening must keep the generation')
@@ -131,7 +131,7 @@ try {
   await page.getByRole('button', { name: 'Open shell', exact: true }).click()
   await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
   const processPage = await context.newPage()
-  await processPage.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
+  await processPage.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
   const oldProcess = await ready(processPage)
   assert.equal(oldProcess.gen, evidence[1].first.gen, 'reopening the worker must keep its generation')
   await context.request.post(`${fixture}/worker-respawn`)
@@ -178,7 +178,7 @@ try {
     assert.equal(await page.evaluate(() => window.__attempts), attempts, 'a renewed terminal kept reconnecting')
     // A fresh page takes the renewed terminal; it never renews it again.
     const rival = await context.newPage()
-    await rival.goto(`${origin}/app/terminal`)
+    await rival.goto(`${origin}/app/s/shell?view=term`)
     assert.equal((await ready(rival)).gen, current.gen, 'a second page renewed again')
     await page.getByText(ELSEWHERE, { exact: true }).waitFor()
     await page.getByText(ELSEWHERE, { exact: true }).click()
@@ -225,12 +225,12 @@ try {
   await page.getByRole('button', { name: 'Open shell', exact: true }).click()
   await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
   const endedWorker = await context.newPage()
-  await endedWorker.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
+  await endedWorker.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
   await ready(endedWorker)
   await command(endedWorker, 'exit')
   // RMVE: a session's terminal that ended takes you to your own, saying so
   await endedWorker.getByText('That session has ended — switched to your terminal.', { exact: true }).waitFor({ timeout: 30000 })
-  assert(!endedWorker.url().includes('worker='), 'still on the ended session')
+  assert(new URL(endedWorker.url()).pathname === '/app/s/shell', 'still on the ended session')
   await ready(endedWorker)
   assert.equal((await state()).worker_dead, '1', 'ended worker restarted')
   await endedWorker.close()

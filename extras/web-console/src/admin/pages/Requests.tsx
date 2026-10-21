@@ -164,7 +164,7 @@ export function RequestsPage() {
             <AlertDescription>
               <span>
                 {t("req.noReachSub")}{" "}
-                <a href="/app/settings#logins" className="font-medium text-primary underline-offset-4 hover:underline">
+                <a href="/app/me/settings#logins" className="font-medium text-primary underline-offset-4 hover:underline">
                   {t("req.noReachGo")}
                 </a>
               </span>

@@ -2,7 +2,8 @@ import { BrowserAttachment, BUFFER_MAX, FRAME_MAX, type AttachmentState } from "
 import { doorRetryDelay, endedStep, retryDelay } from "./terminal-retry";
 export { doorRetryDelay, endedStep, retryDelay };
 
-export const terminalLink = (worker: string) => `/terminal?worker=${encodeURIComponent(worker)}`;
+// a session's terminal is its page's 终端 view (GR5E C9): /s/<worker>?view=term
+export const terminalLink = (worker: string) => `/s/${encodeURIComponent(worker)}?view=term`;
 export const FLEET_MENU = "\x1b[927~";
 export const FLEET_SHELL = "\x1c"; // native Fleet Ctrl+\ toggle, including return
 

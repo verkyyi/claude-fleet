@@ -17,6 +17,8 @@ import { touchWheel } from "@/shared/touch-wheel";
 import { FONT_SIZES, MIN_CONTRAST, SCHEMES, onTermPick, setTermPick, termPick, xtermTheme, type TermPick } from "@/shared/term-theme";
 import { webGoTarget } from "@/shared/web-go";
 import { usePage } from "../Shell";
+import { LIST_PATH, shellPath } from "../legacy";
+import { meTab } from "../routes";
 import { continueCommand, continueProvider } from "@/app/chat/continue";
 import type { Provider } from "@/app/chat/chat";
 
@@ -95,14 +97,15 @@ function terminalPath(view: View): string {
   return view.echo !== undefined ? `${path} · ${view.echo} ms` : path;
 }
 
-// /terminal: the personal terminal (?worker= a session's), the page as before
-// the session workspace (GR5E C4) — now one <TerminalView> under a page.
-export default function TerminalPage() {
+// A terminal as a page of its own — one <TerminalView> under a head: your
+// Shell (/s/shell?view=term, worker null; ?continue= picks a web conversation
+// up), or a session's the list does not hold (/s/<worker>?view=term) — GR5E C9;
+// the old /terminal(?worker=) comes here (legacy.ts). An explicit
+// empty/invalid worker remains explicit and is refused server-side.
+export default function TerminalPage({ worker }: { worker: string | null }) {
   usePage(tr("我的终端", "My Terminal"));
   const [query] = useSearchParams();
   const location = useLocation();
-  // An explicit empty/invalid worker remains explicit and is refused server-side.
-  const worker = query.get("worker");
   // 「在终端里继续」 (task R9A2): the personal terminal picks a web conversation up
   const cont = worker === null ? continueProvider(query.get("continue")) : null;
   const name = typeof location.state?.title === "string" ? location.state.title : undefined;
@@ -311,7 +314,7 @@ export function TerminalView({ worker, cont = null, title, name, toolsInto, comp
         },
         onBytes(bytes) { term?.write(bytes); },
         // A session's terminal ended: your own terminal, saying which (RMVE).
-        onExit() { if (!dead) go.current("/terminal", { replace: true, state: { notice: "session_ended", ended: nameRef.current } }); },
+        onExit() { if (!dead) go.current(shellPath(), { replace: true, state: { notice: "session_ended", ended: nameRef.current } }); },
       });
       take.current = () => connection?.takeControl();
     };
@@ -375,7 +378,7 @@ export function TerminalView({ worker, cont = null, title, name, toolsInto, comp
         <span className="text-muted-foreground ms-2 font-sans text-xs">{view.destination}</span>
       </h1>
       {tools}
-      <Button asChild size="sm" variant="ghost"><Link to="/sessions"><Layers />{tr("会话", "Sessions")}</Link></Button>
+      <Button asChild size="sm" variant="ghost"><Link to={LIST_PATH}><Layers />{tr("会话", "Sessions")}</Link></Button>
     </header>}
     {notice && !compact ? <p role="status" data-notice className="rounded-md border-s-4 border-primary bg-muted px-3 py-2 text-sm">{notice}</p> : null}
     {view.state === "reconnecting" && !compact ? <p role="status" data-waiting className="rounded-md bg-muted px-3 py-2 text-sm">{waitText(view, view.destination, now)}</p> : null}
@@ -383,11 +386,11 @@ export function TerminalView({ worker, cont = null, title, name, toolsInto, comp
     {final && view.state !== "open-elsewhere" ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
       <p>{tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
       {view.state === "unauthorized" || view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
-        : view.error === "no_home" ? <Button asChild size="sm"><Link to="/devices?tab=home">{tr("设备", "Devices")}</Link></Button>
+        : view.error === "no_home" ? <Button asChild size="sm"><Link to={`${meTab("devices").path}?tab=home`}>{tr("设备", "Devices")}</Link></Button>
           : worker === null && view.error === "ended" && view.terminalGeneration ? <Button size="sm" onClick={() => { renewal.current = view.terminalGeneration; again(); }}>{tr("重新打开终端", "Reopen terminal")}</Button>
           : view.error === "interrupted" ? <Button size="sm" onClick={() => { forgetTerminalGeneration(worker); again(); }}>{tr("连接当前会话", "Connect current session")}</Button>
           : !["ended", "unsupported"].includes(view.error || "") && view.state !== "unsupported" ? <Button size="sm" onClick={again}>{tr("重新连接", "Reconnect")}</Button>
-            : <Button asChild size="sm"><Link to="/sessions">{tr("查看会话", "View sessions")}</Link></Button>}
+            : <Button asChild size="sm"><Link to={LIST_PATH}>{tr("查看会话", "View sessions")}</Link></Button>}
     </div> : null}
     {contNote ? <p role="status" className="text-muted-foreground text-sm">{contNote}</p> : null}
     {offers.map((offer) => <p key={offer.id} role="status" className="text-sm break-all">

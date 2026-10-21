@@ -29,6 +29,7 @@ import { newChat } from "./chat/chat";
 import { rememberProvider, useVisualViewport } from "./pages/chat";
 import { usePage, useShell } from "./Shell";
 import { sessionPath, WEB_CHAT_PATH } from "./SessionList";
+import { shellPath } from "./legacy";
 import {
   AGENTS, blocker, CHOICE_KEY, fixChoice, machinesOf, readChoice, rowForRequest, startArgs, targetOf,
   type Agent, type Choice, type Home, type Mode, type Start,
@@ -120,7 +121,7 @@ export default function NewSession() {
       go(WEB_CHAT_PATH, { replace: true, state: say ? { say } : null });
       return;
     }
-    if (s.agent === "shell") { go("/terminal", { replace: true }); return; }
+    if (s.agent === "shell") { go(shellPath(), { replace: true }); return; }
     setBusy(true);
     const idem = "web-" + (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9-]/g, "");
     const r = await sendJSON<{ status?: string; result?: { error?: { message?: string } } }>("POST", "/v1/fleet/write",

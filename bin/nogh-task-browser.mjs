@@ -1,5 +1,6 @@
 // A9/A12: committed portal build, local API fixtures, desktop/mobile + keyboard.
-// Since T769 the tasks live on the one 会话 page (/app/tasks lands there).
+// Since T769 the tasks live on the one 会话 page; since GR5E C9 /app/tasks?q=<code>
+// opens that session (/app/s/<code>), and the 会话 page holds the rest.
 // No native provider or deployed UI claim; screenshots are fixture evidence.
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -63,17 +64,22 @@ try {
     page.setDefaultTimeout(8000);
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    // 任务 is one list with 会话 since T769: the old address opens the row there
+    // the old 任务 address with a code opens that session (GR5E C9): its
+    // workspace (C4), 详情 in a drawer, its terminal a switch away
     await page.goto(`${origin}/app/tasks?q=T1&lang=en`);
+    await page.waitForURL(/\/app\/s\/T1\?lang=en$/);
+    await page.getByRole('button', { name: 'Details' }).first().click();
+    const one = page.getByRole('dialog');
+    await one.getByText(/Waiting for GitHub/).first().waitFor();
+    await one.getByRole('button', { name: /^Terminal$/ }).first().waitFor();
+    await page.keyboard.press('Escape');
+    // 会话's full page holds the rest
+    await page.goto(`${origin}/app/sessions?lang=en`);
     const row = id => page.locator(`[data-task-id="${id}"]`);
     // the details: beside the list on a computer, a sheet on a phone
     const detail = viewport.width >= 1024 ? page.locator('aside') : page.getByRole('dialog');
     await row('T1').waitFor();
-    assert.match(page.url(), /\/app\/sessions\?q=T1/);
     assert.match(await row('T1').innerText(), /Completed/);
-    assert.match(await detail.innerText(), /Waiting for GitHub/);
-    assert.match(await detail.getByRole('link', { name: /Terminal/ }).first().getAttribute('href'), /terminal/);
-    if (viewport.width < 1024) await page.keyboard.press('Escape');
     assert.match(await row('T2').innerText(), /Agent mismatch/);
     assert.match(await row('T3').innerText(), /Unknown/);
     await row('T4').focus();
@@ -102,7 +108,7 @@ try {
   }
   assert.ok(requests.every(r => r.method === 'GET'), 'view wrote task state');
   await writeFile(resolve(work, 'evidence/browser-snapshots.json'), JSON.stringify({ fixture: true, evidence, requests }, null, 2));
-  console.log('PASS committed portal: one 会话 list, /tasks lands on its row, desktop/mobile details, keyboard, stale confirmed timestamp, honest outcome and PR separation');
+  console.log('PASS committed portal: one 会话 list, /tasks?q= opens that session, desktop/mobile details, keyboard, stale confirmed timestamp, honest outcome and PR separation');
 } finally {
   if (browser) await browser.close();
 }

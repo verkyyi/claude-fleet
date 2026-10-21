@@ -9,6 +9,7 @@
 // The words are never taken from the address: the terminal reads the session id
 // and the directory from the home itself (GET /v1/chat/conversation), and refuses
 // an id or a directory of any other shape.
+import { shellPath } from "../legacy.ts"; // .ts: test/chat-continue.mjs runs this file as it is
 export type ContinueProvider = "claude" | "codex";
 export const continueProvider = (v: string | null): ContinueProvider | null => (v === "claude" || v === "codex" ? v : null);
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
@@ -22,4 +23,4 @@ export function continueCommand(provider: ContinueProvider, session: string, cwd
 }
 
 // where the chat page sends a person to continue a side in the terminal
-export const continueLink = (provider: ContinueProvider) => `/terminal?continue=${provider}`;
+export const continueLink = (provider: ContinueProvider) => shellPath(`continue=${provider}`);

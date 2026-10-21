@@ -8,17 +8,21 @@
 // sidebar and the bottom bar carry none of them — the avatar is the way in —
 // and their old addresses move on there, query and hash kept.
 //
+// Every old address moves on through legacy.ts's one table (GR5E C9): 任务 /
+// 会话's ?q= opens that session, /terminal your Shell's (/s/shell?view=term).
+//
 // The session list is the one way in (GR5E C2): the computer's left column and
 // the phone's first screen (/) are the list, a row opens /s/<ref>, and the web
 // conversation is a row of it at /chat — on a computer / still shows it beside
 // the list, and a phone's /?about= (a link into the conversation) opens it too.
 import { lazy, useEffect, useState, type ComponentType } from "react";
 import { Navigate, useLocation } from "react-router";
-import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Gauge, Layers, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage from "./pages/chat";
 import { SessionListPage } from "./SessionList";
+import { LEGACY, legacyTarget } from "./legacy";
 
 // The front page: the list on a phone, the conversation beside the list on a
 // computer (the left column already is the list). Read before the first paint,
@@ -28,15 +32,19 @@ function Home() {
   const { search } = useLocation();
   const [phone, setPhone] = useState(() => matchMedia(PHONE).matches);
   useEffect(() => { const m = matchMedia(PHONE); const f = () => setPhone(m.matches); m.addEventListener("change", f); return () => m.removeEventListener("change", f); }, []);
-  return phone && !search ? <SessionListPage /> : <ChatPage />;
+  // the old first screen was the conversation: only a link into it (?about=) opens it now
+  return phone && !new URLSearchParams(search).has("about") ? <SessionListPage /> : <ChatPage />;
 }
 
-// moved(to): an old address of a page that lives at `to` now, its query and
-// hash carried along (a sign-in flow comes back to /settings#logins).
-const moved = (to: string): ComponentType => function Moved() {
-  const { search, hash } = useLocation();
-  return <Navigate to={`${to}${search}${hash}`} replace />;
-};
+// Moved: an old address, sent on to where legacy.ts says it lives now — or,
+// for one it leaves be (bare /sessions), the page still there.
+const STAYS: Record<string, ComponentType> = { "/sessions": lazy(() => import("./pages/sessions")) };
+function Moved() {
+  const { pathname, search, hash } = useLocation();
+  const to = legacyTarget(pathname, search, hash);
+  const Stay = to === null ? STAYS[pathname.replace(/\/+$/, "")] : undefined;
+  return Stay ? <Stay /> : <Navigate to={to ?? "/"} replace />;
+}
 
 export type PageDef = {
   id: string;
@@ -53,15 +61,9 @@ export const PAGES: PageDef[] = [
   // 新建会话 (GR5E C3): 对话 | 终端 is chosen here, on the right of a computer, a phone's whole screen
   { id: "new", path: "/new", label: tr("新建会话", "New session"), icon: Plus, page: lazy(() => import("./NewSession")) },
   { id: "session", path: "/s/:ref", label: tr("会话", "Session"), icon: Layers, page: lazy(() => import("./pages/session")) },
-  { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, page: lazy(() => import("./pages/sessions")) },
-  { id: "terminal", path: "/terminal", label: tr("我的终端", "My Terminal"), icon: TerminalSquare, page: lazy(() => import("./pages/terminal")) },
-  // 任务 is one list with 会话 since T769: its address (and a code's ?q=) opens it there
-  { id: "tasks", path: "/tasks", label: tr("任务", "Tasks"), icon: ListChecks, page: moved("/sessions") },
   { id: "me", path: "/me/:tab", label: tr("我的", "Me"), icon: CircleUserRound, page: lazy(() => import("./pages/me")) },
-  { id: "me-home", path: "/me", label: tr("我的", "Me"), icon: CircleUserRound, page: moved("/me/account") },
-  { id: "usage", path: "/usage", label: tr("用量", "Usage"), icon: Gauge, page: moved("/me/usage") },
-  { id: "devices", path: "/devices", label: tr("设备", "Devices"), icon: MonitorSmartphone, page: moved("/me/devices") },
-  { id: "settings", path: "/settings", label: tr("设置", "Settings"), icon: Settings, page: moved("/me/settings") },
+  // the old addresses (legacy.ts): each a hop to where it lives now
+  ...Object.keys(LEGACY).map((path) => ({ id: `old${path}`, path, label: path, icon: Layers, page: Moved })),
 ];
 
 // 我的's tabs, in order: each the page it was before, drawn under the tabs.
