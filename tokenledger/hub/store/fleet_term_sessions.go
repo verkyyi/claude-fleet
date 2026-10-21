@@ -42,13 +42,37 @@ type FleetTermSession struct {
 	Outcome   string    `json:"outcome,omitempty"`
 	BytesUp   int64     `json:"bytes_up"`
 	BytesDown int64     `json:"bytes_down"`
+	EchoP50   int       `json:"echo_p50_ms,omitempty"`
+	EchoP95   int       `json:"echo_p95_ms,omitempty"`
+	EchoN     int       `json:"echo_n,omitempty"`
 }
 
 func (s *Store) ensureFleetTermSessions() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetTermSessionsSchema)); err != nil {
 		return fmt.Errorf("create fleet_term_sessions table: %w", err)
 	}
+	// the browser's own echo measure (XX79): key → next output, ms
+	for _, c := range []string{"echo_p50_ms", "echo_p95_ms", "echo_n"} {
+		if err := s.addColumn("fleet_term_sessions", c, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	// A row that never selected a path is not still negotiating: closed ones
+	// say so, and one a replica never closed (it went away) is lost after a day.
+	if _, err := s.write.Exec(`UPDATE fleet_term_sessions SET mode = 'unselected' WHERE mode = 'negotiating' AND closed_at <> ''`); err != nil {
+		return fmt.Errorf("fleet_term_sessions: %w", err)
+	}
+	if _, err := s.write.Exec(`UPDATE fleet_term_sessions SET mode = 'unselected', closed_at = opened_at, outcome = 'lost'
+		WHERE mode = 'negotiating' AND closed_at = '' AND opened_at < ?`, time.Now().Add(-24*time.Hour).UTC().Format(rfc)); err != nil {
+		return fmt.Errorf("fleet_term_sessions: %w", err)
+	}
 	return nil
+}
+
+// RecordTermEcho keeps a terminal's latest echo measure from its browser.
+func (s *Store) RecordTermEcho(id string, p50, p95, n int) error {
+	_, err := s.write.Exec(`UPDATE fleet_term_sessions SET echo_p50_ms = ?, echo_p95_ms = ?, echo_n = ? WHERE id = ?`, p50, p95, n, id)
+	return err
 }
 
 // RecordTermOpen writes a terminal's row as it opens.
@@ -62,7 +86,8 @@ func (s *Store) RecordTermOpen(t FleetTermSession) error {
 // RecordTermClose finishes a terminal's row.
 func (s *Store) RecordTermClose(id, outcome string, up, down int64, at time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_term_sessions SET closed_at = ?, outcome = ?, bytes_up = ?,
-		bytes_down = ? WHERE id = ?`, at.UTC().Format(rfc), outcome, up, down, id)
+		bytes_down = ?, mode = CASE WHEN mode = 'negotiating' THEN 'unselected' ELSE mode END WHERE id = ?`,
+		at.UTC().Format(rfc), outcome, up, down, id)
 	return err
 }
 
@@ -78,7 +103,7 @@ func (s *Store) FleetTermSessions(person string, limit int) ([]FleetTermSession,
 		limit = 50
 	}
 	q := `SELECT id, person, machine, login, target, mode, opened_at, closed_at, outcome, bytes_up,
-		bytes_down FROM fleet_term_sessions`
+		bytes_down, echo_p50_ms, echo_p95_ms, echo_n FROM fleet_term_sessions`
 	var args []any
 	if person != "" {
 		q += ` WHERE person = ?`
@@ -94,7 +119,7 @@ func (s *Store) FleetTermSessions(person string, limit int) ([]FleetTermSession,
 		var t FleetTermSession
 		var opened, closed string
 		if err := rows.Scan(&t.ID, &t.Person, &t.Machine, &t.Login, &t.Target, &t.Mode, &opened, &closed,
-			&t.Outcome, &t.BytesUp, &t.BytesDown); err != nil {
+			&t.Outcome, &t.BytesUp, &t.BytesDown, &t.EchoP50, &t.EchoP95, &t.EchoN); err != nil {
 			return nil, err
 		}
 		t.OpenedAt, _ = time.Parse(rfc, opened)

@@ -441,7 +441,7 @@ func (s *Server) serveConsole(w http.ResponseWriter, r *http.Request, side, rest
 	if strings.HasSuffix(name, "/index.html") {
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")
-		h.Set("Content-Security-Policy", s.consolePolicy())
+		h.Set("Content-Security-Policy", withDoorOrigins(s.consolePolicy(), s.termDoors()))
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Content-Type-Options", "nosniff")

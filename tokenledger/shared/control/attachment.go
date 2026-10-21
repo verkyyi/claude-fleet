@@ -46,9 +46,13 @@ type AttachmentGrant struct {
 	Generation  string                `json:"generation"`
 	Fingerprint string                `json:"fingerprint"`
 	Mode        string                `json:"mode"`
-	Epoch       uint64                `json:"epoch"`
-	Iat         int64                 `json:"iat"`
-	Exp         int64                 `json:"exp"`
+	// Door / Pipe: mode door's one door (its pipe URL) and pipe, set at the
+	// selection and never changed by a lease (XX79).
+	Door  string `json:"door,omitempty"`
+	Pipe  string `json:"pipe,omitempty"`
+	Epoch uint64 `json:"epoch"`
+	Iat   int64  `json:"iat"`
+	Exp   int64  `json:"exp"`
 }
 
 func SignAttachment(g AttachmentGrant, key string) string {
@@ -86,10 +90,18 @@ func VerifyAttachment(s, key, login, conn, generation string, now time.Time) (At
 	if g.Service != "chat" && g.Chat != (ChatAttachmentRequest{}) {
 		return g, bad
 	}
-	if g.Mode != "negotiate" && g.Mode != "direct" && g.Mode != "relay" {
+	if g.Mode != "negotiate" && g.Mode != "direct" && g.Mode != "relay" && g.Mode != "door" {
 		return g, bad
 	}
-	if g.Mode != "relay" && !ValidPeerFingerprint(g.Fingerprint) {
+	if (g.Mode == "door") != (g.Door != "" || g.Pipe != "") {
+		return g, bad
+	}
+	if g.Mode == "door" && (g.Service != "term" || !ValidDoorPipeURL(g.Door) || !doorPipeRE.MatchString(g.Pipe)) {
+		return g, bad
+	}
+	// a door is selected from a negotiation or from a relay start: only
+	// direct needs the offer's fingerprint
+	if (g.Mode == "negotiate" || g.Mode == "direct") && !ValidPeerFingerprint(g.Fingerprint) {
 		return g, bad
 	}
 	return g, nil
@@ -132,6 +144,11 @@ func ValidPeerFingerprint(s string) bool {
 // SameAttachment forbids a lease from changing who, what or which incarnation
 // an attachment reaches. Selection may change only mode/epoch (once).
 func SameAttachment(a, b AttachmentGrant) bool {
+	if a.Mode != "door" || b.Mode != "door" {
+		// the selection is what sets a door: a select compares without it
+		// (the node then checks old had none), a lease with it (both door)
+		a.Door, a.Pipe, b.Door, b.Pipe = "", "", "", ""
+	}
 	a.Mode, b.Mode = "", ""
 	a.Epoch, b.Epoch = 0, 0
 	a.Iat, b.Iat, a.Exp, b.Exp = 0, 0, 0, 0
@@ -155,4 +172,14 @@ type AttachmentSignal struct {
 	Target     string   `json:"target,omitempty"`
 	Pair       string   `json:"pair,omitempty"`
 	Error      string   `json:"error,omitempty"`
+	// XX79: the doors a terminal may go through (config), the one picked
+	// (a browser's select), its pipe and that half's ticket (selecting / select).
+	Doors  []TermDoor `json:"doors,omitempty"`
+	Door   string     `json:"door,omitempty"`
+	URL    string     `json:"url,omitempty"`
+	Ticket string     `json:"ticket,omitempty"`
+	// a browser's echo report (t "stats"): key → next output, milliseconds
+	EchoP50 int `json:"echo_p50,omitempty"`
+	EchoP95 int `json:"echo_p95,omitempty"`
+	EchoN   int `json:"echo_n,omitempty"`
 }

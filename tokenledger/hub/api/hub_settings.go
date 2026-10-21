@@ -122,6 +122,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return v, ""
 		}},
+	TermDoorsKey: {def: "", help: "browser terminals through the nearest door (XX79): a JSON list of {id, url (wss://host/v1/door/pipe), endpoint (the door's node endpoint — its token signs the tickets), label}; the browser picks the fastest, else the hub. Empty = no door offered",
+		check: termDoorsCheck},
 	DoorKey: {def: "", help: "the cluster's one public door (claude-fleet#3549): its machine name(s); a person whose home is their own pod u-<nonce> is reached through it",
 		check: doorCheck},
 	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines (default on when the hub writes address records: CCQUOTA_DNS_*)",

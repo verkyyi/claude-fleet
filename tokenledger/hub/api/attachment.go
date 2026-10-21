@@ -144,10 +144,14 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.termGate.release(person)
+	var doors []termDoor
+	if nc.canTermVia {
+		doors = s.termDoors()
+	}
 	s.serveAttachment(w, r, attachmentAdmission{person: person, home: home, logical: logical,
 		target: target, epID: epID, node: nc, generation: gen, previous: previous,
 		termResume: resume, termTake: take, termRenew: renew, service: "term", table: &s.termRelays, max: termRelayMax(s.TermRelayMaxPerLogin),
-		rate: s.TermRelayRateBPS, recheck: recheck})
+		rate: s.TermRelayRateBPS, recheck: recheck, doors: doors})
 }
 
 // Service adapters share negotiation and leases, never their admission, data
@@ -167,6 +171,8 @@ type attachmentAdmission struct {
 	request                                                      control.ChatAttachmentRequest
 	dispatched                                                   func()
 	result                                                       func(control.AttachmentSignal)
+	// doors a terminal's payload may go through (XX79); nil = none offered
+	doors []termDoor
 }
 
 func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attachmentAdmission) {
@@ -198,7 +204,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	send := func(v control.AttachmentSignal) error { return sendAttachmentSignal(ctx, browser, v) }
-	if send(control.AttachmentSignal{T: "config", STUN: stun, Generation: gen, Target: logical, TrialLeft: w.Header().Get(trialLeftHeader)}) != nil {
+	if send(control.AttachmentSignal{T: "config", STUN: stun, Generation: gen, Target: logical, TrialLeft: w.Header().Get(trialLeftHeader), Doors: browserDoors(a.doors)}) != nil {
 		return
 	}
 	firstCtx, firstCancel := context.WithTimeout(ctx, control.AttachmentNegotiate)
@@ -285,25 +291,47 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 	deadline := time.NewTimer(control.AttachmentNegotiate)
 	defer deadline.Stop()
 	selected, ready := false, false
-	choose := func(mode string) error {
-		if selected || (mode != "direct" && mode != "relay") || !recheck() {
+	doorID := ""
+	choose := func(mode, door string) error {
+		if selected || (mode != "direct" && mode != "relay" && mode != "door") || !recheck() {
 			return errors.New("selection refused")
 		}
 		if mode == "direct" && grant.Mode != "negotiate" {
 			return errors.New("no peer negotiated")
+		}
+		var picked *termDoor
+		for i := range a.doors {
+			if a.doors[i].ID == door {
+				picked = &a.doors[i]
+			}
+		}
+		if mode == "door" && picked == nil {
+			return errors.New("no such door")
+		}
+		var browserTicket, homeTicket string
+		if picked != nil && mode == "door" {
+			pipe, bt, ht, err := s.doorTickets(*picked, time.Now())
+			if err != nil {
+				return err
+			}
+			grant.Door, grant.Pipe, browserTicket, homeTicket, doorID = picked.URL, pipe, bt, ht, picked.ID
 		}
 		selected = true
 		grant.Mode = mode
 		grant.Epoch = 2
 		grant.Iat = time.Now().Unix()
 		grant.Exp = time.Now().Add(control.AttachmentLease).Unix()
-		if send(control.AttachmentSignal{T: "selecting", Mode: mode}) != nil {
+		sel := control.AttachmentSignal{T: "selecting", Mode: mode}
+		if mode == "door" {
+			sel.Door, sel.URL, sel.Ticket = doorID, grant.Door, browserTicket
+		}
+		if send(sel) != nil {
 			return errors.New("browser gone")
 		}
 		if a.dispatched != nil {
 			a.dispatched()
 		}
-		return sendAttachmentSignal(ctx, or.ws, control.AttachmentSignal{T: "select", Grant: control.SignAttachment(grant, signingKey)})
+		return sendAttachmentSignal(ctx, or.ws, control.AttachmentSignal{T: "select", Grant: control.SignAttachment(grant, signingKey), Ticket: homeTicket})
 	}
 	rate := a.rate
 	if rate == 0 {
@@ -318,7 +346,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 			return
 		case <-deadline.C:
 			if !selected {
-				if choose("relay") != nil {
+				if choose("relay", "") != nil {
 					return
 				}
 			}
@@ -344,8 +372,18 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 				if selected {
 					continue
 				}
-				if choose(sig.Mode) != nil {
+				if sig.Mode == "door" && a.service != "term" {
 					return
+				}
+				if choose(sig.Mode, sig.Door) != nil {
+					return
+				}
+				continue
+			}
+			if f.typ == websocket.MessageText && a.service == "term" && selected && sig.T == "stats" {
+				// the browser's echo report: numbers only, never a byte typed
+				if sig.EchoN > 0 && sig.EchoN <= 1_000_000 && sig.EchoP50 >= 0 && sig.EchoP95 >= sig.EchoP50 && sig.EchoP95 <= 60_000 {
+					s.Store.RecordTermEcho(or.id, sig.EchoP50, sig.EchoP95, sig.EchoN)
 				}
 				continue
 			}
@@ -419,6 +457,9 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 						return
 					}
 					outcome = grant.Mode + " " + sig.Pair
+					if grant.Mode == "door" {
+						outcome = "door " + doorID
+					}
 					if a.service == "term" && s.Store.RecordTermMode(or.id, grant.Mode) != nil {
 						return
 					}

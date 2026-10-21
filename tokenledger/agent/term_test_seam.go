@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 	"io"
+	"net/http"
 	"sync"
 )
 
@@ -114,3 +115,7 @@ func (p *pipeTermHelper) Close() error {
 	})
 	return nil
 }
+
+// SetDoorPipeClientForTest makes the home dial door pipes with c (a test
+// door's TLS certificate); nil puts the default back.
+func SetDoorPipeClientForTest(c *http.Client) { doorPipeClient = c }

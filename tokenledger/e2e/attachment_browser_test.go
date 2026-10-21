@@ -97,3 +97,57 @@ while True:
 	t.Log(string(out))
 	waitFor(t, 30*time.Second, "console releases attachment resources", func() bool { return r.procs() == 0 && r.h.Srv.TermRelaysOpenForTest() == 0 })
 }
+
+// XX79: real Chromium takes a terminal through a real door when it answers
+// faster than the hub, and through the hub when the door is down.
+func TestAttachmentDoorChromium(t *testing.T) {
+	for _, scenario := range []string{"door", "door-down", "door-dead"} {
+		t.Run(scenario, func(t *testing.T) {
+			r := newDoorRig(t)
+			switch scenario {
+			case "door-down":
+				// the browser reaches the door, the home cannot (it does not
+				// trust the door's certificate): tried once, then the hub
+				agent.SetDoorPipeClientForTest(nil)
+			case "door-dead":
+				r.door.Close() // the setting still names it: a door that went away
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			args := []string{"door.mjs"}
+			if scenario != "door" {
+				args = append(args, "--"+scenario)
+			}
+			cmd := exec.CommandContext(ctx, "node", args...)
+			cmd.Dir = filepath.Join("..", "..", "extras", "browser-transport")
+			cmd.Env = append(os.Environ(), "FLEET_TEST_ORIGIN="+r.origin, "FLEET_TEST_COOKIE="+r.alice.Name+"="+r.alice.Value, "FLEET_TEST_WORKER="+r.wid)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("Chromium: %v\n%s", err, out)
+			}
+			t.Log(string(out))
+			waitFor(t, 30*time.Second, "door attachment resources released", func() bool { return r.procs() == 0 && r.h.Srv.TermRelaysOpenForTest() == 0 })
+			rows, err := r.h.Srv.Store.FleetTermSessions(pAlice, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			modes := map[string]int{}
+			for _, row := range rows {
+				modes[row.Mode]++
+				if row.Mode == "door" && (row.BytesUp != 0 || row.BytesDown != 0) {
+					t.Fatalf("a door's payload went through the hub: %+v", row)
+				}
+				if row.Mode == "negotiating" {
+					t.Fatalf("unfinished attachment: %+v", row)
+				}
+			}
+			if scenario == "door" && modes["door"] != 1 {
+				t.Fatalf("no door attachment: %+v", rows)
+			}
+			if scenario != "door" && (modes["door"] != 0 || modes["relay"] != 1) {
+				t.Fatalf("the fallback: %+v", rows)
+			}
+			t.Logf("%s: rows=%+v", scenario, rows)
+		})
+	}
+}
