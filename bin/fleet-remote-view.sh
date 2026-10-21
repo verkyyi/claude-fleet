@@ -494,9 +494,11 @@ rv_select() {
 # `--resume` comes back to it — the same session when it is still kept, else a
 # new one on `cur=`. A plain `fleet` (no --want, no --resume — a new run, any
 # device) lands on the person's LAST session (`.last`, the `cur` hook's, issue
-# #4000): here, or on another machine through the 看台's switch road; gone ⇒ a new
-# session (⌘N's road). Never seen one: a new one too — no session is anyone's
-# home (issue #4341).
+# #4000): here, or on another machine through the 看台's switch road. Gone, or
+# never seen one, the first screen is `do land` (task Q1A8): ⌘P's panel on the
+# person's most recently active session anywhere (FLEET_VIEW_LAND=last: straight
+# onto it) — a new session (⌘N's road) only when they have none at all; no
+# session is anyone's home (issue #4341).
 # rv_restoring — a restore of this login holds its lock right now (a live pid in
 # fleet-restore's $FLEET_CONF_DIR/restore/.auto.lock, which the snapshot restore
 # takes too): sessions are being reopened.
@@ -729,7 +731,8 @@ rv_attach_thin() {
     [ -n "$w" ] || { [ -n "$bhome" ] && T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null | grep -qxF "$bhome" && w=$bhome; }
     [ -n "$w" ] || w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null)
   elif [ -n "$lastgone" ] || { [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; }; then
-    # the last one is gone, or there never was one: a new session
+    # the last one is gone, or there never was one: `do land` below (a new session
+    # only when the person has none anywhere — task Q1A8)
     w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null); newfar=1
   fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
@@ -797,9 +800,9 @@ rv_attach_thin() {
   esac
   case "$newfar:$wfar:$view" in 1::*-via-*) ;; 1::*)
     if [ -n "${FLEET_VIEW_FIRST_CMD:-}" ]; then   # the selftest's seam: what ran, nothing switched
-      ( sleep 0.3; TMUX='' sh -c "$FLEET_VIEW_FIRST_CMD"' "$@"' _ "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
+      ( sleep 0.3; TMUX='' sh -c "$FLEET_VIEW_FIRST_CMD"' "$@"' _ "do" land --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
     else
-      ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
+      ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" "do" land --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
     fi ;;
   esac
   rv_hide_borders "$s"

@@ -37,6 +37,12 @@ FLEET_BASE_BRANCH="main"
 # Worker seed prompt
 #FLEET_WORKER_PROMPT="Implement and verify per the repo conventions"
 
+# ── status ──
+# Landing on connect
+#FLEET_VIEW_LAND=panel
+# Tmux UI language
+#FLEET_UI_LANG=auto
+
 # ── caps ──
 # Max sessions — all fleets
 FLEET_GLOBAL_MAX_SESSIONS=0
@@ -50,10 +56,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # ── cache ──
 # GitHub cache lifetime
 #FLEET_GH_TTL=90
-
-# ── status ──
-# Tmux UI language
-#FLEET_UI_LANG=auto
 
 # ── notify ──
 # Notification command
