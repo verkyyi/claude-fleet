@@ -289,8 +289,7 @@ The report goes to 活页 (issue #4957):
    re-run republishes to the same page**: find it first (`mcp__space__list_proposals`
    with the title) and pass its `proposal_id`, so the link already written on the
    parent stays the link.
-2. `mcp__space__push_to_wechat` — that `proposal_id`, `to` omitted (the operator
-   only).
+2. **Make sure it reaches their WeChat exactly once** (T765): the publish receipt's `notify.self` is `true` ⇒ the workspace's automatic push already sends it to them — do NOT call `mcp__space__push_to_wechat` (it would arrive twice); say 已自动推送. No such field? Ask `mcp__space__set_publish_notify` (no arguments: `auto_push` + `include_me`; with the `proposal_id`: `page_notify` off overrides) — both on ⇒ the same. Otherwise call `mcp__space__push_to_wechat` once — that `proposal_id`, `to` omitted (the operator only). A `quiet` update is never pushed, by hand or otherwise.
 3. **Write the link back onto the parent** — one progress word, on the parent's
    ID with the ID switch on, else its task record (only from
    the parent's own session, i.e. as the driver; run by hand elsewhere, put the

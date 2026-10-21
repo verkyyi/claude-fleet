@@ -79,6 +79,8 @@ hasF "$PLAN"   'http.server --bind 127.0.0.1' "plan: with no 活页 tools, the p
 for f in "$PLAN" "$REPORT" "$SK"; do
   hasF "$f" 'mcp__space__publish_file' "${f##*/}: publishes the page to 活页"
   hasF "$f" 'mcp__space__push_to_wechat' "${f##*/}: pushes it to the operator's WeChat"
+  # T765: an automatic push already on (page + include_me) is not doubled by hand
+  hasF "$f" 'mcp__space__set_publish_notify' "${f##*/}: asks the push state before pushing by hand"
 done
 hasF "$PLAN"   'starts **private**' "plan: the page starts private"
 hasF "$REPORT" 'starts **private**' "report: the page starts private"

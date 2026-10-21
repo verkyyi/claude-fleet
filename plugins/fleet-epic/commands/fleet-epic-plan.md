@@ -333,7 +333,7 @@ private** and put it in front of the operator with **one sentence** (issue #4957
    `files`, each by its relative path). A new page starts **private** — only the
    operator's workspace can open it; never make it public or passcode-shared
    yourself. Keep the returned `proposal_id` and link.
-2. `mcp__space__push_to_wechat` — `proposal_id`, `to` omitted (the operator only).
+2. **Make sure it reaches their WeChat exactly once** (T765): the publish receipt's `notify.self` is `true` ⇒ the workspace's automatic push already sends it to them — do NOT call `mcp__space__push_to_wechat` (it would arrive twice); say 已自动推送. No such field? Ask `mcp__space__set_publish_notify` (no arguments: `auto_push` + `include_me`; with the `proposal_id`: `page_notify` off overrides) — both on ⇒ the same. Otherwise call `mcp__space__push_to_wechat` once — that `proposal_id`, `to` omitted (the operator only). A `quiet` update is never pushed, by hand or otherwise.
 3. Say: *"设计方案页 <link>（已推到你微信，仅你可见）— 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
    开跑前要处理 w（为 0 时不写）。改哪条直接说；点头即全部按建议，开父任务开跑。"* On a fleet that runs
    tap-first (`FLEET_TAP_FIRST=1`), the nod is a bounded choice — an

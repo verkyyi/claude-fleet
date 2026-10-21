@@ -25,8 +25,11 @@ shared source: one `template.html`, one `<style>`, one set of section ids.
 cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html     # read the frame, then write your page
 ```
 
-Then publish it to 活页, private (`mcp__space__publish_file`), and push it to the
-operator's WeChat (`mcp__space__push_to_wechat`, to them only) — issue #4957. No
+Then publish it to 活页, private (`mcp__space__publish_file`), and make sure it
+reaches the operator's WeChat exactly once — the publish receipt's
+`notify.self` true (else `mcp__space__set_publish_notify`: `auto_push` +
+`include_me` on) ⇒ it is already pushed, no `mcp__space__push_to_wechat`; else
+push it by hand, to them only; a `quiet` update is never pushed (issue #4957, T765). No
 活页 tools in the session: serve it on loopback
 (`python3 -m http.server --bind 127.0.0.1 <port>`, dies with the session) and open
 it with the fleet `open` tool (`:<port>/<page.html>`).
