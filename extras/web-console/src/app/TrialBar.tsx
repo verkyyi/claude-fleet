@@ -20,7 +20,7 @@ const days = (n: number) => (n <= 0 ? tr("今天到期", "ends today") : tr(`剩
 // The line's parts, in order; the person reads them left to right.
 export function trialParts(t: Trial): string[] {
   const p: string[] = [];
-  if (t.state === "expired") p.push(tr(`试用已于 ${fmtWhen(t.until)} 结束`, `Trial ended ${fmtWhen(t.until)}`));
+  if (t.state === "expired") p.push(tr(`已于 ${fmtWhen(t.until)} 结束`, `ended ${fmtWhen(t.until)}`));
   else if (t.days_left != null) p.push(days(t.days_left));
   if (t.tokens) p.push(tr(`已用 ${fmtTokens(t.used_tokens)} / ${fmtTokens(t.tokens)} tokens`, `${fmtTokens(t.used_tokens)} / ${fmtTokens(t.tokens)} tokens used`));
   else if (t.usd) p.push(tr(`已用 $${(t.spent_usd || 0).toFixed(2)} / $${t.usd}`, `$${(t.spent_usd || 0).toFixed(2)} / $${t.usd} used`));
