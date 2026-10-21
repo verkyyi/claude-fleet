@@ -12,6 +12,20 @@ export async function getJSON<T>(url: string): Promise<T | null> {
   return r && r.ok ? ((await r.json().catch(() => null)) as T | null) : null;
 }
 
+// GET a JSON read that carries a validator (task T47B): with the ETag of the
+// answer already on the page a 304 says it still holds ("same"); else the body
+// and its ETag, or null as getJSON.
+export async function getJSONIf<T>(url: string, etag: string): Promise<{ body: T; etag: string } | "same" | null> {
+  const h: Record<string, string> = { Accept: "application/json" };
+  if (etag) h["If-None-Match"] = etag;
+  const r = await fetch(url, { headers: h }).catch(() => null);
+  if (r) netOk(); else netMiss();
+  if (r?.status === 401) { location.assign("/app/signin"); return null; }
+  if (r?.status === 304 && etag) return "same";
+  const body = r && r.ok ? ((await r.json().catch(() => null)) as T | null) : null;
+  return body ? { body, etag: r!.headers.get("ETag") || "" } : null;
+}
+
 // /v1/me: who the gate admitted — role (admin | user | operator), the pages
 // the menu shows them, how they signed in, whether a sign-out has a cookie to clear.
 export type Me = {

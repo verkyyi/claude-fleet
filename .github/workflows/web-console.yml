@@ -56,6 +56,8 @@ jobs:
         run: node --experimental-strip-types test/chat-copy.mjs
       - name: The conversation kept in this browser — hit, stale, sign-out, nobody else's (KSQG)
         run: node --experimental-strip-types test/chat-local.mjs
+      - name: The session list kept in this browser — hit, expired, sign-out, nobody else's (T47B)
+        run: node --experimental-strip-types test/list-local.mjs
       - name: chat continue (R9A2)
         run: node --experimental-strip-types test/chat-continue.mjs
       - name: 只读 — a terminal session followed, nothing twice (F481)

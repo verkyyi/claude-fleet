@@ -11,6 +11,10 @@ import { useTasks } from "./use-tasks";
 import { boardRows, buildRows, type Row } from "./work";
 import { seenMark } from "./session-list";
 import { NET_BACK } from "@/shared/net";
+import { meOnce } from "@/shared/api";
+import { viewAs } from "@/shared/viewAs";
+import { mayCache } from "./chat/local";
+import { browserListCache, markListFirst } from "./list-local";
 
 type WorkRows = {
   rows: Row[] | null;
@@ -40,9 +44,40 @@ function saveSeen(v: Record<string, string>) {
 
 export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const tasks = useTasks();
-  const { live, ended, board, boardAt, failed, reload } = useSessions(tasks.accept, tasks.reload);
+  const { live, ended, board, boardAt, failed, reload, etag, fresh, prime } = useSessions(tasks.accept, tasks.reload);
   const rows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live)
     : buildRows(tasks.data.tasks, live, ended || [])) : null), [live, ended, board, tasks.data]);
+
+  // the list this browser kept (task T47B): read beside /v1/me (no other
+  // network), drawn only when /v1/me names the same person on their own page —
+  // never a view, never a read-only ticket — and only until the hub answers;
+  // the same rows by the same ids, so the answer that replaces it moves nothing
+  // that did not change
+  const keeper = useRef("");
+  useEffect(() => {
+    const kept = browserListCache()?.readAny().catch(() => null) ?? Promise.resolve(null);
+    let gone = false;
+    void meOnce().then(async (me) => {
+      if (!mayCache(me, viewAs)) return;
+      keeper.current = me!.person!;
+      const any = await kept;
+      if (gone || !any || any.principal !== me!.person) return;
+      const s = any.snap;
+      if (prime({ live: s.live, ended: s.ended, board: s.board, etag: s.etag })) tasks.seed(s.tasks);
+    }).catch(() => {});
+    return () => { gone = true; };
+    // once, at the page's opening
+  }, []);
+  useEffect(() => { if (rows) markListFirst(fresh ? "net" : "local"); }, [rows, fresh]);
+  // what the hub said is kept for next time — at most once a second, never a
+  // task read the hub marked incomplete
+  useEffect(() => {
+    if (!fresh || tasks.loading || !keeper.current || !live || !tasks.data || tasks.data.stale) return;
+    const snap = { live, ended, board, etag, tasks: tasks.data };
+    const who = keeper.current;
+    const t = window.setTimeout(() => { void browserListCache()?.write(who, snap).catch(() => {}); }, 1000);
+    return () => clearTimeout(t);
+  }, [fresh, live, ended, board, etag, tasks.data, tasks.loading]);
 
   // first visit in this browser: what is there now counts as seen
   const [stored, setStored] = useState(readSeen);

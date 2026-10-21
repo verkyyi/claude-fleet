@@ -435,7 +435,7 @@ const ChatCopyCard: FC = () => {
 };
 
 // 清除本机缓存 (task KSQG): the conversation this browser keeps so the chat
-// opens at once — deleted here, and by every sign-out.
+// opens at once, and the session list (T47B) — deleted here, and by every sign-out.
 const LocalCacheCard: FC = () => {
   const [st, setSt] = useState<"" | "busy" | "done" | "fail">("");
   const go = async () => { setSt("busy"); setSt((await clearBrowserCache(3000)) ? "done" : "fail"); };
@@ -444,8 +444,8 @@ const LocalCacheCard: FC = () => {
       <CardHeader>
         <CardTitle className="text-base">{tr("本机缓存", "This device's cache")}</CardTitle>
         <CardDescription>
-          {tr("这台设备的浏览器存着你最近的对话（每边最近 200 条，图片只存缩略图），再打开对话立刻显示，随后以你的机器为准。退出登录时自动清空。",
-            "This browser keeps your recent conversation (the latest 200 items per side, images as previews only) so the chat shows at once, then follows your machine. Signing out clears it.")}
+          {tr("这台设备的浏览器存着你最近的对话（每边最近 200 条，图片只存缩略图）和上一次的会话列表，再打开立刻显示，随后以你的机器和入口为准。退出登录时自动清空。",
+            "This browser keeps your recent conversation (the latest 200 items per side, images as previews only) and your last session list so they show at once, then follow your machine and the hub. Signing out clears them.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex items-center justify-between gap-3">
