@@ -166,6 +166,7 @@ T, BIN, script = sys.argv[1], sys.argv[2], sys.argv[3]
 env = dict(os.environ, HOME=T + "/client", XDG_CACHE_HOME=T + "/client/.cache", FLEET_THIN_LOG=T + "/thin.log",
            FLEET_THIN_ARGV_CMD=os.environ.get("THIN_ARGV_CMD") or T + "/argv.sh", FLEET_THIN_BACKOFF="0.2", FLEET_THIN_UP_SECS="1.5",
            FLEET_THIN_UPDATE_CMD=T + "/update.sh", FLEET_CLIENT_XTVERSION="0", FLEET_UI_LANG="zh",
+           FLEET_THIN_NET_WATCH="0",  # D4NW: no socket aimed off the box (the acceptance counts it); drilled in break-it
            FLEET_CLIENT_CLIP_CMD=T + "/clip.sh", FLEET_PASTE_LOG=T + "/paste.log",
            ITERM_PROFILE="Default", TERM_PROGRAM="iTerm.app", FLEET_ITERM_DIR=T + "/iterm")
 for k in ("TMUX", "TMUX_PANE", "FLEET_CLIENT_UPDATED", "LC_TERMINAL"):
