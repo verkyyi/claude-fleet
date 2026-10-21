@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -49,13 +50,24 @@ func TestChatMirror(t *testing.T) {
 		json.Unmarshal(b, &m)
 		return resp.StatusCode, m, string(b)
 	}
-	if st, m, _ := read(alice, "?cached=1", nil); st != http.StatusNotFound || m["code"] != "no_copy" {
-		t.Fatalf("before any read: %d %v; want 404 no_copy", st, m)
+	// No copy yet is no error (task J091): 200, no items, mirror null.
+	noCopy := func(c *http.Cookie) (bool, string) {
+		st, m, b := read(c, "?cached=1", nil)
+		items, _ := m["items"].([]any)
+		mirror, has := m["mirror"]
+		return st == http.StatusOK && m["items"] != nil && len(items) == 0 && has && mirror == nil, fmt.Sprintf("%d %s", st, b)
+	}
+	copied := func(c *http.Cookie) bool {
+		st, m, _ := read(c, "?cached=1", nil)
+		return st == http.StatusOK && m["mirror"] != nil
+	}
+	if ok, got := noCopy(alice); !ok {
+		t.Fatalf("before any read: %s; want 200 {items:[], mirror:null}", got)
 	}
 	if st, _, b := read(alice, "", nil); st != http.StatusOK || !strings.Contains(b, "SECRET-TOKEN") {
 		t.Fatalf("the home's answer: %d %s", st, b)
 	}
-	waitFor(t, 5e9, "copy kept", func() bool { st, _, _ := read(alice, "?cached=1", nil); return st == http.StatusOK })
+	waitFor(t, 5e9, "copy kept", func() bool { return copied(alice) })
 	n := len(svc.seen())
 	st, m, b := read(alice, "?cached=1", nil)
 	if st != http.StatusOK || m["session"] != "s1" || m["busy"] != false || m["mirror"] == nil {
@@ -80,15 +92,15 @@ func TestChatMirror(t *testing.T) {
 	if st, _, _ := read(alice, "", nil); st != http.StatusServiceUnavailable {
 		t.Errorf("home away: live read %d; want 503", st)
 	}
-	if st, _, _ := read(alice, "?cached=1", nil); st != http.StatusOK {
-		t.Errorf("home away: cached read %d; want the copy", st)
+	if !copied(alice) {
+		t.Error("home away: the cached read gave no copy")
 	}
 	// Nobody else reads it: Bob has none of his own; a view-as read is refused.
-	if st, _, _ := read(bob, "?cached=1", nil); st != http.StatusNotFound {
-		t.Errorf("bob's cached read: %d; want 404 (his own, none)", st)
+	if ok, got := noCopy(bob); !ok {
+		t.Errorf("bob's cached read: %s; want none (his own, none)", got)
 	}
-	if st, _, _ := read(alice, "?cached=1", map[string]string{ViewAsHeader: pBob}); st == http.StatusOK {
-		t.Error("a view-as cached read was answered")
+	if st, _, _ := read(alice, "?cached=1", map[string]string{ViewAsHeader: pBob}); st != http.StatusForbidden {
+		t.Errorf("a view-as cached read: %d; want 403", st)
 	}
 	// The switch: off deletes the copy and keeps none; on again keeps the next.
 	put := func(on bool) int {
@@ -112,12 +124,12 @@ func TestChatMirror(t *testing.T) {
 	}
 	setChatHome(t, h, pAlice, host, login)
 	read(alice, "", nil)
-	if st, _, _ := read(alice, "?cached=1", nil); st != http.StatusNotFound {
-		t.Errorf("switch off: a read kept a copy (%d)", st)
+	if ok, got := noCopy(alice); !ok {
+		t.Errorf("switch off: a read kept a copy (%s)", got)
 	}
 	if put(true) != http.StatusOK {
 		t.Fatal("switch on refused")
 	}
 	read(alice, "", nil)
-	waitFor(t, 5e9, "copy kept again", func() bool { st, _, _ := read(alice, "?cached=1", nil); return st == http.StatusOK })
+	waitFor(t, 5e9, "copy kept again", func() bool { return copied(alice) })
 }

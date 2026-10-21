@@ -14,6 +14,7 @@ import {
 import { tr } from "@/shared/i18n";
 import { attachedPics, MAX_PICS, packPics, type SentPic } from "./pics";
 import { linkFiles, picSrc, type Pic as MediaPic } from "./media";
+import { cachedCopy } from "./copy";
 
 // The console's conversation is the entry's /v1/chat (claude-fleet#3926: moved
 // here from extras/web-chat/ui's site build, its protocol unchanged).
@@ -249,7 +250,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
       // read or an earlier one) a copy that lands later is dropped (task Y393).
       void fetch(`${API}/conversation?cached=1`, { headers: H, signal }).then(async (c) => {
         if (!c.ok || signal.aborted || read !== historyRead.current || homeSeen.current) return;
-        const j = await c.json().catch(() => null);
+        // no copy kept yet (a first visit): nothing to show, the home's answer comes
+        const j = cachedCopy(c.ok, await c.json().catch(() => null));
         if (!j || read !== historyRead.current || homeSeen.current) return;
         hadCopy.current = true;
         setModels(j.models || []);

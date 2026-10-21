@@ -184,25 +184,27 @@ func (t *chatMirrorTee) Read(p []byte) (int, error) {
 }
 
 // handleChatCached answers GET /v1/chat/conversation?cached=1: the person's
-// copy, marked as one, or 404 no_copy.
+// copy, marked as one — or, with none to give (the copy off, not written yet,
+// or sealed under a key that moved on), 200 with no items and "mirror": null
+// (task J091): a first visit is no error, the page just waits for the home.
 func (s *Server) handleChatCached(w http.ResponseWriter, r *http.Request, person string) {
 	if viewAsAsked(r) != "" {
 		s.chatRefuse(w, person, "conversation cached", http.StatusForbidden, "not_yours", "only your own conversation")
 		return
 	}
 	if !s.chatMirrorOn(person) {
-		refuseJSON(w, http.StatusNotFound, "no_copy", "no copy kept")
+		chatNoCopy(w)
 		return
 	}
 	c, err := s.Store.ChatMirror(person, time.Now())
 	if err != nil || c == nil {
-		refuseJSON(w, http.StatusNotFound, "no_copy", "no copy kept")
+		chatNoCopy(w)
 		return
 	}
 	var doc chatMirrorDoc
 	if err := s.Vault.OpenPerson(c.Sealed, &doc, person, chatMirrorPurpose); err != nil {
 		// a vault key that moved on: the next read from the home writes it again
-		refuseJSON(w, http.StatusNotFound, "no_copy", "no copy kept")
+		chatNoCopy(w)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -210,6 +212,12 @@ func (s *Server) handleChatCached(w http.ResponseWriter, r *http.Request, person
 		"items": doc.Items, "busy": false, "asks": []any{},
 		"mirror": map[string]any{"at": c.UpdatedAt.UTC().Format(time.RFC3339)},
 	})
+}
+
+// chatNoCopy is the cached read with no copy to give.
+func chatNoCopy(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"items": []any{}, "mirror": nil})
 }
 
 // ChatMirrorState is GET /v1/chat/mirror's answer.

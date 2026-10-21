@@ -4,6 +4,7 @@ package authz
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -48,6 +49,10 @@ type Session struct {
 	// «sign out everywhere» cut-off and the sliding renewal compare against.
 	// A cookie from before has none (0) and reads as signed at the epoch.
 	Iat int64 `json:"iat,omitempty"`
+	// Sid names one browser's sign-in (task J091): minted at sign-in, carried
+	// through every sliding renewal, so 退出 can revoke that browser's values —
+	// a copy of one included — and no other. A cookie from before has none.
+	Sid string `json:"sid,omitempty"`
 }
 
 // Principal is the person this session is for: UID, else the subject.
@@ -58,10 +63,22 @@ func (s *Session) Principal() string {
 	return s.Sub
 }
 
+// NewSid is a fresh sign-in's Sid.
+func NewSid() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
 // SignRole mints the cookie value for a person signed in by sub, admitted as
-// role, for ttl.
+// role, for ttl — a new sign-in, with a new Sid.
 func SignRole(sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
-	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix()})
+	return SignSid(NewSid(), sub, uid, name, role, secret, now, ttl)
+}
+
+// SignSid is SignRole for the sign-in sid: a renewal keeps its browser's Sid.
+func SignSid(sid, sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
+	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix(), Sid: sid})
 	enc := base64.RawURLEncoding.EncodeToString(body)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(enc))

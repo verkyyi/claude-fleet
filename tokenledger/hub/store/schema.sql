@@ -503,6 +503,16 @@ CREATE TABLE IF NOT EXISTS hub_session_cutoffs (
   at           TEXT NOT NULL
 );
 
+-- One browser's sign-in ended by 退出 (task J091): every session value
+-- carrying this sid is refused until expires_at, when the value would have
+-- lapsed anyway and the row goes.
+CREATE TABLE IF NOT EXISTS hub_session_revoked (
+  sid          TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  at           TEXT NOT NULL
+);
+
 -- Sign-in by mail (claude-fleet#3604, EPIC #3570 C11): one row per mail
 -- asked for — sent or not, so a known address and an unknown one leave the
 -- same trace and hit the same limits. Only hashes: the link's token, the
