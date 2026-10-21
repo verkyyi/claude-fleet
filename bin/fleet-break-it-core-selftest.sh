@@ -577,7 +577,7 @@ esac
 SH
   printf '#!/bin/sh\nexec sleep 60\n' > "$sb/tcpdump"; printf '#!/bin/sh\nexit 0\n' > "$sb/ifconfig"
   chmod +x "$sb/pfctl" "$sb/tcpdump" "$sb/ifconfig"
-  printf '10.9.0.0/16\n' > "$sb/root/rt/conf/trial-egress.allow"
+  printf '198.51.100.0/24\n' > "$sb/root/rt/conf/trial-egress.allow"
   printf 'anchor "com.apple/*"\n' > "$sb/pf.conf"
   # the hub: whatever $sb/answer holds, at /v1/node/trial-egress; gone once killed
   port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')

@@ -44,7 +44,7 @@ printf '#!/bin/sh\nexec sleep 300\n' > "$WORK/tcpdump"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/ifconfig"
 chmod +x "$WORK/pfctl" "$WORK/tcpdump" "$WORK/ifconfig"
 printf 'scrub-anchor "com.apple/*"\nanchor "com.apple/*"\n' > "$WORK/pf.conf"
-printf 'github.com\n10.9.0.0/16\nnot a host!\n' > "$WORK/rt/conf/trial-egress.allow"
+printf 'github.com\n198.51.100.0/24\nnot a host!\n' > "$WORK/rt/conf/trial-egress.allow"
 printf '{"github.com": ["140.82.112.3"], "hub.example.com": ["203.0.113.7"]}\n' > "$WORK/resolve.json"
 printf 'CCQUOTA_HUB_URL=https://hub.example.com\nCCQUOTA_TOKEN=x\n' > "$WORK/state/machine.env"
 
@@ -86,7 +86,7 @@ a = anchor()
 check("B hooked into the main ruleset", 'anchor "fleet-trial"' in open(W + "/pf/main").read(), calls())
 check("B pf enabled by reference", "-E" in calls() and b.get("token") == "4242", str(b))
 check("B allow table: list + hub, unresolvable left out",
-      "table <fleet_trial_allow> const { 140.82.112.3, 10.9.0.0/16, 203.0.113.7 }" in a, a)
+      "table <fleet_trial_allow> const { 140.82.112.3, 198.51.100.0/24, 203.0.113.7 }" in a, a)
 check("B mail ports refused before the allowlist",
       a.index("port { 25 465 587 } user 601") < a.index("to <fleet_trial_allow> user 601")
       and "block return out log quick on ! lo0 proto { tcp udp } to any port { 25 465 587 } user 601" in a, a)
@@ -138,9 +138,9 @@ check("E a stale list flushes (open, the default)", anchor() == "" and "stale" i
 m = {"7": 601}
 names = {"601": "trial1"}
 l1 = eg.parse_pflog("2026-10-21 10:00:01.123456 rule 0.fleet-trial.7/0(match): block out on en0: "
-                    "192.168.1.5.50123 > 93.184.215.14.443: Flags [S], seq 1, win 65535, length 0", m, names)
+                    "192.0.2.5.50123 > 93.184.215.14.443: Flags [S], seq 1, win 65535, length 0", m, names)
 check("F block line", l1 == "2026-10-21T10:00:01Z deny trial1 uid=601 tcp 93.184.215.14:443", str(l1))
-l2 = eg.parse_pflog("2026-10-21 10:00:02.5 rule 7/0(match): pass out on en0: 10.0.0.2.5353 > 1.1.1.1.25: UDP, length 30", m, names)
+l2 = eg.parse_pflog("2026-10-21 10:00:02.5 rule 7/0(match): pass out on en0: 192.0.2.2.5353 > 1.1.1.1.25: UDP, length 30", m, names)
 check("F pass (log mode) line", l2 == "2026-10-21T10:00:02Z would-deny trial1 uid=601 udp 1.1.1.1:25", str(l2))
 check("F another anchor's rule is not ours",
       eg.parse_pflog("2026-10-21 10:00:03.1 rule 0.com.apple.7/0(match): block out on en0: 1.2.3.4.1 > 5.6.7.8.80: Flags [S]", m, names) is None, "matched")
