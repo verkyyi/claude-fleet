@@ -22,7 +22,7 @@ Everything starts from one key. The tables below are generated from fleet's key 
 | — | type to filter |
 | `?` | legend |
 | `esc` | close |
-| — | Rows of the panel (pick one, ↵ — or type its name): ⚡ New session · ⌂ Home command line (this machine's shell) · ⏻ Quit fleet (sessions keep running) |
+| — | Rows of the panel (pick one, ↵ — or type its name): ⚡ New session · $ Shell (this machine's shell, in your home directory) · ⏻ Quit fleet (sessions keep running) |
 <!-- /docs-gen:keys -->
 
 **The top line is the session's; messages get a row of their own.** The 看台's top line says the session only: its state, title, change number and quota. Whatever fleet has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. An error (red ✖) and a result nobody took (yellow ✓) stay until you have seen them; a warning (yellow ▲) fades after 6 seconds, a note (grey ∙) after 3. Once you have seen everything the row folds away. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
@@ -32,8 +32,8 @@ The panel looks roughly like this (sample data). The order on screen, top to bot
 ```text
 › Search sessions                 Sessions 8
   ✦ Messages
-  ⚡ New session
-  ⌂ Home command line (this machine's shell)
+ ⚡ New session
+  $ Shell
 ─ Waiting on you 1
   ! T128     Claude  Login page redesign         web-app
                      keep the old redirect?
@@ -144,7 +144,7 @@ When the context is nearly full, a repository task's session hands itself off to
 
 ## Optional: your own keys for common actions
 
-fleet uses one key, ⌘P (phone: `F12` or `⌃] p`); everything else is in the panel: New session, Home command line and Quit fleet are rows of it — pick one and press ↵, or type a few letters ("home", "quit") to land on it; quitting asks first. ⌘K (clear), ⌘T (new tab), ⌘N (new window) and ⌘Q (quit) are iTerm2's again. If you are used to the old shortcuts, add them back in `~/.config/claude-fleet/fleet.conf` on your own computer:
+fleet uses one key, ⌘P (phone: `F12` or `⌃] p`); everything else is in the panel: New session, Shell and Quit fleet are rows of it — pick one and press ↵, or type a few letters ("shell", "quit") to land on it; quitting asks first. ⌘K (clear), ⌘T (new tab), ⌘N (new window) and ⌘Q (quit) are iTerm2's again. If you are used to the old shortcuts, add them back in `~/.config/claude-fleet/fleet.conf` on your own computer:
 
 ```ini
 [client]

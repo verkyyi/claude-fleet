@@ -182,11 +182,11 @@ done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
 # section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
-# the first rows are ✦ 消息 (T701) · ⚡ 新会话 · ⌂ 回家 (T762), the sessions' first
+# the first rows are ✦ 消息 (T701) · ⚡ 新会话 · $ 命令行 (T762, T774), the sessions' first
 # group 等你 right under them
 grep -A1 '│› ' "$W/popup.txt" | tail -1 | grep -q '✦ 消息' || st_fail "B: the first line is not ✦ 消息: $(head -4 "$W/popup.txt")"
 grep -A2 '│› ' "$W/popup.txt" | tail -1 | grep -q '⚡ 新会话' || st_fail "B: the second line is not ⚡: $(head -5 "$W/popup.txt")"
-grep -A3 '│› ' "$W/popup.txt" | tail -1 | grep -q '⌂ ' || st_fail "B: the third line is not ⌂: $(head -6 "$W/popup.txt")"
+grep -A3 '│› ' "$W/popup.txt" | tail -1 | grep -q '$ 命令行' || st_fail "B: the third line is not $ 命令行: $(head -6 "$W/popup.txt")"
 grep -A4 '│› ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
 [ "$(grep -c '⚡ 新' "$W/popup.txt")" = 1 ] && grep -q '⚡ 新会话' "$W/popup.txt" || st_fail "B: the ⚡ row not once: $(grep -n '⚡' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
@@ -688,11 +688,14 @@ v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
     ["@10", "landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
-# the panel (view-panel's rows): ✦ ⚡ ⌂ above the same lines, ◐ ⏻ after them (T762)
+# the panel (view-panel's rows): ✦ ⚡ $ above the same lines, ◐ ⏻ after them (T762)
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])
 kinds = [e.get("cmd") or e.get("target") for e in p if e["kind"] in ("cmd", "sess")]
 h = kinds.index("history")
 assert kinds[:3] == ["notices", "new", "home"], kinds
+# $ 命令行 (T774): its words are the row's subtitle
+hr = next(e for e in p if e.get("cmd") == "home")
+assert hr["text"] == fv.say("view_cmd_home") and hr["text"].startswith("$ ") and hr["foot"] == fv.say("view_cmd_home_foot"), hr
 assert kinds[h - 1:h + 2] == ["landed:905@o/r", "history", "lang"] and kinds[-1] == "quit", kinds
 # ONE order (T762): ↓ from any row walks the drawn stops round, ↑ walks them back;
 # a stop is drawn indented, only a ─ heading starts at the left edge — any width,
@@ -717,7 +720,16 @@ for q, op, cur in (("", set(), ""), ("", {"ended", "gone"}, "@8"), ("old", set()
         for e, segs in zip(shown, fv.paint(shown, -1, width, qo.cells, qo.clip)):
             line = "".join(t for t, _ in segs)
             if fv.pickable(e):
-                assert line.startswith("  "), (width, line)
+                assert line.startswith(" "), (width, line)
+            # one icon column (T774): every label — ✦ ⚡ $ ◐ ⏻ or none — and every
+            # session's ID start at TEXT_X, by display cells, wide glyph or narrow
+            if e["kind"] == "cmd":
+                icon, _, rest = e["text"].partition(" ")
+                lab = rest if len(icon) == 1 and not icon.isalnum() else e["text"]
+                assert qo.cells(line[:line.index(lab[:3])]) == fv.TEXT_X, (width, line)
+                assert qo.cells(line[:line.index(icon)]) + qo.cells(icon) == 3 if lab is rest else True, (width, line)
+            elif e["kind"] == "sess":
+                assert qo.cells("".join(t for t, _ in segs[:3])) == fv.TEXT_X, (width, line)
             elif e["kind"] == "hdr":
                 assert line.startswith("─"), (width, line)
 # its row gone (T762): the nearest session, else ⚡ — never a command the old index hits

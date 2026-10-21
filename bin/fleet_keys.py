@@ -48,7 +48,7 @@ ITERM_PASS = (("f12", "0xf70f-0x800000", "933"),)
 CODELESS = ("shell",)
 # `home` (EPIC T651 C3): ⌃\ — and ⌘\, which the iTerm2 profile sends as ⌃\'s
 # byte (dash-keymap.sh: code `x1c`) — only when the person names it (T685); the
-# panel's 「回家命令行」 row is its default road. The web PTY keeps its own ⌃\.
+# panel's 「$ 命令行」 row is its default road. The web PTY keeps its own ⌃\.
 HOME_CHORD = "ctrl+\\"
 # The ⌘ keys issue #3328 folded into ⌘P and T685 gave back to iTerm2 (⌘K clears,
 # ⌘T a tab, ⌘N a window, ⌘Q quits): (action, chord, glyph, code). The profile maps
