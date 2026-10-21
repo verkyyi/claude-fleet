@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"math"
 	"reflect"
 	"testing"
@@ -121,8 +122,8 @@ func TestSetPlanPriceCorrectsInPlaceButRefusesBackdating(t *testing.T) {
 	if err := s.SetPlanPrice(price("max", 250, day(2026, 7, 1))); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetPlanPrice(price("max", 220, day(2026, 4, 1))); err == nil {
-		t.Fatal("inserting a price behind an existing one was accepted; periods now overlap")
+	if err := s.SetPlanPrice(price("max", 220, day(2026, 4, 1))); !errors.Is(err, ErrPriceBehind) {
+		t.Fatalf("inserting a price behind an existing one: want ErrPriceBehind, got %v", err)
 	}
 }
 

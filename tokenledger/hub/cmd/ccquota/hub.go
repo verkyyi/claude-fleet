@@ -27,6 +27,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/web"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
@@ -775,13 +776,8 @@ func runHub(args []string) error {
 		if err != nil {
 			return err
 		}
-		for _, pl := range plans {
-			if err := st.SetPlanPrice(pl); err != nil {
-				return fmt.Errorf("--pricing: record %s/%s: %w", pl.Source, pl.Plan, err)
-			}
-		}
-		if len(plans) > 0 {
-			log.Printf("pricing: recorded %d subscription plan price(s) from %s", len(plans), *pricingFile)
+		if err := recordFilePlanPrices(st, plans, *pricingFile); err != nil {
+			return err
 		}
 	}
 
@@ -1605,4 +1601,30 @@ func siteOn(v string) bool {
 		return true
 	}
 	return false
+}
+
+// recordFilePlanPrices records the --pricing file's subscription prices, as
+// every start does. A file price a newer recorded price has superseded (set
+// since with `ccquota plan --set` or the console) is skipped with a log line:
+// the database keeps its newer price, and the hub starts. Refusing there took
+// production down — every new pod exited 1 on the first price someone
+// recorded after the file's date (claude-fleet T829). Any other error still
+// stops the start.
+func recordFilePlanPrices(st *store.Store, plans []model.SubscriptionPlan, file string) error {
+	recorded := 0
+	for _, pl := range plans {
+		if err := st.SetPlanPrice(pl); err != nil {
+			if errors.Is(err, store.ErrPriceBehind) {
+				log.Printf("pricing: %s/%s from %s not recorded — %v; the newer recorded price stands (update the file to match)",
+					pl.Source, pl.Plan, file, err)
+				continue
+			}
+			return fmt.Errorf("--pricing: record %s/%s: %w", pl.Source, pl.Plan, err)
+		}
+		recorded++
+	}
+	if recorded > 0 {
+		log.Printf("pricing: recorded %d subscription plan price(s) from %s", recorded, file)
+	}
+	return nil
 }

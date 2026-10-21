@@ -758,6 +758,36 @@ jobs:
           echo "result=rolled" >> "$GITHUB_OUTPUT"
           echo "credential proxy now on $image"
 
+      # Before the rollback deletes them (claude-fleet T829): every hub pod on
+      # the new image prints its crashed container's last 200 lines (and its
+      # current ones), so a CrashLoopBackOff is never again a release with no
+      # cause on record — on 2026-10-21 three releases rolled back that way
+      # while the cause was one log line («--pricing: record …»). Never fails
+      # the job; a Role without pods/log says so.
+      - name: Logs of the new image's pods
+        if: failure() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure')
+        continue-on-error: true
+        env:
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -uo pipefail
+          pods=$(kubectl -n "$NS" get pod -l app=ccquota-hub \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[?(@.name=="ccquota")].image}{"\n"}{end}' \
+            | awk -F'\t' -v t=":$NEW_TAG" 'substr($2, length($2) - length(t) + 1) == t { print $1 }')
+          [ -n "$pods" ] || { echo "no hub pod on $NEW_TAG left to read"; exit 0; }
+          for p in $pods; do
+            kubectl -n "$NS" get pod "$p" \
+              -o jsonpath='{.metadata.name}: {.status.containerStatuses[0].state} last={.status.containerStatuses[0].lastState}{"\n"}' || true
+            for prev in --previous ""; do
+              echo "::group::$p ${prev:-(current)} — last 200 lines"
+              kubectl -n "$NS" logs "$p" -c ccquota $prev --tail=200 >"$RUNNER_TEMP/crash.log" 2>&1; rc=$?
+              cat "$RUNNER_TEMP/crash.log"
+              echo "::endgroup::"
+              last=$(grep -v '^[[:space:]]*$' "$RUNNER_TEMP/crash.log" | tail -1)
+              if [ -n "$prev" ] && [ "$rc" = 0 ] && [ -n "$last" ]; then echo "::error::$p crashed: ${last:0:400}"; fi
+            done
+          done
+
       # Anything after the apply went wrong ⇒ put the live image back. Only the
       # image: the manifests stay master's, and a migration the new image ran
       # stays run (the snapshot is in the summary; restoring it is a person's,
