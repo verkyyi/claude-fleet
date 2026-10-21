@@ -445,6 +445,9 @@ if (!part("local")) {
 }
 
 proxyHits.length = 0;                                     // A–G count their own
+// the cred log is shared with the socket parts above: the local part reads its own lines only
+const CREDMARK = existsSync(CREDLOG) ? readFileSync(CREDLOG, "utf8").length : 0;
+const localCred = () => readFileSync(CREDLOG, "utf8").slice(CREDMARK);
 let PORT = await start();
 function req(path, { method = "GET", headers = {}, body, host } = {}) {
   return new Promise((resolve, reject) => {
@@ -534,9 +537,12 @@ ok(envSeen.base === `http://127.0.0.1:${PPORT}` && envSeen.token === SECRET, "D 
 ok(envSeen.tmux === "", "D no tmux pane leaks into the agent's environment");
 ok(envSeen.model === "claude-haiku-5-5", "D the chosen model reached the agent");
 ok(proxyHits.length === 1 && proxyHits[0].auth === "Bearer " + SECRET, "D the session's request reached the credential proxy (the pool meters it there)");
-const credCalls = readFileSync(CREDLOG, "utf8");
+const credCalls = localCred();
 const mintSid = (credCalls.match(/mint --provider claude --sid (web-\d+-\d+)/) || [])[1];
-ok(!!mintSid && credCalls.includes(`revoke --sid ${mintSid}`), `D the turn's sid (${mintSid}) was minted and revoked`);
+// one credential per conversation (task V9DJ C1): minted once, kept between
+// turns, revoked when the service stops (checked in F)
+ok(!!mintSid && (credCalls.match(/^mint /gm) || []).length === 1 && !credCalls.includes(`revoke --sid ${mintSid}`),
+  `D the conversation's sid (${mintSid}) was minted once and is kept between turns`);
 
 // ---- G: the page -------------------------------------------------------------------
 const page = await req("/", { headers: me });
@@ -565,6 +571,7 @@ ok(fonts.length >= 3, `G the site's fonts ship with the page (${fonts.length} wo
 const conv1 = JSON.parse((await req("/api/conversation", { headers: me })).body);
 ok(conv1.session === SID && conv1.items.some((i) => i.t === "user" && i.text === "记住青蛙"), "F the conversation is that session, its history on the page");
 await stop();
+ok(localCred().includes(`revoke --sid ${mintSid}`), `F the service's stop revoked the conversation's credential (${mintSid})`);
 PORT = await start();
 const conv2 = JSON.parse((await req("/api/conversation", { headers: me })).body);
 ok(conv2.session === SID, "F after a restart the same conversation (and the cookie still holds)");
@@ -576,6 +583,11 @@ const st2 = turnStream("slow", async (o) => {
 await st2;
 ok(stopped, "F the stop key stops a running turn");
 ok(JSON.parse(readFileSync(ENVLOG, "utf8")).resume === SID, "F the next turn resumed the same session");
+{
+  // the page's read minted ahead of the turn, and the turn used that one
+  const after = localCred().split(`revoke --sid ${mintSid}`)[1] || "";
+  ok((after.match(/^mint /gm) || []).length === 1, "F after the restart one mint served the read-ahead and the turn (the stop key keeps it)");
+}
 
 // ---- E ----------------------------------------------------------------------------
 await stop();
