@@ -209,7 +209,7 @@ func (s *Server) notifyUpgrade(pid string) {
 	}
 	set, _ := s.Store.FleetSettings()
 	for _, u := range users {
-		if u.Role != roleAdmin || u.PrincipalID == pid {
+		if u.Role != roleAdmin {
 			continue
 		}
 		to := Recipient{Owner: u.PrincipalID, Lang: parseLang(set[langSettingKey(u.PrincipalID)])}
