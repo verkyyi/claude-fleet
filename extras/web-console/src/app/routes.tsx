@@ -7,12 +7,29 @@
 // 我的 holds 用量 · 设备 · 设置 · 账号 as four tabs at /me/<tab> (GR5E C1): the
 // sidebar and the bottom bar carry none of them — the avatar is the way in —
 // and their old addresses move on there, query and hash kept.
-import { lazy, type ComponentType } from "react";
+//
+// The session list is the one way in (GR5E C2): the computer's left column and
+// the phone's first screen (/) are the list, a row opens /s/<ref>, and the web
+// conversation is a row of it at /chat — on a computer / still shows it beside
+// the list, and a phone's /?about= (a link into the conversation) opens it too.
+import { lazy, useEffect, useState, type ComponentType } from "react";
 import { Navigate, useLocation } from "react-router";
 import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Settings, CircleUserRound, TerminalSquare, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage from "./pages/chat";
+import { SessionListPage } from "./SessionList";
+
+// The front page: the list on a phone, the conversation beside the list on a
+// computer (the left column already is the list). Read before the first paint,
+// so a phone never flashes the conversation.
+const PHONE = "(max-width: 767px)";
+function Home() {
+  const { search } = useLocation();
+  const [phone, setPhone] = useState(() => matchMedia(PHONE).matches);
+  useEffect(() => { const m = matchMedia(PHONE); const f = () => setPhone(m.matches); m.addEventListener("change", f); return () => m.removeEventListener("change", f); }, []);
+  return phone && !search ? <SessionListPage /> : <ChatPage />;
+}
 
 // moved(to): an old address of a page that lives at `to` now, its query and
 // hash carried along (a sign-in flow comes back to /settings#logins).
@@ -26,16 +43,16 @@ export type PageDef = {
   path: string;            // under /app ("/" is /app itself)
   label: string;
   icon: LucideIcon;
-  tab?: boolean;           // one of the five on a phone's bottom bar
-  side?: boolean;          // listed in the computer's sidebar
   page?: ComponentType;
   href?: string;           // the old page's address, while it has no page here
 };
 
 export const PAGES: PageDef[] = [
-  { id: "chat", path: "/", label: tr("对话", "Chat"), icon: MessageCircle, tab: true, side: true, page: ChatPage },
-  { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, tab: true, side: true, page: lazy(() => import("./pages/sessions")) },
-  { id: "terminal", path: "/terminal", label: tr("我的终端", "My Terminal"), icon: TerminalSquare, side: true, page: lazy(() => import("./pages/terminal")) },
+  { id: "home", path: "/", label: tr("会话", "Sessions"), icon: Layers, page: Home },
+  { id: "chat", path: "/chat", label: tr("我的对话", "My chat"), icon: MessageCircle, page: ChatPage },
+  { id: "session", path: "/s/:ref", label: tr("会话", "Session"), icon: Layers, page: lazy(() => import("./pages/session")) },
+  { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, page: lazy(() => import("./pages/sessions")) },
+  { id: "terminal", path: "/terminal", label: tr("我的终端", "My Terminal"), icon: TerminalSquare, page: lazy(() => import("./pages/terminal")) },
   // 任务 is one list with 会话 since T769: its address (and a code's ?q=) opens it there
   { id: "tasks", path: "/tasks", label: tr("任务", "Tasks"), icon: ListChecks, page: moved("/sessions") },
   { id: "me", path: "/me/:tab", label: tr("我的", "Me"), icon: CircleUserRound, page: lazy(() => import("./pages/me")) },

@@ -38,6 +38,8 @@ jobs:
         run: node --experimental-strip-types test/terminal.mjs
       - name: One 会话 list — tasks and sessions joined (T769)
         run: node --experimental-strip-types test/work.mjs
+      - name: The session list — status and title only, ⌘P's top level and order (GR5E C2)
+        run: node --experimental-strip-types test/session-list.mjs
       - name: Images reach the page as parts assistant-ui keeps (T773)
         run: node --experimental-strip-types test/chat-media.mjs
       - name: No copy yet is no error (J091)
