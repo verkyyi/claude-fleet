@@ -14,13 +14,15 @@ export function terminalKey(event: KeyboardEvent, composing: boolean): boolean {
 }
 
 export type TerminalState = Omit<AttachmentState, "state"> & {
+  /** the door that failed on this page, so the status can say so */
+  doorDown?: string;
   state: "connecting" | "ready" | "reconnecting" | "open-elsewhere" | "ended" | "unauthorized" | "unsupported" | "closed";
 };
 export function forgetTerminalGeneration(worker: string | null) {
   try { sessionStorage.removeItem(`fleet-terminal:${worker ?? "personal"}`); } catch { /* optional */ }
 }
 export type TerminalConnection = ReturnType<typeof connectTerminal>;
-const transient = new Set(["connection_closed", "connection_failed", "direct_closed", "direct_failed", "attachment_timeout", "negotiation_failed", "node_unavailable", "home_down", "offline", "rate", "limit"]);
+const transient = new Set(["connection_closed", "connection_failed", "direct_closed", "direct_failed", "attachment_timeout", "negotiation_failed", "node_unavailable", "home_down", "offline", "rate", "limit", "door_failed", "door_unavailable"]);
 
 export function connectTerminal(worker: string | null, options: {
   signal: AbortSignal;
@@ -87,7 +89,13 @@ export function connectTerminal(worker: string | null, options: {
             resume = state.terminalGeneration;
             try { sessionStorage.setItem(key, resume); } catch { /* optional */ }
           }
-          if (transient.has(error)) { if (state.mode === "direct") relay = true; schedule(error); }
+          if (transient.has(error)) {
+            // a failed direct or door path is not tried again on this page:
+            // the next attempt goes through the hub (XX79)
+            if (state.mode === "direct" || state.mode === "door") relay = true;
+            if (state.mode === "door") info = { ...info, doorDown: state.door || "door" };
+            schedule(error);
+          }
           else finish(error);
         }
       },

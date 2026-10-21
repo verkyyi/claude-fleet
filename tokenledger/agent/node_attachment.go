@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -96,8 +98,10 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	go s.read()
 	go s.watchLease()
 	var selection control.AttachmentGrant
+	var ticket string
 	select {
-	case selection = <-s.selected:
+	case sel := <-s.selected:
+		selection, ticket = sel.grant, sel.ticket
 	case <-ctx.Done():
 		return
 	case <-time.After(control.AttachmentNegotiate):
@@ -120,6 +124,20 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 			return
 		}
 		stream = peer
+	} else if selection.Mode == "door" {
+		// XX79: the payload through the nearest door; leases and the lease's
+		// end stay on this hub socket (s.watchLease), which closes it
+		if peer != nil {
+			peer.Close()
+			peer = nil
+		}
+		ds, err := dialDoorPipe(ctx, selection.Door, ticket)
+		if err != nil {
+			_ = writeAttachmentSignal(ctx, ws, control.AttachmentSignal{T: "error", Error: "door_unavailable"})
+			return
+		}
+		defer ds.Close()
+		stream, pair = ds, "door"
 	} else {
 		// Close waits for ICE teardown before the fallback accesses the target.
 		if peer != nil {
@@ -182,6 +200,36 @@ type attachmentFrame struct {
 	typ websocket.MessageType
 	b   []byte
 }
+
+// selection is the hub's signed select and, for a door, this half's ticket.
+type selection struct {
+	grant  control.AttachmentGrant
+	ticket string
+}
+
+// doorDialTimeout bounds the home's dial to a door's pipe: shorter than the
+// door's wait for the other half.
+const doorDialTimeout = 5 * time.Second
+
+// doorPipeClient is how the home reaches a door (nil = the default client;
+// tests trust their own door's certificate through SetDoorPipeClientForTest).
+var doorPipeClient *http.Client
+
+// dialDoorPipe joins the door's pipe named in the hub's signed grant.
+func dialDoorPipe(ctx context.Context, door, ticket string) (attachment.Stream, error) {
+	if !control.ValidDoorPipeURL(door) || ticket == "" {
+		return nil, errors.New("not a door pipe")
+	}
+	dctx, cancel := context.WithTimeout(ctx, doorDialTimeout)
+	defer cancel()
+	c, _, err := websocket.Dial(dctx, door+"?t="+url.QueryEscape(ticket), &websocket.DialOptions{HTTPClient: doorPipeClient})
+	if err != nil {
+		return nil, err
+	}
+	c.SetReadLimit(attachment.FrameMax + 1024)
+	return attachment.WebSocket{Conn: c}, nil
+}
+
 type authorizedStream struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -190,13 +238,13 @@ type authorizedStream struct {
 	mu       sync.Mutex
 	grant    control.AttachmentGrant
 	active   bool
-	selected chan control.AttachmentGrant
+	selected chan selection
 	in       chan attachmentFrame
 	recorded chan struct{}
 }
 
 func newAuthorizedStream(ctx context.Context, cancel context.CancelFunc, ws *websocket.Conn, g control.AttachmentGrant, key string) *authorizedStream {
-	return &authorizedStream{ctx: ctx, cancel: cancel, ws: ws, key: key, grant: g, selected: make(chan control.AttachmentGrant, 1), in: make(chan attachmentFrame, 8), recorded: make(chan struct{}, 1)}
+	return &authorizedStream{ctx: ctx, cancel: cancel, ws: ws, key: key, grant: g, selected: make(chan selection, 1), in: make(chan attachmentFrame, 8), recorded: make(chan struct{}, 1)}
 }
 
 func (s *authorizedStream) read() {
@@ -213,7 +261,8 @@ func (s *authorizedStream) read() {
 			g, err := control.VerifyAttachment(signal.Grant, s.key, old.Login, old.Conn, old.Generation, time.Now())
 			valid := err == nil && control.SameAttachment(old, g) && time.Now().Before(time.Unix(old.Exp, 0))
 			if signal.T == "select" {
-				valid = valid && old.Epoch == 1 && g.Epoch == 2 && (g.Mode == "direct" || g.Mode == "relay")
+				valid = valid && old.Epoch == 1 && g.Epoch == 2 && old.Door == "" && old.Pipe == "" &&
+					(g.Mode == "direct" || g.Mode == "relay" || (g.Mode == "door" && signal.Ticket != ""))
 			} else {
 				valid = valid && g.Epoch == old.Epoch && g.Mode == old.Mode && g.Exp >= old.Exp
 			}
@@ -225,7 +274,7 @@ func (s *authorizedStream) read() {
 				return
 			}
 			if signal.T == "select" {
-				s.selected <- g
+				s.selected <- selection{grant: g, ticket: signal.Ticket}
 			}
 			continue
 		}

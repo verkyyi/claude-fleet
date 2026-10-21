@@ -132,6 +132,35 @@ C2 接页面；C6 接 Webchat 的请求准入及固定 `chat.sock` 适配器，�
 即使在回复完成后才返回也不能覆盖新消息。禁 UDP 时较慢的回退不会清空当前对话；断线恢复
 仍然只读记录，不重发消息。官网与本地页面都由 `chat-late-history` 演练覆盖。
 
+### 走最近的门（XX79）
+
+在美国开深圳入口的终端，每个键要过两趟太平洋（浏览器→深圳→美国的家，~187 ms × 2）。
+第三种路 `door`：**认人、租约、选择照旧都在入口**，只有终端字节走 浏览器 → 门 → 家。
+
+- 入口设置 `fleet.term_doors`：JSON 列表 `{id, url, endpoint, label}`，`url` 只能是
+  `wss://<门>/v1/door/pipe`，`endpoint` 是门运行用的节点令牌所在的 endpoint（门票用它的哈希签）。
+  空 = 不给门，`config` 与控制台 CSP 一字不变；给了门，控制台的 `connect-src` 只多这几扇门的源。
+- 家报 `term-via-door-v1`（`control.CapTermVia`）才给门。`config` 带 `doors`（地址、`/healthz` 探测、名字）。
+- 页面（`extras/browser-transport/attachment.ts`）照旧先试直连；有门时直连只等 2.5 秒。不是直连，
+  就各测三次入口 `/healthz` 与门 `/healthz` 取最小：门快 ≥30 ms 才走门（`pickDoor`），否则经入口。
+- 选门：浏览器发 `select {mode: door, door: id}`；入口签两张门票 `fdp1`（门 · 管子 · browser/home ·
+  两分钟），给浏览器 `selecting {url, ticket}`，给家 `select {grant, ticket}`——grant（`fba1`，家的
+  令牌签）里写着门的地址和管子号，租约不能改它（`SameAttachment`）。
+- 门（`ccquota door --browser-listen :443 --browser-cert … --browser-key … --door-id us`，
+  `agent/door/pipe.go`）本地验票、每张只认一次、两半配对后逐条原样对拷（≤32 KiB、10 秒 ping），
+  不读帧、不留字节，一条管子一行审计（`joined` / `unpaired` / `refused`，字节数，不记内容）。
+  证书文件变了就重读（续期不重启）。
+- 家拨门 5 秒，拨不上回 `door_unavailable`；浏览器 3 秒收不到 ready 也算门失败。只试一次：
+  下一次经入口（`terminal.ts` 置 relay），状态写「经入口连接 · 美国门暂不可用」。
+- 审计：`mode = door`，`outcome = door <id>`，入口的 `bytes_up/down` 为 0。从没选出路就关的行记
+  `unselected`（以前一直停在 `negotiating`），一天没收尾的记 `lost`。
+- 回显：页面量「按键 → 下一帧输出」，每 15 秒和关时发 `stats {echo_p50, echo_p95, echo_n}`（只有数字），
+  入口写进 `echo_p50_ms / echo_p95_ms / echo_n`；状态行显示中位数。
+
+BREAK-IT：`door-term-ticket-replay` · `door-term-wrong-person` · `door-term-down`。
+测试：`agent/door/pipe_test.go`、`shared/control/door_pipe_test.go`、`e2e/attachment_door_test.go`、
+`TestAttachmentDoorChromium`（`door.mjs`：走门 / 家连不上门 / 门死了）。
+
 ### 网络与部署验证
 
 hub 的 `CCQUOTA_ATTACHMENT_STUN` 是空白分隔的 `stun:host:port`，最多 4 个，默认空；

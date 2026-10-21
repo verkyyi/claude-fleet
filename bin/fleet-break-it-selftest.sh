@@ -6738,7 +6738,8 @@ term_go() {
   local tests="$1" pkgs="$2" ok="$3" out rc t
   for t in $tests; do
     grep -q "^func $t(" "$ROOT"/tokenledger/hub/api/*_test.go "$ROOT"/tokenledger/hub/store/*_test.go "$ROOT"/tokenledger/e2e/*_test.go "$ROOT"/tokenledger/agent/*_test.go \
-      "$ROOT"/tokenledger/shared/control/*_test.go "$ROOT"/tokenledger/shared/attachment/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
+      "$ROOT"/tokenledger/shared/control/*_test.go "$ROOT"/tokenledger/shared/attachment/*_test.go \
+      "$ROOT"/tokenledger/agent/door/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     # shellcheck disable=SC2086 # pkgs is a word list
@@ -6850,6 +6851,48 @@ drill_term_other_person() {
     './e2e github.com/verkyyi/claude-fleet/tokenledger/shared/control' \
     '别人 / 管理员本人 / 以他视角 / 运营门 / 别的 Origin / 两个或没有选择器 / 路径当目标 / 不存在的 worker → 拒，命令 0 次启动；签错 / 过期 / 给别的转发 / 别的登录 / 对话的声明 / 命令当目标 / 重放 → 节点断开，不开终端；本人能开（对照）' \
     || return 1
+  SECS=$(since "$t0")
+}
+
+# door-term-ticket-replay (XX79): a door's pipe takes a ticket the hub signed
+# with THAT door's token hash, once — a replay, another door's key, a ticket for
+# another door, an expired one or none join nothing; and the home accepts a door
+# selection only in a grant it can verify (a door's wss URL and a pipe).
+drill_door_term_ticket_replay() {
+  CAP=180; local t0
+  t0=$(now)
+  grep -q 'p.spend(t, now)' "$ROOT/tokenledger/agent/door/pipe.go" 2>/dev/null \
+    || { WHY="the door no longer spends a ticket once"; return 1; }
+  term_go 'TestDoorPipeTicketReplay TestDoorPipeTicket TestDoorPipeURL TestAttachmentGrantDoor' \
+    'github.com/verkyyi/claude-fleet/tokenledger/agent/door github.com/verkyyi/claude-fleet/tokenledger/shared/control' \
+    '重放 / 别的门的钥匙 / 给别的门 / 过期 / 没票 → 门 403、不留连接；家只认带门 wss 地址和管子号的选择（fba1）' || return 1
+  SECS=$(since "$t0")
+}
+
+# door-term-wrong-person (XX79): a pipe joins only its own other half — another
+# pipe's valid ticket, a second half of the same role, another origin's page get
+# nothing; through the door the real hub and home carry the terminal while the
+# hub's own payload counters stay 0.
+drill_door_term_wrong_person() {
+  CAP=240; local t0
+  t0=$(now)
+  term_go 'TestDoorPipeOnlyItsOwnOtherHalf TestDoorPipeJoinsTheTwoHalves TestAttachmentDoorCarriesTheTerminal' \
+    'github.com/verkyyi/claude-fleet/tokenledger/agent/door ./e2e' \
+    '别的管子的票 / 同一半来第二个 / 别的站点 → 接不上、读不到一个字节；走门时入口自己的字节计数为 0' || return 1
+  SECS=$(since "$t0")
+}
+
+# door-term-down (XX79): a door the home cannot reach costs one attempt
+# (door_unavailable, no terminal started) and the next goes through the hub; no
+# door set offers none, byte for byte as before.
+drill_door_term_down() {
+  CAP=240; local t0
+  t0=$(now)
+  grep -q "msg.error !== 'door_unavailable'" "$ROOT/extras/browser-transport/attachment.ts" 2>/dev/null \
+    || { WHY="the page treats door_unavailable as final (no fallback through the hub)"; return 1; }
+  term_go 'TestAttachmentDoorDownFallsBackToTheHub TestTermDoorsOffAddsNothing TestTermDoorsSetting TestConsoleCSPDoors' \
+    './e2e ./hub/api' \
+    '门连不上 → door_unavailable、不开终端，下一次经入口照常；没配门 → 配置里没有门、控制台策略一字不变' || return 1
   SECS=$(since "$t0")
 }
 

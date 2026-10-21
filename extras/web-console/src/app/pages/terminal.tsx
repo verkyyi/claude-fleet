@@ -41,6 +41,15 @@ function terminalTheme(host: HTMLElement) {
   return { background, foreground, cursor: foreground, selectionBackground: `${foreground}40` };
 }
 
+// The status says which way the bytes go and, once measured, how fast (XX79).
+function terminalPath(view: View): string {
+  const path = view.mode === "direct" ? tr("直连", "Direct")
+    : view.mode === "door" ? tr(`经${view.door || "门"}`, `Via ${view.door || "door"}`)
+    : view.doorDown ? tr(`经入口连接 · ${view.doorDown}暂不可用`, `Via hub · ${view.doorDown} unavailable`)
+    : tr("经入口连接", "Via hub");
+  return view.echo !== undefined ? `${path} · ${view.echo} ms` : path;
+}
+
 export default function TerminalPage() {
   usePage(tr("我的终端", "My Terminal"));
   const [query] = useSearchParams();
@@ -180,7 +189,7 @@ export default function TerminalPage() {
   }, [worker, attempt]);
 
   const status = view.state === "reconnecting" ? tr("正在重新连接…", "Reconnecting…") : view.state === "open-elsewhere" ? tr("正在另一处使用", "Open elsewhere") : view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state !== "ready" ? tr("已断开", "Disconnected")
-    : view.mode === "direct" ? tr("直连", "Direct") : tr("经入口连接", "Via hub");
+    : terminalPath(view);
   return <div className="flex h-full min-h-80 flex-col gap-3 p-4 md:p-6">
     <header className="flex flex-wrap items-center gap-2">
       <h1 className="min-w-0 flex-1 truncate font-display text-lg" title={view.destination}>
