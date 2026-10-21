@@ -470,10 +470,17 @@ def check_repo(params):
         raise Fault("INVALID_ARGUMENT", "repo must be owner/name or a hosted repo's name")
 
 
+# The one comment a text may carry (T815): a whole line holding a batch's own
+# marker — <!-- fleet:epic k=v … --> on an EPIC's charter, <!-- fleet:prev <ID> -->
+# on a redo (fleet-epic-tick.py reads them). No other fleet: name passes, so the
+# bridge's rails stay unforgeable. The hub's batchMarkRE, letter for letter.
+BATCH_MARK = re.compile(r"^[ \t]*<!--[ \t]*fleet:(?:epic|prev)(?:[ \t]+[^\s<>]+)*[ \t]*-->[ \t]*$", re.M)
+
+
 def check_text(text, what="text"):
     if not isinstance(text, str) or not 1 <= len(text) <= MAX_MESSAGE or not text.strip():
         raise Fault("INVALID_ARGUMENT", "%s must be 1-%d characters" % (what, MAX_MESSAGE))
-    if "<!--" in text or any(ord(c) < 32 and c not in "\n\t" for c in text):
+    if "<!--" in BATCH_MARK.sub("", text) or any(ord(c) < 32 and c not in "\n\t" for c in text):
         # A comment marker could forge the bridge's no-relay / provenance
         # rails; control bytes could drive the pane once pasted.
         raise Fault("INVALID_ARGUMENT", what + " must not contain HTML comments or control characters")

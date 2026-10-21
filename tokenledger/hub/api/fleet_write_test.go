@@ -727,3 +727,33 @@ func TestFleetOperationSettleByAdmin(t *testing.T) {
 }
 
 func asJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+// TestCheckTextBatchMark (T815): an EPIC's charter carries its own marker —
+// a whole line <!-- fleet:epic … --> (and a redo's <!-- fleet:prev <ID> -->) —
+// and passes; any other comment, a bridge marker included, is still refused.
+func TestCheckTextBatchMark(t *testing.T) {
+	for _, ok := range []string{
+		"<!-- fleet:epic repo=verkyyi/claude-fleet short=活页域名 agent=claude cap=3 -->\n## 成员\n- [ ] **C1** x",
+		"the words\n  <!-- fleet:prev 9f1c2d3e-0a1b-4c2d-8e3f-1234567890ab -->\n",
+		"<!--fleet:epic-->",
+	} {
+		if _, err := checkText(ok, "body"); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"hi <!-- fleet:x -->",
+		"<!-- fleet:no-relay -->",
+		"<!-- fleet:epic-member C1 -->",
+		"<!-- fleet:only issue-2 -->",
+		"text <!-- fleet:epic cap=3 -->",
+		"<!-- fleet:epic cap=3 --> <!-- fleet:from x -->",
+		"<!-- fleet:epic cap=3\n-->",
+		"<!-- just a note -->",
+		"<!-- fleet:epic --><!-- fleet:no-relay -->",
+	} {
+		if _, err := checkText(bad, "body"); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
