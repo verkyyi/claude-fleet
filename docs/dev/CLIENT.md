@@ -12,7 +12,11 @@ keyboard on the list.
 ## One key + the panel (issue #3185, EPIC #3178 C7; issue #3328; T685)
 
 fleet takes **one key** (操作者 2026-10-20, T685): **⌘P** on a Mac (iTerm2), and
-on a phone or any terminal with no ⌘ the same panel as **⌃] p** (⌃], then p). It
+on a phone or any terminal with no ⌘ the same panel as **F12** (one tap once it is
+on Termius's extra-key row — T705, 操作者 2026-10-20 「Termius还应保留F12」) or
+**⌃] p** (⌃], then p; always bound). In iTerm2 F12 stays the session's: the
+`fleet` profile sends it as code 933, which the 看台 hands on as F12
+(`fleet_keys.ITERM_PASS`) — on a Mac fleet still takes ⌘P alone. It
 opens the panel: every session, and every action — the panel's own rows, picked
 with ↑↓ ↵ or reached by typing a few of their words:
 
@@ -31,11 +35,11 @@ actions are in [日常使用](../public/zh/member/usage.md#一个键总面板).
 **The keys that went back to iTerm2 (T685; after issue #3328):** ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N
 ⌘T ⌘K ⌘Q ⌘\ are no row of the `fleet` profile any more, so iTerm2 has its own
 again — ⌘K clears, ⌘T opens a tab, ⌘N a window, ⌘Q quits iTerm2. ⌃\ goes to the
-session (`send-keys`) and ⌃空格 / F12 to the terminal. Their private codes stay
+session (`send-keys`) and ⌃空格 to the terminal (F12 came back for the phone, T705). Their private codes stay
 retired, never reused: a profile written before the update still sends one until
 the next start rewrites it, and the 看台 catches it as a user key bound to
 nothing — it does nothing (`fleet_keys.RETIRED`). After the update each login is
-told once: 「fleet 只用 ⌘P，其余都在面板里」 (`keys-notice-T685`).
+told once: 「fleet 只用 ⌘P（手机 F12 或 ⌃] p），其余都在面板里」 (`keys-notice-T685`).
 
 Want an old key back, or a different one? One line in `fleet.conf`
 (`~/.config/claude-fleet/fleet.conf`; `bin/fleet_keys.py` reads it) — a key you
@@ -46,7 +50,7 @@ name there is yours:
 FLEET_KEY_PANEL=cmd+p            # the panel's chord: cmd+' … · off = none
 FLEET_KEYS_EXTRA="next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n quit=cmd+q home=cmd+\\"
 [common]                         # the machine's keys for a phone
-FLEET_KEY_PHONE="ctrl+]p"           # + ctrl+space f12 to have them back
+FLEET_KEY_PHONE="f12"            # beside ⌃] p (always): off = ⌃] p alone · ctrl+space f12
 FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]q=quit"
 ```
 
@@ -62,7 +66,7 @@ machine keeps the union (`@fleet_view_keys_extra`), so a phone attaching with no
 extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
-  ⌃] p.
+  F12 or ⌃] p.
 
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
@@ -313,8 +317,9 @@ home on the page changes the port when the new home sits behind the same router
 `docs/MULTI-MACHINE-OPS.md` «从外面连进来».
 
 **The keys: one, to open the panel** (issue #3185). A phone has no ⌘; the 看台
-opens the panel on **⌃] p** — `FLEET_KEY_PHONE`, above (T685 dropped ⌃空格 and
-F12 from the default; write them there to have them back). ⌃] ⌃] sends a
+opens the panel on **F12** or **⌃] p** — `FLEET_KEY_PHONE`, above (F12 by default,
+T705; ⌃] p always; T685 dropped ⌃空格 — write it there to have it back). Put `F12`
+on Termius's extra-key row (Settings → Keyboard → extra keys) and one tap opens it. ⌃] ⌃] sends a
 literal ⌃] to the session. Want a key per action? `FLEET_KEYS_PHONE_EXTRA` binds
 the letters below (`bin/dash-keymap.sh --panel switch view` spells them):
 

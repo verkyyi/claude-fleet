@@ -30,7 +30,7 @@ A sign-in lasts 12 hours, after which this computer renews it by itself; when it
 
 ## 4. Remember one key
 
-**⌘P** (iTerm2; in other terminals **⌃] p**) opens the panel:
+**⌘P** (iTerm2; in other terminals and on a phone **F12** or **⌃] p**) opens the panel:
 
 - every session is here — pick a row to switch to it;
 - select “⚡ New session” and press Enter to open its box: the repository and agent are already chosen, so Enter again opens it; then say what to do in the session;

@@ -206,8 +206,8 @@ line, which exits silently without it.)
 
 ## Keybindings
 
-`fleet` opens the thin client. **⌘P** in iTerm2 or **⌃] p**
-opens the panel: choose a session, start a task, open its shell, or quit fleet.
+`fleet` opens the thin client. **⌘P** in iTerm2, or **F12** / **⌃] p** on a phone
+or another terminal, opens the panel: choose a session, start a task, open its shell, or quit fleet.
 Tab on a row shows its actions. The panel and top bar run on the home machine
 (`fleet_view.py`, `fleet-topbar.py --node`, `conf/tmux-view.conf`).
 Your computer runs one foreground Python loop and one connection; closing it

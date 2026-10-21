@@ -82,15 +82,15 @@ st_eq "D: LC_ALL=C ⇒ empty (it is the one setlocale reads)" "" "$(seen)"
 
 hello() { tr -d '\r' < "$WORK/tty.out" | sed -n 2p; }
 arrive
-st_eq "F: no LANG ⇒ the welcome in 中文" "欢迎回来。⌃] p 打开面板。" "$(hello)"
+st_eq "F: no LANG ⇒ the welcome in 中文" "欢迎回来。F12 或 ⌃] p 打开面板。" "$(hello)"
 has_line() { tr -d '\r' < "$WORK/tty.out" | grep -qx "$1"; }
 CHECKS=$((CHECKS + 1)); has_line "fleet · $(hostname -s) · $(id -un)" || st_miss "F: the welcome's first line" "$(cat "$WORK/tty.out")"
 arrive LANG=en_US.UTF-8
-st_eq "F: en_US ⇒ English" "Welcome back. ⌃] p opens the panel." "$(hello)"
+st_eq "F: en_US ⇒ English" "Welcome back. F12 or ⌃] p opens the panel." "$(hello)"
 PERSON='{"version": 3, "bundle": {"ui_lang": "zh"}}' arrive LANG=en_US.UTF-8
-st_eq "F: the person chose 中文 ⇒ 中文, whatever the client says" "欢迎回来。⌃] p 打开面板。" "$(hello)"
+st_eq "F: the person chose 中文 ⇒ 中文, whatever the client says" "欢迎回来。F12 或 ⌃] p 打开面板。" "$(hello)"
 PERSON='{"version": 4, "bundle": {"ui_lang": "en"}}' arrive
-st_eq "F: the person chose English ⇒ English with no LANG" "Welcome back. ⌃] p opens the panel." "$(hello)"
+st_eq "F: the person chose English ⇒ English with no LANG" "Welcome back. F12 or ⌃] p opens the panel." "$(hello)"
 
 rm -rf "$WORK/conf"
 env -i HOME="$WORK" PATH="$PATH" SHELL=/bin/sh SSH_CONNECTION='10.0.0.9 5 10.0.0.1 22022' \

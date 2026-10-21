@@ -372,6 +372,8 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
           {tr("第一次连会问要不要信任主机钥匙：点 Accept。没装 App？", "The first connection asks to trust the host key: tap Accept. No app yet? ")}
           <a href="https://apps.apple.com/app/termius-terminal-ssh-client/id549039908" rel="noopener" className="text-primary underline-offset-4 hover:underline">{tr("在 App Store 装 Termius", "Get Termius on the App Store")}</a>
         </p>
+        <p className="text-muted-foreground text-[13px]">{tr("连上后按 F12 或 ⌃] p（先按 Ctrl+]，再按 p）打开面板。在 Termius 键盘上方那一排（扩展键）里加一个 F12，点一下就开。",
+          "Once connected, press F12 or ⌃] p (Ctrl+], then p) to open the panel. Add F12 to the extra-keys row above Termius's keyboard and one tap opens it.")}</p>
       </CardContent>
     </Card>
   );

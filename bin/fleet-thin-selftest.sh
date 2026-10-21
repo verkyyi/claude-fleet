@@ -298,7 +298,7 @@ rm -f "$T/clip.on" "$T/echo-input"
 # FLEET_KEYS_EXTRA's ⌘ chords are there and it rides the remote command's
 # environment to the home, which binds them
 kmap() { python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"])))' "$T/iterm/fleet.json" 2>/dev/null; }
-[ "$(kmap)" = "0x70-0x100000 0xd-0x20000" ] && st_ok_all "K: the start wrote the profile — ⌘P + ⇧↵, nothing else (T685)" || st_miss "K: profile keys: $(kmap)"
+[ "$(kmap)" = "0x70-0x100000 0xd-0x20000 0xf70f-0x800000" ] && st_ok_all "K: the start wrote the profile — ⌘P + ⇧↵ + F12 handed on to the session (T685, T705)" || st_miss "K: profile keys: $(kmap)"
 grep -q 'FLEET_KEYS_EXTRA' "$T/ssh.log" && st_miss "K: no extras, yet the remote command names FLEET_KEYS_EXTRA" || st_ok_all "K: no extras → the remote command as before"
 : > "$T/ssh.log"
 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
@@ -306,7 +306,7 @@ FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
  ["send", "quit\n"],
  ["wait", 10]
 ]'
-[ "$(kmap)" = "0x70-0x100000 0xd-0x20000 0xf701-0x300000" ] && st_ok_all "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || st_miss "K: profile keys with extras: $(kmap)"
+[ "$(kmap)" = "0x70-0x100000 0xd-0x20000 0xf701-0x300000 0xf70f-0x800000" ] && st_ok_all "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || st_miss "K: profile keys with extras: $(kmap)"
 case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
   st_ok_all "K: the extras ride the remote command's environment" ;; *) st_miss "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
 
