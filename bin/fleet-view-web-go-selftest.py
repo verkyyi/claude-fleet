@@ -31,7 +31,7 @@ class WebGo(unittest.TestCase):
         self.toasts, self.logs = [], []
         self.patch = {
             "tm": lambda *a: (0, self.tty) if "#{client_tty}" in a else (0, ""),
-            "view_row": lambda vid: {"node": "macmini"},
+            "view_row": lambda vid: {"node": "mac-a"},
             "view_fleet": lambda vid, row: "fleet",
             "current": lambda vid, fleet: "@1",
             "resolve": lambda vid, target, row, fleet: ("", True),
@@ -63,18 +63,18 @@ class WebGo(unittest.TestCase):
             return h
 
     def test_far_session_goes_through_the_page(self):
-        rc = fv.go(self.QO(), "wt-web-abc", WID, "popup", "/dev/ttys999", {"machine": "mini2", "far": True})
+        rc = fv.go(self.QO(), "wt-web-abc", WID, "popup", "/dev/ttys999", {"machine": "mac-b", "far": True})
         self.assertEqual(rc, 0)
         self.assertIn(("\x1b]7502;web-go;w=%s\x07" % WID).encode(), self.read())
         self.assertEqual(self.toasts, [])
         self.assertEqual(self.logs[-1]["method"], "web-go")
 
     def test_bad_id_writes_nothing(self):
-        rc = fv.go(self.QO(), "wt-web-abc", "../../etc;x", "popup", "/dev/ttys999", {"machine": "mini2"})
+        rc = fv.go(self.QO(), "wt-web-abc", "../../etc;x", "popup", "/dev/ttys999", {"machine": "mac-b"})
         self.assertEqual(rc, 3)
         self.assertEqual(self.read(), b"")
-        self.assertEqual(fv.far_miss("wt-web-abc", {"far": True, "machine": "mini2"}, rc), fv.say("view_web_far"))
-        self.assertNotIn("mini2", fv.far_miss("wt-web-abc", {"far": True, "machine": "mini2"}, rc))
+        self.assertEqual(fv.far_miss("wt-web-abc", {"far": True, "machine": "mac-b"}, rc), fv.say("view_web_far"))
+        self.assertNotIn("mac-b", fv.far_miss("wt-web-abc", {"far": True, "machine": "mac-b"}, rc))
 
 
 if __name__ == "__main__":
