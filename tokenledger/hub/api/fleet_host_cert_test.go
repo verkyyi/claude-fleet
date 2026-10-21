@@ -1,20 +1,29 @@
 package api
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // TestEntryHostCertSigned (claude-fleet T743): a machine's entry reach report
 // is answered with its entry key signed by the host CA — a HOST certificate,
-// the names fleet connect checks it under, valid under the host CA and not the
-// user CA — and every route machine carries that CA. No SSH CA ⇒ neither.
+// the names fleet connect checks it under, valid under the host CA — and every
+// route machine carries that CA. No host CA (the user CA alone) ⇒ neither.
 func TestEntryHostCertSigned(t *testing.T) {
 	h := entryHarness(t)
+	_, hostPriv, _ := ed25519.GenerateKey(rand.Reader)
+	hostSigner, err := ssh.NewSignerFromKey(hostPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.SSHHostCA = sshca.New(hostSigner)
 	_, tok := rootNode(t, h, "root7", "mac-h", control.CapEntryKeys)
 	k := reachKey(t)
 	code, v, raw := reachPost(t, h, tok, control.EntryReachReport{Port: closedPort(t), HostKey: reachKeyLine(k), Listening: true}, "")
@@ -30,7 +39,7 @@ func TestEntryHostCertSigned(t *testing.T) {
 		t.Fatalf("not a host certificate of the reported key: %+v", pk)
 	}
 	ca := h.srv.hostCA()
-	if ca == nil || ca.PublicKey() == h.srv.SSHCA.PublicKey() {
+	if ca == nil || h.srv.SSHCA == nil || ca.PublicKey() == h.srv.SSHCA.PublicKey() {
 		t.Fatal("the host CA is missing or is the user CA itself")
 	}
 	caKey, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(ca.PublicKey()))
@@ -50,7 +59,7 @@ func TestEntryHostCertSigned(t *testing.T) {
 	if len(rm.HostCA) != 1 || rm.HostCA[0] != ca.PublicKey() {
 		t.Fatalf("route machine HostCA = %v, want the host CA", rm.HostCA)
 	}
-	h.srv.SSHCA = nil
+	h.srv.SSHHostCA = nil
 	h.srv.entryReachAt.Delete("mac-h")
 	if _, v, _ = reachPost(t, h, tok, control.EntryReachReport{Port: closedPort(t), HostKey: reachKeyLine(k), Listening: true}, ""); v.HostCert != "" {
 		t.Fatal("no SSH CA, yet a host certificate")

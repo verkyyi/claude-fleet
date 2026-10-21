@@ -2523,6 +2523,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Keys (files mounted from their own Secrets; the key itself is the secret):
 #   CCQUOTA_FLEET_SSH_CA_KEY      path of the connection-certificate CA key · 必填 · 密钥
 #                                 (unset = connection certificates off)
+#   CCQUOTA_FLEET_SSH_HOST_CA_KEY path of the HOST CA key (T743; its own key, never the
+#                                 user CA's) · 可选 · 密钥 (unset / file absent = no host
+#                                 certificates for home machines' entry keys)
 #   CCQUOTA_FLEET_CRED_KEY_FILE   path of the credential-vault key · 必填 · 密钥
 #                                 (or CCQUOTA_FLEET_CRED_KEY inline, or
 #                                 CCQUOTA_FLEET_CRED_KMS_KEY_ID; none = vault off)

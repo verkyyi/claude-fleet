@@ -302,6 +302,33 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.SSHCA = ca
 	log.Printf("fleet: SSH user CA %s — 12h certificates at /connect and `fleet login`", ca.Fingerprint())
+	return loadFleetHostCA(srv)
+}
+
+// loadFleetHostCA arms host certificates (claude-fleet T743):
+// CCQUOTA_FLEET_SSH_HOST_CA_KEY names the HOST CA's private key — generated on
+// its own (never derived from, nor computable from, the user CA), mounted from
+// its own Secret (ccquota-ssh-host-ca, optional). Unset, or the file not there
+// (the Secret not made yet): no host certificates, as before. Unreadable, or
+// the user CA's own key: the hub refuses to start.
+func loadFleetHostCA(srv *api.Server) error {
+	path := os.Getenv("CCQUOTA_FLEET_SSH_HOST_CA_KEY")
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		log.Printf("fleet: CCQUOTA_FLEET_SSH_HOST_CA_KEY %s is not there (its Secret not made yet) — host certificates are off", path)
+		return nil
+	}
+	hca, err := sshca.Load(path)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_SSH_HOST_CA_KEY: %w", err)
+	}
+	if srv.SSHCA != nil && hca.PublicKey() == srv.SSHCA.PublicKey() {
+		return errors.New("CCQUOTA_FLEET_SSH_HOST_CA_KEY is the user CA's own key: generate the host CA on its own (deploy/k8s/RUNBOOK.md)")
+	}
+	srv.SSHHostCA = hca
+	log.Printf("fleet: SSH host CA %s — 30-day host certificates for home machines' entry keys", hca.Fingerprint())
 	return nil
 }
 

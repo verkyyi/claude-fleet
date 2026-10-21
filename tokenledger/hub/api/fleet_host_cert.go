@@ -3,7 +3,6 @@ package api
 import (
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -12,42 +11,17 @@ import (
 )
 
 // Host certificates (claude-fleet T743): the hub signs each home machine's
-// entry host key with a host CA of its own, derived from the SSH CA
-// (sshca.Derive, no second Secret — the same place as the user CA, another
-// key). The machine gets its certificate in the answer to its entry reach
-// report and shows it from its entry sshd (HostCertificate); every route
-// list and home answer carries the CA's public key (FleetMachine.HostCA), and
-// fleet connect trusts it as one @cert-authority line — so a machine whose
-// key changed, or a home that moved to another machine, is still known
-// without a question. No SSH CA ⇒ no certificate, no HostCA: byte for byte as
-// before.
+// entry host key with its HOST CA (Server.SSHHostCA — a key of its own, its
+// own Secret, never derived from the user CA). The machine gets its
+// certificate in the answer to its entry reach report and shows it from its
+// entry sshd (HostCertificate); every route list and home answer carries the
+// CA's public key (FleetMachine.HostCA), and fleet connect trusts it as one
+// @cert-authority line — so a machine whose key changed, or a home that moved
+// to another machine, is still known without a question. No host CA ⇒ no
+// certificate, no HostCA: byte for byte as before.
 
-// hostCALabel is the host CA's derivation label.
-const hostCALabel = "host"
-
-var hostCAOnce struct {
-	sync.Mutex
-	from *sshca.CA
-	ca   *sshca.CA
-}
-
-// hostCA is the host CA, nil when the hub has no SSH CA.
-func (s *Server) hostCA() *sshca.CA {
-	if s.SSHCA == nil {
-		return nil
-	}
-	hostCAOnce.Lock()
-	defer hostCAOnce.Unlock()
-	if hostCAOnce.from != s.SSHCA {
-		ca, err := s.SSHCA.Derive(hostCALabel)
-		if err != nil {
-			log.Printf("fleet: derive the host CA: %v", err)
-			return nil
-		}
-		hostCAOnce.from, hostCAOnce.ca = s.SSHCA, ca
-	}
-	return hostCAOnce.ca
-}
+// hostCA is the host CA, nil when the hub has none.
+func (s *Server) hostCA() *sshca.CA { return s.SSHHostCA }
 
 // hostCAKeys is what a route list's machine carries as HostCA: the host CA's
 // public key, nil when there is none.

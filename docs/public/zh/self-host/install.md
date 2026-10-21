@@ -86,6 +86,7 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 | `CCQUOTA_FLEET_ADMIN_USERS` | `alice` | 机器上那个管理员账号的系统登录名：入口只把「开号」「删号」发给以它运行的机器程序 |
 | `CCQUOTA_VIEWER_TOKEN` | `viewer-token` 的内容 | 用量页的只读口令 |
 | `CCQUOTA_FLEET_SSH_CA_KEY` | `/secrets/ca` | 连接证书钥匙的路径 |
+| `CCQUOTA_FLEET_SSH_HOST_CA_KEY` | `/secrets/host-ca` | 主机证书钥匙的路径（可选；独立生成的一把，不是上面那把）：给家机器的入口签主机证书，客户端换家、换钥匙都不再问 |
 | `CCQUOTA_FLEET_CRED_KEY_FILE` | `/secrets/cred-key` | 凭据保险箱钥匙的路径 |
 | `CCQUOTA_FLEET_RELEASE_KEY` | `/secrets/release-key` | 升级包签名钥匙的路径；不设则机器不会自动升级 |
 | `CCQUOTA_FLEET_RELEASE_DIR` | `/data/releases` | 升级包放哪；设了签名钥匙就必须设 |

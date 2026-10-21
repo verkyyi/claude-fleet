@@ -86,6 +86,7 @@ The hub reads only environment variables. A minimal working set:
 | `CCQUOTA_FLEET_ADMIN_USERS` | `alice` | The system login name of the administrator account on the machines: the hub sends account creation and removal only to a machine program running as it |
 | `CCQUOTA_VIEWER_TOKEN` | the contents of `viewer-token` | The read-only password of the usage page |
 | `CCQUOTA_FLEET_SSH_CA_KEY` | `/secrets/ca` | Path of the connection certificate key |
+| `CCQUOTA_FLEET_SSH_HOST_CA_KEY` | `/secrets/host-ca` | Path of the host certificate key (optional; generated on its own, never the one above): signs home machines' entry keys, so a moved home or a new key asks clients nothing |
 | `CCQUOTA_FLEET_CRED_KEY_FILE` | `/secrets/cred-key` | Path of the credential vault key |
 | `CCQUOTA_FLEET_RELEASE_KEY` | `/secrets/release-key` | Path of the upgrade package signing key; unset, machines do not upgrade automatically |
 | `CCQUOTA_FLEET_RELEASE_DIR` | `/data/releases` | Where upgrade packages go; required once the signing key is set |
