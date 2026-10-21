@@ -88,6 +88,12 @@ type placeRequest struct {
 	// As is the agent file the session starts as (claude-fleet#3122); only a
 	// file every machine has (shipped with the release) is sent elsewhere.
 	As string `json:"as"`
+	// LocalDispatch says the asker opens an accepted dispatch itself when the
+	// hub picks it (claude-fleet T716): answered LOCAL as a plain start is,
+	// not sent back to the same machine through its node (a second spawner
+	// run, a one-second poll). Absent (an older ccquota) = the verified
+	// operation, as before.
+	LocalDispatch bool `json:"local_dispatch"`
 }
 
 // AfterPickHeader carries, on a placement's answer, the milliseconds the hub
@@ -431,7 +437,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
 		return
 	}
-	if pl.FleetID == fleetID && req.Dispatch == nil {
+	if pl.FleetID == fleetID && (req.Dispatch == nil || req.LocalDispatch) {
 		s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine), now)
 		writeJSON(w, http.StatusOK, map[string]any{"local": true, "placement": pl, "dispatch": req.Dispatch})
 		return

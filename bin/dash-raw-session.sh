@@ -657,7 +657,11 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   # line (fleet_hub_place's one stderr note — `placement refused: HTTP 409 — …`):
   # kept, so a refusal says THAT, never a guessed 「hub unreachable」 (T675)
   _place_err=$(mktemp "${TMPDIR:-/tmp}/fleet-place-err.XXXXXX") || _place_err=/dev/null
+  # FLEET_PLACE_LOCAL_DISPATCH (T716): an accepted dispatch the hub places HERE
+  # is answered LOCAL and opened by this run, not sent back through this
+  # machine's node (a second run of this script, a 1 s poll)
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
+    FLEET_PLACE_LOCAL_DISPATCH="${FLEET_PLACE_LOCAL_DISPATCH:-1}" \
     FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
     fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
   fleet_timing_at placed   # the hub's placement answered (T716; nothing without a ↵)
@@ -685,9 +689,12 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
       refuse "raw: scratch 每台机器都拒绝了: ${_why:-no reason given}"
       [ -n "$CAP_HELD" ] && exit 2; exit 1 ;;
     0:REMOTE\ *)
-      read -r _ _m _op _st _w <<<"$_pv"
+      read -r _ _m _op _st _w _wid _ <<<"$_pv"
       if [ "$_st" = 'done' ]; then
         printf 'dash-raw-session: scratch → %s 已开窗 %s (hub operation %s) — %s\n' "$_m" "$_w" "$_op" "$_why" >&2
+        # a 看台 goes to it there (T716): `REMOTE <machine> <worker_id> <window>`,
+        # the line --print gives instead of a window here
+        [ "$PRINT_WIN" = 1 ] && [ -n "${_wid:-}" ] && printf 'REMOTE\t%s\t%s\t%s\n' "$_m" "$_wid" "$_w"
       else
         printf 'dash-raw-session: scratch → %s (hub operation %s, %s) — %s\n' "$_m" "$_op" "$_st" "$_why" >&2
       fi

@@ -31,7 +31,7 @@ import (
 //	0  LOCAL <machine>\t<reason>                     open it here, as always
 //	0  REMOTE <machine> <operation_id> <status>\t<reason>
 //	                                                 the hub sent the start there
-//	0  REMOTE <machine> <operation_id> done <window>\t<reason>
+//	0  REMOTE <machine> <operation_id> done <window> [<worker_id>]\t<reason>
 //	                                                 ... and a window opened there
 //	3  HELD <machine>\t<message>                     the issue is leased elsewhere
 //	4  REFUSED <code>\t<message>                     no machine can take it (or
@@ -193,6 +193,12 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	if *as != "" {
 		ask["as"] = *as
 	}
+	// The spawner opens an accepted dispatch here itself when the hub picks
+	// this machine (claude-fleet T716) — said through the environment, so a
+	// script that predates it asks as it always did.
+	if os.Getenv("FLEET_DISPATCH") != "" && os.Getenv("FLEET_PLACE_LOCAL_DISPATCH") == "1" {
+		ask["local_dispatch"] = true
+	}
 	if *bodyFile != "" {
 		if rest[1] != "scratch" {
 			return 2, errors.New("--body-file is for a scratch start")
@@ -264,6 +270,9 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 			Exit   *int   `json:"exit"`
 			Stderr string `json:"stderr1"`
 			Window string `json:"window"`
+			// WorkerID: the opened session's, so a 看台 can go to it on that
+			// machine (claude-fleet T716) — the 6th word of a done REMOTE line
+			WorkerID string `json:"worker_id"`
 		} `json:"outcome"`
 		Error struct {
 			Code    string `json:"code"`
@@ -324,8 +333,12 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 			if win == "" {
 				win = "-"
 			}
-			fmt.Fprintf(stdout, "REMOTE %s %s done %s\t%s\n", out.Placement.Machine, out.Operation.ID,
-				oneLine(win), oneLine(out.Placement.Reason))
+			wid := ""
+			if f := strings.Fields(oc.WorkerID); len(f) == 1 {
+				wid = " " + f[0]
+			}
+			fmt.Fprintf(stdout, "REMOTE %s %s done %s%s\t%s\n", out.Placement.Machine, out.Operation.ID,
+				oneLine(win), wid, oneLine(out.Placement.Reason))
 			return 0, nil
 		case (oc.State == "refused" || oc.State == "failed") && oc.Exit != nil && *oc.Exit > 0:
 			fmt.Fprintf(stdout, "DECLINED %s %s %d\t%s\n", out.Placement.Machine, out.Operation.ID,

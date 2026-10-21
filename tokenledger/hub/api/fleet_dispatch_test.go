@@ -143,3 +143,34 @@ func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
 		})
 	}
 }
+
+// An asker that opens an accepted dispatch itself (claude-fleet T716,
+// local_dispatch) is answered LOCAL when the hub picks it: no operation is sent
+// back to the same machine, the accepted envelope rides the answer; a remote
+// pick is still the one verified operation.
+func TestNodeLocalDispatchAnswersLocal(t *testing.T) {
+	h, first, target, f5, f4 := twoNodesCaps(t, control.CapLaunch)
+	target.setOpGet(startedFixture)
+	input := map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f4.FleetID,
+		"coding_agent": "codex", "idempotency_key": "node-local", "local_dispatch": true}
+	status, out := placeCall(t, h, h.tokens["mac-c"], input)
+	if status != 200 || out["local"] != true {
+		t.Fatalf("placement: %d %v", status, out)
+	}
+	d := out["dispatch"].(map[string]any)
+	if d["resolved_agent"] != "codex" || d["task"] == "" {
+		t.Fatalf("identity lost: %v", d)
+	}
+	if first.count()+target.count() != 0 {
+		t.Fatal("a local dispatch sent an operation back to its own machine")
+	}
+	// the other machine asking with the same flag: picked elsewhere ⇒ one operation, as before
+	input = map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID,
+		"coding_agent": "codex", "idempotency_key": "node-remote", "local_dispatch": true}
+	if status, out = placeCall(t, h, h.tokens["mac-d"], input); status != 200 || out["local"] != false {
+		t.Fatalf("remote placement: %d %v", status, out)
+	}
+	if first.count()+target.count() != 1 {
+		t.Fatal("a remote dispatch must be exactly one verified operation")
+	}
+}
