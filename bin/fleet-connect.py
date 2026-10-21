@@ -61,6 +61,10 @@ remembered line first, whatever its age — only when it does not answer is ever
 route measured again, so a slow network does not wait out a measurement on
 every drop.
 
+The thin client's reconnect page (D4NW): FLEET_CONNECT_PROGRESS names a file
+this appends one JSON line to per route measured / skipped and for the route
+taken; FLEET_CONNECT_SSH_TIMEOUT (15) is ssh's ConnectTimeout.
+
 The shell's seams (claude-fleet#1628): FLEET_CONNECT_ROUTE_FILE names a file
 this writes the chosen route to just before ssh starts — one JSON line,
 {"machine", "kind": "direct"|"relay", "name"} — so the pane knows it is on the
@@ -1011,6 +1015,32 @@ def decided(rows, probes):
                                   for r in rows if not r.get("done"))
 
 
+def progress(**kw):
+    """One JSON line on FLEET_CONNECT_PROGRESS (claude-fleet D4NW): the thin
+    client's reconnect page draws each route's result as it comes in — a row
+    measured ({name, label, ms | err}), skipped ({name, label, skip}), the one
+    taken ({use, label}). No variable ⇒ nothing written; a write that fails
+    costs nothing."""
+    path = os.environ.get("FLEET_CONNECT_PROGRESS")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(kw, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def progress_row(r):
+    lab = route_label(r.get("kind") or "direct", r.get("name") or "")
+    if r.get("skip"):
+        progress(name=r.get("name") or "", label=lab, skip=str(r["skip"]))
+    elif r.get("ms"):
+        progress(name=r.get("name") or "", label=lab, ms=int(median(r["ms"])))
+    else:
+        progress(name=r.get("name") or "", label=lab, err=(r.get("errors") or ["?"])[-1][:60])
+
+
 def measure(rows, hub, token, probes, timeout):
     """Fill each row's ms / errors: routes in parallel, a route's handshakes in
     sequence (so the relay never holds more than one stream open). Returns as
@@ -1026,7 +1056,11 @@ def measure(rows, hub, token, probes, timeout):
             except (Refused, OSError, EOFError, ValueError) as e:
                 r["errors"].append(str(e) or e.__class__.__name__)
         r["done"] = True
+        progress_row(r)
     live = [r for r in rows if not r.get("skip")]
+    for r in rows:
+        if r.get("skip"):
+            progress_row(r)
     for r in live:
         r.pop("done", None)
         threading.Thread(target=run, args=(r,), daemon=True).start()
@@ -1267,11 +1301,17 @@ def write_host_keys(alias, keys):
     return True
 
 
+def ssh_timeout():
+    """ssh's ConnectTimeout: FLEET_CONNECT_SSH_TIMEOUT (15) — the thin client's
+    reconnect asks for less (D4NW): a dark route is given up sooner."""
+    return max(1, int(env_num("FLEET_CONNECT_SSH_TIMEOUT", 15)))
+
+
 def ssh_command(machine, route, login, hub, ssh_opts=(), known_hosts=False):
     """known_hosts: write_known_hosts wrote this machine's keys — ssh checks
     ~/.ssh/fleet-known-hosts first, then the person's own known_hosts."""
     alias = machine.get("alias") or machine.get("hostname")
-    cmd = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=15"]
+    cmd = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=%d" % ssh_timeout()]
     if known_hosts:
         # ~ as ssh expands it: a home with a space would split an absolute path
         mine = os.environ.get("FLEET_KNOWN_HOSTS") or "~/.ssh/fleet-known-hosts"
@@ -1304,7 +1344,7 @@ def ssh_command(machine, route, login, hub, ssh_opts=(), known_hosts=False):
         cmd[2] = "HostKeyAlias=" + palias
         if not known_hosts:
             cmd += ["-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine]
-        inner = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=15",
+        inner = ["ssh", "-o", "HostKeyAlias=fleet-" + alias, "-o", "ConnectTimeout=%d" % ssh_timeout(),
                  "-o", "UserKnownHostsFile=%s ~/.ssh/known_hosts" % mine, "-o", "BatchMode=yes"]
         if os.path.exists(key):
             inner += ["-i", key, "-o", "IdentitiesOnly=yes"]
@@ -1614,6 +1654,7 @@ def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=(), pin="
             out["probe"] = [[route["host"], int(route.get("port") or 22)]]
         if route_mode() == "class":
             out["net"] = net_key()   # thin.log's net= (claude-fleet#3074)
+        progress(use=route["name"], label=route_label(route["kind"], route["name"]))
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
         sys.stdout.flush()
         return 0

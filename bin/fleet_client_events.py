@@ -14,6 +14,9 @@ the doctor read: what the line did, as events of METADATA only —
              reconnect; reason = home:<the hub's code> · pick · no_fleet ·
              opening · first_session · never_up · <ssh's word>
     rehome   the home changed (home → to), or `no_other` (back to the same)
+    net      this computer's network changed (D4NW) — reason = lan · hotspot ·
+             other · none, never an address; the next `up` says reason=net and
+             its ms are from the change
     offline  three tries failed and the hub did not answer either
     quit     the person ended it (rc)
 
@@ -52,7 +55,7 @@ import sys
 import time
 
 BIN = os.path.dirname(os.path.abspath(__file__))
-EVENTS = ("start", "up", "drop", "fail", "rehome", "offline", "quit")
+EVENTS = ("start", "up", "drop", "fail", "rehome", "offline", "quit", "net")
 PHASES = ("", "start", "reconnect")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")
 REASON_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,47}$")
@@ -312,6 +315,18 @@ def _reasons(d, limit=4):
     return out + (" …" if len(items) > limit else "") if out else "-"
 
 
+def net_words(t):
+    """D4NW: 换网 · 换网后恢复 p50 / p95 · 断线后人手退出 — "" when none of it happened."""
+    out = ""
+    if t.get("net_changes"):
+        out += " · 换网 %d 次" % t["net_changes"]
+        if t.get("net_reconnects"):
+            out += "，换网后恢复 p50 %s / p95 %s" % (_secs(t.get("net_p50_ms")), _secs(t.get("net_p95_ms")))
+    if t.get("manual_after_drop"):
+        out += " · 断线后人手退出 %d 次" % t["manual_after_drop"]
+    return out
+
+
 def summary_row(rep):
     """(LEVEL, words) — the doctor's `clients` row off the hub's answer."""
     t = rep.get("total") or {}
@@ -329,6 +344,7 @@ def summary_row(rep):
         words += " · 重连没连上 %d 次" % t.get("reconnect_fails")
     if t.get("drops"):
         words += " · 断线原因 " + _reasons(t.get("drop_reasons"), 3)
+    words += net_words(t)
     words += " — 详表 fleet doctor --clients"
     bad = t.get("starts_failed", 0) > 0 or int(t.get("reconnect_p90_ms") or 0) > 60000
     return ("WARN" if bad else "PASS"), words
@@ -367,6 +383,8 @@ def table(rep):
     lines.append("  合计：启动 %d · 断线 %d · 重连 p50 %s / p90 %s（%d 次）· 起不来 %d 次（%d 次启动）" % (
         t.get("starts", 0), t.get("drops", 0), _secs(t.get("reconnect_p50_ms")), _secs(t.get("reconnect_p90_ms")),
         t.get("reconnects", 0), t.get("fails", 0), t.get("starts_failed", 0)))
+    if net_words(t):
+        lines.append("  " + net_words(t).lstrip(" ·"))
     lines.append("  起不来 = 启动后、第一次画出看台前没连上的一次连接（括号里是一次都没连上的启动数）；"
                  "重连 = 断线到看台重新画出来；重连没连上 = 断线后没连上的一次连接")
     return "\n".join(lines)

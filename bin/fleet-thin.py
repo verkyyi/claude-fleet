@@ -58,8 +58,8 @@ Each connection:
 
 When it ends: ⌘Q (quit) or ssh exit 0 (a detach) — the iTerm2 profile goes
 back (约定 11) and this exits 0. Anything else — the line dropped, the lid
-closed — one line 「和 <home> 的连接断了，N 秒后重连（第 k 次）」 and a reconnect
-after 1 · 2 · 4 … 30 s to the SAME view (`--resume`). Three connections in a
+closed — the RECONNECT PAGE (D4NW, below) and a reconnect after 1 · 2 · 4 · 8 ·
+10 s, then every 10 s, never giving up, to the SAME view (`--resume`). Three connections in a
 row that never came up (no valid 7502 and gone within FLEET_THIN_UP_SECS):
 the hub is asked for another online machine to be home (`--avoid <home>`) —
 unless the hub does not answer either (issue #3007): then it is this computer's
@@ -68,8 +68,26 @@ to go to (`--avoid` exits 1): back to the same home, its view and the backoff
 (issue #4829) — never asking the hub for nothing until the person gives up.
 The screen is held through all of it (T690): a drop after the view was drawn
 turns mouse reporting off but never leaves the alternate screen — the view's
-last picture stays, its top row overwritten (reverse video) with 「正在重连 · …」,
-and ssh's own complaints are kept off it until the next view draws. A line
+last picture stays, and ssh's own complaints are kept off it until the next
+view draws. Over it, the reconnect page (D4NW) — every way between two views
+lands on it (a drop, a start that failed, 换家, the home restarting): a bar over
+the top row (reverse video) and a box in the middle, redrawn every second by a
+thread — 断开 m:ss, the network (本机 <address>, 刚变了 after a change), what it
+is doing (第 k 次 · N 秒后再试 · 正在找路… · 正在连 <route> · 已 N 秒), each route's
+result as fleet-connect measures it (FLEET_CONNECT_PROGRESS) and the keys.
+Between two connections the terminal sends no signals: ↵ · space · ⌃C retry
+now, q (alone) leaves, s opens the home's command line; nothing is sent to the
+session. Narrower than 60 columns only the bar; no terminal, one line per change.
+The view back: 「已恢复 · 走 <route> · 断了 N 秒」 over its top row for
+FLEET_THIN_BANNER_SECS (5), then its pty one row shorter and back so the home
+repaints it. A NetWatch thread reads the address the default route leaves from
+every FLEET_THIN_NET_SECS (1) (a UDP socket connected to TEST-NET: no packet, no
+process); a change cuts short any wait, pick or ssh, makes the next pick
+measure every route (FLEET_CONNECT_RETEST=1, never the old line first) and ends
+a live view whose line rode the old default route at once (thin.log `net`,
+`end=netchange`; a tailnet line is knocked on first, FLEET_THIN_NET_CHECK_TMO
+1.5 s). A reconnect's pick is cut at FLEET_THIN_PICK_SECS (30), its ssh
+ConnectTimeout FLEET_THIN_SSH_TIMEOUT (10). A line
 watch (LineWatch: a TCP connect every FLEET_THIN_PROBE_SECS to the last route's
 address — fleet-connect --argv's `probe` — and the hub) runs from the drop to
 the next view: the moment the line goes from no answer to an answer the
@@ -82,10 +100,10 @@ top line says 「家机器 X 连不上，已自动换到 Y」 for 60 s.
 A home that answers but whose 看台 keeps breaking (EPIC T651 C4): ssh got
 through (not ssh's 255, not rc 3) yet the view never came up, or ended with
 a code that is not a leave (0 · 129) within FLEET_THIN_CRASH_SECS (60) —
-FLEET_THIN_VIEW_FAILS (3) of those in a row and it stops reconnecting into it
-(and never 换家: the home answers): one line 「看台连续 3 次没起来 — 已把你放在
-<home> 的命令行」 + how back, then a plain interactive ssh on the same route
-and certificate, the home's login shell in $HOME with FLEET_NO_VIEW=1
+FLEET_THIN_VIEW_FAILS (3) of those in a row and the page says 「看台连续 3 次没
+起来 — 按 s 进家机器命令行」 and keeps trying (never 换家: the home answers; D4NW —
+it no longer throws you there by itself); s: a plain interactive ssh on the same
+route and certificate, the home's login shell in $HOME with FLEET_NO_VIEW=1
 (fleet-login.zsh starts no 看台 under it); once that shell ends, the 看台 again.
 No fleet of yours there (issue #3054): the home answers `no fleet session is
 live` (rc 3) — a newcomer whose only login is the computer they type on — or the
@@ -96,7 +114,8 @@ machine the session opened on, onto it (`--want <worker_id>`); a refusal that
 heals by itself — the machine's credentials not settled, its tmux restarting,
 its node between two beats, the hub's own 5xx — is waited out, said on the screen, for
 FLEET_THIN_FIRST_WAIT s (issue #4829); a failure is three lines — 没开出来 · 原因 ·
-下一步 (who to ask) — and exit 1.
+下一步 (who to ask) — and exit 1, for a newcomer only: a terminal that has had a
+view this start stays on the page and keeps trying (D4NW).
 Between two connections a new client version (the install's .client-version,
 `fleet-client-update.sh start` → 3) is exec'd in place, view and home kept.
 While a connection is up (issue #4916) the loop asks too: every
@@ -126,14 +145,17 @@ byte back, first_ms = spawn → the first valid `cur`: the view drawn; net =
 `end=<word>` on a connection that did not end 0 — what ssh said last: timeout ·
 reset · broken-pipe · closed-remote · closed · unreachable · refused ·
 connect-timeout, empty when it said none of them, #4828) · rehome · back (the line came back: a wait cut short, T690) ·
-upload · show · exec · quit · shell (the home's command line, C4) · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
+upload · show · exec · quit · shell (the home's command line, C4: offered · opened · ended) ·
+net (the network changed / a live line ended with it, D4NW) · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
 The same lifecycle goes to the hub as connection events (T689,
-bin/fleet_client_events.py — start · up · drop · fail · rehome · offline · quit,
+bin/fleet_client_events.py — start · up · drop · fail · rehome · offline · quit · net,
 metadata only, spooled and sent on a thread; FLEET_CLIENT_EVENTS=0 off).
 
-Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
+Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,10"),
+FLEET_THIN_PICK_SECS (30) · FLEET_THIN_SSH_TIMEOUT (10) · FLEET_THIN_NET_SECS (1) ·
+FLEET_THIN_NET_WATCH=0 · FLEET_THIN_NET_CHECK_TMO (1.5) · FLEET_THIN_BANNER_SECS (5): the reconnect page (D4NW),
 FLEET_THIN_ALIVE_SECS (5) × FLEET_THIN_ALIVE_MAX (3): the keepalive — a line
 silent that long is given up (#4828),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_VIEW_FAILS (3), FLEET_THIN_CRASH_SECS (60),
@@ -150,6 +172,7 @@ FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_FETCH_SECS (600), FLEET_THIN_LOG. Seams 
 FLEET_THIN_FETCH_CMD (in place of the `--fetch` ssh; the id appended),
 FLEET_THIN_HUB_PROBE_CMD (in place of asking the hub's /version before 换家),
 FLEET_THIN_LINE_PROBE_CMD (in place of the line watch's TCP connects; exit 0 = answers),
+FLEET_THIN_NET_KEY_CMD (in place of NetWatch's read: its stdout is the network key),
 FLEET_CLIENT_LEASE_CMD / FLEET_THIN_PLACE_CMD / FLEET_THIN_ACCOUNT_CMD (the
 first session's lease, place and the hub's account word).
 Standard library only.
@@ -166,6 +189,7 @@ import re
 import select
 import shlex
 import signal
+import struct
 import subprocess
 import sys
 import termios
@@ -191,6 +215,32 @@ def quiet(attrs):
     a = list(attrs)
     a[3] &= ~(termios.ECHO | termios.ECHONL | getattr(termios, "ECHOCTL", 0))
     return a
+
+
+def quiet_keys(attrs):
+    """Between two connections (D4NW): echo off, no line editing and no signals
+    — the reconnect page reads each key as it comes, ⌃C included (a byte: retry
+    now, never a KeyboardInterrupt that ends the loop)."""
+    a = quiet(attrs)
+    a[3] &= ~(termios.ICANON | termios.ISIG)
+    return a
+
+
+def wide(s):
+    """Terminal cells of s: CJK and the like take two."""
+    return sum(2 if ord(ch) > 0x2E7F else 1 for ch in s)
+
+
+def cut(s, w):
+    """s cut / padded to exactly w cells."""
+    out, n = [], 0
+    for ch in s:
+        c = 2 if ord(ch) > 0x2E7F else 1
+        if n + c > w:
+            break
+        out.append(ch)
+        n += c
+    return "".join(out) + " " * (w - n)
 
 
 def env_num(name, default):
@@ -335,11 +385,18 @@ def ms(t0, t1=None):
 # the home and the line — fleet-connect.py --argv (约定 4)
 # ---------------------------------------------------------------------------
 
-def pick(home="", avoid="", reconnect=False, restart=None):
+def pick(home="", avoid="", reconnect=False, restart=None, retest="", limit=300.0, progress="", said=None):
     """(fleet-connect --argv's JSON, pick_ms, why) — the certificate renewed, the
     home asked, the line picked; (None, ms, why) when there is none. restart():
-    True while it runs ⇒ the line just came back (LineWatch, T690): a pick that
-    started on a dead network is waiting out its timeouts — kill it and ask again."""
+    True while it runs ⇒ cut it short (the line came back — LineWatch, T690 — the
+    network changed, a key on the reconnect page — D4NW): (None, ms, CUT), and
+    the loop asks again at once. retest: FLEET_CONNECT_RETEST ("1" after a
+    network change: every route measured, never the old one first; else "last"
+    on a reconnect). limit: seconds before it counts as a failure. progress: the
+    FLEET_CONNECT_PROGRESS file the page reads each route's result from. said(line):
+    its stderr a line at a time (the page shows the last); past 4 lines (a scan, a
+    renewal's words) said(None) is called once and the rest goes to the terminal
+    as before, the limit back at 300 s."""
     seam = os.environ.get("FLEET_THIN_ARGV_CMD")
     cmd = shlex.split(seam) if seam else [sys.executable or "python3", os.path.join(BIN, "fleet-connect.py"), "--argv"]
     if home:
@@ -347,31 +404,48 @@ def pick(home="", avoid="", reconnect=False, restart=None):
     if avoid:
         cmd += ["--avoid", avoid]
     env = dict(os.environ)
-    if reconnect:
+    if retest:
+        env["FLEET_CONNECT_RETEST"] = retest
+    elif reconnect:
         env["FLEET_CONNECT_RETEST"] = "last"   # the remembered line first (#2886)
+    if reconnect:
+        # a dark route given up sooner on a reconnect (D4NW)
+        env.setdefault("FLEET_CONNECT_SSH_TIMEOUT", "%d" % env_num("FLEET_THIN_SSH_TIMEOUT", 10))
+    if progress:
+        env["FLEET_CONNECT_PROGRESS"] = progress
     t0 = time.time()
+    lim = {"secs": limit}
     try:
-        # stderr stays the terminal's: a scan or a renewal speaks there
-        while True:
-            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, env=env)
-            box = {}
-            rd = threading.Thread(target=lambda: box.setdefault("out", p.stdout.read()), daemon=True)
-            rd.start()
-            t1 = time.time()
-            while rd.is_alive() and time.time() - t1 < 300:
-                rd.join(0.1)
-                if restart and restart() and rd.is_alive():
-                    break
-            if rd.is_alive():
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE if said else None, env=env)
+        box = {}
+        rd = threading.Thread(target=lambda: box.setdefault("out", p.stdout.read()), daemon=True)
+        rd.start()
+        if said:
+            def errs():
+                n = 0
+                for raw in iter(p.stderr.readline, b""):
+                    n += 1
+                    if n == 5:
+                        said(None)          # a long speech: the terminal's again
+                        lim["secs"] = max(lim["secs"], 300.0)
+                    if n >= 5:
+                        write_out(raw.replace(b"\n", b"\r\n"))
+                    else:
+                        said(raw.decode("utf-8", "replace").strip())
+            threading.Thread(target=errs, daemon=True).start()
+        while rd.is_alive() and time.time() - t0 < lim["secs"]:
+            rd.join(0.1)
+            if restart and restart() and rd.is_alive():
                 p.kill()
                 p.wait()
                 rd.join(1)
-                if time.time() - t1 >= 300:
-                    raise subprocess.TimeoutExpired(cmd, 300)
-                tlog("back", home or "-", "", ms(t1), "", "", "", "the line came back: asking again")
-                continue
+                return None, ms(t0), CUT
+        if rd.is_alive():
+            p.kill()
             p.wait()
-            break
+            rd.join(1)
+            raise subprocess.TimeoutExpired(cmd, lim["secs"])
+        p.wait()
     except (OSError, subprocess.SubprocessError) as e:
         return None, ms(t0), str(e)
     out = box.get("out") or b""
@@ -387,6 +461,7 @@ def pick(home="", avoid="", reconnect=False, restart=None):
 
 
 OPENING = "opening"   # pick()'s why: the hub is opening this person's first login
+CUT = "cut"           # pick()'s why: cut short — the line came back, the network changed, a key (D4NW)
 NO_FLEET = 3          # fleet-remote-view.sh attach --thin: no fleet session is live there
 # A machine's refusal that heals by itself (issue #4829): the hub's placement
 # words (tokenledger fleet_write.go) for a machine coming up — its credentials
@@ -500,9 +575,10 @@ class LineWatch(threading.Thread):
     along (the home's view broke, not the network) leaves `back` at 0: the
     backoff as before. FLEET_THIN_LINE_PROBE_CMD is the seam (exit 0 = answers)."""
 
-    def __init__(self, targets):
+    def __init__(self, targets, on_back=None):
         threading.Thread.__init__(self, daemon=True)
         self.targets, self.ok, self.back, self.stopped = targets, None, 0, threading.Event()
+        self.on_back = on_back
 
     def answers(self):
         seam = os.environ.get("FLEET_THIN_LINE_PROBE_CMD")
@@ -526,6 +602,8 @@ class LineWatch(threading.Thread):
             ok = self.answers()
             if ok and self.ok is False:
                 self.back += 1
+                if self.on_back:
+                    self.on_back()
             self.ok = ok
             self.stopped.wait(env_num("FLEET_THIN_PROBE_SECS", 0.5))
 
@@ -548,6 +626,104 @@ def line_targets(j):
     except ValueError:
         pass
     return out
+
+
+_FC = []
+
+
+def connect_mod():
+    """bin/fleet-connect.py, loaded once (its net_key / local_addrs / route_label)."""
+    if not _FC:
+        _FC.append(load("fleet-connect.py", "fleet_connect"))
+    return _FC[0]
+
+
+def route_words(j):
+    """The route of an --argv answer in a person's words (局域网 · 入口直连 · 中转 …)."""
+    r = (j or {}).get("route") or {}
+    if (j or {}).get("local"):
+        return "local"
+    try:
+        return connect_mod().route_label(r.get("kind") or "direct", r.get("name") or "")
+    except Exception:
+        return r.get("name") or ""
+
+
+class NetWatch(threading.Thread):
+    """Has this computer's network changed? (D4NW) — the address its default
+    route leaves from (IPv4, else the IPv6 /64), read every FLEET_THIN_NET_SECS (1) with a
+    UDP socket connected to a public address (no packet is sent, no process is
+    started: the kernel only picks the route). A change — Wi-Fi to a hotspot,
+    the cable out, home again — calls on_change(old, new) and the loop stops
+    trusting the line it was on. FLEET_THIN_NET_KEY_CMD is the seam (its stdout
+    is the key)."""
+
+    PROBES = (("192.0.2.1", 9, 0), ("2001:db8::1", 9, 1))   # TEST-NET: never sent anything
+
+    def __init__(self, on_change):
+        threading.Thread.__init__(self, daemon=True)
+        self.on_change, self.stopped = on_change, threading.Event()
+        self.seam = os.environ.get("FLEET_THIN_NET_KEY_CMD")
+        self.key = self.read()
+
+    def read(self):
+        if self.seam:
+            try:
+                out = subprocess.run(shlex.split(self.seam), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     stdin=subprocess.DEVNULL, timeout=5).stdout
+                return out.decode("utf-8", "replace").strip()
+            except (OSError, subprocess.SubprocessError):
+                return None
+        import socket
+        parts = []
+        for host, port, v6 in self.PROBES:
+            try:
+                with socket.socket(socket.AF_INET6 if v6 else socket.AF_INET, socket.SOCK_DGRAM) as so:
+                    so.connect((host, port))
+                    parts.append(so.getsockname()[0])
+            except OSError:
+                parts.append("")
+        # IPv6 only with no IPv4, and only its /64: a temporary address rotates daily
+        if parts[0]:
+            return parts[0] + "|"
+        return "|" + ":".join(parts[1].split(":")[:4]) if parts[1] else "|"
+
+    def run(self):
+        every = env_num("FLEET_THIN_NET_SECS", 1)
+        while not self.stopped.wait(every):
+            k = self.read()
+            if k is None or k == self.key:
+                continue
+            old, self.key = self.key, k
+            try:
+                self.on_change(old or "", k)
+            except Exception:
+                pass
+
+    def stop(self):
+        self.stopped.set()
+
+
+def net_words(key):
+    """A network key (NetWatch) in a person's words: 本机 <address>, or "" with
+    no default route (no network)."""
+    v4, _, v6 = (key or "").partition("|")
+    if not (v4 or v6):
+        return ""
+    return tr("thin_page_net_fmt", v4 or v6)
+
+
+def net_class(key):
+    """The hub's word for a network (metadata only, never an address): lan ·
+    hotspot (an iPhone / Android tether's well-known ranges) · other · none."""
+    v4, _, v6 = (key or "").partition("|")
+    if not (v4 or v6):
+        return "none"
+    if v4.startswith(("172.20.10.", "192.168.43.", "192.168.42.")):
+        return "hotspot"
+    if v4.startswith(("192.168.", "10.")) or re.match(r"^172\.(1[6-9]|2[0-9]|3[01])\.", v4):
+        return "lan"
+    return "other"
 
 
 def one_shot(argv):
@@ -811,6 +987,27 @@ class Thin:
         self.started = time.time()
         self.ever_up = False    # this start has drawn a view: a failure now is a reconnect's
         self.drop_at = 0.0      # when the line last dropped (the next up's reconnect time)
+        # the reconnect page (D4NW): one page for every way between two views
+        self.pg = {}            # what it says: phase, attempt, wait_end, route, t0, note …
+        self.page_on = False    # drawn (over the held picture) until the next view draws
+        self.page_tty = os.isatty(1)
+        self.page_last = ""     # no terminal to draw on: the last line said
+        self.out_lock = threading.RLock()
+        self.pager = None
+        self.down_since = 0.0   # the page's 断开 m:ss: from the first drop until a view draws again
+        self.kick_why = ""
+        self.kicks = 0          # cut short whatever is being waited out: the line back, the network changed, a key
+        self.quit_req = False   # q on the page
+        self.shell_req = False  # s on the page: the home's command line
+        self.net = None         # NetWatch
+        self.net_key = ""
+        self.net_changed = False   # since the last view: every route measured again, never the old one first
+        self.net_at = 0.0
+        self.net_cut = False    # this connection was ended by a network change
+        self.banner = None      # (text, until): 「已恢复」 over the view's top row
+        self.nudge = 0          # the view redrawn after the banner: 0 · 1 shrunk · 2 done
+        self.progress = ""      # FLEET_CONNECT_PROGRESS: each route's result for the page
+        self.broke_note = ""    # 看台连续 N 次没起来: said on the page until the next view
 
     def ev(self, kind, **f):
         """One connection event for the hub — metadata only; never blocks."""
@@ -831,8 +1028,12 @@ class Thin:
             # right here — the remote command runs as a child, never an ssh to itself
             m = load("fleet-connect.py", "fleet_connect").local_machine()
             return {"local": True, "machine": m["alias"], "argv": []}, "0", ""
-        w, n0 = self.watch, (self.watch.back if self.watch else 0)
-        return pick(self.home, self.avoid, reconnect, restart=(lambda: w.back > n0) if w else None)
+        k0 = self.kicks
+        retest = "1" if self.net_changed else ""
+        lim = env_num("FLEET_THIN_PICK_SECS", 30) if reconnect else 300.0
+        return pick(self.home, self.avoid, reconnect, restart=lambda: self.cut_check(k0), retest=retest,
+                    limit=lim, progress=self.progress if self.page_on else "",
+                    said=self.pick_said if self.page_on and self.page_tty else None)
 
     def remote(self, token, route):
         rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
@@ -1091,7 +1292,18 @@ class Thin:
     def connect_once(self, reconnect):
         """(rc, came_up, reason)."""
         t_pick = time.time()
+        self.net_cut = False
+        if self.page_on:
+            if self.progress:
+                try:
+                    open(self.progress, "w").close()
+                except OSError:
+                    pass
+            self.page(phase="pick", t0=t_pick, routes=None, use="", said="")
         j, pick, why = self.argv(reconnect)
+        if why == CUT:
+            tlog("back", self.home or "-", "", pick, "", "", "", "cut short: asking again")
+            return 1, False, CUT
         if j is None:
             tlog("connect", self.home or "-", "", pick, "", "", 1, why)
             hc = "" if why == OPENING else home_code(t_pick)
@@ -1112,14 +1324,19 @@ class Thin:
         cmd = self.command(j, extra, self.remote(token, route))
         t0 = time.time()
         self.drawn_at = (home, route, t0)
+        self.route_words = route_words(j)
+        if self.page_on:
+            self.page(phase="ssh", t0=t0, route=self.route_words)
         rc, first_byte, first_view = self.pump(cmd, token, reconnect)
         up = first_view is not None or time.time() - t0 >= env_num("FLEET_THIN_UP_SECS", 10)
         tlog("connect", home, route, pick, ms(t0, first_byte) if first_byte else "",
              ms(t0, first_view) if first_view else "", rc, "quit" if self.quit else ("up" if up else "never up"),
-             net=str(j.get("net") or ""), end="" if rc == 0 else ssh_end(self.tail))
+             net=str(j.get("net") or ""), end="" if rc == 0 else ("netchange" if self.net_cut else ssh_end(self.tail)))
         if up and not self.quit and not self.updating and rc != 0:
             self.drop_at = time.time()
-            self.ev("drop", home=home, route=route, rc=rc, ms=ms(t0), reason=ssh_end(self.tail) or "rc%d" % rc)
+            self.down_since = self.down_since or self.drop_at
+            self.ev("drop", home=home, route=route, rc=rc, ms=ms(t0),
+                    reason="netchange" if self.net_cut else (ssh_end(self.tail) or "rc%d" % rc))
         elif not up and not self.quit and not self.updating:
             self.ev_fail("no_fleet" if rc == NO_FLEET else (ssh_end(self.tail) or "never_up"), rc, home, route)
         if up:
@@ -1239,16 +1456,18 @@ class Thin:
             only once the view draws (it enters the alternate screen, says `cur`,
             or writes more than a screen's worth): ssh's 「connect … unreachable」
             never scrolls over the picture (T690)."""
-            if not self.held or not b:
-                write_out(b)
-                return
-            held.extend(b)
-            if b"\x1b[?1049h" in held or len(held) > 8192:
-                self.held = False
-                write_out(bytes(held))
-                held.clear()
+            with self.out_lock:
+                if not self.held or not b:
+                    write_out(b)
+                    return
+                held.extend(b)
+                if b"\x1b[?1049h" in held or len(held) > 8192:
+                    self.held = self.page_on = False
+                    write_out(bytes(held))
+                    held.clear()
         self.emit_held = lambda: (write_out(bytes(held)), held.clear()) if held else None
-        spawned, back0 = time.time(), (self.watch.back if self.watch else 0)
+        spawned, back0 = time.time(), self.kicks
+        self.banner, self.nudge = None, 0
         out_wait = 0.0
         st = None
         if tty_in:
@@ -1264,12 +1483,15 @@ class Thin:
                     st = s_
                     break
                 tmo = 0.02 if (out_wait or (uploads and uploads.busy)) else 0.5
-                if (reconnect and first_byte is None and not self.cut_back and self.watch
-                        and self.watch.back > back0 and time.time() - spawned > 1):
+                if (not self.cut_back and self.held and self.kicks > back0
+                        and (time.time() - spawned > 1 or self.quit_req or self.shell_req)):
                     # an ssh started on the dead network waits out its ConnectTimeout:
-                    # the line is back — cut it and connect again now (T690)
+                    # the line is back, the network changed or a key asked — cut it and
+                    # connect again now (T690, D4NW)
                     self.cut_back = True
-                    tlog("back", self.home or "-", "", "", ms(spawned), "", "", "the line came back: cutting the ssh")
+                    tlog("back", self.home or "-", "", "", ms(spawned), "", "",
+                         {"key": "a key on the page: cutting the ssh", "net": "the network changed: cutting the ssh"}
+                         .get(self.kick_why, "the line came back: cutting the ssh"))
                     try:
                         os.killpg(pid, signal.SIGKILL)
                     except OSError:
@@ -1279,6 +1501,8 @@ class Thin:
                 except InterruptedError:
                     continue
                 now = time.time()
+                if self.banner and now >= self.banner[1] and self.nudge < 2:
+                    self.redraw_nudge(master)   # the 「已恢复」 line gone: the view draws its top row again
                 if out_wait and now - out_wait > 0.05:
                     emit(osc.flush())
                     out_wait = 0.0
@@ -1309,8 +1533,9 @@ class Thin:
                                 uploads.cancel("会话目标已改变，附件未插入")
                             if first_view is None:
                                 first_view = now
-                                self.drawn, self.held = True, False
-                                self.emit_held()
+                                with self.out_lock:
+                                    self.drawn, self.held, self.page_on = True, False, False
+                                    self.emit_held()
                                 self.stop_watch()
                                 # written now, not when the connection ends: a
                                 # reader (the onboarding drill, #3155) learns the
@@ -1319,12 +1544,18 @@ class Thin:
                                 tlog("drawn", h or "-", rt, "", ms(t0, first_byte) if first_byte else "",
                                      ms(t0, now), "", "")
                                 if self.drop_at:
-                                    self.ev("up", phase="reconnect", home=h, route=rt, ms=ms(self.drop_at, now))
+                                    # after a network change: timed from it, said as such (D4NW)
+                                    netd = self.net_at >= self.drop_at - 1
+                                    since = max(self.drop_at, self.net_at) if netd else self.drop_at
+                                    self.ev("up", phase="reconnect", home=h, route=rt, ms=ms(since, now),
+                                            reason="net" if netd else "")
+                                    self.recovered(now - self.drop_at)
                                 elif not self.ever_up:
                                     self.ev("up", phase="start", home=h, route=rt, ms=ms(self.started, now))
                                 else:
                                     self.ev("up", home=h, route=rt, ms=ms(t0, now))
                                 self.ever_up, self.drop_at = True, 0.0
+                                self.net_changed, self.broke_note, self.pg, self.down_since = False, "", {}, 0.0
                         elif kind == "quit":
                             self.quit = True
                             pending.clear()
@@ -1348,6 +1579,9 @@ class Thin:
                     if not data:
                         # the terminal is gone: as a SIGHUP
                         self.hangup(signal.SIGHUP, None)
+                    if self.page_on:
+                        self.page_key(data)   # the reconnect page's keys (D4NW): never the session's
+                        continue
                     if reconnect and first_byte is None and b"\x03" not in data:
                         continue   # the line still down: a mouse report / a key goes nowhere (⌃C still stops the ssh)
                     if pending and b"\x03" in data:
@@ -1386,16 +1620,18 @@ class Thin:
         return rc_of(st), first_byte, first_view
 
     # -- signals ----------------------------------------------------------
-    def mute(self):
+    def mute(self, signals=False):
         """Between two connections (issue #3007's drill): the terminal echoes
         nothing — a mouse report or a key typed while the line is down would
-        otherwise print as garbage — and ⌃C still stops the loop (ISIG kept).
-        What was typed meanwhile is dropped before the next connection starts
-        (pump's flush), never sent to the session."""
+        otherwise print as garbage. Each key is the reconnect page's (D4NW):
+        ⌃C is a byte (retry now), not a signal that ends the loop — signals=True
+        (the first-session road, which still ends on ⌃C) keeps ISIG and the line
+        discipline. What was typed meanwhile is dropped before the next
+        connection starts (pump's flush), never sent to the session."""
         if self.attrs is None:
             return
         try:
-            termios.tcsetattr(0, termios.TCSANOW, quiet(self.attrs))
+            termios.tcsetattr(0, termios.TCSANOW, quiet(self.attrs) if signals else quiet_keys(self.attrs))
         except termios.error:
             pass
 
@@ -1431,6 +1667,8 @@ class Thin:
                 pass
         if self.fwd:
             self.fwd.close_all()
+        if self.net is not None:
+            self.net.stop()
         self.restore_tty()
         tlog("end", self.home, "", "", "", "", 128 + n, "signal %d" % n)
         self.ev("quit", home=self.home, rc=128 + n, reason="signal")
@@ -1493,7 +1731,7 @@ class Thin:
         if self.local:
             return
         if self.watch is None:
-            self.watch = LineWatch(line_targets(self.base))
+            self.watch = LineWatch(line_targets(self.base), on_back=lambda: self.kick("back"))
             self.watch.start()
 
     def stop_watch(self):
@@ -1502,31 +1740,277 @@ class Thin:
             self.watch = None
 
     def status(self, text, row=1):
-        """A word between two connections. With the view's picture held (a drop
-        after it was drawn) it is written over that picture's top rows — reverse
-        video, the cursor put back — so nothing scrolls and nothing is cleared;
-        else one line, as before."""
-        line = ("fleet · %s" % text).encode("utf-8", "replace")
-        if self.held:
-            write_out(b"\x1b7\x1b[%d;1H\x1b[0;7m\x1b[2K " % row + line + b" \x1b[0m\x1b8")
-        else:
-            write_out(line + b"\r\n")
+        """A word between two connections: the reconnect page's note (D4NW)."""
+        self.page(note=text) if row == 1 else self.page(note2=text)
 
     def unhold(self):
         """Leave the held picture: the old full reset, before lines that scroll."""
-        if self.held:
-            write_out(RESET)
-            self.held = False
+        with self.out_lock:
+            if self.held:
+                write_out(RESET)
+                self.held = False
+            self.page_on = False
 
     def wait_out(self, secs):
-        """The backoff — ended early the moment LineWatch sees the line come back."""
-        end, n0 = time.time() + secs, (self.watch.back if self.watch else 0)
-        while time.time() < end:
-            if self.watch and self.watch.back > n0:
-                tlog("back", self.home or self.avoid or "-", "", "", "", "", "",
-                     "the line came back: reconnecting now")
-                return
+        """The backoff — ended early the moment the line comes back (LineWatch),
+        the network changes (NetWatch) or a key on the page asks (D4NW)."""
+        end, k0 = time.time() + secs, self.kicks
+        while time.time() < end and not self.cut_check(k0):
             time.sleep(min(0.1, max(0.0, end - time.time())))
+
+    # -- the reconnect page (D4NW) ------------------------------------------
+    def kick(self, why):
+        """Cut short whatever is being waited out: the backoff, a pick, an ssh
+        started on a dead line."""
+        self.kicks += 1
+        self.kick_why = why
+        if why == "back":
+            tlog("back", self.home or self.avoid or "-", "", "", "", "", "", "the line came back: reconnecting now")
+
+    def cut_check(self, k0):
+        """pick()'s restart / wait_out's end: a key read, then True once kicked."""
+        self.keys_poll()
+        return self.kicks > k0 or self.quit_req or self.shell_req
+
+    def keys_poll(self):
+        if self.attrs is None:
+            return
+        try:
+            r, _, _ = select.select([0], [], [], 0)
+            if r:
+                data = os.read(0, 1024)
+                if data:
+                    self.page_key(data)
+        except (OSError, ValueError):
+            pass
+
+    def page_key(self, data):
+        """A key on the reconnect page: ↵ / space / ⌃C retry now, q leaves, s the
+        home's command line. Only a key on its own counts (q in a word typed into
+        the dead session is not a quit); an escape sequence is nothing."""
+        if not data or data[:1] == b"\x1b":
+            return
+        if data in (b"q", b"Q"):
+            self.quit_req = True
+            tlog("quit", self.home or "-", "", "", "", "", "", "q on the reconnect page")
+        elif data in (b"s", b"S") and self.base and not self.local:
+            self.shell_req = True
+        elif not any(c in data for c in (b"\r", b"\n", b"\x03", b" ")):
+            return
+        self.kick("key")
+        self.page_draw()
+
+    def pick_said(self, line):
+        """fleet-connect's stderr while the page is up: the last line is its note;
+        None = a long speech (a scan) — the page steps aside for it."""
+        if line is None:
+            self.unhold()
+            return
+        if line:
+            self.page(said=line.replace("fleet · ", "", 1)[:120])
+
+    def on_net(self, old, new):
+        """NetWatch: the network changed. Every route is measured on the next pick
+        (never the old one first); a view up on a line that went with the old
+        network is ended now — not 15 s of keepalive later."""
+        self.net_key, self.net_at, self.net_changed = new, time.time(), True
+        tlog("net", self.home or "-", "", "", "", "", "", "the network changed: %s -> %s" % (net_class(old), net_class(new)))
+        self.ev("net", home=self.home, reason=net_class(new))
+        self.kick("net")
+        if self.page_on:
+            self.page(netnew=True)
+        pid = self.child
+        if pid and not self.held and not self.local:
+            threading.Thread(target=self.net_check, args=(pid, old, new), daemon=True).start()
+
+    def net_check(self, pid, old, new):
+        """Is the view's line still there after a network change? A line over the
+        default route (anything but the tailnet) rode the old gateway: gone with it.
+        Else one TCP connect to it (FLEET_THIN_NET_CHECK_TMO, 1.5 s)."""
+        j = self.base or {}
+        r = j.get("route") or {}
+        gw_moved = old != new   # the default route leaves from another address
+        tail = "tail" in str(r.get("name") or "")
+        ok = False
+        if not (gw_moved and not tail):
+            import socket
+            for host, port in line_targets(j)[:1] or []:
+                try:
+                    socket.create_connection((host, port), timeout=env_num("FLEET_THIN_NET_CHECK_TMO", 1.5)).close()
+                    ok = True
+                except (OSError, ValueError):
+                    pass
+        if ok or self.child != pid or self.held:
+            return
+        self.net_cut = True
+        tlog("net", self.home or "-", str(r.get("name") or ""), "", "", "", "", "the line went with the old network: ending it")
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    def recovered(self, secs):
+        """The view is back: one line over its top row for 5 s (D4NW)."""
+        if not self.page_tty:
+            return
+        text = tr("thin_page_back_fmt", getattr(self, "route_words", "") or "-", "%d" % max(1, round(secs)))
+        if self.net_at and self.net_at >= time.time() - secs - 1:
+            text += tr("thin_page_back_net")
+        self.banner = (text, time.time() + env_num("FLEET_THIN_BANNER_SECS", 5))
+        cols = self.size()[1]
+        with self.out_lock:
+            write_out(b"\x1b7\x1b[1;1H\x1b[0;7m" + cut(" fleet · " + text, cols).encode("utf-8", "replace")
+                      + b"\x1b[0m\x1b8")
+
+    def redraw_nudge(self, master):
+        """The view draws its top row again: its pty one row shorter, then back —
+        the kernel's SIGWINCH makes the home repaint."""
+        rows, cols = self.size()
+        try:
+            if self.nudge == 0:
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", max(1, rows - 1), cols, 0, 0))
+                self.nudge, self.banner = 1, (self.banner[0], time.time() + 0.3)
+            else:
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+                self.nudge, self.banner = 2, None
+        except (OSError, TypeError):
+            self.nudge, self.banner = 2, None
+
+    def size(self):
+        try:
+            rows, cols = struct.unpack("HHHH", fcntl.ioctl(1, termios.TIOCGWINSZ, b"\0" * 8))[:2]
+        except OSError:
+            rows = cols = 0
+        return rows or 24, cols or 80
+
+    def page(self, **kw):
+        """Say something on the reconnect page — entered first if it is not up:
+        the view's last picture stays (the alternate screen, never left), else a
+        blank alternate screen; every way between two views lands here."""
+        with self.out_lock:
+            self.pg.update(kw)
+            self.pg.setdefault("since", time.time())
+            self.down_since = self.down_since or self.drop_at or self.pg["since"]
+            if not self.page_tty:
+                line = self.page_summary()
+                if line != self.page_last:
+                    self.page_last = line
+                    write_out(("fleet · %s\r\n" % line).encode("utf-8", "replace"))
+                self.page_on = True
+                return
+            if not self.held:
+                write_out(b"\x1b[?1049h\x1b[H\x1b[2J" + MOUSE_OFF)
+                self.held = self.drawn = True
+            if not self.page_on:
+                self.page_on = True
+                if not self.progress:
+                    import tempfile
+                    fd, self.progress = tempfile.mkstemp(prefix="fleet-thin-routes.")
+                    os.close(fd)
+            if self.pager is None:
+                self.pager = threading.Thread(target=self.page_tick, daemon=True)
+                self.pager.start()
+        self.page_draw()
+
+    def page_tick(self):
+        while True:
+            time.sleep(1.0 - (time.time() % 1.0))
+            if self.page_on:
+                self.page_draw()
+
+    def mmss(self, secs):
+        secs = max(0, int(secs))
+        return "%d:%02d" % (secs // 60, secs % 60)
+
+    def page_status(self):
+        """(the page's main line, the bar's words) for the phase it is in."""
+        g, now = self.pg, time.time()
+        home = self.home or self.avoid or "?"
+        ph = g.get("phase") or "wait"
+        if ph == "wait":
+            left = max(0, int(round((g.get("wait_end") or now) - now)))
+            return (tr("thin_page_wait_fmt", g.get("attempt") or 1, left),
+                    tr("thin_page_bar_wait_fmt", home, left, g.get("attempt") or 1))
+        if ph == "pick":
+            el = "%d" % (now - (g.get("t0") or now))
+            if self.net_changed:
+                return tr("thin_page_pick_net_fmt", el), tr("thin_page_bar_net")
+            return tr("thin_page_pick_fmt", el), tr("thin_page_bar_pick")
+        if ph == "ssh":
+            el = "%d" % (now - (g.get("t0") or now))
+            return tr("thin_page_ssh_fmt", g.get("route") or "-", el), tr("thin_page_bar_ssh_fmt", g.get("route") or "-")
+        text = g.get("text") or ""
+        return text, text
+
+    def page_summary(self):
+        main, bar = self.page_status()
+        return bar + (" · " + self.pg["note"] if self.pg.get("note") else "")
+
+    def page_routes(self):
+        rows, use = [], ""
+        try:
+            with open(self.progress, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    if d.get("use"):
+                        use = d.get("label") or d["use"]
+                    elif d.get("label"):
+                        rows = [r for r in rows if r.get("label") != d["label"]] + [d]
+        except (OSError, TypeError):
+            pass
+        out = []
+        for d in rows[:6]:
+            if d.get("skip"):
+                st = tr("thin_page_route_skip_fmt", d["skip"])
+            elif d.get("ms") is not None:
+                st = "✓ %d ms" % d["ms"] + (tr("thin_page_route_use") if d["label"] == use else "")
+            else:
+                st = tr("thin_page_route_fail")
+            out.append("%s %s" % (cut(d["label"], 14), st))
+        return out
+
+    def page_draw(self):
+        """The page, once: the bar over the top row and the box in the middle —
+        the cursor put back, nothing scrolled, nothing cleared. Narrower than 60
+        columns (or shorter than 14 rows): the bar alone."""
+        with self.out_lock:
+            if not (self.page_on and self.held and self.page_tty):
+                return
+            g, now = self.pg, time.time()
+            rows, cols = self.size()
+            main, bar = self.page_status()
+            down = self.down_since or now
+            home = self.home or self.avoid or "?"
+            barline = " fleet · %s · %s" % (bar, tr("thin_page_down_fmt", self.mmss(now - down)))
+            buf = [b"\x1b7\x1b[?25l\x1b[1;1H\x1b[0;7m", cut(barline, cols).encode("utf-8", "replace"), b"\x1b[0m"]
+            if cols >= 60 and rows >= 14:
+                net = net_words(self.net_key) or tr("thin_page_net_none")
+                if self.net_changed and now - self.net_at < 30:
+                    net = tr("thin_page_net_changed_fmt", net)
+                lines = [tr("thin_page_title_fmt", home) + "   " + tr("thin_page_down_fmt", self.mmss(now - down)),
+                         "", tr("thin_page_net_label") + net, main]
+                for k in ("note", "note2", "said"):
+                    if g.get(k):
+                        lines.append(g[k])
+                if self.broke_note:
+                    lines.append(self.broke_note)
+                rts = self.page_routes()
+                if rts:
+                    lines += [""] + rts
+                lines += ["", tr("thin_page_keys")]
+                w = min(cols - 4, 72)
+                top = max(3, (rows - len(lines) - 2) // 2)
+                left = max(1, (cols - w) // 2)
+                body = [""] + lines + [""]
+                for i, text in enumerate(body):
+                    buf.append(b"\x1b[%d;%dH\x1b[0;48;5;236;38;5;252m" % (top + i, left))
+                    buf.append((" " + cut(text, w - 2) + " ").encode("utf-8", "replace"))
+                buf.append(b"\x1b[0m")
+            buf.append(b"\x1b8")
+            write_out(b"".join(buf))
 
     def maybe_update(self):
         """A new client between two connections: exec it, view and home kept."""
@@ -1703,142 +2187,188 @@ class Thin:
             signal.signal(s, self.hangup)
         signal.signal(signal.SIGWINCH, self.resize)
         backoff = [env_num("x", x) for x in
-                   (os.environ.get("FLEET_THIN_BACKOFF") or "1,2,4,8,16,30").split(",") if x.strip()] or [1.0]
+                   (os.environ.get("FLEET_THIN_BACKOFF") or "1,2,4,8,10").split(",") if x.strip()] or [1.0]
         rehome = int(env_num("FLEET_THIN_REHOME_AFTER", 3))
         self.profile(True)
         self.ev("start")
+        if not self.local and os.environ.get("FLEET_THIN_NET_WATCH", "1") != "0":
+            self.net = NetWatch(self.on_net)
+            self.net_key = self.net.key or ""
+            self.net.start()
         k = fails = broke = 0
         offline = False
         try:
             while True:
-                rc, up, why = self.connect_once(k > 0)
-                if up:
-                    self.rehomed_from = ""   # said once, on the attach that landed
-                if self.updating and not self.quit:
-                    # we ended this line ourselves for a newer client (#4916): switch,
-                    # exec it onto the same view; not switched ⇒ back on, held a while
-                    self.updating = self.staged = self.just_updated = False
-                    self.mute()
-                    self.held = False
-                    write_out(RESET + ("fleet · %s\r\n" % tr("thin_update_switch")).encode("utf-8", "replace"))
-                    if self.maybe_update() is False:
-                        self.update_hold = time.time() + env_num("FLEET_THIN_UPDATE_HOLD", 3600)
-                        tlog("update", self.home, "", "", "", "", "", "not switched: holding the next try")
-                    fails, k = 0, 0
-                    continue
-                if self.quit or (rc == 0 and not why):
-                    tlog("quit", self.home, "", "", "", "", rc, "quit" if self.quit else "detach")
-                    self.ev("quit", home=self.home, rc=rc, reason="quit" if self.quit else "detach")
-                    return 0
-                if up and self.drawn and not why:
-                    # the view was on screen and the line went: keep its picture (T690)
-                    write_out(MOUSE_OFF)
-                    self.held = True
-                self.start_watch()
-                if not up and rc == NO_FLEET and self.home and self.home == self.up_home and not self.local:
-                    # the home we were just on has no fleet now: its tmux is restarting
-                    # (an update, fleet-sessions-snapshot.sh save → kill-server → restore,
-                    # issue #3511) — wait for it, bounded, and reconnect to the same view
-                    # (--resume finds the session by its @fleet_id); never the
-                    # first-session road, which asks the hub for a NEW session
-                    now = time.time()
-                    self.restart_end = self.restart_end or now + env_num("FLEET_THIN_HOME_RESTART_SECS", 300)
-                    if now < self.restart_end:
-                        self.mute()
-                        self.status(tr("thin_home_restart_fmt", self.home, "%d" % (self.restart_end - now)))
-                        tlog("restart", self.home, "", "", "", "", rc, "no fleet on the home we were on: waiting")
-                        time.sleep(env_num("FLEET_THIN_HOME_RESTART_POLL", 3))
-                        continue
-                    self.up_home = ""   # it did not come back: the old road below
-                if not up and not self.local and (why == OPENING or rc == NO_FLEET):
-                    # no fleet of yours there (rc 3) or none yet (the hub is opening
-                    # one): the first session, never a backoff against it (#3054)
-                    self.firsts += 1
-                    self.stop_watch()
-                    self.unhold()
-                    there = why or "no fleet session is live on %s" % (self.home or "?")
-                    if rc == NO_FLEET:
-                        # say which login was empty, never rotate homes silently (#3049)
-                        write_out(("fleet · %s\r\n" % tr("thin_no_fleet_fmt", self.home or "?",
-                                                           (self.base or {}).get("login") or "?")).encode("utf-8", "replace"))
-                    if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)):
-                        self.first_failed(tr("thin_first_rounds_fmt", self.home or "?", self.firsts - 1))
-                    if self.firsts > int(env_num("FLEET_THIN_FIRST_ROUNDS", 3)) or not self.first_session(there):
-                        tlog("quit", self.home, "", "", "", "", 1, "no first session")
-                        self.ev_fail("first_session", 1)
-                        self.ev("quit", home=self.home, rc=1, reason="no_first_session")
-                        return 1
-                    fails, k = 0, 0
-                    continue
-                if not up and rc == 1 and why and why != OPENING and self.avoid and not self.home and not self.local:
-                    # 换家 found no other machine (`--avoid` exit 1): the home it left is
-                    # still the only one — back to it, its view and the backoff, never
-                    # asking the hub for nothing until the person gives up (#4829)
-                    self.home, self.avoid = self.avoid, ""
-                    self.resume = self.up_home == self.home
-                    tlog("rehome", self.home, "", "", "", "", "", "no other home: back to %s" % self.home)
-                    self.ev("rehome", home=self.home, to=self.home, reason="no_other")
-                    self.status(tr("thin_rehome_back_fmt", self.home), 2)
-                broke = broke + 1 if self.view_broke(rc, up, why) else 0
-                if broke >= int(env_num("FLEET_THIN_VIEW_FAILS", 3)):
-                    # the line is fine, the 看台 is not: the home's command line, not
-                    # another reconnect into it (nor 换家 — the home answers)
-                    why_v = tr("thin_view_never_fmt", broke) if not up else tr("thin_view_crash_fmt", broke, rc)
-                    self.home_shell(why_v)
-                    broke = fails = k = 0
+                try:
+                    rc = self.loop_once(backoff, rehome, k, fails, broke, offline)
+                except KeyboardInterrupt:
+                    # ⌃C between two connections where the terminal still sends it as a
+                    # signal (no tty, the first-session road): retry now, never an exit (D4NW)
+                    tlog("back", self.home or "-", "", "", "", "", 130, "^C between connections: retrying now")
                     self.mute()
                     continue
-                if up:
-                    fails, k, self.firsts = 0, 0, 0
-                    self.up_home, self.restart_end = self.home, 0.0
-                elif self.cut_back:
-                    k = 0   # cut because the line came back: no failure, no wait (T690)
-                else:
-                    fails += 1
-                k += 1
-                if fails >= rehome and self.home and not self.local and hub_answers() is False:
-                    # the hub does not answer either: our own line is down, not the home —
-                    # stay, keep the view, and need one more failure with the hub back (#3007)
-                    tlog("offline", self.home, "", "", "", "", "", "the hub does not answer either: keeping %s" % self.home)
-                    self.ev("offline", home=self.home)
-                    fails, offline = rehome - 1, True
-                elif fails >= rehome and offline:
-                    fails, offline = rehome - 1, False   # the hub back: one more try at the home first
-                go_now = False
-                if fails >= rehome and self.home and not self.local:   # --local has no other home
-                    self.avoid, self.home, fails = self.home, "", 0
-                    self.resume = False   # a new home has no view of ours yet
-                    go_now = True         # the other machine is asked at once, no backoff first (T690)
-                    tlog("rehome", "", "", "", "", "", "", "asking for a home other than %s" % self.avoid)
-                if not why and not self.held:
-                    write_out(RESET)
-                self.mute()
-                if self.cut_back:
+                if isinstance(rc, tuple):
+                    k, fails, broke, offline = rc
                     continue
-                wait = 0 if go_now else backoff[min(k - 1, len(backoff) - 1)]
-                if not self.home and self.avoid:
-                    msg = tr("thin_rehoming_fmt", self.avoid)
-                else:
-                    msg = tr("thin_reconnect", self.home or self.avoid or "?", "%g" % wait, k)
-                if why:
-                    msg = why + " — " + msg
-                self.status(msg)
-                if fails == rehome - 1 and not offline:   # the home about to be given up: how to tell the hub why
-                    self.status(tr("thin_debug_hint"), 2)
-                self.wait_out(wait)
-                self.maybe_update()
-        except KeyboardInterrupt:
-            tlog("quit", self.home, "", "", "", "", 130, "^C between connections")
-            self.ev("quit", home=self.home, rc=130, reason="interrupt")
-            return 130
+                return rc
         finally:
             self.stop_watch()
+            if self.net is not None:
+                self.net.stop()
+            self.page_on = False
             self.unhold()        # ended on a held picture: leave the alternate screen
             if self.fwd:
                 self.fwd.close_all()
             self.restore_tty()   # echo back, if it ended between two connections (mute)
             self.profile(False)
+            if self.progress:
+                try:
+                    os.unlink(self.progress)
+                except OSError:
+                    pass
             path_hint()
+
+    def loop_once(self, backoff, rehome, k, fails, broke, offline):
+        """One connection and what follows it: an exit code (the loop ends) or the
+        counters (k, fails, broke, offline) for the next turn. It never ends by
+        itself on a failing line (D4NW): only ⌘Q, q on the page, a detach, the
+        terminal closing, or a newcomer whose first session cannot be opened."""
+        if self.quit_req:
+            tlog("quit", self.home, "", "", "", "", 0, "q on the reconnect page")
+            self.ev("quit", home=self.home, rc=0, reason="key")
+            return 0
+        if self.shell_req:
+            self.shell_req = False
+            self.home_shell(tr("thin_page_shell_why"))
+            self.mute()
+            return 0, 0, 0, offline
+        rc, up, why = self.connect_once(k > 0)
+        if why == CUT:
+            return (k, fails, broke, offline)   # cut short: ask again at once, no failure
+        if up:
+            self.rehomed_from = ""   # said once, on the attach that landed
+        if self.updating and not self.quit:
+            # we ended this line ourselves for a newer client (#4916): switch,
+            # exec it onto the same view; not switched ⇒ back on, held a while
+            self.updating = self.staged = self.just_updated = False
+            self.mute()
+            self.held = self.page_on = False
+            write_out(RESET + ("fleet · %s\r\n" % tr("thin_update_switch")).encode("utf-8", "replace"))
+            if self.maybe_update() is False:
+                self.update_hold = time.time() + env_num("FLEET_THIN_UPDATE_HOLD", 3600)
+                tlog("update", self.home, "", "", "", "", "", "not switched: holding the next try")
+            return 0, 0, broke, offline
+        if self.quit or (rc == 0 and not why):
+            tlog("quit", self.home, "", "", "", "", rc, "quit" if self.quit else "detach")
+            self.ev("quit", home=self.home, rc=rc, reason="quit" if self.quit else "detach")
+            return 0
+        if self.quit_req or self.shell_req:
+            return (k, fails, broke, offline)
+        if up and self.drawn and not why:
+            # the view was on screen and the line went: keep its picture (T690)
+            write_out(MOUSE_OFF)
+            self.held = True
+        self.start_watch()
+        if not up and rc == NO_FLEET and self.home and self.home == self.up_home and not self.local:
+            # the home we were just on has no fleet now: its tmux is restarting
+            # (an update, fleet-sessions-snapshot.sh save → kill-server → restore,
+            # issue #3511) — wait for it, bounded, and reconnect to the same view
+            # (--resume finds the session by its @fleet_id); never the
+            # first-session road, which asks the hub for a NEW session
+            now = time.time()
+            self.restart_end = self.restart_end or now + env_num("FLEET_THIN_HOME_RESTART_SECS", 300)
+            if now < self.restart_end:
+                self.mute()
+                self.page(phase="text", text=tr("thin_home_restart_fmt", self.home, "%d" % (self.restart_end - now)))
+                tlog("restart", self.home, "", "", "", "", rc, "no fleet on the home we were on: waiting")
+                self.wait_out(env_num("FLEET_THIN_HOME_RESTART_POLL", 3))
+                return (k, fails, broke, offline)
+            self.up_home = ""   # it did not come back: the old road below
+        if not up and not self.local and (why == OPENING or rc == NO_FLEET):
+            # no fleet of yours there (rc 3) or none yet (the hub is opening
+            # one): the first session, never a backoff against it (#3054)
+            self.firsts += 1
+            self.stop_watch()
+            self.unhold()
+            self.mute(signals=True)
+            there = why or "no fleet session is live on %s" % (self.home or "?")
+            if rc == NO_FLEET:
+                # say which login was empty, never rotate homes silently (#3049)
+                write_out(("fleet · %s\r\n" % tr("thin_no_fleet_fmt", self.home or "?",
+                                                   (self.base or {}).get("login") or "?")).encode("utf-8", "replace"))
+            rounds = int(env_num("FLEET_THIN_FIRST_ROUNDS", 3))
+            if self.firsts > rounds:
+                self.first_failed(tr("thin_first_rounds_fmt", self.home or "?", self.firsts - 1))
+            if self.firsts > rounds or not self.first_session(there):
+                self.mute()
+                if self.ever_up:
+                    # a session was on this terminal: stay on the page and keep trying (D4NW)
+                    self.ev_fail("first_session", 1)
+                    self.firsts = 0
+                    self.page(phase="wait", attempt=k + 1, wait_end=time.time() + backoff[-1],
+                              note=tr("thin_page_first_fmt", self.home or "?"))
+                    self.wait_out(backoff[-1])
+                    return (k + 1, fails, broke, offline)
+                tlog("quit", self.home, "", "", "", "", 1, "no first session")
+                self.ev_fail("first_session", 1)
+                self.ev("quit", home=self.home, rc=1, reason="no_first_session")
+                return 1
+            self.mute()
+            return 0, 0, broke, offline
+        if not up and rc == 1 and why and why != OPENING and self.avoid and not self.home and not self.local:
+            # 换家 found no other machine (`--avoid` exit 1): the home it left is
+            # still the only one — back to it, its view and the backoff, never
+            # asking the hub for nothing until the person gives up (#4829)
+            self.home, self.avoid = self.avoid, ""
+            self.resume = self.up_home == self.home
+            tlog("rehome", self.home, "", "", "", "", "", "no other home: back to %s" % self.home)
+            self.ev("rehome", home=self.home, to=self.home, reason="no_other")
+            self.page(note2=tr("thin_rehome_back_fmt", self.home))
+        vb = self.view_broke(rc, up, why)
+        broke = broke + 1 if vb else 0
+        if broke >= int(env_num("FLEET_THIN_VIEW_FAILS", 3)):
+            # the line is fine, the 看台 is not: said on the page, s opens the home's
+            # command line — never thrown there by itself (D4NW), nor 换家 (the home answers)
+            why_v = tr("thin_view_never_fmt", broke) if not up else tr("thin_view_crash_fmt", broke, rc)
+            if not self.broke_note:
+                tlog("shell", self.home, "", "", "", "", rc, "offered: " + why_v)
+            self.broke_note = tr("thin_page_broke_fmt", why_v)
+        if up:
+            fails, k, self.firsts = 0, 0, 0
+            self.up_home, self.restart_end = self.home, 0.0
+        elif self.cut_back:
+            k = 0   # cut because the line came back: no failure, no wait (T690)
+        elif not vb:
+            fails += 1   # a 看台 that broke reached the home: never a reason to 换家
+        k += 1
+        if fails >= rehome and self.home and not self.local and hub_answers() is False:
+            # the hub does not answer either: our own line is down, not the home —
+            # stay, keep the view, and need one more failure with the hub back (#3007)
+            tlog("offline", self.home, "", "", "", "", "", "the hub does not answer either: keeping %s" % self.home)
+            self.ev("offline", home=self.home)
+            fails, offline = rehome - 1, True
+        elif fails >= rehome and offline:
+            fails, offline = rehome - 1, False   # the hub back: one more try at the home first
+        go_now = self.net_cut   # the network changed under the view: the new one at once
+        if fails >= rehome and self.home and not self.local:   # --local has no other home
+            self.avoid, self.home, fails = self.home, "", 0
+            self.resume = False   # a new home has no view of ours yet
+            go_now = True         # the other machine is asked at once, no backoff first (T690)
+            tlog("rehome", "", "", "", "", "", "", "asking for a home other than %s" % self.avoid)
+        self.mute()
+        if self.cut_back:
+            return (k, fails, broke, offline)
+        wait = 0 if go_now else backoff[min(k - 1, len(backoff) - 1)]
+        if not self.home and self.avoid:
+            self.page(phase="text", text=tr("thin_rehoming_fmt", self.avoid), note=why or "")
+        else:
+            self.page(phase="wait", attempt=k, wait_end=time.time() + wait, note=why or "",
+                      text=tr("thin_reconnect", self.home or "?", "%g" % wait, k))
+        if fails == rehome - 1 and not offline:   # the home about to be given up: how to tell the hub why
+            self.page(note2=tr("thin_debug_hint"))
+        self.wait_out(wait)
+        self.maybe_update()
+        return (k, fails, broke, offline)
 
     def resize(self, *_):
         """SIGWINCH: the terminal's size onto the child's pty (the kernel tells ssh)."""

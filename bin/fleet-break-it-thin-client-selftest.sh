@@ -28,9 +28,14 @@
 #   thin-home-alone-down    (issue #4829) the home down and no other machine: the
 #                           换家 finds none, the loop goes back to the home and is
 #                           on it again once it is up — never asking forever
-#   thin-view-keeps-failing  (EPIC T651 C4) the home answers but its 看台 never
-#                           comes up / dies at once, three times: the home's login
-#                           shell on the same route, said; exit → the 看台 again
+#   thin-view-keeps-failing  (EPIC T651 C4, D4NW) the home answers but its 看台 never
+#                           comes up / dies at once, three times: said on the
+#                           reconnect page, still retried; s opens the home's
+#                           login shell on the same route; exit → the 看台 again
+#   thin-gives-up           (D4NW) the network down 26 s: the loop never leaves,
+#                           ⌃C retries, ≤ 10 s between tries, the clock moves
+#   thin-netchange-old-route  (D4NW) the network changes under a live view: ended
+#                           at once (end=netchange), every route measured again
 #   shell-hub-down          (EPIC T651 C5) `fleet shell` with the hub down and the
 #                           certificate gone: the remembered entry route on the
 #                           device key, the home's login shell (FLEET_NO_VIEW=1);
@@ -443,6 +448,75 @@ PY2
   WHAT="退避每次 8 s、网断后又回来：线路监视看到网回来就不再等完退避，${SECS}s 内 --resume 回到 m1 同一个看台的 s1；断线期间看台原画面留着（不离开备用屏、不清屏），顶行写「正在重连」，ssh 的报错不刷屏；thin.log 记 back"
 }
 
+drill_thin_gives_up() {
+  CAP=4   # D4NW: 26 s down — the loop never leaves, ⌃C retries, ≤ 10 s between tries, the countdown moves
+  local t0 n
+  tc_rig
+  ( THIN_ENV='{"FLEET_THIN_BACKOFF": "", "FLEET_THIN_LINE_PROBE_CMD": "sh -c \"[ ! -e '"$R"'/net.down ]\""}' \
+      THIN_ARGS='["--home", "m1", "s1"]' tc_drive gu '[["expect", "VIEW s1 ON m1"], ["await", "'"$R"'/net.down", 15],
+      ["linger", 3], ["send", "\u0003"], ["linger", 4], ["send", "\u0003"], ["linger", 60]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.gu" || { WHY="the view never came up: $(cat "$R/res.gu")"; tc_done; return 1; }
+  n=$(wc -c < "$R/term.out")
+  touch "$R/net.down"; tc_drop_view
+  sleep 26
+  kill -0 "$(cat "$R/thin.pid")" 2>/dev/null || { WHY="the loop ended while the network was down: $(tail -n 3 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  rm -f "$R/net.down"; t0=$(now)
+  until_ok 8 sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="never back on s1: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  le "$SECS" "$CAP" || { WHY="back ${SECS}s after the network returned"; tc_done; return 1; }
+  python3 - "$R/term.out" "$n" "$R/thin.log" <<'PY2' || { WHY="$(cat "$R/gu.why" 2>/dev/null)"; tc_done; return 1; }
+import calendar, re, sys, time
+b = open(sys.argv[1], "rb").read()[int(sys.argv[2]):]
+gap = b[:b.find(b"VIEW s1 ON m1")]
+why = open(sys.argv[1].rsplit("/", 1)[0] + "/gu.why", "w")
+def bad(w):
+    why.write(w); sys.exit(1)
+if b"\x1b[?1049l" in gap:
+    bad("left the alternate screen during the outage")
+secs = set(re.findall(rb"\xe6\x96\xad\xe5\xbc\x80 (\d+:\d\d)", gap))   # 断开 m:ss
+if len(secs) < 15:
+    bad("the down-for clock moved %d times in 26 s" % len(secs))
+ts = [calendar.timegm(time.strptime(l.split("\t")[0][:19], "%Y-%m-%dT%H:%M:%S"))
+      for l in open(sys.argv[3]) if "\tconnect\t" in l]
+gaps = [b2 - a for a, b2 in zip(ts, ts[1:])]
+if len(ts) < 5 or max(gaps or [99]) > 12:
+    bad("tries: %d, the longest gap %ss" % (len(ts), max(gaps or [0])))
+if any("\tquit\t" in l for l in open(sys.argv[3])):
+    bad("thin.log has a quit")
+PY2
+  tc_done; wait 2>/dev/null
+  WHAT="网断 26 s（入口也断）：循环一直在、⌃C 两次只是立即重试、没离开备用屏；相邻两次尝试 ≤ 10 s（退避封顶），重连页的「断开 m:ss」每秒在走；网回来 ${SECS}s 回到 s1"
+}
+
+drill_thin_netchange_old_route() {
+  CAP=3   # D4NW: the network changes under a live view → ended at once, every route measured, back on s1
+  local t0 n
+  tc_rig
+  echo "192.168.1.20|" > "$R/netkey"
+  cat > "$R/bin/argv-wrap" <<EOF
+#!/bin/sh
+echo "retest=\${FLEET_CONNECT_RETEST-}" >> "$R/argv.log"
+exec python3 "$BIN/fleet-connect.py" --argv "\$@"
+EOF
+  chmod +x "$R/bin/argv-wrap"
+  ( THIN_ENV='{"FLEET_THIN_NET_KEY_CMD": "cat '"$R"'/netkey", "FLEET_THIN_NET_SECS": "0.2", "FLEET_THIN_ARGV_CMD": "'"$R"'/bin/argv-wrap"}' \
+      THIN_ARGS='["--home", "m1", "s1"]' tc_drive nc '[["expect", "VIEW s1 ON m1"], ["linger", 40]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.nc" || { WHY="the view never came up: $(cat "$R/res.nc")"; tc_done; return 1; }
+  sleep 1
+  echo "172.20.10.4|" > "$R/netkey"; t0=$(now)
+  until_ok "$CAP" sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="not back on s1 after the network changed: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  grep -aq 'the line went with the old network' "$R/thin.log" || { WHY="the view was not ended on the change: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  grep -aq 'end=netchange' "$R/thin.log" || { WHY="the drop was not filed as netchange"; tc_done; return 1; }
+  [ "$(tail -n 1 "$R/argv.log")" = "retest=1" ] || { WHY="the pick after the change did not measure every route: $(cat "$R/argv.log")"; tc_done; return 1; }
+  case $(tail -n 1 "$R/rv.log") in "m1 attach --thin --view "*" --resume "*) ;;
+    *) WHY="not --resume on the same home: $(tail -n 1 "$R/rv.log")"; tc_done; return 1 ;; esac
+  tc_done; wait 2>/dev/null
+  WHAT="看台连着时换网（家里局域网 → 手机热点）：不等 15 s 保活，当场结束旧连接（thin.log end=netchange），下一次选路 FLEET_CONNECT_RETEST=1 全部重测，${SECS}s 内 --resume 回到 s1"
+}
+
 drill_thin_stall_drops() {
   CAP=12   # an 8 s stall of the line → the session still there, no reconnect
   local t0 n bud
@@ -574,8 +648,8 @@ drill_thin_home_alone_down() {
 }
 
 drill_thin_view_keeps_failing() {
-  CAP=8   # three broken 看台 in a row → the home's command line, said on the screen
-  local t0 n
+  CAP=12  # three broken 看台 in a row → said on the reconnect page; s opens the home's command line
+  local t0
   tc_rig
   # the login shell on the home: says how it was started, runs what it is typed
   cat > "$R/bin/stubsh" <<'EOF'
@@ -586,16 +660,21 @@ EOF
   chmod +x "$R/bin/stubsh"
   echo never > "$R/crash.m1"; t0=$(now)
   THIN_ENV='{"SHELL": "'"$R"'/bin/stubsh"}' THIN_ARGS='["--home", "m1", "s1"]' tc_drive vf '[
-   ["expect", "HOME-SHELL", '"$CAP"'],
+   ["expect", "看台连续 3 次没起来 — 按 s 进家机器命令行", '"$CAP"'],
+   ["sleep", 1.5],
+   ["send", "s"],
+   ["expect", "HOME-SHELL", 10],
    ["sh", "rm -f '"$R"'/crash.m1"],
    ["send", "exit\n"],
    ["expect", "VIEW s1 ON m1", 10],
    ["sh", "echo after > '"$R"'/crash.m1"],
    ["send", "drop\n"],
-   ["expect", "HOME-SHELL[^V]*VIEW s1 ON m1[^H]*HOME-SHELL", 15],
+   ["expect", "看台连续 3 次起来就退出（代码 7） — 按 s", 15],
+   ["send", "s"],
+   ["expect", "HOME-SHELL[\\s\\S]*HOME-SHELL", 10],
    ["sh", "rm -f '"$R"'/crash.m1"],
    ["send", "exit\n"],
-   ["expect", "VIEW s1 ON m1.*VIEW s1 ON m1", 10],
+   ["expect", "VIEW s1 ON m1[\\s\\S]*VIEW s1 ON m1", 10],
    ["send", "quit\n"],
    ["wait", 10]
   ]'
@@ -603,26 +682,24 @@ EOF
 import sys, time, calendar
 for l in open(sys.argv[1]):
     f = l.rstrip("\n").split("\t")
-    if len(f) > 1 and f[1] == "shell":
+    if len(f) > 8 and f[1] == "shell" and f[8].startswith("offered"):
         t = calendar.timegm(time.strptime(f[0][:19], "%Y-%m-%dT%H:%M:%S"))
         print("%.1f" % max(0.0, t - float(sys.argv[2]))); break
 PY2
 )
-  grep -q 'SAW .HOME-SHELL. True' "$R/res.vf" \
-    || { WHY="no shell after a 看台 that never came up: $(tail -n 4 "$R/thin.log" | tr '\t' ' ') — $(tail -c 300 "$R/term.out" 2>/dev/null)"; tc_done; return 1; }
-  grep -aq '看台连续 3 次没起来 — 已把你放在 m1 的命令行' "$R/term.out" && grep -aq '输入 exit 回看台' "$R/term.out" \
-    || { WHY="the screen never said why and how back: $(tail -c 400 "$R/term.out")"; tc_done; return 1; }
+  grep -q 'SAW .看台连续 3 次没起来 — 按 s 进家机器命令行. True' "$R/res.vf" \
+    || { WHY="the page never said the 看台 keeps failing: $(tail -n 4 "$R/thin.log" | tr '\t' ' ') — $(tail -c 300 "$R/term.out" 2>/dev/null)"; tc_done; return 1; }
+  python3 - "$R/term.out" <<'PY3' || { WHY="the home's command line opened before s was pressed"; tc_done; return 1; }
+import sys
+t = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+sys.exit(0 if 0 <= t.find("按 s 进家机器命令行") < t.find("HOME-SHELL") else 1)
+PY3
   grep -aq "HOME-SHELL pwd=$R/home/m1 noview=1 args=-l" "$R/term.out" \
     || { WHY="the shell was not the home's login shell with FLEET_NO_VIEW=1: $(grep -a HOME-SHELL "$R/term.out")"; tc_done; return 1; }
-  grep -aq '看台连续 3 次起来就退出（代码 7）' "$R/term.out" \
-    || { WHY="a 看台 that came up and died 3 times: $(cat "$R/res.vf") $(tail -n 6 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
   grep -q 'RC 0' "$R/res.vf" || { WHY="the session did not run back to the 看台 and ⌘Q: $(cat "$R/res.vf")"; tc_done; return 1; }
-  n=$(grep -c '^m1 ' "$R/rv.log")
-  [ "$n" = 8 ] || { WHY="$n 看台 tries on m1, not 3 + 1 + 3 + 1 = 8: $(cat "$R/rv.log")"; tc_done; return 1; }
   grep -aq 'asking for a home other than' "$R/thin.log" && { WHY="it went 换家 instead"; tc_done; return 1; }
-  [ "$(grep -c '	shell	' "$R/thin.log")" = 4 ] || { WHY="thin.log's shell lines: $(grep '	shell	' "$R/thin.log")"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
-  WHAT="家机器 m1 连得上、看台却连续 3 次没起来（退出码 7）：${SECS:-?}s 内不再重连，先印「看台连续 3 次没起来 — 已把你放在 m1 的命令行」+「输入 exit 回看台」，同一路线开 m1 的登录 shell（\$HOME，FLEET_NO_VIEW=1）；exit 后回到 s1；看台起来就崩 3 次同样落地；从不换家"
+  WHAT="家机器 m1 连得上、看台却连续 3 次没起来（退出码 7）：${SECS:-?}s 内重连页写「看台连续 3 次没起来 — 按 s 进家机器命令行」并继续重试，不自己跳走；按 s 才用同一路线开 m1 的登录 shell（\$HOME，FLEET_NO_VIEW=1），exit 后回到 s1；看台起来就崩 3 次同样；从不换家"
 }
 
 drill_shell_hub_down() {

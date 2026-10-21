@@ -90,7 +90,17 @@ type ClientLineStats struct {
 	ReconnectFailReasons map[string]int `json:"reconnect_fail_reasons"`
 	Rehomes              int            `json:"rehomes"`
 	Offline              int            `json:"offline"`
-	LastAt               *time.Time     `json:"last_at,omitempty"`
+	// D4NW: the network changed under a client (`net`), the views it got back
+	// after one (an `up` with reason net — ms from the change) and those times'
+	// p50 / p95; ManualAfterDrop: a drop the person ended by hand (a quit before
+	// the next up) — the reconnect page's goal is 0.
+	ReconnectP95MS  int64      `json:"reconnect_p95_ms"`
+	NetChanges      int        `json:"net_changes"`
+	NetReconnects   int        `json:"net_reconnects"`
+	NetP50MS        int64      `json:"net_p50_ms"`
+	NetP95MS        int64      `json:"net_p95_ms"`
+	ManualAfterDrop int        `json:"manual_after_drop"`
+	LastAt          *time.Time `json:"last_at,omitempty"`
 }
 
 // ClientEventsReport is the GET's answer.
@@ -106,7 +116,7 @@ type ClientEventsReport struct {
 const clientEventsMax = 500
 
 var (
-	clientEventKinds  = map[string]bool{"start": true, "up": true, "drop": true, "fail": true, "rehome": true, "offline": true, "quit": true}
+	clientEventKinds  = map[string]bool{"start": true, "up": true, "drop": true, "fail": true, "rehome": true, "offline": true, "quit": true, "net": true}
 	clientEventPhases = map[string]bool{"": true, "start": true, "reconnect": true}
 	clientNameRE      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$`)
 	clientReasonRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]{0,47}$`)
@@ -331,9 +341,11 @@ func clientEventsReport(evs []store.FleetClientEvent, now time.Time, hours int) 
 
 func clientLineStats(evs []store.FleetClientEvent) ClientLineStats {
 	st := ClientLineStats{DropReasons: map[string]int{}, FailReasons: map[string]int{}, ReconnectFailReasons: map[string]int{}}
-	var gaps []int64
+	var gaps, netGaps []int64
 	failedStarts := map[string]bool{}
+	dropped := map[string]bool{} // device/start: a drop with no up after it yet
 	for _, e := range evs {
+		key := e.Device + "/" + e.Start
 		switch e.Event {
 		case "start":
 			st.Starts++
@@ -342,8 +354,14 @@ func clientLineStats(evs []store.FleetClientEvent) ClientLineStats {
 			if e.Phase == "reconnect" {
 				st.Reconnects++
 				gaps = append(gaps, e.MS)
+				if e.Reason == "net" {
+					st.NetReconnects++
+					netGaps = append(netGaps, e.MS)
+				}
 			}
+			delete(dropped, key)
 		case "drop":
+			dropped[key] = true
 			st.Drops++
 			st.DropReasons[orDash(e.Reason)]++
 		case "fail":
@@ -361,6 +379,13 @@ func clientLineStats(evs []store.FleetClientEvent) ClientLineStats {
 			st.Rehomes++
 		case "offline":
 			st.Offline++
+		case "net":
+			st.NetChanges++
+		case "quit":
+			if dropped[key] {
+				st.ManualAfterDrop++
+				delete(dropped, key)
+			}
 		}
 		at := e.At
 		if st.LastAt == nil || at.After(*st.LastAt) {
@@ -370,6 +395,9 @@ func clientLineStats(evs []store.FleetClientEvent) ClientLineStats {
 	st.StartsFailed = len(failedStarts)
 	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
 	st.ReconnectP50MS, st.ReconnectP90MS = nearestRank(gaps, 50), nearestRank(gaps, 90)
+	st.ReconnectP95MS = nearestRank(gaps, 95)
+	sort.Slice(netGaps, func(i, j int) bool { return netGaps[i] < netGaps[j] })
+	st.NetP50MS, st.NetP95MS = nearestRank(netGaps, 50), nearestRank(netGaps, 95)
 	return st
 }
 
