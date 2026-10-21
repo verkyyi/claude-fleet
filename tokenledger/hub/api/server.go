@@ -1082,6 +1082,7 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 		// send them to GitHub's page when it is wired up. Everything else gets
 		// the honest 401.
 		if s.signinOn() && wantsHTML(r) {
+			rememberAppReturn(w, r)
 			http.Redirect(w, r, appURL("/signin"), http.StatusFound)
 			return
 		}
