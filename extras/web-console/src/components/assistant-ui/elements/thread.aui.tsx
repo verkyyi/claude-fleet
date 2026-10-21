@@ -26,6 +26,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-ic
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { SAY_SOMETHING } from "@/app/chat/placeholder";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -186,7 +187,7 @@ const ThreadHistorySkeleton: FC = () => (
 export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
-  placeholder = "说点什么…",
+  placeholder = SAY_SOMETHING(),
 }) => {
   const isEmpty = useAuiState(isNewChatView);
 
