@@ -1714,6 +1714,42 @@ def epic_tree(groups, ended, fleet, refresh=True, marks=None):
         lst[i + 1:i + 1] = members
 
 
+def epic_rehang(groups, gone):
+    """After the board's re-lay (C25B): an EPIC's members in its own group sit
+    right under it, in the board's order — the order drawn is the order ↑↓ walk —
+    and only they are what its ▸ opens; a member the board put in another group
+    or 已收起 is an ordinary row where it stands, never hidden by the fold. No
+    member left under it ⇒ no ▸ (an ordinary row, T762)."""
+    drivers = {e["target"]: e for g in GROUPS for e in groups[g] if e.get("epic")}
+    if not drivers:
+        return
+    for g in GROUPS:
+        hung = {}
+        for e in groups[g]:
+            f = e.get("fold")
+            if f in drivers and drivers[f].get("group") == g and e is not drivers[f]:
+                hung.setdefault(f, []).append(e)
+        moved = {id(m) for ms in hung.values() for m in ms}
+        lst = [e for e in groups[g] if id(e) not in moved]
+        for t, ms in hung.items():
+            i = next(n for n, e in enumerate(lst) if e is drivers[t])
+            for m in ms:
+                m["depth"] = 0
+            lst[i + 1:i + 1] = ms
+        for e in lst:
+            if e.get("fold") in drivers and e.get("fold") not in hung:
+                e.pop("fold", None)
+                e["depth"] = 0
+        groups[g] = lst
+    for e in gone:
+        if e.get("fold") in drivers:
+            e.pop("fold", None)
+    for t, d in drivers.items():
+        ms = [e for e in groups[d["group"]] if e.get("fold") == t]
+        d["epic"] = dict(d["epic"], rows=len(ms), needs=sum(1 for m in ms if m.get("sym") == "needs"),
+                         fail=sum(1 for m in ms if m.get("sym") == "fail"))
+
+
 def epic_folds(e):
     """A driver with member rows under it: its ▸ / ▾, → / ← and the click fold it
     (T762) — one with none is drawn and keyed as an ordinary row."""
@@ -2051,6 +2087,7 @@ def entries(vid, now=None, hub=True):
         groups, gone = board_apply(board, groups, shut, gone, here, me)
         shut, older = [], int(board.get("gone_more") or 0)
         ended = [e for e in groups["queue"] if e.get("ended")]
+        epic_rehang(groups, gone)
     id_display(dict(groups, shut=shut))
     multi = len(set(repos)) >= 2
     out = []

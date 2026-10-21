@@ -6,7 +6,7 @@
 // Run: node --experimental-strip-types test/session-list.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { boardRows } from '../src/app/work.ts';
+import { boardRows, nestedKids } from '../src/app/work.ts';
 import { isUnread, listItem, listRows, matchRow, openFor, rowMeta, rowRef, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -87,5 +87,19 @@ const t0 = performance.now();
 for (let i = 0; i < 100; i++) listRows(boardRows(many, [], [])).open.map((r) => listItem(r, {}));
 assert.ok(performance.now() - t0 < 1000, 'sixty rows a hundred times well under a second');
 assert.equal(listRows(boardRows(many, [], [])).open.length, 60);
+
+// C25B: the 会话 page opens an EPIC only onto the members drawn under it — its
+// own group's, the search's — and draws them below it; none ⇒ no ▸
+const epic = rows.find((r) => r.title === 'epic');
+assert.deepEqual(nestedKids(epic).map((k) => k.title), ['member'], 'only its own group\'s member hangs under it');
+const page = readFileSync(new URL('../src/app/pages/sessions.tsx', import.meta.url), 'utf8');
+const line = page.slice(page.indexOf('const RowLine: FC'), page.indexOf('// ✦ 消息'));
+assert.ok(!line.includes('nestedKids('), 'the row draws ▸ off the members shown, never all of them');
+assert.ok(/\{kids\.length \? \(\s*<button[^>]*aria-expanded/.test(line), '▸ only with a member under it');
+const loop = page.slice(page.indexOf('const kids = nestedKids(r).filter(match);'));
+assert.ok(loop.indexOf('<RowLine r={r} kids={kids}') < loop.indexOf('kids.map((k) =>'), 'members drawn below their EPIC');
+
+// 我的对话 is pinned: the first row of the list, before what asks (C25B)
+assert.ok(/<List>\{web\}\{open\.map\(row\)\}<\/List>/.test(src), 'the web conversation is the first row');
 
 console.log('ok session-list.mjs');

@@ -3,7 +3,7 @@
 // nothing else: ⌘P's top-level entries in ⌘P's order (the hub's board, A4G2,
 // read once through work-rows.tsx), no group headings or counts, an EPIC only
 // as its parent row, the put-away ones folded under 「已结束的会话」 at the foot,
-// and the web conversation one row among them. The rest — code · machine ·
+// and the web conversation pinned as the first row. The rest — code · machine ·
 // agent · where it runs · how long — shows on hover (computer, a Tooltip) or a
 // long-press (phone, a Sheet with 对话 / 终端). The head: the mark · the limit ·
 // a search icon (a box only once tapped; it finds a code, a title, a machine) ·
@@ -240,12 +240,10 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
     const { open, gone } = listRows(rows);
-    // the web conversation sits after what asks and what is working
-    const at = open.findIndex((r) => r.group !== "pin" && r.group !== "ask" && r.group !== "work");
-    const split = at < 0 ? open.length : at;
+    // the web conversation is pinned on top, whatever the sessions' state (C25B)
     body = (
       <>
-        <List>{open.slice(0, split).map(row)}{web}{open.slice(split).map(row)}</List>
+        <List>{web}{open.map(row)}</List>
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
