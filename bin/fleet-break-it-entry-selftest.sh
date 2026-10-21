@@ -87,6 +87,14 @@
 #                         only from loopback; another CA's, another login's, one
 #                         from elsewhere, and any at all once the list stops naming
 #                         the CA, are refused — the person's own key still lands
+#   door-user-wrong-key   the door's own SSH server (A5SQ ③): an ordinary ssh client
+#                         to the door as alice with alice's key lands at alice's
+#                         home; bob's key as alice, and a login the book does not
+#                         take home, are refused at the door (go test
+#                         TestDoorTakesEachPersonHome, ./e2e)
+#   door-xssh-drift       the door's copy of golang.org/x/crypto/ssh: one changed
+#                         byte, or a file upstream does not have, and
+#                         bin/xssh-sync.sh --check is red naming it
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1204,6 +1212,38 @@ PY
   sys_same || { edown; return 1; }
   edown
   WHAT="家的本机入口：门会话 CA 签的证书只以自己的主体名、只从回环进得来；别的登录名的、从别处来的、别的 CA 签的进不来；名单不再给 CA，证书一律进不来；本人钥匙照常"
+}
+
+drill_door_user_wrong_key() {
+  CAP=200   # the e2e package's build + one test
+  local t0 gohalf; t0=$(now)
+  grep -q '^func TestDoorTakesEachPersonHome(' "$ROOT/tokenledger/e2e/door_test.go" 2>/dev/null \
+    || { WHY="the test TestDoorTakesEachPersonHome is gone"; return 1; }
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml, e2e) runs TestDoorTakesEachPersonHome"
+  go_half '^TestDoorTakesEachPersonHome$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门自己的 SSH 服务器：普通 ssh 以 alice 的钥匙连门、落到 alice 的家（家只见门会话证书）；bob 的钥匙冒充 alice、书里没有的登录名都在门上被拒；$gohalf"
+}
+
+drill_door_xssh_drift() {
+  CAP=60
+  local t0 d out rc; t0=$(now); d="$EB/xssh"; rm -rf "$d"; mkdir -p "$d"
+  cp -R "$ROOT/tokenledger/agent/internal/xssh/." "$d/"
+  out=$(XSSH_DEST="$d" bash "$ROOT/bin/xssh-sync.sh" --check 2>&1); rc=$?
+  case $rc in
+    3) SECS=$(since "$t0"); WHAT="此处没有 go 工具链：xssh-sync-selftest.sh 在 Go 门上核对"; return 0 ;;
+    0) ;;
+    *) case $out in *'not in the module cache'*) SECS=$(since "$t0"); WHAT="此处没有模块缓存：Go 门核对"; return 0 ;; esac
+       WHY="the tree's own copy is not clean: $out"; return 1 ;;
+  esac
+  printf '\n// a hand edit\n' >> "$d/server.go"
+  out=$(XSSH_DEST="$d" bash "$ROOT/bin/xssh-sync.sh" --check 2>&1) && { WHY="a hand edit passed the check"; return 1; }
+  case $out in *server.go*) ;; *) WHY="the check did not name server.go: $out"; return 1 ;; esac
+  cp "$ROOT/tokenledger/agent/internal/xssh/server.go" "$d/server.go"; printf 'package ssh\n' > "$d/extra.go"
+  out=$(XSSH_DEST="$d" bash "$ROOT/bin/xssh-sync.sh" --check 2>&1) && { WHY="a file upstream lacks passed the check"; return 1; }
+  case $out in *extra.go*) ;; *) WHY="the check did not name extra.go: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门带的 x/crypto/ssh 副本：改一个字节、多一个上游没有的文件，xssh-sync.sh --check 都红并点名；干净的副本是 go.mod 要的版本 + fleet.patch"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs

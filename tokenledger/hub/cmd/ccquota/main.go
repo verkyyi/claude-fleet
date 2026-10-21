@@ -82,7 +82,7 @@ func main() {
 // (agent/cmd/ccquota/commands.txt less version, which both run;
 // bin/tokenledger-modules-selftest.sh holds the two lists together).
 var nodeCommands = map[string]bool{
-	"agent": true, "budget": true, "chat-pipe": true, "codex": true, "core-exec": true,
+	"agent": true, "budget": true, "chat-pipe": true, "codex": true, "core-exec": true, "door": true,
 	"lease": true, "move": true, "place": true, "release": true, "report": true,
 	"stamp": true, "term-pty": true,
 }

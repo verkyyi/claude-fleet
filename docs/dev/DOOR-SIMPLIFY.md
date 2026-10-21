@@ -191,6 +191,11 @@ Match User fleet-jump
    （`SSHRelayOpen.Target = entry`，端口是 agent 自己的 `FLEET_ENTRY_PORT`），门用那张证书登进去。
 
 门被攻下：只能动那段时间里正经它登录的人；没在登录的人的家进不去（没有他们的签名就没有证书）。
+门自己的 SSH 服务器是 `ccquota door`（`tokenledger/agent/door`）：按书核对「钥匙是这个用户名的主人的」才要签名；
+签名来自门带的一份 `golang.org/x/crypto/ssh`（`tokenledger/agent/internal/xssh`：上游原样 + `fleet.patch`
+加一个 `SignedPublicKeyCallback`；`bin/xssh-sync.sh` 跟上游版本同步，`--check` 核对，维护说明在该目录 README）；
+到家那一跳只认入口给的家主机钥匙。每次登录一行审计（来源 · 用户名 · 人 · 指纹 · 家）。
+
 分批：①入口 + agent 这一半（本节的三个接口，BREAK-IT `door-session-no-sig` · `door-session-replay` ·
 `door-home-not-door`）；②家的本机入口认门会话 CA；③门自己的 SSH 服务器（`ccquota door`）；④网页「手机」页
 一行地址；⑤美国侧的门（同名按地区解析）；打洞 / STUN 留作高级。
