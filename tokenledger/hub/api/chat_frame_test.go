@@ -11,15 +11,15 @@ func TestChatFrameOrigins(t *testing.T) {
 	if (&Server{}).consolePolicy() != consoleCSP || strings.Contains(consoleCSP, "frame-src") {
 		t.Fatal("no origins: the policy must stay the console's own")
 	}
-	got, err := ParseChatFrameOrigins(" https://space.24haowan.com, https://*.example.com:8443 ,")
+	got, err := ParseChatFrameOrigins(" https://pages.example.com, https://*.example.com:8443 ,")
 	if err != nil || len(got) != 2 {
 		t.Fatalf("parse: %v %v", got, err)
 	}
 	p := (&Server{ChatFrameOrigins: got}).consolePolicy()
-	if !strings.HasSuffix(p, "; frame-src https://space.24haowan.com https://*.example.com:8443") || !strings.Contains(p, "frame-ancestors 'none'") {
+	if !strings.HasSuffix(p, "; frame-src https://pages.example.com https://*.example.com:8443") || !strings.Contains(p, "frame-ancestors 'none'") {
 		t.Errorf("policy %q", p)
 	}
-	for _, bad := range []string{"http://space.24haowan.com", "https://x.com; script-src *", "*", "https://x.com/path", "https://localhost", "javascript:alert(1)"} {
+	for _, bad := range []string{"http://pages.example.com", "https://x.com; script-src *", "*", "https://x.com/path", "https://localhost", "javascript:alert(1)"} {
 		if _, err := ParseChatFrameOrigins(bad); err == nil {
 			t.Errorf("%q was taken", bad)
 		}

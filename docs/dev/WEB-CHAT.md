@@ -300,8 +300,8 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 `embed.url`，只有它回 `frame-ancestors <入口>`）：页面每轮把自己的 `location.origin` 交给服务，`page_target` 答
 `embed_origin`，Agent 铸好后连同 `expires_at` 交给 `show_page`（`embed_url` / `embed_expires`），卡片在过期前多一个
 「在这里预览」，点开是 `sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"` 的
-iframe；过期就只剩「打开」。入口控制台只在部署给了 `CCQUOTA_FLEET_CHAT_FRAME_ORIGINS`（逗号分隔的 https origin，生产为
-`https://space.24haowan.com`）时加 `frame-src`，否则什么都不嵌。国内副本存卡片的标题、链接、状态，
+iframe；过期就只剩「打开」。入口控制台只在部署给了 `CCQUOTA_FLEET_CHAT_FRAME_ORIGINS`（逗号分隔的 https origin，填活页的嵌入链接所在的源；
+生产的值在私有部署覆盖层里）时加 `frame-src`，否则什么都不嵌。国内副本存卡片的标题、链接、状态，
 不存预览。
 
 ## 认证和凭据

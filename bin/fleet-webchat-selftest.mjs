@@ -189,7 +189,7 @@ async function* one(prompt, options) {
     const target = JSON.parse(await call("page_target", { file: H + "/proj/weekly.html" }));
     appendFileSync(${JSON.stringify(TOOLLOG)}, JSON.stringify(target) + "\\n");
     const input = prompt === "page"
-      ? { title: "销售周报 · 第 41 周", url: "https://w-x.hy.24haowan.com/s/demo", status: "review", proposal_id: "P1", version: 1,
+      ? { title: "销售周报 · 第 41 周", url: "https://pages.example.com/s/demo", status: "review", proposal_id: "P1", version: 1,
           file: H + "/proj/weekly.html", folder_id: "F1", preview: H + "/proj/weekly.png",
           embed_url: "https://space.example.com/embed/V1/TICKET", embed_expires: new Date(Date.now() + 3600e3).toISOString() }
       : { title: "坏链接", url: "javascript:alert(1)", status: "ready", proposal_id: "P1", version: 2, file: H + "/proj/weekly.html" };
@@ -656,7 +656,7 @@ if (part("pages")) {
   const pfrom = existsSync(PROMPTLOG) ? readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).length : 0;
   const live = (await sturn("page")).lines;
   const card = live.find((o) => o.t === "page");
-  ok(card && card.title === "销售周报 · 第 41 周" && card.url === "https://w-x.hy.24haowan.com/s/demo" && card.status === "review" &&
+  ok(card && card.title === "销售周报 · 第 41 周" && card.url === "https://pages.example.com/s/demo" && card.status === "review" &&
     card.version === 1 && card.proposal === "P1" && /^[0-9a-f]{32}\.png$/.test(card.preview || ""), `S live: show_page is a card with its link, state, version, preview (${JSON.stringify(card)})`);
   ok(live.some((o) => o.t === "tool" && o.summary === "发到活页 · 销售周报 · 第 41 周"), "S the step reads 发到活页 · <title>");
   const prompts = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).slice(pfrom).map((l) => JSON.parse(l).prompt);
