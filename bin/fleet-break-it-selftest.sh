@@ -4709,7 +4709,7 @@ HUB
   out=$(FLEET_CONF_DIR="$c" FLEET_ID_HUB_POST="bash $hub" env -u TMUX -u TMUX_PANE bash "$BIN/fleet-id.sh" live 2>&1); rc=$?
   [ "$rc" = 75 ] && [ ! -e "$c/body.POST" ] || { WHY="with no fleet server up it still reported (rc=$rc) — a down fleet would close every ID"; return 1; }
   grep -q 'fleet-id.sh" live' "$BIN/fleet-cleanup-daemon.sh" || { WHY="the cleanup tick never runs the reconcile"; return 1; }
-  grep -q 'self.end_id(snap\["@fleet_id"\])' "$BIN/fleet-cleanup-idle.py" || { WHY="the idle reaper's kill-window still leaves the ID open"; return 1; }
+  grep -Eq 'self\.end_id\(snap\["@fleet_id"\](, why)?\)' "$BIN/fleet-cleanup-idle.py" || { WHY="the idle reaper's kill-window still leaves the ID open"; return 1; }
   SECS=$(since "$t0")
   WHAT="节点每拍把活窗口的 ID 报给 hub（不在的由 hub 关成 hub:gone，再出现就恢复）；没有服务器回答就不报；空闲回收关窗口时写上 closed"
 }
