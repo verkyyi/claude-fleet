@@ -4,18 +4,20 @@
 # Builds site/ with bin/site-build.sh into a sandbox and reads the result:
 #
 #   A  no drill result: both pages build, and neither says a number of seconds
-#      anywhere — the try button reads 「立即体验」 / "Try it", the hero's second
-#      button 「申请使用」 → /apply, and neither page says anyone can start right
-#      away (免费试用 · 登录就能 · 马上 · 现在就试 / Free trial · Start now · Try it now ·
-#      sign in and — issue #4049)
+#      anywhere — the scan card reads 「微信扫码，先试一试」 / "Scan with WeChat to
+#      try it" with one line under its code and nothing else (C2: no 立即体验 /
+#      申请使用 / 其他登录方式 beside it), and neither page says anyone can start
+#      right away (免费试用 · 登录就能 · 马上 · 现在就试 / Free trial · Start now · Try
+#      it now · sign in and — issue #4049; the one 马上 is 「试用马上开通」 once
+#      they follow, which MRGB makes true)
 #   B  each page's head: <html lang>, title, description, canonical, hreflang
 #      zh-CN · en · x-default (→ /en/), og:* and twitter:* with a 1200×630 card
 #      that exists, every absolute URL on the __ORIGIN__ placeholder
 #   C  the JSON-LD parses: @graph has Organization · WebSite · SoftwareApplication
 #      (its UseAction → /app/try), and no FAQPage — the front page carries no FAQ (T872)
-#   D  a drill whose slowest run is ≤ 60 s: 「60 秒」 / "60 seconds" on the page,
-#      each step's seconds, the stopwatch and the drill's date
-#   E  a drill over 60 s: the measured time in its place, no 「60 秒」, a RED: line
+#   D  a drill whose slowest run is ≤ 60 s: build.json says timed, and the page
+#      still shows no stopwatch — the scan card carries none since C2
+#   E  a drill over 60 s: a RED: line
 #   F  a drill older than 7 days: no seconds at all, a RED: line
 #   G  the build refuses (exit 1) a string that states seconds no drill measured
 #   H  every local href / src on both pages is a file the hub serves from the
@@ -59,17 +61,18 @@ def text(page):
     body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', page, flags=re.S)
     return html.unescape(' '.join([metas, ld, re.sub(r'<[^>]+>', ' ', body)]))
 
-for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '立即体验'), ('en', 'en/index.html', '/en/', 'Try it')):
+for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，先试一试'), ('en', 'en/index.html', '/en/', 'Scan with WeChat to try it')):
     p = open(os.path.join(OUT, rel), encoding='utf-8').read()
     t = text(p)
     # A — the trial's length (15 分钟 / 15 minutes, #4049) is a rule, not a timing
     for m in SECS.finditer(re.sub(r'15\s*(分钟|minutes)', ' ', t)):
         bad.append('A %s: says "%s" with no drill' % (rel, t[max(0, m.start() - 15):m.end() + 5].strip()))
     if tryw not in t:
-        bad.append('A %s: no "%s" button' % (rel, tryw))
-    if 'href="/apply" data-out>' not in p:
-        bad.append('A %s: no 申请使用 → /apply button in the hero' % rel)
-    for m in re.finditer(r'免费试用|登录就能|马上|现在就试|free trial|start now|try it now|sign in and', p, re.I):
+        bad.append('A %s: the scan card does not say "%s"' % (rel, tryw))
+    card = p.split('<div class="j j-scan">')[1].split('<div class="j j-wait">')[0]
+    if card.count('<p class="lead">') != 1 or re.search(r'class="(scan|flow|alt|timed|other)"', card):
+        bad.append('A %s: the scan card is not title + code + one line (C2)' % rel)
+    for m in re.finditer(r'免费试用|登录就能|马上(?!开通)|现在就试|free trial|start now|try it now|sign in and', p, re.I):
         bad.append('A %s: says "%s" — access is limited (#4049)' % (rel, m.group(0)))
     # B
     head = p.split('</head>')[0]
@@ -133,14 +136,9 @@ PY
 # D — a drill under 60 s
 printf '{"date":"2026-10-10","runs":[{"total":44,"steps":{"login":7,"machine":5,"first":32}},{"total":46.2,"steps":{"login":8.1,"machine":6,"first":32.1}}]}\n' > "$T/fast.json"
 if out="$("$BUILD" --out "$T/d" --drill "$T/fast.json" --now "$NOW" 2>&1)"; then
-  miss=""
-  for s in '<em>60 秒</em>' '>8 秒<' '>6 秒<' '>32 秒<' '00:46' '2026-10-10' '立即体验'; do
-    grep -qF "$s" "$T/d/index.html" || miss="$miss $s"
-  done
-  for s in '<em>60 seconds</em>' '>8 s<' 'Try it<' 'slowest of 2 runs'; do
-    grep -qF "$s" "$T/d/en/index.html" || miss="$miss $s"
-  done
-  [ -z "$miss" ] && st_ok_all "D a drill of 46 s: 60 秒, the steps 8/6/32, 00:46, its date" || bad "D missing:$miss"
+  if ! grep -q '"timed": true' "$T/d/build.json"; then bad "D build.json does not say timed: $(cat "$T/d/build.json")"
+  elif grep -qE '60 秒|60 seconds|00:46|slowest of' "$T/d/index.html" "$T/d/en/index.html"; then bad "D the page still shows the stopwatch"
+  else st_ok_all "D a drill of 46 s: recorded timed, no stopwatch on the page"; fi
 else bad "D build failed: $out"; fi
 
 # T — fleet.trial off (issue #4269): apply/index.html + apply/en/index.html, served
@@ -263,9 +261,8 @@ else bad "K no built page from D"; fi
 printf '{"date":"2026-10-10","runs":[{"total":131,"steps":{"login":9,"machine":90,"first":32}}]}\n' > "$T/slow.json"
 if out="$("$BUILD" --out "$T/e" --drill "$T/slow.json" --now "$NOW" 2>&1)"; then
   if grep -qE '60 秒|60 seconds' "$T/e/index.html" "$T/e/en/index.html"; then bad "E a 131 s drill still says 60"
-  elif ! grep -qF '约 2 分钟' "$T/e/index.html" || ! grep -qF 'about 2 minutes' "$T/e/en/index.html"; then bad "E the measured time is not on the page"
   elif ! printf '%s\n' "$out" | grep -q '^RED: '; then bad "E no RED: line: $out"
-  else st_ok_all "E a 131 s drill: 约 2 分钟 in place of 60 秒, RED"; fi
+  else st_ok_all "E a 131 s drill: RED"; fi
 else bad "E build failed: $out"; fi
 
 # F — a stale drill

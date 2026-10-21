@@ -95,6 +95,8 @@ They see it themselves at the top of the console and the chat — "Trial · 6 da
 
 **Trial QR codes**, under People in the admin console: make a code — a channel name (only admins see it), the trial plan (`fleet.apply.trial` above by default, changeable), how many people it gives a trial at most (200 by default, 0 = no cap), until when, and whether it needs approval (no by default). Two kinds: **permanent** (the default; never expires, stopped from here — the service account holds 100,000 in all, shared with the company's other products) and **temporary** (at most 30 days, then void). Download the picture as soon as it is made, for a poster, a slide or a group chat. To send it to a friend as it is, **Make a poster** beside the code (or Poster in its row): one 1080×1440 picture with the code, the product in a line, the trial it gives and three steps to start, in 中文 or English; on a phone long-press it to save or forward, on a computer Download PNG.
 
+The website's scan card takes its code from here too: make one with the channel `site` and no approval, and the front page shows it (its scans land in that code's funnel); with none, the front page draws its own as before.
+
 Someone scans it with WeChat and follows the service account (one already following just scans), and the account answers at once with a "Your trial is on" card; tapping it opens the chat inside WeChat — no sign-in, no request. They are on the list like a person approved from "Ask to use", with this code's trial limits and subscriptions; the request record says this code approved it.
 
 - **One trial per WeChat, ever**: the same WeChat scanning another code is told "your trial is running" or "you have tried" (tap to ask to become a member); a member is told to tap and go on.

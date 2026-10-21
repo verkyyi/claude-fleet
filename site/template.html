@@ -125,7 +125,7 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 /* the way in: WeChat first. One card, one state at a time (html[data-j]):
    scan (a computer) · phone (a phone's browser: open it in WeChat) · wait / member / apply
    (inside WeChat: who you are comes from the silent authorisation, no code) · in (signed in) */
-.join{margin-top:6px;background:var(--fleet-surface);border:1px solid var(--fleet-line);border-radius:20px;padding:24px 24px 18px;box-shadow:0 40px 90px -50px rgba(0,0,0,.8)}
+.join{margin-top:6px;background:var(--fleet-surface);border:1px solid var(--fleet-line);border-radius:20px;padding:24px;box-shadow:0 40px 90px -50px rgba(0,0,0,.8)}
 .join h2{font:700 22px/1.3 var(--fleet-font-display)}
 .j-scan .m,html[data-j=phone] .j-scan .d{display:none} html[data-j=phone] .j-scan .m{display:inline}
 .j{display:none} html:not([data-j]) .j-scan,html[data-j=scan] .j-scan,html[data-j=phone] .j-scan,html[data-j=wait] .j-wait,html[data-j=member] .j-member,html[data-j=apply] .j-apply,html[data-j=in] .j-in{display:block}
@@ -135,9 +135,9 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .qrbox .wx svg{width:24px;height:24px}
 .qrbox a{color:var(--fleet-clay-deep);text-decoration:underline}
 .qrbox.sm{width:132px;height:132px;margin:0;flex:none}.qrbox.sm>svg{width:116px;height:116px}.qrbox.sm .wx{width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:7px;border-width:2px}.qrbox.sm .wx svg{width:16px;height:16px}
-.scan{margin-top:12px;text-align:center;font-size:14.5px;font-weight:600}
 .wxhint{display:none;margin-top:12px;text-align:center;font-size:14.5px;font-weight:600}
-html.inwx[data-j=scan] .j-scan .scan{display:none} html.inwx[data-j=scan] .wxhint{display:block}
+.lead{margin-top:15px;text-align:center;font-size:14.5px;line-height:1.55;color:var(--fleet-ink-2)}
+html.inwx[data-j=scan] .j-scan .lead{display:none} html.inwx[data-j=scan] .wxhint{display:block}
 .flow{margin-top:14px;padding-top:12px;border-top:1px solid var(--fleet-line-2);font-size:13.5px;line-height:1.55;color:var(--fleet-ink-2);text-align:center}
 .wxbtn,.orqr,.okline{display:none}
 .wxbtn{width:100%;margin-top:16px;background:#07c160;border-color:#07c160;color:#fff}
@@ -148,12 +148,8 @@ html.inwx[data-j=scan] .j-scan .scan{display:none} html.inwx[data-j=scan] .wxhin
 .okline{margin-top:10px;font-size:13px;color:var(--fleet-ok);line-height:1.5}
 html[data-j=phone] .wxbtn,html[data-j=phone] .orqr{display:flex}
 html[data-j=phone] .okline:not([hidden]){display:block}
-html[data-j=phone] .j-scan .qrbox,html[data-j=phone] .j-scan .scan{display:none}
-html[data-j=phone].qr .j-scan .qrbox{display:grid} html[data-j=phone].qr .j-scan .scan{display:block} html[data-j=phone].qr .orqr{display:none}
-.alt{margin-top:10px;text-align:center;font-size:14px}.alt a{color:var(--fleet-clay);text-decoration:underline;text-underline-offset:3px}
-.timed{margin-top:10px;text-align:center;font-size:13px;color:var(--fleet-ink-2)}.timed em{font-style:normal;color:var(--fleet-clay)}.timed b{font:600 13px var(--fleet-font-mono);margin:0 4px}.timed small{display:block;color:var(--fleet-muted);font-size:12px}
-.sec-t{font:600 12px var(--fleet-font-mono);color:var(--fleet-sand);margin:0 2px}
-.other{display:block;margin-top:12px;text-align:center;font-size:13px;color:var(--fleet-muted)!important;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--fleet-line)}
+html[data-j=phone] .j-scan .qrbox{display:none}
+html[data-j=phone].qr .j-scan .qrbox{display:grid} html[data-j=phone].qr .orqr{display:none}
 .wait{display:flex;gap:10px;align-items:center;justify-content:center;padding:28px 0;color:var(--fleet-ink-2);font-size:15px}
 .wait i{width:16px;height:16px;border-radius:50%;border:2px solid var(--fleet-line);border-top-color:var(--fleet-clay);animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -161,6 +157,7 @@ html[data-j=phone].qr .j-scan .qrbox{display:grid} html[data-j=phone].qr .j-scan
 .jwho .av{flex:none;width:44px;height:44px;border-radius:50%;background:var(--fleet-clay-soft);border:1px solid var(--fleet-clay-line);color:var(--fleet-clay);display:grid;place-items:center;font:600 18px var(--fleet-font-ui)}
 .jwho b{display:block;font:700 19px/1.3 var(--fleet-font-display)}
 .jwho small{display:block;margin-top:3px;font-size:13.5px;line-height:1.5;color:var(--fleet-ink-2)}
+.j-member .tri,html.trialme .j-member .mem{display:none} html.trialme .j-member .tri{display:block}
 .j-apply .unf,html.unfollowed .j-apply .fol{display:none} html.unfollowed .j-apply .unf{display:block}
 .use{display:block;width:100%;margin-top:14px;resize:vertical;min-height:62px;background:var(--fleet-bg-2);border:1px solid var(--fleet-line);border-radius:12px;padding:10px 12px;color:var(--fleet-ink);font:400 15px/1.5 var(--fleet-font-ui)}
 .use::placeholder{color:var(--fleet-muted)}
@@ -189,7 +186,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
   .sub{font-size:16px;margin-top:12px}
   .trust{margin-top:14px;gap:6px}
   .trust li{font-size:13px;padding:5px 10px 5px 8px}
-  .join{margin-top:22px;padding:20px 18px 14px}
+  .join{margin-top:22px;padding:20px 18px}
   .demo{margin-top:22px}
   .screen{height:250px;font-size:12px}
   .topline .r{display:none}
@@ -232,30 +229,31 @@ footer .disc{margin-left:auto;font-size:12.5px}
       <p class="okline" id="phcopied" hidden>{{ph_copied}}</p>
       <button class="orqr" type="button" id="orqr">{{ph_orqr}}</button>
       <div class="qrbox" id="qr" data-p="{{join_p}}"><span>{{join_load}}</span></div>
-      <p class="scan">{{join_scan}}</p>
+      <p class="lead">{{join_lead}}</p>
       <p class="wxhint">{{wx_follow_qr}}</p>
-      <p class="flow"><span class="d">{{join_flow}}</span><span class="m">{{ph_flow}}</span></p>
-<!--trial-->
-      <p class="alt"><a href="{{try_href}}" data-out>{{try}}</a> · <a href="/apply" data-out>{{apply}}</a></p>
-<!--/trial-->
-<!--timed-->
-      <p class="timed">{{steps_h}} {{t_login}}{{t_machine}}{{t_first}} <b>{{clock}}</b><small>{{drill_src}}</small></p>
-<!--/timed-->
-      <a class="other" href="/app">{{join_other}}</a>
     </div>
     <div class="j j-wait"><p class="wait"><i></i>{{wx_wait}}</p></div>
     <div class="j j-member">
-      <p class="jwho"><span class="av" data-av></span><span><b data-hi="{{wx_hi}}"></b><small>{{wx_member_lead}}</small></span></p>
-      <a class="btn btn-p wide" href="/app">{{console}}</a>
+      <p class="jwho"><span class="av" data-av></span><span><b data-hi="{{wx_in_h}}"></b><small class="mem">{{wx_member_lead}}</small><!--trial--><small class="tri">{{wx_in_lead}}</small><!--/trial--></span></p>
+      <a class="btn btn-p wide" href="/app">{{wx_start}}</a>
     </div>
+<!--trial-->
+    <div class="j j-apply">
+      <p class="jwho"><span class="av" data-av></span><span><b class="fol" data-hi="{{wx_in_h}}"></b><b class="unf" data-hi="{{wx_tfollow_h}}"></b><small class="fol">{{wx_in_lead}}</small><small class="unf">{{wx_tfollow_lead}}</small></span></p>
+      <a class="btn btn-p wide fol" href="{{try_href}}">{{wx_start}}</a>
+      <div class="follow"><div class="qrbox sm" id="fqr" data-p="{{join_p}}"></div><p>{{wx_follow_qr}}</p></div>
+    </div>
+<!--/trial-->
+<!--apply-->
     <form class="j j-apply" method="post" action="/apply">
       <p class="jwho"><span class="av" data-av></span><span><b data-hi="{{wx_apply_h}}" data-anon="{{wx_apply_h_anon}}"></b><small class="fol">{{wx_apply_lead}}</small><small class="unf">{{wx_follow_lead}}</small></span></p>
       <textarea class="use" name="use" maxlength="500" rows="2" placeholder="{{wx_use_ph}}"></textarea>
       <input type="hidden" name="notify" value="wechat">
       <button class="btn btn-p wide" type="submit">{{wx_apply_btn}}</button>
-      <div class="follow"><div class="qrbox sm" id="fqr"></div><p>{{wx_follow_qr}}</p></div>
+      <div class="follow"><div class="qrbox sm" id="fqr" data-p="{{join_p}}"></div><p>{{wx_follow_qr}}</p></div>
       <p class="flow">{{wx_fine}}</p>
     </form>
+<!--/apply-->
     <div class="j j-in"><a class="btn btn-p wide" href="/app">{{console}}</a></div>
   </aside>
 
@@ -326,7 +324,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
     if(m){root.classList.add('in');
       document.querySelectorAll('[data-out]').forEach(function(e){e.hidden=true});
       $('#to-app').hidden=false;if(m.can_logout)$('#sign-out').hidden=false;
-      if(inwx){hi(m.name);state('member')}else state('in');return}
+      if(inwx){hi(m.name);if(m.role==='trial')root.classList.add('trialme');state('member')}else state('in');return}
     if(inwx)return wechat();
     if(!phone)code($('#qr'));
   });
@@ -338,7 +336,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
      has not followed gets the code to long-press. The hop failing ⇒ the code. */
   function wechat(){
     fetch('/apply/me',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.json().then(function(j){return r.ok?j:{none:1,silent:!!j.silent}})}).catch(function(){return {none:1}}).then(function(a){
-      if(!a.none){hi(a.name);if(!a.followed){root.classList.add('unfollowed');code($('#fqr'),'login')}
+      if(!a.none){hi(a.name);if(!a.followed){root.classList.add('unfollowed');code($('#fqr'))}
         if(a.applied){location.replace('/apply');return}state('apply');return}
       var k='cf-wx-hop',tried=!a.silent;try{tried=tried||!!sessionStorage.getItem(k);if(!tried)sessionStorage.setItem(k,'1')}catch(e){}
       if(tried){state('scan');code($('#qr'));return}
@@ -364,7 +362,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
       fetch('/auth/wechat/qr',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'purpose='+encodeURIComponent(p)})
       .then(function(r){if(!r.ok)throw 0;return r.json()}).then(function(j){
         box.innerHTML=j.qr+'<span class="wx"><svg><use href="#wxm"/></svg></span>';
-        if(!poll)return;
+        if(!poll||!j.s)return; // a channel code (MRGB) is answered in WeChat: nothing to poll
         var q='/auth/wechat/poll?s='+j.s+(p==='trial'?'&p=trial':'');
         clearInterval(timer);timer=setInterval(function(){
           if(document.hidden)return;
