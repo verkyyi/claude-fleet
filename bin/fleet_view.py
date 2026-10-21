@@ -4804,8 +4804,12 @@ def _popup(screen, qo, vid, client, forward=""):
             lit = key_of(shown[at]) if 0 <= at < len(shown) else (None, None)
             items = new
             shown = listing()
+            # its row gone: the nearest session, else ⚡ (T762: the commands sit
+            # above and below the sessions, so the old index lands on one of them)
+            sess = [i for i, e in enumerate(shown) if e["kind"] == "sess"]
             at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
-                      min(at, max(0, len(shown) - 1)))
+                      min(sess, key=lambda i: abs(i - at)) if sess else
+                      next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), min(at, max(0, len(shown) - 1))))
         if msg and not msg_until:
             msg_until = time.time() + 3
         heal.tick(screen)
