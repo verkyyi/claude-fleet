@@ -55,7 +55,7 @@ The first time, the list is empty and says `No sessions — type a name` at the 
 
 ## 4. Remember one key
 
-**⌘P** (iTerm2; in other terminals **⌃] p**) opens the panel: every session is here — pick a row to switch to it; write a sentence on the top line and it becomes a new task for a new session.
+**⌘P** (iTerm2; in other terminals and on a phone **F12** or **⌃] p**) opens the panel: every session is here — pick a row to switch to it; write a sentence on the top line and it becomes a new task for a new session.
 
 Closing the terminal window does not stop your sessions; type `fleet` next time and everything is where you left it. To quit the client altogether, use `fleet quit` (the sessions keep running).
 

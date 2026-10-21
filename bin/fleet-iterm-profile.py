@@ -15,7 +15,9 @@ reads them). Every other ⌘ key is the parent's, i.e. iTerm2's own (T685, 操�
 2026-10-20: the 看台 takes ⌘P alone) — ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘K ⌘Q ⌘\\, which #3328 /
 T651 had kept, are no row of this profile: ⌘K clears, ⌘T opens a tab, ⌘N a window,
 ⌘Q quits iTerm2 again (fleet_keys.RETIRED; an older profile's code is swallowed by
-the 看台). (The old
+the 看台). One key more, not a ⌘ one (T705): F12 is the phone's panel key, so
+this profile sends it as its own code (fleet_keys.ITERM_PASS, 933), which the 看台
+hands on to the session as F12 — in iTerm2 F12 never opens the panel. (The old
 client's `--all` — every row of the table at its own chord — went with that
 client, issue #3008.)
 
@@ -135,6 +137,9 @@ def rows():
         key = fleet_keys.iterm_key(chord)
         if key and action in codes:
             out.append((key, codes[action]))
+    # F12 (T705): the phone's panel key, so iTerm2 sends it as a code the 看台 hands
+    # on to the session — on a Mac F12 stays the session's (fleet_keys.ITERM_PASS)
+    out += fleet_keys.iterm_pass()
     return out
 
 

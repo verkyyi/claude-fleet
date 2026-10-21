@@ -2,12 +2,14 @@
 """fleet_keys.py — which keys a person's fleet binds (issue #3185, EPIC #3178 C7).
 
 A new install takes ONE key (T685, 操作者 2026-10-20): ⌘P on a Mac, and the same
-panel as ⌃] p on a phone or a terminal with no ⌘; every other action is a row of
-that panel, and any other key is the person's to add:
+panel on a phone or a terminal with no ⌘ as F12 (one tap, once it is on Termius's
+key row — T705, 操作者 2026-10-20: 「Termius还应保留F12」) or ⌃] p; every other
+action is a row of that panel, and any other key is the person's to add:
 
     [client]  FLEET_KEY_PANEL=cmd+p           the panel; another chord, or `off`
               FLEET_KEYS_EXTRA="next=cmd+down new=cmd+n home=ctrl+\\"
-    [common]  FLEET_KEY_PHONE="ctrl+]p"
+    [common]  FLEET_KEY_PHONE="f12"           the phone's one-tap keys besides ⌃] p
+                                              (always bound); `off` = ⌃] p alone
               FLEET_KEYS_PHONE_EXTRA="ctrl+]n=next ctrl+]q=quit"
 
 A chord is `+`-joined modifiers (cmd · ctrl · alt/opt · shift) and one key (a
@@ -31,7 +33,16 @@ import re
 import subprocess
 
 DEFAULT_PANEL = "cmd+p"
-DEFAULT_PHONE = "ctrl+]p"
+# the phone's panel keys (T705): ⌃] p is always one of them (PHONE_BASE — the
+# phone's ⌘P, every terminal sends it); FLEET_KEY_PHONE names the others, F12 by
+# default, `off` none. DEFAULT_PHONE is the whole default set, as the docs print it.
+PHONE_BASE = "ctrl+]p"
+DEFAULT_PHONE = "f12 " + PHONE_BASE
+# iTerm2 keeps F12 (T705: the 看台 takes ⌘P alone on a Mac): the `fleet` profile
+# sends F12 as its own private code, which the 看台 hands on to the pane as F12 —
+# so a phone's F12 opens the panel and iTerm2's reaches the session. (chord, iTerm2
+# key, code); dropped from the profile when the person named F12 themselves.
+ITERM_PASS = (("f12", "0xf70f-0x800000", "933"),)
 # the actions with no switch-table code: bound only as a chord the terminal sends.
 # `shell` (a session's own, in its directory) is reached from the row's Tab page.
 CODELESS = ("shell",)
@@ -201,8 +212,29 @@ def forwards(extra=None):
     return []
 
 
+def iterm_pass():
+    """[(iTerm2 key, code)] the `fleet` profile hands on to the session (T705: F12),
+    less a key the person bound themselves (the panel, an extra)."""
+    named = [panel()] + [c for _, c in pairs(client_extra(), _ANY)]
+    own = {(frozenset(p[0]), p[1]) for p in map(parse, named) if p}
+    return [(k, code) for chord, k, code in ITERM_PASS if (frozenset(parse(chord)[0]), parse(chord)[1]) not in own]
+
+
+class _Any:
+    """Every action name — iterm_pass reads any extra's chord, whatever it binds."""
+    def __contains__(self, _):
+        return True
+
+
+_ANY = _Any()
+
+
 def phone():
-    return setting("FLEET_KEY_PHONE", default=DEFAULT_PHONE).split()
+    """The panel's phone chords: FLEET_KEY_PHONE's (F12 by default; `off` / empty
+    none) and ⌃] p, always (T705 — before it, `f12` replaced ⌃] p)."""
+    v = setting("FLEET_KEY_PHONE", default=DEFAULT_PHONE).split()
+    words = [w for w in v if w != "off"]
+    return words + ([PHONE_BASE] if PHONE_BASE not in words else [])
 
 
 def phone_extra():

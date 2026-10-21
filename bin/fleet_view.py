@@ -3340,8 +3340,8 @@ def tkey(key):
 def key_lines(me, extra=None, browser=False):
     """The commands that rebuild both tables: root copied into fleet-view, then the
     看台's keys (issue #3185, EPIC #3178 C7; T685) — by default ONE action, the
-    panel: its ⌘ code (User927, ⌘P on the client) and the phone key FLEET_KEY_PHONE
-    (⌃] p); then what the person added — the clients' FLEET_KEYS_EXTRA (key_extra:
+    panel: its ⌘ code (User927, ⌘P on the client) and the phone keys FLEET_KEY_PHONE
+    (F12 · ⌃] p, T705 — iTerm2's F12 arrives as User933 and goes on to the pane); then what the person added — the clients' FLEET_KEYS_EXTRA (key_extra:
     a ⌘ chord → its action's code, any other chord → that tmux key) and this
     machine's FLEET_KEYS_PHONE_EXTRA (`ctrl+]n=next` → ⌃] n); ⌃] ⌃] always sends
     one ⌃] on. Every other code (the retired ⌘ keys an older profile still sends)
@@ -3362,7 +3362,8 @@ def key_lines(me, extra=None, browser=False):
     codes = {t.split()[0]: t.split()[3] for t in table.splitlines() if len(t.split()) >= 5}
     # the codes too (conf/tmux-view.conf sets the same, idempotent); 924 926 930 retired
     lines += ['set-option -s user-keys[%s] "\\e[%s~"' % (c, c)
-              for c in sorted(set(codes.values()) | {"924", "926", "930"}) if c.isdigit()]
+              for c in sorted(set(codes.values()) | {"924", "926", "930"} | {p[2] for p in fleet_keys.ITERM_PASS})
+              if c.isdigit()]
     size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
     popup = str(Path(me).parent / "dash-popup.sh")
 
@@ -3434,6 +3435,10 @@ def key_lines(me, extra=None, browser=False):
         popup, size(90), size(80), str(Path(me).parent / "fleet_notice.py"))
     binds[("fleet-view", "MouseDown1Status")] = "if-shell -F '#{==:#{mouse_status_range},inbox}' { %s }%s" % (
         page, " { %s }" % stock if stock else "")
+    # F12 from iTerm2 (T705): its `fleet` profile sends the code, not F12 — the
+    # session's key, handed on; the phone's F12 is FLEET_KEY_PHONE's, above
+    for chord, _k, code in fleet_keys.ITERM_PASS:
+        binds[("fleet-view", "User%s" % code)] = "send-keys %s" % fleet_keys.tmux_key(chord)[1]
     _OURS[0] = {tk for tk in binds if tk[0] == "fleet-view"}
     for (table, key), c in binds.items():
         lines.append("bind-key -T %s %s %s" % (table, tkey(key), c))

@@ -295,7 +295,7 @@ for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 [ -s "$W/pane1.in" ] && st_fail "E: a ⌘ key's bytes reached a pane: $(od -c "$W/pane1.in" | head -2)"
 st_ok_all "E  ⌘↓ ⌘↑ walk the list, ⌘[ ⌘] the history, ⌃] b on a phone; the fleet session keeps its keys"
 
-# --- G: a phone (issue #3006, C9): 40 columns, ⌃] p the whole screen, ⌃] n on to mac-a ----------
+# --- G: a phone (issue #3006, C9; T705): 40 columns, ⌃] p / F12 the whole screen, ⌃] n on to mac-a ----------
 to resize-window -t o:view -x 40 -y 20
 sleep 0.5
 [ "$(ti display-message -p -t 'fl@view-v1:' '#{client_width}')" = 40 ] \
@@ -325,6 +325,21 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.2
 done
 [ -n "$closed" ] || st_fail "G: phone popup did not close and thaw"
+# F12 (T705): the phone's one tap — Termius's key row — opens the same list
+to send-keys -t o:view F12
+ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 0.5; to capture-pane -p -t o:view > "$W/phone-f12.txt"; grep -q '等你' "$W/phone-f12.txt" && { ok=1; break; }
+done
+[ -n "$ok" ] || st_fail "G: F12 opened no list at 40 columns: $(cat "$W/phone-f12.txt")"
+[ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone-f12.txt" "$FLEET_VIEW_EVIDENCE_PHONE.f12"
+to send-keys -t o:view Escape
+closed=''
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if [ "$(ti show-options -gqv @popup_open)" = 0 ] && \
+     [ "$(ti display-message -p -t "$W2" '#{pane_in_mode}')" = 0 ]; then closed=1; break; fi
+  sleep 0.2
+done
+[ -n "$closed" ] || st_fail "G: the F12 popup did not close and thaw"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || st_fail "G: go to alpha"
 to send-keys -t o:view C-] n                 # alpha → the next in the list: mac-a's session
 for _ in $(seq 1 40); do sleep 0.25;  # a poll, not a budget: the first go opens the peer window (#4443)
@@ -333,7 +348,7 @@ case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in
   "mac-a@$ME") ;; *) st_fail "G: ⌃] n from alpha did not step on to mac-a's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
 esac
 to resize-window -t o:view -x 120 -y 32
-st_ok_all "G  a phone: 40 columns, ⌃] p the list on the whole screen, ⌃] n on to another machine's session"
+st_ok_all "G  a phone: 40 columns, ⌃] p and F12 the list on the whole screen, ⌃] n on to another machine's session"
 
 # --- H: no session is special (issue #3119): the orchestrator gets no line of its own ----------
 python3 - "$BIN" <<'EOF' || st_fail "H: the orchestrator still gets a line of its own"

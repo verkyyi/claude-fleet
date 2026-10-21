@@ -20,7 +20,7 @@ fleet          # open it, back to where you left off
 fleet quit     # close only the window on this computer; sessions keep working
 ```
 
-On a Mac, iTerm2 is recommended: ⌘P opens the panel; in other terminals use `⌃] p`. fleet takes that one key; everything else is in the panel.
+On a Mac, iTerm2 is recommended: ⌘P opens the panel; in other terminals and on a phone use `F12` or `⌃] p`. fleet takes that one key (in iTerm2, F12 stays the session's); everything else is in the panel.
 
 ## What happens when you close your computer
 
@@ -37,11 +37,11 @@ One sign-in lasts 12 hours and this computer renews it by itself when it runs ou
 On a phone, use **Termius** (on both iOS and Android) to connect to your own address; what you see is the same set of sessions as on your computer. It takes one setup, about 5 minutes:
 
 1. Open the hub in a browser, sign in, and choose **Connect from a phone** in the navigation (the address is `https://<hub>/fleet/keys`, for example `https://hub.example.com/fleet/keys`).
-2. Follow the page's six steps: install Termius → generate a key in Termius → paste the public key back on the page → add a host in Termius (address, port, username and key — each has a copy button on the page) → connect and trust the host key → once connected, press `⌃] p` to open the panel.
+2. Follow the page's six steps: install Termius → generate a key in Termius → paste the public key back on the page → add a host in Termius (address, port, username and key — each has a copy button on the page) → connect and trust the host key → once connected, press `F12` or `⌃] p` to open the panel.
 3. Your address looks like `<name>.<the hub's domain>` (for example `alice.fleet.example.com`) and is written on the page; use the port the page shows too.
 
 After that, on the phone:
 
-- Open the panel: `⌃] p` (Ctrl+], then p).
+- Open the panel: `F12` or `⌃] p` (Ctrl+], then p). Add `F12` to the extra-keys row above Termius's keyboard and one tap opens it.
 - On a narrow screen the panel fills the screen; tap a row to switch to it.
 - New phone, or lost it: revoke that key on the hub's **My connection** page and it can no longer connect, at once.

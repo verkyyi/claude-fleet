@@ -435,8 +435,8 @@ fleet_ui_t() {
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
     # T685: the one key left — said once per login (keys_notice)
-    zh:view_keys_moved) printf 'fleet 只用 ⌘P，其余都在面板里' ;;
-    en:view_keys_moved) printf 'fleet uses one key, ⌘P — everything else is in its panel' ;;
+    zh:view_keys_moved) printf 'fleet 只用 ⌘P（手机 F12 或 ⌃] p），其余都在面板里' ;;
+    en:view_keys_moved) printf 'fleet uses one key, ⌘P (phone: F12 or ⌃] p) — everything else is in its panel' ;;
     zh:view_web_far) printf '浏览器里请从「会话」打开这个会话' ;;
     en:view_web_far) printf 'Open this session from Sessions in the browser' ;;
     zh:view_open_elsewhere) printf '这个会话开在别处 — 到那个终端页面去接管' ;;
@@ -536,18 +536,18 @@ fleet_ui_t() {
     zh:view_lang_failed_fmt) printf '语言没换：%s' "${1:-}" ;;
     en:view_lang_failed_fmt) printf 'Language not changed: %s' "${1:-}" ;;
     # the door's one welcome line (issue #3329, L4) — printed only as you come in
-    zh:door_welcome) printf '欢迎回来。⌃] p 打开面板。' ;;
-    en:door_welcome) printf 'Welcome back. ⌃] p opens the panel.' ;;
-    zh:view_door_welcome) printf '欢迎回来。⌃] p 打开面板。' ;;
-    en:view_door_welcome) printf 'Welcome back. ⌃] p opens the panel.' ;;
+    zh:door_welcome) printf '欢迎回来。F12 或 ⌃] p 打开面板。' ;;
+    en:door_welcome) printf 'Welcome back. F12 or ⌃] p opens the panel.' ;;
+    zh:view_door_welcome) printf '欢迎回来。F12 或 ⌃] p 打开面板。' ;;
+    en:view_door_welcome) printf 'Welcome back. F12 or ⌃] p opens the panel.' ;;
     # the onboarding guide's fixed lines (issue #3332, EPIC #3178 C20): a newcomer
     # who never wrote code — one key, one thing done; only `dev` names code / a PR
     zh:onboard_hello) printf '你好！我是这台电脑上的向导。两三分钟：教你一个键，再帮你把一件事当场做完。' ;;
     en:onboard_hello) printf "Hi! I'm the guide on this computer. Two or three minutes: one key to learn, then one thing done for you, right now." ;;
-    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 ⌃] p（先按 ⌃]，再按 p）。它打开一个面板，你所有的会话都在里面；最底下带 ⚡ 的那一行，用来交代一件新的事。' ;;
-    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, ⌃] p on a phone (⌃], then p). It opens a panel with all your sessions; the ⚡ row at the bottom is where you hand over something new.' ;;
-    zh:onboard_try) printf '现在试一下：按 ⌘P（手机 ⌃] p），直接写一件你想做的事——比如「帮我写一封请假邮件」——然后回车。' ;;
-    en:onboard_try) printf 'Try it now: press ⌘P (phone: ⌃] p), write one thing you would like done — say, "draft an email asking for Friday off" — and press Enter.' ;;
+    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 F12（或 ⌃] p：先按 ⌃]，再按 p）。它打开一个面板，你所有的会话都在里面；最底下带 ⚡ 的那一行，用来交代一件新的事。' ;;
+    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, F12 on a phone (or ⌃] p: ⌃], then p). It opens a panel with all your sessions; the ⚡ row at the bottom is where you hand over something new.' ;;
+    zh:onboard_try) printf '现在试一下：按 ⌘P（手机 F12 或 ⌃] p），直接写一件你想做的事——比如「帮我写一封请假邮件」——然后回车。' ;;
+    en:onboard_try) printf 'Try it now: press ⌘P (phone: F12 or ⌃] p), write one thing you would like done — say, "draft an email asking for Friday off" — and press Enter.' ;;
     zh:onboard_sent) printf '收到，它已经在一个新会话里开工了。面板里它那一行是 » 就是在干活，变成 ✓ 就是做完了；按 ⌘P，选它，回车，就能过去看。' ;;
     en:onboard_sent) printf 'Got it — a new session has started on it. In the panel, » on its row means working and ✓ means done; press ⌘P, pick it, Enter, to watch.' ;;
     zh:onboard_done) printf '做完了！以后就这样：⌘P，写一句，回车。' ;;

@@ -13,7 +13,7 @@ zh	en	note
 承载	host (capability)	this computer runs sessions: `fleet host on`; the protocol says node (docs/dev/TERMS.md)
 节点	node	the hub protocol's word for a hosting machine
 客户端	client	the `fleet` program on a person's own computer
-总面板	panel	opened with ⌘P / ⌃] p
+总面板	panel	opened with ⌘P / F12 / ⌃] p
 看台	viewer	the thin client view of a machine's sessions
 额度	quota	what is left of a subscription in the 5-hour / 7-day windows
 配额	quota share	the part of the quota an admin gives a person

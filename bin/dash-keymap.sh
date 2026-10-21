@@ -83,8 +83,8 @@ home ⌘\ 0x5c-0x100000 x1c \ -'
 # that is the old client's tmux prefix row, where p is ⌘↑ and Q is shifted; a
 # thumb wants p the list, n / b next and back up the list, q quit. Only the
 # actions a 看台 binds get a letter; every one is a row of the table above.
-# Only `p` is bound by default (fleet.conf FLEET_KEY_PHONE's `ctrl+]p` — the
-# phone's ⌘P; T685 dropped ⌃空格 and F12); the rest are the letters FLEET_KEYS_PHONE_EXTRA's example spells
+# Only `p` is bound by default (fleet_keys.PHONE_BASE `ctrl+]p`, always — the
+# phone's ⌘P; beside it FLEET_KEY_PHONE's F12, T705; T685 dropped ⌃空格); the rest are the letters FLEET_KEYS_PHONE_EXTRA's example spells
 # (`ctrl+]n=next …`), bound only when the person writes them.
 VIEW='quickopen p
 next n
