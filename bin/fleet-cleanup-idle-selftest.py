@@ -2,7 +2,7 @@
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
 # selftest-part: 5 HomeReap.test_exited_two_hours_closes_an_idle_turn_never HomeReap.test_spawned_norepo_without_policy_is_never_closed PinIsOrder.test_dry_run_migrates_nothing PolicyGrammar.test_origin_table_and_the_policy_in_force ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
+# selftest-part: 6 TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn TestIdentity.test_probe_origin_closes_after_a_finished_turn
 # selftest-part: 7 RoundTrip.test_codex_unknown_or_active_native_turn_is_kept
 # selftest-part: 8 RoundTrip.test_real_close_and_restore
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
@@ -1507,6 +1507,21 @@ class TestIdentity(Rig):
         self.assertIn("reaped-test:" + busy, self.clean())        # done 4000 s ago
         self.assertFalse(self.alive(busy))
 
+    def test_probe_origin_closes_after_a_finished_turn(self):
+        # BCYB: a placement demo opened through the hub carries no @origin — its
+        # @reap_origin probe makes it nobody's home session, so done:10m closes it
+        # after a finished turn (D1–D13 waited for an /exit that never came).
+        done = {"@claude_state": "done", "@claude_state_ts": str(int(time.time()) - 900)}
+        probe = self.norepo(False, **dict(done, **{"@reap_origin": "probe"}))
+        mine = self.norepo(False, **done)                          # a person's home session: waits for the exit
+        self.clean()                                              # the countdown starts …
+        if self.tm("display-message", "-p", "-t", probe, "#{@reap_due}").strip().isdigit():
+            self.tm("set-option", "-w", "-t", probe, "@reap_due", str(int(time.time()) - 1))
+        out = self.clean()                                        # … and runs out
+        self.assertIn("reaped-idle:" + probe + " policy=done:10m norepo", out)
+        self.assertFalse(self.alive(probe))
+        self.assertTrue(self.alive(mine))
+
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
 class EmptyReap(Rig):
@@ -1626,20 +1641,6 @@ class HomeReap(ReapPolicy):
         self.set("@claude_state", "done")
         out = self.due()
         self.assertIn("reaped-idle:" + self.win + " policy=done:5m norepo", out)
-        self.assertFalse(self.exists())
-
-    def test_probe_norepo_closes_after_a_finished_turn(self):
-        # BCYB: a placement demo opened through the hub carries no @origin — its
-        # @reap_origin probe makes it nobody's home session, so done:10m closes it
-        # after a finished turn (D1–D13 waited for an /exit that never came).
-        self.policy("done:10m")
-        self.set("@claude_state", "done")
-        self.set("@claude_state_ts", str(int(time.time()) - 900))
-        self.due()
-        self.assertTrue(self.exists())               # a person's home session: waits for the exit
-        self.set("@reap_origin", "probe")
-        out = self.due()
-        self.assertIn("reaped-idle:" + self.win + " policy=done:10m norepo", out)
         self.assertFalse(self.exists())
 
     def test_spawned_norepo_without_policy_is_never_closed(self):
