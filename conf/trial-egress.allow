@@ -1,0 +1,18 @@
+# What a trial login may reach once fleet.trial.egress (or FLEET_TRIAL_EGRESS in
+# machine.env) is `block` — WACK C3, bin/fleet_trial_egress.py. One host name,
+# address or CIDR a line; names are resolved on the machine every pass (60 s).
+# DNS (port 53) and the hub's own host are always allowed; mail ports 25 / 465 /
+# 587 are refused even to a host listed here. Loopback is never touched.
+#
+# Code hosting — clone, fetch, push, the API, release downloads
+github.com
+api.github.com
+codeload.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+# Package registries
+registry.npmjs.org
+pypi.org
+files.pythonhosted.org
+proxy.golang.org
+sum.golang.org

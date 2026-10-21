@@ -45,6 +45,9 @@ OPS = {
     "machine": {"job": str, "action": str},
     "sweep": {},
     "entry": {},
+    # one pass of the trial logins' pf anchor (WACK C3): the core pulls the hub's
+    # list itself (machine.env is root's) — nothing of it comes over the socket
+    "egress": {},
     "report": {"kind": str},
     # the seated updater's root half (#3670): one step of `fleet-node-update.py
     # root <step>` from <current>/bin — outside · credsep · prune, never an argv

@@ -848,6 +848,13 @@ func (s *Server) entryMachineOf(w http.ResponseWriter, r *http.Request) string {
 		httpError(w, http.StatusNotFound, "the direct door is off on this hub ("+EntryKey+")")
 		return ""
 	}
+	return s.nodeMachineHost(w, r, ep)
+}
+
+// nodeMachineHost is the machine a machine's node program (ccquota agent
+// --machine, or the node's root) speaks for; "" with the answer written when
+// the caller is a login's own agent or the machine has no name yet.
+func (s *Server) nodeMachineHost(w http.ResponseWriter, r *http.Request, ep *store.Endpoint) string {
 	host, user := s.peerSelf(ep)
 	machine := user == "root"
 	if c := s.nodes.get(ep.ID); c != nil && c.machineLink {

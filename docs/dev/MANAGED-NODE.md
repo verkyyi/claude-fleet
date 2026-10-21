@@ -823,6 +823,7 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
   | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`）· `wallpaper-off`（Mac：`fleet-wallpaper.sh off --tick`，#4362） |
   | `switch` | sha | `<state>/staging/<sha>/`（降权更新器放的，#3670）或 `<root>/<sha>/`：staging 先**整份复制**成 root 自己的 `<root>/.incoming-<sha>`（新 inode、权限重置），按它 `staged.json` 的表从已验的工件填 `<root>/tools/`，再用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；`bin/ccquota` 用机器的固定身份签（`fleet_node_codesign.py`），移进 `<root>/<sha>/`，信任锚按发布教的更新（链里锚直接担保的根 → 新锚、旧的留 `.prev`；吊销的 id 只增——锚只由核心写，#3835），再 `.prev` = 旧、`current` = 新 |
   | `rollback` | — | `current` ⇄ `.prev`，目标同样复核 |
+  | `egress` | — | 试用账号出网（WACK C3）：核心自己用机器令牌问入口 `GET /v1/node/trial-egress`，按名单把 pf anchor `fleet-trial` 整段重建（`bin/fleet_trial_egress.py`，§26）；名单不走 socket |
   | `update` | step | 降权更新器的 root 一半（#3670）：`<current>/bin/fleet-node-update.py root <step>` 以 root 跑——`outside`（启动缓存、管理员 agent 的 ccquota 与重启、各登录的工具链接）· `credsep`（代码副本刷新 + 池同步）· `prune`（清旧版本）；只收名字，不收 argv |
 
   登录必须在 `accounts.json` 里受管、不是 uid 0。表外一律回 `{"refused": op}`、什么都不执行，
@@ -1092,3 +1093,14 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 - **续不了是运维的事**：设备钥匙也续不了（exit 3：设备过了窗口 / 不认识）时，每段连续失败只报一条 `breakage` 告警，写明由运维重新登记；节点令牌重新登记设备的入口路见 #4595。
 - **措辞**：托管登录上 `fleet login` 的输出、体检 cert 行都不叫人跑 `fleet login` / 扫码，只说「运维会自动续期」/「已报运维处理」。
 - 演练：BREAK-IT `managed-cert-lapses-idle`（`bin/fleet-managed-cert-selftest.sh`）。
+
+## 26. 试用账号出网：默认不限，备好收紧的开关（WACK C3）
+
+试用的人占着的登录默认和别的登录一样能连任何地方。入口设置 `fleet.trial.egress`（`off` · `log` · `block`，默认 `off`；某台机器 `machine.env` 里的 `FLEET_TRIAL_EGRESS` 在那台上优先）打开后：
+
+- **谁算试用**：入口的 `trialIdentity`——走试用路进来、还没转正的人（role trial），或 `fleet.member_limits.<p>` 带 `until` 的成员（转正清掉这个键）。入口按每台机器上「家」是这种人的登录列出名单（`GET /v1/node/trial-egress`，机器令牌；管理员永不在内）。
+- **机器上**：守护每 `FLEET_TRIAL_EGRESS_EVERY`（60 秒）一拍 `tend_egress`（入座后经核心 `egress {}`，pf 是 root 的），`bin/fleet_trial_egress.py converge` 把 anchor `fleet-trial` 整段重建：主规则集没挂这个 anchor 就以 `/etc/pf.conf` 加一行 `anchor "fleet-trial"` 重载；pf 以引用开启（`pfctl -E` 的 token 记在 `<state>/trial-egress.json`，off 时 `-X` 交还）。只认受管登录的 uid（`user <uid>`），回环 `lo0` 不管。
+- **block**：发信端口 25 / 465 / 587 一律拒；白名单（随版本发的 `conf/trial-egress.allow`，每拍在机器上解析成地址，加上入口自己的主机）与 DNS 53 放行；其余 TCP / UDP 出网 `block return` 并 `log`。**log**：同样的规则改成 `pass log`，只记不拦。
+- **记录**：pflog 读取器（`fleet_trial_egress.py log`，`tcpdump -n -e -l -tttt -i pflog0`）把命中本 anchor 的行按规则号（`pfctl -vv -s rules` 的 `@N` → uid）写成 `<log>/egress-deny.log` 一行：`时间 deny|would-deny 登录 uid=… 协议 目标:端口`。
+- **撤净**：off、名单为空、或名单超过 `FLEET_TRIAL_EGRESS_STALE_SECS`（900 秒）没更新（默认就是放开）⇒ `pfctl -a fleet-trial -F all`、交还引用、停读取器；号被回收（入口清了它的家）下一拍就不在规则里。演练：BREAK-IT `trial-egress-stuck`；`bin/fleet-trial-egress-selftest.sh`。
+- **验收**（要 root）：`sudo -n pfctl -a fleet-trial -s rules`（off 时为空）；临时 `FLEET_TRIAL_EGRESS=block` 时试用号 `curl -m5 https://example.com` 失败、`curl -m5 https://github.com` 成功、`egress-deny.log` 末行是那次被拒的连接，演练后改回 off。

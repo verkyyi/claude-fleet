@@ -45,6 +45,9 @@ holds the wire half). The table, written here and nowhere else:
   sweep    {}             the leftover sweep (plists to the attic, launchctl bootout)
   entry    {}             one entry-port pass: converge (host key, keys files, sshd -t,
                           com.apple.access_ssh) + the audit
+  egress   {}             one pass of the trial logins' pf anchor `fleet-trial` (WACK C3,
+                          fleet_trial_egress.py): the hub's mode + trial logins, the
+                          anchor rebuilt whole, the pflog reader started / stopped
   report   {kind}         read-only: table · fda (Full Disk Access of the core's chain)
                           · tenants (sudo -l -U, the sudoers files) · lanes (the
                           refused lanes in the node program's books)
@@ -1153,6 +1156,9 @@ class Core(object):
             except Exception as e:  # the record must never take the pass down
                 audit = "audit: %s" % e
         return {"ok": True, "result": json.loads(json.dumps(b, default=str)), "audit": audit}
+
+    def op_egress(self, conn, a):
+        return {"ok": True, "result": json.loads(json.dumps(sup.egress_pass(sup.Paths()), default=str))}
 
     def op_report(self, conn, a):
         if a["kind"] not in REPORTS:
