@@ -36,6 +36,8 @@ jobs:
         run: node --experimental-strip-types test/tasks.mjs
       - name: Terminal touch scroll
         run: node --experimental-strip-types test/terminal.mjs
+      - name: One 会话 list — tasks and sessions joined (T769)
+        run: node --experimental-strip-types test/work.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build

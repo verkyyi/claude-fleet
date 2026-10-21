@@ -1,0 +1,153 @@
+// work.ts — 会话's one list (T769): the person's task records (/v1/fleet/tasks)
+// and their sessions (/v1/fleet/sessions, live and the last 14 days' ended)
+// joined into rows, a task and its session ONE row — by the session's identity
+// (worker_id), never a name or a key; a session no record names is a row of
+// its own. Grouped as ⌘P's panel groups them (bin/fleet_view.py group_of):
+// 等你 · 在干活 · 排队中 · 已收起. A task's state is the hub's authority
+// (taskStatus), its session's word only what the session says now — neither is
+// inferred from the other (claude-fleet T644/C4: a session done is not a task
+// succeeded). Pure: no React, so test/work.mjs runs it as it is.
+import type { SessionRow } from "@/shared/sessions";
+import { displayCodes, taskOpen, taskPR, taskStatus, writtenCode, type Task } from "./task-state.ts"; // .ts: test/work.mjs runs this file as it is
+
+export type Group = "ask" | "work" | "queue" | "gone";
+export type Tone = "ask" | "fail" | "ok" | "muted";
+export type Glyph = "ask" | "fail" | "work" | "pr" | "done" | "idle" | "wait";
+
+export type Row = {
+  id: string;             // the task's ID, else the session's identity
+  code: string;           // the task's display code ("" = a session with no record)
+  title: string;
+  group: Group;
+  tag: [string, string];  // the state, 中文 / English
+  glyph: Glyph;
+  tone: Tone;
+  line: string;           // the last word: what it asks, what it is doing, its report
+  quote: boolean;         // line is its own words to you (shown in quotes)
+  task?: Task;
+  live?: SessionRow;
+  ended?: SessionRow;
+  parent?: string;        // the parent task's ID
+  parentTitle?: string;
+  kids: Row[];            // an EPIC's members (every one, whatever their group)
+  at: number;             // epoch ms: newest first within a group
+};
+
+export const GROUPS: { g: Group; label: [string, string] }[] = [
+  { g: "ask", label: ["等你", "Needs you"] },
+  { g: "work", label: ["在干活", "Working"] },
+  { g: "queue", label: ["排队中", "Queued"] },
+  { g: "gone", label: ["已收起", "Put away"] },
+];
+
+const ms = (iso?: string) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? t : 0; };
+
+// The person's own words for a task: a dispatch's request (title / body, as the
+// write door accepted it), else its title.
+export function taskWords(t: Task): string {
+  try {
+    const p = JSON.parse(t.request_payload || "{}")?.params || {};
+    const body = typeof p.body === "string" ? p.body.trim() : "";
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    if (body) return title && !body.startsWith(title) ? `${title}\n\n${body}` : body;
+    if (title) return title;
+  } catch { /* the title below */ }
+  return t.title;
+}
+
+// One task (or a session no record names) → its row.
+export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: SessionRow | undefined, code: string): Row {
+  const st = t ? taskStatus(t) : "";
+  const s = live?.state || "";
+  const pr = t ? taskPR(t) : null;
+  const at = live?.born ? live.born * 1000 : ended?.ended ? ms(ended.ended) : ms(t?.created_at);
+  const base = { id: t?.fid || t?.id || live?.id || ended?.wid || ended?.id || "", code, title: t?.title || live?.title || ended?.title || "",
+    task: t, live, ended, parent: t?.parent_task || undefined, kids: [] as Row[], quote: false, at };
+  const say = (x?: string) => (x || "").trim();
+  // 等你: it asks, it failed or did not start, or the record says it waits on you
+  if (s === "needs" || s === "blocked")
+    return { ...base, group: "ask", tag: ["在问你", "Asking you"], glyph: "ask", tone: "ask", line: say(live?.ask?.msg), quote: true };
+  if (st === "failed" || st === "refused")
+    return { ...base, group: "ask", tag: st === "failed" ? ["没做成", "Failed"] : ["没开成", "Didn't start"], glyph: "fail", tone: "fail", line: say(t?.evidence) };
+  if (t && t.asked && taskOpen(t) && !live)
+    return { ...base, group: "ask", tag: ["在等你", "Waiting on you"], glyph: "ask", tone: "ask", line: say(t.asked), quote: true };
+  // the record has ended: its result stands whatever its window still runs
+  // (⌘P's rule, EPIC T644 C4) — in 排队中 while a session is up, else put away
+  if (live && (st === "succeeded" || st === "cancelled"))
+    return { ...base, group: "queue", tag: st === "succeeded" ? ["已完成", "Completed"] : ["已取消", "Cancelled"], glyph: "done", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
+  // 在干活
+  if (s === "working" || s === "looping")
+    return { ...base, group: "work", tag: ["在干活", "Working"], glyph: "work", tone: "ok", line: say(live?.say) };
+  // 排队中: open, waiting on something that is not you
+  if (live) {
+    if (pr && t?.pr_state === "waiting") return { ...base, group: "queue", tag: ["等合并", "Awaiting merge"], glyph: "pr", tone: "muted", line: say(t.evidence) };
+    if (s === "done") return { ...base, group: "queue", tag: ["本轮结束", "Turn ended"], glyph: "done", tone: "muted", line: say(t?.evidence) };
+    if (s === "idle") return { ...base, group: "queue", tag: ["空闲", "Idle"], glyph: "idle", tone: "muted", line: "" };
+    return { ...base, group: "queue", tag: ["状态未知", "Unknown"], glyph: "idle", tone: "muted", line: "" };
+  }
+  if (t && taskOpen(t)) {
+    const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" ? ["排着", "Queued"]
+      : st === "running" || st === "waiting" ? ["看不到会话", "Session not seen"] : ["还不清楚", "Unknown"];
+    return { ...base, group: "queue", tag, glyph: "wait", tone: "muted", line: say(t.evidence) };
+  }
+  // 已收起: the record closed, or a session put away
+  const tag: [string, string] = st === "succeeded" ? ["已完成", "Completed"] : st === "cancelled" ? ["已取消", "Cancelled"] : ["已收起", "Put away"];
+  return { ...base, group: "gone", tag, glyph: st === "succeeded" ? "done" : "idle", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
+}
+
+// The one list: every task joined to its session by identity, every session no
+// record names a row of its own; an EPIC's members listed under it (`kids`),
+// and shown nested while they sit in the parent's group — in their own group
+// otherwise, naming the parent (rowsIn).
+export function buildRows(tasks: Task[], live: SessionRow[], ended: SessionRow[]): Row[] {
+  const codes = displayCodes(tasks);
+  const liveBy = new Map(live.map((r) => [r.id, r]));
+  const endedBy = new Map(ended.filter((r) => r.wid).map((r) => [r.wid!, r]));
+  const used = new Set<string>();
+  const rows: Row[] = tasks.map((t) => {
+    const l = t.worker_id ? liveBy.get(t.worker_id) : undefined;
+    const e = !l && t.worker_id ? endedBy.get(t.worker_id) : undefined;
+    if (t.worker_id) used.add(t.worker_id);
+    return rowOf(t, l, e, codes.get(t) || writtenCode(t));
+  });
+  for (const l of live) if (!used.has(l.id)) rows.push(rowOf(undefined, l, undefined, ""));
+  for (const e of ended) if (!used.has(e.wid || "")) rows.push(rowOf(undefined, undefined, e, ""));
+  const byID = new Map(rows.filter((r) => r.task?.fid).map((r) => [r.task!.fid!, r]));
+  for (const r of rows) {
+    const p = r.parent ? byID.get(r.parent) : undefined;
+    if (p && p !== r) { r.parentTitle = p.title; p.kids.push(r); }
+    else r.parent = undefined;
+  }
+  return rows.sort((a, b) => b.at - a.at);
+}
+
+// A group's rows, top level: a member nested under its parent leaves the top.
+export function rowsIn(rows: Row[], g: Group): Row[] {
+  const byID = new Map(rows.map((r) => [r.id, r]));
+  return rows.filter((r) => r.group === g && !(r.parent && byID.get(r.parent)?.group === g));
+}
+
+// The members shown under a parent: those in its own group.
+export const nestedKids = (r: Row) => r.kids.filter((k) => k.group === r.group);
+
+// Finds a row by what a link names: its code (display or written), the task's
+// ID or old T<n>, or a session's identity.
+export function findRow(rows: Row[], ref: string): Row | undefined {
+  const q = ref.trim().replace(/^#/, "");
+  if (!q) return undefined;
+  const up = q.toUpperCase();
+  return rows.find((r) => r.id === q || r.code.toUpperCase() === up || (r.task && (writtenCode(r.task).toUpperCase() === up || r.task.id === q))
+    || r.live?.id === q || r.ended?.wid === q);
+}
+
+// ✦ 消息: what this page holds for the person to hear — asks, failures, and
+// what finished in the last day (the panel's one book is not on the hub yet).
+export type Message = { row: Row; kind: "ask" | "fail" | "done" };
+export function messagesOf(rows: Row[], now = Date.now()): Message[] {
+  const out: Message[] = [];
+  for (const r of rows) {
+    if (r.group === "ask") out.push({ row: r, kind: r.tone === "fail" ? "fail" : "ask" });
+    else if (r.task && taskStatus(r.task) === "succeeded" && now - ms(r.task.updated_at || r.task.created_at) < 864e5) out.push({ row: r, kind: "done" });
+  }
+  return out;
+}

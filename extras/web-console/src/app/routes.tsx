@@ -4,10 +4,16 @@
 // adds its file under pages/ and fills in this one line (and flips its row in
 // the hub's consolePages, app_mount.go).
 import { lazy, type ComponentType } from "react";
+import { Navigate, useLocation } from "react-router";
 import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Settings, CircleUserRound, TerminalSquare, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage from "./pages/chat";
+
+function TasksMoved() {
+  const { search } = useLocation();
+  return <Navigate to={`/sessions${search}`} replace />;
+}
 
 export type PageDef = {
   id: string;
@@ -24,7 +30,8 @@ export const PAGES: PageDef[] = [
   { id: "chat", path: "/", label: tr("对话", "Chat"), icon: MessageCircle, tab: true, side: true, page: ChatPage },
   { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, tab: true, side: true, page: lazy(() => import("./pages/sessions")) },
   { id: "terminal", path: "/terminal", label: tr("我的终端", "My Terminal"), icon: TerminalSquare, side: true, page: lazy(() => import("./pages/terminal")) },
-  { id: "tasks", path: "/tasks", label: tr("任务", "Tasks"), icon: ListChecks, tab: true, side: true, page: lazy(() => import("./pages/tasks")) },
+  // 任务 is one list with 会话 since T769: its address (and a code's ?q=) opens it there
+  { id: "tasks", path: "/tasks", label: tr("任务", "Tasks"), icon: ListChecks, page: TasksMoved },
   { id: "usage", path: "/usage", label: tr("用量", "Usage"), icon: Gauge, tab: true, side: true, page: lazy(() => import("./pages/usage")) },
   { id: "devices", path: "/devices", label: tr("设备", "Devices"), icon: MonitorSmartphone, side: true, page: lazy(() => import("./pages/devices")) },
   { id: "settings", path: "/settings", label: tr("设置", "Settings"), icon: Settings, side: true, page: lazy(() => import("./pages/settings")) },

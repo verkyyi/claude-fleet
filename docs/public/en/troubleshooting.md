@@ -70,7 +70,7 @@ In fleet, GitHub does one thing: it hosts the code and the pull requests. Tasks,
 
 **Carries on:**
 
-- **Tasks**: dispatching on the ⚡ line, the Tasks page and the T-numbered records live on the hub and are not affected.
+- **Tasks**: dispatching on the ⚡ line, the Sessions page and the T-numbered records live on the hub and are not affected.
 - **Sessions**: running sessions keep working; new sessions still open — fleet spends up to 20 seconds fetching the latest main branch from GitHub, and when it cannot, opens the session off the version this machine fetched last.
 - **Subscriptions and credentials**: the subscription credentials a session uses come from the hub, and so do the quota readings.
 - **The view**: the ⌘P panel, switching sessions, answering questions and following along on a phone all go through the hub and the links between machines.
@@ -79,7 +79,7 @@ In fleet, GitHub does one thing: it hosts the code and the pull requests. Tasks,
 
 - **Pushing code, opening a pull request, reading CI, merging**: these need GitHub. The session says it is waiting for GitHub; the merge gate reads "not determined yet", which is not a failure and is never counted as red.
 - **Keeping the main branch current**: the main branch on the machine stays at the version fetched last.
-- **"Waiting for GitHub" on the Tasks page**: shown beside a work result whose pull request is not confirmed merged yet. Nothing for you to do.
+- **"Waiting for GitHub" in a Sessions page row's details**: shown beside a work result whose pull request is not confirmed merged yet. Nothing for you to do.
 
 **Picks up by itself once GitHub is back:**
 
@@ -832,7 +832,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: whether someone is still driving a batch of tasks (an EPIC).
-- **On WARN / FAIL**: the heartbeat stopped while the batch's parent task (`T<n>`) is still open: resume its driver session from `/fleet-history`, or run `/fleet-epic-run --task T<n>` in a session. The batch is on the hub's Tasks page, with the driver's last tick beside the parent task.
+- **On WARN / FAIL**: the heartbeat stopped while the batch's parent task (`T<n>`) is still open: resume its driver session from `/fleet-history`, or run `/fleet-epic-run --task T<n>` in a session. The batch is on the hub's Sessions page, its members under the parent task and the driver's last tick beside it.
 
 #### `socket`
 

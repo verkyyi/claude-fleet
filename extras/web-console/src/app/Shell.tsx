@@ -1,6 +1,7 @@
 // Shell.tsx — the member side's frame (EPIC #3923 C3): on a phone (< 768) a
-// top bar (the mark, what is left of the person's limit) and the five-tab
-// bottom bar 对话 · 会话 · 任务 · 用量 · 我的; on a computer shadcn's Sidebar —
+// top bar (the mark, what is left of the person's limit) and the bottom bar of
+// the pages marked `tab` — 对话 · 会话 · 用量 · 我的 (任务 joined 会话, T769);
+// on a computer shadcn's Sidebar —
 // the pages, 管理后台 for an admin, the person and sign-out at its foot.
 // Stock shadcn/ui only; a page draws inside <main>.
 //
@@ -190,7 +191,7 @@ const BottomBar: FC<{ nav: Nav }> = ({ nav }) => {
     <div className="min-h-0 overflow-hidden">
     <NavigationMenu viewport={false} className="border-border/70 bg-background/95 max-w-none flex-none border-t pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
       aria-label={tr("页面", "Pages")}>
-      <NavigationMenuList className="grid w-screen grid-cols-5 gap-0">
+      <NavigationMenuList className="grid w-screen gap-0" style={{ gridTemplateColumns: `repeat(${PAGES.filter((p) => p.tab).length}, minmax(0, 1fr))` }}>
         {PAGES.filter((p) => p.tab).map((p) => (
           <NavigationMenuItem key={p.id}>
             <NavigationMenuLink asChild active={active(p)}
