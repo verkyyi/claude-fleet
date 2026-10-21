@@ -436,33 +436,54 @@ def pr_gates(members, prs, repo=""):
 DEP_ARROW = re.compile(r"\s*(?:←|⟵|<-+)\s*")
 DEP_CLAUSE = re.compile(r"\s*(?:[；;]|<br\s*/?>)\s*")
 DEP_NONE = re.compile(r"^[\s—–\-无/·.。*]*$")
+# `C6 等 C2 C3 C4` / `C2 不等` (T851): a clause that starts with member keys and 等 / 不等
+DEP_WAITS = re.compile(r"^(?P<keys>(?:[CR][1-9][0-9]*(?:\s*[–\-~～]\s*[CR]?[1-9][0-9]*)?[\s、,，/]*)+?)\s*(?P<no>不)?等(?!于|同)\s*(?P<on>.*)$")
+DEP_ALL_CORE = re.compile(r"核心全部|全部核心")
 
 
 def dep_table_row(cells, cols, known, put):
     """One row of the `## 依赖顺序` table into `put(key, cell)`: the member column's
     keys (`C2 C3 C4`, `C5 · C6（并行）`, a range) each wait on the wait column — or,
-    when that cell carries `X ← Y` pairs (`C2 ← C1；C7 ← C5`), each X on its Y (an X
-    need not be in the member column), and a row member no pair names on nothing."""
+    when that cell carries per-key clauses — `X ← Y` pairs (`C2 ← C1；C7 ← C5`) or
+    `X 等 Y` / `X 不等` (`C6 等 C2 C3 C4；C8 等 C2 C3 C5`, T851) — each X on its Y
+    (an X need not be in the member column), and a row member no clause names on
+    nothing. A whole-cell wait never makes a row member wait on another of the same
+    row (one row is one wave: `R1 R2 R3` beside a remark naming R2), and 「核心全部」
+    is every core member (the plan template's reserve row). Only the wait column is
+    read — never 可并行 or a remark column."""
     mc, wc = cols
     if max(mc, wc) >= len(cells):
         return False
     keys = [k for sc, k in dep_refs(cells[mc]) if not sc and k in known]
     wait = cells[wc]
-    if not keys and not DEP_ARROW.search(wait):
+    clauses = DEP_CLAUSE.split(wait)
+    row = set(keys)
+    pairs = [DEP_ARROW.split(c, 1) for c in clauses if DEP_ARROW.search(c)]
+    if not pairs:  # `X 等 Y` only when every X is this row's member (`C1 C2 等全部合并` is "etc.")
+        waits = [DEP_WAITS.match(c) for c in clauses]
+        waits = [m for m in waits if m and {k for sc, k in dep_refs(m.group("keys"))} <= row]
+        pairs = [[m.group("keys"), "" if m.group("no") else m.group("on")] for m in waits]
+    if not keys and not pairs:
         return False
-    if DEP_ARROW.search(wait):
+    if pairs:
         for k in keys:
             put(k, "")
-        for clause in DEP_CLAUSE.split(wait):
-            parts = DEP_ARROW.split(clause, 1)
-            if len(parts) == 2:
-                for sc, k in dep_refs(parts[0]):
-                    if not sc and k in known:
-                        put(k, parts[1])
-    else:
-        for k in keys:
-            put(k, wait)
+        for lhs, rhs in pairs:
+            for sc, k in dep_refs(lhs):
+                if not sc and k in known:
+                    put(k, rhs)
+        return True
+    wait = strip_keys(wait, row)
+    if DEP_ALL_CORE.search(wait):
+        wait = " ".join(sorted((x for x in known if not x.startswith("R")), key=lambda x: int(x[1:]))) + " " + wait
+    for k in keys:
+        put(k, wait)
     return True
+
+
+def strip_keys(cell, drop):
+    """`cell` without the bare member keys in `drop` (a same-row mention, T851)."""
+    return DEP_TOK.sub(lambda m: "" if not m.group("scope") and m.group(0) in drop else m.group(0), cell)
 
 
 def parse_deps(text, members, self_ref=""):
