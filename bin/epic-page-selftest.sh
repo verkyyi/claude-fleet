@@ -20,6 +20,9 @@
 #      with no key on it, the metric table is 指标/现在/目标, 需要你定的事 is one
 #      事项/建议 table, and the order section is folded whole — while the
 #      write-back shapes /fleet-epic-run parses stay exactly as they were.
+#   7. a members-only 403 (活页 #12410) that carries error.login_url shows the
+#      「以成员身份登录后提交」 link (target _top); without one the old words stay.
+#      Runs the template's own <denied> block under node (skipped with no node).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -171,5 +174,34 @@ for f in "$PLAN" "$RUN" "$T"; do
   CHECKS=$((CHECKS + 1))
   grep -qE 'FLEET_(GLOBAL_)?MAX_SESSIONS=[0-9]' "$f" && st_fail "${f#"$ROOT"/} suggests a session-cap value"
 done
+
+# 7. the 403 → login link, both branches, on the template's own code
+hasF "$T" '以成员身份登录后提交' "template: the members-only 403 offers a sign-in button"
+hasF "$T" 'denied(x).then' "template: post() reads the 403's body"
+if command -v node >/dev/null 2>&1; then
+  CHECKS=$((CHECKS + 1))
+  out=$(awk '/\/\/ <denied>/,/\/\/ <\/denied>/' "$T" | node -e '
+    let src="";process.stdin.on("data",d=>src+=d).on("end",async()=>{
+      global.document={createElement:t=>({tag:t,children:[]})};
+      const el=(t,c,x)=>{const n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;};
+      const {denied,failed}=new Function("el",src+";return {denied,failed};")(el);
+      const res=b=>({status:403,json:()=>b===null?Promise.reject(new Error("not json")):Promise.resolve(b)});
+      const run=async b=>{const st={children:[],appendChild(a){this.children.push(a);}};
+        const u=await denied(res(b));const e=new Error("只收工作区成员，请先登录");e.login=u;failed(st,e);
+        const a=st.children[0];return st.className+"|"+st.textContent+"|"+(a?a.className+"|"+a.textContent+"|"+a.target+"|"+a.href:"-");};
+      console.log(await run({error:{code:"members_only",login_url:"https://space.example/login?next=x"}}));
+      console.log(await run({error:{code:"members_only"}}));
+      console.log(await run(null));
+      console.log(await run({error:{login_url:"javascript:alert(1)"}}));
+    });' 2>&1)
+  want='st err|没交上：只收工作区成员 |fb-login|以成员身份登录后提交|_top|https://space.example/login?next=x
+st err|没交上：只收工作区成员，请先登录|-
+st err|没交上：只收工作区成员，请先登录|-
+st err|没交上：只收工作区成员，请先登录|-'
+  [ "$out" = "$want" ] || st_fail "template: 403 login link — got:
+$out"
+else
+  echo "skip 7: no node — the 403 login link's behaviour is not run"
+fi
 
 printf 'epic-page-selftest OK (%d checks)\n' "$CHECKS"

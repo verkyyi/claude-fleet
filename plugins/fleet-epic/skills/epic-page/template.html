@@ -293,6 +293,7 @@
   .fbs .t{color:var(--ink-3)}
   .fb-edit,.fb-undo{font:inherit;font-size:.76rem;background:none;border:0;color:var(--accent);cursor:pointer;padding:2px 0}
   .fb-undo{color:var(--ink-3)}
+  .fb-login{display:inline-block;margin-left:4px;padding:2px 10px;border-radius:999px;background:var(--accent);color:#fff;font-weight:600;text-decoration:none}
   .fbi.done>.fb-edit{display:none}
   /* a 需要你定的事 row (v5): its options IN the row — tap one and it is posted; the default carries 「默认」 and,
      while nobody picked, a dashed ring (it is what counts); a non-default pick is highlighted */
@@ -397,12 +398,22 @@ function post(f,item,choice,note,st){
   if(st){st.className="st";st.textContent="提交中…";}
   return fetch("./_data/"+D().fbTable,{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",
     body:JSON.stringify(r)})
-  .then(function(x){if(!x.ok)throw new Error(x.status===403?"只收工作区成员，请先登录":"HTTP "+x.status);
+  .then(function(x){if(x.status===403) return denied(x).then(function(u){var e=new Error("只收工作区成员，请先登录");e.login=u;throw e;});
+    if(!x.ok)throw new Error("HTTP "+x.status);
     remember(r); draw(item,r); if(f&&f.classList.contains("say")) f.hidden=true;
     if(f&&f.classList.contains("pick")) f.querySelector(".freebox").hidden=true;
     if(st){st.className="st ok";st.textContent=choice==="withdraw"?"已撤回":"✓ 已收到 · 会转给执行会话";}})
-  .catch(function(e){if(st){st.className="st err";st.textContent="没交上："+e.message;}});
+  .catch(function(e){failed(st,e);});
 }
+// <denied> a members-only table's 403 carries error.login_url (活页 #12410): one hop signs in
+// (in WeChat too), files the same row as a member and comes back here — offer it as a button
+function denied(x){return x.json().then(function(j){var u=j&&j.error&&j.error.login_url;
+  return typeof u==="string"&&/^(https?:\/\/|\/)/.test(u)?u:"";},function(){return "";});}
+function failed(st,e){if(!st) return; st.className="st err";
+  if(!e.login){st.textContent="没交上："+e.message; return;}
+  st.textContent="没交上：只收工作区成员 ";
+  var a=el("a","fb-login","以成员身份登录后提交"); a.target="_top"; a.href=e.login; st.appendChild(a);}
+// </denied>
 document.addEventListener("click",function(e){
   var o=e.target.closest&&e.target.closest(".opt");
   if(o){e.preventDefault(); var ob=o.closest(".fbi"), fr=o.closest("form");
