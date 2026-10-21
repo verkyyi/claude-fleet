@@ -1917,7 +1917,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|display|open|native|result|progress|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents|backfill …", file=sys.stderr)
+        print("usage: fleet_id.py short|display|open|native|result|progress|close|revive|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family|parents|backfill …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -2121,6 +2121,24 @@ def main(argv):
         if ev:
             push_later(target)
         print("RECORDED\nid: %s\nseq: %s" % (target, ev["seq"] if ev else "-"))
+        return 0
+    if cmd == "revive":
+        # T847: an ID closed while a window here still carries it (a copy's reap ended
+        # it, and with it the record) goes on — one `reopened` event naming that
+        # window; the hub clears the close and puts back the record it had ended.
+        # Only this machine's own ledger: an ID another machine holds is refused.
+        if not os.path.exists(ledger_path(target)):
+            print("fleet-id: %s has no ledger here — revive it on the machine that holds it" % target, file=sys.stderr)
+            return 1
+        def decide(evs):
+            if fold(evs)["closed"] is None:
+                return None
+            ev = {"ev": "reopened"}
+            if opts.get("window"):
+                ev["window"] = opts["window"]
+            return ev
+        print("REOPENED" if append(target, None, decide=decide) else "OPEN")
+        push_later(target)
         return 0
     if cmd == "close":
         def decide(evs):
