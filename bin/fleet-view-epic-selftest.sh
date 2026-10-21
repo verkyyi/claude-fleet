@@ -25,6 +25,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvepic-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS FLEET_VIEW_EPIC_SECS
+export FLEET_VIEW_BOARD=0   # the machine's live hub board is fleet-view-board-selftest.py's
 mkdir -p "$WORK/conf"
 cat > "$WORK/children.json" <<'JSON'
 {"parent": "T497", "children": [
