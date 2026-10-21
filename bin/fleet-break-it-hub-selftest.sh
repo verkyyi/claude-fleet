@@ -2375,7 +2375,7 @@ drill_spare_check_cred_denied() {
   SECS=$(since "$t0")
 }
 
-# ---- spare-cutoff-held (NKTP): the node agent restarting mid-wash (macmini
+# ---- spare-cutoff-held (NKTP): the node agent restarting mid-wash (a managed Mac
 # fleetu12, a release switch at a hub deploy) is answered failed «stopped while
 # this op ran», and a failed spare held its machine's refill for the operator —
 # for a cause that was never the spare's. The hub now retries it (wash again /

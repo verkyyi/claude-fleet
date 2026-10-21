@@ -12,7 +12,7 @@ import (
 
 // A spare whose op was interrupted, not refused (claude-fleet NKTP). The node
 // agent restarting while it ran a create or a wash (a release switch, a hub
-// deploy that took the link — macmini fleetu12, 2026-10-21) is answered
+// deploy that took the link — a managed Mac, 2026-10-21) is answered
 // failed by the new agent (#2918's cutOffResult: «the node agent (pid N)
 // stopped while this op ran»), and an op whose link dropped and never came
 // back is failed by reaskAccounts after accountUnknownGiveUp. Counted as a
