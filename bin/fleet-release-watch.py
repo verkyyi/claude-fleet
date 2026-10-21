@@ -175,13 +175,24 @@ def dispatch_train(repo):
                    capture_output=True, text=True, timeout=60)
 
 
-def notice(hub, run_id, sha, verdict, text, dry):
+def run_url():
+    """This run's page on GitHub, "" outside Actions."""
+    srv, repo, rid = (os.environ.get(k, "") for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
+    return "%s/%s/actions/runs/%s" % (srv, repo, rid) if srv and repo and rid else ""
+
+
+def notice(hub, run_id, sha, verdict, text, dry, to="", url=""):
     print("watch: notice %s: %s" % (verdict, text))
     if dry or not hub:
         return
     path = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "release-watch-notice-%d.json" % os.getpid())
     with open(path, "w") as f:
-        json.dump({"run_id": str(run_id or "local"), "sha": sha, "verdict": verdict, "text": text}, f, ensure_ascii=False)
+        body = {"run_id": str(run_id or "local"), "sha": sha, "verdict": verdict, "text": text}
+        if to:
+            body["to"] = to  # the hub words it 「已回滚 · <sha> → <to>」 (T893)
+        if url:
+            body["url"] = url
+        json.dump(body, f, ensure_ascii=False)
     try:
         rc = ledger().post([path, "--to", "notice", "--hub", hub])
         if rc:
@@ -280,10 +291,10 @@ def cmd_watch(argv):
             dispatch_train(o["--repo"])
         notice(hub, o["--run-id"], sha, "rolledback",
                "已自动回退 %s → %s：%s%s" % (target[:7], prev[:7], why,
-                                         "（入口回到 prod-%s）" % o["--hub-live"][:7] if SHA_RE.match(o["--hub-live"] or "") else ""), dry)
+                                         "（入口回到 prod-%s）" % o["--hub-live"][:7] if SHA_RE.match(o["--hub-live"] or "") else ""), dry, to=prev, url=run_url())
         return 1
     notice(hub, o["--run-id"], sha, "rollback-failed",
-           "%s 出问题了但自动回退失败，请手动：%s · %s" % (target[:7], why, tail[:120]), dry)
+           "%s 出问题了但自动回退失败，请手动：%s · %s" % (target[:7], why, tail[:120]), dry, url=run_url())
     return 3
 
 

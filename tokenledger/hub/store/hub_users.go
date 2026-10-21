@@ -518,3 +518,26 @@ func (s *Store) HubSignins(actors, targets []string, limit int) ([]HubAuditEntry
 	}
 	return out, rows.Err()
 }
+
+// HubAuditByAction is action's rows created at or after since, oldest first —
+// the release digest reads a day's release.notice lines this way
+// (claude-fleet T893).
+func (s *Store) HubAuditByAction(action string, since time.Time) ([]HubAuditEntry, error) {
+	rows, err := s.read.Query(`SELECT id, created, actor, action, target, outcome, detail FROM hub_audit
+		WHERE action = ? AND created >= ? ORDER BY id`, action, since.UTC().Format(rfc))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HubAuditEntry{}
+	for rows.Next() {
+		var e HubAuditEntry
+		var created string
+		if err := rows.Scan(&e.ID, &created, &e.Actor, &e.Action, &e.Target, &e.Outcome, &e.Detail); err != nil {
+			return nil, err
+		}
+		e.Created, _ = time.Parse(rfc, created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

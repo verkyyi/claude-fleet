@@ -84,6 +84,14 @@ case "$(note --action wait --merges "$D/m.json" --now 2026-10-19T10:17:00Z)" in
   "已上线 ${SHA:0:7} · 含 PR #12 #4913 #13 · 合并→生效 17 分钟 · U") st_ok "shipped notice" ;;
   *) st_miss "shipped notice: $(note --action wait --merges "$D/m.json" --now 2026-10-19T10:17:00Z)" ;; esac
 
+# --run-id: the whole body, with what the hub words its push with (T893)
+verdict "$SHA" held
+body=$(note --action wait --holds 77 --run-id 42)
+python3 -c 'import json,sys; b=json.loads(sys.argv[1]); assert b["run_id"]=="42" and b["verdict"]=="held" and b["holds"]=="#77" and b["url"]=="U" and b["text"].endswith("挡着 · U"), b' "$body" \
+  && st_ok "notice --run-id prints the body with holds/url" || st_miss "notice --run-id: $body"
+grep -q -- '--run-id "$GITHUB_RUN_ID"' "$ROOT/.github/workflows/release-train.yml" \
+  && st_ok "the train posts the structured body" || st_miss "release-train.yml does not pass --run-id"
+
 # --- wiring ---
 wf="$ROOT/.github/workflows/release-train.yml"; bk="$ROOT/.github/workflows/release-train-next.yml"
 grep -q 'fleet-train-next.py judge' "$wf" && grep -q 'gh workflow run release-train.yml' "$wf" && grep -q 'name: train-next' "$wf" \

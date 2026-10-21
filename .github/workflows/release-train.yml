@@ -1091,11 +1091,10 @@ jobs:
                    --run-url "$GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID")
           echo "$line"
           { echo "### 🔁 $line"; echo; echo "下一趟：$action（$reason）"; } >> "$GITHUB_STEP_SUMMARY"
-          python3 - "$line" "$GITHUB_RUN_ID" > notice.json <<'PY'
-          import json, sys
-          v = json.load(open("verdict.json"))
-          print(json.dumps({"run_id": sys.argv[2], "sha": v["sha"], "verdict": v["verdict"], "text": sys.argv[1]}, ensure_ascii=False))
-          PY
+          # the same line plus the fields the hub words its push with (T893)
+          python3 bin/fleet-train-next.py notice --verdict verdict.json --action "$action" --reason "$reason" \
+            --retries "$n" --max 2 --merges merges.json --holds "${HELD:-}" --run-id "$GITHUB_RUN_ID" \
+            --run-url "$GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID" > notice.json
           python3 bin/fleet-train-ledger.py post notice.json --to notice --hub "$FLEET_HUB_URL" \
             || echo "::warning::the hub did not take this train's notice"
           exit 0

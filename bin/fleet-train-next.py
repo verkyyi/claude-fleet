@@ -50,6 +50,10 @@ which only READS files the workflow fetched — every gh call stays in the YAML.
         红：<test> · 不稳，已补发（第 n/2 次）
         红：<test> · 真红，等修复
         <sha7> 测完未发布：release-hold #N 挡着
+      with --run-id R: the whole notice body as JSON — the line as "text", plus
+      what the hub words its push with (T893): "tests", "holds", "url",
+      "action" (only red · held · a flaky no re-send saved are pushed at once;
+      shipped is the hub's 09:00 digest).
 
 Exit: 0 · 2 usage.
 """
@@ -273,6 +277,18 @@ def iso(s):
         return None
 
 
+def notice_body(o):
+    v = load_verdict(o.get("verdict"))
+    body = {"run_id": o.get("run-id", ""), "sha": v.get("sha", ""), "verdict": v.get("verdict", ""),
+            "text": notice(o), "action": o.get("action", "wait")}
+    tests = "、".join(v.get("tests") or [])
+    holds = " ".join("#" + h for h in words(o.get("holds"))) or (v.get("why", "") if body["verdict"] == "held" else "")
+    for k, val in (("tests", tests), ("holds", holds), ("url", o.get("run-url", ""))):
+        if val:
+            body[k] = val
+    return body
+
+
 def notice(o):
     v = load_verdict(o.get("verdict"))
     sha7 = v.get("sha", "")[:7] or "?"
@@ -327,7 +343,8 @@ def main(argv):
         o = opts(args, {"sha", "n", "max", "why"})
         print("%s · %s/%s · %s" % (o.get("sha", "")[:7], o.get("n", "1"), o.get("max", "2"), o.get("why", "")))
     elif cmd == "notice":
-        print(notice(opts(args, {"verdict", "action", "reason", "retries", "max", "run-url", "merges", "holds", "now"})))
+        o = opts(args, {"verdict", "action", "reason", "retries", "max", "run-url", "merges", "holds", "now", "run-id"})
+        print(json.dumps(notice_body(o), ensure_ascii=False) if o.get("run-id") else notice(o))
     else:
         die("unknown command %s" % cmd)
     return 0

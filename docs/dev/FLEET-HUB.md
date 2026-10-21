@@ -802,13 +802,20 @@ red would stop mac-follow) and the move ignores it (`--ignore-check ledger`);
 After the ledger, the train's `next` job judges the run with `bin/fleet-train-next.py`
 (shipped · held · flaky · red · superseded · cancelled), re-sends a flaky one on
 master's head through the same lane (`workflow_dispatch`, run name 「补发 <sha7> ·
-n/2」, at most two a sha), and POSTs `{run_id, sha, verdict, text}` to `POST
+n/2」, at most two a sha), and POSTs `{run_id, sha, verdict, text}` (+ `tests` ·
+`holds` · `url` · `action`; the post-release watch adds `to`) to `POST
 /v1/fleet/release/notice` (`fleet-train-ledger.py post --to notice`; the same OIDC
-check, `release-train.yml` and its 10-minute backstop `release-train-next.yml`
-taken). The hub hands `发布列车 · <text>` to its notifier (`FLEET_NOTIFY_CMD`) and
-writes one `release.notice` audit row — never a GitHub issue. An open issue
+check, `release-train.yml`, its 10-minute backstop `release-train-next.yml` and
+`release-watch.yml` taken). The hub writes one `release.notice` audit row for
+every notice — never a GitHub issue — and pushes to its notifier
+(`FLEET_NOTIFY_CMD`) **only what the person must act on** (T893): red, a flaky one
+no re-send saved, held, rolled back, a failed rollback — one line in Chinese then
+English. shipped · superseded · cancelled · resent · a re-sent flaky are the row
+alone; the day's trains are ONE digest at 09:00 Beijing (the alerts leader's
+sweep, `releaseDigestTick`: 昨天上线 N 次 · 含 M 个 PR / 红 K 次，都已补好 / 有无挡着的
+— one line on a quiet day too, made once by its `release.digest` row). An open issue
 labelled `release-hold` keeps the train's publish and move (tests run as always);
-`TestReleaseNoticeRoute`, `fleet-train-next-selftest.sh`.
+`TestReleaseNoticeRoute`, `TestReleaseDigest`, `fleet-train-next-selftest.sh`.
 
 **Views across machines.** Each device has its own grouped view session on
 the home machine. `fleet-view-go.sh` selects the row by worker identity; a row
