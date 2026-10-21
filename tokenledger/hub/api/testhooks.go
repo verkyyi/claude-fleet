@@ -223,3 +223,19 @@ func (s *Server) EndpointHostForTest(ep store.Endpoint) string { return s.endpoi
 func (c *nodeConn) CloseLinkForTest(code websocket.StatusCode, reason string) {
 	c.wire.close(code, reason)
 }
+
+// SetChatRecheckForTest makes a running chat request's recheck tick every d.
+func SetChatRecheckForTest(d time.Duration) (restore func()) {
+	old := chatRecheckEvery.Get()
+	chatRecheckEvery.Set(d)
+	return func() { chatRecheckEvery.Set(old) }
+}
+
+// CloseKeptChatRelaysForTest closes every kept relay (a test's «released»).
+func (s *Server) CloseKeptChatRelaysForTest() {
+	s.chatPool.mu.Lock()
+	defer s.chatPool.mu.Unlock()
+	for _, e := range s.chatPool.m {
+		e.tr.CloseIdleConnections()
+	}
+}

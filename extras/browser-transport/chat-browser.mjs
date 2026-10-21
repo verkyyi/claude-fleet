@@ -58,8 +58,8 @@ try {
     const large = JSON.stringify({ text: 'x'.repeat(1024 * 1024 - 32) })
     const big = await chatRequest('turn', large)
     if (!big.ok || !(await big.text()).includes('中文-once')) throw new Error('bounded large request failed')
-    // Local mode never performs discovery/signaling. Old-node discovery must
-    // select the legacy HTTP route before sending, exactly once.
+    // fetchChat is the HTTP route, local or hosted: no discovery, no signaling,
+    // each request sent exactly once (task V9DJ B).
     const nativeFetch = window.fetch, calls = []
     window.fetch = async (url, init) => {
       calls.push(String(url))
@@ -68,9 +68,9 @@ try {
       return nativeFetch(url, init)
     }
     if (!(await (await fetchChat('/api/conversation', {}, false)).json()).local) throw new Error('local mode lost')
-    if (!(await fetchChat('/v1/chat/conversation')).ok) throw new Error('old-node fallback failed')
+    if (!(await fetchChat('/v1/chat/conversation')).ok) throw new Error('hosted HTTP route failed')
     window.fetch = nativeFetch
-    if (calls.join(',') !== '/api/conversation,/v1/chat/home,/v1/chat/conversation') throw new Error('fallback re-submitted')
+    if (calls.join(',') !== '/api/conversation,/v1/chat/conversation') throw new Error(`fetchChat calls ${calls.join(',')}`)
     {
       const response = await chatRequest('turn', '{"text":"disconnect-once"}')
       const reader = response.body.getReader()

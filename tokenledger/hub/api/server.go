@@ -209,6 +209,10 @@ type Server struct {
 	// ChatPerMinute bounds how many chat relays one person opens a minute
 	// (0: 60; negative: unlimited).
 	ChatPerMinute int
+	// ChatRelayKeepSecs keeps a person's chat relay open this long idle, for
+	// the next request to reuse (task V9DJ B; 0: one relay per request).
+	ChatRelayKeepSecs int
+	chatPool          chatRelayPool
 	// ChatGeoDB is an ip2region xdb (IPv4) the entry reads a chat request's
 	// city from, for the person's conversation (claude-fleet#4034;
 	// CCQUOTA_FLEET_CHAT_GEO_DB). "" ⇒ the address goes without a city.

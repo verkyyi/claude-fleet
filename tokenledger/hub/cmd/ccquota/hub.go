@@ -1532,6 +1532,7 @@ func sshRelayConfig(srv *api.Server) error {
 		}
 	}
 	srv.ChatGeoDB = os.Getenv("CCQUOTA_FLEET_CHAT_GEO_DB")
+	srv.ChatRelayKeepSecs = 90 // a chat relay is kept for the next request (task V9DJ B)
 	for _, kv := range []struct {
 		name string
 		set  func(int64)
@@ -1545,6 +1546,7 @@ func sshRelayConfig(srv *api.Server) error {
 		{"CCQUOTA_FLEET_TERM_RELAY_MAX", func(n int64) { srv.TermRelayMaxPerLogin = int(n) }},
 		{"CCQUOTA_FLEET_TERM_RELAY_RATE_BPS", func(n int64) { srv.TermRelayRateBPS = n }},
 		{"CCQUOTA_FLEET_CHAT_PER_MINUTE", func(n int64) { srv.ChatPerMinute = int(n) }},
+		{"CCQUOTA_FLEET_CHAT_RELAY_KEEP_SECS", func(n int64) { srv.ChatRelayKeepSecs = int(n) }},
 	} {
 		v := os.Getenv(kv.name)
 		if v == "" {
