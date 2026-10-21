@@ -178,6 +178,6 @@ For accepted remote tasks, Fleet verifies the selected agent before delivering t
 
 ## Webchat connections
 
-Webchat tries a direct connection to your home node first and uses the hub relay when the network prevents it. Older nodes and the local page continue to work, with the same conversation and quota rules.
+Webchat goes through the hub to your home node. The hub keeps one connection to your node open, so each request is a single round trip rather than a fresh connection. The conversation still runs only on your home node, with the same conversation and quota rules; the local page works as before.
 
 If the connection drops after submission, the page reloads the conversation and says that the message may already have arrived. Review the recovered conversation before retrying. Messages, stop requests and answers are never sent again automatically.

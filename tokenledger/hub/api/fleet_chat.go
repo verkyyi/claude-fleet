@@ -311,22 +311,47 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		mu      sync.Mutex
 		dialErr error
 	)
-	tr := &http.Transport{
-		// The one address this transport reaches: the person's own relay.
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			c, err := s.dialChatRelay(ctx, person, home.Machine, home.Login)
-			mu.Lock()
-			dialErr = err
-			mu.Unlock()
-			if err == nil {
-				s.chatAudit(person, "chat_relay", "OPENED "+name+" "+where)
-			}
-			return c, err
-		},
-		DisableKeepAlives:  true,
-		DisableCompression: true,
+	// The one address the transport reaches: the person's own relay. A relay
+	// kept open (ChatRelayKeepSecs) is dialled by whichever request needs it;
+	// that request's holder records the dial's error.
+	holder := &chatDialHolder{}
+	dial := func(ctx context.Context) (net.Conn, error) {
+		c, err := s.dialChatRelay(ctx, person, home.Machine, home.Login)
+		h, _ := ctx.Value(chatDialKey{}).(*chatDialHolder)
+		if h == nil {
+			h = holder
+		}
+		mu.Lock()
+		h.err = err
+		mu.Unlock()
+		if err == nil {
+			s.chatAudit(person, "chat_relay", "OPENED "+name+" "+where)
+		}
+		return c, err
 	}
-	defer tr.CloseIdleConnections()
+	var tr http.RoundTripper
+	if keep := time.Duration(s.ChatRelayKeepSecs) * time.Second; keep > 0 {
+		// One person's relays to one home login, kept open between requests
+		// (task V9DJ B): a request on a kept relay is one round trip to the
+		// home instead of asking its agent to dial back each time (~0.8 s
+		// across the Pacific). The statement the agent verified at the relay's
+		// opening names this person; the transport is theirs alone.
+		tr = s.chatPool.transport(person+"\x00"+home.Machine+"\x00"+home.Login, keep, dial)
+	} else {
+		one := &http.Transport{
+			DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
+			DisableKeepAlives:  true,
+			DisableCompression: true,
+		}
+		defer one.CloseIdleConnections()
+		tr = one
+	}
+	// A stream is held to who may read it while it lasts (the attachment's
+	// lease, claude-fleet#4408): signed out, another home, maintenance ⇒ cut.
+	ctx, stop := context.WithCancel(context.WithValue(r.Context(), chatDialKey{}, holder))
+	defer stop()
+	go s.chatRecheck(ctx, stop, r, person, home.Machine, home.Login)
+	r = r.WithContext(ctx)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			out := pr.Out
@@ -366,7 +391,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 			mu.Lock()
 			derr := dialErr
+			if derr == nil {
+				derr = holder.err
+			}
 			mu.Unlock()
+			if derr == nil && r.Context().Err() == nil {
+				// a kept relay's dial may have been another request's: ask the link
+				if _, _, err := s.chatRelayNode(home.Machine, home.Login); err != nil {
+					derr = err
+				}
+			}
 			var re *sshRelayError
 			switch {
 			case derr != nil && errors.As(derr, &re) && re.code == "TOO_MANY":
@@ -382,4 +416,80 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// chatDialKey carries a request's chatDialHolder to the dial it waits on.
+type chatDialKey struct{}
+
+// chatDialHolder is where a dial records its error for the request that waited.
+type chatDialHolder struct{ err error }
+
+// chatRecheckEvery is how often a running chat request is held to its person.
+var chatRecheckEvery = 5 * time.Second
+
+// chatRecheck cancels a request still running once its person no longer
+// signs in, their home moved or went into maintenance.
+func (s *Server) chatRecheck(ctx context.Context, stop func(), r *http.Request, person, machine, login string) {
+	t := time.NewTicker(chatRecheckEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		p, _, code, _ := s.chatPerson(r)
+		h, ok, err := s.Store.EntryHomeOf(person)
+		gone := code != "" || p != person || err != nil || !ok || h.Machine != machine || h.Login != login
+		if !gone {
+			if settings, err := s.Store.FleetSettings(); err == nil {
+				_, gone = maintenanceOf(machine, settings)
+			}
+		}
+		if gone {
+			s.chatAudit(person, "chat_relay", "REVOKED "+machine+"/"+login)
+			stop()
+			return
+		}
+	}
+}
+
+// chatRelayPool holds the kept relay transports, one per person and home login.
+type chatRelayPool struct {
+	mu sync.Mutex
+	m  map[string]*chatPooled
+}
+
+type chatPooled struct {
+	tr   *http.Transport
+	used time.Time
+}
+
+// transport is key's transport, made on first use; one unused for ten times
+// its keep is closed and forgotten.
+func (p *chatRelayPool) transport(key string, keep time.Duration, dial func(context.Context) (net.Conn, error)) *http.Transport {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	for k, e := range p.m {
+		if k != key && now.Sub(e.used) > 10*keep {
+			e.tr.CloseIdleConnections()
+			delete(p.m, k)
+		}
+	}
+	if p.m == nil {
+		p.m = map[string]*chatPooled{}
+	}
+	e := p.m[key]
+	if e == nil {
+		e = &chatPooled{tr: &http.Transport{
+			DialContext:         func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
+			MaxIdleConnsPerHost: 2,
+			IdleConnTimeout:     keep,
+			DisableCompression:  true,
+		}}
+		p.m[key] = e
+	}
+	e.used = now
+	return e.tr
 }

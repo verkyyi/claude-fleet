@@ -94,12 +94,12 @@ export function chatRequest(target: string, body = '', options: {
   })
 }
 
-/** Select old-node/local HTTP before submission; never retry after dispatch. */
-export async function fetchChat(url: string, init: RequestInit = {}, hosted = true): Promise<Response> {
-  if (!hosted) return fetch(url, init)
-  const home = await fetch('/v1/chat/home', { signal: init.signal })
-  if (!home.ok) return home
-  const info = await home.json()
-  if (!info.direct) return fetch(url, init)
-  return chatRequest(url.slice('/v1/chat/'.length), typeof init.body === 'string' ? init.body : '', { signal: init.signal ?? undefined })
+/** A chat request, sent once (never retried after dispatch). On the entry it
+ * is the HTTP route, which rides the person's kept relay to their home (task
+ * V9DJ B): one round trip to the home, where an attachment per request first
+ * asked the home's agent to dial back (~0.8 s across the Pacific) and a
+ * `/v1/chat/home` before it cost one more. chatRequest stays for a caller that
+ * wants the attachment (direct when asked). */
+export async function fetchChat(url: string, init: RequestInit = {}, _hosted = true): Promise<Response> {
+  return fetch(url, init)
 }
