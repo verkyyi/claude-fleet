@@ -210,11 +210,116 @@
   .cmp .tabs button.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
   .cmp .tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   @media (max-width:640px){ .cmp .cols{grid-template-columns:1fr} }
+  /* a row that opens on its own detail (T764) — 原因's 一步 opens on THAT step's evidence, 指标's row
+     on how THAT row is measured. Only a row with a detail is a <details> and wears the ▸; a row
+     without one is a plain row (nothing to tap). Same grid for the header, both kinds of row. */
+  .xt{border:1px solid var(--rule);border-radius:10px;background:var(--surface);overflow:hidden;font-size:.88rem}
+  .xt .xh,.xt .xr>summary,.xt div.xr{display:grid;gap:0 12px;padding:9px 12px;align-items:baseline}
+  .xt.c2 .xh,.xt.c2 .xr>summary,.xt.c2 div.xr{grid-template-columns:3em minmax(0,1fr) 1em}
+  .xt.c3 .xh,.xt.c3 .xr>summary,.xt.c3 div.xr{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) 1em}
+  .xt.c4 .xh,.xt.c4 .xr>summary,.xt.c4 div.xr{grid-template-columns:minmax(0,1.4fr) repeat(3,minmax(0,1fr)) 1em}
+  .xt .xh{white-space:nowrap;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3);font-weight:600;background:var(--surface-2)}
+  .xt .xr{border-top:1px solid var(--rule-2)}
+  .xt .num{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-2)}
+  .xt details.xr>summary{cursor:pointer;list-style:none;-webkit-tap-highlight-color:transparent}
+  .xt details.xr>summary::-webkit-details-marker{display:none}
+  .xt details.xr>summary:hover{background:var(--surface-2)}
+  .xt details.xr>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .xt details.xr>summary i::before{content:"▸";color:var(--accent);font-style:normal}
+  .xt details.xr[open]>summary i::before{content:"▾"}
+  .xt details.xr[open]>summary{background:var(--accent-soft)}
+  .xt .xd{padding:4px 14px 6px 12px;border-top:1px dashed var(--rule-2);background:var(--surface-2);font-size:.84rem;color:var(--ink-2)}
+  .xt .xd ul{margin:8px 0 4px} .xt .xd p{margin:8px 0}
+  .xt.c2 .xd{padding-left:calc(3em + 24px)}
+  @media (max-width:520px){ .xt.c2 .xd{padding-left:12px} }
+  /* a member card with nothing to open (T764): its one line, no ▸ */
+  .ob>div.card{display:flex;min-height:28px}
+  .ob>div.card .ct{display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline;flex:1}
+  .ob>div.card .ct strong{font-weight:600;font-size:.92rem} .ob>div.card .cg{color:var(--ink-2);font-size:.8rem}
+  /* 上线后怎么验收 (T764) — one card per piece of evidence: what · 在哪取 · 通过标准 · status, and its slot.
+     After the switch the worker fills each slot (picture / terminal output / link) and flips the status;
+     the filled card is the report's 已上线 column (.proof's look: a dashed .none box until it is in). */
+  .acc{display:grid;gap:10px}
+  .ev{border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:12px 14px}
+  .ev .eh{display:flex;gap:10px;align-items:baseline}
+  .ev .eh strong{flex:1;font-weight:600;font-size:.92rem}
+  .ev .en{font-family:var(--mono);font-size:.74rem;color:var(--ink-3);min-width:1.2em}
+  .ev .kv{margin-top:6px}
+  .ev .miss{color:var(--crit)}
+  .ev .slot{margin-top:10px;display:flex;align-items:center;justify-content:center;text-align:center;min-height:4.5rem;padding:10px;
+            border:1px dashed var(--rule);border-radius:8px;color:var(--ink-3);font-size:.8rem;background:var(--surface-2)}
+  .ev figure.got{margin-top:10px}
+  .ev figure.got img{display:block;max-width:100%;height:auto;border:1px solid var(--rule);border-radius:8px}
+  .ev figure.got pre{max-height:16rem;font-size:.7rem}
+  .pill.crit{background:color-mix(in srgb,var(--crit) 10%,var(--surface));color:var(--crit);border-color:color-mix(in srgb,var(--crit) 35%,transparent)}
+  /* 其他证据 (T764) — only what no step / metric / card owns, grouped by kind (代码 · 日志 · 现场 · 外部资料),
+     one title line each; tap for the original (a code item: file:line and a line or two). */
+  .oth{margin-top:14px;border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:10px 14px}
+  .oth h3{font-size:.8rem;color:var(--ink-3);margin:0 0 4px}
+  .og{display:grid;grid-template-columns:4.5em minmax(0,1fr);gap:0 10px;padding:4px 0;border-top:1px solid var(--rule-2)}
+  .og:first-of-type{border-top:0}
+  .og>.ok{grid-row:span 99;font-family:var(--mono);font-size:.72rem;color:var(--ink-3);padding-top:5px}
+  .oi{grid-column:2;font-size:.86rem;padding:4px 0}
+  details.oi>summary{cursor:pointer;list-style:none;color:var(--ink)}
+  details.oi>summary::-webkit-details-marker{display:none}
+  details.oi>summary::after{content:" ▸";color:var(--accent)} details.oi[open]>summary::after{content:" ▾"}
+  details.oi .oref{margin:6px 0 4px} details.oi pre{font-size:.72rem}
+  /* 页内反馈 (T764) — the page is a live page: the operator answers on it. 「有意见」 opens a one-line form
+     under its row / card; 需要你定的事 rows carry 按建议 / 改成…; one 点头 button. Each POSTs a row to the
+     page's own members-only table; the orchestrator polls it and hands each answer on. */
+  .xt.fb.c2 .xh,.xt.fb.c2 .xr>summary,.xt.fb.c2 div.xr{grid-template-columns:3em minmax(0,1fr) auto 1em}
+  .say-btn{font:inherit;font-size:.72rem;color:var(--ink-3);background:none;border:1px solid var(--rule);border-radius:99px;
+           padding:1px 8px;cursor:pointer;white-space:nowrap;align-self:center}
+  .say-btn:hover{color:var(--accent);border-color:var(--accent)}
+  .say-row{margin:10px 0 0}
+  form.fbf[hidden]{display:none}
+  form.fbf{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:.84rem}
+  form.fbf input[name=note]{flex:1;min-width:12em;font:inherit;padding:6px 8px;border:1px solid var(--rule);border-radius:6px;
+                            background:var(--surface);color:var(--ink)}
+  form.fbf button{font:inherit;font-size:.82rem;background:var(--ink);color:var(--surface);border:0;border-radius:6px;padding:6px 14px;cursor:pointer}
+  form.fbf label{display:flex;gap:4px;align-items:center;white-space:nowrap}
+  form.fbf .st{font-size:.78rem;color:var(--ink-3)} form.fbf .st.ok{color:var(--ok);font-weight:600} form.fbf .st.err{color:var(--crit)}
+  form.say{padding:8px 12px;background:var(--accent-soft);border-top:1px dashed var(--rule-2)}
+  .ob form.say{margin-top:8px;border-radius:8px}
+  .sol{display:grid;gap:8px}
+  .so{border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:10px 14px}
+  .so .sk{font-weight:600;font-size:.9rem} .so .sv{color:var(--ink-2);font-size:.88rem;margin:2px 0 8px}
+  /* each item answers on its own (T764 v4): a state line (.fbs, from the page's table — what you chose,
+     when, 改 · 撤回), a 需要你定的事 row's options in the row (tap = pick), a 有意见 that opens THIS item's form only; a submitted 全部按建议 hides
+     its button and says so */
+  .fbi{margin-top:6px}
+  .fbs:empty{display:none}
+  .fbs{display:inline-flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline;font-size:.8rem;color:var(--ok);margin-right:8px}
+  .fbs .t{color:var(--ink-3)}
+  .fb-edit,.fb-undo{font:inherit;font-size:.76rem;background:none;border:0;color:var(--accent);cursor:pointer;padding:2px 0}
+  .fb-undo{color:var(--ink-3)}
+  .fbi.done>.fb-edit{display:none}
+  /* a 需要你定的事 row (v5): its options IN the row — tap one and it is posted; the default carries 「默认」 and,
+     while nobody picked, a dashed ring (it is what counts); a non-default pick is highlighted */
+  .opts{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+  form.fbf .opt{font:inherit;font-size:.82rem;background:var(--surface);color:var(--ink-2);border:1px solid var(--rule);border-radius:99px;
+       padding:5px 12px;cursor:pointer;min-height:32px;-webkit-tap-highlight-color:transparent}
+  form.fbf .opt .dm{font-size:.68rem;color:var(--ink-3);margin-left:6px}
+  form.fbf .opt.idle{border-style:dashed;border-color:var(--accent);color:var(--accent)}
+  form.fbf .opt.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+  form.fbf .opt.on.alt{background:color-mix(in srgb,var(--warn) 14%,var(--surface));border-color:var(--warn);color:var(--ink)}
+  .freebox{display:flex;gap:8px;width:100%} .freebox[hidden]{display:none}
+  form.pick{display:block}
+  .fbi.done form.nod{display:none}
+  .xt .fbi{padding:0 12px 6px} .xt .fbi:has(.fbs:empty):has(form[hidden]){display:none}
+  form.nod{margin-top:6px} form.nod button{font-size:.95rem;padding:10px 22px;background:var(--accent);color:#fff}
+  .fb-mark{display:inline-block;margin-left:6px}
+  .fb-note{font-size:.74rem;color:var(--ink-3);margin:10px 0 0;max-width:none}
+  .sym{margin:0 0 18px;max-width:62ch}
+  .fb-done{margin:6px 0 0;font-size:.8rem;color:var(--ink-2)}
+  @media print{ .say-btn,form.fbf{display:none!important} }
   /* print: nothing is folded away on paper — force every <details> (fold AND card) open, both the modern
      ::details-content path and the legacy display:none one, and drop the ▸ affordance */
   @media print{
     :root{--ground:#fff;--surface:#fff;--surface-2:#fff;--ink:#000;--ink-2:#222;--ink-3:#555}
-    details.fold,details.card{display:block}
+    details.fold,details.card,details.xr{display:block}
+    details.xr::details-content{content-visibility:visible!important;block-size:auto!important}
+    details.xr:not([open])>.xd{display:block!important} .xt details.xr>summary i::before{content:""}
     details.fold::details-content,details.card::details-content{content-visibility:visible!important;block-size:auto!important}
     details.fold:not([open])>*,details.card:not([open])>*{display:revert!important}
     details.fold>summary{color:var(--ink-2)}
@@ -232,6 +337,97 @@ document.addEventListener("click",function(e){
   [].forEach.call(ss,function(s,j){s.hidden=j!==i});
   [].forEach.call(bs,function(x,j){x.classList.toggle("on",j===i);x.setAttribute("aria-pressed",j===i?"true":"false")});
 });
+/* 页内反馈 (T764): on a page whose <body> says data-fb-table, every item answers on its own. A form.fbf POSTs
+   {item, choice, note, version, at} to ./_data/<table> (the page's own members-only table); on load the page
+   reads that table back (GET returns its reviewed rows; this device's unsynced ones from localStorage), takes
+   each item's LAST row and draws it: what you chose, when, 改 · 撤回 (a withdraw is a row with choice
+   "withdraw"). ./_data/<table>_done.json — {item, state adopted|declined, note}, written by the session that
+   owns the page — puts 已采纳 / 未采纳 on the item without a new version. */
+(function(){
+var D=function(){return document.body&&document.body.dataset||{};};
+var KEY=function(){return "fleet-fb:"+location.pathname+":"+D().fbTable;};
+function cache(){try{return JSON.parse(localStorage.getItem(KEY())||"[]");}catch(e){return [];}}
+function remember(r){try{var c=cache();c.push(r);localStorage.setItem(KEY(),JSON.stringify(c.slice(-200)));}catch(e){}}
+function esc(s){return String(s).replace(/"/g,'\\"');}
+function fbi(item){return document.querySelector('.fbi[data-item="'+esc(item)+'"]');}
+function when(at){if(!at)return "";var d=new Date(at);if(isNaN(d))return "";
+  return (d.getMonth()+1)+"/"+d.getDate()+" "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);}
+function el(tag,cls,txt){var x=document.createElement(tag);if(cls)x.className=cls;if(txt!=null)x.textContent=txt;return x;}
+function draw(item,r){
+  var b=fbi(item); if(!b) return; var s=b.querySelector(".fbs"); if(!s) return;
+  s.textContent=""; b.classList.remove("done");
+  var k=b.getAttribute("data-kind"), dv=b.getAttribute("data-default"), got=r&&r.choice!=="withdraw"?r:null;
+  [].forEach.call(b.querySelectorAll(".opt"),function(o){var v=o.getAttribute("data-v");
+    o.classList.toggle("on",!!got&&v===got.choice); o.classList.toggle("alt",!!got&&v===got.choice&&v!==dv);
+    o.classList.toggle("idle",!got&&v===dv);});
+  if(!got) return;
+  if(k==="pick"){                                        // the chip shows the pick; the line says when
+    if(got.note) s.appendChild(el("span","",got.note)); var w0=when(got.at); if(w0) s.appendChild(el("span","t",w0));
+    if(got.pending) s.appendChild(el("span","t","（待同步）"));
+    var u0=el("button","fb-undo","撤回");u0.type="button";s.appendChild(u0); b.classList.add("done"); return;}
+  var what=k==="nod"?"✓ 已按建议":k==="say"?"✓ 你的意见："+(r.note||""):"✓ 你选了："+(r.choice||"")+(r.note?"："+r.note:"");
+  s.appendChild(el("span","",what)); var w=when(r.at); if(w) s.appendChild(el("span","t",w));
+  if(r.pending) s.appendChild(el("span","t","（待同步）"));
+  if(k!=="nod"){var e=el("button","fb-edit","改");e.type="button";s.appendChild(e);}
+  var u=el("button","fb-undo","撤回");u.type="button";s.appendChild(u);
+  b.classList.add("done");
+}
+function last(rows){var m={};rows.forEach(function(r){if(r&&r.item&&r._author!==false){var p=m[r.item];
+  if(!p||!r.at||!p.at||r.at>=p.at)m[r.item]=r;}});return m;}
+function load(){
+  var t=D().fbTable; if(!t) return;
+  [].forEach.call(document.querySelectorAll(".fbi"),function(b){draw(b.getAttribute("data-item"),null);});   // nothing yet ⇒ the default
+  fetch("./_data/"+t+".json",{credentials:"include"}).then(function(x){if(!x.ok)throw 0;return x.json();})
+  .then(function(rows){return rows;},function(){return null;})
+  .then(function(rows){
+    var srv=last(rows||[]), loc=last(cache());
+    Object.keys(loc).forEach(function(i){var a=srv[i],b=loc[i],same=a&&a.choice===b.choice&&(a.note||"")===(b.note||"");
+      var newer=!a||(a.at&&b.at?b.at>a.at:!same&&b.at&&Date.now()-new Date(b.at)<6e5);  // not on the server yet (moderation)
+      if(!same&&newer){b=Object.assign({},b);if(rows)b.pending=true;srv[i]=b;}});
+    Object.keys(srv).forEach(function(i){draw(i,srv[i]);});
+  });
+  fetch("./_data/"+t+"_done.json",{credentials:"include"}).then(function(x){if(!x.ok)throw 0;return x.json();})
+  .then(function(rows){(rows||[]).forEach(function(r){
+    var b=fbi(r.item); if(!b||document.querySelector('.fb-done[data-for="'+esc(r.item)+'"]')) return;
+    var p=el("span","pill fb-mark"+(r.state==="adopted"?"":" muted"),r.state==="adopted"?"已采纳":"未采纳");
+    b.appendChild(p); if(r.note) b.appendChild(el("span","t"," "+r.note));});},function(){});
+}
+function post(f,item,choice,note,st){
+  var r={item:item,choice:choice,note:note,version:D().fbVersion||"",at:new Date().toISOString()};
+  if(st){st.className="st";st.textContent="提交中…";}
+  return fetch("./_data/"+D().fbTable,{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",
+    body:JSON.stringify(r)})
+  .then(function(x){if(!x.ok)throw new Error(x.status===403?"只收工作区成员，请先登录":"HTTP "+x.status);
+    remember(r); draw(item,r); if(f&&f.classList.contains("say")) f.hidden=true;
+    if(f&&f.classList.contains("pick")) f.querySelector(".freebox").hidden=true;
+    if(st){st.className="st ok";st.textContent=choice==="withdraw"?"已撤回":"✓ 已收到 · 会转给执行会话";}})
+  .catch(function(e){if(st){st.className="st err";st.textContent="没交上："+e.message;}});
+}
+document.addEventListener("click",function(e){
+  var o=e.target.closest&&e.target.closest(".opt");
+  if(o){e.preventDefault(); var ob=o.closest(".fbi"), fr=o.closest("form");
+    if(o.classList.contains("free")){var x=fr.querySelector(".freebox"); x.hidden=!x.hidden; if(!x.hidden) x.querySelector("input").focus(); return;}
+    post(null,ob.getAttribute("data-item"),o.getAttribute("data-v"),"",fr.querySelector(".st")); return;}
+  var c=e.target.closest&&e.target.closest(".say-btn,.fb-edit,.fb-undo"); if(!c) return;
+  e.preventDefault(); e.stopPropagation();
+  var b=c.closest(".fbi"), item=c.getAttribute("data-say")||(b&&b.getAttribute("data-item"));
+  b=b||fbi(item); if(!b) return;
+  var f=b.querySelector("form.fbf");
+  if(c.classList.contains("fb-undo")){post(null,item,"withdraw","",b.querySelector(".st")); return;}
+  if(f){f.hidden=!f.hidden; if(!f.hidden){var i=f.querySelector("input[name=note]"); if(i) i.focus();}}
+},true);
+document.addEventListener("submit",function(e){
+  var f=e.target; if(!f.classList||!f.classList.contains("fbf")||!D().fbTable) return;
+  e.preventDefault();
+  var st=f.querySelector(".st"), c=f.querySelector("input[name=choice]:checked"), n=f.querySelector("input[name=note]");
+  var choice=f.getAttribute("data-choice")||(c?c.value:""), note=n?n.value.trim():"";
+  if(f.classList.contains("say")&&note) choice="意见";
+  if(f.classList.contains("pick")){choice="改成"; if(!note){st.className="st err";st.textContent="写一句改成什么";return;}}
+  if(!choice&&!note){st.className="st err";st.textContent="先选一项或写一句";return;}
+  post(f,f.getAttribute("data-item"),choice,note,st);
+});
+if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",load); else load();
+})();
 </script>
 </head>
 <body>
@@ -272,39 +468,36 @@ document.addEventListener("click",function(e){
        with none write 「本批不量」 — NEVER blank, never invented. A batch that just ended
        usually cannot be read yet: 「⟨date⟩ 再看」, which beats a number nobody measured;
        an old plan with no table is reported 「本批未声明指标」, never back-filled.
-     FOLD 「怎么量」: which member moves it, 多久能读出来 (复读时间), and 读数口径 — the
-       data source, the filter rules and the exact command. Commands, paths and log names
-       never appear above the fold. -->
+     EACH ROW opens on how THAT row is measured (T764) — which member moves it, 多久能读出来
+       (复读时间), and 读数口径 — the data source, the filter rules and the exact command. No
+       shared 「怎么量」 fold; a row with nothing to say is a plain div.xr (no ▸). Commands, paths
+       and log names never appear above the row. REPORT: class "xt c4", head 指标 / 之前 / 现在 / 目标. -->
 <section id="metrics">
-<h2>指标</h2>
-<div class="scroll">
-<table>
-<thead><tr><th>指标</th><th>现在</th><th>目标</th></tr></thead>
-<tbody>
-<tr><td>⟨已知的「本地好好的，传上去就不行」的情况⟩</td><td class="num">⟨6 种⟩</td><td class="num">⟨0 种⟩</td></tr>
-<tr><td>⟨真实读者 / 30 天⟩</td><td class="num">⟨62⟩</td><td class="num">⟨&gt; 100⟩</td></tr>
-<tr><td>⟨新会话启动⟩</td><td class="num">⟨5–13 秒⟩</td><td class="num">⟨≤ 6 秒⟩</td></tr>
-</tbody>
-</table>
-</div>
-<details class="fold">
-<summary>怎么量</summary>
-<div class="scroll">
-<table>
-<thead><tr><th>指标</th><th>谁来动它</th><th>多久能读出来</th><th>读数口径</th></tr></thead>
-<tbody>
-<tr><td>⟨已知的「本地好好的，传上去就不行」的情况⟩</td><td>⟨全批⟩</td><td>⟨批末⟩</td><td>⟨已知情况的清单本身 — 每种一行，写在这里，报告逐行复核⟩</td></tr>
-<tr><td>⟨真实读者 / 30 天⟩</td><td>⟨成员名称 / 全批⟩</td><td>⟨2 周⟩</td><td>⟨数据源 · 过滤规则（去掉自己人 / 去重 / 时区）· 命令⟩</td></tr>
-</tbody>
-</table>
+<h2>目标</h2>
+<div class="xt c3">
+<div class="xh"><span>指标</span><span>现在</span><span>目标</span><i></i></div>
+<details class="xr"><summary><span class="c">⟨已知的「本地好好的，传上去就不行」的情况⟩</span><span class="num">⟨6 种⟩</span><span class="num">⟨0 种⟩</span><i></i></summary>
+<div class="xd">
+<dl class="kv"><dt>谁来动它</dt><dd>⟨全批⟩</dd><dt>多久能读出来</dt><dd>⟨批末⟩</dd><dt>读数口径</dt><dd>⟨已知情况的清单本身 — 每种一行，写在这里，报告逐行复核⟩</dd></dl>
 </div>
 </details>
+<details class="xr"><summary><span class="c">⟨真实读者 / 30 天⟩</span><span class="num">⟨62⟩</span><span class="num">⟨&gt; 100⟩</span><i></i></summary>
+<div class="xd">
+<dl class="kv"><dt>谁来动它</dt><dd>⟨成员名称 / 全批⟩</dd><dt>多久能读出来</dt><dd>⟨2 周⟩</dd><dt>读数口径</dt><dd>⟨数据源 · 过滤规则（去掉自己人 / 去重 / 时区）· 命令⟩</dd></dl>
+</div>
+</details>
+<div class="xr"><span class="c">⟨新会话启动 — 没有量法可写的一行：普通行，不带 ▸⟩</span><span class="num">⟨5–13 秒⟩</span><span class="num">⟨≤ 6 秒⟩</span><i></i></div>
+</div>
+<!-- PLAN: 范围 sits HERE, under the metric rows (T764: 指标 + 范围 = ONE section 「目标」) — 做 / 不做 in
+     the decider's plain words: short items, no code, no tool names. The report drops it. -->
+<h3>做</h3><ul><li>⟨一条一句大白话⟩</li></ul>
+<h3>不做</h3><ul><li>⟨…⟩</li></ul>
 </section>
 
-<!-- §3 charter — PLAN ONLY. 范围 in the decider's plain words: short items, no code, no tool
-     names (「清掉不用的工作文件夹」「后台少干没用的活」「机器快扛不住时提前提醒」).
-     共同约定 is instruction for the workers — technical, and folded. All of it is written
-     back verbatim into the parent body after the nod. -->
+<!-- §3 charter — PLAN ONLY. 范围 (做 / 不做) moved under #metrics, the section 「目标」 (T764);
+     what stays here is 先回答 (only for a theme that is a question) and 共同约定 —
+     instruction for the workers, technical, and folded. All of it is written back verbatim
+     into the parent body after the nod. -->
 <section id="charter">
 <!-- 先回答 — OPTIONAL (issue #929): only when the theme is a QUESTION (「别人怎么做、我们该怎么做、
      价值在哪」). The answer is the surface, not a fold: 3–4 plain rows, then 我们的价值 as a few
@@ -324,9 +517,6 @@ document.addEventListener("click",function(e){
 <summary>出处与未核实</summary>
 <ul><li>⟨链接 · 出处 · 哪条还没核实⟩</li></ul>
 </details>
-<h2>范围</h2>
-<h3>做</h3><ul><li>⟨一条一句大白话⟩</li></ul>
-<h3>不做</h3><ul><li>⟨…⟩</li></ul>
 <details class="fold">
 <summary>共同约定</summary>
 <ol><li>⟨给执行会话的横向约定，可以很技术⟩</li></ol>
@@ -349,6 +539,9 @@ document.addEventListener("click",function(e){
      The .proof grid sits in the upper layer (the pictures are stakeholder content); the
      上线证据 LINE that told the worker where to shoot folds with the rest.
 
+     NOTHING TO OPEN, NO ▸ (T764): a card whose 技术细节 would be empty drops the fold; a card with
+     nothing beyond its one line is <div class="card"> (no ▸). --lint WARNs `empty-fold`.
+
      PLAN, VISUAL members only (issue #1754, T699): a member that changes something the user SEES
      (侧栏 / 状态栏 / 弹出菜单 / 网页 / 小程序页面 / 报告页样式) carries ONE div.cmp 改前 / 改后 block
      in the upper layer — under the four fields, never in the fold — the prototype IN the card:
@@ -358,7 +551,7 @@ document.addEventListener("click",function(e){
      no p.proto link. A non-visual member drops the block. --lint WARNs `compare` when a visual
      card has none, or still links a prototype page. -->
 <section id="members">
-<h2>要做的事</h2>
+<h2>解决方案</h2>
 
 <h3 class="grp">⟨主题分组 1⟩</h3>
 <div class="ob" id="m-C1">
@@ -525,6 +718,18 @@ document.addEventListener("click",function(e){
 </table>
 </div>
 <p class="lede" style="margin-top:14px">⟨before the nod: 「点头即全部按建议。」 · after: 「发起人 @login YYYY-MM-DD 拍板：全部按建议执行，worker 照做，不再讨论方向。」⟩</p>
+<!-- 页内反馈 (T764) — a page published as a live page answers ON the page: <body data-fb-table="replies"
+     data-fb-version="v⟨N⟩">, the table made members-only (set_data … append_open members_only, columns
+     item / choice / note / version / at). Each item answers on its own: a div.fbi per row of the table
+     above (its options in the row — the default first, marked 默认, then the others, then 改成… — a tap posts it), a 「有意见」 (say-btn + div.fbi with form.say) under any card,
+     one 全部按建议. The frame's script posts them, reads them back on load and draws each item's state
+     (改 · 撤回); ⟨table⟩_done marks 已采纳 / 未采纳. Drop this block for a page that is not a live page. -->
+<div class="sol">
+<div class="so"><div class="sk">⟨事项⟩</div><div class="sv">⟨建议⟩</div>
+<div class="fbi" data-item="signoff-1" data-kind="pick" data-default="⟨默认：建议的那一项⟩"><form class="fbf pick" data-item="signoff-1"><div class="opts"><button type="button" class="opt dflt" data-v="⟨默认：建议的那一项⟩">⟨默认：建议的那一项⟩<span class="dm">默认</span></button><button type="button" class="opt" data-v="⟨另一个选项⟩">⟨另一个选项⟩</button><button type="button" class="opt free" data-v="改成">改成…</button></div><div class="freebox" hidden><input name="note" placeholder="改成什么" maxlength="300"><button>提交</button></div><span class="st"></span></form><span class="fbs"></span></div>
+</div>
+</div>
+<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>全部按建议</button><span class="st"></span></form><span class="fbs"></span></div>
 </section>
 
 <!-- §9 preflight — PLAN ONLY, AFTER the decisions (issue #881), and ONLY WHEN THERE IS

@@ -60,6 +60,16 @@ fleet:
 - 子会话报主干红了（fleet 不自动开故障单，红了只报警）：`task` 派一个修它的任务（`repo`，`body` 写上哪个检查红、
   第一行报错和运行链接），告诉人一句；同一处红已经有任务在修，就 `await` 它，不派第二个。
 
+## 方案页的意见表
+- 发到活页的方案页（任务设计页、EPIC 设计页）都带一张只收工作区成员的意见表 `replies`
+  （列 item / choice / note / version / at）：人在页面上逐项表态——「全部按建议」、某条「改」、某处「有意见」，每项都能撤回。
+- 有方案页在等人时，你在例行轮询里读它：`mcp__space__list_data_rows`（`proposal_id`、`table: "replies"`，
+  `since` 上次回复的 `next_since`；记下新的游标）。每个 `item`（`nod` · `signoff-N` · `cause-N` · `card-X`）
+  以最后一条为准，原话转给出这一页的会话（`mcp__fleet-orch__send`）；`nod` 就是点头，照「需要你定的事」的建议往下走。
+- `choice` 是 `withdraw` 即撤回：这一项当未表态，也转给那个会话。它已经照那一项动手了，就由它回报能不能退回、退了没有。
+- 出页的会话处理完，用 `set_data` 在本页的 `replies_done` 表写一行（item / state adopted|declined / note），
+  页面打开即显示「已采纳 / 未采纳」，不用你回写、也不用重发页面。
+
 ## 规矩
 - 不写代码：不在 worktree 写，也不在基础检出写；写代码的子代理会被拒。
 - 给人看页面或文件用 `mcp__fleet__open` / `mcp__fleet__show`，从不在本机 `open`。

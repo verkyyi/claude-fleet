@@ -38,10 +38,18 @@
 # A TASK page (/fleet-task-plan, T661: its eyebrow reads 任务设计 / 任务 <id>) is
 # checked for its own frame too:
 #   task-section   a section the task layout carries is missing (#problem #cause
-#                  #metrics #charter #members #risks #signoff #evidence)
+#                  #metrics #charter #members #risks #signoff #evidence — since T764
+#                  #cause / #charter are anchors inside 问题与原因 / 目标)
 #   task-evidence  a 原因 with no folded 证据 (code lines, logs, the scene) — a cause
 #                  nobody can check is a guess
 #   task-signoff   需要你定的事 without 「点头即全部按建议」 under it
+# and, on any page (T764):
+#   brevity        a title over 16 characters, a subtitle over 30 or with brackets;
+#                  on a task page a 现象 line over 25 characters, a 做 / 不做 item over 20
+#   fold-row       the old shared folds — 证据（代码与现场） under 原因, 怎么量 under 指标 —
+#                  instead of each step / row opening on its own
+#   accept         上线证据 still one folded line, or an acceptance item with no 通过标准
+#   empty-fold     a fold / card / row that opens on nothing (no ▸ without a detail)
 # It is a checklist aid, not a judge: a clean lint does not make a page good —
 # rules like "the surface answers the theme's question" are yours to read.
 #
@@ -114,11 +122,14 @@ class Surface(HTMLParser):
             if tag == "img" and not self.hidden: self.buf.append("[图:" + (a.get("alt") or "") + "]")
             return
         hid = self.hidden
-        if tag == "section":
+        if tag == "section" or (tag == "span" and a.get("id") in ("cause", "charter")):   # T764: anchors of a merged section
             self.section = a.get("id", ""); self.sections.add(self.section)
         if tag == "details" and "fold" in cls: self.folds[self.section] = self.folds.get(self.section, 0) + 1
-        if tag in ("head","style","script","template"): self.hidden += 1
+        if tag == "div" and "xd" in cls:       # a row own detail (T764): one tap away, like a fold
+            self.folds[self.section] = self.folds.get(self.section, 0) + 1
+        if tag in ("head","style","script","template","button","form"): self.hidden += 1   # page controls are not words
         elif tag == "details" and "fold" in cls: self.hidden += 1
+        elif tag == "div" and "xd" in cls: self.hidden += 1
         elif tag == "details" and "card" in cls:
             self.card.append(False)
             self.cards.append({"base": hid, "text": [], "cmp": False, "page": False, "name": "", "sec": self.section})
@@ -132,13 +143,21 @@ class Surface(HTMLParser):
             self.stack.append((tag, hid, "cardsum")); self.flush(); return
         if tag in ("code","kbd") and not self.hidden:
             self.code += 1; self.buf.append("`")
+        xrow = (tag == "div" and ("xr" in cls or "xh" in cls)) or \
+               (tag == "summary" and self.stack and self.stack[-1][2] == "xr")
+        if xrow:                               # a row of a div.xt (T764): its spans are its cells
+            self.flush(); self.cells = []; self.head_row = "xh" in cls
+            self.stack.append((tag, hid, "xrow")); return
+        if tag == "span" and self.cells is not None and self.stack and self.stack[-1][2] == "xrow":
+            self.buf = []; self.stack.append((tag, hid, "xcell")); return
         if tag == "tr": self.flush(); self.cells = []; self.head_row = False
         if tag == "th": self.head_row = True
         elif tag in ("td","th"): self.buf = []
         elif tag in BLOCK: self.flush()
         if tag == "dt": self.dt = ""; self.raw = []
         if tag == "dd" and self.dt == "为谁": self.whom_buf = []
-        kind = "card" if (tag == "details" and "card" in cls) else "eyebrow" if "eyebrow" in cls else ""
+        kind = "card" if (tag == "details" and "card" in cls) else "eyebrow" if "eyebrow" in cls else "xd" if (tag == "div" and "xd" in cls) \
+            else "xr" if (tag == "details" and "xr" in cls) else ""
         self.stack.append((tag, hid, kind))
     def handle_endtag(self, tag):
         if tag in VOID: return
@@ -151,6 +170,12 @@ class Surface(HTMLParser):
     def _end(self, t, hid, kind):
         if t in ("code","kbd") and self.code:
             self.code -= 1; self.buf.append("`")
+        if kind == "xcell" and self.cells is not None:
+            self.cells.append(re.sub(r"\s+", " ", "".join(self.buf)).strip()); self.buf = []; return
+        if kind == "xrow":
+            if self.cells and not self.hidden:
+                self.lines.append(("th" if self.head_row else "tr", "| " + " | ".join(self.cells) + " |", self.section))
+            self.cells = None; self.buf = []; return
         if t in ("td","th") and self.cells is not None:
             self.cells.append(re.sub(r"\s+", " ", "".join(self.buf)).strip()); self.buf = []
         elif t == "tr":
@@ -182,7 +207,7 @@ class Surface(HTMLParser):
                     self.visual.append(c["name"] or "（未命名成员）")
                 if c["page"]: self.protopage.append(c["name"] or "（未命名成员）")
         # a fold, a card and <head>/<style>/<script> each end their own hiding
-        if t in ("details","head","style","script","template"): self.hidden = hid
+        if t in ("details","head","style","script","template","button","form") or kind == "xd": self.hidden = hid
     def handle_data(self, d):
         if not self.hidden: self.buf.append(d)   # hidden text never reaches the surface
         self.raw.append(d)
@@ -191,8 +216,9 @@ class Surface(HTMLParser):
         if self.whom_buf is not None: self.whom_buf.append(d)
     def handle_comment(self, d): pass
 
+RAW = sys.stdin.read()
 p = Surface()
-p.feed(sys.stdin.read()); p.close(); p.flush()
+p.feed(RAW); p.close(); p.flush()
 
 PFX = {"th":"","h1":"# ","h2":"\n## ","h3":"### ","h4":"#### ","li":"- ","card":"▸ ","summary":"▸ ","dt":"","dd":"  "}
 for kind, text, sec in p.lines:
@@ -251,10 +277,45 @@ for name in p.protopage:
 if any(k == "eyebrow" and t.startswith("任务") for k, t, _ in p.lines):
     for sid in ("problem","cause","metrics","charter","members","risks","signoff","evidence"):
         if sid not in p.sections: warn("task-section", "任务页缺少 #" + sid)
-    if any(k == "h2" and s == "cause" and t == "原因" for k, t, s in p.lines) and not p.folds.get("cause"):
+    if any(k == "h2" and t in ("原因", "问题与原因") for k, t, s in p.lines) and not p.folds.get("cause"):
         warn("task-evidence", "原因没有折叠的证据（代码行、日志、现场）")
     if "signoff" in p.sections and not any(s == "signoff" and "点头即全部按建议" in t for _, t, s in p.lines):
         warn("task-signoff", "需要你定的事下面没有「点头即全部按建议」")
+
+# T764 — the decider reads the top of a page first, and opens only what has something in it
+def txt(h): return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", "", h)).strip()
+def heading(rx):
+    m = re.search(rx, RAW, re.S)
+    return txt(m.group(1)) if m else ""
+TASK = any(k == "eyebrow" and t.startswith("任务") for k, t, _ in p.lines)
+h1, sub = heading(r"<h1>(.*?)</h1>"), heading(r"<p class=\"sub\">(.*?)</p>")
+if h1 and "⟨" not in h1 and len(h1) > 16:
+    warn("brevity", "标题 %d 字，超过 16 字  ← %s" % (len(h1), h1))
+if sub and "⟨" not in sub and (len(sub) > 30 or re.search(r"[（(]", sub)):
+    warn("brevity", "副标题一句话 ≤ 30 字、不带括号，只说做到什么就停（现在 %d 字）  ← %s" % (len(sub), sub))
+if TASK:
+    m = re.search(r"<section id=\"problem\">(.*?)(?:<span id=\"cause\">|</section>)", RAW, re.S)
+    for li in re.findall(r"<li>(.*?)</li>", m.group(1), re.S) if m else []:
+        if len(txt(li)) > 25: warn("brevity", "现象一行一个事实、≤ 25 字（现在 %d 字）  ← %s" % (len(txt(li)), txt(li)))
+    m2 = re.search(r"<span id=\"charter\"></span>(.*?)</section>", RAW, re.S)
+    for li in re.findall(r"<li>(.*?)</li>", m2.group(1), re.S) if m2 else []:
+        if len(txt(li)) > 20: warn("brevity", "做 / 不做一项一句、≤ 20 字，细节进解决方案卡片（现在 %d 字）  ← %s" % (len(txt(li)), txt(li)))
+    for sym in re.findall(r"<p class=\"sym\">(.*?)</p>", m.group(1), re.S) if m else []:
+        if len(txt(sym)) > 40: warn("brevity", "现象一句话、≤ 40 字（现在 %d 字）  ← %s" % (len(txt(sym)), txt(sym)))
+for sid, summ, what in (("cause", "证据（代码与现场）", "证据没挂到步骤：每一步自带它的证据（cause.steps[].evidence），对不上的进分组的「其他证据」"),
+                        ("metrics", "怎么量", "量法没挂到行：每一行指标自带怎么量（metrics[].how）")):
+    m = re.search(r"id=\"%s\">(.*?)(?:<span id=\"charter\">|</section>)" % sid, RAW, re.S)
+    if m and re.search(r"<summary>%s</summary>" % re.escape(summ), m.group(1)):
+        warn("fold-row", what)
+m = re.search(r"<section id=\"evidence\">(.*?)</section>", RAW, re.S)
+if TASK and m and re.search(r"<summary>上线证据</summary>", m.group(1)):
+    warn("accept", "上线证据还是一行折叠：改成「上线后怎么验收」卡（evidence: [{what, where, pass, status, proof}]）")
+for ev in re.findall(r"<div class=\"ev\">(.*?<dl class=\"kv\">.*?</dl>)", RAW, re.S):
+    if "class=\"miss\"" in ev or "通过标准" not in ev:
+        warn("accept", "验收项缺通过标准  ← " + txt(re.sub(r"<dl.*", "", ev, flags=re.S)))
+for cls, summ, inner in re.findall(r"<details class=\"(fold|card|xr|oi)\"[^>]*>\s*<summary>(.*?)</summary>(.*?)</details>", RAW, re.S):
+    if not txt(inner) and "<img" not in inner:
+        warn("empty-fold", "点开是空的：没有可展开的内容就不放 ▸  ← " + (txt(summ) or cls))
 
 seen = set()
 for rule, text in warns:

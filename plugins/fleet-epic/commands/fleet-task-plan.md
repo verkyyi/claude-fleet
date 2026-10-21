@@ -1,5 +1,5 @@
 ---
-description: One task's design page — 现象 · 原因 · 目标与范围 · 改法 · 风险 · 需要你定的事 · 上线证据 — and the task opened from it only after you say yes.
+description: One task's design page — 问题与原因 · 目标 · 解决方案 · 风险 · 需要你定的事 · 上线后怎么验收 — answered on the page, and the task opened from it only after you say yes.
 ---
 
 # /fleet-task-plan — one task, one design page, then the task
@@ -37,12 +37,12 @@ is nowhere else to put it.
 
 Read before you write. A cause on the page is a claim the operator will act on:
 
-- **现象** — what the person sees, with counts and times (「今天 3 个批次……一个都没到」).
+- **现象** — what the person sees, counted, one fact a line (「3 个批次的完成通知一个都没到」).
 - **原因** — reproduce it, then walk it step by step in plain words; keep the
   **证据** — code lines (`file:line`), log lines, the live state (tmux options,
-  ledger rows, a command's output) — they go in the cause's fold.
-- No cause to find (a plain new feature) ⇒ the spec's `"kind": "feature"`: `#cause`
-  becomes 「为什么要做」 (`lede` + `points`), `#problem` 「现在的样子」.
+  ledger rows, a command's output) — each on the step it proves (T764).
+- No cause to find (a plain new feature) ⇒ the spec's `"kind": "feature"`: the
+  section is 「现在的样子与为什么要做」 (`lede` + `points`).
 
 Exclude what someone is already doing (`mcp__fleet__status`, ask the person).
 
@@ -62,16 +62,43 @@ words. Top to bottom:
 
 | part | spec key | what goes there |
 |---|---|---|
-| 标题 + 副题 | `title` · `sub` | the subject; ONE sentence: what we do · where it stops (「…以后 0 份丢失就停」) |
+| 标题 + 副题 | `title` · `sub` | the subject in **≤ 16 字**; the subtitle ONE sentence **≤ 30 字**, no brackets, only where it stops (「…0 份丢失就停」) |
 | 数字条 | `band` | 根本原因数 / 要改的地方 / 影响面 (e.g. 已经丢的回报 15) |
-| `#problem` 现象 | `problem` | what the person sees, counted |
-| `#cause` 原因 | `cause.lede` · `cause.steps` · `cause.evidence` | one-sentence lede; the 一步 / 发生了什么 walk; 证据 folded (code lines, logs, the scene) |
-| `#metrics` 指标 | `metrics` · `metrics_how` | 指标 / 现在 / 目标, numbers only; 「怎么量」 folded |
-| `#charter` 目标与范围 | `charter.do` · `charter.dont` | 做 / 不做, short plain items |
-| `#members` 改法 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `compare` (改前 / 改后, below) |
+| `#problem` 问题与原因 | `problem` | the symptom first: ONE sentence (a string, ≤ 40 字), or a few facts — one a line, **≤ 25 字**, the number first, no reasons |
+| ↳ `#cause` (anchor) | `cause.lede` · `cause.steps[]` · `cause.other[]` | one-sentence lede; the walk `{step, what, evidence [li]}` — **each step opens on ITS evidence** (file:line, the log, the scene); a step with none is a plain row, no ▸. What fits no step / metric / card goes in `other` `{kind: code·log·scene·ref, title, ref (file:line), excerpt (a line or two), text}` — grouped by kind, a title each |
+| `#metrics` 目标 | `metrics[]` | `{name, now, target, how}` — numbers only on the row; **each row opens on how IT is measured** |
+| ↳ `#charter` (anchor) | `charter.do` · `charter.dont` | 做 / 不做 under the metric rows, short plain items |
+| `#members` 解决方案 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `compare` (改前 / 改后, below). A card with nothing past its line has no ▸ |
 | `#risks` | `risks` · `risks_tech` | 「会出什么事 — 我们怎么兜住」 |
-| `#signoff` 需要你定的事 | `signoff` | 事项 / 建议, a default on every row; the line under it says 「点头即全部按建议」 |
-| `#evidence` 上线证据 | `evidence` | ONE line, folded: what the worker captures after the switch to prove it |
+| `#signoff` 需要你定的事 | `signoff` | `{q, rec, default, options}` — 事项, 建议, the DEFAULT (what counts when nobody picks; old `[事项, 建议]` rows default to 按建议) and the other options; the line under it says 「点头即全部按建议」 |
+| `#evidence` 上线后怎么验收 | `evidence[]` · `phase` | one item per proof `{what, where, pass, status, proof}`: 是什么 · 在哪取 · 通过标准. The plan (`phase` plan, the default) shows only those three; the worker renders `phase: build` and fills each `status` (pending · done · failed) and `proof` ({img · text · url · html, caption}) — the filled card is the report's 已上线 |
+| 页内反馈 | `feedback` · `replies_done` | `{table: "replies", version: "v<N>", poll: "12 分钟"}` — below |
+
+**Nothing to open, no ▸** (T764): a step, a metric row or a card with no detail
+renders as a plain line — never an arrow onto nothing (lint `empty-fold`). An old
+spec (`steps` [[…]] + `cause.evidence`, `metrics` [[…]] + `metrics_how`, a one-line
+`evidence`) still renders, and the lint asks to migrate it (`fold-row`, `accept`).
+
+**页内反馈** (T764): the page is a live page, so the operator answers ON it, each
+item on its own: every 需要你定的事 row lays its options out in the row — the default
+first, marked 「默认」 and drawn as what counts while nobody picked, then the others,
+then 「改成…」 (a note); a tap posts that pick, a non-default pick is highlighted —
+「有意见」 on every 原因 step and card, one 「全部按建议」 — each opens or posts THAT item
+only. A submit POSTs `{item, choice, note, version, at}` to the page's own table —
+`item` is `signoff-<n>` · `cause-<step>` · `card-<key>` · `nod`; a withdraw is the same
+item with `choice` `withdraw`. On load the page reads the table back (`GET
+./_data/replies.json` returns the reviewed rows; rows this device sent that are not
+back yet come from localStorage, marked 待同步) and draws each item's LAST row — what
+was chosen, when, 改 · 撤回; a done 全部按建议 hides its button. Make the tables once,
+right after the first publish:
+`mcp__space__set_data` `replies` (`revision` 0, `rows` [], `columns` [item, choice,
+note, version, at] — a column the table lacks is dropped from a row, `append_open`
+true, `members_only` true) and `replies_done` (`columns` [item, state, note],
+`append_open` false). The orchestrator reads `replies` (its 「方案页的意见表」 rule)
+and hands each item's last row to the session that owns the page; that session marks
+it by writing `replies_done` (`{item, state: adopted | declined, note}` — the page
+shows it at once, no new version) — `replies_done` in the spec renders the same mark
+into the page itself.
 
 The **two-layer rules are epic-page's** (`skills/epic-page/SKILL.md`, rules 0 and
 16–24 of `/fleet-epic-plan` step 4): plain words, no keys, file names or
@@ -95,7 +122,10 @@ state (`- 改后 · <标签>：<说明>`), never its HTML.
 The surface as the operator reads it, plus a `WARN` per machine-visible miss —
 epic-page's rules, and the task page's own: `task-section` (a section missing),
 `task-evidence` (a 原因 with no folded 证据), `task-signoff` (no 「点头即全部按建议」), and epic-page's `compare` (a visual change
-with no 改前 / 改后, or a link to a separate prototype page).
+with no 改前 / 改后, or a link to a separate prototype page), `brevity` (标题 > 16 字,
+副题 > 30 字 or bracketed, a 现象 line > 25 字), `fold-row` (the old shared 证据 /
+怎么量 folds), `accept` (上线证据 still one line, or an item with no 通过标准),
+`empty-fold` (an arrow onto nothing).
 A WARN is a question, not a verdict; fix what is real.
 
 ## 4. Publish privately, push, wait
@@ -129,8 +159,8 @@ The page is the source: never re-draft the task from the chat.
 
    It measures the words as they travel (UTF-8 JSON; the hub reads 16 KB with the
    envelope) and, over `--max` (13000), moves folds to the page one kind at a time
-   — the cause's evidence, then 改法's 技术细节 — each line saying 「见设计页」;
-   上线证据 always stays. Exit 1 = even the surface is too long: shorten the page.
+   — the steps' evidence, then 解决方案's 技术细节 — each line saying 「见设计页」;
+   the 上线后怎么验收 items always stay. Page controls (buttons, forms) are never words. Exit 1 = even the surface is too long: shorten the page.
 3. **Open the task** — the `task` tool (`mcp__fleet-orch__task`: `title` the page's
    title, `body` the file's content, `repo`, `spawn: true`), which is
    `fleet-task-record.sh dispatch --title … --body-file <md> --repo <owner/name> --spawn`.

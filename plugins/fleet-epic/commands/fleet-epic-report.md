@@ -129,7 +129,7 @@ step 4 lists; the report takes five of them):
 - **Plain words in the number band** — 上线能力 / 指标已读出 / 未上线 / 还差什么,
   never 核心层 / 储备层 / PR 数.
 - **How a number was read is hidden** — 读数口径, commands, paths, log names go
-  in the metrics section's 「怎么量」 fold; none of them on the surface.
+  in each metric row's own detail (T764); none of them on the surface.
 - **Few words** — a section lede is one sentence or nothing.
 - **Execution detail is folded** — PR numbers, merge times, 占用时长, 依赖,
   来源单号, the whole of `#ops`.
@@ -163,7 +163,7 @@ What earns its place, in page order:
    charter's 打算移动的指标 table (step 1) and fill it row by row — on the surface
    **指标 / 之前 / 现在 / 目标**, numbers or ranges only, with the 数据截至 date as
    the section's one-line lede; the 读数口径 line carried over **verbatim** into the
-   「怎么量」 fold — the same filter rules, or the two numbers are not comparable:
+   row's own detail (`xt c4`, T764) — the same filter rules, or the two numbers are not comparable:
 
    ```
    说好要移动的指标                     数据截至 2026-10-04（批次后 14 天）

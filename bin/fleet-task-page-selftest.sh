@@ -23,6 +23,19 @@
 #      block (template.html's slot IS its output); the spec's `css` follows the
 #      frame's <style>; body writes the block as words, one line per state, no
 #      HTML or script; an old `proto` page link draws the lint's `compare` WARN.
+#   G  T764: each 原因 step opens on ITS evidence and each 指标 row on how IT is
+#      measured; a step / row / card with nothing to open is a plain line (no ▸,
+#      no <details>); leftover evidence is grouped by kind, each item a title that
+#      opens on file:line + excerpt; 问题与原因 / 目标 / 解决方案 are the sections
+#      (#cause / #charter anchors inside); the 上线后怎么验收 card shows what · 在哪取
+#      · 通过标准 in the plan and adds status + slot once building (proof filled);
+#      `feedback` puts the table + version on <body>; every item answers on its own
+#      (a div.fbi: 需要你定的事 rows with their options in the row, the default
+#      marked and drawn as what counts; 「有意见」 per step / card, one
+#      全部按建议); the frame's script posts {item, choice, note, version, at}, reads
+#      the table back on load (+ localStorage), draws each item's last row with 改 ·
+#      撤回 (withdraw = a row) and reads <table>_done; replies_done marks it too;
+#      an OLD spec still renders its shared folds and draws fold-row / accept.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -41,12 +54,13 @@ trap 'rm -rf "$TMP"' EXIT
 export ST_LEG=A
 python3 "$P" render "$EX" -o "$TMP/page.html" || st_fail "render the example"
 PAGE=$(cat "$TMP/page.html")
-for id in $(python3 "$P" ids); do st_has "id $id" "$PAGE" "<section id=\"$id\">"; done
+for id in $(python3 "$P" ids); do st_has "id $id" "$PAGE" " id=\"$id\">"; done
 st_eq "eight ids" 8 "$(python3 "$P" ids | wc -l | tr -d ' ')"
 st_has "open anchor" "$PAGE" '<span id="open"></span>'
 st_has "eyebrow" "$PAGE" '<p class="eyebrow">任务设计 · verkyyi/claude-fleet'
 st_has "a card per member" "$PAGE" '<div class="ob" id="m-C">'
-st_has "evidence folded" "$PAGE" '<summary>证据（代码与现场）</summary>'
+st_has "a step opens on its own evidence" "$PAGE" '<div class="xd">'
+st_hasnt "no shared evidence fold" "$PAGE" '<summary>证据（代码与现场）</summary>'
 STYLE=$(python3 - "$T" "$TMP/page.html" <<'PY'
 import re, sys
 a, b = (re.search(r"<style>\s*:root.*?</style>", open(f, encoding="utf-8").read(), re.S).group(0) for f in sys.argv[1:])
@@ -67,13 +81,16 @@ d = json.load(open(sys.argv[1], encoding="utf-8"))
 f = dict(d, kind="feature", cause={"lede": "你今天得自己拼这一页。", "points": ["每次排查都要从头讲一遍"]})
 json.dump(f, open(sys.argv[2], "w"), ensure_ascii=False)
 b = dict(d, signoff_note="好的")
-b["cause"] = {k: v for k, v in d["cause"].items() if k != "evidence"}
+b["cause"] = {"lede": d["cause"]["lede"], "steps": [{"step": x["step"], "what": x["what"]} for x in d["cause"]["steps"]]}
 json.dump(b, open(sys.argv[3], "w"), ensure_ascii=False)
 PY
 FEAT=$(python3 "$P" render "$TMP/feat.json")
-st_has "feature cause" "$FEAT" '<section id="cause">
-<h2>为什么要做</h2>'
-st_has "feature problem" "$FEAT" '<h2>现在的样子</h2>'
+st_has "feature: one section, its own name" "$FEAT" '<section id="problem">
+<h2>现在的样子与为什么要做</h2>'
+st_has "fix: 问题与原因" "$PAGE" '<h2>问题与原因</h2>'
+st_has "目标 = 指标 + 做 / 不做" "$PAGE" '<span id="charter"></span>
+<h3>做</h3>'
+st_has "解决方案" "$PAGE" '<h2>解决方案</h2>'
 printf '%s' "$FEAT" | bash "$L" --lint - >/dev/null 2>&1; st_eq "a feature needs no evidence fold" 0 $?
 python3 "$P" render "$TMP/broken.json" | sed 's/<section id="risks">/<section id="r">/' > "$TMP/broken.html"
 w=$(bash "$L" --lint "$TMP/broken.html" 2>&1 >/dev/null); rc=$?
@@ -91,11 +108,18 @@ st_eq "body → 0" 0 "$rc"
 st_has "link first" "$B" '> 设计页：https://p/s/x（私密；本文是它的两层全文）'
 st_has "title" "$B" '# 批次报告送不到你手里'
 st_has "band" "$B" '根本原因 1 · 要改的地方 3'
-st_has "cause steps" "$B" '| 一步 | 发生了什么 |'
+st_has "cause steps" "$B" '- 1 · 编排开出「计划页会话」'
+st_has "a step's own evidence under it" "$B" '  - `bin/fleet-report-parent.sh:300-305`'
+st_has "a metric row and its how" "$B" '- 上一层还有活着的会话、回报却成了无主 · 今天 3 次 · 0 次
+  无主回报文件里'
+st_has "an acceptance item" "$B" '- 1. **三层演练：上一层关掉后回报照样送到**
+  **在哪取**'
+st_hasnt "no page controls in the words" "$B" '我要逐条改'
+st_hasnt "no form labels" "$B" '改成…'
 st_has "evidence written out" "$B" 'bin/fleet-report-parent.sh:300-305'
 st_has "card name — line" "$B" '### 回报先按身份找人 — 退役判断放到身份路由之后'
 st_has "tech written out" "$B" '**完成判据** `origin-selftest.sh` D'
-st_has "上线证据 kept" "$B" '让一个演练会话 A 开 B'
+st_has "上线证据 kept" "$B" '演练会话 A 开 B、B 开 C'
 st_has "nod" "$B" '操作者 2026-10-20：全部按「需要你定的事」的建议执行'
 st_hasnt "no eyebrow" "$B" '任务设计 ·'
 st_hasnt "no footer" "$B" '本页私密'
@@ -103,16 +127,16 @@ st_hasnt "no style" "$B" '--ground'
 size() { python3 -c 'import json,sys; print(len(json.dumps(sys.stdin.read(), ensure_ascii=False).encode()))'; }
 n=$(printf '%s\n' "$B" | size)
 st_eq "under the default cap ($n)" yes "$([ "$n" -le 13000 ] && echo yes)"
-B=$(python3 "$P" body "$TMP/page.html" --max 6500)
+B=$(python3 "$P" body "$TMP/page.html" --max 7000)
 n=$(printf '%s\n' "$B" | size)
-st_eq "under --max 6500 ($n)" yes "$([ "$n" -le 6500 ] && echo yes)"
-st_has "evidence moved first" "$B" '（证据（代码与现场）：见设计页）'
-st_has "tech kept at 6500" "$B" '**完成判据**'
-B=$(python3 "$P" body "$TMP/page.html" --max 5500 --link L)
+st_eq "under --max 7000 ($n)" yes "$([ "$n" -le 7000 ] && echo yes)"
+st_has "evidence moved first" "$B" '  （证据：见设计页）'
+st_has "tech kept at 7000" "$B" '**完成判据**'
+B=$(python3 "$P" body "$TMP/page.html" --max 6000 --link L)
 n=$(printf '%s\n' "$B" | size)
-st_eq "under --max 5500 ($n)" yes "$([ "$n" -le 5500 ] && echo yes)"
+st_eq "under --max 6000 ($n)" yes "$([ "$n" -le 6000 ] && echo yes)"
 st_has "tech moved next" "$B" '（技术细节：见设计页）'
-st_has "上线证据 never moved" "$B" '让一个演练会话 A 开 B'
+st_has "上线证据 never moved" "$B" '演练会话 A 开 B、B 开 C'
 st_has "the note says so" "$B" '标「见设计页」的几段只在页面上'
 python3 "$P" body "$TMP/page.html" --max 300 >/dev/null 2>&1; st_eq "nothing fits → 1" 1 $?
 
@@ -141,7 +165,8 @@ up = c.split('<details class="fold">')[0]
 print("upper" if '<div class="cmp">' in up else "folded")
 sts = re.findall(r'<div class="st"( hidden)?', c)
 print("states=%d first=%s rest=%s" % (len(sts), "shown" if not sts[0] else "hidden", "hidden" if all(sts[1:]) else "shown"))
-print("buttons=%d on=%d" % (c.count("<button"), c.count('class="on"')))
+tabs = re.search(r'<div class="tabs">.*?</div>', c, re.S).group(0)
+print("buttons=%d on=%d" % (tabs.count("<button"), tabs.count('class="on"')))
 PY2
 )
 st_has "block in the upper layer" "$CARD" upper
@@ -191,5 +216,85 @@ st_hasnt "body: no block HTML" "$B" 'class="cmp"'
 st_hasnt "body: no script" "$B" 'addEventListener'
 st_hasnt "body: no pane content" "$B" '点开看全文 ›'
 st_has "the command says compare" "$(cat "$CMD")" '"states"'
+
+# ---- G ------------------------------------------------------------------------
+ST_LEG=G
+python3 - "$EX" "$TMP/g.json" "$TMP/gold.json" <<'PY3'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+g = dict(d, phase="build", replies_done={"signoff-1": {"state": "declined", "note": "先不推微信"}})
+g["members"] = d["members"] + [{"key": "Z", "name": "只有一句", "line": "没有可展开的"}]
+ev = [dict(e) for e in d["evidence"]]
+ev[0].update(status="done", proof={"text": "A 收到：C 完成", "caption": "04:52Z"})
+ev[1]["status"] = "failed"
+g["evidence"] = ev
+json.dump(g, open(sys.argv[2], "w"), ensure_ascii=False)
+o = {k: v for k, v in d.items() if k != "feedback"}
+o["cause"] = {"lede": "x", "steps": [[x["step"], x["what"]] for x in d["cause"]["steps"]], "evidence": ["<code>a.sh:1</code> 现场"]}
+o["metrics"] = [[m["name"], m["now"], m["target"]] for m in d["metrics"]]
+o["metrics_how"] = ["数一下"]
+o["evidence"] = "换版后贴 A 窗口收到的回报"
+json.dump(o, open(sys.argv[3], "w"), ensure_ascii=False)
+PY3
+STEPS=$(python3 - "$TMP/page.html" <<'PY3'
+import re, sys
+p = open(sys.argv[1], encoding="utf-8").read()
+sec = re.search(r'<span id="cause"></span>(.*?)</section>', p, re.S).group(1)
+print("open=%d plain=%d" % (sec.count('<details class="xr">'), len(re.findall(r'<div class="xr">', sec))))
+m = re.search(r'<section id="metrics">(.*?)</section>', p, re.S).group(1)
+print("mopen=%d" % m.count('<details class="xr">'))
+PY3
+)
+st_has "steps with evidence open, the rest are plain rows" "$STEPS" 'open=3 plain=3'
+st_has "each metric row opens on its how" "$STEPS" 'mopen=2'
+st_has "a plain row has no arrow" "$(cat "$T")" '.xt details.xr>summary i::before{content:"▸"'
+st_has "leftover evidence, grouped" "$PAGE" '<div class="og"><span class="ok">外部资料</span>'
+st_has "a grouped item opens on its original" "$PAGE" '<details class="oi"><summary>为什么以前没事'
+st_has "plan: what · where · pass" "$PAGE" '<dt>通过标准</dt><dd>A 窗口收到 C 的完成回报'
+st_hasnt "plan: no status" "$PAGE" '待取'
+st_hasnt "plan: no slot" "$PAGE" 'class="slot"'
+st_has "feedback: the table on <body>" "$PAGE" '<body data-fb-table="replies" data-fb-version="v1">'
+st_has "feedback: a step's entry" "$PAGE" 'data-say="cause-1"'
+st_has "feedback: a card answers on its own" "$PAGE" '<div class="fbi" data-item="card-A" data-kind="say"><span class="fbs"></span><form class="fbf say" id="say-card-A" data-item="card-A" hidden>'
+st_has "feedback: a decision row, its options in it, the default marked" "$PAGE" '<div class="fbi" data-item="signoff-1" data-kind="pick" data-default="顶栏一行 + 微信一条"><form class="fbf pick" data-item="signoff-1"><div class="opts"><button type="button" class="opt dflt" data-v="顶栏一行 + 微信一条">顶栏一行 + 微信一条<span class="dm">默认</span></button><button type="button" class="opt" data-v="只在顶栏">只在顶栏</button>'
+st_has "feedback: an old [事项, 建议] row defaults to 按建议" "$PAGE" 'data-item="signoff-2" data-kind="pick" data-default="按建议"'
+st_has "feedback: 改成… opens a note on the row" "$PAGE" '<button type="button" class="opt free" data-v="改成">改成…</button></div><div class="freebox" hidden>'
+st_has "nothing picked: the default is drawn as what counts" "$(cat "$T")" 'o.classList.toggle("idle",!got&&v===dv)'
+st_has "a non-default pick is highlighted" "$(cat "$T")" 'o.classList.toggle("alt",!!got&&v===got.choice&&v!==dv)'
+st_has "feedback: one nod" "$PAGE" '<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>全部按建议</button>'
+st_hasnt "feedback: no global switch" "$PAGE" 'fb-more'
+st_has "feedback: the route is one small line" "$PAGE" '<p class="fb-note">ⓘ 每一项都能单独改、单独撤回'
+TPL=$(cat "$T")
+st_has "the frame posts to the page's own table, stamped" "$TPL" 'version:D().fbVersion||"",at:new Date().toISOString()'
+st_has "it reads the table back on load" "$TPL" 'fetch("./_data/"+t+".json",{credentials:"include"})'
+st_has "this device's unsynced rows from localStorage" "$TPL" 'localStorage.getItem(KEY())'
+st_has "each item's LAST row wins" "$TPL" 'function last(rows)'
+st_has "a withdraw is a row" "$TPL" 'post(null,item,"withdraw","",'
+st_has "a submitted nod hides its button" "$TPL" '.fbi.done form.nod{display:none}'
+st_has "已采纳 / 未采纳 from the live _done table" "$TPL" 'fetch("./_data/"+t+"_done.json"'
+G=$(python3 "$P" render "$TMP/g.json") || st_fail "render the build-phase spec"
+st_has "build: status" "$G" '<span class="pill ">已取</span>'
+st_has "build: a failed item" "$G" '<span class="pill crit">未通过</span>'
+st_has "build: an empty slot" "$G" '<div class="slot">待回填：截图 / 终端输出 / 链接</div>'
+st_has "build: the proof filled in" "$G" '<figure class="got"><pre>A 收到：C 完成</pre><figcaption>04:52Z</figcaption></figure>'
+st_has "replies_done marks the row" "$G" '<p class="fb-done" data-for="signoff-1"><span class="pill muted">未采纳</span> 先不推微信'
+st_has "a card with nothing to open has no fold" "$G" '<div class="ob" id="m-Z">
+<div class="card">'
+OLD=$(python3 "$P" render "$TMP/gold.json") || st_fail "render an old spec"
+st_has "old spec: the shared evidence fold" "$OLD" '<summary>证据（代码与现场）</summary>'
+st_has "old spec: the shared 怎么量" "$OLD" '<summary>怎么量</summary>'
+st_hasnt "old spec: no feedback" "$OLD" '<body data-fb-table'
+w=$(printf '%s' "$OLD" | bash "$L" --lint - 2>&1 >/dev/null)
+st_has "old spec: lint says move evidence to the steps" "$w" 'WARN fold-row: 证据没挂到步骤'
+st_has "old spec: lint says move how to the rows" "$w" 'WARN fold-row: 量法没挂到行'
+st_has "old spec: lint says make the acceptance card" "$w" 'WARN accept: 上线证据还是一行折叠'
+w=$(python3 - "$EX" <<'PY3' | python3 "$P" render - | bash "$L" --lint - 2>&1 >/dev/null
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["charter"]["do"].append("真正没人可送时提醒你（面板一行 + 微信），不再只写进文件")
+print(json.dumps(d, ensure_ascii=False))
+PY3
+)
+st_has "a long 做 item draws brevity" "$w" 'WARN brevity: 做 / 不做一项一句、≤ 20 字'
 
 st_done

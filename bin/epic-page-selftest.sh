@@ -139,9 +139,12 @@ fi
 CHECKS=$((CHECKS + 1))
 grep -E '^<h[23]' "$T" | grep -qE '(^|[^A-Za-z])[CR][0-9]' && st_fail "template: a heading shows a member key"
 hasF "$T" '<dt>编号 / 来源</dt>' "template: the key lives in 技术细节"
-# 6d. metric table: numbers on the surface, 口径 folded
-hasF "$T" '<thead><tr><th>指标</th><th>现在</th><th>目标</th></tr></thead>' "template: metric header 指标/现在/目标"
-hasF "$T" '<summary>怎么量</summary>' "template: 读数口径 sits in the 怎么量 fold"
+# 6d. metric rows: numbers on the surface, each row opens on ITS 口径 (T764), 范围 under them
+hasF "$T" '<div class="xh"><span>指标</span><span>现在</span><span>目标</span><i></i></div>' "template: metric header 指标/现在/目标"
+hasF "$T" '<dt>读数口径</dt>' "template: 读数口径 sits in the row's own detail"
+hasF "$T" '<div class="xr"><span class="c">' "template: a row with nothing to open is a plain row"
+hasF "$T" '<h2>目标</h2>' "template: 指标 + 范围 are one section 目标"
+hasF "$T" '<h2>解决方案</h2>' "template: the member list is 解决方案"
 # 6e. decisions in one table, preflight folded, order folded whole
 hasF "$T" '<thead><tr><th>事项</th><th>建议</th></tr></thead>' "template: 需要你定的事 is one 事项/建议 table"
 hasF "$T" '（批后）' "template: shows the 「（批后）」 mark"
