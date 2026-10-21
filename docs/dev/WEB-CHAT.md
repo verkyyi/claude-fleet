@@ -258,10 +258,17 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - **另一边的状态**：每一边的 `/api/conversation` 带 `last`（最后一轮的号）和 `others.<另一边>` `{busy, last}`，
   页面据此在另一边的标签上亮点（在跑：跳动；有没看过的回复：静止）。
 
+- **入口与页面**（R9A2 ②）：入口只把 `provider=codex` 这一个参数带给家（别的值 400、不转），`POST /v1/chat/new` 是一条路由；
+  入口旁的对话副本按助手各存一份（`hub_chat_mirrors` 的 `pid` / `pid#codex` 两行，#5171 以家为准的新旧规则按行算，
+  关掉开关两份都删）。页面（`extras/web-console` 的对话页）在对话上方一排：两个标签、「在终端里继续」、「新对话」；
+  家没说 `providers` 含 codex（旧家、或没装 codex）就不显示这一排。
+
 ### 接口约定（给「在终端里继续」与两边互斥）
 
 - 会话号与目录：`GET /api/conversation[?provider=codex]` 的 `session`（Claude 的 session id / Codex 的 thread id）和 `cwd`。
   终端里接上：Claude `cd <cwd> && claude --resume <session>`，Codex `cd <cwd> && codex resume <session>`。
+- 网页上的「在终端里继续」：`/app/terminal?continue=claude|codex`——个人终端从家读这一边的 `session` / `cwd` / `busy`（不从地址里拿），
+  在跑就不接；否则开 看台 的 shell（⌃\）敲 `cd '<cwd>' && fleet run claude --resume <session>`（Codex：`fleet run codex resume <session>`）。
 - 正在跑：同一响应的 `busy`（及 `turn`）；`busy` 为真时不要在别处接着写这一段。这一版的锁只在服务进程里（`live`），
   终端那一侧的锁由另一个任务接上。
 
