@@ -45,7 +45,8 @@ var chatRoutes = map[string]string{
 // where the person's conversation runs, for the page's top bar — no relay.
 const chatHomeRoute = "home"
 
-// ChatHome is GET /v1/chat/home's answer. State: ok · offline (the login is
+// ChatHome is GET /v1/chat/home's answer. State: ok · reconnecting (its link
+// was on a replica a deploy took; its agent is reconnecting) · offline (the login is
 // not connected) · maintenance · old_agent (connected, without the chat relay).
 type ChatHome struct {
 	Machine string `json:"machine"`
@@ -91,6 +92,9 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 	if out.State == "ok" {
 		if _, nc, err := s.chatRelayNode(home.Machine, home.Login); err != nil {
 			out.State = "offline"
+			if s.homeReconnecting(home.Machine, home.Login) {
+				out.State = "reconnecting"
+			}
 			var re *sshRelayError
 			if errors.As(err, &re) && re.code == "NO_CHAT" {
 				out.State = "old_agent"
@@ -419,6 +423,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case derr != nil && errors.As(derr, &re) && re.code == "TOO_MANY":
 				s.chatRefuse(w, person, name+" "+where, http.StatusTooManyRequests, "too_many", re.msg)
+			case derr != nil && s.homeReconnecting(home.Machine, home.Login):
+				w.Header().Set("Retry-After", "3")
+				s.chatRefuse(w, person, name+" "+where, http.StatusServiceUnavailable, "home_reconnecting", "正在重连你的家，稍候")
 			case derr != nil:
 				s.chatRefuse(w, person, name+" "+where, http.StatusServiceUnavailable, "home_down", "你的机器现在连不上")
 			case r.Context().Err() != nil:

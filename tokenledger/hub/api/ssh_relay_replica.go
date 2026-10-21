@@ -3,10 +3,13 @@ package api
 import (
 	"crypto/subtle"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
@@ -131,9 +134,16 @@ func (s *Server) proxyRelay(w http.ResponseWriter, r *http.Request, peer store.N
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			log.Printf("relay: hand %s to replica %s: %v", what, peer.Replica, err)
+			if strings.HasPrefix(what, "a chat") || strings.HasPrefix(what, "chat") {
+				// the page says it plainly and asks again by itself (task V9DJ)
+				w.Header().Set("Retry-After", "3")
+				refuseJSON(w, http.StatusServiceUnavailable, "home_reconnecting", "正在重连你的家，稍候")
+				return
+			}
 			httpError(w, http.StatusBadGateway, "the replica holding the machine's link could not be reached")
 		},
 	}
+	rp.Transport = replicaHopTransport
 	if s.Replica.Client != nil && s.Replica.Client.Transport != nil {
 		rp.Transport = s.Replica.Client.Transport
 	}
@@ -149,3 +159,12 @@ func (s *Server) sshRelayReadiness() func(host string) bool {
 		return s.sshRelayLocal(host) || len(peers[host]) > 0
 	}
 }
+
+// replicaHopTransport hands a request to another replica: an in-cluster pod
+// address, so a dial that has not connected in 3 s is to a pod that is gone
+// (a rolling deploy), not a slow one — the default transport waited 30 s.
+var replicaHopTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	return t
+}()

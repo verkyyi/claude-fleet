@@ -181,13 +181,33 @@ func (s *Server) peerConns() map[string]store.NodeConn {
 		log.Printf("fleet: read fleet_node_conns: %v", err)
 		return nil
 	}
+	// A link is only as good as the replica that holds it: a row left by a
+	// replica that has stopped beating (a rolling deploy took its pod) names an
+	// address nothing answers at any more — handing a request there waited out
+	// the dial (30 s) before failing. Such a row is skipped; the node's
+	// reconnect writes its new holder. Unread replica rows ⇒ no filter.
+	up, known := s.replicaNamesUp(time.Now())
 	out := map[string]store.NodeConn{}
 	for _, r := range rows {
-		if r.Replica != s.Replica.Name {
+		if r.Replica != s.Replica.Name && (!known || up[r.Replica]) {
 			out[r.EndpointID] = r
 		}
 	}
 	return out
+}
+
+// replicaNamesUp is the names of the replicas that beat within replicaUpFor;
+// known is false when the rows could not be read.
+func (s *Server) replicaNamesUp(now time.Time) (map[string]bool, bool) {
+	rows, err := s.Store.Replicas(now.Add(-replicaUpFor))
+	if err != nil {
+		return nil, false
+	}
+	up := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		up[r.Name] = true
+	}
+	return up, true
 }
 
 // nodeForward is one call handed to the holder.
@@ -435,4 +455,43 @@ func (s *Server) forwardOAuth(ctx context.Context, peer store.NodeConn, name, pr
 	}
 	ans.Status, ans.Body = rep.HTTP, rep.Body
 	return ans, nil
+}
+
+// homeReconnecting says whether login on host had its link on a replica that
+// has stopped beating (a rolling deploy took it) — so it is between links, not
+// gone: its agent is about to reconnect to a replica that is up.
+func (s *Server) homeReconnecting(host, login string) bool {
+	if s.Replica == nil {
+		return false
+	}
+	up, known := s.replicaNamesUp(time.Now())
+	if !known {
+		return false
+	}
+	rows, err := s.Store.NodeConns()
+	if err != nil {
+		return false
+	}
+	var stale map[string]bool
+	for _, r := range rows {
+		if r.Replica != s.Replica.Name && !up[r.Replica] {
+			if stale == nil {
+				stale = map[string]bool{}
+			}
+			stale[r.EndpointID] = true
+		}
+	}
+	if len(stale) == 0 {
+		return false
+	}
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		return false
+	}
+	for _, n := range nodes {
+		if stale[n.EndpointID] && n.Hostname == host && n.OSUser == login {
+			return true
+		}
+	}
+	return false
 }
