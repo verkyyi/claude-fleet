@@ -194,6 +194,15 @@ class Cleaner:
             return {n: option(self.tm, window, n) for n in names}
         return {n: v.strip() for n, v in zip(names, vals)}
 
+    def moved(self, window, snap):
+        """The window changed since <snap> was read (it came back, was renamed,
+        re-stamped) — every close re-reads first. @reap_why is not a change: it is
+        this reaper's own note (E101), and another pass of it (the --now watcher
+        beside the tick) writes it at its end."""
+        now = self.snapshot(window)
+        return {k: v for k, v in now.items() if k != "@reap_why"} != \
+            {k: v for k, v in snap.items() if k != "@reap_why"}
+
     @staticmethod
     def finished(snap):
         """done | exited | the stamp — the agent's own finished 7501 word first
@@ -405,7 +414,7 @@ class Cleaner:
             self.say(window, "skip:transition")
             return False
         try:
-            if self.snapshot(window) != snap or not recheck():
+            if self.moved(window, snap) or not recheck():
                 return False
             other = self.shared(window, snap["@fleet_id"])
             if other:
@@ -535,7 +544,7 @@ class Cleaner:
         if self.args.dry_run:
             print("would-reap-test:" + window)
             return False
-        if self.snapshot(window) != snap:
+        if self.moved(window, snap):
             return False
         self.retire(window)
         out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
@@ -591,7 +600,7 @@ class Cleaner:
         if self.args.dry_run:
             print("would-reap-idle:" + window)
             return False
-        if self.snapshot(window) != snap:
+        if self.moved(window, snap):
             return False  # it came back (resumed, renamed, re-stamped) since the read
         fid = snap["@fleet_id"]
         if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
@@ -651,7 +660,7 @@ class Cleaner:
         if self.args.dry_run:
             print("would-reap-empty:" + window)
             return False
-        if self.snapshot(window) != snap:
+        if self.moved(window, snap):
             return False
         self.retire(window)
         out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
@@ -787,7 +796,7 @@ class Cleaner:
             print("would-reap-%s:%s origin=%s" % (why, window, origin))
             return False
         if norepo:
-            if self.snapshot(window) != snap:
+            if self.moved(window, snap):
                 return False
             self.retire(window)
             out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session,
