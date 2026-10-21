@@ -6696,6 +6696,16 @@ drill_chat_mirror_other_person() {
   SECS=$(since "$t0")
 }
 
+# chat-replica-gone (task V9DJ): the replica holding the home's link went with a
+# rolling deploy; the chat is never handed to it and the page hears «reconnecting».
+drill_chat_replica_gone() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestChatReplicaGone' './e2e' \
+    '握链接的副本没了：不交给它、5 s 内回 home_reconnecting「正在重连你的家，稍候」，/home 为 reconnecting' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_term_controller_ready() {
   CAP=180; local t0
   t0=$(now)

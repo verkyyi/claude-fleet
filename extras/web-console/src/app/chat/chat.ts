@@ -220,6 +220,14 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     if (!r || !r.ok) {
       if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
       const code = String(j.code || "");
+      if (code === "home_reconnecting") {
+        // the hub moved under the home's link (a deploy): it is back in seconds
+        if (hadCopy.current) setSync("syncing");
+        else setNotice(tr("正在重连你的家，稍候…", "Reconnecting to your machine, one moment…"));
+        setLoaded(true);
+        follow.current = window.setTimeout(load, 3000);
+        return;
+      }
       if (hadCopy.current && (code === "home_down" || !r)) {
         // the home is out of reach: the copy stays on the page, said so
         setSync("offline");
