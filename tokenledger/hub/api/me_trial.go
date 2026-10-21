@@ -24,7 +24,10 @@ import (
 // POST /v1/me/trial/upgrade is 申请转正: it stamps
 // fleet.member_upgrade.<principal> with the time, audited, and the admin's
 // 成员 list shows it beside the person's limits (fleet/person-usage's
-// upgrade_asked). No limits = no `trial`, and the POST answers 409.
+// upgrade_asked), and every admin is told once on the notice desk — WeChat
+// first, tapping through to that person's drawer (claude-fleet T805,
+// notify.go's NotifyKindUpgrade). No limits = no `trial`, and the POST
+// answers 409.
 
 const (
 	MemberUpgradePrefix = "fleet.member_upgrade."
@@ -194,6 +197,7 @@ func (s *Server) handleMeTrialUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.settingAudit(actorOf(r), key, "", v, now)
+	s.notifyUpgrade(pid)
 	at := now.UTC().Truncate(time.Second)
 	writeJSON(w, http.StatusOK, map[string]any{"upgrade_asked": at})
 }

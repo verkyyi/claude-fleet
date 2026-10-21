@@ -70,6 +70,10 @@ func TestMeUsageTrial(t *testing.T) {
 	if again := trial(bob).UpgradeAsked; again == nil || !again.Equal(*first) {
 		t.Fatalf("asking again moved the time: %v → %v", first, again)
 	}
+	// T805: the admin is told once, however often bob asks
+	if ns, _ := h.srv.Store.NoticesOf(githubPrincipal(100), store.NotifyKindUpgrade); len(ns) != 1 || ns[0].Refs[0] != bobID {
+		t.Fatalf("the admin's 转正 notices = %+v", ns)
+	}
 	code, b = rolesGet(t, h, admin, "/v1/fleet/person-usage")
 	var people struct {
 		People []PersonBudgetState `json:"people"`

@@ -21,7 +21,7 @@ import { useLoad, type Trial } from "@/shared/api";
 import { Failed, PageHeader } from "../parts";
 import { useShell, usePage } from "../Shell";
 import { MySubsCard } from "../subs";
-import { trialParts } from "../TrialBar";
+import { trialParts, UpgradeAsk } from "../TrialBar";
 
 // /v1/me/usage's answer (MeUsage, me_usage.go)
 type Limit = {
@@ -355,6 +355,7 @@ const WhereCard: FC<{ u: Usage | null; range: Range; setRange: (r: Range) => voi
 };
 
 export default function UsagePage() {
+  const shell = useShell();
   usePage(tr("用量", "Usage"));
   const [qs, setQs] = useSearchParams();
   const range = rangeOf(qs.get("range"));
@@ -378,6 +379,7 @@ export default function UsagePage() {
       ) : (
         <>
           <LimitCard l={u.limit || {}} trial={u.trial} />
+          {u.trial ? <UpgradeAsk trial={{ ...u.trial, upgrade_asked: shell.trial?.upgrade_asked || u.trial.upgrade_asked }} onAsked={shell.setTrial} /> : null}
           <div className="grid grid-cols-2 gap-3">
             <Stat label={tr("今天用了", "Used today")} value={u.today} note={u.today ? dt! : tr("今天还没用", "Nothing yet today")} />
             <Stat label={tr("近 7 天", "Last 7 days")} value={u.week} note={dw!} />

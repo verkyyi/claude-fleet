@@ -31,8 +31,8 @@ import { TrialBar } from "./TrialBar";
 
 // What every page reads: who is signed in, what is left of their limit and
 // their trial's (claude-fleet T796) — both bumped after each conversation turn.
-type ShellCtx = { me: Me | null; quota: Quota | null; trial: Trial | null; bumpQuota: () => void };
-const Ctx = createContext<ShellCtx>({ me: null, quota: null, trial: null, bumpQuota: () => {} });
+type ShellCtx = { me: Me | null; quota: Quota | null; trial: Trial | null; setTrial: (t: Trial) => void; bumpQuota: () => void };
+const Ctx = createContext<ShellCtx>({ me: null, quota: null, trial: null, setTrial: () => {}, bumpQuota: () => {} });
 export const useShell = () => useContext(Ctx);
 
 // usePage(title): a page names itself — the tab's title.
@@ -236,7 +236,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
   // typing, or moving through the thread, folds the bar the person brought back
   const fold = () => { if (nav.folds && nav.open) nav.setOpen(false); };
   return (
-    <Ctx.Provider value={{ me, quota, trial, bumpQuota }}>
+    <Ctx.Provider value={{ me, quota, trial, setTrial, bumpQuota }}>
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none" style={{ height: "var(--app-h, 100dvh)" }}>
         <Side />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">

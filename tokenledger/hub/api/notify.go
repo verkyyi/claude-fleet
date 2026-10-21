@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -106,6 +107,8 @@ type Recipient struct {
 type Fields struct {
 	// Request is the access request.
 	Request string
+	// Person is the trial member who asked to 转正 (NotifyKindUpgrade).
+	Person string
 }
 
 // Tell is 共同约定 9's Notify (the name is the svc alert seam's, server.go):
@@ -113,13 +116,27 @@ type Fields struct {
 // for to and wakes the desk. A request's result is written once whoever calls
 // it how often; an admin's notice gathers (notifyGather).
 func (s *Server) Tell(ctx context.Context, to Recipient, kind string, f Fields) error {
-	if s.Store == nil || to.Owner == "" || f.Request == "" {
+	ref := f.Request
+	if kind == store.NotifyKindUpgrade {
+		ref = f.Person
+	}
+	if s.Store == nil || to.Owner == "" || ref == "" {
 		return nil
 	}
 	now := time.Now()
 	n := store.Notice{Kind: kind, Owner: to.Owner, Email: to.Email, Prefer: to.Prefer, Lang: to.Lang,
-		Refs: []string{f.Request}}
+		Refs: []string{ref}}
 	switch kind {
+	case store.NotifyKindUpgrade:
+		// one per (member, admin), ever: asking again, or after an admin
+		// cleared the ask, pushes nothing more
+		n.ID = "nt-upgrade-" + ref + "-" + to.Owner
+		if err := s.Store.EnqueueNotice(n, now); err != nil {
+			if isDupNotice(s, n.ID) {
+				return nil
+			}
+			return err
+		}
 	case store.NotifyKindReview:
 		n.ID = "nt-review-" + f.Request
 		if err := s.Store.EnqueueNotice(n, now); err != nil {
@@ -177,6 +194,27 @@ func (s *Server) notifyAdmins(req *store.AccessRequest) {
 		to := Recipient{Owner: u.PrincipalID, Lang: parseLang(set[langSettingKey(u.PrincipalID)])}
 		if err := s.Tell(context.Background(), to, store.NotifyKindNewReq, Fields{Request: req.ID}); err != nil {
 			log.Printf("notify %s of %s: %v", u.PrincipalID, req.ID, err)
+		}
+	}
+}
+
+// notifyUpgrade tells every admin that pid asked to 转正 (claude-fleet T805):
+// tapping it opens 成员 on that person's drawer, where one button makes them a
+// member.
+func (s *Server) notifyUpgrade(pid string) {
+	users, err := s.Store.HubUsers()
+	if err != nil {
+		log.Printf("notify admins of %s's 转正: %v", pid, err)
+		return
+	}
+	set, _ := s.Store.FleetSettings()
+	for _, u := range users {
+		if u.Role != roleAdmin || u.PrincipalID == pid {
+			continue
+		}
+		to := Recipient{Owner: u.PrincipalID, Lang: parseLang(set[langSettingKey(u.PrincipalID)])}
+		if err := s.Tell(context.Background(), to, store.NotifyKindUpgrade, Fields{Person: pid}); err != nil {
+			log.Printf("notify %s of %s's 转正: %v", u.PrincipalID, pid, err)
 		}
 	}
 }
@@ -361,7 +399,7 @@ func wxWhy(code int) string {
 
 func (s *Server) wxTemplate(kind string) string {
 	switch kind {
-	case store.NotifyKindNewReq:
+	case store.NotifyKindNewReq, store.NotifyKindUpgrade:
 		return s.WxGW.TplNewReq
 	case store.NotifyKindNotice:
 		return s.WxGW.TplNotice
@@ -489,6 +527,30 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 			return noticeMsg{}, false, nil
 		}
 		return serviceNoticeMsg(sn, en, base, s.noticeTplFields()), true, nil
+	case store.NotifyKindUpgrade:
+		if len(n.Refs) == 0 {
+			return noticeMsg{}, false, nil
+		}
+		pid := n.Refs[0]
+		set, err := s.Store.FleetSettings()
+		if err != nil {
+			return noticeMsg{}, false, err
+		}
+		at := upgradeAskedOf(set, pid)
+		if _, trial := memberLimitsOf(set, pid); !trial || at == nil {
+			return noticeMsg{}, false, nil // made a member (or the ask cleared) already
+		}
+		users, err := s.Store.HubUsers()
+		if err != nil {
+			return noticeMsg{}, false, err
+		}
+		name := pid
+		for _, u := range users {
+			if u.PrincipalID == pid && strings.TrimSpace(u.Login) != "" {
+				name = u.Login
+			}
+		}
+		return upgradeMsg(pid, name, *at, en, base), true, nil
 	}
 	return noticeMsg{}, false, errors.New("no notice of kind " + n.Kind)
 }
@@ -620,6 +682,47 @@ func newReqMsg(waiting []store.AccessRequest, en bool, base string) noticeMsg {
 		m.Body += "\n你收到这封信，是因为你是 ClaudeFleet 的管理员，有人提交了使用申请。\n"
 	}
 	m.Text = content + "\n" + advice
+	if m.Link != "" {
+		m.Text += "\n" + m.Link
+	}
+	return m
+}
+
+// upgradeMsg: a trial member asked to 转正. The template is the new-request
+// one (用户注册申请审核提醒): 平台名称 · 用户名称 · 申请时间 · 待审批数 1.
+func upgradeMsg(pid, name string, at time.Time, en bool, base string) noticeMsg {
+	m := noticeMsg{}
+	if base != "" {
+		m.Link = base + AdminPrefix + "/people/" + url.PathEscape(pid)
+	}
+	name = clipRunes(oneLine(name), 20)
+	var head, advice string
+	if en {
+		head, advice = "ClaudeFleet: "+name+" asks to become a member", "Tap to open them and make them a member"
+	} else {
+		head, advice = "ClaudeFleet："+name+" 申请转正", "点开直达成员页，一键转正"
+	}
+	m.Tpl = map[string]string{
+		"thing1":             "ClaudeFleet",
+		"thing2":             clipRunes(name+ternary(en, " · member", " · 转正"), 20),
+		"time6":              noticeTime(at, false),
+		"character_string10": "1",
+	}
+	m.Subject = head
+	if en {
+		m.Body = head + " (trial).\n\nAsked: " + noticeTime(at, true) + "\n"
+		if m.Link != "" {
+			m.Body += "\nOpen: " + m.Link + "\n"
+		}
+		m.Body += "\nYou got this mail because you are an admin of ClaudeFleet and a trial member asked to become a member.\n"
+	} else {
+		m.Body = head + "（试用中）。\n\n申请时间：" + noticeTime(at, false) + "\n"
+		if m.Link != "" {
+			m.Body += "\n去处理：" + m.Link + "\n"
+		}
+		m.Body += "\n你收到这封信，是因为你是 ClaudeFleet 的管理员，有试用成员申请转正。\n"
+	}
+	m.Text = head + "\n" + advice
 	if m.Link != "" {
 		m.Text += "\n" + m.Link
 	}
