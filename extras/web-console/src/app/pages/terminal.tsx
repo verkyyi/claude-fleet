@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { Layers, List, TerminalSquare } from "lucide-react";
+import { Layers, List, Palette, TerminalSquare } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { tr } from "@/shared/i18n";
 import { browserClient, type BrowserOffer } from "@/shared/terminal-client";
 import { connectTerminal, forgetTerminalGeneration, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey, terminalLink } from "@/shared/terminal";
 import { touchWheel } from "@/shared/touch-wheel";
+import { FONT_SIZES, MIN_CONTRAST, SCHEMES, onTermPick, setTermPick, termPick, xtermTheme, type TermPick } from "@/shared/term-theme";
 import { webGoTarget } from "@/shared/web-go";
 import { usePage } from "../Shell";
 
@@ -28,17 +32,34 @@ const errors: Record<string, [string, string]> = {
   lease: ["浏览器设备连接已失效，请重新连接。", "This browser's device lease ended. Connect again."],
 };
 
-// Convert the shared theme's CSS colors (including oklch) for xterm's palette.
-function terminalTheme(host: HTMLElement) {
-  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
-  const color = (value: string) => {
-    ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1);
-    const rgba = ctx.getImageData(0, 0, 1, 1).data;
-    return `#${Array.from(rgba.slice(0, 3), (n) => n.toString(16).padStart(2, "0")).join("")}`;
-  };
-  const css = getComputedStyle(host);
-  const background = color(css.backgroundColor), foreground = color(css.color);
-  return { background, foreground, cursor: foreground, selectionBackground: `${foreground}40` };
+// The scheme a person picked, else the page's light / dark (BBVR).
+const pageDark = () => document.documentElement.dataset.theme === "dark";
+const currentTheme = () => xtermTheme(termPick().scheme, pageDark());
+
+// The toolbar's 配色 / 字号: kept on this device, applied at once (BBVR).
+function TermLook({ pick, onPick }: { pick: TermPick; onPick: (p: TermPick) => void }) {
+  return <Popover>
+    <PopoverTrigger asChild><Button size="sm" variant="outline" title={tr("终端配色与字号", "Terminal colours and font size")}><Palette />{tr("配色", "Colours")}</Button></PopoverTrigger>
+    <PopoverContent align="end" className="w-64 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="term-scheme">{tr("配色", "Colours")}</Label>
+        <Select value={pick.scheme} onValueChange={(scheme) => onPick({ ...pick, scheme })}>
+          <SelectTrigger id="term-scheme" className="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="follow">{tr("跟随页面", "Follow page")}</SelectItem>
+            {SCHEMES.map((s) => <SelectItem key={s.id} value={s.id}>{tr(s.zh, s.en)}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="term-size">{tr("字号", "Font size")}</Label>
+        <Select value={String(pick.size)} onValueChange={(v) => onPick({ ...pick, size: Number(v) })}>
+          <SelectTrigger id="term-size" className="w-40"><SelectValue /></SelectTrigger>
+          <SelectContent>{FONT_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent>
+        </Select>
+      </div>
+    </PopoverContent>
+  </Popover>;
 }
 
 // The status says which way the bytes go and, once measured, how fast (XX79).
@@ -67,6 +88,8 @@ export default function TerminalPage() {
   const take = useRef<() => void>(() => {});
   const send = useRef<(text: string) => void>(() => {});
   const renewal = useRef<string | undefined>(undefined);
+  const [pick, setPick] = useState<TermPick>(termPick);
+  const [screen, setScreen] = useState(currentTheme().background);
 
   useEffect(() => {
     const host = container.current!;
@@ -110,9 +133,9 @@ export default function TerminalPage() {
     };
     const createTerminal = () => {
       const current = new Terminal({
-        cursorBlink: true, scrollback: 10000, fontSize: 14,
+        cursorBlink: true, scrollback: 10000, fontSize: termPick().size,
         fontFamily: `${getComputedStyle(host).getPropertyValue("--font-mono")}, "PingFang SC", "Hiragino Sans", "Apple SD Gothic Neo", "Noto Sans CJK SC", monospace`,
-        theme: terminalTheme(host), allowProposedApi: true,
+        theme: currentTheme(), minimumContrastRatio: MIN_CONTRAST, allowProposedApi: true,
       });
       term = current; fit = new FitAddon(); current.loadAddon(fit);
       current.loadAddon(new Unicode11Addon()); current.unicode.activeVersion = "11";
@@ -147,8 +170,14 @@ export default function TerminalPage() {
     };
     send.current = (text) => { if (!composing) { input(text); term?.focus(); } };
     const resize = new ResizeObserver(size); resize.observe(host);
-    const theme = new MutationObserver(() => { if (term) term.options.theme = terminalTheme(host); });
+    // the page turning light / dark, or a new pick, repaints at once
+    const repaint = () => {
+      const t = currentTheme(); setScreen(t.background); setPick(termPick());
+      if (term) { term.options.theme = t; term.options.fontSize = termPick().size; size(); }
+    };
+    const theme = new MutationObserver(repaint);
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const unpick = onTermPick(repaint);
     const start = async () => {
       const response = await fetch("/v1/term/home", { signal: abort.signal, credentials: "same-origin", headers: { Accept: "application/json" } });
       if (dead) return;
@@ -184,7 +213,7 @@ export default function TerminalPage() {
     void start().catch(() => { if (!dead) fail("connection_failed"); });
     return () => {
       dead = true; send.current = () => {}; abort.abort(); connection?.close(); client?.close();
-      resize.disconnect(); theme.disconnect(); disposeTerminal();
+      resize.disconnect(); theme.disconnect(); unpick(); disposeTerminal();
     };
   }, [worker, attempt]);
 
@@ -199,6 +228,7 @@ export default function TerminalPage() {
       <span role="status" className="text-muted-foreground text-xs">{status}</span>
       <Button size="sm" variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_MENU)} title={tr("也可按 Ctrl+]，再按 p", "Also: Ctrl+] then p")}><List />{tr("Fleet 菜单", "Fleet menu")}</Button>
       <Button size="sm" variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_SHELL)} title={tr("再次点击返回会话", "Click again to return to the session")}><TerminalSquare />{tr("打开 Shell", "Open shell")}</Button>
+      <TermLook pick={pick} onPick={setTermPick} />
       <Button asChild size="sm" variant="ghost"><Link to="/sessions"><Layers />{tr("会话", "Sessions")}</Link></Button>
     </header>
     {!["connecting", "reconnecting", "ready"].includes(view.state) ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
@@ -214,6 +244,6 @@ export default function TerminalPage() {
       {offer.url ? <a href={offer.url} target="_blank" rel="noopener noreferrer" className="underline">{tr("打开链接：", "Open link: ")}{offer.url}</a>
         : tr("此操作需要本地终端：浏览器暂不支持端口转发、文件传送或登录回调。", "This action needs a local terminal: browser port forwarding, file transfer and login callbacks are not supported.")}
     </p>)}
-    <div ref={container} data-terminal className="bg-background text-foreground min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border p-2" />
+    <div ref={container} data-terminal style={{ background: screen }} className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border p-2" />
   </div>;
 }
