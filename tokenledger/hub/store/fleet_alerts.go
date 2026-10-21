@@ -57,6 +57,11 @@ const (
 	// AlertTrialNoSpare: a trial waits because no fit machine holds a ready
 	// spare (claude-fleet#4259) — subject "hub"; cleared by the next claim.
 	AlertTrialNoSpare = "trial_no_spare"
+	// AlertEntryHostKeyChanged: a machine reported an entry host key other
+	// than the one the hub held (claude-fleet T743) — every client that pinned
+	// the old one now refuses that machine. Subject its hostname; detail the
+	// old and new fingerprints. Cleared by the operator once they know why.
+	AlertEntryHostKeyChanged = "entry_hostkey_changed"
 )
 
 // FleetAlert is one row.

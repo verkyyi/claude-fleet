@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -382,7 +383,11 @@ func (s *Server) handleNodeEntryReach(w http.ResponseWriter, r *http.Request) {
 	if want != nil {
 		// the key every address above was held to: a pod behind this door
 		// is handed it (withEntryReach), not the pod's own (#4127)
-		if err := s.Store.SetEntryHostKey(host, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(want))), now); err != nil {
+		line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(want)))
+		if prev, err := s.Store.EntryHostKey(host); err == nil && prev != "" && prev != line {
+			s.entryHostKeyChanged(host, prev, want, now)
+		}
+		if err := s.Store.SetEntryHostKey(host, line, now); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -494,4 +499,27 @@ func (s *Server) EntryReachable(machine string, now time.Time) ([]EntryReachable
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Family < out[j].Family })
 	return out, nil
+}
+
+// entryHostKeyChanged says out loud that a machine's entry host key changed
+// (claude-fleet T743): an entry key is made once for a machine's life, so a new
+// one means its state was lost or the address reaches another box — every
+// phone that pinned the old key now refuses it. One fleet alert (open until the
+// operator clears it) and one hub_audit line; the machine's own word still
+// stands as its key, it is never silently the new normal.
+func (s *Server) entryHostKeyChanged(host, prev string, now ssh.PublicKey, at time.Time) {
+	oldFP := "?"
+	if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(prev)); err == nil {
+		oldFP = ssh.FingerprintSHA256(k)
+	}
+	newFP := ssh.FingerprintSHA256(now)
+	b, _ := json.Marshal(map[string]string{"old": oldFP, "new": newFP})
+	if _, err := s.Store.RaiseFleetAlert(store.AlertEntryHostKeyChanged, strings.ToLower(host), string(b), at); err != nil {
+		log.Printf("fleet alerts: raise %s %s: %v", store.AlertEntryHostKeyChanged, host, err)
+	}
+	line := fmt.Sprintf("entry host key of %s changed: %s → %s", host, oldFP, newFP)
+	log.Printf("fleet alert: %s", line)
+	if err := s.Store.HubAudit("hub", "entry.hostkey", strings.ToLower(host), "changed", line, at); err != nil {
+		log.Printf("fleet alerts: audit entry.hostkey %s: %v", host, err)
+	}
 }

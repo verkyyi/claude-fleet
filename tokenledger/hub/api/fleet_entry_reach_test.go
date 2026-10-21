@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -321,5 +322,49 @@ func TestEntryReachDoor(t *testing.T) {
 	}
 	if code, _, _ := reachPost(t, h, tok, control.EntryReachReport{Port: 22022}, ""); code != http.StatusNotFound {
 		t.Fatalf("door off: HTTP %d", code)
+	}
+}
+
+// TestEntryHostKeyChangeIsAlerted (claude-fleet T743, BREAK-IT
+// hostkey-changed-silent): an entry host key is made once; a machine that
+// reports another one raises entry_hostkey_changed with both fingerprints and
+// a hub_audit line — the same key again raises nothing.
+func TestEntryHostKeyChangeIsAlerted(t *testing.T) {
+	h := entryHarness(t)
+	_, tok := rootNode(t, h, "root9", "mac-k", control.CapEntryKeys)
+	k1, k2 := reachKey(t), reachKey(t)
+	post := func(k ssh.PublicKey) {
+		t.Helper()
+		h.srv.entryReachAt.Delete("mac-k")
+		if code, _, raw := reachPost(t, h, tok, control.EntryReachReport{Port: closedPort(t), HostKey: reachKeyLine(k), Listening: true}, ""); code != 200 {
+			t.Fatalf("report: HTTP %d %s", code, raw)
+		}
+	}
+	open := func() []string {
+		t.Helper()
+		subs, err := h.srv.Store.OpenFleetAlertSubjects(store.AlertEntryHostKeyChanged, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return subs
+	}
+	post(k1)
+	post(k1)
+	if subs := open(); len(subs) != 0 {
+		t.Fatalf("the same key raised %v", subs)
+	}
+	post(k2)
+	if subs := open(); len(subs) != 1 || subs[0] != "mac-k" {
+		t.Fatalf("a new entry key raised %v, want [mac-k]", subs)
+	}
+	var detail string
+	if err := h.srv.Store.DB().QueryRow(`SELECT detail FROM fleet_alerts WHERE kind = ?`, store.AlertEntryHostKeyChanged).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detail, ssh.FingerprintSHA256(k1)) || !strings.Contains(detail, ssh.FingerprintSHA256(k2)) {
+		t.Fatalf("alert detail %s lacks the old / new fingerprints", detail)
+	}
+	if k, _ := h.srv.Store.EntryHostKey("mac-k"); k != reachKeyLine(k2) {
+		t.Fatalf("entry host key = %q, want the machine's new word", k)
 	}
 }
