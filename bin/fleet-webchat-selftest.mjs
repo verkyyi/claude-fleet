@@ -103,6 +103,7 @@ esac
 const ENVLOG = join(T, "env.json");
 const PROMPTLOG = join(T, "prompts.ndjson");                  // every prompt the agent got, and its MCP servers (M)
 const TOOLLOG = join(T, "tool.txt");                          // what browser_context answered (M)
+const QUERYLOG = join(T, "queries.log");                     // one line per query() — a started agent (C2)
 const sdk = join(T, "sdk.mjs");
 writeFileSync(sdk, `
 import { writeFileSync, appendFileSync, mkdirSync, realpathSync } from "node:fs";
@@ -110,7 +111,18 @@ import { join } from "node:path";
 const SID = ${JSON.stringify(SID)};
 export const tool = (name, description, shape, handler) => ({ name, handler });
 export const createSdkMcpServer = (o) => ({ type: "sdk", name: o.name, tools: o.tools });
-export async function* query({ prompt, options }) {
+// a streamed prompt (the warm agent, task V9DJ C2) is one process taking turn after
+// turn: every message runs the same body; a string prompt is one turn, as before
+export function query({ prompt, options }) {
+  appendFileSync(${JSON.stringify(QUERYLOG)}, "query\\n");
+  const g = (async function* () {
+    if (typeof prompt === "string") { yield* one(prompt, options); return; }
+    for await (const m of prompt) yield* one(m.message.content, options);
+  })();
+  g.setModel = async (model) => { options.model = model; };
+  return g;
+}
+async function* one(prompt, options) {
   const env = options.env;
   appendFileSync(${JSON.stringify(PROMPTLOG)}, JSON.stringify({ prompt, mcp: Object.keys(options.mcpServers || {}) }) + "\\n");
   if (/ctxtool$/.test(prompt) && options.mcpServers?.fleet_browser) {
@@ -448,6 +460,8 @@ proxyHits.length = 0;                                     // A–G count their o
 // the cred log is shared with the socket parts above: the local part reads its own lines only
 const CREDMARK = existsSync(CREDLOG) ? readFileSync(CREDLOG, "utf8").length : 0;
 const localCred = () => readFileSync(CREDLOG, "utf8").slice(CREDMARK);
+const QMARK = existsSync(QUERYLOG) ? readFileSync(QUERYLOG, "utf8").length : 0;
+const localQueries = () => (readFileSync(QUERYLOG, "utf8").slice(QMARK).match(/^query$/gm) || []).length;
 let PORT = await start();
 function req(path, { method = "GET", headers = {}, body, host } = {}) {
   return new Promise((resolve, reject) => {
@@ -544,6 +558,18 @@ const mintSid = (credCalls.match(/mint --provider claude --sid (web-\d+-\d+)/) |
 ok(!!mintSid && (credCalls.match(/^mint /gm) || []).length === 1 && !credCalls.includes(`revoke --sid ${mintSid}`),
   `D the conversation's sid (${mintSid}) was minted once and is kept between turns`);
 
+// ---- O: the warm agent (task V9DJ C2): the next turn runs on the agent the first
+// one started — no new Claude Code process, no resume — and still answers its card
+{
+  const more = [];
+  const st3 = await turnStream("再说一句", async (o) => {
+    more.push(o.t);
+    if (o.t === "ask") await req("/api/answer", { method: "POST", headers: { ...me, ...PAGE }, body: { rid: o.rid, answers: { "猫还是狗？": "狗" } } });
+  });
+  ok(st3 === 200 && more.at(-1) === "done" && more.includes("session"), `O a second turn streams to done (${more.join(",")})`);
+  ok(localQueries() === 1, `O both turns ran on one agent (${localQueries()} started)`);
+}
+
 // ---- G: the page -------------------------------------------------------------------
 const page = await req("/", { headers: me });
 const csp = String(page.headers["content-security-policy"] || "");
@@ -587,6 +613,8 @@ ok(JSON.parse(readFileSync(ENVLOG, "utf8")).resume === SID, "F the next turn res
   // the page's read minted ahead of the turn, and the turn used that one
   const after = localCred().split(`revoke --sid ${mintSid}`)[1] || "";
   ok((after.match(/^mint /gm) || []).length === 1, "F after the restart one mint served the read-ahead and the turn (the stop key keeps it)");
+  // the restart's read opened the agent ahead of the turn; the stop key closed it
+  ok(localQueries() === 2, `O the page's read opened the agent the next turn used (${localQueries()} started in all)`);
 }
 
 // ---- E ----------------------------------------------------------------------------
