@@ -607,7 +607,7 @@ func (o *accountOps) ownsLocked() func(login, opID string) bool {
 // cutOffResult is the answer to an op the agent's restart cut off.
 func cutOffResult(f accountInflight, exists bool) control.AccountResult {
 	res := control.AccountResult{Op: f.Op, Login: f.Login, Exit: -1}
-	why := "the node agent (pid " + strconv.Itoa(f.PID) + ") stopped while this op ran (started " + f.Started + "); "
+	why := "the node agent (pid " + strconv.Itoa(f.PID) + ") " + control.AccountCutOffMark + " (started " + f.Started + "); "
 	switch {
 	case (f.Op == control.AccountRemove || f.Op == control.AccountReset) && !exists:
 		res.Exit = control.RemoveExitNoLogin

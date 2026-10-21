@@ -186,6 +186,8 @@ var hubSettings = map[string]hubSetting{
 		check: onOff(TrialOnceKey, "on")},
 	TrialCredAllowKey: {def: `"*"`, help: "the subscriptions a trial person may use (they are never listed one by one): \"*\" every one the trial is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, [] none — trials then wait 「试用暂时没有可用订阅」; approval writes it as the new member's own list (claude-fleet#4260)",
 		check: checkTrialCredAllow},
+	SpareCredAllowKey: {def: `"*"`, help: "the subscriptions a spare login may use, and only while its own create / reset is in flight (its readiness check's one reply — a spare is minted by the hub and never listed one by one): \"*\" every one it is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, [] none — new spares then fail their check; a ready spare and a claimed one get nothing from it (claude-fleet NKTP)",
+		check: checkSpareCredAllow},
 	TrialMaxSecsKey: {def: "900", help: "a trial's time on a machine, in seconds — whichever of this and fleet.trial.max_msgs comes first ends it and gives the machine back (claude-fleet#4059)",
 		check: checkIntSetting(TrialMaxSecsKey, 60, 86400, defaultTrialMaxSecs)},
 	TrialMaxMsgsKey: {def: "20", help: "a trial's lines sent — whichever of this and fleet.trial.max_secs comes first ends it (claude-fleet#4059)",

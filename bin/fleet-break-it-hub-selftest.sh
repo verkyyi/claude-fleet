@@ -178,6 +178,12 @@
 #   spare-ready-lease-inflight                      tokenledger/hub/api fleet_login_node.go (principalForLease /
 #                                                   leaseInFlight on the lease · session-pass · relay roads) + store
 #                                                   AccountOpInFlight; go test
+#   spare-check-cred-denied                         tokenledger/hub/api fleet_spare_cred.go (spareUserAllow in
+#                                                   credPolicyFor: fleet.spare.cred_allow, only while the spare's
+#                                                   own op is in flight) + store SpareOpInFlight; go test
+#   spare-cutoff-held                               tokenledger/hub/api fleet_spare_cutoff.go (spareCutOffRetry /
+#                                                   healCutOffSpares in replenishSpares) + control.AccountCutOffMark
+#                                                   in the agent's cutOffResult; go test
 #   trial-no-subscription                           tokenledger/hub/api fleet_trial_cred.go (trialUserAllow in
 #                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
 #                                                   convertTrial writes the member's own list); go test
@@ -2349,6 +2355,41 @@ drill_spare_ready_unverified() {
   c11_go_tests fleet_spare_test.go TestSpareHandedOnlyAfterThreeChecks TestSpareSettings || return 1
   WHAT='验收脚本当真跑：没家 → FAIL home（cred_ok 在）；家起来、首句 403 → FAIL reply（cred_ok · home_ok 在）；都好 → 三个时间戳；入口只领 3/3 的备用（测试按名核对在，Go 门跑它）'
   [ "$GO_RAN" = 1 ] && WHAT='验收脚本当真跑三种结局；首句失败 / 旧节点没验的备用就绪 0、领号不给、名册没验过 2、审计 spare.unchecked；验过 3/3 才领得到；spare_max 只收 0–2（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- spare-check-cred-denied (NKTP): D0JC let a spare's readiness check lease
+# inside its own create / reset, but a spare is a principal the hub mints and
+# strict mode denies a person with no fleet.cred_allow.user.<pid> everything —
+# every credential came back withdrawn «has no allowlist», ready 0. Now the
+# spare has fleet.spare.cred_allow ("*") ONLY while its op is in flight; ready,
+# failed, unknown, past the window or claimed, it has nothing of it.
+drill_spare_check_cred_denied() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
+  t0=$(now)
+  grep -q 's.spareUserAllow(settings, &pol, time.Now())' "$tl/api/fleet_cred_policy.go" 2>/dev/null \
+    || { WHY="credPolicyFor no longer gives a spare inside its op its allowance (fleet_cred_policy.go spareUserAllow)"; return 1; }
+  c11_go_tests fleet_spare_cred_test.go TestSpareLeasesInsideItsOwnOpInStrictMode TestSpareAllowanceOnlyWhileItsOpIsInFlight || return 1
+  WHAT='严格模式下备用在自己的开号 / 洗号里租得到池子订阅；[] / 列表 / 本人列表照设置；就绪、失败、断线、超窗、被领走后都不再有（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='严格模式备用 op 中租约拿到 pool（不再 has no allowlist）；[] 无、列表只列的、本人列表优先；ready / 领走 / 超 15 分钟 / unknown 均拒（go test 两条）'
+  SECS=$(since "$t0")
+}
+
+# ---- spare-cutoff-held (NKTP): the node agent restarting mid-wash (a managed Mac
+# fleetu12, a release switch at a hub deploy) is answered failed «stopped while
+# this op ran», and a failed spare held its machine's refill for the operator —
+# for a cause that was never the spare's. The hub now retries it (wash again /
+# remove a cut-off create) at most twice, then holds it as before.
+drill_spare_cutoff_held() {
+  CAP=120; local t0 tl="$ROOT/tokenledger"; GO_RAN=0
+  t0=$(now)
+  grep -q 'control.AccountCutOffMark' "$tl/agent/node_accounts.go" 2>/dev/null \
+    || { WHY="the agent's cut-off answer no longer carries control.AccountCutOffMark (node_accounts.go cutOffResult)"; return 1; }
+  grep -q 'queued = s.healCutOffSpares(m, now) || queued' "$tl/hub/api/fleet_spare.go" 2>/dev/null \
+    || { WHY="the refill no longer retries a cut-off spare (fleet_spare.go healCutOffSpares)"; return 1; }
+  c11_go_tests fleet_spare_cred_test.go TestSpareCutOffIsRetriedNotHeld || return 1
+  WHAT='agent 重启打断的洗号不再算失败挡补池：入口自己重洗（开号则移除重开），至多 2 次，之后照旧留给运维（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='打断的洗号两次都回 reset_pending、不挡补池；第三次照旧 failed 挡住；拒绝（ready FAIL）与人的号不当打断（go test）'
   SECS=$(since "$t0")
 }
 

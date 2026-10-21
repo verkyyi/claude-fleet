@@ -51,7 +51,7 @@
                                          who and why (claude-fleet#4945)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct
-fleet.auto_assign fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.trial
+fleet.auto_assign fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.spare.cred_allow fleet.trial
 fleet.trial.slots fleet.trial.load_ratio fleet.trial.quota_floor fleet.trial.daily fleet.trial.once fleet.trial.max_secs fleet.trial.max_msgs fleet.trial.cred_allow fleet.cred_pod_providers
 fleet.entry fleet.entry_domain fleet.door_address
 fleet.node_user_cap.<machine> user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).

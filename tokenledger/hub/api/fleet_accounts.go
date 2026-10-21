@@ -770,6 +770,10 @@ const (
 	accountUnknownGiveUp = 30 * time.Minute
 )
 
+// accountGiveUpMark is in the detail of an op reaskAccounts gave up on: the
+// link dropped and the node never answered — interrupted, not refused.
+const accountGiveUpMark = "after the link dropped"
+
 // reaskAccounts runs under accountsMu.
 func (s *Server) reaskAccounts(now time.Time) {
 	rows, err := s.Store.FleetAccountsInState(store.AccountUnknown)
@@ -786,8 +790,8 @@ func (s *Server) reaskAccounts(now time.Time) {
 			continue
 		}
 		if now.Sub(a.UpdatedAt) > accountUnknownGiveUp {
-			detail := fmt.Sprintf("no answer from %s in %d min after the link dropped (%s): check the login there, then retry or remove it",
-				a.Hostname, int(accountUnknownGiveUp.Minutes()), a.Detail)
+			detail := fmt.Sprintf("no answer from %s in %d min %s (%s): check the login there, then retry or remove it",
+				a.Hostname, int(accountUnknownGiveUp.Minutes()), accountGiveUpMark, a.Detail)
 			if ok, err := s.Store.FinishAccountOp(a.OpID, a.EndpointID, store.AccountFailed, truncate(detail, 4000), now); err == nil && ok {
 				log.Printf("fleet: %s %s on %s (op %s): unknown past %s, failed", a.Op, a.Login, a.Hostname, a.OpID, accountUnknownGiveUp)
 			}
