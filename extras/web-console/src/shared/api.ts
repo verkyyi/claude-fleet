@@ -1,11 +1,13 @@
 // api.ts — the console's reads (EPIC #3923 rule 7): only the entry's existing
 // /v1/*, same origin, the person's own ccq_sess cookie, nothing else.
 import { useEffect, useState } from "react";
+import { netMiss, netOk } from "./net";
 
 // GET a JSON read; a 401 means the session ended — to the sign-in, which
 // brings the person back.
 export async function getJSON<T>(url: string): Promise<T | null> {
   const r = await fetch(url, { headers: { Accept: "application/json" } }).catch(() => null);
+  if (r) netOk(); else netMiss();
   if (r?.status === 401) { location.assign("/app/signin"); return null; }
   return r && r.ok ? ((await r.json().catch(() => null)) as T | null) : null;
 }
@@ -126,6 +128,7 @@ export async function sendJSON<T>(method: string, url: string, body?: unknown): 
     method, headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }).catch(() => null);
+  if (r) netOk(); else netMiss();
   if (r?.status === 401) { location.assign("/app/signin"); return { ok: false, error: "", status: 401 }; }
   const j = r ? await r.json().catch(() => null) : null;
   const status = r?.status ?? 0;

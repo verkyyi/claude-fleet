@@ -8,7 +8,8 @@
 // the top bar is the list's alone: a session and 新建 are whole screens with
 // their own head, every other screen a back bar (← · its name · the limit) —
 // phone-screen.ts says which; no bottom bar, screens move by the browser's
-// history and 返回 goes to the screen before (useBack). Stock shadcn/ui only; a
+// history and 返回 goes to the screen before (useBack). A weak network is one
+// band under the bars on every screen (NetBar, GR5E C8). Stock shadcn/ui only; a
 // page draws inside <main>. On a computer the sidebar folds to its glyph strip
 // (shadcn's collapsible="icon"), the choice kept in this browser.
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type FC, type ReactNode, type Ref } from "react";
@@ -32,6 +33,7 @@ import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { backStep, phoneBar } from "./phone-screen";
 import { ADMIN_HREF, ME_TABS, meTab } from "./routes";
 import { ListUiProvider, NewButton, SearchButton, SessionRows } from "./SessionList";
+import { NetBar } from "./NetBar";
 import { TrialBar } from "./TrialBar";
 import { WorkRowsProvider } from "./work-rows";
 
@@ -216,6 +218,13 @@ const TopBar: FC<{ title: string }> = ({ title }) => {
   );
 };
 
+// the network band (NetBar) — at the very top of a whole screen, which has no
+// bar over it, so it clears the notch there
+const NetBarOf: FC = () => {
+  const { pathname, search } = useLocation();
+  return <NetBar top={!viewAs && phoneBar(pathname, search) === "none"} />;
+};
+
 // The sidebar's folded or not, kept in this browser across a reload.
 const SIDE_KEY = "fleet.console.sidebar";
 function useSideOpen(): [boolean, (o: boolean) => void] {
@@ -242,6 +251,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <ViewAsBar />
           <TopBar title={title} />
+          <NetBarOf />
           <TrialBar trial={trial} onAsked={setTrial} />
           <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>
