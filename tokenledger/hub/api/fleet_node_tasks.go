@@ -173,6 +173,24 @@ type nodeTaskWrite struct {
 	Clear            []string          `json:"clear"`
 }
 
+// annotatesOnly says the write is a session's ask / park alone — asked, parked
+// or a clear of them, nothing else (claude-fleet T792): the one plain write an
+// authoritative record takes.
+func (in *nodeTaskWrite) annotatesOnly() bool {
+	if in.AuthorityVersion != 0 || in.Mutation != nil || in.Token != "" || in.Title != "" || in.Via != "" ||
+		in.Repo != "" || in.Rule != "" || in.Issue != "" || in.PR != "" || in.WorkerID != "" || in.Key != "" ||
+		in.State != "" || in.Note != "" || in.RequestedAgent != "" || in.ResolvedAgent != "" || in.TicketRef != "" ||
+		in.ParentTask != "" || in.ParentSession != "" || len(in.RequestPayload) != 0 {
+		return false
+	}
+	for _, c := range in.Clear {
+		if c != "asked" && c != "parked" {
+			return false
+		}
+	}
+	return in.Asked != "" || in.Parked != "" || len(in.Clear) != 0
+}
+
 // clipText is s on one line, at most n characters.
 func clipText(s string, n int) string {
 	s = oneLine(strings.TrimSpace(s))
@@ -368,6 +386,18 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
+		if t.AuthorityVersion == store.TaskAuthorityVersion && in.annotatesOnly() {
+			// A session's ask / park (claude-fleet T792): 「问过你」 / 「停放」 are
+			// words beside the record, never its state or accepted request.
+			rec, err := s.Store.AnnotateTask(t.ID, owner, clipText(in.Asked, nodeTaskTextMax),
+				clipText(in.Parked, nodeTaskTextMax), in.Clear, now)
+			if err != nil {
+				taskWriteError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, rec)
+			return
+		}
 		if t.AuthorityVersion != 0 || in.AuthorityVersion != 0 {
 			if t.AuthorityVersion != store.TaskAuthorityVersion || in.AuthorityVersion != store.TaskAuthorityVersion || in.Mutation == nil {
 				taskWriteError(w, store.ErrTaskFence)

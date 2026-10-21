@@ -265,3 +265,50 @@ func (s *Store) RetitleTask(id int64, owner, from, to string, now time.Time) (Fl
 	}
 	return t, tx.Commit()
 }
+
+// AnnotateTask writes a session's ask / park on an authoritative record
+// (claude-fleet T792): asked and parked are filled when given, a column named in
+// clear (asked | parked) is emptied. Nothing else of the record moves — not its
+// state, owner, generation or accepted request.
+func (s *Store) AnnotateTask(id int64, owner, asked, parked string, clear []string, now time.Time) (FleetTask, error) {
+	sets, args := []string{}, []any{}
+	if asked != "" {
+		sets, args = append(sets, "asked = ?"), append(args, asked)
+	}
+	if parked != "" {
+		sets, args = append(sets, "parked = ?"), append(args, parked)
+	}
+	for _, c := range clear {
+		if c != "asked" && c != "parked" {
+			return FleetTask{}, ErrTaskInvalid
+		}
+		sets, args = append(sets, c+" = ?"), append(args, "")
+	}
+	if len(sets) == 0 {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return FleetTask{}, err
+	}
+	defer tx.Rollback()
+	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
+		return FleetTask{}, err
+	}
+	t, err := s.taskInTx(tx, id)
+	if err != nil {
+		return FleetTask{}, err
+	}
+	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner != owner {
+		return FleetTask{}, ErrTaskFence
+	}
+	sets, args = append(sets, "updated_at = ?"), append(args, now.UTC().Format(rfc))
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET `+strings.Join(sets, ", ")+` WHERE id = ? AND owner = ? AND authority_version = 1`,
+		append(args, t.ID, t.Owner)...); err != nil {
+		return FleetTask{}, err
+	}
+	if t, err = s.taskInTx(tx, id); err != nil {
+		return FleetTask{}, err
+	}
+	return t, tx.Commit()
+}
