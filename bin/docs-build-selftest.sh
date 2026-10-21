@@ -23,6 +23,10 @@
 #      `dash-keymap.sh --panel switch view` and fleet-ui-lang.sh's view_keys;
 #      a changed default key (a sandbox copy of those scripts) reaches the output
 #      and makes the old source stale, --write mends it; an unknown block refuses
+#   I  the brand is extras/fleet-theme's (EPIC SGS6 C4): every page's header carries
+#      the mark and logo.svg's <title> as its name, its <title> ends `· <name>`, its
+#      colours are the theme's tokens (no colour of its own in the frame); the
+#      FAQPage JSON-LD is on faq — every question of faq.md — and on no other page
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/bin/selftest-lib.sh"
@@ -102,6 +106,45 @@ print('ok   B-F %d pages read (%d zh, %d en pending)' % (len(pages), len(zh), su
 sys.exit(1 if bad else 0)
 PY
 
+# I — the brand and the FAQ's one home (EPIC SGS6 C4)
+python3 - "$T/out" "$ROOT" <<'PY' || fail=1
+import json, os, re, subprocess, sys
+out, root = sys.argv[1:3]
+brand = re.search(r'<title>([^<]+)</title>', open(os.path.join(root, 'extras/fleet-theme/logo.svg')).read()).group(1)
+bad, n = [], 0
+for lang in ('zh', 'en'):
+    for d, _, files in os.walk(os.path.join(out, lang)):
+        for f in files:
+            if not f.endswith('.html'):
+                continue
+            n += 1
+            rel = os.path.relpath(os.path.join(d, f), out)
+            h = open(os.path.join(d, f), encoding='utf-8').read()
+            if not re.search(r'<a class="brand" href="[^"]*"><svg class="mark"[^>]*>.*?</svg>%s</a>' % re.escape(brand), h, re.S):
+                bad.append('%s: header is not the mark + %s' % (rel, brand))
+            if not re.search(r'<title>[^<]* · %s</title>' % re.escape(brand), h):
+                bad.append('%s: <title> does not end in · %s' % (rel, brand))
+            if '--brand:var(--link)' not in h or '--fleet-clay:' not in h:
+                bad.append('%s: link colour is not the theme token' % rel)
+            ld = re.findall(r'<script type="application/ld\+json">(.*?)</script>', h, re.S)
+            faq = [x for x in ld if '"FAQPage"' in x]
+            if f == 'faq.html' and d == os.path.join(out, lang):
+                if len(faq) != 1:
+                    bad.append('%s: %d FAQPage blocks (want 1)' % (rel, len(faq))); continue
+                got = [q['name'] for q in json.loads(faq[0])['mainEntity']]
+                want = [it['q'] for it in json.loads(subprocess.run(
+                    [sys.executable, os.path.join(root, 'bin/docs-faq.py'), 'json', '--lang', lang],
+                    capture_output=True, text=True).stdout)['items']]
+                if got != want:
+                    bad.append('%s: FAQPage questions differ from faq.md' % rel)
+            elif faq:
+                bad.append('%s: carries a FAQPage (only faq does)' % rel)
+for b in bad:
+    print('FAIL I ' + b)
+print('ok   I %d pages: mark + %s, · %s titles, theme colours; FAQPage on faq only' % (n, brand, brand))
+sys.exit(1 if bad else 0)
+PY
+
 # G — the build refuses a wrong tree
 mk() { mkdir -p "$(dirname "$T/$1")"; printf '%s\n' "$2" > "$T/$1"; }
 for d in g1 g2; do
@@ -167,6 +210,7 @@ else st_ok_all "D a missing en page is built pending, linking its Chinese page";
 if "$BUILD" --check >"$T/h0.out" 2>&1; then st_ok_all "H docs/public is not stale"; else bad "H stale: $(cat "$T/h0.out")"; fi
 HR="$T/hrepo"; mkdir -p "$HR/bin"
 for f in docs-build.sh fleet_keys.py dash-keymap.sh fleet-ui-lang.sh; do cp "$ROOT/bin/$f" "$HR/bin/$f"; done
+mkdir -p "$HR/extras" && cp -R "$ROOT/extras/fleet-theme" "$HR/extras/"   # the frame's look and brand
 for d in h1 h2; do
   mk "$d/zh/index.md" "# home"
   for r in self-host hosted member; do mk "$d/zh/$r/quickstart.md" "# $r"; done

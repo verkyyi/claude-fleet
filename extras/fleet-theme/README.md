@@ -1,6 +1,6 @@
 # fleet-theme — ClaudeFleet's one look
 
-The website (`/`, `/en/`), the web chat (`/chat/`) and the console take colour,
+The website (`/`, `/en/`), the docs (`/docs/`, `/en/docs/`), the web chat (`/chat/`) and the console take colour,
 type, radius, spacing and the logo from this package and nowhere else (issue
 #3924, EPIC #3923). `bin/fleet-theme-selftest.sh` reds on a theme colour, a theme
 font family or a logo defined outside it.
@@ -23,6 +23,11 @@ font family or a logo defined outside it.
   `@import "<relative path>/extras/fleet-theme/theme.css";`. Vite bundles the
   fonts; use the shadcn classes (`bg-background`, `text-muted-foreground`, …) and
   `font-display` / `font-mono`. Light and dark follow the system.
+- **Docs** — `bin/docs-build.sh` inlines `fonts.css` (font URLs `/site/fonts/…`,
+  the site's copy) and everything from `fleet:tokens` to `@theme` (the tokens, the
+  shadcn light and dark blocks) into every page, maps its own variables onto them
+  (links = `--link`), and puts `logo.svg` in the header with its `<title>` as the
+  product's name.
 - **Share cards** — `bin/site-images.sh` loads `fonts.css` and the tokens block.
 
 ## Changing it
