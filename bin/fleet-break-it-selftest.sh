@@ -4519,7 +4519,7 @@ drill_cross_report_queued_unseen() {
   ua=$(side a bash -c '. "$1/fleet-lib.sh"; fleet_uuid xa' _ "$BIN"); ub=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_uuid xb' _ "$BIN")
   [ -n "$ua" ] && [ -n "$ub" ] && [ "$ua" != "$ub" ] || { WHY="no two fleet UUIDs ([$ua] [$ub])"; return 1; }
   # machine B: the orchestrator (keyless — its key is its identity), a fake Claude with an inbox
-  pw=$(side b tmux new-window -d -P -F '#{window_id}' -t xb -n orch "bash -c ': FLEETFAKECLAUDE; exec sleep 600'")
+  pw=$(side b tmux new-window -d -P -F '#{window_id}' -t xb -n orch "bash -c ': FLEETFAKECLAUDE; while :; do sleep 300; done'")
   side b tmux set-option -w -t "$pw" @norepo 1 \; set-option -w -t "$pw" @fleet_id "$pf" \; set-option -w -t "$pw" @cc_agent claude
   until_ok 5 sh -c "[ -n \"\$(env PATH='$d/b/bin:$PATH' FLEET_CLAUDE_COMM=FLEETFAKECLAUDE bash -c '. \"\$1/fleet-lib.sh\"; fleet_pane_claude_pid \"\$2\"' _ '$BIN' '$pw')\" ]" \
     || { WHY="rig: no fake Claude under the parent's pane"; return 1; }
@@ -4568,14 +4568,14 @@ print(json.dumps(dict(id=r["id"], kind="receipt", **{"from": r["to"]}, to=r["fro
   t0=$(now)
   hubpump
   out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" bash "$BIN/fleet-report-parent.sh" --state waiting \
-    --summary '方案好了，等你点头' 2>&1 </dev/null); rc=$?
+    --summary 'plan ready, waiting for your nod' 2>&1 </dev/null); rc=$?
   wait "$pump" 2>/dev/null
   case "$rc|$out" in "0|"*'reported → '*'(delivered)'*) ;;
     *) kill "$ipid" 2>/dev/null; WHY="the child's waiting report ended $rc: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1 ;; esac
   le "$(since "$t0")" 10 || { kill "$ipid" 2>/dev/null; WHY="reported, but only after $(since "$t0")s (want ≤10 s)"; return 1; }
   until_ok 5 sh -c "grep -q 'WAITING' '$d/b/inbox.got' 2>/dev/null" \
     || { kill "$ipid" 2>/dev/null; WHY="the parent's window never got the report (inbox: $(head -c 200 "$d/b/inbox.got" 2>/dev/null))"; return 1; }
-  grep -q '方案好了' "$d/b/inbox.got" || { kill "$ipid" 2>/dev/null; WHY="the parent got the report without its summary"; return 1; }
+  grep -q 'waiting for your nod' "$d/b/inbox.got" || { kill "$ipid" 2>/dev/null; WHY="the parent got the report without its summary"; return 1; }
   SECS=$(since "$t0")
   # the hub says nothing: queued, and the tick says it in ⌘P 消息
   out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" FLEET_HUB_SENT_WAIT=1 FLEET_HUB_RECEIPT_WAIT=1 \
