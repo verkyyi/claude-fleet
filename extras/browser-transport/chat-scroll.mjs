@@ -32,7 +32,7 @@ async function open(viewport, { conv, copy, pic }) {
     if (path === '/v1/chat/home') return json({ state: 'ok', direct: false })
     if (path === '/v1/me') return json({ person: 'test-person', name: 'Alice', role: 'member' })
     if (path.startsWith('/v1/') || path.startsWith('/api/')) return json({})
-    const file = path === '/' ? 'index.html' : path === '/app' || path === '/app/' ? 'app/index.html' : path.slice(1)
+    const file = path === '/' ? 'index.html' : path === '/app' || path === '/app/' || path === '/app/chat' ? 'app/index.html' : path.slice(1)
     try { await route.fulfill({ path: fileURLToPath(new URL(file, root)) }) } catch { await route.fulfill({ status: 404, body: '' }) }
   })
   return { context, page }
@@ -67,7 +67,7 @@ try {
       pic: () => pics,
     })
     try {
-      await page.goto(origin + '/app')
+      await page.goto(origin + '/app/chat')
       // 1. the copy alone: at its bottom
       await page.getByText('q-11', { exact: true }).waitFor()
       await atBottom(page, `${tag} copy shown`)

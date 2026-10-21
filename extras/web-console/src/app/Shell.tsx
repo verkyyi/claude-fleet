@@ -1,28 +1,23 @@
 // Shell.tsx — the member side's frame (EPIC #3923 C3): on a phone (< 768) a
-// top bar (the mark, what is left of the person's limit, the avatar into 我的)
-// and the bottom bar of the pages marked `tab` (任务 joined 会话, T769); on a
-// computer shadcn's Sidebar — the pages, 管理后台 for an admin, the person at
-// its foot, whose menu opens 用量 · 设备 · 设置 · 我的 · 管理后台 · 退出. Those
-// live in 我的 since GR5E C1, never in either bar. Stock shadcn/ui only; a
-// page draws inside <main>.
-//
-// The conversation is immersive (issue #3996): on a phone the bottom bar folds
-// away on 对话 — it takes no room — and the top bar's 菜单 brings it back;
-// typing or moving the thread folds it again, and every other page shows it
-// always. On a computer the sidebar folds to its icon strip (shadcn's
-// collapsible="icon"), the choice kept in this browser.
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentProps, type FC, type ReactNode, type Ref } from "react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router";
-import { ChevronsUpDown, CircleUserRound, Eye, LayoutGrid, LogOut, ShieldCheck } from "lucide-react";
+// top bar (the mark, what is left of the person's limit, on the list its search,
+// the avatar into 我的); on a computer shadcn's Sidebar — the session list
+// (GR5E C2: its head the mark · the limit · search · 新建), the person at its
+// foot, whose menu opens 用量 · 设备 · 设置 · 我的 · 管理后台 · 退出. The list is
+// the one way in: no page bar on either (用量 · 设备 · 设置 live in 我的 since
+// GR5E C1), the phone's first screen is the list itself. Stock shadcn/ui only; a
+// page draws inside <main>. On a computer the sidebar folds to its glyph strip
+// (shadcn's collapsible="icon"), the choice kept in this browser.
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type FC, type ReactNode, type Ref } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
+import { ChevronsUpDown, CircleUserRound, Eye, LogOut, ShieldCheck } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { NavigationMenu, NavigationMenuItem, NavigationMenuLink, NavigationMenuList } from "@/components/ui/navigation-menu";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader,
-  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarSeparator, SidebarTrigger,
+  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarSeparator,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { Logo } from "@/shared/Logo";
@@ -30,8 +25,10 @@ import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
-import { ADMIN_HREF, ME_TABS, PAGES, meTab, type PageDef } from "./routes";
+import { ADMIN_HREF, ME_TABS, meTab } from "./routes";
+import { ListUiProvider, NewButton, SearchButton, SessionRows } from "./SessionList";
 import { TrialBar } from "./TrialBar";
+import { WorkRowsProvider } from "./work-rows";
 
 // What every page reads: who is signed in, what is left of their limit and
 // their trial's (claude-fleet T796) — both bumped after each conversation turn.
@@ -56,18 +53,6 @@ const QuotaPill: FC<{ quota: Quota | null }> = ({ quota }) =>
       <Link to={meTab("usage").path} title={tr("我的用量", "My usage")}>{quotaWords(quota)}</Link>
     </Button>
   ) : null;
-
-// A page's place: inside this app (a route), or the old page while it has none.
-// Every other prop (a menu button's data-slot, data-active, class) passes on —
-// it is the child of shadcn's asChild buttons.
-const PageLink: FC<{ p: PageDef } & Omit<ComponentProps<"a">, "href">> = ({ p, ...rest }) =>
-  p.page ? <NavLink to={p.path} end {...(rest as Omit<ComponentProps<typeof NavLink>, "to">)} />
-         : <a href={p.href} {...rest} />;
-
-function useActive() {
-  const { pathname } = useLocation();
-  return (p: PageDef) => !!p.page && (p.path === "/" ? pathname === "/" : pathname.startsWith(p.path));
-}
 
 const SignOut: FC<{ children?: ReactNode; formRef?: Ref<HTMLFormElement> }> = ({ children, formRef }) => (
   // back to the site's front page after (claude-fleet#3798): to=site, a fixed word
@@ -131,40 +116,33 @@ const PersonMenu: FC = () => {
   );
 };
 
-const Side: FC = () => {
-  const active = useActive();
-  return (
-    <Sidebar collapsible="icon" className="border-sidebar-border">
-      <SidebarHeader className="flex-row items-center gap-1 px-4 pt-4 pb-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-2">
-        <Link to="/" className="text-foreground flex min-w-0 items-center gap-2.5 no-underline" aria-label="ClaudeFleet">
-          <Logo className="size-7 shrink-0" />
-          <span className="font-display text-[17px] leading-none font-semibold tracking-tight group-data-[collapsible=icon]:hidden">ClaudeFleet</span>
-        </Link>
-        <SidebarTrigger className="text-muted-foreground ms-auto group-data-[collapsible=icon]:ms-0" title={tr("收起 / 展开侧栏", "Fold / unfold the sidebar")} />
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {PAGES.filter((p) => p.side).map((p) => (
-                <SidebarMenuItem key={p.id}>
-                  <SidebarMenuButton asChild isActive={active(p)} tooltip={p.label} className="text-muted-foreground data-[active=true]:text-foreground">
-                    <PageLink p={p}><p.icon />{p.label}</PageLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter className="px-3 pb-3">
-        <SidebarSeparator className="mx-0" />
-        <PersonMenu />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
-  );
-};
+const Side: FC = () => (
+  <Sidebar collapsible="icon" className="border-sidebar-border">
+    <SidebarHeader className="flex-row items-center gap-1 px-3 pt-3 pb-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-2">
+      <Link to="/" className="text-foreground flex min-w-0 items-center gap-2 no-underline" aria-label="ClaudeFleet">
+        <Logo className="size-7 shrink-0" />
+        <span className="font-display truncate text-[16px] leading-none font-semibold tracking-tight group-data-[collapsible=icon]:hidden">ClaudeFleet</span>
+      </Link>
+      <span className="ms-auto flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">
+        <QuotaPillOf />
+        <SearchButton />
+        <NewButton />
+      </span>
+    </SidebarHeader>
+    <SidebarContent>
+      <SidebarGroup className="px-1.5">
+        <SidebarGroupContent><SessionRows variant="side" chatHome /></SidebarGroupContent>
+      </SidebarGroup>
+    </SidebarContent>
+    <SidebarFooter className="px-3 pb-3">
+      <SidebarSeparator className="mx-0" />
+      <PersonMenu />
+    </SidebarFooter>
+    <SidebarRail />
+  </Sidebar>
+);
+
+const QuotaPillOf: FC = () => <QuotaPill quota={useShell().quota} />;
 
 // 只读预览 (claude-fleet#3944): an admin looking through a member's eyes. The
 // band sits over every page, phone and computer alike, until they leave; the
@@ -188,57 +166,23 @@ const ViewAsBar: FC = () => {
   );
 };
 
-// The phone's bars fold on the conversation (issue #3996): `folds` says this
-// page may fold them, `open` that the person brought the bottom bar back.
-type Nav = { folds: boolean; open: boolean; setOpen: (o: boolean) => void };
-
-const TopBar: FC<{ nav: Nav }> = ({ nav }) => {
+// The phone's top bar: the mark, the limit, on the list its search, the avatar.
+const TopBar: FC = () => {
   const { me, quota } = useShell();
+  const { pathname } = useLocation();
   return (
-    <header className={cn("border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pb-2.5 backdrop-blur-md md:hidden",
+    <header className={cn("border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2 border-b px-4 pb-2.5 backdrop-blur-md md:hidden",
       viewAs ? "pt-2.5" : "pt-[calc(env(safe-area-inset-top)+0.6rem)]")}>
       <Link to="/" className="text-foreground flex items-center gap-2.5 no-underline" aria-label="ClaudeFleet">
         <Logo className="size-7 shrink-0" />
         <span className="font-display text-[17px] leading-none font-semibold tracking-tight">ClaudeFleet</span>
       </Link>
       <span className="ms-auto"><QuotaPill quota={quota} /></span>
-      {nav.folds ? (
-        <Button variant="ghost" size="icon" className={cn("size-8", nav.open && "text-clay")} aria-expanded={nav.open} aria-controls="app-tabs"
-          aria-label={tr("菜单", "Menu")} title={tr("菜单", "Menu")} onClick={() => nav.setOpen(!nav.open)}>
-          <LayoutGrid />
-        </Button>
-      ) : null}
+      {pathname === "/" ? <SearchButton /> : null}
       <Link to={meTab("account").path} className="rounded-full no-underline" aria-label={tr("我的", "Me")} title={tr("我的", "Me")}>
         <Avatar className="size-8"><AvatarFallback className="text-xs">{initial(me?.name || me?.login || "")}</AvatarFallback></Avatar>
       </Link>
     </header>
-  );
-};
-
-const BottomBar: FC<{ nav: Nav }> = ({ nav }) => {
-  const active = useActive();
-  const shown = !nav.folds || nav.open;
-  return (
-    // folded, it takes no room (0fr) and leaves only the home-bar inset under the composer
-    <div id="app-tabs" data-folded={!shown} inert={!shown}
-      className={cn("bg-background grid flex-none transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none md:hidden",
-        shown ? "grid-rows-[1fr]" : "grid-rows-[0fr] pb-[env(safe-area-inset-bottom)]")}>
-    <div className="min-h-0 overflow-hidden">
-    <NavigationMenu viewport={false} className="border-border/70 bg-background/95 max-w-none flex-none border-t pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
-      aria-label={tr("页面", "Pages")}>
-      <NavigationMenuList className="grid w-screen gap-0" style={{ gridTemplateColumns: `repeat(${PAGES.filter((p) => p.tab).length}, minmax(0, 1fr))` }}>
-        {PAGES.filter((p) => p.tab).map((p) => (
-          <NavigationMenuItem key={p.id}>
-            <NavigationMenuLink asChild active={active(p)}
-              className="text-muted-foreground aria-[current=page]:text-clay hover:text-foreground items-center gap-0.5 rounded-none bg-transparent py-2 text-[11px] hover:bg-transparent focus:bg-transparent aria-[current=page]:bg-transparent [&_svg]:size-5 aria-[current=page]:[&_svg]:text-clay">
-              <PageLink p={p}><p.icon />{p.label}</PageLink>
-            </NavigationMenuLink>
-          </NavigationMenuItem>
-        ))}
-      </NavigationMenuList>
-    </NavigationMenu>
-    </div>
-    </div>
   );
 };
 
@@ -250,39 +194,28 @@ function useSideOpen(): [boolean, (o: boolean) => void] {
   return [open, save];
 }
 
-// The phone's bars on this page: only the conversation folds them; moving to a
-// page puts them back folded there (the conversation) or shown (anywhere else).
-function useNav(): Nav {
-  const { pathname } = useLocation();
-  const folds = pathname === "/";
-  const [open, setOpen] = useState(false);
-  useEffect(() => { setOpen(false); }, [pathname]);
-  return { folds, open, setOpen };
-}
-
 // AppShell: the frame around every member page. The page fills the space
 // between the bars; a page that scrolls scrolls inside <main>.
 export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: () => void }> = ({ children, quotaKey, bumpQuota }) => {
   const { me } = useMe();
   const { quota, trial, setTrial } = useUsageHead(quotaKey);
   const [sideOpen, setSideOpen] = useSideOpen();
-  const nav = useNav();
-  // typing, or moving through the thread, folds the bar the person brought back
-  const fold = () => { if (nav.folds && nav.open) nav.setOpen(false); };
   return (
     <Ctx.Provider value={{ me, quota, trial, setTrial, bumpQuota }}>
-      <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none" style={{ height: "var(--app-h, 100dvh)" }}>
+     <WorkRowsProvider>
+     <ListUiProvider>
+      <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none"
+        style={{ height: "var(--app-h, 100dvh)", "--sidebar-width": "20rem" } as CSSProperties}>
         <Side />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <ViewAsBar />
-          <TopBar nav={nav} />
+          <TopBar />
           <TrialBar trial={trial} onAsked={setTrial} />
-          <main className="min-h-0 flex-1 overflow-y-auto" data-immersive={nav.folds && !nav.open}
-            onFocusCapture={(e) => { if (e.target instanceof HTMLTextAreaElement) fold(); }}
-            onWheelCapture={fold} onTouchMoveCapture={fold}>{children}</main>
-          <BottomBar nav={nav} />
+          <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>
       </SidebarProvider>
+     </ListUiProvider>
+     </WorkRowsProvider>
       <Toaster position="top-center" />
     </Ctx.Provider>
   );

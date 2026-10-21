@@ -11,8 +11,8 @@
 import { useEffect, useMemo, useState, type FC, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
-  ArrowUpRight, ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot, CircleX, Clock, GitPullRequest,
-  Layers, Loader, MessageCircle, Plus, RotateCcw, Search, Sparkles, TerminalSquare, Trash2, type LucideIcon,
+  ArrowUpRight, ChevronDown, ChevronRight,
+  Layers, Loader, MessageCircle, Plus, RotateCcw, Search, Sparkles, TerminalSquare, Trash2,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -21,32 +21,22 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
-import { sendJSON } from "@/shared/api";
 import { fmtTokens, tr } from "@/shared/i18n";
-import { sessionWrite, useSessions } from "@/shared/sessions";
+import { sessionWrite } from "@/shared/sessions";
 import { terminalLink } from "@/shared/terminal";
 import { viewAs } from "@/shared/viewAs";
 import { usePage } from "../Shell";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
 import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, writtenCode, type Task } from "../task-state";
-import { findTask, useTasks } from "../use-tasks";
-import { GROUPS, boardRows, buildRows, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Glyph, type Row, type Tone } from "../work";
+import { findTask } from "../use-tasks";
+import { NewDialog, reposOf } from "../NewDialog";
+import { GLYPH, TONE } from "../SessionList";
+import { useWorkRows } from "../work-rows";
+import { GROUPS, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Row, type Tone } from "../work";
 
-const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin [animation-duration:2.4s]", className)} />;
-const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
-  ask: CircleAlert, fail: CircleX, work: Spin, pr: GitPullRequest, done: CircleCheck, idle: CircleDot, wait: Clock,
-};
-const TONE: Record<Tone, string> = {
-  ask: "text-clay", fail: "text-destructive", ok: "text-ok", muted: "text-muted-foreground",
-};
 const BADGE: Record<Tone, string> = {
   ask: "text-clay border-clay-line bg-clay-soft", fail: "text-destructive border-destructive/40", ok: "text-ok", muted: "text-muted-foreground",
 };
@@ -266,7 +256,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
       <div className="flex flex-wrap gap-2">
         {r.live ? <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
         {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
-        {t ? <Button asChild variant="outline" className="flex-1"><Link to={`/?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
+        {t ? <Button asChild variant="outline" className="flex-1"><Link to={`/chat?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
         {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("回收", "Close")} title={tr("回收", "Close")}><Trash2 /></Button> : null}
       </div>
       {t ? <TaskFacts t={t} stale={stale} /> : null}
@@ -274,69 +264,48 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
   );
 };
 
-// 新建: the person's words, an optional repo, the agent — one task through the
-// write door: worker_start with a coding agent, so the hub writes the record
-// first. A repo makes it a task that lands its own PR; none, a session of no repo.
-const NewDialog: FC<{ open: boolean; onOpenChange: (o: boolean) => void; repos: string[]; onDone: (ok: boolean, text: string) => void }> = ({ open, onOpenChange, repos, onDone }) => {
-  const [w, setW] = useState("");
-  const [repo, setRepo] = useState("none");
-  const [agent, setAgent] = useState("claude");
+// One row's details with their two writes (回收 · 接回) and what came of them —
+// 会话's side panel and a session's own page (/s/:ref, GR5E C2) alike.
+export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void }> = ({ r, onOpen }) => {
+  const { stale, reload } = useWorkRows();
+  const [confirm, setConfirm] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
-  const start = async () => {
-    const words = w.trim();
-    if (!words) return;
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const act = async (x: Row, tool: "worker_reap" | "worker_resume") => {
+    const id = tool === "worker_reap" ? x.live?.id : x.ended?.id;
+    if (!id) return;
     setBusy(true);
-    const title = words.split("\n").map((l) => l.trim()).find(Boolean)!.slice(0, 120);
-    const idem = "web-" + (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9-]/g, "");
-    const args = repo === "none"
-      ? { kind: "scratch", no_repo: true, body: words, coding_agent: agent, idempotency_key: idem }
-      : { kind: "new", title, body: words, repo, coding_agent: agent, idempotency_key: idem };
-    const r = await sendJSON<{ status?: string; result?: { error?: { message?: string } } }>("POST", "/v1/fleet/write", { tool: "worker_start", args_json: JSON.stringify(args) });
+    setNote(null);
+    const why = await sessionWrite(tool, id);
     setBusy(false);
-    const why = !r.ok ? r.error || `HTTP ${r.status}` : r.data?.status === "failed" ? r.data.result?.error?.message || "failed" : "";
-    if (why) { onDone(false, tr(`没能开始：${why}`, `Couldn't start it: ${why}`)); return; }
-    setW("");
-    onOpenChange(false);
-    onDone(true, tr("已派出 —— 它带着编号出现在列表里，开好会话就开始做。", "Sent — it shows in the list with its code and starts once its session opens."));
+    setConfirm(null);
+    if (why) setNote({ ok: false, text: tool === "worker_reap" ? tr(`没能回收：${why}`, `Could not close it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
+    else setNote({ ok: true, text: tool === "worker_reap" ? tr("已回收，放进「已收起」——之后还能接回。", "Closed — it is under Put away and can be resumed.")
+      : tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
+    reload();
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{tr("新建", "New")}</DialogTitle>
-          <DialogDescription>{tr("说一件要做的事。它会有一个编号，开一个会话去做，在这一页跟着看。", "Say what needs doing. It gets a code and a session of its own; follow it on this page.")}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <Textarea value={w} onChange={(e) => setW(e.target.value)} rows={4} aria-label={tr("要做什么", "What to do")}
-            placeholder={tr("比如：把 sales-w41.xlsx 做成看板，按区域分，发给团队", "e.g. Turn sales-w41.xlsx into a dashboard by region and send it to the team")} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>{tr("在哪个仓库做", "Which repo")}</Label>
-              <Select value={repo} onValueChange={setRepo}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">{tr("不用仓库", "No repo")}</SelectItem>
-                  {repos.map((x) => <SelectItem key={x} value={x}>{x}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>{tr("谁来做", "Who does it")}</Label>
-              <ToggleGroup type="single" variant="outline" value={agent} onValueChange={(v) => v && setAgent(v)} className="w-full">
-                <ToggleGroupItem value="claude" className="flex-1">Claude</ToggleGroupItem>
-                <ToggleGroupItem value="codex" className="flex-1">Codex</ToggleGroupItem>
-              </ToggleGroup>
-            </div>
-          </div>
-          <p className="text-muted-foreground text-xs">
-            {repo === "none" ? tr("不用仓库：开一个会话，做完回报给你。", "No repo: a session opens, and reports back when done.")
-              : tr("选了仓库：在仓库里改，做完自己开 PR、门禁绿了就合并。", "With a repo: it changes the repo, opens a PR and merges it once checks pass.")}
-          </p>
-        </div>
-        <DialogFooter><Button disabled={!w.trim() || busy} onClick={start} className="w-full sm:w-auto">
-          {busy ? <Loader className="animate-spin" aria-hidden /> : null}{tr("开始", "Start")}</Button></DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <>
+      {note ? <p role="status" className={cn("mb-4 text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
+      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={setConfirm} onResume={(x) => act(x, "worker_resume")} />
+      <AlertDialog open={!!confirm} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{tr(`回收「${confirm?.title ?? ""}」？`, `Close “${confirm?.title ?? ""}”?`)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {tr("会话停下、腾出位置。它做过的事都留着，之后可以在「已收起」里接回。",
+                "The session stops and frees its place. Its work is kept; you can resume it from Put away.")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>{tr("先不", "Not now")}</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); if (confirm) void act(confirm, "worker_reap"); }}>
+              {busy ? <Loader className="animate-spin" aria-hidden /> : null}{tr("回收", "Close")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 };
 
@@ -352,8 +321,7 @@ const clock = (ms: number) => (ms ? new Date(ms).toLocaleTimeString("zh-CN", { h
 
 export default function SessionsPage() {
   usePage(tr("会话", "Sessions"));
-  const tasks = useTasks();
-  const { live, ended, board, boardAt, failed, reload } = useSessions(tasks.accept, tasks.reload);
+  const { rows, board, boardAt, tasks, stale, failed, reload } = useWorkRows();
   const narrow = useNarrow();
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState("");
@@ -361,17 +329,9 @@ export default function SessionsPage() {
   const [goneOpen, setGoneOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [sheet, setSheet] = useState(false);
-  const [confirm, setConfirm] = useState<Row | null>(null);
-  const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [found, setFound] = useState<Row | null>(null);
-  const stale = !!(tasks.failed || tasks.data?.stale);
-
-  // the hub's one list (A4G2) — the same the ⌘P panel draws; an older hub sends
-  // none, and the page's own join stands in
-  const rows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live)
-    : buildRows(tasks.data.tasks, live, ended || [])) : null), [live, ended, board, tasks.data]);
-  const repos = useMemo(() => [...new Set((rows || []).map((r) => r.task?.repo || r.live?.repo || "").filter((x) => /^[\w.-]+\/[\w.-]+$/.test(x)))].sort(), [rows]);
+  const repos = useMemo(() => reposOf(rows), [rows]);
   const ref = params.get("open") || params.get("q") || "";
   const picked = rows && ref ? findRow(rows, ref) || (found && findRow([found], ref) ? found : undefined) : undefined;
 
@@ -395,23 +355,8 @@ export default function SessionsPage() {
     if (narrow) setSheet(true);
   };
 
-  const act = async (r: Row, tool: "worker_reap" | "worker_resume") => {
-    const id = tool === "worker_reap" ? r.live?.id : r.ended?.id;
-    if (!id) return;
-    setBusy(true);
-    setNote(null);
-    const why = await sessionWrite(tool, id);
-    setBusy(false);
-    setConfirm(null);
-    if (why) setNote({ ok: false, text: tool === "worker_reap" ? tr(`没能回收：${why}`, `Could not close it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
-    else setNote({ ok: true, text: tool === "worker_reap" ? tr("已回收，放进「已收起」——之后还能接回。", "Closed — it is under Put away and can be resumed.")
-      : tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
-    reload();
-    tasks.reload();
-  };
-
-  const retry = () => { reload(); tasks.reload(); };
-  const list = rows === null ? ((failed && !live) || (tasks.failed && !tasks.data) ? <Failed what={tr("会话", "your sessions")} onRetry={retry} /> : <Loading />)
+  const retry = reload;
+  const list = rows === null ? (failed ? <Failed what={tr("会话", "your sessions")} onRetry={retry} /> : <Loading />)
     : !rows.length ? <Empty icon={<Layers />} title={stale ? tr("数量未知", "Count unknown") : tr("还没有会话", "No sessions yet")}
       body={stale ? tr("当前来源不可用，请重试读取。空的陈旧快照不代表没有任务。", "The source is unavailable. Retry the read; an empty stale snapshot does not mean zero tasks.")
         : tr("点「新建」说一件要做的事，或者在「对话」里说一句。", "Tap New and say what needs doing, or ask in Chat.")}
@@ -451,7 +396,7 @@ export default function SessionsPage() {
       </div>
     );
 
-  const detail = current ? <Detail key={current.id} r={current} stale={stale} busy={busy} onOpen={open} onReap={setConfirm} onResume={(r) => act(r, "worker_resume")} /> : null;
+  const detail = current ? <RowPanel key={current.id} r={current} onOpen={open} /> : null;
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
       <PageHeader title={tr("会话", "Sessions")} count={board ? board.count : undefined}
@@ -486,24 +431,7 @@ export default function SessionsPage() {
           {narrow ? <div className="px-4 pt-5 pb-6">{detail}</div> : null}
         </SheetContent>
       </Sheet>
-      <NewDialog open={newOpen} onOpenChange={setNewOpen} repos={repos} onDone={(ok, text) => { setNote({ ok, text }); if (ok) { tasks.reload(); reload(); } }} />
-      <AlertDialog open={!!confirm} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{tr(`回收「${confirm?.title ?? ""}」？`, `Close “${confirm?.title ?? ""}”?`)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {tr("会话停下、腾出位置。它做过的事都留着，之后可以在「已收起」里接回。",
-                "The session stops and frees its place. Its work is kept; you can resume it from Put away.")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>{tr("先不", "Not now")}</AlertDialogCancel>
-            <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); if (confirm) void act(confirm, "worker_reap"); }}>
-              {busy ? <Loader className="animate-spin" aria-hidden /> : null}{tr("回收", "Close")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <NewDialog open={newOpen} onOpenChange={setNewOpen} repos={repos} onDone={(ok, text) => { setNote({ ok, text }); if (ok) reload(); }} />
     </div>
   );
 }
