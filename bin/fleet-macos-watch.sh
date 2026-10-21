@@ -15,21 +15,21 @@
 #      one failed / timed out ⇒ red, all green ⇒ green, none or cancelled ⇒ no
 #      verdict (a follow with nothing to follow, one cancelled). A run red for
 #      another step is not the BSD half's;
-#   2. green → forgets what it alerted, prints `green`, exit 0;
-#   3. red → names what is red (the failed job, the FAIL/TIMEOUT tests in its log)
-#      and since which commit (the red streak walked back to the last green run;
-#      a run's head commit — a train boards master's head when it starts, at or
-#      past it), and raises ONE `breakage` alert (fleet-alerts.sh event) on
-#      --session's fleet naming the red tests and the run — no issue is filed
-#      (issue #4898) — and spawns NOTHING: since #3120 (EPIC #3111 C9) no session
-#      starts by itself; sending a fixer is the person's, or a session's they
-#      opened for it.
-#   4. remembers the run id it alerted for, so the same red run is never said
-#      again on every tick;
-#   5. a long red (issue #3869): when the red streak began more than
-#      FLEET_MACOS_STALE_SECS ago (7200, 2 hours — the streak's first red run's
-#      created_at) with nothing green since, ONE more `breakage` alert says macOS
-#      has been red that long — once per streak.
+#   2. green → a red streak it saw ends with ONE message «✓ macOS 夜检恢复全绿（红了
+#      N 晚）» (fleet-alerts.sh event, i.e. 消息 — never pushed) and is forgotten;
+#      green with nothing seen red prints nothing;
+#   3. red → names what is red (the failed jobs, the FAIL/TIMEOUT tests in their
+#      logs) and since which commit (the red streak walked back to the last green
+#      run), and raises ONE `breakage` alert per red run on --session's fleet —
+#      no issue is filed (issue #4898), nothing is spawned (#3120). The copy says
+#      what is true since #4671: Macs still update (nothing holds them back);
+#   4. a streak red FLEET_MACOS_PUSH_NIGHTS (2) nights — scheduled runs; a streak
+#      of dispatches alone counts its runs — is pushed to the person ONCE
+#      (FLEET_NOTIFY_CMD, zh + en: nights · tests · since · the run), keyed on the
+#      commit it began at; no notifier ⇒ only the log line says so;
+#   5. remembers the run it alerted for and the streak it pushed, and prints a
+#      line only when something changed — a quiet tick prints nothing, so
+#      diskguard's macos-watch.log grows by events, not by ticks.
 #
 # The walk reads at most FLEET_MACOS_WATCH_WALK (25) runs' jobs.
 #
@@ -40,7 +40,7 @@
 # FLEET_MACOS_WATCH=0 turns it off. --dry-run reads and prints the alert it
 # would raise, raises nothing and remembers nothing.
 #
-# State: $FLEET_CONF_DIR/global/macos-watch/<slug>.{stamp,filed,stale}.
+# State: $FLEET_CONF_DIR/global/macos-watch/<slug>.{stamp,filed,pushed,streak}.
 # Exit: 0 green / alerted / nothing to do · 1 the alert failed · 2 usage / unread.
 set -uo pipefail
 
@@ -57,7 +57,7 @@ while [ "$#" -gt 0 ]; do
     --session) shift; sess="${1:-}" ;;
     --dry-run|-n) dry=1 ;;
     --now)     now=1 ;;
-    -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)         printf 'fleet-macos-watch: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -71,7 +71,8 @@ BRANCH="${FLEET_MACOS_BRANCH:-master}"
 slug=$(fleet_slug "$repo")
 SD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/macos-watch"
 mkdir -p "$SD" 2>/dev/null
-stamp="$SD/$slug.stamp" memo="$SD/$slug.filed" stale="$SD/$slug.stale"
+stamp="$SD/$slug.stamp" memo="$SD/$slug.filed" pushed="$SD/$slug.pushed" streak="$SD/$slug.streak"
+rm -f "$SD/$slug.stale" 2>/dev/null   # compat-1v: 下一批删 (the held-back mark, #3869)
 log() { printf 'fleet-macos-watch: %s: %s\n' "$repo" "$*" >&2; }
 
 every="${FLEET_MACOS_WATCH_SECS:-600}"; case "$every" in ''|*[!0-9]*) every=600 ;; esac
@@ -116,74 +117,112 @@ mac_verdict() {
 }
 
 walk="${FLEET_MACOS_WATCH_WALK:-25}"; case "$walk" in ''|*[!0-9]*|0) walk=25 ;; esac
-rid='' rsha='' jobs='' start='' since='' seen=0
-while IFS=$'\t' read -r id sha _ _ created; do
+rid='' rsha='' jobs='' start='' seen=0 reds=0 nights=0 gone=''
+while IFS=$'\t' read -r id sha _ ev _; do
   [ -n "$id" ] || continue
   seen=$((seen + 1)); [ "$seen" -le "$walk" ] || break
   v=$(mac_verdict "$id")
   case "$v" in
-    green*) [ -z "$rid" ] && { [ "$dry" = 1 ] || rm -f "$memo" "$stale"; printf 'green\t%s\t%.7s\n' "$id" "$sha"; exit 0; }
+    green*) [ -z "$rid" ] && { gone=$id; break; }
             break ;;                       # the streak's first red is the one before it
     red*)   if [ -z "$rid" ]; then
               rid=$id rsha=$sha jobs=$(printf '%s\n' "$v" | sed 1d)
             fi
-            start=$sha since=$created ;;
+            reds=$((reds + 1)); [ "$ev" = schedule ] && nights=$((nights + 1))
+            start=$sha ;;
   esac
 done <<EOF
 $rows
 EOF
-[ -n "$rid" ] || { log "no macOS verdict in the newest $walk $WF run(s) on $BRANCH"; exit 0; }
-[ -n "$start" ] || start="$rsha"
+# a night is a scheduled run; a streak of dispatches alone counts its runs
+[ "$nights" -gt 0 ] || nights=$reds
 
 alert="${FLEET_MACOS_ALERT_CMD:-$BIN/fleet-alerts.sh}"
+push="${FLEET_MACOS_NOTIFY_CMD:-${FLEET_NOTIFY_CMD:-}}"
 sock=''; [ -n "$sess" ] && sock=$(fleet_socket "$sess" 2>/dev/null)
 
-# 5. Held back too long (issue #3869): the streak's first red run is older than
-# FLEET_MACOS_STALE_SECS — one alert per streak (keyed on the commit it began at).
-held=${FLEET_MACOS_STALE_SECS:-7200}; case "$held" in ''|*[!0-9]*) held=7200 ;; esac
-t0=''; [ -z "$since" ] || t0=$(fleet_epoch_from_iso "$since" 2>/dev/null)
-case "$t0" in ''|*[!0-9]*) t0='' ;; esac
-if [ -n "$t0" ] && [ $((t - t0)) -ge "$held" ] && [ "$(cat "$stale" 2>/dev/null)" != "$start" ]; then
-  hrs=$(( (t - t0) / 3600 ))
+# 2. green: a streak this watcher saw ends with ONE message (never pushed) and is
+# forgotten; nothing seen red ⇒ nothing said.
+if [ -n "$gone" ]; then
+  was=$(cut -f2 "$streak" 2>/dev/null); case "$was" in ''|*[!0-9]*) was='' ;; esac
   if [ "$dry" = 1 ]; then
-    printf 'would-alert\tstale\t%sh\t%.7s\n' "$hrs" "$start"
+    [ -n "$was" ] && printf 'would-say\tgreen\t%s\n' "$was"
+    exit 0
+  fi
+  rm -f "$memo" "$pushed"
+  [ -n "$was" ] || exit 0
+  rm -f "$streak"
+  printf 'green\t%s\twas red %s nights\n' "$gone" "$was"
+  bash "$alert" event ${sock:+-L "$sock"} macos-green \
+    "✓ macOS 夜检恢复全绿（红了 ${was} 晚） · ✓ macOS nightly green again (was red ${was} nights)" \
+    >/dev/null 2>&1 || log "the green-again message failed"
+  exit 0
+fi
+[ -n "$rid" ] || { log "no macOS verdict in the newest $walk $WF run(s) on $BRANCH"; exit 0; }
+[ -n "$start" ] || start="$rsha"
+s7=$(printf '%.7s' "$start")
+[ "$dry" = 1 ] || printf '%s\t%s\n' "$start" "$nights" > "$streak"
+
+# What is red: the failed shards, and the FAIL / TIMEOUT tests in their logs.
+red_tests() {
+  local jid u
+  for jid in $(printf '%s\n' "$jobs" | awk -F'\t' 'NF { print $1 }' | head -10); do
+    # over REST (#4238): `gh run view --log-failed` printed nothing for these jobs
+    u="repos/$repo/actions/jobs/$jid/logs"
+    { gh api "$u" --allow-escape-sequences 2>/dev/null || gh api "$u" 2>/dev/null; } \
+      | grep -aoE '(FAIL|TIMEOUT) +[A-Za-z0-9_.#-]*selftest[A-Za-z0-9_.#-]*' | awk '{print $2}'
+  done | grep . | awk '!seen[$0]++'
+}
+jnames=$(printf '%s\n' "$jobs" | cut -f2 | grep . | paste -sd ',' - | sed 's/,/, /g')
+url="https://github.com/$repo/actions/runs/$rid"
+
+# 3. one message per red run (the memo): what is red, since when — never a push
+if [ "$(cat "$memo" 2>/dev/null)" != "$rid" ]; then
+  tl=$(red_tests)
+  what=$(printf '%s\n' "$tl" | grep . | head -5 | paste -sd ',' - | sed 's/,/, /g')
+  what="${what:-${jnames:-$WF}}"
+  title="macOS 夜检红了：${what}（${jnames:-$WF}）自 ${s7} 起；Mac 照常更新"
+  if [ "$dry" = 1 ]; then
+    printf 'would-alert\t%s\t%s\n' "$rid" "$title"
   else
-    printf '%s\n' "$start" > "$stale"
-    printf 'stale\t%sh\t%.7s\n' "$hrs" "$start"
+    printf '%s\n' "$rid" > "$memo"
+    printf 'alerted\t%s\t%s\n' "$rid" "$title"
     bash "$alert" event ${sock:+-L "$sock"} breakage \
-      "fleet: macOS has been red for ${hrs}h+ — since $(printf '%.7s' "$start"); every Mac runs it (the lane moves with stable since #4663)" \
-      >/dev/null 2>&1 || log "the stale-lane alert failed"
+      "fleet: macOS nightly is red since ${s7} ($what); Macs still update — $url (nobody fixes it on their own; open a session on it)" \
+      >/dev/null 2>&1 || { log "the alert for run $rid failed — retried next tick"; rm -f "$memo"; exit 1; }
   fi
 fi
 
-[ "$(cat "$memo" 2>/dev/null)" = "$rid" ] && { printf 'alerted\t%s\t%.7s\t(already, for this run)\n' "$rid" "$rsha"; exit 0; }
-
-# What is red: the failed shards, and the FAIL / TIMEOUT tests in the first one's log.
-jid=$(printf '%s\n' "$jobs" | awk -F'\t' 'NF { print $1; exit }')
-jnames=$(printf '%s\n' "$jobs" | cut -f2 | grep . | paste -sd ',' - | sed 's/,/, /g')
-tests=''
-if [ -n "$jid" ]; then
-  # over REST (#4238): `gh run view --log-failed` printed nothing for these jobs,
-  # so every alert said «no FAIL line»
-  u="repos/$repo/actions/jobs/$jid/logs"
-  tests=$({ gh api "$u" --allow-escape-sequences 2>/dev/null || gh api "$u" 2>/dev/null; } \
-            | grep -aoE '(FAIL|TIMEOUT) +[A-Za-z0-9_.-]*selftest[A-Za-z0-9_.-]*' | awk '{print $2}')
-  tests=$(printf '%s\n' "$tests" | grep . | awk '!seen[$0]++' | head -5 | paste -sd ',' - | sed 's/,/, /g')
+# 4. red FLEET_MACOS_PUSH_NIGHTS nights (2) ⇒ ONE push to the person
+# (FLEET_NOTIFY_CMD) per streak, keyed on the commit it began at.
+need=${FLEET_MACOS_PUSH_NIGHTS:-2}; case "$need" in ''|*[!0-9]*|0) need=2 ;; esac
+[ "$nights" -ge "$need" ] || exit 0
+[ "$(cat "$pushed" 2>/dev/null)" = "$start" ] && exit 0
+[ -n "${tl+x}" ] || tl=$(red_tests)
+k=$(printf '%s\n' "$tl" | grep -c .); first=$(printf '%s\n' "$tl" | grep . | head -1)
+if [ "$k" -gt 1 ]; then
+  zt=" · ${k} 个测试" et=" · ${k} tests" zw="${first} 等，" ew="${first} and $((k - 1)) more, "
+elif [ "$k" = 1 ]; then
+  zt=" · 1 个测试" et=" · 1 test" zw="${first}，" ew="${first}, "
+else
+  zt='' et='' zw='' ew=''
 fi
-what="${tests:-${jnames:-$WF}}"
-s7=$(printf '%.7s' "$start")
-title="macOS 检查红了、Mac 停在上一版：${what}（${jnames:-$WF}）自 ${s7} 起"
+msg="【fleet】macOS 夜检连红 ${nights} 晚${zt}
+${zw}自 ${s7} 起；Mac 照常更新
+要修就开一个会话：${url}
+
+[fleet] macOS nightly red ${nights} nights${et}
+${ew}since ${s7}; Macs still update
+To fix it, open a session: ${url}"
 if [ "$dry" = 1 ]; then
-  printf 'would-alert\t%s\t%s\n' "$rid" "$title"; exit 0
+  printf 'would-push\t%s\t%s\n' "$nights" "$s7"; exit 0
 fi
-
-# One alert per red run (issue #4898: the issue filer left with the ticket
-# layer — a red BSD half is said, not filed): the memo keeps the same red run from
-# being said again every tick; the stale-lane alert (5.) still fires once per
-# streak. Nobody is spawned for it (issue #3120).
-printf '%s\n' "$rid" > "$memo"
-printf 'alerted\t%s\t%s\n' "$rid" "$title"
-bash "$alert" event ${sock:+-L "$sock"} breakage \
-  "fleet: macOS is red since ${s7} ($what), and every Mac runs it — https://github.com/$repo/actions/runs/$rid (nobody fixes it on their own; open a session on it)" \
-  >/dev/null 2>&1 || { log "the alert for run $rid failed — retried next tick"; rm -f "$memo"; exit 1; }
+if [ -z "$push" ]; then
+  log "red ${nights} nights since ${s7} and no FLEET_NOTIFY_CMD — nobody to push it to"
+  printf '%s\n' "$start" > "$pushed"; exit 0
+fi
+"$push" "$msg" >/dev/null 2>&1 || { log "the push for the streak since ${s7} failed — retried next tick"; exit 1; }
+printf '%s\n' "$start" > "$pushed"
+printf 'pushed\t%s nights\t%s\n' "$nights" "$s7"
+bash "$alert" event ${sock:+-L "$sock"} breakage "$(printf '%s\n' "$msg" | sed -n 1,3p | paste -sd ' ' -)" >/dev/null 2>&1 || :
 exit 0
