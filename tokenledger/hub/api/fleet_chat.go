@@ -81,7 +81,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || home.Machine == "" || home.Login == "" {
-		refuseJSON(w, http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
+		refuseJSON(w, http.StatusConflict, "no_home", s.noHomeWhy(person))
 		return
 	}
 	// The person's login is linked to another replica (claude-fleet#3847):
@@ -277,7 +277,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || home.Machine == "" || home.Login == "" {
-		s.chatRefuse(w, person, name, http.StatusConflict, "no_home", "你还没有家：先在「我的连接」里选一台机器")
+		s.chatRefuse(w, person, name, http.StatusConflict, "no_home", s.noHomeWhy(person))
 		return
 	}
 	where := home.Machine + "/" + home.Login

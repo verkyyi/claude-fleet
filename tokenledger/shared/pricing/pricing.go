@@ -154,3 +154,14 @@ func (t *Table) Apply(evs []model.UsageEvent) {
 		evs[i].CostUSD = t.Cost(&evs[i])
 	}
 }
+
+// RatesFor is a model's rates, Claude's table first, then OpenAI's
+// (claude-fleet T789: a member's dollar limit prices its pool usage).
+func RatesFor(modelID string) (Rates, bool) {
+	id := Normalize(modelID)
+	if r, ok := Default().rates[id]; ok {
+		return r, true
+	}
+	r, ok := openAIRates[id]
+	return r, ok
+}
