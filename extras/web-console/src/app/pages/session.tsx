@@ -6,7 +6,7 @@
 // asked of the hub's resolver.
 import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
 import { terminalLink } from "@/shared/terminal";
@@ -56,6 +56,10 @@ export default function SessionPage() {
           onClick={() => (history.length > 1 ? go(-1) : go("/"))}><ArrowLeft /></Button>
         <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{rowMeta(r)}</span>
       </div>
+      {/* a session just started from 新建 (GR5E C3): its terminal opens as soon as it is up */}
+      {params.get("view") === "term" && !r.live && r.group !== "gone" ? <p role="status" data-testid="term-opening"
+        className="text-muted-foreground mb-3 flex items-center gap-2 text-sm"><Loader className="size-4 animate-spin" aria-hidden />
+        {tr("会话正在开，开好就进入它的终端。", "The session is opening; its terminal opens once it is up.")}</p> : null}
       <RowPanel r={r} onOpen={(k) => go(sessionPath(k))} />
     </div>
   );

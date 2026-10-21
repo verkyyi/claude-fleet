@@ -14,7 +14,7 @@
 // the list, and a phone's /?about= (a link into the conversation) opens it too.
 import { lazy, useEffect, useState, type ComponentType } from "react";
 import { Navigate, useLocation } from "react-router";
-import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Settings, CircleUserRound, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Gauge, Layers, ListChecks, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, TerminalSquare, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage from "./pages/chat";
@@ -50,6 +50,8 @@ export type PageDef = {
 export const PAGES: PageDef[] = [
   { id: "home", path: "/", label: tr("会话", "Sessions"), icon: Layers, page: Home },
   { id: "chat", path: "/chat", label: tr("我的对话", "My chat"), icon: MessageCircle, page: ChatPage },
+  // 新建会话 (GR5E C3): 对话 | 终端 is chosen here, on the right of a computer, a phone's whole screen
+  { id: "new", path: "/new", label: tr("新建会话", "New session"), icon: Plus, page: lazy(() => import("./NewSession")) },
   { id: "session", path: "/s/:ref", label: tr("会话", "Session"), icon: Layers, page: lazy(() => import("./pages/session")) },
   { id: "sessions", path: "/sessions", label: tr("会话", "Sessions"), icon: Layers, page: lazy(() => import("./pages/sessions")) },
   { id: "terminal", path: "/terminal", label: tr("我的终端", "My Terminal"), icon: TerminalSquare, page: lazy(() => import("./pages/terminal")) },

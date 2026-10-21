@@ -7,14 +7,14 @@
 // agent · where it runs · how long — shows on hover (computer, a Tooltip) or a
 // long-press (phone, a Sheet with 对话 / 终端). The head: the mark · the limit ·
 // a search icon (a box only once tapped; it finds a code, a title, a machine) ·
-// 新建. No filter, nothing pinned. A row opens /app/s/<ref>. Stock shadcn/ui.
+// 新建 (/app/new, GR5E C3). No filter, nothing pinned. A row opens /app/s/<ref>.
+// Stock shadcn/ui.
 import { createContext, useContext, useEffect, useRef, useState, type FC, type PointerEvent, type ReactNode } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import {
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot, CircleX, Clock, GitPullRequest, Loader,
   MessageCircle, Plus, Search, TerminalSquare, X, type LucideIcon,
 } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -23,7 +23,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
-import { NewDialog, reposOf } from "./NewDialog";
 import { Failed, Loading } from "./parts";
 import { listItem, listRows, rowMeta, rowRef, searchRows } from "./session-list";
 import { useWorkRows } from "./work-rows";
@@ -41,22 +40,18 @@ export const sessionPath = (r: Row, view?: "chat" | "term") => `/s/${encodeURICo
 // the web conversation, one row of the list (its own page until C3 makes it a session)
 export const WEB_CHAT_PATH = "/chat";
 
-// The list's search and 新建, shared by the head that draws their buttons (the
-// left column's, the phone's top bar) and the list that draws the box.
-type ListUi = { searching: boolean; setSearching: (on: boolean) => void; q: string; setQ: (q: string) => void; newOpen: boolean; setNewOpen: (o: boolean) => void };
-const UiCtx = createContext<ListUi>({ searching: false, setSearching: () => {}, q: "", setQ: () => {}, newOpen: false, setNewOpen: () => {} });
+// The list's search, shared by the head that draws its button (the left
+// column's, the phone's top bar) and the list that draws the box.
+type ListUi = { searching: boolean; setSearching: (on: boolean) => void; q: string; setQ: (q: string) => void };
+const UiCtx = createContext<ListUi>({ searching: false, setSearching: () => {}, q: "", setQ: () => {} });
 const useListUi = () => useContext(UiCtx);
 
 export const ListUiProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const [searching, setSearching] = useState(false);
   const [q, setQ] = useState("");
-  const [newOpen, setNewOpen] = useState(false);
-  const { rows, reload } = useWorkRows();
   return (
-    <UiCtx.Provider value={{ searching, setSearching: (on) => { setSearching(on); if (!on) setQ(""); }, q, setQ, newOpen, setNewOpen }}>
+    <UiCtx.Provider value={{ searching, setSearching: (on) => { setSearching(on); if (!on) setQ(""); }, q, setQ }}>
       {children}
-      <NewDialog open={newOpen} onOpenChange={setNewOpen} repos={reposOf(rows)}
-        onDone={(ok, text) => { if (ok) { toast.success(text); reload(); } else toast.error(text); }} />
     </UiCtx.Provider>
   );
 };
@@ -71,11 +66,14 @@ export const SearchButton: FC<{ className?: string }> = ({ className }) => {
   );
 };
 
+// 新建 opens the new-session screen (GR5E C3)
+export const NEW_PATH = "/new";
 export const NewButton: FC<{ className?: string }> = ({ className }) => {
-  const { setNewOpen } = useListUi();
+  const go = useNavigate();
+  const { pathname } = useLocation();
   return (
-    <Button variant="ghost" size="icon" className={cn("size-8", className)} disabled={!!viewAs}
-      aria-label={tr("新建会话", "New session")} title={tr("新建会话", "New session")} onClick={() => setNewOpen(true)}>
+    <Button variant="ghost" size="icon" className={cn("size-8", pathname === NEW_PATH && "text-clay", className)} disabled={!!viewAs}
+      aria-label={tr("新建会话", "New session")} title={tr("新建会话", "New session")} onClick={() => go(NEW_PATH)}>
       <Plus />
     </Button>
   );
@@ -83,9 +81,9 @@ export const NewButton: FC<{ className?: string }> = ({ className }) => {
 
 // The phone's 新建, at the bottom right above the home bar.
 export const NewFab: FC = () => {
-  const { setNewOpen } = useListUi();
+  const go = useNavigate();
   return (
-    <Button size="lg" disabled={!!viewAs} onClick={() => setNewOpen(true)}
+    <Button size="lg" disabled={!!viewAs} onClick={() => go(NEW_PATH)}
       className="fixed end-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-20 h-12 rounded-full px-5 text-base shadow-lg">
       <Plus />{tr("新建", "New")}
     </Button>

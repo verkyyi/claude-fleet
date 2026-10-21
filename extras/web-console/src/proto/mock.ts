@@ -209,7 +209,7 @@ export async function install(): Promise<string> {
     if (tool === "worker_start") {
       const body = String(args.body || "");
       tasks.unshift(task(`T${200 + tasks.length}`, String(args.title || body.split("\n")[0]).slice(0, 120), "网页", "", 0,
-        v1({ fid: crypto.randomUUID(), task_state: "starting", repo: String(args.repo || ""), request_payload: JSON.stringify({ action: "worker_start", node: "auto", params: args }) })));
+        v1({ fid: crypto.randomUUID(), task_state: "starting", repo: String(args.repo || ""), request_payload: JSON.stringify({ action: "worker_start", node: String(args.node || "auto"), params: { ...args, dispatch: { request_id: args.idempotency_key } } }) })));
       return ok({ operation_id: "op-2", action: tool, status: "pending" });
     }
     if (tool === "worker_reap") {
