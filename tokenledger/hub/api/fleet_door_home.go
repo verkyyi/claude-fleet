@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -461,4 +464,69 @@ func (s *Server) handleDoorHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.serveSSHRelay(ctx, conn, actor, machine, epID, nc, control.SSHRelayTargetEntry, refuse)
+}
+
+// DoorAddressKey is the hub setting naming the door's one address for
+// everyone (A5SQ): host or host:port. Set, the phone page leads with it for a
+// person the door takes home; "" = the page as before.
+const DoorAddressKey = "fleet.door_address"
+
+var doorHostRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
+
+// doorAddress parses DoorAddressKey's value: host, port (default the entry port).
+func doorAddress(v string) (string, int, bool) {
+	host, port := v, entryPort
+	if h, p, err := net.SplitHostPort(v); err == nil {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return "", 0, false
+		}
+		host, port = h, n
+	}
+	if !doorHostRE.MatchString(host) || strings.Contains(host, "..") {
+		return "", 0, false
+	}
+	return host, port, true
+}
+
+// EntryShared is the door's one address as a person's phone uses it (A5SQ):
+// the same host and port for everyone, their own login, the door's host key.
+type EntryShared struct {
+	Address string   `json:"address"`
+	Port    int      `json:"port"`
+	Login   string   `json:"login"`
+	HostFP  string   `json:"host_fp,omitempty"` // the DOOR's: what the phone trusts once, for good
+	QR      []string `json:"qr,omitempty"`
+}
+
+// doorShared is machine's person's way in through the one address: nil unless
+// the address is set, a door said lately it carries homes, the home is a
+// machine and its agent can take the stream.
+func (s *Server) doorShared(machine, login string, now time.Time) *EntryShared {
+	host, port, ok := doorAddress(s.setting(DoorAddressKey))
+	if !ok || machine == "" || login == "" || isUserPodName(machine) || !s.entryRelayReady(machine) {
+		return nil
+	}
+	for _, d := range s.doorMachines() {
+		if _, at, err := s.Store.EntryJump(doorHomeKey(d)); err != nil || at.IsZero() || now.Sub(at) >= jumpFresh {
+			continue
+		}
+		return &EntryShared{Address: host, Port: port, Login: login, HostFP: s.entryHostFP(d),
+			QR: qrMatrix(entrySSHURL(login, host, port))}
+	}
+	return nil
+}
+
+// entryRelayReady says a link to host — this replica's or another's — listed
+// CapEntryRelay: its agent can reach the machine's entry port.
+func (s *Server) entryRelayReady(host string) bool {
+	if s.entryRelayLocal(host) {
+		return true
+	}
+	for _, pc := range s.peerRelayHosts()[host] {
+		if pc.HasCap(control.CapEntryRelay) {
+			return true
+		}
+	}
+	return false
 }

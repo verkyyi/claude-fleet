@@ -64,7 +64,10 @@ type EntryKey = { id: string; fp: string; type: string; name: string; created: s
 type Door = {
   domain?: string; address?: string; port: number; login?: string; home_name?: string; home_why?: string;
   home_down?: string; state: string; why?: string; qr?: string[]; jump?: string; host_fp?: string;
+  shared?: Shared;
 };
+// the door's one address for everyone (A5SQ): the same host and port, the person's own login, the door's host key
+type Shared = { address: string; port: number; login: string; host_fp?: string; qr?: string[] };
 type HomeChoice = { machine: string; login: string; online: boolean; name?: string };
 type Entry = {
   name?: string; suggested_name?: string; home: { machine: string; login: string; set_by: string } | null;
@@ -329,6 +332,38 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
   if (!entry.data?.door) return <Failed what={tr("手机的连接方式", "the phone's way in")} onRetry={entry.retry} />;
   const v = entry.data, d = entry.data.door;
   const rows: [string, string | number | undefined][] = [[tr("地址", "Host"), d.address], [tr("端口", "Port"), d.port], [tr("用户名", "User"), d.login]];
+  const direct = (
+    <>
+      <div className={cn("grid gap-4", d.qr ? "sm:grid-cols-[160px_1fr]" : "")}>
+        {d.qr ? (
+          <div className="mx-auto aspect-square w-40 overflow-hidden rounded-xl border bg-white p-1.5 sm:mx-0"><QR rows={d.qr} /></div>
+        ) : null}
+        <div className="flex min-w-0 flex-col text-sm">
+          {rows.map(([k, val]) => (
+            <div key={k} className="flex min-h-11 items-center gap-2 border-b py-1 last:border-b-0">
+              <span className="text-muted-foreground w-16 shrink-0">{k}</span>
+              {val !== undefined && val !== "" ? (
+                <>
+                  <span className="min-w-0 flex-1 truncate font-mono">{val}</span>
+                  <CopyButton text={String(val)} />
+                </>
+              ) : <span className="text-warn flex-1">{k === tr("用户名", "User") ? tr("还没有家", "No home yet") : !d.domain ? tr("地址还没配好", "Not configured") : tr("还没起名", "Not named yet")}</span>}
+            </div>
+          ))}
+          {d.qr ? <p className="text-muted-foreground pt-2 text-[13px]">{tr("用手机相机扫左边的码，在 App 里打开就填好这三项。", "Scan the code with your phone's camera to open these three in the app.")}</p> : null}
+        </div>
+      </div>
+      {d.jump ? (
+        <div className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground text-[13px]">{tr("经门跳转（App 里的 Jump host，或电脑上直接 ssh）：", "Through the door's jump (an app's Jump host, or plain ssh):")}</span>
+          <div className="flex min-h-11 items-center gap-2 rounded-lg border px-2">
+            <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{d.jump}</span>
+            <CopyButton text={d.jump} />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
   return (
     <Card>
       <CardHeader>
@@ -338,41 +373,16 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {!v.name ? <NameForm suggested={v.suggested_name} domain={d.domain} done={reload} /> : null}
-        <div className={cn("grid gap-4", d.qr ? "sm:grid-cols-[160px_1fr]" : "")}>
-          {d.qr ? (
-            <div className="mx-auto aspect-square w-40 overflow-hidden rounded-xl border bg-white p-1.5 sm:mx-0"><QR rows={d.qr} /></div>
-          ) : null}
-          <div className="flex min-w-0 flex-col text-sm">
-            {rows.map(([k, val]) => (
-              <div key={k} className="flex min-h-11 items-center gap-2 border-b py-1 last:border-b-0">
-                <span className="text-muted-foreground w-16 shrink-0">{k}</span>
-                {val !== undefined && val !== "" ? (
-                  <>
-                    <span className="min-w-0 flex-1 truncate font-mono">{val}</span>
-                    <CopyButton text={String(val)} />
-                  </>
-                ) : <span className="text-warn flex-1">{k === tr("用户名", "User") ? tr("还没有家", "No home yet") : !d.domain ? tr("地址还没配好", "Not configured") : tr("还没起名", "Not named yet")}</span>}
-              </div>
-            ))}
-            {d.qr ? <p className="text-muted-foreground pt-2 text-[13px]">{tr("用手机相机扫左边的码，在 App 里打开就填好这三项。", "Scan the code with your phone's camera to open these three in the app.")}</p> : null}
-          </div>
-        </div>
-        {d.host_fp ? (
-          <p className="text-muted-foreground text-[13px]">
-            {tr("主机钥匙指纹（第一次连、或换家后 App 会问一次，对得上再接受）：", "Host key fingerprint (the app asks once — on the first connection or after a home move; accept only if it matches): ")}
-            <span className="text-foreground font-mono break-all">{d.host_fp}</span>
-          </p>
-        ) : null}
-        {d.jump ? (
-          <div className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground text-[13px]">{tr("经门跳转（App 里的 Jump host，或电脑上直接 ssh）：", "Through the door's jump (an app's Jump host, or plain ssh):")}</span>
-            <div className="flex min-h-11 items-center gap-2 rounded-lg border px-2">
-              <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{d.jump}</span>
-              <CopyButton text={d.jump} />
-            </div>
-          </div>
-        ) : null}
-        {!d.domain ? <Note tone="warn">{tr("这个入口还没设地址用的域名（设置 fleet.entry_domain）：请管理员配好。", "This hub has no address domain yet (the fleet.entry_domain setting); ask an admin.")}</Note> : null}
+        {d.shared ? (
+          <>
+            <SharedWay s={d.shared} home={d.home_name} />
+            <details className="text-sm">
+              <summary className="text-primary cursor-pointer text-[13px]">{tr("高级：直连这台机器（路由器转发的地址、tailnet）", "Advanced: straight to this machine (a forwarded port, a tailnet)")}</summary>
+              <div className="flex flex-col gap-4 pt-3">{direct}</div>
+            </details>
+          </>
+        ) : direct}
+        {!d.domain && !d.shared ? <Note tone="warn">{tr("这个入口还没设地址用的域名（设置 fleet.entry_domain）：请管理员配好。", "This hub has no address domain yet (the fleet.entry_domain setting); ask an admin.")}</Note> : null}
         <DoorState d={d} />
         <p className="text-muted-foreground text-[13px]">
           {tr("第一次连会问要不要信任主机钥匙：点 Accept。没装 App？", "The first connection asks to trust the host key: tap Accept. No app yet? ")}
@@ -382,6 +392,38 @@ const PhoneTab: FC<{ entry: Read<Entry>; me: Me | null; reload: () => void }> = 
           "Once connected, press F12 or ⌃] p (Ctrl+], then p) to open the panel. Add F12 to the extra-keys row above Termius's keyboard and one tap opens it.")}</p>
       </CardContent>
     </Card>
+  );
+};
+
+// The door's one address (A5SQ): the same for everyone, the person's own login,
+// the door's host key — a home move changes nothing on the phone.
+const SharedWay: FC<{ s: Shared; home?: string }> = ({ s, home }) => {
+  const rows: [string, string | number][] = [[tr("地址", "Host"), s.address], [tr("端口", "Port"), s.port], [tr("用户名", "User"), s.login]];
+  return (
+    <div className={cn("grid gap-4", s.qr ? "sm:grid-cols-[160px_1fr]" : "")}>
+      {s.qr ? (
+        <div className="mx-auto aspect-square w-40 overflow-hidden rounded-xl border bg-white p-1.5 sm:mx-0"><QR rows={s.qr} /></div>
+      ) : null}
+      <div className="flex min-w-0 flex-col text-sm">
+        {rows.map(([k, val]) => (
+          <div key={k} className="flex min-h-11 items-center gap-2 border-b py-1 last:border-b-0">
+            <span className="text-muted-foreground w-16 shrink-0">{k}</span>
+            <span className="min-w-0 flex-1 truncate font-mono">{val}</span>
+            <CopyButton text={String(val)} />
+          </div>
+        ))}
+        <p className="text-muted-foreground pt-2 text-[13px]">
+          {home
+            ? tr(`所有人都填这个地址，用户名填你自己的。会接到你的家（现在是 ${home}），换家不用改。`, `Everyone uses this address with their own user name. It takes you to your home (now ${home}); a home move changes nothing here.`)
+            : tr("所有人都填这个地址，用户名填你自己的；换家不用改。", "Everyone uses this address with their own user name; a home move changes nothing here.")}
+        </p>
+        {s.host_fp ? (
+          <p className="text-muted-foreground text-[13px]">
+            {tr("主机钥匙（门的，不会变）：", "Host key (the door's, it never changes): ")}<span className="font-mono">{s.host_fp}</span>
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 };
 

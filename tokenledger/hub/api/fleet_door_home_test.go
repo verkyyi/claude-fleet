@@ -282,3 +282,47 @@ func TestDoorHomeStreamOnlyTheDoor(t *testing.T) {
 		t.Fatalf("through the stream: %q %v", b, err)
 	}
 }
+
+// The phone page leads with the door's one address (A5SQ ⑤) only when it is
+// set, a door said it carries homes, and the person's home can take the
+// stream: their own login, the DOOR's host key fingerprint, the code. Absent
+// any of the three: no shared block, the page as before.
+func TestPhonePageLeadsWithTheOneAddress(t *testing.T) {
+	r := newDoorRig(t)
+	now := time.Now()
+	if d := entryDoor(t, r.h, pAlice); d.Shared != nil {
+		t.Fatalf("no address set, yet %+v", d.Shared)
+	}
+	if err := r.h.srv.Store.SetFleetSetting(DoorAddressKey, "door.example.com", now); err != nil {
+		t.Fatal(err)
+	}
+	if d := entryDoor(t, r.h, pAlice); d.Shared != nil {
+		t.Fatalf("no door said it carries homes, yet %+v", d.Shared)
+	}
+	if code, raw := entryCall(t, r.h, http.MethodGet, control.EntryRoutesNodePath+"?home=1", asNode(r.dtok), nil); code != 200 {
+		t.Fatalf("the door's pull: HTTP %d %s", code, raw)
+	}
+	if d := entryDoor(t, r.h, pAlice); d.Shared != nil {
+		t.Fatalf("the home cannot take the stream, yet %+v", d.Shared)
+	}
+	dk := reachKeyLine(reachKey(t))
+	if err := r.h.srv.Store.SetEntryHostKey("fleet-door", dk, now); err != nil {
+		t.Fatal(err)
+	}
+	rootNode(t, r.h, "homea", "mac-e", control.CapSSHRelay, control.CapEntryRelay)
+	d := entryDoor(t, r.h, pAlice)
+	if d.Shared == nil || d.Shared.Address != "door.example.com" || d.Shared.Port != entryPort || d.Shared.Login != "alice" ||
+		d.Shared.HostFP != r.h.srv.entryHostFP("fleet-door") || d.Shared.HostFP == "" || len(d.Shared.QR) < 21 {
+		t.Fatalf("shared %+v", d.Shared)
+	}
+	// Bob's home is a pod: the one address does not take him (the jump does)
+	if b := entryDoor(t, r.h, pBob); b.Shared != nil {
+		t.Fatalf("a pod's person: %+v", b.Shared)
+	}
+	for v, ok := range map[string]bool{"door.example.com": true, "door.example.com:2222": true, "192.0.2.10:22022": true,
+		"door..example.com": false, "door.example.com:0": false, "door.example.com:99999": false, "-x.example": false, "a b": false} {
+		if _, _, got := doorAddress(v); got != ok {
+			t.Errorf("doorAddress(%q) = %v, want %v", v, got, ok)
+		}
+	}
+}
