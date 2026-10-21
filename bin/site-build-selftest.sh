@@ -12,8 +12,7 @@
 #      zh-CN · en · x-default (→ /en/), og:* and twitter:* with a 1200×630 card
 #      that exists, every absolute URL on the __ORIGIN__ placeholder
 #   C  the JSON-LD parses: @graph has Organization · WebSite · SoftwareApplication
-#      (its UseAction → /app/try) · FAQPage, and the FAQPage is the page's visible
-#      FAQ word for word — which is docs-faq.py's site list, word for word
+#      (its UseAction → /app/try), and no FAQPage — the front page carries no FAQ (T872)
 #   D  a drill whose slowest run is ≤ 60 s: 「60 秒」 / "60 seconds" on the page,
 #      each step's seconds, the stopwatch and the drill's date
 #   E  a drill over 60 s: the measured time in its place, no 「60 秒」, a RED: line
@@ -103,19 +102,14 @@ for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '立即体验'), ('en'
     except Exception as e:
         bad.append('C %s: JSON-LD does not parse: %s' % (rel, e)); continue
     types = {g['@type']: g for g in ld.get('@graph', [])}
-    for k in ('Organization', 'WebSite', 'SoftwareApplication', 'FAQPage'):
+    for k in ('Organization', 'WebSite', 'SoftwareApplication'):
         if k not in types:
             bad.append('C %s: JSON-LD has no %s' % (rel, k))
+    if 'FAQPage' in types or '<details' in p:
+        bad.append('C %s: the front page still carries an FAQ (T872)' % rel)
     app = types.get('SoftwareApplication', {})
     if app.get('potentialAction', {}).get('target') != '__ORIGIN__/app/try' or app.get('offers', {}).get('price') != '0':
         bad.append('C %s: SoftwareApplication lacks the try action or the free offer' % rel)
-    ldq = [(q['name'], q['acceptedAnswer']['text']) for q in types.get('FAQPage', {}).get('mainEntity', [])]
-    vis = [(html.unescape(re.sub(r'<i[^>]*>.*?</i>', '', q)).strip(), html.unescape(a).strip())
-           for q, a in re.findall(r'<details><summary>(.*?)</summary><p>(.*?)</p></details>', p, flags=re.S)]
-    src = json.loads(subprocess.check_output([sys.executable, os.path.join(ROOT, 'bin', 'docs-faq.py'), 'json',
-                                              '--lang', lang[:2], '--site']))['items']
-    if not ldq or ldq != vis or vis != [(i['q'], i['a']) for i in src]:
-        bad.append('C %s: FAQPage (%d) / visible FAQ (%d) / faq.md site list (%d) differ' % (rel, len(ldq), len(vis), len(src)))
     # H
     for u in re.findall(r'(?:href|src)="(/[^"]*)"', p):
         u = u.split('?')[0].split('#')[0]
@@ -132,7 +126,7 @@ if b.get('timed') is not False:
 for x in bad:
     print('FAIL ' + x)
 if not bad:
-    print('ok   A no seconds without a drill · B heads · C JSON-LD = visible FAQ = faq.md · H every local link is built')
+    print('ok   A no seconds without a drill · B heads · C JSON-LD, no FAQ · H every local link is built')
 sys.exit(1 if bad else 0)
 PY
 
@@ -201,8 +195,11 @@ sys.exit(1 if bad else 0)
 PY
 
 # S — the hero speaks of a service (#3940): no GitHub / 开源 / open source / MIT in
-#     the header, the first section or the meta description; the footer keeps
-#     the 开源 / 自托管 block with the GitHub link; the app is a BusinessApplication
+#     the header, the first section or the meta description; the app is a
+#     BusinessApplication. The page keeps only what it must (T872): the nav is
+#     文档 · 登录 · the language, the footer GitHub · © — one language switch, one
+#     docs link, the GitHub link only in the footer, no 能交给它 / 价格 / FAQ /
+#     安全 / trademark line, and the share words name no price or trial length
 if [ -f "$T/d/index.html" ]; then
   if out="$(python3 - "$T/d/index.html" "$T/d/en/index.html" <<'PY'
 import re, sys
@@ -215,16 +212,36 @@ for f in sys.argv[1:]:
     if hits:
         bad.append('%s: hero / nav / description say %s' % (f, hits))
     foot = re.search(r'<footer.*?</footer>', s, re.S).group(0)
-    if 'class="oss"' not in foot or 'https://github.com/verkyyi/claude-fleet' not in foot:
-        bad.append('%s: footer lost the open source / self-host block' % f)
+    if '<a class="gh" href="https://github.com/verkyyi/claude-fleet">' not in foot:
+        bad.append('%s: footer has no GitHub link' % f)
     if '"applicationCategory":"BusinessApplication"' not in s:
         bad.append('%s: applicationCategory is not BusinessApplication' % f)
-    if 'id="price"' not in s:
-        bad.append('%s: no #price section' % f)
+    body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', s, flags=re.S)
+    if body.count('https://github.com/verkyyi/claude-fleet"') != 1:
+        bad.append('%s: the GitHub link is not in the footer alone' % f)
+    nav = re.search(r'<div class="nav-r">.*?</div>', body, re.S).group(0)
+    links = re.findall(r'<a [^>]*>', re.sub(r'<aside.*?</aside>', ' ', body, flags=re.S))
+    outside = [a for a in links if 'class="brand"' not in a and 'class="skip"' not in a
+               and 'id="to-app"' not in a]
+    if len(outside) != 4:
+        bad.append('%s: %d entries outside the scan card, not 4 (文档 · 登录 · language · GitHub): %s'
+                   % (f, len(outside), outside))
+    if body.count('data-set=') != 1 or 'data-set=' not in nav:
+        bad.append('%s: the language switch is not once, in the nav' % f)
+    if body.count('class="docs"') != 1 or body.count('href="/docs/"') + body.count('href="/en/docs/"') != 1:
+        bad.append('%s: the docs link is not once, in the nav' % f)
+    if '.nav-r .docs{display:none}' in s:
+        bad.append('%s: the phone hides the docs link' % f)
+    for w in re.findall(r'能交给它|Hand it|价格|Pricing|id="price"|常见问题|class="faq"|/docs/security|'
+                        r'不是 Anthropic 官方产品|Not an Anthropic product', s):
+        bad.append('%s: still says %s' % (f, w))
+    for m in re.findall(r'<meta (?:name="description"|property="og:description"|name="twitter:description")[^>]*>', s):
+        if re.search(r'15|价格|price|看板|dashboard', m, re.I):
+            bad.append('%s: share words say %s' % (f, m))
 print('; '.join(bad))
 sys.exit(1 if bad else 0)
 PY
-)"; then st_ok_all "S the hero is a service: no GitHub / 开源 up top, the footer keeps 开源 / 自托管"
+)"; then st_ok_all "S the hero is a service; the page keeps only 文档 · 登录 · language · GitHub, one switch"
   else bad "S $out"; fi
 else bad "S no built page from D"; fi
 

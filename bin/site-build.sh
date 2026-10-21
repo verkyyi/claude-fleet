@@ -2,7 +2,7 @@
 # site-build.sh — build the public website, 中文 at / and English at /en/
 # (issue #3584, EPIC #3569 C14; the design is the site design v2, decided 2026-10-12).
 #
-#   site-build.sh                 site/ + docs/public FAQ → tokenledger/hub/web/site/
+#   site-build.sh                 site/ → tokenledger/hub/web/site/
 #   site-build.sh --out <dir>     the same, into <dir> (the selftest's sandbox)
 #   site-build.sh --drill <file>  the live drill's result (default site/drill.json)
 #   site-build.sh --now <YYYY-MM-DD>   judge the drill's age against this day (tests)
@@ -15,9 +15,8 @@
 #                                 <!--trial-->…<!--/trial--> (the trial variant only)
 #   site/strings.{zh,en}.json     every word on the page, per language (C15's llms.txt
 #                                 reads the same tables)
-#   docs/public/<lang>/faq.md     the questions marked `<!-- faq: site -->`, through
-#                                 bin/docs-faq.py — the visible FAQ and the FAQPage
-#                                 JSON-LD are one list, word for word (check-html)
+#   docs/public/                  the docs, for the sitemap and the llms files (the
+#                                 front page carries no FAQ of its own — T872)
 #   site/assets/                  icons, share cards (bin/site-images.sh makes
 #                                 the PNGs once)
 #   extras/fleet-theme/           the ONE theme (issue #3924): its fleet:tokens
@@ -177,19 +176,6 @@ def time_text(S):
         return S['time_secs'].replace('{n}', str(t))
     return S['time_mins'].replace('{n}', str(int(math.floor(t / 60.0 + 0.5))))
 
-# --- the FAQ: the docs' site questions, one source --------------------------
-def faq(lang):
-    p = subprocess.run([sys.executable, os.path.join(REPO, 'bin', 'docs-faq.py'), 'json',
-                        '--lang', lang, '--site', '--src', DOCS],
-                       capture_output=True, text=True)
-    if p.returncode != 0:
-        fail('docs-faq.py json --lang %s: %s' % (lang, p.stderr.strip()))
-        return []
-    items = json.loads(p.stdout).get('items', [])
-    if not items:
-        fail('%s: faq.md marks no question for the site' % lang)
-    return [{'q': i['q'], 'a': i['a']} for i in items]
-
 # --- the theme (issue #3924) -------------------------------------------------
 # The page's colours and fonts are extras/fleet-theme's, inlined: its fleet:tokens
 # block and its fonts.css, comments out, whitespace folded, the font files at
@@ -226,14 +212,13 @@ for l, _ in LANGS:
 
 TIMED_KEYS = ('description', 'og_description', 'try', 'sub', 'steps_h', 'end_h')
 # The apply-only variant (issue #4269): these words say <key>_apply instead.
-APPLY_KEYS = ('description', 'og_description', 'try', 'sub', 'fine', 's1', 'end_h', 'offer',
-              'price_trial', 'price_trial_p', 'price_trial_d', 'llms_summary',
-              'join_h', 'join_p', 'join_flow', 'ph_h', 'ph_flow', 'price_line')
+APPLY_KEYS = ('description', 'og_description', 'try', 'sub', 'fine', 's1', 'end_h', 'llms_summary',
+              'join_h', 'join_p', 'join_flow', 'ph_h', 'ph_flow')
 for _k in APPLY_KEYS:
     if _k + '_apply' not in keys:
         fail('strings.zh.json: no %s_apply (the page with the trial off says it)' % _k)
 
-def render(lang, S, items, variant='trial'):
+def render(lang, S, variant='trial'):
     """One page. variant 'apply' is the page with fleet.trial off (issue #4269):
     no trial anywhere, so no drill seconds either — they time the trial."""
     v = dict(S)
@@ -281,10 +266,6 @@ def render(lang, S, items, variant='trial'):
             v[k] = S[k + '_apply']
         v['try_href'] = '/apply'
 
-    v['faq_items'] = '\n'.join(
-        '  <details><summary>%s<i aria-hidden="true">+</i></summary><p>%s</p></details>'
-        % (html.escape(i['q'], quote=False), html.escape(i['a'], quote=False)) for i in items)
-
     origin = '__ORIGIN__'
     url = origin + S['path']
     graph = [
@@ -297,11 +278,8 @@ def render(lang, S, items, variant='trial'):
          'description': v['description'], 'url': url, 'inLanguage': S['lang'],
          'image': origin + S['og_image'], 'license': 'https://opensource.org/licenses/MIT',
          'isAccessibleForFree': True, 'publisher': {'@id': origin + '/#org'},
-         'offers': {'@type': 'Offer', 'price': '0', 'priceCurrency': 'CNY', 'description': v['offer']},
+         'offers': {'@type': 'Offer', 'price': '0', 'priceCurrency': 'CNY'},
          'potentialAction': {'@type': 'UseAction', 'target': origin + v['try_href']}},
-        {'@type': 'FAQPage', '@id': url + '#faq', 'inLanguage': S['lang'],
-         'mainEntity': [{'@type': 'Question', 'name': i['q'],
-                         'acceptedAnswer': {'@type': 'Answer', 'text': i['a']}} for i in items]},
     ]
     ld = json.dumps({'@context': 'https://schema.org', '@graph': graph}, ensure_ascii=False, separators=(',', ':'))
     v['jsonld'] = ld.replace('</', '<\\/')
@@ -346,11 +324,10 @@ def check_seconds(lang, page, allowed):
 # --- build -------------------------------------------------------------------
 pages, apply_pages = {}, {}
 for lang, sub_dir in LANGS:
-    items = faq(lang)
-    page, allowed = render(lang, tables[lang], items)
+    page, allowed = render(lang, tables[lang])
     check_seconds(lang, page, allowed)
     pages[lang] = (sub_dir, page)
-    page, allowed = render(lang, tables[lang], items, 'apply')
+    page, allowed = render(lang, tables[lang], 'apply')
     check_seconds(lang, page, allowed)
     for bad in ('/app/try', '<!--trial', '<!--/trial'):
         if bad in page:
@@ -463,14 +440,6 @@ for lang in tables:
     if not os.path.isfile(os.path.join(OUT, tables[lang]['og_image'].replace('/site/', '', 1))):
         errs.append('share card %s is missing (bin/site-images.sh makes it)' % tables[lang]['og_image'])
 
-# The FAQ on each page is the docs' list, word for word (C12's check).
-for lang, (sub_dir, _) in list(pages.items()) + list(apply_pages.items()):
-    p = subprocess.run([sys.executable, os.path.join(REPO, 'bin', 'docs-faq.py'), 'check-html',
-                        os.path.join(OUT, sub_dir, 'index.html'), '--lang', lang, '--src', DOCS],
-                       capture_output=True, text=True)
-    if p.returncode != 0:
-        errs.append('%s: FAQ differs from faq.md: %s' % (lang, (p.stdout + p.stderr).strip()))
-
 # --- the files for search engines and AI assistants (C15) -------------------
 def crawl_files():
     tmp = tempfile.mkdtemp(prefix='site-docs.')
@@ -550,8 +519,7 @@ def crawl_files():
     home_alt = [('zh-CN', O + home['zh']), ('en', O + home['en']), ('x-default', O + home['en'])]
     for l, _ in LANGS:
         rels = [r for r in (src_rel(os.path.join(SITE, 'template.html')),
-                            src_rel(os.path.join(SITE, 'strings.%s.json' % l)),
-                            src_rel(os.path.join(DOCS, l, 'faq.md'))) if r]
+                            src_rel(os.path.join(SITE, 'strings.%s.json' % l))) if r]
         entries.append((O + home[l], lastmod(*rels) if rels else '', home_alt))
     for d in zh_docs + en_docs:
         if d['state'] != 'page':
