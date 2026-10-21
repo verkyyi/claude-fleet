@@ -45,7 +45,7 @@
 #   task-signoff   需要你定的事 without 「点头即全部按建议」 under it
 # and, on any page (T764):
 #   brevity        a title over 16 characters, a subtitle over 30 or with brackets;
-#                  on a task page a 现象 line over 25 characters
+#                  on a task page a 现象 line over 25 characters, a 做 / 不做 item over 20
 #   fold-row       the old shared folds — 证据（代码与现场） under 原因, 怎么量 under 指标 —
 #                  instead of each step / row opening on its own
 #   accept         上线证据 still one folded line, or an acceptance item with no 通过标准
@@ -297,6 +297,9 @@ if TASK:
     m = re.search(r"<section id=\"problem\">(.*?)(?:<span id=\"cause\">|</section>)", RAW, re.S)
     for li in re.findall(r"<li>(.*?)</li>", m.group(1), re.S) if m else []:
         if len(txt(li)) > 25: warn("brevity", "现象一行一个事实、≤ 25 字（现在 %d 字）  ← %s" % (len(txt(li)), txt(li)))
+    m2 = re.search(r"<span id=\"charter\"></span>(.*?)</section>", RAW, re.S)
+    for li in re.findall(r"<li>(.*?)</li>", m2.group(1), re.S) if m2 else []:
+        if len(txt(li)) > 20: warn("brevity", "做 / 不做一项一句、≤ 20 字，细节进解决方案卡片（现在 %d 字）  ← %s" % (len(txt(li)), txt(li)))
     for sym in re.findall(r"<p class=\"sym\">(.*?)</p>", m.group(1), re.S) if m else []:
         if len(txt(sym)) > 40: warn("brevity", "现象一句话、≤ 40 字（现在 %d 字）  ← %s" % (len(txt(sym)), txt(sym)))
 for sid, summ, what in (("cause", "证据（代码与现场）", "证据没挂到步骤：每一步自带它的证据（cause.steps[].evidence），对不上的进分组的「其他证据」"),

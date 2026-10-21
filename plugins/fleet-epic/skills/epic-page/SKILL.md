@@ -207,21 +207,37 @@ class="card">`, no fold; an empty 技术细节 is dropped, never shown. The lint
 
 ## 页内反馈 — the page answers itself (T764)
 
-A page published as a 活页 takes the operator's answer where they read it. The
-`<body>` carries `data-fb-table="replies" data-fb-version="v<N>"`; the frame's
-script posts every `form.fbf` as `{item, choice, note, version}` to
-`./_data/replies`, a members-only table made once after the first publish
-(`mcp__space__set_data`: `append_open` + `members_only`). On the page ONE
-「全部按建议」 shows (`item` `nod`); 「我要逐条改」 (`body.fb-open`) brings out a 按建议 /
-改成… choice on each 需要你定的事 row (`signoff-<n>`) and a 「有意见」 line under each
-step (`cause-<step>`) and card (`card-<key>`). One small ⓘ line says where it goes.
+A page published as a 活页 takes the operator's answer where they read it, item by
+item. The `<body>` carries `data-fb-table="replies" data-fb-version="v<N>"`; each
+answerable item is a `div.fbi` (`data-item`, `data-kind` pick · say · nod) holding
+its state line `.fbs` and its form — a 需要你定的事 row behind a small 「改」
+(`signoff-<n>`), a 「有意见」 under each step (`cause-<step>`) and card
+(`card-<key>`), one 「全部按建议」 (`nod`). The frame's script:
+
+- posts `{item, choice, note, version, at}` to `./_data/replies` — a members-only
+  table made once after the first publish (`mcp__space__set_data`, columns item ·
+  choice · note · version · at: a column the table lacks is dropped);
+- on load reads it back — `GET ./_data/replies.json` returns the reviewed rows
+  (`_author: true` on a member's); rows this device sent that are not back yet
+  (moderation) come from localStorage, marked 待同步 — and draws each item's LAST
+  row: 「✓ 你选了…（时间）· 改 · 撤回」, a done 全部按建议 hides its button;
+- 撤回 posts the same item with `choice` `withdraw` — the item is unanswered again;
+- reads `./_data/replies_done.json` (`{item, state adopted | declined, note}`, base
+  rows the owning session writes with `set_data`) and marks the item 已采纳 / 未采纳
+  without a new version; the spec's `replies_done` renders the same mark statically.
+
 **The orchestrator's rule** (its agent file, 「方案页的意见表」): every plan page's
 `replies` table is read in its routine poll — `list_data_rows` `since` the last
-cursor — and each row handed to the session that made the page; that session's
-next version marks the row 已采纳 / 未采纳 (`replies_done`) and bumps the version.
-The 活页's own comment box (bottom right, anchored to a selected sentence) also
-reaches it: `list_feedback` returns the sentence, `reply_feedback` answers on the
-page.
+cursor — and each item's last row handed to the session that made the page. A
+withdraw is handed on too; if that session already acted on the item, it says
+whether it can go back and either does or reports why not.
+
+What the 活页 does not give yet (asked of 24haowan): a row's server time / id in
+`GET` (hence the page's own `at`), which member wrote it (`_author` is a flag),
+the author's own held rows, a reader deleting their own row (hence `withdraw`
+rows). The 活页's own comment box (bottom right, a selected sentence) reaches the
+orchestrator too: `list_feedback` returns the sentence, `reply_feedback` answers on
+the page.
 
 ## The sections
 

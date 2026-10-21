@@ -29,9 +29,11 @@
 #      opens on file:line + excerpt; 问题与原因 / 目标 / 解决方案 are the sections
 #      (#cause / #charter anchors inside); the 上线后怎么验收 card shows what · 在哪取
 #      · 通过标准 in the plan and adds status + slot once building (proof filled);
-#      `feedback` puts the table + version on <body>, a form per 需要你定的事 row,
-#      「有意见」 per step / card, one 全部按建议 + 「我要逐条改」, all folded until
-#      body.fb-open (the frame's CSS + script); replies_done marks 已采纳 / 未采纳;
+#      `feedback` puts the table + version on <body>; every item answers on its own
+#      (a div.fbi: 需要你定的事 rows behind a small 改, 「有意见」 per step / card, one
+#      全部按建议); the frame's script posts {item, choice, note, version, at}, reads
+#      the table back on load (+ localStorage), draws each item's last row with 改 ·
+#      撤回 (withdraw = a row) and reads <table>_done; replies_done marks it too;
 #      an OLD spec still renders its shared folds and draws fold-row / accept.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -252,19 +254,25 @@ st_hasnt "plan: no status" "$PAGE" '待取'
 st_hasnt "plan: no slot" "$PAGE" 'class="slot"'
 st_has "feedback: the table on <body>" "$PAGE" '<body data-fb-table="replies" data-fb-version="v1">'
 st_has "feedback: a step's entry" "$PAGE" 'data-say="cause-1"'
-st_has "feedback: a card's entry" "$PAGE" 'id="say-card-A" data-item="card-A" hidden'
-st_has "feedback: a decision row" "$PAGE" 'data-item="signoff-2"'
-st_has "feedback: one nod" "$PAGE" 'data-item="nod" data-choice="全部按建议"><button>全部按建议</button>'
-st_has "feedback: 我要逐条改" "$PAGE" '<button type="button" class="fb-more" aria-expanded="false">我要逐条改</button>'
-st_has "feedback: the route is one small line" "$PAGE" '<p class="fb-note">ⓘ'
-st_has "folded until 我要逐条改" "$(cat "$T")" 'body:not(.fb-open) .say-btn,body:not(.fb-open) form.pick,body:not(.fb-open) form.say{display:none!important}'
-st_has "the frame posts to the page's own table" "$(cat "$T")" 'fetch("./_data/"+d.fbTable'
+st_has "feedback: a card answers on its own" "$PAGE" '<div class="fbi" data-item="card-A" data-kind="say"><span class="fbs"></span><form class="fbf say" id="say-card-A" data-item="card-A" hidden>'
+st_has "feedback: a decision row, its own 改" "$PAGE" '<div class="fbi" data-item="signoff-2" data-kind="pick"><span class="fbs"></span><button type="button" class="fb-edit">改</button><form class="fbf pick" data-item="signoff-2" hidden>'
+st_has "feedback: one nod" "$PAGE" '<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>全部按建议</button>'
+st_hasnt "feedback: no global switch" "$PAGE" 'fb-more'
+st_has "feedback: the route is one small line" "$PAGE" '<p class="fb-note">ⓘ 每一项都能单独改、单独撤回'
+TPL=$(cat "$T")
+st_has "the frame posts to the page's own table, stamped" "$TPL" 'version:D().fbVersion||"",at:new Date().toISOString()'
+st_has "it reads the table back on load" "$TPL" 'fetch("./_data/"+t+".json",{credentials:"include"})'
+st_has "this device's unsynced rows from localStorage" "$TPL" 'localStorage.getItem(KEY())'
+st_has "each item's LAST row wins" "$TPL" 'function last(rows)'
+st_has "a withdraw is a row" "$TPL" 'post(null,item,"withdraw","",'
+st_has "a submitted nod hides its button" "$TPL" '.fbi.done form.nod{display:none}'
+st_has "已采纳 / 未采纳 from the live _done table" "$TPL" 'fetch("./_data/"+t+"_done.json"'
 G=$(python3 "$P" render "$TMP/g.json") || st_fail "render the build-phase spec"
 st_has "build: status" "$G" '<span class="pill ">已取</span>'
 st_has "build: a failed item" "$G" '<span class="pill crit">未通过</span>'
 st_has "build: an empty slot" "$G" '<div class="slot">待回填：截图 / 终端输出 / 链接</div>'
 st_has "build: the proof filled in" "$G" '<figure class="got"><pre>A 收到：C 完成</pre><figcaption>04:52Z</figcaption></figure>'
-st_has "replies_done marks the row" "$G" '<span class="pill muted">未采纳</span> 先不推微信'
+st_has "replies_done marks the row" "$G" '<p class="fb-done" data-for="signoff-1"><span class="pill muted">未采纳</span> 先不推微信'
 st_has "a card with nothing to open has no fold" "$G" '<div class="ob" id="m-Z">
 <div class="card">'
 OLD=$(python3 "$P" render "$TMP/gold.json") || st_fail "render an old spec"
@@ -275,5 +283,13 @@ w=$(printf '%s' "$OLD" | bash "$L" --lint - 2>&1 >/dev/null)
 st_has "old spec: lint says move evidence to the steps" "$w" 'WARN fold-row: 证据没挂到步骤'
 st_has "old spec: lint says move how to the rows" "$w" 'WARN fold-row: 量法没挂到行'
 st_has "old spec: lint says make the acceptance card" "$w" 'WARN accept: 上线证据还是一行折叠'
+w=$(python3 - "$EX" <<'PY3' | python3 "$P" render - | bash "$L" --lint - 2>&1 >/dev/null
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["charter"]["do"].append("真正没人可送时提醒你（面板一行 + 微信），不再只写进文件")
+print(json.dumps(d, ensure_ascii=False))
+PY3
+)
+st_has "a long 做 item draws brevity" "$w" 'WARN brevity: 做 / 不做一项一句、≤ 20 字'
 
 st_done

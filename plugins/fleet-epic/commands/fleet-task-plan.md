@@ -79,18 +79,24 @@ renders as a plain line — never an arrow onto nothing (lint `empty-fold`). An 
 spec (`steps` [[…]] + `cause.evidence`, `metrics` [[…]] + `metrics_how`, a one-line
 `evidence`) still renders, and the lint asks to migrate it (`fold-row`, `accept`).
 
-**页内反馈** (T764): the page is a live page, so the operator answers ON it. With
-`feedback` set the page shows ONE button, 「全部按建议」, and 「我要逐条改」 beside it;
-that one opens a 按建议 / 改成… choice on every 需要你定的事 row and a 「有意见」 line
-under every 原因 step and card. Each submit POSTs `{item, choice, note, version}` to
-the page's own table — `item` is `signoff-<n>` · `cause-<step>` · `card-<key>` ·
-`nod`. Make the table once, right after the first publish, members-only:
-`mcp__space__set_data` (`table` "replies", `revision` 0, `rows` [], `columns`
-[item, choice, note, version], `append_open` true, `members_only` true). The
-orchestrator reads it (its 「方案页的意见表」 rule) and hands each row to the session
-that owns the page; the next version marks each one in `replies_done`
-(`{"<item>": {"state": "adopted" | "declined", "note": "一句为什么"}}`) and bumps
-`version`.
+**页内反馈** (T764): the page is a live page, so the operator answers ON it, each
+item on its own: a small 「改」 under every 需要你定的事 row (按建议 / 改成… + a note),
+「有意见」 on every 原因 step and card, one 「全部按建议」 — each opens or posts THAT item
+only. A submit POSTs `{item, choice, note, version, at}` to the page's own table —
+`item` is `signoff-<n>` · `cause-<step>` · `card-<key>` · `nod`; a withdraw is the same
+item with `choice` `withdraw`. On load the page reads the table back (`GET
+./_data/replies.json` returns the reviewed rows; rows this device sent that are not
+back yet come from localStorage, marked 待同步) and draws each item's LAST row — what
+was chosen, when, 改 · 撤回; a done 全部按建议 hides its button. Make the tables once,
+right after the first publish:
+`mcp__space__set_data` `replies` (`revision` 0, `rows` [], `columns` [item, choice,
+note, version, at] — a column the table lacks is dropped from a row, `append_open`
+true, `members_only` true) and `replies_done` (`columns` [item, state, note],
+`append_open` false). The orchestrator reads `replies` (its 「方案页的意见表」 rule)
+and hands each item's last row to the session that owns the page; that session marks
+it by writing `replies_done` (`{item, state: adopted | declined, note}` — the page
+shows it at once, no new version) — `replies_done` in the spec renders the same mark
+into the page itself.
 
 The **two-layer rules are epic-page's** (`skills/epic-page/SKILL.md`, rules 0 and
 16–24 of `/fleet-epic-plan` step 4): plain words, no keys, file names or

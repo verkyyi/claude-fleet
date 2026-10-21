@@ -284,13 +284,20 @@
   .sol{display:grid;gap:8px}
   .so{border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:10px 14px}
   .so .sk{font-weight:600;font-size:.9rem} .so .sv{color:var(--ink-2);font-size:.88rem;margin:2px 0 8px}
-  /* folded by default: one 全部按建议 shows; 「我要逐条改」 (body.fb-open) brings out every row's choice and
-     every 「有意见」 */
-  body:not(.fb-open) .say-btn,body:not(.fb-open) form.pick,body:not(.fb-open) form.say{display:none!important}
-  .fb-bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:6px}
-  form.nod button{font-size:.95rem;padding:10px 22px;background:var(--accent);color:#fff}
-  .fb-more{font:inherit;font-size:.84rem;background:none;border:0;color:var(--accent);cursor:pointer;padding:6px 0}
-  .fb-more::after{content:" ▸"} body.fb-open .fb-more::after{content:" ▾"}
+  /* each item answers on its own (T764 v4): a state line (.fbs, from the page's table — what you chose,
+     when, 改 · 撤回), a small 改 / 有意见 that opens THIS item's form only; a submitted 全部按建议 hides
+     its button and says so */
+  .fbi{margin-top:6px}
+  .fbs:empty{display:none}
+  .fbs{display:inline-flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline;font-size:.8rem;color:var(--ok);margin-right:8px}
+  .fbs .t{color:var(--ink-3)}
+  .fb-edit,.fb-undo{font:inherit;font-size:.76rem;background:none;border:0;color:var(--accent);cursor:pointer;padding:2px 0}
+  .fb-undo{color:var(--ink-3)}
+  .fbi.done>.fb-edit{display:none}
+  .fbi.done form.nod{display:none}
+  .xt .fbi{padding:0 12px 6px} .xt .fbi:has(.fbs:empty):has(form[hidden]){display:none}
+  form.nod{margin-top:6px} form.nod button{font-size:.95rem;padding:10px 22px;background:var(--accent);color:#fff}
+  .fb-mark{display:inline-block;margin-left:6px}
   .fb-note{font-size:.74rem;color:var(--ink-3);margin:10px 0 0;max-width:none}
   .sym{margin:0 0 18px;max-width:62ch}
   .fb-done{margin:6px 0 0;font-size:.8rem;color:var(--ink-2)}
@@ -319,32 +326,83 @@ document.addEventListener("click",function(e){
   [].forEach.call(ss,function(s,j){s.hidden=j!==i});
   [].forEach.call(bs,function(x,j){x.classList.toggle("on",j===i);x.setAttribute("aria-pressed",j===i?"true":"false")});
 });
-/* 页内反馈 (T764): on a page whose <body> says data-fb-table, 「有意见」 opens its one-line form and every
-   form.fbf POSTs {item, choice, note, version} to ./_data/<table> — the page's own members-only table. */
+/* 页内反馈 (T764): on a page whose <body> says data-fb-table, every item answers on its own. A form.fbf POSTs
+   {item, choice, note, version, at} to ./_data/<table> (the page's own members-only table); on load the page
+   reads that table back (GET returns its reviewed rows; this device's unsynced ones from localStorage), takes
+   each item's LAST row and draws it: what you chose, when, 改 · 撤回 (a withdraw is a row with choice
+   "withdraw"). ./_data/<table>_done.json — {item, state adopted|declined, note}, written by the session that
+   owns the page — puts 已采纳 / 未采纳 on the item without a new version. */
+(function(){
+var D=function(){return document.body&&document.body.dataset||{};};
+var KEY=function(){return "fleet-fb:"+location.pathname+":"+D().fbTable;};
+function cache(){try{return JSON.parse(localStorage.getItem(KEY())||"[]");}catch(e){return [];}}
+function remember(r){try{var c=cache();c.push(r);localStorage.setItem(KEY(),JSON.stringify(c.slice(-200)));}catch(e){}}
+function esc(s){return String(s).replace(/"/g,'\\"');}
+function fbi(item){return document.querySelector('.fbi[data-item="'+esc(item)+'"]');}
+function when(at){if(!at)return "";var d=new Date(at);if(isNaN(d))return "";
+  return (d.getMonth()+1)+"/"+d.getDate()+" "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);}
+function el(tag,cls,txt){var x=document.createElement(tag);if(cls)x.className=cls;if(txt!=null)x.textContent=txt;return x;}
+function draw(item,r){
+  var b=fbi(item); if(!b) return; var s=b.querySelector(".fbs"); if(!s) return;
+  s.textContent=""; b.classList.remove("done");
+  if(!r||r.choice==="withdraw") return;
+  var k=b.getAttribute("data-kind");
+  var what=k==="nod"?"✓ 已按建议":k==="say"?"✓ 你的意见："+(r.note||""):"✓ 你选了："+(r.choice||"")+(r.note?"："+r.note:"");
+  s.appendChild(el("span","",what)); var w=when(r.at); if(w) s.appendChild(el("span","t",w));
+  if(r.pending) s.appendChild(el("span","t","（待同步）"));
+  if(k!=="nod"){var e=el("button","fb-edit","改");e.type="button";s.appendChild(e);}
+  var u=el("button","fb-undo","撤回");u.type="button";s.appendChild(u);
+  b.classList.add("done");
+}
+function last(rows){var m={};rows.forEach(function(r){if(r&&r.item&&r._author!==false){var p=m[r.item];
+  if(!p||!r.at||!p.at||r.at>=p.at)m[r.item]=r;}});return m;}
+function load(){
+  var t=D().fbTable; if(!t) return;
+  fetch("./_data/"+t+".json",{credentials:"include"}).then(function(x){if(!x.ok)throw 0;return x.json();})
+  .then(function(rows){return rows;},function(){return null;})
+  .then(function(rows){
+    var srv=last(rows||[]), loc=last(cache());
+    Object.keys(loc).forEach(function(i){var a=srv[i],b=loc[i],same=a&&a.choice===b.choice&&(a.note||"")===(b.note||"");
+      var newer=!a||(a.at&&b.at?b.at>a.at:!same&&b.at&&Date.now()-new Date(b.at)<6e5);  // not on the server yet (moderation)
+      if(!same&&newer){b=Object.assign({},b);if(rows)b.pending=true;srv[i]=b;}});
+    Object.keys(srv).forEach(function(i){draw(i,srv[i]);});
+  });
+  fetch("./_data/"+t+"_done.json",{credentials:"include"}).then(function(x){if(!x.ok)throw 0;return x.json();})
+  .then(function(rows){(rows||[]).forEach(function(r){
+    var b=fbi(r.item); if(!b||document.querySelector('.fb-done[data-for="'+esc(r.item)+'"]')) return;
+    var p=el("span","pill fb-mark"+(r.state==="adopted"?"":" muted"),r.state==="adopted"?"已采纳":"未采纳");
+    b.appendChild(p); if(r.note) b.appendChild(el("span","t"," "+r.note));});},function(){});
+}
+function post(f,item,choice,note,st){
+  var r={item:item,choice:choice,note:note,version:D().fbVersion||"",at:new Date().toISOString()};
+  if(st){st.className="st";st.textContent="提交中…";}
+  return fetch("./_data/"+D().fbTable,{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",
+    body:JSON.stringify(r)})
+  .then(function(x){if(!x.ok)throw new Error(x.status===403?"只收工作区成员，请先登录":"HTTP "+x.status);
+    remember(r); draw(item,r); if(f) f.hidden=!f.classList.contains("nod");
+    if(st){st.className="st ok";st.textContent=choice==="withdraw"?"已撤回":"✓ 已收到 · 会转给执行会话";}})
+  .catch(function(e){if(st){st.className="st err";st.textContent="没交上："+e.message;}});
+}
 document.addEventListener("click",function(e){
-  var m=e.target.closest&&e.target.closest(".fb-more"); if(!m) return;
-  var on=document.body.classList.toggle("fb-open"); m.setAttribute("aria-expanded",on?"true":"false");
-  m.textContent=on?"收起逐条":"我要逐条改";
-});
-document.addEventListener("click",function(e){
-  var b=e.target.closest&&e.target.closest(".say-btn"); if(!b) return;
+  var c=e.target.closest&&e.target.closest(".say-btn,.fb-edit,.fb-undo"); if(!c) return;
   e.preventDefault(); e.stopPropagation();
-  var f=document.getElementById("say-"+b.getAttribute("data-say")); if(!f) return;
-  f.hidden=!f.hidden; if(!f.hidden){var i=f.querySelector("input[name=note]"); if(i) i.focus();}
+  var b=c.closest(".fbi"), item=c.getAttribute("data-say")||(b&&b.getAttribute("data-item"));
+  b=b||fbi(item); if(!b) return;
+  var f=b.querySelector("form.fbf");
+  if(c.classList.contains("fb-undo")){post(null,item,"withdraw","",b.querySelector(".st")); return;}
+  if(f){f.hidden=!f.hidden; if(!f.hidden){var i=f.querySelector("input[name=note]"); if(i) i.focus();}}
 },true);
 document.addEventListener("submit",function(e){
-  var f=e.target, d=document.body.dataset; if(!f.classList||!f.classList.contains("fbf")||!d.fbTable) return;
+  var f=e.target; if(!f.classList||!f.classList.contains("fbf")||!D().fbTable) return;
   e.preventDefault();
   var st=f.querySelector(".st"), c=f.querySelector("input[name=choice]:checked"), n=f.querySelector("input[name=note]");
   var choice=f.getAttribute("data-choice")||(c?c.value:""), note=n?n.value.trim():"";
+  if(f.classList.contains("say")&&note) choice="意见";
   if(!choice&&!note){st.className="st err";st.textContent="先选一项或写一句";return;}
-  st.className="st";st.textContent="提交中…";
-  fetch("./_data/"+d.fbTable,{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",
-    body:JSON.stringify({item:f.getAttribute("data-item"),choice:choice,note:note,version:d.fbVersion||""})})
-  .then(function(r){if(!r.ok)throw new Error(r.status===403?"只收工作区成员，请先登录":"HTTP "+r.status);
-    st.className="st ok";st.textContent="✓ 已收到 · 会转给执行会话";})
-  .catch(function(err){st.className="st err";st.textContent="没交上："+err.message;});
+  post(f,f.getAttribute("data-item"),choice,note,st);
 });
+if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",load); else load();
+})();
 </script>
 </head>
 <body>
@@ -636,16 +694,17 @@ document.addEventListener("submit",function(e){
 </div>
 <p class="lede" style="margin-top:14px">⟨before the nod: 「点头即全部按建议。」 · after: 「发起人 @login YYYY-MM-DD 拍板：全部按建议执行，worker 照做，不再讨论方向。」⟩</p>
 <!-- 页内反馈 (T764) — a page published as a live page answers ON the page: <body data-fb-table="replies"
-     data-fb-version="v⟨N⟩">, the table made members-only (set_data … append_open members_only), each
-     row of the table above ALSO as a form, a 「有意见」 under any card (say-btn + form.say), one 点头
-     button. The frame's script posts them; the orchestrator polls the table (SKILL.md 「页内反馈」).
-     Drop this block for a page that is not a live page. -->
+     data-fb-version="v⟨N⟩">, the table made members-only (set_data … append_open members_only, columns
+     item / choice / note / version / at). Each item answers on its own: a div.fbi per row of the table
+     above (a small 改 → 按建议 / 改成…), a 「有意见」 (say-btn + div.fbi with form.say) under any card,
+     one 全部按建议. The frame's script posts them, reads them back on load and draws each item's state
+     (改 · 撤回); ⟨table⟩_done marks 已采纳 / 未采纳. Drop this block for a page that is not a live page. -->
 <div class="sol">
 <div class="so"><div class="sk">⟨事项⟩</div><div class="sv">⟨建议⟩</div>
-<form class="fbf pick" data-item="signoff-1"><label><input type="radio" name="choice" value="按建议"> 按建议</label><label><input type="radio" name="choice" value="改成"> 改成…</label><input name="note" placeholder="改成什么 / 备注（可选）" maxlength="300"><button>提交</button><span class="st"></span></form>
+<div class="fbi" data-item="signoff-1" data-kind="pick"><span class="fbs"></span><button type="button" class="fb-edit">改</button><form class="fbf pick" data-item="signoff-1" hidden><label><input type="radio" name="choice" value="按建议"> 按建议</label><label><input type="radio" name="choice" value="改成"> 改成…</label><input name="note" placeholder="改成什么 / 备注（可选）" maxlength="300"><button>提交</button><span class="st"></span></form></div>
 </div>
 </div>
-<form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>点头：全部按建议</button><span class="st"></span></form>
+<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>全部按建议</button><span class="st"></span></form><span class="fbs"></span></div>
 </section>
 
 <!-- §9 preflight — PLAN ONLY, AFTER the decisions (issue #881), and ONLY WHEN THERE IS

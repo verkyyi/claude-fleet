@@ -143,29 +143,35 @@ def say_btn(item):
 
 
 def done_mark(item):
+    """已采纳 / 未采纳 for an item, from the spec's replies_done (the page also reads the
+    live `<table>_done` table on load — a mark written there needs no new version)."""
     d = (FB.get("done") or {}).get(item)
     if not d:
         return ""
     word, cls = {"adopted": ("已采纳", ""), "declined": ("未采纳", "muted")}.get(d.get("state"), (d.get("state", ""), "muted"))
-    return '<p class="fb-done"><span class="pill %s">%s</span> %s</p>\n' % (cls, word, d.get("note", ""))
+    return '<p class="fb-done" data-for="%s"><span class="pill %s">%s</span> %s</p>\n' % (
+        html.escape(item, quote=True), cls, word, d.get("note", ""))
 
 
 def say_form(item):
-    """The one-line 「有意见」 form: hidden until its button is tapped."""
+    """One item's 「有意见」 (a step, a card): its state line — filled by the frame's script
+    from the page's own table — and a one-line form, hidden until its button is tapped."""
     e = html.escape(item, quote=True)
-    return ('<form class="fbf say" id="say-%s" data-item="%s" hidden><input name="note" placeholder="一句话写意见" '
-            'maxlength="300"><button>提交</button><span class="st"></span></form>\n%s' % (e, e, done_mark(item)))
+    return ('<div class="fbi" data-item="%s" data-kind="say"><span class="fbs"></span>'
+            '<form class="fbf say" id="say-%s" data-item="%s" hidden><input name="note" placeholder="一句话写意见" '
+            'maxlength="300"><button>提交</button><span class="st"></span></form></div>\n%s' % (e, e, e, done_mark(item)))
 
 
 def choose_form(item):
-    """A 需要你定的事 row: 按建议 / 改成… + an optional note."""
+    """A 需要你定的事 row: its state line, a small 「改」 that opens 按建议 / 改成… + a note
+    on this row only."""
     e = html.escape(item, quote=True)
-    return ('<form class="fbf pick" data-item="%s"><label><input type="radio" name="choice" value="按建议"> 按建议</label>'
+    return ('<div class="fbi" data-item="%s" data-kind="pick"><span class="fbs"></span>'
+            '<button type="button" class="fb-edit">改</button>'
+            '<form class="fbf pick" data-item="%s" hidden><label><input type="radio" name="choice" value="按建议"> 按建议</label>'
             '<label><input type="radio" name="choice" value="改成"> 改成…</label>'
             '<input name="note" placeholder="改成什么 / 备注（可选）" maxlength="300"><button>提交</button>'
-            '<span class="st"></span></form>\n%s' % (e, done_mark(item)))
-
-
+            '<span class="st"></span></form></div>\n%s' % (e, e, done_mark(item)))
 
 
 def detail(v):
@@ -393,10 +399,10 @@ def render(spec):
     o.append('<p class="lede" style="margin-top:14px">%s</p>\n'
              % (g("signoff_note") or "点头即全部按建议，派一个执行会话做，一个改动说明合并。"))
     if FB:      # one button shows; every per-row / per-card entry waits behind 「我要逐条改」
-        o.append('<div class="fb-bar"><form class="fbf nod" data-item="nod" data-choice="全部按建议">'
-                 '<button>全部按建议</button><span class="st"></span></form>'
-                 '<button type="button" class="fb-more" aria-expanded="false">我要逐条改</button></div>\n%s' % done_mark("nod"))
-        o.append('<p class="fb-note">ⓘ 你在本页的表态进本页的意见表，编排每 %s读一次、转给做这件事的会话；下一版逐条标已采纳 / 未采纳。</p>\n'
+        o.append('<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议">'
+                 '<button>全部按建议</button><span class="st"></span></form><span class="fbs"></span></div>\n%s' % done_mark("nod"))
+        o.append('<p class="fb-note">ⓘ 每一项都能单独改、单独撤回；你的表态存在本页，编排每 %s读一次、转给做这件事的会话，'
+                 '处理后在那一项上标已采纳 / 未采纳。执行会话已动手后再撤回，它会回你能不能退回。</p>\n'
                  % FB.get("poll", "12 分钟"))
     o.append("</section>\n\n")
     ev = g("evidence")
