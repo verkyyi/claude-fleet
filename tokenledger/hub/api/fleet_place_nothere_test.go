@@ -176,3 +176,63 @@ func TestNodePlaceTaskRepoCase(t *testing.T) {
 		t.Fatalf("place(%s) = %d %v; want the task placed", mixed, st, out)
 	}
 }
+
+// A no-repo session is placed like any other (claude-fleet T742): a scratch
+// that names no repo is a candidate on every machine of the person's — even
+// one hosting none of the asker's repos — and the start that goes there says
+// no_repo, never a repo; a no-repo task's record travels with it.
+func TestNodePlaceNoRepoScratch(t *testing.T) {
+	h := newFleetHarness(t)
+	caps := []string{control.CapRead, control.CapWrite, control.CapLaunch}
+	macD := connectWriteNodeCaps(t, h, h.enroll(t, "mac-d"), caps...)
+	macC := connectWriteNodeCaps(t, h, h.enroll(t, "mac-c"), caps...)
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", "acme/other", "/u/frank/other", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5) // busy
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)  // idle, hosts none of mac-d's repos
+	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
+	})
+	macC.setOpGet(startedFixture)
+	tok := h.tokens["mac-d"]
+
+	// A repo'd scratch never leaves the machines that host the repo.
+	if st, out := placeCall(t, h, tok, map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": f5.FleetID}); st != 200 || out["local"] != true {
+		t.Fatalf("place(repo) = %d %v; want LOCAL mac-d (mac-c hosts no %s)", st, out, writeRepo)
+	}
+	// No repo: the idle machine, whatever it hosts.
+	st, out := placeCall(t, h, tok, map[string]any{"repo": "", "kind": "scratch", "fleet_id": f5.FleetID,
+		"body": "drive the batch", "as": "epic-driver", "idempotency_key": "nr-1"})
+	if st != 200 || out["local"] != false || out["placement"].(map[string]any)["machine"] != "mac-c" {
+		t.Fatalf("place(no repo) = %d %v; want REMOTE mac-c", st, out)
+	}
+	if macC.count() != 1 || macD.count() != 0 {
+		t.Fatalf("writes mac-c=%d mac-d=%d; want one start, mac-c's", macC.count(), macD.count())
+	}
+	params := macC.writes[0]["params"].(map[string]any)
+	if params["no_repo"] != true || params["repo"] != nil || params["kind"] != "scratch" || params["as"] != "epic-driver" || params["body"] != "drive the batch" {
+		t.Fatalf("mac-c was sent %v; want a no_repo scratch with its seed and agent file", params)
+	}
+	// A no-repo task: its record (no repo) is accepted and rides the start.
+	d := map[string]any{"version": 1, "request_id": "nr-task-1", "requested_agent": "claude", "resolved_agent": "claude", "agent_source": "explicit"}
+	st, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath, map[string]any{"authority_version": 1, "token": "nr-task-1",
+		"title": "EPIC: x", "requested_agent": "claude", "resolved_agent": "claude",
+		"request_payload": map[string]any{"dispatch": d, "title": "EPIC: x"}})
+	if st != 200 {
+		t.Fatalf("accept: %d %v", st, rec)
+	}
+	d["task"], d["generation"], d["attempt_id"] = rec["id"], rec["generation"], rec["attempt_id"]
+	st, out = placeCall(t, h, tok, map[string]any{"repo": "", "kind": "scratch", "fleet_id": f5.FleetID,
+		"dispatch": d, "idempotency_key": "nr-task-1"})
+	if st != 200 || macC.count() != 2 {
+		t.Fatalf("place(no-repo task) = %d %v; want it sent to mac-c", st, out)
+	}
+	params = macC.writes[1]["params"].(map[string]any)
+	if params["no_repo"] != true || params["repo"] != nil || params["task"] != rec["id"] {
+		t.Fatalf("mac-c was sent %v; want the no-repo task %v", params, rec["id"])
+	}
+	// An issue start still names its repo.
+	if st, _ := placeCall(t, h, tok, map[string]any{"repo": "", "issue": 9, "worker_id": issueWID(f5.FleetID, 9)}); st != 400 {
+		t.Fatalf("issue with no repo = %d; want 400", st)
+	}
+}

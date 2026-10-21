@@ -68,6 +68,9 @@
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   norepo-never-placed                             dash-raw-session.sh (a no-repo task asks with no repo),
+#                                                   fleet_agent_file_travels (fleet-lib.sh: a plugin's agent file);
+#                                                   the hub half is tokenledger/hub/api fleet_place.go (go test)
 #   place-full-no-next / place-slow-bypass          fleet_hub_place (fleet-lib.sh: --not-here, rc 11, place_ms,
 #                                                   fleet_hub_place_ms), dash-issue-session.sh / dash-raw-session.sh
 #                                                   (CAP_HELD → the ask), fleet_agent_file_travels; the hub half is
@@ -4280,6 +4283,24 @@ drill_place_slow_bypass() {
   go_half '^Test(ForwarderOneConnectionManyAsks|TransportFallsBackDirect|TransportHTTPSHubOverSocket)$' ./shared/hubfwd; [ $? = 1 ] && return 1
   SECS=$(since "$t0")
   WHAT="带种子的会话（dispatch --spawn）与 --as fleet-worker 一样先问入口；入口调用走 agent 保温的转发口（多次一条连接）；每次放置记 place_ms，日志读 p90（${out}）"
+}
+
+drill_norepo_never_placed() {
+  CAP=30; local t0 out
+  t0=$(now)
+  # the record-less rule only: a no-repo session bound to its task is the hub's
+  grep -q '{ \[ "\$NOREPO" = 1 \] && \[ -z "\$TASK_REF" \]; }' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh keeps every no-repo session here again, past the hub"; return 1; }
+  grep -q "\[ \"\$NOREPO\" = 1 \] && _prepo=''" "$BIN/dash-raw-session.sh" \
+    || { WHY="a no-repo session asks the hub with the fleet's repo — only that repo's machines"; return 1; }
+  # a plugin's shipped agent file (the EPIC driver) travels like the core's
+  out=$(bash -c '. "$1/fleet-lib.sh"; for n in epic-driver fleet-epic:epic-driver fleet-worker; do
+      fleet_agent_file_travels "$n" || echo "no:$n"; done
+    for n in nosuch fleet-epic:nosuch ../x a:b:c; do fleet_agent_file_travels "$n" && echo "yes:$n"; done; :' _ "$BIN")
+  [ -z "$out" ] || { WHY="fleet_agent_file_travels: $out"; return 1; }
+  go_half '^TestNodePlaceNoRepoScratch$' ./hub/api; [ $? = 1 ] && return 1
+  SECS=$(since "$t0")
+  WHAT="带任务记录的不绑仓库会话问入口、不按仓库筛候选、开到别台带 no_repo；epic-driver 这类插件模板随发布旅行；无记录的仍本机开"
 }
 
 # ---- one primary state source (issue #2537, EPIC #2535 C2) ------------------------
