@@ -148,6 +148,17 @@ var hubSettings = map[string]hubSetting{
 			}
 			return v, ""
 		}},
+	DoorAddressKey: {def: "", help: "the door's one address for everyone (A5SQ): host or host:port (default port 22022) — the phone page's default way in; \"\" = none",
+		check: func(_ *Server, v string) (string, string) {
+			v = strings.ToLower(strings.TrimSpace(v))
+			if v == "" {
+				return "", ""
+			}
+			if _, _, ok := doorAddress(v); !ok {
+				return "", DoorAddressKey + " is a host name or address, optionally :port (door.example.com:22022), or \"\" for none"
+			}
+			return v, ""
+		}},
 	RoutesExtraKey: {def: "", help: "more ways in, on top of CCQUOTA_FLEET_ROUTES: the same JSON array",
 		check: func(_ *Server, v string) (string, string) {
 			ms, err := ParseFleetRoutes(v)

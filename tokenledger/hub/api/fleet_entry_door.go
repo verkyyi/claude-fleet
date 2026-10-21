@@ -127,6 +127,10 @@ type EntryDoor struct {
 	// Jump: for a home that is a pod behind the door, the one line a phone's
 	// Jump host or a bare ssh copies (claude-fleet#4193); "" otherwise.
 	Jump string `json:"jump,omitempty"`
+	// Shared: the door's one address for everyone (A5SQ) — the phone's default
+	// way in when the door takes this person home; the fields above are then
+	// the advanced, machine-direct way. nil = the page as before.
+	Shared *EntryShared `json:"shared,omitempty"`
 	// HostFP: the SHA256 fingerprint of the host key the address answers with
 	// (the home's entry, or the door's for a pod) — what a phone is asked to
 	// trust once after a home move (T702); "" until one was seen.
@@ -153,6 +157,7 @@ func (s *Server) entryDoorOf(v EntryView, now time.Time) EntryDoor {
 			d.Jump = entryJumpLine(d.Address, d.Port, d.Login,
 				s.jumpTarget(page.Home.Machine, s.entryAddrMachine(page.Home.Machine, now), now))
 		}
+		d.Shared = s.doorShared(page.Home.Machine, d.Login, now)
 	}
 	return d
 }
