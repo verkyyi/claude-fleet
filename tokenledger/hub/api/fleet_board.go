@@ -24,9 +24,9 @@ import (
 // worker_id, else the record's: a record and the session doing it are ONE row.
 //
 //	pin   置顶     the session is pinned (@pin)
-//	ask   等你     it asks (needs · blocked), failed, or its record waits on you
-//	                (asked, no session); a record that failed / did not start in
-//	                the last boardAskFor
+//	ask   等你     it asks (needs · blocked), its agent failed, or its record
+//	                waits on you (asked, no session); a record that failed or did
+//	                not start with no session left is 已收起 (the ✦ messages say it)
 //	work  在干活   working · looping
 //	queue 排队中   up, waiting on something not you (idle · its turn ended ·
 //	                unknown · its record already ended), or a record whose
@@ -41,7 +41,6 @@ import (
 const (
 	boardGoneDays = 7
 	boardGoneMax  = 300
-	boardAskFor   = 24 * time.Hour
 )
 
 // BoardRow is one row of the list.
@@ -94,6 +93,9 @@ func taskEnd(t store.FleetTask) string {
 		switch t.Outcome {
 		case store.TaskSucceeded, store.TaskFailed, store.TaskCancelled, store.TaskRefused:
 			return t.Outcome
+		}
+		if t.State == store.TaskClosed {
+			return store.TaskClosed // a settled record (fleet_task_settle), whatever its outcome word
 		}
 		return ""
 	}
@@ -278,8 +280,6 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 				continue
 			}
 			r.Group, r.Tag = "gone", "ended"
-		case (end == store.TaskFailed || end == store.TaskRefused) && now.Sub(t.UpdatedAt) < boardAskFor:
-			r.Group, r.Tag = "ask", end
 		default:
 			if t.UpdatedAt.Before(since) {
 				continue
@@ -290,6 +290,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			}
 			if end == store.TaskClosed {
 				r.Tag = "ended"
+			}
+			if r.Group == "gone" && end == store.TaskRefused {
+				r.Tag = "refused"
 			}
 		}
 		if b != nil {

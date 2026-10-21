@@ -2166,6 +2166,11 @@ def board_apply(board, groups, shut, gone, here, me):
             used.add(id(e))
             if r.get("title"):
                 e["text"] = r["title"]
+            if g != "gone" and e.get("gone"):
+                # a closed session here, its record still open on the hub: the
+                # record's row (counted, nothing to act on — it is not running)
+                e.pop("gone", None)
+                e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
         e["word"] = board_words(r)
         e["depth"] = int(r.get("depth") or 0)
@@ -3936,6 +3941,12 @@ ACTIONS = [
      "local": lambda r, a, f: sh("fleet-transfer.sh", "--from-panel", "--session", f, "--window", r["target"], "--to",
                                  other_agent(r).lower()),
      "far": far("agent"), "ask": None, "slow": True},
+    # 在 WebChat 里继续 (task T810): this login's own session only — another
+    # machine's, or a Codex one before the page has Codex, is shown grey with why
+    {"id": "webchat", "label": lambda r: say("view_act_webchat"),
+     "when": lambda r: (live(r) and bool(r.get("fid"))) or far_live(r),
+     "local": lambda r, a, f: sh("fleet-webchat-handoff.sh", "to-web", "fid:" + r["fid"]),
+     "far": lambda r, a, f: ["bash", "-c", 'printf "%s\\n" "$1" >&2; exit 2', "_", webchat_why(r)], "ask": None},
     {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": far("reap"), "ask": "key",
      "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",
@@ -4020,7 +4031,7 @@ def menu_of(r):
 # in ACTIONS for `fleet view-act` and the command line, and are done from
 # elsewhere (进入 answers and resumes; ⌃\ the shell; ⌃T the pin). A
 # reaped session's one item is 恢复.
-PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "reap")
+PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "webchat", "reap")
 
 
 def page_of(r, missing=None):
@@ -4036,8 +4047,21 @@ def page_of(r, missing=None):
         why = ""
         if aid == "agent":
             why = str((missing or {}).get(other_agent(r).lower(), "") or "")
+        if aid == "webchat":
+            why = webchat_why(r)
         out.append((a, label, why))
     return out
+
+
+def webchat_why(r):
+    """Why 「在 WebChat 里继续」 cannot run for row `r` ("" = it can): WebChat
+    adopts a session of THIS login only (task T810), and Claude's until the page
+    has a Codex side (FLEET_WEBCHAT_CODEX=1)."""
+    if r.get("far"):
+        return say("view_webchat_why_far")
+    if r.get("agent") == "codex" and os.environ.get("FLEET_WEBCHAT_CODEX") != "1":
+        return say("view_webchat_why_codex")
+    return ""
 
 
 def act_ask(a, r):

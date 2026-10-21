@@ -373,6 +373,9 @@ while :; do
   [ "$intmux" = 1 ] || exit "$rc"
   # The fleet made it exit (it stamped @wrap_quiet).
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
+  # Handed to WebChat (task T810, fleet-webchat-handoff.sh): the conversation goes on
+  # there — the page says so and ↵ takes it back once WebChat is not answering.
+  handed=$(opt @handoff_web)
   # A launch that never came up (claude missing, a refused resume, a one-shot
   # `--version`): the caller's own failure path decides, as it always did.
   # Its rc stays on the pane too: tmux ≤3.4 can leave #{pane_dead_status} empty
@@ -453,6 +456,7 @@ while :; do
   case "$rc" in 0|130)
     [ -z "$failed" ] && close_n=$(close_secs) ;;
   esac
+  [ "$handed" = 1 ] && close_n=0 && pargs+=(--handed web)
   [ "$close_n" -gt 0 ] && pargs+=(--close-in "$close_n")
   # The personal layer (#1862): absent on this login → nothing passed, the page as before.
   pers=''
@@ -484,7 +488,9 @@ while :; do
   # the silent window for one that had finished.
   # A task record's agent that went down is 「已掉」 on its ID (T642) — the fleet's
   # own exits (@wrap_quiet) returned above, so this is a crash, a kill or a person.
-  if [ -z "$failed" ]; then
+  if [ "$handed" = 1 ]; then
+    fail_told=''
+  elif [ -z "$failed" ]; then
     fail_told=''
     say_start dropped "agent 退出（rc ${rc}，跑了 ${dur} 秒），窗口停在恢复页" ''
   elif [ -z "$fail_told" ]; then
@@ -493,9 +499,21 @@ while :; do
     say_start not_started "${_w}（${fail_why:-rc $rc}）${fail_line:+：$fail_line}" \
       "the session did not start: ${failed} failed (${fail_why:-rc $rc})${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window waits on the recovery page — retry it there or reap it"
   fi
-  python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"}
-  act=$?
-  case "$act" in 10|11|12|13|14) ;; *) plain_page "$rc"; act=$? ;; esac
+  hnote=()
+  while :; do
+    python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"} ${hnote[@]+"${hnote[@]}"}
+    act=$?
+    case "$act" in 10|11|12|13|14) ;; *) plain_page "$rc"; act=$? ;; esac
+    # ↵ on a handed page: back to the terminal only while WebChat is not answering
+    if [ "$act" = 10 ] && [ "$(opt @handoff_web)" = 1 ]; then
+      if hsay=$(bash "$BIN/fleet-webchat-handoff.sh" to-terminal --agent "$agent" --sid "$sid" --fid "$(opt @fleet_id)" 2>&1); then
+        wset -u @handoff_web; break
+      fi
+      hnote=(--note "$(printf '%s' "$hsay" | tail -n 1)")
+      continue
+    fi
+    break
+  done
   # 14 — the countdown ran out: what q does, logged as such (issue #3170)
   if [ "$act" = 14 ]; then
     [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s auto-close after=%ss\n' \

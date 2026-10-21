@@ -149,6 +149,32 @@ const QuotaBanner: FC = () => {
   );
 };
 
+// a terminal session holds the conversation (task T810): the page reads along,
+// says where it is and whether it is answering; idle, one tap takes it back
+const OwnerBanner: FC = () => {
+  const { owner, takeOver, taking } = useChat();
+  if (!owner) return null;
+  return (
+    <div role="status" data-testid="owner-banner"
+      className="border-border bg-card mx-auto flex w-full max-w-xl items-center gap-2 rounded-full border py-1.5 ps-4 pe-1.5 text-[13px] leading-snug shadow-xs">
+      <span className={`size-2 shrink-0 rounded-full ${owner.busy ? "bg-clay animate-pulse" : "bg-muted-foreground/50"}`} />
+      <span className="min-w-0 flex-1 truncate">
+        {owner.busy ? tr("正在终端里回答…", "Answering in the terminal…") : tr("这段对话在终端里", "In the terminal")}
+        {owner.label ? <span className="text-muted-foreground font-mono text-[12px]"> · {owner.label}</span> : null}
+        {owner.machine ? <span className="text-muted-foreground hidden font-mono text-[12px] sm:inline"> · {owner.machine}</span> : null}
+      </span>
+      <Button size="sm" className="shrink-0 rounded-full" disabled={owner.busy || taking} onClick={() => void takeOver()}>
+        {owner.busy ? tr("等它答完", "Wait for it") : taking ? tr("接过来…", "Taking over…") : tr("在这里继续", "Continue here")}
+      </Button>
+    </div>
+  );
+};
+// the composer's top: whoever stops the person typing says so — the terminal first, then the limit
+const ComposerTop: FC = () => {
+  const { owner } = useChat();
+  return owner ? <OwnerBanner /> : <QuotaBanner />;
+};
+
 // no conversation to reach: say why, and the one thing to do about it
 const GATE_WORDS = (): Record<string, { title: string; body: string; href?: string; action?: string }> => ({
   no_home: {
@@ -371,11 +397,17 @@ function LiveChat() {
             </p> : null}
             <StillHere open={!!beat.beat?.warn} secs={beat.beat?.pause_in_secs ?? 0} onStay={beat.stillHere} onPause={beat.pause} />
             <SyncChip sync={chat.sync} />
+            {chat.handed && !chat.owner ? <p role="status" data-testid="handed" className="text-muted-foreground px-4 pt-2 text-center text-[13px]">
+              {tr("已从终端接过来", "Picked up from the terminal")}{chat.handed.label ? <span className="font-mono text-[12px]"> · {chat.handed.label}</span> : null}
+              {tr(" · 历史完整，接着说", " · the whole history is here; go on")}
+            </p> : null}
             {notice ? <p className="text-destructive px-4 pt-2 text-center text-sm">{notice}</p> : null}
             <div className="min-h-0 flex-1">
               {over ? <TrialOver trial={trial} /> : gate ? <GatePage gate={gate} home={home} onRetry={chat.reload} /> : (
-                <Thread autoFocus={false} placeholder={chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
-                  components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ComposerTools, ComposerTop: QuotaBanner }} />
+                <Thread autoFocus={false} placeholder={chat.owner
+                    ? (chat.owner.busy ? tr("终端里正在回答，这里只读", "The terminal is answering; read-only here") : tr("点「在这里继续」接过来再说", "Tap “Continue here” to take it over"))
+                    : chat.budget ? tr("额度恢复后可以继续", "You can go on once the limit frees up") : undefined}
+                  components={{ Welcome, ToolFallback: ToolStep, ComposerStart: ComposerTools, ComposerTop }} />
               )}
             </div>
           </div>

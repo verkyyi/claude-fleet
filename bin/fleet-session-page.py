@@ -52,7 +52,7 @@ import unicodedata
 # The page's own render helpers (they were borrowed from fleet_sleep_park.py
 # until the sleep page went its own way — T545).
 ANSI = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])')
-BOLD, DIM, RED, YELLOW, RESET = '\x1b[1m', '\x1b[2m', '\x1b[31m', '\x1b[33m', '\x1b[0m'
+BOLD, DIM, RED, YELLOW, GREEN, RESET = '\x1b[1m', '\x1b[2m', '\x1b[31m', '\x1b[33m', '\x1b[32m', '\x1b[0m'
 SGR_MOUSE = re.compile(r'\x1b\[<(\d+);(\d+);(\d+)([Mm])')
 
 
@@ -100,7 +100,8 @@ TEXT = {
            'resume': '重开', 'resume_new': '新开对话', 'retry': '重试启动', 'list': '回列表',
            'new': '新对话', 'quit': '关窗口', 'personal': '不带个人配置重开',
            'closing': '{n} 秒后关闭 · 按任意键取消', 'closing_short': '{n} 秒后关闭',
-           'retrying': '{n} 秒后自动重试 · 按任意键取消', 'retrying_short': '{n} 秒后重试'},
+           'retrying': '{n} 秒后自动重试 · 按任意键取消', 'retrying_short': '{n} 秒后重试',
+           'handed': '已在 WebChat 里继续', 'take_back': '拿回终端'},
     'en': {'ended': 'Session ended', 'crashed': 'Session exited unexpectedly',
            'unpushed': 'Unpushed: {n} commits (branch {b})', 'unpushed_nob': 'Unpushed: {n} commits',
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
@@ -112,16 +113,19 @@ TEXT = {
            'resume': 'reopen', 'resume_new': 'new conversation', 'retry': 'retry the launch', 'list': 'list',
            'new': 'new chat', 'quit': 'close window', 'personal': 'reopen without personal config',
            'closing': 'closing in {n}s · any key cancels', 'closing_short': 'closing in {n}s',
-           'retrying': 'retrying in {n}s · any key cancels', 'retrying_short': 'retrying in {n}s'},
+           'retrying': 'retrying in {n}s · any key cancels', 'retrying_short': 'retrying in {n}s',
+           'handed': 'Continued in WebChat', 'take_back': 'take it back'},
 }
 
 
-def headline(rc, words, failed='', why=''):
+def headline(rc, words, failed='', why='', handed=False):
     """What happened, in a few words: 0 / 130 are the agent ending on its own (the
     person's /exit, Ctrl+D, Ctrl+C twice), anything else — a failure, a signal
     (137 = kill -9) — is 「意外退出」. A relaunch from this line that died at once
     (failed = resume | new) names that instead, and so does a launch the
     launcher itself refused (failed = launch, issue #2404)."""
+    if handed and not failed:
+        return words['handed'], GREEN
     if failed in ('resume', 'new', 'launch'):
         head = words['failed_' + failed]
         if why in ('conversation', 'auth', 'cred', 'cred_unknown', 'account'):
@@ -131,12 +135,13 @@ def headline(rc, words, failed='', why=''):
     return words['crashed'], RED
 
 
-def keys_line(words, personal='', retry=False, enter_new=False):
+def keys_line(words, personal='', retry=False, enter_new=False, handed=False):
     """The keys, the two the person needs first: ↵ and ⌘P (the client's switch);
-    r / q / p after them, dimmer."""
-    enter = words['retry' if retry else 'resume_new' if enter_new else 'resume']
+    r / q / p after them, dimmer. Handed to WebChat (task T810): ↵ takes it back,
+    and there is no new chat here — the conversation is the one in WebChat."""
+    enter = words['take_back' if handed else 'retry' if retry else 'resume_new' if enter_new else 'resume']
     line = BOLD + '↵' + RESET + ' ' + enter + ' · ' + BOLD + '⌘P' + RESET + ' ' + words['list']
-    tail = 'r ' + words['new'] + ' · q ' + words['quit']
+    tail = 'q ' + words['quit'] if handed else 'r ' + words['new'] + ' · q ' + words['quit']
     if personal == 'on': tail += ' · p ' + words['personal']
     return line + DIM + '   ' + tail + RESET
 
@@ -146,7 +151,8 @@ def render(facts, cols, rows=None):
     the one line — what happened · the keys. Each fits `cols` - 1 cells."""
     cols = max(int(cols), 10)
     words = TEXT[facts.get('lang') or ui_lang()]
-    head, color = headline(int(facts.get('rc', 0)), words, facts.get('failed') or '', facts.get('why') or '')
+    handed = facts.get('handed') == 'web'
+    head, color = headline(int(facts.get('rc', 0)), words, facts.get('failed') or '', facts.get('why') or '', handed)
     above = []
     n = int(facts.get('unpushed') or 0)
     if n > 0:
@@ -155,9 +161,10 @@ def render(facts, cols, rows=None):
     off = int(facts.get('hooks_off') or 0)
     if off > 0: above.append((YELLOW, words['hooks_off'].format(n=off, w=facts.get('hooks_off_what') or '')))
     if facts.get('personal') == 'off': above.append((DIM, words['personal_off']))
+    if facts.get('note'): above.append((RED, facts['note']))
     lines = [color + clip(text, cols - 1) + RESET for color, text in above]
     enter_new = facts.get('agent') == 'codex' and not facts.get('sid')
-    keys = keys_line(words, facts.get('personal') or '', bool(facts.get('retry')), enter_new)
+    keys = keys_line(words, facts.get('personal') or '', bool(facts.get('retry')), enter_new, handed)
     # the countdown (issue #3170) rides after the headline; narrow, it first
     # shortens to 「N 秒后关闭」 — a key on the line never makes way for it
     n = int(facts.get('close_in') or 0)
@@ -177,7 +184,7 @@ def render(facts, cols, rows=None):
     return '\n'.join(lines + [line])
 
 
-def choice(chunk, key_row, personal=False):
+def choice(chunk, key_row, personal=False, handed=False):
     """The first press a read holds: ↵ (or a left click on the keys row) resumes,
     r starts new, q recycles, p (only when offered) reopens without the personal
     layer. None = nothing on this page's keys (discarded)."""
@@ -189,7 +196,7 @@ def choice(chunk, key_row, personal=False):
     text = re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|[@-Z\\-_])', '', text)
     for ch in text:
         if ch in '\r\n': return RESUME
-        if ch in 'rR': return NEW
+        if ch in 'rR' and not handed: return NEW
         if ch in 'qQ': return QUIT
         if personal and ch in 'pP': return PERSONAL
     return None
@@ -244,12 +251,15 @@ def main():
                    help='close the window (exit 14) after N seconds unless a key is pressed; 0 = never (#3170)')
     p.add_argument('--retry-in', type=int, default=0,
                    help='with --retry: press ↵ by itself (exit 10) after N seconds unless a key is pressed (#4112)')
+    p.add_argument('--handed', default='', choices=['', 'web'],
+                   help='the conversation went on in WebChat (task T810): ↵ takes it back, no r')
+    p.add_argument('--note', default='', help='one red line above (why ↵ did not take it back yet)')
     p.add_argument('--print', action='store_true', help='draw once at 80 columns and exit 0 (selftest)')
     a = p.parse_args()
     facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'unpushed': a.unpushed,
              'branch': a.branch, 'failed': a.failed, 'why': a.why,
              'retry': a.retry, 'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what,
-             'close_in': max(a.close_in, 0), 'auto': AUTO_CLOSE}
+             'close_in': max(a.close_in, 0), 'auto': AUTO_CLOSE, 'handed': a.handed, 'note': a.note}
     if a.retry and a.retry_in > 0:
         facts['close_in'], facts['auto'] = a.retry_in, RESUME
     if a.print:
@@ -290,7 +300,7 @@ def main():
         deadline = time.monotonic() + facts['close_in'] if facts['close_in'] else None
         if deadline and early and is_key(early):
             deadline = None; facts['close_in'] = 0; redraw()
-        pick = choice(early, key_row, a.personal == 'on') if early else None
+        pick = choice(early, key_row, a.personal == 'on', a.handed == 'web') if early else None
         if pick: return pick
         while True:
             wait = None
@@ -315,7 +325,7 @@ def main():
                 if not chunk: return 1          # the pane's input went away
                 if deadline is not None and is_key(chunk):
                     deadline = None; facts['close_in'] = 0; redraw()
-                pick = choice(chunk, key_row, a.personal == 'on')
+                pick = choice(chunk, key_row, a.personal == 'on', a.handed == 'web')
                 if pick: return pick
     finally:
         try:

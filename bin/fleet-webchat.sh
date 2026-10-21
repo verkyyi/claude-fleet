@@ -24,6 +24,10 @@
 #                                     move webchat — the state dir (conversation.json,
 #                                     chain, transcripts/) goes to <login>'s home, the
 #                                     server there puts the transcripts back
+#   fleet-webchat.sh continue fid:<session id>
+#                                     在 WebChat 里继续 (task T810, ⌘P's actions page
+#                                     too): that session's conversation goes on in the
+#                                     web chat — bin/fleet-webchat-handoff.sh to-web
 #   fleet-webchat.sh status           one line: socket on · pid, local on · port, or off
 #
 # Idle: the server exits 75 after FLEET_WEBCHAT_IDLE_SECS (7200) with no turn and
@@ -228,6 +232,8 @@ case "${1:-status}" in
   disable) disable ;;
   ensure) ensure ;;
   move) shift; move "$@" ;;
+  # 在 WebChat 里继续 (task T810): that session's conversation goes on in the web chat
+  continue) shift; exec bash "$BIN/fleet-webchat-handoff.sh" to-web "$@" ;;
   start) local_on; start ;;
   link) local_on; shift; link "${1:-open}" ;;
   stop) stop ;;
@@ -237,5 +243,5 @@ case "${1:-status}" in
     else echo off; fi
     c=$(claude_bin) && echo "claude · $c" || echo "claude · not found — a turn cannot start (FLEET_CLAUDE_BIN, or put claude on PATH)" ;;
   -h|--help|help) sed -n '2,54p' "$0" ;;
-  *) die "usage: fleet-webchat.sh serve|enable|disable|ensure|move --to <login>|status   (FLEET_WEBCHAT_LOCAL=1: start|link [--tailnet|--print]|stop)" 2 ;;
+  *) die "usage: fleet-webchat.sh serve|enable|disable|ensure|move --to <login>|continue fid:<session id>|status   (FLEET_WEBCHAT_LOCAL=1: start|link [--tailnet|--print]|stop)" 2 ;;
 esac
