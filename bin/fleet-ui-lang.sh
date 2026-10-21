@@ -634,6 +634,36 @@ fleet_ui_t() {
     # hub's worker_switch picks the active one there
     zh:view_act_agent_fmt)      printf '换成 %s' "${1:-}" ;;
     en:view_act_agent_fmt)      printf 'Switch to %s' "${1:-}" ;;
+    # 在 WebChat 里继续 (task T810): this session's conversation goes on in the
+    # person's web chat; the terminal stops on its end page and ↵ takes it back
+    zh:view_act_webchat)        printf '在 WebChat 里继续' ;;
+    en:view_act_webchat)        printf 'Continue in WebChat' ;;
+    zh:view_webchat_why_far)    printf '这段会话不在你的家机器上' ;;
+    en:view_webchat_why_far)    printf 'this session is not on your home machine' ;;
+    zh:view_webchat_why_codex)  printf '网页对话还没有 Codex' ;;
+    en:view_webchat_why_codex)  printf 'WebChat has no Codex yet' ;;
+    zh:webchat_done)            printf '已交给 WebChat，网页已打开；终端这边 ↵ 可拿回' ;;
+    en:webchat_done)            printf 'Handed to WebChat and opened; ↵ in the terminal takes it back' ;;
+    zh:webchat_term_busy)       printf '正在终端里回答，答完再试' ;;
+    en:webchat_term_busy)       printf 'Answering in the terminal — try when it is done' ;;
+    zh:webchat_web_busy)        printf 'WebChat 正在回答，答完再试' ;;
+    en:webchat_web_busy)        printf 'WebChat is answering — try when it is done' ;;
+    zh:webchat_web_busy_wait)   printf 'WebChat 正在回答…，答完再按 ↵' ;;
+    en:webchat_web_busy_wait)   printf 'WebChat is answering… press ↵ when it is done' ;;
+    zh:webchat_no_sid)          printf '这段会话还没有对话号（还没说过话）' ;;
+    en:webchat_no_sid)          printf 'This session has no conversation yet' ;;
+    zh:webchat_no_codex)        printf '网页对话还没有 Codex，这段先在终端里继续' ;;
+    en:webchat_no_codex)        printf 'WebChat has no Codex yet — keep this one in the terminal' ;;
+    zh:webchat_already)         printf '这段对话已经在 WebChat 里了' ;;
+    en:webchat_already)         printf 'This conversation is already in WebChat' ;;
+    zh:webchat_gone)            printf '找不到这个会话的窗口' ;;
+    en:webchat_gone)            printf "Cannot find this session's window" ;;
+    zh:webchat_down)            printf '这台机器上的 WebChat 起不来（fleet-webchat.sh status）' ;;
+    en:webchat_down)            printf 'WebChat does not start on this machine (fleet-webchat.sh status)' ;;
+    zh:webchat_refused_fmt)     printf 'WebChat 没接：%s' "${1:-}" ;;
+    en:webchat_refused_fmt)     printf 'WebChat refused: %s' "${1:-}" ;;
+    zh:webchat_stop_failed)     printf '终端里的会话没停下来，没有交接' ;;
+    en:webchat_stop_failed)     printf 'The terminal session did not stop; nothing was handed over' ;;
     zh:view_act_reap)           printf '回收…' ;;
     en:view_act_reap)           printf 'Reap…' ;;
     zh:view_act_reapall)        printf '回收这一组' ;;

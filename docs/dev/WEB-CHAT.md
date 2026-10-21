@@ -265,6 +265,28 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 正在跑：同一响应的 `busy`（及 `turn`）；`busy` 为真时不要在别处接着写这一段。这一版的锁只在服务进程里（`live`），
   终端那一侧的锁由另一个任务接上。
 
+### 终端和网页接着聊（T810）
+
+同一段对话在终端会话和网页之间来回接力，同一时刻只一边在答。
+
+- **交给网页**：⌘P 选中会话 → Tab →「在 WebChat 里继续」（`fleet-webchat.sh continue fid:<会话>` 同一条路，
+  `bin/fleet-webchat-handoff.sh to-web`）。两边都不在答才走：家机器服务的 `POST /api/adopt`（只走 socket，入口不转）
+  接管这段会话——按会话号在 `~/.claude/projects/*/<id>.jsonl` 找到记录和它的目录，原来那段对话按「新对话」的规则
+  收起留档（`conversation.json` 的 `put_away`）；记录写成 webchat 拿着；窗口里的 agent 用 fleet 自己的 `/exit` 停下，停在结束页
+  「已在 WebChat 里继续 · ↵ 拿回终端」（`@handoff_web 1`，回收器不收它）；网页在操作者此刻的设备上打开。
+- **谁拿着**：`$FLEET_CONF_DIR/convo-lock/<agent>-<sid>.json`（`{holder: terminal|webchat, window_fid, label, machine}`），
+  只经 `bin/fleet-convo-lock.py` 写。「在答」不存，每次现看：终端 = 窗口的 `fleet_reap_state`，网页 = socket 的
+  `GET /api/state`。没有这份记录 = 从没交接过，一切照旧。
+- **终端拿着时**：`/api/conversation` 多一个 `owner {where: terminal, busy, label, machine}`，页面输入框灰、上方一条
+  「正在终端里回答…」或「这段对话在终端里 · 在这里继续」，每 3 秒跟着读；`/api/turn` 409 `code: terminal`。
+  「在这里继续」= `/v1/chat/take` → `/api/take` → `fleet-webchat-handoff.sh to-webchat-take`：终端在答就 409
+  `terminal_busy`，空闲就停下它、记录改成 webchat。
+- **拿回终端**：结束页 ↵ → `to-terminal`：网页在答就原地一行「WebChat 正在回答…，答完再按 ↵」，否则记录改成 terminal、
+  服务关掉它的热进程（`/api/release`），再按原样续同一个会话号——网页上说的几轮都在。
+- Codex：网页有 Codex 一侧（R9A2）之前，Codex 会话的那一项灰着说「网页对话还没有 Codex」；`FLEET_WEBCHAT_CODEX=1`
+  打开 handoff 一侧，服务端 adopt 要随 R9A2 的 provider 一起接。
+- 测试：`bin/fleet-webchat-handoff-selftest.sh`（隔离 tmux socket + 桩 agent + 桩 WebChat）、`fleet-webchat-selftest.sh --only=handoff`。
+
 ## 浏览器上下文（#4034）
 
 模型知道人此刻从哪儿、用什么在说话：

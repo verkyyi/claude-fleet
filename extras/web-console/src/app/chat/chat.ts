@@ -67,6 +67,13 @@ export type Gate = { code: string; msg: string };
 // The copy beside the entry: being checked against the home · matches it ·
 // the home is out of reach (the copy is what shows).
 export type Sync = "" | "syncing" | "synced" | "offline";
+// Which side holds the conversation (task T810): a terminal session it was handed
+// to, answering or idle — the page is then read-only and follows it; absent =
+// this page. `handed`: it came over from a terminal session (said once, on top).
+export type Owner = { where: "terminal"; busy: boolean; label?: string; machine?: string; agent?: string } | null;
+export type Handed = { from: "terminal"; label?: string; at?: string } | null;
+// how often a page reads the conversation while a terminal session holds it
+const OWNER_POLL_MS = 3000;
 const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
@@ -226,6 +233,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   // The copy beside the entry (task V9DJ D): shown first, marked syncing until
   // the home answers; the home's answer replaces it. "" = no copy in play.
   const [sync, setSync] = useState<Sync>("");
+  const [owner, setOwner] = useState<Owner>(null);
+  const [handed, setHanded] = useState<Handed>(null);
   const hadCopy = useRef(false);
   // the home has answered this page once: from then on only the home is shown
   const homeSeen = useRef(false);
@@ -307,10 +316,14 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     setAsks(j.asks || []);
     setResume(j.session ? { id: j.session, cwd: j.cwd } : null);
     setBusy(!!j.busy);
+    const o = j.owner && j.owner.where === "terminal" ? j.owner : null;
+    setOwner(o ? { where: "terminal", busy: !!o.busy, label: o.label, machine: o.machine, agent: o.agent } : null);
+    setHanded(j.handed && j.handed.from === "terminal" ? j.handed : null);
     turnId.current = j.turn || null;
     setLoaded(true);
-    // a turn this page did not start (or lost): follow it
+    // a turn this page did not start (or lost): follow it; a terminal holding it: follow that
     if (j.busy && !streaming.current) follow.current = window.setTimeout(load, 2500);
+    else if (o) follow.current = window.setTimeout(load, OWNER_POLL_MS);
   }, []);
 
   useEffect(() => {
@@ -445,12 +458,25 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   }, [own, budget.until, load]);
   const stop = own ? budget : blockedBy?.blocked ? blockedBy : null;
 
+  // 在这里继续 (task T810): take the conversation back from an idle terminal session
+  const [taking, setTaking] = useState(false);
+  const takeOver = useCallback(async () => {
+    setTaking(true);
+    try {
+      const r = await chatFetch(`${API}/take`, { method: "POST", headers: H, body: "{}" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) setNotice(j.error || tr("没接过来，稍后再试", "Could not take it over; try again"));
+    } catch { setNotice(tr("没接过来，稍后再试", "Could not take it over; try again")); }
+    setTaking(false);
+    await load();
+  }, [load]);
+
   const runtime = useExternalStoreRuntime<Msg>({
     messages,
     convertMessage: (m) => m as ThreadMessageLike,
     isRunning: busy,
     isLoading: !loaded,
-    isDisabled: !!stop,
+    isDisabled: !!stop || !!owner,
     onNew,
     onCancel,
     onRespondToToolApproval,
@@ -458,5 +484,5 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     adapters: { attachments: new SimpleImageAttachmentAdapter() },
   });
 
-  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync };
+  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync, owner, handed, takeOver, taking };
 }

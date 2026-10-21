@@ -87,7 +87,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,links,send,pages,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,media,links,send,pages,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -505,6 +505,76 @@ if (part("trial")) {
     "N a second import onto B is refused 409");
   ok(/"ev":"imported"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "N the log says imported");
   await sstop(b);
+}
+// ---- T: the terminal ⇄ this page (task T810) -------------------------------------------
+if (part("handoff")) {
+  mkdirSync(homeOf("h"), { recursive: true });
+  SSTATE = stateOf("h"); SOCK = join(SSTATE, "chat.sock");
+  const LOCKD = join(HT, "locks"), HLOG = join(HT, "handoff.log"), hsh = join(HT, "handoff.sh");
+  const OWNER = join(HT, "owner.json"), TBUSY = join(HT, "tbusy");
+  mkdirSync(LOCKD, { recursive: true });
+  // bin/fleet-webchat-handoff.sh's two answers the server asks for, stubbed
+  writeFileSync(hsh, `#!/bin/bash
+echo "$*" >>${JSON.stringify(HLOG)}
+case "$1" in
+  owner) cat ${JSON.stringify(OWNER)} ;;
+  to-webchat-take) [ -f ${JSON.stringify(TBUSY)} ] && { echo "正在终端里回答，答完再试" >&2; exit 3; }; echo ok ;;
+esac
+`, { mode: 0o755 });
+  const hs = (await sstart(["--socket"], { ...asHome("h"), FLEET_WEBCHAT_HANDOFF: hsh, FLEET_WEBCHAT_LOCKDIR: LOCKD })).p;
+  ok((await sturn("网页里先说一句")).lines.at(-1)?.t === "done", "T the page's own conversation first");
+  // the terminal's session: its transcript where Claude Code keeps it, cwd on every line
+  const TID = "99999999-8888-4777-8666-555555555555", TCWD = join(homeOf("h"), "proj");
+  mkdirSync(TCWD, { recursive: true });
+  const tdir = join(homeOf("h"), ".claude", "projects", mangle(TCWD));
+  mkdirSync(tdir, { recursive: true });
+  writeFileSync(join(tdir, TID + ".jsonl"), [
+    { type: "user", cwd: TCWD, message: { role: "user", content: "终端里第一句" } },
+    { type: "assistant", cwd: TCWD, message: { content: [{ type: "tool_use", id: "tt1", name: "Bash", input: { command: "ls" } }] } },
+    { type: "user", cwd: TCWD, message: { content: [{ type: "tool_result", tool_use_id: "tt1", content: "a.txt" }] } },
+    { type: "assistant", cwd: TCWD, message: { content: [{ type: "text", text: "终端的回答" }] } },
+  ].map((m) => JSON.stringify(m)).join("\n") + "\n");
+  const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
+  const adopt = (b, headers = H) => sreq("/api/adopt", { method: "POST", headers, body: b });
+  ok((await adopt({ agent: "claude", session: TID }, { "Content-Type": "application/json" })).status === 403, "T adopt without the page's header is refused");
+  const cx = await adopt({ agent: "codex", session: TID });
+  ok(cx.status === 409 && JSON.parse(cx.body).code === "no_codex", "T a Codex session is refused until the page has Codex");
+  ok((await adopt({ agent: "claude", session: "../etc" })).status === 400, "T a bad session id is refused 400");
+  ok((await adopt({ agent: "claude", session: "00000000-0000-4000-8000-000000000000" })).status === 404, "T a session with no transcript here is 404");
+  const ad = await adopt({ agent: "claude", session: TID, label: "scratch-20", machine: "mm", fid: "f" });
+  ok(ad.status === 200, `T adopt the terminal's session (${ad.status} ${ad.body})`);
+  let c = JSON.parse((await sreq("/api/conversation")).body);
+  ok(c.session === TID && c.cwd === TCWD, `T the page's conversation is the terminal's session, in its cwd (${c.session} ${c.cwd})`);
+  ok(c.items.some((i) => i.t === "user" && i.text === "终端里第一句") && c.items.some((i) => i.t === "tool" && i.id === "tt1") &&
+    c.items.some((i) => i.t === "text" && i.d === "终端的回答") && !c.items.some((i) => i.t === "user" && i.text === "网页里先说一句"),
+    "T the whole terminal history is on the page, the old one is not");
+  ok(c.handed?.from === "terminal" && c.handed.label === "scratch-20", "T the page says it came over from the terminal");
+  const kept = JSON.parse(readFileSync(join(SSTATE, "conversation.json"), "utf8")).put_away || [];
+  ok(kept.length === 1 && kept[0].session === SID, "T the page's own conversation is put away and kept (新对话's rule), not lost");
+  // the terminal holds it: the page reads along, a turn is refused
+  writeFileSync(join(LOCKD, `claude-${TID}.json`), JSON.stringify({ holder: "terminal", window_fid: "f" }));
+  writeFileSync(OWNER, JSON.stringify({ holder: "terminal", busy: true, label: "scratch-20", machine: "mm" }));
+  c = JSON.parse((await sreq("/api/conversation")).body);
+  ok(c.owner?.where === "terminal" && c.owner.busy === true && c.owner.label === "scratch-20" && !c.handed,
+    `T the terminal holds it and is answering: said on the page (${JSON.stringify(c.owner)})`);
+  const tb = await sreq("/api/turn", { method: "POST", headers: H, body: { text: "插一句" } });
+  ok(tb.status === 409 && JSON.parse(tb.body).code === "terminal", "T a turn while the terminal holds it is refused 409 terminal");
+  writeFileSync(TBUSY, "");
+  const t1 = await sreq("/api/take", { method: "POST", headers: H, body: {} });
+  ok(t1.status === 409 && JSON.parse(t1.body).code === "terminal_busy" && /终端里回答/.test(JSON.parse(t1.body).error),
+    "T 在这里继续 while the terminal answers: refused, saying where");
+  unlinkSync(TBUSY);
+  ok((await sreq("/api/take", { method: "POST", headers: H, body: {} })).status === 200, "T 在这里继续 once it is idle");
+  ok(readFileSync(HLOG, "utf8").includes(`to-webchat-take --agent claude --sid ${TID}`), "T take goes through fleet-webchat-handoff.sh");
+  writeFileSync(join(LOCKD, `claude-${TID}.json`), JSON.stringify({ holder: "webchat", window_fid: "f" }));
+  ok((await sturn("网页接着说")).lines.at(-1)?.t === "done" && JSON.parse(readFileSync(ENVLOG, "utf8")).resume === TID,
+    "T the page holds it again: the next turn resumes the terminal's session");
+  c = JSON.parse((await sreq("/api/conversation")).body);
+  ok(!c.owner && !c.handed, "T after a turn here: no owner line, the 已从终端接过来 line said once");
+  const st = JSON.parse((await sreq("/api/state")).body);
+  ok(st.busy === false && st.session === TID, "T /api/state: not answering, this session");
+  ok(/"ev":"adopted"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "T the log says adopted");
+  await sstop(hs);
 }
 // ---- P: images (task T773) -------------------------------------------------------------
 if (part("media")) {

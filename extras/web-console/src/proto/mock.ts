@@ -15,10 +15,20 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   // 试用中 (claude-fleet#4059): a trial person — running, its last line, spent
   trial?: "running" | "last" | "capped";
   // 试用成员 (claude-fleet T796): an approved member's trial limits on /v1/me/usage
-  member?: "ok" | "soon" | "spent" | "expired" };
+  member?: "ok" | "soon" | "spent" | "expired";
+  // 终端 ⇄ WebChat (claude-fleet T810): a terminal session holds the conversation, answering or idle; or it was just handed here
+  own?: "term_busy" | "term_idle" | "handed" };
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
+
+// the terminal's last turns (T810): what a session there said before it came over
+const termItems: Record<string, unknown>[] = [
+  { t: "user", text: "顺便把华南那块按城市再拆一下" },
+  { t: "tool", id: "tt1", name: "Bash", summary: "python3 split_cities.py sales-w41.xlsx" },
+  { t: "tool_result", id: "tt1", text: "广州 ¥402,110 · 深圳 ¥351,870 · 佛山 ¥152,140" },
+  { t: "text", d: "华南拆好了：**广州 ¥402,110 · 深圳 ¥351,870 · 佛山 ¥152,140**，已加到看板第二页。" },
+];
 
 const ok = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -332,7 +342,9 @@ export async function install(): Promise<string> {
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
       case "/v1/chat/conversation":
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);
-        return ok({ items, asks: [], models, default: "opus", busy: false, ...(state === "over" ? { budget: { blocked: true, until: reset.toISOString() } } : {}) });
+        return ok({ items: sc.own ? [...items, ...termItems] : items, asks: [], models, default: "opus", busy: false, ...(state === "over" ? { budget: { blocked: true, until: reset.toISOString() } } : {}),
+          ...(sc.own === "term_busy" || sc.own === "term_idle" ? { owner: { where: "terminal", busy: sc.own === "term_busy", label: "scratch-20", machine: "mac-mini", agent: "claude" } } : {}),
+          ...(sc.own === "handed" ? { handed: { from: "terminal", label: "scratch-20", at: new Date().toISOString() } } : {}) });
       case "/v1/chat/turn": {
         const text = JSON.parse(String(init?.body || "{}")).text || "";
         const words = `收到：「${text}」。这是原型里的演示回复——上线后是你家机器上的 Claude 在答。`;
@@ -351,7 +363,7 @@ export async function install(): Promise<string> {
         });
         return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
       }
-      case "/v1/chat/stop": case "/v1/chat/answer": return ok({ ok: true });
+      case "/v1/chat/stop": case "/v1/chat/answer": case "/v1/chat/take": return ok({ ok: true });
     }
     return real(input, init);
   };
