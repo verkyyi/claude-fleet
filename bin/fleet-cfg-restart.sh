@@ -35,7 +35,7 @@
 # moves stable every 10-30 minutes, the reopen is a NEW window (a fresh
 # @cfg_restart_ts), and its continuation prompt ends in a done turn: a finished
 # session came back every release — a reopen notice and an 「is done」 on the
-# person's panel each time (2026-10-20 mini2: two sessions, ~70 a day). 会坏 is
+# person's panel each time (2026-10-20, a managed Mac: two sessions, ~70 a day). 会坏 is
 # never held: that one fails if it stays.
 #
 # FLEET_CFG_RESTART (EPIC #1776 decision 4: default auto):

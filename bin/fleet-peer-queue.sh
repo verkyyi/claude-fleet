@@ -76,7 +76,7 @@ BOOK="$DIR/delivery.ndjson"
 TTL="${FLEET_PEER_QUEUE_TTL:-604800}"; case "$TTL" in ''|*[!0-9]*) TTL=604800 ;; esac
 # A send relayed through the hub that nobody took in a day is undeliverable (T761):
 # its recipient's ID closed, or its machine left the hub's map — the 2026-10-20
-# book on mini2 kept four 6-day-old sends to sessions of a machine the hub no longer
+# book on a managed Mac kept four 6-day-old sends to sessions of a machine the hub no longer
 # listed, «对方能收时自动补送» forever. 0 = never.
 DEAD="${FLEET_PEER_QUEUE_DEAD_SECS:-86400}"; case "$DEAD" in ''|*[!0-9]*) DEAD=86400 ;; esac
 DEADLOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/peer-queue-dead.log"

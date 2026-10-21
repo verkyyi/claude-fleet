@@ -6080,7 +6080,7 @@ drill_reopen_folding_session() {
 
 # A cross-machine send whose recipient's ID closed and whose machine left the hub's
 # map sat QUEUED for days, «对方能收时自动补送» forever, and `status` listed nothing
-# (T761: four 6-day-old sends on mini2). Past FLEET_PEER_QUEUE_DEAD_SECS it is
+# (T761: four 6-day-old sends on a managed Mac). Past FLEET_PEER_QUEUE_DEAD_SECS it is
 # EXPIRED with one audit line and never said again.
 drill_peerq_undeliverable_forever() {
   CAP=30; local t0 d="$WORK/pqu"
