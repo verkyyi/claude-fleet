@@ -230,7 +230,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 `extras/web-chat/codex.mjs`（`server.mjs` 只多一个路由分支）：
 
 - **怎么区分**：请求带 `?provider=codex` 就是 Codex 那一段；不带（或 `claude`）就是 Claude，和以前一字不差。
-  别的值 400；这台机器没有 codex（`fleet-webchat.sh` 的 `codex_bin`，传进 `FLEET_WEBCHAT_CODEX`）时
+  别的值 400；这台机器没有 codex（`fleet-webchat.sh` 的 `codex_bin`，传进 `FLEET_WEBCHAT_CODEX_BIN`）时
   `?provider=codex` 一律 404，Claude 的 `/api/conversation` 也不带 `providers` / `others`——页面据此不显示切换排。
 - **跑在哪**：`codex app-server`（stdio 上的 JSON-RPC）。第一轮（或页面第一次读 Codex 那一段、要模型列表）才起，
   最后一轮结束后 `FLEET_WEBCHAT_WARM_SECS`（600 s）空闲就关；服务的 2 小时空闲退出把它也算上。不新增常驻进程。
@@ -290,8 +290,10 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   `terminal_busy`，空闲就停下它、记录改成 webchat。
 - **拿回终端**：结束页 ↵ → `to-terminal`：网页在答就原地一行「WebChat 正在回答…，答完再按 ↵」，否则记录改成 terminal、
   服务关掉它的热进程（`/api/release`），再按原样续同一个会话号——网页上说的几轮都在。
-- Codex：网页有 Codex 一侧（R9A2）之前，Codex 会话的那一项灰着说「网页对话还没有 Codex」；`FLEET_WEBCHAT_CODEX=1`
-  打开 handoff 一侧，服务端 adopt 要随 R9A2 的 provider 一起接。
+- Codex（R9A2 接上）：`/api/adopt` 的 `agent:"codex"` 把 Codex 的 thread 接成网页 Codex 一侧的对话（旧的那段收起留档，
+  目录取 rollout 的 `session_meta.cwd`，历史读 Codex 自己的 rollout，终端里说的几轮也在）；锁记录同一个
+  `convo-lock/codex-<thread>.json`；`/api/state` · `/api/release` · `/api/take` 带 `?provider=codex` 就是 Codex 一侧的。
+  handoff 一侧默认放行 Codex，`FLEET_WEBCHAT_CODEX=0` 关掉；这台机器没有 codex 时 adopt 回 409 `no_codex`。
 - 测试：`bin/fleet-webchat-handoff-selftest.sh`（隔离 tmux socket + 桩 agent + 桩 WebChat）、`fleet-webchat-selftest.sh --only=handoff`。
 
 ## 浏览器上下文（#4034）

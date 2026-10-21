@@ -129,7 +129,7 @@ codex_bin() { # the login's own codex for the conversation's Codex side (task R9
 
 server_env() {
   env -u TMUX -u TMUX_PANE -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT \
-    FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(claude_bin || true)" FLEET_WEBCHAT_CODEX="$(codex_bin || true)" \
+    FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(claude_bin || true)" FLEET_WEBCHAT_CODEX_BIN="$(codex_bin || true)" \
     FLEET_WEBCHAT_SESSION_CRED="$BIN/fleet-session-cred.sh" "$@"
 }
 

@@ -22,7 +22,7 @@
 //   * 新对话: the thread is put away (kept, never deleted) and the next turn
 //     starts a new one; the Claude side is not touched.
 import { spawn } from "node:child_process";
-import { promises as fsp, readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpathSync } from "node:fs";
+import { promises as fsp, readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpathSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 export const CODEX_SHOW_PAGE = "mcp__fleet_chat__show_page"; // the name toolSummary / the page already know
@@ -114,6 +114,72 @@ export function askOf(method, params) {
 const errorText = (e) => [String(e?.message || ""), String(e?.additionalDetails || "")];
 const ASK_METHODS = new Set(["item/commandExecution/requestApproval", "item/fileChange/requestApproval",
   "item/permissions/requestApproval", "item/tool/requestUserInput"]);
+
+// ---- Codex's own record of a thread (its rollout): the history a thread started in
+// a terminal brings with it (task T810 「在 WebChat 里继续」), read the way the page
+// shows a turn. <home>/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl
+export function findRollout(home, thread) {
+  if (!THREAD_RE.test(thread)) return "";
+  const root = join(home, "sessions");
+  const dirs = (d) => { try { return readdirSync(d).filter((x) => /^\d+$/.test(x)).sort().reverse(); } catch { return []; } };
+  for (const y of dirs(root)) for (const m of dirs(join(root, y))) for (const day of dirs(join(root, y, m))) {
+    const dir = join(root, y, m, day);
+    let names = []; try { names = readdirSync(dir); } catch { continue; }
+    const hit = names.find((n) => n.startsWith("rollout-") && n.endsWith(`-${thread}.jsonl`));
+    if (hit) return join(dir, hit);
+  }
+  return "";
+}
+const textOf = (c) => (Array.isArray(c) ? c.map((b) => (typeof b?.text === "string" ? b.text : "")).join("") : typeof c === "string" ? c : "");
+const pathOf = (p) => String(p || "").replace(/^file:\/\//, "");
+// its session_meta's cwd, and its items as the page's steps (images: their paths, kept by the caller)
+export function rolloutRead(raw) {
+  let cwd = "";
+  const out = [];
+  for (const l of String(raw).split("\n")) {
+    if (!l) continue;
+    let m; try { m = JSON.parse(l); } catch { continue; }
+    const p = m.payload || {};
+    if (m.type === "session_meta" && !cwd) cwd = String(p.cwd || "");
+    if (m.type !== "event_msg" || p.type !== "item_completed" || !p.item) continue;
+    const it = p.item;
+    switch (it.type) {
+      case "UserMessage": {
+        const text = textOf((it.content || []).filter((b) => /^text$/i.test(b?.type || "")));
+        const pics = (it.content || []).filter((b) => /image/i.test(b?.type || "") && (b.path || b.image_url || b.url)).map((b) => ({ path: pathOf(b.path || ""), url: b.image_url || b.url || "" }));
+        if (text || pics.length) out.push({ t: "user", text, pics });
+        break;
+      }
+      case "AgentMessage": { const d = textOf(it.content); if (d) out.push({ t: "text", d }); break; }
+      case "CommandExecution": {
+        const cmd = Array.isArray(it.command) ? it.command.at(-1) : String(it.command || "");
+        out.push({ t: "tool", id: it.id, name: "Shell", summary: `Shell · ${bareCommand(cmd).slice(0, 160)}` });
+        out.push({ t: "tool_result", id: it.id, text: cut(String(it.aggregated_output || ""), 4000) || (it.exit_code != null ? `exit ${it.exit_code}` : ""),
+          error: it.status === "failed" || it.status === "declined" || (it.exit_code != null && it.exit_code !== 0) });
+        break;
+      }
+      case "FileChange": {
+        const ch = it.changes || {};
+        const paths = Array.isArray(ch) ? ch.map((c) => c?.path).filter(Boolean) : Object.keys(ch);
+        out.push({ t: "tool", id: it.id, name: "Edit", summary: `Edit · ${paths.join(", ").slice(0, 160)}` });
+        out.push({ t: "tool_result", id: it.id, text: paths.join("\n"), error: !!it.status && it.status !== "completed" });
+        break;
+      }
+      case "DynamicToolCall": {
+        const st = itemStep({ type: "dynamicToolCall", tool: it.tool, arguments: it.arguments });
+        out.push({ t: "tool", id: it.id, ...st });
+        if (it.tool === "show_page") out.push({ t: "page_args", id: it.id, args: it.arguments || {} });
+        out.push({ t: "tool_result", id: it.id, text: textOf(it.content_items), error: it.success === false });
+        break;
+      }
+      case "McpToolCall": out.push({ t: "tool", id: it.id, name: `${it.server}.${it.tool}`, summary: `${it.server} · ${it.tool}` }); break;
+      case "ImageView": out.push({ t: "image_path", path: pathOf(it.path) }); break;
+      case "ImageGeneration": if (it.saved_path) out.push({ t: "image_path", path: pathOf(it.saved_path) }); break;
+      default: break;
+    }
+  }
+  return { cwd, items: out };
+}
 
 // the app-server over stdio: one process, line-delimited JSON-RPC
 class AppServer {
@@ -220,7 +286,7 @@ export function codexSide(d) {
           `model_providers.fleet={name="fleet",base_url="http://127.0.0.1:${cred.mint.port}/codex",env_key="FLEET_CODEX_SESSION_CRED",wire_api="responses"}`,
           "-c", "features.plugins=false");
       }
-      const s = new AppServer(d.CODEX, [...args, "app-server"], env, conv.cwd || d.CWD, onMsg, (code) => {
+      const s = new AppServer(d.CODEX, [...args, "app-server"], env, conv.cwd && existsSync(conv.cwd) ? conv.cwd : d.CWD, onMsg, (code) => {
         d.log("codex_exit", { code });
         if (srv === s) srv = null;
         if (live) endTurn({ t: "error", msg: "Codex 意外退出了，再说一次试试" });
@@ -399,8 +465,50 @@ export function codexSide(d) {
   }
 
   // ---- what the server's routes call ------------------------------------------------
+  const realHome = () => d.E.CODEX_HOME || join(d.E.HOME || "", ".codex");
+  const rollouts = new Map();                             // thread → its rollout file
+  function rolloutFile(thread) {
+    let f = rollouts.get(thread);
+    if (!f || !existsSync(f)) { f = findRollout(realHome(), thread); if (f) rollouts.set(thread, f); }
+    return f;
+  }
+  // a rollout's steps for the page: images and page cards made real
+  function fromRollout(list, cwd) {
+    const out = [];
+    const img = (path, extra = {}) => {
+      try {
+        const real = realpathSync(path);
+        const mime = d.IMAGE_EXT_MIME[real.toLowerCase().split(".").pop().replace("jpeg", "jpg")];
+        if (mime) out.push(...d.imageItems([{ type: "image", source: { type: "base64", media_type: mime, data: readFileSync(real).toString("base64") } }], extra));
+      } catch { /* gone */ }
+    };
+    for (const o of list) {
+      if (o.t === "user") {
+        const n = out.length;
+        for (const g of o.pics) if (g.path) img(g.path);
+        const pics = out.splice(n).filter((g) => g.ref).map(({ ref, w, h }) => ({ ref, w, h }));
+        out.push({ t: "user", text: o.text, ...(pics.length ? { images: pics } : {}) });
+      } else if (o.t === "image_path") img(o.path);
+      else if (o.t === "page_args") out.push(d.pageItem(o.id, o.args, cwd));
+      else {
+        out.push(o);
+        if (o.t === "text") { const files = d.filesOf(o.d, cwd); if (files) out.push({ t: "files", files }); }
+      }
+    }
+    return out;
+  }
   async function items() {
     if (!conv.thread) return [];
+    // Codex's own record first (it holds what a terminal said too); ours where there is none
+    const rf = rolloutFile(conv.thread);
+    if (rf) {
+      try {
+        const r = rolloutRead(await fsp.readFile(rf, "utf8"));
+        const out = fromRollout(r.items, conv.cwd || r.cwd || d.CWD);
+        d.saveRefs();
+        return d.capImages(out);
+      } catch { /* fall back to ours */ }
+    }
     let raw = "";
     try { raw = await fsp.readFile(record(conv.thread), "utf8"); } catch { return []; }
     const out = [];
@@ -414,7 +522,9 @@ export function codexSide(d) {
   }
   async function conversation() {
     if (available() && !models.length) start().then(() => idle()).catch(() => {});
+    const owner = conv.thread ? await d.owner(conv.thread) : null;
     return { provider: "codex", session: conv.thread, cwd: conv.cwd, busy: !!live, turn: live?.tid || "", last: conv.last,
+      ...(owner ? { owner } : {}), ...(conv.handed && !owner ? { handed: conv.handed } : {}),
       asks: live ? [...live.asks.entries()].map(([rid, a]) => ({ t: "ask", rid, ...a.ask })) : [],
       models, default: conv.model && models.some((x) => x.id === conv.model) ? conv.model : defaultModel(),
       budget: d.budgetView(), items: (await items()).slice(-600) };
@@ -423,6 +533,7 @@ export function codexSide(d) {
   async function turn(res, { text, model, images, person }) {
     if (live) return d.send(res, 409, { error: "还在回复上一句" });
     if (!available()) return d.send(res, 503, { error: "这台机器上没有 Codex" });
+    if (conv.thread && d.holder(conv.thread) === "terminal") return d.send(res, 409, { error: "这段对话在终端里", code: "terminal" });
     if (model && models.length && !models.some((m) => m.id === model)) return d.send(res, 400, { error: "model not allowed" });
     const tid = d.newSecret(9);
     let resolve;
@@ -459,7 +570,9 @@ export function codexSide(d) {
       if (!live) return;
       live.thread = conv.thread;
       emit({ t: "session", id: conv.thread, cwd: conv.cwd });
-      if (model) { conv.model = model; save(); }
+      if (model) conv.model = model;
+      if (conv.handed) delete conv.handed;               // said once: the first turn here ends it
+      save();
       const r = await s.call("turn/start", { threadId: conv.thread, input, ...(model ? { model } : {}) }, 60000);
       if (live?.tid === tid) live.turnId = live.turnId || String(r?.turn?.id || "");
       if (live?.tid === tid && live.stopping) s.call("turn/interrupt", { threadId: live.thread, turnId: live.turnId }, 10000).catch(() => {});
@@ -498,7 +611,32 @@ export function codexSide(d) {
     d.log("new_conversation", { provider: "codex" });
     return true;
   }
+  // the terminal ⇄ this page (task T810)
+  const state = () => ({ busy: !!live, session: conv.thread });
+  // the terminal took this thread back: let go of the app-server that has it open
+  function release(thread) {
+    if (thread && thread === conv.thread && !live && srv) { d.log("codex_release"); srv.kill(); }
+  }
+  // 在 WebChat 里继续: the terminal's thread becomes this side's conversation; the
+  // one it had is put away and kept (新对话's rule) → [code, msg, why?]
+  function adopt(body) {
+    const id = String(body?.session || "");
+    if (!THREAD_RE.test(id)) return [400, "not a thread id"];
+    if (live) return [409, "还在回复上一句", "busy"];
+    if (id === conv.thread) return [200, "already"];
+    const rf = rolloutFile(id);
+    if (!rf) return [404, "no Codex record for this thread here"];
+    let cwd = "";
+    try { cwd = rolloutRead(readFileSync(rf, "utf8")).cwd; } catch { /* the home then */ }
+    if (conv.thread) conv.put_away = [...(conv.put_away || []), { thread: conv.thread, at: new Date().toISOString() }].slice(-200);
+    const label = String(body?.label || "").slice(0, 80);
+    conv = { ...conv, thread: id, cwd: cwd || d.CWD, last: "", handed: { from: "terminal", label, at: new Date().toISOString() } };
+    save();
+    if (srv && !live) srv.kill();                        // the next turn resumes it in its own directory
+    d.log("adopted", { provider: "codex", label, machine: String(body?.machine || "").slice(0, 60) });
+    return [200, "adopted"];
+  }
   function close() { clearTimeout(idleT); srv?.kill(); const c = cred; cred = null; return revoke(c); }
-  return { available, conversation, turn, stop, answer, newConversation, close,
+  return { available, conversation, turn, stop, answer, newConversation, close, state, release, adopt,
     busy: () => !!live, last: () => conv.last, side: () => ({ busy: !!live, last: conv.last }) };
 }

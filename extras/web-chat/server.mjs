@@ -81,7 +81,7 @@ const HOSTS = (E.FLEET_WEBCHAT_HOSTS || "").split(",").map((s) => s.trim()).filt
 const CWD = E.FLEET_WEBCHAT_CWD || E.HOME;
 const CLAUDE = E.FLEET_WEBCHAT_CLAUDE || "";
 // the login's own codex (task R9A2): the conversation's Codex side; none ⇒ Claude only, as before
-const CODEX = E.FLEET_WEBCHAT_CODEX || "";
+const CODEX = E.FLEET_WEBCHAT_CODEX_BIN || "";
 const SESSION_CRED = E.FLEET_WEBCHAT_SESSION_CRED || join(HERE, "../../bin/fleet-session-cred.sh");
 const SDK_PATH = E.FLEET_WEBCHAT_SDK || "";
 const ASK_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_ASK_SECS || 1800) * 1000;
@@ -489,19 +489,22 @@ async function conversationItems() {
 }
 
 // ---- the terminal ⇄ this page (task T810) --------------------------------------
-function lockHolder() {
-  if (!conv.session) return "";
-  try { return JSON.parse(readFileSync(join(LOCK_DIR, `claude-${conv.session}.json`), "utf8")).holder || ""; } catch { return ""; }
+// the record's holder of one agent's session (the Claude side: conv.session;
+// the Codex side, task R9A2: its thread)
+function lockHolder(agent = "claude", sid = conv.session) {
+  if (!sid) return "";
+  try { return JSON.parse(readFileSync(join(LOCK_DIR, `${agent}-${sid}.json`), "utf8")).holder || ""; } catch { return ""; }
 }
-let ownerSeen = { at: 0, v: null };
+let ownerSeen = {};                                      // agent → { at, sid, v }
 // the terminal holds it: where, and whether it is answering (read live, ≤ 1 s old)
-async function ownerNow() {
-  if (lockHolder() !== "terminal") return null;
-  if (Date.now() - ownerSeen.at < 1000) return ownerSeen.v;
-  const r = await run(HANDOFF, ["owner", "--agent", "claude", "--sid", conv.session]);
+async function ownerNow(agent = "claude", sid = conv.session) {
+  if (lockHolder(agent, sid) !== "terminal") return null;
+  const seen = ownerSeen[agent];
+  if (seen && seen.sid === sid && Date.now() - seen.at < 1000) return seen.v;
+  const r = await run(HANDOFF, ["owner", "--agent", agent, "--sid", sid]);
   let o = null;
-  try { const j = JSON.parse(r.stdout); if (j.holder === "terminal") o = { where: "terminal", busy: !!j.busy, label: j.label || "", machine: j.machine || "", agent: "claude" }; } catch { /* none */ }
-  ownerSeen = { at: Date.now(), v: o };
+  try { const j = JSON.parse(r.stdout); if (j.holder === "terminal") o = { where: "terminal", busy: !!j.busy, label: j.label || "", machine: j.machine || "", agent }; } catch { /* none */ }
+  ownerSeen[agent] = { at: Date.now(), sid, v: o };
   return o;
 }
 // a session's transcript wherever Claude Code put it, and the cwd it ran in
@@ -522,7 +525,8 @@ async function findTranscript(id) {
 // the one it had is put away and kept, the same rule as 新对话
 async function adoptConv(body) {
   const agent = String(body?.agent || "claude"), id = String(body?.session || "");
-  if (agent !== "claude") return [409, "WebChat has no Codex yet", "no_codex"];
+  if (agent === "codex") return codex.available() ? codex.adopt(body) : [409, "WebChat has no Codex here", "no_codex"];
+  if (agent !== "claude") return [400, "unknown agent"];
   if (!SID_RE.test(id)) return [400, "not a session id"];
   if (live || maint) return [409, "还在回复上一句", "busy"];
   if (id === conv.session) return [200, "already"];
@@ -1178,7 +1182,8 @@ const codex = codexSide({ E, STATE, CWD, CODEX, SESSION_CRED, MEDIA, IMAGE_EXT_M
   run, log, parseMint, liveCreds, newSecret, send, touch,
   redactLine: (o) => redact(JSON.stringify(o), [...liveCreds, ADMIN]),
   keepImage, imageItems, capImages, filesOf, saveRefs, pageItem, pageTarget, pageShown,
-  budgetRefusal, setBudget, budgetView, budget: () => budget });
+  budgetRefusal, setBudget, budgetView, budget: () => budget,
+  holder: (sid) => lockHolder("codex", sid), owner: (sid) => ownerNow("codex", sid) });
 const PROVIDERS_RE = /^(claude|codex)$/;
 // what a side's page shows of the other one: running now · its last finished turn
 const sides = () => ({ providers: codex.available() ? ["claude", "codex"] : ["claude"],
@@ -1262,6 +1267,18 @@ async function handle(req, res) {
     if (p === "/api/stop" && req.method === "POST") { const ok = await codex.stop(String((await readJson(req)).turn || "")); return send(res, ok ? 200 : 404, { ok }); }
     if (p === "/api/answer" && req.method === "POST") { const ok = codex.answer(await readJson(req)); return send(res, ok ? 200 : 404, { ok }); }
     if (p === "/api/new" && req.method === "POST") { const ok = codex.newConversation(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
+    // the terminal ⇄ this page (task T810), the Codex side's thread
+    if (SOCKET && p === "/api/state" && req.method === "GET") return send(res, 200, codex.state());
+    if (SOCKET && p === "/api/release" && req.method === "POST") { codex.release(String((await readJson(req)).session || "")); ownerSeen = {}; return send(res, 200, { ok: true }); }
+    if (p === "/api/take" && req.method === "POST") {
+      const sid = codex.state().session;
+      if (!sid) return send(res, 404, { error: "no conversation" });
+      const r = await run(HANDOFF, ["to-webchat-take", "--agent", "codex", "--sid", sid]);
+      ownerSeen = {};
+      const said = (r.stderr || r.stdout || "").trim().split("\n").pop();
+      if (r.rc === 0) { log("taken", { provider: "codex" }); return send(res, 200, { ok: true }); }
+      return send(res, r.rc === 3 ? 409 : 500, { error: said || "could not take it over", ...(r.rc === 3 ? { code: "terminal_busy" } : {}) });
+    }
   }
   if (p === "/api/new" && req.method === "POST") { const ok = newClaude(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
   if (p === "/api/conversation" && req.method === "GET") {
@@ -1294,13 +1311,13 @@ async function handle(req, res) {
   }
   if (SOCKET && p === "/api/release" && req.method === "POST") {
     const b = await readJson(req);
-    if (String(b.session || "") === conv.session) { closeWarm("terminal took it"); ownerSeen = { at: 0, v: null }; }
+    if (String(b.session || "") === conv.session) { closeWarm("terminal took it"); ownerSeen = {}; }
     return send(res, 200, { ok: true });
   }
   if (p === "/api/take" && req.method === "POST") {
     if (!conv.session) return send(res, 404, { error: "no conversation" });
     const r = await run(HANDOFF, ["to-webchat-take", "--agent", "claude", "--sid", conv.session]);
-    ownerSeen = { at: 0, v: null };
+    ownerSeen = {};
     const said = (r.stderr || r.stdout || "").trim().split("\n").pop();
     if (r.rc === 0) { log("taken"); return send(res, 200, { ok: true }); }
     return send(res, r.rc === 3 ? 409 : 500, { error: said || "could not take it over", ...(r.rc === 3 ? { code: "terminal_busy" } : {}) });

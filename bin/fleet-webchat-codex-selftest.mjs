@@ -26,6 +26,11 @@
 //      the next turn starts a new thread
 //      — and 新对话 on the Claude side leaves the Codex thread as it is
 //   I  a restart resumes the same thread (thread/resume, no new thread)
+//   L  在 WebChat 里继续 (task T810) for a Codex thread: /api/adopt {agent:"codex"} makes a
+//      terminal's thread this side's conversation — its directory and history read off
+//      Codex's own rollout, the old thread put away; with the lock record saying
+//      terminal a turn is refused 409 and the conversation names the owner;
+//      /api/take, /api/state, /api/release ?provider=codex are the Codex side's
 //   J  the credential appears in no response, no log, no file of the state dir
 import { spawn } from "node:child_process";
 import http from "node:http";
@@ -60,6 +65,29 @@ case "$1" in
   revoke) exit 0 ;;
 esac
 `, { mode: 0o755 });
+
+// ---- the terminal ⇄ page stubs (task T810): a lock dir, a handoff that logs its calls, a rollout
+const CXHOME = join(T, "codexhome");
+const LOCKS = join(T, "locks");
+mkdirSync(LOCKS);
+const HANDLOG = join(T, "handoff.log");
+const handoff = join(T, "fleet-webchat-handoff.sh");
+writeFileSync(handoff, `#!/bin/bash
+echo "$*" >>"${HANDLOG}"
+case "$1" in
+  owner) printf '{"holder":"terminal","busy":false,"label":"scratch-9","machine":"mini2"}\\n' ;;
+  to-webchat-take) rm -f "${LOCKS}/codex-$5.json" ;;
+esac
+`, { mode: 0o755 });
+const TERM_THREAD = "01a15e99-0000-7000-8000-00000000abcd";
+mkdirSync(join(T, "signup"));
+mkdirSync(join(CXHOME, "sessions", "2026", "10", "21"), { recursive: true });
+writeFileSync(join(CXHOME, "sessions", "2026", "10", "21", `rollout-2026-10-21T08-00-00-${TERM_THREAD}.jsonl`), [
+  { type: "session_meta", payload: { id: TERM_THREAD, cwd: join(T, "signup") } },
+  { type: "event_msg", payload: { type: "item_completed", item: { type: "UserMessage", id: "u1", content: [{ type: "text", text: "终端里问的" }] } } },
+  { type: "event_msg", payload: { type: "item_completed", item: { type: "CommandExecution", id: "x1", command: ["/bin/zsh", "-lc", "ls"], status: "completed", aggregated_output: "a.txt\n", exit_code: 0 } } },
+  { type: "event_msg", payload: { type: "item_completed", item: { type: "AgentMessage", id: "a1", content: [{ type: "Text", text: "终端里答的" }] } } },
+].map((x) => JSON.stringify(x)).join("\n") + "\n");
 
 // ---- the fake codex app-server -----------------------------------------------------------
 const RPCLOG = join(T, "rpc.ndjson");         // every request the server sent, and every answer it gave
@@ -151,7 +179,8 @@ process.stdin.on("data", (d) => {
 function start(extra = {}) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, FLEET_WEBCHAT_STATE: STATE, FLEET_WEBCHAT_SESSION_CRED: credSh, FLEET_WEBCHAT_CWD: T,
-      CLAUDE_CONFIG_DIR: join(T, "claude"), FLEET_WEBCHAT_IDLE_SECS: "0", FLEET_WEBCHAT_CODEX: fake, ...extra };
+      CLAUDE_CONFIG_DIR: join(T, "claude"), FLEET_WEBCHAT_IDLE_SECS: "0", FLEET_WEBCHAT_CODEX_BIN: fake,
+      CODEX_HOME: CXHOME, FLEET_WEBCHAT_HANDOFF: handoff, FLEET_WEBCHAT_LOCKDIR: LOCKS, ...extra };
     delete env.FLEET_WEBCHAT_LOCAL; delete env.FLEET_WEBCHAT_SDK;
     for (const k of Object.keys(extra)) if (extra[k] === undefined) delete env[k];
     srv = spawn(process.execPath, [APP, "--socket"], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -316,10 +345,38 @@ for (const [text, allow, want] of [["ask a", true, "accept"], ["ask b", false, "
   ok(rpc().filter((m) => m.method === "thread/start").length === starts && t.lines.find((o) => o.t === "session")?.id === thr, "I no new thread");
 }
 
+// ---- L: a terminal's Codex thread handed to the page (T810) --------------------------------
+{
+  const before = (await req("/api/conversation?provider=codex")).j.session;
+  const a = await req("/api/adopt", { method: "POST", body: { agent: "codex", session: TERM_THREAD, label: "scratch-9", machine: "mini2" } });
+  ok(a.status === 200, `L adopt a Codex thread (${a.status} ${a.body})`);
+  const c = await req("/api/conversation?provider=codex");
+  ok(c.j.session === TERM_THREAD && c.j.cwd === join(T, "signup") && c.j.handed?.from === "terminal", "L it is the Codex side's conversation, in its own directory, said handed");
+  const k = c.j.items.map((o) => o.t).join(",");
+  ok(k === "user,tool,tool_result,text" && c.j.items[0].text === "终端里问的" && c.j.items[1].summary === "Shell · ls", `L its history is Codex's own rollout (${k})`);
+  const conf = JSON.parse(readFileSync(join(STATE, "conversation-codex.json"), "utf8"));
+  ok(conf.put_away.some((x) => x.thread === before), "L the thread it had is put away");
+  ok((await req("/api/adopt", { method: "POST", body: { agent: "codex", session: "no-such-thread" } })).status === 404, "L a thread with no rollout here is 404");
+  writeFileSync(join(LOCKS, `codex-${TERM_THREAD}.json`), JSON.stringify({ holder: "terminal" }));
+  const t = await turn("while the terminal holds it");
+  ok(t.status === 409, "L the terminal holds it: a turn is refused 409");
+  const o = await req("/api/conversation?provider=codex");
+  ok(o.j.owner?.where === "terminal" && o.j.owner.agent === "codex" && o.j.owner.label === "scratch-9", "L the conversation names the owner");
+  const st = await req("/api/state?provider=codex");
+  ok(st.j.session === TERM_THREAD && st.j.busy === false, "L /api/state?provider=codex is the Codex side's");
+  const tk = await req("/api/take?provider=codex", { method: "POST", body: {} });
+  ok(tk.status === 200 && readFileSync(HANDLOG, "utf8").includes(`to-webchat-take --agent codex --sid ${TERM_THREAD}`), "L 在这里继续 takes the Codex thread back");
+  ok((await req("/api/release?provider=codex", { method: "POST", body: { session: TERM_THREAD } })).status === 200, "L /api/release?provider=codex answers");
+  const t2 = await turn("now here");
+  ok(t2.status === 200 && rpc().some((m) => m.method === "thread/resume" && m.params.threadId === TERM_THREAD), "L the next turn resumes the terminal's thread");
+}
+
 // ---- K: no codex here ---------------------------------------------------------------------
 {
   await stop();
-  await start({ FLEET_WEBCHAT_CODEX: "" });
+  await start({ FLEET_WEBCHAT_CODEX_BIN: "" });
+  const cx = await req("/api/adopt", { method: "POST", body: { agent: "codex", session: TERM_THREAD } });
+  ok(cx.status === 409 && cx.j.code === "no_codex", "K no codex: adopting a Codex thread is 409 no_codex");
   const cl = await req("/api/conversation");
   ok(cl.status === 200 && cl.j.providers === undefined && cl.j.others === undefined, "K no codex: the Claude side answers as before");
   ok((await req("/api/conversation?provider=codex")).status === 404, "K no codex: the Codex side is 404");

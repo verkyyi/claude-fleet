@@ -4055,11 +4055,11 @@ def page_of(r, missing=None):
 
 def webchat_why(r):
     """Why 「在 WebChat 里继续」 cannot run for row `r` ("" = it can): WebChat
-    adopts a session of THIS login only (task T810), and Claude's until the page
-    has a Codex side (FLEET_WEBCHAT_CODEX=1)."""
+    adopts a session of THIS login only (task T810); a Codex one too since the
+    page has a Codex side (R9A2) — FLEET_WEBCHAT_CODEX=0 turns that off."""
     if r.get("far"):
         return say("view_webchat_why_far")
-    if r.get("agent") == "codex" and os.environ.get("FLEET_WEBCHAT_CODEX") != "1":
+    if r.get("agent") == "codex" and os.environ.get("FLEET_WEBCHAT_CODEX", "1") != "1":
         return say("view_webchat_why_codex")
     return ""
 
