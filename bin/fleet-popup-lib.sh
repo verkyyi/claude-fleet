@@ -31,9 +31,17 @@
 #       clipped path. Only for a popup that types into no pane — keys sent to a
 #       pane in copy-mode are copy-mode's (dash-popup.sh --freeze is opt-in).
 #       tmux master (next-3.9) has the bug fixed; drop this with the pin past it.
-#   fleet_popup_thaw              the panes fleet_popup_freeze froze, still in
-#       copy-mode, back out (`send-keys -X cancel`); a pane already in a mode
-#       before the popup is never touched.
+#       The freeze FOLLOWS the client (T741): while the popup is up a watcher
+#       (_fleet_popup_follow, every FLEET_POPUP_FOLLOW_SECS, 0.15 s) reads the
+#       client's window again, and a window it has moved to — the ⚡ box's job
+#       going onto the new session, the window behind closed and tmux moving the
+#       client on, a go from anywhere else — is frozen too and the client redrawn
+#       once (refresh-client), so what streamed in the moment between is painted
+#       over. Before it, only the window of the press was held: on a phone the
+#       panel sat over a live window and its CJK broke the frame.
+#   fleet_popup_thaw              the panes fleet_popup_freeze froze (and its
+#       watcher after it), still in copy-mode, back out (`send-keys -X cancel`);
+#       a pane already in a mode before the popup is never touched.
 #   fleet_popup_title <text>      → $FPOP_TITLE, the -T format: centred, # → ##
 #   fleet_popup_geom <width> <w> <h> → $FPOP_W $FPOP_H. A client 80 columns or
 #       narrower (the iPad's 54) gets 96% × 90% whatever was asked, so the border
@@ -76,28 +84,64 @@ fleet_popup_screen() {
 }
 
 fleet_popup_freeze() {
-  FPOP_FROZEN=''
-  local p m wid
+  FPOP_FROZEN='' FPOP_FOLLOW='' FPOP_FROZEN_FILE=''
+  local wid
   # the client's own window — its panes are the ones under its popup; no window
   # read ⇒ nothing frozen (an empty -t would be "the current window", a guess)
   wid=$(tmux display-message -p -c "$1" '#{window_id}' 2>/dev/null)
   case "$wid" in @[0-9]*) ;; *) return 0 ;; esac
+  FPOP_FROZEN=$(_fleet_popup_hold "$wid")
+  # the watcher's own book of what it froze (thaw reads it): a file, since it is
+  # a child process and FPOP_FROZEN is this shell's
+  FPOP_FROZEN_FILE=$(mktemp "${TMPDIR:-/tmp}/.fleet-popup-frozen.XXXXXX" 2>/dev/null) || FPOP_FROZEN_FILE=''
+  [ -n "$FPOP_FROZEN_FILE" ] || return 0
+  _fleet_popup_follow "$1" "$wid" "$FPOP_FROZEN_FILE" "$$" </dev/null >/dev/null 2>&1 &
+  FPOP_FOLLOW=$!
+  return 0
+}
+
+# _fleet_popup_hold <window id> → the ids of the panes it put in copy-mode (a
+# pane already in a mode is left alone), one line
+_fleet_popup_hold() {
+  local p m out=''
   while read -r p m; do
     [ "$m" = 0 ] || continue
-    tmux copy-mode -H -t "$p" 2>/dev/null && FPOP_FROZEN="$FPOP_FROZEN $p"
+    tmux copy-mode -H -t "$p" 2>/dev/null && out="$out $p"
   done <<EOF_FZ
-$(tmux list-panes -t "$wid" -F '#{pane_id} #{pane_in_mode}' 2>/dev/null)
+$(tmux list-panes -t "$1" -F '#{pane_id} #{pane_in_mode}' 2>/dev/null)
 EOF_FZ
-  return 0
+  printf '%s\n' "$out"
+}
+
+# _fleet_popup_follow <client> <window> <file> <door pid> — the freeze's watcher:
+# a window the client moves to while the popup is up is held too (its panes
+# appended to <file>) and the client redrawn once. Ends with the door (its pid
+# gone) or the client; thaw also kills it.
+_fleet_popup_follow() {
+  local cl=$1 cur=$2 f=$3 door=$4 w got n=0
+  while kill -0 "$door" 2>/dev/null; do
+    sleep "${FLEET_POPUP_FOLLOW_SECS:-0.15}"
+    w=$(tmux display-message -p -c "$cl" '#{window_id}' 2>/dev/null) || return 0
+    case "$w" in @[0-9]*) ;; *) return 0 ;; esac
+    [ "$w" = "$cur" ] && continue
+    cur=$w
+    got=$(_fleet_popup_hold "$w")
+    printf '%s\n' "$got" >> "$f"
+    tmux refresh-client -t "$cl" 2>/dev/null
+    n=$((n + 1)); [ "$n" -lt 50 ] || return 0   # a bounded watcher, whatever happens
+  done
 }
 
 fleet_popup_thaw() {
   local p
+  [ -z "${FPOP_FOLLOW:-}" ] || { kill "$FPOP_FOLLOW" 2>/dev/null; wait "$FPOP_FOLLOW" 2>/dev/null; }
+  [ -n "${FPOP_FROZEN_FILE:-}" ] && [ -f "$FPOP_FROZEN_FILE" ] && FPOP_FROZEN="$FPOP_FROZEN $(tr '\n' ' ' < "$FPOP_FROZEN_FILE")"
   for p in ${FPOP_FROZEN:-}; do
     [ "$(tmux display-message -p -t "$p" '#{pane_mode}' 2>/dev/null)" = copy-mode ] \
       && tmux send-keys -X -t "$p" cancel 2>/dev/null
   done
-  FPOP_FROZEN=''
+  [ -z "${FPOP_FROZEN_FILE:-}" ] || rm -f "$FPOP_FROZEN_FILE" 2>/dev/null
+  FPOP_FROZEN='' FPOP_FOLLOW='' FPOP_FROZEN_FILE=''
   return 0
 }
 

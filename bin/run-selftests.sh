@@ -207,6 +207,9 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
     esac
     scrub="$scrub -u $v"
   done
+  # the operator's conf dir, named for the inner half's message-record guard (T741)
+  # before the scrub drops it — never read as config there
+  real_conf="${FLEET_CONF_DIR:-}"
   # The whole gate queues on the MACHINE-WIDE heavy-job semaphore (issue #1150, on
   # #1295's fleet-heavy.sh): an EPIC routinely puts 3-4 workers into this gate at
   # once, and together they drove the box to load 48 — which is how one test hung
@@ -242,7 +245,7 @@ if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; 
     scrub="$scrub -u FLEET_HEAVY -u FLEET_HEAVY_SLOTS -u FLEET_HEAVY_WAIT -u FLEET_HEAVY_DIR -u FLEET_HEAVY_RE -u FLEET_HEAVY_LIGHT_RE"
   fi
   # shellcheck disable=SC2086  # intentional: $heavy and $scrub are argument lists
-  $heavy env $scrub FLEET_HEAVY_HELD=1 FLEET_SELFTEST_ROOT="$shadow" \
+  $heavy env $scrub FLEET_HEAVY_HELD=1 FLEET_SELFTEST_ROOT="$shadow" FLEET_SELFTEST_REAL_CONF="$real_conf" \
     sh "$shadow/bin/run-selftests.sh" "$@"
   exit $?
 fi
@@ -284,6 +287,21 @@ export FLEET_MACHINE_SESSIONS_DIR
 if [ -n "${FLEET_SELFTEST_ROOT:-}" ] && [ -d "$FLEET_SELFTEST_ROOT/conf-dir" ]; then
   FLEET_CONF_DIR="$FLEET_SELFTEST_ROOT/conf-dir"; export FLEET_CONF_DIR
 fi
+
+# The person's message record is never a test's (T741): a test that points a
+# notice at it — its own FLEET_CONF_DIR set to the real one, a drill command copied
+# into a leg — is refused by bin/fleet_notice.py (FLEET_NOTICE_FORBID, the login's
+# own record and the operator's conf dir's), which touches FLEET_NOTICE_FORBID_HIT;
+# the runner reds that test (run_test). 2026-10-20 a hand-run drill's 「入口不通 —
+# https://127.0.0.1:9」 reached the person's ⌘P 消息.
+notice_home=$(python3 -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null) || notice_home=$HOME
+FLEET_NOTICE_FORBID="$notice_home/.config/claude-fleet/logs/notices.ndjson"
+case "${FLEET_SELFTEST_REAL_CONF:-}" in
+  ''|"${FLEET_CONF_DIR:-}") ;;
+  *) FLEET_NOTICE_FORBID="$FLEET_NOTICE_FORBID:$FLEET_SELFTEST_REAL_CONF/logs/notices.ndjson" ;;
+esac
+export FLEET_NOTICE_FORBID
+unset FLEET_SELFTEST_REAL_CONF notice_home
 
 # --shard K/N — take the K-th of N slices. Parsed off the FRONT of the arg list (a
 # selftest name never starts with `-`), so `run-selftests.sh --shard 1/4 'dash-*'`
@@ -955,13 +973,20 @@ run_test() {
   # shellcheck disable=SC2086  # intentional: word lists; test names carry no whitespace
   set -- "$1" env $rt_env $rt_run $rt_args
   tt_dir=$(mktemp -d /tmp/selftest-tt.XXXXXX 2>/dev/null) || tt_dir=''
+  # the record guard's marker (T741): outside tt_dir, which the sweep removes
+  rt_id=$1 rt_hit=$(mktemp /tmp/selftest-notice.XXXXXX 2>/dev/null) || rt_hit=''
   if [ "$supervise" -eq 1 ]; then
-    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" perl -e "$SUPERVISOR" "$test_timeout" "$@" </dev/null; then rc=0; else rc=$?; fi
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" FLEET_NOTICE_FORBID_HIT="$rt_hit" perl -e "$SUPERVISOR" "$test_timeout" "$@" </dev/null; then rc=0; else rc=$?; fi
   else
     shift
-    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" "$@" </dev/null; then rc=0; else rc=$?; fi
+    if TMUX_TMPDIR="${tt_dir:-${TMUX_TMPDIR:-}}" FLEET_NOTICE_FORBID_HIT="$rt_hit" "$@" </dev/null; then rc=0; else rc=$?; fi
   fi
   tt_sweep
+  if [ -n "$rt_hit" ] && [ -s "$rt_hit" ]; then
+    printf 'run-selftests: %s wrote to the real message record — %s\n' "$rt_id" "$(head -n 1 "$rt_hit")"
+    [ "$rc" -ne 0 ] || rc=1
+  fi
+  [ -z "$rt_hit" ] || rm -f "$rt_hit"
   return "$rc"
 }
 run_start=$(now_ms)
