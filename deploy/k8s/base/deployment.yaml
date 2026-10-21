@@ -101,6 +101,10 @@ spec:
             # stage). Unset ⇒ X-Fleet-Client carries the address alone.
             - name: CCQUOTA_FLEET_CHAT_GEO_DB
               value: "/usr/share/ccquota/ip2region/ip2region_v4.xdb"
+            # what a chat card may frame: the person's own 活页 page, through
+            # its embed link (task T773 ④). Unset ⇒ the console frames nothing.
+            - name: CCQUOTA_FLEET_CHAT_FRAME_ORIGINS
+              value: "https://space.24haowan.com"
             - name: CCQUOTA_DB_URL
               valueFrom:
                 secretKeyRef:

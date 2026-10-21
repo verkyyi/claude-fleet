@@ -65,7 +65,11 @@
 //   R  pictures from the page (task T773 ③): a turn's images reach the agent as image
 //      blocks before the words (and with no words at all); read back they ride on the
 //      person's line; a fifth picture, a non-image, a request past the bound are refused
-//   --only=socket|budget|context|home|idle|trial|media|links|send|local (comma list) runs those parts only — the drills' road.
+//   S  the agent's web pages (task T773 ④): the turn's agent has page_target / show_page; a
+//      show_page call becomes a {t:"page"} card (live and read back) with its link, state,
+//      version and a preview kept as an image; a link that is not https is dropped;
+//      pages.json remembers the folder and the file's page, which page_target answers
+//   --only=socket|budget|context|home|idle|trial|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -83,7 +87,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,links,send,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,media,links,send,pages,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -138,6 +142,8 @@ export function query({ prompt, options }) {
 async function* one(prompt, options) {
   const env = options.env;
   appendFileSync(${JSON.stringify(PROMPTLOG)}, JSON.stringify({ prompt, mcp: Object.keys(options.mcpServers || {}) }) + "\\n");
+  // the once-a-session note (task T773) says nothing a stub turn branches on
+  if (typeof prompt === "string") prompt = prompt.replace(/<fleet-webchat-note>[\\s\\S]*?<\\/fleet-webchat-note>\\s*/, "");
   if (/ctxtool$/.test(prompt) && options.mcpServers?.fleet_browser) {
     const t = options.mcpServers.fleet_browser.tools.find((x) => x.name === "browser_context");
     writeFileSync(${JSON.stringify(TOOLLOG)}, (await t.handler({})).content[0].text);
@@ -171,6 +177,24 @@ async function* one(prompt, options) {
     const text = "改好了：[form.css](" + H + "/proj/form.css)、![shot](~/proj/shot.png)、[页面](proj/page.html)、" +
       "[钥匙](" + H + "/.ssh/id_rsa)、[密](" + H + "/proj/.env)、[外](" + H + "/proj/out.txt)、[无](" + H + "/proj/none.txt)、[网](https://example.com/a)";
     const m = { type: "assistant", message: { content: [{ type: "text", text }] } };
+    appendFileSync(tr, JSON.stringify(m) + "\\n");
+    yield { ...m, session_id: SID };
+    yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
+    return;
+  }
+  if (prompt === "page" || prompt === "page2") {   // pages (S): publish, then the card
+    const H = env.HOME;
+    const tools = options.mcpServers?.fleet_chat?.tools || [];
+    const call = async (n, a) => (await tools.find((t) => t.name === n).handler(a)).content[0].text;
+    const target = JSON.parse(await call("page_target", { file: H + "/proj/weekly.html" }));
+    appendFileSync(${JSON.stringify(TOOLLOG)}, JSON.stringify(target) + "\\n");
+    const input = prompt === "page"
+      ? { title: "销售周报 · 第 41 周", url: "https://w-x.hy.24haowan.com/s/demo", status: "review", proposal_id: "P1", version: 1,
+          file: H + "/proj/weekly.html", folder_id: "F1", preview: H + "/proj/weekly.png",
+          embed_url: "https://space.example.com/embed/V1/TICKET", embed_expires: new Date(Date.now() + 3600e3).toISOString() }
+      : { title: "坏链接", url: "javascript:alert(1)", status: "ready", proposal_id: "P1", version: 2, file: H + "/proj/weekly.html" };
+    await call("show_page", input);
+    const m = { type: "assistant", message: { content: [{ type: "tool_use", id: "tu-" + prompt, name: "mcp__fleet_chat__show_page", input }] } };
     appendFileSync(tr, JSON.stringify(m) + "\\n");
     yield { ...m, session_id: SID };
     yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
@@ -619,6 +643,52 @@ if (part("send")) {
     (await post({ text: "x", images: [{ media_type: "image/svg+xml", data: PNG }] })).status === 400, "R a non-image (or an SVG) is refused");
   ok((await post(JSON.stringify({ text: "x".repeat(1200 * 1024) }))).status === 413, "R a request past the bound is refused 413");
   await sstop(sv);
+}
+// ---- S: the agent's web pages (task T773 ④) ------------------------------------------------
+if (part("pages")) {
+  const H = homeOf("pg");
+  mkdirSync(join(H, "proj"), { recursive: true });
+  writeFileSync(join(H, "proj", "weekly.html"), "<h1>周报</h1>");
+  writeFileSync(join(H, "proj", "weekly.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+  SSTATE = stateOf("pg"); SOCK = join(SSTATE, "chat.sock");
+  const pg = (await sstart(["--socket"], { ...asHome("pg"), FLEET_WEBCHAT_CWD: H })).p;
+  const before = existsSync(TOOLLOG) ? readFileSync(TOOLLOG, "utf8") : "";
+  const pfrom = existsSync(PROMPTLOG) ? readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).length : 0;
+  const live = (await sturn("page")).lines;
+  const card = live.find((o) => o.t === "page");
+  ok(card && card.title === "销售周报 · 第 41 周" && card.url === "https://w-x.hy.24haowan.com/s/demo" && card.status === "review" &&
+    card.version === 1 && card.proposal === "P1" && /^[0-9a-f]{32}\.png$/.test(card.preview || ""), `S live: show_page is a card with its link, state, version, preview (${JSON.stringify(card)})`);
+  ok(live.some((o) => o.t === "tool" && o.summary === "发到活页 · 销售周报 · 第 41 周"), "S the step reads 发到活页 · <title>");
+  const prompts = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).slice(pfrom).map((l) => JSON.parse(l).prompt);
+  const noted = prompts.filter((x) => typeof x === "string" && /^<fleet-webchat-note>[\s\S]*<\/fleet-webchat-note>/.test(x) && /show_page/.test(x) && /WebChat 产物/.test(x));
+  const first = JSON.parse(readFileSync(TOOLLOG, "utf8").slice(before.length).trim().split("\n")[0]);
+  ok(first.folder === "WebChat 产物" && first.folder_id === null && first.proposal_id === null, "S page_target, the first time: the folder's name, no folder, no page yet");
+  const saved = JSON.parse(readFileSync(join(SSTATE, "pages.json"), "utf8"));
+  ok(saved.folder_id === "F1" && Object.values(saved.files)[0] === "P1" && (statSync(join(SSTATE, "pages.json")).mode & 0o777) === 0o600,
+    "S pages.json (0600) remembers the folder and the file's page");
+  ok(card.embed === "https://space.example.com/embed/V1/TICKET" && Date.parse(card.embed_exp) > Date.now(), "S the card carries the page's embed link and when it lapses");
+  // the page says its origin with a turn: page_target answers it as embed_origin
+  const live2 = await new Promise((resolve, reject) => {
+    const lines = [];
+    const r = http.request({ socketPath: SOCK, path: "/api/turn", method: "POST",
+      headers: { Host: "webchat", "X-Fleet-Webchat": "1", "Content-Type": "application/json" } }, (res) => {
+      let buf = "";
+      res.on("data", (d) => { buf += d; let i; while ((i = buf.indexOf("\n")) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l) lines.push(JSON.parse(l)); } });
+      res.on("end", () => resolve(lines));
+    });
+    r.on("error", reject); r.end(JSON.stringify({ text: "page2", origin: "https://ccquota.example.com" }));
+  });
+  const again = JSON.parse(readFileSync(TOOLLOG, "utf8").slice(before.length).trim().split("\n").at(-1));
+  ok(again.folder_id === "F1" && again.proposal_id === "P1", "S page_target the next time: the same folder and page (a new version, the same link)");
+  ok(first.embed_origin === null && again.embed_origin === "https://ccquota.example.com", "S page_target answers the page's origin for an embed link once the page said it");
+  const bad = live2.find((o) => o.t === "page");
+  ok(bad && !bad.url && bad.status === "ready" && bad.version === 2, "S a link that is not https is dropped from the card");
+  const items = JSON.parse((await sreq("/api/conversation")).body).items;
+  ok(items.filter((i) => i.t === "page").length === 2 && items.find((i) => i.t === "page").url === card.url, "S read back: both cards");
+  const allp = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).slice(pfrom).map((l) => JSON.parse(l).prompt).filter((x) => typeof x === "string");
+  ok(noted.length === 1 && allp.filter((x) => x.includes("<fleet-webchat-note>")).length === 1 && !JSON.stringify(items).includes("fleet-webchat-note"),
+    "S the agent is told once in the session where a page goes and to show it as a card; the page never shows the note");
+  await sstop(pg);
 }
 if (!part("local")) {
   proxy.close();

@@ -28,6 +28,8 @@ type Item =
   | { t: "image_more"; n: number }
   // the home's files the reply before it links to (task T773 ②): target as written → ref
   | { t: "files"; files: Record<string, string> }
+  // a web page the agent published to the person's 活页 (task T773 ④): a card
+  | PageCard
   | { t: "text"; d: string }
   | { t: "tool"; id: string; name: string; summary?: string }
   | { t: "tool_result"; id: string; text?: string; error?: boolean }
@@ -35,6 +37,8 @@ type Item =
   | { t: "error"; msg: string; code?: string };
 
 type Pic = { ref?: string; w?: number; h?: number; thumb?: string };
+export type PageCard = { t: "page"; id?: string; title: string; url?: string; status: string; proposal?: string;
+  version?: number; preview?: string; note?: string; embed?: string; embed_exp?: string };
 // where the page reads an image: the home's file by its ref, else the copy's preview
 const picSrc = (g: Pic) => (g.ref ? `${API}/file?ref=${encodeURIComponent(g.ref)}` : g.thumb || "");
 // a reply's Markdown link / image target the home gave a ref for → that file's address
@@ -85,6 +89,9 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
   const tools = new Map<string, Record<string, unknown>>();
   const files = new Map<string, string>();
   for (const it of items) if (it.t === "files") for (const [k, v] of Object.entries(it.files || {})) files.set(k, v);
+  // a page published again (a new version, a review that passed): every card of it says the latest
+  const latest = new Map<string, PageCard>();
+  for (const it of items) if (it.t === "page" && it.proposal) latest.set(it.proposal, { ...latest.get(it.proposal), ...it });
   const assistant = (i: number) => {
     if (!cur) { cur = { id: `a${i}`, role: "assistant", content: [] }; out.push(cur); }
     return cur;
@@ -129,6 +136,12 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
         else assistant(i).content.push({ type: "text", text: it.big
           ? tr("\n\n*（一张图超过 10 MB，网页里不显示）*\n\n", "\n\n*(An image over 10 MB is not shown here.)*\n\n")
           : tr("\n\n*（图片在你的机器上，连上后显示）*\n\n", "\n\n*(The image shows once your machine is back.)*\n\n") } as Part);
+        break;
+      }
+      case "page": {
+        const p = it.proposal ? { ...it, ...latest.get(it.proposal), id: it.id } : it;
+        const card = { ...p, ...(p.preview ? { preview: picSrc({ ref: p.preview }) } : {}) };
+        assistant(i).content.push({ type: "data", name: "fleet-page", data: card } as unknown as Part);
         break;
       }
       case "image_more": {
@@ -332,7 +345,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     let lost = false;
     let replied = false;
     try {
-      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}) }) });
+      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}), origin: location.origin }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });

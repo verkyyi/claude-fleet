@@ -70,7 +70,8 @@ func TestChatFile(t *testing.T) {
 }
 
 // The copy beside the entry keeps an image as its preview only (task T773):
-// no ref, no bytes; the newest previews first, within its budget.
+// no ref, no bytes; the newest previews first, within its budget. A page's card
+// keeps its title, link and state, never its preview's ref.
 func TestChatMirrorImages(t *testing.T) {
 	h, svc, host, login := chatHarness(t)
 	sealer, err := credvault.NewSealer(bytes.Repeat([]byte{7}, 32))
@@ -89,7 +90,8 @@ func TestChatMirrorImages(t *testing.T) {
 		io.WriteString(w, `{"session":"s1","items":[{"t":"user","text":"看图","images":[{"ref":"`+ref+`","w":10,"h":20,"thumb":"`+thumb+`"}]},`+
 			`{"t":"tool","id":"tu1","name":"Read","summary":"Read · a.png"},{"t":"tool_result","id":"tu1","text":""},`+
 			`{"t":"image","id":"tu1","ref":"`+ref+`","w":10,"h":20,"thumb":"`+thumb+`"},`+
-			`{"t":"image","ref":"`+ref+`","w":1,"h":1,"thumb":"`+huge+`"},{"t":"image_more","n":3,"x":"y"},{"t":"text","d":"好"}]}`)
+			`{"t":"image","ref":"`+ref+`","w":1,"h":1,"thumb":"`+huge+`"},{"t":"image_more","n":3,"x":"y"},{"t":"text","d":"好"},`+
+			`{"t":"page","id":"tu9","title":"周报","url":"https://w.example/s/x","status":"ready","proposal":"P1","version":2,"preview":"`+ref+`"}]}`)
 	}
 	svc.mu.Unlock()
 	read := func(q string) string {
@@ -114,5 +116,8 @@ func TestChatMirrorImages(t *testing.T) {
 	}
 	if strings.Count(b, thumb) != 2 || !strings.Contains(b, `{"n":3,"t":"image_more"}`) || !strings.Contains(b, `"id":"tu1"`) {
 		t.Errorf("the copy: %s; want both previews, the image_more count and the step's id", b)
+	}
+	if !strings.Contains(b, `"title":"周报"`) || !strings.Contains(b, `"url":"https://w.example/s/x"`) || !strings.Contains(b, `"version":2`) {
+		t.Errorf("the copy lost the page card (task T773 ④): %s", b)
 	}
 }

@@ -104,6 +104,8 @@ export function toolSummary(name, input) {
   if (name === "AskUserQuestion" && Array.isArray(i.questions)) {
     return `提问 · ${i.questions.map((q) => q.question).join(" / ").slice(0, 160)}`;
   }
+  if (name === "mcp__fleet_chat__show_page") return `发到活页 · ${String(i.title || "网页").slice(0, 120)}`;
+  if (name === "mcp__fleet_chat__page_target") return "活页 · 查这一页放哪";
   const pick = i.command ?? i.file_path ?? i.path ?? i.pattern ?? i.url ?? i.query ?? i.description ?? i.prompt;
   const s = typeof pick === "string" ? pick : JSON.stringify(i);
   return `${name}${s ? " · " + s.replace(/\s+/g, " ").slice(0, 160) : ""}`;
@@ -321,3 +323,16 @@ export function linkedType(name) {
   if (ext === "pdf") return { type: "application/pdf", inline: false };
   return { type: "application/octet-stream", inline: false };
 }
+
+// What the web chat's agent is told once in each session (task T773), in a block
+// of its own before the person's words — the page never shows it (NOTE_RE): the
+// person reads a web page, not this machine, so a file they should see is shown
+// or linked, and a page made for them goes to their 活页 as a card.
+export const WEB_NOTE_V = "t773.1";
+export const WEB_NOTE = "你在一个网页里和这个人对话，他看不到这台机器的屏幕和文件。" +
+  "要给他看的图片、截图：用 Read 读一下，网页上就会显示。提到本机文件时写成 Markdown 链接（[名字](绝对路径)），网页上点得开。" +
+  "给他做的网页（HTML）：先调 page_target，再用 space 工具 publish_file 发到他活页的「WebChat 产物」文件夹（保持私密），" +
+  "然后调 show_page 给他一张能点开的卡片；page_target 答了 embed_origin 时，再用 preview_version(version_id, embed_origin) " +
+  "拿嵌入链接一起交给 show_page，他就能在对话里直接预览。同一个网页再改就发到同一个 proposal_id。";
+export const webNoteBlock = () => `<fleet-webchat-note>\n${WEB_NOTE}\n</fleet-webchat-note>\n\n`;
+export const NOTE_RE = /^<fleet-webchat-note>[\s\S]*?<\/fleet-webchat-note>\s*/;
