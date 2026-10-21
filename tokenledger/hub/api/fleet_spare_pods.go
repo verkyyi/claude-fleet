@@ -490,8 +490,16 @@ func (s *Server) claimClusterSpare(principal, displayName, actor, cluster string
 }
 
 // homeOnPod makes pod person's 家: the door routes their name there and the
-// DNS name follows (fleet_door.go). Pushed at once.
+// DNS name follows (fleet_door.go). Pushed at once. A 家 they already have on
+// a machine where their login is still active stays where it is (task KEA0):
+// a home only moves by hand (entryEnsureHome) — a pod handed beside it once
+// took a member's 家 off their machine, and with the pod asleep their web
+// chat, web terminal and door all answered home_down.
 func (s *Server) homeOnPod(person, pod, login string, now time.Time) {
+	if cur, ok, err := s.Store.EntryHomeOf(person); err == nil && ok && s.homeHeld(person, cur) {
+		log.Printf("fleet: %s's 家 stays on %s/%s (pod %s handed beside it)", person, cur.Machine, cur.Login, pod)
+		return
+	}
 	h := store.EntryHome{Person: person, Machine: pod, Login: login, SetBy: "spare", SetAt: now.UTC()}
 	v, err := s.Store.SetEntryHome(h)
 	if err != nil {
@@ -505,6 +513,25 @@ func (s *Server) homeOnPod(person, pod, login string, now time.Time) {
 		}
 		s.broadcastEntry(v, pod)
 	}
+}
+
+// homeHeld says h is a 家 worth keeping: a machine (not a pod) where person's
+// login h.Login is still active.
+func (s *Server) homeHeld(person string, h store.EntryHome) bool {
+	if h.Machine == "" || isUserPodName(h.Machine) {
+		return false
+	}
+	as, err := s.Store.FleetAccounts(person)
+	if err != nil {
+		return true // never move a home on a read that failed
+	}
+	for _, a := range as {
+		if a.State == store.AccountActive && a.Login == h.Login &&
+			(sameMachine(a.Hostname, h.Machine) || sameMachine(h.Machine, a.Hostname)) {
+			return true
+		}
+	}
+	return false
 }
 
 // bindClusterPod labels a claimed pod with its person, and moves its ceiling
