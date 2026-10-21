@@ -17,10 +17,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { fmtTokens, fmtWhen, lang, tr } from "@/shared/i18n";
-import { useLoad } from "@/shared/api";
+import { useLoad, type Trial } from "@/shared/api";
 import { Failed, PageHeader } from "../parts";
 import { useShell, usePage } from "../Shell";
 import { MySubsCard } from "../subs";
+import { trialParts } from "../TrialBar";
 
 // /v1/me/usage's answer (MeUsage, me_usage.go)
 type Limit = {
@@ -34,7 +35,7 @@ type Item = {
   tokens: number; models?: [string, number][]; sessions?: string[]; node?: string; login?: string;
 };
 type Usage = {
-  range: string; limit: Limit; today: number; today_prev: number; week: number; week_prev: number; total: number;
+  range: string; limit: Limit; trial?: Trial; today: number; today_prev: number; week: number; week_prev: number; total: number;
   days: Day[]; models: Model[]; work: { issue: Item[]; repo: Item[]; epic: Item[] }; since_first?: string;
 };
 
@@ -60,10 +61,58 @@ function delta(cur: number, prev: number, full: boolean, vs: [string, string], p
   return tr(`${vs[0]} ${p >= 0 ? "+" : ""}${p}%`, `${p >= 0 ? "+" : ""}${p}% ${vs[1]}`);
 }
 
-// ── the limit: what is left this week (and in 5 hours, when set), or 不限额 ──
-const LimitCard: FC<{ l: Limit }> = ({ l }) => {
+// ── a trial member's limits (claude-fleet T796): the same `trial` the bar over
+// every page reads — tokens left of the ceiling, the days, the session count ──
+const trialLeftPct = (t: Trial) => (num(t.tokens) > 0 ? pct(Math.max(0, num(t.tokens) - num(t.used_tokens)), num(t.tokens)) : 100);
+const TrialLimitCard: FC<{ t: Trial; extra?: ReactNode }> = ({ t, extra }) => {
+  const over = t.state === "expired" || t.state === "spent";
+  const leftPct = trialLeftPct(t);
+  const usedPct = 100 - leftPct;
+  const tone = over ? "[&>[data-slot=progress-indicator]]:bg-destructive" : t.state === "soon" ? "[&>[data-slot=progress-indicator]]:bg-[var(--fleet-warn)]" : "";
+  return (
+    <Card className="gap-2" data-limit="trial">
+      <CardHeader><CardDescription>{tr("我的上限 · 试用", "My limit · trial")}</CardDescription></CardHeader>
+      <CardContent>
+        {over ? (
+          <p className="font-display text-destructive text-[34px] leading-none font-semibold tracking-tight">
+            {t.state === "expired" ? tr("试用已结束", "Trial ended") : tr("用完了", "Used up")}
+          </p>
+        ) : num(t.tokens) > 0 ? (
+          <p className="font-display text-[44px] leading-none font-semibold tracking-tight">
+            {leftPct}<span className="text-muted-foreground text-2xl">%</span>
+          </p>
+        ) : (
+          <p className="font-display text-[34px] leading-none font-semibold tracking-tight">{t.days_left != null ? tr(`剩 ${t.days_left} 天`, `${t.days_left} days left`) : tr("试用中", "On trial")}</p>
+        )}
+        {num(t.tokens) > 0 ? <Progress value={usedPct} className={cn("mt-4 h-2.5", tone)} aria-label={tr("已用", "Used")} /> : null}
+        <p className={cn("mt-2 text-[13px]", over ? "text-destructive" : "text-muted-foreground")}>{trialParts(t).join(" · ")}</p>
+        {t.until && !over ? <p className="text-muted-foreground mt-1 text-[13px]">{tr(`${fmtWhen(t.until)} 到期`, `Ends ${fmtWhen(t.until)}`)}</p> : null}
+        {extra}
+      </CardContent>
+    </Card>
+  );
+};
+
+// ── the limit: the stricter of a trial's and the weekly budget's, the other
+// under it; what is left this week (and in 5 hours, when set); 不限额 only when
+// neither is held ──
+const LimitCard: FC<{ l: Limit; trial?: Trial }> = ({ l, trial }) => {
   const week = num(l.limit_week) > 0, h5 = num(l.limit_5h) > 0;
-  if (!l.set || (!week && !h5)) {
+  const budget = !!l.set && (week || h5);
+  if (trial) {
+    const bLeft = budget ? (week ? pct(l.remaining_week ?? Math.max(0, num(l.limit_week) - num(l.used_week)), num(l.limit_week))
+      : pct(l.remaining_5h ?? Math.max(0, num(l.limit_5h) - num(l.used_5h)), num(l.limit_5h))) : 101;
+    const trialOver = trial.state === "expired" || trial.state === "spent";
+    if (!budget || trialOver || trialLeftPct(trial) <= bLeft) {
+      const extra = budget ? (
+        <p className="text-muted-foreground mt-3 border-t pt-3 text-[13px]">
+          {week ? tr(`本周上限还剩 ${bLeft}%`, `${bLeft}% of the weekly limit left`) : tr(`这 5 小时还剩 ${bLeft}%`, `${bLeft}% left in these 5 hours`)}
+        </p>
+      ) : null;
+      return <TrialLimitCard t={trial} extra={extra} />;
+    }
+  }
+  if (!budget) {
     return (
       <Card className="gap-2">
         <CardHeader><CardDescription>{tr("我的上限", "My limit")}</CardDescription></CardHeader>
@@ -115,6 +164,7 @@ const LimitCard: FC<{ l: Limit }> = ({ l }) => {
             <span>{l.reset_5h ? tr(`${fmtWhen(l.reset_5h)} 恢复`, `Back ${fmtWhen(l.reset_5h)}`) : tr("没用，不计时", "Unused — no clock running")}</span>
           </div>
         ) : null}
+        {trial ? <p className="text-muted-foreground mt-3 border-t pt-3 text-[13px]">{tr("试用", "Trial")} · {trialParts(trial).join(" · ")}</p> : null}
       </CardContent>
     </Card>
   );
@@ -327,7 +377,7 @@ export default function UsagePage() {
         </>
       ) : (
         <>
-          <LimitCard l={u.limit || {}} />
+          <LimitCard l={u.limit || {}} trial={u.trial} />
           <div className="grid grid-cols-2 gap-3">
             <Stat label={tr("今天用了", "Used today")} value={u.today} note={u.today ? dt! : tr("今天还没用", "Nothing yet today")} />
             <Stat label={tr("近 7 天", "Last 7 days")} value={u.week} note={dw!} />

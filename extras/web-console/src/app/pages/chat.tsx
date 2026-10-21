@@ -133,8 +133,11 @@ const ComposerTools: FC = () => (
 const QuotaBanner: FC = () => {
   const { budget, quota } = useChat();
   if (!budget) return null;
-  const when = whenLocal(budget.until || quota?.reset);
-  const what = quota?.over && quota.window === "5h"
+  const trial = quota?.over && quota.window === "trial"; // a trial's end is not a reset (T796)
+  const when = trial ? "" : whenLocal(budget.until || quota?.reset);
+  const what = trial
+    ? tr("试用额度已用完或已到期，申请转正后继续使用", "Your trial is over — ask to become a member to carry on")
+    : quota?.over && quota.window === "5h"
     ? tr("这 5 小时的额度用完了", "This 5-hour limit is used up")
     : tr("这周的额度用完了", "This week's limit is used up");
   return (
