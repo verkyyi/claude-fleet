@@ -10,8 +10,9 @@
 #   no command, a terminal (SSH_TTY: a phone in Termius, plain `ssh -p 22022 …`)
 #                                  ⇒ the 看台: `fleet-remote-view.sh attach --thin
 #     --view <key>-<fp6> --resume [--want <last>] --device <b64> --route entry` —
-#     the first screen is #3060's: the session you looked at last, else a
-#     new one; ⌃\ in the 看台 is the shell as always. A 看台 that cannot come
+#     the first screen is #3060's: the session you looked at last, else ⌘P's
+#     panel on your most recently active session anywhere — a new one only
+#     when you have none (task Q1A8, FLEET_VIEW_LAND); ⌃\ in the 看台 is the shell as always. A 看台 that cannot come
 #     up (no fleet live here), or ends with any code but a leave (0 · 129 — a
 #     crash, EPIC T651 C4), says so in one line and leaves you at the login
 #     shell (FLEET_NO_VIEW=1: no 看台 started again there; `fleet` goes back).
