@@ -19,12 +19,20 @@ const API = "/v1/chat";
 const SITE = true;
 
 type Item =
-  | { t: "user"; text: string }
+  | { t: "user"; text: string; images?: Pic[] }
+  // an image in a reply or a tool's result (task T773): fetched by its ref; the
+  // copy beside the entry carries only its preview (thumb); big = over the bound
+  | { t: "image"; id?: string; ref?: string; w?: number; h?: number; thumb?: string; big?: boolean }
+  | { t: "image_more"; n: number }
   | { t: "text"; d: string }
   | { t: "tool"; id: string; name: string; summary?: string }
   | { t: "tool_result"; id: string; text?: string; error?: boolean }
   | { t: "stopped" }
   | { t: "error"; msg: string; code?: string };
+
+type Pic = { ref?: string; w?: number; h?: number; thumb?: string };
+// where the page reads an image: the home's file by its ref, else the copy's preview
+const picSrc = (g: Pic) => (g.ref ? `${API}/file?ref=${encodeURIComponent(g.ref)}` : g.thumb || "");
 
 type Question = {
   question: string;
@@ -71,7 +79,10 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
     switch (it.t) {
       case "user":
         cur = null;
-        out.push({ id: `u${i}`, role: "user", content: [{ type: "text", text: it.text }] });
+        out.push({ id: `u${i}`, role: "user", content: [
+          ...(it.images || []).filter(picSrc).map((g) => ({ type: "image", image: picSrc(g) }) as Part),
+          ...(it.text || !it.images?.length ? [{ type: "text", text: it.text } as Part] : []),
+        ] });
         break;
       case "text": {
         const m = assistant(i);
@@ -96,6 +107,22 @@ function toMessages(items: Item[], asks: Ask[], answered: Map<string, Answered>)
         }
         p.result = it.text || tr("(空)", "(empty)");
         p.isError = !!it.error;
+        break;
+      }
+      case "image": {
+        const src = it.big ? "" : picSrc(it);
+        if (src) assistant(i).content.push({ type: "image", image: src } as Part);
+        else assistant(i).content.push({ type: "text", text: it.big
+          ? tr("\n\n*（一张图超过 10 MB，网页里不显示）*\n\n", "\n\n*(An image over 10 MB is not shown here.)*\n\n")
+          : tr("\n\n*（图片在你的机器上，连上后显示）*\n\n", "\n\n*(The image shows once your machine is back.)*\n\n") } as Part);
+        break;
+      }
+      case "image_more": {
+        const m = assistant(i);
+        const last = m.content[m.content.length - 1] as { type: string; text?: string; more?: number } | undefined;
+        const n = (last?.more || 0) + (it.n || 1);
+        const part = { type: "text", text: tr(`\n\n*还有 ${n} 张图没显示*\n\n`, `\n\n*${n} more image(s) not shown*\n\n`), more: n } as Part;
+        if (last?.more) m.content[m.content.length - 1] = part; else m.content.push(part);
         break;
       }
       case "stopped":

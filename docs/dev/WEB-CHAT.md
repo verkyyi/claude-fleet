@@ -253,6 +253,20 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - **许可**：ip2region 是 Apache-2.0 / MIT 双许可；它的 `LICENSE.md` 原样随库进镜像（同一目录），这一节就是署名处。
 - **验**：上线后在 `/chat` 问「我大概在哪」，模型那行上下文里有「大致位置 …」；`browser_context` 工具能给出完整的省市。
 
+## 图片（T773）
+
+对话里的图——工具结果里的（截图、读到的图片文件）、回复里的、人自己发的——对话记录里本来就是 base64 块；服务把它们
+**按内容落一份**：`<state>/media/<sha256 前 32 位>.<png|jpg|gif|webp>`（目录 0700、文件 0600），给页面的是条目
+`{t:"image", id?, ref, w, h}`（人发的挂在自己那一行的 `images` 上），**JSON 里从不带图的字节**。页面按 ref 取：
+`GET /v1/chat/file?ref=<ref>` → 入口（只认这个 ref 的形状，别的查询一律不往家传，404 不出门）→ 本人的家 →
+服务的 `/api/file`：只读 media 目录、原样的图片类型、`Content-Security-Policy: default-src 'none'; sandbox`、
+`nosniff`、可缓存（名字就是内容）。取图在入口另排一队（每人 6 个同时、每分钟 300 个），不占一轮对话的位子。
+
+上限：单张超过 `FLEET_WEBCHAT_IMAGE_MAX`（10 MB）的不落、条目是 `{t:"image", big:true}`；两句人话之间超过
+`FLEET_WEBCHAT_IMAGES_PER_REPLY`（20）张的，多出来的计在一个 `{t:"image_more", n}` 上。最新 60 张图带一张
+预览 `thumb`（≤ 24 KB 的 JPEG data URL，后台用 macOS `sips` 或 ImageMagick 做，都没有就不带）；国内那份副本
+（`chat_mirror.go`）对图**只存预览**——不存 ref、不存原图，全部预览 ≤ 2 MB、新的优先——家连不上时页面先显示预览。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，

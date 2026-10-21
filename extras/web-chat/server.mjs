@@ -50,6 +50,7 @@
 //     own projects dir, the cwd rehomed, and the conversation goes on there.
 import http from "node:http";
 import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync, unlinkSync,
   statSync, copyFileSync } from "node:fs";
@@ -59,7 +60,7 @@ import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
-  CTX_RE } from "./lib.mjs";
+  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -228,6 +229,116 @@ const DENY_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" co
 <code>fleet-webchat.sh link</code>，用它给的一次性链接进入。</p></body>`;
 
 
+// ---- images (task T773) -----------------------------------------------------------
+// An image in a reply, a tool's result or the person's own message is kept once
+// under <state>/media/<sha256[:32]>.<ext> (0600) and travels to the page as an
+// item {t:"image", ref, w, h} — the page fetches the bytes by ref (/api/file), so
+// the conversation's JSON never carries them. A small preview (thumb, a data URL,
+// ≤ THUMB_MAX) rides on the newest THUMBS_SHOWN items: the entry's copy beside it
+// keeps only those (chat_mirror.go). Bigger than IMAGE_MAX: shown as too big.
+const MEDIA = join(STATE, "media");
+const IMAGE_MAX = Number(E.FLEET_WEBCHAT_IMAGE_MAX || 10 * 1024 * 1024);
+const IMAGES_PER_REPLY = Number(E.FLEET_WEBCHAT_IMAGES_PER_REPLY || 20);
+const THUMB_MAX = 24 * 1024;
+const THUMBS_SHOWN = 60;
+const mediaSize = new Map();                              // ref → {w, h}
+function keepImage(b) {
+  const img = imageBlockBytes(b);
+  if (!img) return null;
+  if (img.buf.length > IMAGE_MAX) return { big: true };
+  const ref = createHash("sha256").update(img.buf).digest("hex").slice(0, 32) + "." + img.ext;
+  let size = mediaSize.get(ref);
+  if (!size) {
+    const f = join(MEDIA, ref);
+    if (!existsSync(f)) {
+      try {
+        mkdirSync(MEDIA, { recursive: true, mode: 0o700 });
+        writeFileSync(f + ".tmp", img.buf, { mode: 0o600 });
+        renameSync(f + ".tmp", f);
+      } catch (e) { log("media_failed", { msg: String(e?.message || e).slice(0, 200) }); return null; }
+    }
+    size = imageSize(img.buf, img.ext);
+    mediaSize.set(ref, size);
+  }
+  return { ref, ...size };
+}
+// the image items of a block list (a reply's, a tool result's), `extra` on each
+function imageItems(list, extra = {}) {
+  const out = [];
+  for (const b of blocks(list)) {
+    const k = keepImage(b);
+    if (k) out.push(k.big ? { t: "image", big: true, ...extra } : { t: "image", ...extra, ...k });
+  }
+  return out;
+}
+// The previews: made in the background by whatever this machine has (macOS sips,
+// else ImageMagick); none ⇒ no thumb, the page still shows the image itself.
+let thumbTool;
+const thumbBusy = new Set();
+function thumbCmd(src, dst) {
+  if (thumbTool === undefined) {
+    thumbTool = null;
+    for (const [bin, mk] of [["/usr/bin/sips", (a, b) => ["-Z", "320", "-s", "format", "jpeg", "-s", "formatOptions", "60", a, "--out", b]],
+      ...["/opt/homebrew/bin/magick", "/usr/local/bin/magick", "/usr/bin/magick", "/usr/bin/convert"].map((x) => [x, (a, b) => [a + "[0]", "-thumbnail", "320x320", "-quality", "60", "jpeg:" + b]])]) {
+      if (existsSync(bin)) { thumbTool = { bin, mk }; break; }
+    }
+  }
+  return thumbTool && [thumbTool.bin, thumbTool.mk(src, dst)];
+}
+function thumbOf(ref) {
+  const f = join(MEDIA, ref.replace(/\.\w+$/, ".thumb.jpg"));
+  try {
+    const b = readFileSync(f);
+    return b.length && b.length <= THUMB_MAX ? "data:image/jpeg;base64," + b.toString("base64") : "";
+  } catch { /* not made yet */ }
+  const cmd = thumbCmd(join(MEDIA, ref), f + ".tmp");
+  if (cmd && !thumbBusy.has(ref)) {
+    thumbBusy.add(ref);
+    execFile(cmd[0], cmd[1], { timeout: 20000 }, (err) => {
+      thumbBusy.delete(ref);
+      try { if (!err) { chmodSync(f + ".tmp", 0o600); renameSync(f + ".tmp", f); } else unlinkSync(f + ".tmp"); } catch { /* none written */ }
+    });
+  }
+  return "";
+}
+// at most IMAGES_PER_REPLY images between two of the person's lines; the rest
+// are counted on one {t:"image_more", n} item; the newest carry their thumb
+function capImages(items) {
+  const out = [];
+  let n = 0;
+  for (const it of items) {
+    if (it.t === "user") n = 0;
+    if (it.t === "image" && ++n > IMAGES_PER_REPLY) {
+      const last = out[out.length - 1];
+      if (last?.t === "image_more") last.n++; else out.push({ t: "image_more", n: 1 });
+      continue;
+    }
+    out.push(it);
+  }
+  let left = THUMBS_SHOWN;
+  for (let i = out.length - 1; i >= 0 && left > 0; i--) {
+    const it = out[i];
+    for (const g of it.t === "image" ? [it] : it.t === "user" ? it.images || [] : []) {
+      if (!g.ref || left <= 0) continue;
+      left--;
+      const th = thumbOf(g.ref);
+      if (th) g.thumb = th;
+    }
+  }
+  return out;
+}
+async function sendMedia(req, res, ref) {
+  if (!MEDIA_REF_RE.test(ref || "")) return send(res, 404, { error: "not found" });
+  let body;
+  try { body = await fsp.readFile(join(MEDIA, ref)); } catch { return send(res, 404, { error: "not found" }); }
+  // an image only, never run: its own type, no sniffing, a sandbox with nothing allowed
+  res.writeHead(200, { "Content-Type": IMAGE_EXT_MIME[ref.split(".").pop()], "Content-Length": body.length,
+    "Cache-Control": "private, max-age=604800, immutable", "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox", "Content-Disposition": `inline; filename="${ref}"`,
+    "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY" });
+  res.end(body);
+}
+
 // ---- transcripts → the page's items ------------------------------------------
 const SEED_RE = /^<fleet-webchat-relay>[\s\S]*?<\/fleet-webchat-relay>\s*/;
 function blocks(content) { return typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : []; }
@@ -251,14 +362,22 @@ async function readItems(id, cwd) {
     if (!line) continue;
     let m; try { m = JSON.parse(line); } catch { continue; }
     if ((m.type !== "user" && m.type !== "assistant") || m.isSidechain || m.isMeta || m.isCompactSummary) continue;
+    // the person's own pictures ride on their line (the first text of the message)
+    let pics = m.type === "user" ? imageItems(m.message?.content).filter((g) => g.ref).map(({ ref, w, h }) => ({ ref, w, h })) : [];
     for (const b of blocks(m.message?.content)) {
       if (m.type === "user" && b.type === "text" && b.text && !/^\s*<(command|local-command|system-reminder)/.test(b.text)) {
         const text = b.text.replace(SEED_RE, "").replace(CTX_RE, "");
-        if (text) out.push({ t: "user", text });
+        if (text || pics.length) out.push({ t: "user", text, ...(pics.length ? { images: pics } : {}) });
+        pics = [];
       } else if (m.type === "assistant" && b.type === "text" && b.text) out.push({ t: "text", d: b.text });
+      else if (m.type === "assistant" && b.type === "image") out.push(...imageItems([b]));
       else if (m.type === "assistant" && b.type === "tool_use") out.push({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
-      else if (m.type === "user" && b.type === "tool_result") out.push({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
+      else if (m.type === "user" && b.type === "tool_result") {
+        out.push({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
+        out.push(...imageItems(b.content, { id: b.tool_use_id }));
+      }
     }
+    if (pics.length) out.push({ t: "user", text: "", images: pics });
   }
   return out;
 }
@@ -266,7 +385,7 @@ async function conversationItems() {
   const out = [];
   for (const s of conv.chain) out.push(...await readItems(s.id, s.cwd));
   if (conv.session) out.push(...await readItems(conv.session, conv.cwd));
-  return out;
+  return capImages(out);
 }
 
 // ---- the one conversation ------------------------------------------------------
@@ -608,6 +727,10 @@ async function turn(req, res, person) {
   });
 
   let sawDelta = false;
+  let shown = 0;                                          // this turn's images, IMAGES_PER_REPLY at most
+  const emitImages = (list, extra) => {
+    for (const it of imageItems(list, extra)) emitAll(++shown > IMAGES_PER_REPLY ? { t: "image_more", n: 1 } : it);
+  };
   const onMsg = (m) => {
     if (m.type === "system" && m.subtype === "init") return emitAll({ t: "session", id: m.session_id, cwd: conv.cwd });
     if (m.type === "stream_event") {
@@ -626,13 +749,17 @@ async function turn(req, res, person) {
       for (const b of blocks(m.message?.content)) {
         if (b.type === "text" && b.text && !sawDelta) emitAll({ t: "text", d: b.text });
         if (b.type === "tool_use") emitAll({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
+        if (b.type === "image") emitImages([b]);
       }
       sawDelta = false;
       return;
     }
     if (m.type === "user") {
       for (const b of blocks(m.message?.content)) {
-        if (b.type === "tool_result") emitAll({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
+        if (b.type === "tool_result") {
+          emitAll({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
+          emitImages(b.content, { id: b.tool_use_id });
+        }
       }
       return;
     }
@@ -808,6 +935,7 @@ async function handle(req, res) {
       models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600) });
   }
   if (p === "/api/turn" && req.method === "POST") return turn(req, res, person);
+  if (p === "/api/file" && req.method === "GET") return sendMedia(req, res, u.searchParams.get("ref"));
   if (SOCKET && p === "/api/export" && req.method === "GET") { log("export", { person }); return send(res, 200, await exportConv()); }
   if (SOCKET && p === "/api/import" && req.method === "POST") {
     const [code, msg] = await importConv(await readJson(req, EXPORT_MAX + 1024 * 1024));

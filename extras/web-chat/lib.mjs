@@ -249,3 +249,42 @@ export function contextDetails(b, place = {}) {
   return { ip: place.ip || "", place: { country: place.country || "", province: place.province || "", city: place.city || "" },
     ...uaKind(b), ...(b || {}) };
 }
+
+// ---- images (task T773) ---------------------------------------------------------
+// The types the page shows, by MIME → the file extension they are kept under.
+export const IMAGE_TYPES = Object.freeze({ "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" });
+export const IMAGE_EXT_MIME = Object.freeze(Object.fromEntries(Object.entries(IMAGE_TYPES).map(([m, x]) => [x, m])));
+// a kept image's name: the first 32 hex of its bytes' sha256 + its extension
+export const MEDIA_REF_RE = /^[0-9a-f]{32}\.(?:png|jpg|gif|webp)$/;
+// The bytes of an image block (a transcript's / the SDK's {type:"image", source}),
+// or null when it is not one the page shows: base64 only, a known type.
+export function imageBlockBytes(b) {
+  const src = b && b.type === "image" ? b.source : null;
+  if (!src || src.type !== "base64" || typeof src.data !== "string") return null;
+  const ext = IMAGE_TYPES[String(src.media_type || "").toLowerCase()];
+  if (!ext) return null;
+  const buf = Buffer.from(src.data, "base64");
+  return buf.length ? { buf, ext, mime: IMAGE_EXT_MIME[ext] } : null;
+}
+// width × height off the header (PNG · JPEG · GIF · WebP), or {} when unread
+export function imageSize(buf, ext) {
+  try {
+    if (ext === "png" && buf.length >= 24) return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    if (ext === "gif" && buf.length >= 10) return { w: buf.readUInt16LE(6), h: buf.readUInt16LE(8) };
+    if (ext === "webp" && buf.length >= 30) {
+      const kind = buf.toString("ascii", 12, 16);
+      if (kind === "VP8X") return { w: 1 + buf.readUIntLE(24, 3), h: 1 + buf.readUIntLE(27, 3) };
+      if (kind === "VP8 ") return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+      if (kind === "VP8L") { const b = buf.readUInt32LE(21); return { w: 1 + (b & 0x3fff), h: 1 + ((b >> 14) & 0x3fff) }; }
+    }
+    if (ext === "jpg") {
+      for (let i = 2; i + 9 < buf.length;) {
+        if (buf[i] !== 0xff) { i++; continue; }
+        const m = buf[i + 1];
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: buf.readUInt16BE(i + 7), h: buf.readUInt16BE(i + 5) };
+        i += 2 + buf.readUInt16BE(i + 2);
+      }
+    }
+  } catch { /* a short or odd header */ }
+  return {};
+}

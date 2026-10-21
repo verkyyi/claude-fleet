@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -19,7 +21,9 @@ import (
 // answers. The home stays the record: its answer replaces the copy, every time.
 //
 // What the copy holds: the person's words, the reply's text and each tool
-// step's one line — never a tool's output (code, secrets). Only the person
+// step's one line — never a tool's output (code, secrets). An image (task
+// T773) is kept as its small preview only (thumb, chatMirrorThumbMax in all,
+// the newest first), never its bytes and never the name the home serves it by. Only the person
 // reads it: a view-as read is refused, an admin reads only their own. Kept
 // chatMirrorKeep after the last read that reached the home, then deleted.
 // The person's switch (PUT /v1/chat/mirror {"on":false}) deletes it and keeps
@@ -33,7 +37,26 @@ const (
 	chatMirrorKeep = 90 * 24 * time.Hour
 	// chatMirrorMax bounds the conversation body the entry reads to copy.
 	chatMirrorMax = 4 << 20
+	// chatMirrorThumbMax bounds the image previews one copy keeps (task T773).
+	chatMirrorThumbMax = 2 << 20
+	// chatMirrorThumbOne bounds one preview; a larger one is not kept.
+	chatMirrorThumbOne = 32 << 10
 )
+
+// chatMirrorPic keeps an image's size and its preview (when it fits *left).
+func chatMirrorPic(g map[string]any, left *int) map[string]any {
+	out := map[string]any{}
+	for _, k := range []string{"w", "h", "big"} {
+		if v, ok := g[k]; ok {
+			out[k] = v
+		}
+	}
+	if th, ok := g["thumb"].(string); ok && strings.HasPrefix(th, "data:image/jpeg;base64,") && len(th) <= chatMirrorThumbOne && len(th) <= *left {
+		out["thumb"] = th
+		*left -= len(th)
+	}
+	return out
+}
 
 // chatMirrorDoc is what a copy holds.
 type chatMirrorDoc struct {
@@ -44,14 +67,34 @@ type chatMirrorDoc struct {
 	Items   []json.RawMessage `json:"items"`
 }
 
-// chatMirrorItem keeps what a copy may hold of one item.
-func chatMirrorItem(raw json.RawMessage) (json.RawMessage, bool) {
+// chatMirrorItem keeps what a copy may hold of one item; left is what the
+// copy may still spend on previews (the items are walked newest first).
+func chatMirrorItem(raw json.RawMessage, left *int) (json.RawMessage, bool) {
 	var it map[string]any
 	if json.Unmarshal(raw, &it) != nil {
 		return nil, false
 	}
 	switch it["t"] {
-	case "user", "text", "stopped", "error":
+	case "user":
+		if pics, ok := it["images"].([]any); ok {
+			kept := []any{}
+			for _, p := range pics {
+				if g, ok := p.(map[string]any); ok {
+					kept = append(kept, chatMirrorPic(g, left))
+				}
+			}
+			it["images"] = kept
+		}
+	case "image":
+		id, hasID := it["id"]
+		it = chatMirrorPic(it, left)
+		it["t"] = "image"
+		if hasID {
+			it["id"] = id
+		}
+	case "image_more":
+		it = map[string]any{"t": "image_more", "n": it["n"]}
+	case "text", "stopped", "error":
 	case "tool":
 		delete(it, "input")
 	case "tool_result":
@@ -87,11 +130,13 @@ func (s *Server) chatMirrorKeepBody(person string, body []byte, now time.Time) {
 		return
 	}
 	doc := chatMirrorDoc{Session: in.Session, Cwd: in.Cwd, Models: in.Models, Default: in.Default, Items: []json.RawMessage{}}
-	for _, raw := range in.Items {
-		if it, ok := chatMirrorItem(raw); ok {
+	left := chatMirrorThumbMax
+	for i := len(in.Items) - 1; i >= 0; i-- {
+		if it, ok := chatMirrorItem(in.Items[i], &left); ok {
 			doc.Items = append(doc.Items, it)
 		}
 	}
+	slices.Reverse(doc.Items)
 	sealed, err := s.Vault.SealPerson(doc, person, chatMirrorPurpose)
 	if err != nil {
 		log.Printf("fleet: chat copy of %s: seal: %v", person, err)
