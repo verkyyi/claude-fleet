@@ -343,6 +343,7 @@
 4.1 restore-peer-window
 1.1 restore-role-lost
 3.7 resume-fails-fast
+6.0 session-exited-transient
 0.2 rm-empty-var-prompt
 0.5 root-core-off-list
 0.7 root-core-seat-stage

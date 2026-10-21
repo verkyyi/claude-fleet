@@ -87,6 +87,30 @@ def unreported_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else UNREPORTED_DEFAULT
 
 
+BG_GRACE_DEFAULT = 30 * 60      # E101 拍板: 做完后后台活最多再保 30 分钟
+
+
+def bg_grace_secs():
+    """How long a session whose work is over may keep a background job (a preview
+    server, a /loop) alive past its last turn before the job no longer holds the
+    window (E101: Y794's poster preview held it 12 h)."""
+    value = os.environ.get("FLEET_REAP_BG_GRACE", "")
+    return int(value) if re.fullmatch(r"\d{1,7}", value) else BG_GRACE_DEFAULT
+
+
+PARK_DEFAULT = 4 * 3600          # E101 拍板: 等你回话 4 小时停放
+
+
+def park_secs():
+    """How long a finished session waiting on its person's reply keeps its window
+    before it is parked — closed, its conversation, worktree and record kept (E101)."""
+    value = os.environ.get("FLEET_REAP_PARK_SECS", "")
+    return int(value) if re.fullmatch(r"\d{1,7}", value) else PARK_DEFAULT
+
+
+# An ID's newest result that waits on its person (E101).
+WAIT_RESULTS = ("waiting", "blocked")
+
 # A result written this long before the turn that ended counts as that turn's word
 # (a report, then a few more steps before the prompt) — T756's unreported rule.
 REPORTED_SLACK = 600
@@ -107,6 +131,9 @@ class Cleaner:
         self.tm = tmux(args.socket_name)
         self.now = int(time.time())
         self.idle = minutes() * 60
+        self.why = ""          # why the window in hand is still open (E101: @reap_why)
+        self.bg_over = False   # its background job outlived bg_grace_secs(): killed with the window
+        self.records = {}      # one record read a tick per task
 
     def retire(self, window):
         """An idle reap is the fleet's close, never a kill to pull back (#1840)."""
@@ -155,7 +182,9 @@ class Cleaner:
                  # T694 (回收 B): where it came from, and what keeps it
                  "@reap_keep_by", "@reap_origin", "@origin_wid", "@reap_unreported",
                  # T810: handed to WebChat — the window is the way back (↵), kept
-                 "@handoff_web")
+                 "@handoff_web",
+                 # E101: the wrapper's one automatic retry of a temporary error
+                 "@auto_resume_at", "@auto_resumed", "@reap_why")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -264,6 +293,57 @@ class Cleaner:
                    "idle-reap", str(BIN), self.args.session, window)
         return bool(held)
 
+    def held(self, window, snap, over):
+        """busy() — but a session whose work is over (`over`) owns its background
+        job only bg_grace_secs() past its last turn (E101: a poster's preview server
+        held Y794's window 12 hours after its task closed). Past that the job no
+        longer holds the window; the close takes it along (bg_over). Work not over:
+        busy() as it was."""
+        if not self.busy(window, snap):
+            return False
+        if not over:
+            return True
+        stamp = snap["@claude_state_ts"]
+        due = (int(stamp) if stamp.isdigit() else self.now) + bg_grace_secs()
+        if due <= self.now:
+            self.bg_over = True
+            return False
+        self.why = "bg:%d" % due
+        self.say(window, "skip:bg-job", "due=%d" % due)
+        return True
+
+    def tree_pids(self, pid):
+        """Every process under <pid> (not itself) — one ps."""
+        procs = self.tree_rss()
+        kids = {}
+        for p, (pp, _) in procs.items():
+            kids.setdefault(pp, []).append(p)
+        out, todo = [], list(kids.get(int(pid), [])) if str(pid).isdigit() else []
+        while todo:
+            p = todo.pop()
+            if p not in out:
+                out.append(p)
+                todo.extend(kids.get(p, []))
+        return out
+
+    @staticmethod
+    def kill_left(pids):
+        """What a closed window's background job left running (E101): its pane went
+        with the window, the job it outlived its grace for goes too — TERM to each
+        process still up a moment later (a preview server outside every worktree
+        anchor, which fleet-window-reap.sh would spare)."""
+        if not pids:
+            return []
+        time.sleep(1)
+        gone = []
+        for p in pids:
+            try:
+                os.kill(p, 15)
+                gone.append(p)
+            except OSError:
+                pass
+        return gone
+
     def deadline(self, snap, pol):
         """When this window's own policy lets it go (issue #1902)."""
         kind, val = pol
@@ -311,11 +391,13 @@ class Cleaner:
         except OSError:
             pass
 
-    def close(self, window, snap, recheck):
+    def close(self, window, snap, recheck, why="reaped"):
         """The one kill-window of a worktree session: under its transition lock,
         never while a reopen marks it (@migrating), and only once <recheck>()
-        still holds — rc False when any of them says no (nothing closed)."""
+        still holds — rc False when any of them says no (nothing closed). <why> is
+        its ID's close reason (`parked` for a park, E101)."""
         if snap["@migrating"]:
+            self.why = "moving"
             self.say(window, "skip:migrating", snap["@migrating"])
             return False
         lock = self.transition(snap["@worktree"])
@@ -330,9 +412,12 @@ class Cleaner:
                 self.say(window, "id-shared", other.split("\t")[-1])
             else:
                 self.retire(window)
+            left = self.tree_pids(snap["pane_pid"]) if self.bg_over else []
             self.tm("kill-window", "-t", window)
+            if left:
+                print("bg-killed:%s %s" % (window, ",".join(str(p) for p in self.kill_left(left)) or "-"))
             if not other:
-                self.end_id(snap["@fleet_id"])
+                self.end_id(snap["@fleet_id"], why)
             return True
         finally:
             self.untransition(lock)
@@ -349,6 +434,8 @@ class Cleaner:
             # are never this pass's (merged is fleet-cleanup.sh's). Every gate
             # below still applies.
             if pol[0] not in ("done", "idle", "loop-end", "at"):
+                if pol[0] == "keep":
+                    self.why = "keep"
                 return False
         elif snap["@raw"] != "1" or snap["@issue"]:
             return False
@@ -377,6 +464,7 @@ class Cleaner:
             return False
         transfer = snap["@agent_transfer_until"]
         if transfer and (not transfer.isdigit() or int(transfer) > self.now):
+            self.why = "moving"
             return False
         manifest = snap["@handoff_manifest"]
         if manifest:
@@ -403,15 +491,21 @@ class Cleaner:
         # finished windows open for days. A tracked change still keeps it.
         status = run("git", "-C", wt, "status", "--porcelain")
         if status and not (task and all(l.startswith("?? ") for l in status.splitlines())):
+            self.why = "dirty"
             return False
         # Reuse the transfer lease's PID/TTL semantics rather than only trusting
         # window metadata during a migration gap.
         held = run("bash", "-c", '. "$1/fleet-lib.sh"; if fleet_rotate_lease_held "$2"; then echo held; fi',
                    "idle-reap", str(BIN), wt)
         if held:
+            self.why = "moving"
             return False
-        run("python3", str(BIN / "fleet-reap-live.py"), window,
-            "--socket-name", self.args.socket_name)
+        try:
+            run("python3", str(BIN / "fleet-reap-live.py"), window,
+                "--socket-name", self.args.socket_name, *(["--bg-over"] if self.bg_over else []))
+        except subprocess.CalledProcessError:
+            self.why = "live"      # someone looks at it, or a draft in its box
+            raise
         return True
 
     def test_session(self, window, snap):
@@ -644,7 +738,7 @@ class Cleaner:
         if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
             if self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}") == window:
                 return False
-        held = (lambda: False) if (driver and over) else (lambda: self.busy(window, snap))
+        held = (lambda: False) if (driver and over) else (lambda: self.held(window, snap, over))
         if held():
             return False
         if over:
@@ -670,6 +764,7 @@ class Cleaner:
                 self.say(window, "skip:reported", origin)
                 return False
             if not nudged.isdigit():
+                self.why = "task-open"
                 if int(stamp) + first > self.now:
                     return False
                 if self.args.dry_run:
@@ -684,6 +779,7 @@ class Cleaner:
         due = notice(self.tm, window, why + ":" + snap["@fleet_id"][:8], deadline, self.now,
                      self.args.dry_run, tick=max(1, min(deadline - int(stamp), 60)))
         if due > self.now:
+            self.why = "timer:%d" % due
             return False
         print("reap-due:%s policy=%s origin=%s %s" % (window, snap["@reap_policy"] or "merged", origin, why),
               file=__import__("sys").stderr)
@@ -716,7 +812,169 @@ class Cleaner:
         return True
 
     def candidate(self, window):
+        """One window's pass — and, whatever the road decided, why it is still open
+        (E101): @reap_why, one code the node's inventory carries (`reapwhy=`) and the
+        hub turns into the list card's 「为什么还没收」 line. Written when it changes,
+        cleared when there is none (a working window says none); a closed window
+        has no window left to carry it."""
+        self.why, self.bg_over = "", False
         snap = self.snapshot(window)
+        closed = False
+        try:
+            closed = self.road(window, snap)
+            return closed
+        finally:
+            if not closed:
+                self.stamp_why(window, snap)
+
+    def stamp_why(self, window, snap):
+        if self.args.dry_run or self.theirs(snap):
+            return
+        fin = (self.finished(snap) in ("done", "exited") or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1")
+        why = self.why if fin and re.fullmatch(r"[a-z-]{1,16}(?::\d{1,11})?", self.why or "") else ""
+        if why == snap.get("@reap_why", ""):
+            return
+        try:
+            if why:
+                self.tm("set-option", "-w", "-t", window, "@reap_why", why)
+            else:
+                self.tm("set-option", "-wu", "-t", window, "@reap_why")
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def error_stop(self, window, snap):
+        """A session its agent's error stopped (E101): @claude_state exited with a
+        7501 `error` report — FQBW's 502 sat 16 hours in 已结束. Never closed by a
+        reaper: it waits for the wrapper's one automatic retry of a temporary error
+        (fleet-session-wrap.sh @auto_resume_at), else for its person. None = not one."""
+        if snap["@claude_state"] != "exited" or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1":
+            return None
+        try:
+            rec = json.loads(snap["@agent_status"]) if snap["@agent_status"] else None
+        except ValueError:
+            rec = None
+        if not isinstance(rec, dict) or rec.get("state") != "error":
+            return None
+        at = snap.get("@auto_resume_at", "")
+        if at.isdigit():
+            self.why = "error-retry:%s" % at
+        elif snap.get("@auto_resumed") == "1":
+            self.why = "error-retried"
+        else:
+            self.why = "error"
+        self.say(window, "skip:error-stop", self.why)
+        return False
+
+    def id_status(self, fid):
+        """fleet_id.py status of the window's ID ({} unreadable)."""
+        if not FID_RE.fullmatch(fid or ""):
+            return {}
+        env = dict(os.environ)
+        env.pop("FLEET_ID_LIVE", None)
+        try:
+            out = subprocess.run(["python3", str(BIN / "fleet_id.py"), "status", fid], env=env,
+                                 capture_output=True, text=True, timeout=15).stdout
+            got = json.loads(out or "{}")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return {}
+        return got if isinstance(got, dict) else {}
+
+    def waiting(self, window, snap):
+        """A finished session waiting on its person (E101): its ID's newest result
+        says `waiting` / `blocked`, or its open record asked them (「问过你」) — B2XT
+        and CRFW sat in 排队中 for a day. It waits park_secs() (4 h) past its last
+        turn, then it is PARKED: history first and resumable, the window closed,
+        the worktree and conversation kept, 「停放」 on its record — the list keeps
+        its row in 等你 (a clock), and 接回 brings it back where it was. A `keep` it
+        set itself parks too; a person's keep, a pin, an orchestrator never. A
+        draft, a job or tracked changes keep the window. None = not waiting."""
+        if (snap["@norepo"] == "1" or self.theirs(snap) or snap["@fleet_role"] in ("home", "panel")
+                or snap["window_name"] in ("dash", "plan", "backlog", "home")
+                or self.finished(snap) != "done" or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1"):
+            return None
+        stamp = snap["@claude_state_ts"]
+        if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
+            return None
+        selfkeep = snap["@reap_policy"].strip() == "keep" and snap.get("@reap_keep_by") == "session"
+        pol = self.policy(snap)
+        if pol is not None and pol[0] == "keep" and not selfkeep:
+            return None
+        st = self.id_status(snap["@fleet_id"])
+        if st.get("state") in ("done", "failed"):
+            return None                       # its work is over: the ordinary roads
+        result = (st.get("result") or {}).get("state", "") if isinstance(st.get("result"), dict) else ""
+        task = snap["@task"] if re.fullmatch(r"T[1-9][0-9]{0,9}", snap["@task"]) else ""
+        rc, asked, _parked = self.record(task) if task else (3, False, False)
+        if rc == 0 or not (result in WAIT_RESULTS or asked):
+            return None
+        due = int(stamp) + park_secs()
+        self.why = "waiting:%d" % due
+        if snap.get("@reap_unreported") and not self.args.dry_run:
+            self.tm("set-option", "-wu", "-t", window, "@reap_unreported")   # it said something: no red mark
+        if due > self.now:
+            self.say(window, "skip:waiting", "park=%d" % due)
+            return False
+        wt = snap["@worktree"]
+        m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
+        if not m or Path(wt).resolve() == Path(self.args.main).resolve() or not Path(wt).is_dir():
+            return False                      # nothing to resume it from: it keeps its window
+        key = m[1] + "-" + m[2]
+        transfer = snap["@agent_transfer_until"]
+        if transfer and (not transfer.isdigit() or int(transfer) > self.now):
+            self.why = "moving"
+            return False
+        records = run("git", "-C", self.args.main, "worktree", "list", "--porcelain").split("\n\n")
+        if not any("worktree " + wt in record.splitlines() for record in records):
+            return False
+        status = run("git", "-C", wt, "status", "--porcelain")
+        if status and not all(l.startswith("?? ") for l in status.splitlines()):
+            self.why = "dirty"
+            return False
+        if run("bash", "-c", '. "$1/fleet-lib.sh"; if fleet_rotate_lease_held "$2"; then echo held; fi',
+               "idle-park", str(BIN), wt):
+            self.why = "moving"
+            return False
+        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
+            if self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}") == window:
+                return False
+        if self.busy(window, snap):
+            return False
+        if subprocess.run(["python3", str(BIN / "fleet-reap-live.py"), window, "--socket-name",
+                           self.args.socket_name], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
+            self.why = "live"
+            return False
+        print("reap-due:%s policy=%s park" % (window, snap["@reap_policy"] or "-"), file=__import__("sys").stderr)
+        if self.args.dry_run:
+            print("would-park:" + window + " " + key)
+            return False
+        run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
+            "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
+            "--title", snap["window_name"], "--summary", "Parked: waiting on its person's reply")
+        if not self.reopens(window, key, wt):
+            return False
+        if not self.close(window, snap, lambda: not self.busy(window, snap), why="parked"):
+            return False
+        if task:
+            seam = os.environ.get("FLEET_TASK_PARK_CMD")
+            argv = ([seam, task] if seam else ["bash", str(BIN / "fleet-task-record.sh"), "set", task, "--parked",
+                                              "停放：等你回话满 %d 小时，窗口已关，对话和工作区都在；回话即唤醒"
+                                              % (park_secs() // 3600 or 1)])
+            try:
+                subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        print("parked:%s %s%s" % (window, key, (" " + task) if task else ""))
+        return True
+
+    def road(self, window, snap):
+        road = self.error_stop(window, snap)
+        if road is not None:
+            return road
+        road = self.waiting(window, snap)
+        if road is not None:
+            return road
         road = self.dispatched_session(window, snap)
         if road is not None:
             return road
@@ -764,6 +1022,7 @@ class Cleaner:
             deadline = self.deadline(snap, pol)
         due = notice(self.tm, window, "idle:" + head, deadline, self.now, self.args.dry_run)
         if due > self.now:
+            self.why = "timer:%d" % due
             return False
         if pol is not None:
             # The metric's numerator (EPIC #1906): due by its own policy now.
@@ -849,13 +1108,22 @@ class Cleaner:
     def task_closed(self, task):
         """0 closed (收口) · 1 open · 3 unknown — fleet_task_control.py closed,
         or the FLEET_TASK_CLOSED_CMD seam (same contract)."""
+        return self.record(task)[0]
+
+    @staticmethod
+    def record(task):
+        """(rc, asked, parked) of one read of <task>'s record: rc as task_closed;
+        asked / parked — its 「问过你」 / 「停放」 hold words (E101: the `asked: 1` /
+        `parked: 1` lines fleet_task_control.py closed prints; a seam printing none
+        reads as neither)."""
         cmd = os.environ.get("FLEET_TASK_CLOSED_CMD")
         argv = [cmd, task] if cmd else ["python3", str(BIN / "fleet_task_control.py"), "closed", "--task", task]
         try:
-            rc = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode
+            p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
-            return 3
-        return rc if rc in (0, 1) else 3
+            return 3, False, False
+        lines = (p.stdout or "").splitlines()
+        return (p.returncode if p.returncode in (0, 1) else 3), "asked: 1" in lines, "parked: 1" in lines
 
     def task_session(self, window, snap):
         """Close a task session once its work is over (issue #4897; T680: its ID
@@ -876,9 +1144,10 @@ class Cleaner:
         if rc != 0:
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("task:"):
                 clear(self.tm, window)
+            self.why = "task-open"
             self.say(window, "skip:task-open" if rc == 1 else "skip:task-unknown", task)
             return False
-        if not self.eligible(window, snap, task=True) or self.busy(window, snap):
+        if self.held(window, snap, True) or not self.eligible(window, snap, task=True):
             return False
         pol = self.policy(snap)
         if self.args.grace is not None:
@@ -888,6 +1157,7 @@ class Cleaner:
         due = notice(self.tm, window, "task:" + task, int(snap["@claude_state_ts"]) + grace,
                      self.now, self.args.dry_run, tick=min(grace, 60))
         if due > self.now:
+            self.why = "timer:%d" % due
             return False
         print("reap-due:%s policy=%s task=%s" % (window, snap["@reap_policy"] or "merged", task),
               file=__import__("sys").stderr)
@@ -900,9 +1170,9 @@ class Cleaner:
             "--summary", "Automatically closed: task " + task + " is closed")
         if not self.reopens(window, key, wt):
             return False
-        if not self.close(window, snap, lambda: not self.busy(window, snap)):
+        if not self.close(window, snap, lambda: not self.held(window, snap, True)):
             return False  # re-checked right before the close
-        print("reaped-task:" + window + " " + task)
+        print("reaped-task:" + window + " " + task + (" bg-over" if self.bg_over else ""))
         return True
 
     def branch_prs(self, branch, head):
@@ -971,10 +1241,12 @@ class Cleaner:
             return False
         deadline = int(stamp) + done_no_pr_secs()
         if deadline > self.now:
+            self.why = "timer:%d" % deadline
             self.say(window, "skip:done-recent", "%s due=%d" % (key, deadline))
             return False
         transfer = snap["@agent_transfer_until"]
         if transfer and (not transfer.isdigit() or int(transfer) > self.now):
+            self.why = "moving"
             self.say(window, "skip:busy", key + " transfer")
             return False
         manifest = snap["@handoff_manifest"]
@@ -1000,6 +1272,7 @@ class Cleaner:
                        'if fleet_rotate_lease_held "$2"; then echo held; fi',
                        "idle-reap", str(BIN), wt)
             if held:
+                self.why = "moving" if held == "held" else ""
                 self.say(window, "skip:busy", key + " " + ("rotation" if held == "held" else held))
                 return False
             try:
@@ -1018,6 +1291,7 @@ class Cleaner:
         if subprocess.run(["python3", str(BIN / "fleet-reap-live.py"), window, "--socket-name",
                            self.args.socket_name], stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
+            self.why = "live"
             self.say(window, "skip:live", key)
             return False
         if issue:
@@ -1033,6 +1307,7 @@ class Cleaner:
                 except (ValueError, AttributeError, subprocess.CalledProcessError):
                     state = ""
             if state != "CLOSED":
+                self.why = "task-open"
                 self.say(window, "skip:issue-open" if state == "OPEN" else "skip:issue-unknown",
                          "%s #%s" % (key, issue))
                 return False

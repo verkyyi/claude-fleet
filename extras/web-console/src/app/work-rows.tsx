@@ -45,7 +45,7 @@ function saveSeen(v: Record<string, string>) {
 export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const tasks = useTasks();
   const { live, ended, board, boardAt, failed, reload, etag, fresh, prime } = useSessions(tasks.accept, tasks.reload);
-  const rows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live)
+  const rows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live, ended || [])
     : buildRows(tasks.data.tasks, live, ended || [])) : null), [live, ended, board, tasks.data]);
 
   // the list this browser kept (task T47B): read beside /v1/me (no other

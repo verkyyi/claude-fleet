@@ -209,7 +209,7 @@ def reap_state(tmux, target):
 DEFAULT_MIN_AGE = 300
 
 
-def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, now=None):
+def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, now=None, bg_over=False):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
@@ -226,8 +226,18 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
                "#{@loop}\t#{@handoff_manifest}").rstrip("\n")
     value, _, manifest = raw.partition("\t")
     if (value or manifest) and LOOPMARK["status"](value, manifest)[0] == "active":
-        return "retained:loop"
+        if not bg_over:
+            return "retained:loop"
+        if waived is not None:
+            waived.append("loop")
     why = waiting(target, socket_name)
+    # Work over past its background grace (E101, --bg-over — the idle reaper's
+    # word): a pending round or a Bash-tool job no longer holds it; a sub-task
+    # still open or a fleet tool call in flight still does.
+    if why == "bg" and bg_over:
+        if waived is not None:
+            waived.append("bg")
+        why = ""
     # A worker whose PR merged (merged_at, the merged gate's own probe) has shipped:
     # a sub-task it spawned and that is still open — a repro session left at its
     # prompt — does not keep it (issue #4822). The child stays; its reports climb
@@ -322,6 +332,8 @@ def main():
     parser.add_argument("--state", action="store_true",
                         help="print the state a reaper judges the target by (issue #2540) and exit 0")
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
+    parser.add_argument("--bg-over", action="store_true",
+                        help="its work is over past its background grace (E101): a pending loop / bg job no longer holds it")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", str(DEFAULT_MIN_AGE))
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else DEFAULT_MIN_AGE
@@ -345,7 +357,7 @@ def main():
                                      args.exclude_window)
         elif args.target:
             reason = live_reason(args.target, minimum, args.socket_name, merged_at, waived,
-                                 int(time.time()) if merged_at is not None else None)
+                                 int(time.time()) if merged_at is not None else None, args.bg_over)
         else:
             reason = "unknown:missing-target"
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -355,7 +367,7 @@ def main():
         return 1
     if waived:
         # Exit 0 still means reapable; the line only lets the caller log the waiver.
-        print("waived:" + ",".join(w if w in ("looping", "children") else "young-agent:" + w for w in waived))
+        print("waived:" + ",".join(w if w in ("looping", "children", "loop", "bg") else "young-agent:" + w for w in waived))
     return 0
 
 

@@ -23,7 +23,8 @@ export const termKept = (view: View, leftAt: number | null, now = Date.now()) =>
 export type TermState = { kind: "live"; worker: string } | { kind: "opening" } | { kind: "ended" };
 export function termOf(r: Row): TermState {
   if (r.live) return { kind: "live", worker: r.live.id };
-  return r.group === "gone" ? { kind: "ended" } : { kind: "opening" };
+  // a parked session (E101) is not opening: its window closed on purpose, 接回 wakes it
+  return r.group === "gone" || r.board?.tag === "parked" ? { kind: "ended" } : { kind: "opening" };
 }
 
 // A phone on its side: the terminal takes the whole screen, one line of head.

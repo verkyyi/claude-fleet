@@ -4,7 +4,9 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,9 +26,13 @@ import (
 // worker_id, else the record's: a record and the session doing it are ONE row.
 //
 //	pin   置顶     the session is pinned (@pin)
-//	ask   等你     it asks (needs · blocked), its agent failed, or its record
-//	                waits on you (asked, no session); a record that failed or did
-//	                not start with no session left is 已收起 (the ✦ messages say it)
+//	ask   等你     it asks (needs · blocked), its agent failed, its agent's error
+//	                stopped it (E101: exited on a 7501 error, the node's reap_why
+//	                error*), or it waits on you — its record asked, or the node
+//	                says its ID's result waits (reap_why waiting), with or without
+//	                a session; a record parked (停放) with no session; a record that
+//	                failed or did not start with no session left is 已收起 (the ✦
+//	                messages say it). Waiting and parked rows sit above the rest.
 //	work  在干活   working · looping
 //	queue 排队中   up, waiting on something not you (idle · its turn ended ·
 //	                unknown · its record already ended), or a record whose
@@ -51,23 +57,29 @@ const (
 
 // BoardRow is one row of the list.
 type BoardRow struct {
-	ID         string    `json:"id"`
-	Code       string    `json:"code,omitempty"`
-	Task       string    `json:"task,omitempty"`    // the record's T<n>
-	TaskID     string    `json:"task_id,omitempty"` // the record's ID
-	Title      string    `json:"title"`
-	Group      string    `json:"group"`
-	Tag        string    `json:"tag"`
-	Words      [2]string `json:"words"` // the tag in 中文 / English, the same on both sides
-	State      string    `json:"state,omitempty"`
-	WorkerID   string    `json:"worker_id,omitempty"`
-	Machine    string    `json:"machine,omitempty"`
-	Login      string    `json:"login,omitempty"`
-	Repo       string    `json:"repo,omitempty"`
-	Parent     string    `json:"parent,omitempty"`
-	Depth      int       `json:"depth,omitempty"`
-	Lost       bool      `json:"lost,omitempty"`
-	At         int64     `json:"at"`
+	ID       string    `json:"id"`
+	Code     string    `json:"code,omitempty"`
+	Task     string    `json:"task,omitempty"`    // the record's T<n>
+	TaskID   string    `json:"task_id,omitempty"` // the record's ID
+	Title    string    `json:"title"`
+	Group    string    `json:"group"`
+	Tag      string    `json:"tag"`
+	Words    [2]string `json:"words"` // the tag in 中文 / English, the same on both sides
+	State    string    `json:"state,omitempty"`
+	WorkerID string    `json:"worker_id,omitempty"`
+	Machine  string    `json:"machine,omitempty"`
+	Login    string    `json:"login,omitempty"`
+	Repo     string    `json:"repo,omitempty"`
+	Parent   string    `json:"parent,omitempty"`
+	Depth    int       `json:"depth,omitempty"`
+	Lost     bool      `json:"lost,omitempty"`
+	At       int64     `json:"at"`
+	// Why it is still open (E101), 中文 / English, and its tone — grey · orange ·
+	// red: the node's reap_why turned into the card's third line, ONE source for
+	// the console and the ⌘P panel. Only on 等你 / 排队中 rows; none when nothing
+	// holds it (or an older node says nothing).
+	Why        []string `json:"why,omitempty"`
+	WhyTone    string   `json:"why_tone,omitempty"`
 	parentTask string
 }
 
@@ -88,7 +100,68 @@ var boardWords = map[string][2]string{
 	"idle": {"空闲", "Idle"}, "unknown": {"状态未知", "Unknown"}, "starting": {"正在开", "Starting"},
 	"queued": {"排着", "Queued"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
 	"ended": {"已结束", "Ended"}, "ended_no_result": {"结束·没交回结果", "Ended · no result"},
-	"lost": {"机器失联", "Machine lost"},
+	"lost":   {"机器失联", "Machine lost"},
+	"parked": {"已停放 · 等你", "Parked · waiting on you"}, "stopped": {"出错停住", "Stopped on an error"},
+}
+
+// boardWhy turns a node's reap_why (`<code>[:<epoch>]`, bin/fleet-cleanup-idle.py)
+// into the card's line (E101's copy table, letter for letter) and its tone. N is
+// counted to the epoch at this answer, never below 1. An unknown code says nothing.
+func boardWhy(raw string, now time.Time) ([]string, string) {
+	code, at := raw, int64(0)
+	if i := strings.IndexByte(raw, ':'); i >= 0 {
+		code = raw[:i]
+		at, _ = strconv.ParseInt(raw[i+1:], 10, 64)
+	}
+	left := at - now.Unix()
+	mins, hours := (left+59)/60, (left+3599)/3600
+	if mins < 1 {
+		mins = 1
+	}
+	if hours < 1 {
+		hours = 1
+	}
+	two := func(zh, en string) []string { return []string{zh, en} }
+	switch code {
+	case "bg":
+		return two(fmt.Sprintf("还没收：做完了，后台的活还在跑 · %d 分钟后收", mins),
+			fmt.Sprintf("Not closed yet: done, but a background job is still running · closes in %d min", mins)), "grey"
+	case "timer":
+		return two(fmt.Sprintf("还没收：计时中 · %d 分钟后收", mins), fmt.Sprintf("Not closed yet: closes in %d min", mins)), "grey"
+	case "dirty":
+		return two("不会自动收：有没提交的改动", "Won't close on its own: uncommitted changes"), "grey"
+	case "keep":
+		return two("不会自动收：你设了保留", "Won't close on its own: kept by you"), "grey"
+	case "task-open":
+		return two("还没收：任务还没收口", "Not closed yet: its task is still open"), "grey"
+	case "live":
+		return two("先不收：有人正在看或在输入", "Not now: someone is looking or typing"), "grey"
+	case "moving":
+		return two("先不收：正在换机器", "Not now: moving to another machine"), "grey"
+	case "waiting":
+		return two(fmt.Sprintf("在等你回话 · %d 小时后停放，回话即唤醒", hours),
+			fmt.Sprintf("Waiting for your reply · parks in %d h — reply to wake it", hours)), "orange"
+	case "parked":
+		return two("已停放 · 在等你点头，回话即唤醒", "Parked · waiting for your go-ahead — reply to wake it"), "orange"
+	case "error-retry":
+		return two(fmt.Sprintf("出错停住：服务端临时出错 · %d 分钟后自动重试", mins),
+			fmt.Sprintf("Stopped on an error: a temporary server error · retrying in %d min", mins)), "red"
+	case "error-retried":
+		return two("出错停住：自动重试过 1 次仍出错 · 要你看一下", "Stopped on an error: retried once, still failing · needs a look"), "red"
+	case "error":
+		return two("出错停住：要你看一下", "Stopped on an error: needs a look"), "red"
+	}
+	return nil, ""
+}
+
+// boardAskRank: within 等你, a session waiting on its person's reply (asking ·
+// waiting · parked) sits above a failed or stopped one (E101's list).
+func boardAskRank(tag string) int {
+	switch tag {
+	case "asking", "waiting_you", "parked":
+		return 0
+	}
+	return 1
 }
 
 var boardGroupOrder = map[string]int{"pin": 0, "ask": 1, "work": 2, "queue": 3, "gone": 4}
@@ -238,6 +311,11 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if t != nil {
 			end = taskEnd(*t)
 		}
+		why := wstr(w, "reap_why")
+		code := why
+		if i := strings.IndexByte(why, ':'); i >= 0 {
+			code = why[:i]
+		}
 		switch st := r.State; {
 		case lostFor:
 			r.Group, r.Tag, r.At = "gone", "lost", fs.ObservedAt.Unix()
@@ -247,6 +325,10 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Group, r.Tag = "ask", "asking"
 		case st == "failed" || st == "error":
 			r.Group, r.Tag = "ask", "failed"
+		case st == "exited" && strings.HasPrefix(code, "error"):
+			// its agent's error stopped it, its window still up (E101: FQBW sat 16 h
+			// in 已收起): yours to look at, or the wrapper's one retry to come
+			r.Group, r.Tag = "ask", "stopped"
 		case st == "exited":
 			r.Group, r.Tag = "gone", "exited"
 		case end == store.TaskSucceeded:
@@ -257,8 +339,14 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Group, r.Tag = "work", "working"
 		case st == "looping":
 			r.Group, r.Tag = "work", "looping"
+		case end == "" && (code == "waiting" || (t != nil && t.Asked != "")):
+			// its turn over, it waits on you (E101: B2XT and CRFW sat in 排队中)
+			r.Group, r.Tag = "ask", "waiting_you"
 		default:
 			r.Group, r.Tag = "queue", boardStateTag(st)
+		}
+		if r.Group == "ask" || r.Group == "queue" {
+			r.Why, r.WhyTone = boardWhy(why, now)
 		}
 		rows = append(rows, r)
 	}
@@ -277,6 +365,11 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r.At = t.CreatedAt.Unix()
 		end := taskEnd(*t)
 		switch {
+		case end == "" && t.Parked != "":
+			// parked while it waited on you (E101): its window closed, its row stays
+			// in 等你 — 接回 brings it back where it was
+			r.Group, r.Tag = "ask", "parked"
+			r.Why, r.WhyTone = boardWhy("parked", now)
 		case end == "" && t.Asked != "":
 			r.Group, r.Tag = "ask", "waiting_you"
 		case end == "" && b != nil && b.Seq > 0 && b.Closed == 0:
@@ -350,6 +443,11 @@ func finishBoard(rows []BoardRow) *Board {
 		if ga != gb {
 			return ga < gb
 		}
+		if rows[a].Group == "ask" {
+			if ra, rb := boardAskRank(rows[a].Tag), boardAskRank(rows[b].Tag); ra != rb {
+				return ra < rb
+			}
+		}
 		if rows[a].At != rows[b].At {
 			return rows[a].At > rows[b].At
 		}
@@ -411,7 +509,8 @@ func finishBoard(rows []BoardRow) *Board {
 	}
 	h := sha1.New()
 	for _, r := range b.Rows {
-		h.Write([]byte(r.ID + "\x1f" + r.Group + "\x1f" + r.Tag + "\x1f" + r.Code + "\x1f" + r.Title + "\x1f" + r.Parent + "\n"))
+		h.Write([]byte(r.ID + "\x1f" + r.Group + "\x1f" + r.Tag + "\x1f" + r.Code + "\x1f" + r.Title + "\x1f" + r.Parent +
+			"\x1f" + strings.Join(r.Why, "\x1f") + "\n"))
 	}
 	enc, _ := json.Marshal(b.Groups)
 	h.Write(enc)

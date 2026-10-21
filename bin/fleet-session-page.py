@@ -251,6 +251,9 @@ def main():
                    help='close the window (exit 14) after N seconds unless a key is pressed; 0 = never (#3170)')
     p.add_argument('--retry-in', type=int, default=0,
                    help='with --retry: press ↵ by itself (exit 10) after N seconds unless a key is pressed (#4112)')
+    p.add_argument('--resume-in', type=int, default=0,
+                   help='press ↵ (resume the same conversation) by itself after N seconds unless a key is '
+                        'pressed — a temporary server error\'s one automatic retry (E101)')
     p.add_argument('--handed', default='', choices=['', 'web'],
                    help='the conversation went on in WebChat (task T810): ↵ takes it back, no r')
     p.add_argument('--note', default='', help='one red line above (why ↵ did not take it back yet)')
@@ -262,6 +265,8 @@ def main():
              'close_in': max(a.close_in, 0), 'auto': AUTO_CLOSE, 'handed': a.handed, 'note': a.note}
     if a.retry and a.retry_in > 0:
         facts['close_in'], facts['auto'] = a.retry_in, RESUME
+    elif a.resume_in > 0:
+        facts['close_in'], facts['auto'] = a.resume_in, RESUME
     if a.print:
         sys.stdout.write(render(facts, 80) + '\n')
         return 0

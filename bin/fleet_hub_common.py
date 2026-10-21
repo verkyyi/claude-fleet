@@ -358,9 +358,16 @@ def inventory_row(parts):
     so every other machine's list draws it in its 置顶 group. Absent otherwise.
     Column 33 (T701): `notices=` — the login's read mark and messages not seen yet
     (notices_cell): `notices`, on every row alike; absent when empty. Another home's
-    ⌘P 消息 and message row read them (bin/fleet-hub-sessions.sh notices_<fleet>)."""
+    ⌘P 消息 and message row read them (bin/fleet-hub-sessions.sh notices_<fleet>).
+    Column 34 (E101): `reapwhy=<code>[:<epoch>]` — why the idle reaper has not
+    closed this finished window (@reap_why): `reap_why`, which the hub's list turns
+    into its card's 「为什么还没收」 line; absent when empty."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 34 and parts[-1].startswith("reapwhy="):
+        w = parts.pop()[8:]
+        if REAP_WHY_RE.fullmatch(w):
+            extra["reap_why"] = w
     if len(parts) >= 33 and parts[-1].startswith("notices="):
         nt = notices_cell(parts.pop()[8:])
         if nt:
@@ -441,6 +448,9 @@ def inventory_row(parts):
         extra["status_msg"] = extra["detail"]
     return parts, extra
 
+
+# @reap_why's shape (E101): a code, and the epoch it counts down to
+REAP_WHY_RE = re.compile(r"[a-z-]{1,16}(?::[0-9]{1,11})?")
 
 # @claude_needs subtype → the OSC 7501 kind it says (issue #2538)
 NEEDS_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
