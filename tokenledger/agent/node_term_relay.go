@@ -102,6 +102,9 @@ type termRequest struct {
 	Resume string
 	Take   bool
 	Renew  bool
+	// the browser's previous connection (RMVE): its stale lease is this
+	// page's own, so the helper takes it over instead of answering «open elsewhere»
+	Previous string
 }
 type termRequestKey struct{}
 
@@ -125,6 +128,9 @@ var startTermHelper = func(ctx context.Context, view, target string, cols, rows 
 		}
 		if request.Take {
 			args = append(args, "--take", "1")
+		}
+		if request.Previous != "" && termViewRE.MatchString("web-"+request.Previous) {
+			args = append(args, "--previous", "web-"+request.Previous)
 		}
 	}
 	cmd := exec.Command(self, args...)

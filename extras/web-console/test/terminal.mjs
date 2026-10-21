@@ -44,3 +44,24 @@ assert.equal(xtermTheme('solarized-dark', false).background, '#002b36');
 assert.equal(xtermTheme('gone', true).yellow, schemeOf('dark').ansi[3]);
 assert.ok(contrast('#e5e510', schemeOf('light').bg) < 4.5); // xterm's default yellow: the unreadable one
 console.log('term-theme: ok');
+
+// RMVE: a disconnect is never given up on, and the wait stays short
+import { retryDelay, doorRetryDelay, endedStep } from '../src/shared/terminal-retry.ts';
+assert.equal(retryDelay(0, 'connection_closed', 0.5), 500);
+assert.equal(retryDelay(50, 'home_down', 0.5), 15000);   // the 51st try still waits only 15 s
+assert(retryDelay(3, 'hub_restart', 0.99) <= 300);       // a hub that said it restarts: at once
+assert.equal(doorRetryDelay(1), 30000);
+assert.equal(doorRetryDelay(10), 300000);
+// ended: personal — first reconnect plainly, then renew that generation once, then stop
+const renewed = new Set();
+assert.equal(endedStep(null, 't:1', undefined, renewed), 'reconnect');
+assert.equal(endedStep(null, 't:1', 't:1', renewed), 'renew');
+renewed.add('t:1');
+assert.equal(endedStep(null, 't:1', 't:1', renewed), 'stop');
+assert.equal(endedStep(null, 't:2', 't:1', renewed), 'reconnect');  // a new generation starts over
+assert.equal(endedStep(null, '', undefined, renewed), 'stop');
+// a session's terminal: reconnect once (a replaced process is «current»), then leave for your own
+assert.equal(endedStep('w', 't:1', undefined, renewed), 'reconnect');
+assert.equal(endedStep('w', 't:1', 't:1', renewed), 'leave');
+assert.equal(endedStep('w', '', undefined, renewed), 'leave');
+console.log('terminal recovery: ok');

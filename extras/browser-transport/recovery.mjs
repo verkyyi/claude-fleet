@@ -4,6 +4,7 @@ import { chromium } from 'playwright'
 
 const { FLEET_TEST_ORIGIN: origin, FLEET_TEST_COOKIE: cookie, FLEET_TEST_WORKER: worker, FLEET_TEST_FIXTURE: fixture } = process.env
 const mode = process.argv[2]
+const ELSEWHERE = 'This terminal is open in another tab. Click here to bring it back.'
 const dir = `evidence/recovery-${mode}`
 await mkdir(dir, { recursive: true })
 const browser = await chromium.launch({ args: mode === 'relay' ? ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : [] })
@@ -88,13 +89,15 @@ try {
     await other.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
     await other.addInitScript(observe)
     await other.tracing.start({ screenshots: true, snapshots: true, sources: true })
+    // RMVE: opening the page takes the terminal — no «Use here»; the page it
+    // was taken from says so and does not take it back by itself.
     const second = await other.newPage(); await second.goto(url)
-    await second.getByRole('button', { name: 'Use here', exact: true }).waitFor()
-    assert(await second.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
-    await second.getByRole('button', { name: 'Use here', exact: true }).click()
     const taken = await ready(second)
     assert(taken.epoch > reloaded.epoch)
-    await page.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+    await page.getByText(ELSEWHERE, { exact: true }).waitFor()
+    assert(await page.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+    await new Promise(r => setTimeout(r, 1500))
+    assert.equal((await ready(second)).epoch, taken.epoch, 'the page taken from took it back by itself')
     await page.close() // old cleanup must not close or resize the winner
     assert.equal((await ready(second)).epoch, taken.epoch)
     const pairs = await second.evaluate(() => window.__pairs)
@@ -106,23 +109,15 @@ try {
     if (target === 'personal') {
       const directEntry = await context.newPage()
       await directEntry.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
-      await directEntry.getByRole('button', { name: 'Use here', exact: true }).waitFor()
-      await directEntry.getByRole('button', { name: 'Use here', exact: true }).click()
       await ready(directEntry)
-      await second.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+      await second.getByText(ELSEWHERE, { exact: true }).waitFor()
       await directEntry.close()
     }
     await second.close()
   }
   let page = await context.newPage()
   await page.goto(`${origin}/app/terminal`)
-  // Closing the renderer does not synchronously finish node-side cleanup. A
-  // still-live old controller must require the same explicit takeover as any
-  // other browser; reopening must never silently steal it or restart the shell.
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b =>
-    (b.textContent === 'Fleet menu' && !b.disabled) || b.textContent === 'Use here'))
-  const closeReopenTakeover = await page.getByRole('button', { name: 'Use here', exact: true }).isVisible()
-  if (closeReopenTakeover) await page.getByRole('button', { name: 'Use here', exact: true }).click()
+  // Reopening takes the terminal (RMVE) — never restarts the shell.
   const before = await ready(page)
   assert.equal(before.gen, evidence[0].first.gen, 'closing all pages and reopening must keep the generation')
   const reopened = await state()
@@ -140,13 +135,12 @@ try {
   const oldProcess = await ready(processPage)
   assert.equal(oldProcess.gen, evidence[1].first.gen, 'reopening the worker must keep its generation')
   await context.request.post(`${fixture}/worker-respawn`)
-  await processPage.getByRole('alert').waitFor({ timeout: 30000 })
-  assert(await processPage.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+  // RMVE: the replaced process is the current one — connected, and said, no button
+  await processPage.getByText('This session restarted — connected to the current one.', { exact: true }).waitFor({ timeout: 30000 })
+  assert.notEqual((await ready(processPage)).gen, oldProcess.gen, 'the current process must be the one connected')
   const processAttempts = await processPage.evaluate(() => window.__attempts)
   await new Promise(r => setTimeout(r, 2000))
-  assert.equal(await processPage.evaluate(() => window.__attempts), processAttempts, 'process replacement kept retrying')
-  await processPage.getByRole('button', { name: 'Connect current session', exact: true }).click()
-  assert.notEqual((await ready(processPage)).gen, oldProcess.gen, 'explicit action must admit the current process')
+  assert.equal(await processPage.evaluate(() => window.__attempts), processAttempts, 'a connected page kept reconnecting')
   await processPage.close()
   // Real shell bytes through the built console, hub, node and native tmux.
   // Open shell selects the persistent home; an explicitly nested sh returns
@@ -172,36 +166,30 @@ try {
     const oldPage = page
     if (end === 'exit') await command(page, 'exit')
     else await page.locator('.xterm-helper-textarea').press(end)
-    await page.getByRole('button', { name: 'Reopen terminal', exact: true }).waitFor()
-    assert.equal(await page.locator('.xterm-helper-textarea').count(), 0)
-    const attempts = await page.evaluate(() => window.__attempts)
-    await new Promise(r => setTimeout(r, 700))
-    assert.equal(await page.evaluate(() => window.__attempts), attempts, 'ended terminal auto-retried')
-    // Fresh page with no generation cache must learn the ended identity.
-    const rival = await context.newPage()
-    await rival.goto(`${origin}/app/terminal`)
-    await rival.getByRole('button', { name: 'Reopen terminal', exact: true }).waitFor()
-    await Promise.all([page, rival].map(p => p.getByRole('button', { name: 'Reopen terminal', exact: true }).click()))
-    for (const p of [page, rival]) await p.waitForFunction(() =>
-      [...document.querySelectorAll('button')].some(b => b.textContent === 'Fleet menu' && !b.disabled) || !!document.querySelector('[role="alert"]'))
-    const winners = []
-    for (const p of [page, rival]) if (!await p.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled()) winners.push(p)
-    assert.equal(winners.length, 1, 'concurrent renew must leave exactly one controller')
-    const winner = winners[0], loser = winner === page ? rival : page
-    const current = await ready(winner)
+    // RMVE: the personal terminal really ended — a new one is opened by itself
+    // (one renew of that generation), and the page says so; no button.
+    await page.getByText("Your previous terminal ended, so we opened a new one. Commands that had exited won't restart.", { exact: true }).waitFor({ timeout: 30000 })
+    const current = await ready(page)
     assert.equal(current.term, old.term)
     assert.equal(Number(current.gen.split(':')[1]), Number(old.gen.split(':')[1]) + 1)
-    if (await loser.getByRole('button', { name: 'Connect current session', exact: true }).isVisible()) {
-      await loser.getByRole('button', { name: 'Connect current session', exact: true }).click()
-      await loser.getByRole('button', { name: 'Use here', exact: true }).waitFor()
-    }
-    assert.equal((await ready(winner)).epoch, current.epoch, 'losing renew stole control')
+    assert.equal(await page.getByRole('button', { name: 'Reopen terminal', exact: true }).count(), 0)
+    const attempts = await page.evaluate(() => window.__attempts)
+    await new Promise(r => setTimeout(r, 1500))
+    assert.equal(await page.evaluate(() => window.__attempts), attempts, 'a renewed terminal kept reconnecting')
+    // A fresh page takes the renewed terminal; it never renews it again.
+    const rival = await context.newPage()
+    await rival.goto(`${origin}/app/terminal`)
+    assert.equal((await ready(rival)).gen, current.gen, 'a second page renewed again')
+    await page.getByText(ELSEWHERE, { exact: true }).waitFor()
+    await page.getByText(ELSEWHERE, { exact: true }).click()
+    assert.equal((await ready(page)).gen, current.gen)
+    await rival.getByText(ELSEWHERE, { exact: true }).waitFor()
     const sent = await oldPage.evaluate(() => window.__sent)
     await oldInput.dispatchEvent('compositionstart', {data:'未提交'})
     await oldInput.dispatchEvent('compositionend', {data:'未提交'})
     assert.equal(await oldPage.evaluate(() => window.__sent), sent, 'disposed CJK composition replayed')
     await oldInput.dispose()
-    await loser.close(); page = winner
+    await rival.close()
     assert.equal((await state()).worker_pid, liveWorkerPID, "renew restarted worker")
     const tag = `renewed_${mode}_${end}`
     await command(page, `printf '%s\\n' '${tag}' >> "$HOME/commands"`)
@@ -227,7 +215,7 @@ try {
     assert.equal((await ready(page)).gen, current.gen, 'network recovery renewed again')
     assert.equal((await state()).commands.split('\n').filter(v => v === tag).length, 1)
     await page.screenshot({path:`${dir}/renew-${end.replace('+','-')}.png`})
-    evidence.push({personalRenew:end, old:old.gen, current:current.gen, simultaneousControllers:winners.length})
+    evidence.push({personalRenew:end, old:old.gen, current:current.gen, automatic:true})
   }
   await page.getByRole('button', { name: 'Fleet menu', exact: true }).click()
   await new Promise(r => setTimeout(r, 500))
@@ -240,12 +228,17 @@ try {
   await endedWorker.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
   await ready(endedWorker)
   await command(endedWorker, 'exit')
-  await endedWorker.getByRole('link', {name:'View sessions', exact:true}).waitFor()
-  assert.equal(await endedWorker.getByRole('button', {name:'Reopen terminal', exact:true}).count(), 0)
-  await endedWorker.reload()
-  await endedWorker.getByRole('link', {name:'View sessions', exact:true}).waitFor()
+  // RMVE: a session's terminal that ended takes you to your own, saying so
+  await endedWorker.getByText('That session has ended — switched to your terminal.', { exact: true }).waitFor({ timeout: 30000 })
+  assert(!endedWorker.url().includes('worker='), 'still on the ended session')
+  await ready(endedWorker)
   assert.equal((await state()).worker_dead, '1', 'ended worker restarted')
   await endedWorker.close()
+  // the page it was taken from: once that page is gone the lease is free and
+  // its own reconnect gets it back; else it is clicked back (RMVE)
+  await page.waitForFunction((t) => [...document.querySelectorAll('button')].some(b => (b.textContent === 'Fleet menu' && !b.disabled) || b.textContent === t), ELSEWHERE, { timeout: 30000 })
+  if (await page.getByText(ELSEWHERE, { exact: true }).isVisible()) await page.getByText(ELSEWHERE, { exact: true }).click()
+  await ready(page)
   await context.request.post(`${origin}/logout`, { headers: { Origin: origin } })
   await page.getByRole('link', { name: 'Sign in', exact: true }).waitFor({ timeout: 20000 })
   const attempts = await page.evaluate(() => window.__ready.length)
@@ -253,14 +246,17 @@ try {
   assert.equal(await page.evaluate(() => window.__ready.length), attempts, 'revoked authentication retried')
   await context.addCookies([{ ...auth, value: process.env.FLEET_TEST_FRESH_COOKIE }, { name: 'cf_lang', value: 'en', url: origin }])
   await page.reload(); await ready(page)
+  const hostGen = (await ready(page)).gen
   await context.request.post(`${fixture}/host`)
-  await page.getByRole('alert').waitFor({ timeout: 30000 })
-  assert(await page.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+  // RMVE: the home's tmux went with everything in it — a new terminal is
+  // opened by itself (the fixture brings the fleet back), no replay, no button
+  await page.getByText("Your previous terminal ended, so we opened a new one. Commands that had exited won't restart.", { exact: true }).waitFor({ timeout: 30000 })
+  assert.notEqual((await ready(page)).gen, hostGen)
   const hostAttempts = await page.evaluate(() => window.__attempts)
   await new Promise(r => setTimeout(r, 2000))
-  assert.equal(await page.evaluate(() => window.__attempts), hostAttempts, 'host loss kept retrying')
+  assert.equal(await page.evaluate(() => window.__attempts), hostAttempts, 'host loss kept retrying after it came back')
   await page.close()
-  console.log(JSON.stringify({ browser: browser.version(), mode, evidence, closeReopen: 'same PID and generation', closeReopenTakeover, relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'ended; no replay', safari: 'pending', osIME: 'pending' }))
+  console.log(JSON.stringify({ browser: browser.version(), mode, evidence, closeReopen: 'same PID and generation', relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'renewed by itself; no replay', safari: 'pending', osIME: 'pending' }))
 } catch (error) {
   for (const [i, page] of [context, ...others.map(o => o.context)].flatMap(c => c.pages()).entries()) {
     console.error('page', i, page.url(), await page.locator('body').innerText());

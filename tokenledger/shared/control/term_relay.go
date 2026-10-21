@@ -149,6 +149,9 @@ type TermControl struct {
 	Gen  string `json:"gen,omitempty"`
 	Conn string `json:"conn,omitempty"`
 	Mode string `json:"mode,omitempty"`
+	// ready's: one word the page says once on arrival (RMVE: worker_gone —
+	// the session last looked at ended, so the personal terminal went home).
+	Notice string `json:"notice,omitempty"`
 	// error's.
 	Err string `json:"error,omitempty"`
 	Msg string `json:"msg,omitempty"`

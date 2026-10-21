@@ -185,3 +185,29 @@ CI `browser-attachment` 在隔离身份、真实节点适配器和抛弃式 shel
 浏览器 UDP 策略或专用测试身份验证，不能为测试改 live 防火墙/集群策略。pod 重建必须换代并拒绝
 旧授权。CI Chromium 版本写在日志；Safari 版本、日期、真实 OS CJK IME 需人工记录。上述真实
 拓扑与 Safari 验证在部署前仍为待验，不能用 CI host 候选对结果声称已覆盖 NAT 或已上线。
+
+## 进来就能用，断了自己接回（RMVE）
+
+除登录失效外，网页终端不再停在按钮上。规则只有一处：`extras/web-console/src/shared/terminal-retry.ts`
+（无 DOM，`test/terminal.mjs` 跑），连接状态机在 `shared/terminal.ts` 的 `connectTerminal`。
+
+- **不放弃**：transient 断开一直按退避重试（≤15 s），页面回到前台 / 获得焦点 / 网络恢复时立刻再试；
+  页面隐藏时不计时。重连期间最后一屏留着（`data-stale`，不能输入），ready 后换新的 xterm（输入安全不变：
+  旧 textarea 的迟到组合事件永远不进新连接），由 tmux 重画同一个终端。
+- **接自己的班**：页面打开 / `takeControl` 时带 `take=1`；断线重连不带，带上一条 ready 过的连接 id
+  （grant `Previous` → term-pty `--previous` → `FLEET_TERM_PREVIOUS`），`fleet-webterm.py` 只在租约持有者
+  正是它时接管。被别的页接管的页停在「已在另一个页面打开」，只在失去焦点后又被点回来时才接管（不会两页互抢）。
+- **ended**：先普通重连一次——上次看的会话没了时节点（`fleet-webterm.py connect`）回家窗口、准入带
+  `notice: worker_gone`，经 `term_controller` 的 ready 帧 `notice` 字段送到页面；会话进程被换时节点答
+  `interrupted`，页面忘掉旧代、连现在的（提示 `current`）。仍 ended：个人终端对这一代自动 `renew` 一次
+  （`--expect` 保证两页只重开一个，提示 `renewed`）；会话终端转到个人终端（`session_ended`）。
+- **门**：门 / 直连失败只让下一次走入口；接上后 30 s 起（翻倍到 5 分钟）在 2 s 没人打字时重连一次再选路。
+- **家不在线**：`/v1/term/home` 说 offline / maintenance 时页面说明原因、每 10 秒再看。
+- **入口发布**：副本收到 SIGTERM 先 `Server.Drain()`——开着的附着收到 `hub_restart`（页面 0 秒退避），
+  收尾记 `…; hub_restart`；删掉自己的 `fleet_replicas` 行、不再心跳。`proxyState` 拨号失败且请求可重发
+  （GET/HEAD 无体）⇒ 30 s 内跳过该持有者，交下一台或本机处理。附着中途 recheck 失败分清原因：只有登录
+  失效 / 家换了才是 `revoked`，节点重连是 `node_unavailable`、维护是 `maintenance`（都会自己回来）。
+- **量**：`fleet_term_sessions` 多 `cause`（first · auto · manual · take · renew）、`previous`、`selected_at`，
+  `outcome` 在路径后接 `; <原因>`。`GET /v1/fleet/term/health?hours=24`（管理员）算打开成功率、自动接回率与
+  p50/p95、人工按钮次数、断开原因；`bin/fleet-term-health.py` 打印它。
+- BREAK-IT：`term-last-worker-reaped` · `term-hub-rollout` · `term-browser-gives-up` · `term-personal-renew`。

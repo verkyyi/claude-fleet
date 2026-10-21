@@ -150,7 +150,7 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	}
 	var h termHelper
 	if service == "term" {
-		hctx := context.WithValue(ctx, termRequestKey{}, termRequest{Resume: g.TermResume, Take: g.TermTake, Renew: g.TermRenew})
+		hctx := context.WithValue(ctx, termRequestKey{}, termRequest{Resume: g.TermResume, Take: g.TermTake, Renew: g.TermRenew, Previous: g.Previous})
 		h, err = startTermHelper(hctx, "web-"+g.Conn, g.Target, 0, 0)
 		if err != nil {
 			code := "ended"

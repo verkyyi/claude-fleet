@@ -178,5 +178,11 @@ st_eq "F: generation 2" 2 "$(printf '%s' "$o" | jf generation)"; st_eq "F: same 
 tn kill-server
 waitfor 3 sh -c "! '$REAL_TMUX' -L '$RS' has-session 2>/dev/null"
 o=$(WT status); st_eq "F: host lost ⇒ ended" 5 "$?"; st_eq "F: says ended" ended "$(printf '%s' "$o" | jf state)"
+# RMVE: the page's one automatic renew after the host's tmux went brings the
+# fleet back (the seam stands in for fleet-up) — a new generation, same terminal
+o=$(FLEET_WEBTERM_UP_CMD="'$REAL_TMUX' -L '$RS' -f /dev/null new-session -d -s '$RS' -n home 'while :; do sleep 300; done'" WT ensure --renew --init --expect "$ID:2")
+st_eq "F: renew after host loss" 0 "$?"; st_eq "F: generation 3" 3 "$(printf '%s' "$o" | jf generation)"
+st_eq "F: still the same terminal" "$ID" "$(printf '%s' "$o" | jf id)"
+tn kill-server 2>/dev/null
 
 st_done

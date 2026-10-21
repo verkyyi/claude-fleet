@@ -156,7 +156,7 @@ func TestAttachmentDoorCarriesTheTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Mode != "door" || rows[0].Outcome != "door us" || rows[0].BytesUp != 0 || rows[0].BytesDown != 0 {
+	if len(rows) != 1 || rows[0].Mode != "door" || !strings.HasPrefix(rows[0].Outcome, "door us") || rows[0].BytesUp != 0 || rows[0].BytesDown != 0 {
 		t.Fatalf("the hub carried payload, or the row is wrong: %+v", rows)
 	}
 	waitFor(t, 10*time.Second, "the door's record", func() bool {

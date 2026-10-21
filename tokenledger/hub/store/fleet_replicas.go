@@ -90,3 +90,11 @@ func (s *Store) Replicas(since time.Time) ([]ReplicaRow, error) {
 	})
 	return out, nil
 }
+
+// ForgetReplica drops name's row: a replica going away says so at once, so
+// the others stop handing it the state's requests (RMVE) instead of waiting
+// out replicaUpFor.
+func (s *Store) ForgetReplica(name string) error {
+	_, err := s.write.Exec(`DELETE FROM fleet_replicas WHERE name = ?`, name)
+	return err
+}

@@ -103,6 +103,9 @@ func runTermPty(ctx context.Context, args []string, stdin io.Reader, stdout io.W
 		if args[i] == "--take" {
 			env = append(env, "FLEET_TERM_TAKE=1")
 		}
+		if args[i] == "--previous" {
+			env = append(env, "FLEET_TERM_PREVIOUS="+args[i+1])
+		}
 	}
 	cmd.Dir = home
 	cmd.Env = env
@@ -203,7 +206,7 @@ func termPtyLocaleEnv(env, available []string) ([]string, error) {
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		switch k {
-		case "TMUX", "TMUX_PANE", "TERM", "FLEET_TERM_CANCEL_FD", "FLEET_TERM_RENEW", "FLEET_TERM_RESUME", "FLEET_TERM_TAKE", "FLEET_TERM_ADMISSION_FD":
+		case "TMUX", "TMUX_PANE", "TERM", "FLEET_TERM_CANCEL_FD", "FLEET_TERM_RENEW", "FLEET_TERM_RESUME", "FLEET_TERM_TAKE", "FLEET_TERM_PREVIOUS", "FLEET_TERM_ADMISSION_FD":
 			continue
 		case "LANG", "LC_ALL", "LC_CTYPE":
 			want[k] = v

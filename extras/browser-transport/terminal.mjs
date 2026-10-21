@@ -108,12 +108,22 @@ try {
   await page.getByText('No sessions yet', { exact: true }).waitFor()
   await page.getByRole('link', { name: 'My Terminal', exact: true }).last().click()
   await ready()
-  for (const state of ['unsupported', 'offline', 'maintenance']) {
-    await page.route('**/v1/term/home', route => route.fulfill({ json: { state } }))
+  await page.route('**/v1/term/home', route => route.fulfill({ json: { state: 'unsupported' } }))
+  await page.reload()
+  await page.getByRole('alert').waitFor()
+  assert.equal(await page.locator('.xterm-helper-textarea').count(), 0)
+  await page.unroute('**/v1/term/home')
+  // RMVE: an offline / maintenance home is waited for, said, never a button —
+  // and connected by itself once it is back
+  for (const [state, words] of [['offline', 'is unreachable'], ['maintenance', 'is under maintenance']]) {
+    await page.route('**/v1/term/home', route => route.fulfill({ json: { state, machine: 'mac-home' } }))
     await page.reload()
-    await page.getByRole('alert').waitFor()
+    await page.getByText(words, { exact: false }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Reconnect', exact: true }).count(), 0)
     assert.equal(await page.locator('.xterm-helper-textarea').count(), 0)
     await page.unroute('**/v1/term/home')
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    await ready()
   }
   await page.route('**/v1/term/home', route => route.fulfill({ status: 401, json: { code: 'login' } }))
   await page.reload()

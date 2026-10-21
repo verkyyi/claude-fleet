@@ -130,6 +130,50 @@ if [ "${1:-}" = --renew ]; then
   [ "$fails" = 0 ]; exit $?
 fi
 
+# RMVE: the session last looked at in the personal terminal is reaped — the
+# personal terminal is still there: connect goes home and says worker_gone,
+# never «ended» (BREAK-IT `term-last-worker-reaped`).
+if [ "${1:-}" = --worker-gone ]; then
+  run web-wg1 personal
+  waitfor 'tt list-clients -t "=$RS@view-wt-web-wg1" -F x 2>/dev/null | grep -q x' 75 || bad 'worker-gone: first attach'
+  kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
+  waitfor '! tt has-session -t "=$RS@view-wt-web-wg1" 2>/dev/null' 150 || bad 'worker-gone: first view stayed'
+  python3 "$BIN/fleet-webterm.py" select --worker worker:fid-1 >/dev/null || bad 'worker-gone: select'
+  python3 - "$FLEET_CONF_DIR/webterm/terminal.json" "$(tt display-message -p -t "$W" '#{pane_id}|#{pane_pid}|0|fid-1||')" <<'PY'
+import json, sys
+p = sys.argv[1]; st = json.load(open(p)); st["last_worker_identity"] = sys.argv[2]; json.dump(st, open(p, "w"))
+PY
+  tt kill-window -t "$W"   # the worker merged and was reaped
+  run web-wg2 personal
+  if waitfor 'tt list-clients -t "=$RS@view-wt-web-wg2" -F x 2>/dev/null | grep -q x' 75; then
+    G=$(tt list-sessions -F '#{session_name} #{session_id}' | awk -v n="$RS@view-wt-web-wg2" '$1 == n { print $2 }')
+    [ "$(tt display-message -p -t "$G:" '#{window_id}')" = "$H" ] && ok 'worker-gone: personal goes home' || bad 'worker-gone: landed elsewhere'
+  else
+    bad "worker-gone: personal said $(cat "$WORK/web-wg2.out" 2>/dev/null | tr -d '\033' | tr '\r\n' '  ' | cut -c1-200) rc=$(cat "$WORK/web-wg2.rc" 2>/dev/null)"
+  fi
+  python3 -c 'import json,os,sys; st=json.load(open(os.environ["FLEET_CONF_DIR"]+"/webterm/terminal.json")); sys.exit(0 if st.get("last_worker") is None and st["generation"] == 1 else 1)' \
+    && ok 'worker-gone: last worker forgotten, same generation' || bad 'worker-gone: last worker kept or generation moved'
+  [ "$(tt display-message -p -t "$H" '#{pane_pid}')" = "$HPID" ] && ok 'worker-gone: home shell untouched' || bad 'worker-gone: home shell replaced'
+  kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
+  [ "$fails" = 0 ]; exit $?
+fi
+
+# RMVE: a reconnect takes over only its OWN previous connection's lease — any
+# other live holder still answers «open elsewhere» (rc 4).
+if [ "${1:-}" = --own-lease ]; then
+  run web-o1 personal; O1=$P
+  waitfor 'tt list-clients -t "=$RS@view-wt-web-o1" -F x 2>/dev/null | grep -q x' 75 || bad 'own-lease: first attach'
+  FLEET_TERM_PREVIOUS=web-someone-else run web-o2 personal; wait "$P" 2>/dev/null
+  [ "$(cat "$WORK/web-o2.rc")" = 4 ] && ok 'own-lease: another page is still «open elsewhere»' || bad "own-lease: another page took it (rc $(cat "$WORK/web-o2.rc"))"
+  FLEET_TERM_PREVIOUS=web-o1 run web-o3 personal
+  waitfor 'tt list-clients -t "=$RS@view-wt-web-o3" -F x 2>/dev/null | grep -q x' 75 && ok 'own-lease: its own reconnect takes over' || bad 'own-lease: own reconnect refused'
+  ! tt has-session -t "=$RS@view-wt-web-o1" 2>/dev/null && ok 'own-lease: the old view is fenced' || bad 'own-lease: old view survived'
+  wait "$O1" 2>/dev/null
+  kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
+  [ "$(tt display-message -p -t "$H" '#{pane_pid}')" = "$HPID" ] && ok 'own-lease: home shell untouched' || bad 'own-lease: home shell replaced'
+  [ "$fails" = 0 ]; exit $?
+fi
+
 # Model a close whose view is gone but whose helper has not finished cleanup.
 if [ "${1:-}" = --closed-lease ]; then
   python3 - "$BIN" "$RS" <<'PY'

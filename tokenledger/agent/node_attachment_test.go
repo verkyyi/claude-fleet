@@ -146,4 +146,14 @@ func TestAttachmentReplacementFence(t *testing.T) {
 	if _, err = reg.begin(ctx, next, func() {}); err == nil {
 		t.Fatal("two successors won the same predecessor")
 	}
+	// RMVE: the winner's own try ended (interrupted); the page retries with
+	// the same predecessor — nothing is left to win, so it gets through
+	nextFinish()
+	retry := next
+	retry.Conn = "retry"
+	f, err := reg.begin(ctx, retry, func() {})
+	if err != nil {
+		t.Fatalf("a retry after its first successor ended was refused: %v", err)
+	}
+	f()
 }

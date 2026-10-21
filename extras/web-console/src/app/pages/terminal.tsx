@@ -19,18 +19,39 @@ import { usePage } from "../Shell";
 
 type View = TerminalState & { destination?: string };
 const errors: Record<string, [string, string]> = {
-  open_elsewhere: ["此终端正在另一处使用。点击「在这里使用」接管。", "This terminal is open elsewhere. Choose Use here to take control."],
+  open_elsewhere: ["这个终端已在另一个页面打开。回到这里点一下就切回来。", "This terminal is open in another tab. Click here to bring it back."],
   revoked: ["登录已失效，请重新登录。", "Your session was revoked. Sign in again."],
   login: ["登录已过期，请重新登录。", "Your login expired. Sign in again."],
   no_home: ["先在设备页设置你的机器。", "Choose your home in Devices first."],
   unsupported: ["这台机器尚不支持网页终端，请更新节点。", "This node does not support browser terminals yet. Update the node."],
   offline: ["你的机器暂时离线。", "Your machine is offline."],
   maintenance: ["你的机器正在维护，请稍后再试。", "Your machine is under maintenance. Try again later."],
-  ended: ["终端已结束。回到会话列表查看状态。", "The terminal ended. Check its state in Sessions."],
-  interrupted: ["运行环境已改变，已停止连接。确认后可连接当前会话。", "The environment changed. You can explicitly connect to the current session."],
+  ended: ["原来的终端已结束，重新打开也没有成功。", "Your terminal ended and could not be reopened."],
+  interrupted: ["终端刚被重新打开过两次，已停下。确认后连接现在的终端。", "The terminal was reopened twice in a row, so we paused. Connect to the current one when ready."],
   input: ["输入可能只发送了一部分。请重新连接并检查，未发送的内容不会重放。", "Input may be partial. Reconnect and inspect it; unsent input will not be replayed."],
   lease: ["浏览器设备连接已失效，请重新连接。", "This browser's device lease ended. Connect again."],
 };
+
+// What the page says once on arrival (RMVE), then lets go of after 6 s.
+function noticeText(notice: string | undefined, name?: string): string | undefined {
+  if (notice === "worker_gone") return tr("你上次看的会话已结束，已回到你的终端。", "The session you last viewed has ended — you're back in your terminal.");
+  if (notice === "renewed") return tr("原来的终端已结束，已为你开了一个新的。之前退出的命令不会重启。", "Your previous terminal ended, so we opened a new one. Commands that had exited won't restart.");
+  if (notice === "current") return tr("这个会话刚重启过，已连上现在的它。", "This session restarted — connected to the current one.");
+  if (notice === "session_ended") return name ? tr(`会话「${name}」已结束，已转到你的终端。`, `Session “${name}” has ended — switched to your terminal.`)
+    : tr("那个会话已结束，已转到你的终端。", "That session has ended — switched to your terminal.");
+  return undefined;
+}
+
+// While a connection is being brought back: why, and how long (RMVE) — never a button.
+function waitText(view: { error?: string; since?: number }, machine: string | undefined, now: number): string {
+  const secs = view.since ? Math.max(0, Math.round((now - view.since) / 1000)) : 0;
+  const waited = secs >= 120 ? tr(`${Math.round(secs / 60)} 分钟`, `${Math.round(secs / 60)} min`) : tr(`${secs} 秒`, `${secs} s`);
+  const m = machine || tr("你的机器", "your machine");
+  if (view.error === "maintenance") return tr(`你的机器 ${m} 正在维护，结束后自动连上。`, `${m} is under maintenance; we'll connect when it's done.`);
+  if (view.error === "offline" || view.error === "home_down" || view.error === "node_unavailable")
+    return tr(`你的机器 ${m} 现在连不上（已等 ${waited}）。它一上线就自动连上，不用刷新。`, `Your machine ${m} is unreachable (waited ${waited}). We'll connect as soon as it's back — no need to refresh.`);
+  return tr(`连接断了，正在接回同一个终端 · 已等 ${waited}`, `Connection lost — reconnecting to the same terminal · ${waited}`);
+}
 
 // The scheme a person picked, else the page's light / dark (BBVR).
 const pageDark = () => document.documentElement.dataset.theme === "dark";
@@ -66,7 +87,7 @@ function TermLook({ pick, onPick }: { pick: TermPick; onPick: (p: TermPick) => v
 function terminalPath(view: View): string {
   const path = view.mode === "direct" ? tr("直连", "Direct")
     : view.mode === "door" ? tr(`经${view.door || "门"}`, `Via ${view.door || "door"}`)
-    : view.doorDown ? tr(`经入口连接 · ${view.doorDown}暂不可用`, `Via hub · ${view.doorDown} unavailable`)
+    : view.doorDown ? tr(`经入口连接 · ${view.doorDown}稍后重试`, `Via hub · retrying ${view.doorDown} shortly`)
     : tr("经入口连接", "Via hub");
   return view.echo !== undefined ? `${path} · ${view.echo} ms` : path;
 }
@@ -81,24 +102,58 @@ export default function TerminalPage() {
   const go = useRef(navigate); go.current = navigate;
   const title = worker === null ? tr("我的终端", "My Terminal")
     : typeof location.state?.title === "string" ? location.state.title : tr("会话终端", "Session terminal");
+  // the session's own name, when the page was handed one, for 「会话「X」已结束」
+  const nameRef = useRef<string | undefined>(undefined); nameRef.current = typeof location.state?.title === "string" ? location.state.title : undefined;
   const [attempt, retry] = useState(0);
   const [view, setView] = useState<View>({ state: "connecting" });
+  const [pick, setPick] = useState<TermPick>(termPick);
+  const [screen, setScreen] = useState(currentTheme().background);
   const [offers, setOffers] = useState<BrowserOffer[]>([]);
+  const [notice, setNotice] = useState<string | undefined>();
+  const [now, setNow] = useState(() => Date.now());
   const container = useRef<HTMLDivElement>(null);
   const take = useRef<() => void>(() => {});
   const send = useRef<(text: string) => void>(() => {});
   const renewal = useRef<string | undefined>(undefined);
-  const [pick, setPick] = useState<TermPick>(termPick);
-  const [screen, setScreen] = useState(currentTheme().background);
+  const manual = useRef(false);
+
+  // arriving from a session whose terminal ended (RMVE)
+  useEffect(() => {
+    const n = noticeText(location.state?.notice, typeof location.state?.ended === "string" ? location.state.ended : undefined);
+    if (n) setNotice(n);
+  }, [location.key]);
+  // the notice says itself once, then goes (RMVE)
+  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(undefined), 6000); return () => clearTimeout(t); }, [notice]);
+  // 「已等 N 秒」 counts while a connection is being brought back
+  useEffect(() => {
+    if (view.state !== "reconnecting") return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [view.state]);
+  // Coming back to (or clicking) a page another tab took over takes it back —
+  // the only way two pages hand a terminal over (RMVE); never by itself.
+  // Armed only once this page lost focus or was hidden: two pages in view
+  // never pass it back and forth by themselves.
+  useEffect(() => {
+    if (view.state !== "open-elsewhere") return;
+    let away = false;
+    const left = () => { away = true; };
+    const hid = () => { if (document.visibilityState === "hidden") away = true; else if (away) take.current(); };
+    const back = () => { if (away && document.visibilityState !== "hidden") take.current(); };
+    window.addEventListener("blur", left); window.addEventListener("focus", back); document.addEventListener("visibilitychange", hid);
+    return () => { window.removeEventListener("blur", left); window.removeEventListener("focus", back); document.removeEventListener("visibilitychange", hid); };
+  }, [view.state]);
 
   useEffect(() => {
     const host = container.current!;
     const renew = renewal.current; renewal.current = undefined;
+    const cause = manual.current ? "manual" : "first"; manual.current = false;
     const abort = new AbortController();
     let term: Terminal | undefined, fit: FitAddon | undefined;
     let composing = false, ready = false, ended = false, dead = false;
     let connection: ReturnType<typeof connectTerminal> | undefined;
     let client: ReturnType<typeof browserClient> | undefined;
+    let homeTimer: ReturnType<typeof setTimeout> | undefined;
     setView({ state: "connecting" }); setOffers([]);
     const disposeTerminal = () => {
       ready = false;
@@ -108,13 +163,23 @@ export default function TerminalPage() {
       // own end handler cancels it. Never reconstruct or forward this text.
       if (composing) term?.textarea?.dispatchEvent(new CompositionEvent("compositionend"));
       composing = false;
-      // Remove xterm's textarea and its pending composition on disconnect. A
+      // Remove xterm's textarea and its pending composition on reconnect. A
       // late compositionend belongs to that disposed terminal, never its successor.
       term?.dispose(); term = undefined; fit = undefined; host.replaceChildren();
     };
+    // Disconnected: the last screen stays (greyed, no input) until the same
+    // terminal is back and tmux draws it again (RMVE) — never a blank page.
+    const freeze = () => {
+      ready = false;
+      if (term) { term.options.disableStdin = true; term.blur(); }
+      if (composing) term?.textarea?.dispatchEvent(new CompositionEvent("compositionend"));
+      composing = false;
+      if (term?.textarea) term.textarea.value = "";
+      host.dataset.stale = "1";
+    };
     const fail = (error: string) => {
       if (dead) return;
-      ended = true; disposeTerminal(); connection?.close(); client?.close();
+      ended = true; freeze(); connection?.close(); client?.close();
       setOffers([]);
       setView((v) => ({ ...v, state: "closed", error }));
     };
@@ -132,6 +197,7 @@ export default function TerminalPage() {
       }
     };
     const createTerminal = () => {
+      delete host.dataset.stale;
       const current = new Terminal({
         cursorBlink: true, scrollback: 10000, fontSize: termPick().size,
         fontFamily: `${getComputedStyle(host).getPropertyValue("--font-mono")}, "PingFang SC", "Hiragino Sans", "Apple SD Gothic Neo", "Noto Sans CJK SC", monospace`,
@@ -178,47 +244,67 @@ export default function TerminalPage() {
     const theme = new MutationObserver(repaint);
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const unpick = onTermPick(repaint);
-    const start = async () => {
-      const response = await fetch("/v1/term/home", { signal: abort.signal, credentials: "same-origin", headers: { Accept: "application/json" } });
-      if (dead) return;
-      if (response.status === 401) { fail("login"); return; }
-      const home = await response.json();
-      if (!response.ok) { fail(home.code || "refused"); return; }
-      // A session's terminal goes where the session runs — home or another of
-      // your machines (C8X3): only the personal terminal waits on home.
-      if (worker === null) setView((v) => ({ ...v, destination: home.machine }));
-      if (worker === null && home.state !== "ok") { fail(home.state || "refused"); return; }
+    const connect = () => {
       connection = connectTerminal(worker, {
-        signal: abort.signal, renew,
+        signal: abort.signal, renew, take: true, cause,
         onState(state) {
           if (dead || ended) return;
-          if (state.state !== "ready") {
-            ready = false;
-            if (term) { term.options.disableStdin = true; term.blur(); }
-            composing = false;
-            if (term?.textarea) term.textarea.value = "";
-          }
+          if (state.state !== "ready") freeze();
           setView((v) => ({ ...v, ...state }));
-          if (!["connecting", "reconnecting", "ready"].includes(state.state)) { disposeTerminal(); client?.close(); client = undefined; setOffers([]); return; }
+          if (state.notice) setNotice(noticeText(state.notice));
+          if (!["connecting", "reconnecting", "ready"].includes(state.state)) { client?.close(); client = undefined; setOffers([]); return; }
           if (state.state === "ready") {
             if (!ready) { disposeTerminal(); ready = true; createTerminal(); }
             if (!client) client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => { client = undefined; if (!dead) setOffers([]); });
           }
         },
         onBytes(bytes) { term?.write(bytes); },
-        onExit() { fail("ended"); },
+        // A session's terminal ended: your own terminal, saying which (RMVE).
+        onExit() { if (!dead) go.current("/terminal", { replace: true, state: { notice: "session_ended", ended: nameRef.current } }); },
       });
       take.current = () => connection?.takeControl();
     };
+    // Home offline or under maintenance: say so and look again every 10 s,
+    // or at once when the page / the network comes back (RMVE) — never a button.
+    let since: number | undefined;
+    const start = async () => {
+      clearTimeout(homeTimer);
+      if (dead) return;
+      let response: Response;
+      try { response = await fetch("/v1/term/home", { signal: abort.signal, credentials: "same-origin", headers: { Accept: "application/json" } }); }
+      catch { if (!dead) { since ??= Date.now(); setView((v) => ({ ...v, state: "reconnecting", error: "home_down", since })); homeTimer = setTimeout(start, 10000); } return; }
+      if (dead) return;
+      if (response.status === 401) { fail("login"); return; }
+      const home = await response.json().catch(() => ({}));
+      if (dead) return;
+      if (response.status >= 500) { since ??= Date.now(); setView((v) => ({ ...v, state: "reconnecting", error: "home_down", since })); homeTimer = setTimeout(start, 10000); return; }
+      if (!response.ok) { fail(home.code || "refused"); return; }
+      // A session's terminal goes where the session runs — home or another of
+      // your machines (C8X3): only the personal terminal waits on home.
+      if (worker === null) setView((v) => ({ ...v, destination: home.machine }));
+      if (worker === null && (home.state === "offline" || home.state === "maintenance")) {
+        since ??= Date.now();
+        setView((v) => ({ ...v, state: "reconnecting", error: home.state, since }));
+        homeTimer = setTimeout(start, 10000);
+        return;
+      }
+      if (worker === null && home.state !== "ok") { fail(home.state || "refused"); return; }
+      connect();
+    };
+    const homeBack = () => { if (!connection && !ended && document.visibilityState !== "hidden") void start(); };
+    window.addEventListener("online", homeBack); document.addEventListener("visibilitychange", homeBack);
     void start().catch(() => { if (!dead) fail("connection_failed"); });
     return () => {
-      dead = true; send.current = () => {}; abort.abort(); connection?.close(); client?.close();
+      dead = true; send.current = () => {}; abort.abort(); connection?.close(); client?.close(); clearTimeout(homeTimer);
+      window.removeEventListener("online", homeBack); document.removeEventListener("visibilitychange", homeBack);
       resize.disconnect(); theme.disconnect(); unpick(); disposeTerminal();
     };
   }, [worker, attempt]);
 
-  const status = view.state === "reconnecting" ? tr("正在重新连接…", "Reconnecting…") : view.state === "open-elsewhere" ? tr("正在另一处使用", "Open elsewhere") : view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state !== "ready" ? tr("已断开", "Disconnected")
+  const again = () => { manual.current = true; setView({ state: "connecting" }); retry((n) => n + 1); };
+  const status = view.state === "reconnecting" ? tr("正在接回…", "Reconnecting…") : view.state === "open-elsewhere" ? tr("在另一处使用", "Open elsewhere") : view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state !== "ready" ? tr("已断开", "Disconnected")
     : terminalPath(view);
+  const final = !["connecting", "reconnecting", "ready"].includes(view.state);
   return <div className="flex h-full min-h-80 flex-col gap-3 p-4 md:p-6">
     <header className="flex flex-wrap items-center gap-2">
       <h1 className="min-w-0 flex-1 truncate font-display text-lg" title={view.destination}>
@@ -231,19 +317,23 @@ export default function TerminalPage() {
       <TermLook pick={pick} onPick={setTermPick} />
       <Button asChild size="sm" variant="ghost"><Link to="/sessions"><Layers />{tr("会话", "Sessions")}</Link></Button>
     </header>
-    {!["connecting", "reconnecting", "ready"].includes(view.state) ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
-      <p>{worker === null && view.error === "ended" ? tr("个人终端已结束。可重新打开，已退出的命令不会重启。", "Your personal terminal ended. Reopen it to continue; exited commands will not restart.") : tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
-      {view.state === "open-elsewhere" ? <Button size="sm" onClick={() => take.current()}>{tr("在这里使用", "Use here")}</Button> : view.state === "unauthorized" || view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
+    {notice ? <p role="status" data-notice className="rounded-md border-s-4 border-primary bg-muted px-3 py-2 text-sm">{notice}</p> : null}
+    {view.state === "reconnecting" ? <p role="status" data-waiting className="rounded-md bg-muted px-3 py-2 text-sm">{waitText(view, view.destination, now)}</p> : null}
+    {view.state === "open-elsewhere" ? <button type="button" role="alert" className="rounded-lg border p-4 text-start text-sm" onClick={() => take.current()}>{tr(...errors.open_elsewhere)}</button> : null}
+    {final && view.state !== "open-elsewhere" ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
+      <p>{tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
+      {view.state === "unauthorized" || view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
         : view.error === "no_home" ? <Button asChild size="sm"><Link to="/devices?tab=home">{tr("设备", "Devices")}</Link></Button>
-          : worker === null && view.error === "ended" && view.terminalGeneration ? <Button size="sm" onClick={() => { renewal.current = view.terminalGeneration; setView({ state: "connecting" }); retry((n) => n + 1); }}>{tr("重新打开终端", "Reopen terminal")}</Button>
-          : view.error === "interrupted" ? <Button size="sm" onClick={() => { forgetTerminalGeneration(worker); retry((n) => n + 1); }}>{tr("连接当前会话", "Connect current session")}</Button>
-          : !["ended", "interrupted"].includes(view.error || "") ? <Button size="sm" onClick={() => retry((n) => n + 1)}>{tr("重新连接", "Reconnect")}</Button>
+          : worker === null && view.error === "ended" && view.terminalGeneration ? <Button size="sm" onClick={() => { renewal.current = view.terminalGeneration; again(); }}>{tr("重新打开终端", "Reopen terminal")}</Button>
+          : view.error === "interrupted" ? <Button size="sm" onClick={() => { forgetTerminalGeneration(worker); again(); }}>{tr("连接当前会话", "Connect current session")}</Button>
+          : !["ended", "unsupported"].includes(view.error || "") && view.state !== "unsupported" ? <Button size="sm" onClick={again}>{tr("重新连接", "Reconnect")}</Button>
             : <Button asChild size="sm"><Link to="/sessions">{tr("查看会话", "View sessions")}</Link></Button>}
     </div> : null}
     {offers.map((offer) => <p key={offer.id} role="status" className="text-sm break-all">
       {offer.url ? <a href={offer.url} target="_blank" rel="noopener noreferrer" className="underline">{tr("打开链接：", "Open link: ")}{offer.url}</a>
         : tr("此操作需要本地终端：浏览器暂不支持端口转发、文件传送或登录回调。", "This action needs a local terminal: browser port forwarding, file transfer and login callbacks are not supported.")}
     </p>)}
-    <div ref={container} data-terminal style={{ background: screen }} className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border p-2" />
+    <div ref={container} data-terminal style={{ background: screen }} onPointerDown={() => { if (view.state === "open-elsewhere") take.current(); }}
+      className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border p-2 transition-opacity data-[stale]:opacity-50" />
   </div>;
 }

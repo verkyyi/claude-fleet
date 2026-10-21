@@ -45,11 +45,10 @@ to open that session directly. **My Terminal** in the sidebar and Sessions heade
 opens your personal terminal. Ended sessions keep their **Resume** action.
 The page is `/app/terminal`; old `/term?worker=…` links redirect here and keep the target.
 
-After a brief network outage, input pauses while the page reconnects to the same surviving terminal.
-**Open shell** selects your persistent personal shell. Exiting a nested shell with `exit` or EOF returns to its parent. Exiting the personal shell itself ends the terminal: choose **Reopen terminal** on the same page to start a new personal terminal generation. Exited commands and workers are not restarted. Reopening never takes control from another active tab; use **Use here** separately. Ordinary network recovery reuses the existing terminal. If renewal is unsupported, update the node first.
-
-Uncertain input is never resent. If another tab controls it, choose **Use here** to take control explicitly. If the session has restarted, choose **Connect current session** explicitly; this connects to the existing process without resending previous input.
-An ended environment or expired login stops retries; return to Sessions or sign in again.
+A dropped connection (network, a hub update, your machine restarting, a phone in the background) is never given up on: the last screen stays, input pauses, and the page tries again at once when it is back in front or the network returns — always reconnecting to the same terminal. Uncertain input is never resent.
+**Open shell** selects your persistent personal shell. Exiting a nested shell with `exit` or EOF returns to its parent. If the session you last viewed has ended, you land back in your personal terminal with a note; if the personal shell itself exited (or your machine's tmux went), the page opens a new personal terminal by itself — exited commands and workers are not restarted.
+A session's terminal whose session ended takes you to your personal terminal; a session that restarted is connected as it is now. If your machine is offline or under maintenance, the page says so and connects as soon as it is back — no refresh needed.
+The page you just opened or clicked back into uses the terminal; another page shows "open in another tab" — click it to bring it back. Only an expired login needs you to sign in again.
 Closing the page preserves the running shell and session.
 
 On nodes supporting browser terminals, **Fleet menu** or **Ctrl+] then p** opens

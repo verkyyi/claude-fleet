@@ -237,6 +237,10 @@ def cmd_ensure(args):
             selected = worker_live(sess, sock, st["last_worker"])
             identity = pane_identity(sock, selected) if selected else None
             selected_ended = not identity or identity != st.get("last_worker_identity")
+        # A fleet whose tmux server is gone (its name still resolves from the
+        # conf) is no fleet to renew into: bring it up like a first use (RMVE).
+        if sess is not None and tm(sock, "has-session", "-t", "=" + sess)[0] != 0:
+            sess = None
         if sess is None and init:
             up = os.environ.get("FLEET_WEBTERM_UP_CMD")   # the selftest's seam
             subprocess.run(["sh", "-c", up] if up else
@@ -402,6 +406,11 @@ def connect(args, conn, target, generation):
         out(view(st, "ended"), 5)
     resume = os.environ.pop("FLEET_TERM_RESUME", "")
     take = os.environ.pop("FLEET_TERM_TAKE", "") == "1"
+    # The page's own previous connection (RMVE): a lease it still holds is this
+    # page's, taken over at once — any other holder is «open elsewhere».
+    previous = os.environ.pop("FLEET_TERM_PREVIOUS", "")
+    if previous and not CONN.fullmatch(previous):
+        previous = ""
     renew = os.environ.pop("FLEET_TERM_RENEW", "") == "1"
     ensure = [sys.executable, __file__, "ensure"]
     if target == "personal" and not st:
@@ -454,23 +463,30 @@ def connect(args, conn, target, generation):
             current = read_json(os.path.join(state_dir(), "terminal.json"))
             if not current or current.get("generation") != st["generation"] or reading(current)[0] != "live":
                 out(view(current, "ended"), 5)
-            lease, rc = control_claim(path, target, conn, "take" if take else "claim")
+            own = lambda p: bool(previous) and (read_json(p) or {}).get("conn") == previous
+            lease, rc = control_claim(path, target, conn, "take" if take or own(path) else "claim")
             if rc:
                 out(lease, rc)
             selected = target
+            notice = None
             if target == "personal":
                 selected = current.get("last_worker") or "personal"
                 if selected != "personal":
                     worker = worker_live(sess, sock, selected)
                     if not worker or (current.get("last_worker_identity") and current["last_worker_identity"] != pane_identity(sock, worker)):
-                        out(view(current, "ended"), 5)
+                        # The session last looked at ended (reaped, respawned,
+                        # a new conversation): the personal terminal did not.
+                        # Go home and say so — never «ended» (RMVE).
+                        current["last_worker"] = current["last_worker_identity"] = None
+                        write_json(os.path.join(state_dir(), "terminal.json"), current)
+                        selected, worker, notice = "personal", None, "worker_gone"
             window = worker or current["window"]
             identity = pane_identity(sock, window)
             if not identity:
                 out({"state": "ended"}, 5)
             lease.update(window=window, identity=identity)
             if selected != target:
-                secondary, rc = control_claim(control_path(selected), selected, conn, "take" if take else "claim")
+                secondary, rc = control_claim(control_path(selected), selected, conn, "take" if take or own(control_path(selected)) else "claim")
                 if rc: out(secondary, rc)
                 lease.update(selected_lease=control_path(selected), selected_epoch=secondary["epoch"])
             write_json(path, lease)
@@ -504,9 +520,9 @@ def connect(args, conn, target, generation):
                 time.sleep(0.05)
             if not attached:
                 return 1
-        admission({"state": "controller", "term": st["id"], "gen": gen,
-                   "conn": conn, "epoch": lease["epoch"], "lease": path, "ttl": lease_secs(),
-                   "lock": os.path.join(state_dir(), "control/.lock")})
+        admission(dict({"state": "controller", "term": st["id"], "gen": gen,
+                        "conn": conn, "epoch": lease["epoch"], "lease": path, "ttl": lease_secs(),
+                        "lock": os.path.join(state_dir(), "control/.lock")}, **({"notice": notice} if notice else {})))
         while child.poll() is None and not stopped[0]:
             with Lock("control/.lock"):
                 current = read_json(path) or {}

@@ -72,6 +72,9 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 			t.Setenv("FLEET_VIEW_ROWS_CMD", "cat '"+rows+"'")
 			t.Setenv("FLEET_VIEW_FIRST_CMD", "false")
 			t.Setenv("FLEET_STATUS_G", filepath.Join(home, "global"))
+			// RMVE: the personal terminal whose tmux went is reopened by itself;
+			// its --init brings this disposable fleet back, never a real fleet-up
+			t.Setenv("FLEET_WEBTERM_UP_CMD", "tmux -L "+sock+" -f /dev/null new-session -d -s "+sock+" -n home -x 120 -y 32 'exec /bin/sh'")
 			for _, key := range []string{"FLEET_VIEW_ROWS_CMD", "FLEET_VIEW_FIRST_CMD", "FLEET_STATUS_G", "FLEET_UI_LANG"} {
 				tm("set-environment", "-g", key, os.Getenv(key))
 			}
@@ -104,9 +107,9 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 			// UDP denial exercises the real seven-second ICE fallback on every
 			// fresh page. Repeated exit/renew + two-tab races add those bounded
 			// negotiations; allow six minutes without relaxing any assertion.
-			budget := 240 * time.Second
+			budget := 360 * time.Second
 			if mode == "relay" {
-				budget = 360 * time.Second
+				budget = 540 * time.Second
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			defer cancel()

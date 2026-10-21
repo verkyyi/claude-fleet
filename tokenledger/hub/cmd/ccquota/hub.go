@@ -1106,6 +1106,8 @@ func runHub(args []string) error {
 	}
 	go func() {
 		<-ctx.Done()
+		// open browser terminals come back at once, to a replica still up (RMVE)
+		srv.Drain()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
 		for _, hs := range servers {
