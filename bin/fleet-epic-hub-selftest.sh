@@ -18,6 +18,9 @@
 #   D. C2's retry fails too: C2 is blocked, the batch is done; the report's read
 #      carries C1's PR and C2's state; the heartbeat stamps and clears `T<n>`.
 #   E. gh and curl were never run; every request went to the stub hub.
+#   F. the local files a charter names (~/fleet-drafts/…) ride the parent's
+#      record and reach each member's body on another machine (T793,
+#      fleet_local_refs.py); one nobody carried is warned.
 # Hermetic: a sandbox FLEET_CONF_DIR, no tmux, no network.
 set -uo pipefail
 
@@ -170,6 +173,38 @@ has "D: the heartbeat stamps the parent task" "$H" "stamped epic=T1"
 has "D: and clears it" "$(bash "$BIN/fleet-epic-heartbeat.sh" --clear "$P")" "cleared"
 python3 "$BIN/fleet-epic-tick.py" status --task T99 >/dev/null 2>&1; RC=$?
 eq "D: an unknown parent is not a batch" 1 "$RC"
+
+# --- F. the plan's local drafts travel with the batch (T793) -----------------------
+# The plan names ~/fleet-drafts/… files; the parent's dispatch carries them, and a
+# driver on ANOTHER machine (the drafts gone) still hands each member its own file
+# and the 共同约定 — and says a file nobody carried.
+mkdir -p "$WORK/mini2/fleet-drafts/t696/members" "$WORK/macmini"
+printf '约定：不改 conf 格式。\n' > "$WORK/mini2/fleet-drafts/t696/sections.md"
+printf 'C1 细节：开关叫 drafts。\n' > "$WORK/mini2/fleet-drafts/t696/members/C1.md"
+cat > "$WORK/charter2" <<'EOF2'
+<!-- fleet:epic repo=o/r short=草稿 cap=4 -->
+# EPIC: 草稿批次
+
+## 共同约定
+全文见 ~/fleet-drafts/t696/sections.md
+
+## 成员
+- [ ] **C1** 带细节的一项
+- [ ] **C2** 细节没带上的一项
+
+## C1 · 带细节的一项
+细节（必读）~/fleet-drafts/t696/members/C1.md
+
+## C2 · 细节没带上的一项
+细节（必读）~/fleet-drafts/t696/members/C2.md
+EOF2
+P=$(HOME="$WORK/mini2" bash "$BIN/fleet-task-record.sh" dispatch --title "EPIC: 草稿批次" --body-file "$WORK/charter2" 2>"$WORK/perr" | head -1)
+has "F: the plan's dispatch says the file it could not carry" "$(cat "$WORK/perr")" "members/C2.md · 不在这台机器"
+S=$(HOME="$WORK/macmini" tick)
+B1=$(printf '%s' "$S" | jq_ '[n["body"] for n in d["next"] if n["key"]=="C1"][0]')
+has "F: on another machine, C1 still gets its own file" "$B1" "C1 细节：开关叫 drafts。"
+has "F: and the 共同约定, file and all" "$B1" "约定：不改 conf 格式。"
+has "F: the line warns about C2's file" "$(HOME="$WORK/macmini" tick --line)" "C2 的本机文件没能随单带上"
 
 # --- E. no GitHub ---------------------------------------------------------------------
 [ -e "$WORK/denied" ] && bad "E: a GitHub road ran: $(cat "$WORK/denied")" || ok

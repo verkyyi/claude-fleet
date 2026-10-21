@@ -59,7 +59,9 @@
 #                       set / attach print the task's code (else T<n>) on stdout
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
 #                     [--spawn] [--reap P] [--agent A] [--session S] [--origin O] [--via V] [--print]
-#                     → the `task` tool: the record FIRST (its code, then
+#                     → the `task` tool: the record FIRST (a local text file the
+#                       body names — ~/fleet-drafts/… — rides in it, T793:
+#                       fleet_local_refs.py; what cannot is said on stderr) (its code, then
 #                       `T<n>` on stdout — `T<n>` alone from an older hub), then — a repo named, i.e. a development task —
 #                       + --spawn: its session in a worktree of that repo, bound
 #                       to the record alone (no issue: dash-raw-session.sh --repo
@@ -305,6 +307,16 @@ if [ "$cmd" = dispatch ]; then
   applicable || die 3 "no hub here: a task has nowhere to be recorded (issue #4898)"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
+  # The local files the words name travel WITH them (T793): the session may be
+  # placed on another machine (T742), where ~/fleet-drafts/… is not. What cannot
+  # come (not here, too big) is said on stderr and in the body — never dropped.
+  if [ -n "$body" ]; then
+    cbody=$(printf '%s\n' "$body" | python3 "$BIN/fleet_local_refs.py" carry 2>"${TMPDIR:-/tmp}/fleet-carry.$$") && body=$cbody
+    while IFS= read -r ln; do
+      [ -n "$ln" ] && printf 'fleet-task-record: %s — 会话在别的机器上读不到它\n' "$ln" >&2
+    done < "${TMPDIR:-/tmp}/fleet-carry.$$"
+    rm -f "${TMPDIR:-/tmp}/fleet-carry.$$"
+  fi
   # One token per (caller, words): a session asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
