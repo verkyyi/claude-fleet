@@ -141,6 +141,20 @@ published WITH the page to the same 活页 (`publish_file` `files`: the page plu
 page draws each as a thumbnail that opens full size. A done / passed item without
 both is the lint's `task-evidence-shot` — a must-fix before the worker reports.
 
+**登录后的页面 (T844)**: a page behind a sign-in — production's console `/app` — is
+shot signed in as the person who dispatched the session, read-only, never by a
+sign-in of the session's own and never with a person's browser state. Run
+`~/.claude/fleet/bin/fleet-console-ticket.sh --next /app/<page>`: the hub hands
+THIS session a one-time link (good for 2 minutes, opened once) into its login
+owner's `/app`; `browser_navigate` to it in the browser that shoots, then take
+both widths in that same browser (the session lasts 15 minutes, `--ttl` up to
+1800; past it, ask for a new link). It is a member's view and reads only — a write,
+a websocket or the conversation answers 403 (只读票据), an admin's ticket opens no
+admin page — so shoot the state, do not drive it. The link is a credential: give
+it to the browser only, never to a page, a record or a log. Exit 1 (a login no
+person owns, a person off the list) or 3/4 (no hub, not a fleet session) ⇒ that
+item's signed-in shot is the person's: say so in its `proof`.
+
 ## 4. Publish privately, push, wait
 
 1. `mcp__space__publish_file` — `title` 「任务设计：<标题>」, `filename`

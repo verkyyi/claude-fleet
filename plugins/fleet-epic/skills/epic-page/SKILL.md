@@ -213,6 +213,20 @@ both is the lint's `task-evidence-shot` — a must-fix before the worker reports
 On an EPIC report the 已上线 cell is the same rule: the shot is taken on production,
 at both widths, and published with the report.
 
+**登录后的页面 (T844)**: a page behind a sign-in — production's console `/app` — is
+shot signed in as the person who dispatched the session, read-only, never by a
+sign-in of the session's own and never with a person's browser state. Run
+`~/.claude/fleet/bin/fleet-console-ticket.sh --next /app/<page>`: the hub hands
+THIS session a one-time link (good for 2 minutes, opened once) into its login
+owner's `/app`; `browser_navigate` to it in the browser that shoots, then take
+both widths in that same browser (the session lasts 15 minutes, `--ttl` up to
+1800; past it, ask for a new link). It is a member's view and reads only — a write,
+a websocket or the conversation answers 403 (只读票据), an admin's ticket opens no
+admin page — so shoot the state, do not drive it. The link is a credential: give
+it to the browser only, never to a page, a record or a log. Exit 1 (a login no
+person owns, a person off the list) or 3/4 (no hub, not a fleet session) ⇒ that
+item's signed-in shot is the person's: say so in its `proof`.
+
 ## Rows that open on their own detail (T764)
 
 Both page kinds. A table whose rows carry detail is a `div.xt` (`c2` for 一步 /

@@ -92,6 +92,9 @@ type Me struct {
 	// ViewAs says an admin is looking through this person's eyes, read-only
 	// (claude-fleet#3944): the page draws its 只读预览 bar off it.
 	ViewAs *MeViewAs `json:"view_as,omitempty"`
+	// ReadOnly says the request rides a read-only console ticket (task
+	// T844): a session the person's own acceptance session asked the hub for.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 // MeViewAs is /v1/me's view_as: whom the page shows, and who is looking.
@@ -141,6 +144,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		sess := sessionOf(r.Context())
 		out.Person, out.Name, out.CanLogout = sess.Principal(), sess.Name, true
 		out.Via = sess.Sub
+		if sess.RO {
+			// a read-only console ticket (task T844): nothing to sign out of
+			out.ReadOnly, out.CanLogout = true, false
+		}
 	case doorToken:
 		_, err := r.Cookie(viewerCookie)
 		out.CanLogout = err == nil

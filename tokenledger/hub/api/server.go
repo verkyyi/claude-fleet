@@ -568,6 +568,8 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/auth/email/start", s.handleEmailStart)
 	mux.HandleFunc("/auth/email/link", s.handleEmailLink)
 	mux.HandleFunc("/auth/email/code", s.handleEmailCode)
+	// A read-only console ticket's link (task T844): 404 when off.
+	mux.HandleFunc(ConsoleTicketPath, s.handleConsoleTicket)
 	// 申请 (claude-fleet#4051): a person the list does not name asks to be
 	// let in; 404 when no way in is configured.
 	mux.HandleFunc(ApplyPath, s.handleApply)
@@ -647,6 +649,9 @@ func (s *Server) routes() *routeMux {
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.
 		mux.HandleFunc("/v1/node/peer-cert", s.handleNodePeerCert)
+		// A read-only console ticket (task T844): a session of the person's
+		// own login asks, as itself, for a one-time link into /app.
+		mux.HandleFunc(ConsoleTicketNodePath, s.handleNodeConsoleTicket)
 		// The admin role account's own token (claude-fleet#3724): the
 		// machine asks for _fleetadmin on itself, once per install.
 		mux.HandleFunc(AdminTokenNodePath, s.handleNodeAdminToken)

@@ -231,6 +231,17 @@ func (s *Server) doors(f HubFacts) []Door {
 			Note:  pick(f.Email, "Here: wired up.", "Here: NOT configured (CCQUOTA_SMTP_URL), so /auth/email/* answers 404."),
 		},
 		{
+			ID: "ticket", Name: "Read-only console ticket", Via: "http",
+			Where:      []string{ConsoleTicketNodePath, ConsoleTicketPath},
+			Credential: "a node's enrollment token plus one of its sessions' worker assertion, for the login's own owner",
+			Can: "Hand a session the person dispatched (an acceptance session shooting production) a one-time " +
+				"link, good for 2 minutes, into that person's own /app: read-only (every write, websocket and the " +
+				"conversation refused), as a member, for at most 30 minutes, never renewed. Every issuance and " +
+				"redemption is a fleet_audit row (console_ticket / console_ticket_used).",
+			State: pick(f.GitHub || f.WeChat || f.Email, "open", "off"),
+			Note:  "Here: " + pick(f.GitHub || f.WeChat || f.Email, "on — any sign-in is configured.", "off — no sign-in is configured, so both answer 404."),
+		},
+		{
 			ID: "api", Name: "The query API", Via: "http",
 			Where:      []string{"/v1/summary", "/v1/usage", "/v1/history", "/v1/live/stream", "and ~20 more"},
 			Credential: "the same viewer token, as an `Authorization: Bearer` header",

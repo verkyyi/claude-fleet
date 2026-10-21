@@ -85,6 +85,12 @@ func viewAsReadable(r *http.Request) bool {
 // view, before any route sees it. Nothing asked ⇒ nothing read, byte for byte.
 func (s *Server) viewAsGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !viewAsReadable(r) && s.consoleTicketCookie(r) {
+			// A read-only console ticket's session (task T844): reads only,
+			// whatever the route — the same rule as a view.
+			httpError(w, http.StatusForbidden, consoleTicketRefusal)
+			return
+		}
 		if target := viewAsAsked(r); target != "" && !viewAsReadable(r) {
 			if _, pid, ok := s.personSession(r); ok && pid != target {
 				if role, err := s.personRole(pid); err == nil && role == roleAdmin {

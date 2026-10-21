@@ -53,6 +53,11 @@ type Session struct {
 	// through every sliding renewal, so 退出 can revoke that browser's values —
 	// a copy of one included — and no other. A cookie from before has none.
 	Sid string `json:"sid,omitempty"`
+	// RO marks a read-only console ticket's session (task T844): minted from
+	// a one-time ticket a session of the person's own login asked the hub
+	// for, short-lived, never renewed, and admitted by the gate for reads only.
+	// An ordinary sign-in never carries it.
+	RO bool `json:"ro,omitempty"`
 }
 
 // Principal is the person this session is for: UID, else the subject.
@@ -78,7 +83,17 @@ func SignRole(sub, uid, name, role, secret string, now time.Time, ttl time.Durat
 
 // SignSid is SignRole for the sign-in sid: a renewal keeps its browser's Sid.
 func SignSid(sid, sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
-	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix(), Sid: sid})
+	return sign(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix(), Sid: sid}, secret)
+}
+
+// SignReadOnly mints a read-only ticket session (RO) for the person, a sign-in
+// of its own (a new Sid), for ttl.
+func SignReadOnly(sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
+	return sign(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix(), Sid: NewSid(), RO: true}, secret)
+}
+
+func sign(sess Session, secret string) string {
+	body, _ := json.Marshal(sess)
 	enc := base64.RawURLEncoding.EncodeToString(body)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(enc))
