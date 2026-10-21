@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
 import { browserClient, type BrowserOffer } from "@/shared/terminal-client";
 import { connectTerminal, forgetTerminalGeneration, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey } from "@/shared/terminal";
+import { touchWheel } from "@/shared/touch-wheel";
 import { usePage } from "../Shell";
 
 type View = TerminalState & { destination?: string };
@@ -108,6 +109,22 @@ export default function TerminalPage() {
       current.onData((text) => { if (term === current) input(text); });
       current.textarea?.addEventListener("compositionstart", () => { composing = true; });
       current.textarea?.addEventListener("compositionend", () => { composing = false; });
+      // A phone's drag is the wheel while tmux reads the mouse (C8X3): history
+      // scrolls in copy-mode or in the app itself, never only xterm's empty buffer.
+      const el = current.element!;
+      let lastY: number | null = null, carry = 0;
+      el.addEventListener("touchstart", (e) => { lastY = e.touches.length === 1 ? e.touches[0].clientY : null; carry = 0; }, { passive: true });
+      el.addEventListener("touchmove", (e) => {
+        if (lastY === null || e.touches.length !== 1 || current.modes.mouseTrackingMode === "none") return;
+        const t = e.touches[0];
+        const r = touchWheel(carry, t.clientY - lastY, el.clientHeight / Math.max(1, current.rows));
+        lastY = t.clientY; carry = r.carry; e.preventDefault();
+        const target = el.querySelector(".xterm-screen") ?? el;
+        for (let i = 0; i < Math.abs(r.steps); i++) {
+          target.dispatchEvent(new WheelEvent("wheel", { deltaY: Math.sign(r.steps), deltaMode: WheelEvent.DOM_DELTA_LINE,
+            clientX: t.clientX, clientY: t.clientY, bubbles: true, cancelable: true }));
+        }
+      }, { passive: false });
       size(); current.focus();
     };
     send.current = (text) => { if (!composing) { input(text); term?.focus(); } };

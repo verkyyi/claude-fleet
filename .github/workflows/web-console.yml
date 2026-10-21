@@ -34,6 +34,8 @@ jobs:
         run: node test/pool.mjs
       - name: Task outcome and stale reads
         run: node --experimental-strip-types test/tasks.mjs
+      - name: Terminal touch scroll
+        run: node --experimental-strip-types test/terminal.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build
