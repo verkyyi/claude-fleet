@@ -6,7 +6,7 @@ A service the daemon keeps up (fleet service, docs/dev/MANAGED-NODE.md §10)
 exits 3 when another server already answers on its socket. When that server
 is an ORPHAN of the same service — an old copy left behind by a release switch
 or a dead parent (PPID 1, its argv the service's own) — the managed copy would
-exit every 30 s forever («已退出·待重启» on the alert bar, mini2 2026-10-21:
+exit every 30 s forever («已退出·待重启» on the alert bar, 2026-10-21:
 an old `server.mjs --socket` from 10-15 on the old code path). So:
 
     fleet-service-takeover.py --name <svc> --socket <path> [--pidfile <file>]

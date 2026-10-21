@@ -6591,7 +6591,7 @@ drill_chat_claude_bare_path() {
   SECS=$(since "$t0")
 }
 
-# service-orphan-holds-socket (task BZGP, mini2 2026-10-21): an old webchat
+# service-orphan-holds-socket (task BZGP, a managed Mac 2026-10-21): an old webchat
 # server — a release switch left it, PPID 1, the old code path — kept answering
 # on chat.sock, so the managed copy exited 3 every 30 s («已退出·待重启» on the
 # bar). serve now stops an orphan of the service first (TERM, then KILL), and
