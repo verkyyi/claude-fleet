@@ -6685,14 +6685,24 @@ fleet_hub_place() {
   return 1
 }
 
-# fleet_agent_file_travels <name> — rc 0 when the agent file is one the core ships
-# with the release (conf/agent-defaults/claude/agents/<name>.md: fleet-worker,
-# orchestrator), so every machine's ~/.claude/agents has it and a session started
-# as it may open on any of them (issue T672; T604 — the template travels with the
-# release). A file only this machine has (the repo's, the login's own) is rc 1.
+# fleet_agent_file_travels <name> — rc 0 when the agent file is one the release
+# ships: the core's (conf/agent-defaults/claude/agents/<name>.md: fleet-worker,
+# orchestrator) or a plugin's (plugins/<plugin>/agents/<name>.md, `<name>` or
+# `<plugin>:<name>` — epic-driver, T742), so every machine has it and a session
+# started as it may open on any of them (issue T672; T604 — the template travels
+# with the release). A machine whose login lacks the plugin declines the start and
+# the hub tries the next one. A file only this machine has (the repo's, the
+# login's own) is rc 1.
 fleet_agent_file_travels() {
-  case "${1:-}" in ''|*[!A-Za-z0-9_.:-]*|.*) return 1 ;; esac
-  [ -f "$_FLEET_LIB_DIR/../conf/agent-defaults/claude/agents/$1.md" ]
+  local n="${1:-}" pl f
+  case "$n" in ''|*[!A-Za-z0-9_.:-]*|.*|*:*:*|*/*) return 1 ;; esac
+  case "$n" in *:*)
+    pl=${n%%:*}; n=${n#*:}
+    [ -n "$pl" ] && [ -n "$n" ] && [ -f "$_FLEET_LIB_DIR/../plugins/$pl/agents/$n.md" ]; return ;;
+  esac
+  [ -f "$_FLEET_LIB_DIR/../conf/agent-defaults/claude/agents/$n.md" ] && return 0
+  for f in "$_FLEET_LIB_DIR"/../plugins/*/agents/"$n".md; do [ -f "$f" ] && return 0; done
+  return 1
 }
 
 # _fleet_place_log <what> <node> <rc> <ms> <answer> [<not here>] [<total ms>] — one
