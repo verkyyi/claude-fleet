@@ -368,8 +368,24 @@ while :; do
   # where it is launched.
   [ "$intmux" = 1 ] && { wset -u @agent_status; wset -u @agent_status_ts; wset -u @agent_cwd; }
   # The new session's clock (T716) is its FIRST agent's: a relaunch here (a
-  # resume off the recovery page, a cfg-restart) is not that start's 能打字.
-  [ "$intmux" = 1 ] && [ -n "$(opt @timing_ready)" ] && { wset -u @timing_t0; wset -u @timing_ready; }
+  # resume off the recovery page, a cfg-restart) is not that start's 能打字. The
+  # first launch carries the ↵ to its launcher (FLEET_TIMING_T0, unset before the
+  # agent runs) and writes `wrap` — its launcher about to run, inline (no lib here).
+  unset FLEET_TIMING_T0 FLEET_TIMING_WHAT
+  if [ "$intmux" = 1 ]; then
+    _tm=$(tmux display-message -p -t "$TMUX_PANE" '#{@timing_t0}:#{@timing_ready}:#{@timing_what}' 2>/dev/null)
+    _t0=${_tm%%:*}; _tw=${_tm##*:}
+    case "$_tm" in
+      *[0-9]:*[0-9]:*) wset -u @timing_t0; wset -u @timing_ready ;;
+      *[0-9]::*) export FLEET_TIMING_T0=$_t0
+               [ "$_tw" = session.node ] && export FLEET_TIMING_WHAT=session.node
+               _tw=${FLEET_TIMING_WHAT:-session}; _td="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/timing"
+               mkdir -p "$_td" 2>/dev/null && perl -MTime::HiRes=time -e 'my ($t0, $w) = @ARGV; my $ms = (time() - $t0) * 1000;
+                 printf "{\"ts\": %.3f, \"what\": \"%s\", \"seg\": \"wrap\", \"ms\": %.1f}\n", $t0, $w, $ms if $ms >= 0 && $ms < 3600000' \
+                 "$_t0" "$_tw" >> "$_td/$_tw.ndjson" 2>/dev/null ;;
+    esac
+    unset _tm _t0 _tw _td
+  fi
   # A durable task handover that rewrites this HOME's native task table holds
   # every new Claude here until it is settled (issue #4280): the launch gate.
   if [ -f "$PCONF/transfer-durable/launch.gate" ]; then
@@ -383,7 +399,13 @@ while :; do
     if [ -n "$(opt @launch)" ]; then
       for o in @launch @launch_receipt @launch_seed @launch_started @launch_error @launch_hook_error; do wset -u "$o"; done
     fi
-    PATH="$SHIM_PATH" python3 "$BIN/fleet_repo_authority.py" --supervise -- "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+    # The launcher as it is, without the environment a retired layer (EPIC T497
+    # C8) may have handed a session started before it — fleet_repo_authority.py's
+    # --supervise did this with a Python start (T716: env -u, no start).
+    PATH="$SHIM_PATH" env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \
+      -u FLEET_LAUNCH_WORKTREE -u FLEET_LAUNCH_CREATE -u FLEET_LAUNCH_DELIVERY -u FLEET_AUTHORITY_CONTEXT \
+      -u FLEET_AUTHORITY_ADMISSION -u FLEET_AUTHORITY_START -u FLEET_AUTHORITY_EXPECTED \
+      -u FLEET_AUTHORITY_RESUME_SID -u FLEET_ID_DISPATCH "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   else
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi

@@ -312,6 +312,10 @@ case "$_fc_ty" in 0|off|none) case "${CLAUDE_CODE_SHELL_PREFIX:-}" in */fleet-to
   esac ;;
 esac
 unset _fc_ty
+# The new session's clock (T716): the agent runs now — `exec`, then the ↵ stays
+# out of its environment (a dispatch it makes starts a clock of its own).
+fleet_timing_at exec
+unset FLEET_TIMING_T0 FLEET_TIMING_WHAT
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
   # shellcheck disable=SC2154  # fleet_launch_yield sets _fl_yield
   exec python3 "$BIN/fleet-loop.py" bridge -- ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"

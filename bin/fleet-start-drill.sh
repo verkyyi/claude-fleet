@@ -15,9 +15,10 @@
 #   --node here      open on this machine (FLEET_SPAWN_NODE=local) — the default:
 #                    a baseline is one machine's; `auto` lets the hub place it
 #   --wait SECS      how long one run may take to its input box (default 60)
-#   --keep           leave the sessions open (default: each ends itself once
-#                    measured — its own `stopped` report closes its record, and
-#                    the fleet closes a reported dispatched session a minute on)
+#   --keep           leave the sessions open (default: each is closed the moment
+#                    it is measured — its own `stopped` report ends its record,
+#                    fleet-worker-stop.sh ends the session; nothing is left on
+#                    the person's list)
 #
 # Each run is the fleet's own clock (FLEET_TIMING_T0 = the drill's ↵ for it): the
 # stages land in timing/session.ndjson like any other start's, so `fleet_timing.py
@@ -31,8 +32,8 @@
 # counted `remote`, not measured. The sessions report to the session that runs the
 # drill (their parent) — run it from a session that may receive them.
 #
-# A drill is load on the machine: it refuses (exit 3) when the host is already
-# above 1 load per core, like fleet-loadgen.sh; --force runs anyway.
+# A drill is load on the machine: it refuses (exit 3) when the CPU is already
+# over 80 % busy (admission's reading, _fleet_cpu_busy); --force runs anyway.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROAD=box AGENT=claude N=20 K=1 REPO='' WAIT=60 KEEP=0 FORCE=0 NODE=here
@@ -59,8 +60,10 @@ case "$N$K$WAIT" in *[!0-9]*) echo "fleet-start-drill: -n / --concurrent / --wai
 [ "$N" -ge 1 ] && [ "$K" -ge 1 ] || { echo "fleet-start-drill: -n and --concurrent are at least 1" >&2; exit 2; }
 
 if [ "$FORCE" = 0 ]; then
-  over=$(python3 -c 'import os; l = os.getloadavg()[0]; c = os.cpu_count() or 1; print(1 if l / c > 1 else 0)' 2>/dev/null)
-  [ "$over" = 1 ] && { echo "fleet-start-drill: the host is above 1 load per core — not adding to it (--force)" >&2; exit 3; }
+  # the CPU's own reading, admission's (BREAK-IT mac-admit-load-not-busy): a Mac's
+  # load average counts I/O waiters and reads 3/core on a machine 40 % busy
+  over=$(bash -c '. "$1/fleet-lib.sh"; b=$(_fleet_cpu_busy) && awk -v b="$b" "BEGIN { print (b > 0.8) ? 1 : 0 }"' _ "$BIN" 2>/dev/null)
+  [ "$over" = 1 ] && { echo "fleet-start-drill: the host CPU is over 80 % busy — not adding to it (--force)" >&2; exit 3; }
 fi
 if [ -z "$REPO" ]; then
   REPO=$(bash -c '. "$1/fleet-lib.sh"; fleet_repos 2>/dev/null | head -n 1' _ "$BIN")
@@ -79,10 +82,10 @@ one() {
   printf '%s\n' "$t0" > "$out.t0"
   if [ "$ROAD" = box ]; then
     FLEET_TIMING_T0=$t0 bash "$BIN/fleet-task-record.sh" dispatch --title "启动演练 $i" --repo "$REPO" \
-      --spawn --agent "$AGENT" --print --blank > "$out" 2> "$out.err"
+      --spawn --agent "$AGENT" --reap done:1m --print --blank > "$out" 2> "$out.err"
   else
     FLEET_TIMING_T0=$t0 bash "$BIN/fleet-task-record.sh" dispatch --title "启动演练 $i" --repo "$REPO" \
-      --spawn --agent "$AGENT" --print --body-file "$WORDS" > "$out" 2> "$out.err"
+      --spawn --agent "$AGENT" --reap done:1m --print --body-file "$WORDS" > "$out" 2> "$out.err"
   fi
   printf '%s\n' "$?" > "$out.rc"
   win=$(sed -n 's/^\(@[0-9][0-9]*\).*/\1/p' "$out" | head -n 1)
@@ -103,10 +106,15 @@ one() {
   done
   [ -n "$ms" ] && printf '%s\n' "$ms" > "$out.input"
   [ "$KEEP" = 1 ] && return 0
-  local pane
+  # closed at once, never left on the person's list: its record ends (its own
+  # `stopped` report), then the session itself (fleet-worker-stop.sh, by identity)
+  local pane fid sess
   pane=$(tmux display-message -p -t "$win" '#{pane_id}' 2>/dev/null)
+  fid=$(tmux display-message -p -t "$win" '#{@fleet_id}' 2>/dev/null)
+  sess=$(tmux display-message -p -t "$win" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
   [ -n "$pane" ] && TMUX_PANE=$pane bash "$BIN/fleet-report-parent.sh" --state stopped --outcome failed \
     --summary "启动演练（T716）：只量开窗到能打字，不是活" > /dev/null 2>&1
+  [ -n "$fid" ] && [ -n "$sess" ] && bash "$BIN/fleet-worker-stop.sh" "$sess" "fid:$fid" > /dev/null 2>&1
   return 0
 }
 

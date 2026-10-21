@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import urllib.error
+import urllib.request  # fleet_hub_rest imports it where it asks (T716); patched through it here
 from unittest.mock import patch
 
 import fleet_hub_rest as ticket

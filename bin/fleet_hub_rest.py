@@ -12,16 +12,17 @@ The node token is read the way every hub caller reads it (`_fleet_hub_env`, issu
 export. Exit-code style errors: Fail(rc, msg) — 1 the hub refused · 2 a bad request
 or reference · 4 the hub is not reachable (no answer, or no node token).
 """
-import http.client
 import io
 import json
 import os
 import re
 import socket
 import subprocess
-import urllib.error
 import urllib.parse
-import urllib.request
+# http.client / urllib.request / urllib.error are imported where a request is
+# made (T716): they pull in email, ssl and http — ~1 s on a busy disk — and a
+# caller that never asks the hub (fleet_repo_authority.py --supervise, a
+# --match-ticket-ref) paid it on every start.
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 ID_RE = re.compile(r'^(gh):([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$')
@@ -97,15 +98,16 @@ def hub_sock():
     return None
 
 
-class _UnixConn(http.client.HTTPConnection):
-    def __init__(self, path, timeout):
-        super().__init__('localhost', timeout=timeout)
-        self._path = path
+def _UnixConn(path, timeout):
+    import http.client
 
-    def connect(self):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
-        self.sock.connect(self._path)
+    class UnixConn(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.settimeout(self.timeout)
+            self.sock.connect(path)
+
+    return UnixConn('localhost', timeout=timeout)
 
 
 def _via_sock(sock, req, hub):
@@ -135,6 +137,8 @@ def _via_sock(sock, req, hub):
 
 
 def api(method, path, body=None, query=None, root='/v1/fleet'):
+    import urllib.error
+    import urllib.request
     url, tok = creds()
     # A task authority is a person's (issue #4901): /authority[/start] is
     # the hub's /v1/fleet/authority road (#4896); a repo= on it only names the

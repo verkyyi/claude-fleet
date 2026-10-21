@@ -3642,8 +3642,8 @@ if _sp=$(python3 "$(dirname "$0")/fleet_timing.py" p90 session --hours 24 2>/dev
   info spawn-time "$(printf '%s\n' "$_sp" | awk '{
     for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
     s = "新建耗时 近 24 小时 " v["n"] " 次 · 九成"
-    split("record placed window switched ready input", k, " "); split("记任务|hub 结论|开窗|切过去|agent 就绪|能打字", w, "|")
-    for (j = 1; j <= 6; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
+    split("record placed window wrap exec switched ready input", k, " "); split("记任务|hub 结论|开窗|启动脚本|agent 启动|切过去|agent 就绪|能打字", w, "|")
+    for (j = 1; j <= 8; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
     print s }') — fleet_timing.py table session shows each run's stages"
 fi
 

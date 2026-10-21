@@ -192,6 +192,17 @@ fleet_launch_mcp() {   # [<launch model>] -- <the agent argv>
   case "$(fleet_agent_get "$LAUNCH_AGENT" mcp)" in
   flags)
     case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) return 0 ;; esac
+    # A worker starts lean (T716 F): no FLEET_MCP_CONFIG of the fleet's, a
+    # fleet-worker launch, FLEET_MCP_LEAN not 0 ⇒ strict, only the fleet's own
+    # servers + GitHub + the remote connectors + FLEET_MCP_EXTRA (the config is
+    # composed after fleet_launch_cfg, which hands the fleet/team layer to the
+    # gateway instead); every other configured server is a mcp_enable away.
+    _fl_mcp_lean=0
+    if [ -z "${FLEET_MCP_CONFIG:-}" ] && [ "${FLEET_MCP_LEAN:-1}" != 0 ] && [ "${_fc_as:-}" = fleet-worker ] \
+       && [ "${FLEET_MCP_GATEWAY:-1}" != 0 ] && [ -f "$BIN/fleet_mcp_gateway.py" ] \
+       && [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$mw" ] && [ -f "$BIN/fleet-mcp.py" ]; then
+      _fl_mcp_lean=1   # --strict-mcp-config goes in with the composed list, never without it
+    fi
     if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
       v="$FLEET_MCP_CONFIG"; [ "$v" = none ] && v='{"mcpServers":{}}'
       mcp_flag+=(--strict-mcp-config "--mcp-config=$v")
@@ -248,7 +259,8 @@ fleet_launch_cfg() {   # [composer args…]
       manifest) _fl_cfg_man="$v" ;;
       say)      say="$v" ;;
       mod)      _fl_cfg_mod="$v" ;;
-      mcp)      cfg_flag+=("--mcp-config=$v") ;;   # the =form: --mcp-config is variadic
+      mcp)      if [ "${_fl_mcp_lean:-0}" = 1 ]; then export FLEET_MCP_TEAM_FILE="$v"   # the gateway's (T716)
+                else cfg_flag+=("--mcp-config=$v"); fi ;;   # the =form: --mcp-config is variadic
       settings) cfg_flag+=("--settings=$v") ;;
       c)        flags+=(-c "$v") ;;
       lock)     locks="${locks:+$locks; }$v" ;;
@@ -257,6 +269,17 @@ fleet_launch_cfg() {   # [composer args…]
     esac
   done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
              python3 "$BIN/fleet-agent-team.py" session "$LAUNCH_AGENT" "$@" 2>/dev/null)
+  # the lean start's own list (T716 F): composed now that the fleet/team layer is known
+  if [ "${_fl_mcp_lean:-0}" = 1 ]; then
+    local lean="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/mcp-gateway/lean.$$.json"
+    mkdir -p "${lean%/*}" 2>/dev/null
+    find "${lean%/*}" -name 'lean.*.json' -mmin +60 -delete 2>/dev/null
+    if FLEET_MCP_EXTRA="${FLEET_MCP_EXTRA:-}" python3 "$BIN/fleet_mcp_gateway.py" lean-config "$lean" >/dev/null 2>&1; then
+      mcp_flag+=(--strict-mcp-config "--mcp-config=$lean")
+    elif [ -n "${FLEET_MCP_TEAM_FILE:-}" ]; then
+      cfg_flag+=("--mcp-config=$FLEET_MCP_TEAM_FILE"); unset FLEET_MCP_TEAM_FILE   # not lean: as before
+    fi
+  fi
   # where this session's configuration comes from (EPIC #1855 C6) — only with a personal layer
   [ -n "$say" ] && fleet_launch_say "配置 $say"
   [ -n "$locks" ] && fleet_launch_say "locked agent config overridden on this login: $locks (issue #1782)"

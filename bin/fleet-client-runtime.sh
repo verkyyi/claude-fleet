@@ -97,7 +97,7 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh
 #     fleet-login-bootstrap.sh fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py
 #     fleet-agent-team.py fleet-daemon-lib.sh fleet-cred-proxy.sh fleet-credsep.sh
-#     fleet-peer-cert.sh fleet-node-shell-retire.sh
+#     fleet-peer-cert.sh fleet-node-shell-retire.sh fleet_cred_ctl.py
 #     fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
 #     fleet-node-probe.sh (a managed node's, #4886 — fleet-node.sh tests for it)
 NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
@@ -106,7 +106,7 @@ NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_vi
   fleet_notify.py fleet-report-parent.sh dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh fleet-webchat.sh
   fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh fleet-login-bootstrap.sh
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
-  fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh
+  fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh fleet_cred_ctl.py
   fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
   fleet-node-probe.sh fleet-board-diff.py"
 

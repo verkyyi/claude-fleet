@@ -3219,7 +3219,11 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
         return 2
     run = fleet_timing.Run("session", fleet_timing_t0(t0))
     os.environ["FLEET_TIMING_T0"] = "%.3f" % run.t0
-    if repo and not prompt and new_authority(fleet, vid, repo) == "hub":
+    mode = new_authority(fleet, vid, repo) if repo and not prompt else ""
+    if mode in ("hub", "legacy"):
+        # asked once a start (T716): the spawner takes this answer while it is fresh
+        os.environ["FLEET_AUTHORITY_SEEN"] = "%s %d" % (mode, int(time.time()))
+    if mode == "hub":
         # under hub authority a repo's start is a task record first (issue #4965):
         # a blank one (T652, EPIC T651 C1) is a record titled 「新会话」 with no first
         # turn, renamed by its first prompt. `draft` words: an older panel's send

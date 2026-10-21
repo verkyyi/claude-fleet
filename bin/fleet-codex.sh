@@ -246,6 +246,8 @@ elif [ -n "${TMUX:-}" ] && [ "${FLEET_CODEX_SERVER:-1}" != 0 ] && [ -z "$FLEET_C
   runner=(python3 "$BIN/fleet-codex-runtime.py" --)
 fi
 fleet_launch_yield   # the agent one scheduling class below the 看台 (T691)
+fleet_timing_at exec   # the new session's clock (T716): the agent runs now
+unset FLEET_TIMING_T0 FLEET_TIMING_WHAT
 # shellcheck disable=SC2154  # fleet_launch_yield sets _fl_yield
 runner=(${_fl_yield[@]+"${_fl_yield[@]}"} "${runner[@]}") # bash32-ok: runner is always populated
 if [ "$have_prompt" = 1 ]; then

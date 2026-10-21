@@ -306,6 +306,13 @@ def authority(repo, fleet=""):
     """The person's task authority for a start of `repo` — hub · legacy · frozen —
     as the spawners' gate asks it (fleet_repo_authority_guard --gate); "" when no
     hub is on for it, or the hub did not say."""
+    seen = (os.environ.get("FLEET_AUTHORITY_SEEN") or "").split()
+    try:   # the 看台 asked a moment ago (T716): asked once a start
+        fresh = float(os.environ.get("FLEET_AUTHORITY_FRESH_SECS") or 30)
+        if len(seen) == 2 and seen[0] in ("hub", "legacy") and 0 <= time.time() - float(seen[1]) < fresh:
+            return seen[0]
+    except ValueError:
+        pass
     seam = os.environ.get("FLEET_DISPATCH_AUTHORITY_CMD")
     if seam:
         argv = seam.split() + [repo, fleet]

@@ -40,7 +40,11 @@ seconds, ms precision), and a `total` segment for end to end. The two writers:
                record    the hub's task record answered (fleet-task-record.sh)
                placed    the hub's placement answered (dash-raw-session.sh, off
                          `ccquota place`; hub road only)
-               window    the window opened (go_new / fleet-quick-dispatch.py)
+               window    the window opened (dash-raw-session.sh)
+               wrap      its wrapper about to run the launcher (fleet-session-wrap.sh)
+               exec      the launcher handing over to the agent — its last line,
+                         in the Claude and the Codex launcher alike; window → exec
+                         is the fleet's own part
                switched  the 看台 on it (`typeable` before T716 — read as this)
                ready     the agent's native session up (fleet_id.hook, Claude and
                          Codex alike, off the window's @timing_t0)
@@ -274,7 +278,7 @@ def p90(xs):
     return xs[max(0, -(-9 * len(xs) // 10) - 1)]
 
 
-STAGES = ("record", "placed", "window", "switched", "ready", "input")
+STAGES = ("record", "placed", "window", "wrap", "exec", "switched", "ready", "input")
 
 
 def spawn_p90(what="session", hours=24.0):

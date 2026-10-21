@@ -266,9 +266,15 @@ _fleet_node_separated() { [ -f "$FLEET_CONF_DIR/credsep.json" ]; }
 # _fleet_node_broker → `<broker url>TAB<fcpn1.…>`: the hub through the credential
 # proxy, which puts the node token in on the way out and never forwards
 # POST /v1/node/credentials. rc 1 = the proxy did not answer.
+# The control socket is asked by bin/fleet_cred_ctl.py first (T716): the proxy's
+# whole module behind fleet-cred-proxy.sh took ~6 s on a busy disk, before every
+# hub call; anything but its answer falls back to that road.
 _fleet_node_broker() {
-  local out
-  out=$(bash "${_FLEET_LIB_DIR:-${_FLEET_CORE_DIR:-$HOME/.claude/fleet/bin}}/fleet-cred-proxy.sh" node-token 2>/dev/null) || return 1
+  local out d="${_FLEET_LIB_DIR:-${_FLEET_CORE_DIR:-$HOME/.claude/fleet/bin}}"
+  if [ -f "$d/fleet_cred_ctl.py" ] && out=$(python3 -I "$d/fleet_cred_ctl.py" node-token 2>/dev/null); then
+    case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out"; return 0 ;; esac
+  fi
+  out=$(bash "$d/fleet-cred-proxy.sh" node-token 2>/dev/null) || return 1
   case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out" ;; *) return 1 ;; esac
 }
 
