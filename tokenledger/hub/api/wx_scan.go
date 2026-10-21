@@ -554,6 +554,10 @@ details.more ol{margin:8px 0 0;padding-left:20px}
 details.more .qrbox{margin-top:12px}
 `
 
+// signinAgree is the line under the way in (T883): signing in is agreeing to
+// the user agreement and the privacy policy, both a link to the site's page.
+const signinAgree = `<p class="agree">{{t "signin.agree.pre"}}<a href="{{t "signin.agree.terms.href"}}">{{t "signin.agree.terms"}}</a>{{t "signin.agree.and"}}<a href="{{t "signin.agree.privacy.href"}}">{{t "signin.agree.privacy"}}</a>{{t "signin.agree.end"}}</p>`
+
 var signinScanTmpl = template.Must(template.New("signin-scan").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `<style>` + signinScanCSS + `</style>
 <title>{{t "signin.title"}}</title>{{if .Scene}}<noscript><meta http-equiv="refresh" content="2;url=` + wxPollPath + `?s={{.Scene}}{{if .Trial}}&amp;p=trial{{end}}"></noscript>{{end}}</head><body><div class="page">` + entryTop + `
 <main class="col" id="wx"{{if .Scene}} data-s="{{.Scene}}"{{end}}{{if .Trial}} data-p="trial"{{end}}>
@@ -571,6 +575,7 @@ var signinScanTmpl = template.Must(template.New("signin-scan").Funcs(pageFuncs(i
 <div class="veil" id="wxgone" hidden>{{t "signin.wx.expired"}}<a class="btn primary" href="/app/signin">` + rotateIcon + `{{t "signin.wx.again"}}</a></div></div>
 <p class="t">{{t "signin.wx.t"}}</p><p class="s">{{t "signin.wx.s"}}</p></div>
 <p class="alert" id="wxdown" role="status" hidden>` + alertIcon + `<span>{{t "signin.wx.down"}}</span></p>{{end}}
+` + signinAgree + `
 {{if or .Email .GitHub}}<details class="other" id="other"{{if .OtherOpen}} open{{end}}><summary>{{t "signin.wx.other"}}</summary><div class="in">
 {{if .Email}}<form class="stack" method="post" action="/auth/email/start"><input class="input" type="email" name="email" autocomplete="email" required aria-label="{{t "signin.email.label"}}" placeholder="{{t "signin.wx.email.placeholder"}}">
 <button class="btn outline" type="submit">{{t "signin.wx.email.button"}}</button></form>{{end}}
@@ -625,7 +630,14 @@ const signinPollScript = `(function () {
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"wx.user": {i18n.EN: "WeChat user", i18n.ZhCN: "微信用户"},
+		"wx.user":                   {i18n.EN: "WeChat user", i18n.ZhCN: "微信用户"},
+		"signin.agree.pre":          {i18n.EN: "By signing in you agree to the ", i18n.ZhCN: "登录即表示你同意"},
+		"signin.agree.terms":        {i18n.EN: "Terms of Service", i18n.ZhCN: "《用户协议》"},
+		"signin.agree.and":          {i18n.EN: " and the ", i18n.ZhCN: "和"},
+		"signin.agree.privacy":      {i18n.EN: "Privacy Policy", i18n.ZhCN: "《隐私政策》"},
+		"signin.agree.end":          {i18n.EN: ".", i18n.ZhCN: "。"},
+		"signin.agree.terms.href":   {i18n.EN: "/en/terms", i18n.ZhCN: "/terms"},
+		"signin.agree.privacy.href": {i18n.EN: "/en/privacy", i18n.ZhCN: "/privacy"},
 		"signin.wx.lead": {
 			i18n.EN:   "Scan with WeChat and follow 二四网络科技 to sign in. Not on the list yet? Sign in, then try it and apply right there.",
 			i18n.ZhCN: "用微信扫码关注「二四网络科技」登录。还不在名单上的，登录后可以先试用、当场申请。",

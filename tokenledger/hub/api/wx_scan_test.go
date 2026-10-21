@@ -645,3 +645,15 @@ func TestWxQRTrialIsTheSiteCode(t *testing.T) {
 		t.Fatalf("login draw = %d %s", r.StatusCode, body)
 	}
 }
+
+// Signing in is agreeing (T883): under the way in, the user agreement and the
+// privacy policy, each a link to the site's page — on the scan page and on the
+// page with several ways alike.
+func TestSigninSaysAgree(t *testing.T) {
+	for name, h := range map[string]*waysHarness{"scan": newWxHarness(t).waysHarness, "ways": newWaysHarness(t)} {
+		_, body := newBrowser(t, "").do(http.MethodGet, h.http.URL+AppPrefix+"/signin", nil)
+		if !strings.Contains(body, `<p class="agree">`) || !strings.Contains(body, `href="/en/terms"`) || !strings.Contains(body, `href="/en/privacy"`) {
+			t.Errorf("%s: no agreement line under the way in\n%s", name, body)
+		}
+	}
+}

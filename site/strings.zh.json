@@ -134,5 +134,14 @@
   "wx_follow_qr": "长按识别二维码，关注「二四网络科技」",
   "wx_fine": "申请通常 1 个工作日内答复",
   "ph_h": "在微信里打开，先试一试",
-  "ph_h_apply": "在微信里打开，直接申请"
+  "ph_h_apply": "在微信里打开，直接申请",
+  "terms": "用户协议",
+  "privacy": "隐私政策",
+  "terms_path": "/terms",
+  "privacy_path": "/privacy",
+  "company": "广州二四网络科技有限公司",
+  "icp": "粤ICP备13087700号",
+  "legal_home": "返回首页",
+  "terms_desc": "ClaudeFleet 用户协议：账号、可以怎样使用、你的内容、责任与适用法律。",
+  "privacy_desc": "ClaudeFleet 隐私政策：收集什么、存多久（30 天）、谁能看、怎样删除。"
 }

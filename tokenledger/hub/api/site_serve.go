@@ -20,6 +20,8 @@ import (
 //	/            the 中文 page for someone signed out (serveSite, app_mount.go)
 //	/en/         the English page (/en → 301 /en/)
 //	/site/<f>    its assets: fonts, share cards, icons
+//	/terms /privacy /en/terms /en/privacy   the user agreement and the privacy
+//	             policy (T883), <p>/index.html of the build
 //	/favicon.ico /favicon.svg /apple-touch-icon.png   what a browser asks the root for
 //	/docs/<p>    docs zh/<p>.html (<p>/ → <p>/index.html, <p>.md → the Markdown)
 //	/en/docs/<p> the same in English
@@ -59,6 +61,11 @@ var siteCrawlFiles = map[string]bool{
 	"llms.txt": true, "llms-zh.txt": true, "llms-full.txt": true,
 }
 
+// siteLegalPages are the legal pages' paths (T883) and each one's language.
+var siteLegalPages = map[string]string{
+	"/terms": "zh", "/privacy": "zh", "/en/terms": "en", "/en/privacy": "en",
+}
+
 // serveSitePath answers the site's paths above (true), or leaves r alone
 // (false): the site is off, the method is not a read, or the path is not one
 // of them.
@@ -72,6 +79,10 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 		http.Redirect(w, r, withQuery(p+"/", r), http.StatusMovedPermanently)
 	case p == "/en/":
 		if !s.sitePage(w, r, "en/index.html", "en") {
+			http.NotFound(w, r)
+		}
+	case siteLegalPages[p] != "":
+		if !s.sitePage(w, r, strings.TrimPrefix(p, "/")+"/index.html", siteLegalPages[p]) {
 			http.NotFound(w, r)
 		}
 	case p == "/favicon.ico" || p == "/apple-touch-icon.png":

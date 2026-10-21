@@ -134,6 +134,7 @@ var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i
 <input class="input" type="email" id="email" name="email" autocomplete="email" required placeholder="{{t "signin.email.placeholder"}}">
 <button class="btn outline" type="submit">{{t "signin.email.button"}}</button></form>{{end}}
 {{if .GitHub}}{{if or .WeChat .Email}}<div class="or">{{t "signin.or"}}</div>{{end}}<a class="btn {{if or .WeChat .Email}}outline{{else}}primary{{end}}" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>{{end}}
+` + signinAgree + `
 <p class="fine">{{if .WeChat}}{{t "signin.ways.fine.wechat"}}{{else}}{{t "signin.ways.fine"}}{{end}}</p>{{end}}
 </main></div></body></html>`))
 

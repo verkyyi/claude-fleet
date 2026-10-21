@@ -134,5 +134,14 @@
   "wx_follow_qr": "Long-press the code to follow 二四网络科技",
   "wx_fine": "We usually answer within a working day",
   "ph_h": "Open in WeChat to try it",
-  "ph_h_apply": "Open it in WeChat to apply"
+  "ph_h_apply": "Open it in WeChat to apply",
+  "terms": "Terms",
+  "privacy": "Privacy",
+  "terms_path": "/en/terms",
+  "privacy_path": "/en/privacy",
+  "company": "广州二四网络科技有限公司",
+  "icp": "粤ICP备13087700号",
+  "legal_home": "Home",
+  "terms_desc": "ClaudeFleet Terms of Service: your account, how you may use it, your content, liability and governing law.",
+  "privacy_desc": "ClaudeFleet Privacy Policy: what we collect, how long we keep it (30 days), who can see it and how to delete it."
 }
