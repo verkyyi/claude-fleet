@@ -601,6 +601,16 @@ def _user_pod_container_resources(limits):
 POD_SSHD_PORT = 2222
 POD_SSHD_CAPS = ['CHOWN', 'SETUID', 'SETGID', 'SYS_CHROOT', 'KILL', 'AUDIT_WRITE']
 POD_ETC_UID = 65534
+# where a pod's sshd keeps its host key across rebuilds (T743): a subPath of the
+# person's own disk that only the sshd container (root) mounts
+POD_SSHD_KEEP = '/var/lib/fleet-sshd-key'
+POD_SSHD_KEY_SCRIPT = (
+    'K=%(k)s\nchmod 700 "$K"\n'
+    'if [ ! -s "$K/host" ]; then rm -f "$K/host.pub"; ssh-keygen -q -t ed25519 -N "" -C fleet-pod -f "$K/host"; fi\n'
+    'if [ ! -s "$K/host.pub" ]; then ssh-keygen -y -f "$K/host" > "$K/host.pub.tmp"; mv "$K/host.pub.tmp" "$K/host.pub"; fi\n'
+    'chown 0:0 "$K/host" "$K/host.pub"; chmod 600 "$K/host"; chmod 644 "$K/host.pub"\n'
+    'chmod 711 /run/sshd-key\ncp "$K/host" /run/sshd-key/host; cp "$K/host.pub" /run/sshd-key/host.pub\n'
+    'chmod 600 /run/sshd-key/host; chmod 644 /run/sshd-key/host.pub\n') % {'k': POD_SSHD_KEEP}
 POD_UID_RANGE = (1000, 60000)
 POD_LOGIN_RE = r'(?=[a-z0-9]*[a-z])[a-z0-9]{2,16}'
 POD_RESERVED = ('root', 'admin', 'daemon', 'nobody', 'guest', 'shared', 'fleetcred', 'sshd', 'fleet')
@@ -693,13 +703,14 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                            # meets that sshd, so the heartbeat carries its key
                            {'name': 'sshd-key', 'mountPath': '/run/sshd-key', 'readOnly': True}],
     }, **_probes())
-    # sshd: a host key of its own each start (the hub hands it on — the jump's
-    # inner login checks it, #4193), the config pod-etc wrote
+    # sshd: a host key of its own, made ONCE and kept on the person's disk (T743 —
+    # a new one each start was 「REMOTE HOST IDENTIFICATION HAS CHANGED」 on every
+    # pod rebuild): only this container mounts its subPath; a lost .pub is derived
+    # back, a present key never replaced. The copy in /run/sshd-key is what sshd
+    # reads and the heartbeat hands on (the jump's inner login checks it, #4193)
     sshd = {
         'name': 'sshd', 'image': image,
-        'command': ['/bin/sh', '-ec', 'chmod 711 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
-                    'ssh-keygen -q -t ed25519 -N "" -f /run/sshd-key/host\n'
-                    'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
+        'command': ['/bin/sh', '-ec', POD_SSHD_KEY_SCRIPT + 'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
         'resources': _ephemeral({'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
                                 USER_POD_EPHEMERAL['sshd']),
         'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
@@ -711,7 +722,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
         'volumeMounts': [m for m in data if m['subPath'] == 'homes']
                         + [dict(m, readOnly=True) for m in data if m['subPath'] == 'node']
                         + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env', 'sshd_config'])
-                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'}],
+                        + [{'name': 'sshd-key', 'mountPath': '/run/sshd-key'},
+                           {'name': 'data', 'mountPath': POD_SSHD_KEEP, 'subPath': 'sshd-hostkey'}],
     }
     etc = {
         'name': 'pod-etc', 'image': image,
