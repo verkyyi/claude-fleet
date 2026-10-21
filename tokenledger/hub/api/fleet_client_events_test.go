@@ -155,3 +155,26 @@ func TestNearestRank(t *testing.T) {
 		t.Fatal("nearest rank")
 	}
 }
+
+// D4NW: a network change, the view back after it (an up with reason net) and a
+// drop the person ended by hand are counted apart.
+func TestClientLineStatsNet(t *testing.T) {
+	at := time.Now()
+	ev := func(kind, start, phase, reason string, ms int64) store.FleetClientEvent {
+		at = at.Add(time.Second)
+		return store.FleetClientEvent{Device: "mbp", Start: start, Event: kind, Phase: phase, Reason: reason, MS: ms, At: at}
+	}
+	st := clientLineStats([]store.FleetClientEvent{
+		ev("start", "a", "", "", 0), ev("up", "a", "start", "", 900),
+		ev("net", "a", "", "hotspot", 0), ev("drop", "a", "", "netchange", 0), ev("up", "a", "reconnect", "net", 3000),
+		ev("net", "a", "", "lan", 0), ev("drop", "a", "", "netchange", 0), ev("up", "a", "reconnect", "net", 7000),
+		ev("drop", "a", "", "timeout", 0), ev("up", "a", "reconnect", "", 20000),
+		ev("start", "b", "", "", 0), ev("up", "b", "start", "", 900), ev("drop", "b", "", "timeout", 0),
+		ev("quit", "b", "", "interrupt", 0),
+		ev("start", "c", "", "", 0), ev("up", "c", "start", "", 900), ev("quit", "c", "", "quit", 0),
+	})
+	if st.NetChanges != 2 || st.NetReconnects != 2 || st.NetP50MS != 3000 || st.NetP95MS != 7000 ||
+		st.ManualAfterDrop != 1 || st.Reconnects != 3 || st.ReconnectP95MS != 20000 {
+		t.Fatalf("stats = %+v", st)
+	}
+}

@@ -263,7 +263,7 @@ case $out in $'\e]1337;SetProfile=fleet\a'*) st_ok_all "B: the iTerm2 profile go
 case $res in *"CHILDREN 1 "*"fleet-remote-view.sh attach --thin "*) st_ok_all "B: the loop's only child is the ssh" ;; *) st_miss "B: children: $(grep CHILDREN "$T/res.main")" ;; esac
 socks=$(find "$T/client" -type s 2>/dev/null | wc -l | tr -d ' ')
 [ "$socks" = 0 ] && st_ok_all "B: no socket file under the client's HOME / cache" || st_miss "B: $socks socket file(s)"
-case $out in *'和 m1 的连接断了，0.2 秒后重连（第 1 次）'*) st_ok_all "C: a drop → one line 「和 m1 的连接断了…（第 1 次）」" ;; *) st_miss "C: no reconnect line" ;; esac
+case $out in *'正在重连 m1 · 0 秒后重试（第 1 次）'*) st_ok_all "C: a drop → the reconnect page 「正在重连 m1 · … 秒后重试（第 1 次）」" ;; *) st_miss "C: no reconnect page" ;; esac
 case $l2 in "m1 attach --thin --view $view --resume --device "*) st_ok_all "C: the reconnect is --resume on the same view, back on s1" ;; *) st_miss "C: reconnect: $l2" ;; esac
 [ "$(grep -c 'VIEW s1 ON m1' "$T/out.main")" -ge 2 ] || st_miss "C: not back on s1"
 case $out in *'FAKE SENT'*'GOT['*) st_ok_all "D: a quit with another token does nothing" ;; *) st_miss "D: the loop ended on a bad token" ;; esac

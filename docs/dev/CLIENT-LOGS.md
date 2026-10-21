@@ -102,10 +102,12 @@ stops at ten):
 
 | event | when | fields |
 |---|---|---|
-| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit`; `net` = `net=<default gateway>@<its network>` — the network this computer was on when the route was picked (#3074; empty under `FLEET_CONNECT_PREFER_TAILNET`); `end` = `end=<word>` on a connection whose ssh did not exit 0 — what ssh printed last (#4828): `timeout` (its keepalive gave up — `Timeout, server … not responding`) · `reset` · `broken-pipe` · `closed-remote` (the far end closed it) · `closed` · `unreachable` · `refused` · `connect-timeout`; empty when it said none of them |
+| `connect` | each connection, when it ends | `pick_ms` = `fleet-connect.py --argv` (certificate · machine · route); `ssh_ms` = ssh spawned → the first byte back (handshake + the far end starting); `first_ms` = spawned → the home's first valid `cur` (the view drawn); `rc` = ssh's exit; reason `up` · `never up` · `quit`; `net` = `net=<default gateway>@<its network>` — the network this computer was on when the route was picked (#3074; empty under `FLEET_CONNECT_PREFER_TAILNET`); `end` = `end=<word>` on a connection whose ssh did not exit 0 — what ssh printed last (#4828): `timeout` (its keepalive gave up — `Timeout, server … not responding`) · `reset` · `broken-pipe` · `closed-remote` (the far end closed it) · `closed` · `unreachable` · `refused` · `connect-timeout` · `netchange` (the network changed under it, D4NW); empty when it said none of them |
 | `drawn` | the moment a connection first draws the view (its first valid `cur`) — while it is up, where `connect` comes only at its end (#3155) | `home` · `route`; `ssh_ms`, `first_ms` as on `connect` |
 | `rehome` | three connections in a row never came up — a new home asked for (`--avoid`), or the machine named changed; or the `--avoid` found no other machine and the loop went back to its home (#4829) | reason: from / other than which / `no other home: back to <home>` |
-| `back` | (T690) between a drop and the next view, the line watch saw the line come back (no answer → an answer): the backoff, a pick or an ssh started on the dead network is cut short and the loop reconnects at once | reason: `the line came back: reconnecting now` · `… asking again` (a pick) · `… cutting the ssh`; pick_ms / ssh_ms how long the cut one had run |
+| `back` | (T690) between a drop and the next view, the line watch saw the line come back (no answer → an answer): the backoff, a pick or an ssh started on the dead network is cut short and the loop reconnects at once | reason: `the line came back: reconnecting now` · `cut short: asking again` (a pick) · `… cutting the ssh` · `a key on the page: …` · `the network changed: …` (D4NW); pick_ms / ssh_ms how long the cut one had run |
+| `net` | (D4NW) the network changed (the address the default route leaves from), or a live view's line went with the old one and was ended | reason: `the network changed: <class> -> <class>` (lan · hotspot · other · none) · `the line went with the old network: ending it` |
+| `shell` | (EPIC T651 C4, D4NW) the 看台 broke three times in a row: offered on the reconnect page; s opened the home's command line; it ended | reason: `offered: <why>` · `<why>` · `the shell ended: the 看台 again` |
 | `first` | the home had no fleet session of yours (rc 3) or the hub is opening your first login — the first-session road (#3054): a start line, then rc 0 + the place line (opened there) or rc 1 + why it did not open | `home` (the machine it opened on, once placed); reason |
 | `offline` | three connections failed and the hub did not answer either — this computer's own line is down, so no 换家: the home and the view are kept (#3007) | `home`; reason |
 | `upload` | a drop or a ⌃V picture sent through the home | `ssh_ms` = the one-shot's time; reason `<name> → <path there>` |
@@ -161,12 +163,13 @@ goes there as **connection events**, metadata only (稳定性①):
 | event | when | fields beyond `id` · `at` · `start` · `ver` |
 |---|---|---|
 | `start` | a `fleet` start (its id rides every later event) | — |
-| `up` | the view drawn | `phase` start (`ms` from the start) · reconnect (`ms` = drop → drawn: the reconnect time) · `home` · `route` |
+| `up` | the view drawn | `phase` start (`ms` from the start) · reconnect (`ms` = drop → drawn: the reconnect time; after a network change `reason` net and `ms` from the change — D4NW) · `home` · `route` |
 | `drop` | the line ended while up, not by the person | `home` · `route` · `rc` · `ms` (how long it was up) · `reason` = ssh's last word (`timeout` · `reset` · …) else `rc<N>` |
 | `fail` | a connection that did not come up | `phase` start (起不来) · reconnect; `reason` = `home:<the hub's code>` (connect.log's `home` line) · `pick` · `opening` · `no_fleet` · `first_session` · `never_up` · ssh's word; `rc` |
 | `rehome` | the home changed | `home` → `to`; `reason` `no_other` when the 换家 found no other and went back |
 | `offline` | three tries failed and the hub did not answer either | `home` |
-| `quit` | the person (or a signal) ended it | `rc` · `reason` quit · detach · signal · interrupt |
+| `net` | (D4NW) this computer's network changed | `home` · `reason` lan · hotspot · other · none (never an address) |
+| `quit` | the person (or a signal) ended it | `rc` · `reason` quit · detach · signal · interrupt · key (q on the reconnect page) |
 
 Every field is a code (`[a-z0-9_.:-]`, ≤ 48), a machine name or a number — the
 writer codes or drops anything else, and the hub (`POST /v1/fleet/client-events`,

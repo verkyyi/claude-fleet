@@ -166,5 +166,21 @@ out=$(bash "$BIN/fleet-client-events.sh" 2>&1); rc=$?
 case "$rc:$out" in 1:*"predates T689"*) st_ok_all "F: a hub without the door → rc 1, said" ;; *) st_miss "F: 404: rc=$rc $out" ;; esac
 out=$(bash "$BIN/fleet-client-events.sh" --hours x 2>&1); [ $? = 2 ] && st_ok_all "F: --hours x → usage (2)" || st_miss "F: usage: $out"
 
+# --- N (D4NW) -----------------------------------------------------------------
+NS="$T/net.ndjson"
+FLEET_CLIENT_EVENTS_SPOOL="$NS" FLEET_CLIENT_EVENTS_POST_CMD=false rec net home=mac-d reason=hotspot
+FLEET_CLIENT_EVENTS_SPOOL="$NS" FLEET_CLIENT_EVENTS_POST_CMD=false rec up home=mac-d phase=reconnect ms=3200 reason=net
+case $(cat "$NS" 2>/dev/null) in *'"event":"net"'*'"reason":"hotspot"'*'"reason":"net"'*) st_ok_all "N: a network change and the view back after it are recorded" ;;
+  *) st_miss "N: spool: $(cat "$NS" 2>/dev/null)" ;; esac
+nw=$(python3 - "$CE" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("e", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+print(m.table({"hours": 24, "devices": [{"device": "mbp"}], "total": {"net_changes": 2, "net_reconnects": 2,
+      "net_p50_ms": 3000, "net_p95_ms": 7000, "manual_after_drop": 1}}))
+PY
+)
+case $nw in *'换网 2 次，换网后恢复 p50 3.0s / p95 7.0s · 断线后人手退出 1 次'*) st_ok_all "N: the table says 换网 · p50 / p95 · 人手退出" ;;
+  *) st_miss "N: table: $nw" ;; esac
+
 echo
 st_done
