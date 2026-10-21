@@ -75,7 +75,7 @@ const handoff = join(T, "fleet-webchat-handoff.sh");
 writeFileSync(handoff, `#!/bin/bash
 echo "$*" >>"${HANDLOG}"
 case "$1" in
-  owner) printf '{"holder":"terminal","busy":false,"label":"scratch-9","machine":"mini2"}\\n' ;;
+  owner) printf '{"holder":"terminal","busy":false,"label":"scratch-9","machine":"box-a"}\\n' ;;
   to-webchat-take) rm -f "${LOCKS}/codex-$5.json" ;;
 esac
 `, { mode: 0o755 });
@@ -348,7 +348,7 @@ for (const [text, allow, want] of [["ask a", true, "accept"], ["ask b", false, "
 // ---- L: a terminal's Codex thread handed to the page (T810) --------------------------------
 {
   const before = (await req("/api/conversation?provider=codex")).j.session;
-  const a = await req("/api/adopt", { method: "POST", body: { agent: "codex", session: TERM_THREAD, label: "scratch-9", machine: "mini2" } });
+  const a = await req("/api/adopt", { method: "POST", body: { agent: "codex", session: TERM_THREAD, label: "scratch-9", machine: "box-a" } });
   ok(a.status === 200, `L adopt a Codex thread (${a.status} ${a.body})`);
   const c = await req("/api/conversation?provider=codex");
   ok(c.j.session === TERM_THREAD && c.j.cwd === join(T, "signup") && c.j.handed?.from === "terminal", "L it is the Codex side's conversation, in its own directory, said handed");
