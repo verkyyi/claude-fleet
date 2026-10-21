@@ -70,7 +70,7 @@ words. Top to bottom:
 | ↳ `#charter` (anchor) | `charter.do` · `charter.dont` | 做 / 不做 under the metric rows, short plain items |
 | `#members` 解决方案 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `compare` (改前 / 改后, below). A card with nothing past its line has no ▸ |
 | `#risks` | `risks` · `risks_tech` | 「会出什么事 — 我们怎么兜住」 |
-| `#signoff` 需要你定的事 | `signoff` | 事项 / 建议, a default on every row; the line under it says 「点头即全部按建议」 |
+| `#signoff` 需要你定的事 | `signoff` | `{q, rec, default, options}` — 事项, 建议, the DEFAULT (what counts when nobody picks; old `[事项, 建议]` rows default to 按建议) and the other options; the line under it says 「点头即全部按建议」 |
 | `#evidence` 上线后怎么验收 | `evidence[]` · `phase` | one item per proof `{what, where, pass, status, proof}`: 是什么 · 在哪取 · 通过标准. The plan (`phase` plan, the default) shows only those three; the worker renders `phase: build` and fills each `status` (pending · done · failed) and `proof` ({img · text · url · html, caption}) — the filled card is the report's 已上线 |
 | 页内反馈 | `feedback` · `replies_done` | `{table: "replies", version: "v<N>", poll: "12 分钟"}` — below |
 
@@ -80,7 +80,9 @@ spec (`steps` [[…]] + `cause.evidence`, `metrics` [[…]] + `metrics_how`, a o
 `evidence`) still renders, and the lint asks to migrate it (`fold-row`, `accept`).
 
 **页内反馈** (T764): the page is a live page, so the operator answers ON it, each
-item on its own: a small 「改」 under every 需要你定的事 row (按建议 / 改成… + a note),
+item on its own: every 需要你定的事 row lays its options out in the row — the default
+first, marked 「默认」 and drawn as what counts while nobody picked, then the others,
+then 「改成…」 (a note); a tap posts that pick, a non-default pick is highlighted —
 「有意见」 on every 原因 step and card, one 「全部按建议」 — each opens or posts THAT item
 only. A submit POSTs `{item, choice, note, version, at}` to the page's own table —
 `item` is `signoff-<n>` · `cause-<step>` · `card-<key>` · `nod`; a withdraw is the same

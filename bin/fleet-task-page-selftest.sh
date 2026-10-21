@@ -30,7 +30,8 @@
 #      (#cause / #charter anchors inside); the 上线后怎么验收 card shows what · 在哪取
 #      · 通过标准 in the plan and adds status + slot once building (proof filled);
 #      `feedback` puts the table + version on <body>; every item answers on its own
-#      (a div.fbi: 需要你定的事 rows behind a small 改, 「有意见」 per step / card, one
+#      (a div.fbi: 需要你定的事 rows with their options in the row, the default
+#      marked and drawn as what counts; 「有意见」 per step / card, one
 #      全部按建议); the frame's script posts {item, choice, note, version, at}, reads
 #      the table back on load (+ localStorage), draws each item's last row with 改 ·
 #      撤回 (withdraw = a row) and reads <table>_done; replies_done marks it too;
@@ -255,7 +256,11 @@ st_hasnt "plan: no slot" "$PAGE" 'class="slot"'
 st_has "feedback: the table on <body>" "$PAGE" '<body data-fb-table="replies" data-fb-version="v1">'
 st_has "feedback: a step's entry" "$PAGE" 'data-say="cause-1"'
 st_has "feedback: a card answers on its own" "$PAGE" '<div class="fbi" data-item="card-A" data-kind="say"><span class="fbs"></span><form class="fbf say" id="say-card-A" data-item="card-A" hidden>'
-st_has "feedback: a decision row, its own 改" "$PAGE" '<div class="fbi" data-item="signoff-2" data-kind="pick"><span class="fbs"></span><button type="button" class="fb-edit">改</button><form class="fbf pick" data-item="signoff-2" hidden>'
+st_has "feedback: a decision row, its options in it, the default marked" "$PAGE" '<div class="fbi" data-item="signoff-1" data-kind="pick" data-default="顶栏一行 + 微信一条"><form class="fbf pick" data-item="signoff-1"><div class="opts"><button type="button" class="opt dflt" data-v="顶栏一行 + 微信一条">顶栏一行 + 微信一条<span class="dm">默认</span></button><button type="button" class="opt" data-v="只在顶栏">只在顶栏</button>'
+st_has "feedback: an old [事项, 建议] row defaults to 按建议" "$PAGE" 'data-item="signoff-2" data-kind="pick" data-default="按建议"'
+st_has "feedback: 改成… opens a note on the row" "$PAGE" '<button type="button" class="opt free" data-v="改成">改成…</button></div><div class="freebox" hidden>'
+st_has "nothing picked: the default is drawn as what counts" "$(cat "$T")" 'o.classList.toggle("idle",!got&&v===dv)'
+st_has "a non-default pick is highlighted" "$(cat "$T")" 'o.classList.toggle("alt",!!got&&v===got.choice&&v!==dv)'
 st_has "feedback: one nod" "$PAGE" '<div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>全部按建议</button>'
 st_hasnt "feedback: no global switch" "$PAGE" 'fb-more'
 st_has "feedback: the route is one small line" "$PAGE" '<p class="fb-note">ⓘ 每一项都能单独改、单独撤回'

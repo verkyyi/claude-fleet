@@ -210,8 +210,10 @@ class="card">`, no fold; an empty 技术细节 is dropped, never shown. The lint
 A page published as a 活页 takes the operator's answer where they read it, item by
 item. The `<body>` carries `data-fb-table="replies" data-fb-version="v<N>"`; each
 answerable item is a `div.fbi` (`data-item`, `data-kind` pick · say · nod) holding
-its state line `.fbs` and its form — a 需要你定的事 row behind a small 「改」
-(`signoff-<n>`), a 「有意见」 under each step (`cause-<step>`) and card
+its state line `.fbs` and its form — a 需要你定的事 row with its options in the row
+(`signoff-<n>`, `data-default`: the default first, marked 「默认」 and drawn as what
+counts while nobody picked, the others, 「改成…」; a tap posts it, a non-default pick
+is highlighted), a 「有意见」 under each step (`cause-<step>`) and card
 (`card-<key>`), one 「全部按建议」 (`nod`). The frame's script:
 
 - posts `{item, choice, note, version, at}` to `./_data/replies` — a members-only

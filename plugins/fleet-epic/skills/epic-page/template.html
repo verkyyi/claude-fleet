@@ -285,7 +285,7 @@
   .so{border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:10px 14px}
   .so .sk{font-weight:600;font-size:.9rem} .so .sv{color:var(--ink-2);font-size:.88rem;margin:2px 0 8px}
   /* each item answers on its own (T764 v4): a state line (.fbs, from the page's table — what you chose,
-     when, 改 · 撤回), a small 改 / 有意见 that opens THIS item's form only; a submitted 全部按建议 hides
+     when, 改 · 撤回), a 需要你定的事 row's options in the row (tap = pick), a 有意见 that opens THIS item's form only; a submitted 全部按建议 hides
      its button and says so */
   .fbi{margin-top:6px}
   .fbs:empty{display:none}
@@ -294,6 +294,17 @@
   .fb-edit,.fb-undo{font:inherit;font-size:.76rem;background:none;border:0;color:var(--accent);cursor:pointer;padding:2px 0}
   .fb-undo{color:var(--ink-3)}
   .fbi.done>.fb-edit{display:none}
+  /* a 需要你定的事 row (v5): its options IN the row — tap one and it is posted; the default carries 「默认」 and,
+     while nobody picked, a dashed ring (it is what counts); a non-default pick is highlighted */
+  .opts{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+  form.fbf .opt{font:inherit;font-size:.82rem;background:var(--surface);color:var(--ink-2);border:1px solid var(--rule);border-radius:99px;
+       padding:5px 12px;cursor:pointer;min-height:32px;-webkit-tap-highlight-color:transparent}
+  form.fbf .opt .dm{font-size:.68rem;color:var(--ink-3);margin-left:6px}
+  form.fbf .opt.idle{border-style:dashed;border-color:var(--accent);color:var(--accent)}
+  form.fbf .opt.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+  form.fbf .opt.on.alt{background:color-mix(in srgb,var(--warn) 14%,var(--surface));border-color:var(--warn);color:var(--ink)}
+  .freebox{display:flex;gap:8px;width:100%} .freebox[hidden]{display:none}
+  form.pick{display:block}
   .fbi.done form.nod{display:none}
   .xt .fbi{padding:0 12px 6px} .xt .fbi:has(.fbs:empty):has(form[hidden]){display:none}
   form.nod{margin-top:6px} form.nod button{font-size:.95rem;padding:10px 22px;background:var(--accent);color:#fff}
@@ -345,8 +356,15 @@ function el(tag,cls,txt){var x=document.createElement(tag);if(cls)x.className=cl
 function draw(item,r){
   var b=fbi(item); if(!b) return; var s=b.querySelector(".fbs"); if(!s) return;
   s.textContent=""; b.classList.remove("done");
-  if(!r||r.choice==="withdraw") return;
-  var k=b.getAttribute("data-kind");
+  var k=b.getAttribute("data-kind"), dv=b.getAttribute("data-default"), got=r&&r.choice!=="withdraw"?r:null;
+  [].forEach.call(b.querySelectorAll(".opt"),function(o){var v=o.getAttribute("data-v");
+    o.classList.toggle("on",!!got&&v===got.choice); o.classList.toggle("alt",!!got&&v===got.choice&&v!==dv);
+    o.classList.toggle("idle",!got&&v===dv);});
+  if(!got) return;
+  if(k==="pick"){                                        // the chip shows the pick; the line says when
+    if(got.note) s.appendChild(el("span","",got.note)); var w0=when(got.at); if(w0) s.appendChild(el("span","t",w0));
+    if(got.pending) s.appendChild(el("span","t","（待同步）"));
+    var u0=el("button","fb-undo","撤回");u0.type="button";s.appendChild(u0); b.classList.add("done"); return;}
   var what=k==="nod"?"✓ 已按建议":k==="say"?"✓ 你的意见："+(r.note||""):"✓ 你选了："+(r.choice||"")+(r.note?"："+r.note:"");
   s.appendChild(el("span","",what)); var w=when(r.at); if(w) s.appendChild(el("span","t",w));
   if(r.pending) s.appendChild(el("span","t","（待同步）"));
@@ -358,6 +376,7 @@ function last(rows){var m={};rows.forEach(function(r){if(r&&r.item&&r._author!==
   if(!p||!r.at||!p.at||r.at>=p.at)m[r.item]=r;}});return m;}
 function load(){
   var t=D().fbTable; if(!t) return;
+  [].forEach.call(document.querySelectorAll(".fbi"),function(b){draw(b.getAttribute("data-item"),null);});   // nothing yet ⇒ the default
   fetch("./_data/"+t+".json",{credentials:"include"}).then(function(x){if(!x.ok)throw 0;return x.json();})
   .then(function(rows){return rows;},function(){return null;})
   .then(function(rows){
@@ -379,11 +398,16 @@ function post(f,item,choice,note,st){
   return fetch("./_data/"+D().fbTable,{method:"POST",headers:{"Content-Type":"application/json"},credentials:"include",
     body:JSON.stringify(r)})
   .then(function(x){if(!x.ok)throw new Error(x.status===403?"只收工作区成员，请先登录":"HTTP "+x.status);
-    remember(r); draw(item,r); if(f) f.hidden=!f.classList.contains("nod");
+    remember(r); draw(item,r); if(f&&f.classList.contains("say")) f.hidden=true;
+    if(f&&f.classList.contains("pick")) f.querySelector(".freebox").hidden=true;
     if(st){st.className="st ok";st.textContent=choice==="withdraw"?"已撤回":"✓ 已收到 · 会转给执行会话";}})
   .catch(function(e){if(st){st.className="st err";st.textContent="没交上："+e.message;}});
 }
 document.addEventListener("click",function(e){
+  var o=e.target.closest&&e.target.closest(".opt");
+  if(o){e.preventDefault(); var ob=o.closest(".fbi"), fr=o.closest("form");
+    if(o.classList.contains("free")){var x=fr.querySelector(".freebox"); x.hidden=!x.hidden; if(!x.hidden) x.querySelector("input").focus(); return;}
+    post(null,ob.getAttribute("data-item"),o.getAttribute("data-v"),"",fr.querySelector(".st")); return;}
   var c=e.target.closest&&e.target.closest(".say-btn,.fb-edit,.fb-undo"); if(!c) return;
   e.preventDefault(); e.stopPropagation();
   var b=c.closest(".fbi"), item=c.getAttribute("data-say")||(b&&b.getAttribute("data-item"));
@@ -398,6 +422,7 @@ document.addEventListener("submit",function(e){
   var st=f.querySelector(".st"), c=f.querySelector("input[name=choice]:checked"), n=f.querySelector("input[name=note]");
   var choice=f.getAttribute("data-choice")||(c?c.value:""), note=n?n.value.trim():"";
   if(f.classList.contains("say")&&note) choice="意见";
+  if(f.classList.contains("pick")){choice="改成"; if(!note){st.className="st err";st.textContent="写一句改成什么";return;}}
   if(!choice&&!note){st.className="st err";st.textContent="先选一项或写一句";return;}
   post(f,f.getAttribute("data-item"),choice,note,st);
 });
@@ -696,12 +721,12 @@ if(document.readyState==="loading") document.addEventListener("DOMContentLoaded"
 <!-- 页内反馈 (T764) — a page published as a live page answers ON the page: <body data-fb-table="replies"
      data-fb-version="v⟨N⟩">, the table made members-only (set_data … append_open members_only, columns
      item / choice / note / version / at). Each item answers on its own: a div.fbi per row of the table
-     above (a small 改 → 按建议 / 改成…), a 「有意见」 (say-btn + div.fbi with form.say) under any card,
+     above (its options in the row — the default first, marked 默认, then the others, then 改成… — a tap posts it), a 「有意见」 (say-btn + div.fbi with form.say) under any card,
      one 全部按建议. The frame's script posts them, reads them back on load and draws each item's state
      (改 · 撤回); ⟨table⟩_done marks 已采纳 / 未采纳. Drop this block for a page that is not a live page. -->
 <div class="sol">
 <div class="so"><div class="sk">⟨事项⟩</div><div class="sv">⟨建议⟩</div>
-<div class="fbi" data-item="signoff-1" data-kind="pick"><span class="fbs"></span><button type="button" class="fb-edit">改</button><form class="fbf pick" data-item="signoff-1" hidden><label><input type="radio" name="choice" value="按建议"> 按建议</label><label><input type="radio" name="choice" value="改成"> 改成…</label><input name="note" placeholder="改成什么 / 备注（可选）" maxlength="300"><button>提交</button><span class="st"></span></form></div>
+<div class="fbi" data-item="signoff-1" data-kind="pick" data-default="⟨默认：建议的那一项⟩"><form class="fbf pick" data-item="signoff-1"><div class="opts"><button type="button" class="opt dflt" data-v="⟨默认：建议的那一项⟩">⟨默认：建议的那一项⟩<span class="dm">默认</span></button><button type="button" class="opt" data-v="⟨另一个选项⟩">⟨另一个选项⟩</button><button type="button" class="opt free" data-v="改成">改成…</button></div><div class="freebox" hidden><input name="note" placeholder="改成什么" maxlength="300"><button>提交</button></div><span class="st"></span></form><span class="fbs"></span></div>
 </div>
 </div>
 <div class="fbi" data-item="nod" data-kind="nod"><form class="fbf nod" data-item="nod" data-choice="全部按建议"><button>全部按建议</button><span class="st"></span></form><span class="fbs"></span></div>

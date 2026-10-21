@@ -32,7 +32,7 @@ The spec (plugins/fleet-epic/skills/epic-page/task-page.example.json is a whole 
   excerpt?, text?}]} · metrics [{name, now, target, how [li] | str}] ·
   charter {do [li], dont [li]} · members [{key, name, line, what, compare?,
   tech [[label, text]]}] · risks [{head, text}] · risks_tech [li] ·
-  signoff [[事项, 建议]] · signoff_note · evidence [{what, where, pass, status
+  signoff [[事项, 建议] | {q, rec, default, options [..]}] · signoff_note · evidence [{what, where, pass, status
   (pending | done | failed), proof? {img | text | html | url, caption}}] ·
   evidence_note · feedback {table, version, poll} · replies_done {item: {state
   (adopted | declined), note}} · footer · css (the prototypes' own rules, one
@@ -162,16 +162,31 @@ def say_form(item):
             'maxlength="300"><button>提交</button><span class="st"></span></form></div>\n%s' % (e, e, e, done_mark(item)))
 
 
-def choose_form(item):
-    """A 需要你定的事 row: its state line, a small 「改」 that opens 按建议 / 改成… + a note
-    on this row only."""
+def choose_form(item, default="按建议", options=()):
+    """A 需要你定的事 row (T764 v5): its options laid out IN the row — the default first,
+    marked 「默认」, then the others, then 「改成…」 (a note) — a tap picks and posts that
+    one; nothing picked counts as the default. The state line says when, and 撤回."""
     e = html.escape(item, quote=True)
-    return ('<div class="fbi" data-item="%s" data-kind="pick"><span class="fbs"></span>'
-            '<button type="button" class="fb-edit">改</button>'
-            '<form class="fbf pick" data-item="%s" hidden><label><input type="radio" name="choice" value="按建议"> 按建议</label>'
-            '<label><input type="radio" name="choice" value="改成"> 改成…</label>'
-            '<input name="note" placeholder="改成什么 / 备注（可选）" maxlength="300"><button>提交</button>'
-            '<span class="st"></span></form></div>\n%s' % (e, e, done_mark(item)))
+    opts = [default] + [x for x in options if x != default]
+    btn = "".join('<button type="button" class="opt%s" data-v="%s">%s%s</button>' % (
+        " dflt" if i == 0 else "", html.escape(plain(x), quote=True), x, '<span class="dm">默认</span>' if i == 0 else "")
+        for i, x in enumerate(opts))
+    return ('<div class="fbi" data-item="%s" data-kind="pick" data-default="%s">'
+            '<form class="fbf pick" data-item="%s"><div class="opts">%s<button type="button" class="opt free" data-v="改成">改成…</button></div>'
+            '<div class="freebox" hidden><input name="note" placeholder="改成什么" maxlength="300"><button>提交</button></div>'
+            '<span class="st"></span></form><span class="fbs"></span></div>\n%s'
+            % (e, html.escape(plain(default), quote=True), e, btn, done_mark(item)))
+
+
+def signoff_row(i, row):
+    """[事项, 建议] (old) or {q, rec, default, options}: the default is what counts when
+    nobody picks — say it on the row (「默认：…」)."""
+    if isinstance(row, dict):
+        k, v, d, opts = row.get("q", ""), row.get("rec", ""), row.get("default") or "按建议", row.get("options") or []
+    else:
+        k, v, d, opts = row[0], row[1], "按建议", []
+    return ('<div class="so"><div class="sk">%s</div><div class="sv">%s</div>\n%s</div>\n'
+            % (k, v, choose_form("signoff-%d" % i, d, opts)))
 
 
 def detail(v):
@@ -390,12 +405,10 @@ def render(spec):
         o.append(fold("技术风险", ul(g("risks_tech"))))
     o.append("</section>\n\n")
     o.append('<section id="signoff">\n<span id="open"></span>\n<h2>需要你定的事</h2>\n')
-    if g("signoff") and FB:                              # T764: each row answers on its own (a small 改)
-        o.append('<div class="sol">\n' + "".join(
-            '<div class="so"><div class="sk">%s</div><div class="sv">%s</div>\n%s</div>\n'
-            % (k, v, choose_form("signoff-%d" % i)) for i, (k, v) in enumerate(g("signoff"), 1)) + "</div>\n")
+    if g("signoff") and FB:                              # T764: each row's options laid out in it, the default marked
+        o.append('<div class="sol">\n' + "".join(signoff_row(i, r) for i, r in enumerate(g("signoff"), 1)) + "</div>\n")
     elif g("signoff"):
-        o.append(table(["事项", "建议"], g("signoff")))
+        o.append(table(["事项", "建议"], [[r.get("q", ""), r.get("rec", "")] if isinstance(r, dict) else r for r in g("signoff")]))
     o.append('<p class="lede" style="margin-top:14px">%s</p>\n'
              % (g("signoff_note") or "点头即全部按建议，派一个执行会话做，一个改动说明合并。"))
     if FB:      # one 全部按建议; every item answers on its own
