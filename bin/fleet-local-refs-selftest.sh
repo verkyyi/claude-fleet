@@ -13,6 +13,7 @@
 #      another machine than the plan); an already-carried path is not re-carried
 #   F. fleet-task-record.sh dispatch carries before it posts (stub hub)
 # Hermetic: a sandbox HOME (files only — nothing here signals or starts a service).
+# shellcheck disable=SC2088  # a literal ~/… is the words under test, never a path to expand
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
