@@ -29,6 +29,15 @@
 # /fleet-history. @cfg_restart_ts holds a window off for the idle span after a try,
 # so a reopen that did not happen is retried, never hammered.
 #
+# ONE reopen per session per FLEET_CFG_RESTART_DAY (86400 s; 0 = no cap) for 配置旧 /
+# 待换新, keyed by the session's IDENTITY (@fleet_id, else the window id) in
+# $FLEET_CONF_DIR/global/cfg-restart.ledger (`<epoch> <id>`; issue T761). The train
+# moves stable every 10-30 minutes, the reopen is a NEW window (a fresh
+# @cfg_restart_ts), and its continuation prompt ends in a done turn: a finished
+# session came back every release — a reopen notice and an 「is done」 on the
+# person's panel each time (2026-10-20 mini2: two sessions, ~70 a day). 会坏 is
+# never held: that one fails if it stays.
+#
 # FLEET_CFG_RESTART (EPIC #1776 decision 4: default auto):
 #   auto  reopen as above
 #   ask   reopen nothing; one alert per window per fingerprint names it instead
@@ -57,7 +66,7 @@ while [ $# -gt 0 ]; do
     --count) MODE=count ;;
     --counts) MODE=counts ;;
     --) shift; break ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
     -*) printf 'fleet-cfg-restart: unknown option %s\n' "$1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -68,8 +77,25 @@ POLICY="${FLEET_CFG_RESTART:-auto}"
 case "$POLICY" in auto|ask|off) ;; *) POLICY=auto ;; esac
 IDLE="${FLEET_CFG_RESTART_IDLE:-600}"; case "$IDLE" in ''|*[!0-9]*) IDLE=600 ;; esac
 MAX="${FLEET_CFG_RESTART_MAX:-1}";     case "$MAX" in ''|*[!0-9]*) MAX=1 ;; esac
+DAY="${FLEET_CFG_RESTART_DAY:-86400}"; case "$DAY" in ''|*[!0-9]*) DAY=86400 ;; esac
 MIGRATE="${FLEET_CFG_RESTART_MIGRATE:-$BIN/fleet-migrate.sh}"   # selftest seam
 LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/cfg-restart.log"
+LEDGER="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/cfg-restart.ledger"
+NOW=$(date +%s)
+# The identities reopened within DAY, one per line (read once per run).
+RECENT=''
+if [ "$DAY" -gt 0 ] && [ -f "$LEDGER" ]; then
+  RECENT=$(awk -v cut=$((NOW - DAY)) '$1 ~ /^[0-9]+$/ && $1 >= cut { print $2 }' "$LEDGER" 2>/dev/null)
+fi
+held_today() { [ -n "$1" ] && [ -n "$RECENT" ] && printf '%s\n' "$RECENT" | grep -qxF -- "$1"; }
+# ledger_add <id> — append, dropping the lines older than DAY (one rename).
+ledger_add() {
+  [ "$DAY" -gt 0 ] && [ -n "$1" ] || return 0
+  mkdir -p "${LEDGER%/*}" 2>/dev/null
+  { [ -f "$LEDGER" ] && awk -v cut=$((NOW - DAY)) '$1 ~ /^[0-9]+$/ && $1 >= cut' "$LEDGER" 2>/dev/null
+    printf '%s %s\n' "$NOW" "$1"; } > "$LEDGER.tmp.$$" 2>/dev/null && mv -f "$LEDGER.tmp.$$" "$LEDGER" 2>/dev/null
+  RECENT="$RECENT"$'\n'"$1"
+}
 
 if [ $# -gt 0 ]; then sockets=$*; else sockets=$(fleet_sockets); fi
 fleet_cfg_expected_load; fleet_cfg_broken_load
@@ -80,16 +106,16 @@ for sess in $sockets; do
   # The stale ones first, off ONE list-windows: a compare per window, no fork;
   # only those are judged further.
   stale=''
-  while IFS='|' read -r wid ag fp av ts; do
+  while IFS='|' read -r wid ag fp av ts fid; do
     [ -n "$wid" ] || continue
     fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$wid"
     # broken (#2076) is a stale session that will fail too: reopened the same way
-    case "$FCFG_STATE" in stale|renew|broken) stale+="$wid|$fp${av:+/$av}|$ts|$FCFG_STATE"$'\n' ;; esac
+    case "$FCFG_STATE" in stale|renew|broken) stale+="$wid|$fp${av:+/$av}|$ts|$FCFG_STATE|${fid:-$wid}"$'\n' ;; esac
   done < <(tmux -L "$sess" list-windows -t "=$sess" \
-             -F '#{window_id}|#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@cfg_restart_ts}' 2>/dev/null)
+             -F '#{window_id}|#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@cfg_restart_ts}|#{@fleet_id}' 2>/dev/null)
   [ -n "$stale" ] || continue
   picked=0
-  while IFS='|' read -r wid fp ts st; do
+  while IFS='|' read -r wid fp ts st ident; do
     [ -n "$wid" ] || continue
     nm=$(tmux -L "$sess" display-message -p -t "$wid" '#{window_name}' 2>/dev/null)
     case "$nm" in dash|plan|backlog|home) continue ;; esac
@@ -97,11 +123,13 @@ for sess in $sockets; do
     case "$st" in renew) nrenew=$((nrenew + 1)) ;; broken) nbroken=$((nbroken + 1)) ;; *) nstale=$((nstale + 1)) ;; esac
     case "$MODE" in count|counts) continue ;; esac
     why=$(FLEET_CFG_RESTART_IDLE=$IDLE fleet_cfg_restart_why "$sess" "$wid" "$IDLE") && why=reopen
+    # once a day per session (T761): the reopen is a new window, so the hold is its identity's
+    if [ "$why" = reopen ] && [ "$st" != broken ] && held_today "$ident"; then why=held:day; fi
     if [ "$MODE" = list ]; then printf '%s\t%s\t%s\t%s\n' "$sess" "$wid" "$nm" "$why"; continue; fi
     [ "$why" = reopen ] || continue
     [ "$POLICY" != off ] || continue
     case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
-    [ $(( $(date +%s) - ts )) -ge "$IDLE" ] || continue        # tried lately: hold off
+    [ $(( NOW - ts )) -ge "$IDLE" ] || continue        # tried lately: hold off
     if [ "$POLICY" = ask ]; then
       [ "$(tmux -L "$sess" display-message -p -t "$wid" '#{@cfg_asked}' 2>/dev/null)" = "$fp" ] && continue
       say "ask: $sess:$nm ($wid) runs an old configuration or fleet version and is idle"
@@ -116,6 +144,7 @@ for sess in $sockets; do
     say "reopen: $sess:$nm ($wid) onto the current configuration"
     [ -n "$DRY" ] && continue
     tmux -L "$sess" set-option -w -t "$wid" @cfg_restart_ts "$(date +%s)" 2>/dev/null
+    ledger_add "$ident"
     mkdir -p "${LOG%/*}" 2>/dev/null
     printf '%s reopen %s:%s (%s) reason=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sess" "$nm" "$wid" \
       "$([ "$st" = renew ] && printf ver-stale || printf cfg-stale)" >> "$LOG" 2>/dev/null

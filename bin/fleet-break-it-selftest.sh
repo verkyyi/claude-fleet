@@ -159,6 +159,8 @@
 #   admit-tight-done-windows                        fleet_session_cap_ok / fleet_admit_make_room (fleet-lib.sh),
 #                                                   fleet-cleanup-idle.sh --make-room, fleet-cleanup-idle.py --plan-room/--fold
 #   reopen-folding-session                          fleet_cfg_restart_why (fleet-lib.sh: @reap_due / @reap_seen)
+#   peerq-undeliverable-forever                     bin/fleet-peer-queue.sh stale / status (FLEET_PEER_QUEUE_DEAD_SECS)
+#   reopen-every-release                            bin/fleet-cfg-restart.sh (cfg-restart.ledger, FLEET_CFG_RESTART_DAY)
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 #   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
@@ -6074,6 +6076,33 @@ drill_reopen_folding_session() {
     || { WHY="a release still reopens a window a reaper counts down: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="回收正在倒计时的闲置会话（@reap_due 新鲜）换版不重开；倒计时停了、被拦下（hold）照旧"
+}
+
+# A cross-machine send whose recipient's ID closed and whose machine left the hub's
+# map sat QUEUED for days, «对方能收时自动补送» forever, and `status` listed nothing
+# (T761: four 6-day-old sends on mini2). Past FLEET_PEER_QUEUE_DEAD_SECS it is
+# EXPIRED with one audit line and never said again.
+drill_peerq_undeliverable_forever() {
+  CAP=30; local t0 d="$WORK/pqu"
+  mkdir -p "$d"; t0=$(now)
+  bash "$BIN/peer-queue-dead-selftest.sh" >"$d/out" 2>&1 \
+    || { WHY="an undeliverable send still waits forever: $(grep -E '^(FAIL|not ok)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="经入口的发送排队过一天判送不到：账本 EXPIRED + 一行审计、不再提醒；status 列得出跨机排队的"
+}
+
+# A finished session was reopened by every release (T761: stable moves every 10-30
+# minutes; the reopen is a new window, so @cfg_restart_ts started empty each time —
+# a reopen notice and an «is done» on the person's panel ~70 times a day).
+drill_reopen_every_release() {
+  CAP=10; local t0
+  t0=$(now)
+  grep -q 'held_today "\$ident"' "$BIN/fleet-cfg-restart.sh" && grep -q 'ledger_add "\$ident"' "$BIN/fleet-cfg-restart.sh" \
+    || { WHY="fleet-cfg-restart.sh no longer holds a session's second reopen by its identity"; return 1; }
+  suite_holds cfg-stale-selftest.sh 'held:day' 'FLEET_CFG_RESTART_DAY=0' \
+    'the reopened window (same identity) is not reopened again the same day' || return 1
+  SECS=$(since "$t0")
+  WHAT="同一会话（@fleet_id）一天只换版重开一次：新窗口带同一 ID、答 held:day；会坏不受限（cfg-stale-selftest.sh 真跑，这里按名守住）"
 }
 
 # A stop sent over ssh / the peerlink runs with a bare PATH (/usr/bin:/bin): no tmux
