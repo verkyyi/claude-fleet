@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { Layers, List, Palette, TerminalSquare } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
@@ -17,6 +18,7 @@ import { FONT_SIZES, MIN_CONTRAST, SCHEMES, onTermPick, setTermPick, termPick, x
 import { webGoTarget } from "@/shared/web-go";
 import { usePage } from "../Shell";
 import { continueCommand, continueProvider } from "@/app/chat/continue";
+import type { Provider } from "@/app/chat/chat";
 
 type View = TerminalState & { destination?: string };
 const errors: Record<string, [string, string]> = {
@@ -59,9 +61,9 @@ const pageDark = () => document.documentElement.dataset.theme === "dark";
 const currentTheme = () => xtermTheme(termPick().scheme, pageDark());
 
 // The toolbar's 配色 / 字号: kept on this device, applied at once (BBVR).
-function TermLook({ pick, onPick }: { pick: TermPick; onPick: (p: TermPick) => void }) {
+function TermLook({ pick, onPick, compact }: { pick: TermPick; onPick: (p: TermPick) => void; compact?: boolean }) {
   return <Popover>
-    <PopoverTrigger asChild><Button size="sm" variant="outline" title={tr("终端配色与字号", "Terminal colours and font size")}><Palette />{tr("配色", "Colours")}</Button></PopoverTrigger>
+    <PopoverTrigger asChild><Button size={compact ? "icon-sm" : "sm"} variant="outline" aria-label={tr("配色", "Colours")} title={tr("终端配色与字号", "Terminal colours and font size")}><Palette />{compact ? null : tr("配色", "Colours")}</Button></PopoverTrigger>
     <PopoverContent align="end" className="w-64 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <Label htmlFor="term-scheme">{tr("配色", "Colours")}</Label>
@@ -93,21 +95,41 @@ function terminalPath(view: View): string {
   return view.echo !== undefined ? `${path} · ${view.echo} ms` : path;
 }
 
+// /terminal: the personal terminal (?worker= a session's), the page as before
+// the session workspace (GR5E C4) — now one <TerminalView> under a page.
 export default function TerminalPage() {
   usePage(tr("我的终端", "My Terminal"));
   const [query] = useSearchParams();
+  const location = useLocation();
   // An explicit empty/invalid worker remains explicit and is refused server-side.
   const worker = query.get("worker");
   // 「在终端里继续」 (task R9A2): the personal terminal picks a web conversation up
   const cont = worker === null ? continueProvider(query.get("continue")) : null;
+  const name = typeof location.state?.title === "string" ? location.state.title : undefined;
+  const title = worker === null ? tr("我的终端", "My Terminal") : name || tr("会话终端", "Session terminal");
+  return <TerminalView worker={worker} cont={cont} title={title} name={name} />;
+}
+
+// The tools a terminal's head carries: Fleet 菜单 · 打开 Shell · 配色 / 字号, and
+// its status. In a session's workspace (GR5E C4) they go into the workspace's
+// own head (`toolsInto`); a phone draws them as icons.
+export type TerminalViewProps = {
+  worker: string | null;           // null = the personal terminal
+  cont?: Provider | null;          // 「在终端里继续」 that side's conversation
+  title?: string;                  // the head's title; none with toolsInto
+  name?: string;                   // the session's own name, for 「会话「X」已结束」
+  toolsInto?: HTMLElement | null;  // draw the tools there instead of a head of its own
+  compact?: boolean;               // no notice bars (a phone on its side)
+  icons?: boolean;                 // tools as icons only (a phone)
+  hidden?: boolean;                // kept in the background: connected, not drawn
+};
+
+export function TerminalView({ worker, cont = null, title, name, toolsInto, compact, icons, hidden }: TerminalViewProps) {
   const [contNote, setContNote] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
   const go = useRef(navigate); go.current = navigate;
-  const title = worker === null ? tr("我的终端", "My Terminal")
-    : typeof location.state?.title === "string" ? location.state.title : tr("会话终端", "Session terminal");
-  // the session's own name, when the page was handed one, for 「会话「X」已结束」
-  const nameRef = useRef<string | undefined>(undefined); nameRef.current = typeof location.state?.title === "string" ? location.state.title : undefined;
+  const nameRef = useRef<string | undefined>(undefined); nameRef.current = name;
   const [attempt, retry] = useState(0);
   const [view, setView] = useState<View>({ state: "connecting" });
   const [pick, setPick] = useState<TermPick>(termPick);
@@ -118,6 +140,7 @@ export default function TerminalPage() {
   const container = useRef<HTMLDivElement>(null);
   const take = useRef<() => void>(() => {});
   const send = useRef<(text: string) => void>(() => {});
+  const focus = useRef<() => void>(() => {});
   const renewal = useRef<string | undefined>(undefined);
   const manual = useRef(false);
 
@@ -239,6 +262,7 @@ export default function TerminalPage() {
       size(); current.focus();
     };
     send.current = (text) => { if (!composing) { input(text); term?.focus(); } };
+    focus.current = () => { if (ready) term?.focus(); };
     // once ready: the side's session and directory read from the home, then its
     // shell (the 看台's ⌃\) and the one command — never while a turn runs there
     let contDone = !cont;
@@ -258,6 +282,11 @@ export default function TerminalPage() {
       setTimeout(() => { if (!dead) { input(cmd + "\r"); setContNote(""); } }, 800);
     };
     const resize = new ResizeObserver(size); resize.observe(host);
+    // a phone turned on its side (GR5E C4): the same connection, the columns
+    // fitted again once the turn has settled — never a reconnect
+    let turned: ReturnType<typeof setTimeout> | undefined;
+    const turn = () => { clearTimeout(turned); turned = setTimeout(size, 250); };
+    window.addEventListener("orientationchange", turn);
     // the page turning light / dark, or a new pick, repaints at once
     const repaint = () => {
       const t = currentTheme(); setScreen(t.background); setPick(termPick());
@@ -317,30 +346,39 @@ export default function TerminalPage() {
     window.addEventListener("online", homeBack); document.addEventListener("visibilitychange", homeBack);
     void start().catch(() => { if (!dead) fail("connection_failed"); });
     return () => {
-      dead = true; send.current = () => {}; abort.abort(); connection?.close(); client?.close(); clearTimeout(homeTimer);
+      dead = true; send.current = () => {}; focus.current = () => {}; abort.abort(); connection?.close(); client?.close(); clearTimeout(homeTimer);
       window.removeEventListener("online", homeBack); document.removeEventListener("visibilitychange", homeBack);
       resize.disconnect(); theme.disconnect(); unpick(); disposeTerminal();
+      clearTimeout(turned); window.removeEventListener("orientationchange", turn);
     };
   }, [worker, attempt, cont]);
+
+  // back in view (GR5E C4): typing goes to it again at once
+  useEffect(() => { if (!hidden) focus.current(); }, [hidden]);
 
   const again = () => { manual.current = true; setView({ state: "connecting" }); retry((n) => n + 1); };
   const status = view.state === "reconnecting" ? tr("正在接回…", "Reconnecting…") : view.state === "open-elsewhere" ? tr("在另一处使用", "Open elsewhere") : view.state === "connecting" ? tr("正在连接…", "Connecting…") : view.state !== "ready" ? tr("已断开", "Disconnected")
     : terminalPath(view);
   const final = !["connecting", "reconnecting", "ready"].includes(view.state);
-  return <div className="flex h-full min-h-80 flex-col gap-3 p-4 md:p-6">
-    <header className="flex flex-wrap items-center gap-2">
+  const icon = icons ? "icon-sm" as const : "sm" as const;
+  const tools = <>
+    <span role="status" className={icons ? "sr-only" : "text-muted-foreground text-xs"}>{status}</span>
+    <Button size={icon} variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_MENU)} aria-label={tr("Fleet 菜单", "Fleet menu")} title={tr("也可按 Ctrl+]，再按 p", "Also: Ctrl+] then p")}><List />{icons ? null : tr("Fleet 菜单", "Fleet menu")}</Button>
+    <Button size={icon} variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_SHELL)} aria-label={tr("打开 Shell", "Open shell")} title={tr("再次点击返回会话", "Click again to return to the session")}><TerminalSquare />{icons ? null : tr("打开 Shell", "Open shell")}</Button>
+    <TermLook pick={pick} onPick={setTermPick} compact={icons} />
+  </>;
+  const inWorkspace = toolsInto !== undefined;
+  return <div data-terminal-view hidden={hidden} className={inWorkspace ? `flex h-full min-h-0 flex-col ${compact ? "gap-1 p-1" : "gap-3 p-2 md:p-4"}` : "flex h-full min-h-80 flex-col gap-3 p-4 md:p-6"}>
+    {inWorkspace ? (toolsInto && !hidden ? createPortal(tools, toolsInto) : null) : <header className="flex flex-wrap items-center gap-2">
       <h1 className="min-w-0 flex-1 truncate font-display text-lg" title={view.destination}>
         {title}
         <span className="text-muted-foreground ms-2 font-sans text-xs">{view.destination}</span>
       </h1>
-      <span role="status" className="text-muted-foreground text-xs">{status}</span>
-      <Button size="sm" variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_MENU)} title={tr("也可按 Ctrl+]，再按 p", "Also: Ctrl+] then p")}><List />{tr("Fleet 菜单", "Fleet menu")}</Button>
-      <Button size="sm" variant="outline" disabled={view.state !== "ready"} onClick={() => send.current(FLEET_SHELL)} title={tr("再次点击返回会话", "Click again to return to the session")}><TerminalSquare />{tr("打开 Shell", "Open shell")}</Button>
-      <TermLook pick={pick} onPick={setTermPick} />
+      {tools}
       <Button asChild size="sm" variant="ghost"><Link to="/sessions"><Layers />{tr("会话", "Sessions")}</Link></Button>
-    </header>
-    {notice ? <p role="status" data-notice className="rounded-md border-s-4 border-primary bg-muted px-3 py-2 text-sm">{notice}</p> : null}
-    {view.state === "reconnecting" ? <p role="status" data-waiting className="rounded-md bg-muted px-3 py-2 text-sm">{waitText(view, view.destination, now)}</p> : null}
+    </header>}
+    {notice && !compact ? <p role="status" data-notice className="rounded-md border-s-4 border-primary bg-muted px-3 py-2 text-sm">{notice}</p> : null}
+    {view.state === "reconnecting" && !compact ? <p role="status" data-waiting className="rounded-md bg-muted px-3 py-2 text-sm">{waitText(view, view.destination, now)}</p> : null}
     {view.state === "open-elsewhere" ? <button type="button" role="alert" className="rounded-lg border p-4 text-start text-sm" onClick={() => take.current()}>{tr(...errors.open_elsewhere)}</button> : null}
     {final && view.state !== "open-elsewhere" ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
       <p>{tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
