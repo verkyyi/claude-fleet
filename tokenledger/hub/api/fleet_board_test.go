@@ -123,7 +123,7 @@ func TestBoardLostMachineIsPutAway(t *testing.T) {
 	sess := func(key, state, avail string, heard time.Time) FleetSession {
 		wid := "42f8e358-7cc0-5856-a353-8983a4b4c9a1/" + key
 		w := map[string]any{"key": key, "state": state, "name": key, "worker_id": wid}
-		return FleetSession{WorkerID: &wid, MachineName: "mini2", OSUser: "drill1", Availability: avail,
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "drill1", Availability: avail,
 			ObservedAt: heard, Worker: w}
 	}
 	live := []FleetSession{
