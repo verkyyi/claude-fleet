@@ -2,8 +2,8 @@ package sshca
 
 import (
 	"crypto/ed25519"
-	"encoding/pem"
 	"crypto/rand"
+	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
