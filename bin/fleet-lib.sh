@@ -10253,7 +10253,9 @@ fleet_agent_deliver() {
   gate_root="${FLEET_GATE_DIR:-${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/session-gate}"
   if fleet_is_fid "$fid" && { [ -n "$parked" ] || [ -d "$gate_root/$fid" ]; }; then
     seed=$(mktemp "${TMPDIR:-/tmp}/fleet-deliver.XXXXXX") || { FLEET_DELIVER_NOTE="cannot preserve wake words"; return "$held"; }
-    printf '%s' "$text" > "$seed"
+    if ! printf '%s' "$text" > "$seed"; then
+      rm -f "$seed"; FLEET_DELIVER_NOTE="cannot preserve wake words"; return "$held"
+    fi
     why=消息; [ "$from" != fleet-report ] || why=回报
     out=$(fleet_park_wake "$fid" --why "$why" --seed-file "$seed" ${delivery:+--delivery "$delivery"} 2>/dev/null); rc=$?
     rm -f "$seed"
