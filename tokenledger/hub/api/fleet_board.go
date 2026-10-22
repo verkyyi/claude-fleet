@@ -133,6 +133,18 @@ func boardWhy(raw string, now time.Time) ([]string, string) {
 	}
 	two := func(zh, en string) []string { return []string{zh, en} }
 	switch code {
+	case "watched":
+		return two("先不停放：有人正在看", "Not parking: someone is looking"), "grey"
+	case "draft":
+		return two("先不停放：输入框有草稿", "Not parking: a draft is in the input box"), "grey"
+	case "park-bg":
+		return two("先不停放：后台的活还在跑", "Not parking: background work is still running"), "grey"
+	case "asking":
+		return two("先不停放：选择框还开着", "Not parking: a choice dialog is open"), "grey"
+	case "old-wrapper":
+		return two("先不停放：旧外壳尚不支持", "Not parking: this older wrapper does not support it"), "grey"
+	case "park-gate":
+		return two("先不停放：尚未确认能安全停下", "Not parking: safe parking is not yet confirmed"), "grey"
 	case "bg":
 		return two(fmt.Sprintf("还没收：做完了，后台的活还在跑 · %d 分钟后收", mins),
 			fmt.Sprintf("Not closed yet: done, but a background job is still running · closes in %d min", mins)), "grey"

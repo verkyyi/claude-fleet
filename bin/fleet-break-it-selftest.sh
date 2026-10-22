@@ -6418,6 +6418,17 @@ drill_park_reap_table() {
   WHAT='停放与回收同表：每来源、三天期限、历史可接回，doctor 同一时刻'
 }
 
+drill_park_reap_exceptions() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cleanup-idle-selftest.py" \
+    ParkTable.test_finished_probe_keeps_its_one_minute_policy \
+    ParkTable.test_decide_keeps_idle_policy_except_reported_waiting \
+    ParkTable.test_park_refusal_reaches_doctor 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='decide 保留 idle:15m，明确 waiting 才用停放三天；probe 做完一分钟仍走原回收门；拒停原因送到 doctor'
+}
+
 drill_park_drops_dialog() {
   CAP=60; local t0 out
   t0=$(now)

@@ -659,7 +659,8 @@ class client:
         r.now = 1000
         snap = {'@park_wrap_ver':'1', '@parked':'', '@wrap_gone':'', 'pane_dead':'',
                 '@claude_state':'done', '@agent_status':'', '@claude_state_ts':'900',
-                '@fleet_id':'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', '@loop':'', '@park_presence':'1'}
+                '@fleet_id':'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', '@loop':'', '@park_presence':'1',
+                '@reap_policy':'keep'}  # every source may park even when explicitly kept
         with patch.dict(os.environ, self.env | {'FLEET_SESSION_PARK_IDLE_UNATTENDED':'1m'}), \
                 patch.object(r, 'busy', return_value=False), \
                 patch.object(r, 'tm', return_value=''), \

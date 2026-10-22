@@ -1041,12 +1041,20 @@ class Cleaner:
         stamp = snap.get("@claude_state_ts", "")
         if not stamp.isdigit():
             return False
+        # A completed probe's one-minute policy precedes the five-minute park
+        # tier. Return to the existing reaper; its live/history checks still
+        # decide whether it may close. Explicit waiting reports park instead.
+        pol = self.policy(snap) if fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] == "done" else None
+        if (pol and pol[0] == "done" and self.deadline(snap, pol) <= self.now
+                and not self.is_waiting(snap)):
+            return None
         if not hasattr(self, "_park_watched"):
             clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
             self._park_watched = {f[1] for line in clients.splitlines()
                                   if len(f := line.split("\t")) == 2 and f[0] != "1"}
         if window in self._park_watched:
             self.tm("set-option", "-w", "-t", window, "@park_watched_at", str(self.now))
+            self.why = "watched"
             return False
         due = fleet_reap_policy.park_after(snap, self.now)
         self.why = "waiting:%d" % (max(int(stamp), int(snap.get("@park_watched_at") or 0)) + due)
@@ -1079,7 +1087,7 @@ class Cleaner:
                 self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
             print("parked-web:%s %s" % (window, why))
             return True
-        self.why = "bg" if got.get("why") == "bg" else ""
+        self.why = fleet_reap_policy.PARK_HOLDS.get(got.get("why"), "park-gate")
         return False
 
     def road(self, window, snap):
