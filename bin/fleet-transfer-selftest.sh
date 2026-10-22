@@ -916,6 +916,35 @@ ok; [ -z "$(field agent_transfer_until)" ] || fail 'successful transfer must rel
 OUT=$(bash "$BUNDLE/resume-source.sh" 2>&1) && fail 'manual recovery must refuse while Codex is alive'; ok
 SENTINEL="$WIN"
 
+# A switch of a settled waiting/completed session is not approval to execute
+# history. Verify the actual controller delivers the exact disposition packet.
+for disposition in waiting completed; do
+  spawn "disposition-$disposition" raw normal
+  printf 'Language: 中文\nOriginal intent: publish once AFTER approval. Still waiting; no GO.\n' > "$WORK/disposition.md"
+  transfer --disposition "$disposition" --dry-run && fail 'noncontinuing transfer needs private context'; ok
+  TM set-option -w -t "$WIN" @loop unknown
+  transfer --disposition "$disposition" --handoff "$WORK/disposition.md" --dry-run && fail 'disposition must not restart a loop'; ok
+  TM set-option -wu -t "$WIN" @loop
+  TM set-option -w -t "$WIN" @claude_state needs
+  transfer --disposition "$disposition" --handoff "$WORK/disposition.md" && fail 'disposition must not bypass approval guard'; ok
+  TM set-option -w -t "$WIN" @claude_state "done"
+  transfer --disposition "$disposition" --handoff "$WORK/disposition.md" || fail 'settled waiting/completed switch'
+  ! fleet_pid_alive "$PID" && [ "$(field cc_agent)" = codex ] || fail 'disposition left duplicate writer'; ok
+  python3 - "$(packet)" "$WORK/target-argv.json" "$disposition" <<'PYDISPOSITION' || fail 'disposition pickup changed intent'
+import json, sys
+from pathlib import Path
+b, argv, disposition = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+m = json.loads((b/'manifest.json').read_text())
+pickup = (b/'pickup.md').read_text()
+assert m['disposition'] == disposition
+assert json.loads(argv.read_text())['argv'][2] == pickup.rstrip('\n')
+assert 'not approval or GO' in pickup and 'Do not execute historical requests' in pickup
+assert 'no GO' in (b/'handoff.md').read_text()
+assert not (b/'loop').exists()
+PYDISPOSITION
+  ok
+done
+
 spawn 42 raw normal
 git -C "$WT" checkout --detach -q || fail 'detached scratch fixture'
 # Clean scratch at the base commit: SessionEnd/cleanup must keep it for Codex.

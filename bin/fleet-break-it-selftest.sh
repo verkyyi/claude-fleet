@@ -5587,7 +5587,17 @@ drill_quota_boundary_recheck() {
     || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
   python3 "$BIN/fleet-transfer-source-selftest.py" QuotaDialog.test_native_prompt_proof_uses_real_inbox_dispatch_without_probe_seam >>"$WORK/quota-boundary.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_preflight_refusal_recovers_once_with_exact_receipt >>"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
+}
+
+drill_transfer_disposition() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-disposition-selftest.py" >"$WORK/transfer-disposition.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-disposition.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='explicit waiting/completed pickup preserves intent and draft without GO or loop activation'
 }
 
 drill_web_quota_continuation() {

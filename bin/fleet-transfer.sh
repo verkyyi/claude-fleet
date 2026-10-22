@@ -19,6 +19,8 @@
 # --quota-continuation  Internal web continuation: exact Claude quota failure,
 #                 empty native prompt and no live tools, approvals or loops.
 #                 Requires --expected-session-id; all normal cutover gates apply.
+# --disposition   continue (default), waiting or completed. The latter two require
+#                 private --handoff context; switch agents without authorizing work.
 #
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
@@ -76,10 +78,10 @@ usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME=''
 TARGET_FILE='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
-QUOTA_CONTINUATION=0
+QUOTA_CONTINUATION=0 DISPOSITION=continue
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id|--disposition)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
@@ -94,6 +96,7 @@ while [ "$#" -gt 0 ]; do
         --expected-source) EXPECT=$2 ;; --armed-request) REQUEST=$2 ;;
         --retry) RETRY=$2 ;; --expected-session-id) EXPECT_SID=$2 ;;
         --preparation-id) PREPARATION_ID=$2 ;;
+        --disposition) DISPOSITION=$2 ;;
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -108,6 +111,12 @@ while [ "$#" -gt 0 ]; do
     *) die "unknown argument $1 (exactly one --window is required)" ;;
   esac
 done
+case "$DISPOSITION" in continue|waiting|completed) ;; *) die 'invalid --disposition' ;; esac
+if [ "$DISPOSITION" != continue ]; then
+  [ -s "$NOTES" ] || die 'waiting/completed disposition requires --handoff context'
+  [ "$AFTER:$NATIVE:$TAKEOVER" = 0:0:0 ] && [ -z "$RETRY$LOOP$REQUEST" ] \
+    || die 'waiting/completed disposition requires immediate transfer without loop, retry or native resume'
+fi
 # Road 2 of the durable handover (issue #4280): a source that cannot run its own
 # CronDelete — an explicit --durable-takeover — has its durable tasks taken by
 # this controller, inside the isolation boundary.
@@ -351,6 +360,7 @@ source_ready() {
 RETRY_NOTE=''
 record_retry() {
   local fid dir
+  [ "$DISPOSITION" = continue ] || return 0 # never lose waiting/completed intent in an old retry
   [ -z "${FLEET_TRANSFER_RETRYING:-}" ] && [ "$DRY" != 1 ] && [ "$PREPARE" != 1 ] || return 0
   fid=$(fleet_window_fid "$SESS" "$WIN" "$SOCK") || return 0
   dir=$(python3 "$HELPER" retry-record --session "$SESS" --fid "$fid" --window "$WIN" --handle "${HANDLE:-$WIN}" \
@@ -382,6 +392,22 @@ rollback_hold() {
 }
 [ -z "$NOTES" ] || [ -s "$NOTES" ] || die '--handoff file is missing or empty'
 [ -z "$LOOP" ] || [ -s "$LOOP" ] || die '--loop file is missing or empty'
+disposition_ready() {
+  [ "$DISPOSITION" = continue ] && return 0
+  [ -z "$LOOP$(opt '#{@loop}')" ] || die 'waiting/completed transfer cannot carry an active loop'
+  python3 - "$PREVIOUS" "$(opt '#{@fleet_id}')" <<'PYDISPOSITION' || die 'resolve the existing loop before waiting/completed transfer'
+import json, os, sys
+from pathlib import Path
+previous, fid = sys.argv[1:]
+if previous:
+    prior = Path(previous).parent / 'loop' / 'state.json'
+    if prior.exists() and json.loads(prior.read_text()).get('status') not in ('complete', 'stopped', 'cancelled'):
+        raise SystemExit(1)
+if fid and (Path(os.environ['FLEET_CONF_DIR']) / 'transfer-durable' / (fid + '.json')).exists():
+    raise SystemExit(1)  # durable ownership needs its existing controller, never an implicit GO
+PYDISPOSITION
+}
+disposition_ready
 if [ -n "$LOOP" ]; then
   python3 - "$BIN/fleet-loop.py" "$LOOP" <<'PY' || die 'invalid loop spec'
 import json, runpy, sys
@@ -568,7 +594,7 @@ if [ "$TAKEOVER" = 1 ] && [ "$NOREPO" = 1 ] && [ "$NATIVE_CRON" = 1 ] && [ "$PRE
   [ -z "$TAKEOVER_PLAN" ] || [ -z "$LOOP" ] \
     || die 'durable takeover carries the durable tasks alone: a source with a verified plan can run its own CronDelete'
 fi
-package_flags=(--identity "$IDENTITY" --lease-key "$LEASE_KEY" --input-view "$INPUT_VIEW"); [ "$NOREPO" != 1 ] || package_flags+=(--norepo)
+package_flags=(--identity "$IDENTITY" --lease-key "$LEASE_KEY" --input-view "$INPUT_VIEW" --disposition "$DISPOSITION"); [ "$NOREPO" != 1 ] || package_flags+=(--norepo)
 [ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
 
 BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$MAIN" \
@@ -642,6 +668,7 @@ TM set-option -p -t "$PANE" remain-on-exit on || die 'cannot retain source pane 
 # new turn, or another process must not inherit an earlier session's handoff.
 [ "$(source_read 2>/dev/null)" = "$RESOLVED" ] && armed_cycle_free || die 'source changed while preparing the transfer'
 source_ready || die 'source started another turn while preparing the transfer'
+disposition_ready
 if [ "$NOREPO" = 1 ]; then
   PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES") || die 'panel preparation is no longer valid'
   [ "$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT")" = "$INPUT_VIEW" ] || die 'source scheduler or unsent input changed'
@@ -671,9 +698,10 @@ fi
 [ -z "$DFID" ] || python3 "$DURABLE" claim "$DFID" "$$" || die 'durable handover is not confirmed by the source'
 # Target authentication can block long enough for new input or a new source.
 # Re-prove quota input and exact identity immediately before any clearing key.
-if [ "$QUOTA_CONTINUATION" = 1 ]; then
+if [ "$QUOTA_CONTINUATION" = 1 ] || [ "$DISPOSITION" != continue ]; then
   [ "$(source_read 2>/dev/null)" = "$RESOLVED" ] && armed_cycle_free \
     && source_ready || die 'quota source or prompt changed before exit; source retained'
+  disposition_ready
 fi
 EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
