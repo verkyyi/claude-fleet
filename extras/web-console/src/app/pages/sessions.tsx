@@ -62,7 +62,8 @@ function metaOf(r: Row, standalone: boolean) {
   const pr = r.task ? taskPR(r.task) : null;
   return [r.kids.length ? tr(`${r.kids.length} 项`, `${r.kids.length} items`) : "",
     standalone && r.parentTitle ? tr(`属于「${r.parentTitle}」`, `in “${r.parentTitle}”`) : "",
-    machineOf(r), pr ? `PR #${pr.n}` : "", when(r)].filter(Boolean).join(" · ");
+    r.board?.agent_words ? tr(...r.board.agent_words) : "",
+    r.board?.context ? tr(...r.board.context) : "", machineOf(r), pr ? `PR #${pr.n}` : "", when(r)].filter(Boolean).join(" · ");
 }
 
 // `kids`: the members drawn under it (its own group's, the search's) — none ⇒ no
@@ -232,6 +233,8 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           <h2 className="font-display text-xl leading-snug font-semibold break-words">{r.title}</h2>
         </div>
         <p className="text-muted-foreground text-sm">{[tr(...r.tag), machine, t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
+        {r.board?.agent_words ? <p className="text-sm">{tr(...r.board.agent_words)}</p> : null}
+        {r.board?.context ? <p className="text-sm">{tr(...r.board.context)}</p> : null}
         {r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
       </div>
       {asking && r.live ? (

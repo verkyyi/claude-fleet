@@ -3733,6 +3733,16 @@ drill_recycle_rejoins() {
 # person's scope on this machine and each live certificate naming the login on
 # the revocation list (refused within 10 s), and recycleLeftovers reds on one
 # not there.
+
+# PV4D: board-only plans keep their engine and coordination evidence.
+drill_board_plan_facts() {
+  CAP=120; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-view-board-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  _drill_go_tests 'TestBoardPlanFacts' "$ROOT/tokenledger/hub/api/fleet_board_test.go" '计划、运行证据及协调归属分别显示' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_recycle_old_cert() {
   CAP=90; local t0 f="$ROOT/tokenledger/hub/api/fleet_recycle.go"
   t0=$(now)

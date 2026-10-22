@@ -91,6 +91,40 @@ class Board(unittest.TestCase):
             self.assertEqual(v.session_count(items), "4")
             self.assertEqual(v.session_count([e for e in items if not e.get("unboarded")]), str(BOARD["count"]))
 
+    def test_planned_board_only(self):
+        board = {"rows": [{"id": "planned", "group": "queue", "tag": "queued",
+                  "words": ["未派发", "Not dispatched"], "agent": "codex", "agent_basis": "planned",
+                  "agent_words": ["Codex（计划）", "Codex (planned)"],
+                  "context": ["尚未启动 · 协调负责人：AB12", "Not started · Coordinator: AB12"]}]}
+        out, _ = v.board_apply(board, {g: [] for g in v.GROUPS}, [], [], "m", "u")
+        rec = out["queue"][0]
+        self.assertEqual(v.agent_word(rec), "Codex（计划）")
+        self.assertIn("AB12", v.note_of(rec)[0])
+        self.assertEqual(rec["word"], "未派发")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("qo", BIN / "fleet-quickopen.py")
+        qo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(qo)
+        drawn = "".join(t for t, _ in v.row_segs(rec, 50, qo.cells, qo.clip))
+        self.assertIn("Cod·计", drawn)
+        v._BOARD["lang"] = "en"
+        drawn = "".join(t for t, _ in v.row_segs(rec, 50, qo.cells, qo.clip))
+        self.assertIn("Cod(P)", drawn)
+
+    def test_actual_and_legacy_board(self):
+        for group in ("work", "gone"):
+            e = sess("@1", "actual", group, agent="codex")
+            board = {"rows": [{"id": "actual", "group": group, "tag": "working",
+                               "agent": "claude", "agent_basis": "native", "agent_words": ["Claude", "Claude"]}]}
+            groups = {g: [] for g in v.GROUPS}
+            groups["work"] = [e]
+            out, gone = v.board_apply(board, groups, [], [], "m", "u")
+            self.assertEqual(v.agent_word((gone if group == "gone" else out[group])[0]), "Claude")
+        groups = {g: [] for g in v.GROUPS}
+        groups["work"] = [sess("@1", "legacy", "work", agent="codex")]
+        out, _ = v.board_apply({"rows": [{"id": "legacy", "group": "work"}]}, groups, [], [], "m", "u")
+        self.assertEqual(v.agent_word(out["work"][0]), "Codex", "old hub preserves local evidence")
+
     def test_web_opened_session_is_a_row(self):
         """会话合一 (task PQ41): a session the web opened is one row of the same
         list — its place, its word, the count — and a parked one reads 空闲."""

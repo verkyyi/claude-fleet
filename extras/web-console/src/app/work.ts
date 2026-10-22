@@ -45,7 +45,7 @@ export const GROUPS: { g: Group; label: [string, string] }[] = [
   { g: "pin", label: ["置顶", "Pinned"] },
   { g: "ask", label: ["等你", "Needs you"] },
   { g: "work", label: ["在干活", "Working"] },
-  { g: "queue", label: ["排队中", "Queued"] },
+  { g: "queue", label: ["待派发 / 保留", "Pending / retained"] },
   { g: "gone", label: ["已收起", "Put away"] },
 ];
 
@@ -81,13 +81,11 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
     return { ...base, group: "ask", tag: st === "failed" ? ["没做成", "Failed"] : ["没开成", "Didn't start"], glyph: "fail", tone: "fail", line: say(t?.evidence) };
   if (t && t.asked && taskOpen(t) && !live)
     return { ...base, group: "ask", tag: ["在等你", "Waiting on you"], glyph: "ask", tone: "ask", line: say(t.asked), quote: true };
-  // the record has ended: its result stands whatever its window still runs
-  // (⌘P's rule, EPIC T644 C4) — in 排队中 while a session is up, else put away
-  if (live && (st === "succeeded" || st === "cancelled"))
-    return { ...base, group: "queue", tag: st === "succeeded" ? ["已完成", "Completed"] : ["已取消", "Cancelled"], glyph: "done", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
-  // 在干活
+  // Current work takes precedence over a previous task result.
   if (s === "working" || s === "looping")
     return { ...base, group: "work", tag: ["在干活", "Working"], glyph: "work", tone: "ok", line: say(live?.say) };
+  if (live && (st === "succeeded" || st === "cancelled"))
+    return { ...base, group: "queue", tag: st === "succeeded" ? ["已完成 · 待回收", "Completed · retained"] : ["已取消", "Cancelled"], glyph: "done", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
   // 排队中: open, waiting on something that is not you
   if (live) {
     if (pr && t?.pr_state === "waiting") return { ...base, group: "queue", tag: ["等合并", "Awaiting merge"], glyph: "pr", tone: "muted", line: say(t.evidence) };
@@ -96,7 +94,7 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
     return { ...base, group: "queue", tag: ["状态未知", "Unknown"], glyph: "idle", tone: "muted", line: "" };
   }
   if (t && taskOpen(t)) {
-    const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" ? ["排着", "Queued"]
+    const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" ? ["未派发", "Not dispatched"]
       : st === "running" || st === "waiting" ? ["看不到会话", "Session not seen"] : ["还不清楚", "Unknown"];
     return { ...base, group: "queue", tag, glyph: "wait", tone: "muted", line: say(t.evidence) };
   }
@@ -139,7 +137,7 @@ export function buildRows(tasks: Task[], live: SessionRow[], ended: SessionRow[]
 // colour; stopped (its agent's error stopped it) a red cross.
 const GLYPH_OF: Record<string, Glyph> = {
   asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "work", looping: "work",
-  completed: "done", turn_done: "done", ended: "done", starting: "wait", queued: "wait", not_seen: "wait",
+  retained_completed: "done", completed: "done", turn_done: "done", ended: "done", starting: "wait", queued: "wait", not_seen: "wait",
   parked: "wait", stopped: "fail",
 };
 const TONE_OF: Record<string, Tone> = {

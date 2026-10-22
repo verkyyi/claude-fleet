@@ -34,7 +34,7 @@ import (
 //	                failed or did not start with no session left is 已收起 (the ✦
 //	                messages say it). Waiting and parked rows sit above the rest.
 //	work  在干活   working · looping
-//	queue 排队中   up, waiting on something not you (idle · its turn ended ·
+//	queue 待派发/保留   up, waiting on something not you (idle · its turn ended ·
 //	                unknown · its record already ended), or a record whose
 //	                session is starting / not seen
 //	gone  已收起   ended within boardGoneDays: an agent exited with its window
@@ -57,6 +57,14 @@ const (
 
 // BoardRow is one row of the list.
 type BoardRow struct {
+	// Agent is accompanied by its evidence basis; planned never means actual.
+	Agent       string    `json:"agent,omitempty"`
+	AgentBasis  string    `json:"agent_basis,omitempty"`
+	AgentWords  [2]string `json:"agent_words"`
+	Context     [2]string `json:"context"`
+	Coordinator string    `json:"coordinator,omitempty"`
+	Outcome     string    `json:"outcome,omitempty"`
+
 	ID       string    `json:"id"`
 	Code     string    `json:"code,omitempty"`
 	Task     string    `json:"task,omitempty"`    // the record's T<n>
@@ -107,8 +115,9 @@ var boardWords = map[string][2]string{
 	"asking": {"在问你", "Asking you"}, "failed": {"没做成", "Failed"}, "refused": {"没开成", "Didn't start"},
 	"waiting_you": {"在等你", "Waiting on you"}, "working": {"在干活", "Working"}, "looping": {"在循环", "Looping"},
 	"completed": {"已完成", "Completed"}, "cancelled": {"已取消", "Cancelled"}, "turn_done": {"本轮结束", "Turn ended"},
+	"retained_completed": {"已完成 · 待回收", "Completed · retained"}, "session_parked": {"已停放", "Parked"},
 	"idle": {"空闲", "Idle"}, "unknown": {"状态未知", "Unknown"}, "starting": {"正在开", "Starting"},
-	"queued": {"排着", "Queued"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
+	"queued": {"未派发", "Not dispatched"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
 	"ended": {"已结束", "Ended"}, "ended_no_result": {"结束·没交回结果", "Ended · no result"},
 	"lost":   {"机器失联", "Machine lost"},
 	"parked": {"已停放 · 等你", "Parked · waiting on you"}, "stopped": {"出错停住", "Stopped on an error"},
@@ -258,9 +267,36 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r := BoardRow{}
 		if b != nil {
 			r.Code, r.Title, r.Machine, r.Login, r.Repo = b.Short, b.Title, b.Machine, b.Login, b.Repo
+			r.Agent = b.Agent
+			if r.Agent != "" {
+				r.AgentBasis = "native"
+			}
 		}
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
+			r.Outcome = taskEnd(*t)
+			if r.Agent == "" && t.ActualAgent != "" {
+				r.Agent, r.AgentBasis = t.ActualAgent, "actual"
+			}
+			p := byFID[t.ParentTask]
+			if p == nil {
+				p = byRef[t.ParentTask]
+			}
+			if p != nil && p != t {
+				r.Coordinator = p.Short
+				if r.Coordinator == "" {
+					r.Coordinator = p.Ref
+				}
+			}
+			if r.Coordinator == "" && t.ParentSession != "" {
+				id := t.ParentSession
+				if i := strings.LastIndexByte(id, '/'); i >= 0 {
+					id = id[i+1:]
+				}
+				if parent := idBy[id]; parent != nil {
+					r.Coordinator = parent.Short
+				}
+			}
 			if t.Title != "" {
 				r.Title = t.Title
 			}
@@ -325,6 +361,10 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r.WorkerID, r.Machine, r.Login = wid, fs.MachineName, fs.OSUser
 		r.State = wstr(w, "state")
+		// Inventory is runtime evidence; a native ledger segment is preferred.
+		if r.Agent == "" && wstr(w, "agent") != "" {
+			r.Agent, r.AgentBasis = wstr(w, "agent"), "runtime"
+		}
 		r.Lost = fs.Availability == "lost"
 		if v, ok := w["born"].(float64); ok {
 			r.At = int64(v)
@@ -353,14 +393,14 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Group, r.Tag = "ask", "stopped"
 		case st == "exited":
 			r.Group, r.Tag = "gone", "exited"
-		case end == store.TaskSucceeded:
-			r.Group, r.Tag = "queue", "completed"
-		case end == store.TaskCancelled:
-			r.Group, r.Tag = "queue", "cancelled"
 		case st == "working":
 			r.Group, r.Tag = "work", "working"
 		case st == "looping":
 			r.Group, r.Tag = "work", "looping"
+		case end == store.TaskSucceeded:
+			r.Group, r.Tag = "queue", "retained_completed"
+		case end == store.TaskCancelled:
+			r.Group, r.Tag = "queue", "cancelled"
 		case end == "" && (code == "waiting" || (t != nil && t.Asked != "")):
 			// its turn over, it waits on you (E101: B2XT and CRFW sat in 排队中)
 			r.Group, r.Tag = "ask", "waiting_you"
@@ -407,9 +447,20 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		case end == "" && b != nil && b.Seq > 0:
 			r.Group, r.Tag, r.At = "gone", "ended_no_result", b.Closed
 		case end == "" && t.AuthorityVersion == store.TaskAuthorityVersion:
-			r.Group, r.Tag = "queue", "queued"
+			r.Group, r.Tag = "queue", "not_seen"
+			if t.State == store.TaskAccepted && t.WorkerID == "" && r.Agent == "" {
+				r.Tag = "queued"
+			}
 			if t.State == store.TaskStarting {
 				r.Tag = "starting"
+			}
+			if (r.Tag == "queued" || r.Tag == "starting") && r.Agent == "" && t.WorkerID == "" && (b == nil || b.Seq == 0) {
+				for _, a := range []string{t.ResolvedAgent, t.RequestedAgent, t.Agent} {
+					if a == "codex" || a == "claude" || a == "gemini" {
+						r.Agent, r.AgentBasis = a, "planned"
+						break
+					}
+				}
 			}
 		case end == "":
 			if t.UpdatedAt.Before(since) {
@@ -426,6 +477,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			}
 			if end == store.TaskClosed {
 				r.Tag = "ended"
+			}
+			if end == store.TaskSucceeded {
+				r.Tag = "completed"
 			}
 			if r.Group == "gone" && end == store.TaskRefused {
 				r.Tag = "refused"
@@ -460,10 +514,11 @@ func boardStateTag(st string) string {
 		return "asking"
 	case "done", "landed":
 		return "turn_done"
-	case "idle", "sleeping", "parked":
-		// a parked session (task PQ41: a web one idle past fleet.session.park_idle,
-		// its agent let go, taken back by the next line) reads as idle — the
-		// person sees no difference
+	case "starting":
+		return "starting"
+	case "parked", "sleeping":
+		return "session_parked"
+	case "idle":
 		return "idle"
 	}
 	return "unknown"
@@ -488,6 +543,9 @@ func finishBoard(rows []BoardRow) *Board {
 	})
 	byTask := map[string]int{}
 	for i, r := range rows {
+		if r.Task != "" {
+			byTask[r.Task] = i
+		}
 		if r.TaskID != "" {
 			byTask[r.TaskID] = i
 		}
@@ -511,6 +569,21 @@ func finishBoard(rows []BoardRow) *Board {
 		r := rows[i]
 		r.Depth = depth
 		r.Words = boardWords[r.Tag]
+		r.AgentWords = [2]string{"未知", "Unknown"}
+		if r.Agent != "" {
+			name := strings.ToUpper(r.Agent[:1]) + r.Agent[1:]
+			r.AgentWords = [2]string{name, name}
+			if r.AgentBasis == "planned" {
+				r.AgentWords = [2]string{name + "（计划）", name + " (planned)"}
+			}
+		}
+		if r.Tag == "queued" {
+			r.Context = [2]string{"尚未启动", "Not started"}
+		}
+		if r.Coordinator != "" && (r.Tag == "queued" || r.Tag == "starting") {
+			r.Context[0] += " · 协调负责人：" + r.Coordinator + "（后续派发请由其确认）"
+			r.Context[1] += " · Coordinator: " + r.Coordinator + " (confirm dispatch with them)"
+		}
 		out = append(out, r)
 		for _, k := range kids[i] {
 			put(k, depth+1)
@@ -541,10 +614,9 @@ func finishBoard(rows []BoardRow) *Board {
 		b.Rows = []BoardRow{}
 	}
 	h := sha1.New()
-	for _, r := range b.Rows {
-		h.Write([]byte(r.ID + "\x1f" + r.Group + "\x1f" + r.Tag + "\x1f" + r.Code + "\x1f" + r.Title + "\x1f" + r.Parent +
-			"\x1f" + strings.Join(r.Why, "\x1f") + "\x1f" + r.Origin + "\x1f" + strconv.FormatBool(r.CanTalk) + "\n"))
-	}
+	encRows, _ := json.Marshal(b.Rows)
+	h.Write(encRows)
+
 	enc, _ := json.Marshal(b.Groups)
 	h.Write(enc)
 	b.Digest = hex.EncodeToString(h.Sum(nil))[:12]

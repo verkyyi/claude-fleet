@@ -1201,9 +1201,8 @@ def hub_task(task):
             "outcome": hit[3] if len(hit) > 3 and hit[3] in TASK_ENDS else ""}
 
 
-# A task record's end (fleet_task_control.TERMINAL): a row whose record says one is
-# done (排队中) whatever its window still runs (EPIC T644 C4, the operator's 2026-10-20 word —
-# a Codex loop left running after the merge kept a closed task 在干活).
+# A task record's result (fleet_task_control.TERMINAL), separate from current
+# work. PV4D: a completed task can receive more work in its retained session.
 TASK_ENDS = ("succeeded", "failed", "cancelled", "refused")
 
 
@@ -1234,6 +1233,8 @@ def task_read(task):
         if not isinstance(rec, dict):
             return None
         t = rec.get("task") or rec
+        # Requested/resolved/agent are plans, never actual evidence. The board
+        # carries them separately as agent_basis=planned for unstarted records.
         agent = str(t.get("actual_agent") or "")
         repo = str(t.get("repo") or "")
         if not SLUG_RE.match(repo):
@@ -1963,8 +1964,8 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else far_fid(target), known)
         if not e["repo"]:
             norepo.append(e)
-        if e["state"] in ("working", "looping", "idle") and task_ended(e):
-            # its record has ended: done (排队中), even with a loop still running in its window
+        if e["state"] == "idle" and task_ended(e):
+            # A result describes the task; current work keeps its live state.
             e["state"], e["sym"] = "done", sym_of("done", e["lost"])
             e["word"] = state_words("done")
         if e["state"] != state:
@@ -2168,7 +2169,7 @@ def board_why(r):
 
 
 BOARD_SYM = {"asking": "needs", "waiting_you": "needs", "failed": "fail", "refused": "fail", "working": "work",
-             "looping": "work", "completed": "done", "turn_done": "done", "ended": "done", "exited": "exited",
+             "looping": "work", "retained_completed": "done", "completed": "done", "turn_done": "done", "ended": "done", "exited": "exited",
              "parked": "needs", "stopped": "fail"}
 
 
@@ -2214,11 +2215,20 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
+        if "agent_basis" in r or "agent_words" in r:
+            e["agent"] = r.get("agent") or ""
+            e["agent_basis"] = r.get("agent_basis") or ""
+            e["agent_words"] = r.get("agent_words")
+        e["board_context"] = board_words({"words": r.get("context") or ["", ""]})
         # 会话合一 (task PQ41): where the session was opened — web / terminal
         e["origin"] = r.get("origin") or ""
         if not e.get("act") and isinstance(r.get("at"), (int, float)):
             e["act"] = int(r["at"])             # the hub's last word for it (Q1A8: the landing's pick)
         e["word"] = board_words(r)
+        if r.get("state"):
+            e["state"] = r["state"]
+        if r.get("tag"):
+            e["sym"] = BOARD_SYM.get(r["tag"], "idle")
         e["depth"] = int(r.get("depth") or 0)
         e["foot"] = " · ".join(x for x in (e.get("text") or "", e["word"], " · ".join(
             x for x in (e.get("machine") or here, e.get("login") or me) if x)) if x)
@@ -2438,7 +2448,9 @@ def note_of(e):
     console card's 「为什么还没收」 line, one source). (text, red)."""
     tags = [t for t in (e.get("tags") or []) if t and t != e.get("repo")]
     red = any(say("view_tag_cfg_broken") in t for t in tags)
-    return " · ".join(([e["why"]] if e.get("why") else []) + tags), red
+    facts = [e.get("board_context"), e.get("word") if e.get("board") else "",
+             agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why")]
+    return " · ".join([x for x in facts if x] + tags), red
 
 
 def score(query, e):
@@ -2538,6 +2550,8 @@ def clip_name(text, room, cells, clip):
 
 
 def agent_word(e):
+    if e.get("agent_words"):
+        return board_words({"words": e["agent_words"]})
     a = e.get("agent") or ""
     return a.capitalize() if a else say("view_agent_unknown")
 
@@ -2562,6 +2576,9 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base),
             ((e.get("id") or "").ljust(ID_W) + " ", base + ("bold",))]
     if show_agent:
+        # Keep the plan marker visible even in the seven-cell engine column.
+        if e.get("agent_basis") == "planned":
+            agent = (e.get("agent") or "?").capitalize()[:3] + ("·计" if _BOARD.get("lang") == "zh" else "(P)")
         aw = ellipsis(agent, AGENT_W, cells, clip)
         segs.append((aw + " " * (AGENT_W - cells(aw)) + " ", base + (("dim",) if not e.get("agent") else ())))
     used = sum(cells(t) for t, _ in segs)

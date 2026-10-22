@@ -31,8 +31,8 @@
 #      2 show 3, the rest 2, the page keeps the written 4; once one ends its
 #      neighbour is 2 again; typing 2 lists both (an unfinished one first, never a
 #      pick), fleet_id.resolve_open says rc 2; ids/.open feeds the top bar and the
-#      notification title the same length; a row whose task record has ended is
-#      做完待收 even while its window still works (the operator's 2026-10-20 word)
+#      notification title the same length; current work stays visible even when
+#      the task has a previous result (PV4D)
 #      — fleet_id.py display_short / resolve_open / open_save, fleet-topbar.py ticket,
 #      fleet_notify.py subject
 # Exit 0 = pass.
@@ -389,10 +389,10 @@ assert by[ids[0]]["id"] == A[:3] and by[CLASH]["id"] == C[:3], (by[ids[0]]["id"]
 assert all(len(by[f]["id"]) == 2 for f in ids[1:]), [by[f]["id"] for f in ids[1:]]
 assert all(len(by[f]["code"]) >= 4 and by[f]["code"].startswith(by[f]["id"]) for f in ids), [by[f]["code"] for f in ids]
 assert any(t.strip().startswith("编号 " + by[ids[1]]["code"]) for t, _ in fv.id_page(by[ids[1]], 100)), fv.id_page(by[ids[1]], 100)
-# a record that has ended is 做完待收 even while its window works — and not unfinished
+# A past result does not hide new work (PV4D); its live identity stays addressable.
 d = by[DONE_T]
-assert d["group"] == "queue" and d["sym"] == "done" and not d["open_id"] and len(d["id"]) >= 2, d
-assert fi.open_ids() == set(ids + [CLASH]), len(fi.open_ids())
+assert d["group"] == "work" and d["sym"] == "work" and d["open_id"] and len(d["id"]) >= 2, d
+assert fi.open_ids() == set(ids + [CLASH, DONE_T]), len(fi.open_ids())
 # typing 2: both unfinished ones, never a pick; 3 is the one
 sess = lambda q: [W.get(e["target"]) for e in fv.visible(it, q, set()) if e["kind"] == "sess"]
 assert sorted(sess(A[:2].lower())) == sorted([ids[0], CLASH]), sess(A[:2])
@@ -414,4 +414,4 @@ assert by[ids[0]]["id"] == A[:2], by[ids[0]]["id"]
 assert fi.resolve_open(A[:2], fi.open_ids()) == (0, [ids[0]]) and tb.ticket("", "", ids[0]) == A[:2]
 print("   2 places: %s · %s (clash) · %s … ; after: %s" % (A[:3], C[:3], by[ids[1]]["id"], by[ids[0]]["id"]))
 PY
-st_ok_all "I  2 places: a clash shows 3, the rest 2, the page the written 4; the clash ends ⇒ 2 again; 2 typed lists both, never a pick; top bar + notification the same; an ended record is 做完待收"
+st_ok_all "I  2 places: a clash shows 3, the rest 2, the page the written 4; the clash ends ⇒ 2 again; 2 typed lists both, never a pick; top bar + notification the same; a previous result leaves current work visible"

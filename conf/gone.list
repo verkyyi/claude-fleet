@@ -237,3 +237,7 @@ re --why\s+切换 T948 bin/fleet-session-wrap.sh
 
 # C6 / T965: a terminal result never expires real background work protection.
 key FLEET_REAP_BG_GRACE T952
+
+# PV4D: mixed pending/retained rows are not a scheduler queue.
+re label:.*Queued T966 extras/web-console/src/app/work.ts
+re en:view_grp_queue_fmt.*Queued T966 bin/fleet-ui-lang.sh
