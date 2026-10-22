@@ -635,6 +635,23 @@ func (s *Store) ReissuedToken(hash string) (*ReissuedToken, error) {
 	return &rt, nil
 }
 
+// EndpointEverHeldToken is the endpoint that holds or once held the token
+// whose hash is hash — retired, or reissued away, alike (T906). It answers
+// only "whose was this?" for the log line of a refused request; it never
+// authenticates anything. ErrNoSuchEndpoint when no endpoint ever held it.
+func (s *Store) EndpointEverHeldToken(hash string) (*Endpoint, error) {
+	if hash == "" {
+		return nil, ErrNoSuchEndpoint
+	}
+	row := s.read.QueryRow(endpointColumns+
+		` FROM endpoints WHERE token_hash = ? OR prev_token_hash = ? ORDER BY enrolled_at DESC LIMIT 1`, hash, hash)
+	ep, err := scanEndpoint(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoSuchEndpoint
+	}
+	return ep, err
+}
+
 // endpointColumns keeps the SELECT list and scanEndpoint in lockstep; they
 // drifted apart once already when a column was added.
 const endpointColumns = `

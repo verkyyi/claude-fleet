@@ -489,6 +489,11 @@ type Server struct {
 	// httpStats counts this replica's requests and 5xx per minute, for the
 	// post-release watch (fleet_release_canary.go, claude-fleet#4915).
 	httpStats httpStats
+	// logQuiet keeps a repeating line to once a window per signature (T906).
+	logQuiet logQuiet
+	// underivedEPs: endpoints this replica raised fleet_underived for (T906).
+	underivedMu  sync.Mutex
+	underivedEPs map[string]bool
 }
 
 // Handler builds the router.
@@ -1147,7 +1152,14 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		if strings.HasPrefix(path, InvitePath) {
 			path = InvitePath + "…"
 		}
-		line := fmt.Sprintf("%s %s %d %s", r.Method, path, sw.status, time.Since(start).Round(time.Millisecond))
+		took := time.Since(start).Round(time.Millisecond)
+		line := fmt.Sprintf("%s %s %d %s", r.Method, path, sw.status, took)
+		if sw.status == http.StatusUnauthorized || sw.status == http.StatusForbidden {
+			// A refusal names its source, once a window per source (T906).
+			if line = s.rejectedLine(r, path, sw.status, took, time.Now()); line == "" {
+				return
+			}
+		}
 		if viewer != "" {
 			line += " viewer=" + viewer
 		}

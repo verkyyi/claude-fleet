@@ -87,6 +87,16 @@ const (
 	// within startFailedWindow, whoever asked (claude-fleet QSSW). Subject
 	// "hub"; cleared once the window holds fewer.
 	AlertStartFailed = "start_failed"
+	// AlertFleetUnderived: a node reports a fleet whose UUID does not derive
+	// from its machine id, so the hub skips it and that fleet's sessions are
+	// missing from its list (T906). Subject "<endpoint>/<fleet uuid>";
+	// cleared by the first beat of that endpoint that no longer shows it.
+	AlertFleetUnderived = "fleet_underived"
+	// AlertPoolRelogin: the hub's own quota read of a pool credential was
+	// refused (HTTP 401/403) poolReloginAfter times running (T906) — its
+	// login has gone bad. Subject "<provider>/<account>"; cleared by the
+	// next good read.
+	AlertPoolRelogin = "pool_relogin"
 )
 
 // How a raised row was handed to the hub's notifier (claude-fleet QSSW): ""
