@@ -119,7 +119,7 @@ func TestClientSettingsWhitelist(t *testing.T) {
 
 // C6: the same retention is configurable at the hub and handed to the reaper.
 func TestParkedRetentionSettingReachesNode(t *testing.T) {
-	h := newHarness(t)
+	h := newFleetHarness(t)
 	if got := h.srv.poolSettings()["FLEET_SESSION_REAP_PARKED"]; got != "259200" {
 		t.Fatalf("default parked retention: %s", got)
 	}
