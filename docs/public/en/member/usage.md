@@ -192,6 +192,8 @@ For accepted remote tasks, Tokenman verifies the selected agent before deliverin
 
 ## Webchat connections
 
+When you open a session, the page first checks whether sending is available. You can draft while it checks or reconnects, then send after it recovers; drafts are never sent automatically. A read-only sign-in or an older session without web continuation remains read-only, with an explanation on the page.
+
 Webchat goes through the hub to your home node. The hub keeps one connection to your node open, so each request is a single round trip rather than a fresh connection. The conversation still runs only on your home node, with the same conversation and quota rules; the local page works as before.
 
 If the connection drops after submission, the page reloads the conversation and says that the message may already have arrived. Review the recovered conversation before retrying. Messages, stop requests and answers are never sent again automatically.

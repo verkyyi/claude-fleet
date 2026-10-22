@@ -6910,6 +6910,13 @@ drill_chat_gate_cold_readonly() {
   WHAT="冷连接先发探测中，再由会话门明确允许发送；探测未完成不误报只读"
 }
 
+drill_chat_gate_probe_unavailable() {
+  CAP=30
+  webchat_part gate "Y a failed capability probe is unavailable, never a read-only verdict" \
+    "Y capability failure after a writable frame recovers on the same stream" || return 1
+  WHAT="能力探测失败明确暂不可达，同一流下一次成功恢复可写；只读权限不放宽"
+}
+
 drill_codex_release_shadowed() {
   CAP=30; SECS=0
   suite_holds fleet-codex-selftest.sh 'F4 managed release Codex wins over a stale CLI earlier on PATH' || return 1
