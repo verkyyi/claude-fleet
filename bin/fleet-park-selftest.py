@@ -127,7 +127,7 @@ while True:
         self.assertEqual(self.opt('@park_why'), 'idle')
         from fleet_park_metrics import census
         with patch.dict(os.environ, self.env):
-            observed = census(self.label, 'test', self.root / 'census')[self.win]
+            observed = census(self.label, 'test', self.root / 'conf/global')[self.win]
         self.assertEqual(observed['state'], 'parked')
         self.assertEqual(observed['saved_mb'], float(self.opt('@park_saved_mb')))
         self.assertEqual(observed['why'], 'idle')
@@ -162,7 +162,7 @@ while True:
             return raw.replace('\x1f', r'\037') if 'list-windows' in args else raw
         for reader in (command, escaped_rows):
             with patch.dict(os.environ, self.env), patch.object(metrics, 'command', reader):
-                readings = census(self.label, 'test', self.root / 'census')
+                readings = census(self.label, 'test', self.root / 'conf/global')
             self.assertIn(self.win, readings, readings)
             observed = readings[self.win]
             self.assertEqual(observed['state'], 'parked')

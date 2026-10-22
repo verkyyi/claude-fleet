@@ -128,7 +128,7 @@ def census(socket, session, cache_dir):
             saved_mb = saved_by_fid[fid]
         result[wid] = {"state": "parked" if parked == "停放中" else "awake",
                        "rss_mb": round(rss, 2) if known else None, "saved_mb": saved_mb,
-                       "why": "watched" if wid in watched else "failed" if parked == "失败" else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
+                       "why": "working" if parked == "接回中" else "watched" if wid in watched else "failed" if parked == "失败" else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".%d.tmp" % os.getpid())
@@ -148,7 +148,7 @@ def inventory_park(reading, state, busy):
     """
     p = dict(reading)
     quiet = p.pop("quiet", None)
-    ended = state in ("done", "looping", "needs")
+    ended = state in ("done", "looping", "needs") and p["why"] != "working"
     blocked = p["why"] == "watched" or busy == "bg"
     p["eligible"] = (False if p["state"] == "parked" or not ended or quiet is False or blocked
                      else None if quiet is None else True)

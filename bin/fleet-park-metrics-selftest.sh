@@ -70,6 +70,7 @@ def joined(**kw):
 assert joined(why='watched')['eligible'] is False
 assert joined(busy='bg')['eligible'] is False
 assert joined(state='working')['eligible'] is False
+assert joined(why='working')['eligible'] is False  # reconnecting before native state arrives
 assert joined(quiet=None)['eligible'] is None
 assert joined(quiet=False)['eligible'] is False
 assert joined()['eligible'] is True
