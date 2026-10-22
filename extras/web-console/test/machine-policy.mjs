@@ -46,3 +46,16 @@ assert.equal(versionRow({ ...machine, installs: { runtime: { version: stable } }
 assert.equal(versionRow({ ...machine, installs: undefined }, [{ ...compute,
   installs: { logins: [{ login: 'fleetverky', install: { version: stable } }] } }]).behind, false);
 console.log('machine runtime uses installed releases and excludes client Git heads PASS');
+
+const { machineSessionGroups } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+const session = (availability) => ({ availability, worker: { state: 'done' } });
+const detail = { machine: { sessions: 1 }, sessions: [session('online')], pending_sessions: [session('lost')], historical_sessions: [session('historical')] };
+assert.deepEqual(Object.fromEntries(Object.entries(machineSessionGroups(detail)).map(([k,v]) => [k,Array.isArray(v) ? v.length : v])),
+  { current: 1, pending: 1, history: 1, count: 1, partial: false });
+assert.equal(machineSessionGroups({ ...detail, machine: { sessions: null } }).count, null);
+const oldHub = machineSessionGroups({ machine: { sessions: 1 }, sessions: [session('online'), session('lost')] });
+assert.equal(oldHub.current.length, 1);
+assert.equal(oldHub.pending.length, 1);
+assert.equal(oldHub.partial, false);
+assert.equal(machineSessionGroups({ machine: { sessions: 2 }, sessions: [session('online')] }).partial, true);
+console.log('machine session counts keep pending and historical snapshots separate PASS');

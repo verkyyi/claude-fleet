@@ -41,8 +41,10 @@ type NodeDetail struct {
 	Load       NodeDetailLoad          `json:"load"`
 	Mem        NodeDetailMem           `json:"mem"`
 	// Sessions are fleet_sessions' rows on this machine, cut the same way.
-	Sessions   []FleetSession `json:"sessions"`
-	SessionsAt *time.Time     `json:"sessions_at"`
+	Sessions           []FleetSession `json:"sessions"`
+	SessionsAt         *time.Time     `json:"sessions_at"`
+	PendingSessions    []FleetSession `json:"pending_sessions"`
+	HistoricalSessions []FleetSession `json:"historical_sessions,omitempty"`
 }
 
 // NodeDetailVersion is 版本与更新: the node program and claude-fleet the
@@ -268,40 +270,8 @@ func (s *Server) nodeDetail(now time.Time, name string, visible func(hostname, o
 		d.Mem.Pressure = &p
 	}
 
-	// Sessions: fleet_sessions' rows on this machine, the same cut.
-	if fleets, err := s.Store.Fleets(); err == nil {
-		avail := s.nodeAvailability(now)
-		for _, r := range fleets {
-			if r.Hostname != host || !r.Present || (visible != nil && !visible(r.Hostname, r.OSUser)) {
-				continue
-			}
-			obs := r.ObservedAt
-			d.SessionsAt = newer(d.SessionsAt, &obs)
-			a := avail[r.EndpointID]
-			if a == "" {
-				a = "lost"
-			}
-			var ws []map[string]any
-			_ = json.Unmarshal([]byte(r.WorkersJSON), &ws)
-			for _, w := range ws {
-				var id *string
-				if x, ok := w["worker_id"].(string); ok && x != "" {
-					id = &x
-				}
-				d.Sessions = append(d.Sessions, FleetSession{WorkerID: id, MachineName: r.Hostname, OSUser: r.OSUser,
-					FleetID: r.FleetID, FleetName: r.Name, Availability: a, Worker: w,
-					ObservedAt: r.ObservedAt, AgeSec: now.Sub(r.ObservedAt).Seconds()})
-			}
-		}
-		sort.SliceStable(d.Sessions, func(a, b int) bool {
-			x, y := d.Sessions[a], d.Sessions[b]
-			if x.OSUser != y.OSUser {
-				return x.OSUser < y.OSUser
-			}
-			ka, _ := x.Worker["key"].(string)
-			kb, _ := y.Worker["key"].(string)
-			return ka < kb
-		})
+	if err := s.fillNodeSessions(d, snap, now, visible); err != nil {
+		return nil, err
 	}
 	return d, nil
 }

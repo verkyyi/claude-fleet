@@ -98,22 +98,23 @@ type FleetReport struct {
 
 // FleetRow is one registered fleet, with the machine it lives on.
 type FleetRow struct {
-	FleetID     string
-	MachineID   string
-	EndpointID  string
-	Hostname    string
-	OSUser      string
-	Name        string
-	Repo        string
-	Checkout    string
-	Agent       string
-	Repos       []string // nil = not reported; see HostedRepos
-	State       string
-	WorkerCount int
-	WorkersJSON string
-	Present     bool
-	FirstSeen   time.Time
-	ObservedAt  time.Time
+	EndpointRetired bool
+	FleetID         string
+	MachineID       string
+	EndpointID      string
+	Hostname        string
+	OSUser          string
+	Name            string
+	Repo            string
+	Checkout        string
+	Agent           string
+	Repos           []string // nil = not reported; see HostedRepos
+	State           string
+	WorkerCount     int
+	WorkersJSON     string
+	Present         bool
+	FirstSeen       time.Time
+	ObservedAt      time.Time
 }
 
 // FleetOperation is one row of the operation journal.
@@ -165,6 +166,16 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
+	// Serialize with RetireEndpointAs on Postgres as well as SQLite. An
+	// in-flight heartbeat must not restore present=1 after retirement commits.
+	var retired sql.NullString
+	err = tx.QueryRow(`SELECT retired_at FROM endpoints WHERE endpoint_id = ?`+s.d.forUpdate(), endpointID).Scan(&retired)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if retired.Valid {
+		return nil, fmt.Errorf("fleet snapshot: endpoint is retired")
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO fleet_machines (machine_id, endpoint_id, hostname, os_user, first_seen, last_seen)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -218,7 +229,7 @@ func (s *Store) UpdateFleetWorkers(fleetID, state string, count int, workersJSON
 
 const fleetCols = `f.fleet_id, f.machine_id, m.endpoint_id, m.hostname, m.os_user, f.name, f.repo,
 	f.checkout, f.agent, f.state, f.worker_count, f.workers_json, f.present, f.first_seen, f.observed_at,
-	f.repos_json`
+	f.repos_json, CASE WHEN e.retired_at IS NULL THEN 0 ELSE 1 END`
 
 // reposJSON stores a fleet's repo list: "" when the agent sent none, so a
 // row from an older agent stays distinguishable from a reported list.
@@ -244,14 +255,15 @@ func (r FleetRow) HostedRepos() []string {
 
 func scanFleet(sc interface{ Scan(...any) error }) (FleetRow, error) {
 	var r FleetRow
-	var present int
+	var present, retired int
 	var first, obs, repos string
 	err := sc.Scan(&r.FleetID, &r.MachineID, &r.EndpointID, &r.Hostname, &r.OSUser, &r.Name, &r.Repo,
-		&r.Checkout, &r.Agent, &r.State, &r.WorkerCount, &r.WorkersJSON, &present, &first, &obs, &repos)
+		&r.Checkout, &r.Agent, &r.State, &r.WorkerCount, &r.WorkersJSON, &present, &first, &obs, &repos, &retired)
 	if repos != "" {
 		_ = json.Unmarshal([]byte(repos), &r.Repos)
 	}
-	r.Present = present != 0
+	r.EndpointRetired = retired != 0
+	r.Present = present != 0 && !r.EndpointRetired
 	r.FirstSeen, _ = time.Parse(rfc, first)
 	r.ObservedAt, _ = time.Parse(rfc, obs)
 	return r, err
@@ -261,6 +273,7 @@ func scanFleet(sc interface{ Scan(...any) error }) (FleetRow, error) {
 func (s *Store) Fleets() ([]FleetRow, error) {
 	rows, err := s.read.Query(`SELECT ` + fleetCols + `
 		  FROM fleet_fleets f JOIN fleet_machines m ON m.machine_id = f.machine_id
+		 LEFT JOIN endpoints e ON e.endpoint_id = m.endpoint_id
 		 ORDER BY m.hostname, m.os_user, f.name, f.fleet_id`)
 	if err != nil {
 		return nil, err
@@ -281,6 +294,7 @@ func (s *Store) Fleets() ([]FleetRow, error) {
 func (s *Store) Fleet(fleetID string) (FleetRow, error) {
 	return scanFleet(s.read.QueryRow(`SELECT `+fleetCols+`
 		  FROM fleet_fleets f JOIN fleet_machines m ON m.machine_id = f.machine_id
+		 LEFT JOIN endpoints e ON e.endpoint_id = m.endpoint_id
 		 WHERE f.fleet_id = ?`, fleetID))
 }
 

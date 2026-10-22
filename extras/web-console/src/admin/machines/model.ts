@@ -109,6 +109,10 @@ export type JoinCodes = { codes: { label?: string; used_at?: string; joined_host
 
 // /v1/nodes/<host>
 export type FleetSession = {
+  availability?: string;
+  observed_at?: string;
+  fleet_id?: string;
+  worker_id?: string;
   machine_name?: string;
   os_user?: string;
   worker?: { key?: string; name?: string; title?: string; repo?: string; state?: string; born?: number; worker_id?: string };
@@ -143,6 +147,8 @@ export type NodeDetail = {
   load: { now: number; ncpu: number; hist: number[]; hist_step_sec: number; unread?: string[]; at: string | null };
   mem: { used: number; total: number; pressure: number | null; at: string | null };
   sessions: FleetSession[];
+  pending_sessions?: FleetSession[];
+  historical_sessions?: FleetSession[];
   sessions_at: string | null;
 };
 
@@ -378,3 +384,12 @@ export function components(v: NodeDetail["version"]): CompRow[] {
 }
 
 export const gb = (b?: number) => (Number(b) > 0 ? Number(b) / (1 << 30) : 0);
+
+// Count and current rows belong to the same server heartbeat snapshot. Last-known
+// rows must never inflate this count, including while an older hub rolls out.
+export function machineSessionGroups(d: NodeDetail) {
+  const current = (d.sessions || []).filter(s => !s.availability || s.availability === "online" || s.availability === "maintenance");
+  const pending = d.pending_sessions ?? (d.sessions || []).filter(s => s.availability === "lost" || s.availability === "unknown");
+  return { current, pending, history: d.historical_sessions || [], count: d.machine.sessions,
+    partial: d.machine.sessions != null && current.length !== d.machine.sessions };
+}

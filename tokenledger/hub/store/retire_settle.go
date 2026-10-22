@@ -29,6 +29,7 @@ import (
 
 // RetiredSettle is what one settle closed.
 type RetiredSettle struct {
+	Fleets int // snapshots made non-current; history stays intact
 	Starts int // repo_local_start rows ended retired
 	// WorkerStarts: worker_start operations on its fleets ended failed
 	// (claude-fleet#4864).
@@ -38,7 +39,7 @@ type RetiredSettle struct {
 }
 
 func (r RetiredSettle) empty() bool {
-	return r.Starts == 0 && r.WorkerStarts == 0 && len(r.Leases) == 0
+	return r.Starts == 0 && r.WorkerStarts == 0 && len(r.Leases) == 0 && r.Fleets == 0
 }
 
 func (s *Store) settleRetiredTx(tx *sql.Tx, endpointID, actor, reason string, at time.Time) (RetiredSettle, error) {
@@ -58,6 +59,17 @@ func (s *Store) settleRetiredTx(tx *sql.Tx, endpointID, actor, reason string, at
 			return out, fmt.Errorf("settle its worker starts: %w", err)
 		}
 		out.WorkerStarts = n
+		res, err := tx.Exec(`UPDATE fleet_fleets SET present = 0
+			WHERE present <> 0 AND machine_id IN
+			(SELECT machine_id FROM fleet_machines WHERE endpoint_id = ?)`, endpointID)
+		if err != nil {
+			return out, fmt.Errorf("retire its fleet snapshots: %w", err)
+		}
+		changed, err := res.RowsAffected()
+		if err != nil {
+			return out, err
+		}
+		out.Fleets = int(changed)
 	}
 	if ok, err := s.d.tableExists(tx, "fleet_leases"); err != nil {
 		return out, err
@@ -75,6 +87,9 @@ func (s *Store) settleRetiredTx(tx *sql.Tx, endpointID, actor, reason string, at
 		return out, err
 	} else if ok {
 		outcome := fmt.Sprintf("SETTLED starts=%d leases=%d", out.Starts, len(out.Leases))
+		if out.Fleets > 0 {
+			outcome += fmt.Sprintf(" fleets=%d", out.Fleets)
+		}
 		if out.WorkerStarts > 0 {
 			outcome += fmt.Sprintf(" worker_starts=%d", out.WorkerStarts)
 		}
