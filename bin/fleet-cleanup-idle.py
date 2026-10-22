@@ -1073,9 +1073,12 @@ class Cleaner:
         return False
 
     def road(self, window, snap):
-        road = self.web_park(window, snap)
-        if road is not None:
-            return road
+        if not getattr(self.args, "skip_park", False):
+            road = self.web_park(window, snap)
+            if road is not None:
+                return road
+        elif snap.get("@parked"):
+            return False
         if getattr(self, "_park_only", False):
             return False
         road = self.error_stop(window, snap)
@@ -1649,7 +1652,8 @@ class Cleaner:
                 print(f"fold deferred {self.args.only}: {exc}", file=__import__("sys").stderr)
                 return 1
         self.pin_keep_once()
-        self._park_only = not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir()
+        self._park_only = (getattr(self.args, "park_only", False) or not self.idle or not self.args.repo
+                           or not (Path(self.args.main) / ".git").is_dir())
         count = 0
         windows = self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}").split()
         if self.args.only:
@@ -1680,6 +1684,8 @@ def main():
     for name in ("main", "repo", "base"):          # not needed by --plan-room
         p.add_argument("--" + name, default="")
     p.add_argument("--limit", type=int, default=4)
+    p.add_argument("--park-only", action="store_true", help="one login-wide parking pass, including zero-repo logins")
+    p.add_argument("--skip-park", action="store_true", help="ordinary repo reaping after the login-wide parking pass")
     p.add_argument("--forge", default="github", choices=("github", "none"),
                    help="none = the repo is not on GitHub: no gh, git says what landed (issue #3601)")
     p.add_argument("--window-repo", action="store_true",

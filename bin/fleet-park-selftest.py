@@ -145,6 +145,7 @@ while True:
 
     def test_driver_parks_when_no_repo_is_hosted(self):
         self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
         self.set('@claude_state_ts', str(int(time.time()) - 600))
         self.set('@norepo', '1')
         driver = self.root / 'driver'
@@ -160,7 +161,7 @@ while True:
         p = subprocess.run(['bash', str(driver / 'fleet-cleanup-idle.sh'), 'test'],
                            env=self.env, capture_output=True, text=True, timeout=15)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(self.opt('@park_held'), 'zero-repo fleet omitted parking: ' + p.stdout + p.stderr)
+        self.assertTrue(self.opt('@park_held'), 'zero-repo fleet omitted parking: ' + p.stdout + p.stderr + ' state=' + self.opt('@claude_state') + ' ts=' + self.opt('@claude_state_ts'))
 
     def test_keyboard_bytes_after_proof_cancel_exit(self):
         self.fake()
