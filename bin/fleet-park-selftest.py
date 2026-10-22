@@ -77,6 +77,7 @@ while True:
 ''')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
+                          'printf "%s\\n" "$@" >> ' + str(self.root / 'launch-args') + '\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
                           'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + '\n')
@@ -98,6 +99,46 @@ while True:
         probe.chmod(0o755)
         self.env['FLEET_GATE_PARK_PROBE_CMD'] = str(probe)
         self.wait(lambda: self.opt('@park_relay') and self.opt('@cc_session_id'))
+
+    def parked(self):
+        self.fake()
+        self.set('@fleet_role', 'worker')
+        self.set('@worktree', str(self.root))
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid).get('ok'))
+
+    def test_parked_peer_first_turn(self):
+        # Drive fleet-peer-send.sh -> fleet_agent_deliver -> fleet_park_wake,
+        # fleet_session_gate.py and the real fleet-session-wrap.sh.
+        self.parked()
+        p = subprocess.run(['bash', str(BIN / 'fleet-peer-send.sh'), '-L', self.label,
+                            self.win, 'wake peer: first sentence'], env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('sent →', p.stdout)
+        self.assertIn('wake peer: first sentence', (self.root / 'launch-args').read_text())
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual(rows[-1]['why'], '消息')
+
+    def test_parked_report_queue_drain(self):
+        # Drive fleet-peer-queue.sh drain -> children_send -> the same gate.
+        self.parked()
+        queue = ['bash', str(BIN / 'fleet-peer-queue.sh')]
+        p = subprocess.run(queue + ['put', '-L', self.label, '--kind', 'report',
+                            '--rid', 'fixture:report', '--to-fid', self.fid],
+                           input='child result: complete', env=self.env, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = subprocess.run(queue + ['drain', '-L', self.label], env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('delivered 1', p.stdout)
+        self.assertIn('child result: complete', (self.root / 'launch-args').read_text())
+        book = self.root / 'conf/fleets' / self.label / 'delivery.ndjson'
+        self.assertEqual(json.loads(book.read_text().splitlines()[-1])['state'], 'DELIVERED')
+        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual(rows[-1]['why'], '回报')
 
     def wait(self, predicate):
         until = time.monotonic() + 6

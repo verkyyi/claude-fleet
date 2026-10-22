@@ -6362,6 +6362,14 @@ drill_c8_old_supervisor_reopen() {
 # A web session parked while a person is looking at it in a terminal (task HHV0):
 # its agent would exit under their eyes. The gate's park refuses while a terminal
 # client shows the window (a control-mode client — the hub's own — is nobody).
+drill_wake_peer_report() {
+  CAP=40; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_peer_first_turn Park.test_parked_report_queue_drain 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
+}
+
 drill_park_all_origins() {
   CAP=30; local t0 out
   t0=$(now)
