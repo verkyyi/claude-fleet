@@ -1387,6 +1387,14 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:notice_act_fwd_only)     printf 'only a result nobody took can be handed on' ;;
     zh:notice_act_far_fmt)      printf '这条在 %s 上——到那台机器的看台上转' "${1:-}" ;;
     en:notice_act_far_fmt)      printf 'this one is on %s — hand it on from there' "${1:-}" ;;
+    zh:alert_load_high_fmt)     printf '机器负载高 · %s · %s/核，已持续 %s 分钟 — 开会话和测试会变慢' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:alert_load_high_fmt)     printf 'High load · %s · %s/core for %s min — sessions and tests run slow' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:alert_load_back_fmt)     printf '机器负载高 · %s · %s/核，已持续 %s 分钟（已回落 %s）' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:alert_load_back_fmt)     printf 'High load · %s · %s/core for %s min (back to normal %s)' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    zh:alert_mem_high_fmt)      printf '机器内存高 · %s · 已用 %s%%，已持续 %s 分钟 — 机器快要换页了' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:alert_mem_high_fmt)      printf 'High memory · %s · %s%% used for %s min — the machine is about to swap' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:alert_mem_back_fmt)      printf '机器内存高 · %s · 已用 %s%%，已持续 %s 分钟（已回落 %s）' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:alert_mem_back_fmt)      printf 'High memory · %s · %s%% used for %s min (back to normal %s)' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
     zh:alert_healed_fmt)        printf '已恢复：%s' "${1:-}" ;;
     en:alert_healed_fmt)        printf 'recovered: %s' "${1:-}" ;;
     zh:notice_none)             printf '还没有消息' ;;

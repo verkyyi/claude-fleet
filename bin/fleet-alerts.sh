@@ -309,6 +309,7 @@ _fa_loadpc() {
   case "$lf" in *[!0-9]*) lf=00 ;; esac
   case "${2:-}" in ''|*[!0-9]*|0) return 0 ;; esac
   FA_LOADPC=$(( (10#$lp * 100 + 10#$lf) / $2 )); t=$(( (FA_LOADPC + 5) / 10 ))
+  # shellcheck disable=SC2034  # the rounded figure: forkless-hotpath-selftest.sh reads it
   FA_LOAD="$(( t / 10 )).$(( t % 10 ))"
 }
 
@@ -347,6 +348,73 @@ _fa_machine() {
   return 0
 }
 
+# _fa_figure <kind> <hundredths|%> → the figure a machine row shows: load as one
+# decimal per core (`0.9`), memory as a percent.
+_fa_figure() {
+  local t
+  if [ "$1" = load ]; then t=$(( ($2 + 5) / 10 )); printf '%s.%s' $(( t / 10 )) $(( t % 10 ))
+  else printf '%s' "$2"; fi
+}
+
+# _fa_hold <kind> <reading> <hi> <lo> <now> — the machine rows' hysteresis (T899).
+# One state line per kind, $G/alerts.machine.<kind>: `hi lo up peak cup cback cdone
+# cpeak` — the high streak's start, the calm streak's start (0 = broken), the
+# standing warning's start + its peak, and the last one that greyed (its start,
+# when it fell back, when it greyed, its peak). A reading between the lines breaks
+# both streaks; an unreadable one changes nothing. Sets FA_H_* to the line.
+_fa_hold() {
+  local f v="$2" hi="$3" lo="$4" now="$5" line="" x
+  f="$(fleet_usage_cache_dir)/alerts.machine.$1"
+  [ -f "$f" ] && IFS= read -r line < "$f" 2>/dev/null
+  read -r FA_H_HI FA_H_LO FA_H_UP FA_H_PEAK FA_H_CUP FA_H_CBACK FA_H_CDONE FA_H_CPEAK <<< "$line"
+  for x in FA_H_HI FA_H_LO FA_H_UP FA_H_PEAK FA_H_CUP FA_H_CBACK FA_H_CDONE FA_H_CPEAK; do
+    case "${!x:-}" in ''|*[!0-9]*) printf -v "$x" 0 ;; esac
+  done
+  case "$hi" in ''|*[!0-9]*) hi=0 ;; esac
+  case "$lo" in ''|*[!0-9]*) lo=0 ;; esac
+  case "$v" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$v" -ge "$hi" ]; then
+    [ "$FA_H_HI" -gt 0 ] || FA_H_HI=$now; FA_H_LO=0
+  elif [ "$v" -lt "$lo" ]; then
+    [ "$FA_H_LO" -gt 0 ] || FA_H_LO=$now; FA_H_HI=0
+  else
+    FA_H_HI=0 FA_H_LO=0
+  fi
+  if [ "$FA_H_UP" = 0 ] && [ "$FA_H_HI" -gt 0 ] && [ $(( now - FA_H_HI )) -ge "${FLEET_ALERTS_HOLD_SECS:-300}" ]; then
+    FA_H_UP=$FA_H_HI FA_H_PEAK=$v
+  fi
+  if [ "$FA_H_UP" -gt 0 ]; then
+    [ "$v" -gt "$FA_H_PEAK" ] && FA_H_PEAK=$v
+    if [ "$FA_H_LO" -gt 0 ] && [ $(( now - FA_H_LO )) -ge "${FLEET_ALERTS_CALM_SECS:-600}" ]; then
+      FA_H_CUP=$FA_H_UP FA_H_CBACK=$FA_H_LO FA_H_CDONE=$now FA_H_CPEAK=$FA_H_PEAK FA_H_UP=0 FA_H_PEAK=0
+    fi
+  fi
+  mkdir -p "${f%/*}" 2>/dev/null
+  printf '%s %s %s %s %s %s %s %s\n' "$FA_H_HI" "$FA_H_LO" "$FA_H_UP" "$FA_H_PEAK" \
+    "$FA_H_CUP" "$FA_H_CBACK" "$FA_H_CDONE" "$FA_H_CPEAK" > "$f.$$" 2>/dev/null &&
+    mv -f "$f.$$" "$f" 2>/dev/null || rm -f "$f.$$"
+}
+
+# _fa_hold_row <kind> <reading> <hi> <lo> <now> <condition> <standing key> <greyed key>
+# — the machine-<kind> row: a warning while one stands (its detail is the message
+# the person reads, its target the message's tag), then a healed row for
+# FLEET_ALERTS_TRACE carrying the greyed words the writer amends that message to.
+_fa_hold_row() {
+  local kind="$1" now="$5" co="$6" host fig unit
+  _fa_hold "$kind" "$2" "$3" "$4" "$now"
+  host=$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]'); host=${host%%.*}
+  unit=/core; [ "$kind" = mem ] && unit=%
+  if [ "$FA_H_UP" -gt 0 ]; then
+    case "${2:-}" in ''|*[!0-9]*) fig=$(_fa_figure "$kind" "$FA_H_PEAK") ;; *) fig=$(_fa_figure "$kind" "$2") ;; esac
+    _fa_row "machine-$kind" warning machine "$co" "$fig$unit" "$FA_H_UP" machine 0 "machine-$kind-$FA_H_UP" \
+      "$(sh "$_FA_BIN/fleet-ui-lang.sh" t "$7" "${host:-?}" "$fig" $(( (now - FA_H_UP) / 60 )) 2>/dev/null)"
+  elif [ "$FA_H_CDONE" -gt 0 ] && [ $(( now - FA_H_CDONE )) -lt "${FLEET_ALERTS_TRACE:-1800}" ]; then
+    fig=$(_fa_figure "$kind" "$FA_H_CPEAK")
+    _fa_row "machine-$kind" healed machine "$co" "$fig$unit" "$FA_H_CUP" machine "$FA_H_CDONE" "machine-$kind-$FA_H_CUP" \
+      "$(sh "$_FA_BIN/fleet-ui-lang.sh" t "$8" "${host:-?}" "$fig" $(( (FA_H_CBACK - FA_H_CUP) / 60 )) "$(_fa_hhmm "$FA_H_CBACK")" 2>/dev/null)"
+  fi
+}
+
 # fleet_alerts_compute [--kick] — every alert that holds RIGHT NOW, as TSV rows
 # (since=0 means "carry it over from the previous file, or now"). A line
 # `#carry-needs` asks the writer to keep the previous file's needs rows: the
@@ -355,7 +423,7 @@ fleet_alerts_compute() {
   local kick=0 now cstale ckick trace dn du dnames
   local dkick dtrace free floor target af at nf label rest model until fb seen
   [ "${1:-}" = --kick ] && kick=1
-  now=$(fleet_now)
+  now=${FLEET_ALERTS_NOW:-$(fleet_now)}   # FLEET_ALERTS_NOW: a selftest's clock
   trace="${FLEET_COLLECT_KICK_TRACE:-1800}"
 
   # --- dash = the collector (issue #636): the stale alarm, its self-heal, its trace.
@@ -404,16 +472,18 @@ fleet_alerts_compute() {
 
   # --- machine: 负载 / 内存 in the red (issue #1616). The bar stopped drawing
   # them — they took room on every client while normal — so the moment they turn
-  # red is a warning here instead. The bands are the ones the bar coloured by:
-  # the 1-minute load PER CORE ≥ 0.8, used memory ≥ 85 %. FLEET_ALERTS_MACHINE=0 off.
+  # red is a warning here instead. They hold (T899, 错误调研 E): one sample over the
+  # line raised a ▲ and the next under it a 「已恢复」, 182 messages a day on a busy
+  # Mac. Now the 1-minute load PER CORE must stay ≥ 0.9 (used memory ≥ 85 %) for
+  # FLEET_ALERTS_HOLD_SECS (300) before ONE warning stands, and under 0.6 (80 %)
+  # for FLEET_ALERTS_CALM_SECS (600) before it greys — the same message amended,
+  # never a second one (_fa_hold). FLEET_ALERTS_MACHINE=0 off.
   if [ "${FLEET_ALERTS_MACHINE:-1}" != 0 ]; then
     _fa_machine
-    [ -n "$FA_LOADPC" ] && [ "$FA_LOADPC" -ge "${FLEET_ALERTS_LOAD_PCT:-80}" ] &&
-      _fa_row machine-load warning machine 'load high' "$FA_LOAD/core" 0 machine 0 '' \
-        'the 1-minute load per core is in the red: spawns and selftests run slow'
-    [ -n "$FA_MEMPC" ] && [ "$FA_MEMPC" -ge "${FLEET_ALERTS_MEM_PCT:-85}" ] &&
-      _fa_row machine-mem warning machine 'memory high' "$FA_MEMPC%" 0 machine 0 '' \
-        'used memory is in the red: the box is about to swap'
+    _fa_hold_row load "$FA_LOADPC" "${FLEET_ALERTS_LOAD_PCT:-90}" "${FLEET_ALERTS_LOAD_LO_PCT:-60}" "$now" \
+      'load high' alert_load_high_fmt alert_load_back_fmt
+    _fa_hold_row mem "$FA_MEMPC" "${FLEET_ALERTS_MEM_PCT:-85}" "${FLEET_ALERTS_MEM_LO_PCT:-80}" "$now" \
+      'memory high' alert_mem_high_fmt alert_mem_back_fmt
   fi
 
   # --- service: a registered background service / scheduled task meant to run
@@ -557,7 +627,7 @@ fleet_alerts_write() {
   local f cur prev="" now trace line row id sev su co va si ac he ta de out="" ids="|" carry=0 pid act="|" said=""
   f=$(fleet_alerts_file)
   mkdir -p "${f%/*}" 2>/dev/null
-  now=$(fleet_now)
+  now=${FLEET_ALERTS_NOW:-$(fleet_now)}
   trace="${FLEET_ALERTS_TRACE:-1800}"
   cur=$(fleet_alerts_compute "$@")
   _fa_entry_hostkey
@@ -584,6 +654,9 @@ fleet_alerts_write() {
     out="$out$(_fa_json "$id$_FA_US$sev$_FA_US$su$_FA_US$co$_FA_US$va$_FA_US$si$_FA_US$ac$_FA_US$he$_FA_US$ta$_FA_US$de")"$'\n'
     case "$sev:$id:$act" in
       alarm:ev-*|warning:ev-*) ;;
+      # a machine row's message is its detail, tagged so the greying amends it (T899)
+      warning:machine-*) case "$act" in *"|$id|"*) ;; *) said="$said$sev$_FA_US$de$_FA_US$ta"$'\n' ;; esac ;;
+      healed:machine-*) case "$act" in *"|$id|"*) said="${said}amend$_FA_US$de$_FA_US$ta"$'\n' ;; esac ;;
       alarm:*|warning:*) case "$act" in *"|$id|"*) ;; *) said="$said$sev$_FA_US$su · $co${va:+ · $va}"$'\n' ;; esac ;;
     esac
   done <<< "$cur"
@@ -603,7 +676,8 @@ fleet_alerts_write() {
       alarm|warning)
         line="${line/\"severity\":\"$sev\"/\"severity\":\"healed\"}"
         line="${line/\"healed_at\":0,/\"healed_at\":$now,}"
-        said="${said}healed$_FA_US${BASH_REMATCH[3]} · ${BASH_REMATCH[4]}"$'\n' ;;
+        # a machine row never says 「已恢复」: its own message greys (T899)
+        case "$id" in machine-*) ;; *) said="${said}healed$_FA_US${BASH_REMATCH[3]} · ${BASH_REMATCH[4]}"$'\n' ;; esac ;;
       healed) [ $(( now - he )) -lt "$trace" ] || continue ;;
       needs) [ "$carry" = 1 ] || continue ;;
       *) continue ;;
@@ -613,10 +687,11 @@ fleet_alerts_write() {
   pid=$$
   printf '%s' "$out" > "$f.$pid" 2>/dev/null && mv -f "$f.$pid" "$f" 2>/dev/null || rm -f "$f.$pid"
   printf '%s\n' "$now" > "$f.ts.$pid" 2>/dev/null && mv -f "$f.ts.$pid" "$f.ts" 2>/dev/null || rm -f "$f.ts.$pid"
-  while IFS=$_FA_US read -r sev su; do
+  while IFS=$_FA_US read -r sev su ta; do
     case "$sev" in
       alarm) _fa_notice error "$su" --no-draw --kind alert --source alert:appear ;;
-      warning) _fa_notice warn "$su" --no-draw --kind alert --source alert:appear ;;
+      warning) _fa_notice warn "$su" --no-draw --kind alert --source alert:appear ${ta:+--tag "$ta"} ;;
+      amend) python3 "$_FA_BIN/fleet_notice.py" amend "$ta" info "$su" </dev/null >/dev/null 2>&1 || : ;;
       healed) _fa_notice info "$(sh "$_FA_BIN/fleet-ui-lang.sh" t alert_healed_fmt "$su" 2>/dev/null)" --no-draw --kind alert --source alert:healed ;;
     esac
   done <<< "$said"

@@ -90,7 +90,7 @@
 2.6 fleet-agent-defaults-selftest.sh
 11.8 fleet-agent-route-selftest.sh
 11.3 fleet-agent-team-selftest.sh
-14.9 fleet-alerts-selftest.sh
+40.0 fleet-alerts-selftest.sh
 17.8 fleet-answer-selftest.sh
 0.2 fleet-attach-selftest.sh
 28.7 fleet-await-selftest.sh
