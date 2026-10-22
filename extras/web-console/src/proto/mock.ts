@@ -23,7 +23,9 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   // background, or holding a reply the page has not shown
   chat?: "claude" | "codex"; codex?: "ask" | "busy" | "new";
   // 接管 (claude-fleet VV8F): the followed terminal session idle (接管 can go) or answering (等它说完)
-  view?: "idle" | "busy" };
+  view?: "idle" | "busy";
+  // a person's six (claude-fleet WD8F): a reply still running (新对话 can go), or one the home was stopped in (重试)
+  wd8f?: "busy" | "cut" };
 
 // 接管 / 交回 (VV8F): whether this page holds the followed session now
 const VIEW_SID = "5b1e0000-0000-4000-8000-0000000000b2";
@@ -31,6 +33,17 @@ let viewHeld = false;
 
 const SALES_REPLY =
   "看板做好了，按 **华东 / 华南 / 华北** 三块分开：\n\n| 区域 | 总额 | 订单 |\n|---|--:|--:|\n| 华东 | ¥1,284,300 | 412 |\n| 华南 | ¥906,120 | 318 |\n| 华北 | ¥655,480 | 247 |\n\n链接：dash-w41（团队可见）。要我顺便写一页周报发到群里吗？";
+
+// WD8F: a turn the home was stopped in — its background command's notice is one line now
+const wd8fItems: Record<string, unknown>[] = [
+  { t: "user", text: "你查不到用户旅程数据吗" },
+  { t: "text", d: "查得到，现在有了通道。我直接查 prod 的旅程表。" },
+  { t: "tool", id: "wd1", name: "Bash", summary: "psql prod -c 'select count(*) from user_journey'" },
+  { t: "tool_result", id: "wd1", text: "count 18342" },
+  { t: "tool", id: "wd2", name: "Bash", summary: "python3 journey_report.py --since 7d &" },
+  { t: "tool_result", id: "wd2", text: "Command running in background" },
+  { t: "note", kind: "task", text: "后台命令没跑完：上一轮回复中途被打断了" },
+];
 
 // the terminal's last turns (T810): what a session there said before it came over
 const termItems: Record<string, unknown>[] = [
@@ -349,7 +362,7 @@ export async function install(): Promise<string> {
       case "/v1/nodes": return ok({ nodes: [
         { endpoint_id: "e1", hostname: "mac-mini", os_user: me.login, status: "online", load1: 1.9, ncpu: 8, sessions: 3, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
         { endpoint_id: "e2", hostname: "studio-2", os_user: me.login, status: "online", load1: 0.6, ncpu: 12, sessions: 0, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
-      ], machines: [{ hostname: "mac-mini", alias: "mac-mini" }, { hostname: "studio-2", alias: "studio-2" }] });
+      ], machines: [{ hostname: "mac-mini", alias: "h1" }, { hostname: "studio-2", alias: "h2" }] });
       case "/v1/me/identities": {
         const m = (init?.method || "GET").toUpperCase();
         if (m === "POST") {
@@ -375,6 +388,10 @@ export async function install(): Promise<string> {
       case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
       case "/v1/chat/conversation": {
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);
+        if (sc.wd8f && !url.includes("provider=codex")) return ok({ items: wd8fItems, asks: [], models, default: "opus", last: "turn-a1",
+          providers: ["claude", "codex"], others: { codex: { busy: false, last: "turn-c1" } },
+          busy: sc.wd8f === "busy", turn: sc.wd8f === "busy" ? "turn-busy" : "", session: "5b1e0000-0000-4000-8000-0000000000a1", cwd: "/Users/" + me.login,
+          ...(sc.wd8f === "cut" ? { interrupted: { text: "你查不到用户旅程数据吗", at: new Date().toISOString() } } : {}) });
         // a trial a 试用二维码 just started: its home on its way (claude-fleet MRGB)
         if (state === "opening") return ok({ code: "no_home", error: "正在为你开家（mac-1），通常一两分钟，稍后刷新" }, 409);
         const codex = url.includes("provider=codex");

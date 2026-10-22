@@ -31,7 +31,7 @@ import { useBack, usePage, useShell } from "./Shell";
 import { sessionPath, WEB_CHAT_PATH } from "./SessionList";
 import { shellPath } from "./legacy";
 import {
-  AGENTS, blocker, CHOICE_KEY, fixChoice, machinesOf, readChoice, rowForRequest, startArgs, targetOf,
+  AGENTS, blocker, CHOICE_KEY, fixChoice, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf, TOUCH_PRIMARY,
   type Agent, type Choice, type Home, type Mode, type Start,
 } from "./new-session";
 import { useWorkRows } from "./work-rows";
@@ -135,7 +135,8 @@ export default function NewSession() {
   };
   const start = () => { if (canStart) void startSession({ ...choice, words: shell ? "" : words }); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) { e.preventDefault(); start(); }
+    const touch = typeof matchMedia === "function" && matchMedia(TOUCH_PRIMARY).matches;
+    if (sendsOnEnter({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, touch)) { e.preventDefault(); start(); }
   };
 
   return (

@@ -40,7 +40,13 @@ export type Item =
   // more: a terminal session read along carries its output's start only (task YP39)
   | { t: "tool_result"; id: string; text?: string; error?: boolean; more?: boolean }
   | { t: "stopped" }
-  | { t: "error"; msg: string; code?: string };
+  | { t: "error"; msg: string; code?: string }
+  // a line Claude Code wrote to the agent itself — a background task's notice
+  // (task WD8F): one quiet line in the reply, never the person's bubble
+  | { t: "note"; kind?: string; text: string };
+
+// the turn the home did not see end (it was stopped mid-answer — task WD8F): its words, for 重试
+export type Interrupted = { text: string; pics?: number; at?: string } | null;
 
 type Pic = MediaPic;
 export type PageCard = { t: "page"; id?: string; title: string; url?: string; status: string; proposal?: string;
@@ -185,6 +191,9 @@ export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Ans
         if (last?.more) m.content[m.content.length - 1] = part; else m.content.push(part);
         break;
       }
+      case "note":
+        assistant(i).content.push({ type: "text", text: `\n\n*${it.text}*\n\n` } as Part);
+        break;
       case "stopped":
         assistant(i).status = { type: "incomplete", reason: "cancelled" };
         cur = null;
@@ -281,6 +290,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   // the assistants the home offers (an older home, or one without codex: none said ⇒ Claude only)
   const [providers, setProviders] = useState<Provider[]>(["claude"]);
   const [last, setLast] = useState("");
+  const [interrupted, setInterrupted] = useState<Interrupted>(null);
   const hadCopy = useRef(false);
   // the history this browser kept (task KSQG) is on the page, before copy or home
   const hadLocal = useRef(false);
@@ -303,6 +313,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   const transport = useRef(new AbortController());
   const follow = useRef<number | undefined>(undefined);
   const historyRead = useRef(0);
+  // bumped by 新对话: a stream from before it is the conversation put away (task WD8F)
+  const convGen = useRef(0);
 
   const load = useCallback(async () => {
     clearTimeout(follow.current);
@@ -415,6 +427,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     setOthers(j.others && typeof j.others === "object" ? j.others : {});
     setProviders(Array.isArray(j.providers) ? j.providers.filter((p: string): p is Provider => PROVIDERS.includes(p as Provider)) : ["claude"]);
     setLast(String(j.last || ""));
+    setInterrupted(j.interrupted && typeof j.interrupted.text === "string" ? j.interrupted : null);
     turnId.current = j.turn || null;
     setLoaded(true);
     // a turn this page did not start (or lost): follow it; a terminal holding it: follow that
@@ -457,9 +470,20 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem(modelKey(provider), m); }, [provider]);
 
   // 新对话: this side starts over; the other side and the history file stay
+  // — mid-answer too (task WD8F): the home lets that turn answer on, put away
+  // with its conversation; this page lets go of its stream and starts clean
   const startNew = useCallback(async () => {
-    if (!(await newChat(provider, transport.current.signal)).ok) { setNotice(tr("没能开新对话，稍后再试。", "Could not start a new conversation; try again.")); return; }
-    setItems([]); setAsks([]); setResume(null);
+    const r = await newChat(provider, transport.current.signal);
+    if (!r.ok) { setNotice(r.error ? tr(`没能开新对话：${r.error}`, `Could not start a new conversation: ${r.error}`) : tr("没能开新对话，稍后再试。", "Could not start a new conversation; try again.")); return; }
+    if (streaming.current) {
+      ++convGen.current;
+      transport.current.abort();
+      transport.current = new AbortController();
+      streaming.current = false;
+      turnId.current = null;
+      setBusy(false);
+    }
+    setItems([]); setAsks([]); setResume(null); setInterrupted(null); setNotice("");
     await load();
   }, [provider, load]);
 
@@ -476,7 +500,9 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     clearTimeout(follow.current);
     ++historyRead.current;
     streaming.current = true;
+    const gen = convGen.current;
     setLoaded(true);
+    setInterrupted(null);
     setItems((xs) => [...xs, { t: "user", text, ...(images.length ? { images: images.map((g) => ({ thumb: `data:${g.media_type};base64,${g.data}` })) } : {}) }]);
     setAsks([]);
     setBusy(true);
@@ -491,6 +517,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
         return;
       }
       await readLines(r, (batch) => {
+        if (gen !== convGen.current) return;               // put away by 新对话: not this page's any more
         const add: Item[] = [];
         const newAsks: Ask[] = [];
         for (const o of batch) {
@@ -514,11 +541,14 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     } catch {
       lost = true;
     } finally {
-      streaming.current = false;
-      setBusy(false);
-      turnId.current = null;
+      if (gen === convGen.current) {
+        streaming.current = false;
+        setBusy(false);
+        turnId.current = null;
+      }
       turnEnd.current?.();
     }
+    if (gen !== convGen.current) return;
     // the line dropped; the turn goes on — pick it back up. A finished turn
     // reloads too: the transcript is the record, the stream was only its preview.
     if (lost) { await load(); setNotice("连接中断，消息可能已送达。请查看对话，再决定是否重试。"); }
@@ -528,6 +558,15 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       if (hadCopy.current) void load();
     }
   }, [model, load]);
+
+  // 重试 (task WD8F): the words of a turn the home was stopped in, said again
+  const retry = useCallback(() => {
+    const it = interrupted;
+    if (!it?.text) return;
+    setInterrupted(null);
+    void onNew({ content: [{ type: "text", text: it.text }] } as unknown as AppendMessage);
+  }, [interrupted, onNew]);
+  const dismissInterrupted = useCallback(() => setInterrupted(null), []);
 
   const onCancel = useCallback(async () => {
     if (!turnId.current) return;
@@ -601,5 +640,5 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   });
 
   return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync, owner, handed, takeOver, taking,
-    provider, providers, others, last, startNew, loaded };
+    provider, providers, others, last, startNew, loaded, interrupted, retry, dismissInterrupted };
 }

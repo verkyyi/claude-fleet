@@ -96,7 +96,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,media,links,send,pages,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,media,links,send,pages,aside,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -136,9 +136,10 @@ const PROMPTLOG = join(T, "prompts.ndjson");                  // every prompt th
 const TOOLLOG = join(T, "tool.txt");                          // what browser_context answered (M)
 const SPACELOG = join(T, "space.ndjson");                     // the space server a trial's agent got (S, task XA4R)
 const QUERYLOG = join(T, "queries.log");                     // one line per query() — a started agent (C2)
+const HOLDFLAG = join(T, "hold.go");                          // a "hold" turn answers once this is there (U, task WD8F)
 const sdk = join(T, "sdk.mjs");
 writeFileSync(sdk, `
-import { writeFileSync, appendFileSync, mkdirSync, realpathSync } from "node:fs";
+import { writeFileSync, appendFileSync, mkdirSync, realpathSync, existsSync } from "node:fs";
 import { join } from "node:path";
 const SID = ${JSON.stringify(SID)};
 export const tool = (name, description, shape, handler) => ({ name, handler });
@@ -227,6 +228,30 @@ async function* one(prompt, options) {
     const m = { type: "assistant", message: { content: [{ type: "tool_use", id: "tu-" + prompt, name: "mcp__fleet_chat__show_page", input }] } };
     appendFileSync(tr, JSON.stringify(m) + "\\n");
     yield { ...m, session_id: SID };
+    yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
+    return;
+  }
+  if (prompt === "hold") {                 // a turn that answers only when told (U): 新对话 must not cut it
+    const sig = options.abortController.signal;
+    while (!existsSync(${JSON.stringify(HOLDFLAG)})) {
+      if (sig.aborted) throw new Error("aborted");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const m = { type: "assistant", message: { content: [{ type: "text", text: "答完了" }] } };
+    appendFileSync(tr, JSON.stringify(m) + "\\n");
+    yield { ...m, session_id: SID };
+    yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
+    return;
+  }
+  if (prompt === "notice") {               // a background task's notice + Claude Code's filler (U)
+    const lines = [
+      { type: "user", origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>\\n<task-id>b1</task-id>\\n<status>stopped</status>\\n<summary>Background shell command didn't finish before the previous session ended</summary>\\n</task-notification>" } },
+      { type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "接着说" }] } },
+    ];
+    for (const m of lines) appendFileSync(tr, JSON.stringify(m) + "\\n");
+    yield { type: "assistant", session_id: SID, message: { model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } };
+    yield { type: "assistant", session_id: SID, message: { content: [{ type: "text", text: "接着说" }] } };
     yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
     return;
   }
@@ -911,6 +936,50 @@ if (part("send")) {
   ok((await post(JSON.stringify({ text: "x".repeat(1200 * 1024) }))).status === 413, "R a request past the bound is refused 413");
   await sstop(sv);
 }
+// ---- U: 新对话 mid-answer, a turn cut off, a background task's notice (task WD8F) -----------
+if (part("aside")) {
+  mkdirSync(homeOf("u"), { recursive: true });
+  SSTATE = stateOf("u"); SOCK = join(SSTATE, "chat.sock");
+  let sv = (await sstart(["--socket"], asHome("u"))).p;
+  const conv = async () => JSON.parse((await sreq("/api/conversation")).body);
+  const busyNow = async () => JSON.parse((await sreq("/api/busy")).body).busy;
+  const until = async (f, ms = 5000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await f()) return true; await new Promise((r) => setTimeout(r, 50)); } return false; };
+  // 新对话 while a turn answers: 200, the new conversation is free, the old turn answers on
+  rmSync(HOLDFLAG, { force: true });
+  const held = sturn("hold");
+  ok(await until(async () => (await conv()).busy), "U a held turn is running");
+  const nw = await sreq("/api/new", { method: "POST", headers: { "X-Fleet-Webchat": "1" } });
+  ok(nw.status === 200, `U 新对话 mid-answer is not refused (${nw.status})`);
+  const fresh = await conv();
+  ok(!fresh.busy && fresh.items.length === 0 && !fresh.session, "U …the new conversation is empty and free at once");
+  ok(await busyNow(), "U …/api/busy still says busy: the put-aside turn answers on");
+  writeFileSync(HOLDFLAG, "go");
+  const hr = await held;
+  ok(hr.lines.some((o) => o.t === "text" && o.d === "答完了") && hr.lines.some((o) => o.t === "done") && !hr.lines.some((o) => o.t === "stopped"),
+    "U …and ends with its answer, never stopped");
+  ok(await until(async () => !(await busyNow())), "U …then nothing is busy");
+  const saved = JSON.parse(readFileSync(join(SSTATE, "conversation.json"), "utf8"));
+  ok(saved.put_away?.at(-1)?.session === SID && !saved.session, "U the put-away entry learned its session; the new one has none yet");
+  // a turn the service did not see end: said on the next start, with its words
+  rmSync(HOLDFLAG, { force: true });
+  const cut = sturn("hold").catch(() => null);
+  ok(await until(async () => (await conv()).busy), "U a second held turn is running");
+  await sstop(sv);
+  await cut;
+  sv = (await sstart(["--socket"], asHome("u"))).p;
+  const back = await conv();
+  ok(back.interrupted?.text === "hold" && !back.busy, `U a turn cut off is said on the next start, with its words (${JSON.stringify(back.interrupted || null)})`);
+  // a background task's notice is one quiet line; Claude Code's filler is none
+  const nt = await sturn("notice");
+  ok(!nt.lines.some((o) => o.t === "text" && /No response requested/.test(o.d)), "U the live stream carries no «No response requested.»");
+  const after = await conv();
+  ok(!after.interrupted, "U …the next turn clears the cut-off notice");
+  ok(after.items.some((i) => i.t === "note" && i.kind === "task" && /上一轮回复中途被打断/.test(i.text)), "U a task notice reads as one note");
+  ok(!after.items.some((i) => (i.t === "user" && /task-notification/.test(i.text)) || (i.t === "text" && /No response requested/.test(i.d))),
+    "U …never the raw XML as the person's bubble, never the filler");
+  ok(after.items.some((i) => i.t === "text" && i.d === "接着说"), "U …the real reply stays");
+  await sstop(sv);
+}
 // ---- S: the agent's web pages (task T773 ④) ------------------------------------------------
 if (part("pages")) {
   const H = homeOf("pg");
@@ -1126,8 +1195,12 @@ PORT = await start();
 const conv2 = JSON.parse((await req("/api/conversation", { headers: me })).body);
 ok(conv2.session === SID, "F after a restart the same conversation (and the cookie still holds)");
 let stopped = false;
+// the stop key once the agent has the turn (its session line): a stop that comes
+// earlier, while the agent still opens, ends the turn before the agent sees it (WD8F)
+let tid2 = "";
 const st2 = turnStream("slow", async (o) => {
-  if (o.t === "turn") seen.push((await req("/api/stop", { method: "POST", headers: { ...me, ...PAGE }, body: { turn: o.id } })).body);
+  if (o.t === "turn") tid2 = o.id;
+  if (o.t === "session") seen.push((await req("/api/stop", { method: "POST", headers: { ...me, ...PAGE }, body: { turn: tid2 } })).body);
   if (o.t === "stopped") stopped = true;
 });
 await st2;

@@ -11,6 +11,7 @@ an old `server.mjs --socket` from 10-15 on the old code path). So:
 
     fleet-service-takeover.py --name <svc> --socket <path> [--pidfile <file>]
                               --match <argv word>… [--shell-match <argv word>…]
+                              [--busy <http path>…]
 
   * nobody answers on <path>                ⇒ exit 0, nothing done
   * the holder is an orphan of <svc>        ⇒ TERM, wait FLEET_SERVICE_TAKEOVER_WAIT
@@ -31,13 +32,54 @@ an old `server.mjs --socket` from 10-15 on the old code path). So:
 The holder is found by the pid file the server writes when it listens, else
 `lsof -t <path>`. Exit 2 = usage. Seams: FLEET_SERVICE_TAKEOVER_WAIT,
 FLEET_SERVICE_TAKEOVER_REAPER (a pid that counts as init).
+
+An orphan still in the middle of something is not cut off (task WD8F: the old
+web chat copy stopped mid-answer at every release and takeover). With --busy,
+before the TERM the holder is asked over its own socket — `GET <path>`, the
+first path that answers 200 with a JSON `busy` decides (a newer and an older
+server's word: `--busy /api/busy --busy /api/state`) — and while it says busy
+the takeover waits, every 2 s, at most FLEET_SERVICE_TAKEOVER_BUSY_SECS (900);
+one line says it waited. No answer is not busy: an old copy that cannot say
+is stopped as before.
 """
+import json
 import os
 import signal
 import socket
 import subprocess
 import sys
 import time
+
+
+def busy(path, paths):
+    """The holder's own word on whether it is in the middle of something: the
+    first of `paths` it answers 200 with a JSON {"busy": …} — else None."""
+    for p in paths:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(3)
+        try:
+            s.connect(path)
+            s.sendall(("GET %s HTTP/1.0\r\nHost: localhost\r\n\r\n" % p).encode())
+            buf = b""
+            while len(buf) < 65536:
+                b = s.recv(4096)
+                if not b:
+                    break
+                buf += b
+        except OSError:
+            continue
+        finally:
+            s.close()
+        head, _, body = buf.partition(b"\r\n\r\n")
+        if not head.startswith(b"HTTP/") or head.split(b" ", 2)[1:2] != [b"200"]:
+            continue
+        try:
+            v = json.loads(body.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if isinstance(v, dict) and "busy" in v:
+            return bool(v["busy"])
+    return None
 
 
 def answers(path):
@@ -162,7 +204,7 @@ def stop(pid, wait):
 
 def main(argv):
     name = sock = pidfile = None
-    words, shell = [], []
+    words, shell, busy_paths = [], [], []
     it = iter(argv)
     for a in it:
         v = next(it, None)
@@ -178,16 +220,35 @@ def main(argv):
             words.append(v)
         elif a == "--shell-match":
             shell.append(v)
+        elif a == "--busy":
+            busy_paths.append(v)
         else:
             break
     else:
         if name and sock and words:
-            return run(name, sock, pidfile, words, shell)
+            return run(name, sock, pidfile, words, shell, busy_paths)
     print(__doc__.split("\n\n")[2], file=sys.stderr)
     return 2
 
 
-def run(name, sock, pidfile, words, shell=()):
+def wait_idle(name, sock, paths):
+    """While the holder says it is busy, wait (bounded); True once it is not."""
+    try:
+        cap = float(os.environ.get("FLEET_SERVICE_TAKEOVER_BUSY_SECS") or 900)
+    except ValueError:
+        cap = 900.0
+    t0 = time.time()
+    while busy(sock, paths):
+        if time.time() - t0 >= cap:
+            print("fleet-service %s: %s 的旧副本忙了 %ds 还没停，不再等" % (name, sock, cap), file=sys.stderr)
+            return False
+        time.sleep(2)
+    if time.time() - t0 >= 1:
+        print("fleet-service %s: 等旧副本答完手上那一轮（%ds）再接管" % (name, time.time() - t0), file=sys.stderr)
+    return True
+
+
+def run(name, sock, pidfile, words, shell=(), busy_paths=()):
     if not os.path.exists(sock) or not answers(sock):
         return 0
     try:
@@ -204,6 +265,8 @@ def run(name, sock, pidfile, words, shell=()):
         print("fleet-service %s: %s 被占着：%s — 不是本服务的孤儿，没动它；它是手动起的就停掉它（kill <pid>），"
               "是另一个受管副本就 fleet service stop %s 只留一个" % (name, sock, who, name), file=sys.stderr)
         return 3
+    if busy_paths:
+        wait_idle(name, sock, busy_paths)
     for p in orph:
         if not alive(p):  # a shell that ended with its child
             continue

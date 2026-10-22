@@ -228,10 +228,28 @@ const OwnerBanner: FC = () => {
     </div>
   );
 };
+// the last turn did not finish here — the home was stopped mid-answer (a release,
+// a takeover; task WD8F): said in one line, and its words go again on one tap
+const InterruptedBanner: FC = () => {
+  const { interrupted, retry, dismissInterrupted, busy } = useChat();
+  if (!interrupted || busy) return null;
+  return (
+    <div role="status" data-testid="interrupted-banner"
+      className="border-border bg-card mx-auto flex w-full max-w-xl items-center gap-2 rounded-full border py-1.5 ps-4 pe-1.5 text-[13px] leading-snug shadow-xs">
+      <span className="bg-clay size-2 shrink-0 rounded-full" />
+      <span className="min-w-0 flex-1">
+        {tr("上一句没答完：服务那边重启，把回复打断了。", "The last reply was cut off: the service restarted mid-answer.")}
+        {interrupted.pics ? <span className="text-muted-foreground">{tr("（图片要重新附上）", " (attach the pictures again)")}</span> : null}
+      </span>
+      <Button size="sm" variant="ghost" className="text-muted-foreground shrink-0 rounded-full" onClick={dismissInterrupted}>{tr("算了", "Dismiss")}</Button>
+      <Button size="sm" className="shrink-0 rounded-full" onClick={retry} data-testid="interrupted-retry">{tr("重试", "Retry")}</Button>
+    </div>
+  );
+};
 // the composer's top: whoever stops the person typing says so — the terminal first, then the limit
 const ComposerTop: FC = () => {
-  const { owner } = useChat();
-  return owner ? <OwnerBanner /> : <QuotaBanner />;
+  const { owner, interrupted, busy, budget } = useChat();
+  return owner ? <OwnerBanner /> : interrupted && !busy && !budget ? <InterruptedBanner /> : <QuotaBanner />;
 };
 
 // no conversation to reach: say why, and the one thing to do about it
@@ -511,9 +529,11 @@ const ProviderBar: FC<{ onSwitch: (p: Provider) => void }> = ({ onSwitch }) => {
         title={busy ? tr("正在回复，答完再接", "Replying — continue once it is done") : tr("在网页终端里接着这段对话", "Continue this conversation in the web terminal")}>
         {!busy && resume
           ? <Link to={continueLink(provider)} className="no-underline"><TerminalSquareIcon className="size-4" /><span className="hidden sm:inline">{tr("在终端里继续", "Continue in terminal")}</span></Link>
-          : <span><TerminalSquareIcon className="size-4" /><span className="hidden sm:inline">{tr("在终端里继续", "Continue in terminal")}</span></span>}
+          // one row with the icon, as the link above (task WD8F: a bare span stacked it over the words)
+          : <span className="inline-flex items-center gap-2"><TerminalSquareIcon className="size-4" /><span className="hidden sm:inline">{tr("在终端里继续", "Continue in terminal")}</span></span>}
       </Button>
-      <Button variant="ghost" size="sm" className="text-muted-foreground rounded-full" disabled={busy} onClick={() => setAsking(true)}>
+      {/* 新对话 mid-answer too (task WD8F): that turn answers on, put away with its conversation */}
+      <Button variant="ghost" size="sm" className="text-muted-foreground rounded-full" onClick={() => setAsking(true)}>
         <SquarePenIcon className="size-4" />{tr("新对话", "New chat")}
       </Button>
       <AlertDialog open={asking} onOpenChange={setAsking}>
@@ -521,8 +541,11 @@ const ProviderBar: FC<{ onSwitch: (p: Provider) => void }> = ({ onSwitch }) => {
           <AlertDialogHeader>
             <AlertDialogTitle>{tr(`和 ${PROVIDER_NAME[provider]} 开一段新对话？`, `Start a new chat with ${PROVIDER_NAME[provider]}?`)}</AlertDialogTitle>
             <AlertDialogDescription>
-              {tr(`这边的旧对话收起，不再接着聊；${PROVIDER_NAME[provider === "claude" ? "codex" : "claude"]} 那边不受影响。`,
-                `This side's old conversation is put away and not carried on; ${PROVIDER_NAME[provider === "claude" ? "codex" : "claude"]} is not touched.`)}
+              {busy
+                ? tr("上一句还在回复：它会在后台答完，和旧对话一起收起；这边马上开一段新的。",
+                  "The last reply is still running: it finishes in the background and is put away with the old conversation; a new one starts here now.")
+                : tr(`这边的旧对话收起，不再接着聊；${PROVIDER_NAME[provider === "claude" ? "codex" : "claude"]} 那边不受影响。`,
+                  `This side's old conversation is put away and not carried on; ${PROVIDER_NAME[provider === "claude" ? "codex" : "claude"]} is not touched.`)}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
