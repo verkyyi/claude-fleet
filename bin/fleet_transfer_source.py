@@ -145,6 +145,16 @@ def quota_loop_replacement(source, mark):
     if not auth.get('user_message_uuid') or len(matches) != 1:
         raise ValueError('missing or ambiguous original user loop authorization')
     _, text = matches[0]
+    user_index = next(i for i, line in enumerate(rows) if json.loads(line).get('uuid') == auth['user_message_uuid'])
+    for line in rows[user_index + 1:]:
+        row = json.loads(line)
+        if row.get('type') != 'assistant' or row.get('isSidechain'):
+            continue
+        content = row.get('message', {}).get('content', [])
+        for b in content if isinstance(content, list) else []:
+            if (isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ScheduleWakeup'
+                    and isinstance(b.get('input'), dict) and b['input'].get('stop')):
+                raise ValueError('a later scheduler cancellation supersedes this authorization; reconcile task intent')
     match = re.fullmatch(r'/loop ([1-9][0-9]*)([smhd]) ([^\r\n]+)', invocation)
     labels = [invocation]
     if auth.get('basis', 'user-loop') == 'user-loop':
@@ -171,7 +181,6 @@ def quota_loop_replacement(source, mark):
         uses = [json.loads(line) for line in rows if json.loads(line).get('uuid') == auth.get('schedule_message_uuid')]
         if len(uses) != 1 or uses[0].get('type') != 'assistant' or uses[0].get('isSidechain'):
             raise ValueError('missing exact historical schedule message')
-        user_index = next(i for i, line in enumerate(rows) if json.loads(line).get('uuid') == auth['user_message_uuid'])
         use_index = next(i for i, line in enumerate(rows) if json.loads(line).get('uuid') == auth['schedule_message_uuid'])
         if user_index >= use_index:
             raise ValueError('historical rearm predates its authorization provenance')

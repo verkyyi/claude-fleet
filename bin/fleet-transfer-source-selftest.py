@@ -97,6 +97,11 @@ class ExternalQuotaLoop(unittest.TestCase):
                 for mark in ('kind=cron id=abc@9999999999', 'kind=wakeup unknown=1', 'legacy-loop'):
                     with self.subTest(mark=mark), self.assertRaises(ValueError):
                         src.quota_loop_replacement(source, mark)
+                cancel = dict(type='assistant',message={'content':[dict(type='tool_use',id='stop',
+                    name='ScheduleWakeup',input={'stop':True})]})
+                path.write_text(json.dumps(row)+'\n'+json.dumps(cancel)+'\n')
+                with self.assertRaisesRegex(ValueError, 'cancellation'):
+                    src.quota_loop_replacement(source, '')
                 path.write_text(json.dumps(dict(row, type='assistant'))+'\n')
                 with self.assertRaises(ValueError): src.quota_loop_replacement(source, '')
 
