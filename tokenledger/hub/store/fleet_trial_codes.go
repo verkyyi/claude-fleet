@@ -61,6 +61,7 @@ type TrialGrant struct {
 	ScannedAt time.Time `json:"scanned_at"`
 	GrantedAt time.Time `json:"granted_at"`
 	FirstAt   time.Time `json:"first_at"`
+	NextDayAt time.Time `json:"next_day_at"`
 }
 
 // TrialScan is one scan.
@@ -226,15 +227,16 @@ func (s *Store) TrialScanCounts(codeID string, since time.Time) (scans, follows 
 	return scans, follows, err
 }
 
-const trialGrantCols = `who, code_id, principal, openid, state, lang, scanned_at, granted_at, first_at`
+const trialGrantCols = `who, code_id, principal, openid, state, lang, scanned_at, granted_at, first_at, next_day_at`
 
 func scanTrialGrant(row interface{ Scan(...any) error }) (*TrialGrant, error) {
 	var g TrialGrant
-	var sa, ga, fa int64
-	if err := row.Scan(&g.Who, &g.CodeID, &g.Principal, &g.OpenID, &g.State, &g.Lang, &sa, &ga, &fa); err != nil {
+	var sa, ga, fa, nda int64
+	if err := row.Scan(&g.Who, &g.CodeID, &g.Principal, &g.OpenID, &g.State, &g.Lang, &sa, &ga, &fa, &nda); err != nil {
 		return nil, err
 	}
 	g.ScannedAt, g.GrantedAt, g.FirstAt = unixOrZero(sa), unixOrZero(ga), unixOrZero(fa)
+	g.NextDayAt = unixOrZero(nda)
 	return &g, nil
 }
 
@@ -272,7 +274,7 @@ func (s *Store) ClaimTrialGrant(g TrialGrant, cap int) (bool, error) {
 			return false, ErrTrialCodeFull
 		}
 	}
-	_, err = tx.Exec(`INSERT INTO fleet_trial_grants (`+trialGrantCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+	_, err = tx.Exec(`INSERT INTO fleet_trial_grants (`+trialGrantCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 		g.Who, g.CodeID, g.Principal, g.OpenID, g.State, g.Lang, g.ScannedAt.Unix(), unixOf(g.GrantedAt))
 	if isUniqueViolation(err) {
 		return false, nil
@@ -384,4 +386,20 @@ func (s *Store) TrialScanOutcomesSince(outcome string, since time.Time) (int, er
 	err := s.read.QueryRow(`SELECT COUNT(DISTINCT openid) FROM fleet_trial_scans WHERE outcome = ? AND at >= ?`,
 		outcome, since.Unix()).Scan(&n)
 	return n, err
+}
+
+// MarkTrialNextDayLine records an accepted chat message on the Beijing calendar
+// day after admission. No message content is stored. Repeated messages count once;
+// older grants have no historical backfill because the hub does not keep chats.
+func (s *Store) MarkTrialNextDayLine(principal string, now time.Time) error {
+	if principal == "" {
+		return nil
+	}
+	bj := now.In(time.FixedZone("Beijing", 8*60*60))
+	start := time.Date(bj.Year(), bj.Month(), bj.Day(), 0, 0, 0, 0, bj.Location())
+	_, err := s.write.Exec(`UPDATE fleet_trial_grants SET next_day_at = ?
+		WHERE principal = ? AND state = ? AND next_day_at = 0
+		AND granted_at >= ? AND granted_at < ? AND granted_at > 0`,
+		now.Unix(), principal, GrantGranted, start.AddDate(0, 0, -1).Unix(), start.Unix())
+	return err
 }

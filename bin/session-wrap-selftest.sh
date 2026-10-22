@@ -107,7 +107,7 @@ grep -q '^    restore_watch' "$BIN/fleet-diskguard.sh" || fail "A: the diskguard
 
 # --------------------------------------------- B: the wrapper, on a real tmux ----
 mkdir -p "$WORK/wbin"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet-park-page.py fleet_session_gate.py fleet_session_fallback.py fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 # every window writes its logs into the test's own conf (T909: a run by hand once
 # put SID-1 / CX-9 rows into the operator's session-exit.log)
 mkdir -p "$WORK/conf/logs"

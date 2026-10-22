@@ -135,6 +135,13 @@ def run(gate, fid, sid):
                 r.update(state="continued", target_session=after["sid"], completed_at=time.time())
                 finish(gate, path, r)
                 return
+            if after and after["agent"] == "codex" and after["sid"]:
+                # The controller may have bound the target before reporting a
+                # failed boot/cleanup. Keep that writer fenced too: neither
+                # silently accept more words nor launch another continuation.
+                r.update(state="recovery", why="transfer_incomplete", target_session=after["sid"])
+                finish(gate, path, r)
+                return
             why = "transfer_refused"  # detailed private controller receipt is retained
         except OSError:
             why = "controller_unavailable"

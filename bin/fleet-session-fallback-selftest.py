@@ -139,6 +139,22 @@ class Continuation(unittest.TestCase):
         self.assertIsNone(fallback.view(gate, other))
         self.assertIsNone(fallback.view(gate, dict(self.w, sid="replacement")))
 
+    def test_failed_controller_with_bound_target_keeps_one_writer_in_recovery(self):
+        with patch.object(fallback.subprocess, "Popen"):
+            self.start()
+        def incomplete(argv, **kw):
+            self.w.update(agent="codex", sid="partially-started-target")
+            return subprocess_result(1)
+        with patch.object(gate, "window", side_effect=lambda _: dict(self.w)), patch.object(fallback.subprocess, "run", side_effect=incomplete) as controller:
+            fallback.run(gate, FID, SID)
+            fallback.run(gate, FID, SID)
+        self.assertEqual(controller.call_count, 1)
+        self.assertEqual(fallback.view(gate, self.w)["state"], "recovery")
+        self.assertFalse(gate.can_talk(self.w)[0])
+        with patch.object(fallback.subprocess, "Popen") as spawn:
+            self.start()
+            spawn.assert_not_called()
+
     def test_capacity_signal_and_generation_timeout_are_isolated(self):
         self.error(message={"content": [{"type": "text", "text": "Claude subscription pool unavailable (claude_pool_unavailable)"}]})
         self.w["state"] = "working"

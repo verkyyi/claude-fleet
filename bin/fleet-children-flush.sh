@@ -100,7 +100,7 @@ print("%s\t%s" % (d.get("flush") or "", d.get("seq") or 0)); print(d.get("text")
   if [ "$DRY" = 1 ]; then
     printf 'would send digest → %s (%s) · %s · cursor → %s\n--- envelope ---\n%s\n' \
       "$key" "$pwin" "$reason" "$seq" "$msg"
-  elif children_send "$sess" "$sock" "$pwin" "$msg" >/dev/null 2>&1; then
+  elif children_send "$sess" "$sock" "$pwin" "$msg" "digest:$key:$seq" >/dev/null 2>&1; then
     children_cursor_set "$key" "$sess" "$seq"
     printf 'digest → %s (%s) · %s · cursor %s\n' "$key" "$pwin" "$reason" "$seq"
   else

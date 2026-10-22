@@ -875,3 +875,5 @@ FLEET_ID_NOAGENT_CMD               seam: a command printing the IDs whose live w
 FLEET_ID_NOAGENT                   handoff: fleet-id.sh → fleet_id.py, the live IDs whose window holds no agent (FLEET_AGENT_FMT 0; T642 start_word)
 FLEET_START_GRACE                  knob: seconds a task record may go with no native segment before start_word calls it not started (default 300; T642)
 FLEET_TASK_RESPAWN                 seam: the spawner fleet-task-record.sh respawn runs (default bin/dash-raw-session.sh; T642)
+FLEET_GATE_DIR                    seam: gate fixture root shared by shell delivery and Python wake receipts (C4)
+FLEET_PEER_DELIVERY_ID            handoff: hub relay's stable delivery id for the local peer sender and queue (C4)

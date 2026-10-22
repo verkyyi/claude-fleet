@@ -498,6 +498,7 @@ esac
 # queue_here <why> — a WINDOW that cannot take it now (issue #1647): this fleet's
 # peer queue holds it for the window's lifelong @fleet_id, delivered on the cleanup
 # tick or its wake. A pid / session-uuid target has no identity to wait on: refused.
+delivery_id="${FLEET_PEER_DELIVERY_ID:-local:peer#$(date +%s).$$.${RANDOM:-0}}"
 queue_here() {
   local s fid
   case "$tgt" in @*|%*) ;; *) die 1 "$1" ;; esac
@@ -505,7 +506,7 @@ queue_here() {
   [ -n "$s" ] || die 1 "$1"
   fid=$(fleet_window_fid "$s" "$tgt" "$SOCK" 2>/dev/null) || die 1 "$1"
   printf '%s' "$text" | bash "$BIN/fleet-peer-queue.sh" put -L "$s" --kind message \
-    --rid "local:peer#$(date +%s).$$" --to-fid "$fid" --to "${label:-$tgt}" >/dev/null || die 1 "$1"
+    --rid "$delivery_id" --to-fid "$fid" --to "${label:-$tgt}" >/dev/null || die 1 "$1"
   echo "queued → ${who:-$tgt}${label:+ ($label)} — $1; delivered when it can take it"
   exit 3
 }
@@ -515,7 +516,7 @@ queue_here() {
 # waits in this fleet's peer queue for the window's identity, replayed, never «sent».
 case "$tgt" in
   @*|%*)
-    fleet_agent_deliver "$tgt" "$SOCK" "$text"; rc=$?
+    fleet_agent_deliver "$tgt" "$SOCK" "$text" fleet-peer "$delivery_id"; rc=$?
     case "$rc" in
       0) echo "sent → ${who:+$who · }$FLEET_DELIVER_NOTE ($label)"; exit 0 ;;
       "${FLEET_DELIVER_HELD:-3}") queue_here "$FLEET_DELIVER_NOTE" ;;
