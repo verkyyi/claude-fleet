@@ -845,6 +845,9 @@ exit 2
   ok(/^fleet --origin hub --print --no-repo --node local --reap-origin web --agent claude --prompt-file=/m.test(rl) && rl.includes("开个新的"),
     `Y open: a no-repo window of this login, origin web, the words its first turn (${rl})`);
   ok((await sreq("/api/open", { method: "POST", headers: PAGE, body: { agent: "gpt", text: "x" } })).status === 400, "Y open: an unknown agent is 400");
+  r = await sreq("/api/open", { method: "POST", headers: PAGE, body: { text: "默认的" } });
+  const rl2 = readFileSync(RLOG, "utf8").trim().split("\n").filter((l) => l.startsWith("fleet ")).pop() || "";
+  ok(r.status === 200 && !/--agent/.test(rl2), `Y open: no agent chosen ⇒ none passed, the fleet's default decides (${rl2})`);
   // the view's state line: can_talk and the queue, no holder
   const st = await new Promise((resolve) => {
     const evs = [];

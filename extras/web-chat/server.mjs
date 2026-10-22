@@ -1718,8 +1718,9 @@ async function gateSay(req, res, u, person) {
 async function gateOpen(req, res, person) {
   const tb = await turnBody(req, res);
   if (!tb) return;
-  const agent = String(tb.body.agent || "claude");
-  if (!PROVIDERS_RE.test(agent)) return send(res, 400, { error: "unknown agent", code: "agent" });
+  // the agent the page chose; none ⇒ the fleet's default (FLEET_AGENT, dash-raw-session.sh decides)
+  const agent = tb.body.agent == null || tb.body.agent === "" ? "" : String(tb.body.agent);
+  if (agent && !PROVIDERS_RE.test(agent)) return send(res, 400, { error: "unknown agent", code: "agent" });
   let text = tb.text;
   for (const b of tb.images) {
     const k = keepImage(b);
@@ -1730,7 +1731,7 @@ async function gateOpen(req, res, person) {
   const pf = join(STATE, `open-${process.pid}-${Date.now()}.txt`);
   writeFileSync(pf, text, { mode: 0o600 });
   const args = [...(target ? [target] : []), "--origin", "hub", "--print", "--no-repo", "--node", "local",
-    "--reap-origin", "web", "--agent", agent, `--prompt-file=${pf}`];
+    "--reap-origin", "web", ...(agent ? ["--agent", agent] : []), `--prompt-file=${pf}`];
   const r = await run(RAW, args);
   try { unlinkSync(pf); } catch { /* read by the spawn */ }
   const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";
@@ -1740,8 +1741,8 @@ async function gateOpen(req, res, person) {
     log("open_failed", { person, rc: r.rc, said: said.slice(0, 200) });
     return send(res, 503, { state: "refused", reason: "open_failed", error: said || "没能开一个新会话" });
   }
-  log("open", { person, agent });
-  return send(res, 200, { fid, agent, delivery: randomUUIDish(), state: "sent" });
+  log("open", { person, agent: agent || "default" });
+  return send(res, 200, { fid, ...(agent ? { agent } : {}), delivery: randomUUIDish(), state: "sent" });
 }
 const randomUUIDish = () => { const h = randomHex(); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`; };
 async function gatePost(req, res, u, what) {
