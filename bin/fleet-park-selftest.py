@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+import hashlib
 from unittest.mock import patch
 
 BIN = Path(__file__).resolve().parent
@@ -41,7 +42,9 @@ class Park(unittest.TestCase):
         self.label = 'park-' + str(os.getpid()) + '-' + self.root.name[-8:]
         self.env = dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf'),
                         FLEET_GATE_WAKE_SECS='3', FLEET_GATE_PARK_SECS='3',
-                        FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50')
+                        FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50',
+                        FLEET_ID_PUSH='0', FLEET_SKIP_GLOBAL_CONF='1')
+        self.env.pop('CCQUOTA_FLEET', None)
         self.env.pop('TMUX', None)
         self.env.pop('TMUX_PANE', None)
         self.tm('new-session', '-d', '-s', 'test', 'sleep 120')
@@ -83,6 +86,7 @@ while True:
                           'with Path(__file__).with_name("argv").open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
+                          'printf "%s\\n" "$@" >> ' + str(self.root / 'launch-args') + '\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
                           'python3 ' + str(record) + ' "$@"\n' +
@@ -110,6 +114,92 @@ while True:
         probe.chmod(0o755)
         self.env['FLEET_GATE_PARK_PROBE_CMD'] = str(probe)
         self.wait(lambda: self.opt('@park_relay') and self.opt('@cc_session_id'))
+
+    def parked(self):
+        self.fake()
+        self.set('@fleet_role', 'worker')
+        self.set('@worktree', str(self.root))
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid).get('ok'))
+
+    def test_parked_peer_first_turn(self):
+        # Drive fleet-peer-send.sh -> fleet_agent_deliver -> fleet_park_wake,
+        # fleet_session_gate.py and the real fleet-session-wrap.sh.
+        self.parked()
+        p = subprocess.run(['bash', str(BIN / 'fleet-peer-send.sh'), '-L', self.label,
+                            self.win, 'wake peer: first sentence'], env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('sent →', p.stdout)
+        self.assertIn('wake peer: first sentence', (self.root / 'launch-args').read_text())
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual(rows[-1]['why'], '消息')
+
+    def test_parked_report_queue_drain(self):
+        # Drive fleet-peer-queue.sh drain -> children_send -> the same gate.
+        self.parked()
+        queue = ['bash', str(BIN / 'fleet-peer-queue.sh')]
+        p = subprocess.run(queue + ['put', '-L', self.label, '--kind', 'report',
+                            '--rid', 'fixture:report', '--to-fid', self.fid],
+                           input='child result: complete', env=self.env, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = subprocess.run(queue + ['drain', '-L', self.label], env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('delivered 1', p.stdout)
+        self.assertIn('child result: complete', (self.root / 'launch-args').read_text())
+        book = self.root / 'conf/fleets' / self.label / 'delivery.ndjson'
+        self.assertEqual(json.loads(book.read_text().splitlines()[-1])['state'], 'DELIVERED')
+        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual(rows[-1]['why'], '回报')
+
+    def test_question_is_never_parked(self):
+        self.fake()
+        self.set('@claude_state', 'needs')
+        self.set('@claude_needs', 'ask')
+        self.set('@claude_state_ts', str(int(time.time()) - 3600))
+        with patch.dict(os.environ, self.env):
+            result = gate.park(self.fid)
+        self.assertFalse(result['ok'], result)
+        self.assertEqual(result['why'], 'asking')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def test_local_child_report_wakes_parent(self):
+        # fleet-report-parent.sh must reach the gate before its missing-PID
+        # fallback. This drives the report producer, not only queue replay.
+        self.parked()
+        self.tm('rename-session', '-t', 'test', self.label)
+        self.set('@issue', '42')
+        child = self.tm('new-window', '-d', '-P', '-F', '#{window_id}', 'sleep 60')
+        for k, v in (('@issue', '43'), ('@origin', 'issue-42'), ('@origin_fid', self.fid)):
+            self.tm('set-option', '-w', '-t', child, k, v)
+        p = subprocess.run(['bash', str(BIN / 'fleet-report-parent.sh'), '-L', self.label,
+                            '--win', child, '--state', 'blocked', '--summary', 'fixture child result'],
+                           env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('reported →', p.stdout)
+        self.assertIn('fixture child result', (self.root / 'launch-args').read_text())
+        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual(rows[-1]['why'], '回报')
+
+    def test_late_wake_receipt_is_not_a_second_turn(self):
+        # A wrapper has taken the seed, but its native ready report arrives
+        # after the sender's wait. The queue retries the SAME delivery id.
+        self.fake()
+        delivery = 'fixture:late-report'
+        with patch.dict(os.environ, self.env):
+            seed = gate.wake_path(self.fid, 'peer-' + hashlib.sha256(delivery.encode()).hexdigest())
+            Path(str(seed) + '.taken').write_text('late report')
+            with patch.object(gate.time, 'sleep', side_effect=lambda _: Path(str(seed) + '.launched').touch()):
+                result = gate.wake(self.fid, why='回报', delivery=delivery)
+            self.assertTrue(result['ok'], result)
+            self.assertFalse(result.get('already'), 'awake is not a delivery receipt')
+            self.assertTrue(gate.wake(self.fid, why='回报', delivery=delivery)['ok'])
+        self.assertFalse(self.opt('@park_wake'))
+        self.assertNotIn('late report', (self.root / 'launch-args').read_text())
 
     def wait(self, predicate):
         until = time.monotonic() + 6

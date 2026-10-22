@@ -461,7 +461,7 @@ if [ "$KIND" = message ]; then
   # bridge is gone (issue #4899) — refused for good, never re-sent.
   [ -s "$WORK/bridge" ] && die 1 "no issue bridge here (removed, claude-fleet#4899) — the comment was not delivered"
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
-  out=$(env -u TMUX bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
+  out=$(env -u TMUX FLEET_PEER_DELIVERY_ID="$RID" bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
   case "$rc" in
     0) printf '%s\n' "$out" >&2; exit 0 ;;
     3) printf 'queued at %s: %s\n' "$(hostname -s 2>/dev/null)" "${out##*$'\n'}" >&2; exit 0 ;;
@@ -499,7 +499,7 @@ pwin=$pfwin
 [ -n "$pwin" ] || pwin=$(fleet_win_for_key "$pkey" "$sock") || pwin=''
 [ -n "$pwin" ] || die 75 "not now: parent $pkey has no window here — ledgered, delivered when it is back"
 [ -s "$WORK/msg" ] || exit 0
-children_send "$home" "$sock" "$pwin" "$(cat "$WORK/msg")"; rc=$?
+children_send "$home" "$sock" "$pwin" "$(cat "$WORK/msg")" "$RID"; rc=$?
 if [ "$rc" -eq 0 ]; then
   children_cursor_set "$pkey" "$home"
   printf '%s\n' "$RID" >> "$sentf"

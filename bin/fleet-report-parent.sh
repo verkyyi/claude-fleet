@@ -954,11 +954,12 @@ fi
 parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
 ppid=''
 parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
+parent_parked=$(TM display-message -p -t "$pwin" '#{@parked}#{@park_held}#{@park_start}' 2>/dev/null)
 noclaude=''
 # Only an agent taken over its process's inbox needs that process now (the adapter's
 # deliver column, T626); a thread queue holds its own conversation.
 if [ "$(fleet_agent_get "$(fleet_agent_or_default "$parent_agent" 2>/dev/null)" deliver 2>/dev/null)" != queue ] \
-   && [ -z "$parent_evidence" ]; then
+   && [ -z "$parent_evidence$parent_parked" ]; then
   ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) || ppid=''
   [ -n "$ppid" ] || noclaude=1
 fi
@@ -978,11 +979,11 @@ fi
 # queue_local <why> — the parent is here but cannot take it now (issue #1647): this
 # fleet's peer queue holds it for the parent's IDENTITY, and the cleanup tick
 # delivers it. Exit 3 `queued`; exit 1 only if even that failed.
+delivery_id="local:${selfkey:-?}#$(date +%s).$$.${RANDOM:-0}"
 queue_local() {
-  local pfid rid
+  local pfid
   pfid=$(fleet_window_fid "$sess" "$pwin" "$SOCK" 2>/dev/null) || pfid=''
-  rid="local:${selfkey:-?}#$(date +%s).$$"
-  if printf '%s' "$msg" | bash "$BIN/fleet-peer-queue.sh" put -L "$sess" --kind report --rid "$rid" \
+  if printf '%s' "$msg" | bash "$BIN/fleet-peer-queue.sh" put -L "$sess" --kind report --rid "$delivery_id" \
        --to "$SENDKEY" ${pfid:+--to-fid "$pfid"} --to-key "$SENDKEY" >/dev/null; then
     TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
     printf 'queued → %s (%s): %s — %s; delivered when it can take it\n' "$SENDKEY" "$pwin" "$st" "$1"
@@ -998,7 +999,7 @@ queue_local() {
 # nobody there to take it now (a Codex parent not on the thread its window names —
 # a /clear not followed yet, T540; a Claude whose inbox will not answer) — queued
 # for its identity and replayed, never «reported».
-fleet_agent_deliver "$pwin" "$SOCK" "$msg" "${FLEET_REPORT_FROM:-fleet-report}"; src=$?
+fleet_agent_deliver "$pwin" "$SOCK" "$msg" "${FLEET_REPORT_FROM:-fleet-report}" "$delivery_id"; src=$?
 if [ "$src" -eq 0 ]; then
   # The stamp is what keeps the reaper fallback from sending a second, blunter
   # report for the same session ~a minute later.

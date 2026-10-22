@@ -17,6 +17,7 @@
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | 托管发行树已带新版 Codex，但 PATH 前面的 Homebrew/npm 仍是旧版（T944） | 网页新建首条可发，私有 app-server 却是旧版；后续输入被会话门判 old_version 拒绝 | Codex 启动器优先发行树的 tools/bin，私有服务与终端客户端使用同一固定版本，tmux 保护 shim 仍在首位；没有发行工具的普通安装沿用 PATH | `codex-release-shadowed` |
 | Codex 发行工具目录前置遮蔽 tmux-shim（T944） | agent 子进程可绕过 tmux 保护入口 | 发行版 Codex 优先时仍保持 tmux-shim 在 PATH 首位；直接 webchat 同样选发行版 | `codex-pin-displaces-guard` |
+| Codex 已取走排队消息，回合收据稍后才可见（T944） | 已经答复却误示没送到，引导用户重发 | 收据等待有界宽限期；只观察原 delivery，不重复加入；确实消失后才退回 | `codex-receipt-race` |
 | 网页新会话进入时会话门尚未探测完成（T944） | 首条能发，进入后却显示终端只读，不能继续输入 | 未知权限单独显示连接中，保留输入草稿；仅会话门明确允许才启用发送，旧版本与只读票据仍不可写 | `chat-gate-cold-readonly` |
 |---|---|---|---|
 | 存量 worker 的自动报告仍唤醒历史 parent，监督目标离线又升级到人（T946） | 接管失效、额度耗尽的旧会话被重新唤醒 | 显式身份作用域的审计委托只改 delivery；固定原来源、目标与授权链，既有队列恢复投递，routine 不因超时升级 | `report-delegation-offline` |
@@ -471,6 +472,7 @@
 | 池子凭证代理上的 Codex 会话在 `looping`（两轮之间）时交接或切换（T630） | 原生线程的 modelProvider 是代理的 `fleet`，空闲判断只认 `openai`，报「native Codex thread/provider changed」——池子里所有 Codex 一进 looping 就再也切不走 | `fleet_transfer_source.py` 的 `FLEET_PROVIDERS` 认 OpenAI 自己的和池子代理的两种；别的 provider 照旧拒 | `transfer-pooled-codex-looping` |
 | Claude 网页会话额度耗尽后停住；把网络、认证或未决工具当额度又可能重复副作用（T943） | 网页不能接续，或多次轮询启动多个 Agent；试用默认 Codex 仍被满额 Claude 池挡住 | 共用 session gate 只认精确原生额度错误，持久单次票据调用正式 transfer；安全边界不明保留记录，未送消息退回，不重放已收消息；试用准入读取默认 Agent 池，同一预算和槽位不变 | `web-quota-continuation` |
 | 原生 weekly-limit 选择框停在 needs；直接放宽 idle guard 会吞草稿或并发写入（T943） | 已有网页会话无法接续，或误取消审批、重放工具 | 正式 controller 在独占锁和 lease 内核实精确额度转录、原生弹框与工具/调度证据，单次 Escape 后要求原生结束和空输入，再重跑全部交接检查；未确认不重试 | `web-quota-dialog` |
+| 试用按默认 Codex 池准入，网页却显式选 Claude 或被登录本地默认覆盖（T943） | 检查有余量的池却启动满额 provider；无效默认造成检查和启动不一致 | 正式 open 在入口解析并固定试用实际 provider，检查同一池再转发；非法默认拒绝，缺失默认沿正式 dispatch 的 Claude 兼容语义；不消耗被拒消息的预算 | `trial-provider-mismatch` |
 | 入口那份会话清单过期（`hub_ok` 旧了、节点 token 一时被拒、刷新循环没在跑），而入口答得慢 | 看台 ⌘P 先等 `hub_fresh` 的 `--ensure`（最长 3 秒）/ `--refresh`（最长 5 秒）才画第一帧：linux-a 上按一下要 5 秒（#3311） | 弹窗第一帧照缓存直接画（过期的带红色「失联」横条），`hub_fresh` 挪到弹窗已有的后台刷新线程，打开就跑；`FLEET_VIEW_REFRESH=0` 保持原来先等再画（#3311） | `view-first-frame-hub-slow` |
 | 瘦客户端在人的电脑上，人的 `~/.ssh/config` 里有 `Host *` + `ControlMaster auto`（#2987 第 2 类之 b） | 小循环的每条 ssh（看台连接、拖放的一次性上传）都会在人的电脑上建主连接、留控制文件：系统清临时目录后「文件没了连接还在」，下一次又整条重连；人的电脑上又有了要人管的连接状态 | 小循环的每条 ssh 都带 `-o ControlMaster=no -o ControlPath=none`（命令行压过配置文件），客户端不起 tmux、不留文件（除日志）；演练用真 `ssh -G` 对着那份配置逐条解析，并在会话结束后 `find -type s` 数到 0（#3007） | `thin-control-socket` |
 | stable 挪了，人的看台（`fleet` 瘦客户端）一直连着、几天不关（2026-10-19 操作者：三类都要自动跟上 stable） | 客户端只在两次连接之间跑 `fleet-client-update.sh start`：线不断就永远不查新版；`bin/fleet` 启动时换过一次版设下的 `FLEET_CLIENT_UPDATED=1` 还让看台此后每次重连都跳过更新——一直开着的客户端停在旧版，直到人自己关掉重开 | 看台连着时每 `FLEET_THIN_POLL_SECS`（120 s）在后台跑 `fleet-client-update.sh poll`（不受每小时一次的限制，取好新版退 10）；取好了且人 `FLEET_THIN_UPDATE_IDLE`（30 s）没按键、没有附件在传，就断开这条线、跑 `start` 换版、原地 exec 新版并 `--resume` 回同一个看台（view 和 home 保留）；`FLEET_CLIENT_UPDATED` 只跳过启动后的第一次检查。`fleet doctor --installs` 的「在线客户端」行列出每个连着的看台的版本和落后时长（#4916） | `client-stays-old` |
@@ -617,6 +619,7 @@
 | ⌘P 面板里某一行在 ↑↓ 上被特殊对待：↑ 跳过 ✦ 消息、到顶绕到 ⚡ 新会话；命令一半插在顶上一半插在底下（2026-10-20 操作者实测，T762） | 屏幕顺序、↓ 顺序、↑ 顺序成了三样东西：从会话按 ↑ 跳到屏幕下半截的 ⚡，✦ 消息、⌂ 回家、◐ 语言、⏻ 退出四行用 ↑ 永远到不了 | 一份行序（T762）：`panel_rows` 先排 ✦ ⚡ ⌂、再接会话、最后置顶 · ◐ · ⏻，`nav_step`（`bin/fleet_view.py`）是 ↑↓ 唯一的走法——下一条 / 上一条能停的行、首尾相接，箭头键处理里不点名任何一行；能停的行都缩进两格，顶格「─」只是组标题；`fleet-view-selftest.sh` 的 ONE order 腿从每一行按 ↓ ↑ 走一圈、和画出来的行序逐行比 | `panel-order-split` |
 | 会话结束了却没交回结果——被回收、智能体退出后收起、一直没回报（2026-10-21 操作者账号，A4G2） | 它的任务记录永远 `accepted`：网页「会话」里一行「排着」挂在旁边、和 ⌘P 面板对不上（同一分钟 18 对 10），只能靠人手动清（当天清了 20 条） | 入口在编号关闭的同一事务里收尾记录（`cancelled`，「结束·没交回结果」，`id_closed:<编号>:<旧状态>`）；编号续上（`reopened`）就恢复，之后到的结果照样算数；告警主副本每 5 分钟对一次账（`ReconcileClosedTasks`：之前关的、24 小时没起来的）；网页与 ⌘P 都画入口算的同一份清单（`fleet_board.go`），按身份把记录和会话拼成一行，`fleet board diff` 说差几条 | `task-record-never-closes` |
 | 停放窗口打字时吞掉首字，或接回失败把整句丢掉（G1YC C2） | 原屏消失、切过去空醒、重试与新会话都没有那句话 | 停前存屏；回车才接回，原句留到原生启动确认；失败可重试或按 n 带入新会话 | `wake-fail-silent` |
+| 停放后 peer 消息与子回报只等助手进程，不唤醒原窗口（C4） | 消息一直排队，父会话永远等不到完成回报 | 统一投递入口按身份走 `fleet_park_wake`，首轮带原文；队列重试沿用同一投递编号，接回确认后才记送达 | `wake-peer-report` |
 | 将停放范围扩到终端 / 派发来源，却漏掉草稿、后台任务或停掉后换了对话（C1） | 输入丢失，任务被杀，或者窗口虽在却接到了新会话 | HHV0 的同一个门用原生空输入框证明、中继输入代数、后台工作检查；外壳保持窗口 / fid / 会话号，按原号恢复 | `park-all-origins` |
 | 切换版本后，停放器去停一个没有停放页的老外壳窗口（C1） | 退出会吊销凭据或丢掉窗口，接不回同一会话 | 只停有 `@park_wrap_ver` 的新外壳；旧窗口拒停，不送退出 | `park-old-wrapper` |
 | 机器页把空闲常驻与可停空闲当成同一个数，或把 CPU 仍在算的会话算作可停空闲（G1YC C8） | 管理台、doctor 与本批指标读出不同的空闲数；把采样不足当成 0 或把旧停放标记当成新停放还会误报节省 | 空闲常驻计本轮已结束且至少 60 秒 CPU 低于每分钟 0.5 秒的会话；可停空闲再排除观看与后台命令，原因行保留两类计数，inventory 的 eligible 使用完整状态与后台信息；采样不足保持未知。停放只认 HHV0 的 `@parked` + `@park_held`；节省只读 C1 的 `@park_saved_mb`，缺失则隐藏节省项，不从动作账本估算，读计量不写账本 | `park-census-overcounts` |

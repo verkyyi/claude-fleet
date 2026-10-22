@@ -273,8 +273,12 @@ func (s *Server) handleChatWorker(w http.ResponseWriter, r *http.Request, name s
 		var a struct {
 			State string `json:"state"`
 		}
-		if json.Unmarshal(out, &a) == nil && a.State == "refused" {
-			refund("the session refused the line")
+		if json.Unmarshal(out, &a) == nil {
+			if a.State == "refused" {
+				refund("the session refused the line")
+			} else if a.State == "sent" || a.State == "queued" {
+				s.trialNextDayLine(person, time.Now())
+			}
 		}
 	}
 	s.chatAudit(person, "chat_relay", strings.ToUpper(name)+" "+wid+" "+where+" "+resp.Status)
