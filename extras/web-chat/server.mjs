@@ -1720,7 +1720,7 @@ async function gateSay(req, res, u, person) {
 }
 // a NEW session opened from the web: a no-repo session of this login, its first
 // sentence the start's own first turn; the agent chosen here stays its agent
-async function gateOpen(req, res, person) {
+async function gateOpen(req, res, person, requiredPurpose = "") {
   const tb = await turnBody(req, res);
   if (!tb) return;
   // the agent the page chose; none ⇒ the fleet's default (FLEET_AGENT, dash-raw-session.sh decides)
@@ -1728,7 +1728,10 @@ async function gateOpen(req, res, person) {
   if (agent && !PROVIDERS_RE.test(agent)) return send(res, 400, { error: "unknown agent", code: "agent" });
   // A temporary probe is explicitly owned. The official spawner verifies that
   // this identity still has a live parent; ordinary web sessions retain keep.
-  const purpose = tb.body.purpose ?? "";
+  if (requiredPurpose && tb.body.purpose != null && tb.body.purpose !== requiredPurpose) {
+    return send(res, 400, { error: "purpose does not match this endpoint", code: "purpose" });
+  }
+  const purpose = requiredPurpose || (tb.body.purpose ?? "");
   const parent = tb.body.parent_fid;
   if (purpose !== "" && purpose !== "probe") return send(res, 400, { error: "unknown purpose", code: "purpose" });
   if (purpose === "probe" && (typeof parent !== "string" || !FID_RE.test(parent))) {
@@ -1755,7 +1758,8 @@ async function gateOpen(req, res, person) {
     return send(res, 503, { state: "refused", reason: "open_failed", error: said || "没能开一个新会话" });
   }
   log("open", { person, agent: agent || "default" });
-  return send(res, 200, { fid, ...(agent ? { agent } : {}), delivery: randomUUIDish(), state: "sent" });
+  return send(res, 200, { fid, ...(agent ? { agent } : {}), delivery: randomUUIDish(), state: "sent",
+    ...(purpose === "probe" ? { reap_origin: "probe", origin_fid: parent } : {}) });
 }
 const randomUUIDish = () => { const h = randomHex(); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`; };
 async function gatePost(req, res, u, what) {
@@ -1914,6 +1918,9 @@ async function handle(req, res) {
   // the session gate (task HHV0): say · open · answer · stop by fid
   if (p === "/api/say" && req.method === "POST") return gateSay(req, res, u, person);
   if (p === "/api/open" && req.method === "POST") return gateOpen(req, res, person);
+  // Unlike a new JSON field on /api/open, an old resident cannot silently
+  // ignore this contract: it returns 404 without spawning an ordinary web.
+  if (p === "/api/open/probe" && req.method === "POST") return gateOpen(req, res, person, "probe");
   if (p === "/api/ack" && req.method === "POST") return gatePost(req, res, u, "ack");
   // stop / answer with a session's fid (the entry writes it into the body, PQ41):
   // the gate's; without one: the old conversation's, below
