@@ -2857,6 +2857,20 @@ fleet_transcript_dir() {
   printf '%s/%s' "${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}" "$enc"
 }
 
+# Both spawners resume only the requested agent's surviving conversation (T965).
+# A same-named Claude project transcript is not evidence of a Codex rollout.
+fleet_resume_transcript_exists() {   # <agent> <cwd> <native sid>
+  local agent sid="${3:-}"
+  agent=$(fleet_agent_or_default "${1:-}")
+  [ -n "$sid" ] && [ "$(fleet_agent_get "$agent" park_resume)" = 1 ] || return 1
+  case "$(fleet_agent_get "$agent" transcript)" in
+    project) [ -f "$(fleet_transcript_dir "${2:-}")/$sid.jsonl" ] ;;
+    home) python3 "$_FLEET_LIB_DIR/fleet-codex-session.py" locate --session "$sid" \
+      --home "${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}" >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
 # a human ran? The status classifier (until issue #2543) and the dashboard
 # summarizer (until #535) ran from INSIDE a window's worktree, so their transcripts

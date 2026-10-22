@@ -118,10 +118,17 @@ fi
 # --- hooks as `-c hooks.<Event>=[…]`, derived from the ONE table (issue #611) with
 # the Codex delta (hooks/codex-map.json); a failure launches without them, said so
 hook_flags=()
+# Native session flags live as long as the conversation's CLI process. Never
+# pin an installed session to a release directory that the updater can remove.
+# Keep checkout/sandbox launches on their own tree, not an unrelated install.
+hook_root=$ROOT
+if [ "$ROOT" -ef "$HOME/.claude/fleet" ]; then
+  hook_root="$HOME/.claude/fleet"
+fi
 if [ -x "$BIN/fleet-hooks-emit.sh" ]; then
   while IFS=$'\t' read -r _ev _toml; do
     [ -n "$_ev" ] && [ -n "$_toml" ] && hook_flags+=(-c "hooks.$_ev=$_toml")
-  done < <("$BIN/fleet-hooks-emit.sh" --target codex --root "$ROOT" 2>/dev/null)
+  done < <("$BIN/fleet-hooks-emit.sh" --target codex --root "$hook_root" 2>/dev/null)
 fi
 if [ "${#hook_flags[@]}" -eq 0 ]; then
   fleet_launch_say "could not materialise the hook table from $ROOT/hooks/settings-hooks.json — launching WITHOUT hooks: this window will not colour on the dash and the two bypass-permissions guards (bash-guard / base-readonly-guard) are NOT wired for it."

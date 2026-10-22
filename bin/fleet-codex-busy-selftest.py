@@ -66,6 +66,79 @@ class CodexBusy(unittest.TestCase):
     def test_idle_persistent_mcp_is_not_work(self):
         self.assertEqual(self.busy(), [])
 
+    def managed_github(self):
+        self.config['service'] = dict(command='bash', args=[
+            '-lc', 'exec "$HOME/.claude/fleet/bin/mcp-github.sh"'])
+        package = self.root / 'node_modules/@modelcontextprotocol/server-github'
+        package.mkdir(parents=True)
+        entry = package / 'index.js'
+        entry.touch()
+        (package / 'package.json').write_text(json.dumps(dict(
+            name='@modelcontextprotocol/server-github', bin={'server-github': 'index.js'})))
+        self.rows[103] = (102, 'server-github')
+        self.argv[103] = ['npm exec @modelcontextprotocol/server-github']
+        self.exes[103] = Path('/release/node')
+        self.rows[104] = (103, 'node')
+        self.argv[104] = ['/release/node', str(entry)]
+        self.exes[104] = Path('/release/node')
+
+    def test_managed_github_wrapper_resident_is_not_work(self):
+        self.managed_github()
+        self.assertEqual(self.busy(), [])
+        self.rows[105] = (104, 'bash')
+        self.argv[105] = ['/bin/bash', '-c', 'real tool job']
+        self.exes[105] = Path('/bin/bash')
+        self.assertEqual(self.busy(), [105])
+
+    def test_managed_wrapper_does_not_guess_changed_config_or_package(self):
+        self.managed_github()
+        self.config['service']['args'][1] += ' --other'
+        self.assertEqual(self.busy(), [103, 104])
+        self.config['service']['args'][1] = 'exec "$HOME/.claude/fleet/bin/mcp-github.sh"'
+        self.argv[104].append('--other')
+        self.assertEqual(self.busy(), [103, 104])
+
+    def test_managed_wrapper_keeps_strict_unknown_and_ambiguous_gates(self):
+        self.managed_github()
+        mcp = LIB['MCP']
+        readers = (lambda pid: self.argv[pid], lambda pid: self.exes[pid])
+        status = {'service': {'runtimeStatus': 'ready'}}
+        args = (self.source, (self.config, status), self.rows, 102, *readers)
+        # A busy-service identity must not grant a restartability proof.
+        self.assertEqual(mcp['classify'](*args, strict=True), set())
+        status['service']['runtimeStatus'] = 'starting'
+        self.assertEqual(mcp['classify'](*args, strict=False), set())
+        status['service']['runtimeStatus'] = 'ready'
+        self.config['duplicate'] = dict(self.config['service'])
+        self.assertEqual(self.busy(), [103, 104])
+
+    def test_managed_fetch_wrapper_resident_is_not_work(self):
+        self.config['service'] = dict(command='bash', args=[
+            '-lc', 'exec "$HOME/.claude/fleet/bin/mcp-fetch.sh"'])
+        runner = self.root / 'uvx'
+        runner.touch()
+        uv = self.root / 'uv'
+        uv.touch()
+        self.rows[103] = (102, 'uv')
+        self.argv[103] = [str(uv), 'tool', 'uvx', 'mcp-server-fetch']
+        self.exes[103] = uv.resolve()
+        env = (self.root / 'env').resolve()
+        (env / 'bin').mkdir(parents=True)
+        (env / 'pyvenv.cfg').touch()
+        py = env / 'bin/python'
+        py.touch()
+        entry = env / 'bin/mcp-server-fetch'
+        entry.touch()
+        self.rows[104] = (103, 'python')
+        self.argv[104] = [str(py), str(entry)]
+        self.exes[104] = py.resolve()
+        with patch('shutil.which', return_value=str(runner)):
+            self.assertEqual(self.busy(), [])
+            self.rows[105] = (104, 'python')
+            self.argv[105] = [str(py), '-c', 'real job']
+            self.exes[105] = py.resolve()
+            self.assertEqual(self.busy(), [105])
+
     def test_app_server_can_be_the_bound_root(self):
         self.source['pid'] = 102
         self.source['codex_identity']['owner'] = '102'

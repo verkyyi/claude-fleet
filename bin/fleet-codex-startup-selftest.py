@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -35,13 +36,55 @@ else:
  (root/'launched.json').write_text(json.dumps({'args':args,'home':os.environ.get('CODEX_HOME')}))
 '''); codex.chmod(0o755)
         self.env = dict(os.environ, PATH=str(fake)+':'+os.environ['PATH'], HOME=str(self.root),
-                        FLEET_CONF_DIR=str(self.root/'conf'), TEST_ROOT=str(self.root), FLEET_CODEX_HOME=str(self.home))
-        for key in ('TMUX', 'TMUX_PANE', 'FLEET_LOOP_SPEC', 'CODEX_HOME'):
+                        FLEET_CONF_DIR=str(self.root/'conf'), TEST_ROOT=str(self.root), FLEET_CODEX_HOME=str(self.home),
+                        FLEET_CRED_PROXY='0', FLEET_SKIP_GLOBAL_CONF='1')
+        for key in ('TMUX', 'TMUX_PANE', 'FLEET_LOOP_SPEC', 'CODEX_HOME', 'FLEET_CRED_SID'):
             self.env.pop(key, None)
 
     def launch(self, *args, **settings):
         return subprocess.run(['bash', str(self.bin/'fleet-codex.sh'), *args],
                               env=dict(self.env, **settings), text=True, capture_output=True)
+
+    def test_live_hook_paths_survive_retired_release_removal(self):
+        # Execute an emitted harmless hook after a real release switch/removal.
+        marker = self.bin / 'fixture-hook.sh'
+        marker.write_text('printf "replacement hook works\\n"\n')
+        source = self.bin.parent / 'hooks/settings-hooks.json'
+        table = json.loads(source.read_text())
+        table['hooks']['SessionStart'].append({'hooks': [{
+            'type': 'command', 'command': 'sh ~/.claude/fleet/bin/fixture-hook.sh'}]})
+        source.write_text(json.dumps(table))
+        live = self.root / '.claude/fleet'
+        live.parent.mkdir()
+        live.symlink_to(self.bin.parent, target_is_directory=True)
+        p = self.launch('seed', FLEET_MCP_CONFIG='none')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        args = json.loads((self.root/'launched.json').read_text())['args']
+        hooks = [x for x in args if x.startswith('hooks.')]
+        self.assertTrue(hooks)
+        self.assertTrue(all(str(live) in x for x in hooks))
+        self.assertFalse(any(str(self.bin.parent) in x for x in hooks))
+        commands = [json.loads(x) for h in hooks
+                    for x in re.findall(r'command=("(?:[^"\\]|\\.)*")', h)]
+        command = next(c for c in commands if 'fixture-hook.sh' in c)
+        # A new release keeps the entrypoints, then the old release disappears.
+        next_release = self.root / 'next release'
+        shutil.copytree(self.bin.parent, next_release)
+        live.unlink(); live.symlink_to(next_release, target_is_directory=True)
+        shutil.rmtree(self.bin.parent)
+        ran = subprocess.run(['sh', '-c', command], env=self.env, text=True, capture_output=True)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(ran.stdout, 'replacement hook works\n')
+
+    def test_checkout_hooks_do_not_use_an_unrelated_live_install(self):
+        live = self.root / '.claude/fleet'
+        live.mkdir(parents=True)
+        p = self.launch('seed', FLEET_MCP_CONFIG='none')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        args = json.loads((self.root/'launched.json').read_text())['args']
+        hooks = [x for x in args if x.startswith('hooks.')]
+        self.assertTrue(hooks)
+        self.assertTrue(all(str(self.bin.parent) in x for x in hooks))
 
     def test_none_is_strict_and_subagents_use_native_keys(self):
         p = self.launch('seed', FLEET_MCP_CONFIG='none', FLEET_CODEX_SUBAGENT_MODEL='native-model', FLEET_CODEX_SUBAGENT_EFFORT='high')
