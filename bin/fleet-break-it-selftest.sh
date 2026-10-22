@@ -6933,6 +6933,16 @@ drill_service_orphan_shell_holds_socket() {
 # asks the old copy over its own socket (--busy /api/busy) and waits while it
 # answers; a turn cut off anyway is said on the next start with 重试; the notice
 # is one quiet line; and 新对话 mid-answer puts the turn aside instead of a 409.
+drill_webchat_helper_stale_release() {
+  CAP=20; local t0
+  t0=$(now)
+  webchat_part release "Z resident service initially calls release A gate" \
+    "Z same process calls release B gate after stable switch" \
+    "Z new session uses current release launcher after stable switch" || return 1
+  WHAT='同一网页服务跨 stable A→B，后续 gate 与新建都用当前发行版，不丢会话或重复投递'
+  SECS=$(since "$t0")
+}
+
 drill_webchat_turn_cut_by_restart() {
   CAP=60; local t0
   t0=$(now)
