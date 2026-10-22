@@ -181,6 +181,10 @@ while True:
         # memory-pressure driver must reach the same refusal, even after 30m.
         from types import SimpleNamespace
         self.fake()
+        # The relay endpoint precedes the first asynchronous 7501 state write.
+        # Wait for that writer before setting the dialog, or its startup idle
+        # can erase the test's ask/needs stamps under CI load.
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
         transcript = self.dialog_transcript()
         original = transcript.read_bytes()
         cases = [('needs', 'ask', '', ''), ('done', 'ask', '', ''),
@@ -234,6 +238,7 @@ while True:
 
     def test_dialog_appears_after_native_proof(self):
         self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
         transcript = self.root / 'question.jsonl'
         with patch.dict(os.environ, self.env), \
                 patch.object(gate, 'claude_transcript', return_value=transcript), \
