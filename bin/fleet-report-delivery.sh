@@ -27,7 +27,7 @@ if [ "$act" = _local ]; then
   # Resolve by the exact identity again immediately before invoking the adapter.
   [ "$(tmux -L "$sock" display-message -p -t "$win" '#{@fleet_id}' 2>/dev/null)" = "${recipient#*/}" ] || exit 75
   msg=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["msg"])' "$file") || exit 1
-  fleet_agent_deliver "$win" "$sock" "$msg" fleet-report
+  fleet_agent_deliver "$win" "$sock" "$msg" fleet-report "$rid"
   rc=$?; [ "$rc" = 0 ] && exit 0
   exit 75
 fi

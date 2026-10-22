@@ -69,6 +69,7 @@ import argparse
 import fcntl
 import socket
 import glob
+import hashlib
 import json
 import os
 import re
@@ -861,19 +862,32 @@ def wake_ready(pane):
     Path(str(path) + ".claimed").unlink(missing_ok=True)
 
 
-def wake(fid, seed_file=None, why="网页", request_only=False):
+def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
+    # The sender and peer queue carry the same id. A slow native startup owns
+    # its seed after .taken: a retry observes that receipt, never posts it again
+    # to the now-live inbox. Bare / keyboard wakes retain their existing path.
+    token = 'peer-' + hashlib.sha256(delivery.encode()).hexdigest() if delivery else uuid.uuid4().hex
+    seed = wake_path(fid, token)
     with lock(fid):
+        if delivery and Path(str(seed) + '.launched').exists():
+            return dict(ok=True)
         w = window(fid)
         if w is None:
             return dict(ok=False, why="no_session")
-        if not w["parked"]:
-            return dict(ok=True, already=True)
-        seed = wake_path(fid, uuid.uuid4().hex)
-        seed.write_text(Path(seed_file).read_text() if seed_file else "")
-        result = wake_request(w, seed, why)
-        if not result.get("ok"):
-            seed.unlink(missing_ok=True)
-            return result
+        owned = delivery and (Path(str(seed) + '.taken').exists() or
+                              w.get('park_wake') == str(seed) or w.get('park_start') == str(seed) + '.meta')
+        if owned:
+            result = dict(ok=True, seed=str(seed))
+        else:
+            if w.get('park_wake') or w.get('park_start'):
+                return dict(ok=False, why="wake_pending")
+            if not w["parked"]:
+                return dict(ok=True, already=True)
+            seed.write_text(Path(seed_file).read_text() if seed_file else "")
+            result = wake_request(w, seed, why)
+            if not result.get("ok"):
+                seed.unlink(missing_ok=True)
+                return result
     if request_only:
         return result
     end = time.monotonic() + num_env("FLEET_GATE_WAKE_SECS", 20)
@@ -1085,6 +1099,7 @@ def main(argv=None):
             p.add_argument("--seed-file")
             p.add_argument("--why", default="网页")
             p.add_argument("--request-only", action="store_true")
+            p.add_argument("--delivery")
         if name == "name":
             p.add_argument("--name", required=True)
         if name == "quota-transfer":
@@ -1124,7 +1139,7 @@ def main(argv=None):
     if a.cmd == "park":
         return out(park(a.fid, a.why, a.force))
     if a.cmd == "wake":
-        return out(wake(a.fid, a.seed_file, a.why, a.request_only))
+        return out(wake(a.fid, a.seed_file, a.why, a.request_only, a.delivery))
     if a.cmd == "name":
         # a name the person gave it (@name_manual, issue #3317): every list's title
         loc = locate(a.fid)
