@@ -124,8 +124,13 @@ def quota_settled(session, pane, sid):
     view = inputs(session, pane, agent='claude')
     if view.get('state') != 'empty':
         raise ValueError('quota source prompt is not safely exportable')
+    # OSC errors are not Stop acknowledgements. The live module must separately
+    # prove the main turn stopped and the underlying prompt empty, including
+    # after a person cancels the quota menu without ever running a Stop hook.
+    quota_prompt_proof(session, pane)
     quiet_processes(source)  # same live tool/MCP/subagent inventory as hibernation
     quota_schedules(source)
+    quota_prompt_proof(session, pane)
     if (quota_marks(session, pane) != marks or inspect(session, pane) != source
             or inputs(session, pane, agent='claude') != view
             or fallback.quota_error(source['transcript'], sid) != signal):

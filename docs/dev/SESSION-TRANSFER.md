@@ -107,7 +107,10 @@ per source session before starting `fleet-transfer.sh --to codex --quota-continu
 Native API errors can leave OSC 7501 at `exited` while Claude is still at its
 prompt. The controller verifies the exact quota error, native error/idle state,
 empty prompt and no live tool, background process, approval or loop twice before
-accepting this boundary. It never restamps the source `done`.
+accepting this boundary. Even after native Stop-and-wait or Escape, OSC `exited`
+is not a Stop acknowledgement: the live module must independently prove no main
+turn and an empty underlying prompt through `park.v1`. Missing/expired module
+evidence keeps the source safely refused. It never restamps the source `done`.
 Subscription quota can instead open the native `needs` choice menu. The controller
 requires the exact quota transcript, OSC `blocked/dialog open`, fully visible known
 quota choices, no recent terminal input, the existing native `park.v1` proof of an
@@ -129,6 +132,10 @@ result and controller evidence privately. Unknown completion is recovery, never
 another automatic launch. Queued unsent words return to the page; accepted words
 are never resubmitted. A controller failure after binding Codex keeps that target
 in recovery too, without a second writer. Codex does not automatically switch back.
+An earlier refusal for an unsettled delivery or missing boundary, before any
+controller was launched, can be reconsidered once the delivery settles and a native
+boundary appears. It still must pass every controller proof. An attempted controller
+or uncertain keypress is never retried through this exception.
 Trial admission reads the default agent's pool. The unified open route resolves
 and pins the trial's actual provider and checks that pool before counting a line;
 explicit Claude cannot borrow Codex headroom, and local defaults cannot change the

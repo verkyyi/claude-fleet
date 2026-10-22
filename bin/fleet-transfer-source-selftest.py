@@ -63,11 +63,25 @@ class QuotaSettled(unittest.TestCase):
             snapshot = unittest.mock.Mock(return_value=dict(state='empty', text=''))
             with patch.object(src, 'inspect', return_value=source) as inspect, \
                  patch.object(src, 'quota_marks', return_value=marks) as meta, \
-                 patch.object(src, 'quota_schedules'), \
+                 patch.object(src, 'quota_schedules') as schedules, \
+                 patch.object(src, 'quota_prompt_proof', return_value={'ok': True}) as prompt, \
                  patch.object(src.runpy, 'run_path', return_value={'snapshot': snapshot}), \
                  patch.object(src, 'quiet_processes') as quiet:
                 src.quota_settled('test', '%2', 'exact')
                 quiet.assert_called_once_with(source)
+                self.assertEqual(prompt.call_count, 2)
+                for why in ('active_turn', 'probe_timeout', 'draft'):
+                    prompt.side_effect = ValueError(why)
+                    with self.assertRaisesRegex(ValueError, why):
+                        src.quota_settled('test', '%2', 'exact')
+                prompt.side_effect = [{'ok': True}, ValueError('main turn restarted')]
+                with self.assertRaisesRegex(ValueError, 'main turn restarted'):
+                    src.quota_settled('test', '%2', 'exact')
+                prompt.side_effect = None
+                schedules.side_effect = ValueError('current scheduler unknown')
+                with self.assertRaisesRegex(ValueError, 'current scheduler unknown'):
+                    src.quota_settled('test', '%2', 'exact')
+                schedules.side_effect = None
                 with self.assertRaisesRegex(ValueError, 'conversation changed'):
                     src.quota_settled('test', '%2', 'other')
                 for state in ('unknown', 'draft'):
