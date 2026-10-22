@@ -145,7 +145,10 @@ while True:
 
     def test_driver_parks_when_no_repo_is_hosted(self):
         self.fake()
-        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        # Source is written before the timestamp in set-claude-state.sh. Wait
+        # for the final stamp before aging it, or Linux can overwrite our clock.
+        self.wait(lambda: self.opt('@claude_state_src') == '7501'
+                  and self.opt('@claude_state_ts').isdigit())
         self.set('@claude_state_ts', str(int(time.time()) - 600))
         self.set('@norepo', '1')
         driver = self.root / 'driver'
@@ -158,19 +161,10 @@ while True:
             'fleet_socket() { printf %s "' + self.label + '"; }\n'
             'fleet_repos() { :; }\n'
             'fleet_window_repo() { return 1; }\n')
-        # Keep the subprocess gate's refusal visible on CI (the driver normally
-        # only prints actions). This uses the real gate, not a decision stub.
-        gate_log = self.root / 'gate-result'
-        gate_driver = self.root / 'gate-driver'
-        import shlex
-        gate_driver.write_text('#!/bin/bash\npython3 ' + shlex.quote(str(driver / 'fleet_session_gate.py'))
-                               + ' "$@" | tee ' + shlex.quote(str(gate_log)) + '\n')
-        gate_driver.chmod(0o755)
-        self.env['FLEET_SESSION_GATE_CMD'] = str(gate_driver)
-        p = subprocess.run(['bash', '-x', str(driver / 'fleet-cleanup-idle.sh'), 'test'],
+        p = subprocess.run(['bash', str(driver / 'fleet-cleanup-idle.sh'), 'test'],
                            env=self.env, capture_output=True, text=True, timeout=15)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertTrue(self.opt('@park_held'), 'zero-repo fleet omitted parking: ' + p.stdout + p.stderr + ' state=' + self.opt('@claude_state') + ' ts=' + self.opt('@claude_state_ts') + ' gate=' + (gate_log.read_text() if gate_log.exists() else 'not called') + ' why=' + self.opt('@reap_why'))
+        self.assertTrue(self.opt('@park_held'), 'zero-repo fleet omitted parking: ' + p.stdout + p.stderr + ' state=' + self.opt('@claude_state') + ' ts=' + self.opt('@claude_state_ts') + ' why=' + self.opt('@reap_why'))
 
     def test_keyboard_bytes_after_proof_cancel_exit(self):
         self.fake()
