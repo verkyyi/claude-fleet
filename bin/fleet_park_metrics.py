@@ -56,36 +56,17 @@ def process_trees(text):
     return tree
 
 
-def latest_park_rss(path):
-    """Last park action per lifelong identity; observations never append rows."""
-    saved = {}
-    try:
-        with Path(path).open() as book:
-            for line in book:
-                try:
-                    row = json.loads(line)
-                    if row.get("act") != "park" or not row.get("fid"):
-                        continue
-                    rss = row.get("rss_mb")
-                    saved[row["fid"]] = float(rss) if type(rss) in (int, float) and math.isfinite(rss) and rss >= 0 else None
-                except (ValueError, TypeError, AttributeError):
-                    continue
-    except FileNotFoundError:
-        pass  # C1 has not parked anything yet.
-    return saved
-
-
 def census(socket, session, cache_dir):
     # Exact session, one row per window: grouped views never duplicate a pane.
     fmt = "\x1f".join(["#{window_id}", "#{pane_pid}", "#{@fleet_role}", "#{window_name}",
-                          "#{@park_state}", "#{@park_saved_mb}", "#{@park_wrap_ver}",
-                          "#{@park_since}", "#{@fleet_id}", "#{@park_why}"])
+                          "#{@parked}", "#{@park_saved_mb}", "#{@park_wrap_ver}",
+                          "#{@park_since}", "#{@fleet_id}", "#{@park_why}",
+                          "#{@park_held}", "#{@park_start}"])
     rows = command(["tmux", "-u", "-L", socket, "list-windows", "-t", "=" + session, "-F", fmt])
     clients = command(["tmux", "-L", socket, "list-clients", "-F", "#{client_control_mode}\x1f#{window_id}"])
     watched = {wid for row in clients.split("\n") for control, sep, wid in [row.replace("\\037", "\x1f").partition("\x1f")]
                if sep and control != "1"}
     trees = process_trees(command(["ps", "-axo", "pid=,ppid=,rss=,time=,command="]))
-    saved_by_fid = latest_park_rss(Path(cache_dir).parent / "logs/park.ndjson")
     path = Path(cache_dir) / ("park-cpu-" + session + ".json")
     try:
         previous = json.loads(path.read_text())
@@ -96,11 +77,9 @@ def census(socket, session, cache_dir):
         # tmux <=3.4 vis-escapes this control separator even with -u.
         # Newer tmux emits the literal byte; both describe the same census row.
         fields = row.replace("\\037", "\x1f").split("\x1f")
-        if len(fields) == 9:  # older census fixtures / readers
-            fields += [""]
-        if len(fields) != 10:
+        if len(fields) != 12:
             continue
-        wid, pid, role, name, parked, saved, wrap, _since, fid, why = fields
+        wid, pid, role, name, parked, saved, wrap, _since, _fid, why, held, start = fields
         if role in ("home", "panel") or (not role and name in ("home", "dash", "plan", "backlog")):
             continue
         if not pid.isdigit():
@@ -118,17 +97,16 @@ def census(socket, session, cache_dir):
             quiet = None
         next_sample[wid] = {"at": now, "cpu": cpu, "pid": pid, "quiet": quiet} if elapsed >= 60 or old.get("pid") != pid else old
         try:
-            saved_mb = max(0, float(saved)) if saved else None
-            if saved_mb is not None and not math.isfinite(saved_mb):
+            saved_mb = float(saved) if saved else None
+            if saved_mb is not None and (not math.isfinite(saved_mb) or saved_mb < 0):
                 saved_mb = None
         except ValueError:
             saved_mb = None
-        # The latest park action is authoritative, including an unknown sample.
-        if fid in saved_by_fid:
-            saved_mb = saved_by_fid[fid]
-        result[wid] = {"state": "parked" if parked == "停放中" else "awake",
+        # HHV0's request plus confirmed holding page; C1 owns the RSS snapshot.
+        is_parked = bool(parked and held)
+        result[wid] = {"state": "parked" if is_parked else "awake",
                        "rss_mb": round(rss, 2) if known else None, "saved_mb": saved_mb,
-                       "why": "working" if parked == "接回中" else "watched" if wid in watched else "failed" if parked == "失败" else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
+                       "why": "working" if start and not is_parked else "watched" if wid in watched else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".%d.tmp" % os.getpid())
