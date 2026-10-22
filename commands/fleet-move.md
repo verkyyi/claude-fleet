@@ -37,6 +37,13 @@ inspect the target before resuming the source to avoid two writable copies.
 `--keep-source` and `--via hub` refuse Codex rather than falling back to an old
 Claude transcript. Source branches are pushed even when behind master so the
 target starts at the exact same commit.
+Imported homes use the destination login's subscription pool. The native resume
+explicitly selects the new worktree and preserves model and reasoning effort.
+Rotation leases suppress exit cleanup during the move; an unverified target
+returns failure, even if it created a window. Moved target windows carry a reap
+hold for operator follow-up; `fleet_worker_life.py release --session <fleet>
+<window>` restores normal automatic reaping. This moves committed repository
+content and native conversation history, not arbitrary files outside the worktree.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 

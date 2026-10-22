@@ -47,6 +47,7 @@ MOVE="$BIN/fleet-move.sh"; REMOTE="$BIN/fleet-move-remote.sh"
 [ -f "$MOVE" ] && [ -f "$REMOTE" ] || { printf 'selftest: fleet-move.sh/-remote.sh not found\n' >&2; exit 2; }
 
 CHECKS=0
+python3 "$BIN/fleet-move-codex-selftest.py" || st_fail 'Codex migration identity, archive, launch or recovery regression'
 
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 if [ -z "$REAL_TMUX" ] || ! command -v perl >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
