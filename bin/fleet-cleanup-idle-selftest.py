@@ -1749,7 +1749,7 @@ class WebPark(Rig):
                       "-c", str(self.root), "sleep 90").strip()
         fid = "%08x-0000-4000-8000-0000000000aa" % int(win[1:])
         for key, value in dict({"@norepo": "1", "@fleet_id": fid, "@reap_policy": "keep", "@reap_origin": "web",
-                                "@session_origin": "web", "@claude_state": "done",
+                                "@session_origin": "web", "@park_wrap_ver": "1", "@claude_state": "done",
                                 "@claude_state_ts": str(int(time.time()) - idle)}, **opts).items():
             self.tm("set-option", "-w", "-t", win, key, value)
         return win, fid

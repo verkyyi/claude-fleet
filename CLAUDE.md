@@ -539,13 +539,17 @@ one-off drill / audit records do not go in the repo (issue #3576).
   mod's conditional accept `idle.v2` (no turn running, no draft, no /clear since,
   checked again at the engine's entry; mod ≥ 0.7.0, `@mod_accept idle.v2`), Codex
   through its own queue; refused ⇒ queued and retried, unanswered ⇒ settled by its
-  receipt, never posted twice. A session the web opened (`@session_origin web`, reap
-  origin `web` = `keep`) is PARKED idle (`FLEET_SESSION_PARK_IDLE`, 5 min): its agent
+  receipt, never posted twice. Every origin uses the same idle parker (C1), only
+  on wrappers stamped `@park_wrap_ver=1` (`FLEET_SESSION_PARK_IDLE`, 5 min;
+  unattended also 5 min after the cache probe, 1 min opt-in): its agent
   exits in its own window, the window / ID / conversation / session credential stay
   and it reads idle; `fleet-session-wrap.sh` `park_hold` resumes the same
   conversation on a wake (the sentence the start's first turn, a seed claimed by
   rename) or when a person looks at the window. Never parked while answering,
-  asking, holding a job, with words waiting or watched. Inventory col 36
+  asking, holding a job, with words waiting or watched. Native `park.v1` proves
+  the prompt empty; the 7501 relay refuses /exit if keyboard bytes arrived after
+  that proof. `fleet_park_wake <fid> --why ... [--seed-file ...]` is the one wake
+  road. `logs/park.ndjson` records actions only. Inventory col 36
   `cantalk=`, col 5 `parked`. `fleet-session-gate-selftest.py`, BREAK-IT
   `park-while-watched` · `wake-timeout`, docs/dev/WEB-CHAT.md «会话合一 ①».
 - **Orchestrating is a session template — no seat, no rule table, nothing keeps

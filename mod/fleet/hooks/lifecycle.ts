@@ -52,7 +52,7 @@ import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
 import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
 import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
-import { noteSessionBoundary, runtimeQuery, WRITE_TIMEOUT_MS } from './state'
+import { noteSessionBoundary, runtimeQuery, runtimeIdleNow, WRITE_TIMEOUT_MS } from './state'
 import { ACCEPT_V2, acceptOutcome, acceptSessionEnded, beginAccept, parseAccept } from './accept'
 
 export const HEARTBEAT_MS = 15_000
@@ -101,6 +101,14 @@ function inboxIo($: EngineInterface): InboxIo {
       await $.command.run({ command, args })
     },
     query: async request => {
+      if (request.query === 'park.v1') {
+        const now = (await $.clock.now()) / 1000
+        if (!isOpen() || typeof request.deadline !== 'number' || now >= request.deadline
+            || request.deadline - now > 5) return { ok: false, why: 'expired' }
+        if (!runtimeIdleNow()) return { ok: false, why: 'busy' }
+        if ((await $.prompt.read()).text !== '') return { ok: false, why: 'draft' }
+        return { ok: runtimeIdleNow(), why: runtimeIdleNow() ? '' : 'busy' }
+      }
       const context = await $.env.get('FLEET_LAUNCH_CONTEXT')
       const payload = runtimeQuery(request, context, (await $.clock.now()) / 1000)
       const r = await $.process.run(['python3', `${$.plugin.root}/../../bin/fleet_runtime.py`, 'event'], {

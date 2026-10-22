@@ -99,6 +99,22 @@ def park_idle_secs():
     return max(PARK_IDLE_MIN, s) if s is not None else PARK_IDLE_DEFAULT
 
 
+def park_idle_unattended_secs():
+    """C1 cache probe lost part of the prefix: conservative 5m, 1m opt-in."""
+    import os
+    v = os.environ.get("FLEET_SESSION_PARK_IDLE_UNATTENDED", "").strip()
+    if v == "0":
+        return 0
+    secs = dur_secs(v) if v else None
+    return max(PARK_IDLE_MIN, secs) if secs is not None else PARK_IDLE_DEFAULT
+
+
+def park_presence_secs():
+    import os
+    secs = dur_secs(os.environ.get("FLEET_SESSION_PARK_PRESENCE", "15m"))
+    return secs if secs is not None else 900
+
+
 # The origins whose «done» is a reported result — the dispatched road
 # (fleet-cleanup-idle.py dispatched_session): over ⇒ closed, unreported ⇒ nudged.
 REPORTING = ("dispatched", "member", "driver")

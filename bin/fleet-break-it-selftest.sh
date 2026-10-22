@@ -6354,6 +6354,22 @@ drill_c8_old_supervisor_reopen() {
 # A web session parked while a person is looking at it in a terminal (task HHV0):
 # its agent would exit under their eyes. The gate's park refuses while a terminal
 # client shows the window (a control-mode client — the hub's own — is nobody).
+drill_park_all_origins() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='所有来源共用停放器：同一窗口与身份，真实进程退出后同会话接回；草稿、后台任务、旧外壳不停'
+}
+
+drill_park_old_wrapper() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" N 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='旧外壳没有停放页：拒停，不送退出，不动凭据和窗口'
+}
+
 drill_park_while_watched() {
   CAP=30; local t0 out
   t0=$(now)
