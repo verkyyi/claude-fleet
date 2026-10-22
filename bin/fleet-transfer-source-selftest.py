@@ -172,6 +172,66 @@ class BrokenHookMaintenance(unittest.TestCase):
             finally:
                 subprocess.run(['tmux','-L',label,'kill-server'],capture_output=True,env=env)
 
+    @unittest.skipUnless(__import__('shutil').which('tmux'), 'tmux unavailable')
+    def test_actual_wrapper_exit_retains_pane_then_same_thread_launches_once(self):
+        from contextlib import ExitStack
+        import shlex,uuid
+        import fleet_native_proc
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root=Path(tmp).resolve(); (root/'handoffs').mkdir();work=root/'work';work.mkdir(); bin_=root/'bin';bin_.mkdir()
+            label='repair-flow-'+uuid.uuid4().hex[:10];fid=str(uuid.uuid4()); transcript=root/'source.jsonl';transcript.write_text('{}\n')
+            child=root/'native.sh';child.write_text('printf "%s" "$$" > '+shlex.quote(str(root/'native.pid'))+'\n'
+                +'while IFS= read -r line; do case "$line" in */exit*) exit 0;; esac; done\n')
+            original=root/'wrapper.sh';original.write_text('bash '+shlex.quote(str(child))+'\n'
+                +'[ "$(tmux -L '+label+' display-message -p -t "$TMUX_PANE" "#{@wrap_quiet}")" = 1 ] && exit 0\n'
+                +'exec sleep 600\n')
+            successor=bin_/'fleet-session-wrap.sh';successor.write_text('#!/bin/bash\nprintf "%s\n" "$@" > '
+                +shlex.quote(str(root/'launch.argv'))+'\nexec sleep 600\n');successor.chmod(0o755)
+            env={k:v for k,v in os.environ.items() if not k.startswith('FLEET_') and k not in ('TMUX','TMUX_PANE')}
+            env.update(HOME=str(root),FLEET_CONF_DIR=str(root),FLEET_GATE_DIR=str(root/'gate'))
+            stack.enter_context(patch.dict(os.environ,env,clear=True))
+            tm=lambda *a:subprocess.check_output(['tmux','-L',label,*a],text=True,env=env).strip()
+            try:
+                tm('new-session','-d','-s',label,'-n','anchor','sleep 600')
+                win=tm('new-window','-d','-t',label,'-c',str(work),'-P','-F','#{window_id}',
+                       'exec bash '+shlex.quote(str(original)))
+                pane=tm('display-message','-p','-t',win,'#{pane_id}')
+                tm('set-option','-w','-t',win,'@fleet_id',fid)
+                deadline=time.monotonic()+5
+                while not (root/'native.pid').exists() and time.monotonic()<deadline:time.sleep(.02)
+                pid=int((root/'native.pid').read_text())
+                source=dict(agent='codex',pid=pid,session=label,window=win,pane=pane,worktree=str(work),
+                    home='/real-home',transcript=str(transcript),session_id='sid',codex_identity=dict(remote='unix:///old.sock'))
+                proof=dict(source=source,fid=fid,birth=fleet_native_proc.process(pid),processes=[fleet_native_proc.process(pid)],
+                    input={'state':'empty'},missing_hooks=['/old/hook.py'],loop=None,last_turn='completed')
+                stack.enter_context(patch.object(src,'BIN',bin_))
+                stack.enter_context(patch.object(src,'repair_check',return_value=proof))
+                stack.enter_context(patch.object(src,'repair_target_home',return_value='/real-home'))
+                stack.enter_context(patch.object(src,'native_hook_flags',return_value=(
+                    ['hooks.Stop=fleet-codex-session.py bash-guard.py base-readonly-guard.py'],[])))
+                stack.enter_context(patch.object(src,'inspect',side_effect=lambda *a:dict(source,
+                    pid=int(tm('display-message','-p','-t',pane,'#{pane_pid}')),
+                    codex_identity={'remote':'unix:///new.sock'})))
+                run=src.run
+                stack.enter_context(patch.object(src,'run',side_effect=lambda a,**k:'' if a[0]=='git' else run(a,**k)))
+                class Rpc:
+                    initialized={'userAgent':'claude_fleet/0.162.1'}
+                    def __init__(self,*a,**kw):pass
+                    def call(self,*a):return {'thread':{'id':'sid','cwd':str(work)}}
+                    def close(self):pass
+                stack.enter_context(patch.object(src,'RPC',Rpc))
+                with contextlib.redirect_stdout(io.StringIO()):src.repair_hooks(label,pane,fid,'sid')
+                self.assertEqual(tm('display-message','-p','-t',win,'#{@fleet_id}'),fid)
+                self.assertEqual(tm('display-message','-p','-t',pane,'#{remain-on-exit}'),'off')
+                deadline=time.monotonic()+5
+                while not (root/'launch.argv').exists() and time.monotonic()<deadline:time.sleep(.02)
+                self.assertEqual((root/'launch.argv').read_text().splitlines(),
+                    ['--agent','codex','--codex-home','/real-home','--resume','sid'])
+                receipts=list((root/'handoffs').glob('hook-repair-*/receipt.json'))
+                self.assertEqual(json.loads(receipts[0].read_text())['state'],'resumed')
+            finally:
+                subprocess.run(['tmux','-L',label,'kill-server'],capture_output=True,env=env)
+
     def test_exact_maintenance_success_and_unknown_completion_never_relaunch(self):
         from contextlib import ExitStack
         import fleet_session_gate as gate
