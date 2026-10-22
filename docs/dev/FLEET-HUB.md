@@ -1832,7 +1832,11 @@ person's session.
   completed observation period.
   The local runner keeps its key/pass and bounded stdout/stderr in memory.
   Codex gets a fresh credential-free home and the Fleet provider's environment
-  credential. `fleet-svc-fetch.py URL` reads public HTTP(S) pages with GET only,
+  credential. An outer named permissions profile permits only this run's
+  directories and required runtime libraries; the inner CLI retains
+  `workspace-write`. Unsupported profile versions fail closed. Native sandbox
+  tests verify that a sibling run cannot be read. Ephemeral execution avoids
+  persisting Codex session transcripts. `fleet-svc-fetch.py URL` reads public HTTP(S) pages with GET only,
   no proxy/cookies, checked and pinned DNS, redirects rechecked, and a 2 MB cap.
   Failure tails are redacted before reaching the hub audit.
 - **`svc_degraded`** (claude-fleet#4007). Daily `tenant=probe` runs are scheduled by the caller; two consecutive final failures in seven days also trigger this alert. The alert sweep (`RunNodeAlerts`,
