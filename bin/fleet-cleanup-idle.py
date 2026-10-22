@@ -87,17 +87,6 @@ def unreported_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else UNREPORTED_DEFAULT
 
 
-BG_GRACE_DEFAULT = 30 * 60      # E101 拍板: 做完后后台活最多再保 30 分钟
-
-
-def bg_grace_secs():
-    """How long a session whose work is over may keep a background job (a preview
-    server, a /loop) alive past its last turn before the job no longer holds the
-    window (E101: Y794's poster preview held it 12 h)."""
-    value = os.environ.get("FLEET_REAP_BG_GRACE", "")
-    return int(value) if re.fullmatch(r"\d{1,7}", value) else BG_GRACE_DEFAULT
-
-
 # An ID's newest result that waits on its person (E101).
 WAIT_RESULTS = ("waiting", "blocked")
 
@@ -122,7 +111,6 @@ class Cleaner:
         self.now = int(time.time())
         self.idle = minutes() * 60
         self.why = ""          # why the window in hand is still open (E101: @reap_why)
-        self.bg_over = False   # its background job outlived bg_grace_secs(): killed with the window
         self.records = {}      # one record read a tick per task
         self._mem = None       # HHV0: (tight, the longest-idle web window) once a pass
 
@@ -295,55 +283,16 @@ class Cleaner:
         return bool(held)
 
     def held(self, window, snap, over):
-        """busy() — but a session whose work is over (`over`) owns its background
-        job only bg_grace_secs() past its last turn (E101: a poster's preview server
-        held Y794's window 12 hours after its task closed). Past that the job no
-        longer holds the window; the close takes it along (bg_over). Work not over:
-        busy() as it was."""
+        """Completion never overrides a real background job or pending loop.
+
+        Keep the caller's `over` argument compatible; it is evidence about the
+        result, not permission to terminate work (C6 / T965).
+        """
         if not self.busy(window, snap):
             return False
-        if not over:
-            return True
-        stamp = snap["@claude_state_ts"]
-        due = (int(stamp) if stamp.isdigit() else self.now) + bg_grace_secs()
-        if due <= self.now:
-            self.bg_over = True
-            return False
-        self.why = "bg:%d" % due
-        self.say(window, "skip:bg-job", "due=%d" % due)
+        self.why = "bg"
+        self.say(window, "skip:bg-job")
         return True
-
-    def tree_pids(self, pid):
-        """Every process under <pid> (not itself) — one ps."""
-        procs = self.tree_rss()
-        kids = {}
-        for p, (pp, _) in procs.items():
-            kids.setdefault(pp, []).append(p)
-        out, todo = [], list(kids.get(int(pid), [])) if str(pid).isdigit() else []
-        while todo:
-            p = todo.pop()
-            if p not in out:
-                out.append(p)
-                todo.extend(kids.get(p, []))
-        return out
-
-    @staticmethod
-    def kill_left(pids):
-        """What a closed window's background job left running (E101): its pane went
-        with the window, the job it outlived its grace for goes too — TERM to each
-        process still up a moment later (a preview server outside every worktree
-        anchor, which fleet-window-reap.sh would spare)."""
-        if not pids:
-            return []
-        time.sleep(1)
-        gone = []
-        for p in pids:
-            try:
-                os.kill(p, 15)
-                gone.append(p)
-            except OSError:
-                pass
-        return gone
 
     def deadline(self, snap, pol):
         """When this window's own policy lets it go (issue #1902)."""
@@ -433,10 +382,7 @@ class Cleaner:
                 self.say(window, "id-shared", other.split("\t")[-1])
             else:
                 self.retire(window)
-            left = self.tree_pids(snap["pane_pid"]) if self.bg_over else []
             self.tm("kill-window", "-t", window)
-            if left:
-                print("bg-killed:%s %s" % (window, ",".join(str(p) for p in self.kill_left(left)) or "-"))
             if not other:
                 self.end_id(snap["@fleet_id"], why)
             return True
@@ -523,7 +469,7 @@ class Cleaner:
             return False
         try:
             run("python3", str(BIN / "fleet-reap-live.py"), window,
-                "--socket-name", self.args.socket_name, *(["--bg-over"] if self.bg_over else []))
+                "--socket-name", self.args.socket_name)
         except subprocess.CalledProcessError:
             self.why = "live"      # someone looks at it, or a draft in its box
             raise
@@ -838,7 +784,7 @@ class Cleaner:
         hub turns into the list card's 「为什么还没收」 line. Written when it changes,
         cleared when there is none (a working window says none); a closed window
         has no window left to carry it."""
-        self.why, self.bg_over = "", False
+        self.why = ""
         snap = self.snapshot(window)
         closed = False
         try:
@@ -1306,7 +1252,7 @@ class Cleaner:
             return False
         if not self.close(window, snap, lambda: not self.held(window, snap, True)):
             return False  # re-checked right before the close
-        print("reaped-task:" + window + " " + task + (" bg-over" if self.bg_over else ""))
+        print("reaped-task:" + window + " " + task)
         return True
 
     def branch_prs(self, branch, head):

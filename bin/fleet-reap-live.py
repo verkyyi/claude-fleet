@@ -226,18 +226,10 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
                "#{@loop}\t#{@handoff_manifest}").rstrip("\n")
     value, _, manifest = raw.partition("\t")
     if (value or manifest) and LOOPMARK["status"](value, manifest)[0] == "active":
-        if not bg_over:
-            return "retained:loop"
-        if waived is not None:
-            waived.append("loop")
+        return "retained:loop"
+    # `bg_over` remains accepted for launchers from older installs. A terminal
+    # report and elapsed grace never waive real work (C6 / T965).
     why = waiting(target, socket_name)
-    # Work over past its background grace (E101, --bg-over — the idle reaper's
-    # word): a pending round or a Bash-tool job no longer holds it; a sub-task
-    # still open or a fleet tool call in flight still does.
-    if why == "bg" and bg_over:
-        if waived is not None:
-            waived.append("bg")
-        why = ""
     # A worker whose PR merged (merged_at, the merged gate's own probe) has shipped:
     # a sub-task it spawned and that is still open — a repro session left at its
     # prompt — does not keep it (issue #4822). The child stays; its reports climb

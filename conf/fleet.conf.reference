@@ -927,11 +927,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Default 1800 (30 min).
 # @label=Nudge an unreported dispatched session after @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_UNREPORTED_SECS=1800
-# A session whose work is over (its record closed, its ID's result final) keeps a
-# background job (a preview server, a /loop) holding its window only this many
-# seconds past its last turn (E101); then the window closes and the job goes with
-# it. A session still working is never touched. Default 1800 (30 min).
-# @label=A finished session's background job holds it for @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
+# Compatibility only (C6 / T965): this old grace no longer permits closing a
+# real background job or pending loop. Completion never overrides running work.
+# @label=Legacy background grace (no longer waives work) @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_BG_GRACE=1800
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota

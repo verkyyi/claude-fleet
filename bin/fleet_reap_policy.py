@@ -88,7 +88,7 @@ PARK_IDLE_MIN = 60
 
 # The park gate owns eligibility; the reaper only carries its refusal to the
 # same explanation line. In particular, a background PARK hold has no close
-# countdown (the existing `bg:<epoch>` is a different, completed-work policy).
+# countdown (`bg:<epoch>` is still readable for notices from older installs).
 PARK_HOLDS = {"watched": "watched", "draft": "draft", "typing": "draft",
               "bg": "park-bg", "asking": "asking", "old_wrapper": "old-wrapper"}
 

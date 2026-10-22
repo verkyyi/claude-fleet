@@ -1305,8 +1305,7 @@ class TaskSession(Rig):
 
 
 class HoldsAndWhy(TaskSession):
-    """E101: a finished task's background job holds its window only
-    FLEET_REAP_BG_GRACE past its last turn; a session waiting on its person is
+    """C6 / T965: real background work always holds its window; a session waiting on its person is
     parked by the common gate and reaped after three days with resumable history;
     a window its agent's error stopped is never closed; and every window the pass
     leaves open carries why (@reap_why), cleared once it is working."""
@@ -1333,7 +1332,7 @@ class HoldsAndWhy(TaskSession):
         return self.tm("display-message", "-p", "-t", self.win, "#{@reap_why}").strip()
 
     def test_a_background_job_holds_a_done_task_past_old_grace(self):
-        """Y794: a preview server kept a closed task's window 12 hours."""
+        """A closed task does not authorize dropping its pending work."""
         self.answer.write_text("0\n")
         self.set("@loop", "kind=wakeup next=%d ttl=600" % (int(time.time()) + 6000))   # its job still pending
         self.set("@claude_state_ts", str(int(time.time()) - 1000))
