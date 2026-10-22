@@ -924,10 +924,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # it. A session still working is never touched. Default 1800 (30 min).
 # @label=A finished session's background job holds it for @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_BG_GRACE=1800
-# compat-1v: 下一批删 — previous releases read this E101 timer. Current cleanup
-# uses C1 parking tiers and FLEET_SESSION_REAP_PARKED; this key is ignored.
-# @label=Legacy waiting timer (ignored) @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
-#FLEET_REAP_PARK_SECS=14400
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota
 # move). Empty by default. Exact configured stdio launchers/package entrypoints
