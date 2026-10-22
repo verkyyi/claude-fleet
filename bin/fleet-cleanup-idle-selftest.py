@@ -2188,6 +2188,9 @@ class ParkTable(unittest.TestCase):
                 "@park_held": "1", "@park_since": "100", "@park_presence": "200"}
         with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "1h"}):
             self.assertEqual(rp.parked_deadline(snap), 3800)
+            finished = {"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "looping",
+                        "@agent_status": '{"state":"done"}', "@claude_state_ts": "100"}
+            self.assertIn("next=park@", rp.explain(finished, now=200))
             for opts in ({"@pin": "1"}, {"@reap_policy": "keep", "@reap_keep_by": "person"}):
                 self.assertIsNone(rp.parked_deadline(dict(snap, **opts)))
 

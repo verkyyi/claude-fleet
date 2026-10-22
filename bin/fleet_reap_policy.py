@@ -178,7 +178,9 @@ def explain(snap, now=None):
     if not snap.get("@park_wrap_ver"):
         return prefix + " next=legacy-policy (old wrapper) why=" + why
     stamp = snap.get("@claude_state_ts", "")
-    if snap.get("@claude_state") == "done" and stamp.isdigit():
+    from fleet_reap_notice import reap_state
+    state = reap_state(snap.get("@claude_state", ""), snap.get("@agent_status", ""), snap.get("@claude_needs", ""))
+    if state == "done" and stamp.isdigit():
         delay = park_after(snap, now)
         watched = snap.get("@park_watched_at", "")
         due = max(int(stamp), int(watched) if watched.isdigit() else 0) + delay
