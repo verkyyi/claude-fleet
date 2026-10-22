@@ -177,13 +177,15 @@ class Recovery(unittest.TestCase):
         self.assertIn('keep hung prompt', f.tm('capture-pane', '-p', '-t', f.win))
 
     def test_timer_defers_without_losing_delivery_or_counting_failure(self):
-        from types import SimpleNamespace
+        import fleet_park_wake as wake
         f, gate = self.fixture(memory=True)
         admit = f.root / 'admit'
         with patch.dict(os.environ, f.env):
             self.assertTrue(gate.park(f.fid)['ok'])
-            args = SimpleNamespace(fid=f.fid, text='timer original', image=[], delivery=None, why='定时', next_at=123)
-            gate.say(args)
+            wake.save(wake.path_for(f.fid), dict(v=1, fid=f.fid, sid=f.sid, agent='claude',
+                phase='active', parked=True, jobs=[dict(id='timer', kind='wakeup', prompt='timer original',
+                                                     next=123, recurring=False)]))
+            wake.tick(f.fid)
             f.wait(lambda: f.opt('@park_held'))
             record = gate.records(f.fid)[0]
             gate.settle(f.fid, record['delivery'])
@@ -208,6 +210,10 @@ class Recovery(unittest.TestCase):
             f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
             gate.settle(f.fid, record['delivery'])
             self.assertEqual(gate.records(f.fid)[0]['state'], 'sent', gate.records(f.fid)[0])
+            wake.tick(f.fid)
+            contract = json.loads(wake.path_for(f.fid).read_text())
+            self.assertNotIn('pending', contract)
+            self.assertIsNone(contract['jobs'][0]['next'])
 
 
 if __name__ == '__main__':

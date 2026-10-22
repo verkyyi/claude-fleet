@@ -191,7 +191,11 @@ sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.s
   || st_fail "R --resume <sid> must sit between the launcher and the seed" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"
 CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed" --agent codex
-grep -q -- '--resume' "$WORK/newwin" && st_fail "R a Codex return carries no Claude --resume" "$(cat "$WORK/newwin")"
+# C5 enables park_resume for Codex too. The shared launcher accepts --resume
+# and fleet-codex.sh normalizes it to `resume <id>`; dropping it loses the thread.
+sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.sh' --agent codex --resume $SID \"\$(cat '" \
+  || st_fail "R a Codex return keeps the exact conversation id" "$(cat "$WORK/newwin")"
+[ "$(seed)" = "[fleet park] read the handoff" ] || st_fail "R a Codex return keeps its first turn" "$(seed)"
 st_pass "R a parked session comes back on the same conversation with its own first turn (#2671)"
 
 # ===== BODY: fleet_worker_prompt_body (the per-fleet directive the brief prints)

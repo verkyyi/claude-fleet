@@ -6426,6 +6426,30 @@ drill_park_codex_new_thread() {
   WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
 }
 
+drill_park_codex_loop_idle() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_looping_without_mod_status_uses_native_idle_proof 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 循环没有 Claude mod 状态时仍由原生 idle 证明决定停放，正在工作的原生 thread 不停'
+}
+
+drill_wake_loop_reenters_bridge() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_resume_does_not_reenter_initial_loop_bridge 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放后接回清除首次桥接启动参数，保留原 manifest 与单 owner 定时约定，不重建循环'
+}
+
+drill_wake_wrong_transcript() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dash-issue-session-prompt-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='启用 Codex 停放不能把旧项目目录里的 Claude transcript 当成它的恢复依据'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)
@@ -6464,6 +6488,25 @@ PY
     || { WHY='restore called the holding wrapper a failed native launch'; return 1; }
   SECS=$(since "$t0")
   WHAT='进程退出后到点唤醒，同一窗口与会话的首轮是原提示，约定时刻记入动作账本'
+}
+
+drill_park_loop_rebootstrap() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_codex_park_resume_does_not_bootstrap_second_controller 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='原 Fleet loop 停放接回不复用首次创建控制器的环境，同 thread 原提示一次、原账本继续调度'
+}
+
+drill_park_stopped_timer_revives() {
+  CAP=45; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_codex_stopped_loop_never_rearms \
+    test_codex_stopped_pending_loop_never_rearms test_codex_cancelled_pending_job_keeps_sibling \
+    test_codex_cancelled_pending_job_keeps_due_sibling test_cancelled_native_cron_pending_never_wakes 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='显式停止或取消后，旧定时队列不再接回；未取消的任务保留同一账本和会话'
 }
 
 drill_park_loses_cron() {

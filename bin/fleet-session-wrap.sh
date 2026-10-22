@@ -331,6 +331,11 @@ PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # submitted with ↵ here. Switching windows only shows the saved screen. Sets
 # park_seed (the first turn's words, may be empty) and park_act (wake | quit).
 park_hold() {
+  # Transfer's launch.sh passes these only to create the first loop controller.
+  # After park, the existing gate owns the original ledger. Replaying LOOP_SPEC
+  # on resume would enter bridge again and collide with that ledger's directory.
+  # Keep HANDOFF_MANIFEST / LOOP_RECORD so the same owner can still defer/stop.
+  unset FLEET_LOOP_SPEC FLEET_LOOP_AGENT
   park_act=wake; park_seed=''
   wset @claude_needs ''
   wset @claude_state_src wrapper
@@ -549,6 +554,10 @@ while :; do
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
   # Parked: the window holds the same conversation until a wake, and looks idle.
   if [ -n "$parked" ]; then
+    # The initial transfer bridge has handed its ledger to the park gate.
+    # Resume the same thread without constructing another bridge/controller.
+    # Keep the manifest: owner commands still find the original loop ledger.
+    unset FLEET_LOOP_SPEC FLEET_LOOP_AGENT FLEET_LOOP_RECORD
     while :; do
       park_hold
       [ "$park_act" != quit ] || exit "$rc"

@@ -470,6 +470,8 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 不支持该退出方式的老中继拒停，等下次正常重开后启用。
 证明以后有键盘输入就取消，绝不靠 Escape 清空草稿。窗口、ID、对话、工作区和凭据留在原处，窗口仍读作空闲。
 有定时任务时必须先交出 C3 的唤醒约定，否则保守不停。
+Codex 的 Fleet loop 轮间即使没有 Claude mod 状态，也由同一原生证明判断是否可停。
+迁移循环停放后，外壳接回时移除首次桥接启动参数，保留原 manifest 与 ledger；不再创建控制器，定时投递继续归已交接的 gate owner。
 
 唯一唤醒接口为 `fleet_park_wake <fid> --why <理由> [--seed-file <文件>]`，转到门的 `wake`；
 包装器自己请求唤醒时使用 `--request-only` 避免等待自己。种子文件挂在 `@park_wake`，包装器 rename 成
@@ -511,10 +513,18 @@ durable 任务沿 `fleet_transfer_durable.py` 已验证的单一归属路径：�
 
 已由 `fleet-loop.py` 管理的循环（含 Codex）继续以原账本为唯一节拍来源。
 停前写 `park_fid` 交出投递权；旧 bridge 不再投递、也不因停放退出把循环写成 stopped。
+外壳进入停放页时清掉 transfer 首次创建控制器所用的 `FLEET_LOOP_SPEC / FLEET_LOOP_AGENT`，
+保留原 manifest / ledger；接回走原 thread 的普通恢复，不再进入 bridge 创建另一份控制器。
 接回同一 thread 后原有 `fleet-loop.py defer / stop` 仍有效；正在投递且收据未定的循环拒停。
+显式 stop、取消任务或改期后，定时 tick 与独立会话门清扫都会重新核对原计划，
+撤销尚未被外壳或原生领取的旧提示。同一时刻的多个任务取消其中一个时，
+旧的合并提示作废，其余任务以新的 delivery ID 投递一次，原账本与 owner 代次不变。
+已被领取的当前轮次保留原收据，不强行中断；收据确认不会把 stopped 的账本重新激活。
 
 隔离演练：`bin/fleet-park-wake-selftest.py` 驱动停放门、外壳、定时投递及 durable 撤出，
-覆盖 3 秒后唤醒、三轮 cron、外壳恢复、退出失败保持原生任务。
+覆盖 3 秒后唤醒、三轮 cron、外壳恢复、退出失败保持原生任务，以及 Claude/Codex
+原 ledger 的同会话投递、owner 不变和停止不复活。BREAK-IT `park-stopped-timer-revives`
+还驱动显式停止、单任务取消及未取消任务的保留。
 
 测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、
 `bin/fleet-idle-accept-claude-selftest.sh`（真引擎：入口边界、排队重交、Esc、草稿、竞态；CI 上无 claude 跳过）、
