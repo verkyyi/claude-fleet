@@ -1114,6 +1114,8 @@ async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details, 
   w.canUse = canUseTool;
   const stop = () => closeWarm("stopped", w);
   ac.signal.addEventListener("abort", stop, { once: true });
+  // the stop key pressed while the agent was still opening: its abort came before this listener
+  if (ac.signal.aborted) { ac.signal.removeEventListener("abort", stop); stop(); throw new Error("aborted"); }
   try {
     await new Promise((resolve, reject) => {
       w.cur = { onMsg, resolve, reject };
