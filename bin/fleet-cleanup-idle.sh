@@ -149,7 +149,7 @@ case "$limit" in ''|*[!0-9]*) limit=4 ;; esac
 # still owns conversations; do not require a repo to release their idle agents.
 # Conf assignments are shell-local unless explicitly exported to Python.
 export FLEET_SESSION_PARK_IDLE FLEET_SESSION_PARK_IDLE_UNATTENDED FLEET_SESSION_PARK_PRESENCE
-export FLEET_PARK_MEM_PCT FLEET_GATE_WAKE_SECS
+export FLEET_PARK_MEM_PCT FLEET_GATE_WAKE_SECS FLEET_SESSION_REAP_PARKED
 out=$(python3 "$BIN/fleet-cleanup-idle.py" --session "$FLEET_SESSION" \
   --socket-name "$(fleet_socket "$FLEET_SESSION")" --park-only --limit "$limit" ${rest[@]+"${rest[@]}"})
 rc=$?

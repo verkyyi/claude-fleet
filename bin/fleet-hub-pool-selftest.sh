@@ -116,4 +116,14 @@ else st_miss "G old file: fo=$(reads FLEET_FAILOVER)"; fi
 [ "$(FLEET_FAILOVER=0 reads FLEET_FAILOVER)" = 0 ] && [ "$(FLEET_FAILOVER=1 reads FLEET_FAILOVER)" = 1 ] \
   && st_ok_all "G an exported FLEET_FAILOVER passes through as it was" || st_miss "G env: $(FLEET_FAILOVER=0 reads FLEET_FAILOVER)"
 
+# C6: retention must survive the hub -> node whitelist, not only the API response.
+printf '{"pool":{"FLEET_SESSION_REAP_PARKED":"345600"}}\n' > "$HUBD/v1/fleet/client-settings"
+fetch --force
+[ "$(reads FLEET_SESSION_REAP_PARKED)" = 345600 ] \
+  && st_ok_all "H parked retention reaches node settings" || st_miss "H retention dropped"
+printf '{"pool":{"FLEET_SESSION_REAP_PARKED":"30"}}\n' > "$HUBD/v1/fleet/client-settings"
+fetch --force 2>/dev/null
+[ "$(reads FLEET_SESSION_REAP_PARKED)" = - ] \
+  && st_ok_all "H invalid retention is refused" || st_miss "H invalid retention kept"
+
 st_done

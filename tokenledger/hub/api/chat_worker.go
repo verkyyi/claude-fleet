@@ -326,6 +326,16 @@ func init() {
 				return d.String(), ""
 			}}
 	}
+	hubSettings["fleet.session.reap_parked"] = hubSetting{def: "3d",
+		help: "close an inactive parked conversation after this long, after recording resumable history (1h–366d) · 停放多久后回收",
+		check: func(_ *Server, v string) (string, string) {
+			d, ok := sessionReapParkedDuration(v)
+			if !ok {
+				return "", "fleet.session.reap_parked must be a duration from 1h to 366d"
+			}
+			return d.String(), ""
+		}}
+
 	hubSettings[SessionParkIdleKey] = hubSetting{def: "5m",
 		help: "an idle session with human presence parks after this long (1m–24h, or off); watched panes, drafts and background work stay running · 有人交互的会话空闲多久停放",
 		check: func(_ *Server, v string) (string, string) {
@@ -359,6 +369,27 @@ func (s *Server) sessionParkDuration(key, fallback string) int {
 	d, err := time.ParseDuration(value)
 	if err != nil || d < time.Minute || d > maxSessionParkIdle {
 		d, _ = time.ParseDuration(fallback)
+	}
+	return int(d / time.Second)
+}
+
+func sessionReapParkedDuration(v string) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if strings.HasSuffix(v, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(v, "d"))
+		if err != nil || n < 1 || n > 366 {
+			return 0, false
+		}
+		return time.Duration(n) * 24 * time.Hour, true
+	}
+	d, err := time.ParseDuration(v)
+	return d, err == nil && d >= time.Hour && d <= 366*24*time.Hour
+}
+
+func (s *Server) sessionReapParked() int {
+	d, ok := sessionReapParkedDuration(s.setting("fleet.session.reap_parked"))
+	if !ok {
+		d = 72 * time.Hour
 	}
 	return int(d / time.Second)
 }

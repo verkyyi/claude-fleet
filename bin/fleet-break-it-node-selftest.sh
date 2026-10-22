@@ -1085,7 +1085,10 @@ NA
     FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 \
     python3 -I "$BIN/fleet-node-supervisor.py" run >"$sb/sup.log" 2>&1 &
   printf '%s\n' "$!" >> "$WORK/cred-pids"
-  until_ok 10 test -e "$sb/db/started" || { WHY="the node agent never started its op: $(tail -2 "$sb/sup.log" | tr '\n' ' ')"; return 1; }
+  # The child writes started before the supervisor publishes state.json. Wait
+  # for both observations; an empty baseline pid is not a restarted agent.
+  op_started() { [ -e "$sb/db/started" ] && [ -n "$(st pid)" ]; }
+  until_ok 10 op_started || { WHY="the node agent never started its op: $(tail -2 "$sb/sup.log" | tr '\n' ' ')"; return 1; }
   pid1=$(st pid)
   # the create writes the new login's .env half way through
   printf 'CCQUOTA_TOKEN=y\n' > "$lg/alice.env"; t0=$(now)
