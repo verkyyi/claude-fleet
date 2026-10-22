@@ -6363,7 +6363,7 @@ drill_c8_old_supervisor_reopen() {
 # its agent would exit under their eyes. The gate's park refuses while a terminal
 # client shows the window (a control-mode client — the hub's own — is nobody).
 drill_park_all_origins() {
-  CAP=30; local t0 out
+  CAP=60; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-park-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")

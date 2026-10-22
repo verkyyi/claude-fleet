@@ -181,6 +181,9 @@ while True:
         self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
         time.sleep(.4)
         self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')
+        self.assertGreater(int(self.opt('@park_presence')), 0)
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(gate.wake(self.fid, why='消息', request_only=True).get('why'), 'draft')
         self.tm('send-keys', '-t', self.win, 'Enter')
         self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
         args = json.loads((self.root / 'argv').read_text().splitlines()[-1])
@@ -204,15 +207,21 @@ while True:
         self.assertNotIn('--resume', args)
         self.assertEqual(self.opt('@fleet_id'), self.fid)
 
-    def test_narrow_english_hint_wraps(self):
-        self.env['FLEET_UI_LANG'] = 'en'
+    def narrow_hint(self, language, hint):
+        self.env['FLEET_UI_LANG'] = language
         self.fake()
         self.tm('set-option', '-w', '-t', self.win, 'window-size', 'manual')
         self.tm('resize-window', '-t', self.win, '-x', '39', '-y', '24')
         with patch.dict(os.environ, self.env):
             self.assertTrue(gate.park(self.fid)['ok'])
-        rows = self.tm('capture-pane', '-p', '-t', self.win).splitlines()
-        self.assertEqual(''.join(rows[-2:]), '· parked · just type — Enter resumes it (~2 s)')
+        rows = self.tm('capture-pane', '-p', '-N', '-t', self.win).splitlines()
+        self.assertEqual(''.join(rows[-2:]), hint)
+
+    def test_narrow_english_hint_wraps(self):
+        self.narrow_hint('en', '· parked · just type — Enter resumes it (~2 s)')
+
+    def test_narrow_chinese_hint_wraps(self):
+        self.narrow_hint('zh', '· 已停放 · 直接打字，回车即接回（约 2 秒）')
 
     def test_keyboard_retry_preserves_paste_and_literal_keys(self):
         self.fake()
