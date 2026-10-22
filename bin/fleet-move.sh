@@ -120,7 +120,7 @@ PANEL_RE='^(plan|dash|backlog|home)$'
 EXIT_WAIT="${FLEET_MOVE_EXIT_WAIT:-30}"     # s to wait for a graceful `/exit`
 TERM_WAIT="${FLEET_MOVE_TERM_WAIT:-10}"     # s to wait after a SIGTERM fallback
 CLOSE_WAIT="${FLEET_MOVE_CLOSE_WAIT:-15}"   # s to wait for the SessionEnd hook
-REMOTE_BIN_NAME='.claude/fleet/bin/fleet-move-remote.sh'   # relative to the target's $HOME
+REMOTE_BIN_NAME=${FLEET_MOVE_REMOTE_BIN:-.claude/fleet/bin/fleet-move-remote.sh}   # relative to the target's $HOME
 
 die() { printf 'fleet-move: %s\n' "$*" >&2; exit 2; }
 say() { printf '%s\n' "$*"; }
@@ -444,6 +444,52 @@ move_main() {
     return 8
   }
 
+  # Codex never enters the legacy Claude registry/project-directory path.
+  # The target must explicitly understand the format before the source exits.
+  move_one_codex() (
+    [ "$VIA" = ssh ] || { say "  – $name ($wid): Codex moves require an explicit user@host target; hub transport has no Codex capability negotiation — refused:not-eligible"; return 4; }
+    [ "$KEEP" = 0 ] || { say "  – $name ($wid): Codex --keep-source would fork the same history — refused:not-eligible"; return 4; }
+    local record sid plan prov rfleet twt launch nw ncp home
+    record=$(mktemp "${TMPDIR:-/tmp}/fleet-move-codex.XXXXXX") || return 8
+    trap 'rm -f "${record:?}"' EXIT
+    python3 "$BIN/fleet_move_codex.py" inspect --socket "$SOCK" --window "$wid" --worktree "$wt" > "$record" \
+      || { say "  – $name ($wid): Codex identity/idle proof failed — refused:busy"; return 11; }
+    sid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sid"])' "$record") || return 4
+    plan=$(ssh_run "$REMOTE_BIN" plan --repo "$repo" --agent codex ${TARGET_FLEET:+--fleet "$TARGET_FLEET"}) \
+      || { say "  – $name ($wid): target does not support a verified Codex move — failed:target"; return 8; }
+    say "  → $name ($wid): $repo @ $branch → $TO (Codex $sid)"
+    if [ "$DRY" = 1 ]; then
+      say "    ✓ target ready: ${plan%%$'\t'*}; would preserve this UUID and verify native history before closing the source window"
+      return 0
+    fi
+    git -C "$wt" push -u origin "$branch" >/dev/null 2>&1 \
+      || { say '    failed:push — source retained'; return 7; }
+    local pushed_flag=--pushed
+    prov=$(ssh_run "$REMOTE_BIN" provision --repo "$repo" --branch "$branch" ${pushed_flag:+"$pushed_flag"} ${TARGET_FLEET:+--fleet "$TARGET_FLEET"}) || return 8
+    IFS=$'\t' read -r rfleet twt _ <<< "$prov"
+    [ -n "$rfleet" ] && [ -n "$twt" ] || return 8
+    # Keep the source window/transcript on failure. Never force-kill an unknown
+    # process, and never resume two copies after an unconfirmed target launch.
+    if ! python3 "$BIN/fleet_move_codex.py" stop --record "$record" --wait "$EXIT_WAIT"; then
+      ssh_run "$REMOTE_BIN" discard --wt "$twt" --branch "$branch" --repo "$repo" --fleet "$rfleet" >/dev/null 2>&1 || :
+      return 9
+    fi
+    home=$(python3 "$BIN/fleet_move_codex.py" pack --record "$record" \
+      | move_ssh "$TO" "$(remote_cmd "$REMOTE_BIN" receive-codex --sid "$sid" --wt "$twt")") || {
+      say "    failed:target — source window $wid and its native history retained; target was not launched"; return 8;
+    }
+    launch=$(ssh_run "$REMOTE_BIN" launch --agent codex --codex-home "$home" --wt "$twt" --sid "$sid" --name "$name" \
+      --raw "${raw:-0}" --state "${state:-done}" --fleet "$rfleet" \
+      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} ${origin:+--origin "$origin"} --repo "$repo")
+    IFS=$'\t' read -r nw ncp _ <<< "$launch"
+    if [ -z "$ncp" ]; then
+      say "    failed:verify — inspect $TO:$nw before resuming source $wid; source window/transcript retained"; return 10
+    fi
+    fleet_win_retire "$wid" "$SOCK"
+    TM kill-window -t "$wid" 2>/dev/null || :
+    say "  ✓ $name ($wid → $TO:$nw, pid $ncp): moved Codex $sid; native history verified"
+  )
+
   move_one_body() {
     local wid="$1" name cwd state raw iss wt origin hnd norepo hub
     name=$(wopt "$wid" '#{window_name}')
@@ -484,6 +530,8 @@ move_main() {
     local base="${FLEET_BASE_BRANCH:-master}"
     local ahead; ahead=$(git -C "$wt" rev-list --count "origin/$base..HEAD" 2>/dev/null || echo 0)
     case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
+
+    if [ "$(wopt "$wid" '#{@cc_agent}')" = codex ]; then move_one_codex; return $?; fi
 
     local cpid; cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || cpid=""
     local sid; sid=$(session_id_for "${cpid:-0}" "$cwd") || sid=""

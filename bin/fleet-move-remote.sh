@@ -74,8 +74,9 @@ case "$cmd" in
     ;;
 
   plan)
-    repo='' fleetw=''
+    repo='' fleetw='' agent=claude
     while [ $# -gt 0 ]; do case "$1" in
+      --agent) agent="${2:-}"; shift 2 ;;
       --repo) repo="${2:-}"; shift 2 ;;
       --fleet) fleetw="${2:-}"; shift 2 ;;
       *) die "plan: unknown arg $1" ;;
@@ -84,6 +85,17 @@ case "$cmd" in
     sess=$(resolve_fleet "$fleetw") || die 'no single configured fleet on this login (pass --fleet)'
     load_repo "$sess" "$repo" || die "fleet $sess does not host $repo (or its base checkout is missing)"
     [ -w "$(dirname "$FLEET_MAIN")" ] || die "worktree root not writable: $(dirname "$FLEET_MAIN")"
+    case "$agent" in
+      claude) ;;
+      codex)
+        [ -f "$BIN/fleet_move_codex.py" ] || die 'Codex move helper missing'
+        PATH=$(fleet_path_fill); export PATH
+        command -v codex >/dev/null || die 'Codex CLI missing'
+        fleet_load_conf "$sess"
+        fleet_machine_admit || die 'target resources do not admit a new worker'
+        ;;
+      *) die 'unsupported move agent' ;;
+    esac
     printf '%s\t%s\t%s\n' "$sess" "$FLEET_MAIN" "${FLEET_BASE_BRANCH:-master}"
     ;;
 
@@ -137,9 +149,23 @@ case "$cmd" in
     tar -C "$d" -xf - || die 'tar extract failed'
     ;;
 
+  receive-codex)
+    sid='' wt=''
+    while [ $# -gt 0 ]; do case "$1" in
+      --sid) sid="${2:-}"; shift 2 ;;
+      --wt) wt="${2:-}"; shift 2 ;;
+      *) die "receive-codex: unknown arg $1" ;;
+    esac; done
+    [ -d "$wt" ] || die 'receive-codex: target worktree missing'
+    python3 "$BIN/fleet_move_codex.py" unpack --sid "$sid" --worktree "$wt" || exit 8
+    ;;
+
   launch)
+    agent=claude cxhome=''
     wt='' sid='' fleetw='' name='moved' wid='' issue='' raw=0 origin='' repo='' state='done'
     while [ $# -gt 0 ]; do case "$1" in
+      --agent) agent="${2:-}"; shift 2 ;;
+      --codex-home) cxhome="${2:-}"; shift 2 ;;
       --wt) wt="${2:-}"; shift 2 ;;
       --sid) sid="${2:-}"; shift 2 ;;
       --fleet) fleetw="${2:-}"; shift 2 ;;
@@ -162,7 +188,25 @@ case "$cmd" in
     LAUNCH="${FLEET_MOVE_LAUNCH:-$BIN/fleet-session-wrap.sh}"
     boot="${FLEET_MOVE_BOOT_WAIT:-15}"
     cmdline="'$LAUNCH' --resume '$sid'; exec \$SHELL"
-    nw=$(TM new-window -d -t "$sess:" -n "$name" -c "$wt" -P -F '#{window_id}' "$cmdline" 2>/dev/null)
+    if [ "$agent" = codex ]; then
+      [ -f "$cxhome/move.json" ] || die 'missing Codex import receipt'
+      fleet_load_conf "$sess"
+      fleet_session_cap_ok "$sess" || die 'target no longer has capacity'
+      # Quote each argv; paths/metadata are data, not remote shell syntax.
+      cmdline=$(python3 - "$LAUNCH" "$cxhome" "$sid" <<'PY_LAUNCH'
+import json,shlex,sys
+launcher,home,sid=sys.argv[1:]
+m=json.load(open(home+'/move.json'))
+args=[launcher,'--agent','codex','--codex-home',home,'--resume',sid]
+opts=m.get('metadata',{})
+for flag, key in [('--model','@model'),('--effort','@effort')]:
+    if opts.get(key): args += [flag, opts[key]]
+print('exec '+shlex.join(args))
+PY_LAUNCH
+) || die 'invalid Codex launch receipt'
+    elif [ "$agent" != claude ]; then die 'unsupported move agent'; fi
+    bootline="$cmdline"; [ "$agent" != codex ] || bootline='exec sleep 120'
+    nw=$(TM new-window -d -t "$sess:" -n "$name" -c "$wt" -P -F '#{window_id}' "$bootline" 2>/dev/null)
     [ -n "$nw" ] || die 'tmux new-window failed'
     TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
     # The session's lifelong identity (issue #1646) rode the bundle as
@@ -189,10 +233,28 @@ case "$cmd" in
     [ -n "$wid" ] && fleet_wid_stamp "$nw" "$SOCK" "$wid" >/dev/null 2>&1
     # Carried, not said (issue #2537): only until the new agent's first OSC 7501.
     fleet_state_carry "$SOCK" "$nw" "$state"
+    if [ "$agent" = codex ]; then
+      PYTHONPATH="$BIN${PYTHONPATH:+:$PYTHONPATH}" python3 - "$cxhome" "$SOCK" "$nw" <<'PY_META'
+import json,subprocess,sys
+home,sock,win=sys.argv[1:]
+from fleet_move_codex import OPTIONS
+m=json.load(open(home+'/move.json'))
+for key,value in m.get('metadata',{}).items():
+    if key in OPTIONS and value:
+        subprocess.run(['tmux','-L',sock,'set-option','-w','-t',win,key,str(value)],check=True)
+PY_META
+      [ $? = 0 ] || die 'could not restore Codex worker metadata'
+      TM respawn-pane -k -t "$nw" -c "$wt" "$cmdline" || die 'could not start imported Codex session'
+      fleet_admit_confirm >/dev/null
+    fi
     fleet_hub_nudge   # issue #1481
     ncp=''; i=0
     while [ "$i" -lt "$boot" ]; do
-      ncp=$(fleet_pane_claude_pid "$nw" "$SOCK" 2>/dev/null) && [ -n "$ncp" ] && break
+      if [ "$agent" = codex ]; then
+        ncp=$(python3 "$BIN/fleet_move_codex.py" verify --socket "$SOCK" --window "$nw" --sid "$sid" --home "$cxhome" --worktree "$wt" 2>/dev/null) && [ -n "$ncp" ] && break
+      else
+        ncp=$(fleet_pane_claude_pid "$nw" "$SOCK" 2>/dev/null) && [ -n "$ncp" ] && break
+      fi
       i=$((i + 1)); sleep 1
     done
     printf '%s\t%s\t%s\n' "$nw" "${ncp:-}" "$sess"
