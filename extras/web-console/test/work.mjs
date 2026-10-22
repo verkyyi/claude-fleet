@@ -59,7 +59,7 @@ assert.notEqual(by('merge').group, 'gone');
 
 // a record closed as succeeded stays so while its window still runs (T644 C4)
 const kept = buildRows([v1({ id: 'T11', fid: fid(11), title: 'kept', outcome: 'succeeded', worker_id: `${F}/k` })], [sess('k', 'working')], []);
-assert.deepEqual([kept[0].group, kept[0].tag[1]], ['queue', 'Completed']);
+assert.deepEqual([kept[0].group, kept[0].tag[1]], ['work', 'Working']);
 
 // EPIC: members listed under it; nested while in its group, else in their own naming it
 const epic = by('epic');
@@ -133,4 +133,26 @@ console.log('ok work.mjs');
   assert.equal(br[2].whyTone, 'grey', 'no tone said: grey');
   assert.equal(boardRows({ ...board, rows: [{ ...board.rows[2], why: undefined }] }, ts, []).at(0).why, undefined, 'nothing said, no line');
   console.log('ok — why it is still open (E101)');
+}
+
+// PV4D: board-only plans retain the hub's explicit evidence and coordinator.
+{
+ const { boardRows, GROUPS } = await import('../src/app/work.ts');
+ const facts = {id:'plan', title:'not launched', group:'queue', tag:'queued', words:['未派发','Not dispatched'],
+   agent:'codex', agent_basis:'planned', agent_words:['Codex（计划）','Codex (planned)'],
+   context:['尚未启动 · 协调负责人：AB12','Not started · Coordinator: AB12'], coordinator:'AB12', at:1};
+ const [r] = boardRows({rows:[facts]}, [], []);
+ assert.equal(r.live, undefined);
+ assert.equal(r.board.agent_basis,'planned');
+ assert.equal(r.board.coordinator,'AB12');
+ assert.deepEqual(r.tag,facts.words);
+ assert.equal(GROUPS.find(x=>x.g==='queue').label[1],'Pending / retained');
+}
+
+// An operation receipt proves dispatch, not a live worker or undispatched plan.
+{
+ const [r] = buildRows([v1({id:'T99', title:'accepted operation',task_state:'accepted',operation_id:'op-test'})],[],[]);
+ assert.deepEqual(r.tag,['看不到会话','Session not seen']);
+ const [starting] = buildRows([v1({id:'T100', title:'starting operation',task_state:'starting',operation_id:'op-test'})],[],[]);
+ assert.equal(starting.tag[1],'Starting');
 }

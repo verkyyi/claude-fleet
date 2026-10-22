@@ -45,6 +45,8 @@ export type SessionRow = {
 // the console and the ⌘P panel both draw it as it is.
 export type BoardGroup = "pin" | "ask" | "work" | "queue" | "gone";
 export type BoardRow = {
+  agent?: string; agent_basis?: "planned" | "native" | "actual" | "runtime";
+  agent_words?: [string, string]; context?: [string, string]; coordinator?: string; outcome?: string;
   id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;
   words: [string, string]; state?: string; worker_id?: string; machine?: string; login?: string; repo?: string;
   parent?: string; depth?: number; lost?: boolean; at: number;

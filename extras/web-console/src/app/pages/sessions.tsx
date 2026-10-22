@@ -62,7 +62,8 @@ function metaOf(r: Row, standalone: boolean) {
   const pr = r.task ? taskPR(r.task) : null;
   return [r.kids.length ? tr(`${r.kids.length} 项`, `${r.kids.length} items`) : "",
     standalone && r.parentTitle ? tr(`属于「${r.parentTitle}」`, `in “${r.parentTitle}”`) : "",
-    machineOf(r), pr ? `PR #${pr.n}` : "", when(r)].filter(Boolean).join(" · ");
+    r.board?.agent_words ? tr(...r.board.agent_words) : "",
+    r.board?.context ? tr(...r.board.context) : "", machineOf(r), pr ? `PR #${pr.n}` : "", when(r)].filter(Boolean).join(" · ");
 }
 
 // `kids`: the members drawn under it (its own group's, the search's) — none ⇒ no
@@ -225,13 +226,15 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
   const asking = r.live && (r.live.state === "needs" || r.live.state === "blocked");
   const words = t ? taskWords(t) : "";
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 max-w-full space-y-5 break-words">
       <div className="space-y-1">
-        <div className="flex items-baseline gap-2">
-          {r.code ? <span className="text-clay font-mono text-sm">{r.code}</span> : null}
-          <h2 className="font-display text-xl leading-snug font-semibold break-words">{r.title}</h2>
+        <div className="flex min-w-0 max-w-full items-baseline gap-2 pe-6">
+          {r.code ? <span className="text-clay shrink-0 font-mono text-sm">{r.code}</span> : null}
+          <h2 className="font-display min-w-0 flex-1 text-xl leading-snug font-semibold [overflow-wrap:anywhere]">{r.title}</h2>
         </div>
         <p className="text-muted-foreground text-sm">{[tr(...r.tag), machine, t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
+        {r.board?.agent_words ? <p className="text-sm">{tr(...r.board.agent_words)}</p> : null}
+        {r.board?.context ? <p className="max-w-full text-sm [overflow-wrap:anywhere]">{tr(...r.board.context)}</p> : null}
         {r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
       </div>
       {asking && r.live ? (
@@ -280,7 +283,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         {s ? <p>{[machines > 1 ? s.machine : "", s.key, r.live?.born ? tr(`开始于 ${ago(new Date(r.live.born * 1000).toISOString())}`, `started ${ago(new Date(r.live.born * 1000).toISOString())}`)
           : r.ended ? tr(`收起于 ${ago(r.ended.ended)}`, `put away ${ago(r.ended.ended)}`) : "",
           r.live?.tokens ? tr(`今天 ${fmtTokens(r.live.tokens)} tokens`, `${fmtTokens(r.live.tokens)} tokens today`) : ""].filter(Boolean).join(" · ")}</p>
-          : <p className="text-muted-foreground">{t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
+          : <p className="text-muted-foreground">{r.board?.tag === "queued" ? tr("尚未派发，尚未启动会话", "Not dispatched; no session started") : r.board?.tag === "starting" ? tr("会话正在启动", "The session is starting") : t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
       </Field>
       <div className="flex flex-wrap gap-2">
         {r.live && !cli ? onTerminal ? <Button className="flex-1" onClick={onTerminal}><TerminalSquare />{tr("终端", "Terminal")}</Button>

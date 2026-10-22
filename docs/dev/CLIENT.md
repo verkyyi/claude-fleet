@@ -68,6 +68,14 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
   F12 or ⌃] p.
 
+面板和网页的「待派发 / 保留」是同一份 Hub 清单的容器，各行状态分别说明：
+「未派发」表示记录已建立但没有启动证据；「正在开」表示启动中；已有会话显示
+「空闲」「已停放」「本轮结束」或「已完成 · 保留中」。计划引擎显示为
+`Codex（计划）`（窄列 `Cod·计`，英文 `Cod(P)`），不代表已经运行；真实运行及历史
+使用运行证据，缺证据仍为未知。选中行可看「尚未启动」及可核验的协调负责人短码，
+后续派发由协调方确认，界面不承诺自动启动。任务结果不会盖过会话收到新工作后的
+「在干活」；这些显示不改变回收策略。父任务关系本身不表示依赖阻塞。
+
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
 The old client was removed in #3008 after every row below was ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」
