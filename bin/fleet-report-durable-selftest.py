@@ -93,6 +93,20 @@ class DurableReport(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse(self.terminal(), "batch delivery ledger failed, but ID became terminal")
 
+    def test_failed_orphan_ledger_does_not_finalize(self):
+        self.tm("set-option", "-w", "-t", self.child, "@origin", "scratch-999")
+        path = self.conf / "global" / "orphan-reports.ndjson"
+        path.mkdir(parents=True)
+        p = self.report()
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.terminal(), "orphan report not saved, but ID became terminal")
+
+    def test_hub_spawned_session_has_no_required_parent_delivery(self):
+        self.tm("set-option", "-w", "-t", self.child, "@origin", "")
+        p = self.report()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(self.terminal())
+
 
 if __name__ == "__main__":
     unittest.main()
