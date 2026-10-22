@@ -184,7 +184,7 @@ def quota_loop_replacement(source, mark):
                      and b.get('type') == 'tool_use' and b.get('name') in ('ScheduleWakeup', 'CronCreate', 'CronDelete')]
         if not mutations or mutations[-1] != (auth.get('schedule_message_uuid'), auth.get('schedule_tool_use_id')):
             raise ValueError('a later scheduler mutation superseded the selected historical specification')
-        if len(tools) != 1 or tools[0].get('input') != inp or inp.get('prompt') != invocation:
+        if len(tools) != 1 or tools[0].get('input') != inp or inp.get('prompt') != invocation or inp.get('stop'):
             raise ValueError('selected historical schedule is not the latest confirmed specification')
         if (not isinstance(response, dict) or not result_at or not response.get('scheduledFor')
                 or response.get('clampedDelaySeconds') != raw.get('interval_seconds')):

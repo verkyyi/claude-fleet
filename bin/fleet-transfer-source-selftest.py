@@ -134,10 +134,11 @@ class ExternalQuotaLoop(unittest.TestCase):
                 with patch.object(cron,'process_start',return_value=time.time()):
                     self.assertFalse(cron.has_native_activity(path,42))
                     self.assertEqual(src.quota_loop_replacement(source,''),proof)
-                for change in ('bad-user-hash','unconfirmed','later-mutation'):
-                    bad=json.loads(json.dumps(raw)); changed=list(rows)
+                for change in ('bad-user-hash','unconfirmed','later-mutation','stopped'):
+                    bad=json.loads(json.dumps(raw)); changed=json.loads(json.dumps(rows))
                     if change=='bad-user-hash': bad['quota_replacement']['user_message_sha256']='wrong'
                     if change=='unconfirmed': changed.pop()
+                    if change=='stopped': changed[1]['message']['content'][0]['input']['stop']=True
                     if change=='later-mutation':
                         changed.append(dict(type='assistant',uuid='later',message={'content':[
                             dict(type='tool_use',id='new',name='ScheduleWakeup',input=inp)]}))
