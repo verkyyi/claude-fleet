@@ -808,7 +808,11 @@ def park_locked(fid, why, force):
         return dict(ok=False, why="not_resumable")
     if w["state"] not in ("done", "looping"):
         return dict(ok=False, why=busy_of(w) or "not_idle")
-    if busy_of(w) and not w["loop"]:
+    # A native Fleet loop has no Claude mod status/mark. Its looping label
+    # alone says nothing about the current turn; the native proof below does.
+    native_loop = (w["state"] == "looping" and not w["word"]
+                   and adapter.get("park_probe") == "native-input")
+    if busy_of(w) and not w["loop"] and not native_loop:
         return dict(ok=False, why=busy_of(w))
     if watched(w):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_watched_at", str(int(now())))
