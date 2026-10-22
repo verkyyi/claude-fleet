@@ -14,7 +14,7 @@ const auth = { name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: orig
 await context.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
 await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
 const observe = () => {
-  window.__ready = []; window.__pairs = []; window.__attempts = 0; window.__sent = 0
+  window.__errors = []; window.__ready = []; window.__pairs = []; window.__attempts = 0; window.__sent = 0
   for (const proto of [WebSocket.prototype, RTCDataChannel.prototype]) {
     const send = proto.send
     proto.send = function(data) {
@@ -26,6 +26,7 @@ const observe = () => {
     if (typeof event.data !== 'string') return
     try {
       const c = JSON.parse(event.data)
+      if (c.t === 'error') window.__errors.push({ ...c, url: event.target.url, at: Date.now() })
       if (c.t === 'ready') window.__ready.push(c)
       if (c.t === 'selected') window.__pairs.push(c)
     } catch {}
@@ -245,21 +246,42 @@ try {
   await new Promise(r => setTimeout(r, 2000))
   assert.equal(await page.evaluate(() => window.__ready.length), attempts, 'revoked authentication retried')
   await context.addCookies([{ ...auth, value: process.env.FLEET_TEST_FRESH_COOKIE }, { name: 'cf_lang', value: 'en', url: origin }])
+  let hostGen
+  // A fast direct run can exhaust the hub's normal admission bucket. Pin the
+  // refusal at the renew boundary so this race is covered on slower runners
+  // too; all admitted requests still reach the real hub/node/native tmux.
+  let refusedRenew = false
+  await page.routeWebSocket(url => url.pathname === '/v1/attachment/connect', ws => {
+    const query = new URL(ws.url()).searchParams
+    if (hostGen && !refusedRenew && query.get('renew') === '1') {
+      refusedRenew = true
+      assert.equal(query.get('term_resume'), hostGen)
+      console.log('host renewal admission refused once', mode, hostGen)
+      ws.send(JSON.stringify({ t: 'error', status: 429, error: 'rate', message: 'isolated admission refusal' }))
+      ws.close()
+    } else ws.connectToServer()
+  })
+  // Observe the routed WebSocket too; routing installs its own constructor.
+  await page.addInitScript(observe)
+  // WebSocket routing is an init script: install before the fresh page loads.
   await page.reload(); await ready(page)
-  const hostGen = (await ready(page)).gen
+  hostGen = (await ready(page)).gen
   await context.request.post(`${fixture}/host`)
   // RMVE: the home's tmux went with everything in it — a new terminal is
   // opened by itself (the fixture brings the fleet back), no replay, no button
   await page.getByText("Your previous terminal ended, so we opened a new one. Commands that had exited won't restart.", { exact: true }).waitFor({ timeout: 30000 })
+  assert(refusedRenew, 'host recovery did not exercise admission refusal')
   assert.notEqual((await ready(page)).gen, hostGen)
   const hostAttempts = await page.evaluate(() => window.__attempts)
   await new Promise(r => setTimeout(r, 2000))
   assert.equal(await page.evaluate(() => window.__attempts), hostAttempts, 'host loss kept retrying after it came back')
+  await page.screenshot({ path: `${dir}/host-recovered.png` })
   await page.close()
   console.log(JSON.stringify({ browser: browser.version(), mode, evidence, closeReopen: 'same PID and generation', relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'renewed by itself; no replay', safari: 'pending', osIME: 'pending' }))
 } catch (error) {
   for (const [i, page] of [context, ...others.map(o => o.context)].flatMap(c => c.pages()).entries()) {
     console.error('page', i, page.url(), await page.locator('body').innerText());
+    console.error('terminal errors', await page.evaluate(() => window.__errors));
     await page.screenshot({ path: `${dir}/failure-${i}.png` });
   }
   console.error('fixture', await state());
