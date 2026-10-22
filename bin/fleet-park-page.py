@@ -63,7 +63,8 @@ def paint(screen, words, failed=False, pos=None, waking=False):
     if failed:
         reason = os.environ.get('FLEET_PARK_ERROR', '')
         labels = {
-            'wake_timeout': ('接回超过 20 秒', 'Resume exceeded 20 seconds'),
+            'wake_timeout': ('接回超时', 'Resume timed out'),
+            'wake_queue_timeout': ('接回排队超时，请重试', 'Wake queue timed out; retry'),
             'version_mismatch': ('版本不兼容，按 n 带原话新开对话', 'Incompatible version; n starts a new chat with your words'),
             'wake_guard': ('接回名额不可用', 'Wake slots unavailable'),
         }
@@ -192,7 +193,8 @@ def failure(meta_path):
         # No process was launched. Timers keep their original delivery and retry
         # after the deferral; no error page, no failure streak, no stolen draft.
         Path(seed + '.taken').unlink(missing_ok=True)
-        return 3
+        gate.tmux('', 'set-option', '-w', '-t', pane, '@park_error', meta['deferred'])
+        return 0 if meta.get('why') == '键盘' else 3
     error = gate.read_json(seed + '.error') or {}
     reason = error.get('reason', 'launch_failed')
     import re

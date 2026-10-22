@@ -598,7 +598,7 @@ def find(rows, delivery):
 
 def deliver(r, w):
     """(state, why) after one attempt: sent · queued · trying · native · waking · returned."""
-    if r.get("state") == "waking" or w["parked"]:
+    if r.get("state") == "waking" or w["parked"] or r.get("wake_retry_at"):
         return wake_try(r, w)
     b = busy_of(w)
     if b == "asking" and r.get("state") == "queued":
@@ -649,8 +649,11 @@ def wake_try(r, w):
         return "returned", "wake_timeout"
     if now() < r.get('wake_retry_at', 0):
         return "queued", r.get('why', 'deferred')
+    if r.get('wake_retry_at') and not w['parked']:
+        return 'queued', 'wake_pending'
     for suffix in ('.deferred', '.meta.failed', '.error', '.admitted'):
         Path(str(seed) + suffix).unlink(missing_ok=True)
+    r.pop('wake_retry_at', None)
     seed.write_text(compose(r))
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
     save(r)
@@ -821,7 +824,7 @@ def park_locked(fid, why, force):
     if not w.get("wrap_ver", "").isdigit() or int(w["wrap_ver"]) < 1:
         return dict(ok=False, why="old_wrapper")
     health = read_json(fid_dir(fid) / 'park-health.json') or {}
-    if health.get('disabled'):
+    if health.get('disabled') and not force:
         return dict(ok=False, why='wake_failures')
     adapter = fleet_agent_adapter.ADAPTERS.get(w["agent"], {})
     if adapter.get("park_resume") != "1" or not w["sid"]:
