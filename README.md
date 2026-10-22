@@ -518,6 +518,15 @@ so. The screen text is Chinese, fixed — the fleet has no UI-language setting.
 A fleet spawns **Claude Code** by default and can spawn **OpenAI Codex CLI**
 instead (`FLEET_AGENT=codex` for the fleet, or `--agent codex` / the tools'
 `coding_agent` for one session).
+Set `FLEET_AGENT` with `bin/fleet-conf.sh set-node FLEET_AGENT 'FLEET_AGENT="codex"'`
+on each host (an older fleet overlay that sets the key must agree). For hub
+dispatch, clients without a local choice, and a fresh browser's new-session
+screen, set `fleet.client_defaults.FLEET_AGENT` to `codex` through the admin
+settings page or `PUT /v1/fleet/settings` (`{"key":"fleet.client_defaults.FLEET_AGENT","value":"codex"}`). Set the same keys to
+`claude` to switch back. The browser applies it when opening a new-session form,
+including a browser that remembers the old agent. Explicit choices in the open
+form and already accepted tasks keep their agent. An unset hub default keeps
+the existing behavior.
 Two agents, not thirty — which is what makes it honest to print the grading in
 full, gaps included.
 

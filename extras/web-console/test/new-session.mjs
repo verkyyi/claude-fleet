@@ -19,6 +19,10 @@ assert.equal(fixChoice({ mode: 'term', agent: 'codex', machine: 'studio-2' }).ma
 assert.deepEqual(readChoice(JSON.stringify({ mode: 'term', agent: 'codex', machine: 'studio-2', words: 'never kept' })), { mode: 'term', agent: 'codex', machine: 'studio-2' });
 assert.deepEqual(readChoice('{nope'), { mode: 'chat', agent: 'claude', machine: '' });
 assert.deepEqual(readChoice(null), { mode: 'chat', agent: 'claude', machine: '' });
+assert.equal(readChoice(null, 'codex').agent, 'codex', 'a fresh browser uses the team default');
+assert.equal(readChoice('{nope', 'codex').agent, 'codex');
+assert.equal(readChoice(JSON.stringify({agent:'claude'}), 'codex').agent, 'codex', 'a changed default replaces the browser\'s old remembered default');
+assert.equal(readChoice(null, 'claude').agent, 'claude', 'the default rolls back without a new build');
 
 // machines: the person's own, the home first, never a client or a link row
 const home = { machine: 'mac-mini', login: 'me', state: 'ok' };

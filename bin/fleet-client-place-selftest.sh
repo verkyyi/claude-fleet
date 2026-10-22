@@ -86,6 +86,16 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def do_GET(self):
+        if self.path == "/v1/fleet/client-settings":
+            try:
+                with open(os.path.join(os.path.dirname(LOG), "team-default")) as f:
+                    agent = f.read().strip()
+            except OSError:
+                agent = ""
+            return self.answer(200, {"settings": {"FLEET_AGENT": agent}})
+        return self.answer(404, {})
+
     def do_POST(self):
         env = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
         if self.path != "/v1/fleet/client/place" or self.headers.get("Authorization") != "Bearer tok":
@@ -222,6 +232,19 @@ st_has "A: scratch payload title" "$(lastreq)" '"title": "看看日志"'
 st_has "A: scratch payload repo" "$(lastreq)" '"repo": "verkyyi/claude-fleet"'
 # issue #2430: the login it landed under is remembered against its fleet
 st_eq "A: scratch login remembered (candidate os_user)" "$UUID	erin" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
+
+# An omitted agent follows the shared default; local and explicit choices win.
+printf '%s\n' codex > "$WORK/team-default"
+run "$P" verkyyi/claude-fleet scratch
+st_has "A: omitted agent uses team default" "$(lastreq)" '"resolved_agent": "codex"'
+st_has "A: team default is not an explicit choice" "$(lastreq)" '"agent_source": "fleet"'
+FLEET_AGENT=claude run "$P" verkyyi/claude-fleet scratch
+st_has "A: local default overrides team" "$(lastreq)" '"resolved_agent": "claude"'
+run "$P" verkyyi/claude-fleet scratch --agent claude
+st_has "A: explicit choice overrides team" "$(lastreq)" '"agent_source": "explicit"'
+rm -f "$WORK/team-default"
+run "$P" verkyyi/claude-fleet scratch
+st_has "A: clearing team default restores legacy choice" "$(lastreq)" '"resolved_agent": "claude"'
 
 # `fleet codex` (issue #2403): a HOME session carries its agent to the hub
 run "$P" - home --agent codex

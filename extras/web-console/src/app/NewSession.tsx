@@ -59,14 +59,15 @@ const Seg: FC<{ value: string; items: [string, string][]; onChange: (v: string) 
 const Step: FC<{ children: string }> = ({ children }) => <p className="text-foreground/80 mt-4 text-[14px]">{children}</p>;
 
 // 终端: the lines for the person's own terminal
-const TermLines: FC = () => {
+const TermLines: FC<{ agent: "claude" | "codex" }> = ({ agent }) => {
   const install = useInstallLine();
+  const other = agent === "codex" ? "claude" : "codex";
   return (
     <div data-testid="new-term">
       <Step>{tr("终端会话推荐在 iTerm2 里开，在本机终端里粘贴：", "Terminal sessions are best in iTerm2 — paste in your local terminal:")}</Step>
-      <CopyLine text="fleet claude" className="mt-1.5" />
-      <Step>{tr("要 Codex：", "For Codex:")}</Step>
-      <CopyLine text="fleet codex" className="mt-1.5" />
+      <CopyLine text={`fleet ${agent}`} className="mt-1.5" />
+      <Step>{tr(`要 ${AGENT_NAME[other]}：`, `For ${AGENT_NAME[other]}:`)}</Step>
+      <CopyLine text={`fleet ${other}`} className="mt-1.5" />
       <Step>{tr("还没装 fleet？先粘贴：", "No fleet yet? Paste this first:")}</Step>
       <CopyLine text={install} className="mt-1.5" />
       <p className="text-muted-foreground mt-3 text-[13px]">{tr("开好的终端会话会出现在左边的表里，网页上也能直接说。", "It shows up in the list on the left, and you can talk to it here too.")}</p>
@@ -87,8 +88,17 @@ export default function NewSession() {
   const unified = useUnified();
   const { rows, reload, markSeen } = useWorkRows();
   const homeRead = useLoad<Home>("/v1/chat/home");
+  const defaults = useLoad<{ settings: { FLEET_AGENT?: string } }>("/v1/fleet/client-settings");
   const [choice, setChoiceState] = useState<Choice>(() => { try { return readChoice(localStorage.getItem(CHOICE_KEY)); } catch { return fixChoice(null); } });
-  const setChoice = (c: Partial<Choice>) => setChoiceState((old) => { const n = fixChoice({ ...old, ...c }); saveChoice(n); return n; });
+  const choiceTouched = useRef(false);
+  const setChoice = (c: Partial<Choice>) => { choiceTouched.current = true; setChoiceState((old) => { const n = fixChoice({ ...old, ...c }); saveChoice(n); return n; }); };
+  useEffect(() => {
+    if (defaults.loading || choiceTouched.current) return;
+    const configured = defaults.data?.settings?.FLEET_AGENT;
+    const fallback = configured === "codex" || configured === "claude" ? configured : undefined;
+    try { setChoiceState(readChoice(localStorage.getItem(CHOICE_KEY), fallback)); }
+    catch { setChoiceState(fixChoice(null, fallback)); }
+  }, [defaults.loading, defaults.data]);
   // 「在新会话里接着说」 brings the line that did not go through
   const { state: carried } = useLocation();
   const [words, setWords] = useState(() => (typeof (carried as { say?: unknown } | null)?.say === "string" ? (carried as { say: string }).say : ""));
@@ -97,7 +107,7 @@ export default function NewSession() {
   const box = useRef<HTMLTextAreaElement>(null);
 
   const agent: "claude" | "codex" = choice.agent === "codex" ? "codex" : "claude";
-  const loading = homeRead.loading || unified === null;
+  const loading = homeRead.loading || defaults.loading || unified === null;
   const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data);
   const canStart = !loading && !why && !busy && !waiting;
 
@@ -168,7 +178,7 @@ export default function NewSession() {
           <Seg value={choice.mode} label={tr("对话还是终端", "Chat or terminal")} disabled={!!viewAs}
             items={[["chat", tr("对话", "Chat")], ["term", tr("终端", "Terminal")]]} onChange={(v) => setChoice({ mode: v as Mode })} />
 
-          {choice.mode === "term" ? <TermLines /> : (
+          {choice.mode === "term" ? <TermLines agent={agent} /> : (
             <div className="mt-4">
               <div className="border-input bg-card focus-within:ring-ring/50 rounded-2xl border p-2 ps-3.5 shadow-xs focus-within:ring-[3px]">
                 <Textarea ref={box} value={words} onChange={(e) => setWords(e.target.value)} onKeyDown={onKey} rows={3} autoFocus

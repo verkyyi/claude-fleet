@@ -342,7 +342,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	if idem == "" {
 		idem = "client-" + lease[:min(8, len(lease))] + "-" + strconv.FormatInt(now.UnixNano(), 36)
 	}
-	d, derr := resolveDispatch(req.CodingAgent, req.Agent, dispatchRaw(req.Dispatch), idem)
+	d, derr := s.resolveStartDispatch(req.CodingAgent, req.Agent, dispatchRaw(req.Dispatch), idem)
 	if derr != nil {
 		httpError(w, http.StatusBadRequest, errorObject(derr)["message"])
 		return

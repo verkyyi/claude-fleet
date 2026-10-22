@@ -27,6 +27,24 @@ type dispatchChoice struct {
 
 func codingAgentOK(a string) bool { return a == "claude" || a == "codex" }
 
+// The same reversible default the clients read. Explicit choices and accepted
+// envelopes belong to their caller; changing a default never rewrites them.
+func (s *Server) resolveStartDispatch(coding, legacy string, raw any, key string) (*dispatchChoice, error) {
+	if coding == "" && legacy == "" && raw == nil {
+		settings, err := s.Store.FleetSettings()
+		if err != nil {
+			return nil, err
+		}
+		if agent := settings[ClientDefaultsPrefix+"FLEET_AGENT"]; codingAgentOK(agent) {
+			if key == "" {
+				key = "place-" + newOperationID()
+			}
+			raw = dispatchChoice{Version: 1, RequestID: key, RequestedAgent: "default", ResolvedAgent: agent, AgentSource: "fleet"}
+		}
+	}
+	return resolveDispatch(coding, legacy, raw, key)
+}
+
 func resolveDispatch(coding, legacy string, raw any, key string) (*dispatchChoice, error) {
 	bad := func() (*dispatchChoice, error) {
 		return nil, fault("INVALID_ARGUMENT", "invalid or contradictory coding agent / accepted dispatch")

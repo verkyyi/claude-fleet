@@ -237,7 +237,7 @@ lease = read(os.path.join(d, "client.lease"))
 akey = read(os.environ.get("FLEET_CLIENT_KEY_FILE") or os.path.join(d, "client.key"))
 if not lease or not akey:
     sys.exit(10)
-import hashlib, hmac, importlib.util, json, re, time, urllib.error, urllib.request
+import hashlib, hmac, importlib.util, json, re, subprocess, time, urllib.error, urllib.request
 fc = connect_module()
 # Every answer leaves one line in the client's place.log (issue #2896,
 # docs/dev/CLIENT-LOGS.md): the line printed, plus every reason said on stderr —
@@ -319,7 +319,23 @@ for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), (
 if kind != "restore":
     sys.path.insert(0, here)
     from fleet_dispatch import resolve
-    req["dispatch"] = resolve([agent] if agent else [], request_id=req["idempotency_key"])
+    default_agent = os.environ.get("FLEET_AGENT", "")
+    if not agent:
+        # Read the actual local configuration, then the team's public default.
+        # Do not freeze an omitted choice to Claude before the hub sees it.
+        try:
+            configured = subprocess.run(["bash", os.path.join(here, "fleet-hook-conf.sh"), "FLEET_AGENT"],
+                capture_output=True, text=True, timeout=10).stdout.strip()
+            default_agent = configured or default_agent
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if default_agent not in ("claude", "codex"):
+            try:
+                with urllib.request.urlopen(hub.rstrip("/") + "/v1/fleet/client-settings", timeout=5) as r:
+                    default_agent = json.load(r).get("settings", {}).get("FLEET_AGENT", "")
+            except (OSError, ValueError):
+                default_agent = ""
+    req["dispatch"] = resolve([agent] if agent else [], default=default_agent, request_id=req["idempotency_key"])
     req["agent"] = req["dispatch"]["resolved_agent"]
     if agent:
         req["coding_agent"] = agent
