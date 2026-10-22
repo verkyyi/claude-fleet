@@ -31,6 +31,9 @@ L="pq$$"
 export TMPDIR="$WORK"
 export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
+# Admission re-resolves @fleet_id under its lock through fleet_id_window.
+# Register this isolated fleet as fleet-up does; a directory alone is not a fleet.
+: > "$FLEET_CONF_DIR/fleets/$L/conf"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_CHILD_REPORT FLEET_PEER_QUEUE_TTL
 
