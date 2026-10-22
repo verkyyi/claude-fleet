@@ -3418,7 +3418,10 @@ def serve(a):
             os.umask(old)
     # 0666 only with the peer-uid gate (separated / shared: the login is another uid)
     os.chmod(sockp, 0o666 if gated else 0o600)
-    ctl.listen(16)
+    # every login of a shared proxy asks here (T903): macOS refuses a unix
+    # connect past the backlog at once, so a reconnect's burst of logins ×
+    # repos re-reads read «no node token» with a backlog of 16
+    ctl.listen(128)
     HANDOFF["ctl"] = ctl
 
     def bye(*_):

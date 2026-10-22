@@ -12,15 +12,36 @@ the answer — the proxy's own wire (fleet-cred-proxy.py ctl_call), nothing else
 Exit 3: no proxy answering (not separated, not running); 1: it said no. The
 caller (_fleet_node_broker) falls back to the old road on anything but 0.
 """
+import errno
 import json
 import os
+import random
 import socket
 import sys
+import time
 
 
 def conf_dir():
     return os.environ.get("FLEET_CONF_DIR") or os.path.join(
         os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"), "claude-fleet")
+
+
+def connect(path, tries=6):
+    """A connected socket, or None. A full backlog is refused at once on macOS
+    (T903: a reconnect's burst of re-reads): a refused connect is tried again a
+    few times, ~3 s in all, before the caller falls back."""
+    for i in range(tries):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(30)
+        try:
+            s.connect(path)
+            return s
+        except OSError as e:
+            s.close()
+            if e.errno not in (errno.ECONNREFUSED, errno.EAGAIN) or i == tries - 1:
+                return None
+            time.sleep(0.1 * (2 ** i) * (0.5 + random.random()))
+    return None
 
 
 def ctl(op):
@@ -34,10 +55,10 @@ def ctl(op):
     req = {"op": op}
     if os.environ.get("FLEET_CRED_AS"):
         req["as"] = os.environ["FLEET_CRED_AS"]
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(30)
+    s = connect(os.path.join(run, "ctl.sock"))
+    if s is None:
+        return None, 3
     try:
-        s.connect(os.path.join(run, "ctl.sock"))
         s.sendall((json.dumps(req) + "\n").encode())
         buf = b""
         while b"\n" not in buf:

@@ -30,6 +30,14 @@ const authorityTimeout = 60 * time.Second
 // authorityCommand is the injection point for tests.
 var authorityCommand = relayCommand
 
+// authoritySlots bounds the re-reads running at once on this process — every
+// login's tenant of a managed machine shares it (claude-fleet T903). A
+// reconnect re-pushes every repo to every login on its first beat, and each
+// re-read asks the machine's ONE credential proxy for its broker pair: logins ×
+// repos at once overflowed that control socket's backlog, macOS refused the
+// connect, and the read said «no node token here» until the next beat.
+var authoritySlots = make(chan struct{}, 2)
+
 type authorityWant struct {
 	want, done int64
 	running    bool
@@ -88,6 +96,13 @@ func (a *Agent) authoritySync(ctx context.Context, script, repo string, w *autho
 	// Not the connection's: a link that drops mid-write must not cut it short.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), authorityTimeout)
 	defer cancel()
+	var err error
+	select {
+	case authoritySlots <- struct{}{}:
+		defer func() { <-authoritySlots }()
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
 	args := []string{"authority-sync"}
 	if repo != "" {
 		args = append(args, repo)
@@ -95,7 +110,9 @@ func (a *Agent) authoritySync(ctx context.Context, script, repo string, w *autho
 	cmd := authorityCommand(ctx, script, args...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = prepCmd(ctx, cmd)
+	}
 	if err == nil {
 		err = cmd.Run()
 	}
