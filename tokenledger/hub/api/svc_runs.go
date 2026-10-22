@@ -142,6 +142,7 @@ type SvcRunView struct {
 	CallbackAttempts int             `json:"callback_attempts,omitempty"`
 	Usage            json.RawMessage `json:"usage,omitempty"`
 	Result           json.RawMessage `json:"result,omitempty"`
+	ResultSHA256     string          `json:"result_sha256,omitempty"`
 	Replayed         bool            `json:"replayed,omitempty"`
 }
 
@@ -155,6 +156,9 @@ func svcRunView(r store.SvcRun, withResult bool) SvcRunView {
 	}
 	if withResult && r.ResultJSON != "" {
 		v.Result = json.RawMessage(r.ResultJSON)
+	}
+	if store.SvcRunTerminal(r.State) {
+		v.ResultSHA256 = svcSHA(r.ResultJSON)
 	}
 	return v
 }
@@ -354,6 +358,21 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 	if why := svcEngineRequest(&req); why != "" {
 		svcRunError(w, http.StatusBadRequest, SvcErrTemplateInvalid, why)
 		return
+	}
+	isEval, _ := r.Context().Value(svcEvalContextKey{}).(bool)
+	if strings.HasPrefix(req.Tenant, "eval/") && !isEval {
+		svcRunError(w, http.StatusForbidden, "", "use the authorized evaluation endpoint")
+		return
+	}
+	if req.EnginePref == "codex" && !isEval {
+		digest := strings.TrimPrefix(req.TemplateDigest, "sha256:")
+		if req.EngineTemplates["codex"] != "" {
+			digest = req.EngineTemplates["codex"]
+		}
+		if !s.svcQualified(p.ID, "codex", digest) {
+			svcRunError(w, http.StatusForbidden, SvcErrTemplateInvalid, "Codex template has no trusted qualification")
+			return
+		}
 	}
 	if req.DeadlineS == 0 {
 		req.DeadlineS = svcDeadlineDefault

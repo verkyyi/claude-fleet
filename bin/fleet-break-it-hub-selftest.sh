@@ -2138,6 +2138,16 @@ drill_svc_token_escalate() {
   SECS=$(since "$t0")
 }
 
+# ---- svc-unqualified-codex (T954): registration or self-attestation must
+# never grant production Codex eligibility.
+drill_svc_unqualified_codex() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests svc_qualifications_test.go TestSvcQualificationRejectsRegisteredOnlyAndForgedEval TestSvcUnqualifiedDualSkipsWithoutCodexAttempt TestSvcTrustedEvaluationEvidenceAndRevocation || return 1
+  WHAT='普通调用不能以登记、伪造评测或自报通过授资格；专用评测、管理员试卷和独立grader证据核验后才放行，改策略即撤销旧资格'
+  SECS=$(since "$t0")
+}
+
 # ---- svc-usage-crosses-tenant (#4006, the SPACE EPIC C4): a service run's
 # usage lands on another tenant or a person, or one tenant (or the whole
 # service) uses up the pool for everyone. The break: two tenants' runs through

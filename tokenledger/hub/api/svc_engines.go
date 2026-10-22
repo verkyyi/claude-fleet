@@ -115,6 +115,17 @@ func (s *Server) svcSelectEngine(run store.SvcRun, worker string, now time.Time)
 			reasons = append(reasons, engine+": no evaluated template registered")
 			continue
 		}
+		if strings.HasPrefix(run.Tenant, "eval/") {
+			if !s.svcAuthorizedEval(run, engine, digest) {
+				return store.SvcTemplate{}, "", fmt.Errorf("template_invalid: evaluation authority changed")
+			}
+		} else if engine == "codex" && !s.svcQualified(run.Principal, engine, digest) {
+			if run.EnginePref == "codex" {
+				return store.SvcTemplate{}, "", fmt.Errorf("template_invalid: Codex template is not qualified")
+			}
+			reasons = append(reasons, "codex: no trusted template qualification")
+			continue
+		}
 		template, err := s.Store.SvcTemplateOf(run.Principal, digest)
 		if err != nil {
 			return store.SvcTemplate{}, "", fmt.Errorf("template_invalid: %s template is not registered", engine)
