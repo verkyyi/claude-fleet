@@ -194,6 +194,7 @@ func applySchema(d dialect, write *sql.DB) error {
 // hub fails every query that mentions it.
 func migrate(db *sql.DB) error {
 	adds := []struct{ table, column, spec string }{
+		{"fleet_trial_grants", "next_day_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"endpoints", "limits_unavailable", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "limits_checked_at", "TEXT"},
 		{"accounts", "account_created_at", "TEXT"},

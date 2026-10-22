@@ -241,6 +241,12 @@ your Mac). The few that do something else on purpose say so below.
 | ⌘K | iTerm2 清屏 | 一样 | #3185 起还给 iTerm2（默认只绑 ⌘P） | |
 | ⌘T ⌘N ⌘Q | iTerm2 新标签 / 新窗口 / 退出 | 一样 | T685 起还给 iTerm2；新会话、退出 fleet 在面板里 | |
 
+## 停放后继续说话
+
+空闲会话停放后保留最后一屏，底部显示灰字「· 已停放 · 直接打字，回车即接回（约 2 秒）」；英文显示「· parked · just type — Enter resumes it (~2 s)」。窄终端按宽度换行。
+
+切换到这个窗口只查看记录。直接输入，按回车后恢复同一对话，并把整句作为第一轮；输入未提交前不会接回。恢复启动失败时原句仍留在窗口，回车或 r 重试，n 开新对话并带上这句话。只有助手启动确认后才清除暂存的输入。
+
 ## Where the state lives
 
 The home keeps each view's registration under `$FLEET_CONF_DIR/remote-views/`.

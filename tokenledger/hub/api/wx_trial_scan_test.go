@@ -363,3 +363,52 @@ func TestTrialCodeGates(t *testing.T) {
 		t.Fatalf("member create = %d", st)
 	}
 }
+
+// TVCC: retention is the next Beijing calendar day, not 24 hours later.
+func TestTrialCodeNextDayFunnel(t *testing.T) {
+	h := newTrialHarness(t)
+	c := h.newCode(t, map[string]any{"channel": "site"})
+	bj := time.FixedZone("Beijing", 8*60*60)
+	day := time.Now().In(bj).AddDate(0, 0, -2)
+	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, bj)
+	cases := []struct {
+		name    string
+		granted time.Time
+		lines   []time.Time
+		want    bool
+	}{
+		{"same-day", start, []time.Time{start.Add(23 * time.Hour)}, false},
+		{"midnight", start.Add(23*time.Hour + 59*time.Minute), []time.Time{start.Add(24 * time.Hour), start.Add(25 * time.Hour)}, true},
+		{"end-next-day", start, []time.Time{start.Add(48*time.Hour - time.Second)}, true},
+		{"third-day", start, []time.Time{start.Add(48 * time.Hour)}, false},
+		{"silent", start, nil, false},
+	}
+	for i, tc := range cases {
+		pid := fmt.Sprintf("gh:%d", 70000+i)
+		ok, err := h.srv.Store.ClaimTrialGrant(store.TrialGrant{Who: "wx:" + tc.name, CodeID: c.ID,
+			Principal: pid, OpenID: tc.name, State: store.GrantGranted, ScannedAt: start, GrantedAt: tc.granted}, 20)
+		if err != nil || !ok {
+			t.Fatalf("claim %s: %v %v", tc.name, ok, err)
+		}
+		for _, at := range tc.lines {
+			h.srv.trialNextDayLine(pid, at)
+		}
+		g, err := h.srv.Store.TrialGrantOf("wx:" + tc.name)
+		if err != nil || (!g.NextDayAt.IsZero()) != tc.want {
+			t.Fatalf("%s: %+v %v", tc.name, g, err)
+		}
+		if tc.want && !g.NextDayAt.Equal(tc.lines[0]) {
+			t.Fatalf("%s: duplicate moved timestamp", tc.name)
+		}
+	}
+	st, b := requestsDo(t, h.ghHarness, h.admin, http.MethodGet, AdminTrialCodesPath, nil)
+	var v adminTrialCodesView
+	if st != http.StatusOK || json.Unmarshal(b, &v) != nil || len(v.Codes) != 1 || v.Codes[0].Funnel.NextDay != 2 || v.Totals.NextDay != 2 {
+		t.Fatalf("list retention: %d %s", st, b)
+	}
+	_, b = requestsDo(t, h.ghHarness, h.admin, http.MethodGet, AdminTrialCodesPath+"/"+c.ID, nil)
+	var d adminTrialCodeDetail
+	if json.Unmarshal(b, &d) != nil || d.Funnel.NextDay != 2 || d.Funnel.Granted != 5 {
+		t.Fatalf("detail retention: %s", b)
+	}
+}

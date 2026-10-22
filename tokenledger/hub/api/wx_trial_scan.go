@@ -351,6 +351,9 @@ func (s *Server) qrHold(now time.Time) string {
 	if s.trialNoSub() {
 		return trialWaitNoSub
 	}
+	if _, err := s.trialDefaultAgent(); err != nil {
+		return trialWaitBusy + ":provider"
+	}
 	if left, ok := trialPoolLeft(s); ok && left < float64(s.trialQuotaFloor()) {
 		return trialWaitQuota
 	}
@@ -731,5 +734,15 @@ func (s *Server) notifyTrialBurst(codeID string, now time.Time) {
 		if err := s.Tell(context.Background(), to, store.NotifyKindQRBurst, Fields{Code: codeID, At: now}); err != nil {
 			log.Printf("notify %s of trial code %s: %v", u.PrincipalID, codeID, err)
 		}
+	}
+}
+
+// trialNextDayLine counts accepted messages, not page views or refused turns.
+func (s *Server) trialNextDayLine(person string, now time.Time) {
+	if s.Store == nil || !isPerson(person) {
+		return
+	}
+	if err := s.Store.MarkTrialNextDayLine(person, now); err != nil {
+		log.Printf("trial code: next-day line of %s: %v", person, err)
 	}
 }

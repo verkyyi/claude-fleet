@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -165,10 +168,29 @@ func (s *Server) trialLoadRatio() float64 {
 // window, on average over those with a reading (the pool's headroom: the
 // proxy picks among them). ok=false with no reading — nothing is held then.
 func (s *Server) poolLeft() (float64, bool) {
-	// The same default as a new web/task session. A full Claude pool must
-	// not hold a trial whose first session will use Codex (T943).
+	agent, err := s.trialDefaultAgent()
+	if err != nil {
+		return 0, false
+	}
+	return s.poolLeftForAgent(agent)
+}
+
+// A missing team setting retains the dispatch protocol's Claude default.
+// Corrupt persisted settings must not silently check one pool and launch another.
+func (s *Server) trialDefaultAgent() (string, error) {
+	agent := s.setting(ClientDefaultsPrefix + "FLEET_AGENT")
+	if agent == "" {
+		return "claude", nil
+	}
+	if !codingAgentOK(agent) {
+		return "", errors.New("invalid trial default agent")
+	}
+	return agent, nil
+}
+
+func (s *Server) poolLeftForAgent(agent string) (float64, bool) {
 	source := model.SourceClaude
-	if s.setting(ClientDefaultsPrefix+"FLEET_AGENT") == "codex" {
+	if agent == "codex" {
 		source = model.SourceCodex
 	}
 	across, err := s.LimitsForAllSource(source)
@@ -190,6 +212,46 @@ func (s *Server) poolLeft() (float64, bool) {
 		return 0, false
 	}
 	return sum / float64(n), true
+}
+
+// Pin the trial's actual provider on the unified open request, before counting
+// a line or handing it to another replica/login. Local defaults cannot override
+// this admission decision. Explicit choices still use their own pool.
+func (s *Server) trialOpenProvider(w http.ResponseWriter, r *http.Request, person string) bool {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatBodyMax))
+	_ = r.Body.Close()
+	if err != nil {
+		s.chatRefuse(w, person, "open", http.StatusRequestEntityTooLarge, "too_large", "消息太大 · message too large")
+		return false
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil || body == nil {
+		s.chatRefuse(w, person, "open", http.StatusBadRequest, "bad_body", "a JSON object")
+		return false
+	}
+	agent := ""
+	if value := body["agent"]; len(value) != 0 && string(value) != "null" {
+		if json.Unmarshal(value, &agent) != nil || (agent != "" && !codingAgentOK(agent)) {
+			s.chatRefuse(w, person, "open", http.StatusBadRequest, "agent", "agent: claude or codex")
+			return false
+		}
+	}
+	if agent == "" {
+		agent, err = s.trialDefaultAgent()
+		if err != nil {
+			s.chatRefuse(w, person, "open", http.StatusServiceUnavailable, "trial_provider", "暂时无法开始试用，请稍后再试。")
+			return false
+		}
+	}
+	if left, ok := s.poolLeftForAgent(agent); ok && left < float64(s.trialQuotaFloor()) {
+		s.chatRefuse(w, person, "open", http.StatusTooManyRequests, "trial_quota", "这个助手的额度暂时不足，请稍后再试。")
+		return false
+	}
+	body["agent"], _ = json.Marshal(agent)
+	raw, _ = json.Marshal(body)
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	r.ContentLength = int64(len(raw))
+	return true
 }
 
 // trialDailyNow is today's total: fleet.trial.daily, halved while the pool
@@ -215,6 +277,9 @@ func (s *Server) trialHold(host string, now time.Time) string {
 	}
 	if n, err := s.Store.TrialsHolding(); err != nil || n >= s.trialSlots() {
 		return trialWaitFull
+	}
+	if _, err := s.trialDefaultAgent(); err != nil {
+		return trialWaitBusy + ":provider"
 	}
 	if left, ok := trialPoolLeft(s); ok && left < float64(s.trialQuotaFloor()) {
 		return trialWaitQuota

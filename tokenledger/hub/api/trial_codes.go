@@ -56,6 +56,7 @@ type trialFunnel struct {
 	Queued    int `json:"queued"`
 	Pending   int `json:"pending"`
 	First     int `json:"first"`
+	NextDay   int `json:"next_day"`
 	Converted int `json:"converted"`
 	// P50Secs is the median time from the scan to the first line in the
 	// chat, over those who sent one (0 = none yet).
@@ -171,6 +172,7 @@ func (s *Server) adminTrialCodesList(w http.ResponseWriter) {
 		v.Totals.Queued += f.Queued
 		v.Totals.Pending += f.Pending
 		v.Totals.First += f.First
+		v.Totals.NextDay += f.NextDay
 		v.Totals.Converted += f.Converted
 	}
 	v.Totals.P50Secs = median(firsts)
@@ -220,6 +222,9 @@ func (s *Server) trialCodeRow(code *store.TrialCode, set map[string]string, user
 		if !g.FirstAt.IsZero() {
 			row.Funnel.First++
 			mine = append(mine, int(g.FirstAt.Sub(g.ScannedAt).Seconds()))
+		}
+		if !g.NextDayAt.IsZero() {
+			row.Funnel.NextDay++
 		}
 		if trialConverted(g.Principal, set, users) {
 			row.Funnel.Converted++

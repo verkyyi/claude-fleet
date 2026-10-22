@@ -80,8 +80,8 @@ export function secs(n: number): string {
   return t("tc.min", { n: Math.floor(n / 60), s: n % 60 });
 }
 
-const STEPS: (keyof TrialFunnel)[] = ["scans", "follows", "granted", "first", "converted"];
-// the funnel as five small bars, the 开通 one in the accent colour
+const STEPS: (keyof TrialFunnel)[] = ["scans", "follows", "granted", "first", "next_day", "converted"];
+// the funnel as six small bars, the 开通 one in the accent colour
 function Funnel({ f }: { f: TrialFunnel }) {
   const top = Math.max(1, ...STEPS.map((k) => f[k]));
   return (
@@ -255,6 +255,7 @@ const FUNNEL_WORDS: Record<string, { zh: string; en: string }> = {
   follows: { zh: "扫码关注", en: "Followed" },
   granted: { zh: "开通试用", en: "Started" },
   first: { zh: "发出第一句", en: "First line" },
+  next_day: { zh: "次日回来", en: "Back next day" },
   converted: { zh: "转正", en: "Member" },
 };
 

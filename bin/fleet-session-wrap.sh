@@ -122,7 +122,7 @@ _ad="$BIN/fleet-agent-adapter.sh"
 wset() { tmux set-option -w -t "$TMUX_PANE" "$@" 2>/dev/null; }
 # C1: only a running wrapper with this holding page is eligible for parking.
 if [ "$intmux" = 1 ]; then
-  wset @park_wrap_ver 1
+  wset @park_wrap_ver 2
   [ -n "$(opt @park_presence)" ] || wset @park_presence 0
 fi
 
@@ -327,26 +327,31 @@ PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # its ID, its conversation and its credential stay, and every list reads it idle
 # (@claude_state done). It waits for a wake — the gate's @park_wake (a seed file the
 # wake claims by renaming it, the gate cancelling with the same rename, so exactly
-# one side wins: the first sentence rides the start, never twice), a person
-# switching to this window (a terminal client showing it), or ↵ here. Sets
+# one side wins: the first sentence rides the start, never twice), or a sentence
+# submitted with ↵ here. Switching windows only shows the saved screen. Sets
 # park_seed (the first turn's words, may be empty) and park_act (wake | quit).
 park_hold() {
   park_act=wake; park_seed=''
   wset @claude_needs ''
   wset @claude_state_src wrapper
   wset @claude_state "done"
-  wset @park_held "$(date +%s)"
-  printf '\n  已停放 · 发一句或按 ↵ 即接回同一个对话\n  parked · say something or press ↵ to resume the same conversation\n' 2>/dev/null
-  local w k seed me t
-  me=$(opt window_id)
+  local w page_rc fid draft screen reply
+  local page_args=()
+  fid=$(opt @fleet_id)
+  draft="${FLEET_GATE_DIR:-$PCONF/session-gate}/$fid/park-input.txt"
+  screen=$(opt @park_screen)
+  [ -n "$screen" ] || screen="${draft%/*}/park-screen.txt"
+  [ "$park_failed" = 1 ] || park_new=''
   while :; do
     w=$(opt @park_wake)
-    if [ -n "$w" ]; then
+    if [ -n "$w" ] && { [ "$park_keyboard" = 1 ] || [ ! -s "$draft" ]; }; then
       if mv "$w" "$w.taken" 2>/dev/null; then
-        park_seed=$(cat "$w.taken" 2>/dev/null)
+        park_seed=$(cat "$w.taken" 2>/dev/null; printf .)
+        park_seed=${park_seed%.}
         if [ -f "$w.meta" ]; then
           # First native 7501 report acknowledges a new gate's owned seed.
           wset @park_start "$w.meta"
+          [ "$park_keyboard" != 1 ] || park_attempt="$w.meta"
         else
           # HHV0 callers handed a seed directly, before metadata existed.
           : > "$w.launched" 2>/dev/null
@@ -357,22 +362,30 @@ park_hold() {
       fi
       wset -u @park_wake
     fi
-    # a person came to look at it (fleet open, ⌘P, a switch): bring it back
-    if tmux list-clients -F '#{client_control_mode}	#{window_id}' 2>/dev/null \
-        | awk -F'\t' -v w="$me" '$1 != 1 && $2 == w { f = 1 } END { exit !f }'; then
-      python3 "$BIN/fleet_session_gate.py" wake --fid "$(opt @fleet_id)" --why 切换 --request-only >/dev/null 2>&1
-      continue
-    fi
-    k=''; t=$SECONDS
-    IFS= read -rsn1 -t 1 k; seed=$?
-    # a second went by, no key: bash 4+ says >128, 3.2 says 1 — as an EOF does,
-    # which returns at once, so the clock tells them apart (plain_page's rule)
-    if [ "$seed" -gt 128 ] || { [ "$seed" != 0 ] && [ "$SECONDS" -gt "$t" ]; }; then continue; fi
-    if [ "$seed" = 0 ]; then
-      python3 "$BIN/fleet_session_gate.py" wake --fid "$(opt @fleet_id)" --why 键盘 --request-only >/dev/null 2>&1
-      continue
-    fi
-    park_act=quit; break                             # the pane's input is gone
+    page_args=(--screen "$screen" --draft "$draft")
+    [ "$park_failed" != 1 ] || page_args+=(--failed)
+    python3 "$BIN/fleet-park-page.py" ${page_args[@]+"${page_args[@]}"}
+    page_rc=$?
+    case "$page_rc" in
+      12) continue ;;  # external seed, claimed by the same rename above
+      10|11)
+        [ "$page_rc" != 11 ] || park_new=1
+        reply=$( . "$BIN/fleet-lib.sh"; fleet_park_wake "$fid" --why 键盘 --seed-file "$draft" --request-only )
+        case "$reply" in
+          *'"ok":true'*) park_keyboard=1; park_failed='' ;;
+          *) park_failed=1 ;;
+        esac ;;
+      1) park_act=quit; break ;;
+      *)
+        # A broken editor must not turn a sentence into a single-key command.
+        printf '\n接回页面不可用 · 输入整句后回车重试 / Resume page unavailable · type then Enter: '
+        wset @park_held "$(date +%s)"
+        IFS= read -r park_seed || { park_act=quit; break; }
+        mkdir -p "${draft%/*}"
+        ( umask 077; printf '%s' "$park_seed" > "$draft" )
+        reply=$( . "$BIN/fleet-lib.sh"; fleet_park_wake "$fid" --why 键盘 --seed-file "$draft" --request-only )
+        case "$reply" in *'"ok":true'*) park_keyboard=1 ;; *) park_failed=1 ;; esac ;;
+    esac
   done
   wset -u @parked; wset -u @park_since; wset -u @park_why; wset -u @park_held
 }
@@ -394,6 +407,7 @@ for a in "$@"; do
 done
 unset _pv _ag
 park_sid=''    # a parked session's credential sid, kept for its wake (task HHV0)
+park_keyboard=''; park_attempt=''; park_failed=''; park_new=''
 park_seed=''   # the first sentence a wake carries into the resumed conversation
 cred_tries=0   # refused launches in a row for want of a session credential (#4112)
 cred_since=0   # when that streak began (T915: its child report waits FLEET_CRED_REPORT_SECS)
@@ -492,7 +506,14 @@ while :; do
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi
   rc=$?
-  park_seed=''
+  # A keyboard wake owns its words until a native report claims the metadata.
+  # A launcher exiting before that confirmation returns to the parked editor.
+  if [ -n "$park_attempt" ] && python3 "$BIN/fleet-park-page.py" --fail-meta "$park_attempt"; then
+    park_failed=1
+  else
+    park_failed=''
+  fi
+  park_attempt=''; park_keyboard=''; park_seed=''
   unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # retired (C8): an old spawner's never rides a resume
   # Parked (task HHV0, bin/fleet_session_gate.py park): the gate stamped @parked
   # before it asked the agent to /exit. The session credential is NOT revoked —
@@ -514,18 +535,26 @@ while :; do
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
   # Parked: the window holds the same conversation until a wake, and looks idle.
   if [ -n "$parked" ]; then
-    park_hold
-    case "$park_act" in
-      quit) exit "$rc" ;;
-    esac
-    first=0; last=resume
-    agent=$(fleet_agent_or_default "$(opt @cc_agent)")
-    sid=$(fleet_agent_session_id "$agent" opt window)
-    [ -n "$sid" ] || sid=$last_sid
+    while :; do
+      park_hold
+      [ "$park_act" != quit ] || exit "$rc"
+      first=0; last=resume
+      agent=$(fleet_agent_or_default "$(opt @cc_agent)")
+      sid=$(fleet_agent_session_id "$agent" opt window)
+      [ -n "$sid" ] || sid=$last_sid
+      cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"})
+      if [ "$park_new" = 1 ]; then break; fi
+      if [ -n "$sid" ]; then
+        last_sid=$sid; last_agent=$agent
+        cmd+=("$(fleet_agent_get "$agent" resume_flag)" "$sid")
+        break
+      fi
+      # Never fall back to another window's latest conversation. The same
+      # recovery page retains the words and offers an explicit new conversation.
+      python3 "$BIN/fleet-park-page.py" --fail-meta "$park_attempt" || :
+      park_failed=1
+    done
     wset @id_next_trigger "reopen:$(date +%s)"
-    cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"})
-    if [ -n "$sid" ]; then cmd+=("$(fleet_agent_get "$agent" resume_flag)" "$sid")
-    else _o=$(fleet_agent_get "$agent" continue_flag); [ -n "$_o" ] && cmd+=("$_o"); fi
     wset @claude_state ''
     wset @claude_state_ts "$(date +%s)"
     continue

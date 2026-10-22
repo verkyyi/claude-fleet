@@ -157,7 +157,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 额度观察 | `fleet-quota* usage-*` | 额度与用量 |
 | 项目依赖复用 | `fleet-deps-*` | 显式依赖克隆/链接，不属于默认会话启动 |
 | 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install* fleet-dev-mode*` | 安装、版本与包 |
-| 宿主清理与保护 | `fleet-cleanup* fleet-reconcile-tick* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-park* fleet_park*` | 资源、退出与停放 |
+| 宿主清理与保护 | `fleet-cleanup* fleet-reconcile-tick* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-park* fleet_park*` | 资源、退出与停放；停放页保留屏幕与未确认输入，回车接回同一会话 |
 | 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠的一版兼容转发 |
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect*` | 收集与账本 |
 | 终端状态与节点连接 | `tmux-spinner* fleet-render-watch.py fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接；spinner 的 shell 入口加载配置后 exec Python 主循环，复用 render-watch 的常驻 control transport、可见性和有界等待 |
