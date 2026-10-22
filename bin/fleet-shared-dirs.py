@@ -212,12 +212,29 @@ def main(argv):
     root = root.rstrip("/") or "/"
     ps = Pass(check)
     heavy, sessions = os.path.join(root, "heavy"), os.path.join(root, "sessions")
-    for d in (root, heavy, sessions):
+    wake = os.path.join(root, "wake")
+    for d in (root, heavy, sessions, wake):
         ps.ensure_dir(d)
     if os.path.isdir(heavy):
         for k in range(1, slots + 1):
             ps.ensure_slot(os.path.join(heavy, "slot-%d" % k))
         ps.sweep_heavy(heavy)
+    if os.path.isdir(wake):
+        for k in range(32):
+            path = os.path.join(wake, "slot-%d" % k)
+            try:
+                st = os.lstat(path)
+            except FileNotFoundError:
+                st = None
+            if st is not None and stat.S_ISREG(st.st_mode) and ps.root:
+                # Keep the inode: a login may already hold this wake slot.
+                # Replacing an occupied file would create a second free slot.
+                if st.st_uid != 0 or st.st_gid != 0:
+                    ps.act("chown root " + path, os.chown, path, 0, 0)
+                if stat.S_IMODE(st.st_mode) != 0o644:
+                    ps.act("chmod 644 " + path, os.chmod, path, 0o644)
+            else:
+                ps.ensure_slot(path)
     if os.path.isdir(sessions):
         ps.sweep_sessions(sessions)
     for n in ps.notes:

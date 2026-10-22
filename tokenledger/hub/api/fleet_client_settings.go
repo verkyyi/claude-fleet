@@ -132,6 +132,7 @@ func (s *Server) poolSettings() map[string]string {
 		// (task PQ41), in seconds; 0 = never
 		"FLEET_SESSION_PARK_IDLE":            strconv.Itoa(s.sessionParkIdle()),
 		"FLEET_SESSION_PARK_IDLE_UNATTENDED": strconv.Itoa(s.sessionParkDuration("fleet.session.park_idle_unattended", "5m")),
+		"FLEET_SESSION_WAKE_SLOTS":           s.setting("fleet.session.wake_slots"),
 		"FLEET_SESSION_PARK_PRESENCE":        strconv.Itoa(s.sessionParkDuration("fleet.session.park_presence", "15m")),
 	}
 }

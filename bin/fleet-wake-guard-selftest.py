@@ -12,6 +12,11 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+import importlib.util
+import shutil
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 BIN = Path(__file__).resolve().parent
 
@@ -23,9 +28,9 @@ class Storm(unittest.TestCase):
             fake = root / 'engine.py'
             fake.write_text('import sys,time,json\nfrom pathlib import Path\n'
                             'p=Path(sys.argv[1]); out=Path(sys.argv[2])\n'
-                            'with out.open("a") as f: f.write(json.dumps(["start",time.monotonic()])+"\\n")\n'
+                            'with out.open("a") as f: f.write(json.dumps(["start",time.time()])+"\\n")\n'
                             'time.sleep(.4)\n'
-                            'with out.open("a") as f: f.write(json.dumps(["ready",time.monotonic()])+"\\n")\n'
+                            'with out.open("a") as f: f.write(json.dumps(["ready",time.time()])+"\\n")\n'
                             'Path(str(p)+".launched").touch()\n'
                             'p.with_suffix(".meta").unlink(missing_ok=True)\n')
             children = []
@@ -62,6 +67,138 @@ class Storm(unittest.TestCase):
             self.assertGreater(peak, 1)
             self.assertLessEqual(elapsed, 60)
             print('wake-storm: ready=%d peak=%d elapsed=%.2fs' % (ready, peak, elapsed))
+
+
+    def test_human_jumps_waiting_timer_and_dead_ticket_does_not_block(self):
+        import fcntl
+        import fleet_wake_guard as guard
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            env = dict(os.environ, FLEET_WAKE_SLOT_DIR=tmp, FLEET_SESSION_WAKE_SLOTS='1',
+                       FLEET_WAKE_ADMIT_CMD='true')
+            ticket = guard.shared_file(directory / 'human-test')
+            fcntl.flock(ticket, fcntl.LOCK_EX)
+            code = ('import sys,time; from pathlib import Path; import fleet_wake_guard as g; '
+                    'p=Path(sys.argv[1]); m=dict(fid="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",why=sys.argv[2]); '
+                    'f=g.acquire(p,m); p.write_text("acquired"); time.sleep(.1); f.close()')
+            env['PYTHONPATH'] = str(BIN)
+            timer = subprocess.Popen([sys.executable, '-c', code, str(directory / 'timer'), '定时'], env=env)
+            try:
+                time.sleep(.3)
+                self.assertFalse((directory / 'timer').exists())
+                human = subprocess.run([sys.executable, '-c', code, str(directory / 'human'), '键盘'],
+                                       env=env, timeout=5)
+                self.assertEqual(human.returncode, 0)
+                self.assertTrue((directory / 'human').exists())
+                self.assertFalse((directory / 'timer').exists())
+                ticket.close()  # Simulate a dead waiter: stale filename, no lock.
+                timer.wait(timeout=5)
+                self.assertEqual(timer.returncode, 0)
+                self.assertTrue((directory / 'timer').exists())
+            finally:
+                ticket.close()
+                if timer.poll() is None:
+                    timer.kill()
+                timer.wait()
+
+
+class Recovery(unittest.TestCase):
+    def fixture(self, memory=False):
+        if not shutil.which('tmux'):
+            self.skipTest('tmux absent')
+        spec = importlib.util.spec_from_file_location('guard_fixture', BIN / 'fleet-park-selftest.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        f = module.Park('runTest')
+        f.setUp()
+        self.addCleanup(f.doCleanups)
+        if memory:
+            admit = f.root / 'admit'
+            admit.write_text('#!/bin/sh\nexit 1\n')
+            admit.chmod(0o755)
+            f.env['FLEET_WAKE_ADMIT_CMD'] = str(admit)
+        f.fake()
+        return f, module.gate
+
+    def test_two_failed_resumes_keep_words_and_disable_reparking(self):
+        f, gate = self.fixture()
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+        (f.root / 'fail').touch()
+        f.tm('send-keys', '-t', f.win, '-l', 'keep this sentence')
+        f.tm('send-keys', '-t', f.win, 'Enter')
+        health = f.root / 'conf/session-gate' / f.fid / 'park-health.json'
+        f.wait(lambda: health.exists() and json.loads(health.read_text()).get('failures') == 1)
+        f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
+        f.tm('send-keys', '-t', f.win, 'Enter')
+        f.wait(lambda: json.loads(health.read_text()).get('disabled'))
+        f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
+        (f.root / 'fail').unlink()
+        f.tm('send-keys', '-t', f.win, 'Enter')
+        f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+        f.wait(lambda: json.loads(health.read_text()).get('failures') == 0)
+        with patch.dict(os.environ, f.env):
+            self.assertEqual(gate.park(f.fid).get('why'), 'wake_failures')
+        args = json.loads((f.root / 'argv').read_text().splitlines()[-1])
+        self.assertEqual(args[-1], 'keep this sentence')
+        self.assertIn(f.sid, args)
+
+    def test_version_rejection_offers_new_chat_with_reason_and_words(self):
+        f, gate = self.fixture()
+        launch = f.root / 'launch'
+        launch.write_text(launch.read_text().replace('echo resume-failed', 'echo "unsupported session version"'))
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+        (f.root / 'fail').touch()
+        f.tm('send-keys', '-t', f.win, '-l', 'saved version question')
+        f.tm('send-keys', '-t', f.win, 'Enter')
+        f.wait(lambda: '版本不兼容' in f.tm('capture-pane', '-p', '-t', f.win))
+        (f.root / 'fail').unlink()
+        f.tm('send-keys', '-t', f.win, 'n')
+        f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+        args = json.loads((f.root / 'argv').read_text().splitlines()[-1])
+        self.assertNotIn('--resume', args)
+        self.assertEqual(args[-1], 'saved version question')
+        self.assertEqual(f.opt('@fleet_id'), f.fid)
+
+    def test_hung_start_is_stopped_before_retry_and_words_survive(self):
+        f, gate = self.fixture()
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+        fake = f.root / 'fake.py'
+        fake.write_text(fake.read_text().replace('state=idle:app=claude-code', 'state=starting:app=claude-code'))
+        f.tm('send-keys', '-t', f.win, '-l', 'keep hung prompt')
+        f.tm('send-keys', '-t', f.win, 'Enter')
+        f.wait(lambda: f.opt('@park_error') == 'wake_timeout')
+        f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
+        self.assertFalse(f.opt('@park_relay'))
+        self.assertIn('keep hung prompt', f.tm('capture-pane', '-p', '-t', f.win))
+
+    def test_timer_defers_without_losing_delivery_or_counting_failure(self):
+        from types import SimpleNamespace
+        f, gate = self.fixture(memory=True)
+        admit = f.root / 'admit'
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+            args = SimpleNamespace(fid=f.fid, text='timer original', image=[], delivery=None, why='定时', next_at=123)
+            gate.say(args)
+            f.wait(lambda: f.opt('@park_held'))
+            record = gate.records(f.fid)[0]
+            gate.settle(f.fid, record['delivery'])
+            record = gate.records(f.fid)[0]
+            self.assertEqual(record['state'], 'queued')
+            self.assertEqual(record['text'], 'timer original')
+            self.assertEqual(record['wake_next'], 123)
+            self.assertEqual(record['why'], 'memory')
+            self.assertFalse((gate.fid_dir(f.fid) / 'park-health.json').exists())
+            admit.write_text('#!/bin/sh\nexit 0\n')
+            with gate.lock(f.fid):
+                record['wake_retry_at'] = 0
+                gate.save(record)
+            gate.settle(f.fid, record['delivery'])
+            f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+            gate.settle(f.fid, record['delivery'])
+            self.assertEqual(gate.records(f.fid)[0]['state'], 'sent', gate.records(f.fid)[0])
 
 
 if __name__ == '__main__':

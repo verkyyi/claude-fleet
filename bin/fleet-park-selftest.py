@@ -43,6 +43,7 @@ class Park(unittest.TestCase):
         self.env = dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf'),
                         FLEET_GATE_WAKE_SECS='3', FLEET_GATE_PARK_SECS='3',
                         FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50',
+                        FLEET_WAKE_SLOT_DIR=str(self.root / 'slots'), FLEET_WAKE_ADMIT_CMD='true',
                         FLEET_ID_PUSH='0', FLEET_SKIP_GLOBAL_CONF='1')
         self.env.pop('CCQUOTA_FLEET', None)
         self.env.pop('TMUX', None)

@@ -326,6 +326,16 @@ func init() {
 				return d.String(), ""
 			}}
 	}
+	hubSettings["fleet.session.wake_slots"] = hubSetting{def: "3",
+		help: "simultaneous parked session starts per machine, shared by all logins (1–32)",
+		check: func(_ *Server, v string) (string, string) {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 1 || n > 32 {
+				return "", "fleet.session.wake_slots must be an integer from 1 to 32"
+			}
+			return strconv.Itoa(n), ""
+		}}
+
 	hubSettings[SessionParkIdleKey] = hubSetting{def: "5m",
 		help: "an idle session with human presence parks after this long (1m–24h, or off); watched panes, drafts and background work stay running · 有人交互的会话空闲多久停放",
 		check: func(_ *Server, v string) (string, string) {
