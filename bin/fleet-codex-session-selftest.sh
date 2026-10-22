@@ -434,6 +434,11 @@ class SessionTests(unittest.TestCase):
         old_t, new_t = fake_server.uuid7(now - 60000), fake_server.uuid7(now)
         server.add(fake_server.tui_thread(old_t))
         conf = self.root / 'conf'; ids = self.root / 'ids'
+        # Report admission re-resolves the window by fleet ID. Register this
+        # isolated fleet so that the test reaches the native /clear guard.
+        registration = conf / 'fleets' / label / 'conf'
+        registration.parent.mkdir(parents=True)
+        registration.touch()
         saved = {k: os.environ.get(k) for k in ('TMUX', 'TMUX_PANE', 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_ID_DIR', 'FLEET_ID_PUSH', 'FLEET_CONF_DIR')}
         try:
             call('new-session', '-d', '-s', label, '-n', 'parent', 'sleep 60')
