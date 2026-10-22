@@ -174,7 +174,9 @@ def explain(snap, now=None):
     row = ORIGINS[origin]
     reap = row["reap"] if uses_park_retention(snap) or not snap.get("@reap_policy") else snap["@reap_policy"]
     prefix = "origin=%s park=%s reap=%s" % (origin, row["park"], reap)
-    why = snap.get("@reap_why") or "pending-check"
+    why = report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")) or snap.get("@reap_why") or "pending-check"
+    if why in ("report-pending", "report-unknown"):
+        return prefix + " next=after-report-saved why=" + why
     if snap.get("@parked") and snap.get("@park_held"):
         due = parked_deadline(snap)
         if due is not None:
@@ -418,7 +420,13 @@ def report_proof(fid):
         return {}
     try:
         rec = json.loads((gate_root() / fid / "report.json").read_text())
-        return rec if isinstance(rec, dict) else {"phase": "unknown"}
+        if not isinstance(rec, dict):
+            return {"phase": "unknown"}
+        if rec.get("phase") == "complete" and (
+                not FID_RE.fullmatch(str(rec.get("token", "")))
+                or not isinstance(rec.get("result_seq"), int) or rec["result_seq"] < 1):
+            return {"phase": "unknown"}
+        return rec
     except FileNotFoundError:
         return {}
     except (OSError, ValueError):

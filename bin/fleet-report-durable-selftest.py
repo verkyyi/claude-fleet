@@ -84,6 +84,10 @@ class DurableReport(unittest.TestCase):
         cleaner.task_closed = lambda task: 0
         with patch.dict(os.environ, self.env, clear=True):
             self.assertFalse(cleaner.work_over({"@fleet_id": self.fid, "@task": "T42"}))
+            row = idle.fleet_reap_policy.explain({"@fleet_id": self.fid, "@parked": "1",
+                                                "@park_held": "1", "@park_since": "1"})
+            self.assertIn("next=after-report-saved why=report-pending", row)
+            self.assertNotIn("next=reap@", row)
 
 
     def test_failed_batch_ledger_does_not_finalize(self):
