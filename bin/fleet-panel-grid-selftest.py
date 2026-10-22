@@ -89,7 +89,7 @@ def items():
                  expanded=True),
             sess(5, "done", "成员一 member one", "B1", "work", fold="@4"),
             sess(6, "needs", "成员二 member two", "B2", "work", fold="@4"),
-            sess(7, "lost", "mini2 失联 lost", "Q8H1", "work", lost=True, far=True, agent=""),
+            sess(7, "lost", "另一台 失联 lost", "Q8H1", "work", lost=True, far=True, agent=""),
             {"kind": "hdr", "group": "queue", "text": fv.say("view_grp_queue_fmt", 1)},
             sess(8, "exited", "已结束 " + "很长" * 40, "WACK", "queue", ended=True),
             {"kind": "cmd", "cmd": "reapall", "act": "reapall", "n": 1, "row": {"targets": []},
