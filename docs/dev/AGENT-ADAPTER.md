@@ -110,6 +110,20 @@ hub relay）都走 `fleet_agent_deliver`（`bin/fleet-lib.sh`）。结果码两�
 | `bg_probe` | `pid` | `native` | 上一轮结束后还有没有活：Claude 看进程的 Bash 工具子进程；Codex 通过 app-server 问它自己的清单，回答不是干净的 idle 就不回收（常驻 MCP 和辅助服务是基础设施，不算活，#4318） |
 | `daemon` / `cred_home` | （无） | `app-server` / `codex-homes` | Codex 会话结束后会留下一个带会话凭据的 app-server；`_fleet_agent_cred_daemons` 通过 `cred-proxy/codex-homes/<sid>` 找到它，在凭据撤销后清掉 |
 
+Codex 留着不收时先区分「回报过 merged」与「现在已空闲」：回报后收到新任务的会话仍要保留。
+原生 idle 却显示 `looping` / `skip:bg-job` 时，检查 `fleet_worker_life.py busy --session <fleet> <window> --reap`
+给出的 PID；它们可能是常驻 MCP，而不是工具任务。默认 GitHub/fetch 用 `bash -lc` 启动包装器，
+包装器 exec 后进程树只剩 npm/uv/Python（T965）；普通 `bash -c exec` 的展开证明不能识别它们。
+非严格忙闲检查对这两个完整默认配置核对已知服务的实际 executable、参数和包入口；
+服务须 ready，入口下面的任务、浏览器仍算忙。自定义包装器、额外参数、未知状态继续保留；
+严格停放/交接的重启证明不因此放宽。`codex-mcp-busy` 演练覆盖默认包装器与真实任务后代。
+
+安装版 Codex 的 Hook 参数使用 `~/.claude/fleet` 稳定入口（T965），不能固定在待清理的版本目录。
+独立 checkout 启动仍指向自身。已启动的进程保留旧参数，修复后要在空闲时保存身份和原生 SID、
+通过 Fleet 停止并以同一 SID 恢复；不能只比较置顶和窗口身份。恢复入口按 `transcript` 列寻找历史：
+两个 spawner 共用 `fleet_resume_transcript_exists`：Claude 是 project 目录，Codex 是所选 home 的原生 rollout，并核对 UUID 元数据。
+`codex-hook-retired-root` / `codex-resume-history` 演练分别验证旧版本删除和同一对话恢复。
+
 ## 加第三种 Agent
 
 1. 在 `ADAPTERS` 加一行，**每一列**都填上（没有这一步就填空或 0），然后运行
