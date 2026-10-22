@@ -222,6 +222,12 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     from fleet_reap_policy import report_hold
     if len(hold) == 3 and report_hold(hold[2], hold[1]):
         return "retained:report"
+    if len(hold) == 3 and re.fullmatch(r"[0-9a-f-]{36}", hold[2]):
+        from fleet_session_gate import close_hold
+        if close_hold(hold[2]):
+            return "retained:message"
+    if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_work_pending}").strip():
+        return "retained:input"
 
     # A pending LOOP (issue #1331) — the agent scheduled its own next round
     # (ScheduleWakeup / CronCreate → @loop) or a fleet-loop.py ledger holds one.

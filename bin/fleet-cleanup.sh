@@ -303,7 +303,7 @@ fi
 # Pin the execution before any wait. The final gate compares under the SAME
 # transition lock as rotate/transfer; a delayed cleanup never adopts a successor.
 cleanup_binding() {
-  local inode='' panes=''
+  local inode='' panes='' fid='' work=''
   if [ -n "$WT" ]; then
     inode=$(python3 - "$WT" <<'PY'
 import os, sys
@@ -316,10 +316,12 @@ PY
   fi
   if [ -n "$WIN" ]; then
     [[ "$WIN" =~ ^@[0-9]+$ ]] || return 1
-    panes=$(ftmux list-panes -t "$WIN" -F '#{socket_path}|#{pid}|#{window_id}|#{pane_id}|#{pane_pid}|#{@fleet_id}|#{@repo}|#{@worktree}|#{@cc_agent}|#{@cc_launcher_pid}|#{@authority_receipt}|#{@codex_session_id}|#{@launch_receipt}||#{@migrating}|#{@reap_hold}' 2>/dev/null) || return 1
+    panes=$(ftmux list-panes -t "$WIN" -F '#{socket_path}|#{pid}|#{window_id}|#{pane_id}|#{pane_pid}|#{@fleet_id}|#{@repo}|#{@worktree}|#{@cc_agent}|#{@cc_launcher_pid}|#{@authority_receipt}|#{@codex_session_id}|#{@launch_receipt}||#{@migrating}|#{@reap_hold}|#{@task}|#{@claude_state_ts}|#{@reap_work_pending}' 2>/dev/null) || return 1
     [ -n "$panes" ] || return 1
+    fid=$(ftmux display-message -p -t "$WIN" '#{@fleet_id}') || return 1
+    work=$(python3 "$BIN/fleet_reap_policy.py" work-token "$fid") || return 1
   fi
-  printf '%s\n%s\n%s\n' "$WT" "$inode" "$panes" | shasum -a 256 | awk '{print $1}'
+  printf '%s\n%s\n%s\n%s\n' "$WT" "$inode" "$panes" "$work" | shasum -a 256 | awk '{print $1}'
 }
 CLEANUP_BINDING=$(cleanup_binding) || { done_token skip:live; exit 0; }
 if [ -n "$EXPECTED_BINDING" ] && [ "$CLEANUP_BINDING" != "$EXPECTED_BINDING" ]; then
@@ -355,8 +357,8 @@ issue_open_gate() {
   if [ -n "$wtask" ]; then
     # «做完» is one rule (T680, fleet_cfg_work_over): the window's ID has a final
     # result here, or the record is closed.
-    fleet_cfg_work_over "" "$(fleet_worktree_id "$WT" 2>/dev/null)" && return 0
-    tv=$(fleet_task_closed "$wtask") && return 0
+    fleet_cfg_work_over "$wtask" "$(fleet_worktree_id "$WT" 2>/dev/null)" && return 0
+    tv=$(fleet_task_closed "$wtask")
     verb=merged; [ "$st" = CLOSED ] && verb=closed
     note "  #$PR $verb but task $wtask is ${tv:-unknown} (not closed) — automatic cleanup deferred until the record closes."
     if [[ "$WIN" =~ ^@[0-9]+$ ]]; then
@@ -630,6 +632,15 @@ fi
 auto_cleanup_gate() {
   [ "$AUTO" = 1 ] || return 0
   [ -n "$WT" ] || [ -n "$WIN" ] || return 0
+  if [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+    local gate_fid gate_task
+    gate_fid=$(ftmux display-message -p -t "$WIN" '#{@fleet_id}')
+    gate_task=$(ftmux display-message -p -t "$WIN" '#{@task}')
+    if ! python3 "$BIN/fleet_reap_policy.py" completion-ready "$gate_fid" "$gate_task" \
+       || ! python3 "$BIN/fleet_session_gate.py" close-ready --fid "$gate_fid"; then
+      done_token skip:live; return 1
+    fi
+  fi
   local why="" state self_win cwd lease git_state current_head base_head token="skip:live"
   local socket_args=()
   if ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then
@@ -765,6 +776,18 @@ teardown() (
     done_token deferred:cleanup; return 1
   fi
 
+  # The same inherited flock as message admission, before the worktree lock.
+  # This subshell owns fd 9 through the final recheck and kill; no sleeps or
+  # detached closer can turn an earlier idle observation into authorization.
+  if [ "$AUTO" = 1 ] && [ -n "$WIN" ]; then
+    local close_fid close_dir
+    close_fid=$(ftmux display-message -p -t "$WIN" '#{@fleet_id}')
+    fleet_is_fid "$close_fid" || { done_token skip:live; return 1; }
+    close_dir="${FLEET_GATE_DIR:-$FLEET_CONF_DIR/session-gate}/$close_fid"
+    mkdir -p "$close_dir" || return 1
+    exec 9>>"$close_dir/.lock"
+    python3 "$BIN/fleet_session_gate.py" lock-fd --fid "$close_fid" --fd 9 || return 1
+  fi
   if [ -n "$WT" ]; then
     local transition_wt
     transition_wt=$(cd "$WT" 2>/dev/null && pwd -P) || transition_wt="$WT"

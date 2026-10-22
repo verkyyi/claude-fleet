@@ -166,15 +166,18 @@ class Cleaner:
                  "@auto_resume_at", "@auto_resumed", "@reap_why",
                  # HHV0: a session the web opened, and whether it is parked
                  "@session_origin", "@parked", "@park_wrap_ver", "@park_presence", "@park_watched_at",
-                 "@park_held", "@park_since", "@park_wake", "@park_start", "@park_waiting", "@reap_report_pending")
+                 "@park_held", "@park_since", "@park_wake", "@park_start", "@park_waiting", "@reap_report_pending", "@reap_work_pending")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
         out = self.tm("display-message", "-p", "-t", window, "\x1f".join("#{" + n + "}" for n in names))
         vals = out.split("\x1f")
         if len(vals) != len(names):
-            return {n: option(self.tm, window, n) for n in names}
-        return {n: v.strip() for n, v in zip(names, vals)}
+            snap = {n: option(self.tm, window, n) for n in names}
+        else:
+            snap = {n: v.strip() for n, v in zip(names, vals)}
+        snap["work_token"] = fleet_reap_policy.current_work(snap["@fleet_id"]).get("token", "")
+        return snap
 
     def moved(self, window, snap):
         """The window changed since <snap> was read (it came back, was renamed,
@@ -233,7 +236,9 @@ class Cleaner:
     def work_over(self, snap):
         """«做完» (T680's one rule): its ID's newest result is final, or its task
         record is closed."""
-        if fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")):
+        if snap.get("@reap_work_pending") or fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")):
+            return False
+        if fleet_reap_policy.completion_hold(snap.get("@fleet_id", ""), snap.get("@task", "")):
             return False
         if self.id_over(snap["@fleet_id"]):
             return True
@@ -348,26 +353,24 @@ class Cleaner:
         never while a reopen marks it (@migrating), and only once <recheck>()
         still holds — rc False when any of them says no (nothing closed). <why> is
         its ID's close reason (`parked` for a park, E101)."""
-        if snap.get("@parked") and not getattr(self, "_closing_park", False):
+        if not getattr(self, "_closing_identity", False):
             import fleet_session_gate
             fid = snap.get("@fleet_id", "")
             if not FID_RE.fullmatch(fid):
                 return False
             with fleet_session_gate.lock(fid):
                 current = self.snapshot(window)
-                draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
-                if (self.moved(window, snap) or not current.get("@park_held")
+                if (self.moved(window, snap) or current.get("@reap_work_pending")
+                        or (snap.get("@parked") and not current.get("@park_held"))
                         or current.get("@park_wake") or current.get("@park_start")
-                        or (draft.exists() and draft.stat().st_size)
-                        or any(r.get("state") in ("queued", "trying", "native", "waking")
-                               for r in fleet_session_gate.records(fid))):
+                        or fleet_session_gate.close_hold(fid)):
                     self.why = "live"
                     return False
-                self._closing_park = True
+                self._closing_identity = True
                 try:
                     return self.close(window, snap, recheck, why)
                 finally:
-                    self._closing_park = False
+                    self._closing_identity = False
         if snap["@migrating"]:
             self.why = "moving"
             self.say(window, "skip:migrating", snap["@migrating"])
@@ -507,10 +510,7 @@ class Cleaner:
             return False
         if self.moved(window, snap):
             return False
-        self.retire(window)
-        out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
-                             env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, timeout=120).stdout.strip()
+        out = self.stop_norepo(window, snap)
         print("reaped-test:" + window + " policy=" + snap["@reap_policy"] + " " + (out or "no answer"))
         return out.startswith("stopped:")
 
@@ -526,6 +526,9 @@ class Cleaner:
         home session: its done / loop-end / at policy closes it like any other, a
         finished turn too."""
         pol = self.policy(snap)
+        if self.origin(snap) == "probe" and not self.work_over(snap):
+            self.why = "unreported"
+            return False
         # a probe (BCYB: placement demos 「空会话，可关」 opened through the hub carry
         # no @origin) is nobody's home session either: a finished turn counts —
         # without this D1–D13's done:10m waited for an /exit that never came
@@ -567,10 +570,7 @@ class Cleaner:
         if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
             return False
         # stopped the graceful way, by identity — test_session's road (#2505)
-        self.retire(window)
-        out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
-                             env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, timeout=120).stdout.strip()
+        out = self.stop_norepo(window, snap)
         print("reaped-idle:" + window + " policy=" + snap["@reap_policy"] + " norepo " + (out or "no answer"))
         return out.startswith("stopped:")
 
@@ -623,12 +623,27 @@ class Cleaner:
             return False
         if self.moved(window, snap):
             return False
-        self.retire(window)
-        out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
-                             env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, timeout=120).stdout.strip()
+        out = self.stop_norepo(window, snap)
         print("reaped-empty:" + window + " policy=" + snap["@reap_policy"] + " " + (out or "no answer"))
         return out.startswith("stopped:")
+
+    def stop_norepo(self, window, snap):
+        """The existing graceful stop, ordered with message admission by ID."""
+        import fleet_session_gate
+        fid = snap.get("@fleet_id", "")
+        if not FID_RE.fullmatch(fid):
+            return ""
+        with fleet_session_gate.lock(fid):
+            if (snap.get("@reap_work_pending") or fleet_session_gate.close_hold(fid) or self.moved(window, snap)
+                    or self.busy(window, snap)):
+                return ""
+            pol = self.policy(snap)
+            if pol and pol[0] in ("done", "merged", "loop-end") and fleet_reap_policy.completion_hold(fid, snap.get("@task", "")):
+                return ""
+            self.retire(window)
+            return subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
+                                  env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=120).stdout.strip()
 
     def nudge(self, window, snap):
         """The one reminder an unreported session gets (T694): itself asked to
@@ -759,11 +774,7 @@ class Cleaner:
         if norepo:
             if self.moved(window, snap):
                 return False
-            self.retire(window)
-            out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session,
-                                  "fid:" + snap["@fleet_id"]],
-                                 env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
-                                 capture_output=True, text=True, timeout=120).stdout.strip()
+            out = self.stop_norepo(window, snap)
             print("reaped-%s:%s origin=%s norepo %s" % (why, window, origin, out or "no answer"))
             return out.startswith("stopped:")
         wt = snap["@worktree"]
@@ -1040,7 +1051,8 @@ class Cleaner:
         return False
 
     def road(self, window, snap):
-        hold = fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", ""))
+        hold = ("input-pending" if snap.get("@reap_work_pending") else
+                fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")))
         if hold:
             # Holding completion still permits the existing safe park gate.
             if not snap.get("@parked") and not getattr(self.args, "skip_park", False):
@@ -1055,6 +1067,9 @@ class Cleaner:
             if road is not None:
                 return road
         if getattr(self, "_park_only", False):
+            return False
+        if self.origin(snap) == "probe" and not self.work_over(snap):
+            self.why = "unreported"
             return False
         if snap.get("@park_wrap_ver") and fleet_reap_policy.uses_park_retention(snap):
             # Its old stamped idle policy cannot bypass the new park retention.
@@ -1230,7 +1245,7 @@ class Cleaner:
         key = key[1] + "-" + key[2]
         if self.finished(snap) not in ("done", "exited") and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1":
             return False
-        rc = 0 if self.id_over(snap["@fleet_id"]) else self.task_closed(task)
+        rc = 0 if self.work_over(snap) else 1
         if rc != 0:
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("task:"):
                 clear(self.tm, window)
@@ -1260,7 +1275,7 @@ class Cleaner:
             "--summary", "Automatically closed: task " + task + " is closed")
         if not self.reopens(window, key, wt):
             return False
-        if not self.close(window, snap, lambda: not self.held(window, snap, True)):
+        if not self.close(window, snap, lambda: self.work_over(snap) and not self.held(window, snap, True)):
             return False  # re-checked right before the close
         print("reaped-task:" + window + " " + task)
         return True

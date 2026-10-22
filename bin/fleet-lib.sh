@@ -9586,7 +9586,7 @@ fleet_cfg_restart_why() {
 fleet_cfg_work_over() {
   local t="${1:-}" f="${2:-}" w
   if fleet_is_fid "$f"; then
-    python3 "$_FLEET_LIB_DIR/fleet_reap_policy.py" report-ready "$f" || return 1
+    python3 "$_FLEET_LIB_DIR/fleet_reap_policy.py" completion-ready "$f" "$t" || return 1
   fi
   if fleet_is_fid "$f" && [ -f "${FLEET_ID_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids}/$f.ndjson" ]; then
     w=$(env -u FLEET_ID_LIVE python3 "$_FLEET_LIB_DIR/fleet_id.py" status "$f" 2>/dev/null \
@@ -10297,6 +10297,20 @@ print(4 if r.get("ok") and r.get("already") else 0 if r.get("ok") else 3)' 2>/de
       *) FLEET_DELIVER_NOTE="wake pending for $tgt"; return "$held" ;;
     esac
   fi
+  if fleet_is_fid "$fid"; then
+    out=$(printf '%s' "$text" | python3 "$lib/fleet_session_gate.py" legacy-deliver --fid "$fid" \
+      --sender "$from" ${delivery:+--delivery "$delivery"} 2>/dev/null); rc=$?
+    FLEET_DELIVER_NOTE="${out:-message admission unavailable}"
+    [ "$rc" = 0 ] && return 0
+    return "$held"
+  fi
+  _fleet_agent_deliver_native "$tgt" "$sock" "$text" "$from"
+}
+
+# Kept for pre-gate clients: only the surrounding identity admission changed.
+_fleet_agent_deliver_native() {
+  local tgt="$1" sock="$2" text="$3" from="$4" agent ev pid out rc sess
+  local held="${FLEET_DELIVER_HELD:-3}" lib="${_FLEET_LIB_DIR:-}"
   ev=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
   if [ -n "$ev" ] && [ -f "$lib/fleet_worker_life.py" ]; then
     sess=$(_fad_tm "$sock" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)

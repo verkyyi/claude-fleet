@@ -1076,12 +1076,11 @@ class PolicyGrammar(unittest.TestCase):
             ("orchestrator",), ("fleet-epic:epic-driver",), ("", "", "", "1"), ("", "scratch-3"),
             ("", "hub"), ("", "", "u/f"), ("", ""), ("", "scratch-3", "", "", "decide"))],
             ["orchestrator", "driver", "probe", "dispatched", "person", "dispatched", "person", "decide"])
-        # BCYB: a title that says it is a probe makes it one — never «演练» alone
-        # (a task about drills is work), never over an orchestrator / a driver
+        # Titles label sessions; only explicit provenance authorizes probe policy.
         self.assertEqual([rp.origin_of(*a) for a in (
             ("", "hub", "", "", "", "T672 放置计时 D2（空会话，可关）"), ("", "scratch-3", "", "", "", "探针：放置 4xx"),
             ("", "scratch-3", "", "", "", "C5 · 重复的故障演练合并"), ("orchestrator", "", "", "", "", "可关"))],
-            ["probe", "probe", "dispatched", "orchestrator"])
+            ["person", "dispatched", "dispatched", "orchestrator"])
         self.assertEqual([rp.effective(*a) for a in (
             ("done:5m", "1"), ("", "", "orchestrator"), ("keep", "", "", "session", True),
             ("keep", "", "", "session", False), ("keep", "", "", "", True), ("merged",))],
@@ -1659,6 +1658,10 @@ class TestIdentity(Rig):
             self.tm("set-option", "-w", "-t", win, key, value)
         if test:
             self.tm("set-option", "-w", "-t", win, "@test_identity", "1")
+            # The placement verifier has saved its completed result. A native
+            # empty/idle pane on its own is no longer completion evidence.
+            self.call("python3", str(BIN / "fleet_id.py"), "result", fid, "--state", "succeeded",
+                      "--summary", "placement verified")
         return win
 
     def alive(self, win):
@@ -1680,12 +1683,12 @@ class TestIdentity(Rig):
         self.assertIn("reaped-test:" + busy, self.clean())        # done 4000 s ago
         self.assertFalse(self.alive(busy))
 
-    def test_probe_origin_closes_after_a_finished_turn(self):
-        # BCYB: a placement demo opened through the hub carries no @origin — its
-        # @reap_origin probe makes it nobody's home session, so done:10m closes it
-        # after a finished turn (D1–D13 waited for an /exit that never came).
+    def test_probe_origin_closes_after_a_saved_result(self):
         done = {"@claude_state": "done", "@claude_state_ts": str(int(time.time()) - 900)}
         probe = self.norepo(False, **dict(done, **{"@reap_origin": "probe"}))
+        fid = self.tm("display-message", "-p", "-t", probe, "#{@fleet_id}").strip()
+        self.call("python3", str(BIN / "fleet_id.py"), "result", fid, "--state", "succeeded",
+                  "--summary", "probe completed")
         mine = self.norepo(False, **done)                          # a person's home session: waits for the exit
         self.clean()                                              # the countdown starts …
         if self.tm("display-message", "-p", "-t", probe, "#{@reap_due}").strip().isdigit():
@@ -2177,7 +2180,7 @@ class ParkTable(unittest.TestCase):
         snap.update({"@reap_origin": "probe", "@reap_policy": "done:1m", "@park_wrap_ver": "1",
                      "@claude_state": "done", "@claude_state_ts": "100",
                      "@test_identity": "1", "@norepo": "1"})
-        with patch.object(c, "work_over", return_value=False), patch.object(c, "waiting", return_value=None), \
+        with patch.object(c, "work_over", return_value=True), patch.object(c, "waiting", return_value=None), \
                 patch.object(c, "test_session", return_value=False) as reap, \
                 patch.object(idle, "run") as gate:
             c.road("@9", snap)

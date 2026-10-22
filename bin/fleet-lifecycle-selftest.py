@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -44,7 +45,14 @@ class Lifecycle(unittest.TestCase):
         self.cleaner.task_closed = lambda task: 0
         self.snap = {"@fleet_id": FID, "@task": "T42", "@migrating": "", "@worktree": "",
                      "@parked": "", "@park_held": "", "pane_pid": "1"}
-        self.window = dict(fid=FID, sid="same-native-session", agent="claude", win="@1", sock="isolated-fixture")
+        self.window = dict(fid=FID, sid="same-native-session", agent="claude", win="@1", pane="%1",
+                           sock="isolated-fixture", task="T42")
+        p = patch.object(gate, "window", return_value=self.window)
+        p.start()
+        self.addCleanup(p.stop)
+        p = patch.object(fleet_id, "push_later")
+        p.start()
+        self.addCleanup(p.stop)
 
     def say(self):
         args = argparse.Namespace(fid=FID, text="new work", image=[], delivery=str(uuid.uuid4()))
@@ -72,6 +80,56 @@ class Lifecycle(unittest.TestCase):
         self.say()
         self.assertFalse(policy.report_finish(FID, token, "merged", "old task", "claude", "123"))
         self.assertFalse(self.cleaner.work_over(self.snap))
+
+    def test_new_task_or_attempt_during_report_refuses_commit(self):
+        token = policy.report_begin(FID, "T42")
+        self.window["task"] = "T43"
+        self.assertFalse(policy.report_finish(FID, token, "merged", "old", "claude", "123"))
+        token = policy.report_begin(FID, "T43")
+        fleet_id.append(FID, dict(ev="reopened", attempt=2))
+        self.assertFalse(policy.report_finish(FID, token, "merged", "old", "claude", "123"))
+
+    def test_fresh_report_restores_completion_for_current_work(self):
+        self.say()
+        self.assertFalse(self.cleaner.work_over(self.snap))
+        token = policy.report_begin(FID, "T42")
+        self.assertTrue(policy.report_finish(FID, token, "merged", "new result", "claude", "124"))
+        self.assertTrue(self.cleaner.work_over(self.snap))
+        self.assertEqual(fleet_id.status(FID, [FID])["result"]["summary"], "new result")
+
+    def test_prompt_invalidates_but_tool_and_lifecycle_exit_do_not(self):
+        with patch.dict(os.environ, TMUX="fixture", TMUX_PANE="%1"), \
+             patch.object(gate, "tmux", return_value=FID):
+            gate.prompt_input(dict(hook_event_name="PostToolUse", prompt="UserPromptSubmit"))
+            gate.prompt_input(dict(hook_event_name="UserPromptSubmit", prompt="/exit"))
+            self.assertEqual(policy.current_work(FID), {})
+            gate.prompt_input(dict(hook_event_name="UserPromptSubmit", prompt="another task"))
+        self.assertFalse(self.cleaner.work_over(self.snap))
+        self.assertIsNone(fleet_id.status(FID, [FID])["result"])
+
+    def test_legacy_admission_invalidates_and_rechecks_closed_window(self):
+        args = argparse.Namespace(fid=FID, delivery=str(uuid.uuid4()), sender="fleet")
+        with patch.object(sys, "stdin", io.StringIO("new words")), redirect_stdout(io.StringIO()), \
+             patch.object(gate.subprocess, "run", return_value=argparse.Namespace(returncode=0, stdout="sent")) as send:
+            self.assertEqual(gate.legacy_deliver(args), 0)
+        send.assert_called_once()
+        self.assertFalse(self.cleaner.work_over(self.snap))
+        with patch.object(gate, "window", return_value=None), patch.object(sys, "stdin", io.StringIO("late")), \
+             redirect_stdout(io.StringIO()), patch.object(gate.subprocess, "run") as send:
+            self.assertEqual(gate.legacy_deliver(args), 3)
+            send.assert_not_called()
+
+    def test_shell_descriptor_holds_the_same_identity_lock(self):
+        path = gate.fid_dir(FID) / ".lock"
+        # The child which acquired flock has exited; the shell still holds it.
+        # A second open description must fail immediately, without sleep races.
+        contender = "import fcntl,sys; f=open(sys.argv[1], 'a'); fcntl.flock(f, fcntl.LOCK_EX|fcntl.LOCK_NB)"
+        script = 'exec 9>>"$1"; "$2" "$3" lock-fd --fid "$4" --fd 9 || exit; "$2" -c "$5" "$1" 2>/dev/null; test "$?" != 0'
+        p = subprocess.run(["bash", "-c", script, "lock-test", str(path), sys.executable,
+                            str(BIN / "fleet_session_gate.py"), FID, contender], capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        with gate.lock(FID):
+            pass  # the closing shell released it on exit
 
     def test_close_rechecks_admitted_message_under_identity_lock(self):
         gate.save(dict(fid=FID, delivery=str(uuid.uuid4()), at=1, state="queued", text="next task"))

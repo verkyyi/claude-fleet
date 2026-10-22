@@ -415,6 +415,11 @@ fi
 # beyond the first `"cwd"` (it precedes tool_input in Claude Code's payload).
 if [ -z "$via" ] && [ "${1:-}" = working ] && [ ! -t 0 ]; then
   [ "$_hp_read" = 1 ] || { _hp=$(cat 2>/dev/null); _hp_read=1; }
+  case "$_hp" in *UserPromptSubmit*)
+    # The Python reader checks the root event, so tool text mentioning the
+    # hook does not invalidate the report made by that very tool call.
+    printf '%s' "$_hp" | python3 "$(dirname "$0")/fleet_session_gate.py" prompt-input >/dev/null 2>&1 ;;
+  esac
   case "$_hp" in *'"tool_name":"Bash"'*|*'"tool_name": "Bash"'*)
     _cwd=$(printf '%s\n' "$_hp" | awk '{ i = index($0, "\"cwd\""); if (!i) next
       s = substr($0, i + 5); if (!sub(/^[ \t]*:[ \t]*"/, "", s)) exit

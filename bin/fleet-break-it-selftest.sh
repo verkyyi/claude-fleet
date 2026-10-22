@@ -6434,7 +6434,9 @@ drill_park_reap_current_work() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-lifecycle-selftest.py" Lifecycle.test_new_message_invalidates_old_terminal_and_closed_task \
-    Lifecycle.test_new_task_does_not_inherit_previous_report Lifecycle.test_message_during_report_prevents_stale_terminal_commit 2>&1) || { WHY="$out"; return 1; }
+    Lifecycle.test_new_task_does_not_inherit_previous_report Lifecycle.test_message_during_report_prevents_stale_terminal_commit \
+    Lifecycle.test_new_task_or_attempt_during_report_refuses_commit Lifecycle.test_prompt_invalidates_but_tool_and_lifecycle_exit_do_not \
+    Lifecycle.test_fresh_report_restores_completion_for_current_work 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='新任务/消息使旧完成证据失效；报告提交不能覆盖在它期间接收的新工作'
 }
@@ -6443,7 +6445,8 @@ drill_park_reap_admission() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-lifecycle-selftest.py" Lifecycle.test_close_rechecks_admitted_message_under_identity_lock \
-    Lifecycle.test_norepo_close_roads_recheck_the_same_pending_message Lifecycle.test_retired_window_is_rechecked_at_message_admission 2>&1) || { WHY="$out"; return 1; }
+    Lifecycle.test_norepo_close_roads_recheck_the_same_pending_message Lifecycle.test_retired_window_is_rechecked_at_message_admission \
+    Lifecycle.test_legacy_admission_invalidates_and_rechecks_closed_window Lifecycle.test_shell_descriptor_holds_the_same_identity_lock 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='普通/停放/无仓库关窗与消息准入共用身份锁；关闭先赢则拒绝对旧窗口的准入'
 }
