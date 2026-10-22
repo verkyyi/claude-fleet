@@ -184,6 +184,19 @@ def account_home(home, root=None):
     return 'default'
 
 
+def launch_args(launcher, home, sid, worktree):
+    manifest = json.loads((Path(home) / 'move.json').read_text())
+    if manifest.get('sid') != sid:
+        raise ValueError('launch receipt UUID mismatch')
+    args = [launcher, '--agent', 'codex', '--codex-home', home, '--resume', sid, '--cd', worktree]
+    opts = manifest.get('metadata', {})
+    if opts.get('@model'):
+        args += ['--model', opts['@model']]
+    if opts.get('@effort'):
+        args += ['-c', 'model_reasoning_effort=' + json.dumps(opts['@effort'])]
+    return args
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('action', choices=('inspect', 'stop', 'pack', 'unpack', 'verify', 'account-home'))

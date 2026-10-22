@@ -198,16 +198,13 @@ case "$cmd" in
       [ -f "$cxhome/move.json" ] || die 'missing Codex import receipt'
       fleet_load_conf "$sess"
       fleet_session_cap_ok "$sess" || die 'target no longer has capacity'
+      CODEX_HOME="$cxhome" python3 "$BIN/fleet_codex_trust.py" ready "$wt" --apply >/dev/null \
+        || die 'target worktree trust is not ready'
       # Quote each argv; paths/metadata are data, not remote shell syntax.
-      cmdline=$(python3 - "$LAUNCH" "$cxhome" "$sid" <<'PY_LAUNCH'
-import json,shlex,sys
-launcher,home,sid=sys.argv[1:]
-m=json.load(open(home+'/move.json'))
-args=[launcher,'--agent','codex','--codex-home',home,'--resume',sid]
-opts=m.get('metadata',{})
-if opts.get('@model'): args += ['--model', opts['@model']]
-if opts.get('@effort'): args += ['-c', 'model_reasoning_effort='+json.dumps(opts['@effort'])]
-print('exec '+shlex.join(args))
+      cmdline=$(PYTHONPATH="$BIN${PYTHONPATH:+:$PYTHONPATH}" python3 - "$LAUNCH" "$cxhome" "$sid" "$wt" <<'PY_LAUNCH'
+import shlex,sys
+from fleet_move_codex import launch_args
+print('exec '+shlex.join(launch_args(*sys.argv[1:])))
 PY_LAUNCH
 ) || die 'invalid Codex launch receipt'
     elif [ "$agent" != claude ]; then die 'unsupported move agent'; fi
@@ -274,6 +271,7 @@ PY_META
       fleet_rotate_lease_drop "$wt"
     fi
     printf '%s\t%s\t%s\n' "$nw" "${ncp:-}" "$sess"
+    [ "$agent" != codex ] || [ -n "$ncp" ] || exit 10
     ;;
 
   discard)

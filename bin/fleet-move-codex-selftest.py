@@ -62,6 +62,28 @@ class Move(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invalid Codex import'):
             move.account_home(home, self.root)
 
+    def test_native_launch_preserves_model_effort_and_overrides_stored_cwd(self):
+        self.record['metadata'].update({'@model':'gpt-6-astra','@effort':'high'})
+        home=move.unpack(self.bundle(), SID, '/new dir', self.root)
+        args=move.launch_args('/fleet/wrap',home,SID,'/new dir')
+        self.assertEqual(args[args.index('--cd')+1],'/new dir')
+        self.assertEqual(args[args.index('--resume')+1],SID)
+        self.assertEqual(args[args.index('--model')+1],'gpt-6-astra')
+        self.assertIn('model_reasoning_effort="high"',args)
+        self.assertNotIn('--effort',args)
+        with self.assertRaisesRegex(ValueError,'UUID mismatch'):
+            move.launch_args('/fleet/wrap',home,OTHER,'/new dir')
+
+    def test_stop_holds_source_before_exit_keys(self):
+        record=dict(self.record,socket='scratch',window='@1',owner='123')
+        events=[]
+        with patch.object(move,'same_source'), patch.object(move,'alive',return_value=False), \
+             patch.object(move,'tm',side_effect=lambda *a:events.append(a)), \
+             patch.object(move.subprocess,'run',side_effect=lambda *a,**kw:events.append(('keys',))):
+            move.stop(record,1)
+        self.assertLess(next(i for i,e in enumerate(events) if '@reap_hold' in e),
+                        next(i for i,e in enumerate(events) if e==('keys',)))
+
     def test_existing_target_refuses_overwrite(self):
         home = Path(move.unpack(self.bundle(), SID, '/new', self.root))
         with self.assertRaises(FileExistsError):

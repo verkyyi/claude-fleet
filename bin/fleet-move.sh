@@ -483,9 +483,11 @@ move_main() {
     }
     launch=$(ssh_run "$REMOTE_BIN" launch --agent codex --codex-home "$home" --wt "$twt" --sid "$sid" --name "$name" \
       --raw "${raw:-0}" --state "${state:-done}" --fleet "$rfleet" \
-      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} ${origin:+--origin "$origin"} --repo "$repo")
+      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} ${origin:+--origin "$origin"} --repo "$repo") || {
+      say "    failed:verify — target returned ${launch:-no receipt}; source window/transcript retained"; return 10;
+    }
     IFS=$'\t' read -r nw ncp _ <<< "$launch"
-    if [ -z "$ncp" ]; then
+    if ! [[ "$nw" =~ ^@[0-9]+$ && "$ncp" =~ ^[1-9][0-9]*$ ]]; then
       say "    failed:verify — inspect $TO:$nw before resuming source $wid; source window/transcript retained"; return 10
     fi
     fleet_win_retire "$wid" "$SOCK"
