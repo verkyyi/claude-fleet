@@ -31,11 +31,11 @@ var tryClosedTmpl = template.Must(template.New("try-closed").Funcs(pageFuncs(i18
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"tc.title": {i18n.EN: "The trial isn't open · claudefleet", i18n.ZhCN: "试用暂未开放 · claudefleet"},
+		"tc.title": {i18n.EN: "The trial isn't open · {brand}", i18n.ZhCN: "试用暂未开放 · {brand}"},
 		"tc.h1":    {i18n.EN: "The trial isn't open for now", i18n.ZhCN: "试用暂未开放"},
 		"tc.lead": {
-			i18n.EN:   "ClaudeFleet is in limited access, by application. Tell us what you want to use it for and we'll open an account for you.",
-			i18n.ZhCN: "ClaudeFleet 目前限定开放，请申请使用。说说你想用它做什么，审核通过后给你开号。",
+			i18n.EN:   "{brand} is in limited access, by application. Tell us what you want to use it for and we'll open an account for you.",
+			i18n.ZhCN: "{brand} 目前限定开放，请申请使用。说说你想用它做什么，审核通过后给你开号。",
 		},
 		"tc.member": {i18n.EN: "I already have an account", i18n.ZhCN: "我已经有账号"},
 		"tc.fine": {

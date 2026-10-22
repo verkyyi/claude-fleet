@@ -82,7 +82,7 @@ const entryHead = `<!doctype html>
 
 // entryTop is the header: the mark, the language pair, the way back to the
 // website. Inside <div class="page">.
-const entryTop = `<header class="top"><span class="brand"><img src="` + themePrefix + `logo.svg" alt="" width="28" height="28">ClaudeFleet</span>
+const entryTop = `<header class="top"><span class="brand"><img src="` + themePrefix + `logo.svg" alt="" width="28" height="28">` + Brand + `</span>
 <span class="end">` + langSwitch + `<a class="home" href="/">` + arrowLeftIcon + `{{t "entry.site"}}</a></span></header>`
 
 // limitedPill says, above a way-in page's heading, that the hub is open to a
@@ -246,7 +246,7 @@ func (s *Server) notFoundPage(w http.ResponseWriter, r *http.Request) {
 func init() {
 	for k, v := range map[string]i18n.Text{
 		"entry.site": {i18n.EN: "Website", i18n.ZhCN: "官网"},
-		"nf.title":   {i18n.EN: "Page not found · ClaudeFleet", i18n.ZhCN: "页面不存在 · ClaudeFleet"},
+		"nf.title":   {i18n.EN: "Page not found · {brand}", i18n.ZhCN: "页面不存在 · {brand}"},
 		"nf.h1":      {i18n.EN: "Page not found", i18n.ZhCN: "页面不存在"},
 		"nf.lead": {
 			i18n.EN:   "The address may be mistyped, or the page has moved.",

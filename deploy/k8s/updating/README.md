@@ -11,7 +11,7 @@ claude-fleet#2052（EPIC #1982）。入口是单副本 SQLite（`Recreate`），
 
 | 请求 | 回答 |
 |---|---|
-| 浏览器要页面（`Accept` 含 `text/html`，且不是下面的路径） | `503` + 中英双语「ClaudeFleet 正在更新，一分钟内回来 / ClaudeFleet is updating — back in a minute」，`Retry-After: 30`，每 15 秒自动刷新 |
+| 浏览器要页面（`Accept` 含 `text/html`，且不是下面的路径） | `503` + 中英双语「Tokenman 正在更新，一分钟内回来 / Tokenman is updating — back in a minute」，`Retry-After: 30`，每 15 秒自动刷新 |
 | `/v1/*`、`/mcp`、`/install`、`/healthz`、`/version`，以及不要 HTML 的一切 | `503` + `Retry-After: 30` + 一行 JSON（`{"error":"updating",…}`）——机器和客户端照旧重试 |
 
 ```
