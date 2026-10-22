@@ -397,6 +397,26 @@ class Cleaner:
         never while a reopen marks it (@migrating), and only once <recheck>()
         still holds — rc False when any of them says no (nothing closed). <why> is
         its ID's close reason (`parked` for a park, E101)."""
+        if snap.get("@parked") and not getattr(self, "_closing_park", False):
+            import fleet_session_gate
+            fid = snap.get("@fleet_id", "")
+            if not FID_RE.fullmatch(fid):
+                return False
+            with fleet_session_gate.lock(fid):
+                current = self.snapshot(window)
+                draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
+                if (self.moved(window, snap) or not current.get("@park_held")
+                        or current.get("@park_wake") or current.get("@park_start")
+                        or (draft.exists() and draft.stat().st_size)
+                        or any(r.get("state") in ("queued", "trying", "native", "waking")
+                               for r in fleet_session_gate.records(fid))):
+                    self.why = "live"
+                    return False
+                self._closing_park = True
+                try:
+                    return self.close(window, snap, recheck, why)
+                finally:
+                    self._closing_park = False
         if snap["@migrating"]:
             self.why = "moving"
             self.say(window, "skip:migrating", snap["@migrating"])
@@ -765,7 +785,7 @@ class Cleaner:
                 self.say(window, "skip:reported", origin)
                 return False
             if not nudged.isdigit():
-                self.why = "task-open"
+                self.why = "unreported:%d" % (int(stamp) + first)
                 if int(stamp) + first > self.now:
                     return False
                 if self.args.dry_run:
@@ -912,6 +932,11 @@ class Cleaner:
         self.why = "parked"
         if not snap.get("@park_held") or not snap.get("@park_wrap_ver") or self.theirs(snap):
             return False
+        row = fleet_reap_policy.ORIGINS[self.origin(snap)]
+        pol = self.policy(snap)
+        if (row["reap"] in ("reported", "batch") and (not pol or pol[0] != "keep")
+                and self.work_over(snap)):
+            return None
         due = fleet_reap_policy.parked_deadline(snap)
         if due is None:
             # Reporting/probe rows retain their completion rules while parked.
@@ -931,37 +956,36 @@ class Cleaner:
         fid = snap.get("@fleet_id", "")
         if not FID_RE.fullmatch(fid):
             return False
-        with fleet_session_gate.lock(fid):
-            draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
-            if (draft.exists() and draft.stat().st_size) or (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
-                    or snap.get("@migrating") or self.busy(window, snap)
-                    or any(r.get("state") in ("queued", "trying", "native", "waking")
-                           for r in fleet_session_gate.records(fid))):
-                self.why = "live"
-                return False
-            clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
-            if any(line.split("\t") == ["0", window] for line in clients.splitlines()):
-                self.why = "live"
-                return False
-            wt = snap.get("@worktree", "")
-            m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
-            if not m or not self.args.repo or not Path(wt).is_dir() or Path(wt).resolve() == Path(self.args.main).resolve():
-                self.why = "no-history"
-                return False
-            key = m[1] + "-" + m[2]
-            if self.args.dry_run:
-                print("would-reap-parked:" + window)
-                return False
-            run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
-                "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
-                "--title", snap["window_name"], "--summary", "Reaped after parked retention; conversation and worktree kept")
-            if not self.reopens(window, key, wt):
-                self.why = "no-history"
-                return False
-            if not self.close(window, snap, lambda: not self.busy(window, snap)):
-                return False
-            print("reaped-parked:%s %s" % (window, key))
-            return True
+        draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
+        if (draft.exists() and draft.stat().st_size) or (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
+                or snap.get("@migrating") or self.busy(window, snap)
+                or any(r.get("state") in ("queued", "trying", "native", "waking")
+                       for r in fleet_session_gate.records(fid))):
+            self.why = "live"
+            return False
+        clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
+        if any(line.split("\t") == ["0", window] for line in clients.splitlines()):
+            self.why = "live"
+            return False
+        wt = snap.get("@worktree", "")
+        m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
+        if not m or not self.args.repo or not Path(wt).is_dir() or Path(wt).resolve() == Path(self.args.main).resolve():
+            self.why = "no-history"
+            return False
+        key = m[1] + "-" + m[2]
+        if self.args.dry_run:
+            print("would-reap-parked:" + window)
+            return False
+        run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
+            "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
+            "--title", snap["window_name"], "--summary", "Reaped after parked retention; conversation and worktree kept")
+        if not self.reopens(window, key, wt):
+            self.why = "no-history"
+            return False
+        if not self.close(window, snap, lambda: not self.busy(window, snap)):
+            return False
+        print("reaped-parked:%s %s" % (window, key))
+        return True
 
     @property
     def mem_tight(self):

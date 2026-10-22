@@ -162,6 +162,9 @@ def explain(snap, now=None):
         due = parked_deadline(snap)
         if due is not None:
             return prefix + " next=reap@" + iso(due) + " why=" + why
+        code, _, epoch = why.partition(":")
+        if epoch.isdigit() and code in ("timer", "unreported", "bg"):
+            return prefix + " next=" + ("remind@" if code == "unreported" else "reap@") + iso(int(epoch)) + " why=" + why
         return prefix + " next=" + ("keep" if row["reap"] == "never" or snap.get("@reap_policy") == "keep"
                                     or snap.get("@pin") == "1" else "result/policy") + " why=" + why
     if not snap.get("@park_wrap_ver"):
