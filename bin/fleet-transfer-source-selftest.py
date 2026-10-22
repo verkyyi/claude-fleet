@@ -232,12 +232,14 @@ class BrokenHookMaintenance(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root=Path(tmp).resolve(); (root/'handoffs').mkdir();work=root/'work';work.mkdir(); bin_=root/'bin';bin_.mkdir()
             label='repair-flow-'+uuid.uuid4().hex[:10];fid=str(uuid.uuid4()); transcript=root/'source.jsonl';transcript.write_text('{}\n')
-            child=root/'native.sh';child.write_text('printf "%s" "$$" > '+shlex.quote(str(root/'native.pid'))+'\n'
+            child=root/'native.sh';child.write_text('printf "%s" "$$" > '+shlex.quote(str(root/'native.pid.tmp'))+'\n'
+                +'mv '+shlex.quote(str(root/'native.pid.tmp'))+' '+shlex.quote(str(root/'native.pid'))+'\n'
                 +'while IFS= read -r line; do case "$line" in */exit*) exit 0;; esac; done\n')
             original=root/'wrapper.sh';original.write_text('bash '+shlex.quote(str(child))+'\n'
                 +'[ "$(tmux -L '+label+' display-message -p -t "$TMUX_PANE" "#{@wrap_quiet}")" = 1 ] && exit 0\n'
                 +'exec sleep 600\n')
             successor=bin_/'fleet-session-wrap.sh';successor.write_text('#!/bin/bash\nprintf "%s\n" "$@" > '
+                +shlex.quote(str(root/'launch.argv.tmp'))+'\nmv '+shlex.quote(str(root/'launch.argv.tmp'))+' '
                 +shlex.quote(str(root/'launch.argv'))+'\nexec sleep 600\n');successor.chmod(0o755)
             env={k:v for k,v in os.environ.items() if not k.startswith('FLEET_') and k not in ('TMUX','TMUX_PANE')}
             env.update(HOME=str(root),FLEET_CONF_DIR=str(root),FLEET_GATE_DIR=str(root/'gate'))

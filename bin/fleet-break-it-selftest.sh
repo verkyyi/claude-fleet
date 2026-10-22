@@ -456,14 +456,14 @@ exit_drill() {
 drill_broken_hook_maintenance() {
   local started; started=$(now); CAP=30
   python3 "$BIN/fleet-transfer-source-selftest.py" BrokenHookMaintenance >"$WORK/broken-hook-maintenance.log" 2>&1 \
-    || { WHY="missing-hook maintenance identity/unknown-delivery guard failed"; return 1; }
+    || { cat "$WORK/broken-hook-maintenance.log"; WHY="missing-hook maintenance identity/unknown-delivery guard failed"; return 1; }
   SECS=$(since "$started"); WHAT='same-SID maintenance proves missing hooks; paused original timer rejects unknown attempts'
 }
 
 drill_broken_hook_model_menu() {
   local started; started=$(now); CAP=10
   python3 "$BIN/fleet-transfer-source-selftest.py" BrokenHookMenu >"$WORK/broken-hook-model-menu.log" 2>&1 \
-    || { WHY='maintenance must return from the exact model reminder once, retaining unknown input'; return 1; }
+    || { cat "$WORK/broken-hook-model-menu.log"; WHY='maintenance must return from the exact model reminder once, retaining unknown input'; return 1; }
   SECS=$(since "$started"); WHAT='exact model reminder returns once; unknown input never exits or retries'
 }
 
