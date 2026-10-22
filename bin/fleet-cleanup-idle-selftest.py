@@ -2167,6 +2167,57 @@ class ParkTable(unittest.TestCase):
     """C6: drive fleet-cleanup-idle.py and fleet_reap_policy.py for every origin.
     The E101 real tmux/history round trip below proves the close is resumable.
     """
+    def test_decide_keeps_idle_policy_except_reported_waiting(self):
+        args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
+                                  base="master", window_repo=False, dry_run=True)
+        c = idle.Cleaner(args)
+        c.now = 500
+        with patch.object(c, "tm", return_value=""):
+            snap = c.snapshot("@9")
+        snap.update({"@reap_origin": "decide", "@reap_policy": "idle:15m",
+                     "@park_wrap_ver": "1", "@parked": "400", "@park_held": "1",
+                     "@park_since": "400", "@claude_state_ts": "100"})
+        # Parking must return an ordinary decision session to its existing
+        # policy road, whose history / live-work / keep gates still own closing.
+        self.assertIsNone(c.parked("@9", snap))
+        self.assertEqual(c.deadline(snap, c.policy(snap)), 1000)
+        self.assertEqual(idle.fleet_reap_policy.effective("idle:15m"), "idle:15m")
+        snap["@reap_why"] = "timer:1000"
+        self.assertIn("next=reap@1970-01-01T00:16:40Z", idle.fleet_reap_policy.explain(snap, now=500))
+        # E101 is an explicit waiting report, not the origin's name.
+        snap["@park_waiting"] = "1"
+        with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "3d"}):
+            self.assertFalse(c.parked("@9", snap))
+            self.assertEqual(idle.fleet_reap_policy.parked_deadline(snap), 259600)
+        for opts in ({"@pin": "1"}, {"@reap_policy": "keep", "@reap_keep_by": "person"}):
+            self.assertFalse(c.parked("@9", dict(snap, **opts)))
+
+    def test_park_refusal_reaches_doctor(self):
+        args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
+                                  base="master", window_repo=False, dry_run=False)
+        c = idle.Cleaner(args)
+        c.now, c._mem = 1000, (False, "")
+        with patch.object(c, "tm", return_value=""):
+            snap = c.snapshot("@9")
+        snap.update({"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "done",
+                     "@claude_state_ts": "100", "@fleet_id": "00000009-0000-4000-8000-0000000000aa"})
+        for reason, code in (("watched", "watched"), ("draft", "draft"), ("bg", "park-bg"),
+                             ("asking", "asking"), ("old_wrapper", "old-wrapper"),
+                             ("probe_failed", "park-gate")):
+            with self.subTest(reason=reason), patch.object(c, "tm", return_value=""), \
+                    patch.object(idle, "run", return_value=json.dumps({"ok": False, "why": reason})):
+                c._park_watched, c.why = set(), ""
+                self.assertFalse(c.web_park("@9", snap))
+                self.assertEqual(c.why, code)
+                explanation = idle.fleet_reap_policy.explain(dict(snap, **{"@reap_why": c.why}), now=c.now)
+                self.assertIn("next=park-held", explanation)
+                self.assertIn("why=" + code, explanation)
+        with patch.object(c, "tm", return_value=""), patch.object(idle, "run") as gate:
+            c._park_watched = {"@9"}
+            self.assertFalse(c.web_park("@9", snap))
+            gate.assert_not_called()
+            self.assertEqual(c.why, "watched")
+
     def test_each_origin_has_a_park_and_reap_column(self):
         rp = idle.fleet_reap_policy
         for origin, reap in (("person", "parked"), ("dispatched", "reported"),
