@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+# selftest-entry
+"""C6: fleet-cleanup-idle.py / fleet_session_gate.py completion and admission.
+
+The real identity ledger, gate receipts and policy, with controlled native
+admission and close boundaries. No production socket or sleep-based races.
+"""
+import argparse
+from contextlib import contextmanager, redirect_stdout
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+import uuid
+
+BIN = Path(__file__).absolute().parent
+sys.path.insert(0, str(BIN))
+import fleet_id
+import fleet_reap_policy as policy
+import fleet_session_gate as gate
+spec = importlib.util.spec_from_file_location("idle", BIN / "fleet-cleanup-idle.py")
+idle = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(idle)
+FID = "44444444-4444-4444-8444-444444444444"
+
+
+class Lifecycle(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="c6-life-")
+        self.addCleanup(self.tmp.cleanup)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_", "CCQUOTA_")) and k not in ("TMUX", "TMUX_PANE")}
+        env.update(FLEET_CONF_DIR=self.tmp.name, FLEET_ID_LIVE="[]")
+        p = patch.dict(os.environ, env, clear=True)
+        p.start()
+        self.addCleanup(p.stop)
+        fleet_id.append(FID, dict(ev="opened", task="T42"))
+        fleet_id.append(FID, dict(ev="result", state="merged", task="T42"))
+        self.cleaner = idle.Cleaner.__new__(idle.Cleaner)
+        self.cleaner.task_closed = lambda task: 0
+        self.snap = {"@fleet_id": FID, "@task": "T42", "@migrating": "", "@worktree": "",
+                     "@parked": "", "@park_held": "", "pane_pid": "1"}
+        self.window = dict(fid=FID, sid="same-native-session", agent="claude", win="@1", sock="isolated-fixture")
+
+    def say(self):
+        args = argparse.Namespace(fid=FID, text="new work", image=[], delivery=str(uuid.uuid4()))
+        stream = io.StringIO()
+        with patch.object(gate, "window", return_value=self.window), \
+             patch.object(gate, "can_talk", return_value=(True, "")), \
+             patch.object(gate, "settle", return_value=None), \
+             patch.object(gate, "tmux"), redirect_stdout(stream):
+            gate.say(args)
+        return json.loads(stream.getvalue())
+
+    def test_new_message_invalidates_old_terminal_and_closed_task(self):
+        self.assertEqual(self.say()["state"], "queued")
+        self.assertFalse(self.cleaner.work_over(self.snap))
+        self.assertEqual(len(gate.records(FID)), 1)
+
+    def test_new_task_does_not_inherit_previous_report(self):
+        token = policy.report_begin(FID, "T42")
+        self.assertTrue(policy.report_finish(FID, token, "merged", "old task", "claude", "123"))
+        self.snap["@task"] = "T43"
+        self.assertFalse(self.cleaner.work_over(self.snap))
+
+    def test_message_during_report_prevents_stale_terminal_commit(self):
+        token = policy.report_begin(FID, "T42")
+        self.say()
+        self.assertFalse(policy.report_finish(FID, token, "merged", "old task", "claude", "123"))
+        self.assertFalse(self.cleaner.work_over(self.snap))
+
+    def test_close_rechecks_admitted_message_under_identity_lock(self):
+        gate.save(dict(fid=FID, delivery=str(uuid.uuid4()), at=1, state="queued", text="next task"))
+        c = self.cleaner
+        c.snapshot = lambda window: dict(self.snap)
+        c.moved = lambda *args: False
+        c.transition = lambda wt: ""
+        c.untransition = lambda lock: None
+        c.shared = lambda *args: ""
+        c.retire = Mock()
+        c.end_id = Mock()
+        c.tm = Mock()
+        for parked in (False, True):
+            with self.subTest(parked=parked):
+                self.snap.update({"@parked": "1" if parked else "", "@park_held": "1" if parked else ""})
+                with patch.object(gate, "lock", wraps=gate.lock) as taken:
+                    self.assertFalse(c.close("@1", self.snap, lambda: True))
+                    taken.assert_called_with(FID)
+                c.retire.assert_not_called()
+                c.tm.assert_not_called()
+
+    def test_norepo_close_roads_recheck_the_same_pending_message(self):
+        args = argparse.Namespace(socket_name="fixture", session="fixture", dry_run=False)
+        c = idle.Cleaner(args)
+        c.tm = Mock(return_value="")
+        snap = c.snapshot("@1")
+        snap.update(self.snap)
+        snap.update({"@norepo": "1", "@reap_policy": "done:1m", "@claude_state": "done",
+                     "@claude_state_ts": "1", "@born": "1", "@origin_fid": FID,
+                     "@fleet_role": "worker", "@wrap_gone": "1"})
+        c.moved = lambda *args: False
+        c.busy = lambda *args: False
+        c.retire = Mock()
+        gate.save(dict(fid=FID, delivery=str(uuid.uuid4()), at=1, state="queued", text="next task"))
+        for road in ("test_session", "norepo", "empty"):
+            with self.subTest(road=road), patch.object(idle, "notice", return_value=0), \
+                 patch.object(idle.subprocess, "run", return_value=argparse.Namespace(stdout="stopped: fixture")) as stop:
+                self.assertFalse(getattr(c, road)("@1", snap))
+                stop.assert_not_called()
+                c.retire.assert_not_called()
+
+    def test_explicit_probe_needs_a_completed_result_not_only_native_idle(self):
+        c = idle.Cleaner(argparse.Namespace(socket_name="fixture", session="fixture", dry_run=False))
+        c.tm = Mock(return_value="")
+        snap = c.snapshot("@1")
+        snap.update({"@fleet_id": FID, "@task": "T42", "@norepo": "1", "@reap_origin": "probe",
+                     "@reap_policy": "done:1m", "@claude_state": "done", "@claude_state_ts": "1",
+                     "@fleet_role": "worker", "@wrap_gone": "1"})
+        c.id_over = lambda fid: False
+        c.task_closed = lambda task: 1
+        c.moved = lambda *args: False
+        c.busy = lambda *args: False
+        c.retire = Mock()
+        with patch.object(idle, "notice", return_value=0), \
+             patch.object(idle.subprocess, "run", return_value=argparse.Namespace(stdout="stopped: fixture")) as stop:
+            self.assertFalse(c.norepo("@1", snap))
+            stop.assert_not_called()
+            c.retire.assert_not_called()
+
+    def test_retired_window_is_rechecked_at_message_admission(self):
+        alive = [self.window]
+        n = [0]
+        original = gate.lock
+        @contextmanager
+        def boundary(fid):
+            with original(fid) as held:
+                n[0] += 1
+                if n[0] == 2:
+                    alive[0] = None  # close won the lock after the preliminary read
+                yield held
+        args = argparse.Namespace(fid=FID, text="new work", image=[], delivery=str(uuid.uuid4()))
+        stream = io.StringIO()
+        with patch.object(gate, "window", side_effect=lambda fid: alive[0]), \
+             patch.object(gate, "can_talk", side_effect=lambda w: (bool(w), "" if w else "no_session")), \
+             patch.object(gate, "lock", boundary), patch.object(gate, "settle", return_value=None), \
+             patch.object(gate, "tmux"), redirect_stdout(stream):
+            gate.say(args)
+        self.assertEqual(json.loads(stream.getvalue())["state"], "refused")
+        self.assertEqual(gate.records(FID), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
