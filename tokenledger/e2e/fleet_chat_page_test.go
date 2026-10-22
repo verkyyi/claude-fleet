@@ -20,15 +20,16 @@ func TestChatPage(t *testing.T) {
 		resp.Body.Close()
 		return resp
 	}
-	// One 301, signed in or not — the gate is /app's.
+	// One 301, signed in or not — the gate is /app's — to 「我的对话」, the
+	// session the old conversation became (会话合一, task PQ41).
 	for _, c := range []*http.Cookie{alice, nil} {
 		for _, p := range []string{"/chat/", "/chat"} {
-			if resp := page(p, c); resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix {
-				t.Fatalf("%s (cookie %v): %d → %q; want 301 %s", p, c != nil, resp.StatusCode, resp.Header.Get("Location"), AppPrefix)
+			if resp := page(p, c); resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != AppPrefix+"/chat" {
+				t.Fatalf("%s (cookie %v): %d → %q; want 301 %s/chat", p, c != nil, resp.StatusCode, resp.Header.Get("Location"), AppPrefix)
 			}
 		}
 	}
-	if resp := page("/chat/?x=1", alice); resp.Header.Get("Location") != AppPrefix+"?x=1" {
+	if resp := page("/chat/?x=1", alice); resp.Header.Get("Location") != AppPrefix+"/chat?x=1" {
 		t.Errorf("/chat/?x=1 → %q; want the query kept", resp.Header.Get("Location"))
 	}
 	for _, p := range []string{"/chat/assets/index-x.js", "/chat/nope.js"} {

@@ -596,8 +596,10 @@ func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
 	// everything at the operator's door; never an admin's everyone's view.
 	if owner, ok := boardOwner(req.Context(), p); ok {
 		if b, err := s.buildBoard(owner, out, now); err == nil {
+			// how many machines the person has (task PQ41): one ⇒ no machine names
+			b.Machines = len(hosts)
 			res["board"] = b
-			res["etag"] = strings.TrimSuffix(res["etag"].(string), "\"") + "-b" + b.Digest + "\""
+			res["etag"] = strings.TrimSuffix(res["etag"].(string), "\"") + "-b" + b.Digest + "-m" + strconv.Itoa(b.Machines) + "\""
 		} else {
 			log.Printf("fleet_sessions: the session list: %v", err)
 		}

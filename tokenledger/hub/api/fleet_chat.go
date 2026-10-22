@@ -40,15 +40,21 @@ const ChatPathPrefix = "/v1/chat/"
 var chatRoutes = map[string]string{
 	"conversation": http.MethodGet,
 	"turn":         http.MethodPost,
-	"stop":         http.MethodPost,
-	"answer":       http.MethodPost,
+	// the home conversation's own stop / answer; with ?worker= a session's
+	// (chat_worker.go, task PQ41)
+	"stop":   http.MethodPost,
+	"answer": http.MethodPost,
 	// 在这里继续 (claude-fleet T810): the page takes the conversation back from
-	// an idle terminal session; the home refuses while the terminal answers
+	// an idle terminal session; the home refuses while the terminal answers.
+	// Moved with fleet.chat.unified on (task PQ41) — compat-1v: 下一批删
 	"take": http.MethodPost,
 	// an image the conversation holds (task T773), by its ref — never a path
 	"file": http.MethodGet,
 	// 新对话 (task R9A2): that assistant's conversation starts over, the other kept
 	"new": http.MethodPost,
+	// 会话合一 (task PQ41 / HHV0 ①): a new session opened from the web on the
+	// person's home, its first line with it — {agent, text, images} → {fid, …}
+	"open": http.MethodPost,
 }
 
 // chatProvider is which of the person's two conversations a request is for
@@ -83,6 +89,9 @@ type ChatHome struct {
 	State   string `json:"state"`
 	Why     string `json:"why,omitempty"`
 	Direct  bool   `json:"direct,omitempty"`
+	// Unified is fleet.chat.unified (会话合一, task PQ41): on, the page talks to
+	// sessions only and the old conversation routes answer 410 moved.
+	Unified bool `json:"unified,omitempty"`
 }
 
 // handleChatHome answers the person's home and whether a turn could reach it
@@ -104,8 +113,9 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	unified := s.chatUnified()
 	if !ok || home.Machine == "" || home.Login == "" {
-		writeJSON(w, http.StatusOK, ChatHome{State: "no_home", Why: s.noHomeWhy(person)})
+		writeJSON(w, http.StatusOK, ChatHome{State: "no_home", Why: s.noHomeWhy(person), Unified: unified})
 		return
 	}
 	// The person's login is linked to another replica (claude-fleet#3847):
@@ -114,7 +124,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		s.proxyRelay(w, r, peer, "a chat home read for "+home.Machine+"/"+home.Login)
 		return
 	}
-	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok"}
+	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok", Unified: unified}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
 			out.State = "maintenance"
@@ -267,8 +277,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.handleChatView(w, r)
 		return
 	}
-	if _, ok := chatHandoverRoutes[name]; ok {
-		s.handleChatHandover(w, r, name)
+	// 会话合一 (task PQ41): the old conversation routes have moved
+	if chatMovedRoutes[name] && s.chatUnified() {
+		s.chatMoved(w, r, name)
+		return
+	}
+	// the worker road: say, and an answer / a stop that names its session
+	if _, ok := chatWorkerRoutes[name]; ok && (name == "say" || name == "ack" || name == "takeover" || name == "giveback" || r.URL.Query().Get("worker") != "") {
+		s.handleChatWorker(w, r, name)
 		return
 	}
 	method, ok := chatRoutes[name]
@@ -289,7 +305,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	person, status, code, msg := s.chatPerson(r)
 	if code == "" {
 		_ = s.Store.TouchTrial(person, time.Now()) // a trial in use is not idle (claude-fleet#3590)
-		if name == "turn" {
+		if name == "turn" || name == "open" {
 			s.trialFirstLine(person, time.Now()) // a 试用二维码's 60 seconds end here (MRGB)
 		}
 	}
@@ -382,7 +398,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// A trial line counted for this turn goes back when the turn gets no reply
 	// (claude-fleet#4248); nil for anything else.
 	var refund func(why string)
-	if name == "turn" {
+	if name == "turn" || name == "open" {
 		// A trial's lines and time (claude-fleet#4059): past either, no more.
 		code, msg, counted := s.trialTurn(w, person, time.Now())
 		if code != "" {
@@ -487,6 +503,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				resp.Body = &chatMirrorTee{ReadCloser: resp.Body, done: func(b []byte) {
 					s.chatMirrorKeepBody(person, provider, append([]byte(nil), b...), taken)
 				}}
+			}
+			if name == "open" && resp.StatusCode == http.StatusOK {
+				s.chatOpenWorker(resp, home.Machine, home.Login)
 			}
 			if refund == nil {
 				return nil

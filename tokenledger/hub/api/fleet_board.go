@@ -78,8 +78,15 @@ type BoardRow struct {
 	// red: the node's reap_why turned into the card's third line, ONE source for
 	// the console and the ⌘P panel. Only on 等你 / 排队中 rows; none when nothing
 	// holds it (or an older node says nothing).
-	Why        []string `json:"why,omitempty"`
-	WhyTone    string   `json:"why_tone,omitempty"`
+	Why     []string `json:"why,omitempty"`
+	WhyTone string   `json:"why_tone,omitempty"`
+	// 会话合一 (task PQ41): where the session was opened — web (the person's web
+	// page opened it: the node's @session_origin) or terminal (anything else) —
+	// and whether the web may talk to it now (a live session on a machine not
+	// lost, not ended: a terminal one too, by default). A record with no session
+	// has neither.
+	Origin     string `json:"origin,omitempty"`
+	CanTalk    bool   `json:"can_talk"`
 	parentTask string
 }
 
@@ -91,6 +98,9 @@ type Board struct {
 	GoneDays int            `json:"gone_days"`
 	GoneMore int            `json:"gone_more,omitempty"` // older than the cap, not listed
 	Digest   string         `json:"digest"`
+	// Machines is how many machines the person has (task PQ41): one ⇒ the page
+	// names none (a machine's name is only in a session's details then).
+	Machines int `json:"machines"`
 }
 
 var boardWords = map[string][2]string{
@@ -348,6 +358,14 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if r.Group == "ask" || r.Group == "queue" {
 			r.Why, r.WhyTone = boardWhy(why, now)
 		}
+		r.Origin = "terminal"
+		if wstr(w, "origin") == "web" {
+			r.Origin = "web"
+		}
+		r.CanTalk = r.Group != "gone" && !r.Lost && wid != "" && fs.Availability != "maintenance" && fs.Availability != MachineAvailDisabled
+		if v, ok := w["can_talk"].(bool); ok && !v {
+			r.CanTalk = false // the home's session gate says no (task HHV0 ①)
+		}
 		rows = append(rows, r)
 	}
 	// the records no live session holds
@@ -430,7 +448,10 @@ func boardStateTag(st string) string {
 		return "asking"
 	case "done", "landed":
 		return "turn_done"
-	case "idle", "sleeping":
+	case "idle", "sleeping", "parked":
+		// a parked session (task PQ41: a web one idle past fleet.session.park_idle,
+		// its agent let go, taken back by the next line) reads as idle — the
+		// person sees no difference
 		return "idle"
 	}
 	return "unknown"
@@ -510,7 +531,7 @@ func finishBoard(rows []BoardRow) *Board {
 	h := sha1.New()
 	for _, r := range b.Rows {
 		h.Write([]byte(r.ID + "\x1f" + r.Group + "\x1f" + r.Tag + "\x1f" + r.Code + "\x1f" + r.Title + "\x1f" + r.Parent +
-			"\x1f" + strings.Join(r.Why, "\x1f") + "\n"))
+			"\x1f" + strings.Join(r.Why, "\x1f") + "\x1f" + r.Origin + "\x1f" + strconv.FormatBool(r.CanTalk) + "\n"))
 	}
 	enc, _ := json.Marshal(b.Groups)
 	h.Write(enc)

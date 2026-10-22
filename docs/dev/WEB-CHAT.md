@@ -338,7 +338,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   确认框（手机从底部升起，带安全区）→ 接管成功即显示「已接管 · 在这里说，终端只读」，对话就是网页那一边（Claude Code / Codex 按会话的 agent）
   的对话——WebChat 已把这段会话接成它的对话，`useFleetChat` 照常可写。条上「交回终端」。终端在答时按钮是「等它说完」、不可点；
   网页在答时「交回终端」同样等这一轮。自己刚接管 / 交回的结果先信（≤6 s），之后以流里的 holder 为准。只读预览（view-as）不显示接管。
-- **入口**（`tokenledger/hub/api/chat_take.go`）：`POST /v1/chat/takeover?worker=<id>` · `POST /v1/chat/giveback?worker=<id>`，要
+- **入口**（`tokenledger/hub/api/chat_worker.go`，原 `chat_take.go`）：`POST /v1/chat/takeover?worker=<id>` · `POST /v1/chat/giveback?worker=<id>`，要
   `X-Fleet-Webchat: 1`；谁 = `termPerson`，会话是不是你的 = `termTarget`，还必须在**家登录**上（网页的对话只在家里，别的登录上的会话只能看，
   409 `not_home`）。转给家的 `/api/takeover|giveback`，body 由入口写 `{"fid": <窗口>}`——浏览器只报 worker id。旧服务没有这两条 = 409
   `old_service`；旧 agent = 409 `old_agent`。
@@ -385,6 +385,30 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   「同步中…」，超过 10 秒或家机器连不上时「家机器暂时连不上」，输入框说「家机器连回来后
   才能发」。会话的「⋯ 更多」第一项一点即复制 `fleet open <编号>`；详情里是命令行接入。
 - 原型：`npm run build:proto`，场景 `{"uni": "on"|"busy"|"typing"|"ask"|"old"|"fail"|"down"}`。
+
+### 会话合一：网页只和会话说话（PQ41 ②；HHV0 ① 家机会话门、Y01K ③ 页面）
+
+网页里的每段对话都是家机器上的一个会话，和终端开的会话进同一张表（A4G2 的 `board`）：网页表、⌘P、看板画同一批行。
+
+- **说**：`POST /v1/chat/say?worker=<id>`（`{text, images: [≤4]}`，≤1 MB）→ 会话所在登录的 `/api/say`，body 加入口写的
+  `fid`（浏览器带的 `fid` 被覆盖）→ `{delivery, state: sent | queued | refused, reason?}`。`answer?worker=`（问题指纹 + 选项原文）、
+  `stop?worker=`、`ack?worker=`（`{delivery}`，页面收下队列退回的一句）同一条路（`/api/answer|stop|ack`）；不带 `worker` 的 `answer` / `stop` 仍是家里那段对话自己的。谁 = `termPerson`，
+  会话是不是你的 = `termTarget`（家或你自己的另一个登录，否则 404 `not_yours`），个人终端 400 `bad_target`；空话 400 `empty`、
+  五张图 400 `too_many_images`、不是 JSON 400 `bad_body`；旧服务 409 `old_service`、旧 agent 409 `old_agent`。试用者的一句照旧记一行，
+  会话没收下（非 200 或 `state: refused`）就还回去。`open-terminal` 不做（「更多」只复制命令）。新开一段：`POST /v1/chat/open`
+  （`{agent, text, images}`，转家的 `/api/open`，第一句随它记试用的一行；回答里入口补上 `worker` = 这个登录唯一那支 fleet 的 `<fleet>/<fid>`）。`GET /v1/chat/home` 带 `unified`（= 下面的开关）。
+- **旧路由**：设置 `fleet.chat.unified`（默认 off）。on 时 `/v1/chat/turn|new|take|takeover|giveback` 回 410 `moved`、不到家；
+  off 时照旧转发（新页面和家机会话门上线前网页不断）——三个任务里最后合入的一方把它打开，之后一个版本删旧路。
+  接力锁（`fleet-convo-lock.py`）不再有新的写入方：⌘P「在 WebChat 里继续」改为「在网页里打开」（`fleet-web-open.sh`，
+  开 `/app/s/<会话>`，不搬、不锁）；结束页对旧锁的读取留一个版本。
+- **表**：`board.rows[]` 每行加 `origin`（`web` = 网页开的，节点 inventory 第 35 列 `origin=web`，来自窗口的 `@session_origin`；
+  否则 `terminal`；没会话的记录行为空）和 `can_talk`（活着、没收起、机器没失联 / 维护 / 停用；终端会话默认也能说）。
+  停放的会话（节点报 `state: parked`）在表里就是「空闲」。`board.machines` = 这个人有几台机器，1 台时页面不显示机器名。
+- **停放**：`fleet.session.park_idle`（默认 `5m`，`1m`–`24h` 或 `off`）随 `/v1/fleet/client-settings` 的 `pool` 下发为
+  `FLEET_SESSION_PARK_IDLE`（秒，0 = 不停放），只管网页开的会话。
+- **旧书签**：`/chat`、`/chat/` → 301 `/app/chat`（「我的对话」——旧对话迁出的那个会话的地址，页面认它）。
+- 测试：e2e `TestChatSayToSession`、`TestChatPage`；`TestBoardOriginAndCanTalk`；`session-title-selftest.sh`（第 35 列）；
+  `fleet-view-board-selftest.py`（网页开的一行）；`fleet-view-actions-selftest.sh`（`webopen`）。
 
 ## 浏览器上下文（#4034）
 

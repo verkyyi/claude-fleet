@@ -79,7 +79,24 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			body, _ := io.ReadAll(r.Body)
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true,"agent":"claude","got":`+strconvQuote(string(body))+`}`)
-		case "/api/stop", "/api/answer", "/api/new":
+		case "/api/say":
+			// 会话合一 (task PQ41): the body the hub wrote, echoed; "refuse" is refused
+			body, _ := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			state := "sent"
+			if strings.Contains(string(body), `"text":"refuse"`) {
+				state = "refused"
+			}
+			io.WriteString(w, `{"delivery":"d1","state":"`+state+`","got":`+strconvQuote(string(body))+`}`)
+		case "/api/stop", "/api/answer", "/api/ack":
+			body, _ := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ok":true,"got":`+strconvQuote(string(body))+`}`)
+		case "/api/open":
+			io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"fid":"f-new","agent":"claude","state":"sent"}`)
+		case "/api/new":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)
 		default:

@@ -224,8 +224,8 @@ class NativeTests(unittest.TestCase):
             # a whole page: the session line on top, a rule, one numbered item a line
             self.assertIn("源中文", opened[1])
             self.assertTrue(opened[2].startswith("───"), opened[2])
-            # 在 WebChat 里继续 (T810): a Codex session's too, since the page has a Codex side (R9A2)
-            self.assertEqual([x.strip() for x in opened[3:8]], ["1 进入", "2 改名…", "3 换成 Claude", "4 在 WebChat 里继续", "5 回收…"])
+            # 在网页里打开 (PQ41): any session, a Codex one too
+            self.assertEqual([x.strip() for x in opened[3:8]], ["1 进入", "2 改名…", "3 换成 Claude", "4 在网页里打开", "5 回收…"])
             self.assertNotIn("会话 02", "\n".join(opened))
             self.assertIn("会话 42", opened[0])
             self.assertNotIn("DO NOT REPEAT", "\n".join(opened))

@@ -150,8 +150,10 @@ type consolePage struct {
 var consolePages = []consolePage{
 	// 我的 — the conversation is its front page, 我的 its own (C3)
 	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3"},
-	{old: ChatPagePath, new: AppPrefix, side: sideMe, owner: "C3"},
-	{old: "/chat", new: AppPrefix, side: sideMe, owner: "C16"},
+	// the old conversation's bookmark opens 「我的对话」, the session it became
+	// (会话合一, task PQ41): the console's /app/chat is that session's address
+	{old: ChatPagePath, new: AppPrefix + "/chat", side: sideMe, owner: "PQ41"},
+	{old: "/chat", new: AppPrefix + "/chat", side: sideMe, owner: "PQ41"},
 	{old: AppPrefix + mePagePath, new: AppPrefix + mePagePath, side: sideMe, owner: "C3"},
 	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
 	{old: "/term", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},

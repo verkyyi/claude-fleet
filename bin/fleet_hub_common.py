@@ -361,9 +361,15 @@ def inventory_row(parts):
     ⌘P 消息 and message row read them (bin/fleet-hub-sessions.sh notices_<fleet>).
     Column 34 (E101): `reapwhy=<code>[:<epoch>]` — why the idle reaper has not
     closed this finished window (@reap_why): `reap_why`, which the hub's list turns
-    into its card's 「为什么还没收」 line; absent when empty."""
+    into its card's 「为什么还没收」 line; absent when empty.
+    Column 35 (task PQ41): `origin=web` — a session the person's web page opened
+    (@session_origin): `origin: "web"`, the hub's list row's origin; absent on a
+    terminal's."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 35 and parts[-1].startswith("origin="):
+        if parts.pop()[7:] == "web":
+            extra["origin"] = "web"
     if len(parts) >= 34 and parts[-1].startswith("reapwhy="):
         w = parts.pop()[8:]
         if REAP_WHY_RE.fullmatch(w):
