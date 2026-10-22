@@ -67,6 +67,13 @@ class MakeRoom(Rig):
             time.sleep(0.05)
         return (self.root / "resume-args").read_text()
 
+    def test_memory_pressure_never_archives_unwrapped_sessions(self):
+        out = self.room()
+        self.assertTrue(self.exists(), out)
+        self.assertNotIn('folded:' + self.win, out)
+        self.assertFalse((self.root / 'ledger.tsv').exists())
+        self.assertTrue(self.transcript.is_file())
+
     def test_an_idle_session_is_folded_and_comes_back_with_its_conversation(self):
         out = self.room()
         self.assertIn("folded:" + self.win + " scratch-7", out)

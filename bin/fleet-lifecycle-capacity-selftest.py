@@ -141,28 +141,24 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(f.opt('@pin'), '1')
             self.assertEqual(f.opt('@fleet_id'), f.fid)
 
-    def test_terminal_recheck_precedes_park_and_missing_rss_stays_unknown(self):
+    def test_memory_never_calls_terminal_reaper_and_missing_rss_stays_unknown(self):
         import contextlib
         import io
         f = self.fixture()
         with patch.dict(os.environ, f.env, clear=True):
             c = self.cleaner(f)
             c.args.repo = 'o/r'
-            def new_question(window):
-                f.set('@claude_needs', 'ask')
-                return False
-            with patch.object(c, 'work_over', return_value=True), \
-                    patch.object(c, 'candidate', side_effect=new_question) as reaper:
-                self.assertFalse(c.fold(f.win))
-                reaper.assert_called_once_with(f.win)
-                self.assertFalse(f.opt('@park_held'))
-            f.set('@claude_needs', '')
-            f.set('@pin', '1')
-            c.args.repo = ''
             out = io.StringIO()
-            with patch.object(c, 'tree_rss', return_value={}), contextlib.redirect_stdout(out):
+            with patch.object(c, 'work_over', return_value=True), \
+                    patch.object(c, 'candidate', return_value=True) as reaper, \
+                    patch.object(c, 'tree_rss', return_value={}), contextlib.redirect_stdout(out):
                 self.assertTrue(c.fold(f.win))
+                reaper.assert_not_called()
+            self.assertTrue(f.opt('@park_held'))
+            self.assertIn('parked-room:' + f.win, out.getvalue())
             self.assertIn('mb=unknown', out.getvalue())
+            self.assertEqual(f.opt('@fleet_id'), f.fid)
+            self.assertFalse((f.root / 'conf/retired' / f.fid).exists())
 
 if __name__ == '__main__':
     unittest.main()
