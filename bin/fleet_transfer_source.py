@@ -185,7 +185,7 @@ def quota_prompt_proof(session, pane):
     # choice cursor cannot prove this. Old/unresponsive modules refuse safely.
     from fleet_session_gate import park_proof
     socket = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, '#{socket_path}'])
-    proof = park_proof(dict(sock=session, socket_path=socket, pane=pane))
+    proof = park_proof(dict(agent='claude', sock=session, socket_path=socket, pane=pane))
     if not isinstance(proof, dict) or proof.get('ok') is not True:
         raise ValueError('native quota prompt/turn is not proven empty and stopped: ' + str(proof.get('why', 'unknown') if isinstance(proof, dict) else 'unknown'))
     return proof
