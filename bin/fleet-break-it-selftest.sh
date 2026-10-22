@@ -5580,6 +5580,14 @@ drill_web_quota_dialog() {
   SECS=$(since "$started"); WHAT='quota dialog dismissed once; native boundary re-proved; drafts, tools, schedules, approvals and changed source held'
 }
 
+drill_quota_boundary_recheck() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_unattempted_refusal_rechecks_when_native_cancel_or_delivery_settles >"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
+}
+
 drill_web_quota_continuation() {
   CAP=120
   local started; started=$(now)
