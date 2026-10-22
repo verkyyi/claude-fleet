@@ -871,9 +871,16 @@ fi
   # transcript is still where it ran and the agent comes back into its own
   # conversation (the table's park_resume); else a fresh one.
   rsid=''
-  if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] \
-     && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
-    rsid=$RESUME_SID
+  if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ]; then
+    case "$(agent_col transcript)" in
+      project)
+        [ ! -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ] || rsid=$RESUME_SID ;;
+      home)
+        if python3 "$BIN/fleet-codex-session.py" locate --session "$RESUME_SID" \
+            --home "${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}" >/dev/null 2>&1; then
+          rsid=$RESUME_SID
+        fi ;;
+    esac
   fi
   if [ "$NOREPO" = 1 ]; then
     if [ -n "$rsid" ]; then

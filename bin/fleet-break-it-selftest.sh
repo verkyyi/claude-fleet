@@ -5707,6 +5707,22 @@ drill_spinner_protocol_budget() {
   WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；协议总账由两个 process-budget 44 秒独立场景共测'
 }
 
+drill_codex_resume_history() {
+  CAP=120; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dash-raw-session-selftest.sh" 2>&1) \
+    || { WHY="Codex 原对话恢复: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
+}
+
+drill_codex_hook_retired_root() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-startup-selftest.py" PolicyTests.test_live_hook_paths_survive_retired_release_removal PolicyTests.test_checkout_hooks_do_not_use_an_unrelated_live_install 2>&1) \
+    || { WHY="Codex Hook 版本目录回收: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='安装 Hook 走稳定入口；独立 checkout 不借用其他安装'
+}
+
 drill_codex_mcp_busy() {
   CAP=30; local t0 out
   t0=$(now)
