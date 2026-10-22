@@ -18,7 +18,10 @@
 #                              + this session's own worker assertion) — no account
 #          exit 3 switched off · 4 nothing to bind (no account on a trusted route:
 #          the ambient login, which holds nothing to protect) · 5 central: the hub
-#          does not know this session (404, not registered — issue #2914) · 1 failed
+#          does not know this session (404, not registered — issue #2914) · 6 the
+#          proxy is not answering (not running, its control socket refused — between
+#          two lives; T914: the only failure a launch waits out) · 1 failed (an
+#          answer: the proxy or the hub said no)
 #   fleet-session-cred.sh revoke --sid SID    at the session's exit: the proxy's
 #                              revoke (or the revoked list when it is down), the
 #                              hub pass's DELETE, the Codex home marked dead
@@ -54,6 +57,9 @@ STATE="$CONF/cred-proxy"
 PROXY="$BIN/fleet-cred-proxy.sh"
 
 die() { printf 'fleet-session-cred: %s\n' "$1" >&2; exit "${2:-1}"; }
+# down_rc <the proxy client's rc> → mint's exit: 3 (its control socket would not
+# connect — not running, between two lives) is 6, anything else an answer, 1
+down_rc() { if [ "${1:-1}" = 3 ]; then echo 6; else echo 1; fi; }
 
 switch() { # 1 / 0 — an explicit environment value outranks the conf (fleet-cred-proxy.sh's rule)
   # A separated login reaches a subscription through the proxy or not at all
@@ -239,11 +245,11 @@ case "$cmd" in
     sid_ok "$sid" || die "mint: --sid NAME ([A-Za-z0-9._-])" 2
     case "$provider" in claude|codex) ;; *) die "mint: --provider claude|codex" 2 ;; esac
     port=$(FLEET_CRED_PROXY=1 bash "$PROXY" ensure 2>/dev/null) && [ -n "$port" ] \
-      || die "the credential proxy is not running and would not start (logs/cred-proxy.log)"
-    rt=$(bash "$PROXY" route --provider "$provider" --json 2>/dev/null)
-    case "$rt" in *'"trust": "unknown"'*) rt=$(bash "$PROXY" route --provider "$provider" --refresh --json 2>/dev/null) ;; esac
+      || die "the credential proxy is not running and would not start (logs/cred-proxy.log)" 6
+    rt=$(bash "$PROXY" route --provider "$provider" --json 2>/dev/null); prc=$?
+    case "$rt" in *'"trust": "unknown"'*) rt=$(bash "$PROXY" route --provider "$provider" --refresh --json 2>/dev/null); prc=$? ;; esac
     route=$(printf '%s' "$rt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["route"])' 2>/dev/null) \
-      || die "the proxy did not say which route this machine takes"
+      || die "the proxy did not say which route this machine takes" "$(down_rc "$prc")"
     wid=''; [ "$route" = central ] || wid=$(session_worker)   # central: the cluster proxy's to meter
     if [ "$route" = central ]; then
       row=$(hub_pass "$provider"); hrc=$?
@@ -265,9 +271,9 @@ case "$cmd" in
       # separated (issue #2412): the session names no account — the proxy picks
       # one per request and moves it when it fills; a --account here is not ours
       # to give (and the login has no pick of its own to offer since T550).
-      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
+      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null); prc=$?
       account=proxy
-      [ -n "$cred" ] || die "the proxy would not mint a session credential"
+      [ -n "$cred" ] || die "the proxy would not mint a session credential" "$(down_rc "$prc")"
       rec_set "$sid" account "$account"
     elif [ "$provider" = codex ] && separated && [ -z "$account" ] \
          && [ "$(codex_label "${chome:-$HOME/.codex}" 2>/dev/null)" = default ]; then
@@ -275,15 +281,15 @@ case "$cmd" in
       # picks the account — skipping one at its limit — and moves the session on
       # a usage-limit 429. A proxy older than #4606 still wants one: default.
       err=$(mktemp "${TMPDIR:-/tmp}/fsc-mint.XXXXXX")
-      cred=$(bash "$PROXY" mint --provider codex --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err")
+      cred=$(bash "$PROXY" mint --provider codex --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err"); prc=$?
       if [ -z "$cred" ] && grep -q -- '--account LABEL' "$err"; then
         account=default
-        cred=$(bash "$PROXY" mint --account default --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
+        cred=$(bash "$PROXY" mint --account default --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null); prc=$?
       else
         account=proxy
       fi
       rm -f "$err"
-      [ -n "$cred" ] || die "the proxy would not mint a session credential"
+      [ -n "$cred" ] || die "the proxy would not mint a session credential" "$(down_rc "$prc")"
       rec_set "$sid" account "$account"
     else
       if [ -z "$account" ] && [ "$provider" = codex ] && [ -n "$chome" ]; then
@@ -292,8 +298,8 @@ case "$cmd" in
       [ -n "$account" ] || exit 4
       # --wrap: the session's wrapper — while it lives the proxy keeps this
       # credential good past its stamp (issue #1975: no mid-session expiry)
-      cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null) && [ -n "$cred" ] \
-        || die "the proxy would not mint a session credential for $account"
+      cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null); prc=$?
+      [ -n "$cred" ] || die "the proxy would not mint a session credential for $account" "$(down_rc "$prc")"
       rec_set "$sid" account "$account"
     fi
     rec_set "$sid" route "$route"
