@@ -479,7 +479,9 @@ pullback_scan() {
     IFS=$'\t' read -r _ wname wpath wsid _ wstate _ <<<"$line"
     echo "$wname" | grep -qE "$PANEL_RE" && continue
     [ -n "$wsid" ] && [ "$wsid" != - ] && printf '%s\n' "$lsid" | grep -qxF "$wsid" && continue
-    case "$wstate" in done|exited) continue ;; esac            # finished: stays closed
+    case "$wstate" in done|exited)
+      python3 "$BIN/fleet_park_wake.py" restore --fid "$fid" --sid "$wsid" --owned 2>/dev/null || continue ;;
+    esac  # A scheduled round is unfinished even though its held wrapper says done.
     fleet_fid_retired "$fid" && continue                        # the fleet closed it
     [ -d "$wpath" ] || continue
     grep -qxF "$(printf 'FID\t%s' "$fid")" "$pb" 2>/dev/null && continue
@@ -649,7 +651,12 @@ restore() {
       # A planned restart's pin (fleet-sessions-snapshot.sh, issue #3511) also
       # brings back a `done` one — a session waiting at its prompt is not ended
       # (RESTORE_KEEP_DONE=1); `exited` still stays closed.
-      if [ -n "${RESTORE_UNFINISHED:-}" ] \
+      local wpark='' wtimers=''
+      case "$wtag" in WIN:?*)
+        python3 "$BIN/fleet_park_wake.py" restore --fid "${wtag#WIN:}" --sid "$wid" --owned 2>/dev/null && wtimers=1
+        python3 "$BIN/fleet_park_wake.py" restore --fid "${wtag#WIN:}" --sid "$wid" 2>/dev/null && wpark=1 ;;
+      esac
+      if [ -n "${RESTORE_UNFINISHED:-}" ] && [ -z "$wtimers" ] \
          && { [ "$wstate" = exited ] || { [ "$wstate" = "done" ] && [ -z "${RESTORE_KEEP_DONE:-}" ]; }; }; then
         say "    · $wname: $wstate last time — not reopened"
         log "skip $sess/$wname state=$wstate (auto restores unfinished only)"
@@ -752,7 +759,7 @@ restore() {
       # quoted for the shell since it is the person's text. Nothing pending → a
       # plain resume, exactly as before.
       local loopq=''
-      if [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ]; then
+      if [ -z "$wtimers" ] && [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ]; then
         local loopline sq="'" esc="'\\''"
         loopline=$(python3 "$BIN/fleet_loop_mark.py" rearm --transcript "$(fleet_transcript_dir "$wpath")/$wid.jsonl" 2>/dev/null)
         if [ -n "$loopline" ]; then
@@ -761,6 +768,10 @@ restore() {
         fi
       fi
       local launch="'$BIN/fleet-session-wrap.sh'"
+      if [ -n "$wpark" ]; then
+        launch="FLEET_PARK_RESTORE_FID='${wtag#WIN:}' $launch"
+        nudge=''
+      fi
       local cmd
       local agent_label=claude resume_flag=--resume home_arg
       if [ "$wagent" = codex ]; then
@@ -981,18 +992,21 @@ probe_outcomes() {
   [ -n "$PENDING" ] || return 0
   local secs="${FLEET_RESTORE_PROBE_SECS:-5}"
   case "$secs" in (''|*[!0-9]*) secs=5;; esac
-  local tries=$(( secs * 5 )) i=0 left seq sock w sess name ex cap oc note
+  local tries=$(( secs * 5 )) i=0 left seq sock w sess name ex cap oc note held
   while :; do
     left=''
     while IFS=$'\t' read -r seq sock w sess name; do
       [ -n "$w" ] || continue
       oc=''; note=''
       ex=$(tmux -L "$sock" display-message -p -t "$w" '#{@restore_exit}' 2>/dev/null)
+      held=$(tmux -L "$sock" display-message -p -t "$w" '#{@park_held}' 2>/dev/null)
       cap=$(tmux -L "$sock" capture-pane -p -t "$w" 2>/dev/null)
       if printf '%s\n' "$cap" | grep -Eq "$RESTORE_NOCONV_RE"; then
         oc=failed; note="resume refused: $(printf '%s\n' "$cap" | grep -Eo "($RESTORE_NOCONV_RE).*" | head -1 | cut -c1-60)"
       elif [ -n "$ex" ]; then
         oc=failed; note="agent exited — pane is at a shell"
+      elif [ -n "$held" ]; then
+        oc=resumed; note="holding the same conversation until its scheduled round"
       elif printf '%s\n' "$cap" | grep -Eq "$RESTORE_DIALOG_RE"; then
         oc=attention; note="a dialog is waiting for you (not answered automatically)"
       elif printf '%s\n' "$cap" | grep -Eq "$RESTORE_PROMPT_RE"; then

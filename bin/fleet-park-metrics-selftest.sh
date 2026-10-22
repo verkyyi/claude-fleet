@@ -61,13 +61,13 @@ from pathlib import Path
 from fleet_hub_common import inventory_row
 from fleet_control import Control
 from fleet_park_metrics import daily, summarize
-# Resident idle includes viewers and background work; acceptance uses only
-# eligible idle. Both exclude active CPU and exited sessions.
+# Idle uses the batch acceptance definition. Viewers/background work remain
+# reasons, while the three counts still cover every session exactly once.
 def worker(state='done', quiet=True, why='old-shell', busy=None):
     return {'state':state, 'busy':busy, 'park':{'state':'awake','quiet':quiet,'why':why,'rss_mb':100,'saved_mb':None}}
 strict = summarize([worker(), worker('looping'), worker('needs'), worker(why='watched'),
                     worker(busy='bg'), worker(quiet=False), worker('exited')])
-assert (strict['sessions_idle'], strict['sessions_working'], strict['idle_rss_mb']) == (5,2,500), strict
+assert (strict['sessions_idle'], strict['sessions_working'], strict['idle_rss_mb']) == (3,4,300), strict
 assert (strict['idle_eligible'],strict['idle_eligible_rss_mb']) == (3,300), strict
 assert strict['idle_reasons']['watched'] == strict['idle_reasons']['background'] == 1, strict
 from fleet_park_metrics import inventory_park
@@ -79,6 +79,8 @@ assert joined(busy='bg')['eligible'] is False
 assert joined(state='working')['eligible'] is False
 assert joined(why='working')['eligible'] is False  # reconnecting before native state arrives
 assert joined(quiet=None)['eligible'] is None
+assert joined(why='watched', quiet=None)['why'] == 'watched'
+assert joined(busy='bg', quiet=None)['why'] == 'background'
 assert joined(quiet=False)['eligible'] is False
 assert joined()['eligible'] is True
 assert set(joined()) == {'state','rss_mb','saved_mb','why','eligible'}
@@ -117,7 +119,7 @@ assert ctl.workers(fleet)['park_metrics'] == q
 # A collector's control client is not a viewer; an attached human is.
 (w/'fake/control').write_text('0')
 viewed = ctl.workers(fleet)['park_metrics']
-assert (viewed['sessions_idle'], viewed['sessions_working'], viewed['idle_rss_mb']) == (1,1,201), viewed
+assert (viewed['sessions_idle'], viewed['sessions_working'], viewed['idle_rss_mb']) == (0,2,0), viewed
 assert viewed['idle_eligible'] == viewed['idle_eligible_rss_mb'] == 0, viewed
 assert viewed['idle_reasons']['watched'] == 1, viewed
 (w/'fake/control').unlink()
@@ -126,8 +128,11 @@ for marker in ('parked', 'held'):
     (w/'fake'/marker).write_text('')
     assert ctl.workers(fleet)['park_metrics']['sessions_parked'] == 0
     (w/'fake'/marker).unlink()
-# A stale ledger cannot replace an absent or invalid C1 pre-park snapshot.
-for value in ('', '-1', 'NaN'):
+# A valid C1 snapshot wins over the ledger; missing stamps use the latest park
+# action for this identity. Invalid stamps remain unknown instead of estimating.
+(w/'fake/saved').write_text('')
+assert ctl.workers(fleet)['park_metrics']['parked_saved_mb'] == 9999
+for value in ('-1', 'NaN'):
     (w/'fake/saved').write_text(value)
     missing = ctl.workers(fleet)['park_metrics']
     assert missing['sessions_parked'] == 1 and missing['parked_saved_mb'] is None, missing
@@ -136,6 +141,9 @@ for value in ('', '-1', 'NaN'):
 book = w/'conf/logs/park.ndjson'
 book.unlink()
 assert ctl.workers(fleet)['park_metrics']['parked_saved_mb'] == 2048
+(w/'fake/saved').write_text('')
+assert ctl.workers(fleet)['park_metrics']['parked_saved_mb'] is None
+(w/'fake/saved').unlink()
 book = w/'conf/logs/park.ndjson'
 book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T12:00:00Z','fid':'fid3','act':'park','rss_mb':2048},

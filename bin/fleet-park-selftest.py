@@ -64,22 +64,27 @@ class Park(unittest.TestCase):
     def opt(self, key):
         return self.tm('display-message', '-p', '-t', self.win, '#{' + key + '}')
 
-    def fake(self):
+    def fake(self, agent='claude'):
         self.fid = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
         self.sid = '11111111-2222-4333-8444-555555555555'
         fake = self.root / 'fake.py'
-        fake.write_text(r'''import os,sys,tty
+        fake.write_text(r'''import os,sys,tty,json
+from pathlib import Path
+agent=sys.argv[1]
+Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
 print('\x1b[2J\x1b[Hlast answer: preserved\r\nsecond line: 中文',flush=True)
-print('fake ready\x1b]7501;state=idle:app=claude-code\x1b\\',flush=True)
+print('fake ready\x1b]7501;state=idle:app='+agent+'\x1b\\',flush=True)
 tty.setraw(0)
+os.write(1,b'\r\n\xe2\x80\xba ')
 b=b''
 while True:
  c=os.read(0,4096)
  if not c: break
  b+=c
- if b'/exit\r' in b:
+ if (b'\x1b[200~/exit\x1b[201~\r' if agent=='codex' else b'/exit\r') in b:
   print('\x1b[2J\x1b[Hagent exit screen',flush=True)
   break
+ os.write(1,c)
 ''')
         record = self.root / 'record.py'
         record.write_text('import json,sys\nfrom pathlib import Path\n'
@@ -88,10 +93,11 @@ while True:
         launch.write_text('#!/bin/bash\n' +
                           'printf "%s\\n" "$@" >> ' + str(self.root / 'launch-args') + '\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
-                          'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
+                          'tmux set-option -w -t "$TMUX_PANE" @cc_agent ' + agent + '\n' +
+                          'tmux set-option -w -t "$TMUX_PANE" ' + ('@codex_session_id' if agent == 'codex' else '@cc_session_id') + ' ' + self.sid + '\n' +
                           'python3 ' + str(record) + ' "$@"\n' +
                           '[ ! -f ' + str(self.root / 'fail') + ' ] || { echo resume-failed; exit 1; }\n' +
-                          'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + '\n')
+                          'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + ' ' + agent + ' ' + str(self.root / 'argv.json') + ' "$@"\n')
         launch.chmod(0o755)
         self.env['FLEET_WRAP_LAUNCH'] = str(launch)
         loc = self.root / 'locate'
@@ -101,7 +107,7 @@ while True:
         # new-window inherits its server environment; pass only fixture settings.
         import shlex
         cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
-                               if k.startswith('FLEET_') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
+                               if (k.startswith('FLEET_') or k == 'PATH') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
         self.win = self.tm('new-window', '-d', '-P', '-F', '#{window_id}', '-t', 'test', cmd)
         self.set('@fleet_id', self.fid)
         self.set('@fleet_role', 'worker')
@@ -113,7 +119,86 @@ while True:
         probe.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
         probe.chmod(0o755)
         self.env['FLEET_GATE_PARK_PROBE_CMD'] = str(probe)
-        self.wait(lambda: self.opt('@park_relay') and self.opt('@cc_session_id'))
+        self.wait(lambda: self.opt('@park_relay') and self.opt('@codex_session_id' if agent == 'codex' else '@cc_session_id'))
+        if agent == 'codex':
+            native = self.root / 'native.py'
+            native.write_text('''import json
+from pathlib import Path
+def identity(pane, socket):
+ return dict(session_id=%r, remote='unix:///fake-codex.sock')
+class client:
+ def __init__(self, remote): pass
+ def close(self): pass
+ def call(self, method, params):
+  if method=='thread/read': return dict(thread=dict(id=%r,status=dict(type='idle')))
+  if method=='thread/queue/list': return dict(data=[])
+  raise ValueError(method)
+''' % (self.sid, self.sid))
+            self.env['FLEET_GATE_CODEX'] = str(native)
+            self.env.pop('FLEET_GATE_PARK_PROBE_CMD')
+            self.wait(lambda: '›' in self.tm('capture-pane', '-p', '-t', self.win))
+
+    def test_codex_same_thread_and_paste_exit(self):
+        self.fake('codex')
+        before = self.opt('pane_pid')
+        with patch.dict(os.environ, self.env):
+            result = gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertTrue(self.opt('@park_held'))
+        self.assertFalse(self.opt('@park_relay'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        self.assertEqual(self.opt('pane_pid'), before)
+        seed = self.root / 'seed'
+        seed.write_text('continue this conversation')
+        with patch.dict(os.environ, self.env):
+            result = gate.wake(self.fid, seed_file=str(seed), why='message')
+        self.assertTrue(result.get('ok'), result)
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        argv = json.loads((self.root / 'argv.json').read_text())
+        self.assertEqual(argv, ['--agent', 'codex', 'resume', self.sid, 'continue this conversation'])
+
+    def test_codex_old_relay_holds_without_typing(self):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env), patch.object(gate, 'relay_request', return_value=dict(ok=True, generation=0)):
+            self.assertEqual(gate.park(self.fid).get('why'), 'old_relay')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def test_codex_ledger_without_native_mark_requires_timer_handover(self):
+        self.fake('codex')
+        import fleet_park_wake as wake
+        manifest = self.root / 'transfer/manifest.json'
+        ledger = manifest.parent / 'loop/state.json'
+        ledger.parent.mkdir(parents=True)
+        manifest.write_text('{}')
+        ledger.write_text(json.dumps(dict(status='active', thread_id=self.sid)))
+        self.set('@handoff_manifest', str(manifest))
+        self.assertFalse(self.opt('@loop'))
+        with patch.dict(os.environ, self.env), patch.object(wake, 'export', side_effect=ValueError('handover unavailable')):
+            self.assertEqual(gate.park(self.fid).get('why'), 'wake_contract')
+        self.assertTrue(self.opt('@park_relay'))
+        self.assertFalse(self.opt('@parked'))
+
+    def test_codex_prompt_and_native_queue_hold(self):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env):
+            w = gate.window(self.fid)
+            self.assertTrue(gate.park_proof(w).get('ok'))
+            native = Path(self.env['FLEET_GATE_CODEX'])
+            original = native.read_text()
+            for old, new in (("type='idle'", "type='active'"),
+                             ('data=[]', "data=[{'id':'queued'}]"),
+                             ("session_id=" + repr(self.sid), "session_id='different'")):
+                native.write_text(original.replace(old, new))
+                self.assertFalse(gate.park_proof(w).get('ok'), new)
+            native.write_text(original)
+            self.tm('send-keys', '-t', self.win, '-l', 'unfinished draft')
+            self.wait(lambda: 'unfinished draft' in self.tm('capture-pane', '-p', '-t', self.win))
+            self.assertEqual(gate.park_proof(w).get('why'), 'draft')
+            self.assertFalse(self.opt('@parked'))
 
     def parked(self):
         self.fake()
@@ -164,6 +249,109 @@ while True:
             result = gate.park(self.fid)
         self.assertFalse(result['ok'], result)
         self.assertEqual(result['why'], 'asking')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def dialog_transcript(self):
+        path = self.root / 'question.jsonl'
+        path.write_text(json.dumps({'message': {'content': [{
+            'type': 'tool_use', 'id': 'question-1', 'name': 'AskUserQuestion',
+            'input': {'questions': [{'question': 'Pick a colour', 'header': 'Colour',
+                                    'options': [{'label': 'Blue'}, {'label': 'Red'}]}]}
+        }]}}) + '\n')
+        return path
+
+    def test_dialog_guard_all_park_routes(self):
+        # A native question can outlive a stale done stamp. Both the timer and
+        # memory-pressure driver must reach the same refusal, even after 30m.
+        from types import SimpleNamespace
+        self.fake()
+        # The relay endpoint precedes the first asynchronous 7501 state write.
+        # Wait for that writer before setting the dialog, or its startup idle
+        # can erase the test's ask/needs stamps under CI load.
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.dialog_transcript()
+        original = transcript.read_bytes()
+        cases = [('needs', 'ask', '', ''), ('done', 'ask', '', ''),
+                 ('done', 'permission', '', ''), ('done', '', 'blocked', ''),
+                 ('done', '', 'blocked', 'timer'), ('native', '', '', '')]
+        for state, needs, word, loop in cases:
+            for via in ('idle', 'memory', 'driver-idle', 'driver-memory'):
+                with self.subTest(state=state, needs=needs, word=word, loop=loop, via=via):
+                    self.set('@claude_state', 'done' if state == 'native' else state)
+                    self.set('@claude_needs', needs)
+                    self.set('@agent_status', json.dumps({'state': word}))
+                    self.set('@loop', loop)
+                    self.set('@claude_state_ts', str(int(time.time()) - 3601))
+                    exits = []
+
+                    def relay(w, request):
+                        if request['op'] == 'exit':
+                            exits.append(request)
+                            return {'ok': False, 'why': 'test_no_exit'}
+                        return {'ok': True, 'generation': 1}
+
+                    with patch.dict(os.environ, self.env), \
+                            patch.object(gate, 'claude_transcript', return_value=transcript if state == 'native' else None), \
+                            patch.object(gate, 'relay_request', side_effect=relay):
+                        if via.startswith('driver-'):
+                            args = SimpleNamespace(socket_name=self.label, session='test',
+                                                   window_repo=False, repo='', dry_run=False)
+                            driver = reap.Cleaner(args)
+                            driver.now = int(time.time())
+                            driver._mem = (via == 'driver-memory', '')
+                            driver._park_watched = set()
+                            snap = driver.snapshot(self.win)
+
+                            def run_gate(*argv):
+                                self.assertIn('park', argv)
+                                result = gate.park(self.fid, why=argv[-1])
+                                self.assertEqual(result.get('why'), 'asking', result)
+                                return json.dumps(result)
+
+                            with patch.object(driver, 'busy', return_value=False), \
+                                    patch.object(reap, 'run', side_effect=run_gate):
+                                self.assertFalse(driver.web_park(self.win, snap))
+                        else:
+                            result = gate.park(self.fid, why=via)
+                            self.assertFalse(result['ok'], result)
+                            self.assertEqual(result.get('why'), 'asking', result)
+                    self.assertEqual(exits, [], '/exit must never be injected into a choice')
+                    self.assertFalse(self.opt('@parked'))
+                    self.assertTrue(self.opt('@park_relay'))
+                    self.assertEqual(transcript.read_bytes(), original, 'question/options changed')
+
+    def test_dialog_appears_after_native_proof(self):
+        self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.root / 'question.jsonl'
+        with patch.dict(os.environ, self.env), \
+                patch.object(gate, 'claude_transcript', return_value=transcript), \
+                patch.object(gate, 'relay_request', return_value={'ok': True, 'generation': 1}) as relay:
+            def proof(w):
+                self.dialog_transcript()
+                return {'ok': True}
+            with patch.object(gate, 'park_proof', side_effect=proof):
+                result = gate.park(self.fid, why='memory')
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(any(c.args[1]['op'] == 'exit' for c in relay.call_args_list),
+                         '/exit reached a question opened during the idle proof')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def test_dialog_appears_during_timer_export(self):
+        import fleet_park_wake
+        self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.root / 'question.jsonl'
+        with patch.dict(os.environ, self.env), \
+                patch.object(gate, 'claude_transcript', return_value=transcript), \
+                patch.object(gate, 'relay_request', return_value={'ok': True, 'generation': 1}) as relay, \
+                patch.object(fleet_park_wake, 'export', side_effect=lambda fid: self.dialog_transcript()):
+            result = gate.park(self.fid, why='memory')
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(any(c.args[1]['op'] == 'exit' for c in relay.call_args_list),
+                         '/exit reached a question opened while exporting timers')
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
 
@@ -247,6 +435,25 @@ while True:
         self.assertEqual(rows[0]['rss_mb'], observed['saved_mb'])
 
     def test_park_screen_and_keyboard_sentence(self):
+        # macOS Python 3.9 starts monotonic() near zero in each process. Rebase
+        # only the real parked editor's clock so Linux covers the same startup.
+        import shlex
+        clock = self.root / 'clock-origin.py'
+        clock.write_text('import runpy,sys,time\nfrom pathlib import Path\n'
+                         'native=time.monotonic; origin=native()\n'
+                         'time.monotonic=lambda: native()-origin\n'
+                         'sys.argv=sys.argv[1:]\n'
+                         'sys.path.insert(0,str(Path(sys.argv[0]).resolve().parent))\n'
+                         'runpy.run_path(sys.argv[0],run_name="__main__")\n')
+        shim = self.root / 'tools'
+        shim.mkdir()
+        python = shim / 'python3'
+        executable = shlex.quote(sys.executable)
+        python.write_text('#!/bin/sh\ncase "$1" in\n'
+                          ' */fleet-park-page.py) exec ' + executable + ' ' + shlex.quote(str(clock)) + ' "$@" ;;\n'
+                          ' *) exec ' + executable + ' "$@" ;;\nesac\n')
+        python.chmod(0o755)
+        self.env['PATH'] = str(shim) + os.pathsep + self.env.get('PATH', '')
         self.fake()
         self.wait(lambda: 'last answer: preserved' in self.tm('capture-pane', '-p', '-t', self.win))
         before = self.tm('capture-pane', '-p', '-t', self.win).split('\n')
@@ -268,6 +475,7 @@ while True:
         self.tm('select-window', '-t', self.win)
         time.sleep(1.2)
         self.assertTrue(self.opt('@park_held'), 'viewing resumed the parked agent')
+        self.assertEqual(self.opt('@park_presence'), '0', 'viewing counted as keyboard input')
         self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
         time.sleep(.4)
         self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')
@@ -421,6 +629,18 @@ while True:
                 patch.object(reap, 'run', return_value='{"ok":true}'):
             for origin in ('person','dispatched','member','driver','orchestrator','probe','web'):
                 self.assertTrue(r.web_park('@1', snap | {'@session_origin':origin}), origin)
+
+
+class NativeReady(unittest.TestCase):
+    def test_codex_wake_without_new_session_clock(self):
+        from types import SimpleNamespace
+        runtime = module('park_runtime', 'fleet-codex-runtime.py')
+        with patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(stdout='\t\tmeta\n')):
+            self.assertFalse(runtime.input_ready('%1'))
+        with patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(stdout='\tthread-id\tmeta\n')), \
+                patch.object(gate, 'wake_ready') as ready:
+            self.assertTrue(runtime.input_ready('%1'))
+            ready.assert_called_once_with('%1')
 
 
 if __name__ == '__main__':

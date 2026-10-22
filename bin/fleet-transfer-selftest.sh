@@ -952,19 +952,46 @@ assert not confirm(screen.replace('Enter to confirm · Esc to cancel', ''))
 PY
 ok
 
-# T943: a native quota error is `exited`, with a LIVE Claude at its prompt.
-# The formal controller verifies the boundary; no done stamp or forced exit.
-spawn 75 issue norepo
-python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTA'
+# T943 actual native shape: cancel the quota menu, preserving the same LIVE
+# process/SID. The agent double emits OSC's error/exited mapping; no Stop hook.
+quota_source 75 quota-dialog
+TM send-keys -t "$PANE" Enter
+for ((qwait=0; qwait<50; qwait++)); do
+  [ "$(field claude_state)" = exited ] && break
+  sleep 0.1
+done
+[ "$(field claude_state)" = exited ] && [ "$(field claude_state_src)" = 7501 ] \
+  && kill -0 "$PID" || fail 'native Stop-and-wait did not preserve live exited source'
+same_source=$(bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$WIN" --to codex --inspect) || fail 'cancelled source inspect'
+python3 - "$same_source" "$PID" "$SID" <<'PYQUOTAIDENTITY' || fail 'native cancellation changed source'
+import json,sys
+s=json.loads(sys.argv[1]); assert s['pid']==int(sys.argv[2]) and s['session_id']==sys.argv[3]
+PYQUOTAIDENTITY
+transfer --dry-run && fail 'ordinary exited is never an idle source'
+touch "$WORK/quota-proof-refuse"
+transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'exited without live main-turn proof must refuse'
+[ "$(field claude_state)" = exited ] && kill -0 "$PID" || fail 'unknown turn proof changed source'
+rm "$WORK/quota-proof-refuse"
+python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTATOOL'
 import json,sys
 with open(sys.argv[1], 'a') as out:
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], message={'content':[
+        dict(type='tool_use', id='native-network-tool', name='WebFetch', input={})]}))+'\n')
     out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
-        isApiErrorMessage=True, error='rate_limit', apiErrorStatus=429,
-        message={'content':[{'type':'text','text':"You've hit your weekly limit"}]}))+'\n')
-PYQUOTA
-TM set-option -w -t "$WIN" @claude_state exited
-TM set-option -w -t "$WIN" @claude_state_src 7501
-TM set-option -w -t "$WIN" @agent_status '{"state":"error","app":"claude-code"}'
+        isApiErrorMessage=True, error='rate_limit', message={'content':[
+            dict(type='text', text="You've hit your weekly limit")]}))+'\n')
+PYQUOTATOOL
+transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'unreturned network tool must hold exited source'
+kill -0 "$PID" || fail 'unfinished tool refusal exited source'
+python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTATOOLEND'
+import json,sys
+with open(sys.argv[1], 'a') as out:
+    out.write(json.dumps(dict(type='user', sessionId=sys.argv[2], message={'content':[
+        dict(type='tool_result', tool_use_id='native-network-tool', content='cancelled')]}))+'\n')
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
+        isApiErrorMessage=True, error='rate_limit', message={'content':[
+            dict(type='text', text="You've hit your weekly limit")]}))+'\n')
+PYQUOTATOOLEND
 transfer --quota-continuation --expected-session-id "$SID" --dry-run || fail 'native quota boundary dry-run'
 [ "$(field claude_state)" = exited ] && kill -0 "$PID" || fail 'quota dry-run must preserve live failed source'; ok
 TM send-keys -t "$PANE" -l 'unsent draft'
@@ -979,6 +1006,24 @@ transfer --quota-continuation --expected-session-id "$SID" || fail 'native quota
 [ "$(field cc_agent)" = codex ] && ! fleet_pid_alive "$PID" || fail 'quota did not retain one writer'; ok
 [ "$(field issue)" = 75 ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'quota lost task or exact provenance'; ok
 transfer --quota-continuation --expected-session-id "$SID" && fail 'quota must not switch target again'; ok
+rm -f "$WORK/quota-keys"
+
+# A person may instead cancel with the menu's advertised Escape. An active main
+# turn/unknown native module still refuses; restoration of proof permits a later
+# explicit controller run without another cancellation or state stamp.
+quota_source 81 quota-dialog
+TM send-keys -t "$PANE" Escape
+for ((qwait=0; qwait<50; qwait++)); do
+  [ "$(field claude_state)" = exited ] && break
+  sleep 0.1
+done
+[ "$(field claude_state)" = exited ] && [ "$(cat "$WORK/quota-keys")" = 1b ] \
+  && kill -0 "$PID" || fail 'native Escape did not reach live error boundary'
+transfer --quota-continuation --expected-session-id "$SID" --dry-run || fail 'native escaped quota boundary'
+[ "$(cat "$WORK/quota-keys")" = 1b ] && kill -0 "$PID" || fail 'escaped dry-run repeated a key or exited source'; ok
+transfer --quota-continuation --expected-session-id "$SID" || fail 'native escaped source cutover'
+[ "$(field cc_agent)" = codex ] && ! fleet_pid_alive "$PID" || fail 'escaped quota did not retain single writer'; ok
+rm -f "$WORK/quota-keys"
 
 # The actual subscription path: native quota choice dialog, not an idle prompt.
 quota_source 76 quota-dialog
