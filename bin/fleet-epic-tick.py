@@ -21,6 +21,11 @@ The charter (written by /fleet-epic-plan, the parent's body):
   - [ ] **C1** <title>                       a core member in the marker's repo
   - [ ] **C2** <owner/name> — <title> (codex) one in another repo, on Codex
   - [ ] **R1** <title>                       reserve: never dispatched by itself
+A member key is any capital but T and a number (`B3` as well as `C3`); a key under a
+`### 核心` heading is core, under `### 备选` a reserve, else `R<n>` is a reserve
+and the rest core (EDN1). A member whose repo this fleet does not host
+(`fleet-repo.sh list` — a repo moved to another owner) is never in `next`: it is
+in `unhosted` and said in `warnings`; no fleet to ask ⇒ no check.
   ## C1 · <title>                            its detail, handed to its session
   ## 共同约定                                  handed to every member's session too
 
@@ -72,7 +77,8 @@ Per member, off its batons:
   unstarted  no baton yet
 Dependencies are the charter's `## 依赖顺序` table — `| C5 | C4 | |`, or the plan's
 `| 波次 | 成员 | 等谁 | 可并行 |` (every key of the 成员 cell waits on the 等谁 cell, or
-its `C2 ← C1；C7 ← C5` pairs; `C1–C6` a range) — else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only a BARE `C<n>` is
+its `C2 ← C1；C7 ← C5` pairs; `C1–C6` a range; a `B1 → B2 → B3 · B4` chain in
+the 成员 cell, each step on the one before) — else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only a BARE `C<n>` is
 this batch's member. A key behind a `T<n>` — `T542 C5`, `T542 C7、C8` (the prefix
 holds over the keys that follow it, until other words or a `+` / `;`) — is the
 member of ANOTHER batch: released once that parent's child task titled `C5 · …`
@@ -133,7 +139,13 @@ TREF = re.compile(r"^T[1-9][0-9]{0,9}$")
 TASK_REF = re.compile(r"^(?:T[1-9][0-9]{0,9}|#?[A-Za-z][0-9A-Za-z]{1,25}"
                       r"|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 MARK = re.compile(r"<!--\s*fleet:epic\b([^>]*)-->")
-LINE = re.compile(r"^\s*[-*] \[[ xX]\] \*\*([CR][1-9][0-9]*)\*\*\s+(.+?)\s*$")
+# a member key is a letter and a number (`C1`, `R2`, `B3` — EPIC SGS6's 改名 wave):
+# any capital but T, which is a task (T<n>); `R` is a reserve unless its section says
+KEY = r"[A-SU-Z][1-9][0-9]*"
+LINE = re.compile(r"^\s*[-*] \[[ xX]\] \*\*(" + KEY + r")\*\*\s+(.+?)\s*$")
+# the member list's sub-headings: `### 核心 …` / `### 备选 …` decide a key's layer
+LAYER_CORE = re.compile(r"^#{2,4}\s+.*(?:核心|\bcore\b)", re.I)
+LAYER_RESERVE = re.compile(r"^#{2,4}\s+.*(?:备选|储备|\breserve\b)", re.I)
 REPO = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s+(?:—|--|-)\s+(.+)$")
 AGENT = re.compile(r"^(.*?)\s*\((codex|claude)\)$")
 HEAD = re.compile(r"^#{2,4}\s+")
@@ -145,17 +157,17 @@ DEPS_HEAD = re.compile(r"^#{2,4}\s+依赖")
 # (`K5H0`, `#K5H0`: a letter, then Crockford base32, 4–26 places — EPIC T644 C5) or
 # T<n> (compat-1v) — or a ticket (#<n>) scopes the keys right after it; only these
 # between them keep the scope. A member key (`C12`) is never read as a code.
-CODE_TOK = r"#?(?![CR][0-9]+(?![0-9A-Z]))[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25}(?![0-9A-Za-z])"
+CODE_TOK = r"#?(?![A-Z][0-9]+(?![0-9A-Z]))[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25}(?![0-9A-Za-z])"
 DEP_TOK = re.compile(r"(?<![A-Za-z0-9])(?:(?P<scope>T[1-9][0-9]{0,9}(?![0-9A-Za-z])|#[1-9][0-9]*(?![0-9A-Za-z])|"
                      + CODE_TOK + r")"
-                     r"|(?P<a>[CR])(?P<lo>[1-9][0-9]*)(?:\s*[–—~-]\s*[CR]?(?P<hi>[1-9][0-9]*))?)(?![0-9])")
+                     r"|(?P<a>[A-SU-Z])(?P<lo>[1-9][0-9]*)(?:\s*[–—~-]\s*(?:(?P=a))?(?P<hi>[1-9][0-9]*))?)(?![0-9])")
 DEP_GLUE = re.compile(r"^[\s、,，/:：]*$")
 DEP_LINE = re.compile(r"\*\*依赖\*\*\s*依赖\s*(.*?)(?:·|$)")
 # an in-flight PR gate in a dependency cell (T843): `PR #5191`, `PR #5182 #5189、#5192`
 # — every `#<n>` right after `PR` (glue only between them) is a PR of the member's repo
 PR_GATE = re.compile(r"(?<![A-Za-z])PRs?\s*((?:#[1-9][0-9]*(?![0-9A-Za-z])(?:[\s、,，/和及与&+]*(?=#[1-9]))?)+)", re.I)
 FAILED = ("failed", "refused", "exited")
-KEYED = re.compile(r"^([CR][1-9][0-9]*)\s*·\s*(.*)$")
+KEYED = re.compile(r"^(" + KEY + r")\s*·\s*(.*)$")
 TITLE_MAX = 200
 
 
@@ -323,8 +335,11 @@ def parse_charter(text):
             k, _, v = word.partition("=")
             if v:
                 meta[k] = v
-    members, order = {}, []
+    members, order, layer = {}, [], ""
     for line in text.splitlines():
+        if HEAD.match(line):
+            layer = "core" if LAYER_CORE.match(line) else "reserve" if LAYER_RESERVE.match(line) else ""
+            continue
         m = LINE.match(line)
         if not m or m.group(1) in members:
             continue
@@ -337,7 +352,7 @@ def parse_charter(text):
         if r:
             repo, rest = r.group(1), r.group(2)
         members[key] = dict(key=key, title=rest.strip(), repo=repo.lower(), agent=agent or meta.get("agent", ""),
-                            layer="reserve" if key.startswith("R") else "core", detail=detail(text, key))
+                            layer=layer or ("reserve" if key.startswith("R") else "core"), detail=detail(text, key))
         order.append(key)
     return meta, [members[k] for k in order]
 
@@ -433,15 +448,52 @@ def pr_gates(members, prs, repo=""):
     return open_, warn
 
 
+def hosted_repos():
+    """The repos this fleet hosts, lower-cased (`fleet-repo.sh list`), or None when
+    that cannot be read (no fleet here — a sandbox, another machine): no check then.
+    `FLEET_EPIC_TICK_REPOS` (space-separated) stands in for it (a selftest's)."""
+    env = os.environ.get("FLEET_EPIC_TICK_REPOS")
+    if env is not None:
+        return {r.lower() for r in env.split()}
+    try:
+        p = subprocess.run(["bash", str(BIN / "fleet-repo.sh"), "list"], capture_output=True, text=True,
+                           timeout=30, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    got = {ln.split()[0].lower() for ln in p.stdout.splitlines()
+           if ln.startswith("  ") and "/" in (ln.split() or [""])[0]} if p.returncode == 0 else set()
+    return got or None
+
+
+def unhosted(members, hosted):
+    """({key: repo} of each member still to dispatch whose repo this fleet does not
+    host, [warnings]) — a dispatch there fails (a repo moved to another owner, a typo);
+    a hosted repo of the same name is named as the likely one."""
+    out, warn = {}, []
+    if hosted is None:
+        return out, warn
+    for m in members:
+        r = m.get("repo") or ""
+        if not r or r in hosted or m["layer"] == "reserve" or m["state"] in ("succeeded", "blocked", "running", "stalled"):
+            continue
+        out[m["key"]] = r
+        same = sorted(h for h in hosted if h.rpartition("/")[2] == r.rpartition("/")[2])
+        warn.append("%s 的仓库 %s 不在本 fleet 托管的仓库里——派单会失败，先不派%s" % (
+            m["key"], r, "（托管的同名仓库：%s，章程可能写的是迁移前的名字）" % "、".join(same) if same else ""))
+    return out, warn
+
+
 DEP_ARROW = re.compile(r"\s*(?:←|⟵|<-+)\s*")
 DEP_CLAUSE = re.compile(r"\s*(?:[；;]|<br\s*/?>)\s*")
 DEP_NONE = re.compile(r"^[\s—–\-无/·.。*]*$")
 # `C6 等 C2 C3 C4` / `C2 不等` (T851): a clause that starts with member keys and 等 / 不等
-DEP_WAITS = re.compile(r"^(?P<keys>(?:[CR][1-9][0-9]*(?:\s*[–\-~～]\s*[CR]?[1-9][0-9]*)?[\s、,，/]*)+?)\s*(?P<no>不)?等(?!于|同)\s*(?P<on>.*)$")
+DEP_WAITS = re.compile(r"^(?P<keys>(?:" + KEY + r"(?:\s*[–\-~～]\s*[A-SU-Z]?[1-9][0-9]*)?[\s、,，/]*)+?)\s*(?P<no>不)?等(?!于|同)\s*(?P<on>.*)$")
 DEP_ALL_CORE = re.compile(r"核心全部|全部核心")
+# a chain in the 成员 cell, `B1 → B2 → B3 · B4`: each step's keys wait on the step before
+DEP_CHAIN = re.compile(r"\s*(?:→|⟶|->+)\s*")
 
 
-def dep_table_row(cells, cols, known, put):
+def dep_table_row(cells, cols, known, put, core=None):
     """One row of the `## 依赖顺序` table into `put(key, cell)`: the member column's
     keys (`C2 C3 C4`, `C5 · C6（并行）`, a range) each wait on the wait column — or,
     when that cell carries per-key clauses — `X ← Y` pairs (`C2 ← C1；C7 ← C5`) or
@@ -450,11 +502,16 @@ def dep_table_row(cells, cols, known, put):
     nothing. A whole-cell wait never makes a row member wait on another of the same
     row (one row is one wave: `R1 R2 R3` beside a remark naming R2), and 「核心全部」
     is every core member (the plan template's reserve row). Only the wait column is
-    read — never 可并行 or a remark column."""
+    read — never 可并行 or a remark column. A `→` chain in the member column (`B1 → B2
+    → B3 · B4`) makes each step's keys wait on the step before, beside the wait cell."""
     mc, wc = cols
     if max(mc, wc) >= len(cells):
         return False
     keys = [k for sc, k in dep_refs(cells[mc]) if not sc and k in known]
+    steps = [[k for sc, k in dep_refs(x) if not sc and k in known] for x in DEP_CHAIN.split(cells[mc])]
+    for before, step in zip(steps, steps[1:]):
+        for k in step:
+            put(k, " ".join(before))
     wait = cells[wc]
     clauses = DEP_CLAUSE.split(wait)
     row = set(keys)
@@ -475,7 +532,8 @@ def dep_table_row(cells, cols, known, put):
         return True
     wait = strip_keys(wait, row)
     if DEP_ALL_CORE.search(wait):
-        wait = " ".join(sorted((x for x in known if not x.startswith("R")), key=lambda x: int(x[1:]))) + " " + wait
+        every = core if core is not None else sorted((x for x in known if not x.startswith("R")), key=lambda x: int(x[1:]))
+        wait = " ".join(every) + " " + wait
     for k in keys:
         put(k, wait)
     return True
@@ -496,6 +554,7 @@ def parse_deps(text, members, self_ref=""):
     (a table that gave nothing, a section line naming no key — `M1`): the driver
     holds those members by hand (T692)."""
     known = {m["key"] for m in members}
+    core = [m["key"] for m in members if m["layer"] != "reserve"]
     deps, on, cols, rows, read = {}, False, None, 0, 0
 
     def put(k, cell):
@@ -521,7 +580,7 @@ def parse_deps(text, members, self_ref=""):
                 continue
             cols = (0, 1)   # no header: the old `| C5 | C4 |`
         rows += 1
-        read += dep_table_row(cells, cols, known, put)
+        read += dep_table_row(cells, cols, known, put, core)
     warn = []
     if rows and not read:
         warn.append("依赖顺序表有 %d 行，一个成员键都没读出来——依赖请驱动手动压住" % rows)
@@ -531,10 +590,12 @@ def parse_deps(text, members, self_ref=""):
             d = DEP_LINE.search(m.get("detail") or "")
             if d:
                 deps[m["key"]] = d.group(1)
-                if not dep_refs(d.group(1)) and not pr_refs(d.group(1)) and not DEP_NONE.match(d.group(1)):
+                refs = dep_refs(d.group(1))
+                if not any(sc or x in known for sc, x in refs) and not pr_refs(d.group(1)) \
+                        and not DEP_NONE.match(d.group(1)):
                     unread.append(m["key"])
     if unread:
-        warn.append("%s 的 **依赖** 行写了依赖却没有成员键（只认 C<n> / R<n>）——请驱动手动压住" % "、".join(unread))
+        warn.append("%s 的 **依赖** 行写了依赖却没有本批的成员键——请驱动手动压住" % "、".join(unread))
     out, ext, prs = {}, {}, {}
     for k, cell in deps.items():
         if pr_refs(cell):
@@ -873,7 +934,9 @@ def status(parent_ref, cap):
     stalled = [m for m in members if m["state"] == "stalled"]
     free = max(0, cap - running - len(stalled))
     pending = [m for m in counted if m["state"] == "retry"] + [m for m in counted if m["state"] == "unstarted"]
-    nxt = [dispatch_of(parent, m, text) for m in pending if m["repo"]][:free]
+    away, away_warn = unhosted(counted, hosted_repos())
+    dep_warn = dep_warn + away_warn
+    nxt = [dispatch_of(parent, m, text) for m in pending if m["repo"] and m["key"] not in away][:free]
     for n in nxt:   # said before the dispatch, so the driver never hands out a dead path
         dep_warn = dep_warn + ["%s 的本机文件没能随单带上：%s" % (n["key"], "、".join(n["uncarried"]))] \
             if n["uncarried"] else dep_warn
@@ -895,7 +958,7 @@ def status(parent_ref, cap):
                 title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,
                 members=[{k: v for k, v in m.items() if k != "detail"} for m in members],
-                next=nxt, no_repo=norepo, warnings=dep_warn,
+                next=nxt, no_repo=norepo, unhosted=away, warnings=dep_warn,
                 stalled=[dict(key=m["key"], task=m.get("task", ""), code=m.get("code", ""), short=m.get("short", ""),
                               **m["stall"]) for m in stalled],
                 last_tick=last, last_tick_src=("id" if fam.get("progress") else "record") if last else "",
