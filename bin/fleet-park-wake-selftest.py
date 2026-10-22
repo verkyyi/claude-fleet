@@ -24,8 +24,8 @@ spec.loader.exec_module(fixture)
 
 
 class Timers(fixture.Park):
-    def setup_timer(self, cron=False):
-        self.fake()
+    def setup_timer(self, cron=False, agent='claude'):
+        self.fake(agent)
         self.env['FLEET_WAKE_NATIVE_HOME'] = str(self.root)
         self.prompt = 'Check the batch; preserve "quotes" and\nthis second line.'
         self.env['FLEET_CC_PROJECTS_DIR'] = str(self.root / 'projects')
@@ -189,7 +189,13 @@ class Timers(fixture.Park):
                 self.assertFalse(wake.exit_confirmation(self.fid, altered))
 
     def test_existing_loop_ledger_keeps_one_dispatcher_and_owner_commands(self):
-        self.setup_timer()
+        self.check_existing_loop_ledger('claude')
+
+    def test_codex_loop_wakes_same_thread_and_keeps_owner_commands(self):
+        self.check_existing_loop_ledger('codex')
+
+    def check_existing_loop_ledger(self, agent):
+        self.setup_timer(agent=agent)
         self.set('@loop', '')
         manifest = self.root / 'transfer/manifest.json'
         ledger = manifest.parent / 'loop/state.json'
@@ -197,7 +203,7 @@ class Timers(fixture.Park):
         manifest.write_text('{}')
         self.set('@handoff_manifest', str(manifest))
         ledger.write_text(json.dumps(dict(id='loop-1', status='active', thread_id=self.sid,
-                          agent='claude', manifest=str(manifest), schedule=dict(prompt=self.prompt,
+                          agent=agent, manifest=str(manifest), schedule=dict(prompt=self.prompt,
                           interval_seconds=60, next_run_at=self.due))))
         with patch.dict(os.environ, self.env):
             self.assertTrue(fixture.gate.park(self.fid).get('ok'))
@@ -205,9 +211,13 @@ class Timers(fixture.Park):
             # The old dispatcher sees its ownership moved and does no native I/O.
             wake.loop_module().dispatch(ledger, now=self.due)
         self.assertEqual(json.loads(ledger.read_text())['park_fid'], self.fid)
+        self.tick(self.due - 1)
+        self.assertTrue(self.opt('@parked'))
         self.tick(self.due)
         self.wait(lambda: self.opt('@park_relay'))
         self.assertEqual((self.root / 'launch-args').read_text().count(self.prompt), 1)
+        self.assertEqual(self.opt('@codex_session_id' if agent == 'codex' else '@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
         record = json.loads(ledger.read_text())
         self.assertEqual(record['deliveries'], 1)
         self.assertEqual(record['schedule']['next_run_at'], self.due + 60)

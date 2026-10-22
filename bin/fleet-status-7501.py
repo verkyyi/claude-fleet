@@ -462,10 +462,12 @@ class ParkRelay:
                 request = json.loads(client.recv(2048))
                 op = request.get("op")
                 if op == "status":
-                    reply = dict(ok=not self.exiting, generation=self.generation, relay_pid=os.getpid(), agent_pid=self.agent_pid)
+                    reply = dict(ok=not self.exiting, generation=self.generation, relay_pid=os.getpid(),
+                                 agent_pid=self.agent_pid, park_exit=["typed", "paste"])
                 elif (op == "exit" and not self.exiting and not pending_input and not buffer
-                      and not busy and request.get("generation") == self.generation):
-                    buffer.extend(b"/exit\r")
+                      and not busy and request.get("generation") == self.generation
+                      and request.get("park_exit", "typed") in ("typed", "paste")):
+                    buffer.extend(b"\x1b[200~/exit\x1b[201~\r" if request.get("park_exit") == "paste" else b"/exit\r")
                     self.exiting = True
                     reply = dict(ok=True)
                 elif (op == 'confirm-exit' and self.exiting and not self.exit_confirmed
