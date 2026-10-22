@@ -210,13 +210,15 @@ while True:
                                                    window_repo=False, repo='', dry_run=False)
                             driver = reap.Cleaner(args)
                             driver.now = int(time.time())
-                            driver.mem_tight = via == 'driver-memory'
+                            driver._mem = (via == 'driver-memory', '')
                             driver._park_watched = set()
                             snap = driver.snapshot(self.win)
 
                             def run_gate(*argv):
                                 self.assertIn('park', argv)
-                                return json.dumps(gate.park(self.fid, why=argv[-1]))
+                                result = gate.park(self.fid, why=argv[-1])
+                                self.assertEqual(result.get('why'), 'asking', result)
+                                return json.dumps(result)
 
                             with patch.object(driver, 'busy', return_value=False), \
                                     patch.object(reap, 'run', side_effect=run_gate):
@@ -224,6 +226,7 @@ while True:
                         else:
                             result = gate.park(self.fid, why=via)
                             self.assertFalse(result['ok'], result)
+                            self.assertEqual(result.get('why'), 'asking', result)
                     self.assertEqual(exits, [], '/exit must never be injected into a choice')
                     self.assertFalse(self.opt('@parked'))
                     self.assertTrue(self.opt('@park_relay'))

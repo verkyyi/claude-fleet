@@ -739,6 +739,21 @@ def park_proof(w):
     return dict(ok=False, why="probe_timeout")
 
 
+def park_dialog(w):
+    """Choice/permission dialogs never receive /exit, even with a stale done
+    stamp or a loop. Claude treats it as a choice submission (C4), not an exit.
+    Reuse the answerer's pending-question reader so the original words stay put.
+    """
+    if (w["state"] == "needs" or w["word"] == "blocked"
+            or w["needs"] in ("ask", "question", "perm", "permission")):
+        return True
+    transcript = claude_transcript(w["sid"]) if w["agent"] == "claude" else None
+    if transcript is None:
+        return False  # the native idle proof below is still mandatory
+    from fleet_needs_detail import pending_dialog
+    return pending_dialog(str(transcript)) is not None
+
+
 def park_saved_mb(w):
     """C8's pane process-tree RSS in MiB; an unreadable sample stays unknown."""
     from fleet_park_metrics import process_trees
@@ -768,6 +783,8 @@ def park_locked(fid, why, force):
     adapter = fleet_agent_adapter.ADAPTERS.get(w["agent"], {})
     if adapter.get("park_resume") != "1" or not w["sid"]:
         return dict(ok=False, why="not_resumable")
+    if park_dialog(w):
+        return dict(ok=False, why="asking")
     if w["state"] not in ("done", "looping"):
         return dict(ok=False, why=busy_of(w) or "not_idle")
     if busy_of(w) and not w["loop"]:
@@ -798,6 +815,8 @@ def park_locked(fid, why, force):
     if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
             or current["state"] in ("working", "needs", "exited") or watched(current)):
         return dict(ok=False, why="changed")
+    if park_dialog(current):
+        return dict(ok=False, why="asking")
     # Save physical rows with their SGR colours BEFORE /exit tears down the UI.
     # Refuse if capture failed: a blank holding page cannot preserve the screen.
     screen = tmux(w["sock"], "capture-pane", "-p", "-e", "-t", w["pane"])
