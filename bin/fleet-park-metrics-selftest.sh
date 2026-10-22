@@ -17,7 +17,7 @@ case "$*" in
   *list-clients*) exit 0 ;;
   *list-windows*)
     case "$*" in
-      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\037\037\n@2\037200\037worker\037two\037\037\0371\037\037\037\n@3\037300\037worker\037three\037停放中\0372048\0371\037\037\037\n';;
+      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "${PARK_TEST_STATE-停放中}";;
       *ctx_left*) printf '@1\t=\t=\t=\t=\t=\t=\t=\n@2\t=\t=\t=\t=\t=\t=\t=\n@3\t=\t=\t=\t=\t=\t=\t=\n';;
       *pane_current_path*) printf '@1\t/tmp/scratch-1\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@2\t/tmp/scratch-2\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@3\t/tmp/scratch-3\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n';;
       *cc_agent*loop*) exit 0 ;;
@@ -40,6 +40,7 @@ export PATH="$WORK/fake:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CON
 export PYTHONPATH="$BIN" PARK_TEST_WORK="$WORK"
 # Test the actual adapter and one parser with 37 columns, rather than making the
 # controller's JSON response ourselves. Existing 34-column rows remain accepted.
+printf '{"ts":"2026-10-21T12:00:00Z","fid":"fid3","act":"park","rss_mb":2048}\n' > "$WORK/conf/logs/park.ndjson"
 bash "$BIN/fleet-control-read.sh" workers census > "$WORK/workers"
 python3 - <<'PY' || st_fail 'production census assertion'
 import json, os, time
@@ -47,6 +48,14 @@ from pathlib import Path
 from fleet_hub_common import inventory_row
 from fleet_control import Control
 from fleet_park_metrics import daily, summarize
+# One strict idle definition: viewers, background work, active CPU and exited
+# sessions are excluded, even when the previous turn is over.
+def worker(state='done', quiet=True, why='old-shell', busy=None):
+    return {'state':state, 'busy':busy, 'park':{'state':'awake','quiet':quiet,'why':why,'rss_mb':100,'saved_mb':None}}
+strict = summarize([worker(), worker('looping'), worker('needs'), worker(why='watched'),
+                    worker(busy='bg'), worker(quiet=False), worker('exited')])
+assert (strict['sessions_idle'], strict['sessions_working'], strict['idle_rss_mb']) == (3,4,300), strict
+from fleet_park_metrics import latest_park_rss
 w = Path(os.environ['PARK_TEST_WORK'])
 lines = (w/'workers').read_text().splitlines()
 assert len(lines) == 3, lines
@@ -59,8 +68,8 @@ ctl = Control()
 fleet = {'fleet_id':'test', 'name':'census', 'agent':'claude', 'repo':''}
 snap = ctl.workers(fleet)
 p = snap['park_metrics']
-assert (p['sessions_working'],p['sessions_idle'],p['sessions_parked']) == (1,1,1), p
-assert p['parked_saved_mb'] == 2048 and p['idle_rss_mb'] == 201, p
+assert (p['sessions_working'],p['sessions_idle'],p['sessions_parked']) == (None,None,1), p
+assert p['parked_saved_mb'] == 2048 and p['idle_rss_mb'] is None, p
 unknown = summarize([{'state':'parked', 'park':{'state':'parked','saved_mb':None}}])
 assert unknown['sessions_parked'] == 1 and unknown['parked_saved_mb'] is None, unknown
 assert p['idle_eligible'] is None, p # not yet 60 seconds: never claim eligibility
@@ -75,18 +84,31 @@ cache.write_text(json.dumps({
  '@2': {'at':time.time()-61,'pid':'200','cpu':1},
  '@3': {'at':time.time()-61,'pid':'300','cpu':0}}))
 q=ctl.workers(fleet)['park_metrics']
-assert q['idle_eligible'] == 1 and q['idle_eligible_rss_mb'] == 201, q
+assert q['sessions_idle'] == q['idle_eligible'] == 1 and q['idle_rss_mb'] == q['idle_eligible_rss_mb'] == 201, q
+assert q['sessions_working'] == 1 and q['sessions_parked'] == 1, q
 assert ctl.workers(fleet)['park_metrics'] == q
+# Before C1 stamps @park_state, even a saved RSS value never invents parking.
+os.environ['PARK_TEST_STATE'] = ''
+assert ctl.workers(fleet)['park_metrics']['sessions_parked'] == 0
+os.environ.pop('PARK_TEST_STATE')
 book = w/'conf/logs/park.ndjson'
 book.write_text('\n'.join(json.dumps(r) for r in [
- {'ts':'2026-10-21T12:00:00Z','act':'park'},
+ {'ts':'2026-10-21T12:00:00Z','fid':'fid3','act':'park','rss_mb':2048},
  {'ts':'2026-10-21T12:00:02Z','act':'wake','secs':2,'result':'ok','next':10,'started':12},
  {'ts':'2026-10-21T13:00:00Z','act':'wake','secs':5,'result':'ok','next':10,'started':45},
  {'ts':'2026-10-21T14:00:00Z','act':'fail'},
  {'ts':'2026-10-21T14:00:01Z','act':'deferred'},
  {'ts':'2026-10-20T14:00:01Z','act':'wake','secs':100,'result':'ok'}])+'\ninvalid\n')
+assert latest_park_rss(book) == {'fid3':2048}, latest_park_rss(book)
 d=daily(book,'2026-10-21')
 assert (d['park'],d['wake'],d['fail'],d['deferred'],d['p50'],d['p95'],d['on_time_rate']) == (1,2,1,1,2,5,.5),d
+# Appended park actions replace older RSS; wake/fail rows never replace it.
+last = w/'last.ndjson'
+last.write_text('\n'.join(json.dumps(r) for r in [
+ {'fid':'f','act':'park','rss_mb':512}, {'fid':'f','act':'wake','rss_mb':0},
+ {'fid':'f','act':'park','rss_mb':256}, {'fid':'f','act':'fail'},
+ {'fid':'g','act':'park','rss_mb':2048}, {'fid':'g','act':'park'}]))
+assert latest_park_rss(last) == {'f':256,'g':None}, latest_park_rss(last)
 PY
 # Drive doctor's real --park entry using the real Control inventory and adapter.
 row=$(sh "$BIN/fleet-doctor.sh" --park)
