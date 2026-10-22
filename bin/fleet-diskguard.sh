@@ -827,10 +827,10 @@ restore_watch() {
   return 0
 }
 
-# macos_watch — the BSD half on master (issues #2286, #3120, #3143, #3869): a red macOS
-# follow holds every Mac on the previous version, so bin/fleet-macos-watch.sh files
-# it ONCE as a breakage (one issue per fingerprint, fleet-wide) and raises one alert
-# — it spawns nobody. Only a repo whose base checkout carries BOTH the watched
+# macos_watch — the BSD half on master (issues #2286, #3120, #3143, T889): a red macOS
+# nightly is a bug a Mac will meet (Macs still update — nothing holds them back, #4671),
+# so bin/fleet-macos-watch.sh says it once per red run, pushes the person once a
+# streak is red two nights, and spawns nobody; the log gets a line only on a change. Only a repo whose base checkout carries BOTH the watched
 # workflow (selftests-macos.yml, the nightly full run since #4663) and bin/fleet-stable.sh is read (business repos never are); throttled inside the
 # watcher (FLEET_MACOS_WATCH_SECS); FLEET_MACOS_WATCH=0 turns it off. Each fleet
 # in a subshell, so one conf never colours the next; detached, a read is network.

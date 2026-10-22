@@ -34,7 +34,13 @@ printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/tmux"; chmod +x "$WORK/bin/tmux"   # nobody watching: EVERY
 export PATH="$WORK/bin:$PATH"
 printf '{"machines": [], "sessions": [], "nodes": []}\n' > "$WORK/sessions.json"
-export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_HUB_SESSIONS_EVERY=1
+# the fetch counts the loop's rounds (into $ROUNDS, a lane's own): D and E hold
+# reads == rounds, so a slow runner's fewer rounds never read as a kept inventory
+printf '#!/bin/sh
+[ -z "${ROUNDS:-}" ] || echo x >> "$ROUNDS"
+cat %s/sessions.json
+' "$WORK" > "$WORK/fetch.sh"; chmod +x "$WORK/fetch.sh"
+export FLEET_HUB_SESSIONS_CMD="$WORK/fetch.sh" FLEET_HUB_SESSIONS_EVERY=1
 
 # the shadow bin/: every file the real one has, the inventory read counting itself
 for f in "$BIN"/*; do ln -s "$f" "$WORK/sbin/${f##*/}"; done
@@ -50,6 +56,7 @@ HUBS="$WORK/sbin/fleet-hub-sessions.sh"
 
 CHECKS=0
 reads() { [ -f "$READS" ] && grep -c . "$READS" || echo 0; }
+rounds() { [ -f "$ROUNDS" ] && grep -c . "$ROUNDS" || echo 0; }
 age() { python3 -c 'import os, sys, time; t = time.time() - int(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$1" "$2"; }
 NUDGE="$WORK/conf/global/hub-nudge"
 
@@ -59,7 +66,7 @@ NUDGE="$WORK/conf/global/hub-nudge"
 lane() {
   ( L="$WORK/lane-$1"; mkdir -p "$L/.claude-dash/global" "$L/conf/global"
     cp -R "$WORK/conf/fleets" "$L/conf/fleets"
-    export TMPDIR="$L" FLEET_CONF_DIR="$L/conf" READS="$L/reads"
+    export TMPDIR="$L" FLEET_CONF_DIR="$L/conf" READS="$L/reads" ROUNDS="$L/rounds"
     G="$L/.claude-dash/global"; NUDGE="$L/conf/global/hub-nudge"; CHECKS=0
     "leg_$1"; echo "$CHECKS" > "$L/checks" ) > "$WORK/lane-$1.log" 2>&1 &
   eval "lane_pid_$1=\$!"
@@ -101,10 +108,10 @@ CHECKS=$((CHECKS+1)); [ "$n" = 2 ] || st_fail "C: two bare --refresh read the in
 
 leg_D() {
 # --- D: no nudge file — every round reads -----------------------------------------
-rm -f "$NUDGE" "$READS" "$G/hubsess.inv.$S"
+rm -f "$NUDGE" "$READS" "$ROUNDS" "$G/hubsess.inv.$S"
 FLEET_HUB_SESSIONS_LOOP_SECS=4 bash "$HUBS" --loop >/dev/null 2>&1
-n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" -ge 3 ] || st_fail "D: no hub-nudge file — the inventory was read $n times in ~4 rounds, want every round"
+n=$(reads) r=$(rounds)
+CHECKS=$((CHECKS+1)); [ "$r" -ge 2 ] && [ "$n" = "$r" ] || st_fail "D: no hub-nudge file — the inventory was read $n times in $r rounds, want every round (≥ 2)"
 CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.inv.$S" ] || st_fail "D: no hub-nudge file, yet an inventory was kept"
 
 }
@@ -112,10 +119,10 @@ CHECKS=$((CHECKS+1)); [ ! -e "$G/hubsess.inv.$S" ] || st_fail "D: no hub-nudge f
 leg_E() {
 # --- E: TTL 0 — every round reads --------------------------------------------------
 : > "$NUDGE"; age "$NUDGE" 60
-rm -f "$READS"
+rm -f "$READS" "$ROUNDS"
 FLEET_HUB_SESSIONS_INV_TTL=0 FLEET_HUB_SESSIONS_LOOP_SECS=4 bash "$HUBS" --loop >/dev/null 2>&1
-n=$(reads)
-CHECKS=$((CHECKS+1)); [ "$n" -ge 3 ] || st_fail "E: FLEET_HUB_SESSIONS_INV_TTL=0 — the inventory was read $n times in ~4 rounds, want every round"
+n=$(reads) r=$(rounds)
+CHECKS=$((CHECKS+1)); [ "$r" -ge 2 ] && [ "$n" = "$r" ] || st_fail "E: FLEET_HUB_SESSIONS_INV_TTL=0 — the inventory was read $n times in $r rounds, want every round (≥ 2)"
 
 }
 

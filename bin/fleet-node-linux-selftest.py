@@ -1830,11 +1830,14 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         's = """multi"""\n', "s = '''multi'''\n", 'd = 2026-01-01T00:00:00Z\n', 'd = 2026-01-01\n',
         'h = 0xff\n', 'f = inf\n', 'f = nan\n', 'o = 0o7\n', 't = {a.b = 1}\n',
         '[fruit]\napple.color = "red"\n[fruit.apple.texture]\nsmooth = true\n', '\ufeffa = 1\n',
+        # TOML 1.1 (tomllib from Python 3.15) takes a trailing comma / newline in an
+        # inline table; 1.0 (3.11–3.14) refuses it — the subset refuses it on both
+        'a = {b = 1,}\n', 'a = {b = 1\n}\n',
     )
     TOML_INVALID = (
         'a = 1\na = 2\n', '[t]\n[t]\n', 'a = {b = 1}\n[a]\n', 'a = [1]\n[[a]]\n', 'a.b = 1\n[a]\n',
         '[[a]]\n[a]\n', 'unclosed=[\n', 'a = "x\n', 'a = 01\n', 'a = 1 2\n', 'a = truex\n',
-        'a = "\\q"\n', 'a = "\\uD800"\n', 'a = 1,\n', '[a\n', 'a = {b = 1,}\n', 'a = {b = 1\n}\n',
+        'a = "\\q"\n', 'a = "\\uD800"\n', 'a = 1,\n', '[a\n',
         'a\rb = 1\n', 'a = "ctl\x01"\n', '= 1\n', 'a = \n', 't = {a = 1, a = 2}\n', 'x = 1\nx.y = 2\n',
     )
 

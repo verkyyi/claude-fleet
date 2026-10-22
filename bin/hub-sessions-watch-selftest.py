@@ -182,7 +182,12 @@ def rest(root, env, tm, fetches, data, source, log, client, loop, procs):
     wait = subprocess.Popen([sys.executable, str(root / 'bin/fleet-render-watch.py'),
                              '--events-only', '1', sock], env=env, stdout=subprocess.PIPE, text=True)
     procs.append(wait)
-    time.sleep(.2)
+    # Signal only once the waiter's own `tmux wait-for` is up (its child) — or it
+    # already took an earlier latched signal and is done: a fixed 0.2 s lost the
+    # race on a busy macOS runner (T889).
+    until(lambda: wait.poll() is not None or subprocess.run(
+        ['pgrep', '-P', str(wait.pid)], stdout=subprocess.DEVNULL).returncode == 0, 5)
+    time.sleep(.5)
     data['sessions'][0]['worker']['state'] = 'needs'
     source.write_text(json.dumps(data))
     (root / 'conf/global/hub-nudge').touch()
@@ -190,7 +195,7 @@ def rest(root, env, tm, fetches, data, source, log, client, loop, procs):
        ';', 'wait-for', '-S', 'fleet-state-changed')
     cache = root / '.claude-dash/global/remote_test'
     latency = until(lambda: cache.exists() and '\x1fneeds\x1f' in cache.read_text())
-    wait.communicate(timeout=2)
+    wait.communicate(timeout=5)
     until(lambda: spin() == '✓')
     print('PASS spinner + list + waiter broadcast/cache %.3fs' % latency, flush=True)
     view = root / '.claude-dash/global/hubsess.view'
@@ -202,11 +207,12 @@ def rest(root, env, tm, fetches, data, source, log, client, loop, procs):
                    env=dict(env, TMUX=sock + ',0,0'), check=True)
     until(lambda: len(fetches()) > n)
     n = len(fetches())
-    until(lambda: len(fetches()) > n, 2.5)
+    # a 2 s pace against the 60 s idle one: 5 s tells them apart on a loaded runner
+    until(lambda: len(fetches()) > n, 5)
     memo = root / '.claude-dash/global/hubsess.map.json'
     before = memo.stat().st_mtime_ns
     n = len(fetches())
-    until(lambda: len(fetches()) > n, 2.5)
+    until(lambda: len(fetches()) > n, 5)
     time.sleep(.2)
     assert memo.stat().st_mtime_ns == before, 'identical inputs recomputed'
     print('PASS real request keeps 2s pace; identical inputs reuse mapping', flush=True)

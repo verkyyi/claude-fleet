@@ -61,7 +61,8 @@ for box in old new; do
 done
 mkdir -p "$WORK/new/mod/fleet/.claude-plugin"
 printf '{"name":"fleet"}\n' > "$WORK/new/mod/fleet/.claude-plugin/plugin.json"
-NEWMOD="$(cd "$WORK/new/mod/fleet" && pwd)"
+# fleet_mod_dir hands Claude the PHYSICAL dir (#4669): on macOS $TMPDIR is /var → /private/var
+NEWMOD="$(cd "$WORK/new/mod/fleet" && pwd -P)"
 
 mkdir -p "$WORK/fakebin"
 # fake `claude`: one bracketed line per argv word, so a byte compare sees every word.

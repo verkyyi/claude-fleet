@@ -71,6 +71,11 @@ if [ "$list" = 1 ]; then
   exit 0
 fi
 
+# nothing to lint needs no shellcheck (a runner without one: the macOS nightly)
+if [ -z "$files" ] && [ "$scope" = changed ]; then
+  echo "ci-shellcheck: this change touches no shell script under bin hooks shell extras — nothing to lint"
+  exit 0
+fi
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo "ci-shellcheck: shellcheck not found on PATH — install it (brew install shellcheck)" >&2
   exit 2
@@ -87,10 +92,6 @@ fi
 
 # --- the exact CI invocation ---
 if [ -z "$files" ]; then
-  if [ "$scope" = changed ]; then
-    echo "ci-shellcheck: this change touches no shell script under bin hooks shell extras — nothing to lint"
-    exit 0
-  fi
   echo "no shell scripts found — nothing to lint" >&2
   exit 1
 fi

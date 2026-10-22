@@ -3034,11 +3034,30 @@ def shared_holder(run):
     return pid
 
 
-def handoff_listen(st, lockf):
+# AF_UNIX sun_path: 104 bytes on macOS (108 on Linux), the NUL included
+SUN_PATH_MAX = 104 if sys.platform == "darwin" else 108
+
+
+def handoff_path(st, ctld):
+    """<state>/handoff.sock, else — a state dir too deep for AF_UNIX, e.g. under
+    macOS's /private/var/folders — <ctl dir>/handoff.sock, the dir ctl.sock is
+    sized for; None when neither fits. Both halves ask it with the same dirs."""
+    for d in (st, ctld):
+        path = os.path.join(d, "handoff.sock")
+        if len(os.fsencode(path)) < SUN_PATH_MAX:
+            return path
+    return None
+
+
+def handoff_listen(st, lockf, ctld):
     """The old half of a restart that drops nothing (T595): <state>/handoff.sock
     (0600 in the 0700 state dir; the peer must be this uid or root) hands every
-    listening socket in HANDOFF to the next proxy, then this one drains."""
-    path = os.path.join(st, "handoff.sock")
+    listening socket in HANDOFF to the next proxy, then this one drains. A path
+    that cannot be bound only turns the handoff off — the proxy serves on."""
+    path = handoff_path(st, ctld)
+    if not path:
+        sys.stderr.write("fleet-cred-proxy: no handoff socket (the state dir %s is too deep for AF_UNIX)\n" % st)
+        return
     try:
         os.unlink(path)
     except OSError:
@@ -3047,6 +3066,10 @@ def handoff_listen(st, lockf):
     old = os.umask(0o177)
     try:
         hs.bind(path)
+    except OSError as e:
+        hs.close()
+        sys.stderr.write("fleet-cred-proxy: no handoff socket (%s: %s)\n" % (path, e))
+        return
     finally:
         os.umask(old)
     hs.listen(4)
@@ -3102,11 +3125,13 @@ def handoff_serve(hs, lockf):
         return
 
 
-def handoff_from(lockf, st):
+def handoff_from(lockf, st, ctld):
     """The new half (T595): ask the proxy holding the lock for its listening
     sockets; once it says it let go, take the lock. -> {key: fd}, the lock held;
     None when it cannot hand over (an older proxy, gone) — nothing changed then."""
-    path = os.path.join(st, "handoff.sock")
+    path = handoff_path(st, ctld)
+    if not path:
+        return None
     c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     c.settimeout(15)
     try:
@@ -3253,7 +3278,8 @@ def serve(a):
         # replaces the holder without a moment of nobody listening — its sockets
         # handed over, else (an older proxy) stopped as a stale one is
         handing = env("FLEET_CRED_HANDOFF") == "1"
-        took = handoff_from(lockf, st) if handing else None
+        ctl0 = (shared.get("run") or st) if shared else env("FLEET_CRED_CTL_DIR", st)
+        took = handoff_from(lockf, st, ctl0) if handing else None
         if took is not None:
             inherited = took
         else:
@@ -3446,7 +3472,7 @@ def serve(a):
         files.append(lf)
     for f in inherited.values():    # a handed-over port nobody here serves any more
         os.close(f)
-    handoff_listen(st, lockf)
+    handoff_listen(st, lockf, ctld)
     if gated:   # separated / shared: the login (another uid) reads them
         for p in files:
             os.chmod(p, 0o644)

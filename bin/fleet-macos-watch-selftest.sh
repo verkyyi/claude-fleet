@@ -8,11 +8,15 @@
 # (EPIC #3111 C9) nothing is ever spawned: a stand-in for dash-issue-session.sh
 # sits first on PATH and must stay unrun.
 #
-#   A. green          newest completed run green → `green`, nothing alerted, memo gone
+#   A. green          newest completed run green → nothing said when no red streak
+#                     was seen; after one, ONE message «✓ macOS 夜检恢复全绿（红了 N 晚）»
+#                     (zh + en) — never pushed — and the memos are gone
 #   B. red            ONE `breakage` alert on --session's fleet names the failed
 #                     test, the failed job, the run and the commit the red streak
-#                     started at; nobody is spawned; the run id is remembered
-#   C. same run       not alerted again
+#                     started at, and says Macs still update (never «Mac 停在上一版»);
+#                     nobody is spawned; the run id is remembered
+#   C. same run       not alerted again, and the tick prints nothing (the log
+#                     grows by changes only, T889)
 #   D. throttle       inside FLEET_MACOS_WATCH_SECS nothing is read
 #   F. alert fails    NOT remembered (retried next tick), exit 1
 #   G. noise          a cancelled run and a pull_request run are no verdict; a
@@ -23,10 +27,11 @@
 #   J. diskguard      fleet-diskguard.sh --watch's macos_watch drives it for a repo
 #                     carrying both gate files, alerts, spawns nobody; a repo
 #                     without them is never read; the dispatch shell is inert
-#   K. held back      (issue #3869) the red streak began > FLEET_MACOS_STALE_SECS
-#                     ago ⇒ ONE more alert «every Mac … previous version»; the next
-#                     tick in the same streak says nothing; green forgets it. The
-#                     default workflow is selftests-macos.yml (#4663: mac-follow holds nothing)
+#   K. two nights     (T889) one red night pushes nothing; the second pushes ONE
+#                     message over FLEET_NOTIFY_CMD — the design copy, zh + en, the
+#                     tests counted across every failed shard — and the third night
+#                     of the same streak pushes nothing; no notifier ⇒ said once in
+#                     the log; green ⇒ the message, no push
 #   M. one at a time  (issue #4841) a previous watch still running (its lock's pid
 #                     alive) ⇒ this one leaves; a dead holder's lock is taken over
 set -uo pipefail
@@ -49,7 +54,7 @@ cat > "$WORK/shim/gh" <<SH
 case "\$*" in
   *actions/workflows/*) cat "$WORK/runs" ;;
   *actions/runs/*/jobs*) id=\${2#*actions/runs/}; id=\${id%%/*}; cat "$WORK/jobs.\$id" 2>/dev/null ;;
-  *actions/jobs/*/logs*) cat "$WORK/log" 2>/dev/null ;;   # REST: run view --log-failed printed nothing (#4232)
+  *actions/jobs/*/logs*) j=\${2#*actions/jobs/}; j=\${j%%/*}; cat "$WORK/log.\$j" 2>/dev/null || cat "$WORK/log" 2>/dev/null ;;   # REST (#4232)
 esac
 SH
 cat > "$WORK/alert" <<SH
@@ -57,6 +62,12 @@ cat > "$WORK/alert" <<SH
 printf '%s\n' "\$*" >> "$WORK/alerted"
 exit \$(cat "$WORK/alert_rc" 2>/dev/null || echo 0)
 SH
+cat > "$WORK/push" <<SH
+#!/bin/bash
+printf '%s\n<<END>>\n' "\$1" >> "$WORK/pushed"
+exit \$(cat "$WORK/push_rc" 2>/dev/null || echo 0)
+SH
+chmod +x "$WORK/push"
 cat > "$WORK/shim/dash-issue-session.sh" <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/spawned"
@@ -76,36 +87,55 @@ jobs() {
   esac > "$WORK/jobs.$1"
 }
 red_runs() {
-  { row 30 "$S3" failure push; row 29 "$S2" failure push; row 28 "$S1" success schedule; } > "$WORK/runs"
+  { row 30 "$S3" failure schedule; row 29 "$S2" failure push; row 28 "$S1" success schedule; } > "$WORK/runs"
   jobs 30 red; jobs 29 red; jobs 28 green
 }
 printf '2026-10-07T01:02:03Z FAIL  dash-marker-selftest.sh   12s\n2026-10-07T01:02:04Z selftest FAIL: a thing\n' > "$WORK/log"
 
 run() {
   OUT=$(env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-          FLEET_MACOS_ALERT_CMD="$WORK/alert" \
+          FLEET_MACOS_ALERT_CMD="$WORK/alert" FLEET_MACOS_NOTIFY_CMD="${PUSH-$WORK/push}" \
           bash "$W" --repo o/r "$@" 2>&1); RC=$?
 }
 memo() { cat "$WORK/conf/global/macos-watch/o-r.filed" 2>/dev/null || echo none; }
 alerted() { cat "$WORK/alerted" 2>/dev/null; }
 spawned() { [ -f "$WORK/spawned" ] && echo yes || echo no; }
-reset() { rm -f "$WORK/spawned" "$WORK/alerted" "$WORK/alert_rc" "$WORK/jobs."* "$WORK/conf/global/macos-watch/"*; }
+pushed() { cat "$WORK/pushed" 2>/dev/null; }
+reset() { rm -f "$WORK/spawned" "$WORK/alerted" "$WORK/alert_rc" "$WORK/pushed" "$WORK/push_rc" "$WORK/log."* "$WORK/jobs."* "$WORK/conf/global/macos-watch/"*; }
 
 # --- A. green ------------------------------------------------------------------
-reset; echo 9 > "$WORK/conf/stale"; mkdir -p "$WORK/conf/global/macos-watch"; echo 7 > "$WORK/conf/global/macos-watch/o-r.filed"
+reset; mkdir -p "$WORK/conf/global/macos-watch"; echo 7 > "$WORK/conf/global/macos-watch/o-r.filed"
 { row 31 "$S3" success push; row 30 "$S2" failure push; } > "$WORK/runs"; jobs 31 green; jobs 30 red
 run --now
-st_eq "A: green exits 0" 0 "$RC"; contains "A: says green" "$OUT" "green	31"; st_eq "A: nothing alerted" "" "$(alerted)"; st_eq "A: memo forgotten" none "$(memo)"
+st_eq "A: green exits 0" 0 "$RC"; st_eq "A: no streak seen ⇒ says nothing" "" "$OUT"
+st_eq "A: nothing alerted" "" "$(alerted)"; st_eq "A: memo forgotten" none "$(memo)"
+reset; mkdir -p "$WORK/conf/global/macos-watch"; printf '%s\t10\n' "$S2" > "$WORK/conf/global/macos-watch/o-r.streak"
+echo "$S2" > "$WORK/conf/global/macos-watch/o-r.pushed"
+{ row 31 "$S3" success schedule; row 30 "$S2" failure schedule; } > "$WORK/runs"; jobs 31 green; jobs 30 red
+run --now --session fleet
+contains "A: a streak ends with one line" "$OUT" "green	31	was red 10 nights"
+contains "A: the green-again message (zh)" "$(alerted)" "✓ macOS 夜检恢复全绿（红了 10 晚）"
+contains "A: the green-again message (en)" "$(alerted)" "✓ macOS nightly green again (was red 10 nights)"
+st_eq "A: green is never pushed" "" "$(pushed)"
+st_eq "A: the streak is forgotten" no "$([ -e "$WORK/conf/global/macos-watch/o-r.streak" ] && echo yes || echo no)"
+st_eq "A: the push mark is forgotten" no "$([ -e "$WORK/conf/global/macos-watch/o-r.pushed" ] && echo yes || echo no)"
+rm -f "$WORK/alerted"; run --now
+st_eq "A: the next green tick says nothing" "" "$OUT"; st_eq "A: ... and alerts nothing" "" "$(alerted)"
 
 # --- B. red --------------------------------------------------------------------
 reset; red_runs
 run --now --session fleet
-st_eq "B: red exits 0" 0 "$RC"; contains "B: says alerted" "$OUT" "alerted	30	macOS 检查红了、Mac 停在上一版：dash-marker-selftest.sh"
+st_eq "B: red exits 0" 0 "$RC"; contains "B: says alerted" "$OUT" "alerted	30	macOS 夜检红了：dash-marker-selftest.sh"
+contains "B: the copy says Macs still update" "$OUT" "Mac 照常更新"
+lacks "B: never «Mac 停在上一版» (#4671: Macs follow stable)" "$(cat "$W")" "停在上一版"
+lacks "B: never «every Mac runs it»" "$(cat "$W")" "every Mac runs it"
+contains "B: the alert says Macs still update" "$(alerted)" "Macs still update"
 A=$(alerted)
 contains "B: one breakage alert on the fleet" "$A" "event -L fleet breakage"
 contains "B: the alert names the test" "$A" "dash-marker-selftest.sh"
 lacks "B: a bare 'FAIL: a thing' line is not a test name" "$OUT" "a thing"
 contains "B: the title names the job" "$OUT" "（macOS / shard 2）"
+st_eq "B: one red night (a push run is no night) — nothing pushed" "" "$(pushed)"
 contains "B: the alert names the streak's first red commit" "$A" "since 2222222"
 contains "B: the alert links the run" "$A" "https://github.com/o/r/actions/runs/30"
 st_eq "B: nobody spawned" no "$(spawned)"
@@ -116,7 +146,7 @@ lacks "B: nothing filed — no issue filer is named (#4898)" "$(cat "$W")" "issu
 # --- C. the same red run is not alerted again -------------------------------------
 rm -f "$WORK/spawned" "$WORK/alerted"
 run --now --session fleet
-st_eq "C: exits 0" 0 "$RC"; contains "C: says already" "$OUT" "already, for this run"
+st_eq "C: exits 0" 0 "$RC"; st_eq "C: a quiet tick prints nothing (no «already» line)" "" "$OUT"
 st_eq "C: no second alert" "" "$(alerted)"
 
 # --- D. throttle ------------------------------------------------------------------
@@ -139,8 +169,9 @@ run --now
 contains "G: the red macOS run under Linux-red / replaced / PR runs decides" "$OUT" "alerted	38"; st_eq "G: remembered 38" 38 "$(memo)"
 contains "G: the streak starts at 38's commit" "$(alerted)" "since 2222222"
 reset; { row 52 "$S3" failure push; row 51 "$S2" success push; } > "$WORK/runs"; jobs 52 linux; jobs 51 green
+mkdir -p "$WORK/conf/global/macos-watch"; printf '%s\t1\n' "$S1" > "$WORK/conf/global/macos-watch/o-r.streak"
 run --now
-contains "G: a train red on Linux only leaves the BSD half green" "$OUT" "green	51"; st_eq "G: nothing alerted" "" "$(alerted)"
+contains "G: a train red on Linux only leaves the BSD half green" "$OUT" "green	51"; lacks "G: no red alert" "$(alerted)" "breakage"
 
 # --- H. --dry-run ------------------------------------------------------------------------
 reset; red_runs
@@ -177,24 +208,42 @@ st_eq "J: a repo without the gate files is never read" 1 "$(alerted | grep -c 'a
 st_eq "J: nobody spawned" no "$(spawned)"
 # (no spawner, no dispatch shell or daemon template left, #3576: conf/gone.list)
 
-# --- K. the Mac lane held back past FLEET_MACOS_STALE_SECS (#3869) ----------------------
+# --- K. red two nights ⇒ ONE push (T889) --------------------------------------
 reset
-old=$(date -u -r $(( $(date +%s) - 3 * 3600 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - 3 * 3600 ))" +%Y-%m-%dT%H:%M:%SZ)  # portable-ok: BSD || GNU
-new=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-{ row 62 "$S3" failure workflow_run "$new"; row 61 "$S2" failure workflow_run "$old"; row 60 "$S1" success workflow_run "$old"; } > "$WORK/runs"
-jobs 62 red; jobs 61 red; jobs 60 green
+jobs2() { printf '1\tsuccess\tLinux / shard 1\n901\tfailure\tmacOS / shard 4\n902\tfailure\tmacOS / shard 8\n' > "$WORK/jobs.$1"; }
+printf 'x Z FAIL  fleet-credsep-selftest.sh  3s\n' > "$WORK/log.901"
+printf 'x Z TIMEOUT fleet-break-it-cred-selftest.sh  600s\n' > "$WORK/log.902"
+{ row 61 "$S2" failure schedule; row 60 "$S1" success schedule; } > "$WORK/runs"; jobs2 61; jobs 60 green
 run --now --session fleet
-contains "K: says the lane is held back" "$OUT" "stale	3h	2222222"
-contains "K: the held-back alert" "$(alerted)" "macOS has been red for 3h+"
-st_eq "K: two alerts (the red run + held back)" 2 "$(alerted | wc -l | tr -d ' ')"
-rm -f "$WORK/alerted"; { row 63 "$S3" failure workflow_run "$new"; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 63 red
+contains "K: night 1 is said" "$OUT" "alerted	61"; st_eq "K: night 1 pushes nothing" "" "$(pushed)"
+{ row 63 "$S3" failure workflow_dispatch; row 62 "$S3" failure schedule; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs2 62; jobs2 63
 run --now --session fleet
-lacks "K: the same streak is not alerted twice" "$(alerted)" "has been red for"
-FLEET_MACOS_STALE_SECS=99999 run --now
-lacks "K: within the window nothing is said" "$OUT" "stale	"
-{ row 64 "$S3" success workflow_run "$new"; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 64 green
-run --now
-st_eq "K: green forgets the held-back mark" no "$([ -e "$WORK/conf/global/macos-watch/o-r.stale" ] && echo yes || echo no)"
+contains "K: night 2 says pushed" "$OUT" "pushed	2 nights	2222222"
+P=$(pushed)
+st_eq "K: exactly one push" 1 "$(printf '%s\n' "$P" | grep -c '<<END>>')"
+contains "K: zh title" "$P" "【fleet】macOS 夜检连红 2 晚 · 2 个测试"
+contains "K: zh line" "$P" "fleet-credsep-selftest.sh 等，自 2222222 起；Mac 照常更新"
+contains "K: en title" "$P" "[fleet] macOS nightly red 2 nights · 2 tests"
+contains "K: en line" "$P" "fleet-credsep-selftest.sh and 1 more, since 2222222; Macs still update"
+contains "K: the run" "$P" "https://github.com/o/r/actions/runs/63"
+lacks "K: a dispatch is not a night" "$P" "3 晚"
+contains "K: the push is in 消息 too" "$(alerted)" "【fleet】macOS 夜检连红 2 晚"
+{ row 64 "$S3" failure schedule; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs2 64
+rm -f "$WORK/pushed"; run --now --session fleet
+st_eq "K: night 3 of the same streak pushes nothing" "" "$(pushed)"
+rm -f "$WORK/pushed"; run --now --session fleet
+st_eq "K: a quiet tick prints nothing" "" "$OUT"
+rm -f "$WORK/conf/global/macos-watch/o-r.pushed"; echo 1 > "$WORK/push_rc"; run --now --session fleet
+st_eq "K: a failed push exits 1" 1 "$RC"; contains "K: ... retried" "$OUT" "retried next tick"
+st_eq "K: ... not marked pushed" no "$([ -e "$WORK/conf/global/macos-watch/o-r.pushed" ] && echo yes || echo no)"
+rm -f "$WORK/push_rc" "$WORK/pushed"
+PUSH='' FLEET_NOTIFY_CMD='' run --now --session fleet
+contains "K: no notifier ⇒ the log says nobody to push to" "$OUT" "no FLEET_NOTIFY_CMD"
+PUSH='' FLEET_NOTIFY_CMD='' run --now --session fleet
+st_eq "K: ... once" "" "$OUT"
+rm -f "$WORK/alerted"; { row 65 "$S3" success schedule; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 65 green
+run --now --session fleet
+contains "K: green after 3 nights" "$(alerted)" "✓ macOS 夜检恢复全绿（红了 3 晚）"; st_eq "K: green pushes nothing" "" "$(pushed)"
 contains "K: the watched workflow is selftests-macos.yml" "$(cat "$W")" 'FLEET_MACOS_WORKFLOW:-selftests-macos.yml'
 
 # --- M. one watch at a time (#4841) ---------------------------------------------
