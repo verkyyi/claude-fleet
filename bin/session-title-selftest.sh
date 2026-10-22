@@ -317,7 +317,7 @@ export CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_
 bash "$HUBS" --refresh 2>"$WORK/err" || st_fail "C: --refresh failed" "$(cat "$WORK/err")"
 R=$(cat "$G/remote_$S" 2>/dev/null)
 US=$'\x1f'
-crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $36 "|" substr($37, 1, 5) }'; }
+crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { print NF "|" $NF }'; }
 st_eq "C: a titled worker's row ends in field 17 = the title" "17|远程的 issue 标题" "$(crow issue-21)"
 st_eq "C: a null title keeps the row's 16 fields" "16|" "$(crow issue-22)"
 st_eq "C: no title key keeps the row's 16 fields" "16|" "$(crow issue-23)"
