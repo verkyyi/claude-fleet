@@ -32,8 +32,10 @@ class Lifecycle(unittest.TestCase):
         f = park.Park('runTest')
         f.setUp()
         self.addCleanup(f.doCleanups)
-        f.tm('set-option', '-w', '-t', 'test:0', '@fleet_role', 'home')
+        home = f.tm('list-windows', '-t', 'test', '-F', '#{window_id}')
+        f.tm('set-option', '-w', '-t', home, '@fleet_role', 'home')
         f.fake()
+        f.wait(lambda: f.opt('@claude_state_src') == '7501')
         f.tm('rename-session', '-t', 'test', f.label)
         config = f.root / 'conf/fleets' / f.label
         config.mkdir(parents=True)
@@ -61,9 +63,12 @@ class Lifecycle(unittest.TestCase):
         f.set('@parked', '123')       # exit requested, agent still running
         self.assertEqual(self.counts(f)[:2], ['1', '1'])
         f.set('@parked', '')
-        with patch.dict(os.environ, f.env):
+        with patch.dict(os.environ, f.env, clear=True):
             self.assertTrue(park.gate.park(f.fid)['ok'])
             self.assertEqual(self.counts(f), ['0', '0'])
+            f.set('@park_wrap_ver', 'unknown')
+            self.assertEqual(self.counts(f)[:2], ['1', '1'])
+            f.set('@park_wrap_ver', '3')
             f.set('@park_start', '/pending.meta')
             self.assertEqual(self.counts(f)[:2], ['1', '1'])
             f.set('@park_start', '')
@@ -86,10 +91,12 @@ class Lifecycle(unittest.TestCase):
                 f = self.fixture()
                 for key, value in options.items():
                     f.set(key, value)
-                with patch.dict(os.environ, f.env):
+                with patch.dict(os.environ, f.env, clear=True):
                     c = self.cleaner(f)
                     self.assertEqual(c.room_tier(f.win, c.snapshot(f.win), set(), ''), 1)
-                    self.assertTrue(c.fold(f.win))
+                    with patch.object(c, 'id_status', return_value=dict(state='open', result=dict(state='waiting'))):
+                        self.assertTrue(c.fold(f.win))
+                    self.assertEqual(f.opt('@park_waiting'), '1')
                     self.assertTrue(f.opt('@park_held'))
                     self.assertIsNone(idle.fleet_reap_policy.parked_deadline(c.snapshot(f.win)))
                 for key, value in options.items():
@@ -111,6 +118,51 @@ class Lifecycle(unittest.TestCase):
         self.assertIn('parked-room:' + f.win, p.stdout)
         self.assertTrue(f.opt('@park_held'), p.stdout + p.stderr)
         self.assertEqual(f.opt('@pin'), '1')
+
+    def test_memory_path_keeps_the_existing_safety_holds(self):
+        f = self.fixture()
+        f.set('@pin', '1')
+        with patch.dict(os.environ, f.env, clear=True):
+            c = self.cleaner(f)
+            for state in ('working', 'needs', 'unknown'):
+                f.set('@claude_state', state)
+                f.set('@agent_status', '')
+                self.assertFalse(c.fold(f.win))
+                self.assertFalse(f.opt('@parked'))
+            f.set('@claude_state', 'done')
+            with patch.dict(os.environ, FLEET_GATE_BG_CMD='true'):
+                self.assertFalse(c.fold(f.win))
+                self.assertFalse(f.opt('@parked'))
+            proof = Path(f.env['FLEET_GATE_PARK_PROBE_CMD'])
+            for reason in ('draft', 'unknown_input', 'asking'):
+                proof.write_text("#!/bin/sh\necho '" + json.dumps(dict(ok=False, why=reason)) + "'\n")
+                self.assertFalse(c.fold(f.win))
+                self.assertFalse(f.opt('@parked'))
+            self.assertEqual(f.opt('@pin'), '1')
+            self.assertEqual(f.opt('@fleet_id'), f.fid)
+
+    def test_terminal_recheck_precedes_park_and_missing_rss_stays_unknown(self):
+        import contextlib
+        import io
+        f = self.fixture()
+        with patch.dict(os.environ, f.env, clear=True):
+            c = self.cleaner(f)
+            c.args.repo = 'o/r'
+            def new_question(window):
+                f.set('@claude_needs', 'ask')
+                return False
+            with patch.object(c, 'work_over', return_value=True), \
+                    patch.object(c, 'candidate', side_effect=new_question) as reaper:
+                self.assertFalse(c.fold(f.win))
+                reaper.assert_called_once_with(f.win)
+                self.assertFalse(f.opt('@park_held'))
+            f.set('@claude_needs', '')
+            f.set('@pin', '1')
+            c.args.repo = ''
+            out = io.StringIO()
+            with patch.object(c, 'tree_rss', return_value={}), contextlib.redirect_stdout(out):
+                self.assertTrue(c.fold(f.win))
+            self.assertIn('mb=unknown', out.getvalue())
 
 if __name__ == '__main__':
     unittest.main()
