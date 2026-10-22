@@ -349,6 +349,24 @@ class McpRestartTest(unittest.TestCase):
             self.config['fleet']['command']='/bin/bash'
             self.assertEqual(self.shell_classify(),{2})
 
+    def test_shell_exec_canonical_script_requires_same_file_and_exact_arguments(self):
+        self.shell_exec_case()
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); actual=root/'fleet-mcp.py'; actual.write_text('pass\n')
+            link=root/'installed'; link.symlink_to(root, target_is_directory=True)
+            self.env['FLEET_MCP_BIN']=str(link)
+            self.argv[2][1]=str(actual)
+            self.source={'agent':'codex'}
+            self.assertEqual(self.shell_classify(strict=False),{2})
+            self.argv[2].extend(['--group','orch'])
+            self.assertEqual(self.shell_classify(strict=False),set())
+            self.argv[2]=self.argv[2][:2]
+            other=root/'other.py'; other.write_text('pass\n')
+            self.argv[2][1]=str(other)
+            self.assertEqual(self.shell_classify(strict=False),set())
+            self.argv[2][1]=str(actual); actual.unlink()
+            self.assertEqual(self.shell_classify(strict=False),set())
+
     def test_shell_exec_identity_is_not_a_restartability_contract(self):
         self.shell_exec_case()
         with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
@@ -529,6 +547,7 @@ class McpRestartTest(unittest.TestCase):
         self.assertIs(pick(client('claude_fleet/0.160.1 (Mac OS 27.0.0; arm64) unknown (claude_fleet; 1)'),reader),reader)
         # 0.162.1: measured in #4775.
         self.assertIs(pick(client('claude_fleet/0.162.1 (Mac OS 27.0.0; arm64)'),reader),reader)
+        self.assertIs(pick(client('claude_fleet/0.163.0 (Mac OS; arm64)'),reader),reader)
         for agent in ('claude_fleet/0.161.0 (Mac OS)','claude_fleet/0.160.10','claude_fleet/0.162.10','codex/0.160.1-alpha','0.160.1',None,7):
             self.assertIsNone(pick(client(agent),reader),agent)
         self.assertIsNone(pick(object(),reader))

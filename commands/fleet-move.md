@@ -24,6 +24,27 @@ the hub module on (`CCQUOTA_FLEET=1`). The two machines never talk to each
 other: the transcript, the issue's lease and the start all travel through the
 hub. See § 5.
 
+### Codex sessions
+
+Codex moves currently require the SSH form `to <user>@<host>`. The source reads
+its launcher-bound UUID and exact rollout, checks native idleness, pending input
+and background work, and probes the target's Codex support before exiting. The
+transport carries only that conversation and Fleet metadata into a private
+account home; credentials and the source's Codex configuration never travel.
+The target must prove the same UUID, worktree and native history before the
+source window closes. A failed target leaves the source window and history;
+inspect the target before resuming the source to avoid two writable copies.
+`--keep-source` and `--via hub` refuse Codex rather than falling back to an old
+Claude transcript. Source branches are pushed even when behind master so the
+target starts at the exact same commit.
+Imported homes use the destination login's subscription pool. The native resume
+explicitly selects the new worktree and preserves model and reasoning effort.
+Rotation leases suppress exit cleanup during the move; an unverified target
+returns failure, even if it created a window. Moved target windows carry a reap
+hold for operator follow-up; `fleet_worker_life.py release --session <fleet>
+<window>` restores normal automatic reaping. This moves committed repository
+content and native conversation history, not arbitrary files outside the worktree.
+
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
 ```sh
