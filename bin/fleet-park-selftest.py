@@ -133,6 +133,20 @@ while True:
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
         self.assertEqual([r['act'] for r in rows], ['park', 'wake'])
 
+    def test_unknown_rss_clears_previous_sample_and_census_stays_unknown(self):
+        from fleet_park_metrics import census, summarize
+        self.fake()
+        self.set('@park_saved_mb', '999')
+        with patch.dict(os.environ, self.env), patch.object(gate, 'park_saved_mb', return_value=None):
+            result = gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertFalse(self.opt('@park_saved_mb'), 'old RSS was presented as this park sample')
+        with patch.dict(os.environ, self.env):
+            observed = census(self.label, 'test', self.root / 'census')[self.win]
+        self.assertEqual(observed['state'], 'parked')
+        self.assertIsNone(observed['saved_mb'])
+        self.assertIsNone(summarize([{'state':'done', 'park':observed}])['parked_saved_mb'])
+
     def test_draft_and_background_and_legacy_hold(self):
         self.fake()
         with patch.dict(os.environ, self.env):

@@ -710,20 +710,15 @@ def park_proof(w):
 
 
 def park_saved_mb(w):
-    """RSS of this window's agent tree; no command text or credentials logged."""
+    """C8's pane process-tree RSS in MiB; an unreadable sample stays unknown."""
+    from fleet_park_metrics import process_trees
     try:
-        rows = subprocess.run(["ps", "-axo", "pid=,ppid=,rss="], capture_output=True,
-                              text=True, timeout=5).stdout.splitlines()
-        tree = [tuple(map(int, line.split())) for line in rows if len(line.split()) == 3]
-        owned = {int(w.get("pane_pid") or 0)}
-        for _ in range(len(tree)):
-            more = {pid for pid, ppid, rss in tree if ppid in owned}
-            if more <= owned:
-                break
-            owned |= more
-        return round(sum(rss for pid, ppid, rss in tree if pid in owned) / 1024, 1)
+        sample = subprocess.run(["ps", "-axo", "pid=,ppid=,rss=,time="], capture_output=True,
+                                text=True, timeout=5, check=True)
+        rss, _, known = process_trees(sample.stdout)(int(w.get("pane_pid") or 0))
+        return round(rss, 1) if known else None
     except (OSError, ValueError, subprocess.SubprocessError):
-        return 0
+        return None
 
 
 def park(fid, why="idle", force=False):
@@ -775,8 +770,13 @@ def park_locked(fid, why, force):
         return dict(ok=False, why="changed")
     started = time.monotonic()
     since = str(int(now()))
-    for option, value in (("@parked", since), ("@park_since", since), ("@park_why", why),
-                          ("@park_saved_mb", str(park_saved_mb(w)))):
+    saved_mb = park_saved_mb(w)
+    # Do not retain the previous park's RSS when this sample is unavailable.
+    if saved_mb is None:
+        tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_saved_mb")
+    else:
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_saved_mb", str(saved_mb))
+    for option, value in (("@parked", since), ("@park_since", since), ("@park_why", why)):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], option, value)
     if seam:
         rc = subprocess.run(shlex.split(seam) + [w["pane"]], capture_output=True, timeout=5).returncode
