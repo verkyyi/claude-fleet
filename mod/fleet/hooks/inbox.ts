@@ -33,7 +33,7 @@ export type InboxIo = {
   claim: (from: string, to: string) => Promise<boolean>
   run: (command: string, args: string) => Promise<void>
   /** Read-only native observation. This never enters command.run. */
-  query?: (request: Record<string, unknown>) => Promise<void>
+  query?: (request: Record<string, unknown>) => Promise<void | Record<string, unknown>>
   /** Conditional idle acceptance (accept.ts, #4618): its outcome rides the .done. */
   accept?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
@@ -107,10 +107,9 @@ export async function pollInbox(io: InboxIo, dir: string): Promise<number> {
         if (!io.accept) throw new Error('idle accept unavailable')
         result = { ok: true, ...(await io.accept(request)) }
       } else if (request?.query !== undefined) {
-        if (request.query !== 'runtime.v1') throw new Error('unsupported query')
+        if (request.query !== 'runtime.v1' && request.query !== 'park.v1') throw new Error('unsupported query')
         if (!io.query) throw new Error('runtime query unavailable')
-        await io.query(request)
-        result = { ok: true }
+        result = { ok: true, ...((await io.query(request)) ?? {}) }
       } else {
         const msg = parseMessage(text)
         if ('error' in msg) result = { ok: false, error: msg.error }

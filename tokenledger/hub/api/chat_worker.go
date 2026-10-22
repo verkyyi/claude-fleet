@@ -294,11 +294,11 @@ func withoutFid(in map[string]any) map[string]any {
 	return out
 }
 
-// SessionParkIdleKey is how long a session opened from the web may sit idle
+// SessionParkIdleKey is how long an unattended-to-human session may sit idle
 // before its home parks it (task PQ41 / HHV0 ①: its agent let go, its
 // credential kept, the next line takes it back) — handed to every node as
-// FLEET_SESSION_PARK_IDLE (seconds; 0 = never) with the pool's settings. A
-// session opened in a terminal is never parked by it.
+// FLEET_SESSION_PARK_IDLE (seconds; 0 = never) with the pool's settings.
+// Every origin uses this path when its wrapper can hold a parked session.
 const SessionParkIdleKey = "fleet.session.park_idle"
 
 const (
@@ -307,8 +307,23 @@ const (
 )
 
 func init() {
+	for key, def := range map[string]string{
+		"fleet.session.park_idle_unattended": "5m",
+		"fleet.session.park_presence":        "15m",
+	} {
+		key := key
+		hubSettings[key] = hubSetting{def: def,
+			help: "idle parking: unattended grace (5m conservative default; 1m opt-in), or how long human presence stays recent",
+			check: func(_ *Server, v string) (string, string) {
+				d, err := time.ParseDuration(strings.TrimSpace(v))
+				if err != nil || d < time.Minute || d > maxSessionParkIdle {
+					return "", key + " must be a duration from 1m to 24h"
+				}
+				return d.String(), ""
+			}}
+	}
 	hubSettings[SessionParkIdleKey] = hubSetting{def: "5m",
-		help: "a session opened from the web is parked after this long idle (1m–24h, or off): its agent let go, the next line takes it back; a terminal's session never is (task PQ41) · 网页开的会话空闲多久停放",
+		help: "an idle session with human presence parks after this long (1m–24h, or off); watched panes, drafts and background work stay running · 有人交互的会话空闲多久停放",
 		check: func(_ *Server, v string) (string, string) {
 			v = strings.ToLower(strings.TrimSpace(v))
 			if v == "off" {
@@ -331,6 +346,15 @@ func (s *Server) sessionParkIdle() int {
 	d, err := time.ParseDuration(v)
 	if err != nil || d < time.Minute || d > maxSessionParkIdle {
 		d = defaultSessionParkIdle
+	}
+	return int(d / time.Second)
+}
+
+func (s *Server) sessionParkDuration(key, fallback string) int {
+	value := s.setting(key)
+	d, err := time.ParseDuration(value)
+	if err != nil || d < time.Minute || d > maxSessionParkIdle {
+		d, _ = time.ParseDuration(fallback)
 	}
 	return int(d / time.Second)
 }

@@ -3494,6 +3494,16 @@ fleet_mod_inbox_reset() {
 #   2  usage
 # Knobs: FLEET_MOD_TAKE_SECS (5) to be taken, FLEET_MOD_DONE_SECS (20) to finish.
 # Outside a pane, --socket names the fleet's server (the label == the session).
+# C1: the one wake road. Callers carry only identity, reason and a seed file;
+# the gate owns arbitration and the wrapper resumes the same conversation.
+fleet_park_wake() {
+  local fid="${1:-}" bin
+  [ -n "$fid" ] || return 2
+  shift
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  python3 "$bin/fleet_session_gate.py" wake --fid "$fid" "$@"
+}
+
 fleet_session_command() {
   local sock='' from='' target line
   while [ "$#" -gt 0 ]; do

@@ -449,22 +449,32 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - `can_talk`：mod 说 `@mod_accept idle.v2` 的 Claude、停放中的会话（下次启动就是新 mod）、app-server
   ≥ 0.162 的 Codex；其余只读。清单第 36 列 `cantalk=`，第 5 列停放时写 `parked`（看板画成空闲）。
 
-**停放**（`fleet_session_gate.py park`）：网页开的会话（`@session_origin web`，回收方式 `keep`，
-`fleet_reap_policy.py` 的 `web` 来源）闲了 `FLEET_SESSION_PARK_IDLE`（hub 的 `fleet.session.park_idle`，
-默认 5 分钟，最小 1 分钟，0 = 不停）由 `fleet-cleanup-idle.py web_park` 停放：在答、在问、有话排着、有
-后台任务、有人在终端里看着这个窗口（不算控制模式客户端）都不停；家机空闲内存低于
-`FLEET_PARK_MEM_PCT`（15%，试用账号到份额 80%）时，最久没动的那个闲过 1 分钟就先停。停放 = 智能体进程
-在**它自己的窗口里**退出（mod 跑 `/exit`），窗口、ID、对话、会话凭据（不吊销——接回最慢的就是重新领）
-都留着，窗口读作空闲（`@claude_state done`）。`fleet-session-wrap.sh` 的 `park_hold` 守着它：门写一份
-种子文件并在窗口上挂 `@park_wake`，包装器 `mv` 成 `.taken` 就用同一个会话号 `--resume` 启动、这句随
-启动成为第一轮（不走收件箱）；门过 20 秒用同一个 rename 收回种子，这句退回（BREAK-IT `wake-timeout`）。
-有人切到这个窗口（`fleet open`、⌘P）或在里面按 ↵，它当场接回（BREAK-IT `park-while-watched`）。终端开的
-会话不停放，照旧按它自己的回收方式。
+**停放**（`fleet_session_gate.py park`）：所有来源的空闲会话共用 HHV0 的停放器
+（`fleet-cleanup-idle.py web_park`，保留旧入口名）。只停有 `@park_wrap_ver=1` 的新外壳：
+在答、在问、输入框有草稿、有话排着、有后台任务、真人终端客户端正在看着，都不停。
+看着时不断刷新离开时钟，离开后重新等待；分组 view 与 thin 客户端按窗口身份判断，控制模式不算真人。
+有人交互的档位为 `fleet.session.park_idle`（5 分钟）；无人档位为
+`fleet.session.park_idle_unattended`（本次缓存实测未完整复用前缀，默认保守退回 5 分钟，可设 1 分钟）。
+`fleet.session.park_presence` 默认 15 分钟：键盘输入和网页在场更新时间，缺少证明时按有人处理。
+内存紧张（`FLEET_PARK_MEM_PCT`，15%；试用账号到份额 80%）时，按空闲最久排序，跳过不适合的窗口，
+每拍停一个，不必等普通档位。已报告完成的工作仍按原回收规则结束。
+
+停放前取得 mod 的 `park.v1` 原生证明（没有在跑的轮次、空输入框），通过 7501 中继向 pty 送 `/exit`；
+证明以后有键盘输入就取消，绝不靠 Escape 清空草稿。窗口、ID、对话、工作区和凭据留在原处，窗口仍读作空闲。
+有定时任务时必须先交出 C3 的唤醒约定，否则保守不停。
+
+唯一唤醒接口为 `fleet_park_wake <fid> --why <理由> [--seed-file <文件>]`，转到门的 `wake`；
+包装器自己请求唤醒时使用 `--request-only` 避免等待自己。种子文件挂在 `@park_wake`，包装器 rename 成
+`.taken` 后用同一会话号 `--resume`，句子随启动进入首轮；7501 首次原生状态才写 `.launched` 确认恢复。
+超时收回未认领种子；已认领的种子属于当前启动，不会重投。
+有人切到窗口或在里面按 ↵ 也走这一路。`@parked`、`@park_held` 沿用 HHV0，停前写 `@park_saved_mb` 和
+`@park_why`，只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
+`next` 与 `started` 为 epoch。没有每拍的 skip 日志。
 
 测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、
 `bin/fleet-idle-accept-claude-selftest.sh`（真引擎：入口边界、排队重交、Esc、草稿、竞态；CI 上无 claude 跳过）、
 `bin/fleet-webchat-selftest.mjs --only=gate`（Y：HTTP 路）、`bin/session-wrap-selftest.sh` PK（停放与接回）、
-`bin/fleet-cleanup-idle-selftest.py WebPark`。
+`bin/fleet-cleanup-idle-selftest.py WebPark`、`bin/fleet-park-selftest.py`（隔离 socket，实际进程退出与身份保留）。
 
 ## 浏览器上下文（#4034）
 

@@ -187,7 +187,7 @@ class Cleaner:
                  # E101: the wrapper's one automatic retry of a temporary error
                  "@auto_resume_at", "@auto_resumed", "@reap_why",
                  # HHV0: a session the web opened, and whether it is parked
-                 "@session_origin", "@parked")
+                 "@session_origin", "@parked", "@park_wrap_ver", "@park_presence", "@park_watched_at")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -985,20 +985,16 @@ class Cleaner:
         return self.mem_state()[0]
 
     def mem_state(self):
-        """(tight, window): the machine's free memory under FLEET_PARK_MEM_PCT (15%)
-        — or, on a trial login, its processes at 80% of its share (the trial
-        guard's mem.tsv line) — and the web session idle the longest, the one that
-        parks first (one a pass). Read once a pass."""
+        """Free memory pressure, once a pass. Oldest eligible is tried first;
+        a watched / busy oldest window must never starve the following ones."""
         if self._mem is not None:
             return self._mem
-        tight = False
-        seam = os.environ.get("FLEET_PARK_MEM_FREE")
-        free = seam if seam is not None else run(
-            "bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_mem_probe | awk \'NF{print $2; exit}\'',
-            "park-mem", str(BIN))
+        free = os.environ.get("FLEET_PARK_MEM_FREE")
+        if free is None:
+            free = run("bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_mem_probe | awk \'NF{print $2; exit}\'',
+                       "park-mem", str(BIN))
         pct = os.environ.get("FLEET_PARK_MEM_PCT", "15")
-        if (free or "").strip().isdigit() and pct.isdigit() and int(free.strip()) < int(pct):
-            tight = True
+        tight = bool((free or "").strip().isdigit() and pct.isdigit() and int(free.strip()) < int(pct))
         trial = os.environ.get("FLEET_TRIAL_DIR") or os.path.join(
             os.environ.get("FLEET_NODE_STATE", "/var/db/fleet-node"), "trial")
         try:
@@ -1010,73 +1006,78 @@ class Cleaner:
                         tight = True
         except OSError:
             pass
-        oldest, at = "", None
-        if tight:
-            rows = self.tm("list-windows", "-t", self.args.session, "-F",
-                           "#{window_id}\t#{@session_origin}\t#{@parked}\t#{@claude_state_ts}")
-            for line in (rows or "").splitlines():
-                f = line.split("\t")
-                if len(f) == 4 and f[1] == "web" and not f[2] and f[3].isdigit() and (at is None or int(f[3]) < at):
-                    oldest, at = f[0], int(f[3])
-        self._mem = (tight, oldest)
+        self._mem = (tight, "")
         return self._mem
 
     def web_park(self, window, snap):
-        """A session the web opened (`@session_origin web`, task HHV0) is never closed on
-        its own: idle fleet_reap_policy.park_idle_secs() (5 min) past its last turn
-        it is PARKED in its own window — the agent's process ends, the window, its
-        ID, conversation and credential stay, and every list reads it idle — by
-        bin/fleet_session_gate.py park, which refuses while it answers, asks, has
-        words waiting or a person looks at it. Under memory pressure (free below
-        FLEET_PARK_MEM_PCT, 15%) the longest idle web session parks first, past
-        one minute. A background job keeps it open. None = not a web session."""
-        if snap["@session_origin"] != "web":
-            return None
-        if snap["@parked"]:
+        """HHV0's one parker, extended to every origin (C1).
+
+        Name retained for callers from the previous release. Old wrappers keep
+        their original close policies. A new wrapper parks without changing its
+        identity or credential. No timers are lost: the gate exports C3's wake
+        contract before exiting, or holds when it cannot.
+        """
+        if self.theirs(snap) and snap.get("@norepo") != "1":
+            return False
+        if not snap.get("@park_wrap_ver"):
+            return False if snap.get("@session_origin") == "web" else None
+        if snap.get("@parked"):
             self.why = "parked"
             return False
-        if snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1" or self.finished(snap) != "done":
-            return False
-        stamp = snap["@claude_state_ts"]
+        if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) != "done":
+            return None if snap.get("@session_origin") != "web" else False
+        # Work already reported over still closes by its existing policy.
+        if snap.get("@session_origin") != "web" and "@task" in snap and self.work_over(snap):
+            return None
+        stamp = snap.get("@claude_state_ts", "")
         if not stamp.isdigit():
             return False
-        idle = self.now - int(stamp)
-        due = fleet_reap_policy.park_idle_secs()
-        early = self.mem_tight and self.mem_state()[1] == window and idle >= 60
-        if due == 0 and not early:
-            return False                      # fleet.session.park_idle 0: never parked
-        if early:
-            due = 0
-        if idle < due:
-            self.say(window, "skip:web-idle", "park=%d" % (int(stamp) + due))
+        import fleet_session_gate
+        if not hasattr(self, "_park_watched"):
+            clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
+            self._park_watched = {f[1] for line in clients.splitlines()
+                                  if len(f := line.split("\t")) == 2 and f[0] != "1"}
+        if window in self._park_watched:
+            self.tm("set-option", "-w", "-t", window, "@park_watched_at", str(self.now))
+            return False
+        w = dict(presence=snap.get("@park_presence", ""))
+        due = (fleet_reap_policy.park_idle_secs() if fleet_session_gate.presence(w)
+               else fleet_reap_policy.park_idle_unattended_secs())
+        idle = self.now - max(int(stamp), int(snap.get("@park_watched_at") or 0))
+        early = self.mem_tight and not getattr(self, "_park_memory_done", False)
+        if (due == 0 and not early) or (idle < due and not early):
             return False
         if self.busy(window, snap):
             self.why = "bg"
             return False
-        fid = snap["@fleet_id"]
-        if not FID_RE.fullmatch(fid or ""):
+        fid = snap.get("@fleet_id", "")
+        if not FID_RE.fullmatch(fid):
             return False
         if self.args.dry_run:
             print("would-park-web:" + window)
             return False
-        why = "memory" if early and not 0 < fleet_reap_policy.park_idle_secs() <= idle else "idle"
-        gate = os.environ.get("FLEET_SESSION_GATE_CMD")       # a selftest's stand-in
-        out = run(*(gate.split() if gate else ["python3", str(BIN / "fleet_session_gate.py")]),
+        why = "memory" if early else "idle"
+        command = os.environ.get("FLEET_SESSION_GATE_CMD")
+        out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
                   "park", "--fid", fid, "--why", why)
         try:
             got = json.loads(out or "{}")
         except ValueError:
             got = {}
         if got.get("ok"):
+            if early:
+                self._park_memory_done = True
             print("parked-web:%s %s" % (window, why))
             return True
-        self.say(window, "skip:web-" + str(got.get("why") or "unparked"))
+        self.why = "bg" if got.get("why") == "bg" else ""
         return False
 
     def road(self, window, snap):
         road = self.web_park(window, snap)
         if road is not None:
             return road
+        if not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir():
+            return False
         road = self.error_stop(window, snap)
         if road is not None:
             return road
@@ -1648,12 +1649,15 @@ class Cleaner:
                 print(f"fold deferred {self.args.only}: {exc}", file=__import__("sys").stderr)
                 return 1
         self.pin_keep_once()
-        if not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir():
-            return 0
         count = 0
         windows = self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}").split()
         if self.args.only:
             windows = [w for w in windows if w == self.args.only]
+        if self.mem_tight:
+            ages = self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}\t#{@claude_state_ts}")
+            stamps = {f[0]: int(f[1]) for line in ages.splitlines()
+                      if len(f := line.split("\t")) == 2 and f[1].isdigit()}
+            windows.sort(key=lambda w: stamps.get(w, self.now))
         for window in windows:
             if count >= self.args.limit:
                 break

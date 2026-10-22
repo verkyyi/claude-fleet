@@ -120,6 +120,11 @@ _ad="$BIN/fleet-agent-adapter.sh"
 # shellcheck source=fleet-agent-adapter.sh
 . "$_ad"; unset _ad
 wset() { tmux set-option -w -t "$TMUX_PANE" "$@" 2>/dev/null; }
+# C1: only a running wrapper with this holding page is eligible for parking.
+if [ "$intmux" = 1 ]; then
+  wset @park_wrap_ver 1
+  [ -n "$(opt @park_presence)" ] || wset @park_presence 0
+fi
 
 # Ctrl+C belongs to the agent: a trapped (not ignored) INT resets to default in
 # the child, and the wrapper itself just keeps going when the agent returns.
@@ -340,22 +345,26 @@ park_hold() {
       wset -u @park_wake
       if mv "$w" "$w.taken" 2>/dev/null; then
         park_seed=$(cat "$w.taken" 2>/dev/null)
-        : > "$w.launched" 2>/dev/null
-        rm -f "$w.taken" 2>/dev/null
+        # First native 7501 report acknowledges this seed after the engine starts.
+        wset @park_start "$w.meta"
         break
       fi
     fi
     # a person came to look at it (fleet open, ⌘P, a switch): bring it back
     if tmux list-clients -F '#{client_control_mode}	#{window_id}' 2>/dev/null \
         | awk -F'\t' -v w="$me" '$1 != 1 && $2 == w { f = 1 } END { exit !f }'; then
-      break
+      python3 "$BIN/fleet_session_gate.py" wake --fid "$(opt @fleet_id)" --why 切换 --request-only >/dev/null 2>&1
+      continue
     fi
     k=''; t=$SECONDS
     IFS= read -rsn1 -t 1 k; seed=$?
     # a second went by, no key: bash 4+ says >128, 3.2 says 1 — as an EOF does,
     # which returns at once, so the clock tells them apart (plain_page's rule)
     if [ "$seed" -gt 128 ] || { [ "$seed" != 0 ] && [ "$SECONDS" -gt "$t" ]; }; then continue; fi
-    [ "$seed" = 0 ] && break                         # ↵ (or any key) here
+    if [ "$seed" = 0 ]; then
+      python3 "$BIN/fleet_session_gate.py" wake --fid "$(opt @fleet_id)" --why 键盘 --request-only >/dev/null 2>&1
+      continue
+    fi
     park_act=quit; break                             # the pane's input is gone
   done
   wset -u @parked; wset -u @park_why; wset -u @park_held
@@ -398,8 +407,12 @@ while :; do
   # through the environment ONLY (never argv, a file or a log), revoked when the
   # agent exits. No tool service (FLEET_MCP=0), outside tmux, or a mint that fails:
   # none — the tools then know the session by its window's options, as before.
-  unset FLEET_WORKER_CRED
-  if [ "$intmux" = 1 ] && [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/fleet-mcp.py" ]; then
+  # A parked credential stays only in this wrapper's environment. Expired ones
+  # remint before the resumed MCP mounts; initial launches never inherit a peer.
+  if [ "$first" = 1 ] || ! python3 "$BIN/fleet-mcp.py" --cred check >/dev/null 2>&1; then
+    unset FLEET_WORKER_CRED
+  fi
+  if [ -z "${FLEET_WORKER_CRED:-}" ] && [ "$intmux" = 1 ] && [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/fleet-mcp.py" ]; then
     FLEET_WORKER_CRED=$(python3 "$BIN/fleet-mcp.py" --cred mint 2>/dev/null) && [ -n "$FLEET_WORKER_CRED" ] \
       && export FLEET_WORKER_CRED || unset FLEET_WORKER_CRED
   fi
@@ -480,7 +493,7 @@ while :; do
   parked=''
   [ "$intmux" = 1 ] && [ -n "$(opt @parked)" ] && parked=1
   [ -n "$parked" ] && [ -n "${FLEET_CRED_SID:-}" ] && park_sid=$FLEET_CRED_SID
-  if [ -n "${FLEET_WORKER_CRED:-}" ]; then
+  if [ -n "${FLEET_WORKER_CRED:-}" ] && [ -z "$parked" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
     unset FLEET_WORKER_CRED
   fi

@@ -60,6 +60,9 @@ import pty
 import queue
 import re
 import select
+import socket
+import tempfile
+import shutil
 import signal
 import subprocess
 import sys
@@ -215,6 +218,12 @@ class Writer(threading.Thread):
             # started with is already on its way — `input`, the new session's
             # clock to 能打字 (fleet_timing.py)
             self.input_seen = True
+            try:
+                sys.path.insert(0, BIN)
+                import fleet_session_gate
+                fleet_session_gate.wake_ready(self.pane)
+            except (OSError, ValueError):
+                pass
             try:
                 sys.path.insert(0, BIN)
                 import fleet_timing
@@ -420,6 +429,56 @@ def _rc(st):
     return 1
 
 
+class ParkRelay:
+    """A per-launch, private control socket; only this relay writes its pty.
+
+    status -> native prompt proof -> exit(expected generation). Any keyboard
+    bytes after the snapshot invalidate the proof, preserving even half a draft.
+    """
+    def __init__(self):
+        self.directory = tempfile.mkdtemp(prefix="fpr-", dir="/tmp")
+        self.path = os.path.join(self.directory, "ctl")
+        self.server = socket.socket(socket.AF_UNIX)
+        self.server.bind(self.path)
+        os.chmod(self.path, 0o600)
+        self.server.listen(4)
+        self.server.setblocking(False)
+        self.generation = 0
+        self.exiting = False
+        self.presence_at = 0
+        if pane():
+            tmux(["set-option", "-w", "-t", pane(), "@park_relay", self.path])
+
+    def serve(self, buffer, pending_input):
+        try:
+            client, _ = self.server.accept()
+        except BlockingIOError:
+            return
+        with client:
+            try:
+                client.settimeout(.1)
+                request = json.loads(client.recv(2048))
+                op = request.get("op")
+                if op == "status":
+                    reply = dict(ok=not self.exiting, generation=self.generation)
+                elif (op == "exit" and not self.exiting and not pending_input and not buffer
+                      and request.get("generation") == self.generation):
+                    buffer.extend(b"/exit\r")
+                    self.exiting = True
+                    reply = dict(ok=True)
+                else:
+                    reply = dict(ok=False, why="input_changed")
+                client.sendall((json.dumps(reply) + "\n").encode())
+            except (OSError, ValueError):
+                pass
+
+    def close(self):
+        self.server.close()
+        if pane():
+            tmux(["set-option", "-wu", "-t", pane(), "@park_relay"])
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+
 def relay(cmd, depth=0):
     if not cmd:
         sys.stderr.write("usage: fleet-status-7501.py relay -- <cmd> [args…]\n")
@@ -438,6 +497,7 @@ def relay(cmd, depth=0):
     pid, master = pty.fork()
     if pid == 0:
         _guard(cmd, attrs, size)      # never returns
+    control = ParkRelay()
     rd = Reader(pane(), depth)
     if depth > 0 and rd.writer.pane:   # the node's switch / attach hooks replay while this is set
         tmux(["set-option", "-g", "@agent_replay", str(depth)])
@@ -483,7 +543,7 @@ def relay(cmd, depth=0):
                         to_out += rd.spliced(data)
                     child_open = False
                     continue
-            r = []
+            r = [control.server] if child_open else []
             if child_open and len(to_out) < (1 << 20):
                 r.append(master)
             if stdin_open and child_open and len(to_child) < (1 << 20):
@@ -520,10 +580,16 @@ def relay(cmd, depth=0):
                 except OSError:
                     data = b""
                 if data:
+                    control.generation += 1
                     to_child += data
+                    if pane() and time.time() - control.presence_at > 15:
+                        control.presence_at = time.time()
+                        tmux(["set-option", "-w", "-t", pane(), "@park_presence", str(int(control.presence_at))])
                 else:
                     stdin_open = False
                     _killpg(pid, signal.SIGHUP)
+            if control.server in rr:
+                control.serve(to_child, 0 in rr)
             if master in ww:
                 _flush(master, to_child)
             if 1 in ww:
@@ -534,6 +600,7 @@ def relay(cmd, depth=0):
                 else:
                     del to_out[:n]
     finally:
+        control.close()
         if attrs is not None:
             try:
                 termios.tcsetattr(0, termios.TCSADRAIN, attrs)
