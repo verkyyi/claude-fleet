@@ -103,7 +103,7 @@ sys.path.insert(0, sys.argv[1])
 import fleet_view as fv
 rows = fv.panel_rows([], "", set(), cmds=("new", "quit"))
 print(" ".join(e.get("cmd", "?") for e in rows))
-print(next((e["text"] for e in rows if e.get("cmd") == "notices"), "-"))
+print(next((fv.cmd_icons()["notices"] + " " + e["text"] for e in rows if e.get("cmd") == "notices"), "-"))   # T923: the icon is the table's
 for q in ("消息", "message", "zzz"):
     print(q, "notices" in [e.get("cmd") for e in fv.panel_rows([], q, set(), cmds=("new", "quit"))])
 PY2
