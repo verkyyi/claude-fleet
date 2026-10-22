@@ -215,7 +215,9 @@ while True:
         with patch.dict(os.environ, self.env):
             self.assertTrue(gate.park(self.fid)['ok'])
         rows = self.tm('capture-pane', '-p', '-N', '-t', self.win).splitlines()
-        self.assertEqual(''.join(rows[-2:]), hint)
+        # -N keeps the space before a wrapped wide character, plus tmux's
+        # physical-cell padding; compare the visible words with that padding folded.
+        self.assertEqual(' '.join(''.join(rows[-2:]).split()), hint)
 
     def test_narrow_english_hint_wraps(self):
         self.narrow_hint('en', '· parked · just type — Enter resumes it (~2 s)')
