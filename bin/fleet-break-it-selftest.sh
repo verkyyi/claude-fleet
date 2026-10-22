@@ -4136,7 +4136,7 @@ drill_done_no_pr_stranded() {
     IFS=: read -r w i p a <<EOF2
 $x
 EOF2
-    for kv in "@issue=$i" "@worktree=$p" "@claude_state=done" "@reap_policy=merged" "@repo=acme/app" \
+    for kv in "@issue=$i" "@fleet_id=$(printf '%08d-0000-4000-8000-000000000000' "$i")" "@worktree=$p" "@claude_state=done" "@reap_policy=merged" "@repo=acme/app" \
               "@claude_state_ts=$(( $(date +%s) - a ))" "@cc_agent=claude"; do
       nt set-option -w -t "$w" "${kv%%=*}" "${kv#*=}"
     done
@@ -4544,7 +4544,7 @@ drill_cross_report_queued_unseen() {
   fx_repo "$d/b/conf" xb acme/app FLEET_MAIN="$d/b/main"
   local m
   for m in a b; do
-    printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$d/$m/sock" > "$d/$m/bin/tmux"; chmod +x "$d/$m/bin/tmux"
+    printf '#!/bin/sh\n[ "$1" != -L ] || shift 2\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$d/$m/sock" > "$d/$m/bin/tmux"; chmod +x "$d/$m/bin/tmux"
   done
   # side <a|b> <cmd…> — this machine's conf dir, tmux server and (b) its Claude registry
   side() { local m=$1; shift
@@ -6436,7 +6436,9 @@ drill_park_reap_current_work() {
   out=$(python3 "$BIN/fleet-lifecycle-selftest.py" Lifecycle.test_new_message_invalidates_old_terminal_and_closed_task \
     Lifecycle.test_new_task_does_not_inherit_previous_report Lifecycle.test_message_during_report_prevents_stale_terminal_commit \
     Lifecycle.test_new_task_or_attempt_during_report_refuses_commit Lifecycle.test_prompt_invalidates_but_tool_and_lifecycle_exit_do_not \
-    Lifecycle.test_fresh_report_restores_completion_for_current_work 2>&1) || { WHY="$out"; return 1; }
+    Lifecycle.test_fresh_report_restores_completion_for_current_work \
+    Lifecycle.test_wake_seed_invalidates_old_completion_under_same_gate \
+    Lifecycle.test_delivered_message_restarts_idle_clock_before_native_hook 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='新任务/消息使旧完成证据失效；报告提交不能覆盖在它期间接收的新工作'
 }
@@ -6446,7 +6448,9 @@ drill_park_reap_admission() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-lifecycle-selftest.py" Lifecycle.test_close_rechecks_admitted_message_under_identity_lock \
     Lifecycle.test_norepo_close_roads_recheck_the_same_pending_message Lifecycle.test_retired_window_is_rechecked_at_message_admission \
-    Lifecycle.test_legacy_admission_invalidates_and_rechecks_closed_window Lifecycle.test_shell_descriptor_holds_the_same_identity_lock 2>&1) || { WHY="$out"; return 1; }
+    Lifecycle.test_legacy_admission_invalidates_and_rechecks_closed_window Lifecycle.test_shell_descriptor_holds_the_same_identity_lock \
+    Lifecycle.test_live_legacy_report_directory_does_not_require_wake_api \
+    Lifecycle.test_final_native_guard_preserves_question_draft_and_unknown 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='普通/停放/无仓库关窗与消息准入共用身份锁；关闭先赢则拒绝对旧窗口的准入'
 }

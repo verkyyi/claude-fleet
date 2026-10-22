@@ -337,8 +337,10 @@ def legacy_deliver(a):
     admission against closing; an uncertain send stays visible for inspection.
     """
     text = sys.stdin.read()
-    delivery = a.delivery or str(uuid.uuid4())
-    if not UUID_RE.fullmatch(delivery) or not text:
+    # Peer/report envelopes predate UUID gate deliveries (e.g. local:peer#...).
+    # Derive a stable filename-safe receipt without changing the sender's ID.
+    delivery = str(uuid.uuid5(uuid.NAMESPACE_URL, "fleet:legacy:" + a.delivery)) if a.delivery else str(uuid.uuid4())
+    if not text:
         return 1
     with lock(a.fid):
         w = window(a.fid)

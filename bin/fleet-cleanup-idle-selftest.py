@@ -661,6 +661,7 @@ class Rig(unittest.TestCase):
         self.win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
                            "-c", str(self.wt), "sleep 90").strip()
         for key, value in {"@raw": "1", "@worktree": str(self.wt), "@claude_state": "done",
+                           "@fleet_id": "00000007-0000-4000-8000-000000000007",
                            "@claude_state_ts": str(int(time.time()) - 4000), "@cc_agent": "claude"}.items():
             self.set(key, value)
         self.tdir = self.root / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(self.wt))

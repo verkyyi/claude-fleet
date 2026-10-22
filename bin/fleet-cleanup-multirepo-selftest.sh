@@ -108,6 +108,7 @@ old=$(( $(date +%s) - 7200 ))
 mkwin() {   # $1=name $2=cwd, then option/value pairs → prints the window id
   local n="$1" d="$2" w; shift 2
   w=$(tmux new-window -d -P -F '#{window_id}' -t "$S" -n "$n" -c "$d")
+  tmux set-option -w -t "$w" @fleet_id "$(printf '%08d-0000-4000-8000-000000000000' "${w#@}")"
   tmux set-option -w -t "$w" @claude_state "done"
   tmux set-option -w -t "$w" @claude_state_ts "$old"
   while [ "$#" -ge 2 ]; do tmux set-option -w -t "$w" "$1" "$2"; shift 2; done

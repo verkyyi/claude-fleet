@@ -359,6 +359,7 @@ class Cleaner:
             import fleet_session_gate
             fid = snap.get("@fleet_id", "")
             if not FID_RE.fullmatch(fid):
+                self.why = "no-identity"
                 return False
             with fleet_session_gate.lock(fid):
                 current = self.snapshot(window)
@@ -404,6 +405,10 @@ class Cleaner:
             run("python3", str(BIN / "fleet-reap-live.py"), window,
                 "--socket-name", self.args.socket_name or "", "--automatic")
             return True
+        except subprocess.CalledProcessError as exc:
+            self.why = "live"
+            self.say(window, "skip:live", (exc.output or "").strip())
+            return False
         except (OSError, subprocess.SubprocessError):
             self.why = "live"
             return False
@@ -1263,7 +1268,7 @@ class Cleaner:
         key = key[1] + "-" + key[2]
         if self.finished(snap) not in ("done", "exited") and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1":
             return False
-        rc = 0 if self.work_over(snap) else 1
+        rc = 0 if self.work_over(snap) else (3 if self.task_closed(task) == 3 else 1)
         if rc != 0:
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("task:"):
                 clear(self.tm, window)

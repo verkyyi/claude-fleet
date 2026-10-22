@@ -83,6 +83,9 @@ class Rig:
         self.root = Path(tempfile.mkdtemp(prefix='fad-', dir='/tmp'))
         self.label = 'fad%s%d' % (agent[:2], os.getpid())
         self.conf = self.root / 'conf'
+        fleet = self.conf / 'fleets' / self.label
+        fleet.mkdir(parents=True)
+        (fleet / 'conf').write_text('')
         self.qlog = self.root / 'queue.ndjson'
         fakebin = self.root / 'fakebin'
         fakebin.mkdir()
