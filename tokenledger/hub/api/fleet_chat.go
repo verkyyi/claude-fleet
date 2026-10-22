@@ -322,8 +322,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, name, http.StatusForbidden, "forbidden", "X-Fleet-Webchat: 1 is required")
 		return
 	}
-	if name == "open" && s.trialPerson(person) && !s.trialOpenProvider(w, r, person) {
-		return
+	if name == "open" {
+		settings, err := s.Store.FleetSettings()
+		if err != nil {
+			s.chatRefuse(w, person, name, http.StatusServiceUnavailable, "trial_provider", "暂时无法开始会话，请稍后再试。")
+			return
+		}
+		// Include scanned-code / approved limited members, through the same
+		// identity rule their credential policy and isolation already use.
+		if s.trialIdentity(settings, person) && !s.trialOpenProvider(w, r, person) {
+			return
+		}
 	}
 	// The copy beside the entry (task V9DJ D) is answered here, home or not.
 	if name == "conversation" && r.URL.Query().Get("cached") == "1" {

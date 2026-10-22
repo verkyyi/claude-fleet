@@ -72,6 +72,9 @@ func TestTrialProviderPinAndDefaults(t *testing.T) {
 	if why := h.srv.trialHold("", time.Now()); why != trialWaitBusy+":provider" {
 		t.Fatalf("invalid default admitted: %q", why)
 	}
+	if why := h.srv.qrHold(time.Now()); why != trialWaitBusy+":provider" {
+		t.Fatalf("invalid default admitted through scanned trial: %q", why)
+	}
 }
 
 func TestTrialOpenCodexExhaustionAndProviderOverride(t *testing.T) {
@@ -133,6 +136,33 @@ func TestTrialOpenExplicitClaudeCannotSpendCodexHeadroom(t *testing.T) {
 	tr, err := h.srv.Store.Trial(pid)
 	if err != nil || tr.Msgs != 0 {
 		t.Fatalf("refused open spent trial line: %+v %v", tr, err)
+	}
+}
+
+// Scanned trial codes grant limited membership rather than a role=trial row.
+// Both identities must use the same effective-provider check, even with the
+// legacy fleet.trial switch off (the site's D grayscale remains independent).
+func TestTrialOpenLimitedMemberUsesSameProviderGate(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	const pid = "gh:9435294"
+	listPerson(t, h, pid, "trial-limited")
+	now := time.Now()
+	setHubSetting(t, h.srv, MemberLimitsPrefix+pid, MemberLimits{Tokens: 100, Since: now.Add(-time.Minute), Until: now.Add(time.Hour), Sessions: 1}.String())
+	setHubSetting(t, h.srv, ClientDefaultsPrefix+"FLEET_AGENT", "codex")
+	setChatHome(t, h, pid, "mac-d", "trial-limited")
+	if err := h.srv.Store.UpsertAccount(model.Identity{AccountUUID: "limited-cl", Source: model.SourceClaude}, "pro", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.InsertLimits(&model.LimitsSnapshot{AccountUUID: "limited-cl", EndpointID: "test-node", ObservedAt: now, FiveHour: model.Window{Utilization: 100}}); err != nil {
+		t.Fatal(err)
+	}
+	resp := chatDo(t, h, http.MethodPost, ChatPathPrefix+"open", personCookie(pid, "trial-limited"), map[string]string{"X-Fleet-Webchat": "1"}, `{"agent":"claude","text":"preserve this trial task"}`)
+	if code := chatCode(t, resp); resp.StatusCode != http.StatusTooManyRequests || code != "trial_quota" {
+		t.Fatalf("limited member open = %d %s", resp.StatusCode, code)
+	}
+	if h.srv.trialOn() {
+		t.Fatal("test enabled the legacy trial switch")
 	}
 }
 
