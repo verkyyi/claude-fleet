@@ -116,3 +116,18 @@ func TestClientSettingsWhitelist(t *testing.T) {
 		t.Errorf("cleared key still served: %v", s)
 	}
 }
+
+// C6: the same retention is configurable at the hub and handed to the reaper.
+func TestParkedRetentionSettingReachesNode(t *testing.T) {
+	h := newFleetHarness(t)
+	if got := h.srv.poolSettings()["FLEET_SESSION_REAP_PARKED"]; got != "259200" {
+		t.Fatalf("default parked retention: %s", got)
+	}
+	putSetting(t, h, "fleet.session.reap_parked", "4d", http.StatusOK)
+	if got := h.srv.poolSettings()["FLEET_SESSION_REAP_PARKED"]; got != "345600" {
+		t.Fatalf("configured parked retention: %s", got)
+	}
+	for _, value := range []string{"0", "30m", "367d", "nonsense"} {
+		putSetting(t, h, "fleet.session.reap_parked", value, http.StatusBadRequest)
+	}
+}

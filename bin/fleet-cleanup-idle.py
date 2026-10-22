@@ -98,16 +98,6 @@ def bg_grace_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else BG_GRACE_DEFAULT
 
 
-PARK_DEFAULT = 4 * 3600          # E101 拍板: 等你回话 4 小时停放
-
-
-def park_secs():
-    """How long a finished session waiting on its person's reply keeps its window
-    before it is parked — closed, its conversation, worktree and record kept (E101)."""
-    value = os.environ.get("FLEET_REAP_PARK_SECS", "")
-    return int(value) if re.fullmatch(r"\d{1,7}", value) else PARK_DEFAULT
-
-
 # An ID's newest result that waits on its person (E101).
 WAIT_RESULTS = ("waiting", "blocked")
 
@@ -187,7 +177,8 @@ class Cleaner:
                  # E101: the wrapper's one automatic retry of a temporary error
                  "@auto_resume_at", "@auto_resumed", "@reap_why",
                  # HHV0: a session the web opened, and whether it is parked
-                 "@session_origin", "@parked", "@park_wrap_ver", "@park_presence", "@park_watched_at")
+                 "@session_origin", "@parked", "@park_wrap_ver", "@park_presence", "@park_watched_at",
+                 "@park_held", "@park_since", "@park_wake", "@park_start", "@park_waiting")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -249,9 +240,7 @@ class Cleaner:
 
     def origin(self, snap):
         """Where the session came from (T694): its @reap_origin, else read off it."""
-        return fleet_reap_policy.origin_of(snap.get("@agent_def", ""), snap["@origin"] or snap["@origin_fid"],
-                                           snap.get("@origin_wid", ""), snap["@test_identity"],
-                                           snap.get("@reap_origin", ""))
+        return fleet_reap_policy.snapshot_origin(snap)
 
     def work_over(self, snap):
         """«做完» (T680's one rule): its ID's newest result is final, or its task
@@ -408,6 +397,26 @@ class Cleaner:
         never while a reopen marks it (@migrating), and only once <recheck>()
         still holds — rc False when any of them says no (nothing closed). <why> is
         its ID's close reason (`parked` for a park, E101)."""
+        if snap.get("@parked") and not getattr(self, "_closing_park", False):
+            import fleet_session_gate
+            fid = snap.get("@fleet_id", "")
+            if not FID_RE.fullmatch(fid):
+                return False
+            with fleet_session_gate.lock(fid):
+                current = self.snapshot(window)
+                draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
+                if (self.moved(window, snap) or not current.get("@park_held")
+                        or current.get("@park_wake") or current.get("@park_start")
+                        or (draft.exists() and draft.stat().st_size)
+                        or any(r.get("state") in ("queued", "trying", "native", "waking")
+                               for r in fleet_session_gate.records(fid))):
+                    self.why = "live"
+                    return False
+                self._closing_park = True
+                try:
+                    return self.close(window, snap, recheck, why)
+                finally:
+                    self._closing_park = False
         if snap["@migrating"]:
             self.why = "moving"
             self.say(window, "skip:migrating", snap["@migrating"])
@@ -735,7 +744,7 @@ class Cleaner:
         finished = (self.finished(snap) in ("done", "exited")
                     or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1")
         over = finished and self.work_over(snap)
-        if driver and pol[0] == "loop-end" and not over:
+        if driver and not over:
             return None                       # between two ticks: its loop's own road
         if not finished:
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith(("over:", "unrep:")):
@@ -776,7 +785,7 @@ class Cleaner:
                 self.say(window, "skip:reported", origin)
                 return False
             if not nudged.isdigit():
-                self.why = "task-open"
+                self.why = "unreported:%d" % (int(stamp) + first)
                 if int(stamp) + first > self.now:
                     return False
                 if self.args.dry_run:
@@ -891,93 +900,91 @@ class Cleaner:
             return {}
         return got if isinstance(got, dict) else {}
 
-    def waiting(self, window, snap):
-        """A finished session waiting on its person (E101): its ID's newest result
-        says `waiting` / `blocked`, or its open record asked them (「问过你」) — B2XT
-        and CRFW sat in 排队中 for a day. It waits park_secs() (4 h) past its last
-        turn, then it is PARKED: history first and resumable, the window closed,
-        the worktree and conversation kept, 「停放」 on its record — the list keeps
-        its row in 等你 (a clock), and 接回 brings it back where it was. A `keep` it
-        set itself parks too; a person's keep, a pin, an orchestrator never. A
-        draft, a job or tracked changes keep the window. None = not waiting."""
-        if (snap["@norepo"] == "1" or self.theirs(snap) or snap["@fleet_role"] in ("home", "panel")
-                or snap["window_name"] in ("dash", "plan", "backlog", "home")
-                or self.finished(snap) != "done" or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1"):
-            return None
-        stamp = snap["@claude_state_ts"]
-        if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
-            return None
-        selfkeep = snap["@reap_policy"].strip() == "keep" and snap.get("@reap_keep_by") == "session"
-        pol = self.policy(snap)
-        if pol is not None and pol[0] == "keep" and not selfkeep:
-            return None
-        st = self.id_status(snap["@fleet_id"])
+    def is_waiting(self, snap):
+        st = self.id_status(snap.get("@fleet_id", ""))
         if st.get("state") in ("done", "failed"):
-            return None                       # its work is over: the ordinary roads
-        result = (st.get("result") or {}).get("state", "") if isinstance(st.get("result"), dict) else ""
-        task = snap["@task"] if re.fullmatch(r"T[1-9][0-9]{0,9}", snap["@task"]) else ""
-        rc, asked, _parked = self.record(task) if task else (3, False, False)
-        if rc == 0 or not (result in WAIT_RESULTS or asked):
+            return False
+        result = st.get("result") or {}
+        task = snap.get("@task", "")
+        rc, asked, _ = self.record(task) if task else (3, False, False)
+        return rc != 0 and ((isinstance(result, dict) and result.get("state") in WAIT_RESULTS) or asked)
+
+    def waiting(self, window, snap):
+        """E101 no longer closes a window to park it. Legacy wrappers wait for
+        a safe reopen; new wrappers use the same HHV0 park as every origin."""
+        if self.finished(snap) != "done" or self.theirs(snap) or not self.is_waiting(snap):
             return None
-        due = int(stamp) + park_secs()
-        self.why = "waiting:%d" % due
+        pol = self.policy(snap)
+        if pol and pol[0] == "keep" and snap.get("@reap_keep_by") != "session":
+            self.why = "keep"
+            return False
         if snap.get("@reap_unreported") and not self.args.dry_run:
-            self.tm("set-option", "-wu", "-t", window, "@reap_unreported")   # it said something: no red mark
-        if due > self.now:
-            self.say(window, "skip:waiting", "park=%d" % due)
+            self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
+        self.why = "waiting"
+        self.say(window, "skip:waiting", "old-wrapper" if not snap.get("@park_wrap_ver") else "park-gate")
+        return False
+
+    def parked(self, window, snap):
+        """Retire only acknowledged, inactive parks, under the wake lock. History
+        and resume verification precede the close; data/worktree stays in place."""
+        if not snap.get("@parked"):
+            return None
+        self.why = "parked"
+        if not snap.get("@park_held") or not snap.get("@park_wrap_ver") or self.theirs(snap):
             return False
-        wt = snap["@worktree"]
-        m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
-        if not m or Path(wt).resolve() == Path(self.args.main).resolve() or not Path(wt).is_dir():
-            return False                      # nothing to resume it from: it keeps its window
-        key = m[1] + "-" + m[2]
-        transfer = snap["@agent_transfer_until"]
-        if transfer and (not transfer.isdigit() or int(transfer) > self.now):
-            self.why = "moving"
-            return False
-        records = run("git", "-C", self.args.main, "worktree", "list", "--porcelain").split("\n\n")
-        if not any("worktree " + wt in record.splitlines() for record in records):
-            return False
-        status = run("git", "-C", wt, "status", "--porcelain")
-        if status and not all(l.startswith("?? ") for l in status.splitlines()):
-            self.why = "dirty"
-            return False
-        if run("bash", "-c", '. "$1/fleet-lib.sh"; if fleet_rotate_lease_held "$2"; then echo held; fi',
-               "idle-park", str(BIN), wt):
-            self.why = "moving"
-            return False
-        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
-            if self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}") == window:
+        row = fleet_reap_policy.ORIGINS[self.origin(snap)]
+        pol = self.policy(snap)
+        if (row["reap"] in ("reported", "batch") and (not pol or pol[0] != "keep")
+                and self.work_over(snap)):
+            return None
+        due = fleet_reap_policy.parked_deadline(snap)
+        if due is None:
+            # Reporting/probe rows retain their completion rules while parked.
+            row = fleet_reap_policy.ORIGINS[self.origin(snap)]
+            pol = self.policy(snap)
+            if row["reap"] == "batch" and not self.work_over(snap):
+                self.why = "task-open"
                 return False
-        if self.busy(window, snap):
+            if (row["reap"] in ("reported", "batch", "done") or not fleet_reap_policy.uses_park_retention(snap)) and (not pol or pol[0] != "keep"):
+                return None
+            self.why = "keep"
             return False
-        if subprocess.run(["python3", str(BIN / "fleet-reap-live.py"), window, "--socket-name",
-                           self.args.socket_name], stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
+        self.why = "timer:%d" % due
+        if self.now < due or getattr(self, "_park_only", False):
+            return False
+        import fleet_session_gate
+        fid = snap.get("@fleet_id", "")
+        if not FID_RE.fullmatch(fid):
+            return False
+        draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
+        if (draft.exists() and draft.stat().st_size) or (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
+                or snap.get("@migrating") or self.busy(window, snap)
+                or any(r.get("state") in ("queued", "trying", "native", "waking")
+                       for r in fleet_session_gate.records(fid))):
             self.why = "live"
             return False
-        print("reap-due:%s policy=%s park" % (window, snap["@reap_policy"] or "-"), file=__import__("sys").stderr)
+        clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
+        if any(line.split("\t") == ["0", window] for line in clients.splitlines()):
+            self.why = "live"
+            return False
+        wt = snap.get("@worktree", "")
+        m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
+        if not m or not self.args.repo or not Path(wt).is_dir() or Path(wt).resolve() == Path(self.args.main).resolve():
+            self.why = "no-history"
+            return False
+        key = m[1] + "-" + m[2]
         if self.args.dry_run:
-            print("would-park:" + window + " " + key)
+            print("would-reap-parked:" + window)
             return False
         run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
             "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
-            "--title", snap["window_name"], "--summary", "Parked: waiting on its person's reply")
+            "--title", snap["window_name"], "--summary", "Reaped after parked retention; conversation and worktree kept")
         if not self.reopens(window, key, wt):
+            self.why = "no-history"
             return False
-        if not self.close(window, snap, lambda: not self.busy(window, snap), why="parked"):
+        if not self.close(window, snap, lambda: not self.busy(window, snap)):
             return False
-        if task:
-            seam = os.environ.get("FLEET_TASK_PARK_CMD")
-            argv = ([seam, task] if seam else ["bash", str(BIN / "fleet-task-record.sh"), "set", task, "--parked",
-                                              "停放：等你回话满 %d 小时，窗口已关，对话和工作区都在；回话即唤醒"
-                                              % (park_secs() // 3600 or 1)])
-            try:
-                subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=30)
-            except (OSError, subprocess.SubprocessError):
-                pass
-        print("parked:%s %s%s" % (window, key, (" " + task) if task else ""))
+        print("reaped-parked:%s %s" % (window, key))
         return True
 
     @property
@@ -1027,12 +1034,13 @@ class Cleaner:
         if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) != "done":
             return None if snap.get("@session_origin") != "web" else False
         # Work already reported over still closes by its existing policy.
-        if snap.get("@session_origin") != "web" and "@task" in snap and self.work_over(snap):
+        if (fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] != "never"
+                and not fleet_reap_policy.uses_park_retention(snap)
+                and "@task" in snap and self.work_over(snap)):
             return None
         stamp = snap.get("@claude_state_ts", "")
         if not stamp.isdigit():
             return False
-        import fleet_session_gate
         if not hasattr(self, "_park_watched"):
             clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
             self._park_watched = {f[1] for line in clients.splitlines()
@@ -1040,9 +1048,8 @@ class Cleaner:
         if window in self._park_watched:
             self.tm("set-option", "-w", "-t", window, "@park_watched_at", str(self.now))
             return False
-        w = dict(presence=snap.get("@park_presence", ""))
-        due = (fleet_reap_policy.park_idle_secs() if fleet_session_gate.presence(w)
-               else fleet_reap_policy.park_idle_unattended_secs())
+        due = fleet_reap_policy.park_after(snap, self.now)
+        self.why = "waiting:%d" % (max(int(stamp), int(snap.get("@park_watched_at") or 0)) + due)
         idle = self.now - max(int(stamp), int(snap.get("@park_watched_at") or 0))
         early = self.mem_tight and not getattr(self, "_park_memory_done", False)
         if (due == 0 and not early) or (idle < due and not early):
@@ -1066,19 +1073,27 @@ class Cleaner:
         if got.get("ok"):
             if early:
                 self._park_memory_done = True
+            waiting = self.is_waiting(snap)
+            self.tm("set-option", "-w", "-t", window, "@park_waiting", "1" if waiting else "0")
+            if snap.get("@reap_unreported"):
+                self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
             print("parked-web:%s %s" % (window, why))
             return True
         self.why = "bg" if got.get("why") == "bg" else ""
         return False
 
     def road(self, window, snap):
-        if not getattr(self.args, "skip_park", False):
+        road = self.parked(window, snap)
+        if road is not None:
+            return road
+        if not snap.get("@parked") and not getattr(self.args, "skip_park", False):
             road = self.web_park(window, snap)
             if road is not None:
                 return road
-        elif snap.get("@parked"):
-            return False
         if getattr(self, "_park_only", False):
+            return False
+        if snap.get("@park_wrap_ver") and fleet_reap_policy.uses_park_retention(snap):
+            # Its old stamped idle policy cannot bypass the new park retention.
             return False
         road = self.error_stop(window, snap)
         if road is not None:

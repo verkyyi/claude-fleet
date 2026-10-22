@@ -70,21 +70,19 @@ IDLE_DEFAULT = 2 * 3600          # 回收 B 拍板: 你自己开的会话闲置 
 # over» — the record closed, or its ID carries a final result (T680) — then the
 # fleet's grace (≈1 minute); a driver goes at once.
 ORIGINS = {
-    "person": "idle:2h",          # 不因做完收起，闲置 2 小时收起
-    "dispatched": "merged",       # 做完 1 分钟收起；没报结果闲 30 分钟提醒，再 30 分钟收起
-    "member": "merged",           # 同执行会话；失败的也收起
-    "driver": "merged",           # 批次收口立即收起；两拍之间不收起
-    "orchestrator": "keep",       # 永不自动收起（开窗即置顶）
-    "decide": "idle:15m",         # 等你拍板：闲置 15 分钟收起，回话即恢复
-    "probe": "done:1m",           # 定时任务、探针、演练：做完立即收起
-    "web": "keep",                # 网页开的会话：不收起，闲 5 分钟停放（HHV0，见 park_idle_secs）
+    # `default` is also the compatibility policy stamped by old spawners.
+    # `reap` governs new park-capable wrappers; every origin parks by C1 tiers.
+    "person":       dict(default="idle:2h", park="idle", reap="parked"),
+    "dispatched":   dict(default="merged", park="idle", reap="reported"),
+    "member":       dict(default="merged", park="idle", reap="reported"),
+    "driver":       dict(default="merged", park="idle", reap="batch"),
+    "orchestrator": dict(default="keep", park="idle", reap="never"),
+    "decide":       dict(default="idle:15m", park="idle", reap="parked"),
+    "probe":        dict(default="done:1m", park="idle", reap="done"),
+    "web":          dict(default="keep", park="idle", reap="never"),
 }
-# A session the web opened (task HHV0, @session_origin web) is the person's conversation:
-# never closed on its own — its destination is PARKED (fleet-cleanup-idle.py
-# web_park → fleet_session_gate.py park), its window, ID and conversation kept,
-# after park_idle_secs() idle. The node's half of the hub setting
-# fleet.session.park_idle is FLEET_SESSION_PARK_IDLE (seconds or a duration, the
-# hub's client settings hand it down; default 5m, never under 1m; 0 = never park).
+# Web lifecycle follows HHV0; keep remains keep. C1's measured cache fallback
+# keeps unattended parking at 5m unless explicitly configured to 1m.
 PARK_IDLE_DEFAULT = 5 * 60
 PARK_IDLE_MIN = 60
 
@@ -115,9 +113,87 @@ def park_presence_secs():
     return secs if secs is not None else 900
 
 
+def reap_parked_secs():
+    import os
+    value = os.environ.get("FLEET_SESSION_REAP_PARKED", "3d").strip()
+    # Hub durations arrive as seconds, including the eight digits of 366d.
+    seconds = int(value) if re.fullmatch(r"[0-9]{1,8}", value) else dur_secs(value)
+    return seconds if seconds is not None and 3600 <= seconds <= MAX_SECS else 3 * 86400
+
+
+def snapshot_origin(snap):
+    return origin_of(snap.get("@agent_def", ""), snap.get("@origin") or snap.get("@origin_fid", ""),
+                     snap.get("@origin_wid", ""), snap.get("@test_identity", ""),
+                     "web" if snap.get("@session_origin") == "web" else snap.get("@reap_origin", ""))
+
+
+def uses_park_retention(snap):
+    row = ORIGINS[snapshot_origin(snap)]
+    policy = snap.get("@reap_policy", "")
+    return (snap.get("@park_waiting") == "1" or
+            (row["reap"] == "parked" and policy in ("", row["default"], "keep")))
+
+
+def parked_deadline(snap):
+    """The shared C6 clock: only an acknowledged park, no wake in flight.
+    A person's keep/pin and permanent origins have no automatic expiration.
+    Waiting reports use the same retention as a person's conversation.
+    """
+    row = ORIGINS[snapshot_origin(snap)]
+    if (not snap.get("@park_wrap_ver") or not snap.get("@parked") or not snap.get("@park_held")
+            or row["reap"] == "never" or snap.get("@pin") == "1"
+            or (snap.get("@reap_policy") == "keep" and snap.get("@reap_keep_by") != "session")):
+        return None
+    if not uses_park_retention(snap):
+        return None
+    since = snap.get("@park_since", "")
+    if not since.isdigit() or int(since) <= 0:
+        return None
+    # Activity recorded after a park resets retention, even if a wake failed.
+    return max(int(since), *(int(snap.get(k) or 0) if str(snap.get(k) or "").isdigit() else 0
+                            for k in ("@claude_state_ts", "@park_presence"))) + reap_parked_secs()
+
+
+def park_after(snap, now=None):
+    now = int(time.time()) if now is None else now
+    presence = snap.get("@park_presence", "")
+    recent = not presence.isdigit() or now - int(presence) < park_presence_secs()
+    return park_idle_secs() if recent else park_idle_unattended_secs()
+
+
+def explain(snap, now=None):
+    """Doctor's read-only row; the reaper owns @reap_why for other holds."""
+    now = int(time.time()) if now is None else now
+    origin = snapshot_origin(snap)
+    row = ORIGINS[origin]
+    reap = row["reap"] if uses_park_retention(snap) or not snap.get("@reap_policy") else snap["@reap_policy"]
+    prefix = "origin=%s park=%s reap=%s" % (origin, row["park"], reap)
+    why = snap.get("@reap_why") or "pending-check"
+    if snap.get("@parked") and snap.get("@park_held"):
+        due = parked_deadline(snap)
+        if due is not None:
+            return prefix + " next=reap@" + iso(due) + " why=" + why
+        code, _, epoch = why.partition(":")
+        if epoch.isdigit() and code in ("timer", "unreported", "bg"):
+            return prefix + " next=" + ("remind@" if code == "unreported" else "reap@") + iso(int(epoch)) + " why=" + why
+        return prefix + " next=" + ("keep" if row["reap"] == "never" or snap.get("@reap_policy") == "keep"
+                                    or snap.get("@pin") == "1" else "result/policy") + " why=" + why
+    if not snap.get("@park_wrap_ver"):
+        return prefix + " next=legacy-policy (old wrapper) why=" + why
+    stamp = snap.get("@claude_state_ts", "")
+    from fleet_reap_notice import reap_state
+    state = reap_state(snap.get("@claude_state", ""), snap.get("@agent_status", ""), snap.get("@claude_needs", ""))
+    if state == "done" and stamp.isdigit():
+        delay = park_after(snap, now)
+        watched = snap.get("@park_watched_at", "")
+        due = max(int(stamp), int(watched) if watched.isdigit() else 0) + delay
+        return prefix + (" next=park@" + iso(due) if delay else " next=park-off") + " why=" + why
+    return prefix + " next=after-turn why=" + why
+
+
 # The origins whose «done» is a reported result — the dispatched road
 # (fleet-cleanup-idle.py dispatched_session): over ⇒ closed, unreported ⇒ nudged.
-REPORTING = ("dispatched", "member", "driver")
+REPORTING = tuple(origin for origin, row in ORIGINS.items() if row["reap"] in ("reported", "batch"))
 
 
 # A probe by its words (BCYB): a session a person or a session opened to measure
@@ -156,7 +232,7 @@ def origin_default(origin, kind=""):
         return "loop-end"
     if kind == "issue" and origin in ("person", "dispatched", "member"):
         return "merged"            # an issue session's historic rule: its PR merged
-    return ORIGINS.get(origin, "")
+    return ORIGINS.get(origin, {}).get("default", "")
 
 
 def effective(policy, pin="", agent_def="", keep_by="", over=False):

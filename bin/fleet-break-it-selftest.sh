@@ -6391,6 +6391,15 @@ drill_wake_peer_report() {
   WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
 }
 
+drill_park_reap_table() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cleanup-idle-selftest.py" ParkTable \
+    HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放与回收同表：每来源、三天期限、历史可接回，doctor 同一时刻'
+}
+
 drill_park_drops_dialog() {
   CAP=60; local t0 out
   t0=$(now)

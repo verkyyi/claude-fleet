@@ -228,5 +228,9 @@ func hub_relay_ok                               T606  bin/
 # G1YC C8 follows HHV0 markers (T940).
 text @park_state T940 bin/
 
+# C6: waiting uses the one parker, no separate E101 close timer.
+func park_secs T952 bin/fleet-cleanup-idle.py
+key FLEET_REAP_PARK_SECS T952
+key FLEET_TASK_PARK_CMD T952
 # Looking at a parked window must not wake its agent (G1YC C2).
 re --why\s+切换 T948 bin/fleet-session-wrap.sh

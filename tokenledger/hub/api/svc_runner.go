@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
@@ -65,9 +64,11 @@ const (
 
 // The runner contract's exit codes.
 const (
-	SvcExitOK            = 0
-	SvcExitOutputInvalid = 20
-	SvcExitTimeout       = 30
+	SvcExitOK              = 0
+	SvcExitOutputInvalid   = 20
+	SvcExitTimeout         = 30
+	SvcExitModeration      = 40
+	SvcExitTemplateInvalid = 50
 )
 
 var (
@@ -249,6 +250,10 @@ func (s *Server) handleNodeSvcRuns(w http.ResponseWriter, r *http.Request) {
 // svcRunSpec hands the Job its template, its inputs and its model pass — once.
 func (s *Server) svcRunSpec(w http.ResponseWriter, r *http.Request, run store.SvcRun, j store.SvcRunJob) {
 	now := time.Now()
+	if j.Fetched != nil {
+		httpError(w, http.StatusConflict, "this run's spec was read already")
+		return
+	}
 	if a := r.URL.Query().Get("attempt"); a != "" && a != strconv.Itoa(j.Attempt) {
 		httpError(w, http.StatusConflict, "this key is attempt "+strconv.Itoa(j.Attempt)+"'s")
 		return
@@ -283,8 +288,19 @@ func (s *Server) svcRunSpec(w http.ResponseWriter, r *http.Request, run store.Sv
 		v = 2
 	}
 	worker := "svc/" + run.Ref() + "/a" + strconv.Itoa(j.Attempt)
+	t, engine, selectErr := s.svcSelectEngine(run, worker, now)
+	if selectErr != nil {
+		code := SvcErrInfra
+		if strings.HasPrefix(selectErr.Error(), "template_invalid:") {
+			code = SvcErrTemplateInvalid
+		}
+		_, _ = s.SvcRunFinishDetail(run.ID, store.SvcRunFailed, code, selectErr.Error(), nil, nil)
+		s.svcEnvEnd(run.ID, j.Attempt, "engine unavailable", now)
+		httpError(w, http.StatusConflict, code)
+		return
+	}
 	claims := sessionCredClaims{V: v, ID: "sc_" + hex.EncodeToString(rnd[:]), Principal: run.Principal, WorkerID: worker,
-		Machine: "svc-run", Providers: []string{credvault.Claude}, Iat: iat.Unix(), Exp: exp.Unix(),
+		Machine: "svc-run", Providers: []string{engine}, Iat: iat.Unix(), Exp: exp.Unix(),
 		Svc: svcName(run.Principal), Tenant: run.Tenant, Run: run.Ref()}
 	ok, err := s.Store.FetchSvcRunJob(run.ID, j.Attempt, claims.ID, now)
 	if err != nil {
@@ -307,8 +323,14 @@ func (s *Server) svcRunSpec(w http.ResponseWriter, r *http.Request, run store.Sv
 	}
 	s.svcAudit(run.Principal, "svc.run.spec", run.Ref(), "ok", "pass "+claims.ID+" until "+
 		time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339), now)
+	remaining := int(deadline.Sub(now).Seconds())
+	attemptTimeout := remaining - 30
+	if engine == "codex" && run.Attempt == 1 && run.EnginePref == "codex,claude" {
+		attemptTimeout = (remaining - 30) / 2
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"run_id": run.Ref(), "attempt": j.Attempt, "deadline_s": run.DeadlineS,
-		"template": t.Name, "template_digest": t.Digest, "agent_md": t.AgentMD, "inputs": inputs,
+		"attempt_timeout_s": attemptTimeout,
+		"template":          t.Name, "template_digest": t.Digest, "agent_md": t.AgentMD, "inputs": inputs, "engine": engine,
 		"pass": s.signSessionPass(claims)})
 }
 
@@ -354,6 +376,10 @@ func (s *Server) svcRunResult(w http.ResponseWriter, r *http.Request, run store.
 		code = SvcErrOutputInvalid
 	case SvcExitTimeout:
 		code = SvcErrRunTimeout
+	case SvcExitModeration:
+		code = "moderation_blocked"
+	case SvcExitTemplateInvalid:
+		code = SvcErrTemplateInvalid
 	}
 	// the runner's own words on a failure go to the hub's log and audit only
 	ended, err := s.SvcRunFinishDetail(run.ID, state, code, in.Detail, res, in.Usage)

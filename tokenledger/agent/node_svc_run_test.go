@@ -12,6 +12,16 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
+func TestSvcRunTailBoundedAndRedacted(t *testing.T) {
+	var tail svcRunTail
+	_, _ = tail.Write([]byte(strings.Repeat("x", 10000)))
+	_, _ = tail.Write([]byte(" fsj_test fcp-h2.test-pass fcs_test key-to-remove"))
+	got := tail.text("key-to-remove")
+	if len(tail.data) > 4096 || strings.Contains(got, "test-pass") || strings.Contains(got, "fsj_test") || strings.Contains(got, "key-to-remove") {
+		t.Fatal("tail is not bounded and redacted")
+	}
+}
+
 // A service login takes one attempt at a time (claude-fleet#4086): its own
 // wrapper, the key on stdin only, killed and cleaned on a cancel; anything
 // else is refused.

@@ -166,5 +166,8 @@ DRILL_REFUSED=1 one 6 1; rc=$?
   || bad "G rc=$rc: $(grep R6 "$WORK/results")"
 settle || bad "G a process of run 6 outlived it"
 
+python3 "$BIN/fleet-svc-fetch-selftest.py" || bad "H public page reader"
+python3 "$BIN/fleet-svc-runner-selftest.py" || bad "I Codex runner and memory credentials"
+
 [ "$fail" = 0 ] && echo "svc-local selftest: PASS" || echo "svc-local selftest: FAIL"
 exit "$fail"

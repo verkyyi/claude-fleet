@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS svc_runs (
   callback_next     TEXT NOT NULL DEFAULT '',
   callback_last     TEXT NOT NULL DEFAULT '',
   deadline_at       TEXT NOT NULL DEFAULT '',
+  engine_pref       TEXT NOT NULL DEFAULT '',
+  engine_templates  TEXT NOT NULL DEFAULT '{}',
+  engine            TEXT NOT NULL DEFAULT '',
+  attempts_json     TEXT NOT NULL DEFAULT '[]',
   UNIQUE (principal, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS svc_runs_state ON svc_runs(state, queued_at);
@@ -111,6 +115,10 @@ func svcTimeRead(v string) *time.Time {
 
 // SvcRun is one run.
 type SvcRun struct {
+	EnginePref       string     `json:"engine_pref,omitempty"`
+	EngineTemplates  string     `json:"-"`
+	Engine           string     `json:"engine,omitempty"`
+	AttemptsJSON     string     `json:"-"`
 	ID               int64      `json:"-"`
 	Principal        string     `json:"principal"`
 	Tenant           string     `json:"tenant"`
@@ -155,9 +163,22 @@ func ParseSvcRunRef(ref string) int64 {
 // Ref is the run's R<id>.
 func (r SvcRun) Ref() string { return SvcRunRef(r.ID) }
 
+// SetSvcRunEngine records the hub's engine choice before the attempt gets a
+// model pass. Only the active attempt can be changed.
+func (s *Store) SetSvcRunEngine(id int64, attempt int, engine string) error {
+	_, err := s.write.Exec(`UPDATE svc_runs SET engine = ? WHERE id = ? AND state = 'running' AND attempt = ?`, engine, id, attempt)
+	return err
+}
+
+// RecordSvcAttempt preserves completed attempts across a requeue.
+func (s *Store) RecordSvcAttempt(id int64, attempt int, attempts, usage string) error {
+	_, err := s.write.Exec(`UPDATE svc_runs SET attempts_json = ?, usage_json = ? WHERE id = ? AND state = 'running' AND attempt = ?`, attempts, usage, id, attempt)
+	return err
+}
+
 const svcRunCols = `id, principal, tenant, subject, template, digest, inputs_json, idempotency_key, request_sha,
 	state, error_code, attempt, deadline_s, queued_at, started_at, finished_at, usage_json, result_json,
-	callback_url, callback_state, callback_attempts, callback_next, callback_last, deadline_at`
+	callback_url, callback_state, callback_attempts, callback_next, callback_last, deadline_at, engine_pref, engine_templates, engine, attempts_json`
 
 func scanSvcRun(sc interface{ Scan(...any) error }) (SvcRun, error) {
 	var r SvcRun
@@ -165,7 +186,7 @@ func scanSvcRun(sc interface{ Scan(...any) error }) (SvcRun, error) {
 	if err := sc.Scan(&r.ID, &r.Principal, &r.Tenant, &r.Subject, &r.Template, &r.Digest, &r.InputsJSON,
 		&r.IdempotencyKey, &r.RequestSHA, &r.State, &r.ErrorCode, &r.Attempt, &r.DeadlineS, &queued, &started,
 		&finished, &r.UsageJSON, &r.ResultJSON, &r.CallbackURL, &r.CallbackState, &r.CallbackAttempts, &next,
-		&r.CallbackLast, &deadline); err != nil {
+		&r.CallbackLast, &deadline, &r.EnginePref, &r.EngineTemplates, &r.Engine, &r.AttemptsJSON); err != nil {
 		return r, err
 	}
 	if t := svcTimeRead(queued); t != nil {
@@ -181,7 +202,18 @@ func (s *Store) ensureSvcRuns() error {
 		return fmt.Errorf("create svc_runs tables: %w", err)
 	}
 	// claude-fleet#4007: a database made by #4004's first version.
-	return s.addColumn("svc_runs", "deadline_at", "TEXT NOT NULL DEFAULT ''")
+	for _, c := range []struct{ name, ddl string }{
+		{"deadline_at", "TEXT NOT NULL DEFAULT ''"},
+		{"engine_pref", "TEXT NOT NULL DEFAULT ''"},
+		{"engine_templates", "TEXT NOT NULL DEFAULT '{}'"},
+		{"engine", "TEXT NOT NULL DEFAULT ''"},
+		{"attempts_json", "TEXT NOT NULL DEFAULT '[]'"},
+	} {
+		if err := s.addColumn("svc_runs", c.name, c.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateSvcRun queues r unless its principal already used its idempotency
@@ -194,10 +226,10 @@ func (s *Store) CreateSvcRun(r SvcRun, now time.Time) (run SvcRun, created bool,
 		r.DeadlineS = 900
 	}
 	res, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO svc_runs (principal, tenant, subject, template, digest,
-		inputs_json, idempotency_key, request_sha, state, deadline_s, queued_at, callback_url)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`),
+		inputs_json, idempotency_key, request_sha, state, deadline_s, queued_at, callback_url, engine_pref, engine_templates)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`),
 		r.Principal, r.Tenant, r.Subject, r.Template, r.Digest, r.InputsJSON, r.IdempotencyKey, r.RequestSHA,
-		r.DeadlineS, svcTime(now), r.CallbackURL)
+		r.DeadlineS, svcTime(now), r.CallbackURL, r.EnginePref, r.EngineTemplates)
 	if err != nil {
 		return SvcRun{}, false, err
 	}

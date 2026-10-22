@@ -126,6 +126,9 @@ park_row() {
   else
     warn park "session census unavailable; no zero inferred"
   fi
+  if _park_reap=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; export FLEET_SESSION_PARK_IDLE FLEET_SESSION_PARK_IDLE_UNATTENDED FLEET_SESSION_PARK_PRESENCE FLEET_SESSION_REAP_PARKED; exec python3 "$1/fleet-reap-overdue.py" --park-table' park-reap "$(dirname "$0")" 2>/dev/null); then
+    [ -z "$_park_reap" ] || info park-reap "$_park_reap"
+  fi
 }
 if [ "${1:-}" = --park ]; then
   park_row
