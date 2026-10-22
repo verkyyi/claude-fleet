@@ -774,6 +774,7 @@ if [ "$DONLY" = 0 ]; then
   if [ "$APPLY" = 1 ]; then
     ISTG=$(mktemp -d /tmp/fleet-login-install.XXXXXX) && chmod 755 "$ISTG" \
       && cp "$BIN/fleet-login-install.sh" "$BIN/fleet-release-lib.sh" "$BIN/fleet-daemon-lib.sh" \
+            "$BIN/fleet-release-fetch.py" "$BIN/fleet-release-verify.py" \
             "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$ISTG/" \
       && chmod 644 "$ISTG"/* \
       || { printf '%s: cannot stage fleet-login-install.sh for %s\n' "$PROG" "$LOGIN" >&2; fail; }
