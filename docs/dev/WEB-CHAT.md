@@ -484,12 +484,14 @@ peer 消息和子会话回报也通过 `fleet_agent_deliver` 调这一个唤醒�
 不会在新进程的收件箱再送一次。账本原因分别为「消息」「回报」。
 
 **选择框暂不自动停放（C4）**：Claude Code 2.1.295 的原生 AskUserQuestion 演练中，
-向打开的选择框发送 `/exit` 没有退出，反而提交了当前选项。无法证明题干与选项可安全恢复，
+向打开的选择框发送 `/exit` 没有退出，反而提交了当前 Blue 选项。无法证明题干与选项可安全恢复，
 因此即使等过 30 分钟仍保持运行；网页、⌘P、微信继续走现有代答入口。
-权限确认也继续排除。只有取得原生空输入框证明的空闲会话才可停放。
+权限确认也继续排除。统一 `park` 入口及原生证明后的复检都拦截 blocked、ask、权限标记和
+会话记录中未回答的 AskUserQuestion；旧 done 状态、loop 标记和内存紧均不能绕过，题干及选项原文不改。
+只有取得原生空输入框证明的空闲会话才可停放。
 
 有人切到窗口或在里面按 ↵ 也走这一路。C8 计量沿用 HHV0 的 `@parked` + `@park_held`，两者同时存在才计停放。`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前由 C1 写 `@park_saved_mb` 和
-`@park_why`；RSS 为进程树含外壳的总量，单位 MB，采样失败或根进程缺失时清除快照。C8 只读这份快照，缺失时隐藏节省项。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
+`@park_why`；RSS 为进程树含外壳的总量，单位 MB，采样失败或根进程缺失时清除快照。C8 优先读这份快照，缺戳时才按同一 fid 取最后一次 park 动作的 rss_mb 后备，两者都缺失则隐藏节省项。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
 `next` 与 `started` 为 epoch；成功 `park` 行可写 `rss_mb`（未采到为 null），用于动作记录，C8 日汇总按 act 计数和 wake secs 求分位。没有每拍的 skip 日志。
 
 **停放期间的定时任务（C3）**：停前通过 `fleet_loop_mark.py export --fid <身份>`

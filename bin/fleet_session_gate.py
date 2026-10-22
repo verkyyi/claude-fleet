@@ -746,6 +746,21 @@ def park_proof(w):
     return dict(ok=False, why="probe_timeout")
 
 
+def park_dialog(w):
+    """Choice/permission dialogs never receive /exit, even with a stale done
+    stamp or a loop. Claude treats it as a choice submission (C4), not an exit.
+    Reuse the answerer's pending-question reader so the original words stay put.
+    """
+    if (w["state"] == "needs" or w["word"] == "blocked"
+            or w["needs"] in ("ask", "question", "perm", "permission")):
+        return True
+    transcript = claude_transcript(w["sid"]) if w["agent"] == "claude" else None
+    if transcript is None:
+        return False  # the native idle proof below is still mandatory
+    from fleet_needs_detail import pending_dialog
+    return pending_dialog(str(transcript)) is not None
+
+
 def park_native_input(w):
     """The native background inventory already vetoed tools / goals / subagents.
 
@@ -806,6 +821,8 @@ def park_locked(fid, why, force):
     adapter = fleet_agent_adapter.ADAPTERS.get(w["agent"], {})
     if adapter.get("park_resume") != "1" or not w["sid"]:
         return dict(ok=False, why="not_resumable")
+    if park_dialog(w):
+        return dict(ok=False, why="asking")
     if w["state"] not in ("done", "looping"):
         return dict(ok=False, why=busy_of(w) or "not_idle")
     # A native Fleet loop has no Claude mod status/mark. Its looping label
@@ -833,11 +850,6 @@ def park_locked(fid, why, force):
     proof = park_proof(w)
     if not proof.get("ok"):
         return dict(ok=False, why=proof.get("why") or proof.get("error") or "not_idle")
-    # Recheck after the native proof: a client / queued turn may have arrived.
-    current = window(fid)
-    if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
-            or current["state"] in ("working", "needs", "exited") or watched(current)):
-        return dict(ok=False, why="changed")
     # Save physical rows with their SGR colours BEFORE /exit tears down the UI.
     # Refuse if capture failed: a blank holding page cannot preserve the screen.
     screen = tmux(w["sock"], "capture-pane", "-p", "-e", "-t", w["pane"])
@@ -858,6 +870,15 @@ def park_locked(fid, why, force):
     started = time.monotonic()
     since = str(int(now()))
     saved_mb = park_saved_mb(w)
+    # Snapshot, timer export and RSS sampling can take time. Recheck AFTER all
+    # of them, before marking parked or sending exit: a question/turn may have
+    # appeared since the native proof. Export alone has not handed off timers.
+    current = window(fid)
+    if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
+            or current["state"] in ("working", "needs", "exited") or watched(current)):
+        return dict(ok=False, why="changed")
+    if park_dialog(current):
+        return dict(ok=False, why="asking")
     # Do not retain the previous park's RSS when this sample is unavailable.
     if saved_mb is None:
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_saved_mb")

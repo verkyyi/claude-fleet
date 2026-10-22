@@ -228,10 +228,29 @@ class Continuation(unittest.TestCase):
         current = fallback.receipt(gate, FID)
         self.assertNotEqual(current['request_id'], old['request_id'])
         self.assertEqual(current['at'], 1000)
-        for why in ('transfer_refused', 'controller_unavailable', 'delivery_unsettled'):
+        for why in ('transfer_refused', 'controller_unavailable'):
             gate.write_json(path, dict(old, why=why))
             with patch.object(fallback.subprocess, 'Popen') as spawn:
                 self.start(); spawn.assert_not_called()
+
+    def test_unattempted_refusal_rechecks_when_native_cancel_or_delivery_settles(self):
+        path = gate.fid_dir(FID) / 'quota-continuation.json'
+        for why in ('boundary', 'delivery_unsettled'):
+            with self.subTest(why=why):
+                old = dict(source_session=SID, state='blocked', why=why, at=100, request_id='unattempted')
+                gate.write_json(path, old)
+                self.w.update(state='working', word='working')
+                with patch.object(fallback.subprocess, 'Popen') as spawn:
+                    self.start()
+                    spawn.assert_not_called()
+                    self.w.update(state='exited', word='error')
+                    self.start([dict(state='native')])
+                    spawn.assert_not_called()
+                    self.start()
+                    self.start()
+                    self.assertEqual(spawn.call_count, 1)
+                self.assertEqual(fallback.receipt(gate, FID)['state'], 'starting')
+                self.assertEqual(self.w['state'], 'exited')
 
 
 def subprocess_result(rc):

@@ -107,7 +107,7 @@ while True:
         # new-window inherits its server environment; pass only fixture settings.
         import shlex
         cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
-                               if k.startswith('FLEET_') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
+                               if (k.startswith('FLEET_') or k == 'PATH') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
         self.win = self.tm('new-window', '-d', '-P', '-F', '#{window_id}', '-t', 'test', cmd)
         self.set('@fleet_id', self.fid)
         self.set('@fleet_role', 'worker')
@@ -289,6 +289,109 @@ class client:
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
 
+    def dialog_transcript(self):
+        path = self.root / 'question.jsonl'
+        path.write_text(json.dumps({'message': {'content': [{
+            'type': 'tool_use', 'id': 'question-1', 'name': 'AskUserQuestion',
+            'input': {'questions': [{'question': 'Pick a colour', 'header': 'Colour',
+                                    'options': [{'label': 'Blue'}, {'label': 'Red'}]}]}
+        }]}}) + '\n')
+        return path
+
+    def test_dialog_guard_all_park_routes(self):
+        # A native question can outlive a stale done stamp. Both the timer and
+        # memory-pressure driver must reach the same refusal, even after 30m.
+        from types import SimpleNamespace
+        self.fake()
+        # The relay endpoint precedes the first asynchronous 7501 state write.
+        # Wait for that writer before setting the dialog, or its startup idle
+        # can erase the test's ask/needs stamps under CI load.
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.dialog_transcript()
+        original = transcript.read_bytes()
+        cases = [('needs', 'ask', '', ''), ('done', 'ask', '', ''),
+                 ('done', 'permission', '', ''), ('done', '', 'blocked', ''),
+                 ('done', '', 'blocked', 'timer'), ('native', '', '', '')]
+        for state, needs, word, loop in cases:
+            for via in ('idle', 'memory', 'driver-idle', 'driver-memory'):
+                with self.subTest(state=state, needs=needs, word=word, loop=loop, via=via):
+                    self.set('@claude_state', 'done' if state == 'native' else state)
+                    self.set('@claude_needs', needs)
+                    self.set('@agent_status', json.dumps({'state': word}))
+                    self.set('@loop', loop)
+                    self.set('@claude_state_ts', str(int(time.time()) - 3601))
+                    exits = []
+
+                    def relay(w, request):
+                        if request['op'] == 'exit':
+                            exits.append(request)
+                            return {'ok': False, 'why': 'test_no_exit'}
+                        return {'ok': True, 'generation': 1}
+
+                    with patch.dict(os.environ, self.env), \
+                            patch.object(gate, 'claude_transcript', return_value=transcript if state == 'native' else None), \
+                            patch.object(gate, 'relay_request', side_effect=relay):
+                        if via.startswith('driver-'):
+                            args = SimpleNamespace(socket_name=self.label, session='test',
+                                                   window_repo=False, repo='', dry_run=False)
+                            driver = reap.Cleaner(args)
+                            driver.now = int(time.time())
+                            driver._mem = (via == 'driver-memory', '')
+                            driver._park_watched = set()
+                            snap = driver.snapshot(self.win)
+
+                            def run_gate(*argv):
+                                self.assertIn('park', argv)
+                                result = gate.park(self.fid, why=argv[-1])
+                                self.assertEqual(result.get('why'), 'asking', result)
+                                return json.dumps(result)
+
+                            with patch.object(driver, 'busy', return_value=False), \
+                                    patch.object(reap, 'run', side_effect=run_gate):
+                                self.assertFalse(driver.web_park(self.win, snap))
+                        else:
+                            result = gate.park(self.fid, why=via)
+                            self.assertFalse(result['ok'], result)
+                            self.assertEqual(result.get('why'), 'asking', result)
+                    self.assertEqual(exits, [], '/exit must never be injected into a choice')
+                    self.assertFalse(self.opt('@parked'))
+                    self.assertTrue(self.opt('@park_relay'))
+                    self.assertEqual(transcript.read_bytes(), original, 'question/options changed')
+
+    def test_dialog_appears_after_native_proof(self):
+        self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.root / 'question.jsonl'
+        with patch.dict(os.environ, self.env), \
+                patch.object(gate, 'claude_transcript', return_value=transcript), \
+                patch.object(gate, 'relay_request', return_value={'ok': True, 'generation': 1}) as relay:
+            def proof(w):
+                self.dialog_transcript()
+                return {'ok': True}
+            with patch.object(gate, 'park_proof', side_effect=proof):
+                result = gate.park(self.fid, why='memory')
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(any(c.args[1]['op'] == 'exit' for c in relay.call_args_list),
+                         '/exit reached a question opened during the idle proof')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def test_dialog_appears_during_timer_export(self):
+        import fleet_park_wake
+        self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.root / 'question.jsonl'
+        with patch.dict(os.environ, self.env), \
+                patch.object(gate, 'claude_transcript', return_value=transcript), \
+                patch.object(gate, 'relay_request', return_value={'ok': True, 'generation': 1}) as relay, \
+                patch.object(fleet_park_wake, 'export', side_effect=lambda fid: self.dialog_transcript()):
+            result = gate.park(self.fid, why='memory')
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(any(c.args[1]['op'] == 'exit' for c in relay.call_args_list),
+                         '/exit reached a question opened while exporting timers')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
     def test_local_child_report_wakes_parent(self):
         # fleet-report-parent.sh must reach the gate before its missing-PID
         # fallback. This drives the report producer, not only queue replay.
@@ -369,6 +472,25 @@ class client:
         self.assertEqual(rows[0]['rss_mb'], observed['saved_mb'])
 
     def test_park_screen_and_keyboard_sentence(self):
+        # macOS Python 3.9 starts monotonic() near zero in each process. Rebase
+        # only the real parked editor's clock so Linux covers the same startup.
+        import shlex
+        clock = self.root / 'clock-origin.py'
+        clock.write_text('import runpy,sys,time\nfrom pathlib import Path\n'
+                         'native=time.monotonic; origin=native()\n'
+                         'time.monotonic=lambda: native()-origin\n'
+                         'sys.argv=sys.argv[1:]\n'
+                         'sys.path.insert(0,str(Path(sys.argv[0]).resolve().parent))\n'
+                         'runpy.run_path(sys.argv[0],run_name="__main__")\n')
+        shim = self.root / 'tools'
+        shim.mkdir()
+        python = shim / 'python3'
+        executable = shlex.quote(sys.executable)
+        python.write_text('#!/bin/sh\ncase "$1" in\n'
+                          ' */fleet-park-page.py) exec ' + executable + ' ' + shlex.quote(str(clock)) + ' "$@" ;;\n'
+                          ' *) exec ' + executable + ' "$@" ;;\nesac\n')
+        python.chmod(0o755)
+        self.env['PATH'] = str(shim) + os.pathsep + self.env.get('PATH', '')
         self.fake()
         self.wait(lambda: 'last answer: preserved' in self.tm('capture-pane', '-p', '-t', self.win))
         before = self.tm('capture-pane', '-p', '-t', self.win).split('\n')
@@ -390,6 +512,7 @@ class client:
         self.tm('select-window', '-t', self.win)
         time.sleep(1.2)
         self.assertTrue(self.opt('@park_held'), 'viewing resumed the parked agent')
+        self.assertEqual(self.opt('@park_presence'), '0', 'viewing counted as keyboard input')
         self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
         time.sleep(.4)
         self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')
