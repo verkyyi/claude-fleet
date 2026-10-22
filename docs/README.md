@@ -32,7 +32,7 @@
 - [ID-SWITCH.md](dev/ID-SWITCH.md) — 切到「一个窗口一个 ID」：MacBook 会话照做的切换说明书（迁移 + 开关 + 回退）
 - [WORKER.md](dev/WORKER.md) — 执行会话的规则背景与排障（流程由 SessionStart hook 给出）
 - [TASK-LIST-DESIGN.md](dev/TASK-LIST-DESIGN.md) — Terminal / Web 任务列表设计与交互原型
-- [Hub 任务完整调整方案](dev/HUB-TASK-IMPLEMENTATION-DESIGN.md) — 最终交互、唯一执行权、Hub 订阅、停止、迁移与验收。
+- [Hub 任务完整调整方案](dev/HUB-TASK-IMPLEMENTATION-DESIGN.md) — 最终交互、唯一执行权、停止、迁移与验收。
 - [HUB-TASK-SIMPLIFY.md](dev/HUB-TASK-SIMPLIFY.md) — Hub 任务与编排减法提案：原生协作、统一事件、可关闭的任务
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：夹具验收与独立的 live 演练单
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
