@@ -20,10 +20,11 @@ import (
 // When the upstream says so — not a request-rate 429, which passes through as
 // before — the proxy tells the hub (POST RebindPath), which remembers the
 // account as full and moves the session's binding to an account with room.
-// The proxy then sends the same request (its body is already read) once more
+// Claude then sends the same request (its body is already read) once more
 // with the new account's token; the audit line carries `rebind_from`. No
 // account with room, or the second answer is a 429 too: the client gets that
-// answer, unchanged. One retry per request, never a loop.
+// answer, unchanged. One retry per Claude request, never a loop. Codex returns
+// the original 429 without replay; only its next request uses the new binding.
 
 // RebindPath is the hub route a quota 429 is reported to (api.CredProxyRebindPath).
 const RebindPath = "/v1/fleet/credproxy/rebind"
@@ -167,6 +168,11 @@ func (p *Proxy) rebind(ctx context.Context, resp *http.Response, pass, provider 
 		return resp
 	}
 	p.remember(pass, provider, nr)
+	if provider == Codex {
+		// A quota failure changes only the NEXT request's binding. Never
+		// replay a Codex body on another subscription, even before streaming.
+		return resp
+	}
 	again, err := send(nr)
 	if err != nil {
 		return resp

@@ -446,6 +446,7 @@ class ParkRelay:
         self.server.setblocking(False)
         self.generation = 0
         self.exiting = False
+        self.exit_confirmed = False
         self.presence_at = 0
         if pane():
             tmux(["set-option", "-w", "-t", pane(), "@park_relay", self.path])
@@ -467,10 +468,21 @@ class ParkRelay:
                     buffer.extend(b"/exit\r")
                     self.exiting = True
                     reply = dict(ok=True)
+                elif (op == 'confirm-exit' and self.exiting and not self.exit_confirmed
+                      and not pending_input and not buffer and request.get('generation') == self.generation):
+                    import hashlib
+                    screen = subprocess.check_output(['tmux', 'capture-pane', '-p', '-t', pane()],
+                                                     text=True, timeout=3)
+                    if request.get('screen') == hashlib.sha256(screen.encode()).hexdigest():
+                        buffer.extend(b'\r')
+                        self.exit_confirmed = True
+                        reply = dict(ok=True)
+                    else:
+                        reply = dict(ok=False, why='dialog_changed')
                 else:
                     reply = dict(ok=False, why="input_changed")
                 client.sendall((json.dumps(reply) + "\n").encode())
-            except (OSError, ValueError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 pass
 
     def close(self):

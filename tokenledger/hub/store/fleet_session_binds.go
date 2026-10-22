@@ -113,3 +113,15 @@ func (s *Store) SessionBinds(workerID string) ([]SessionBind, error) {
 	}
 	return out, rows.Err()
 }
+
+// CompareSessionBind changes only the revision evaluated by the scheduler.
+// Concurrent requests / replicas and an operator's explicit bind win over a
+// stale decision; the caller uses the binding that actually stands.
+func (s *Store) CompareSessionBind(b SessionBind, revision int64, at time.Time) (SessionBind, error) {
+	_, err := s.write.Exec(`UPDATE fleet_session_binds SET owner=?, account=?, set_by=?, rev=rev+1, updated_at=?
+ WHERE worker_id=? AND provider=? AND rev=?`, b.Owner, b.Account, b.SetBy, at.UTC().Format(sessRFC), b.WorkerID, b.Provider, revision)
+	if err != nil {
+		return b, err
+	}
+	return s.SessionBindFor(b.WorkerID, b.Provider)
+}

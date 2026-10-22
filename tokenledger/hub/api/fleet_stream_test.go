@@ -265,6 +265,11 @@ func TestFleetStreamTornReadBounded(t *testing.T) {
 	beat(t, a.conn, control.Proto, hb)
 	waitFor(t, 3*time.Second, "node heard", func() bool { return len(roster(t, h).Nodes) == 1 && roster(t, h).Nodes[0].LastHeartbeat != nil })
 
+	// Finish the first beat before subscribing, as TestFleetStreamTornRead
+	// does. A late load-history update otherwise queues another old-load
+	// event while this test sleeps, before the second beat is even sent.
+	waitFor(t, 3*time.Second, "load history", func() bool { return len(h.srv.loadHist.series("mac-d", time.Now())) == 1 })
+
 	// A recording that never ends: every read from here on overlaps one.
 	h.srv.nodesChanged.begin()
 	t.Cleanup(h.srv.nodesChanged.end)
@@ -275,12 +280,21 @@ func TestFleetStreamTornReadBounded(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond) // out of the first event's second
 	hb.Load1 = 6.25
 	beat(t, a.conn, control.Proto, hb)
-	ev := nextEvent(t, ch, "nodes", 3*time.Second)
-	if !strings.Contains(ev.data, `"load1":6.25`) {
-		t.Errorf("nodes event under endless recording = %s; want the new load", ev.data)
+	// Under a deliberately never-settled recording, the bounded fallback
+	// may emit a frame read across the second beat. Keep the original
+	// deadline, but wait for the new observation rather than mistaking
+	// that permitted intermediate frame for the beat's final result.
+	deadline := time.Now().Add(3 * time.Second)
+	ev := nextEvent(t, ch, "nodes", time.Until(deadline))
+	for !strings.Contains(ev.data, `"load1":6.25`) {
+		ev = nextEvent(t, ch, "nodes", time.Until(deadline))
 	}
-	if d := ev.at.Sub(h.srv.nodesChanged.lastFired()); d > time.Second {
-		t.Errorf("nodes event %v after the beat was recorded; want ≤ 1 s", d)
+	// A permitted intermediate frame can consume the coalescing slot.
+	// The final observation then pays that slot plus the bounded rereads
+	// and recheck ticks. This is a fixed bound, not a deadline reset per frame.
+	maxDelay := fleetStreamCoalesce + time.Duration(fleetStreamRereads)*fleetStreamReread + 2*fleetStreamRecheck
+	if d := ev.at.Sub(h.srv.nodesChanged.lastFired()); d > maxDelay {
+		t.Errorf("nodes event %v after the beat was recorded; want ≤ %v", d, maxDelay)
 	}
 	// One second of rechecks (20 at 50 ms), each read at most 1+rereads times.
 	n0 := reads.Load()
