@@ -93,6 +93,8 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     (named as the book's writers, which run on a machine)
 #     fleet_reap_notice.py (lazy import inside fleet_reap_policy.explain, called
 #     only by the node doctor; client policy parsing/labels never call explain)
+#     fleet_session_gate.py fleet_id.py (lazy imports in the node-only report
+#     begin/finish commands; client policy parsing/labels never submit reports)
 #   words fleet-ui-lang.sh only prints (a hint naming a machine's command):
 #     dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh fleet-webchat.sh
 #   承载's, each behind a presence test that says so or takes the client road:
@@ -112,7 +114,7 @@ NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_vi
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
   fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh fleet_cred_ctl.py
   fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
-  fleet-node-probe.sh fleet-board-diff.py fleet-hook-conf.sh fleet_reap_notice.py"
+  fleet-node-probe.sh fleet-board-diff.py fleet-hook-conf.sh fleet_reap_notice.py fleet_session_gate.py fleet_id.py"
 
 check() {
   local list=${1:-$LIST_DEF} man=${2:-$MANIFEST_DEF}

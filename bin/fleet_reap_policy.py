@@ -408,6 +408,16 @@ def idle_owned(policy, now=None):
     return False
 
 
+def report_path(fid):
+    """Read-only path; policy parsing/doctor need no node runtime imports."""
+    import os
+    from pathlib import Path
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+        return None
+    conf = Path(os.environ.get("FLEET_CONF_DIR") or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "claude-fleet")
+    return Path(os.environ.get("FLEET_GATE_DIR") or conf / "session-gate") / fid / "report.json"
+
+
 def report_proof(fid):
     """Local completion evidence, beside the existing identity gate's receipts.
 
@@ -415,15 +425,15 @@ def report_proof(fid):
     This is not a parked state, nor a second delivery queue.
     """
     import json
-    from fleet_session_gate import gate_root, FID_RE
-    if not FID_RE.fullmatch(fid or ""):
+    path = report_path(fid)
+    if path is None:
         return {}
     try:
-        rec = json.loads((gate_root() / fid / "report.json").read_text())
+        rec = json.loads(path.read_text())
         if not isinstance(rec, dict):
             return {"phase": "unknown"}
         if rec.get("phase") == "complete" and (
-                not FID_RE.fullmatch(str(rec.get("token", "")))
+                report_path(str(rec.get("token", ""))) is None
                 or not isinstance(rec.get("result_seq"), int) or rec["result_seq"] < 1):
             return {"phase": "unknown"}
         return rec
@@ -489,8 +499,7 @@ def main(argv):
         return 2
     cmd, args = argv[1], argv[2:]
     if cmd in ("report-begin", "report-finish", "report-ready"):
-        from fleet_session_gate import FID_RE
-        if not args or not FID_RE.fullmatch(args[0]):
+        if not args or report_path(args[0]) is None:
             return 2
         try:
             if cmd == "report-begin" and len(args) == 2:
