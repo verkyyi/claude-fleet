@@ -46,6 +46,7 @@ import {
   firstLabel,
   gb,
   machineRows,
+  runtimeVersions,
   serviceRows,
   sessionState,
   short,
@@ -104,7 +105,7 @@ export function MachineDetailPage() {
 
   // The machine's identity for its subscription rule (cred-policy's
   // machineTargets): one answer from its endpoints, else none.
-  const eps = st?.row?.eps.join(" ") || "";
+  const eps = st?.row?.policyEps.join(" ") || "";
   React.useEffect(() => {
     if (!st || st.nodeId !== undefined) return;
     const list = eps ? eps.split(" ") : [];
@@ -393,6 +394,8 @@ function rollText(r: NonNullable<NodeDetail["version"]["roll"]>): string {
 
 function VersionCard({ d, row, stable }: { d: NodeDetail; row: MachineRow | null; stable: string }) {
   const v = d.version;
+  const installHeads = [...new Set(d.logins.filter((n) => n.role !== "client" && n.status !== "lost")
+    .map((n) => short(n.fleet_version)).filter(Boolean))].join(" / ");
   const pair = (n?: number, rel?: string) => (n ? `v${n}${rel ? " · " + short(rel) : ""}` : "—");
   const off = !!v.want && (v.want !== v.reached || !!v.diff);
   const comps = components(v);
@@ -408,7 +411,7 @@ function VersionCard({ d, row, stable }: { d: NodeDetail; row: MachineRow | null
       <CardContent>
         <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-2 text-sm">
           <KV k={tm("d.runtime")}>
-            <span className={cn("font-mono text-xs", row?.behind && "text-warn")}>{short(v.runtime) || row?.version || "—"}</span>
+            <span className={cn("font-mono text-xs", row?.behind && "text-warn")}>{row?.version || runtimeVersions(d.machine, d.logins).map(short).join(" / ") || short(v.runtime) || "—"}</span>
           </KV>
           <KV k={tm("d.stable")}>
             <span className="font-mono text-xs">{stable || "—"}</span>
@@ -424,7 +427,7 @@ function VersionCard({ d, row, stable }: { d: NodeDetail; row: MachineRow | null
             <span className="font-mono text-xs">{v.agent || "—"}</span>
           </KV>
           <KV k={tm("d.fleet")}>
-            <span className="font-mono text-xs">{short(v.fleet) || "—"}</span>
+            <span className="font-mono text-xs">{installHeads || (d.logins.length ? "" : short(v.fleet)) || "—"}</span>
           </KV>
           {(!!v.want || !!v.reached) && (
             <>

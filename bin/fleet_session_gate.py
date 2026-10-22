@@ -722,6 +722,8 @@ def wake_try(r, w):
         deferred = read_json(str(seed) + ".deferred")
         if deferred:
             r['wake_retry_at'] = deferred['retry_at']
+            if deferred.get('queued_at'):
+                r['wake_queued_at'] = deferred['queued_at']
             return "queued", deferred['deferred']
         failed = read_json(str(seed) + ".meta.failed")
         if failed:
@@ -762,7 +764,7 @@ def wake_try(r, w):
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
     save(r)
     log("wake", r, "seed")
-    requested = wake_request(w, seed, r.get("wake_why", "网页"), r.get("wake_next"))
+    requested = wake_request(w, seed, r.get("wake_why", "网页"), r.get("wake_next"), r.get('wake_queued_at'))
     if not requested.get("ok"):
         seed.unlink(missing_ok=True)
         return "queued", requested["why"]
@@ -1049,7 +1051,7 @@ def park_locked(fid, why, force):
     return dict(ok=False, why=sent.get("why") or "exit_failed")
 
 
-def wake_request(w, seed, why, next_at=None):
+def wake_request(w, seed, why, next_at=None, queued_at=None):
     """Called under the fid lock: one owned seed, never replace another wake."""
     # An unsubmitted terminal draft is not a message to send with a peer wake.
     # Callers keep their words queued; the keyboard's own Enter submits its draft.
@@ -1062,7 +1064,7 @@ def wake_request(w, seed, why, next_at=None):
     if seed.read_text().strip():
         from fleet_reap_policy import work_changed_locked
         work_changed_locked(w["fid"], w.get("task", ""))
-    meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
+    meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed), queued_at=queued_at or now(),
                 guarded=w.get("wrap_ver") == "3",
                 next=next_at if next_at is not None else
                 (read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
@@ -1149,10 +1151,11 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
             if not w["parked"]:
                 ok, reason = can_talk(w)
                 return dict(ok=True, already=True) if ok else dict(ok=False, why=reason)
+            previous = read_json(str(seed) + '.deferred') or {}
             for suffix in ('.deferred', '.meta.failed', '.error', '.admitted', '.fresh'):
                 Path(str(seed) + suffix).unlink(missing_ok=True)
             seed.write_text(Path(seed_file).read_text() if seed_file else "")
-            result = wake_request(w, seed, why)
+            result = wake_request(w, seed, why, queued_at=previous.get('queued_at'))
             if not result.get("ok"):
                 seed.unlink(missing_ok=True)
                 return result

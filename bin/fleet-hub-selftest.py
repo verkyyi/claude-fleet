@@ -913,7 +913,8 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ --repo example/project issue:123 -$")
         self.assertEqual((self.node.conf / "peer.body").read_text(), "继续：先跑 selftest 再开 PR\n第二行")
         scratch = self.lifecycle("worker_message", "scratch-4", text="hi")
-        self.assertEqual((scratch["status"], scratch["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
+        self.assertEqual(scratch["status"], "succeeded", scratch)
+        self.assertRegex(self.node.calls("peer")[-1], r"^-L \S+ @13 -$")
         for text in ("", " ", "x" * 4001, "<!-- fleet:no-relay -->", "a\x1b[Ab", 5):
             with self.subTest(text=text), self.assertRaises(Fault):
                 self.call("worker_message", {"worker_id": self.worker(), "idempotency_key": "bad", "text": text})
@@ -931,7 +932,21 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@15", 123, False, "/fixture/issue-123"))
         two = self.lifecycle("worker_message", idem="msg-two", text="anyone?")
         self.assertEqual((two["status"], two["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
-        self.assertEqual(len(self.node.calls("peer")), 2)
+        self.assertEqual(len(self.node.calls("peer")), 3)
+
+    def test_message_reaches_keyless_identity_without_picking_a_sibling(self):
+        wanted, other = str(uuid.uuid4()), str(uuid.uuid4())
+        self.node.windows(("@12", None, True, "", "", "?", wanted),
+                          ("@13", None, True, "", "", "?", other))
+        done = self.lifecycle("worker_message", wanted, text="continue after reconnect")
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ @12 -$")
+        self.assertEqual((self.node.conf / "peer.body").read_text(), "continue after reconnect")
+        self.node.windows(("@12", None, True, "", "", "?", wanted),
+                          ("@13", None, True, "", "", "?", wanted))
+        duplicate = self.lifecycle("worker_message", wanted, idem="duplicate-keyless", text="do not guess")
+        self.assertEqual(duplicate["result"]["error"]["code"], "AMBIGUOUS")
+        self.assertEqual(len(self.node.calls("peer")), 1)
 
     def test_check_text_passes_only_a_batch_marker_line(self):
         # T815: an EPIC's charter carries <!-- fleet:epic … --> on its own line (a redo

@@ -590,6 +590,9 @@ class Control:
             return self.execute_transfer(fleet, key, params["to"])
         if action == "worker_reap":
             return self.execute_reap(fleet, key)
+        if action == "worker_message":
+            matches, _ = self.target(fleet, key, action)
+            return self.execute_inject(fleet, matches, params["text"])
         if is_identity(key):
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
@@ -599,13 +602,6 @@ class Control:
             key = matches[0]["key"]
         if action == "worker_answer":
             return self.execute_answer(fleet, key, params["answer"], actor)
-        if action == "worker_message":
-            if not key.rsplit(":", 1)[-1].startswith("issue-"):
-                raise Unattempted("INVALID_ARGUMENT", "A scratch session has no issue channel to message")
-            matches, _ = self.target(fleet, key, action)
-            # Straight to the live session (issue #4898: the comment road that the
-            # issue bridge relayed left with the issue layer).
-            return self.execute_inject(fleet, matches, params["text"])
         if action == "worker_stop":
             matches, _ = self.target(fleet, key, action)
             code, output, err = self.adapter("stop", fleet["name"], key, timeout=120)
@@ -669,7 +665,11 @@ class Control:
         several on a guess."""
         if len(matches) > 1:
             raise Unattempted("AMBIGUOUS", "Several live windows hold this identity; resolve them on the fleet first")
-        code, output, err = self.adapter("inject", fleet["name"], matches[0]["key"],
+        # A no-repo session has an identity but no issue/scratch key. Its
+        # window was resolved above on this fleet; never pass None to argv.
+        key = matches[0]["key"] or ""
+        target = key if key.rsplit(":", 1)[-1].startswith("issue-") else matches[0]["window_id"]
+        code, output, err = self.adapter("inject", fleet["name"], target,
                                          payload=text.encode("utf-8"), timeout=60)
         if code:
             raise Unattempted("EXECUTION_FAILED", "Direct delivery was refused: " + last_line(err))

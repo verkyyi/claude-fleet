@@ -6645,6 +6645,22 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_park_runtime_capacity() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-lifecycle-capacity-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='确认停放才释放运行容量，接回重新计入；memory make-room 保留 pin/keep/管家及身份，问题不退出'
+}
+
+drill_wake_fair_order() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-wake-fairness-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='共享唤醒票据同级先到先得，人工优先有界，过期票据不挡队列'
+}
+
 drill_wake_launcher_no_ready() {
   CAP=30; local t0 out
   t0=$(now)

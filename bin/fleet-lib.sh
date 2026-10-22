@@ -8213,7 +8213,7 @@ fleet_hub_sessions() {
 # 2026-10-07 three such shells filled a login's 4/4 and refused the one real
 # start.
 _fleet_session_tally() {   # → "<awake>" across every fleet
-  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT" | awk "$FLEET_ROLE_AWK"'
+  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_RUNNING_FMT" | awk "$FLEET_ROLE_AWK"'
     { rows[NR]=$0; r=frole($2); if (r=="home" || r=="panel") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
@@ -8237,7 +8237,7 @@ fleet_session_count() { _fleet_session_tally; }
 # AND the agent rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
 # per-fleet caps count different sets.
 _fleet_session_tally_for() {   # <sess> → "<awake>" in that fleet
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_RUNNING_FMT" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
     { ag=1; t=$0
       if (match(t, / @A=[^ ]*$/)) { ag=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
       role=frole(t)
@@ -8257,9 +8257,15 @@ fleet_session_count_for() { _fleet_session_tally_for "$1"; }
 # its way) in <window>, rc 1 when nothing does: the wrapper gone (@wrap_gone, a
 # launch that fell to the caller's shell), the pane dead, or the session on its
 # recovery page (@claude_state exited) — issue #2404. The ONE rule the caps
-# (FLEET_AGENT_FMT in the tallies above) and the idle reap share; a window that
+# and the idle reap share; runtime tallies additionally exclude confirmed parks. A window that
 # does not exist is rc 2.
 FLEET_AGENT_FMT='#{?#{pane_dead},0,#{?#{@wrap_gone},0,#{?#{==:#{@claude_state},exited},0,1}}}'
+# C7/T939: retention is not runtime capacity. Only an acknowledged parked
+# wrapper with no relay or pending wake releases capacity. Exit requests and
+# starts still count; unknown/legacy windows remain conservative. Keep the ID
+# reader's FLEET_AGENT_FMT unchanged: parking is not a closed/recovery session.
+FLEET_RUNNING_FMT="#{?#{&&:#{&&:#{@parked},#{@park_held}},#{&&:#{m/r:^[1-9][0-9]*$,#{@park_wrap_ver}},#{==:#{@park_relay}#{@park_start}#{@park_wake},}}},0,$FLEET_AGENT_FMT}"
+
 fleet_window_has_agent() {
   local a
   # #{window_id} first: tmux answers an unknown target with empty formats, rc 0.
@@ -8284,7 +8290,7 @@ fleet_reap_state() {
 # window that holds a slot in that fleet — the refusal names them (issue #2404 ③),
 # so 「4/4」 is never a mystery and the way out is one command.
 fleet_session_slot_holders() {
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_RUNNING_FMT	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
     | awk -F'\t' "$FLEET_ROLE_AWK"'
       { split($1, h, " "); if (frole($2)!="worker") next
         if (h[1] ~ /^@/ && h[2]!="0") print h[1] "\t" $3 "\t" $4 }'
@@ -8311,7 +8317,7 @@ _fleet_holders_note() {
 #              global-only behaviour unchanged) AND the cap is a positive number.
 # On refusal, prints a human-readable reason on stdout for the caller to surface
 # (tmux display-message); prints nothing when allowed. Both ceilings count the
-# worker windows with an agent in them (FLEET_AGENT_FMT, issue #2404).
+# worker windows consuming runtime capacity (FLEET_RUNNING_FMT); retained parks do not count.
 # fleet_fetch_bounded <main> <base> — `git fetch origin <base>`, given at most
 # FLEET_POOL_FETCH_SECS seconds (default 20; 0 = no bound) — issue #3999. A remote
 # that never answers (a pod with no egress to GitHub) hung the fetch forever — and
@@ -9121,8 +9127,8 @@ fleet_machine_sessions_summary() {
 # estimate lacks for ONE more session (fleet_machine_headroom: the floor, the
 # hysteresis and the reserved ones' cost above what is available), else
 # FLEET_ADMIT_MAKE_ROOM_MB (1024). `fleet-cleanup-idle.sh --make-room` folds the
-# done ones first, then the longest idle — never a pinned one, an orchestrator,
-# `keep`, one working or asking — each recorded and resumable from 已收起, its
+# done ones first through the normal final-result reaper, then safe idle parks
+# (pin/keep preserve the window). Legacy wrappers retain their close gates; each close is resumable, its
 # worktree kept. Says what it did on stdout; rc 0 when something was folded (the
 # caller asks again), rc 1 when nothing was (or FLEET_ADMIT_MAKE_ROOM=0, or it
 # ran past FLEET_ADMIT_MAKE_ROOM_SECS, 90).
@@ -9146,7 +9152,7 @@ EOF
   fi
   out=$(fleet_timebox "$secs" bash "$_FLEET_LIB_DIR/fleet-cleanup-idle.sh" --make-room "$need" 2>/dev/null)
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/making room: /'
-  case "$out" in *folded:*) sleep "${FLEET_ADMIT_MAKE_ROOM_SETTLE:-1}" 2>/dev/null; return 0 ;; esac
+  case "$out" in *folded:*|*parked-room:*) sleep "${FLEET_ADMIT_MAKE_ROOM_SETTLE:-1}" 2>/dev/null; return 0 ;; esac
   return 1
 }
 

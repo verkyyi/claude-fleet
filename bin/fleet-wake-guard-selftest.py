@@ -75,31 +75,37 @@ class Storm(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             env = dict(os.environ, FLEET_WAKE_SLOT_DIR=tmp, FLEET_SESSION_WAKE_SLOTS='1',
-                       FLEET_WAKE_ADMIT_CMD='true')
-            ticket = guard.shared_file(directory / 'human-test')
-            fcntl.flock(ticket, fcntl.LOCK_EX)
+                       FLEET_WAKE_ADMIT_CMD='true', PYTHONPATH=str(BIN))
+            # Hold capacity while both REAL waiters register. An artificial
+            # locked human ticket is itself an older waiter under FIFO; it must
+            # not be bypassed just to make a newer human win this test.
+            slot = guard.shared_file(directory / 'slot-0')
+            fcntl.flock(slot, fcntl.LOCK_EX)
+            guard.shared_file(directory / 'human-dead').close()
             code = ('import sys,time; from pathlib import Path; import fleet_wake_guard as g; '
                     'p=Path(sys.argv[1]); m=dict(fid="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",why=sys.argv[2]); '
-                    'f=g.acquire(p,m); p.write_text("acquired"); time.sleep(.1); f.close()')
-            env['PYTHONPATH'] = str(BIN)
-            timer = subprocess.Popen([sys.executable, '-c', code, str(directory / 'timer'), '定时'], env=env)
+                    'f=g.acquire(p,m); p.write_text(str(time.monotonic_ns())); time.sleep(.1); f.close()')
+            children = []
             try:
-                time.sleep(.3)
+                for kind, why in (('timer', '定时'), ('human', '⌘P')):
+                    children.append(subprocess.Popen([sys.executable, '-c', code, str(directory / kind), why], env=env))
+                    until = time.monotonic() + 5
+                    while not any(p.name != 'human-dead' for p in directory.glob(kind + '-*')):
+                        self.assertLess(time.monotonic(), until, 'waiter did not register')
+                        time.sleep(.01)
                 self.assertFalse((directory / 'timer').exists())
-                human = subprocess.run([sys.executable, '-c', code, str(directory / 'human'), '⌘P'],
-                                       env=env, timeout=5)
-                self.assertEqual(human.returncode, 0)
-                self.assertTrue((directory / 'human').exists())
-                self.assertFalse((directory / 'timer').exists())
-                ticket.close()  # Simulate a dead waiter: stale filename, no lock.
-                timer.wait(timeout=5)
-                self.assertEqual(timer.returncode, 0)
-                self.assertTrue((directory / 'timer').exists())
+                self.assertFalse((directory / 'human').exists())
+                slot.close()
+                for child in children:
+                    child.wait(timeout=5)
+                    self.assertEqual(child.returncode, 0)
+                self.assertLess(int((directory / 'human').read_text()), int((directory / 'timer').read_text()))
             finally:
-                ticket.close()
-                if timer.poll() is None:
-                    timer.kill()
-                timer.wait()
+                slot.close()
+                for child in children:
+                    if child.poll() is None:
+                        child.terminate()
+                    child.wait(timeout=5)
 
 
 class Recovery(unittest.TestCase):
