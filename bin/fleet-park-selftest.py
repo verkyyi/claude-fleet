@@ -28,7 +28,7 @@ def module(name, file):
     return m
 
 
-gate = module('park_gate', 'fleet_session_gate.py')
+import fleet_session_gate as gate
 reap = module('park_reap', 'fleet-cleanup-idle.py')
 
 
@@ -40,6 +40,8 @@ class Park(unittest.TestCase):
         self.env = dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf'),
                         FLEET_GATE_WAKE_SECS='3', FLEET_GATE_PARK_SECS='3',
                         FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50')
+        self.env.pop('TMUX', None)
+        self.env.pop('TMUX_PANE', None)
         self.tm('new-session', '-d', '-s', 'test', 'sleep 120')
         self.addCleanup(self.cleanup)
 
@@ -61,15 +63,15 @@ class Park(unittest.TestCase):
         self.fid = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
         self.sid = '11111111-2222-4333-8444-555555555555'
         fake = self.root / 'fake.py'
-        fake.write_text('''import os,sys,tty
-print('fake ready',flush=True)
+        fake.write_text(r'''import os,sys,tty
+print('fake ready\x1b]7501;state=idle:app=claude-code\x1b\\',flush=True)
 tty.setraw(0)
 b=b''
 while True:
  c=os.read(0,4096)
  if not c: break
  b+=c
- if b'/exit\\r' in b: break
+ if b'/exit\r' in b: break
 ''')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
@@ -139,7 +141,7 @@ while True:
         # The reaper's real decision, independent of its close / GitHub roads.
         from types import SimpleNamespace
         args = SimpleNamespace(socket_name=self.label, session='test', window_repo=False, repo='', dry_run=False)
-        r = reap.Reaper(args)
+        r = reap.Cleaner(args)
         r.now = 1000
         snap = {'@park_wrap_ver':'1', '@parked':'', '@wrap_gone':'', 'pane_dead':'',
                 '@claude_state':'done', '@agent_status':'', '@claude_state_ts':'900',
