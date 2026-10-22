@@ -8336,19 +8336,41 @@ fleet_fetch_bounded() {
 # With <sess>, the number's next GENERATION is minted (issue #1538): whatever the
 # last scratch-<N> left in the child ledger is retired, never inherited.
 fleet_scratch_alloc() {
-  local main="$1" base="$2" sess="${3:-}" cand cwt n=1
+  local main="$1" base="$2" sess="${3:-}" cand cwt n=1 gd ck
   fleet_fetch_bounded "$main" "$base"
+  # A number is CLAIMED before its worktree is made (T716): concurrent starts
+  # (a batch of four, ⌘P pressed again) each take the next free one at once
+  # instead of all trying the same N and paying a failed `worktree add` each.
+  # The claim is a mkdir beside the repo's refs, gone the moment the add ends;
+  # one older than a minute is a crashed start's and is taken over.
+  gd=$(git -C "$main" rev-parse --git-common-dir 2>/dev/null)
+  case "$gd" in '') ;; /*) ;; *) gd="$main/$gd" ;; esac
   while [ "$n" -le 999 ]; do
     cand="scratch-$n"; cwt="$(fleet_worktree_dir "$main" "$cand")"
     if git -C "$main" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then
       n=$((n + 1)); continue
     fi
+    ck=''
+    if [ -n "$gd" ]; then
+      ck="$gd/fleet-claim.$cand"
+      if ! mkdir "$ck" 2>/dev/null; then
+        if [ ! -d "$ck" ]; then
+          ck=''   # nowhere to claim (a read-only git dir): the `-b` race alone, as before
+        elif [ -n "$(find "$ck" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+          rmdir "$ck" 2>/dev/null; mkdir "$ck" 2>/dev/null || { n=$((n + 1)); continue; }
+        else
+          n=$((n + 1)); continue
+        fi
+      fi
+    fi
     # No --reuse: `-b` failing on a branch a racing caller just took is the signal
     # to move on to the next N. Silent on both streams (#446).
     if fleet_worktree_create "$main" "$cand" "$base" >/dev/null; then
+      [ -n "$ck" ] && rmdir "$ck" 2>/dev/null
       [ -n "$sess" ] && fleet_scratch_gen_new "$sess" "$cand" "$cwt"
       printf '%s\t%s\n' "$cand" "$cwt"; return 0
     fi
+    [ -n "$ck" ] && rmdir "$ck" 2>/dev/null
     n=$((n + 1))
   done
   return 1
@@ -8601,11 +8623,11 @@ EOF
 fleet_machine_headroom() {
   local ap="${1:-}" total c cost med agents pct rmb hyst=0 floor avail res pend room
   [ -n "$ap" ] || ap=$(fleet_mem_probe 2>/dev/null | awk 'NF>=2{print $2+0; exit}')
-  total=$(fleet_mem_total_mb 2>/dev/null)
+  total=${_FLEET_ADMIT_PRE_TOTAL:-$(fleet_mem_total_mb 2>/dev/null)}
   case "$ap" in ''|*[!0-9]*) return 1 ;; esac
   case "$total" in ''|*[!0-9]*) return 1 ;; esac
   [ "$total" -gt 0 ] || return 1
-  c=$(_fleet_session_cost); cost=${c%%$'\t'*}; c=${c#*$'\t'}; med=${c%%$'\t'*}; agents=${c#*$'\t'}
+  c=${_FLEET_ADMIT_PRE_COST:-$(_fleet_session_cost)}; cost=${c%%$'\t'*}; c=${c#*$'\t'}; med=${c%%$'\t'*}; agents=${c#*$'\t'}
   case "$cost" in ''|*[!0-9]*) cost=512 ;; esac
   pct="${FLEET_ADMIT_MEM_FREE_PCT:-15}"; case "$pct" in ''|*[!0-9]*) pct=15 ;; esac
   rmb="${FLEET_ADMIT_RESERVE_MB:-2048}"; case "$rmb" in ''|*[!0-9]*) rmb=2048 ;; esac
@@ -8780,7 +8802,7 @@ fleet_machine_admit() {
   case "$free_min" in ''|*[!0-9]*) free_min=15 ;; esac
   case "$lmax" in ''|*[!0-9.]*) lmax=1.5 ;; esac
   case "$pres" in critical|4) plim=4 ;; off|0|none) plim=0 ;; *) plim=2 ;; esac
-  m="$(fleet_mem_probe 2>/dev/null)"
+  m="${_FLEET_ADMIT_PRE_MEM:-$(fleet_mem_probe 2>/dev/null)}"
   lvl=$(printf '%s\n' "$m" | awk 'NF{print $1+0; exit}')
   avail=$(printf '%s\n' "$m" | awk 'NF>=2{print $2+0; exit}')
   if [ -n "$lvl" ]; then
@@ -9139,10 +9161,18 @@ fleet_session_cap_ok() {
   [ "${FLEET_ADMIT:-1}" = 0 ] && return 0
   local lk="$FLEET_C/global/admit.lock" i=0 rc
   mkdir -p "${lk%/*}" 2>/dev/null
+  # The machine's readings that do not move in a second — memory, its total, a
+  # session's cost (a ps over every process) — are taken BEFORE the lock (T716):
+  # held inside, one spawn kept the next ones waiting ~1 s each on a busy Mac.
+  # What concurrent spawns change, the reservations, is still read under it.
+  local _FLEET_ADMIT_PRE_MEM _FLEET_ADMIT_PRE_TOTAL _FLEET_ADMIT_PRE_COST
+  _FLEET_ADMIT_PRE_MEM=$(fleet_mem_probe 2>/dev/null)
+  _FLEET_ADMIT_PRE_TOTAL=$(fleet_mem_total_mb 2>/dev/null)
+  _FLEET_ADMIT_PRE_COST=$(_fleet_session_cost 2>/dev/null)
   while ! mkdir "$lk" 2>/dev/null; do   # a holder dead > 10 s left it behind
     i=$((i + 1))
-    [ "$i" -ge 50 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
-    sleep 0.2 2>/dev/null || sleep 1
+    [ "$i" -ge 250 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
+    sleep 0.04 2>/dev/null || sleep 1
   done
   _fleet_admit_advised='' _fleet_admit_cpu_advised=''
   fleet_machine_admit >"$lk.why.$$"; rc=$?
@@ -9151,10 +9181,11 @@ fleet_session_cap_ok() {
   if [ "$rc" != 0 ] && grep -q '^machine memory tight' "$lk.why.$$" 2>/dev/null \
      && fleet_admit_make_room >&2; then
     rm -f "$lk.why.$$"; rmdir "$lk" 2>/dev/null; i=0
+    _FLEET_ADMIT_PRE_MEM='' _FLEET_ADMIT_PRE_COST=''   # sessions were folded: read again
     while ! mkdir "$lk" 2>/dev/null; do
       i=$((i + 1))
-      [ "$i" -ge 50 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
-      sleep 0.2 2>/dev/null || sleep 1
+      [ "$i" -ge 250 ] && { rmdir "$lk" 2>/dev/null; mkdir "$lk" 2>/dev/null; break; }
+      sleep 0.04 2>/dev/null || sleep 1
     done
     _fleet_admit_advised='' _fleet_admit_cpu_advised=''
     fleet_machine_admit >"$lk.why.$$"; rc=$?

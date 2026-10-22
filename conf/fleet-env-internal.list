@@ -208,6 +208,7 @@ FLEET_CONTROL_TASK                 handoff: the hub task record (T<n>) a start b
 FLEET_PRETRUST_NODE_MAX_AGE        knob: how old (s, default 86400) the proxy's cached hub trust word may be for the trusted-node wide pre-trust (#2282)
 FLEET_TIMING_T0                    handoff: a 看台's new-session ↵ (epoch s), carried go_new → fleet-task-record.sh / dash-raw-session.sh so each stage is clocked from it (fleet_timing.py, T684)
 FLEET_FETCH_FRESH_SECS             knob: a base fetched this recently is used as it is by a new start (fleet_fetch_bounded, 60; 0 = always fetch — T716)
+FLEET_PLACE_LOCAL_DISPATCH         knob: 1 (default) asks the hub to answer LOCAL for an accepted dispatch it places on the asking machine (dash-raw-session.sh → ccquota place, T716); 0 = the verified operation through the node, as before
 FLEET_MCP_GATEWAY                  knob: 0 serves no mcp_list / mcp_enable / mcp_disable and starts lean workers with everything (fleet-mcp.py, T716)
 FLEET_MCP_TEAM_FILE                handoff: the fleet/team layer's composed MCP file, read by the gateway when a lean worker does not mount it (fleet-launch-lib.sh → fleet_mcp_gateway.py, T716)
 FLEET_AS_KV                        handoff: the agent file fleet-task-record.sh dispatch just read (fleet-agent-def.py launch's lines), so dash-raw-session.sh reads it once a start (T716)

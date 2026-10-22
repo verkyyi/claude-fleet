@@ -3257,6 +3257,15 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
         rc, w, why = 1, "", say("view_new_timeout_fmt", "%g" % secs)
     except OSError as error:
         rc, w, why = 1, "", str(error)
+    far = next((l.split("\t") for l in (p.stdout or "").splitlines() if l.startswith("REMOTE\t")), None) \
+        if rc == 0 and not re.fullmatch(r"@[0-9]+", w) else None
+    if far and len(far) >= 3 and far[2].strip():
+        # the hub opened it on another machine (T716): the 看台 goes to it there
+        if chosen and not prompt:
+            new_remember(repo, agent)
+        went = go(qo, vid, far[2].strip(), "new", client)
+        toast(client, say("view_new_remote_fmt", far[1].strip()), "info")
+        return 0 if went in (0, 3) else went
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
         if chosen and not prompt:
             new_remember(repo, agent)

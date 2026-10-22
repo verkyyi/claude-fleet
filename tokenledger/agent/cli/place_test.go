@@ -40,6 +40,10 @@ func TestPlaceCLIContract(t *testing.T) {
 		{"remote done", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},
 			"operation":{"operation_id":"op_2","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@42","node":"mac-a"}}`, 200,
 			0, "REMOTE mac-a op_2 done @42\tchose mac-a"},
+		// claude-fleet T716: the opened session's worker_id rides the line, so a 看台 goes to it
+		{"remote done with its worker", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},
+			"operation":{"operation_id":"op_2","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@42","worker_id":"f1/s1","node":"mac-a"}}`, 200,
+			0, "REMOTE mac-a op_2 done @42 f1/s1\tchose mac-a"},
 		{"remote declined", `{"local":false,"placement":{"machine":"mac-a","reason":"chose mac-a"},
 			"operation":{"operation_id":"op_3","status":"failed"},
 			"outcome":{"state":"refused","exit":2,"stderr1":"dash-issue-session: at capacity:\n 6/6","node":"mac-a"}}`, 200,

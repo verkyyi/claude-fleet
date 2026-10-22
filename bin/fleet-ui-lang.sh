@@ -452,6 +452,8 @@ fleet_ui_t() {
     en:view_new_failed_fmt) printf 'the new session did not open: %s' "${1:-}" ;;
     zh:view_new_timing_fmt) printf '新会话 %s 秒就能打字' "${1:-}" ;;
     en:view_new_timing_fmt) printf 'new session: typeable in %ss' "${1:-}" ;;
+    zh:view_new_remote_fmt) printf '新会话开在 %s，已切过去' "${1:-}" ;;
+    en:view_new_remote_fmt) printf 'new session opened on %s — switched there' "${1:-}" ;;
     zh:view_new_timeout_fmt) printf '%s 秒内没开出来' "${1:-}" ;;
     en:view_new_timeout_fmt) printf 'not open within %ss' "${1:-}" ;;
     zh:view_new_exit_fmt) printf '退出码 %s，没说原因' "${1:-}" ;;
@@ -1193,6 +1195,8 @@ fleet_ui_t() {
     en:dispatch_new_title)      printf 'New session' ;;
     zh:dispatch_task_done_fmt)  printf '已建 %s 并开工：%s' "${1:-}" "${2:-}" ;;
     en:dispatch_task_done_fmt)  printf 'recorded %s and started it: %s' "${1:-}" "${2:-}" ;;
+    zh:dispatch_task_remote_fmt)  printf '已建 %s 并开在 %s：%s' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:dispatch_task_remote_fmt)  printf 'recorded %s and started it on %s: %s' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:dispatch_task_made_fmt)  printf '已建 %s' "${1:-}" ;;
     en:dispatch_task_made_fmt)  printf 'recorded %s' "${1:-}" ;;
     zh:dispatch_hub_elsewhere_fmt) printf '%s 不在 %s 这台上：任务由入口管时，⌘P 只在本机开带仓库的任务——到托管它的那台开，或让编排会话派' "${1:-}" "${2:-}" ;;

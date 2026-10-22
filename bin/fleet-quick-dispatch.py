@@ -400,6 +400,15 @@ def task_send(data, view="", client=""):
     remember(repo, data.get("agent"))
     if view and win:
         go(view, win, client)
+    # the hub opened it on another machine (T716): the 看台 goes to it there,
+    # by its worker_id (`REMOTE <machine> <worker_id> <window>`)
+    far = next((l.split("\t") for l in lines if l.startswith("REMOTE\t")), None)
+    if not win and far and len(far) >= 3 and far[2].strip():
+        if view:
+            go(view, far[2].strip(), client)
+        said = tr("dispatch_task_remote_fmt", name, far[1].strip(), repo)
+        notice(client, "info", said)
+        return True, said
     return True, tr("dispatch_task_done_fmt", name, repo)
 
 
