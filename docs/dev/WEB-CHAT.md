@@ -473,7 +473,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 `.taken` 后用同一会话号 `--resume`，句子随启动进入首轮；7501 首次原生状态才写 `.launched` 确认恢复。
 超时收回未认领种子；已认领的种子属于当前启动，不会重投。
 有人切到窗口或在里面按 ↵ 也走这一路。`@parked`、`@park_held` 沿用 HHV0；`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前写 `@park_saved_mb` 和
-`@park_why`，只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
+`@park_why`；RSS 复用 C8 的 `process_trees`，单位 MiB，采样失败或根进程缺失时清除 `@park_saved_mb`，让 census 保留 `saved=null`。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
 `next` 与 `started` 为 epoch。没有每拍的 skip 日志。
 
 测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、

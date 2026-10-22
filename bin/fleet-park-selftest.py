@@ -124,6 +124,12 @@ while True:
                 os.kill(pid, 0)
         self.assertGreater(float(self.opt('@park_saved_mb')), 0)
         self.assertEqual(self.opt('@park_why'), 'idle')
+        from fleet_park_metrics import census
+        with patch.dict(os.environ, self.env):
+            observed = census(self.label, 'test', self.root / 'census')[self.win]
+        self.assertEqual(observed['state'], 'parked')
+        self.assertEqual(observed['saved_mb'], float(self.opt('@park_saved_mb')))
+        self.assertEqual(observed['why'], 'idle')
         with patch.dict(os.environ, self.env):
             result = gate.wake(self.fid, why='消息')
         self.assertTrue(result.get('ok'), result)
@@ -132,6 +138,29 @@ while True:
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
         self.assertEqual([r['act'] for r in rows], ['park', 'wake'])
+
+    def test_unknown_rss_clears_previous_sample_and_census_stays_unknown(self):
+        import fleet_park_metrics as metrics
+        census, summarize = metrics.census, metrics.summarize
+        self.fake()
+        self.set('@park_saved_mb', '999')
+        with patch.dict(os.environ, self.env), patch.object(gate, 'park_saved_mb', return_value=None):
+            result = gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertFalse(self.opt('@park_saved_mb'), 'old RSS was presented as this park sample')
+        # Replay the <=3.4 command boundary as well as this host's native one.
+        command = metrics.command
+        def escaped_rows(args):
+            raw = command(args)
+            return raw.replace('\x1f', r'\037') if 'list-windows' in args else raw
+        for reader in (command, escaped_rows):
+            with patch.dict(os.environ, self.env), patch.object(metrics, 'command', reader):
+                readings = census(self.label, 'test', self.root / 'census')
+            self.assertIn(self.win, readings, readings)
+            observed = readings[self.win]
+            self.assertEqual(observed['state'], 'parked')
+            self.assertIsNone(observed['saved_mb'])
+            self.assertIsNone(summarize([{'state':'done', 'park':observed}])['parked_saved_mb'])
 
     def test_draft_and_background_and_legacy_hold(self):
         self.fake()
