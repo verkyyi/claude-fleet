@@ -7,6 +7,7 @@ are themselves locked: a dead waiter cannot block humans or leave a stale slot.
 """
 import argparse
 import fcntl
+from functools import lru_cache
 import os
 from pathlib import Path
 import signal
@@ -21,14 +22,31 @@ import fleet_session_gate as gate
 HUMAN = {'键盘', '网页', '回答', 'keyboard', 'web', 'answer'}
 
 
+@lru_cache(maxsize=1)
+def settings():
+    # Wrappers live across hub setting updates. Read the ordinary config road
+    # at each wake rather than freezing the slot count in their launch env.
+    try:
+        p = subprocess.run(['bash', '-c', '. "$1/fleet-lib.sh" >/dev/null 2>&1; '
+                            'printf "%s\\n%s" "${FLEET_SESSION_WAKE_SLOTS:-3}" "${FLEET_WAKE_SLOT_DIR:-}"',
+                            'wake-settings', str(gate.BIN)], capture_output=True, text=True, timeout=10)
+        if p.returncode == 0:
+            lines = p.stdout.split('\n', 1)
+            return lines[0], lines[1] if len(lines) > 1 else ''
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return '3', ''
+
+
 def slots():
-    value = gate.num_env('FLEET_SESSION_WAKE_SLOTS', 3)
+    raw = os.environ.get('FLEET_SESSION_WAKE_SLOTS') or settings()[0]
+    value = int(raw) if raw.isdigit() else 3
     return value if 1 <= value <= 32 else 3
 
 
 def root():
     base = '/Users/Shared/claude-fleet/wake' if sys.platform == 'darwin' else '/var/tmp/claude-fleet/wake'
-    path = Path(os.environ.get('FLEET_WAKE_SLOT_DIR') or base)
+    path = Path(os.environ.get('FLEET_WAKE_SLOT_DIR') or settings()[1] or base)
     # The directory is shared across managed logins, never under a login HOME.
     for directory in (path.parent, path):
         try:
@@ -107,6 +125,10 @@ def acquire(meta_path, meta):
                             if not human and not admitted():
                                 file.close()
                                 defer(meta_path, meta, 'memory')
+                                return None
+                            if time.monotonic() >= end:
+                                file.close()
+                                defer(meta_path, meta, 'wake_queue_timeout')
                                 return None
                             return file
                         file.close()
