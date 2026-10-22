@@ -18,6 +18,9 @@
 #      and on the plain prompt when the page is broken); a key cancels it and the
 #      window waits as before; FLEET_EXIT_CLOSE_SECS=0 (in fleet.conf) never counts;
 #      a crash and the orchestrator never count
+#   T909 every window writes its logs into the test's own conf; a test's window aimed
+#      at the login's real conf dir (FLEET_SELFTEST_REAL_CONF stands in) writes no
+#      session-exit.log / start-fail.log row (fleet_notice.py guard, the wrapper's book_ok)
 #   B' the worker credential (issue #1809): with fleet-mcp.py beside it the wrapper
 #      hands the launch a FLEET_WORKER_CRED that verifies, for this window's
 #      @fleet_id, and revokes it when the agent exits; without it (every leg
@@ -101,7 +104,10 @@ grep -q '^    restore_watch' "$BIN/fleet-diskguard.sh" || fail "A: the diskguard
 
 # --------------------------------------------- B: the wrapper, on a real tmux ----
 mkdir -p "$WORK/wbin"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+# every window writes its logs into the test's own conf (T909: a run by hand once
+# put SID-1 / CX-9 rows into the operator's session-exit.log)
+mkdir -p "$WORK/conf/logs"
 cat > "$WORK/wbin/session-end-hook.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/recycled"
@@ -143,7 +149,7 @@ chmod +x "$WORK/wbin/session-end-hook.sh" "$WORK/fake-launch"
 # win <name> <fast-fail secs> — a window running the wrapper as the spawners do.
 win() {
   mkdir -p "$WORK/$1"; : > "$WORK/$1/argv"
-  local cmd="env CTL='$WORK/$1' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=$2 FLEET_UI_LANG=zh ${WRAP_ENV:-FLEET_EXIT_CLOSE_SECS=0}"
+  local cmd="env CTL='$WORK/$1' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=$2 FLEET_UI_LANG=zh FLEET_CONF_DIR='$WORK/conf' ${WRAP_ENV:-FLEET_EXIT_CLOSE_SECS=0}"
   local wa="--agent claude 'the seed prompt'"; [ -n "${WRAP_ARGS:-}" ] && wa=$WRAP_ARGS
   cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' $wa; echo WRAP_RC=\$?; exec sleep 600"
   if tf has-session -t sw 2>/dev/null; then tf new-window -d -t sw: -n "$1" "$cmd"
@@ -264,6 +270,27 @@ waitfor "q: session-end-hook --recycle was asked" grep -sqx -- '--recycle' "$WOR
 waitfor "q: the wrapper returned 0" screen_has q 'WRAP_RC=0'
 eq "q: recycled windows read done" "done" "$(o q @claude_state)"
 
+# T909: a test's window never writes the login's REAL logs. FLEET_SELFTEST_REAL_CONF
+# stands in for the login's real conf dir; this wrapper is a test's (a pane of a -S
+# tmux server in a temp dir), so fleet_notice.py guard refuses both logs there — and
+# the test's own conf still gets its rows.
+mkdir -p "$WORK/realconf/logs"
+RG="FLEET_EXIT_CLOSE_SECS=0 FLEET_CONF_DIR=$WORK/realconf FLEET_SELFTEST_REAL_CONF=$WORK/realconf"
+WRAP_ENV="$RG" win tg 0
+mkdir -p "$WORK/tr"; printf refuse > "$WORK/tr/mode"
+WRAP_ENV="$RG" win tr 5
+waitfor "tg: first launch" launches tg 1
+printf rc0 > "$WORK/tg/mode"; : > "$WORK/tg/go"
+waitfor "tg: the page" screen_has tg '会话已结束'
+waitfor "tr: the refused page" screen_has tr '重试启动'
+sleep 0.5
+eq "tg: a test's exit is not in the real session-exit.log" "" "$(cat "$WORK/realconf/logs/session-exit.log" 2>/dev/null)"
+eq "tr: a test's refused start is not in the real start-fail.log" "" "$(cat "$WORK/realconf/logs/start-fail.log" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); grep -q ' window=w .*sid=SID-1' "$WORK/conf/logs/session-exit.log" 2>/dev/null \
+  || fail "T909: the test's own conf got no session-exit row: $(cat "$WORK/conf/logs/session-exit.log" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); grep -q ' window=rf ' "$WORK/conf/logs/start-fail.log" 2>/dev/null \
+  || fail "T909: the test's own conf got no start-fail row: $(cat "$WORK/conf/logs/start-fail.log" 2>/dev/null)"
+
 # X (issue #3170): the countdown after the person's own exit.
 recycles() { cat "$WORK/recycled" 2>/dev/null | grep -c .; }
 # at 0 it recycles like q — a Codex window as well as a Claude one
@@ -316,18 +343,18 @@ git -C "$WORK/u" commit -q --allow-empty -m seed; git -C "$WORK/u" checkout -qb 
 git -C "$WORK/u" remote add origin "$WORK/u-origin.git"; git -C "$WORK/u" push -q origin issue-7 2>/dev/null
 git -C "$WORK/u" commit -q --allow-empty -m one; git -C "$WORK/u" commit -q --allow-empty -m two
 mkdir -p "$WORK/uc"; : > "$WORK/uc/argv"
-tf new-window -d -t sw: -n u -c "$WORK/u" "env CTL='$WORK/uc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_EXIT_CLOSE_SECS=0 '$WORK/wbin/fleet-session-wrap.sh' --agent claude; exec sleep 600"
+tf new-window -d -t sw: -n u -c "$WORK/u" "env CTL='$WORK/uc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_CONF_DIR='$WORK/conf' FLEET_EXIT_CLOSE_SECS=0 '$WORK/wbin/fleet-session-wrap.sh' --agent claude; exec sleep 600"
 waitfor "u: first launch" launches uc 1
 printf rc0 > "$WORK/uc/mode"; : > "$WORK/uc/go"
 waitfor "u: the page counts the unpushed commits" screen_has u '未推送：2 个提交（分支 issue-7）'
 
 # P (issue #1842 ③): the page itself fails → a plain prompt, never an exit.
 mkdir -p "$WORK/pbin"
-for f in fleet_repo_authority.py fleet-session-wrap.sh; do ln -s "$BIN/$f" "$WORK/pbin/$f"; done
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet_notice.py; do ln -s "$BIN/$f" "$WORK/pbin/$f"; done
 printf 'import sys\nraise SystemExit(1)\n' > "$WORK/pbin/fleet-session-page.py"
 ln -s "$WORK/wbin/session-end-hook.sh" "$WORK/pbin/session-end-hook.sh"
 mkdir -p "$WORK/pc"; : > "$WORK/pc/argv"
-tf new-window -d -t sw: -n p "env CTL='$WORK/pc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_EXIT_CLOSE_SECS=0 '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+tf new-window -d -t sw: -n p "env CTL='$WORK/pc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_CONF_DIR='$WORK/conf' FLEET_EXIT_CLOSE_SECS=0 '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
 waitfor "p: first launch" launches pc 1
 printf rc0 > "$WORK/pc/mode"; : > "$WORK/pc/go"
 waitfor "p: a broken page falls to the plain prompt" screen_has p '会话已结束 · ↵ 重开'
@@ -339,7 +366,7 @@ eq "p: the same conversation" "--agent claude --resume SID-1" "$(sed -n 2p "$WOR
 # X on the plain prompt (a broken page): it counts down too, and at 0 recycles.
 r0=$(recycles)
 mkdir -p "$WORK/pac"; : > "$WORK/pac/argv"
-tf new-window -d -t sw: -n pa "env CTL='$WORK/pac' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_EXIT_CLOSE_SECS=2 '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+tf new-window -d -t sw: -n pa "env CTL='$WORK/pac' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh FLEET_CONF_DIR='$WORK/conf' FLEET_EXIT_CLOSE_SECS=2 '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
 waitfor "pa: first launch" launches pac 1
 printf rc0 > "$WORK/pac/mode"; : > "$WORK/pac/go"
 waitfor "pa: the plain prompt counts down" screen_has pa '秒后关闭 · 按任意键取消'
@@ -348,7 +375,7 @@ waitfor "pa: the wrapper returned 0" screen_has pa 'WRAP_RC=0'
 
 # B': the worker credential (issue #1809) — minted per launch, revoked on exit.
 mkdir -p "$WORK/kbin" "$WORK/kconf"
-for f in fleet_repo_authority.py fleet-session-wrap.sh fleet-session-page.py fleet-mcp.py fleet-lib.sh fleet-client-core.sh; do
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet_notice.py fleet-session-page.py fleet-mcp.py fleet-lib.sh fleet-client-core.sh; do
   ln -s "$BIN/$f" "$WORK/kbin/$f"
 done
 cat > "$WORK/cred-launch" <<EOF
@@ -376,7 +403,7 @@ eq "w: a wrapper with no fleet-mcp.py beside it mints nothing" "cred=" "$(sort -
 # the launch is what it was; =1: a per-launch FLEET_CRED_SID on the launch and on
 # the window (@cred_sid), its session record revoked and the option gone at exit.
 mkdir -p "$WORK/xbin"
-for f in fleet_repo_authority.py fleet-session-wrap.sh fleet-session-page.py fleet-session-cred.sh fleet-cred-proxy.sh fleet-cred-proxy.py; do
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet_notice.py fleet-session-page.py fleet-session-cred.sh fleet-cred-proxy.sh fleet-cred-proxy.py; do
   ln -s "$BIN/$f" "$WORK/xbin/$f"
 done
 cat > "$WORK/sid-launch" <<'EOF'

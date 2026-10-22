@@ -36,6 +36,12 @@
 #                          FLEET_NOTICE_FORBID), and a drill run against the live install
 #                          with a fake hub (T672's https://127.0.0.1:9), each through
 #                          fleet_ui_fail — dash-raw-session.sh's refusal road
+#   test-into-real-exit-log  bin/fleet_notice.py test_why() + `guard` (T909): a selftest
+#                          run BY HAND (no FLEET_NOTICE_FORBID) — a selftest file up its
+#                          process chain, or a pane of a -S tmux server in a temp dir —
+#                          aiming at the login's real conf dir writes no notice, and
+#                          fleet-session-wrap.sh's session-exit.log / start-fail.log
+#                          lines go through `book_ok` (the same guard)
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
@@ -457,6 +463,38 @@ drill_notice_test_into_real_book() {
     || { WHY="run-selftests.sh no longer guards the person's record"; return 1; }
   SECS=$(since "$t0")
   WHAT="dash-raw-session 的拒绝（fleet_ui_fail）：测试（FLEET_NOTICE_FORBID）写不进真实消息记录、标记让测试变红；对着假入口（127.0.0.1:9）的演练也写不进；本人自己的入口照常记一条"
+}
+
+# test-into-real-exit-log — 2026-10-18..21 a session ran session-wrap-selftest.sh /
+# the break-it wrapper drills by hand: their fake windows (sid=SID-1, CX-9, window=w
+# rf rw cx) landed in the operator's logs/session-exit.log and start-fail.log, ~24
+# rows a day — no FLEET_NOTICE_FORBID outside the gate, and the wrapper's two logs had
+# no guard at all (T909). FLEET_SELFTEST_REAL_CONF stands in for the real conf dir.
+drill_test_into_real_exit_log() {
+  CAP=10
+  local t0 d out rc
+  d=$(mktemp -d /tmp/tre.XXXXXX); printf '%s\n' "$d" >> "$WORK/thin-boxes"
+  mkdir -p "$d/real/logs" "$d/own/logs"
+  t0=$(now)
+  ge() { env -u FLEET_NOTICE_FORBID -u FLEET_NOTICE_FORBID_HIT -u FLEET_SELFTEST_ROOT -u TMUX FLEET_SELFTEST_REAL_CONF="$d/real" "$@"; }
+  # by hand, under this selftest: the wrapper's logs refused, its own conf allowed
+  out=$(ge python3 "$BIN/fleet_notice.py" guard "$d/real/logs/session-exit.log" 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="a hand-run test aiming at the real session-exit.log: rc $rc, want 3 ($out)"; return 1; }
+  ge python3 "$BIN/fleet_notice.py" guard "$d/own/logs/start-fail.log" 2>/dev/null \
+    || { WHY="the test's own conf was refused"; return 1; }
+  ge FLEET_CONF_DIR="$d/real" python3 "$BIN/fleet_notice.py" notify error 'repo authority: 入口不通 — https://127.0.0.1:9' --no-draw 2>/dev/null
+  [ ! -e "$d/real/logs/notices.ndjson" ] || { WHY="a hand-run test's notice reached the real record"; return 1; }
+  # a pane of a -S tmux server in a temp dir is a test's on that alone
+  out=$(ge TMUX="$d/s,1,0" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_notice as N, subprocess
+N.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, "", "")
+print(N.test_why())' "$BIN" 2>&1)
+  case "$out" in *"test's tmux server"*) ;; *) WHY="a -S temp socket's pane is not seen as a test's: $out"; return 1 ;; esac
+  # every write the wrapper makes to its two logs asks book_ok first
+  rc=$(grep -cE '\[ -d "\$\{(xlog|slog)%/\*\}" \]' "$BIN/fleet-session-wrap.sh")
+  [ "$rc" -ge 4 ] && [ "$(grep -E '\[ -d "\$\{(xlog|slog)%/\*\}" \]' "$BIN/fleet-session-wrap.sh" | grep -vc 'book_ok')" = 0 ] \
+    || { WHY="a fleet-session-wrap.sh write to session-exit.log / start-fail.log skips book_ok"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="手动跑的自测（没有 FLEET_NOTICE_FORBID）：链上有自测文件、或是 -S 临时 tmux 服务器的窗格，写真实 conf 目录的消息 / session-exit.log / start-fail.log 一律拒绝；测试自己的 conf 照写"
 }
 
 drill_view_far_reaped() {

@@ -346,7 +346,8 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+mkdir -p "$WORK/wconf/logs"   # the wrapped windows' own logs (T909), never the operator's
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash
@@ -420,7 +421,7 @@ o()  { nt display-message -p -t "$1" "#{$2}" 2>/dev/null; }
 wrapped() {
   mkdir -p "$3"; : > "$3/argv"
   local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=${WRAP_FAST:-0} FLEET_UI_LANG=zh ${WRAP_ENV:-}"
-  [ -n "${PERS_CONF:-}" ] && cmd="$cmd FLEET_CONF_DIR='$PERS_CONF'"
+  cmd="$cmd FLEET_CONF_DIR='${PERS_CONF:-$WORK/wconf}'"
   cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude ${WRAP_ARGS:-}'the seed'; exec sleep 600"
   if nt has-session -t "$1" 2>/dev/null; then nt new-window -d -t "$1:" -n "$2" "$cmd"
   else nt -f /dev/null new-session -d -s "$1" -n "$2" -x 100 -y 30 "$cmd"; fi

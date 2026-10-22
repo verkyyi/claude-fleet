@@ -23,6 +23,11 @@
 #               看台, a plain client gets a display-message HELD for its tier
 #               (never tmux's ~0.75 s default), fleet_notice (fleet-client-core.sh)
 #               and fleet-notice.sh reach the same road.
+#   G. GUARD    a test's process never writes under the login's real conf dir (T909):
+#               FLEET_SELFTEST_REAL_CONF stands in for it — `guard` says rc 3 and
+#               `notify` records nothing there, run by hand (no FLEET_NOTICE_FORBID,
+#               this file up the chain) and as a pane of a -S tmux server in a temp
+#               dir; a book outside it is written as before.
 # tmux absent → C SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -224,6 +229,29 @@ PY
     [ "$fails" = "$f0" ] && st_pass "C --client only its 看台, the newest + more, --all every 看台, a plain client a held display-message"
   fi
 fi
+
+# --- G. a test never writes the real record (T909) ---------------------------------------
+f0=$fails; RC="$WORK/realconf"; mkdir -p "$RC/logs"
+# outside the gate's environment: what is left is this selftest up the chain
+G() { env -u FLEET_NOTICE_FORBID -u FLEET_NOTICE_FORBID_HIT -u FLEET_SELFTEST_ROOT FLEET_SELFTEST_REAL_CONF="$RC" "$@"; }
+out=$(G python3 "$NP" guard "$RC/logs/session-exit.log" 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "G guard: a test aiming at the real conf dir is refused (rc 3)" "rc=$rc $out"
+case "$out" in *'run under a selftest'*fleet-notice-selftest.sh*) ;; *) fail "G guard names the selftest up the chain" "$out" ;; esac
+G python3 "$NP" guard "$WORK/conf/logs/session-exit.log" 2>/dev/null || fail "G guard: the test's own conf is allowed"
+G FLEET_CONF_DIR="$RC" python3 "$NP" notify error 'a test row' --no-draw 2>/dev/null
+[ ! -e "$RC/logs/notices.ndjson" ] || fail "G notify: a test wrote the real record" "$(cat "$RC/logs/notices.ndjson")"
+# a pane of a test's tmux server (a -S socket in a temp dir): refused on that alone
+out=$(env -u FLEET_NOTICE_FORBID -u FLEET_SELFTEST_ROOT TMUX="$SD/s,1,0" FLEET_SELFTEST_REAL_CONF="$RC" \
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_notice as N
+N._TEST_WHY = None; import subprocess; N.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, "", "")
+print(N.test_why())' "$BIN" 2>&1)
+case "$out" in *"test's tmux server"*) ;; *) fail "G a -S temp socket is a test's" "$out" ;; esac
+out=$(env -u FLEET_NOTICE_FORBID -u FLEET_SELFTEST_ROOT TMUX="/private/tmp/tmux-$(id -u)/fleet,1,0" \
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_notice as N
+import subprocess; N.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, "", "")
+print("why=" + N.test_why())' "$BIN" 2>&1)
+[ "$out" = "why=" ] || fail "G a fleet's -L socket is not a test's" "$out"
+[ "$fails" = "$f0" ] && st_pass "G a test's process (by hand, or a -S temp server's pane) never writes the real conf dir"
 
 [ "$fails" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$fails" >&2; exit 1; }
 printf 'selftest PASS: %s legs — one notice road: recorded, three tiers, only the asking client (T675)\n' "$pass"
