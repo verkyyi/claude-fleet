@@ -166,7 +166,9 @@ class Recovery(unittest.TestCase):
         with patch.dict(os.environ, f.env):
             self.assertTrue(gate.park(f.fid)['ok'])
         fake = f.root / 'fake.py'
-        fake.write_text(fake.read_text().replace('state=idle:app=claude-code', 'state=starting:app=claude-code'))
+        source = fake.read_text()
+        self.assertIn('state=idle:app=', source, 'fixture no longer exposes its initial ready report')
+        fake.write_text(source.replace('state=idle:app=', 'state=starting:app='))
         f.tm('send-keys', '-t', f.win, '-l', 'keep hung prompt')
         f.tm('send-keys', '-t', f.win, 'Enter')
         f.wait(lambda: f.opt('@park_error') == 'wake_timeout')
