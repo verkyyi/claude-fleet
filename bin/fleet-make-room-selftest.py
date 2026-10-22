@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
-"""T695 (回收 C): a spawn memory would refuse first folds what it can.
+"""Memory pressure cannot archive a wrapper without the safe park protocol.
 
-`fleet-cleanup-idle.sh --make-room <MB>` (fleet-cleanup-idle.py --plan-room /
---fold) folds the done sessions first, then the longest idle — history first and
-resumable, the window closed, the worktree kept — and never a pinned one, an
-orchestrator, `keep`, one working / asking / recent. A folded session comes back
-from 已收起 with its own conversation (dash-restore-session.sh: Claude --resume,
-Codex its identity). fleet_session_cap_ok makes room before a memory refusal and
-asks again; fleet_cfg_restart_why leaves a window a reaper counts down alone.
-Drives bin/fleet-cleanup-idle.sh, bin/fleet-cleanup-idle.py, bin/fleet-lib.sh
-(fleet_admit_make_room, fleet_session_cap_ok, fleet_cfg_restart_why),
-bin/dash-restore-session.sh on the Rig of fleet-cleanup-idle-selftest.py.
+Drive the old-wrapper compatibility boundary and admission refusal through
+fleet-cleanup-idle.sh/.py and fleet-lib.sh. The real new-wrapper park path and
+capacity release are driven by fleet-lifecycle-capacity-selftest.py.
 """
 import importlib.util
 import os
@@ -74,26 +67,15 @@ class MakeRoom(Rig):
         self.assertFalse((self.root / 'ledger.tsv').exists())
         self.assertTrue(self.transcript.is_file())
 
-    def test_an_idle_session_is_folded_and_comes_back_with_its_conversation(self):
-        out = self.room()
-        self.assertIn("folded:" + self.win + " scratch-7", out)
-        self.assertIn("1 folded", out)
-        self.assertFalse(self.exists())
-        self.assertTrue(self.wt.is_dir())                      # the worktree kept
-        self.assertTrue(self.transcript.is_file())
-        self.assertIn("Folded to make room", (self.root / "ledger.tsv").read_text())
-        self.assertIn("--resume\n" + self.sid, self.restore())  # 已收起 ↵: the same conversation
-
-    def test_a_codex_session_folds_and_resumes_its_own_identity(self):
-        home = self.root / "codex-home"
+    def test_unwrapped_codex_keeps_its_identity_and_history(self):
         self.codexify()
-        self.assertIn("folded:" + self.win, self.room())
-        self.assertFalse(self.exists())
-        args = self.restore()
-        self.assertIn("--agent\ncodex\n--codex-home\n" + str(home), args)
-        self.assertIn(self.sid, args)
+        out = self.room()
+        self.assertNotIn("folded:" + self.win, out)
+        self.assertTrue(self.exists())
+        self.assertFalse((self.root / "ledger.tsv").exists())
+        self.assertTrue(self.wt.is_dir())
 
-    def test_pinned_orchestrator_keep_working_asking_and_recent_are_never_folded(self):
+    def test_protected_and_unwrapped_sessions_are_never_folded(self):
         for key, value in (("@pin", "1"), ("@agent_def", "orchestrator"), ("@agent_def", "epic-driver"),
                            ("@reap_policy", "keep"), ("@claude_state", "working"),
                            ("@claude_state", "needs"), ("@claude_state", "looping"),
@@ -109,39 +91,32 @@ class MakeRoom(Rig):
                 else:
                     self.tm("set-option", "-wu", "-t", self.win, key)
         self.assertFalse((self.root / "ledger.tsv").exists())
-        self.assertIn("would-fold:" + self.win, self.room("1", "--dry-run"))
+        self.assertNotIn("would-fold:", self.room("1", "--dry-run"))
         self.assertTrue(self.exists())
 
-    def test_done_ones_go_before_the_longest_idle_and_it_stops_at_enough(self):
-        done, _ = self.second(idle=120)                         # recent, but its work is over
+    def test_completed_unwrapped_windows_wait_for_normal_reaper(self):
+        done, _ = self.second(idle=120)
         self.tm("set-option", "-w", "-t", done, "@fleet_id", FID)
         self.call("python3", str(BIN / "fleet_id.py"), "result", FID, "--state", "merged", "--summary", "t695")
         out = self.room("1")
-        self.assertIn("folded:" + done + " scratch-8", out)
-        self.assertNotIn("folded:" + self.win, out)            # enough freed: the idle one stays
-        self.assertFalse(self.alive(done))
+        self.assertNotIn("folded:", out)
+        self.assertTrue(self.alive(done))
         self.assertTrue(self.exists())
-        self.assertIn("folded:" + self.win, self.room("1"))    # asked again: the idle one goes
+        self.assertFalse((self.root / "ledger.tsv").exists())
 
-    def test_a_memory_refusal_folds_first_then_admits(self):
-        # the machine's reading is faked: tight until a fold is on the ledger
-        script = ('. "$1/fleet-lib.sh"; fleet_machine_admit() { if ! grep -q "Folded to make room" '
-                  '"$FLEET_HISTORY_LEDGER" 2>/dev/null; then echo "machine memory tight — 暂停开新：内存紧张 (test)"; '
-                  'return 1; fi; return 0; }; fleet_admit_reserve() { :; }; '
-                  'fleet_session_cap_ok "$2"; echo "|rc=$?"')
-        env = dict(self.env, FLEET_ADMIT="1", FLEET_ADMIT_MAKE_ROOM_SETTLE="0")   # the gate pins FLEET_ADMIT=0
+    def test_memory_refusal_without_safe_parks_still_refuses(self):
+        script = ('. "$1/fleet-lib.sh"; fleet_machine_admit() { '
+                  'echo "machine memory tight — 暂停开新：内存紧张 (test)"; return 1; }; '
+                  'fleet_admit_reserve() { :; }; fleet_session_cap_ok "$2"; echo "|rc=$?"')
+        env = dict(self.env, FLEET_ADMIT="1", FLEET_ADMIT_MAKE_ROOM_SETTLE="0")
         p = subprocess.run(["bash", "-c", script, "t", str(self.ibin), self.label], env=env,
                            capture_output=True, text=True, timeout=120)
-        self.assertIn("|rc=0", p.stdout, p.stdout + p.stderr)
-        self.assertIn("making room: folded:" + self.win, p.stderr, p.stdout + p.stderr)
-        self.assertFalse(self.exists())
-        # nothing may be folded: refused, and said why
-        self.second(n=9)
-        always = script.replace('if ! grep -q "Folded to make room" "$FLEET_HISTORY_LEDGER" 2>/dev/null; then',
-                                'if :; then')
-        p = subprocess.run(["bash", "-c", always, "t", str(self.ibin), self.label],
-                           env=dict(env, FLEET_ADMIT_MAKE_ROOM="0"), capture_output=True, text=True, timeout=60)
+        self.assertIn("|rc=1", p.stdout, p.stdout + p.stderr)
         self.assertIn("memory tight", p.stdout)
+        self.assertTrue(self.exists())
+        self.assertFalse((self.root / "ledger.tsv").exists())
+        p = subprocess.run(["bash", "-c", script, "t", str(self.ibin), self.label],
+                           env=dict(env, FLEET_ADMIT_MAKE_ROOM="0"), capture_output=True, text=True, timeout=60)
         self.assertIn("|rc=1", p.stdout)
         self.assertNotIn("making room", p.stderr)
 

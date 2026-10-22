@@ -68,6 +68,66 @@ class Fairness(unittest.TestCase):
                             child.terminate()
                         child.wait(timeout=5)
 
+    def test_cancelled_queue_owner_does_not_block_or_consume_words(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = dict(os.environ, FLEET_WAKE_SLOT_DIR=tmp, FLEET_SESSION_WAKE_SLOTS='1',
+                       FLEET_WAKE_ADMIT_CMD='true', PYTHONPATH=str(BIN))
+            children = []
+            seeds = []
+            with guard.shared_file(root / 'slot-0') as occupied:
+                fcntl.flock(occupied, fcntl.LOCK_EX)
+                try:
+                    for n in range(2):
+                        login = root / ('login-%d' % n)
+                        login.mkdir()
+                        seed = login / 'wake.txt'
+                        seed.write_text('original %d' % n)
+                        seeds.append(seed)
+                        meta = login / 'wake.meta'
+                        meta.write_text(json.dumps(dict(fid='test', why='定时', seed=str(seed))))
+                        child = subprocess.Popen([sys.executable, str(BIN / 'fleet_wake_guard.py'),
+                            'run', '--meta', str(meta), '--', sys.executable, '-c',
+                            'from pathlib import Path; import sys; Path(sys.argv[1]).touch()',
+                            str(login / 'started')], env=env)
+                        children.append(child)
+                        end = time.monotonic() + 5
+                        while len(list(root.glob('timer-*'))) < n + 1 and time.monotonic() < end:
+                            time.sleep(.02)
+                        self.assertEqual(len(list(root.glob('timer-*'))), n + 1)
+                    # A cancelled/killed guard may leave a file, but no locked
+                    # queue ticket or consumed prompt. C3 owns logical cancel.
+                    children[0].terminate()
+                    children[0].wait(timeout=5)
+                    occupied.close()
+                    self.assertEqual(children[1].wait(timeout=5), 0)
+                    self.assertFalse((root / 'login-0/started').exists())
+                    self.assertTrue((root / 'login-1/started').exists())
+                    self.assertEqual([p.read_text() for p in seeds], ['original 0', 'original 1'])
+                finally:
+                    for child in children:
+                        if child.poll() is None:
+                            child.terminate()
+                        child.wait(timeout=5)
+
+    def test_failed_launcher_releases_slot_without_consuming_words(self):
+        import json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = root / 'wake.txt'
+            seed.write_text('failed original')
+            meta = root / 'wake.meta'
+            meta.write_text(json.dumps(dict(fid='test', why='键盘', seed=str(seed))))
+            with patch.dict(os.environ, FLEET_WAKE_SLOT_DIR=tmp, FLEET_SESSION_WAKE_SLOTS='1'):
+                self.assertEqual(guard.run(meta, [str(root / 'missing-launcher')]), 1)
+            with guard.shared_file(root / 'slot-0') as slot:
+                self.assertTrue(guard.try_lock(slot))
+            self.assertFalse(list(root.glob('human-*')))
+            self.assertEqual(seed.read_text(), 'failed original')
+            self.assertEqual(json.loads(Path(str(seed) + '.error').read_text())['reason'], 'wake_guard')
+
     def test_deferred_delivery_preserves_queue_age(self):
         from unittest.mock import patch
         import fleet_session_gate as gate

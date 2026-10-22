@@ -62,6 +62,10 @@ class Lifecycle(unittest.TestCase):
         f.set('@reap_policy', 'keep')
         f.set('@parked', '123')       # exit requested, agent still running
         self.assertEqual(self.counts(f)[:2], ['1', '1'])
+        f.set('@park_held', '123')   # stale ack cannot hide a still-live relay
+        self.assertTrue(f.opt('@park_relay'))
+        self.assertEqual(self.counts(f)[:2], ['1', '1'])
+        f.set('@park_held', '')
         f.set('@parked', '')
         with patch.dict(os.environ, f.env, clear=True):
             self.assertTrue(park.gate.park(f.fid)['ok'])
@@ -78,6 +82,37 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(f.opt('@reap_policy'), 'keep')
         self.assertEqual(f.opt('@cc_session_id'), f.sid)
         self.assertEqual(f.opt('@fleet_id'), f.fid)
+
+    def test_repo_configuration_changes_preserve_other_session_and_capacity(self):
+        f = self.fixture()
+        f.set('@repo', 'owner/first')
+        f.set('@norepo', '')
+        repos = f.root / 'conf/fleets' / f.label / 'repos'
+        repos.mkdir()
+        (repos / 'owner-first.conf').write_text('FLEET_REPO="owner/first"\n')
+        (repos / '.order').write_text('owner-first\n')
+        identity_format = '#{@fleet_id}|#{@cc_session_id}|#{@repo}|#{@worktree}|#{window_id}|#{@pin}|#{@reap_policy}'
+        def snapshot():
+            return f.tm('display-message', '-p', '-t', f.win, identity_format), self.counts(f)
+        # Add/remove another repo while awake, then while safely parked. These
+        # are the registry files consumed by the real cap/identity readers.
+        for parked in (False, True):
+            if parked:
+                with patch.dict(os.environ, f.env, clear=True):
+                    self.assertTrue(park.gate.park(f.fid)['ok'])
+            before = snapshot()
+            if not parked:
+                with patch.dict(os.environ, f.env, clear=True):
+                    cleaner = self.cleaner(f)
+                    cleaner.args.repo = 'owner/second'
+                    self.assertFalse(cleaner.fold(f.win))
+                self.assertEqual(snapshot(), before)
+            (repos / 'owner-second.conf').write_text('FLEET_REPO="owner/second"\n')
+            (repos / '.order').write_text('owner-first\nowner-second\n')
+            self.assertEqual(snapshot(), before)
+            (repos / 'owner-second.conf').unlink()
+            (repos / '.order').write_text('owner-first\n')
+            self.assertEqual(snapshot(), before)
 
     def cleaner(self, f):
         args = argparse.Namespace(socket_name=f.label, session=f.label, repo='', main='', base='master',

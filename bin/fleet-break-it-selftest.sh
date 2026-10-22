@@ -6186,21 +6186,19 @@ drill_stop_no_exit_hangs() {
   WHAT="/exit 不生效的会话：结束 agent 进程树（TERM → 宽限 → KILL），记历史、关窗，回 stopped:forced"
 }
 
-# Memory refused a new session while finished windows held it (T695: three
-# refusals in a day on one Mac, done windows of ~320 MB each still open). Now a
-# memory refusal folds first — the done ones, then the longest idle; history kept,
-# resumable, the worktree untouched — and asks again; a folded session comes back
-# with its own conversation, Claude or Codex.
+# Memory pressure cannot borrow the legacy archive path. Unwrapped idle or
+# completed sessions stay for the normal reaper; admission still refuses when
+# no safe park can release resources.
 drill_admit_tight_done_windows() {
   CAP=120; local t0 d="$WORK/atdw"
   mkdir -p "$d"; t0=$(now)
   python3 "$BIN/fleet-make-room-selftest.py" "$BIN" \
-    MakeRoom.test_a_memory_refusal_folds_first_then_admits \
-    MakeRoom.test_done_ones_go_before_the_longest_idle_and_it_stops_at_enough \
-    MakeRoom.test_an_idle_session_is_folded_and_comes_back_with_its_conversation >"$d/out" 2>&1 \
-    || { WHY="a memory refusal still keeps the finished windows: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
+    MakeRoom.test_memory_refusal_without_safe_parks_still_refuses \
+    MakeRoom.test_completed_unwrapped_windows_wait_for_normal_reaper \
+    MakeRoom.test_memory_pressure_never_archives_unwrapped_sessions >"$d/out" 2>&1 \
+    || { WHY="memory pressure archived an unwrapped window or bypassed admission: $(grep -E '^(FAIL|ERROR|AssertionError)' "$d/out" | head -2 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="内存紧要拒开新会话前先收起：做完的先、闲置最久的后（留历史、留工作树、回车原样恢复），再判一次"
+  WHAT="内存腾挪无安全停放协议则保留窗口和历史；完成回收归原流程，腾不出仍拒绝新启动"
 }
 
 # A session idle and about to be folded was reopened by every release instead
