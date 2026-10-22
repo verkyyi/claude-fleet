@@ -20,7 +20,8 @@ func TestMachineParkCensusAllLogins(t *testing.T) {
 		*p.SessionsWorking = 1
 		p.SessionsParked = i + 1
 		*p.ParkedSavedMB = float64((i + 1) * 1024)
-		*p.SessionsIdle = 1
+		*p.SessionsIdle = 2
+		*p.IdleEligible, *p.IdleEligibleRSSMB = 1, 128
 		p.IdleReasons = map[string]int{"old-shell": 1}
 		*p.IdleRSSMB = 512
 		send(i, p)
@@ -31,7 +32,7 @@ func TestMachineParkCensusAllLogins(t *testing.T) {
 	})
 	_, d := getDetail(t, h, "/v1/nodes/node-a", "")
 	m := d.Machine
-	if m.ParkMetrics == nil || m.SessionsWorking == nil || *m.SessionsWorking != 2 || m.SessionsIdle == nil || *m.SessionsIdle != 2 || m.SessionsParked != 3 || m.ParkedSavedMB == nil || *m.ParkedSavedMB != 3072 || *m.IdleRSSMB != 1024 || m.IdleReasons["old-shell"] != 2 {
+	if m.ParkMetrics == nil || m.SessionsWorking == nil || *m.SessionsWorking != 2 || m.SessionsIdle == nil || *m.SessionsIdle != 4 || m.SessionsParked != 3 || m.ParkedSavedMB == nil || *m.ParkedSavedMB != 3072 || *m.IdleRSSMB != 1024 || m.IdleReasons["old-shell"] != 2 || *m.IdleEligible != 2 || *m.IdleEligibleRSSMB != 256 {
 		t.Fatalf("aggregate: %+v", m.ParkMetrics)
 	}
 	// A held session from an older wrapper has a count, but no pre-park RSS.
@@ -41,6 +42,14 @@ func TestMachineParkCensusAllLogins(t *testing.T) {
 	waitFor(t, 3*time.Second, "unknown savings are not zero", func() bool {
 		d, err := h.srv.nodeDetail(time.Now(), "node-a", nil)
 		return err == nil && d != nil && d.Machine.ParkMetrics != nil && d.Machine.ParkedSavedMB == nil
+	})
+	// Eligibility can be unknown while resident idle is known; never alias them.
+	unknown.IdleEligible, unknown.IdleEligibleRSSMB = nil, nil
+	*unknown.SessionsIdle, *unknown.IdleRSSMB = 3, 700
+	send(1, unknown)
+	waitFor(t, 3*time.Second, "eligibility stays independent across logins", func() bool {
+		d, err := h.srv.nodeDetail(time.Now(), "node-a", nil)
+		return err == nil && d != nil && d.Machine.ParkMetrics != nil && d.Machine.IdleEligible == nil && d.Machine.IdleEligibleRSSMB == nil && d.Machine.SessionsIdle != nil && *d.Machine.SessionsIdle == 5 && *d.Machine.IdleRSSMB == 1212
 	})
 	// An ended turn needs a complete CPU sample before the machine can claim idle.
 	unknown.SessionsIdle, unknown.SessionsWorking, unknown.IdleRSSMB = nil, nil, nil
