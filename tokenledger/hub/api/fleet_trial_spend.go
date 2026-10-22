@@ -538,7 +538,7 @@ func (s *Server) trialSpendLink(day, pid string) string {
 // trialDailyMsg is the morning report: title line, then one line each.
 func trialDailyMsg(t TrialSpend, sent time.Time, en bool, link string) string {
 	var b strings.Builder
-	b.WriteString(ternary(en, "ClaudeFleet trial daily · ", "ClaudeFleet 试用日报 · ") + spendDate(sent, en) + "\n")
+	b.WriteString(ternary(en, Brand+" trial daily · ", Brand+" 试用日报 · ") + spendDate(sent, en) + "\n")
 	if t.empty() {
 		b.WriteString(ternary(en, "Nobody tried it yesterday, and nobody new started.", "昨天没有人试用，也没有新开通。") + "\n")
 	} else {

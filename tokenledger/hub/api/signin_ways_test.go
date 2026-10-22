@@ -647,7 +647,7 @@ func TestBuildMailAndSMTPURL(t *testing.T) {
 			t.Errorf("parseSMTP(%q) = %v; want a refusal that does not quote it", bad, err)
 		}
 	}
-	msg := string(buildMail(c.from, "x@example.com", "登录 claudefleet", "正文", time.Unix(0, 0)))
+	msg := string(buildMail(c.from, "x@example.com", "登录 Tokenman", "正文", time.Unix(0, 0)))
 	if !strings.Contains(msg, "Subject: =?utf-8?b?") || !strings.Contains(msg, "Content-Transfer-Encoding: base64") || !strings.HasSuffix(msg, "\r\n") {
 		t.Fatalf("mail:\n%s", msg)
 	}
