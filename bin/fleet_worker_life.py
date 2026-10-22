@@ -136,7 +136,9 @@ class Worker:
         hub, issue, raw, name = metadata
         if name in ('dash','plan','backlog','home') or hub == '1':
             raise NotAWorker('panel/hub is not a worker')
-        if not issue.isdigit() and raw != '1':
+        # No-repo sessions have neither @issue nor @raw. The native inspect
+        # still validates their exact HOME, role and lifelong identity.
+        if not issue.isdigit() and raw != '1' and self.opt('@norepo') != '1':
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)
         self.lockfile = self.directory / ('window-' + self.window[1:] + '.lock')
@@ -283,6 +285,7 @@ def quiet_processes(source,config_home=None,background=None,strict=True,remounte
             seen.add(pid);pid=rows[pid][0]
     mcp_pids=set()
     helpers=set()
+    relays=set()
     helper_dir=None
     if not strict and source['agent']=='codex':
         root_argv=ARGV['process_argv'](source['pid'])
@@ -351,6 +354,15 @@ def quiet_processes(source,config_home=None,background=None,strict=True,remounte
                         and (parent==source['pid'] or (runtime and '--guard' in argv and parent in helpers))):
                     helpers.add(pid)
                     continue
+            # The park pty and its forked guardian belong to this runtime, from
+            # this install and targeting this exact private endpoint. Their
+            # descendants are still walked: a same-named script or a job is work.
+            relay=(helper_dir and len(argv)>6 and Path(argv[1]).resolve()==helper_dir/'fleet-status-7501.py'
+                   and argv[2:4]==['relay','--'] and argv[5:7]==['--remote',remote])
+            if relay and (parent in helpers or
+                          (parent in relays and argv==ARGV['process_argv'](parent))):
+                relays.add(pid)
+                continue
             if comm in ('codex-code-mode-host','codex-code-mode'):
                 parent_args=ARGV['process_argv'](parent)
                 remote=source['codex_identity'].get('remote','')

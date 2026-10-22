@@ -88,7 +88,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import { appendFileSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, rmSync, chmodSync, unlinkSync, mkdirSync,
-  renameSync, realpathSync } from "node:fs";
+  renameSync, realpathSync, symlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
@@ -100,7 +100,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,media,links,send,pages,aside,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,media,links,send,pages,aside,release,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -769,6 +769,35 @@ echo "no such window" >&2; exit 2
   ok(/"ev":"view"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "V the log says view");
   await sstop(v);
 }
+// A resident server must follow helper scripts through the stable install entry,
+// even though Node resolved import.meta.url to the release that started it.
+if (part("release")) {
+  SSTATE = stateOf("release"); SOCK = join(SSTATE, "chat.sock");
+  const a = join(HT, "release-a"), b = join(HT, "release-b"), current = join(HT, "current");
+  const fid = "abcdef12-1234-4234-8234-12345678aaaa", nextFid = "abcdef12-1234-4234-8234-12345678bbbb";
+  for (const [dir, version] of [[a, "old"], [b, "new"]]) {
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    writeFileSync(join(dir, "bin/fleet_session_gate.py"), `import json
+print(json.dumps({"can_talk": True, "why": "${version}", "queue": []}))
+`);
+    writeFileSync(join(dir, "bin/dash-raw-session.sh"), `#!/bin/bash
+printf '@9\\t${version}\\t\\t${version === "new" ? nextFid : fid}\\n'
+`, { mode: 0o755 });
+  }
+  symlinkSync(a, current);
+  const p = (await sstart(["--socket"], { ...asHome("release"), FLEET_WEBCHAT_BIN: join(current, "bin"),
+    FLEET_WEBCHAT_GATE: undefined, FLEET_WEBCHAT_RAW: undefined, FLEET_WEBCHAT_FLEET: "fleet" })).p;
+  sserver = p;
+  const first = JSON.parse((await sreq(`/api/session?fid=${fid}`)).body);
+  ok(first.why === "old", "Z resident service initially calls release A gate");
+  symlinkSync(b, current + ".next"); renameSync(current + ".next", current);
+  const next = JSON.parse((await sreq(`/api/session?fid=${fid}`)).body);
+  ok(next.why === "new" && p.exitCode === null, "Z same process calls release B gate after stable switch");
+  const opened = await sreq("/api/open", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: { text: "same service after release" } });
+  ok(opened.status === 200 && JSON.parse(opened.body).fid === nextFid, "Z new session uses current release launcher after stable switch");
+  await sstop(p); sserver = null;
+}
+
 // ---- Y: the session gate (task HHV0) — /api/say · stop · answer · open · view's state -----
 if (part("gate")) {
   mkdirSync(homeOf("y"), { recursive: true });

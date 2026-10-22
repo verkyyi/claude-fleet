@@ -737,6 +737,12 @@ def park_proof(w):
             return json.loads(p.stdout) if p.returncode == 0 else dict(ok=False, why="probe_failed")
         except (OSError, ValueError, subprocess.SubprocessError):
             return dict(ok=False, why="probe_failed")
+    import fleet_agent_adapter
+    probe = fleet_agent_adapter.get(w["agent"], "park_probe")
+    if probe == "native-input":
+        return park_native_input(w)
+    if probe != "inbox":
+        return dict(ok=False, why="no_probe")
     directory = claude_inbox(w)
     if directory is None:
         return dict(ok=False, why="no_probe")
@@ -755,6 +761,37 @@ def park_proof(w):
     # Late probes are read-only; cancel when still unclaimed.
     pending.unlink(missing_ok=True)
     return dict(ok=False, why="probe_timeout")
+
+
+def park_native_input(w):
+    """The native background inventory already vetoed tools / goals / subagents.
+
+    Re-read the current thread and queue, then the TUI's empty composer. The
+    relay generation taken BEFORE this proof vetoes any intervening keystroke.
+    Unknown input, a stale identity or an unreachable server always holds.
+    """
+    try:
+        identity, mkclient = codex_api()
+        data = identity(w["pane"], w["sock"])
+        if not data or data.get("session_id") != w["sid"] or not str(data.get("remote", "")).startswith("unix://"):
+            return dict(ok=False, why="changed")
+        client = mkclient(data["remote"])
+        try:
+            thread = client.call("thread/read", dict(threadId=w["sid"]))["thread"]
+            if thread.get("id") != w["sid"] or thread.get("status", {}).get("type") != "idle":
+                return dict(ok=False, why="not_idle")
+            queue = client.call("thread/queue/list", dict(threadId=w["sid"], limit=1))
+            if queue.get("data") != [] or queue.get("nextCursor"):
+                return dict(ok=False, why="words_waiting")
+        finally:
+            client.close()
+        import runpy
+        snap = runpy.run_path(str(BIN / "fleet-input.py"))["snapshot"](w["sock"], w["pane"], w["agent"])
+        if snap.get("state") != "empty":
+            return dict(ok=False, why="draft" if snap.get("state") == "draft" else "unknown_input")
+        return dict(ok=True)
+    except Exception:  # noqa: BLE001 — a failed native read must never authorize exit
+        return dict(ok=False, why="probe_failed")
 
 
 def park_saved_mb(w):
@@ -804,6 +841,11 @@ def park_locked(fid, why, force):
     seam = os.environ.get("FLEET_GATE_EXIT_CMD")
     if not generation.get("ok") and not seam:
         return generation
+    exit_mode = adapter.get("park_exit")
+    # A running relay keeps its launch-time implementation after a release.
+    # The old one can only type /exit; never feed that into a paste-aware TUI.
+    if not seam and exit_mode not in generation.get("park_exit", ["typed"]):
+        return dict(ok=False, why="old_relay")
     proof = park_proof(w)
     if not proof.get("ok"):
         return dict(ok=False, why=proof.get("why") or proof.get("error") or "not_idle")
@@ -843,7 +885,7 @@ def park_locked(fid, why, force):
         rc = subprocess.run(shlex.split(seam) + [w["pane"]], capture_output=True, timeout=5).returncode
         sent = dict(ok=rc in (0, 6))
     else:
-        sent = relay_request(w, dict(op="exit", generation=generation.get("generation")))
+        sent = relay_request(w, dict(op="exit", generation=generation.get("generation"), park_exit=exit_mode))
     if sent.get("ok"):
         end = time.monotonic() + num_env("FLEET_GATE_PARK_SECS", 15)
         confirmed = False

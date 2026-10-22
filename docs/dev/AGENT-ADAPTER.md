@@ -66,7 +66,9 @@ source bin/fleet-agent-adapter.sh; fleet_agent_get claude end   # → hook
 | `continue_flag` | `--continue` | （无） | Codex 没有「接着这里最新的一个」，只能开新的 |
 | `from_pr_flag` | `--from-pr` | （无） | 只有 Claude 能重开做出某个 PR 的那次会话 |
 | `transcript` | `project` | `home` | Claude 的记录在登录账号的 `~/.claude/projects/<cwd>/<id>.jsonl`，可以归档；Codex 的 rollout 在它自己的账号 home 里，history 行的 12–14 列记下这个 home |
-| `park_resume` | `1` | `0` | 停放的 Claude 回来时还在原会话（记录在 worktree 旁边）；Codex 回来时是新会话 |
+| `park_resume` | `1` | `1` | 空闲停放后包装器明确 resume 原对话号；Codex 使用原账号 home 中的 thread，不 fork |
+| `park_exit` | `typed` | `paste` | 同一 pty 中继发送 `/exit` + Enter；Codex 用 bracketed paste，避免 Enter 被吸收成换行 |
+| `park_probe` | `inbox` | `native-input` | Claude 的 `park.v1`；Codex 原生 idle、队列为空且终端输入框确认为空。后台工作检查仍共用原生 inventory，未知即不停 |
 
 ### 递消息（C6 · T626）
 

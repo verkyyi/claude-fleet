@@ -5580,6 +5580,14 @@ drill_web_quota_dialog() {
   SECS=$(since "$started"); WHAT='quota dialog dismissed once; native boundary re-proved; drafts, tools, schedules, approvals and changed source held'
 }
 
+drill_quota_boundary_recheck() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_unattempted_refusal_rechecks_when_native_cancel_or_delivery_settles >"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
+}
+
 drill_web_quota_continuation() {
   CAP=120
   local started; started=$(now)
@@ -6391,6 +6399,15 @@ drill_park_all_origins() {
   WHAT='所有来源共用停放器：同一窗口与身份，真实进程退出后同会话接回；草稿、后台任务、旧外壳不停'
 }
 
+drill_park_codex_new_thread() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_same_thread_and_paste_exit 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" CodexBusy.test_park_relay_is_infrastructure_but_its_jobs_are_work CodexBusy.test_managed_home_worker_can_reach_native_busy_probe 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)
@@ -6981,6 +6998,16 @@ drill_service_orphan_shell_holds_socket() {
 # asks the old copy over its own socket (--busy /api/busy) and waits while it
 # answers; a turn cut off anyway is said on the next start with 重试; the notice
 # is one quiet line; and 新对话 mid-answer puts the turn aside instead of a 409.
+drill_webchat_helper_stale_release() {
+  CAP=20; local t0
+  t0=$(now)
+  webchat_part release "Z resident service initially calls release A gate" \
+    "Z same process calls release B gate after stable switch" \
+    "Z new session uses current release launcher after stable switch" || return 1
+  WHAT='同一网页服务跨 stable A→B，后续 gate 与新建都用当前发行版，不丢会话或重复投递'
+  SECS=$(since "$t0")
+}
+
 drill_webchat_turn_cut_by_restart() {
   CAP=60; local t0
   t0=$(now)
