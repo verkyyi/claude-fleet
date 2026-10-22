@@ -552,6 +552,10 @@ while :; do
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
   # Parked: the window holds the same conversation until a wake, and looks idle.
   if [ -n "$parked" ]; then
+    # The initial transfer bridge has handed its ledger to the park gate.
+    # Resume the same thread without constructing another bridge/controller.
+    # Keep the manifest: owner commands still find the original loop ledger.
+    unset FLEET_LOOP_SPEC FLEET_LOOP_AGENT FLEET_LOOP_RECORD
     while :; do
       park_hold
       [ "$park_act" != quit ] || exit "$rc"

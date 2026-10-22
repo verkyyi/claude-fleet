@@ -470,6 +470,8 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 不支持该退出方式的老中继拒停，等下次正常重开后启用。
 证明以后有键盘输入就取消，绝不靠 Escape 清空草稿。窗口、ID、对话、工作区和凭据留在原处，窗口仍读作空闲。
 有定时任务时必须先交出 C3 的唤醒约定，否则保守不停。
+Codex 的 Fleet loop 轮间即使没有 Claude mod 状态，也由同一原生证明判断是否可停。
+迁移循环停放后，外壳接回时移除首次桥接启动参数，保留原 manifest 与 ledger；不再创建控制器，定时投递继续归已交接的 gate owner。
 
 唯一唤醒接口为 `fleet_park_wake <fid> --why <理由> [--seed-file <文件>]`，转到门的 `wake`；
 包装器自己请求唤醒时使用 `--request-only` 避免等待自己。种子文件挂在 `@park_wake`，包装器 rename 成

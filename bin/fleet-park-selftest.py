@@ -160,6 +160,43 @@ class client:
         argv = json.loads((self.root / 'argv.json').read_text())
         self.assertEqual(argv, ['--agent', 'codex', 'resume', self.sid, 'continue this conversation'])
 
+    def test_codex_looping_without_mod_status_uses_native_idle_proof(self):
+        # Drive fleet_session_gate.py against the real wrapper/relay. A native
+        # Fleet loop has a ledger and a looping state, but no Claude mod status.
+        self.fake('codex')
+        self.set('@claude_state', 'looping')
+        self.set('@agent_status', '')
+        self.set('@loop', '')
+        native = Path(self.env['FLEET_GATE_CODEX'])
+        idle = native.read_text()
+        native.write_text(idle.replace("type='idle'", "type='active'"))
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(gate.park(self.fid).get('why'), 'not_idle')
+            self.assertFalse(self.opt('@parked'))
+            native.write_text(idle)
+            result = gate.park(self.fid)
+            self.assertTrue(result.get('ok'), result)
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+
+    def test_parked_resume_does_not_reenter_initial_loop_bridge(self):
+        # Drive fleet-session-wrap.sh with the transfer launch environment.
+        # The first bridge may run once; the wake resumes under the gate owner.
+        self.env.update(FLEET_LOOP_SPEC='initial-spec', FLEET_LOOP_AGENT='codex',
+                        FLEET_LOOP_RECORD='initial-record', FLEET_HANDOFF_MANIFEST='retained-manifest')
+        self.fake('codex')
+        launch = self.root / 'launch'
+        guard = ('[ -z "${FLEET_LOOP_SPEC:-}${FLEET_LOOP_AGENT:-}${FLEET_LOOP_RECORD:-}" ] || '
+                 '{ echo "loop bridge already exists"; exit 1; }\n'
+                 '[ "$FLEET_HANDOFF_MANIFEST" = retained-manifest ] || exit 2\n')
+        launch.write_text(launch.read_text().replace('#!/bin/bash\n', '#!/bin/bash\n' + guard))
+        with patch.dict(os.environ, self.env):
+            result = gate.park(self.fid)
+            self.assertTrue(result.get('ok'), result)
+            result = gate.wake(self.fid, why='timer')
+            self.assertTrue(result.get('ok'), result)
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertTrue(self.opt('@park_relay'))
+
     def test_codex_old_relay_holds_without_typing(self):
         self.fake('codex')
         with patch.dict(os.environ, self.env), patch.object(gate, 'relay_request', return_value=dict(ok=True, generation=0)):
