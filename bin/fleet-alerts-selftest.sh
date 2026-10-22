@@ -22,9 +22,12 @@
 #                 (@claude_needs_detail, issue #1951) — Claude's and Codex's
 #                 alike
 #   8. degenerate — nothing configured: no rows, an empty bar
-#  13. machine  — 负载 per core ≥ 0.8 / 内存 ≥ 85 % → `▲ machine · load high` /
-#                 `memory high` (issue #1616: they left the bar); under the bands
-#                 nothing; the knobs move the line; FLEET_ALERTS_MACHINE=0 off
+#  13. machine  — 负载 per core ≥ 0.9 / 内存 ≥ 85 % HELD 5 minutes → `▲ machine ·
+#                 load high` / `memory high` (issue #1616: they left the bar) and
+#                 ONE notice in the person's words; 0.85↔0.95 jitter for 30 min →
+#                 nothing; under 0.6 / 80 % for 10 min the row greys (↻) and the
+#                 SAME notice is amended (info, 「已回落 HH:MM」) — no 「已恢复」 row,
+#                 no second notice (T899); the knobs move the line; MACHINE=0 off
 #  10. act      — ↵ on a kick row returns at once (the kick runs detached and
 #                 toasts its outcome); kick-daemons passes ONLY the row's
 #                 detail units as --unit, never --force; a healed row kicks
@@ -352,28 +355,59 @@ mshim() {  # mshim <load1> <vm_stat active pages> <free's used MB> — 4 cores, 
   chmod +x "$MS"/*
 }
 mfa() { FLEET_ALERTS_MACHINE="${MON-1}" FLEET_PROC_LOADAVG="$WORK/loadavg" PATH="$MS:$PATH" bash "$FA" "$@"; }
-rm -f "$G"/*
-mshim 3.60 400000 7373                      # 3.6 / 4 = 0.9 per core; 7373 of 8192 MB = 90 %
-mfa write
+rm -f "$G"/*; rm -rf "$WORK/conf/logs"
+NB="$WORK/conf/logs/notices.ndjson"
+T0=$(( $(now) - 7200 ))
+at() { FLEET_ALERTS_NOW=$(( T0 + $1 )) FLEET_UI_LANG=zh mfa write; }
+macn() { [ -f "$NB" ] && grep -c '"source":"alert:' "$NB" || echo 0; }
+mwarn() { grep -c '"severity":"warning","subject":"machine"' "$G/alerts.ndjson"; }
+# 0.85 ↔ 0.95 per core, flipping every 2 minutes for 30 minutes: never 5 above 0.9
+t=0; while [ "$t" -lt 1800 ]; do
+  if [ $(( t / 120 % 2 )) = 0 ]; then mshim 3.40 100000 2685; else mshim 3.80 100000 2685; fi
+  at "$t"; t=$(( t + 120 ))
+done
+eq "13: 0.85↔0.95 jitter for 30 min → no machine row" "0" "$(mwarn)"
+eq "13: …and no message at all" "0" "$(macn)"
+# held at 3.6/4 = 0.9 per core and 90 % memory for 6 minutes
+mshim 3.60 400000 7373
+for t in 1800 2100 2160; do at "$t"; done
 rows=$(cat "$G/alerts.ndjson")
 case "$rows" in *'"id":"machine-load","severity":"warning","subject":"machine","condition":"load high","value":"0.9/core"'*'"action":"machine"'*) st_count ;;
-  *) st_fail "13: load 0.9 per core → ▲ machine · load high · 0.9/core" "$rows" ;; esac
+  *) st_fail "13: load held at 0.9 per core 6 min → ▲ machine · load high · 0.9/core" "$rows" ;; esac
 case "$rows" in *'"id":"machine-mem","severity":"warning","subject":"machine","condition":"memory high","value":"90%"'*) st_count ;;
-  *) st_fail "13: memory 90 % → ▲ machine · memory high · 90%" "$rows" ;; esac
+  *) st_fail "13: memory held at 90 % → ▲ machine · memory high · 90%" "$rows" ;; esac
 eq "13: …two warnings, no alarm" "0 2 0" "$(fa counts)"
 case "$(fa list --plain)" in *"▲  machine · load high · 0.9/core"*"see top"*) st_count ;; *) st_fail "13: the popup row names its action" "$(fa list --plain)" ;; esac
-case "$(fa bar)" in *"▲ 2"*) st_count ;; *) st_fail "13: the bar counts them" "$(fa bar)" ;; esac
-mshim 1.20 100000 2685                      # 0.3 per core; 2685 of 8192 MB = 32 %
-mfa write
-eq "13: under the bands → no machine warning (a ↻ trace, as every cleared alert)" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
-case "$(cat "$G/alerts.ndjson")" in *'"id":"machine-load","severity":"healed"'*) st_count ;; *) st_fail "13: a cleared load warning leaves its ↻ trace" "$(cat "$G/alerts.ndjson")" ;; esac
-mshim 3.20 373824 6964                      # exactly 0.8 per core; 6964 of 8192 MB = 85 %
-mfa write
-eq "13: the bands' edges count (0.8 / 85 %)" "2" "$(grep -c '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
-FLEET_ALERTS_LOAD_PCT=95 FLEET_ALERTS_MEM_PCT=99 mfa write
-eq "13: the knobs move the line" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
+eq "13: held 6 min → exactly one message per kind" "2" "$(macn)"
+case "$(cat "$NB")" in *'"level":"warn","text":"机器负载高 · '*' · 0.9/核，已持续 5 分钟 — 开会话和测试会变慢"'*'"tag":"machine-load-'*) st_count ;;
+  *) st_fail "13: the load message is the prototype's words" "$(cat "$NB")" ;; esac
+eq "13: (en) the same message in English" "High load · mac · 1.3/core for 7 min — sessions and tests run slow" \
+  "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t alert_load_high_fmt mac 1.3 7)"
+# 0.7 per core (between the lines) keeps it standing; 0.3 for 10 min greys it
+mshim 2.80 100000 6800                      # 0.7 per core; 83 % memory
+at 2400; at 2700
+eq "13: between the lines → still standing" "2" "$(mwarn)"
+mshim 1.20 100000 2685                      # 0.3 per core; 32 %
+for t in 2760 3060 3360; do at "$t"; done
+eq "13: 10 min under 0.6 / 80 % → no warning left" "0" "$(mwarn)"
+case "$(cat "$G/alerts.ndjson")" in *'"id":"machine-load","severity":"healed"'*) st_count ;; *) st_fail "13: the greyed load row leaves its ↻ trace" "$(cat "$G/alerts.ndjson")" ;; esac
+eq "13: greying adds no message (no 「已恢复」)" "2" "$(macn)"
+eq "13: …no alert:healed row at all" "0" "$(grep -c alert:healed "$NB")"
+case "$(grep machine-load- "$NB")" in *'"level":"info","text":"机器负载高 · '*' · 0.9/核，已持续 '*' 分钟（已回落 '*'）"'*'"amended"'*) st_count ;;
+  *) st_fail "13: the one load message greyed in place" "$(cat "$NB")" ;; esac
+at 3420; at 3480
+eq "13: afterwards no new message" "2" "$(macn)"
+eq "13: (en) the greyed words" "High load · mac · 1.3/core for 7 min (back to normal 16:42)" \
+  "$(FLEET_UI_LANG=en sh "$BIN/fleet-ui-lang.sh" t alert_load_back_fmt mac 1.3 7 16:42)"
+rm -f "$G"/*
 mshim 3.60 400000 7373
-MON=0 mfa write
+FLEET_ALERTS_HOLD_SECS=0 FLEET_ALERTS_LOAD_PCT=95 FLEET_ALERTS_MEM_PCT=99 mfa write
+eq "13: the knobs move the line" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
+rm -f "$G"/*
+FLEET_ALERTS_HOLD_SECS=0 mfa write
+eq "13: FLEET_ALERTS_HOLD_SECS=0 → at once" "2" "$(mwarn)"
+rm -f "$G"/*
+MON=0 FLEET_ALERTS_HOLD_SECS=0 mfa write
 eq "13: FLEET_ALERTS_MACHINE=0 → none" "" "$(grep '"severity":"warning","subject":"machine"' "$G/alerts.ndjson")"
 rm -f "$G"/*
 

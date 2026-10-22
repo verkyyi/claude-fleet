@@ -17,6 +17,9 @@ row 「✦ 消息」; fleet takes no key of its own for it.
     fleet_notice.py read [<id>…]               mark them seen: all, or those ids (an orphan's
                                                result read in its own book too)
     fleet_notice.py seen <tag>                 rc 0 when a notice carrying <tag> was recorded
+    fleet_notice.py amend <tag> <level> <text> the newest notice carrying <tag> now says <text> at
+                                               <level> — same id, same ts (a machine alert that greys
+                                               instead of a second 「已恢复」, T899); rc 1 none
     fleet_notice.py cell                       the node inventory's `notices=` cell (column 33)
 
 THE TIERS. error — red, on the message row until seen (opening ⌘P's 消息; a key
@@ -479,6 +482,40 @@ def cell():
                      clean(m.get("wid", ""), 120), clean(m.get("text", ""), 200).replace(US, " ").replace(RS, " ")])
             for m in un]
     return RS.join(["%d" % int(local_mark())] + ents)
+
+
+def amend(tag, level, text):
+    """Rewrite the newest row carrying `tag` in place: its level and text change, its
+    id and ts stay (the hub's caches and the page key on the id), `amended` says when.
+    False when no row carries it."""
+    if not tag or level not in LEVELS:
+        return False
+    text = clean(text)
+    path = log_path()
+    why = refused(path)
+    if why:
+        _refuse(why)
+        return False
+    try:
+        with open(path, "r+", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            lines = fh.readlines()
+            for i in range(len(lines) - 1, -1, -1):
+                try:
+                    r = json.loads(lines[i])
+                except ValueError:
+                    continue
+                if not isinstance(r, dict) or r.get("tag") != tag:
+                    continue
+                r.update(level=level, text=text or r.get("text", ""), amended=round(time.time(), 3))
+                lines[i] = json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
+                fh.seek(0)
+                fh.truncate()
+                fh.write("".join(lines))
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def seen(tag):
@@ -959,6 +996,11 @@ def main(argv):
     if cmd == "cell":
         print(cell())
         return 0
+    if cmd == "amend":
+        if len(args) < 3:
+            print("usage: fleet_notice.py amend <tag> <level> <text>", file=sys.stderr)
+            return 2
+        return 0 if amend(args[0], args[1], args[2]) else 1
     if cmd == "seen":
         return 0 if args and seen(args[0]) else 1
     print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
