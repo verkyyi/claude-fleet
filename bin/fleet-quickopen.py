@@ -19,6 +19,7 @@ rows off a fleet machine's own producer (`full_rows` / `parse_rows`).
 import time
 T_START = time.time()   # the 看台's ⌘P clock starts here where /proc cannot say (#3551)
 import curses
+import functools
 import locale
 import os
 import subprocess
@@ -173,6 +174,7 @@ def tmux(*args):
     return subprocess.run(["tmux", *args], capture_output=True, text=True).stdout.strip()
 
 
+@functools.lru_cache(maxsize=4096)
 def char_cells(c):
     """The cells one character takes, as the terminal and tmux count them: a
     wide or full-width one 2, a mark that rides on the one before (a combining
@@ -207,10 +209,16 @@ def sel_attr(pair, colors=None, env=None):
 
 
 def cells(text):
-    return sum(char_cells(c) for c in text)
+    # ASCII is one cell a character (T890: the per-character count was half of
+    # ⌘P's first frame on a busy machine)
+    if text.isascii():
+        return len(text)
+    return sum(map(char_cells, text))
 
 
 def clip(text, width):
+    if text.isascii():
+        return text[:max(0, width)]
     out, used = "", 0
     for c in text:
         w = char_cells(c)

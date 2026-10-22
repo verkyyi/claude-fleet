@@ -116,6 +116,7 @@ FLEET_NOTICE_FORBID                handoff: run-selftests.sh → fleet_notice.py
 FLEET_NOTICE_FORBID_HIT            handoff: run-selftests.sh's per-test marker a refused record write touches (T741)
 FLEET_NOTICE_OWN_BOOK              seam: a drill's stand-in for the login's own message record (fleet_notice.py own_book, T741)
 FLEET_POPUP_FOLLOW_SECS            knob: how often a frozen popup re-reads its client's window (fleet-popup-lib.sh, T741)
+FLEET_POPUP_HOLD_SECS              knob: how often dash-popup.sh --hold checks the panel it holds the popup book for (T890)
 FLEET_REAP_NOW_EVERY               knob: internal pacing/limit, safe in-code default (fleet-cleanup-idle.sh --now, T680)
 FLEET_REAP_NOW_MAX                 knob: internal pacing/limit, safe in-code default (fleet-cleanup-idle.sh --now, T680)
 FLEET_PLACED                       handoff: @placed (hub | fallback-local) carried to dash-issue-session.sh's --async tail (T672)

@@ -3613,18 +3613,21 @@ if [ -n "$_ol" ]; then
 fi
 
 # --- timing: ⌘P → 面板 and ⌘N / ⚡ → 能打字 (issue #3551, EPIC #3500 C6) ---------
-# fleet_timing.py's `check` over the last 10 runs of each, the medians against
-# FLEET_TIMING_PANEL_MS (500) and FLEET_TIMING_SESSION_MS (8000; a session judged
+# fleet_timing.py's `check`: ⌘P's 九成五 over its last 50 runs against
+# FLEET_TIMING_PANEL_MS (100, T890), the session's median of 10 against
+# FLEET_TIMING_SESSION_MS (8000; a session judged
 # by its `input` — the agent's input box, T716 — else its `total`; a `cold` run
 # from before the warm pool left, T495, is counted apart). Nothing measured ⇒ no row.
 # The segment table is `fleet_timing.py table`.
 if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [ -n "$_tm" ]; then
   _tmsg=$(printf '%s\n' "$_tm" | awk '{
+    split("", v)
     for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
     w = ($1 == "panel" ? "⌘P → 面板" : ($1 == "session" ? "新会话 → 能打字" : $1))
-    s = w " p50 " (v["p50"] == "—" ? "—" : sprintf("%.2fs", v["p50"] / 1000)) " (" v["n"] " 次"
+    if ("p95" in v) s = w " 九成五 " (v["p95"] == "—" ? "—" : sprintf("%.2fs", v["p95"] / 1000)) " · p50 " (v["p50"] == "—" ? "—" : sprintf("%.2fs", v["p50"] / 1000)) " (" v["n"] " 次"
+    else s = w " p50 " (v["p50"] == "—" ? "—" : sprintf("%.2fs", v["p50"] / 1000)) " (" v["n"] " 次"
     if (v["cold"] > 0) s = s "，冷启 " v["cold"]
-    s = s ")"; if (v["over"] == 1) s = s " > " sprintf("%.1fs", v["limit"] / 1000)
+    s = s ")"; if (v["over"] == 1) s = s " > " sprintf("%.2fs", v["limit"] / 1000)
     printf "%s%s", (NR > 1 ? " · " : ""), s }')
   if printf '%s\n' "$_tm" | grep -q ' over=1 '; then
     warn timing "$_tmsg — fleet_timing.py table shows which segment"

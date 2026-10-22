@@ -35,6 +35,12 @@
 #                  fleet_popup_freeze — issue #3058: tmux 3.7c lets a pane's wide
 #                  characters bleed through a popup). Only for a popup that types
 #                  into no pane: the 看台's ⌘P list and ⌘T dispatch
+#   --hold <pid>   open nothing: a popup the key opened itself (the 看台's ⌘P,
+#                  fleet-popup-lib.sh fleet_popup_bind — no shell before it, T890)
+#                  gets this door's book while <pid> (its panel) lives — @popup_open
+#                  · @popup_pid · @popup_title, --freeze, and the keypress's
+#                  FLEET_PANEL_CTX taken off --session's environment; run by the
+#                  panel after its first frame, detached
 #
 # It gives an in-pane popup the two things a `prefix`-bound popup gets for free
 # and a raw a tmux popup in an fzf `execute()` bind never had:
@@ -90,7 +96,7 @@
 # THIS fleet's socket (issue #159).
 set -u
 
-W=""; H=""; SIZE=""; TITLE=""; OBJECT=""; CLIENT=""; NO_INLINE=""; SESSION=""; FREEZE=""
+W=""; H=""; SIZE=""; TITLE=""; OBJECT=""; CLIENT=""; NO_INLINE=""; SESSION=""; FREEZE=""; HOLD=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) shift; W="${1:-}" ;;
@@ -102,11 +108,34 @@ while [ $# -gt 0 ]; do
     --session) shift; SESSION="${1:-}" ;;
     --no-inline) NO_INLINE=1 ;;
     --freeze) FREEZE=1 ;;
+    --hold) shift; HOLD="${1:-}" ;;
     --) shift; break ;;
     *)  break ;;
   esac
   shift
 done
+BIN="$(cd "$(dirname "$0")" && pwd)"
+
+# --hold: the book of a popup that is already up (see the header). The thaw and
+# the flags' reset run when the panel's pid is gone (or this is killed).
+if [ -n "$HOLD" ]; then
+  case "$HOLD" in *[!0-9]*|'') echo "dash-popup.sh: --hold takes a pid" >&2; exit 2 ;; esac
+  . "$BIN/fleet-popup-lib.sh"
+  # shellcheck disable=SC2034  # read by fleet_popup_thaw (the trap)
+  FPOP_FROZEN=''
+  trap 'fleet_popup_thaw; tmux set -g @popup_open 0 \; set -gu @popup_pid \; set -gu @popup_title 2>/dev/null || true' EXIT INT TERM HUP
+  epoch=$(date +%s)
+  tmux set -g @popup_open "$epoch" \; set -g @popup_pid "$epoch:$HOLD" \; set -g @popup_title "${TITLE:-}" 2>/dev/null || true
+  [ -z "$SESSION" ] || tmux set-environment -u -t "=$SESSION" FLEET_PANEL_CTX 2>/dev/null || true
+  if [ -n "$FREEZE" ] && [ -n "$CLIENT" ]; then
+    fleet_popup_freeze "$CLIENT"
+    # what streamed behind in the moment before the freeze is painted over
+    [ -z "$FPOP_FROZEN" ] || tmux refresh-client -t "$CLIENT" 2>/dev/null || true
+  fi
+  while kill -0 "$HOLD" 2>/dev/null; do sleep "${FLEET_POPUP_HOLD_SECS:-0.1}"; done
+  exit 0
+fi
+
 [ $# -gt 0 ] || { echo "dash-popup.sh: no command" >&2; exit 2; }
 
 # The three sizes (issue #1535). -w / -h given beside --size win on their axis.
@@ -117,8 +146,6 @@ case "$SIZE" in
   '') ;;
   *) echo "dash-popup.sh: --size is S, M or L" >&2; exit 2 ;;
 esac
-
-BIN="$(cd "$(dirname "$0")" && pwd)"
 
 # One shell-command string (the popup command takes exactly one). %q-quote each token
 # so a title/path with a space or metachar survives both the popup and the

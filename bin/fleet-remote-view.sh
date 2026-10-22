@@ -788,6 +788,11 @@ rv_attach_thin() {
   case "$browser:$view" in 1:*|*:*-via-*) ;; *)
     ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
   esac
+  # ⌘P's resident panel (T890): started now, off the attach's path, so the first
+  # ⌘P already finds the list in hand (fleet-panel-server.py; off ⇒ nothing)
+  case "$browser:$view" in 1:*|*:*-via-*) ;; *)
+    ( python3 "$BIN/fleet-panel-server.py" ensure --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
+  esac
   # the one message issue #3328 added: 快捷键只剩 ⌘P, once per login, on this
   # 看台's client once it is attached
   case "$view" in *-via-*) ;; *)

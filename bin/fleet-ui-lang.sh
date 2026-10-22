@@ -459,6 +459,16 @@ fleet_ui_t() {
     # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
     zh:view_count_fmt) printf '会话 %s' "${1:-}" ;;
     en:view_count_fmt) printf 'Sessions %s' "${1:-}" ;;
+    zh:view_age_fmt) printf ' · %s' "${1:-}" ;;
+    en:view_age_fmt) printf ' · %s' "${1:-}" ;;
+    zh:view_age_refreshing_fmt) printf ' · %s · 刷新中…' "${1:-}" ;;
+    en:view_age_refreshing_fmt) printf ' · %s · refreshing…' "${1:-}" ;;
+    zh:view_ago_s_fmt) printf '%s 秒前' "${1:-}" ;;
+    en:view_ago_s_fmt) printf '%ss ago' "${1:-}" ;;
+    zh:view_ago_m_fmt) printf '%s 分钟前' "${1:-}" ;;
+    en:view_ago_m_fmt) printf '%s min ago' "${1:-}" ;;
+    zh:view_ago_h_fmt) printf '%s 小时前' "${1:-}" ;;
+    en:view_ago_h_fmt) printf '%s h ago' "${1:-}" ;;
     zh:view_page_keys_fmt) printf '↵ 执行  ↑↓ 选  %s 直接执行  [ ] 上一个/下一个会话  esc 回列表' "${1:-}" ;;
     en:view_page_keys_fmt) printf '↵ run  ↑↓ pick  %s run it  [ ] previous/next session  esc list' "${1:-}" ;;
     zh:view_choice_keys_fmt) printf '↵ 选定  ↑↓ 选  %s 直接选  esc 返回' "${1:-}" ;;

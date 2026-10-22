@@ -632,13 +632,49 @@ def notify(level, text, nxt="", client="", sock="", everyone=False, source="", s
 _WORDS = {}
 
 
+def words_key():
+    """What the language table's dump depends on (issue #3514): the table itself
+    and every input fleet_ui_lang reads — FLEET_UI_LANG, the person's choice
+    file, FLEET_VIEW_LANG (set or not), the locale. One file per answer; the
+    panel's words (fleet_view) and these read the same key."""
+    table = BIN / "fleet-ui-lang.sh"
+    person = os.environ.get("FLEET_UI_PERSON_FILE") or os.path.join(
+        os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "person-bundle.json")
+    parts = []
+    for f in (table, person):
+        try:
+            st = os.stat(str(f))
+            parts.append("%s:%d:%d" % (f, st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append("%s:-" % f)
+    for k in ("FLEET_UI_LANG", "FLEET_VIEW_LANG", "LC_ALL", "LC_MESSAGES", "LC_CTYPE", "LANG"):
+        parts.append("%s=%s" % (k, os.environ.get(k, "\1")))
+    return hashlib.sha1("\0".join(parts).encode("utf-8", "replace")).hexdigest()[:16]
+
+
 def say(key, *args):
     if not _WORDS:
+        # kept per words_key() like the panel's own words (T890: a shell run of
+        # 120-150 ms on a busy machine that every ⌘P paid before its first frame)
+        kept = gdir() / ("notice-words-" + words_key())
         try:
-            out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "notice_"], capture_output=True,
-                                 text=True, timeout=5, stdin=subprocess.DEVNULL).stdout
-        except (OSError, subprocess.SubprocessError):
+            out = kept.read_text(encoding="utf-8")
+        except (OSError, ValueError):
             out = ""
+        if not out:
+            try:
+                out = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "notice_"], capture_output=True,
+                                     text=True, timeout=5, stdin=subprocess.DEVNULL).stdout
+            except (OSError, subprocess.SubprocessError):
+                out = ""
+            if out:
+                try:
+                    kept.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = kept.with_name(kept.name + ".%d" % os.getpid())
+                    tmp.write_text(out, encoding="utf-8")
+                    os.replace(str(tmp), str(kept))
+                except OSError:
+                    pass
         raw = out.split("\0")
         _WORDS.update({k: v.replace("\1", "%s") for k, v in zip(raw[0::2], raw[1::2])})
         _WORDS.setdefault("_", "")
