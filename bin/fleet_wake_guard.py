@@ -20,6 +20,9 @@ import uuid
 import fleet_session_gate as gate
 
 HUMAN = {'键盘', '网页', '回答', '⌘P', 'keyboard', 'web', 'answer'}
+# A human can pass a recent timer, but not one that has already waited longer
+# than this advantage. Aging uses the original request even across deferral.
+HUMAN_ADVANCE_SECS = 30
 
 
 @lru_cache(maxsize=1)
@@ -95,6 +98,28 @@ def humans_waiting(directory):
     return False
 
 
+def queue_turn(directory, ticket):
+    """FIFO within each class, bounded human priority across every login.
+
+    Only locked tickets are waiters. No process deletes or rewrites another
+    login's ticket, and a dead waiter cannot strand the queue.
+    """
+    def order(path):
+        advance = HUMAN_ADVANCE_SECS * 1_000_000_000 if path.name.startswith('human-') else 0
+        return path.stat().st_mtime_ns - advance, path.name
+    ours = order(ticket)
+    for path in directory.iterdir():
+        if path == ticket or not path.name.startswith(('human-', 'timer-')):
+            continue
+        try:
+            with shared_file(path) as file:
+                if not try_lock(file) and order(path) < ours:
+                    return False
+        except FileNotFoundError:
+            continue
+    return True
+
+
 def admitted():
     """Use the existing machine admission reader (including its hysteresis)."""
     import shlex
@@ -123,12 +148,17 @@ def acquire(meta_path, meta):
     with shared_file(ticket) as waiting:
         fcntl.flock(waiting, fcntl.LOCK_EX)
         try:
+            queued = meta.setdefault('queued_at', time.time())
+            os.utime(ticket, (queued, queued))
             end = time.monotonic() + 60
             while time.monotonic() < end:
-                if human or not humans_waiting(directory):
+                if queue_turn(directory, ticket):
                     for i in range(slots()):
                         file = shared_file(directory / ('slot-%d' % i))
                         if try_lock(file):
+                            if not queue_turn(directory, ticket):
+                                file.close()
+                                break
                             # A timer waits for capacity to recover; a person's
                             # submitted words have priority, but still need a slot.
                             if not human and not admitted():

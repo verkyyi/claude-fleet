@@ -81,12 +81,13 @@ NOW_EOF
 fi
 
 # --make-room <MB> [--dry-run] (T695, 回收 C): fold sessions until about <MB> of
-# their memory is free — the done ones first, then the longest idle
+# their memory is free — normal terminal reaping first, then safe idle parking
 # (fleet-cleanup-idle.py --plan-room's tiers, across this login's fleets), each
-# through `--fold --only <window>` with ITS repo's conf: history first and
+# through `--fold --only <window>` with ITS repo's conf (or explicit no-repo).
+# New wrappers park in place and retain pin/keep; legacy closes remain history first and
 # resumable, the window closed, the worktree kept. fleet_admit_make_room
 # (fleet-lib.sh) runs it before a spawn is refused for memory. One line a fold
-# (`folded:<window> <key> mb=<n>`), then `made-room <freed>MB of <MB>MB, <n> folded`.
+# (`folded:<window> <key> mb=<n>` or `parked-room:<window> mb=<n|unknown>`), then `made-room <freed>MB of <MB>MB, <n> folded`.
 # FLEET_ADMIT_MAKE_ROOM=0 folds nothing.
 if [ "${1:-}" = --make-room ]; then
   need=${2:-}; dry=''
@@ -101,29 +102,37 @@ if [ "${1:-}" = --make-room ]; then
   done <<MR_EOF
 $(fleet_sockets)
 MR_EOF
-  freed=0; n=0
+  freed=0; n=0; parked_n=0
   # tier, then the oldest last turn first
   while IFS=$'\t' read -r tier ts mb win s; do
     [ -n "$win" ] || continue
     [ "$freed" -lt "$need" ] || break
     out=$( export FLEET_SESSION="$s"
       fleet_load_conf "$s"
-      repo=$(fleet_window_repo "$s" "$win") && [ -n "$repo" ] || exit 0
-      fleet_load_repo_conf "$s" "$repo" || exit 0
+      if [ "$(tmux -L "$(fleet_socket "$s")" display-message -p -t "$win" '#{@norepo}' 2>/dev/null)" = 1 ]; then
+        repo=''; FLEET_MAIN=''
+      else
+        repo=$(fleet_window_repo "$s" "$win") && [ -n "$repo" ] || exit 0
+        fleet_load_repo_conf "$s" "$repo" || exit 0
+      fi
       python3 "$BIN/fleet-cleanup-idle.py" --session "$s" --socket-name "$(fleet_socket "$s")" \
         --main "${FLEET_MAIN:-}" --repo "$repo" --base "${FLEET_BASE_BRANCH:-master}" \
         --only "$win" --fold ${dry:+"$dry"} 2>/dev/null )
     [ -z "$out" ] || printf '%s\n' "$out"
-    case "$out" in *folded:*)
+    case "$out" in *parked-room:*)
+      parked_n=$((parked_n + 1)); m=${out##*mb=}; m=${m%%[!0-9]*}
+      case "$m" in ''|*[!0-9]*) m=0 ;; esac
+      freed=$((freed + m)) ;;
+    *folded:*)
       n=$((n + 1)); m=${out##*mb=}; m=${m%%[!0-9]*}
-      case "$m" in ''|0) m=1 ;; esac     # an unreadable size still counts as one fold
+      case "$m" in ''|*[!0-9]*) m=0 ;; esac  # unknown bytes are not measured savings
       freed=$((freed + m)) ;;
     esac
     : "$tier$ts$mb"
   done <<MR_EOF
 $(printf '%s' "$plan" | sort -t$'\t' -k1,1n -k2,2n)
 MR_EOF
-  echo "made-room ${freed}MB of ${need}MB, $n folded"
+  echo "made-room ${freed}MB of ${need}MB, $n folded, $parked_n parked"
   exit 0
 fi
 
