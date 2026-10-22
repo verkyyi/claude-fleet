@@ -392,11 +392,11 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 
 - **说**：`POST /v1/chat/say?worker=<id>`（`{text, images: [≤4]}`，≤1 MB）→ 会话所在登录的 `/api/say`，body 加入口写的
   `fid`（浏览器带的 `fid` 被覆盖）→ `{delivery, state: sent | queued | refused, reason?}`。`answer?worker=`（问题指纹 + 选项原文）、
-  `stop?worker=` 同一条路（`/api/answer|stop`）；不带 `worker` 的 `answer` / `stop` 仍是家里那段对话自己的。谁 = `termPerson`，
+  `stop?worker=`、`ack?worker=`（`{delivery}`，页面收下队列退回的一句）同一条路（`/api/answer|stop|ack`）；不带 `worker` 的 `answer` / `stop` 仍是家里那段对话自己的。谁 = `termPerson`，
   会话是不是你的 = `termTarget`（家或你自己的另一个登录，否则 404 `not_yours`），个人终端 400 `bad_target`；空话 400 `empty`、
   五张图 400 `too_many_images`、不是 JSON 400 `bad_body`；旧服务 409 `old_service`、旧 agent 409 `old_agent`。试用者的一句照旧记一行，
   会话没收下（非 200 或 `state: refused`）就还回去。`open-terminal` 不做（「更多」只复制命令）。新开一段：`POST /v1/chat/open`
-  （`{agent, text, images}`，转家的 `/api/open`，第一句随它记试用的一行；回答里入口补上 `worker_id` = 这个登录唯一那支 fleet 的 `<fleet>/<fid>`）。`GET /v1/chat/home` 带 `unified`（= 下面的开关）。
+  （`{agent, text, images}`，转家的 `/api/open`，第一句随它记试用的一行；回答里入口补上 `worker` = 这个登录唯一那支 fleet 的 `<fleet>/<fid>`）。`GET /v1/chat/home` 带 `unified`（= 下面的开关）。
 - **旧路由**：设置 `fleet.chat.unified`（默认 off）。on 时 `/v1/chat/turn|new|take|takeover|giveback` 回 410 `moved`、不到家；
   off 时照旧转发（新页面和家机会话门上线前网页不断）——三个任务里最后合入的一方把它打开，之后一个版本删旧路。
   接力锁（`fleet-convo-lock.py`）不再有新的写入方：⌘P「在 WebChat 里继续」改为「在网页里打开」（`fleet-web-open.sh`，

@@ -88,7 +88,7 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 				state = "refused"
 			}
 			io.WriteString(w, `{"delivery":"d1","state":"`+state+`","got":`+strconvQuote(string(body))+`}`)
-		case "/api/stop", "/api/answer":
+		case "/api/stop", "/api/answer", "/api/ack":
 			body, _ := io.ReadAll(r.Body)
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true,"got":`+strconvQuote(string(body))+`}`)

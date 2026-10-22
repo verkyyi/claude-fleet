@@ -34,6 +34,7 @@ import (
 //         queued | refused, reason?}
 // answer: the question's fingerprint and the option's own words
 // stop:   nothing — the session's current turn is stopped (Esc)
+// ack:    {delivery} — a line the session's queue gave back, taken off it
 //
 // The browser names a worker id, never a window: the body's fid is the hub's.
 // There is no relay lock any more — who may talk is the session gate's word
@@ -51,6 +52,8 @@ var chatWorkerRoutes = map[string]struct {
 	"say":    {"say", 30 * time.Second},
 	"answer": {"answer", 30 * time.Second},
 	"stop":   {"stop", 15 * time.Second},
+	// a line the session's queue gave back, taken off it by the page
+	"ack": {"ack", 15 * time.Second},
 	// the old 接管 / 交回 (task VV8F): home only, while fleet.chat.unified is off
 	"takeover": {"takeover", 45 * time.Second}, // compat-1v: 下一批删
 	"giveback": {"giveback", 45 * time.Second}, // compat-1v: 下一批删
@@ -332,7 +335,7 @@ func (s *Server) sessionParkIdle() int {
 	return int(d / time.Second)
 }
 
-// chatOpenWorker adds the new session's worker_id to /api/open's answer (task
+// chatOpenWorker adds the new session's worker id (`worker`) to /api/open's answer (task
 // PQ41): the home names its window (fid); the page talks to it by worker id,
 // <the login's fleet>/<fid> — named only when the login runs exactly one fleet
 // the hub has heard (else the page finds it on the board by its id, the fid).
@@ -365,7 +368,7 @@ func (s *Server) chatOpenWorker(resp *http.Response, machine, login string) {
 	if fleet == "" {
 		return
 	}
-	out["worker_id"] = fleet + "/" + fid
+	out["worker"] = fleet + "/" + fid
 	b, err := json.Marshal(out)
 	if err != nil {
 		return

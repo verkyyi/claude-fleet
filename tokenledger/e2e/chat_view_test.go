@@ -280,7 +280,7 @@ func TestChatSayToSession(t *testing.T) {
 	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"state":"refused"`) {
 		t.Fatalf("a refused say: %d %s", resp.StatusCode, b)
 	}
-	for _, route := range []string{"answer", "stop"} {
+	for _, route := range []string{"answer", "stop", "ack"} {
 		resp := chatDo(t, h, "POST", "/v1/chat/"+route+"?worker="+wid, alice, page, `{"fp":"q1","pick":"是"}`)
 		b, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `\"fid\":\"`+fid+`\"`) {
@@ -334,7 +334,7 @@ func TestChatSayToSession(t *testing.T) {
 	// a new session from the web: on the home, its first line with it
 	resp = chatDo(t, h, "POST", "/v1/chat/open", alice, page, `{"agent":"claude","text":"hello"}`)
 	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"fid":"f-new"`) ||
-		!strings.Contains(string(b), `"worker_id":"`+fuid+`/f-new"`) {
+		!strings.Contains(string(b), `"worker":"`+fuid+`/f-new"`) {
 		t.Fatalf("open: %d %s", resp.StatusCode, b)
 	}
 	// an answer / a stop with no worker is still the home conversation's own

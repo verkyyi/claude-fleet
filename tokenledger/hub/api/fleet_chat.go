@@ -283,7 +283,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// the worker road: say, and an answer / a stop that names its session
-	if _, ok := chatWorkerRoutes[name]; ok && (name == "say" || name == "takeover" || name == "giveback" || r.URL.Query().Get("worker") != "") {
+	if _, ok := chatWorkerRoutes[name]; ok && (name == "say" || name == "ack" || name == "takeover" || name == "giveback" || r.URL.Query().Get("worker") != "") {
 		s.handleChatWorker(w, r, name)
 		return
 	}
