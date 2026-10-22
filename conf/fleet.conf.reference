@@ -319,16 +319,16 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # hub setting fleet.session.park_idle hands it down; seconds or 5m / 2h; never
 # under 60; 0 = never park. Under memory pressure the longest idle web session
 # parks first, past one minute, when free memory is under FLEET_PARK_MEM_PCT %.
-# @label=Park an idle web session after @group=janitor @tier=advanced @scope=global @edit=str
+# @label=Park an idle web session after @group=janitor @tier=advanced @scope=fleet @edit=str
 #FLEET_SESSION_PARK_IDLE=300
-# @label=Park early under memory pressure below @group=janitor @tier=advanced @scope=global @edit=int @unit=percent
+# @label=Park early under memory pressure below @group=janitor @tier=advanced @scope=fleet @edit=int @unit=percent
 #FLEET_PARK_MEM_PCT=15
 # A sentence the web said waits this long for its session to be free, then goes
 # back to the page's box with its reason; a parked session that does not come
 # back within FLEET_GATE_WAKE_SECS returns its sentence (「这一句没送到 · 重试」).
-# @label=Web sentence waits at most @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+# @label=Web sentence waits at most @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
 #FLEET_GATE_QUEUE_SECS=1800
-# @label=Wake a parked session within @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+# @label=Wake a parked session within @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
 #FLEET_GATE_WAKE_SECS=20
 
 # --- Rotation lease TTL (issue #550) -------------------------------------------
