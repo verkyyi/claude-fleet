@@ -509,6 +509,8 @@ durable 任务沿 `fleet_transfer_durable.py` 已验证的单一归属路径：�
 
 已由 `fleet-loop.py` 管理的循环（含 Codex）继续以原账本为唯一节拍来源。
 停前写 `park_fid` 交出投递权；旧 bridge 不再投递、也不因停放退出把循环写成 stopped。
+外壳进入停放页时清掉 transfer 首次创建控制器所用的 `FLEET_LOOP_SPEC / FLEET_LOOP_AGENT`，
+保留原 manifest / ledger；接回走原 thread 的普通恢复，不再进入 bridge 创建另一份控制器。
 接回同一 thread 后原有 `fleet-loop.py defer / stop` 仍有效；正在投递且收据未定的循环拒停。
 显式 stop、取消任务或改期后，定时 tick 与独立会话门清扫都会重新核对原计划，
 撤销尚未被外壳或原生领取的旧提示。同一时刻的多个任务取消其中一个时，
