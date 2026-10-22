@@ -396,6 +396,21 @@ ok "F3 private runtime is default inside a pane; embedded opt-out and explicit r
 # ============================================================================
 # G. codex missing from PATH → loud failure, claude is NOT substituted
 # ============================================================================
+# T944: a managed release carries its verified CLI. A stale Homebrew/npm CLI
+# earlier on PATH must not turn a new web session into an old, read-only one.
+mkdir -p "$WORK/install/tools/bin"
+cat > "$WORK/install/tools/bin/codex" <<EOS
+#!/bin/sh
+printf 'pin\n' >> "$WORK/pin-used"
+exec "$WORK/fakebin/codex" "\$@"
+EOS
+chmod +x "$WORK/install/tools/bin/codex"
+run 'release pin fixture'
+[ -s "$WORK/pin-used" ] || fail "F4 managed release Codex must win over a stale CLI earlier on PATH"
+[ "$(ran)" = codex ] || fail "F4 the pinned CLI did not run" "$(ran)"
+rm -rf "$WORK/install/tools"
+ok "F4 managed release Codex wins over a stale CLI earlier on PATH"
+
 # PATH is narrowed to the fakes + the system dirs so a REAL codex installed under
 # ~/.local/bin or /opt/homebrew can't be found once the fake is gone (this test
 # must never launch a real agent).

@@ -114,6 +114,7 @@ while True:
             result = gate.park(self.fid)
         self.assertTrue(result.get('ok'), result)
         self.assertTrue(self.opt('@park_held'))
+        self.assertEqual(self.opt('@park_since'), self.opt('@parked'))
         self.assertEqual(self.opt('@fleet_id'), self.fid)
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         self.assertEqual(self.opt('pane_pid'), before)
@@ -127,6 +128,7 @@ while True:
             result = gate.wake(self.fid, why='消息')
         self.assertTrue(result.get('ok'), result)
         self.wait(lambda: self.opt('@park_relay'))
+        self.assertFalse(self.opt('@park_since'), 'wake retained a stale parked timestamp')
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
         self.assertEqual([r['act'] for r in rows], ['park', 'wake'])

@@ -5,7 +5,17 @@
 // is never shown twice; ?before= draws the page before above it.
 // Run: node --experimental-strip-types test/session-view.mjs
 import assert from 'node:assert/strict';
-import { NOTHING, applyFrame, parseEvent, prependOlder } from '../src/app/chat/view-stream.ts';
+import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess } from '../src/app/chat/view-stream.ts';
+
+assert.equal(writeAccess(null, true), 'checking');
+assert.equal(writeAccess({ can_talk: null }, true), 'checking');
+assert.equal(writeAccess({ can_talk: false, talk_reason: 'unreachable' }, true), 'checking');
+for (const agent of ['codex', 'claude']) {
+  assert.equal(writeAccess({ agent, can_talk: true }, true), 'writable');
+  assert.equal(writeAccess({ agent, can_talk: false, talk_reason: 'old_version' }, true), 'readonly');
+}
+assert.equal(writeAccess({}, true), 'readonly', 'old service stays read-only');
+assert.equal(writeAccess({ can_talk: true }, false), 'readonly', 'read-only ticket / view-as cannot write');
 
 assert.deepEqual(parseEvent('id: 7\ndata: {"t":"items","at":5}'), { id: 7, data: { t: 'items', at: 5 } });
 assert.deepEqual(parseEvent('data: {"t":"state","busy":true}'), { id: undefined, data: { t: 'state', busy: true } });

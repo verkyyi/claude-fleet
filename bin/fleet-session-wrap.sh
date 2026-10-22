@@ -374,7 +374,7 @@ park_hold() {
     fi
     park_act=quit; break                             # the pane's input is gone
   done
-  wset -u @parked; wset -u @park_why; wset -u @park_held
+  wset -u @parked; wset -u @park_since; wset -u @park_why; wset -u @park_held
 }
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''

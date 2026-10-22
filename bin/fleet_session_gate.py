@@ -789,7 +789,8 @@ def park_locked(fid, why, force):
             or current["state"] in ("working", "needs", "exited") or watched(current)):
         return dict(ok=False, why="changed")
     started = time.monotonic()
-    for option, value in (("@parked", str(int(now()))), ("@park_why", why),
+    since = str(int(now()))
+    for option, value in (("@parked", since), ("@park_since", since), ("@park_why", why),
                           ("@park_saved_mb", str(park_saved_mb(w)))):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], option, value)
     if seam:
@@ -805,7 +806,7 @@ def park_locked(fid, why, force):
                 park_log(fid, "park", why, time.monotonic() - started)
                 return dict(ok=True, why=why)
             time.sleep(.1)
-    for option in ("@parked", "@park_why", "@park_saved_mb"):
+    for option in ("@parked", "@park_since", "@park_why", "@park_saved_mb"):
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
     park_log(fid, "fail", why, time.monotonic() - started, sent.get("why") or "exit_failed")
     return dict(ok=False, why=sent.get("why") or "exit_failed")
@@ -840,6 +841,8 @@ def wake_ready(pane):
         Path(seed + ".taken").unlink(missing_ok=True)
     park_log(meta.get("fid", ""), "wake", meta.get("why", ""),
              max(0, now() - meta.get("started", now())), "resumed", meta.get("next", 0), meta.get("started", 0))
+    # Also clear for a wrapper already running the previous release's hold page.
+    tmux("", "set-option", "-wu", "-t", pane, "@park_since")
     tmux("", "set-option", "-wu", "-t", pane, "@park_start")
     Path(str(path) + ".claimed").unlink(missing_ok=True)
 

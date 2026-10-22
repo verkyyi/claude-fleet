@@ -5,6 +5,14 @@
 // the byte the page holds (at) — so a page back with ?at= never shows a line
 // twice (task YP39: a byte cursor; the record is read from its end).
 
+// Unknown capability is a connection in progress, not an old terminal session.
+// An older service omits can_talk; it remains read-only. Only true enables send.
+export function writeAccess(state: { can_talk?: boolean | null; talk_reason?: string } | null, allowed: boolean) {
+  if (!allowed) return "readonly";
+  if (!state || state.can_talk === null || state.talk_reason === "unreachable") return "checking";
+  return state.can_talk === true ? "writable" : "readonly";
+}
+
 // one SSE block → its id and its data (the service writes one data line per event)
 export function parseEvent(block: string): { id?: number; data?: Record<string, unknown> } {
   let id: number | undefined, data = "";
