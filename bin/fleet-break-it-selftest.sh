@@ -6529,13 +6529,21 @@ assert out == "FELL --view fl@view-dead --client /dev/ttys9" and secs < 2, (out,
 hung = socket.socket(socket.AF_UNIX); hung.bind(str(ps.sock_path("hung"))); hung.listen(4)
 out, secs = attach("hung")
 assert out == "FELL --view fl@view-hung --client /dev/ttys9" and secs < 2, (out, secs)
+# a probe — `status` / `ensure` connect and close, sending nothing — is not a ⌘P:
+# the live server answered one with an exception and died (T890, first day)
+class FV:
+    view_fleet = staticmethod(lambda vid: "")
+srv = ps.Server("p", None, FV())
+a, b = socket.socketpair()
+b.close()
+srv.serve_conn(a)
 print("ok")
 PY
 ) || { WHY="a dead resident panel held ⌘P: $out"; return 1; }
   [ "$out" = ok ] || { WHY="dead panel: $out"; return 1; }
-  suite_holds fleet-panel-server-selftest.sh 'C no server' 'G its 看台 gone' || return 1
+  suite_holds fleet-panel-server-selftest.sh 'C no server' 'G its 看台 gone' 'B0 a probe' || return 1
   SECS=$(since "$t0")
-  WHAT='常驻面板死了（旧 socket 没人听）或卡住（收下连接不答）：连接器 2 秒内改走原来的 Python 面板，带着按键时的 --view / --client；Go 连接器同一条由 agent/panel_test.go 守住'
+  WHAT='常驻面板死了（旧 socket 没人听）或卡住（收下连接不答）：连接器 2 秒内改走原来的 Python 面板，带着按键时的 --view / --client；一个只连不说的探问（status / ensure）不让它倒下；Go 连接器同一条由 agent/panel_test.go 守住'
 }
 
 # Home moved, panel changed (EPIC T644 C7): the operator moved the 看台's home from

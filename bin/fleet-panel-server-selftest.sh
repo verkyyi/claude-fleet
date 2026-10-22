@@ -6,6 +6,8 @@
 #   A  the socket: one name per 看台, the Go connector's (sha1(view)[:16], the same
 #      constant agent/panel_test.go holds); a directory not 0700 / not ours is
 #      refused; `ensure` with no connector starts nothing
+#   B0 a probe — `status` / `ensure` connect and close, sending nothing — leaves
+#      the server up (it died on the first one)
 #   B  serve + attach: a 看台 on an isolated tmux, the rows through the producer
 #      seam; `attach` (the connector in Python) hands its pty to the server, the
 #      forked child draws the first frame from the list in hand — the row is on
@@ -81,6 +83,12 @@ for _ in $(seq 1 100); do [ -S "$W/ps/$(python3 "$BIN/fleet-panel-server.py" soc
 sleep 2      # its first read
 
 # --- B ----------------------------------------------------------------------------
+# a probe first (status / ensure connect and close, sending nothing): the server
+# stays up and answers the ⌘P after it (T890: it died on the first probe)
+for _ in 1 2 3; do python3 "$BIN/fleet-panel-server.py" status --view fl@view-v1 >/dev/null; done
+python3 "$BIN/fleet-panel-server.py" ensure --view fl@view-v1 >/dev/null
+kill -0 "$SRV" 2>/dev/null && python3 "$BIN/fleet-panel-server.py" status --view fl@view-v1 >/dev/null \
+  && st_ok "B0 a probe (status · ensure) leaves the server up" || st_miss "B0 a probe took the server down: $(tail -2 "$W/conf/logs/panel-server.log")"
 CTX="fl@view-v1|/dev/ttys999|$W1|||||120"
 python3 - "$BIN" "$SOCK" "$CTX" "$W" <<'PY' && st_ok "B attach: the forked child draws the first frame from the list in hand (attach · read=0 · frame), ESC ⇒ rc 0" || st_miss "B serve + attach: $(tail -3 "$W/conf/logs/panel-server.log" 2>/dev/null)"
 import json, os, pty, select, sys, time, collections
