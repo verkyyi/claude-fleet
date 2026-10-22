@@ -6530,6 +6530,14 @@ drill_park_loop_rebootstrap() {
   WHAT='原 Fleet loop 停放接回不复用首次创建控制器的环境，同 thread 原提示一次、原账本继续调度'
 }
 
+drill_park_export_refusal_owner() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-export-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='真实导出后复检拒停立即归还原合同与投递权，保留问题且不退出；原 dispatcher 到点只执行一次'
+}
+
 drill_park_stopped_timer_revives() {
   CAP=45; local t0 out
   t0=$(now)
