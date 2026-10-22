@@ -24,3 +24,7 @@ assert.deepEqual(termOf(row({ group: 'ask', board: { tag: 'parked' } })), { kind
 
 assert.match(LANDSCAPE, /orientation: landscape/);
 console.log('workspace-view: ok');
+
+assert.deepEqual(termOf(row({group:'queue',board:{tag:'queued'}})),{kind:'planned'},'an accepted record is not starting');
+assert.deepEqual(termOf(row({group:'queue',board:{tag:'starting'}})),{kind:'opening'});
+assert.deepEqual(termOf(row({group:'queue',board:{tag:'not_seen'}})),{kind:'unavailable'},'missing evidence is not starting');

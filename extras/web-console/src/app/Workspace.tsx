@@ -44,6 +44,7 @@ export function Workspace({ r }: { r: Row }) {
   // the backup terminal and back is not a step: Back leaves the session, to the list
   const setView = (v: View) => setParams((p) => { if (v === "term") p.set("view", v); else p.delete("view"); return p; }, { replace: true });
   const term = termOf(r);
+  const pendingRecord = !r.live && !!r.board && ["queued", "starting", "not_seen"].includes(r.board.tag);
   const side = useMedia(LANDSCAPE);
   const full = side && view === "term";
   const phone = useMedia("(max-width: 767px)");
@@ -104,7 +105,11 @@ export function Workspace({ r }: { r: Row }) {
         </DropdownMenu>
       </header>
       <div className="relative min-h-0 flex-1">
-        {chatOn ? <div hidden={view !== "chat"} className="h-full">
+        {pendingRecord ? <div className="space-y-2 p-4 text-sm" role="status">
+          <p>{tr(...r.tag)}</p><p>{rowAgent(r)}</p>
+          {r.board?.context ? <p>{tr(...r.board.context)}</p> : null}
+        </div> : null}
+        {chatOn && !pendingRecord ? <div hidden={view !== "chat"} className="h-full">
           <ChatThread source={{ kind: "session", machine: rowMachine(r), key: r.live?.key || r.ended?.key || "", agent, worker: workerOf(r),
             ...(isTerminal(r) && canOpen ? { open } : {}) }}
             last={r.line} onHead={onHead} />
@@ -112,7 +117,7 @@ export function Workspace({ r }: { r: Row }) {
         {termOn && term.kind === "live"
           ? <TerminalView key={term.worker} worker={term.worker} name={r.title} toolsInto={tools} compact={full} icons={full || phone} hidden={view !== "term"} />
           : null}
-        {view === "term" && term.kind === "opening" ? <p role="status" data-testid="term-opening"
+        {view === "term" && term.kind === "opening" && !pendingRecord ? <p role="status" data-testid="term-opening"
           className="text-muted-foreground flex items-center gap-2 p-4 text-sm"><Loader className="size-4 animate-spin" aria-hidden />
           {tr("会话正在开，开好就进入它的终端。", "The session is opening; its terminal opens once it is up.")}</p> : null}
         {view === "term" && term.kind === "ended" ? <div className="p-4"><Empty icon={<TerminalSquare />}

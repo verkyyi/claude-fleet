@@ -20,9 +20,11 @@ export const termKept = (view: View, leftAt: number | null, now = Date.now()) =>
 
 // What the 终端 side shows: its terminal (the live session's worker), it is
 // still opening (started from 新建, not up yet), or it has ended.
-export type TermState = { kind: "live"; worker: string } | { kind: "opening" } | { kind: "ended" };
+export type TermState = { kind: "live"; worker: string } | { kind: "opening" } | { kind: "planned" } | { kind: "unavailable" } | { kind: "ended" };
 export function termOf(r: Row): TermState {
   if (r.live) return { kind: "live", worker: r.live.id };
+  if (r.board?.tag === "queued") return { kind: "planned" };
+  if (r.board?.tag === "not_seen") return { kind: "unavailable" };
   // a parked session (E101) is not opening: its window closed on purpose, 接回 wakes it
   return r.group === "gone" || r.board?.tag === "parked" ? { kind: "ended" } : { kind: "opening" };
 }
