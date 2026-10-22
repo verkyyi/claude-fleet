@@ -6420,6 +6420,14 @@ drill_park_reap_table() {
   WHAT='停放与回收同表：每来源、三天期限、历史可接回，doctor 同一时刻'
 }
 
+drill_park_reap_report() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-report-durable-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='必要报告写失败不能终态回收；可靠持久排队无需等网络即时送达'
+}
+
 drill_park_reap_background() {
   CAP=30; local t0 out
   t0=$(now)
