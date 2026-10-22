@@ -5041,8 +5041,11 @@ def popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     try:
         return _popup(screen, qo, vid, client, forward, land_at, pre)
     finally:
-        sys.stdout.write("\x1b[?2004l")
-        sys.stdout.flush()
+        try:
+            sys.stdout.write("\x1b[?2004l")
+            sys.stdout.flush()
+        except OSError:
+            pass        # the popup's terminal is already gone (closed under us)
 
 
 def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):

@@ -305,6 +305,7 @@ class Server:
     # a ⌘P --------------------------------------------------------------------
     def serve_conn(self, conn):
         conn.settimeout(0.5)
+        fds = []
         uid = peer_uid(conn)
         if uid is not None and uid != os.getuid():
             log("refused a peer of uid %s" % uid)
@@ -316,6 +317,9 @@ class Server:
                 raise ValueError("descriptors before ready, or protocol %r" % msg.get("v"))
             conn.sendall(b'{"ready": 1}\n')
             fds = recv_fds(conn)
+        except Probe:
+            conn.close()                # `status` / `ensure` asking whether we answer
+            return
         except (OSError, ValueError) as e:
             log("bad request: %s" % e)
             for fd in fds:
@@ -453,7 +457,10 @@ class Server:
                         except (BlockingIOError, InterruptedError):
                             break
                         conn.setblocking(True)
-                        self.serve_conn(conn)
+                        try:
+                            self.serve_conn(conn)
+                        except Exception:   # noqa: BLE001 — one bad ⌘P never takes the server down
+                            log("conn: " + traceback.format_exc().replace("\n", " | "))
                 if self.worker and self.worker[1] in r:
                     self.worker_read()
                 if time.time() - self.last_conn > idle and not self.children:
@@ -508,6 +515,10 @@ def recv_fds(conn):
     return fds
 
 
+class Probe(Exception):
+    """A connection that closed before sending a byte: a probe, not a ⌘P."""
+
+
 def recv_head(conn):
     """One JSON line and the descriptors sent with its first bytes."""
     fds, buf = [], b""
@@ -525,6 +536,8 @@ def recv_head(conn):
     if not buf.endswith(b"\n"):
         for fd in fds:
             os.close(fd)
+        if not buf and not fds:
+            raise Probe()
         raise ValueError("no request line")
     return json.loads(buf.decode("utf-8")), fds
 
