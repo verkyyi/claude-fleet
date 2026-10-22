@@ -32,6 +32,10 @@ export type ViewState = { agent: string; session: string; busy: boolean; state: 
 export type ViewGate = { code: string; msg: string } | null;
 
 const RETRY_MS = [1000, 2000, 4000, 8000, 15000];
+// viewStream sends a comment heartbeat every 15 s, even for an idle session.
+// A half-open connection may never reject read(); missing three beats is a
+// connection failure, never a capability verdict. Reconnect from the cursor.
+const VIEW_IDLE_MS = 45_000;
 // a refusal that stays one: asking again changes nothing
 const FINAL = new Set(["not_yours", "bad_target", "old_agent", "no_session", "agent", "operator", "signin", "view_as", "forbidden", "gone"]);
 const API = "/v1/chat/view";
@@ -68,7 +72,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
   useEffect(() => {
     if (!worker) return;
     let on = true, tries = 0, wake: (() => void) | null = null, saveT = 0;
-    let ac: AbortController | null = null;
+    let ac: AbortController | null = null, lastByteAt = Date.now();
     const opened = performance.now();
     held.current = NOTHING; shown.current = []; top.current = null; keeper.current = "";
     try { delete (window as unknown as { __fleetViewFirst?: unknown }).__fleetViewFirst; } catch { /* none */ }
@@ -116,12 +120,28 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
       save();
     };
     const sleep = (ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); wake = () => { clearTimeout(t); r(); }; });
-    const onShow = () => { if (document.visibilityState === "visible") wake?.(); };
+    const onShow = () => {
+      if (document.visibilityState !== "visible") return;
+      // Background tabs can throttle the idle timer. Check its age again when
+      // returning to the page rather than waiting on the old reader forever.
+      if (Date.now() - lastByteAt >= VIEW_IDLE_MS) ac?.abort();
+      wake?.();
+    };
+    const onNetwork = () => { ac?.abort(); wake?.(); };
     document.addEventListener("visibilitychange", onShow);
-    window.addEventListener("online", onShow);
+    window.addEventListener("online", onNetwork);
+    window.addEventListener("offline", onNetwork);
     (async () => {
       while (on) {
         ac = new AbortController();
+        const attempt = ac;
+        let idleTimer = 0;
+        const received = () => {
+          lastByteAt = Date.now();
+          clearTimeout(idleTimer);
+          idleTimer = window.setTimeout(() => attempt.abort(), VIEW_IDLE_MS);
+        };
+        received();
         const h = held.current;
         const q = h.at >= 0 ? `&at=${h.at}&s=${encodeURIComponent(h.session)}` : "";
         let final = false;
@@ -142,6 +162,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
             for (;;) {
               const { value, done } = await rd.read();
               if (done) break;
+              received(); // includes SSE comment heartbeats, not just state changes
               buf = (buf + dec.decode(value, { stream: true })).replace(/\r\n/g, "\n");
               let i;
               while ((i = buf.indexOf("\n\n")) >= 0) {
@@ -155,7 +176,8 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
               }
             }
           }
-        } catch { /* dropped: come back from what we hold */ }
+        } catch { /* dropped or silent: come back from what we hold */ }
+        finally { clearTimeout(idleTimer); ac = null; }
         setLive(false);
         if (on) setConnection("offline");
         if (!on || final) break;
@@ -165,7 +187,8 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     })();
     return () => {
       on = false; ac?.abort(); wake?.(); clearTimeout(saveT);
-      document.removeEventListener("visibilitychange", onShow); window.removeEventListener("online", onShow);
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("online", onNetwork); window.removeEventListener("offline", onNetwork);
     };
   }, [worker]);
 

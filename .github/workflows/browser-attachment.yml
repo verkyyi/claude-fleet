@@ -38,6 +38,9 @@ jobs:
       - name: Session discovery preserves drafts and only a writable gate enables send (T944)
         run: node session-write.mjs
         working-directory: extras/browser-transport
+      - name: Silent session streams reconnect without losing drafts or permissions (T944)
+        run: node session-stream.mjs
+        working-directory: extras/browser-transport
       - name: A late copy never puts an older conversation back; a second browser follows
         run: node chat-copy-order.mjs
         working-directory: extras/browser-transport
