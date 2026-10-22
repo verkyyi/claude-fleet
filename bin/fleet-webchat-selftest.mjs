@@ -1195,8 +1195,12 @@ PORT = await start();
 const conv2 = JSON.parse((await req("/api/conversation", { headers: me })).body);
 ok(conv2.session === SID, "F after a restart the same conversation (and the cookie still holds)");
 let stopped = false;
+// the stop key once the agent has the turn (its session line): a stop that comes
+// earlier, while the agent still opens, ends the turn before the agent sees it (WD8F)
+let tid2 = "";
 const st2 = turnStream("slow", async (o) => {
-  if (o.t === "turn") seen.push((await req("/api/stop", { method: "POST", headers: { ...me, ...PAGE }, body: { turn: o.id } })).body);
+  if (o.t === "turn") tid2 = o.id;
+  if (o.t === "session") seen.push((await req("/api/stop", { method: "POST", headers: { ...me, ...PAGE }, body: { turn: tid2 } })).body);
   if (o.t === "stopped") stopped = true;
 });
 await st2;
