@@ -330,7 +330,9 @@ footer .lang svg{width:13px;height:13px}
       $('#to-app').hidden=false;if(m.can_logout)$('#sign-out').hidden=false;
       if(inwx){hi(m.name);if(m.role==='trial')root.classList.add('trialme');state('member');return}
       state('in');
-      /* a computer ≥1024 keeps the code beside 进入控制台: drawn when the card shows it */
+      /* a computer ≥1024 keeps the code beside 进入控制台: drawn when the card shows it.
+         It is a SIGN-IN code (换个微信登录), never the trial code a visitor gets (TVCC). */
+      $('#qr').dataset.p='login';
       if(!phone&&window.matchMedia){var wide=matchMedia('(min-width:1024px)'),go=function(){if(wide.matches)code($('#qr'))};go();
         if(wide.addEventListener)wide.addEventListener('change',go);else if(wide.addListener)wide.addListener(go)}
       return}
