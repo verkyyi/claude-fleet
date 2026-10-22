@@ -355,6 +355,7 @@ FLEET_WALLPAPER_LAUNCHCTL          seam: the launchctl fleet-wallpaper.sh enters
 FLEET_WALLPAPER_OSASCRIPT          seam: the osascript fleet-wallpaper.sh sets the picture with (#4362)
 FLEET_WALLPAPER_PS                 seam: a command printing `uid user etime pcpu command` rows for fleet-wallpaper.sh (#4362)
 FLEET_WALLPAPER_SUDO               seam: the sudo fleet-wallpaper.sh runs as the login with (#4362)
+FLEET_WEBCHAT_BIN                  handoff: stable bin entry passed by fleet-webchat.sh to resident child helpers so a release switch does not pin them to Node import.meta.url (T944)
 FLEET_WEBCHAT_NODE                 seam: the node binary bin/fleet-webchat.sh runs the browser chat with (#3567)
 FLEET_WEBCHAT_PORT                 knob: the browser chat's loopback port, 18961 (bin/fleet-webchat.sh, #3567)
 FLEET_WEBCHAT_LOCAL                knob: 1 turns on the browser chat's old 127.0.0.1 + login-link mode, off by default — the road is the socket service (bin/fleet-webchat.sh, #3643)
