@@ -364,7 +364,7 @@ park_hold() {
     fi
     page_args=(--screen "$screen" --draft "$draft")
     [ "$park_failed" != 1 ] || page_args+=(--failed)
-    python3 "$BIN/fleet-park-page.py" "${page_args[@]}"
+    python3 "$BIN/fleet-park-page.py" ${page_args[@]+"${page_args[@]}"}
     page_rc=$?
     case "$page_rc" in
       12) continue ;;  # external seed, claimed by the same rename above
