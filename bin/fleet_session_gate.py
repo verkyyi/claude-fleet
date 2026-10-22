@@ -911,8 +911,12 @@ def park_locked(fid, why, force):
     current = window(fid)
     if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
             or current["state"] in ("working", "needs", "exited") or watched(current)):
+        # Export has already paused the original dispatcher. A normal refusal
+        # rolls back now, under the fid lock, not at a later due-timer sweep.
+        fleet_park_wake.abort(fid)
         return dict(ok=False, why="changed")
     if park_dialog(current):
+        fleet_park_wake.abort(fid)
         return dict(ok=False, why="asking")
     # Do not retain the previous park's RSS when this sample is unavailable.
     if saved_mb is None:

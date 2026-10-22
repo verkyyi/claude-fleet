@@ -498,6 +498,8 @@ peer 消息和子会话回报也通过 `fleet_agent_deliver` 调这一个唤醒�
 读取 `@loop` 与这段会话的完整原生工具记录，保存到 `$FLEET_CONF_DIR/wake/<fid>.json`。
 每个任务保留 `next / kind / expr / prompt / until`、任务 ID、时区及会话号。
 原生进程退出且外壳确认停放后才启用；退出失败撤回准备状态，原生任务继续运行。
+导出后末次复检若发现新问答、观看者或状态变化，也在返回拒停前撤回准备状态，
+恢复先前约定与原 dispatcher 的投递权，不等下一次到期清扫；不发送退出或改写问题。
 spinner 每 5 秒驱动 `fleet_park_wake.py tick`，到点经会话门接回同一会话，首轮是原提示。
 唤醒仍由 `wake_request` 仲裁，7501 确认启动；`park.ndjson` 的 `why=定时`、`next`
 和 `started` 记录约定与实际请求时刻。只有确认送达才推进 cron，错过多轮只执行一轮。
