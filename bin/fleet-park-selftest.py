@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+# selftest-entry
+"""Drive fleet_session_gate.py, fleet-cleanup-idle.py, fleet-session-wrap.sh and
+fleet-status-7501.py on an isolated tmux socket: one window / fid / conversation,
+real process exit, every origin, drafts / watched / jobs / legacy wrapper held.
+The native prompt proof is replaced only for the fake assistant (no model).
+"""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+BIN = Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN))
+
+
+def module(name, file):
+    spec = importlib.util.spec_from_file_location(name, BIN / file)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+gate = module('park_gate', 'fleet_session_gate.py')
+reap = module('park_reap', 'fleet-cleanup-idle.py')
+
+
+@unittest.skipUnless(shutil.which('tmux'), 'tmux absent')
+class Park(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='fleet-park-'))
+        self.label = 'park-' + str(os.getpid())
+        self.env = dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf'),
+                        FLEET_GATE_WAKE_SECS='3', FLEET_GATE_PARK_SECS='3',
+                        FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50')
+        self.tm('new-session', '-d', '-s', 'test', 'sleep 120')
+        self.addCleanup(self.cleanup)
+
+    def cleanup(self):
+        self.tm('kill-server', check=False)
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def tm(self, *args, check=True):
+        return subprocess.run(['tmux', '-L', self.label, *args], env=self.env,
+                              capture_output=True, text=True, timeout=10, check=check).stdout.strip()
+
+    def set(self, key, value):
+        self.tm('set-option', '-w', '-t', self.win, key, value)
+
+    def opt(self, key):
+        return self.tm('display-message', '-p', '-t', self.win, '#{' + key + '}')
+
+    def fake(self):
+        self.fid = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+        self.sid = '11111111-2222-4333-8444-555555555555'
+        fake = self.root / 'fake.py'
+        fake.write_text('''import os,sys,tty
+print('fake ready',flush=True)
+tty.setraw(0)
+b=b''
+while True:
+ c=os.read(0,4096)
+ if not c: break
+ b+=c
+ if b'/exit\\r' in b: break
+''')
+        launch = self.root / 'launch'
+        launch.write_text('#!/bin/bash\n' +
+                          'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
+                          'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
+                          'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + '\n')
+        launch.chmod(0o755)
+        self.env['FLEET_WRAP_LAUNCH'] = str(launch)
+        # new-window inherits its server environment; pass only fixture settings.
+        import shlex
+        cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
+                               if k.startswith('FLEET_') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
+        self.win = self.tm('new-window', '-d', '-P', '-F', '#{window_id}', '-t', 'test', cmd)
+        self.set('@fleet_id', self.fid)
+        self.set('@fleet_role', 'worker')
+        loc = self.root / 'locate'
+        loc.write_text('#!/bin/sh\nprintf "' + self.label + '\\t' + self.win + '\\n"\n')
+        loc.chmod(0o755)
+        self.env['FLEET_GATE_WIN_CMD'] = str(loc)
+        probe = self.root / 'proof'
+        probe.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
+        probe.chmod(0o755)
+        self.env['FLEET_GATE_PARK_PROBE_CMD'] = str(probe)
+        self.wait(lambda: self.opt('@park_relay') and self.opt('@cc_session_id'))
+
+    def wait(self, predicate):
+        until = time.monotonic() + 6
+        while time.monotonic() < until:
+            if predicate(): return
+            time.sleep(.05)
+        self.fail('fixture never settled: ' + self.tm('capture-pane', '-p', '-t', self.win))
+
+    def test_process_gone_identity_retained_and_same_conversation_wakes(self):
+        self.fake()
+        before = self.opt('pane_pid')
+        with patch.dict(os.environ, self.env):
+            result = gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertTrue(self.opt('@park_held'))
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('pane_pid'), before)
+        self.assertFalse(self.opt('@park_relay'), 'the relay / assistant tree survived parking')
+        with patch.dict(os.environ, self.env):
+            result = gate.wake(self.fid, why='消息')
+        self.assertTrue(result.get('ok'), result)
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual([r['act'] for r in rows], ['park', 'wake'])
+
+    def test_draft_and_background_and_legacy_hold(self):
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            proof = Path(self.env['FLEET_GATE_PARK_PROBE_CMD'])
+            proof.write_text('#!/bin/sh\necho \'{"ok":false,"why":"draft"}\'\n')
+            self.assertEqual(gate.park(self.fid).get('why'), 'draft')
+            proof.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
+            with patch.dict(os.environ, FLEET_GATE_BG_CMD='true'):
+                self.assertEqual(gate.park(self.fid).get('why'), 'bg')
+            self.tm('set-option', '-wu', '-t', self.win, '@park_wrap_ver')
+            self.assertEqual(gate.park(self.fid).get('why'), 'old_wrapper')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def test_all_origins_and_memory_oldest_eligible(self):
+        # The reaper's real decision, independent of its close / GitHub roads.
+        from types import SimpleNamespace
+        args = SimpleNamespace(socket_name=self.label, session='test', window_repo=False, repo='', dry_run=False)
+        r = reap.Reaper(args)
+        r.now = 1000
+        snap = {'@park_wrap_ver':'1', '@parked':'', '@wrap_gone':'', 'pane_dead':'',
+                '@claude_state':'done', '@agent_status':'', '@claude_state_ts':'900',
+                '@fleet_id':'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', '@loop':''}
+        with patch.dict(os.environ, self.env | {'FLEET_SESSION_PARK_IDLE_UNATTENDED':'1m'}), \
+                patch.object(r, 'busy', return_value=False), \
+                patch.object(gate, 'presence', return_value=False), \
+                patch.object(reap, 'run', return_value='{"ok":true}'):
+            for origin in ('person','dispatched','member','driver','orchestrator','probe','web'):
+                self.assertTrue(r.web_park('@1', snap | {'@session_origin':origin}), origin)
+
+
+if __name__ == '__main__':
+    unittest.main()
