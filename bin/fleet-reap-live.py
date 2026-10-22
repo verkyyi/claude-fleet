@@ -325,7 +325,7 @@ def main():
                         help="print the state a reaper judges the target by (issue #2540) and exit 0")
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
     parser.add_argument("--bg-over", action="store_true",
-                        help="its work is over past its background grace (E101): a pending loop / bg job no longer holds it")
+                        help="compatibility flag; real background work and loops remain protected")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", str(DEFAULT_MIN_AGE))
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else DEFAULT_MIN_AGE
