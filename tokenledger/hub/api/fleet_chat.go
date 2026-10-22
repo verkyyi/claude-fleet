@@ -322,6 +322,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, name, http.StatusForbidden, "forbidden", "X-Fleet-Webchat: 1 is required")
 		return
 	}
+	if name == "open" && s.trialPerson(person) && !s.trialOpenProvider(w, r, person) {
+		return
+	}
 	// The copy beside the entry (task V9DJ D) is answered here, home or not.
 	if name == "conversation" && r.URL.Query().Get("cached") == "1" {
 		s.handleChatCached(w, r, person, provider)
