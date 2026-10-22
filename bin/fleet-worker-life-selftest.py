@@ -386,6 +386,82 @@ class McpRestartTest(unittest.TestCase):
         self.source={'agent':'codex'}
         self.assertEqual(self.shell_classify(strict=False),{2})
 
+    def test_strict_managed_wrapper_needs_install_identity_and_separate_contract(self):
+        home=self.root/'home'
+        (home/'.claude').mkdir(parents=True)
+        (home/'.claude/fleet').symlink_to(BIN.parent, target_is_directory=True)
+        self.source={'agent':'codex'}
+        self.config={'fetch':{'command':'bash', 'args':['-lc','exec "$HOME/.claude/fleet/bin/mcp-fetch.sh"']}}
+        self.status={'data':[{'name':'fetch','runtimeStatus':'ready','toolsError':None}]}
+        uv=self.root/'uv';uv.touch()
+        uvx=self.root/'uvx';uvx.symlink_to(uv)
+        venv=self.root/'venv';(venv/'bin').mkdir(parents=True);(venv/'pyvenv.cfg').touch()
+        python=venv/'bin/python';python.touch()
+        entry=venv/'bin/mcp-server-fetch';entry.touch()
+        self.rows={2:(1,'uv'),3:(2,'python')}
+        self.argv={2:[str(uv),'tool','uvx','mcp-server-fetch'],3:[str(python),str(entry)]}
+        self.exes={2:uv,3:python}
+        self.env={'HOME':str(home)};self.parent_env=None
+        self.births={1:(10,0),2:(20,0)};self.socket_stdin=set();self.env_reads=[]
+        with patch.object(shutil,'which',side_effect=lambda name, **kw:str(uvx) if name=='uvx' else None):
+            with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fetch'):
+                self.assertEqual(self.shell_classify(),{2,3})
+                self.assertEqual(self.source['sleep_mcp']['fetch'],LIB['MCP']['fingerprint'](self.config['fetch']))
+                self.assertEqual(self.source['sleep_mcp_basis']['fetch'],'managed-wrapper')
+                self.assertEqual(self.shell_classify(env_reader=False),set())
+                self.parent_env={'HOME':'/other'}
+                self.assertEqual(self.shell_classify(),set())
+                self.parent_env=None
+                self.env['BASH_ENV']='/untrusted'
+                self.assertEqual(self.shell_classify(),set())
+                del self.env['BASH_ENV']
+                self.argv[2].append('--custom')
+                self.assertEqual(self.shell_classify(),set())
+                self.argv[2].pop()
+                self.config['fetch']['args'][1]+=' --custom'
+                self.assertEqual(self.shell_classify(),set())
+                self.config['fetch']['args'][1]=self.config['fetch']['args'][1].removesuffix(' --custom')
+                (home/'.claude/fleet').unlink()
+                (home/'.claude/fleet/bin').mkdir(parents=True)
+                (home/'.claude/fleet/bin/mcp-fetch.sh').write_text('exec uvx mcp-server-fetch\n')
+                self.assertEqual(self.shell_classify(),set())
+                shutil.rmtree(home/'.claude/fleet')
+                (home/'.claude/fleet').symlink_to(BIN.parent,target_is_directory=True)
+            with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+                with self.assertRaisesRegex(ValueError,'no restartability contract'):self.shell_classify()
+            with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fetch'):
+                self.status['data'][0]['runtimeStatus']='starting'
+                with self.assertRaisesRegex(ValueError,'not ready'):self.shell_classify()
+                self.status['data'][0]['runtimeStatus']='ready'
+                self.rows[4]=(3,'browser')
+                with self.assertRaisesRegex(ValueError,'live job/browser'):self.shell_classify()
+
+    def test_strict_github_wrapper_keeps_package_identity_and_revocation(self):
+        home=self.root/'home'
+        (home/'.claude').mkdir(parents=True)
+        (home/'.claude/fleet').symlink_to(BIN.parent,target_is_directory=True)
+        self.shell_exec_case(env={'HOME':str(home)},args=['-lc','exec "$HOME/.claude/fleet/bin/mcp-github.sh"'])
+        self.source={'agent':'codex'}
+        self.config={'github':self.config['fleet']}
+        self.status={'data':[{'name':'github','runtimeStatus':'ready','toolsError':None}]}
+        package=self.root/'node_modules/@modelcontextprotocol/server-github'
+        package.mkdir(parents=True)
+        script=package/'index.js';script.touch()
+        (package/'package.json').write_text(json.dumps({'name':'@modelcontextprotocol/server-github','bin':{'server-github':'index.js'}}))
+        self.rows={2:(1,'node'),3:(2,'node')}
+        self.argv={2:['npm exec @modelcontextprotocol/server-github','',''],3:[str(self.node),str(script)]}
+        self.exes={2:self.node,3:self.node}
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='github'):
+            self.assertEqual(self.shell_classify(),{2,3})
+            self.argv[3].append('--custom')
+            self.assertEqual(self.shell_classify(),set())
+            self.argv[3].pop()
+            self.rows[4]=(3,'job')
+            with self.assertRaisesRegex(ValueError,'live job/browser'):self.shell_classify()
+        del self.rows[4]
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='github,!github'):
+            with self.assertRaisesRegex(ValueError,'no restartability contract'):self.shell_classify()
+
     def test_remounted_skips_only_contract_and_readiness(self):
         # Issue #4775: the continuation proves the next lifetime mounts the
         # fleet's own service afresh from the current install. That replaces the

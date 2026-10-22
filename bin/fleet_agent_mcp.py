@@ -539,8 +539,9 @@ def package_child(pid, config, argv_reader, exe_reader):
 def managed_wrapper_configs(config):
     """Known final services of the shipped GitHub/fetch wrappers (T965).
 
-    This identifies a resident service for the non-strict busy question only;
-    it does not prove shell expansion or promise a restart preserves state.
+    This catalogue alone identifies a resident service only for the non-strict
+    busy question. Strict callers also need verified_managed_wrapper_configs;
+    neither grants a contract that a restart preserves state.
     Match the complete default invocation, then still verify the actual kernel
     executable, exact arguments and package entrypoint. Never execute the shell
     or read its credential. Custom wrappers/arguments remain unknown.
@@ -558,13 +559,54 @@ def managed_wrapper_configs(config):
     return []
 
 
+def verified_managed_wrapper_configs(pid, parent, config, env_reader):
+    """Identify a shipped wrapper after exec, never grant restartability.
+
+    The native effective config must name the exact default invocation. Its
+    actual HOME must resolve that wrapper to this install, not a same-named
+    script elsewhere. The caller supplies a measured native environment reader;
+    do not execute a login shell or inspect its credential. The kernel argv,
+    executable, package child, independent contract and readiness are still
+    checked by the ordinary strict classifier below.
+    """
+    candidates = managed_wrapper_configs(config)
+    if not candidates or env_reader is None or parent is None:
+        return []
+    extra, forwarded = config.get('env') or {}, config.get('env_vars') or []
+    if (not isinstance(extra, dict) or not isinstance(forwarded, list)
+            or _hooked(extra) or _hooked(forwarded)):
+        return []
+    try:
+        mine, origin = env_reader(pid, {'HOME'}), env_reader(parent, {'HOME'})
+        home = extra.get('HOME', origin['values'].get('HOME'))
+        if (not isinstance(home, str) or not Path(home).is_absolute()
+                or mine['values'].get('HOME') != home or mine['stdin_socket']
+                or mine['functions'] or _hooked(mine['names'])
+                or _hooked(n for n in origin['names'] if not n.startswith('SSH'))
+                or origin['functions'] or origin['birth'] > mine['birth']):
+            return []
+        wrapper = re.fullmatch(r'exec "\$HOME/\.claude/fleet/bin/(mcp-(?:fetch|github)\.sh)"',
+                               config['args'][1]).group(1)
+        expected = Path(__file__).resolve().parent / wrapper
+        actual = Path(home) / '.claude/fleet/bin' / wrapper
+        if (not expected.is_file() or not actual.is_file() or not os.path.samefile(actual, expected)
+                or env_reader(pid, set())['birth'] != mine['birth']):
+            return []
+    except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
+        return []
+    return candidates
+
+
 def matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader=None,
-                     managed_wrappers=False):
+                     managed_wrappers=False, verified_wrappers=False):
     matches = []
     for name, conf in configured.items():
         if not conf.get('enabled', True):
             continue
         candidates = [conf] + (managed_wrapper_configs(conf) if managed_wrappers else [])
+        if verified_wrappers:
+            candidates += verified_managed_wrapper_configs(pid, rows.get(pid, (None,))[0],
+                                                           conf, env_reader)
         for candidate in candidates:
             if (configured_process(pid, candidate, argv_reader, exe_reader, env_reader,
                                    rows.get(pid, (None,))[0])
@@ -652,7 +694,8 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
         if parent != server_pid:
             continue
         matches = matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader,
-                                   managed_wrappers=not strict and source.get('agent') == 'codex')
+                                   managed_wrappers=not strict and source.get('agent') == 'codex',
+                                   verified_wrappers=strict and source.get('agent') == 'codex')
         if len(matches) != 1:
             continue
         name, conf = matches[0]
@@ -691,7 +734,9 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
             if any(parent == child for parent, _ in rows.values()):
                 raise ValueError('MCP service %s owns a live job/browser beneath its entrypoint' % name)
             allowed.add(child)
-        proof[name] = fingerprint(conf)
+        proof[name] = fingerprint(configured[name])
+        if conf != configured[name]:
+            basis[name] = 'managed-wrapper'
         if shell_exec_argv(pid, server_pid, conf, env_reader) is not None:
             basis[name] = 'shell-exec'
         if name in remounted:
