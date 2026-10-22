@@ -453,6 +453,13 @@ exit_drill() {
 # session-exit — every way an agent leaves or stops, one table: /exit (rc 0), Ctrl+C
 # (rc 130) and a kill (137) end on the recovery page (exit_drill, ≤5s each); Ctrl+Z
 # (ctrl_z_leg) is resumed within 1s.
+drill_broken_hook_maintenance() {
+  local started; started=$(now); CAP=30
+  python3 "$BIN/fleet-transfer-source-selftest.py" BrokenHookMaintenance >"$WORK/broken-hook-maintenance.log" 2>&1 \
+    || { WHY="missing-hook maintenance identity/unknown-delivery guard failed"; return 1; }
+  SECS=$(since "$started"); WHAT='same-SID maintenance proves missing hooks; paused original timer rejects unknown attempts'
+}
+
 drill_session_exit() {
   CAP=5; local m rc head s=0 what=''
   while IFS='|' read -r m rc head; do

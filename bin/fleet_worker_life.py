@@ -261,7 +261,7 @@ def codex_busy_binding(w, source):
             data.get('remote'), process(source['pid']))
 
 
-def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None):
+def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None,rpc_timeout=5):
     # background=None is hibernation's contract: any unverified child vetoes.
     # A list collects those pids instead (still walking their descendants) —
     # failover's hard-wall grace passes one (#871), and so does child_busy (#864);
@@ -307,7 +307,7 @@ def quiet_processes(source,config_home=None,background=None,strict=True,remounte
         if 'app-server' in argv and '--listen' in argv:
             if not remote or argv[argv.index('--listen')+1:argv.index('--listen')+2]!=[remote]:
                 raise ValueError('bound Codex server owns a different endpoint')
-            client=RPC(remote,timeout=5)
+            client=RPC(remote,timeout=rpc_timeout)
             # A measured Codex release only: its MCP children's environment is what
             # shell_exec_argv can account for (issue #4537); Claude's call passes none.
             try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
@@ -341,7 +341,7 @@ def quiet_processes(source,config_home=None,background=None,strict=True,remounte
                 if native and 'app-server' in argv:
                     children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
                     if children:
-                        client=RPC(remote,timeout=5)
+                        client=RPC(remote,timeout=rpc_timeout)
                         try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
                         finally:client.close()
                 continue
