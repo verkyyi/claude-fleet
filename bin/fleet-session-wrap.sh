@@ -344,8 +344,14 @@ park_hold() {
     if [ -n "$w" ]; then
       if mv "$w" "$w.taken" 2>/dev/null; then
         park_seed=$(cat "$w.taken" 2>/dev/null)
-        # First native 7501 report acknowledges this seed after the engine starts.
-        wset @park_start "$w.meta"
+        if [ -f "$w.meta" ]; then
+          # First native 7501 report acknowledges a new gate's owned seed.
+          wset @park_start "$w.meta"
+        else
+          # HHV0 callers handed a seed directly, before metadata existed.
+          : > "$w.launched" 2>/dev/null
+          rm -f "$w.taken" 2>/dev/null
+        fi
         wset -u @park_wake
         break
       fi
