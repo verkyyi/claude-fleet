@@ -90,6 +90,7 @@ They see it themselves at the top of the console and the chat — "Trial · 6 da
 - Afterwards: `fleet hub set fleet.member_limits.<principal> "until=2026-11-01T00:00:00Z,tokens=3M,sessions=2"` (or edit it in People); `fleet hub unset fleet.member_limits.<principal>` makes them a full member.
 - A `usd=` written before is turned into tokens by database migration 6 (150,000 per dollar).
 - Approving again never resets limits already written.
+- When a trial ends (`until` passed, not made a member): the sessions on their login stop at once; 23 and 27 days after the end they are told on the service account (else by mail) when their data goes; on day 30 their login's home is deleted (the login washed, checked clean and back in the spare pool), with the hub's copy of their conversation and their uploads — only a `trial.purge` audit row without content stays. `fleet hub set fleet.trial.retain_days 30` sets how long (30 by default, 0 = at once and no notice; the notices are always 7 and 3 days before). Making them a member (`unset` the key above) deletes nothing.
 
 ## Trial QR codes: scan, follow, try
 

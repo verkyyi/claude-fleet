@@ -247,6 +247,9 @@ type Server struct {
 	// into the next (claude-fleet#4060); nil = through the person's own chat
 	// relay. Tests put a stand-in here.
 	trialConvoIO trialConvoIO
+	// trialStopHook stops one ended trial's session in a test (nil = the
+	// operator's worker_stop, claude-fleet WACK C8).
+	trialStopHook func(ctx context.Context, workerID string) error
 	// trialSlots holds which trials are being released now, and when the kept
 	// conversations were last purged (claude-fleet#4060).
 	trialSlotSt trialSlotState

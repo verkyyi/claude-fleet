@@ -138,6 +138,8 @@ func (s *Server) NodeAlertTick(since, now time.Time) {
 	s.SvcAlertTick(now)
 	s.QueueLongTick(now)
 	s.StartFailedTick(now)
+	// an ended trial's sessions, notices and data (claude-fleet WACK C8), hourly — its own goroutine: a stop waits on the node
+	go s.TrialRetentionTick(now)
 	// person pods onto the new image (claude-fleet#4174): its own goroutine —
 	// each roll waits on the cluster's ops link
 	go s.PodRollTick(now, false)
