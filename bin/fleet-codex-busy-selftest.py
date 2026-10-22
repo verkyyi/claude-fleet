@@ -132,6 +132,19 @@ fleet_window_bg_busy fleet @1 1 1
         self.argv[111] = relay[:-1] + ['unix:///another.sock']
         self.assertIn(111, self.busy())
 
+    def test_managed_home_worker_can_reach_native_busy_probe(self):
+        worker = LIB['Worker']
+        # A normal no-repo worker deliberately has no @issue or @raw. inspect()
+        # still validates its lifelong identity and physical HOME afterwards.
+        for norepo in ('1', ''):
+            with patch.object(worker, 'tm', side_effect=['@2|test', '%2', '0|||scratch-2', norepo]), \
+                    patch.dict(worker.__init__.__globals__, root=lambda session: self.root):
+                if norepo:
+                    self.assertEqual(worker('test', '@2').pane, '%2')
+                else:
+                    with self.assertRaisesRegex(ValueError, 'not an issue'):
+                        worker('test', '@2')
+
 
 class NativeBusy(CodexBusy):
     def setUp(self):

@@ -136,7 +136,9 @@ class Worker:
         hub, issue, raw, name = metadata
         if name in ('dash','plan','backlog','home') or hub == '1':
             raise NotAWorker('panel/hub is not a worker')
-        if not issue.isdigit() and raw != '1':
+        # No-repo sessions have neither @issue nor @raw. The native inspect
+        # still validates their exact HOME, role and lifelong identity.
+        if not issue.isdigit() and raw != '1' and self.opt('@norepo') != '1':
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)
         self.lockfile = self.directory / ('window-' + self.window[1:] + '.lock')

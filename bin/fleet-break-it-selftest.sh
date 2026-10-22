@@ -6374,6 +6374,7 @@ drill_park_codex_new_thread() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_same_thread_and_paste_exit 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" CodexBusy.test_park_relay_is_infrastructure_but_its_jobs_are_work CodexBusy.test_managed_home_worker_can_reach_native_busy_probe 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
 }
