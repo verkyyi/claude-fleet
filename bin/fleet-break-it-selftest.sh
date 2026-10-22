@@ -6383,7 +6383,7 @@ drill_park_census_overcounts() {
   t0=$(now)
   out=$(bash "$BIN/fleet-park-metrics-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="$out"; return 1; }
-  WHAT='常驻空闲与可停空闲分计，观看和后台写原因；采样不足未知；停放按状态与最后 park RSS 计'
+  WHAT='常驻空闲与可停空闲分计，观看和后台写原因；采样不足未知；停放认 HHV0 双标记，节省只读 C1 快照'
   SECS=$(since "$t0")
 }
 
