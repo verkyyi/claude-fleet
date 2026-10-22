@@ -42,7 +42,7 @@ export PYTHONPATH="$BIN" PARK_TEST_WORK="$WORK"
 # controller's JSON response ourselves. Existing 34-column rows remain accepted.
 bash "$BIN/fleet-control-read.sh" workers census > "$WORK/workers"
 python3 - <<'PY' || st_fail 'production census assertion'
-import json, os
+import json, os, time
 from pathlib import Path
 from fleet_hub_common import inventory_row
 from fleet_control import Control
@@ -65,6 +65,16 @@ assert p['idle_eligible'] is None, p # not yet 60 seconds: never claim eligibili
 # A second repo changes no count or identity.
 (w/'conf/fleets/census/repos/second.conf').write_text('FLEET_REPO=acme/second\n')
 assert ctl.workers(fleet)['park_metrics'] == p
+# A full minute of low CPU makes the batch figure known; the next census keeps
+# that completed reading while accumulating the next minute (never flickers).
+cache = w/'conf/global/park-cpu-census.json'
+cache.write_text(json.dumps({
+ '@1': {'at':time.time()-61,'pid':'100','cpu':12},
+ '@2': {'at':time.time()-61,'pid':'200','cpu':1},
+ '@3': {'at':time.time()-61,'pid':'300','cpu':0}}))
+q=ctl.workers(fleet)['park_metrics']
+assert q['idle_eligible'] == 1 and q['idle_eligible_rss_mb'] == 201, q
+assert ctl.workers(fleet)['park_metrics'] == q
 book = w/'conf/logs/park.ndjson'
 book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T12:00:00Z','act':'park'},
