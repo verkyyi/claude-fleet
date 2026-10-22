@@ -798,9 +798,11 @@ async function viewStream(req, res, u, person) {
   res.on("close", () => { closed = true; });
   const ev = (o, id) => { if (!closed) { touch(); res.write(`${id != null ? `id: ${id}\n` : ""}data: ${JSON.stringify(o)}\n\n`); } };
   // the gate's word on it (task HHV0): may the page talk, and what still waits
-  let gs = gateKnown.get(fid)?.j || null;
+  const cachedGate = gateKnown.get(fid);
+  let gs = cachedGate && Date.now() - cachedGate.at < GATE_STATE_MS ? cachedGate.j : null;
   const stateOf = () => JSON.stringify({ t: "state", agent: w.agent, session: w.sid || "", busy: !!w.busy, state: w.state || "",
-    label: w.label || "", can_talk: gs ? !!gs.can_talk : false, queue: (gs?.queue || []).map(({ delivery, text, why }) => ({ delivery, text, why })),
+    label: w.label || "", can_talk: gs ? !!gs.can_talk : null, talk_reason: gs ? gs.why || "" : "checking",
+    queue: (gs?.queue || []).map(({ delivery, text, why }) => ({ delivery, text, why })),
     ...(gs?.ask ? { ask: gs.ask } : {}) });
   let said = stateOf();
   res.write(`data: ${said}\n\n`);

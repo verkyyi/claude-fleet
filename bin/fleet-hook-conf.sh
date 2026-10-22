@@ -32,11 +32,14 @@ sess=''
 if [ "${1:-}" = "--session" ]; then sess="${2:-}"; shift 2; fi
 [ "$#" -gt 0 ] || { printf 'usage: fleet-hook-conf.sh [--session <sess>] KEY [KEY…]\n' >&2; exit 2; }
 
-if [ -f "$BIN/fleet-lib.sh" ]; then
+if [ -f "$BIN/fleet-client-core.sh" ]; then
   # shellcheck source=/dev/null
-  . "$BIN/fleet-lib.sh" >/dev/null 2>&1
-  if [ -z "$sess" ] && [ -n "${TMUX:-}" ]; then sess=$(fleet_current_session 2>/dev/null); fi
-  [ -n "$sess" ] && fleet_load_conf "$sess" >/dev/null 2>&1
+  . "$BIN/fleet-client-core.sh" >/dev/null 2>&1
+  # A client-only package has no machine conf library; keep the environment floor.
+  if fleet_host_lib >/dev/null 2>&1; then
+    if [ -z "$sess" ] && [ -n "${TMUX:-}" ]; then sess=$(fleet_current_session 2>/dev/null); fi
+    [ -n "$sess" ] && fleet_load_conf "$sess" >/dev/null 2>&1
+  fi
 fi
 
 for k in "$@"; do

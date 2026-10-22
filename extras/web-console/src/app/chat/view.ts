@@ -20,12 +20,12 @@ import { toMessages, type Item, type Msg } from "./chat";
 import { attachedPics, MAX_PICS, packPics } from "./pics";
 import { afterSay, askOf, bubbles, replying, settle, userLines, type Pending, type Queued, type ViewAsk } from "./talk";
 import { browserCache, mayCache, mayShow, type Layer } from "./local";
-import { NOTHING, applyFrame, parseEvent, prependOlder, type Frame, type Held } from "./view-stream";
+import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame, type Held } from "./view-stream";
 
 // can_talk (会话合一 Y01K): the web may talk to it — absent on the old road,
 // false for an older session (read-only); queue: its lines waiting; ask: what it asks now
 export type ViewState = { agent: string; session: string; busy: boolean; state: string; label: string; holder?: string;
-  can_talk?: boolean; queue?: Queued[]; ask?: ViewAsk | null };
+  can_talk?: boolean | null; talk_reason?: string; queue?: Queued[]; ask?: ViewAsk | null };
 // why there is nothing to follow: the entry's or the service's code
 // (not_yours · old_agent · no_session · home_down · gone · …) and its words
 export type ViewGate = { code: string; msg: string } | null;
@@ -48,7 +48,7 @@ function markFirst(layer: Layer, since: number) {
   } catch { /* no performance API */ }
 }
 
-export function useSessionView(worker: string) {
+export function useSessionView(worker: string, allowed = true) {
   const [items, setItems] = useState<Item[]>([]);
   const [state, setState] = useState<ViewState | null>(null);
   const [gate, setGate] = useState<ViewGate>(null);
@@ -167,7 +167,8 @@ export function useSessionView(worker: string) {
   }, [worker]);
 
   // 会话合一 (Y01K): talking to it — what this page said and is waiting on
-  const canTalk = state?.can_talk === true;
+  const access = writeAccess(state, allowed);
+  const canTalk = access === "writable";
   const [pending, setPending] = useState<Pending[]>([]);
   const [answered, setAnswered] = useState<Map<string, { approved: boolean; answers?: Record<string, { optionIds: string[] }> }>>(new Map());
   const [note, setNote] = useState("");
@@ -303,14 +304,14 @@ export function useSessionView(worker: string) {
     // a line handed over runs from the moment it went: waking a parked session is 「回答中」 too
     isRunning: !!state?.busy || (canTalk && sending),
     isLoading: !loaded,
-    isDisabled: !canTalk,
-    isSendDisabled: canTalk && !!gate,
+    isDisabled: access === "readonly",
+    isSendDisabled: !canTalk || !!gate,
     hasEarlier: older > 0,
     onLoadEarlier: loadEarlier,
     onNew: onSay,
     ...(canTalk ? { onCancel: onStop, onRespondToToolApproval: onAnswer, queue: lane, adapters: { attachments: attach } } : {}),
   });
   const failed = pending.filter((p) => p.state === "failed");
-  return { runtime, state, gate, loaded, live, count: items.length, layer, canTalk, failed, retry, dismiss, note,
+  return { runtime, state, gate, loaded, live, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
     busy: !!state?.busy || (canTalk && sending) };
 }

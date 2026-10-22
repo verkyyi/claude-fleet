@@ -775,9 +775,11 @@ if (part("gate")) {
   SSTATE = stateOf("y"); SOCK = join(SSTATE, "chat.sock");
   const FID = "abcdef12-1234-4234-8234-12345678aaaa", GONE = "abcdef12-1234-4234-8234-12345678bbbb";
   const GLOG = join(HT, "gate.log"), gpy = join(HT, "gate.py"), rsh = join(HT, "raw.sh"), RLOG = join(HT, "raw.log");
+  const GFAIL = join(HT, "first-probe-fails");
+  writeFileSync(GFAIL, "1");
   const VID = "77777777-6666-4555-8444-33333333aaaa";
   // bin/fleet_session_gate.py, stubbed: its argv + stdin logged, a fixed answer printed
-  writeFileSync(gpy, `import json, sys
+  writeFileSync(gpy, `import json, sys, os, time
 a = sys.argv[1:]
 data = sys.stdin.read()
 open(${JSON.stringify(GLOG)}, "a").write(json.dumps({"argv": a, "stdin": data}) + "\\n")
@@ -787,6 +789,9 @@ if fid == ${JSON.stringify(GONE)}:
 if a[0] == "say":
     print(json.dumps({"delivery": "d1d1d1d1-0000-4000-8000-000000000001", "state": "queued", "reason": "busy"}))
 elif a[0] == "status":
+    time.sleep(0.2)
+    if os.path.exists(${JSON.stringify(GFAIL)}):
+        os.unlink(${JSON.stringify(GFAIL)}); sys.exit(1)
     print(json.dumps({"can_talk": True, "why": "", "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
 elif a[0] == "stop":
     print(json.dumps({"ok": True, "how": "escape"}))
@@ -807,7 +812,7 @@ printf '@9\\tweb-1\\t\\t%s\\n' ${FID}
 exit 2
 `, { mode: 0o755 });
   const y = (await sstart(["--socket"], { ...asHome("y"), FLEET_WEBCHAT_GATE: gpy, FLEET_WEBCHAT_RAW: rsh, FLEET_WEBCHAT_HANDOFF: vsh,
-    FLEET_WEBCHAT_FLEET: "fleet", FLEET_GATE_DIR: join(HT, "gate-dir"), FLEET_WEBCHAT_VIEW_STATE_MS: "200", FLEET_WEBCHAT_VIEW_POLL_MS: "100" })).p;
+    FLEET_WEBCHAT_FLEET: "fleet", FLEET_GATE_DIR: join(HT, "gate-dir"), FLEET_WEBCHAT_GATE_STATE_MS: "100", FLEET_WEBCHAT_VIEW_STATE_MS: "200", FLEET_WEBCHAT_VIEW_POLL_MS: "100" })).p;
   const PAGE = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
   const calls = () => existsSync(GLOG) ? readFileSync(GLOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   ok((await sreq("/api/say", { method: "POST", headers: { "Content-Type": "application/json" }, body: { fid: FID, text: "x" } })).status === 403,
@@ -867,6 +872,10 @@ exit 2
     q.end();
   });
   const last = st.filter((e) => e.t === "state").at(-1) || {};
+  ok(st.find((e) => e.t === "state")?.can_talk === null,
+    "Y a cold view is checking, never read-only before the gate answers");
+  ok(calls().filter(c => c.argv[0] === "status").length >= 2,
+    "Y a delayed failed probe retries and recovers on the same stream");
   ok(last.can_talk === true && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),
     `Y the view's state says can_talk and what waits, no holder (${JSON.stringify(last)})`);
   await sstop(y);

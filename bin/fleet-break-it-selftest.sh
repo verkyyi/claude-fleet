@@ -6698,6 +6698,18 @@ webchat_part() {
   WEBCHAT_OUT=$out
 }
 
+drill_chat_gate_cold_readonly() {
+  CAP=30
+  webchat_part gate "Y a cold view is checking, never read-only before the gate answers" || return 1
+  WHAT="冷连接先发探测中，再由会话门明确允许发送；探测未完成不误报只读"
+}
+
+drill_codex_release_shadowed() {
+  CAP=30; SECS=0
+  suite_holds fleet-codex-selftest.sh 'F4 managed release Codex wins over a stale CLI earlier on PATH' || return 1
+  WHAT="发行树的固定 Codex 优先于 PATH 前面的旧版；同一 PATH 传给私有服务与终端客户端"
+}
+
 drill_chat_socket_other_login() {
   CAP=30
   if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi

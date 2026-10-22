@@ -43,6 +43,10 @@
 
 ## 用
 
+网页打开会话时，若会话门还在探测或暂时连不上，输入框显示「正在连接会话，可以先写下要说的话…」。可以先写草稿，确认会话可写后自动允许发送；不用重建会话。只有旧版会话或只读访问才显示只读，探测失败会继续重试。
+
+托管安装的 Codex 会话使用发行树固定的 CLI（`tools/bin/codex`），私有 app-server 与终端客户端保持同一版本；不会被 PATH 前面的旧版 npm/Homebrew CLI 覆盖。旧版本已启动的会话仍按真实能力只读，正常停放后可沿原会话接回到新版，记录保留。
+
 对话服务是这个登录的**登记后台服务**（docs/dev/MANAGED-NODE.md §10），只听一个 unix socket
 `$FLEET_CONF_DIR/webchat/chat.sock`（socket 0600，目录 0700）——不开任何 TCP 端口，不发 cookie、
 不要登录链接、不写 `admin.token`。能连上这个 socket 的只有本登录；到达它的是节点程序的转发
@@ -378,7 +382,8 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   「这一句没送到…」+ 重试 / 在新会话里接着说，并 `POST /v1/chat/ack?worker= {delivery}`。
   不知道送没送到（没有回答）的重试用同一个 id。提问卡片：`ask {fp, kind, questions}` →
   `POST /v1/chat/answer?worker= {fp, answers}` / `{fp, allow}`；停止：`POST /v1/chat/stop?worker=`。
-  `can_talk` 为假（老版本）只读，只在输入框里一句「只读 · 终端会话。要接着说，在 iTerm2
+  `can_talk:null`（首次探测）或 `talk_reason:unreachable`（暂时连不上）显示连接中，允许写草稿但不能发送；探测会自动重试，明确为真后启用发送。只读票据和以他视角看始终不能写。
+  `can_talk` 为假（老版本）或旧服务没带这个字段时只读，只在输入框里一句「只读 · 终端会话。要接着说，在 iTerm2
   里输入 fleet open <编号>（详情里可复制）」。接管按钮、「对话 | 终端」切换都没了；旧路
   上已经被网页接过来的会话仍可「交回终端」。
 - **同步只一种说法**：标题旁浅灰小字，平时什么都没有（不再有「已同步」）；没同步时

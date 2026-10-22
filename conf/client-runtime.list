@@ -39,6 +39,7 @@ bin/fleet-shell.py	dispatch
 bin/fleet_open_fwd.py	static
 bin/fleet-client-where.sh	static
 bin/fleet-client-place.sh	static
+bin/fleet-hook-conf.sh	static
 bin/fleet_dispatch.py	dispatch
 bin/fleet_reap_policy.py	static
 bin/fleet-home-session.sh	static
