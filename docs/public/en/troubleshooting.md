@@ -1043,6 +1043,14 @@ From `fleet doctor`.
 Working, idle and parked sessions, saved memory and the complete process-tree RSS of idle sessions. Use `fleet doctor --park` to read just this row. WARN means the census could not be read: check tmux access and the node version; unknown is never zero. `eligible` counts idle sessions with no viewer or background job and less than 0.5 CPU seconds over a minute; it stays unknown before the first full sample. Reasons explain idle sessions still in memory. `old-shell` means an older wrapper cannot park automatically; newly opened sessions use the newer wrapper after the old session finishes.
 
 
+#### `park-fresh`
+
+A confirmed major-version mismatch, or your choice to start fresh, moved the saved words into a new conversation in the same window. The old record remains available. The reason is also recorded as a `fresh` action in `park.ndjson`. Do not send the same words again.
+
+#### `park-wake`
+
+Two consecutive resume failures disabled automatic parking for this window. Your words are still saved. Read the launch error in the original window, fix the agent environment, then retry manually. Do not force parking or clear the disable marker to repeat a failing cycle.
+
 #### `park-reap`
 
 From `fleet doctor`.

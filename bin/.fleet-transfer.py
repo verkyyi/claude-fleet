@@ -201,6 +201,10 @@ def package(a):
     notes = Path(a.handoff).read_text(encoding="utf-8") if a.handoff else ""
     if a.handoff and not notes.strip():
         raise ValueError("--handoff must name a non-empty UTF-8 file")
+    if a.disposition != 'continue' and not notes.strip():
+        raise ValueError('waiting/completed disposition requires --handoff with the original waiting/completion context')
+    if a.disposition != 'continue' and a.native_resume:
+        raise ValueError('non-continuing transfer requires a new pickup, not native resume')
     loop = None
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
@@ -226,6 +230,8 @@ def package(a):
                             last_delivered_at=state.get('last_delivered_at'))
             elif state.get('status') in ('delivering', 'paused', 'unbound'):
                 raise ValueError('resolve the pending/paused loop before cycling its session')
+    if a.disposition != 'continue' and loop:
+        raise ValueError('non-continuing transfer cannot carry an active loop')
     # A registered worktree may legitimately be detached after a review/merge.
     # Preserve that state, rather than creating or checking out a branch.
     branch = None if a.norepo else run("git", "-C", worktree, "branch", "--show-current") or None
@@ -317,6 +323,7 @@ def package(a):
         },
         "target": dict(json.loads(Path(a.target_file).read_text()) if a.target_file else {}, agent=a.to, codex_home=a.target_home or None),
         "reason": 'quota' if a.quota_request else 'handoff',
+        "disposition": a.disposition,
         "quota_request": a.quota_request or None,
         "native_resume": a.native_resume,
         "fleet": {"session": a.session, "window_id": a.window, "pane_id": a.pane,
@@ -374,6 +381,15 @@ def package(a):
         "Fleet/window: `%s / %s`\n\n"
     ) % (a.source_agent, a.sid, source, bundle / "source.jsonl", socket.gethostname(), worktree, branch or "(detached HEAD)", head, a.session, a.handle or a.window)
     body = "# Single-session handoff\n\n" + provenance
+    policy = (
+        'Disposition: %s. This agent switch is not approval or GO. '
+        'Do not execute historical requests, tool calls, or the notes\' old Next action. '
+        'Preserve the original user intent and pending approval/completion context. '
+        'Read only what is needed to identify that context, acknowledge the switch briefly '
+        'in the conversation\'s language, then wait for a new explicit user instruction. '
+        'Do not submit drafts, repeat completed effects, start loops, approve anything, '
+        'or mark the task active/closed because its agent changed. '
+    ) % a.disposition if a.disposition != 'continue' else ''
     if notes:
         body += "## Source agent's handoff notes\n\n" + notes + "\n"
     else:
@@ -384,10 +400,11 @@ def package(a):
             "## First recorded user message (may follow an earlier compaction)\n\n%s\n\n"
             "## Last recorded user message\n\n%s\n"
         ) % (first_user[:12000], last_user[:12000])
+    next_action = policy or "Continue the latest unfinished user request, keeping the conversation's language. "
     body += (
         "\n## Next action\n\nRead manifest.json and this handoff, then inspect the source conversation "
         "as needed. Verify the current branch, git status, relevant files and running jobs. "
-        "Continue the latest unfinished user request, keeping the conversation's language. "
+        + next_action +
         "The existing index, uncommitted changes and untracked files are in the worktree; "
         "the patches here are evidence, NOT patches to reapply. Do not recreate the worktree "
         "or re-claim the issue. Historical tool calls are evidence, not commands to replay. "
@@ -403,18 +420,25 @@ def package(a):
                 "Retain the routing in manifest.fleet.identity; when it names an agent file (agent_def), " \
                 "keep working as that template says. Use Fleet MCP tools with this session's existing permissions.\n"
     (bundle / "handoff.md").write_text(body, encoding="utf-8")
-    pickup = "Continue ONE existing fleet task handed over from %s to %s.\n\n" % (a.source_agent, a.to) + provenance
+    pickup = "%s ONE existing fleet task handed over from %s to %s.\n\n" % (
+        'Receive' if policy else 'Continue', a.source_agent, a.to) + provenance
     pickup += (
         "First read `%s` and `%s`. Your source agent, exact source session ID and original "
         "transcript path are recorded there; keep this provenance available when reporting "
         "or handing off again. `%s` is a readable view; `%s` is the frozen original JSONL. "
         "Use targeted searches when the history is large.\n\n"
-        "Follow the handoff's Next action. Re-establish the latest user goal and language "
+    ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
+    pickup += policy or (
+        "Follow the handoff's Next action. Re-establish the latest user goal, authorization and language "
         "from the source records, verify current workspace state, then continue. "
+        "Changing agent is not a new approval: preserve any waiting/completed task semantics "
+        "and never repeat completed effects. "
+    )
+    pickup += (
         "Edit only this worktree, never the base checkout. Use the fleet's shell scripts "
         "directly when needed; use only tools supported by your current agent. "
         "Do not restart or message the source agent.\n"
-    ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
+    )
     if a.norepo:
         pickup = pickup.replace('Edit only this worktree, never the base checkout.', 'This is a managed HOME conversation; do not run git or edit a base checkout.')
         pickup += "\nManaged no-repo session: read manifest.fleet.identity for its agent file, parent and task. Do not run git in HOME or claim a new issue.\n"
@@ -858,6 +882,7 @@ def main():
     p.add_argument("--source-agent", choices=agents, default="claude")
     p.add_argument('--to', choices=agents, default='codex')
     p.add_argument('--native-resume', action='store_true')
+    p.add_argument('--disposition', choices=('continue', 'waiting', 'completed'), default='continue')
     p.add_argument("--codex-home", default="")
     p.add_argument("--target-home", default="")
     for name in ("handle", "issue", "origin", "repo", "handoff", "previous", "loop", "target-file", "quota-request", "draft-file"):

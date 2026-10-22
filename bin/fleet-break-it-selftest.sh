@@ -5587,7 +5587,17 @@ drill_quota_boundary_recheck() {
     || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
   python3 "$BIN/fleet-transfer-source-selftest.py" QuotaDialog.test_native_prompt_proof_uses_real_inbox_dispatch_without_probe_seam >>"$WORK/quota-boundary.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_preflight_refusal_recovers_once_with_exact_receipt >>"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
+}
+
+drill_transfer_disposition() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-disposition-selftest.py" >"$WORK/transfer-disposition.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-disposition.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='explicit waiting/completed pickup preserves intent and draft without GO or loop activation'
 }
 
 drill_web_quota_continuation() {
@@ -6547,6 +6557,14 @@ drill_park_loop_rebootstrap() {
   WHAT='原 Fleet loop 停放接回不复用首次创建控制器的环境，同 thread 原提示一次、原账本继续调度'
 }
 
+drill_park_export_refusal_owner() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-export-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='真实导出后复检拒停立即归还原合同与投递权，保留问题且不退出；原 dispatcher 到点只执行一次'
+}
+
 drill_park_stopped_timer_revives() {
   CAP=45; local t0 out
   t0=$(now)
@@ -6596,6 +6614,14 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_full_card() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-wake-guard-selftest.py" Recovery.test_major_version_preflight_starts_fresh_and_keeps_words Recovery.test_two_failed_resumes_keep_words_and_disable_reparking Recovery.test_memguard_rule_c_parks_idle_through_the_existing_gate 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='主版本不符自动新开且原话保留、fresh 原因可查；连续失败 doctor WARN；4 GB 空闲窗口由同一门停放'
+}
+
 drill_wake_storm() {
   CAP=90; local t0 out
   t0=$(now)

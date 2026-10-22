@@ -568,7 +568,14 @@ def settle(fid, wait_new=None):
                 if fleet_park_wake.retire_cancelled(r, w):
                     continue
             if r.get("sid") and w["sid"] and r["sid"] != w["sid"] and not w["parked"]:
-                ret(r, "session_changed")       # a /clear or another conversation: never into it
+                fresh = read_json(str(wake_path(fid, r['delivery'])) + '.fresh') or {}
+                if (r['state'] == 'waking' and fresh.get('old_sid') == r['sid']
+                        and fresh.get('new_sid', w['sid']) == w['sid']):
+                    if fresh.get('new_sid'):
+                        r['sid'] = w['sid']
+                        save(r)
+                else:
+                    ret(r, "session_changed")  # an unrelated /clear never gets the queued words
             elif (r.get("state") == "queued" and t - r.get("at", t) > queue_secs
                   and not (r.get('wake_why') == '定时' and r.get('wake_retry_at'))):
                 ret(r, "expired")
@@ -656,7 +663,7 @@ def wake_try(r, w):
         return "queued", r.get('why', 'deferred')
     if r.get('wake_retry_at') and not w['parked']:
         return 'queued', 'wake_pending'
-    for suffix in ('.deferred', '.meta.failed', '.error', '.admitted'):
+    for suffix in ('.deferred', '.meta.failed', '.error', '.admitted', '.fresh'):
         Path(str(seed) + suffix).unlink(missing_ok=True)
     r.pop('wake_retry_at', None)
     seed.write_text(compose(r))
@@ -904,8 +911,12 @@ def park_locked(fid, why, force):
     current = window(fid)
     if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
             or current["state"] in ("working", "needs", "exited") or watched(current)):
+        # Export has already paused the original dispatcher. A normal refusal
+        # rolls back now, under the fid lock, not at a later due-timer sweep.
+        fleet_park_wake.abort(fid)
         return dict(ok=False, why="changed")
     if park_dialog(current):
+        fleet_park_wake.abort(fid)
         return dict(ok=False, why="asking")
     # Do not retain the previous park's RSS when this sample is unavailable.
     if saved_mb is None:
@@ -978,9 +989,17 @@ def wake_ready(pane):
     except OSError:
         return
     meta = read_json(str(path) + ".claimed") or {}
+    fresh = meta.get('fresh')
     if meta.get("fid"):
         import fleet_park_wake
-        fleet_park_wake.resumed(meta['fid'])
+        w = window(meta['fid']) if fresh else None
+        if fresh and w and w['sid']:
+            fresh['new_sid'] = w['sid']
+            fleet_park_wake.resumed(meta['fid'], fresh['old_sid'], w['sid'])
+            write_json(meta['seed'] + '.fresh', fresh)
+            park_log(meta['fid'], 'fresh', meta.get('why', ''), result=fresh['reason'])
+        else:
+            fleet_park_wake.resumed(meta['fid'])
     seed = meta.get("seed", "")
     if seed:
         Path(seed + ".launched").touch()
@@ -992,6 +1011,13 @@ def wake_ready(pane):
             health_path = fid_dir(meta['fid']) / 'park-health.json'
             health = read_json(health_path) or {}
             health['failures'] = 0
+            if fresh:
+                health['fresh_reason'] = fresh['reason']
+                for row in records(meta['fid']):
+                    if (str(wake_path(meta['fid'], row['delivery'])) == seed
+                            and row.get('sid') == fresh['old_sid'] and fresh.get('new_sid')):
+                        row['sid'] = fresh['new_sid']
+                        save(row)
             write_json(health_path, health)
     if meta.get("draft"):
         Path(meta["draft"]).unlink(missing_ok=True)
@@ -1024,7 +1050,7 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
                 return dict(ok=False, why="wake_pending")
             if not w["parked"]:
                 return dict(ok=True, already=True)
-            for suffix in ('.deferred', '.meta.failed', '.error', '.admitted'):
+            for suffix in ('.deferred', '.meta.failed', '.error', '.admitted', '.fresh'):
                 Path(str(seed) + suffix).unlink(missing_ok=True)
             seed.write_text(Path(seed_file).read_text() if seed_file else "")
             result = wake_request(w, seed, why)
@@ -1228,7 +1254,7 @@ def public(r):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet_session_gate.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer"):
+    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover"):
         p = sub.add_parser(name)
         if name not in ("pending",):
             p.add_argument("--fid", required=name != "tick")
@@ -1253,16 +1279,20 @@ def main(argv=None):
             p.add_argument("--delivery")
         if name == "name":
             p.add_argument("--name", required=True)
-        if name == "quota-transfer":
+        if name in ("quota-transfer", "quota-recover"):
             p.add_argument("--source-session", required=True)
+            p.add_argument("--request-id", required=name == "quota-recover")
     a = ap.parse_args(argv)
     if getattr(a, "fid", None) and not FID_RE.match(a.fid):
         return out(dict(ok=False, why="bad_fid"), 2)
     if a.cmd == "say":
         return say(a)
     if a.cmd == "quota-transfer":
-        fallback.run(fallback_api(), a.fid, a.source_session)
+        fallback.run(fallback_api(), a.fid, a.source_session, a.request_id)
         return 0
+    if a.cmd == "quota-recover":
+        result = fallback.recover(fallback_api(), a.fid, a.source_session, a.request_id)
+        return out(result, 0 if result["ok"] else 1)
     if a.cmd == "tick":
         fids = [a.fid] if a.fid else pending_fids()
         for f in fids:

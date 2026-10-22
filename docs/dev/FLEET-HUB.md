@@ -1811,10 +1811,10 @@ person's session.
   same-engine `infra_error` retry; any `engine_templates` mapping is ignored.
   Explicit `codex,claude` opts into fallback; `codex` and `claude` select a single engine. The caller supplies
   `engine_templates: {codex: "<digest>", claude: "<digest>"}` after registering
-  and evaluating the corresponding templates. A single-engine `codex` request
+  and qualifying the corresponding templates. A single-engine `codex` request
   uses `template_digest` directly; register its plain Markdown with
   `{engine: "codex", name, agent_md}` (the digest remains the exact text hash). Omit the Codex entry until its
-  evaluation passes: the hub then starts Claude. The legacy `template_digest`
+  evaluation passes: the hub starts Claude if the Codex digest has no trusted qualification. The legacy `template_digest`
   remains the Claude default. The hub checks each digest belongs to the caller,
   uses the existing service subscription allowlist and yield policy to bind an
   account, and issues a pass scoped to the selected engine. No service pool
@@ -1842,6 +1842,62 @@ person's session.
   persisting Codex session transcripts. `fleet-svc-fetch.py URL` reads public HTTP(S) pages with GET only,
   no proxy/cookies, checked and pinned DNS, redirects rechecked, and a 2 MB cap.
   Failure tails are redacted before reaching the hub audit.
+- **Trusted template qualification** (T954). Template registration only stores
+  text; it never grants Codex eligibility. Ordinary single-engine Codex requests
+  without a current qualification return 403 `template_invalid`. Explicit dual
+  requests skip unqualified Codex without creating a Codex attempt. The hub
+  checks again before issuing the model pass, including runs queued before a
+  policy change. Legacy and explicit Claude requests retain their compatibility
+  behavior; this gate does not retroactively block the existing Claude service.
+
+  The existing administrator-only `POST /v1/fleet/svc` accepts
+  `{op:"eval-policy", principal:"svc:livepage", eval_policy:{evaluator,
+  grader, grader_version, case_set_version, cases:[{id,boundary,inputs}]}}`.
+  Production, evaluator and grader must be three distinct enabled service
+  principals. The evaluator needs `runs:eval`, the grader `templates:qualify`;
+  those scopes do not authorize any target until an administrator binds this
+  policy. There must be exactly eight unique cases, with boundary cases marked.
+  The hub canonicalizes the input objects and returns `policy_hash`,
+  `case_set_digest` and the policy. The administrator owns the real case set
+  and trusted grader version: neither comes from an ordinary client's summary.
+  No identities, tokens, subscription allowlists or pool settings are provisioned
+  automatically. Missing authorized identities remain a deployment prerequisite.
+
+  The evaluator calls `POST /v1/svc/eval-runs` with `target_principal`,
+  `engine` (`codex` or `claude`), `template_digest`, `case_set_digest`, `case_id`
+  and `idempotency_key`. The target must already own that exact registered
+  template. The hub copies only that template into the evaluator namespace and
+  supplies the policy's exact inputs, a single engine and a 900-second deadline.
+  It assigns a reserved `eval/…` tenant and no callback; caller-supplied inputs,
+  tenant and callback cannot replace these. Ordinary `/runs` rejects reserved
+  eval tenants. Unqualified single-engine execution is allowed only through
+  this authenticated, target-bound route; it cannot fall back to another engine.
+  Execution remains subject to the evaluator's service pool and budget policy.
+
+  The bound evaluator or grader reads `GET /v1/svc/eval-runs?target_principal=…&run_id=R…`.
+  Other principals and unrelated runs are denied. Terminal views include
+  `result_sha256`, the SHA256 of the hub's stored result JSON (hashing the empty string
+  when no result exists); use this returned hash instead of reserializing JSON.
+  The grader examines the result and submits `POST /v1/svc/template-qualifications`:
+  `{target_principal,engine,template_digest,case_set_digest,grader_version,
+  cases:[{case_id,run_id,result_sha256,passed}]}`. The hub requires the bound
+  grader's `templates:qualify` authority, all eight unique matching eval runs,
+  exact inputs/digest/engine, a fetched scoped execution pass, one completed
+  attempt and matching result hashes. A passing case must have `state:succeeded`
+  and attempt `code:ok`. Codex needs at least seven passes, Claude eight, and
+  every boundary case must pass. Semantic grading is the explicitly trusted
+  grader's responsibility; ordinary run/template writers cannot attest success.
+  Evidence is immutable per target/engine/digest/policy, records the grader,
+  timestamp and server-counted passes, and is audited. A changed policy or
+  disabled evaluator/grader invalidates eligibility at the next check.
+
+  The target's `runs:read` identity reads
+  `GET /v1/svc/template-qualifications?engine=codex&template_digest=…`:
+  `{qualified,policy_hash?,case_set_digest?,grader_version?,evidence?}`.
+  No policy returns `qualified:false`; registration alone never returns true.
+  Daily production probes remain separate `tenant:probe` runs under an
+  authorized service principal, with callback-prefix/signature/run ownership
+  checks; an eval result is not a seven-day production probe.
 - **`svc_degraded`** (claude-fleet#4007). Daily `tenant=probe` runs are scheduled by the caller; two consecutive final failures in seven days also trigger this alert. The alert sweep (`RunNodeAlerts`,
   leader `alerts`, a pass a minute) reads each principal's last 30 minutes:
   more than 20 % of the runs that ended failed or expired (cancels count

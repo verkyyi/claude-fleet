@@ -84,6 +84,7 @@ func TestSvcEngineSelectionAndScopedPass(t *testing.T) {
 	if err := h.srv.Store.PutCredential("svc:livepage", "codex", "test-codex", []byte("test-only"), "oauth", nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	svcQualifiedFixture(t, h, svcTestDigest)
 	req := svcExplicitDualReq("probe", "codex-first")
 	req.EngineTemplates = map[string]string{"codex": svcTestDigest}
 	ref := svcSubmit(t, h, tok, req)["run_id"].(string)
@@ -151,6 +152,7 @@ func TestSvcCodexPlainTemplateAndSingleEngine(t *testing.T) {
 	if err := h.srv.Store.PutCredential("svc:livepage", "codex", "test-codex", []byte("test-only"), "oauth", nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	svcQualifiedFixture(t, h, registered["digest"].(string))
 	req := svcReq("probe", "single-codex")
 	req.EnginePref, req.TemplateDigest = "codex", registered["digest"].(string)
 	ref := svcSubmit(t, h, tok, req)["run_id"].(string)
