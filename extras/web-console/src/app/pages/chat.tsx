@@ -635,7 +635,9 @@ const handoverWhy = (code: string, error: string) => HANDOVER_WORDS()[code] || e
 const SessionView: FC<SessionProps> = (props) => {
   const { source, onHead } = props;
   const { me } = useShell();
-  const v = useSessionView(source.worker || "");
+  // Both a read-only ticket and a view-as preview keep the runtime read-only.
+  const preview = !!(me?.read_only || (viewAs && (!me || me.view_as)));
+  const v = useSessionView(source.worker || "", !!me && !preview);
   const [mine, setMine] = useState<Mine>(null);
   const [, setTick] = useState(0);
   // a giveback made here is believed SURE_MS at most: look again then
@@ -645,8 +647,6 @@ const SessionView: FC<SessionProps> = (props) => {
     return () => clearTimeout(t);
   }, [mine]);
   const stage = stageOf(v.state, mine, Date.now());
-  // a view-as preview never writes
-  const preview = viewAs && (!me || me.view_as);
   const raw: SyncWord = v.gate?.code === "home_down" ? "offline" : v.gate && v.count ? "syncing" : v.layer && v.layer !== "home" ? "syncing" : "";
   const sync = useSyncWord(raw);
   const busy = v.state ? v.busy : undefined;
@@ -716,7 +716,8 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
         <div className="flex h-full flex-col" data-testid="session-view" data-talk={talk ? "" : undefined} data-live={v.live ? "" : undefined}>
           <div className="min-h-0 flex-1">
             <Thread autoFocus={false}
-              placeholder={sync === "offline" ? OFFLINE_BOX() : talk ? composerPlaceholder(null, null) : readOnlyWords(source.open)}
+              placeholder={sync === "offline" ? OFFLINE_BOX() : talk ? composerPlaceholder(null, null)
+                : v.access === "checking" ? tr("正在连接会话，可以先写下要说的话…", "Connecting to your session; you can draft your message…") : readOnlyWords(source.open)}
               components={talk ? { Welcome: Empty, ToolFallback: ViewToolStep, ComposerStart: ComposerAddAttachment, ComposerTop: Top }
                 : { Welcome: Empty, ToolFallback: ViewToolStep }} />
           </div>

@@ -6682,6 +6682,12 @@ webchat_part() {
   WEBCHAT_OUT=$out
 }
 
+drill_chat_gate_cold_readonly() {
+  CAP=30
+  webchat_part gate "Y a cold view is checking, never read-only before the gate answers" || return 1
+  WHAT="冷连接先发探测中，再由会话门明确允许发送；探测未完成不误报只读"
+}
+
 drill_chat_socket_other_login() {
   CAP=30
   if ! command -v node >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 node"; return 0; fi

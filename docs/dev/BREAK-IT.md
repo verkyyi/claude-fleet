@@ -15,6 +15,7 @@
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
+| 网页新会话进入时会话门尚未探测完成（T944） | 首条能发，进入后却显示终端只读，不能继续输入 | 未知权限单独显示连接中，保留输入草稿；仅会话门明确允许才启用发送，旧版本与只读票据仍不可写 | `chat-gate-cold-readonly` |
 |---|---|---|---|
 | 无人值守的会话跑 `rm -f $P/*` 这类开头是变量的 rm 路径（#4637，2026-10-17 worker #4625 实见） | Claude Code 在 bypass 模式下照样弹「Dangerous rm operation on possibly-empty variable path」等人批准，没人答 30 多秒后自动拒绝：每次打断操作者，或会话干等 | bash-guard 在 PreToolUse 先拒（exit 2），理由里写好改法（`"${P:?}"/*`、非空默认值或字面路径），agent 自己改写重跑，不弹框；`${P:?}`、`${P:-/非空}`、`git rm`、单引号字面量、变量不在开头的照常放行 | `rm-empty-var-prompt` |
 | pending-tool 批量读取跨检查复用旧进程、窗口或 transcript（#4474） | 工具已开始或窗口已换代，旧的无 pending 读数仍可能清掉 needs | 每次安全核对重采集；同次共享解析，前后验证 socket/server、worker、pane 与 native birth/SID，过期或缺身份返回 unknown | `pending-observation-stale` |
