@@ -309,6 +309,7 @@ _fa_loadpc() {
   case "$lf" in *[!0-9]*) lf=00 ;; esac
   case "${2:-}" in ''|*[!0-9]*|0) return 0 ;; esac
   FA_LOADPC=$(( (10#$lp * 100 + 10#$lf) / $2 )); t=$(( (FA_LOADPC + 5) / 10 ))
+  # shellcheck disable=SC2034  # the rounded figure: forkless-hotpath-selftest.sh reads it
   FA_LOAD="$(( t / 10 )).$(( t % 10 ))"
 }
 
