@@ -6418,6 +6418,17 @@ drill_park_reap_table() {
   WHAT='停放与回收同表：每来源、三天期限、历史可接回，doctor 同一时刻'
 }
 
+drill_park_reap_exceptions() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cleanup-idle-selftest.py" \
+    ParkTable.test_finished_probe_keeps_its_one_minute_policy \
+    ParkTable.test_decide_keeps_idle_policy_except_reported_waiting \
+    ParkTable.test_park_refusal_reaches_doctor 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='decide 保留 idle:15m，明确 waiting 才用停放三天；probe 做完一分钟仍走原回收门；拒停原因送到 doctor'
+}
+
 drill_park_drops_dialog() {
   CAP=60; local t0 out
   t0=$(now)
@@ -6916,6 +6927,13 @@ drill_chat_gate_cold_readonly() {
   CAP=30
   webchat_part gate "Y a cold view is checking, never read-only before the gate answers" || return 1
   WHAT="冷连接先发探测中，再由会话门明确允许发送；探测未完成不误报只读"
+}
+
+drill_chat_gate_probe_unavailable() {
+  CAP=30
+  webchat_part gate "Y a failed capability probe is unavailable, never a read-only verdict" \
+    "Y capability failure after a writable frame recovers on the same stream" || return 1
+  WHAT="能力探测失败明确暂不可达，同一流下一次成功恢复可写；只读权限不放宽"
 }
 
 drill_codex_release_shadowed() {

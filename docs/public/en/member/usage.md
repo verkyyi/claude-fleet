@@ -137,15 +137,17 @@ Explicit policies such as after-merge still apply. Otherwise, new wrappers use t
 | Batch member | Idle tier | Same as dispatched, including failed results |
 | Batch driver | Idle tier | When the batch ends; retained between ticks |
 | Orchestrator | Idle tier | Never automatically |
-| Waiting for a decision | Idle tier | 3 inactive days parked |
-| Probe or drill | Idle tier | About 1 minute after finishing |
+| Waiting for a decision | Idle tier | After 15 idle minutes, under the existing close conditions |
+| Probe or drill | Idle tier; check reaping first once its close time is due | About 1 minute after finishing |
 | Web conversation | Idle tier | Keeps the existing web policy: never automatically |
 
-A dispatched task that reported waiting or blocked also gets 3 days parked. Missing resume proof keeps the window. A pin or your explicit keep policy prevents reaping, but permits parking. Old wrappers cannot park; waiting conversations stay open until their wrapper is updated.
+A session that explicitly reported waiting or blocked also gets 3 days parked, including a decision session. The decide origin alone is not a waiting report. Missing resume proof keeps the window. A pin or your explicit keep policy prevents reaping, but permits parking. Old wrappers cannot park; waiting conversations stay open until their wrapper is updated.
 
 Settings: `fleet.session.park_idle` **5m**, `park_idle_unattended` **5m** (the conservative cache-measurement fallback; **1m** is configurable), `park_presence` **15m**, and `fleet.session.reap_parked` **3d**. Memory pressure may park earlier. Watched windows, drafts, active turns, open choice dialogs and background work hold parking. `fleet doctor --park` lists each window's origin, park/reap rule, next UTC deadline and hold reason.
 
-Pick the row, Tab → "Reap policy…" to change its policy. Person and decision conversations on new wrappers use the parked retention above; an explicit keep still holds.
+The window's explanation line says why parking is held: someone is looking, a draft is in the input box, background work is running, a choice dialog is open, or an older wrapper cannot park. Doctor carries the same reason instead of promising a parking time that a protection condition has blocked.
+
+Pick the row, Tab → "Reap policy…" to change its policy. Person conversations on new wrappers use the parked retention above; decision sessions retain their 15-minute idle policy unless they explicitly reported waiting. An explicit keep still holds.
 
 ## Quota and usage
 
@@ -191,6 +193,8 @@ A managed conversation without a repository can also switch to Codex from the li
 For accepted remote tasks, Tokenman verifies the selected agent before delivering the first input. If launch verification fails or the connection loses its receipt, Tokenman keeps the task for recovery instead of choosing another agent or starting it again. A resume keeps the original conversation. An explicit agent switch starts a new attempt only after the source has stopped; an uncertain switch needs recovery before another attempt.
 
 ## Webchat connections
+
+When you open a session, the page first checks whether sending is available. You can draft while it checks or reconnects, then send after it recovers; drafts are never sent automatically. A read-only sign-in or an older session without web continuation remains read-only, with an explanation on the page.
 
 Webchat goes through the hub to your home node. The hub keeps one connection to your node open, so each request is a single round trip rather than a fresh connection. The conversation still runs only on your home node, with the same conversation and quota rules; the local page works as before.
 

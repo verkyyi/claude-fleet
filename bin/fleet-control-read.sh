@@ -238,7 +238,8 @@ case "$mode" in
     # Column 34 (E101): `reapwhy=<code>[:<epoch>]` — why the idle reaper has not
     # closed this finished window (@reap_why, bin/fleet-cleanup-idle.py: bg · timer
     # · dirty · keep · task-open · live · moving · waiting · parked · error-retry ·
-    # error-retried · error); the hub turns it into the list card's line. Empty on a
+    # error-retried · error · watched · draft · park-bg · asking · old-wrapper ·
+    # park-gate); the hub turns it into the list card's line. Empty on a
     # working window and on one nothing holds.
     # Column 35 (task PQ41, 会话合一): `origin=web` on a session the person's web
     # page opened (@session_origin, stamped by the home's conversation service

@@ -101,6 +101,53 @@ func TestChatViewReadsOwnSession(t *testing.T) {
 	}
 }
 
+// Capability frames are live service data, never replaced by the board or the
+// cached transcript. The gzip relay must preserve split frames on reconnect too.
+func TestChatViewCapabilityFramesSurviveRelay(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	const fleet, fid = "66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"
+	wid := fleet + "/" + fid
+	workers, _ := json.Marshal([]map[string]any{{"worker_id": wid, "identity": fid, "state": "done", "can_talk": false}})
+	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
+		FleetID: fleet, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(workers)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	setChatHome(t, h, pAlice, host, login)
+	frames := []string{
+		`data: {"t":"state","session":"same-thread","can_talk":null,"talk_reason":"checking"}` + "\n\n",
+		`data: {"t":"state","session":"same-thread","can_talk":null,"talk_reason":"unreachable"}` + "\n\n",
+		`data: {"t":"state","session":"same-thread","can_talk":true,"talk_reason":""}` + "\n\n",
+		`data: {"t":"state","session":"same-thread","can_talk":false,"talk_reason":"old_version"}` + "\n\n",
+	}
+	svc.mu.Lock()
+	svc.view = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("fid") != fid || r.Header.Get("X-Fleet-Person") != pAlice {
+			t.Error("view reached the wrong session or person")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, frame := range frames {
+			// Deliberately split the JSON token across flushed network chunks.
+			cut := strings.Index(frame, "can_talk") + 4
+			io.WriteString(w, frame[:cut])
+			w.(http.Flusher).Flush()
+			io.WriteString(w, frame[cut:])
+			w.(http.Flusher).Flush()
+		}
+	}
+	svc.mu.Unlock()
+	for _, cursor := range []string{"", "&at=17&s=same-thread"} {
+		resp := chatDo(t, h, "GET", "/v1/chat/view?worker="+wid+cursor, personCookie(pAlice, "alice"), nil, "")
+		got, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || !resp.Uncompressed || string(got) != strings.Join(frames, "") {
+			t.Fatalf("capability stream %q: %d gzip=%v err=%v body=%s", cursor, resp.StatusCode, resp.Uncompressed, err, got)
+		}
+		if !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+			t.Fatal("live capability stream may be cached")
+		}
+	}
+}
+
 // An agent without the chat relay: one sentence, no relay (「这台机器还旧」).
 func TestChatViewOldAgent(t *testing.T) {
 	h := newFleetHarness(t)

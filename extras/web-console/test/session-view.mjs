@@ -9,7 +9,12 @@ import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess } from '../s
 
 assert.equal(writeAccess(null, true), 'checking');
 assert.equal(writeAccess({ can_talk: null }, true), 'checking');
-assert.equal(writeAccess({ can_talk: false, talk_reason: 'unreachable' }, true), 'checking');
+assert.equal(writeAccess({ can_talk: false, talk_reason: 'unreachable' }, true), 'offline');
+assert.equal(writeAccess({ can_talk: true }, null), 'checking', 'permission still loading is not a read-only login');
+assert.equal(writeAccess({ can_talk: true }, true, 'offline'), 'offline', 'a disconnected stream cannot keep a stale write capability');
+assert.equal(writeAccess({ can_talk: false }, true, 'checking'), 'checking', 'a new connection waits for its own capability frame');
+assert.equal(writeAccess({ can_talk: true }, true, 'live'), 'writable', 'a recovered state frame enables sending again');
+assert.equal(writeAccess({ can_talk: true }, false, 'offline'), 'readonly', 'transport failure never lifts the read-only login restriction');
 for (const agent of ['codex', 'claude']) {
   assert.equal(writeAccess({ agent, can_talk: true }, true), 'writable');
   assert.equal(writeAccess({ agent, can_talk: false, talk_reason: 'old_version' }, true), 'readonly');

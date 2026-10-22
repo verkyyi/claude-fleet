@@ -77,7 +77,7 @@ ORIGINS = {
     "member":       dict(default="merged", park="idle", reap="reported"),
     "driver":       dict(default="merged", park="idle", reap="batch"),
     "orchestrator": dict(default="keep", park="idle", reap="never"),
-    "decide":       dict(default="idle:15m", park="idle", reap="parked"),
+    "decide":       dict(default="idle:15m", park="idle", reap="idle"),
     "probe":        dict(default="done:1m", park="idle", reap="done"),
     "web":          dict(default="keep", park="idle", reap="never"),
 }
@@ -85,6 +85,12 @@ ORIGINS = {
 # keeps unattended parking at 5m unless explicitly configured to 1m.
 PARK_IDLE_DEFAULT = 5 * 60
 PARK_IDLE_MIN = 60
+
+# The park gate owns eligibility; the reaper only carries its refusal to the
+# same explanation line. In particular, a background PARK hold has no close
+# countdown (the existing `bg:<epoch>` is a different, completed-work policy).
+PARK_HOLDS = {"watched": "watched", "draft": "draft", "typing": "draft",
+              "bg": "park-bg", "asking": "asking", "old_wrapper": "old-wrapper"}
 
 
 def park_idle_secs():
@@ -180,6 +186,8 @@ def explain(snap, now=None):
                                     or snap.get("@pin") == "1" else "result/policy") + " why=" + why
     if not snap.get("@park_wrap_ver"):
         return prefix + " next=legacy-policy (old wrapper) why=" + why
+    if why in set(PARK_HOLDS.values()) | {"park-gate"}:
+        return prefix + " next=park-held why=" + why
     stamp = snap.get("@claude_state_ts", "")
     from fleet_reap_notice import reap_state
     state = reap_state(snap.get("@claude_state", ""), snap.get("@agent_status", ""), snap.get("@claude_needs", ""))
