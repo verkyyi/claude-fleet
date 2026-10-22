@@ -161,11 +161,17 @@ func (s *Server) trialLoadRatio() float64 {
 	return f
 }
 
-// poolLeft is what the Claude subscriptions have left of their tightest
+// poolLeft is what the trial's default agent subscriptions have left of their tightest
 // window, on average over those with a reading (the pool's headroom: the
 // proxy picks among them). ok=false with no reading — nothing is held then.
 func (s *Server) poolLeft() (float64, bool) {
-	across, err := s.LimitsForAllSource(model.SourceClaude)
+	// The same default as a new web/task session. A full Claude pool must
+	// not hold a trial whose first session will use Codex (T943).
+	source := model.SourceClaude
+	if s.setting(ClientDefaultsPrefix+"FLEET_AGENT") == "codex" {
+		source = model.SourceCodex
+	}
+	across, err := s.LimitsForAllSource(source)
 	if err != nil {
 		log.Printf("fleet: trial: pool reading: %v", err)
 		return 0, false

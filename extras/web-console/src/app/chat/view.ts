@@ -25,7 +25,8 @@ import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame,
 // can_talk (会话合一 Y01K): the web may talk to it — absent on the old road,
 // false for an older session (read-only); queue: its lines waiting; ask: what it asks now
 export type ViewState = { agent: string; session: string; busy: boolean; state: string; label: string; holder?: string;
-  can_talk?: boolean | null; talk_reason?: string; queue?: Queued[]; ask?: ViewAsk | null };
+  can_talk?: boolean | null; talk_reason?: string; queue?: Queued[]; ask?: ViewAsk | null;
+  continuation?: { state: string; to: string; message: string } };
 // why there is nothing to follow: the entry's or the service's code
 // (not_yours · old_agent · no_session · home_down · gone · …) and its words
 export type ViewGate = { code: string; msg: string } | null;

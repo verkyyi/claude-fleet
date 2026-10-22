@@ -61,5 +61,11 @@ and local sign-in callbacks require a local terminal.
 
 ## Next
 
+When a web Claude session exhausts its subscription quota, it automatically
+continues in Codex at a safe handoff boundary, with a brief notice. Unsent messages
+return to the composer. If handoff is unsafe, the record stays available with a
+recovery notice. Network errors, sign-in failures and stopping a turn do not switch
+agents. Trials can use Codex too; switching keeps the same budget and trial clock.
+
 - Everyday use and checking your own quota: [Everyday use](usage.md)
 - It will not open or connect: [Troubleshooting](../troubleshooting.md)

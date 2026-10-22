@@ -792,7 +792,7 @@ elif a[0] == "status":
     time.sleep(0.2)
     if os.path.exists(${JSON.stringify(GFAIL)}):
         os.unlink(${JSON.stringify(GFAIL)}); sys.exit(1)
-    print(json.dumps({"can_talk": True, "why": "", "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
+    print(json.dumps({"can_talk": True, "why": "", "continuation": {"state": "continued", "to": "codex", "message": "已换 Codex 继续。"}, "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
 elif a[0] == "stop":
     print(json.dumps({"ok": True, "how": "escape"}))
 elif a[0] == "answer":
@@ -876,7 +876,7 @@ exit 2
     "Y a cold view is checking, never read-only before the gate answers");
   ok(calls().filter(c => c.argv[0] === "status").length >= 2,
     "Y a delayed failed probe retries and recovers on the same stream");
-  ok(last.can_talk === true && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),
+  ok(last.can_talk === true && last.continuation?.state === "continued" && last.continuation.to === "codex" && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),
     `Y the view's state says can_talk and what waits, no holder (${JSON.stringify(last)})`);
   await sstop(y);
 }

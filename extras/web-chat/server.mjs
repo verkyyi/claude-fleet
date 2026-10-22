@@ -803,7 +803,7 @@ async function viewStream(req, res, u, person) {
   const stateOf = () => JSON.stringify({ t: "state", agent: w.agent, session: w.sid || "", busy: !!w.busy, state: w.state || "",
     label: w.label || "", can_talk: gs ? !!gs.can_talk : null, talk_reason: gs ? gs.why || "" : "checking",
     queue: (gs?.queue || []).map(({ delivery, text, why }) => ({ delivery, text, why })),
-    ...(gs?.ask ? { ask: gs.ask } : {}) });
+    ...(gs?.ask ? { ask: gs.ask } : {}), ...(gs?.continuation ? { continuation: gs.continuation } : {}) });
   let said = stateOf();
   res.write(`data: ${said}\n\n`);
   log("view", { agent: w.agent, person, known: knew });

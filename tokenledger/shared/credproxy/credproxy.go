@@ -71,6 +71,10 @@ const Pass2Prefix = "fcp-h2."
 // ResolvePath is the hub route the proxy asks (api.CredProxyResolvePath).
 const ResolvePath = "/v1/fleet/credproxy/resolve"
 
+// ClaudePoolUnavailable is capacity proven by the hub after pass, budget and
+// policy checks; it must never be inferred from an authentication failure.
+const ClaudePoolUnavailable = "claude_pool_unavailable"
+
 // MaxCacheTTL bounds CacheTTL: the issue's "≤ 30 s" verify cache.
 const MaxCacheTTL = 30 * time.Second
 
@@ -556,6 +560,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	a.principal, a.worker, a.pass = res.Principal, res.WorkerID, res.ID
+	if !res.Valid && provider == Claude && res.Error == ClaudePoolUnavailable {
+		a.status, _ = refuseCode(w, provider, http.StatusTooManyRequests, "rate_limit_error", ClaudePoolUnavailable,
+			"Claude subscription pool unavailable ("+ClaudePoolUnavailable+")")
+		a.why = ClaudePoolUnavailable
+		return
+	}
 	if !res.Valid && res.Error == PersonBudgetExceeded {
 		// the person is over their budget (claude-fleet#1977): the hub's
 		// own line, under its own code, with a status no client retries

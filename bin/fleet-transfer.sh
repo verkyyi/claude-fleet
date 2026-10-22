@@ -16,6 +16,9 @@
 # --retry         Run a switch that a dead TARGET login stopped (issue #1669) once
 #                 more, with its original arguments: exit 0 switched, 3 the target
 #                 still cannot log in (left pending), 1 failed (never retried again).
+# --quota-continuation  Internal web continuation: exact Claude quota failure,
+#                 empty native prompt and no live tools, approvals or loops.
+#                 Requires --expected-session-id; all normal cutover gates apply.
 #
 # Supports Claude → Codex and Codex context cycling. No bulk mode, transcript guessing, git mutation,
 # automatic source restart, or forced agent termination. A cutover requires @claude_state
@@ -73,6 +76,7 @@ usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME=''
 TARGET_FILE='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
+QUOTA_CONTINUATION=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id)
@@ -93,6 +97,7 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --quota-continuation) QUOTA_CONTINUATION=1; shift ;;
     --from-panel) FROM_PANEL=1; shift ;;
     --prepare-only) PREPARE=1; shift ;;
     --after-turn) AFTER=1; shift ;;
@@ -313,6 +318,11 @@ PY
 fi
 HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}')
 source_ready() {
+    if [ "$QUOTA_CONTINUATION" = 1 ]; then
+      [ "$SOURCE_AGENT" = claude ] && [ "$TO" = codex ] && [ "$EXPECT_SID" = "$SID" ] \
+        && python3 "$BIN/fleet_transfer_source.py" quota-settled --session "$SESS" --pane "$PANE" --sid "$SID"
+      return $?
+    fi
     # A `looping` Codex source between rounds is as settled as `done`: its idle
     # native thread, no live item and a completed last turn are checked, never
     # assumed from the tmux flag (#786).

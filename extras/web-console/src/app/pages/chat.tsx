@@ -707,7 +707,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
       <p className="text-muted-foreground text-center text-[14px]">{v.loaded ? (talk ? tr("说点什么吧。", "Say something.") : tr("它还没说话。", "Nothing said yet.")) : tr("正在读它的对话…", "Reading its conversation…")}</p>
     </div>
   );
-  const Top: FC = () => <FailLine v={v} />;
+  const Top: FC = () => <><FailLine v={v} />{v.state?.continuation ? <p role="status" className="text-muted-foreground px-2 text-center text-[13px]">{v.state.continuation.message}</p> : null}</>;
   return (
     <ViewWorker.Provider value={props.source.worker || ""}>
     <AssistantRuntimeProvider runtime={v.runtime}>
@@ -716,7 +716,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
         <div className="flex h-full flex-col" data-testid="session-view" data-talk={talk ? "" : undefined} data-live={v.live ? "" : undefined}>
           <div className="min-h-0 flex-1">
             <Thread autoFocus={false}
-              placeholder={sync === "offline" ? OFFLINE_BOX() : talk ? composerPlaceholder(null, null)
+              placeholder={sync === "offline" ? OFFLINE_BOX() : v.state?.continuation?.state !== "continued" && v.state?.continuation ? v.state.continuation.message : talk ? composerPlaceholder(null, null)
                 : v.access === "checking" ? tr("正在连接会话，可以先写下要说的话…", "Connecting to your session; you can draft your message…") : readOnlyWords(source.open)}
               components={talk ? { Welcome: Empty, ToolFallback: ViewToolStep, ComposerStart: ComposerAddAttachment, ComposerTop: Top }
                 : { Welcome: Empty, ToolFallback: ViewToolStep }} />

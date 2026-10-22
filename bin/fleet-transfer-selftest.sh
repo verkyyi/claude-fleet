@@ -33,7 +33,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet_repo_authority.py fleet_native_proc.py fleet_hub_rest.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-agent-adapter.sh fleet_agent_adapter.py fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py fleet_transfer_source.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet_worker_life.py fleet_agent_argv.py fleet_agent_mcp.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet_session_fallback.py fleet_repo_authority.py fleet_native_proc.py fleet_hub_rest.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-agent-adapter.sh fleet_agent_adapter.py fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py fleet_transfer_source.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet_worker_life.py fleet_agent_argv.py fleet_agent_mcp.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The canonical pane→Claude walk is imported by fleet-lib (#4474). Keep this
@@ -879,6 +879,34 @@ assert not confirm(screen + '\nNormal Claude prompt\n')
 assert not confirm(screen.replace('Enter to confirm · Esc to cancel', ''))
 PY
 ok
+
+# T943: a native quota error is `exited`, with a LIVE Claude at its prompt.
+# The formal controller verifies the boundary; no done stamp or forced exit.
+spawn 75 issue norepo
+python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTA'
+import json,sys
+with open(sys.argv[1], 'a') as out:
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
+        isApiErrorMessage=True, error='rate_limit', apiErrorStatus=429,
+        message={'content':[{'type':'text','text':"You've hit your weekly limit"}]}))+'\n')
+PYQUOTA
+TM set-option -w -t "$WIN" @claude_state exited
+TM set-option -w -t "$WIN" @claude_state_src 7501
+TM set-option -w -t "$WIN" @agent_status '{"state":"error","app":"claude-code"}'
+transfer --quota-continuation --expected-session-id "$SID" --dry-run || fail 'native quota boundary dry-run'
+[ "$(field claude_state)" = exited ] && kill -0 "$PID" || fail 'quota dry-run must preserve live failed source'; ok
+TM send-keys -t "$PANE" -l 'unsent draft'
+transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'quota must preserve unsent native draft'
+kill -0 "$PID" || fail 'draft refusal exited source'; ok
+TM send-keys -t "$PANE" C-u
+TM set-option -w -t "$WIN" @loop unknown
+transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'quota must hold native loop'
+kill -0 "$PID" || fail 'loop refusal exited source'; ok
+TM set-option -wu -t "$WIN" @loop
+transfer --quota-continuation --expected-session-id "$SID" || fail 'native quota source cutover'
+[ "$(field cc_agent)" = codex ] && ! fleet_pid_alive "$PID" || fail 'quota did not retain one writer'; ok
+[ "$(field issue)" = 75 ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'quota lost task or exact provenance'; ok
+transfer --quota-continuation --expected-session-id "$SID" && fail 'quota must not switch target again'; ok
 
 fi
 
