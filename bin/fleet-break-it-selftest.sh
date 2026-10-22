@@ -7372,8 +7372,11 @@ drill_reap_agent_split() {
 
 drill_report_delegation_offline() {
   local t0; t0=$(now); CAP=60
-  python3 "$BIN/fleet-report-delegation-selftest.py" >"$WORK/delegation.out" 2>&1 \
-    || { WHY="$(tail -8 "$WORK/delegation.out")"; return 1; }
+  suite_holds fleet-report-delegation-selftest.py \
+    'def test_real_entry_offline_replay_identity_and_provenance' \
+    'def test_cross_machine_real_hub_receiver_and_replay' \
+    'def test_scope_chain_cycle_revoke_audit' \
+    'def test_batch_does_not_redeliver_and_revoke_keeps_pending' || return 1
   WHAT='授权作用域、历史来源、离线恢复及重放去重，routine 不唤醒人'
   SECS=$(since "$t0")
 }

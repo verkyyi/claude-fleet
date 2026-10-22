@@ -95,5 +95,5 @@ python3 ~/.claude/fleet/bin/fleet_report_delegation.py resolve \
 `python3 bin/fleet-report-delegation-selftest.py` 覆盖正式 grant/revoke/resolve、环与
 作用域拒绝、真实 report-parent/peer-queue/hub-node 入口、本地/跨机离线恢复、身份更换、
 原 provenance、自动完成/失败/blocked/Stop 状态及重放去重。
-BREAK-IT `report-delegation-offline` 运行同一隔离演练；Go 的
+BREAK-IT `report-delegation-offline` 按名守住同一隔离演练，CI 单独运行专项自测；Go 的
 `TestDelegatedReportSurvivesRelayTTL` 验证 hub 保留委托报告、普通报告仍正常过期。
