@@ -100,7 +100,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,media,links,send,pages,aside,release,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,media,links,send,pages,aside,release,probe-contract,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -299,13 +299,13 @@ let SSTATE = join(HS, "sstate");
 let SOCK = join(SSTATE, "chat.sock");
 let sserver = null;
 process.on("exit", () => { try { sserver?.kill("SIGKILL"); } catch { /* gone */ } });
-function sstart(args = ["--socket"], extra = {}) {
+function sstart(args = ["--socket"], extra = {}, entry = APP) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, FLEET_WEBCHAT_STATE: SSTATE, FLEET_WEBCHAT_SDK: sdk, FLEET_WEBCHAT_SESSION_CRED: credSh,
       FLEET_WEBCHAT_CWD: T, CLAUDE_CONFIG_DIR: CFG, FLEET_WEBCHAT_PORT: "0", FLEET_WEBCHAT_IDLE_SECS: "0", ...extra };
     delete env.FLEET_WEBCHAT_LOCAL;
     for (const k of Object.keys(extra)) if (extra[k] === undefined) delete env[k];
-    const p = spawn(process.execPath, [APP, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn(process.execPath, [entry, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "";
     p.stdout.on("data", (d) => { out += d; if (/listening on/.test(out)) resolve({ p, out }); });
     p.stderr.on("data", (d) => { err += d; });
@@ -796,6 +796,49 @@ printf '@9\\t${version}\\t\\t${version === "new" ? nextFid : fid}\\n'
   const opened = await sreq("/api/open", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: { text: "same service after release" } });
   ok(opened.status === 200 && JSON.parse(opened.body).fid === nextFid, "Z new session uses current release launcher after stable switch");
   await sstop(p); sserver = null;
+}
+
+// A healthy old resident can ignore new JSON fields. An owned probe needs a
+// distinct route: the old API must refuse it without opening an ordinary web.
+if (part("probe-contract")) {
+  const fid = "abcdef12-1234-4234-8234-12345678aaaa";
+  const raw = join(HT, "probe-raw.sh"), calls = join(HT, "probe-calls");
+  writeFileSync(raw, `#!/bin/bash
+printf '%s\\n' "$*" >> '${calls}'
+printf '@9\\tfixture\\t\\t${fid}\\n'
+`, { mode: 0o755 });
+  const PAGE = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
+  const open = (path, body) => sreq(path, { method: "POST", headers: PAGE, body });
+  // Retain the real server/auth/body parser, remove only the new API dispatch.
+  // This models the resident's fixed route table, independent of helper version.
+  const oldDir = join(HT, "old-probe-api"); mkdirSync(oldDir);
+  for (const f of ["lib.mjs", "codex.mjs"]) symlinkSync(join(dirname(APP), f), join(oldDir, f));
+  const oldApp = join(oldDir, "server.mjs");
+  writeFileSync(oldApp, readFileSync(APP, "utf8").split("\n")
+    .filter((l) => !l.includes('if (p === "/api/open/probe"')).join("\n"));
+  const env = { ...asHome("probe-contract"), FLEET_WEBCHAT_RAW: raw, FLEET_WEBCHAT_FLEET: "fleet" };
+  SSTATE = stateOf("old-probe-api"); SOCK = join(SSTATE, "chat.sock");
+  sserver = (await sstart(["--socket"], env, oldApp)).p;
+  ok((await sreq("/healthz")).status === 200, "P old resident is healthy without the probe route");
+  let r = await open("/api/open/probe", { text: "temporary", parent_fid: fid });
+  ok(r.status === 404 && !existsSync(calls), "P old resident refuses probe without spawning ordinary web");
+  await sstop(sserver); sserver = null;
+  SSTATE = stateOf("new-probe-api"); SOCK = join(SSTATE, "chat.sock");
+  sserver = (await sstart(["--socket"], env)).p;
+  for (const body of [{ text: "missing owner" }, { text: "bad owner", parent_fid: "scratch-1" },
+    { text: "conflicting purpose", parent_fid: fid, purpose: "web" }]) {
+    r = await open("/api/open/probe", body);
+    ok(r.status === 400 && !existsSync(calls), "P invalid probe is refused before spawn");
+  }
+  r = await open("/api/open/probe", { text: "temporary", parent_fid: fid });
+  const reply = JSON.parse(r.body);
+  ok(r.status === 200 && reply.reap_origin === "probe" && reply.origin_fid === fid &&
+    existsSync(calls) && readFileSync(calls, "utf8").includes(`--origin ${fid} --print --no-repo --node local --reap-origin probe`),
+    "P explicit probe route preserves ownership through the official spawner");
+  r = await open("/api/open", { text: "ordinary web" });
+  ok(r.status === 200 && readFileSync(calls, "utf8").includes("--origin hub --print --no-repo --node local --reap-origin web"),
+    "P ordinary web retains its existing source");
+  await sstop(sserver); sserver = null;
 }
 
 // ---- Y: the session gate (task HHV0) — /api/say · stop · answer · open · view's state -----

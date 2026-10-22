@@ -425,6 +425,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 |---|---|
 | `POST /api/say` `{fid, text, images≤4, id?}` | 一句话（+ 图，存进 `media/`，路径写进这一轮）→ `{delivery, state: sent\|queued\|refused, reason}` |
 | `POST /api/open` `{agent, text, images?}` | 网页新开一个会话：本机 no-repo 窗口，`@session_origin web`，这句是它的第一轮 → `{fid, agent, state}` |
+| `POST /api/open/probe` `{parent_fid, agent?, text, images?}` | 有归属的临时验收会话：复用同一创建器，官方 spawner 验证活父身份，`@reap_origin probe`；成功回 `{fid, state, reap_origin:"probe", origin_fid}` |
 | `POST /api/answer` `{fid, fp, answers\|picks}` · `{fid, fp, allow}` | 替它答 AskUserQuestion（`fleet-dialog-answer.sh`）/ 权限（`fleet-permission.sh --by 网页`） |
 | `POST /api/stop` `{fid}` | 停掉正在答的一轮：Claude 确认在答时按 Esc（实测 0.24–0.34 s），Codex `turn/interrupt` |
 | `POST /api/ack` `{fid, delivery}` | 页面把退回的一句放回输入框后，门里删掉它 |
@@ -434,6 +435,16 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 
 没有 `fid` 的 `/api/turn|new|take|stop|answer` 还是旧的 SDK 对话，直到入口的 `fleet.chat.unified`
 打开（PQ41）；迁移过的对话再走旧路回 410 `moved`（带 fid）。
+
+临时 probe 调用家机 socket 的 `/api/open/probe`。旧驻留服务不认识该路径时返回 404，不创建会话；
+调用方必须停止，不能改用普通 `/api/open` 重试。`/api/open` 的旧 `purpose:"probe"` 写法保留兼容，
+但更早的驻留版本会忽略这个字段并开成普通 web，因此不能用于跨版本验收。新入口不放宽普通 web、
+人工 keep 或任何回收保护；完成结果可靠保存后仍走既有 probe 收尾规则。
+
+安装版本和 `/healthz=200` 只证明磁盘与服务健康，不证明驻留 JS 已换版。helper 跟随 `current`，
+请求解析仍是启动时的代码；404 需由服务维护方先确认活动 SDK 轮次和待投递消息，再安全换版。
+不得为补验收重建已有 FID 或事后改其来源。上线证据需保存新入口回执，并核对该 FID 的
+`@origin_fid` 和 `@reap_origin`；隔离 fixture 的通过不替代这份证据。
 
 **门** = `bin/fleet_session_gate.py`。每句一条记录先落盘（`$FLEET_CONF_DIR/session-gate/<fid>/`，每句
 一个 delivery id），再交出去，所以服务重启丢不了、也不会发两遍（WD8F ①：一轮在它自己的窗口里跑，
