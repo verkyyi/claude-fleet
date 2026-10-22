@@ -81,6 +81,38 @@ except (OSError,ValueError): pass' "$hub" 2>/dev/null)
   case "$agent" in claude|codex) ;; *) agent=claude ;; esac ;;
 esac
 
+# An exec reply alone does not prove the native queue API used by the web.
+# Select the same release-first CLI as fleet-codex.sh, AS this login, and use
+# the session gate's existing minimum rather than admitting a second version.
+codex_bin=''
+if [ "$agent" = codex ]; then
+  out=$(as_login python3 - "$ROOT" "${FLEET_CODEX_BIN:-}" <<'PYCODEX'
+import os, pathlib, re, shutil, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root / 'bin'))
+try:
+    from fleet_session_gate import CODEX_MIN
+    pinned = root / 'tools/bin/codex'
+    binary = sys.argv[2] or (str(pinned) if os.access(pinned, os.X_OK) else shutil.which('codex'))
+    if not binary:
+        raise ValueError('Codex CLI is missing')
+    result = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=10)
+    version = re.fullmatch(r'codex-cli (\d+)\.(\d+)\.(\d+)', result.stdout.strip())
+    if result.returncode or not version:
+        raise ValueError('Codex CLI version is unknown')
+    if tuple(map(int, version.groups()))[:2] < CODEX_MIN:
+        raise ValueError('Codex CLI ' + version.group(0).split()[-1] +
+                         ' lacks the web queue API; need >= ' + '.'.join(map(str, CODEX_MIN)))
+    print(binary)
+except (ImportError, OSError, ValueError, subprocess.SubprocessError) as error:
+    print(str(error))
+    sys.exit(1)
+PYCODEX
+  ); rc=$?
+  [ "$rc" = 0 ] || fail reply "$(printf '%s' "$out" | oneline)"
+  codex_bin=$out
+fi
+
 # 1 cred — the proxy hands this login a session credential, fail closed.
 out=$(as_login bash "$ROOT/bin/fleet-session-cred.sh" mint --provider "$agent" --sid "$SID" 2>&1); rc=$?
 [ "$rc" = 0 ] || fail cred "fleet-session-cred.sh mint exited $rc: $(printf '%s' "$out" | oneline)"
@@ -124,7 +156,7 @@ if [ "$agent" = codex ]; then
     if [ "$rc" = 0 ] && [ -z "$(tr -d "[:space:]" < "$reply_file")" ]; then echo "Codex answered nothing"; rc=1; fi
     rm -f "$reply_file"
     exit "$rc"' \
-    _ "$port" "$REPLY_SECS" "${FLEET_CODEX_BIN:-codex}" "$mirror" 2>&1); rc=$?
+    _ "$port" "$REPLY_SECS" "$codex_bin" "$mirror" 2>&1); rc=$?
 else
   # shellcheck disable=SC2016 # expanded by the inner bash, as the login
   out=$(printf '%s' "$CRED" | as_login bash -c 'IFS= read -r tok; export CLAUDE_CODE_OAUTH_TOKEN="$tok" ANTHROPIC_BASE_URL="http://127.0.0.1:$1" CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
