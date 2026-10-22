@@ -826,6 +826,8 @@ def wake_ready(pane):
         Path(seed + ".taken").unlink(missing_ok=True)
     park_log(meta.get("fid", ""), "wake", meta.get("why", ""),
              max(0, now() - meta.get("started", now())), "resumed", meta.get("next", 0), meta.get("started", 0))
+    # Also clear for a wrapper already running the previous release's hold page.
+    tmux("", "set-option", "-wu", "-t", pane, "@park_since")
     tmux("", "set-option", "-wu", "-t", pane, "@park_start")
     Path(str(path) + ".claimed").unlink(missing_ok=True)
 
