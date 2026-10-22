@@ -81,9 +81,24 @@ if [ -n "$REAL_TMUX" ]; then
   # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
   # columns 24-28 are the measurement bus (issue #2431), 29 agentstatus= (#2536),
   # 30 test= (#2505), 31 orphanrep= (#3369), 32 pin= (#3517), 33 notices= (T701),
-  # 34 reapwhy= (E101), 35 origin= (PQ41), 36 cantalk= (HHV0) — the last (columns 31-37 went with #3118); 37 park= (RBQG); NF - 16 keeps the previous columns fixed
-  st_eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 37, RBQG); 16 before it as they were" "21 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin= notices= reapwhy=" \
+  # 34 reapwhy= (E101), 35 origin= (PQ41), 36 cantalk= (HHV0) — the last (columns 31-37 went with #3118); 37 park= (RBQG), 38 loop=, 39 nativewait=; NF - 16 keeps the previous columns fixed
+  st_eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 39; first 37 retain their positions); 16 before it as they were" "23 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin= notices= reapwhy=" \
      "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 16, $18, $19, $20, $21, $22, $23, $30, $31, $32, $33, $34 }')"
+
+  # New native facts append after park, without shifting any of the old 37.
+  T set-option -w -t "=$S:draft" @loop "id=repeat@$(( $(date +%s) + 3600 )) cron=repeat@*/5_*_*_*_*"
+  T set-option -w -t "=$S:draft" @claude_wait 'bg,tool'
+  native=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: native facts read failed"
+  st_eq "A: native facts append at columns 38/39" '39|loop=1|nativewait=bg,tool' \
+     "$(printf '%s\n' "$native" | awk -F'\t' '$10 == "draft" { print NF "|" $38 "|" $39 }')"
+  st_eq "A: native facts leave the first 37 fields byte-for-byte unchanged" \
+     "$(printf '%s\n' "$out" | cut -f1-37 | sort)" "$(printf '%s\n' "$native" | cut -f1-37 | sort)"
+  T set-option -w -t "=$S:draft" @loop "id=once@$(( $(date +%s) + 3600 )) at=once@$(( $(date +%s) + 1800 ))"
+  native=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: single wakeup read failed"
+  st_eq "A: a one-shot plan is not a recurring Loop" 'loop=0|nativewait=bg,tool' \
+     "$(printf '%s\n' "$native" | awk -F'\t' '$10 == "draft" { print $38 "|" $39 }')"
+  T set-option -wu -t "=$S:draft" @loop
+  T set-option -wu -t "=$S:draft" @claude_wait
 
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
@@ -146,8 +161,8 @@ if [ -n "$REAL_TMUX" ]; then
   # row ends at orphanrep= (column 31, issue #3369), empty with no orphan report
   T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:draft" @orch_queue 3
   oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
-  st_eq "A: an old seat's @orch_queue → no orchq=, the row has cantalk= followed by park= (issues #3118, #3369, #3517, T701, E101, PQ41, HHV0)" "37|cantalk=|park=" \
-     "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { print NF "|" $36 "|" substr($37, 1, 5) }')"
+  st_eq "A: an old seat's @orch_queue → no orchq=, the row has cantalk= followed by park= (issues #3118, #3369, #3517, T701, E101, PQ41, HHV0)" "39|cantalk=|park=|loop=0|nativewait=" \
+     "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { print NF "|" $36 "|" substr($37, 1, 5) "|" $38 "|" $39 }')"
   for o in @orch_queue @fleet_role; do T set-option -wu -t "=$S:draft" "$o"; done
   # column 31 (issue #3369): the login's unread orphan reports, the same cell on every row
   mkdir -p "$FLEET_CONF_DIR/global"
@@ -183,7 +198,7 @@ if [ -n "$REAL_TMUX" ]; then
   st_eq "A: a no-repo session → its @task_line as title= (#2359)" "title=帮我看下 mac-d 的日志" "$(col17 "$out5" '我的会话')"
   st_eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
   st_eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
-  st_eq "A: …and the line moves no other column (34 columns, #3369, #3517, T701, E101)" "21 reap= detail= role= epic=" \
+  st_eq "A: …and the line moves no other column (39 columns; legacy field positions unchanged)" "23 reap= detail= role= epic=" \
      "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 16, $18, $19, $20, $21 }')"
 
   # A3 (issue #3317): a name the person gave the window beats the issue title and

@@ -40,6 +40,8 @@ class TaskList(unittest.TestCase):
     def test_one_slot_priority_and_quiet_states(self):
         examples = [
             (dict(state="needs", pending_start=True, loop=True), "needs"),
+            (dict(state="blocked", pending_start=True, loop=True), "needs"),
+            (dict(state="blocked"), "needs"),
             (dict(state="working", pending_start=True, loop=True), "pending"),
             (dict(state="working", loop=True), "work"),
             (dict(state="working", running=False, loop=True), "loop"),

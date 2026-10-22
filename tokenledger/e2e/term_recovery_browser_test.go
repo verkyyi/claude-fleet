@@ -19,8 +19,9 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/agent"
 )
 
-// Production console + hub + node adapter + lifecycle helper + native tmux.
-// Only the worker command and menu's row producer are fixtures. No live Fleet,
+// Production Shell and a test-only mount of the actual TerminalView + hub +
+// node adapter + lifecycle helper + native tmux. The worker command and menu's
+// row producer are fixtures; task routes no longer mount terminals. No live Fleet,
 // agent model, account, firewall or host restart is involved.
 func TestTerminalRecoveryChromium(t *testing.T) {
 	// Playwright's installed browser belongs to the runner, while the native

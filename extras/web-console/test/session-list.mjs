@@ -178,4 +178,8 @@ assert.equal(lostPlan.words.length,3, 'details retain last-known request/plan fa
 
 assert.equal(listStatus(R({board:{tag:'starting'}})).kind,'pending', 'old-hub explicit starting is retained');
 assert.equal(listStatus(R({board:{tag:'queued'},task:v1({task_state:'starting'})})).kind,null, 'old board observation beats stale record');
+const exitedWindow = R({id:'exited-window',at:1,group:'gone',live:{state:'exited'},board:{tag:'exited'}});
+assert.deepEqual(listRows([exitedWindow]).open.map(r=>r.id),['exited-window'], 'agent exit alone does not fold a retained live window');
+assert.equal(listRows([exitedWindow]).gone.length,0);
+assert.deepEqual(listRows([{...exitedWindow,live:undefined}]).gone.map(r=>r.id),['exited-window'], 'closed window remains in earlier sessions');
 console.log('ok session-list.mjs');

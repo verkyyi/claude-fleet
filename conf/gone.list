@@ -241,3 +241,7 @@ key FLEET_REAP_BG_GRACE T952
 # PV4D: mixed pending/retained rows are not a scheduler queue.
 re label:.*Queued T966 extras/web-console/src/app/work.ts
 re en:view_grp_queue_fmt.*Queued T966 bin/fleet-ui-lang.sh
+
+# Task pages use the conversation; the independent shell keeps its terminal.
+path extras/web-console/src/app/workspace-view.ts T970
+path extras/web-console/test/workspace-view.mjs T970

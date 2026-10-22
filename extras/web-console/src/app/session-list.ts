@@ -12,7 +12,7 @@ export type ListItem = { ref: string; glyph: Glyph; tone: Tone; title: string; b
 export type ListGroups = { pin: Row[]; open: Row[]; gone: Row[] };
 export function listRows(rows: Row[], previous?: ListGroups): ListGroups {
   const stable = [...rows].sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
-  const older = (r: Row) => r.group === "gone" && !listStatus(r).kind && !listStatus(r).unknown;
+  const older = (r: Row) => r.group === "gone" && !r.live && !listStatus(r).kind && !listStatus(r).unknown;
   const keep = (next: Row[], before: Row[] = []) => {
     const byID = new Map(next.map((r) => [r.id, r]));
     const known = new Set(before.map((r) => r.id));
@@ -79,7 +79,7 @@ export function openFor(born: number, now = Date.now()): string {
 // · how long; the machine only for a person with more than one (会话合一 Y01K:
 // nearly everyone has one home, and its name said nothing).
 export function rowMeta(r: Row, now = Date.now(), machines = 1): string {
-  const where = r.group === "gone" ? tr("更早的会话", "Earlier session") : "";
+  const where = r.group === "gone" && !r.live ? tr("更早的会话", "Earlier session") : "";
   return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), r.board?.context ? tr(...r.board.context) : "", where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
 }
 

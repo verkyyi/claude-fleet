@@ -173,8 +173,7 @@ class Diff(unittest.TestCase):
 
 
 class EpicOnBoard(unittest.TestCase):
-    """C25B: on the board an EPIC opens only onto members in its own group, and
-    they sit right under it — never above it, never a ▸ onto nothing."""
+    """Older board parent/member metadata cannot hide or aggregate task rows."""
 
     def board_epic(self, kid_groups):
         groups = {g: [] for g in v.GROUPS}
@@ -196,24 +195,22 @@ class EpicOnBoard(unittest.TestCase):
         for e in [drv, other] + kids:
             groups[e["group"]].append(e)
         out, out_gone = v.board_apply({"rows": rows}, groups, [], [], "m", "u")
-        v.epic_rehang(out, out_gone)
         items = [e for g in v.GROUPS for e in out[g]]
         return items, drv
 
-    def test_members_right_under(self):
+    def test_all_members_visible_without_driver_expansion(self):
         items, drv = self.board_epic(["work", "work"])
-        self.assertEqual([e["target"] for e in items], ["@1", "@2", "@3", "@9"])
-        self.assertTrue(v.epic_folds(drv))
-        shown = [e["target"] for e in v.visible(items, "", set())]
-        self.assertEqual(shown, ["@1", "@2", "@3", "@9"], "drawn below the EPIC, in the walk order")
-
-    def test_no_member_here_no_mark(self):
-        items, drv = self.board_epic(["ask"])
-        self.assertFalse(v.epic_folds(drv), "no member under it ⇒ no ▸")
-        self.assertEqual([e["target"] for e in items], ["@2", "@1", "@9"])
-        self.assertNotIn("fold", items[0], "a member elsewhere is an ordinary row")
         drv["expanded"] = False
-        self.assertIn("@2", [e["target"] for e in v.visible(items, "", set())], "never hidden by a fold")
+        shown = v.visible(items, "", set())
+        self.assertEqual([e["target"] for e in shown], ["@1", "@9", "@2", "@3"])
+        self.assertTrue(all(not e.get("fold") and not e.get("epic") and not e.get("depth") for e in shown))
+
+    def test_members_in_other_groups_stay_independent(self):
+        items, drv = self.board_epic(["ask"])
+        drv["expanded"] = False
+        shown = v.visible(items, "", set())
+        self.assertEqual([e["target"] for e in shown], ["@2", "@1", "@9"])
+        self.assertTrue(all(not e.get("fold") and not e.get("epic") for e in shown))
 
 
 if __name__ == "__main__":

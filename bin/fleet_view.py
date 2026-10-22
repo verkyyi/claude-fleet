@@ -2509,7 +2509,7 @@ def task_status(e):
     if e.get("lost"):
         return "quiet"
     state = e.get("state")
-    if e.get("needs_input") or e.get("ask") or state == "needs" or e.get("conflict"):
+    if e.get("needs_input") or e.get("ask") or state in ("needs", "blocked") or e.get("conflict"):
         return "needs"
     if e.get("pending_start"):
         return "pending"
