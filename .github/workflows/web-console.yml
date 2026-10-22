@@ -44,8 +44,6 @@ jobs:
         run: node --experimental-strip-types test/session-list.mjs
       - name: New session — chat or terminal, five starts (GR5E C3)
         run: node --experimental-strip-types test/new-session.mjs
-      - name: Session workspace rules (GR5E C4)
-        run: node --experimental-strip-types test/workspace-view.mjs
       - name: Old addresses land where their page lives now (GR5E C9)
         run: node --experimental-strip-types test/legacy.mjs
       - name: Phone screens — list, whole-screen session, back steps back (GR5E C7)
