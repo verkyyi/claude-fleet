@@ -355,6 +355,9 @@ type Agent struct {
 	// renews early once per refusal, not every poll. The lease loop's own.
 	credReported              map[string]bool
 	credRejectionsUnavailable bool
+	// credStoreDown: the last lease's write found the credential proxy's
+	// store not answering (T904) — the wait polls it and leases when it does.
+	credStoreDown bool
 	// credSummary is the last lease's account count line, logged only when it
 	// changes (claude-fleet#3440: a 200 lease with no account said nothing).
 	credSummary string

@@ -314,6 +314,18 @@ fleet_launch_mint() {   # [mint args…]
   else
     px=$(bash "$BIN/fleet-session-cred.sh" mint --provider "$LAUNCH_AGENT" --sid "$FLEET_CRED_SID" "$@"); rc=$?
   fi
+  # A proxy between two lives (T904: the shared one restarts with every release
+  # step — 135 times one day) refuses for a few seconds; wait for it, at most
+  # FLEET_CRED_MINT_WAIT seconds (20), before the refusal below. Only a plain
+  # failure (1) is waited out: 3/4/5 are answers. The credential stays in $px.
+  if [ "$rc" = 1 ]; then
+    local deadline=$((SECONDS + ${FLEET_CRED_MINT_WAIT:-20})) said=0
+    while [ "$rc" = 1 ] && [ "$SECONDS" -lt "$deadline" ]; do
+      [ "$said" = 1 ] || { fleet_launch_say 'the credential proxy is not answering — waiting for it (at most '"${FLEET_CRED_MINT_WAIT:-20}"' s)'; said=1; }
+      sleep 1
+      px=$(bash "$BIN/fleet-session-cred.sh" mint --provider "$LAUNCH_AGENT" --sid "$FLEET_CRED_SID" "$@"); rc=$?
+    done
+  fi
   case "$rc" in
     0) IFS=$'\t' read -r _fl_route _fl_port _fl_cred <<< "$px"; return 0 ;;
     4) return 4 ;;
