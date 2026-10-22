@@ -42,7 +42,7 @@ var appPagePaths = map[string]bool{
 	"/": true, "/usage": true, "/quota": true, "/sessions": true, TasksPagePath: true,
 	"/machines": true, "/connect": true, "/config": true, "/nodes": true,
 	"/subscriptions": true, "/subscriptions/settings": true,
-	"/admin/users": true, "/admin/settings": true, "/admin/audit": true,
+	"/admin/users": true, "/admin/settings": true, "/admin/audit": true, "/admin/emergency": true,
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 	// the new console's own pages, with no old page behind them (EPIC #3923)
@@ -190,6 +190,7 @@ var consolePages = []consolePage{
 	{old: AppPrefix + trainsPagePath, new: AdminPrefix + "/release", side: sideAdmin, owner: "C14"},
 	{old: AppPrefix + "/admin/settings", new: AdminPrefix + "/settings", side: sideAdmin, owner: "C15"},
 	{old: AppPrefix + "/admin/audit", new: AdminPrefix + "/audit", side: sideAdmin, owner: "C15"},
+	{old: AppPrefix + "/admin/emergency", new: AdminPrefix + "/emergency", side: sideAdmin, owner: "WACK C5"},
 }
 
 // consoleRow is the row for path p: an exact old first, else the longest

@@ -114,7 +114,7 @@ func (t *tryStarts) take(now time.Time) bool {
 
 // tryAnswer is what the page reads.
 type tryAnswer struct {
-	State    string `json:"state"`              // ready · opening · waiting · member · tried · day_full · signin · signed_in
+	State    string `json:"state"`              // ready · opening · waiting · member · tried · day_full · halted · signin · signed_in
 	Next     string `json:"next,omitempty"`     // where to go now
 	Position int    `json:"position,omitempty"` // people ahead in line
 	ETASecs  int    `json:"eta_secs,omitempty"` // roughly how long until a seat
@@ -143,6 +143,11 @@ func (s *Server) handleTryStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if s.trialHalted() {
+		// the emergency brake (WACK C5): no new trial, the page says so
+		refuseJSON(w, http.StatusServiceUnavailable, "halted", trialHaltWords(false))
+		return
+	}
 	if _, pid, ok := s.personSession(r); ok {
 		if role, err := s.personRole(pid); err == nil && role != "" {
 			writeJSON(w, http.StatusOK, tryAnswer{State: "signed_in", Next: TryPagePath})
@@ -243,6 +248,12 @@ func (s *Server) tryClaimAs(pid, name string, resume bool, now time.Time) (tryAn
 			return tryAnswer{}, err
 		}
 		return s.tryHome(pid, now)
+	}
+	if s.trialHalted() {
+		// the emergency brake (WACK C5): one holding a machine goes on, no
+		// one new is placed
+		s.trialQueued(pid, trialWaitHalted, now)
+		return tryAnswer{State: "halted"}, nil
 	}
 	if n, err := s.Store.TrialsStartedSince(trialDayStart(now)); err != nil {
 		return tryAnswer{}, err
@@ -453,7 +464,7 @@ var tryTmpl = template.Must(template.New("try").Funcs(pageFuncs(i18n.EN)).Parse(
  data-w-wait="{{t "try.wait"}}" data-w-first="{{t "try.first"}}" data-w-opening="{{t "try.opening"}}"
  data-w-busy="{{t "try.busy"}}" data-w-fail="{{t "try.fail"}}" data-w-min="{{t "try.min"}}"
  data-w-tried="{{t "try.tried"}}" data-w-applied="{{t "try.applied"}}" data-w-apply="{{t "try.apply"}}" data-w-see="{{t "try.see"}}"
- data-w-dayfull="{{t "try.dayfull"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
+ data-w-dayfull="{{t "try.dayfull"}}" data-w-halted="{{t "try.halted"}}" data-w-r-full="{{t "try.r.full"}}" data-w-r-busy="{{t "try.r.busy"}}"
  data-w-r-load="{{t "try.r.load"}}" data-w-r-quota="{{t "try.r.quota"}}" data-w-r-nosub="{{t "try.r.nosub"}}"
  data-w-r-no_spare="{{t "try.r.no_spare"}}" data-w-reach="{{t "try.reach"}}"
  data-w-r-byo="{{t "try.r.byo"}}" data-w-own="{{t "try.own"}}"
@@ -547,7 +558,7 @@ const tryScript = `(function () {
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (x) {
         if (x.ok && x.j.next) { location.assign(x.j.next); return; }
-        say(x.j.code === "busy" ? w("busy") : w("fail")); go.disabled = false;
+        say(x.j.code === "busy" ? w("busy") : x.j.code === "halted" ? w("halted") : w("fail")); go.disabled = false;
       })
       .catch(function () { say(w("fail")); go.disabled = false; });
   };
@@ -589,6 +600,7 @@ const tryScript = `(function () {
           go.textContent = w("own"); go.disabled = false;
           return;
         }
+        if (j.state === "halted") { say(w("halted")); setTimeout(function () { claim(false); }, 30000); return; }
         if (j.state === "day_full") { say(w("dayfull")); setTimeout(function () { claim(false); }, 60000); return; }
         var mins = Math.max(1, Math.round((j.eta_secs || 60) / 60));
         var why = j.reason ? w("r-" + j.reason) : "";
@@ -630,6 +642,7 @@ func init() {
 			i18n.ZhCN: "这个账号已经试用过了，你的申请也已经交了。在「我的申请」里看进度。"},
 		"try.apply":   {i18n.EN: "Apply to use it", i18n.ZhCN: "申请使用"},
 		"try.see":     {i18n.EN: "See my application", i18n.ZhCN: "看我的申请"},
+		"try.halted":  {i18n.EN: "Trials are paused — try again later.", i18n.ZhCN: "试用暂停，稍后再来。"},
 		"try.dayfull": {i18n.EN: "Today's trials are all taken. Come back tomorrow — or apply to use it now.", i18n.ZhCN: "今天的试用名额满了。明天再来，或者现在就申请使用。"},
 		"try.r.full":  {i18n.EN: "Every trial seat is taken.", i18n.ZhCN: "试用名额都在用。"},
 		"try.r.busy":  {i18n.EN: "The machines are busy right now.", i18n.ZhCN: "机器这会儿正忙。"},

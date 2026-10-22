@@ -387,3 +387,14 @@ export type TrialCodesList = {
   burst: number;
   temp_days_max: number;
 };
+
+// 紧急开关 (WACK C5): GET / POST /v1/admin/emergency {action, target?, reason?}
+export type EmergencyAction = "trial_stop" | "trial_resume" | "code_disable" | "person_stop" | "machine_pause";
+export type EmergencyView = {
+  trial: { stopped: boolean; by?: string; at?: string; reason?: string; saw: number; trying: number };
+  codes: { id: string; channel: string; state: "live" | "stopped" | "paused"; granted: number }[];
+  people: { principal: string; login: string; role?: string; trial?: boolean; sessions: number }[];
+  stopped: { principal: string; login: string; by?: string; at?: string; sessions: number }[];
+  machines: { hostname: string; status: string; paused: boolean; sessions: number; since?: string; by?: string }[];
+  done?: { action: EmergencyAction; target?: string; outcome: string; sessions?: number; stopped?: number; devices?: number };
+};

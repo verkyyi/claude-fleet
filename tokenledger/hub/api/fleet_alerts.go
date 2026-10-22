@@ -88,6 +88,8 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 			go s.SweepTrialSlots(now)
 			// 试用日报 at 09:00 Beijing, and trial_spend's held pushes (WACK C6).
 			go s.TrialSpendTick(now)
+			// A person the 紧急开关 stopped stays stopped (WACK C5).
+			go s.EmergencySweep(now)
 		}
 	}
 }

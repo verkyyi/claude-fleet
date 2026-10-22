@@ -376,3 +376,12 @@ func (s *Store) TrialGrantByOpenID(openid string) (*TrialGrant, error) {
 	}
 	return &gs[0], nil
 }
+
+// TrialScanOutcomesSince is how many WeChats a scan was answered outcome
+// since t (the emergency brake's 「期间 N 人看到暂停页」, WACK C5).
+func (s *Store) TrialScanOutcomesSince(outcome string, since time.Time) (int, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(DISTINCT openid) FROM fleet_trial_scans WHERE outcome = ? AND at >= ?`,
+		outcome, since.Unix()).Scan(&n)
+	return n, err
+}

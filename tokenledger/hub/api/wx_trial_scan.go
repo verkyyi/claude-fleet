@@ -75,6 +75,7 @@ const (
 	qrDaily   = "daily"
 	qrRefused = "refused"
 	qrAgain   = "again"
+	qrHalted  = "halted" // the emergency brake (WACK C5)
 )
 
 func init() {
@@ -231,6 +232,9 @@ func (s *Server) trialScanDecide(ctx context.Context, code *store.TrialCode, u w
 		if role, _ := s.personRole(pid); role == roleUser || role == roleAdmin {
 			return s.personAnswer(lang, pid, now) // on the list already
 		}
+	}
+	if s.trialHalted() {
+		return text(qrHalted) // the emergency brake: no one new, the code untouched
 	}
 	switch {
 	case code.State != store.TrialCodeLive:
@@ -586,6 +590,8 @@ func (s *Server) qrText(lang, outcome string, code *store.TrialCode) string {
 	case qrDaily:
 		return ternary(en, "Today's trials are all given out. Scan again tomorrow.",
 			"今天的试用名额发完了，明天再扫一次就好。")
+	case qrHalted:
+		return trialHaltWords(en)
 	case qrPending:
 		return ternary(en, "Got it — your request to try "+Brand+" is with us. The answer comes to this chat.",
 			"收到，你的 "+Brand+" 试用申请已提交，结果会推到这里。")
@@ -622,7 +628,7 @@ func (s *Server) trialQueuePass(ctx context.Context, now time.Time) {
 		if now.Sub(g.ScannedAt) > qrQueueMax {
 			continue
 		}
-		if s.qrHold(now) != "" {
+		if s.qrHold(now) != "" || s.trialHalted() {
 			return
 		}
 		if n, err := s.Store.TrialGrantedSince("", trialDayStart(now)); err != nil || n >= s.qrDaily() {

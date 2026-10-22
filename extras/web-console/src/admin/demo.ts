@@ -1,7 +1,7 @@
 // demo.ts — the prototype's hub (EPIC #3923 rule 14): the real reads' shapes
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
-import type { AccessRequest, ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, NoticeMember, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, ServiceNotice, TeamUsage, TrainRun, TrialCode, TrialCodeDetail, TrialFunnel, TrialSpend, TrialSpendPerson } from "./api";
+import type { AccessRequest, ApiInit, Credential, EmergencyAction, EmergencyView, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, NoticeMember, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, ServiceNotice, TeamUsage, TrainRun, TrialCode, TrialCodeDetail, TrialFunnel, TrialSpend, TrialSpendPerson } from "./api";
 import { demoMachines } from "./machines/demo";
 import { demoPool, poolSettings } from "./poolDemo";
 import { entryDemo } from "./demo-entry";
@@ -304,6 +304,23 @@ const trialPeople = (c: TrialCode): TrialCodeDetail["people"] =>
     granted_at: ago(60 * (i + 1) * 7), first_at: i < 4 ? new Date(Date.parse(ago(60 * (i + 1) * 7)) + (40 + i * 9) * 1000).toISOString() : ZERO,
   }));
 
+// 紧急开关's state (WACK C5)
+let emergency: EmergencyView | null = null;
+const emergencyDemo = (stopped: boolean): EmergencyView => ({
+  trial: stopped ? { stopped: true, by: "zhouning", at: ago(18), saw: 3, trying: 14 } : { stopped: false, saw: 0, trying: 14 },
+  codes: [
+    { id: "tc-salon", channel: "线下沙龙 · 深圳", state: "live", granted: 38 },
+    { id: "tc-wechat", channel: "公众号推文", state: "live", granted: 61 },
+    { id: "tc-old", channel: "九月活动", state: "stopped", granted: 12 },
+  ],
+  people: users.filter((x) => x.role !== "admin").map((x, i) => ({ principal: x.principal_id, login: x.login, role: x.role, trial: i === 1, sessions: [2, 1, 0, 0][i] ?? 0 })),
+  stopped: [],
+  machines: [
+    { hostname: "mac-mini", status: "online", paused: false, sessions: 9 },
+    { hostname: "mac-studio", status: "online", paused: false, sessions: 4 },
+  ],
+});
+
 const wait = (ms = 250) => new Promise((r) => setTimeout(r, ms));
 const scenario = () => (window as any).__DEMO_SCENARIO || new URLSearchParams(location.search).get("demo") || "";
 
@@ -380,6 +397,29 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
       return { ...done, people: trialPeople(done) };
     }
     return { ...c, people: trialPeople(c) };
+  }
+  if (u.pathname === "/v1/admin/emergency") {
+    // 紧急开关 (WACK C5): ?demo=stopped opens with new trials stopped,
+    // ?demo=pressfail fails every press
+    if (!emergency) emergency = emergencyDemo(scenario() === "stopped");
+    if (method === "POST") {
+      if (scenario() === "pressfail") throw Object.assign(new Error("504 Gateway Timeout"), { status: 504 });
+      const a = String(body.action || "");
+      const v: EmergencyView = structuredClone(emergency);
+      if (a === "trial_stop") v.trial = { ...v.trial, stopped: true, by: "zhouning", at: new Date().toISOString(), saw: 0 };
+      if (a === "trial_resume") v.trial = { ...v.trial, stopped: false, by: undefined, at: undefined, saw: 0 };
+      if (a === "code_disable") v.codes = v.codes.map((c) => (c.id === body.target ? { ...c, state: "stopped" } : c));
+      if (a === "person_stop") {
+        const p = v.people.find((x) => x.principal === body.target);
+        v.people = v.people.filter((x) => x.principal !== body.target);
+        if (p) v.stopped = [{ principal: p.principal, login: p.login, by: "zhouning", at: new Date().toISOString(), sessions: 0 }, ...v.stopped];
+        v.done = { action: "person_stop", target: String(body.target), outcome: "ok", sessions: p?.sessions || 0, stopped: p?.sessions || 0 };
+      }
+      if (a === "machine_pause") v.machines = v.machines.map((m) => (m.hostname === body.target ? { ...m, paused: true, by: "zhouning", since: new Date().toISOString() } : m));
+      emergency = { ...v, done: v.done || { action: a as EmergencyAction, outcome: "ok" } };
+      return emergency;
+    }
+    return emergency;
   }
   if (u.pathname === "/v1/admin/notices") {
     const today = notices.filter((n) => Date.now() - Date.parse(n.created_at) < 86400_000).length;

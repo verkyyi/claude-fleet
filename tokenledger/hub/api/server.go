@@ -753,6 +753,8 @@ func (s *Server) routes() *routeMux {
 		// 管理侧「试用二维码」(claude-fleet MRGB): the same 404 to a member.
 		mux.Handle(AdminTrialCodesPath, s.viewerOnly(http.HandlerFunc(s.handleAdminTrialCodes)))
 		mux.Handle(adminTrialCodesPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminTrialCodes)))
+		// 紧急开关 (WACK C5): an admin's only, 403 to anyone else.
+		mux.Handle(AdminEmergencyPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminEmergency))))
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
