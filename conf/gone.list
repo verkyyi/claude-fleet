@@ -231,3 +231,5 @@ func latest_park_rss T940 bin/
 
 # C6: waiting uses the one parker, no separate E101 close timer.
 func park_secs T952 bin/fleet-cleanup-idle.py
+# Looking at a parked window must not wake its agent (G1YC C2).
+re --why\s+切换 T948 bin/fleet-session-wrap.sh

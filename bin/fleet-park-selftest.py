@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # selftest-entry
 """Drive fleet_session_gate.py, fleet-cleanup-idle.sh / .py, fleet-session-wrap.sh and
-fleet-status-7501.py on an isolated tmux socket: one window / fid / conversation,
+fleet-status-7501.py and fleet-park-page.py on an isolated tmux socket: one window / fid / conversation,
 real process exit, every origin, drafts / watched / jobs / legacy wrapper held.
 The native prompt proof is replaced only for the fake assistant (no model).
 """
@@ -69,6 +69,7 @@ class Park(unittest.TestCase):
         self.sid = '11111111-2222-4333-8444-555555555555'
         fake = self.root / 'fake.py'
         fake.write_text(r'''import os,sys,tty
+print('\x1b[2J\x1b[Hlast answer: preserved\r\nsecond line: 中文',flush=True)
 print('fake ready\x1b]7501;state=idle:app=claude-code\x1b\\',flush=True)
 tty.setraw(0)
 b=b''
@@ -76,16 +77,27 @@ while True:
  c=os.read(0,4096)
  if not c: break
  b+=c
- if b'/exit\r' in b: break
+ if b'/exit\r' in b:
+  print('\x1b[2J\x1b[Hagent exit screen',flush=True)
+  break
 ''')
+        record = self.root / 'record.py'
+        record.write_text('import json,sys\nfrom pathlib import Path\n'
+                          'with Path(__file__).with_name("argv").open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
                           'printf "%s\\n" "$@" >> ' + str(self.root / 'launch-args') + '\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
+                          'python3 ' + str(record) + ' "$@"\n' +
+                          '[ ! -f ' + str(self.root / 'fail') + ' ] || { echo resume-failed; exit 1; }\n' +
                           'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + '\n')
         launch.chmod(0o755)
         self.env['FLEET_WRAP_LAUNCH'] = str(launch)
+        loc = self.root / 'locate'
+        loc.write_text('#!/bin/sh\ntmux display-message -p -t "$TMUX_PANE" "' + self.label + '\t#{window_id}"\n')
+        loc.chmod(0o755)
+        self.env['FLEET_GATE_WIN_CMD'] = str(loc)
         # new-window inherits its server environment; pass only fixture settings.
         import shlex
         cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
@@ -233,6 +245,91 @@ while True:
         self.assertEqual([r['act'] for r in rows], ['park', 'wake'])
         self.assertEqual(rows[0]['fid'], self.fid)
         self.assertEqual(rows[0]['rss_mb'], observed['saved_mb'])
+
+    def test_park_screen_and_keyboard_sentence(self):
+        self.fake()
+        self.wait(lambda: 'last answer: preserved' in self.tm('capture-pane', '-p', '-t', self.win))
+        before = self.tm('capture-pane', '-p', '-t', self.win).split('\n')
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        after = self.tm('capture-pane', '-p', '-t', self.win).split('\n')
+        self.assertEqual(after[:-1], (before + [''] * len(after))[:len(after)-1])
+        self.assertIn('已停放', after[-1])
+        # A real terminal client (not control mode): merely selecting must not wake.
+        import pty
+        master, slave = pty.openpty()
+        client = subprocess.Popen(['tmux', '-L', self.label, 'attach-session', '-t', 'test'],
+                                  stdin=slave, stdout=slave, stderr=slave,
+                                  env=dict(self.env, TERM='xterm-256color'))
+        self.addCleanup(lambda: client.wait(timeout=5))
+        self.addCleanup(client.terminate)
+        self.addCleanup(lambda: os.close(master))
+        self.addCleanup(lambda: os.close(slave))
+        self.tm('select-window', '-t', self.win)
+        time.sleep(1.2)
+        self.assertTrue(self.opt('@park_held'), 'viewing resumed the parked agent')
+        self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
+        time.sleep(.4)
+        self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')
+        self.assertGreater(int(self.opt('@park_presence')), 0)
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(gate.wake(self.fid, why='消息', request_only=True).get('why'), 'draft')
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        args = json.loads((self.root / 'argv').read_text().splitlines()[-1])
+        self.assertEqual(args[-1], '接着解释 café')
+        self.assertIn(self.sid, args)
+
+    def test_wake_failure_keeps_sentence_for_new_chat(self):
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        (self.root / 'fail').touch()
+        self.tm('send-keys', '-t', self.win, '-l', 'keep this sentence')
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: '接回失败' in self.tm('capture-pane', '-p', '-t', self.win))
+        self.assertIn('keep this sentence', self.tm('capture-pane', '-p', '-t', self.win))
+        (self.root / 'fail').unlink()
+        self.tm('send-keys', '-t', self.win, 'n')
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        args = json.loads((self.root / 'argv').read_text().splitlines()[-1])
+        self.assertEqual(args[-1], 'keep this sentence')
+        self.assertNotIn('--resume', args)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+
+    def narrow_hint(self, language, hint):
+        self.env['FLEET_UI_LANG'] = language
+        self.fake()
+        self.tm('set-option', '-w', '-t', self.win, 'window-size', 'manual')
+        self.tm('resize-window', '-t', self.win, '-x', '39', '-y', '24')
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        rows = self.tm('capture-pane', '-p', '-N', '-t', self.win).splitlines()
+        # -N keeps the space before a wrapped wide character, plus tmux's
+        # physical-cell padding; compare the visible words with that padding folded.
+        self.assertEqual(' '.join(''.join(rows[-2:]).split()), hint)
+
+    def test_narrow_english_hint_wraps(self):
+        self.narrow_hint('en', '· parked · just type — Enter resumes it (~2 s)')
+
+    def test_narrow_chinese_hint_wraps(self):
+        self.narrow_hint('zh', '· 已停放 · 直接打字，回车即接回（约 2 秒）')
+
+    def test_keyboard_retry_preserves_paste_and_literal_keys(self):
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        (self.root / 'fail').touch()
+        sentence = 'new question: r n q 中文\nsecond line\n'
+        self.tm('send-keys', '-t', self.win, '-l', '\x1b[200~' + sentence + '\x1b[201~')
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: '接回失败' in self.tm('capture-pane', '-p', '-t', self.win))
+        (self.root / 'fail').unlink()
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        args = json.loads((self.root / 'argv').read_text().splitlines()[-1])
+        self.assertEqual(args[-1], sentence)
+        self.assertIn(self.sid, args)
 
     def test_unknown_rss_clears_previous_sample_and_census_stays_unknown(self):
         import fleet_park_metrics as metrics

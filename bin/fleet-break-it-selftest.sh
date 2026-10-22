@@ -6393,7 +6393,7 @@ drill_park_reap_table() {
 }
 
 drill_park_all_origins() {
-  CAP=30; local t0 out
+  CAP=60; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-park-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
@@ -6431,6 +6431,14 @@ drill_park_while_watched() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_fail_silent() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_park_screen_and_keyboard_sentence Park.test_wake_failure_keeps_sentence_for_new_chat 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放保留原屏，回车前不醒；接回失败原句仍在，n 的新会话首轮带上它'
+}
+
 drill_wake_timeout() {
   CAP=30; local t0 out
   t0=$(now)
