@@ -32,8 +32,11 @@ for (const lang of ['zh', 'en']) {
  assert.ok(idle.includes(lang === 'zh' ? '有人在看着 1 · 跑着后台命令 1' : 'being viewed 1 · background job 1'));
 }
 assert.match(draw({ ...r, sessions_idle: 1, idle_rss_mb: null }), /内存读不到/);
-assert.match(draw({ ...r, parked_saved_mb: null }), /节省量未采到/);
-assert.match(draw({ ...r, parked_saved_mb: null }, 'en'), /savings unavailable/);
+for (const lang of ['zh', 'en']) {
+ const missing = draw({ ...r, parked_saved_mb: null }, lang);
+ assert.ok(missing.includes(lang === 'zh' ? '已停放 4' : '4 parked'));
+ assert.doesNotMatch(missing, /省|saved|savings|GB|未采到/);
+}
 assert.match(draw({ ...r, idle_eligible: null }), /可停空闲待采样/);
 assert.match(draw({ ...r, idle_eligible: null }, 'en'), /park eligibility pending/);
 console.log('park metrics component: bilingual, absent, zero and 390px grouping PASS');

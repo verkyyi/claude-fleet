@@ -114,7 +114,7 @@ while True:
             result = gate.park(self.fid)
         self.assertTrue(result.get('ok'), result)
         self.assertTrue(self.opt('@park_held'))
-        self.assertEqual(self.opt('@park_state'), '停放中')
+        self.assertFalse(self.opt('@park_state'))
         self.assertEqual(self.opt('@park_since'), self.opt('@parked'))
         self.assertEqual(self.opt('@fleet_id'), self.fid)
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
@@ -135,7 +135,8 @@ while True:
             result = gate.wake(self.fid, why='消息')
         self.assertTrue(result.get('ok'), result)
         self.wait(lambda: self.opt('@park_relay'))
-        self.wait(lambda: not self.opt('@park_state'))
+        self.assertFalse(self.opt('@parked'))
+        self.assertFalse(self.opt('@park_held'))
         self.assertFalse(self.opt('@park_since'), 'wake retained a stale parked timestamp')
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
@@ -154,7 +155,7 @@ while True:
         self.assertFalse(self.opt('@park_saved_mb'), 'old RSS was presented as this park sample')
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
         self.assertIsNone(rows[-1]['rss_mb'])
-        self.assertEqual(self.opt('@park_state'), '停放中')
+        self.assertFalse(self.opt('@park_state'))
         # Replay the <=3.4 command boundary as well as this host's native one.
         command = metrics.command
         def escaped_rows(args):

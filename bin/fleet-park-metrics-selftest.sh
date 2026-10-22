@@ -13,17 +13,24 @@ mkdir -p "$WORK/bin" "$WORK/conf/fleets/census/repos" "$WORK/conf/logs" "$WORK/f
 cat > "$WORK/fake/tmux" <<'SH'
 #!/bin/sh
 fixture_dir=$(dirname "$0")
-control=1; state=停放中
+control=1; parked=1; held=1; saved=2048
 [ ! -f "$fixture_dir/control" ] || control=$(cat "$fixture_dir/control")
-[ ! -f "$fixture_dir/state" ] || state=$(cat "$fixture_dir/state")
+[ ! -f "$fixture_dir/parked" ] || parked=$(cat "$fixture_dir/parked")
+[ ! -f "$fixture_dir/held" ] || held=$(cat "$fixture_dir/held")
+[ ! -f "$fixture_dir/saved" ] || saved=$(cat "$fixture_dir/saved")
 case "$*" in
   *has-session*) exit 0 ;;
   *list-clients*) printf '%s\037@2\n' "$control" ;;
   *list-windows*)
     case "$*" in
-      *park_state*)
+      *park_saved_mb*)
         case "$*" in *'#{@park_saved_mb}'*'#{@park_wrap_ver}'*'#{@park_since}'*) ;; *) exit 1 ;; esac
-        printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "$state";;
+        case "$*" in
+          *park_state*)
+            printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\037\n@2\037200\037worker\037two\037\037\0371\037\037fid2\037\n@3\037300\037worker\037three\037\037%s\0371\037\037fid3\037idle\n' "$saved";;
+          *)
+            printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\037\037\037\n@2\037200\037worker\037two\037\037\0371\037\037fid2\037\037\037\n@3\037300\037worker\037three\037%s\037%s\0371\0371\037fid3\037idle\037%s\037\n' "$parked" "$saved" "$held";;
+        esac;;
       *ctx_left*) printf '@1\t=\t=\t=\t=\t=\t=\t=\n@2\t=\t=\t=\t=\t=\t=\t=\n@3\t=\t=\t=\t=\t=\t=\t=\n';;
       *pane_current_path*) printf '@1\t/tmp/scratch-1\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@2\t/tmp/scratch-2\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@3\t/tmp/scratch-3\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n';;
       *cc_agent*loop*) exit 0 ;;
@@ -46,7 +53,7 @@ export PATH="$WORK/fake:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CON
 export PYTHONPATH="$BIN" PARK_TEST_WORK="$WORK"
 # Test the actual adapter and one parser with 37 columns, rather than making the
 # controller's JSON response ourselves. Existing 34-column rows remain accepted.
-printf '{"ts":"2026-10-21T12:00:00Z","fid":"fid3","act":"park","rss_mb":2048}\n' > "$WORK/conf/logs/park.ndjson"
+printf '{"ts":"2026-10-21T12:00:00Z","fid":"fid3","act":"park","rss_mb":9999}\n' > "$WORK/conf/logs/park.ndjson"
 bash "$BIN/fleet-control-read.sh" workers census > "$WORK/workers"
 python3 - <<'PY' || st_fail 'production census assertion'
 import json, os, time
@@ -75,7 +82,6 @@ assert joined(quiet=None)['eligible'] is None
 assert joined(quiet=False)['eligible'] is False
 assert joined()['eligible'] is True
 assert set(joined()) == {'state','rss_mb','saved_mb','why','eligible'}
-from fleet_park_metrics import latest_park_rss
 w = Path(os.environ['PARK_TEST_WORK'])
 lines = (w/'workers').read_text().splitlines()
 assert len(lines) == 3, lines
@@ -115,14 +121,21 @@ assert (viewed['sessions_idle'], viewed['sessions_working'], viewed['idle_rss_mb
 assert viewed['idle_eligible'] == viewed['idle_eligible_rss_mb'] == 0, viewed
 assert viewed['idle_reasons']['watched'] == 1, viewed
 (w/'fake/control').unlink()
-# Before C1 stamps @park_state, even a saved RSS value never invents parking.
-(w/'fake/state').write_text('')
-assert ctl.workers(fleet)['park_metrics']['sessions_parked'] == 0
-(w/'fake/state').unlink()
-# No ledger row: use C1's @park_saved_mb stamp, not an invented RSS name.
+# HHV0 requires both intent and a confirmed holding page; either alone is awake.
+for marker in ('parked', 'held'):
+    (w/'fake'/marker).write_text('')
+    assert ctl.workers(fleet)['park_metrics']['sessions_parked'] == 0
+    (w/'fake'/marker).unlink()
+# A stale ledger cannot replace an absent or invalid C1 pre-park snapshot.
+for value in ('', '-1', 'NaN'):
+    (w/'fake/saved').write_text(value)
+    missing = ctl.workers(fleet)['park_metrics']
+    assert missing['sessions_parked'] == 1 and missing['parked_saved_mb'] is None, missing
+(w/'fake/saved').unlink()
+# Snapshot savings do not depend on an action book being present.
 book = w/'conf/logs/park.ndjson'
 book.unlink()
-assert ctl.workers(fleet)['park_metrics']['parked_saved_mb'] == 9999
+assert ctl.workers(fleet)['park_metrics']['parked_saved_mb'] == 2048
 book = w/'conf/logs/park.ndjson'
 book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T12:00:00Z','fid':'fid3','act':'park','rss_mb':2048},
@@ -132,16 +145,8 @@ book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T14:00:00Z','act':'fail'},
  {'ts':'2026-10-21T14:00:01Z','act':'deferred'},
  {'ts':'2026-10-20T14:00:01Z','act':'wake','secs':100,'result':'ok'}])+'\ninvalid\n')
-assert latest_park_rss(book) == {'fid3':2048}, latest_park_rss(book)
 d=daily(book,'2026-10-21')
 assert (d['park'],d['wake'],d['fail'],d['deferred'],d['p50'],d['p95'],d['scheduled'],d['on_time_rate']) == (1,3,1,1,3,5,2,.5),d
-# Appended park actions replace older RSS; wake/fail rows never replace it.
-last = w/'last.ndjson'
-last.write_text('\n'.join(json.dumps(r) for r in [
- {'fid':'f','act':'park','rss_mb':512}, {'fid':'f','act':'wake','rss_mb':0},
- {'fid':'f','act':'park','rss_mb':256}, {'fid':'f','act':'fail'},
- {'fid':'g','act':'park','rss_mb':2048}, {'fid':'g','act':'park'}]))
-assert latest_park_rss(last) == {'f':256,'g':None}, latest_park_rss(last)
 PY
 # Drive doctor's real --park entry using the real Control inventory and adapter.
 row=$(sh "$BIN/fleet-doctor.sh" --park)
