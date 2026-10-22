@@ -424,8 +424,10 @@ def codex_real_home(home, recovery=None):
         if owned(record).st_size > 16384:
             raise ValueError('invalid proxy session record')
         fields = dict(line.split('=', 1) for line in record.read_text().splitlines() if '=' in line)
-        central = recovery is not None and fields.get('route') == 'central' and fields.get('hub_id')
-        if (fields.get('provider') != 'codex' or (not central and fields.get('account') != label)
+        pooled = recovery is not None and (
+            (fields.get('route') == 'central' and fields.get('hub_id'))
+            or (fields.get('route') == 'direct' and fields.get('account') == 'proxy'))
+        if (fields.get('provider') != 'codex' or (not pooled and fields.get('account') != label)
                 or (recovery is not None and (path.name != recovery.get('sid')
                     or any(fields.get(k) != v for k, v in recovery.items() if k != 'sid')))):
             raise ValueError('real home differs from the proxy session account')

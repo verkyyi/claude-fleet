@@ -22,9 +22,12 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shlex
+import shutil
 import subprocess
 import sys
 import time
+import tempfile
 
 import fleet_session_fallback as fallback
 
@@ -396,7 +399,7 @@ def quota_dialog_stop(session, pane, sid):
         raise
 
 
-def quiet_processes(source, background=None):
+def quiet_processes(source, background=None, rpc_timeout=5):
     # The same exact executable/endpoint and restartable-MCP contract as
     # hibernation, for both agents (#784/#808/#830).
     sleep = runpy.run_path(str(BIN / 'fleet_worker_life.py'))
@@ -404,6 +407,8 @@ def quiet_processes(source, background=None):
         rpc = RPC(source['codex_identity'].get('remote', ''), timeout=5)
         try: sleep['quiet_native_children'](rpc, source['session_id'])
         finally: rpc.close()
+    if rpc_timeout != 5:
+        return sleep['quiet_processes'](source, background=background, rpc_timeout=rpc_timeout)
     if background is None:
         return sleep['quiet_processes'](source)
     return sleep['quiet_processes'](source, background=background)
@@ -413,6 +418,353 @@ def process_start(pid):
     try: fields = run(['ps', '-p', str(pid), '-o', 'stat=', '-o', 'lstart=']).split(None, 1)
     except (subprocess.CalledProcessError, OSError): return '', ''
     return fields[0], (fields[1] if len(fields) > 1 else '')
+
+
+def missing_hook_paths(argv):
+    """Read only native inline hook commands, never prompts or credentials."""
+    missing = set()
+    for value in argv:
+        if not value.startswith('hooks.'):
+            continue
+        for quoted in re.findall(r'command\s*=\s*("(?:[^"\\]|\\.)*")', value):
+            command = shlex.split(json.loads(quoted))
+            for word in command:
+                path = Path(word)
+                if (path.is_absolute() and path.suffix in ('.py', '.sh')
+                        and not path.exists()):
+                    missing.add(str(path))
+    return sorted(missing)
+
+
+def repairable_loop(value, source):
+    """Only a proven pre-send missing-helper pause may regain its old timer."""
+    if (value.get('status') != 'paused' or value.get('thread_id') != source['session_id']
+            or value.get('home') != source['home'] or value.get('worktree') != source['worktree']
+            or not value.get('id') or value.get('pending_delivery')):
+        raise ValueError('loop is not this exact paused maintenance owner')
+    if (value.get('last_attempt', {}).get('state') != 'accepted'
+            or not re.fullmatch(r"\[Errno 2\] No such file or directory: '[^']+/bin/fleet-input\.py'",
+                                value.get('detail', ''))):
+        raise ValueError('loop delivery is unknown or not a pre-send missing-helper failure')
+    if value['schedule'].get('jobs') or type(value['schedule'].get('interval_seconds')) is not int:
+        raise ValueError('maintenance requires the original single interval timer')
+
+
+def native_hook_flags(source):
+    life = runpy.run_path(str(BIN / 'fleet_worker_life.py'))
+    rows = TRANSFER['process_rows']()
+    pending, children, flags = [source['pid']], [], []
+    while pending:
+        pid = pending.pop()
+        children.append(pid)
+        flags.extend(a for a in life['ARGV']['process_argv'](pid) if a.startswith('hooks.'))
+        pending.extend(p for p, row in rows.items() if row[0] == pid and p not in children)
+    return flags, children
+
+
+def repair_model_menu(screen):
+    """A narrow native reminder with an explicit back action, never approval."""
+    lines = [s.strip() for s in screen.splitlines() if s.strip()]
+    if len(lines) < 6:
+        return None
+    tail = lines[-6:]
+    if (tail[0] == 'Approaching rate limits'
+            and re.fullmatch(r'Switch to [A-Za-z0-9_.-]+ for lower credit usage\?', tail[1])
+            and re.fullmatch(r'[›❯] 1\. Switch to [A-Za-z0-9_.-]+\s+Fast and affordable model for easier tasks\.', tail[2])
+            and tail[3] == '2. Keep current model'
+            and tail[4] == '3. Keep current model (never show again)  Hide future rate limit reminders about switching models'
+            and tail[5] == 'enter select · esc back'):
+        return screen.strip()
+    return None
+
+
+def repair_menu_cancel(session, pane, fid, sid, proof, receipt):
+    """One external back action, followed by an independent composer proof."""
+    if receipt.exists():
+        raise ValueError('model reminder return already attempted; no repeated keys')
+    if repair_check(session, pane, fid, sid, allow_menu=True) != proof:
+        raise ValueError('model reminder changed before return')
+    with receipt.open('x') as out:
+        os.chmod(receipt, 0o600)
+        json.dump(dict(state='cancelling', proof=proof), out)
+        out.flush(); os.fsync(out.fileno())
+    directory = os.open(receipt.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    run(['tmux', '-L', session, 'send-keys', '-t', proof['source']['pane'], 'Escape'],
+        env=dict(os.environ, FLEET_ALLOW_SENDKEYS='1'))
+    time.sleep(0.2)
+    after = repair_check(session, pane, fid, sid)
+    fixed = lambda value: {k:v for k,v in value.items() if k not in ('input', 'model_menu')}
+    if fixed(after) != fixed(proof):
+        raise ValueError('source changed while returning from model reminder')
+    save(receipt, dict(state='returned', proof=proof, after=after))
+    return after
+
+
+def repair_check(session, pane, fid, sid, allow_menu=False):
+    source = inspect(session, pane)
+    opt = lambda fmt: run(['tmux', '-L', session, 'display-message', '-p', '-t', source['pane'], fmt])
+    if source['agent'] != 'codex' or source['session_id'] != sid or opt('#{@fleet_id}') != fid:
+        raise ValueError('maintenance source FID/SID/agent changed')
+    if opt('#{window_panes}') != '1' or opt('#{@parked}#{@park_start}#{@agent_transfer_request}'):
+        raise ValueError('maintenance source has another pane/transition')
+    if opt('#{@handoff_armed}') or int(opt('#{@agent_transfer_until}') or 0) > time.time():
+        raise ValueError('source has an unresolved transition')
+    from fleet_native_proc import process
+    flags, children = native_hook_flags(source)
+    missing = missing_hook_paths(flags)
+    if not missing:
+        raise ValueError('native process has no proven missing inline hook')
+    store = BIN.resolve().parent.parent
+    for item in missing:
+        try:
+            relative = Path(item).resolve().relative_to(store)
+        except ValueError:
+            raise ValueError('missing hook is outside the managed release store') from None
+        if (not re.fullmatch('[0-9a-f]{12,40}', relative.parts[0])
+                or not (BIN.resolve().parent/Path(*relative.parts[1:])).is_file()):
+            raise ValueError('current release cannot repair the missing managed hook')
+    t = native_thread(source)
+    codex_quiet(t)
+    if t.get('status', {}).get('type') != 'idle':
+        raise ValueError('maintenance requires native idle')
+    view = runpy.run_path(str(BIN / 'fleet-input.py'))['snapshot'](session, source['pane'], agent='codex')
+    menu = None
+    if view.get('state') != 'empty' or view.get('busy'):
+        if allow_menu:
+            menu = repair_model_menu(run(['tmux', '-L', session, 'capture-pane', '-p', '-t', source['pane']]))
+        if not menu:
+            raise ValueError('maintenance input is not proven empty; source retained')
+    rpc = RPC(source['codex_identity']['remote'], timeout=10)
+    try:
+        if rpc.initialized.get('codexHome') != source['home']:
+            raise ValueError('native runtime account HOME changed')
+        queue = rpc.call('thread/queue/list', {'threadId': sid})
+        if queue.get('data') != [] or queue.get('nextCursor'):
+            raise ValueError('native queued input must remain with its source')
+    finally:
+        rpc.close()
+    import fleet_session_gate as gate
+    if any(r.get('state') in ('queued', 'trying', 'native', 'waking') for r in gate.records(fid)):
+        raise ValueError('durable admitted input is still pending')
+    loop = None
+    if source.get('previous'):
+        path = Path(source['previous']).parent / 'loop/state.json'
+        if path.exists():
+            module = runpy.run_path(str(BIN / 'fleet-loop.py'))
+            with module['locked'](path) as value:
+                module['current'](value)
+                repairable_loop(value, source)
+                if value.get('controller_pid') not in children:
+                    raise ValueError('old loop controller is not owned by this source')
+                loop = dict(path=str(path), before=value)
+    try:
+        quiet_processes(source, rpc_timeout=30)
+    except (TimeoutError, subprocess.TimeoutExpired):
+        raise ValueError('maintenance strict process proof timed out; source retained') from None
+    result = dict(source=source, fid=fid, birth=process(source['pid']), input=view,
+                processes=[process(pid) for pid in children],
+                missing_hooks=sorted(missing), loop=loop,
+                last_turn=(t.get('turns') or [{}])[-1].get('id'))
+    if menu:
+        result['model_menu'] = menu
+    return result
+
+
+def repair_target_home(source):
+    """Resolve a live exact mirror; still ask the normal target-auth resolver."""
+    home = Path(source['home'])
+    conf = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home()/'.config/claude-fleet')))
+    recovery = None
+    if home.parent == conf/'cred-proxy/codex-homes':
+        fields = dict(line.split('=', 1) for line in
+                      (conf/'cred-proxy/sessions'/home.name).read_text().splitlines() if '=' in line)
+        recovery = dict(sid=home.name, **{k: fields[k] for k in ('provider', 'route', 'account')})
+        if fields.get('route') == 'central':
+            recovery['hub_id'] = fields['hub_id']
+    real, _ = ACCOUNT['codex_real_home'](str(home), recovery=recovery)
+    auth = json.loads(run(['bash', BIN/'fleet-account.sh', 'target-auth', '--agent', 'codex', '--home', real]))
+    if auth.get('verdict') != 'ok':
+        raise ValueError('maintenance target authentication is not verified')
+    return real
+
+
+def repair_loop_restore(proof, source):
+    """Resume the original paused record after its old controller is gone."""
+    if not proof:
+        return None
+    module = runpy.run_path(str(BIN/'fleet-loop.py'))
+    path, before = Path(proof['path']), proof['before']
+    old_pid = before['controller_pid']
+    try:
+        os.kill(old_pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise ValueError('original loop controller still lives; no timer rebind')
+    with module['locked'](path) as current:
+        for key in ('id', 'generation', 'active_record', 'active_generation',
+                    'last_attempt', 'deliveries', 'schedule', 'thread_id', 'home'):
+            if current.get(key) != before.get(key):
+                raise ValueError('loop ownership or delivery changed during maintenance')
+        if current.get('status') not in ('paused', 'stopped'):
+            raise ValueError('loop has an unknown maintenance outcome')
+        value = dict(current, status='active', driver='quotawatch', controller_pid=0,
+                     pane_pid=int(run(['tmux','-L',source['session'],'display-message','-p',
+                                       '-t',source['pane'],'#{pane_pid}'])),
+                     socket=source['codex_identity']['remote'][7:], home=source['home'],
+                     detail='Exact same-thread hook maintenance; original timer resumed')
+        value['fleet'] = dict(value['fleet'], window_id=source['window'], pane_id=source['pane'])
+        # A missed interval is never replayed; preserve the cadence and the one ID.
+        value['schedule'] = dict(value['schedule'], next_run_at=time.time()+value['schedule']['interval_seconds'])
+        value.update(due_since=None, deferred_reason=None)
+        module['current'](value)
+        module['save'](path, value)
+        return {k: value[k] for k in ('id', 'status', 'thread_id', 'schedule', 'driver')}
+
+
+def repair_hooks(session, pane, fid, sid, dry=False):
+    """The caller holds transition lock/lease; this lock also fences admission."""
+    import fleet_session_gate as gate
+    from fleet_native_proc import process
+    with gate.lock(fid):
+        root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home()/'.config/claude-fleet')))/'handoffs'
+        for path in root.glob('hook-repair-*/receipt.json'):
+            old = json.loads(path.read_text())
+            if old.get('proof', {}).get('fid') == fid and old.get('state') not in ('resumed', 'refused'):
+                raise ValueError('prior maintenance completion is unknown; inspect its receipt, never relaunch')
+        proof = repair_check(session, pane, fid, sid, allow_menu=True)
+        source = proof['source']
+        home = repair_target_home(source)
+        if dry:
+            print(json.dumps(dict(state='ready', fid=fid, sid=sid, missing_hooks=proof['missing_hooks'],
+                                  loop_id=(proof['loop'] or {}).get('before', {}).get('id'),
+                                  action='return-model-reminder-then-revalidate' if proof.get('model_menu') else 'resume-same-thread')))
+            return
+        directory = Path(tempfile.mkdtemp(prefix='hook-repair-', dir=str(root)))
+        save(directory/'receipt.json', dict(state='preparing', proof=proof))
+        stage = 'preparing'
+        retained = None
+        try:
+            shutil.copyfile(source['transcript'], directory/'source.jsonl')
+            before = (directory/'source.jsonl').read_bytes()
+            for name, argv in [('unstaged.patch',['diff','--binary']), ('index.patch',['diff','--cached','--binary']),
+                               ('git-state.txt',['status','--porcelain=v1','--branch'])]:
+                (directory/name).write_text(run(['git','-C',source['worktree'],*argv])+'\n')
+            fresh = repair_check(session, pane, fid, sid, allow_menu=True)
+            if fresh != proof or repair_target_home(source) != home:
+                raise ValueError('maintenance source changed during preparation')
+            if proof.get('model_menu'):
+                stage = 'returning-model-menu'
+                save(directory/'receipt.json', dict(state=stage, proof=proof))
+                proof = repair_menu_cancel(session, pane, fid, sid, proof, directory/'model-menu-return.json')
+                source = proof['source']
+                if Path(source['transcript']).read_bytes() != before or repair_target_home(source) != home:
+                    raise ValueError('source transcript/account changed during model reminder return')
+            tm = lambda *a: run(['tmux','-L',session,*a])
+            stage = 'exiting'
+            save(directory/'receipt.json', dict(state=stage, proof=proof))
+            retained = tm('display-message','-p','-t',source['pane'],'#{remain-on-exit}') or 'off'
+            tm('set-option','-w','-t',source['window'],'@agent_transfer_until',str(int(time.time())+180))
+            tm('set-option','-p','-t',source['pane'],'remain-on-exit','on')
+            tm('set-option','-w','-t',source['window'],'@wrap_quiet','1')
+            # Empty composer was proven twice. No Escape, C-u, replay or forced kill.
+            tm('send-keys','-t',source['pane'],'-l','\x1b[200~/exit\x1b[201~')
+            time.sleep(0.6)
+            tm('send-keys','-t',source['pane'],'Enter')
+            deadline = time.monotonic()+30
+            while process_start(source['pid'])[1] and time.monotonic()<deadline:
+                if process(source['pid']) != proof['birth']:
+                    raise ValueError('source PID was reused during maintenance')
+                time.sleep(0.2)
+            if process_start(source['pid'])[1]:
+                raise ValueError('source did not exit; maintenance is not retried')
+            deadline = time.monotonic()+10
+            while True:
+                live = []
+                for old in proof.get('processes', []):
+                    stat, birth = process_start(old['pid'])
+                    if birth and not stat.startswith('Z') and process(old['pid']) == old:
+                        live.append(old['pid'])
+                if not live:
+                    break
+                if time.monotonic() >= deadline:
+                    raise ValueError('source descendants still live; no new writer started')
+                time.sleep(0.2)
+            # Source hook exit must not have accepted a racing user/peer turn.
+            data = Path(source['transcript']).read_bytes()
+            if not data.startswith(before) or any(
+                    json.loads(line).get('type') in ('response_item', 'event_msg')
+                    for line in data[len(before):].splitlines() if line.strip()):
+                raise ValueError('native transcript changed during exit; inspect retained evidence')
+            # Native death can precede wrapper credential revocation/cleanup.
+            # Wait for that owner; never respawn over a still-live wrapper.
+            deadline = time.monotonic()+10
+            while tm('display-message','-p','-t',source['pane'],'#{pane_dead}') != '1':
+                pid = tm('display-message','-p','-t',source['pane'],'#{pane_pid}')
+                try:
+                    run(['python3', BIN/'.fleet-transfer.py', 'process', 'shell', pid])
+                    break
+                except (OSError, subprocess.SubprocessError):
+                    if time.monotonic() >= deadline:
+                        raise ValueError('source wrapper has not finished cleanup; no repeated launch') from None
+                    time.sleep(0.1)
+            if tm('display-message','-p','-t',source['pane'],'#{@fleet_id}') != fid:
+                raise ValueError('source FID changed after exit')
+            launcher = str(BIN/'fleet-session-wrap.sh')
+            args = [launcher,'--agent','codex','--codex-home',home,'--resume',sid]
+            command = 'exec '+shlex.join(args)
+            stage = 'starting'
+            save(directory/'receipt.json', dict(state=stage, proof=proof, launch=args))
+            tm('respawn-pane','-k','-t',source['pane'],'-c',source['worktree'],command)
+            deadline = time.monotonic()+60
+            target = None
+            while time.monotonic()<deadline:
+                try:
+                    candidate = inspect(session, source['pane'])
+                    if candidate['pid'] != source['pid'] and candidate['session_id'] == sid:
+                        target = candidate
+                        break
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+                time.sleep(1)
+            if target is None:
+                raise ValueError('same native SID not bound; no repeated launch')
+            if tm('display-message','-p','-t',target['pane'],'#{@fleet_id}') != fid:
+                raise ValueError('target FID mismatch')
+            rpc = RPC(target['codex_identity']['remote'], timeout=10)
+            try:
+                runtime = rpc.initialized
+                version = re.search(r'/(\d+)\.(\d+)\.(\d+)', runtime.get('userAgent', ''))
+                if not version or tuple(map(int, version.groups())) < (0, 162, 0):
+                    raise ValueError('resumed runtime capability is not verified >=0.162')
+                t = rpc.call('thread/read', {'threadId': sid, 'includeTurns': False})['thread']
+                if t.get('id') != sid or Path(t['cwd']).resolve() != Path(source['worktree']).resolve():
+                    raise ValueError('resumed native thread/worktree changed')
+            finally:
+                rpc.close()
+            flags, _ = native_hook_flags(target)
+            if (missing_hook_paths(flags) or not all(any(name in value for value in flags) for name in
+                    ('fleet-codex-session.py', 'bash-guard.py', 'base-readonly-guard.py'))):
+                raise ValueError('resumed native hook guards are not verified')
+            loop = repair_loop_restore(proof['loop'], target)
+            receipt = dict(state='resumed', fid=fid, sid=sid, target=target, loop=loop,
+                           at=time.time(), proof=proof, initialize=runtime)
+            save(directory/'receipt.json', receipt)
+            stage = 'resumed'
+            print(json.dumps(dict(state='resumed', fid=fid, sid=sid, receipt=str(directory/'receipt.json'), loop=loop)))
+        except Exception as error:
+            save(directory/'receipt.json', dict(state='refused' if stage == 'preparing' else 'recovery',
+                                                stage=stage, proof=proof, reason=str(error)))
+            raise
+        finally:
+            # No source restart or timer rearm on unknown outcomes.
+            run(['tmux','-L',session,'set-option','-wu','-t',source['window'],'@agent_transfer_until'])
+            if stage == 'resumed' and retained is not None:
+                run(['tmux','-L',session,'set-option','-p','-t',source['pane'],'remain-on-exit',retained])
 
 def process_cwd(pid):
     try: return os.readlink('/proc/%d/cwd' % pid)
@@ -483,6 +835,8 @@ def main():
     q = sub.add_parser('settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
     q = sub.add_parser('quota-settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
     q.add_argument('--sid', required=True)
+    q = sub.add_parser('repair-hooks'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
+    q.add_argument('--fid', required=True); q.add_argument('--sid', required=True); q.add_argument('--dry-run', action='store_true')
     for command in ('quota-dialog-check', 'quota-dialog-stop'):
         q = sub.add_parser(command); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
         q.add_argument('--sid', required=True)
@@ -492,6 +846,7 @@ def main():
     q.add_argument('--worktree', default=''); q.add_argument('--session', default='')
     a = p.parse_args()
     if a.command == 'settled': settled(a.session, a.pane)
+    elif a.command == 'repair-hooks': repair_hooks(a.session, a.pane, a.fid, a.sid, a.dry_run)
     elif a.command == 'quota-settled': quota_settled(a.session, a.pane, a.sid)
     elif a.command == 'quota-dialog-check': quota_dialog_check(a.session, a.pane, a.sid)
     elif a.command == 'quota-dialog-stop': quota_dialog_stop(a.session, a.pane, a.sid)

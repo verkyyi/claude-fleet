@@ -29,6 +29,320 @@ def module(name, file):
 src = module('transfer_source', 'fleet_transfer_source.py')
 
 
+
+class BrokenHookMenu(unittest.TestCase):
+    screen = '''Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back
+'''
+
+    def test_only_exact_model_reminder_can_return_without_a_choice(self):
+        self.assertEqual(src.repair_model_menu(self.screen), self.screen.strip())
+        for screen in (self.screen.replace('esc back', 'esc quit'),
+                       self.screen.replace('2. Keep current model', '2. Approve command'),
+                       self.screen + '\n› unsent draft', 'Permission required\nenter select · esc back'):
+            self.assertIsNone(src.repair_model_menu(screen))
+
+    def test_cancel_is_once_then_fresh_empty_proof_or_retained_unknown(self):
+        import copy
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'receipt.json'
+            proof=dict(fid='fid',source=dict(pane='%2',session_id='sid'),
+                       input=dict(state='unknown',busy=True),model_menu=self.screen.strip(),
+                       birth=dict(pid=12),last_turn='original')
+            after=copy.deepcopy(proof);after.pop('model_menu');after['input']=dict(state='empty',busy=False)
+            with patch.object(src,'repair_check',side_effect=[proof,after]) as check, \
+                 patch.object(src,'run') as run:
+                self.assertEqual(src.repair_menu_cancel('test','%2','fid','sid',proof,path),after)
+                self.assertEqual(sum('Escape' in a.args[0] for a in run.call_args_list),1)
+                self.assertFalse(any('Enter' in a.args[0] for a in run.call_args_list))
+                self.assertEqual(check.call_args_list[-1].kwargs,{})
+            path.unlink()
+            with patch.object(src,'repair_check',side_effect=[proof,ValueError('input not empty')]), \
+                 patch.object(src,'run') as run:
+                with self.assertRaisesRegex(ValueError,'input not empty'):
+                    src.repair_menu_cancel('test','%2','fid','sid',proof,path)
+                self.assertEqual(json.loads(path.read_text())['state'],'cancelling')
+                self.assertEqual(sum('Escape' in a.args[0] for a in run.call_args_list),1)
+            with patch.object(src,'repair_check') as check,patch.object(src,'run') as run:
+                with self.assertRaisesRegex(ValueError,'attempted'):
+                    src.repair_menu_cancel('test','%2','fid','sid',proof,path)
+                check.assert_not_called();run.assert_not_called()
+
+
+class BrokenHookMaintenance(unittest.TestCase):
+    def test_missing_hook_is_verified_from_native_argv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            command = 'python3 ' + repr(str(root/'old/bin/fleet-codex-session.py')) + ' hook'
+            flags = ['hooks.Stop=[{hooks=[{type="command",command=' + json.dumps(command) + '}]}]']
+            self.assertEqual(src.missing_hook_paths(flags), [str(root/'old/bin/fleet-codex-session.py')])
+            (root/'old/bin').mkdir(parents=True)
+            (root/'old/bin/fleet-codex-session.py').write_text('# exists')
+            self.assertEqual(src.missing_hook_paths(flags), [])
+            self.assertEqual(src.missing_hook_paths(['--prompt', command]), [])
+
+    def test_paused_loop_repair_cannot_resend_unknown_attempt(self):
+        value = dict(id='original-loop', status='paused', thread_id='sid', home='/home/exact',
+            worktree='/work', schedule=dict(interval_seconds=1200, next_run_at=100, prompt='original'),
+            detail="[Errno 2] No such file or directory: '/gone/bin/fleet-input.py'",
+            last_attempt=dict(state='accepted'), controller_pid=123)
+        source = dict(session_id='sid', home='/home/exact', worktree='/work')
+        src.repairable_loop(value, source)
+        for state in ('delivering', 'unknown', 'failed'):
+            bad = dict(value, last_attempt=dict(state=state))
+            with self.assertRaisesRegex(ValueError, 'delivery'):
+                src.repairable_loop(bad, source)
+        for change in (dict(status='stopped'), dict(thread_id='other'),
+                       dict(detail='RPC timeout'), dict(pending_delivery={'text':'unknown'})):
+            with self.assertRaises(ValueError): src.repairable_loop(dict(value, **change), source)
+        self.assertEqual(value['schedule']['next_run_at'], 100)
+
+    def test_original_timer_rebind_retains_id_and_rejects_changed_delivery(self):
+        from contextlib import contextmanager
+        import copy
+        value = dict(id='original-loop', status='stopped', thread_id='sid', home='/old-home',
+            fleet=dict(session='test', window_id='@2', pane_id='%2'), generation=0,
+            schedule=dict(interval_seconds=1200, next_run_at=100, prompt='original'),
+            last_attempt=dict(state='accepted'), controller_pid=123, deliveries=7)
+        before = copy.deepcopy(value); before['status']='paused'
+        source = dict(session='test', window='@2', pane='%2', home='/new-mirror',
+                      codex_identity=dict(remote='unix:///new.sock'))
+        @contextmanager
+        def locked(path): yield value
+        saved=[]
+        module=dict(locked=locked, current=lambda v:None, save=lambda p,v:saved.append(v))
+        with patch.object(src.runpy,'run_path',return_value=module), \
+             patch.object(src.os,'kill',side_effect=ProcessLookupError), \
+             patch.object(src,'run',return_value='42'), patch.object(src.time,'time',return_value=5000):
+            result=src.repair_loop_restore(dict(path='/private/state.json',before=before),source)
+            self.assertEqual(result['id'],'original-loop')
+            self.assertEqual(result['schedule']['next_run_at'],6200)
+            self.assertEqual(result['schedule']['prompt'],'original')
+            self.assertEqual(saved[0]['deliveries'],7)
+            self.assertEqual(saved[0]['driver'],'quotawatch')
+            value['last_attempt']={'state':'delivering'}
+            with self.assertRaisesRegex(ValueError,'delivery changed'):
+                src.repair_loop_restore(dict(path='/private/state.json',before=before),source)
+            self.assertEqual(len(saved),1)
+
+    def test_live_proof_keeps_old_marks_but_never_ignores_input_queue_or_tools(self):
+        from contextlib import ExitStack
+        import fleet_session_gate as gate
+        import fleet_native_proc
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            store=Path(tmp); current=store/('b'*40)/'bin';current.mkdir(parents=True)
+            (current/'fleet-codex-session.py').write_text('# current hook')
+            missing=store/('a'*40)/'bin/fleet-codex-session.py'
+            flags=['hooks.Stop=[{hooks=[{type="command",command='+json.dumps('python3 '+str(missing))+'}]}]']
+            source=dict(agent='codex',session_id='sid',pid=12,pane='%2',window='@2',state='working',
+                        worktree='/work',home='/home',codex_identity={'remote':'unix:///exact.sock'})
+            view={'state':'empty','busy':False,'text':''}; queue={'data':[],'nextCursor':None}
+            class Rpc:
+                initialized={'codexHome':'/home'}
+                def __init__(self,*a,**kw):pass
+                def call(self,*a):return queue
+                def close(self):pass
+            stack.enter_context(patch.object(src,'BIN',current))
+            stack.enter_context(patch.object(src,'inspect',return_value=source))
+            stack.enter_context(patch.object(src,'run',side_effect=lambda a,**k:{
+                '#{@fleet_id}':'fid','#{window_panes}':'1',
+                '#{@parked}#{@park_start}#{@agent_transfer_request}':'',
+                '#{@handoff_armed}':'','#{@agent_transfer_until}':'',
+                '%2':BrokenHookMenu.screen}[a[-1]]))
+            stack.enter_context(patch.dict(src.TRANSFER,process_rows=lambda:{12:(1,'bash')}))
+            stack.enter_context(patch.object(src.runpy,'run_path',side_effect=lambda p:{
+                'fleet_worker_life.py':{'ARGV':{'process_argv':lambda pid:flags}},
+                'fleet-input.py':{'snapshot':lambda *a,**k:view}}[Path(p).name]))
+            stack.enter_context(patch.object(src,'native_thread',return_value={
+                'status':{'type':'idle'},'turns':[{'id':'finished','status':'completed','items':[]}]}))
+            quiet=stack.enter_context(patch.object(src,'quiet_processes'))
+            stack.enter_context(patch.object(src,'RPC',Rpc))
+            pending=stack.enter_context(patch.object(gate,'records',return_value=[]))
+            stack.enter_context(patch.object(fleet_native_proc,'process',return_value={'birth':'exact'}))
+            result=src.repair_check('test','%2','fid','sid')
+            self.assertEqual(result['source']['state'],'working')
+            quiet.assert_called_once_with(source,rpc_timeout=30)
+            with self.assertRaisesRegex(ValueError,'FID/SID'):
+                src.repair_check('test','%2','other','sid')
+            view.update(state='unknown',busy=True)
+            with self.assertRaisesRegex(ValueError,'input.*empty'):
+                src.repair_check('test','%2','fid','sid')
+            menu_proof=src.repair_check('test','%2','fid','sid',allow_menu=True)
+            self.assertEqual(menu_proof['model_menu'],BrokenHookMenu.screen.strip())
+            quiet.side_effect=ValueError('active tool behind menu')
+            with self.assertRaisesRegex(ValueError,'active tool behind menu'):
+                src.repair_check('test','%2','fid','sid',allow_menu=True)
+            quiet.side_effect=None
+            view.update(state='empty',busy=False);queue['data']=[{'id':'pending'}]
+            with self.assertRaisesRegex(ValueError,'queued input'):
+                src.repair_check('test','%2','fid','sid')
+            queue['data']=[];pending.return_value=[{'state':'native'}]
+            with self.assertRaisesRegex(ValueError,'admitted input'):
+                src.repair_check('test','%2','fid','sid')
+            pending.return_value=[];quiet.side_effect=ValueError('active tool')
+            with self.assertRaisesRegex(ValueError,'active tool'):
+                src.repair_check('test','%2','fid','sid')
+
+    @unittest.skipUnless(__import__('shutil').which('tmux'), 'tmux unavailable')
+    def test_public_migrate_entry_fences_the_exact_window_and_forwards_one_plan(self):
+        import shutil,sys,uuid
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve(); work=root/'work';work.mkdir(); stub=root/'bin';stub.mkdir()
+            label='repair-test-'+uuid.uuid4().hex[:12];fid=str(uuid.uuid4());sid=str(uuid.uuid4())
+            conf=root/'conf';(conf/'fleets'/label).mkdir(parents=True)
+            (conf/'fleets'/label/'conf').write_text('FLEET_SESSION='+label+'\n')
+            log=root/'helper.json'
+            (stub/'python3').write_text('#!'+sys.executable+'\nimport os,sys,json\n'
+                +'if len(sys.argv)>2 and sys.argv[1].endswith("/fleet_transfer_source.py") and sys.argv[2]=="repair-hooks":\n'
+                +' open('+repr(str(log))+',"w").write(json.dumps(sys.argv[2:]))\n print("ready")\n'
+                +'else: os.execv('+repr(sys.executable)+', ['+repr(sys.executable)+']+sys.argv[1:])\n')
+            (stub/'python3').chmod(0o755)
+            env={k:v for k,v in os.environ.items() if not k.startswith('FLEET_') and k not in ('TMUX','TMUX_PANE')}
+            env.update(HOME=str(root),FLEET_CONF_DIR=str(conf),FLEET_SKIP_GLOBAL_CONF='1',PATH=str(stub)+os.pathsep+os.environ['PATH'])
+            tm=lambda *a:subprocess.check_output(['tmux','-L',label,*a],text=True,env=env).strip()
+            try:
+                win=tm('new-session','-d','-s',label,'-c',str(work),'-P','-F','#{window_id}')
+                tm('set-option','-w','-t',win,'@fleet_id',fid)
+                tm('set-option','-w','-t',win,'@worktree',str(work))
+                args=['bash',str(Path(__file__).with_name('fleet-migrate.sh')),'--session',label,
+                      '--repair-hooks','--expected-fid',fid,'--expected-session-id',sid,'--dry-run',win]
+                result=subprocess.run(args,text=True,capture_output=True,env=env,timeout=20)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                forwarded=json.loads(log.read_text());self.assertIn('--dry-run',forwarded)
+                self.assertEqual(forwarded[forwarded.index('--fid')+1],fid)
+                self.assertEqual(forwarded[forwarded.index('--sid')+1],sid)
+                log.unlink();args[args.index('--expected-fid')+1]=str(uuid.uuid4())
+                result=subprocess.run(args,text=True,capture_output=True,env=env,timeout=20)
+                self.assertNotEqual(result.returncode,0);self.assertFalse(log.exists())
+                self.assertEqual(tm('display-message','-p','-t',win,'#{@fleet_id}'),fid)
+            finally:
+                subprocess.run(['tmux','-L',label,'kill-server'],capture_output=True,env=env)
+
+    @unittest.skipUnless(__import__('shutil').which('tmux'), 'tmux unavailable')
+    def test_actual_wrapper_exit_retains_pane_then_same_thread_launches_once(self):
+        from contextlib import ExitStack
+        import shlex,uuid
+        import fleet_native_proc
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root=Path(tmp).resolve(); (root/'handoffs').mkdir();work=root/'work';work.mkdir(); bin_=root/'bin';bin_.mkdir()
+            label='repair-flow-'+uuid.uuid4().hex[:10];fid=str(uuid.uuid4()); transcript=root/'source.jsonl';transcript.write_text('{}\n')
+            child=root/'native.sh';child.write_text('printf "%s" "$$" > '+shlex.quote(str(root/'native.pid.tmp'))+'\n'
+                +'mv '+shlex.quote(str(root/'native.pid.tmp'))+' '+shlex.quote(str(root/'native.pid'))+'\n'
+                +'while IFS= read -r line; do case "$line" in */exit*) exit 0;; esac; done\n')
+            original=root/'wrapper.sh';original.write_text('bash '+shlex.quote(str(child))+'\n'
+                +'sleep 0.4\n'  # Native exit precedes wrapper credential/cleanup work.
+                +'[ "$(tmux -L '+label+' display-message -p -t "$TMUX_PANE" "#{@wrap_quiet}")" = 1 ] && exit 0\n'
+                +'exec sleep 600\n')
+            successor=bin_/'fleet-session-wrap.sh';successor.write_text('#!/bin/bash\nprintf "%s\n" "$@" > '
+                +shlex.quote(str(root/'launch.argv.tmp'))+'\nmv '+shlex.quote(str(root/'launch.argv.tmp'))+' '
+                +shlex.quote(str(root/'launch.argv'))+'\nexec sleep 600\n');successor.chmod(0o755)
+            env={k:v for k,v in os.environ.items() if not k.startswith('FLEET_') and k not in ('TMUX','TMUX_PANE')}
+            env.update(HOME=str(root),FLEET_CONF_DIR=str(root),FLEET_GATE_DIR=str(root/'gate'))
+            stack.enter_context(patch.dict(os.environ,env,clear=True))
+            tm=lambda *a:subprocess.check_output(['tmux','-L',label,*a],text=True,env=env).strip()
+            try:
+                tm('new-session','-d','-s',label,'-n','anchor','sleep 600')
+                win=tm('new-window','-d','-t',label,'-c',str(work),'-P','-F','#{window_id}',
+                       'exec bash '+shlex.quote(str(original)))
+                pane=tm('display-message','-p','-t',win,'#{pane_id}')
+                tm('set-option','-w','-t',win,'@fleet_id',fid)
+                deadline=time.monotonic()+5
+                while not (root/'native.pid').exists() and time.monotonic()<deadline:time.sleep(.02)
+                pid=int((root/'native.pid').read_text())
+                source=dict(agent='codex',pid=pid,session=label,window=win,pane=pane,worktree=str(work),
+                    home='/real-home',transcript=str(transcript),session_id='sid',codex_identity=dict(remote='unix:///old.sock'))
+                proof=dict(source=source,fid=fid,birth=fleet_native_proc.process(pid),processes=[fleet_native_proc.process(pid)],
+                    input={'state':'empty'},missing_hooks=['/old/hook.py'],loop=None,last_turn='completed')
+                stack.enter_context(patch.object(src,'BIN',bin_))
+                stack.enter_context(patch.object(src,'repair_check',return_value=proof))
+                stack.enter_context(patch.object(src,'repair_target_home',return_value='/real-home'))
+                stack.enter_context(patch.object(src,'native_hook_flags',return_value=(
+                    ['hooks.Stop=fleet-codex-session.py bash-guard.py base-readonly-guard.py'],[])))
+                stack.enter_context(patch.object(src,'inspect',side_effect=lambda *a:dict(source,
+                    pid=int(tm('display-message','-p','-t',pane,'#{pane_pid}')),
+                    codex_identity={'remote':'unix:///new.sock'})))
+                run=src.run
+                stack.enter_context(patch.object(src,'run',side_effect=lambda a,**k:'' if a[0]=='git' else run(a,**k)))
+                class Rpc:
+                    initialized={'userAgent':'claude_fleet/0.162.1'}
+                    def __init__(self,*a,**kw):pass
+                    def call(self,*a):return {'thread':{'id':'sid','cwd':str(work)}}
+                    def close(self):pass
+                stack.enter_context(patch.object(src,'RPC',Rpc))
+                with contextlib.redirect_stdout(io.StringIO()):src.repair_hooks(label,pane,fid,'sid')
+                self.assertEqual(tm('display-message','-p','-t',win,'#{@fleet_id}'),fid)
+                self.assertEqual(tm('display-message','-p','-t',pane,'#{remain-on-exit}'),'off')
+                deadline=time.monotonic()+5
+                while not (root/'launch.argv').exists() and time.monotonic()<deadline:time.sleep(.02)
+                self.assertEqual((root/'launch.argv').read_text().splitlines(),
+                    ['--agent','codex','--codex-home','/real-home','--resume','sid'])
+                receipts=list((root/'handoffs').glob('hook-repair-*/receipt.json'))
+                self.assertEqual(json.loads(receipts[0].read_text())['state'],'resumed')
+            finally:
+                subprocess.run(['tmux','-L',label,'kill-server'],capture_output=True,env=env)
+
+    def test_exact_maintenance_success_and_unknown_completion_never_relaunch(self):
+        from contextlib import ExitStack
+        import fleet_session_gate as gate
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root=Path(tmp); (root/'handoffs').mkdir(); work=root/'work';work.mkdir()
+            transcript=root/'rollout.jsonl';transcript.write_text('{}\n')
+            source=dict(agent='codex',pid=12,session='test',window='@2',pane='%2',
+                worktree=str(work),home='/real-home',transcript=str(transcript),session_id='sid',
+                codex_identity=dict(remote='unix:///old.sock'))
+            proof=dict(source=source,fid='fid',birth={'pid':12},input={'state':'empty'},
+                       missing_hooks=['/gone/hook.py'],loop=None,last_turn='completed-turn')
+            successor=dict(source,pid=22,codex_identity=dict(remote='unix:///new.sock'))
+            checks=stack.enter_context(patch.object(src,'repair_check',return_value=proof))
+            stack.enter_context(patch.dict(os.environ,FLEET_CONF_DIR=str(root),FLEET_GATE_DIR=str(root/'gate')))
+            stack.enter_context(patch.object(src,'repair_target_home',return_value='/real-home'))
+            stack.enter_context(patch.object(src,'inspect',return_value=successor))
+            stack.enter_context(patch.object(src,'process_start',return_value=('','')))
+            stack.enter_context(patch.object(src.time,'sleep'))
+            class Rpc:
+                initialized={'userAgent':'claude_fleet/0.162.1'}
+                def __init__(self,*a,**kw):pass
+                def call(self,*a):return {'thread':{'id':'sid','cwd':str(work)}}
+                def close(self):pass
+            stack.enter_context(patch.object(src,'RPC',Rpc))
+            stack.enter_context(patch.object(src,'native_hook_flags',return_value=(
+                ['hooks.Stop=fleet-codex-session.py bash-guard.py base-readonly-guard.py'],[22])))
+            calls=[]; fail=[False]
+            def run(argv,**kw):
+                calls.append(list(map(str,argv)))
+                if 'respawn-pane' in argv and fail[0]: raise ValueError('unknown spawn result')
+                if argv[-1]=='#{pane_pid}':return '42'
+                if argv[-1]=='#{@fleet_id}':return 'fid'
+                return ''
+            stack.enter_context(patch.object(src,'run',side_effect=run))
+            with contextlib.redirect_stdout(io.StringIO()):src.repair_hooks('test','%2','fid','sid')
+            receipts=list((root/'handoffs').glob('hook-repair-*/receipt.json'))
+            self.assertEqual(len(receipts),1)
+            result=json.loads(receipts[0].read_text());self.assertEqual(result['state'],'resumed')
+            self.assertEqual(result['target']['session_id'],'sid')
+            launch=next(c[-1] for c in calls if 'respawn-pane' in c)
+            self.assertIn('--resume sid',launch);self.assertNotIn('||',launch)
+            self.assertEqual(sum('respawn-pane' in c for c in calls),1)
+            checks.side_effect=[proof,dict(proof,last_turn='new-turn')]
+            with self.assertRaisesRegex(ValueError,'source changed'):
+                src.repair_hooks('test','%2','fid','sid')
+            self.assertEqual(sum('respawn-pane' in c for c in calls),1)
+            checks.side_effect=None
+            fail[0]=True
+            with self.assertRaisesRegex(ValueError,'unknown spawn'):
+                src.repair_hooks('test','%2','fid','sid')
+            count=checks.call_count
+            with self.assertRaisesRegex(ValueError,'completion is unknown'):
+                src.repair_hooks('test','%2','fid','sid')
+            self.assertEqual(checks.call_count,count)
+            self.assertEqual(sum('respawn-pane' in c for c in calls),2)
+
 class CurrentSchedulerEvidence(unittest.TestCase):
     def test_old_wakeup_is_not_a_current_loop_or_a_live_export(self):
         import fleet_transfer_cron as cron

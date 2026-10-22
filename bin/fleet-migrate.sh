@@ -61,6 +61,11 @@
 #                             thread/read) before the /exit, and it comes back as
 #                             `codex resume <same thread>` in the same CODEX_HOME.
 #                             fleet-cfg-restart.sh is the caller.
+#         --repair-hooks     explicit maintenance of ONE Codex FID/SID with missing
+#                             native inline hooks. Requires --expected-fid UUID and
+#                             --expected-session-id UUID. Native idle, empty input,
+#                             quiet tools, target auth and both locks still apply.
+#                             Keeps the same window/thread; unknown outcomes never retry.
 #         --nudge <text>      first prompt of the resumed session (default: the
 #                             interrupted-turn text for a `working` window; none if idle)
 #         --dry-run           print the plan, touch nothing
@@ -747,6 +752,7 @@ migrate_one_body() {
 # direct run dispatches. Same guard idiom as fleet-account.sh.
 migrate_main() {
   MODE=""; ACCOUNT=""; NUDGE=""; NUDGE_SET=0; DRY=0; TOAST=0; SESS=""; MODEL=""; WIDS=(); FORCE_BG=0; MAX=0; FORCE_SELF=0; CFG=0
+  local repair=0 repair_fid='' repair_sid=''
   local verified=0
   FLEET_MIGRATION_LOCKED=''
   MIGRATE_TMP=''
@@ -760,6 +766,9 @@ migrate_main() {
       --force-bg) FORCE_BG=1; shift ;;
       --force-self) FORCE_SELF=1; shift ;;
       --cfg-stale) CFG=1; shift ;;
+      --repair-hooks) repair=1; shift ;;
+      --expected-fid) [ $# -ge 2 ] || return 2; repair_fid=$2; shift 2 ;;
+      --expected-session-id) [ $# -ge 2 ] || return 2; repair_sid=$2; shift 2 ;;
       --account) MODE=account; ACCOUNT="${2:-}"; shift 2 ;;
       --account=*) MODE=account; ACCOUNT="${1#--account=}"; shift ;;
       --max) MAX="${2:-}"; case "$MAX" in ''|*[!0-9]*) echo 'fleet-migrate: --max needs a number' >&2; return 2 ;; esac; shift 2 ;;
@@ -795,6 +804,33 @@ migrate_main() {
   NUDGE_MODEL_DEFAULT="${FLEET_MIGRATE_NUDGE_MODEL:-$NUDGE_MODEL_BUILTIN}"
   SOCK=$(fleet_socket "$SESS")
   TM() { tmux -L "$SOCK" "$@"; }
+  if [ "$repair" = 1 ]; then
+    if [ "${#WIDS[@]}" != 1 ] || ! fleet_is_fid "$repair_fid" || ! fleet_is_fid "$repair_sid" \
+       || [ "$CFG:$FORCE_BG:$FORCE_SELF:$NUDGE_SET:$MAX" != 0:0:0:0:0 ] || [ -n "$MODEL$MODE" ]; then
+      echo 'fleet-migrate: repair-hooks requires one exact window/FID/SID, without other migration modes' >&2
+      return 2
+    fi
+    local repair_win repair_wt repair_rc repair_args=()
+    repair_win=$(fleet_wid_target "${WIDS[0]}" "$SOCK") || return 1
+    [ "$(TM display-message -p -t "$repair_win" '#{@fleet_id}')" = "$repair_fid" ] || return 1
+    [ "${TMUX_PANE:-}" != "$(TM display-message -p -t "$repair_win" '#{pane_id}')" ] \
+      || { echo 'fleet-migrate: run hook maintenance from another session' >&2; return 1; }
+    repair_wt=$(TM display-message -p -t "$repair_win" '#{@worktree}')
+    [ -d "$repair_wt" ] || return 1
+    fleet_transition_lock_take "$repair_wt" || { echo 'fleet-migrate: another transition owns source' >&2; return 1; }
+    FLEET_MIGRATION_LOCKED=$repair_wt
+    fleet_rotate_lease_take "$repair_wt" 'exact same-SID hook maintenance' 900 || return 1
+    export FLEET_CONF_DIR
+    [ "$DRY" != 1 ] || repair_args+=(--dry-run)
+    python3 "$BIN/fleet_transfer_source.py" repair-hooks --session "$SESS" --pane "$repair_win" \
+      --fid "$repair_fid" --sid "$repair_sid" ${repair_args[@]+"${repair_args[@]}"}
+    repair_rc=$?
+    # A partial native exit/start keeps its bounded preservation lease.
+    if [ "$repair_rc" = 0 ] || [ "$DRY" = 1 ]; then fleet_rotate_lease_drop "$repair_wt"; fi
+    fleet_transition_lock_drop "$repair_wt"; FLEET_MIGRATION_LOCKED=''
+    return "$repair_rc"
+  fi
+  [ -z "$repair_fid$repair_sid" ] || { echo 'fleet-migrate: expected identity requires --repair-hooks' >&2; return 2; }
   # A positional may be the fleet's short window HANDLE (`b3`, issue #566) instead
   # of a tmux window-id/index. Normalise once, here, so every path below (whoami
   # and the explicit walk alike) works on a real target; anything that is not a

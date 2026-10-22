@@ -709,3 +709,52 @@ fails or its completion is unknown, the timer remains paused in that package;
 there is no automatic source/timer restart. A late target binding still cannot
 deliver timer rounds until the formal controller records verified `started`. Inspect the retained target before
 using explicit recovery. Drafts and business approvals keep their existing rules.
+
+
+### Repair a live Codex session with deleted inline hooks
+
+An explicit operator maintenance request uses the existing migration controller:
+
+```sh
+bash ~/.claude/fleet/bin/fleet-migrate.sh --session fleet --repair-hooks \
+  --expected-fid FID --expected-session-id NATIVE_SID --dry-run @WINDOW
+```
+
+Remove `--dry-run` only for the same exact identity after reviewing its refusal
+or readiness. This mode differs from automatic `--cfg-stale`: an old working,
+looping or completed-task stamp does not replace fresh native evidence or
+prevent a person from maintaining their retained conversation. It requires a
+managed inline hook path that is actually missing in the live process argv,
+a current replacement hook, native idle with no active tool, empty native queue,
+a proven empty composer, no pending durable admission and the existing strict
+process/MCP restartability proof. Unknown input is refused and kept unchanged.
+The normal target-auth check still runs against the verified account home.
+
+One specific native obstruction can be returned from externally: the complete
+`Approaching rate limits` model reminder with its three model choices and
+`enter select · esc back` footer. The same native idle, queue, process and auth
+checks must pass before any key. Dry-run reports this extra action explicitly.
+After freezing private evidence and repeating the exact reminder proof, the
+controller writes a receipt and sends **one Escape**, selecting no model. It
+then requires a fresh empty composer and unchanged native identity/transcript
+before `/exit`. A revealed draft or unknown result is retained and blocks
+another attempt; a blank screen alone is never an input export.
+
+Maintenance holds the worktree transition lock, preservation lease and FID
+message-admission lock. It privately freezes the exact transcript, input proof
+and tracked diffs; repeats all source checks; sends the normal native `/exit`
+once; verifies source death and a childless shell; then starts the standard
+wrapper with the original native SID in the same pane/worktree/FID. It never
+falls back to a new thread or retries an unknown exit/start. A private
+`handoffs/hook-repair-*/receipt.json` records the stage and result; an unresolved
+receipt blocks another maintenance attempt. Do not edit that receipt to retry.
+
+An existing Fleet interval loop may accompany this repair only when its exact
+owner record is paused by a missing `fleet-input.py` before a new delivery,
+with the previous attempt accepted. An explicit stop, ambiguous delivery or
+changed generation still refuses. After the original controller exits and the
+same native SID binds, maintenance reattaches the **same loop record and ID**
+to the existing quota tick. Its prompt, interval and delivery history remain;
+`next_run_at` starts one original interval after reattachment, without replaying
+missed ticks. This is maintenance of that timer, not a new loop or a native
+scheduler export. Failed or uncertain thread restoration never reactivates it.

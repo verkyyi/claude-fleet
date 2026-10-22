@@ -16,6 +16,33 @@ accounts = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(accounts)
 
 
+
+class MaintenanceProxyHome(unittest.TestCase):
+    def test_direct_pool_mirror_requires_exact_recovery_and_still_does_not_grant_auth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp); conf=home/'.config/claude-fleet'; state=conf/'cred-proxy'
+            mirror=state/'codex-homes/worker-session'; real=home/'.codex'
+            for path in (conf,state,state/'codex-homes',state/'sessions',mirror,real,real/'sessions'):
+                path.mkdir(parents=True,exist_ok=True);path.chmod(0o700)
+            marker=mirror/'.fleet-real-home';marker.write_text(str(real)+'\n');marker.chmod(0o600)
+            (mirror/'sessions').symlink_to(real/'sessions',target_is_directory=True)
+            record=state/'sessions'/mirror.name
+            record.write_text('provider=codex\nroute=direct\naccount=proxy\n');record.chmod(0o600)
+            proof=dict(sid=mirror.name,provider='codex',route='direct',account='proxy')
+            with patch.dict(os.environ,HOME=str(home),FLEET_CONF_DIR=str(conf)):
+                with self.assertRaisesRegex(ValueError,'session account'):
+                    accounts.codex_real_home(str(mirror))
+                self.assertEqual(accounts.codex_real_home(str(mirror),recovery=proof),(str(real.resolve()),True))
+                with self.assertRaisesRegex(ValueError,'session account'):
+                    accounts.codex_real_home(str(mirror),recovery=dict(proof,sid='other'))
+                record.write_text('provider=codex\nroute=direct\naccount=foreign-account\n')
+                with self.assertRaisesRegex(ValueError,'session account'):
+                    accounts.codex_real_home(str(mirror),recovery=proof)
+                record.write_text('provider=codex\nroute=direct\naccount=proxy\n');record.chmod(0o666)
+                with self.assertRaisesRegex(ValueError,'ownership'):
+                    accounts.codex_real_home(str(mirror),recovery=proof)
+
+
 def candidate(agent, name, used=10, **extra):
     return dict(agent=agent, key=agent + '/' + name, account=name, score=(100-used)*2,
                 utilization=used, available=True, login='valid', **extra)
