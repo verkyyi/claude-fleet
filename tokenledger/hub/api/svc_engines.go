@@ -41,7 +41,10 @@ func svcProgress(r store.SvcRun) SvcRunProgress {
 
 func svcEngineRequest(req *SvcRunRequest) string {
 	if req.EnginePref == "" {
-		req.EnginePref = "codex,claude"
+		// An omitted preference is the legacy contract, including its Claude
+		// infra retry and request fingerprint. A stray mapping cannot opt in.
+		req.EngineTemplates = nil
+		return ""
 	}
 	if req.EnginePref != "codex,claude" && req.EnginePref != "codex" && req.EnginePref != "claude" {
 		return "engine_pref is codex,claude, codex, or claude"
@@ -56,6 +59,12 @@ func svcEngineRequest(req *SvcRunRequest) string {
 }
 
 func svcEngineDigest(run store.SvcRun, engine string) string {
+	if run.EnginePref == "" {
+		if engine == "claude" {
+			return run.Digest
+		}
+		return ""
+	}
 	var templates map[string]string
 	_ = json.Unmarshal([]byte(run.EngineTemplates), &templates)
 	if digest := templates[engine]; digest != "" {
