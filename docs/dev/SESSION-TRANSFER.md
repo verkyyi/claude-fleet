@@ -655,3 +655,57 @@ its recovery (`fleet-loop.py recover`) can reattach a dead controller only to th
 same restored native UUID
 and worktree. Explicitly stopped/paused loops and replacement threads stay off.
 A restored loop runs at the existing tick cadence; missed intervals coalesce.
+
+### External recovery of a quota-stuck session loop
+
+A quota-stuck Claude need not reply, run CronList, write handoff, or produce a
+new Stop hook. An operator can use the existing controller with
+`--quota-continuation --quota-loop-replacement /private/replacement.json`,
+`--expected-source PANE:PID:SID`, `--expected-session-id SID` and private
+`--handoff` notes. Dry-run checks without keys; actual cutover uses the same
+mutex, lease, native quota cancellation, two-phase identity/input/tool checks,
+and target admission. Automatic web continuation does not enable this option.
+
+The JSON contains `prompt`, `interval_seconds`, and `quota_replacement` with
+`version: 1`, exact `fid`, `session_id`, `pid`, `proc_start` (the existing durable
+controller's process fingerprint), original `user_message_uuid`, and exact
+`invocation`, for example `/loop 30m check the task`. The prompt and cadence must
+match that exact original user text in the registered transcript. This is an
+**authorized replacement**, not a live native export. Historical ScheduleWakeup
+records never prove current membership, a pending deadline, or successful work.
+The replacement begins with a fresh interval; missed ticks are never replayed.
+
+For a task command rearmed by ScheduleWakeup (rather than a literal `/loop`),
+use `basis: "historical-wakeup-spec"` in `quota_replacement`. Bind the exact
+source user-command record with `user_message_uuid` and its text's
+`user_message_sha256`, plus `schedule_message_uuid` and `schedule_tool_use_id`.
+The original `<command-name>` must match `invocation` and `prompt`; the latest
+confirmed scheduler tool must be that exact ScheduleWakeup call, with a native
+`scheduledFor`/`clampedDelaySeconds` receipt matching the chosen interval.
+The historical deadline is discarded. A later scheduler mutation, missing
+receipt or mismatched task refuses. These records supply specification provenance;
+the transcript's `user` role alone is not a new business approval. The operator's
+private handoff must retain current task authorization, completion and waiting
+conditions from the durable task/control record. Starting the timer never grants
+an EPIC GO that the task did not have.
+
+Only a single session wakeup is supported here. Durable records/journals,
+competing Fleet loop controllers, unknown marks, autonomous loop specifications,
+and multi-cron plans refuse with the missing evidence. Durable tasks continue to
+use `--durable-takeover` and its existing isolation/journal road. No source-model
+cooperation is needed on that road either; mixed/session-only schedules still
+need a separately supported ownership proof.
+
+The live native module must prove an empty prompt and stopped main turn; exact
+transcript and process inventories must show no unfinished tool or live work.
+The normal `/exit` confirmation, if present, must list exactly the authorized
+single `/loop` invocation and selected “Exit and stop tasks”. Unknown dialogs
+get no confirmation. Source transcript is checked again after process death to hold any racing tick.
+Source process death and a childless shell/dead pane are
+required before the single Fleet timer starts. The private package retains
+original intent, source transcript, authorization, fingerprint, spec hash and
+native exit screen. Changing the spec after packaging refuses. If the target
+fails or its completion is unknown, the timer remains paused in that package;
+there is no automatic source/timer restart. A late target binding still cannot
+deliver timer rounds until the formal controller records verified `started`. Inspect the retained target before
+using explicit recovery. Drafts and business approvals keep their existing rules.

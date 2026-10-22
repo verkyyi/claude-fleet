@@ -423,6 +423,19 @@ class IdleDispatchTests(NativeDouble, unittest.TestCase):
 
     def read(self): return json.loads(self.path.read_text())
 
+    def test_external_quota_transfer_waits_for_confirmed_controller_start(self):
+        activation=self.path.parent/'transfer-state.json'
+        r=self.read();r['quota_transfer_state']=str(activation);loop.save(self.path,r)
+        for state in (None,'prepared','source_exited','failed','target_failed'):
+            if state is not None: activation.write_text(json.dumps({'state':state}))
+            loop.dispatch(self.path,now=10000)
+            self.assertEqual(self.messages,[])
+            self.assertEqual(self.read()['deferred_reason'],'quota-transfer-unconfirmed')
+        activation.write_text(json.dumps({'state':'started'}))
+        loop.dispatch(self.path,now=10001)
+        loop.dispatch(self.path,now=10002)
+        self.assertEqual(len(self.messages),1)
+
     def test_stop_looping_own_loop_legacy_codex_delivers_once(self):
         loop.dispatch(self.path, now=10000)
         self.assertEqual(len(self.messages), 1)

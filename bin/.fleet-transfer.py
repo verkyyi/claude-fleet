@@ -340,6 +340,15 @@ def package(a):
         if manifest['fleet']['identity'].get('agent_def'):
             manifest['source_resume_argv'][1:1] = ['--as', manifest['fleet']['identity']['agent_def']]
     if loop:
+        if a.loop and os.environ.get('FLEET_QUOTA_LOOP_REPLACEMENT'):
+            from fleet_transfer_source import quota_loop_replacement
+            proof = quota_loop_replacement(dict(session=a.session, pane=a.pane, pid=int(a.pid),
+                session_id=a.sid, transcript=a.transcript), run('tmux', '-L', a.session,
+                'display-message', '-p', '-t', a.pane, '#{@loop}'))
+            if json.loads(Path(a.loop).read_bytes()) != raw:
+                raise ValueError('replacement changed during packaging')
+            manifest['quota_loop_replacement'] = proof
+            write_json(bundle / 'quota-loop-authorization.json', proof)
         write_json(bundle / 'loop-spec.json', loop)
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
         if a.loop:
@@ -561,6 +570,19 @@ def loop_exit_confirmation(screen, bundle=None):
     lines = [line.strip() for line in screen.splitlines() if line.strip()]
     if bundle:
         manifest = json.loads((bundle / 'manifest.json').read_text())
+        replacement = manifest.get('quota_loop_replacement')
+        if replacement:
+            invocation = replacement['authorization']['invocation']
+            # ScheduleWakeup commonly rearms /loop with its interval omitted;
+            # this is still the exact authorized prompt, not another task.
+            match = re.fullmatch(r'/loop [1-9][0-9]*[smhd] ([^\r\n]+)', invocation)
+            labels = replacement.get('native_exit_invocations') or ([invocation] + (['/loop ' + match[1]] if match else []))
+            label = '(?:' + '|'.join(re.escape(x) for x in labels) + ')'
+            return (len(lines) >= 7
+                    and lines[-7:-5] == ['Background work is running', 'The following will stop when you exit:']
+                    and re.fullmatch(r'scheduled task · Runs once in .+ · ' + label, lines[-5]) is not None
+                    and lines[-4:] == ['❯ 1. Exit and stop tasks', '2. Move to background and exit',
+                                       '3. Stay', 'Enter to confirm · Esc to cancel'])
         if manifest.get('native_cron'):
             jobs = [j for j in json.loads(Path(manifest['loop_spec_path']).read_text())['jobs']
                     if j['id'] not in manifest.get('durable_ids', [])]  # deleted natively already
@@ -933,7 +955,11 @@ def main():
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         })
     elif a.command == "verify":
-        source = json.loads((Path(a.bundle) / "manifest.json").read_text())["source"]
+        manifest = json.loads((Path(a.bundle) / "manifest.json").read_text())
+        replacement = manifest.get('quota_loop_replacement')
+        if replacement and hashlib.sha256(Path(replacement['path']).read_bytes()).hexdigest() != replacement['sha256']:
+            raise ValueError('external quota replacement changed after packaging')
+        source = manifest["source"]
         digest = hashlib.sha256()
         with open(source["transcript_path"], "rb") as transcript:
             for chunk in iter(lambda: transcript.read(1024 * 1024), b""):

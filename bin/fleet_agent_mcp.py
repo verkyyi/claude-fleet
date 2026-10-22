@@ -325,7 +325,7 @@ def _expand(nodes, env):
 # env_vars + env (issue #4537: real app-server, every hook in its environment,
 # none reached the child; one named in env_vars did). Another release gets no
 # shell-exec identity until it is measured and added here.
-SHELL_EXEC_CODEX = ('0.160.1', '0.162.1')   # 0.162.1: measured in #4775
+SHELL_EXEC_CODEX = ('0.160.1', '0.162.1', '0.163.0')  # 0.163.0: fleet-move-codex-native-selftest.py
 
 
 def codex_version(client):
@@ -434,7 +434,18 @@ def configured_process(pid, config, argv_reader, exe_reader, env_reader=None, pa
         found = shutil.which(program, path=search) if search else None
         framework_python = (re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', program) is not None
                             and executable.parts[-4:] == ('Python.app', 'Contents', 'MacOS', 'Python'))
-        if (same and '/' not in program and argv[1:] == launched[1:]
+        arguments_match = argv[1:] == launched[1:]
+        # The managed MCP server re-execs its canonical install path on upgrade.
+        # Permit only the Python script operand to name the same existing file;
+        # all remaining arguments and the native parent/environment proof stay exact.
+        if (not arguments_match and re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', program)
+                and len(argv) > 1 and len(launched) > 1 and argv[2:] == launched[2:]
+                and os.path.isabs(argv[1]) and os.path.isabs(launched[1])):
+            try:
+                arguments_match = Path(argv[1]).is_file() and os.path.samefile(argv[1], launched[1])
+            except OSError:
+                pass
+        if (same and '/' not in program and arguments_match
                 and (executable.name == program or framework_python
                      or (found and executable == Path(found).resolve()))):
             return True

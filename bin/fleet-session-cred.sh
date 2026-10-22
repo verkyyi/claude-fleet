@@ -103,6 +103,11 @@ codex_label() { # <home> → the proxy's label for it (default | <name>), exit 1
   local h homes
   h=$(cd "$1" 2>/dev/null && pwd -P) || return 1
   [ "$h" = "$(cd "$HOME/.codex" 2>/dev/null && pwd -P)" ] && { printf default; return 0; }
+  # A migrated transcript has its own credential-free history home, but keeps
+  # this login's normal pool routing. Never borrow the source login's account.
+  if [ -f "$BIN/fleet_move_codex.py" ] && python3 "$BIN/fleet_move_codex.py" account-home --home "$h" >/dev/null 2>&1; then
+    printf default; return 0
+  fi
   homes=$(cd "${FLEET_CRED_CODEX_HOMES:-$HOME/.codex-accounts}" 2>/dev/null && pwd -P) || return 1
   case "$h" in "$homes"/*/*|"$homes"/) return 1 ;; "$homes"/*) printf '%s' "${h##*/}"; return 0 ;; esac
   return 1
