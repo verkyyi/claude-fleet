@@ -192,8 +192,10 @@ def daily(path, day):
                 if math.isfinite(secs) and secs >= 0:
                     durations.append(secs)
                 if row.get("next") is not None and row.get("started") is not None:
-                    scheduled += 1
-                    timely += 0 <= float(row["started"]) - float(row["next"]) <= 30
+                    due, started = float(row["next"]), float(row["started"])
+                    if math.isfinite(due) and math.isfinite(started) and due > 0 and started > 0:
+                        scheduled += 1
+                        timely += 0 <= started - due <= 30
         except (ValueError, TypeError, KeyError, OverflowError):
             continue
     durations.sort()

@@ -105,12 +105,13 @@ book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T12:00:00Z','fid':'fid3','act':'park','rss_mb':2048},
  {'ts':'2026-10-21T12:00:02Z','act':'wake','secs':2,'result':'ok','next':10,'started':12},
  {'ts':'2026-10-21T13:00:00Z','act':'wake','secs':5,'result':'ok','next':10,'started':45},
+ {'ts':'2026-10-21T13:00:01Z','act':'wake','secs':3,'result':'ok','next':0,'started':0},
  {'ts':'2026-10-21T14:00:00Z','act':'fail'},
  {'ts':'2026-10-21T14:00:01Z','act':'deferred'},
  {'ts':'2026-10-20T14:00:01Z','act':'wake','secs':100,'result':'ok'}])+'\ninvalid\n')
 assert latest_park_rss(book) == {'fid3':2048}, latest_park_rss(book)
 d=daily(book,'2026-10-21')
-assert (d['park'],d['wake'],d['fail'],d['deferred'],d['p50'],d['p95'],d['on_time_rate']) == (1,2,1,1,2,5,.5),d
+assert (d['park'],d['wake'],d['fail'],d['deferred'],d['p50'],d['p95'],d['scheduled'],d['on_time_rate']) == (1,3,1,1,3,5,2,.5),d
 # Appended park actions replace older RSS; wake/fail rows never replace it.
 last = w/'last.ndjson'
 last.write_text('\n'.join(json.dumps(r) for r in [
