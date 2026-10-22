@@ -218,6 +218,15 @@ for l, _ in LANGS:
     for k, v in tables[l].items():
         if '"' in v:
             fail('strings.%s.json %s: no double quotes (it goes into attributes)' % (l, k))
+# The brand (EPIC SGS6 B1): ONE name, the strings' `brand` — every other string
+# says {brand}, and the docs (bin/docs-build.sh) and the share card read the same key.
+BRAND = tables['zh'].get('brand', '')
+if not BRAND or any(tables[l].get('brand') != BRAND for l, _ in LANGS):
+    fail('strings.*.json: brand must be set, and the same in every language')
+for l, _ in LANGS:
+    tables[l] = {k: v.replace('{brand}', BRAND) for k, v in tables[l].items()}
+    t = tables[l].get('brand_tag', '')
+    tables[l]['brand_tag_html'] = '<span class="tag">%s</span>' % t if t else ''
 
 TIMED_KEYS = ('description', 'og_description', 'try', 'sub', 'steps_h', 'end_h')
 # The apply-only variant (issue #4269): these words say <key>_apply instead.
@@ -280,11 +289,11 @@ def render(lang, S, variant='trial'):
     origin = '__ORIGIN__'
     url = origin + S['path']
     graph = [
-        {'@type': 'Organization', '@id': origin + '/#org', 'name': 'ClaudeFleet',
+        {'@type': 'Organization', '@id': origin + '/#org', 'name': BRAND,
          'url': origin + '/', 'logo': origin + '/site/icon-512.png', 'sameAs': [REPO_URL]},
-        {'@type': 'WebSite', '@id': origin + '/#website', 'name': 'ClaudeFleet', 'url': url,
+        {'@type': 'WebSite', '@id': origin + '/#website', 'name': BRAND, 'url': url,
          'inLanguage': S['lang'], 'publisher': {'@id': origin + '/#org'}},
-        {'@type': 'SoftwareApplication', '@id': origin + '/#app', 'name': 'ClaudeFleet',
+        {'@type': 'SoftwareApplication', '@id': origin + '/#app', 'name': BRAND,
          'applicationCategory': 'BusinessApplication', 'operatingSystem': 'Web, iOS, Android, macOS',
          'description': v['description'], 'url': url, 'inLanguage': S['lang'],
          'image': origin + S['og_image'], 'license': 'https://opensource.org/licenses/MIT',
@@ -412,7 +421,7 @@ else:
             if not os.path.isfile(src):
                 fail('site/legal/%s.%s.md is missing (every legal page has both languages)' % (doc, lang))
                 continue
-            md = open(src, encoding='utf-8').read()
+            md = open(src, encoding='utf-8').read().replace('{brand}', BRAND)
             title = re.search(r'^#\s+(.+?)\s*$', md, flags=re.M)
             if not title:
                 fail('site/legal/%s.%s.md has no # title' % (doc, lang))
@@ -606,7 +615,7 @@ def crawl_files():
     ai = ['GPTBot', 'OAI-SearchBot', 'ChatGPT-User', 'ClaudeBot', 'Claude-User', 'Claude-SearchBot',
           'anthropic-ai', 'PerplexityBot', 'Perplexity-User', 'Google-Extended', 'Applebot-Extended',
           'CCBot', 'Bytespider', 'meta-externalagent']
-    lines = ['# ClaudeFleet — the website and its docs are open to every crawler, AI assistants included;',
+    lines = ['# %s — the website and its docs are open to every crawler, AI assistants included;' % BRAND,
              '# the console (/app) and the APIs are not. (bin/site-build.sh writes this file.)',
              'User-agent: *'] + ['User-agent: %s' % a for a in ai]
     lines += ['Allow: /', 'Allow: /en/', 'Allow: /docs/', 'Allow: /en/docs/', 'Allow: /site/']
@@ -665,7 +674,7 @@ def crawl_files():
     def llms(lang):
         S = tables[lang]
         other = 'llms-zh.txt' if lang == 'en' else 'llms.txt'
-        out = ['# ClaudeFleet', '', '> ' + S['llms_summary'], '',
+        out = ['# ' + BRAND, '', '> ' + S['llms_summary'], '',
                S['llms_is'], '', S['llms_not'], '', S['llms_for'], '',
                '## ' + S['llms_docs_h'], '']
         mine = en_docs if lang == 'en' else zh_docs
@@ -693,7 +702,7 @@ def crawl_files():
             q = os.path.normpath(os.path.join(d, target))[:-len('.md')]
             return '%s%s%s%s)' % (m.group(1), O, md_url(lang, q), frag)
         return re.sub(r'(\]\()(?!https?:|/|#|mailto:)([^)\s#]+\.md)(#[^)\s]*)?\)', fix, md)
-    full = ['# ClaudeFleet — full documentation', '',
+    full = ['# %s — full documentation' % BRAND, '',
             '> ' + tables['en']['llms_summary'], '',
             '> ' + tables['zh']['llms_summary'], '']
     for d in en_docs + zh_docs:

@@ -230,8 +230,8 @@ def render_list(lines, i, out):
 # The look is extras/fleet-theme's (issue #3924; EPIC SGS6 C4): its tokens and the
 # shadcn light / dark blocks inlined as they are, the fonts at /site/fonts/ (the
 # site's copy), and every colour below a var() of them — none is defined here
-# (fleet-theme-selftest.sh). The brand — the mark and its name, logo.svg's <title> —
-# comes from the same package.
+# (fleet-theme-selftest.sh). The mark comes from the same package; its name is the
+# site's brand key (site/strings.zh.json).
 THEME = os.path.join(REPO, 'extras', 'fleet-theme')
 
 def theme_css():
@@ -245,13 +245,16 @@ def theme_css():
     return '\n'.join(tidy(c) for c in re.findall(r'@font-face\s*\{[^}]*\}', fonts)) + '\n' + tidy(t[a:b])
 
 def theme_brand():
-    svg = open(os.path.join(THEME, 'logo.svg'), encoding='utf-8').read().strip()
-    m = re.search(r'<title>([^<]+)</title>', svg)
-    if not m:
-        print('docs-build: extras/fleet-theme/logo.svg has no <title> (the brand name)', file=sys.stderr)
+    """The name is the site's one brand key (site/strings.zh.json `brand`, EPIC SGS6
+    B1); the mark is the theme's logo.svg."""
+    try:
+        name = json.load(open(os.path.join(REPO, 'site', 'strings.zh.json'), encoding='utf-8'))['brand']
+    except (OSError, ValueError, KeyError):
+        print('docs-build: site/strings.zh.json has no brand (the product name)', file=sys.stderr)
         sys.exit(1)
+    svg = open(os.path.join(THEME, 'logo.svg'), encoding='utf-8').read().strip()
     mark = re.sub(r'<title>[^<]*</title>', '', svg).replace('<svg ', '<svg class="mark" aria-hidden="true" ', 1)
-    return html.unescape(m.group(1)), mark
+    return name, mark
 
 BRAND, MARK = theme_brand()
 CSS = theme_css() + """

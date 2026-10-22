@@ -10,7 +10,7 @@
 <link rel="alternate" hreflang="en" href="__ORIGIN__/en/">
 <link rel="alternate" hreflang="x-default" href="__ORIGIN__/en/">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="ClaudeFleet">
+<meta property="og:site_name" content="{{brand}}">
 <meta property="og:title" content="{{title}}">
 <meta property="og:description" content="{{og_description}}">
 <meta property="og:url" content="__ORIGIN__{{path}}">
@@ -52,6 +52,7 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .nav .wrap{display:flex;align-items:center;height:60px;gap:14px}
 .brand{display:flex;align-items:center;gap:10px;font:750 19px/1 var(--fleet-font-display)}
 .brand svg{width:30px;height:30px}
+.brand .tag{margin-left:8px;font:500 12px/1.3 var(--fleet-font-ui);color:var(--fleet-ink-2)}
 .nav-r{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px}
 .nav-r a{color:var(--fleet-ink-2)} .nav-r a:hover{color:var(--fleet-ink)}
 .lang{display:inline-flex;align-items:center;gap:5px;font:400 13px/1 var(--fleet-font-ui);color:var(--fleet-muted)!important}
@@ -192,7 +193,7 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mk" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)"/><polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="wxm" viewBox="0 0 24 24"><path fill="#fff" d="M9.2 4C5.2 4 2 6.7 2 10.1c0 1.9 1 3.6 2.6 4.7l-.6 2 2.3-1.2c.9.3 1.9.4 2.9.4h.6a5.4 5.4 0 0 1-.2-1.5c0-3.3 3.1-5.9 7-5.9h.6C16.6 5.9 13.2 4 9.2 4zM6.8 7.6a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm4.8 0a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zM16.6 10c-3.3 0-6 2.2-6 5s2.7 5 6 5c.7 0 1.4-.1 2-.3l1.9 1-.5-1.6c1.3-.9 2.6-2.4 2.6-4.1 0-2.8-2.7-5-6-5zm-2 2.6a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm4 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/></symbol></svg>
 
 <header class="nav"><div class="wrap">
-  <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>ClaudeFleet</a>
+  <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>{{brand}}{{brand_tag_html}}</a>
   <div class="nav-r">
     <a class="docs" href="{{docs_path}}">{{docs}}</a>
     <a href="/app" data-out>{{signin}}</a>
@@ -257,7 +258,7 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
       <div class="bar"><i></i><i></i><i></i><span class="url"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>__HOST__/app</span></div>
       <div class="app">
         <div class="sb">
-          <div class="bd"><svg><use href="#mk"/></svg>ClaudeFleet</div>
+          <div class="bd"><svg><use href="#mk"/></svg>{{brand}}</div>
           <div class="it on"><span class="spin" id="sb-1"></span>{{sb_1}}</div>
           <div class="it"><span class="ok">✓</span>{{sb_2}}</div>
           <div class="it"><span class="ok">✓</span>{{sb_3}}</div>

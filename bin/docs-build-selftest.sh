@@ -23,8 +23,8 @@
 #      `dash-keymap.sh --panel switch view` and fleet-ui-lang.sh's view_keys;
 #      a changed default key (a sandbox copy of those scripts) reaches the output
 #      and makes the old source stale, --write mends it; an unknown block refuses
-#   I  the brand is extras/fleet-theme's (EPIC SGS6 C4): every page's header carries
-#      the mark and logo.svg's <title> as its name, its <title> ends `· <name>`, its
+#   I  the brand is the site's (EPIC SGS6 C4, B1): every page's header carries the
+#      theme's mark and site/strings.zh.json's `brand` as its name, its <title> ends `· <name>`, its
 #      colours are the theme's tokens (no colour of its own in the frame); the
 #      FAQPage JSON-LD is on faq — every question of faq.md — and on no other page
 set -u
@@ -110,7 +110,7 @@ PY
 python3 - "$T/out" "$ROOT" <<'PY' || fail=1
 import json, os, re, subprocess, sys
 out, root = sys.argv[1:3]
-brand = re.search(r'<title>([^<]+)</title>', open(os.path.join(root, 'extras/fleet-theme/logo.svg')).read()).group(1)
+brand = json.load(open(os.path.join(root, 'site/strings.zh.json'), encoding='utf-8'))['brand']
 bad, n = [], 0
 for lang in ('zh', 'en'):
     for d, _, files in os.walk(os.path.join(out, lang)):
@@ -210,7 +210,8 @@ else st_ok_all "D a missing en page is built pending, linking its Chinese page";
 if "$BUILD" --check >"$T/h0.out" 2>&1; then st_ok_all "H docs/public is not stale"; else bad "H stale: $(cat "$T/h0.out")"; fi
 HR="$T/hrepo"; mkdir -p "$HR/bin"
 for f in docs-build.sh fleet_keys.py dash-keymap.sh fleet-ui-lang.sh; do cp "$ROOT/bin/$f" "$HR/bin/$f"; done
-mkdir -p "$HR/extras" && cp -R "$ROOT/extras/fleet-theme" "$HR/extras/"   # the frame's look and brand
+mkdir -p "$HR/extras" "$HR/site" && cp -R "$ROOT/extras/fleet-theme" "$HR/extras/"   # the frame's look
+cp "$ROOT/site/strings.zh.json" "$HR/site/"   # and its brand
 for d in h1 h2; do
   mk "$d/zh/index.md" "# home"
   for r in self-host hosted member; do mk "$d/zh/$r/quickstart.md" "# $r"; done
