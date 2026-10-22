@@ -398,17 +398,48 @@ ok "F3 private runtime is default inside a pane; embedded opt-out and explicit r
 # ============================================================================
 # T944: a managed release carries its verified CLI. A stale Homebrew/npm CLI
 # earlier on PATH must not turn a new web session into an old, read-only one.
-mkdir -p "$WORK/install/tools/bin"
+mkdir -p "$WORK/install/tools/bin" "$IBIN/tmux-shim"
+cp "$WORK/fakebin/tmux" "$IBIN/tmux-shim/tmux"
+printf '#!/bin/sh\nexit 99\n' > "$WORK/install/tools/bin/tmux"
+chmod +x "$WORK/install/tools/bin/tmux"
 cat > "$WORK/install/tools/bin/codex" <<EOS
 #!/bin/sh
 printf 'pin\n' >> "$WORK/pin-used"
+command -v tmux > "$WORK/pinned-tmux"
 exec "$WORK/fakebin/codex" "\$@"
 EOS
 chmod +x "$WORK/install/tools/bin/codex"
 run 'release pin fixture'
 [ -s "$WORK/pin-used" ] || fail "F4 managed release Codex must win over a stale CLI earlier on PATH"
 [ "$(ran)" = codex ] || fail "F4 the pinned CLI did not run" "$(ran)"
-rm -rf "$WORK/install/tools"
+[ "$(cat "$WORK/pinned-tmux")" = "$IBIN/tmux-shim/tmux" ] || fail "F4 release tools displaced the tmux protection shim"
+# Exercise the direct service launch too, with its SDK already installed and a
+# fake node that records the executable passed to server.mjs (no server/network).
+ln -s "$BIN/fleet-webchat.sh" "$IBIN/fleet-webchat.sh"
+ln -s "$BIN/fleet-service-takeover.py" "$IBIN/fleet-service-takeover.py"
+mkdir -p "$WORK/install/extras/web-chat" "$WORK/webconf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk"
+printf '{}\n' > "$WORK/install/extras/web-chat/package-lock.json"
+cp "$WORK/install/extras/web-chat/package-lock.json" "$WORK/webconf/webchat/deps/package-lock.json"
+touch "$WORK/webconf/webchat/deps/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
+cat > "$WORK/fakebin/webnode" <<EOS
+#!/bin/sh
+printf '%s' "\$FLEET_WEBCHAT_CODEX_BIN" > "$WORK/direct-codex"
+EOS
+chmod +x "$WORK/fakebin/webnode"
+ln -s /usr/bin/true "$WORK/fakebin/npm"
+direct_launch() {
+  FLEET_CONF_DIR="$WORK/webconf" FLEET_WEBCHAT_NODE="$WORK/fakebin/webnode" \
+    FLEET_CODEX_BIN="$WORK/fakebin/codex" bash "$IBIN/fleet-webchat.sh" serve > "$WORK/direct-out" 2>&1 \
+    || fail "F5 direct webchat launch failed" "$(cat "$WORK/direct-out")"
+}
+direct_launch
+[ "$(cat "$WORK/direct-codex")" = "$WORK/install/bin/../tools/bin/codex" ] \
+  || fail "F5 direct webchat ignored the managed pin" "$(cat "$WORK/direct-codex")"
+rm -rf "$WORK/install/tools" "$IBIN/tmux-shim"
+direct_launch
+[ "$(cat "$WORK/direct-codex")" = "$WORK/fakebin/codex" ] \
+  || fail "F5 unmanaged direct webchat lost its explicit override"
+ok "F5 direct webchat uses the managed pin; unmanaged installs keep the explicit override"
 ok "F4 managed release Codex wins over a stale CLI earlier on PATH"
 
 # PATH is narrowed to the fakes + the system dirs so a REAL codex installed under

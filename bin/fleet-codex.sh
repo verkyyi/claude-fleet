@@ -24,6 +24,9 @@ if [ "${FLEET_CODEX_NATIVE_USAGE:-0}" = 1 ]; then export FLEET_CODEX_NATIVE_USAG
 # without release tools keep their existing PATH selection.
 if [ -x "$ROOT/tools/bin/codex" ]; then
   PATH="$ROOT/tools/bin:$PATH"
+  # tools/bin also carries real tmux. Keep the wrapper's protection entry first
+  # for the CLI, app-server and every agent subprocess (T944 follow-up).
+  [ ! -x "$BIN/tmux-shim/tmux" ] || PATH="$BIN/tmux-shim:$PATH"
   export PATH
 fi
 command -v codex >/dev/null 2>&1 || { fleet_launch_say 'FLEET_AGENT=codex but `codex` is not on PATH — install OpenAI Codex CLI (npm i -g @openai/codex) and `codex login`, or set FLEET_AGENT back to claude.'; exit 127; }
