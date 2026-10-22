@@ -56,14 +56,36 @@ def process_trees(text):
     return tree
 
 
+def latest_park_rss(path):
+    """Last park action per lifelong identity; observations never append rows."""
+    saved = {}
+    try:
+        with Path(path).open() as book:
+            for line in book:
+                try:
+                    row = json.loads(line)
+                    if row.get("act") != "park" or not row.get("fid"):
+                        continue
+                    rss = row.get("rss_mb")
+                    saved[row["fid"]] = float(rss) if type(rss) in (int, float) and math.isfinite(rss) and rss >= 0 else None
+                except (ValueError, TypeError, AttributeError):
+                    continue
+    except FileNotFoundError:
+        pass  # C1 has not parked anything yet.
+    return saved
+
+
 def census(socket, session, cache_dir):
     # Exact session, one row per window: grouped views never duplicate a pane.
     fmt = "\x1f".join(["#{window_id}", "#{pane_pid}", "#{@fleet_role}", "#{window_name}",
-                          "#{@park_state}", "#{@park_saved_mb}", "#{@park_wrap_ver}",
-                          "#{@park_why}", "#{@parked}", "#{@park_held}"])
+                          "#{@park_state}", "#{@park_rss_mb}", "#{@park_wrap_ver}",
+                          "#{@park_since}", "#{@fleet_id}"])
     rows = command(["tmux", "-u", "-L", socket, "list-windows", "-t", "=" + session, "-F", fmt])
-    watched = set(command(["tmux", "-L", socket, "list-clients", "-F", "#{window_id}"]).split())
+    clients = command(["tmux", "-L", socket, "list-clients", "-F", "#{client_control_mode}\x1f#{window_id}"])
+    watched = {wid for row in clients.split("\n") for control, sep, wid in [row.partition("\x1f")]
+               if sep and control != "1"}
     trees = process_trees(command(["ps", "-axo", "pid=,ppid=,rss=,time=,command="]))
+    saved_by_fid = latest_park_rss(Path(cache_dir).parent / "logs/park.ndjson")
     path = Path(cache_dir) / ("park-cpu-" + session + ".json")
     try:
         previous = json.loads(path.read_text())
@@ -72,9 +94,9 @@ def census(socket, session, cache_dir):
     now, next_sample, result = time.time(), {}, {}
     for row in rows.split("\n"):
         fields = row.split("\x1f")
-        if len(fields) != 10:
+        if len(fields) != 9:
             continue
-        wid, pid, role, name, parked, saved, wrap, why, gate_parked, held = fields
+        wid, pid, role, name, parked, saved, wrap, _since, fid = fields
         if role in ("home", "panel") or (not role and name in ("home", "dash", "plan", "backlog")):
             continue
         if not pid.isdigit():
@@ -88,6 +110,8 @@ def census(socket, session, cache_dir):
             quiet = cpu - old["cpu"] < 0.5 * elapsed / 60
         if cpu < old.get("cpu", cpu):
             quiet = None
+        if not known:
+            quiet = None
         next_sample[wid] = {"at": now, "cpu": cpu, "pid": pid, "quiet": quiet} if elapsed >= 60 or old.get("pid") != pid else old
         try:
             saved_mb = max(0, float(saved)) if saved else None
@@ -95,9 +119,11 @@ def census(socket, session, cache_dir):
                 saved_mb = None
         except ValueError:
             saved_mb = None
-        result[wid] = {"state": "parked" if parked == "停放中" or (gate_parked and held) else "awake",
+        if fid in saved_by_fid:
+            saved_mb = saved_by_fid[fid]
+        result[wid] = {"state": "parked" if parked == "停放中" else "awake",
                        "rss_mb": round(rss, 2) if known else None, "saved_mb": saved_mb,
-                       "why": "watched" if wid in watched else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
+                       "why": "watched" if wid in watched else "failed" if parked == "失败" else ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".%d.tmp" % os.getpid())
@@ -112,8 +138,9 @@ def summarize(workers):
     if any("park" not in w for w in workers):
         return None  # An older adapter cannot supply a partial, optimistic sum.
     out = dict(sessions_working=0, sessions_idle=0, sessions_parked=0,
-               idle_rss_mb=0.0, parked_saved_mb=0.0, idle_reasons={}, idle_eligible=0, idle_eligible_rss_mb=0.0)
+               idle_rss_mb=0.0, parked_saved_mb=0.0, idle_reasons={})
     reasons = Counter()
+    sample_pending = False
     for w in workers:
         p = w["park"]
         if p["state"] == "parked":
@@ -122,27 +149,27 @@ def summarize(workers):
                 out["parked_saved_mb"] = None
             elif out["parked_saved_mb"] is not None:
                 out["parked_saved_mb"] += p["saved_mb"]
-        elif w.get("state") not in ("done", "idle", "looping", "needs", "exited") or p.get("quiet") is False:
+        elif (w.get("state") not in ("done", "looping", "needs")
+              or p.get("quiet") is False or p["why"] == "watched" or w.get("busy") == "bg"):
             out["sessions_working"] += 1
+        elif p.get("quiet") is None:
+            # Until a full CPU sample, neither a zero idle count nor a working
+            # count is known. Preserve that uncertainty through the heartbeat.
+            out["idle_rss_mb"] = None
+            reasons["sampling"] += 1
+            sample_pending = True
         else:
             out["sessions_idle"] += 1
             if p["rss_mb"] is None:
                 out["idle_rss_mb"] = None
             elif out["idle_rss_mb"] is not None:
                 out["idle_rss_mb"] += p["rss_mb"]
-            why = "background" if w.get("busy") == "bg" else p["why"]
-            if p.get("quiet") is None and why == "idle-delay":
-                why = "sampling"
-            reasons[why] += 1
-            if p["quiet"] is None:
-                out["idle_eligible"] = None
-                out["idle_eligible_rss_mb"] = None
-            elif out["idle_eligible"] is not None and p["quiet"] and why not in ("watched", "background"):
-                out["idle_eligible"] += 1
-                if p["rss_mb"] is None:
-                    out["idle_eligible_rss_mb"] = None
-                elif out["idle_eligible_rss_mb"] is not None:
-                    out["idle_eligible_rss_mb"] += p["rss_mb"]
+            reasons[p["why"]] += 1
+    if sample_pending:
+        out["sessions_idle"] = out["sessions_working"] = None
+    # compat-1v: 下一批删 — these fields shipped in #5275; one definition now.
+    out["idle_eligible"] = out["sessions_idle"]
+    out["idle_eligible_rss_mb"] = out["idle_rss_mb"]
     out["idle_reasons"] = dict(reasons)
     return out
 
@@ -165,8 +192,10 @@ def daily(path, day):
                 if math.isfinite(secs) and secs >= 0:
                     durations.append(secs)
                 if row.get("next") is not None and row.get("started") is not None:
-                    scheduled += 1
-                    timely += 0 <= float(row["started"]) - float(row["next"]) <= 30
+                    due, started = float(row["next"]), float(row["started"])
+                    if math.isfinite(due) and math.isfinite(started) and due > 0 and started > 0:
+                        scheduled += 1
+                        timely += 0 <= started - due <= 30
         except (ValueError, TypeError, KeyError, OverflowError):
             continue
     durations.sort()
@@ -198,19 +227,18 @@ def main():
             if stats is None:
                 raise RuntimeError("park metrics unavailable for " + fleet["name"])
             totals.append(stats)
-        total = {k: sum(s[k] for s in totals) for k in ("sessions_working", "sessions_idle", "sessions_parked")}
+        total = {k: (None if any(s[k] is None for s in totals) else sum(s[k] for s in totals))
+                 for k in ("sessions_working", "sessions_idle", "sessions_parked")}
         saved = None if any(s["parked_saved_mb"] is None for s in totals) else sum(s["parked_saved_mb"] for s in totals)
         idle_rss = None if any(s["idle_rss_mb"] is None for s in totals) else sum(s["idle_rss_mb"] for s in totals)
         reasons = Counter()
         for s in totals:
             reasons.update(s["idle_reasons"])
-        eligible = None if any(s["idle_eligible"] is None for s in totals) else sum(s["idle_eligible"] for s in totals)
-        eligible_rss = None if any(s["idle_eligible_rss_mb"] is None for s in totals) else sum(s["idle_eligible_rss_mb"] for s in totals)
-        detail = " · eligible " + ("unknown (needs 60s CPU sample)" if eligible is None else str(eligible))
-        detail += " / " + ("unknown" if eligible_rss is None else "%.1f MB" % eligible_rss)
+        detail = ""
         if reasons:
             detail += " · " + ", ".join("%s %d" % pair for pair in sorted(reasons.items()))
-        print("working {sessions_working} · idle {sessions_idle} · parked {sessions_parked} · saved ".format(**total) + ("unknown" if saved is None else "%.1f MB" % saved) + " · idle RSS " + ("unknown" if idle_rss is None else "%.1f MB" % idle_rss) + detail)
+        counts = {k: "unknown (needs 60s CPU sample)" if v is None else str(v) for k, v in total.items()}
+        print("working {sessions_working} · idle {sessions_idle} · parked {sessions_parked} · saved ".format(**counts) + ("unknown" if saved is None else "%.1f MB" % saved) + " · idle RSS " + ("unknown" if idle_rss is None else "%.1f MB" % idle_rss) + detail)
 
 
 if __name__ == "__main__":

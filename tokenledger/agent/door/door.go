@@ -812,12 +812,18 @@ func carry(nch ssh.NewChannel, home *ssh.Client) {
 		hch.Close()
 		return
 	}
+	// A short command can close its home channel before the goroutine below
+	// forwards the exec acknowledgement. Keep the client channel open until
+	// that acknowledgement is sent, or Session.Start can report EOF.
+	var clientRequest sync.Mutex
 	go func() {
 		for r := range creqs {
+			clientRequest.Lock()
 			ok, err := hch.SendRequest(r.Type, r.WantReply, r.Payload)
 			if r.WantReply {
 				r.Reply(ok && err == nil, nil)
 			}
+			clientRequest.Unlock()
 		}
 		hch.Close()
 	}()
@@ -840,9 +846,11 @@ func carry(nch ssh.NewChannel, home *ssh.Client) {
 		}
 	}()
 	_, _ = io.Copy(ch, hch)
-	_ = ch.CloseWrite()
 	<-reqDone
+	clientRequest.Lock()
+	_ = ch.CloseWrite()
 	ch.Close()
+	clientRequest.Unlock()
 	hch.Close()
 	go wg.Wait()
 }
