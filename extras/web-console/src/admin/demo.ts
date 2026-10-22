@@ -316,7 +316,7 @@ const emergencyDemo = (stopped: boolean): EmergencyView => ({
   people: users.filter((x) => x.role !== "admin").map((x, i) => ({ principal: x.principal_id, login: x.login, role: x.role, trial: i === 1, sessions: [2, 1, 0, 0][i] ?? 0 })),
   stopped: [],
   machines: [
-    { hostname: "macmini", status: "online", paused: false, sessions: 9 },
+    { hostname: "mac-mini", status: "online", paused: false, sessions: 9 },
     { hostname: "mac-studio", status: "online", paused: false, sessions: 4 },
   ],
 });
