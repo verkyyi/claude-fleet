@@ -89,6 +89,7 @@ fleet hub unset fleet.person_budget.gh:1234567              # 取消上限
 - 批准后：`fleet hub set fleet.member_limits.<身份 id> "until=2026-11-01T00:00:00Z,tokens=3M,sessions=2"` 改（或在「成员」里改）；`fleet hub unset fleet.member_limits.<身份 id>` = 转正，什么都不限。
 - 早先按美元写的 `usd=` 由库迁移 6 换成 tokens（每美元 15 万）。
 - 再批准一次不会重置已有的限额。
+- 试用到期（`until` 过了、还没转正）：当时就停掉他登录上的会话；到期后第 23、27 天经服务号（不行就邮件）提醒他数据哪天删；第 30 天删掉他登录的家目录（登录洗净、过检查后回备用池）、hub 上的对话镜像和上传文件，只在审计里留一行不含内容的 `trial.purge`。保留天数 `fleet hub set fleet.trial.retain_days 30`（默认 30，0 = 到期立即删、不提醒；提醒总在删除前 7 天和 3 天）。转正（`unset` 上面的键）就什么都不删。
 
 ## 试用二维码：扫码关注即试用
 

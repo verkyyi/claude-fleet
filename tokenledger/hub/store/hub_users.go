@@ -541,3 +541,12 @@ func (s *Store) HubAuditByAction(action string, since time.Time) ([]HubAuditEntr
 	}
 	return out, rows.Err()
 }
+
+// HubAuditTargetHas reports whether action has an audit row naming target —
+// a once-per-person step remembers itself this way (claude-fleet WACK C8:
+// trial.expire_stop, trial.purge).
+func (s *Store) HubAuditTargetHas(action, target string) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM hub_audit WHERE action = ? AND target = ?`, action, target).Scan(&n)
+	return n > 0, err
+}

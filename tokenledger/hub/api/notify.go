@@ -417,7 +417,7 @@ func (s *Server) wxTemplate(kind string) string {
 	switch kind {
 	case store.NotifyKindNewReq, store.NotifyKindUpgrade, store.NotifyKindQRBurst:
 		return s.WxGW.TplNewReq
-	case store.NotifyKindNotice:
+	case store.NotifyKindNotice, store.NotifyKindTrialPurge:
 		return s.WxGW.TplNotice
 	}
 	return s.WxGW.TplReview
@@ -579,6 +579,8 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 			return noticeMsg{}, false, nil // resumed already
 		}
 		return qrBurstMsg(code, en, base), true, nil
+	case store.NotifyKindTrialPurge:
+		return s.trialPurgeNoticeMsg(n, en, base)
 	}
 	return noticeMsg{}, false, errors.New("no notice of kind " + n.Kind)
 }

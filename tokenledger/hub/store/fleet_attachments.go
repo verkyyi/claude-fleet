@@ -90,3 +90,13 @@ func (s *Store) ExpireFleetAttachments(ttl time.Duration, at time.Time) (int64, 
 	}
 	return res.RowsAffected()
 }
+
+// DeleteFleetAttachmentsOf drops every attachment actor sent (claude-fleet
+// WACK C8: an ended trial's uploads go with its data).
+func (s *Store) DeleteFleetAttachmentsOf(actor string) (int64, error) {
+	res, err := s.write.Exec(`DELETE FROM fleet_attachments WHERE actor = ?`, actor)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

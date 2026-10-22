@@ -23,6 +23,10 @@ const (
 	// NotifyKindQRBurst is a 试用二维码 that paused itself on a burst → an
 	// admin; refs = the code's id (claude-fleet MRGB).
 	NotifyKindQRBurst = "qrburst"
+	// NotifyKindTrialPurge tells an ended trial member when their data goes;
+	// refs = the member's principal and the purge time, RFC 3339
+	// (claude-fleet WACK C8).
+	NotifyKindTrialPurge = "trialpurge"
 )
 
 // The states of a notice.
