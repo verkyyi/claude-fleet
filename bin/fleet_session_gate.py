@@ -67,6 +67,7 @@ read as fleet_session_command's), FLEET_GATE_NOW (epoch).
 """
 import argparse
 import fcntl
+import socket
 import glob
 import json
 import os
@@ -97,9 +98,12 @@ KEEP_RETURNED = 3600       # a returned one an hour (the page puts it back in th
 WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}", "#{@claude_state}",
                      "#{@claude_needs}", "#{@agent_status}", "#{@cc_session_id}", "#{@codex_session_id}",
                      "#{@mod_alive}", "#{@session_origin}", "#{window_activity}", "#{@park_wake}",
-                     "#{@claude_state_ts}", "#{@loop}", "#{socket_path}"])
+                     "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
+                     "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
+                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
-            "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path"]
+            "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
+            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start"]
 
 
 def now():
@@ -599,12 +603,16 @@ def wake_try(r, w):
                 return "waking", "starting"
             return ("sent", "woken") if Path(str(seed) + ".launched").exists() else ("returned", "wake_timeout")
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+        park_log(r["fid"], "fail", "网页", now() - r.get("wake_at", now()), "wake_timeout")
         return "returned", "wake_timeout"
     seed.write_text(compose(r))
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
     save(r)
     log("wake", r, "seed")
-    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_wake", str(seed))
+    requested = wake_request(w, seed, "网页")
+    if not requested.get("ok"):
+        seed.unlink(missing_ok=True)
+        return "queued", requested["why"]
     # the wrapper polls; give it a moment so a quick start answers `sent` at once
     end = time.monotonic() + min(wake_secs, float(os.environ.get("FLEET_GATE_WAKE_WAIT", "3")))
     while time.monotonic() < end:
@@ -614,69 +622,241 @@ def wake_try(r, w):
     return "waking", "waking"
 
 
+def park_log(fid, act, why, secs=0, result="ok", next_at=0, started=0):
+    """Only actions, never a polling skip. One append ≤ PIPE_BUF."""
+    row = dict(ts=int(now()), fid=fid, act=act, why=why, secs=round(secs, 3),
+               result=result, next=next_at, started=started)
+    try:
+        directory = conf_dir() / "logs"
+        directory.mkdir(parents=True, exist_ok=True)
+        fd = os.open(directory / "park.ndjson", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, (json.dumps(row, ensure_ascii=False) + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def presence(w):
+    """Recent first-person input / an open web page; missing evidence is conservative.
+
+    @park_presence is an epoch: the web / keyboard reader refreshes it, peer
+    messages never do. Browser-owned human work already holds the bg gate.
+    """
+    import fleet_reap_policy
+    stamp = w.get("presence", "")
+    return not stamp.isdigit() or now() - int(stamp) < fleet_reap_policy.park_presence_secs()
+
+
+def park_background(w):
+    seam = os.environ.get("FLEET_GATE_BG_CMD")
+    argv = shlex.split(seam) if seam else [
+        "bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; '
+        'fleet_window_bg_busy "$2" "$3" "" 1', "park-bg", str(BIN), w["sock"], w["win"]]
+    env = dict(os.environ)
+    # These helpers inherit the window's server, never the caller's socket.
+    if w.get("socket_path"):
+        env["TMUX"] = w["socket_path"] + ",0,0"
+    try:
+        p = subprocess.run(argv, capture_output=True, timeout=15, env=env)
+        return p.returncode != 1            # unknown / failed probes hold too
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def relay_request(w, request):
+    """The 7501 relay owns the pty. No tmux keys and no Escape fallback."""
+    path = w.get("relay", "")
+    if not path:
+        return dict(ok=False, why="no_relay")
+    try:
+        with socket.socket(socket.AF_UNIX) as c:
+            c.settimeout(3)
+            c.connect(path)
+            c.sendall((json.dumps(request) + "\n").encode())
+            raw = c.recv(4096)
+        return json.loads(raw)
+    except (OSError, ValueError):
+        return dict(ok=False, why="relay_unavailable")
+
+
+def park_proof(w):
+    seam = os.environ.get("FLEET_GATE_PARK_PROBE_CMD")
+    if seam:
+        try:
+            p = subprocess.run(shlex.split(seam), capture_output=True, text=True, timeout=5)
+            return json.loads(p.stdout) if p.returncode == 0 else dict(ok=False, why="probe_failed")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return dict(ok=False, why="probe_failed")
+    directory = claude_inbox(w)
+    if directory is None:
+        return dict(ok=False, why="no_probe")
+    nonce = uuid.uuid4().hex
+    base = directory / ("%d-park-%s" % (int(now()), nonce))
+    pending = Path(str(base) + ".json")
+    write_json(pending, dict(query="park.v1", nonce=nonce, deadline=now() + 5))
+    end = time.monotonic() + 5
+    while time.monotonic() < end:
+        answer = read_json(str(base) + ".done")
+        if isinstance(answer, dict):
+            for suffix in (".done", ".taken"):
+                Path(str(base) + suffix).unlink(missing_ok=True)
+            return answer
+        time.sleep(.05)
+    # Late probes are read-only; cancel when still unclaimed.
+    pending.unlink(missing_ok=True)
+    return dict(ok=False, why="probe_timeout")
+
+
+def park_saved_mb(w):
+    """RSS of this window's agent tree; no command text or credentials logged."""
+    try:
+        rows = subprocess.run(["ps", "-axo", "pid=,ppid=,rss="], capture_output=True,
+                              text=True, timeout=5).stdout.splitlines()
+        tree = [tuple(map(int, line.split())) for line in rows if len(line.split()) == 3]
+        owned = {int(w.get("pane_pid") or 0)}
+        for _ in range(len(tree)):
+            more = {pid for pid, ppid, rss in tree if ppid in owned}
+            if more <= owned:
+                break
+            owned |= more
+        return round(sum(rss for pid, ppid, rss in tree if pid in owned) / 1024, 1)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
 def park(fid, why="idle", force=False):
+    with lock(fid):
+        return park_locked(fid, why, force)
+
+
+def park_locked(fid, why, force):
+    import fleet_agent_adapter
     w = window(fid)
     if w is None:
         return dict(ok=False, why="no_session")
     if w["parked"]:
         return dict(ok=True, already=True)
-    if w["agent"] not in ("claude", "codex") or w["state"] == "exited":
-        return dict(ok=False, why="not_running")
-    b = busy_of(w)
-    if b:
-        return dict(ok=False, why=b)
-    if not force and watched(w):
+    if not w.get("wrap_ver", "").isdigit() or int(w["wrap_ver"]) < 1:
+        return dict(ok=False, why="old_wrapper")
+    adapter = fleet_agent_adapter.ADAPTERS.get(w["agent"], {})
+    if adapter.get("park_resume") != "1" or not w["sid"]:
+        return dict(ok=False, why="not_resumable")
+    if w["state"] not in ("done", "looping"):
+        return dict(ok=False, why=busy_of(w) or "not_idle")
+    if busy_of(w) and not w["loop"]:
+        return dict(ok=False, why=busy_of(w))
+    if watched(w):
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_watched_at", str(int(now())))
         return dict(ok=False, why="watched")
+    if park_background(w):
+        return dict(ok=False, why="bg")
     if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
         return dict(ok=False, why="words_waiting")
-    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@parked", str(int(now())))
-    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_why", why)
-    rc = 3
-    seam = os.environ.get("FLEET_GATE_EXIT_CMD")
-    if seam:
-        rc = subprocess.run(shlex.split(seam) + [w["pane"]], capture_output=True, timeout=60).returncode
-    elif w["agent"] == "claude":
-        rc = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; '
-                             'fleet_session_command --socket "$2" --from park "$3" /exit',
-                             "park", str(BIN), w["sock"], w["pane"]],
-                            capture_output=True, timeout=60).returncode
-    if rc not in (0, 6):
-        # no mod to run it: the fleet's own typed /exit, on an idle prompt only
-        sk = os.environ.get("FLEET_GATE_TMUX", "tmux")
-        env = dict(os.environ, FLEET_ALLOW_SENDKEYS="1")
-        for keys in (["Escape"], ["-l", "/exit"], ["Enter"]):
-            subprocess.run([sk, "-L", w["sock"], "send-keys", "-t", w["pane"]] + keys, env=env,
+    # C3 hands timers out before the process goes away. Until it is installed,
+    # a live timer is a hold, never a silently lost wakeup.
+    if w["loop"]:
+        p = subprocess.run([sys.executable, str(BIN / "fleet_loop_mark.py"), "export", "--fid", fid],
                            capture_output=True, timeout=10)
-    # the wrapper says it holds the parked window (@park_held); an agent that did
-    # not exit is not parked — the mark comes off again
-    end = time.monotonic() + num_env("FLEET_GATE_PARK_SECS", 15)
-    while time.monotonic() < end:
-        held = tmux(w["sock"], "display-message", "-p", "-t", w["win"], "#{@park_held}")
-        if held and held.strip():
-            log("park", dict(fid=fid, agent=w["agent"], state="parked"), why)
-            return dict(ok=True, why=why)
-        time.sleep(.2)
-    tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@parked")
-    tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_why")
-    return dict(ok=False, why="exit_failed")
+        if p.returncode != 0:
+            return dict(ok=False, why="wake_contract")
+    generation = relay_request(w, dict(op="status"))
+    seam = os.environ.get("FLEET_GATE_EXIT_CMD")
+    if not generation.get("ok") and not seam:
+        return generation
+    proof = park_proof(w)
+    if not proof.get("ok"):
+        return dict(ok=False, why=proof.get("why") or proof.get("error") or "not_idle")
+    # Recheck after the native proof: a client / queued turn may have arrived.
+    current = window(fid)
+    if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
+            or current["state"] in ("working", "needs", "exited") or watched(current)):
+        return dict(ok=False, why="changed")
+    started = time.monotonic()
+    for option, value in (("@parked", str(int(now()))), ("@park_why", why),
+                          ("@park_saved_mb", str(park_saved_mb(w)))):
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], option, value)
+    if seam:
+        rc = subprocess.run(shlex.split(seam) + [w["pane"]], capture_output=True, timeout=5).returncode
+        sent = dict(ok=rc in (0, 6))
+    else:
+        sent = relay_request(w, dict(op="exit", generation=generation.get("generation")))
+    if sent.get("ok"):
+        end = time.monotonic() + num_env("FLEET_GATE_PARK_SECS", 15)
+        while time.monotonic() < end:
+            held = tmux(w["sock"], "display-message", "-p", "-t", w["win"], "#{@park_held}")
+            if held and held.strip():
+                park_log(fid, "park", why, time.monotonic() - started)
+                return dict(ok=True, why=why)
+            time.sleep(.1)
+    for option in ("@parked", "@park_why", "@park_saved_mb"):
+        tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
+    park_log(fid, "fail", why, time.monotonic() - started, sent.get("why") or "exit_failed")
+    return dict(ok=False, why=sent.get("why") or "exit_failed")
 
 
-def wake(fid, seed_file=None):
-    w = window(fid)
-    if w is None:
-        return dict(ok=False, why="no_session")
-    if not w["parked"]:
-        return dict(ok=True, already=True)
-    seed = wake_path(fid, None)
-    seed.write_text(Path(seed_file).read_text() if seed_file else "")
+def wake_request(w, seed, why):
+    """Called under the fid lock: one owned seed, never replace another wake."""
+    active = w.get("park_wake") or w.get("park_start")
+    if active:
+        return dict(ok=False, why="wake_pending")
+    meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
+                next=(read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
+    write_json(str(seed) + ".meta", meta)
     tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_wake", str(seed))
+    return dict(ok=True, seed=str(seed))
+
+
+def wake_ready(pane):
+    """7501's first native report: the resumed engine is up, not merely forked."""
+    raw = tmux("", "display-message", "-p", "-t", pane, "#{@park_start}")
+    if not raw or not raw.strip():
+        return
+    path = Path(raw.strip())
+    try:
+        path.rename(str(path) + ".claimed")
+    except OSError:
+        return
+    meta = read_json(str(path) + ".claimed") or {}
+    seed = meta.get("seed", "")
+    if seed:
+        Path(seed + ".launched").touch()
+        Path(seed + ".taken").unlink(missing_ok=True)
+    park_log(meta.get("fid", ""), "wake", meta.get("why", ""),
+             max(0, now() - meta.get("started", now())), "resumed", meta.get("next", 0), meta.get("started", 0))
+    tmux("", "set-option", "-wu", "-t", pane, "@park_start")
+    Path(str(path) + ".claimed").unlink(missing_ok=True)
+
+
+def wake(fid, seed_file=None, why="网页", request_only=False):
+    with lock(fid):
+        w = window(fid)
+        if w is None:
+            return dict(ok=False, why="no_session")
+        if not w["parked"]:
+            return dict(ok=True, already=True)
+        seed = wake_path(fid, uuid.uuid4().hex)
+        seed.write_text(Path(seed_file).read_text() if seed_file else "")
+        result = wake_request(w, seed, why)
+        if not result.get("ok"):
+            seed.unlink(missing_ok=True)
+            return result
+    if request_only:
+        return result
     end = time.monotonic() + num_env("FLEET_GATE_WAKE_SECS", 20)
     while time.monotonic() < end:
         if Path(str(seed) + ".launched").exists():
-            Path(str(seed) + ".launched").unlink(missing_ok=True)
             return dict(ok=True)
         time.sleep(.1)
-    return dict(ok=False, why="wake_timeout")
+    # Reclaim only an unclaimed seed. A launch in progress owns its first words.
+    try:
+        seed.rename(str(seed) + ".cancelled")
+        tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+    except FileNotFoundError:
+        pass
+    park_log(fid, "fail", why, num_env("FLEET_GATE_WAKE_SECS", 20), "wake_timeout")
+    return dict(ok=False, why="wake_timeout", seed=str(seed))
 
 
 # ---- stop -------------------------------------------------------------------------------
@@ -793,6 +973,9 @@ def answer(fid, fp, picks=None, answers=None, allow=None):
 # ---- the CLI ------------------------------------------------------------------------------
 def status(fid):
     w = window(fid)
+    if w:
+        # The web keeps this call open while its conversation page is present.
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_presence", str(int(now())))
     ok, why = can_talk(w)
     q = [dict(delivery=r["delivery"], text=r["text"], why=r.get("why") or r.get("state"), state=r.get("state"))
          for r in records(fid) if r.get("state") in ("queued", "trying", "native", "waking", "returned")]
@@ -829,6 +1012,9 @@ def say(args):
              agent=w["agent"], state="queued", why="", tries=0)
     with lock(fid):
         save(r)
+    w = window(fid)
+    if w:
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_presence", str(int(now())))
     log("say", r)
     got = settle(fid, delivery) or r
     return out(dict(delivery=delivery, state=public(got), reason=got.get("why", "")))
@@ -862,6 +1048,8 @@ def main(argv=None):
             p.add_argument("--force", action="store_true")
         if name == "wake":
             p.add_argument("--seed-file")
+            p.add_argument("--why", default="网页")
+            p.add_argument("--request-only", action="store_true")
         if name == "name":
             p.add_argument("--name", required=True)
     a = ap.parse_args(argv)
@@ -896,7 +1084,7 @@ def main(argv=None):
     if a.cmd == "park":
         return out(park(a.fid, a.why, a.force))
     if a.cmd == "wake":
-        return out(wake(a.fid, a.seed_file))
+        return out(wake(a.fid, a.seed_file, a.why, a.request_only))
     if a.cmd == "name":
         # a name the person gave it (@name_manual, issue #3317): every list's title
         loc = locate(a.fid)

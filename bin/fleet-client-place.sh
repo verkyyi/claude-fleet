@@ -324,9 +324,13 @@ if kind != "restore":
         # Read the actual local configuration, then the team's public default.
         # Do not freeze an omitted choice to Claude before the hub sees it.
         try:
-            configured = subprocess.run(["bash", os.path.join(here, "fleet-hook-conf.sh"), "FLEET_AGENT"],
-                capture_output=True, text=True, timeout=10).stdout.strip()
-            default_agent = configured or default_agent
+            # This helper belongs to a hosting machine. Client-only installs
+            # keep the environment choice and read the team's public default.
+            helper = os.path.join(here, "fleet-hook-conf.sh")
+            if os.path.isfile(helper):
+                configured = subprocess.run(["bash", helper, "FLEET_AGENT"],
+                    capture_output=True, text=True, timeout=10).stdout.strip()
+                default_agent = configured or default_agent
         except (OSError, subprocess.SubprocessError):
             pass
         if default_agent not in ("claude", "codex"):

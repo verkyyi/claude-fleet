@@ -130,6 +130,8 @@ func (s *Server) poolSettings() map[string]string {
 		"FLEET_ACCOUNT_PAUSED": strings.Join(paused, " "),
 		// how long a session opened from the web idles before its home parks it
 		// (task PQ41), in seconds; 0 = never
-		"FLEET_SESSION_PARK_IDLE": strconv.Itoa(s.sessionParkIdle()),
+		"FLEET_SESSION_PARK_IDLE":            strconv.Itoa(s.sessionParkIdle()),
+		"FLEET_SESSION_PARK_IDLE_UNATTENDED": strconv.Itoa(s.sessionParkDuration("fleet.session.park_idle_unattended", "5m")),
+		"FLEET_SESSION_PARK_PRESENCE":        strconv.Itoa(s.sessionParkDuration("fleet.session.park_presence", "15m")),
 	}
 }

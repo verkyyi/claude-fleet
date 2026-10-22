@@ -145,6 +145,17 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$limit" in ''|*[!0-9]*) limit=4 ;; esac
+# C1: parking is login-wide, before any per-repo close. A login with zero repos
+# still owns conversations; do not require a repo to release their idle agents.
+# Conf assignments are shell-local unless explicitly exported to Python.
+export FLEET_SESSION_PARK_IDLE FLEET_SESSION_PARK_IDLE_UNATTENDED FLEET_SESSION_PARK_PRESENCE
+export FLEET_PARK_MEM_PCT FLEET_GATE_WAKE_SECS
+out=$(python3 "$BIN/fleet-cleanup-idle.py" --session "$FLEET_SESSION" \
+  --socket-name "$(fleet_socket "$FLEET_SESSION")" --park-only --limit "$limit" ${rest[@]+"${rest[@]}"})
+rc=$?
+[ -z "$out" ] || printf '%s\n' "$out"
+[ "$rc" = 75 ] && exit 75
+limit=$(( limit - $(printf '%s\n' "$out" | grep -c '^parked-web:') ))
 # Resolve every window's repo ONCE first — @repo is the only field the per-repo
 # pass reads. fleet_window_repo stamps it from the window's @worktree; a worktree
 # window it answers by the fleet's ONLY repo (a worktree with no origin) is
@@ -164,7 +175,7 @@ while IFS= read -r repo; do
     [ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
     python3 "$BIN/fleet-cleanup-idle.py" --session "$FLEET_SESSION" \
       --socket-name "$(fleet_socket "$FLEET_SESSION")" --main "${FLEET_MAIN:-}" \
-      --repo "$repo" --base "${FLEET_BASE_BRANCH:-master}" --window-repo \
+      --repo "$repo" --base "${FLEET_BASE_BRANCH:-master}" --window-repo --skip-park \
       ${FLEET_FORGE:+--forge "$( [ "$FLEET_FORGE" = none ] && echo none || echo github )"} \
       --limit "$limit" ${rest[@]+"${rest[@]}"} )
   rc=$?

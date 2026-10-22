@@ -152,6 +152,9 @@ class Gate(unittest.TestCase):
         (self.d / "codex.py").write_text(FAKE_CODEX)
         (self.d / "win").write_text("#!/bin/sh\nprintf 'fleet-a\\t@1\\n'\n")
         (self.d / "win").chmod(0o755)
+        proof = self.d / "park-proof"
+        proof.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
+        proof.chmod(0o755)
         self.window({})
         self.plan([])
         (self.d / "accept.log").write_text("")
@@ -160,7 +163,7 @@ class Gate(unittest.TestCase):
 
     def window(self, extra, clients=()):
         w = {"pane_id": "%7", "@cc_agent": "claude", "@mod_accept": "idle.v2", "@claude_state": "done",
-             "@cc_session_id": SID, "socket_path": "/private/tmp/tmux-501/fleet-a"}
+             "@cc_session_id": SID, "@park_wrap_ver": "1", "socket_path": "/private/tmp/tmux-501/fleet-a"}
         w.update(extra)
         st = {"windows": {"@1": w}, "clients": list(clients)}
         json.dump(st, open(self.d / "tmux.json", "w"))
@@ -190,7 +193,8 @@ class Gate(unittest.TestCase):
                  FAKE_ACCEPT_LOG=str(self.d / "accept.log"), FAKE_INBOX=str(self.inbox),
                  FLEET_GATE_CODEX=str(self.d / "codex.py"), FAKE_CODEX_STATE=str(self.d / "codex.json"),
                  FLEET_CC_PROJECTS_DIR=str(self.d / "projects"), FLEET_GATE_WAKE_WAIT="0.3",
-                 FLEET_GATE_PARK_SECS="2", FLEET_GATE_EXIT_CMD="false")
+                 FLEET_GATE_PARK_SECS="2", FLEET_GATE_EXIT_CMD="false",
+                 FLEET_GATE_BG_CMD="false", FLEET_GATE_PARK_PROBE_CMD=str(self.d / "park-proof"))
         e.update(env or {})
         p = subprocess.run([sys.executable, str(GATE), *args], input=text or "", capture_output=True, text=True,
                            env=e, timeout=60)
@@ -267,7 +271,7 @@ class Gate(unittest.TestCase):
         # a control-mode client (the hub's own) is nobody looking
         self.window({}, clients=[{"window": "@1", "control": "1"}])
         # the wrapper says it holds it: simulate by stamping @park_held as /exit lands
-        env = {"FLEET_GATE_PARK_SECS": "1"}
+        env = {"FLEET_GATE_PARK_SECS": "1", "FLEET_GATE_EXIT_CMD": "true"}
         self.setopt(**{"@park_held": "1"})
         r = self.gate("park", "--fid", FID, env=env)
         self.assertTrue(r["ok"], r)
@@ -275,6 +279,14 @@ class Gate(unittest.TestCase):
         # answering or asking: never parked
         self.window({"@claude_state": "needs"})
         self.assertEqual(self.gate("park", "--fid", FID)["why"], "asking")
+
+    def test_N_old_wrapper_never_receives_exit(self):
+        # C1 drives fleet_session_gate.py: an old wrapper has no holding page.
+        self.setopt(**{"@park_wrap_ver": None})
+        r = self.gate("park", "--fid", FID)
+        self.assertEqual(r.get("why"), "old_wrapper", r)
+        self.assertIsNone(self.opt("@parked"))
+        self.assertFalse(json.load(open(self.d / "tmux.json")).get("keys"))
 
     def test_H_wake_timeout(self):
         self.window({"@parked": "1", "@claude_state": "done"})
