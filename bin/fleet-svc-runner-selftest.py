@@ -15,6 +15,11 @@ spec.loader.exec_module(runner)
 
 
 class RunnerTests(unittest.TestCase):
+    def test_launcher_credentials_not_inherited(self):
+        with patch.dict(os.environ, {'CCQUOTA_TOKEN': 'private', 'FLEET_WORKER_CRED': 'private',
+                                     'SERVICE_API_KEY': 'private', 'PATH': '/usr/bin'}, clear=True):
+            self.assertEqual(runner.session_env(), {'PATH': '/usr/bin'})
+
     def test_codex_success_and_credential_boundary(self):
         with tempfile.TemporaryDirectory() as root:
             work, out = root + '/work', root + '/out'
