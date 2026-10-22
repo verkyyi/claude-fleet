@@ -84,6 +84,9 @@ type Server struct {
 	// (claude-fleet#4054, CCQUOTA_WX_INTERNAL_URL / _TOKEN): sign in by
 	// following it. Nil means /signin is what it was.
 	WxGW *WxGateway
+	// LivePage is 活页's partner door (task XA4R, CCQUOTA_LIVEPAGE_PARTNER_URL
+	// / _KEY): a trial's account opened, its key taken back. Nil = none.
+	LivePage *LivePagePartner
 	// SessionSecret (CCQUOTA_SESSION_SECRET) signs the sessions of a hub
 	// with no GitHub sign-in. With GitHub on, its client secret signs them,
 	// as it always has (sessionKey).
@@ -253,6 +256,8 @@ type Server struct {
 	// trialSlots holds which trials are being released now, and when the kept
 	// conversations were last purged (claude-fleet#4060).
 	trialSlotSt trialSlotState
+	// livePageSweep bounds the 活页 key sweep to once a minute (task XA4R).
+	livePageSweep livePageSweepState
 	// svcLogs are the service logs being followed (claude-fleet#2797): one
 	// node stream per service, however many viewers.
 	svcLogs svcLogHub
@@ -660,6 +665,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(control.EntryRoutesNodePath, s.handleNodeEntryRoutes)
 		// …and the trial logins' way out (WACK C3): mode + logins, machine token.
 		mux.HandleFunc(control.TrialEgressNodePath, s.handleNodeTrialEgress)
+		// …and a trial person's 活页 key, asked by its credential proxy (task XA4R).
+		mux.HandleFunc(LivePageTokenNodePath, s.handleNodeLivePageToken)
 		// one address, routed by username (A5SQ): the door's own token — its
 		// stream to a person's home (a websocket) and that hop's certificate
 		mux.HandleFunc(control.DoorHomePath, s.handleDoorHome)

@@ -110,7 +110,20 @@ const PAGE_STATE = (): Record<string, string> => ({
   ready: tr("仅你可见", "Only you can see it"), review: tr("审核中，好了自动能点", "Under review; opens once it passes"),
   publishing: tr("正在发布…", "Publishing…"), failed: tr("没发出去", "Not published"),
   unavailable: tr("这台机器还没连活页", "This machine is not connected to LivePage"),
+  account: tr("活页账号还没开好，网页先留在对话里，稍后自动再试", "Your LivePage account isn't ready yet. The page stays here; we'll retry shortly."),
 });
+// a trial's page once it went to their WeChat (task XA4R)
+const PUSHED = () => tr("仅你可见 · 已发到你的微信", "Only you can see it · Sent to your WeChat");
+// 现在重试: the account was not open yet — ask the agent to publish it again, now
+const RetryPublish: FC<{ title: string }> = ({ title }) => {
+  const aui = useAui();
+  return (
+    <button type="button" data-testid="page-retry" className="text-clay my-1 self-start text-[13px] font-medium"
+      onClick={() => { aui.composer().setText(tr(`重试发布「${title}」`, `Retry publishing "${title}"`)); aui.composer().send(); }}>
+      {tr("现在重试", "Retry now")}
+    </button>
+  );
+};
 // 在这里预览: 活页's embed link for this page, framed under a sandbox while it lasts
 const PagePreview: FC<{ p: PageCard }> = ({ p }) => {
   const [open, setOpen] = useState(false);
@@ -140,7 +153,8 @@ const PageCardUI = makeAssistantDataUI<PageCard>({
             {tr("网页 · 活页", "Web page · LivePage")}{p.version && p.version > 1 ? tr(` · 第 ${p.version} 版`, ` · version ${p.version}`) : ""}</span>
           <span className="text-foreground truncate text-[15px] font-semibold">{p.title}</span>
           <span className="text-muted-foreground flex items-center gap-1 text-[12px]">
-            {p.status === "failed" && p.note ? `${PAGE_STATE().failed} · ${p.note}` : PAGE_STATE()[p.status] || p.status}
+            {p.status === "failed" && p.note ? `${PAGE_STATE().failed} · ${p.note}`
+              : p.status === "ready" && p.pushed ? PUSHED() : PAGE_STATE()[p.status] || p.status}
             {open ? <span className="text-clay ms-auto flex items-center gap-0.5 font-medium">{tr("打开", "Open")}<ExternalLinkIcon className="size-3.5" /></span> : null}
           </span>
         </span>
@@ -149,10 +163,17 @@ const PageCardUI = makeAssistantDataUI<PageCard>({
     const cls = "border-border bg-card my-2 flex max-w-md overflow-hidden rounded-2xl border no-underline shadow-xs";
     return (
       <>
+        {p.fresh ? (
+          <p data-testid="page-fresh" className="text-muted-foreground my-1 max-w-md text-[13px] leading-snug">
+            {tr("已用你的微信开好活页账号。你做的网页默认只有你能看。",
+              "Your LivePage account is ready, set up with your WeChat. Pages you make are visible only to you.")}
+          </p>
+        ) : null}
         {open
           ? <a href={p.url} target="_blank" rel="noopener noreferrer" className={`${cls} hover:bg-accent/40 transition-colors`}>{body}</a>
           : <div className={cls}>{body}</div>}
         {open ? <PagePreview p={p} /> : null}
+        {p.status === "account" ? <RetryPublish title={p.title} /> : null}
       </>
     );
   },
@@ -166,10 +187,14 @@ const ComposerTools: FC = () => (
 // the limit is used up: one band over a greyed composer, until it frees up
 const QuotaBanner: FC = () => {
   const { budget, quota } = useChat();
+  const { trial: mine } = useShell();
   if (!budget) return null;
   const trial = quota?.over && quota.window === "trial"; // a trial's end is not a reset (T796)
   const when = trial ? "" : whenLocal(budget.until || quota?.reset);
-  const what = trial
+  const what = trial && mine?.livepage_kept // their 活页 pages are kept (task XA4R)
+    ? tr("试用已结束。你的网页保留 30 天，申请转正后接着用；也可以在活页里注销、立即删除",
+      "Your trial has ended. Your pages are kept for 30 days — become a member to keep using them, or close your LivePage account to delete them now")
+    : trial
     ? tr("试用额度已用完或已到期，申请转正后继续使用", "Your trial is over — ask to become a member to carry on")
     : quota?.over && quota.window === "5h"
     ? tr("这 5 小时的额度用完了", "This 5-hour limit is used up")

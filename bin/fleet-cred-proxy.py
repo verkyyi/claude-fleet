@@ -349,7 +349,8 @@ def configured_urls(cfgs):
     (root's copy in separated mode) points at."""
     urls = [env("FLEET_HUB_URL"), env("FLEET_HUB_INTERNAL_URL")]
     for c in cfgs:
-        urls += [getattr(c, "relay_url", ""), getattr(c, "central_url", "")]
+        # + 活页's MCP (task XA4R): FLEET_CRED_SPACE_URL, else the default — /space/mcp only
+        urls += [getattr(c, "relay_url", ""), getattr(c, "central_url", ""), getattr(c, "space_url", "")]
         ne = getattr(c, "node_env", "")
         if ne:
             urls.append(node_env(ne).get("CCQUOTA_HUB_URL", ""))
@@ -1123,6 +1124,108 @@ class Router:
 
 
 # ---- one login's half ----------------------------------------------------------
+# ---- a trial person's 活页 key (task XA4R) ----------------------------------
+# A trial's session publishes its web pages through `space` (bin/mcp-space.py →
+# 127.0.0.1:<port>/space/mcp). The key that opens the person's 活页 workspace is
+# the hub's: asked here with the login's node token (POST /v1/node/livepage-token
+# — the hub opens the account the first time), kept in this process's memory
+# only until 5 minutes before its end, put on the forwarded request in place of
+# the session's own credential. Never written, never logged, never in an answer.
+SPACE_URL_DEFAULT = "https://space.24haowan.com"  # oss-ok: 活页's public MCP, the one partner a trial publishes to (XA4R)
+SPACE_TOKEN_PATH = "/v1/node/livepage-token"
+
+
+def iso_epoch(v):
+    """The hub's `until` (RFC 3339 UTC, …Z) → epoch seconds; 0 when it is not one."""
+    try:
+        import calendar
+        return calendar.timegm(time.strptime(str(v), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def space_tunnel():
+    """-> (host, port) of the egress proxy 活页 is reached through, or None (direct).
+    A person's pod REJECTs the public internet and goes out through the cluster's
+    egress (deploy/k8s/egress): FLEET_CRED_SPACE_PROXY, else HTTPS_PROXY, else the
+    pod's /etc/fleet-devnet.env (fleet-node-linux.py writes it every start)."""
+    v = env("FLEET_CRED_SPACE_PROXY") or env("HTTPS_PROXY") or env("https_proxy")
+    if not v:
+        try:
+            for line in open(env("FLEET_DEVNET_ENV", "/etc/fleet-devnet.env")):
+                k, _, val = line.strip().partition("=")
+                if k == "HTTPS_PROXY" and val:
+                    v = val
+                    break
+        except OSError:
+            pass
+    if not v or v == "off":
+        return None
+    u = urlsplit(v if "://" in v else "http://" + v)
+    return (u.hostname, u.port or 3128) if u.hostname else None
+
+
+class SpaceKey:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.lock = threading.Lock()
+        self.tok, self.exp = "", 0.0
+        self.seen = (0.0, 0, None)   # GET's last answer: (when, status, body)
+
+    def hub(self, method):
+        """-> (status, answer) of the hub's LivePageTokenNodePath."""
+        ne = node_env(getattr(self.cfg, "node_env", None))
+        hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
+        tok = ne.get("CCQUOTA_TOKEN", "")
+        if not hub or not tok:
+            return 503, {"code": "no_node", "message": "no node token on this login (node.env)"}
+        if not loopback_ok(hub):
+            return 503, {"code": "no_node", "message": "the hub address is neither https nor loopback"}
+        req = urllib.request.Request(hub_dial(hub) + SPACE_TOKEN_PATH, data=b"{}" if method == "POST" else None,
+                                     method=method, headers={"Authorization": "Bearer " + tok,
+                                                             "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"{}")
+            except ValueError:
+                return e.code, {"code": "hub", "message": "HTTP %d" % e.code}
+        except Exception as e:
+            return 503, {"code": "hub_unreachable", "message": "the hub: %s" % type(e).__name__}
+
+    def status(self):
+        """GET, kept a minute: may this login's person publish to 活页 here."""
+        with self.lock:
+            at, code, a = self.seen
+            if a is not None and time.time() - at < 60:
+                return code, a
+        code, a = self.hub("GET")
+        a = {k: v for k, v in (a if isinstance(a, dict) else {}).items() if k != "token"}
+        with self.lock:
+            self.seen = (time.time(), code, a)
+        return code, a
+
+    def get(self, drop=False):
+        """-> (key, new, status, answer): the key, or why there is none."""
+        with self.lock:
+            if drop:
+                self.tok = ""
+            if self.tok and time.time() < self.exp - 300:
+                return self.tok, False, 200, None
+            code, a = self.hub("POST")
+            a = a if isinstance(a, dict) else {}
+            k = a.pop("token", "")
+            if code == 200 and k:
+                self.tok = k
+                self.exp = iso_epoch(a.get("until")) or time.time() + 3600
+                self.seen = (time.time(), 200, {"eligible": True, "ready": True})
+                return k, bool(a.get("new")), 200, None
+            self.tok = ""
+            return "", False, code if code != 200 else 502, a
+
+
 class Tenant:
     """One login's half of the proxy (issue #2217): its signing key, binds,
     revocations, trust, hub passes, budget, quota readings and log. A per-login
@@ -1136,6 +1239,7 @@ class Tenant:
         self.passes = HubPasses(cfg.state, cfg, self.log)
         self.relay = cfg.relay_keep = RelayKeep(cfg, self.log)
         self.budget = Budget(cfg)
+        self.space = SpaceKey(cfg)  # the person's 活页 key (task XA4R; memory only)
         self.extended = set()   # sids whose fcp1 is past its stamp, kept by a live session
         self.skip = {}          # sid -> {route: (until, why)}: a route that refused this session
         self.hubcreds = {}      # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
@@ -1589,11 +1693,14 @@ class Proxy(BaseHTTPRequestHandler):
         n = int(inbound.get("content-length") or 0)
         body = self.rfile.read(n) if n else None
         path = self.path
+        self.extra_resp, self.space_retry = [], False
         if path.startswith("http://") or path.startswith("https://"):
             self.log(ev="deny", path=path.split("?")[0], why="absolute-URI proxying disabled")
             return self.fail(403, "absolute-URI proxying disabled", "permission_error")
         if path.startswith("/hub/"):
             return self.hub_broker(inbound, path[len("/hub"):], body, t0)
+        if path.startswith("/space/"):
+            return self.space(inbound, path, body, t0)
         provider = "codex" if path.startswith("/codex/") else "claude"
         if provider == "codex":
             why = codex_refused(self.command, path)
@@ -1698,6 +1805,66 @@ class Proxy(BaseHTTPRequestHandler):
         hub = hub_dial(hub)
         self.upstream(hub, urlsplit(hub).path.rstrip("/") + path, out, body, "hub", "node", "-", "node",
                       [], t0, "hub", can_switch=False)
+
+    def space(self, inbound, path, body, t0):
+        """/space/mcp → 活页's MCP with the person's key (task XA4R); /space/status
+        says whether this login's person may publish there. Only a session's own
+        credential gets either."""
+        bare = path.split("?")[0]
+        q = path[len(bare):]
+        tok = inbound.get("authorization", "")[7:].strip() if inbound.get("authorization", "").lower().startswith("bearer ") else ""
+        self.t = self.pick(tok) if tok else None
+        if not self.t:
+            self.t = self.fixed or self.T
+            self.log(ev="deny", path=bare, why="no session credential")
+            return self.fail(401, "no session credential")
+        if is_hub_pass(tok):
+            if not hub_claims(tok):
+                self.log(ev="deny", path=bare, why="not a hub pass")
+                return self.fail(401, "not a hub pass")
+            sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
+        else:
+            claims, why = self.keys.verify(tok, live=live_session(self.cfg.state))
+            if not claims:
+                self.log(ev="deny", path=bare, why=why)
+                return self.fail(401, why)
+            sid = claims["sid"]
+        seen = sorted("%s=%s" % (k, red(k, v)) for k, v in inbound.items())
+
+        def say(code, a):
+            b = json.dumps(a if isinstance(a, dict) else {}, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+        if bare == "/space/status":
+            code, a = self.t.space.status()
+            self.log(ev="space_status", sid=sid, status=code, code=(a or {}).get("code", ""))
+            return say(code, a)
+        if bare != "/space/mcp":
+            self.log(ev="deny", sid=sid, path=bare, why="only /space/mcp")
+            return self.fail(404, "only /space/mcp is forwarded", "not_found_error")
+        base = getattr(self.cfg, "space_url", "") or SPACE_URL_DEFAULT
+        if not loopback_ok(base):
+            return self.fail(403, "活页's address is not an allowed upstream", "permission_error")
+        for again in (False, True):
+            key, new, code, a = self.t.space.get(drop=again)
+            if not key:
+                self.log(ev="deny", sid=sid, path=bare, why="no 活页 key", status=code, code=(a or {}).get("code", ""))
+                return say(code, a)
+            out = {k: v for k, v in self.headers.items()
+                   if k.lower() not in HOP and k.lower() not in ("authorization", "x-api-key", "host", "content-length")}
+            out["Authorization"] = "Bearer " + key
+            if body is not None:
+                out["Content-Length"] = str(len(body))
+            self.extra_resp = [("X-Fleet-Space-New", "1")] if new else []
+            self.space_retry = not again
+            r = self.upstream(base, urlsplit(base).path.rstrip("/") + "/mcp" + q, out, body, "space", sid, "-",
+                              "space", seen, t0, "space", can_switch=False)
+            if r != "space401":
+                return None
+        return None
 
     def plan(self, order, sid):
         """-> (routes, skipped): drop the routes that refused this session
@@ -1858,6 +2025,12 @@ class Proxy(BaseHTTPRequestHandler):
                 return again()
         elif u.scheme == "http":
             conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=self.cfg.timeout)
+        elif provider == "space" and space_tunnel():
+            # 活页 from a person's pod: a CONNECT through the cluster's egress, TLS end to end
+            th, tp = space_tunnel()
+            conn = http.client.HTTPSConnection(th, tp, timeout=self.cfg.timeout,
+                                               context=ssl._create_default_https_context())
+            conn.set_tunnel(u.hostname, u.port or 443)
         else:
             conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=self.cfg.timeout,
                                                context=ssl._create_default_https_context())  # fleet_tls's when it loaded
@@ -1927,6 +2100,10 @@ class Proxy(BaseHTTPRequestHandler):
                     self.fail(403, "no route can reach the provider from here: %s; %s: region refusal (403)"
                               % ("; ".join(tried), route), "permission_error")
                     return None
+        if r.status == 401 and provider == "space" and getattr(self, "space_retry", False):
+            r.read()     # the kept 活页 key went stale: ask the hub once more
+            conn.close()
+            return "space401"
         if provider == "codex" and cred == "file":
             if r.status == 401:
                 first = r.read(65536)
@@ -1934,6 +2111,8 @@ class Proxy(BaseHTTPRequestHandler):
         self.send_response_only(r.status, r.reason)
         rh = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP]
         for k, v in rh:
+            self.send_header(k, v)
+        for k, v in getattr(self, "extra_resp", None) or ():
             self.send_header(k, v)
         chunked = self.command != "HEAD" and r.status not in (204, 304)
         if chunked:
@@ -3294,6 +3473,7 @@ def serve(a):
     handed = bool(inherited)
     cfg.anthropic_url = env("FLEET_CRED_ANTHROPIC_URL", "https://api.anthropic.com").rstrip("/")
     cfg.codex_url = env("FLEET_CRED_CODEX_URL", "https://chatgpt.com/backend-api/codex").rstrip("/")
+    cfg.space_url = env("FLEET_CRED_SPACE_URL", SPACE_URL_DEFAULT).rstrip("/")
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
     # the account pick's ceiling (issue #2412): a session leaves an account at it
@@ -3352,7 +3532,7 @@ def serve(a):
     if shared or cfg.store:
         ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"), configured_urls([cfg] + everyone))
     for c in [cfg] + everyone:
-        for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
+        for name in ("anthropic_url", "codex_url", "relay_url", "central_url", "space_url"):
             v = getattr(c, name, "")
             if v and not loopback_ok(v, cluster=name == "central_url"):
                 sys.exit("fleet-cred-proxy: %s=%s: %s" % (

@@ -44,7 +44,9 @@ export type Item =
 
 type Pic = MediaPic;
 export type PageCard = { t: "page"; id?: string; title: string; url?: string; status: string; proposal?: string;
-  version?: number; preview?: string; note?: string; embed?: string; embed_exp?: string };
+  version?: number; preview?: string; note?: string; embed?: string; embed_exp?: string;
+  // task XA4R: 活页 was opened for a trial person by this publish (said once); the page went to their WeChat
+  fresh?: boolean; pushed?: boolean };
 
 type Question = {
   question: string;

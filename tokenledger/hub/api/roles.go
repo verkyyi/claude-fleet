@@ -101,6 +101,8 @@ var routeAccess = map[string]string{
 	control.TrialEgressNodePath: accessSelf,
 	// A machine's trial guard (claude-fleet WACK C4): who is on trial here, and what it did.
 	TrialLimitsNodePath: accessSelf, TrialAlertNodePath: accessSelf,
+	// a trial person's 活页 key, asked by its credential proxy (task XA4R)
+	LivePageTokenNodePath: accessSelf,
 	// … its reach, and the cluster door's table (claude-fleet#3549).
 	control.EntryReachNodePath: accessSelf, control.EntryRoutesNodePath: accessSelf,
 	control.DoorHomePath: accessSelf, control.DoorSessionPath: accessSelf,

@@ -106,7 +106,12 @@ const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) fails
 
 // ---- the stub credential proxy: what reaches it is the pool's usage record ----
 const proxyHits = [];
+let spaceEligible = false;                                   // S: the proxy's /space/status (task XA4R)
 const proxy = http.createServer((req, res) => {
+  if (req.url === "/space/status") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(spaceEligible && req.headers.authorization === "Bearer " + SECRET ? { eligible: true, ready: false } : { eligible: false }));
+  }
   proxyHits.push({ auth: req.headers.authorization || "", path: req.url });
   res.writeHead(200, { "Content-Type": "application/json" }); res.end('{"usage":{"input_tokens":7,"output_tokens":3}}');
 });
@@ -129,6 +134,7 @@ esac
 const ENVLOG = join(T, "env.json");
 const PROMPTLOG = join(T, "prompts.ndjson");                  // every prompt the agent got, and its MCP servers (M)
 const TOOLLOG = join(T, "tool.txt");                          // what browser_context answered (M)
+const SPACELOG = join(T, "space.ndjson");                     // the space server a trial's agent got (S, task XA4R)
 const QUERYLOG = join(T, "queries.log");                     // one line per query() — a started agent (C2)
 const sdk = join(T, "sdk.mjs");
 writeFileSync(sdk, `
@@ -151,6 +157,7 @@ export function query({ prompt, options }) {
 async function* one(prompt, options) {
   const env = options.env;
   appendFileSync(${JSON.stringify(PROMPTLOG)}, JSON.stringify({ prompt, mcp: Object.keys(options.mcpServers || {}) }) + "\\n");
+  if (options.mcpServers?.space) appendFileSync(${JSON.stringify(SPACELOG)}, JSON.stringify(options.mcpServers.space) + "\\n");
   // the once-a-session note (task T773) says nothing a stub turn branches on
   if (typeof prompt === "string") prompt = prompt.replace(/<fleet-webchat-note>[\\s\\S]*?<\\/fleet-webchat-note>\\s*/, "");
   if (/ctxtool$/.test(prompt) && options.mcpServers?.fleet_browser) {
@@ -186,6 +193,20 @@ async function* one(prompt, options) {
     const text = "改好了：[form.css](" + H + "/proj/form.css)、![shot](~/proj/shot.png)、[页面](proj/page.html)、" +
       "[钥匙](" + H + "/.ssh/id_rsa)、[密](" + H + "/proj/.env)、[外](" + H + "/proj/out.txt)、[无](" + H + "/proj/none.txt)、[网](https://example.com/a)";
     const m = { type: "assistant", message: { content: [{ type: "text", text }] } };
+    appendFileSync(tr, JSON.stringify(m) + "\\n");
+    yield { ...m, session_id: SID };
+    yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
+    return;
+  }
+  if (prompt === "page3" || prompt === "page4") {  // a trial's page (S, task XA4R): opened · pushed, or not open yet
+    const tools = options.mcpServers?.fleet_chat?.tools || [];
+    const call = async (n, a) => (await tools.find((t) => t.name === n).handler(a)).content[0].text;
+    appendFileSync(${JSON.stringify(TOOLLOG)}, (await call("page_target", { file: env.HOME + "/proj/list.html" })) + "\\n");
+    const input = prompt === "page3"
+      ? { title: "周末露营清单", url: "https://pages.example.com/s/camp", status: "ready", proposal_id: "P3", version: 1, account_new: true, pushed: true }
+      : { title: "周末露营清单", status: "account", note: "活页暂时不可用" };
+    await call("show_page", input);
+    const m = { type: "assistant", message: { content: [{ type: "tool_use", id: "tu-" + prompt, name: "mcp__fleet_chat__show_page", input }] } };
     appendFileSync(tr, JSON.stringify(m) + "\\n");
     yield { ...m, session_id: SID };
     yield { type: "result", subtype: "success", session_id: SID, duration_ms: 1 };
@@ -934,7 +955,24 @@ if (part("pages")) {
   const allp = readFileSync(PROMPTLOG, "utf8").split("\n").filter(Boolean).slice(pfrom).map((l) => JSON.parse(l).prompt).filter((x) => typeof x === "string");
   ok(noted.length === 1 && allp.filter((x) => x.includes("<fleet-webchat-note>")).length === 1 && !JSON.stringify(items).includes("fleet-webchat-note"),
     "S the agent is told once in the session where a page goes and to show it as a card; the page never shows the note");
+  ok(!existsSync(SPACELOG), "S not a trial (the proxy says so): no `space` bridge is attached");
   await sstop(pg);
+  // a trial's login (task XA4R): the proxy says eligible ⇒ the bridge, its credential by NAME only
+  spaceEligible = true;
+  const tg = (await sstart(["--socket"], { ...asHome("pg"), FLEET_WEBCHAT_CWD: H, FLEET_WEBCHAT_WARM_SECS: "0" })).p;
+  const t3 = (await sturn("page3")).lines.find((o) => o.t === "page");
+  const sp = existsSync(SPACELOG) ? readFileSync(SPACELOG, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
+  ok(sp.length >= 1 && sp[0].type === "stdio" && sp[0].args.includes("--cred-env") && sp[0].args.includes("CLAUDE_CODE_OAUTH_TOKEN") &&
+    /mcp-space\.py$/.test(sp[0].args.find((a) => a.endsWith("mcp-space.py")) || "") && !JSON.stringify(sp).includes(SECRET),
+    `S a trial's agent gets the space bridge to the proxy, its credential by name, never in the config (${JSON.stringify(sp[0] || null)})`);
+  const rules = JSON.parse(readFileSync(TOOLLOG, "utf8").trim().split("\n").at(-1));
+  ok(typeof rules.trial === "string" && /push_to_wechat/.test(rules.trial) && /passcode/.test(rules.trial) && /never public/.test(rules.trial),
+    "S page_target gives a trial its rules: push to their WeChat, ask before sharing, a passcode, never public");
+  ok(t3 && t3.status === "ready" && t3.fresh === true && t3.pushed === true, `S the card says the account was opened and the page sent to WeChat (${JSON.stringify(t3)})`);
+  const t4 = (await sturn("page4")).lines.find((o) => o.t === "page");
+  ok(t4 && t4.status === "account" && !t4.url && !t4.fresh, "S the account not open yet: status account, nothing to open");
+  spaceEligible = false;
+  await sstop(tg);
 }
 if (!part("local")) {
   proxy.close();

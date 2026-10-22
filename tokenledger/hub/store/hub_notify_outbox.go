@@ -27,6 +27,10 @@ const (
 	// refs = the member's principal and the purge time, RFC 3339
 	// (claude-fleet WACK C8).
 	NotifyKindTrialPurge = "trialpurge"
+	// NotifyKindLivePageEnd is a trial's end told to its person once their
+	// 活页 key was taken back: their pages stay 30 days; refs = the
+	// principal (task XA4R).
+	NotifyKindLivePageEnd = "livepage_end"
 )
 
 // The states of a notice.

@@ -20,7 +20,7 @@ We do not collect your phone number, contacts, location or payment details, we d
 
 ## 2. How long we keep it
 
-- **Trial accounts**: within 30 days after the trial ends, the account identity, session content and usage records are deleted.
+- **Trial accounts**: within 30 days after the trial ends, the account identity, session content and usage records are deleted. A LivePage account opened for you during the trial: its key is taken back when the trial ends and your pages are kept there for 30 days; deleting your data closes that account too.
 - **Session content**: within 30 days after a session ends or is cleaned up, its working directory and conversation are deleted.
 - **Usage and access records**: kept for 30 days, then deleted or made anonymous.
 - **A full member's account identity**: kept while the account exists; deleted within 30 days after it is closed.

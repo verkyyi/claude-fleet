@@ -81,6 +81,7 @@ export type Trial = {
   usd?: number; spent_usd?: number; // a ceiling written before T796
   sessions?: number; sessions_now: number;
   upgrade_asked?: string;
+  livepage_kept?: boolean; // the trial ended; its 活页 pages are kept 30 days (task XA4R)
 };
 // A trial's tokens as a Quota (claude-fleet T796), so the pill and 用量 read
 // one limit: the stricter of the trial's and the weekly budget's.

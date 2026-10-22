@@ -440,6 +440,21 @@ iframe；过期就只剩「打开」。入口控制台只在部署给了 `CCQUOT
 生产的值在私有部署覆盖层里）时加 `frame-src`，否则什么都不嵌。国内副本存卡片的标题、链接、状态，
 不存预览。
 
+### 试用者的网页：替他开活页、钥匙不进会话（task XA4R）
+
+试用者的登录没有自己的 `space`。对话服务每轮问一次本机凭据代理 `GET /space/status`（带这一轮的会话凭据；代理用这个登录的节点令牌问入口
+`GET /v1/node/livepage-token`，一分钟一问）：是试用者、入口开着 `fleet.trial.livepage` ⇒ 给 Agent 挂一个 `space` 服务器——
+`bin/mcp-space.py`，stdio 小桥，参数只有代理地址和**会话凭据所在变量的名字**（Claude `CLAUDE_CODE_OAUTH_TOKEN`，Codex
+`FLEET_CODEX_SESSION_CRED` 经 `env_vars`），凭据本身不进配置、不进 argv。小桥自己答 `initialize` / `tools/list`（发布用的那十个工具），
+第一次真调工具才经代理的 `/space/mcp` 连活页——没发过网页的人不会多出一个空账号。代理在转发时问入口要这个人的活页钥匙
+（`POST /v1/node/livepage-token`：第一次由入口调活页 `/internal/partner/provision` 开号，钥匙封存在 `hub_partner_creds`），只放内存、
+到期前 5 分钟丢掉，换掉 Authorization 再转给活页的 `/mcp`（`FLEET_CRED_SPACE_URL`，默认活页的公网入口）；活页回 401 就再问一次。第一次开号那一调的结果多一行，
+Agent 给 `show_page` 带 `account_new`，卡片上说一次「已用你的微信开好活页账号」；发好后 `push_to_wechat`（只给本人）再带 `pushed`，
+卡片写「仅你可见 · 已发到你的微信」；开号没成是 `status: account`，卡片有「现在重试」。试用的网页不能设公开（小桥和活页两边都拒），
+要给别人看先问、只给口令。试用结束（到期、用完、转正）入口一分钟内收回钥匙并告诉活页 `/internal/partner/revoke`，到期那次推一条微信、
+对话页的额度条改说「网页保留 30 天」；删掉这个人时活页账号一起注销（`erase`）。`fleet.trial.livepage` 默认 `off`：什么都不挂、不开号，
+和以前一样。测试：`fleet-cred-proxy-space-selftest.py`（代理 + 小桥）、`fleet_trial_livepage_test.go`（入口）、本页 S 段的试用一半。
+
 ## 认证和凭据
 
 每一轮用 `bin/fleet-session-cred.sh mint --provider claude --sid web-<pid>-<n>` 取一张**会话凭据**，

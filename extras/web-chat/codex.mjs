@@ -32,7 +32,7 @@ const THREAD_RE = /^[A-Za-z0-9_-]{1,80}$/;
 export const CODEX_NOTE = "你在一个网页里和这个人对话，他看不到这台机器的屏幕和文件。" +
   "要给他看的图片、截图：用 view_image 看一下，网页上就会显示。提到本机文件时写成 Markdown 链接（[名字](绝对路径)），网页上点得开。" +
   "给他做的网页（HTML）发到他的活页后，调 show_page 给他一张能点开的卡片（先调 page_target 问放哪）；" +
-  "这台机器上没有活页工具时，show_page 的 status 填 unavailable，并告诉他。";
+  "这台机器上没有活页工具时，show_page 的 status 填 unavailable，并告诉他。page_target 的回答里有 trial 时照那几条做。";
 
 const PAGE_TOOLS = [
   { type: "function", name: "page_target",
@@ -41,9 +41,10 @@ const PAGE_TOOLS = [
   { type: "function", name: "show_page",
     description: "Show the person a card for a web page you published to their LivePage: they tap it to open the page.",
     inputSchema: { type: "object", required: ["title", "status"], properties: {
-      title: { type: "string" }, url: { type: "string" }, status: { type: "string", enum: ["publishing", "review", "ready", "failed", "unavailable"] },
+      title: { type: "string" }, url: { type: "string" }, status: { type: "string", enum: ["publishing", "review", "ready", "failed", "unavailable", "account"] },
       proposal_id: { type: "string" }, version: { type: "number" }, file: { type: "string" }, folder_id: { type: "string" },
-      preview: { type: "string" }, note: { type: "string" }, embed_url: { type: "string" }, embed_expires: { type: "string" } } } },
+      preview: { type: "string" }, note: { type: "string" }, embed_url: { type: "string" }, embed_expires: { type: "string" },
+      account_new: { type: "boolean" }, pushed: { type: "boolean" } } } },
 ];
 
 // "/bin/zsh -lc 'npm test'" → "npm test"
@@ -285,6 +286,8 @@ export function codexSide(d) {
         args.push("-c", 'model_provider="fleet"', "-c",
           `model_providers.fleet={name="fleet",base_url="http://127.0.0.1:${cred.mint.port}/codex",env_key="FLEET_CODEX_SESSION_CRED",wire_api="responses"}`,
           "-c", "features.plugins=false");
+        // a trial person's `space` (task XA4R): the bridge to the proxy, attached only for a trial
+        if (d.spaceCodexArgs) args.push(...await d.spaceCodexArgs(cred.mint));
       }
       const s = new AppServer(d.CODEX, [...args, "app-server"], env, conv.cwd && existsSync(conv.cwd) ? conv.cwd : d.CWD, onMsg, (code) => {
         d.log("codex_exit", { code });

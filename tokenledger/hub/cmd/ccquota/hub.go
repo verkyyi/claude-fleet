@@ -851,6 +851,7 @@ func runHub(args []string) error {
 		WeChat:              wx,
 		Email:               mailIn,
 		WxGW:                wxGatewayFromEnv(os.Getenv),
+		LivePage:            livePagePartnerFromEnv(os.Getenv),
 		SessionSecret:       os.Getenv("CCQUOTA_SESSION_SECRET"),
 		Pricing:             table,
 		ViewerToken:         *token,
@@ -1284,6 +1285,33 @@ func wxGatewayFromEnv(getenv func(string) string) *api.WxGateway {
 	g.TplNotice = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NOTICE"))
 	g.TplNoticeFields = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NOTICE_FIELDS"))
 	return g
+}
+
+// livePagePartnerFromEnv wires 活页's partner door (task XA4R, HBXZ): 活页's
+// base URL and its partner-provision-token (CCQUOTA_LIVEPAGE_PARTNER_KEY, else
+// read from the file _KEY_FILE names — a mounted Secret; a high-value secret).
+// The URL is 活页's in-cluster Service: its /internal/partner/* is not served
+// on the public address. Either missing ⇒ nil: a
+// trial's card says 「这台机器还没连活页」, as before.
+func livePagePartnerFromEnv(getenv func(string) string) *api.LivePagePartner {
+	u := strings.TrimSpace(getenv("CCQUOTA_LIVEPAGE_PARTNER_URL"))
+	key := strings.TrimSpace(getenv("CCQUOTA_LIVEPAGE_PARTNER_KEY"))
+	if key == "" {
+		if f := strings.TrimSpace(getenv("CCQUOTA_LIVEPAGE_PARTNER_KEY_FILE")); f != "" {
+			if b, err := os.ReadFile(f); err == nil {
+				key = strings.TrimSpace(string(b))
+			}
+		}
+	}
+	if u == "" && key == "" {
+		return nil
+	}
+	if u == "" || key == "" {
+		log.Printf("WARN 活页 partner: off — CCQUOTA_LIVEPAGE_PARTNER_URL and a key (_KEY / _KEY_FILE) are both required")
+		return nil
+	}
+	log.Printf("活页 partner: on, through %s", u)
+	return &api.LivePagePartner{URL: u, Key: key}
 }
 
 // githubOAuthVia wires where the GitHub sign-in trades its code for a token

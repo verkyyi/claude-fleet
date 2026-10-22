@@ -126,6 +126,8 @@ func (s *Server) Tell(ctx context.Context, to Recipient, kind string, f Fields) 
 		ref = f.Person
 	case store.NotifyKindQRBurst:
 		ref = f.Code
+	case store.NotifyKindLivePageEnd:
+		ref = f.Person
 	}
 	if s.Store == nil || to.Owner == "" || ref == "" {
 		return nil
@@ -147,6 +149,15 @@ func (s *Server) Tell(ctx context.Context, to Recipient, kind string, f Fields) 
 	case store.NotifyKindQRBurst:
 		// one per (pause, admin): a code resumed and paused again says so again
 		n.ID = "nt-qrburst-" + ref + "-" + strconv.FormatInt(f.At.Unix(), 10) + "-" + to.Owner
+		if err := s.Store.EnqueueNotice(n, now); err != nil {
+			if isDupNotice(s, n.ID) {
+				return nil
+			}
+			return err
+		}
+	case store.NotifyKindLivePageEnd:
+		// one per key taken back: a trial that came back and ended again says it again
+		n.ID = "nt-livepage-end-" + ref + "-" + strconv.FormatInt(f.At.Unix(), 10)
 		if err := s.Store.EnqueueNotice(n, now); err != nil {
 			if isDupNotice(s, n.ID) {
 				return nil
@@ -581,6 +592,18 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 		return qrBurstMsg(code, en, base), true, nil
 	case store.NotifyKindTrialPurge:
 		return s.trialPurgeNoticeMsg(n, en, base)
+	case store.NotifyKindLivePageEnd:
+		if len(n.Refs) == 0 {
+			return noticeMsg{}, false, nil
+		}
+		c, err := s.Store.PartnerCred(n.Refs[0], store.PartnerLivePage)
+		if err != nil {
+			return noticeMsg{}, false, err
+		}
+		if c == nil || c.RevokedAt.IsZero() || c.RevokeReason != livePageExpired {
+			return noticeMsg{}, false, nil // a key given out again since
+		}
+		return livePageEndMsg(c.RevokedAt, en, base), true, nil
 	}
 	return noticeMsg{}, false, errors.New("no notice of kind " + n.Kind)
 }

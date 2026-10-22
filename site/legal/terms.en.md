@@ -15,6 +15,7 @@ The service runs AI coding sessions for you on machines we host, and lets you wa
 - You sign in with WeChat, email or GitHub. An account is for you alone: do not transfer it, lend it or share it.
 - Keep your sign-in safe; anything done with your account is treated as done by you.
 - A trial account has a time and quota limit. When it ends, its sessions stop and its quota is withdrawn; becoming a full member needs an admin's approval.
+- When you ask for a web page during a trial, a LivePage account is opened for you with your WeChat (the same identity the 「二四网络科技」 service account knows) and your pages go there, visible only to you by default; after the trial they are kept on LivePage for 30 days, and you can close the LivePage account to delete them at once.
 
 ## 3. How you may use it
 

@@ -317,6 +317,8 @@ func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revoked := s.revokePersonDevices(pid, actor, now)
+	// a 活页 account opened for their trial closes with them (task XA4R)
+	s.eraseLivePage(pid, now)
 	// Their cookies die with the row, and stay dead if they are added back
 	// (claude-fleet#3701).
 	if err := s.Store.CutSessions(pid, actor, now); err != nil {
