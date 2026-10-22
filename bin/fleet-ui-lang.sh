@@ -354,8 +354,8 @@ fleet_ui_t() {
     en:view_legend_lost) printf 'lost' ;;
     zh:view_sec_gone_fmt) printf '已收起 %s 个' "${1:-}" ;;
     en:view_sec_gone_fmt) printf 'Folded away (%s)' "${1:-}" ;;
-    zh:view_cmd_reapall_fmt) printf '⌫ 现在收起已结束的 %s 个（有未提交改动的 worktree 保留）' "${1:-}" ;;
-    en:view_cmd_reapall_fmt) printf '⌫ Fold the %s ended ones now (a worktree with uncommitted changes is kept)' "${1:-}" ;;
+    zh:view_cmd_reapall_fmt) printf '现在收起已结束的 %s 个（有未提交改动的 worktree 保留）' "${1:-}" ;;
+    en:view_cmd_reapall_fmt) printf 'Fold the %s ended ones now (a worktree with uncommitted changes is kept)' "${1:-}" ;;
     zh:view_cmd_older_fmt) printf '更早的 %s 个 → /fleet-history' "${1:-}" ;;
     en:view_cmd_older_fmt) printf '%s older → /fleet-history' "${1:-}" ;;
     zh:view_ended_reap_hint) printf 'Tab → 回收' ;;
@@ -485,6 +485,8 @@ fleet_ui_t() {
     en:view_narrow) printf 'Narrow: use ≥48 cols; Tab/esc work' ;;
     zh:view_overlay_gone) printf '来源已失效；请回列表重新选择' ;;
     en:view_overlay_gone) printf 'Source unavailable; select it again in the list' ;;
+    zh:view_empty) printf '还没有会话' ;;
+    en:view_empty) printf 'No sessions yet' ;;
     zh:view_composer) printf '新会话' ;;
     en:view_composer) printf 'New session' ;;
     zh:view_new_open) printf '开 ↵' ;;
@@ -501,8 +503,8 @@ fleet_ui_t() {
     en:view_grid_loading) printf 'Loading repositories and agents; please wait' ;;
     zh:view_search_ph) printf '搜索会话' ;;
     en:view_search_ph) printf 'Search sessions' ;;
-    zh:view_cmd_blank) printf '⚡ 新会话' ;;
-    en:view_cmd_blank) printf '⚡ New session' ;;
+    zh:view_cmd_blank) printf '新会话' ;;
+    en:view_cmd_blank) printf 'New session' ;;
     zh:view_grid_repo) printf '仓库' ;;
     en:view_grid_repo) printf 'Repo' ;;
     zh:view_grid_norepo) printf '不绑仓库' ;;
@@ -525,8 +527,8 @@ fleet_ui_t() {
     en:view_notices_words) printf 'message messages notice notices error 消息 提示 通知 错误' ;;
     zh:view_notices_foot) printf '↵ 看全部消息：在问你、错误、警告、没人收的结果、做完、提示' ;;
     en:view_notices_foot) printf '↵ every message: asking you, errors, warnings, results nobody took, done, notes' ;;
-    zh:view_lang_row) printf '语言 / Language　中文 ✓ · English' ;;
-    en:view_lang_row) printf 'Language / 语言　English ✓ · 中文' ;;
+    zh:view_lang_row) printf '语言 / Language  中文 ✓ · English' ;;
+    en:view_lang_row) printf 'Language / 语言  English ✓ · 中文' ;;
     zh:view_lang_saved) printf '界面语言：中文 · 已存到你的账号' ;;
     en:view_lang_saved) printf 'Language: English · saved to your account' ;;
     zh:view_lang_auto_fmt) printf '已按你的系统用中文 · ⌘P → 语言 可改' ;;
@@ -558,8 +560,8 @@ fleet_ui_t() {
     # who never wrote code — one key, one thing done; only `dev` names code / a PR
     zh:onboard_hello) printf '你好！我是这台电脑上的向导。两三分钟：教你一个键，再帮你把一件事当场做完。' ;;
     en:onboard_hello) printf "Hi! I'm the guide on this computer. Two or three minutes: one key to learn, then one thing done for you, right now." ;;
-    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 F12（或 ⌃] p：先按 ⌃]，再按 p）。它打开一个面板，你所有的会话都在里面；最底下带 ⚡ 的那一行，用来交代一件新的事。' ;;
-    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, F12 on a phone (or ⌃] p: ⌃], then p). It opens a panel with all your sessions; the ⚡ row at the bottom is where you hand over something new.' ;;
+    zh:onboard_key) printf '只要记住一个键：电脑上 ⌘P，手机上 F12（或 ⌃] p：先按 ⌃]，再按 p）。它打开一个面板，你所有的会话都在里面；最上面「+ 新会话」那一行，用来交代一件新的事。' ;;
+    en:onboard_key) printf 'There is one key to remember: ⌘P on a computer, F12 on a phone (or ⌃] p: ⌃], then p). It opens a panel with all your sessions; the + New session row at the top is where you hand over something new.' ;;
     zh:onboard_try) printf '现在试一下：按 ⌘P（手机 F12 或 ⌃] p），直接写一件你想做的事——比如「帮我写一封请假邮件」——然后回车。' ;;
     en:onboard_try) printf 'Try it now: press ⌘P (phone: F12 or ⌃] p), write one thing you would like done — say, "draft an email asking for Friday off" — and press Enter.' ;;
     zh:onboard_sent) printf '收到，它已经在一个新会话里开工了。面板里它那一行是 » 就是在干活，变成 ✓ 就是做完了；按 ⌘P，选它，回车，就能过去看。' ;;
@@ -568,18 +570,18 @@ fleet_ui_t() {
     en:onboard_done) printf "Done! That is all there is from now on: ⌘P, write one line, Enter." ;;
     zh:onboard_more) printf '想再交代一件，随时 ⌘P；想回来找我，在 ⌘P 里选 guide 这一行。' ;;
     en:onboard_more) printf 'Anything else, any time: ⌘P. To come back to me, pick the guide row in ⌘P.' ;;
-    zh:view_cmd_quit) printf '⏻ 退出 Tokenman（会话在后台继续）' ;;
-    en:view_cmd_quit) printf '⏻ Quit Tokenman (sessions keep running)' ;;
+    zh:view_cmd_quit) printf '退出 Tokenman（会话在后台继续）' ;;
+    en:view_cmd_quit) printf 'Quit Tokenman (sessions keep running)' ;;
     zh:view_ask_quit) printf '退出 Tokenman？会话在后台继续 (y/n) ' ;;
     en:view_ask_quit) printf 'Quit Tokenman? Sessions keep running (y/n) ' ;;
     # T774: the label is short; the row's subtitle says what it is ($ under ascii too)
-    zh:view_cmd_home) printf '$ 命令行' ;;
-    en:view_cmd_home) printf '$ Shell' ;;
+    zh:view_cmd_home) printf '命令行' ;;
+    en:view_cmd_home) printf 'Shell' ;;
     zh:view_cmd_home_foot) printf '这台机器的 shell，在家目录' ;;
     en:view_cmd_home_foot) printf "this machine's shell, in your home directory" ;;
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress
-    zh:view_keys_match_fmt) printf '↵ 切到 %s  ↑ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
-    en:view_keys_match_fmt) printf '↵ go to %s  ↑ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;
+    zh:view_keys_match_fmt) printf '↵ 切到 %s  ↑ 到「+ 新会话」预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
+    en:view_keys_match_fmt) printf '↵ go to %s  ↑ to + draft "%s"  esc close' "${1:-}" "${2:-}" ;;
     zh:view_keys_epic) printf '→ 展开 / ← 收起' ;;
     en:view_keys_epic) printf '→ expand / ← collapse' ;;
     zh:view_keys_short) printf '↵ 进入/编辑  Tab 操作  ↑↓ 选  esc 关' ;;
@@ -588,10 +590,10 @@ fleet_ui_t() {
     en:view_keys_sending) printf 'opening — esc closes the panel; the draft will not be sent' ;;
     zh:view_nomatch) printf '没有会话叫这句话' ;;
     en:view_nomatch) printf 'no session goes by these words' ;;
-    zh:view_task_starting_fmt) printf '⚡ 开窗中… %s' "${1:-}" ;;
-    en:view_task_starting_fmt) printf '⚡ starting… %s' "${1:-}" ;;
-    zh:view_task_opening) printf '⚡ 开会话中…' ;;
-    en:view_task_opening) printf '⚡ opening a session…' ;;
+    zh:view_task_starting_fmt) printf '+ 开窗中… %s' "${1:-}" ;;
+    en:view_task_starting_fmt) printf '+ starting… %s' "${1:-}" ;;
+    zh:view_task_opening) printf '开会话中…' ;;
+    en:view_task_opening) printf 'opening a session…' ;;
     zh:view_task_step_fmt) printf '… 开会话 · %s' "${1:-}" ;;
     en:view_task_step_fmt) printf '… opening the session · %s' "${1:-}" ;;
     zh:view_sess_issue_fmt) printf '#%s 「%s」' "${1:-}" "${2:-}" ;;

@@ -241,12 +241,12 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(len([x for x in box.splitlines() if x.strip().startswith(("仓库 ‹", "Agent ‹", "开 ↵"))]), 3)
             # T774: the box's own first line stands where 搜索会话 stood, once
             top = box.splitlines()[0]
-            self.assertEqual(top.strip(), "⚡ 新会话", box)
+            self.assertEqual(top.rstrip(), "  + 新会话", box)
             self.assertNotIn("›", top)
             self.assertEqual(box.count("新会话"), 1, box)
             self.assertEqual(self.actions(), [])
             self.keys("Escape")
-            self.assertTrue(self.wait("Tab 操作").splitlines()[0].startswith("› "), self.screen())
+            self.assertTrue(self.wait("Tab 操作").splitlines()[0].startswith("  › "), self.screen())
             # Cancel restores source (New); ↓↓ goes by $ 命令行 back to the first session (T762).
             self.keys("Down", "Down")
         self.keys("Up", "Up", "Enter")

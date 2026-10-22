@@ -22,7 +22,7 @@ Everything starts from one key. The tables below are generated from Tokenman's k
 | — | type to filter |
 | `?` | legend |
 | `esc` | close |
-| — | Rows of the panel (pick one, ↵ — or type its name): ⚡ New session · $ Shell (this machine's shell, in your home directory) · ⏻ Quit Tokenman (sessions keep running) |
+| — | Rows of the panel (pick one, ↵ — or type its name): + New session · $ Shell (this machine's shell, in your home directory) · ⏏ Quit Tokenman (sessions keep running) |
 <!-- /docs-gen:keys -->
 
 **The top line is the session's; messages get a row of their own.** The 看台's top line says the session only: its state, title, change number and quota. Whatever Tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. An error (red ✖) and a result nobody took (yellow ✓) stay until you have seen them; a warning (yellow ▲) fades after 6 seconds, a note (grey ∙) after 3. Once you have seen everything the row folds away. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
@@ -30,9 +30,9 @@ Everything starts from one key. The tables below are generated from Tokenman's k
 The panel looks roughly like this (sample data). The order on screen, top to bottom, is the order ↑↓ walk; ↓ at the bottom goes round to the top, ↑ at the top to the bottom. The cursor stops on indented rows; a line starting with ─ is a group heading.
 
 ```text
-› Search sessions                 Sessions 8
+  › Search sessions               Sessions 8
   ✦ Messages
- ⚡ New session
+  + New session
   $ Shell
 ─ Waiting on you 1
   ! T128     Claude  Login page redesign         web-app
@@ -43,17 +43,17 @@ The panel looks roughly like this (sample data). The order on screen, top to bot
 ─ Queued 1
   ✓ T127     Claude  Upgrade dependencies        web-app  waiting for the release train
   ▸ Folded away (4)
-  ◐ Language / 语言
-  ⏻ Quit Tokenman (sessions keep running)
-↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close
+  ⇄ Language / 语言
+  ⏏ Quit Tokenman (sessions keep running)
+  ↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close
 ```
 
 ### Open a session
 
-- **Open a new session**: pick “⚡ New session” and press Enter (at the top of the list, under Messages) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. The defaults: the repository of the session you are looking at (when it has none, the one you chose last time — “No repo” counts), and the agent that repository last opened with; `⌘N` opens this box directly, Enter then opens the session, Escape closes it. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
+- **Open a new session**: pick “+ New session” and press Enter (at the top of the list, under Messages) to open the “New session” box: three items only — “Repo ‹›”, “Agent ‹›” and “Open ↵” — already chosen, with the cursor on “Open”, so another Enter opens it. To change one: ↑↓ or Tab moves between items, ←→ changes the repository or agent (“No repo” when you need none), and Enter on a value goes back to “Open”. The defaults: the repository of the session you are looking at (when it has none, the one you chose last time — “No repo” counts), and the agent that repository last opened with; `⌘N` opens this box directly, Enter then opens the session, Escape closes it. There is nothing to write — say what to do inside the session once it opens; after your first message, its row in the list (and its task record) is renamed to that message's first line.
 - **Switch sessions**: type part of a title or ticket number, select a session with ↑↓, and press Enter.
 
-The actions page, a question such as a rename, and the new-session box are whole pages: the list area is replaced, the top line names what it is about (the session, or “⚡ New session”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new-session box; items on a page are clickable (click a repository or agent again for the next one, click “Open” to open).
+The actions page, a question such as a rename, and the new-session box are whole pages: the list area is replaced, the top line names what it is about (the session, or “+ New session”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new-session box; items on a page are clickable (click a repository or agent again for the next one, click “Open” to open).
 
 The repository and agent chosen in the box are stored privately on this machine for this view, and come back the next time it opens. Resize keeps the selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice and keep Tab and Escape working. Long content scrolls inside the page.
 
@@ -113,7 +113,7 @@ Sessions run on Tokenman's machines: close the terminal, shut the laptop, switch
 
 ## Task records: T numbers
 
-Everything you hand over on the ⚡ line is first written down by Tokenman, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
+Everything you hand over on the + New session line is first written down by Tokenman, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
 
 - A task has this one number: it is yours, not a repository's. A task given a repository changes code and opens pull requests there — GitHub holds only the code and the pull requests, with no second ticket.
 - The hub's **Sessions** page lists all your task records — one line per piece of work, a task and its session on the same line, grouped by whether it needs you (Needs you · Working · Queued · Put away), a batch's members under it. A record stays after its session ends. Open a line for its details: your words, its report, the PR, the terminal. **New** at the top sends one from there.
