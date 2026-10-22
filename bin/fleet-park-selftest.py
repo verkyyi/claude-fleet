@@ -142,7 +142,12 @@ while True:
         self.assertTrue(result.get('ok'), result)
         self.assertFalse(self.opt('@park_saved_mb'), 'old RSS was presented as this park sample')
         with patch.dict(os.environ, self.env):
-            observed = census(self.label, 'test', self.root / 'census')[self.win]
+            readings = census(self.label, 'test', self.root / 'census')
+            self.assertIn(self.win, readings, 'census=' + repr(readings) + ' raw=' + repr(self.tm(
+                'list-windows', '-t', '=test', '-F', '\x1f'.join(
+                    '#{' + k + '}' for k in ('window_id', 'pane_pid', '@fleet_role', 'window_name',
+                    '@park_state', '@park_saved_mb', '@park_wrap_ver', '@park_why', '@parked', '@park_held')))))
+            observed = readings[self.win]
         self.assertEqual(observed['state'], 'parked')
         self.assertIsNone(observed['saved_mb'])
         self.assertIsNone(summarize([{'state':'done', 'park':observed}])['parked_saved_mb'])
