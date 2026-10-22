@@ -36,6 +36,8 @@ import { findTask } from "../use-tasks";
 import { NewDialog, reposOf } from "../NewDialog";
 import { GLYPH, TONE } from "../SessionList";
 import { useWorkRows } from "../work-rows";
+import { CopyLine, useInstallLine } from "../cli";
+import { openLine } from "../session-list";
 import { GROUPS, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Row, type Tone } from "../work";
 
 const BADGE: Record<Tone, string> = {
@@ -194,8 +196,29 @@ const TaskFacts: FC<{ t: Task; stale: boolean }> = ({ t, stale }) => {
 // its members, its session, the ways in.
 // onTerminal (GR5E C4): inside a session's workspace its terminal is a switch
 // away — the buttons switch there instead of opening /terminal
-const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => void; onReap: (r: Row) => void; onResume: (r: Row) => void; onTerminal?: () => void }> = ({ r, stale, busy, onOpen, onReap, onResume, onTerminal }) => {
+// 命令行接入 (会话合一 Y01K): inside a session's own page its 详情 gives the
+// line that opens it in the person's terminal and the install line; the web
+// terminal is one small line at the foot (onTerminal), never a big button.
+const CliAccess: FC<{ r: Row; onTerminal?: () => void }> = ({ r, onTerminal }) => {
+  const install = useInstallLine();
+  return (
+    <div className="space-y-1.5" data-testid="cli-access">
+      <p className="text-muted-foreground text-xs">{tr("在终端里接着用", "Continue in a terminal")}</p>
+      <CopyLine text={openLine(r)} />
+      <p className="text-muted-foreground pt-1 text-xs">{tr("还没装 fleet？先在 iTerm2 里粘贴：", "No fleet yet? Paste this in iTerm2 first:")}</p>
+      <CopyLine text={install} />
+      <p className="text-muted-foreground text-xs">{tr("Windows 在 WSL 里粘贴同样两行。", "On Windows, paste the same two lines in WSL.")}</p>
+      {onTerminal ? <p className="pt-2 text-[12px]"><button type="button" onClick={onTerminal} data-testid="web-term"
+        className="text-muted-foreground hover:text-foreground">{tr("网页终端（备用）", "Web terminal (backup)")}</button></p> : null}
+    </div>
+  );
+};
+
+const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => void; onReap: (r: Row) => void; onResume: (r: Row) => void; onTerminal?: () => void; cli?: boolean }> = ({ r, stale, busy, onOpen, onReap, onResume, onTerminal, cli }) => {
   const t = r.task, s = r.live || r.ended;
+  // a machine's name only for a person with more than one (会话合一 Y01K)
+  const { machines } = useWorkRows();
+  const machine = machines > 1 ? machineOf(r) : "";
   const pr = t ? taskPR(t) : null;
   const landing = t ? taskLanding(t) : "";
   const ticket = t ? taskTicket(t) : null;
@@ -208,7 +231,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           {r.code ? <span className="text-clay font-mono text-sm">{r.code}</span> : null}
           <h2 className="font-display text-xl leading-snug font-semibold break-words">{r.title}</h2>
         </div>
-        <p className="text-muted-foreground text-sm">{[tr(...r.tag), machineOf(r), t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
+        <p className="text-muted-foreground text-sm">{[tr(...r.tag), machine, t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
         {r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
       </div>
       {asking && r.live ? (
@@ -216,9 +239,10 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           <CardContent className="space-y-2 px-4">
             <p className="text-muted-foreground text-xs">{tr(...(ASK_KIND[r.live.ask?.kind || ""] || ASK_KIND.question))}</p>
             {r.live.ask?.msg ? <p className="text-sm break-words whitespace-pre-wrap">{r.live.ask.msg}</p> : null}
-            {onTerminal ? <Button size="sm" className="w-full" onClick={onTerminal}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Button>
+            {cli ? <p className="text-muted-foreground text-xs">{tr("在对话里点选项回答，或在终端里：", "Pick an option in the chat, or in a terminal:")} <span className="font-mono">{openLine(r)}</span></p>
+              : onTerminal ? <Button size="sm" className="w-full" onClick={onTerminal}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Button>
               : <Button asChild size="sm" className="w-full"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("去终端回答", "Answer in the terminal")}</Link></Button>}
-            <p className="text-muted-foreground font-mono text-[12px] break-all select-all">fleet answer {r.live.key}</p>
+            {cli ? null : <p className="text-muted-foreground font-mono text-[12px] break-all select-all">fleet answer {r.live.key}</p>}
           </CardContent>
         </Card>
       ) : t?.asked && r.group === "ask" ? (
@@ -253,18 +277,19 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         </div>
       </Field> : null}
       <Field label={tr("会话", "Session")}>
-        {s ? <p>{[s.machine, s.key, r.live?.born ? tr(`开始于 ${ago(new Date(r.live.born * 1000).toISOString())}`, `started ${ago(new Date(r.live.born * 1000).toISOString())}`)
+        {s ? <p>{[machines > 1 ? s.machine : "", s.key, r.live?.born ? tr(`开始于 ${ago(new Date(r.live.born * 1000).toISOString())}`, `started ${ago(new Date(r.live.born * 1000).toISOString())}`)
           : r.ended ? tr(`收起于 ${ago(r.ended.ended)}`, `put away ${ago(r.ended.ended)}`) : "",
           r.live?.tokens ? tr(`今天 ${fmtTokens(r.live.tokens)} tokens`, `${fmtTokens(r.live.tokens)} tokens today`) : ""].filter(Boolean).join(" · ")}</p>
           : <p className="text-muted-foreground">{t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
       </Field>
       <div className="flex flex-wrap gap-2">
-        {r.live ? onTerminal ? <Button className="flex-1" onClick={onTerminal}><TerminalSquare />{tr("终端", "Terminal")}</Button>
+        {r.live && !cli ? onTerminal ? <Button className="flex-1" onClick={onTerminal}><TerminalSquare />{tr("终端", "Terminal")}</Button>
           : <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
         {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
-        {t ? <Button asChild variant="outline" className="flex-1"><Link to={`/chat?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
+        {t && !cli ? <Button asChild variant="outline" className="flex-1"><Link to={`/chat?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
         {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("回收", "Close")} title={tr("回收", "Close")}><Trash2 /></Button> : null}
       </div>
+      {cli && (r.live || r.board?.worker_id) ? <CliAccess r={r} onTerminal={onTerminal} /> : null}
       {t ? <TaskFacts t={t} stale={stale} /> : null}
     </div>
   );
@@ -272,7 +297,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
 
 // One row's details with their two writes (回收 · 接回) and what came of them —
 // 会话's side panel and a session's own page (/s/:ref, GR5E C2) alike.
-export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () => void }> = ({ r, onOpen, onTerminal }) => {
+export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () => void; cli?: boolean }> = ({ r, onOpen, onTerminal, cli }) => {
   const { stale, reload } = useWorkRows();
   const [confirm, setConfirm] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
@@ -293,7 +318,7 @@ export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () =>
   return (
     <>
       {note ? <p role="status" className={cn("mb-4 text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
-      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={setConfirm} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} />
+      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={setConfirm} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} cli={cli} />
       <AlertDialog open={!!confirm} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

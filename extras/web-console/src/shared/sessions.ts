@@ -33,6 +33,11 @@ export type SessionRow = {
   say?: string;         // its last word while working (status_msg)
   wid?: string;         // an ended row's worker_id: the task record's join
   ident?: string;       // a live row's identity (its window's @fleet_id)
+  // 会话合一 (Y01K): who opened it — the web (a chat session) or a terminal —
+  // and whether the web can talk to it (an older session: read-only). Absent on
+  // an older hub: nothing changes.
+  origin?: "web" | "terminal";
+  canTalk?: boolean;
 };
 
 // The one session list (claude-fleet A4G2): the hub builds it once — rows,
@@ -45,8 +50,11 @@ export type BoardRow = {
   parent?: string; depth?: number; lost?: boolean; at: number;
   // why it is still open (E101): the card's third line, 中文 / English, and its tone
   why?: [string, string]; why_tone?: "grey" | "orange" | "red";
+  // 会话合一 (Y01K): web = a chat session the web opened, terminal = one a terminal opened
+  origin?: "web" | "terminal"; can_talk?: boolean;
 };
-export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string };
+// machines (会话合一 Y01K): how many machines the person has — one ⇒ no machine name anywhere
+export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string; machines?: number };
 
 type LiveBody = { etag?: string; sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[]; board?: Board };
 type EndedBody = { sessions?: { worker_id?: string; resume_id: string; key: string; title?: string; repo?: string; machine_name?: string; ended_at?: string }[] };
@@ -77,6 +85,8 @@ export function liveRows(body: LiveBody | null): SessionRow[] {
       machine: s.machine_name || "", state, group: asking ? "ask" : "run", ask: asking ? askOf(w) : null,
       born: Number(w.born) || 0, ended: "", tokens: Number(s.tokens_today) > 0 ? Number(s.tokens_today) : 0,
       say: asking ? "" : str(w.status_msg).slice(0, 200), ident: str(w.identity) || undefined,
+      ...(w.origin === "web" || w.origin === "terminal" ? { origin: w.origin } : {}),
+      ...(typeof w.can_talk === "boolean" ? { canTalk: w.can_talk } : {}),
     });
   }
   return out.sort((a, b) => b.born - a.born || a.key.localeCompare(b.key));

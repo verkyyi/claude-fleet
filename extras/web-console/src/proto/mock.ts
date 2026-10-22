@@ -25,7 +25,19 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   // 接管 (claude-fleet VV8F): the followed terminal session idle (接管 can go) or answering (等它说完)
   view?: "idle" | "busy";
   // a person's six (claude-fleet WD8F): a reply still running (新对话 can go), or one the home was stopped in (重试)
-  wd8f?: "busy" | "cut" };
+  wd8f?: "busy" | "cut";
+  // 会话合一 (claude-fleet Y01K): the entry's new road on — chats are sessions, the web talks to
+  // a terminal's: idle, answering with a line queued, someone typing there, asking, an older
+  // session (read-only), a line that did not come back in 20 s, the home out of reach
+  uni?: "on" | "busy" | "typing" | "ask" | "old" | "fail" | "down" };
+
+// 会话合一 (Y01K): what the talked-to session's record holds, and its queue
+const uniSaid: Record<string, unknown>[] = [
+  { t: "user", text: "把 v4 的链接发我" }, { t: "text", d: "设计页 v4 已发：https://…/s/YtqX…" },
+];
+const uniQueue: { delivery: string; text: string; why: string }[] = [];
+let uniGen = 0;
+const uniBump = () => { uniGen++; };
 
 // 接管 / 交回 (VV8F): whether this page holds the followed session now
 const VIEW_SID = "5b1e0000-0000-4000-8000-0000000000b2";
@@ -218,6 +230,15 @@ export async function install(): Promise<string> {
     sess("build-box", FLEET2, { worker_id: `${FLEET2}/0d3e`, key: "task-w8ge", repo: "linxiao/training-deck", title: "十月培训幻灯片", state: "done", agent: "codex", born: (Date.now() - 5 * H) / 1e3 }, 66400),
     sess("office-mac", FLEET, { worker_id: `${FLEET}/5aa0`, key: "scratch-20", repo: "", title: "试一段 Python 脚本", state: "idle", agent: "claude", born: (Date.now() - 50 * 6e4) / 1e3 }, 8200),
   ];
+  if (sc.uni) {
+    // the new road: every session says where it was opened; three of them the web's
+    live = live.filter((x) => x.machine_name === "office-mac").map((x) => ({ ...x, worker: { ...(x.worker as object), origin: "terminal", can_talk: sc.uni !== "old" } }));
+    live.unshift(
+      sess("office-mac", FLEET, { worker_id: `${FLEET}/w001`, key: "scratch-41", title: "帮我看下这周的账单", state: "working", agent: "claude", born: (Date.now() - 6 * 6e4) / 1e3, origin: "web", can_talk: true, status_msg: "读了 3 个文件" }),
+      sess("office-mac", FLEET, { worker_id: `${FLEET}/w002`, key: "scratch-42", title: "整理周三的会议纪要", state: "done", agent: "claude", born: (Date.now() - 20 * 6e4) / 1e3, origin: "web", can_talk: true }),
+      sess("office-mac", FLEET, { worker_id: `${FLEET}/w003`, key: "scratch-43", title: "我的对话", state: "idle", agent: "claude", born: (Date.now() - 30 * H) / 1e3, origin: "web", can_talk: true }),
+    );
+  }
   let ended = state === "empty" ? [] : [
     { worker_id: `${FLEET2}/3e02`, resume_id: `${FLEET2}/task-m5tc`, key: "task-m5tc", title: "客户名单去重", repo: "linxiao/crm-clean", machine_name: "build-box", fleet_id: FLEET2, state: "closed", ended_at: before(3.9 * 864e5) },
     { worker_id: `${FLEET}/9c01`, resume_id: `${FLEET}/scratch-9`, key: "scratch-9", title: "新品发布 · 预告短片", repo: "linxiao/launch-video", machine_name: "office-mac", fleet_id: FLEET, state: "landed", ended_at: before(5.8 * 864e5) },
@@ -385,7 +406,30 @@ export async function install(): Promise<string> {
         }
         return ok(bundle);
       }
-      case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: "ok" });
+      case "/v1/chat/home": return ok({ machine: "mac-mini", login: me.login, state: sc.uni === "down" ? "offline" : "ok", ...(sc.uni ? { unified: true } : {}) });
+      case "/v1/chat/ack": {
+        const d = JSON.parse(String(init?.body || "{}")).delivery;
+        for (let i = uniQueue.length - 1; i >= 0; i--) if (uniQueue[i].delivery === d) uniQueue.splice(i, 1);
+        uniBump();
+        return ok({ ok: true });
+      }
+      case "/v1/chat/open": {
+        const b = JSON.parse(String(init?.body || "{}"));
+        const fid = crypto.randomUUID();
+        live.unshift(sess("office-mac", FLEET, { worker_id: `${FLEET}/${fid}`, identity: fid, key: "scratch-50", title: String(b.text || "新会话").slice(0, 20), state: "working", agent: b.agent, born: Date.now() / 1e3, origin: "web", can_talk: true }));
+        return ok({ fid, agent: b.agent, state: "sent", worker: `${FLEET}/${fid}` });
+      }
+      case "/v1/chat/say": {
+        // 会话合一: the line lands in the record a moment later — queued while it answers or a terminal has a draft
+        const b = JSON.parse(String(init?.body || "{}"));
+        // a parked session that did not come back: the door gives the line back on the queue
+        if (sc.uni === "fail") { setTimeout(() => { uniQueue.push({ delivery: "d-" + b.id, text: b.text, why: "wake_timeout" }); uniBump(); }, 1200);
+          uniQueue.push({ delivery: "d-" + b.id, text: b.text, why: "waking" }); uniBump(); return ok({ delivery: "d-" + b.id, state: "queued", reason: "waking" }); }
+        const queued = sc.uni === "busy" || sc.uni === "typing";
+        if (queued) { uniQueue.push({ delivery: "d-" + b.id, text: b.text, why: sc.uni === "typing" ? "typing" : "busy" }); setTimeout(uniBump, 200); }
+        else setTimeout(() => { uniSaid.push({ t: "user", text: b.text }, { t: "text", d: "收到，这是原型里的演示回复。" }); uniBump(); }, 900);
+        return ok({ delivery: "d-" + b.id, state: queued ? "queued" : "sent" });
+      }
       case "/v1/chat/conversation": {
         if (state === "no_home") return ok({ code: "no_home", error: "no home" }, 409);
         if (sc.wd8f && !url.includes("provider=codex")) return ok({ items: wd8fItems, asks: [], models, default: "opus", last: "turn-a1",
@@ -434,7 +478,28 @@ export async function install(): Promise<string> {
       }
       // 只读 (task F481): a terminal session's record, as the service streams it —
       // what it said, then one more line while it answers
-      case "/v1/chat/view": {
+      case "/v1/chat/view": if (sc.uni) {
+        const enc = new TextEncoder();
+        const ev = (o: unknown) => enc.encode(`data: ${JSON.stringify(o)}\n\n`);
+        const st = () => ({ t: "state", queue: [...uniQueue], agent: "claude", session: VIEW_SID, label: "scratch-20", state: sc.uni === "busy" ? "working" : "done",
+          busy: sc.uni === "busy", ...(sc.uni === "old" ? {} : { can_talk: true }),
+          ...(sc.uni === "ask" ? { ask: { fp: "fp-1", kind: "question", questions: [{ question: "先做哪一条？", options: [{ label: "第 3 条（推荐）" }, { label: "按原顺序" }] }] } } : {}) });
+        const stream = new ReadableStream({
+          async start(c) {
+            c.enqueue(ev(st()));
+            c.enqueue(ev({ t: "items", replace: true, at: uniSaid.length, session: VIEW_SID, items: uniSaid }));
+            let n = uniGen, at = uniSaid.length;
+            for (;;) {
+              await new Promise((r) => setTimeout(r, 300));
+              if (n === uniGen) continue;
+              n = uniGen;
+              c.enqueue(ev(st()));
+              if (uniSaid.length > at) { c.enqueue(ev({ t: "items", at: uniSaid.length, session: VIEW_SID, items: uniSaid.slice(at) })); at = uniSaid.length; }
+            }
+          },
+        });
+        return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+      } else {
         const from = Number(new URL(url, location.href).searchParams.get("from") || 0);
         const enc = new TextEncoder();
         const ev = (o: unknown, id?: number) => enc.encode(`${id != null ? `id: ${id}\n` : ""}data: ${JSON.stringify(o)}\n\n`);

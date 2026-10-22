@@ -353,6 +353,39 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 测试：`fleet-webchat-handoff-selftest.sh` 7b、`fleet-webchat-selftest.mjs --only=handover`（X）、e2e `TestChatHandover`、
   `extras/web-console/test/session-handover.mjs`。
 
+### 会话合一：网页上一张会话表、对任何会话直接说（Y01K，与 HHV0 · PQ41）
+
+页面一侧（`extras/web-console`）。开关是入口的 `fleet.chat.unified`，页面从
+`GET /v1/chat/home` 的 `unified: true` 读到（`chat/home.ts useUnified`）；没有这个字
+段 = 旧路：`/app/chat` 的那一条对话、终端会话只读，下面这些都不出现。
+
+- **一张会话表**：「我的对话」不再是专行（旧路才有）；终端开的会话标题后一个 `>_`
+  （行的 `origin`，旧入口不说时有活窗口即算终端）；行尾只说要看的：回答中 · 新回复 ·
+  在问你；停放的网页会话就是「空闲」（`work.ts boardRows`）。一个行从「回答中」变走而人
+  不在它上面 ⇒ 橙点「新回复」+ 顶部一行「「X」答完了 · 去看」3 秒（`work-rows.tsx`）。
+  机器名只给有好几台机器的人、只在详情里（`board.machines`，没有就按行数）。
+- **新会话只一个入口**：左栏 ＋ / 手机右下「＋ 新会话」→ `/app/new`。对话：
+  `POST /v1/chat/open {agent, text}`（家机 `/api/open`，开一个 origin web 的会话，第一句
+  是它的第一轮）→ `{fid, worker}`，开好进 `/app/s/<ref>`；终端：页面不开会话，给
+  `fleet claude` / `fleet codex` 与安装行，网页终端只在底部一行小字。电脑上的 `/app/`
+  就是新会话页；`/app/chat` 打开迁出来的「我的对话」（origin web，标题「我的对话」）。
+- **对会话直接说**（`chat/view.ts` + `chat/talk.ts`）：读仍是 `GET /v1/chat/view`，
+  `{t:"state"}` 里 `can_talk` 为真才写；`POST /v1/chat/say?worker=` `{id, text, images?}`
+  → `{delivery, state: sent|queued|refused, reason}`。发出的一句先照着落地的样子画，
+  记录里有了就换成记录；`queue` 里 why 为 busy / typing / asking 的淡色排着、下面一行
+  原因，waking 照常画（接回期间就是「回答中」）；门退回的（expired · session_changed ·
+  wake_timeout · no_session · old_version · exited · dropped）文字放回输入框、输入框上一句
+  「这一句没送到…」+ 重试 / 在新会话里接着说，并 `POST /v1/chat/ack?worker= {delivery}`。
+  不知道送没送到（没有回答）的重试用同一个 id。提问卡片：`ask {fp, kind, questions}` →
+  `POST /v1/chat/answer?worker= {fp, answers}` / `{fp, allow}`；停止：`POST /v1/chat/stop?worker=`。
+  `can_talk` 为假（老版本）只读，只在输入框里一句「只读 · 终端会话。要接着说，在 iTerm2
+  里输入 fleet open <编号>（详情里可复制）」。接管按钮、「对话 | 终端」切换都没了；旧路
+  上已经被网页接过来的会话仍可「交回终端」。
+- **同步只一种说法**：标题旁浅灰小字，平时什么都没有（不再有「已同步」）；没同步时
+  「同步中…」，超过 10 秒或家机器连不上时「家机器暂时连不上」，输入框说「家机器连回来后
+  才能发」。会话的「⋯ 更多」第一项一点即复制 `fleet open <编号>`；详情里是命令行接入。
+- 原型：`npm run build:proto`，场景 `{"uni": "on"|"busy"|"typing"|"ask"|"old"|"fail"|"down"}`。
+
 ## 浏览器上下文（#4034）
 
 模型知道人此刻从哪儿、用什么在说话：

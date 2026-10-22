@@ -22,6 +22,9 @@ import { SHELL_REF } from "../legacy";
 const TerminalPage = lazy(() => import("./terminal"));
 // a session's identity (<fleet>/<id>) is a worker its terminal opens as it is
 const isWorker = (ref: string) => ref.includes("/");
+const fresh = (worker: string): Row => ({ id: worker, code: "", title: tr("新会话", "New session"), group: "work", tag: ["回答中", "Replying"],
+  glyph: "work", tone: "ok", line: "", quote: false, kids: [], at: Date.now(), origin: "web",
+  board: { id: worker, title: "", group: "work", tag: "working", words: ["回答中", "Replying"], worker_id: worker, at: Date.now() / 1000 } });
 
 export default function SessionPage() {
   const { ref = "" } = useParams();
@@ -31,7 +34,7 @@ export default function SessionPage() {
 
 function OneSession({ ref_: ref }: { ref_: string }) {
   const [params] = useSearchParams();
-  const { rows, markSeen } = useWorkRows();
+  const { rows, markSeen, setOpenRow } = useWorkRows();
   const [found, setFound] = useState<Row | null | undefined>(undefined);
   const inList = rows ? findRow(rows, ref) : undefined;
   const r = inList || found || undefined;
@@ -46,9 +49,14 @@ function OneSession({ ref_: ref }: { ref_: string }) {
   // opened is seen: the row reads plain again in the list
   const mark = inList ? `${inList.id}\t${inList.tag[1]}\t${inList.at}` : "";
   useEffect(() => { if (inList) markSeen(inList); }, [mark]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the one looked at never says 新回复: its reply is on screen
+  const openID = inList?.id || "";
+  useEffect(() => { setOpenRow(openID); return () => setOpenRow(""); }, [openID, setOpenRow]);
 
   if (!rows || (!inList && found === undefined)) return <div className="mx-auto max-w-3xl px-4 py-6"><Loading /></div>;
   if (!r && isWorker(ref) && params.get("view") === "term") return <TerminalPage worker={ref} />;
+  // a session just opened from 新会话 (会话合一 Y01K) the list does not carry yet: read by its worker
+  if (!r && isWorker(ref)) return <Workspace key={ref} r={fresh(ref)} />;
   if (!r) return (
     <div className="mx-auto max-w-3xl px-4 py-6">
       <Empty icon={<ArrowLeft />} title={tr("没找到这个会话", "No such session")}

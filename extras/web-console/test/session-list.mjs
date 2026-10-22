@@ -7,8 +7,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
-import { isUnread, listItem, listRows, matchRow, openFor, rowMeta, rowRef, searchRows, seenMark } from '../src/app/session-list.ts';
+import { headMeta, isTerminal, isUnread, listItem, listRows, listWord, machineCount, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
 
+const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
 const fid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const v1 = (x) => ({ authority_version: 1, generation: 1, created_at: new Date().toISOString(), title: 'x', ...x });
@@ -66,9 +67,11 @@ assert.deepEqual(searchRows(rows, 'office').map((r) => r.title), ['a loose shell
 assert.deepEqual(searchRows(rows, 'K5H0').map((r) => r.title), ['member elsewhere']);
 assert.equal(searchRows(rows, '').length, rows.length);
 
-// the one detail line: code · machine · agent · where · how long
+// the one detail line: code · agent · how long — the machine only past one (会话合一 Y01K)
 // (node's language is the machine's: either one)
-assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · build-box · Claude Code · (在终端里|in a terminal) · (开了 3 小时|open 3 h)$`));
+assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · Claude Code · (开了 3 小时|open 3 h)$`));
+assert.match(rowMeta(open[0], now, 2), new RegExp(`^${open[0].code} · build-box · Claude Code · (开了 3 小时|open 3 h)$`));
+assert.equal(machineCount(rows), 2, 'build-box and office');
 assert.match(rowMeta(gone[0], now), /^(已结束|ended)$/);
 assert.match(openFor(now - 5 * 60e3, now), /^(开了 5 分钟|open 5 min)$/);
 assert.equal(openFor(0, now), '');
@@ -99,7 +102,32 @@ assert.ok(/\{kids\.length \? \(\s*<button[^>]*aria-expanded/.test(line), '▸ on
 const loop = page.slice(page.indexOf('const kids = nestedKids(r).filter(match);'));
 assert.ok(loop.indexOf('<RowLine r={r} kids={kids}') < loop.indexOf('kids.map((k) =>'), 'members drawn below their EPIC');
 
-// 我的对话 is pinned: the first row of the list, before what asks (C25B)
-assert.ok(/<List>\{web\}\{open\.map\(row\)\}<\/List>/.test(src), 'the web conversation is the first row');
+// 我的对话 is pinned on the old road only (C25B); on the new one it is a session of the list (会话合一 Y01K)
+assert.ok(/<List>\{oldRoad \? web : null\}\{open\.map\(row\)\}<\/List>/.test(src), 'the web conversation is the first row on the old road');
+assert.ok(src.includes('const oldRoad = useUnified() === false'), 'only the entry saying unified off keeps that row');
+
+// 会话合一 (Y01K): a terminal's session wears >_ (an older hub lists terminal sessions only)
+assert.ok(isTerminal({ origin: 'terminal' }) && !isTerminal({ origin: 'web' }) && isTerminal({ live: {} }) && !isTerminal({}));
+// the word at a row's end: 回答中 · 新回复 · its ask — nothing for one at rest
+const R = (x) => ({ code: 'K7Q2', glyph: 'idle', group: 'queue', tag: ['空闲', 'Idle'], ...x });
+assert.match(tr2(listWord(R({ glyph: 'work', group: 'work' }))), /回答中|Replying/);
+assert.match(tr2(listWord(R({}), true)), /新回复|New reply/);
+assert.match(tr2(listWord(R({ glyph: 'ask', group: 'ask', tag: ['在问你', 'Asking you'] }))), /在问你|Asking you/);
+assert.equal(listWord(R({})), null);
+assert.deepEqual(rowState(R({ glyph: 'done', tag: ['本轮结束', 'Turn ended'] })), ['空闲', 'Idle'], 'a turn ended is idle to the person');
+// the head: code and state, no machine; its own stream's word wins
+assert.match(headMeta(R({ glyph: 'work', group: 'work' })), /^K7Q2 · (回答中|Replying)$/);
+assert.match(headMeta(R({ glyph: 'work', group: 'work' }), false), /^K7Q2 · (空闲|Idle)$/);
+assert.match(headMeta(R({}), true), /^K7Q2 · (回答中|Replying)$/);
+assert.equal(openLine(R({})), 'fleet open K7Q2');
+// 新回复: a row that left 回答中 between two reads; never one put away
+assert.deepEqual(repliesDone({ a: 'work', b: 'work', c: 'idle', d: 'work' },
+  [R({ id: 'a', glyph: 'done' }), R({ id: 'b', glyph: 'work' }), R({ id: 'c' }), R({ id: 'd', group: 'gone' })]).map((r) => r.id), ['a']);
+// a parked web session reads as any idle one — no mark of its own
+const pk = boardRows({ count: 1, groups: {}, gone_days: 7, digest: 'x', rows: [
+  { id: 'w1', title: '周报初稿', group: 'ask', tag: 'parked', words: ['停放', 'Parked'], origin: 'web', why: ['停放了', 'parked'], at: 1 },
+  { id: 't1', title: '编排', group: 'ask', tag: 'parked', words: ['停放', 'Parked'], origin: 'terminal', at: 1 }] }, [], []);
+assert.deepEqual([pk[0].glyph, pk[0].tone, pk[0].tag[0], pk[0].why, pk[0].origin], ['idle', 'muted', '空闲', undefined, 'web']);
+assert.deepEqual([pk[1].glyph, pk[1].tag[0]], ['wait', '停放'], 'a terminal\'s parked row stays as it was');
 
 console.log('ok session-list.mjs');

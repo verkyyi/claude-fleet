@@ -13,7 +13,7 @@ import { createContext, useContext, useEffect, useRef, useState, type FC, type P
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot, CircleX, Clock, GitPullRequest, Loader,
-  MessageCircle, Plus, Search, TerminalSquare, X, type LucideIcon,
+  MessageCircle, Plus, Search, X, type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,7 +24,8 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { listItem, listRows, rowMeta, rowRef, searchRows } from "./session-list";
+import { isTerminal, listItem, listRows, listWord, rowMeta, rowRef, searchRows } from "./session-list";
+import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
 
@@ -78,7 +79,7 @@ export const NewButton: FC<{ className?: string }> = ({ className }) => {
   const { pathname } = useLocation();
   return (
     <Button variant="ghost" size="icon" className={cn("size-8", pathname === NEW_PATH && "text-clay", className)} disabled={!!viewAs}
-      aria-label={tr("新建会话", "New session")} title={tr("新建会话", "New session")} onClick={() => go(NEW_PATH)}>
+      aria-label={tr("新会话", "New session")} title={tr("新会话", "New session")} onClick={() => go(NEW_PATH)}>
       <Plus />
     </Button>
   );
@@ -90,7 +91,7 @@ export const NewFab: FC = () => {
   return (
     <Button size="lg" disabled={!!viewAs} onClick={() => go(NEW_PATH)}
       className="fixed end-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-20 h-12 rounded-full px-5 text-base shadow-lg">
-      <Plus />{tr("新建", "New")}
+      <Plus />{tr("新会话", "New session")}
     </Button>
   );
 };
@@ -135,33 +136,45 @@ function useLongPress(on: () => void, ms = 300) {
   };
 }
 
-const RowGlyph: FC<{ r: Row }> = ({ r }) => {
+// a reply the person has not opened: an orange dot in the glyph's place
+const RowGlyph: FC<{ r: Row; replied?: boolean }> = ({ r, replied }) => {
+  if (replied && r.glyph !== "work") return <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden><span className="bg-clay size-2 rounded-full" /></span>;
   const Icon = GLYPH[r.glyph];
   return <Icon className={cn("size-4 shrink-0", TONE[r.tone])} aria-hidden />;
 };
 
+// >_ after a terminal's session's title (会话合一 Y01K)
+export const TermTag: FC<{ r: Row; className?: string }> = ({ r, className }) =>
+  isTerminal(r) ? <span className={cn("text-muted-foreground shrink-0 font-mono text-[11px] font-normal", className)} aria-label={tr("终端会话", "terminal session")} title={tr("终端会话", "Terminal session")}>&gt;_</span> : null;
+
 // What a hover and a long-press show: the title, the one detail line, its last word.
-const RowDetail: FC<{ r: Row }> = ({ r }) => (
-  <>
+const RowDetail: FC<{ r: Row }> = ({ r }) => {
+  const { machines } = useWorkRows();
+  return <>
     <span className="block text-sm font-semibold break-words">{r.title}</span>
-    <span className="block opacity-80">{rowMeta(r)}</span>
+    <span className="block opacity-80">{rowMeta(r, Date.now(), machines)}</span>
     <RowWhy r={r} className="mt-1 text-[13px]" />
     {r.line ? <span className="mt-0.5 block line-clamp-3">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</span> : null}
-  </>
-);
+  </>;
+};
 
 type Variant = "side" | "page";
 const rowCls = "text-foreground hover:text-foreground flex items-center gap-3 no-underline";
 
 const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void }> = ({ r, variant, active, onPress }) => {
-  const { seen, markSeen } = useWorkRows();
+  const { seen, markSeen, replied } = useWorkRows();
   const it = listItem(r, seen);
   const press = useLongPress(() => onPress(r));
+  const isNew = !!replied[r.id] && !active;
+  const word = listWord(r, isNew);
   const body = (
-    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-current={active ? "page" : undefined}
+    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
       className={cn(rowCls, variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
-      <RowGlyph r={r} />
-      <span className={cn("min-w-0 flex-1 truncate", it.bold ? "font-semibold" : "font-normal")}>{it.title}</span>
+      <RowGlyph r={r} replied={isNew} />
+      <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal")}>
+        <span className="min-w-0 truncate">{it.title}</span><TermTag r={r} />
+      </span>
+      {word ? <span data-testid="row-word" className={cn("shrink-0 text-[12px] font-normal group-data-[collapsible=icon]:hidden", isNew || r.group === "ask" ? "text-clay" : "text-muted-foreground")}>{tr(...word)}</span> : null}
     </Link>
   );
   if (variant === "page") return <li>{body}</li>;
@@ -196,21 +209,19 @@ const WebChatRow: FC<{ variant: Variant; active: boolean }> = ({ variant, active
 
 // The long-press sheet: the same detail, and the two ways in.
 const PressSheet: FC<{ r: Row | null; onClose: () => void }> = ({ r, onClose }) => {
-  const { markSeen } = useWorkRows();
+  const { markSeen, machines } = useWorkRows();
   return (
     <Sheet open={!!r} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent side="bottom" className="gap-0 rounded-t-2xl pb-[calc(env(safe-area-inset-bottom)+1rem)]">
         {r ? <>
           <SheetHeader className="gap-1 px-5 pt-5 pb-3">
             <SheetTitle className="text-base leading-snug break-words">{r.title}</SheetTitle>
-            <SheetDescription>{rowMeta(r)}</SheetDescription>
+            <SheetDescription>{rowMeta(r, Date.now(), machines)}</SheetDescription>
             <RowWhy r={r} className="text-sm" />
             {r.line ? <p className="text-foreground text-sm break-words">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</p> : null}
           </SheetHeader>
-          <div className="grid grid-cols-2 gap-3 px-5">
-            <Button asChild variant="outline" className="text-foreground no-underline"><Link to={sessionPath(r, "chat")} onClick={() => { markSeen(r); onClose(); }}><MessageCircle />{tr("对话", "Chat")}</Link></Button>
-            {r.live ? <Button asChild variant="outline" className="text-foreground no-underline"><Link to={sessionPath(r, "term")} onClick={() => { markSeen(r); onClose(); }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button>
-              : <Button variant="outline" disabled><TerminalSquare />{tr("终端", "Terminal")}</Button>}
+          <div className="px-5">
+            <Button asChild variant="outline" className="text-foreground w-full no-underline"><Link to={sessionPath(r)} onClick={() => { markSeen(r); onClose(); }}><MessageCircle />{tr("打开", "Open")}</Link></Button>
           </div>
         </> : null}
       </SheetContent>
@@ -230,6 +241,9 @@ function useOpenRef() {
 export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ variant, chatHome }) => {
   const { rows, failed, reload } = useWorkRows();
   const { q } = useListUi();
+  // 会话合一: the web's old conversation is a session of the list now (「我的对话」),
+  // no row of its own — kept only on the old road
+  const oldRoad = useUnified() === false;
   const { ref, pathname } = useOpenRef();
   const [goneOpen, setGoneOpen] = useState(false);
   const [pressed, setPressed] = useState<Row | null>(null);
@@ -243,20 +257,20 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   if (searching) {
     const found = searchRows(rows, q);
     const webHit = `${tr("我的对话", "My chat")} chat`.toLowerCase().includes(q.trim().toLowerCase());
-    body = found.length || webHit ? <List>{webHit ? web : null}{found.map(row)}</List>
+    body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
     const { open, gone } = listRows(rows);
     // the web conversation is pinned on top, whatever the sessions' state (C25B)
     body = (
       <>
-        <List>{web}{open.map(row)}</List>
+        <List>{oldRoad ? web : null}{open.map(row)}</List>
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
               variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
             {goneOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("已结束的会话", "Ended sessions")}</span>
+            <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("已结束的会话", "Ended sessions")}<span className="font-mono"> · {gone.length}</span></span>
           </button>
           {goneOpen ? <List>{gone.map(row)}</List> : null}
         </> : null}

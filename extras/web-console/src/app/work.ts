@@ -35,6 +35,10 @@ export type Row = {
   board?: BoardRow;       // the hub's row this one draws (A4G2)
   why?: [string, string]; // why it is still open, 中文 / English (E101 — the hub's words)
   whyTone?: WhyTone;
+  // 会话合一 (Y01K): web = a chat session the web opened, terminal = a terminal's
+  // (an older hub says neither); canTalk: the web may talk to it (absent: unknown)
+  origin?: "web" | "terminal";
+  canTalk?: boolean;
 };
 
 export const GROUPS: { g: Group; label: [string, string] }[] = [
@@ -67,7 +71,8 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
   const pr = t ? taskPR(t) : null;
   const at = live?.born ? live.born * 1000 : ended?.ended ? ms(ended.ended) : ms(t?.created_at);
   const base = { id: t?.fid || t?.id || live?.id || ended?.wid || ended?.id || "", code, title: t?.title || live?.title || ended?.title || "",
-    task: t, live, ended, parent: t?.parent_task || undefined, kids: [] as Row[], quote: false, at };
+    task: t, live, ended, parent: t?.parent_task || undefined, kids: [] as Row[], quote: false, at,
+    ...(live?.origin ? { origin: live.origin } : {}), ...(typeof live?.canTalk === "boolean" ? { canTalk: live.canTalk } : {}) };
   const say = (x?: string) => (x || "").trim();
   // 等你: it asks, it failed or did not start, or the record says it waits on you
   if (s === "needs" || s === "blocked")
@@ -155,11 +160,18 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], ended
     const asking = b.tag === "asking" || b.tag === "waiting_you";
     const line = asking ? (l?.ask?.msg || t?.asked || "").trim() : b.group === "work" ? (l?.say || "").trim() : (t?.evidence || "").trim();
     const why = Array.isArray(b.why) && b.why.length === 2 ? b.why : undefined;
+    const origin = b.origin || l?.origin;
+    const canTalk = typeof b.can_talk === "boolean" ? b.can_talk : l?.canTalk;
+    // a web session parked (会话合一: idle 5 minutes, its process put away) reads as
+    // any idle one — no mark of its own; a word to it brings it back
+    const quiet = b.tag === "parked" && origin === "web";
     return {
       id: b.id, code: t ? codes.get(t) || writtenCode(t) : b.code || "", title: b.title, group: b.group,
-      tag: b.words, glyph: GLYPH_OF[b.tag] || "idle", tone: TONE_OF[b.tag] || "muted", line, quote: asking && !!line,
+      tag: quiet ? ["空闲", "Idle"] : b.words, glyph: quiet ? "idle" : GLYPH_OF[b.tag] || "idle", tone: quiet ? "muted" : TONE_OF[b.tag] || "muted",
+      line, quote: asking && !!line,
       task: t, live: l, ended: e, parent: b.parent || undefined, kids: [], at: b.at * 1000, board: b,
-      why, whyTone: why ? b.why_tone || "grey" : undefined,
+      why: quiet ? undefined : why, whyTone: why && !quiet ? b.why_tone || "grey" : undefined,
+      ...(origin ? { origin } : {}), ...(typeof canTalk === "boolean" ? { canTalk } : {}),
     };
   });
   const byID = new Map(rows.map((r) => [r.id, r]));
@@ -186,7 +198,7 @@ export function findRow(rows: Row[], ref: string): Row | undefined {
   if (!q) return undefined;
   const up = q.toUpperCase();
   return rows.find((r) => r.id === q || r.code.toUpperCase() === up || (r.task && (writtenCode(r.task).toUpperCase() === up || r.task.id === q))
-    || r.live?.id === q || r.ended?.wid === q);
+    || r.live?.id === q || r.live?.ident === q || r.ended?.wid === q || (!!r.board?.worker_id && r.board.worker_id === q));
 }
 
 // ✦ 消息: what this page holds for the person to hear — asks, failures, and
