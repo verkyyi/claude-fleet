@@ -6689,7 +6689,7 @@ drill_chat_gate_cold_readonly() {
 }
 
 drill_codex_release_shadowed() {
-  CAP=30
+  CAP=30; SECS=0
   suite_holds fleet-codex-selftest.sh 'F4 managed release Codex wins over a stale CLI earlier on PATH' || return 1
   WHAT="发行树的固定 Codex 优先于 PATH 前面的旧版；同一 PATH 传给私有服务与终端客户端"
 }
