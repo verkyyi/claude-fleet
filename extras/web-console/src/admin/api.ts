@@ -185,6 +185,34 @@ export type UsagePerson = { principal: string; name: string; today: number; week
 export type UsageModel = { name: string; provider: string; tokens: number };
 export type UsageMachine = { node: string; today: number; week: number; people: number };
 export type TeamUsage = { people: UsagePerson[]; models: UsageModel[]; machines: UsageMachine[] };
+// /v1/admin/usage/trial: one Beijing day of the trial identities (WACK C6) —
+// the same count as /v1/admin/usage, split by where it was spent.
+export type TrialSpendPerson = {
+  principal: string;
+  name: string;
+  kind?: string;
+  trial_day: number;
+  tokens: number;
+  pool: number;
+  byo: number;
+  new: boolean;
+  active: boolean;
+  over: boolean;
+};
+export type TrialSpend = {
+  day: string;
+  new: number;
+  active: number;
+  tokens: number;
+  pool: number;
+  byo: number;
+  by_source: Record<string, number>;
+  over: number;
+  all_over: boolean;
+  line: { person_day: number; all_day: number; daily: boolean };
+  machines: { node: string; load_pct: number }[];
+  people: TrialSpendPerson[];
+};
 export type UsageSession = { kind?: string; worker_id?: string; key?: string; repo?: string; issue?: number; today: number; week: number };
 export type MeUsage = { range: string; today: number; week: number; total: number; limit: MeUsageLimit; models: UsageModel[]; by_session: UsageSession[] };
 

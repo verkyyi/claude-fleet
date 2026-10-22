@@ -68,6 +68,11 @@ const (
 	// is back under, or by the operator.
 	AlertTrialRunaway = "trial_runaway"
 	AlertTrialAbuse   = "trial_abuse"
+	// AlertTrialSpend: a trial identity's tokens today (Beijing) past
+	// fleet.trial.alert's person_day, or everyone's past all_day (claude-fleet
+	// WACK C6) — subject "<principal>@<day>" / "all@<day>", so each is raised
+	// once a day; cleared the next day.
+	AlertTrialSpend = "trial_spend"
 	// AlertEntryHostKeyChanged: a machine reported an entry host key other
 	// than the one the hub held (claude-fleet T743) — every client that pinned
 	// the old one now refuses that machine. Subject its hostname; detail the

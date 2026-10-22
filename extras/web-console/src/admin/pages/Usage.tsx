@@ -5,10 +5,12 @@
 // /v1/admin/usage — the hub's own /v1/me/usage count, so their row and drawer
 // say what their own 用量 page says; what they are on, their sessions and
 // logins are /v1/admin/overview; the sessions are /v1/admin/sessions. CSV is
-// made here, from the rows on screen.
+// made here, from the rows on screen. 试用 (WACK C6) is one Beijing day of the
+// trial identities — /v1/admin/usage/trial, the same count — where the morning
+// 「试用日报」's 查看详情 lands (?tab=trial&day=…, &open=<person> from a 超线提醒).
 import * as React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Copy, Download, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Download, X } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -30,12 +32,14 @@ import {
   type Overview,
   type OverviewPerson,
   type TeamUsage,
+  type TrialSpend,
+  type TrialSpendPerson,
   type UsageMachine,
   type UsageModel,
 } from "../api";
 import { ago, t, type MsgKey } from "../i18n";
 
-const TABS = ["people", "sessions", "machines", "models"] as const;
+const TABS = ["people", "sessions", "machines", "models", "trial"] as const;
 type Tab = (typeof TABS)[number];
 
 type Data = { usage: TeamUsage; ov: Overview | null; ses: FleetSessions | null };
@@ -240,6 +244,8 @@ export function UsagePage() {
   const who = sp.get("who") || "";
   const open = sp.get("open");
   const [data, setData] = React.useState<Data | null>(null);
+  const [trial, setTrial] = React.useState<TrialSpend | null>(null);
+  const day = sp.get("day") || "";
   const cache = React.useRef<Promise<Data> | null>(null);
 
   const load = React.useCallback((): Promise<Data> => {
@@ -283,7 +289,7 @@ export function UsagePage() {
   };
 
   const tabs = (
-    <Tabs value={tab} onValueChange={(v) => set({ tab: v === "people" ? null : v, open: null, who: null })}>
+    <Tabs value={tab} onValueChange={(v) => set({ tab: v === "people" ? null : v, open: null, who: null, day: null })}>
       <TabsList>
         {TABS.map((k) => (
           <TabsTrigger key={k} value={k} className="px-3">
@@ -309,6 +315,83 @@ export function UsagePage() {
     ),
   };
 
+  if (tab === "trial") {
+    const shown = trial?.day || day || bjDay(-1);
+    const go = (d: number) => set({ day: shiftDay(shown, d), open: null });
+    return (
+      <AdminTablePage<TrialRow>
+        key={`trial:${day}`}
+        {...common}
+        title={t("usage.trial.title")}
+        lead={t("usage.trial.lead", { when: trialWhen(shown) })}
+        kpis={() =>
+          trial
+            ? [
+                { label: t("usage.trial.split", { pool: fmtTokens(trial.pool), byo: fmtTokens(trial.byo) }), value: t("usage.trial.tokens", { n: fmtTokens(trial.tokens) }) },
+                { label: t("usage.trial.activeNew", { n: trial.new }), value: peopleN(trial.active) },
+                { label: t("usage.trial.overLine"), value: peopleN(trial.over) },
+              ]
+            : []
+        }
+        aside={() => (
+          <div className="flex flex-wrap items-center gap-3">
+            {tabs}
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="icon" className="size-8" aria-label={t("usage.trial.prev")} onClick={() => go(-1)}>
+                <ChevronLeft />
+              </Button>
+              <span className="min-w-24 text-center font-mono text-xs tabular-nums">{shown}</span>
+              <Button variant="outline" size="icon" className="size-8" aria-label={t("usage.trial.next")} disabled={shown >= bjDay()} onClick={() => go(1)}>
+                <ChevronRight />
+              </Button>
+            </div>
+            {trial?.all_over && (
+              <Badge variant="outline" className="h-7 border-destructive/50 font-normal text-destructive">
+                {t("usage.trial.allOver", { n: fmtTokens(trial.line.all_day) })}
+              </Badge>
+            )}
+          </div>
+        )}
+        actions={(_reload, rows) => (
+          <Button
+            variant="outline"
+            disabled={!rows.length}
+            onClick={() =>
+              csv(`trial-usage-${shown}`, ["principal", "name", "trial_day", "tokens", "pool", "byo", "new", "active", "over"], (rows as TrialRow[]).map((r) => [
+                r.principal, r.name, r.trial_day, r.tokens, r.pool, r.byo, String(r.new), String(r.active), String(r.over),
+              ]))
+            }
+          >
+            <Download />
+            {t("usage.export")}
+          </Button>
+        )}
+        fetch={() =>
+          Promise.all([api<TrialSpend>(`/v1/admin/usage/trial${day ? `?day=${encodeURIComponent(day)}` : ""}`), load().catch(() => null)]).then(([d]) => {
+            setTrial(d);
+            return d.people.map((p) => ({ ...p, id: p.principal }));
+          })
+        }
+        columns={trialColumns}
+        filters={trialFilters}
+        searchText={(r) => [r.name, r.principal].join(" ")}
+        rowId={(r) => r.id}
+        emptyText={t("usage.empty.trial")}
+        drawer={(r) => {
+          const p = data?.usage.people.find((x) => x.principal === r.principal);
+          const row: PersonRow = {
+            id: r.principal,
+            name: r.name,
+            today: p?.today || 0,
+            week: p?.week || 0,
+            limit: p?.limit || { set: false, used_week: 0, used_5h: 0 },
+            ov: data?.ov?.people.find((x) => x.principal === r.principal),
+          };
+          return <PersonDrawer r={row} subName={(a) => data?.ov?.pool.find((s) => s.account === a)?.label || a} onSessions={() => set({ tab: "sessions", who: r.principal, open: null, day: null })} />;
+        }}
+      />
+    );
+  }
   if (tab === "sessions") {
     const whoName = who && data ? data.usage.people.find((p) => p.principal === who)?.name || who : who;
     return (
@@ -656,6 +739,60 @@ const machineColumns: ColumnDef<MachineRow, any>[] = [
     header: () => t("usage.col.sessions"),
     cell: ({ row: { original: m } }) => (m.sessions ? <span className="tabular-nums">{t("usage.running", { r: m.running, n: m.sessions })}</span> : <span className="text-muted-foreground">—</span>),
   },
+];
+
+// ── 试用: one Beijing day of the trial identities ──
+type TrialRow = TrialSpendPerson & { id: string };
+
+// bjDay is the Beijing date d days from now, YYYY-MM-DD.
+const bjDay = (d = 0) => new Date(Date.now() + 8 * 3_600_000 + d * 86_400_000).toISOString().slice(0, 10);
+const shiftDay = (day: string, d: number) => new Date(Date.parse(day + "T00:00:00Z") + d * 86_400_000).toISOString().slice(0, 10);
+const peopleN = (n: number) => t(n === 1 ? "usage.trial.person" : "usage.trial.people", { n });
+
+function trialWhen(day: string) {
+  if (day === bjDay(-1)) return t("usage.trial.yesterday");
+  if (day === bjDay()) return t("usage.trial.today");
+  return day;
+}
+
+function TrialState({ r }: { r: TrialRow }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {r.over && (
+        <Badge variant="outline" className="border-destructive/50 font-normal text-destructive">
+          {t("usage.trial.st.over")}
+        </Badge>
+      )}
+      {r.new && (
+        <Badge variant="outline" className="border-clay-line bg-clay-soft font-normal text-clay">
+          {t("usage.trial.st.new")}
+        </Badge>
+      )}
+      {!r.new && (
+        <Badge variant="outline" className={cn("font-normal", r.active ? "border-ok/40 text-ok" : "text-muted-foreground")}>
+          {t(r.active ? "usage.trial.st.active" : "usage.trial.st.ended")}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+const trialColumns: ColumnDef<TrialRow, any>[] = [
+  { accessorKey: "name", header: () => t("usage.col.person"), cell: ({ getValue }) => <span className="font-medium">{getValue()}</span> },
+  {
+    accessorKey: "trial_day",
+    header: () => t("usage.col.trialDay"),
+    cell: ({ getValue }) => (getValue() ? <span className="tabular-nums">{t("usage.trial.dayN", { n: getValue() })}</span> : <span className="text-muted-foreground">—</span>),
+  },
+  { accessorKey: "tokens", header: () => t("usage.col.tokens"), cell: ({ getValue }) => num(getValue()) },
+  { accessorKey: "pool", header: () => t("usage.col.pool"), cell: ({ getValue }) => num(getValue()) },
+  { accessorKey: "byo", header: () => t("usage.col.byo"), cell: ({ getValue }) => num(getValue()) },
+  { id: "state", accessorFn: (r) => (r.over ? 2 : r.new ? 1 : 0), header: () => t("usage.col.trialState"), cell: ({ row }) => <TrialState r={row.original} /> },
+];
+
+const trialFilters: Filter<TrialRow>[] = [
+  { key: "over", label: t("usage.filter.over"), test: (r) => r.over },
+  { key: "new", label: t("usage.filter.new"), test: (r) => r.new },
 ];
 
 // ── by model ──
