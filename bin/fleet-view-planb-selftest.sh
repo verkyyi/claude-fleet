@@ -25,6 +25,7 @@ st_need python3
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvplanb-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+export FLEET_VIEW_BOARD=0
 unset NO_COLOR FLEET_COLOR FLEET_GLYPHS
 mkdir -p "$WORK/conf"
 
@@ -114,7 +115,7 @@ assert grp["@7"] == "folded" and by["@7"]["sec"] == "gone" and grp["@3"] == "que
 assert "空闲" in by["@6"]["tags"] and grp["MU/far1"] == "queue", (by["@6"]["tags"], grp)
 assert all(e["group"] == "folded" for e in by.values() if e["sym"] == "exited")
 leg = fv.legend()
-assert leg == "↻ 运行中  ! 等你  ✓ 已完成  ✗ 失败  ◌ 已退出  ∙ 空闲  ? 失联", leg
+assert leg == "! 需要我回答  ◷ 待启动  ↻ 运行中  ⟳ Loop 已开启", leg
 
 # --- D: paint
 W = 100
@@ -126,7 +127,7 @@ for e, segs in zip(shown, lines):
     if e["kind"] != "sess":
         continue
     assert qo.cells(text) == W, (qo.cells(text), text)
-    assert segs[1][0] == gl[e["sym"]], segs
+    assert segs[1][0] == fv.TASK_GLYPHS[fv.task_status(e)], segs
     assert segs[3][0] == (e["id"] or "").ljust(8) + " " and "bold" in segs[3][1], segs[3]
     agent = (e["agent"] or "").capitalize() or "未知"
     assert segs[4][0] == agent.ljust(7 - (qo.cells(agent) - len(agent))) + " ", segs[4]
@@ -134,7 +135,7 @@ for e, segs in zip(shown, lines):
     repo = segs[6][0]
     assert qo.cells(repo) == 15 and repo.startswith(" ") and repo.endswith(" "), repr(repo)
     red = any(st.startswith("c") for st in segs[1][1])
-    assert red == (e["sym"] in ("needs", "fail")) and (not red or "bold" in segs[1][1]), segs[1]
+    assert red == (fv.task_status(e) == "needs") and (not red or "bold" in segs[1][1]), segs[1]
     for bad in ("#4539", "会坏", "mac-a", "1/2", "merged"):
         assert bad not in text, (bad, text)
     if e["target"] == "@1":
@@ -170,6 +171,6 @@ assert "失联" in note and not red, (note, red)
 PY
 st_ok_all "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
 st_ok_all "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
-st_ok_all "C  ↻ ! ✓ ✗ ◌ ∙ ? — one cell each; ◌ folded into 已收起, ∙ in 排队中 (T688); the legend"
-st_ok_all "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
+st_ok_all "C  legacy observations retained; single-slot legend: needs / pending / running / Loop"
+st_ok_all "D  paint: one status slot · ID · Agent · title · repo; only needs red; cut at punctuation"
 st_ok_all "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"

@@ -1,26 +1,53 @@
-// session-list.ts — the session list's rules (GR5E C2): which rows the list
-// draws, in what order, what a row draws (a status glyph and a title — nothing
-// else), what a search finds, the one line of detail a hover / long-press /
-// the session's top shows, and which rows are new to the person. The rows are
-// work.ts's (the hub's one list, A4G2) as they are: no second filter, group or
-// count. Pure: no React, so test/session-list.mjs runs it as it is.
+// Task-list presentation: one status slot, stable PIN/ordinary/history ordering.
+// Native facts stay in the shared board; old-hub fallbacks never invent a request.
 import { tr } from "../shared/i18n.ts"; // .ts: the test runs this file as it is
-import { writtenCode } from "./task-state.ts";
+import { taskStatus, writtenCode } from "./task-state.ts";
 import type { Glyph, Row, Tone } from "./work.ts";
 
 // What a list row draws — exactly this, the test holds it to these keys.
 export type ListItem = { ref: string; glyph: Glyph; tone: Tone; title: string; bold: boolean };
 
-// The list's rows: ⌘P's top-level entries in ⌘P's order (the hub's board order
-// already is), an EPIC's members only inside their parent, the put-away rows
-// apart — under 「已结束的会话」 at the foot.
-// (A stable sort by group: a no-op on the board, the panel's order on an older
-// hub's own join, which is newest first.)
-const ORDER: Record<string, number> = { pin: 0, ask: 1, work: 2, queue: 3, gone: 4 };
-export function listRows(rows: Row[]): { open: Row[]; gone: Row[] } {
-  const top = rows.filter((r) => !r.parent).sort((a, b) => ORDER[a.group] - ORDER[b.group]);
-  return { open: top.filter((r) => r.group !== "gone"), gone: top.filter((r) => r.group === "gone") };
+// PIN is the only group heading. Old board group ordering must not move a
+// task when its observation changes. Older parent/member records are flat too.
+export type ListGroups = { pin: Row[]; open: Row[]; gone: Row[] };
+export function listRows(rows: Row[], previous?: ListGroups): ListGroups {
+  const stable = [...rows].sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
+  const older = (r: Row) => r.group === "gone" && !listStatus(r).kind && !listStatus(r).unknown;
+  const keep = (next: Row[], before: Row[] = []) => {
+    const byID = new Map(next.map((r) => [r.id, r]));
+    const known = new Set(before.map((r) => r.id));
+    return [...next.filter((r) => !known.has(r.id)), ...before.flatMap((r) => byID.has(r.id) ? [byID.get(r.id)!] : [])];
+  };
+  return { pin: keep(rows.filter((r) => r.group === "pin"), previous?.pin),
+    open: keep(stable.filter((r) => r.group !== "pin" && !older(r)), previous?.open),
+    gone: keep(stable.filter(older), previous?.gone) };
 }
+
+export type ListStatus = { kind: "ask" | "pending" | "work" | "loop" | null; words: [string, string][]; unknown: boolean };
+// One fixed slot, priority: answer > accepted execution > running > Loop.
+// No-session is never evidence of a pending execution request.
+export function listStatus(r: Row): ListStatus {
+  const tag = r.board?.tag;
+  const state = r.live?.state || r.board?.state;
+  const unknown = !!r.board?.lost || state === "unknown" || tag === "not_seen";
+  const ask = !unknown && (state === "needs" || state === "blocked" || tag === "asking" || tag === "waiting_you" || (!r.board && r.glyph === "ask"));
+  const status = r.task ? taskStatus(r.task) : "";
+  const started = ["working", "looping", "needs", "blocked", "done"].includes(state || "");
+  const pending = typeof r.board?.pending_start === "boolean" ? r.board.pending_start
+    : !unknown && !started && !r.task?.cancel_request
+      && (r.board ? tag === "starting" : status === "starting");
+  const work = !unknown && (typeof r.board?.running === "boolean" ? r.board.running
+    : state === "working" || tag === "working" || (!r.board && !r.live && r.glyph === "work"));
+  const loop = r.board?.loop === true;
+  const words: [string, string][] = [];
+  if (ask) words.push(["需要回答", "Needs your answer"]);
+  if (pending) words.push(["待启动", "Waiting to start"]);
+  if (work) words.push(["运行中", "Running"]);
+  if (loop) words.push(["Loop 中", "Loop enabled"]);
+  if (unknown) words.push(["运行情况未知", "Execution status unknown"]);
+  return { kind: unknown ? null : ask ? "ask" : pending ? "pending" : work ? "work" : loop ? "loop" : null, words, unknown };
+}
+export const listStatusLabel = (r: Row) => listStatus(r).words.map((w) => tr(...w)).join(" · ");
 
 // The stable name a row goes by in an address (/app/s/<ref>): its task's code,
 // else its own code, else the session's identity.
@@ -52,7 +79,7 @@ export function openFor(born: number, now = Date.now()): string {
 // · how long; the machine only for a person with more than one (会话合一 Y01K:
 // nearly everyone has one home, and its name said nothing).
 export function rowMeta(r: Row, now = Date.now(), machines = 1): string {
-  const where = r.group === "gone" ? tr("已结束", "ended") : "";
+  const where = r.group === "gone" ? tr("更早的会话", "Earlier session") : "";
   return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), r.board?.context ? tr(...r.board.context) : "", where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
 }
 
@@ -77,12 +104,6 @@ export function rowState(r: Row, replied = false): [string, string] {
   if (r.group === "ask" || r.group === "gone" || r.glyph === "wait" || r.glyph === "pr") return r.tag;
   return ["空闲", "Idle"];
 }
-// what the list prints at a row's end: only what asks to be looked at
-export function listWord(r: Row, replied = false): [string, string] | null {
-  if (r.glyph === "work" || replied || r.group === "ask" || (r.board && r.group === "queue")) return rowState(r, replied);
-  return null;
-}
-
 // A session's own head: its code and its state (no machine, no agent). `busy`:
 // what its own stream says now, over the list's word.
 export function headMeta(r: Row, busy?: boolean): string {
@@ -100,7 +121,7 @@ export function repliesDone(prev: Record<string, string>, next: Row[]): Row[] {
 }
 
 // A search finds what the row does not show: its code (shown or written), its
-// title, its machine. An EPIC member that matches is listed on its own then.
+// title, its machine, including folded historical records.
 export function matchRow(r: Row, q: string): boolean {
   const s = q.trim().toLowerCase().replace(/^#/, "");
   if (!s) return true;

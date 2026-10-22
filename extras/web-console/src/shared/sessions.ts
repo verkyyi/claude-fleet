@@ -50,6 +50,9 @@ export type BoardRow = {
   id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;
   words: [string, string]; state?: string; worker_id?: string; machine?: string; login?: string; repo?: string;
   parent?: string; depth?: number; lost?: boolean; at: number;
+  loop?: boolean; // explicit recurring plan, never inferred from looping observation
+  running?: boolean; // native execution/background activity observation
+  pending_start?: boolean; // accepted execution request with no confirmed native start
   // why it is still open (E101): the card's third line, 中文 / English, and its tone
   why?: [string, string]; why_tone?: "grey" | "orange" | "red";
   // 会话合一 (Y01K): web = a chat session the web opened, terminal = one a terminal opened
@@ -231,7 +234,7 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
 
 // One write through the write door, as the signed-in person. Resolves to null
 // when the hub took it, else the reason in words.
-export async function sessionWrite(tool: "worker_reap" | "worker_resume", workerID: string): Promise<string | null> {
+export async function sessionWrite(tool: "worker_reap" | "worker_resume" | "worker_stop", workerID: string): Promise<string | null> {
   const idem = (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9-]/g, "");
   const r = await sendJSON<{ status?: string; result?: { error?: { message?: string } } }>("POST", "/v1/fleet/write",
     { tool, args_json: JSON.stringify({ worker_id: workerID, idempotency_key: idem }) });

@@ -1,12 +1,6 @@
-// session.tsx — one session, /app/s/<ref> (GR5E C2): what a row of the session
-// list opens — its workspace (C4, Workspace.tsx), 对话 | 终端 switched in place
-// by ?view=, 详情 in a drawer. <ref> is a code, a task's ID or a session's
-// identity (work.ts findRow); one the list no longer holds is asked of the
-// hub's resolver. Your Shell is /s/shell?view=term, and a session's terminal
-// the list does not hold (a worker of another machine, ⌘P's web-go) opens on
-// its own page — GR5E C9: the old /terminal(?worker=) lands on these.
+// A task address opens its conversation; the separate Shell route remains native shell access.
 import { lazy, useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
@@ -33,7 +27,6 @@ export default function SessionPage() {
 }
 
 function OneSession({ ref_: ref }: { ref_: string }) {
-  const [params] = useSearchParams();
   const { rows, markSeen, setOpenRow } = useWorkRows();
   const [found, setFound] = useState<Row | null | undefined>(undefined);
   const inList = rows ? findRow(rows, ref) : undefined;
@@ -54,7 +47,6 @@ function OneSession({ ref_: ref }: { ref_: string }) {
   useEffect(() => { setOpenRow(openID); return () => setOpenRow(""); }, [openID, setOpenRow]);
 
   if (!rows || (!inList && found === undefined)) return <div className="mx-auto max-w-3xl px-4 py-6"><Loading /></div>;
-  if (!r && isWorker(ref) && params.get("view") === "term") return <TerminalPage worker={ref} />;
   // a session just opened from 新会话 (会话合一 Y01K) the list does not carry yet: read by its worker
   if (!r && isWorker(ref)) return <Workspace key={ref} r={fresh(ref)} />;
   if (!r) return (

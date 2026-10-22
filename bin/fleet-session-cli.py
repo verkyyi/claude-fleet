@@ -19,9 +19,9 @@
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
                                          issue #2358 — the key never changes)
-    fleet close <会话> [--yes]           reap it (the hub's worker_reap; asks y/n
-                                         on a terminal unless --yes)
-    fleet close --test [--yes]           reap every test row at once (issue #2505)
+    fleet close <会话> [--yes]           stop its execution through worker_stop;
+                                         no confirmation; history remains resumable
+    fleet close --test [--yes]           stop every test row; one confirmation unless --yes
     fleet reap <会话> <方式>             its reap policy — merged[:<dur>] ·
                                          done[:<dur>] · loop-end · at:<time> · keep
                                          (the hub's worker_reap_policy, issue #2368)
@@ -84,13 +84,13 @@ than 5 minutes is grey with 「(N 分钟前)」; a node too old to report it sho
 
 A session the TEST identity's client placed (`fleet --test-identity`, issue
 #2505: the node's @test_identity, field 26 of the cache) is no row on the list;
-here it is listed with 「（测试）」 after its name, and `close --test` reaps them all.
+here it is listed with 「（测试）」 after its name, and `close --test` stops them all.
 
 Seams (tests): FLEET_SESSION_CLI_ROWS (a switch-rows.tsv to read instead of the
 producer), FLEET_SESSION_CLI_CACHE (a remote_<fleet> cache to read instead of the
 client's; "" = none), FLEET_SESSION_CLI_NOW (the clock), FLEET_SESSION_CLI_WRITE (a script run in fleet-hub-write.sh's place,
 same argv), FLEET_SESSION_CLI_REFRESH (a command run in `fleet-hub-sessions.sh
---refresh`'s place on the --home road) and fleet-hub-write.sh's own FLEET_HUB_WRITE_CMD (close's reap).
+--refresh`'s place on the --home road).
 """
 import importlib.util
 import json
@@ -687,16 +687,11 @@ def cmd_close(args):
     row, rc = one(rows(), rest[0])
     if row is None:
         return rc
-    if not remote_only(row, "回收"):
+    if not remote_only(row, "停止"):
         return 1
-    if not yes:
-        got = ask("回收「%s」（%s）？它的窗口会关掉 [y/N] " % (row["name"], row["node"] or "?"))
-        if got is None:
-            say("不在终端里：确认请加 --yes")
-            return 2
-        if got.strip().lower() not in ("y", "yes"):
-            return 1
-    return reap_row(row)
+    # --yes / -y remain accepted for scripts written for the former reap flow.
+    # A person's explicit stop does not wait for a result, loop or reap policy.
+    return stop_row(row)
 
 
 def close_tests(yes):
@@ -707,7 +702,7 @@ def close_tests(yes):
         return 0
     table(rs)
     if not yes:
-        got = ask("回收这 %d 个测试会话？它们的窗口会关掉 [y/N] " % len(rs))
+        got = ask("停止这 %d 个测试会话？它们的窗口会关掉 [y/N] " % len(rs))
         if got is None:
             say("不在终端里：确认请加 --yes")
             return 2
@@ -715,30 +710,16 @@ def close_tests(yes):
             return 1
     rc = 0
     for r in rs:
-        if not remote_only(r, "回收") or reap_row(r):
+        if not remote_only(r, "停止") or stop_row(r):
             rc = 1
     return rc
 
 
-def reap_row(row):
-    """The hub's worker_reap on one row (fleet_hub_reap) → 0 reaped, 1 not."""
-    try:
-        out = subprocess.run(["bash", "-c", LIB + 'fleet_hub_reap "$2" 90', "fleet-close",
-                              str(BIN), worker_id(row)], stdin=subprocess.DEVNULL, capture_output=True,
-                             text=True, timeout=150)
-        token = (out.stdout.strip().splitlines() or [""])[-1]
-        # fleet_hub_reap's own `reap: <why>` line carries the writer's reason whole
-        # (issue #2506); anything else on stderr is noise around it
-        errs = [ln.strip() for ln in out.stderr.splitlines() if ln.strip()]
-        reap = [ln[len("reap: "):] for ln in errs if ln.startswith("reap: ")]
-        why = reap[-1] if reap else (errs[-1] if errs else "")
-    except (OSError, subprocess.TimeoutExpired) as e:
-        token, why = "", str(e)
-    if token.startswith("reaped:"):
-        print("已回收 %s（%s）" % (row["name"], token))
-        return 0
-    say("回收 %s：%s%s" % (row["name"], token or "没有回答", (" — " + why) if why else ""))
-    return 1
+def stop_row(row):
+    """Request worker_stop; the returned operation distinguishes acceptance from exit."""
+    ok, line = hub_write("worker_stop", {"worker_id": worker_id(row)}, wait=90)
+    print("停止 %s：%s" % (row["name"], line), file=sys.stdout if ok else sys.stderr)
+    return 0 if ok else 1
 
 
 def cmd_reap(args):

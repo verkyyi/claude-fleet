@@ -1448,7 +1448,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       while [ "$_nf" -lt 9 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
       _rw=$wrepo; [ "$wnorepo" = 1 ] && _rw=''
       case "$_rw" in */*) _rw=${_rw//[[:cntrl:]]/} ;; *) _rw='' ;; esac
-      cfgf+="$US$wtask$US$_agw$US$_rw${wepic:+${US}1}"
+      # The task list reads raw native plan/wait facts, never the overloaded
+      # `looping` state as evidence of a repeating plan. Fields 26/27 follow
+      # the retained legacy EPIC field, even when its value is empty.
+      cfgf+="$US$wtask$US$_agw$US$_rw$US${wepic:+1}$US$wloop$US$nsub"
     fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue

@@ -65,23 +65,29 @@ type BoardRow struct {
 	Coordinator string    `json:"coordinator,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
 
-	ID       string    `json:"id"`
-	Code     string    `json:"code,omitempty"`
-	Task     string    `json:"task,omitempty"`    // the record's T<n>
-	TaskID   string    `json:"task_id,omitempty"` // the record's ID
-	Title    string    `json:"title"`
-	Group    string    `json:"group"`
-	Tag      string    `json:"tag"`
-	Words    [2]string `json:"words"` // the tag in 中文 / English, the same on both sides
-	State    string    `json:"state,omitempty"`
-	WorkerID string    `json:"worker_id,omitempty"`
-	Machine  string    `json:"machine,omitempty"`
-	Login    string    `json:"login,omitempty"`
-	Repo     string    `json:"repo,omitempty"`
-	Parent   string    `json:"parent,omitempty"`
-	Depth    int       `json:"depth,omitempty"`
-	Lost     bool      `json:"lost,omitempty"`
-	At       int64     `json:"at"`
+	ID     string    `json:"id"`
+	Code   string    `json:"code,omitempty"`
+	Task   string    `json:"task,omitempty"`    // the record's T<n>
+	TaskID string    `json:"task_id,omitempty"` // the record's ID
+	Title  string    `json:"title"`
+	Group  string    `json:"group"`
+	Tag    string    `json:"tag"`
+	Words  [2]string `json:"words"` // the tag in 中文 / English, the same on both sides
+	State  string    `json:"state,omitempty"`
+	// Read-only facts for both lists, not a new task lifecycle. Explicit false
+	// suppresses older clients' guesses from legacy group/tag words.
+	PendingStart bool   `json:"pending_start"`
+	Running      bool   `json:"running"`
+	Loop         *bool  `json:"loop,omitempty"`
+	NativeWait   string `json:"native_wait,omitempty"`
+	WorkerID     string `json:"worker_id,omitempty"`
+	Machine      string `json:"machine,omitempty"`
+	Login        string `json:"login,omitempty"`
+	Repo         string `json:"repo,omitempty"`
+	Parent       string `json:"parent,omitempty"`
+	Depth        int    `json:"depth,omitempty"`
+	Lost         bool   `json:"lost,omitempty"`
+	At           int64  `json:"at"`
 	// Why it is still open (E101), 中文 / English, and its tone — grey · orange ·
 	// red: the node's reap_why turned into the card's third line, ONE source for
 	// the console and the ⌘P panel. Only on 等你 / 排队中 rows; none when nothing
@@ -415,6 +421,12 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r.WorkerID, r.Machine, r.Login = wid, fs.MachineName, fs.OSUser
 		r.State = wstr(w, "state")
+		r.NativeWait = wstr(w, "native_wait")
+		if loop, ok := w["loop"].(bool); ok {
+			r.Loop = &loop
+		}
+		r.Running = boardRunning(r.State, r.NativeWait)
+		r.PendingStart = r.State == "starting"
 		// Inventory is runtime evidence; a native ledger segment is preferred.
 		if r.Agent == "" && wstr(w, "agent") != "" {
 			r.Agent, r.AgentBasis = wstr(w, "agent"), "runtime"
@@ -507,7 +519,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			if t.State == store.TaskAccepted && t.WorkerID == "" && t.OperationID == "" && r.Agent == "" {
 				r.Tag = "queued"
 			}
-			if t.State == store.TaskStarting {
+			if s.boardPendingStart(t) {
 				r.Tag = "starting"
 			}
 			if (r.Tag == "queued" || r.Tag == "starting") && r.Agent == "" && t.WorkerID == "" && !started {
@@ -541,6 +553,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 				r.Tag = "refused"
 			}
 		}
+		r.PendingStart = r.Tag == "starting"
 		if b != nil {
 			usedID[b.ID] = true
 		}
@@ -580,6 +593,39 @@ func usedIDLive(live []FleetSession, id string) bool {
 		}
 	}
 	return false
+}
+
+// A looping observation also covers background tools and waiting for people.
+// Only explicit recurring-plan metadata is a Loop; bg/tool prove ongoing work.
+func boardRunning(state, wait string) bool {
+	if state == "working" {
+		return true
+	}
+	if state == "looping" {
+		for _, reason := range strings.Split(wait, ",") {
+			if reason == "bg" || reason == "tool" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Only a recorded, still-pending start is evidence. An operation ID alone can
+// name an already failed or settled start. No-session and reserved IDs are not
+// pending requests. Live observations take precedence in buildBoard above.
+func (s *Server) boardPendingStart(t *store.FleetTask) bool {
+	if t == nil || taskEnd(*t) != "" || t.CancelRequest != "" {
+		return false
+	}
+	if t.OperationID == "" {
+		return t.State == store.TaskStarting
+	}
+	op, err := s.Store.FleetOperation(t.OperationID)
+	if err != nil || op.Action != "worker_start" || (op.TaskOwner != t.Owner && op.Actor != t.Owner) {
+		return false
+	}
+	return op.Status == "pending" || op.Status == "sent" || op.Status == "running"
 }
 
 func boardStateTag(st string) string {

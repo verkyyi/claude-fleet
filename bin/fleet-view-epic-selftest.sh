@@ -1,21 +1,7 @@
 #!/bin/bash
-# fleet-view-epic-selftest.sh — ⌘P hangs an EPIC's members under its driver
-# (T507, T486 v18 定稿 ⑪–⑭; bin/fleet_view.py epic_tree / visible / row_segs).
-#
-#   A  only an EPIC hangs: a driver (@epic + @task) takes its hub children's open
-#      rows into its own group, whatever their repo or state, ordered by task; an
-#      ordinary dispatch stays flat; a member's name is the child's title
-#   B  folded by default: only ! / ✗ members show (└ under the driver); the
-#      driver says 已完成/总数 counting closed members; the heading counts every
-#      session in its group — a folded member too (T541), the same number folded
-#      or expanded; @expand=1 opens it (├ … └), epic_toggle writes @expand both ways
-#   C  paint: ▸ / ▾ before the driver's name, N/N grey, !k red; a member's tree in
-#      the name column only (glyph, ID, Agent, repo columns where they were)
-#   D  a search still finds a folded member; the first frame (hub=False) reads the
-#      kept copy only, never the hub; no driver ⇒ the list as before
-#   E  a driver with no member row under it (every child closed — T762) is an
-#      ordinary row: no ▸ / ▾, epic_folds false, its N/N kept
-# Exit 0 = pass.
+# Legacy EPIC stamps must not change the task list: every member stays visible,
+# flat, with no children reads, driver counters, expansion writes or state groups.
+# Drives the real entries -> visible -> paint projection with isolated fixtures.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -87,96 +73,20 @@ fv.hub_view_request = lambda f: None
 fv.hub_fresh = lambda f: None
 asked = os.path.join(W, "asked")
 
-# --- D (first): the first frame never asks the hub, and with no copy hangs nothing
-it = fv.entries("v1", hub=False)
-assert not os.path.exists(asked), "first frame asked the hub"
-assert not any(e.get("epic") or e.get("fold") for e in it), "a tree with no copy"
-
-# --- A
-it = fv.entries("v1")
-assert open(asked).read().split() == ["T497"], open(asked).read()
-by = {e["target"]: e for e in it if e["kind"] == "sess"}
-d = by["@10"]
-assert d["epic"] == {"done": 3, "total": 6, "rows": 4, "needs": 1, "fail": 1}, d["epic"]
-assert fv.epic_folds(d)
-assert not d["expanded"]
-seq = [e["target"] for e in it if e["kind"] == "sess"]
-i = seq.index("@10")
-assert seq[i:i + 5] == ["@10", "@12", "@11", "@13", "@15"], seq    # by task: C4 T502 before C5 T503
-for t in ("@11", "@12", "@13", "@15"):
-    assert by[t]["fold"] == "@10" and by[t]["group"] == d["group"] and by[t]["depth"] == 0, by[t]
-assert by["@11"]["text"] == "C5 · EPIC 技能跟改" and by["@13"]["text"] == "C6 · 迁移命令", by["@11"]["text"]
-assert "fold" not in by["@14"] and by["@14"]["group"] == "work", by["@14"]
-assert by["@12"]["sym"] == "done" and by["@15"]["repo"] == "other"
-# a kept copy: the next read inside FLEET_VIEW_EPIC_SECS does not ask again
-fv.entries("v1")
-assert open(asked).read().split() == ["T497"], "asked again inside the window"
-
-# --- B: folded — only ! / ✗ show, └ on the last
-sh = fv.visible(it, "", set())
-mem = [(e["target"], e.get("tree")) for e in sh if e["kind"] == "sess" and e.get("fold")]
-assert mem == [("@13", "├ "), ("@15", "└ ")], mem
-ask = [e for e in sh if e["kind"] == "ask" and e["of"] == "@13"]
-assert ask and ask[0]["tree"] == "│ ", ask
-hd = {e["group"]: e["text"] for e in it if e["kind"] == "hdr"}
-assert hd[d["group"]] == fv.say("view_grp_%s_fmt" % d["group"], 6), hd     # @10 @14 + all 4 members, folded too (T541)
-fv.epic_toggle(it, "fl", "@10", True)
-assert any(c[:1] == ("set-option",) and "@expand" in c and "1" in c for c in calls), calls
-assert marks["@10"][1] == "1"
-sh = fv.visible(it, "", set())
-mem = [(e["target"], e.get("tree")) for e in sh if e["kind"] == "sess" and e.get("fold")]
-assert mem == [("@12", "├ "), ("@11", "├ "), ("@13", "├ "), ("@15", "└ ")], mem
-hd = {e["group"]: e["text"] for e in it if e["kind"] == "hdr"}
-assert hd[d["group"]] == fv.say("view_grp_%s_fmt" % d["group"], 6), hd     # expanded: the same count (T541)
-# a member in another repo (@15, o/other) counts in its driver's group, not elsewhere
-assert sum(1 for e in it if e["kind"] == "sess" and e["group"] == d["group"]) == 6
-# ⑭: the window's mark is what the next read keeps
-it2 = fv.entries("v1")
-assert [e for e in it2 if e.get("epic")][0]["expanded"]
-fv.epic_toggle(it2, "fl", "@10", False)
-assert any("-wu" in c for c in calls) and marks["@10"][1] == ""
-
-# --- C: paint
-W_ = 100
-it = fv.entries("v1")
-sh = fv.visible(it, "", set())
-lines = fv.paint(sh, -1, W_, qo.cells, qo.clip)
-txt = {e.get("target"): (segs, "".join(t for t, _ in segs)) for e, segs in zip(sh, lines) if e["kind"] == "sess"}
-segs, t = txt["@10"]
-assert qo.cells(t) == W_, (qo.cells(t), t)
-assert segs[5][0].startswith("▸ EPIC 会话T 驱动"), segs[5]
-assert segs[6] == (" 3/6", ("dim",)), segs[6]
-assert segs[7][0] == " !1" and any(s.startswith("c") for s in segs[7][1]), segs[7]
-assert segs[8][0] == " ✗1", segs[8]
-segs, t = txt["@13"]
-assert qo.cells(t) == W_ and len(segs) == 7, segs
-assert segs[5][0].startswith("├ C6 · 迁移命令"), segs[5]
-assert segs[1][0] == "!" and segs[6][0].strip() == "claude-fleet", segs
-n10 = txt["@10"][1].index("▸"); n13 = txt["@13"][1].index("├")
-assert n10 == n13 == fv.name_col(W_), (n10, n13, fv.name_col(W_))
-
-# --- D: a search finds a folded member, flat
-hits = fv.visible(it, "技能", set())
-assert [e["target"] for e in hits if e["kind"] == "sess"] == ["@11"] and not hits[0].get("tree"), hits
-
-# --- E (T762): a driver no open member hangs under — every child closed — is an
-# ordinary row: no ▸ / ▾, nothing to fold, its N/N still there
-full_rows = rows
-rows = "\n".join(l for l in full_rows.split("\n") if not any(l.startswith(w + US) for w in ("@11", "@12", "@13", "@15"))) + "\n"
-it = fv.entries("v1")
-d = [e for e in it if e.get("epic")][0]
-assert d["epic"]["rows"] == 0 and d["epic"]["total"] == 6 and not fv.epic_folds(d), d["epic"]
-sh = fv.visible(it, "", set())
-segs = fv.paint(sh, -1, W_, qo.cells, qo.clip)[[e.get("target") for e in sh].index("@10")]
-assert segs[5][0].startswith("EPIC 会话T 驱动") and "▸" not in "".join(t for t, _ in segs), segs
-assert segs[6] == (" 3/6", ("dim",)), segs[6]
-rows = full_rows
-
-# no driver mark ⇒ the list as before
-marks.clear()
-it = fv.entries("v1")
-assert not any(e.get("epic") or e.get("fold") for e in it), [(e.get("target"), e.get("epic"), e.get("fold")) for e in it if e.get("epic") or e.get("fold")]
-flat = [e["target"] for e in fv.visible(it, "", set()) if e["kind"] == "sess"]
-assert flat == ["@13", "@15", "@11", "@14", "@10", "@12"], flat
-print("ok   A only an EPIC hangs · B folded ! / ✗, N/N, @expand · C paint · D search, first frame, no driver · E empty EPIC plain")
+# Legacy @epic stamps and children books must no longer create a UI hierarchy.
+for hub in (False, True):
+    it = fv.entries("v1", hub=hub)
+    assert not os.path.exists(asked), "task list queried a legacy child ledger"
+    assert not any(e.get("epic") or e.get("fold") for e in it)
+    shown = fv.visible(it, "", set())
+    targets = [e["target"] for e in shown if e["kind"] == "sess"]
+    assert targets == ["@11", "@14", "@12", "@13", "@15", "@10"], targets
+    assert not any(e["kind"] in ("hdr", "ask") for e in shown), shown
+    assert all(e.get("depth", 0) == 0 for e in shown)
+    text = "\n".join("".join(t for t, _ in segs) for segs in fv.paint(shown, -1, 100, qo.cells, qo.clip))
+    assert "3/6" not in text and "├" not in text and "▸" not in text, text
+    hits = fv.visible(it, "技能", set())
+    assert [e["target"] for e in hits] == ["@11"], hits
+assert not calls, "list wrote tmux EPIC expansion state"
+print("ok legacy EPIC stamps ignored; every task flat; no children reads, driver counts or expansion writes")
 PY

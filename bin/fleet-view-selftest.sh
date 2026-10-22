@@ -173,10 +173,10 @@ grep -q '在干活' "$W/direct.txt" && st_fail "B: ⌘P opened a list in a sessi
 [ -s "$W/pane0.in" ] && st_fail "B: ⌘P's bytes reached the pane in a session attached directly: $(od -c "$W/pane0.in" | head -2)"
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q '等你 1' "$W/popup.txt" && { ok=1; break; }
+  sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q 'Beta 要你拍板' "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '─ 待派发 / 保留 1' 'Old 做完的' '⌫ 现在收起已结束的 1 个' '▸ 已收起 1 个'; do
+for want in 'Beta 要你拍板' 'Alpha 的完整标题很长很长' 'Old 做完的' '▸ 更早的会话'; do
   grep -qF "$want" "$W/popup.txt" || st_fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
@@ -187,14 +187,15 @@ done
 grep -A1 '│  › ' "$W/popup.txt" | tail -1 | grep -q '✦ 消息' || st_fail "B: the first line is not ✦ 消息: $(head -4 "$W/popup.txt")"
 grep -A2 '│  › ' "$W/popup.txt" | tail -1 | grep -q '  + 新会话' || st_fail "B: the second line is not + 新会话: $(head -5 "$W/popup.txt")"
 grep -A3 '│  › ' "$W/popup.txt" | tail -1 | grep -q '  \$ 命令行' || st_fail "B: the third line is not $ 命令行: $(head -6 "$W/popup.txt")"
-grep -A4 '│  › ' "$W/popup.txt" | tail -1 | grep -q '─ 等你 1' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
+grep -A4 '│  › ' "$W/popup.txt" | tail -1 | grep -q 'Alpha 的完整标题很长很长' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
 [ "$(grep -c '+ 新会话' "$W/popup.txt")" = 1 ] && ! grep -q '⚡' "$W/popup.txt" || st_fail "B: the + 新会话 row not once: $(grep -n '新会话' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
   grep -qF -- "$bad" "$W/popup.txt" && st_fail "B: the list still says 「${bad}」: $(grep -F -- "$bad" "$W/popup.txt")"
 done
-ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
-[ "$ask" -lt "$work" ] || st_fail "B: 等你 is not the first group"
+for bad in '─ 等你' '─ 在干活' '─ 待派发' '⌫ 现在收起' '要不要继续合并？'; do
+  grep -qF "$bad" "$W/popup.txt" && st_fail "B: legacy group/action/question still drawn: $bad"
+done
 # plan B (T493): glyph · ID · Agent · short name · repo
 grep -qE '! +Claude +Beta 要你拍板' "$W/popup.txt" || st_fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
 # Highlight changes background only; text and glyph columns stay fixed (#4416).
@@ -202,7 +203,7 @@ grep -q '▶' "$W/popup.txt" && st_fail "B: selection inserted a marker"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"
 # `?` on an empty query: the legend line; with text it is a letter of the query
 to send-keys -t o:view -l '?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
-grep -q '! 等你' "$W/legend.txt" || st_fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
+grep -q '! 需要我回答' "$W/legend.txt" || st_fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
 grep -q '› ?' "$W/legend.txt" && st_fail "B: ? on an empty query went into the query"
 to send-keys -t o:view -l '?'; to send-keys -t o:view -l 'z?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
 grep -q '› z?' "$W/legend.txt" || st_fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
@@ -216,12 +217,12 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   grep -q 'Old 收起的' "$W/fold.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "B: → on the 已收起 heading did not open it: $(cat "$W/fold.txt")"
-grep -q '▾ 已收起' "$W/fold.txt" || st_fail "B: → opened 已收起 but its caret is not ▾: $(grep -F 已收起 "$W/fold.txt")"
+grep -q '▾ 更早的会话' "$W/fold.txt" || st_fail "B: → opened 已收起 but its caret is not ▾: $(grep -F 已收起 "$W/fold.txt")"
 to send-keys -t o:view Right; shot
 grep -q 'Old 收起的' "$W/fold.txt" || st_fail "B: a second → shut 已收起"
 to send-keys -t o:view Left; shot
 grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: ← on the open 已收起 heading did not shut it"
-grep -q '▸ 已收起' "$W/fold.txt" || st_fail "B: ← shut 已收起 but its caret is not ▸"
+grep -q '▸ 更早的会话' "$W/fold.txt" || st_fail "B: ← shut 已收起 but its caret is not ▸"
 to send-keys -t o:view Left; shot
 grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: a second ← opened 已收起"
 to send-keys -t o:view Enter; shot
@@ -230,7 +231,7 @@ to send-keys -t o:view Enter; shot
 grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: ↵ on the open 已收起 heading no longer shuts it"
 : > "$W/gone.txt"; : > "$W/g/view-gone.fl"
 st_ok_all "B  ⌘P: → opens 已收起, ← shuts it, ↵ toggles it (#3666)"
-st_ok_all "B  ⌘P: the list in the 看台 (等你 first, glyphs, the question under its row, 排队中 + its 收起 line, 已收起 folded), nothing in a direct attach"
+st_ok_all "B  ⌘P: flat single-line tasks, one status slot, earlier conversations folded; nothing in a direct attach"
 
 # --- C: ↵ on beta, here ------------------------------------------------------------------
 to pipe-pane -o -t o:view "cat > '$W/client.bytes'"
@@ -278,10 +279,10 @@ st_ok_all "D  another machine / login: its peer window, shown waiting (rc 3, pee
 cur() { ti display-message -p -t 'fl@view-v1:' '#{window_id}'; }
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || st_fail "E: go by worker id"
 [ "$(cur)" = "$W1" ] || st_fail "E: go by worker id landed on $(cur)"
-to send-keys -t o:view -H 1b 5b 39 32 31 7e   # ⌘↑: alpha → beta (等你 sits above)
+to send-keys -t o:view -H 1b 5b 39 32 30 7e   # ⌘↓: alpha → beta (source order, no state grouping)
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 [ "$(cur)" = "$W2" ] || st_fail "E: ⌘↑ from alpha did not land on beta ($(cur))"
-to send-keys -t o:view -H 1b 5b 39 32 30 7e   # ⌘↓: beta → alpha
+to send-keys -t o:view -H 1b 5b 39 32 31 7e   # ⌘↑: beta → alpha
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W1" ] && break; done
 [ "$(cur)" = "$W1" ] || st_fail "E: ⌘↓ from beta did not land on alpha ($(cur))"
 to send-keys -t o:view -H 1b 5b 39 32 32 7e   # ⌘[: back to beta
@@ -290,7 +291,7 @@ for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 to send-keys -t o:view -H 1b 5b 39 32 33 7e   # ⌘]: forward to alpha
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W1" ] && break; done
 [ "$(cur)" = "$W1" ] || st_fail "E: ⌘] did not go forward to alpha ($(cur))"
-to send-keys -t o:view C-] b                 # the phone's ⌃] b = ⌘↑
+to send-keys -t o:view C-] n                 # the phone's next = ⌘↓
 for _ in 1 2 3 4 5 6; do sleep 0.3; [ "$(cur)" = "$W2" ] && break; done
 [ "$(cur)" = "$W2" ] || st_fail "E: ⌃] b did not step to beta ($(cur))"
 [ -f "$W/conf/remote-views/v1.d/history.json" ] || st_fail "E: no history beside the registry row"
@@ -305,7 +306,7 @@ sleep 0.5
   || st_fail "G: the client is not 40 columns: $(ti list-clients -F '#{client_width}')"
 to send-keys -t o:view C-] p
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 0.5; to capture-pane -p -t o:view > "$W/phone.txt"; grep -q '等你' "$W/phone.txt" && { ok=1; break; }
+  sleep 0.5; to capture-pane -p -t o:view > "$W/phone.txt"; grep -q 'Beta 要你拍板' "$W/phone.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "G: ⌃] p opened no list at 40 columns: $(cat "$W/phone.txt")"
 python3 - "$W/phone.txt" <<'PY' || st_fail "G: the list is not the whole screen at 40 columns: $(cat "$W/phone.txt")"
@@ -331,7 +332,7 @@ done
 # F12 (T705): the phone's one tap — Termius's key row — opens the same list
 to send-keys -t o:view F12
 ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
-  sleep 0.5; to capture-pane -p -t o:view > "$W/phone-f12.txt"; grep -q '等你' "$W/phone-f12.txt" && { ok=1; break; }
+  sleep 0.5; to capture-pane -p -t o:view > "$W/phone-f12.txt"; grep -q 'Beta 要你拍板' "$W/phone-f12.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "G: F12 opened no list at 40 columns: $(cat "$W/phone-f12.txt")"
 [ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone-f12.txt" "$FLEET_VIEW_EVIDENCE_PHONE.f12"
@@ -343,7 +344,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.2
 done
 [ -n "$closed" ] || st_fail "G: the F12 popup did not close and thaw"
-TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || st_fail "G: go to alpha"
+TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f2" || st_fail "G: go to beta"
 to send-keys -t o:view C-] n                 # alpha → the next in the list: mac-a's session
 for _ in $(seq 1 40); do sleep 0.25;  # a poll, not a budget: the first go opens the peer window (#4443)
    case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in mac-a@*) break ;; esac; done
@@ -457,29 +458,29 @@ for mode in ("", "ascii"):
     shown = fv.visible(run(["o/r"]), "", set())
     at = next(i for i, e in enumerate(shown) if e.get("target") == "@2")
     lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
-    gl = fv.glyphs()
+    gl = fv.TASK_GLYPHS_ASCII if mode == "ascii" else fv.TASK_GLYPHS
     for e, segs in zip(shown, lines):
         if e["kind"] != "sess": continue
         g = segs[1][0]
-        assert g == gl[e["sym"]] and len(g) == 1 and w1(g) == 1, (g, e)
+        assert g == gl[fv.task_status(e)] and len(g) == 1 and w1(g) == 1, (g, e)
         if mode == "ascii": assert g.isascii(), g
         text = "".join(s[0] for s in segs)
         assert e["word"] not in text.split(e["text"])[0], text
-        assert text.startswith("  " + gl[e["sym"]] + " "), text
+        assert text.startswith("  " + gl[fv.task_status(e)] + " "), text
     assert len({e["sym"] for e in shown if e["kind"] == "sess"}) == 6
     assert any(any(st.startswith("c") for _, st in segs for st in st) for segs in lines)
     # only ! and ✗ are coloured (red, bold); the tags no longer ride the row
     for e, segs in zip(shown, lines):
         if e["kind"] != "sess": continue
         colored = any(st.startswith("c") for st in segs[1][1])
-        assert colored == (e["sym"] in ("needs", "fail") and not e.get("lost")), (e["sym"], segs[1])
+        assert colored == (fv.task_status(e) == "needs"), (e["sym"], segs[1])
         assert "会坏" not in "".join(t for t, _ in segs), segs
 os.environ["NO_COLOR"] = "1"
 lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
 assert not any(st.startswith("c") for segs in lines for _, sty in segs for st in sty), "NO_COLOR left a colour"
 PYI
 ( unset NO_COLOR FLEET_COLOR FLEET_GLYPHS; python3 "$W/leg-i.py" "$BIN" ) || st_fail "I: the grouped list"
-st_ok_all "I  ⌘P grouped: 置顶 · 等你 · 在干活 · 排队中 (· 已收起); six one-cell glyphs (ascii, NO_COLOR); the question under its row; tags; 「修 3164」"
+st_ok_all "I  legacy observation parsing; flat PIN task projection; single-cell status, ASCII/NO_COLOR, details and search"
 
 # --- J: the reaped sessions (issue #3286) -------------------------------------------------------
 mkdir -p "$W/jstub"
@@ -686,7 +687,7 @@ assert [e.get("target") for e in v if e.get("ended")] == ["@8", "@9"], v
 opened = fv.sec_fold(set(), "gone", True)
 v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
-    ["@10", "landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
+    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
 # the panel (view-panel's rows): ✦ + $ above the same lines, ⇄ ⏏ after them (T762, T923)
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])

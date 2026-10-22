@@ -126,14 +126,14 @@ class StateTests(unittest.TestCase):
 
     def test_actions_page_five_items_and_a_grey_agent(self):
         r = dict(kind="sess", target="@1", state="working", agent="codex", pr="#4966", pr_url="u", far=False, gone=False,
-                 text="t", name="t")
+                 text="t", name="t", fid="test-id")
         with patch.object(v, "say", side_effect=lambda k, *a: k if not a else k + ":" + ":".join(map(str, a))):
             ids = [a["id"] for a, _, _ in v.page_of(r)]
-            self.assertEqual(ids, ["enter", "pr", "rename", "agent", "reap"])
+            self.assertEqual(ids, ["enter", "pr", "rename", "agent", "webopen", "stop"])
             page = v.page_of(r, {"claude": "this machine has no claude"})
-            self.assertEqual([why for _, _, why in page], ["", "", "", "this machine has no claude", ""])
-            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, pr=""))], ["enter", "rename", "agent", "reap"])
-            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, state="exited"))], ["enter", "pr", "rename", "reap"])
+            self.assertEqual([why for _, _, why in page], ["", "", "", "this machine has no claude", "", ""])
+            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, pr=""))], ["enter", "rename", "agent", "webopen", "stop"])
+            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, state="exited"))], ["enter", "pr", "rename"])
             self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, gone=True, pr="", target="landed:1@o/r"))], ["resume"])
 
     def test_editor_enter_unicode_caret_and_resize(self):
@@ -220,12 +220,12 @@ class NativeTests(unittest.TestCase):
             time.sleep(.15)
             before = self.screen().splitlines()
             self.keys("Tab")
-            opened = self.wait("回收…").splitlines()
+            opened = self.wait("停下（可恢复）").splitlines()
             # a whole page: the session line on top, a rule, one numbered item a line
             self.assertIn("源中文", opened[1])
             self.assertTrue(opened[2].startswith("───"), opened[2])
             # 在网页里打开 (PQ41): any session, a Codex one too
-            self.assertEqual([x.strip() for x in opened[3:8]], ["1 进入", "2 改名…", "3 换成 Claude", "4 在网页里打开", "5 回收…"])
+            self.assertEqual([x.strip() for x in opened[3:8]], ["1 进入", "2 改名…", "3 换成 Claude", "4 在网页里打开", "5 停下（可恢复）"])
             self.assertNotIn("会话 02", "\n".join(opened))
             self.assertIn("会话 42", opened[0])
             self.assertNotIn("DO NOT REPEAT", "\n".join(opened))
@@ -278,7 +278,7 @@ class NativeTests(unittest.TestCase):
         self.keys("Tab", "2")
         self.wait("新名字›")
         self.keys("Escape")
-        self.wait("5 回收…")
+        self.wait("5 停下（可恢复）")
         self.keys("Escape")
         self.wait("Tab 操作")
         self.keys("Up", "Tab")
@@ -304,7 +304,7 @@ class NativeTests(unittest.TestCase):
 
     def test_mouse_clicks_a_page_item_once(self):
         self.keys("Tab")
-        lines = self.wait("回收…").splitlines()
+        lines = self.wait("停下（可恢复）").splitlines()
         def click(x, y):
             # Match the application's terminfo, as tmux translates a real
             # client's mouse. macOS ncurses can still request X10, not SGR.
