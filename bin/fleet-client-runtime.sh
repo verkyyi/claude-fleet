@@ -100,6 +100,8 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     fleet-peer-cert.sh fleet-node-shell-retire.sh fleet_cred_ctl.py
 #     fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
 #     fleet-node-probe.sh (a managed node's, #4886 — fleet-node.sh tests for it)
+#     fleet-hook-conf.sh (hosting config only; fleet-client-place.sh tests for it,
+#     a client-only install uses the environment / hub default instead)
 NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
   tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh fleet-peerlink.py
   fleet-node-supervisor.py fleet-topbar.py fleet-alerts.sh fleet-orphan-reports.py fleet-view-go.sh
@@ -108,7 +110,7 @@ NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_vi
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
   fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh fleet_cred_ctl.py
   fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
-  fleet-node-probe.sh fleet-board-diff.py"
+  fleet-node-probe.sh fleet-board-diff.py fleet-hook-conf.sh"
 
 check() {
   local list=${1:-$LIST_DEF} man=${2:-$MANIFEST_DEF}
