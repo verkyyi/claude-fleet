@@ -34,7 +34,7 @@
 #      (H1 · > summary · ## lists of [links](…)), every link answered; llms-full
 #      carries every doc's title; a doc added to docs/public/ is in all of them
 #   L  the legal pages (T883, EPIC WACK C2): /terms /privacy /en/terms /en/privacy
-#      built from site/legal/, each in its language with its draft line, its
+#      built from site/legal/, each in its language, final (no draft line) with its effective date, its
 #      twin as hreflang, and the front page's footer; both front pages' footers
 #      carry 用户协议 · 隐私政策 (Terms · Privacy) and no company name or ICP
 #      number (ZCKT) — every footer key in both string tables; a
@@ -480,13 +480,15 @@ for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
         q = open(f, encoding='utf-8').read()
         twin = S['en' if l == 'zh' else 'zh'][doc + '_path']
         need = ['<html lang="%s">' % S[l]['lang'], '<link rel="canonical" href="__ORIGIN__%s">' % path,
-                'href="__ORIGIN__%s"' % twin, '<h1>', '草稿' if l == 'zh' else 'Draft',
+                'href="__ORIGIN__%s"' % twin, '<h1>', '生效日期' if l == 'zh' else 'Effective:',
                 'href="%s" aria-current="page"' % path]
         for w in need:
             if w not in q:
                 bad.append('L %s: lacks %s' % (path, w))
         if '{{' in q:
             bad.append('L %s: an unfilled slot' % path)
+        if ('草稿' if l == 'zh' else 'Draft') in q:
+            bad.append('L %s: still marked as a draft' % path)
         for u in re.findall(r'href="(/[^"]*)"', q):
             u = u.split('#')[0]
             if u in ('/', '/en/') or u.startswith(('/favicon', '/apple-touch')):
@@ -496,7 +498,7 @@ for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
 for x in bad:
     print('FAIL ' + x)
 if not bad:
-    print('ok   L /terms /privacy /en/terms /en/privacy built, drafts, twins · footers carry both links, no company or ICP number')
+    print('ok   L /terms /privacy /en/terms /en/privacy built, final, twins · footers carry both links, no company or ICP number')
 sys.exit(1 if bad else 0)
 PY
 mkdir -p "${T:?}/lsite"; cp -R "$ROOT/site/." "${T:?}/lsite/"; rm -f "${T:?}/lsite/legal/privacy.en.md"
