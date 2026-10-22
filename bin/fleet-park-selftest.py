@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # selftest-entry
-"""Drive fleet_session_gate.py, fleet-cleanup-idle.py, fleet-session-wrap.sh and
+"""Drive fleet_session_gate.py, fleet-cleanup-idle.sh / .py, fleet-session-wrap.sh and
 fleet-status-7501.py on an isolated tmux socket: one window / fid / conversation,
 real process exit, every origin, drafts / watched / jobs / legacy wrapper held.
 The native prompt proof is replaced only for the fake assistant (no model).
@@ -142,6 +142,25 @@ while True:
             self.assertEqual(gate.park(self.fid).get('why'), 'old_wrapper')
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
+
+    def test_driver_parks_when_no_repo_is_hosted(self):
+        self.fake()
+        self.set('@claude_state_ts', str(int(time.time()) - 600))
+        self.set('@norepo', '1')
+        driver = self.root / 'driver'
+        driver.mkdir()
+        for file in BIN.iterdir():
+            if file.is_file() and file.name != 'fleet-lib.sh':
+                (driver / file.name).symlink_to(file)
+        (driver / 'fleet-lib.sh').write_text(
+            'fleet_load_conf() { :; }\n'
+            'fleet_socket() { printf %s "' + self.label + '"; }\n'
+            'fleet_repos() { :; }\n'
+            'fleet_window_repo() { return 1; }\n')
+        p = subprocess.run(['bash', str(driver / 'fleet-cleanup-idle.sh'), 'test'],
+                           env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(self.opt('@park_held'), 'zero-repo fleet omitted parking: ' + p.stdout + p.stderr)
 
     def test_keyboard_bytes_after_proof_cancel_exit(self):
         self.fake()
