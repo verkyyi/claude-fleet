@@ -21,7 +21,9 @@ case "$*" in
   *list-clients*) printf '%s\037@2\n' "$control" ;;
   *list-windows*)
     case "$*" in
-      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "$state";;
+      *park_state*)
+        case "$*" in *'#{@park_rss_mb}'*'#{@park_wrap_ver}'*'#{@park_since}'*) ;; *) exit 1 ;; esac
+        printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "$state";;
       *ctx_left*) printf '@1\t=\t=\t=\t=\t=\t=\t=\n@2\t=\t=\t=\t=\t=\t=\t=\n@3\t=\t=\t=\t=\t=\t=\t=\n';;
       *pane_current_path*) printf '@1\t/tmp/scratch-1\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@2\t/tmp/scratch-2\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@3\t/tmp/scratch-3\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n';;
       *cc_agent*loop*) exit 0 ;;

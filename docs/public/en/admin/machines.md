@@ -20,7 +20,7 @@ Where to see it: the badges on the cards of the console's **Service nodes & clie
 
 Open a machine's details and look under **Load and memory** for total sessions, working, parked, memory saved and idle sessions still in memory. Zero parked sessions are hidden. Older nodes omit the whole line. Counts include the machine's reporting managed logins; a login without metrics makes the total unknown.
 
-Saved memory sums `rss_mb` from the latest park action for each session identity currently reporting `@park_state=停放中`, including its wrapper and child processes. Resuming removes that saving. The older `@park_saved_mb` stamp is a fallback; a missing reading shows “savings unavailable”. Without a reported parking state, the parked count is zero.
+Saved memory sums `rss_mb` from the latest park action for each session identity currently reporting `@park_state=停放中`, including its wrapper and child processes. Resuming removes that saving. Without a matching action, the `@park_rss_mb` snapshot is a fallback; a missing reading shows “savings unavailable”. Without a reported parking state, the parked count is zero.
 
 Idle in memory uses the batch definition: the turn has ended (done / looping / waiting for you), a CPU sample of at least 60 seconds uses less than 0.5 CPU seconds per minute, nobody is viewing it and no background job is running. Idle RSS sums only those process trees, including wrappers; nonzero counts include reasons such as an older wrapper or waiting to park. Until a complete sample, idle, working and idle RSS remain unknown and the machine page hides the summary.
 

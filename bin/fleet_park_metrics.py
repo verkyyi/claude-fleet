@@ -78,8 +78,8 @@ def latest_park_rss(path):
 def census(socket, session, cache_dir):
     # Exact session, one row per window: grouped views never duplicate a pane.
     fmt = "\x1f".join(["#{window_id}", "#{pane_pid}", "#{@fleet_role}", "#{window_name}",
-                          "#{@park_state}", "#{@park_saved_mb}", "#{@park_wrap_ver}",
-                          "#{@park_why}", "#{@fleet_id}"])
+                          "#{@park_state}", "#{@park_rss_mb}", "#{@park_wrap_ver}",
+                          "#{@park_since}", "#{@fleet_id}"])
     rows = command(["tmux", "-u", "-L", socket, "list-windows", "-t", "=" + session, "-F", fmt])
     clients = command(["tmux", "-L", socket, "list-clients", "-F", "#{client_control_mode}\x1f#{window_id}"])
     watched = {wid for row in clients.split("\n") for control, sep, wid in [row.partition("\x1f")]
@@ -96,7 +96,7 @@ def census(socket, session, cache_dir):
         fields = row.split("\x1f")
         if len(fields) != 9:
             continue
-        wid, pid, role, name, parked, saved, wrap, why, fid = fields
+        wid, pid, role, name, parked, saved, wrap, _since, fid = fields
         if role in ("home", "panel") or (not role and name in ("home", "dash", "plan", "backlog")):
             continue
         if not pid.isdigit():
@@ -123,7 +123,7 @@ def census(socket, session, cache_dir):
             saved_mb = saved_by_fid[fid]
         result[wid] = {"state": "parked" if parked == "停放中" else "awake",
                        "rss_mb": round(rss, 2) if known else None, "saved_mb": saved_mb,
-                       "why": "watched" if wid in watched else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
+                       "why": "watched" if wid in watched else "failed" if parked == "失败" else ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".%d.tmp" % os.getpid())
