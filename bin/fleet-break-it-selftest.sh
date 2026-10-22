@@ -7818,6 +7818,15 @@ drill_report_delegation_offline() {
   SECS=$(since "$t0")
 }
 
+drill_session_title_lost() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/session-title-ledger-selftest.py" >"$WORK/title-ledger.log" 2>&1 || {
+    WHY="persistent title regression: $(tail -3 "$WORK/title-ledger.log")"; return 1;
+  }
+  WHAT='创建、自动/人工命名、并发顺序、回收和重开保留同一身份的标题'
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
 
 FAILS=$LINT; PASSES=0

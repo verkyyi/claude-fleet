@@ -377,6 +377,12 @@ if isinstance(p, str):
     # becomes the window's name, its @task_line and its hub record's title — once
     # (the stamp goes; the hub compares on the placeholder). A message from another
     # session renames nothing.
+    # Persist the same bounded first line the inventory displays (also for web
+    # and no-repo sessions without a placeholder). The ID's manual name wins.
+    if [ "$_tpeer" = 0 ] && [ -n "$_tl" ] && [ -z "$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}#{@task}' 2>/dev/null)" ]; then
+      python3 "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet_id.py" title-window \
+        --window "$TMUX_PANE" --title "$_tl" --source auto >/dev/null 2>&1 || :
+    fi
     _tp=$(tmux display-message -p -t "$TMUX_PANE" '#{@title_pending}' 2>/dev/null)
     [ "$_tpeer" = 0 ] && [ -n "$_tl" ] || _tp=''
     if [ -n "$_tp" ]; then
@@ -392,9 +398,11 @@ line = re.sub(r"\s+", " ", line)
 sys.stdout.write(line if len(line) <= 30 else line[:29].rstrip() + "…")
 ' 2>/dev/null)
       if [ -n "$_t1" ]; then
-        tmux rename-window -t "$TMUX_PANE" "$_t1" 2>/dev/null
-        tmux set-window-option -t "$TMUX_PANE" @task_line "$_t1" 2>/dev/null
+        python3 "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet_id.py" name-window \
+          --window "$TMUX_PANE" --title "$_t1" --source auto >/dev/null 2>&1 || _t1=''
+        [ -n "$_t1" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_t1" 2>/dev/null
         _tk=$(tmux display-message -p -t "$TMUX_PANE" '#{@task}' 2>/dev/null)
+        [ -n "$_t1" ] || _tk=''
         case "$_tk" in T[1-9]*)
           ( bash "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-task-record.sh" retitle "$_tk" \
               --from "$_tp" --title "$_t1" </dev/null >/dev/null 2>&1 & ) ;;

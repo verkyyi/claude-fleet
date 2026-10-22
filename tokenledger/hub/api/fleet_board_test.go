@@ -439,3 +439,58 @@ func TestBoardPlanFacts(t *testing.T) {
 		t.Fatalf("history: %+v", r)
 	}
 }
+
+func TestBoardHistoryTitles(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	for i, title := range []string{"", " \t", "original"} {
+		id := "11111111-1111-4111-8111-11111111111" + strconv.Itoa(i)
+		evs := []map[string]any{{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "title": title}}
+		if i == 2 {
+			evs = append(evs, map[string]any{"ev": "named", "seq": float64(2), "title": "chosen", "source": "manual"})
+		}
+		evs = append(evs, map[string]any{"ev": "closed", "seq": float64(len(evs) + 1), "ts": float64(now.Unix()), "reason": "reaped"})
+		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep1", ID: id, Events: evs}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := s.buildBoard("gh:1", nil, now)
+	if err != nil || len(b.Rows) != 3 {
+		t.Fatalf("board: %+v %v", b, err)
+	}
+	for _, r := range b.Rows {
+		want := "会话 " + r.Code
+		if r.ID[len(r.ID)-1:] == "2" {
+			want = "chosen"
+		}
+		if r.Title != want || r.Group != "gone" {
+			t.Fatalf("history title: %+v want %q", r, want)
+		}
+	}
+	other, err := s.buildBoard("gh:2", nil, now)
+	if err != nil || len(other.Rows) != 0 {
+		t.Fatalf("other owner: %+v %v", other, err)
+	}
+}
+
+func TestBoardManualTitleBeatsTaskAndLive(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	task, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "task title", AuthorityVersion: 1, RequestedAgent: "default", ResolvedAgent: "claude"}, "manual-title", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := []map[string]any{{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "title": "task title"}, {"ev": "named", "seq": float64(2), "title": "chosen name", "source": "manual"}}
+	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep1", ID: task.FID, Events: evs}); err != nil {
+		t.Fatal(err)
+	}
+	live := []FleetSession{{Worker: map[string]any{"identity": task.FID, "title": "stale inventory", "state": "working"}, Availability: "online"}}
+	for _, sessions := range [][]FleetSession{live, nil} {
+		b, err := s.buildBoard("gh:1", sessions, now)
+		if err != nil || len(b.Rows) != 1 || b.Rows[0].Title != "chosen name" {
+			t.Fatalf("manual board: %+v %v", b, err)
+		}
+	}
+}

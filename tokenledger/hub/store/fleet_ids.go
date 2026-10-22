@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -224,6 +225,7 @@ type FleetIDRecord struct {
 	Login       string           `json:"login"`
 	Window      string           `json:"window,omitempty"`
 	Title       string           `json:"title,omitempty"`
+	TitleSource string           `json:"title_source,omitempty"`
 	Agent       string           `json:"agent,omitempty"`
 	Repo        string           `json:"repo,omitempty"`
 	Issues      []string         `json:"issues"`
@@ -302,6 +304,7 @@ func (s *Store) ensureFleetIDs() error {
 	for _, c := range []struct{ col, spec string }{{"progress", "TEXT NOT NULL DEFAULT ''"},
 		{"progress_state", "TEXT NOT NULL DEFAULT ''"}, {"progress_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"progress_seq", "INTEGER NOT NULL DEFAULT 0"},
+		{"title_source", "TEXT NOT NULL DEFAULT ''"},
 		// EPIC T644 C1: the task this ID belongs to, by the task's own ID
 		// (fleet_tasks.fid) — `task` keeps the T<n> for one version (compat-1v: 下一批删).
 		{"task_id", "TEXT NOT NULL DEFAULT ''"}} {
@@ -457,10 +460,10 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 	r := idRow{}
 	r.ID = p.ID
 	err = tx.QueryRow(`SELECT owner, code, short, endpoint_id, machine, login, win, title, agent, repo, issues,
-		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq, natives, task_id
+		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq, natives, task_id, title_source
 		FROM fleet_ids WHERE id = ?`+s.d.forUpdate(), p.ID).Scan(&r.Owner, &r.code, &r.Short, &r.EndpointID,
 		&r.Machine, &r.Login, &r.Window, &r.Title, &r.Agent, &r.Repo, &r.issues, &r.Body, &r.Key, &r.Task,
-		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq, &r.natives, &r.taskID)
+		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq, &r.natives, &r.taskID, &r.TitleSource)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return FleetIDPushed{}, err
@@ -549,10 +552,10 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 		als, _ := json.Marshal(nonNil(r.Aliases))
 		if _, err := tx.Exec(`UPDATE fleet_ids SET short = ?, endpoint_id = ?, machine = ?, login = ?, win = ?,
 			title = ?, agent = ?, repo = ?, issues = ?, body = ?, key = ?, task = ?, parent = ?, prev = ?, aliases = ?,
-			opened_at = ?, closed_at = ?, close_reason = ?, seq = ?, natives = ?, task_id = ?, updated_at = ? WHERE id = ?`,
+			opened_at = ?, closed_at = ?, close_reason = ?, seq = ?, natives = ?, task_id = ?, title_source = ?, updated_at = ? WHERE id = ?`,
 			r.Short, r.EndpointID, r.Machine, r.Login, r.Window, r.Title, r.Agent, r.Repo, string(iss), r.Body,
 			r.Key, r.Task, r.Parent, r.Prev, string(als), r.OpenedAt, r.ClosedAt, r.CloseReason, r.Seq, r.natives,
-			r.taskID, time.Now().UTC().Format(rfc), r.ID); err != nil {
+			r.taskID, r.TitleSource, time.Now().UTC().Format(rfc), r.ID); err != nil {
 			return FleetIDPushed{}, err
 		}
 	}
@@ -581,7 +584,12 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 	switch evStr(ev, "ev", 20) {
 	case "opened":
 		fillStr(&r.Window, evStr(ev, "window", 32))
-		fillStr(&r.Title, evStr(ev, "title", 200))
+		if r.Title == "" {
+			r.Title = FleetTitle(evStr(ev, "title", 4000))
+			if r.Title != "" {
+				r.TitleSource = evStr(ev, "title_source", 20)
+			}
+		}
 		fillStr(&r.Agent, evStr(ev, "agent", 20))
 		fillStr(&r.Repo, evStr(ev, "repo", 201))
 		fillStr(&r.Body, evStr(ev, "body", 4000))
@@ -600,6 +608,13 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 		}
 		if m := idKeyRE.FindStringSubmatch(r.Key); m != nil && r.Repo != "" {
 			r.Issues = addIssue(r.Issues, r.Repo+"#"+m[1])
+		}
+	case "named":
+		title, source := FleetTitle(evStr(ev, "title", 4000)), evStr(ev, "source", 20)
+		if title != "" && (source == "manual" || source == "auto" || source == "recovered") {
+			if source == "manual" || (r.TitleSource != "manual" && (source != "recovered" || strings.TrimSpace(r.Title) == "")) {
+				r.Title, r.TitleSource = title, source
+			}
 		}
 	case "native":
 		if ev["compact"] == true {
@@ -682,11 +697,11 @@ func (s *Store) FleetIDOf(owner, id string) (FleetIDRecord, error) {
 	var pg FleetIDProgress
 	err := s.read.QueryRow(`SELECT id, owner, code, short, endpoint_id, machine, login, win, title, agent, repo, issues,
 		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq,
-		progress, progress_state, progress_at, progress_seq
+		progress, progress_state, progress_at, progress_seq, title_source
 		FROM fleet_ids WHERE id = ? AND owner = ?`, id, owner).Scan(&r.ID, &r.Owner, &r.code, &r.Short, &r.EndpointID,
 		&r.Machine, &r.Login, &r.Window, &r.Title, &r.Agent, &r.Repo, &r.issues, &r.Body, &r.Key, &r.Task,
 		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq,
-		&pg.Summary, &pg.State, &pg.At, &pg.Seq)
+		&pg.Summary, &pg.State, &pg.At, &pg.Seq, &r.TitleSource)
 	if err != nil {
 		return FleetIDRecord{}, err
 	}
@@ -929,4 +944,26 @@ func (s *Store) FleetIDsSince(owner, since string, limit int) (recs []FleetIDRec
 		cursor = since
 	}
 	return recs, cursor, more, nil
+}
+
+// FleetTitle bounds display text to its first nonempty line, matching fleet_id.clean_title.
+func FleetTitle(value string) string {
+	var title string
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r", "\n"), "\n") {
+		line = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, line)
+		title = strings.Join(strings.Fields(line), " ")
+		if title != "" {
+			break
+		}
+	}
+	runes := []rune(title)
+	if len(runes) > 80 {
+		return strings.TrimSpace(string(runes[:79])) + "…"
+	}
+	return title
 }

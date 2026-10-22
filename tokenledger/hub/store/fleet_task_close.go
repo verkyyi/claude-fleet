@@ -225,6 +225,7 @@ func (s *Store) idsCarrying(t FleetTask) ([]idState, error) {
 // BoardID is one ID as the session list needs it (A4G2, api/fleet_board.go).
 type BoardID struct {
 	ID, Short, Machine, Login, Title, Task, TaskID, Repo, Reason string
+	TitleSource                                                  string
 	Agent                                                        string
 	Seq                                                          int
 	Opened, Closed                                               int64
@@ -234,7 +235,7 @@ type BoardID struct {
 // after since (epoch seconds).
 func (s *Store) BoardIDs(owner string, since int64) ([]BoardID, error) {
 	q := `SELECT id, short, machine, login, title, task, task_id, repo, close_reason, seq, opened_at, closed_at,
- COALESCE((SELECT agent FROM fleet_id_natives n WHERE n.id = fleet_ids.id AND native != '' ORDER BY n.n DESC LIMIT 1), '')
+ COALESCE((SELECT agent FROM fleet_id_natives n WHERE n.id = fleet_ids.id AND native != '' ORDER BY n.n DESC LIMIT 1), ''), title_source
 		FROM fleet_ids WHERE (closed_at = 0 OR closed_at >= ?)`
 	args := []any{since}
 	if owner != "" {
@@ -249,7 +250,7 @@ func (s *Store) BoardIDs(owner string, since int64) ([]BoardID, error) {
 	for rows.Next() {
 		var b BoardID
 		if err := rows.Scan(&b.ID, &b.Short, &b.Machine, &b.Login, &b.Title, &b.Task, &b.TaskID, &b.Repo, &b.Reason,
-			&b.Seq, &b.Opened, &b.Closed, &b.Agent); err != nil {
+			&b.Seq, &b.Opened, &b.Closed, &b.Agent, &b.TitleSource); err != nil {
 			return nil, err
 		}
 		out = append(out, b)

@@ -274,3 +274,40 @@ func TestFleetIDProgress(t *testing.T) {
 		t.Fatalf("reread %+v %v", b, err)
 	}
 }
+
+// Named events have their own semantics; opened stays first-value-wins.
+func TestFleetIDNamedSurvivesCloseMoveAndReplay(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	evs := ledger(t,
+		`{"ev":"opened","seq":1,"ts":100,"title":"initial"}`,
+		`{"ev":"named","seq":2,"ts":101,"title":"automatic","source":"auto"}`,
+		`{"ev":"named","seq":3,"ts":102,"title":"chosen","source":"manual"}`,
+		`{"ev":"named","seq":4,"ts":99,"title":"late auto","source":"auto"}`,
+		`{"ev":"closed","seq":5,"ts":105,"reason":"reaped"}`)
+	for _, e := range evs {
+		if _, err := push(t, st, "e1", idA, []map[string]any{e}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := push(t, st, "e1", idA, evs); err != nil {
+		t.Fatal(err)
+	}
+	r, err := st.FleetIDOf("operator", idA)
+	if err != nil || r.Title != "chosen" || r.ClosedAt != 105 {
+		t.Fatalf("named close: %+v %v", r, err)
+	}
+	moved := ledger(t, `{"ev":"moved","seq":6,"ts":106}`, `{"ev":"reopened","seq":7,"ts":107}`, `{"ev":"named","seq":8,"ts":108,"title":"new manual","source":"manual"}`)
+	if _, err := push(t, st, "e2", idA, moved); err != nil {
+		t.Fatal(err)
+	}
+	r, err = st.FleetIDOf("operator", idA)
+	if err != nil || r.Title != "new manual" || r.ClosedAt != 0 {
+		t.Fatalf("move: %+v %v", r, err)
+	}
+	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "other", EndpointID: "e2", ID: idA, Events: ledger(t, `{"ev":"named","seq":9,"title":"stolen","source":"manual"}`)}); !errors.Is(err, store.ErrIDDuplicate) {
+		t.Fatalf("owner: %v", err)
+	}
+	if _, err := push(t, st, "e2", idA, ledger(t, `{"ev":"named","seq":9,"id":"`+idB+`","title":"wrong identity","source":"manual"}`)); err == nil {
+		t.Fatal("accepted another FID")
+	}
+}

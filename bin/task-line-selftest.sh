@@ -36,7 +36,7 @@ trap 'exit 130' INT TERM HUP
 st_tally count
 
 mkdir -p "$WORK/path" "$WORK/inst/bin" "$WORK/inst/logs"
-cp "$BIN/set-claude-state.sh" "$BIN/fleet-ui-lang.sh" "$WORK/inst/bin/"
+cp "$BIN/set-claude-state.sh" "$BIN/fleet-ui-lang.sh" "$BIN/fleet_id.py" "$WORK/inst/bin/"
 HOOK="$WORK/inst/bin/set-claude-state.sh"
 st_tmux_socket "$WORK/path" "$SOCK" strip
 PATH="$WORK/path:$PATH"; export PATH

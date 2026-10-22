@@ -24,5 +24,5 @@ name=${name//$'\t'/ }
 # @name_manual (issue #3317): the name the person chose, so every list shows it
 # over the issue title (fleet_view.py's rows, the inventory's title= column) —
 # while the window still wears it; a later rename by the fleet ends it.
-tmux rename-window -t "$w" -- "$name" \; set-option -w -t "$w" @name_manual "$name" 2>/dev/null || exit 0
+python3 "$BIN/fleet_id.py" name-window --window "$w" --title "$name" --source manual || exit 1
 exit 0
