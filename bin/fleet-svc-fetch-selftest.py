@@ -42,8 +42,8 @@ def address(ip):
 
 class ReaderTests(unittest.TestCase):
     def test_internal_and_metadata_addresses(self):
-        for ip in ('127.0.0.1', '10.0.0.1', '169.254.169.254', '100.100.100.200',
-                   '192.168.1.1', '172.16.0.1', '::1', 'fc00::1', '::ffff:8.8.8.8', '224.0.0.1'):
+        for ip in ('127.0.0.1', '10.0.0.1', '169.254.169.254', '100.100.100.200',  # oss-ok: standard metadata/private-address rejection fixtures
+                   '192.168.1.1', '172.16.0.1', '::1', 'fc00::1', '::ffff:8.8.8.8', '224.0.0.1'):  # oss-ok: RFC private-range rejection fixtures
             with self.subTest(ip=ip), patch.object(socket, 'getaddrinfo', return_value=address(ip)):
                 with self.assertRaises(ValueError): reader.public_addresses('example.com', 80)
 
