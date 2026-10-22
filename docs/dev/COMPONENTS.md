@@ -147,7 +147,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
 | 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-id.sh fleet-id-selftest* fleet-id-results-selftest* fleet-id-migrate-selftest* fleet_id.py fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
-| 会话迁移与历史 | `fleet-move* fleet_move_codex.py fleet-history* fleet-migrate* dash-restore-session*` | 迁移与恢复历史 |
+| 会话迁移与历史 | `fleet-move* fleet_move_codex.py fleet-history* fleet_history_read.py fleet-migrate* dash-restore-session*` | 迁移与恢复历史；原生历史读取保留已关闭会话的查看入口 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
