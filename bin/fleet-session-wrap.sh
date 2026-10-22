@@ -525,7 +525,7 @@ while :; do
           if [ "$a" = "$_resume" ]; then _skip=1; continue; fi
           _args+=("$a")
         done
-        cmd=("${_args[@]}")
+        cmd=(${_args[@]+"${_args[@]}"})
         printf '\n%s\n' "$_fresh"
       fi
     fi

@@ -147,6 +147,8 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `onboard` | node | [node-doctor] | 就绪探针没过：照行内修 |
 | `open` | node | [node-doctor] | open.secret 权限不是 0600：`chmod 600` |
 | `park` | node | [node-doctor] | 会话在算 / 空闲 / 停放计数与省下的 RSS；未知时检查 tmux 与节点版本，`fleet doctor --park` 单读；eligible 要满 60 秒 CPU 采样，非零的空闲看所列原因 |
+| `park-fresh` | node | [node-doctor] | 主版本不符或手动选择新对话：原话已带入新会话，旧记录保留；核对所列版本与 fresh 动作原因，不重复发送原话 |
+| `park-wake` | node | [node-doctor] | 连续接回失败已禁止自动停放：在原窗口查看失败原因，原话仍在；修好启动环境后手动重试，不强制清掉禁停标记 |
 | `park-reap` | node | [node-doctor] | 逐窗口的来源、停放/回收规则与下一步 UTC 时间；live 看唤醒/消息/草稿，no-history 先核对历史可接回，旧外壳不强制关闭 |
 | `peerlink` | node | [node-doctor] | 机器间链路：`fleet-peerlink.py status` |
 | `perl` | node | [mac-node-prep] | 装 Time::HiRes（不装也只是转圈按整秒） |
