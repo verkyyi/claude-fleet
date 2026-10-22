@@ -30,6 +30,51 @@ src = module('transfer_source', 'fleet_transfer_source.py')
 
 
 
+class BrokenHookMenu(unittest.TestCase):
+    screen = '''Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back
+'''
+
+    def test_only_exact_model_reminder_can_return_without_a_choice(self):
+        self.assertEqual(src.repair_model_menu(self.screen), self.screen.strip())
+        for screen in (self.screen.replace('esc back', 'esc quit'),
+                       self.screen.replace('2. Keep current model', '2. Approve command'),
+                       self.screen + '\n› unsent draft', 'Permission required\nenter select · esc back'):
+            self.assertIsNone(src.repair_model_menu(screen))
+
+    def test_cancel_is_once_then_fresh_empty_proof_or_retained_unknown(self):
+        import copy
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'receipt.json'
+            proof=dict(fid='fid',source=dict(pane='%2',session_id='sid'),
+                       input=dict(state='unknown',busy=True),model_menu=self.screen.strip(),
+                       birth=dict(pid=12),last_turn='original')
+            after=copy.deepcopy(proof);after.pop('model_menu');after['input']=dict(state='empty',busy=False)
+            with patch.object(src,'repair_check',side_effect=[proof,after]) as check, \
+                 patch.object(src,'run') as run:
+                self.assertEqual(src.repair_menu_cancel('test','%2','fid','sid',proof,path),after)
+                self.assertEqual(sum('Escape' in a.args[0] for a in run.call_args_list),1)
+                self.assertFalse(any('Enter' in a.args[0] for a in run.call_args_list))
+                self.assertEqual(check.call_args_list[-1].kwargs,{})
+            path.unlink()
+            with patch.object(src,'repair_check',side_effect=[proof,ValueError('input not empty')]), \
+                 patch.object(src,'run') as run:
+                with self.assertRaisesRegex(ValueError,'input not empty'):
+                    src.repair_menu_cancel('test','%2','fid','sid',proof,path)
+                self.assertEqual(json.loads(path.read_text())['state'],'cancelling')
+                self.assertEqual(sum('Escape' in a.args[0] for a in run.call_args_list),1)
+            with patch.object(src,'repair_check') as check,patch.object(src,'run') as run:
+                with self.assertRaisesRegex(ValueError,'attempted'):
+                    src.repair_menu_cancel('test','%2','fid','sid',proof,path)
+                check.assert_not_called();run.assert_not_called()
+
+
 class BrokenHookMaintenance(unittest.TestCase):
     def test_missing_hook_is_verified_from_native_argv(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,7 +153,8 @@ class BrokenHookMaintenance(unittest.TestCase):
             stack.enter_context(patch.object(src,'run',side_effect=lambda a,**k:{
                 '#{@fleet_id}':'fid','#{window_panes}':'1',
                 '#{@parked}#{@park_start}#{@agent_transfer_request}':'',
-                '#{@handoff_armed}':'','#{@agent_transfer_until}':''}[a[-1]]))
+                '#{@handoff_armed}':'','#{@agent_transfer_until}':'',
+                '%2':BrokenHookMenu.screen}[a[-1]]))
             stack.enter_context(patch.dict(src.TRANSFER,process_rows=lambda:{12:(1,'bash')}))
             stack.enter_context(patch.object(src.runpy,'run_path',side_effect=lambda p:{
                 'fleet_worker_life.py':{'ARGV':{'process_argv':lambda pid:flags}},
@@ -127,6 +173,12 @@ class BrokenHookMaintenance(unittest.TestCase):
             view.update(state='unknown',busy=True)
             with self.assertRaisesRegex(ValueError,'input.*empty'):
                 src.repair_check('test','%2','fid','sid')
+            menu_proof=src.repair_check('test','%2','fid','sid',allow_menu=True)
+            self.assertEqual(menu_proof['model_menu'],BrokenHookMenu.screen.strip())
+            quiet.side_effect=ValueError('active tool behind menu')
+            with self.assertRaisesRegex(ValueError,'active tool behind menu'):
+                src.repair_check('test','%2','fid','sid',allow_menu=True)
+            quiet.side_effect=None
             view.update(state='empty',busy=False);queue['data']=[{'id':'pending'}]
             with self.assertRaisesRegex(ValueError,'queued input'):
                 src.repair_check('test','%2','fid','sid')

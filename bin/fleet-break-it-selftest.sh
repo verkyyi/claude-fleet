@@ -460,6 +460,13 @@ drill_broken_hook_maintenance() {
   SECS=$(since "$started"); WHAT='same-SID maintenance proves missing hooks; paused original timer rejects unknown attempts'
 }
 
+drill_broken_hook_model_menu() {
+  local started; started=$(now); CAP=10
+  python3 "$BIN/fleet-transfer-source-selftest.py" BrokenHookMenu >"$WORK/broken-hook-model-menu.log" 2>&1 \
+    || { WHY='maintenance must return from the exact model reminder once, retaining unknown input'; return 1; }
+  SECS=$(since "$started"); WHAT='exact model reminder returns once; unknown input never exits or retries'
+}
+
 drill_session_exit() {
   CAP=5; local m rc head s=0 what=''
   while IFS='|' read -r m rc head; do

@@ -462,7 +462,49 @@ def native_hook_flags(source):
     return flags, children
 
 
-def repair_check(session, pane, fid, sid):
+def repair_model_menu(screen):
+    """A narrow native reminder with an explicit back action, never approval."""
+    lines = [s.strip() for s in screen.splitlines() if s.strip()]
+    if len(lines) < 6:
+        return None
+    tail = lines[-6:]
+    if (tail[0] == 'Approaching rate limits'
+            and re.fullmatch(r'Switch to [A-Za-z0-9_.-]+ for lower credit usage\?', tail[1])
+            and re.fullmatch(r'[›❯] 1\. Switch to [A-Za-z0-9_.-]+\s+Fast and affordable model for easier tasks\.', tail[2])
+            and tail[3] == '2. Keep current model'
+            and tail[4] == '3. Keep current model (never show again)  Hide future rate limit reminders about switching models'
+            and tail[5] == 'enter select · esc back'):
+        return screen.strip()
+    return None
+
+
+def repair_menu_cancel(session, pane, fid, sid, proof, receipt):
+    """One external back action, followed by an independent composer proof."""
+    if receipt.exists():
+        raise ValueError('model reminder return already attempted; no repeated keys')
+    if repair_check(session, pane, fid, sid, allow_menu=True) != proof:
+        raise ValueError('model reminder changed before return')
+    with receipt.open('x') as out:
+        os.chmod(receipt, 0o600)
+        json.dump(dict(state='cancelling', proof=proof), out)
+        out.flush(); os.fsync(out.fileno())
+    directory = os.open(receipt.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    run(['tmux', '-L', session, 'send-keys', '-t', proof['source']['pane'], 'Escape'],
+        env=dict(os.environ, FLEET_ALLOW_SENDKEYS='1'))
+    time.sleep(0.2)
+    after = repair_check(session, pane, fid, sid)
+    fixed = lambda value: {k:v for k,v in value.items() if k not in ('input', 'model_menu')}
+    if fixed(after) != fixed(proof):
+        raise ValueError('source changed while returning from model reminder')
+    save(receipt, dict(state='returned', proof=proof, after=after))
+    return after
+
+
+def repair_check(session, pane, fid, sid, allow_menu=False):
     source = inspect(session, pane)
     opt = lambda fmt: run(['tmux', '-L', session, 'display-message', '-p', '-t', source['pane'], fmt])
     if source['agent'] != 'codex' or source['session_id'] != sid or opt('#{@fleet_id}') != fid:
@@ -490,8 +532,12 @@ def repair_check(session, pane, fid, sid):
     if t.get('status', {}).get('type') != 'idle':
         raise ValueError('maintenance requires native idle')
     view = runpy.run_path(str(BIN / 'fleet-input.py'))['snapshot'](session, source['pane'], agent='codex')
+    menu = None
     if view.get('state') != 'empty' or view.get('busy'):
-        raise ValueError('maintenance input is not proven empty; source retained')
+        if allow_menu:
+            menu = repair_model_menu(run(['tmux', '-L', session, 'capture-pane', '-p', '-t', source['pane']]))
+        if not menu:
+            raise ValueError('maintenance input is not proven empty; source retained')
     rpc = RPC(source['codex_identity']['remote'], timeout=10)
     try:
         if rpc.initialized.get('codexHome') != source['home']:
@@ -519,10 +565,13 @@ def repair_check(session, pane, fid, sid):
         quiet_processes(source, rpc_timeout=30)
     except (TimeoutError, subprocess.TimeoutExpired):
         raise ValueError('maintenance strict process proof timed out; source retained') from None
-    return dict(source=source, fid=fid, birth=process(source['pid']), input=view,
+    result = dict(source=source, fid=fid, birth=process(source['pid']), input=view,
                 processes=[process(pid) for pid in children],
                 missing_hooks=sorted(missing), loop=loop,
                 last_turn=(t.get('turns') or [{}])[-1].get('id'))
+    if menu:
+        result['model_menu'] = menu
+    return result
 
 
 def repair_target_home(source):
@@ -587,12 +636,13 @@ def repair_hooks(session, pane, fid, sid, dry=False):
             old = json.loads(path.read_text())
             if old.get('proof', {}).get('fid') == fid and old.get('state') not in ('resumed', 'refused'):
                 raise ValueError('prior maintenance completion is unknown; inspect its receipt, never relaunch')
-        proof = repair_check(session, pane, fid, sid)
+        proof = repair_check(session, pane, fid, sid, allow_menu=True)
         source = proof['source']
         home = repair_target_home(source)
         if dry:
             print(json.dumps(dict(state='ready', fid=fid, sid=sid, missing_hooks=proof['missing_hooks'],
-                                  loop_id=(proof['loop'] or {}).get('before', {}).get('id'))))
+                                  loop_id=(proof['loop'] or {}).get('before', {}).get('id'),
+                                  action='return-model-reminder-then-revalidate' if proof.get('model_menu') else 'resume-same-thread')))
             return
         directory = Path(tempfile.mkdtemp(prefix='hook-repair-', dir=str(root)))
         save(directory/'receipt.json', dict(state='preparing', proof=proof))
@@ -604,9 +654,16 @@ def repair_hooks(session, pane, fid, sid, dry=False):
             for name, argv in [('unstaged.patch',['diff','--binary']), ('index.patch',['diff','--cached','--binary']),
                                ('git-state.txt',['status','--porcelain=v1','--branch'])]:
                 (directory/name).write_text(run(['git','-C',source['worktree'],*argv])+'\n')
-            fresh = repair_check(session, pane, fid, sid)
+            fresh = repair_check(session, pane, fid, sid, allow_menu=True)
             if fresh != proof or repair_target_home(source) != home:
                 raise ValueError('maintenance source changed during preparation')
+            if proof.get('model_menu'):
+                stage = 'returning-model-menu'
+                save(directory/'receipt.json', dict(state=stage, proof=proof))
+                proof = repair_menu_cancel(session, pane, fid, sid, proof, directory/'model-menu-return.json')
+                source = proof['source']
+                if Path(source['transcript']).read_bytes() != before or repair_target_home(source) != home:
+                    raise ValueError('source transcript/account changed during model reminder return')
             tm = lambda *a: run(['tmux','-L',session,*a])
             stage = 'exiting'
             save(directory/'receipt.json', dict(state=stage, proof=proof))

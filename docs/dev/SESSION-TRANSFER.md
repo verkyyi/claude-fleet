@@ -730,6 +730,16 @@ a proven empty composer, no pending durable admission and the existing strict
 process/MCP restartability proof. Unknown input is refused and kept unchanged.
 The normal target-auth check still runs against the verified account home.
 
+One specific native obstruction can be returned from externally: the complete
+`Approaching rate limits` model reminder with its three model choices and
+`enter select · esc back` footer. The same native idle, queue, process and auth
+checks must pass before any key. Dry-run reports this extra action explicitly.
+After freezing private evidence and repeating the exact reminder proof, the
+controller writes a receipt and sends **one Escape**, selecting no model. It
+then requires a fresh empty composer and unchanged native identity/transcript
+before `/exit`. A revealed draft or unknown result is retained and blocks
+another attempt; a blank screen alone is never an input export.
+
 Maintenance holds the worktree transition lock, preservation lease and FID
 message-admission lock. It privately freezes the exact transcript, input proof
 and tracked diffs; repeats all source checks; sends the normal native `/exit`
