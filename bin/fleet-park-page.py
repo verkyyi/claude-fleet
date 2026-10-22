@@ -94,7 +94,8 @@ def editor(screen, draft, failed):
     pane = os.environ['TMUX_PANE']
     old = termios.tcgetattr(0)
     last_poll = 0
-    last_presence = 0
+    # Zero is a valid monotonic origin (macOS Python 3.9), not a prior input.
+    last_presence = None
     size = None
     try:
         tty.setraw(0, termios.TCSANOW)
@@ -139,7 +140,7 @@ def editor(screen, draft, failed):
                 save(draft, words)
                 paint(screen, words, failed, pos)
                 continue
-            if time.monotonic() - last_presence >= 30:
+            if last_presence is None or time.monotonic() - last_presence >= 30:
                 last_presence = time.monotonic()
                 gate.tmux('', 'set-option', '-w', '-t', pane, '@park_presence', str(int(time.time())))
             if not pasted and (char in ('\r', '\n') or (failed and char in ('r', 'n'))):

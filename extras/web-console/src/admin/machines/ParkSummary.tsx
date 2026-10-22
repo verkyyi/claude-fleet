@@ -40,7 +40,9 @@ export function ParkSummary({ reading: r, lang }: { reading: ParkReading; lang: 
       <span className={r.sessions_idle > 0 ? "text-warn" : "text-muted-foreground"}>
         {zh ? `空闲常驻 ${r.sessions_idle}` : `${r.sessions_idle} idle in memory`}
         {` · ${eligible}`}
-        {r.sessions_idle > 0 && <small className="block text-sm">{rss} · {why || (zh ? "原因未报" : "reason unavailable")}</small>}
+        {(r.sessions_idle > 0 || why) && <small className="block text-sm">
+          {r.sessions_idle > 0 && `${rss} · `}{why || (zh ? "原因未报" : "reason unavailable")}
+        </small>}
       </span>
     </div>
   );

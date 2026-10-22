@@ -74,20 +74,22 @@ def maybe_start(gate, w, rows):
     """Called under the delivery lock, before any further words can be sent."""
     if w is None or w["agent"] != "claude" or not w["sid"]:
         return
+    pending = [r for r in rows if r.get("state") in ("trying", "native", "waking")]
+    dialog = native_quota_dialog(w)
+    boundary = dialog or w["state"] == "done" or (w["state"] == "exited" and w["word"] == "error")
     old = receipt(gate, w["fid"])
-    # The preceding release recorded needs as a boundary refusal without ever
-    # starting a controller. That source can use this newly proved boundary;
-    # an attempted/uncertain controller result is still terminal and never retried.
-    newly_supported = (old and old.get('state') == 'blocked' and old.get('why') == 'boundary'
-                       and native_quota_dialog(w))
+    # Only these two refusals precede *any* controller launch. A later native
+    # cancellation or settled delivery may provide a candidate worth proving.
+    # Attempted/uncertain controllers never use this road, even if state changes.
+    newly_supported = (old and old.get('state') == 'blocked'
+                       and old.get('why') in ('boundary', 'delivery_unsettled')
+                       and boundary and not pending and not w['parked']
+                       and (dialog or not gate.busy_of(w)))
     if old and old.get("source_session") == w["sid"] and old.get("state") != "waiting" and not newly_supported:
         return
     signal = quota_error(gate.claude_transcript(w["sid"]), w["sid"])
     if not signal:
         return
-    pending = [r for r in rows if r.get("state") in ("trying", "native", "waking")]
-    dialog = native_quota_dialog(w)
-    boundary = dialog or w["state"] == "done" or (w["state"] == "exited" and w["word"] == "error")
     why = "delivery_unsettled" if pending else "boundary" if (gate.busy_of(w) and not dialog) or w["parked"] or not boundary else ""
     same = old if old and old.get("source_session") == w["sid"] and not newly_supported else {}
     waiting = why == "boundary" and not w["parked"] and gate.busy_of(w) != "asking" and gate.now() - same.get("at", gate.now()) < 30

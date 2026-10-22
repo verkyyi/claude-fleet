@@ -25,11 +25,15 @@ assert.equal((en.match(/<span/g) || []).length, 3);
 assert.match(en, /flex-col.*sm:flex-row sm:flex-wrap/);
 assert.doesNotMatch(draw({ ...r, sessions_parked: 0 }), /已停放|省/);
 for (const lang of ['zh', 'en']) {
- const idle = draw({ ...r, sessions_idle: 3, idle_rss_mb: 1024, idle_eligible: 1, idle_eligible_rss_mb: 256, idle_reasons: { watched: 1, background: 1 } }, lang);
+ const idle = draw({ ...r, sessions_idle: 1, idle_rss_mb: 1024, idle_eligible: 1, idle_eligible_rss_mb: 1024, idle_reasons: { watched: 1, background: 1 } }, lang);
  assert.match(idle, /1.0 GB/);
- assert.ok(idle.includes(lang === 'zh' ? '空闲常驻 3 · 可停空闲 1' : '3 idle in memory · 1 eligible to park'));
+ assert.ok(idle.includes(lang === 'zh' ? '空闲常驻 1 · 可停空闲 1' : '1 idle in memory · 1 eligible to park'));
  assert.match(idle, /block/); // Reasons have their own line.
  assert.ok(idle.includes(lang === 'zh' ? '有人在看着 1 · 跑着后台命令 1' : 'being viewed 1 · background job 1'));
+ const excluded = draw({ ...r, idle_reasons: { watched: 1, background: 1 } }, lang);
+ assert.ok(excluded.includes(lang === 'zh' ? '空闲常驻 0' : '0 idle in memory'));
+ assert.ok(excluded.includes(lang === 'zh' ? '有人在看着 1 · 跑着后台命令 1' : 'being viewed 1 · background job 1'));
+ assert.doesNotMatch(excluded, /0\.0 GB/); // Excluded sessions do not supply idle RSS.
 }
 assert.match(draw({ ...r, sessions_idle: 1, idle_rss_mb: null }), /内存读不到/);
 for (const lang of ['zh', 'en']) {
