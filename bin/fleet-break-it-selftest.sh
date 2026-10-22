@@ -6473,6 +6473,16 @@ drill_park_reap_admission() {
   WHAT='普通/停放/无仓库关窗与消息准入共用身份锁；关闭先赢则拒绝对旧窗口的准入'
 }
 
+drill_park_web_probe_old_api() {
+  CAP=30; local t0
+  t0=$(now)
+  webchat_part probe-contract "P old resident refuses probe without spawning ordinary web" \
+    "P explicit probe route preserves ownership through the official spawner" \
+    "P ordinary web retains its existing source" || return 1
+  SECS=$(since "$t0")
+  WHAT='健康旧驻留服务不识别probe路由时拒绝且零创建；新服务同一创建入口验证父身份，普通web不扩收'
+}
+
 drill_park_web_owned_probe() {
   CAP=60; local t0 out
   t0=$(now)
