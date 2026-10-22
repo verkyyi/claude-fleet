@@ -18,6 +18,10 @@
 #      service's shell (`fleet-webchat.sh serve`, PPID init, our uid) ⇒ both
 #      stopped, exit 0, the socket answers no more
 #   I  the same with a shell that is not the service's ⇒ left alone, exit 3
+#   J  (task WD8F) --busy: an orphan that says it is busy over its own socket
+#      (GET /api/busy → {"busy": true}) is let finish first — stopped once it says
+#      false, the line says it waited; FLEET_SERVICE_TAKEOVER_BUSY_SECS caps it
+#   K  an orphan that cannot say (404 on every --busy path) is stopped at once
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -155,5 +159,68 @@ alive "$HP" || fail "I: the holder was stopped"; st_count
 alive "$SP" || fail "I: the shell was stopped"; st_count
 has "I: …named, not the service's" "不是本服务的孤儿" "$out"
 kill -9 "$HP" "$SP" 2>/dev/null
+
+# ------------------------------------------------------------------------- J ----
+# an HTTP holder: GET /api/busy answers {"busy": <the flag file is there>}, else 404
+cat > "$WORK/hb.py" <<'PY'
+import json, os, signal, socket, sys
+signal.alarm(60)
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
+open(sys.argv[2], "w").write("%d\n" % os.getpid())
+while True:
+    c, _ = s.accept()
+    try:  # a bare connect (is anyone there?) sends nothing and is gone
+        req = c.recv(4096).decode("latin-1")
+        path = req.split(" ")[1] if " " in req else ""
+        if path == "/api/busy" and sys.argv[4] == "say":
+            body = json.dumps({"busy": os.path.exists(sys.argv[3])}).encode()
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        elif req:
+            c.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+    except OSError:
+        pass
+    c.close()
+PY
+busy_holder() { # <say|mute> — an orphan of the service answering HTTP on the socket
+  rm -f "$SOCK" "$PIDF"
+  ( python3 "$WORK/hb.py" "$SOCK" "$PIDF" "$WORK/busy.flag" "$1" /old/extras/web-chat/server.mjs --socket </dev/null >/dev/null 2>&1 & )
+  wait_pid; HP=$(cat "$PIDF"); PIDS+=("$HP")
+  REAPER=$(ps -o ppid= -p "$HP" | tr -d ' ')
+}
+tkb() { FLEET_SERVICE_TAKEOVER_WAIT=2 FLEET_SERVICE_TAKEOVER_REAPER=${REAPER:-1} FLEET_SERVICE_TAKEOVER_BUSY_SECS=${BUSY:-30} \
+        python3 -I "$TK" --name webchat --socket "$SOCK" --pidfile "$PIDF" --match extras/web-chat/server.mjs --match --socket \
+        --busy /api/busy --busy /api/state; }
+touch "$WORK/busy.flag"
+busy_holder say
+( sleep 3; rm -f "$WORK/busy.flag" ) &
+t0=$(date +%s)
+out=$(tkb 2>&1); rc=$?
+dt=$(( $(date +%s) - t0 ))
+[ "$rc" = 0 ] || fail "J: a busy orphan is taken over once idle: exit 0 (got $rc)" "$out"; st_count
+[ "$dt" -ge 3 ] || fail "J: it did not wait for the turn (${dt}s)" "$out"; st_count
+alive "$HP" && fail "J: the orphan still runs"; st_count
+has "J: the line says it waited" "等旧副本答完手上那一轮" "$out"
+has "J: …then what it stopped" "停掉了旧孤儿（pid $HP · " "$out"
+# the cap: busy for good ⇒ stopped after FLEET_SERVICE_TAKEOVER_BUSY_SECS
+touch "$WORK/busy.flag"
+busy_holder say
+t0=$(date +%s)
+out=$(BUSY=2 tkb 2>&1); rc=$?
+dt=$(( $(date +%s) - t0 ))
+eq "J: busy past the cap: exit 0" 0 "$rc"
+[ "$dt" -lt 12 ] || fail "J: the busy wait was not capped (${dt}s)"; st_count
+alive "$HP" && fail "J: the capped orphan still runs"; st_count
+has "J: the cap is said" "不再等" "$out"
+rm -f "$WORK/busy.flag"
+
+# ------------------------------------------------------------------------- K ----
+busy_holder mute
+t0=$(date +%s)
+out=$(tkb 2>&1); rc=$?
+dt=$(( $(date +%s) - t0 ))
+eq "K: an orphan that cannot say: exit 0" 0 "$rc"
+[ "$dt" -lt 5 ] || fail "K: it waited on an orphan that cannot say (${dt}s)"; st_count
+alive "$HP" && fail "K: it still runs"; st_count
+case "$out" in *等旧副本*) fail "K: it said it waited" "$out" ;; esac; st_count
 
 echo "fleet-service-takeover-selftest: PASS ($CHECKS checks)"

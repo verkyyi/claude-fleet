@@ -140,9 +140,11 @@ serve() { # the service's command: the socket, in the foreground
   # an old orphan of this service still answering on the socket (a release switch
   # left it, PPID 1) is stopped first — or one whose `fleet-webchat.sh serve` shell
   # init adopted, its node child still on the socket (CVC4); anything else
-  # holding it is named, rc 3 (BZGP)
+  # holding it is named, rc 3 (BZGP). One still answering a turn is let finish
+  # it first, at most FLEET_SERVICE_TAKEOVER_BUSY_SECS (task WD8F)
   python3 -I "$BIN/fleet-service-takeover.py" --name webchat --socket "$STATE/chat.sock" --pidfile "$STATE/pid" \
-    --match extras/web-chat/server.mjs --match --socket --shell-match fleet-webchat.sh --shell-match serve || exit 3
+    --match extras/web-chat/server.mjs --match --socket --shell-match fleet-webchat.sh --shell-match serve \
+    --busy /api/busy --busy /api/state || exit 3
   server_env "$NODE" "$APP/server.mjs" --socket
 }
 

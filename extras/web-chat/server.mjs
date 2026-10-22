@@ -435,6 +435,22 @@ async function sendLinked(req, res, ref) {
 
 // ---- transcripts → the page's items ------------------------------------------
 const SEED_RE = /^<fleet-webchat-relay>[\s\S]*?<\/fleet-webchat-relay>\s*/;
+// Claude Code tells the agent about a background task with a user line of its own
+// (<task-notification>…, origin.kind task-notification) and answers some of them
+// with a synthetic «No response requested.» — neither is the person's or the
+// assistant's words (task WD8F): the notice is one quiet line, the filler none.
+const TASK_NOTE_RE = /^\s*<task-notification>/;
+const noReply = (m) => m.message?.model === "<synthetic>" && blocks(m.message?.content).every((b) => b.type === "text" && /^\s*No response requested\.?\s*$/.test(b.text || ""));
+function taskNote(text) {
+  const tag = (k) => (text.match(new RegExp(`<${k}>([\\s\\S]*?)</${k}>`)) || [])[1]?.trim() || "";
+  const status = tag("status"), summary = tag("summary");
+  const say = /previous session ended/i.test(summary) ? "后台命令没跑完：上一轮回复中途被打断了"
+    : status === "completed" ? "后台任务跑完了"
+    : status === "failed" ? "后台任务失败了"
+    : status === "killed" || status === "stopped" ? "后台任务停了"
+    : "后台任务有了新进展";
+  return { t: "note", kind: "task", text: say };
+}
 function blocks(content) { return typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : []; }
 function resultText(c) {
   const t = typeof c === "string" ? c : blocks(c).map((b) => b.text || "").join("\n");
@@ -463,6 +479,8 @@ function linesItems(lines, cwd) {
     // the person's own pictures ride on their line (the first text of the message)
     let pics = m.type === "user" ? imageItems(m.message?.content).filter((g) => g.ref).map(({ ref, w, h }) => ({ ref, w, h })) : [];
     for (const b of blocks(m.message?.content)) {
+      if (m.type === "user" && b.type === "text" && b.text && TASK_NOTE_RE.test(b.text)) { out.push(taskNote(b.text)); continue; }
+      if (m.type === "assistant" && noReply(m)) break;
       if (m.type === "user" && b.type === "text" && b.text && !/^\s*<(command|local-command|system-reminder)/.test(b.text)) {
         const text = b.text.replace(SEED_RE, "").replace(CTX_RE, "").replace(NOTE_RE, "");
         if (text || pics.length) out.push({ t: "user", text, ...(pics.length ? { images: pics } : {}) });
@@ -921,20 +939,25 @@ function restoreSessions(old, home) {
 }
 carryIn();
 let live = null;          // the running turn: { tid, ac, listeners, asks, model }
+const aside = new Set();  // turns 新对话 put aside mid-answer, answering on (task WD8F)
 let maint = null;         // a compact / relay between turns (the next turn waits for it)
+// a turn left open in the file is one the service did not see end — it was
+// stopped mid-answer (a takeover, a restart, task WD8F): said once on the page
+if (conv.open) { conv.interrupted = { ...conv.open }; delete conv.open; saveConv(); }
 let ridSeq = 0;
 
-// the context's size, off every message of a query
-function account(m) {
+// the context's size, off every message of a query — on the conversation the
+// query belongs to (a turn left running by 新对话 keeps its own, task WD8F)
+function account(m, c = conv) {
   if (m.type === "assistant" && m.message?.usage) {
     const u = m.message.usage;
-    conv.ctx.used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    c.ctx.used = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
   }
   if (m.type === "result") {
-    for (const mu of Object.values(m.modelUsage || {})) if (mu?.contextWindow) conv.ctx.window = mu.contextWindow;
+    for (const mu of Object.values(m.modelUsage || {})) if (mu?.contextWindow) c.ctx.window = mu.contextWindow;
   }
   if (m.type === "system" && m.subtype === "compact_boundary") {
-    conv.ctx.used = m.compact_metadata?.post_tokens || 0;
+    c.ctx.used = m.compact_metadata?.post_tokens || 0;
     log("compacted", { trigger: m.compact_metadata?.trigger, pre: m.compact_metadata?.pre_tokens });
   }
 }
@@ -942,7 +965,7 @@ function account(m) {
 // One query() through the conversation's session credential; onMsg sees every SDK message.
 // A prompt that is content blocks (pictures with the words, task T773 ③) goes in as
 // the one user message of an input stream — query() takes a string or a stream.
-async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers }, onMsg) {
+async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers, c = conv }, onMsg) {
   if (Array.isArray(prompt)) {
     const one = inputStream();
     one.push({ type: "user", message: { role: "user", content: prompt }, parent_tool_use_id: null, session_id: resume || "" });
@@ -961,8 +984,8 @@ async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers
       stderr: () => {},                    // the child's stderr is never relayed or logged
     } });
     for await (const m of q) {
-      if (m.session_id && !resume && !conv.session) { conv.session = m.session_id; conv.cwd = cwd; saveConv(); }
-      account(m);
+      if (m.session_id && !resume && !c.session) { c.session = m.session_id; c.cwd = cwd; saveConv(); }
+      account(m, c);
       onMsg(m);
     }
   } catch (e) {
@@ -1003,9 +1026,8 @@ function inputStream() {
     },
   };
 }
-function closeWarm(why) {
-  const w = warm;
-  warm = null;
+function closeWarm(why, w = warm) {
+  if (warm === w) warm = null;
   if (!w || w.closed) return;
   w.closed = true;
   clearTimeout(w.idle);
@@ -1013,11 +1035,11 @@ function closeWarm(why) {
   w.input.end();
   w.ac.abort();
 }
-async function openWarm({ model, cwd, resume }) {
+async function openWarm({ model, cwd, resume, c = conv }) {
   const S = await sdk();
   const cred = await credFor();
   const w = { input: inputStream(), ac: new AbortController(), cwd, resume: resume || "", session: resume || "", model,
-    cur: null, details: null, canUse: null, idle: null, closed: false };
+    cur: null, details: null, canUse: null, idle: null, closed: false, conv: c };
   w.q = S.query({ prompt: w.input, options: {
     cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
     ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources],
@@ -1032,13 +1054,18 @@ async function openWarm({ model, cwd, resume }) {
       for await (const m of w.q) {
         if (m.session_id && !w.session) {
           w.session = m.session_id;
-          if (!conv.session) { conv.session = m.session_id; conv.cwd = cwd; saveConv(); }
+          if (!w.conv.session) { w.conv.session = m.session_id; w.conv.cwd = cwd; saveConv(); }
         }
-        account(m);
+        account(m, w.conv);
         const c = w.cur;
         if (!c) continue;
-        try { c.onMsg(m); } catch (e) { w.cur = null; c.reject(e); closeWarm("turn error"); return; }
-        if (m.type === "result") { w.cur = null; c.resolve(); w.idle = setTimeout(() => { if (warm === w && !w.cur) closeWarm("idle"); }, WARM_IDLE_MS); }
+        try { c.onMsg(m); } catch (e) { w.cur = null; c.reject(e); closeWarm("turn error", w); return; }
+        if (m.type === "result") {
+          w.cur = null; c.resolve();
+          // a turn 新对话 left running (task WD8F) has no next turn here: it goes with its answer
+          if (warm !== w) { closeWarm("left running, done", w); return; }
+          w.idle = setTimeout(() => { if (warm === w && !w.cur) closeWarm("idle"); }, WARM_IDLE_MS);
+        }
       }
       throw new Error("the agent ended");
     } catch (e) {
@@ -1046,7 +1073,7 @@ async function openWarm({ model, cwd, resume }) {
       w.cur = null;
       c?.reject(e);
     } finally {
-      if (warm === w) closeWarm("ended");
+      closeWarm("ended", w);
     }
   })();
   return w;
@@ -1062,9 +1089,9 @@ function prewarm() {
 }
 // One turn on the warm agent (runQuery's contract: onMsg sees every message of
 // this turn; resolves on its result, throws on an error or the stop key).
-async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details }, onMsg) {
+async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details, c = conv }, onMsg) {
   lastModel = model;
-  if (!WARM_IDLE_MS) return runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers: await chatTools(await sdk(), details) }, onMsg);
+  if (!WARM_IDLE_MS) return runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers: await chatTools(await sdk(), details), c }, onMsg);
   if (warmOpening) await warmOpening;
   let w = warm;
   if (w && (w.closed || w.cur || w.cwd !== cwd || w.session !== (resume || ""))) { closeWarm("other session"); w = null; }
@@ -1074,7 +1101,10 @@ async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details }
     } else { closeWarm("model"); w = null; }
   }
   try {
-    if (!w) warm = w = await openWarm({ model, cwd, resume });
+    if (!w) {
+      w = await openWarm({ model, cwd, resume, c });
+      if (c === conv) warm = w;                          // put aside while it opened: it is that turn's alone
+    }
   } catch (e) {
     if (!e?.budget) await dropCred("agent failed to start");
     throw e;
@@ -1082,7 +1112,7 @@ async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details }
   clearTimeout(w.idle);
   w.details = details || null;
   w.canUse = canUseTool;
-  const stop = () => { if (warm === w) closeWarm("stopped"); };
+  const stop = () => closeWarm("stopped", w);
   ac.signal.addEventListener("abort", stop, { once: true });
   try {
     await new Promise((resolve, reject) => {
@@ -1289,10 +1319,10 @@ async function chatTools(S, details) {
 const TOO_LONG = /prompt is too long|context (?:window|length)|too many tokens/i;
 
 // ---- a turn: NDJSON lines to every page that is watching ----------------------
-function emitAll(o) {
-  if (!live) return;
+function emitAll(o, t = live) {
+  if (!t) return;
   const line = redact(JSON.stringify(o), [...liveCreds, ADMIN]) + "\n";
-  for (const res of live.listeners) if (!res.writableEnded) res.write(line);
+  for (const res of t.listeners) if (!res.writableEnded) res.write(line);
 }
 function askEvent(rid, a) {
   const id = a.toolUseID ? { id: a.toolUseID } : {};      // the tool step it gates (the page hangs it there)
@@ -1340,36 +1370,46 @@ async function turn(req, res, person) {
   const details = browser || place.ip ? contextDetails(browser, place) : null;
 
   const tid = newSecret(9);
-  live = { tid, ac: new AbortController(), listeners: new Set([res]), asks: new Map(), model };
+  // t / c: this turn and its conversation — 新对话 may put both aside while the
+  // turn runs (task WD8F): it then answers on into the conversation put away
+  const t = live = { tid, ac: new AbortController(), listeners: new Set([res]), asks: new Map(), model };
+  const c = conv;
+  const emit = (o) => emitAll(o, t);
+  // a turn the service did not see end (stopped mid-answer: a takeover, a
+  // restart) is said on the next start, with its words for 重试 (task WD8F)
+  delete c.interrupted;
+  c.open = { tid, text: text.slice(0, 4000), pics: images.length, at: new Date().toISOString() };
+  saveConv();
   res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store",
     "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff" });
   // a page that goes away (a phone in a pocket) does not stop the turn — only the stop key does
-  res.on("close", () => live?.listeners.delete(res));
-  emitAll({ t: "turn", id: tid, model });
+  res.on("close", () => t.listeners.delete(res));
+  emit({ t: "turn", id: tid, model });
   log("turn", { person, model });
 
   // In bypass (lib.mjs PERMISSIONS) this is reached for AskUserQuestion — the
   // card the person picks from; any other tool runs without asking.
   const canUseTool = (name, input, opts = {}) => new Promise((resolve) => {
     const rid = `r${++ridSeq}-${newSecret(6)}`;
-    const t = live;
+    // nobody is left to answer a turn put aside by 新对话
+    if (t.aside) return resolve({ behavior: "deny", message: "the person started a new conversation" });
     const done = (v) => { clearTimeout(timer); t.asks.delete(rid); resolve(v); };
     const timer = setTimeout(() => done({ behavior: "deny", message: "no answer from the web page in time" }), ASK_TIMEOUT_MS);
     t.asks.set(rid, { name, input, done, toolUseID: typeof opts.toolUseID === "string" ? opts.toolUseID : "" });
     opts.signal?.addEventListener?.("abort", () => done({ behavior: "deny", message: "aborted" }));
-    emitAll(askEvent(rid, t.asks.get(rid)));
+    emit(askEvent(rid, t.asks.get(rid)));
   });
 
   let sawDelta = false;
   let shown = 0;                                          // this turn's images, IMAGES_PER_REPLY at most
   const emitImages = (list, extra) => {
-    for (const it of imageItems(list, extra)) emitAll(++shown > IMAGES_PER_REPLY ? { t: "image_more", n: 1 } : it);
+    for (const it of imageItems(list, extra)) emit(++shown > IMAGES_PER_REPLY ? { t: "image_more", n: 1 } : it);
   };
   const onMsg = (m) => {
-    if (m.type === "system" && m.subtype === "init") return emitAll({ t: "session", id: m.session_id, cwd: conv.cwd });
+    if (m.type === "system" && m.subtype === "init") return emit({ t: "session", id: m.session_id, cwd: c.cwd });
     if (m.type === "stream_event") {
       const ev = m.event || {};
-      if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") { sawDelta = true; emitAll({ t: "text", d: ev.delta.text }); }
+      if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") { sawDelta = true; emit({ t: "text", d: ev.delta.text }); }
       return;
     }
     if (m.type === "assistant" || m.type === "result") {
@@ -1380,16 +1420,18 @@ async function turn(req, res, person) {
     }
     if (m.type === "assistant") {
       // its text already went out as deltas when the partial stream carried them
+      // Claude Code's own filler for a background task's notice is no reply (task WD8F)
+      if (noReply(m)) return;
       for (const b of blocks(m.message?.content)) {
-        if (b.type === "text" && b.text && !sawDelta) emitAll({ t: "text", d: b.text });
+        if (b.type === "text" && b.text && !sawDelta) emit({ t: "text", d: b.text });
         if (b.type === "tool_use") {
-          emitAll({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
-          if (b.name === SHOW_PAGE) emitAll(pageItem(b.id, b.input, conv.cwd || CWD));
+          emit({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
+          if (b.name === SHOW_PAGE) emit(pageItem(b.id, b.input, c.cwd || CWD));
         }
         if (b.type === "image") emitImages([b]);
         if (b.type === "text" && b.text) {
-          const files = filesOf(b.text, conv.cwd || CWD);
-          if (files) { emitAll({ t: "files", files }); saveRefs(); }
+          const files = filesOf(b.text, c.cwd || CWD);
+          if (files) { emit({ t: "files", files }); saveRefs(); }
         }
       }
       sawDelta = false;
@@ -1398,7 +1440,7 @@ async function turn(req, res, person) {
     if (m.type === "user") {
       for (const b of blocks(m.message?.content)) {
         if (b.type === "tool_result") {
-          emitAll({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
+          emit({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
           emitImages(b.content, { id: b.tool_use_id });
         }
       }
@@ -1407,31 +1449,31 @@ async function turn(req, res, person) {
     if (m.type === "result") {
       if (m.subtype !== "success" && TOO_LONG.test(JSON.stringify(m.errors || m.result || ""))) throw Object.assign(new Error("too long"), { tooLong: true });
       if (m.subtype === "success" && !m.is_error && budget) setBudget(null);
-      emitAll({ t: "done", subtype: m.subtype, ms: m.duration_ms });
+      emit({ t: "done", subtype: m.subtype, ms: m.duration_ms });
     }
   };
 
   try {
     if (maint) await maint;
     for (let attempt = 0; ; attempt++) {
-      const seed = conv.session ? "" : conv.seed;
+      const seed = c.session ? "" : c.seed;
       // the one-line context goes in on a session's first turn and again only when it changed
-      const head = where && (!conv.session || conv.ctxKey !== where.key) ? contextBlock(where.line) : "";
+      const head = where && (!c.session || c.ctxKey !== where.key) ? contextBlock(where.line) : "";
       try {
         // how a web page's person sees things (task T773): once in each session
-        const note = conv.note !== WEB_NOTE_V || !conv.session ? webNoteBlock() : "";
+        const note = c.note !== WEB_NOTE_V || !c.session ? webNoteBlock() : "";
         const words = seed + head + note + text;
-        await warmQuery(images.length ? [...images, ...(words ? [{ type: "text", text: words }] : [])] : words, { model, resume: conv.session, cwd: conv.session ? conv.cwd : CWD, ac: live.ac,
-          canUseTool, details }, onMsg);
-        if (seed) conv.seed = "";
-        if (head) conv.ctxKey = where.key;
-        if (note) conv.note = WEB_NOTE_V;
-        const handed = !!conv.handed;                     // said once: the first turn here ends it
-        if (handed) delete conv.handed;
+        await warmQuery(images.length ? [...images, ...(words ? [{ type: "text", text: words }] : [])] : words, { model, resume: c.session, cwd: c.session ? c.cwd : CWD, ac: t.ac,
+          canUseTool, details, c }, onMsg);
+        if (seed) c.seed = "";
+        if (head) c.ctxKey = where.key;
+        if (note) c.note = WEB_NOTE_V;
+        const handed = !!c.handed;                        // said once: the first turn here ends it
+        if (handed) delete c.handed;
         if (seed || head || note || handed) saveConv();
         break;
       } catch (e) {
-        if (attempt === 0 && !live.ac.signal.aborted && (e.tooLong || TOO_LONG.test(String(e?.message || e)))) {
+        if (attempt === 0 && !t.ac.signal.aborted && !t.aside && (e.tooLong || TOO_LONG.test(String(e?.message || e)))) {
           await maintain("too long");
           continue;
         }
@@ -1440,25 +1482,33 @@ async function turn(req, res, person) {
     }
   } catch (e) {
     const b = e?.budget || budgetRefusal([String(e?.message || "")]);
-    if (b && !live.ac.signal.aborted) {
+    if (b && !t.ac.signal.aborted) {
       setBudget({ msg: b.msg, ...(b.until ? { until: b.until } : {}), at: new Date().toISOString() });
-      emitAll({ t: "error", code: "budget", msg: b.msg, ...(b.until ? { until: b.until } : {}) });
+      emit({ t: "error", code: "budget", msg: b.msg, ...(b.until ? { until: b.until } : {}) });
       log("budget", { person, until: b.until || "" });
     } else {
-      emitAll(live.ac.signal.aborted ? { t: "stopped" } : { t: "error", msg: String(e?.message || e).slice(0, 500) });
+      emit(t.ac.signal.aborted ? { t: "stopped" } : { t: "error", msg: String(e?.message || e).slice(0, 500) });
       log("turn_error", { msg: String(e?.message || e).slice(0, 300) });
     }
   } finally {
-    for (const a of [...live.asks.values()]) a.done({ behavior: "deny", message: "turn ended" });
-    const ls = live.listeners;
-    live = null;
-    for (const r of ls) if (!r.writableEnded) r.end();
-    conv.last = tid;                                     // the page's 「new reply」 mark (task R9A2)
-    saveConv();
-    log("turn_end", { session: conv.session, used: conv.ctx.used, window: conv.ctx.window });
-    carryOut();
+    for (const a of [...t.asks.values()]) a.done({ behavior: "deny", message: "turn ended" });
+    if (live === t) live = null;
+    aside.delete(t);
+    for (const r of t.listeners) if (!r.writableEnded) r.end();
+    if (!stopping) delete c.open;                        // the service going: the next start says so
+    if (t.aside) {
+      // put away mid-answer: its entry in put_away learns the session it ended in
+      if (t.aside.entry) Object.assign(t.aside.entry, { session: c.session, cwd: c.cwd, chain: c.chain });
+      saveConv();
+      log("turn_end", { session: c.session, aside: true });
+    } else {
+      c.last = tid;                                      // the page's 「new reply」 mark (task R9A2)
+      saveConv();
+      log("turn_end", { session: c.session, used: c.ctx.used, window: c.ctx.window });
+      carryOut();
+      if (c === conv && c.session && c.ctx.window && c.ctx.used >= COMPACT_AT * c.ctx.window) maintain("near full");
+    }
     touch();
-    if (conv.session && conv.ctx.window && conv.ctx.used >= COMPACT_AT * conv.ctx.window) maintain("near full");
   }
 }
 
@@ -1543,14 +1593,27 @@ async function codexTurn(req, res, person) {
   return codex.turn(res, { text: tb.text, model, images: tb.images, person });
 }
 // 新对话 on the Claude side: the session (and its chain) put away, kept; the next
-// turn starts a new one. The Codex side is not touched.
+// turn starts a new one. The Codex side is not touched. A turn still answering
+// is put aside, not stopped (task WD8F): it answers on into the conversation put
+// away (its own warm agent, closed after its answer) and the new one is free at once.
 function newClaude() {
-  if (live || maint) return false;
-  if (conv.session || conv.chain.length) conv.put_away = [...(conv.put_away || []), { session: conv.session, cwd: conv.cwd, chain: conv.chain, at: new Date().toISOString() }].slice(-200);
-  closeWarm("new conversation");
-  Object.assign(conv, { session: "", chain: [], seed: "", ctx: { used: 0, window: 0 }, ctxKey: "", note: "", last: "" });
+  if (maint) return false;
+  const old = conv, t = live;
+  const entry = old.session || old.chain.length || t ? { session: old.session, cwd: old.cwd, chain: old.chain, at: new Date().toISOString() } : null;
+  conv = { ...old, session: "", chain: [], seed: "", ctx: { used: 0, window: 0 }, ctxKey: "", note: "", last: "",
+    put_away: entry ? [...(old.put_away || []), entry].slice(-200) : old.put_away || [] };
+  delete conv.open;
+  delete conv.interrupted;
+  if (t) {
+    t.aside = { entry };
+    aside.add(t);
+    live = null;
+    for (const a of [...t.asks.values()]) a.done({ behavior: "deny", message: "the person started a new conversation" });
+    if (warm) warm = null;                               // its agent goes on carrying that turn, then closes
+    log("turn_aside", { session: old.session });
+  } else closeWarm("new conversation");
   saveConv();
-  log("new_conversation", { provider: "claude" });
+  log("new_conversation", { provider: "claude", aside: !!t });
   return true;
 }
 
@@ -1633,7 +1696,7 @@ async function handle(req, res) {
       return send(res, r.rc === 3 ? 409 : 500, { error: said || "could not take it over", ...(r.rc === 3 ? { code: "terminal_busy" } : {}) });
     }
   }
-  if (p === "/api/new" && req.method === "POST") { const ok = newClaude(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
+  if (p === "/api/new" && req.method === "POST") { const ok = newClaude(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "正在整理上一段对话，过几秒再开" }); }
   if (p === "/api/conversation" && req.method === "GET") {
     // a page reading the conversation is about to talk: have the credential ready
     const owner = await ownerNow();
@@ -1643,7 +1706,8 @@ async function handle(req, res) {
       ...(owner ? { owner } : {}), ...(conv.handed && !owner ? { handed: conv.handed } : {}),
       asks: live ? [...live.asks.entries()].map(([rid, a]) => askEvent(rid, a)) : [],
       models: MODELS, default: DEFAULT_MODEL, budget: budgetView(), items: items.slice(-600),
-      last: conv.last || "", ...(codex.available() ? { providers: sides().providers, others: { codex: codex.side() } } : {}) });
+      last: conv.last || "", ...(conv.interrupted && !live ? { interrupted: conv.interrupted } : {}),
+      ...(codex.available() ? { providers: sides().providers, others: { codex: codex.side() } } : {}) });
   }
   if (p === "/api/turn" && req.method === "POST") return turn(req, res, person);
   if (p === "/api/file" && req.method === "GET") {
@@ -1658,6 +1722,8 @@ async function handle(req, res) {
   // the terminal ⇄ this page (task T810): adopt / state / release are this
   // machine's own (fleet-webchat-handoff.sh over the socket); take is the page's
   if (SOCKET && p === "/api/state" && req.method === "GET") return send(res, 200, { busy: !!live || !!maint, session: conv.session });
+  // anything answering on either side: the next copy's takeover waits for none (task WD8F)
+  if (SOCKET && p === "/api/busy" && req.method === "GET") return send(res, 200, { busy: busyAny() });
   if (SOCKET && p === "/api/adopt" && req.method === "POST") {
     const [code, msg, why] = await adoptConv(await readJson(req));
     return send(res, code, code === 200 ? { ok: true, msg } : { error: msg, ...(why ? { code: why } : {}) });
@@ -1688,6 +1754,7 @@ async function handle(req, res) {
 }
 
 // idle: no turn, no compact, no connection open (a page that is watching holds one)
+const busyAny = () => !!live || aside.size > 0 || !!maint || codex.busy();
 let lastBusy = Date.now();
 function touch() { lastBusy = Date.now(); }
 const server = http.createServer((req, res) => {
@@ -1752,8 +1819,8 @@ async function shutdown(code, ev) {
 }
 if (SOCKET && IDLE_SECS > 0) {
   setInterval(() => {
-    if (live || maint || codex.busy() || Date.now() - lastBusy < IDLE_SECS * 1000) return;
-    server.getConnections((err, n) => { if (!err && n === 0 && !live && !maint && !codex.busy()) shutdown(IDLE_RC, "idle_exit"); });
+    if (busyAny() || Date.now() - lastBusy < IDLE_SECS * 1000) return;
+    server.getConnections((err, n) => { if (!err && n === 0 && !busyAny()) shutdown(IDLE_RC, "idle_exit"); });
   }, Math.min(60, Math.max(0.2, IDLE_SECS / 4)) * 1000).unref();
 }
 for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => shutdown(0, "stop"));

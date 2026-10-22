@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { SAY_SOMETHING } from "@/app/chat/placeholder";
+import { TOUCH_PRIMARY } from "@/app/new-session";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -518,6 +519,7 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
+const touchPrimary = () => typeof matchMedia === "function" && matchMedia(TOUCH_PRIMARY).matches;
 const Composer: FC<{ autoFocus: boolean; placeholder: string }> = ({ autoFocus, placeholder }) => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
@@ -532,7 +534,10 @@ const Composer: FC<{ autoFocus: boolean; placeholder: string }> = ({ autoFocus, 
             className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
             rows={1}
             autoFocus={autoFocus}
-            enterKeyHint="send"
+            // Enter sends, Shift+Enter a new line; on a phone Enter stays a new
+            // line and the button sends (task WD8F) — an IME's Enter never sends
+            unstable_insertNewlineOnTouchEnter
+            enterKeyHint={touchPrimary() ? "enter" : "send"}
             aria-label="输入"
           />
           <ComposerAction />

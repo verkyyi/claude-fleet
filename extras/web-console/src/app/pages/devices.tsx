@@ -33,6 +33,7 @@ import { lang, tr } from "@/shared/i18n";
 import { isAdmin, sendJSON, useLoad, type Device, type Me } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 import { ago as agoText, Failed, Loading, PageHeader } from "../parts";
+import { machineName } from "../new-session";
 
 // ---- the reads ----------------------------------------------------------
 
@@ -512,7 +513,6 @@ const TAKES: Record<Machine["takes"], [string, string, string]> = {
 // a person's own laptop only coordinates; a client machine is a device, not here.
 function myMachines(snap: Nodes | null, me: Me | null): Machine[] {
   const pairs = me?.logins?.length ? me.logins : null;
-  const alias = new Map((snap?.machines || []).map((m) => [m.hostname, m.alias || ""]));
   const client = new Set((snap?.machines || []).filter((m) => m.role === "client").map((m) => m.hostname));
   const by = new Map<string, Node[]>();
   for (const n of snap?.nodes || []) {
@@ -529,7 +529,7 @@ function myMachines(snap: Nodes | null, me: Me | null): Machine[] {
       sessions = n.sessions == null ? undefined : (sessions || 0) + n.sessions;
     }
     return {
-      hostname, label: alias.get(hostname) || hostname, login: [...new Set(ns.map((n) => n.os_user))].sort().join(" · "),
+      hostname, label: machineName(hostname), login: [...new Set(ns.map((n) => n.os_user))].sort().join(" · "),
       takes: takesOf(best), load: heard ? (Number(heard.load1) || 0) / heard.ncpu : null, sessions,
       version: (ns.find((n) => n.fleet_version)?.fleet_version || "").slice(0, 7),
     };

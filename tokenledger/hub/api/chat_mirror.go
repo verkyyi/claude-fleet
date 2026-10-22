@@ -103,7 +103,7 @@ func chatMirrorItem(raw json.RawMessage, left *int) (json.RawMessage, bool) {
 			}
 		}
 		it = kept
-	case "text", "stopped", "error":
+	case "text", "stopped", "error", "note": // note: a background task's notice, one line (claude-fleet WD8F)
 	case "tool":
 		delete(it, "input")
 	case "tool_result":

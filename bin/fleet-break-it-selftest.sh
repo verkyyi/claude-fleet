@@ -6792,6 +6792,28 @@ drill_service_orphan_shell_holds_socket() {
   SECS=$(since "$t0")
 }
 
+# webchat-turn-cut-by-restart (task WD8F, a person's web chat 2026-10-22): the
+# web chat's server went at every release and every takeover with a turn half
+# answered — the takeover TERMed the old copy after 10 s, a stop SIGKILLs the
+# group after 5 — and the page then showed Claude Code's raw <task-notification>
+# as the person's bubble and a lone «No response requested.». Now the takeover
+# asks the old copy over its own socket (--busy /api/busy) and waits while it
+# answers; a turn cut off anyway is said on the next start with 重试; the notice
+# is one quiet line; and 新对话 mid-answer puts the turn aside instead of a 409.
+drill_webchat_turn_cut_by_restart() {
+  CAP=60; local t0
+  t0=$(now)
+  grep -q -- '--busy /api/busy --busy /api/state' "$ROOT/bin/fleet-webchat.sh" \
+    || { WHY="fleet-webchat.sh serve no longer asks the old copy whether it is answering (--busy)"; return 1; }
+  suite_holds fleet-service-takeover-selftest.sh 'J: a busy orphan is taken over once idle' 'K: an orphan that cannot say' || return 1
+  if ! command -v node >/dev/null 2>&1; then SECS=$(since "$t0"); WHAT="SKIP：这里没有 node（接管等忙的那一半按名守住）"; return 0; fi
+  webchat_part aside "U 新对话 mid-answer is not refused (200)" "U …and ends with its answer, never stopped" \
+    "U a turn cut off is said on the next start, with its words" "U a task notice reads as one note" \
+    "U …never the raw XML as the person's bubble, never the filler" || return 1
+  WHAT='旧副本正答着一轮时接管：先问它忙不忙、答完再停（fleet-service-takeover-selftest.sh J/K 按名守住）；回复中途点新对话：200、新对话立刻空着能用、旧一轮在后台答完；被停掉的一轮下次起来说清楚并带原话可重试；后台任务通知折成一行，不再当用户气泡、不再出 No response requested.'
+  SECS=$(since "$t0")
+}
+
 # service-alert-flaps (task CVC4): a service the daemon restarts every few
 # minutes raised and cleared service_failed once each per restart (7 and 7 in
 # 37 minutes). The hub now holds a run 10 minutes each way — Go

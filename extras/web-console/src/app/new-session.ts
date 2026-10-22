@@ -34,14 +34,16 @@ export type Home = { machine?: string; login?: string; state: string; why?: stri
 export const hasHome = (h: Home | null): h is Home & { machine: string } => !!h?.machine && h.state !== "no_home";
 
 // The person's machines a session can open on (/v1/nodes): their own logins
-// on it, never a client computer or a machine's link row; the home first.
+// on it, never a client computer or a machine's link row; the home first. A
+// machine is shown by its own name (macmini, mini2) — the roster's alias is the
+// operator's ssh shorthand (m5, m4), a word the person never chose (task WD8F).
+export const machineName = (hostname: string) => hostname.split(".")[0] || hostname;
 type Node = { hostname: string; os_user: string; status: string; machine_link?: boolean; compute_off?: boolean };
 type Nodes = { nodes?: Node[]; machines?: { hostname: string; alias?: string; role?: string }[] };
 export type Machine = { hostname: string; label: string; state: "on" | "maint" | "lost"; home: boolean };
 const same = (a: string, b: string) => a.toLowerCase().split(".")[0] === b.toLowerCase().split(".")[0];
 
 export function machinesOf(snap: Nodes | null, logins: { machine: string; login: string }[] | undefined, home: Home | null): Machine[] {
-  const alias = new Map((snap?.machines || []).map((m) => [m.hostname, m.alias || ""]));
   const client = new Set((snap?.machines || []).filter((m) => m.role === "client").map((m) => m.hostname));
   const by = new Map<string, Node[]>();
   for (const n of snap?.nodes || []) {
@@ -50,12 +52,12 @@ export function machinesOf(snap: Nodes | null, logins: { machine: string; login:
     by.set(n.hostname, [...(by.get(n.hostname) || []), n]);
   }
   const out: Machine[] = [...by.entries()].map(([hostname, ns]) => ({
-    hostname, label: alias.get(hostname) || hostname,
+    hostname, label: machineName(hostname),
     state: ns.some((n) => n.status !== "lost" && n.status !== "maintenance") ? "on" : ns.some((n) => n.status === "maintenance") ? "maint" : "lost",
     home: hasHome(home) && same(hostname, home.machine),
   }));
   if (hasHome(home) && !out.some((m) => m.home)) {
-    out.push({ hostname: home.machine, label: home.machine, state: home.state === "ok" ? "on" : home.state === "maintenance" ? "maint" : "lost", home: true });
+    out.push({ hostname: home.machine, label: machineName(home.machine), state: home.state === "ok" ? "on" : home.state === "maintenance" ? "maint" : "lost", home: true });
   }
   return out.sort((a, b) => Number(b.home) - Number(a.home) || a.label.localeCompare(b.label));
 }
@@ -115,4 +117,13 @@ export function rowForRequest(rows: Row[] | null, idem: string): Row | null {
     } catch { /* not this one */ }
   }
   return null;
+}
+
+// The box's Enter (task WD8F): Enter sends and Shift+Enter is a new line, as in
+// every chat — but never mid-IME (a pinyin candidate's Enter picks the word), and
+// on a phone (a coarse pointer, no fine one) Enter stays a new line: the button sends.
+export const TOUCH_PRIMARY = "(pointer: coarse) and (not (any-pointer: fine))";
+export function sendsOnEnter(e: { key: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number }, touch: boolean): boolean {
+  if (e.key !== "Enter" || e.shiftKey || touch) return false;
+  return !e.isComposing && e.keyCode !== 229;
 }
