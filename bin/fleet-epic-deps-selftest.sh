@@ -29,6 +29,11 @@
 #      `核心全部合并（R2 若…，等 C4）` — no C1↔C2 cycle, wave 1 alone is due, C6 / C8
 #      wait on exactly their own keys, the reserves on every core member, never a
 #      same-row R; the 可并行 column and a card's 被依赖 are never read.
+#   K. SGS6's charter (EDN1): `### 核心` lists C1–C5 AND B1–B4, `### 备选` R1 R2; the
+#      wave row `B1 → B2 → B3 · B4 | B1 等 C1 C3 C4` — every B is core (counts, next),
+#      B1 waits on C1 C3 C4, B2 on B1, B3 B4 on B2; a child titled `B1 · …` is B1's
+#      (running, not unstarted), so C all merged with B open is NOT done; a member
+#      whose repo the fleet does not host (moved owner) warns and is not in next.
 #   D. the argv: `status --task T<n>`, `--task T<n> status`, and the ONE word
 #      `--task T<n>` zsh makes of `${P:+--task "$P"}` all read the batch.
 # Hermetic: a stub hub (FLEET_HUB_CURL), a sandbox FLEET_CONF_DIR, no network.
@@ -375,6 +380,55 @@ out = {}
 m.dep_table_row(["3", "C3", sys.argv[1]], (1, 2), {"C1", "C2", "C3"}, lambda k, c: out.setdefault(k, c))
 print([k for sc, k in m.dep_refs(out["C3"])])' "$1"; }
 eq "J: \`C1 C2 等全部合并\` in another row is a whole-cell wait" "['C1', 'C2']" "$(row_c3 'C1 C2 等全部合并')"
+
+# --- K. SGS6's B<k> members (EDN1) ----------------------------------------------
+CHARTER='<!-- fleet:epic repo=o/r short=官网 cap=8 -->
+## 成员
+### 核心 — definition of done
+- [ ] **C1** 一
+- [ ] **C3** 三
+- [ ] **C4** 四
+- [ ] **C5** old/mono — 五
+- [ ] **B1** 改名一
+- [ ] **B2** 改名二
+- [ ] **B3** 改名三
+- [ ] **B4** old/mono — 改名四
+### 备选 — dispatched only when added
+- [ ] **R1** 甲
+## 依赖顺序
+| 波次 | 成员 | 等谁 | 可并行 |
+|---|---|---|---|
+| 1 | C1 C4 C5 | — | 三个并行 |
+| 2 | C3 | C1 | — |
+| 改名 | B1 → B2 → B3 · B4 | B1 等 C1 C3 C4 | B3 B4 并行 |
+| 储备 | R1 | R1 等 C1 C3 | — |
+'
+PARENT=$(python3 -c 'import json,sys; print(json.dumps(dict(id="T580", authority_version=1, title="EPIC", request_payload=json.dumps({"body": sys.argv[1]}))))' "$CHARTER")
+kids() { # kids <py dict-expr of extra children>
+  state "({'T580': $PARENT} | $1)"; }
+export FLEET_EPIC_TICK_REPOS="o/r new/mono"
+kids "{}"
+S=$(tick)
+eq "K: B1–B4 are core (counts.core 8)" "8" "$(printf '%s' "$S" | jq_ 'd["counts"]["core"]')"
+eq "K: layers off the headings" "core core reserve" "$(mem B1 '["layer"]') $(mem C1 '["layer"]') $(mem R1 '["layer"]')"
+eq "K: B1 waits on C1 C3 C4" "['C1', 'C3', 'C4']" "$(mem B1 '["waits_on"]')"
+eq "K: B2 on B1, B3 B4 on B2" "['B1'] ['B2'] ['B2']" "$(mem B2 '["waits_on"]') $(mem B3 '["waits_on"]') $(mem B4 '["waits_on"]')"
+eq "K: C5 in a repo not hosted is not due" "C1 C4" "$(due)"
+eq "K: and says so, naming the hosted one" "True" "$(printf '%s' "$S" | jq_ 'any(w.startswith("C5 的仓库 old/mono") and "new/mono" in w for w in d["warnings"])')"
+eq "K: unhosted lists it" "{'C5': 'old/mono', 'B4': 'old/mono'}" "$(printf '%s' "$S" | jq_ 'd["unhosted"]')"
+done_kids="{'T611': dict(id='T611', parent_task='T580', title='C1 · 一', outcome='succeeded'),
+  'T612': dict(id='T612', parent_task='T580', title='C3 · 三', outcome='succeeded'),
+  'T613': dict(id='T613', parent_task='T580', title='C4 · 四', outcome='succeeded'),
+  'T614': dict(id='T614', parent_task='T580', title='C5 · 五', outcome='succeeded')}"
+kids "$done_kids"
+S=$(tick)
+eq "K: C all merged ⇒ B1 due, batch not done" "B1 False" "$(due) $(printf '%s' "$S" | jq_ 'd["done"]')"
+kids "$done_kids | {'T615': dict(id='T615', parent_task='T580', title='B1 · 改名一', outcome='')}"
+S=$(tick)
+eq "K: a child titled B1 · … is B1's, running" "running 1" "$(mem B1 '["state"]') $(printf '%s' "$S" | jq_ 'd["counts"]["running"]')"
+eq "K: nothing due while B1 runs" "" "$(due)"
+eq "K: --line never says 核心空了" "" "$(python3 "$BIN/fleet-epic-tick.py" status --task T580 --line | grep -o '核心空了')"
+unset FLEET_EPIC_TICK_REPOS
 
 # --- D. the argv ------------------------------------------------------------------
 argv_ok() { python3 "$BIN/fleet-epic-tick.py" "$@" >/dev/null 2>&1; eq "D: argv [$*] reads the batch" 0 "$?"; }
