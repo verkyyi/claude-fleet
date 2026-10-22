@@ -57,6 +57,9 @@ type MeUsageTrial struct {
 	Sessions     int        `json:"sessions,omitempty"` // at most this many at once
 	SessionsNow  int        `json:"sessions_now"`
 	UpgradeAsked *time.Time `json:"upgrade_asked,omitempty"`
+	// LivePageKept: the trial is over and its 活页 key was taken back — their
+	// pages stay there 30 days (task XA4R); the console says so once.
+	LivePageKept bool `json:"livepage_kept,omitempty"`
 }
 
 // meTrial is principal's trial at now off their budget state; nil = none.
@@ -80,6 +83,7 @@ func (s *Server) meTrial(st PersonBudgetState, now time.Time) *MeUsageTrial {
 		t.DaysLeft = &d
 	}
 	t.SessionsNow = s.personSessionsNow(st.Principal, now)
+	t.LivePageKept = s.livePageEnded(st.Principal)
 	return t
 }
 

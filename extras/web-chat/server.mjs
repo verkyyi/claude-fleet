@@ -83,6 +83,8 @@ const CLAUDE = E.FLEET_WEBCHAT_CLAUDE || "";
 // the login's own codex (task R9A2): the conversation's Codex side; none ⇒ Claude only, as before
 const CODEX = E.FLEET_WEBCHAT_CODEX_BIN || "";
 const SESSION_CRED = E.FLEET_WEBCHAT_SESSION_CRED || join(HERE, "../../bin/fleet-session-cred.sh");
+// a trial person's `space` (活页) bridge to the credential proxy (task XA4R)
+const MCP_SPACE = E.FLEET_WEBCHAT_MCP_SPACE || join(HERE, "../../bin/mcp-space.py");
 const SDK_PATH = E.FLEET_WEBCHAT_SDK || "";
 const ASK_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_ASK_SECS || 1800) * 1000;
 const COMPACT_AT = Number(E.FLEET_WEBCHAT_COMPACT_AT || 0.8);  // the context share that triggers a compact
@@ -954,7 +956,7 @@ async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers
     const q = S.query({ prompt, options: {
       cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
       ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources], canUseTool,
-      ...(mcpServers ? { mcpServers } : {}),
+      ...(mcpServers ? { mcpServers: { ...await spaceServers(cred, "CLAUDE_CODE_OAUTH_TOKEN"), ...mcpServers } } : {}),
       abortController: ac, ...(CLAUDE ? { pathToClaudeCodeExecutable: CLAUDE } : {}),
       stderr: () => {},                    // the child's stderr is never relayed or logged
     } });
@@ -1020,7 +1022,7 @@ async function openWarm({ model, cwd, resume }) {
     cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
     ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources],
     canUseTool: (n, i, o) => (w.canUse ? w.canUse(n, i, o) : Promise.resolve({ behavior: "deny", message: "no turn is running" })),
-    mcpServers: { ...browserTools(S, () => w.details), ...await pageTools(S) },
+    mcpServers: { ...await spaceServers(cred, "CLAUDE_CODE_OAUTH_TOKEN"), ...browserTools(S, () => w.details), ...await pageTools(S) },
     abortController: w.ac, ...(CLAUDE ? { pathToClaudeCodeExecutable: CLAUDE } : {}),
     stderr: () => {},
   } });
@@ -1165,7 +1167,7 @@ function savePages() {
   try { writeFileSync(PAGES_FILE + ".tmp", JSON.stringify(pages), { mode: 0o600 }); renameSync(PAGES_FILE + ".tmp", PAGES_FILE); }
   catch (e) { log("pages_failed", { msg: String(e?.message || e).slice(0, 200) }); }
 }
-const PAGE_STATES = new Set(["publishing", "review", "ready", "failed", "unavailable"]);
+const PAGE_STATES = new Set(["publishing", "review", "ready", "failed", "unavailable", "account"]);
 // the page's origin, as the last turn said it: an embed link is minted for it
 const ORIGIN_RE = /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d{1,5})?$/;
 let pageOrigin = "";
@@ -1177,7 +1179,9 @@ function pageItem(id, i, cwd) {
   const it = { t: "page", id, title: String(o.title || "网页").slice(0, 120), status, ...(url ? { url } : {}),
     ...(o.proposal_id ? { proposal: String(o.proposal_id).slice(0, 64) } : {}),
     ...(Number(o.version) > 0 ? { version: Math.floor(Number(o.version)) } : {}),
-    ...(o.note ? { note: String(o.note).slice(0, 200) } : {}) };
+    ...(o.note ? { note: String(o.note).slice(0, 200) } : {}),
+    // task XA4R: 活页 was opened for them by this publish (said once), and the page went to their WeChat
+    ...(o.account_new === true ? { fresh: true } : {}), ...(o.pushed === true ? { pushed: true } : {}) };
   // an embed link (活页 preview_version with embed_origin): the card previews it in place until it expires
   const exp = Date.parse(String(o.embed_expires || ""));
   if (/^https:\/\/[^\s"<>]+$/.test(String(o.embed_url || "")) && exp > 0) { it.embed = String(o.embed_url); it.embed_exp = new Date(exp).toISOString(); }
@@ -1198,7 +1202,41 @@ const SHOW_PAGE = "mcp__fleet_chat__show_page";
 function pageTarget(file) {
   const real = (() => { try { return realpathSync(String(file || "")); } catch { return String(file || ""); } })();
   return { folder: PAGE_FOLDER, folder_id: pages.folder_id || null, proposal_id: pages.files[real] || null,
-    visibility: "private (never change it)", embed_origin: pageOrigin || null };
+    visibility: spaceTrial ? "private until the person says otherwise" : "private (never change it)",
+    embed_origin: pageOrigin || null, ...(spaceTrial ? { trial: TRIAL_PAGE_RULES } : {}) };
+}
+// ---- a trial person's 活页, through the proxy (task XA4R) ----------------------
+// A trial's login has no `space` of its own: its 活页 account is opened by the hub
+// the first time a page is published, and the key never comes here — the
+// session's `space` is bin/mcp-space.py, talking to the credential proxy with the
+// session's own credential. Attached only when the proxy says this login's person
+// may (GET /space/status: a trial, the hub's switch on); anyone else keeps
+// whatever `space` their login has, byte for byte.
+let spaceTrial = false;
+const TRIAL_PAGE_RULES = "This person is on a trial: their 活页 account is opened for them by the first publish (a tool result says so " +
+  "once: then pass account_new: true to show_page). Once a page is ready: call space push_to_wechat(proposal_id, to: self) and " +
+  "show_page with pushed: true — they open it in WeChat, only they can. Never make a page visible to others unless they ask: then " +
+  "ask first — 「要让别人也能打开吗？① 凭口令打开（推荐） ② 先不分享」 — and only on ① call set_visibility passcode and give them the " +
+  "passcode. A trial page is never public. If the account is not ready yet, show_page status account (the file stays here; " +
+  "publish again when they say retry).";
+// the same bridge for the Codex side: one -c table, its credential passed by NAME (env_vars)
+async function spaceCodexArgs(mint) {
+  const sv = (await spaceServers({ mint }, "FLEET_CODEX_SESSION_CRED")).space;
+  if (!sv) return [];
+  const q = (v) => JSON.stringify(String(v));
+  return ["-c", `mcp_servers.space={command=${q(sv.command)},args=[${sv.args.map(q).join(",")}],env_vars=["FLEET_CODEX_SESSION_CRED"]}`];
+}
+async function spaceServers(cred, credEnv) {
+  spaceTrial = false;
+  if (!cred?.mint?.port || !cred.mint.cred) return {};
+  const base = `http://127.0.0.1:${cred.mint.port}`;
+  try {
+    const r = await fetch(base + "/space/status", { headers: { authorization: `Bearer ${cred.mint.cred}` }, signal: AbortSignal.timeout(8000) });
+    const a = r.ok ? await r.json() : null;
+    if (!a?.eligible) return {};
+  } catch { return {}; }
+  spaceTrial = true;
+  return { space: { type: "stdio", command: "python3", args: ["-I", MCP_SPACE, "--base", base, "--cred-env", credEnv] } };
 }
 function pageShown(a) {
   if (a?.folder_id && !pages.folder_id) pages.folder_id = String(a.folder_id).slice(0, 64);
@@ -1222,7 +1260,8 @@ async function pageTools(S) {
     `folder for this conversation's pages (「${PAGE_FOLDER}」, its folder_id once made) and, for this file, the proposal_id it was ` +
     "published as before. The rules: publish with the `space` tools (publish_file; files over 2 MB through its CLI). FIRST " +
     `time: create_folder 「${PAGE_FOLDER}」 and pass its folder_id to show_page. A file published before: publish to the SAME ` +
-    "proposal_id (a new version, the same link). Never change a page's visibility — it stays private, only the person sees it. " +
+    "proposal_id (a new version, the same link). Never change a page's visibility — it stays private, only the person sees it " +
+    "(unless the answer carries `trial`: then follow those rules). " +
     "If the publish is held for review, call show_page with status review, poll get_version, then show_page again with ready. " +
     "No `space` tools here: tell the person this machine is not connected to 活页 and call show_page with status unavailable. " +
     "Once it is ready and embed_origin is answered: call space preview_version(version_id, embed_origin) and pass its " +
@@ -1233,12 +1272,13 @@ async function pageTools(S) {
     "Show the person a card for a web page you published to their 活页: they tap it to open the page. Call it after " +
     "publish_file (status ready, or review while it waits), with the page's link (its default_url / url), the proposal_id and " +
     "version, the HTML file it came from, and the folder_id when you just made the folder. A picture of the page (a screenshot " +
-    "file) may go in preview.",
+    "file) may go in preview. Status account: the person's 活页 account is not open yet (the file stays here).",
     shape((z) => ({
-      title: z.string(), url: z.string().optional(), status: z.enum(["publishing", "review", "ready", "failed", "unavailable"]),
+      title: z.string(), url: z.string().optional(), status: z.enum(["publishing", "review", "ready", "failed", "unavailable", "account"]),
       proposal_id: z.string().optional(), version: z.number().optional(), file: z.string().optional(),
       folder_id: z.string().optional(), preview: z.string().optional(), note: z.string().optional(),
       embed_url: z.string().optional(), embed_expires: z.string().optional(),
+      account_new: z.boolean().optional(), pushed: z.boolean().optional(),
     })),
     async (a) => { pageShown(a); return { content: [{ type: "text", text: "shown to the person as a card" }] }; });
   return { fleet_chat: S.createSdkMcpServer({ name: "fleet_chat", version: "1.0.0", tools: [info, show] }) };
@@ -1489,7 +1529,7 @@ async function importConv(body) {
 const codex = codexSide({ E, STATE, CWD, CODEX, SESSION_CRED, MEDIA, IMAGE_EXT_MIME, IMAGES_PER_REPLY, ASK_TIMEOUT_MS, WARM_IDLE_MS,
   run, log, parseMint, liveCreds, newSecret, send, touch,
   redactLine: (o) => redact(JSON.stringify(o), [...liveCreds, ADMIN]),
-  keepImage, imageItems, capImages, filesOf, saveRefs, pageItem, pageTarget, pageShown,
+  keepImage, imageItems, capImages, filesOf, saveRefs, pageItem, pageTarget, pageShown, spaceCodexArgs,
   budgetRefusal, setBudget, budgetView, budget: () => budget,
   holder: (sid) => lockHolder("codex", sid), owner: (sid) => ownerNow("codex", sid) });
 const PROVIDERS_RE = /^(claude|codex)$/;

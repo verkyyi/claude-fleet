@@ -423,6 +423,7 @@ func (s *Server) SweepTrialSlots(now time.Time) {
 		}
 	}
 	s.SweepTrials(now)
+	s.SweepLivePage(now)
 	if s.SweepTrialStragglers(now) {
 		s.dispatchAccounts()
 	}

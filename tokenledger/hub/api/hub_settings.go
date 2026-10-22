@@ -186,6 +186,8 @@ var hubSettings = map[string]hubSetting{
 		check: checkTrialEgress},
 	TrialAlertKey: {def: trialAlertDefault, help: "试用花费的线 (WACK C6): person_day — one trial identity's tokens in a Beijing day, all_day — every trial identity's together; past either the admins get one 「试用用量超线」 (once per person per day, once for everyone per day; trial_spend). 0 = that line not watched; daily=off keeps the 09:00 「试用日报」 in; off = neither. Tokens count input + cache write + output, as /v1/admin/usage",
 		check: checkTrialAlert},
+	TrialLivePageKey: {def: "off", help: "a trial person's web pages in their own 活页 (task XA4R): on — the first page their session publishes opens a 活页 account by their service-account WeChat (CCQUOTA_LIVEPAGE_PARTNER_URL / _KEY), its key kept here and put on by the machine's credential proxy, never in the session; taken back when the trial ends. off — the card says 「这台机器还没连活页」, as before. 试用者的网页发到他自己的活页",
+		check: checkTrialLivePage},
 	TrialOnceKey: {def: "on", help: "one trial per account (WeChat by unionid, else openid; an address; a GitHub account): a second one is told it has tried and pointed at /apply (claude-fleet#4058)",
 		check: onOff(TrialOnceKey, "on")},
 	TrialCredAllowKey: {def: `"*"`, help: "the subscriptions a trial person may use (they are never listed one by one): \"*\" every one the trial is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, [] none — trials then wait 「试用暂时没有可用订阅」; approval writes it as the new member's own list (claude-fleet#4260)",
