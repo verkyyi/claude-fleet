@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -123,5 +124,8 @@ func (s *Server) poolSettings() map[string]string {
 		"FLEET_ACCOUNT_CEILING": s.setting(PoolSkipPctKey),
 		// The pool accounts an admin paused (claude-fleet#1990), space-separated.
 		"FLEET_ACCOUNT_PAUSED": strings.Join(paused, " "),
+		// how long a session opened from the web idles before its home parks it
+		// (task PQ41), in seconds; 0 = never
+		"FLEET_SESSION_PARK_IDLE": strconv.Itoa(s.sessionParkIdle()),
 	}
 }

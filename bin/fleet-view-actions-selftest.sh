@@ -54,7 +54,7 @@ LOG="$W/calls.log"; : > "$LOG"
 
 # --- the stubs: one line per call, `name|arg|arg|…` ----------------------------------
 for s in fleet-task-record.sh open-url.sh fleet-permission.sh fleet-answer.sh fleet-peer-send.sh dash-pin-toggle.sh \
-         fleet-reap-policy.sh fleet-worker-stop.sh \
+         fleet-reap-policy.sh fleet-worker-stop.sh fleet-web-open.sh \
          fleet-transfer.sh dash-reap.sh dash-rename.sh fleet-row-remote.sh; do
   cat > "$W/stub/$s" <<EOF
 #!/bin/bash
@@ -144,7 +144,7 @@ st_ok_all "A  every sidebar menu item is an action here (or row-less, C2 / C7); 
 # --- B: which actions a row gets -----------------------------------------------------
 ids() { qo view-menu --view fl@view-v1 "$1" | awk -F '\t' '{ print $1 }' | tr '\n' ' '; }
 m1=$(ids "$W1")
-for a in enter shell pr message rename pin reappol stop agent webchat reap; do
+for a in enter shell pr message rename pin reappol stop agent webopen reap; do
   case " $m1 " in *" $a "*) ;; *) st_fail "B: done row lacks $a: $m1" ;; esac
 done
 for a in answer wake awake resume sub; do case " $m1 " in *" $a "*) st_fail "B: done row has $a: $m1" ;; esac; done
@@ -159,8 +159,8 @@ grep -q $'^resume\t恢复' <<< "$m3" || st_fail "B: ended exited row lacks 恢�
 # 换 Codex on another machine's row (issue #4184): its hub writes; pr stays this
 # machine's (no PR on a far row). No 换账号 / 换到可用订阅 on any row since T550:
 # the pool picks.
-# 在 WebChat 里继续 (T810) is listed there too, grey: page_of says why (not this login's)
-[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent webchat reap " ] || st_fail "B: another machine's row: $(ids "$MU/far1")"
+# 在网页里打开 (PQ41; T810's 在 WebChat 里继续 before it) opens any machine's session
+[ "$(ids "$MU/far1")" = "enter shell message rename pin reappol stop agent webopen reap " ] || st_fail "B: another machine's row: $(ids "$MU/far1")"
 mf=$(qo view-menu --view fl@view-v1 "$MU/far1")
 grep -q $'^agent\t换成 Codex\t$' <<< "$mf" || st_fail "B: a far row's agent item: $mf"
 grep -q '换到可用订阅\|换账号' <<< "$mf$(qo view-menu --view fl@view-v1 "$W1")" && st_fail "B: a row still offers 换账号 / 换到可用订阅 (T550): $mf"
@@ -188,6 +188,8 @@ one message "fleet-peer-send.sh|$W1|合并了吗 hello" "$W1" message --text '�
 one pin "dash-pin-toggle.sh|$W1" "$W1" pin
 one reappol "fleet-reap-policy.sh|set|done:2h|--win|$W1|--session|fl" "$W1" reappol --text done:2h
 one stop "fleet-worker-stop.sh|fl|fid:f1" "$W1" stop
+one webopen "fleet-web-open.sh|fid:f1" "$W1" webopen
+one webopen-far "fleet-web-open.sh|wid:$MU/far1" "$MU/far1" webopen
 one agent "fleet-transfer.sh|--from-panel|--session|fl|--window|$W1|--to|codex" "$W1" agent
 one rename "dash-rename.sh|--wid|$W1|新名字" "$W1" rename --text '新名字'
 [ "$(ti display-message -p -t "$W1" '#{window_name}')" = '新名字' ] || st_fail "C: rename did not rename the window"

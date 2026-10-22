@@ -243,3 +243,129 @@ func TestChatViewCopy(t *testing.T) {
 		t.Errorf("the switch off left the view copy: %v %v", c, err)
 	}
 }
+
+// 会话合一 (task PQ41): POST /v1/chat/say|answer|stop?worker=<id> reaches the
+// login the session runs on as /api/say|answer|stop, the page's body with the
+// hub's own fid; the browser's fid is never passed on. A say carries at most 4
+// pictures and something to say; another person's worker, the personal
+// terminal, a call not from the page and the operator's door never reach it.
+func TestChatSayToSession(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	enablePeople(t, h, pCarol)
+	const fuid, fid = "66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"
+	wid := fuid + "/" + fid
+	ws, _ := json.Marshal([]map[string]any{{"key": "issue-1", "state": "done", "worker_id": wid}})
+	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
+		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(ws)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	setChatHome(t, h, pAlice, host, login)
+	setChatHome(t, h, pCarol, "elsewhere", "carol")
+	alice := personCookie(pAlice, "alice")
+	page := map[string]string{"X-Fleet-Webchat": "1", "Content-Type": "application/json"}
+
+	resp := chatDo(t, h, "POST", "/v1/chat/say?worker="+wid, alice, page, `{"text":"hi","fid":"forged","images":[{"media_type":"image/png","data":"x"}]}`)
+	b, _ := io.ReadAll(resp.Body)
+	var got struct{ Delivery, State, Got string }
+	_ = json.Unmarshal(b, &got)
+	var sent map[string]any
+	_ = json.Unmarshal([]byte(got.Got), &sent)
+	if resp.StatusCode != http.StatusOK || got.State != "sent" || got.Delivery != "d1" || sent["fid"] != fid || sent["text"] != "hi" {
+		t.Fatalf("say: %d %s", resp.StatusCode, b)
+	}
+	if pics, _ := sent["images"].([]any); len(pics) != 1 {
+		t.Fatalf("say: the picture was not passed on: %s", got.Got)
+	}
+	resp = chatDo(t, h, "POST", "/v1/chat/say?worker="+wid, alice, page, `{"text":"refuse"}`)
+	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"state":"refused"`) {
+		t.Fatalf("a refused say: %d %s", resp.StatusCode, b)
+	}
+	for _, route := range []string{"answer", "stop"} {
+		resp := chatDo(t, h, "POST", "/v1/chat/"+route+"?worker="+wid, alice, page, `{"fp":"q1","pick":"是"}`)
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `\"fid\":\"`+fid+`\"`) {
+			t.Fatalf("%s: %d %s", route, resp.StatusCode, b)
+		}
+	}
+	five := `{"text":"x","images":[{},{},{},{},{}]}`
+	cases := []struct {
+		name, method, query, body string
+		cookie                    *http.Cookie
+		hdr                       map[string]string
+		status                    int
+		code                      string
+	}{
+		{"a GET", "GET", "worker=" + wid, "", alice, page, http.StatusMethodNotAllowed, ""},
+		{"not from the page", "POST", "worker=" + wid, `{"text":"x"}`, alice, nil, http.StatusForbidden, "forbidden"},
+		{"signed out", "POST", "worker=" + wid, `{"text":"x"}`, nil, page, http.StatusUnauthorized, ""},
+		{"another person's session", "POST", "worker=" + wid, `{"text":"x"}`, personCookie(pCarol, "carol"), page, http.StatusNotFound, "not_yours"},
+		{"no session", "POST", "", `{"text":"x"}`, alice, page, http.StatusBadRequest, "bad_target"},
+		{"the personal terminal", "POST", "target=personal", `{"text":"x"}`, alice, page, http.StatusBadRequest, "bad_target"},
+		{"nothing to say", "POST", "worker=" + wid, `{"text":"  "}`, alice, page, http.StatusBadRequest, "empty"},
+		{"five pictures", "POST", "worker=" + wid, five, alice, page, http.StatusBadRequest, "too_many_images"},
+		{"not JSON", "POST", "worker=" + wid, `hi`, alice, page, http.StatusBadRequest, "bad_body"},
+		{"the operator's door", "POST", "worker=" + wid, `{"text":"x"}`, nil, map[string]string{"Authorization": "Bearer " + viewerToken, "X-Fleet-Webchat": "1"}, http.StatusForbidden, "operator"},
+	}
+	for _, c := range cases {
+		resp := chatDo(t, h, c.method, "/v1/chat/say?"+c.query, c.cookie, c.hdr, c.body)
+		if resp.StatusCode != c.status {
+			t.Errorf("%s: %d; want %d", c.name, resp.StatusCode, c.status)
+			continue
+		}
+		if c.code != "" {
+			if got := chatCode(t, resp); got != c.code {
+				t.Errorf("%s: code %q; want %q", c.name, got, c.code)
+			}
+		}
+	}
+	n := 0
+	for _, s := range svc.seen() {
+		if strings.Contains(s, "/api/say") {
+			if !strings.Contains(s, "person="+pAlice) || strings.Contains(s, "cookie=ccq") {
+				t.Errorf("the service saw %q", s)
+			}
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("says at the service: %d, want 2", n)
+	}
+
+	// a new session from the web: on the home, its first line with it
+	resp = chatDo(t, h, "POST", "/v1/chat/open", alice, page, `{"agent":"claude","text":"hello"}`)
+	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"fid":"f-new"`) {
+		t.Fatalf("open: %d %s", resp.StatusCode, b)
+	}
+	// an answer / a stop with no worker is still the home conversation's own
+	resp = chatDo(t, h, "POST", "/v1/chat/stop", alice, page, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the home's own stop: %d", resp.StatusCode)
+	}
+	// fleet.chat.unified on: the old routes answer 410 moved, nothing reaches the home
+	if err := h.Srv.Store.SetFleetSetting("fleet.chat.unified", "on", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before := len(svc.seen())
+	for _, route := range []string{"turn", "new", "take", "takeover?worker=" + wid, "giveback?worker=" + wid} {
+		resp := chatDo(t, h, "POST", "/v1/chat/"+route, alice, page, `{"text":"hi"}`)
+		if resp.StatusCode != http.StatusGone {
+			t.Errorf("%s with fleet.chat.unified on: %d; want 410", route, resp.StatusCode)
+			continue
+		}
+		if got := chatCode(t, resp); got != "moved" {
+			t.Errorf("%s: code %q; want moved", route, got)
+		}
+	}
+	if n := len(svc.seen()); n != before {
+		t.Fatalf("a moved route reached the service: %v", svc.seen()[before:])
+	}
+	resp = chatDo(t, h, "POST", "/v1/chat/say?worker="+wid, alice, page, `{"text":"hi"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("say with fleet.chat.unified on: %d", resp.StatusCode)
+	}
+	// the page reads the switch off its top bar's read
+	resp = chatDo(t, h, "GET", "/v1/chat/home", alice, nil, "")
+	if b, _ := io.ReadAll(resp.Body); !strings.Contains(string(b), `"unified":true`) {
+		t.Fatalf("home with fleet.chat.unified on: %s", b)
+	}
+}

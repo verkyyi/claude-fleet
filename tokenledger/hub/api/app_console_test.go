@@ -326,7 +326,8 @@ func TestConsoleTableNamesRoutes(t *testing.T) {
 				t.Errorf("row %s: new %s is route %q; want an admin route", c.owner, np, acc)
 			}
 		case strings.HasPrefix(np, AppPrefix):
-			if !isAppPage(strings.TrimPrefix(np, AppPrefix)) && np != AppPrefix {
+			// a session list address (/app/chat · /app/s/<ref>, PQ41) is the console's own page too
+			if !isAppPage(strings.TrimPrefix(np, AppPrefix)) && np != AppPrefix && !isSessionPage(np) {
 				t.Errorf("row %s goes to %s, no console page", c.owner, np)
 			}
 		}
@@ -377,7 +378,7 @@ func TestConsoleMemberSide(t *testing.T) {
 			}
 		}
 	}
-	if got := consoleDo(hd, http.MethodGet, ChatPagePath, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix {
+	if got := consoleDo(hd, http.MethodGet, ChatPagePath, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+"/chat" {
 		t.Errorf("GET /chat/ = %d → %q; want 301 %s", got.Code, got.Header().Get("Location"), AppPrefix)
 	}
 	if got := consoleDo(hd, http.MethodGet, mePagePath, user); got.Code != http.StatusMovedPermanently || got.Header().Get("Location") != AppPrefix+mePagePath {

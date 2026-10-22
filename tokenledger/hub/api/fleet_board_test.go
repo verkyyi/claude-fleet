@@ -271,3 +271,69 @@ func TestBoardWhyCopy(t *testing.T) {
 		t.Fatalf("no reason = %q %s; want nothing", w, tone)
 	}
 }
+
+// 会话合一 (task PQ41): a session the web opened is a row of the same list,
+// marked origin web; a terminal's is origin terminal; a parked web session reads
+// as idle (no difference to see); the web may talk to any live session not put
+// away — never to a record with no session, an exited one, or one on a machine
+// lost or in maintenance.
+func TestBoardOriginAndCanTalk(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	rec, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "queued", AuthorityVersion: 1,
+		RequestedAgent: "default", ResolvedAgent: "claude"}, "q", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet := "42f8e358-7cc0-5856-a353-8983a4b4c9a1"
+	sess := func(ident, state, avail string, extra map[string]any) FleetSession {
+		wid := fleet + "/" + ident
+		w := map[string]any{"identity": ident, "state": state, "name": ident, "born": float64(100), "worker_id": wid}
+		for k, v := range extra {
+			w[k] = v
+		}
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: avail, Worker: w}
+	}
+	const web, parked, term, exited, maint = "0b7e8c1a-1111-4222-8333-444455550001", "0b7e8c1a-1111-4222-8333-444455550002",
+		"0b7e8c1a-1111-4222-8333-444455550003", "0b7e8c1a-1111-4222-8333-444455550004", "0b7e8c1a-1111-4222-8333-444455550005"
+	const gated = "0b7e8c1a-1111-4222-8333-444455550006" // the home's gate says no (HHV0 ①)
+	live := []FleetSession{
+		sess(web, "working", "online", map[string]any{"origin": "web"}),
+		sess(parked, "parked", "online", map[string]any{"origin": "web"}),
+		sess(term, "done", "online", nil),
+		sess(exited, "exited", "online", nil),
+		sess(maint, "idle", "maintenance", nil),
+		sess(gated, "done", "online", map[string]any{"origin": "web", "can_talk": false}),
+	}
+	b, err := s.buildBoard("gh:1", live, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BoardRow{}
+	for _, r := range b.Rows {
+		got[r.ID] = r
+	}
+	type want struct {
+		origin, tag string
+		talk        bool
+	}
+	for id, w := range map[string]want{
+		web: {"web", "working", true}, parked: {"web", "idle", true}, term: {"terminal", "turn_done", true},
+		exited: {"terminal", "exited", false}, maint: {"terminal", "idle", false}, rec.FID: {"", "queued", false},
+		gated: {"web", "turn_done", false},
+	} {
+		r, ok := got[id]
+		if !ok || r.Origin != w.origin || r.Tag != w.tag || r.CanTalk != w.talk {
+			t.Errorf("row %s = %+v; want origin %q tag %s can_talk %v", id, r, w.origin, w.tag, w.talk)
+		}
+	}
+	if got[parked].Words != got[maint].Words || got[parked].Group != "queue" {
+		t.Errorf("a parked session does not read as idle: %+v", got[parked])
+	}
+	// origin and can_talk move the digest: the page redraws when a session parks or wakes
+	live[0].Worker["origin"] = ""
+	if b2, _ := s.buildBoard("gh:1", live, now); b2.Digest == b.Digest {
+		t.Error("the digest ignores origin")
+	}
+}

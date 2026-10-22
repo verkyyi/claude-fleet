@@ -91,6 +91,26 @@ class Board(unittest.TestCase):
             self.assertEqual(v.session_count(items), "4")
             self.assertEqual(v.session_count([e for e in items if not e.get("unboarded")]), str(BOARD["count"]))
 
+    def test_web_opened_session_is_a_row(self):
+        """会话合一 (task PQ41): a session the web opened is one row of the same
+        list — its place, its word, the count — and a parked one reads 空闲."""
+        board = {"count": 2, "digest": "w", "groups": {"work": 1, "queue": 1}, "rows": [
+            {"id": "f-web", "title": "我的对话", "group": "work", "tag": "working", "words": ["在干活", "Working"],
+             "origin": "web", "can_talk": True, "at": 9},
+            {"id": "f-park", "title": "旧话题", "group": "queue", "tag": "idle", "words": ["空闲", "Idle"],
+             "origin": "web", "can_talk": True, "state": "parked", "at": 8},
+        ]}
+        groups = {g: [] for g in v.GROUPS}
+        groups["work"] = [sess("@3", "f-web", "work")]
+        out, out_gone = v.board_apply(board, groups, [], [], "m", "u")
+        self.assertEqual(out["work"][0]["target"], "@3")
+        self.assertEqual((out["work"][0]["text"], out["work"][0]["origin"]), ("我的对话", "web"))
+        park = out["queue"][0]
+        self.assertEqual((park["word"], park["origin"]), ("空闲", "web"), "a parked session reads as idle")
+        items = [e for g in v.GROUPS for e in out[g]] + out_gone
+        with patch.object(v, "say", side_effect=lambda k, x: x):
+            self.assertEqual(v.session_count(items), str(board["count"]))
+
     def test_exited_window_is_not_counted(self):
         items = [sess("@1", "a", "work"), sess("@2", "b", "folded", sec="gone", shut=True, state="exited")]
         with patch.object(v, "say", side_effect=lambda k, x: x):
