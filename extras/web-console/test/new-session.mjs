@@ -29,14 +29,14 @@ const nodes = { nodes: [
   { hostname: 'laptop', os_user: 'me', status: 'online' },
   { hostname: 'mac-mini', os_user: 'me', status: 'online', machine_link: true },
   { hostname: 'gone-box', os_user: 'me', status: 'lost' },
-], machines: [{ hostname: 'laptop', role: 'client' }, { hostname: 'studio-2', alias: 'm5' }] };
+], machines: [{ hostname: 'laptop', role: 'client' }, { hostname: 'studio-2', alias: 'h1' }] };
 const logins = [{ machine: 'mac-mini', login: 'me' }, { machine: 'studio-2', login: 'me' }, { machine: 'laptop', login: 'me' }, { machine: 'gone-box', login: 'me' }];
 const ms = machinesOf(nodes, logins, home);
 assert.deepEqual(ms.map((m) => [m.hostname, m.label, m.state, m.home]),
   [['mac-mini', 'mac-mini', 'on', true], ['gone-box', 'gone-box', 'lost', false], ['studio-2', 'studio-2', 'on', false]]);
-// a machine reads by its own name, never the operator's ssh alias (task WD8F: «m5 · 家» for macmini)
-assert.equal(machinesOf({ nodes: [{ hostname: 'macmini.local', os_user: 'me', status: 'online' }], machines: [{ hostname: 'macmini.local', alias: 'm5' }] },
-  [{ machine: 'macmini.local', login: 'me' }], { machine: 'macmini.local', login: 'me', state: 'ok' })[0].label, 'macmini');
+// a machine reads by its own name, never the operator's ssh alias (task WD8F: an alias on the home's row)
+assert.equal(machinesOf({ nodes: [{ hostname: 'box-a.local', os_user: 'me', status: 'online' }], machines: [{ hostname: 'box-a.local', alias: 'h1' }] },
+  [{ machine: 'box-a.local', login: 'me' }], { machine: 'box-a.local', login: 'me', state: 'ok' })[0].label, 'box-a');
 // a home the roster does not list yet is still there to pick
 assert.equal(machinesOf({ nodes: [] }, logins, home)[0].hostname, 'mac-mini');
 

@@ -24,7 +24,7 @@ type Scenario = { role?: "user" | "admin" | "view"; // view = an admin looking t
   chat?: "claude" | "codex"; codex?: "ask" | "busy" | "new";
   // 接管 (claude-fleet VV8F): the followed terminal session idle (接管 can go) or answering (等它说完)
   view?: "idle" | "busy";
-  // Arvin's six (claude-fleet WD8F): a reply still running (新对话 can go), or one the home was stopped in (重试)
+  // a person's six (claude-fleet WD8F): a reply still running (新对话 can go), or one the home was stopped in (重试)
   wd8f?: "busy" | "cut" };
 
 // 接管 / 交回 (VV8F): whether this page holds the followed session now
@@ -362,7 +362,7 @@ export async function install(): Promise<string> {
       case "/v1/nodes": return ok({ nodes: [
         { endpoint_id: "e1", hostname: "mac-mini", os_user: me.login, status: "online", load1: 1.9, ncpu: 8, sessions: 3, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
         { endpoint_id: "e2", hostname: "studio-2", os_user: me.login, status: "online", load1: 0.6, ncpu: 12, sessions: 0, fleet_version: "b9276c61a", last_heartbeat: new Date().toISOString() },
-      ], machines: [{ hostname: "mac-mini", alias: "m5" }, { hostname: "studio-2", alias: "m4" }] });
+      ], machines: [{ hostname: "mac-mini", alias: "h1" }, { hostname: "studio-2", alias: "h2" }] });
       case "/v1/me/identities": {
         const m = (init?.method || "GET").toUpperCase();
         if (m === "POST") {

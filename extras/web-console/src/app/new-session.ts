@@ -35,8 +35,8 @@ export const hasHome = (h: Home | null): h is Home & { machine: string } => !!h?
 
 // The person's machines a session can open on (/v1/nodes): their own logins
 // on it, never a client computer or a machine's link row; the home first. A
-// machine is shown by its own name (macmini, mini2) — the roster's alias is the
-// operator's ssh shorthand (m5, m4), a word the person never chose (task WD8F).
+// machine is shown by its own name (its hostname) — the roster's alias is the
+// operator's ssh shorthand (h1, h2), a word the person never chose (task WD8F).
 export const machineName = (hostname: string) => hostname.split(".")[0] || hostname;
 type Node = { hostname: string; os_user: string; status: string; machine_link?: boolean; compute_off?: boolean };
 type Nodes = { nodes?: Node[]; machines?: { hostname: string; alias?: string; role?: string }[] };
