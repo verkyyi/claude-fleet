@@ -637,7 +637,7 @@ const SessionView: FC<SessionProps> = (props) => {
   const { me } = useShell();
   // Both a read-only ticket and a view-as preview keep the runtime read-only.
   const preview = !!(me?.read_only || (viewAs && (!me || me.view_as)));
-  const v = useSessionView(source.worker || "", !!me && !preview);
+  const v = useSessionView(source.worker || "", me ? !preview : null);
   const [mine, setMine] = useState<Mine>(null);
   const [, setTick] = useState(0);
   // a giveback made here is believed SURE_MS at most: look again then
@@ -647,7 +647,7 @@ const SessionView: FC<SessionProps> = (props) => {
     return () => clearTimeout(t);
   }, [mine]);
   const stage = stageOf(v.state, mine, Date.now());
-  const raw: SyncWord = v.gate?.code === "home_down" ? "offline" : v.gate && v.count ? "syncing" : v.layer && v.layer !== "home" ? "syncing" : "";
+  const raw: SyncWord = v.gate?.code === "home_down" || v.access === "offline" ? "offline" : !v.live || v.access === "checking" || (v.gate && v.count) || (v.layer && v.layer !== "home") ? "syncing" : "";
   const sync = useSyncWord(raw);
   const busy = v.state ? v.busy : undefined;
   useEffect(() => { onHead?.({ sync, busy }); }, [sync, busy, onHead]);
@@ -690,21 +690,20 @@ const FailLine: FC<{ v: ReturnType<typeof useSessionView> }> = ({ v }) => {
 const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: SyncWord; preview: boolean }> = (props) => {
   const { last, v, sync, preview, source } = props;
   const talk = v.canTalk && !preview;
-  // nothing read yet and a refusal: the sentence, and the last word if there is one
-  if (v.gate && !v.count) return (
-    <div className="flex h-full flex-col" data-testid="session-view" data-gate={v.gate.code}>
-      <div className="mx-auto flex w-full max-w-[44rem] min-h-0 flex-1 flex-col justify-end gap-3 px-4 py-6">
+  const boxWords = preview ? tr("只读 · 当前登录只能查看这个会话。", "Read-only · this sign-in can only view this session.")
+    : sync === "offline" || v.access === "offline" ? OFFLINE_BOX()
+    : v.access === "checking" ? tr("正在连接会话，可以先写下要说的话…", "Connecting to your session; you can draft your message…")
+    : talk ? composerPlaceholder(null, null) : readOnlyWords(source.open);
+  // Keep the runtime and composer mounted through an empty/offline view too:
+  // a failed connection must not discard a draft written before history arrived.
+  const Empty: FC = () => (
+    <div className="mx-auto flex w-full max-w-[44rem] flex-1 flex-col justify-end px-4 py-6">
+      {v.gate ? <>
         {last ? <div className="bg-muted max-w-[85%] self-end rounded-2xl px-4 py-2.5 text-[15px] break-words whitespace-pre-wrap" data-testid="last-word">{last}</div> : null}
         <p className="text-muted-foreground text-center text-[13px]" role="status" data-testid="view-gate">
           {VIEW_WORDS()[v.gate.code] || v.gate.msg || tr("现在看不了这个会话的对话。", "This conversation cannot be followed right now.")}
         </p>
-      </div>
-      <ClosedComposer words={v.gate.code === "home_down" ? OFFLINE_BOX() : readOnlyWords(source.open)} />
-    </div>
-  );
-  const Empty: FC = () => (
-    <div className="mx-auto flex w-full max-w-[44rem] flex-1 flex-col justify-end px-4 py-6">
-      <p className="text-muted-foreground text-center text-[14px]">{v.loaded ? (talk ? tr("说点什么吧。", "Say something.") : tr("它还没说话。", "Nothing said yet.")) : tr("正在读它的对话…", "Reading its conversation…")}</p>
+      </> : <p className="text-muted-foreground text-center text-[14px]">{v.loaded ? (talk ? tr("说点什么吧。", "Say something.") : tr("它还没说话。", "Nothing said yet.")) : tr("正在读它的对话…", "Reading its conversation…")}</p>}
     </div>
   );
   const Top: FC = () => <><FailLine v={v} />{v.state?.continuation ? <p role="status" className="text-muted-foreground px-2 text-center text-[13px]">{v.state.continuation.message}</p> : null}</>;
@@ -713,11 +712,10 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
     <AssistantRuntimeProvider runtime={v.runtime}>
       <TooltipProvider>
         <PageCardUI />
-        <div className="flex h-full flex-col" data-testid="session-view" data-talk={talk ? "" : undefined} data-live={v.live ? "" : undefined}>
+        <div className="flex h-full flex-col" data-testid="session-view" data-gate={v.gate?.code} data-access={v.access} data-talk={talk ? "" : undefined} data-live={v.live ? "" : undefined}>
           <div className="min-h-0 flex-1">
             <Thread autoFocus={false}
-              placeholder={sync === "offline" ? OFFLINE_BOX() : v.state?.continuation?.state !== "continued" && v.state?.continuation ? v.state.continuation.message : talk ? composerPlaceholder(null, null)
-                : v.access === "checking" ? tr("正在连接会话，可以先写下要说的话…", "Connecting to your session; you can draft your message…") : readOnlyWords(source.open)}
+              placeholder={talk && v.state?.continuation?.state !== "continued" && v.state?.continuation ? v.state.continuation.message : boxWords}
               components={talk ? { Welcome: Empty, ToolFallback: ViewToolStep, ComposerStart: ComposerAddAttachment, ComposerTop: Top }
                 : { Welcome: Empty, ToolFallback: ViewToolStep }} />
           </div>

@@ -22,6 +22,7 @@ _fa_claude_seed_words='1'
 _fa_claude_park_resume='1'
 _fa_claude_park_exit='typed'
 _fa_claude_park_probe='inbox'
+_fa_claude_park_incompatible='(?:incompatible|unsupported) (?:session|transcript|conversation) version|session (?:was )?created (?:with|by) a newer version'
 _fa_claude_ready_check=''
 _fa_claude_trust='claude-json'
 _fa_claude_mcp='flags'
@@ -61,6 +62,7 @@ _fa_codex_seed_words='0'
 _fa_codex_park_resume='1'
 _fa_codex_park_exit='paste'
 _fa_codex_park_probe='native-input'
+_fa_codex_park_incompatible='(?:incompatible|unsupported) (?:session|rollout|thread) version|session (?:was )?created (?:with|by) a newer version'
 _fa_codex_ready_check='fleet_codex_ready'
 _fa_codex_trust='codex-toml'
 _fa_codex_mcp='config'
@@ -89,7 +91,7 @@ fleet_agent_or_default() { if fleet_agent_known "${1:-}"; then printf '%s' "$1";
 fleet_agent_get() {   # <agent> <column> — prints the value; exit 1 unknown
   fleet_agent_known "${1:-}" || return 1
   case "${2:-}" in ''|*[!a-z0-9_]*) return 1 ;; esac
-  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume park_exit park_probe ready_check trust mcp deliver sid_source clear_said transcript from_pr_flag transfer_source home_flag account_env loop_settled exit_paste armed_cycle native_cron bind_proof account_resume end procs proc_js bg_probe daemon cred_home " in *" $2 "*) : ;; *) return 1 ;; esac
+  case " launcher model_env model_flag resume_flag fork_flag fork_replaces continue_flag preset_sid_flag sid_window sid_pending sid_thread seed seed_words park_resume park_exit park_probe park_incompatible ready_check trust mcp deliver sid_source clear_said transcript from_pr_flag transfer_source home_flag account_env loop_settled exit_paste armed_cycle native_cron bind_proof account_resume end procs proc_js bg_probe daemon cred_home " in *" $2 "*) : ;; *) return 1 ;; esac
   eval "printf '%s' \"\${_fa_${1}_${2}}\""
 }
 fleet_agent_session_id() {   # <agent> <reader> [window|fallback] — the window's current conversation id;

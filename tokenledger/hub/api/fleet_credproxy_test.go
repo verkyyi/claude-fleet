@@ -122,7 +122,7 @@ func (r *cpRig) call(t *testing.T, provider, cred string) (int, string) {
 	if provider == credvault.Codex {
 		path = "/v1/proxy/codex/responses"
 	}
-	req, _ := http.NewRequest(http.MethodPost, r.proxy.URL+path, strings.NewReader(`{"PING":1}`))
+	req, _ := http.NewRequest(http.MethodPost, r.proxy.URL+path, strings.NewReader(`{"input":"PING"}`))
 	req.Header.Set("Authorization", "Bearer "+cred)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {

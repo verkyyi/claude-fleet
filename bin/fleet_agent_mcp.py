@@ -525,11 +525,42 @@ def package_child(pid, config, argv_reader, exe_reader):
     return False
 
 
-def matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader=None):
-    return [(name, conf) for name, conf in configured.items()
-            if conf.get('enabled', True) and
-            (configured_process(pid, conf, argv_reader, exe_reader, env_reader, rows.get(pid, (None,))[0])
-             or npm_title_process(pid, conf, rows, argv_reader, exe_reader))]
+def managed_wrapper_configs(config):
+    """Known final services of the shipped GitHub/fetch wrappers (T965).
+
+    This identifies a resident service for the non-strict busy question only;
+    it does not prove shell expansion or promise a restart preserves state.
+    Match the complete default invocation, then still verify the actual kernel
+    executable, exact arguments and package entrypoint. Never execute the shell
+    or read its credential. Custom wrappers/arguments remain unknown.
+    """
+    if config.get('command') != 'bash':
+        return []
+    for wrapper, services in (
+        ('github', [('github-mcp-server', ['stdio']),
+                    ('npx', ['-y', '@modelcontextprotocol/server-github'])]),
+        ('fetch', [('uvx', ['mcp-server-fetch']),
+                   ('python3', ['-m', 'mcp_server_fetch'])]),
+    ):
+        if config.get('args') == ['-lc', 'exec "$HOME/.claude/fleet/bin/mcp-%s.sh"' % wrapper]:
+            return [dict(command=command, args=args) for command, args in services]
+    return []
+
+
+def matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader=None,
+                     managed_wrappers=False):
+    matches = []
+    for name, conf in configured.items():
+        if not conf.get('enabled', True):
+            continue
+        candidates = [conf] + (managed_wrapper_configs(conf) if managed_wrappers else [])
+        for candidate in candidates:
+            if (configured_process(pid, candidate, argv_reader, exe_reader, env_reader,
+                                   rows.get(pid, (None,))[0])
+                    or npm_title_process(pid, candidate, rows, argv_reader, exe_reader)):
+                matches.append((name, candidate))
+                break
+    return matches
 
 
 def restartable(source):
@@ -609,7 +640,8 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
     for pid, (parent, _) in rows.items():
         if parent != server_pid:
             continue
-        matches = matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader)
+        matches = matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader,
+                                   managed_wrappers=not strict and source.get('agent') == 'codex')
         if len(matches) != 1:
             continue
         name, conf = matches[0]

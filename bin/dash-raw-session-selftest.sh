@@ -36,6 +36,9 @@
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
+# The fixture owns its dispatch authority; never inherit a live worker's Hub.
+export CCQUOTA_FLEET=0 FLEET_TASK_AUTHORITY='' FLEET_SKIP_GLOBAL_CONF=1
+unset FLEET_DISPATCH
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 RAW="$BIN/dash-raw-session.sh"
@@ -62,6 +65,7 @@ ln -s "$RAW" "$WORK/bin/dash-raw-session.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet_dispatch.py" "$WORK/bin/fleet_dispatch.py"
 ln -s "$BIN/fleet-ui-lang.sh" "$WORK/bin/fleet-ui-lang.sh"   # fleet_ui_fail (issue #1618)
+ln -s "$BIN/fleet-codex-session.py" "$WORK/bin/fleet-codex-session.py"
 # Record the async prefill handoff; scratch-prefill-selftest.sh tests delivery.
 cat > "$WORK/bin/scratch-prefill.py" <<'PY'
 import json, os, sys
@@ -501,6 +505,22 @@ WINS=plan FLEET_MAX_SESSIONS=0 run_raw --native-worktree --node local --agent cl
 [ ! -s "$NEWWIN_LOG" ] || fail "Q a retired --native-worktree opened a window"
 grep -q 'native-worktree is retired' "$WORK/err" || fail "Q missing the retired-flag refusal" "$(cat "$WORK/err")"
 ok "Q --native-worktree is refused as retired, no window"
+
+# R: Codex resumes use the native home rollout, never Claude's project path.
+reset_scratch
+sid=11111111-2222-4333-8444-555555555555
+codex_home="$WORK/codex home"
+mkdir -p "$codex_home/sessions/2026/10/22"
+rollout="$codex_home/sessions/2026/10/22/rollout-test-$sid.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s"}}\n' "$sid" > "$rollout"
+WINS=plan FLEET_MAX_SESSIONS=0 FLEET_CODEX_HOME="$codex_home" run_raw --no-repo --agent codex --resume "$sid"
+grep -q -- "--resume $sid" "$NEWWIN_LOG" || fail "R Codex history silently became a new conversation" "$(cat "$NEWWIN_LOG")"
+grep -q -- "@norepo_sid '$sid'" "$NEWWIN_LOG" || fail "R resumed native identity was not stamped"
+# A matching filename is not enough: metadata must identify this conversation.
+printf '{"type":"session_meta","payload":{"id":"different"}}\n' > "$rollout"
+WINS=plan FLEET_MAX_SESSIONS=0 FLEET_CODEX_HOME="$codex_home" run_raw --no-repo --agent codex --resume "$sid"
+grep -q -- "--resume $sid" "$NEWWIN_LOG" && fail "R resumed unrelated rollout metadata"
+ok "R Codex resumes its exact native rollout; unrelated metadata never resumes"
 
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

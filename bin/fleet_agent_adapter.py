@@ -89,6 +89,8 @@ Columns
                   no-repo identity asks for the session
   account_resume  1 = a cutover may reopen the SAME conversation under another
                   account (--native-resume); 0 = not supported
+  park_incompatible regex identifying a resume rejected for native format/version;
+                  the parked editor offers a new conversation with the saved words
   end             how the fleet hears that the person walked away (T631, C8): hook =
                   the agent's SessionEnd hook, reason prompt_input_exit|logout (the
                   launcher execs the agent, so there is no exit code to read); exit =
@@ -123,7 +125,7 @@ HERE = Path(__file__).resolve().parent
 
 COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "fork_replaces",
            "continue_flag", "preset_sid_flag", "sid_window", "sid_pending", "sid_thread",
-           "seed", "seed_words", "park_resume", "park_exit", "park_probe", "ready_check", "trust", "mcp",
+           "seed", "seed_words", "park_resume", "park_exit", "park_probe", "park_incompatible", "ready_check", "trust", "mcp",
            "deliver", "sid_source", "clear_said", "transcript", "from_pr_flag",
            "transfer_source", "home_flag", "account_env", "loop_settled", "exit_paste",
            "armed_cycle", "native_cron", "bind_proof", "account_resume",
@@ -138,6 +140,7 @@ ADAPTERS = {
         "sid_window": "@cc_session_id", "sid_pending": "", "sid_thread": "",
         "seed": "slash", "seed_words": "1", "park_resume": "1",
         "park_exit": "typed", "park_probe": "inbox",
+        "park_incompatible": r"(?:incompatible|unsupported) (?:session|transcript|conversation) version|session (?:was )?created (?:with|by) a newer version",
         "ready_check": "", "trust": "claude-json", "mcp": "flags",
         "deliver": "inbox",
         "sid_source": "hook", "clear_said": "1", "transcript": "project", "from_pr_flag": "--from-pr",
@@ -154,6 +157,7 @@ ADAPTERS = {
         "sid_window": "@codex_session_id", "sid_pending": "@codex_pending", "sid_thread": "@codex_thread_id",
         "seed": "skill", "seed_words": "0", "park_resume": "1",
         "park_exit": "paste", "park_probe": "native-input",
+        "park_incompatible": r"(?:incompatible|unsupported) (?:session|rollout|thread) version|session (?:was )?created (?:with|by) a newer version",
         "ready_check": "fleet_codex_ready", "trust": "codex-toml", "mcp": "config",
         "deliver": "queue",
         "sid_source": "thread", "clear_said": "0", "transcript": "home", "from_pr_flag": "",

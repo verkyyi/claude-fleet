@@ -402,30 +402,95 @@ credits 标志，没有可跨订阅比较的绝对 token / 请求容量，也没
   读数保守保留 limited；新鲜 blocked 与 429 cooldown 也覆盖正面读数。
 - **只有 usable 才有重置利用机会**：5h 距 reset ≤30 分钟，或 7d ≤12 小时。
   同一层内有机会者优先；不比较两个账号的精确余量，也不因一窗快重置就花掉另一窗
-  的最后储备。缺容量时这是保守机会选择，不是精确容量优化。
+  的最后储备。缺容量时这是保守机会利用，不是绝对容量最优或精确容量优化。
 - 已绑定的人类 Codex 会话至少保持 10 分钟。只有另一候选已知 usable，且当前
   tight/limited，或当前也是 usable 而另一候选独有重置机会，才主动换绑。
   读数未知本身不证明切换有收益；显式人工绑定不被主动策略覆盖。服务会话保留既有
   yield 逻辑，不使用新的主动换绑。429/授权失效仍走原有故障处理，不受机会型保持阻挡。
 
-**请求边界与并发。** 新中心代理只在发送新请求前的 resolve 带 `request_boundary`，
-缓存至多 30 秒；旧代理不带此字段便不会主动改已有绑定。401 处理的 resolve 不带该字段。
-每个请求拿自己的凭据快照，流开始后不替换 token、不取消流、不重启 Agent。双副本或
-并发请求可以跨绑定版本重叠：旧流继续用旧账号直到结束，新请求可用新账号；这不承诺
-所有副本全局等待零 inflight。绑定更新使用数据库 revision CAS，较旧决定不能覆盖另一
-请求或人工操作。诊断分别记录决定和提交后实际版本，缓存更新只影响后续请求。
+阈值依据是保守策略取舍，未经真实订阅压测，也不是上游缓存 TTL 或容量承诺：
+10 分钟最短保持限制正常主动切换最多每 10 分钟一次，减少缓存反复失效；同为
+10 分钟的读数有效期限制旧观察带来的机会，两个时钟独立，保持期结束不会刷新读数。
+20% 是每个窗口自己的保护带，不代表相同 token 储备或保证下一请求一定放得下。
+30 分钟 / 12 小时分别约为 5h / 7d 的最后 10% / 7%，把机会限定在窗口末段，
+不对两个窗口或不同套餐的价值做精确加权。收益门槛是离散状态变化：恢复双窗保护带，
+或两者都有保护带但仅候选临近 reset；百分比多一点、双方都有机会、未知变已知均不足以
+单独触发主动换绑。假时钟测试固定保持期前一秒、恰好到期、后一秒，另测新鲜度、
+20% 保护带与两个机会窗口的阈值内外。后续调参需要正常业务的脱敏证据另行评估。
+
+**请求边界与账号亲和。** 新 HTTP 请求不等于独立上下文。只有可识别的自包含请求
+（例如不带引用的完整文字历史）才允许按上述滞后策略重选。`previous_response_id`、
+conversation、item/call ID、加密 reasoning/compaction 和 `x-codex-turn-state` /
+`x-codex-routing-hint` 必须回到其来源凭据。来源由中心代理观察上游输出后写入
+hub 的 `fleet_codex_affinity`，以 worker + 带用途的 SHA256 引用为键，保存所属人与
+稳定凭据身份和实际 ChatGPT account ID 的用途隔离摘要；不保存原文、加密正文、header 或 token。代理冷启动、两副本和 pass
+续期共享同一记录。引用有效期为最近观察后 30 天；到期、未知、跨来源混合、同一引用发生身份冲突
+均明确返回 `409 codex_continuation_unavailable`，保持现有绑定及 revision 不变，不能猜当前绑定就是来源。
+这里“维持绑定”不表示将未知续接转发给当前账号。WebSocket 的 GET responses/Upgrade
+不在路径授权范围，返回 403，不解析其状态、不选账号、不连接上游。过期身份与
+冲突记录保留为墓碑，不能删掉后让重复引用转属另一个账号；此表随已观察引用数增长，
+发布容量验收须计入这部分数据库存储。
+
+每次 Codex 请求都向 hub 询问来源，不走仅按 pass 缓存的旧 resolve 或 stale fallback；
+hub 不可用时返回 503。新代理要求 hub 明确回传 `codex_affinity_v1` 能力；旧 hub
+忽略未知 wire 字段而返回普通 lease，也不能被误当成已经登记来源。来源账号仍须通过 allowlist、暂停、reauth、refresh 健康与
+cooldown 检查，替换同名凭据或改变同一 OAuth 身份的 workspace/account ID 都不继承旧引用；
+缺少实际 account ID 的 lease 不能提供续接保证，拒绝发送推理。续接只取得该来源的 lease，不覆盖较新的
+sticky 或人工绑定。旧 `request_boundary` boolean 不再触发主动重选；旧消费者仍可
+resolve，但没有证明上下文独立的能力。
+
+每个请求拿自己的凭据快照，流开始后不替换 token、不取消流、不重启 Agent。两个
+副本可跨版本并发：A 的旧流继续到结束，B 上的独立请求正常进行；A 的后续续接仍回
+A。绑定更新使用 revision CAS，较旧决定不能覆盖另一个请求或人工操作。来源记录必须先于引用交付：SSE 按事件登记再原字节转发；普通 JSON 最多缓冲 8 MiB。
+上游请求协商 identity 编码，非预期的压缩响应拒绝。登记失败或超出事件/响应边界时
+终止该响应，不交付未登记状态、不重放推理；已交付的流内容仍不可撤回。这增加 hub
+依赖和事件延迟，必须纳入发布验收。
+
+**兼容限制与发布前提。** 这是保守协议，不保证未知请求结构可自动移植。当前识别
+文字/内嵌图片、function/custom tool、reasoning/compaction 与上述显式引用；未知
+输入项、未知顶层字段、压缩请求体、外部 file/vector-store 依赖明确拒绝。引用上限
+每请求 4096 个，数据库批量读写；不截断后猜测。超出解析上限的上游响应停止交付；未观察到的输出，其后续引用拒绝。
+上线前生成的 opaque 历史没有来源记录，不可默认为当前账号；因此现存会话是否可继续
+必须在正式发布验收中评估。不得以删除历史、剥离 opaque 内容、重放或重启 Agent 来
+伪造可移植性。生产 rollout 必须先确认所有中心代理支持本协议，再开放会改变绑定的
+流量；混用旧代理的缓存不能保证亲和。
+
+依据：OpenAI 官方 [conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
+和 [compaction](https://developers.openai.com/api/docs/guides/compaction) 文档说明这些
+对象携带续接状态，未承诺跨订阅账号可移植。本机 Codex 0.162.1 对应源码
+`codex-rs/core/src/client.rs` 的 `ModelClientSession` 也明确约定 turn-state 只在同一
+turn 内复用，auth ownership 变化时清除。网关不能替 Agent 清除或重建其状态。
 
 Codex 的配额 429 仍记 cooldown、选择其他候选，但本次原样返回 429，**不跨账号重放**。
 下一次独立请求才使用新绑定。401 access 刷新仍记录拒绝并更新健康状态，但刷新结果也
-仅供下一次独立请求使用，本次返回原始 401；即便是同账号也不重放。普通请求率 429 不换绑。
+仅供下一次独立请求使用，本次返回原始 401；即便是同账号也不重放。Codex 的 HTTP
+客户端不跟随重定向，向 Agent 返回不带 Location 的 400，且移除请求 body 的自动 rewind 能力。普通请求率 429 不换绑。
+
+这改变了 Codex 已知配额拒绝后的重试契约，与请求开始时的主动机会策略分开验收：
+
+| 场景 | T947 前 | T947 后 |
+| --- | --- | --- |
+| Codex 明确额度 429，有替代账号 | cooldown、换绑并同请求重发一次，caller 可能收到成功 | cooldown、换绑；caller 收到原始 429 正文及 Retry-After；下一独立请求使用新绑定 |
+| Codex 普通请求率 429 | 原样返回，不换绑 | 保持该行为，不制造额度 cooldown |
+| Codex 401 access 拒绝 | 刷新后可能同请求重试 | 仍报告拒绝/刷新健康，本次原 401 返回，不重放；新凭据供下一请求 |
+| Claude 明确额度 429 | 可换绑并重发一次 | 保留既有契约 |
+| Codex 主动机会选择 | 已有 sticky 保持 | 仅独立请求且满足最短保持/收益门槛时 CAS 换绑；未发生推理重试 |
+
+`TestCodexSelection429Contract` 用真实 hub 和隔离假上游分别验证额度/普通 429：
+原响应状态、正文与 Retry-After、单次上游调用、凭据身份 cooldown 及其 reset 边界、
+绑定 revision、下一独立请求的账号与原始正文。Claude 的旧重发契约另由
+`TestCredProxyRebindsOnQuota429` 固定，不能作为 Codex 不重放的证据。
+`TestCodexQuotaCASTwoReplicas` 使用同库两个独立 Store 连接，显式安排获胜提交后
+旧 revision 的反向决定到达，重复 CAS loser 均重读已提交账号/revision/保持时间，
+不能倒退，也不能覆盖人工绑定；API 的并发与保持期测试另验证不抖动。
 
 日志 `credproxy selection` 带策略版本、窗口观察年龄、窗口有效性、剩余百分比、reset、
 健康层、可比性与选择/维持原因；不记录 access/refresh token、原始读取报错、请求正文或
 请求头。`minimum_hold`、`no_known_safe_alternative`、`explicit_binding` 等原因可以解释
 为什么没有切换。此策略不触发额外额度探测。
 
-验收使用 `TestCodexQuota*`、`TestCodexSelection*` 和现有 `TestCredProxy*` / `TestCredPolicy*`，
-假时钟、临时数据库和 loopback 假上游；`codex-quota-sticky` 是 BREAK-IT 入口。不得以真实
+验收使用 `TestCodexQuota*`、`TestCodexSelection*`、`TestCodexContinuation*` 和现有 `TestCredProxy*` / `TestCredPolicy*`，
+假时钟、临时数据库和 loopback 假上游；`codex-quota-sticky` 和 `codex-continuation-account` 是 BREAK-IT 入口。不得以真实
 订阅请求做压力测试。**合并不是生产启用**：需正常发布 hub 与中心代理；仅 hub 更新时
 旧代理不会触发已有 sticky 的机会型重选。发布后通过正常业务请求的脱敏选择日志核对
 版本、双窗口状态、保持原因和绑定变化，不为验收额外花订阅额度；发布结果独立记录。

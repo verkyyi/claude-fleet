@@ -5585,6 +5585,8 @@ drill_quota_boundary_recheck() {
   local started; started=$(now)
   python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_unattempted_refusal_rechecks_when_native_cancel_or_delivery_settles >"$WORK/quota-boundary.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-transfer-source-selftest.py" QuotaDialog.test_native_prompt_proof_uses_real_inbox_dispatch_without_probe_seam >>"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
 }
 
@@ -5705,6 +5707,24 @@ drill_spinner_protocol_budget() {
     || { WHY="resident protocol invalidation: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；协议总账由两个 process-budget 44 秒独立场景共测'
+}
+
+drill_codex_resume_history() {
+  CAP=120; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dash-issue-session-prompt-selftest.sh" 2>&1) \
+    || { WHY="Codex issue 原对话恢复: $out"; return 1; }
+  out=$(bash "$BIN/dash-raw-session-selftest.sh" 2>&1) \
+    || { WHY="Codex 原对话恢复: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
+}
+
+drill_codex_hook_retired_root() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-startup-selftest.py" PolicyTests.test_live_hook_paths_survive_retired_release_removal PolicyTests.test_checkout_hooks_do_not_use_an_unrelated_live_install 2>&1) \
+    || { WHY="Codex Hook 版本目录回收: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='安装 Hook 走稳定入口；独立 checkout 不借用其他安装'
 }
 
 drill_codex_mcp_busy() {
@@ -6437,6 +6457,30 @@ drill_park_codex_new_thread() {
   WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
 }
 
+drill_park_codex_loop_idle() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_looping_without_mod_status_uses_native_idle_proof 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 循环没有 Claude mod 状态时仍由原生 idle 证明决定停放，正在工作的原生 thread 不停'
+}
+
+drill_wake_loop_reenters_bridge() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_resume_does_not_reenter_initial_loop_bridge 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放后接回清除首次桥接启动参数，保留原 manifest 与单 owner 定时约定，不重建循环'
+}
+
+drill_wake_wrong_transcript() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dash-issue-session-prompt-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='启用 Codex 停放不能把旧项目目录里的 Claude transcript 当成它的恢复依据'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)
@@ -6535,6 +6579,14 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_storm() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-loadgen.sh" 4 300 -- python3 "$BIN/fleet-wake-guard-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="十个 fake 会话跨登录共享名额，接回同时最多三个、60 秒内全醒；$out"
+}
+
 drill_wake_fail_silent() {
   CAP=30; local t0 out
   t0=$(now)
@@ -6877,6 +6929,13 @@ drill_chat_gate_cold_readonly() {
   CAP=30
   webchat_part gate "Y a cold view is checking, never read-only before the gate answers" || return 1
   WHAT="冷连接先发探测中，再由会话门明确允许发送；探测未完成不误报只读"
+}
+
+drill_chat_gate_probe_unavailable() {
+  CAP=30
+  webchat_part gate "Y a failed capability probe is unavailable, never a read-only verdict" \
+    "Y capability failure after a writable frame recovers on the same stream" || return 1
+  WHAT="能力探测失败明确暂不可达，同一流下一次成功恢复可写；只读权限不放宽"
 }
 
 drill_codex_release_shadowed() {

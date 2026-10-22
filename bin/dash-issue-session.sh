@@ -773,11 +773,10 @@ fi
 unset _words
 # A parked session's return (--resume, issue #2671): the same conversation, its
 # own first turn — only when the transcript is still there and the agent comes back
-# into its own conversation (the table's park_resume: Claude).
+# into its own conversation (the table's park_resume and transcript kind).
 RESUME_ARG=''
-if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] \
-   && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
-  RESUME_ARG=" --resume $RESUME_SID"
+if fleet_resume_transcript_exists "${AGENT:-${FLEET_AGENT:-}}" "$wt" "$RESUME_SID"; then
+  RESUME_ARG=" $(agent_col resume_flag) $RESUME_SID"
   [ -n "$SEED_FILE" ] && [ -s "$SEED_FILE" ] && { cat "$SEED_FILE" > "$tf"; SEED_WORDS=''; }
 fi
 if [ -n "$FETCH_PID" ]; then wait "$FETCH_PID" 2>/dev/null

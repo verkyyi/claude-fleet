@@ -2387,6 +2387,7 @@ esac
 STUB
   cat > "$sb/codex" <<'STUB'
 #!/bin/bash
+[ "${1:-}" != --version ] || { cat "$HOME/codex.version"; exit 0; }
 [ "${FLEET_CODEX_SESSION_CRED:-}" = fcp1.test ] && [ "${CODEX_HOME:-}" = "$HOME/safe-codex" ] || exit 1
 case "$*" in *fcp1.test*) echo 'token in argv'; exit 1 ;; esac
 case "$*" in *'model_provider="fleet"'*'base_url="http://127.0.0.1:18923/codex"'*'exec --skip-git-repo-check --ephemeral --sandbox read-only'*) ;; *) echo 'wrong wiring'; exit 1 ;; esac
@@ -2403,11 +2404,43 @@ STUB
   chmod +x "$sb/codex"
   printf 'FLEET_AGENT=codex\n' > "$sb/home/.config/claude-fleet/hub-defaults.conf"
   rm "$sb/home/.config/claude-fleet/fleet.conf"
+  # A first exec reply cannot certify the native queue API used after it.
+  # Old/unknown CLI versions must fail before minting or spending any budget.
+  for f in 'codex-cli 0.154.0' 'codex-cli 0.161.99' 'codex-cli unknown' ''; do
+    printf '%s\n' "$f" > "$sb/home/codex.version"
+    rm -f "$sb/home/cred.calls"
+    out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
+    case "$out" in "ready: FAIL reply: "*"Codex"*) ;; *) WHY="unsupported Codex runtime marked ready: $out"; sr_down; return 1 ;; esac
+    [ ! -s "$sb/home/cred.calls" ] || { WHY="unsupported Codex runtime minted credentials"; sr_down; return 1; }
+  done
+  rm -f "$sb/home/cred.calls"
+  out=$(FLEET_CODEX_BIN="$sb/missing-codex" chk 5)
+  case "$out" in "ready: FAIL reply: "*) ;; *) WHY="missing Codex marked ready: $out"; sr_down; return 1 ;; esac
+  [ ! -s "$sb/home/cred.calls" ] || { WHY="missing Codex minted credentials"; sr_down; return 1; }
+  printf 'codex-cli 0.162.0\n' > "$sb/home/codex.version"
   out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
   printf '%s' "$out" | grep -Eq '^ready: cred_ok=[0-9]+ home_ok=[0-9]+ first_reply_ok=[0-9]+$' \
     || { WHY="Codex default with Claude unavailable: $out"; sr_down; return 1; }
   grep -q '^revoke --sid ready-' "$sb/home/cred.calls" \
     || { WHY="Codex probe credential not revoked"; sr_down; return 1; }
+  # The managed release wins over a stale login PATH, just as at launch.
+  # Conversely an old pinned release cannot borrow a newer ambient CLI's reply.
+  mkdir -p "$sb/root/tools/bin" "$sb/home/.local/bin"
+  ln -s "$sb/codex" "$sb/root/tools/bin/codex"
+  printf '#!/bin/sh\necho "codex-cli 0.154.0"\n' > "$sb/home/.local/bin/codex"
+  chmod +x "$sb/home/.local/bin/codex"
+  out=$(FLEET_CODEX_BIN='' chk 5)
+  printf '%s' "$out" | grep -Eq '^ready: cred_ok=[0-9]+ home_ok=[0-9]+ first_reply_ok=[0-9]+$' \
+    || { WHY="readiness ignored the pinned release CLI: $out"; sr_down; return 1; }
+  rm "$sb/root/tools/bin/codex" "$sb/home/.local/bin/codex"
+  printf '#!/bin/sh\necho "codex-cli 0.154.0"\n' > "$sb/root/tools/bin/codex"
+  chmod +x "$sb/root/tools/bin/codex"
+  ln -s "$sb/codex" "$sb/home/.local/bin/codex"
+  rm "$sb/home/cred.calls"
+  out=$(FLEET_CODEX_BIN='' chk 5)
+  case "$out" in "ready: FAIL reply: "*"0.154.0"*) ;; *) WHY="old pinned CLI borrowed ambient readiness: $out"; sr_down; return 1 ;; esac
+  [ ! -s "$sb/home/cred.calls" ] || { WHY="old pinned CLI minted credentials"; sr_down; return 1; }
+  rm -rf "$sb/root/tools" "$sb/home/.local"
   # Fresh spare: no cached default yet; resolve public hub setting without auth.
   rm "$sb/home/.config/claude-fleet/hub-defaults.conf"
   python3 - "$sb/public-url" <<'PYMOCK' &
@@ -2456,7 +2489,7 @@ PYMOCK
     || { WHY="the hub no longer keeps a create's check (applyAccountResult → recordAccountCheck)"; return 1; }
   c11_go_tests fleet_spare_test.go TestSpareHandedOnlyAfterThreeChecks TestSpareSettings || return 1
   WHAT='验收脚本当真跑：没家 → FAIL home（cred_ok 在）；家起来、首句 403 → FAIL reply（cred_ok · home_ok 在）；都好 → 三个时间戳；入口只领 3/3 的备用（测试按名核对在，Go 门跑它）'
-  [ "$GO_RAN" = 1 ] && WHAT='Claude/Codex 按共用默认验收（含全新 spare 公共设置）；Codex 凭证隔离/撤销、mirror 失败拒绝；首句失败 / 旧节点没验的备用就绪 0、领号不给、名册没验过 2、审计 spare.unchecked；验过 3/3 才领得到；spare_max 只收 0–2（go test）'
+  [ "$GO_RAN" = 1 ] && WHAT='Claude/Codex 按共用默认验收（含全新 spare 公共设置）；Codex 实际 CLI 按 release 优先、复用 gate 最低版本，旧版/未知/缺失在发凭证前拒绝；凭证隔离/撤销、mirror 失败拒绝；首句失败 / 旧节点没验的备用就绪 0、领号不给、名册没验过 2、审计 spare.unchecked；验过 3/3 才领得到；spare_max 只收 0–2（go test）'
   SECS=$(since "$t0")
 }
 
@@ -2638,6 +2671,15 @@ drill_codex_quota_sticky() {
   c11_go_tests fleet_credproxy_selection_test.go TestCodexQuotaSelection TestCodexQuotaInputs TestCodexQuotaIncomparableCapacity TestCodexQuotaSticky TestCodexQuotaAuthorizationAndHealth TestCodexQuotaResolveExistingSession || return 1
   go_half '^TestCodexSelection' ./shared/credproxy; case $? in 1) return 1 ;; esac
   WHAT='Codex 双窗口、读数失效、容量不可比及 sticky 请求边界由隔离 Go fixtures 验证'
+  SECS=$(since "$t0")
+}
+
+drill_codex_continuation_account() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests fleet_credproxy_affinity_test.go TestCodexContinuationAcrossReplicas TestCodexContinuationLegacyBoundaryCannotReselect || return 1
+  go_half '^TestCodexContinuation' ./shared/credproxy ./hub/store; case $? in 1) return 1 ;; esac
+  WHAT='Codex 续接只能回到来源账号；跨副本、冷缓存与故障改绑均不跨账号重放（隔离 Go fixtures）'
   SECS=$(since "$t0")
 }
 

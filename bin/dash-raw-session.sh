@@ -869,10 +869,9 @@ fi
   stamp=''; nsid=''
   # A parked session's return (issue #3387): the same conversation when its
   # transcript is still where it ran and the agent comes back into its own
-  # conversation (the table's park_resume); else a fresh one.
+  # conversation through the adapter's transcript source and resume flag.
   rsid=''
-  if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] \
-     && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
+  if fleet_resume_transcript_exists "${AGENT:-${FLEET_AGENT:-}}" "$wt" "$RESUME_SID"; then
     rsid=$RESUME_SID
   fi
   if [ "$NOREPO" = 1 ]; then

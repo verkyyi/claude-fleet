@@ -68,6 +68,7 @@ except Exception:
 if not isinstance(pool, dict):
     sys.exit(0)                     # an older hub: no pool block, the file stays
 rules = {
+    "FLEET_SESSION_WAKE_SLOTS": lambda v: re.fullmatch(r"[0-9]{1,2}", v) and 1 <= int(v) <= 32,
     "FLEET_SESSION_REAP_PARKED": lambda v: re.fullmatch(r"[0-9]{1,8}", v) and 3600 <= int(v) <= 366 * 86400,
     "FLEET_ACCOUNT_CEILING": lambda v: re.fullmatch(r"[0-9]{1,3}", v) and 1 <= int(v) <= 100,
 }
