@@ -818,7 +818,12 @@ def park_locked(fid, why, force):
         return dict(ok=False, why="words_waiting")
     # C3 hands timers out before the process goes away. Until it is installed,
     # a live timer is a hold, never a silently lost wakeup.
-    if w["loop"]:
+    # Fleet's Codex loop has a ledger, not a native @loop mark. Its controller
+    # exits with the TUI too, so it needs the same handover before parking.
+    manifest = (tmux(w["sock"], "display-message", "-p", "-t", w["win"], "#{@handoff_manifest}") or "").strip()
+    ledger = Path(manifest).parent / "loop/state.json" if manifest else None
+    ledger_live = bool(ledger and ledger.exists() and (read_json(ledger) or {}).get("status") not in ("complete", "stopped"))
+    if w["loop"] or ledger_live:
         p = subprocess.run([sys.executable, str(BIN / "fleet_loop_mark.py"), "export", "--fid", fid],
                            capture_output=True, timeout=10)
         if p.returncode != 0:

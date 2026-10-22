@@ -167,6 +167,26 @@ class client:
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
 
+    def test_codex_ledger_without_native_mark_requires_timer_handover(self):
+        self.fake('codex')
+        from types import SimpleNamespace
+        manifest = self.root / 'transfer/manifest.json'
+        ledger = manifest.parent / 'loop/state.json'
+        ledger.parent.mkdir(parents=True)
+        manifest.write_text('{}')
+        ledger.write_text(json.dumps(dict(status='active', thread_id=self.sid)))
+        self.set('@handoff_manifest', str(manifest))
+        self.assertFalse(self.opt('@loop'))
+        run = gate.subprocess.run
+        def refuse_export(argv, **kwargs):
+            if str(BIN / 'fleet_loop_mark.py') in argv and 'export' in argv:
+                return SimpleNamespace(returncode=1)
+            return run(argv, **kwargs)
+        with patch.dict(os.environ, self.env), patch.object(gate.subprocess, 'run', side_effect=refuse_export):
+            self.assertEqual(gate.park(self.fid).get('why'), 'wake_contract')
+        self.assertTrue(self.opt('@park_relay'))
+        self.assertFalse(self.opt('@parked'))
+
     def test_codex_prompt_and_native_queue_hold(self):
         self.fake('codex')
         with patch.dict(os.environ, self.env):
