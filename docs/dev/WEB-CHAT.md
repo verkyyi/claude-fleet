@@ -45,6 +45,8 @@
 
 网页打开会话时，若会话门还在探测或暂时连不上，输入框显示「正在连接会话，可以先写下要说的话…」。可以先写草稿，确认会话可写后自动允许发送；不用重建会话。只有旧版会话或只读访问才显示只读，探测失败会继续重试。
 
+托管安装的 Codex 会话使用发行树固定的 CLI（`tools/bin/codex`），私有 app-server 与终端客户端保持同一版本；不会被 PATH 前面的旧版 npm/Homebrew CLI 覆盖。旧版本已启动的会话仍按真实能力只读，正常停放后可沿原会话接回到新版，记录保留。
+
 对话服务是这个登录的**登记后台服务**（docs/dev/MANAGED-NODE.md §10），只听一个 unix socket
 `$FLEET_CONF_DIR/webchat/chat.sock`（socket 0600，目录 0700）——不开任何 TCP 端口，不发 cookie、
 不要登录链接、不写 `admin.token`。能连上这个 socket 的只有本登录；到达它的是节点程序的转发

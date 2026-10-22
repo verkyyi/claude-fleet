@@ -18,6 +18,14 @@ _fl_lib="$BIN/fleet-launch-lib.sh"   # beside this script, else beside its link'
 . "$_fl_lib"
 if [ "${FLEET_CODEX_NATIVE_USAGE:-0}" = 1 ]; then export FLEET_CODEX_NATIVE_USAGE=1; else unset FLEET_CODEX_NATIVE_USAGE; fi   # #4557: only exported reaches the runtime
 
+# A managed release pins its CLI beside the scripts. A login's inherited PATH
+# may still name an older Homebrew/npm Codex first (T944); use the release tool
+# for both the private app-server and its terminal client. Ordinary checkouts
+# without release tools keep their existing PATH selection.
+if [ -x "$ROOT/tools/bin/codex" ]; then
+  PATH="$ROOT/tools/bin:$PATH"
+  export PATH
+fi
 command -v codex >/dev/null 2>&1 || { fleet_launch_say 'FLEET_AGENT=codex but `codex` is not on PATH — install OpenAI Codex CLI (npm i -g @openai/codex) and `codex login`, or set FLEET_AGENT back to claude.'; exit 127; }
 
 # Recovery callers carry the account home explicitly, and the shared resume spelling
