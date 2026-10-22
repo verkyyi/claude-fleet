@@ -927,10 +927,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Default 1800 (30 min).
 # @label=Nudge an unreported dispatched session after @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_UNREPORTED_SECS=1800
-# Compatibility only (C6 / T965): this old grace no longer permits closing a
-# real background job or pending loop. Completion never overrides running work.
-# @label=Legacy background grace (no longer waives work) @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
-#FLEET_REAP_BG_GRACE=1800
+# C6 / T965: real background jobs and pending loops always protect a session,
+# even after a terminal report. The old FLEET_REAP_BG_GRACE setting is ignored.
+
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota
 # move). Empty by default. Exact configured stdio launchers/package entrypoints
