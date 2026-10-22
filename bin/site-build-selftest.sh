@@ -55,6 +55,8 @@ NOW=2026-10-12
 # A — no drill
 if out="$("$BUILD" --out "$T/a" --drill "$T/none.json" --now "$NOW" 2>&1)"; then st_ok_all "A build: $out"; else bad "A build failed: $out"; echo FAIL; exit 1; fi
 
+node "$ROOT/bin/site-qr-selftest.cjs" "$T/a" || fail=1
+
 python3 - "$T/a" "$ROOT" <<'PY' || fail=1
 import html, json, os, re, struct, subprocess, sys
 OUT, ROOT = sys.argv[1], sys.argv[2]

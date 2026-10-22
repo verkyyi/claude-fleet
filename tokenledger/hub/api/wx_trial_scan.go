@@ -733,3 +733,13 @@ func (s *Server) notifyTrialBurst(codeID string, now time.Time) {
 		}
 	}
 }
+
+// trialNextDayLine counts accepted messages, not page views or refused turns.
+func (s *Server) trialNextDayLine(person string, now time.Time) {
+	if s.Store == nil || !isPerson(person) {
+		return
+	}
+	if err := s.Store.MarkTrialNextDayLine(person, now); err != nil {
+		log.Printf("trial code: next-day line of %s: %v", person, err)
+	}
+}
