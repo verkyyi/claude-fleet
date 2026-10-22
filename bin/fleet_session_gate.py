@@ -52,7 +52,7 @@ Parking (`park`): the agent's process ends IN ITS OWN WINDOW — the window, its
 @fleet_id, its conversation id, its session credential (never revoked: minting one
 again is the slow part of a start) and its row in every list stay; the window says
 `done` (idle), so nobody can tell. bin/fleet-session-wrap.sh holds the parked
-window; `wake` (or a person switching to it, or ↵ in it) resumes the SAME
+window; `wake` (or a person submitting a sentence with ↵ in it) resumes the SAME
 conversation there, the first sentence riding the start (no inbox round). Never
 while it answers, asks, holds a background job or while a person looks at it
 (`watched`: a terminal client showing the window).
@@ -798,6 +798,16 @@ def park_locked(fid, why, force):
     if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
             or current["state"] in ("working", "needs", "exited") or watched(current)):
         return dict(ok=False, why="changed")
+    # Save physical rows with their SGR colours BEFORE /exit tears down the UI.
+    # Refuse if capture failed: a blank holding page cannot preserve the screen.
+    screen = tmux(w["sock"], "capture-pane", "-p", "-e", "-t", w["pane"])
+    if screen is None:
+        return dict(ok=False, why="screen_unavailable")
+    screen_path = fid_dir(fid) / "park-screen.txt"
+    fd = os.open(screen_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(screen)
+    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_screen", str(screen_path))
     started = time.monotonic()
     since = str(int(now()))
     saved_mb = park_saved_mb(w)
@@ -829,11 +839,18 @@ def park_locked(fid, why, force):
 
 def wake_request(w, seed, why):
     """Called under the fid lock: one owned seed, never replace another wake."""
+    # An unsubmitted terminal draft is not a message to send with a peer wake.
+    # Callers keep their words queued; the keyboard's own Enter submits its draft.
+    draft = fid_dir(w["fid"]) / "park-input.txt"
+    if why != "键盘" and draft.exists() and draft.stat().st_size:
+        return dict(ok=False, why="draft")
     active = w.get("park_wake") or w.get("park_start")
     if active:
         return dict(ok=False, why="wake_pending")
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
                 next=(read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
+    if why == "键盘":
+        meta["draft"] = str(fid_dir(w["fid"]) / "park-input.txt")
     write_json(str(seed) + ".meta", meta)
     tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_wake", str(seed))
     return dict(ok=True, seed=str(seed))
@@ -854,6 +871,8 @@ def wake_ready(pane):
     if seed:
         Path(seed + ".launched").touch()
         Path(seed + ".taken").unlink(missing_ok=True)
+    if meta.get("draft"):
+        Path(meta["draft"]).unlink(missing_ok=True)
     park_log(meta.get("fid", ""), "wake", meta.get("why", ""),
              max(0, now() - meta.get("started", now())), "resumed", meta.get("next", 0), meta.get("started", 0))
     # Also clear for a wrapper already running the previous release's hold page.
