@@ -396,7 +396,7 @@ func TestBoardPlanFacts(t *testing.T) {
 	if r = read(nil); r.Agent != "" || r.AgentWords[1] != "Unknown" {
 		t.Fatalf("unknown: %+v", r)
 	}
-	set("UPDATE fleet_tasks SET resolved_agent='codex', requested_agent='codex', state='running' WHERE id=?", child.ID)
+	set("UPDATE fleet_tasks SET resolved_agent='codex', requested_agent='codex', state='accepted', operation_id='' WHERE id=?", child.ID)
 	push := func(events ...map[string]any) {
 		t.Helper()
 		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep-plan", Machine: "test-machine", Login: "alice", ID: child.FID, Events: events}); err != nil {
@@ -407,6 +407,10 @@ func TestBoardPlanFacts(t *testing.T) {
 		return map[string]any{"ev": kind, "id": child.FID, "seq": float64(seq), "ts": float64(now.Unix()), "agent": agent, "native": "native-test"}
 	}
 	push(event("opened", 1, "codex"), event("native", 2, "claude"))
+	// The placement state may remain accepted after native startup.
+	if r = read(nil); r.Tag != "not_seen" || r.AgentBasis != "native" {
+		t.Fatalf("accepted with native startup is not undispatched: %+v", r)
+	}
 	wid := "fleet/" + child.FID
 	live := []FleetSession{{WorkerID: &wid, Availability: "online", Worker: map[string]any{"identity": child.FID, "state": "working", "agent": "codex"}}}
 	if r = read(live); r.Agent != "claude" || r.AgentBasis != "native" || r.Group != "work" {
