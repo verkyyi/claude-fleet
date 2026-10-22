@@ -6379,9 +6379,33 @@ drill_park_old_wrapper() {
 }
 
 drill_park_loses_loop() {
-  CAP=30; local t0 out
+  CAP=45; local t0 out fid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee03 sid=11111111-2222-4333-8444-555555555503
   t0=$(now)
   out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_wakeup 2>&1) || { WHY="$out"; return 1; }
+  # Drive fleet-restore.sh as well: the snapshot says done, but the contract
+  # keeps it unfinished. The original wrapper returns without starting Claude.
+  BREAK_SOCK="$WORK/sock-park-timer"
+  mkdir -p "$WORK/econf/wake" "$WORK/wt-3" "$WORK/gbin"
+  printf '#!/bin/sh\necho 0\n' > "$WORK/gbin/gh"; chmod +x "$WORK/gbin/gh"
+  python3 - "$WORK/econf/wake/$fid.json" "$fid" "$sid" <<'PY'
+import json,sys,time
+due=int(time.time())+3600
+json.dump(dict(v=1,fid=sys.argv[2],sid=sys.argv[3],agent='claude',phase='active',parked=True,next=due,
+               jobs=[dict(id='once',kind='wakeup',expr='',prompt='original timer prompt',until=due+600,
+                          next=due,recurring=False)]),open(sys.argv[1],'w'))
+PY
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$fid"; printf 'WIN\tissue-3\t%s\t%s\t3\tdone\t-\t-\n' "$WORK/wt-3" "$sid"
+  } > "$WORK/econf/fleets/oc/restore.map"
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH"
+  [ "$(o oc:issue-3 @cc_session_id)" = "$sid" ] && [ -n "$(o oc:issue-3 @park_held)" ] \
+    || { WHY='parked timer was not restored into the original conversation holding page'; return 1; }
+  nt kill-window -t oc:issue-3
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH"
+  [ "$(o oc:issue-3 @fleet_id)" = "$fid" ] && [ -n "$(o oc:issue-3 @park_held)" ] \
+    || { WHY='the done snapshot suppressed pullback of the killed timer wrapper'; return 1; }
+  [ "$(o oc:issue-3 @restore_outcome)" = resumed ] \
+    || { WHY='restore called the holding wrapper a failed native launch'; return 1; }
   SECS=$(since "$t0")
   WHAT='进程退出后到点唤醒，同一窗口与会话的首轮是原提示，约定时刻记入动作账本'
 }

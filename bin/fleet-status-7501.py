@@ -222,7 +222,7 @@ class Writer(threading.Thread):
                 sys.path.insert(0, BIN)
                 import fleet_session_gate
                 fleet_session_gate.wake_ready(self.pane)
-            except (OSError, ValueError, subprocess.SubprocessError):
+            except (OSError, ValueError):
                 pass
             try:
                 sys.path.insert(0, BIN)
@@ -482,7 +482,7 @@ class ParkRelay:
                 else:
                     reply = dict(ok=False, why="input_changed")
                 client.sendall((json.dumps(reply) + "\n").encode())
-            except (OSError, ValueError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 pass
 
     def close(self):

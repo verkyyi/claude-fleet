@@ -479,7 +479,9 @@ pullback_scan() {
     IFS=$'\t' read -r _ wname wpath wsid _ wstate _ <<<"$line"
     echo "$wname" | grep -qE "$PANEL_RE" && continue
     [ -n "$wsid" ] && [ "$wsid" != - ] && printf '%s\n' "$lsid" | grep -qxF "$wsid" && continue
-    case "$wstate" in done|exited) continue ;; esac            # finished: stays closed
+    case "$wstate" in done|exited)
+      python3 "$BIN/fleet_park_wake.py" restore --fid "$fid" --sid "$wsid" --owned 2>/dev/null || continue ;;
+    esac  # A scheduled round is unfinished even though its held wrapper says done.
     fleet_fid_retired "$fid" && continue                        # the fleet closed it
     [ -d "$wpath" ] || continue
     grep -qxF "$(printf 'FID\t%s' "$fid")" "$pb" 2>/dev/null && continue
@@ -990,18 +992,21 @@ probe_outcomes() {
   [ -n "$PENDING" ] || return 0
   local secs="${FLEET_RESTORE_PROBE_SECS:-5}"
   case "$secs" in (''|*[!0-9]*) secs=5;; esac
-  local tries=$(( secs * 5 )) i=0 left seq sock w sess name ex cap oc note
+  local tries=$(( secs * 5 )) i=0 left seq sock w sess name ex cap oc note held
   while :; do
     left=''
     while IFS=$'\t' read -r seq sock w sess name; do
       [ -n "$w" ] || continue
       oc=''; note=''
       ex=$(tmux -L "$sock" display-message -p -t "$w" '#{@restore_exit}' 2>/dev/null)
+      held=$(tmux -L "$sock" display-message -p -t "$w" '#{@park_held}' 2>/dev/null)
       cap=$(tmux -L "$sock" capture-pane -p -t "$w" 2>/dev/null)
       if printf '%s\n' "$cap" | grep -Eq "$RESTORE_NOCONV_RE"; then
         oc=failed; note="resume refused: $(printf '%s\n' "$cap" | grep -Eo "($RESTORE_NOCONV_RE).*" | head -1 | cut -c1-60)"
       elif [ -n "$ex" ]; then
         oc=failed; note="agent exited — pane is at a shell"
+      elif [ -n "$held" ]; then
+        oc=resumed; note="holding the same conversation until its scheduled round"
       elif printf '%s\n' "$cap" | grep -Eq "$RESTORE_DIALOG_RE"; then
         oc=attention; note="a dialog is waiting for you (not answered automatically)"
       elif printf '%s\n' "$cap" | grep -Eq "$RESTORE_PROMPT_RE"; then
