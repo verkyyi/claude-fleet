@@ -45,13 +45,15 @@ CREATE INDEX IF NOT EXISTS svc_tokens_principal ON svc_tokens(principal);`
 // The scopes a service principal can hold — the whole list. A route outside
 // /v1/svc/ is no scope's.
 const (
-	SvcRunsWrite      = "runs:write"
-	SvcRunsRead       = "runs:read"
-	SvcTemplatesWrite = "templates:write"
+	SvcRunsWrite        = "runs:write"
+	SvcRunsRead         = "runs:read"
+	SvcTemplatesWrite   = "templates:write"
+	SvcRunsEval         = "runs:eval"
+	SvcTemplatesQualify = "templates:qualify"
 )
 
 // SvcScopes is every scope, in the order they print.
-var SvcScopes = []string{SvcRunsWrite, SvcRunsRead, SvcTemplatesWrite}
+var SvcScopes = []string{SvcRunsWrite, SvcRunsRead, SvcTemplatesWrite, SvcRunsEval, SvcTemplatesQualify}
 
 // SvcLiveTokensMax is how many unrevoked, unexpired tokens one principal may
 // hold: the current one and its replacement during a rotation.
@@ -126,6 +128,9 @@ func SvcScopesParse(s string) ([]string, error) {
 
 // EnsureSvc creates the principal tables and the runs' (idempotent).
 func (s *Store) EnsureSvc() error {
+	if _, err := s.write.Exec(s.d.ddl(svcQualificationSchema)); err != nil {
+		return err
+	}
 	if _, err := s.write.Exec(s.d.ddl(svcSchema)); err != nil {
 		return fmt.Errorf("create svc tables: %w", err)
 	}
