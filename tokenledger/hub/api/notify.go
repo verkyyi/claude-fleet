@@ -426,7 +426,7 @@ func wxWhy(code int) string {
 
 func (s *Server) wxTemplate(kind string) string {
 	switch kind {
-	case store.NotifyKindNewReq, store.NotifyKindUpgrade, store.NotifyKindQRBurst:
+	case store.NotifyKindNewReq, store.NotifyKindUpgrade, store.NotifyKindQRBurst, store.NotifyKindPoolReauth, store.NotifyKindPoolBack:
 		return s.WxGW.TplNewReq
 	case store.NotifyKindNotice, store.NotifyKindTrialPurge:
 		return s.WxGW.TplNotice
@@ -592,6 +592,8 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 		return qrBurstMsg(code, en, base), true, nil
 	case store.NotifyKindTrialPurge:
 		return s.trialPurgeNoticeMsg(n, en, base)
+	case store.NotifyKindPoolReauth, store.NotifyKindPoolBack:
+		return s.poolReauthNoticeMsg(n, en, base)
 	case store.NotifyKindLivePageEnd:
 		if len(n.Refs) == 0 {
 			return noticeMsg{}, false, nil

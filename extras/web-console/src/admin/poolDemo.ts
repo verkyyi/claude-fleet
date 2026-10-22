@@ -42,6 +42,11 @@ let creds: (Credential & Record<string, unknown>)[] = [
   // 林晓's own (C21, claude-fleet#4035): connected from her Usage page, hers alone
   { provider: "claude", account: "my-max", account_uuid: "8e3f0c2a-4444-4d5e-8f60-3456789abcde", principal_id: "p:7c1e", created_at: ago(60 * 24 * 6) },
   { provider: "codex", account: "codex-1", account_uuid: U.x, principal_id: "pool", created_at: ago(60 * 24 * 20) },
+  // FKS6: a setup token the provider keeps refusing — marked, red, told
+  { provider: "claude", account: "Charlie_20X", credential_id: "cred-charlie", principal_id: "pool", created_at: ago(60 * 24 * 8),
+    secret_expires_at: ahead(357), reauth_required: true, reauth_required_at: ago(42),
+    refresh_error: "quota reads refused: 3 in a row since " + ago(52) + " (limits unavailable: HTTP 401 from the messages endpoint)",
+    limits: { available: false, read_status: "failed", read_attempt_at: ago(2), observed_at: ago(60 * 24 * 7) } },
 ];
 const paused = new Set<string>(["max-c"]);
 const labels: Record<string, string> = {};
@@ -130,6 +135,10 @@ export function demoPool(method: string, u: URL, body: Record<string, any>, empt
     if (i < 0) list.push(entry);
     else list[i] = entry;
     return policy;
+  }
+  if (method === "GET" && p === "/v1/admin/subscriptions/reauth") {
+    const items = empty ? [] : creds.filter((c) => c.reauth_required).map((c) => ({ credential_id: c.credential_id, provider: c.provider, account: c.account }));
+    return { pending: items.length, items };
   }
   if (method === "GET" && p === "/v1/fleet/credentials") return { credentials: empty ? [] : creds, paused: [...paused] };
   if (method === "POST" && p === "/v1/fleet/credentials") {

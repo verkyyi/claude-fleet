@@ -27,7 +27,8 @@ export const NAV: NavGroup[] = [
   {
     key: "nav.money",
     items: [
-      { key: "page.pool", icon: CreditCard, to: "/pool" },
+      // with how many need a new sign-in (claude-fleet FKS6)
+      { key: "page.pool", icon: CreditCard, to: "/pool", count: "/v1/admin/subscriptions/reauth" },
       { key: "page.usage", icon: BarChart3, to: "/usage" },
     ],
   },

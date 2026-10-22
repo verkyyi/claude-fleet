@@ -523,6 +523,28 @@ var ErrRefreshFailed = errors.New("credential refresh failed")
 // account wait on its lock, so the account is refreshed ONCE and the waiters
 // get the result; the refresh is saved before anyone receives it.
 func (v *Vault) Lease(ctx context.Context, principal, provider, account string) (Access, error) {
+	return v.lease(ctx, principal, provider, account, false)
+}
+
+// QuotaReauthPrefix starts the refresh_error of a reauth_required mark the
+// hub's quota reader set (claude-fleet FKS6): the upstream kept refusing the
+// credential's reads, not its refresh token.
+const QuotaReauthPrefix = "quota reads refused: "
+
+// LeaseProbe is Lease for the hub's own quota reader (claude-fleet FKS6): a
+// setup token, or a credential its quota reads marked reauth_required, is
+// still leased so the next read can prove it works again. A refresh token the
+// provider itself refused stays refused.
+func (v *Vault) LeaseProbe(ctx context.Context, principal, provider, account string) (Access, error) {
+	return v.lease(ctx, principal, provider, account, true)
+}
+
+// probeThrough: a probe may lease past c's reauth mark.
+func probeThrough(c *store.Credential) bool {
+	return c.Kind == KindSetupToken || strings.HasPrefix(c.RefreshError, QuotaReauthPrefix)
+}
+
+func (v *Vault) lease(ctx context.Context, principal, provider, account string, probe bool) (Access, error) {
 	sl, err := v.sealer()
 	if err != nil {
 		return Access{}, err
@@ -531,7 +553,7 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 	if err != nil {
 		return Access{}, err
 	}
-	if c.ReauthRequired && provider != GitHub && c.Kind == KindSetupToken {
+	if c.ReauthRequired && provider != GitHub && c.Kind == KindSetupToken && !probe {
 		return Access{}, reauthErr(c)
 	}
 	if provider == GitHub || c.Kind == KindSetupToken {
@@ -606,7 +628,7 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		if haveCached && cached.ExpiresAt != nil && cached.ExpiresAt.Sub(v.now()) >= v.minTTL() {
 			return cached, nil
 		}
-		if c.ReauthRequired {
+		if c.ReauthRequired && !(probe && probeThrough(c)) {
 			// The refresh token is dead; asking again only fails again. What
 			// is still cached was never refused (a refused one was dropped),
 			// so it runs out on its own — then nothing more is issued.

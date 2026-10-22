@@ -86,6 +86,8 @@ type HubQuota struct {
 	last map[string]HubQuotaRead // by provider/label
 	// fails is each credential's refused reads in a row (T906).
 	fails map[string]int
+	// failSince is when each credential's run of refused reads began (FKS6).
+	failSince map[string]time.Time
 }
 
 // HubQuotaRead is the outcome of the last read of one credential — what
@@ -318,7 +320,7 @@ func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) (r Hub
 	if err != nil {
 		return fail(err)
 	}
-	acc, err := s.Vault.Lease(ctx, c.PrincipalID, c.Provider, c.Account)
+	acc, err := s.Vault.LeaseProbe(ctx, c.PrincipalID, c.Provider, c.Account)
 	if err != nil {
 		return fail(fmt.Errorf("lease: %w", err))
 	}
@@ -329,9 +331,20 @@ func (s *Server) readHubQuotaOne(ctx context.Context, c store.Credential) (r Hub
 	base := strings.TrimRight(h.RelayURL, "/")
 	switch c.Provider {
 	case credvault.Claude:
-		cl := &limits.Client{HTTP: h.client(), MessagesURL: base + hubQuotaClaudePath, Decorate: s.hubQuotaDecorate}
+		// The relay's own refusal is a 403 too: told apart by its body, so
+		// it never reads as the upstream refusing this login (FKS6).
+		hc := *h.client()
+		capture := &subStatusTransport{base: hc.Transport}
+		if capture.base == nil {
+			capture.base = http.DefaultTransport
+		}
+		hc.Transport = capture
+		cl := &limits.Client{HTTP: &hc, MessagesURL: base + hubQuotaClaudePath, Decorate: s.hubQuotaDecorate}
 		snap, err := cl.FetchViaInference(ctx, acc.AccessToken)
 		if err != nil {
+			if capture.relayRefused {
+				return fail(errors.New("the relay refused the hub's quota pass"))
+			}
 			return fail(err)
 		}
 		snap.AccountUUID, snap.EndpointID, snap.CredentialLabel = uuid, HubQuotaEndpoint, c.Account

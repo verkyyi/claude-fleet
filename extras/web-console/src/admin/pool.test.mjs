@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { subscriptions, room, withOverview, stateOf } from "./pool.ts";
 import { planName, monthlyLabel } from "./plan.ts";
-import { windowsOf } from "./pool.ts";
+import { windowsOf, reauthReason } from "./pool.ts";
 
 // Re-reporting a historical account must not repopulate the managed pool;
 // the input history remains available to the usage page.
@@ -70,3 +70,16 @@ assert.equal(monthlyLabel(null), "");
 assert.equal(manual.monthly, null);
 assert.equal(planName("claude", "future_plan"), null);
 console.log("PASS managed inventory, historical re-report, personal isolation, unknown quota, plan labels");
+
+// FKS6: a credential the quota reader marked says why in one sentence, and
+// its row reads reauth.
+{
+  const c = { principal_id: "pool", provider: "claude", account: "Charlie_20X", credential_id: "cred:c", reauth_required: true,
+    refresh_error: "quota reads refused: 3 in a row since 2026-10-22T01:00:00Z (limits unavailable: HTTP 401 from the messages endpoint)" };
+  assert.deepEqual(reauthReason(c), { key: "quota", n: 3, code: "401" });
+  assert.equal(reauthReason({ refresh_error: "upstream rejected the setup token: token_revoked" }).key, "session");
+  assert.equal(reauthReason({ refresh_error: "invalid_grant" }).key, "refresh");
+  assert.equal(reauthReason(null).key, "other");
+  const [row] = subscriptions({ creds: { credentials: [c] } });
+  assert.equal(stateOf(row, 85), "reauth");
+}

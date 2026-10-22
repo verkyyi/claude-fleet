@@ -208,19 +208,24 @@ type poolReloginDetail struct {
 	Streak   int    `json:"streak"`
 }
 
-// authRefused says a read failed because the upstream refused the login.
+// authRefused says a read failed because the upstream refused the login —
+// a 401 / 403 from it (the relay's own refusal reads otherwise), or a lease
+// the vault refused because the provider refused the refresh token. A 429,
+// a 5xx or an unreachable relay is not.
 func authRefused(e string) bool {
-	return strings.Contains(e, "HTTP 401") || strings.Contains(e, "HTTP 403")
+	return strings.Contains(e, "HTTP 401") || strings.Contains(e, "HTTP 403") || strings.Contains(e, "reauth_required")
 }
 
 // streak records r's outcome against its credential and returns the failures
-// in a row it now stands at (0 on success), and the count before it (-1 when
-// this is the first read since the hub started).
-func (h *HubQuota) streak(r HubQuotaRead) (now, before int) {
+// in a row it now stands at (0 on success), the count before it (-1 when
+// this is the first read since the hub started) and when the run of
+// failures began.
+func (h *HubQuota) streak(r HubQuotaRead) (now, before int, since time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.fails == nil {
 		h.fails = map[string]int{}
+		h.failSince = map[string]time.Time{}
 	}
 	prev, seen := h.fails[r.CredentialID]
 	if !seen {
@@ -228,11 +233,15 @@ func (h *HubQuota) streak(r HubQuotaRead) (now, before int) {
 	}
 	if r.OK {
 		h.fails[r.CredentialID] = 0
-		return 0, prev
+		delete(h.failSince, r.CredentialID)
+		return 0, prev, time.Time{}
 	}
 	n := max(prev, 0) + 1
 	h.fails[r.CredentialID] = n
-	return n, prev
+	if n == 1 || h.failSince[r.CredentialID].IsZero() {
+		h.failSince[r.CredentialID] = r.At
+	}
+	return n, prev, h.failSince[r.CredentialID]
 }
 
 // poolReloginSubject names a credential: "<provider>/<account>", the owner in
@@ -245,23 +254,32 @@ func poolReloginSubject(r HubQuotaRead) string {
 	return subject
 }
 
-// hubQuotaOutcome logs a failed read once a window per (credential, error)
-// and raises / clears pool_relogin.
+// hubQuotaOutcome logs a failed read once a window per (credential, error),
+// raises / clears pool_relogin and marks / lifts the credential's
+// reauth_required (FKS6, pool_reauth.go) — telling the admins either way.
 func (s *Server) hubQuotaOutcome(r HubQuotaRead, at time.Time) {
-	n, before := s.HubQuota.streak(r)
+	n, before, since := s.HubQuota.streak(r)
 	subject := poolReloginSubject(r)
 	if r.OK {
-		if before != 0 && s.Store != nil {
-			if cleared, err := s.Store.ClearFleetAlert(store.AlertPoolRelogin, subject, at); err == nil && cleared {
+		if s.Store == nil {
+			return
+		}
+		cleared := false
+		if before != 0 {
+			if c, err := s.Store.ClearFleetAlert(store.AlertPoolRelogin, subject, at); err == nil && c {
 				log.Printf("fleet alert cleared: pool_relogin %s", subject)
+				cleared = true
 			}
+		}
+		if s.poolReauthLift(r, at) || cleared {
+			s.tellPoolReauth(r, true, at)
 		}
 		return
 	}
 	if ok, held := s.logQuiet.allow("hubquota/"+r.CredentialID+"/"+r.Error, at); ok {
 		log.Printf("hub quota: %s/%s: %s (%d in a row)%s", r.Provider, r.Account, r.Error, n, heldBack(held))
 	}
-	if n < poolReloginAfter || !authRefused(r.Error) || s.Store == nil {
+	if n < poolReloginAfter || !authRefused(r.Error) || s.Store == nil || at.Sub(since) < poolReloginSpan {
 		return
 	}
 	b, _ := json.Marshal(poolReloginDetail{Provider: r.Provider, Account: r.Account, Owner: r.Owner, Error: r.Error, Streak: n})
@@ -270,6 +288,8 @@ func (s *Server) hubQuotaOutcome(r HubQuotaRead, at time.Time) {
 	} else if raised {
 		log.Printf("fleet alert: pool_relogin %s — %d quota reads refused in a row; re-log it in on the pool page", subject, n)
 	}
+	s.poolReauthMark(r, n, since, at)
+	s.tellPoolReauth(r, false, at)
 }
 
 // alertLine is the one line fleet_underived / pool_relogin says to the

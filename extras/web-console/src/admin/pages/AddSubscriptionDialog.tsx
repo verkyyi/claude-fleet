@@ -14,7 +14,8 @@ const BASE = "/v1/admin/subscriptions";
 type Flow = { flow: string; authorize_url: string; paste: string; expires_at: string };
 type Answer = { account: string; quota: "ready" | "pending"; duplicate?: boolean };
 
-export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void; replace?: { provider: Prov; account: string } }) {
+// primary: the update is the thing to do now (a subscription that needs a new sign-in, FKS6)
+export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void; replace?: { provider: Prov; account: string }; primary?: boolean; size?: "sm" | "default" }) {
   const [open, setOpen] = React.useState(false);
   const [prov, setProv] = React.useState<Prov>(p.replace?.provider || "claude");
   const [label, setLabel] = React.useState(p.replace?.account || "");
@@ -59,7 +60,7 @@ export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void;
     }
   };
   return <Dialog open={open} onOpenChange={changeOpen}>
-    <DialogTrigger asChild><Button variant={p.replace ? "outline" : "default"}>{!p.replace && <Plus />}{t(p.replace ? "pool.web.update" : "pool.add")}</Button></DialogTrigger>
+    <DialogTrigger asChild><Button size={p.size} variant={p.replace && !p.primary ? "outline" : "default"}>{!p.replace && <Plus />}{t(p.replace ? "pool.web.update" : "pool.add")}</Button></DialogTrigger>
     <DialogContent className="sm:max-w-lg">
       <DialogHeader><DialogTitle>{t(p.replace ? "pool.web.update" : "pool.add.title")}</DialogTitle><DialogDescription>{t("pool.web.description")}</DialogDescription></DialogHeader>
       {answer ? <div className="grid gap-4" role="status">
