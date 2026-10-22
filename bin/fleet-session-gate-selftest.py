@@ -48,7 +48,9 @@ a = sys.argv[1:]
 if a[:1] == ["-L"]:
     a = a[2:]
 def save():
-    json.dump(st, open(st_path, "w"))
+    with open(st_path + ".tmp", "w") as f:
+        json.dump(st, f)
+    os.replace(st_path + ".tmp", st_path)
 def opts(t):
     return st["windows"].setdefault(t if t in st["windows"] else "@1", {})
 cmd = a[0]
