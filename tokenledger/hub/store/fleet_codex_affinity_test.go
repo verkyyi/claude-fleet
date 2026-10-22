@@ -28,7 +28,9 @@ func TestCodexContinuationStore(t *testing.T) {
 	if err := s.RecordCodexAffinity("worker", []string{"ref-a"}, a, now); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(s.src)
+	// Open(path) is remapped by the PostgreSQL fixture to a database per path.
+	// Reopen this exact backend, not a new fixture named after its DSN.
+	reopened, err := openStore(s.d, s.src, "codex-affinity-reopen")
 	if err != nil {
 		t.Fatal(err)
 	}
