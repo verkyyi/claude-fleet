@@ -78,6 +78,8 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 				continue
 			}
 			s.NodeAlertTick(start, now)
+			// Yesterday's releases, one line at 09:00 Beijing (T893).
+			s.releaseDigestTick(now)
 			// A record whose session is over ends (A4G2), every taskSweepEvery.
 			go s.TaskSweepTick(now)
 			// A trial's machine back on its budget (claude-fleet#4059) or on
