@@ -186,8 +186,19 @@ The page is the source: never re-draft the task from the chat.
 
    It measures the words as they travel (UTF-8 JSON; the hub reads 16 KB with the
    envelope) and, over `--max` (13000), moves folds to the page one kind at a time
-   — the steps' evidence, then 解决方案's 技术细节 — each line saying 「见设计页」;
-   the 上线后怎么验收 items always stay. Page controls (buttons, forms) are never words. Exit 1 = even the surface is too long: shorten the page.
+   — the 代码位置 folds, the steps' evidence, then 解决方案's 技术细节 — each line saying 「见设计页」;
+   the 上线后怎么验收 items always stay. Page controls (buttons, forms) are never words.
+   Folds nest to any depth and every layer is written out. Exit 1 = even the surface
+   is too long — for a page with several cards, split it instead, one task per card:
+
+   ```sh
+   python3 ~/.claude/fleet/bin/fleet-task-page.py body <page.html> --link <活页 link> \
+     --nod "<operator> YYYY-MM-DD" --split <scratchpad>/task-<slug>-parts
+   # → one line per part: <dir>/NN-<card key>.md <TAB> bytes <TAB> card name
+   ```
+
+   Each part carries the link and every shared section (问题与原因 · 目标 · 风险 ·
+   需要你定的事 · 上线后怎么验收) plus ONE card; open one task per part (step 3).
 3. **Open the task** — the `task` tool (`mcp__fleet-orch__task`: `title` the page's
    title, `body` the file's content, `repo`, `spawn: true`), which is
    `fleet-task-record.sh dispatch --title … --body-file <md> --repo <owner/name> --spawn`.

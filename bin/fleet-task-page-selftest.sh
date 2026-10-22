@@ -46,6 +46,15 @@
 #      way — the first spelling replaced — puts the page into the head: `check`
 #      exits 1 and the lint says ERROR body; an empty body is an ERROR too; render
 #      refuses a frame whose head would swallow the page.
+#   I  NZP2: folds nested to any depth (the 会话合一 v4 page's shape — a 代码位置
+#      fold, details.code, inside a step's evidence, inside an 其他证据 item's
+#      paragraph and inside a card's 技术细节 <dd>, one more fold inside that):
+#      body writes every layer, keeps the words before a nested fold and its dd
+#      label, never crashes at any --max (the old kind() unpacked a dropped fold's
+#      third field), moves the 代码位置 folds first; over the cap the message
+#      names --split; --split writes one task per member card, each with the
+#      link, every shared section and only its own card; one card ⇒ exit 1; the
+#      lint hides a first-layer 代码位置 fold.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -376,5 +385,72 @@ st_eq "render through a comment-carrying frame stays whole" "0" "$?"
 printf '<html><head><script>/* ends at </head> */</script></head><body></body></html>\n' > "$TMP/swallow.html"
 FLEET_TASK_PAGE_TEMPLATE="$TMP/swallow.html" python3 "$P" render "$EX" >/dev/null 2>&1
 st_eq "render refuses a frame whose head swallows the page" "1" "$?"
+
+# ---- I ------------------------------------------------------------------------
+ST_LEG=I
+python3 - "$EX" "$TMP/nest.json" <<'PYI'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+code = lambda inner: '<details class="code"><summary>代码位置（展开）</summary>%s</details>' % inner
+d["cause"]["steps"][3]["evidence"].append("实测：16/16 通过" + code(
+    '取自 <code>bin/nest-a-selftest.sh</code><details class="code"><summary>原始输出</summary>第三层原文</details>'))
+d["cause"]["other"].append({"kind": "scene", "title": "实测二：接回要多久",
+                            "text": "中位 1.28 秒" + code("<code>tmux -L parkbench</code>") + "，远在 5 秒内"})
+d["members"][0]["tech"].append(["完成判据二", "判据先说" + code("<code>bin/nest-b.sh:12</code>")])
+d["problem"].append('一处表层折叠' + code("<code>bin/nest-first.sh</code>"))
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PYI
+python3 "$P" render "$TMP/nest.json" -o "$TMP/nest.html" || st_fail "render the nested spec"
+st_has "two layers of code fold in the page" "$(cat "$TMP/nest.html")" '<summary>原始输出</summary>'
+B=$(python3 "$P" body "$TMP/nest.html" --max 99999 2>&1); rc=$?
+st_eq "nested body → 0" 0 "$rc"
+st_hasnt "no traceback" "$B" 'Traceback'
+st_has "the words before a nested fold" "$B" '实测：16/16 通过'
+st_has "layer 2 written out" "$B" '取自 `bin/nest-a-selftest.sh`'
+st_has "layer 3 written out" "$B" '第三层原文'
+st_has "a paragraph's words around its fold" "$B" '中位 1.28 秒'
+st_has "…and after it" "$B" '，远在 5 秒内'
+st_has "a dd keeps its label before its fold" "$B" '**完成判据二** 判据先说'
+st_has "no 「（展开）」 in words" "$B" '**代码位置**'
+for m in 13000 9000 7000 6000 4000 300; do
+  e=$(python3 "$P" body "$TMP/nest.html" --max $m 2>&1 >/dev/null); rc=$?
+  st_hasnt "--max $m: no traceback" "$e" 'Traceback'
+  st_eq "--max $m: 0 or over" yes "$([ $rc -le 1 ] && echo yes)"
+done
+full=$(python3 "$P" body "$TMP/nest.html" --max 99999 | python3 -c 'import json,sys; print(len(json.dumps(sys.stdin.read(), ensure_ascii=False).encode()))')
+B=$(python3 "$P" body "$TMP/nest.html" --max $((full - 1)))
+st_has "代码位置 moved first" "$B" '（代码位置：见设计页）'
+st_has "…while the evidence stays" "$B" '实测：16/16 通过'
+st_hasnt "…its inner layer with it" "$B" '第三层原文'
+e=$(python3 "$P" body "$TMP/nest.html" --max 300 2>&1 >/dev/null)
+st_has "over the cap names --split" "$e" 'body <page> --split <dir> (3 cards)'
+out=$(python3 "$P" body "$TMP/nest.html" --link https://p/s/n --split "$TMP/parts"); rc=$?
+st_eq "split → 0" 0 "$rc"
+st_eq "one part per card" 3 "$(printf '%s\n' "$out" | grep -c .)"
+st_has "a part line: path, bytes, card" "$out" "$TMP/parts/02-B.md	"
+for k in A B C; do
+  f=$(ls "$TMP/parts/"*-$k.md 2>/dev/null)
+  st_eq "part $k written" yes "$([ -s "$f" ] && echo yes)"
+  W=$(cat "$f")
+  st_has "part $k: the link" "$W" '> 设计页：https://p/s/n（私密；本文是它按成员卡拆开的第'
+  st_has "part $k: the shared problem" "$W" '## 问题与原因'
+  st_has "part $k: the shared acceptance" "$W" '演练会话 A 开 B、B 开 C'
+  st_has "part $k: says where the others are" "$W" '张各是一份任务——见设计页）'
+  st_eq "part $k: only its own card" 1 "$(grep -c '^### .* — ' "$f")"
+done
+st_has "part A is card A" "$(cat "$TMP/parts/01-A.md")" '### 回报先按身份找人'
+st_hasnt "part B is not card A" "$(cat "$TMP/parts/02-B.md")" '### 回报先按身份找人'
+python3 - "$TMP/nest.json" "$TMP/one.json" <<'PYO'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8")); d["members"] = d["members"][:1]
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PYO
+python3 "$P" render "$TMP/one.json" -o "$TMP/one.html"
+python3 "$P" body "$TMP/one.html" --split "$TMP/oneparts" >/dev/null 2>&1; st_eq "one card: nothing to split → 1" 1 $?
+st_eq "one card: nothing written" no "$([ -e "$TMP/oneparts" ] && echo yes || echo no)"
+w=$(bash "$L" --lint "$TMP/nest.html" 2>&1 >/dev/null)
+st_hasnt "lint: a first-layer 代码位置 fold stays folded" "$w" 'nest-first.sh'
+st_hasnt "lint: nested folds are not empty" "$w" 'empty-fold'
+st_hasnt "surface: no 代码位置 upstairs" "$(bash "$L" "$TMP/nest.html" 2>/dev/null)" '代码位置'
 
 st_done
