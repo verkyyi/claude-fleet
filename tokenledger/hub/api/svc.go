@@ -175,6 +175,8 @@ func (s *Server) svcMux() http.Handler {
 	s.svcRunsMux(m)
 	s.svcTemplatesMux(m)
 	m.Handle(SvcUsagePath, s.svcOnly(store.SvcRunsRead, http.HandlerFunc(s.handleSvcUsage)))
+	m.Handle(svcEvalRunsPath, s.svcOnly("", http.HandlerFunc(s.handleSvcEvalRun)))
+	m.Handle(svcQualificationsPath, s.svcOnly("", http.HandlerFunc(s.handleSvcQualifications)))
 	return s.svcGate(m)
 }
 
@@ -293,8 +295,9 @@ type SvcAdminRequest struct {
 	Reason    string `json:"reason,omitempty"`
 	// op callback (claude-fleet#4004): the prefix every run's callback_url
 	// must sit under; a secret is minted the first time or with rotate.
-	CallbackPrefix string `json:"callback_prefix,omitempty"`
-	Rotate         bool   `json:"rotate,omitempty"`
+	CallbackPrefix string         `json:"callback_prefix,omitempty"`
+	Rotate         bool           `json:"rotate,omitempty"`
+	EvalPolicy     *SvcEvalPolicy `json:"eval_policy,omitempty"`
 }
 
 // SvcPrincipalView is one principal with its tokens, as GET lists it.
@@ -374,6 +377,18 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 				s.revRecord([]store.Revocation{e}, now)
 			}
 			writeJSON(w, http.StatusOK, p)
+		case "eval-policy":
+			if req.EvalPolicy == nil {
+				httpError(w, http.StatusBadRequest, "eval_policy required")
+				return
+			}
+			if err := s.svcSetEvalPolicy(req.Principal, *req.EvalPolicy); err != nil {
+				svcAdminError(w, err)
+				return
+			}
+			policy, _ := s.svcEvalPolicy(req.Principal)
+			s.svcAudit(actor, "svc.eval.policy", req.Principal, "ok", svcPolicyHash(policy), now)
+			writeJSON(w, http.StatusOK, map[string]any{"policy_hash": svcPolicyHash(policy), "case_set_digest": svcCasesHash(policy), "policy": policy})
 		case "callback":
 			secret, c, err := SvcSetCallback(s.Store, req.Principal, req.CallbackPrefix, req.Rotate, actor, now)
 			if err != nil {
@@ -386,7 +401,7 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, out)
 		default:
-			httpError(w, http.StatusBadRequest, "op is one of create, issue, revoke, disable, enable, callback")
+			httpError(w, http.StatusBadRequest, "op is one of create, issue, revoke, disable, enable, callback, eval-policy")
 		}
 	default:
 		w.Header().Set("Allow", "GET, POST")
