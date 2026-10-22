@@ -78,7 +78,7 @@ The hub reads only environment variables. A minimal working set:
 
 | Key | Example | Notes |
 |---|---|---|
-| `CCQUOTA_FLEET` | `1` | Turns the fleet features on |
+| `CCQUOTA_FLEET` | `1` | Turns the Tokenman features on |
 | `CCQUOTA_FLEET_PUBLIC_URL` | `https://hub.example.com` | The hub's public address, used by machines and clients |
 | `CCQUOTA_PUBLIC_URL` | `https://hub.example.com` | The same, for sign-in redirects |
 | `CCQUOTA_GITHUB_ADMINS` | `alice` | Admins' GitHub usernames, comma-separated |
@@ -465,7 +465,7 @@ Sessions run on machines ("service nodes" in the console). Each machine has a ca
    ```
 
 3. It prints one line per step: 检查 · 加入 · 发布公钥 · 期望状态 · ccquota · 运行时 · 机器钥匙 · 角色用户 · ssh CA · 删号通道 · 核心 · 守护 · 入口 (check · join · publish the public key · expected state · ccquota · runtime · machine key · role user · ssh CA · account-removal channel · core · daemon · hub). Each line is `✓`, `跳过` (skipped: already in place) or `✗` (failed; the next line says how to run it again). The last line is `已收敛` (converged).
-4. `mac-a` appears on the **Service nodes & clients** page, and the dialog says it has joined fleet.
+4. `mac-a` appears on the **Service nodes & clients** page, and the dialog says it has joined Tokenman.
 
 Requirements: macOS's own `/usr/bin/python3` (if missing, run `xcode-select --install` first), `curl`, administrator rights.
 
@@ -565,7 +565,7 @@ How members use it from there: [Member · Quickstart](../member/quickstart.md) a
 
 ### 4.1 What stable is
 
-Every part of fleet — the hub, the machines, the clients — follows the same version: the tag called `stable` in the repository. `stable` moves forward only after a commit has passed every check (the tests on both Linux and macOS, and the replay check before a release), so it is the version "fit to give to other people", not the latest commit.
+Every part of Tokenman — the hub, the machines, the clients — follows the same version: the tag called `stable` in the repository. `stable` moves forward only after a commit has passed every check (the tests on both Linux and macOS, and the replay check before a release), so it is the version "fit to give to other people", not the latest commit.
 
 ```sh
 fleet update stable      # the stable commit your hub reports

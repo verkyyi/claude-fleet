@@ -1,6 +1,6 @@
 # Security and isolation
 
-This page answers the two questions asked first when evaluating fleet — **can a session read the subscription credentials**, and **can anyone else get into my workspace** — and where the credentials are, how long each lives, and whom a compromise of each part affects.
+This page answers the two questions asked first when evaluating Tokenman — **can a session read the subscription credentials**, and **can anyone else get into my workspace** — and where the credentials are, how long each lives, and whom a compromise of each part affects.
 
 Every statement carries a status: **live** is in today's stable; **planned** is decided and under way. One marked "gate N" is row N of the [seven security gates that must be met before going public](https://github.com/verkyyi/claude-fleet/blob/master/conf/public-gate.tsv); on a machine connected to a hub, `fleet doctor`'s `gate` rows read out PASS / FAIL for each. Until all seven are green we do not promote it publicly and take on no hosted customer.
 
@@ -15,7 +15,7 @@ The exception, said plainly: **the machine's administrator (anyone with root or 
 
 ## Three principles
 
-1. **A personal account is only personal.** A personal account runs only its own person's sessions — never fleet's machine-wide or admin services.
+1. **A personal account is only personal.** A personal account runs only its own person's sessions — never Tokenman's machine-wide or admin services.
 2. **A service account does one thing.** What takes the hub's instructions, what holds the subscription credentials and what holds root are three different accounts; compromising any one gets only its one job.
 3. **Root is only a very small core.** It is not on the network and takes no instruction from outside; it listens only to the machine's own node daemon, and accepts only a fixed table of actions; anything off the table is refused and logged.
 
@@ -23,7 +23,7 @@ The exception, said plainly: **the machine's administrator (anyone with root or 
 
 | Account | Runs | Rights | Status |
 |---|---|---|---|
-| Root core | Starts and stops a login's fleet processes as that login, ends runaway processes, memory protection, power settings, switches versions after re-checking the signature | Opens no port, reads nothing from the hub; accepts only the machine's node daemon and only the fixed action table | live · gate 2 |
+| Root core | Starts and stops a login's Tokenman processes as that login, ends runaway processes, memory protection, power settings, switches versions after re-checking the signature | Opens no port, reads nothing from the hub; accepts only the machine's node daemon and only the fixed action table | live · gate 2 |
 | Node daemon | Health checks, disk patrol, reporting, connecting to the hub for session instructions, downloading and verifying new versions | No sudo; can only ask the root core for what is in its table | can be turned on per machine; planned until every machine has switched · gate 3 |
 | Admin program | Account creation and removal sent by the hub | Runs only orders the hub signed, each usable once and expiring in ten minutes | "Only signed orders" is live; moving it into a dedicated admin account is planned · gate 4 |
 | Credential proxy | Holds the subscription credentials and speaks for sessions | A separate role account, never merged with the account that takes outside instructions | live · gate 7 |

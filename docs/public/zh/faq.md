@@ -10,7 +10,7 @@ Tokenman 目前限定开放：每个账号背后是一台真机器和真额度�
 
 ### 和自己装 Claude Code 有什么不同？
 <!-- faq: site -->
-同一个官方 Claude Code，机器、技能和发布由 fleet 配好；每件事一个会话，关掉电脑它也继续跑。
+同一个官方 Claude Code，机器、技能和发布由 Tokenman 配好；每件事一个会话，关掉电脑它也继续跑。
 
 ### 不会编程能用吗？
 <!-- faq: site -->
@@ -33,7 +33,7 @@ Tokenman 目前限定开放：每个账号背后是一台真机器和真额度�
 
 ### 是 Anthropic 官方产品吗？
 <!-- faq: site -->
-不是，fleet 是独立的开源项目（MIT），运行未经修改的官方 Claude Code；Claude 是 Anthropic 的商标。
+不是，Tokenman 是独立的开源项目（MIT），运行未经修改的官方 Claude Code；Claude 是 Anthropic 的商标。
 
 ## 用起来
 

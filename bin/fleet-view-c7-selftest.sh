@@ -263,7 +263,7 @@ grep -q '已并进' "$W/dispatch.txt" && st_fail "T: ⌘T still says 「已并�
 grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && st_fail "T: ⌘T still opened the 派一件事 popup"
 # the panel's own rows (T685): 命令行 and 退出 fleet stand in it
 grep -qF '$ 命令行' "$W/dispatch.txt" || st_fail "T: the panel has no 命令行 row: $(grep -v '^$' "$W/dispatch.txt")"
-grep -q '⏻ 退出 fleet' "$W/dispatch.txt" || st_fail "T: the panel has no 退出 fleet row"
+grep -q '⏻ 退出 Tokenman' "$W/dispatch.txt" || st_fail "T: the panel has no 退出 Tokenman row"
 # the panel clock (issue #3551): the frame drawn ⇒ one run boot · read · frame · total
 waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^panel n=$((pn + 1)) '" \
   || st_fail "T: the panel's first frame left no run in timing/panel.ndjson: $(python3 "$BIN/fleet_timing.py" check)"
@@ -271,7 +271,7 @@ python3 "$BIN/fleet_timing.py" table panel | grep -q '^| frame | ' || st_fail "T
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
 # typed words land on a row of the panel's own: 退出 → ⏻, and ↵ asks before it quits
 to send-keys -t o:view -l '退出'
-waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⏻ 退出 fleet'" || st_fail "T: typing 退出 did not light ⏻: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⏻ 退出 Tokenman'" || st_fail "T: typing 退出 did not light ⏻: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
 to send-keys -t o:view Enter
 waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '(y/n)'" || st_fail "T: ↵ on ⏻ did not ask first: $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
 to send-keys -t o:view n

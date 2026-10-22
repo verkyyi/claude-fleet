@@ -10,7 +10,7 @@ Tokenman is in limited access for now: every account stands for a real machine a
 
 ### How is it different from installing Claude Code myself?
 <!-- faq: site -->
-It is the same official Claude Code; fleet sets up the machine, the skills and publishing, gives each task its own session, and keeps it running when you close your laptop.
+It is the same official Claude Code; Tokenman sets up the machine, the skills and publishing, gives each task its own session, and keeps it running when you close your laptop.
 
 ### Can I use it without coding?
 <!-- faq: site -->
@@ -33,12 +33,12 @@ Sessions need to reach Claude's or ChatGPT's service to work; a self-hosted sing
 
 ### Is this an Anthropic product?
 <!-- faq: site -->
-No. fleet is an independent open-source project (MIT) that runs the unmodified official Claude Code; Claude is a trademark of Anthropic.
+No. Tokenman is an independent open-source project (MIT) that runs the unmodified official Claude Code; Claude is a trademark of Anthropic.
 
 ## Using it
 
 ### How many sessions can one computer run?
-There is no fixed limit by default: before a new session starts, fleet checks how much memory is left and how busy the machine is, and a session that does not fit waits; running sessions are never touched. For a hard limit, set `FLEET_GLOBAL_MAX_SESSIONS` in the configuration.
+There is no fixed limit by default: before a new session starts, Tokenman checks how much memory is left and how busy the machine is, and a session that does not fit waits; running sessions are never touched. For a hard limit, set `FLEET_GLOBAL_MAX_SESSIONS` in the configuration.
 
 ### If I close the terminal, do my sessions keep running?
 Yes. Sessions run on the machine, not in your terminal; type `fleet` again and everything is where you left it — you land on the session you looked at last (from any computer or phone), or on a new one if that session has been closed. `fleet quit` closes only the client.
