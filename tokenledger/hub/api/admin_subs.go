@@ -289,6 +289,7 @@ func (s *Server) adminSubAnswer(w http.ResponseWriter, r *http.Request, c store.
 		read := s.readHubQuotaOne(ctx, c)
 		cancel()
 		s.HubQuota.record(read)
+		s.hubQuotaOutcome(read, s.HubQuota.now())
 		if read.OK {
 			quota = "ready"
 		}

@@ -22,6 +22,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 import { t } from "./i18n";
 
 export type Kpi = { label: string; value: React.ReactNode };
@@ -50,6 +51,8 @@ export type AdminTablePageProps<T> = {
   // the text a row is searched by
   searchText?: (row: T) => string;
   rowId: (row: T) => string;
+  // a row's own look (the pool's red row for a subscription that needs a new sign-in)
+  rowClass?: (row: T) => string | undefined;
   // the open row's id (the page's route says it), and the way to change it
   openId?: string | null;
   onOpen?: (id: string | null) => void;
@@ -162,7 +165,7 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
               </div>
             )}
             {p.filters && (
-              <ToggleGroup type="single" variant="outline" size="sm" value={filter} onValueChange={(v) => {
+              <ToggleGroup type="single" variant="outline" size="sm" className="max-w-full overflow-x-auto" value={filter} onValueChange={(v) => {
                   if (!v) return;
                   setFilter(v);
                   p.onFilter?.(v);
@@ -224,7 +227,7 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
                     <TableRow
                       key={r.id}
                       data-state={r.id === p.openId ? "selected" : undefined}
-                      className={p.onOpen ? "cursor-pointer" : undefined}
+                      className={cn(p.onOpen && "cursor-pointer", p.rowClass?.(r.original))}
                       onClick={() => p.onOpen?.(r.id)}
                     >
                       {r.getVisibleCells().map((c) => (

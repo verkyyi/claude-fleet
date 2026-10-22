@@ -10,10 +10,10 @@
 // /v1/admin/overview · /v1/fleet/cred-policy · /v1/nodes · /v1/accounts/label.
 import * as React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowRight, Bot, Cpu, Pause, Pencil, Play, Settings2, ShieldAlert, User } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router";
+import { ArrowRight, Bot, Cpu, KeyRound, Pause, Pencil, Play, Settings2, ShieldAlert, User } from "lucide-react";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +42,7 @@ import { ago, inTime, t, when, type MsgKey } from "../i18n";
 import {
   credState,
   entryOf,
+  reauthReason,
   fingerprint,
   grantOf,
   leasesOf,
@@ -101,6 +102,23 @@ function StateBadge({ s }: { s: State }) {
     <Badge variant="outline" className={cn("font-normal", STATE[s])}>
       {t(`pool.state.${s}` as MsgKey)}
     </Badge>
+  );
+}
+
+// reasonText is why a row needs a new sign-in, one sentence (FKS6).
+export function reasonText(s: Sub): string {
+  const r = reauthReason(s.cred);
+  return t(`reauth.r.${r.key}` as MsgKey, { n: r.n ?? "", code: r.code ?? "" });
+}
+
+// ReauthUpdate is the row's 更新凭据: the main button; clicks inside its dialog
+// never reach the row under it (React bubbles through the portal).
+function ReauthUpdate({ s, onAdded, size }: { s: Sub; onAdded: () => void; size?: "sm" | "default" }) {
+  if (!s.cred || s.owner) return null;
+  return (
+    <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <AddSubscriptionDialog known={[]} replace={{ provider: s.prov, account: s.cred.account }} onAdded={onAdded} primary size={size} />
+    </span>
   );
 }
 
@@ -172,6 +190,9 @@ async function machineTargets(view: PolicyView): Promise<Target[]> {
 export function PoolPage() {
   const { id } = useParams();
   const nav = useNavigate();
+  const { search } = useLocation();
+  const need = new URLSearchParams(search).get("need") === "reauth";
+  const reloadRef = React.useRef<() => void>(() => {});
   const [world, setWorld] = React.useState<World>({
     skip: 85,
     view: null,
@@ -249,13 +270,27 @@ export function PoolPage() {
           </span>
         ),
       },
-      { accessorKey: "state", header: () => t("pool.col.state"), cell: ({ row }) => <StateBadge s={row.original.state} /> },
+      {
+        accessorKey: "state",
+        header: () => t("pool.col.state"),
+        cell: ({ row }) =>
+          row.original.state === "reauth" ? (
+            <div className="flex w-52 flex-col items-start gap-1.5 whitespace-normal">
+              <StateBadge s="reauth" />
+              <span className="text-xs leading-snug text-destructive">{reasonText(row.original)}</span>
+              <ReauthUpdate s={row.original} onAdded={() => reloadRef.current()} size="sm" />
+            </div>
+          ) : (
+            <StateBadge s={row.original.state} />
+          ),
+      },
     ],
     [world.skip, world.users],
   );
 
   const filters: Filter<Row>[] = React.useMemo(
     () => [
+      { key: "reauth", label: t("reauth.filter"), test: (r) => r.state === "reauth" },
       { key: "claude", label: t("pool.filter.claude"), test: (r) => r.prov === "claude" },
       { key: "codex", label: t("pool.filter.codex"), test: (r) => r.prov === "codex" },
       { key: "near", label: t("pool.filter.near"), test: (r) => r.state === "near" || r.state === "limited" },
@@ -282,6 +317,37 @@ export function PoolPage() {
         filters={filters}
         searchText={(r) => [r.label, serviceOf(r), planOf(r), r.who, r.people.join(" "), r.cred?.account, r.id, r.owner && ownerName(world, r.owner)].join(" ")}
         rowId={(r) => r.id}
+        rowClass={(r) => (r.state === "reauth" ? "bg-destructive/5 hover:bg-destructive/10 data-[state=selected]:bg-destructive/10" : undefined)}
+        key={need ? "reauth" : "all"}
+        defaultFilter={need ? "reauth" : undefined}
+        aside={(rows) => {
+          const bad = (rows || []).filter((r) => r.state === "reauth");
+          if (!bad.length) return null;
+          return (
+            <Alert variant="destructive" className="border-destructive/50">
+              <KeyRound />
+              <AlertTitle>{t("reauth.title")} · {bad.length}</AlertTitle>
+              <AlertDescription className="grid gap-3">
+                <p className="text-xs">{t("reauth.lead")}</p>
+                <ul className="grid gap-2">
+                  {bad.map((r) => (
+                    <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-destructive/30 bg-background px-3 py-2 text-foreground">
+                      <span className="font-mono text-sm font-medium">{r.label}</span>
+                      <span className="text-xs text-muted-foreground">{serviceOf(r)}</span>
+                      <span className="basis-full text-xs text-destructive sm:basis-auto">{reasonText(r)}</span>
+                      <span className="ml-auto flex gap-2">
+                        <Button size="sm" variant="ghost" asChild>
+                          <Link to={`/pool/${encodeURIComponent(r.id)}`}>{t("reauth.open")}</Link>
+                        </Button>
+                        <ReauthUpdate s={r} onAdded={() => reloadRef.current()} size="sm" />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          );
+        }}
         openId={id ? decodeURIComponent(id) : null}
         onOpen={(x) => nav(x ? `/pool/${encodeURIComponent(x)}` : "/pool")}
         emptyText={t("pool.empty")}
@@ -298,7 +364,9 @@ export function PoolPage() {
             { label: t("pool.kpi.people"), value: people.size },
           ];
         }}
-        actions={(reload, rows) => (
+        actions={(reload, rows) => {
+          reloadRef.current = reload;
+          return (
           <>
             <Button variant="outline" asChild>
               <Link to="/pool/settings">
@@ -308,7 +376,8 @@ export function PoolPage() {
             </Button>
             <AddSubscriptionDialog known={rows.filter((r) => r.cred && !r.owner).map((r) => `${r.cred!.provider}/${r.cred!.account}`)} onAdded={reload} />
           </>
-        )}
+          );
+        }}
         drawer={(r, ctx) => <PoolDrawer r={r} world={world} {...ctx} />}
       />
     </>
@@ -378,6 +447,27 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
       </SheetHeader>
 
       <div className="grid gap-6 p-6">
+        {r.state === "reauth" && (
+          <Alert variant="destructive" className="border-destructive/50">
+            <KeyRound />
+            <AlertTitle>{t("reauth.title")}</AlertTitle>
+            <AlertDescription>
+              <dl className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm break-words">
+                <dt>{t("reauth.why")}</dt>
+                <dd>{reasonText(r)}</dd>
+                {r.cred?.reauth_required_at && (
+                  <>
+                    <dt>{t("reauth.since")}</dt>
+                    <dd>{when(r.cred.reauth_required_at)}</dd>
+                  </>
+                )}
+                <dt>{t("reauth.lastGood")}</dt>
+                <dd>{r.readAt ? `${when(r.readAt)} · ${ago(r.readAt)}` : t("reauth.never")}</dd>
+              </dl>
+              <p className="mt-2 text-xs">{t("reauth.lead")}</p>
+            </AlertDescription>
+          </Alert>
+        )}
         {!r.managed && (
           <Alert>
             <AlertDescription className="text-xs">{t("pool.unmanagedHint")}</AlertDescription>
@@ -470,7 +560,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
       <SheetFooter className="mt-auto flex-row justify-end gap-2 border-t p-4">
         {r.cred && !r.owner && <>
           <Button variant="outline" disabled={refreshing} onClick={refresh}>{t("pool.web.refresh")}</Button>
-          <AddSubscriptionDialog known={[]} replace={{ provider: r.prov, account: r.cred.account }} onAdded={reload} />
+          <AddSubscriptionDialog known={[]} replace={{ provider: r.prov, account: r.cred.account }} onAdded={reload} primary={r.state === "reauth"} />
         </>}
 
         {r.cred ? (

@@ -31,6 +31,11 @@ const (
 	// 活页 key was taken back: their pages stay 30 days; refs = the
 	// principal (task XA4R).
 	NotifyKindLivePageEnd = "livepage_end"
+	// NotifyKindPoolReauth is a pool credential the upstream keeps refusing
+	// → an admin; NotifyKindPoolBack is its first good read after it; refs =
+	// its credential id, owner, provider, account (claude-fleet FKS6).
+	NotifyKindPoolReauth = "pool_reauth"
+	NotifyKindPoolBack   = "pool_back"
 )
 
 // The states of a notice.

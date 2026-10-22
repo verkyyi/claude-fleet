@@ -204,7 +204,9 @@ func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]s
 		}
 		var mine []store.Credential
 		for _, c := range rows {
-			if c.Provider == provider && !ownPaused(settings, c) { // paused by its owner (#4035)
+			// paused by its owner (#4035); one that needs a new login is
+			// never handed to a session (FKS6)
+			if c.Provider == provider && !ownPaused(settings, c) && !c.ReauthRequired {
 				mine = append(mine, c)
 			}
 		}
@@ -239,7 +241,13 @@ func (s *Server) noBindWhy(principal, endpointID, provider string) string {
 			if c.Provider != provider {
 				continue
 			}
-			if _, r := s.credVerdict(c, pol); r != "" {
+			r := ""
+			if c.ReauthRequired {
+				r = "needs a new login (update its credential on the pool page)"
+			} else {
+				_, r = s.credVerdict(c, pol)
+			}
+			if r != "" {
 				owner := c.PrincipalID
 				if owner == store.PoolPrincipal {
 					owner = "pool"

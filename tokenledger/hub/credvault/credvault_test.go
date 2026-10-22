@@ -67,7 +67,7 @@ func (c *countingRefresher) Refresh(_ context.Context, _ string, s Secret) (Acce
 func TestConcurrentLeaseRefreshesOnce(t *testing.T) {
 	r := &countingRefresher{ttl: 8 * time.Hour, delay: 50 * time.Millisecond}
 	v := newVault(t, r)
-	if err := v.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0"}); err != nil {
+	if err := v.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0", AccountID: "acct-1"}); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -106,7 +106,7 @@ func TestLeaseReusesUntilMinTTL(t *testing.T) {
 	v := newVault(t, r)
 	now := time.Now()
 	v.Now = func() time.Time { return now }
-	_ = v.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0"})
+	_ = v.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0", AccountID: "acct-1"})
 	for i := 0; i < 3; i++ {
 		if _, err := v.Lease(context.Background(), "p1", Claude, "main"); err != nil {
 			t.Fatal(err)
@@ -127,7 +127,7 @@ func TestRefreshFailureFallsBackThenErrors(t *testing.T) {
 	v := newVault(t, r)
 	now := time.Now()
 	v.Now = func() time.Time { return now }
-	_ = v.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0"})
+	_ = v.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0", AccountID: "acct-1"})
 	if _, err := v.Lease(context.Background(), "p1", Claude, "main"); err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestSetupTokenIssuedAsIsAndNeverRefreshed(t *testing.T) {
 
 	// A refresh-token row beside it still refreshes as before.
 	now = exp.Add(-time.Hour)
-	if err := v.Put("pool", Claude, "rt", Secret{RefreshToken: "RT-0"}); err != nil {
+	if err := v.Put("pool", Claude, "rt", Secret{RefreshToken: "RT-0", AccountID: "acct-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if acc, err := v.Lease(context.Background(), "pool", Claude, "rt"); err != nil || acc.AccessToken != "AT-1" {
@@ -506,7 +506,7 @@ func TestTwoReplicasRefreshOnce(t *testing.T) {
 			a.CrossLock, b.CrossLock = cross, cross
 			a.Replica, b.Replica = "hub-a", "hub-b"
 		}
-		if err := a.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0"}); err != nil {
+		if err := a.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0", AccountID: "acct-1"}); err != nil {
 			t.Fatal(err)
 		}
 		var wg sync.WaitGroup
@@ -557,5 +557,45 @@ func TestSetupTokenUnknownExpiry(t *testing.T) {
 	acc, err := v.Lease(context.Background(), "pool", Claude, "unknown")
 	if err != nil || acc.ExpiresAt != nil || acc.AccessToken == "" {
 		t.Fatalf("unknown expiry: %+v %v", acc, err)
+	}
+}
+
+// A credential the quota reader marked reauth_required (claude-fleet FKS6)
+// leases to nobody but the reader's probe: a setup token as stored, an OAuth
+// one by a refresh — which, landing, lifts the mark. A refresh token the
+// provider itself refused stays refused, probe or not.
+func TestLeaseProbePastQuotaMark(t *testing.T) {
+	ref := &countingRefresher{ttl: 8 * time.Hour}
+	v := newVault(t, ref)
+	exp := time.Now().Add(365 * 24 * time.Hour)
+	if err := v.Put("pool", Claude, "setup", Secret{SetupToken: "sk-ant-oat01-X", ExpiresAt: &exp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Put("pool", Codex, "oauth", Secret{RefreshToken: "RT-0", AccountID: "acct-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Put("pool", Claude, "dead", Secret{RefreshToken: "RT-D"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	_ = v.Store.MarkReauthRequired("pool", Claude, "setup", QuotaReauthPrefix+"3 in a row", false, now)
+	_ = v.Store.MarkReauthRequired("pool", Codex, "oauth", QuotaReauthPrefix+"3 in a row", true, now)
+	_ = v.Store.MarkReauthRequired("pool", Claude, "dead", "invalid_grant", true, now)
+	for _, a := range []struct{ prov, account string }{{Claude, "setup"}, {Codex, "oauth"}, {Claude, "dead"}} {
+		if _, err := v.Lease(context.Background(), "pool", a.prov, a.account); !errors.Is(err, ErrReauthRequired) {
+			t.Fatalf("%s: lease = %v, want reauth_required", a.account, err)
+		}
+	}
+	if acc, err := v.LeaseProbe(context.Background(), "pool", Claude, "setup"); err != nil || acc.AccessToken != "sk-ant-oat01-X" {
+		t.Fatalf("setup probe = %+v %v", acc, err)
+	}
+	if _, err := v.LeaseProbe(context.Background(), "pool", Codex, "oauth"); err != nil {
+		t.Fatalf("oauth probe: %v", err)
+	}
+	if row, _ := v.Store.Credential("pool", Codex, "oauth"); row.ReauthRequired {
+		t.Fatal("a refresh that landed left the mark")
+	}
+	if _, err := v.LeaseProbe(context.Background(), "pool", Claude, "dead"); !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("dead probe = %v, want reauth_required", err)
 	}
 }

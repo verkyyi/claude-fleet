@@ -159,12 +159,22 @@ func TestPoolReloginAlert(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	t.Cleanup(up.Close)
-	h.srv.HubQuota = &HubQuota{RelayURL: up.URL}
+	clock := time.Now()
+	var cmu sync.Mutex
+	h.srv.HubQuota = &HubQuota{RelayURL: up.URL, Now: func() time.Time { cmu.Lock(); defer cmu.Unlock(); return clock }}
+	tick := func(d time.Duration) { cmu.Lock(); clock = clock.Add(d); cmu.Unlock() }
+	h.srv.FleetPublicURL = "https://hub.example"
+	if err := h.srv.Store.UpsertHubUser(store.HubUser{PrincipalID: "p-boss", Login: "boss", Role: roleAdmin, AddedBy: "test", AddedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
 	buf, lmu := quietCaptureLog(t)
 	exp := time.Now().Add(300 * 24 * time.Hour)
 	putPool(t, h, credvault.Claude, "Charlie_20X", credvault.Secret{SetupToken: "sk-ant-oat01-CHARLIESECRET", ExpiresAt: &exp, AccountUUID: icloudUUID})
 	subject := "claude/Charlie_20X"
 	for i := 1; i <= poolReloginAfter; i++ {
+		if i > 1 {
+			tick(poolReloginSpan / time.Duration(poolReloginAfter-1))
+		}
 		h.srv.ReadHubQuota(context.Background())
 		_, _, ok, _ := h.srv.Store.OpenFleetAlert(store.AlertPoolRelogin, subject)
 		if ok != (i == poolReloginAfter) {
@@ -185,11 +195,107 @@ func TestPoolReloginAlert(t *testing.T) {
 	if strings.Contains(out, "CHARLIESECRET") {
 		t.Fatal("a secret reached the log")
 	}
+	// FKS6: marked reauth_required, out of the binder's choices, one admin
+	// notice — and a fourth refusal tells nobody again.
+	c, _ := h.srv.Store.Credential(store.PoolPrincipal, credvault.Claude, "Charlie_20X")
+	if !c.ReauthRequired || !strings.HasPrefix(c.RefreshError, credvault.QuotaReauthPrefix) || !strings.Contains(c.RefreshError, "HTTP 401") {
+		t.Fatalf("not marked: %+v", c)
+	}
+	if choices, _ := h.srv.sessionBindChoices(pAlice, "", credvault.Claude); len(choices) != 0 {
+		t.Fatalf("a credential that needs a new login is still a choice: %+v", choices)
+	}
+	tick(5 * time.Minute)
+	h.srv.ReadHubQuota(context.Background())
+	notices := func(kind string) []store.Notice {
+		ns, err := h.srv.Store.NoticesOf("p-boss", kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ns
+	}
+	if ns := notices(store.NotifyKindPoolReauth); len(ns) != 1 {
+		t.Fatalf("admin told %d times, want once", len(ns))
+	} else if m, ok, err := h.srv.noticeMsg(ns[0]); err != nil || !ok || !strings.Contains(m.Text, "需要重新授权") || !strings.Contains(m.Text, "HTTP 401") || !strings.Contains(m.Link, "/admin/pool/") {
+		t.Fatalf("notice = %+v %v %v", m, ok, err)
+	}
+	rec := httptest.NewRecorder()
+	h.srv.handleAdminSubsReauth(rec, httptest.NewRequest(http.MethodGet, AdminSubsReauthPath, nil))
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `"pending":1`) || !strings.Contains(body, "Charlie_20X") || strings.Contains(body, "CHARLIESECRET") {
+		t.Fatalf("reauth list = %d %s", rec.Code, body)
+	}
 	mu.Lock()
 	refuse = false
 	mu.Unlock()
+	tick(5 * time.Minute)
 	h.srv.ReadHubQuota(context.Background())
 	if _, _, ok, _ := h.srv.Store.OpenFleetAlert(store.AlertPoolRelogin, subject); ok {
 		t.Fatal("pool_relogin not cleared by a good read")
+	}
+	if c, _ := h.srv.Store.Credential(store.PoolPrincipal, credvault.Claude, "Charlie_20X"); c.ReauthRequired {
+		t.Fatalf("mark not lifted by a good read: %+v", c)
+	}
+	if ns := notices(store.NotifyKindPoolBack); len(ns) != 1 {
+		t.Fatalf("back told %d times, want once", len(ns))
+	} else if m, ok, _ := h.srv.noticeMsg(ns[0]); !ok || !strings.Contains(m.Text, "已恢复") {
+		t.Fatalf("back notice = %+v %v", m, ok)
+	}
+	if choices, _ := h.srv.sessionBindChoices(pAlice, "", credvault.Claude); len(choices) != 1 {
+		t.Fatalf("back in the pool, still no choice: %+v", choices)
+	}
+}
+
+// Only the upstream refusing the login marks a credential: a 429, a 5xx and
+// the relay's own refusal never do, however long they last (FKS6).
+func TestPoolReauthNotOnOtherFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		body string
+	}{{"429", 429, `{}`}, {"503", 503, `oops`}, {"relay", 403, `{"error":"relay_refused"}`}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := newVaultHarness(t)
+			h.srv.SessionCredKey = bytes.Repeat([]byte{9}, 32)
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, tc.body, tc.code)
+			}))
+			t.Cleanup(up.Close)
+			clock := time.Now()
+			h.srv.HubQuota = &HubQuota{RelayURL: up.URL, Now: func() time.Time { return clock }}
+			exp := time.Now().Add(300 * 24 * time.Hour)
+			putPool(t, h, credvault.Claude, "Charlie_20X", credvault.Secret{SetupToken: "sk-ant-oat01-X", ExpiresAt: &exp})
+			for i := 0; i < 6; i++ {
+				h.srv.ReadHubQuota(context.Background())
+				clock = clock.Add(5 * time.Minute)
+			}
+			if c, _ := h.srv.Store.Credential(store.PoolPrincipal, credvault.Claude, "Charlie_20X"); c.ReauthRequired {
+				t.Fatalf("%s marked it: %+v", tc.name, c)
+			}
+		})
+	}
+}
+
+// Three refusals inside ten minutes are not yet enough (FKS6).
+func TestPoolReauthNeedsSpan(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	h.srv.SessionCredKey = bytes.Repeat([]byte{9}, 32)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{}`, http.StatusUnauthorized)
+	}))
+	t.Cleanup(up.Close)
+	clock := time.Now()
+	h.srv.HubQuota = &HubQuota{RelayURL: up.URL, Now: func() time.Time { return clock }}
+	exp := time.Now().Add(300 * 24 * time.Hour)
+	putPool(t, h, credvault.Claude, "Charlie_20X", credvault.Secret{SetupToken: "sk-ant-oat01-X", ExpiresAt: &exp})
+	for i := 0; i < 5; i++ {
+		h.srv.ReadHubQuota(context.Background())
+		clock = clock.Add(time.Minute)
+	}
+	if c, _ := h.srv.Store.Credential(store.PoolPrincipal, credvault.Claude, "Charlie_20X"); c.ReauthRequired {
+		t.Fatal("marked within the span")
+	}
+	clock = clock.Add(poolReloginSpan)
+	h.srv.ReadHubQuota(context.Background())
+	if c, _ := h.srv.Store.Credential(store.PoolPrincipal, credvault.Claude, "Charlie_20X"); !c.ReauthRequired {
+		t.Fatal("not marked past the span")
 	}
 }
