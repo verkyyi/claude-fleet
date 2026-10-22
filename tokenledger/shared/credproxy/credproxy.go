@@ -86,22 +86,23 @@ const maxBody = 64 << 20
 
 // Resolution is the hub's answer for one pass + provider (api.CredProxyResolve).
 type Resolution struct {
-	CredentialID string     `json:"credential_id,omitempty"`
-	Valid        bool       `json:"valid"`
-	Reason       string     `json:"reason,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	ID           string     `json:"id,omitempty"`
-	Principal    string     `json:"principal,omitempty"`
-	WorkerID     string     `json:"worker_id,omitempty"`
-	Machine      string     `json:"machine,omitempty"`
-	Exp          int64      `json:"exp,omitempty"`
-	Provider     string     `json:"provider,omitempty"`
-	Owner        string     `json:"owner,omitempty"`
-	Account      string     `json:"account,omitempty"`
-	BindRev      int64      `json:"bind_rev,omitempty"`
-	AccessToken  string     `json:"access_token,omitempty"`
-	AccountID    string     `json:"account_id,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CodexAffinityV1 bool       `json:"codex_affinity_v1,omitempty"`
+	CredentialID    string     `json:"credential_id,omitempty"`
+	Valid           bool       `json:"valid"`
+	Reason          string     `json:"reason,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	ID              string     `json:"id,omitempty"`
+	Principal       string     `json:"principal,omitempty"`
+	WorkerID        string     `json:"worker_id,omitempty"`
+	Machine         string     `json:"machine,omitempty"`
+	Exp             int64      `json:"exp,omitempty"`
+	Provider        string     `json:"provider,omitempty"`
+	Owner           string     `json:"owner,omitempty"`
+	Account         string     `json:"account,omitempty"`
+	BindRev         int64      `json:"bind_rev,omitempty"`
+	AccessToken     string     `json:"access_token,omitempty"`
+	AccountID       string     `json:"account_id,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 is signed with (base64), when the hub has one.
 	SessionPub string `json:"session_pub,omitempty"`
 	// SessionPubPrev is the key a rotation retires (claude-fleet#4138).

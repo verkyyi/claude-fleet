@@ -420,7 +420,8 @@ hub 的 `fleet_codex_affinity`，以 worker + 带用途的 SHA256 引用为键�
 发布容量验收须计入这部分数据库存储。
 
 每次 Codex 请求都向 hub 询问来源，不走仅按 pass 缓存的旧 resolve 或 stale fallback；
-hub 不可用时返回 503。来源账号仍须通过 allowlist、暂停、reauth、refresh 健康与
+hub 不可用时返回 503。新代理要求 hub 明确回传 `codex_affinity_v1` 能力；旧 hub
+忽略未知 wire 字段而返回普通 lease，也不能被误当成已经登记来源。来源账号仍须通过 allowlist、暂停、reauth、refresh 健康与
 cooldown 检查，替换同名凭据不继承旧引用。续接只取得该来源的 lease，不覆盖较新的
 sticky 或人工绑定。旧 `request_boundary` boolean 不再触发主动重选；旧消费者仍可
 resolve，但没有证明上下文独立的能力。

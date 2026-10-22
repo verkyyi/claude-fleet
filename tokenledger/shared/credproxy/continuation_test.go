@@ -155,3 +155,19 @@ func TestCodexContinuationNeverFollowsRedirect(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexContinuationRequiresHubCapability(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// An old hub ignores the new JSON fields and returns a normal lease.
+		io.WriteString(w, `{"valid":true,"access_token":"fixture","account":"old"}`)
+	}))
+	defer hub.Close()
+	router := &HubResolver{URL: hub.URL, Token: "fixture"}
+	got, err := router.ResolveCodex(t.Context(), "fixture-pass", CodexRoute{Independent: true})
+	if err != nil || got.Valid || got.Error != CodexContinuationUnavailable {
+		t.Fatalf("legacy hub accepted: %+v %v", got, err)
+	}
+	if err := router.RecordCodexAffinity(t.Context(), "fixture-pass", Resolution{Owner: "pool", Account: "old", CredentialID: "fixture"}, []string{CodexReference("id", "ref")}); err == nil {
+		t.Fatal("legacy hub falsely acknowledged source registration")
+	}
+}

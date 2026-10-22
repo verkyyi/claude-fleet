@@ -37,14 +37,18 @@ type CodexRouter interface {
 }
 
 func (h *HubResolver) ResolveCodex(ctx context.Context, pass string, route CodexRoute) (Resolution, error) {
-	return h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: Codex, Codex: &route})
+	answer, err := h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: Codex, Codex: &route})
+	if err == nil && answer.Valid && !answer.CodexAffinityV1 {
+		return Resolution{Error: CodexContinuationUnavailable, Reason: "affinity_protocol_unavailable"}, nil
+	}
+	return answer, err
 }
 
 func (h *HubResolver) RecordCodexAffinity(ctx context.Context, pass string, res Resolution, refs []string) error {
 	answer, err := h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: Codex, CodexRecord: &CodexAffinityRecord{
 		Owner: res.Owner, Account: res.Account, CredentialID: res.CredentialID, References: refs,
 	}})
-	if err == nil && !answer.Valid {
+	if err == nil && (!answer.Valid || !answer.CodexAffinityV1) {
 		return errors.New("continuation record refused")
 	}
 	return err
