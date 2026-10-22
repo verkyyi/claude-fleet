@@ -194,7 +194,37 @@ class Timers(fixture.Park):
     def test_codex_loop_wakes_same_thread_and_keeps_owner_commands(self):
         self.check_existing_loop_ledger('codex')
 
-    def check_existing_loop_ledger(self, agent):
+    def test_codex_park_resume_does_not_bootstrap_second_controller(self):
+        # A transferred session's wrapper inherits these from launch.sh. The
+        # first native fixture is already running; the original ledger exists.
+        manifest = self.root / 'transfer/manifest.json'
+        spec = manifest.parent / 'loop-spec.json'
+        self.env.update(FLEET_HANDOFF_MANIFEST=str(manifest), FLEET_LOOP_SPEC=str(spec),
+                        FLEET_LOOP_AGENT='codex')
+        ledger = self.park_ledger('codex')
+        source = subprocess.Popen(['sh', '-c', 'exit 0'])
+        source.wait()
+        manifest.write_text(json.dumps(dict(source=dict(pid=source.pid), loop_spec_path=str(spec),
+            fleet=dict(session=self.label, window_id=self.win, pane_id=self.opt('pane_id')),
+            workspace=dict(path=str(self.root)), target=dict(agent='codex'))))
+        spec.write_text(json.dumps(dict(prompt=self.prompt, interval_seconds=60, next_run_at=self.due)))
+        # The launcher's documented LOOP_SPEC branch runs the actual bridge,
+        # whose duplicate-directory guard must never be hit on a parked resume.
+        launch = self.root / 'launch'
+        text = launch.read_text()
+        probe = ('if [ -n "${FLEET_LOOP_SPEC:-}" ]; then\n'
+                 '  touch ' + shlex.quote(str(self.root / 'rebootstrap')) + '\n'
+                 '  exec ' + shlex.join([sys.executable, str(BIN / 'fleet-loop.py'), 'bridge', '--']) + ' "$@"\nfi\n')
+        launch.write_text(text.replace('#!/bin/bash\n', '#!/bin/bash\n' + probe, 1))
+        self.tick(self.due)
+        self.assertFalse((self.root / 'rebootstrap').exists(),
+                         'park resume attempted a second controller: ' + self.tm('capture-pane', '-p', '-t', self.win))
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertEqual((self.root / 'launch-args').read_text().count(self.prompt), 1)
+        self.assertEqual(json.loads(ledger.read_text())['deliveries'], 1)
+
+    def park_ledger(self, agent, cron=False, same_due=False):
         self.setup_timer(agent=agent)
         self.set('@loop', '')
         manifest = self.root / 'transfer/manifest.json'
@@ -202,15 +232,37 @@ class Timers(fixture.Park):
         ledger.parent.mkdir(parents=True)
         manifest.write_text('{}')
         self.set('@handoff_manifest', str(manifest))
-        ledger.write_text(json.dumps(dict(id='loop-1', status='active', thread_id=self.sid,
-                          agent=agent, manifest=str(manifest), schedule=dict(prompt=self.prompt,
-                          interval_seconds=60, next_run_at=self.due))))
+        schedule = dict(prompt=self.prompt, interval_seconds=60, next_run_at=self.due)
+        if cron:
+            import fleet_cron
+            self.due = (int(time.time()) // 60 + 1) * 60
+            schedule = fleet_cron.plan(dict(jobs=[dict(id=ident, prompt=prompt, cron='* * * * *',
+                timezone='UTC', expires_at=time.time()+3600, recurring=True, stop_when='', next_run_at=due)
+                for ident, prompt, due in [('cancel-me', self.prompt, self.due),
+                                          ('keep-me', 'Uncancelled sibling prompt', self.due if same_due else self.due+120)]]))
+        record = dict(id='loop-1', status='active', thread_id=self.sid,
+                      agent=agent, manifest=str(manifest), schedule=schedule)
+        import fleet_park_wake as wake
+        wake.loop_module().claim_owner(ledger, record, {})
+        self.owner_evidence = {k: record[k] for k in ('owner_record', 'record_path', 'generation',
+                                                     'active_record', 'active_generation')}
+        ledger.write_text(json.dumps(record))
         with patch.dict(os.environ, self.env):
             self.assertTrue(fixture.gate.park(self.fid).get('ok'))
-            import fleet_park_wake as wake
             # The old dispatcher sees its ownership moved and does no native I/O.
             wake.loop_module().dispatch(ledger, now=self.due)
         self.assertEqual(json.loads(ledger.read_text())['park_fid'], self.fid)
+        return ledger
+
+    def owner_command(self, ledger, *args):
+        env = dict(self.env, FLEET_LOOP_RECORD=str(ledger), TMUX=self.opt('socket_path') + ',0,0',
+                   TMUX_PANE=self.opt('pane_id'))
+        p = subprocess.run([sys.executable, str(BIN / 'fleet-loop.py'), *args],
+                           env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def check_existing_loop_ledger(self, agent):
+        ledger = self.park_ledger(agent)
         self.tick(self.due - 1)
         self.assertTrue(self.opt('@parked'))
         self.tick(self.due)
@@ -219,17 +271,95 @@ class Timers(fixture.Park):
         self.assertEqual(self.opt('@codex_session_id' if agent == 'codex' else '@cc_session_id'), self.sid)
         self.assertEqual(self.opt('@fleet_id'), self.fid)
         record = json.loads(ledger.read_text())
+        self.assertEqual({k: record[k] for k in self.owner_evidence}, self.owner_evidence)
         self.assertEqual(record['deliveries'], 1)
         self.assertEqual(record['schedule']['next_run_at'], self.due + 60)
-        env = dict(self.env, FLEET_LOOP_RECORD=str(ledger), TMUX=self.opt('socket_path') + ',0,0',
-                   TMUX_PANE=self.opt('pane_id'))
-        for args in (['defer', '--seconds', '120'], ['stop']):
-            p = subprocess.run([sys.executable, str(BIN / 'fleet-loop.py'), *args],
-                               env=env, capture_output=True, text=True, timeout=10)
-            self.assertEqual(p.returncode, 0, p.stderr)
+        self.owner_command(ledger, 'defer', '--seconds', '120')
+        self.owner_command(ledger, 'stop')
+        self.tick(self.due + 600)
+        self.assertEqual(json.loads(ledger.read_text())['status'], 'stopped')
+        self.assertEqual(json.loads(ledger.read_text())['deliveries'], 1)
         import fleet_loop_mark as mark
         with patch.dict(os.environ, self.env):
             self.assertEqual(mark.status(self.opt('@loop'))[0], 'none')
+
+
+    def block_timer_wake(self):
+        # Another startup owns the gate. No second seed may launch beside it.
+        self.set('@park_start', str(self.root / 'other-start.meta'))
+        self.tick(self.due)
+        contract = json.loads((self.root / 'conf/wake' / (self.fid + '.json')).read_text())
+        self.assertIn('pending', contract)
+        with patch.dict(os.environ, self.env):
+            row = fixture.gate.find(fixture.gate.records(self.fid), contract['pending']['delivery'])
+        self.assertEqual(row['state'], 'queued')
+        return contract['pending']['delivery']
+
+    def settle_after_cancel(self, tick_first=False, tick=True):
+        self.set('@park_start', '')
+        # The queue sweeper can run before the timer's next tick. Both roads
+        # must observe stop/cancel, not only the @loop display's status.
+        if tick and tick_first:
+            self.tick(self.due)
+        with patch.dict(os.environ, self.env):
+            fixture.gate.settle(self.fid)
+        if tick and not tick_first:
+            self.tick(self.due)
+        self.assertTrue(self.opt('@parked'), 'cancelled timer resumed the native engine')
+        self.assertFalse((self.root / 'launch-args').exists(), 'cancelled prompt was launched')
+
+    def test_codex_stopped_loop_never_rearms(self):
+        ledger = self.park_ledger('codex')
+        self.owner_command(ledger, 'stop')
+        self.settle_after_cancel()
+        self.assertEqual(json.loads(ledger.read_text())['status'], 'stopped')
+
+    def test_codex_stopped_pending_loop_never_rearms(self):
+        ledger = self.park_ledger('codex')
+        self.block_timer_wake()
+        self.owner_command(ledger, 'stop')
+        self.settle_after_cancel(tick_first=True)
+        self.assertEqual(json.loads(ledger.read_text())['status'], 'stopped')
+
+    def test_codex_cancelled_pending_job_keeps_sibling(self):
+        ledger = self.park_ledger('codex', cron=True)
+        self.block_timer_wake()
+        self.owner_command(ledger, 'stop', '--job', 'cancel-me')
+        self.settle_after_cancel()
+        self.assertEqual(json.loads(ledger.read_text())['status'], 'active')
+        self.tick(self.due + 120)
+        self.wait(lambda: self.opt('@park_relay'))
+        args = (self.root / 'launch-args').read_text()
+        self.assertNotIn(self.prompt, args)
+        self.assertEqual(args.count('Uncancelled sibling prompt'), 1)
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+
+    def test_codex_cancelled_pending_job_keeps_due_sibling(self):
+        ledger = self.park_ledger('codex', cron=True, same_due=True)
+        cancelled_delivery = self.block_timer_wake()
+        self.owner_command(ledger, 'stop', '--job', 'cancel-me')
+        self.settle_after_cancel(tick=False)
+        self.tick(self.due)
+        self.wait(lambda: self.opt('@park_relay'))
+        args = (self.root / 'launch-args').read_text()
+        self.assertNotIn(self.prompt, args)
+        self.assertEqual(args.count('Uncancelled sibling prompt'), 1)
+        self.tick(self.due)
+        record = json.loads(ledger.read_text())
+        self.assertEqual(record['deliveries'], 1)
+        self.assertNotEqual(record['accepted_turn'], cancelled_delivery)
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+
+    def test_cancelled_native_cron_pending_never_wakes(self):
+        import fleet_park_wake as wake
+        self.setup_timer(cron=True)
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(fixture.gate.park(self.fid).get('ok'))
+        self.due = json.loads((self.root / 'conf/wake' / (self.fid + '.json')).read_text())['next']
+        self.block_timer_wake()
+        with patch.dict(os.environ, self.env):
+            wake.cancel(self.fid, dict(tool_name='CronDelete', tool_input=dict(id='job-1')))
+        self.settle_after_cancel()
 
 
 if __name__ == '__main__':

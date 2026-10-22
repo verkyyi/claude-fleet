@@ -563,6 +563,10 @@ def settle(fid, wait_new=None):
         if continuation and continuation["state"] != "continued":
             return find(rows, wait_new)
         for r in live:
+            if r.get('wake_why') == '定时':
+                import fleet_park_wake
+                if fleet_park_wake.retire_cancelled(r, w):
+                    continue
             if r.get("sid") and w["sid"] and r["sid"] != w["sid"] and not w["parked"]:
                 ret(r, "session_changed")       # a /clear or another conversation: never into it
             elif r.get("state") == "queued" and t - r.get("at", t) > queue_secs:

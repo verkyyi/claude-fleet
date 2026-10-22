@@ -6466,6 +6466,25 @@ PY
   WHAT='进程退出后到点唤醒，同一窗口与会话的首轮是原提示，约定时刻记入动作账本'
 }
 
+drill_park_loop_rebootstrap() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_codex_park_resume_does_not_bootstrap_second_controller 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='原 Fleet loop 停放接回不复用首次创建控制器的环境，同 thread 原提示一次、原账本继续调度'
+}
+
+drill_park_stopped_timer_revives() {
+  CAP=45; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_codex_stopped_loop_never_rearms \
+    test_codex_stopped_pending_loop_never_rearms test_codex_cancelled_pending_job_keeps_sibling \
+    test_codex_cancelled_pending_job_keeps_due_sibling test_cancelled_native_cron_pending_never_wakes 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='显式停止或取消后，旧定时队列不再接回；未取消的任务保留同一账本和会话'
+}
+
 drill_park_loses_cron() {
   CAP=45; local t0 out
   t0=$(now)
