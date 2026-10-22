@@ -808,6 +808,7 @@ async function viewStream(req, res, u, person) {
   if (at != null && atSid !== (w.sid || "")) at = null;      // another conversation now: from its end
   let src = null, off = 0, first = true, lookedAt = 0, nothingYet = false;
   let asking = null, askedAt = knew ? 0 : Date.now(), pinged = Date.now(), next = null;
+  let gasking = null, gaskedAt = 0;
   const restart = () => { src = null; off = 0; at = null; first = true; lookedAt = 0; nothingYet = false; ev({ t: "reset" }); };
   while (!closed) {
     // another conversation in that window now (a /clear, a resume): from its end
@@ -855,9 +856,18 @@ async function viewStream(req, res, u, person) {
       first = false; nothingYet = true;
     }
     // the window's state, asked in the background (the script takes ~1 s)
+    // the gate's word, asked on its own clock: a slow one never holds the record's state back
+    if (!gasking && Date.now() - gaskedAt >= GATE_STATE_MS) {
+      gasking = gateStatus(fid).catch(() => null).then((g) => {
+        gasking = null; gaskedAt = Date.now();
+        if (closed || !g) return;
+        gs = g;
+        const now = stateOf();
+        if (now !== said) { said = now; ev(JSON.parse(now)); }
+      });
+    }
     if (!asking && Date.now() - askedAt >= VIEW_STATE_MS) {
-      asking = Promise.all([viewOf(fid), gateStatus(fid).catch(() => null)])
-        .then(([x, g]) => { asking = null; askedAt = Date.now(); if (g) { gs = g; if (x) x = { ...x }; } return x; });
+      asking = viewOf(fid).then((x) => { asking = null; askedAt = Date.now(); return x; });
       asking.then((x) => {
         if (closed) return;
         if (x === null) { ev({ t: "gone" }); closed = true; res.end(); return; }
@@ -1639,6 +1649,7 @@ const GATE = E.FLEET_WEBCHAT_GATE || join(HERE, "../../bin/fleet_session_gate.py
 const RAW = E.FLEET_WEBCHAT_RAW || join(HERE, "../../bin/dash-raw-session.sh");
 const GATE_DIR = E.FLEET_GATE_DIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "session-gate");
 const GATE_TICK_MS = Number(E.FLEET_WEBCHAT_GATE_TICK_MS || 1500);
+const GATE_STATE_MS = Number(E.FLEET_WEBCHAT_GATE_STATE_MS || 3000);   // the view asks the gate this often
 const GATE_LIVE = new Set(["queued", "trying", "native", "waking"]);
 function gate(args, input = "", timeout = 90000) {
   return new Promise((resolve) => {
