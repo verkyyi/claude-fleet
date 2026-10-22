@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -51,7 +52,7 @@ func TestAdminSubsOAuthIsolationReplayAndExpiry(t *testing.T) {
 	ex := &fakeExchange{}
 	h.srv.OAuthExchange = ex.fn
 	start := func() map[string]any {
-		code, out := adminSubsCall(t, h, "admin-a", AdminSubsLoginPath, map[string]any{"provider": "claude", "account": "web"})
+		code, out := adminSubsCall(t, h, "admin-a", AdminSubsLoginPath, map[string]any{"provider": "codex", "account": "web"})
 		if code != 200 {
 			t.Fatalf("start: %d %v", code, out)
 		}
@@ -59,25 +60,26 @@ func TestAdminSubsOAuthIsolationReplayAndExpiry(t *testing.T) {
 	}
 	flow := start()
 	au, _ := url.Parse(flow["authorize_url"].(string))
-	if au.Host != "claude.ai" || au.Query().Get("code_challenge_method") != "S256" {
+	if au.Host != "auth.openai.com" || au.Query().Get("code_challenge_method") != "S256" {
 		t.Fatal("not provider PKCE")
 	}
-	finish := map[string]any{"flow": flow["flow"], "paste": "code#" + au.Query().Get("state")}
+	cb := func(state string) string { return "http://localhost:1455/auth/callback?code=code&state=" + state }
+	finish := map[string]any{"flow": flow["flow"], "paste": cb(au.Query().Get("state"))}
 	if code, _ := adminSubsCall(t, h, "admin-b", AdminSubsFinishPath, finish); code != 410 {
 		t.Fatalf("cross admin: %d", code)
 	}
-	if code, _ := adminSubsCall(t, h, "admin-a", AdminSubsFinishPath, map[string]any{"flow": flow["flow"], "paste": "code#wrong"}); code != 422 {
+	if code, _ := adminSubsCall(t, h, "admin-a", AdminSubsFinishPath, map[string]any{"flow": flow["flow"], "paste": cb("wrong")}); code != 422 {
 		t.Fatalf("wrong state: %d", code)
 	}
 	// The personal purpose cannot enter the shared pool even for the same actor.
-	note := meSubLogin{Provider: "claude", Account: "own", Verifier: "v", State: "s", Expires: time.Now().Add(time.Minute)}
+	note := meSubLogin{Provider: "codex", Account: "own", Verifier: "v", State: "s", Expires: time.Now().Add(time.Minute)}
 	blob, _ := h.srv.Vault.SealNote(note, "admin-a", meSubLoginNote)
-	if code, _ := adminSubsCall(t, h, "admin-a", AdminSubsFinishPath, map[string]any{"flow": base64.RawURLEncoding.EncodeToString(blob), "paste": "c#s"}); code != 410 {
+	if code, _ := adminSubsCall(t, h, "admin-a", AdminSubsFinishPath, map[string]any{"flow": base64.RawURLEncoding.EncodeToString(blob), "paste": cb("s")}); code != 410 {
 		t.Fatalf("personal purpose: %d", code)
 	}
 	note.Expires = time.Now().Add(-time.Second)
 	blob, _ = h.srv.Vault.SealNote(note, "admin-a", adminSubPurpose)
-	if code, _ := adminSubsCall(t, h, "admin-a", AdminSubsFinishPath, map[string]any{"flow": base64.RawURLEncoding.EncodeToString(blob), "paste": "c#s"}); code != 410 {
+	if code, _ := adminSubsCall(t, h, "admin-a", AdminSubsFinishPath, map[string]any{"flow": base64.RawURLEncoding.EncodeToString(blob), "paste": cb("s")}); code != 410 {
 		t.Fatalf("expired: %d", code)
 	}
 	// A cancelled start never writes a credential.
@@ -99,6 +101,29 @@ func TestAdminSubsOAuthIsolationReplayAndExpiry(t *testing.T) {
 	}
 }
 
+// HXNB: a Claude pool subscription is a pasted setup token only — the web
+// sign-in neither starts nor finishes (a flow sealed before the change).
+func TestAdminSubsClaudeWebSignInRefused(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	ex := &fakeExchange{}
+	h.srv.OAuthExchange = ex.fn
+	code, out := adminSubsCall(t, h, "admin", AdminSubsLoginPath, map[string]any{"provider": "claude", "account": "web"})
+	if code != 400 || !strings.Contains(fmt.Sprint(out["error"]), "setup-token") {
+		t.Fatalf("claude start: %d %v", code, out)
+	}
+	note := meSubLogin{Provider: "claude", Account: "web", Verifier: "v", State: "s", Expires: time.Now().Add(time.Minute)}
+	blob, _ := h.srv.Vault.SealNote(note, "admin", adminSubPurpose)
+	if code, _ := adminSubsCall(t, h, "admin", AdminSubsFinishPath, map[string]any{"flow": base64.RawURLEncoding.EncodeToString(blob), "paste": "code#s"}); code != 410 {
+		t.Fatalf("claude finish: %d", code)
+	}
+	if len(ex.forms) != 0 {
+		t.Fatal("claude code exchanged")
+	}
+	if rows, _ := h.srv.Store.Credentials("pool"); len(rows) != 0 {
+		t.Fatal("claude web sign-in stored")
+	}
+}
+
 func TestAdminSubsExchangeFailureConsumesFlow(t *testing.T) {
 	for _, network := range []bool{false, true} {
 		h, _, _ := newVaultHarness(t)
@@ -109,8 +134,9 @@ func TestAdminSubsExchangeFailureConsumesFlow(t *testing.T) {
 				return 0, nil, errors.New("sensitive upstream error")
 			}
 		}
-		_, flow := adminSubsCall(t, h, "admin", AdminSubsLoginPath, map[string]any{"provider": "claude", "account": "web"})
-		args := map[string]any{"flow": flow["flow"], "paste": "bad-code"}
+		_, flow := adminSubsCall(t, h, "admin", AdminSubsLoginPath, map[string]any{"provider": "codex", "account": "web"})
+		au, _ := url.Parse(flow["authorize_url"].(string))
+		args := map[string]any{"flow": flow["flow"], "paste": "http://localhost:1455/auth/callback?code=bad&state=" + au.Query().Get("state")}
 		code, out := adminSubsCall(t, h, "admin", AdminSubsFinishPath, args)
 		want := 422
 		if network {

@@ -25,10 +25,12 @@ The console's **Admin → Subscription pool**. One row per subscription: how muc
 
 ### Adding a subscription
 
-An admin selects **Add subscription**, chooses Claude Code or Codex and gives it a name (letters, digits, dots, hyphens and underscores). Both connection methods stay in the browser:
+An admin selects **Add subscription**, chooses Claude Code or Codex and gives it a name (letters, digits, dots, hyphens and underscores). Everything stays in the browser:
 
-- **Browser authorization (default)**: open the provider's sign-in page and paste its authorization code back here. For Codex, paste the complete localhost redirect URL; it is normal for that page not to load. Authorization expires after ten minutes. Start again after cancelling.
-- **Existing OAuth token**: submit a Claude OAuth token or Codex OAuth refresh token in the hidden input. It clears on submit or close. The server validates it before encrypted storage. No SSH, operator token or account UUID is needed.
+- **Claude: a setup token only**: on a computer signed in to that Claude account run `claude setup-token`, confirm in the browser, and paste the whole `sk-ant-oat01-…` it prints. The hub tests it once against the provider's messages endpoint and does not save a token that is refused. Claude no longer offers browser authorization — that road yields a short-lived rotating token, not the long-lived kind the rest of the pool uses.
+- **Codex: browser authorization (default) or an existing refresh token**: after signing in, paste the complete localhost redirect URL (it is normal for that page not to load; authorization expires after ten minutes), or submit an OAuth refresh token.
+
+The input is hidden and clears on submit or close. The server validates it before encrypted storage. No SSH, operator token or account UUID is needed.
 
 The page returns the result directly and reads the initial quota. Retry network failures; a valid credential whose quota cannot yet be read shows **Quota pending**. **Refresh quota** in its details reads the backend again. Duplicate tokens return the existing subscription. To replace a credential under the same name, explicitly select **Update credential** in its details; replacement follows validation. An unconfirmed expiry is shown as **Unknown**.
 

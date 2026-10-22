@@ -1,5 +1,7 @@
 // Administrator-owned browser sign-in. Secrets live only in the input/request,
 // never in a URL or browser storage. A closed dialog ignores late responses.
+// Claude comes in one way only: the token `claude setup-token` prints, pasted
+// here and probed by the hub before it is saved (HXNB); the web sign-in is Codex's.
 import * as React from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,6 +28,7 @@ export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void;
   const [err, setErr] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const epoch = React.useRef(0);
+  const how = prov === "claude" ? "token" : mode;
   const fid = React.useId();
   const changeOpen = (o: boolean) => {
     epoch.current++;
@@ -43,7 +46,7 @@ export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void;
     const value = secret;
     setSecret(""); setBusy(true); setErr("");
     try {
-      if (mode === "login" && !flow) {
+      if (how === "login" && !flow) {
         const result = await api<Flow>(BASE + "/login", { json: { provider: prov, account, again: !!p.replace } });
         if (generation === epoch.current) setFlow(result);
       } else {
@@ -62,7 +65,7 @@ export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void;
   return <Dialog open={open} onOpenChange={changeOpen}>
     <DialogTrigger asChild><Button size={p.size} variant={p.replace && !p.primary ? "outline" : "default"}>{!p.replace && <Plus />}{t(p.replace ? "pool.web.update" : "pool.add")}</Button></DialogTrigger>
     <DialogContent className="sm:max-w-lg">
-      <DialogHeader><DialogTitle>{t(p.replace ? "pool.web.update" : "pool.add.title")}</DialogTitle><DialogDescription>{t("pool.web.description")}</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{t(p.replace ? "pool.web.update" : "pool.add.title")}</DialogTitle><DialogDescription>{t(prov === "claude" ? "pool.web.descriptionClaude" : "pool.web.description")}</DialogDescription></DialogHeader>
       {answer ? <div className="grid gap-4" role="status">
         <p>{t("pool.add.inPool", { label: answer.account })}</p>
         {answer.duplicate && <p>{t("pool.web.duplicate")}</p>}
@@ -77,26 +80,29 @@ export function AddSubscriptionDialog(p: { known: string[]; onAdded: () => void;
           <Label htmlFor={fid}>{t("pool.add.label")}</Label>
           <Input id={fid} value={label} disabled={busy || !!p.replace} onChange={e => setLabel(e.target.value)} autoComplete="off" />
           {p.replace && <p className="text-sm text-muted-foreground">{t("pool.web.replaceHint", { label })}</p>}
-          <Label htmlFor={fid + "mode"}>{t("pool.web.method")}</Label>
-          <select id={fid + "mode"} value={mode} disabled={busy} onChange={e => { setMode(e.target.value); setSecret(""); setErr(""); }} className="rounded-md border p-2">
-            <option value="login">{t("pool.web.login")}</option><option value="token">{t("pool.web.token")}</option>
-          </select>
+          {prov === "codex" && <>
+            <Label htmlFor={fid + "mode"}>{t("pool.web.method")}</Label>
+            <select id={fid + "mode"} value={mode} disabled={busy} onChange={e => { setMode(e.target.value); setSecret(""); setErr(""); }} className="rounded-md border p-2">
+              <option value="login">{t("pool.web.login")}</option><option value="token">{t("pool.web.token")}</option>
+            </select>
+          </>}
+          {prov === "claude" && <p className="text-sm text-muted-foreground">{t("pool.web.setupTokenHow")}</p>}
         </>}
         {flow && <>
           <Button asChild variant="outline"><a href={flow.authorize_url} target="_blank" rel="noopener noreferrer">{t("pool.web.open")}</a></Button>
           <p className="text-sm text-muted-foreground">{t(flow.paste === "url" ? "pool.web.pasteURL" : "pool.web.pasteCode")}</p>
           <p className="text-xs text-muted-foreground">{t("pool.web.expires", { when: new Date(flow.expires_at).toLocaleTimeString() })}</p>
         </>}
-        {(flow || mode === "token") && <>
-          <Label htmlFor={fid + "secret"}>{t(flow ? "pool.web.code" : prov === "codex" ? "pool.web.refreshToken" : "pool.web.token")}</Label>
-          <Input id={fid + "secret"} type="password" value={secret} onChange={e => setSecret(e.target.value)} disabled={busy} autoComplete="off" spellCheck={false} required />
+        {(flow || how === "token") && <>
+          <Label htmlFor={fid + "secret"}>{t(flow ? "pool.web.code" : prov === "codex" ? "pool.web.refreshToken" : "pool.web.setupToken")}</Label>
+          <Input id={fid + "secret"} type="password" value={secret} onChange={e => setSecret(e.target.value)} disabled={busy} autoComplete="off" spellCheck={false} placeholder={!flow && prov === "claude" ? "sk-ant-oat01-…" : undefined} required />
           <p className="text-xs text-muted-foreground">{t("pool.web.secretHint")}</p>
         </>}
         {err && <p role="alert" className="text-sm text-destructive">{err}</p>}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => changeOpen(false)}>{t("confirm.cancel")}</Button>
           {flow && <Button type="button" variant="outline" disabled={busy} onClick={() => { setFlow(null); setSecret(""); setErr(""); }}>{t("pool.web.restart")}</Button>}
-          <Button type="submit" disabled={busy}>{t(busy ? "pool.web.busy" : flow || mode === "token" ? "pool.web.submit" : "pool.add.continue")}</Button>
+          <Button type="submit" disabled={busy}>{t(busy ? "pool.web.busy" : flow || how === "token" ? "pool.web.submit" : "pool.add.continue")}</Button>
         </DialogFooter>
       </form>}
     </DialogContent>
