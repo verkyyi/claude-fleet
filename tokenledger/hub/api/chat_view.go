@@ -420,7 +420,7 @@ func (s *Server) handleChatViewCached(w http.ResponseWriter, r *http.Request, pe
 	}
 	c, err := s.Store.ChatMirrorOf(person, store.ChatMirrorViewPrefix+wid, time.Now())
 	if strings.HasPrefix(wid, "fid:") {
-		c, err = s.Store.ChatHistoryMirrorOf(person, strings.TrimPrefix(wid, "fid:"), time.Now())
+		c, err = s.Store.ChatHistoryMirrorOf(person, strings.TrimPrefix(wid, "fid:"), time.Now(), s.historyMirrorSession)
 	}
 	if err != nil || c == nil {
 		chatNoCopy(w)
@@ -431,8 +431,12 @@ func (s *Server) handleChatViewCached(w http.ResponseWriter, r *http.Request, pe
 		chatNoCopy(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"session": doc.Session, "items": doc.Items,
 		"mirror": map[string]any{"at": c.UpdatedAt.UTC().Format(time.RFC3339)},
-	})
+	}
+	if strings.HasPrefix(wid, "fid:") {
+		out["history_status"] = "readable"
+	}
+	writeJSON(w, http.StatusOK, out)
 }

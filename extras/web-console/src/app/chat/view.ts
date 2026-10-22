@@ -108,6 +108,10 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
       .then((r) => (r.ok ? r.json() : null)).then((j) => {
         if (!on || !j?.mirror || !Array.isArray(j.items) || !j.items.length || !mayShow("copy", top.current)) return;
         draw(j.items as Item[], "copy");
+        if (worker.startsWith("fid:") && j.history_status === "readable") {
+          setState((current) => current || { agent: "", session: String(j.session || ""), busy: false, state: "ended", label: "",
+            history_status: "readable", can_talk: false, talk_reason: "historical" });
+        }
       }).catch(() => {});
     // 3. the session's machine: its stream, for as long as the page is open
     const take = (f: Frame) => {

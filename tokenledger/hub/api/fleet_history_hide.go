@@ -48,7 +48,7 @@ func (s *Server) handleHistoryHide(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = viewerOf(r.Context())
 	}
-	if err := s.Store.HideHistory(in.Manifest, actor, in.Undo, in.Apply, time.Now()); err != nil {
+	if err := s.Store.HideHistory(in.Manifest, actor, in.Undo, in.Apply, time.Now(), s.historyMirrorSession); err != nil {
 		httpError(w, 409, err.Error())
 		return
 	}

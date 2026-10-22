@@ -559,7 +559,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r.ID, r.Group, r.Tag, r.At = b.ID, "gone", "ended", b.Closed
 		rows = append(rows, r)
 	}
-	hidden, err := s.Store.HiddenHistory(owner)
+	hidden, err := s.Store.HiddenHistory(owner, s.historyMirrorSession)
 	if err != nil {
 		return nil, err
 	}

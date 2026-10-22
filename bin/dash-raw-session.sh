@@ -217,7 +217,7 @@ while [ "$#" -gt 0 ]; do
     --task=*)      TASK_REF="${1#--task=}"; shift ;;
     # --resume <sid> / --seed-file <f> / --worktree <dir> (issue #3387): see above.
     --strict-resume) STRICT_RESUME=1; shift ;;
-    --codex-home) CX_HOME="${2:-}"; export CODEX_HOME="$CX_HOME"; shift 2 ;;
+    --codex-home) CX_HOME="${2:-}"; export CODEX_HOME="$CX_HOME" FLEET_CODEX_HOME="$CX_HOME"; shift 2 ;;
     --resume)      RESUME_SID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --resume=*)    RESUME_SID="${1#--resume=}"; shift ;;
     --seed-file)   SEED_FILE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;

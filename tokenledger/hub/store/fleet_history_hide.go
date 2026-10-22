@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 )
@@ -39,7 +40,7 @@ type HistoryHideManifest struct {
 
 var ErrHistoryEvidence = errors.New("history hide refused: closed identity, fresh complete online absence evidence, no cache and no pending work required")
 
-func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply bool, now time.Time) error {
+func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply bool, now time.Time, decode ChatMirrorSession) error {
 	if m.Owner == "" || !IsFleetID(m.ID) || actor == "" {
 		return ErrHistoryEvidence
 	}
@@ -147,23 +148,22 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 		// No limit/window here: old tasks and blocked backlog must also survive.
 		var pending int
 		err = tx.QueryRow(`SELECT COUNT(*) FROM fleet_tasks WHERE owner = ? AND
-   (fid = ? OR fid = ? OR id = ? OR worker_id LIKE ?) AND
+   (fid = ? OR (? != '' AND fid = ?) OR id = ? OR worker_id LIKE ?) AND
    (asked != '' OR parked != '' OR state IN ('accepted','starting','blocked','open','placing','unknown') OR (state NOT IN ('closed','refused') AND outcome NOT IN ('succeeded','failed','cancelled','refused')))`,
-			m.Owner, m.ID, taskID, ParseTaskRef(task), "%/"+m.ID).Scan(&pending)
+			m.Owner, m.ID, taskID, taskID, ParseTaskRef(task), "%/"+m.ID).Scan(&pending)
 		if err != nil {
 			return err
 		}
 		if pending != 0 {
 			return ErrHistoryEvidence
 		}
-		// Conservatively retain when ANY view copy of this owner remains. Legacy
-		// copies were keyed by recycled names; they cannot prove a negative by FID.
-		var copies int
-		err = tx.QueryRow(`SELECT COUNT(*) FROM hub_chat_mirrors WHERE principal LIKE ?`, m.Owner+"#view:%").Scan(&copies)
+		// Read and decrypt a fresh cache snapshot under the same owner lock as
+		// PutChatMirrorOf and identity events. Never trust dry-run evidence at apply.
+		copies, unknown, err := historyViewCopies(tx, m.Owner, decode)
 		if err != nil {
 			return err
 		}
-		if copies != 0 {
+		if unknown || len(copies[m.ID]) != 0 {
 			return ErrHistoryEvidence
 		}
 	}
@@ -186,27 +186,83 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 
 // HiddenHistory only hides the exact closed ledger version reviewed. A later
 // event (including reopen) automatically exposes it again; no ID/task is edited.
-func (s *Store) HiddenHistory(owner string) (map[string]bool, error) {
-	q := `SELECT h.id FROM fleet_history_hides h JOIN fleet_ids i ON i.id=h.id AND i.owner=h.owner WHERE h.hidden=1 AND h.seq=i.seq AND i.closed_at>0
- AND NOT EXISTS (SELECT 1 FROM hub_chat_mirrors c WHERE substr(c.principal,1,length(h.owner)+6)=h.owner || '#view:')
+func (s *Store) HiddenHistory(owner string, decode ChatMirrorSession) (map[string]bool, error) {
+	q := `SELECT h.id,h.owner FROM fleet_history_hides h JOIN fleet_ids i ON i.id=h.id AND i.owner=h.owner WHERE h.hidden=1 AND h.seq=i.seq AND i.closed_at>0
  AND NOT EXISTS (SELECT 1 FROM fleet_operations o WHERE o.status NOT IN ('succeeded','failed') AND o.request LIKE '%' || h.id || '%')`
 	args := []any{}
 	if owner != "" {
 		q += ` AND h.owner=?`
 		args = append(args, owner)
 	}
-	rows, err := s.read.Query(q, args...)
+	tx, err := s.write.Begin()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[string]bool{}
+	defer tx.Rollback()
+	// Discover owners first, then lock them in a stable order before reading
+	// ledger versions and caches. The post-lock read also covers a hide changed
+	// while this request waited (PostgreSQL replicas share these advisory locks).
+	ownerQuery := `SELECT DISTINCT owner FROM fleet_history_hides WHERE hidden=1`
+	if owner != "" {
+		ownerQuery += ` AND owner=?`
+	}
+	rows, err := tx.Query(ownerQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	var owners []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var pid string
+		if err := rows.Scan(&pid); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		out[id] = true
+		owners = append(owners, pid)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Strings(owners)
+	for _, pid := range owners {
+		if err := s.d.lockKey(tx, "fleet_ids", "fleet_ids:"+pid); err != nil {
+			return nil, err
+		}
+	}
+	rows, err = tx.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	candidates := map[string][]string{}
+	for rows.Next() {
+		var id, pid string
+		if err := rows.Scan(&id, &pid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		candidates[pid] = append(candidates[pid], id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, pid := range owners {
+		ids := candidates[pid]
+		// Cache arrivals after apply restore visibility. Unrelated verified native
+		// conversations do not cancel a hide; uncertain attribution always does.
+		copies, unknown, err := historyViewCopies(tx, pid, decode)
+		if err != nil {
+			return nil, err
+		}
+		if unknown {
+			continue
+		}
+		for _, id := range ids {
+			if len(copies[id]) == 0 {
+				out[id] = true
+			}
+		}
+	}
+	return out, nil
 }

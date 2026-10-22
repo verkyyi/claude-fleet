@@ -43,6 +43,7 @@ func (s *Store) ensureChatMirrors() error {
 type ChatMirrorCopy struct {
 	Sealed    []byte
 	UpdatedAt time.Time
+	ExpiresAt time.Time
 }
 
 // PutChatMirror keeps sealed as pid's copy until expires, replacing the last —
@@ -71,15 +72,27 @@ func (s *Store) PutChatMirrorOf(pid, provider string, sealed []byte, expires, no
 	if off, err := s.ChatMirrorOff(pid); err != nil || off {
 		return err
 	}
-	if _, err := s.write.Exec(`DELETE FROM hub_chat_mirrors WHERE expires_at <= ?`, now.Unix()); err != nil {
+	tx, err := s.write.Begin()
+	if err != nil {
 		return err
 	}
-	_, err := s.write.Exec(`INSERT INTO hub_chat_mirrors (principal, sealed, expires_at, updated_at)
+	defer tx.Rollback()
+	// Serialize view-cache arrivals with history hide's snapshot and apply.
+	if err := s.d.lockKey(tx, "hub_chat_mirrors", "fleet_ids:"+pid); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM hub_chat_mirrors WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO hub_chat_mirrors (principal, sealed, expires_at, updated_at)
 		VALUES (?, ?, ?, ?) ON CONFLICT(principal) DO UPDATE SET sealed = excluded.sealed,
 		expires_at = excluded.expires_at, updated_at = excluded.updated_at
 		WHERE hub_chat_mirrors.updated_at <= excluded.updated_at`,
 		ChatMirrorKey(pid, provider), sealed, expires.Unix(), now.Unix())
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ChatMirror is pid's own copy when it has not expired at now; nil, nil for none.
@@ -142,21 +155,88 @@ func (s *Store) SetChatMirrorOff(pid string, off bool, now time.Time) error {
 	return s.DeleteChatMirror(pid)
 }
 
-// ChatHistoryMirrorOf accepts only durable FID keys. Legacy scratch-key copies
-// cannot safely be attributed to a closed generation and are never guessed.
-func (s *Store) ChatHistoryMirrorOf(pid, fid string, now time.Time) (*ChatMirrorCopy, error) {
-	var c ChatMirrorCopy
-	var at int64
-	prefix, suffix := pid+"#view:", "/"+fid
-	err := s.read.QueryRow(`SELECT sealed, updated_at FROM hub_chat_mirrors WHERE expires_at > ? AND
- (principal = ? OR (substr(principal,1,?) = ? AND substr(principal,?) = ?)) ORDER BY updated_at DESC LIMIT 1`,
-		now.Unix(), prefix+"fid:"+fid, len(prefix), prefix, -len(suffix), suffix).Scan(&c.Sealed, &at)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+// ChatMirrorSession opens a sealed view copy as its owner. The API owns the
+// vault; the store owns the identity join and transaction snapshot.
+type ChatMirrorSession func(owner string, sealed []byte) (string, error)
+
+// historyViewCopies attributes legacy and FID keys alike through the native SID
+// inside the sealed document. Keys, cwd, title and recency are never identity.
+// Include expired-but-still-stored copies for cleanup: expiry is not absence.
+// Unknown or ambiguous attribution is conservative evidence against hiding.
+func historyViewCopies(q querier, owner string, decode ChatMirrorSession) (map[string][]ChatMirrorCopy, bool, error) {
+	rows, err := q.Query(`SELECT n.native, n.id FROM fleet_id_natives n JOIN fleet_ids i ON i.id=n.id WHERE i.owner=?`, owner)
+	if err != nil {
+		return nil, false, err
 	}
+	ids := map[string]string{}
+	for rows.Next() {
+		var sid, fid string
+		if err := rows.Scan(&sid, &fid); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		if old, ok := ids[sid]; ok && old != fid {
+			ids[sid] = ""
+		} else if !ok {
+			ids[sid] = fid
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	prefix := owner + "#view:"
+	rows, err = q.Query(`SELECT sealed,updated_at,expires_at FROM hub_chat_mirrors WHERE substr(principal,1,?)=?`, len(prefix), prefix)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	copies := map[string][]ChatMirrorCopy{}
+	unknown := false
+	for rows.Next() {
+		var c ChatMirrorCopy
+		var at, expires int64
+		if err := rows.Scan(&c.Sealed, &at, &expires); err != nil {
+			return nil, false, err
+		}
+		c.UpdatedAt, c.ExpiresAt = time.Unix(at, 0), time.Unix(expires, 0)
+		if decode == nil {
+			unknown = true
+			continue
+		}
+		sid, err := decode(owner, c.Sealed)
+		fid := ids[sid]
+		if err != nil || sid == "" || fid == "" {
+			unknown = true
+			continue
+		}
+		copies[fid] = append(copies[fid], c)
+	}
+	return copies, unknown, rows.Err()
+}
+
+// ChatHistoryMirrorOf also reads legacy key caches, but only when their sealed
+// native SID has one verified FID belonging to this owner. A malformed unrelated
+// copy cannot supply content; an ambiguous SID cannot supply any FID's content.
+func (s *Store) ChatHistoryMirrorOf(pid, fid string, now time.Time, decode ChatMirrorSession) (*ChatMirrorCopy, error) {
+	tx, err := s.write.Begin()
 	if err != nil {
 		return nil, err
 	}
-	c.UpdatedAt = time.Unix(at, 0)
-	return &c, nil
+	defer tx.Rollback()
+	if err := s.d.lockKey(tx, "fleet_ids", "fleet_ids:"+pid); err != nil {
+		return nil, err
+	}
+	copies, _, err := historyViewCopies(tx, pid, decode)
+	if err != nil {
+		return nil, err
+	}
+	var newest *ChatMirrorCopy
+	for _, c := range copies[fid] {
+		if c.ExpiresAt.After(now) && (newest == nil || c.UpdatedAt.After(newest.UpdatedAt)) {
+			copy := c
+			newest = &copy
+		}
+	}
+	return newest, nil
 }

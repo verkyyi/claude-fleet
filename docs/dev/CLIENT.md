@@ -95,8 +95,11 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 `natives`，并声明 `native_evidence:"absent_verified"`、`backups:"absent_verified"`、
 `inputs:"empty_verified"`；`evidence` 指向操作者核验过所有落点、迁移/收尾备份和输入队列的
 证据。核验须在五分钟内完成；离线、不完整、版本变化、活跃窗口或未完成任务均拒绝。
-这份清单是人工核验声明，不是工具自动扫描出的证明。Hub 会另行查缓存和待办；旧缓存
-无法可靠按 FID 归属时，只要该 owner 仍有任一 view 缓存就保守拒绝隐藏。
+这份清单是人工核验声明，不是工具自动扫描出的证明。Hub 会另行查缓存和待办：解密该 owner 的 view 缓存，用其中的原生
+`Session` 与 owner 范围内记录的原生 SID 精确归属 FID，旧 key 缓存也这样读取；不按
+scratch 名称或更新时间猜归属。无关且可归属的缓存不阻挡，相关缓存、解密失败、缺失或
+歧义映射均拒绝隐藏。dry-run 的结果不复用到 apply：事务内重新检查，缓存写入与隐藏
+共用 owner 锁；之后到达的相关或无法归属的缓存使隐藏行重新显示。缓存不会因隐藏而清除。
 隐藏与撤销都留审计，仅改变 Web 与 Terminal 共用看板的可见性，不删除任务、原生段、
 对话、账号或端点。后续 FID 事件会使旧隐藏自动失效。
 

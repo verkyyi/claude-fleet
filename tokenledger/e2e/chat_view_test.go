@@ -443,7 +443,24 @@ func TestChatViewClosedIdentityIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = h.Srv.Store.PutChatMirrorOf(pAlice, "view:66666666-6666-4666-8666-666666666666/"+fid, sealed, now.Add(time.Hour), now); err != nil {
+	if err = h.Srv.Store.PutChatMirrorOf(pAlice, "view:66666666-6666-4666-8666-666666666666/scratch-1", sealed, now.Add(time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	// A newer canonical-FID key contains a different native conversation. Even
+	// that key cannot override the verified SID in the older legacy-key copy.
+	const otherFID = "88888888-8888-4888-8888-888888888888"
+	_, err = h.Srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: pAlice, EndpointID: "old", Machine: "offline", Login: "alice", ID: otherFID,
+		Events: []map[string]any{{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "key": "scratch-1"},
+			{"ev": "native", "seq": float64(2), "ts": float64(now.Unix()), "native": "other-native", "agent": "claude"},
+			{"ev": "closed", "seq": float64(3), "ts": float64(now.Unix())}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := h.Srv.Vault.SealPerson(map[string]any{"session": "other-native", "items": []map[string]string{{"t": "text", "d": "wrong conversation"}}}, pAlice, "chat-mirror")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.Srv.Store.PutChatMirrorOf(pAlice, "view:fid:"+fid, newer, now.Add(time.Hour), now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -461,8 +478,14 @@ func TestChatViewClosedIdentityIsolation(t *testing.T) {
 		rr := httptest.NewRecorder()
 		h.Srv.Handler().ServeHTTP(rr, req)
 		b := rr.Body.Bytes()
+		if strings.Contains(string(b), "wrong conversation") {
+			t.Errorf("%s joined recycled key/recency: %s", c.name, b)
+		}
 		if rr.Code != c.status {
 			t.Errorf("%s: %d %s", c.name, rr.Code, b)
+		}
+		if c.status == 200 && !strings.Contains(string(b), `"history_status":"readable"`) {
+			t.Error("cached history did not say readable")
 		}
 		if (c.status == 200) != strings.Contains(string(b), "kept words") {
 			t.Errorf("%s leaked/lost content: %s", c.name, b)
