@@ -4,7 +4,7 @@
 # Builds site/ with bin/site-build.sh into a sandbox and reads the result:
 #
 #   A  no drill result: both pages build, and neither says a number of seconds
-#      anywhere — the scan card reads 「微信扫码，先试一试」 / "Scan with WeChat to
+#      anywhere — the scan card reads 「微信扫码，立即试用」 / "Scan with WeChat to
 #      try it" with one line under its code and nothing else (C2: no 立即体验 /
 #      申请使用 / 其他登录方式 beside it), and neither page says anyone can start
 #      right away (免费试用 · 登录就能 · 马上 · 现在就试 / Free trial · Start now · Try
@@ -67,7 +67,7 @@ def text(page):
     body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', page, flags=re.S)
     return html.unescape(' '.join([metas, ld, re.sub(r'<[^>]+>', ' ', body)]))
 
-for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，先试一试'), ('en', 'en/index.html', '/en/', 'Scan with WeChat to try it')):
+for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，立即试用'), ('en', 'en/index.html', '/en/', 'Scan with WeChat to try it')):
     p = open(os.path.join(OUT, rel), encoding='utf-8').read()
     t = text(p)
     # A — the trial's length (15 分钟 / 15 minutes, #4049) is a rule, not a timing
@@ -168,7 +168,7 @@ def told(p):
     body = re.sub(r'<(script|style)[^>]*>.*?</\1>', ' ', p, flags=re.S)
     return html.unescape(' '.join([title, metas, ld, re.sub(r'<[^>]+>', ' ', body)]))
 TRIAL = re.compile(r'立即体验|试用|先试|Try it|\btrial\b|15\s*(分钟|minutes)|\d+\s*(秒|seconds?\b)|\b\d\d:\d\d\b', re.I)
-for rel, applyw in (('index.html', '申请使用'), ('en/index.html', 'to apply')):
+for rel, applyw in (('index.html', '微信扫码申请'), ('en/index.html', 'to apply')):
     f = os.path.join(OUT, 'apply', rel)
     if not os.path.isfile(f):
         bad.append('T apply/%s not built' % rel); continue
@@ -205,7 +205,8 @@ PY
 # S — the hero speaks of a service (#3940): no GitHub / 开源 / open source / MIT in
 #     the header, the first section or the meta description; the app is a
 #     BusinessApplication. The page keeps only what it must (T872): the nav is
-#     文档 · 登录 · the language, the footer GitHub · © (+ the legal line, leg L) — one language switch, one
+#     文档 · 登录, the footer GitHub · the language · © (+ the legal line, leg L; T924 moved the
+#     switch down) — one language switch, one
 #     docs link, the GitHub link only in the footer, no 能交给它 / 价格 / FAQ /
 #     安全 / trademark line, and the share words name no price or trial length.
 #     The replay is the web app (C3): no iTerm2 / ⌘P, its address bar __HOST__/app,
@@ -247,8 +248,8 @@ for f in sys.argv[1:]:
     if len(outside) != 4:
         bad.append('%s: %d entries outside the scan card, not 4 (文档 · 登录 · language · GitHub): %s'
                    % (f, len(outside), outside))
-    if body.count('data-set=') != 1 or 'data-set=' not in nav:
-        bad.append('%s: the language switch is not once, in the nav' % f)
+    if body.count('data-set=') != 1 or 'data-set=' not in foot or 'data-set=' in nav:
+        bad.append('%s: the language switch is not once, in the footer' % f)
     if body.count('class="docs"') != 1 or body.count('href="/docs/"') + body.count('href="/en/docs/"') != 1:
         bad.append('%s: the docs link is not once, in the nav' % f)
     if '.nav-r .docs{display:none}' in s:
@@ -262,7 +263,7 @@ for f in sys.argv[1:]:
 print('; '.join(bad))
 sys.exit(1 if bad else 0)
 PY
-)"; then st_ok_all "S the hero is a service; the page keeps only 文档 · 登录 · language · GitHub, one switch"
+)"; then st_ok_all "S the hero is a service; the page keeps only 文档 · 登录 · GitHub · the footer's one language switch"
   else bad "S $out"; fi
 else bad "S no built page from D"; fi
 

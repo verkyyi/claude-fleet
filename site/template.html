@@ -32,7 +32,10 @@
 /*{{fleet_theme}}*/
 :root{color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:var(--fleet-bg);color:var(--fleet-ink);font:400 17px/1.6 var(--fleet-font-ui);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+body{margin:0;background:var(--fleet-bg);color:var(--fleet-ink);font:400 17px/1.6 var(--fleet-font-ui);-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  /* the footer sits on the window's bottom edge however short the page (T924) */
+  display:flex;flex-direction:column;min-height:100vh;min-height:100dvh}
+main{flex:1 0 auto;display:flex;flex-direction:column;justify-content:center}
 h1,h2,h3{font-family:var(--fleet-font-display);margin:0;text-wrap:balance}
 p{margin:0} a{color:inherit;text-decoration:none}
 a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--fleet-clay-hi);outline-offset:3px;border-radius:6px}
@@ -47,7 +50,7 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .btn-p:hover{background:var(--fleet-clay-hi);border-color:var(--fleet-clay-hi)}
 .btn svg{width:19px;height:19px}
 
-/* nav — one quiet row: the language is a small link, not a control (T794) */
+/* nav — one quiet row; the language lives in the footer (T924) */
 .nav{position:sticky;top:0;z-index:30;background:rgba(25,24,42,.84);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--fleet-line-2)}
 .nav .wrap{display:flex;align-items:center;height:60px;gap:14px}
 .brand{display:flex;align-items:center;gap:10px;font:750 19px/1 var(--fleet-font-display)}
@@ -55,8 +58,6 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .brand .tag{margin-left:8px;font:500 12px/1.3 var(--fleet-font-ui);color:var(--fleet-ink-2)}
 .nav-r{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px}
 .nav-r a{color:var(--fleet-ink-2)} .nav-r a:hover{color:var(--fleet-ink)}
-.lang{display:inline-flex;align-items:center;gap:5px;font:400 13px/1 var(--fleet-font-ui);color:var(--fleet-muted)!important}
-.lang svg{width:14px;height:14px}
 .nav .btn{height:38px;padding:0 16px;font-size:14.5px;color:var(--fleet-on-clay)}
 .nav-r [hidden]{display:none}
 .out{margin:0}.out button{font:inherit;font-size:15px;color:var(--fleet-ink-2);background:none;border:0;padding:0;cursor:pointer;white-space:nowrap}
@@ -65,10 +66,12 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .hero{position:relative;padding:30px 0 22px;overflow:hidden}
 .hero::before{content:"";position:absolute;left:30%;top:120px;transform:translateX(-50%);width:1000px;height:640px;background:radial-gradient(closest-side,rgba(217,118,90,.14),transparent 72%);pointer-events:none}
 .grid{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 360px;grid-template-areas:"say join" "demo join";column-gap:44px;align-items:start}
+/* the card is as tall as the words + the replay beside it, its content centred (T924) */
+@media (min-width:901px){.join{align-self:stretch;display:flex;flex-direction:column;justify-content:center}}
 .say{grid-area:say}.demo{grid-area:demo}.join{grid-area:join}
-.kick{display:inline-flex;align-items:center;gap:8px;font:500 13px/1 var(--fleet-font-mono);color:var(--fleet-sand);background:rgba(236,211,184,.07);border:1px solid rgba(236,211,184,.2);padding:7px 12px;border-radius:999px}
-.kick i{width:6px;height:6px;border-radius:50%;background:var(--fleet-clay)}
-.hero h1{margin-top:16px;font-size:58px;line-height:1.06;font-weight:750;letter-spacing:-.02em}
+/* the eyebrow names the product (the nav no longer does); 限定开放 moved into the card (T924) */
+.kick{font:500 14px/1.2 var(--fleet-font-mono);color:var(--fleet-sand);letter-spacing:.01em}
+.hero h1{margin-top:12px;font-size:58px;line-height:1.06;font-weight:750;letter-spacing:-.02em}
 html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .hero h1 em{font-style:normal;color:var(--fleet-clay)}
 .trust{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:16px 0 0;padding:0}
@@ -113,8 +116,14 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 /* the way in: WeChat first. One card, one state at a time (html[data-j]):
    scan (a computer) · phone (a phone's browser: open it in WeChat) · wait / member / apply
    (inside WeChat: who you are comes from the silent authorisation, no code) · in (signed in) */
-.join{margin-top:6px;background:var(--fleet-surface);border:1px solid var(--fleet-line);border-radius:20px;padding:24px;box-shadow:0 40px 90px -50px rgba(0,0,0,.8)}
-.join h2{font:700 22px/1.3 var(--fleet-font-display)}
+.join{background:var(--fleet-surface);border:1px solid var(--fleet-line);border-radius:20px;padding:24px;box-shadow:0 40px 90px -50px rgba(0,0,0,.8)}
+.join h2{font:700 22px/1.3 var(--fleet-font-display);text-align:center}
+.fine{display:flex;justify-content:center;margin-bottom:12px}
+.fine span{display:inline-flex;align-items:center;gap:7px;font:500 12.5px/1 var(--fleet-font-ui);color:var(--fleet-sand);background:rgba(236,211,184,.07);border:1px solid rgba(236,211,184,.2);padding:6px 11px;border-radius:999px}
+.fine i{width:6px;height:6px;border-radius:50%;background:var(--fleet-clay)}
+html.in .fine{display:none}
+/* signed in, the code is only another account's way in (T924): its own title, no 申请 words */
+.j-scan .n,html.in .j-scan .d,html.in .j-scan .lead{display:none} html.in .j-scan .n{display:inline}
 .j-scan .m,html[data-j=phone] .j-scan .d{display:none} html[data-j=phone] .j-scan .m{display:inline}
 .j{display:none} html:not([data-j]) .j-scan,html[data-j=scan] .j-scan,html[data-j=phone] .j-scan,html[data-j=wait] .j-wait,html[data-j=member] .j-member,html[data-j=apply] .j-apply,html[data-j=in] .j-in{display:block}
 .qrbox{margin:16px auto 0;width:212px;height:212px;border-radius:14px;background:#fff;display:grid;place-items:center;position:relative;color:#57536b;font-size:13px;text-align:center}
@@ -124,7 +133,7 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .qrbox a{color:var(--fleet-clay-deep);text-decoration:underline}
 .qrbox.sm{width:132px;height:132px;margin:0;flex:none}.qrbox.sm>svg{width:116px;height:116px}.qrbox.sm .wx{width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:7px;border-width:2px}.qrbox.sm .wx svg{width:16px;height:16px}
 .wxhint{display:none;margin-top:12px;text-align:center;font-size:14.5px;font-weight:600}
-.lead{margin-top:15px;text-align:center;font-size:14.5px;line-height:1.55;color:var(--fleet-ink-2)}
+.lead{margin-top:14px;text-align:center;font-size:14.5px;line-height:1.55;color:var(--fleet-ink-2)}
 html.inwx[data-j=scan] .j-scan .lead{display:none} html.inwx[data-j=scan] .wxhint{display:block}
 .flow{margin-top:14px;padding-top:12px;border-top:1px solid var(--fleet-line-2);font-size:13.5px;line-height:1.55;color:var(--fleet-ink-2);text-align:center}
 .wxbtn,.orqr,.okline,.direct,.tocon{display:none}
@@ -162,8 +171,10 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
 footer a:hover{color:var(--fleet-ink)}
 footer .gh{display:inline-flex;gap:6px;align-items:center}
 footer .gh svg{width:16px;height:16px}
-footer .disc{margin-left:auto;font-size:12.5px}
-@media (max-width:640px){footer .disc{margin-left:0;flex-basis:100%}}
+footer .end{margin-left:auto;display:flex;align-items:center;gap:18px;font-size:12.5px}
+footer .lang{display:inline-flex;align-items:center;gap:5px}
+footer .lang svg{width:13px;height:13px}
+@media (max-width:640px){footer .end{margin-left:0;flex-basis:100%}}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media (max-width:900px){
@@ -190,32 +201,32 @@ footer .disc{margin-left:auto;font-size:12.5px}
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mk" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)"/><polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="wxm" viewBox="0 0 24 24"><path fill="#fff" d="M9.2 4C5.2 4 2 6.7 2 10.1c0 1.9 1 3.6 2.6 4.7l-.6 2 2.3-1.2c.9.3 1.9.4 2.9.4h.6a5.4 5.4 0 0 1-.2-1.5c0-3.3 3.1-5.9 7-5.9h.6C16.6 5.9 13.2 4 9.2 4zM6.8 7.6a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm4.8 0a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zM16.6 10c-3.3 0-6 2.2-6 5s2.7 5 6 5c.7 0 1.4-.1 2-.3l1.9 1-.5-1.6c1.3-.9 2.6-2.4 2.6-4.1 0-2.8-2.7-5-6-5zm-2 2.6a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm4 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/></symbol></svg>
 
 <header class="nav"><div class="wrap">
-  <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>{{brand}}{{brand_tag_html}}</a>
+  <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>{{brand}}</a>
   <div class="nav-r">
     <a class="docs" href="{{docs_path}}">{{docs}}</a>
     <a href="/app" data-out>{{signin}}</a>
     <a class="btn btn-p" href="/app" id="to-app" hidden>{{console}}</a>
     <form class="out" id="sign-out" method="post" action="/logout" hidden><input type="hidden" name="to" value="{{logout_to}}"><button type="submit">{{signout}}</button></form>
-    <a class="lang" href="{{other_path}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}" data-set="{{other_key}}" aria-label="{{lang_group}}: {{other_name}}"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{lang_switch}}</a>
   </div>
 </div></header>
 
 <main id="top">
 <section class="hero"><div class="wrap"><div class="grid">
   <div class="say">
-    <p class="kick"><i></i>{{fine}}</p>
+    <p class="kick">{{brand_tag}}</p>
     <h1>{{h1}}</h1>
     <ul class="trust">
-      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg>{{t1}}</li>
-      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{t2}}</li>
-      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>{{t3}}</li>
-      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg>{{t4}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{t1}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>{{t2}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>{{t3}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>{{t4}}</li>
     </ul>
   </div>
 
   <aside class="join" aria-labelledby="join-h">
     <div class="j j-scan">
-      <h2 id="join-h"><span class="d">{{join_h}}</span><span class="m">{{ph_h}}</span></h2>
+      <p class="fine"><span><i></i>{{fine}}</span></p>
+      <h2 id="join-h"><span class="d">{{join_h}}</span><span class="m">{{ph_h}}</span><span class="n">{{join_h_in}}</span></h2>
       <button class="btn wxbtn" type="button" id="phopen"><svg aria-hidden="true"><use href="#wxm"/></svg>{{ph_open}}</button>
       <p class="okline" id="phcopied" hidden>{{ph_copied}}</p>
       <button class="orqr" type="button" id="orqr">{{ph_orqr}}</button>
@@ -283,7 +294,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
   <a class="gh" href="https://github.com/verkyyi/claude-fleet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>GitHub</a>
   <a href="{{terms_path}}">{{terms}}</a>
   <a href="{{privacy_path}}">{{privacy}}</a>
-  <p class="disc">{{disc}}</p>
+  <p class="end"><a class="lang" href="{{other_path}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}" data-set="{{other_key}}" aria-label="{{lang_group}}: {{other_name}}"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{lang_switch}}</a><span>{{disc}}</span></p>
 </div></footer>
 
 <script>
