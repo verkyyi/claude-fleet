@@ -37,6 +37,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { api, ApiError } from "../api";
+import { ParkSummary } from "../machines/ParkSummary";
+import { lang } from "../i18n";
 import { ago, t as ta } from "../i18n";
 import { tm, type MKey } from "../machines/i18n";
 import {
@@ -342,6 +344,7 @@ function LoadCard({ d, lost }: { d: NodeDetail; lost: boolean }) {
             label={tm("d.mem") + (d.mem.pressure == null ? "" : ` · ${Math.round(d.mem.pressure * 100)}%`)}
           />
         </div>
+        <ParkSummary reading={d.machine} lang={lang} />
         {data.length ? (
           <ChartContainer config={chartConfig} className="aspect-auto h-40 w-full">
             <AreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>

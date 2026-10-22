@@ -907,6 +907,8 @@ func refuse(ctx context.Context, wire nodeWire, opID, code, msg string) {
 
 // NodeView is one node as the roster API presents it.
 type NodeView struct {
+	*control.ParkMetrics
+
 	EndpointID    string     `json:"endpoint_id"`
 	Hostname      string     `json:"hostname"`
 	OSUser        string     `json:"os_user"`
@@ -1055,6 +1057,8 @@ type NodeFleetSummary struct {
 // MachineView folds a machine's logins into one row: the operator asks "is mac-a
 // up", not "is each of mac-a's six agents up".
 type MachineView struct {
+	*control.ParkMetrics
+
 	Hostname string `json:"hostname"`
 	// Alias is the short name the admin gave it (fleet.machine_names,
 	// claude-fleet#1706), else CCQUOTA_FLEET_ROUTES' alias; absent for none.
@@ -1284,7 +1288,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		m := machines[v.Hostname]
 		if m == nil {
 			zero := 0
-			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Sessions: &zero, Repos: []string{}}
+			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Sessions: &zero, ParkMetrics: control.EmptyParkMetrics(), Repos: []string{}}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
 		}
@@ -1319,6 +1323,11 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		// 只协调 is the machine's word only when every heard login says it.
 		m.ComputeOff = v.ComputeOff && (m.Online == 0 || m.ComputeOff)
 		m.Online++
+		if v.ParkMetrics == nil {
+			m.ParkMetrics = nil
+		} else if m.ParkMetrics != nil {
+			m.ParkMetrics.Add(v.ParkMetrics)
+		}
 		// One unreadable login makes the machine's count unknown: a sum
 		// that silently drops it would read a busy machine as idle.
 		for _, u := range v.SessionsUnknown {
@@ -1382,6 +1391,9 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			if svcs := visibleServices(h, reg, visible); len(svcs) > 0 {
 				machines[h].Services, machines[h].ServicesAt = svcs, reg.at
 			}
+		}
+		if machines[h].Online == 0 {
+			machines[h].ParkMetrics = nil
 		}
 		sort.Strings(machines[h].Repos)
 		machines[h].Role = machineRole(*machines[h], out.Nodes)
@@ -1484,6 +1496,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 	}
 	var hb control.Heartbeat
 	if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil {
+		v.ParkMetrics = hb.ParkMetrics
 		v.Load1, v.NCPU = hb.Load1, hb.NCPU
 		v.CPUBusy, v.MaxCPUBusy = hb.CPUBusy, hb.MaxCPUBusy
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes

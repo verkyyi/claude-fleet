@@ -13,6 +13,7 @@ import time
 import traceback
 import uuid
 
+from fleet_park_metrics import summarize as park_summary
 from fleet_config_write import revision, write
 from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
@@ -324,7 +325,7 @@ class Control:
         # post-condition check, which over the whole fleet cost seconds.
         code, output, err = self.adapter("workers", fleet["name"], *([window] if window else []))
         if code == 3:
-            return {"state": "down", "workers": [], "observed_at": now()}
+            return {"state": "down", "workers": [], "park_metrics": park_summary([]), "observed_at": now()}
         if code:
             # The adapter's last stderr line rides along (issue #1460): `tmux:
             # command not found` is the whole diagnosis, and without it the fault
@@ -367,7 +368,7 @@ class Control:
                                 # kept on the wire, always awake now.
                                 lifecycle="awake",
                                 agent=agent or fleet["agent"], handle=handle, **extra))
-        return {"state": "running", "workers": workers, "observed_at": now()}
+        return {"state": "running", "workers": workers, "park_metrics": park_summary(workers), "observed_at": now()}
 
     def id_presence(self):
         """Every fleet's windows and their @fleet_id, read now (EPIC T497 C6): the

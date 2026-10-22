@@ -211,6 +211,7 @@ func (fp fleetPart) fill(hb *control.Heartbeat, at time.Time) {
 		hb.FleetError = fp.err.Error()
 	default:
 		hb.MachineID, hb.Fleets = fp.snap.machineID, fp.snap.fleets
+		hb.ParkMetrics = fp.snap.park
 		for _, f := range fp.snap.fleets {
 			hb.Sessions += f.Count
 		}

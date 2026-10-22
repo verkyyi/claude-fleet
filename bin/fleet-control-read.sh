@@ -150,6 +150,7 @@ case "$mode" in
       [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-$unk}" "$nm" "$ow" "$nd" "$fi"
     done <<<"$rows")
+    park=$(python3 "$BIN/fleet_park_metrics.py" census --socket "$sock" --session "$sess" 2>/dev/null) || park='{}'
     busy=$(workers_busy "$sock" "$sess" "$one")
     # Two fills (issue #1749), so every session the operator's own list shows is
     # one the other machines see too:
@@ -269,6 +270,7 @@ case "$mode" in
       [ -n "$_sr" ] || continue
       estale+="${estale:+$'\036'}$_sr#$_sn"$'\037'"$_sa"$'\037'"${_st//$'\036'/ }"
     done < <(fleet_epic_stale_list "$(printf '%s\n' "$cwds" | awk -F'\t' '$10 != "" { printf "%s ", $10 }')" 2>/dev/null)
+    # Add the optional census column after assembling the stable inventory shape.
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       wid=${row%%$'\t'*}; rest=${row#*$'\t'}
@@ -368,7 +370,14 @@ case "$mode" in
       fi
       orole=''   # column 20 is always empty (issue #4341)
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\tnotices=%s\treapwhy=%s\torigin=%s\tcantalk=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin" "$ntc" "$cw" "$cor" "$ctk"
-    done <<<"$rows"
+    done <<<"$rows" | PARK_CENSUS="$park" python3 -c '
+import json, os, sys
+census = json.loads(os.environ["PARK_CENSUS"])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    p = census.get(line.split("\t", 1)[0])
+    print(line + "\tpark=" + (json.dumps(p, separators=(",", ":")) if p else ""))'
+
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
   # A just-opened window's `<@claude_state>\t<@cc_session_id>` — what the start's

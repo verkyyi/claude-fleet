@@ -636,6 +636,8 @@ var errNoFleet = errors.New("no claude-fleet install on this login")
 var fleetReadErrs = &sync.Map{} // fleet name → error string
 
 type fleetSnapshot struct {
+	park *control.ParkMetrics
+
 	machineID string
 	fleets    []control.Fleet
 	// capacity is the login's own cap and the count its gate reads
@@ -703,16 +705,18 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 	if err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "discover", "params": map[string]any{}}, &disc); err != nil {
 		return fleetSnapshot{}, fmt.Errorf("fleet discover: %w", err)
 	}
-	snap := fleetSnapshot{machineID: disc.MachineID, fleets: []control.Fleet{}, capacity: disc.Capacity}
+	snap := fleetSnapshot{machineID: disc.MachineID, fleets: []control.Fleet{}, capacity: disc.Capacity, park: control.EmptyParkMetrics()}
 	for _, f := range disc.Fleets {
 		var st struct {
-			State   string            `json:"state"`
-			Workers []json.RawMessage `json:"workers"`
+			Park    *control.ParkMetrics `json:"park_metrics"`
+			State   string               `json:"state"`
+			Workers []json.RawMessage    `json:"workers"`
 		}
 		fl := control.Fleet{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Checkout: f.Checkout, Agent: f.Agent, Repos: f.Repos}
 		err := fleetRPC(ctx, script, map[string]any{"protocol": 1, "method": "fleet_status",
 			"machine_id": disc.MachineID, "params": map[string]any{"fleet_id": f.FleetID}}, &st)
 		if err != nil {
+			snap.park = nil
 			fl.State, fl.Error = control.FleetStateUnknown, err.Error()
 			if prev, _ := fleetReadErrs.Load(f.Name); prev != err.Error() {
 				log.Printf("heartbeat: fleet %s is unreadable, reported as state unknown (not 0 sessions): %v", f.Name, err)
@@ -721,6 +725,11 @@ func readFleets(ctx context.Context, home string) (fleetSnapshot, error) {
 		} else {
 			if _, had := fleetReadErrs.LoadAndDelete(f.Name); had {
 				log.Printf("heartbeat: fleet %s reads again", f.Name)
+			}
+			if st.Park == nil {
+				snap.park = nil
+			} else if snap.park != nil {
+				snap.park.Add(st.Park)
 			}
 			fl.State, fl.Count = st.State, len(st.Workers)
 			if st.Workers == nil {

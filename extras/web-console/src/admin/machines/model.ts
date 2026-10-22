@@ -38,7 +38,7 @@ export type InstallItem = {
 export type LoginInstall = { login: string; install?: InstallItem; shell?: InstallItem; client?: InstallItem };
 export type Installs = { lane?: string; stable?: string; at?: string; runtime?: InstallItem; logins?: LoginInstall[] };
 
-export type MachineView = {
+export type MachineView = import("./ParkSummary").ParkReading & {
   hostname: string;
   alias?: string;
   status: "online" | "maintenance" | "lost" | string;
