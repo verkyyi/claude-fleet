@@ -597,6 +597,7 @@ def repair_hooks(session, pane, fid, sid, dry=False):
         directory = Path(tempfile.mkdtemp(prefix='hook-repair-', dir=str(root)))
         save(directory/'receipt.json', dict(state='preparing', proof=proof))
         stage = 'preparing'
+        retained = None
         try:
             shutil.copyfile(source['transcript'], directory/'source.jsonl')
             before = (directory/'source.jsonl').read_bytes()
@@ -607,9 +608,12 @@ def repair_hooks(session, pane, fid, sid, dry=False):
             if fresh != proof or repair_target_home(source) != home:
                 raise ValueError('maintenance source changed during preparation')
             tm = lambda *a: run(['tmux','-L',session,*a])
-            tm('set-option','-w','-t',source['window'],'@agent_transfer_until',str(int(time.time())+180))
             stage = 'exiting'
             save(directory/'receipt.json', dict(state=stage, proof=proof))
+            retained = tm('display-message','-p','-t',source['pane'],'#{remain-on-exit}') or 'off'
+            tm('set-option','-w','-t',source['window'],'@agent_transfer_until',str(int(time.time())+180))
+            tm('set-option','-p','-t',source['pane'],'remain-on-exit','on')
+            tm('set-option','-w','-t',source['window'],'@wrap_quiet','1')
             # Empty composer was proven twice. No Escape, C-u, replay or forced kill.
             tm('send-keys','-t',source['pane'],'-l','\x1b[200~/exit\x1b[201~')
             time.sleep(0.6)
@@ -684,6 +688,7 @@ def repair_hooks(session, pane, fid, sid, dry=False):
             receipt = dict(state='resumed', fid=fid, sid=sid, target=target, loop=loop,
                            at=time.time(), proof=proof, initialize=runtime)
             save(directory/'receipt.json', receipt)
+            stage = 'resumed'
             print(json.dumps(dict(state='resumed', fid=fid, sid=sid, receipt=str(directory/'receipt.json'), loop=loop)))
         except Exception as error:
             save(directory/'receipt.json', dict(state='refused' if stage == 'preparing' else 'recovery',
@@ -692,6 +697,8 @@ def repair_hooks(session, pane, fid, sid, dry=False):
         finally:
             # No source restart or timer rearm on unknown outcomes.
             run(['tmux','-L',session,'set-option','-wu','-t',source['window'],'@agent_transfer_until'])
+            if stage == 'resumed' and retained is not None:
+                run(['tmux','-L',session,'set-option','-p','-t',source['pane'],'remain-on-exit',retained])
 
 def process_cwd(pid):
     try: return os.readlink('/proc/%d/cwd' % pid)
