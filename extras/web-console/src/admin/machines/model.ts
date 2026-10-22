@@ -82,6 +82,7 @@ export type NodeView = {
   agent_version?: string;
   fleet_version?: string;
   trust?: string;
+  installs?: Installs;
   trust_source?: string;
   desired?: DesiredView;
   logins_refused?: Record<string, string>;
@@ -185,6 +186,22 @@ export const doorOf = (m: MachineView): Door => (m.door ? { state: m.door.state,
 // may be short).
 const sameVersion = (a: string, b: string) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
 
+// Compare installed releases, not the bundle's synthetic git HEAD or a
+// personal client's heartbeat. Different login installs remain visible.
+export function runtimeVersions(m: MachineView, nodes: NodeView[]): string[] {
+  const shared = m.versions?.runtime || m.installs?.runtime?.version;
+  if (shared) return [shared];
+  const live = nodes.filter((n) => n.role !== "client" && n.status !== "lost" && !n.machine_link);
+  const versions = live.map((n) => {
+    const login = n.os_user;
+    return n.installs?.runtime?.version
+      || n.installs?.logins?.find((l) => l.login === login)?.install?.version
+      || m.installs?.logins?.find((l) => l.login === login)?.install?.version
+      || n.fleet_version || "";
+  }).filter(Boolean);
+  return [...new Set(versions.length ? versions : nodes.length ? [] : [m.fleet_version || ""].filter(Boolean))];
+}
+
 export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): MachineRow[] {
   const stables = [ver?.stable || ver?.client_version || "", ver?.client_version_macos || ""].filter(Boolean);
   const byHost = new Map<string, NodeView[]>();
@@ -201,9 +218,9 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
       const kind: Kind = isPersonPod(m.hostname) ? "person" : "fixed";
       // 期望 / 实际 (claude-fleet#2214): a managed machine's newest desired pair
       const desired = nodes.map((n) => n.desired).filter(Boolean).sort((a, b) => b!.want - a!.want)[0];
-      const installed = m.versions?.runtime || m.fleet_version || nodes.map((n) => n.fleet_version || "").sort().pop() || "";
+      const installed = runtimeVersions(m, nodes);
       const offDesired = !!desired && (desired.want !== desired.reached || !!desired.diff);
-      const offStable = !!installed && /^[0-9a-f]{7,}$/i.test(installed) && stables.length > 0 && !stables.some((s) => sameVersion(installed, s));
+      const offStable = installed.some((v) => /^[0-9a-f]{7,}$/i.test(v) && stables.length > 0 && !stables.some((s) => sameVersion(v, s)));
       const status: Status = m.status === "maintenance" ? "maintenance" : m.status === "online" ? "online" : "lost";
       // A retired login's last heartbeat is history, not current capacity.
       // A resource-admitted login has no fixed count ceiling: adding only its
@@ -220,7 +237,7 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
         loadCore: m.ncpu && m.status !== "lost" ? m.load1 / m.ncpu : null,
         sessions: m.sessions,
         cap,
-        version: short(installed),
+        version: installed.map(short).join(" / "),
         behind: offDesired || offStable,
         stableShort: short(stables[0]),
         door: doorOf(m),
