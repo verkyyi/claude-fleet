@@ -7600,6 +7600,16 @@ drill_term_hub_rollout() {
   SECS=$(since "$t0")
 }
 
+# term-renew-admission-refused (T968): an admission refusal did not run renew.
+drill_term_renew_admission_refused() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(cd "$ROOT/extras/web-console" && node --experimental-strip-types test/terminal-renew.mjs 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='准入明确拒绝后仍重开同一代；答复丢失只重连确认；不重放输入'
+  SECS=$(since "$t0")
+}
+
 # term-browser-gives-up (RMVE): the page never stops trying, and an «ended»
 # personal terminal is reconnected, then renewed once — the rules' own test.
 drill_term_browser_gives_up() {

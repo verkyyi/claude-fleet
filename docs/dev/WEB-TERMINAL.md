@@ -201,6 +201,8 @@ CI `browser-attachment` 在隔离身份、真实节点适配器和抛弃式 shel
   `notice: worker_gone`，经 `term_controller` 的 ready 帧 `notice` 字段送到页面；会话进程被换时节点答
   `interrupted`，页面忘掉旧代、连现在的（提示 `current`）。仍 ended：个人终端对这一代自动 `renew` 一次
   （`--expect` 保证两页只重开一个，提示 `renewed`）；会话终端转到个人终端（`session_ended`）。
+  重开请求被入口明确限流拒绝时，页面保留同一代的重开意图，按原退避等待准入，不需要手动刷新；
+  请求已发出后丢失答复则只重连确认当前代，不盲目再次重开，也不重放命令。
 - **门**：门 / 直连失败只让下一次走入口；接上后 30 s 起（翻倍到 5 分钟）在 2 s 没人打字时重连一次再选路。
 - **家不在线**：`/v1/term/home` 说 offline / maintenance 时页面说明原因、每 10 秒再看。
 - **入口发布**：副本收到 SIGTERM 先 `Server.Drain()`——开着的附着收到 `hub_restart`（页面 0 秒退避），
