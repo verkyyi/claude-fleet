@@ -93,6 +93,8 @@ def parse(value):
         k, _, v = tok.partition('=')
         if k in ('next', 'ttl') and v.isdigit():
             out[k] = int(v)
+        elif k == 'park' and re.fullmatch(r'[0-9a-f-]{36}', v):
+            out[k] = v
         elif k == 'id':
             for ent in v.split(','):
                 job, _, until = ent.partition('@')
@@ -118,7 +120,9 @@ def fmt(d):
                 parts.append('at=%s@%d' % (job, d['at'][job]))
             elif job in d.get('cron', {}):
                 parts.append('cron=%s@%s' % (job, d['cron'][job]))
-    return ' '.join(['kind=' + ','.join(kinds)] + parts) if kinds else ''
+    if d.get('park'):
+        parts.append('park=' + d['park'])
+    return ' '.join((['kind=' + ','.join(kinds)] if kinds else []) + parts)
 
 
 def wake_until(d):
@@ -423,6 +427,9 @@ def status(value, manifest='', now=None):
     """('active'|'none', reason)."""
     now = int(time.time()) if now is None else int(now)
     d = prune(parse(value), now)
+    pending = park_next(d.get('park'))
+    if pending:
+        return 'active', 'park:next=%s' % pending
     if d['next']:
         return 'active', 'wakeup:next=%d' % d['next']
     if d['ids']:
@@ -431,6 +438,17 @@ def status(value, manifest='', now=None):
     if led:
         return 'active', 'ledger:' + led
     return 'none', ('expired' if (value or '').strip() else 'unset')
+
+
+def park_next(fid):
+    if not fid:
+        return 0
+    root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
+    try:
+        r = json.loads((root / 'wake' / (fid + '.json')).read_text())
+        return r.get('next', 0)
+    except (OSError, ValueError, AttributeError):
+        return 0
 
 
 def _cron_field(f, lo, hi):
@@ -493,6 +511,9 @@ def due(value, manifest='', within=600, now=None):
     known to be further away (issue #1690)."""
     now = int(time.time()) if now is None else int(now)
     d = prune(parse(value), now)
+    pending = park_next(d.get('park'))
+    if pending:
+        return ('due' if pending - now <= within else 'parked'), 'park:next=%s' % pending
     if ledger_status(manifest):
         return 'due', 'ledger'
     if not d['next'] and not d['ids']:
@@ -553,7 +574,7 @@ def hook():
         if re.fullmatch(r'[0-9a-f-]{36}', fid):
             import fleet_park_wake
             fleet_park_wake.cancel(fid, payload)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return 0
 

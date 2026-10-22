@@ -219,7 +219,8 @@ def busy_of(w):
         return ""
     if w["state"] == "needs" or w["word"] == "blocked":
         return "asking"
-    if w["state"] in ("working", "looping") or w["word"] == "working":
+    if (w["state"] == "working" or w["word"] == "working"
+            or (w["state"] == "looping" and w["word"] not in ("idle", "done"))):
         return "busy"
     return ""
 

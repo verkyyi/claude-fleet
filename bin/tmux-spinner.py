@@ -188,7 +188,16 @@ class Spinner:
         # a slow gate owns this pass until it exits, never overlapping sweeps.
         if self.timer_child is not None and self.timer_child.poll() is None:
             return
-        if not any((self.conf / 'wake').glob('*.json')):
+        due = False
+        for path in (self.conf / 'wake').glob('*.json'):
+            try:
+                r = json.loads(path.read_text())
+                if r.get('next') and r['next'] <= time.time():
+                    due = True
+                    break
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        if not due:
             return
         self.timer_child = subprocess.Popen([sys.executable, str(BIN / 'fleet_park_wake.py'), 'tick'],
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

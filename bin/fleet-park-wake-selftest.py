@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # selftest-entry
-"""Drive fleet_loop_mark.py export, fleet_park_wake.py tick and the real
+"""Drive fleet_loop_mark.py export, tmux-spinner.py / fleet_park_wake.py tick and the real
 fleet_session_gate.py / fleet-session-wrap.sh on Park's isolated tmux socket.
 No model or live login is used. The launch fixture records the first prompt.
 """
@@ -64,7 +64,16 @@ class Timers(fixture.Park):
         self.tick(self.due - 1)
         self.assertTrue(self.opt('@parked'))
         time.sleep(max(0, self.due - time.time()))
-        self.tick()
+        spinner_module = fixture.module('timer_spinner', 'tmux-spinner.py')
+        with patch.dict(os.environ, self.env):
+            spinner = spinner_module.Spinner()
+            try:
+                spinner.park_timers()
+                self.assertIsNotNone(spinner.timer_child)
+                spinner.timer_child.wait(timeout=15)
+                self.assertEqual(spinner.timer_child.returncode, 0)
+            finally:
+                spinner.close()
         self.wait(lambda: not self.opt('@parked') and self.opt('@park_relay'))
         self.assertIn(self.prompt, (self.root / 'launch-args').read_text())
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
@@ -104,6 +113,9 @@ class Timers(fixture.Park):
         self.tm('respawn-window', '-k', '-t', self.win, cmd)
         self.wait(lambda: self.opt('@park_held') and self.opt('@park_wrap_ver'))
         self.assertFalse((self.root / 'launch-args').exists(), 'restore started the native engine early')
+        import fleet_loop_mark as mark
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(mark.status(self.opt('@loop'))[0], 'active', 'restored cron lost its reap hold')
         self.tick(contract['next'])
         self.wait(lambda: not self.opt('@parked') and self.opt('@park_relay'))
         self.assertEqual(self.opt('@fleet_id'), self.fid)
@@ -143,6 +155,39 @@ class Timers(fixture.Park):
         self.assertFalse(result.get('ok'))
         self.assertTrue(self.opt('@park_relay'))
         self.assertFalse((self.root / 'conf/wake' / (self.fid + '.json')).exists())
+
+    def test_cron_continues_while_awake(self):
+        self.setup_timer(cron=True)
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(fixture.gate.park(self.fid).get('ok'))
+        path = self.root / 'conf/wake' / (self.fid + '.json')
+        self.tick(json.loads(path.read_text())['next'])
+        self.wait(lambda: self.opt('@park_relay'))
+        self.set('@mod_accept', 'idle.v2')
+        self.set('@claude_state', 'looping')
+        self.set('@agent_status', json.dumps(dict(state='idle')))
+        accept = self.root / 'accept.py'
+        accept.write_text('import sys,json\nr=json.load(sys.stdin)\n'
+                          'open(' + repr(str(self.root / 'accepted')) + ',"a").write(r["text"]+"\\n")\n'
+                          'print(json.dumps(dict(state="accepted",turn_id="turn-1")))\n')
+        self.env['FLEET_GATE_ACCEPT_CMD'] = shlex.join([sys.executable, str(accept)])
+        due = json.loads(path.read_text())['next']
+        self.tick(due)
+        self.tick(due)
+        self.assertEqual((self.root / 'accepted').read_text().count(self.prompt), 1)
+
+    def test_only_exact_native_exit_dialog_is_confirmed(self):
+        import fleet_park_wake as wake
+        self.setup_timer(cron=True)
+        with patch.dict(os.environ, self.env):
+            wake.export(self.fid)
+            screen = ('Background work is running\nThe following will stop when you exit:\n'
+                      'cron task · * * * * * · check\n❯ 1. Exit and stop tasks\n'
+                      '2. Move to background and exit\n3. Stay\nEnter to confirm · Esc to cancel\n')
+            self.assertTrue(wake.exit_confirmation(self.fid, screen))
+            for altered in (screen.replace('❯ 1.', '1.'), screen.replace('cron task', 'background task'),
+                            screen.replace('* * * * *', '*/5 * * * *'), screen + 'normal prompt\n'):
+                self.assertFalse(wake.exit_confirmation(self.fid, altered))
 
 
 if __name__ == '__main__':

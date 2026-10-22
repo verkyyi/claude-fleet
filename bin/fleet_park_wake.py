@@ -74,6 +74,8 @@ def native_jobs(w, at):
         if value['next'] or value['ids']:
             raise ValueError('pending timer has no exact transcript')
         return [], None
+    if not value['next'] and not value['ids']:
+        return [], transcript
     wake, jobs = None, {}
     with transcript.open() as lines:
         for name, inp, resp, used, result in mark.claude_tool_results(
@@ -132,6 +134,8 @@ def export(fid):
         record = old or dict(v=1, fid=fid, sid=w['sid'], agent=w['agent'], jobs=[])
         previous = dict(record) if old else None
         known = {j['id']: j for j in record['jobs']}
+        if any(j['next'] is not None and j['next'] <= at and j['id'] not in known for j in incoming):
+            raise ValueError('native one-shot is already due; keep its current owner')
         native = [j for j in incoming if j['id'] not in known]
         for job in incoming:
             # Consumed one-shots are tombstones; a second park must not rearm them.
@@ -169,6 +173,11 @@ def activate(fid):
         r['phase'] = 'active'
         r.pop('previous', None)
         save(path, r)
+    w = gate.window(fid)
+    if w:
+        # Native timers died with the process. Their old expiry marks must not
+        # outlive a cancelled/consumed contract or revive them on the next park.
+        gate.tmux(w['sock'], 'set-option', '-w', '-t', w['win'], '@loop', 'park=' + fid)
 
 
 def abort(fid):
@@ -274,6 +283,13 @@ def tick(fid, at=None):
         gate.settle(fid, pending['delivery'])
         delivery = gate.find(gate.records(fid), pending['delivery'])
     if not delivery or delivery.get('state') != 'sent':
+        if delivery and delivery.get('state') == 'returned':
+            with locked(fid) as path:
+                r = durable.read(path)
+                if r and r.get('pending', {}).get('delivery') == pending['delivery'] and not r.get('attention'):
+                    r['attention'] = delivery.get('why') or 'delivery_returned'
+                    save(path, r)
+                    gate.park_log(fid, 'fail', '定时', result=r['attention'], next_at=pending['next'])
         return
     with locked(fid) as path:
         r = durable.read(path)

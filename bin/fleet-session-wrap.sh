@@ -400,6 +400,7 @@ park_seed=''   # the first sentence a wake carries into the resumed conversation
 if [ "$intmux" = 1 ] && [ -n "${FLEET_PARK_RESTORE_FID:-}" ] \
    && python3 "$BIN/fleet_park_wake.py" restore --fid "$FLEET_PARK_RESTORE_FID" --sid "$last_sid"; then
   wset @fleet_id "$FLEET_PARK_RESTORE_FID"
+  wset @loop "park=$FLEET_PARK_RESTORE_FID"
   wset "$(fleet_agent_get "${last_agent:-claude}" sid_window)" "$last_sid"
   wset @parked "$(date +%s)"
   park_hold
