@@ -36,6 +36,10 @@ class Lifecycle(unittest.TestCase):
         f.tm('set-option', '-w', '-t', home, '@fleet_role', 'home')
         f.fake()
         f.wait(lambda: f.opt('@claude_state_src') == '7501')
+        # Production spawns pass a fixed key with new-window -n. This fixture
+        # otherwise auto-renames env -> bash asynchronously, changing the slot
+        # holder's name even when the repo registry and capacity are untouched.
+        f.tm('rename-window', '-t', f.win, 'capacity-worker')
         f.tm('rename-session', '-t', 'test', f.label)
         config = f.root / 'conf/fleets' / f.label
         config.mkdir(parents=True)
