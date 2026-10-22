@@ -215,8 +215,14 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
     # A HOLD (issue #1244) is the operator's "keep this one" — e.g. a sleeper
     # parked on post-release verification. It retains any worker.
-    if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_hold}").strip() == "1":
+    hold = read(*tmux, "display-message", "-p", "-t", target,
+                "#{@reap_hold}\t#{@reap_report_pending}\t#{@fleet_id}").rstrip("\n").split("\t")
+    if hold[0] == "1":
         return "retained:hold"
+    from fleet_reap_policy import report_hold
+    if len(hold) == 3 and report_hold(hold[2], hold[1]):
+        return "retained:report"
+
     # A pending LOOP (issue #1331) — the agent scheduled its own next round
     # (ScheduleWakeup / CronCreate → @loop) or a fleet-loop.py ledger holds one.
     # The window is idle between rounds, not finished: reaping it would take the

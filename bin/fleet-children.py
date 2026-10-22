@@ -289,6 +289,7 @@ def append_row(path, raw):
         fh.seek(0, os.SEEK_END)
         fh.write(json.dumps(ev, ensure_ascii=False) + '\n')
         fh.flush()
+        os.fsync(fh.fileno())
     return 0, 'seq=%d' % ev['seq']
 
 

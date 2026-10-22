@@ -201,15 +201,32 @@ fi
 # 已退出 (S7). Written as this script exits — whatever road it took (a hub-spawned
 # session has no parent to tell, and still has a result) — with the state the
 # checks below settled on, so an unmerged PR is never recorded as merged. Beside
-# the old record (双写); it never changes the exit code.
+# the old record (双写). Failed persistence holds the window and returns an error;
+# durable queued delivery (exit 3) counts as a saved report.
+report_token=''
+if [ -z "$WIN" ] && [ "$DRY" != 1 ] && fleet_is_fid "$selffid"; then
+  # Stamp before disk IO: even an unwritable proof directory cannot leave an old
+  # terminal result free to close this window. Never touch a person's keep/hold.
+  TM set-window-option -t "$selfwin" @reap_report_pending 1 2>/dev/null || exit 1
+  report_token=$(python3 "$BIN/fleet_reap_policy.py" report-begin "$selffid" "$wtask") || {
+    printf 'fleet-report-parent: cannot preserve report evidence; session retained\n' >&2
+    exit 1
+  }
+fi
 id_result() {
   local rc=$?
-  if [ -z "$WIN" ] && [ "$DRY" != 1 ] && fleet_is_fid "$selffid"; then
-    python3 "$BIN/fleet_id.py" result "$selffid" --state "$STATE" --summary "$SUMMARY" --agent "$wagent" \
-      ${PR:+--pr "${PR//[^0-9]/}"} >/dev/null 2>&1 \
-      && fleet_reap_soon "$selffid" "$STATE"   # 做完约 1 分钟收起 (T680)
+  if [ -n "$report_token" ] && { [ "$rc" = 0 ] || [ "$rc" = 3 ]; }; then
+    if python3 "$BIN/fleet_reap_policy.py" report-finish "$selffid" "$report_token" \
+         "$STATE" "$SUMMARY" "$wagent" "${PR//[^0-9]/}" >/dev/null 2>&1; then
+      TM set-window-option -t "$selfwin" -u @reap_report_pending 2>/dev/null
+      fleet_reap_soon "$selffid" "$STATE"
+    else
+      printf 'fleet-report-parent: result not safely recorded; session retained\n' >&2
+      rc=1
+    fi
   fi
-  return "$rc"
+  trap - EXIT
+  exit "$rc"
 }
 trap id_result EXIT
 
@@ -609,9 +626,11 @@ if last and (last.get("state"), last.get("pr")) == (row["state"], row["pr"]):
     sys.exit(0)
 with open(f, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    fh.flush()
+    os.fsync(fh.fileno())
 import hashlib     # the row id, as bin/fleet-orphan-reports.py row_id hashes it
 print("new " + hashlib.sha1(("%s|%s|%s|%s" % (row["ts"], row["child_key"], row["state"], row["pr"])).encode("utf-8")).hexdigest()[:12])
-' "$f" 2>/dev/null)
+' "$f" 2>/dev/null) || { printf 'fleet-report-parent: cannot save orphan report; session retained\n' >&2; exit 1; }
   if [ "${new%% *}" = new ]; then
     [ -n "$sockl" ] || sockl=$(fleet_socket "$sess" 2>/dev/null)
     local otext="$label${wname:+ \"$wname\"} $UST${prn:+ (PR #$prn)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}"
@@ -814,7 +833,7 @@ if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/
   esac
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
     children_append "$worigin" "$(row_json \
-      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
+      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || exit 1
   fi
   _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
   printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
@@ -858,7 +877,7 @@ if [ -n "$RETIRED_GEN" ] || { [ -z "$PFOUND" ] && [ -n "$sess" ] && fleet_key_ge
   RETIRED_GEN=${RETIRED_GEN:-${wogen:-0}}
   if [ "$DRY" != 1 ] && command -v children_append_retired >/dev/null 2>&1; then
     children_append_retired "$worigin" "$RETIRED_GEN" "$(row_json \
-      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || :
+      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || exit 1
   fi
   # Someone takes it by ID (T660): the retired book holds that generation's row, the
   # new holder's live book none, and the report is delivered below with the stand-in
@@ -883,7 +902,7 @@ fi
 # holder never hears of this child.
 if [ "$DRY" != 1 ] && [ -z "$RETIRED_GEN" ] && command -v children_append >/dev/null 2>&1; then
   children_append "$worigin" "$(row_json \
-    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || :
+    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || exit 1
 fi
 
 # silent = ledger only, in every mode: a parent is never woken for a turn boundary.
@@ -907,7 +926,7 @@ fi
 # the live ancestor).
 if [ -n "$IDTAKE" ] && [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
   children_append "$SENDKEY" "$(row_json \
-    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$worigin" 2>/dev/null)" "$sess" || :
+    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$worigin" 2>/dev/null)" "$sess" || exit 1
 fi
 [ -n "$IDGONE" ] && orphan "parent ID $(bash "$BIN/fleet-id.sh" short "$ofid" 2>/dev/null || printf '%s' "$ofid") has closed, with no successor or parent open"
 [ -n "$pwin" ] || pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
@@ -915,7 +934,7 @@ if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); the
   SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"
   if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
     children_append "$SENDKEY" "$(row_json \
-      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || :
+      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || exit 1
   fi
 fi
 

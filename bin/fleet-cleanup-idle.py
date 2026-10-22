@@ -166,7 +166,7 @@ class Cleaner:
                  "@auto_resume_at", "@auto_resumed", "@reap_why",
                  # HHV0: a session the web opened, and whether it is parked
                  "@session_origin", "@parked", "@park_wrap_ver", "@park_presence", "@park_watched_at",
-                 "@park_held", "@park_since", "@park_wake", "@park_start", "@park_waiting")
+                 "@park_held", "@park_since", "@park_wake", "@park_start", "@park_waiting", "@reap_report_pending")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -233,6 +233,8 @@ class Cleaner:
     def work_over(self, snap):
         """«做完» (T680's one rule): its ID's newest result is final, or its task
         record is closed."""
+        if fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")):
+            return False
         if self.id_over(snap["@fleet_id"]):
             return True
         return bool(re.fullmatch(r"T[1-9][0-9]{0,9}", snap["@task"])) and self.task_closed(snap["@task"]) == 0
@@ -375,7 +377,8 @@ class Cleaner:
             self.say(window, "skip:transition")
             return False
         try:
-            if self.moved(window, snap) or not recheck():
+            if (fleet_reap_policy.report_hold(snap.get("@fleet_id", ""))
+                    or self.moved(window, snap) or not recheck()):
                 return False
             other = self.shared(window, snap["@fleet_id"])
             if other:
@@ -1037,6 +1040,13 @@ class Cleaner:
         return False
 
     def road(self, window, snap):
+        hold = fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", ""))
+        if hold:
+            # Holding completion still permits the existing safe park gate.
+            if not snap.get("@parked") and not getattr(self.args, "skip_park", False):
+                self.web_park(window, snap)
+            self.why = hold
+            return False
         road = self.parked(window, snap)
         if road is not None:
             return road

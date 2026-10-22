@@ -296,6 +296,7 @@ def append(fid, ev, decide=None):
         ev["seq"] = len(events) + 1
         ev.setdefault("ts", int(time.time()))
         os.write(fd, (json.dumps(ev, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+        os.fsync(fd)
         return ev
     finally:
         os.close(fd)
@@ -703,7 +704,8 @@ def status(fid, live, idx=None):
         return dict(hs, id=fid, closed=rec["closed"], segments=len(rec["segments"]), progress=rec.get("progress"),
                     src="hub")
     r = last_result(rec)
-    rs = (r or {}).get("state", "")
+    from fleet_reap_policy import report_hold
+    rs = "" if report_hold(fid) else (r or {}).get("state", "")
     up = alive(fid, rec, live)
     con = conflicts(fid, live, idx) if up else []
     if con:

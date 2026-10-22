@@ -406,11 +406,95 @@ def idle_owned(policy, now=None):
     return False
 
 
+def report_proof(fid):
+    """Local completion evidence, beside the existing identity gate's receipts.
+
+    A missing record is a legacy session. Unreadable evidence always holds it.
+    This is not a parked state, nor a second delivery queue.
+    """
+    import json
+    from fleet_session_gate import gate_root, FID_RE
+    if not FID_RE.fullmatch(fid or ""):
+        return {}
+    try:
+        rec = json.loads((gate_root() / fid / "report.json").read_text())
+        return rec if isinstance(rec, dict) else {"phase": "unknown"}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return {"phase": "unknown"}
+
+
+def report_hold(fid, pending=""):
+    phase = report_proof(fid).get("phase", "")
+    if pending or phase == "pending":
+        return "report-pending"
+    return "report-unknown" if phase not in ("", "complete") else ""
+
+
+def write_report_proof(fid, proof):
+    import os
+    from fleet_session_gate import fid_dir, write_json
+    folder = fid_dir(fid)
+    write_json(folder / "report.json", proof)
+    fd = os.open(str(folder), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def report_begin(fid, task):
+    import uuid
+    from fleet_session_gate import lock
+    token = str(uuid.uuid4())
+    with lock(fid):
+        write_report_proof(fid, dict(phase="pending", token=token, task=task, at=time.time()))
+    return token
+
+
+def report_finish(fid, token, state, summary, agent, pr):
+    """Publish completion only after the caller saved the required report.
+
+    rc 3 (durably queued) is as reliable as rc 0. A failed write leaves the
+    pending proof intact, including when an older result or task was terminal.
+    """
+    from fleet_session_gate import lock
+    import fleet_id
+    with lock(fid):
+        proof = report_proof(fid)
+        if proof.get("phase") != "pending" or proof.get("token") != token:
+            return False
+        ev = dict(ev="result", state=state, summary=summary, agent=agent)
+        if pr:
+            ev["pr"] = pr
+        got = fleet_id.append(fid, ev)
+        proof.update(phase="complete", result_seq=got["seq"])
+        write_report_proof(fid, proof)
+    fleet_id.push_later(fid)
+    return True
+
+
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(__doc__)
         return 2
     cmd, args = argv[1], argv[2:]
+    if cmd in ("report-begin", "report-finish", "report-ready"):
+        from fleet_session_gate import FID_RE
+        if not args or not FID_RE.fullmatch(args[0]):
+            return 2
+        try:
+            if cmd == "report-begin" and len(args) == 2:
+                print(report_begin(*args))
+                return 0
+            if cmd == "report-finish" and len(args) == 6:
+                return 0 if report_finish(*args) else 1
+            if cmd == "report-ready":
+                return 1 if report_hold(args[0]) else 0
+        except (OSError, ValueError):
+            return 1
+        return 2
     if cmd == "norm":
         out = norm(args[0] if args else "")
         if out is None:

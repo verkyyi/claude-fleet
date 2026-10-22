@@ -141,11 +141,13 @@ PYDONE
     text=$(cat); [ -n "$text" ] || die 2 "empty message"
     mkdir -p "$Q" 2>/dev/null || die 1 "cannot create $Q"
     tmp=$(mktemp "$Q/.put.XXXXXX") || die 1 "cannot write in $Q"
-    printf '%s' "$text" | python3 -c 'import json, sys, time
+    printf '%s' "$text" | python3 -c 'import json, os, sys, time
 rid, kind, fid, key, to, delegation = sys.argv[1:7]
 print(json.dumps({"rid": rid, "kind": kind, "to_fid": fid, "to_key": key, "to": to,
                   "created": int(time.time()), "text": sys.stdin.read(),
-                  **({"delegation": json.loads(delegation)} if delegation else {})}, ensure_ascii=False))' \
+                  **({"delegation": json.loads(delegation)} if delegation else {})}, ensure_ascii=False))
+sys.stdout.flush()
+os.fsync(sys.stdout.fileno())' \
       "$RID" "$KIND" "$FID" "$TKEY" "${TO:-${TKEY:-$FID}}" "$DELEGATION" > "$tmp" 2>/dev/null || { rm -f "$tmp"; die 1 "cannot encode the item"; }
     f="$Q/$(date -u +%Y%m%dT%H%M%SZ)-$$-${tmp##*.}.json"
     if [ "$KIND" = delegated_report ]; then
@@ -159,6 +161,14 @@ print(json.dumps({"rid": rid, "kind": kind, "to_fid": fid, "to_key": key, "to": 
     else
       mv -f "$tmp" "$f" || { rm -f "$tmp"; die 1 "cannot write in $Q"; }
     fi
+    python3 - "$Q" <<'PYSYNC' || die 1 "cannot persist delivery directory"
+import os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PYSYNC
     _rep=''
     [ "$KIND" = report ] && _rep=$(printf '%s' "$text" | python3 -c 'import json, sys; print(json.dumps({"summary": sys.stdin.read()[:2000]}, ensure_ascii=False))' 2>/dev/null)
     note "$RID" QUEUED "${TO:-${TKEY:-$FID}}" "$KIND" local '' "$_rep"
