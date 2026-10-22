@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -40,9 +41,19 @@ type HistoryHideManifest struct {
 
 var ErrHistoryEvidence = errors.New("history hide refused: closed identity, fresh complete online absence evidence, no cache and no pending work required")
 
+// HistoryHideError reports only a fixed reason code, never record contents.
+type HistoryHideError struct{ Reason string }
+
+func (e *HistoryHideError) Error() string    { return "history hide refused: " + e.Reason }
+func (e *HistoryHideError) Unwrap() error    { return ErrHistoryEvidence }
+func historyHideRefusal(reason string) error { return &HistoryHideError{Reason: reason} }
+
 func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply bool, now time.Time, decode ChatMirrorSession) error {
-	if m.Owner == "" || !IsFleetID(m.ID) || actor == "" {
-		return ErrHistoryEvidence
+	if actor == "" {
+		return historyHideRefusal("actor_missing")
+	}
+	if m.Owner == "" || !IsFleetID(m.ID) {
+		return historyHideRefusal("invalid_identity")
 	}
 	tx, err := s.write.Begin()
 	if err != nil {
@@ -57,14 +68,24 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 	var closed int64
 	var machine, login, taskID, task, key, asked, parked string
 	err = tx.QueryRow(`SELECT seq, closed_at, machine, login, task_id, task, key, asked, parked FROM fleet_ids WHERE owner = ? AND id = ?`+s.d.forUpdate(), m.Owner, m.ID).Scan(&seq, &closed, &machine, &login, &taskID, &task, &key, &asked, &parked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return historyHideRefusal("identity_not_found")
+	}
 	if err != nil {
 		return err
 	}
 	if !undo {
-		if closed == 0 || seq != m.Seq || machine != m.Machine || login != m.Login || !m.Online || !m.Complete ||
-			now.Unix()-m.CheckedAt < 0 || now.Unix()-m.CheckedAt > 300 || m.NativeEvidence != "absent_verified" ||
-			m.Backups != "absent_verified" || m.Inputs != "empty_verified" || strings.TrimSpace(m.Evidence) == "" || asked != "" || parked != "" {
-			return ErrHistoryEvidence
+		if closed == 0 || seq != m.Seq || machine != m.Machine || login != m.Login {
+			return historyHideRefusal("ledger_mismatch")
+		}
+		if !m.Online || !m.Complete || m.NativeEvidence != "absent_verified" || m.Backups != "absent_verified" || m.Inputs != "empty_verified" || strings.TrimSpace(m.Evidence) == "" {
+			return historyHideRefusal("evidence_incomplete")
+		}
+		if now.Unix()-m.CheckedAt < 0 || now.Unix()-m.CheckedAt > 300 {
+			return historyHideRefusal("evidence_stale")
+		}
+		if asked != "" || parked != "" {
+			return historyHideRefusal("pending_gate")
 		}
 		rows, err := tx.Query(`SELECT native FROM fleet_id_natives WHERE id = ? ORDER BY n`, m.ID)
 		if err != nil {
@@ -84,11 +105,11 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 			return err
 		}
 		if len(natives) != len(m.Natives) {
-			return ErrHistoryEvidence
+			return historyHideRefusal("natives_mismatch")
 		}
 		for i, sid := range natives {
 			if sid != m.Natives[i] {
-				return ErrHistoryEvidence
+				return historyHideRefusal("natives_mismatch")
 			}
 		}
 		liveRows, err := tx.Query(`SELECT workers_json FROM fleet_fleets WHERE present=1`)
@@ -105,7 +126,7 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 			var workers []map[string]any
 			if json.Unmarshal([]byte(raw), &workers) != nil {
 				liveRows.Close()
-				return ErrHistoryEvidence
+				return historyHideRefusal("live_inventory_unknown")
 			}
 			for _, w := range workers {
 				wid, _ := w["worker_id"].(string)
@@ -119,7 +140,7 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 			return err
 		}
 		if live {
-			return ErrHistoryEvidence
+			return historyHideRefusal("live_identity")
 		}
 		operations, err := tx.Query(`SELECT request FROM fleet_operations WHERE status NOT IN ('succeeded','failed')`)
 		if err != nil {
@@ -143,28 +164,47 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 			return err
 		}
 		if queued {
-			return ErrHistoryEvidence
+			return historyHideRefusal("pending_operation")
 		}
 		// No limit/window here: old tasks and blocked backlog must also survive.
+		// Empty legacy task FIDs are not identities. Build optional joins only
+		// from a recorded task UUID or valid positive T<n>/numeric reference.
+		bindings := []string{"fid = ?", "worker_id LIKE ?"}
+		args := []any{m.Owner, m.ID, "%/" + m.ID}
+		if IsFleetID(taskID) {
+			bindings = append(bindings, "fid = ?")
+			args = append(args, taskID)
+		} else if taskID != "" {
+			return historyHideRefusal("task_identity_unknown")
+		}
+		if n := ParseTaskRef(task); n > 0 {
+			bindings = append(bindings, "id = ?")
+			args = append(args, n)
+		} else if task != "" {
+			return historyHideRefusal("task_reference_unknown")
+		}
 		var pending int
 		err = tx.QueryRow(`SELECT COUNT(*) FROM fleet_tasks WHERE owner = ? AND
-   (fid = ? OR (? != '' AND fid = ?) OR id = ? OR worker_id LIKE ?) AND
-   (asked != '' OR parked != '' OR state IN ('accepted','starting','blocked','open','placing','unknown') OR (state NOT IN ('closed','refused') AND outcome NOT IN ('succeeded','failed','cancelled','refused')))`,
-			m.Owner, m.ID, taskID, taskID, ParseTaskRef(task), "%/"+m.ID).Scan(&pending)
+          (`+strings.Join(bindings, " OR ")+`) AND
+          (asked != '' OR parked != '' OR state IN ('accepted','starting','blocked','open','placing','unknown') OR (state NOT IN ('closed','refused') AND outcome NOT IN ('succeeded','failed','cancelled','refused')))`, args...).Scan(&pending)
 		if err != nil {
 			return err
 		}
 		if pending != 0 {
-			return ErrHistoryEvidence
+			return historyHideRefusal("pending_task")
 		}
+
 		// Read and decrypt a fresh cache snapshot under the same owner lock as
 		// PutChatMirrorOf and identity events. Never trust dry-run evidence at apply.
 		copies, unknown, err := historyViewCopies(tx, m.Owner, decode)
 		if err != nil {
 			return err
 		}
-		if unknown || len(copies[m.ID]) != 0 {
-			return ErrHistoryEvidence
+		if unknown {
+			return historyHideRefusal("cache_identity_unknown")
+		}
+		if len(copies[m.ID]) != 0 {
+			return historyHideRefusal("native_cache_present")
 		}
 	}
 	if !apply {
