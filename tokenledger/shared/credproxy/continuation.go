@@ -25,6 +25,7 @@ type CodexRoute struct {
 }
 
 type CodexAffinityRecord struct {
+	AccountKey   string   `json:"account_key"`
 	Owner        string   `json:"owner"`
 	Account      string   `json:"account"`
 	CredentialID string   `json:"credential_id"`
@@ -46,7 +47,7 @@ func (h *HubResolver) ResolveCodex(ctx context.Context, pass string, route Codex
 
 func (h *HubResolver) RecordCodexAffinity(ctx context.Context, pass string, res Resolution, refs []string) error {
 	answer, err := h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: Codex, CodexRecord: &CodexAffinityRecord{
-		Owner: res.Owner, Account: res.Account, CredentialID: res.CredentialID, References: refs,
+		Owner: res.Owner, Account: res.Account, CredentialID: res.CredentialID, AccountKey: CodexReference("account", res.AccountID), References: refs,
 	}})
 	if err == nil && (!answer.Valid || !answer.CodexAffinityV1) {
 		return errors.New("continuation record refused")

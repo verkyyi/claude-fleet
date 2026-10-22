@@ -76,7 +76,7 @@ func TestCodexContinuationAcrossReplicas(t *testing.T) {
 	first, _ := s.Store.Credential(store.PoolPrincipal, credvault.Codex, "poolcx")
 	// Seed the reference used by the account-checking fixture via the real record protocol.
 	router := &credproxy.HubResolver{URL: r.h.http.URL, Token: cpToken}
-	if err := router.RecordCodexAffinity(t.Context(), pass, credproxy.Resolution{Owner: store.PoolPrincipal, Account: "poolcx", CredentialID: s.Vault.CredentialID(*first)}, []string{credproxy.CodexReference("id", "old-ref")}); err != nil {
+	if err := router.RecordCodexAffinity(t.Context(), pass, credproxy.Resolution{Owner: store.PoolPrincipal, Account: "poolcx", AccountID: "aid-pool", CredentialID: s.Vault.CredentialID(*first)}, []string{credproxy.CodexReference("id", "old-ref")}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := s.Store.SessionBindFor(wid, credvault.Codex)
@@ -156,5 +156,33 @@ func TestCodexContinuationLegacyBoundaryCannotReselect(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	if !result.Valid || result.Account != "poolcx" {
 		t.Fatalf("legacy boolean selected new account: %+v", result)
+	}
+}
+
+func TestCodexContinuationWorkspaceIdentity(t *testing.T) {
+	r := newCPRig(t)
+	s := r.h.srv
+	pass, _ := r.issue(t, fidA)
+	router := &credproxy.HubResolver{URL: r.h.http.URL, Token: cpToken}
+	original, err := router.ResolveCodex(t.Context(), pass, credproxy.CodexRoute{Independent: true})
+	if err != nil || !original.Valid {
+		t.Fatalf("initial %+v %v", original, err)
+	}
+	ref := credproxy.CodexReference("id", "workspace-ref")
+	if err := router.RecordCodexAffinity(t.Context(), pass, original, []string{ref}); err != nil {
+		t.Fatal(err)
+	}
+	// A workspace/account ID can change without changing the OAuth grant used
+	// by the stable metering identity. Neither labels nor that identity suffice.
+	if err := s.Vault.Put(store.PoolPrincipal, credvault.Codex, "poolcx", credvault.Secret{RefreshToken: "rt-cx", AccountID: "another-workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := s.Store.Credential(store.PoolPrincipal, credvault.Codex, "poolcx")
+	if s.Vault.CredentialID(*row) != original.CredentialID {
+		t.Fatal("fixture changed grant, not just workspace")
+	}
+	next, err := router.ResolveCodex(t.Context(), pass, credproxy.CodexRoute{References: []string{ref}})
+	if err != nil || next.Valid || next.Error != credproxy.CodexContinuationUnavailable {
+		t.Fatalf("workspace change accepted: %+v %v", next, err)
 	}
 }

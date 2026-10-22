@@ -26,17 +26,17 @@ func (s *Server) codexAffinityChoice(principal, endpoint string, affinity store.
 	return store.Credential{}, errors.New("source_account_not_authorized")
 }
 
-func (s *Server) codexAffinityBind(worker, principal, endpoint string, route credproxy.CodexRoute, now time.Time) (store.SessionBind, string, error) {
-	fail := func(why string) (store.SessionBind, string, error) {
+func (s *Server) codexAffinityBind(worker, principal, endpoint string, route credproxy.CodexRoute, now time.Time) (store.SessionBind, store.CodexAffinity, error) {
+	fail := func(why string) (store.SessionBind, store.CodexAffinity, error) {
 		log.Printf("credproxy affinity: worker_id=%s reason=%s", worker, why)
-		return store.SessionBind{}, "", errors.New(why)
+		return store.SessionBind{}, store.CodexAffinity{}, errors.New(why)
 	}
 	if route.Unknown || (route.Independent && len(route.References) > 0) {
 		return fail("unknown_request_shape")
 	}
 	if route.Independent {
 		b, err := s.sessionBind(worker, principal, endpoint, credvault.Codex, now, true)
-		return b, "", err
+		return b, store.CodexAffinity{}, err
 	}
 	if !credproxy.ValidCodexReferences(route.References) {
 		return fail("unknown_reference")
@@ -52,5 +52,5 @@ func (s *Server) codexAffinityBind(worker, principal, endpoint string, route cre
 	log.Printf("credproxy affinity: worker_id=%s reason=source_account references=%d", worker, len(route.References))
 	// This lease does not mutate sticky state, including an operator's newer
 	// binding. An in-flight response's own account remains authoritative.
-	return store.SessionBind{WorkerID: worker, Provider: credvault.Codex, Owner: ch.PrincipalID, Account: ch.Account}, affinity.CredentialID, nil
+	return store.SessionBind{WorkerID: worker, Provider: credvault.Codex, Owner: ch.PrincipalID, Account: ch.Account}, affinity, nil
 }

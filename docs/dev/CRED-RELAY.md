@@ -413,7 +413,7 @@ credits 标志，没有可跨订阅比较的绝对 token / 请求容量，也没
 conversation、item/call ID、加密 reasoning/compaction 和 `x-codex-turn-state` /
 `x-codex-routing-hint` 必须回到其来源凭据。来源由中心代理观察上游输出后写入
 hub 的 `fleet_codex_affinity`，以 worker + 带用途的 SHA256 引用为键，保存所属人与
-稳定凭据身份；不保存原文、加密正文、header 或 token。代理冷启动、两副本和 pass
+稳定凭据身份和实际 ChatGPT account ID 的用途隔离摘要；不保存原文、加密正文、header 或 token。代理冷启动、两副本和 pass
 续期共享同一记录。引用有效期为最近观察后 30 天；到期、未知、跨来源混合、同一引用发生身份冲突
 均明确返回 `409 codex_continuation_unavailable`，不能猜当前绑定就是来源。过期身份与
 冲突记录保留为墓碑，不能删掉后让重复引用转属另一个账号；此表随已观察引用数增长，
@@ -422,7 +422,8 @@ hub 的 `fleet_codex_affinity`，以 worker + 带用途的 SHA256 引用为键�
 每次 Codex 请求都向 hub 询问来源，不走仅按 pass 缓存的旧 resolve 或 stale fallback；
 hub 不可用时返回 503。新代理要求 hub 明确回传 `codex_affinity_v1` 能力；旧 hub
 忽略未知 wire 字段而返回普通 lease，也不能被误当成已经登记来源。来源账号仍须通过 allowlist、暂停、reauth、refresh 健康与
-cooldown 检查，替换同名凭据不继承旧引用。续接只取得该来源的 lease，不覆盖较新的
+cooldown 检查，替换同名凭据或改变同一 OAuth 身份的 workspace/account ID 都不继承旧引用；
+缺少实际 account ID 的 lease 不能提供续接保证，拒绝发送推理。续接只取得该来源的 lease，不覆盖较新的
 sticky 或人工绑定。旧 `request_boundary` boolean 不再触发主动重选；旧消费者仍可
 resolve，但没有证明上下文独立的能力。
 

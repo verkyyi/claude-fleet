@@ -138,7 +138,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	if req.CodexRecord != nil {
 		record := req.CodexRecord
 		if req.Provider != credvault.Codex || req.Codex != nil || req.Rejected != nil ||
-			record.CredentialID == "" || !credproxy.ValidCodexReferences(record.References) {
+			record.CredentialID == "" || record.AccountKey == credproxy.CodexReference("account", "") || !credproxy.ValidCodexReferences([]string{record.AccountKey}) || !credproxy.ValidCodexReferences(record.References) {
 			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation record")
 			return
 		}
@@ -146,7 +146,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_not_authorized"
 		} else if err := s.Store.RecordCodexAffinity(c.WorkerID, record.References, store.CodexAffinity{
-			Owner: ch.PrincipalID, Account: ch.Account, CredentialID: record.CredentialID,
+			Owner: ch.PrincipalID, Account: ch.Account, CredentialID: record.CredentialID, AccountKey: record.AccountKey,
 		}, now); err != nil {
 			httpError(w, http.StatusInternalServerError, "could not record continuation source")
 			return
@@ -155,14 +155,14 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var b store.SessionBind
-	var expectedIdentity string
+	var expectedSource store.CodexAffinity
 	var err error
 	if req.Codex != nil {
 		if req.Provider != credvault.Codex || req.Rejected != nil {
 			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation route")
 			return
 		}
-		b, expectedIdentity, err = s.codexAffinityBind(c.WorkerID, c.Principal, endpoint, *req.Codex, now)
+		b, expectedSource, err = s.codexAffinityBind(c.WorkerID, c.Principal, endpoint, *req.Codex, now)
 	} else {
 		// The old boolean proves only a new HTTP request, never independence
 		// from account-bound provider state. Older callers retain sticky state.
@@ -209,7 +209,12 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	if expectedIdentity != "" && expectedIdentity != identity {
+	if req.Codex != nil && acc.AccountID == "" {
+		out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_id_missing"
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if expectedSource.CredentialID != "" && (expectedSource.CredentialID != identity || expectedSource.AccountKey != credproxy.CodexReference("account", acc.AccountID)) {
 		out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_credential_replaced"
 		writeJSON(w, http.StatusOK, out)
 		return
