@@ -47,6 +47,10 @@ func Run(name string, args []string) (handled bool, code int) {
 		// A terminal relay's last hop, run as the login (claude-fleet#3838):
 		// its own PTY on the one attach command, framed on stdio.
 		return true, runTermPty(args)
+	case "panel": // agent.PanelCmd
+		// The 看台's ⌘P connector (claude-fleet T890): this popup's terminal to the
+		// resident panel, else the Python panel.
+		return true, runPanel(args)
 	case "door":
 		// The cluster door's own SSH server (A5SQ): one address, routed by username.
 		err = runDoor(args)

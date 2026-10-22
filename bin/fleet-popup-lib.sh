@@ -15,6 +15,19 @@
 #       the draw: the frame below around <cmd>, on <client> (whose
 #       #{client_width} is <width>). Blocks until the popup closes. Called by
 #       dash-popup.sh only; its exit status means nothing (see there, #454).
+#   fleet_popup_bind <narrow> <w> <h> <argv…>
+#       PRINT the tmux command a KEY binds to open <argv…> in this frame with no
+#       shell before it — not the door's, and not the popup's own (tmux runs an
+#       argv of two words or more straight, no default-shell) (T890, the 看台's
+#       ⌘P: run-shell + this door cost 0.13-0.37 s on a busy machine). tmux expands no format in a popup's command, so the
+#       keypress's context rides in the session's environment
+#       (`set-environment -F FLEET_PANEL_CTX` session · client · window ·
+#       @peer_cur · @view_shell · @view_lang_set · @view_lang · client width); a
+#       client narrower than <narrow> columns gets 100% × 100%, else <w> × <h>;
+#       the title is the session's @view_popup_title (fleet_view.popup_title_set);
+#       the popup's book (@popup_open, --freeze) is dash-popup.sh --hold's, which
+#       the panel starts after its first frame. A refused popup (another overlay
+#       up) does nothing — #454's toast needs the door's shell.
 #   fleet_popup_screen <socket-label> <client> <cmd>
 #       a WHOLE-SCREEN state, not a dialog: no frame, no title, 100% × 100% on
 #       <client> of the server `-L <socket-label>` (none = the current one).
@@ -81,6 +94,18 @@ fleet_popup() {
 
 fleet_popup_screen() {
   tmux ${1:+-L "$1"} display-popup -c "$2" -E -w 100% -h 100% "$3"
+}
+
+fleet_popup_bind() {
+  local narrow="${1:-100}" w="${2:-90%}" h="${3:-80%}" frame='-b rounded' one cmd='' a
+  shift 3
+  for a in "$@"; do cmd="$cmd '${a//\'/\'\\\'\'}'"; done
+  # text for tmux's parser, never for a shell: the quotes are meant literally
+  # shellcheck disable=SC2089
+  fleet_palette_load && frame="$frame -S 'fg=$PAL_DIM' -s 'bg=$PAL_BG'"
+  one="display-popup -E $frame -T '#{@view_popup_title}' -e FLEET_POPUP=1 -e FLEET_PANEL_DIRECT=1"
+  printf '%s' "{ set-environment -F FLEET_PANEL_CTX '#{session_name}|#{client_name}|#{window_id}|#{@peer_cur}|#{@view_shell}|#{@view_lang_set}|#{@view_lang}|#{client_width}' ; "  # view-ok: a key's own session IS the 看台 (its @view- name is the server's)
+  printf '%s' "if-shell -F '#{e|<:#{client_width},$narrow}' { $one -w 100% -h 100%$cmd } { $one -w $w -h $h$cmd } }"
 }
 
 fleet_popup_freeze() {

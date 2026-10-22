@@ -30,9 +30,14 @@ they can type into.
 Every run is lines of `{ts, what, seg, ms}` in `$FLEET_CONF_DIR/timing/<what>.ndjson`
 — one line per segment, all of a run's lines carrying the same `ts` (epoch
 seconds, ms precision), and a `total` segment for end to end. The two writers:
-    panel    fleet_view.popup (the 看台's ⌘P):
-             boot (the process start → the panel's code loaded) · read (the rows
-             off the cache) · frame (the first frame drawn) · total
+    panel    fleet_view.popup (the 看台's ⌘P), every segment from the key's
+             popup (the connector's start, `ccquota panel attach` — T890):
+             the resident panel's road: attach (connector → its forked child
+             running) · read (0: the list in hand) · frame (the first frame
+             drawn) · total; the Python panel's own (no server, the old door):
+             boot (→ the panel's code loaded; on a Mac without the connector the
+             module's import, the interpreter's start uncounted) · read (the
+             rows off the cache) · frame · total
     session  every new session (⌘N / the 「新会话」 box, T684; a dispatch --spawn
              and every other road that carries the ↵, T716): each stage is its
              time SINCE THE ↵ (the box's keypress, `do new --t0`; a dispatch's
@@ -62,8 +67,9 @@ seconds, ms precision), and a `total` segment for end to end. The two writers:
 A file past MAX_LINES keeps its newest half. Writing never raises and never
 blocks the person: a full disk or a read-only home costs the line, nothing else.
 
-The limits (`check`, the doctor's `timing` row): FLEET_TIMING_PANEL_MS (500) on
-the median panel total, FLEET_TIMING_SESSION_MS (8000 — a session is started
+The limits (`check`, the doctor's `timing` row): FLEET_TIMING_PANEL_MS (100) on
+the panel total's 九成五 over the last 50 runs (T890; the median of 10 against 500
+before), FLEET_TIMING_SESSION_MS (8000 — a session is started
 cold since the warm pool left, T495; making that fast is the work now) on the
 median session `input` (a run without one — a road that has none yet, an older
 run — is judged by its `total`). No file ⇒ nothing printed.
@@ -74,7 +80,11 @@ import sys
 import time
 
 MAX_LINES = 4000
-LIMITS = {"panel": ("FLEET_TIMING_PANEL_MS", 500), "session": ("FLEET_TIMING_SESSION_MS", 8000)}
+LIMITS = {"panel": ("FLEET_TIMING_PANEL_MS", 100), "session": ("FLEET_TIMING_SESSION_MS", 8000)}
+# what is judged by its 九成五 over the last P95_RUNS runs (T890: ⌘P's first frame
+# is a p95 ≤ 100 ms promise); the rest by the median of the last N
+P95 = {"panel"}
+P95_RUNS = 50
 
 
 def timing_dir():
@@ -348,19 +358,31 @@ def limit(what):
         return d
 
 
+def pctl(xs, q):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    return xs[min(len(xs) - 1, int(round(q * (len(xs) - 1))))]
+
+
 def check(last):
     over_any = False
     for what in whats():
-        rs = runs(what, last)
+        p95 = what in P95
+        rs = runs(what, max(last, P95_RUNS) if p95 else last)
         if not rs:
             continue
         lim = limit(what)
         judged = [r for r in rs if "cold" not in r]
-        p50 = median([r.get("input", r.get("total")) for r in judged if "input" in r or "total" in r])
-        over = bool(lim and p50 is not None and p50 > lim)
+        vals = [r.get("input", r.get("total")) for r in judged if "input" in r or "total" in r]
+        p50 = median(vals)
+        top = pctl(vals, 0.95) if p95 else None
+        judge = top if p95 else p50
+        over = bool(lim and judge is not None and judge > lim)
         over_any = over_any or over
-        print("%s n=%d p50=%s limit=%s over=%d cold=%d" % (what, len(rs), fmt(p50), lim or "-", int(over),
-                                                          len(rs) - len(judged)))
+        print("%s n=%d p50=%s%s limit=%s over=%d cold=%d" % (what, len(rs), fmt(p50),
+                                                           " p95=%s" % fmt(top) if p95 else "", lim or "-",
+                                                           int(over), len(rs) - len(judged)))
     return 1 if over_any else 0
 
 

@@ -2509,12 +2509,31 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # `git fetch` + `git worktree add` ~3.2s, claude's boot ~1.7s, and a ~1.1s window in
 # which Claude Code's TUI has painted its `❯` box but still discards what is typed.
 
-# The doctor's `timing` row (issue #3551): the median of the last 10 ⌘P → panel
-# and ⌘N / ⚡ → typeable against these, in ms (a session starts cold since the
-# warm pool left, T495). The runs are
+# The doctor's `timing` row (issue #3551): ⌘P → panel judged by its 九成五 over
+# the last 50 opens (T890: from the key's popup to the first frame, ≤ 100 ms),
+# ⌘N / ⚡ → typeable by the median of the last 10 (a session starts cold since the
+# warm pool left, T495), in ms. The runs are
 # $FLEET_CONF_DIR/timing/*.ndjson; `fleet_timing.py table` prints the segments.
 # @label=⌘P panel limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
-#FLEET_TIMING_PANEL_MS=500
+#FLEET_TIMING_PANEL_MS=100
+
+# ⌘P's resident panel (T890, bin/fleet-panel-server.py): one per 看台, its code
+# loaded and the list in hand, so the key's popup (`ccquota panel attach`) draws
+# its first frame without starting Python or reading anything. 0 = off: the key
+# keeps the old door (dash-popup.sh → the Python panel). The list is read again
+# every FLEET_PANEL_SERVER_REFRESH seconds while the 看台 was active in the last
+# 10 minutes (30 s otherwise); the server exits after FLEET_PANEL_SERVER_IDLE
+# seconds with no ⌘P (the next ⌘P starts it again).
+# @label=⌘P resident panel @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_PANEL_SERVER=1
+# @label=⌘P resident panel refresh (s) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_PANEL_SERVER_REFRESH=2
+# @label=⌘P resident panel idle exit (s) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_PANEL_SERVER_IDLE=1800
+# ⌘P's list older than this many seconds says so beside 「会话 N」 —
+# 「2 分钟前 · 刷新中…」 while it is read again (T890).
+# @label=⌘P stale-list mark (s) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_VIEW_STALE_MARK_SECS=3
 # @label=New session limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_TIMING_SESSION_MS=8000
 

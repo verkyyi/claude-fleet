@@ -291,22 +291,10 @@ _WORDS = {}
 
 
 def words_key():
-    """What the language table's dump depends on (issue #3514): the table itself
-    and every input fleet_ui_lang reads — FLEET_UI_LANG, the person's choice
-    file, FLEET_VIEW_LANG (set or not), the locale. One file per answer."""
-    table = Path(__file__).absolute().parent / "fleet-ui-lang.sh"
-    person = os.environ.get("FLEET_UI_PERSON_FILE") or os.path.join(
-        os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "person-bundle.json")
-    parts = []
-    for f in (table, person):
-        try:
-            st = os.stat(f)
-            parts.append("%s:%d:%d" % (f, st.st_mtime_ns, st.st_size))
-        except OSError:
-            parts.append("%s:-" % f)
-    for k in ("FLEET_UI_LANG", "FLEET_VIEW_LANG", "LC_ALL", "LC_MESSAGES", "LC_CTYPE", "LANG"):
-        parts.append("%s=%s" % (k, os.environ.get(k, "\1")))
-    return hashlib.sha1("\0".join(parts).encode("utf-8", "replace")).hexdigest()[:16]
+    """What the language table's dump depends on (issue #3514) — fleet_notice's,
+    the one definition (the panel's own words and its 消息 row's, T890)."""
+    import fleet_notice
+    return fleet_notice.words_key()
 
 
 def say(key, *args):
@@ -1798,7 +1786,7 @@ def epic_toggle(items, fleet, target, on):
             e["expanded"] = bool(on)
 
 
-def entries(vid, now=None, hub=True):
+def entries(vid, now=None, hub=True, kept=None, view_request=True):
     """Every line the popup can show, in order (issue #3179): grouped by what you
     should do — 置顶 (@pin) · 等你 (needs / failed / blocked, or an unanswered ⛔
     ask on its issue — issue #4225) · 在干活 (working / looping) · 等合并/等发版
@@ -1816,11 +1804,16 @@ def entries(vid, now=None, hub=True):
           configuration, ∅ no issue, k/N, repo when 2+) · right (the issue) · foot
           (the lit row's line; it says 「今天 N token」 when the hub recorded any —
           issue #3377) · today (that phrase alone) · target (what go() takes) · far (another
-          machine/login)"""
+          machine/login)
+    kept: the producer's kept copy answers (default: when hub=False — the
+    popup's first paint); the resident panel's worker passes False with hub=False
+    (fleet-panel-server.py: a fresh read, no hub wait) and view_request=False
+    while its 看台 is idle (only a person looking renews the hub's window, #4357)."""
     now = time.time() if now is None else now
     row = view_row(vid)
     fleet = view_fleet(vid, row)
-    hub_view_request(fleet)
+    if view_request:
+        hub_view_request(fleet)
     here, me = here_label(row), getpass.getuser()
     logins = fleet_logins()
     wins = windows(fleet) if fleet else {}
@@ -1845,7 +1838,7 @@ def entries(vid, now=None, hub=True):
     slug, lists = only, {}
     if hub:     # hub=False: the cache as it is — the popup's first paint (#3311)
         hub_fresh(fleet)
-    for line in produce(fleet, kept=not hub).splitlines():
+    for line in produce(fleet, kept=(not hub) if kept is None else kept).splitlines():
         f = line.split(US)
         if f[0] == "hdr":
             kind = f[1] if len(f) > 1 else ""
@@ -3739,13 +3732,18 @@ def key_lines(me, extra=None, browser=False):
               if c.isdigit()]
     size = lambda pc: "#{?#{e|<:#{client_width},%d},100%%,%d%%}" % (NARROW, pc)
     popup = str(Path(me).parent / "dash-popup.sh")
+    direct = direct_popup(me)
 
-    def cmd_of(action, forward=""):
+    def cmd_of(action, forward="", door=False):
         verb = "do " + action if action in fleet_keys.CODELESS else VIEW_ACTIONS.get(action)
         if verb == "forward":
             forward = forward or action
         if forward:
             verb = "popup"
+        if verb == "popup" and direct and not forward and not door:
+            # ⌘P straight into its popup (T890): the connector hands the terminal to
+            # the resident panel, else runs this same panel itself
+            return direct
         if verb == "popup":
             # through the one popup door (dash-popup.sh, issue #3044), from a
             # run-shell, which expands the formats — the old client's road too.
@@ -3822,10 +3820,10 @@ def key_lines(me, extra=None, browser=False):
     if browser:
         lines += ["unbind-key -q -a -T fleet-webterm", "unbind-key -q -a -T fleet-webterm-pfx",
                   "bind-key -T fleet-webterm Any send-keys",
-                  "bind-key -T fleet-webterm User927 " + cmd_of("quickopen"),
+                  "bind-key -T fleet-webterm User927 " + cmd_of("quickopen", door=True),
                   "bind-key -T fleet-webterm 'C-\\' " + cmd_of("shell"),
                   "bind-key -T fleet-webterm C-] switch-client -T fleet-webterm-pfx",
-                  "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen"),
+                  "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen", door=True),
                   "bind-key -T fleet-webterm-pfx C-] send-keys C-]",
                   # root's own wheel (iTerm2's 看台 has it): an app that asked for the
                   # mouse — Claude Code's fullscreen transcript, no tmux history —
@@ -3834,6 +3832,31 @@ def key_lines(me, extra=None, browser=False):
                   " { send-keys -M } { copy-mode -e }",
                   "bind-key -T fleet-webterm WheelDownPane send-keys -M"]
     return lines
+
+
+def direct_popup(me):
+    """The bind that opens ⌘P's panel with no shell before it (T890) — `ccquota
+    panel attach` in fleet-popup-lib.sh's fleet_popup_bind frame — or "" when this
+    install has no connector (no bin/ccquota beside us, or one without `panel`) or
+    FLEET_PANEL_SERVER=0: the key keeps the popup door (dash-popup)."""
+    if os.environ.get("FLEET_PANEL_SERVER", "1") == "0" or not me:
+        return ""
+    here = Path(me).parent
+    cq = os.environ.get("FLEET_PANEL_CONNECTOR") or str(here / "ccquota")
+    try:
+        ok = subprocess.run([cq, "panel", "probe"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if ok != "panel 1":
+        return ""
+    try:
+        out = subprocess.run(["bash", "-c", '. "$1"; shift; fleet_popup_bind "$@"', "-",
+                              str(here / "fleet-popup-lib.sh"), str(NARROW), "90%", "80%",
+                              cq, "panel", "attach", "--", "python3", me],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return out.strip()
 
 
 def our_keys(lines):
@@ -4372,12 +4395,23 @@ def cli_act(qo, vid, target, aid, text=None, yes=False, client=""):
 # --- the interface language (issue #3329, EPIC #3178 D7) ------------------------------
 
 def ui_lang():
-    """zh | en — the language fleet-ui-lang.sh draws in right now."""
+    """zh | en — the language fleet-ui-lang.sh draws in right now: asked once per
+    words_key() (a shell run, 25-30 ms on a busy machine, each ⌘P — T890), kept
+    beside the words."""
+    kept = dash_global() / ("view-lang-" + words_key())
+    try:
+        out = kept.read_text(encoding="utf-8").strip()
+    except OSError:
+        out = ""
+    if out in ("zh", "en"):
+        return out
     try:
         out = subprocess.run(["sh", str(Path(__file__).absolute().parent / "fleet-ui-lang.sh"), "lang"],
                              capture_output=True, text=True, timeout=5).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         out = ""
+    if out in ("zh", "en"):
+        atomic_write(kept, out)
     return out if out in ("zh", "en") else "zh"
 
 
@@ -4431,6 +4465,138 @@ def view_lang_env(vid):
     said, _, lang = (out or "").partition("|")
     if rc == 0 and said == "1":
         os.environ["FLEET_VIEW_LANG"] = lang
+
+
+def panel_t0(pre, qo=None):
+    """When this ⌘P began (epoch seconds): the connector's start — handed in
+    (`pre["t0"]`) or, when it fell back to this process, FLEET_PANEL_T0 — else the
+    process start (Linux) or the module's import (T890: a Mac's clock started after
+    the interpreter and the imports, ~0.2 s late)."""
+    now = time.time()
+    for v in ((pre or {}).get("t0"), os.environ.pop("FLEET_PANEL_T0", None)):
+        try:
+            t = float(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= now - t < 60:
+            return t
+    return fleet_timing.proc_start() or getattr(qo, "T_START", None)
+
+
+def rows_age_at(vid):
+    """When the rows the popup's first paint reads were read: the producer's kept
+    copy's time while produce() would answer it, else now (it runs the producer)."""
+    try:
+        m = rows_cache(view_fleet(vid)).stat().st_mtime
+    except OSError:
+        return time.time()
+    return m if 0 <= time.time() - m < fenv("FLEET_VIEW_ROWS_KEEP", 600) else time.time()
+
+
+def ago(secs):
+    secs = max(0, int(secs))
+    if secs < 60:
+        return say("view_ago_s_fmt", secs)
+    if secs < 3600:
+        return say("view_ago_m_fmt", secs // 60)
+    return say("view_ago_h_fmt", secs // 3600)
+
+
+def age_mark(at, fresh=None, down=False, now=None):
+    """The words after 「会话 N」 when the list in hand is older than
+    FLEET_VIEW_STALE_MARK_SECS (3; T890): 「 · 2 分钟前 · 刷新中…」 while the popup's
+    Refresh is reading it again, 「 · 3 分钟前」 alone under the 失联 banner; "" fresh."""
+    if not at:
+        return ""
+    age = (time.time() if now is None else now) - at
+    if age <= fenv("FLEET_VIEW_STALE_MARK_SECS", 3):
+        return ""
+    if down or fresh is None or getattr(fresh, "every", 1) <= 0:
+        return say("view_age_fmt", ago(age))
+    return say("view_age_refreshing_fmt", ago(age))
+
+
+def popup_title_set(vid):
+    """The popup frame's title (「会话 · <机器>」, the popup door's) on the 看台
+    session, where the key's own popup (`-T '#{@view_popup_title}'`) reads
+    it (T890); set only when it changed."""
+    fleet = view_fleet(vid)
+    if not fleet:
+        return
+    text = say("view_title")
+    me = here_label(view_row(vid))
+    if me:
+        text += " · " + me
+    want = "#[align=centre] %s " % text.replace("#", "##")
+    target = "=%s@view-%s" % (fleet, vid)
+    rc, have = tm("show-option", "-qv", "-t", target, "@view_popup_title")
+    if rc == 0 and have == want:
+        return
+    tm("set-option", "-t", target, "@view_popup_title", want)
+
+
+def after_frame(vid, client, items, pre):
+    """What a ⌘P does once its first frame is up, off the screen's thread (T890):
+    the order file; the frame's title; on the direct road (the key's own popup,
+    FLEET_PANEL_DIRECT) the popup's book — @popup_open, the freeze of the panes
+    under it (#3058) and the keypress context's cleanup (the popup door's
+    `--hold`) —
+    and, when this IS the fallback, the resident panel for the next ⌘P."""
+    direct = os.environ.get("FLEET_PANEL_DIRECT") == "1"
+    ctx_session = ((pre or {}).get("ctx") or {}).get("session") or "%s@view-%s" % (view_fleet(vid), vid)
+
+    def run():
+        try:
+            order_save(vid, items)
+        except Exception:   # noqa: BLE001 — never the panel's death
+            pass
+        if direct:
+            try:
+                subprocess.Popen(["bash", str(Path(__file__).absolute().parent / "dash-popup.sh"), "--hold", str(os.getpid()),
+                                  "--client", client or "", "--session", ctx_session, "--freeze", "--title", "view_title"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+            except OSError:
+                pass
+            if not pre:
+                try:
+                    subprocess.Popen([sys.executable, str(Path(__file__).absolute().parent / "fleet-panel-server.py"),
+                                      "ensure", "--view", vid], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                except OSError:
+                    pass
+        try:
+            popup_title_set(vid)
+        except Exception:   # noqa: BLE001
+            pass
+    threading.Thread(target=run, daemon=True).start()
+
+
+def caches_export():
+    """What a resident panel's worker read, for the server to keep (T890): the ID
+    records, the hub board, the words — so the next read starts warm."""
+    return {"id": {k: v for k, v in _ID_CACHE.items() if k != "mod"},
+            "board": {k: v for k, v in _BOARD.items() if k != "lang"}, "words": dict(_WORDS)}
+
+
+def caches_import(c):
+    _ID_CACHE.update(c.get("id") or {})
+    _BOARD.update(c.get("board") or {})
+    if c.get("words"):
+        _WORDS.clear()
+        _WORDS.update(c["words"])
+
+
+def caches_words_reset():
+    """Another language than the server read in: every word read again."""
+    _WORDS.clear()
+    _BOARD.pop("lang", None)
+    del _LANG_NONE[:]
+    try:
+        import fleet_notice
+        fleet_notice._WORDS.clear()
+    except Exception:   # noqa: BLE001
+        pass
 
 
 def lang_row(query):
@@ -4868,18 +5034,18 @@ def sel_color(cs):
     return SEL_RGB[view_theme()][1] if cs.COLORS >= 256 else cs.COLOR_BLUE
 
 
-def popup(screen, qo, vid, client, forward="", land_at=""):
+def popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     # Scope paste mode to this popup's terminal, including exceptions/close.
     sys.stdout.write("\x1b[?2004h")
     sys.stdout.flush()
     try:
-        return _popup(screen, qo, vid, client, forward, land_at)
+        return _popup(screen, qo, vid, client, forward, land_at, pre)
     finally:
         sys.stdout.write("\x1b[?2004l")
         sys.stdout.flush()
 
 
-def _popup(screen, qo, vid, client, forward="", land_at=""):
+def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     # raw: ⌃\ is a key here (the home shell), never SIGQUIT
     import fleet_panel as panel
     inputs = panel.Input()
@@ -4927,20 +5093,29 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
     # check is the Refresh thread's first read, at once. FLEET_VIEW_REFRESH=0 (no
     # Refresh) keeps the old blocking read.
     bg = fenv("FLEET_VIEW_REFRESH", 2) > 0
-    # the panel's clock (issue #3551): the process start (Linux) or the module's
-    # import → loaded → the rows read → the first frame, in timing/panel.ndjson
-    clock = fleet_timing.Clock("panel", fleet_timing.proc_start() or getattr(qo, "T_START", None))
-    clock.mark("boot")
-    items = entries(vid, hub=not bg)
+    # the panel's clock (issue #3551; T890): from the connector's start (the key's
+    # popup — `pre["t0"]`, or FLEET_PANEL_T0 when it fell back to this process),
+    # else the process start (Linux) or the module's import. The resident road
+    # (fleet-panel-server.py) writes attach · read · frame, this process's own
+    # boot · read · frame; both `total`, in timing/panel.ndjson
+    pre = pre or {}
+    clock = fleet_timing.Clock("panel", panel_t0(pre, qo))
+    clock.mark("attach" if pre else "boot")
+    items, items_at = pre.get("items"), pre.get("ts") or 0.0
+    if items is None:
+        items_at = rows_age_at(vid)
+        items = entries(vid, hub=not bg)
     clock.mark("read")
-    order_save(vid, items)
-    cur = current(vid)
+    fleet = view_fleet(vid)
+    if pre:     # the keypress's own (FLEET_PANEL_CTX): no tmux read before the frame
+        cur, vsh = pre.get("cur") or "", pre.get("vsh") or ""
+    else:
+        cur = current(vid)
+        _, vsh = tm("display-message", "-p", "-t", "=%s@view-%s:" % (fleet, vid), "#{@view_shell}")
+        view_lang_env(vid)
     # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it
-    _, vsh = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid), "#{@view_shell}")
     if ":" in vsh:
         cur = vsh.split(":", 1)[1]
-    fleet = view_fleet(vid)
-    view_lang_env(vid)
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), order_notice(), False
     msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
@@ -4948,15 +5123,16 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
     # `busy` while a ↵ runs, its outcome landing in `job`
     bolt, busy, job = bolt_new(), None, []
     # the box's defaults start from the session in view (T670, EPIC T651 C2)
-    vrepo = view_repo(vid, cur, items)
     page, follow_list, ask_focus = None, True, 0
     box = 2         # the 「新会话」 box's lit item: 0 仓库 · 1 Agent · 2 开 (T652)
 
     def grid_load():
-        bolt["g"] = grid_read(vid, vrepo)
+        # the session in view's repo is asked here, off the first frame's road (T890)
+        bolt["g"] = grid_read(vid, view_repo(vid, cur, items))
         bolt["ready"] = True
+    # started once the first frame is up (T890: a thread's start waits for the
+    # thread to run — tens of ms on a busy machine, before anything was drawn)
     loader = threading.Thread(target=grid_load, daemon=True)
-    loader.start()
 
     def listing():
         return panel_rows(items, query, opened, cmds, bolt, busy, cur)
@@ -4975,7 +5151,9 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
     # The popup door's --freeze contains background output. Repair after resize
     # only: a periodic last-row scroll otherwise repaints the frame at rest.
     heal = qo.Heal(periodic=False)
-    fresh = Refresh(vid, first=0 if bg else None)
+    # a list the resident panel read moments ago is not read again at once
+    fresh = Refresh(vid, first=(max(0.0, fenv("FLEET_VIEW_REFRESH", 2) - (time.time() - items_at)) if pre and items_at
+                                else 0) if bg else None)
     # One full page in the list's place (plan B, T486 v14 §2): the actions, a
     # choice, a question or the composer. Escape steps back a level — a question
     # asked from the actions page returns to it (`stack`) — and from the first
@@ -5155,11 +5333,11 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
                 return 0
             msg = said or say("view_new_failed")
             shown = listing()
-        new = fresh.poll()
+        new = fresh.poll() if clock.written else None
         if new is not None:
             # the list read again: the lit row stays the lit row (by its key)
             lit = key_of(shown[at]) if 0 <= at < len(shown) else (None, None)
-            items = new
+            items, items_at = new, time.time()
             shown = listing()
             at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
                       row_gone_at(shown, at))
@@ -5182,7 +5360,8 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
         follow_list = False
         remote_unknown = hub_stale() or (os.environ.get("CCQUOTA_FLEET") == "1" and hub_age() is None)
         count = session_count(items, query, remote_unknown)
-        count_x = max(2, width - 2 - qo.cells(count))
+        aged = age_mark(items_at, fresh, bool(ban))
+        count_x = max(2, width - 2 - qo.cells(count) - qo.cells(aged))
         if page and mode == "compose":
             # the 「新会话」 box's own first line stands where 搜索会话 stood (T774),
             # as ✦ 消息's page puts its title there; esc gives the search back
@@ -5190,6 +5369,9 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
         else:
             panel.put(screen, 0, 0, "› " + (query or say("view_search_ph")), count_x - 1, qo.clip)
             panel.put(screen, 0, count_x, count, width - count_x - 1, qo.clip, attr(("bold",)))
+            if aged:
+                cx = count_x + qo.cells(count)
+                panel.put(screen, 0, cx, aged, max(0, width - cx - 1), qo.clip, attr(("dim",)))
         if ban:
             try:
                 screen.addnstr(1, 0, qo.clip(ban, width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
@@ -5311,6 +5493,8 @@ def _popup(screen, qo, vid, client, forward="", land_at=""):
         if not clock.written:
             clock.mark("frame")
             clock.done()
+            loader.start()
+            after_frame(vid, client, items, pre)
         timeout_ms = min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
                          max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000)
         try:

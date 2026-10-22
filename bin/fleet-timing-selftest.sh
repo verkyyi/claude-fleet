@@ -6,8 +6,9 @@
 #      a run on the same ts; a Clock's marks add up to its total
 #   B  table: per segment the median and max over the last N runs; a cold open
 #      counted, and the total without it
-#   C  check: the medians against FLEET_TIMING_PANEL_MS / FLEET_TIMING_SESSION_MS —
-#      a cold open is not judged, one over its limit exits 1; no file ⇒ nothing
+#   C  check: ⌘P's 九成五 over its last 50 runs against FLEET_TIMING_PANEL_MS (100,
+#      T890), a session's median against FLEET_TIMING_SESSION_MS — a cold open is
+#      not judged, one over its limit exits 1; no file ⇒ nothing
 #   D  a file past MAX_LINES keeps its newest half; a home it cannot write costs the
 #      line, never an error
 #   E  proc_start: on Linux the process's own start, before the module loaded;
@@ -71,15 +72,18 @@ printf '%s\n' "$out" | grep -qx '| total | 200 | 300 | 3 |' \
 
 # --- C ---------------------------------------------------------------------------
 f0=$FAIL
-out=$(T check); rc=$?
-[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 limit=500 over=0 cold=0' \
+out=$(FLEET_TIMING_PANEL_MS=500 T check); rc=$?
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 p95=300 limit=500 over=0 cold=0' \
   && printf '%s\n' "$out" | grep -qx 'session n=2 p50=300 limit=8000 over=0 cold=1' \
   || st_miss "C check under the limits: rc=$rc $out"
-out=$(FLEET_TIMING_PANEL_MS=150 T check); rc=$?
-[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 limit=150 over=1 cold=0' \
-  || st_miss "C check over the panel limit: rc=$rc $out"
+out=$(FLEET_TIMING_PANEL_MS=250 T check); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 p95=300 limit=250 over=1 cold=0' \
+  || st_miss "C check over the panel limit (its 九成五, the median under it): rc=$rc $out"
+out=$(T check); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 p95=300 limit=100 over=1 cold=0' \
+  || st_miss "C check: the panel's default limit is 100 ms (T890): rc=$rc $out"
 [ -z "$(FLEET_CONF_DIR="$WORK/none" T check)" ] || st_miss "C no file printed something"
-[ "$FAIL" = "$f0" ] && st_ok "C check: medians against the limits, cold not judged, over ⇒ exit 1, no file ⇒ nothing"
+[ "$FAIL" = "$f0" ] && st_ok "C check: ⌘P by its 九成五, a session by its median, cold not judged, over ⇒ exit 1, no file ⇒ nothing"
 
 # --- D ---------------------------------------------------------------------------
 python3 - "$BIN" "$WORK" <<'PY' && st_ok "D a long file keeps its newest half; an unwritable home costs only the line" || st_miss "D rotation / unwritable"
@@ -115,14 +119,14 @@ PY
 sed -n '/^# --- timing: ⌘P/,/^# --- 新建耗时/p' "$BIN/fleet-doctor.sh" | sed "s#\$(dirname \"\$0\")#$BIN#" > "$WORK/row.sh"
 row() { bash -c 'pass() { echo "PASS $1 $2"; }; warn() { echo "WARN $1 $2"; }; . "$1"' _ "$WORK/row.sh"; }
 f0=$FAIL
-out=$(row)
-printf '%s\n' "$out" | grep -q '^PASS timing ⌘P → 面板 p50 0.20s (3 次) · 新会话 → 能打字 p50 0.30s (2 次，冷启 1)$' \
+out=$(FLEET_TIMING_PANEL_MS=500 row)
+printf '%s\n' "$out" | grep -q '^PASS timing ⌘P → 面板 九成五 0.30s · p50 0.20s (3 次) · 新会话 → 能打字 p50 0.30s (2 次，冷启 1)$' \
   || st_miss "F PASS under the limits: $out"
-out=$(FLEET_TIMING_PANEL_MS=150 row)
-printf '%s\n' "$out" | grep -q '^WARN timing ⌘P → 面板 p50 0.20s (3 次) > 0.1s' || st_miss "F WARN over a limit: $out"
+out=$(row)
+printf '%s\n' "$out" | grep -q '^WARN timing ⌘P → 面板 九成五 0.30s · p50 0.20s (3 次) > 0.10s' || st_miss "F WARN over a limit: $out"
 rm -f "$FLEET_CONF_DIR/timing/session.ndjson"; T add session start=9000 go=10 total=9010
 out=$(row)
-printf '%s\n' "$out" | grep -q '^WARN timing .*新会话 → 能打字 p50 9.01s (1 次) > 8.0s' || st_miss "F WARN a slow start: $out"
+printf '%s\n' "$out" | grep -q '^WARN timing .*新会话 → 能打字 p50 9.01s (1 次) > 8.00s' || st_miss "F WARN a slow start: $out"
 [ -z "$(FLEET_CONF_DIR="$WORK/none" row)" ] || st_miss "F no run printed a row"
 [ "$FAIL" = "$f0" ] && st_ok "F doctor timing: PASS under, WARN over (a slow start too), no row with nothing measured"
 

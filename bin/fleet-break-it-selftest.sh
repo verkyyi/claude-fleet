@@ -6501,6 +6501,43 @@ drill_task_start_unseen() {
   WHAT='开局几秒就退：ID 上「未起来：<原因>」、本机日志一行、父会话收到一次；同因不重复；起来了答「起来了」；tick 判 stalled 不算在跑，await 当场 NOT-STARTED，提示 respawn 原记录'
 }
 
+# ⌘P's resident panel gone (T890): the key's popup runs the connector, which must
+# never wait on a server that is not there. Break it for real — a socket file left
+# by a killed server (nobody listens) and a server that accepts and never answers —
+# and the connector runs the Python panel itself, at once (50 ms connect, 1 s
+# answer), with the keypress's --view / --client.
+drill_panel_server_dead() {
+  CAP=10; local t0 out
+  t0=$(now)
+  mkdir -p "$WORK/pnl" && chmod 700 "$WORK/pnl"
+  out=$(FLEET_PANEL_SOCK_DIR="$WORK/pnl" python3 - "$BIN" 2>&1 <<'PY'
+import importlib.util, os, socket, subprocess, sys, time
+B = sys.argv[1]
+spec = importlib.util.spec_from_file_location("ps", B + "/fleet-panel-server.py")
+ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
+def attach(view):
+    env = dict(os.environ, FLEET_PANEL_CTX="fl@view-%s|/dev/ttys9|@1|||||80" % view)
+    t = time.time()
+    out = subprocess.run([sys.executable, B + "/fleet-panel-server.py", "attach", "--", "sh", "-c", 'echo "FELL $*"', "x"],
+                         env=env, capture_output=True, text=True, timeout=10).stdout.strip()
+    return out, time.time() - t
+# a socket nobody listens on
+dead = socket.socket(socket.AF_UNIX); dead.bind(str(ps.sock_path("dead"))); dead.close()
+out, secs = attach("dead")
+assert out == "FELL --view fl@view-dead --client /dev/ttys9" and secs < 2, (out, secs)
+# a server that takes the connection and never answers
+hung = socket.socket(socket.AF_UNIX); hung.bind(str(ps.sock_path("hung"))); hung.listen(4)
+out, secs = attach("hung")
+assert out == "FELL --view fl@view-hung --client /dev/ttys9" and secs < 2, (out, secs)
+print("ok")
+PY
+) || { WHY="a dead resident panel held ⌘P: $out"; return 1; }
+  [ "$out" = ok ] || { WHY="dead panel: $out"; return 1; }
+  suite_holds fleet-panel-server-selftest.sh 'C no server' 'G its 看台 gone' || return 1
+  SECS=$(since "$t0")
+  WHAT='常驻面板死了（旧 socket 没人听）或卡住（收下连接不答）：连接器 2 秒内改走原来的 Python 面板，带着按键时的 --view / --client；Go 连接器同一条由 agent/panel_test.go 守住'
+}
+
 # Home moved, panel changed (EPIC T644 C7): the operator moved the 看台's home from
 # one machine to another and the first one's sessions lost their short codes and their EPIC parent
 # — each machine's ID ledger is its own, and the panel read only this machine's.
