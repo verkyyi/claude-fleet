@@ -216,10 +216,7 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
       const id = firstLabel(m.hostname);
       const nodes = byHost.get(id.toLowerCase()) || [];
       const kind: Kind = isPersonPod(m.hostname) ? "person" : "fixed";
-      // 期望 / 实际 (claude-fleet#2214): a managed machine's newest desired pair
-      const desired = nodes.map((n) => n.desired).filter(Boolean).sort((a, b) => b!.want - a!.want)[0];
       const installed = runtimeVersions(m, nodes);
-      const offDesired = !!desired && (desired.want !== desired.reached || !!desired.diff);
       const offStable = installed.some((v) => /^[0-9a-f]{7,}$/i.test(v) && stables.length > 0 && !stables.some((s) => sameVersion(v, s)));
       const status: Status = m.status === "maintenance" ? "maintenance" : m.status === "online" ? "online" : "lost";
       // A retired login's last heartbeat is history, not current capacity.
@@ -238,7 +235,9 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
         sessions: m.sessions,
         cap,
         version: installed.map(short).join(" / "),
-        behind: offDesired || offStable,
+        // Configuration convergence is shown separately in the detail card;
+        // an unacknowledged config revision is not an outdated runtime.
+        behind: offStable,
         stableShort: short(stables[0]),
         door: doorOf(m),
         seen: m.last_heartbeat,

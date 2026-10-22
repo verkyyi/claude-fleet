@@ -34,6 +34,7 @@ const versionRow = (m, ns) => machineRows({ machines: [m], nodes: ns }, { stable
 const personal = { ...client, status: 'online', fleet_version: '0b591685' };
 assert.equal(versionRow(machine, [personal, compute]).version, 'dfc510e');
 assert.equal(versionRow(machine, [personal, compute]).behind, false);
+assert.equal(versionRow(machine, [personal, { ...compute, desired: { want: 1, reached: 0 } }]).behind, false);
 assert.equal(versionRow({ ...machine, installs: undefined }, [personal, compute]).version, 'ccb0d24');
 assert.equal(versionRow(machine, [personal]).version, '');
 assert.equal(versionRow(machine, [personal, { ...compute, status: 'lost' }]).version, '');
