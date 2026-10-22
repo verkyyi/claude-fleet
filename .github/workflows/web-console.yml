@@ -70,6 +70,8 @@ jobs:
         run: node --experimental-strip-types test/chat-placeholder.mjs
       - name: The 试用海报's words and layout (CHZ0)
         run: node --experimental-strip-types test/poster.mjs
+      - name: Machine parking savings — bilingual and narrow layout (RBQG)
+        run: node test/park-metrics.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build

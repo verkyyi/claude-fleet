@@ -741,6 +741,8 @@ type Welcome struct {
 // Heartbeat is the payload of TypeHeartbeat: what one login on one machine
 // looks like right now.
 type Heartbeat struct {
+	*ParkMetrics
+
 	Hostname string `json:"hostname"`
 	// LoginsRefused is the machine link's own word (claude-fleet#2501):
 	// login → the hub's WRONG_LOGIN for its last hello, for every login of

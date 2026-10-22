@@ -1035,3 +1035,9 @@ From `fleet doctor`.
 
 - **What it is**: whether each of the seven security gates that must be met before a public release is done (for the maintainers).
 - **On WARN / FAIL**: it only reports; nothing to do.
+
+#### `park`
+
+From `fleet doctor`.
+
+Working, idle and parked sessions, saved memory and the complete process-tree RSS of idle sessions. Use `fleet doctor --park` to read just this row. WARN means the census could not be read: check tmux access and the node version; unknown is never zero. `eligible` counts idle sessions with no viewer or background job and less than 0.5 CPU seconds over a minute; it stays unknown before the first full sample. Reasons explain idle sessions still in memory. `old-shell` means an older wrapper cannot park automatically; newly opened sessions use the newer wrapper after the old session finishes.

@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -370,8 +371,20 @@ def inventory_row(parts):
     node's row has none: absent."""
     parts = list(parts)
     extra = {}
+    # Column 37 (RBQG): read-only park census; absent from older adapters.
+    if len(parts) >= 37 and parts[-1].startswith("park="):
+        try:
+            p = json.loads(parts.pop()[5:])
+            if (all(k in p for k in ("rss_mb", "saved_mb", "why", "quiet"))
+                    and p.get("state") in ("awake", "parked")
+                    and all(p.get(k) is None or (isinstance(p[k], (int, float)) and math.isfinite(p[k]) and p[k] >= 0)
+                            for k in ("rss_mb", "saved_mb"))):
+                extra["park"] = p
+        except (ValueError, TypeError, AttributeError):
+            pass
     if len(parts) >= 36 and parts[-1].startswith("cantalk="):
         extra["can_talk"] = parts.pop()[8:] == "1"
+
     if len(parts) >= 35 and parts[-1].startswith("origin="):
         if parts.pop()[7:] == "web":
             extra["origin"] = "web"

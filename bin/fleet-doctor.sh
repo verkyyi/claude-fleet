@@ -119,7 +119,20 @@ print(json.dumps({"v": 1, "rc": int(sys.argv[1]), "fails": n("FAIL"), "warns": n
   exit "$_djrc"
 fi
 
+# A focused read is also useful on a node during acceptance.
+park_row() {
+  if _park=$(python3 "$(dirname "$0")/fleet_park_metrics.py" doctor 2>/dev/null); then
+    info park "$_park"
+  else
+    warn park "session census unavailable; no zero inferred"
+  fi
+}
+if [ "${1:-}" = --park ]; then
+  park_row
+  exit 0
+fi
 printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
+[ -f "$(dirname "$0")/fleet_park_metrics.py" ] && park_row
 
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
 # $conf_dir is defaulted once at the top of the file (see the note there).
