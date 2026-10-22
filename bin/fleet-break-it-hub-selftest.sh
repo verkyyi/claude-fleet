@@ -2641,6 +2641,15 @@ drill_codex_quota_sticky() {
   SECS=$(since "$t0")
 }
 
+drill_codex_continuation_account() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests fleet_credproxy_affinity_test.go TestCodexContinuationAcrossReplicas TestCodexContinuationLegacyBoundaryCannotReselect || return 1
+  go_half '^TestCodexContinuation' ./shared/credproxy ./hub/store; case $? in 1) return 1 ;; esac
+  WHAT='Codex 续接只能回到来源账号；跨副本、冷缓存与故障改绑均不跨账号重放（隔离 Go fixtures）'
+  SECS=$(since "$t0")
+}
+
 drill_credential_quota_unbound() {
   CAP=120; local t0; GO_RAN=0
   t0=$(now)

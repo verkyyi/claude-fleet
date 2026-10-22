@@ -133,9 +133,45 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now, req.RequestBoundary && req.Rejected == nil)
+	endpoint := s.passEndpoint(c.ID, now)
+	if req.CodexRecord != nil {
+		record := req.CodexRecord
+		if req.Provider != credvault.Codex || req.Codex != nil || req.Rejected != nil ||
+			record.CredentialID == "" || !credproxy.ValidCodexReferences(record.References) {
+			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation record")
+			return
+		}
+		ch, err := s.codexAffinityChoice(c.Principal, endpoint, store.CodexAffinity{Owner: record.Owner, CredentialID: record.CredentialID}, now)
+		if err != nil {
+			out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_not_authorized"
+		} else if err := s.Store.RecordCodexAffinity(c.WorkerID, record.References, store.CodexAffinity{
+			Owner: ch.PrincipalID, Account: ch.Account, CredentialID: record.CredentialID,
+		}, now); err != nil {
+			httpError(w, http.StatusInternalServerError, "could not record continuation source")
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	var b store.SessionBind
+	var expectedIdentity string
+	var err error
+	if req.Codex != nil {
+		if req.Provider != credvault.Codex || req.Rejected != nil {
+			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation route")
+			return
+		}
+		b, expectedIdentity, err = s.codexAffinityBind(c.WorkerID, c.Principal, endpoint, *req.Codex, now)
+	} else {
+		// The old boolean proves only a new HTTP request, never independence
+		// from account-bound provider state. Older callers retain sticky state.
+		b, err = s.sessionBind(c.WorkerID, c.Principal, endpoint, req.Provider, now)
+	}
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
+		if req.Codex != nil {
+			out.Error = credproxy.CodexContinuationUnavailable
+		}
 		if req.Provider == credvault.Claude && errors.Is(err, errNoProviderAccount) {
 			out.Error = credproxy.ClaudePoolUnavailable
 		}
@@ -143,12 +179,25 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out.Owner, out.Account, out.BindRev = b.Owner, b.Account, b.Rev
-	if req.Rejected != nil && req.Rejected.Owner == b.Owner && req.Rejected.Account == b.Account {
-		if _, err := s.Vault.RejectUpstream(b.Owner, req.Provider, b.Account, req.Rejected.Fingerprint, req.Rejected.Code, "central-proxy"); err != nil {
-			httpError(w, http.StatusInternalServerError, "could not record upstream credential rejection")
+	if req.Rejected != nil {
+		// The failed request can be a continuation on an older binding. Check
+		// current authorization for its source, not equality with today's sticky.
+		choices, choiceErr := s.sessionBindChoices(c.Principal, endpoint, req.Provider)
+		if choiceErr != nil {
+			httpError(w, http.StatusInternalServerError, "could not check rejection source")
 			return
 		}
+		for _, ch := range choices {
+			if ch.PrincipalID == req.Rejected.Owner && ch.Account == req.Rejected.Account {
+				if _, err := s.Vault.RejectUpstream(ch.PrincipalID, req.Provider, ch.Account, req.Rejected.Fingerprint, req.Rejected.Code, "central-proxy"); err != nil {
+					httpError(w, http.StatusInternalServerError, "could not record upstream credential rejection")
+					return
+				}
+				break
+			}
+		}
 	}
+
 	acc, identity, err := s.leaseIdentified(r.Context(), b.Owner, req.Provider, b.Account)
 	if err != nil {
 		if errors.Is(err, credvault.ErrLocked) {
@@ -156,6 +205,11 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		out.Valid, out.Error, out.Reason = false, "no_credential", "account "+b.Account+": "+err.Error()
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if expectedIdentity != "" && expectedIdentity != identity {
+		out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_credential_replaced"
 		writeJSON(w, http.StatusOK, out)
 		return
 	}

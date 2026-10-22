@@ -408,12 +408,44 @@ credits 标志，没有可跨订阅比较的绝对 token / 请求容量，也没
   读数未知本身不证明切换有收益；显式人工绑定不被主动策略覆盖。服务会话保留既有
   yield 逻辑，不使用新的主动换绑。429/授权失效仍走原有故障处理，不受机会型保持阻挡。
 
-**请求边界与并发。** 新中心代理只在发送新请求前的 resolve 带 `request_boundary`，
-缓存至多 30 秒；旧代理不带此字段便不会主动改已有绑定。401 处理的 resolve 不带该字段。
-每个请求拿自己的凭据快照，流开始后不替换 token、不取消流、不重启 Agent。双副本或
-并发请求可以跨绑定版本重叠：旧流继续用旧账号直到结束，新请求可用新账号；这不承诺
-所有副本全局等待零 inflight。绑定更新使用数据库 revision CAS，较旧决定不能覆盖另一
-请求或人工操作。诊断分别记录决定和提交后实际版本，缓存更新只影响后续请求。
+**请求边界与账号亲和。** 新 HTTP 请求不等于独立上下文。只有可识别的自包含请求
+（例如不带引用的完整文字历史）才允许按上述滞后策略重选。`previous_response_id`、
+conversation、item/call ID、加密 reasoning/compaction 和 `x-codex-turn-state` /
+`x-codex-routing-hint` 必须回到其来源凭据。来源由中心代理观察上游输出后写入
+hub 的 `fleet_codex_affinity`，以 worker + 带用途的 SHA256 引用为键，保存所属人与
+稳定凭据身份；不保存原文、加密正文、header 或 token。代理冷启动、两副本和 pass
+续期共享同一记录。引用有效期为最近观察后 30 天；到期、未知、跨来源混合、同一引用发生身份冲突
+均明确返回 `409 codex_continuation_unavailable`，不能猜当前绑定就是来源。过期身份与
+冲突记录保留为墓碑，不能删掉后让重复引用转属另一个账号；此表随已观察引用数增长，
+发布容量验收须计入这部分数据库存储。
+
+每次 Codex 请求都向 hub 询问来源，不走仅按 pass 缓存的旧 resolve 或 stale fallback；
+hub 不可用时返回 503。来源账号仍须通过 allowlist、暂停、reauth、refresh 健康与
+cooldown 检查，替换同名凭据不继承旧引用。续接只取得该来源的 lease，不覆盖较新的
+sticky 或人工绑定。旧 `request_boundary` boolean 不再触发主动重选；旧消费者仍可
+resolve，但没有证明上下文独立的能力。
+
+每个请求拿自己的凭据快照，流开始后不替换 token、不取消流、不重启 Agent。两个
+副本可跨版本并发：A 的旧流继续到结束，B 上的独立请求正常进行；A 的后续续接仍回
+A。绑定更新使用 revision CAS，较旧决定不能覆盖另一个请求或人工操作。来源记录必须先于引用交付：SSE 按事件登记再原字节转发；普通 JSON 最多缓冲 8 MiB。
+上游请求协商 identity 编码，非预期的压缩响应拒绝。登记失败或超出事件/响应边界时
+终止该响应，不交付未登记状态、不重放推理；已交付的流内容仍不可撤回。这增加 hub
+依赖和事件延迟，必须纳入发布验收。
+
+**兼容限制与发布前提。** 这是保守协议，不保证未知请求结构可自动移植。当前识别
+文字/内嵌图片、function/custom tool、reasoning/compaction 与上述显式引用；未知
+输入项、未知顶层字段、压缩请求体、外部 file/vector-store 依赖明确拒绝。引用上限
+每请求 4096 个，数据库批量读写；不截断后猜测。超出解析上限的上游响应停止交付；未观察到的输出，其后续引用拒绝。
+上线前生成的 opaque 历史没有来源记录，不可默认为当前账号；因此现存会话是否可继续
+必须在正式发布验收中评估。不得以删除历史、剥离 opaque 内容、重放或重启 Agent 来
+伪造可移植性。生产 rollout 必须先确认所有中心代理支持本协议，再开放会改变绑定的
+流量；混用旧代理的缓存不能保证亲和。
+
+依据：OpenAI 官方 [conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
+和 [compaction](https://developers.openai.com/api/docs/guides/compaction) 文档说明这些
+对象携带续接状态，未承诺跨订阅账号可移植。本机 Codex 0.162.1 对应源码
+`codex-rs/core/src/client.rs` 的 `ModelClientSession` 也明确约定 turn-state 只在同一
+turn 内复用，auth ownership 变化时清除。网关不能替 Agent 清除或重建其状态。
 
 Codex 的配额 429 仍记 cooldown、选择其他候选，但本次原样返回 429，**不跨账号重放**。
 下一次独立请求才使用新绑定。401 access 刷新仍记录拒绝并更新健康状态，但刷新结果也
@@ -424,8 +456,8 @@ Codex 的配额 429 仍记 cooldown、选择其他候选，但本次原样返回
 请求头。`minimum_hold`、`no_known_safe_alternative`、`explicit_binding` 等原因可以解释
 为什么没有切换。此策略不触发额外额度探测。
 
-验收使用 `TestCodexQuota*`、`TestCodexSelection*` 和现有 `TestCredProxy*` / `TestCredPolicy*`，
-假时钟、临时数据库和 loopback 假上游；`codex-quota-sticky` 是 BREAK-IT 入口。不得以真实
+验收使用 `TestCodexQuota*`、`TestCodexSelection*`、`TestCodexContinuation*` 和现有 `TestCredProxy*` / `TestCredPolicy*`，
+假时钟、临时数据库和 loopback 假上游；`codex-quota-sticky` 和 `codex-continuation-account` 是 BREAK-IT 入口。不得以真实
 订阅请求做压力测试。**合并不是生产启用**：需正常发布 hub 与中心代理；仅 hub 更新时
 旧代理不会触发已有 sticky 的机会型重选。发布后通过正常业务请求的脱敏选择日志核对
 版本、双窗口状态、保持原因和绑定变化，不为验收额外花订阅额度；发布结果独立记录。
