@@ -1406,6 +1406,7 @@ drill_door_home_hostcert() {
 }
 
 drill_door_fast_exec_close() {
+  CAP=200
   local t0 gohalf; t0=$(now)
   gohalf="no go toolchain here — the Go gate runs TestDoorHomeDialsBackToTheDoor"
   go_half '^TestDoorHomeDialsBackToTheDoor$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
