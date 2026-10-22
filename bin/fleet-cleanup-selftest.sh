@@ -165,6 +165,19 @@ case "\${1:-}" in
                       : ;;   # window @7 → issue 42
     esac ;;
   display-message)
+    case "\${!#}" in
+      '#{@fleet_id}') echo '00000042-0000-4000-8000-000000000042'; exit 0 ;;
+      *'#{@reap_hold}'*'#{@fleet_id}') printf '%s\t\t00000042-0000-4000-8000-000000000042\n' "\${FAKE_HOLD:-}"; exit 0 ;;
+      *'#{@mod_accept}'*)
+        python3 - "\${!#}" <<'PYFIELDS'
+import os, re, sys
+facts = dict(pane_id='%7', pane_pid='500', **{'@cc_agent': 'codex', '@park_wrap_ver': '3',
+             '@claude_state': os.environ.get('WIN_STATE_FAKE', 'done'),
+             '@codex_session_id': '00000042-0000-4000-8000-000000000042'})
+print(re.sub(r'#{([^}]+)}', lambda m: facts.get(m[1], ''), sys.argv[1]))
+PYFIELDS
+        exit 0 ;;
+    esac
     case "\$*" in
       # fleet_window_repo's one read (#1943): spawners always stamp @repo, and a
       # window whose repo is unknown is never matched — window @7 is acme/widgets'.
@@ -207,6 +220,16 @@ case "$*" in
 esac
 PSFAKE
 chmod +x "$WORK/fakebin/ps"
+
+# Native proof for this fake process table (there is no app-server/composer).
+# The real liveness checks still decide state, process age, background and hold.
+cat > "$WORK/gate-win" <<'GATEWIN'
+#!/bin/sh
+printf 'testsess\t@%s\n' "$(if [ "${SCRATCH_WIN:-0}" = 1 ]; then echo 9; else echo 7; fi)"
+GATEWIN
+printf '#!/bin/sh\nprintf '\''{"ok":true}\\n'\''\n' > "$WORK/native-idle"
+chmod +x "$WORK/gate-win" "$WORK/native-idle"
+export FLEET_GATE_WIN_CMD="$WORK/gate-win" FLEET_GATE_PARK_PROBE_CMD="$WORK/native-idle"
 
 # Freeze only the cleanup clock when requested, to test the exact boundary
 # without sleeps. Timestamp parsing/formatting still uses the host BSD/GNU date.

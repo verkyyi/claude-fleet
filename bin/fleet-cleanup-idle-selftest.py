@@ -1221,7 +1221,7 @@ class TaskSession(Rig):
         shutil.rmtree(lock)
         # the reopen's outcome: the old window gone, a NEW one on the same session
         opts = {k: self.tm("display-message", "-p", "-t", self.win, "#{" + k + "}").strip()
-                for k in ("@raw", "@worktree", "@cc_agent", "@task", "@task_flow", "@reap_policy")}
+                for k in ("@raw", "@worktree", "@cc_agent", "@task", "@task_flow", "@reap_policy", "@fleet_id")}
         subprocess.run(["tmux", "-L", self.label, "kill-window", "-t", self.win], check=True, timeout=20,
                        env=dict(self.env, FLEET_ALLOW_TMUX_DESTROY="1"))   # the reopen's /exit
         self.win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
