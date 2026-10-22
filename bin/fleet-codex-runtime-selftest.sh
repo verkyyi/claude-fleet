@@ -277,7 +277,7 @@ class PretrustTests(unittest.TestCase):
     def test_run_pretrusts_only_with_the_bypass_flag(self):
         src = RUNTIME.read_text()
         self.assertIn("'--dangerously-bypass-hook-trust' in options", src)
-        self.assertLess(src.index('trust_launch_hooks(remote'), src.index("client = subprocess.Popen(['codex', '--remote'"))
+        self.assertLess(src.index('trust_launch_hooks(remote'), src.index('client = subprocess.Popen(command'))
 
 class LaunchWitnessRetiredTests(unittest.TestCase):
     """EPIC T497 C8: the runtime witnesses no launch receipt any more (T485's

@@ -446,6 +446,7 @@ class ParkRelay:
         self.server.setblocking(False)
         self.generation = 0
         self.exiting = False
+        self.exit_confirmed = False
         self.presence_at = 0
         if pane():
             tmux(["set-option", "-w", "-t", pane(), "@park_relay", self.path])
@@ -461,16 +462,29 @@ class ParkRelay:
                 request = json.loads(client.recv(2048))
                 op = request.get("op")
                 if op == "status":
-                    reply = dict(ok=not self.exiting, generation=self.generation, relay_pid=os.getpid(), agent_pid=self.agent_pid)
+                    reply = dict(ok=not self.exiting, generation=self.generation, relay_pid=os.getpid(),
+                                 agent_pid=self.agent_pid, park_exit=["typed", "paste"])
                 elif (op == "exit" and not self.exiting and not pending_input and not buffer
-                      and not busy and request.get("generation") == self.generation):
-                    buffer.extend(b"/exit\r")
+                      and not busy and request.get("generation") == self.generation
+                      and request.get("park_exit", "typed") in ("typed", "paste")):
+                    buffer.extend(b"\x1b[200~/exit\x1b[201~\r" if request.get("park_exit") == "paste" else b"/exit\r")
                     self.exiting = True
                     reply = dict(ok=True)
+                elif (op == 'confirm-exit' and self.exiting and not self.exit_confirmed
+                      and not pending_input and not buffer and request.get('generation') == self.generation):
+                    import hashlib
+                    screen = subprocess.check_output(['tmux', 'capture-pane', '-p', '-t', pane()],
+                                                     text=True, timeout=3)
+                    if request.get('screen') == hashlib.sha256(screen.encode()).hexdigest():
+                        buffer.extend(b'\r')
+                        self.exit_confirmed = True
+                        reply = dict(ok=True)
+                    else:
+                        reply = dict(ok=False, why='dialog_changed')
                 else:
                     reply = dict(ok=False, why="input_changed")
                 client.sendall((json.dumps(reply) + "\n").encode())
-            except (OSError, ValueError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 pass
 
     def close(self):

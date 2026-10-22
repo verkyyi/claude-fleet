@@ -133,7 +133,7 @@ codex_bin() { # the release pin, else the login's own codex for the conversation
 server_env() {
   env -u TMUX -u TMUX_PANE -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT \
     FLEET_WEBCHAT_STATE="$STATE" FLEET_WEBCHAT_SDK="$SDK" FLEET_WEBCHAT_CLAUDE="$(claude_bin || true)" FLEET_WEBCHAT_CODEX_BIN="$(codex_bin || true)" \
-    FLEET_WEBCHAT_SESSION_CRED="$BIN/fleet-session-cred.sh" "$@"
+    FLEET_WEBCHAT_BIN="${FLEET_WEBCHAT_BIN:-$BIN}" FLEET_WEBCHAT_SESSION_CRED="$BIN/fleet-session-cred.sh" "$@"
 }
 
 serve() { # the service's command: the socket, in the foreground

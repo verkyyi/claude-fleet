@@ -82,7 +82,7 @@ def scenario(fixture, delayed=False):
                 with patch.object(subprocess, 'Popen', recorded_popen):
                     spinner = spinner_module.Spinner()
                     assert spinner.periods == dict(stuck_check=10, needs_check=20, degen_check=15,
-                                                   hb_stamp=20, daemon_watch=30)
+                                                   hb_stamp=20, daemon_watch=30, park_timers=5)
                     for name in spinner.periods:
                         original = getattr(spinner, name)
 
