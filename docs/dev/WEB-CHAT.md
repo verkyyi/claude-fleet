@@ -410,6 +410,62 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 测试：e2e `TestChatSayToSession`、`TestChatPage`；`TestBoardOriginAndCanTalk`；`session-title-selftest.sh`（第 35 列）；
   `fleet-view-board-selftest.py`（网页开的一行）；`fleet-view-actions-selftest.sh`（`webopen`）。
 
+## 会话合一 ①：会话门、停放与接回（HHV0）
+
+网页不再自己跑一段对话、也不再「接管 / 交回」：每个对话就是家机器上的一个**会话**（一个窗口、一个
+`@fleet_id`，和终端开的同一张表），网页和终端都只是往里「说一句」的口子，先到先进。家机上的对话服务
+是这些会话的**门**：收下网页的一句，交给那个会话作为它的下一轮。
+
+| 路（家机 socket） | 做什么 |
+|---|---|
+| `POST /api/say` `{fid, text, images≤4, id?}` | 一句话（+ 图，存进 `media/`，路径写进这一轮）→ `{delivery, state: sent\|queued\|refused, reason}` |
+| `POST /api/open` `{agent, text, images?}` | 网页新开一个会话：本机 no-repo 窗口，`@session_origin web`，这句是它的第一轮 → `{fid, agent, state}` |
+| `POST /api/answer` `{fid, fp, answers\|picks}` · `{fid, fp, allow}` | 替它答 AskUserQuestion（`fleet-dialog-answer.sh`）/ 权限（`fleet-permission.sh --by 网页`） |
+| `POST /api/stop` `{fid}` | 停掉正在答的一轮：Claude 确认在答时按 Esc（实测 0.24–0.34 s），Codex `turn/interrupt` |
+| `POST /api/ack` `{fid, delivery}` | 页面把退回的一句放回输入框后，门里删掉它 |
+| `GET /api/session?fid=` | `{can_talk, queue:[{delivery,text,why}], ask?}` |
+| `GET /api/view?fid=` | 读记录的流（F481 那条）；`{t:"state"}` 不再有 holder，带 `can_talk`、`queue`、`ask` |
+| `POST /api/migrate` · `GET /api/ended` | 旧「我的对话」变成一个会话（同一对话 resume，窗口名「我的对话」）；收起过的 ≤200 段进「已结束的会话」 |
+
+没有 `fid` 的 `/api/turn|new|take|stop|answer` 还是旧的 SDK 对话，直到入口的 `fleet.chat.unified`
+打开（PQ41）；迁移过的对话再走旧路回 410 `moved`（带 fid）。
+
+**门** = `bin/fleet_session_gate.py`。每句一条记录先落盘（`$FLEET_CONF_DIR/session-gate/<fid>/`，每句
+一个 delivery id），再交出去，所以服务重启丢不了、也不会发两遍（WD8F ①：一轮在它自己的窗口里跑，
+重启对话服务掐不断它；排着的照样从盘上接着送）。
+
+- **Claude**：fleet mod 的条件接收 `idle.v2`（mod ≥ 0.7.0，`mod/fleet/hooks/accept.ts`）：投进窗口的
+  收件箱槽位，到引擎入口边界再查一次——没有在跑的一轮、输入框没有草稿、其间没有 /clear——过了就是
+  它自己的一轮（回执：mod 的回执文件，或这一轮隐藏上下文里的 delivery id）；拒了就排着，服务每 1.5 秒
+  tick 一次，空闲了再交；没答复就先查回执，绝不重投同一句。网页的一句被停止后，引擎会把它放回输入框，
+  mod 认出是门自己的话就清掉（不然后面每句都会被当成「有人在打字」）。
+- **Codex**：它自己的队列（`thread/queue/add` 带 clientUserMessageId，再 `thread/queue/start`）：空闲就
+  开始，在答就排在 Codex 自己的队列里，答完它自己开始，门扫回执确认。
+- 一个会话一次交一句，最老的先：在答时连说两句 = 两轮，按顺序。
+- 退回网页（`why`）：排了 30 分钟（`FLEET_GATE_QUEUE_SECS`）还没进 `expired` · 换了对话（/clear、另一个
+  id）`session_changed` · 窗口没了 `no_session` · 老版本 `old_version` · 停放的会话 20 秒没接回
+  `wake_timeout`。排着时的 `why`：`busy` 在答 · `typing` 终端里有草稿 · `asking` 它在问你（先答问题）·
+  `waking` 正在接回。
+- `can_talk`：mod 说 `@mod_accept idle.v2` 的 Claude、停放中的会话（下次启动就是新 mod）、app-server
+  ≥ 0.162 的 Codex；其余只读。清单第 36 列 `cantalk=`，第 5 列停放时写 `parked`（看板画成空闲）。
+
+**停放**（`fleet_session_gate.py park`）：网页开的会话（`@session_origin web`，回收方式 `keep`，
+`fleet_reap_policy.py` 的 `web` 来源）闲了 `FLEET_SESSION_PARK_IDLE`（hub 的 `fleet.session.park_idle`，
+默认 5 分钟，最小 1 分钟，0 = 不停）由 `fleet-cleanup-idle.py web_park` 停放：在答、在问、有话排着、有
+后台任务、有人在终端里看着这个窗口（不算控制模式客户端）都不停；家机空闲内存低于
+`FLEET_PARK_MEM_PCT`（15%，试用账号到份额 80%）时，最久没动的那个闲过 1 分钟就先停。停放 = 智能体进程
+在**它自己的窗口里**退出（mod 跑 `/exit`），窗口、ID、对话、会话凭据（不吊销——接回最慢的就是重新领）
+都留着，窗口读作空闲（`@claude_state done`）。`fleet-session-wrap.sh` 的 `park_hold` 守着它：门写一份
+种子文件并在窗口上挂 `@park_wake`，包装器 `mv` 成 `.taken` 就用同一个会话号 `--resume` 启动、这句随
+启动成为第一轮（不走收件箱）；门过 20 秒用同一个 rename 收回种子，这句退回（BREAK-IT `wake-timeout`）。
+有人切到这个窗口（`fleet open`、⌘P）或在里面按 ↵，它当场接回（BREAK-IT `park-while-watched`）。终端开的
+会话不停放，照旧按它自己的回收方式。
+
+测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、
+`bin/fleet-idle-accept-claude-selftest.sh`（真引擎：入口边界、排队重交、Esc、草稿、竞态；CI 上无 claude 跳过）、
+`bin/fleet-webchat-selftest.mjs --only=gate`（Y：HTTP 路）、`bin/session-wrap-selftest.sh` PK（停放与接回）、
+`bin/fleet-cleanup-idle-selftest.py WebPark`。
+
 ## 浏览器上下文（#4034）
 
 模型知道人此刻从哪儿、用什么在说话：

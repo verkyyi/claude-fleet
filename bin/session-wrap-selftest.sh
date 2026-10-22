@@ -13,6 +13,9 @@
 #      fast launch failure return the status with no page (and stamps @wrap_gone);
 #      a launch the LAUNCHER refused (@launch_refused, #2404) stops on the page
 #      even the first time, ↵ retrying it; q → session-end-hook --recycle
+#   PK a parked session (task HHV0): @parked before the exit ⇒ no page, the window
+#      reads done, the credential is kept; @park_wake + a seed file ⇒ the same
+#      conversation resumed with the seed as its first turn, the seed claimed once
 #   X  the end line's countdown (issue #3170): after the person's own exit it says
 #      「N 秒后关闭 · 按任意键取消」 and at 0 recycles like q (a Codex window too,
 #      and on the plain prompt when the page is broken); a key cancels it and the
@@ -196,6 +199,28 @@ waitfor "w/quiet: the wrapper returned" screen_has w 'WRAP_RC=0'
 CHECKS=$((CHECKS + 1)); [ "$(o w @claude_state)" != exited ] || fail "w/quiet: a fleet exit drew the recovery page"
 eq "w/quiet: no relaunch" "$n" "$(grep -c . "$WORK/w/argv")"
 eq "w/quiet: the marker is consumed" "" "$(o w @wrap_quiet)"
+
+# PK (task HHV0): a parked session — the gate stamped @parked before its /exit. No
+# page: the window reads idle (done), holds the same conversation, and a wake
+# (@park_wake naming a seed file it claims by rename) resumes it with the seed as
+# the start's first turn; the marks come off.
+win pk 0
+waitfor "pk: first launch" launches pk 1
+tf set-option -w -t sw:pk @parked 1
+printf rc0 > "$WORK/pk/mode"; : > "$WORK/pk/go"
+waitfor "pk: the wrapper holds it parked" eval '[ -n "$(o pk @park_held)" ]'
+eq "pk: a parked window reads idle, never exited" "done" "$(o pk @claude_state)"
+waitfor "pk: it says how it comes back" screen_has pk '已停放'
+CHECKS=$((CHECKS + 1)); eq_recycles 0 || fail "pk: parking recycled the window"
+printf '在吗？' > "$WORK/pk/seed"
+tf set-option -w -t sw:pk @park_wake "$WORK/pk/seed"
+waitfor "pk: the wake relaunched" launches pk 2
+eq "pk: the wake resumes the SAME conversation with the sentence as its first turn" \
+  "--agent claude --resume SID-1 在吗？" "$(sed -n 2p "$WORK/pk/argv")"
+eq "pk: the seed was claimed (never carried twice)" "1" "$([ -e "$WORK/pk/seed.launched" ] && [ ! -e "$WORK/pk/seed" ] && echo 1)"
+eq "pk: the marks come off" "::" "$(o pk @parked):$(o pk @park_wake):$(o pk @park_held)"
+printf rc0 > "$WORK/pk/mode"; : > "$WORK/pk/go"
+waitfor "pk: an ordinary exit after it is the recovery page again" state_is pk exited
 
 # CX (issue #3463): a Codex session that dies however it dies — an error exit, a
 # kill — stops on the page, and ↵ resumes the SAME Codex conversation in the same

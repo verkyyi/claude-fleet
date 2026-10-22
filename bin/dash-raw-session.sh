@@ -199,7 +199,8 @@ while [ "$#" -gt 0 ]; do
     # --reap-origin <word> (T694, 回收 B): where it came from, when the spawn
     # knows better than its own facts — decide (waits on a person's call) ·
     # probe (a scheduled job, a drill) · person · dispatched · member · driver ·
-    # orchestrator. None = read off the spawn (fleet_reap_origin). It picks the
+    # orchestrator · web (a session the web chat opened, task HHV0). None = read
+    # off the spawn (fleet_reap_origin). It picks the
     # default policy (fleet_reap_policy.py ORIGINS) and is stamped @reap_origin.
     --reap-origin)   REAP_ORIGIN="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap-origin=*) REAP_ORIGIN="${1#--reap-origin=}"; shift ;;
@@ -304,7 +305,7 @@ if [ -n "$DISPATCH" ]; then
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-case "$REAP_ORIGIN" in ''|person|dispatched|member|driver|orchestrator|decide|probe) ;;
+case "$REAP_ORIGIN" in ''|person|dispatched|member|driver|orchestrator|decide|probe|web) ;;
   *) printf 'dash-raw-session: --reap-origin takes person|dispatched|member|driver|orchestrator|decide|probe\n' >&2; exit 2 ;;
 esac
 # The reap policy, canonical or refused before anything opens (issue #1902).
@@ -1026,6 +1027,10 @@ fi
 [ "$REAP" = keep ] && case "$REAP_ORIGIN" in dispatched|member) stamp_option @reap_keep_by session 2>/dev/null ;; esac
 # An orchestrator is pinned from its first moment (回收 B): never closed on its own.
 [ "$REAP_ORIGIN" = orchestrator ] && [ "$PIN" != 1 ] && stamp_option @pin 1 2>/dev/null
+# A session the web opened (task HHV0, `--reap-origin web`): the person's
+# conversation — never closed on its own, parked idle (fleet-cleanup-idle.py
+# web_park); its row says origin=web on every list (fleet-control-read.sh).
+[ "$REAP_ORIGIN" = web ] && stamp_option @session_origin web 2>/dev/null
 # A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
 # gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's
 # `working`), so one nobody ever typed into is closed after its grace

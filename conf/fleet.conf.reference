@@ -309,6 +309,28 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # @label=Reclaim idle scratch after @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
 #FLEET_SCRATCH_MAX_IDLE=0
 
+# --- Web sessions park when idle (task HHV0, 会话合一 ①) ---------------------------
+# A session the web chat opened (@session_origin web) is never closed on its own;
+# idle this long (no turn running, no question open, no background job, nobody
+# looking at its window in a terminal) its agent's process ends IN ITS OWN WINDOW
+# — the window, its ID, its conversation and its session credential stay, every
+# list reads it idle — and the next sentence resumes the same conversation there
+# (bin/fleet_session_gate.py park / wake; fleet-cleanup-idle.py web_park). The
+# hub setting fleet.session.park_idle hands it down; seconds or 5m / 2h; never
+# under 60; 0 = never park. Under memory pressure the longest idle web session
+# parks first, past one minute, when free memory is under FLEET_PARK_MEM_PCT %.
+# @label=Park an idle web session after @group=janitor @tier=advanced @scope=fleet @edit=str
+#FLEET_SESSION_PARK_IDLE=300
+# @label=Park early under memory pressure below @group=janitor @tier=advanced @scope=fleet @edit=int @unit=percent
+#FLEET_PARK_MEM_PCT=15
+# A sentence the web said waits this long for its session to be free, then goes
+# back to the page's box with its reason; a parked session that does not come
+# back within FLEET_GATE_WAKE_SECS returns its sentence (「这一句没送到 · 重试」).
+# @label=Web sentence waits at most @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
+#FLEET_GATE_QUEUE_SECS=1800
+# @label=Wake a parked session within @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
+#FLEET_GATE_WAKE_SECS=20
+
 # --- Rotation lease TTL (issue #550) -------------------------------------------
 # An account rotation (bin/fleet-migrate.sh) closes a walled window and opens its
 # replacement seconds later. Through that gap the worktree has no window and no

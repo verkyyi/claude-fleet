@@ -103,7 +103,7 @@ export async function pollInbox(io: InboxIo, dir: string): Promise<number> {
       let request: Record<string, unknown> | undefined
       try { request = JSON.parse(text) } catch { /* Keep the command parser's error. */ }
       if (request?.accept !== undefined) {
-        if (request.accept !== 'idle.v1') throw new Error('unsupported accept')
+        if (request.accept !== 'idle.v1' && request.accept !== 'idle.v2') throw new Error('unsupported accept')
         if (!io.accept) throw new Error('idle accept unavailable')
         result = { ok: true, ...(await io.accept(request)) }
       } else if (request?.query !== undefined) {

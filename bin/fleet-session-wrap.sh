@@ -317,6 +317,49 @@ auto_resume_secs() {
 }
 
 PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+
+# park_hold — a parked window (task HHV0): the agent's process is gone, the window,
+# its ID, its conversation and its credential stay, and every list reads it idle
+# (@claude_state done). It waits for a wake — the gate's @park_wake (a seed file the
+# wake claims by renaming it, the gate cancelling with the same rename, so exactly
+# one side wins: the first sentence rides the start, never twice), a person
+# switching to this window (a terminal client showing it), or ↵ here. Sets
+# park_seed (the first turn's words, may be empty) and park_act (wake | quit).
+park_hold() {
+  park_act=wake; park_seed=''
+  wset @claude_needs ''
+  wset @claude_state_src wrapper
+  wset @claude_state "done"
+  wset @park_held "$(date +%s)"
+  printf '\n  已停放 · 发一句或按 ↵ 即接回同一个对话\n  parked · say something or press ↵ to resume the same conversation\n' 2>/dev/null
+  local w k seed me t
+  me=$(opt window_id)
+  while :; do
+    w=$(opt @park_wake)
+    if [ -n "$w" ]; then
+      wset -u @park_wake
+      if mv "$w" "$w.taken" 2>/dev/null; then
+        park_seed=$(cat "$w.taken" 2>/dev/null)
+        : > "$w.launched" 2>/dev/null
+        rm -f "$w.taken" 2>/dev/null
+        break
+      fi
+    fi
+    # a person came to look at it (fleet open, ⌘P, a switch): bring it back
+    if tmux list-clients -F '#{client_control_mode}	#{window_id}' 2>/dev/null \
+        | awk -F'\t' -v w="$me" '$1 != 1 && $2 == w { f = 1 } END { exit !f }'; then
+      break
+    fi
+    k=''; t=$SECONDS
+    IFS= read -rsn1 -t 1 k; seed=$?
+    # a second went by, no key: bash 4+ says >128, 3.2 says 1 — as an EOF does,
+    # which returns at once, so the clock tells them apart (plain_page's rule)
+    if [ "$seed" -gt 128 ] || { [ "$seed" != 0 ] && [ "$SECONDS" -gt "$t" ]; }; then continue; fi
+    [ "$seed" = 0 ] && break                         # ↵ (or any key) here
+    park_act=quit; break                             # the pane's input is gone
+  done
+  wset -u @parked; wset -u @park_why; wset -u @park_held
+}
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''
 # The conversation this wrapper was opened to resume (issue #4728) is the last id
@@ -334,6 +377,8 @@ for a in "$@"; do
   _pv=$a
 done
 unset _pv _ag
+park_sid=''    # a parked session's credential sid, kept for its wake (task HHV0)
+park_seed=''   # the first sentence a wake carries into the resumed conversation
 cred_tries=0   # refused launches in a row for want of a session credential (#4112)
 cred_since=0   # when that streak began (T915: its child report waits FLEET_CRED_REPORT_SECS)
 while :; do
@@ -368,7 +413,12 @@ while :; do
   # the agent exits. `fleet-account.sh migrate` then rebinds the sid: no closed
   # window. Switched off: nothing is set — the launch is what it always was.
   unset FLEET_CRED_SID
-  if [ -f "$BIN/fleet-session-cred.sh" ] && bash "$BIN/fleet-session-cred.sh" on 2>/dev/null; then
+  if [ -n "$park_sid" ]; then
+    # a parked session's wake (task HHV0): the credential it parked with was
+    # never revoked — the same sid, the same binding at the proxy
+    export FLEET_CRED_SID=$park_sid; park_sid=''
+    [ "$intmux" = 1 ] && wset @cred_sid "$FLEET_CRED_SID"
+  elif [ -f "$BIN/fleet-session-cred.sh" ] && bash "$BIN/fleet-session-cred.sh" on 2>/dev/null; then
     export FLEET_CRED_SID="w-$$-$t0"
     [ "$intmux" = 1 ] && wset @cred_sid "$FLEET_CRED_SID"
   fi
@@ -417,17 +467,24 @@ while :; do
     PATH="$SHIM_PATH" env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \
       -u FLEET_LAUNCH_WORKTREE -u FLEET_LAUNCH_CREATE -u FLEET_LAUNCH_DELIVERY -u FLEET_AUTHORITY_CONTEXT \
       -u FLEET_AUTHORITY_ADMISSION -u FLEET_AUTHORITY_START -u FLEET_AUTHORITY_EXPECTED \
-      -u FLEET_AUTHORITY_RESUME_SID -u FLEET_ID_DISPATCH "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+      -u FLEET_AUTHORITY_RESUME_SID -u FLEET_ID_DISPATCH "$LAUNCH" ${cmd[@]+"${cmd[@]}"} ${park_seed:+"$park_seed"}
   else
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi
   rc=$?
+  park_seed=''
   unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # retired (C8): an old spawner's never rides a resume
+  # Parked (task HHV0, bin/fleet_session_gate.py park): the gate stamped @parked
+  # before it asked the agent to /exit. The session credential is NOT revoked —
+  # minting one again is the slow part of a start — and the window waits below.
+  parked=''
+  [ "$intmux" = 1 ] && [ -n "$(opt @parked)" ] && parked=1
+  [ -n "$parked" ] && [ -n "${FLEET_CRED_SID:-}" ] && park_sid=$FLEET_CRED_SID
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
     unset FLEET_WORKER_CRED
   fi
-  if [ -n "${FLEET_CRED_SID:-}" ]; then
+  if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "$parked" ]; then
     bash "$BIN/fleet-session-cred.sh" revoke --sid "$FLEET_CRED_SID" >/dev/null 2>&1
     [ "$intmux" = 1 ] && { wset -u @cred_sid; wset -u @cred_route; }
     unset FLEET_CRED_SID
@@ -435,6 +492,24 @@ while :; do
   [ "$intmux" = 1 ] || exit "$rc"
   # The fleet made it exit (it stamped @wrap_quiet).
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
+  # Parked: the window holds the same conversation until a wake, and looks idle.
+  if [ -n "$parked" ]; then
+    park_hold
+    case "$park_act" in
+      quit) exit "$rc" ;;
+    esac
+    first=0; last=resume
+    agent=$(fleet_agent_or_default "$(opt @cc_agent)")
+    sid=$(fleet_agent_session_id "$agent" opt window)
+    [ -n "$sid" ] || sid=$last_sid
+    wset @id_next_trigger "reopen:$(date +%s)"
+    cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"})
+    if [ -n "$sid" ]; then cmd+=("$(fleet_agent_get "$agent" resume_flag)" "$sid")
+    else _o=$(fleet_agent_get "$agent" continue_flag); [ -n "$_o" ] && cmd+=("$_o"); fi
+    wset @claude_state ''
+    wset @claude_state_ts "$(date +%s)"
+    continue
+  fi
   # Handed to WebChat (task T810, fleet-webchat-handoff.sh): the conversation goes on
   # there — the page says so and ↵ takes it back once WebChat is not answering.
   handed=$(opt @handoff_web)

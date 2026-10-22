@@ -47,6 +47,7 @@ CLI (the shell side's one parser — never a second copy):
     fleet_reap_policy.py origin [--agent-def N] [--origin K] [--origin-wid W]
                                 [--test-identity 1] [--stamp O]   the origin word
     fleet_reap_policy.py origin-default <origin> [--kind issue|task|scratch|loop]
+    fleet_reap_policy.py park-idle          seconds a web session idles before it parks
     fleet_reap_policy.py effective <policy> [--pin 1] [--agent-def N]
                                 [--keep-by session] [--over 1]   the policy in force
 """
@@ -76,7 +77,28 @@ ORIGINS = {
     "orchestrator": "keep",       # 永不自动收起（开窗即置顶）
     "decide": "idle:15m",         # 等你拍板：闲置 15 分钟收起，回话即恢复
     "probe": "done:1m",           # 定时任务、探针、演练：做完立即收起
+    "web": "keep",                # 网页开的会话：不收起，闲 5 分钟停放（HHV0，见 park_idle_secs）
 }
+# A session the web opened (task HHV0, @session_origin web) is the person's conversation:
+# never closed on its own — its destination is PARKED (fleet-cleanup-idle.py
+# web_park → fleet_session_gate.py park), its window, ID and conversation kept,
+# after park_idle_secs() idle. The node's half of the hub setting
+# fleet.session.park_idle is FLEET_SESSION_PARK_IDLE (seconds or a duration, the
+# hub's client settings hand it down; default 5m, never under 1m; 0 = never park).
+PARK_IDLE_DEFAULT = 5 * 60
+PARK_IDLE_MIN = 60
+
+
+def park_idle_secs():
+    """Seconds a web session sits idle before it parks; 0 = never."""
+    import os
+    v = os.environ.get("FLEET_SESSION_PARK_IDLE", "").strip()
+    if v == "0":
+        return 0
+    s = dur_secs(v) if v else None
+    return max(PARK_IDLE_MIN, s) if s is not None else PARK_IDLE_DEFAULT
+
+
 # The origins whose «done» is a reported result — the dispatched road
 # (fleet-cleanup-idle.py dispatched_session): over ⇒ closed, unreported ⇒ nudged.
 REPORTING = ("dispatched", "member", "driver")
@@ -313,6 +335,9 @@ def main(argv):
         if out:
             print(out)
         return 0 if out else 1
+    if cmd == "park-idle":
+        print(park_idle_secs())
+        return 0
     if cmd == "idle-owned":
         now = int(args[args.index("--now") + 1]) if "--now" in args else None
         return 0 if idle_owned(args[0] if args else "", now) else 1

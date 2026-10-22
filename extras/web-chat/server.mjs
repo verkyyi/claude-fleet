@@ -53,7 +53,7 @@ import { gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync, unlinkSync,
-  statSync, copyFileSync } from "node:fs";
+  statSync, copyFileSync, readdirSync } from "node:fs";
 import { join, dirname, extname, normalize, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -225,9 +225,11 @@ function send(res, code, body, type = "application/json; charset=utf-8", headers
   res.end(redact(b, [...liveCreds, ADMIN]));
 }
 async function readJson(req, max = 256 * 1024) {
+  if (req._json !== undefined) return req._json;            // read once: a route may look before it hands on
   let n = 0; const parts = [];
   for await (const c of req) { n += c.length; if (n > max) throw new Error("too large"); parts.push(c); }
-  return parts.length ? JSON.parse(Buffer.concat(parts).toString("utf8")) : {};
+  req._json = parts.length ? JSON.parse(Buffer.concat(parts).toString("utf8")) : {};
+  return req._json;
 }
 function authed(req) {
   const c = parseCookies(req.headers.cookie)[COOKIE];
@@ -795,14 +797,18 @@ async function viewStream(req, res, u, person) {
   let closed = false;
   res.on("close", () => { closed = true; });
   const ev = (o, id) => { if (!closed) { touch(); res.write(`${id != null ? `id: ${id}\n` : ""}data: ${JSON.stringify(o)}\n\n`); } };
+  // the gate's word on it (task HHV0): may the page talk, and what still waits
+  let gs = gateKnown.get(fid)?.j || null;
   const stateOf = () => JSON.stringify({ t: "state", agent: w.agent, session: w.sid || "", busy: !!w.busy, state: w.state || "",
-    label: w.label || "", holder: w.holder || "" });
+    label: w.label || "", can_talk: gs ? !!gs.can_talk : false, queue: (gs?.queue || []).map(({ delivery, text, why }) => ({ delivery, text, why })),
+    ...(gs?.ask ? { ask: gs.ask } : {}) });
   let said = stateOf();
   res.write(`data: ${said}\n\n`);
   log("view", { agent: w.agent, person, known: knew });
   if (at != null && atSid !== (w.sid || "")) at = null;      // another conversation now: from its end
   let src = null, off = 0, first = true, lookedAt = 0, nothingYet = false;
   let asking = null, askedAt = knew ? 0 : Date.now(), pinged = Date.now(), next = null;
+  let gasking = null, gaskedAt = 0;
   const restart = () => { src = null; off = 0; at = null; first = true; lookedAt = 0; nothingYet = false; ev({ t: "reset" }); };
   while (!closed) {
     // another conversation in that window now (a /clear, a resume): from its end
@@ -850,6 +856,16 @@ async function viewStream(req, res, u, person) {
       first = false; nothingYet = true;
     }
     // the window's state, asked in the background (the script takes ~1 s)
+    // the gate's word, asked on its own clock: a slow one never holds the record's state back
+    if (!gasking && Date.now() - gaskedAt >= GATE_STATE_MS) {
+      gasking = gateStatus(fid).catch(() => null).then((g) => {
+        gasking = null; gaskedAt = Date.now();
+        if (closed || !g) return;
+        gs = g;
+        const now = stateOf();
+        if (now !== said) { said = now; ev(JSON.parse(now)); }
+      });
+    }
     if (!asking && Date.now() - askedAt >= VIEW_STATE_MS) {
       asking = viewOf(fid).then((x) => { asking = null; askedAt = Date.now(); return x; });
       asking.then((x) => {
@@ -1619,6 +1635,214 @@ function newClaude() {
   return true;
 }
 
+// ---- the session gate (task HHV0, 会话合一 ①) ---------------------------------
+// The page talks to SESSIONS — a window on this login, by its fleet_id — the way
+// a terminal does: one sentence is the session's next turn. This service only
+// keeps the door: bin/fleet_session_gate.py holds the words on disk (each its own
+// delivery id, never sent twice), hands them to the session (the mod's idle.v2
+// accept for Claude, its own queue for Codex), queues what cannot go in yet and
+// retries; a parked session is woken with the sentence as its first turn. A turn
+// runs in its window, not here: restarting this service cuts nothing (WD8F ①),
+// and the queue goes on from disk. The SDK conversation below stays for the old
+// page until the entry's fleet.chat.unified switch; a migrated one answers 410.
+const GATE = E.FLEET_WEBCHAT_GATE || join(HERE, "../../bin/fleet_session_gate.py");
+const RAW = E.FLEET_WEBCHAT_RAW || join(HERE, "../../bin/dash-raw-session.sh");
+const GATE_DIR = E.FLEET_GATE_DIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "session-gate");
+const GATE_TICK_MS = Number(E.FLEET_WEBCHAT_GATE_TICK_MS || 1500);
+const GATE_STATE_MS = Number(E.FLEET_WEBCHAT_GATE_STATE_MS || 3000);   // the view asks the gate this often
+const GATE_LIVE = new Set(["queued", "trying", "native", "waking"]);
+function gate(args, input = "", timeout = 90000) {
+  return new Promise((resolve) => {
+    const c = execFile("python3", [GATE, ...args], { env: E, timeout, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      let j = null;
+      try { j = JSON.parse(String(stdout).trim().split("\n").pop() || "null"); } catch { /* no answer */ }
+      resolve({ rc: err ? (typeof err.code === "number" ? err.code : 1) : 0, j });
+    });
+    if (input) c.stdin.end(input); else c.stdin.end();
+  });
+}
+// the fleet a new session opens in: this login's one fleet (its first socket)
+function firstFleet() {
+  if (E.FLEET_WEBCHAT_FLEET) return Promise.resolve(E.FLEET_WEBCHAT_FLEET);
+  return new Promise((resolve) => execFile("bash", ["-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_sockets 2>/dev/null | head -n 1',
+    "first-fleet", join(HERE, "../../bin")], { env: E, timeout: 20000 }, (err, stdout) => resolve(err ? "" : String(stdout).trim())));
+}
+const fidOf = (u, body) => String(u.searchParams.get("fid") || body?.fid || "");
+// words still waiting anywhere on this login: read off the files, no process
+function gateWaiting() {
+  let dirs = [];
+  try { dirs = readdirSync(GATE_DIR); } catch { return false; }
+  for (const d of dirs) {
+    if (!FID_RE.test(d)) continue;
+    let fs = [];
+    try { fs = readdirSync(join(GATE_DIR, d)); } catch { continue; }
+    for (const f of fs) {
+      if (!f.endsWith(".json") || f.startsWith(".")) continue;
+      try { if (GATE_LIVE.has(JSON.parse(readFileSync(join(GATE_DIR, d, f), "utf8")).state)) return true; } catch { /* half written */ }
+    }
+  }
+  return false;
+}
+let gateTicking = false, gatePending = false;
+function gateTick() {
+  if (gateTicking) return;
+  gatePending = gateWaiting();
+  if (!gatePending) return;
+  gateTicking = true;
+  gate(["tick"]).finally(() => { gateTicking = false; });
+}
+setInterval(gateTick, GATE_TICK_MS).unref();
+// one sentence (+ at most 4 pictures, kept in media/ and named in the turn)
+async function gateSay(req, res, u, person) {
+  const tb = await turnBody(req, res);
+  if (!tb) return;
+  const fid = fidOf(u, tb.body);
+  if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
+  const delivery = String(tb.body.delivery || tb.body.id || "");
+  if (delivery && !FID_RE.test(delivery)) return send(res, 400, { error: "not a delivery id", code: "bad_delivery" });
+  const args = ["say", "--fid", fid];
+  if (delivery) args.push("--delivery", delivery);
+  for (const b of tb.images) {
+    const k = keepImage(b);
+    if (!k || k.big) return send(res, 400, { error: "图太大或不是图", code: "bad_image" });
+    args.push("--image", join(MEDIA, k.ref));
+  }
+  const r = await gate(args, tb.text);
+  if (!r.j) return send(res, 503, { state: "refused", reason: "gate_unavailable" });
+  log("say", { person, state: r.j.state, reason: r.j.reason || "" });
+  gatePending = true;
+  return send(res, 200, r.j);
+}
+// a NEW session opened from the web: a no-repo session of this login, its first
+// sentence the start's own first turn; the agent chosen here stays its agent
+async function gateOpen(req, res, person) {
+  const tb = await turnBody(req, res);
+  if (!tb) return;
+  // the agent the page chose; none ⇒ the fleet's default (FLEET_AGENT, dash-raw-session.sh decides)
+  const agent = tb.body.agent == null || tb.body.agent === "" ? "" : String(tb.body.agent);
+  if (agent && !PROVIDERS_RE.test(agent)) return send(res, 400, { error: "unknown agent", code: "agent" });
+  let text = tb.text;
+  for (const b of tb.images) {
+    const k = keepImage(b);
+    if (!k || k.big) return send(res, 400, { error: "图太大或不是图", code: "bad_image" });
+    text += `\n\n[附图] ${join(MEDIA, k.ref)}`;
+  }
+  const target = await firstFleet();
+  const pf = join(STATE, `open-${process.pid}-${Date.now()}.txt`);
+  writeFileSync(pf, text, { mode: 0o600 });
+  const args = [...(target ? [target] : []), "--origin", "hub", "--print", "--no-repo", "--node", "local",
+    "--reap-origin", "web", ...(agent ? ["--agent", agent] : []), `--prompt-file=${pf}`];
+  const r = await run(RAW, args);
+  try { unlinkSync(pf); } catch { /* read by the spawn */ }
+  const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";
+  const fid = line.split("\t")[3] || "";
+  if (r.rc !== 0 || !FID_RE.test(fid)) {
+    const said = (r.stderr || "").trim().split("\n").pop() || "";
+    log("open_failed", { person, rc: r.rc, said: said.slice(0, 200) });
+    return send(res, 503, { state: "refused", reason: "open_failed", error: said || "没能开一个新会话" });
+  }
+  log("open", { person, agent: agent || "default" });
+  return send(res, 200, { fid, ...(agent ? { agent } : {}), delivery: randomUUIDish(), state: "sent" });
+}
+const randomUUIDish = () => { const h = randomHex(); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`; };
+async function gatePost(req, res, u, what) {
+  const body = await readJson(req);
+  const fid = fidOf(u, body);
+  if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
+  let args;
+  if (what === "stop") args = ["stop", "--fid", fid];
+  else if (what === "ack") {
+    if (!FID_RE.test(String(body.delivery || ""))) return send(res, 400, { error: "not a delivery id" });
+    args = ["ack", "--fid", fid, "--delivery", String(body.delivery)];
+  } else {
+    // the question's fingerprint and the option's own words (the entry hands the page's body on as is)
+    // {fp, answers: {<question>: <label>}} · {fp, picks: [<label>]} · {fp, allow: true|false} (a permission)
+    const fp = String(body.fp || body.fingerprint || "");
+    if (!/^[0-9a-f]{16}$/.test(fp)) return send(res, 400, { error: "a question's fingerprint and its option, verbatim", code: "bad_answer" });
+    args = ["answer", "--fid", fid, "--fp", fp];
+    if (typeof body.allow === "boolean") args.push("--allow", body.allow ? "1" : "0");
+    else if (body.answers && typeof body.answers === "object" && !Array.isArray(body.answers)) args.push("--answers-json", JSON.stringify(body.answers));
+    else {
+      const raw = body.picks ?? body.labels ?? body.options ?? (body.pick ?? body.label ?? body.option);
+      const picks = (Array.isArray(raw) ? raw : raw != null ? [raw] : []).map(String).filter(Boolean);
+      if (!picks.length || picks.length > 8) return send(res, 400, { error: "a question's fingerprint and its option, verbatim", code: "bad_answer" });
+      args.push(...picks.flatMap((x) => ["--pick", x]));
+    }
+  }
+  const r = await gate(args);
+  if (!r.j) return send(res, 503, { ok: false, why: "gate_unavailable" });
+  if (r.j.ok === false && r.j.why === "no_session") return send(res, 404, { ...r.j, code: "no_session", error: "这个会话不在这台机器上了" });
+  return send(res, 200, r.j);
+}
+// what the gate knows of one session, for the view's state line
+const gateKnown = new Map();                               // fid → { j, at }
+async function gateStatus(fid) {
+  const r = await gate(["status", "--fid", fid], "", 30000);
+  if (r.j) { gateKnown.set(fid, { j: r.j, at: Date.now() }); if (gateKnown.size > 500) gateKnown.delete(gateKnown.keys().next().value); }
+  return r.j;
+}
+
+// 旧「我的对话」 (task HHV0): the one conversation becomes a session of this login
+// (the same conversation resumed in a window, origin web); everything 新对话 put
+// away — at most 200 — is listed as 已结束的会话 (ended.json, read by /api/ended).
+// Asked by the entry once fleet.chat.unified is on (POST /api/migrate) — before
+// that the old page still talks to it here. A failure leaves conversation.json as
+// it is and marks it pending: the next start tries again.
+const ENDED_FILE = join(STATE, "ended.json");
+let migrating = null;
+async function migrateConv() {
+  if (conv.migrated?.fid) return { ok: true, fid: conv.migrated.fid, already: true };
+  if (live || maint || aside.size) return { ok: false, why: "busy" };
+  const ended = [];
+  for (const e of conv.put_away || []) {
+    const ids = [...(e.chain || []), ...(e.session ? [{ id: e.session, cwd: e.cwd }] : [])];
+    if (ids.length) ended.push({ agent: "claude", session: ids.at(-1).id, cwd: ids.at(-1).cwd, chain: ids.slice(0, -1), at: e.at || "" });
+  }
+  let fid = "";
+  if (conv.session) {
+    const target = await firstFleet();
+    const seed = join(STATE, `migrate-${process.pid}.txt`);
+    writeFileSync(seed, "", { mode: 0o600 });
+    const r = await run(RAW, [...(target ? [target] : []), "--origin", "hub", "--print", "--no-repo", "--node", "local",
+      "--reap-origin", "web", "--agent", "claude", "--resume", conv.session, "--seed-file", seed, "--name", "我的对话"]);
+    try { unlinkSync(seed); } catch { /* gone */ }
+    const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";
+    fid = line.split("\t")[3] || "";
+    if (r.rc !== 0 || !FID_RE.test(fid)) {
+      conv.migrate_pending = true; saveConv();
+      log("migrate_failed", { rc: r.rc });
+      return { ok: false, why: "open_failed" };
+    }
+    await gate(["name", "--fid", fid, "--name", "我的对话"]);   // the title the page finds it by
+    if (conv.chain.length) ended.unshift({ agent: "claude", session: conv.chain.at(-1).id, cwd: conv.chain.at(-1).cwd, chain: conv.chain.slice(0, -1), at: "", relayed_into: fid });
+  }
+  try {
+    let old = [];
+    try { old = JSON.parse(readFileSync(ENDED_FILE, "utf8")); } catch { /* first */ }
+    writeFileSync(ENDED_FILE + ".tmp", JSON.stringify([...old, ...ended].slice(-400)), { mode: 0o600 });
+    renameSync(ENDED_FILE + ".tmp", ENDED_FILE);
+  } catch (e) { conv.migrate_pending = true; saveConv(); return { ok: false, why: "write_failed" }; }
+  closeWarm("migrated");
+  conv.migrated = { fid, at: new Date().toISOString(), ended: ended.length };
+  delete conv.migrate_pending;
+  saveConv();
+  log("migrated", { fid: !!fid, ended: ended.length });
+  return { ok: true, fid, ended: ended.length };
+}
+function migrate() { if (!migrating) migrating = migrateConv().finally(() => { migrating = null; }); return migrating; }
+if (conv.migrate_pending) setTimeout(() => migrate().catch(() => {}), 5000).unref();
+async function endedList(res, u) {
+  let list = [];
+  try { list = JSON.parse(readFileSync(ENDED_FILE, "utf8")); } catch { /* none */ }
+  const sid = u.searchParams.get("session") || "";
+  if (!sid) return send(res, 200, { ended: list.map(({ agent, session, at, relayed_into }) => ({ agent, session, at, relayed_into })).reverse() });
+  const e = list.find((x) => x.session === sid);
+  if (!e || !SID_RE.test(sid)) return send(res, 404, { error: "no such session", code: "no_session" });
+  const items = [];
+  for (const s of [...(e.chain || []), { id: e.session, cwd: e.cwd }]) items.push(...await readItems(s.id, s.cwd));
+  return send(res, 200, { session: sid, items });
+}
+
 async function handle(req, res) {
   const port = SOCKET ? 0 : server.address().port;
   if (!SOCKET && !hostAllowed(req.headers.host, port, HOSTS)) return send(res, 421, { error: "unknown host" });
@@ -1674,6 +1898,28 @@ async function handle(req, res) {
   // 接管 / 交回 (task VV8F): the same session, this page ⇄ its terminal
   if (p === "/api/takeover" && req.method === "POST") return handover(req, res, person, "take");
   if (p === "/api/giveback" && req.method === "POST") return handover(req, res, person, "give");
+  // the session gate (task HHV0): say · open · answer · stop by fid
+  if (p === "/api/say" && req.method === "POST") return gateSay(req, res, u, person);
+  if (p === "/api/open" && req.method === "POST") return gateOpen(req, res, person);
+  if (p === "/api/ack" && req.method === "POST") return gatePost(req, res, u, "ack");
+  // stop / answer with a session's fid (the entry writes it into the body, PQ41):
+  // the gate's; without one: the old conversation's, below
+  if ((p === "/api/stop" || p === "/api/answer") && req.method === "POST") {
+    let b = {};
+    try { b = await readJson(req); } catch { return send(res, 413, { error: "too large" }); }
+    if (FID_RE.test(fidOf(u, b))) return gatePost(req, res, u, p === "/api/stop" ? "stop" : "answer");
+  }
+  if (p === "/api/session" && req.method === "GET" && FID_RE.test(u.searchParams.get("fid") || "")) {
+    const j = await gateStatus(u.searchParams.get("fid"));
+    return j ? send(res, 200, j) : send(res, 503, { error: "gate_unavailable" });
+  }
+  if (SOCKET && p === "/api/migrate" && req.method === "POST") return send(res, 200, await migrate());
+  if (p === "/api/ended" && req.method === "GET") return endedList(res, u);
+  // a migrated conversation is a session now: the old roads say where it went
+  if (conv.migrated?.fid && (u.searchParams.get("provider") || "claude") === "claude"
+      && ["/api/turn", "/api/new", "/api/take"].includes(p) && req.method === "POST") {
+    return send(res, 410, { error: "这个对话已经是一个会话了", code: "moved", fid: conv.migrated.fid });
+  }
   // the Codex side (task R9A2): ?provider=codex; none or claude = the Claude side, as before
   const provider = u.searchParams.get("provider") || "claude";
   if (p.startsWith("/api/") && !PROVIDERS_RE.test(provider)) return send(res, 400, { error: "unknown provider" });
@@ -1756,7 +2002,7 @@ async function handle(req, res) {
 }
 
 // idle: no turn, no compact, no connection open (a page that is watching holds one)
-const busyAny = () => !!live || aside.size > 0 || !!maint || codex.busy();
+const busyAny = () => !!live || aside.size > 0 || !!maint || codex.busy() || gatePending || !!migrating;
 let lastBusy = Date.now();
 function touch() { lastBusy = Date.now(); }
 const server = http.createServer((req, res) => {

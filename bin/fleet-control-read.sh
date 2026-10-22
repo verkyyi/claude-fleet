@@ -112,9 +112,12 @@ case "$mode" in
     fi
     # SSH forced commands often have no UTF-8 locale. Without -u, tmux
     # replaces tabs/non-ASCII in format output with underscores.
+    # Column 5 says `parked` for a parked session (task HHV0: its agent's process
+    # ended in its own window, @parked; locally it reads done) — the hub's board
+    # draws it 空闲 and keeps addressing it as this same worker.
     # Column 8 was hibernation's lifecycle stamp (issue #808); it stays on the
     # wire, empty (= awake), since hibernation went with T548 (C8).
-    fmt=$'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{@claude_state}\t#{@cc_agent}\t#{@wid}\t\t'
+    fmt=$'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{?@parked,parked,#{@claude_state}}\t#{@cc_agent}\t#{@wid}\t\t'
     # Column 9 = the window's repo (issue #1018), so every key carries it: two
     # hosted repos can both have an issue-12, and since issue #1939 a one-repo
     # fleet's keys are `<slug>:issue-N` too — adding a second repo renames no
@@ -213,7 +216,7 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}\t=#{@reap_why}\t=#{@session_origin}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}\t=#{@reap_why}\t=#{@session_origin}\t=#{@cc_agent}:#{@mod_accept}:#{?@parked,1,}:#{?@codex_identity,1,}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
@@ -240,6 +243,8 @@ case "$mode" in
     # page opened (@session_origin, stamped by the home's conversation service
     # when it opens one); empty on every other — a terminal's. The hub's list
     # carries it as the row's origin.
+    # Column 36 (task HHV0): `cantalk=1` when the web may say a sentence into it (the
+    # session gate, bin/fleet_session_gate.py), else empty: read-only there.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -342,13 +347,17 @@ case "$mode" in
       [ -n "$wman" ] && [ -z "$wepic" ] && t=$wman
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      cl='' cb='' cts='' cm='' ce='' cas='' cw='' cor=''
+      cl='' cb='' cts='' cm='' ce='' cas='' cw='' cor='' ctk=''
       if [ -n "$ctxs" ]; then
         # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
         # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
-        IFS=$'\t' read -r _ cl cb cts cm ce cas cw cor <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
-        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cw=${cw#=} cor=${cor#=}
+        IFS=$'\t' read -r _ cl cb cts cm ce cas cw cor ctk <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cw=${cw#=} cor=${cor#=} ctk=${ctk#=}
         [ "$cor" = web ] || cor=''
+        # can_talk (task HHV0): may the web say a sentence into it — a Claude whose
+        # mod takes idle.v2, a parked one (its next start does), a Codex on its
+        # app-server (fleet_session_gate.py checks the version at the sentence)
+        case "$ctk" in claude:idle.v2:*|:idle.v2:*|*:*:1:*|codex:*:*:1) ctk=1 ;; *) ctk='' ;; esac
         case "$cw" in *[!a-z0-9:-]*) cw='' ;; esac
         case "$cas" in '{'*'}') ;; *) cas='' ;; esac
         case "$cl" in *[!0-9]*) cl='' ;; esac
@@ -358,7 +367,7 @@ case "$mode" in
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
       orole=''   # column 20 is always empty (issue #4341)
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\tnotices=%s\treapwhy=%s\torigin=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin" "$ntc" "$cw" "$cor"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\tnotices=%s\treapwhy=%s\torigin=%s\tcantalk=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin" "$ntc" "$cw" "$cor" "$ctk"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
