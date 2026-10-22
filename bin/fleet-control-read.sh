@@ -370,12 +370,17 @@ case "$mode" in
       fi
       orole=''   # column 20 is always empty (issue #4341)
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\tnotices=%s\treapwhy=%s\torigin=%s\tcantalk=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin" "$ntc" "$cw" "$cor" "$ctk"
-    done <<<"$rows" | PARK_CENSUS="$park" python3 -c '
+    done <<<"$rows" | PARK_CENSUS="$park" PYTHONPATH="$BIN${PYTHONPATH:+:$PYTHONPATH}" python3 -c '
 import json, os, sys
+from fleet_hub_common import inventory_row
+from fleet_park_metrics import inventory_park
 census = json.loads(os.environ["PARK_CENSUS"])
 for line in sys.stdin:
     line = line.rstrip("\n")
     p = census.get(line.split("\t", 1)[0])
+    if p:
+        parts, extra = inventory_row(line.split("\t"))
+        p = inventory_park(p, parts[4], extra.get("busy"))
     print(line + "\tpark=" + (json.dumps(p, separators=(",", ":")) if p else ""))'
 
     ;;

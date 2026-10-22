@@ -375,8 +375,9 @@ def inventory_row(parts):
     if len(parts) >= 37 and parts[-1].startswith("park="):
         try:
             p = json.loads(parts.pop()[5:])
-            if (all(k in p for k in ("rss_mb", "saved_mb", "why", "quiet"))
+            if (all(k in p for k in ("rss_mb", "saved_mb", "why", "eligible"))
                     and p.get("state") in ("awake", "parked")
+                    and (p["eligible"] is None or type(p["eligible"]) is bool)
                     and all(p.get(k) is None or (isinstance(p[k], (int, float)) and math.isfinite(p[k]) and p[k] >= 0)
                             for k in ("rss_mb", "saved_mb"))):
                 extra["park"] = p

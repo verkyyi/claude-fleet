@@ -22,7 +22,7 @@ case "$*" in
   *list-windows*)
     case "$*" in
       *park_state*)
-        case "$*" in *'#{@park_rss_mb}'*'#{@park_wrap_ver}'*'#{@park_since}'*) ;; *) exit 1 ;; esac
+        case "$*" in *'#{@park_saved_mb}'*'#{@park_wrap_ver}'*'#{@park_since}'*) ;; *) exit 1 ;; esac
         printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "$state";;
       *ctx_left*) printf '@1\t=\t=\t=\t=\t=\t=\t=\n@2\t=\t=\t=\t=\t=\t=\t=\n@3\t=\t=\t=\t=\t=\t=\t=\n';;
       *pane_current_path*) printf '@1\t/tmp/scratch-1\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@2\t/tmp/scratch-2\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@3\t/tmp/scratch-3\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n';;
@@ -54,13 +54,27 @@ from pathlib import Path
 from fleet_hub_common import inventory_row
 from fleet_control import Control
 from fleet_park_metrics import daily, summarize
-# One strict idle definition: viewers, background work, active CPU and exited
-# sessions are excluded, even when the previous turn is over.
+# Resident idle includes viewers and background work; acceptance uses only
+# eligible idle. Both exclude active CPU and exited sessions.
 def worker(state='done', quiet=True, why='old-shell', busy=None):
     return {'state':state, 'busy':busy, 'park':{'state':'awake','quiet':quiet,'why':why,'rss_mb':100,'saved_mb':None}}
 strict = summarize([worker(), worker('looping'), worker('needs'), worker(why='watched'),
                     worker(busy='bg'), worker(quiet=False), worker('exited')])
-assert (strict['sessions_idle'], strict['sessions_working'], strict['idle_rss_mb']) == (3,4,300), strict
+assert (strict['sessions_idle'], strict['sessions_working'], strict['idle_rss_mb']) == (5,2,500), strict
+assert (strict['idle_eligible'],strict['idle_eligible_rss_mb']) == (3,300), strict
+assert strict['idle_reasons']['watched'] == strict['idle_reasons']['background'] == 1, strict
+from fleet_park_metrics import inventory_park
+def joined(**kw):
+    w = worker(**kw)
+    return inventory_park(w['park'], w['state'], w['busy'])
+assert joined(why='watched')['eligible'] is False
+assert joined(busy='bg')['eligible'] is False
+assert joined(state='working')['eligible'] is False
+assert joined(why='working')['eligible'] is False  # reconnecting before native state arrives
+assert joined(quiet=None)['eligible'] is None
+assert joined(quiet=False)['eligible'] is False
+assert joined()['eligible'] is True
+assert set(joined()) == {'state','rss_mb','saved_mb','why','eligible'}
 from fleet_park_metrics import latest_park_rss
 w = Path(os.environ['PARK_TEST_WORK'])
 lines = (w/'workers').read_text().splitlines()
@@ -68,6 +82,7 @@ assert len(lines) == 3, lines
 for line in lines:
     parts, extra = inventory_row(line.split('\t'))
     assert 'park' in extra, line
+    assert set(extra['park']) == {'state','rss_mb','saved_mb','why','eligible'}, extra
     assert len(line.split('\t')) == 37, line
     assert 'park' not in inventory_row(line.split('\t')[:-1])[1]
 ctl = Control()
@@ -96,12 +111,18 @@ assert ctl.workers(fleet)['park_metrics'] == q
 # A collector's control client is not a viewer; an attached human is.
 (w/'fake/control').write_text('0')
 viewed = ctl.workers(fleet)['park_metrics']
-assert (viewed['sessions_idle'], viewed['sessions_working'], viewed['idle_rss_mb']) == (0,2,0), viewed
+assert (viewed['sessions_idle'], viewed['sessions_working'], viewed['idle_rss_mb']) == (1,1,201), viewed
+assert viewed['idle_eligible'] == viewed['idle_eligible_rss_mb'] == 0, viewed
+assert viewed['idle_reasons']['watched'] == 1, viewed
 (w/'fake/control').unlink()
 # Before C1 stamps @park_state, even a saved RSS value never invents parking.
 (w/'fake/state').write_text('')
 assert ctl.workers(fleet)['park_metrics']['sessions_parked'] == 0
 (w/'fake/state').unlink()
+# No ledger row: use C1's @park_saved_mb stamp, not an invented RSS name.
+book = w/'conf/logs/park.ndjson'
+book.unlink()
+assert ctl.workers(fleet)['park_metrics']['parked_saved_mb'] == 9999
 book = w/'conf/logs/park.ndjson'
 book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T12:00:00Z','fid':'fid3','act':'park','rss_mb':2048},
@@ -124,5 +145,5 @@ assert latest_park_rss(last) == {'f':256,'g':None}, latest_park_rss(last)
 PY
 # Drive doctor's real --park entry using the real Control inventory and adapter.
 row=$(sh "$BIN/fleet-doctor.sh" --park)
-st_has 'doctor census' "$row" 'working 1 · idle 1 · parked 1 · saved 2048.0 MB · idle RSS 201.0 MB'
+st_has 'doctor census' "$row" 'working 1 · idle 1 · parked 1 · saved 2048.0 MB · idle RSS 201.0 MB · eligible 1 · eligible RSS 201.0 MB'
 st_ok 'park inventory → heartbeat census / doctor / daily ledger'

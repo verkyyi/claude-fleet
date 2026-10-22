@@ -5,6 +5,8 @@ export type ParkReading = {
   sessions_idle?: number | null;
   sessions_parked?: number;
   idle_rss_mb?: number | null;
+  idle_eligible?: number | null;
+  idle_eligible_rss_mb?: number | null;
   parked_saved_mb?: number | null;
   idle_reasons?: Record<string, number>;
 };
@@ -29,13 +31,16 @@ export function ParkSummary({ reading: r, lang }: { reading: ParkReading; lang: 
   const why = Object.entries(r.idle_reasons || {}).filter(([, n]) => n > 0)
     .map(([k, n]) => `${reasons[k]?.[zh ? 0 : 1] || (zh ? "等待停放" : "waiting to park")} ${n}`).join(" · ");
   const rss = r.idle_rss_mb == null ? (zh ? "内存读不到" : "memory unavailable") : `${(r.idle_rss_mb / 1024).toFixed(1)} GB`;
+  const eligible = r.idle_eligible == null ? (zh ? "可停空闲待采样" : "park eligibility pending")
+    : (zh ? `可停空闲 ${r.idle_eligible}` : `${r.idle_eligible} eligible to park`);
   return (
     <div data-park-summary className="flex min-w-0 flex-col gap-x-4 gap-y-1 text-sm sm:flex-row sm:flex-wrap">
       <span>{zh ? `会话 ${total} 个 · 在算 ${r.sessions_working}` : `${total} sessions · ${r.sessions_working} working`}</span>
       {r.sessions_parked > 0 && <span>{zh ? `已停放 ${r.sessions_parked} · ${saved}` : `${r.sessions_parked} parked · ${saved}`}</span>}
       <span className={r.sessions_idle > 0 ? "text-warn" : "text-muted-foreground"}>
         {zh ? `空闲常驻 ${r.sessions_idle}` : `${r.sessions_idle} idle in memory`}
-        {r.sessions_idle > 0 && ` · ${rss} · ${why || (zh ? "原因未报" : "reason unavailable")}`}
+        {` · ${eligible}`}
+        {r.sessions_idle > 0 && <small className="block text-sm">{rss} · {why || (zh ? "原因未报" : "reason unavailable")}</small>}
       </span>
     </div>
   );
