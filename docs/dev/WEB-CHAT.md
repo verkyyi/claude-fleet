@@ -472,9 +472,9 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 包装器自己请求唤醒时使用 `--request-only` 避免等待自己。种子文件挂在 `@park_wake`，包装器 rename 成
 `.taken` 后用同一会话号 `--resume`，句子随启动进入首轮；7501 首次原生状态才写 `.launched` 确认恢复。
 超时收回未认领种子；已认领的种子属于当前启动，不会重投。
-有人切到窗口或在里面按 ↵ 也走这一路。`@parked`、`@park_held` 沿用 HHV0；`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前写 `@park_saved_mb` 和
+有人切到窗口或在里面按 ↵ 也走这一路。C8 计量只认 `@park_state=停放中`；已进入停放页才写停放中，唤醒请求改为接回中，原生状态确认后清除，失败写失败；未认领的唤醒超时则退回停放中。`@parked`、`@park_held` 保留 HHV0 控制兼容；`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前写 `@park_saved_mb` 和
 `@park_why`；RSS 复用 C8 的 `process_trees`，单位 MiB，采样失败或根进程缺失时清除 `@park_saved_mb`，让 census 保留 `saved=null`。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
-`next` 与 `started` 为 epoch。没有每拍的 skip 日志。
+`next` 与 `started` 为 epoch；成功 `park` 行还写 `rss_mb`（MiB，未采到为 null），供 C8 按 fid 读取最后一次 park 的 RSS，窗口 `@park_saved_mb` 仅作过渡回退。没有每拍的 skip 日志。
 
 测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、
 `bin/fleet-idle-accept-claude-selftest.sh`（真引擎：入口边界、排队重交、Esc、草稿、竞态；CI 上无 claude 跳过）、

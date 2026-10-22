@@ -294,11 +294,13 @@ class Gate(unittest.TestCase):
         self.assertEqual(r["state"], "queued")
         seed = self.d / "conf/session-gate" / FID / ("wake-%s.txt" % r["delivery"])
         self.assertTrue(seed.exists())
+        self.assertEqual(self.opt("@park_state"), "接回中")
         time.sleep(1.2)
         st = self.gate("status", "--fid", FID, env={"FLEET_GATE_WAKE_SECS": "1"})
         self.assertEqual([(q["delivery"], q["why"]) for q in st["queue"]], [(r["delivery"], "wake_timeout")])
         self.assertFalse(seed.exists(), "the seed is taken back: a late start never carries it")
         self.assertIsNone(self.opt("@park_wake"))
+        self.assertEqual(self.opt("@park_state"), "停放中")
 
     def test_I_wake_carries_first_turn(self):
         self.window({"@parked": "1"})
