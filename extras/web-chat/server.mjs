@@ -66,6 +66,9 @@ import { codexSide } from "./codex.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
+// Node resolves this module into its launch release. Child helpers must follow
+// the install's stable entry when a resident service spans a release switch.
+const HELPERS = E.FLEET_WEBCHAT_BIN || join(HERE, "../../bin");
 const STATE = E.FLEET_WEBCHAT_STATE;
 if (!STATE) { console.error("fleet-webchat: FLEET_WEBCHAT_STATE is not set"); process.exit(2); }
 mkdirSync(STATE, { recursive: true, mode: 0o700 });
@@ -82,9 +85,9 @@ const CWD = E.FLEET_WEBCHAT_CWD || E.HOME;
 const CLAUDE = E.FLEET_WEBCHAT_CLAUDE || "";
 // the login's own codex (task R9A2): the conversation's Codex side; none ⇒ Claude only, as before
 const CODEX = E.FLEET_WEBCHAT_CODEX_BIN || "";
-const SESSION_CRED = E.FLEET_WEBCHAT_SESSION_CRED || join(HERE, "../../bin/fleet-session-cred.sh");
+const SESSION_CRED = E.FLEET_WEBCHAT_SESSION_CRED || join(HELPERS, "fleet-session-cred.sh");
 // a trial person's `space` (活页) bridge to the credential proxy (task XA4R)
-const MCP_SPACE = E.FLEET_WEBCHAT_MCP_SPACE || join(HERE, "../../bin/mcp-space.py");
+const MCP_SPACE = E.FLEET_WEBCHAT_MCP_SPACE || join(HELPERS, "mcp-space.py");
 const SDK_PATH = E.FLEET_WEBCHAT_SDK || "";
 const ASK_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_ASK_SECS || 1800) * 1000;
 const COMPACT_AT = Number(E.FLEET_WEBCHAT_COMPACT_AT || 0.8);  // the context share that triggers a compact
@@ -98,7 +101,7 @@ const CARRY = join(STATE, "transcripts");
 // holds it is bin/fleet-convo-lock.py's record, <dir>/<agent>-<sid>.json (read
 // here, written only by that script and bin/fleet-webchat-handoff.sh, which also
 // reads whether the terminal is answering). No record = never handed over.
-const HANDOFF = E.FLEET_WEBCHAT_HANDOFF || join(HERE, "../../bin/fleet-webchat-handoff.sh");
+const HANDOFF = E.FLEET_WEBCHAT_HANDOFF || join(HELPERS, "fleet-webchat-handoff.sh");
 const LOCK_DIR = E.FLEET_WEBCHAT_LOCKDIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "convo-lock");
 // The page is the built UI (issue #3637): ui/dist, made by `npm run build` in
 // extras/web-chat/ui and committed — served from here, every byte local.
@@ -1647,8 +1650,8 @@ function newClaude() {
 // runs in its window, not here: restarting this service cuts nothing (WD8F ①),
 // and the queue goes on from disk. The SDK conversation below stays for the old
 // page until the entry's fleet.chat.unified switch; a migrated one answers 410.
-const GATE = E.FLEET_WEBCHAT_GATE || join(HERE, "../../bin/fleet_session_gate.py");
-const RAW = E.FLEET_WEBCHAT_RAW || join(HERE, "../../bin/dash-raw-session.sh");
+const GATE = E.FLEET_WEBCHAT_GATE || join(HELPERS, "fleet_session_gate.py");
+const RAW = E.FLEET_WEBCHAT_RAW || join(HELPERS, "dash-raw-session.sh");
 const GATE_DIR = E.FLEET_GATE_DIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "session-gate");
 const GATE_TICK_MS = Number(E.FLEET_WEBCHAT_GATE_TICK_MS || 1500);
 const GATE_STATE_MS = Number(E.FLEET_WEBCHAT_GATE_STATE_MS || 3000);   // the view asks the gate this often
@@ -1667,7 +1670,7 @@ function gate(args, input = "", timeout = 90000) {
 function firstFleet() {
   if (E.FLEET_WEBCHAT_FLEET) return Promise.resolve(E.FLEET_WEBCHAT_FLEET);
   return new Promise((resolve) => execFile("bash", ["-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_sockets 2>/dev/null | head -n 1',
-    "first-fleet", join(HERE, "../../bin")], { env: E, timeout: 20000 }, (err, stdout) => resolve(err ? "" : String(stdout).trim())));
+    "first-fleet", HELPERS], { env: E, timeout: 20000 }, (err, stdout) => resolve(err ? "" : String(stdout).trim())));
 }
 const fidOf = (u, body) => String(u.searchParams.get("fid") || body?.fid || "");
 // words still waiting anywhere on this login: read off the files, no process
