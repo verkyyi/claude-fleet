@@ -6579,6 +6579,14 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_launcher_no_ready() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-wake-guard-selftest.py" Recovery.test_codex_timer_launcher_failure_needs_this_launch_receipt Recovery.test_recovery_page_with_stale_sid_is_not_a_wake_receipt Recovery.test_failed_peer_wake_retry_does_not_report_already_awake 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex launcher 无 native-ready：旧 SID 和 parked 清空不算成功；原话及定时轮次保留，失败可见且只记一次'
+}
+
 drill_wake_full_card() {
   CAP=60; local t0 out
   t0=$(now)
