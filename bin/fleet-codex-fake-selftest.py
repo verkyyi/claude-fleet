@@ -284,7 +284,17 @@ class OneClient(unittest.TestCase):
     methods does it through that Client, never its own socket or pipe."""
     REPO = (BIN / 'fleet-codex-rpc.py').resolve().parent.parent
     METHOD = re.compile(r'''['"](?:thread|turn|account)/[a-zA-Z]''')
-    TRANSPORT = re.compile(r'AF_UNIX|Sec-WebSocket|stdin=subprocess\.PIPE|app-server --listen')
+    # AF_UNIX alone also names Fleet's unrelated 7501 pty relay. A Codex
+    # WebSocket transport must perform its handshake; its header is the marker.
+    TRANSPORT = re.compile(r'Sec-WebSocket|stdin=subprocess\.PIPE|app-server --listen')
+
+    def test_unix_relay_is_not_a_second_codex_transport(self):
+        relay = "socket.socket(socket.AF_UNIX); client.call('thread/read', {})"
+        native = relay + "; headers = {'Sec-WebSocket-Key': key}"
+        self.assertTrue(self.METHOD.search(relay))
+        self.assertFalse(self.TRANSPORT.search(relay))
+        self.assertTrue(self.TRANSPORT.search(native))
+        self.assertTrue(self.TRANSPORT.search('stdin=subprocess.PIPE'))
 
     def test_python_has_one_client(self):
         bad = []
