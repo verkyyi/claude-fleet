@@ -33,6 +33,7 @@ export type PoolCredential = Credential & {
   monthly_cost?: number;
   currency?: string;
   reauth_required?: boolean;
+  reauth_required_at?: string;
   refresh_error?: string;
   secret_expires_at?: string;
   created_at?: string;
@@ -350,4 +351,20 @@ export function settingOf(answer: any, key: string): string {
   if (row) return String(row.value ?? "");
   const v = answer?.settings?.[key];
   return v == null ? "" : String(v);
+}
+
+// reauthReason is why a credential needs a new sign-in, in words a page says
+// (claude-fleet FKS6): the hub's quota reader writes
+// "quota reads refused: <n> in a row since … (… HTTP 401 …)".
+export type ReauthReason = { key: "quota" | "session" | "refresh" | "other"; n?: number; code?: string };
+export function reauthReason(c: PoolCredential | null | undefined): ReauthReason {
+  const why = String(c?.refresh_error || "");
+  const q = /^quota reads refused: (\d+)/.exec(why);
+  if (q) {
+    const code = /HTTP (40[13])/.exec(why)?.[1] || "401/403";
+    return { key: "quota", n: Number(q[1]), code };
+  }
+  if (why.startsWith("upstream rejected the setup token")) return { key: "session" };
+  if (why) return { key: "refresh" };
+  return { key: "other" };
 }

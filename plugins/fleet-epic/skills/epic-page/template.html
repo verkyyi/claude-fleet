@@ -167,6 +167,9 @@
   details.fold>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   details.fold .kv{margin-top:2px}
   section>details.fold{border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:4px 16px 12px;margin-top:0}
+  /* 代码位置: the code references, one more fold inside a 技术细节 / a step's evidence, closed by default */
+  details.code{margin-top:6px}
+  details.code>summary{cursor:pointer;color:var(--ink-3);font-size:12px}
 
   /* the whole member card folds to ONE line (issue #881): 名称 + 一句「解决什么」, tap to
      open the upper layer, tap the inner .fold for 技术细节. The list of cards IS the overview. */

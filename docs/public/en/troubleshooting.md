@@ -70,7 +70,7 @@ In Tokenman, GitHub does one thing: it hosts the code and the pull requests. Tas
 
 **Carries on:**
 
-- **Tasks**: dispatching on the ⚡ line, the Sessions page and the T-numbered records live on the hub and are not affected.
+- **Tasks**: dispatching on the + New session line, the Sessions page and the T-numbered records live on the hub and are not affected.
 - **Sessions**: running sessions keep working; new sessions still open — Tokenman spends up to 20 seconds fetching the latest main branch from GitHub, and when it cannot, opens the session off the version this machine fetched last.
 - **Subscriptions and credentials**: the subscription credentials a session uses come from the hub, and so do the quota readings.
 - **The view**: the ⌘P panel, switching sessions, answering questions and following along on a phone all go through the hub and the links between machines.

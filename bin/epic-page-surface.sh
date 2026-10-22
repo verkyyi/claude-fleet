@@ -8,7 +8,8 @@
 # subtitle, the number band, each section's visible text, tables as `| a | b |`
 # rows, and each member card as its ONE summary line. Dropped, because the
 # decider does not see them without a tap: every `<details class="fold">`
-# (怎么量 / 共同约定 / 技术细节 / 预检原文 / 执行安排 …), everything inside a
+# (怎么量 / 共同约定 / 技术细节 / 预检原文 / 执行安排 …) and `<details class="code">`
+# (a 代码位置 fold, at any depth — NZP2; brevity measures without them), everything inside a
 # `<details class="card">` except its <summary>, <head>, <style>, <script> and
 # HTML comments.
 #
@@ -135,7 +136,7 @@ class Surface(HTMLParser):
         if tag == "div" and "xd" in cls:       # a row own detail (T764): one tap away, like a fold
             self.folds[self.section] = self.folds.get(self.section, 0) + 1
         if tag in ("head","style","script","template","button","form"): self.hidden += 1   # page controls are not words
-        elif tag == "details" and "fold" in cls: self.hidden += 1
+        elif tag == "details" and ("fold" in cls or "code" in cls): self.hidden += 1   # NZP2: a 代码位置 fold is one tap away at any depth
         elif tag == "div" and "xd" in cls: self.hidden += 1
         elif tag == "details" and "card" in cls:
             self.card.append(False)
@@ -313,6 +314,10 @@ if any(k == "eyebrow" and t.startswith("任务") for k, t, _ in p.lines):
 
 # T764 — the decider reads the top of a page first, and opens only what has something in it
 def txt(h): return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", "", h)).strip()
+def surf(h):   # NZP2: what is on the surface — every fold taken out, innermost first, at any depth
+    while True:
+        h, n = re.subn(r"<details\b[^>]*>(?:(?!<details\b).)*?</details>", "", h, flags=re.S)
+        if not n: return txt(h)
 def heading(rx):
     m = re.search(rx, RAW, re.S)
     return txt(m.group(1)) if m else ""
@@ -325,12 +330,12 @@ if sub and "⟨" not in sub and (len(sub) > 30 or re.search(r"[（(]", sub)):
 if TASK:
     m = re.search(r"<section id=\"problem\">(.*?)(?:<span id=\"cause\">|</section>)", RAW, re.S)
     for li in re.findall(r"<li>(.*?)</li>", m.group(1), re.S) if m else []:
-        if len(txt(li)) > 25: warn("brevity", "现象一行一个事实、≤ 25 字（现在 %d 字）  ← %s" % (len(txt(li)), txt(li)))
+        if len(surf(li)) > 25: warn("brevity", "现象一行一个事实、≤ 25 字（现在 %d 字）  ← %s" % (len(surf(li)), surf(li)))
     m2 = re.search(r"<span id=\"charter\"></span>(.*?)</section>", RAW, re.S)
     for li in re.findall(r"<li>(.*?)</li>", m2.group(1), re.S) if m2 else []:
-        if len(txt(li)) > 20: warn("brevity", "做 / 不做一项一句、≤ 20 字，细节进解决方案卡片（现在 %d 字）  ← %s" % (len(txt(li)), txt(li)))
+        if len(surf(li)) > 20: warn("brevity", "做 / 不做一项一句、≤ 20 字，细节进解决方案卡片（现在 %d 字）  ← %s" % (len(surf(li)), surf(li)))
     for sym in re.findall(r"<p class=\"sym\">(.*?)</p>", m.group(1), re.S) if m else []:
-        if len(txt(sym)) > 40: warn("brevity", "现象一句话、≤ 40 字（现在 %d 字）  ← %s" % (len(txt(sym)), txt(sym)))
+        if len(surf(sym)) > 40: warn("brevity", "现象一句话、≤ 40 字（现在 %d 字）  ← %s" % (len(surf(sym)), surf(sym)))
 for sid, summ, what in (("cause", "证据（代码与现场）", "证据没挂到步骤：每一步自带它的证据（cause.steps[].evidence），对不上的进分组的「其他证据」"),
                         ("metrics", "怎么量", "量法没挂到行：每一行指标自带怎么量（metrics[].how）")):
     m = re.search(r"id=\"%s\">(.*?)(?:<span id=\"charter\">|</section>)" % sid, RAW, re.S)

@@ -195,7 +195,8 @@ and on a done / passed item its 线上实拍 — `screenshots`, phone 390 + desk
 `task-evidence`, `task-signoff`, `brevity`, `fold-row`, `accept`, `empty-fold`,
 `task-evidence-shot`);
 `fleet-task-page.py body` turns it into the task's words, both layers, inside the
-record's 16 KB.
+record's 16 KB; a page too long for one task splits into one task per card
+(`body … --split <dir>`, each part with the link and the shared sections).
 
 ## 验收要有线上真实截图 (A300)
 
@@ -236,6 +237,24 @@ class="xd">…</div></details>`, a row WITHOUT one a plain `<div class="xr">` �
 nothing to tap. The same rule for a card: nothing past its one line ⇒ `<div
 class="card">`, no fold; an empty 技术细节 is dropped, never shown. The lint's
 `empty-fold` names an arrow onto nothing, `fold-row` the old shared 证据 / 怎么量 folds.
+
+## 代码位置 — the code references, one fold further down (NZP2)
+
+Both page kinds. A 技术细节 / a step's evidence / an 其他证据 item is written as
+ARCHITECTURE (what talks to what, who owns which state, what happens on failure);
+the code references it rests on — `file:line`, a commit, a test's name — go in ONE
+more fold inside it, `<details class="code">`, closed by default:
+
+```html
+<dt>完成判据</dt><dd>网页对一个开着的会话说一句：终端里出现这一轮；草稿不被覆盖。
+<details class="code"><summary>代码位置（展开）</summary><code>bin/fleet-idle-accept-claude-selftest.sh</code>
+加 6 步：Esc 与交话延迟。</details></dd>
+```
+
+In a spec this is just part of the HTML fragment (`tech`'s value, an `evidence` li,
+an `other` item's `text`). The frame styles it; the lint never reads it as surface
+(nor counts it in `brevity`); `fleet-task-page.py body` writes it out at any depth
+(「**代码位置** …」) and, over the cap, moves these folds to the page first.
 
 ## 页内反馈 — the page answers itself (T764)
 

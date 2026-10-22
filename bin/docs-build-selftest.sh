@@ -251,9 +251,9 @@ words = subprocess.run(['bash', os.path.join(ROOT, 'bin/fleet-ui-lang.sh'), 't',
                        capture_output=True, text=True, env=dict(os.environ, FLEET_UI_LANG='zh')).stdout
 want += [w.split(' ', 1)[-1] for w in words.split('  ') if w.strip()]
 # T685: the panel's own rows stand where the other keys stood
-for k in ('view_cmd_blank', 'view_cmd_home', 'view_cmd_quit'):
-    want.append(subprocess.run(['bash', os.path.join(ROOT, 'bin/fleet-ui-lang.sh'), 't', k],
-                               capture_output=True, text=True, env=dict(os.environ, FLEET_UI_LANG='zh')).stdout.strip())
+for k, icon in (('view_cmd_blank', '+'), ('view_cmd_home', '$'), ('view_cmd_quit', '⏏')):
+    want.append(icon + ' ' + subprocess.run(['bash', os.path.join(ROOT, 'bin/fleet-ui-lang.sh'), 't', k],
+                                            capture_output=True, text=True, env=dict(os.environ, FLEET_UI_LANG='zh')).stdout.strip())
 for w in want:
     if w not in md:
         bad.append('H the generated .md lacks %r' % w)

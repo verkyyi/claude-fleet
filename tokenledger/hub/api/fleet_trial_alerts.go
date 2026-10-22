@@ -65,6 +65,8 @@ var selfNotifiedAlerts = map[string]bool{
 	store.AlertSvcDegraded:         true,
 	store.AlertEntryHostKeyChanged: true,
 	store.AlertTrialCodeBurst:      true,
+	// pool_relogin: each admin on WeChat, once a credential a day (FKS6)
+	store.AlertPoolRelogin: true,
 }
 
 // alertWords is each kind in words, zh / en: the pushed message's title.

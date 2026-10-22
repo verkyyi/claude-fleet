@@ -1,8 +1,6 @@
 # Terms of Service
 
-> Draft: these terms are still being confirmed and may change before the final version is published.
-
-Last updated: 21 October 2026
+Effective: 21 October 2026
 
 These terms are an agreement between you and 广州二四网络科技有限公司 ("we") about your use of {brand} ("the service"). By signing in you confirm that you have read and agree to these terms and the [Privacy Policy](/en/privacy).
 

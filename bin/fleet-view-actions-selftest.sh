@@ -223,7 +223,7 @@ waitfor '回收…' || st_fail "D: Tab opened no menu: $(screen)"
 screen > "$W/menu.txt"
 # plan B (T493): a whole page — the row on top, a rule, numbered items
 sed -n 2p "$W/menu.txt" | grep -q 'Alpha 做完了' || st_fail "D: the page's top line is not the row: $(cat "$W/menu.txt")"
-grep -q '1  进入' "$W/menu.txt" || st_fail "D: the page has no numbered 进入: $(cat "$W/menu.txt")"
+grep -q '1 进入' "$W/menu.txt" || st_fail "D: the page has no numbered 进入: $(cat "$W/menu.txt")"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || st_fail "D: Esc did not step back to the list: $(screen)"
 to send-keys -t o Escape
@@ -238,7 +238,7 @@ waitfor '回收…' || st_fail "D: ↓ did not reach 回收: $(screen)"
 to send-keys -t o Enter
 waitfor '回收「Alpha 做完了」？(y/n)' || st_fail "D: 回收 did not ask y/n: $(screen)"
 to send-keys -t o n
-waitfor '1  进入' || st_fail "D: n did not return to the actions page: $(screen)"
+waitfor '1 进入' || st_fail "D: n did not return to the actions page: $(screen)"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || st_fail "D: Esc did not return to the list"
 [ -z "$(calls)" ] || st_fail "D: 回收 → n ran «$(calls)»"
@@ -252,12 +252,12 @@ waitfor '回收：已在后台做' || st_fail "D: the list does not say the reap
 screen > "$W/after.txt"
 reset
 to send-keys -t o Tab; waitfor '改名…' || st_fail "D: no menu (3)"
-n=$(screen | grep -o '[0-9]  改名…' | cut -c1)
+n=$(screen | grep -o '[0-9] 改名…' | cut -c1)
 [ -n "$n" ] || st_fail "D: 改名 has no number: $(screen)"
 to send-keys -t o "$n"
 waitfor '新名字›' || st_fail "D: 改名 did not ask on its page: $(screen)"
 to send-keys -t o Escape
-waitfor '1  进入' || st_fail "D: Esc did not step back to the actions page: $(screen)"
+waitfor '1 进入' || st_fail "D: Esc did not step back to the actions page: $(screen)"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || st_fail "D: Esc did not cancel the rename"
 [ -z "$(calls)" ] || st_fail "D: a cancelled rename ran «$(calls)»"
@@ -373,7 +373,7 @@ to send-keys -t o -l 'Far 在'
 waitfor '› Far 在' || st_fail "E: typing did not filter: $(screen)"
 to send-keys -t o Tab; waitfor '换成' || st_fail "E: Tab on the far row: $(screen)"
 sed -n 2p <<<"$(screen)" | grep -q 'Far 在' || st_fail "E: the page's top line is not the far row: $(screen)"
-n=$(screen | grep -o '[0-9]  换成' | cut -c1)
+n=$(screen | grep -o '[0-9] 换成' | cut -c1)
 [ -n "$n" ] || st_fail "E: 换成 has no number on the far row's page: $(screen)"
 to send-keys -t o "$n"
 waitfor '（在 mac-a）：已完成' || st_fail "E: the popup does not say the switch landed: $(screen)"

@@ -2542,7 +2542,7 @@ def agent_word(e):
 
 def name_col(width):
     """The cell the name column starts at, as row_segs lays a row out."""
-    return 4 + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0)
+    return TEXT_X + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0)
 
 
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
@@ -2557,7 +2557,7 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     show_repo = width >= 60
     show_agent = width >= 40
     agent = agent_word(e)
-    segs = [("  ", base), (gl[sym], gstyle), (" ", base),
+    segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base),
             ((e.get("id") or "").ljust(ID_W) + " ", base + ("bold",))]
     if show_agent:
         aw = ellipsis(agent, AGENT_W, cells, clip)
@@ -2597,20 +2597,46 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     return segs
 
 
-# the icon column (T774): a 1-cell gutter, then a 2-cell slot a narrow glyph sits
-# at the right of (where a session row's state glyph is) and a wide one (⚡) fills,
-# a space — so every label starts at TEXT_X, a session's ID too
-TEXT_X = 4
+# the left grid (T923): col 0-1 gutter, col 2 the ONE icon column (every icon
+# exactly one cell — no wide, no ambiguous, no emoji presentation), col 3 a space,
+# col 4 = TEXT_X, where every label, ID and input starts
+ICON_X, TEXT_X = 2, 4
+# a command row's icon by its `cmd` (T923): the ONE table — the strings carry words
+# only; 消息's is MSG_GLYPHS' inbox (fleet_notice's book). An icon here is one cell
+# wide, never East Asian W / F / A (fleet-panel-grid-selftest.py holds it)
+CMD_ICONS = {"notices": "✦", "new": "+", "home": "$", "pin": "⇡", "unpin": "⇣", "lang": "⇄",
+             "quit": "⏏", "reapall": "⌫", "history": "↺"}
+CMD_ICONS_ASCII = {"notices": "*", "new": "+", "home": "$", "pin": "^", "unpin": "v", "lang": "~",
+                   "quit": "<", "reapall": "-", "history": "<"}
 
 
-def cmd_line(text, cells):
-    """A command row (✦ 消息 · ⚡ 新会话 · $ 命令行 · 置顶 · ◐ · ⏻ …) with its icon in
-    the one column and its words at TEXT_X, by display cells; a row with no icon
-    (its first word is not a lone symbol) keeps the slot blank."""
-    icon, sep, rest = text.partition(" ")
-    if not sep or len(icon) != 1 or icon.isalnum() or cells(icon) > 2:
-        icon, rest = "", text
-    return " " + " " * (2 - cells(icon)) + icon + " " + rest
+def cmd_icons():
+    t = CMD_ICONS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else CMD_ICONS
+    return dict(t, notices=msg_glyphs()["inbox"])
+
+
+def row_lead(icon=""):
+    """The row start every kind shares: the gutter, the icon cell, a space."""
+    return " " * ICON_X + (icon or " ") + " "
+
+
+def cmd_line(text, cells, icon=None):
+    """A command row: its icon (CMD_ICONS) in the one column, its words at TEXT_X.
+    An old string still led by a lone symbol has that symbol taken off."""
+    first, sep, rest = text.partition(" ")
+    if sep and len(first) == 1 and not first.isalnum():
+        if icon is None:
+            icon = first
+        text = rest
+    return row_lead(icon or "") + text
+
+
+def fill(text, width, cells, clip):
+    """A row as wide as the list: cut with … when it does not fit, padded when it
+    does — so a lit row's ground spans the row whatever its kind."""
+    if cells(text) > width:
+        text = clip(text, max(0, width - 1)) + "…"
+    return text + " " * max(0, width - cells(text))
 
 
 def paint(shown, at, width, cells, clip):
@@ -2626,15 +2652,16 @@ def paint(shown, at, width, cells, clip):
         if e["kind"] == "sec":
             # a row the cursor stops on (T762): indented like one; only a ─ heading
             # starts at the left edge
-            lines.append([(clip("  " + ("▸ " if e.get("closed", True) else "▾ ") + e["text"], width),
+            lines.append([(fill(row_lead("▸" if e.get("closed", True) else "▾") + e["text"], width, cells, clip),
                            ("lit",) if lit else ())])
             continue
         if e["kind"] == "cmd":
-            lines.append([(clip(cmd_line(e["text"], cells), width), ("lit",) if lit else ())])
+            icon = cmd_icons().get(e.get("icon") or e.get("cmd") or "")
+            lines.append([(fill(cmd_line(e["text"], cells, icon), width, cells, clip), ("lit",) if lit else ())])
             continue
         if e["kind"] == "grid":
             # the ⚡ row's cells (issue #3327): the one Tab is on lit, the rest plain
-            segs = [("    ", ())]
+            segs = [(" " * TEXT_X, ())]
             for n, (text, on) in enumerate(e.get("cells") or []):
                 segs += ([("  ·  ", ("dim",))] if n else []) + [(text, ("lit", "bold") if on else ())]
             if not e.get("cells"):
@@ -2646,8 +2673,10 @@ def paint(shown, at, width, cells, clip):
         indent = "  " * (e.get("depth") or 0)
         if e["kind"] == "ask":
             # the question under its row, from the name column
-            lead = " " * (4 + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0))
-            lines.append([(clip(lead + (e.get("tree") or indent) + e["text"], width), ("dim",))])
+            lines.append([(clip(" " * name_col(width) + (e.get("tree") or indent) + e["text"], width), ("dim",))])
+            continue
+        if e["kind"] == "note":
+            lines.append([(clip(" " * TEXT_X + e["text"], width), ("dim",))])
             continue
         lines.append(row_segs(e, width, cells, clip, lit))
     return lines
@@ -4600,8 +4629,8 @@ def caches_words_reset():
 
 
 def lang_row(query):
-    """「◐ 语言 / Language」 (issue #3329) — when there are no words, or they name it."""
-    text = "◐ " + say("view_lang_row")
+    """「⇄ 语言 / Language」 (issue #3329) — when there are no words, or they name it."""
+    text = say("view_lang_row")
     q = query.strip().lower()
     if q and not all(w in text.lower() for w in q.split()):
         return None
@@ -4610,8 +4639,8 @@ def lang_row(query):
 
 
 def compose_title(cells):
-    """The 「新会话」 box's first line (T774): ⚡ 新会话, its icon in the one column."""
-    return cmd_line("⚡ " + say("view_composer"), cells)
+    """The 「新会话」 box's first line (T774): + 新会话, its icon in the one column."""
+    return cmd_line(say("view_composer"), cells, cmd_icons()["new"])
 
 
 def notices_row(query):
@@ -4624,7 +4653,7 @@ def notices_row(query):
         n = fleet_notice.unread()
     except Exception:
         n = 0
-    text = msg_glyphs()["inbox"] + " " + (say("view_notices_row_fmt", n) if n else say("view_notices_row"))
+    text = say("view_notices_row_fmt", n) if n else say("view_notices_row")
     q = query.strip()
     if q and not panel_hit(q, text, say("view_notices_words")):
         return None
@@ -4661,6 +4690,7 @@ def pin_row(items, query, cur):
     if q and not all(w in (text + " pin top 置顶").lower() for w in q.split()):
         return None
     return {"kind": "cmd", "cmd": "pin", "act": "pin", "row": e, "text": text,
+            "icon": "unpin" if e.get("group") == "pin" else "pin",
             "foot": say("view_pin_foot_fmt", label_of(e))}
 
 
@@ -4862,6 +4892,8 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     if "quit" in words:
         bottom.append({"kind": "cmd", "cmd": "quit", "act": "quit", "row": {}, "text": say("view_cmd_quit"),
                        "hit": bool(q) and panel_hit(q, say("view_cmd_quit"), QUIT_WORDS)})
+    if not q and not any(e["kind"] == "sess" for e in rows):
+        rows = [{"kind": "note", "text": say("view_empty")}] + rows
     out = top + rows + bottom
     return out
 
@@ -5370,14 +5402,14 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             # as ✦ 消息's page puts its title there; esc gives the search back
             panel.put(screen, 0, 0, compose_title(qo.cells), width - 1, qo.clip, attr(("bold",)))
         else:
-            panel.put(screen, 0, 0, "› " + (query or say("view_search_ph")), count_x - 1, qo.clip)
+            panel.put(screen, 0, 0, row_lead("›") + (query or say("view_search_ph")), count_x - 1, qo.clip)
             panel.put(screen, 0, count_x, count, width - count_x - 1, qo.clip, attr(("bold",)))
             if aged:
                 cx = count_x + qo.cells(count)
                 panel.put(screen, 0, cx, aged, max(0, width - cx - 1), qo.clip, attr(("dim",)))
         if ban:
             try:
-                screen.addnstr(1, 0, qo.clip(ban, width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
+                screen.addnstr(1, 0, qo.clip(cmd_line(ban, qo.cells), width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
             except curses.error:
                 pass
         for y, segs in enumerate(paint(shown[top:top + body], at - top, width - 1, qo.cells, qo.clip) if not page else [], off):
@@ -5401,7 +5433,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             fstyle = ("red",) if red else fstyle
         if width < 48:
             foot = say("view_narrow")
-        panel.put(screen, height - 2, 0, foot, width - 1, qo.clip, attr(fstyle))
+        panel.put(screen, height - 2, 0, fill(cmd_line(foot, qo.cells), width - 1, qo.cells, qo.clip) if foot else foot, width - 1, qo.clip, attr(fstyle))
         keys = say("view_keys_sending") if busy else say("view_keys_short")
         if not busy and not page and epic_folds(lit_e) and not query.split():
             keys = say("view_keys_epic") + "  " + keys
@@ -5428,10 +5460,10 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 n = 0
                 for i, (_, label, _, why) in enumerate(mitems):
                     if why:
-                        lines.append(("     " + label + "　" + why, ("dim",)))
+                        lines.append((" " * TEXT_X + label + "  " + why, ("dim",)))
                         continue
                     n += 1
-                    lines.append(("  %s  %s" % (n if n < 10 else " ", label), ("lit",) if i == mat else ()))
+                    lines.append((row_lead(str(n) if n < 10 else "") + label, ("lit",) if i == mat else ()))
                 if mode == "menu" and head and head.get("kind") == "sess":
                     # the window's ID under its actions (EPIC T497 C3): segments, aliases, hub
                     lines.extend(id_page(head, w))
@@ -5466,10 +5498,10 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 cells, note = bolt_cells(bolt, "")
                 for k, label in enumerate([cells[0][0], cells[1][0], say("view_new_open")]):
                     controls[len(lines)] = k
-                    lines.append(("  " + label, ("lit",) if box == k else ()))
+                    lines.append((" " * TEXT_X + label, ("lit",) if box == k else ()))
                 selected = next(i for i, k in controls.items() if k == box)
                 if note:
-                    lines.append(("  " + note, ("dim",)))
+                    lines.append((" " * TEXT_X + note, ("dim",)))
                 keys = say("view_compose_keys")
             area = max(1, body - 1 - (pg - off))
             page.scroll = panel.clamp_top(page.scroll, len(lines), area)
@@ -5491,7 +5523,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 curses.curs_set(0)
         else:
             curses.curs_set(0)
-        panel.put(screen, height - 1, 0, keys, width - 1, qo.clip, attr(("dim",)))
+        panel.put(screen, height - 1, 0, cmd_line(keys, qo.cells), width - 1, qo.clip, attr(("dim",)))
         screen.refresh()
         if not clock.written:
             clock.mark("frame")

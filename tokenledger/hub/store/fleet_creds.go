@@ -403,6 +403,20 @@ func (s *Store) MarkReauthRequired(principalID, provider, account, detail string
 	return err
 }
 
+// ClearReauthRequired lifts a reauth_required mark a later successful read
+// proved wrong (claude-fleet FKS6): the credential works again. cleared is
+// false when the row carried no mark.
+func (s *Store) ClearReauthRequired(principalID, provider, account string, at time.Time) (cleared bool, err error) {
+	res, err := s.write.Exec(`UPDATE fleet_credentials SET reauth_required_at = NULL, refresh_error = '', updated_at = ?
+		WHERE principal_id = ? AND provider = ? AND account = ? AND reauth_required_at IS NOT NULL`,
+		fmtTime(at), principalID, provider, account)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // AddCredAudit appends an audit row.
 func (s *Store) AddCredAudit(a CredAudit) error {
 	if a.At.IsZero() {

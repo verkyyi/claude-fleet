@@ -49,7 +49,7 @@
 #      both chosen; ↑↓ walk, ←→ change, ↵ on a value goes to 开, ↵ on 开 is ⌘N's
 #      argv with --repo / --no-repo and --agent (no send, no words), the 看台 on
 #      it, the choice kept per view; ⏻ = ⌘Q's OSC 7502 + detach
-#   I  ⌘P's language row (issue #3329, EPIC #3178 D7): 语言 lights 「◐ 语言 / Language」,
+#   I  ⌘P's language row (issue #3329, EPIC #3178 D7): 语言 lights 「⇄ 语言 / Language」,
 #      ↵ flips to English — kept on the hub (a seam) and re-read here at once, the
 #      panel redrawn in it with a 3 s line — Tab's 跟系统走 takes it back; none
 #      said ⇒ 中文 and the Termius line (D9). FLEET_VIEW_LANG_EVIDENCE=<prefix>
@@ -180,7 +180,7 @@ printf '%s\n' "$MU/orch4${US}mac-a${US}online${US}working${US}${US}" > "$W/g/orc
 # opened before: 不绑仓库 · the fleet's Claude); ↵ opens
 nbox() {
   # the last box's popup has closed (it closes once the 看台 is on the new session)
-  waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || st_fail "N: the last box stayed open"
+  waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '+ 新会话'" || st_fail "N: the last box stayed open"
   to send-keys -t o:view -H 1b 5b 39 32 38 7e
   waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开 ↵'" || st_fail "N: ⌘N did not open the box: $(to capture-pane -p -t o:view)"
   waitfor 48 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -Eq '仓库 ‹(acme/|不绑仓库)'" || st_fail "N: the box's repo did not load"
@@ -212,11 +212,11 @@ waitfor 20 sh -c "tmux -S '$IN' list-windows -t fl -F '#{window_name}' | grep -q
 waitfor 10 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["repo"]=="acme/app" and d["agent_by_repo"]=={"":"claude","acme/app":"claude"}, d' \
   "$W/state/compose-state.json" 2>/dev/null || st_fail "N: the box's choices were not remembered: $(cat "$W/state/compose-state.json")"
 # esc closes a ⌘N box at once — there is no list it came from
-waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || st_fail "N: the second box stayed open"
+waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '+ 新会话'" || st_fail "N: the second box stayed open"
 to send-keys -t o:view -H 1b 5b 39 32 38 7e
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开 ↵'" || st_fail "N: a third ⌘N opened no box"
 to send-keys -t o:view Escape
-waitfor 8 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || st_fail "N: esc did not close a ⌘N box"
+waitfor 8 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '+ 新会话'" || st_fail "N: esc did not close a ⌘N box"
 N2=$(ti list-windows -t fl -F '#{window_id} #{window_name}' | awk '$2 == "new2" { print $1 }')
 waitfor 16 sh -c "[ \"\$(tmux -S '$IN' display-message -p -t 'fl@view-v1:' '#{window_id}')\" = '$N2' ]" \
   || st_fail "N: the second ⌘N did not land on its new session (now $(cur), it is $N2)"
@@ -250,20 +250,20 @@ st_ok_all "N  ⌘N: the box chosen (the session in view's repo, else the last), 
 # profile still sends it: no panel, no line in view-switch.ndjson.
 to send-keys -t o:direct -H 1b 5b 39 33 32 7e
 sleep 1.5
-to capture-pane -p -t o:direct | grep -q '⚡' && st_fail "T: ⌘T opened the panel in a direct attach"
+to capture-pane -p -t o:direct | grep -q '+ 新会话' && st_fail "T: ⌘T opened the panel in a direct attach"
 log="$W/conf/logs/view-switch.ndjson"
 # the panel runs leg N's ⌘N boxes left (each is the panel too)
 pn=$(python3 "$BIN/fleet_timing.py" check | sed -n 's/^panel n=\([0-9]*\) .*/\1/p'); pn=${pn:-0}
 to send-keys -t o:view -H 1b 5b 39 33 32 7e
 ok=''; for _ in $(seq 1 80); do
-  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '│ ⚡ 新会话' "$W/dispatch.txt" && { ok=1; break; }
+  sleep 0.1; to capture-pane -p -t o:view > "$W/dispatch.txt"; grep -q '│  + 新会话' "$W/dispatch.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "T: ⌘T in the 看台 did not open the panel lit on ⚡: $(grep -v '^$' "$W/dispatch.txt")"
 grep -q '已并进' "$W/dispatch.txt" && st_fail "T: ⌘T still says 「已并进 ⌘P」 (the hint went with T685)"
 grep -q '用哪个 Coding Agent' "$W/dispatch.txt" && st_fail "T: ⌘T still opened the 派一件事 popup"
 # the panel's own rows (T685): 命令行 and 退出 fleet stand in it
 grep -qF '$ 命令行' "$W/dispatch.txt" || st_fail "T: the panel has no 命令行 row: $(grep -v '^$' "$W/dispatch.txt")"
-grep -q '⏻ 退出 Tokenman' "$W/dispatch.txt" || st_fail "T: the panel has no 退出 Tokenman row"
+grep -q '⏏ 退出 Tokenman' "$W/dispatch.txt" || st_fail "T: the panel has no 退出 Tokenman row"
 # the panel clock (issue #3551): the frame drawn ⇒ one run boot · read · frame · total
 waitfor 10 sh -c "python3 '$BIN/fleet_timing.py' check | grep -q '^panel n=$((pn + 1)) '" \
   || st_fail "T: the panel's first frame left no run in timing/panel.ndjson: $(python3 "$BIN/fleet_timing.py" check)"
@@ -271,16 +271,16 @@ python3 "$BIN/fleet_timing.py" table panel | grep -q '^| frame | ' || st_fail "T
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/dispatch.txt" "$FLEET_VIEW_EVIDENCE"
 # typed words land on a row of the panel's own: 退出 → ⏻, and ↵ asks before it quits
 to send-keys -t o:view -l '退出'
-waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⏻ 退出 Tokenman'" || st_fail "T: typing 退出 did not light ⏻: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⏏ 退出 Tokenman'" || st_fail "T: typing 退出 did not light ⏻: $(to capture-pane -p -t o:view | grep -v '^$' | tail -6)"
 to send-keys -t o:view Enter
 waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '(y/n)'" || st_fail "T: ↵ on ⏻ did not ask first: $(to capture-pane -p -t o:view | grep -v '^$' | tail -4)"
 to send-keys -t o:view n
 sleep 0.5; [ -n "$(to list-panes -t o:view -F '#{pane_dead}' | grep -x 0)" ] || st_fail "T: n on 退出's question ended the connection"
-to send-keys -t o:view Escape; to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '│ ⚡'"
+to send-keys -t o:view Escape; to send-keys -t o:view Escape; waitfor 4 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '│  + 新会话'"
 lines=$(grep -c . "$log" 2>/dev/null || echo 0)
 to send-keys -t o:view -H 1b 5b 39 33 30 7e
 sleep 1.5
-to capture-pane -p -t o:view | grep -q '│ ⚡' && st_fail "T: ⌘K (retired code 930) opened the panel (T685: it does nothing)"
+to capture-pane -p -t o:view | grep -q '│  + 新会话' && st_fail "T: ⌘K (retired code 930) opened the panel (T685: it does nothing)"
 [ "$(grep -c . "$log" 2>/dev/null || echo 0)" = "$lines" ] || st_fail "T: ⌘K (930) left a line in view-switch.ndjson: $(tail -1 "$log")"
 grep -q '"how":"old:' "$log" 2>/dev/null && st_fail "T: a press is still logged how=old:<action> (the forwards went with T685)"
 # the one message after the update (fleet-remote-view.sh attach --thin runs view-notice):
@@ -488,7 +488,7 @@ pbox() {
   waitfor 12 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '开 ↵'" || st_fail "P: the new-session box did not open"
   waitfor 48 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -Eq '仓库 ‹(acme/|不绑仓库)'" || st_fail "P: repositories did not load"
 }
-pclosed() { waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '⚡'" || st_fail "P: panel stayed open"; }
+pclosed() { waitfor 20 sh -c "! tmux -S '$OUT' capture-pane -p -t o:view | grep -q '+ 新会话'" || st_fail "P: panel stayed open"; }
 : > "$W/send.calls"; rm -f "$W/sent.json"
 pbox '修 3164 的列表'
 to capture-pane -p -t o:view > "$W/panel-box.txt"
@@ -566,14 +566,14 @@ lshot() { to capture-pane -p -t o:view | grep -v '^$'; }
 to send-keys -t o:view -H 1b 5b 39 32 37 7e
 waitfor 20 listed || st_fail "I: ⌘P listed nothing"
 to send-keys -t o:view -l '语言'; sleep 0.5
-waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ◐ 语言 / Language　中文 ✓ · English'" \
+waitfor 10 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q '  ⇄ 语言 / Language  中文 ✓ · English'" \
   || st_fail "I: typing 语言 did not light the language row: $(lshot)"
 lshot | grep -q 'Termius → Hosts' && st_fail "I: footer repeats selected row detail"
 [ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.zh.txt"
 to send-keys -t o:view Enter
 waitfor 20 sh -c "tmux -S '$OUT' capture-pane -p -t o:view | grep -q 'Language: English · saved to your account'" \
   || st_fail "I: ↵ did not switch to English and say so: $(lshot)"
-lshot | grep -q '◐ Language / 语言　English ✓ · 中文' || st_fail "I: the panel did not redraw in English: $(lshot)"
+lshot | grep -q '⇄ Language / 语言  English ✓ · 中文' || st_fail "I: the panel did not redraw in English: $(lshot)"
 [ -n "${FLEET_VIEW_LANG_EVIDENCE:-}" ] && lshot > "$FLEET_VIEW_LANG_EVIDENCE.en.txt"
 grep -q '"ui_lang": *"en"' "$W/person.json" || st_fail "I: the hub was not told: $(cat "$W/person.json")"
 grep -q '"ui_lang": *"en"' "$W/conf/person-bundle.json" || st_fail "I: this computer's copy was not re-read: $(cat "$W/conf/person-bundle.json" 2>&1)"

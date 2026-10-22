@@ -970,6 +970,7 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(AdminSubsFinishPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsFinish))))
 	mux.Handle(AdminSubsTokenPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsToken))))
 	mux.Handle(AdminSubsRefreshPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsRefresh))))
+	mux.Handle(AdminSubsReauthPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSubsReauth))))
 	mux.Handle(MeSubsPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubs)))
 	mux.Handle(MeSubsLoginPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsLogin)))
 	mux.Handle(MeSubsFinishPath, s.viewerOnly(http.HandlerFunc(s.handleMeSubsFinish)))

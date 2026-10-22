@@ -4,8 +4,8 @@
 // folds behind a trigger (rule 9: opens and reads, no layout of its own).
 // ⌘K anywhere opens the search box (Search.tsx, claude-fleet#3942).
 import * as React from "react";
-import { ArrowLeft } from "lucide-react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { ArrowLeft, ArrowRight, KeyRound } from "lucide-react";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import {
   Sidebar,
@@ -46,6 +46,34 @@ function useCounts(pathname: string): Record<string, number> {
     }
   }, [pathname]);
   return counts;
+}
+
+// ReauthBanner is the console's one line across the top while any
+// subscription needs a new sign-in (claude-fleet FKS6): how many, and the way
+// to them — the one itself when it is one, the pool narrowed to them else.
+type ReauthList = { pending: number; items?: { credential_id: string }[] };
+function ReauthBanner({ pathname }: { pathname: string }) {
+  const [list, setList] = React.useState<ReauthList | null>(null);
+  React.useEffect(() => {
+    api<ReauthList>("/v1/admin/subscriptions/reauth").then(setList, () => setList(null));
+  }, [pathname]);
+  if (!list?.pending) return null;
+  const one = list.pending === 1 && list.items?.[0]?.credential_id;
+  const to = one ? `/pool/${encodeURIComponent(one)}` : "/pool?need=reauth";
+  return (
+    <Link
+      to={to}
+      role="alert"
+      className="flex items-center gap-2 border-b border-destructive/40 bg-destructive px-4 py-2.5 text-sm font-medium text-white hover:bg-destructive/90"
+    >
+      <KeyRound className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1">{t("reauth.banner", { n: list.pending })}</span>
+      <span className="flex shrink-0 items-center gap-1 underline underline-offset-2">
+        {t("reauth.bannerGo")}
+        <ArrowRight className="size-4" />
+      </span>
+    </Link>
+  );
 }
 
 export function AdminShell() {
@@ -119,6 +147,7 @@ export function AdminShell() {
               <span className="font-display text-sm font-semibold whitespace-nowrap">{BRAND} · {t("brand.admin")}</span>
               <SearchButton className="ml-auto w-auto" />
             </header>
+            <ReauthBanner pathname={pathname} />
             <Outlet />
           </SidebarInset>
         </SidebarProvider>
