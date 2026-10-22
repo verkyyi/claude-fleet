@@ -17,6 +17,25 @@ try {
         const page = await context.newPage()
         let capability = kind === 'delayed' ? null : kind === 'ticket' ? true : undefined
         const sent = []
+        // route.fulfill ends the response immediately. Use a real open stream:
+        // a completed SSE response must now disable sending until reconnect.
+        await page.addInitScript(({ agent, kind }) => {
+          const real = window.fetch.bind(window)
+          const enc = new TextEncoder()
+          const test = window.__sessionView = { capability: kind === 'delayed' ? null : kind === 'ticket' ? true : undefined }
+          test.emit = () => test.controller.enqueue(enc.encode(`data: ${JSON.stringify({ t: 'state', agent, session: 's1', busy: false,
+            can_talk: test.capability, talk_reason: test.capability === null ? 'checking' : '', queue: [] })}\n\n`))
+          window.fetch = async (input, init) => {
+            const url = new URL(String(input), location.origin)
+            if (url.pathname !== '/v1/chat/view' || url.searchParams.has('cached')) return real(input, init)
+            return new Response(new ReadableStream({ start(controller) {
+              test.controller = controller
+              test.emit()
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ t: 'items', replace: true, session: 's1', at: 10,
+                items: [{ t: 'text', d: 'first reply' }] })}\n\n`))
+            } }), { headers: { 'Content-Type': 'text/event-stream' } })
+          }
+        }, { agent, kind })
         await page.route('**/*', async route => {
           const url = new URL(route.request().url())
           assert.equal(url.origin, origin)
@@ -27,13 +46,8 @@ try {
           if (path.startsWith('/v1/fleet/tasks/')) return route.fulfill({ status: 404, json: {} })
           if (path === '/v1/fleet/sessions') return json({ sessions: [], fleets: [] })
           if (path === '/v1/chat/view') {
-            if (url.searchParams.has('cached')) return json({ mirror: null })
-            const frames = [
-              { t: 'state', agent, session: 's1', busy: false, can_talk: capability,
-                talk_reason: capability === null ? 'checking' : '', queue: [] },
-              { t: 'items', replace: true, session: 's1', at: 10, items: [{ t: 'text', d: 'first reply' }] },
-            ]
-            return route.fulfill({ contentType: 'text/event-stream', body: frames.map(f => `data: ${JSON.stringify(f)}\n\n`).join('') })
+            assert(url.searchParams.has('cached'), 'live view uses the open stream')
+            return json({ mirror: null })
           }
           if (path === '/v1/chat/say') {
             assert.equal(kind, 'delayed', 'read-only page must not send')
@@ -54,7 +68,13 @@ try {
           assert.match(await input.getAttribute('placeholder'), /Connecting|正在连接/)
           await input.press('Enter')
           assert.equal(sent.length, 0, 'Enter cannot send before the gate answers')
+          await page.evaluate(() => window.__sessionView.controller.error(new Error('controlled stream disconnect')))
+          await page.waitForFunction(() => document.querySelector('[data-testid=session-view]')?.getAttribute('data-access') === 'offline')
+          assert.equal(await input.inputValue(), 'draft survives discovery')
+          assert.equal(await input.isDisabled(), false, 'offline can keep drafting')
+          assert.equal(await page.getByRole('button', { name: '发送', exact: true }).isDisabled(), true)
           capability = true
+          await page.evaluate(() => { window.__sessionView.capability = true })
           await page.locator('[data-testid=session-view][data-talk]').waitFor()
           assert.match(await input.inputValue(), /draft survives discovery/)
           await page.getByRole('button', { name: '发送', exact: true }).click()
