@@ -62,6 +62,10 @@ class Lifecycle(unittest.TestCase):
         f.set('@reap_policy', 'keep')
         f.set('@parked', '123')       # exit requested, agent still running
         self.assertEqual(self.counts(f)[:2], ['1', '1'])
+        f.set('@park_held', '123')   # stale ack cannot hide a still-live relay
+        self.assertTrue(f.opt('@park_relay'))
+        self.assertEqual(self.counts(f)[:2], ['1', '1'])
+        f.set('@park_held', '')
         f.set('@parked', '')
         with patch.dict(os.environ, f.env, clear=True):
             self.assertTrue(park.gate.park(f.fid)['ok'])
@@ -78,6 +82,37 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(f.opt('@reap_policy'), 'keep')
         self.assertEqual(f.opt('@cc_session_id'), f.sid)
         self.assertEqual(f.opt('@fleet_id'), f.fid)
+
+    def test_repo_configuration_changes_preserve_other_session_and_capacity(self):
+        f = self.fixture()
+        f.set('@repo', 'owner/first')
+        f.set('@norepo', '')
+        repos = f.root / 'conf/fleets' / f.label / 'repos'
+        repos.mkdir()
+        (repos / 'owner-first.conf').write_text('FLEET_REPO="owner/first"\n')
+        (repos / '.order').write_text('owner-first\n')
+        identity_format = '#{@fleet_id}|#{@cc_session_id}|#{@repo}|#{@worktree}|#{window_id}|#{@pin}|#{@reap_policy}'
+        def snapshot():
+            return f.tm('display-message', '-p', '-t', f.win, identity_format), self.counts(f)
+        # Add/remove another repo while awake, then while safely parked. These
+        # are the registry files consumed by the real cap/identity readers.
+        for parked in (False, True):
+            if parked:
+                with patch.dict(os.environ, f.env, clear=True):
+                    self.assertTrue(park.gate.park(f.fid)['ok'])
+            before = snapshot()
+            if not parked:
+                with patch.dict(os.environ, f.env, clear=True):
+                    cleaner = self.cleaner(f)
+                    cleaner.args.repo = 'owner/second'
+                    self.assertFalse(cleaner.fold(f.win))
+                self.assertEqual(snapshot(), before)
+            (repos / 'owner-second.conf').write_text('FLEET_REPO="owner/second"\n')
+            (repos / '.order').write_text('owner-first\nowner-second\n')
+            self.assertEqual(snapshot(), before)
+            (repos / 'owner-second.conf').unlink()
+            (repos / '.order').write_text('owner-first\n')
+            self.assertEqual(snapshot(), before)
 
     def cleaner(self, f):
         args = argparse.Namespace(socket_name=f.label, session=f.label, repo='', main='', base='master',
@@ -141,28 +176,24 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(f.opt('@pin'), '1')
             self.assertEqual(f.opt('@fleet_id'), f.fid)
 
-    def test_terminal_recheck_precedes_park_and_missing_rss_stays_unknown(self):
+    def test_memory_never_calls_terminal_reaper_and_missing_rss_stays_unknown(self):
         import contextlib
         import io
         f = self.fixture()
         with patch.dict(os.environ, f.env, clear=True):
             c = self.cleaner(f)
             c.args.repo = 'o/r'
-            def new_question(window):
-                f.set('@claude_needs', 'ask')
-                return False
-            with patch.object(c, 'work_over', return_value=True), \
-                    patch.object(c, 'candidate', side_effect=new_question) as reaper:
-                self.assertFalse(c.fold(f.win))
-                reaper.assert_called_once_with(f.win)
-                self.assertFalse(f.opt('@park_held'))
-            f.set('@claude_needs', '')
-            f.set('@pin', '1')
-            c.args.repo = ''
             out = io.StringIO()
-            with patch.object(c, 'tree_rss', return_value={}), contextlib.redirect_stdout(out):
+            with patch.object(c, 'work_over', return_value=True), \
+                    patch.object(c, 'candidate', return_value=True) as reaper, \
+                    patch.object(c, 'tree_rss', return_value={}), contextlib.redirect_stdout(out):
                 self.assertTrue(c.fold(f.win))
+                reaper.assert_not_called()
+            self.assertTrue(f.opt('@park_held'))
+            self.assertIn('parked-room:' + f.win, out.getvalue())
             self.assertIn('mb=unknown', out.getvalue())
+            self.assertEqual(f.opt('@fleet_id'), f.fid)
+            self.assertFalse((f.root / 'conf/retired' / f.fid).exists())
 
 if __name__ == '__main__':
     unittest.main()

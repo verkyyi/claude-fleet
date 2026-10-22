@@ -80,15 +80,11 @@ NOW_EOF
   exit 0
 fi
 
-# --make-room <MB> [--dry-run] (T695, 回收 C): fold sessions until about <MB> of
-# their memory is free — normal terminal reaping first, then safe idle parking
-# (fleet-cleanup-idle.py --plan-room's tiers, across this login's fleets), each
-# through `--fold --only <window>` with ITS repo's conf (or explicit no-repo).
-# New wrappers park in place and retain pin/keep; legacy closes remain history first and
-# resumable, the window closed, the worktree kept. fleet_admit_make_room
-# (fleet-lib.sh) runs it before a spawn is refused for memory. One line a fold
-# (`folded:<window> <key> mb=<n>` or `parked-room:<window> mb=<n|unknown>`), then `made-room <freed>MB of <MB>MB, <n> folded`.
-# FLEET_ADMIT_MAKE_ROOM=0 folds nothing.
+# --make-room <MB> [--dry-run]: safely park new wrappers until about <MB> of
+# observed RSS has been released. Unknown/old wrappers stay for the ordinary
+# lifecycle; this pressure path never archives. Resolve each window's own repo
+# (or explicit no-repo) and recheck the single park gate through --fold --only.
+# Keep the CLI and summary shape for existing admission callers.
 if [ "${1:-}" = --make-room ]; then
   need=${2:-}; dry=''
   [ "${3:-}" = --dry-run ] && dry=--dry-run

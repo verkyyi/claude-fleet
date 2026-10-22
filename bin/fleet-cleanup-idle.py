@@ -1464,54 +1464,29 @@ class Cleaner:
         return int(v) if re.fullmatch(r"\d{1,7}", v) else 600
 
     def room_tier(self, window, snap, shown, here):
-        """0 completed · 1 safely parkable (legacy: idle) · None held.
+        """0 completed · 1 safely parkable · None held.
 
-        The native gate, not this ordering hint, authorizes parking.
+        Ordering only: memory pressure never grants permission to archive.
+        Old/unknown wrappers wait for the ordinary lifecycle or a safe upgrade.
         """
+        if not re.fullmatch(r"[1-9][0-9]*", snap.get("@park_wrap_ver", "")):
+            return None
+        stamp = snap.get("@claude_state_ts", "")
+        transfer = snap.get("@agent_transfer_until", "")
+        if (snap.get("@parked") or snap.get("@park_wake") or snap.get("@park_start")
+                or snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1"
+                or snap.get("@fleet_role") in ("home", "panel") or snap.get("@handoff_web") == "1"
+                or snap.get("@migrating") or window in shown or window == here
+                or (transfer and (not transfer.isdigit() or int(transfer) > self.now))
+                or not stamp.isdigit() or not 0 < int(stamp) <= self.now
+                or self.finished(snap) not in ("done", "looping")):
+            return None
+        # Retention protects identity/history, not an idle native process. The
+        # single park gate rechecks native input, questions, timers and work.
         pol = self.policy(snap)
-        if snap.get("@park_wrap_ver"):
-            # Retention policies protect identity/history, not an idle process.
-            # This is only a candidate order; the existing native park gate
-            # checks questions, drafts, real background work and timers again.
-            stamp = snap.get("@claude_state_ts", "")
-            transfer = snap.get("@agent_transfer_until", "")
-            if (snap.get("@parked") or snap.get("@park_wake") or snap.get("@park_start")
-                    or snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1"
-                    or snap.get("@fleet_role") in ("home", "panel") or snap.get("@handoff_web") == "1"
-                    or snap.get("@migrating") or window in shown or window == here
-                    or (transfer and (not transfer.isdigit() or int(transfer) > self.now))
-                    or not stamp.isdigit() or not 0 < int(stamp) <= self.now
-                    or self.finished(snap) not in ("done", "looping")):
-                return None
-            retained = (snap.get("@pin") == "1" or snap.get("@agent_def") in self.KEEP_DEFS
-                        or (pol is not None and pol[0] == "keep"))
-            return 0 if not retained and self.work_over(snap) else 1
-        if (snap["@pin"] == "1" or snap.get("@handoff_web") == "1" or snap["@agent_def"] in self.KEEP_DEFS
-                or (pol is not None and pol[0] == "keep")
-                or snap["@norepo"] == "1" or snap["@fleet_role"] in ("home", "panel")
-                or snap["window_name"] in ("dash", "plan", "backlog", "home")
-                or snap["@migrating"] or window in shown or window == here):
-            return None
-        gone = snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1"
-        state = self.finished(snap)
-        if state not in ("done", "exited") and not gone:
-            return None
-        transfer = snap["@agent_transfer_until"]
-        if transfer and (not transfer.isdigit() or int(transfer) > self.now):
-            return None
-        wt = snap["@worktree"]
-        if (not wt or not re.search(r"(?:^|-)(scratch|issue)-\d+$", Path(wt).name)
-                or not Path(wt).is_dir()):
-            return None
-        stamp = snap["@claude_state_ts"]
-        if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
-            return None
-        if state == "exited" or gone or self.id_over(snap["@fleet_id"]):
-            return 0
-        task = self.task_ref(snap)
-        if task and self.task_closed(task) == 0:
-            return 0
-        return 1 if self.now - int(stamp) >= self.room_idle_secs() else None
+        retained = (snap.get("@pin") == "1" or snap.get("@agent_def") in self.KEEP_DEFS
+                    or (pol is not None and pol[0] == "keep"))
+        return 0 if not retained and self.work_over(snap) else 1
 
     @staticmethod
     def tree_rss():
@@ -1547,7 +1522,7 @@ class Cleaner:
         return kb // 1024
 
     def plan_room(self):
-        """One line a window that may be folded: `<tier>\t<last turn>\t<MB>\t<window>`."""
+        """One line a window that may be safely parked: `<tier>\t<last turn>\t<MB>\t<window>`."""
         try:
             shown = set(self.tm("list-clients", "-F", "#{window_id}").split())
         except (OSError, subprocess.SubprocessError):
@@ -1572,78 +1547,40 @@ class Cleaner:
         return 0
 
     def fold(self, window):
-        """Fold ONE window to make room (--fold --only): its gates again, then the
-        history row, the resume proof and the close — the worktree untouched."""
+        """Keep the --fold argument, but memory make-room only safely parks.
+
+        Completion/archive belongs to the ordinary reaper, never this request.
+        """
         snap = self.snapshot(window)
         here = ""
         if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
             here = self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}")
         shown = set(self.tm("list-clients", "-F", "#{window_id}").split())
-        tier = self.room_tier(window, snap, shown, here)
-        if tier is None:
+        if self.room_tier(window, snap, shown, here) is None:
             self.say(window, "skip:fold-gate")
             return False
-        if snap.get("@park_wrap_ver"):
-            before = self.tree_rss()
-            pid = snap["pane_pid"]
-            if tier == 0 and self.args.repo:
-                # Terminal work uses the ordinary final-result/history/recheck
-                # road. A memory request never grants a new right to archive.
-                previous = getattr(self.args, "skip_park", False)
-                self.args.skip_park = True
-                try:
-                    closed = self.candidate(window)
-                finally:
-                    self.args.skip_park = previous
-                if closed:
-                    saved = str(self.pane_mb(before, pid)) if pid.isdigit() and int(pid) in before else "unknown"
-                    print("folded:%s completed mb=%s" % (window, saved))
-                    return True
-            if self.args.dry_run:
-                print("would-park-room:" + window)
-                return False
-            command = os.environ.get("FLEET_SESSION_GATE_CMD")
-            out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
-                      "park", "--fid", snap["@fleet_id"], "--why", "memory")
-            result = json.loads(out or "{}")
-            current = self.snapshot(window)
-            if (not result.get("ok") or current["@fleet_id"] != snap["@fleet_id"]
-                    or not current.get("@parked") or not current.get("@park_held")
-                    or current.get("@park_wake") or current.get("@park_start")):
-                return False
-            self.tm("set-option", "-w", "-t", window, "@park_waiting", "1" if self.is_waiting(snap) else "0")
-            after = self.tree_rss()
-            known = pid.isdigit() and int(pid) in before and int(pid) in after
-            saved = str(max(0, self.pane_mb(before, pid) - self.pane_mb(after, pid))) if known else "unknown"
-            print("parked-room:%s mb=%s" % (window, saved))
-            return True
-        if snap["@repo"] and norm_repo(snap["@repo"]) != norm_repo(self.args.repo):
-            return False
-        wt = snap["@worktree"]
-        key = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name)
-        key = key[1] + "-" + key[2]
-        if self.busy(window, snap):
-            self.say(window, "skip:busy", key)
-            return False
-        if subprocess.run(["python3", str(BIN / "fleet-reap-live.py"), window, "--socket-name",
-                           self.args.socket_name], stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
-            self.say(window, "skip:live", key)
+        if snap["@norepo"] != "1" and (not snap["@repo"] or norm_repo(snap["@repo"]) != norm_repo(self.args.repo)):
             return False
         if self.args.dry_run:
-            print("would-fold:" + window + " " + key)
+            print("would-park-room:" + window)
             return False
-        mb = self.pane_mb(self.tree_rss(), snap["pane_pid"])
-        head = run("git", "-C", wt, "rev-parse", "HEAD")
-        run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
-            "--session", self.args.session, "--key", key, "--worktree", wt, "--win", window,
-            "--title", snap["window_name"], "--summary", "Folded to make room (memory tight)")
-        if not self.reopens(window, key, wt):
+        before = self.tree_rss()
+        pid = snap["pane_pid"]
+        command = os.environ.get("FLEET_SESSION_GATE_CMD")
+        out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
+                  "park", "--fid", snap["@fleet_id"], "--why", "memory")
+        result = json.loads(out or "{}")
+        current = self.snapshot(window)
+        if (not result.get("ok") or current["@fleet_id"] != snap["@fleet_id"]
+                or not current.get("@parked") or not current.get("@park_held")
+                or current.get("@park_wake") or current.get("@park_start")
+                or option(self.tm, window, "@park_relay")):
             return False
-        if not self.close(window, snap, lambda: not self.busy(window, snap)
-                          and run("git", "-C", wt, "rev-parse", "HEAD") == head):
-            return False
-        print("folded:%s %s mb=%d" % (window, key, mb))
+        self.tm("set-option", "-w", "-t", window, "@park_waiting", "1" if self.is_waiting(snap) else "0")
+        after = self.tree_rss()
+        known = pid.isdigit() and int(pid) in before and int(pid) in after
+        saved = str(max(0, self.pane_mb(before, pid) - self.pane_mb(after, pid))) if known else "unknown"
+        print("parked-room:%s mb=%s" % (window, saved))
         return True
 
     def pin_keep_once(self):
@@ -1729,8 +1666,8 @@ def main():
     p.add_argument("--grace", type=int, default=None,
                    help="a task session's grace in seconds, over its policy's (T680: --now --after)")
     p.add_argument("--plan-room", action="store_true",
-                   help="list the windows --make-room may fold (T695): tier, last turn, MB, window")
-    p.add_argument("--fold", action="store_true", help="fold the --only window to make room (T695)")
+                   help="list the windows --make-room may park (T695): tier, last turn, MB, window")
+    p.add_argument("--fold", action="store_true", help="safely park the --only window to make room (T695)")
     p.add_argument("--dry-run", action="store_true")
     return Cleaner(p.parse_args()).main()
 
