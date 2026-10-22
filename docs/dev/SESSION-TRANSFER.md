@@ -110,7 +110,8 @@ empty prompt and no live tool, background process, approval or loop twice before
 accepting this boundary. It never restamps the source `done`.
 Subscription quota can instead open the native `needs` choice menu. The controller
 requires the exact quota transcript, OSC `blocked/dialog open`, fully visible known
-quota choices, no recent terminal input, and the existing tool and scheduler proofs.
+quota choices, no recent terminal input, the existing native `park.v1` proof of an
+empty underlying prompt and stopped main turn, and the tool and scheduler proofs.
 Under its transfer mutex and rotation lease it records one Escape before sending it;
 then it requires the native error/idle boundary and empty input, and runs all normal
 transfer checks again. Escape preserves a hidden draft: any draft or unknown composer

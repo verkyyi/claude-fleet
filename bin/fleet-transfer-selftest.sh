@@ -33,7 +33,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet_session_fallback.py fleet_repo_authority.py fleet_native_proc.py fleet_hub_rest.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-agent-adapter.sh fleet_agent_adapter.py fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py fleet_transfer_source.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet_worker_life.py fleet_agent_argv.py fleet_agent_mcp.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet_session_gate.py fleet_session_fallback.py fleet_repo_authority.py fleet_native_proc.py fleet_hub_rest.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-agent-adapter.sh fleet_agent_adapter.py fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py fleet_transfer_source.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet_worker_life.py fleet_agent_argv.py fleet_agent_mcp.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The canonical pane→Claude walk is imported by fleet-lib (#4474). Keep this
@@ -73,6 +73,18 @@ fi
 exec "$TRANSFER_TEST_TMUX" "$@"
 SH
 chmod +x "$FB/tmux"
+# Native read-only park.v1 response double; independent of the visible menu.
+cat > "$WORK/quota-prompt-proof" <<'SHQUOTAPROOF'
+#!/bin/sh
+if [ -f "$TRANSFER_TEST_ROOT/quota-proof-refuse" ]; then
+  printf '{"ok":false,"why":"draft"}\n'
+else
+  printf '{"ok":true,"why":""}\n'
+fi
+SHQUOTAPROOF
+chmod +x "$WORK/quota-prompt-proof"
+export FLEET_GATE_PARK_PROBE_CMD="$WORK/quota-prompt-proof"
+
 # The existing process-tree probe also verifies recovery: tmux's
 # pane_current_command may name the interpreter/runner instead of Claude.
 # shellcheck source=/dev/null
@@ -965,6 +977,10 @@ TM set-option -w -t "$WIN" @loop unknown
 transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'quota dialog loop must refuse'
 [ ! -s "$WORK/quota-keys" ] || fail 'loop refusal dismissed dialog'; ok
 TM set-option -wu -t "$WIN" @loop
+touch "$WORK/quota-proof-refuse"
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'native hidden draft must hold menu'
+[ ! -s "$WORK/quota-keys" ] && kill -0 "$PID" || fail 'hidden draft proof refusal touched source'; ok
+rm "$WORK/quota-proof-refuse"
 qlock="$(fleet_rotate_lease_file "$WT").transfer-lock"; mkdir "$qlock"
 transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'quota dialog concurrent controller must refuse'
 [ ! -s "$WORK/quota-keys" ] || fail 'concurrent controller dismissed dialog'; ok

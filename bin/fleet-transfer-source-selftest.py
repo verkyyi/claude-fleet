@@ -116,6 +116,7 @@ class QuotaDialog(unittest.TestCase):
              patch.object(src.fallback, 'quota_error', return_value=signal) as quota, \
              patch.object(src, 'run', side_effect=run) as tm, \
              patch.object(src, 'quiet_processes') as tools, \
+             patch.object(src, 'quota_prompt_proof', return_value={'ok': True}) as prompt, \
              patch.object(src.runpy, 'run_path', return_value={'schedule_readiness': unittest.mock.Mock()}) as modules:
             evidence = src.quota_dialog_check('test', '%2', 'exact')
             self.assertEqual(evidence['fingerprint'], src.quota_dialog(self.SCREEN))
@@ -139,8 +140,21 @@ class QuotaDialog(unittest.TestCase):
             schedule.side_effect = ValueError('native scheduling unknown')
             with self.assertRaisesRegex(ValueError, 'scheduling'): src.quota_dialog_check('test', '%2', 'exact')
             schedule.side_effect = None
+            prompt.side_effect = ValueError('native hidden draft')
+            with self.assertRaisesRegex(ValueError, 'hidden draft'): src.quota_dialog_check('test', '%2', 'exact')
+            prompt.side_effect = None
             tm.side_effect = lambda argv, **kw: str(int(src.time.time())) + ' @2' if 'list-clients' in argv else self.SCREEN
             with self.assertRaisesRegex(ValueError, 'person'): src.quota_dialog_check('test', '%2', 'exact')
+
+    def test_native_prompt_proof_refuses_hidden_draft_busy_unknown_or_timeout(self):
+        import fleet_session_gate as gate
+        with patch.object(src, 'run', return_value='/sock/test'), patch.object(gate, 'park_proof') as query:
+            for reply in ({'ok':False,'why':'draft'}, {'ok':False,'why':'busy'}, {'ok':False,'why':'probe_timeout'}, {}, None):
+                query.return_value = reply
+                with self.assertRaisesRegex(ValueError, 'not proven empty and stopped'):
+                    src.quota_prompt_proof('test', '%2')
+            query.return_value = {'ok': True, 'why': ''}
+            self.assertTrue(src.quota_prompt_proof('test', '%2')['ok'])
 
     def test_cancellation_is_write_ahead_once_and_never_restamps_or_replays(self):
         source = dict(agent='claude', state='needs', session_id='exact', pid=42)

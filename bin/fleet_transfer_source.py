@@ -167,6 +167,18 @@ def quota_schedules(source):
         source['session'], source['pane'], source['transcript'], source['pid'], source['session_id'], '', 'claude')
 
 
+
+def quota_prompt_proof(session, pane):
+    # Reuse the existing native read-only park.v1 proof: no active main turn,
+    # and $.prompt.read().text is empty even beneath a modal. The visible
+    # choice cursor cannot prove this. Old/unresponsive modules refuse safely.
+    from fleet_session_gate import park_proof
+    socket = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, '#{socket_path}'])
+    proof = park_proof(dict(sock=session, socket_path=socket, pane=pane))
+    if not isinstance(proof, dict) or proof.get('ok') is not True:
+        raise ValueError('native quota prompt/turn is not proven empty and stopped: ' + str(proof.get('why', 'unknown') if isinstance(proof, dict) else 'unknown'))
+    return proof
+
 def quota_dialog_check(session, pane, sid):
     source = inspect(session, pane)
     if source.get('agent') != 'claude' or source.get('state') != 'needs' or source.get('session_id') != sid:
@@ -194,13 +206,14 @@ def quota_dialog_check(session, pane, sid):
     # Use the existing scheduler authority even for a worktree source; an empty
     # @loop alone does not prove that native Cron/durable work is absent.
     quota_schedules(source)
+    prompt = quota_prompt_proof(session, pane)
     if inspect(session, pane) != source or source_marks(session, pane) != marks:
         raise ValueError('quota dialog changed during the boundary check')
     if quota_dialog(run(['tmux', '-L', session, 'capture-pane', '-p', '-t', pane])) != fingerprint:
         raise ValueError('quota dialog changed during the boundary check')
     if fallback.quota_error(source['transcript'], sid) != signal:
         raise ValueError('quota transcript changed during the boundary check')
-    return dict(source=source, marks=marks, signal=signal, fingerprint=fingerprint, screen=screen)
+    return dict(source=source, marks=marks, signal=signal, fingerprint=fingerprint, screen=screen, native_prompt=prompt)
 
 def quota_dialog_stop(session, pane, sid):
     """Called ONLY under the controller's transfer lock and rotation lease.
