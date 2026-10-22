@@ -2186,6 +2186,8 @@ class ParkTable(unittest.TestCase):
         rp = idle.fleet_reap_policy
         snap = {"@reap_origin": "decide", "@park_wrap_ver": "1", "@parked": "100",
                 "@park_held": "1", "@park_since": "100", "@park_presence": "200"}
+        with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": str(366 * 86400)}):
+            self.assertEqual(rp.reap_parked_secs(), 366 * 86400)
         with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "1h"}):
             self.assertEqual(rp.parked_deadline(snap), 3800)
             finished = {"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "looping",

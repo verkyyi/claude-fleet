@@ -115,7 +115,10 @@ def park_presence_secs():
 
 def reap_parked_secs():
     import os
-    return dur_secs(os.environ.get("FLEET_SESSION_REAP_PARKED", "3d")) or 3 * 86400
+    value = os.environ.get("FLEET_SESSION_REAP_PARKED", "3d").strip()
+    # Hub durations arrive as seconds, including the eight digits of 366d.
+    seconds = int(value) if re.fullmatch(r"[0-9]{1,8}", value) else dur_secs(value)
+    return seconds if seconds is not None and 3600 <= seconds <= MAX_SECS else 3 * 86400
 
 
 def snapshot_origin(snap):
@@ -190,7 +193,7 @@ def explain(snap, now=None):
 
 # The origins whose «done» is a reported result — the dispatched road
 # (fleet-cleanup-idle.py dispatched_session): over ⇒ closed, unreported ⇒ nudged.
-REPORTING = ("dispatched", "member", "driver")
+REPORTING = tuple(origin for origin, row in ORIGINS.items() if row["reap"] in ("reported", "batch"))
 
 
 # A probe by its words (BCYB): a session a person or a session opened to measure
