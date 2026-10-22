@@ -1362,13 +1362,15 @@ def public(r):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet_session_gate.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover", "legacy-deliver", "prompt-input", "lock-fd", "close-ready"):
+    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover", "legacy-deliver", "prompt-input", "lock-fd", "close-ready", "wake-known"):
         p = sub.add_parser(name)
         if name not in ("pending", "prompt-input"):
             p.add_argument("--fid", required=name != "tick")
         if name == "legacy-deliver":
             p.add_argument("--sender", default="fleet")
             p.add_argument("--delivery")
+        if name == "wake-known":
+            p.add_argument("--delivery", required=True)
         if name == "lock-fd":
             p.add_argument("--fd", type=int, required=True)
         if name == "say":
@@ -1411,6 +1413,9 @@ def main(argv=None):
         if why:
             print(why)
         return 1 if why else 0
+    if a.cmd == "wake-known":
+        seed = wake_path(a.fid, "peer-" + hashlib.sha256(a.delivery.encode()).hexdigest())
+        return 0 if any(seed.parent.glob(seed.name + ".*")) else 1
     if a.cmd == "legacy-deliver":
         return legacy_deliver(a)
     if a.cmd == "prompt-input":

@@ -582,6 +582,16 @@ passed
 
 # =============================================================================
 step 6 '回收: the cleanup daemon reaps the window, the worktree and the branch'
+# The fake native process above deliberately has no Claude mod/composer. Give
+# its completed turn an explicit native idle proof through the existing seam;
+# a done stamp alone must no longer bypass unknown input at final close.
+cat > "$WORK/native-idle.py" <<'PY'
+#!/usr/bin/env python3
+import json
+print(json.dumps({"ok": True}))
+PY
+chmod +x "$WORK/native-idle.py"
+export FLEET_GATE_PARK_PROBE_CMD="$WORK/native-idle.py"
 tmux set-option -w -t "$W" @claude_state "done"
 tmux set-option -w -t "$W" @claude_state_ts "$(( $(date +%s) - 3600 ))"
 bash "$BIN/fleet-cleanup-daemon.sh" "$S" >"$WORK/out" 2>"$WORK/err" || die "the cleanup tick exited $?" "$(cat "$WORK/err")"

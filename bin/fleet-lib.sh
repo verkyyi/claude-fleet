@@ -10284,7 +10284,9 @@ fleet_agent_deliver() {
   fid=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@fleet_id}' 2>/dev/null)
   parked=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@parked}#{@park_held}#{@park_start}' 2>/dev/null)
   gate_root="${FLEET_GATE_DIR:-${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/session-gate}"
-  if fleet_is_fid "$fid" && { [ -n "$parked" ] || [ -d "$gate_root/$fid" ]; }; then
+  if fleet_is_fid "$fid" && { [ -n "$parked" ] || {
+      [ -n "$delivery" ] && [ -d "$gate_root/$fid" ] &&
+      python3 "$lib/fleet_session_gate.py" wake-known --fid "$fid" --delivery "$delivery"; }; }; then
     seed=$(mktemp "${TMPDIR:-/tmp}/fleet-deliver.XXXXXX") || { FLEET_DELIVER_NOTE="cannot preserve wake words"; return "$held"; }
     if ! printf '%s' "$text" > "$seed"; then
       rm -f "$seed"; FLEET_DELIVER_NOTE="cannot preserve wake words"; return "$held"

@@ -27,6 +27,9 @@ import fleet_session_gate as gate
 spec = importlib.util.spec_from_file_location("idle", BIN / "fleet-cleanup-idle.py")
 idle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(idle)
+spec = importlib.util.spec_from_file_location("reap_live", BIN / "fleet-reap-live.py")
+reap_live = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reap_live)
 FID = "44444444-4444-4444-8444-444444444444"
 
 
@@ -132,6 +135,18 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(gate.legacy_deliver(args), 3)
             send.assert_not_called()
 
+    def test_live_legacy_report_directory_does_not_require_wake_api(self):
+        policy.report_begin(FID, "T42")  # even an old native adapter can report
+        script = '''. "$1/fleet-lib.sh"
+_fad_tm() { case "${!#}" in '#{@fleet_id}') printf '%s' "$TEST_FID";; esac; }
+fleet_park_wake() { printf 'unexpected wake API' >&2; return 3; }
+python3() { if [ "${2:-}" = legacy-deliver ]; then echo legacy-admitted; else command python3 "$@"; fi; }
+fleet_agent_deliver @1 fixture 'next work' fleet
+'''
+        p = subprocess.run(["bash", "-c", script, "legacy-test", str(BIN)],
+                           env=dict(os.environ, TEST_FID=FID), capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
     def test_shell_descriptor_holds_the_same_identity_lock(self):
         path = gate.fid_dir(FID) / ".lock"
         # The child which acquired flock has exited; the shell still holds it.
@@ -143,6 +158,30 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         with gate.lock(FID):
             pass  # the closing shell released it on exit
+
+    def test_final_native_guard_preserves_question_draft_and_unknown(self):
+        self.window.update(state="done", word="done", needs="", wrap_ver="3")
+        def read(*args):
+            fmt = args[-1]
+            if fmt == "#{@reap_hold}\t#{@reap_report_pending}\t#{@fleet_id}":
+                return "\t\t" + FID
+            if fmt == reap_live.STATE_FMT:
+                return "done\t\t"
+            if fmt == "#{pane_pid}":
+                return "4242"
+            if fmt == "#{client_control_mode}\t#{window_id}":
+                return ""
+            return ""
+        with patch.object(reap_live, "read", side_effect=read), patch.object(reap_live, "waiting", return_value=""), \
+             patch.object(reap_live, "process_table", return_value=({"4242": (600, "claude")}, {}, {"4242": "claude"})), \
+             patch.object(reap_live, "agent_under", return_value=True), patch.object(gate, "park_dialog", return_value=False), \
+             patch.object(gate, "park_proof", return_value={"ok": True}) as proof:
+            self.assertIsNone(reap_live.live_reason("@1", 0, "fixture", automatic=True))
+            for why in ("draft", "unknown_input", "not_idle"):
+                proof.return_value = dict(ok=False, why=why)
+                self.assertEqual(reap_live.live_reason("@1", 0, "fixture", automatic=True), "retained:native-input")
+            with patch.object(gate, "park_dialog", return_value=True):
+                self.assertEqual(reap_live.live_reason("@1", 0, "fixture", automatic=True), "retained:asking")
 
     def test_close_rechecks_admitted_message_under_identity_lock(self):
         gate.save(dict(fid=FID, delivery=str(uuid.uuid4()), at=1, state="queued", text="next task"))
