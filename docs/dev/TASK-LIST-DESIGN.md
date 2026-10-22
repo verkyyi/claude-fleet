@@ -42,7 +42,7 @@ T970 / NV03 · 2026-10-22 · 设计提案，尚未上线
 
    任务                         当前           之后
 >  NV03  简化 Hub 任务           运行中         无自动运行
-   Codex · macmini · claude-fleet
+   Codex · dev-node · claude-fleet
    K8D2  发布接口变更            运行中 !       无自动运行
    Claude · cloud-1 · api
    A7P4  检查服务可用性          非运行中       每 30 分钟 · 下次 14:30

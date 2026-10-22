@@ -20,11 +20,11 @@
 <script>
 'use strict';
 const seed=[
-{id:'NV03',title:'简化 Hub 任务',agent:'Codex',env:'macmini / claude-fleet',state:'run',native:'active',future:'无自动运行',schedule:false,note:'正在检查任务状态的读取路径。',artifact:'方案草稿 · 2 分钟前',history:'当前 Codex · 14:02；上次 Claude · 昨日 16:40'},
+{id:'NV03',title:'简化 Hub 任务',agent:'Codex',env:'dev-node / claude-fleet',state:'run',native:'active',future:'无自动运行',schedule:false,note:'正在检查任务状态的读取路径。',artifact:'方案草稿 · 2 分钟前',history:'当前 Codex · 14:02；上次 Claude · 昨日 16:40'},
 {id:'K8D2',title:'发布接口变更',agent:'Claude',env:'cloud-1 / api',state:'run',native:'PermissionRequest',attention:'需要你 · 批准部署命令',future:'无自动运行',schedule:false,note:'原生会话正在等待部署命令的权限确认。',artifact:'接口契约 v2 草稿',history:'当前 Claude · 13:50'},
 {id:'A7P4',title:'检查服务可用性',agent:'Codex',env:'cloud-2 / ops',state:'idle',native:'idle',future:'14:30 · 每 30 分钟',schedule:true,note:'上次检查已记录。之后将按计划再次运行。',artifact:'检测记录 · 14:00',history:'最近 Codex · 14:00'},
 {id:'M2R9',title:'编写 API v2 界面',agent:'Claude',env:'cloud-1 / web',state:'idle',native:'idle',future:'等 K8D2 的契约 v2',schedule:true,dependency:true,note:'契约 v2 发布后启动；上游空闲或停止不会触发。',artifact:'暂无产物',history:'最近 Claude · 13:42'},
-{id:'J6W1',title:'调整登录页文案',agent:'Codex',env:'macmini / website',state:'idle',native:'idle',future:'无自动运行',schedule:false,note:'文案已更新。可以打开历史或继续提出修改。',artifact:'PR #128 已合并 · 12:48',history:'最近 Codex · 12:42；上次 Claude · 11:30'},
+{id:'J6W1',title:'调整登录页文案',agent:'Codex',env:'dev-node / website',state:'idle',native:'idle',future:'无自动运行',schedule:false,note:'文案已更新。可以打开历史或继续提出修改。',artifact:'PR #128 已合并 · 12:48',history:'最近 Codex · 12:42；上次 Claude · 11:30'},
 {id:'Q4N8',title:'分析日志中的超时',agent:'Claude',env:'cloud-3 / logs',state:'unknown',native:'最后观测：工具执行中',future:'无法确认原生计划',schedule:false,note:'节点失联；最后收到观测为 14:06，不能确认是否仍在运行。',artifact:'超时样本 · 14:05',history:'最后观测 Claude · 14:06'}
 ];
 const names={all:'全部',run:'运行中',idle:'非运行中',attention:'需要你',auto:'有自动运行'};
