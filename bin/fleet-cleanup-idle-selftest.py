@@ -1313,11 +1313,6 @@ class HoldsAndWhy(TaskSession):
 
     def setUp(self):
         super().setUp()
-        self.parks = self.root / "parks"
-        seam = self.root / "park"
-        seam.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> " + shlex.quote(str(self.parks)) + "\n")
-        seam.chmod(0o755)
-        self.env["FLEET_TASK_PARK_CMD"] = str(seam)
         self.asked = self.root / "asked"
         closed = self.root / "task-closed"           # the record's hold words too (fleet_task_control.py closed)
         closed.write_text("#!/bin/sh\nread rc < " + shlex.quote(str(self.answer)) + "\n"
