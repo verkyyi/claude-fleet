@@ -103,7 +103,12 @@ The hub emits `claude_pool_unavailable` only for absent provider inventory;
 existing credentials refused by authentication, pausing or policy keep their
 original refusal. The shared session gate reads only the exact Claude transcript,
 waits at most 30 seconds for a clean boundary, and writes one continuation receipt
-per source session before starting `fleet-transfer.sh --to codex`. Network,
+per source session before starting `fleet-transfer.sh --to codex --quota-continuation`.
+Native API errors can leave OSC 7501 at `exited` while Claude is still at its
+prompt. The controller verifies the exact quota error, native error/idle state,
+empty prompt and no live tool, background process, approval or loop twice before
+accepting this boundary. It never restamps the source `done`. A native draft
+holds automatic continuation in place; it is kept unsent. Network,
 authentication, per-minute request throttling, personal budget refusals and user
 cancellation do not trigger it. The existing controller may refuse unsafe input,
 pending tools, schedules or target authentication; no force flag is added.

@@ -9,6 +9,7 @@ Codex between rounds, #786), the background inventory (#873) and
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -23,6 +24,54 @@ def module(name, file):
 
 
 src = module('transfer_source', 'fleet_transfer_source.py')
+
+
+class QuotaSettled(unittest.TestCase):
+    def test_native_failed_turn_requires_all_controller_proofs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / 'native.jsonl'
+            record = dict(type='assistant', sessionId='exact', uuid='error-id', error='rate_limit',
+                          isApiErrorMessage=True, apiErrorStatus=429, apiErrorIsTransient=False,
+                          message={'content': [{'type': 'text', 'text': "API Error: Request rejected (429) · You've hit your weekly limit"}]})
+            transcript.write_text(json.dumps(record) + '\n')
+            source = dict(session='test', pane='%2', pid=42, session_id='exact', agent='claude',
+                          state='exited', transcript=str(transcript))
+            marks = ['exited', '7501', '{"state":"error"}', '', '', '', '']
+            snapshot = unittest.mock.Mock(return_value=dict(state='empty', text=''))
+            with patch.object(src, 'inspect', return_value=source) as inspect, \
+                 patch.object(src, 'quota_marks', return_value=marks) as meta, \
+                 patch.object(src.runpy, 'run_path', return_value={'snapshot': snapshot}), \
+                 patch.object(src, 'quiet_processes') as quiet:
+                src.quota_settled('test', '%2', 'exact')
+                quiet.assert_called_once_with(source)
+                with self.assertRaisesRegex(ValueError, 'conversation changed'):
+                    src.quota_settled('test', '%2', 'other')
+                for state in ('unknown', 'draft'):
+                    snapshot.return_value = dict(state=state)
+                    with self.assertRaisesRegex(ValueError, 'prompt'):
+                        src.quota_settled('test', '%2', 'exact')
+                snapshot.return_value = dict(state='empty', text='')
+                quiet.side_effect = ValueError('live tool')
+                with self.assertRaisesRegex(ValueError, 'live tool'):
+                    src.quota_settled('test', '%2', 'exact')
+                quiet.side_effect = None
+                meta.side_effect = [marks, marks + ['changed']]
+                with self.assertRaisesRegex(ValueError, 'changed during'):
+                    src.quota_settled('test', '%2', 'exact')
+                meta.side_effect = None
+                transcript.write_text(json.dumps(dict(record, error='authentication_failed')) + '\n')
+                with self.assertRaisesRegex(ValueError, 'no exact native'):
+                    src.quota_settled('test', '%2', 'exact')
+
+    def test_metadata_holds_approvals_loops_and_native_work(self):
+        fields = ['exited', '7501', '{"state":"error"}', '', '', '', '']
+        for key, bad in ((0, 'working'), (1, 'classifier'), (2, '{"state":"working"}'),
+                         (3, 'perm'), (4, 'tool'), (5, 'loop'), (6, '1')):
+            value = list(fields); value[key] = bad
+            with patch.object(src, 'run', return_value='\x1f'.join(value + ['END'])):
+                with self.assertRaises(ValueError): src.quota_marks('test', '%2')
+        with patch.object(src, 'run', return_value='\x1f'.join(fields + ['END'])):
+            self.assertEqual(src.quota_marks('test', '%2'), fields)
 
 
 class Settled(unittest.TestCase):

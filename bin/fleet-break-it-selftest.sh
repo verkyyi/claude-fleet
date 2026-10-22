@@ -5566,6 +5566,8 @@ drill_web_quota_continuation() {
   local started; started=$(now)
   python3 "$BIN/fleet-session-fallback-selftest.py" >"$WORK/web-quota.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/web-quota.out" | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-transfer-source-selftest.py" >"$WORK/web-quota-source.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/web-quota-source.out" | tr '\n' ' ')"; return 1; }
   go_half '^Test(TrialCodex(DefaultAdmission|ContinuationBudgetIsolation)|CredProxyClaudeCapacityContinuation)$' github.com/verkyyi/claude-fleet/tokenledger/hub/api
   case $? in
     1) return 1 ;;

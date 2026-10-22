@@ -24,6 +24,8 @@ import subprocess
 import sys
 import time
 
+import fleet_session_fallback as fallback
+
 BIN = Path(__file__).absolute().parent
 ACCOUNT = runpy.run_path(str(BIN / '.fleet-account.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
@@ -85,6 +87,46 @@ def settled(session, pane):
     codex_quiet(thread)
     if not looping_settled(source, thread):
         raise ValueError('source is not a looping Codex worker between rounds')
+
+
+def quota_marks(session, pane):
+    fmt = '\x1f'.join('#{@' + k + '}' for k in
+                       ('claude_state', 'claude_state_src', 'agent_status', 'claude_needs',
+                        'claude_wait', 'loop', 'parked'))
+    fields = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, fmt + '\x1fEND']).split('\x1f')
+    if len(fields) != 8 or fields.pop() != 'END':
+        raise ValueError('quota source metadata is incomplete')
+    native = json.loads(fields[2] or '{}')
+    ended = (fields[0] in ('done', 'exited') and fields[1] in ('7501', 'hook')
+             and (native.get('state') == 'error' or (fields[0] == 'done' and native.get('state') in ('idle', 'done'))))
+    if not ended or any(fields[3:]):
+        raise ValueError('quota source is not a native error boundary without pending work')
+    return fields
+
+
+def quota_settled(session, pane, sid):
+    """Native Claude API failure: an ended turn, NOT a dead agent.
+
+    OSC 7501 calls API errors `exited`. Verify the exact quota transcript,
+    exportable prompt and absence of live tools/background processes before
+    admitting this boundary through the normal controller. Never restamp done.
+    """
+    source = inspect(session, pane)
+    if source.get('agent') != 'claude' or source.get('state') not in ('done', 'exited') or source.get('session_id') != sid:
+        raise ValueError('quota source conversation changed')
+    marks = quota_marks(session, pane)
+    signal = fallback.quota_error(source['transcript'], sid)
+    if not signal:
+        raise ValueError('source has no exact native hard-quota error')
+    inputs = runpy.run_path(str(BIN / 'fleet-input.py'))['snapshot']
+    view = inputs(session, pane, agent='claude')
+    if view.get('state') != 'empty':
+        raise ValueError('quota source prompt is not safely exportable')
+    quiet_processes(source)  # same live tool/MCP/subagent inventory as hibernation
+    if (quota_marks(session, pane) != marks or inspect(session, pane) != source
+            or inputs(session, pane, agent='claude') != view
+            or fallback.quota_error(source['transcript'], sid) != signal):
+        raise ValueError('quota source changed during the boundary check')
 
 
 def quiet_processes(source, background=None):
@@ -178,12 +220,15 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
     q = sub.add_parser('settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
+    q = sub.add_parser('quota-settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
+    q.add_argument('--sid', required=True)
     q = sub.add_parser('terminate-background'); q.add_argument('request', type=Path)
     q.add_argument('--bundle', type=Path); q.add_argument('--note')
     q = sub.add_parser('background'); q.add_argument('--pid', required=True, type=int)
     q.add_argument('--worktree', default=''); q.add_argument('--session', default='')
     a = p.parse_args()
     if a.command == 'settled': settled(a.session, a.pane)
+    elif a.command == 'quota-settled': quota_settled(a.session, a.pane, a.sid)
     elif a.command == 'terminate-background': terminate_background(a.request, a.bundle, a.note)
     else: print(json.dumps(claude_background(a.pid, a.worktree, a.session), ensure_ascii=False))
 

@@ -71,7 +71,8 @@ def maybe_start(gate, w, rows):
     if not signal:
         return
     pending = [r for r in rows if r.get("state") in ("trying", "native", "waking")]
-    why = "delivery_unsettled" if pending else "boundary" if gate.busy_of(w) or w["parked"] or w["state"] != "done" else ""
+    boundary = w["state"] == "done" or (w["state"] == "exited" and w["word"] == "error")
+    why = "delivery_unsettled" if pending else "boundary" if gate.busy_of(w) or w["parked"] or not boundary else ""
     same = old if old and old.get("source_session") == w["sid"] else {}
     waiting = why == "boundary" and not w["parked"] and gate.busy_of(w) != "asking" and gate.now() - same.get("at", gate.now()) < 30
     signal.update(at=same.get("at", gate.now()), request_id=same.get("request_id") or uuid.uuid4().hex)
@@ -107,7 +108,7 @@ def run(gate, fid, sid):
     why = "source_changed"
     if w and w["agent"] == "claude" and w["sid"] == sid and quota_error(gate.claude_transcript(sid), sid):
         argv = ["bash", str(gate.BIN / "fleet-transfer.sh"), "--session", w["sock"], "--window", w["win"],
-                "--to", "codex", "--expected-session-id", sid]
+                "--to", "codex", "--quota-continuation", "--expected-session-id", sid]
         # Keep the controller's rollback, but no automatic relogin retry chain.
         env = dict(os.environ, FLEET_TRANSFER_RETRYING="1")
         env.pop("TMUX_PANE", None)

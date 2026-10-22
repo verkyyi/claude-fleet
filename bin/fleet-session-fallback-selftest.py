@@ -176,6 +176,14 @@ class Continuation(unittest.TestCase):
             run.assert_not_called()
         self.assertEqual(fallback.receipt(gate, FID)["why"], "source_changed")
 
+    def test_native_quota_error_boundary_delegates_to_controller_without_restamping(self):
+        self.w.update(state="exited", word="error")
+        with patch.object(fallback.subprocess, "Popen") as spawn:
+            self.start()
+            self.assertEqual(spawn.call_count, 1)
+        self.assertEqual(self.w["state"], "exited")
+        self.assertEqual(fallback.receipt(gate, FID)["state"], "starting")
+
 
 def subprocess_result(rc):
     from types import SimpleNamespace

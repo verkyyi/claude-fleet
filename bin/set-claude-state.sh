@@ -552,7 +552,7 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   # Web sessions continue at a clean boundary even after their page closes
   # (T943). The shared gate judges the native error; this hook authorizes no
   # exit and never waits for a transfer. Old installs without it keep working.
-  if [ "$sem" = 'done' ] && [ -f "${0%/*}/fleet_session_fallback.py" ]; then
+  if { [ "$sem" = 'done' ] || [ "$sem" = 'exited' ]; } && [ -f "${0%/*}/fleet_session_fallback.py" ]; then
     _quota_web=$(tmux display-message -p -t "$TMUX_PANE" '#{@session_origin}|#{@cc_agent}|#{@fleet_id}' 2>/dev/null)
     case "$_quota_web" in
       web\|claude\|*)
