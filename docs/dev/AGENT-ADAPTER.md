@@ -121,7 +121,7 @@ Codex 留着不收时先区分「回报过 merged」与「现在已空闲」：�
 安装版 Codex 的 Hook 参数使用 `~/.claude/fleet` 稳定入口（T965），不能固定在待清理的版本目录。
 独立 checkout 启动仍指向自身。已启动的进程保留旧参数，修复后要在空闲时保存身份和原生 SID、
 通过 Fleet 停止并以同一 SID 恢复；不能只比较置顶和窗口身份。恢复入口按 `transcript` 列寻找历史：
-Claude 是 project 目录，Codex 是所选 home 的原生 rollout，并核对 UUID 元数据。
+两个 spawner 共用 `fleet_resume_transcript_exists`：Claude 是 project 目录，Codex 是所选 home 的原生 rollout，并核对 UUID 元数据。
 `codex-hook-retired-root` / `codex-resume-history` 演练分别验证旧版本删除和同一对话恢复。
 
 ## 加第三种 Agent

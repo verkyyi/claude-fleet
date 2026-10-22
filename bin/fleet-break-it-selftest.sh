@@ -5710,6 +5710,8 @@ drill_spinner_protocol_budget() {
 drill_codex_resume_history() {
   CAP=120; local t0 out
   t0=$(now)
+  out=$(bash "$BIN/dash-issue-session-prompt-selftest.sh" 2>&1) \
+    || { WHY="Codex issue 原对话恢复: $out"; return 1; }
   out=$(bash "$BIN/dash-raw-session-selftest.sh" 2>&1) \
     || { WHY="Codex 原对话恢复: $out"; return 1; }
   SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
