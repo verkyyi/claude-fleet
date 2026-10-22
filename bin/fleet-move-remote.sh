@@ -42,6 +42,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# SSH non-interactive shells on macOS have only system directories in PATH.
+# All subcommands, especially launch, need the same installed tool discovery.
+PATH=$(fleet_path_fill); export PATH
 
 die() { printf 'fleet-move-remote: %s\n' "$*" >&2; exit 1; }
 
@@ -92,6 +95,9 @@ case "$cmd" in
         PATH=$(fleet_path_fill); export PATH
         command -v codex >/dev/null || die 'Codex CLI missing'
         fleet_load_conf "$sess"
+        fleet_server_tmpdir "$(fleet_socket "$sess")"
+        command -v tmux >/dev/null || die 'tmux missing'
+        tmux -L "$(fleet_socket "$sess")" has-session -t "$sess" 2>/dev/null || die 'target fleet session missing'
         fleet_machine_admit || die 'target resources do not admit a new worker'
         ;;
       *) die 'unsupported move agent' ;;
@@ -199,15 +205,21 @@ launcher,home,sid=sys.argv[1:]
 m=json.load(open(home+'/move.json'))
 args=[launcher,'--agent','codex','--codex-home',home,'--resume',sid]
 opts=m.get('metadata',{})
-for flag, key in [('--model','@model'),('--effort','@effort')]:
-    if opts.get(key): args += [flag, opts[key]]
+if opts.get('@model'): args += ['--model', opts['@model']]
+if opts.get('@effort'): args += ['-c', 'model_reasoning_effort='+json.dumps(opts['@effort'])]
 print('exec '+shlex.join(args))
 PY_LAUNCH
 ) || die 'invalid Codex launch receipt'
     elif [ "$agent" != claude ]; then die 'unsupported move agent'; fi
     bootline="$cmdline"; [ "$agent" != codex ] || bootline='exec sleep 120'
-    nw=$(TM new-window -d -t "$sess:" -n "$name" -c "$wt" -P -F '#{window_id}' "$bootline" 2>/dev/null)
+    nw=$(TM new-window -d -t "$sess:" -n "$name" -c "$wt" -P -F '#{window_id}' "$bootline")
     [ -n "$nw" ] || die 'tmux new-window failed'
+    if [ "$agent" = codex ]; then
+      TM set-window-option -t "$nw" @reap_hold 1
+      TM set-option -p -t "$nw" remain-on-exit on
+      fleet_rotate_lease_take "$wt" "Codex move target $nw" 900 || die 'could not protect target worktree'
+      TM set-window-option -t "$nw" @agent_transfer_until "$(( $(date +%s) + 900 ))"
+    fi
     TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
     # The session's lifelong identity (issue #1646) rode the bundle as
     # `<sid>.fleet-id` (fleet-move.sh fid_bundle) — stamped verbatim, never
@@ -257,6 +269,10 @@ PY_META
       fi
       i=$((i + 1)); sleep 1
     done
+    if [ "$agent" = codex ] && [ -n "$ncp" ]; then
+      TM set-window-option -u -t "$nw" @agent_transfer_until
+      fleet_rotate_lease_drop "$wt"
+    fi
     printf '%s\t%s\t%s\n' "$nw" "${ncp:-}" "$sess"
     ;;
 

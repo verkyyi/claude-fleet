@@ -52,6 +52,16 @@ class Move(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'bound Codex UUID'):
             self.bundle()
 
+    def test_import_home_uses_only_target_default_pool(self):
+        home = Path(move.unpack(self.bundle(), SID, '/new', self.root))
+        self.assertEqual(move.account_home(home, self.root), 'default')
+        with self.assertRaisesRegex(ValueError, 'not a managed'):
+            move.account_home(home, self.root/'another-login')
+        manifest=json.loads((home/'move.json').read_text()); manifest['sid']=OTHER
+        (home/'move.json').write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'invalid Codex import'):
+            move.account_home(home, self.root)
+
     def test_existing_target_refuses_overwrite(self):
         home = Path(move.unpack(self.bundle(), SID, '/new', self.root))
         with self.assertRaises(FileExistsError):

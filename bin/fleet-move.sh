@@ -468,6 +468,9 @@ move_main() {
     prov=$(ssh_run "$REMOTE_BIN" provision --repo "$repo" --branch "$branch" ${pushed_flag:+"$pushed_flag"} ${TARGET_FLEET:+--fleet "$TARGET_FLEET"}) || return 8
     IFS=$'\t' read -r rfleet twt _ <<< "$prov"
     [ -n "$rfleet" ] && [ -n "$twt" ] || return 8
+    fleet_rotate_lease_held "$wt" >/dev/null && { say '    refused:busy — source already has a migration lease'; return 11; }
+    fleet_rotate_lease_take "$wt" "Codex move $wid to $TO" 900 || return 11
+    TM set-option -w -t "$wid" @agent_transfer_until "$(( $(date +%s) + 900 ))" || return 11
     # Keep the source window/transcript on failure. Never force-kill an unknown
     # process, and never resume two copies after an unconfirmed target launch.
     if ! python3 "$BIN/fleet_move_codex.py" stop --record "$record" --wait "$EXIT_WAIT"; then
@@ -487,6 +490,7 @@ move_main() {
     fi
     fleet_win_retire "$wid" "$SOCK"
     TM kill-window -t "$wid" 2>/dev/null || :
+    fleet_rotate_lease_drop "$wt"
     say "  ✓ $name ($wid → $TO:$nw, pid $ncp): moved Codex $sid; native history verified"
   )
 

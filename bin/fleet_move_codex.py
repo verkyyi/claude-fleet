@@ -84,6 +84,7 @@ def alive(pid):
 def stop(record, wait):
     same_source(record)  # last native proof, immediately before the exit
     sock, win = record['socket'], record['window']
+    tm(sock, 'set-option', '-w', '-t', win, '@reap_hold', '1')
     tm(sock, 'set-option', '-p', '-t', win, 'remain-on-exit', 'on')
     tm(sock, 'set-option', '-w', '-t', win, '@reported', '1')
     tm(sock, 'set-option', '-w', '-t', win, '@wrap_quiet', '1')
@@ -171,9 +172,21 @@ def verify(sock, window, sid, home, worktree):
     return data['owner']
 
 
+def account_home(home, root=None):
+    """An imported conversation uses this login's default subscription pool."""
+    home = Path(home).resolve()
+    root = Path(root or os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))).resolve()
+    if home.parent != root / 'moves' / 'codex' or not NATIVE['valid_id'](home.name):
+        raise ValueError('not a managed Codex import home')
+    manifest = json.loads((home / 'move.json').read_text())
+    if manifest.get('format') != 1 or manifest.get('agent') != 'codex' or manifest.get('sid') != home.name:
+        raise ValueError('invalid Codex import receipt')
+    return 'default'
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=('inspect', 'stop', 'pack', 'unpack', 'verify'))
+    p.add_argument('action', choices=('inspect', 'stop', 'pack', 'unpack', 'verify', 'account-home'))
     for key in ('socket', 'window', 'worktree', 'record', 'sid', 'home'):
         p.add_argument('--' + key, default='')
     p.add_argument('--wait', type=int, default=30)
@@ -188,6 +201,8 @@ def main():
             pack(record, sys.stdout.buffer)
     elif a.action == 'unpack':
         print(unpack(sys.stdin.buffer, a.sid, a.worktree))
+    elif a.action == 'account-home':
+        print(account_home(a.home))
     else:
         print(verify(a.socket, a.window, a.sid, a.home, a.worktree))
 
