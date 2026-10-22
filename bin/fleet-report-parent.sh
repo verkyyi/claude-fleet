@@ -695,8 +695,9 @@ envelope() {
 if [ -n "$DELEGATION" ]; then
   envelope
   _drow=$(row_json "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")
+  _ddry=''; [ "$DRY" != 1 ] || _ddry=--dry-run
   _sealed=$(printf '%s' "$msg" | python3 "$BIN/fleet_report_delegation.py" seal \
-    --route "$DELEGATION" --row "$_drow" --origin "$worigin") || exit 1
+    --route "$DELEGATION" --row "$_drow" --origin "$worigin" ${_ddry:+"$_ddry"}) || exit 1
   { read -r _dto; read -r _drid; } <<EOF
 $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["report_delegation"]["target"]); print(d["rid"])' "$_sealed")
 EOF

@@ -54,7 +54,8 @@ python3 ~/.claude/fleet/bin/fleet_report_delegation.py resolve \
 委托报告使用既有 `peer-queue`，cleanup 的既有 drain 重试；跨机继续使用 hub outbox / relay。
 暂不可达、没有活窗口、目标已换身份都保持 queued；不会按窗口名找替身，不转给旧 parent、
 祖先或人的 reminder，不因 TTL 或 stale 告警唤醒人。目标以同一身份恢复后自动补送。
-队列和 hub 都保存报告 ID，重复输入、hub 重放和重复 drain 使用同一个 ID；receiver 的
+队列和 hub 都保存报告 ID；同一最新报告重放使用同一个 ID，状态变化后再次回到 blocked
+属于新事件。hub 重放和重复 drain 不生成新 ID；receiver 的
 持久 receipt 记录成功投递后去重。adapter 成功返回与 receipt 落盘之间的进程崩溃仍是
 既有 transport 的不确定窗口，不能声称对任意崩溃实现端到端 exactly-once。
 

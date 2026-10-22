@@ -125,10 +125,37 @@ def lookup(worker, parent):
         return resolve(active(rows), worker, parent)
 
 
-def seal(route, row, msg, origin):
-    # Identical replay of a report and authorization has one durable ID. New
-    # content/state/authorization is a new event. No reported/accepted inference.
+def event_sequence(reporter, fingerprint, dry_run):
+    # Compare with the latest event, not all history: BLOCKED → IDLE → BLOCKED
+    # is fresh news, whereas replaying the latest BLOCKED is the same send.
+    directory = root() / 'report-delegation/events'
+    if dry_run and not directory.exists():
+        return 1
+    directory.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(reporter.encode()).hexdigest()
+    state = directory / (name + '.json')
+    if dry_run:
+        old = json.loads(state.read_text()) if state.exists() else {}
+        return old.get('seq', 0) + (old.get('fingerprint') != fingerprint)
+    with (directory / (name + '.lock')).open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = json.loads(state.read_text()) if state.exists() else {}
+        seq = old.get('seq', 0) + (old.get('fingerprint') != fingerprint)
+        tmp = state.with_suffix('.tmp')
+        with tmp.open('w') as f:
+            json.dump(dict(seq=seq, fingerprint=fingerprint), f)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(state)
+        return seq
+
+
+def seal(route, row, msg, origin, dry_run=False):
+    # Identical replay of the latest report/authorization has one durable ID.
+    # A transition (including back to the same state) is a new event.
     body = dict(row, report_delegation=route, original_origin=origin)
+    fingerprint = hashlib.sha256(encode(body).encode()).hexdigest()
+    body['report_event'] = event_sequence(route['reporter'], fingerprint, dry_run)
     suffix = hashlib.sha256(encode(body).encode()).hexdigest()
     body['rid'] = route['reporter'] + '#' + suffix
     chain = ' -> '.join(g['id'] for g in route['chain'])
@@ -205,6 +232,7 @@ def main():
     pack.add_argument('--route', required=True)
     pack.add_argument('--row', required=True)
     pack.add_argument('--origin', required=True)
+    pack.add_argument('--dry-run', action='store_true')
     receive = sub.add_parser('deliver')
     receive.add_argument('file')
     args = vars(ap.parse_args())
@@ -219,7 +247,7 @@ def main():
         if result is None:
             return 4
     elif action == 'seal':
-        result = seal(json.loads(args['route']), json.loads(args['row']), sys.stdin.read(), args['origin'])
+        result = seal(json.loads(args['route']), json.loads(args['row']), sys.stdin.read(), args['origin'], args['dry_run'])
     else:
         return deliver(args['file'])
     print(encode(result))

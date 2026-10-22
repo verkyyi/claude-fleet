@@ -189,6 +189,10 @@ else:
         for state in ('failed', 'merged', 'stopped'):
             self.report(state, expected=0)
         self.assertEqual((self.work/'messages').read_text().count('[child-report]'), 4)
+        self.report('blocked', expected=0)  # a later transition back is fresh news
+        self.assertEqual((self.work/'messages').read_text().count('[child-report]'), 5)
+        self.report('blocked', expected=0)
+        self.assertEqual((self.work/'messages').read_text().count('[child-report]'), 5)
 
     def test_batch_does_not_redeliver_and_revoke_keeps_pending(self):
         self.fixture()
@@ -220,6 +224,7 @@ else:
         self.run_script('fleet-report-parent.sh', '-L', 'test', '--win', '@child',
                         '--state', 'blocked', '--dry-run')
         self.assertFalse(self.q.exists())
+        self.assertFalse((self.conf/'report-delegation/events').exists())
         self.report('idle', expected=0)
         self.assertFalse(self.q.exists())
         self.assertFalse((self.work/'messages').exists())
