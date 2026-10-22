@@ -582,6 +582,42 @@ func TestFleetAssignMintedLoginNotExisting(t *testing.T) {
 	}
 }
 
+// Locally created logins can settle an unsent relogin without a machine admin.
+func TestFleetAdoptPendingRelogin(t *testing.T) {
+	h := newFleetHarness(t)
+	const pid = "gh:2718137"
+	for _, host := range []string{"laptop", "other"} {
+		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: host, Login: "ivan"}); code != 200 {
+			t.Fatalf("adopt: %d", code)
+		}
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "laptop", Login: "fleetverky"}); code != 200 {
+		t.Fatalf("relogin: %d", code)
+	}
+	waitState(t, h, pid, "laptop", store.AccountPending)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "laptop", Login: "wrongname"}); code != http.StatusConflict {
+		t.Fatalf("wrong login: %d", code)
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "laptop", Login: "fleetverky"}); code != 200 {
+		t.Fatalf("adopt pending: %d", code)
+	}
+	row := accountState(t, h, pid, "laptop")
+	if row.State != store.AccountActive || row.Login != "fleetverky" || row.OpID != "" {
+		t.Fatalf("account: %+v", row)
+	}
+	if row := accountState(t, h, pid, "other"); row.State != store.AccountActive || row.Login != "ivan" {
+		t.Fatalf("other account changed: %+v", row)
+	}
+	p, err := h.srv.Store.Principal(pid)
+	if err != nil || p.Login != "ivan" {
+		t.Fatalf("principal changed: %+v %v", p, err)
+	}
+	sent, err := h.srv.Store.MarkAccountSent(pid, "laptop", store.AccountPending, store.AccountCreating, "late-create", "admin", time.Now())
+	if err != nil || sent {
+		t.Fatalf("stale dispatcher started create: %v %v", sent, err)
+	}
+}
+
 // claude-fleet#2210: the operator's own login on a machine is the admin one
 // (ivan, passwordless sudo). relogin moves their row there to a fresh
 // standard login and queues its create on the admin node — never a remove of
@@ -620,6 +656,10 @@ func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
 	m, op := expectAccountOp(t, admin.tnode)
 	if op.Op != control.AccountCreate || op.Login != "verkydev" {
 		t.Fatalf("relogin op = %+v", op)
+	}
+	// Manual adoption must not race an already dispatched create.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "mac-d", Login: "verkydev"}); code != http.StatusConflict {
+		t.Fatalf("adopt in flight: HTTP %d, want 409", code)
 	}
 	// While in flight a second relogin refuses.
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "mac-d", Login: "verkyabc"}); code != http.StatusConflict {
