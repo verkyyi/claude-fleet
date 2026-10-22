@@ -108,6 +108,7 @@ while True:
         self.fake()
         before = self.opt('pane_pid')
         with patch.dict(os.environ, self.env):
+            processes = gate.relay_request(gate.window(self.fid), {'op':'status'})
             result = gate.park(self.fid)
         self.assertTrue(result.get('ok'), result)
         self.assertTrue(self.opt('@park_held'))
@@ -115,6 +116,11 @@ while True:
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         self.assertEqual(self.opt('pane_pid'), before)
         self.assertFalse(self.opt('@park_relay'), 'the relay / assistant tree survived parking')
+        for pid in (processes['relay_pid'], processes['agent_pid']):
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+        self.assertGreater(float(self.opt('@park_saved_mb')), 0)
+        self.assertEqual(self.opt('@park_why'), 'idle')
         with patch.dict(os.environ, self.env):
             result = gate.wake(self.fid, why='消息')
         self.assertTrue(result.get('ok'), result)
@@ -136,6 +142,18 @@ while True:
             self.assertEqual(gate.park(self.fid).get('why'), 'old_wrapper')
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
+
+    def test_keyboard_bytes_after_proof_cancel_exit(self):
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            w = gate.window(self.fid)
+            before = gate.relay_request(w, {'op':'status'})
+            self.tm('send-keys', '-t', self.win, '-l', 'unsubmitted draft')
+            self.wait(lambda: gate.relay_request(w, {'op':'status'}).get('generation') != before.get('generation'))
+            result = gate.relay_request(w, {'op':'exit', 'generation':before['generation']})
+        self.assertFalse(result['ok'], result)
+        self.assertTrue(self.opt('@park_relay'), 'stale prompt proof stopped the assistant')
+        self.assertFalse(self.opt('@parked'))
 
     def test_all_origins_and_memory_oldest_eligible(self):
         # The reaper's real decision, independent of its close / GitHub roads.

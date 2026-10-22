@@ -1076,7 +1076,7 @@ class Cleaner:
         road = self.web_park(window, snap)
         if road is not None:
             return road
-        if not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir():
+        if getattr(self, "_park_only", False):
             return False
         road = self.error_stop(window, snap)
         if road is not None:
@@ -1649,6 +1649,7 @@ class Cleaner:
                 print(f"fold deferred {self.args.only}: {exc}", file=__import__("sys").stderr)
                 return 1
         self.pin_keep_once()
+        self._park_only = not self.idle or not self.args.repo or not (Path(self.args.main) / ".git").is_dir()
         count = 0
         windows = self.tm("list-windows", "-t", self.args.session, "-F", "#{window_id}").split()
         if self.args.only:

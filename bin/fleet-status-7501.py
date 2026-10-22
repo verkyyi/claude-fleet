@@ -435,7 +435,8 @@ class ParkRelay:
     status -> native prompt proof -> exit(expected generation). Any keyboard
     bytes after the snapshot invalidate the proof, preserving even half a draft.
     """
-    def __init__(self):
+    def __init__(self, agent_pid):
+        self.agent_pid = agent_pid
         self.directory = tempfile.mkdtemp(prefix="fpr-", dir="/tmp")
         self.path = os.path.join(self.directory, "ctl")
         self.server = socket.socket(socket.AF_UNIX)
@@ -460,7 +461,7 @@ class ParkRelay:
                 request = json.loads(client.recv(2048))
                 op = request.get("op")
                 if op == "status":
-                    reply = dict(ok=not self.exiting, generation=self.generation)
+                    reply = dict(ok=not self.exiting, generation=self.generation, relay_pid=os.getpid(), agent_pid=self.agent_pid)
                 elif (op == "exit" and not self.exiting and not pending_input and not buffer
                       and not busy and request.get("generation") == self.generation):
                     buffer.extend(b"/exit\r")
@@ -497,7 +498,7 @@ def relay(cmd, depth=0):
     pid, master = pty.fork()
     if pid == 0:
         _guard(cmd, attrs, size)      # never returns
-    control = ParkRelay()
+    control = ParkRelay(pid)
     rd = Reader(pane(), depth)
     if depth > 0 and rd.writer.pane:   # the node's switch / attach hooks replay while this is set
         tmux(["set-option", "-g", "@agent_replay", str(depth)])
