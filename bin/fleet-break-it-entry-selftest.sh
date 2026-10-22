@@ -1405,6 +1405,14 @@ drill_door_home_hostcert() {
   WHAT="家的本机入口同时带主机证书：门只要入口钉住的那把明钥匙、证书只认里面是那把钥匙的，照样落到家；钉的钥匙不对时拒，并把原因打到手机屏幕上；$gohalf"
 }
 
+drill_door_fast_exec_close() {
+  local t0 gohalf; t0=$(now)
+  gohalf="no go toolchain here — the Go gate runs TestDoorHomeDialsBackToTheDoor"
+  go_half '^TestDoorHomeDialsBackToTheDoor$' ./e2e; case $? in 0) gohalf="go test ok" ;; 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="门转发极短命令：家的输出和退出先回来时，仍送完 exec 确认再关客户端通道；$gohalf"
+}
+
 drill_door_via_unreachable() {
   CAP=200
   local t0 gohalf; t0=$(now)
