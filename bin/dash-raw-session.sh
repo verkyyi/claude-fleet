@@ -869,9 +869,10 @@ fi
   stamp=''; nsid=''
   # A parked session's return (issue #3387): the same conversation when its
   # transcript is still where it ran and the agent comes back into its own
-  # conversation (the table's park_resume); else a fresh one.
+  # conversation with a project transcript; native thread resumes use the
+  # in-place wrapper, not this legacy project-file lookup.
   rsid=''
-  if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] \
+  if [ -n "$RESUME_SID" ] && [ "$(agent_col park_resume)" = 1 ] && [ "$(agent_col transcript)" = project ] \
      && [ -f "$(fleet_transcript_dir "$wt")/$RESUME_SID.jsonl" ]; then
     rsid=$RESUME_SID
   fi
