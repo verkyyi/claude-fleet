@@ -52,7 +52,7 @@ def save(path, value):
     tmp.replace(path)
 
 
-def paint(screen, words, failed=False, pos=None):
+def paint(screen, words, failed=False, pos=None, waking=False):
     width, height = shutil.get_terminal_size()
     en = os.environ.get('FLEET_UI_LANG') == 'en'
     hint = ('· parked · just type — Enter resumes it (~2 s)' if en else
@@ -60,6 +60,8 @@ def paint(screen, words, failed=False, pos=None):
     if failed:
         hint = ('Resume failed · Enter/r retry · n new chat' if en else
                 '接回失败 · 回车/r 重试 · n 新会话')
+    if waking:
+        hint = '· resuming…' if en else '· 接回中…'
     footer = lines(hint, width)
     if words:
         footer += lines('> ' + words, width)
@@ -142,6 +144,7 @@ def editor(screen, draft, failed):
                 gate.tmux('', 'set-option', '-w', '-t', pane, '@park_presence', str(int(time.time())))
             if not pasted and (char in ('\r', '\n') or (failed and char in ('r', 'n'))):
                 save(draft, words)
+                paint(screen, words, pos=pos, waking=True)
                 return 11 if failed and char == 'n' else 10
             if char in ('\x7f', '\b') and pos:
                 words = words[:pos-1] + words[pos:]

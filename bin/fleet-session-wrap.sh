@@ -341,7 +341,7 @@ park_hold() {
   draft="${FLEET_GATE_DIR:-$PCONF/session-gate}/$fid/park-input.txt"
   screen=$(opt @park_screen)
   [ -n "$screen" ] || screen="${draft%/*}/park-screen.txt"
-  park_new=''
+  [ "$park_failed" = 1 ] || park_new=''
   while :; do
     w=$(opt @park_wake)
     if [ -n "$w" ] && { [ "$park_keyboard" = 1 ] || [ ! -s "$draft" ]; }; then
