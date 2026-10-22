@@ -3,7 +3,9 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -127,6 +129,53 @@ class Move(unittest.TestCase):
                         rollout=lambda d: (str(path), {})), patch.object(move, 'alive', return_value=True), patch.object(move, 'RPC', Client):
             with self.assertRaisesRegex(ValueError, 'history'):
                 move.verify('scratch', '@1', SID, str(home), '/new')
+
+    def test_real_move_coordinator_never_retires_source_on_failed_receipt(self):
+        source=(Path(__file__).parent/'fleet-move.sh').read_text()
+        coordinator=source[source.index('  move_one_codex() ('):source.index('\n  move_one_body() {')]
+        fixture=r'''
+set -uo pipefail
+VIA=ssh KEEP=0 BIN=/candidate SOCK=scratch wid=@1 wt=/source repo=o/r branch=work
+REMOTE_BIN=/remote TARGET_FLEET='' TO=target DRY=0 name=worker EXIT_WAIT=1
+raw=1 state=done hnd=a1 iss='' origin=''
+say() { :; }
+git() { return 0; }
+TM() { printf '%s\n' "$*" >> "$TRACE"; }
+fleet_win_retire() { printf 'retire\n' >> "$TRACE"; }
+fleet_rotate_lease_held() { return 1; }
+fleet_rotate_lease_take() { return 0; }
+fleet_rotate_lease_drop() { return 0; }
+python3() {
+  case "${2:-}" in
+    inspect) printf '{"sid":"01a1625a-6695-7bd0-ab61-ab43e70180cc"}\n' ;;
+    stop) return 0 ;;
+    pack) printf fixture ;;
+    *) command python3 "$@" ;;
+  esac
+}
+remote_cmd() { printf receive; }
+move_ssh() { cat >/dev/null; printf '/import-home\n'; }
+ssh_run() {
+  case "$2" in
+    plan) printf 'fleet\t/main\tmaster\n' ;;
+    provision) printf 'fleet\t/target\tscratch\n' ;;
+    launch)
+      case "$MODE" in
+        empty) printf '@9\t\tfleet\n' ;;
+        nonzero) printf '@9\t123\tfleet\n'; return 10 ;;
+        success) printf '@9\t123\tfleet\n' ;;
+      esac ;;
+  esac
+}
+'''
+        for mode in ('empty','nonzero','success'):
+            trace=self.root/(mode+'.trace')
+            result=subprocess.run(['bash','-c',fixture+coordinator+'\nmove_one_codex\n'],
+                                  env=dict(os.environ,TRACE=str(trace),MODE=mode),capture_output=True,text=True)
+            calls=trace.read_text()
+            self.assertEqual(result.returncode,0 if mode=='success' else 10,result.stderr)
+            self.assertEqual('retire' in calls,mode=='success')
+            self.assertEqual('kill-window' in calls,mode=='success')
 
 
 if __name__ == '__main__':
