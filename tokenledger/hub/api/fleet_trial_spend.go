@@ -174,14 +174,14 @@ type TrialSpendMachine struct {
 
 // TrialSpend is TrialSpendPath's answer: one Beijing day.
 type TrialSpend struct {
-	Day      string    `json:"day"`
-	From     time.Time `json:"from"`
-	To       time.Time `json:"to"`
-	New      int       `json:"new"`
-	Active   int       `json:"active"`
-	Tokens   int64     `json:"tokens"`
-	Pool     int64     `json:"pool"`
-	BYO      int64     `json:"byo"`
+	Day    string    `json:"day"`
+	From   time.Time `json:"from"`
+	To     time.Time `json:"to"`
+	New    int       `json:"new"`
+	Active int       `json:"active"`
+	Tokens int64     `json:"tokens"`
+	Pool   int64     `json:"pool"`
+	BYO    int64     `json:"byo"`
 	// BySource is Tokens by C1's class: subscription · api · byo.
 	BySource map[string]int64    `json:"by_source"`
 	Over     int                 `json:"over"`
