@@ -318,6 +318,7 @@ def run(argv, prepare=None, tick=None):
             command = [sys.executable, str(relay), 'relay', '--', *command]
         client = subprocess.Popen(command, env=env)
         next_tick = time.monotonic()
+        binding_until = next_tick + 5
         # T716: the new session's clock to 能打字 — the TUI's thread is up (its
         # SessionStart stamped @codex_session_id) ⇒ `input` under @timing_t0, once
         clock_pane = env.get('TMUX_PANE', '') if env.get('TMUX') else ''
@@ -335,7 +336,11 @@ def run(argv, prepare=None, tick=None):
                 if seeder is not None and not seeder.tick():
                     seeder = None
                 if tick: tick()
-                next_tick = time.monotonic() + 1
+                # A resumed TUI commonly binds just after the first observation.
+                # Do not add a whole second to wake confirmation. Only the first
+                # five seconds can poll faster; steady idle keeps its 1s cadence.
+                binding = follower is not None and not getattr(follower, 'started', True)
+                next_tick = time.monotonic() + (.1 if binding and time.monotonic() < binding_until else 1)
             time.sleep(0.1)
         if ended:
             return 128 + ended[0]
