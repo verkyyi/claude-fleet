@@ -66,6 +66,7 @@ class Park(unittest.TestCase):
         self.sid = '11111111-2222-4333-8444-555555555555'
         fake = self.root / 'fake.py'
         fake.write_text(r'''import os,sys,tty
+print('\x1b[2J\x1b[Hlast answer: preserved\r\nsecond line: 中文',flush=True)
 print('fake ready\x1b]7501;state=idle:app=claude-code\x1b\\',flush=True)
 tty.setraw(0)
 b=b''
@@ -75,13 +76,22 @@ while True:
  b+=c
  if b'/exit\r' in b: break
 ''')
+        record = self.root / 'record.py'
+        record.write_text('import json,sys\nfrom pathlib import Path\n'
+                          'with Path(__file__).with_name("argv").open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
+                          'python3 ' + str(record) + ' "$@"\n' +
+                          '[ ! -f ' + str(self.root / 'fail') + ' ] || { echo resume-failed; exit 1; }\n' +
                           'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + '\n')
         launch.chmod(0o755)
         self.env['FLEET_WRAP_LAUNCH'] = str(launch)
+        loc = self.root / 'locate'
+        loc.write_text('#!/bin/sh\ntmux display-message -p -t "$TMUX_PANE" "' + self.label + '\t#{window_id}"\n')
+        loc.chmod(0o755)
+        self.env['FLEET_GATE_WIN_CMD'] = str(loc)
         # new-window inherits its server environment; pass only fixture settings.
         import shlex
         cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
@@ -143,6 +153,42 @@ while True:
         self.assertEqual([r['act'] for r in rows], ['park', 'wake'])
         self.assertEqual(rows[0]['fid'], self.fid)
         self.assertEqual(rows[0]['rss_mb'], observed['saved_mb'])
+
+    def test_park_screen_and_keyboard_sentence(self):
+        self.fake()
+        self.wait(lambda: 'last answer: preserved' in self.tm('capture-pane', '-p', '-t', self.win))
+        before = self.tm('capture-pane', '-p', '-t', self.win).splitlines()
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        after = self.tm('capture-pane', '-p', '-t', self.win).splitlines()
+        self.assertEqual(after[:len(before)], before)
+        self.assertIn('已停放', after[-1])
+        self.tm('select-window', '-t', self.win)
+        self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
+        time.sleep(.4)
+        self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        args = json.loads((self.root / 'argv').read_text().splitlines()[-1])
+        self.assertEqual(args[-1], '接着解释 café')
+        self.assertIn(self.sid, args)
+
+    def test_wake_failure_keeps_sentence_for_new_chat(self):
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        (self.root / 'fail').touch()
+        self.tm('send-keys', '-t', self.win, '-l', 'keep this sentence')
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: '接回失败' in self.tm('capture-pane', '-p', '-t', self.win))
+        self.assertIn('keep this sentence', self.tm('capture-pane', '-p', '-t', self.win))
+        (self.root / 'fail').unlink()
+        self.tm('send-keys', '-t', self.win, 'n')
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        args = json.loads((self.root / 'argv').read_text().splitlines()[-1])
+        self.assertEqual(args[-1], 'keep this sentence')
+        self.assertNotIn('--resume', args)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
 
     def test_unknown_rss_clears_previous_sample_and_census_stays_unknown(self):
         import fleet_park_metrics as metrics
