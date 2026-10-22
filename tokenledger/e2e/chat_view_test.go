@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -415,5 +416,60 @@ func TestChatSayToSession(t *testing.T) {
 	resp = chatDo(t, h, "GET", "/v1/chat/home", alice, nil, "")
 	if b, _ := io.ReadAll(resp.Body); !strings.Contains(string(b), `"unified":true`) {
 		t.Fatalf("home with fleet.chat.unified on: %s", b)
+	}
+}
+
+// Closed FIDs remain readable without a home, node or live inventory. The
+// cache door must not launch an operation or grant an admin someone else's chat.
+func TestChatViewClosedIdentityIsolation(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h, pAlice, pBob, pCarol)
+	h.Srv.Admins = []string{pBob}
+	sealer, err := credvault.NewSealer(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Srv.Vault = &credvault.Vault{Store: h.Srv.Store, Sealer: sealer}
+	const fid = "77777777-7777-4777-8777-777777777777"
+	now := time.Now()
+	_, err = h.Srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: pAlice, EndpointID: "old", Machine: "offline", Login: "alice", ID: fid,
+		Events: []map[string]any{{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "key": "scratch-1"},
+			{"ev": "native", "seq": float64(2), "ts": float64(now.Unix()), "native": "native-id", "agent": "claude"},
+			{"ev": "closed", "seq": float64(3), "ts": float64(now.Unix())}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := h.Srv.Vault.SealPerson(map[string]any{"session": "native-id", "items": []map[string]string{{"t": "text", "d": "kept words"}}}, pAlice, "chat-mirror")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.Srv.Store.PutChatMirrorOf(pAlice, "view:66666666-6666-4666-8666-666666666666/"+fid, sealed, now.Add(time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name, person, query string
+		status              int
+	}{
+		{"owner", pAlice, "worker=fid:" + fid + "&cached=1", 200},
+		{"other tenant", pCarol, "worker=fid:" + fid + "&cached=1", 404},
+		{"admin as self", pBob, "worker=fid:" + fid + "&cached=1", 404},
+		{"admin view-as", pBob, "worker=fid:" + fid + "&cached=1&as=" + pAlice, 403},
+		{"recycled key", pAlice, "worker=66666666-6666-4666-8666-666666666666/scratch-1&cached=1", 404},
+	} {
+		req := httptest.NewRequest("GET", "/v1/chat/view?"+c.query, nil)
+		req.AddCookie(personCookie(c.person, "reader"))
+		rr := httptest.NewRecorder()
+		h.Srv.Handler().ServeHTTP(rr, req)
+		b := rr.Body.Bytes()
+		if rr.Code != c.status {
+			t.Errorf("%s: %d %s", c.name, rr.Code, b)
+		}
+		if (c.status == 200) != strings.Contains(string(b), "kept words") {
+			t.Errorf("%s leaked/lost content: %s", c.name, b)
+		}
+	}
+	var operations int
+	if err = h.Srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_operations`).Scan(&operations); err != nil || operations != 0 {
+		t.Fatalf("history launched operations=%d err=%v", operations, err)
 	}
 }

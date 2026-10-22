@@ -130,6 +130,7 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   AGENT=$1
 }
 NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""
+CX_HOME=""; STRICT_RESUME=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -215,6 +216,8 @@ while [ "$#" -gt 0 ]; do
     --task)        TASK_REF="${2:-}"; shift 2 ;;
     --task=*)      TASK_REF="${1#--task=}"; shift ;;
     # --resume <sid> / --seed-file <f> / --worktree <dir> (issue #3387): see above.
+    --strict-resume) STRICT_RESUME=1; shift ;;
+    --codex-home) CX_HOME="${2:-}"; export CODEX_HOME="$CX_HOME"; shift 2 ;;
     --resume)      RESUME_SID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --resume=*)    RESUME_SID="${1#--resume=}"; shift ;;
     --seed-file)   SEED_FILE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -873,6 +876,14 @@ fi
   rsid=''
   if fleet_resume_transcript_exists "${AGENT:-${FLEET_AGENT:-}}" "$wt" "$RESUME_SID"; then
     rsid=$RESUME_SID
+  fi
+  if [ "$STRICT_RESUME" = 1 ] && [ -z "$rsid" ]; then
+    echo 'fleet: exact native transcript unavailable; resume refused, no fresh conversation started' >&2
+    exit 1
+  fi
+  if [ -n "$CX_HOME" ]; then
+    _cx_q=$(printf '%s' "$CX_HOME" | python3 -c 'import shlex,sys; print(shlex.quote(sys.stdin.read()))')
+    launch="$launch --codex-home $_cx_q"
   fi
   if [ "$NOREPO" = 1 ]; then
     if [ -n "$rsid" ]; then

@@ -144,17 +144,21 @@ const TONE_OF: Record<string, Tone> = {
   asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "ok", looping: "ok", completed: "ok",
   parked: "ask", stopped: "fail",
 };
-export function boardRows(board: Board, tasks: Task[], live: SessionRow[], ended: SessionRow[] = []): Row[] {
+export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ended: SessionRow[] = []): Row[] {
   const codes = displayCodes(tasks);
   const byFID = new Map(tasks.filter((t) => t.fid).map((t) => [t.fid!, t]));
   const byRef = new Map(tasks.map((t) => [t.id, t]));
   const liveBy = new Map(live.map((l) => [l.id, l]));
-  const endedBy = new Map(ended.filter((r) => r.wid).map((r) => [r.wid!, r]));
   const rows: Row[] = board.rows.map((b: BoardRow) => {
     const t = (b.task_id && byFID.get(b.task_id)) || (b.task && byRef.get(b.task)) || undefined;
     const l = b.worker_id ? liveBy.get(b.worker_id) : undefined;
-    // a parked row's session ended on purpose (E101): its 接回 is the wake
-    const e = !l && b.tag === "parked" && t?.worker_id ? endedBy.get(t.worker_id) : undefined;
+    // The hub resolves the closed generation by FID, never by a recycled key.
+    const h = !l ? b.history : undefined;
+    const e: SessionRow | undefined = h?.resume_id ? {
+      id: h.resume_id, ident: h.id, wid: `fid:${h.id}`, key: "", title: b.title,
+      repo: b.repo || "", machine: b.machine || "", state: "ended", group: "ended",
+      ask: null, born: 0, ended: new Date(b.at * 1000).toISOString(), tokens: 0,
+    } : undefined;
     const asking = b.tag === "asking" || b.tag === "waiting_you";
     const line = asking ? (l?.ask?.msg || t?.asked || "").trim() : b.group === "work" ? (l?.say || "").trim() : (t?.evidence || "").trim();
     const why = Array.isArray(b.why) && b.why.length === 2 ? b.why : undefined;

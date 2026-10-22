@@ -25,6 +25,7 @@ import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame,
 // can_talk (会话合一 Y01K): the web may talk to it — absent on the old road,
 // false for an older session (read-only); queue: its lines waiting; ask: what it asks now
 export type ViewState = { agent: string; session: string; busy: boolean; state: string; label: string; holder?: string;
+  history_status?: string;
   can_talk?: boolean | null; talk_reason?: string; queue?: Queued[]; ask?: ViewAsk | null;
   continuation?: { state: string; to: string; message: string } };
 // why there is nothing to follow: the entry's or the service's code
@@ -37,7 +38,7 @@ const RETRY_MS = [1000, 2000, 4000, 8000, 15000];
 // connection failure, never a capability verdict. Reconnect from the cursor.
 const VIEW_IDLE_MS = 45_000;
 // a refusal that stays one: asking again changes nothing
-const FINAL = new Set(["not_yours", "bad_target", "old_agent", "no_session", "agent", "operator", "signin", "view_as", "forbidden", "gone"]);
+const FINAL = new Set(["not_yours", "bad_target", "old_agent", "no_session", "agent", "operator", "signin", "view_as", "forbidden", "gone", "never_started", "missing_confirmed", "offline_unknown"]);
 const API = "/v1/chat/view";
 // a session's record in this browser: the chat's store, one side per session
 export const viewSide = (worker: string) => `view:${worker}`;
@@ -172,6 +173,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
                 if (data.t === "state") { setState(data as unknown as ViewState); setConnection("live"); }
                 else if (data.t === "items") take(data as Frame);
                 else if (data.t === "reset") held.current = { ...held.current, at: -1 };   // the next frame replaces
+                else if (data.t === "history_end") { final = true; }
                 else if (data.t === "gone") { setGate({ code: "gone", msg: "" }); final = true; }
               }
             }
@@ -179,7 +181,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
         } catch { /* dropped or silent: come back from what we hold */ }
         finally { clearTimeout(idleTimer); ac = null; }
         setLive(false);
-        if (on) setConnection("offline");
+        if (on && !final) setConnection("offline");
         if (!on || final) break;
         // a hidden page waits until it is looked at again
         await sleep(document.visibilityState === "hidden" ? 60_000 : RETRY_MS[Math.min(tries++, RETRY_MS.length - 1)]);

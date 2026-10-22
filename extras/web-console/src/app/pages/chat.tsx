@@ -606,6 +606,9 @@ const OFFLINE_BOX = () => tr("家机器连回来后才能发", "Send once your m
 
 // why the record cannot be followed here, in one sentence
 const VIEW_WORDS = (): Record<string, string> => ({
+  never_started: tr("没有记录到原生对话。任务和待办仍保留。", "No native conversation was recorded. Tasks and pending work are retained."),
+  offline_unknown: tr("暂时无法确认历史文件；未找到不代表已删除。", "History is currently unverified; not found does not mean deleted."),
+  missing_confirmed: tr("已核实原生记录及恢复副本均不存在。", "Native records and recovery copies were verified absent."),
   not_yours: tr("没有这个会话，或者它不是你的。", "No such session of yours."),
   old_agent: tr("这台机器的 fleet 还旧，网页里看不了这个会话的对话；更新后就能看，现在请用终端。",
     "This machine's fleet is too old to show this conversation here; update it, and use the terminal for now."),
@@ -691,6 +694,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
   const { last, v, sync, preview, source } = props;
   const talk = v.canTalk && !preview;
   const boxWords = preview ? tr("只读 · 当前登录只能查看这个会话。", "Read-only · this sign-in can only view this session.")
+    : v.state?.history_status ? tr("只读历史 · 接回请用详情中的接回入口。", "Read-only history · use Resume in Details to continue.")
     : sync === "offline" || v.access === "offline" ? OFFLINE_BOX()
     : v.access === "checking" ? tr("正在连接会话，可以先写下要说的话…", "Connecting to your session; you can draft your message…")
     : talk ? composerPlaceholder(null, null) : readOnlyWords(source.open);
@@ -713,6 +717,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
       <TooltipProvider>
         <PageCardUI />
         <div className="flex h-full flex-col" data-testid="session-view" data-gate={v.gate?.code} data-access={v.access} data-talk={talk ? "" : undefined} data-live={v.live ? "" : undefined}>
+          {v.state?.history_status ? <p role="status" className="px-4 py-2 text-sm text-muted-foreground">{v.state.history_status === "resumable" ? tr("历史对话 · 可接回", "History · resumable") : tr("历史对话 · 只读", "History · read only")}</p> : null}
           <div className="min-h-0 flex-1">
             <Thread autoFocus={false}
               placeholder={talk && v.state?.continuation?.state !== "continued" && v.state?.continuation ? v.state.continuation.message : boxWords}

@@ -1316,9 +1316,14 @@ def continue_plan(fid, seg=None):
         raise ValueError("%s has segments 1..%d, not %s" % (fid, len(segs), seg))
     s = segs[n - 1]
     o = rec["opened"]
+    placement = {}
+    if s["agent"] == "codex":
+        from fleet_history_read import landing
+        placement = landing(fid, s["native"])
     return {"id": fid, "seg": n, "native": s["native"], "agent": s["agent"], "worktree": o.get("worktree", ""),
             "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None,
-            "task": o.get("task", ""), "parent": o.get("parent", "")}
+            "task": o.get("task", ""), "parent": o.get("parent", ""), **placement}
+
 
 
 # ---- the hub mirror (EPIC T497 C2) ----------------------------------------------

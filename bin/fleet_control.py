@@ -597,7 +597,16 @@ class Control:
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
             if action == "worker_resume":
-                raise Unattempted("INVALID_ARGUMENT", "Resume a stopped worker by its key-form worker_id")
+                matches, _ = self.find_workers(fleet, key)
+                if matches:
+                    raise Unattempted("ALREADY_RUNNING", "A live window already holds this identity")
+                code, output, err = self.adapter("resume", fleet["name"], "fid:" + key, timeout=180)
+                if code:
+                    raise Fault("UNKNOWN_OUTCOME", err.decode("utf-8", errors="replace")[-1000:] or "Exact history could not be resumed; inspect the session before retrying")
+                matches, snapshot = self.find_workers(fleet, key)
+                if len(matches) != 1:
+                    raise Fault("UNKNOWN_OUTCOME", "Restore did not confirm exactly one window with this FID")
+                return {"resumed": matches[0], "observed_at": snapshot["observed_at"]}
             matches, _ = self.target(fleet, key, action)
             key = matches[0]["key"]
         if action == "worker_answer":

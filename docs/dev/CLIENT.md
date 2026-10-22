@@ -76,6 +76,30 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 后续派发由协调方确认，界面不承诺自动启动。任务结果不会盖过会话收到新工作后的
 「在干活」；这些显示不改变回收策略。父任务关系本身不表示依赖阻塞。
 
+## 历史会话：查看、接回与撤销隐藏
+
+网页的「已收起」从会话 FID 取历史入口，不依赖另一份已结束列表的条数，也不按
+循环使用的 scratch 名称猜会话。打开对话是只读；不会启动助手，已删除工作树也
+不妨碍读取保留的原生记录。状态区分 `readable`（可读）、`resumable`（可尝试接回）、
+`offline_unknown`（目前无法核实）、`missing_confirmed`（人工核验全部副本缺失）和
+`never_started`（没有记录到原生段）。Hub 缓存仅供本人读取；管理员的 view-as 不能读对话。
+
+「详情 → 接回」按同一 FID 恢复原生 SID。Codex 的迁移收据须同时匹配 FID、SID
+和原生记录中的落点，恢复时携带原 CODEX_HOME。缺少原目录且没有可核验的精确版本，
+明确拒绝自动恢复；不会偷偷开新对话。可读与可接回是两个不同条件。
+
+一次性清理由操作者使用 `bin/fleet-history-hide.py <manifest.json>`，默认仅 dry-run；
+`--apply` 才隐藏，`--undo --apply` 撤销。凭据只从 `FLEET_HUB_URL`、
+`FLEET_HISTORY_ADMIN_TOKEN` 环境变量读取。清单是一个 owner+FID 对象，必须包含
+`owner,id,seq,machine,login,checked_at`、`online:true,complete:true`，按段顺序列出全部
+`natives`，并声明 `native_evidence:"absent_verified"`、`backups:"absent_verified"`、
+`inputs:"empty_verified"`；`evidence` 指向操作者核验过所有落点、迁移/收尾备份和输入队列的
+证据。核验须在五分钟内完成；离线、不完整、版本变化、活跃窗口或未完成任务均拒绝。
+这份清单是人工核验声明，不是工具自动扫描出的证明。Hub 会另行查缓存和待办；旧缓存
+无法可靠按 FID 归属时，只要该 owner 仍有任一 view 缓存就保守拒绝隐藏。
+隐藏与撤销都留审计，仅改变 Web 与 Terminal 共用看板的可见性，不删除任务、原生段、
+对话、账号或端点。后续 FID 事件会使旧隐藏自动失效。
+
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
 The old client was removed in #3008 after every row below was ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」

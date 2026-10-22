@@ -19,6 +19,7 @@ device). Read `os`, `terminal`, `caps`, `via`, and `clients` when there are seve
 
 | They are on | Tell it as |
 |---|---|
+| closed session history, resume, reversible operator cleanup | `docs/dev/CLIENT.md` § 「历史会话：查看、接回与撤销隐藏」 |
 | a parked window, typing to resume, retrying a failed resume | `docs/dev/CLIENT.md` § 「停放后继续说话」 |
 | `os` iOS / iPadOS / Android, or `terminal` Termius / Blink, or `caps` only `link` | the **phone**: Termius taps — ⌃ is the Ctrl key on the extra-key row, then `]`, then a letter; a page is a link to tap |
 | `os` macOS with `terminal` iTerm2 (`caps` has `iterm2`) | the **Mac**: one key, ⌘P (everything else is a row in it); a page you can open for them with `mcp__fleet__open` |

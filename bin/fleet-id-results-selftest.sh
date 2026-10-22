@@ -125,16 +125,21 @@ $(newwin "$F8")
 EOF
 fid open "$F8" --window "$W8" --socket "$L" --agent claude --title 'S8 work' >/dev/null
 hook "$P8" startup dddd0001
-hook "$P8" clear dddd0002
+hook "$P8" clear dddd0002-1111-4111-8111-111111111111
 hook "$P8" clear dddd0003
 lib fleet_win_retire "$W8" "$L" exited; tf kill-window -t "$W8"
 plan=$(fid continue "$F8" --seg 2)
-st_count; printf '%s' "$plan" | grep -q '"native": "dddd0002"' || st_miss "S8: segment 2's native id is the plan" "$plan"
+st_count; printf '%s' "$plan" | grep -q '"native": "dddd0002-1111-4111-8111-111111111111"' || st_miss "S8: segment 2's native id is the plan" "$plan"
 cat > "$WORK/spawn.sh" <<'SP'
 printf '%s\n' "$@" > "$FLEET_TEST_SPAWNED"
 SP
+# A resume must verify the exact native segment before opening a window.
+export CLAUDE_PROJECTS_DIR="$WORK/claude-projects"
+mkdir -p "$CLAUDE_PROJECTS_DIR/project"
+printf '{"sessionId":"dddd0002-1111-4111-8111-111111111111"}\n' > "$CLAUDE_PROJECTS_DIR/project/dddd0002-1111-4111-8111-111111111111.jsonl"
+printf '{"sessionId":"dddd0101-1111-4111-8111-111111111111"}\n' > "$CLAUDE_PROJECTS_DIR/project/dddd0101-1111-4111-8111-111111111111.jsonl"
 FLEET_TEST_SPAWNED="$WORK/spawned" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue "$F8" --seg 2 --exec
-st_count; tr '\n' ' ' < "$WORK/spawned" | grep -q -- "--resume dddd0002 .*--no-repo.*--prev $F8" \
+st_count; tr '\n' ' ' < "$WORK/spawned" | grep -q -- "--resume dddd0002-1111-4111-8111-111111111111 .*--no-repo.*--prev $F8" \
   || st_miss "S8: --exec opens a window resuming segment 2 with --prev <ID>" "$(tr '\n' ' ' < "$WORK/spawned" 2>/dev/null)"
 st_count; ! grep -q -- '--id-task' "$WORK/spawned" || st_miss "S8: an ID with no record carries none"
 # C18: an EPIC driver's ID (its record T<n>, its parent) continued — the new
@@ -144,7 +149,7 @@ read -r W8T P8T <<EOF
 $(newwin "$F8T")
 EOF
 fid open "$F8T" --window "$W8T" --socket "$L" --agent claude --title 'EPIC: driver' --task T580 --parent "$F8P" >/dev/null
-hook "$P8T" startup dddd0101
+hook "$P8T" startup dddd0101-1111-4111-8111-111111111111
 lib fleet_win_retire "$W8T" "$L" exited; tf kill-window -t "$W8T"
 FLEET_TEST_SPAWNED="$WORK/spawned-t" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue "$F8T" --exec
 st_count; tr '\n' ' ' < "$WORK/spawned-t" | grep -q -- "--id-task T580 --id-parent $F8P .*--prev $F8T" \
@@ -153,8 +158,8 @@ G8=$(mkfid)
 read -r WG8 PG8 <<EOF
 $(newwin "$G8")
 EOF
-fid open "$G8" --window "$WG8" --socket "$L" --agent claude --from-native dddd0002 >/dev/null
-hook "$PG8" resume dddd0002
+fid open "$G8" --window "$WG8" --socket "$L" --agent claude --from-native dddd0002-1111-4111-8111-111111111111 >/dev/null
+hook "$PG8" resume dddd0002-1111-4111-8111-111111111111
 st_count; [ "$(openedf "$G8" prev)" = "$F8" ] || st_miss "S8: the new ID's prev is the old one" "$(openedf "$G8" prev)"
 st_count; [ "$G8" != "$F8" ] && [ "$(closed "$F8")" = yes ] || st_miss "S8: the old ID stays closed"
 st_count; [ "$(fid route "$F8")" = "$G8	successor" ] || st_miss "S8: what was meant for the closed ID goes to its successor" "$(fid route "$F8")"

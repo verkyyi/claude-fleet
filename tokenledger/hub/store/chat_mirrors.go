@@ -141,3 +141,22 @@ func (s *Store) SetChatMirrorOff(pid string, off bool, now time.Time) error {
 	}
 	return s.DeleteChatMirror(pid)
 }
+
+// ChatHistoryMirrorOf accepts only durable FID keys. Legacy scratch-key copies
+// cannot safely be attributed to a closed generation and are never guessed.
+func (s *Store) ChatHistoryMirrorOf(pid, fid string, now time.Time) (*ChatMirrorCopy, error) {
+	var c ChatMirrorCopy
+	var at int64
+	prefix, suffix := pid+"#view:", "/"+fid
+	err := s.read.QueryRow(`SELECT sealed, updated_at FROM hub_chat_mirrors WHERE expires_at > ? AND
+ (principal = ? OR (substr(principal,1,?) = ? AND substr(principal,?) = ?)) ORDER BY updated_at DESC LIMIT 1`,
+		now.Unix(), prefix+"fid:"+fid, len(prefix), prefix, -len(suffix), suffix).Scan(&c.Sealed, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.UpdatedAt = time.Unix(at, 0)
+	return &c, nil
+}

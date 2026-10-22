@@ -101,6 +101,24 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 	// only a worker: the personal terminal has no conversation to read
 	q := url.Values{"worker": {r.URL.Query().Get("worker")}}
 	wid, target, dest, status, code, msg := s.termTarget(q, home)
+	historical := false
+	// History has an owner-scoped identity even after WorkersJSON forgets it.
+	// Only a full FID is accepted; recycled keys never resolve closed history.
+	ref := strings.TrimPrefix(q.Get("worker"), "fid:")
+	if i := strings.LastIndexByte(ref, '/'); i >= 0 {
+		ref = ref[i+1:]
+	}
+	if code != "" && store.IsFleetID(ref) {
+		if rec, err := s.Store.FleetIDOf(person, ref); err == nil && rec.ClosedAt > 0 {
+			wid, target = "fid:"+ref, control.TermWorkerTarget(ref)
+			dest = store.EntryHome{Person: person, Machine: rec.Machine, Login: rec.Login}
+			status, code, msg, historical = 0, "", "", true
+			fwd.Set("history", "1")
+			if r.URL.Query().Get("status") == "1" {
+				fwd.Set("status", "1")
+			}
+		}
+	}
 	if code != "" {
 		s.chatRefuse(w, person, chatViewRoute, status, code, msg)
 		return
@@ -111,6 +129,15 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("cached") == "1" {
 		s.handleChatViewCached(w, r, person, wid)
 		return
+	}
+	// Native reads still require that the destination login belongs to this
+	// person today. Cached reads above remain available when a machine is offline.
+	if historical {
+		own, err := s.ownScope(person)
+		if err != nil || !own(dest.Machine, dest.Login) {
+			s.chatRefuse(w, person, chatViewRoute, http.StatusServiceUnavailable, "offline_unknown", "历史所在登录目前不可访问")
+			return
+		}
 	}
 	where := dest.Machine + "/" + dest.Login
 	if peer, ok := s.chatRelayPeer(r, dest.Machine, dest.Login); ok {
@@ -180,7 +207,10 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 			if resp.StatusCode == http.StatusOK && fwd.Get("before") == "" && fwd.Get("tool") == "" && viewAsAsked(r) == "" && !s.consoleTicketCookie(r) && s.chatMirrorOn(person) {
 				taken := time.Now()
 				resp.Body = &chatViewTee{ReadCloser: resp.Body, done: func(b []byte) {
-					s.chatViewKeep(person, wid, b, taken)
+					s.chatViewKeep(person, "fid:"+fid, b, taken)
+					if !historical {
+						s.chatViewKeep(person, wid, b, taken)
+					}
 				}}
 			}
 			return nil
@@ -389,6 +419,9 @@ func (s *Server) handleChatViewCached(w http.ResponseWriter, r *http.Request, pe
 		return
 	}
 	c, err := s.Store.ChatMirrorOf(person, store.ChatMirrorViewPrefix+wid, time.Now())
+	if strings.HasPrefix(wid, "fid:") {
+		c, err = s.Store.ChatHistoryMirrorOf(person, strings.TrimPrefix(wid, "fid:"), time.Now())
+	}
 	if err != nil || c == nil {
 		chatNoCopy(w)
 		return

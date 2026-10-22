@@ -93,9 +93,18 @@ type BoardRow struct {
 	// and whether the web may talk to it now (a live session on a machine not
 	// lost, not ended: a terminal one too, by default). A record with no session
 	// has neither.
-	Origin     string `json:"origin,omitempty"`
-	CanTalk    bool   `json:"can_talk"`
+	Origin     string        `json:"origin,omitempty"`
+	CanTalk    bool          `json:"can_talk"`
+	History    *BoardHistory `json:"history,omitempty"`
 	parentTask string
+}
+
+// BoardHistory is resolved directly from the owner's FID ledger, independently
+// of the legacy ended list's cap, age window, and recycled scratch names.
+type BoardHistory struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	ResumeID string `json:"resume_id,omitempty"`
 }
 
 // Board is the list: its rows in order, the count, each group's size.
@@ -261,6 +270,22 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		return byRef[b.Task]
 	}
+	fleets, err := s.Store.Fleets()
+	if err != nil {
+		return nil, err
+	}
+	resumeID := func(b *store.BoardID) string {
+		found := ""
+		for _, f := range fleets {
+			if f.Hostname == b.Machine && f.OSUser == b.Login && f.Present {
+				if found != "" {
+					return ""
+				} // ambiguous placement refuses
+				found = f.FleetID + "/" + b.ID
+			}
+		}
+		return found
+	}
 	var rows []BoardRow
 	usedTask, usedID := map[*store.FleetTask]bool{}, map[string]bool{}
 	row := func(t *store.FleetTask, b *store.BoardID) BoardRow {
@@ -270,6 +295,35 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Agent = b.Agent
 			if r.Agent != "" {
 				r.AgentBasis = "native"
+			}
+		}
+		hb := b
+		if t != nil {
+			ref := t.FID
+			if n := strings.LastIndexByte(t.WorkerID, '/'); n >= 0 && store.IsFleetID(t.WorkerID[n+1:]) {
+				ref = t.WorkerID[n+1:]
+			}
+			if store.IsFleetID(ref) && (hb == nil || hb.ID != ref) {
+				// A parked task can be older than either list window. Resolve
+				// its exact owner's FID directly, never a scratch key or title.
+				if rec, err := s.Store.FleetIDOf(t.Owner, ref); err == nil && rec.ClosedAt > 0 {
+					hb = &store.BoardID{ID: rec.ID, Machine: rec.Machine, Login: rec.Login, Seq: rec.Seq, Closed: rec.ClosedAt}
+					if len(rec.Natives) > 0 {
+						hb.Agent = rec.Natives[len(rec.Natives)-1].Agent
+					}
+				}
+			}
+		}
+		if hb != nil {
+			if hb.Closed > 0 {
+				status := "offline_unknown"
+				if hb.Seq > 0 && hb.Agent == "" {
+					status = "never_started"
+				}
+				r.History = &BoardHistory{ID: hb.ID, Status: status}
+				if hb.Agent != "" {
+					r.History.ResumeID = resumeID(hb)
+				}
 			}
 		}
 		if t != nil {
@@ -505,7 +559,27 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r.ID, r.Group, r.Tag, r.At = b.ID, "gone", "ended", b.Closed
 		rows = append(rows, r)
 	}
-	return finishBoard(rows), nil
+	hidden, err := s.Store.HiddenHistory(owner)
+	if err != nil {
+		return nil, err
+	}
+	kept := rows[:0]
+	for _, r := range rows {
+		if r.Group == "gone" && r.History != nil && hidden[r.History.ID] && !usedIDLive(live, r.History.ID) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return finishBoard(kept), nil
+}
+
+func usedIDLive(live []FleetSession, id string) bool {
+	for _, fs := range live {
+		if identityOf(fs.Worker) == id {
+			return true
+		}
+	}
+	return false
 }
 
 func boardStateTag(st string) string {

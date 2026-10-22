@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -492,5 +493,50 @@ func TestBoardManualTitleBeatsTaskAndLive(t *testing.T) {
 		if err != nil || len(b.Rows) != 1 || b.Rows[0].Title != "chosen name" {
 			t.Fatalf("manual board: %+v %v", b, err)
 		}
+	}
+}
+
+// Every closed row resolves its own FID, including row 201+, independently of
+// the legacy ended list. An unstarted accepted task remains visible.
+func TestBoardHistoryBeyondEndedCap(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	for i := 0; i < 205; i++ {
+		id := fmt.Sprintf("11111111-1111-4111-8111-%012d", i)
+		_, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep", Machine: "machine-a", Login: "alice", ID: id,
+			Events: []map[string]any{{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "key": "scratch-1"},
+				{"ev": "native", "seq": float64(2), "ts": float64(now.Unix()), "native": "sid", "agent": "claude"},
+				{"ev": "closed", "seq": float64(3), "ts": float64(now.Unix()), "reason": "done"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "not started", AuthorityVersion: 1, RequestedAgent: "default", ResolvedAgent: "claude"}, "queued", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.buildBoard("gh:1", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range b.Rows {
+		if r.History != nil {
+			n++
+			if r.History.ID != r.ID {
+				t.Fatal("history identity mismatch")
+			}
+		}
+		if r.ID == pending.FID && r.Group == "gone" {
+			t.Fatal("pending task hidden")
+		}
+	}
+	if n != 205 {
+		t.Fatalf("history rows=%d", n)
+	}
+	other, err := s.buildBoard("gh:2", nil, now)
+	if err != nil || len(other.Rows) != 0 {
+		t.Fatalf("tenant rows=%+v err=%v", other, err)
 	}
 }

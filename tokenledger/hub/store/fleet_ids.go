@@ -298,6 +298,9 @@ type FleetIDPushed struct {
 }
 
 func (s *Store) ensureFleetIDs() error {
+	if _, err := s.write.Exec(s.d.ddl(historyHideSchema)); err != nil {
+		return err
+	}
 	if _, err := s.write.Exec(s.d.ddl(fleetIDsSchema)); err != nil {
 		return fmt.Errorf("create fleet_ids tables: %w", err)
 	}
