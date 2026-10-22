@@ -194,6 +194,36 @@ class Timers(fixture.Park):
     def test_codex_loop_wakes_same_thread_and_keeps_owner_commands(self):
         self.check_existing_loop_ledger('codex')
 
+    def test_codex_park_resume_does_not_bootstrap_second_controller(self):
+        # A transferred session's wrapper inherits these from launch.sh. The
+        # first native fixture is already running; the original ledger exists.
+        manifest = self.root / 'transfer/manifest.json'
+        spec = manifest.parent / 'loop-spec.json'
+        self.env.update(FLEET_HANDOFF_MANIFEST=str(manifest), FLEET_LOOP_SPEC=str(spec),
+                        FLEET_LOOP_AGENT='codex')
+        ledger = self.park_ledger('codex')
+        source = subprocess.Popen(['sh', '-c', 'exit 0'])
+        source.wait()
+        manifest.write_text(json.dumps(dict(source=dict(pid=source.pid), loop_spec_path=str(spec),
+            fleet=dict(session=self.label, window_id=self.win, pane_id=self.opt('pane_id')),
+            workspace=dict(path=str(self.root)), target=dict(agent='codex'))))
+        spec.write_text(json.dumps(dict(prompt=self.prompt, interval_seconds=60, next_run_at=self.due)))
+        # The launcher's documented LOOP_SPEC branch runs the actual bridge,
+        # whose duplicate-directory guard must never be hit on a parked resume.
+        launch = self.root / 'launch'
+        text = launch.read_text()
+        probe = ('if [ -n "${FLEET_LOOP_SPEC:-}" ]; then\n'
+                 '  touch ' + shlex.quote(str(self.root / 'rebootstrap')) + '\n'
+                 '  exec ' + shlex.join([sys.executable, str(BIN / 'fleet-loop.py'), 'bridge', '--']) + ' "$@"\nfi\n')
+        launch.write_text(text.replace('#!/bin/bash\n', '#!/bin/bash\n' + probe, 1))
+        self.tick(self.due)
+        self.assertFalse((self.root / 'rebootstrap').exists(),
+                         'park resume attempted a second controller: ' + self.tm('capture-pane', '-p', '-t', self.win))
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertEqual((self.root / 'launch-args').read_text().count(self.prompt), 1)
+        self.assertEqual(json.loads(ledger.read_text())['deliveries'], 1)
+
     def park_ledger(self, agent, cron=False, same_due=False):
         self.setup_timer(agent=agent)
         self.set('@loop', '')
