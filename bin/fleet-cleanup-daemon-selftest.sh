@@ -84,6 +84,9 @@ if grep -qxF "\$pr" "$WORK/hang" 2>/dev/null; then
   wait "\$sp"
 fi
 printf '%s\n' "\$pr" >> "$CLEAN_LOG"
+# T905: a PR named in $WORK/tok answers that error token instead (gh could not read it).
+t=\$(awk -v p="\$pr" '\$1 == p { print \$2; exit }' "$WORK/tok" 2>/dev/null)
+[ -n "\$t" ] && { printf '%s\n' "\$t"; exit 2; }
 printf 'cleaned:fake%s\n' "\$pr"
 exit 0
 FAKE
@@ -385,5 +388,30 @@ run s1 s2
 grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'
 [ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail 'rate limit must stop before the second fleet'
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle\n'
+# T905) gh could not read a PR: backoff, a 3-times-gone tombstone, a limit stops the pass.
+rm -f "$WORK/idle-rate" "$WORK/conf/s2.conf"; rm -rf "$WORK/conf/fleets/s2"
+MISS="$C/fleets/fake-repo/prmap.miss"; rm -f "$MISS"
+due() { awk -F'\t' 'BEGIN{OFS="\t"} $4 != "dead" { $4 = 0 } 1' "$MISS" > "$MISS.t" && mv "$MISS.t" "$MISS"; }
+printf '101 error:pr-not-found\n102 error:gh-failed\n' > "$WORK/tok"
+reset; conf; run s1
+[ "$(reaped_list)" = "101 102 105" ] || fail "T905 first tick asks every candidate, got [$(reaped_list)]"
+awk -F'\t' '$1==101 && $2==1 && $3==0 && $4 ~ /^[0-9]+$/' "$MISS" | grep -q . || fail "T905 #101 gone once must be a backoff row"
+awk -F'\t' '$1==102 && $2==0 && $3==1' "$MISS" | grep -q . || fail "T905 #102 gh-failed must be a backoff row"
+reset; run s1
+[ "$(reaped_list)" = "105" ] || fail "T905 a PR in backoff is not asked, got [$(reaped_list)]"
+: > "$WORK/tok"; printf '101 error:pr-not-found\n' > "$WORK/tok"
+due; reset; run s1
+[ "$(reaped_list)" = "101 102 105" ] || fail "T905 a due PR is asked again, got [$(reaped_list)]"
+grep -q '^102	' "$MISS" && fail "T905 #102 answered — its row must go (a merged PR cleans as usual)"
+due; reset; run s1
+grep -q 'tombstoned' "$WORK/log" || fail "T905 the third 'not there' must tombstone and say so"
+awk -F'\t' '$1==101 && $4=="dead"' "$MISS" | grep -q . || fail "T905 #101 must be dead"
+: > "$WORK/tok"; due; reset; run s1
+grep -qxF 101 "$CLEAN_LOG" && fail "T905 a tombstoned PR is never asked again"
+rm -f "$MISS"; printf '101 error:gh-rate-limit\n' > "$WORK/tok"; reset; run s1
+[ "$(reaped_list)" = "101" ] || fail "T905 a rate limit stops the repo's pass, got [$(reaped_list)]"
+grep -q 'backing off' "$WORK/log" || fail "T905 the rate-limit stop must be logged"
+rm -f "$WORK/tok" "$MISS"
+
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle · gh-miss backoff/tombstone\n'
 exit 0
