@@ -11,19 +11,20 @@ const worker = '66666666-6666-4666-8666-666666666666/77777777-7777-4777-8777-777
 const browser = await chromium.launch()
 try {
   for (const agent of ['codex', 'claude']) {
-    for (const kind of ['delayed', 'old', 'ticket']) {
+    for (const kind of ['delayed', 'old', 'ticket', 'identity']) {
       const context = await browser.newContext()
       try {
         const page = await context.newPage()
         if (kind === 'delayed') await page.clock.install()
-        let capability = kind === 'delayed' ? null : kind === 'ticket' ? true : undefined
+        let capability = kind === 'delayed' ? null : kind === 'old' ? undefined : true
+        let identityReads = 0
         const sent = []
         // route.fulfill ends the response immediately. Use a real open stream:
         // a completed SSE response must now disable sending until reconnect.
         await page.addInitScript(({ agent, kind }) => {
           const real = window.fetch.bind(window)
           const enc = new TextEncoder()
-          const test = window.__sessionView = { capability: kind === 'delayed' ? null : kind === 'ticket' ? true : undefined }
+          const test = window.__sessionView = { capability: kind === 'delayed' ? null : kind === 'old' ? undefined : true }
           test.emit = () => test.controller.enqueue(enc.encode(`data: ${JSON.stringify({ t: 'state', agent, session: 's1', busy: false,
             can_talk: test.capability, talk_reason: test.capability === null ? 'checking' : '', queue: [] })}\n\n`))
           window.fetch = async (input, init) => {
@@ -43,7 +44,11 @@ try {
           assert.equal(url.origin, origin)
           const path = url.pathname
           const json = body => route.fulfill({ json: body })
-          if (path === '/v1/me') return json({ person: 'test-person', name: 'Alice', role: 'user', read_only: kind === 'ticket' })
+          if (path === '/v1/me') {
+            identityReads++
+            if (kind === 'identity' && identityReads === 1) return route.fulfill({ status: 503, json: { error: 'temporary identity failure' } })
+            return json({ person: 'test-person', name: 'Alice', role: 'user', read_only: kind === 'ticket' })
+          }
           if (path === '/v1/fleet/tasks') return json({ tasks: [] })
           if (path.startsWith('/v1/fleet/tasks/')) return route.fulfill({ status: 404, json: {} })
           if (path === '/v1/fleet/sessions') return json({ sessions: [], fleets: [] })
@@ -52,7 +57,7 @@ try {
             return json({ mirror: null })
           }
           if (path === '/v1/chat/say') {
-            assert.equal(kind, 'delayed', 'read-only page must not send')
+            assert(['delayed', 'identity'].includes(kind), 'read-only page must not send')
             assert.equal(capability, true, 'unknown permission must not send')
             sent.push(route.request().postDataJSON().text)
             return json({ delivery: `d${sent.length}`, state: 'queued' })
@@ -96,6 +101,17 @@ try {
           await page.getByRole('button', { name: '发送', exact: true }).click()
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')
           assert.deepEqual(sent, ['draft survives discovery', 'second turn'])
+        } else if (kind === 'identity') {
+          await input.fill('draft survives identity failure')
+          assert.equal(await page.locator('[data-testid=session-view]').getAttribute('data-access'), 'checking')
+          await input.press('Enter')
+          assert.equal(sent.length, 0, 'a writable stream cannot substitute for unknown sign-in permissions')
+          await page.locator('[data-testid=session-view][data-talk]').waitFor({ timeout: 5000 })
+          assert(identityReads >= 2, 'temporary identity failure must be retried')
+          assert.equal(await input.inputValue(), 'draft survives identity failure')
+          await page.getByRole('button', { name: '发送', exact: true }).click()
+          await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')
+          assert.deepEqual(sent, ['draft survives identity failure'])
         } else {
           // The stream's state arrives after the input mounts. Wait for its
           // verdict rather than asserting against the initial checking state.

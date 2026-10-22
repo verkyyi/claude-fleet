@@ -6953,6 +6953,20 @@ drill_chat_view_stream_silent() {
   SECS=$(since "$t0")
 }
 
+drill_chat_view_identity_unavailable() {
+  CAP=60; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/extras/browser-transport/session-write.mjs" ] || { WHY='missing identity recovery browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/session-write.mjs" 2>&1) || { WHY="$out"; return 1; }
+    printf '%s\n' "$out" | grep -q '^PASS session-write codex identity' || { WHY="missing identity recovery case: $out"; return 1; }
+    WHAT='登录身份首次503、会话能力为true：仍禁发，身份恢复后保留草稿并允许主动发送；只读票据始终禁发'
+  else
+    WHAT='这里没有 Playwright Chromium；browser-attachment 门运行身份503恢复演练'
+  fi
+  SECS=$(since "$t0")
+}
+
 drill_codex_release_shadowed() {
   CAP=30; SECS=0
   suite_holds fleet-codex-selftest.sh 'F4 managed release Codex wins over a stale CLI earlier on PATH' || return 1

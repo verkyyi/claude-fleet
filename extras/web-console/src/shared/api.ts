@@ -5,8 +5,8 @@ import { netMiss, netOk } from "./net";
 
 // GET a JSON read; a 401 means the session ended — to the sign-in, which
 // brings the person back.
-export async function getJSON<T>(url: string): Promise<T | null> {
-  const r = await fetch(url, { headers: { Accept: "application/json" } }).catch(() => null);
+export async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T | null> {
+  const r = await fetch(url, { headers: { Accept: "application/json" }, signal }).catch(() => null);
   if (r) netOk(); else netMiss();
   if (r?.status === 401) { location.assign("/app/signin"); return null; }
   return r && r.ok ? ((await r.json().catch(() => null)) as T | null) : null;
@@ -38,14 +38,40 @@ export type Me = {
 };
 export type MeState = { me: Me | null; loading: boolean };
 let meCache: Promise<Me | null> | null = null;
-// meOnce: the page's one /v1/me read, shared by every caller
-export const meOnce = () => (meCache ??= getJSON<Me>("/v1/me"));
+// Share in-flight/successful identity reads. A transient failure must not become
+// the page's permanent permission verdict. Bound hung identity requests too.
+export const meOnce = () => (meCache ??= (() => {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15_000);
+  return getJSON<Me>("/v1/me", ac.signal).then((me) => {
+    if (!me) meCache = null;
+    return me;
+  }).finally(() => clearTimeout(timer));
+})());
 export function useMe(): MeState {
   const [s, set] = useState<MeState>({ me: null, loading: true });
   useEffect(() => {
-    let live = true;
-    meOnce().then((me) => live && set({ me, loading: false }));
-    return () => { live = false; };
+    let live = true, tries = 0, wake: (() => void) | null = null;
+    const onShow = () => { if (document.visibilityState === "visible") wake?.(); };
+    document.addEventListener("visibilitychange", onShow);
+    window.addEventListener("online", onShow);
+    (async () => {
+      while (live) {
+        const me = await meOnce();
+        if (!live) return;
+        set({ me, loading: false });
+        if (me) return;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.min(1000 * 2 ** tries++, 15_000));
+          wake = () => { clearTimeout(timer); resolve(); };
+        });
+      }
+    })();
+    return () => {
+      live = false; wake?.();
+      document.removeEventListener("visibilitychange", onShow);
+      window.removeEventListener("online", onShow);
+    };
   }, []);
   return s;
 }
