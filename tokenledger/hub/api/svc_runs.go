@@ -108,18 +108,23 @@ type SvcRunner interface {
 
 // SvcRunRequest is POST /v1/svc/runs.
 type SvcRunRequest struct {
-	Template       string          `json:"template"`
-	TemplateDigest string          `json:"template_digest"`
-	Tenant         string          `json:"tenant"`
-	Subject        string          `json:"subject"`
-	Inputs         json.RawMessage `json:"inputs"`
-	IdempotencyKey string          `json:"idempotency_key"`
-	CallbackURL    string          `json:"callback_url"`
-	DeadlineS      int             `json:"deadline_s"`
+	EnginePref      string            `json:"engine_pref,omitempty"`
+	EngineTemplates map[string]string `json:"engine_templates,omitempty"`
+	Template        string            `json:"template"`
+	TemplateDigest  string            `json:"template_digest"`
+	Tenant          string            `json:"tenant"`
+	Subject         string            `json:"subject"`
+	Inputs          json.RawMessage   `json:"inputs"`
+	IdempotencyKey  string            `json:"idempotency_key"`
+	CallbackURL     string            `json:"callback_url"`
+	DeadlineS       int               `json:"deadline_s"`
 }
 
 // SvcRunView is a run as the caller reads it — the GET body and the callback's.
 type SvcRunView struct {
+	EnginePref       string          `json:"engine_pref,omitempty"`
+	Attempts         json.RawMessage `json:"attempts"`
+	Progress         SvcRunProgress  `json:"progress"`
 	RunID            string          `json:"run_id"`
 	State            string          `json:"state"`
 	ErrorCode        string          `json:"error_code,omitempty"`
@@ -141,7 +146,7 @@ type SvcRunView struct {
 }
 
 func svcRunView(r store.SvcRun, withResult bool) SvcRunView {
-	v := SvcRunView{RunID: r.Ref(), State: r.State, ErrorCode: r.ErrorCode, Tenant: r.Tenant, Subject: r.Subject,
+	v := SvcRunView{EnginePref: r.EnginePref, Attempts: svcAttemptsJSON(r), Progress: svcProgress(r), RunID: r.Ref(), State: r.State, ErrorCode: r.ErrorCode, Tenant: r.Tenant, Subject: r.Subject,
 		Template: r.Template, TemplateDigest: r.Digest, IdempotencyKey: r.IdempotencyKey, Attempt: r.Attempt,
 		DeadlineS: r.DeadlineS, QueuedAt: r.QueuedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 		CallbackState: r.CallbackState, CallbackAttempts: r.CallbackAttempts}
@@ -328,6 +333,12 @@ func svcRequestSHA(req SvcRunRequest, inputs string) string {
 		h.Write([]byte(f))
 		h.Write([]byte{0})
 	}
+	if req.EnginePref != "" {
+		b, _ := json.Marshal(req.EngineTemplates)
+		h.Write([]byte(req.EnginePref))
+		h.Write([]byte{0})
+		h.Write(b)
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -337,6 +348,11 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 	var req SvcRunRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, svcInputsMax+16<<10)).Decode(&req); err != nil {
 		svcRunError(w, http.StatusBadRequest, "", "malformed request: "+err.Error())
+		return
+	}
+	legacyRequest := req.EnginePref == "" && len(req.EngineTemplates) == 0
+	if why := svcEngineRequest(&req); why != "" {
+		svcRunError(w, http.StatusBadRequest, SvcErrTemplateInvalid, why)
 		return
 	}
 	if req.DeadlineS == 0 {
@@ -393,13 +409,19 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 		svcRunError(w, http.StatusTooManyRequests, st.ErrorCode, "this run is over its budget")
 		return
 	}
+	engineTemplates, _ := json.Marshal(req.EngineTemplates)
 	sha := svcRequestSHA(req, inputs)
 	run, created, err := s.Store.CreateSvcRun(store.SvcRun{Principal: p.ID, Tenant: req.Tenant, Subject: req.Subject,
-		Template: req.Template, Digest: req.TemplateDigest, InputsJSON: inputs, IdempotencyKey: req.IdempotencyKey,
+		EnginePref: req.EnginePref, EngineTemplates: string(engineTemplates), Template: req.Template, Digest: req.TemplateDigest, InputsJSON: inputs, IdempotencyKey: req.IdempotencyKey,
 		RequestSHA: sha, DeadlineS: req.DeadlineS, CallbackURL: req.CallbackURL}, now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if !created && run.EnginePref == "" && legacyRequest {
+		old := req
+		old.EnginePref, old.EngineTemplates = "", nil
+		sha = svcRequestSHA(old, inputs)
 	}
 	if !created && run.RequestSHA != sha {
 		svcRunError(w, http.StatusConflict, "", "idempotency_key was already used for a different run ("+run.Ref()+")")
@@ -426,6 +448,9 @@ func (s *Server) handleSvcRunsList(w http.ResponseWriter, r *http.Request) {
 	f := store.SvcRunFilter{Principal: p.ID, Tenant: q.Get("tenant"), State: q.Get("state")}
 	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
+		if v == "7d" {
+			t, err = time.Now().Add(-7*24*time.Hour), nil
+		}
 		if err != nil {
 			httpError(w, http.StatusBadRequest, "since is an RFC 3339 time")
 			return
@@ -552,6 +577,7 @@ const svcRetryMinLeft = time.Minute
 // the caller is told the error code and nothing else (contract 6).
 func (s *Server) SvcRunFinishDetail(id int64, state, code, detail string, res *SvcRunResult, usage json.RawMessage) (store.SvcRun, error) {
 	now := time.Now()
+	detail = redactLogLine(detail)
 	end := store.SvcRunEnd{State: state, ErrorCode: code}
 	if len(usage) > 0 && json.Valid(usage) {
 		var b bytes.Buffer
@@ -579,28 +605,35 @@ func (s *Server) SvcRunFinishDetail(id int64, state, code, detail string, res *S
 		} else {
 			detail = end.ErrorCode
 		}
-		if SvcRunRetryable(end.ErrorCode) {
-			// a run the budget now refuses (its proxy said so mid-run) ends
-			// with the budget's code, not a retry (claude-fleet#4006)
-			if cur, err := s.Store.SvcRun(id); err == nil && cur.State == store.SvcRunRunning {
-				if st, over := s.svcBudgetRefusal(cur.Principal, cur.Tenant, now); over {
-					end.ErrorCode, detail = st.ErrorCode, st.ErrorCode+": "+st.Message
-				}
-			}
-		}
-		if SvcRunRetryable(end.ErrorCode) {
-			run, requeued, err := s.Store.RequeueSvcRun(id, now, svcRetryMinLeft)
-			if err != nil {
-				return run, err
-			}
-			if requeued {
-				log.Printf("svc run %s: attempt 1 failed (%s) — queued again for its one retry", run.Ref(), detail)
-				s.svcAudit(run.Principal, "svc.run.retry", run.Ref(), "queued", detail, now)
-				return run, nil
-			}
-		}
+
 	default:
 		return store.SvcRun{}, fmt.Errorf("a runner ends a run succeeded or failed, not %q", state)
+	}
+	cur, err := s.Store.SvcRun(id)
+	if err != nil {
+		return cur, err
+	}
+	if store.SvcRunTerminal(cur.State) || cur.State != store.SvcRunRunning {
+		return cur, nil
+	}
+	if end.State == store.SvcRunFailed && SvcRunRetryable(end.ErrorCode) {
+		if st, over := s.svcBudgetRefusal(cur.Principal, cur.Tenant, now); over {
+			end.ErrorCode, detail = st.ErrorCode, st.ErrorCode+": "+st.Message
+		}
+	}
+	end.UsageJSON, err = s.svcRecordAttempt(cur, end.ErrorCode, usage)
+	if err != nil {
+		return cur, err
+	}
+	if end.State == store.SvcRunFailed && svcFallbackAllowed(cur, end.ErrorCode) {
+		run, requeued, err := s.Store.RequeueSvcRun(id, now, svcRetryMinLeft)
+		if err != nil {
+			return run, err
+		}
+		if requeued {
+			s.svcAudit(run.Principal, "svc.run.retry", run.Ref(), "queued", detail, now)
+			return run, nil
+		}
 	}
 	run, changed, err := s.Store.FinishSvcRun(id, end, now)
 	if err != nil {
@@ -697,7 +730,7 @@ func (s *Server) SvcRunsTick(ctx context.Context, now time.Time) {
 					continue
 				}
 				if r, changed, err := s.Store.FinishSvcRun(run.ID, store.SvcRunEnd{State: store.SvcRunFailed,
-					ErrorCode: SvcErrInfra}, now); err == nil && changed {
+					ErrorCode: SvcErrInfra, UsageJSON: run.UsageJSON}, now); err == nil && changed {
 					s.svcAudit(r.Principal, "svc.run.end", r.Ref(), r.State, SvcErrInfra+": retry never started before the deadline", now)
 				}
 				continue
@@ -723,8 +756,13 @@ func (s *Server) SvcRunsTick(ctx context.Context, now time.Time) {
 			if now.Before(deadline.Add(svcRunGrace)) {
 				continue
 			}
+			usage, _ := json.Marshal(map[string]any{"wall_s": now.Sub(*run.StartedAt).Seconds()})
+			total, recordErr := s.svcRecordAttempt(run, SvcErrRunTimeout, usage)
+			if recordErr != nil {
+				continue
+			}
 			if r, changed, err := s.Store.FinishSvcRun(run.ID, store.SvcRunEnd{State: store.SvcRunFailed,
-				ErrorCode: SvcErrRunTimeout}, now); err == nil && changed {
+				ErrorCode: SvcErrRunTimeout, UsageJSON: total}, now); err == nil && changed {
 				s.svcAudit(r.Principal, "svc.run.end", r.Ref(), r.State, SvcErrRunTimeout, now)
 				s.svcRunnerCancel(ctx, r)
 			}

@@ -29,6 +29,7 @@ const (
 
 // SvcTemplateRequest is POST /v1/svc/templates.
 type SvcTemplateRequest struct {
+	Engine  string `json:"engine,omitempty"`
 	Name    string `json:"name"`
 	AgentMD string `json:"agent_md"`
 }
@@ -97,6 +98,13 @@ func (s *Server) handleSvcTemplatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, why := svcTemplateName(req.AgentMD)
+	if req.Engine != "" && req.Engine != "claude" && req.Engine != "codex" {
+		httpError(w, http.StatusBadRequest, "engine is claude or codex")
+		return
+	}
+	if req.Engine == "codex" && svcWord(req.Name, 100) && utf8.ValidString(req.AgentMD) {
+		name, why = req.Name, ""
+	}
 	if why != "" {
 		httpError(w, http.StatusBadRequest, why)
 		return

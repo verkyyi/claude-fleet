@@ -1806,16 +1806,40 @@ person's session.
   nothing is dispatched: runs wait and expire. `SvcRunFinishDetail` takes the
   runner's own words on a failure (a stderr tail, the Job's events) — they go to
   the hub's log and audit only; the caller sees the code.
-- **One retry** (claude-fleet#4007). A run that fails `infra_error` (a pod lost,
-  scheduling that never came, the credential proxy's 5xx, a result that could
-  not be handed back) on its FIRST attempt goes back in the queue under the same
-  `R<n>` — `attempt` 2, `queued_at` kept so it is first in line — inside what is
-  left of the deadline its first start fixed (`deadline_at`, kept on the retry;
-  less than a minute left ⇒ no retry). A retry that has not started by then ends
-  failed `infra_error`; one that runs past it ends `run_timeout`. No other code
-  is retried (`run_timeout` · `output_invalid` · `template_invalid` ·
-  `quota_*`), and never a second time. Audit `svc.run.retry`.
-- **`svc_degraded`** (claude-fleet#4007). The alert sweep (`RunNodeAlerts`,
+- **Engine preference and fallback** (T954). `engine_pref` defaults to
+  `codex,claude`; `codex` and `claude` select a single engine. The caller supplies
+  `engine_templates: {codex: "<digest>", claude: "<digest>"}` after registering
+  and evaluating the corresponding templates. A single-engine `codex` request
+  uses `template_digest` directly; register its plain Markdown with
+  `{engine: "codex", name, agent_md}` (the digest remains the exact text hash). Omit the Codex entry until its
+  evaluation passes: the hub then starts Claude. The legacy `template_digest`
+  remains the Claude default. The hub checks each digest belongs to the caller,
+  uses the existing service subscription allowlist and yield policy to bind an
+  account, and issues a pass scoped to the selected engine. No service pool
+  setting changes automatically.
+  Only `infra_error`, `output_invalid` and `run_timeout` can move a Codex run to
+  Claude, once, with at least a minute left. `template_invalid`, moderation and
+  budget refusals end the run. A Codex first attempt gets half the remaining
+  execution time so fallback can fit inside the original 900-second deadline.
+  A skipped Codex pool/template starts Claude directly; Claude is never repeated.
+  Already queued pre-release runs retain their original retry behavior.
+  The final callback and GET include `usage.engine`, `attempts` with
+  `{engine, code, wall_s}` (`code: "ok"` on success), and
+  `progress: {stage, engine, attempt}`. Stages are `queued`, `running`, `fallback`
+  and `completed`; an intermediate fallback does not send a failure callback.
+  Token and wall-time usage sums both attempts. `GET /v1/svc/runs?tenant=probe&since=7d`
+  supplies the seven-day observation evidence; a merge or deployment is not a
+  completed observation period.
+  The local runner keeps its key/pass and bounded stdout/stderr in memory.
+  Codex gets a fresh credential-free home and the Fleet provider's environment
+  credential. An outer named permissions profile permits only this run's
+  directories and required runtime libraries; the inner CLI retains
+  `workspace-write`. Unsupported profile versions fail closed. Native sandbox
+  tests verify that a sibling run cannot be read. Ephemeral execution avoids
+  persisting Codex session transcripts. `fleet-svc-fetch.py URL` reads public HTTP(S) pages with GET only,
+  no proxy/cookies, checked and pinned DNS, redirects rechecked, and a 2 MB cap.
+  Failure tails are redacted before reaching the hub audit.
+- **`svc_degraded`** (claude-fleet#4007). Daily `tenant=probe` runs are scheduled by the caller; two consecutive final failures in seven days also trigger this alert. The alert sweep (`RunNodeAlerts`,
   leader `alerts`, a pass a minute) reads each principal's last 30 minutes:
   more than 20 % of the runs that ended failed or expired (cancels count
   neither way) and at least 3 did, or the p95 of queued → first start (a run
