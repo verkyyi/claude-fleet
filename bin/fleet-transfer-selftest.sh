@@ -71,6 +71,11 @@ export TRANSFER_TEST_ROOT="$WORK"
 TRANSFER_TEST_TMUX=$(command -v tmux)
 export TRANSFER_TEST_TMUX
 export PATH="$FB:$PATH"
+# The managed candidate used by runtime preflight, independently of the TUI
+# process doubles below. It speaks the real initialize protocol, with no model.
+mkdir -p "$WORK/install/tools/bin"
+cp "$BIN/fleet_codex_fake_appserver.py" "$WORK/install/tools/bin/codex"
+chmod +x "$WORK/install/tools/bin/codex"
 # All operations use real isolated tmux; this one read seam models a client
 # typing in the target window without attaching to a user's terminal.
 cat > "$FB/tmux" <<'SH'
@@ -915,6 +920,15 @@ transfer --dry-run || fail 'dry-run'
 ok; [ ! -e "$FLEET_CONF_DIR/handoffs" ] && [ ! -e "$FLEET_CONF_DIR/rotating" ] || fail 'dry-run must not write packages or leases'
 ok; kill -0 "$PID" && [ "$(field cc_agent)" = '' ] || fail 'dry-run changed the source'
 ok; [ -z "$(field worktree)" ] || fail 'dry-run must not stamp a missing worktree'
+# A new --version banner cannot stand in for the actual initialize response.
+# Both planning and real cutover retain this exact source on an old runtime.
+printf '{"version":"0.154.0"}\n' > "$WORK/old-target-runtime.json"
+FLEET_FAKE_CODEX_SCRIPT="$WORK/old-target-runtime.json" transfer --dry-run \
+  && fail 'old initialize must reject dry-run'
+printf '%s' "$OUT" | grep -q 'target runtime capability preflight failed' || fail 'wrong runtime refusal'; ok
+FLEET_FAKE_CODEX_SCRIPT="$WORK/old-target-runtime.json" transfer \
+  && fail 'old initialize must reject cutover before source exit'
+kill -0 "$PID" && [ "$(field cc_agent)" = '' ] || fail 'runtime refusal exited or replaced source'; ok
 transfer --prepare-only --handoff "$WORK/notes.md" || fail 'prepare-only'
 BUNDLE=$(packet)
 ok; kill -0 "$PID" || fail 'prepare-only stopped Claude'

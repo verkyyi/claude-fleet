@@ -97,6 +97,15 @@ must be resolved first. Loop dispatch waits while a handoff is pending.
 
 ## Preview and transfer
 
+Before exiting a source for a Codex target, both transfer and exact hook repair
+initialize the launcher's selected binary in an isolated temporary HOME. The
+probe creates no thread or turn and must meet the session gate's `CODEX_MIN`.
+The initialize budget is eight seconds; its existing guardian tears the probe
+down when the caller exits. Account authentication remains a separate check.
+An old, unknown or unreachable runtime retains the source. The controller
+rechecks the source after probing and saves `target-runtime.json` in the private
+recovery package before a real exit.
+
 Web sessions use the same controller automatically after a native hard-quota
 API error or an explicit empty Claude subscription inventory response (T943).
 The hub emits `claude_pool_unavailable` only for absent provider inventory;

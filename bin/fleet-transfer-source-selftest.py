@@ -262,6 +262,7 @@ class BrokenHookMaintenance(unittest.TestCase):
                 stack.enter_context(patch.object(src,'BIN',bin_))
                 stack.enter_context(patch.object(src,'repair_check',return_value=proof))
                 stack.enter_context(patch.object(src,'repair_target_home',return_value='/real-home'))
+                stack.enter_context(patch.object(src,'target_runtime_preflight',return_value={'initialize':{'userAgent':'claude_fleet/0.162.1'}}))
                 stack.enter_context(patch.object(src,'native_hook_flags',return_value=(
                     ['hooks.Stop=fleet-codex-session.py bash-guard.py base-readonly-guard.py'],[])))
                 stack.enter_context(patch.object(src,'inspect',side_effect=lambda *a:dict(source,
@@ -302,6 +303,7 @@ class BrokenHookMaintenance(unittest.TestCase):
             checks=stack.enter_context(patch.object(src,'repair_check',return_value=proof))
             stack.enter_context(patch.dict(os.environ,FLEET_CONF_DIR=str(root),FLEET_GATE_DIR=str(root/'gate')))
             stack.enter_context(patch.object(src,'repair_target_home',return_value='/real-home'))
+            preflight=stack.enter_context(patch.object(src,'target_runtime_preflight',return_value={'initialize':{'userAgent':'claude_fleet/0.162.1'}}))
             stack.enter_context(patch.object(src,'inspect',return_value=successor))
             stack.enter_context(patch.object(src,'process_start',return_value=('','')))
             stack.enter_context(patch.object(src.time,'sleep'))
@@ -321,6 +323,11 @@ class BrokenHookMaintenance(unittest.TestCase):
                 if argv[-1]=='#{@fleet_id}':return 'fid'
                 return ''
             stack.enter_context(patch.object(src,'run',side_effect=run))
+            preflight.side_effect=ValueError('target initialize unavailable')
+            with self.assertRaisesRegex(ValueError,'target initialize'):
+                src.repair_hooks('test','%2','fid','sid')
+            self.assertEqual(calls,[])  # no exit, Escape, pane mutation or launch
+            preflight.side_effect=None
             with contextlib.redirect_stdout(io.StringIO()):src.repair_hooks('test','%2','fid','sid')
             receipts=list((root/'handoffs').glob('hook-repair-*/receipt.json'))
             self.assertEqual(len(receipts),1)

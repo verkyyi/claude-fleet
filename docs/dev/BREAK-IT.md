@@ -22,6 +22,7 @@
 |---|---|---|---|
 | 网页终端的 tmux 已退出，旧浏览器的控制租约还新鲜（T944 CI） | 个人终端自动重建先被旧租约挡住，始终无法走到重建，终端恢复浏览器验收超时 | 原生连接读不到时仅在操作系统确认旧 server PID 不存在后释放旧租约；活进程、未知 PID 和权限错误仍拒绝接管 | `term-dead-server-lease` |
 | Codex 新会话的原生身份尚未发布或版本握手尚未完成（T944） | 已有会话门答复仍误报旧版，阻止继续输入，直到下一次探测成功 | 缺失身份与未知版本保持探测中，连接失败明确暂不可达；只有已核实旧版本才判旧版，发送仍须明确许可 | `chat-codex-identity-pending` |
+| transfer 只验目标账号，源退出后才发现实际 Codex runtime 太旧或无法 initialize | 已停源，目标不能继续接收输入 | 源退出前用启动器同一候选 binary、隔离 HOME 有界 initialize，复用会话门版本门槛；不创建 thread/turn，探针失败保源，探针进程必清理 | `transfer-target-runtime` |
 | Codex 内联 hook 引用已删除的发行目录，唯一 loop 因缺失输入读取器暂停 | 正常输入与监督都被阻断，自动配置更新又因旧状态或回收判据拒绝 | 显式精确 FID/SID 维护入口重验原生空闲、输入、进程及收据；仅重开原线程并接回原 timer，未知投递不重试 | `broken-hook-maintenance` |
 | 缺失 hook 的 Codex 停在原生低额度换模型提醒，composer 输入不可读 | 维护不能证明空输入，原会话持续不可恢复 | 精确提醒与原生空闲、空队列及进程证明重复核查后仅一次 Escape 返回；重新证明空输入才可维护，草稿或未知结果保留并拒绝 | `broken-hook-model-menu` |
 | 存量 worker 的自动报告仍唤醒历史 parent，监督目标离线又升级到人（T946） | 接管失效、额度耗尽的旧会话被重新唤醒 | 显式身份作用域的审计委托只改 delivery；固定原来源、目标与授权链，既有队列恢复投递，routine 不因超时升级 | `report-delegation-offline` |

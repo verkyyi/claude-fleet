@@ -453,6 +453,13 @@ exit_drill() {
 # session-exit — every way an agent leaves or stops, one table: /exit (rc 0), Ctrl+C
 # (rc 130) and a kill (137) end on the recovery page (exit_drill, ≤5s each); Ctrl+Z
 # (ctrl_z_leg) is resumed within 1s.
+drill_transfer_target_runtime() {
+  local started; started=$(now); CAP=12
+  bash "$BIN/fleet-codex-runtime-selftest.sh" TargetPreflightTests >"$WORK/transfer-target-runtime.log" 2>&1 \
+    || { cat "$WORK/transfer-target-runtime.log"; WHY='target initialize capability must be proven before source exit'; return 1; }
+  SECS=$(since "$started"); WHAT='isolated target initialize rejects old/unknown/unreachable runtimes without threads; probe is reaped'
+}
+
 drill_broken_hook_maintenance() {
   local started; started=$(now); CAP=30
   python3 "$BIN/fleet-transfer-source-selftest.py" BrokenHookMaintenance >"$WORK/broken-hook-maintenance.log" 2>&1 \

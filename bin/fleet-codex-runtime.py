@@ -69,6 +69,87 @@ def version_check(codex="codex"):
                PIN_COMMAND + "`, or set FLEET_CODEX_VERSION_CHECK=0 to silence")
 
 
+def target_binary(root=None):
+    """The launcher's managed release tool, otherwise its inherited PATH tool."""
+    root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
+    managed = root / 'tools/bin/codex'
+    if not os.access(managed, os.X_OK) and any(
+            not Path(p).is_absolute() for p in os.environ.get('PATH', '').split(os.pathsep)):
+        raise ValueError('target Codex binary PATH is relative; source retained')
+    binary = str(managed) if os.access(managed, os.X_OK) else shutil.which('codex')
+    if not binary:
+        raise ValueError('target Codex binary is unavailable; source retained')
+    return str(Path(binary).resolve())
+
+
+def require_capability(client):
+    # This is the same initialize parser and floor as the writable session gate.
+    from fleet_session_gate import CODEX_MIN, codex_version
+    version = codex_version(client)
+    if version is None or version[:2] < CODEX_MIN:
+        raise ValueError('target Codex initialize capability is not verified; source retained')
+
+
+def target_preflight(root=None, timeout=8):
+    """Initialize only: no account HOME, MCP, thread, queue or model request.
+
+    Reuse the private runtime guardian, so even a killed transfer closes its
+    owner pipe and tears down this isolated server. This proves the runtime,
+    separately from target-auth's subscription proof.
+    """
+    if not 0 < timeout <= 8:
+        raise ValueError('target initialize budget must be in (0, 8] seconds')
+    binary = target_binary(root)
+    before = Path(binary).stat()
+    fingerprint = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    rpc_class = runpy.run_path(str(Path(__file__).with_name('fleet-codex-rpc.py')))['Client']
+    directory = tempfile.mkdtemp(prefix='fleet-probe-', dir='/tmp')
+    remote = 'unix://' + directory + '/probe.sock'
+    env = dict(os.environ, HOME=directory, CODEX_HOME=directory,
+               XDG_CONFIG_HOME=directory, FLEET_CODEX_REMOTE=remote)
+    # No ambient credentials or remote endpoint can attach the probe to a user.
+    for key in list(env):
+        if re.search(r'AUTH|TOKEN|SECRET|PASSWORD|_KEY', key) or key in (
+                'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'FLEET_CODEX_HOME',
+                'FLEET_CODEX_PROFILE', 'FLEET_WORKER_CRED', 'FLEET_WORKER_ASSERT'):
+            env.pop(key)
+    read_fd, write_fd = os.pipe()
+    guardian = rpc = None
+    deadline = time.monotonic() + timeout
+    try:
+        guardian = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--guard', str(read_fd),
+                                     directory, binary, 'app-server', '--listen', remote],
+                                    env=env, cwd=directory, pass_fds=(read_fd,),
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+        os.close(read_fd); read_fd = -1
+        while not Path(remote[7:]).exists():
+            if guardian.poll() is not None or time.monotonic() >= deadline:
+                raise ValueError('target Codex initialize unavailable; source retained')
+            time.sleep(.02)
+        remaining = deadline-time.monotonic()
+        if remaining <= 0:
+            raise ValueError('target Codex initialize timed out; source retained')
+        rpc = rpc_class(remote, timeout=remaining)
+        require_capability(rpc)
+        after = Path(binary).stat()
+        if (target_binary(root) != binary or
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != fingerprint):
+            raise ValueError('target Codex binary changed during initialize; source retained')
+        return dict(binary=binary, fingerprint=fingerprint, initialize=rpc.initialized)
+    except (OSError, RuntimeError, TimeoutError) as error:
+        raise ValueError('target Codex initialize failed; source retained') from error
+    finally:
+        if rpc is not None:
+            rpc.close()
+        os.close(write_fd)
+        if read_fd >= 0:
+            os.close(read_fd)
+        if guardian is not None:
+            guardian.wait(timeout=8)
+        shutil.rmtree(directory, ignore_errors=True)
+
+
 def stop(process):
     if process is None or process.poll() is not None:
         return
@@ -372,6 +453,9 @@ def run(argv, prepare=None, tick=None):
 
 if __name__ == '__main__':
     try:
+        if sys.argv[1:2] == ['target-preflight']:
+            print(json.dumps(target_preflight()))
+            sys.exit(0)
         if sys.argv[1:2] == ['version-check']:
             rc, line = version_check()
             print(line)
