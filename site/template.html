@@ -71,7 +71,6 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .hero h1{margin-top:16px;font-size:58px;line-height:1.06;font-weight:750;letter-spacing:-.02em}
 html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .hero h1 em{font-style:normal;color:var(--fleet-clay)}
-.sub{margin-top:14px;font-size:17px;line-height:1.6;color:var(--fleet-ink-2);max-width:700px}
 .trust{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:16px 0 0;padding:0}
 .trust li{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--fleet-ink);background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:999px;padding:6px 12px 6px 10px}
 .trust svg{width:16px;height:16px;color:var(--fleet-clay)}
@@ -107,10 +106,7 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .say-in{display:flex;align-items:center;justify-content:space-between;margin-top:auto;height:42px;padding:0 6px 0 12px;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--muted-foreground)}
 .say-in i{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--primary);color:var(--card)}
 .say-in i svg{width:14px;height:14px;stroke-width:2.4}
-.case{margin-top:10px;color:var(--fleet-muted);font-size:13.5px;line-height:1.55}
-.case b{color:var(--fleet-clay);font-weight:600;margin-right:6px}
-.case .who{color:var(--fleet-ink-2);font-weight:600;margin-right:6px}
-.devline{margin-top:4px;color:var(--fleet-muted);font-size:13.5px}
+.devline{margin-top:10px;color:var(--fleet-muted);font-size:13.5px}
 .devline a{color:var(--fleet-ink-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--fleet-line)}
 .devline a:hover{color:var(--fleet-ink)}
 
@@ -131,7 +127,8 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .lead{margin-top:15px;text-align:center;font-size:14.5px;line-height:1.55;color:var(--fleet-ink-2)}
 html.inwx[data-j=scan] .j-scan .lead{display:none} html.inwx[data-j=scan] .wxhint{display:block}
 .flow{margin-top:14px;padding-top:12px;border-top:1px solid var(--fleet-line-2);font-size:13.5px;line-height:1.55;color:var(--fleet-ink-2);text-align:center}
-.wxbtn,.orqr,.okline{display:none}
+.wxbtn,.orqr,.okline,.direct{display:none}
+@media (min-width:1024px){html[data-j=scan]:not(.inwx) .direct{display:flex}}
 .wxbtn{width:100%;margin-top:16px;background:#07c160;border-color:#07c160;color:#fff}
 .wxbtn:hover{background:#06ad56;border-color:#06ad56}
 .wxbtn svg{width:22px;height:22px}
@@ -177,7 +174,6 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
   .hero{padding:24px 0 20px}
   .grid{grid-template-columns:1fr;grid-template-areas:"say" "join" "demo"}
   .hero h1,html[lang=zh-CN] .hero h1{font-size:40px;margin-top:14px}
-  .sub{font-size:16px;margin-top:12px}
   .trust{margin-top:14px;gap:6px}
   .trust li{font-size:13px;padding:5px 10px 5px 8px}
   .join{margin-top:22px;padding:20px 18px}
@@ -208,7 +204,6 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
   <div class="say">
     <p class="kick"><i></i>{{fine}}</p>
     <h1>{{h1}}</h1>
-    <p class="sub">{{sub}}</p>
     <ul class="trust">
       <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg>{{t1}}</li>
       <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{t2}}</li>
@@ -226,6 +221,7 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
       <div class="qrbox" id="qr" data-p="{{join_p}}"><span>{{join_load}}</span></div>
       <p class="lead">{{join_lead}}</p>
       <p class="wxhint">{{wx_follow_qr}}</p>
+      <a class="btn wide direct" href="/app">{{signin_direct}}</a>
     </div>
     <div class="j j-wait"><p class="wait"><i></i>{{wx_wait}}</p></div>
     <div class="j j-member">
@@ -276,7 +272,6 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
       </div>
       </div>
     </div>
-    <p class="case"><b>{{case_tag}}</b><span class="who">{{case_who}}</span>{{case_line}}</p>
     <p class="devline">{{dev_line}} <a href="{{dev_path}}">{{dev_link}}</a></p>
   </div>
 </div></div></section>

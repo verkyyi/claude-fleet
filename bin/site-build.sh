@@ -228,9 +228,9 @@ for l, _ in LANGS:
     t = tables[l].get('brand_tag', '')
     tables[l]['brand_tag_html'] = '<span class="tag">%s</span>' % t if t else ''
 
-TIMED_KEYS = ('description', 'og_description', 'try', 'sub', 'steps_h', 'end_h')
+TIMED_KEYS = ('description', 'og_description', 'try', 'steps_h', 'end_h')
 # The apply-only variant (issue #4269): these words say <key>_apply instead.
-APPLY_KEYS = ('description', 'og_description', 'try', 'sub', 'fine', 's1', 'end_h', 'llms_summary',
+APPLY_KEYS = ('description', 'og_description', 'try', 'fine', 's1', 'end_h', 'llms_summary',
               'join_h', 'join_p', 'join_lead', 'ph_h')
 for _k in APPLY_KEYS:
     if _k + '_apply' not in keys:
