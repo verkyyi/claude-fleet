@@ -434,6 +434,8 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r.At = t.CreatedAt.Unix()
 		end := taskEnd(*t)
+		// opened_at is also stamped when a task ID is merely reserved.
+		started := b != nil && (b.Seq > 0 || b.Agent != "")
 		switch {
 		case end == "" && t.Parked != "":
 			// parked while it waited on you (E101): its window closed, its row stays
@@ -442,9 +444,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Why, r.WhyTone = boardWhy("parked", now)
 		case end == "" && t.Asked != "":
 			r.Group, r.Tag = "ask", "waiting_you"
-		case end == "" && b != nil && b.Seq > 0 && b.Closed == 0:
+		case end == "" && started && b.Closed == 0:
 			r.Group, r.Tag, r.Lost = "queue", "not_seen", true
-		case end == "" && b != nil && b.Seq > 0:
+		case end == "" && started:
 			r.Group, r.Tag, r.At = "gone", "ended_no_result", b.Closed
 		case end == "" && t.AuthorityVersion == store.TaskAuthorityVersion:
 			r.Group, r.Tag = "queue", "not_seen"
@@ -454,7 +456,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			if t.State == store.TaskStarting {
 				r.Tag = "starting"
 			}
-			if (r.Tag == "queued" || r.Tag == "starting") && r.Agent == "" && t.WorkerID == "" && (b == nil || b.Seq == 0) {
+			if (r.Tag == "queued" || r.Tag == "starting") && r.Agent == "" && t.WorkerID == "" && !started {
 				for _, a := range []string{t.ResolvedAgent, t.RequestedAgent, t.Agent} {
 					if a == "codex" || a == "claude" || a == "gemini" {
 						r.Agent, r.AgentBasis = a, "planned"

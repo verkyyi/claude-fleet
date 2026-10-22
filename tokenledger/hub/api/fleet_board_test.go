@@ -397,6 +397,15 @@ func TestBoardPlanFacts(t *testing.T) {
 		t.Fatalf("unknown: %+v", r)
 	}
 	set("UPDATE fleet_tasks SET resolved_agent='codex', requested_agent='codex', state='accepted', operation_id='' WHERE id=?", child.ID)
+	set("UPDATE fleet_tasks SET worker_id='fleet/existing' WHERE id=?", child.ID)
+	if r = read(nil); r.Tag != "not_seen" || r.AgentBasis == "planned" {
+		t.Fatalf("accepted with worker but no inventory: %+v", r)
+	}
+	set("UPDATE fleet_tasks SET worker_id='' WHERE id=?", child.ID)
+	// Reserving a task stamps opened_at even though no worker has started.
+	if r = read(nil); r.Tag != "queued" || r.AgentBasis != "planned" {
+		t.Fatalf("reserved ID timestamp is not runtime evidence: %+v", r)
+	}
 	push := func(events ...map[string]any) {
 		t.Helper()
 		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep-plan", Machine: "test-machine", Login: "alice", ID: child.FID, Events: events}); err != nil {
