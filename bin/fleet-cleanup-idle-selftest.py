@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
-# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_only_its_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn PinIsOrder.test_a_pin_set_later_keeps_its_window PolicyGrammar.test_norm_default_label StuckReaps.test_another_repos_pass_leaves_the_countdown
-# selftest-part: 6 ReapPolicy.test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work TaskSession.test_closed_record_reaps_after_grace_keeping_the_worktree TaskSession.test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does
-# selftest-part: 7 RoundTrip.test_codex_close_and_restore_keeps_exact_identity WebPark.test_zero_never_parks_and_memory_parks_the_oldest_first
-# selftest-part: 8 RoundTrip.test_missing_transcript_and_failed_ledger_do_not_close ParkTable.test_activity_and_keep_hold_expiration
+# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_only_its_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
+# selftest-part: 6 ParkTable.test_finished_probe_keeps_its_one_minute_policy PolicyGrammar.test_origin_table_and_the_policy_in_force RoundTrip.test_real_close_and_restore
+# selftest-part: 7 PinIsOrder.test_dry_run_migrates_nothing ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
+# selftest-part: 8 ParkTable.test_activity_and_keep_hold_expiration RoundTrip.test_codex_unknown_or_active_native_turn_is_kept TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
 import time
@@ -2172,6 +2172,7 @@ class ParkTable(unittest.TestCase):
                                   base="master", window_repo=False, dry_run=False)
         c = idle.Cleaner(args)
         c.now, c._mem = 200, (False, "")
+        c._park_watched = set()
         with patch.object(c, "tm", return_value=""):
             snap = c.snapshot("@9")
         snap.update({"@reap_origin": "probe", "@reap_policy": "done:1m", "@park_wrap_ver": "1",
@@ -2241,7 +2242,7 @@ class ParkTable(unittest.TestCase):
         rp = idle.fleet_reap_policy
         for origin, reap in (("person", "parked"), ("dispatched", "reported"),
                              ("member", "reported"), ("driver", "batch"),
-                             ("orchestrator", "never"), ("decide", "parked"),
+                             ("orchestrator", "never"), ("decide", "idle"),
                              ("probe", "done"), ("web", "never")):
             with self.subTest(origin=origin):
                 self.assertEqual(rp.ORIGINS[origin]["park"], "idle")
@@ -2249,7 +2250,7 @@ class ParkTable(unittest.TestCase):
 
     def test_activity_and_keep_hold_expiration(self):
         rp = idle.fleet_reap_policy
-        snap = {"@reap_origin": "decide", "@park_wrap_ver": "1", "@parked": "100",
+        snap = {"@reap_origin": "person", "@park_wrap_ver": "1", "@parked": "100",
                 "@park_held": "1", "@park_since": "100", "@park_presence": "200"}
         with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": str(366 * 86400)}):
             self.assertEqual(rp.reap_parked_secs(), 366 * 86400)
@@ -2272,7 +2273,7 @@ class ParkTable(unittest.TestCase):
                         "@park_held": "1", "@park_since": "100", "@claude_state_ts": "90"}
                 with patch.object(c, "policy", return_value=("merged", 0)), patch.object(c, "work_over", return_value=True):
                     result = c.parked("@9", snap)
-                if origin in ("dispatched", "member", "driver", "probe"):
+                if origin in ("dispatched", "member", "driver", "probe", "decide"):
                     self.assertIsNone(result)  # completion/unreported policy still runs
                 else:
                     self.assertFalse(result)  # retention or permanent keep

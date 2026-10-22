@@ -248,6 +248,12 @@ func TestBoardWhyCopy(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	in := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
 	for _, c := range []struct{ raw, zh, en, tone string }{
+		{"watched", "先不停放：有人正在看", "Not parking: someone is looking", "grey"},
+		{"draft", "先不停放：输入框有草稿", "Not parking: a draft is in the input box", "grey"},
+		{"park-bg", "先不停放：后台的活还在跑", "Not parking: background work is still running", "grey"},
+		{"asking", "先不停放：选择框还开着", "Not parking: a choice dialog is open", "grey"},
+		{"old-wrapper", "先不停放：旧外壳尚不支持", "Not parking: this older wrapper does not support it", "grey"},
+		{"park-gate", "先不停放：尚未确认能安全停下", "Not parking: safe parking is not yet confirmed", "grey"},
 		{"bg:" + in(18*time.Minute), "还没收：做完了，后台的活还在跑 · 18 分钟后收", "Not closed yet: done, but a background job is still running · closes in 18 min", "grey"},
 		{"timer:" + in(5*time.Minute), "还没收：计时中 · 5 分钟后收", "Not closed yet: closes in 5 min", "grey"},
 		{"dirty", "不会自动收：有没提交的改动", "Won't close on its own: uncommitted changes", "grey"},
