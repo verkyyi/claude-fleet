@@ -6370,6 +6370,14 @@ drill_park_all_origins() {
   WHAT='所有来源共用停放器：同一窗口与身份，真实进程退出后同会话接回；草稿、后台任务、旧外壳不停'
 }
 
+drill_park_codex_new_thread() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_same_thread_and_paste_exit 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)

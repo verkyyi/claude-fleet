@@ -61,25 +61,30 @@ class Park(unittest.TestCase):
     def opt(self, key):
         return self.tm('display-message', '-p', '-t', self.win, '#{' + key + '}')
 
-    def fake(self):
+    def fake(self, agent='claude'):
         self.fid = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
         self.sid = '11111111-2222-4333-8444-555555555555'
         fake = self.root / 'fake.py'
-        fake.write_text(r'''import os,sys,tty
-print('fake ready\x1b]7501;state=idle:app=claude-code\x1b\\',flush=True)
+        fake.write_text(r'''import os,sys,tty,json
+from pathlib import Path
+agent=sys.argv[1]
+Path(sys.argv[2]).write_text(json.dumps(sys.argv[3:]))
+print('fake ready\x1b]7501;state=idle:app='+agent+'\x1b\\',flush=True)
 tty.setraw(0)
+os.write(1,b'\r\n\xe2\x80\xba ')
 b=b''
 while True:
  c=os.read(0,4096)
  if not c: break
  b+=c
- if b'/exit\r' in b: break
+ if (b'\x1b[200~/exit\x1b[201~\r' if agent=='codex' else b'/exit\r') in b: break
 ''')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
                           'tmux set-option -w -t "$TMUX_PANE" @claude_state done\n' +
-                          'tmux set-option -w -t "$TMUX_PANE" @cc_session_id ' + self.sid + '\n' +
-                          'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + '\n')
+                          'tmux set-option -w -t "$TMUX_PANE" @cc_agent ' + agent + '\n' +
+                          'tmux set-option -w -t "$TMUX_PANE" ' + ('@codex_session_id' if agent == 'codex' else '@cc_session_id') + ' ' + self.sid + '\n' +
+                          'exec python3 ' + str(BIN / 'fleet-status-7501.py') + ' relay -- python3 ' + str(fake) + ' ' + agent + ' ' + str(self.root / 'argv.json') + ' "$@"\n')
         launch.chmod(0o755)
         self.env['FLEET_WRAP_LAUNCH'] = str(launch)
         # new-window inherits its server environment; pass only fixture settings.
@@ -97,7 +102,29 @@ while True:
         probe.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
         probe.chmod(0o755)
         self.env['FLEET_GATE_PARK_PROBE_CMD'] = str(probe)
-        self.wait(lambda: self.opt('@park_relay') and self.opt('@cc_session_id'))
+        self.wait(lambda: self.opt('@park_relay') and self.opt('@codex_session_id' if agent == 'codex' else '@cc_session_id'))
+
+    def test_codex_same_thread_and_paste_exit(self):
+        self.fake('codex')
+        before = self.opt('pane_pid')
+        with patch.dict(os.environ, self.env):
+            result = gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertTrue(self.opt('@park_held'))
+        self.assertFalse(self.opt('@park_relay'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        self.assertEqual(self.opt('pane_pid'), before)
+        seed = self.root / 'seed'
+        seed.write_text('continue this conversation')
+        with patch.dict(os.environ, self.env):
+            result = gate.wake(self.fid, seed_file=str(seed), why='message')
+        self.assertTrue(result.get('ok'), result)
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        argv = json.loads((self.root / 'argv.json').read_text())
+        self.assertEqual(argv, ['--agent', 'codex', 'resume', self.sid, 'continue this conversation'])
 
     def wait(self, predicate):
         until = time.monotonic() + 6
