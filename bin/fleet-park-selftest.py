@@ -124,6 +124,12 @@ while True:
                 os.kill(pid, 0)
         self.assertGreater(float(self.opt('@park_saved_mb')), 0)
         self.assertEqual(self.opt('@park_why'), 'idle')
+        from fleet_park_metrics import census
+        with patch.dict(os.environ, self.env):
+            observed = census(self.label, 'test', self.root / 'census')[self.win]
+        self.assertEqual(observed['state'], 'parked')
+        self.assertEqual(observed['saved_mb'], float(self.opt('@park_saved_mb')))
+        self.assertEqual(observed['why'], 'idle')
         with patch.dict(os.environ, self.env):
             result = gate.wake(self.fid, why='消息')
         self.assertTrue(result.get('ok'), result)
