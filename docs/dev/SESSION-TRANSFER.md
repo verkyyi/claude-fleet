@@ -107,8 +107,20 @@ per source session before starting `fleet-transfer.sh --to codex --quota-continu
 Native API errors can leave OSC 7501 at `exited` while Claude is still at its
 prompt. The controller verifies the exact quota error, native error/idle state,
 empty prompt and no live tool, background process, approval or loop twice before
-accepting this boundary. It never restamps the source `done`. A native draft
-holds automatic continuation in place; it is kept unsent. Network,
+accepting this boundary. It never restamps the source `done`.
+Subscription quota can instead open the native `needs` choice menu. The controller
+requires the exact quota transcript, OSC `blocked/dialog open`, fully visible known
+quota choices, no recent terminal input, the existing native `park.v1` proof of an
+empty underlying prompt and stopped main turn, and the tool and scheduler proofs.
+Under its transfer mutex and rotation lease it records one Escape before sending it;
+then it requires the native error/idle boundary and empty input, and runs all normal
+transfer checks again, including exact source and input after target authentication
+immediately before exit. Escape preserves a hidden draft: any draft or unknown composer
+holds the transfer. An approval, changed/unknown menu, armed auto-resume, scheduler
+without proof or unconfirmed cancellation remains recoverable without another keypress.
+Dry-run only previews this cancellation and conditional recheck; it never authorizes
+exit from `needs`. Private evidence is in `quota-dialog-stop/<source-hash>.json`.
+Drafts remain unsent. Network,
 authentication, per-minute request throttling, personal budget refusals and user
 cancellation do not trigger it. The existing controller may refuse unsafe input,
 pending tools, schedules or target authentication; no force flag is added.

@@ -16,6 +16,8 @@ quota failover planner (`.fleet-failover.py`), moved here unchanged:
 A full subscription is the pool's to change now; nothing here picks an account.
 """
 import argparse
+import hashlib
+import re
 import json
 import os
 from pathlib import Path
@@ -34,11 +36,9 @@ ATTENTION = runpy.run_path(str(BIN / 'fleet-codex-attention.py'))
 save, read = ACCOUNT['save'], ACCOUNT['read']
 background_note = TRANSFER['background_note']
 
-
 def run(argv, timeout=15, **kwargs):
     return subprocess.check_output([str(x) for x in argv], timeout=timeout,
                                    stderr=subprocess.PIPE, text=True, **kwargs).strip()
-
 
 def inspect(session, window):
     return json.loads(run(['bash', BIN / 'fleet-transfer.sh', '--session', session,
@@ -49,7 +49,6 @@ def inspect(session, window):
 # proxy (`model_provider="fleet"`, fleet-codex.sh / fleet-run.sh) — every pooled
 # session's. Anything else is a thread the fleet did not start (T630).
 FLEET_PROVIDERS = ('openai', 'fleet')
-
 
 def native_thread(source):
     data = source['codex_identity']
@@ -63,7 +62,6 @@ def native_thread(source):
         raise ValueError('native Codex thread/provider changed')
     return t
 
-
 def codex_quiet(thread):
     if thread.get('status', {}).get('type') not in ('idle', 'systemError'):
         raise ValueError('source Codex turn or approval is still active')
@@ -71,14 +69,12 @@ def codex_quiet(thread):
            for t in (thread.get('turns') or [])[-1:] for i in t.get('items', [])):
         raise ValueError('source Codex tool is still active')
 
-
 def looping_settled(source, thread):
     """A `looping` Codex source whose round ended cleanly is as settled as `done`:
     an idle thread with no live item (codex_quiet) and a completed last turn."""
     turns = thread.get('turns') or []
     return (source.get('agent') == 'codex' and source.get('state') == 'looping'
             and bool(turns) and turns[-1].get('status') == 'completed')
-
 
 def settled(session, pane):
     """fleet-transfer.sh's manual source_ready for a `looping` Codex source."""
@@ -88,8 +84,7 @@ def settled(session, pane):
     if not looping_settled(source, thread):
         raise ValueError('source is not a looping Codex worker between rounds')
 
-
-def quota_marks(session, pane):
+def source_marks(session, pane):
     # Tabs are the shared gate's portable tmux field delimiter. Older tmux
     # renders control separators (US) visibly instead of returning their byte.
     fmt = '\t'.join('#{@' + k + '}' for k in
@@ -98,13 +93,18 @@ def quota_marks(session, pane):
     fields = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, fmt + '\tEND']).split('\t')
     if len(fields) != 8 or fields.pop() != 'END':
         raise ValueError('quota source metadata is incomplete')
+    return fields
+
+def quota_marks(session, pane):
+    fields = source_marks(session, pane)
     native = json.loads(fields[2] or '{}')
+    if not isinstance(native, dict):
+        raise ValueError('quota native status is invalid')
     ended = (fields[0] in ('done', 'exited') and fields[1] in ('7501', 'hook')
              and (native.get('state') == 'error' or (fields[0] == 'done' and native.get('state') in ('idle', 'done'))))
     if not ended or any(fields[3:]):
         raise ValueError('quota source is not a native error boundary without pending work')
     return fields
-
 
 def quota_settled(session, pane, sid):
     """Native Claude API failure: an ended turn, NOT a dead agent.
@@ -125,10 +125,144 @@ def quota_settled(session, pane, sid):
     if view.get('state') != 'empty':
         raise ValueError('quota source prompt is not safely exportable')
     quiet_processes(source)  # same live tool/MCP/subagent inventory as hibernation
+    quota_schedules(source)
     if (quota_marks(session, pane) != marks or inspect(session, pane) != source
             or inputs(session, pane, agent='claude') != view
             or fallback.quota_error(source['transcript'], sid) != signal):
         raise ValueError('quota source changed during the boundary check')
+
+
+def quota_dialog(screen):
+    """Only the native quota menu, including its bottom input guide.
+
+    Escape cancels this menu without selecting an upgrade or auto-resume. An
+    armed auto-resume, unknown option, truncated menu or another dialog refuses.
+    The transcript and OSC state are independently required by the caller.
+    """
+    title = 'What do you want to do?'
+    if title not in screen:
+        raise ValueError('no native quota choice dialog')
+    body = screen.rsplit(title, 1)[1].strip()
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines or lines[-1] != 'Enter to confirm · Esc to cancel':
+        raise ValueError('quota dialog input guide changed')
+    labels, selected = [], 0
+    for line in lines[:-1]:
+        m = re.fullmatch(r'(❯ )?(\d+)\. (.+)', line)
+        if not m or int(m[2]) != len(labels) + 1:
+            raise ValueError('quota dialog options are not fully visible')
+        selected += bool(m[1])
+        label = m[3]
+        if (label != 'Stop and wait for limit to reset' and label != 'Upgrade your plan'
+                and not re.fullmatch(r'Wait here, then continue automatically at [^\r\n]+', label)):
+            raise ValueError('quota dialog option changed or auto-resume is armed')
+        labels.append(label)
+    if selected != 1 or labels.count('Stop and wait for limit to reset') != 1 or len(labels) != len(set(labels)):
+        raise ValueError('quota dialog is incomplete')
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def quota_schedules(source):
+    return runpy.run_path(str(BIN / '.fleet-transfer-norepo.py'))['schedule_readiness'](
+        source['session'], source['pane'], source['transcript'], source['pid'], source['session_id'], '', 'claude')
+
+
+
+def quota_prompt_proof(session, pane):
+    # Reuse the existing native read-only park.v1 proof: no active main turn,
+    # and $.prompt.read().text is empty even beneath a modal. The visible
+    # choice cursor cannot prove this. Old/unresponsive modules refuse safely.
+    from fleet_session_gate import park_proof
+    socket = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, '#{socket_path}'])
+    proof = park_proof(dict(sock=session, socket_path=socket, pane=pane))
+    if not isinstance(proof, dict) or proof.get('ok') is not True:
+        raise ValueError('native quota prompt/turn is not proven empty and stopped: ' + str(proof.get('why', 'unknown') if isinstance(proof, dict) else 'unknown'))
+    return proof
+
+def quota_dialog_check(session, pane, sid):
+    source = inspect(session, pane)
+    if source.get('agent') != 'claude' or source.get('state') != 'needs' or source.get('session_id') != sid:
+        raise ValueError('quota dialog source conversation changed')
+    marks = source_marks(session, pane)
+    native = json.loads(marks[2] or '{}')
+    if not isinstance(native, dict):
+        raise ValueError('quota native status is invalid')
+    if (marks[0:2] != ['needs', '7501'] or any(marks[3:])
+            or native.get('state') != 'blocked' or native.get('app') != 'claude-code'
+            or native.get('kind') or native.get('msg') != 'dialog open'):
+        raise ValueError('source is not a native quota dialog without pending work')
+    signal = fallback.quota_error(source['transcript'], sid)
+    if not signal:
+        raise ValueError('source has no exact native hard-quota error')
+    # No typing over an attached person, including a live terminal view.
+    clients = run(['tmux', '-L', session, 'list-clients', '-F', '#{client_activity} #{window_id}'])
+    for row in clients.splitlines():
+        activity, _, window = row.partition(' ')
+        if window == source['window'] and (not activity.isdigit() or time.time() - int(activity) <= 30):
+            raise ValueError('a person is using the quota dialog')
+    screen = run(['tmux', '-L', session, 'capture-pane', '-p', '-t', pane])
+    fingerprint = quota_dialog(screen)
+    quiet_processes(source)
+    # Use the existing scheduler authority even for a worktree source; an empty
+    # @loop alone does not prove that native Cron/durable work is absent.
+    quota_schedules(source)
+    prompt = quota_prompt_proof(session, pane)
+    if inspect(session, pane) != source or source_marks(session, pane) != marks:
+        raise ValueError('quota dialog changed during the boundary check')
+    if quota_dialog(run(['tmux', '-L', session, 'capture-pane', '-p', '-t', pane])) != fingerprint:
+        raise ValueError('quota dialog changed during the boundary check')
+    if fallback.quota_error(source['transcript'], sid) != signal:
+        raise ValueError('quota transcript changed during the boundary check')
+    return dict(source=source, marks=marks, signal=signal, fingerprint=fingerprint, screen=screen, native_prompt=prompt)
+
+def quota_dialog_stop(session, pane, sid):
+    """Called ONLY under the controller's transfer lock and rotation lease.
+
+    Write ahead of the one Escape. An uncertain dismissal is never retried.
+    Escape preserves any hidden draft; it must then be proved empty by the same
+    quota_settled check as every later controller boundary. No state is stamped.
+    """
+    evidence = quota_dialog_check(session, pane, sid)
+    root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
+    root = root / 'quota-dialog-stop'
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    key = hashlib.sha256(json.dumps([session, sid]).encode()).hexdigest()
+    path = root / (key + '.json')
+    evidence.update(state='dismissing', at=time.time())
+    try:
+        with path.open('x') as out:
+            os.chmod(path, 0o600)
+            json.dump(evidence, out, ensure_ascii=False)
+            out.flush(); os.fsync(out.fileno())
+        directory = os.open(root, os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    except FileExistsError:
+        raise ValueError('quota dialog dismissal already attempted; inspect retained evidence') from None
+    try:
+        # Recheck after write-ahead and immediately before the only keypress.
+        if quota_dialog_check(session, pane, sid) != {k: v for k, v in evidence.items() if k not in ('state', 'at')}:
+            raise ValueError('quota dialog changed before cancellation')
+        run(['tmux', '-L', session, 'send-keys', '-t', pane, 'Escape'],
+            env=dict(os.environ, FLEET_ALLOW_SENDKEYS='1'))
+        deadline = time.monotonic() + 5
+        while True:
+            after = inspect(session, pane)
+            if {k:v for k,v in after.items() if k != 'state'} != {k:v for k,v in evidence['source'].items() if k != 'state'}:
+                raise ValueError('quota source identity changed after cancellation')
+            if after.get('state') in ('done', 'exited'):
+                quota_settled(session, pane, sid)
+                evidence.update(state='settled', after=after,
+                                screen_after=run(['tmux', '-L', session, 'capture-pane', '-p', '-t', pane]))
+                save(path, evidence)
+                return
+            if time.monotonic() >= deadline:
+                raise ValueError('native quota dialog did not settle; source retained, no retry')
+            time.sleep(0.1)
+    except Exception as error:
+        evidence.update(state='recovery', reason=str(error))
+        save(path, evidence)
+        raise
 
 
 def quiet_processes(source, background=None):
@@ -143,13 +277,11 @@ def quiet_processes(source, background=None):
         return sleep['quiet_processes'](source)
     return sleep['quiet_processes'](source, background=background)
 
-
 def process_start(pid):
     """(state, lstart) — lstart fingerprints the process against pid reuse."""
     try: fields = run(['ps', '-p', str(pid), '-o', 'stat=', '-o', 'lstart=']).split(None, 1)
     except (subprocess.CalledProcessError, OSError): return '', ''
     return fields[0], (fields[1] if len(fields) > 1 else '')
-
 
 def process_cwd(pid):
     try: return os.readlink('/proc/%d/cwd' % pid)
@@ -157,7 +289,6 @@ def process_cwd(pid):
     try: out = run(['lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'])
     except (subprocess.CalledProcessError, OSError): return ''
     return next((line[1:] for line in out.splitlines() if line.startswith('n')), '')
-
 
 def background_inventory(source):
     """Every non-infrastructure process the source owns, as [{pid,argv,cwd,start}]:
@@ -175,14 +306,12 @@ def background_inventory(source):
         entries.append(dict(pid=pid, argv=args, cwd=process_cwd(pid), start=start))
     return entries
 
-
 def claude_background(pid, worktree='', session=''):
     """background_inventory() for a Claude pid named directly (#873):
     fleet-migrate.sh --force-bg has only the pane's Claude pid, its worktree (the
     MCP inventory) and the fleet (the MCP contract)."""
     return background_inventory(dict(pid=int(pid), agent='claude', worktree=worktree or '',
                                      session=session or '', codex_identity={}))
-
 
 def terminate_background(request, bundle=None, why=None):
     """Stop the processes recorded in <request>/background.json (#871).
@@ -216,7 +345,6 @@ def terminate_background(request, bundle=None, why=None):
         for name in ('pickup.md', 'handoff.md'):
             with (Path(bundle) / name).open('a', encoding='utf-8') as out: out.write(note)
 
-
 def main():
     os.umask(0o077)
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -224,6 +352,9 @@ def main():
     q = sub.add_parser('settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
     q = sub.add_parser('quota-settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
     q.add_argument('--sid', required=True)
+    for command in ('quota-dialog-check', 'quota-dialog-stop'):
+        q = sub.add_parser(command); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
+        q.add_argument('--sid', required=True)
     q = sub.add_parser('terminate-background'); q.add_argument('request', type=Path)
     q.add_argument('--bundle', type=Path); q.add_argument('--note')
     q = sub.add_parser('background'); q.add_argument('--pid', required=True, type=int)
@@ -231,6 +362,8 @@ def main():
     a = p.parse_args()
     if a.command == 'settled': settled(a.session, a.pane)
     elif a.command == 'quota-settled': quota_settled(a.session, a.pane, a.sid)
+    elif a.command == 'quota-dialog-check': quota_dialog_check(a.session, a.pane, a.sid)
+    elif a.command == 'quota-dialog-stop': quota_dialog_stop(a.session, a.pane, a.sid)
     elif a.command == 'terminate-background': terminate_background(a.request, a.bundle, a.note)
     else: print(json.dumps(claude_background(a.pid, a.worktree, a.session), ensure_ascii=False))
 

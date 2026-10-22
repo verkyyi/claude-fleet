@@ -185,6 +185,39 @@ class Continuation(unittest.TestCase):
         self.assertEqual(fallback.receipt(gate, FID)["state"], "starting")
 
 
+    def test_quota_menu_is_only_a_controller_candidate_and_still_once(self):
+        self.w.update(state='needs', word='blocked', agent_status=json.dumps(
+            dict(state='blocked', app='claude-code', kind='', msg='dialog open')))
+        with patch.object(fallback.subprocess, 'Popen') as spawn:
+            self.start(); self.start()
+            self.assertEqual(spawn.call_count, 1)
+        self.assertEqual(self.w['state'], 'needs')
+        for key, value in (('needs','perm'), ('agent_status','{}'), ('parked','1')):
+            (gate.fid_dir(FID) / 'quota-continuation.json').unlink()
+            old = self.w.get(key); self.w[key] = value
+            with patch.object(fallback.subprocess, 'Popen') as spawn:
+                self.start(); spawn.assert_not_called()
+            self.w[key] = old
+
+
+    def test_old_boundary_refusal_can_use_new_menu_proof_but_controller_never_retries(self):
+        self.w.update(state='needs', word='blocked', agent_status=json.dumps(
+            dict(state='blocked', app='claude-code', kind='', msg='dialog open')))
+        path = gate.fid_dir(FID) / 'quota-continuation.json'
+        old = dict(source_session=SID, state='blocked', why='boundary', at=100, request_id='unattempted')
+        gate.write_json(path, old)
+        with patch.object(fallback.subprocess, 'Popen') as spawn:
+            self.start(); self.start()
+            self.assertEqual(spawn.call_count, 1)
+        current = fallback.receipt(gate, FID)
+        self.assertNotEqual(current['request_id'], old['request_id'])
+        self.assertEqual(current['at'], 1000)
+        for why in ('transfer_refused', 'controller_unavailable', 'delivery_unsettled'):
+            gate.write_json(path, dict(old, why=why))
+            with patch.object(fallback.subprocess, 'Popen') as spawn:
+                self.start(); spawn.assert_not_called()
+
+
 def subprocess_result(rc):
     from types import SimpleNamespace
     return SimpleNamespace(returncode=rc)

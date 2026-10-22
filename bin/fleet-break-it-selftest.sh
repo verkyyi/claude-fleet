@@ -5561,6 +5561,14 @@ drill_transfer_proxy_auth() {
   SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
 }
 
+drill_web_quota_dialog() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-source-selftest.py" QuotaDialog >"$WORK/quota-dialog.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-dialog.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='quota dialog dismissed once; native boundary re-proved; drafts, tools, schedules, approvals and changed source held'
+}
+
 drill_web_quota_continuation() {
   CAP=120
   local started; started=$(now)
