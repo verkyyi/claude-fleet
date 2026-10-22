@@ -209,7 +209,7 @@ def reap_state(tmux, target):
 DEFAULT_MIN_AGE = 300
 
 
-def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, now=None, bg_over=False):
+def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, now=None, bg_over=False, automatic=False):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
@@ -282,6 +282,32 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     processes, children, commands = process_table()
     if not all(pid in processes for pid in roots):
         return "unknown:pane-process"
+    if automatic:
+        # Final automatic-close check, inside the caller's identity lock.
+        # Manual close keeps its existing confirmation contract.
+        clients = read(*tmux, "list-clients", "-F", "#{client_control_mode}\t#{window_id}")
+        if any(line.split("\t") == ["0", target] for line in clients.splitlines()):
+            return "retained:watched"
+        needs = read(*tmux, "display-message", "-p", "-t", target, "#{@claude_needs}").strip()
+        if needs in ("ask", "question", "perm", "permission", "nostart"):
+            return "retained:asking"
+        found = agent_under(roots, (processes, children, commands))
+        if found is None:
+            return "unknown:agent-command"
+        if found:
+            from fleet_session_gate import window, park_dialog, park_proof
+            w = window(hold[2]) if len(hold) == 3 else None
+            if not w or w["win"] != target:
+                return "unknown:identity"
+            if park_dialog(w):
+                return "retained:asking"
+            if w.get("wrap_ver"):
+                if not park_proof(w).get("ok"):
+                    return "retained:native-input"
+            else:
+                box = runpy.run_path(str(_HERE / "fleet-input.py"))["snapshot"](socket_name, target, w["agent"])
+                if box.get("state") != "empty":
+                    return "retained:input"
     if busy or gone_stale:
         found = agent_under(roots, (processes, children, commands))
         if found is None:
@@ -338,6 +364,7 @@ def main():
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
     parser.add_argument("--bg-over", action="store_true",
                         help="compatibility flag; real background work and loops remain protected")
+    parser.add_argument("--automatic", action="store_true", help="also retain watched/draft/question/unknown input")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", str(DEFAULT_MIN_AGE))
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else DEFAULT_MIN_AGE
@@ -361,7 +388,7 @@ def main():
                                      args.exclude_window)
         elif args.target:
             reason = live_reason(args.target, minimum, args.socket_name, merged_at, waived,
-                                 int(time.time()) if merged_at is not None else None, args.bg_over)
+                                 int(time.time()) if merged_at is not None else None, args.bg_over, args.automatic)
         else:
             reason = "unknown:missing-target"
     except (OSError, ValueError, subprocess.SubprocessError):

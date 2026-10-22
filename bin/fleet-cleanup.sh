@@ -694,7 +694,7 @@ auto_cleanup_gate() {
           MERGED:*) socket_args+=(--merged-at "$merged_epoch") ;;
         esac
         if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}" \
-          python3 "$BIN/fleet-reap-live.py" "$WIN" ${socket_args[@]+"${socket_args[@]}"} 2>/dev/null); then
+          python3 "$BIN/fleet-reap-live.py" "$WIN" --automatic ${socket_args[@]+"${socket_args[@]}"} 2>/dev/null); then
           why="${why:-liveness probe unavailable}"
         else
           case "$why" in
@@ -802,6 +802,8 @@ teardown() (
     done_token skip:live; return 1
   fi
   auto_cleanup_gate || return 1
+  current=$(cleanup_binding) || { done_token skip:binding; return 1; }
+  [ "$current" = "$CLEANUP_BINDING" ] || { done_token skip:binding; return 1; }
   note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and

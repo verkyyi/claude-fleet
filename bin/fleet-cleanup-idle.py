@@ -381,7 +381,8 @@ class Cleaner:
             return False
         try:
             if (fleet_reap_policy.report_hold(snap.get("@fleet_id", ""))
-                    or self.moved(window, snap) or not recheck()):
+                    or self.moved(window, snap) or not recheck() or not self.final_live(window)
+                    or self.moved(window, snap)):
                 return False
             other = self.shared(window, snap["@fleet_id"])
             if other:
@@ -394,6 +395,16 @@ class Cleaner:
             return True
         finally:
             self.untransition(lock)
+
+    def final_live(self, window):
+        """Re-read native input/jobs at the close boundary, while ID is locked."""
+        try:
+            run("python3", str(BIN / "fleet-reap-live.py"), window,
+                "--socket-name", self.args.socket_name or "", "--automatic")
+            return True
+        except (OSError, subprocess.SubprocessError):
+            self.why = "live"
+            return False
 
     def eligible(self, window, snap, task=False):
         pol = self.policy(snap)
@@ -639,6 +650,8 @@ class Cleaner:
                 return ""
             pol = self.policy(snap)
             if pol and pol[0] in ("done", "merged", "loop-end") and fleet_reap_policy.completion_hold(fid, snap.get("@task", "")):
+                return ""
+            if not self.final_live(window) or self.moved(window, snap):
                 return ""
             self.retire(window)
             return subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
