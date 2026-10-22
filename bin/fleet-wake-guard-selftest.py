@@ -191,9 +191,16 @@ class Recovery(unittest.TestCase):
             self.assertEqual(record['wake_next'], 123)
             self.assertEqual(record['why'], 'memory')
             self.assertFalse((gate.fid_dir(f.fid) / 'park-health.json').exists())
+            # Memory pressure can outlast the web-message TTL. The timer's
+            # original prompt still belongs to this delivery when it recovers.
+            record['at'] = time.time() - 3600
+            with gate.lock(f.fid):
+                gate.save(record)
+            gate.settle(f.fid, record['delivery'])
+            self.assertEqual(gate.records(f.fid)[0]['state'], 'queued')
             admit.write_text('#!/bin/sh\nexit 0\n')
             with gate.lock(f.fid):
-                record['wake_retry_at'] = 0
+                record['wake_retry_at'] = time.time() - 1
                 gate.save(record)
             gate.settle(f.fid, record['delivery'])
             f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))

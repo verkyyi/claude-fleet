@@ -565,7 +565,8 @@ def settle(fid, wait_new=None):
         for r in live:
             if r.get("sid") and w["sid"] and r["sid"] != w["sid"] and not w["parked"]:
                 ret(r, "session_changed")       # a /clear or another conversation: never into it
-            elif r.get("state") == "queued" and t - r.get("at", t) > queue_secs:
+            elif (r.get("state") == "queued" and t - r.get("at", t) > queue_secs
+                  and not (r.get('wake_why') == '定时' and r.get('wake_retry_at'))):
                 ret(r, "expired")
         live = [r for r in live if r.get("state") in ("queued", "trying", "native", "waking")]
         if not live:
