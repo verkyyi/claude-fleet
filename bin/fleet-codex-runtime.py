@@ -200,22 +200,28 @@ def trust_launch_hooks(remote, cwd, rpc_client=None):
 
 def input_ready(pane):
     """True once the Codex thread in <pane> is up and its `input` stage written
-    (fleet_timing.input_once); a window with no clock is done at once."""
+    (fleet_timing.input_once). A parked wake also waits for this native binding,
+    including when there is no new-session clock."""
     try:
-        out = subprocess.run(['tmux', 'display-message', '-p', '-t', pane, '#{@timing_t0}\t#{@codex_session_id}'],
+        out = subprocess.run(['tmux', 'display-message', '-p', '-t', pane, '#{@timing_t0}\t#{@codex_session_id}\t#{@park_start}'],
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              text=True, timeout=5).stdout.rstrip('\n')
     except (OSError, subprocess.SubprocessError):
-        return True
-    t0, _, sid = out.partition('\t')
-    if not t0:
+        return False
+    fields = out.split('\t')
+    t0, sid, waking = (fields + ['', '', ''])[:3]
+    if not t0 and not waking:
         return True
     if not sid:
         return False
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import fleet_timing
-        fleet_timing.input_once(pane)
+        if t0:
+            fleet_timing.input_once(pane)
+        if waking:
+            import fleet_session_gate
+            fleet_session_gate.wake_ready(pane)
     except Exception:  # noqa: BLE001 — a clock never costs the session
         pass
     return True
@@ -303,8 +309,16 @@ def run(argv, prepare=None, tick=None):
                           file=sys.stderr)
             except Exception as exc:
                 print('fleet-codex-runtime: could not pre-trust the fleet hooks: ' + str(exc), file=sys.stderr)
-        client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
+        command = ['codex', '--remote', remote, *argv]
+        # The same pty owner as Claude: keyboard generation protects drafts and
+        # park_exit is submitted only after the gate's native idle proof.
+        relay = Path(__file__).with_name('fleet-status-7501.py')
+        if (env.get('TMUX') and env.get('TMUX_PANE') and env.get('FLEET_STATUS_7501', '1') != '0'
+                and sys.stdin.isatty() and sys.stdout.isatty() and relay.is_file()):
+            command = [sys.executable, str(relay), 'relay', '--', *command]
+        client = subprocess.Popen(command, env=env)
         next_tick = time.monotonic()
+        binding_until = next_tick + 5
         # T716: the new session's clock to 能打字 — the TUI's thread is up (its
         # SessionStart stamped @codex_session_id) ⇒ `input` under @timing_t0, once
         clock_pane = env.get('TMUX_PANE', '') if env.get('TMUX') else ''
@@ -322,7 +336,11 @@ def run(argv, prepare=None, tick=None):
                 if seeder is not None and not seeder.tick():
                     seeder = None
                 if tick: tick()
-                next_tick = time.monotonic() + 1
+                # A resumed TUI commonly binds just after the first observation.
+                # Do not add a whole second to wake confirmation. Only the first
+                # five seconds can poll faster; steady idle keeps its 1s cadence.
+                binding = follower is not None and not getattr(follower, 'started', True)
+                next_tick = time.monotonic() + (.1 if binding and time.monotonic() < binding_until else 1)
             time.sleep(0.1)
         if ended:
             return 128 + ended[0]

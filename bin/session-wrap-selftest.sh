@@ -535,12 +535,25 @@ home_exit() {
   home_trace exit-unconfirmed
 }
 home_exit
-waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_pid}')\" != '$hpid' ] && [ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 0 ]"
+heal() ( PATH="$WORK/tbin:$PATH"; FLEET_CONF_DIR="$WORK/dconf"; export PATH FLEET_CONF_DIR
+         . "$BIN/fleet-lib.sh"; fleet_home_heal whatever sw )
+# On tmux 3.3/3.4 the known lost SIGCHLD can occur in this first leg too:
+# CI observed the old shell still Zs with pane_dead=1 and the hook installed.
+# Drive the existing tick backstop only for that evidence, as a real node does;
+# do not retry a live shell or manufacture another child exit to unstick tmux.
+home_recovered() {
+  if [ "$(o home pane_dead)" = 1 ] \
+     && [ "$(ps -o stat= -p "$hpid" 2>/dev/null | tr -d ' ' | cut -c1)" = Z ]; then
+    home_trace missed-sigchld
+    heal >/dev/null
+  fi
+  [ "$(o home pane_pid)" != "$hpid" ] && [ "$(o home pane_dead)" = 0 ]
+}
+eq "D: home has its exit hook" 'pane-died[0] respawn-pane -k' "$(tf show-hooks -w -t sw:home | grep '^pane-died\[0\]')"
+waitfor "D: home respawned a fresh shell" home_recovered
 # The tick's backstop (#1801): tmux ≤ 3.4 can lose the shell's SIGCHLD and leave
 # home dead with no pane-died — made here by dropping the hook. fleet_home_heal
 # respawns a dead home and leaves a live one alone.
-heal() ( PATH="$WORK/tbin:$PATH"; FLEET_CONF_DIR="$WORK/dconf"; export PATH FLEET_CONF_DIR
-         . "$BIN/fleet-lib.sh"; fleet_home_heal whatever sw )
 tf set-hook -wu -t sw:home pane-died
 home_exit
 waitfor "D: home left dead with no hook" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 1 ]"

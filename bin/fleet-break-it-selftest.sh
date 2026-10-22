@@ -6400,12 +6400,61 @@ drill_park_all_origins() {
   WHAT='所有来源共用停放器：同一窗口与身份，真实进程退出后同会话接回；草稿、后台任务、旧外壳不停'
 }
 
+drill_park_codex_new_thread() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_same_thread_and_paste_exit 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" CodexBusy.test_park_relay_is_infrastructure_but_its_jobs_are_work CodexBusy.test_managed_home_worker_can_reach_native_busy_probe 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-session-gate-selftest.py" N 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='旧外壳没有停放页：拒停，不送退出，不动凭据和窗口'
+}
+
+drill_park_loses_loop() {
+  CAP=45; local t0 out fid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee03 sid=11111111-2222-4333-8444-555555555503
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_wakeup 2>&1) || { WHY="$out"; return 1; }
+  # Drive fleet-restore.sh as well: the snapshot says done, but the contract
+  # keeps it unfinished. The original wrapper returns without starting Claude.
+  BREAK_SOCK="$WORK/sock-park-timer"
+  mkdir -p "$WORK/econf/wake" "$WORK/wt-3" "$WORK/gbin"
+  printf '#!/bin/sh\necho 0\n' > "$WORK/gbin/gh"; chmod +x "$WORK/gbin/gh"
+  python3 - "$WORK/econf/wake/$fid.json" "$fid" "$sid" <<'PY'
+import json,sys,time
+due=int(time.time())+3600
+json.dump(dict(v=1,fid=sys.argv[2],sid=sys.argv[3],agent='claude',phase='active',parked=True,next=due,
+               jobs=[dict(id='once',kind='wakeup',expr='',prompt='original timer prompt',until=due+600,
+                          next=due,recurring=False)]),open(sys.argv[1],'w'))
+PY
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$fid"; printf 'WIN\tissue-3\t%s\t%s\t3\tdone\t-\t-\n' "$WORK/wt-3" "$sid"
+  } > "$WORK/econf/fleets/oc/restore.map"
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH"
+  [ "$(o oc:issue-3 @cc_session_id)" = "$sid" ] && [ -n "$(o oc:issue-3 @park_held)" ] \
+    || { WHY='parked timer was not restored into the original conversation holding page'; return 1; }
+  nt kill-window -t oc:issue-3
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH"
+  [ "$(o oc:issue-3 @fleet_id)" = "$fid" ] && [ -n "$(o oc:issue-3 @park_held)" ] \
+    || { WHY='the done snapshot suppressed pullback of the killed timer wrapper'; return 1; }
+  [ "$(o oc:issue-3 @restore_outcome)" = resumed ] \
+    || { WHY='restore called the holding wrapper a failed native launch'; return 1; }
+  SECS=$(since "$t0")
+  WHAT='进程退出后到点唤醒，同一窗口与会话的首轮是原提示，约定时刻记入动作账本'
+}
+
+drill_park_loses_cron() {
+  CAP=45; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_cron_three_rounds 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='cron 连续停放接回三次，每轮原提示一次，不重建、不叠加'
 }
 
 drill_park_census_overcounts() {
@@ -6942,6 +6991,16 @@ drill_service_orphan_shell_holds_socket() {
 # asks the old copy over its own socket (--busy /api/busy) and waits while it
 # answers; a turn cut off anyway is said on the next start with 重试; the notice
 # is one quiet line; and 新对话 mid-answer puts the turn aside instead of a 409.
+drill_webchat_helper_stale_release() {
+  CAP=20; local t0
+  t0=$(now)
+  webchat_part release "Z resident service initially calls release A gate" \
+    "Z same process calls release B gate after stable switch" \
+    "Z new session uses current release launcher after stable switch" || return 1
+  WHAT='同一网页服务跨 stable A→B，后续 gate 与新建都用当前发行版，不丢会话或重复投递'
+  SECS=$(since "$t0")
+}
+
 drill_webchat_turn_cut_by_restart() {
   CAP=60; local t0
   t0=$(now)

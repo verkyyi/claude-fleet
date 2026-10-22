@@ -42,15 +42,15 @@ func TestRejectedAccessRetry(t *testing.T) {
 		wantCalls  int64
 		wantReport int64
 	}{
-		{"expired", 401, `{"error":{"code":"token_expired"}}`, "new", nil, false, 200, 2, 1},
+		{"expired", 401, `{"error":{"code":"token_expired"}}`, "new", nil, false, 401, 1, 1},
 		{"relay auth", 401, `{"error":{"code":"unauthenticated"}}`, "new", nil, false, 401, 1, 0},
 		{"refresh token rejected", 401, `{"error":{"code":"refresh_token_expired"}}`, "new", nil, false, 401, 1, 0},
 		{"plain response", 401, "unauthorized", "new", nil, false, 401, 1, 0},
 		{"other status", 403, `{"error":{"code":"token_expired"}}`, "new", nil, false, 403, 1, 0},
 		{"hub down", 401, `{"error":{"code":"token_expired"}}`, "new", ErrHubUnavailable, false, 401, 1, 1},
 		{"unchanged token", 401, `{"error":{"code":"token_expired"}}`, "old", nil, false, 401, 1, 1},
-		{"retry bounded", 401, `{"error":{"code":"token_expired"}}`, "new", nil, true, 401, 2, 1},
-		{"gzip expired", 401, `{"error":{"code":"token_expired"}}`, "new", nil, false, 200, 2, 1},
+		{"retry bounded", 401, `{"error":{"code":"token_expired"}}`, "new", nil, true, 401, 1, 1},
+		{"gzip expired", 401, `{"error":{"code":"token_expired"}}`, "new", nil, false, 401, 1, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var calls atomic.Int64
@@ -88,7 +88,20 @@ func TestRejectedAccessRetry(t *testing.T) {
 			if response.Code != test.wantStatus || calls.Load() != test.wantCalls || resolver.reports.Load() != test.wantReport {
 				t.Fatalf("status=%d calls=%d reports=%d", response.Code, calls.Load(), resolver.reports.Load())
 			}
-			if test.wantStatus != 200 && response.Body.String() != test.body {
+			body := response.Body.String()
+			if response.Header().Get("Content-Encoding") == "gzip" {
+				decoded, err := gzip.NewReader(strings.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := io.ReadAll(decoded)
+				decoded.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				body = string(raw)
+			}
+			if test.wantStatus != 200 && body != test.body {
 				t.Fatalf("original refusal changed: %q", response.Body.String())
 			}
 		})

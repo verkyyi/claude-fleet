@@ -25,8 +25,8 @@ import (
 //     /v1/fleet/credproxy/rebind), remembered until the reset the answer
 //     carried, else for limitMemoDefault.
 //
-// Every account full ⇒ the old order, byte for byte. A session already bound
-// is not moved by a reading — only by its own 429, through rebind: the proxy
+// Every account full ⇒ the old order. Codex also uses the conservative dual-
+// window policy at request boundaries (fleet_credproxy_selection.go). On 429 the proxy
 // asks once per request, the hub moves the binding only while it still names
 // the account that answered 429 (so concurrent 429s on one session move it
 // once), to the first choice not at its limit; none ⇒ nothing moves and the
@@ -76,6 +76,13 @@ func (m *limitMemo) limited(provider, owner, account string, now time.Time) bool
 // credAtLimit says why one vault account is known to be at its limit, or "".
 func (s *Server) credAtLimit(c store.Credential, now time.Time) string {
 	if s.Vault == nil {
+		return ""
+	}
+	if c.Provider == credvault.Codex {
+		q := s.codexQuotaFor(c, now)
+		if q.State == "limited" {
+			return q.Reason
+		}
 		return ""
 	}
 	if s.limits.limited(c.Provider, c.PrincipalID, s.Vault.CredentialID(c), now) {
@@ -207,14 +214,29 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 	if err == nil && same && b.Owner == owner && b.Account == req.Account {
 		var choices []store.Credential
 		if choices, err = s.sessionBindChoices(c.Principal, epID, req.Provider); err == nil {
+			if req.Provider == credvault.Codex {
+				inputs := make([]codexQuotaInput, len(choices))
+				for i, ch := range choices {
+					inputs[i] = s.codexQuotaFor(ch, now)
+				}
+				ranked := make([]store.Credential, 0, len(choices))
+				for _, i := range codexOrder(choices, inputs) {
+					ranked = append(ranked, choices[i])
+				}
+				choices = ranked
+			}
 			for _, ch := range choices {
 				if (ch.PrincipalID == b.Owner && ch.Account == b.Account) || s.credAtLimit(ch, now) != "" {
 					continue
 				}
-				nb, serr := s.Store.SetSessionBind(store.SessionBind{WorkerID: c.WorkerID, Provider: req.Provider,
-					Owner: ch.PrincipalID, Account: ch.Account, SetBy: "credproxy:429"}, now)
+				nb, serr := s.Store.CompareSessionBind(store.SessionBind{WorkerID: c.WorkerID, Provider: req.Provider,
+					Owner: ch.PrincipalID, Account: ch.Account, SetBy: "credproxy:429"}, b.Rev, now)
 				if serr != nil {
 					err = serr
+					break
+				}
+				if nb.Rev != b.Rev+1 || nb.Owner != ch.PrincipalID || nb.Account != ch.Account {
+					b = nb // another request or an explicit binding won
 					break
 				}
 				out.RebindFrom = optional("pool · ", b.Owner == store.PoolPrincipal) + b.Account

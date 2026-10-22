@@ -374,3 +374,58 @@ sudo grep -rEc 'sk-ant-|eyJhbGci|Bearer ' /var/log/caddy/ /etc/caddy/ ; sudo gre
   重领；经转发 Claude、Codex、`/openai-auth/` 跑通且上游拿到原样的 `Authorization`、没有
   `X-Fleet-Relay` 和 `X-Forwarded-*`；入口核验从没见过 `Authorization`；拒绝的请求到不了上游；
   转发日志里没有订阅、通行证、路径细节、地址；本机代理（C3）在 relay 路上经转发跑通两家。
+
+## Codex 中心网关的额度选择（T947）
+
+`hub/api/fleet_credproxy_selection.go` 在已有授权候选内选择。来源是按凭据身份保存的
+`QuotaSnapshot`（`/wham/usage` 的完整 `account_api` 读取，或收集器的
+`account/rateLimits/read` / 局部更新），并读取独立保存的最近读取失败与 429 cooldown。
+局部更新保留各窗口原来的观察时间，不能用新快照的时间替旧窗口续命。
+
+**容量不可精确比较。** 当前协议只有 `used_percent`、窗口时长、reset、套餐名与
+credits 标志，没有可跨订阅比较的绝对 token / 请求容量，也没有可信的换算系数。
+套餐名相同不证明容量相同；不同套餐也不套倍率。credits 的余额 / unlimited 不被当作
+5h 或 7d 订阅容量。因此不按「剩余百分比最大」排序，不声称最大化真实吞吐；诊断明确写
+`comparability=no_absolute_capacity`。未来若有可信绝对容量，须另加来源、单位、有效期
+和双窗口换算的验证，不能只填一个套餐权重。
+
+当前保守规则如下（常数是策略阈值，不是套餐容量）：
+
+- 授权、暂停、reauth 和凭据去重仍由 `sessionBindChoices` 过滤。自有优先于共享，
+  同一所属内 refresh 健康优先；已满账号才按原行为让给其他获授权的未满账号。
+- `codex` 主池的 5h（300 分钟）与 7d（10080 分钟）必须都存在，百分比在 0–100，
+  无重复窗口、缺 reset、未来观察时间、超出窗口的 reset；两窗各自观察时间均不超过
+  10 分钟，最近读取也没有失败。过 reset 后要等新的读数，不能自行补成 100% 可用。
+- 两窗各剩至少 20% 为 `usable`，任一窗不足为 `tight`；无可靠读数为 `unknown`。
+  同一所属/健康层中依次选择 usable、tight、unknown、limited；全部未知或全部受限
+  则保持原有确定顺序，不制造容量。unknown 不是「空闲」。已有未过 reset 的 100%
+  读数保守保留 limited；新鲜 blocked 与 429 cooldown 也覆盖正面读数。
+- **只有 usable 才有重置利用机会**：5h 距 reset ≤30 分钟，或 7d ≤12 小时。
+  同一层内有机会者优先；不比较两个账号的精确余量，也不因一窗快重置就花掉另一窗
+  的最后储备。缺容量时这是保守机会选择，不是精确容量优化。
+- 已绑定的人类 Codex 会话至少保持 10 分钟。只有另一候选已知 usable，且当前
+  tight/limited，或当前也是 usable 而另一候选独有重置机会，才主动换绑。
+  读数未知本身不证明切换有收益；显式人工绑定不被主动策略覆盖。服务会话保留既有
+  yield 逻辑，不使用新的主动换绑。429/授权失效仍走原有故障处理，不受机会型保持阻挡。
+
+**请求边界与并发。** 新中心代理只在发送新请求前的 resolve 带 `request_boundary`，
+缓存至多 30 秒；旧代理不带此字段便不会主动改已有绑定。401 处理的 resolve 不带该字段。
+每个请求拿自己的凭据快照，流开始后不替换 token、不取消流、不重启 Agent。双副本或
+并发请求可以跨绑定版本重叠：旧流继续用旧账号直到结束，新请求可用新账号；这不承诺
+所有副本全局等待零 inflight。绑定更新使用数据库 revision CAS，较旧决定不能覆盖另一
+请求或人工操作。诊断分别记录决定和提交后实际版本，缓存更新只影响后续请求。
+
+Codex 的配额 429 仍记 cooldown、选择其他候选，但本次原样返回 429，**不跨账号重放**。
+下一次独立请求才使用新绑定。401 access 刷新仍记录拒绝并更新健康状态，但刷新结果也
+仅供下一次独立请求使用，本次返回原始 401；即便是同账号也不重放。普通请求率 429 不换绑。
+
+日志 `credproxy selection` 带策略版本、窗口观察年龄、窗口有效性、剩余百分比、reset、
+健康层、可比性与选择/维持原因；不记录 access/refresh token、原始读取报错、请求正文或
+请求头。`minimum_hold`、`no_known_safe_alternative`、`explicit_binding` 等原因可以解释
+为什么没有切换。此策略不触发额外额度探测。
+
+验收使用 `TestCodexQuota*`、`TestCodexSelection*` 和现有 `TestCredProxy*` / `TestCredPolicy*`，
+假时钟、临时数据库和 loopback 假上游；`codex-quota-sticky` 是 BREAK-IT 入口。不得以真实
+订阅请求做压力测试。**合并不是生产启用**：需正常发布 hub 与中心代理；仅 hub 更新时
+旧代理不会触发已有 sticky 的机会型重选。发布后通过正常业务请求的脱敏选择日志核对
+版本、双窗口状态、保持原因和绑定变化，不为验收额外花订阅额度；发布结果独立记录。

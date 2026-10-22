@@ -115,6 +115,36 @@ fleet_window_bg_busy fleet @1 1 1
                                     FLEET_CONF_DIR=str(self.root), TMUX='isolated,1,0'))
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
+    def test_park_relay_is_infrastructure_but_its_jobs_are_work(self):
+        self.argv[101] = ['/bin/bash', str(BIN / 'fleet-codex.sh')]
+        self.rows[110] = (101, 'python')
+        self.argv[110] = [sys.executable, str(BIN / 'fleet-codex-runtime.py'), '--']
+        relay = [sys.executable, str(BIN / 'fleet-status-7501.py'), 'relay', '--',
+                 '/release/codex', '--remote', self.remote]
+        self.rows[111] = (110, 'python'); self.argv[111] = relay
+        self.rows[112] = (111, 'python'); self.argv[112] = relay  # relay's pty guardian
+        self.rows[113] = (112, 'codex'); self.argv[113] = relay[4:]
+        self.assertEqual(self.busy(), [])
+        self.rows[114] = (112, 'python'); self.argv[114] = [sys.executable, '-c', 'job']
+        self.assertEqual(self.busy(), [114])
+        self.argv[111] = relay[:1] + ['/other/fleet-status-7501.py'] + relay[2:]
+        self.assertIn(111, self.busy())
+        self.argv[111] = relay[:-1] + ['unix:///another.sock']
+        self.assertIn(111, self.busy())
+
+    def test_managed_home_worker_can_reach_native_busy_probe(self):
+        worker = LIB['Worker']
+        # A normal no-repo worker deliberately has no @issue or @raw. inspect()
+        # still validates its lifelong identity and physical HOME afterwards.
+        for norepo in ('1', ''):
+            with patch.object(worker, 'tm', side_effect=['@2|test', '%2', '0|||scratch-2', norepo]), \
+                    patch.dict(worker.__init__.__globals__, root=lambda session: self.root):
+                if norepo:
+                    self.assertEqual(worker('test', '@2').pane, '%2')
+                else:
+                    with self.assertRaisesRegex(ValueError, 'not an issue'):
+                        worker('test', '@2')
+
 
 class NativeBusy(CodexBusy):
     def setUp(self):

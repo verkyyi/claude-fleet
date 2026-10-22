@@ -1054,9 +1054,8 @@ class Cleaner:
         early = self.mem_tight and not getattr(self, "_park_memory_done", False)
         if (due == 0 and not early) or (idle < due and not early):
             return False
-        if self.busy(window, snap):
-            self.why = "bg"
-            return False
+        # The session gate proves native idle/background state and exports its
+        # timers. busy() is the CLOSE gate: its Loop hold must not veto parking.
         fid = snap.get("@fleet_id", "")
         if not FID_RE.fullmatch(fid):
             return False

@@ -220,7 +220,8 @@ def busy_of(w):
         return ""
     if w["state"] == "needs" or w["word"] == "blocked":
         return "asking"
-    if w["state"] in ("working", "looping") or w["word"] == "working":
+    if (w["state"] == "working" or w["word"] == "working"
+            or (w["state"] == "looping" and w["word"] not in ("idle", "done"))):
         return "busy"
     return ""
 
@@ -637,7 +638,7 @@ def wake_try(r, w):
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
     save(r)
     log("wake", r, "seed")
-    requested = wake_request(w, seed, "网页")
+    requested = wake_request(w, seed, r.get("wake_why", "网页"), r.get("wake_next"))
     if not requested.get("ok"):
         seed.unlink(missing_ok=True)
         return "queued", requested["why"]
@@ -719,6 +720,12 @@ def park_proof(w):
             return json.loads(p.stdout) if p.returncode == 0 else dict(ok=False, why="probe_failed")
         except (OSError, ValueError, subprocess.SubprocessError):
             return dict(ok=False, why="probe_failed")
+    import fleet_agent_adapter
+    probe = fleet_agent_adapter.get(w["agent"], "park_probe")
+    if probe == "native-input":
+        return park_native_input(w)
+    if probe != "inbox":
+        return dict(ok=False, why="no_probe")
     directory = claude_inbox(w)
     if directory is None:
         return dict(ok=False, why="no_probe")
@@ -737,6 +744,37 @@ def park_proof(w):
     # Late probes are read-only; cancel when still unclaimed.
     pending.unlink(missing_ok=True)
     return dict(ok=False, why="probe_timeout")
+
+
+def park_native_input(w):
+    """The native background inventory already vetoed tools / goals / subagents.
+
+    Re-read the current thread and queue, then the TUI's empty composer. The
+    relay generation taken BEFORE this proof vetoes any intervening keystroke.
+    Unknown input, a stale identity or an unreachable server always holds.
+    """
+    try:
+        identity, mkclient = codex_api()
+        data = identity(w["pane"], w["sock"])
+        if not data or data.get("session_id") != w["sid"] or not str(data.get("remote", "")).startswith("unix://"):
+            return dict(ok=False, why="changed")
+        client = mkclient(data["remote"])
+        try:
+            thread = client.call("thread/read", dict(threadId=w["sid"]))["thread"]
+            if thread.get("id") != w["sid"] or thread.get("status", {}).get("type") != "idle":
+                return dict(ok=False, why="not_idle")
+            queue = client.call("thread/queue/list", dict(threadId=w["sid"], limit=1))
+            if queue.get("data") != [] or queue.get("nextCursor"):
+                return dict(ok=False, why="words_waiting")
+        finally:
+            client.close()
+        import runpy
+        snap = runpy.run_path(str(BIN / "fleet-input.py"))["snapshot"](w["sock"], w["pane"], w["agent"])
+        if snap.get("state") != "empty":
+            return dict(ok=False, why="draft" if snap.get("state") == "draft" else "unknown_input")
+        return dict(ok=True)
+    except Exception:  # noqa: BLE001 — a failed native read must never authorize exit
+        return dict(ok=False, why="probe_failed")
 
 
 def park_saved_mb(w):
@@ -779,17 +817,15 @@ def park_locked(fid, why, force):
         return dict(ok=False, why="bg")
     if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
         return dict(ok=False, why="words_waiting")
-    # C3 hands timers out before the process goes away. Until it is installed,
-    # a live timer is a hold, never a silently lost wakeup.
-    if w["loop"]:
-        p = subprocess.run([sys.executable, str(BIN / "fleet_loop_mark.py"), "export", "--fid", fid],
-                           capture_output=True, timeout=10)
-        if p.returncode != 0:
-            return dict(ok=False, why="wake_contract")
     generation = relay_request(w, dict(op="status"))
     seam = os.environ.get("FLEET_GATE_EXIT_CMD")
     if not generation.get("ok") and not seam:
         return generation
+    exit_mode = adapter.get("park_exit")
+    # A running relay keeps its launch-time implementation after a release.
+    # The old one can only type /exit; never feed that into a paste-aware TUI.
+    if not seam and exit_mode not in generation.get("park_exit", ["typed"]):
+        return dict(ok=False, why="old_relay")
     proof = park_proof(w)
     if not proof.get("ok"):
         return dict(ok=False, why=proof.get("why") or proof.get("error") or "not_idle")
@@ -808,6 +844,13 @@ def park_locked(fid, why, force):
     with os.fdopen(fd, "w") as f:
         f.write(screen)
     tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_screen", str(screen_path))
+    # Read durable tasks even without @loop. Export never enables delivery while
+    # the native process can still run its timers; held below commits ownership.
+    import fleet_park_wake
+    try:
+        fleet_park_wake.export(fid)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return dict(ok=False, why="wake_contract", detail=str(error))
     started = time.monotonic()
     since = str(int(now()))
     saved_mb = park_saved_mb(w)
@@ -822,22 +865,35 @@ def park_locked(fid, why, force):
         rc = subprocess.run(shlex.split(seam) + [w["pane"]], capture_output=True, timeout=5).returncode
         sent = dict(ok=rc in (0, 6))
     else:
-        sent = relay_request(w, dict(op="exit", generation=generation.get("generation")))
+        sent = relay_request(w, dict(op="exit", generation=generation.get("generation"), park_exit=exit_mode))
     if sent.get("ok"):
         end = time.monotonic() + num_env("FLEET_GATE_PARK_SECS", 15)
+        confirmed = False
         while time.monotonic() < end:
             held = tmux(w["sock"], "display-message", "-p", "-t", w["win"], "#{@park_held}")
             if held and held.strip():
+                try:
+                    fleet_park_wake.activate(fid)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    park_log(fid, "fail", why, time.monotonic() - started, "wake_contract:" + str(error))
+                    return dict(ok=False, why="wake_contract", parked=True)
                 park_log(fid, "park", why, time.monotonic() - started, rss_mb=saved_mb)
                 return dict(ok=True, why=why)
+            if w['loop'] and not confirmed:
+                screen = tmux(w['sock'], 'capture-pane', '-p', '-t', w['pane']) or ''
+                if fleet_park_wake.exit_confirmation(fid, screen):
+                    confirmation = relay_request(w, dict(op='confirm-exit', generation=generation.get('generation'),
+                                                         screen=hashlib.sha256(screen.encode()).hexdigest()))
+                    confirmed = bool(confirmation.get('ok'))
             time.sleep(.1)
     for option in ("@parked", "@park_since", "@park_why", "@park_saved_mb"):
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
+    fleet_park_wake.abort(fid)
     park_log(fid, "fail", why, time.monotonic() - started, sent.get("why") or "exit_failed")
     return dict(ok=False, why=sent.get("why") or "exit_failed")
 
 
-def wake_request(w, seed, why):
+def wake_request(w, seed, why, next_at=None):
     """Called under the fid lock: one owned seed, never replace another wake."""
     # An unsubmitted terminal draft is not a message to send with a peer wake.
     # Callers keep their words queued; the keyboard's own Enter submits its draft.
@@ -848,7 +904,8 @@ def wake_request(w, seed, why):
     if active:
         return dict(ok=False, why="wake_pending")
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
-                next=(read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
+                next=next_at if next_at is not None else
+                (read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
     if why == "键盘":
         meta["draft"] = str(fid_dir(w["fid"]) / "park-input.txt")
     write_json(str(seed) + ".meta", meta)
@@ -867,6 +924,9 @@ def wake_ready(pane):
     except OSError:
         return
     meta = read_json(str(path) + ".claimed") or {}
+    if meta.get("fid"):
+        import fleet_park_wake
+        fleet_park_wake.resumed(meta['fid'])
     seed = meta.get("seed", "")
     if seed:
         Path(seed + ".launched").touch()
@@ -1054,8 +1114,10 @@ def status(fid):
 
 def say(args):
     fid = args.fid
-    text = sys.stdin.read() if args.text_file in (None, "-") else Path(args.text_file).read_text()
-    text = text.strip()
+    text = getattr(args, "text", None)
+    if text is None:
+        text = sys.stdin.read() if args.text_file in (None, "-") else Path(args.text_file).read_text()
+        text = text.strip()
     images = [str(Path(p)) for p in args.image or []]
     if not text and not images:
         return out(dict(state="refused", reason="empty"), 2)
@@ -1075,13 +1137,15 @@ def say(args):
         return out(dict(delivery=delivery, state="refused", reason=why))
     r = dict(v=1, delivery=delivery, fid=fid, text=text or "（图片）", images=images, at=now(), sid=w["sid"],
              agent=w["agent"], state="queued", why="", tries=0)
+    if getattr(args, "why", None):
+        r.update(wake_why=args.why, wake_next=getattr(args, "next_at", 0))
     with lock(fid):
         known = find(records(fid), delivery)
         if known is not None:
             return out(dict(delivery=delivery, state=public(known), reason=known.get("why", "")))
         save(r)
     w = window(fid)
-    if w:
+    if w and not getattr(args, "why", None):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_presence", str(int(now())))
     log("say", r)
     got = settle(fid, delivery) or r

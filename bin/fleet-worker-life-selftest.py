@@ -72,7 +72,7 @@ class WorkerMetadataTest(unittest.TestCase):
         for metadata in ('1||1|task', '0|||task',
                          '0||1|home', '0||1|plan', 'incomplete'):
             with self.subTest(metadata=metadata), patch.object(LIB['Worker'], 'tm',
-                    side_effect=['@7|fixture', '%8  ', metadata]):
+                    side_effect=['@7|fixture', '%8  ', metadata, '']):  # no @norepo exemption
                 with self.assertRaises(ValueError):
                     LIB['Worker']('fixture', '@7')
 
