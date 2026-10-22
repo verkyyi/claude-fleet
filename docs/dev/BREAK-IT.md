@@ -657,4 +657,4 @@
 | Codex 账号按字母序常驻，另一份额度重置前闲置（T947） | 两个窗口的瓶颈与读数失效被忽略；sticky 会话永不受益 | 双窗口保守分档、请求边界重选、最短保持与并发版本检查；不重放请求 | `codex-quota-sticky` |
 | Codex 把新 HTTP 请求误当成独立上下文（T947） | response ID 或加密续接被送到另一个订阅账号，HTTP 自动跳转还可能重放 | 续接来源按 session 持久记录，未知来源拒绝；自包含请求才参与重选，Codex 禁止自动跳转/rewind | `codex-continuation-account` |
 
-| quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格 | `quota-loop-replacement` |
+| quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格；目标晚绑定仍须等待 controller 已确认 started，未知结果不启 timer | `quota-loop-replacement` |

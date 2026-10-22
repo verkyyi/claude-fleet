@@ -706,5 +706,6 @@ required before the single Fleet timer starts. The private package retains
 original intent, source transcript, authorization, fingerprint, spec hash and
 native exit screen. Changing the spec after packaging refuses. If the target
 fails or its completion is unknown, the timer remains paused in that package;
-there is no automatic source/timer restart. Inspect the retained target before
+there is no automatic source/timer restart. A late target binding still cannot
+deliver timer rounds until the formal controller records verified `started`. Inspect the retained target before
 using explicit recovery. Drafts and business approvals keep their existing rules.

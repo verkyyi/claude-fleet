@@ -387,6 +387,15 @@ def wait_reasons(r):
 def hold(r, now):
     """Why a due wakeup waits now ('' = none). The panel word is read only for the
     states it alone knows (a turn, a question); `looping` is re-asked, never trusted."""
+    if r.get('quota_transfer_state'):
+        # A late native binding must not enable a replacement timer after its
+        # transfer failed/timed out. Only the controller's verified target starts it.
+        try:
+            transfer = json.loads(Path(r['quota_transfer_state']).read_text())
+            if transfer.get('state') != 'started':
+                return 'quota-transfer-unconfirmed'
+        except (OSError, ValueError, TypeError, AttributeError):
+            return 'quota-transfer-unconfirmed'
     if pane(r, '#{@agent_transfer_request}') or int(pane(r, '#{@agent_transfer_until}') or 0) > now:
         return 'transfer'
     if pane(r, '#{@handoff_armed}') == '1':
@@ -623,6 +632,8 @@ def bridge(args):
          'agent': agent, 'workspace_kind': m['workspace'].get('kind', 'worktree'), 'schedule': schedule, 'socket': '', 'thread_id': None,
          'deliveries': raw.get('deliveries',0), 'last_delivered_at':raw.get('last_delivered_at'),
          'controller_pid': os.getpid()}
+    if m.get('quota_loop_replacement'):
+        r['quota_transfer_state'] = str(manifest.parent / 'state.json')
     if m.get('durable_fid'):
         r.update(durable_fid=m['durable_fid'], durable_ids=m.get('durable_ids', []))
     r['pane_pid'] = int(pane(r, '#{pane_pid}'))

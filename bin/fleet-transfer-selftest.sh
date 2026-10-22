@@ -772,6 +772,8 @@ assert not m.get('native_cron')
 r=json.loads((b/'loop/state.json').read_text())
 assert r['status']=='active' and r['thread_id'] and r['schedule']['interval_seconds']==1800
 assert r.get('deliveries',0)==0
+assert r['quota_transfer_state']==str(b/'state.json')
+assert json.loads((b/'state.json').read_text())['state']=='started'
 assert (b/'loop-exit-confirmation.txt').exists()
 assert 'publish-once' in (b/'source.jsonl').read_text()
 assert not (b/'rollback').exists()
