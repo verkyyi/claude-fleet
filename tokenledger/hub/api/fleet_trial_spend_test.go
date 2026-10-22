@@ -191,7 +191,7 @@ func TestTrialSpend_DailyOnceAtNine(t *testing.T) {
 	daily := func() []string {
 		var out []string
 		for _, m := range pushes() {
-			if strings.HasPrefix(m, "ClaudeFleet 试用日报") {
+			if strings.HasPrefix(m, "Tokenman 试用日报") {
 				out = append(out, m)
 			}
 		}
@@ -208,7 +208,7 @@ func TestTrialSpend_DailyOnceAtNine(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("reports = %q; want one", got)
 	}
-	for _, want := range []string{"ClaudeFleet 试用日报 · 10 月 15 日", "新开通 1 人", "在试用 1 人",
+	for _, want := range []string{"Tokenman 试用日报 · 10 月 15 日", "新开通 1 人", "在试用 1 人",
 		"试用用量 1,640 tokens（池子 1,640 · 自带订阅 0）", "需要看 没有人超线",
 		"查看详情 https://hub.example/admin/usage?day=2026-10-14&tab=trial"} {
 		if !strings.Contains(got[0], want) {
@@ -263,7 +263,7 @@ func TestTrialSpend_English(t *testing.T) {
 		Machines: []TrialSpendMachine{{Node: "mac-a", LoadPct: 52}}}
 	sent := time.Date(2026, 10, 21, 1, 0, 0, 0, time.UTC)
 	got := trialDailyMsg(sum, sent, true, "https://h/x")
-	for _, want := range []string{"ClaudeFleet trial daily · Oct 21", "New 6 people", "Active 14 people",
+	for _, want := range []string{"Tokenman trial daily · Oct 21", "New 6 people", "Active 14 people",
 		"Trial usage 18.2M tokens (pool 0 · own subscriptions 18.2M)", "Machines mac-a load 52%",
 		"Watch 1 person over 1M tokens in a day", "View details https://h/x"} {
 		if !strings.Contains(got, want) {

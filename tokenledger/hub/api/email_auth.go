@@ -391,12 +391,12 @@ func (s *Server) emailFinish(w http.ResponseWriter, r *http.Request, addr string
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"mail.subject": {i18n.EN: "Sign in to claudefleet", i18n.ZhCN: "登录 claudefleet"},
+		"mail.subject": {i18n.EN: "Sign in to {brand}", i18n.ZhCN: "登录 {brand}"},
 		"mail.body": {
-			i18n.EN: "Someone — hopefully you — asked to sign in to claudefleet ({host}) with this address.\n\n" +
+			i18n.EN: "Someone — hopefully you — asked to sign in to {brand} ({host}) with this address.\n\n" +
 				"Open this link in the same browser:\n{link}\n\nor type these six digits there: {code}\n\n" +
 				"Both work once, for 15 minutes. Didn't ask? Ignore this mail: nothing happens without it.\n",
-			i18n.ZhCN: "有人（希望是你）想用这个邮箱登录 claudefleet（{host}）。\n\n" +
+			i18n.ZhCN: "有人（希望是你）想用这个邮箱登录 {brand}（{host}）。\n\n" +
 				"在发起登录的那个浏览器里打开这个链接：\n{link}\n\n或在那里输入这 6 位数字：{code}\n\n" +
 				"两者都只能用一次，15 分钟内有效。不是你要登录？不用管这封信，没有它什么都不会发生。\n",
 		},

@@ -482,10 +482,10 @@ func (s *Server) queueAnswer(lang string, g *store.TrialGrant) trialScanAnswer {
 	base := strings.TrimRight(s.FleetPublicURL, "/")
 	n := &wxNews{PicURL: base + "/site/og/cover-" + lang + ".png", URL: base + "/"}
 	if lang == "en" {
-		n.Title = "ClaudeFleet trial · in line"
+		n.Title = Brand + " trial · in line"
 		n.Description = strconv.Itoa(ahead) + " ahead of you. The trials are all in use — no need to keep it open: we message you when it is your turn."
 	} else {
-		n.Title = "ClaudeFleet 试用 · 排队中"
+		n.Title = Brand + " 试用 · 排队中"
 		n.Description = "前面还有 " + strconv.Itoa(ahead) + " 位。试用名额正被用满，不用一直开着，轮到你我们发消息。"
 	}
 	return trialScanAnswer{News: n}
@@ -506,32 +506,32 @@ func (s *Server) trialCard(lang, outcome string, code *store.TrialCode, pid stri
 	switch outcome {
 	case qrGranted:
 		if en {
-			n.Title = "Your ClaudeFleet trial is on" + days
+			n.Title = "Your " + Brand + " trial is on" + days
 			n.Description = "Opens straight into the chat — no sign-in, no request."
 		} else {
-			n.Title = "ClaudeFleet 试用已开通" + days
+			n.Title = Brand + " 试用已开通" + days
 			n.Description = "点开直接对话，不用登录、不用申请。"
 		}
 	case qrOn:
 		if en {
-			n.Title, n.Description = "Your ClaudeFleet trial is running", "Tap to go on where you left off."
+			n.Title, n.Description = "Your "+Brand+" trial is running", "Tap to go on where you left off."
 		} else {
-			n.Title, n.Description = "你的 ClaudeFleet 试用还在进行", "点开接着用。"
+			n.Title, n.Description = "你的 "+Brand+" 试用还在进行", "点开接着用。"
 		}
 	case qrMember:
 		if en {
-			n.Title, n.Description = "You are a ClaudeFleet member already", "Tap to open it."
+			n.Title, n.Description = "You are a "+Brand+" member already", "Tap to open it."
 		} else {
-			n.Title, n.Description = "你已经是 ClaudeFleet 成员", "点开继续用。"
+			n.Title, n.Description = "你已经是 "+Brand+" 成员", "点开继续用。"
 		}
 	default: // qrTried
 		if pid == "" {
 			n.URL = base + ApplyPath // a WeChat the list does not name: ask at /apply
 		}
 		if en {
-			n.Title, n.Description = "You have tried ClaudeFleet", "One trial per WeChat. Want to keep using it? Tap to ask to become a member — the answer comes here."
+			n.Title, n.Description = "You have tried "+Brand, "One trial per WeChat. Want to keep using it? Tap to ask to become a member — the answer comes here."
 		} else {
-			n.Title, n.Description = "你已经试用过 ClaudeFleet", "每个微信号试用一次。想继续用？点开申请转正，通过后结果推到这里。"
+			n.Title, n.Description = "你已经试用过 "+Brand, "每个微信号试用一次。想继续用？点开申请转正，通过后结果推到这里。"
 		}
 	}
 	return n
@@ -575,23 +575,23 @@ func (s *Server) qrText(lang, outcome string, code *store.TrialCode) string {
 	apply := strings.TrimRight(s.FleetPublicURL, "/") + ApplyPath
 	switch outcome {
 	case qrStopped:
-		return ternary(en, "This trial code has stopped. To use ClaudeFleet, ask here — the answer comes to this chat: "+apply,
-			"这张试用码已停用。想用 ClaudeFleet 可以点下面申请，结果会推到这里："+apply)
+		return ternary(en, "This trial code has stopped. To use "+Brand+", ask here — the answer comes to this chat: "+apply,
+			"这张试用码已停用。想用 "+Brand+" 可以点下面申请，结果会推到这里："+apply)
 	case qrExpired:
-		return ternary(en, "This trial code has expired. To use ClaudeFleet, ask here — the answer comes to this chat: "+apply,
-			"这张试用码已过期。想用 ClaudeFleet 可以点下面申请，结果会推到这里："+apply)
+		return ternary(en, "This trial code has expired. To use "+Brand+", ask here — the answer comes to this chat: "+apply,
+			"这张试用码已过期。想用 "+Brand+" 可以点下面申请，结果会推到这里："+apply)
 	case qrFull:
-		return ternary(en, "This trial code has given every trial it had. To use ClaudeFleet, ask here — the answer comes to this chat: "+apply,
-			"这张试用码的名额已经发完了。想用 ClaudeFleet 可以点下面申请，结果会推到这里："+apply)
+		return ternary(en, "This trial code has given every trial it had. To use "+Brand+", ask here — the answer comes to this chat: "+apply,
+			"这张试用码的名额已经发完了。想用 "+Brand+" 可以点下面申请，结果会推到这里："+apply)
 	case qrDaily:
 		return ternary(en, "Today's trials are all given out. Scan again tomorrow.",
 			"今天的试用名额发完了，明天再扫一次就好。")
 	case qrPending:
-		return ternary(en, "Got it — your request to try ClaudeFleet is with us. The answer comes to this chat.",
-			"收到，你的 ClaudeFleet 试用申请已提交，结果会推到这里。")
+		return ternary(en, "Got it — your request to try "+Brand+" is with us. The answer comes to this chat.",
+			"收到，你的 "+Brand+" 试用申请已提交，结果会推到这里。")
 	}
-	return ternary(en, "ClaudeFleet cannot start a trial for you right now. You can ask here — the answer comes to this chat: "+apply,
-		"ClaudeFleet 暂时不能为你开通试用。可以点下面申请，结果会推到这里："+apply)
+	return ternary(en, Brand+" cannot start a trial for you right now. You can ask here — the answer comes to this chat: "+apply,
+		Brand+" 暂时不能为你开通试用。可以点下面申请，结果会推到这里："+apply)
 }
 
 // RunTrialQueue serves the line: every qrQueueTick, while nothing holds,
@@ -652,9 +652,9 @@ func (s *Server) trialQueuePass(ctx context.Context, now time.Time) {
 		}
 		card := s.trialCard(g.Lang, qrGranted, code, pid, now)
 		if g.Lang == "en" {
-			card.Title, card.Description = "Your turn — your ClaudeFleet trial is on", "Opens straight into the chat."
+			card.Title, card.Description = "Your turn — your "+Brand+" trial is on", "Opens straight into the chat."
 		} else {
-			card.Title, card.Description = "轮到你了 · ClaudeFleet 试用已开通", "点开直接对话。"
+			card.Title, card.Description = "轮到你了 · "+Brand+" 试用已开通", "点开直接对话。"
 		}
 		if err := s.WxGW.customNews(ctx, g.OpenID, wxArticle{Title: card.Title, Description: card.Description,
 			URL: card.URL, PicURL: card.PicURL}); err != nil {

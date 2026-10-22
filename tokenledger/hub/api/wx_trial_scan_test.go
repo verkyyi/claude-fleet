@@ -109,7 +109,7 @@ func TestTrialCodeScanStartsTheTrial(t *testing.T) {
 
 	st, a := h.follow(t, c.Scene, "openid-newcomer-0001", "union-newcomer-1", "subscribe")
 	if st != http.StatusOK || a.News == nil || a.News.URL != "https://fleet.example/auth/wechat/start" ||
-		a.News.Title != "ClaudeFleet 试用已开通 · 14 天" || a.News.Description != "点开直接对话，不用登录、不用申请。" {
+		a.News.Title != "Tokenman 试用已开通 · 14 天" || a.News.Description != "点开直接对话，不用登录、不用申请。" {
 		t.Fatalf("answer = %d %+v", st, a.News)
 	}
 	gs := h.grants(t, c.ID)
