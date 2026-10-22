@@ -97,6 +97,19 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.cleaner.work_over(self.snap))
         self.assertEqual(fleet_id.status(FID, [FID])["result"]["summary"], "new result")
 
+    def test_delivered_message_restarts_idle_clock_before_native_hook(self):
+        self.say()
+        work = policy.current_work(FID)
+        snap = dict(self.snap, work_at=str(work["at"]), **{"@claude_state_ts": "1"})
+        self.assertEqual(self.cleaner.deadline(snap, ("idle", 60)), work["at"] + 60)
+
+    def test_wake_seed_invalidates_old_completion_under_same_gate(self):
+        seed = gate.fid_dir(FID) / "next-seed"
+        seed.write_text("new work while parked")
+        with gate.lock(FID), patch.object(gate, "tmux"):
+            self.assertTrue(gate.wake_request(self.window, seed, "消息")["ok"])
+        self.assertFalse(self.cleaner.work_over(self.snap))
+
     def test_prompt_invalidates_but_tool_and_lifecycle_exit_do_not(self):
         with patch.dict(os.environ, TMUX="fixture", TMUX_PANE="%1"), \
              patch.object(gate, "tmux", return_value=FID):

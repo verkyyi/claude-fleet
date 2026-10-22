@@ -1059,6 +1059,9 @@ def wake_request(w, seed, why, next_at=None):
     active = w.get("park_wake") or w.get("park_start")
     if active:
         return dict(ok=False, why="wake_pending")
+    if seed.read_text().strip():
+        from fleet_reap_policy import work_changed_locked
+        work_changed_locked(w["fid"], w.get("task", ""))
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
                 guarded=w.get("wrap_ver") == "3",
                 next=next_at if next_at is not None else

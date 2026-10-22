@@ -10308,6 +10308,7 @@ print(4 if r.get("ok") and r.get("already") else 0 if r.get("ok") else 3)' 2>/de
 }
 
 # Kept for pre-gate clients: only the surrounding identity admission changed.
+# shellcheck disable=SC2034  # FLEET_DELIVER_NOTE is the caller's output
 _fleet_agent_deliver_native() {
   local tgt="$1" sock="$2" text="$3" from="$4" agent ev pid out rc sess
   local held="${FLEET_DELIVER_HELD:-3}" lib="${_FLEET_LIB_DIR:-}"

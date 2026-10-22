@@ -176,7 +176,9 @@ class Cleaner:
             snap = {n: option(self.tm, window, n) for n in names}
         else:
             snap = {n: v.strip() for n, v in zip(names, vals)}
-        snap["work_token"] = fleet_reap_policy.current_work(snap["@fleet_id"]).get("token", "")
+        work = fleet_reap_policy.current_work(snap["@fleet_id"])
+        snap["work_token"] = work.get("token", "")
+        snap["work_at"] = str(work.get("at", ""))
         return snap
 
     def moved(self, window, snap):
@@ -304,7 +306,7 @@ class Cleaner:
     def deadline(self, snap, pol):
         """When this window's own policy lets it go (issue #1902)."""
         kind, val = pol
-        stamp = int(snap["@claude_state_ts"])
+        stamp = max(int(snap["@claude_state_ts"]), int(snap.get("work_at") or 0))
         if kind in ("done", "idle"):
             return stamp + val
         if kind == "loop-end":
@@ -507,6 +509,8 @@ class Cleaner:
                 and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1"):
             return False
         stamp = snap["@claude_state_ts"] if snap["@claude_state_ts"].isdigit() else snap["@born"]
+        if stamp.isdigit():
+            stamp = str(max(int(stamp), int(snap.get("work_at") or 0)))
         if pol[0] in ("done", "idle") and (not stamp.isdigit() or int(stamp) + pol[1] > self.now):
             return False
         if pol[0] == "at" and pol[1] > self.now:
@@ -600,7 +604,7 @@ class Cleaner:
                 or (snap["@claude_state"] not in ("", "done", "idle", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")):
             return False
-        stamps = [int(v) for v in (snap["@born"], snap["@claude_state_ts"]) if v.isdigit()]
+        stamps = [int(v) for v in (snap["@born"], snap["@claude_state_ts"], snap.get("work_at", "")) if v.isdigit()]
         # an `idle:2h` never typed into goes on the old 15 minutes (T694)
         grace = min(pol[1], fleet_reap_policy.DONE_DEFAULT) if pol[0] == "idle" else pol[1]
         if not stamps or max(stamps) + grace > self.now:
@@ -730,6 +734,7 @@ class Cleaner:
         stamp = snap["@claude_state_ts"]
         if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
             return False
+        stamp = str(max(int(stamp), int(snap.get("work_at") or 0)))
         transfer = snap["@agent_transfer_until"]
         if transfer and (not transfer.isdigit() or int(transfer) > self.now):
             return False

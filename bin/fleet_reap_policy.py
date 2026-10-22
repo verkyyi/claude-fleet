@@ -499,7 +499,7 @@ def work_changed_locked(fid, task=""):
     import fleet_id
     from fleet_session_gate import fid_dir, write_json
     events = fleet_id.read(fid)
-    work = dict(token=str(uuid.uuid4()), task=task,
+    work = dict(token=str(uuid.uuid4()), task=task, at=int(time.time()),
                 after_seq=max((e.get("seq", 0) for e in events), default=0),
                 attempt=fleet_id.fold(events)["attempt"])
     write_json(fid_dir(fid) / "work.json", work)
