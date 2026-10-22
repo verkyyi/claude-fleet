@@ -555,7 +555,7 @@ var wechatBindTmpl = template.Must(template.New("wechat-bind").Funcs(pageFuncs(i
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"wxbind.title": {i18n.EN: "Link this WeChat · claudefleet", i18n.ZhCN: "挂上这个微信 · claudefleet"},
+		"wxbind.title": {i18n.EN: "Link this WeChat · {brand}", i18n.ZhCN: "挂上这个微信 · {brand}"},
 		"wxbind.h1":    {i18n.EN: "First time with this WeChat", i18n.ZhCN: "第一次用这个微信登录"},
 		"wxbind.lead": {
 			i18n.EN:   "This WeChat isn't on anyone's account here yet. So nobody can sign in as someone they are not, say whose it is first — after that, a scan signs you straight in.",

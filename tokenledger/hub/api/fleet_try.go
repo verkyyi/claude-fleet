@@ -614,7 +614,7 @@ const tryScript = `(function () {
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"try.title": {i18n.EN: "Try it now · ClaudeFleet", i18n.ZhCN: "立即体验 · ClaudeFleet"},
+		"try.title": {i18n.EN: "Try it now · {brand}", i18n.ZhCN: "立即体验 · {brand}"},
 		"try.h1":    {i18n.EN: "Try it now", i18n.ZhCN: "立即体验"},
 		"try.lead": {i18n.EN: "Scan with WeChat and follow 二四网络科技, get a machine, say your first line. The clock runs from the press to the first reply.",
 			i18n.ZhCN: "扫码关注「二四网络科技」、领一台机器、说第一句话。从按下按钮到看到第一句回复，都在计时。"},
@@ -622,10 +622,10 @@ func init() {
 		"try.s2": {i18n.EN: "Get a machine", i18n.ZhCN: "领一台机器"},
 		"try.s3": {i18n.EN: "Say your first line", i18n.ZhCN: "说第一句话"},
 		"try.go": {i18n.EN: "Start the trial", i18n.ZhCN: "开始试用"},
-		"try.fine": {i18n.EN: "ClaudeFleet is open to a limited few for now. A trial is free, on a subscription we provide; one per account. Files made in a trial are not kept.",
-			i18n.ZhCN: "ClaudeFleet 目前限定开放。试用免费，用我们提供的订阅；一个账号试一次。试用里生成的文件不保留。"},
-		"try.tried": {i18n.EN: "You have already had your trial with this account. To keep using ClaudeFleet, apply — the answer usually comes within one working day.",
-			i18n.ZhCN: "这个账号已经试用过了。想长期使用，就申请吧——通常 1 个工作日内答复。"},
+		"try.fine": {i18n.EN: "{brand} is open to a limited few for now. A trial is free, on a subscription we provide; one per account. Files made in a trial are not kept.",
+			i18n.ZhCN: "{brand} 目前限定开放。试用免费，用我们提供的订阅；一个账号试一次。试用里生成的文件不保留。"},
+		"try.tried": {i18n.EN: "You have already had your trial with this account. To keep using {brand}, apply — the answer usually comes within one working day.",
+			i18n.ZhCN: "这个账号已经试用过了。想长期使用 {brand}，就申请吧——通常 1 个工作日内答复。"},
 		"try.applied": {i18n.EN: "You have already had your trial, and your application is in. See where it stands on your application page.",
 			i18n.ZhCN: "这个账号已经试用过了，你的申请也已经交了。在「我的申请」里看进度。"},
 		"try.apply":   {i18n.EN: "Apply to use it", i18n.ZhCN: "申请使用"},

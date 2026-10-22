@@ -25,6 +25,7 @@ import {
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarRail, SidebarSeparator,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
+import { BRAND } from "@/shared/brand";
 import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
@@ -49,7 +50,7 @@ const TitleCtx = createContext<(t: string) => void>(() => {});
 // usePage(title): a page names itself — the tab's title, and a phone's back bar.
 export function usePage(title: string) {
   const setTitle = useContext(TitleCtx);
-  useEffect(() => { document.title = `${title} · ClaudeFleet`; setTitle(title); }, [title, setTitle]);
+  useEffect(() => { document.title = `${title} · ${BRAND}`; setTitle(title); }, [title, setTitle]);
 }
 
 // useBack(): 返回 — the screen before, or the list in place when this tab
@@ -143,9 +144,9 @@ const PersonMenu: FC = () => {
 const Side: FC = () => (
   <Sidebar collapsible="icon" className="border-sidebar-border">
     <SidebarHeader className="flex-row items-center gap-1 px-3 pt-3 pb-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-2">
-      <Link to="/" className="text-foreground flex min-w-0 items-center gap-2 no-underline" aria-label="ClaudeFleet">
+      <Link to="/" className="text-foreground flex min-w-0 items-center gap-2 no-underline" aria-label={BRAND}>
         <Logo className="size-7 shrink-0" />
-        <span className="font-display truncate text-[16px] leading-none font-semibold tracking-tight group-data-[collapsible=icon]:hidden">ClaudeFleet</span>
+        <span className="font-display truncate text-[16px] leading-none font-semibold tracking-tight group-data-[collapsible=icon]:hidden">{BRAND}</span>
       </Link>
       <span className="ms-auto flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">
         <QuotaPillOf />
@@ -203,9 +204,9 @@ const TopBar: FC<{ title: string }> = ({ title }) => {
     <header data-phone-bar={bar} className={cn("border-border/70 bg-background/85 sticky top-0 z-20 flex min-h-14 items-center gap-1 border-b ps-2 pe-2 pb-1 backdrop-blur-md md:hidden",
       viewAs ? "pt-1" : "pt-[calc(env(safe-area-inset-top)+0.25rem)]")}>
       {bar === "list" ? (
-        <Link to="/" className="text-foreground flex min-h-11 items-center gap-2.5 ps-2 no-underline" aria-label="ClaudeFleet">
+        <Link to="/" className="text-foreground flex min-h-11 items-center gap-2.5 ps-2 no-underline" aria-label={BRAND}>
           <Logo className="size-7 shrink-0" />
-          <span className="font-display text-[17px] leading-none font-semibold tracking-tight">ClaudeFleet</span>
+          <span className="font-display text-[17px] leading-none font-semibold tracking-tight">{BRAND}</span>
         </Link>
       ) : (
         <>

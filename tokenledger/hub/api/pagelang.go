@@ -188,8 +188,12 @@ func pageT(loc, key string) string {
 	if !ok {
 		return key
 	}
-	return txt.In(loc)
+	return i18n.Interpolate(txt.In(loc), brandArgs)
 }
+
+// brandArgs fills {brand} in every page text (brand.go); any other placeholder
+// stands for its caller to fill.
+var brandArgs = map[string]string{"brand": Brand}
 
 // langSwitch is the 中文 / EN pair on the public pages' top bar (styled by
 // entryCSS). Plain links: the server does the remembering, so it works with

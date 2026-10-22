@@ -16,13 +16,13 @@ var pageText = map[string]i18n.Text{
 	"lang.label": {i18n.EN: "Language", i18n.ZhCN: "语言"},
 
 	// ── /signin ───────────────────────────────────────────────────────
-	"signin.title":  {i18n.EN: "Sign in · claudefleet", i18n.ZhCN: "登录 · claudefleet"},
+	"signin.title":  {i18n.EN: "Sign in · {brand}", i18n.ZhCN: "登录 · {brand}"},
 	"signin.h1":     {i18n.EN: "Sign in", i18n.ZhCN: "登录"},
 	"signin.lead":   {i18n.EN: "Pick up your chats and sessions. Not on the list yet? Sign in with GitHub, then apply right there.", i18n.ZhCN: "继续你的对话和会话。还不在名单上的，用 GitHub 登录后可以当场申请。"},
 	"signin.button": {i18n.EN: "Continue with GitHub", i18n.ZhCN: "用 GitHub 继续"},
 	"signin.fine": {
-		i18n.EN:   "claudefleet asks GitHub only who you are. It gets no access to your repositories or organizations.",
-		i18n.ZhCN: "claudefleet 只向 GitHub 了解你是谁，拿不到你的仓库和组织。",
+		i18n.EN:   "{brand} asks GitHub only who you are. It gets no access to your repositories or organizations.",
+		i18n.ZhCN: "{brand} 只向 GitHub 了解你是谁，拿不到你的仓库和组织。",
 	},
 	"signin.note.expired": {
 		i18n.EN:   "That sign-in took too long or was started in another tab. Try again.",
@@ -38,7 +38,7 @@ var pageText = map[string]i18n.Text{
 	},
 
 	// ── the refusal ───────────────────────────────────────────────────
-	"deny.title": {i18n.EN: "Can't use this hub · claudefleet", i18n.ZhCN: "不能使用本入口 · claudefleet"},
+	"deny.title": {i18n.EN: "Can't use this hub · {brand}", i18n.ZhCN: "不能使用本入口 · {brand}"},
 	"deny.h1":    {i18n.EN: "This GitHub account can't use this hub", i18n.ZhCN: "这个 GitHub 账号不能使用本入口"},
 	"deny.renamed": {
 		i18n.EN:   "The username {v} is on this hub's list, but it now belongs to a different GitHub account. An admin can check the Users page.",
@@ -80,7 +80,7 @@ var pageText = map[string]i18n.Text{
 		i18n.ZhCN: "这条邀请是发给另一个 GitHub 账号的，不是 {v}。换那个账号登录，或者请人给你单独发一条。",
 	},
 	"deny.another": {i18n.EN: "Use another account", i18n.ZhCN: "换个账号"},
-	"deny.back":    {i18n.EN: "Back to claudefleet", i18n.ZhCN: "回到 claudefleet"},
+	"deny.back":    {i18n.EN: "Back to {brand}", i18n.ZhCN: "回到 {brand}"},
 	"deny.fine": {
 		i18n.EN:   "Response 403 · no session created · the attempt is in the audit log.",
 		i18n.ZhCN: "返回 403 · 没有建立登录 · 这次尝试已记入审计。",
