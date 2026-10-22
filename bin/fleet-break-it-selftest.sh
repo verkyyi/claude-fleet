@@ -6400,6 +6400,14 @@ drill_park_codex_new_thread() {
   WHAT='Codex 优雅退出后保留窗口与身份，接回明确 resume 原 thread 并带入原话'
 }
 
+drill_park_codex_loop_idle() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_codex_looping_without_mod_status_uses_native_idle_proof 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 循环没有 Claude mod 状态时仍由原生 idle 证明决定停放，正在工作的原生 thread 不停'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)
