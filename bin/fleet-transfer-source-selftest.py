@@ -7,6 +7,7 @@ Codex between rounds, #786), the background inventory (#873) and
 `terminate-background` (#871). Isolated: no live tmux or provider calls.
 """
 import contextlib
+import concurrent.futures
 import importlib.util
 import io
 import json
@@ -14,6 +15,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -210,6 +212,37 @@ class QuotaDialog(unittest.TestCase):
                     src.quota_prompt_proof('test', '%2')
             query.return_value = {'ok': True, 'why': ''}
             self.assertTrue(src.quota_prompt_proof('test', '%2')['ok'])
+
+    def test_native_prompt_proof_uses_real_inbox_dispatch_without_probe_seam(self):
+        # Exercise park_proof itself: a mocked proof or command seam masks a
+        # missing agent selector before the native inbox request is even sent.
+        for reply in ({'ok': True, 'why': ''}, {'ok': False, 'why': 'busy'},
+                      {'ok': False, 'why': 'draft'}):
+            with self.subTest(reply=reply), tempfile.TemporaryDirectory() as tmp, \
+                 patch.dict(os.environ, FLEET_CONF_DIR=tmp, FLEET_GATE_PARK_PROBE_CMD=''), \
+                 patch.object(src, 'run', return_value='/sock/test'), \
+                 concurrent.futures.ThreadPoolExecutor(max_workers=1) as worker:
+                future = worker.submit(src.quota_prompt_proof, 'test', '%2')
+                directory = Path(tmp) / 'global/mod-inbox/test/2'
+                end = time.monotonic() + 3
+                pending = []
+                while not pending and not future.done() and time.monotonic() < end:
+                    pending = list(directory.glob('*.json'))
+                    time.sleep(.01)
+                if future.done():
+                    future.result()  # surface dispatch failures, not a timeout
+                self.assertEqual(len(pending), 1, 'native proof request not delivered')
+                request = json.loads(pending[0].read_text())
+                self.assertEqual(request['query'], 'park.v1')
+                self.assertTrue(request['nonce'])
+                self.assertGreater(request['deadline'], time.time())
+                pending[0].unlink()
+                pending[0].with_suffix('.done').write_text(json.dumps(reply))
+                if reply['ok']:
+                    self.assertEqual(future.result(timeout=2), reply)
+                else:
+                    with self.assertRaisesRegex(ValueError, reply['why']):
+                        future.result(timeout=2)
 
     def test_cancellation_is_write_ahead_once_and_never_restamps_or_replays(self):
         source = dict(agent='claude', state='needs', session_id='exact', pid=42)
