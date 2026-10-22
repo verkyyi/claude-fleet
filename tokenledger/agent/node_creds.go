@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,6 +84,11 @@ const (
 	// refusal of a token it holds (claude-fleet#2007): a new one renews at
 	// once instead of at the token's exp, which a revocation does not move.
 	credRejectPoll = time.Minute
+	// credStorePoll is how often a lease loop whose last write found the
+	// credential proxy's store not answering (it restarts: the socket is
+	// refused or gone for a moment) asks it again (claude-fleet T904): once it
+	// answers, the loop leases at once and writes what it could not.
+	credStorePoll = 2 * time.Second
 )
 
 // credLease mirrors the hub's NodeCredentialsResponse.
@@ -210,12 +216,18 @@ func (a *Agent) waitCredLease(ctx context.Context, wait time.Duration) bool {
 		if step > credRejectPoll {
 			step = credRejectPoll
 		}
+		if a.credStoreDown && step > credStorePoll {
+			step = credStorePoll
+		}
 		t := time.NewTimer(step)
 		select {
 		case <-ctx.Done():
 			t.Stop()
 			return false
 		case <-t.C:
+			if a.credStoreDown && a.credStoreAnswers() {
+				return true // the proxy is back: lease and write what it missed
+			}
 		case <-a.credKickCh():
 			// the hub's TypeCreds (claude-fleet#3744): what this login may
 			// lease changed — lease now, not on the clock
@@ -305,6 +317,8 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	written := map[string]int{}
 	failed := 0
 	noStore := 0
+	storeDown := 0
+	var storeErr error
 	// claude-fleet#4675: a subscription credential goes to the credential
 	// proxy's store or nowhere — never into a home (#4643: an agent started
 	// with no store wrote one there, and a login read it for a week).
@@ -331,6 +345,13 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 		}
 		if errors.Is(werr, errNoStore) {
 			noStore++
+			continue
+		}
+		if credStoreUnreachable(werr) {
+			// the proxy is restarting (T904): said once below, written again
+			// when it answers — never one line per account per lease
+			storeDown++
+			storeErr = werr
 			continue
 		}
 		if werr != nil {
@@ -371,6 +392,7 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	if wait < credMinWait {
 		wait = credMinWait
 	}
+	a.noteCredStore(storeDown, storeErr, written)
 	a.credVerdict("ok", "", "", claude)
 	line := credSummary(written, failed, len(lease.Withdrawn))
 	if noStore > 0 {
@@ -378,6 +400,48 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	}
 	a.logCredSummary(line)
 	return wait, nil
+}
+
+// credStoreUnreachable: a write that could not reach the credential proxy's
+// control socket at all — refused, or not there (the proxy between two
+// lives) — as opposed to one it answered no to.
+func credStoreUnreachable(err error) bool {
+	var op *net.OpError
+	return err != nil && errors.As(err, &op) && op.Op == "dial"
+}
+
+// noteCredStore keeps credStoreDown (claude-fleet T904): down says so once,
+// with how many credentials wait; the lease after it answers again says how
+// many were written.
+func (a *Agent) noteCredStore(down int, err error, written map[string]int) {
+	if down > 0 {
+		if !a.credStoreDown {
+			log.Printf("credentials: the credential proxy is not answering (%v) — %d credential(s) will be written once it does", err, down)
+		}
+		a.credStoreDown = true
+		return
+	}
+	if a.credStoreDown {
+		n := 0
+		for _, k := range written {
+			n += k
+		}
+		log.Printf("credentials: the credential proxy answers again — wrote %d credential(s)", n)
+	}
+	a.credStoreDown = false
+}
+
+// credStoreAnswers: one read-only `status` on the proxy's control socket.
+func (a *Agent) credStoreAnswers() bool {
+	if a.cfg.FleetCredStore == "" {
+		return false
+	}
+	as := ""
+	if a.cfg.RunAs != nil {
+		as = a.cfg.RunAs.Login
+	}
+	_, err := credStoreAsk(a.cfg.FleetCredStore, as, map[string]any{"op": "status"})
+	return !credStoreUnreachable(err)
 }
 
 // credKickCh is the wake-up TypeCreds sends the lease loop (one buffered slot:

@@ -279,3 +279,88 @@ func TestNoStoreWritesNothingHome(t *testing.T) {
 		}
 	}
 }
+
+// claude-fleet T904: the shared proxy restarting (its ctl.sock gone, then
+// refused) costs one line, not one per account per lease; the wait asks the
+// socket every credStorePoll and, once it answers, the next lease writes what
+// it missed and says so once.
+func TestCredStoreDownIsSaidOnceAndWrittenWhenBack(t *testing.T) {
+	exp := time.Now().Add(8 * time.Hour).UTC().Truncate(time.Second)
+	body := fmt.Sprintf(`{"principal_id":"p","credentials":[
+	 {"provider":"claude","account":"main","expires_at":%q,"access":{"access_token":"sk-ant-oat01-a"}},
+	 {"provider":"claude","account":"spare","expires_at":%q,"access":{"access_token":"sk-ant-oat01-b"}}]}`,
+		exp.Format(time.RFC3339), exp.Format(time.RFC3339))
+	dir, err := os.MkdirTemp("", "cs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "ctl.sock")
+	a := credAgent(fakeVaultHub(t, 200, body), t.TempDir())
+	a.cfg.FleetCredStore = sock
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	for i := 0; i < 3; i++ { // the socket is not there: three leases, one line
+		if _, err := a.credCycle(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !a.credStoreDown {
+		t.Fatal("a lease whose store is gone did not mark it down")
+	}
+	if n := strings.Count(buf.String(), "not answering"); n != 1 {
+		t.Fatalf("%d «not answering» lines, want 1:\n%s", n, buf.String())
+	}
+	if strings.Contains(buf.String(), "credentials: write") || strings.Contains(buf.String(), "sk-ant-") {
+		t.Fatalf("a per-account line, or a credential, in the log:\n%s", buf.String())
+	}
+
+	// the proxy comes back 300 ms into a 6 h wait: the wait ends within a poll
+	stored := make(chan string, 4)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		l, err := net.Listen("unix", sock)
+		if err != nil {
+			return
+		}
+		t.Cleanup(func() { l.Close() })
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			line, _ := bufio.NewReader(c).ReadBytes('\n')
+			var req map[string]any
+			_ = json.Unmarshal(line, &req)
+			if req["op"] == "store" {
+				stored <- fmt.Sprint(req["label"])
+			}
+			c.Write([]byte(`{"ok":true,"rejected":[]}` + "\n"))
+			c.Close()
+		}
+	}()
+	start := time.Now()
+	if !a.waitCredLease(context.Background(), 6*time.Hour) {
+		t.Fatal("wait ended without the context ending, yet said false")
+	}
+	if d := time.Since(start); d > credStorePoll+3*time.Second {
+		t.Fatalf("the wait took %v after the proxy came back", d)
+	}
+	if _, err := a.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case l := <-stored:
+			got[l] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("stored %v, want main and spare", got)
+		}
+	}
+	if a.credStoreDown || strings.Count(buf.String(), "answers again — wrote 2") != 1 {
+		t.Fatalf("down=%v, log:\n%s", a.credStoreDown, buf.String())
+	}
+}

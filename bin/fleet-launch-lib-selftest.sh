@@ -25,7 +25,9 @@
 #   E  the resume spelling is the table's (claude --resume <id>, codex resume <id>),
 #      and the agent's pending-id option names the thread a resume was opened for
 #   F  the credential proxy refuses alike: 404 ⇒ @launch_refused cred_unknown, any
-#      other failure ⇒ cred — exit 1, the agent never runs
+#      other failure ⇒ cred — exit 1, the agent never runs; a proxy that is only
+#      restarting (T904: fails, then answers within FLEET_CRED_MINT_WAIT) is waited
+#      for — said once, the agent runs on the credential minted after it came back
 #   G  the mint starts early (T683, a cold start ≤ 5 s): it runs beside the composed
 #      configuration (it sees the composer's manifest appear while it is still
 #      minting), its credential reaches the agent, its --wrap is the launcher (the
@@ -225,7 +227,7 @@ for rc in 5 1; do
   printf '#!/bin/sh\nexit %s\n' "$rc" > "$INST/bin/fleet-session-cred.sh"; chmod +x "$INST/bin/fleet-session-cred.sh"
   want=cred; [ "$rc" = 5 ] && want=cred_unknown
   for a in $AGENTS; do
-    fresh; launch FLEET_CRED_SID=sid-test -- --agent "$a" x
+    fresh; launch FLEET_CRED_SID=sid-test FLEET_CRED_MINT_WAIT=1 -- --agent "$a" x
     [ "$(cat "$WORK/rc")" = 1 ] || fail "F $a: mint rc $rc ⇒ exit $(cat "$WORK/rc"), want 1" "$(cat "$WORK/err")"
     [ ! -e "$WORK/argv.$a" ] || fail "F $a: the agent ran after a refused mint"
     [ "$(stamp @launch_refused)" = "$want" ] || fail "F $a: @launch_refused [$(stamp @launch_refused)], want $want"
@@ -233,6 +235,29 @@ for rc in 5 1; do
   done
 done
 ok "F a refused session credential: exit 1, @launch_refused cred / cred_unknown, the agent never runs — both agents"
+# T904: the proxy restarting — two failed mints, then it answers: the launch waits
+cat > "$INST/bin/fleet-session-cred.sh" <<EOF
+#!/bin/sh
+case "\$1" in
+  mint) n=\$(cat "$WORK/mint.n" 2>/dev/null || echo 0); echo \$((n + 1)) > "$WORK/mint.n"
+        [ "\$n" -ge 2 ] || exit 1
+        printf 'direct\t4321\tfcp1.back\n' ;;
+  codex-home) mkdir -p "$WORK/chome"; printf '%s\n' "$WORK/chome" ;;
+  standing) exit 0 ;;
+esac
+EOF
+chmod +x "$INST/bin/fleet-session-cred.sh"
+for a in $AGENTS; do
+  fresh; rm -f "${WORK:?}/mint.n" "${WORK:?}/env.$a"
+  launch FLEET_CRED_SID=sid-test FLEET_CRED_MINT_WAIT=10 -- --agent "$a" x
+  [ "$(cat "$WORK/rc")" = 0 ] && [ -s "$WORK/argv.$a" ] || fail "F $a: a restarting proxy was not waited for" "$(cat "$WORK/err")"
+  grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|FLEET_CODEX_SESSION_CRED)=fcp1\.back$' "$WORK/env.$a" \
+    || fail "F $a: the credential minted after the wait did not reach the agent" "$(cat "$WORK/env.$a")"
+  [ "$(grep -c 'not answering — waiting' "$WORK/err")" = 1 ] || fail "F $a: the wait is not said exactly once" "$(cat "$WORK/err")"
+  ! grep -q fcp1 "$WORK/err" || fail "F $a: the credential reached stderr" "$(cat "$WORK/err")"
+  [ -z "$(stamp @launch_refused)" ] || fail "F $a: refused after the proxy came back"
+done
+ok "F a restarting proxy (T904) is waited for: said once, the agent runs on the credential minted after — both agents"
 
 # ---- G: the mint starts early ------------------------------------------------------------------
 cat > "$INST/bin/fleet-session-cred.sh" <<EOF

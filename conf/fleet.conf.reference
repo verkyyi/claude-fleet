@@ -2268,6 +2268,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # A login opened by bin/fleet-login-new.sh (the hub's account op) gets 1 in its own
 # fleet.conf [common] from the start, with FLEET_CRED_SEPARATE=1 (issue #2294).
 #FLEET_CRED_PROXY=0                # 1 = sessions go through the machine's proxy (bin/fleet-cred-proxy.sh); `fleet-credsep.sh machine install` sets it
+#FLEET_CRED_MINT_WAIT=20           # seconds a launch waits for a proxy that is not answering (restarting) before it refuses (T904)
 # @label=Singapore relay URL @group=disk @tier=internal @scope=global @edit=str
 #FLEET_CRED_RELAY_URL=             # the relay route's base (…/anthropic, …/chatgpt/codex); empty = no relay route
 # @label=Central credential proxy URL @group=disk @tier=internal @scope=global @edit=str
