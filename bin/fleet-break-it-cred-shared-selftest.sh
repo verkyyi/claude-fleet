@@ -31,6 +31,10 @@
 #                       only the paths Codex CLI uses go on; every other path, spelling or
 #                       method is a 403 that never reaches chatgpt.com (the hub's half:
 #                       go test github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy TestCodexPathAllowList)
+#   cred-ctl-burst      bin/fleet_cred_ctl.py connect (T903): a burst of node-token asks past the
+#                       control socket's backlog is retried, not read as «no node token»;
+#                       bin/fleet-cred-proxy.py listens with a backlog of 128 (the agent's half:
+#                       go test ./agent TestRepoAuthoritySyncsBounded)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT / CP are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -561,6 +565,47 @@ assert len(f) == 3 and all(e["sid"] == "s-up" and e["acct"] == "a1" and e["route
     || { WHY="the banner outlived the recovery: $(FLEET_UPSTREAM_STATS_DIR="$us" python3 -I "$BIN/fleet_upstream_stats.py" banner)"; return 1; }
   SECS=$(since "$t0")
   WHAT="上游重置 3 次、超时 1 次、529 两次：统计（0644、无凭据）按类别记下账号 a1 与会话 s-up；doctor 上游行 WARN 写明「连接被重置 3」，看台顶行「上游连不上：连接被重置（3 次）」；再 30 次成功后顶行消失"
+}
+
+# cred-ctl-burst (T903): a reconnect re-pushes every repo to every login of a
+# managed machine, each re-read asks the shared proxy's control socket for its
+# broker pair at once. Past the backlog the connect is refused at once, which
+# read as «no node token here» until the next beat. A fake control socket with a
+# backlog of 1 that answers one ask at a time: 24 asks at once all get the pair.
+drill_cred_ctl_burst() {
+  CAP=20
+  local d t0 i bad=0 srv pids=''
+  d="$WORK/ctlburst"; mkdir -p "$d/conf" "$d/run"
+  printf '{"separated": true, "run": "%s"}\n' "$d/run" > "$d/conf/credsep.json"
+  python3 - "$d/run/ctl.sock" <<'PY' &
+import json, os, socket, sys, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind(sys.argv[1]); s.listen(1)
+s.settimeout(30)
+while True:
+    try:
+        c, _ = s.accept()
+    except OSError:
+        break
+    c.recv(4096); time.sleep(0.02)
+    c.sendall((json.dumps({"ok": True, "url": "http://127.0.0.1:1/hub", "token": "fcpn1.drill"}) + "\n").encode())
+    c.close()
+PY
+  srv=$!
+  until_ok 5 test -S "$d/run/ctl.sock" || { WHY="the fake control socket never listened"; kill "$srv" 2>/dev/null; return 1; }
+  t0=$(now)
+  for i in $(seq 1 24); do
+    ( FLEET_CONF_DIR="$d/conf" python3 -I "$BIN/fleet_cred_ctl.py" node-token > "$d/out.$i" 2>&1; echo $? > "$d/rc.$i" ) &
+    pids="$pids $!"
+  done
+  for i in $pids; do wait "$i"; done
+  for i in $(seq 1 24); do
+    [ "$(cat "$d/rc.$i" 2>/dev/null)" = 0 ] && grep -q 'fcpn1.drill' "$d/out.$i" || bad=$((bad + 1))
+  done
+  kill "$srv" 2>/dev/null; wait "$srv" 2>/dev/null
+  [ "$bad" = 0 ] || { WHY="$bad of 24 asks at once got no broker pair: a full backlog read as no node token"; return 1; }
+  grep -q 'ctl.listen(128)' "$BIN/fleet-cred-proxy.py" || { WHY="the proxy's control socket no longer listens with a backlog of 128"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="控制口 backlog 1、一次答一个：24 个 node-token 同时问，全部拿到 broker 对（被拒的连接退避重试，不再读成「没有节点令牌」）；共享代理的控制口 backlog 128"
 }
 
 cred_run_drills "$0"

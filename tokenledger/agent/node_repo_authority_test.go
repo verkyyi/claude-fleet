@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -89,5 +92,57 @@ func TestRepoAuthorityPushSyncRetryDedup(t *testing.T) {
 	push("", 1)
 	if count() != 5 || runs[4] != "/fleet/bin/fleet-hub-node.sh authority-sync" {
 		t.Fatalf("no-repo push: runs %q", runs)
+	}
+}
+
+// A reconnect re-pushes every repo at once (claude-fleet T903): the re-reads
+// queue on authoritySlots instead of all asking the credential proxy together,
+// and every one still runs.
+func TestRepoAuthoritySyncsBounded(t *testing.T) {
+	a := &Agent{}
+	dir := t.TempDir()
+	old := authorityCommand
+	authorityCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// each run marks itself, counts who else is running, then leaves
+		return exec.CommandContext(ctx, "sh", "-c",
+			`mkdir -p "$1/run"; touch "$1/run/$$"; ls "$1/run" | wc -l >> "$1/seen"; sleep 0.1; rm "$1/run/$$"`, "_", dir)
+	}
+	t.Cleanup(func() { authorityCommand = old })
+	ctx := context.Background()
+	for i := 0; i < 8; i++ {
+		m, _ := control.New(control.TypeRepoAuthority, control.RepoAuthority{Repo: "org/r" + string(rune('a'+i)), Mode: "hub", Revision: 2})
+		a.handleRepoAuthority(ctx, "/fleet/bin/fleet-hub-node.sh", m)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		a.authority.mu.Lock()
+		synced := 0
+		for _, w := range a.authority.repos {
+			if w.done == 2 {
+				synced++
+			}
+		}
+		a.authority.mu.Unlock()
+		if synced == 8 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of 8 re-reads synced", synced)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "seen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := strings.Fields(string(b))
+	peak := 0
+	for _, f := range seen {
+		if n, _ := strconv.Atoi(f); n > peak {
+			peak = n
+		}
+	}
+	if len(seen) != 8 || peak > 2 {
+		t.Fatalf("runs %d, peak %d at once — want 8 runs, at most 2 at once", len(seen), peak)
 	}
 }
