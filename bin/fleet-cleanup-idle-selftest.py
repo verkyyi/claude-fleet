@@ -4,7 +4,7 @@
 # selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_only_its_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn PinIsOrder.test_a_pin_set_later_keeps_its_window PolicyGrammar.test_norm_default_label StuckReaps.test_another_repos_pass_leaves_the_countdown
 # selftest-part: 6 ReapPolicy.test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work TaskSession.test_closed_record_reaps_after_grace_keeping_the_worktree TaskSession.test_untracked_only_does_not_hold_a_closed_record_but_a_tracked_change_does
 # selftest-part: 7 RoundTrip.test_codex_close_and_restore_keeps_exact_identity WebPark.test_zero_never_parks_and_memory_parks_the_oldest_first
-# selftest-part: 8 RoundTrip.test_missing_transcript_and_failed_ledger_do_not_close
+# selftest-part: 8 RoundTrip.test_missing_transcript_and_failed_ledger_do_not_close ParkTable.test_activity_and_keep_hold_expiration
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
 import time
@@ -1307,18 +1307,12 @@ class TaskSession(Rig):
 class HoldsAndWhy(TaskSession):
     """E101: a finished task's background job holds its window only
     FLEET_REAP_BG_GRACE past its last turn; a session waiting on its person is
-    parked after FLEET_REAP_PARK_SECS (a keep it set itself too, a person's never);
+    parked by the common gate and reaped after three days with resumable history;
     a window its agent's error stopped is never closed; and every window the pass
     leaves open carries why (@reap_why), cleared once it is working."""
 
     def setUp(self):
         super().setUp()
-        self.parks = self.root / "parks"
-        seam = self.root / "park"
-        seam.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> " + shlex.quote(str(self.parks)) + "\n")
-        seam.chmod(0o755)
-        self.env["FLEET_TASK_PARK_CMD"] = str(seam)
-        self.env["FLEET_REAP_PARK_SECS"] = "3600"
         self.asked = self.root / "asked"
         closed = self.root / "task-closed"           # the record's hold words too (fleet_task_control.py closed)
         closed.write_text("#!/bin/sh\nread rc < " + shlex.quote(str(self.answer)) + "\n"
@@ -1372,41 +1366,49 @@ class HoldsAndWhy(TaskSession):
         self.assertEqual(self.why(), "")
 
     def test_waiting_on_its_person_parks_after_its_hours(self):
-        """B2XT / CRFW: a session that asked its person sat in 排队中 for a day."""
+        """C6/E101: same window when parked; 3d later history proves resume first."""
         self.answer.write_text("1\n")
         self.result("waiting")
-        turn = int(time.time()) - 600
-        self.set("@claude_state_ts", str(turn))
-        for keep_by in ("", "session"):            # no policy of its own · a keep it set itself
-            with self.subTest(keep_by=keep_by):
-                if keep_by:
-                    self.set("@reap_policy", "keep")
-                    self.set("@reap_keep_by", keep_by)
-                self.set("@reap_skip", "")
-                out = self.due()
-                self.assertIn("skip:waiting " + self.win, out)
-                self.assertTrue(self.exists())
-                self.assertEqual(self.why(), "waiting:%d" % (turn + 3600))
-        self.set("@reap_keep_by", "person")        # a person's keep: never parked, says so
-        self.set("@reap_skip", "")
-        out = self.due()
-        self.assertNotIn("waiting", out)
-        self.assertEqual(self.why(), "keep")
-        self.set("@reap_keep_by", "session")
-        self.set("@claude_state_ts", str(int(time.time()) - 4000))
-        out = self.due()
-        self.assertIn("parked:" + self.win + " scratch-7 T42", out)
+        self.set("@park_wrap_ver", "1")
+        self.set("@reap_origin", "decide")
+        self.set("@claude_state_ts", str(int(time.time()) - 600))
+        self.env["FLEET_PARK_MEM_FREE"] = "50"
+        # The native park gate is covered by fleet-park-selftest.py. This seam
+        # acknowledges the park in the same real tmux window, never closes it.
+        gate = self.root / "gate"
+        gate.write_text("#!/bin/sh\n" +
+                        "tmux -L " + shlex.quote(self.label) + " set-option -w -t " + self.win + " @parked 1\n" +
+                        "tmux -L " + shlex.quote(self.label) + " set-option -w -t " + self.win + " @park_held 1\n" +
+                        "tmux -L " + shlex.quote(self.label) + " set-option -w -t " + self.win + " @park_since $(date +%s)\n" +
+                        "echo '{\"ok\":true}'\n")
+        gate.chmod(0o755)
+        self.env["FLEET_SESSION_GATE_CMD"] = str(gate)
+        self.env["FLEET_SESSION_REAP_PARKED"] = "3d"
+        out = self.clean()
+        self.assertIn("parked-web:" + self.win, out)
+        self.assertTrue(self.exists())
+        self.clean()
+        self.assertRegex(self.why(), r"^timer:\d+$")
+        old = str(int(time.time()) - 3 * 86400 - 600)
+        self.set("@park_since", old)
+        self.set("@claude_state_ts", old)
+        # A pending wake wins over expiry; no history or close under that wake.
+        self.set("@park_wake", "/pending-seed")
+        self.assertNotIn("reaped-parked", self.clean())
+        self.assertTrue(self.exists())
+        self.set("@park_wake", "")
+        out = self.clean()
+        self.assertIn("reaped-parked:" + self.win + " scratch-7", out)
         self.assertFalse(self.exists())
         self.assertTrue(self.wt.is_dir())
-        self.assertEqual(self.parks.read_text(), "T42\n")
-        self.assertIn("Parked: waiting on its person's reply", (self.root / "ledger.tsv").read_text())
+        self.assertIn("Reaped after parked retention", (self.root / "ledger.tsv").read_text())
 
     def test_the_record_asking_is_waiting_too(self):
         self.answer.write_text("1\n")
         self.set("@claude_state_ts", str(int(time.time()) - 600))
         self.asked.write_text("")
         self.due()
-        self.assertTrue(self.why().startswith("waiting:"))
+        self.assertEqual(self.why(), "waiting")
         self.asked.unlink()
         self.set("@reap_skip", "")
         self.due()
@@ -2158,6 +2160,69 @@ class StuckReaps(unittest.TestCase):
         opts["@agent_status"] = st("working")
         with self.assertRaises(ValueError):
             notice(tm, "@1", "merged:9:abc", 0, 600)
+
+
+
+class ParkTable(unittest.TestCase):
+    """C6: drive fleet-cleanup-idle.py and fleet_reap_policy.py for every origin.
+    The E101 real tmux/history round trip below proves the close is resumable.
+    """
+    def test_each_origin_has_a_park_and_reap_column(self):
+        rp = idle.fleet_reap_policy
+        for origin, reap in (("person", "parked"), ("dispatched", "reported"),
+                             ("member", "reported"), ("driver", "batch"),
+                             ("orchestrator", "never"), ("decide", "parked"),
+                             ("probe", "done"), ("web", "never")):
+            with self.subTest(origin=origin):
+                self.assertEqual(rp.ORIGINS[origin]["park"], "idle")
+                self.assertEqual(rp.ORIGINS[origin]["reap"], reap)
+
+    def test_activity_and_keep_hold_expiration(self):
+        rp = idle.fleet_reap_policy
+        snap = {"@reap_origin": "decide", "@park_wrap_ver": "1", "@parked": "100",
+                "@park_held": "1", "@park_since": "100", "@park_presence": "200"}
+        with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": str(366 * 86400)}):
+            self.assertEqual(rp.reap_parked_secs(), 366 * 86400)
+        with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "1h"}):
+            self.assertEqual(rp.parked_deadline(snap), 3800)
+            finished = {"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "looping",
+                        "@agent_status": '{"state":"done"}', "@claude_state_ts": "100"}
+            self.assertIn("next=park@", rp.explain(finished, now=200))
+            for opts in ({"@pin": "1"}, {"@reap_policy": "keep", "@reap_keep_by": "person"}):
+                self.assertIsNone(rp.parked_deadline(dict(snap, **opts)))
+
+    def test_driver_reads_every_origin_without_closing_early(self):
+        args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
+                                  base="master", window_repo=False, dry_run=True)
+        c = idle.Cleaner(args)
+        c.now = 200
+        for origin in idle.fleet_reap_policy.ORIGINS:
+            with self.subTest(origin=origin):
+                snap = {"@reap_origin": origin, "@park_wrap_ver": "1", "@parked": "100",
+                        "@park_held": "1", "@park_since": "100", "@claude_state_ts": "90"}
+                with patch.object(c, "policy", return_value=("merged", 0)), patch.object(c, "work_over", return_value=True):
+                    result = c.parked("@9", snap)
+                if origin in ("dispatched", "member", "driver", "probe"):
+                    self.assertIsNone(result)  # completion/unreported policy still runs
+                else:
+                    self.assertFalse(result)  # retention or permanent keep
+
+
+    def test_park_expiry_and_doctor_share_the_deadline(self):
+        rp = idle.fleet_reap_policy
+        snap = {"@reap_origin": "person", "@park_wrap_ver": "1", "@parked": "100",
+                "@park_held": "1", "@park_since": "100", "@claude_state_ts": "90"}
+        with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "3d"}):
+            self.assertEqual(rp.parked_deadline(snap), 259300)
+            self.assertIn("1970-01-04T00:01:40Z", rp.explain(snap, now=200))
+            self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "merged"})))
+            self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "done:10m"})))
+            snap["@reap_origin"] = "orchestrator"
+            self.assertIsNone(rp.parked_deadline(snap))
+            self.assertIn("keep", rp.explain(snap, now=200))
+            snap["@reap_origin"] = "person"
+            snap["@park_held"] = ""
+            self.assertIsNone(rp.parked_deadline(snap))
 
 
 if __name__ == "__main__":

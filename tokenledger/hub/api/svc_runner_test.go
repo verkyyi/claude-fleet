@@ -32,6 +32,12 @@ func svcEnvRig(t *testing.T) (*harness, *fakeOps, string) {
 	h.srv.SessionCredKey = bytes.Repeat([]byte{9}, 32)
 	h.srv.SvcRunner = NewClusterSvcRunner(h.srv, testCluster)
 	tok := svcSetup(t, h, "livepage", "runs:write runs:read templates:write")
+	if st, out := h.post(t, CredPolicyPath, map[string]any{"scope": "user", "id": "svc:livepage", "all": true}); st != 200 {
+		t.Fatalf("allow test service: %d %v", st, out)
+	}
+	if err := h.srv.Store.PutCredential("svc:livepage", "claude", "test-account", []byte("test-only"), "oauth", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.srv.Store.PutSvcTemplate(store.SvcTemplate{Principal: "svc:livepage", Digest: svcTestDigest,
 		Name: "daily", AgentMD: svcTestAgent}, time.Now()); err != nil {
 		t.Fatal(err)
