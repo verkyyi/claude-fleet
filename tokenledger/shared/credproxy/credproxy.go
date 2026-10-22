@@ -127,7 +127,7 @@ type HubResolver struct {
 // Resolve posts {cred, provider} to the hub. A transport error or a 5xx is
 // ErrHubUnavailable; any other non-200 is a configuration error.
 func (h *HubResolver) Resolve(ctx context.Context, pass, provider string) (Resolution, error) {
-	return h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: provider})
+	return h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: provider, RequestBoundary: provider == Codex})
 }
 
 func (h *HubResolver) resolveRequest(ctx context.Context, request ResolveRequest) (Resolution, error) {

@@ -26,9 +26,11 @@ func (rejection AccessRejection) Valid() bool {
 }
 
 type ResolveRequest struct {
-	Cred     string           `json:"cred"`
-	Provider string           `json:"provider"`
-	Rejected *AccessRejection `json:"rejected,omitempty"`
+	// Set only before a NEW request is sent, never by an auth-error refresh.
+	RequestBoundary bool             `json:"request_boundary,omitempty"`
+	Cred            string           `json:"cred"`
+	Provider        string           `json:"provider"`
+	Rejected        *AccessRejection `json:"rejected,omitempty"`
 }
 
 type AccessRejecter interface {
@@ -111,6 +113,11 @@ func (p *Proxy) refreshRejected(ctx context.Context, response *http.Response, pa
 		return response
 	}
 	p.remember(pass, provider, refreshed)
+	if refreshed.Owner != resolved.Owner || refreshed.Account != resolved.Account {
+		// An authorization change may have replaced the binding while the
+		// refusal was handled. Never replay this body on another account.
+		return response
+	}
 	again, err := send(refreshed)
 	if err != nil {
 		return response

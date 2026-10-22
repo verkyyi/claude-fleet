@@ -133,7 +133,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now)
+	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now, req.RequestBoundary && req.Rejected == nil)
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
 		if req.Provider == credvault.Claude && errors.Is(err, errNoProviderAccount) {
@@ -266,9 +266,11 @@ func (s *Server) noBindWhy(principal, endpointID, provider string) string {
 }
 
 // sessionBind is the session's binding for provider, picked (and kept) on
-// first use. A binding whose account is no longer the person's to use — the
+// first use. Codex can be reconsidered before a new request (quota policy,
+// minimum hold, revision CAS); in-flight requests keep their own lease. A
+// binding whose account is no longer the person's to use — the
 // row was deleted, or it is another person's — is picked again.
-func (s *Server) sessionBind(workerID, principal, endpointID, provider string, now time.Time) (store.SessionBind, error) {
+func (s *Server) sessionBind(workerID, principal, endpointID, provider string, now time.Time, requestBoundary ...bool) (store.SessionBind, error) {
 	choices, err := s.sessionBindChoices(principal, endpointID, provider)
 	if err != nil {
 		return store.SessionBind{}, err
@@ -283,6 +285,16 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 	}
 	b, err := s.Store.SessionBindFor(workerID, provider)
 	if err == nil && allowed(b.Owner, b.Account) {
+		if provider == credvault.Codex && !isSvcPrincipal(principal) {
+			candidate, _ := s.codexSelect(choices, b, now, len(requestBoundary) > 0 && requestBoundary[0])
+			if candidate.PrincipalID != b.Owner || candidate.Account != b.Account {
+				actual, err := s.Store.CompareSessionBind(store.SessionBind{WorkerID: workerID, Provider: provider, Owner: candidate.PrincipalID, Account: candidate.Account, SetBy: "credproxy:quota"}, b.Rev, now)
+				if err == nil {
+					log.Printf("credproxy selection committed: worker_id=%s expected_rev=%d actual_rev=%d owner=%s account=%s", workerID, b.Rev, actual.Rev, actual.Owner, actual.Account)
+				}
+				return actual, err
+			}
+		}
 		return b, nil
 	}
 	if err != nil && !errors.Is(err, store.ErrNoSessionBind) {
@@ -301,7 +313,13 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 			return b, errors.New("the pool is tight: " + principal + " yields every account near its limit to people")
 		}
 	}
-	choices = s.byHeadroom(choices, now) // one at its limit last (claude-fleet#2115)
+	if provider == credvault.Codex {
+		candidate, _ := s.codexSelect(choices, b, now, false)
+		// b may refer to an account removed from the authorized choices.
+		choices = []store.Credential{candidate}
+	} else {
+		choices = s.byHeadroom(choices, now)
+	}
 	pick := store.SessionBind{WorkerID: workerID, Provider: provider, Owner: choices[0].PrincipalID,
 		Account: choices[0].Account, SetBy: "auto"}
 	if err == nil { // the bound account went away: re-pick, counted as a rebind
