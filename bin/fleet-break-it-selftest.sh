@@ -6383,6 +6383,15 @@ drill_wake_peer_report() {
   WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
 }
 
+drill_park_drops_dialog() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_dialog_guard_all_park_routes \
+        Park.test_dialog_appears_after_native_proof 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='选择框超 30 分钟及内存紧也拒停；旧 done、loop 和证明期间出现的问题不接收 /exit，题干选项原文保持'
+}
+
 drill_park_all_origins() {
   CAP=60; local t0 out
   t0=$(now)

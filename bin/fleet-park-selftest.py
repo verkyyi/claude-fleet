@@ -167,6 +167,85 @@ while True:
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
 
+    def dialog_transcript(self):
+        path = self.root / 'question.jsonl'
+        path.write_text(json.dumps({'message': {'content': [{
+            'type': 'tool_use', 'id': 'question-1', 'name': 'AskUserQuestion',
+            'input': {'questions': [{'question': 'Pick a colour', 'header': 'Colour',
+                                    'options': [{'label': 'Blue'}, {'label': 'Red'}]}]}
+        }]}}) + '\n')
+        return path
+
+    def test_dialog_guard_all_park_routes(self):
+        # A native question can outlive a stale done stamp. Both the timer and
+        # memory-pressure driver must reach the same refusal, even after 30m.
+        from types import SimpleNamespace
+        self.fake()
+        transcript = self.dialog_transcript()
+        original = transcript.read_bytes()
+        cases = [('needs', 'ask', '', ''), ('done', 'ask', '', ''),
+                 ('done', 'permission', '', ''), ('done', '', 'blocked', ''),
+                 ('done', '', 'blocked', 'timer'), ('native', '', '', '')]
+        for state, needs, word, loop in cases:
+            for via in ('idle', 'memory', 'driver-idle', 'driver-memory'):
+                with self.subTest(state=state, needs=needs, word=word, loop=loop, via=via):
+                    self.set('@claude_state', 'done' if state == 'native' else state)
+                    self.set('@claude_needs', needs)
+                    self.set('@agent_status', json.dumps({'state': word}))
+                    self.set('@loop', loop)
+                    self.set('@claude_state_ts', str(int(time.time()) - 3601))
+                    exits = []
+
+                    def relay(w, request):
+                        if request['op'] == 'exit':
+                            exits.append(request)
+                            return {'ok': False, 'why': 'test_no_exit'}
+                        return {'ok': True, 'generation': 1}
+
+                    with patch.dict(os.environ, self.env), \
+                            patch.object(gate, 'claude_transcript', return_value=transcript if state == 'native' else None), \
+                            patch.object(gate, 'relay_request', side_effect=relay):
+                        if via.startswith('driver-'):
+                            args = SimpleNamespace(socket_name=self.label, session='test',
+                                                   window_repo=False, repo='', dry_run=False)
+                            driver = reap.Cleaner(args)
+                            driver.now = int(time.time())
+                            driver.mem_tight = via == 'driver-memory'
+                            driver._park_watched = set()
+                            snap = driver.snapshot(self.win)
+
+                            def run_gate(*argv):
+                                self.assertIn('park', argv)
+                                return json.dumps(gate.park(self.fid, why=argv[-1]))
+
+                            with patch.object(driver, 'busy', return_value=False), \
+                                    patch.object(reap, 'run', side_effect=run_gate):
+                                self.assertFalse(driver.web_park(self.win, snap))
+                        else:
+                            result = gate.park(self.fid, why=via)
+                            self.assertFalse(result['ok'], result)
+                    self.assertEqual(exits, [], '/exit must never be injected into a choice')
+                    self.assertFalse(self.opt('@parked'))
+                    self.assertTrue(self.opt('@park_relay'))
+                    self.assertEqual(transcript.read_bytes(), original, 'question/options changed')
+
+    def test_dialog_appears_after_native_proof(self):
+        self.fake()
+        transcript = self.root / 'question.jsonl'
+        with patch.dict(os.environ, self.env), \
+                patch.object(gate, 'claude_transcript', return_value=transcript), \
+                patch.object(gate, 'relay_request', return_value={'ok': True, 'generation': 1}) as relay:
+            def proof(w):
+                self.dialog_transcript()
+                return {'ok': True}
+            with patch.object(gate, 'park_proof', side_effect=proof):
+                result = gate.park(self.fid, why='memory')
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(any(c.args[1]['op'] == 'exit' for c in relay.call_args_list),
+                         '/exit reached a question opened during the idle proof')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
     def test_local_child_report_wakes_parent(self):
         # fleet-report-parent.sh must reach the gate before its missing-PID
         # fallback. This drives the report producer, not only queue replay.
