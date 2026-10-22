@@ -68,10 +68,15 @@ class QuotaSettled(unittest.TestCase):
         for key, bad in ((0, 'working'), (1, 'classifier'), (2, '{"state":"working"}'),
                          (3, 'perm'), (4, 'tool'), (5, 'loop'), (6, '1')):
             value = list(fields); value[key] = bad
-            with patch.object(src, 'run', return_value='\x1f'.join(value + ['END'])):
+            with patch.object(src, 'run', return_value='\t'.join(value + ['END'])):
                 with self.assertRaises(ValueError): src.quota_marks('test', '%2')
-        with patch.object(src, 'run', return_value='\x1f'.join(fields + ['END'])):
+        with patch.object(src, 'run', return_value='\t'.join(fields + ['END'])):
             self.assertEqual(src.quota_marks('test', '%2'), fields)
+        # A missing delimiter / truncated read cannot admit a quota boundary.
+        for raw in ('exited7501END', '\t'.join(fields), '\t'.join(fields + ['extra', 'END'])):
+            with patch.object(src, 'run', return_value=raw):
+                with self.assertRaisesRegex(ValueError, 'metadata is incomplete'):
+                    src.quota_marks('test', '%2')
 
 
 class Settled(unittest.TestCase):

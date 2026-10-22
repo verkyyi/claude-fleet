@@ -40,11 +40,15 @@ if [ -f "$BIN/fleet-client-core.sh" ]; then
     if [ -z "$sess" ] && [ -n "${TMUX:-}" ]; then sess=$(fleet_current_session 2>/dev/null); fi
     [ -n "$sess" ] && fleet_load_conf "$sess" >/dev/null 2>&1
   else
-    # Same global precedence on a pure client, which has no fleet overlay.
-    for conf in "$FLEET_CONF_DIR/hub-defaults.conf" "$BIN/../fleet.conf" "$FLEET_CONF_DIR/fleet.settings" "$FLEET_CONF_DIR/fleet.conf"; do
-      # shellcheck source=/dev/null
-      [ ! -f "$conf" ] || . "$conf" >/dev/null 2>&1
-    done
+    # A pure client needs only the session default. Keep machine-only hook
+    # controls unresolved when the machine library is missing (fail closed).
+    FLEET_AGENT=$(
+      for conf in "$FLEET_CONF_DIR/hub-defaults.conf" "$BIN/../fleet.conf" "$FLEET_CONF_DIR/fleet.settings" "$FLEET_CONF_DIR/fleet.conf"; do
+        # shellcheck source=/dev/null
+        [ ! -f "$conf" ] || . "$conf" >/dev/null 2>&1
+      done
+      printf '%s' "${FLEET_AGENT:-}"
+    )
   fi
 fi
 

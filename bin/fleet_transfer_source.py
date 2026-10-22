@@ -90,10 +90,12 @@ def settled(session, pane):
 
 
 def quota_marks(session, pane):
-    fmt = '\x1f'.join('#{@' + k + '}' for k in
+    # Tabs are the shared gate's portable tmux field delimiter. Older tmux
+    # renders control separators (US) visibly instead of returning their byte.
+    fmt = '\t'.join('#{@' + k + '}' for k in
                        ('claude_state', 'claude_state_src', 'agent_status', 'claude_needs',
                         'claude_wait', 'loop', 'parked'))
-    fields = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, fmt + '\x1fEND']).split('\x1f')
+    fields = run(['tmux', '-L', session, 'display-message', '-p', '-t', pane, fmt + '\tEND']).split('\t')
     if len(fields) != 8 or fields.pop() != 'END':
         raise ValueError('quota source metadata is incomplete')
     native = json.loads(fields[2] or '{}')
