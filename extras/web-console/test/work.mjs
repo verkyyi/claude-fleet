@@ -148,3 +148,11 @@ console.log('ok work.mjs');
  assert.deepEqual(r.tag,facts.words);
  assert.equal(GROUPS.find(x=>x.g==='queue').label[1],'Pending / retained');
 }
+
+// An operation receipt proves dispatch, not a live worker or undispatched plan.
+{
+ const [r] = buildRows([v1({id:'T99', title:'accepted operation',task_state:'accepted',operation_id:'op-test'})],[],[]);
+ assert.deepEqual(r.tag,['看不到会话','Session not seen']);
+ const [starting] = buildRows([v1({id:'T100', title:'starting operation',task_state:'starting',operation_id:'op-test'})],[],[]);
+ assert.equal(starting.tag[1],'Starting');
+}

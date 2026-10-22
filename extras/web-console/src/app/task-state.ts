@@ -4,7 +4,7 @@ export type Task = {
   // id is T<n>, the record's old number (compat-1v: 下一批删); fid is the task's
   // ID and short its written code (EPIC T644 C1) — the one number a person reads.
   id: string; fid?: string; short?: string; task?: string; title: string; via?: string; device?: string; repo?: string;
-  session_key?: string; worker_id?: string; state?: string; task_state?: string;
+  session_key?: string; worker_id?: string; operation_id?: string; state?: string; task_state?: string;
   issue?: string; ticket_ref?: string; parked?: string; asked?: string;
   created_at: string; updated_at?: string; authority_version?: number;
   generation?: number; outcome?: string; cancel_request?: string;

@@ -384,6 +384,10 @@ func TestBoardPlanFacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	set("UPDATE fleet_tasks SET operation_id='op-accepted' WHERE id=?", child.ID)
+	if r = read(nil); r.Tag != "not_seen" || r.Context[0] != "" || r.AgentBasis == "planned" {
+		t.Fatalf("accepted dispatch without a worker is not undispatched: %+v", r)
+	}
 	set("UPDATE fleet_tasks SET state='starting' WHERE id=?", child.ID)
 	if r = read(nil); r.Tag != "starting" || r.AgentBasis != "planned" {
 		t.Fatalf("starting: %+v", r)
@@ -413,7 +417,8 @@ func TestBoardPlanFacts(t *testing.T) {
 		t.Fatalf("new work after result: %+v", r)
 	}
 	live[0].Worker["state"] = "idle"
-	if r = read(live); r.Tag != "retained_completed" {
+	live[0].Worker["reap_why"] = "keep"
+	if r = read(live); r.Tag != "retained_completed" || r.Words[0] != "已完成 · 保留中" || r.Why[0] != "不会自动收：你设了保留" {
 		t.Fatalf("completed retained: %+v", r)
 	}
 	push(event("closed", 3, "claude"))

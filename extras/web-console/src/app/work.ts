@@ -85,7 +85,7 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
   if (s === "working" || s === "looping")
     return { ...base, group: "work", tag: ["在干活", "Working"], glyph: "work", tone: "ok", line: say(live?.say) };
   if (live && (st === "succeeded" || st === "cancelled"))
-    return { ...base, group: "queue", tag: st === "succeeded" ? ["已完成 · 待回收", "Completed · retained"] : ["已取消", "Cancelled"], glyph: "done", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
+    return { ...base, group: "queue", tag: st === "succeeded" ? ["已完成 · 保留中", "Completed · retained"] : ["已取消", "Cancelled"], glyph: "done", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
   // 排队中: open, waiting on something that is not you
   if (live) {
     if (pr && t?.pr_state === "waiting") return { ...base, group: "queue", tag: ["等合并", "Awaiting merge"], glyph: "pr", tone: "muted", line: say(t.evidence) };
@@ -94,8 +94,8 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
     return { ...base, group: "queue", tag: ["状态未知", "Unknown"], glyph: "idle", tone: "muted", line: "" };
   }
   if (t && taskOpen(t)) {
-    const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" ? ["未派发", "Not dispatched"]
-      : st === "running" || st === "waiting" ? ["看不到会话", "Session not seen"] : ["还不清楚", "Unknown"];
+    const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" && !t.operation_id && !t.worker_id ? ["未派发", "Not dispatched"]
+      : st === "running" || st === "waiting" || !!t.operation_id || !!t.worker_id ? ["看不到会话", "Session not seen"] : ["还不清楚", "Unknown"];
     return { ...base, group: "queue", tag, glyph: "wait", tone: "muted", line: say(t.evidence) };
   }
   // 已收起: the record closed, or a session put away

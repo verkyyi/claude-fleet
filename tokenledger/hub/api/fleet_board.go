@@ -115,7 +115,7 @@ var boardWords = map[string][2]string{
 	"asking": {"在问你", "Asking you"}, "failed": {"没做成", "Failed"}, "refused": {"没开成", "Didn't start"},
 	"waiting_you": {"在等你", "Waiting on you"}, "working": {"在干活", "Working"}, "looping": {"在循环", "Looping"},
 	"completed": {"已完成", "Completed"}, "cancelled": {"已取消", "Cancelled"}, "turn_done": {"本轮结束", "Turn ended"},
-	"retained_completed": {"已完成 · 待回收", "Completed · retained"}, "session_parked": {"已停放", "Parked"},
+	"retained_completed": {"已完成 · 保留中", "Completed · retained"}, "session_parked": {"已停放", "Parked"},
 	"idle": {"空闲", "Idle"}, "unknown": {"状态未知", "Unknown"}, "starting": {"正在开", "Starting"},
 	"queued": {"未派发", "Not dispatched"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
 	"ended": {"已结束", "Ended"}, "ended_no_result": {"结束·没交回结果", "Ended · no result"},
@@ -448,7 +448,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Group, r.Tag, r.At = "gone", "ended_no_result", b.Closed
 		case end == "" && t.AuthorityVersion == store.TaskAuthorityVersion:
 			r.Group, r.Tag = "queue", "not_seen"
-			if t.State == store.TaskAccepted && t.WorkerID == "" && r.Agent == "" {
+			if t.State == store.TaskAccepted && t.WorkerID == "" && t.OperationID == "" && r.Agent == "" {
 				r.Tag = "queued"
 			}
 			if t.State == store.TaskStarting {
