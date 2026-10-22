@@ -26,6 +26,7 @@ const ClientDefaultsPrefix = "fleet.client_defaults."
 // clientDefaultKeys is the whitelist: what the client (fleet-shell.sh and the
 // pieces it starts) reads, none of it a secret, none of it an address.
 var clientDefaultKeys = map[string]bool{
+	"FLEET_AGENT":                      true,
 	"FLEET_UI_LANG":                    true,
 	"FLEET_NODE_ALIASES":               true,
 	"FLEET_SHELL_PREFIX":               true,
@@ -56,6 +57,9 @@ func clientDefaultCheck(key, value string) string {
 	name := strings.TrimPrefix(key, ClientDefaultsPrefix)
 	if !clientDefaultKeys[name] {
 		return "client default " + name + " is not settable; the keys are " + strings.Join(clientDefaultKeyList(), ", ")
+	}
+	if name == "FLEET_AGENT" && value != "" && !codingAgentOK(value) {
+		return "FLEET_AGENT is claude | codex, or empty for the existing default"
 	}
 	if !clientDefaultValueRE.MatchString(value) {
 		return "a client default is one line of at most 200 letters, digits, spaces and ._:=,@/+%-"

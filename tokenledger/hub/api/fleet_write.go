@@ -836,6 +836,21 @@ func (s *Server) SubmitWrite(ctx context.Context, p fleetPrincipal, tool string,
 // /v1/node/place, claude-fleet#1425): the start goes to args' fleet_id and the
 // journal keeps placed as the operation's placement.
 func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string, args map[string]any, placed *Placement) (map[string]any, error) {
+	if tool == "worker_start" && (args["coding_agent"] == nil || args["coding_agent"] == "") &&
+		(args["agent"] == nil || args["agent"] == "") && args["dispatch"] == nil {
+		d, err := s.resolveStartDispatch("", "", nil, asString(args["idempotency_key"]))
+		if err != nil {
+			return nil, err
+		}
+		if d != nil {
+			copyArgs := make(map[string]any, len(args)+1)
+			for k, v := range args {
+				copyArgs[k] = v
+			}
+			copyArgs["dispatch"] = d
+			args = copyArgs
+		}
+	}
 	w, idem, err := parseWrite(tool, args)
 	if err != nil {
 		return nil, err

@@ -2,12 +2,42 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
+
+func TestConfiguredDefaultCodingAgent(t *testing.T) {
+	h, _, target, _, _ := twoNodesCaps(t, control.CapLaunch)
+	putSetting(t, h, ClientDefaultsPrefix+"FLEET_AGENT", "invalid", http.StatusBadRequest)
+	putSetting(t, h, ClientDefaultsPrefix+"FLEET_AGENT", "codex", http.StatusOK)
+	defaults, _ := getClientSettings(t, h)
+	if defaults["FLEET_AGENT"] != "codex" {
+		t.Fatal(defaults)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"repo": writeRepo, "kind": "scratch", "idempotency_key": "default-codex"}, 200)
+	p := target.writes[0]["params"].(map[string]any)
+	d := p["dispatch"].(map[string]any)
+	if p["agent"] != "codex" || d["requested_agent"] != "default" || d["agent_source"] != "fleet" {
+		t.Fatalf("omitted choice did not use configured default: %v", p)
+	}
+	putSetting(t, h, ClientDefaultsPrefix+"FLEET_AGENT", "claude", http.StatusOK)
+	accepted, err := h.srv.resolveStartDispatch("", "", d, "default-codex")
+	if err != nil || accepted.ResolvedAgent != "codex" {
+		t.Fatalf("default change rewrote accepted work: %+v %v", accepted, err)
+	}
+	explicit, err := h.srv.resolveStartDispatch("codex", "", nil, "explicit-codex")
+	if err != nil || explicit.ResolvedAgent != "codex" || explicit.AgentSource != "explicit" {
+		t.Fatalf("explicit choice overwritten: %+v %v", explicit, err)
+	}
+	reverted, err := h.srv.resolveStartDispatch("", "", nil, "default-claude")
+	if err != nil || reverted.ResolvedAgent != "claude" {
+		t.Fatalf("rollback failed: %+v %v", reverted, err)
+	}
+}
 
 func TestAcceptedCodingAgentDispatch(t *testing.T) {
 	h, _, target, _, _ := twoNodesCaps(t, control.CapLaunch)

@@ -237,7 +237,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	if req.Dispatch != nil && req.Idem == "" {
 		req.Idem = req.Dispatch.RequestID
 	}
-	d, derr := resolveDispatch(req.CodingAgent, req.Agent, dispatchRaw(req.Dispatch), req.Idem)
+	d, derr := s.resolveStartDispatch(req.CodingAgent, req.Agent, dispatchRaw(req.Dispatch), req.Idem)
 	if derr != nil {
 		httpError(w, http.StatusBadRequest, errorObject(derr)["message"])
 		return

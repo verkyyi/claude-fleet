@@ -16,17 +16,22 @@ export type Start = Choice & { words: string };
 export const AGENTS: Record<Mode, Agent[]> = { chat: ["claude", "codex"], term: ["claude", "codex", "shell"] };
 
 // A choice that holds: 只开 Shell is the terminal's only; a chat runs on the home only.
-export function fixChoice(c: Partial<Choice> | null | undefined): Choice {
+export function fixChoice(c: Partial<Choice> | null | undefined, defaultAgent: Agent = "claude"): Choice {
   const mode: Mode = c?.mode === "term" ? "term" : "chat";
-  const agent: Agent = AGENTS[mode].includes(c?.agent as Agent) ? (c!.agent as Agent) : "claude";
+  const agent: Agent = AGENTS[mode].includes(c?.agent as Agent) ? (c!.agent as Agent) : defaultAgent === "codex" ? "codex" : "claude";
   const machine = mode === "term" && agent !== "shell" && typeof c?.machine === "string" ? c.machine : "";
   return { mode, agent, machine };
 }
 
 // What is remembered of the last start (this browser): the choice, never the words.
 export const CHOICE_KEY = "fleet.console.new";
-export function readChoice(raw: string | null): Choice {
-  try { return fixChoice(JSON.parse(raw || "null")); } catch { return fixChoice(null); }
+export function readChoice(raw: string | null, defaultAgent?: Agent): Choice {
+  let saved: Partial<Choice> | null = null;
+  try { saved = JSON.parse(raw || "null"); } catch { /* use the default */ }
+  // A changed team default applies to the next start, including browsers that
+  // remember the old default. A choice made in this open form still wins.
+  const agent = defaultAgent === "claude" || defaultAgent === "codex" ? defaultAgent : undefined;
+  return fixChoice(agent ? { ...saved, agent } : saved);
 }
 
 // The home, as /v1/chat/home answers it.
