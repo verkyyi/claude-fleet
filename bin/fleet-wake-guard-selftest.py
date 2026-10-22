@@ -103,7 +103,7 @@ class Storm(unittest.TestCase):
 
 
 class Recovery(unittest.TestCase):
-    def fixture(self, memory=False, preflight=False):
+    def fixture(self, memory=False, preflight=False, agent="claude"):
         if not shutil.which('tmux'):
             self.skipTest('tmux absent')
         spec = importlib.util.spec_from_file_location('guard_fixture', BIN / 'fleet-park-selftest.py')
@@ -123,8 +123,93 @@ class Recovery(unittest.TestCase):
             version.chmod(0o755)
             f.env['FLEET_PARK_VERSION_CMD'] = str(version)
             f.env['FLEET_CC_PROJECTS_DIR'] = str(f.root / 'projects')
-        f.fake()
+        f.fake(agent)
         return f, module.gate
+
+    def test_codex_timer_launcher_failure_needs_this_launch_receipt(self):
+        import fleet_park_wake as wake
+        f, gate = self.fixture(agent='codex')
+        launch = f.root / 'launch'
+        launch.write_text(launch.read_text().replace('echo resume-failed; exit 1;',
+            'echo "loop bridge already exists"; '
+            'while [ ! -f "' + str(f.root / 'release') + '" ]; do sleep .05; done; exit 1;'))
+        with patch.dict(os.environ, dict(f.env, FLEET_GATE_WAKE_WAIT='0')):
+            self.assertTrue(gate.park(f.fid)['ok'])
+            (f.root / 'fail').touch()
+            wake.save(wake.path_for(f.fid), dict(v=1, fid=f.fid, sid=f.sid, agent='codex',
+                phase='active', parked=True, jobs=[dict(id='timer', kind='wakeup',
+                prompt='keep failed loop words', next=123, recurring=False)]))
+            wake.tick(f.fid)
+            f.wait(lambda: 'loop bridge already exists' in f.tm('capture-pane', '-p', '-t', f.win))
+            self.assertFalse(f.opt('@parked'))
+            self.assertEqual(f.opt('@codex_session_id'), f.sid)
+            self.assertFalse(f.opt('@codex_identity'))
+            # The native identity disappears during startup. Only this wake's
+            # receipt can settle it, never availability of the old conversation.
+            native = Path(f.env['FLEET_GATE_CODEX'])
+            native.write_text(native.read_text().replace("return dict(session_id=", "return None # dict(session_id="))
+            gate.settle(f.fid)
+            self.assertEqual(gate.records(f.fid)[0]['state'], 'waking')
+            (f.root / 'release').touch()
+            f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
+            wake.tick(f.fid)
+            row = gate.records(f.fid)[0]
+            self.assertEqual((row['state'], row['why']), ('returned', 'launch_failed'))
+            self.assertEqual(row['text'], 'keep failed loop words')
+            contract = gate.read_json(wake.path_for(f.fid))
+            self.assertEqual(contract['pending']['delivery'], row['delivery'])
+            self.assertEqual(contract['jobs'][0]['next'], 123)
+            self.assertEqual(contract['attention'], 'launch_failed')
+            self.assertFalse(Path(str(gate.wake_path(f.fid, row['delivery'])) + '.launched').exists())
+        self.assertIn('keep failed loop words', f.tm('capture-pane', '-p', '-t', f.win))
+        acts = [json.loads(line)['act'] for line in (f.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        self.assertEqual(acts.count('fail'), 1)
+        self.assertNotIn('wake', acts)
+
+    def test_recovery_page_with_stale_sid_is_not_a_wake_receipt(self):
+        import fleet_park_wake as wake
+        f, gate = self.fixture(agent='codex')
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+            # Persisted shape of C5's failed old wrapper: ordinary recovery,
+            # old SID present, parked/identity/start absent, no native receipt.
+            f.set('@parked', '')
+            f.set('@park_held', '')
+            f.set('@claude_state', 'exited')
+            row = dict(v=1, fid=f.fid, delivery='dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+                       sid=f.sid, agent='codex', text='unaccepted words', images=[],
+                       at=time.time(), state='waking', wake_at=time.time() - 100, tries=1,
+                       wake_why='定时', wake_next=123, method='wake')
+            gate.save(row)
+            wake.save(wake.path_for(f.fid), dict(v=1, fid=f.fid, sid=f.sid, agent='codex',
+                phase='active', parked=True, jobs=[dict(id='timer', kind='wakeup',
+                prompt=row['text'], next=123, recurring=False)], pending=dict(
+                delivery=row['delivery'], prompt=row['text'], next=123, rounds=[['timer', 123]])))
+            seed = gate.wake_path(f.fid, row['delivery'])
+            Path(str(seed) + '.taken').write_text(row['text'])
+            gate.settle(f.fid)
+            result = gate.records(f.fid)[0]
+            self.assertEqual((result['state'], result['why']), ('returned', 'wake_timeout'))
+            self.assertEqual(result['text'], row['text'])
+            self.assertFalse(gate.wake(f.fid)['ok'], 'cleared parked and stale SID are not ready')
+            wake.tick(f.fid)
+            self.assertEqual(gate.read_json(wake.path_for(f.fid))['attention'], 'wake_timeout')
+            gate.settle(f.fid)
+            acts = [json.loads(line)['act'] for line in (f.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+            self.assertEqual(acts.count('fail'), 1)
+            self.assertNotIn('wake', acts)
+
+    def test_failed_peer_wake_retry_does_not_report_already_awake(self):
+        import hashlib
+        f, gate = self.fixture(agent='codex')
+        delivery = 'failed-peer-delivery'
+        with patch.dict(os.environ, f.env):
+            seed = gate.wake_path(f.fid, 'peer-' + hashlib.sha256(delivery.encode()).hexdigest())
+            gate.write_json(str(seed) + '.meta.failed', dict(failure='launch_failed'))
+            f.set('@claude_state', 'exited')
+            result = gate.wake(f.fid, delivery=delivery)
+            self.assertFalse(result['ok'], result)
+            self.assertEqual(result['why'], 'launch_failed')
 
     def test_two_failed_resumes_keep_words_and_disable_reparking(self):
         f, gate = self.fixture()
