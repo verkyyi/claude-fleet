@@ -54,7 +54,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 die() { printf 'fleet-peer-queue: %s\n' "$2" >&2; exit "$1"; }
 
 ACT="${1:-}"; [ $# -gt 0 ] && shift
-SESS='' FID='' TKEY='' KIND='' RID='' TO='' STATE='' VIA='' DETAIL='' REPORT='' SECS=4 SECS_SET=
+SESS='' FID='' TKEY='' KIND='' RID='' TO='' STATE='' VIA='' DETAIL='' REPORT='' DELEGATION='' SECS=4 SECS_SET=
 while [ $# -gt 0 ]; do
   case "$1" in
     -L) SESS="${2:-}"; shift ;;
@@ -67,6 +67,7 @@ while [ $# -gt 0 ]; do
     --via) VIA="${2:-}"; shift ;;
     --detail) DETAIL="${2:-}"; shift ;;
     --report) REPORT="${2:-}"; shift ;;
+    --delegation) DELEGATION="${2:-}"; shift ;;
     --secs) SECS="${2:-}"; SECS_SET=1; shift ;;
     *) die 2 "unknown argument $1" ;;
   esac
@@ -121,19 +122,43 @@ hand() {
 case "$ACT" in
   put)
     [ -n "$RID" ] || die 2 "put needs --rid"
-    case "$KIND" in report|message) ;; *) die 2 "put needs --kind report|message" ;; esac
+    case "$KIND" in report|message|delegated_report) ;; *) die 2 "put needs --kind report|message" ;; esac
     if [ -n "$FID" ]; then fleet_is_fid "$FID" || die 2 "--to-fid '$FID' is not a fleet_id"; fi
     [ -n "$FID$TKEY" ] || die 2 "put needs --to-fid or --to-key"
+    if [ "$KIND" = delegated_report ]; then
+      [ -n "$DELEGATION" ] || die 2 'delegated_report needs --delegation'
+      _existing=$(python3 - "$BOOK" "$RID" <<'PYDONE'
+import json, sys
+try:
+    rows = [json.loads(line) for line in open(sys.argv[1])]
+except FileNotFoundError:
+    rows = []
+print(int(any(r.get('rid') == sys.argv[2] and r.get('state') == 'DELIVERED' for r in rows)))
+PYDONE
+) || die 1 'cannot read delivery receipts'
+      [ "$_existing" = 1 ] && { printf 'delivered\n'; exit 0; }
+    fi
     text=$(cat); [ -n "$text" ] || die 2 "empty message"
     mkdir -p "$Q" 2>/dev/null || die 1 "cannot create $Q"
     tmp=$(mktemp "$Q/.put.XXXXXX") || die 1 "cannot write in $Q"
     printf '%s' "$text" | python3 -c 'import json, sys, time
-rid, kind, fid, key, to = sys.argv[1:6]
+rid, kind, fid, key, to, delegation = sys.argv[1:7]
 print(json.dumps({"rid": rid, "kind": kind, "to_fid": fid, "to_key": key, "to": to,
-                  "created": int(time.time()), "text": sys.stdin.read()}, ensure_ascii=False))' \
-      "$RID" "$KIND" "$FID" "$TKEY" "${TO:-${TKEY:-$FID}}" > "$tmp" 2>/dev/null || { rm -f "$tmp"; die 1 "cannot encode the item"; }
+                  "created": int(time.time()), "text": sys.stdin.read(),
+                  **({"delegation": json.loads(delegation)} if delegation else {})}, ensure_ascii=False))' \
+      "$RID" "$KIND" "$FID" "$TKEY" "${TO:-${TKEY:-$FID}}" "$DELEGATION" > "$tmp" 2>/dev/null || { rm -f "$tmp"; die 1 "cannot encode the item"; }
     f="$Q/$(date -u +%Y%m%dT%H%M%SZ)-$$-${tmp##*.}.json"
-    mv -f "$tmp" "$f" || { rm -f "$tmp"; die 1 "cannot write in $Q"; }
+    if [ "$KIND" = delegated_report ]; then
+      _hash=$(printf '%s' "$RID" | shasum -a 256 | cut -d ' ' -f 1)
+      f="$Q/delegated-$_hash.json"
+      # Link is create-if-absent: concurrent replay never replaces a pending item.
+      if [ -f "$f.sending" ] || ! ln "$tmp" "$f" 2>/dev/null; then
+        rm -f "$tmp"; printf '%s\n' "$f"; exit 0
+      fi
+      rm -f "$tmp"
+    else
+      mv -f "$tmp" "$f" || { rm -f "$tmp"; die 1 "cannot write in $Q"; }
+    fi
     _rep=''
     [ "$KIND" = report ] && _rep=$(printf '%s' "$text" | python3 -c 'import json, sys; print(json.dumps({"summary": sys.stdin.read()[:2000]}, ensure_ascii=False))' 2>/dev/null)
     note "$RID" QUEUED "${TO:-${TKEY:-$FID}}" "$KIND" local '' "$_rep"
@@ -142,6 +167,18 @@ print(json.dumps({"rid": rid, "kind": kind, "to_fid": fid, "to_key": key, "to": 
 
   note)
     [ -n "$RID" ] && [ -n "$STATE" ] || die 2 "note needs --rid and --state"
+    # A delegated report retains its queue policy when a hub receipt arrives.
+    # Receipt kind is child_report on the wire; the producer's book owns policy.
+    if python3 - "$BOOK" "$RID" <<'PYKIND'
+import json, sys
+try:
+    found = any((r.get('rid') == sys.argv[2] and r.get('kind') == 'delegated_report')
+                for r in (json.loads(line) for line in open(sys.argv[1])))
+except FileNotFoundError:
+    found = False
+sys.exit(0 if found else 1)
+PYKIND
+    then KIND=delegated_report; fi
     # The hub's EXPIRED receipt for a report (its relay TTL ran out): the person is
     # handed it instead (T887) — HANDED is its last row, never EXPIRED.
     case "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]'):$KIND" in
@@ -282,7 +319,7 @@ def since(r):
 # EXPIRED in the book with one audit line, and never said — the local queue's
 # items stay the drain's (their window may still come back).
 dead = [r for rid, r in last.items() if dead_secs > 0 and r.get("state") == "QUEUED"
-        and r.get("via") != "local" and since(r) > dead_secs]
+        and r.get("via") != "local" and since(r) > dead_secs and r.get("kind") != "delegated_report"]
 # A REPORT nobody took is the person's (T887): handed (the reminder, its task
 # record, a HANDED row) — never EXPIRED. Then every report an older version let
 # expire within the reminder's window, once.
@@ -324,7 +361,7 @@ if dead:
     done.update(r["rid"] for r in dead)
 bound = min(ttl, dead_secs) if dead_secs > 0 else ttl
 hits = [r for rid, r in last.items() if r.get("state") == "QUEUED" and rid not in done
-        and secs <= since(r) <= bound]
+        and secs <= since(r) <= bound and r.get("kind") != "delegated_report"]
 if not hits:
     sys.exit(0)
 def who(r):
@@ -379,6 +416,19 @@ print("\x1f".join(str(d.get(k, "")).replace("\x1f", " ").replace("\n", " ") for 
 $meta
 EOF
   [ -n "$FID" ] && [ "$fid" != "$FID" ] && { mv -f "$c" "$f"; continue; }
+  if [ "$kind" = delegated_report ]; then
+    bash "$BIN/fleet-report-delivery.sh" drain "$c" "$SESS"; _rc=$?
+    if [ "$_rc" = 0 ]; then
+      if note "$rid" DELIVERED "$to" "$kind" local ''; then
+        rm -f "$c"; sent=$((sent + 1))
+      else
+        mv -f "$c" "$f"; waiting=$((waiting + 1))
+      fi
+    else
+      mv -f "$c" "$f"; waiting=$((waiting + 1))
+    fi
+    continue
+  fi
   case "$created" in ''|*[!0-9]*) created=0 ;; esac
   if [ $((now - created)) -gt "$TTL" ]; then
     rm -f "$c"

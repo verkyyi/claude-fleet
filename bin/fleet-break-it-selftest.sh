@@ -6678,6 +6678,7 @@ PY
 
 # ================================================================ run ====}
 
+
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
 # failing, a squash-merged session read `unmerged` — never reaped, never landed in
 # history. git alone says it now: fleet_land_check's patch-id match → `landed`, and
@@ -7369,7 +7370,16 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_report_delegation_offline() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-report-delegation-selftest.py" >"$WORK/delegation.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/delegation.out")"; return 1; }
+  WHAT='授权作用域、历史来源、离线恢复及重放去重，routine 不唤醒人'
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
+
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

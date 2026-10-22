@@ -279,6 +279,9 @@ def append_row(path, raw):
             ev['fid'] = fid
         if pfid:
             ev['pfid'] = pfid
+        if isinstance(raw.get('report_delegation'), dict):
+            ev['report_delegation'] = raw['report_delegation']
+            ev['original_origin'] = raw.get('original_origin', '')
         if task:
             ev['task'] = task
         ev.update((f, v) for f, v in gens.items() if v)
@@ -593,7 +596,7 @@ def news_of(d, key):
     cur = read_cursor(d, key)
     pend = sorted((e for e in read_events(os.path.join(d, key + '.ndjson')) if seq_of(e) > cur),
                   key=seq_of)
-    return pend, [e for e in pend if e.get('tier') != 'silent']
+    return pend, [e for e in pend if e.get('tier') != 'silent' and not e.get('report_delegation')]
 
 
 def cmd_scan(a):
@@ -678,7 +681,8 @@ def cmd_digest(a):
     # One line per child that CHANGED since the cursor, its latest event only.
     latest = {}
     for e in pend:
-        latest[e['child']] = e
+        if not e.get('report_delegation'):
+            latest[e['child']] = e
     rows = []
     for child, e in latest.items():
         g = (kids.get(child) or {}).get('bucket') or bucket(None, e)

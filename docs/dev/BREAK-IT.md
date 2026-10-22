@@ -19,6 +19,7 @@
 | Codex 发行工具目录前置遮蔽 tmux-shim（T944） | agent 子进程可绕过 tmux 保护入口 | 发行版 Codex 优先时仍保持 tmux-shim 在 PATH 首位；直接 webchat 同样选发行版 | `codex-pin-displaces-guard` |
 | 网页新会话进入时会话门尚未探测完成（T944） | 首条能发，进入后却显示终端只读，不能继续输入 | 未知权限单独显示连接中，保留输入草稿；仅会话门明确允许才启用发送，旧版本与只读票据仍不可写 | `chat-gate-cold-readonly` |
 |---|---|---|---|
+| 存量 worker 的自动报告仍唤醒历史 parent，监督目标离线又升级到人（T946） | 接管失效、额度耗尽的旧会话被重新唤醒 | 显式身份作用域的审计委托只改 delivery；固定原来源、目标与授权链，既有队列恢复投递，routine 不因超时升级 | `report-delegation-offline` |
 | 无人值守的会话跑 `rm -f $P/*` 这类开头是变量的 rm 路径（#4637，2026-10-17 worker #4625 实见） | Claude Code 在 bypass 模式下照样弹「Dangerous rm operation on possibly-empty variable path」等人批准，没人答 30 多秒后自动拒绝：每次打断操作者，或会话干等 | bash-guard 在 PreToolUse 先拒（exit 2），理由里写好改法（`"${P:?}"/*`、非空默认值或字面路径），agent 自己改写重跑，不弹框；`${P:?}`、`${P:-/非空}`、`git rm`、单引号字面量、变量不在开头的照常放行 | `rm-empty-var-prompt` |
 | pending-tool 批量读取跨检查复用旧进程、窗口或 transcript（#4474） | 工具已开始或窗口已换代，旧的无 pending 读数仍可能清掉 needs | 每次安全核对重采集；同次共享解析，前后验证 socket/server、worker、pane 与 native birth/SID，过期或缺身份返回 unknown | `pending-observation-stale` |
 | 已注册的 GitHub 仓库名含大写（#4495） | 面板新建误报冻结，规范化后的迁移清单又找不到原 overlay | Hub 身份规范化，本地按注册身份定位原 overlay；实际冻结、输入、认证及入口故障保留各自原因 | `repo-authority-case` |

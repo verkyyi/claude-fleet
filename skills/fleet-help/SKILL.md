@@ -33,6 +33,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | connecting from a phone, first time (Termius, keys page, the four things) | `docs/dev/CLIENT.md` § 「手机：Termius 四样」 · `docs/dev/MULTI-MACHINE-OPS.md` § 「一个人第一次从手机连」 |
 | their address, the entry port, what a connection with no command does | `docs/dev/CLIENT.md` § 「Your address: no command = the 看台」 · `docs/dev/MANAGED-NODE.md` § 「16. 入口端口」 |
 | device keys: add, revoke, lost phone | `docs/dev/CLIENT.md` § 「手机：Termius 四样」 (step 4) |
+| changing who supervises existing workers’ reports, granting or revoking report delivery | `docs/dev/REPORT-DELEGATION.md` § 「授权与存量作用域」 · `docs/dev/REPORT-DELEGATION.md` § 「撤销与回滚」 |
 | changing the home machine | `docs/dev/MULTI-MACHINE-OPS.md` § 「手动换家」 |
 | the address stopped working after the home's internet changed | `docs/dev/MULTI-MACHINE-OPS.md` § 「宽带换了公网地址」 |
 | connecting from the Mac, which machine `fleet` picks, a named machine | `docs/public/zh/member/connect.md` § 「电脑上（Mac 或 Linux）」 · `docs/dev/MULTI-MACHINE-OPS.md` § 「6. 速查」 |
