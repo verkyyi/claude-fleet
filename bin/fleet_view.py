@@ -4454,16 +4454,6 @@ def view_lang_env(vid):
         os.environ["FLEET_VIEW_LANG"] = lang
 
 
-def view_state(vid):
-    """(cur, @view_shell, @view_lang_set, @view_lang) of the 看台 in ONE tmux read
-    (T890: the popup asked three times — 20 ms each on a busy machine — before its
-    first frame); cur as current() says it."""
-    rc, out = tm("display-message", "-p", "-t", "=%s@view-%s:" % (view_fleet(vid), vid),
-                 "#{window_id}|#{@peer_cur}|#{@view_shell}|#{@view_lang_set}|#{@view_lang}")
-    w, pc, vsh, said, lang = ((out if rc == 0 else "").split("|") + [""] * 5)[:5]
-    return (pc[4:] if pc.startswith("wid:") else (pc or w)), vsh, said, lang
-
-
 def panel_t0(pre, qo=None):
     """When this ⌘P began (epoch seconds): the connector's start — handed in
     (`pre["t0"]`) or, when it fell back to this process, FLEET_PANEL_T0 — else the
@@ -4508,7 +4498,7 @@ def age_mark(at, fresh=None, down=False, now=None):
     age = (time.time() if now is None else now) - at
     if age <= fenv("FLEET_VIEW_STALE_MARK_SECS", 3):
         return ""
-    if down or fresh is None or fresh.every <= 0:
+    if down or fresh is None or getattr(fresh, "every", 1) <= 0:
         return say("view_age_fmt", ago(age))
     return say("view_age_refreshing_fmt", ago(age))
 
@@ -5104,12 +5094,12 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         items = entries(vid, hub=not bg)
     clock.mark("read")
     fleet = view_fleet(vid)
-    if pre:
+    if pre:     # the keypress's own (FLEET_PANEL_CTX): no tmux read before the frame
         cur, vsh = pre.get("cur") or "", pre.get("vsh") or ""
     else:
-        cur, vsh, said, lang = view_state(vid)
-        if said == "1" and "FLEET_VIEW_LANG" not in os.environ:
-            os.environ["FLEET_VIEW_LANG"] = lang
+        cur = current(vid)
+        _, vsh = tm("display-message", "-p", "-t", "=%s@view-%s:" % (fleet, vid), "#{@view_shell}")
+        view_lang_env(vid)
     # opened in a session's shell (⌃\): its session is the lit row — ↵ is back on it
     if ":" in vsh:
         cur = vsh.split(":", 1)[1]

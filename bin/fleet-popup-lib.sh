@@ -104,7 +104,7 @@ fleet_popup_bind() {
   # shellcheck disable=SC2089
   fleet_palette_load && frame="$frame -S 'fg=$PAL_DIM' -s 'bg=$PAL_BG'"
   one="display-popup -E $frame -T '#{@view_popup_title}' -e FLEET_POPUP=1 -e FLEET_PANEL_DIRECT=1"
-  printf '%s' "{ set-environment -F FLEET_PANEL_CTX '#{session_name}|#{client_name}|#{window_id}|#{@peer_cur}|#{@view_shell}|#{@view_lang_set}|#{@view_lang}|#{client_width}' ; "
+  printf '%s' "{ set-environment -F FLEET_PANEL_CTX '#{session_name}|#{client_name}|#{window_id}|#{@peer_cur}|#{@view_shell}|#{@view_lang_set}|#{@view_lang}|#{client_width}' ; "  # view-ok: a key's own session IS the 看台 (its @view- name is the server's)
   printf '%s' "if-shell -F '#{e|<:#{client_width},$narrow}' { $one -w 100% -h 100%$cmd } { $one -w $w -h $h$cmd } }"
 }
 
