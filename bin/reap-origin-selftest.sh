@@ -53,6 +53,7 @@ python3 "$BIN/fleet_id.py" open "$OLD" --parent "$ORC" --title t >/dev/null 2>&1
 eq "A: 代起 — a reopened ID whose ledger has a parent → dispatched" "$(O '' '' '' 0 '' "$OLD")" dispatched
 eq "A: …a parent-less ID stays a person's"     "$(O '' '' '' 0 '' dddddddd-4444-4444-8444-444444444444)" person
 
+eq "A: a title is not explicit probe provenance" "$(python3 "$BIN/fleet_reap_policy.py" origin --title 'probe 可关')" person
 # ---- B ------------------------------------------------------------------------
 D() { python3 "$BIN/fleet_reap_policy.py" origin-default "$@"; }
 eq "B: person idle 2h · dispatched/member/driver merged · orchestrator keep · decide idle 15m · probe done 1m" \

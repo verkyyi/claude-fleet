@@ -25,7 +25,7 @@ spec.loader.exec_module(live)
 class LiveTests(unittest.TestCase):
     def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, hold="",
               merged_at=None, waived=None, now=None, loop="\t", wait="", status="", bg_over=False):
-        outputs = iter([hold, loop, state + ("\t" + status if status else ""), roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
+        outputs = iter([hold, "", loop, state + ("\t" + status if status else ""), roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)), \
              patch.object(live, "waiting", return_value=wait):
@@ -192,7 +192,7 @@ class LiveTests(unittest.TestCase):
     def test_merged_at_cli_output(self):
         NOW = 1_000_000
         def run(*extra):
-            replies = iter(["", "\t", "done", "100", "100 1 01:00:00 zsh\n101 100 10:00 claude", "100 zsh\n101 claude"])
+            replies = iter(["", "", "\t", "done", "100", "100 1 01:00:00 zsh\n101 100 10:00 claude", "100 zsh\n101 claude"])
             out = []
             with patch.object(sys, "argv", ["probe", "@1", *extra]), \
                  patch.object(live, "read", side_effect=lambda *a: next(replies)), \
@@ -210,7 +210,7 @@ class LiveTests(unittest.TestCase):
     def test_default_min_age_is_five_minutes(self):
         # Issue #2453: unset FLEET_REAP_MIN_AGE → 300s; 6 minutes passes, 4 refuses.
         def run(age):
-            replies = iter(["", "\t", "done", "100", f"100 1 01:00:00 zsh\n101 100 {age} claude", "100 zsh\n101 claude"])
+            replies = iter(["", "", "\t", "done", "100", f"100 1 01:00:00 zsh\n101 100 {age} claude", "100 zsh\n101 claude"])
             out = []
             env = {k: v for k, v in os.environ.items() if k != "FLEET_REAP_MIN_AGE"}
             with patch.dict(os.environ, env, clear=True), \
@@ -285,13 +285,13 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(live.main(), 1)
 
     def test_explicit_socket_applies_to_every_tmux_probe(self):
-        replies = iter(["", "\t", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
+        replies = iter(["", "", "\t", "done", "100", "100 1 01:00:00 zsh", "100 zsh"])
         with patch.object(live, "read", side_effect=lambda *args: next(replies)) as read, \
              patch.object(live, "waiting", return_value="") as wait:
             self.assertIsNone(live.live_reason("@1", 1800, "other-fleet"))
         wait.assert_called_once_with("@1", "other-fleet")
         calls = [call.args for call in read.call_args_list if call.args[0] == "tmux"]
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertTrue(all(call[:3] == ("tmux", "-L", "other-fleet") for call in calls))
 
     @unittest.skipUnless(shutil.which("tmux") and shutil.which("perl"), "tmux/perl absent")

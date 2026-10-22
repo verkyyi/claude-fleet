@@ -929,6 +929,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_REAP_UNREPORTED_SECS=1800
 # C6 / T965: real background jobs and pending loops always protect a session,
 # even after a terminal report. The old FLEET_REAP_BG_GRACE setting is ignored.
+# New input/messages, a new task binding or a reopened attempt invalidate old
+# completion evidence. A required report must be saved (a durable delivery queue
+# suffices); a failed write holds reaping. Message admission and final automatic
+# closure share the session's identity lock, for parked and ordinary windows.
+# Temporary web probes use the official /api/open entry with purpose=probe and
+# parent_fid=<live parent UUID>. Ordinary web/explicit keep remains retained;
+# names never select probe policy, and native idle is not a completed result.
 
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota

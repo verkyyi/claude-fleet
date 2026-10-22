@@ -228,7 +228,7 @@ def origin_of(agent_def="", origin="", origin_wid="", test_identity="", stamp=""
         return "orchestrator"
     if name == "epic-driver":
         return "driver"
-    if test_identity == "1" or is_probe_title(title):
+    if test_identity == "1":
         return "probe"
     if (origin and origin != "hub") or origin_wid:
         return "dispatched"
@@ -447,7 +447,67 @@ def report_hold(fid, pending=""):
     phase = report_proof(fid).get("phase", "")
     if pending or phase == "pending":
         return "report-pending"
-    return "report-unknown" if phase not in ("", "complete") else ""
+    return "report-unknown" if phase not in ("", "complete", "superseded") else ""
+
+
+def current_work(fid):
+    """Local input generation; absent means a session from before this contract."""
+    import json
+    path = report_path(fid)
+    if path is None:
+        return {}
+    try:
+        work = json.loads(path.with_name("work.json").read_text())
+        if not isinstance(work, dict) or not isinstance(work.get("after_seq"), int) or not work.get("token"):
+            return {"unknown": True}
+        return work
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return {"unknown": True}
+
+
+def completion_hold(fid, task="", rec=None):
+    """Old task closure/result cannot authorize the current turn's teardown.
+
+    This only invalidates completion; idle/park retention remains its own rule.
+    Compare ledger sequence numbers, never wall clocks or window names.
+    """
+    if report_hold(fid):
+        return "report-pending"
+    if report_path(fid) is None:
+        return ""
+    import fleet_id
+    rec = rec if rec is not None else fleet_id.fold(fleet_id.read(fid))
+    result = fleet_id.last_result(rec) or {}
+    if rec.get("attempt", 1) > 1 and not result:
+        return "new-attempt"
+    work = current_work(fid)
+    if work.get("unknown"):
+        return "work-unknown"
+    if work and result.get("seq", 0) <= work["after_seq"]:
+        return "new-work"
+    bound = result.get("task") or (report_proof(fid).get("task") if result else "") or rec.get("opened", {}).get("task")
+    if task and bound and task != bound:
+        return "task-changed"
+    return ""
+
+
+def work_changed_locked(fid, task=""):
+    """Caller holds the existing identity gate, before handing new words over."""
+    import uuid
+    import fleet_id
+    from fleet_session_gate import fid_dir, write_json
+    events = fleet_id.read(fid)
+    work = dict(token=str(uuid.uuid4()), task=task, at=int(time.time()),
+                after_seq=max((e.get("seq", 0) for e in events), default=0),
+                attempt=fleet_id.fold(events)["attempt"])
+    write_json(fid_dir(fid) / "work.json", work)
+    proof = report_proof(fid)
+    if proof.get("phase") == "pending":
+        proof["phase"] = "superseded"
+        write_report_proof(fid, proof)
+    return work
 
 
 def write_report_proof(fid, proof):
@@ -467,7 +527,10 @@ def report_begin(fid, task):
     from fleet_session_gate import lock
     token = str(uuid.uuid4())
     with lock(fid):
-        write_report_proof(fid, dict(phase="pending", token=token, task=task, at=time.time()))
+        import fleet_id
+        write_report_proof(fid, dict(phase="pending", token=token, task=task, at=time.time(),
+                                    work=current_work(fid).get("token", ""),
+                                    attempt=fleet_id.fold(fleet_id.read(fid))["attempt"]))
     return token
 
 
@@ -477,13 +540,20 @@ def report_finish(fid, token, state, summary, agent, pr):
     rc 3 (durably queued) is as reliable as rc 0. A failed write leaves the
     pending proof intact, including when an older result or task was terminal.
     """
-    from fleet_session_gate import lock
+    from fleet_session_gate import lock, window
     import fleet_id
     with lock(fid):
         proof = report_proof(fid)
         if proof.get("phase") != "pending" or proof.get("token") != token:
             return False
-        ev = dict(ev="result", state=state, summary=summary, agent=agent)
+        w = window(fid)
+        if (proof.get("work", "") != current_work(fid).get("token", "")
+                or proof.get("attempt") != fleet_id.fold(fleet_id.read(fid))["attempt"]
+                or (w and w.get("task", "") != proof.get("task", ""))):
+            proof["phase"] = "superseded"
+            write_report_proof(fid, proof)
+            return False
+        ev = dict(ev="result", state=state, summary=summary, agent=agent, task=proof.get("task", ""))
         if pr:
             ev["pr"] = pr
         got = fleet_id.append(fid, ev)
@@ -498,7 +568,11 @@ def main(argv):
         sys.stderr.write(__doc__)
         return 2
     cmd, args = argv[1], argv[2:]
-    if cmd in ("report-begin", "report-finish", "report-ready"):
+    if cmd == "work-token" and len(args) == 1:
+        work = current_work(args[0])
+        print(work.get("token", "unknown" if work.get("unknown") else ""))
+        return 0
+    if cmd in ("report-begin", "report-finish", "report-ready", "completion-ready"):
         if not args or report_path(args[0]) is None:
             return 2
         try:
@@ -509,6 +583,8 @@ def main(argv):
                 return 0 if report_finish(*args) else 1
             if cmd == "report-ready":
                 return 1 if report_hold(args[0]) else 0
+            if cmd == "completion-ready":
+                return 1 if completion_hold(args[0], args[1] if len(args) > 1 else "") else 0
         except (OSError, ValueError):
             return 1
         return 2

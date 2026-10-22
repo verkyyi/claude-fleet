@@ -1726,6 +1726,14 @@ async function gateOpen(req, res, person) {
   // the agent the page chose; none ⇒ the fleet's default (FLEET_AGENT, dash-raw-session.sh decides)
   const agent = tb.body.agent == null || tb.body.agent === "" ? "" : String(tb.body.agent);
   if (agent && !PROVIDERS_RE.test(agent)) return send(res, 400, { error: "unknown agent", code: "agent" });
+  // A temporary probe is explicitly owned. The official spawner verifies that
+  // this identity still has a live parent; ordinary web sessions retain keep.
+  const purpose = tb.body.purpose ?? "";
+  const parent = tb.body.parent_fid;
+  if (purpose !== "" && purpose !== "probe") return send(res, 400, { error: "unknown purpose", code: "purpose" });
+  if (purpose === "probe" && (typeof parent !== "string" || !FID_RE.test(parent))) {
+    return send(res, 400, { error: "probe requires a parent identity", code: "parent_fid" });
+  }
   let text = tb.text;
   for (const b of tb.images) {
     const k = keepImage(b);
@@ -1735,8 +1743,8 @@ async function gateOpen(req, res, person) {
   const target = await firstFleet();
   const pf = join(STATE, `open-${process.pid}-${Date.now()}.txt`);
   writeFileSync(pf, text, { mode: 0o600 });
-  const args = [...(target ? [target] : []), "--origin", "hub", "--print", "--no-repo", "--node", "local",
-    "--reap-origin", "web", ...(agent ? ["--agent", agent] : []), `--prompt-file=${pf}`];
+  const args = [...(target ? [target] : []), "--origin", purpose === "probe" ? parent : "hub", "--print", "--no-repo", "--node", "local",
+    "--reap-origin", purpose === "probe" ? "probe" : "web", ...(agent ? ["--agent", agent] : []), `--prompt-file=${pf}`];
   const r = await run(RAW, args);
   try { unlinkSync(pf); } catch { /* read by the spawn */ }
   const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";

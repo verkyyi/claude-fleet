@@ -704,8 +704,10 @@ def status(fid, live, idx=None):
         return dict(hs, id=fid, closed=rec["closed"], segments=len(rec["segments"]), progress=rec.get("progress"),
                     src="hub")
     r = last_result(rec)
-    from fleet_reap_policy import report_hold
-    rs = "" if report_hold(fid) else (r or {}).get("state", "")
+    from fleet_reap_policy import completion_hold
+    if completion_hold(fid, rec=rec):
+        r = None
+    rs = (r or {}).get("state", "")
     up = alive(fid, rec, live)
     con = conflicts(fid, live, idx) if up else []
     if con:

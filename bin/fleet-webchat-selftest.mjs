@@ -882,6 +882,19 @@ exit 2
   r = await sreq("/api/open", { method: "POST", headers: PAGE, body: { text: "默认的" } });
   const rl2 = readFileSync(RLOG, "utf8").trim().split("\n").filter((l) => l.startsWith("fleet ")).pop() || "";
   ok(r.status === 200 && !/--agent/.test(rl2), `Y open: no agent chosen ⇒ none passed, the fleet's default decides (${rl2})`);
+  // C6 / T965: only an explicitly owned temporary probe gets the probe policy.
+  r = await sreq("/api/open", { method: "POST", headers: PAGE,
+    body: { purpose: "probe", parent_fid: FID, text: "临时验收" } });
+  const probeLine = readFileSync(RLOG, "utf8").trim().split("\n").filter((l) => l.startsWith("fleet ")).pop() || "";
+  ok(r.status === 200 && probeLine.startsWith(`fleet --origin ${FID} --print --no-repo --node local --reap-origin probe `),
+    `Y probe: formal spawn gets explicit source and parent identity (${probeLine})`);
+  ok((await sreq("/api/open", { method: "POST", headers: PAGE,
+    body: { purpose: "probe", text: "无归属" } })).status === 400, "Y probe: an owner is required");
+  ok((await sreq("/api/open", { method: "POST", headers: PAGE,
+    body: { purpose: "probe", parent_fid: "scratch-1", text: "name is not identity" } })).status === 400,
+    "Y probe: a name cannot replace the parent identity");
+  ok((await sreq("/api/open", { method: "POST", headers: PAGE,
+    body: { purpose: "anything", parent_fid: FID, text: "x" } })).status === 400, "Y probe: unknown purpose is refused");
   // the view's state line: can_talk and the queue, no holder
   const st = await new Promise((resolve) => {
     const evs = [];

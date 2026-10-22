@@ -112,10 +112,10 @@ WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}
                      "#{@mod_alive}", "#{@session_origin}", "#{window_activity}", "#{@park_wake}",
                      "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
                      "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
-                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}"])
+                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
             "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
-            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start"]
+            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task"]
 
 
 def now():
@@ -150,6 +150,11 @@ def write_json(path, record):
         f.flush()
         os.fsync(f.fileno())
     tmp.replace(path)
+    fd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def read_json(path):
@@ -310,6 +315,85 @@ def lock(fid):
     f = (fid_dir(fid) / ".lock").open("a")
     fcntl.flock(f, fcntl.LOCK_EX)
     return f
+
+
+def close_hold(fid):
+    """Read under lock(fid), shared by all automatic closing roads."""
+    from fleet_reap_policy import report_hold
+    if report_hold(fid):
+        return "report-pending"
+    if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
+        return "words_waiting"
+    draft = fid_dir(fid) / "park-input.txt"
+    if draft.exists() and draft.stat().st_size:
+        return "draft"
+    return ""
+
+
+def legacy_deliver(a):
+    """Admit legacy inbox/app-server words without requiring a newer native API.
+
+    The existing delivery adapters still send them. The gate receipt orders
+    admission against closing; an uncertain send stays visible for inspection.
+    """
+    text = sys.stdin.read()
+    # Peer/report envelopes predate UUID gate deliveries (e.g. local:peer#...).
+    # Derive a stable filename-safe receipt without changing the sender's ID.
+    delivery = str(uuid.uuid5(uuid.NAMESPACE_URL, "fleet:legacy:" + a.delivery)) if a.delivery else str(uuid.uuid4())
+    if not text:
+        return 1
+    with lock(a.fid):
+        w = window(a.fid)
+        if w is None:
+            print("session closed before message admission")
+            return 3
+        if w.get("parked") or w.get("park_start"):
+            print("session parked before message admission")
+            return 3  # the caller's durable queue retries through fleet_park_wake
+        known = find(records(a.fid), delivery)
+        if known and known.get("state") != "returned":
+            print(known.get("why") or "previous admission")
+            return 0 if known.get("state") == "sent" else 3
+        from fleet_reap_policy import work_changed_locked
+        work_changed_locked(a.fid, w.get("task", ""))
+        r = dict(fid=a.fid, delivery=delivery, at=now(), state="native", legacy=True,
+                 sid=w["sid"], agent=w["agent"], text=text, images=[], why="legacy-admission")
+        save(r)
+        p = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; words=$(cat); '
+                            '_fleet_agent_deliver_native "$2" "$3" "$words" "$4"; rc=$?; '
+                            'printf "%s\\n" "$FLEET_DELIVER_NOTE"; exit "$rc"',
+                            "gate-delivery", str(BIN), w["win"], w["sock"], a.sender],
+                           input=text, text=True, capture_output=True, timeout=60)
+        r.update(state="sent" if p.returncode == 0 else "returned", why=p.stdout.strip(),
+                 sent_at=now(), returned_at=now())
+        save(r)
+        print(r["why"])
+        return p.returncode
+
+
+def prompt_input(payload):
+    """The installed UserPromptSubmit road, shared by both agent engines."""
+    if not isinstance(payload, dict) or payload.get("hook_event_name") != "UserPromptSubmit":
+        return
+    # A lifecycle /exit is not new work. In particular it must never wait for
+    # the park holder which is waiting for that same native exit.
+    if str(payload.get("prompt", "")).strip() in ("/exit", "/quit"):
+        return
+    pane = os.environ.get("TMUX_PANE", "")
+    if not pane or not os.environ.get("TMUX"):
+        return
+    fid = (tmux("", "display-message", "-p", "-t", pane, "#{@fleet_id}") or "").strip()
+    if not FID_RE.fullmatch(fid):
+        return
+    # Memory stamp first: failed persistence is never terminal completion.
+    tmux("", "set-option", "-w", "-t", pane, "@reap_work_pending", "1")
+    with lock(fid):
+        w = window(fid)
+        if not w or (w.get("pane") != pane):
+            return
+        from fleet_reap_policy import work_changed_locked
+        work_changed_locked(fid, w.get("task", ""))
+        tmux("", "set-option", "-wu", "-t", pane, "@reap_work_pending")
 
 
 def compose(r):
@@ -583,6 +667,8 @@ def settle(fid, wait_new=None):
         if not live:
             return find(rows, wait_new)
         r = live[0]
+        if r.get("legacy"):
+            return find(rows, wait_new)  # uncertain old-adapter send: never replay blindly
         # A starting engine may have cleared parked but has no native identity
         # yet (or has already fallen back to the ordinary recovery page). Its
         # owned seed is settled only by this launch's receipt/failure/deadline,
@@ -977,6 +1063,9 @@ def wake_request(w, seed, why, next_at=None, queued_at=None):
     active = w.get("park_wake") or w.get("park_start")
     if active:
         return dict(ok=False, why="wake_pending")
+    if seed.read_text().strip():
+        from fleet_reap_policy import work_changed_locked
+        work_changed_locked(w["fid"], w.get("task", ""))
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed), queued_at=queued_at or now(),
                 guarded=w.get("wrap_ver") == "3",
                 next=next_at if next_at is not None else
@@ -1252,6 +1341,12 @@ def say(args):
         known = find(records(fid), delivery)
         if known is not None:
             return out(dict(delivery=delivery, state=public(known), reason=known.get("why", "")))
+        current = window(fid)
+        ok, why = can_talk(current)
+        if not ok or current is None or (current["sid"], current["win"], current["sock"]) != (w["sid"], w["win"], w["sock"]):
+            return out(dict(delivery=delivery, state="refused", reason=why or "changed"))
+        from fleet_reap_policy import work_changed_locked
+        work_changed_locked(fid, current.get("task", ""))
         save(r)
     w = window(fid)
     if w and not getattr(args, "why", None):
@@ -1269,10 +1364,17 @@ def public(r):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet_session_gate.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover"):
+    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover", "legacy-deliver", "prompt-input", "lock-fd", "close-ready", "wake-known"):
         p = sub.add_parser(name)
-        if name not in ("pending",):
+        if name not in ("pending", "prompt-input"):
             p.add_argument("--fid", required=name != "tick")
+        if name == "legacy-deliver":
+            p.add_argument("--sender", default="fleet")
+            p.add_argument("--delivery")
+        if name == "wake-known":
+            p.add_argument("--delivery", required=True)
+        if name == "lock-fd":
+            p.add_argument("--fd", type=int, required=True)
         if name == "say":
             p.add_argument("--text-file")
             p.add_argument("--image", action="append")
@@ -1300,6 +1402,27 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if getattr(a, "fid", None) and not FID_RE.match(a.fid):
         return out(dict(ok=False, why="bad_fid"), 2)
+    if a.cmd == "lock-fd":
+        # Bash opened this descriptor; flock belongs to that inherited open file
+        # description, so it stays held until the closing shell drops the fd.
+        path = fid_dir(a.fid) / ".lock"
+        if a.fd < 3 or not os.path.samestat(os.fstat(a.fd), path.stat()):
+            return 1
+        fcntl.flock(a.fd, fcntl.LOCK_EX)
+        return 0
+    if a.cmd == "close-ready":
+        why = close_hold(a.fid)
+        if why:
+            print(why)
+        return 1 if why else 0
+    if a.cmd == "wake-known":
+        seed = wake_path(a.fid, "peer-" + hashlib.sha256(a.delivery.encode()).hexdigest())
+        return 0 if any(seed.parent.glob(seed.name + ".*")) else 1
+    if a.cmd == "legacy-deliver":
+        return legacy_deliver(a)
+    if a.cmd == "prompt-input":
+        prompt_input(json.load(sys.stdin))
+        return 0
     if a.cmd == "say":
         return say(a)
     if a.cmd == "quota-transfer":
