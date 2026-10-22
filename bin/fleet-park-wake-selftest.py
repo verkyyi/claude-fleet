@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import shlex
 import unittest
 from unittest.mock import patch
 
@@ -25,6 +26,7 @@ spec.loader.exec_module(fixture)
 class Timers(fixture.Park):
     def setup_timer(self, cron=False):
         self.fake()
+        self.env['FLEET_WAKE_NATIVE_HOME'] = str(self.root)
         self.prompt = 'Check the batch; preserve "quotes" and\nthis second line.'
         self.env['FLEET_CC_PROJECTS_DIR'] = str(self.root / 'projects')
         project = self.root / 'projects/example'
@@ -88,8 +90,62 @@ class Timers(fixture.Park):
         args = (self.root / 'launch-args').read_text()
         self.assertEqual(args.count(self.prompt), 3, args)
 
+    def test_wrapper_restore_keeps_contract(self):
+        self.setup_timer(cron=True)
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(fixture.gate.park(self.fid).get('ok'))
+        contract = json.loads((self.root / 'conf/wake' / (self.fid + '.json')).read_text())
+        # The same command fleet-restore.sh emits after restoring the original
+        # fid from its map. Kill only this fixture's wrapper/window process tree.
+        cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
+                               if k.startswith('FLEET_') and 'CRED' not in k and 'ASSERT' not in k)
+        cmd += ' FLEET_PARK_RESTORE_FID=' + self.fid + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
+        cmd += ' --resume ' + self.sid
+        self.tm('respawn-window', '-k', '-t', self.win, cmd)
+        self.wait(lambda: self.opt('@park_held') and self.opt('@park_wrap_ver'))
+        self.assertFalse((self.root / 'launch-args').exists(), 'restore started the native engine early')
+        self.tick(contract['next'])
+        self.wait(lambda: not self.opt('@parked') and self.opt('@park_relay'))
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertIn(self.prompt, (self.root / 'launch-args').read_text())
+
+    def test_durable_has_one_owner(self):
+        import fleet_transfer_durable as durable
+        self.setup_timer()
+        self.set('@loop', '')
+        self.transcript.write_text(json.dumps(dict(version='2.1.295')) + '\n')
+        with patch.dict(os.environ, self.env):
+            source = fixture.gate.relay_request(fixture.gate.window(self.fid), dict(op='status'))
+        when = time.localtime(time.time() + 600)
+        minute = when.tm_min if when.tm_min not in (0, 30) else when.tm_min + 1
+        native = dict(id='durable-1', prompt=self.prompt, cron=f'{minute} {when.tm_hour} {when.tm_mday} {when.tm_mon} *',
+                      recurring=False, createdAt=int(time.time()*1000), createdBySessionId=self.sid,
+                      createdInProject=str(self.root.resolve()), createdByPid=source['agent_pid'],
+                      createdByProcStart=durable.proc_start(source['agent_pid']))
+        store = self.root / '.claude/scheduled_tasks.json'
+        store.parent.mkdir()
+        store.write_text(json.dumps(dict(tasks=[native])))
+        with patch.dict(os.environ, self.env), patch.object(durable, 'claude_processes', return_value=[]):
+            result = fixture.gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertEqual(json.loads(store.read_text())['tasks'], [])
+        contract = json.loads((self.root / 'conf/wake' / (self.fid + '.json')).read_text())
+        self.tick(contract['next'])
+        self.wait(lambda: not self.opt('@parked') and self.opt('@park_relay'))
+        self.tick(contract['next'])
+        self.assertEqual((self.root / 'launch-args').read_text().count(self.prompt), 1)
+
+    def test_refused_exit_keeps_native_schedule(self):
+        self.setup_timer()
+        with patch.dict(os.environ, dict(self.env, FLEET_GATE_EXIT_CMD='false')):
+            result = fixture.gate.park(self.fid)
+        self.assertFalse(result.get('ok'))
+        self.assertTrue(self.opt('@park_relay'))
+        self.assertFalse((self.root / 'conf/wake' / (self.fid + '.json')).exists())
+
 
 if __name__ == '__main__':
-    names = sys.argv[1:] or ['test_wakeup', 'test_cron_three_rounds']
+    names = sys.argv[1:] or [n for n in Timers.__dict__ if n.startswith('test_')]
     result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Timers(n) for n in names))
     sys.exit(not result.wasSuccessful())

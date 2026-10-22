@@ -69,6 +69,7 @@ import argparse
 import fcntl
 import socket
 import glob
+import hashlib
 import json
 import os
 import re
@@ -624,7 +625,7 @@ def wake_try(r, w):
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
     save(r)
     log("wake", r, "seed")
-    requested = wake_request(w, seed, "网页")
+    requested = wake_request(w, seed, r.get("wake_why", "网页"), r.get("wake_next"))
     if not requested.get("ok"):
         seed.unlink(missing_ok=True)
         return "queued", requested["why"]
@@ -766,13 +767,6 @@ def park_locked(fid, why, force):
         return dict(ok=False, why="bg")
     if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
         return dict(ok=False, why="words_waiting")
-    # C3 hands timers out before the process goes away. Until it is installed,
-    # a live timer is a hold, never a silently lost wakeup.
-    if w["loop"]:
-        p = subprocess.run([sys.executable, str(BIN / "fleet_loop_mark.py"), "export", "--fid", fid],
-                           capture_output=True, timeout=10)
-        if p.returncode != 0:
-            return dict(ok=False, why="wake_contract")
     generation = relay_request(w, dict(op="status"))
     seam = os.environ.get("FLEET_GATE_EXIT_CMD")
     if not generation.get("ok") and not seam:
@@ -785,6 +779,13 @@ def park_locked(fid, why, force):
     if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
             or current["state"] in ("working", "needs", "exited") or watched(current)):
         return dict(ok=False, why="changed")
+    # Read durable tasks even without @loop. Export never enables delivery while
+    # the native process can still run its timers; held below commits ownership.
+    import fleet_park_wake
+    try:
+        fleet_park_wake.export(fid)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return dict(ok=False, why="wake_contract", detail=str(error))
     started = time.monotonic()
     since = str(int(now()))
     saved_mb = park_saved_mb(w)
@@ -802,25 +803,39 @@ def park_locked(fid, why, force):
         sent = relay_request(w, dict(op="exit", generation=generation.get("generation")))
     if sent.get("ok"):
         end = time.monotonic() + num_env("FLEET_GATE_PARK_SECS", 15)
+        confirmed = False
         while time.monotonic() < end:
             held = tmux(w["sock"], "display-message", "-p", "-t", w["win"], "#{@park_held}")
             if held and held.strip():
+                try:
+                    fleet_park_wake.activate(fid)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    park_log(fid, "fail", why, time.monotonic() - started, "wake_contract:" + str(error))
+                    return dict(ok=False, why="wake_contract", parked=True)
                 park_log(fid, "park", why, time.monotonic() - started, rss_mb=saved_mb)
                 return dict(ok=True, why=why)
+            if w['loop'] and not confirmed:
+                screen = tmux(w['sock'], 'capture-pane', '-p', '-t', w['pane']) or ''
+                if fleet_park_wake.exit_confirmation(fid, screen):
+                    confirmation = relay_request(w, dict(op='confirm-exit', generation=generation.get('generation'),
+                                                         screen=hashlib.sha256(screen.encode()).hexdigest()))
+                    confirmed = bool(confirmation.get('ok'))
             time.sleep(.1)
     for option in ("@parked", "@park_since", "@park_why", "@park_saved_mb"):
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
+    fleet_park_wake.abort(fid)
     park_log(fid, "fail", why, time.monotonic() - started, sent.get("why") or "exit_failed")
     return dict(ok=False, why=sent.get("why") or "exit_failed")
 
 
-def wake_request(w, seed, why):
+def wake_request(w, seed, why, next_at=None):
     """Called under the fid lock: one owned seed, never replace another wake."""
     active = w.get("park_wake") or w.get("park_start")
     if active:
         return dict(ok=False, why="wake_pending")
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
-                next=(read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
+                next=next_at if next_at is not None else
+                (read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
     write_json(str(seed) + ".meta", meta)
     tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_wake", str(seed))
     return dict(ok=True, seed=str(seed))
@@ -837,6 +852,9 @@ def wake_ready(pane):
     except OSError:
         return
     meta = read_json(str(path) + ".claimed") or {}
+    if meta.get("fid"):
+        import fleet_park_wake
+        fleet_park_wake.resumed(meta['fid'])
     seed = meta.get("seed", "")
     if seed:
         Path(seed + ".launched").touch()
@@ -1009,8 +1027,10 @@ def status(fid):
 
 def say(args):
     fid = args.fid
-    text = sys.stdin.read() if args.text_file in (None, "-") else Path(args.text_file).read_text()
-    text = text.strip()
+    text = getattr(args, "text", None)
+    if text is None:
+        text = sys.stdin.read() if args.text_file in (None, "-") else Path(args.text_file).read_text()
+        text = text.strip()
     images = [str(Path(p)) for p in args.image or []]
     if not text and not images:
         return out(dict(state="refused", reason="empty"), 2)
@@ -1030,13 +1050,15 @@ def say(args):
         return out(dict(delivery=delivery, state="refused", reason=why))
     r = dict(v=1, delivery=delivery, fid=fid, text=text or "（图片）", images=images, at=now(), sid=w["sid"],
              agent=w["agent"], state="queued", why="", tries=0)
+    if getattr(args, "why", None):
+        r.update(wake_why=args.why, wake_next=getattr(args, "next_at", 0))
     with lock(fid):
         known = find(records(fid), delivery)
         if known is not None:
             return out(dict(delivery=delivery, state=public(known), reason=known.get("why", "")))
         save(r)
     w = window(fid)
-    if w:
+    if w and not getattr(args, "why", None):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_presence", str(int(now())))
     log("say", r)
     got = settle(fid, delivery) or r

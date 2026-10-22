@@ -649,7 +649,12 @@ restore() {
       # A planned restart's pin (fleet-sessions-snapshot.sh, issue #3511) also
       # brings back a `done` one — a session waiting at its prompt is not ended
       # (RESTORE_KEEP_DONE=1); `exited` still stays closed.
-      if [ -n "${RESTORE_UNFINISHED:-}" ] \
+      local wpark='' wtimers=''
+      case "$wtag" in WIN:?*)
+        python3 "$BIN/fleet_park_wake.py" restore --fid "${wtag#WIN:}" --sid "$wid" --owned 2>/dev/null && wtimers=1
+        python3 "$BIN/fleet_park_wake.py" restore --fid "${wtag#WIN:}" --sid "$wid" 2>/dev/null && wpark=1 ;;
+      esac
+      if [ -n "${RESTORE_UNFINISHED:-}" ] && [ -z "$wtimers" ] \
          && { [ "$wstate" = exited ] || { [ "$wstate" = "done" ] && [ -z "${RESTORE_KEEP_DONE:-}" ]; }; }; then
         say "    · $wname: $wstate last time — not reopened"
         log "skip $sess/$wname state=$wstate (auto restores unfinished only)"
@@ -752,7 +757,7 @@ restore() {
       # quoted for the shell since it is the person's text. Nothing pending → a
       # plain resume, exactly as before.
       local loopq=''
-      if [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ]; then
+      if [ -z "$wtimers" ] && [ "$wstate" = looping ] && [ "$wagent" != codex ] && [ -n "$wid" ] && [ "$wid" != - ]; then
         local loopline sq="'" esc="'\\''"
         loopline=$(python3 "$BIN/fleet_loop_mark.py" rearm --transcript "$(fleet_transcript_dir "$wpath")/$wid.jsonl" 2>/dev/null)
         if [ -n "$loopline" ]; then
@@ -761,6 +766,10 @@ restore() {
         fi
       fi
       local launch="'$BIN/fleet-session-wrap.sh'"
+      if [ -n "$wpark" ]; then
+        launch="FLEET_PARK_RESTORE_FID='${wtag#WIN:}' $launch"
+        nudge=''
+      fi
       local cmd
       local agent_label=claude resume_flag=--resume home_arg
       if [ "$wagent" = codex ]; then

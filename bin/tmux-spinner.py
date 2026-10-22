@@ -156,7 +156,8 @@ class Spinner:
         self.degen_secs = setting('FLEET_DEGENERATE_SECS', 15)
         self.periods = dict(stuck_check=setting('STUCK_CHECK_SECS', 10),
                             needs_check=self.needs_secs, degen_check=self.degen_secs,
-                            hb_stamp=max(self.interval, setting('SPIN_HB_SECS', 20)), daemon_watch=30)
+                            hb_stamp=max(self.interval, setting('SPIN_HB_SECS', 20)), daemon_watch=30,
+                            park_timers=5)
         now = clock()
         self.deadlines = {key: now + value for key, value in self.periods.items() if value}
         if not self.stuck_age:
@@ -172,6 +173,7 @@ class Spinner:
         self.next_read = now
         self.observer = watch.Observer()
         self.children = []
+        self.timer_child = None
         self.stuck_strikes = set()
         self.screens = {}
         self.idle_t0 = None
@@ -180,6 +182,17 @@ class Spinner:
         self.hb_time = None
         self.hb_count = 0
         self.hb_stamp()
+
+    def park_timers(self):
+        # C3 rides the resident spinner's clock. No per-session timer process;
+        # a slow gate owns this pass until it exits, never overlapping sweeps.
+        if self.timer_child is not None and self.timer_child.poll() is None:
+            return
+        if not any((self.conf / 'wake').glob('*.json')):
+            return
+        self.timer_child = subprocess.Popen([sys.executable, str(BIN / 'fleet_park_wake.py'), 'tick'],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.children.append(self.timer_child)
 
     def idle_delay(self, now):
         after = setting('FLEET_DAEMON_IDLE_AFTER', 300)

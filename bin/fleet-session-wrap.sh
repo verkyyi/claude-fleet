@@ -395,6 +395,17 @@ done
 unset _pv _ag
 park_sid=''    # a parked session's credential sid, kept for its wake (task HHV0)
 park_seed=''   # the first sentence a wake carries into the resumed conversation
+# C3: restore brings back the holding wrapper without starting the native engine
+# ahead of its deadline. The disk contract is bound to both fid and conversation.
+if [ "$intmux" = 1 ] && [ -n "${FLEET_PARK_RESTORE_FID:-}" ] \
+   && python3 "$BIN/fleet_park_wake.py" restore --fid "$FLEET_PARK_RESTORE_FID" --sid "$last_sid"; then
+  wset @fleet_id "$FLEET_PARK_RESTORE_FID"
+  wset "$(fleet_agent_get "${last_agent:-claude}" sid_window)" "$last_sid"
+  wset @parked "$(date +%s)"
+  park_hold
+  [ "$park_act" = quit ] && exit 0
+fi
+unset FLEET_PARK_RESTORE_FID
 cred_tries=0   # refused launches in a row for want of a session credential (#4112)
 cred_since=0   # when that streak began (T915: its child report waits FLEET_CRED_REPORT_SECS)
 while :; do

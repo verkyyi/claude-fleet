@@ -548,6 +548,11 @@ def hook():
         elif cur:
             subprocess.call(['tmux', 'set-window-option', '-u', '-t', pane, '@loop'],
                             stderr=subprocess.DEVNULL, timeout=5)
+        fid = subprocess.check_output(['tmux', 'display-message', '-p', '-t', pane, '#{@fleet_id}'],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+        if re.fullmatch(r'[0-9a-f-]{36}', fid):
+            import fleet_park_wake
+            fleet_park_wake.cancel(fid, payload)
     except (OSError, subprocess.SubprocessError):
         pass
     return 0
@@ -557,6 +562,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
     sub.add_parser('hook')
+    e = sub.add_parser('export')
+    e.add_argument('--fid', required=True)
     w = sub.add_parser('window')
     w.add_argument('target')
     w.add_argument('--socket-name')
@@ -583,6 +590,14 @@ def main():
     r.add_argument('--max-bytes', type=int, default=TAIL_BYTES)
     r.add_argument('--now', type=int)
     a = p.parse_args()
+    if a.cmd == 'export':
+        import fleet_park_wake
+        try:
+            print(json.dumps(fleet_park_wake.export(a.fid)))
+            return 0
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
     if a.cmd == 'rearm':
         try:
             line = rearm(tail_lines(a.transcript, a.max_bytes), a.now)
