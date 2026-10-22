@@ -6408,6 +6408,14 @@ drill_park_codex_loop_idle() {
   WHAT='Codex 循环没有 Claude mod 状态时仍由原生 idle 证明决定停放，正在工作的原生 thread 不停'
 }
 
+drill_wake_loop_reenters_bridge() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_resume_does_not_reenter_initial_loop_bridge 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放后接回清除首次桥接启动参数，保留原 manifest 与单 owner 定时约定，不重建循环'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)

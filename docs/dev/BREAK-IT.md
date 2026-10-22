@@ -624,6 +624,7 @@
 | 将停放范围扩到终端 / 派发来源，却漏掉草稿、后台任务或停掉后换了对话（C1） | 输入丢失，任务被杀，或者窗口虽在却接到了新会话 | HHV0 的同一个门用原生空输入框证明、中继输入代数、后台工作检查；外壳保持窗口 / fid / 会话号，按原号恢复 | `park-all-origins` |
 | Codex 空闲仍常驻，或停放接回时另开 thread（C5） | 内存不释放，原上下文和循环丢失 | 适配表声明优雅退出与同 thread 恢复；只在原生空闲且输入框为空时退出，包装器明确 resume 原 id | `park-codex-new-thread` |
 | Codex 的 Fleet loop 轮间空闲，只有 looping 状态而没有 Claude mod 状态（C5 真机验证） | 停放门一直报 busy，原生 idle 证明永远不运行 | native-input 适配器用原生 thread、队列和输入框决定是否空闲；原生仍在工作则拒停 | `park-codex-loop-idle` |
+| 迁移来的 Fleet loop 停放后到点接回，外壳仍继承首次启动的循环参数（C5 真机验证） | 再次进入 bridge，已有循环目录令启动失败；旧 thread id 还在但没有原生就绪 | 停放接回只恢复原 thread，去掉一次性桥接启动参数；保留原 manifest 与 ledger，由已交接的 gate owner 投递 | `wake-loop-reenters-bridge` |
 | 切换版本后，停放器去停一个没有停放页的老外壳窗口（C1） | 退出会吊销凭据或丢掉窗口，接不回同一会话 | 只停有 `@park_wrap_ver` 的新外壳；旧窗口拒停，不送退出 | `park-old-wrapper` |
 | 会话排了下一轮唤醒后停放 | 进程内定时器跟着退出，原提示再也不运行 | 停前持久化原会话的唤醒约定，到点经同一会话门接回，首轮保留原提示 | `park-loses-loop` |
 | 会话内 cron 在两轮之间停放 | cron 丢失，或每次接回重建一个 cron 导致重复执行 | 按任务 ID 保留唯一约定，确认送达后推进时刻，不重建原生 cron | `park-loses-cron` |
