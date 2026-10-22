@@ -209,7 +209,9 @@ book_ok() {  # <log path>
   [ "$?" != 3 ]
 }
 
-say_start() {  # <not_started|dropped> <why, one line> <the parent's summary>
+say_start() {  # <not_started|dropped> <why, one line> <the parent's summary> [word|force]
+  # 4th: word = the record's word and the log line only, no child report (a refusal
+  # the page retries by itself — T915); force = the report even when the word is not new
   [ "$intmux" = 1 ] || return 0
   local fid task iss why slog
   fid=$(opt @fleet_id); task=$(opt @task); iss=$(opt @issue)
@@ -230,7 +232,8 @@ say_start() {  # <not_started|dropped> <why, one line> <the parent's summary>
       told=1
     fi
     [ "$1" = not_started ] || exit 0
-    [ -n "$told" ] || { [ -z "$task" ] && [ -n "$iss" ]; } || exit 0
+    [ "${4:-}" = word ] && exit 0
+    [ "${4:-}" = force ] || [ -n "$told" ] || { [ -z "$task" ] && [ -n "$iss" ]; } || exit 0
     bash "$BIN/fleet-report-parent.sh" --state failed --win "$TMUX_PANE" --summary "$3" ) </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null
   return 0
@@ -332,6 +335,7 @@ for a in "$@"; do
 done
 unset _pv _ag
 cred_tries=0   # refused launches in a row for want of a session credential (#4112)
+cred_since=0   # when that streak began (T915: its child report waits FLEET_CRED_REPORT_SECS)
 while :; do
   if [ "$intmux" = 1 ]; then
     wset -u @wrap_quiet
@@ -500,12 +504,13 @@ while :; do
   case "$refused" in
     cred|cred_unknown)
       if [ "$retry" = 1 ]; then
+        [ "$cred_tries" = 0 ] && cred_since=$(date +%s)
         cred_tries=$((cred_tries + 1)); rin=15; i=1
         while [ "$i" -lt "$cred_tries" ] && [ "$rin" -lt 300 ]; do rin=$((rin * 2)); i=$((i + 1)); done
         [ "$rin" -gt 300 ] && rin=300
         pargs+=(--retry-in "$rin")
       fi ;;
-    *) cred_tries=0 ;;
+    *) cred_tries=0; cred_since=0 ;;
   esac
   # The countdown (issue #3170): only the person's own exit — never a crash, a
   # failed relaunch or a refused launch (the page must stay to say why). Every
@@ -567,10 +572,22 @@ while :; do
     fail_told=''
     say_start dropped "agent 退出（rc ${rc}，跑了 ${dur} 秒），窗口停在恢复页" ''
   elif [ -z "$fail_told" ]; then
-    fail_told=1
+    # No credential this once (T915): the page presses ↵ by itself and the next
+    # launch usually comes up — a FAILED report now would be the parent's answer for
+    # a session that went on to finish. The record's word and the log line are
+    # written at once; the report waits until the streak is FLEET_CRED_REPORT_SECS
+    # (300) old, and then goes even though the word is not new.
+    smode=''
+    if [ "$cred_tries" -gt 0 ]; then
+      cgrace=${FLEET_CRED_REPORT_SECS:-300}; case "$cgrace" in ''|*[!0-9]*) cgrace=300 ;; esac
+      if [ $(( $(date +%s) - cred_since )) -lt "$cgrace" ]; then smode=word
+      elif [ "$cred_tries" -gt 1 ]; then smode=force; fi
+    fi
+    [ "$smode" = word ] || fail_told=1
     case "$failed" in launch) _w="启动被拒" ;; *) _w="重开 ${dur} 秒就退出" ;; esac
     say_start not_started "${_w}（${fail_why:-rc $rc}）${fail_line:+：$fail_line}" \
-      "the session did not start: ${failed} failed (${fail_why:-rc $rc})${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window waits on the recovery page — retry it there or reap it"
+      "the session did not start: ${failed} failed (${fail_why:-rc $rc})${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window waits on the recovery page — retry it there or reap it" \
+      "$smode"
   fi
   hnote=()
   while :; do
