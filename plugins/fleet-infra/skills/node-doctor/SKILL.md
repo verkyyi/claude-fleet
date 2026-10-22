@@ -146,6 +146,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `nofile` | node | [mac-node-prep] | 只报状态：系统默认文件数上限 |
 | `onboard` | node | [node-doctor] | 就绪探针没过：照行内修 |
 | `open` | node | [node-doctor] | open.secret 权限不是 0600：`chmod 600` |
+| `park` | node | [node-doctor] | 会话在算 / 空闲 / 停放计数与省下的 RSS；未知时检查 tmux 与节点版本，`fleet doctor --park` 单读；eligible 要满 60 秒 CPU 采样，非零的空闲看所列原因 |
 | `peerlink` | node | [node-doctor] | 机器间链路：`fleet-peerlink.py status` |
 | `perl` | node | [mac-node-prep] | 装 Time::HiRes（不装也只是转圈按整秒） |
 | `personcert` | node | [mac-node-enroll] | 节点在用个人的 fleet login：查 node.env / 凭据代理，节点只用自己的令牌 |

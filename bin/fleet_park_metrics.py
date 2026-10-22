@@ -1,3 +1,4 @@
+# fleet_park_metrics.py — shared read-only session census and action summaries
 """Read-only park census shared by inventory, heartbeat and doctor (RBQG).
 
 RSS is the pane's complete process tree, including its wrapper. No observations
@@ -13,6 +14,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+
+import fleet_iso
 
 
 def command(args):
@@ -147,7 +150,7 @@ def daily(path, day):
         try:
             row = json.loads(line)
             ts = row["ts"]
-            stamp = datetime.fromtimestamp(ts, timezone.utc) if isinstance(ts, (float, int)) else datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            stamp = datetime.fromtimestamp(ts, timezone.utc) if isinstance(ts, (float, int)) else fleet_iso.parse(ts, utc=True)
             if stamp.astimezone(timezone.utc).date().isoformat() != day:
                 continue
             act = row.get("act")
