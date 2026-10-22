@@ -276,6 +276,14 @@ class Gate(unittest.TestCase):
         self.window({"@claude_state": "needs"})
         self.assertEqual(self.gate("park", "--fid", FID)["why"], "asking")
 
+    def test_N_old_wrapper_never_receives_exit(self):
+        # C1 drives fleet_session_gate.py: an old wrapper has no holding page.
+        self.setopt(**{"@park_wrap_ver": None})
+        r = self.gate("park", "--fid", FID)
+        self.assertEqual(r.get("why"), "old_wrapper", r)
+        self.assertIsNone(self.opt("@parked"))
+        self.assertFalse(json.load(open(self.d / "tmux.json")).get("keys"))
+
     def test_H_wake_timeout(self):
         self.window({"@parked": "1", "@claude_state": "done"})
         r = self.say("are you there", env={"FLEET_GATE_WAKE_SECS": "1"})
