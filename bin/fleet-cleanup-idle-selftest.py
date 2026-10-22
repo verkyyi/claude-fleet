@@ -2215,6 +2215,8 @@ class ParkTable(unittest.TestCase):
         with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "3d"}):
             self.assertEqual(rp.parked_deadline(snap), 259300)
             self.assertIn("1970-01-04T00:01:40Z", rp.explain(snap, now=200))
+            self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "merged"})))
+            self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "done:10m"})))
             snap["@reap_origin"] = "orchestrator"
             self.assertIsNone(rp.parked_deadline(snap))
             self.assertIn("keep", rp.explain(snap, now=200))

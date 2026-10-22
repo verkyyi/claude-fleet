@@ -124,6 +124,13 @@ def snapshot_origin(snap):
                      "web" if snap.get("@session_origin") == "web" else snap.get("@reap_origin", ""))
 
 
+def uses_park_retention(snap):
+    row = ORIGINS[snapshot_origin(snap)]
+    policy = snap.get("@reap_policy", "")
+    return (snap.get("@park_waiting") == "1" or
+            (row["reap"] == "parked" and policy in ("", row["default"], "keep")))
+
+
 def parked_deadline(snap):
     """The shared C6 clock: only an acknowledged park, no wake in flight.
     A person's keep/pin and permanent origins have no automatic expiration.
@@ -134,7 +141,7 @@ def parked_deadline(snap):
             or row["reap"] == "never" or snap.get("@pin") == "1"
             or (snap.get("@reap_policy") == "keep" and snap.get("@reap_keep_by") != "session")):
         return None
-    if row["reap"] != "parked" and snap.get("@park_waiting") != "1":
+    if not uses_park_retention(snap):
         return None
     since = snap.get("@park_since", "")
     if not since.isdigit() or int(since) <= 0:
@@ -156,7 +163,8 @@ def explain(snap, now=None):
     now = int(time.time()) if now is None else now
     origin = snapshot_origin(snap)
     row = ORIGINS[origin]
-    prefix = "origin=%s park=%s reap=%s" % (origin, row["park"], row["reap"])
+    reap = row["reap"] if uses_park_retention(snap) or not snap.get("@reap_policy") else snap["@reap_policy"]
+    prefix = "origin=%s park=%s reap=%s" % (origin, row["park"], reap)
     why = snap.get("@reap_why") or "pending-check"
     if snap.get("@parked") and snap.get("@park_held"):
         due = parked_deadline(snap)

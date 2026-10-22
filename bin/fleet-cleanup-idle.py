@@ -945,7 +945,7 @@ class Cleaner:
             if row["reap"] == "batch" and not self.work_over(snap):
                 self.why = "task-open"
                 return False
-            if row["reap"] in ("reported", "batch", "done") and (not pol or pol[0] != "keep"):
+            if (row["reap"] in ("reported", "batch", "done") or not fleet_reap_policy.uses_park_retention(snap)) and (not pol or pol[0] != "keep"):
                 return None
             self.why = "keep"
             return False
@@ -1034,7 +1034,8 @@ class Cleaner:
         if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) != "done":
             return None if snap.get("@session_origin") != "web" else False
         # Work already reported over still closes by its existing policy.
-        if (fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] not in ("parked", "never")
+        if (fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] != "never"
+                and not fleet_reap_policy.uses_park_retention(snap)
                 and "@task" in snap and self.work_over(snap)):
             return None
         stamp = snap.get("@claude_state_ts", "")
@@ -1092,7 +1093,7 @@ class Cleaner:
                 return road
         if getattr(self, "_park_only", False):
             return False
-        if (snap.get("@park_wrap_ver") and fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] == "parked"):
+        if snap.get("@park_wrap_ver") and fleet_reap_policy.uses_park_retention(snap):
             # Its old stamped idle policy cannot bypass the new park retention.
             return False
         road = self.error_stop(window, snap)

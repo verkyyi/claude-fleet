@@ -128,6 +128,8 @@ With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a sess
 
 Parking releases an idle agent process while keeping its window, identity, conversation and worktree. Speaking resumes the same conversation. Reaping closes the window only after recording resumable history; the worktree stays.
 
+Explicit policies such as after-merge still apply. Otherwise, new wrappers use this table:
+
 | Origin | Parking | Reaping |
 |---|---|---|
 | Person | Idle tier | 3 inactive days parked |

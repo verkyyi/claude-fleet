@@ -152,7 +152,7 @@ def due_of(w, repo, prs, landed, now):
     if w.get("@parked"):
         due = fleet_reap_policy.parked_deadline(w)
         return (due, "parked retention") if due is not None else None
-    if w.get("@park_wrap_ver") and fleet_reap_policy.ORIGINS[fleet_reap_policy.snapshot_origin(w)]["reap"] == "parked":
+    if w.get("@park_wrap_ver") and fleet_reap_policy.uses_park_retention(w):
         return None
     pol = fleet_reap_policy.parse(w["@reap_policy"]) if w["@reap_policy"] else None
     kind = pol[0] if pol else ("merged" if w["@issue"] else None)
