@@ -391,6 +391,29 @@ EOF
   exit 0
 fi
 
+# Delegation affects delivery only. Its sealed envelope names the original
+# parent; do not put this worker into the supervisor's children ledger. A held
+# adapter returns retry to the hub, not a successful receipt or user fallback.
+if [ "$KIND" = child_report ] && python3 - "$WORK/in" "$WORK/delegated" <<'PYDELEGATION'
+import json, sys
+r = json.load(open(sys.argv[1]))
+p = r['payload']
+d = p.get('report_delegation')
+if not d:
+    sys.exit(1)
+if not isinstance(d, dict) or d.get('reporter') != r['from'] or d.get('target') != r['to'] or p.get('rid') != r['id']:
+    sys.exit(2)
+with open(sys.argv[2], 'w') as f:
+    json.dump(p, f)
+PYDELEGATION
+then
+  python3 "$BIN/fleet_report_delegation.py" deliver "$WORK/delegated"
+  exit $?
+else
+  _drc=$?
+  [ "$_drc" != 2 ] || die 1 'delegation envelope does not match relay identities'
+fi
+
 # Task reports are fenced against task and parent generation before any key
 # resolution or ledger delivery. The hub retains retryable delivery failures.
 if [ "$KIND" = child_report ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("payload", {}).get("task_report") else 1)' "$WORK/in"; then

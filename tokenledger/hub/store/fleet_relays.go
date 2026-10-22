@@ -166,7 +166,8 @@ func (s *Store) FinishFleetRelay(id, status, detail string, at time.Time) error 
 // ExpireFleetRelays settles every relay still pending after ttl as expired.
 func (s *Store) ExpireFleetRelays(ttl time.Duration, now time.Time) (int64, error) {
 	res, err := s.write.Exec(`UPDATE fleet_relays SET status = ?, detail = 'no node took it within the relay TTL', updated = ?,
-		receipt = ? WHERE status = ? AND created < ?`, RelayExpired, now.UTC().Format(rfc), ReceiptDue, RelayPending,
+		receipt = ? WHERE status = ? AND created < ?
+		AND (kind <> 'child_report' OR `+s.d.jsonText("payload", "report_delegation")+` IS NULL)`, RelayExpired, now.UTC().Format(rfc), ReceiptDue, RelayPending,
 		now.Add(-ttl).UTC().Format(rfc))
 	if err != nil {
 		return 0, err

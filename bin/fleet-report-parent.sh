@@ -339,6 +339,24 @@ esac
 # sent under the key's one spelling, `<slug>:<key>`.
 [ -n "$sess" ] && worigin=$(fleet_key_qualify "$sess" "$worigin")
 
+# Report supervision is scoped to the producer's lifelong ID and original parent.
+# Read before the historic key-healing path: delegation never rewrites @origin.
+DELEGATION=''
+if [ -f "$FLEET_CONF_DIR/report-delegation/audit.ndjson" ]; then
+  _duuid=$(fleet_uuid "$sess" --read-only) || _duuid=''
+  _dparent=$owid
+  # An older spawn may carry a key-form worker_id beside the exact parent fid.
+  if [ -n "$_dparent" ] && ! fleet_is_fid "${_dparent#*/}" && fleet_is_fid "$ofid"; then
+    _dparent="${_dparent%%/*}/$ofid"
+  fi
+  [ -n "$_dparent" ] || { [ -z "$ofid" ] || _dparent="$_duuid/$ofid"; }
+  DELEGATION=$(python3 "$BIN/fleet_report_delegation.py" resolve --worker "$_duuid/$selffid" --parent "$_dparent")
+  _drc=$?
+  # Missing scope is the only fallback. A damaged journal fails closed, never
+  # silently waking the old parent after supervision was authorized.
+  case "$_drc" in 0|4) ;; *) exit 1 ;; esac
+fi
+
 # --- the parent by IDENTITY (issue #1646) ----------------------------------------
 # A spawn records the parent's @fleet_id as @origin_fid. The key in @origin is only
 # the NAME the parent wore at spawn time — a scratch bound to an issue since answers
@@ -348,7 +366,7 @@ esac
 # nests it and fleet-children.sh counts it there). Its generation check is moot —
 # the identity IS the session. Not found here ⇒ the key path below, as before.
 PFOUND=''
-if [ -z "$RETIRED_GEN" ] && fleet_is_fid "$ofid"; then
+if [ -z "$DELEGATION" ] && [ -z "$RETIRED_GEN" ] && fleet_is_fid "$ofid"; then
   if _pw=$(fleet_win_for_fid "$ofid" "$SOCK" 2>/dev/null) && [ -n "$_pw" ]; then
     _pk=$(fleet_window_okey "$sess" "$_pw" 2>/dev/null)
     # A parent with no key of its own (a session that took a role, issue #3439) is
@@ -671,6 +689,36 @@ envelope() {
   # the line, which is what both audiences read first.
   msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_NOTICE}"
 }
+
+# A delegated report is sealed once at its producer. All real hook callers of
+# this entry share the same route; the receiver never delegates it again.
+if [ -n "$DELEGATION" ]; then
+  envelope
+  _drow=$(row_json "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")
+  _ddry=''; [ "$DRY" != 1 ] || _ddry=--dry-run
+  _sealed=$(printf '%s' "$msg" | python3 "$BIN/fleet_report_delegation.py" seal \
+    --route "$DELEGATION" --row "$_drow" --origin "$worigin" ${_ddry:+"$_ddry"}) || exit 1
+  { read -r _dto; read -r _drid; } <<EOF
+$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["report_delegation"]["target"]); print(d["rid"])' "$_sealed")
+EOF
+  if [ "$DRY" = 1 ]; then printf '%s\n' "$_sealed"; exit 0; fi
+  # Archive by ORIGINAL parent identity on the producer. A historical key may
+  # now belong to another generation; never write into that holder's book.
+  children_append "${_dparent#*/}" "$_sealed" "$sess" || exit 1
+  [ "$TIER" = silent ] && quiet 'delegated · tier=silent — ledger only'
+  _queued=$(printf '%s' "$msg" | bash "$BIN/fleet-peer-queue.sh" put -L "$sess" \
+    --kind delegated_report --rid "$_drid" --to "$_dto" --to-fid "${_dto#*/}" \
+    --delegation "$_sealed") || exit 1
+  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
+  if [ "$_queued" = delivered ]; then printf 'reported → %s (replay): %s\n' "$_dto" "$st"; exit 0; fi
+  # Existing cleanup drains this queue. Try it now too; offline is still QUEUED.
+  bash "$BIN/fleet-peer-queue.sh" drain -L "$sess" --fid "${_dto#*/}" >/dev/null 2>&1
+  if bash "$BIN/fleet-peer-queue.sh" wait -L "$sess" --rid "$_drid" --secs 0 >/dev/null 2>&1; then
+    printf 'reported → %s (delegated): %s\n' "$_dto" "$st"; exit 0
+  fi
+  printf 'queued → %s (delegated; original parent preserved): %s\n' "$_dto" "$st"
+  exit 3
+fi
 
 # --- a parent on ANOTHER machine (issues #1420, #1421) ----------------------------
 # The parent's book lives on ITS machine, so the report is not ledgered here — a

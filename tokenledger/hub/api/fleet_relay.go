@@ -255,6 +255,9 @@ func (s *Server) checkRelay(ep store.Endpoint, m control.Message) (store.FleetRe
 	if len(payload) > control.MaxRelayPayload || json.Unmarshal(payload, &obj) != nil || obj == nil {
 		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "a relay's payload must be one JSON object of at most 16 KiB")
 	}
+	if err := checkReportDelegation(in, obj); err != nil {
+		return store.FleetRelay{}, err
+	}
 	from, err := s.Store.Fleet(fromFleet)
 	if err != nil || from.EndpointID != ep.ID {
 		// A node speaks only for its own workers.

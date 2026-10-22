@@ -66,3 +66,5 @@
 - [USAGE-EVIDENCE.md](dev/USAGE-EVIDENCE.md) — 使用实证
 
 新文档放进上面两处之一，链接用相对路径；`bin/docs-links-selftest.sh` 在每个 PR 上读一遍所有链接。
+
+- [报告监督委托：授权、读回与撤销](dev/REPORT-DELEGATION.md)
