@@ -62,13 +62,18 @@ def _rows(d, since, tail=None):
     """Every minute row from `since` on, the open minute last. `tail` bytes read
     off the file's end only (the top line, every 2 s)."""
     out = []
+    cut = False
     try:
         with open(os.path.join(d, FILE), "rb") as f:
             if tail:
                 f.seek(0, 2)
-                f.seek(max(0, f.tell() - tail))
+                start = max(0, f.tell() - tail)
+                if start:
+                    f.seek(start - 1)
+                    cut = f.read(1) != b"\n"
+                f.seek(start)
             data = f.read().decode("utf-8", "replace").splitlines()
-        if tail and data:
+        if cut and data:
             data = data[1:]     # a cut first line
     except OSError:
         data = []
