@@ -107,7 +107,7 @@ while True:
         # new-window inherits its server environment; pass only fixture settings.
         import shlex
         cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in self.env.items()
-                               if k.startswith('FLEET_') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
+                               if (k.startswith('FLEET_') or k == 'PATH') and 'CRED' not in k and 'ASSERT' not in k) + ' bash ' + shlex.quote(str(BIN / 'fleet-session-wrap.sh'))
         self.win = self.tm('new-window', '-d', '-P', '-F', '#{window_id}', '-t', 'test', cmd)
         self.set('@fleet_id', self.fid)
         self.set('@fleet_role', 'worker')
@@ -332,6 +332,25 @@ class client:
         self.assertEqual(rows[0]['rss_mb'], observed['saved_mb'])
 
     def test_park_screen_and_keyboard_sentence(self):
+        # macOS Python 3.9 starts monotonic() near zero in each process. Rebase
+        # only the real parked editor's clock so Linux covers the same startup.
+        import shlex
+        clock = self.root / 'clock-origin.py'
+        clock.write_text('import runpy,sys,time\nfrom pathlib import Path\n'
+                         'native=time.monotonic; origin=native()\n'
+                         'time.monotonic=lambda: native()-origin\n'
+                         'sys.argv=sys.argv[1:]\n'
+                         'sys.path.insert(0,str(Path(sys.argv[0]).resolve().parent))\n'
+                         'runpy.run_path(sys.argv[0],run_name="__main__")\n')
+        shim = self.root / 'tools'
+        shim.mkdir()
+        python = shim / 'python3'
+        executable = shlex.quote(sys.executable)
+        python.write_text('#!/bin/sh\ncase "$1" in\n'
+                          ' */fleet-park-page.py) exec ' + executable + ' ' + shlex.quote(str(clock)) + ' "$@" ;;\n'
+                          ' *) exec ' + executable + ' "$@" ;;\nesac\n')
+        python.chmod(0o755)
+        self.env['PATH'] = str(shim) + os.pathsep + self.env.get('PATH', '')
         self.fake()
         self.wait(lambda: 'last answer: preserved' in self.tm('capture-pane', '-p', '-t', self.win))
         before = self.tm('capture-pane', '-p', '-t', self.win).split('\n')
@@ -353,6 +372,7 @@ class client:
         self.tm('select-window', '-t', self.win)
         time.sleep(1.2)
         self.assertTrue(self.opt('@park_held'), 'viewing resumed the parked agent')
+        self.assertEqual(self.opt('@park_presence'), '0', 'viewing counted as keyboard input')
         self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
         time.sleep(.4)
         self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')

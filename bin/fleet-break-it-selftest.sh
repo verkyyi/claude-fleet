@@ -6475,6 +6475,14 @@ drill_park_while_watched() {
   WHAT='有人在终端里看着的网页会话不停放；没人看（控制模式的客户端不算人）、闲着才停'
 }
 
+drill_park_human_presence_lost() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_park_screen_and_keyboard_sentence 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放页的单调时钟从零附近起步：首次输入立即记录 presence，未回车不醒，原句仍带入恢复首轮'
+}
+
 # A parked session that does not come back (task HHV0): the machine went away, the
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
