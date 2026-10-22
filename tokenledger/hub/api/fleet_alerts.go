@@ -86,6 +86,8 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 			// hidden · idle (claude-fleet#4060), off the tick: a release waits
 			// on its conversation's export.
 			go s.SweepTrialSlots(now)
+			// 试用日报 at 09:00 Beijing, and trial_spend's held pushes (WACK C6).
+			go s.TrialSpendTick(now)
 		}
 	}
 }

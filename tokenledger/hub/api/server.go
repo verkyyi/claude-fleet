@@ -997,6 +997,7 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
 	mux.Handle(AdminOverviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminOverview))))
 	mux.Handle(AdminUsagePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminUsage))))
+	mux.Handle(TrialSpendPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTrialSpend))))
 
 	// The public counter (claude-fleet#1988): the hub's one lifetime total,
 	// readable by anyone while hub.public_meter is on, so example.com's
