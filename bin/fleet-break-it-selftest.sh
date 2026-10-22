@@ -5585,6 +5585,8 @@ drill_quota_boundary_recheck() {
   local started; started=$(now)
   python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_unattempted_refusal_rechecks_when_native_cancel_or_delivery_settles >"$WORK/quota-boundary.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-transfer-source-selftest.py" QuotaDialog.test_native_prompt_proof_uses_real_inbox_dispatch_without_probe_seam >>"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
 }
 

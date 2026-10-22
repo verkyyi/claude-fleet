@@ -1806,8 +1806,10 @@ person's session.
   nothing is dispatched: runs wait and expire. `SvcRunFinishDetail` takes the
   runner's own words on a failure (a stderr tail, the Job's events) — they go to
   the hub's log and audit only; the caller sees the code.
-- **Engine preference and fallback** (T954). `engine_pref` defaults to
-  `codex,claude`; `codex` and `claude` select a single engine. The caller supplies
+- **Engine preference and fallback** (T954). Omitting `engine_pref` preserves
+  legacy Claude, the original `template_digest`, request fingerprint and one
+  same-engine `infra_error` retry; any `engine_templates` mapping is ignored.
+  Explicit `codex,claude` opts into fallback; `codex` and `claude` select a single engine. The caller supplies
   `engine_templates: {codex: "<digest>", claude: "<digest>"}` after registering
   and evaluating the corresponding templates. A single-engine `codex` request
   uses `template_digest` directly; register its plain Markdown with
@@ -1821,8 +1823,9 @@ person's session.
   Claude, once, with at least a minute left. `template_invalid`, moderation and
   budget refusals end the run. A Codex first attempt gets half the remaining
   execution time so fallback can fit inside the original 900-second deadline.
-  A skipped Codex pool/template starts Claude directly; Claude is never repeated.
-  Already queued pre-release runs retain their original retry behavior.
+  In the explicit dual-engine mode, a skipped Codex pool/template starts Claude
+  directly and Claude is never repeated. Legacy requests, including already
+  queued pre-release runs, retain their original retry behavior.
   The final callback and GET include `usage.engine`, `attempts` with
   `{engine, code, wall_s}` (`code: "ok"` on success), and
   `progress: {stage, engine, attempt}`. Stages are `queued`, `running`, `fallback`

@@ -109,6 +109,24 @@ func TestCodexContinuationAcrossReplicas(t *testing.T) {
 	} {
 		call(p2, body, 409)
 	}
+	afterRefusal, err := s.Store.SessionBindFor(wid, credvault.Codex)
+	if err != nil || afterRefusal != b {
+		t.Fatalf("unknown continuation changed binding: %+v -> %+v: %v", b, afterRefusal, err)
+	}
+	// WebSocket state is unsupported: refuse before selection or upstream I/O.
+	ws, _ := http.NewRequest(http.MethodGet, p2.URL+"/v1/proxy/codex/responses", nil)
+	ws.Header.Set("Authorization", "Bearer "+pass)
+	ws.Header.Set("Connection", "Upgrade")
+	ws.Header.Set("Upgrade", "websocket")
+	wsResp, err := http.DefaultClient.Do(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsResp.Body.Close()
+	afterWS, err := s.Store.SessionBindFor(wid, credvault.Codex)
+	if wsResp.StatusCode != 403 || err != nil || afterWS != b {
+		t.Fatalf("websocket selected/accepted: %d %+v %v", wsResp.StatusCode, afterWS, err)
+	}
 	// A quota cooldown refuses a pinned source; it cannot redirect the continuation.
 	s.limits.mark(credvault.Codex, store.PoolPrincipal, s.Vault.CredentialID(*first), time.Now().Add(time.Hour))
 	call(p2, `{"previous_response_id":"old-ref","input":"continue"}`, 409)

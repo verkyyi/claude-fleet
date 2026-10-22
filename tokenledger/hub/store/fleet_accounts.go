@@ -556,15 +556,16 @@ func (s *Store) AlignPrincipalLogin(principalID, hostname string) (from, to stri
 
 // AdoptReloginAccount settles a relogin'd row (claude-fleet#2210) as active
 // without running anything: the row on hostname must already carry login (the
-// relogin's new name, not the person's own) and be settled or failed — the
-// create stopped part-way and the admin finished the login by hand. Any other
+// relogin's new name, not the person's own) and be unsent, settled or failed.
+// An admin may have created it locally before dispatch. The pending transition
+// is atomic against MarkAccountSent; in-flight operations stay refused. Any other
 // row refuses with ErrAccountState: adopt never invents a second login.
 func (s *Store) AdoptReloginAccount(principalID, hostname, login string, at time.Time) error {
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'adopt', detail = ?, op_id = '', endpoint_id = '', updated_at = ?
-		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ? AND login = ? AND state IN (?, ?, ?, ?)`,
+		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ? AND login = ? AND state IN (?, ?, ?, ?, ?)`,
 		AccountActive, "adopted: relogin "+login+" finished by hand", ts, principalID, hostname, login,
-		AccountActive, AccountFailed, AccountRemoved, AccountUnknown)
+		AccountPending, AccountActive, AccountFailed, AccountRemoved, AccountUnknown)
 	if err != nil {
 		return err
 	}
