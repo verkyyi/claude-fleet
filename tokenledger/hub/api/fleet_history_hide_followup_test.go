@@ -150,10 +150,44 @@ func TestHistoryHideReplicaForwarding(t *testing.T) {
 	if code, body := call(pAlice, "", ""); code != 200 || !strings.Contains(body, `"applied":false`) || hops != 1 {
 		t.Fatalf("peer dry-run: %d %s hops=%d", code, body, hops)
 	}
-	// Shared operator credentials carry no named principal. Preserve auth on
-	// the hop, and diagnose the existing audit actor requirement explicitly.
-	if code, body := call("shared-token", "", ""); code != 409 || !strings.Contains(body, `"reason":"actor_missing"`) {
-		t.Fatalf("shared-token audit identity: %d %s", code, body)
+	// The documented CLI uses the shared operator bearer. It is authorized
+	// by both replicas' full middleware and audited as a role, never a human.
+	if code, body := call("shared-token", "", ""); code != 200 || !strings.Contains(body, `"applied":false`) {
+		t.Fatalf("bearer dry-run: %d %s", code, body)
+	}
+	var audits int
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM fleet_history_hide_audit`).Scan(&audits); err != nil || audits != 0 {
+		t.Fatalf("dry-run wrote audit: %d %v", audits, err)
+	}
+	for _, actor := range []string{"shared-token", pAlice} {
+		wantActor := actor
+		if actor == "shared-token" {
+			wantActor = "operator"
+		}
+		raw, _ = json.Marshal(map[string]any{"manifest": m, "apply": true})
+		before := hops
+		if code, body := call(actor, "", ""); code != 200 || !strings.Contains(body, `"applied":true`) || hops != before+1 {
+			t.Fatalf("%s peer apply: %d %s", actor, code, body)
+		}
+		hidden, err := st.HiddenHistory(pAlice, a.historyMirrorSession)
+		if err != nil || !hidden[m.ID] {
+			t.Fatalf("apply did not hide: %v", err)
+		}
+		// Undo needs only identity and is available even without a live link.
+		raw, _ = json.Marshal(map[string]any{"manifest": map[string]string{"owner": m.Owner, "id": m.ID}, "apply": true, "undo": true})
+		if code, body := call(actor, "", ""); code != 200 || !strings.Contains(body, `"undo":true`) {
+			t.Fatalf("%s undo: %d %s", actor, code, body)
+		}
+		hidden, err = st.HiddenHistory(pAlice, a.historyMirrorSession)
+		if err != nil || hidden[m.ID] {
+			t.Fatalf("undo did not restore: %v", err)
+		}
+		for _, action := range []string{"hide", "undo"} {
+			var got int
+			if err := st.DB().QueryRow(`SELECT COUNT(*) FROM fleet_history_hide_audit WHERE owner=? AND fid=? AND actor=? AND action=?`, m.Owner, m.ID, wantActor, action).Scan(&got); err != nil || got != 1 {
+				t.Fatalf("%s audit actor=%s: %d %v", action, wantActor, got, err)
+			}
+		}
 	}
 	// Receiving replica still runs exact ledger checks, not just connectivity.
 	bad := m
@@ -169,8 +203,10 @@ func TestHistoryHideReplicaForwarding(t *testing.T) {
 			t.Fatal("nonadmin forwarded")
 		}
 	}
-	if code, _ := call(pAlice, "?as="+pBob, ""); code != 403 || hops != before {
-		t.Fatal("view-as forwarded")
+	for _, actor := range []string{pAlice, "shared-token"} {
+		if code, _ := call(actor, "?as="+pBob, ""); code != 403 || hops != before {
+			t.Fatal("view-as forwarded")
+		}
 	}
 	if code, body := call(pAlice, "", replicaTestToken); code != 409 || !strings.Contains(body, `"reason":"offline_unknown"`) || hops != before {
 		t.Fatalf("loop guard: %d %s", code, body)

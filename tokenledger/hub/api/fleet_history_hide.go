@@ -74,6 +74,11 @@ func (s *Server) handleHistoryHide(w http.ResponseWriter, r *http.Request) {
 	if actor == "" {
 		actor = viewerOf(r.Context())
 	}
+	if actor == "" {
+		// Same provenance as FleetPrincipal: the authorized shared operator
+		// credential names a role, not an individual human.
+		actor = "operator"
+	}
 	if err := s.Store.HideHistory(in.Manifest, actor, in.Undo, in.Apply, time.Now(), s.historyMirrorSession); err != nil {
 		var refusal *store.HistoryHideError
 		if errors.As(err, &refusal) {
