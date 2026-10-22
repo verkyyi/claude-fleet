@@ -55,5 +55,6 @@ spotlight	machine	machine	Spotlight off on a managed Mac
 wallpaper	machine	machine	Static desktop on a headless managed Mac (#4362)
 update	machine	machine	the one updater
 credsep-enforce	machine	machine	every human fleet login credential-separated, by root (#4607)
+trial-guard	machine	machine	every trial login held to fleet.trial.limits (renice → pause, miner / scan paused), by root (WACK C4)
 credential-pool	machine	machine	the subscription pool sync (an image-updated node)
 machine-reading	machine	machine	memory pressure, total memory and load per core, once every 15 s → cluster/machine.json (in a cluster: fleet-ops reads each user pod against its own limits and the hub pushes it into the pod login's $FLEET_CONF_DIR/cluster/, #3734)

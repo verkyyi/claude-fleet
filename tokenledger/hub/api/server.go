@@ -642,6 +642,10 @@ func (s *Server) routes() *routeMux {
 		// and sends its record with the machine's token.
 		mux.HandleFunc(control.EntryKeysNodePath, s.handleNodeEntryKeys)
 		mux.HandleFunc(control.EntryAuditNodePath, s.handleNodeEntryAudit)
+		// A machine's trial guard (claude-fleet WACK C4): its trial logins and
+		// limits, and the alert it raises when one runs away or mines.
+		mux.HandleFunc(TrialLimitsNodePath, s.handleNodeTrialLimits)
+		mux.HandleFunc(TrialAlertNodePath, s.handleNodeTrialAlert)
 		// …and says how the outside could reach its entry port (claude-fleet#3072).
 		mux.HandleFunc(control.EntryReachNodePath, s.handleNodeEntryReach)
 		// …and the cluster's one door reads its table (claude-fleet#3549).

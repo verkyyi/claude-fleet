@@ -541,6 +541,19 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   esac
 fi
 
+# --- trial-limits: every trial login held to its share (claude-fleet WACK C4) -------
+# The root daemon's trial-guard task writes <state>/trial/status.json (0644) each
+# minute: the hub's fleet.trial.limits, how many trial logins, any paused. Never
+# ran here (not a managed machine) = INFO, no row.
+if [ -f "$(dirname "$0")/fleet-trial-guard.py" ]; then
+  _tl=$(python3 -I "$(dirname "$0")/fleet-trial-guard.py" check 2>&1 | tail -n 1)
+  _tl_m=${_tl#trial-limits: }; _tl_lv=${_tl_m%% —*}; _tl_m=${_tl_m#* — }
+  case "$_tl_lv" in
+    OK)   pass trial-limits "$_tl_m" ;;
+    WARN) warn trial-limits "$_tl_m" ;;
+  esac
+fi
+
 # --- gate: 公开前必须先完成的安全项 (issue #3574, EPIC #3569 C4) ---------------------
 # One INFO row per item of conf/public-gate.tsv, PASS / FAIL in its words, then the
 # count. INFO on purpose: the gate is red until EPIC #3500 lands, and a red gate is

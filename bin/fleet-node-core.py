@@ -70,6 +70,11 @@ holds the wire half). The table, written here and nowhere else:
                           fleet-node-update.py root <step> as root — outside (cache,
                           admin agents, account links) · credsep (its code copy) ·
                           prune (retired releases); a step name, never an argv
+  trial    {login, action} a trial login's processes (claude-fleet WACK C4,
+                          bin/fleet_trial.py): renice (nice 10) · pause (SIGSTOP) ·
+                          resume (SIGCONT, nice 0) — every process of that managed
+                          login's uid, found by the core itself; never a pid, never
+                          root or an unmanaged login
 
 A login must be a managed one (<state>/accounts.json); never uid 0. Anything else —
 another op, an extra key, a wrong type, an argv outside bin/, an unsigned release —
@@ -160,6 +165,13 @@ if os.path.exists(os.path.join(HERE, "fleet_node_codesign.py")):
     _cspec = importlib.util.spec_from_file_location("fleet_node_codesign", os.path.join(HERE, "fleet_node_codesign.py"))
     codesign = importlib.util.module_from_spec(_cspec)
     _cspec.loader.exec_module(codesign)
+
+# a trial login's processes (claude-fleet WACK C4); a tree without it acts on none
+fleet_trial = None
+if os.path.exists(os.path.join(HERE, "fleet_trial.py")):
+    _tspec = importlib.util.spec_from_file_location("fleet_trial", os.path.join(HERE, "fleet_trial.py"))
+    fleet_trial = importlib.util.module_from_spec(_tspec)
+    _tspec.loader.exec_module(fleet_trial)
 
 # the admin seat's gate placement (issue #3696); a tree without it places nothing
 admin_seat = None
@@ -1206,6 +1218,18 @@ class Core(object):
         except subprocess.TimeoutExpired as x:
             rc, out = 124, (x.stdout or b"") + b"\n(timed out)"
         return {"ok": True, "rc": rc, "out": out[-4096:].decode("utf-8", "replace")}
+
+    def op_trial(self, conn, a):
+        if fleet_trial is None:
+            raise Refused(None, "no bin/fleet_trial.py in this release")
+        if a["action"] not in fleet_trial.ACTIONS:
+            raise Refused(None, "action %r — one of %s" % (a["action"], ", ".join(fleet_trial.ACTIONS)))
+        ident = managed_login(self.p, a["login"])
+        try:
+            got = fleet_trial.act(ident[0], a["action"])
+        except ValueError as e:
+            raise Refused(None, str(e))
+        return dict(ok=True, **got)
 
     def op_memguard(self, conn, a):
         if a["level"] not in LEVELS:

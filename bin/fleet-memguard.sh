@@ -40,6 +40,13 @@
 #              sitting on the line does not flicker). Same `ps` sample, judged every
 #              FLEET_CLAUDE_RSS_EVERY (30s) — the tmux pane map is read only when a
 #              session is over the line or a badge is up.
+#   T  trial   a trial login's processes together at ≥ its memory share
+#              (claude-fleet WACK C4): bin/fleet-trial-guard.py writes the lines,
+#              <FLEET_TRIAL_DIR>/mem.tsv (uid · limit MB · login), from the hub's
+#              fleet.trial.limits; this kills that login's largest process that is
+#              not its agent (claude / codex), tmux or sshd, and appends the stop to
+#              mem-events.tsv — the guard's next pass raises trial_runaway. No
+#              mem.tsv (not a managed machine, no trial login) = no ps, nothing.
 #
 # A kill is SIGKILL to that ONE pid — not its group, not its session: the shell
 # that ran it sees exit 137 and the session carries on. The pane's window gets
@@ -74,7 +81,9 @@
 #   FLEET_METRICS             0 = no 10s machine-metrics rows under pressure (default 1;
 #                             the rows land beside diskguard's in machine/metrics-*.tsv, #1294)
 #   FLEET_NOTIFY_CMD          notifier run as `$CMD "<markdown>"`
-# Stubs (selftests): FLEET_MEM_PS_CMD, FLEET_MEM_PROBE_CMD, FLEET_MEM_TOTAL_MB.
+#   FLEET_TRIAL_DIR           the trial guard's dir (default <FLEET_NODE_STATE>/trial)
+# Stubs (selftests): FLEET_MEM_PS_CMD, FLEET_MEM_PROBE_CMD, FLEET_MEM_TOTAL_MB,
+# FLEET_MEM_TRIAL_PS_CMD (rule T's `uid pid rssKB comm` rows).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -285,6 +294,37 @@ EOF
   return 0
 }
 
+TRIAL_DIR="${FLEET_TRIAL_DIR:-${FLEET_NODE_STATE:-/var/db/fleet-node}/trial}"
+
+# trial_pass — rule T. One ps only when a trial line is there.
+trial_pass() {
+  [ -s "$TRIAL_DIR/mem.tsv" ] || return 0
+  local rows hits uid login pid rss tot
+  if [ -n "${FLEET_MEM_TRIAL_PS_CMD:-}" ]; then rows="$(/bin/sh -c "$FLEET_MEM_TRIAL_PS_CMD" 2>/dev/null)"
+  else rows="$(ps -A -o uid=,pid=,rss=,comm= 2>/dev/null)"; fi
+  hits="$( { sed 's/^/L	/' "$TRIAL_DIR/mem.tsv"; printf '%s\n' "$rows" | awk '{ print "R\t" $1 "\t" $2 "\t" $3 "\t" $4 }'; } | awk -F'\t' '
+    $1 == "L" && $3 > 0 { lim[$2] = $3; who[$2] = $4; next }
+    $1 == "R" && ($2 in lim) { tot[$2] += $4
+      n = $5; sub(/.*\//, "", n)
+      if (n ~ /^(claude|codex|tmux|sshd|sshd-session|login|launchd)$/) next
+      if ($4 > big[$2]) { big[$2] = $4; bp[$2] = $3 } }
+    END { for (u in lim) if (tot[u] / 1024 >= lim[u] && bp[u] > 1)
+      printf "%s\t%s\t%s\t%d\t%d\n", u, who[u], bp[u], big[u] / 1024, tot[u] / 1024 }')"
+  while IFS="$TAB" read -r uid login pid rss tot; do
+    [ -n "$pid" ] || continue
+    if [ "$ONCE" = 1 ]; then
+      printf 'trial\t%s\t%s\t%sMB\t-\t%s\t%s holds %s MB\n' "$([ "$DRY" = 1 ] && echo would-kill || echo kill)" \
+        "$pid" "$rss" "$login" "$login" "$tot"
+    fi
+    [ "$DRY" = 1 ] && continue
+    kill -KILL "$pid" 2>/dev/null || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(now)" "$uid" "$login" "$pid" "$rss" "$tot" >> "$TRIAL_DIR/mem-events.tsv" 2>/dev/null
+  done <<EOF
+$hits
+EOF
+  return 0
+}
+
 exempt() { [ -n "$EXEMPT_RE" ] && printf '%s' "$1" | grep -Eq -- "$EXEMPT_RE"; }
 
 # Is an orphan row ours? Only asked for a row that has already crossed a line.
@@ -300,6 +340,9 @@ ROWS=''
 tick() {
   local t; t=$(now)
   ROWS="$(fleet_proc_mem_rows)"
+  # T — a trial login over its memory share (claude-fleet WACK C4): its own ps,
+  # whoever's processes fleet_proc_mem_rows counts
+  trial_pass
   [ -n "$ROWS" ] || return 0
   local hard=0
   [ "$HARD_PCT" -gt 0 ] && [ "$TOTAL_MB" -gt 0 ] && hard=$(( TOTAL_MB * HARD_PCT / 100 ))
@@ -372,7 +415,7 @@ for a in "$@"; do
     --daemon) MODE=daemon ;;
     --once) MODE=once ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,77p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,87p' "$0"; exit 0 ;;
     *) printf 'fleet-memguard: unknown argument %s (see --help)\n' "$a" >&2; exit 2 ;;
   esac
 done
@@ -420,6 +463,6 @@ case "$MODE" in
       sleep "$INTERVAL"
     done
     ;;
-  *) sed -n '2,77p' "$0"; exit 0 ;;
+  *) sed -n '2,87p' "$0"; exit 0 ;;
 esac
 exit 0

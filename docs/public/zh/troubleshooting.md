@@ -336,6 +336,13 @@ fleet doctor --json
 - **是什么**：被接管的登录有没有管理员权限或 sudo。它们不该有。
 - **WARN / FAIL 怎么办**：FAIL：把这个登录移出 admin 组和 sudoers。
 
+#### `trial-limits`
+
+来自 `fleet doctor`。
+
+- **是什么**：这台托管机器上的试用登录是不是都被看着：每位试用者 4 核 · 8 GB · 20 GB 家目录（入口设置 `fleet.trial.limits`）。CPU 持续满载先降优先级、再暂停；内存超线停掉它最大的进程；家目录超线提醒、超 120% 停会话；挖矿进程、矿池端口、短时大量新连接直接暂停，并告诉管理员。成员从不受影响。
+- **WARN / FAIL 怎么办**：WARN 点名已暂停的试用登录和原因：查清楚后由管理员在这台机器上执行 `sudo python3 ~/.claude/fleet/bin/fleet-trial-guard.py resume <登录>`；「上次巡检 N 分钟前」是机器守护的 trial-guard 任务没在跑，重跑 `sudo fleet node install`。
+
 #### `rootlog`
 
 来自 `fleet doctor`。

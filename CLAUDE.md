@@ -992,7 +992,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (only the node daemon's: `_fleetnode` once it exists — re-read per connection —
   else root), one line `{op, args}` with no extra key, and only `run-as` · `stop-as`
   · `exec-as` · `kill` · `memguard` · `power` · `switch` · `rollback` · `machine` ·
-  `sweep` · `entry` · `report` (`bin/fleet_node_core.py` is the wire + client).
+  `sweep` · `entry` · `report` · `trial` (`bin/fleet_node_core.py` is the wire + client).
   A job is a NAME of the account task table, never an argv; exec-as's argv[0] lives
   under `<current>/bin/`; `switch` re-checks the release with the core's own key
   (`bin/fleet_ed25519.py`, plain Python) and every digest. Off the table ⇒

@@ -99,6 +99,8 @@ var routeAccess = map[string]string{
 	// The direct door (claude-fleet#3068): a machine's own list and record.
 	control.EntryKeysNodePath: accessSelf, control.EntryAuditNodePath: accessSelf,
 	control.TrialEgressNodePath: accessSelf,
+	// A machine's trial guard (claude-fleet WACK C4): who is on trial here, and what it did.
+	TrialLimitsNodePath: accessSelf, TrialAlertNodePath: accessSelf,
 	// … its reach, and the cluster door's table (claude-fleet#3549).
 	control.EntryReachNodePath: accessSelf, control.EntryRoutesNodePath: accessSelf,
 	control.DoorHomePath: accessSelf, control.DoorSessionPath: accessSelf,
