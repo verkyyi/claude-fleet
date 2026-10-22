@@ -33,10 +33,11 @@ import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { backStep, phoneBar } from "./phone-screen";
 import { ADMIN_HREF, ME_TABS, meTab } from "./routes";
-import { ListUiProvider, NewButton, SearchButton, SessionRows } from "./SessionList";
+import { ListUiProvider, NewButton, SearchButton, SessionRows, sessionPath } from "./SessionList";
 import { NetBar } from "./NetBar";
 import { TrialBar } from "./TrialBar";
-import { WorkRowsProvider } from "./work-rows";
+import { useWorkRows, WorkRowsProvider } from "./work-rows";
+import { toast } from "sonner";
 import { clearBrowserCache } from "./chat/local";
 
 // What every page reads: who is signed in, what is left of their limit and
@@ -232,6 +233,23 @@ const NetBarOf: FC = () => {
   return <NetBar top={!viewAs && phoneBar(pathname, search) === "none"} />;
 };
 
+// 新回复 (会话合一 Y01K): a session the person is not looking at finished its
+// reply — one line on top for 3 s, 「X」答完了 · 去看; the row keeps its dot.
+const ReplyToast: FC = () => {
+  const { done, markSeen } = useWorkRows();
+  const go = useNavigate();
+  useEffect(() => {
+    if (!done) return;
+    const r = done.row;
+    const t = r.title.length > 14 ? `${r.title.slice(0, 13)}…` : r.title;
+    toast(tr(`「${t}」答完了`, `“${t}” is done`), {
+      duration: 3000, id: "reply-done",
+      action: { label: tr("去看", "View"), onClick: () => { markSeen(r); go(sessionPath(r)); } },
+    });
+  }, [done]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+};
+
 // The sidebar's folded or not, kept in this browser across a reload.
 const SIDE_KEY = "fleet.console.sidebar";
 function useSideOpen(): [boolean, (o: boolean) => void] {
@@ -252,6 +270,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
      <TitleCtx.Provider value={setTitle}>
      <WorkRowsProvider>
      <ListUiProvider>
+      <ReplyToast />
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none"
         style={{ height: "var(--app-h, 100dvh)", "--sidebar-width": "20rem" } as CSSProperties}>
         <Side />

@@ -11,14 +11,21 @@
 // layers as the chat (task KSQG, local.ts): this browser's record < the entry's
 // copy (?cached=1) < the session's machine, which always replaces the others.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
+import { SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type ExternalThreadQueueAdapter,
+  type RespondToToolApprovalOptions, type ThreadMessageLike } from "@assistant-ui/react";
 import { meOnce } from "@/shared/api";
+import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { toMessages, type Item, type Msg } from "./chat";
+import { attachedPics, MAX_PICS, packPics } from "./pics";
+import { afterSay, askOf, bubbles, replying, settle, userLines, type Pending, type Queued, type ViewAsk } from "./talk";
 import { browserCache, mayCache, mayShow, type Layer } from "./local";
 import { NOTHING, applyFrame, parseEvent, prependOlder, type Frame, type Held } from "./view-stream";
 
-export type ViewState = { agent: string; session: string; busy: boolean; state: string; label: string; holder: string };
+// can_talk (会话合一 Y01K): the web may talk to it — absent on the old road,
+// false for an older session (read-only); queue: its lines waiting; ask: what it asks now
+export type ViewState = { agent: string; session: string; busy: boolean; state: string; label: string; holder?: string;
+  can_talk?: boolean; queue?: Queued[]; ask?: ViewAsk | null };
 // why there is nothing to follow: the entry's or the service's code
 // (not_yours · old_agent · no_session · home_down · gone · …) and its words
 export type ViewGate = { code: string; msg: string } | null;
@@ -159,6 +166,109 @@ export function useSessionView(worker: string) {
     };
   }, [worker]);
 
+  // 会话合一 (Y01K): talking to it — what this page said and is waiting on
+  const canTalk = state?.can_talk === true;
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [answered, setAnswered] = useState<Map<string, { approved: boolean; answers?: Record<string, { optionIds: string[] }> }>>(new Map());
+  const [note, setNote] = useState("");
+  const itemsNow = useRef<Item[]>([]);
+  itemsNow.current = items;
+  useEffect(() => { setPending([]); setAnswered(new Map()); setNote(""); }, [worker]);
+  // what the record and the session's queue say settle what this page shows of its own lines
+  const queue = state?.queue;
+  useEffect(() => { setPending((ps) => settle(ps, items as { t: string; text?: string }[], queue, Date.now())); }, [items, queue]);
+  const waiting = pending.some((p) => p.state !== "failed");
+  useEffect(() => {
+    if (!waiting) return;
+    const t = window.setInterval(() => setPending((ps) => settle(ps, itemsNow.current as { t: string; text?: string }[], queue, Date.now())), 1000);
+    return () => clearInterval(t);
+  }, [waiting, queue]);
+
+  // same: a line not known to have gone is said again under its own id (the door never takes one twice)
+  const sayLine = useCallback(async (text: string, pics: string[], replace?: string, same?: string) => {
+    const id = same || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    const p: Pending = { id, text, pics, at: Date.now(), base: userLines(itemsNow.current as { t: string; text?: string }[], text), state: "sending" };
+    setNote("");
+    setPending((ps) => [...ps.filter((x) => x.id !== replace), p]);
+    let images: { media_type: string; data: string }[] = [];
+    try { images = pics.length ? await packPics(pics, text) : []; } catch {
+      setPending((ps) => ps.filter((x) => x.id !== id));
+      setNote(tr("这张图读不出来，换一张试试。", "That picture could not be read; try another."));
+      return;
+    }
+    const r = await fetch(`/v1/chat/say?worker=${encodeURIComponent(worker)}`, {
+      method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, cache: "no-store",
+      body: JSON.stringify({ id, text, ...(images.length ? { images } : {}) }),
+    }).catch(() => null);
+    const j = r ? await r.json().catch(() => ({})) : {};
+    const said = r?.ok ? { ok: true, delivery: String(j.delivery || ""), state: String(j.state || "sent"), reason: j.reason ? String(j.reason) : undefined }
+      : { ok: false, code: String(j.code || (r ? `http_${r.status}` : "offline")) };
+    setPending((ps) => ps.map((x) => (x.id === id ? afterSay(x, said, Date.now()) : x)));
+  }, [worker]);
+  const onSay = useCallback(async (m: AppendMessage) => {
+    const text = m.content.map((c) => (c.type === "text" ? c.text : "")).join("").trim();
+    const pics = attachedPics(m);
+    if (!text && !pics.length) return;
+    if (pics.length > MAX_PICS) setNote(tr(`一次最多发 ${MAX_PICS} 张图，只发了前 ${MAX_PICS} 张。`, `At most ${MAX_PICS} pictures a message; the first ${MAX_PICS} went.`));
+    await sayLine(text, pics.slice(0, MAX_PICS));
+  }, [sayLine]);
+  // 重试: the same words again; 算了: let it go
+  const retry = useCallback((id: string) => {
+    const p = pending.find((x) => x.id === id);
+    if (p) void sayLine(p.text, p.pics, id, p.returned ? undefined : p.id);
+  }, [pending, sayLine]);
+  // a line the door gave back is acked once: it is the page's now
+  const acked = useRef(new Set<string>());
+  useEffect(() => {
+    for (const p of pending) {
+      if (!p.returned || !p.delivery || acked.current.has(p.delivery)) continue;
+      acked.current.add(p.delivery);
+      void fetch(`/v1/chat/ack?worker=${encodeURIComponent(worker)}`, {
+        method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, cache: "no-store",
+        body: JSON.stringify({ delivery: p.delivery }),
+      }).catch(() => {});
+    }
+  }, [pending, worker]);
+  const dismiss = useCallback((id: string) => setPending((ps) => ps.filter((x) => x.id !== id)), []);
+  const post = useCallback(async (what: "stop" | "answer", body: Record<string, unknown>) => {
+    const r = await fetch(`/v1/chat/${what}?worker=${encodeURIComponent(worker)}`, {
+      method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify(body),
+    }).catch(() => null);
+    return !!r?.ok;
+  }, [worker]);
+  const onStop = useCallback(async () => {
+    if (!(await post("stop", {}))) setNote(tr("没停下来，稍后再试。", "It did not stop; try again."));
+  }, [post]);
+  const asks = useMemo(() => { const a = askOf(state?.ask); return a ? [a] : []; }, [state?.ask]);
+  const onAnswer = useCallback(async (o: RespondToToolApprovalOptions) => {
+    const a = asks.find((x) => x.rid === o.approvalId);
+    if (!a) return;
+    let body: Record<string, unknown>;
+    let picked: Record<string, { optionIds: string[] }> | undefined;
+    if (a.kind === "question") {
+      const out: Record<string, string | string[]> = {};
+      picked = {};
+      for (const [q, ans] of Object.entries(o.answers || {})) {
+        const picked1 = [...(ans.optionIds || []), ...(ans.text ? [ans.text] : [])];
+        out[q] = picked1.length > 1 ? picked1 : picked1[0] || "";
+        picked[q] = { optionIds: [...(ans.optionIds || [])] };
+      }
+      body = { fp: a.rid, answers: out };
+    } else body = { fp: a.rid, allow: o.approved };
+    if (await post("answer", body)) setAnswered((m) => new Map(m).set(a.rid, { approved: a.kind === "question" ? true : o.approved, ...(picked ? { answers: picked } : {}) }));
+    else setNote(tr("这个回答没送到，再点一次。", "That answer didn't go through; pick it again."));
+  }, [asks, post]);
+  // every send goes through the queue lane: the session's own door orders them,
+  // so the composer stays open while it answers (assistant-ui's queue capability)
+  const sayRef = useRef(onSay);
+  sayRef.current = onSay;
+  const lane = useMemo<ExternalThreadQueueAdapter | undefined>(() => (canTalk ? {
+    items: [], steerItems: [],
+    enqueue: (m) => { void sayRef.current(m); }, steer: (m) => { void sayRef.current(m); },
+    move: () => {}, edit: () => {}, remove: () => {},
+  } : undefined), [canTalk]);
+  const attach = useMemo(() => new SimpleImageAttachmentAdapter(), []);
+
   // the page before what is shown (?before=), drawn above it — assistant-ui's own
   // 「更早的消息」 (the runtime runs one at a time and says it is loading)
   const loadEarlier = useCallback(async () => {
@@ -175,17 +285,32 @@ export function useSessionView(worker: string) {
 
   // a message's id is its item's place counted from the first answer's first
   // item, so a page drawn above keeps every row (and the scroll) where it was
-  const messages = useMemo<Msg[]>(() => toMessages(items, [], new Map(), worker)
-    .map((m) => ({ ...m, id: m.id[0] + (Number(m.id.slice(1)) - lead) })), [items, worker, lead]);
+  const messages = useMemo<Msg[]>(() => {
+    const base = toMessages(items, canTalk ? asks : [], answered, worker)
+      .map((m) => ({ ...m, id: m.id[0] === "a" && m.id[1] === "-" ? m.id : m.id[0] + (Number(m.id.slice(1)) - lead) }));
+    // what this page said and the session holds queued: after the record, a waiting one faded
+    const more = bubbles(pending, canTalk ? queue : undefined).map((b) => ({
+      id: `p-${b.id}`, role: "user" as const,
+      content: [...b.pics.map((g) => ({ type: "image", image: g })), ...(b.text ? [{ type: "text", text: b.text }] : [])] as Msg["content"],
+      ...(b.wait ? { metadata: { custom: { queued: b.wait } } } : {}),
+    }));
+    return [...base, ...more];
+  }, [items, worker, lead, canTalk, asks, answered, pending, queue]);
+  const sending = replying(pending, queue);
   const runtime = useExternalStoreRuntime<Msg>({
     messages,
     convertMessage: (m) => m as ThreadMessageLike,
-    isRunning: !!state?.busy,
+    // a line handed over runs from the moment it went: waking a parked session is 「回答中」 too
+    isRunning: !!state?.busy || (canTalk && sending),
     isLoading: !loaded,
-    isDisabled: true,
+    isDisabled: !canTalk,
+    isSendDisabled: canTalk && !!gate,
     hasEarlier: older > 0,
     onLoadEarlier: loadEarlier,
-    onNew: async () => { /* read-only: the composer is never offered */ },
+    onNew: onSay,
+    ...(canTalk ? { onCancel: onStop, onRespondToToolApproval: onAnswer, queue: lane, adapters: { attachments: attach } } : {}),
   });
-  return { runtime, state, gate, loaded, live, count: items.length, layer };
+  const failed = pending.filter((p) => p.state === "failed");
+  return { runtime, state, gate, loaded, live, count: items.length, layer, canTalk, failed, retry, dismiss, note,
+    busy: !!state?.busy || (canTalk && sending) };
 }

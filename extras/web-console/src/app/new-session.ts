@@ -127,3 +127,21 @@ export function sendsOnEnter(e: { key: string; shiftKey?: boolean; isComposing?:
   if (e.key !== "Enter" || e.shiftKey || touch) return false;
   return !e.isComposing && e.keyCode !== 229;
 }
+
+// 会话合一 (Y01K): why a chat cannot start now — the home's own word, never its
+// name (nearly everyone has one) — or "" when it can.
+export function chatBlocker(home: Home | null): string {
+  if (!hasHome(home)) return home?.why || tr("你还没有家：家是你有登录、上面开着 fleet 的那台机器。先在一台机器上把 fleet 开起来，再回来新建。",
+    "You have no home yet: it is a machine with your login and fleet running on it. Start fleet on one, then come back.");
+  if (home.state === "offline" || home.state === "home_down") return tr("家机器暂时连不上 · 家机器连回来后才能发", "Your machine is out of reach · send once it is back");
+  if (home.state === "maintenance") return tr("家机器正在维护，维护结束后就能开。", "Your machine is under maintenance; you can start once it is done.");
+  if (home.state === "old_agent") return tr("家机器上的 fleet 太旧，还不能开对话。更新后再来。", "fleet on your machine is too old for a chat. Update it, then come back.");
+  return "";
+}
+
+// The row a chat opened became (会话合一 Y01K): /v1/chat/open answers its window's
+// identity (fid) and its worker id; the list carries either.
+export function rowForOpen(rows: Row[] | null, fid: string, worker: string): Row | null {
+  return (rows || []).find((r) => (!!worker && (r.live?.id === worker || r.board?.worker_id === worker))
+    || (!!fid && (r.live?.ident === fid || r.id === fid || !!r.board?.worker_id?.endsWith(`/${fid}`)))) || null;
+}

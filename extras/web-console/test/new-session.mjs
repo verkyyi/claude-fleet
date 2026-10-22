@@ -5,7 +5,7 @@
 // worker_start with or without words; the row it became is found by its key.
 // Run: node --experimental-strip-types test/new-session.mjs
 import assert from 'node:assert/strict';
-import { blocker, fixChoice, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf } from '../src/app/new-session.ts';
+import { blocker, chatBlocker, fixChoice, rowForOpen, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf } from '../src/app/new-session.ts';
 
 // the five, and nothing else
 const five = [['chat', 'claude'], ['chat', 'codex'], ['term', 'claude'], ['term', 'codex'], ['term', 'shell']];
@@ -85,4 +85,15 @@ assert.equal(sendsOnEnter({ key: 'Enter', isComposing: true }, false), false, 'a
 assert.equal(sendsOnEnter({ key: 'Enter', keyCode: 229 }, false), false, 'Safari\'s IME Enter (229) never sends');
 assert.equal(sendsOnEnter({ key: 'Enter' }, true), false, 'on a phone Enter is a new line; the button sends');
 assert.equal(sendsOnEnter({ key: 'a' }, false), false);
+// 会话合一 (Y01K): the chat /v1/chat/open opened is found by its worker or its window's identity
+const opened = [{ id: 'a', live: { id: 'F/x1', ident: 'fid-1' } }, { id: 'b', board: { worker_id: 'F/fid-2' } }];
+assert.equal(rowForOpen(opened, '', 'F/x1')?.id, 'a');
+assert.equal(rowForOpen(opened, 'fid-1', '')?.id, 'a');
+assert.equal(rowForOpen(opened, 'fid-2', '')?.id, 'b');
+assert.equal(rowForOpen(opened, 'nope', ''), null);
+// why it cannot start: the home's word, never its name
+assert.equal(chatBlocker({ machine: 'home-1', state: 'ok' }), '');
+for (const st of ['offline', 'maintenance', 'old_agent']) assert.ok(!chatBlocker({ machine: 'home-1', state: st }).includes('home-1'), st);
+assert.match(chatBlocker({ machine: 'home-1', state: 'offline' }), /家机器暂时连不上|out of reach/);
+assert.ok(chatBlocker({ state: 'no_home' }).length > 0);
 console.log('new-session: ok');

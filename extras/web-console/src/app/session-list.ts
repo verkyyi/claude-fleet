@@ -45,11 +45,54 @@ export function openFor(born: number, now = Date.now()): string {
   return tr(`开了 ${Math.floor(h / 24)} 天`, `open ${Math.floor(h / 24)} d`);
 }
 
-// rowMeta: the one line of detail a hover, a long-press and the session's own
-// top share — code · machine · agent · where it runs · how long.
-export function rowMeta(r: Row, now = Date.now()): string {
-  const where = r.live ? tr("在终端里", "in a terminal") : r.group === "gone" ? tr("已结束", "ended") : "";
-  return [r.code, rowMachine(r), rowAgent(r), where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
+// rowMeta: the one line of detail a hover and a long-press share — code · agent
+// · how long; the machine only for a person with more than one (会话合一 Y01K:
+// nearly everyone has one home, and its name said nothing).
+export function rowMeta(r: Row, now = Date.now(), machines = 1): string {
+  const where = r.group === "gone" ? tr("已结束", "ended") : "";
+  return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
+}
+
+// How many machines the person's sessions run on: a name is shown only past one.
+export function machineCount(rows: Row[] | null): number {
+  return new Set((rows || []).map((r) => rowMachine(r).toLowerCase().split(".")[0]).filter(Boolean)).size;
+}
+
+// A terminal's session (>_ after its title): the hub says where it was opened;
+// an older hub says nothing, and a running session there is a terminal's (the
+// web's one conversation is apart). A record with no session is neither.
+export const isTerminal = (r: Row) => (r.origin ? r.origin === "terminal" : !!r.live);
+
+// The state a row says in words, beside its title and under a session's own:
+// 回答中 while it answers, 新回复 when a reply came that the person has not
+// opened, its ask while it waits on them, 空闲 for any open one at rest (a
+// parked one too). `null`: the list says nothing for it.
+export function rowState(r: Row, replied = false): [string, string] {
+  if (r.glyph === "work") return ["回答中", "Replying"];
+  if (replied) return ["新回复", "New reply"];
+  if (r.group === "ask" || r.group === "gone" || r.glyph === "wait" || r.glyph === "pr") return r.tag;
+  return ["空闲", "Idle"];
+}
+// what the list prints at a row's end: only what asks to be looked at
+export function listWord(r: Row, replied = false): [string, string] | null {
+  if (r.glyph === "work" || replied || r.group === "ask") return rowState(r, replied);
+  return null;
+}
+
+// A session's own head: its code and its state (no machine, no agent). `busy`:
+// what its own stream says now, over the list's word.
+export function headMeta(r: Row, busy?: boolean): string {
+  const st: [string, string] = busy ? ["回答中", "Replying"] : busy === false && r.glyph === "work" ? ["空闲", "Idle"] : rowState(r);
+  return [r.code, tr(...st)].filter(Boolean).join(" · ");
+}
+
+// The line that opens it in a terminal (fleet-session-cli.py `fleet open <会话>`).
+export const openLine = (r: Row) => `fleet open ${r.code || r.live?.key || rowRef(r)}`;
+
+// 新回复 (会话合一; WD8F ②): a row that was answering and is not any more — the
+// ones in `next` whose glyph left "work" since `prev` (id → glyph).
+export function repliesDone(prev: Record<string, string>, next: Row[]): Row[] {
+  return next.filter((r) => prev[r.id] === "work" && r.glyph !== "work" && r.group !== "gone");
 }
 
 // A search finds what the row does not show: its code (shown or written), its

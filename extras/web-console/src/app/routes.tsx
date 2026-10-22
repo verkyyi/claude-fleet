@@ -21,19 +21,38 @@ import { Gauge, Layers, MessageCircle, MonitorSmartphone, Plus, Settings, Circle
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage from "./pages/chat";
-import { SessionListPage } from "./SessionList";
+import { SessionListPage, sessionPath } from "./SessionList";
+import { useUnified } from "./chat/home";
+import { useWorkRows } from "./work-rows";
 import { LEGACY, legacyTarget } from "./legacy";
 
 // The front page: the list on a phone, the conversation beside the list on a
 // computer (the left column already is the list). Read before the first paint,
 // so a phone never flashes the conversation.
 const PHONE = "(max-width: 767px)";
+const NewSession = lazy(() => import("./NewSession"));
 function Home() {
   const { search } = useLocation();
+  const unified = useUnified();
   const [phone, setPhone] = useState(() => matchMedia(PHONE).matches);
   useEffect(() => { const m = matchMedia(PHONE); const f = () => setPhone(m.matches); m.addEventListener("change", f); return () => m.removeEventListener("change", f); }, []);
   // the old first screen was the conversation: only a link into it (?about=) opens it now
-  return phone && !new URLSearchParams(search).has("about") ? <SessionListPage /> : <ChatPage />;
+  if (phone && !new URLSearchParams(search).has("about")) return <SessionListPage />;
+  // 会话合一 (Y01K): a chat is a session; a computer's front page is a new one
+  if (unified === null) return null;
+  return unified ? <NewSession /> : <ChatPage />;
+}
+
+// /chat: the old road's one conversation; on the new one it became a session
+// named 「我的对话」 — opened as any session, else the list.
+const MY_CHAT = ["我的对话", "My chat"];
+function ChatRoute() {
+  const unified = useUnified();
+  const { rows } = useWorkRows();
+  if (unified === false) return <ChatPage />;
+  if (unified === null || !rows) return null;
+  const mine = rows.find((r) => r.origin === "web" && MY_CHAT.includes(r.title));
+  return <Navigate to={mine ? sessionPath(mine) : "/"} replace />;
 }
 
 // Moved: an old address, sent on to where legacy.ts says it lives now — or,
@@ -57,9 +76,9 @@ export type PageDef = {
 
 export const PAGES: PageDef[] = [
   { id: "home", path: "/", label: tr("会话", "Sessions"), icon: Layers, page: Home },
-  { id: "chat", path: "/chat", label: tr("我的对话", "My chat"), icon: MessageCircle, page: ChatPage },
-  // 新建会话 (GR5E C3): 对话 | 终端 is chosen here, on the right of a computer, a phone's whole screen
-  { id: "new", path: "/new", label: tr("新建会话", "New session"), icon: Plus, page: lazy(() => import("./NewSession")) },
+  { id: "chat", path: "/chat", label: tr("我的对话", "My chat"), icon: MessageCircle, page: ChatRoute },
+  // 新会话 (GR5E C3; 会话合一 Y01K: the one way to start one): 对话 | 终端, on the right of a computer, a phone's whole screen
+  { id: "new", path: "/new", label: tr("新会话", "New session"), icon: Plus, page: NewSession },
   { id: "session", path: "/s/:ref", label: tr("会话", "Session"), icon: Layers, page: lazy(() => import("./pages/session")) },
   { id: "me", path: "/me/:tab", label: tr("我的", "Me"), icon: CircleUserRound, page: lazy(() => import("./pages/me")) },
   // the old addresses (legacy.ts): each a hop to where it lives now

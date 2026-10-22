@@ -595,6 +595,9 @@ const ComposerAction: FC = () => {
         <AuiIf
           condition={(s) =>
             !s.composer.canCancel ||
+            // fleet 会话合一 (Y01K): a session that queues its lines takes one
+            // mid-answer — words in the box send, an empty box stops
+            (s.thread.capabilities.queue && !s.composer.isEmpty) ||
             (s.thread.voice !== undefined &&
               s.composer.submission === undefined)
           }
@@ -616,6 +619,7 @@ const ComposerAction: FC = () => {
         <AuiIf
           condition={(s) =>
             s.composer.canCancel &&
+            !(s.thread.capabilities.queue && !s.composer.isEmpty) &&
             (s.thread.voice === undefined ||
               s.composer.submission !== undefined)
           }
@@ -881,6 +885,8 @@ const UserImagePart: ImageMessagePartComponent = (part) => (
 );
 
 const UserMessage: FC = () => {
+  // fleet 会话合一 (Y01K): a line waiting in the session's queue — faded, and why under it
+  const queued = useAuiState((s) => (s.message.metadata?.custom as { queued?: string } | undefined)?.queued);
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
@@ -890,14 +896,15 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden">
+        <div data-queued={queued ? "" : undefined} className={cn("aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden", queued && "opacity-55")}>
           <MessagePrimitive.Parts
             components={{ File: UserFilePart, Image: UserImagePart }}
           />
         </div>
-        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
+        {queued ? <p data-testid="queued-why" className="text-muted-foreground mt-1 text-end text-[12px]">{queued}</p> : null}
+        {queued ? null : <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
           <UserActionBar />
-        </div>
+        </div>}
       </div>
 
       <BranchPicker

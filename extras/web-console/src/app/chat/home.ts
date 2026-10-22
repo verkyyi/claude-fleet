@@ -23,3 +23,17 @@ export function whenLocal(iso: string | undefined, now = new Date()): string {
   if (days > 1 && days < 7) return lang === "zh" ? `周${"日一二三四五六"[t.getDay()]} ${hm}` : `${t.toLocaleDateString("en", { weekday: "short" })} ${hm}`;
   return lang === "zh" ? `${t.getMonth() + 1}月${t.getDate()}日 ${hm}` : `${t.toLocaleDateString("en", { month: "short", day: "numeric" })} ${hm}`;
 }
+
+// 会话合一 (Y01K): the entry says on /v1/chat/home whether its new road is on
+// (`unified`, the hub setting fleet.chat.unified): a chat is then a session of
+// the one list and the web talks to any session by /v1/chat/say. Off, or an
+// older entry that says nothing, the page keeps the old road — the one
+// conversation at /chat, a terminal session followed read-only. Read once per page.
+let homeRead: Promise<(Home & { unified?: boolean }) | null> | null = null;
+export const chatHome = () => (homeRead ??= getJSON<Home & { unified?: boolean }>("/v1/chat/home").catch(() => null)
+  .then((j) => { if (!j) homeRead = null; return j || null; }));   // a failed read is asked again next time
+export function useUnified(): boolean | null {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => { let live = true; void chatHome().then((h) => { if (live) setOn(h?.unified === true); }); return () => { live = false; }; }, []);
+  return on;
+}
