@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +53,31 @@ type svcRunProc struct {
 	cmd  *exec.Cmd
 	stop chan struct{} // closed by a cancel
 	once sync.Once
+	tail svcRunTail
+}
+
+// Bounded memory only: subprocess output must never create a credential log.
+type svcRunTail struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (t *svcRunTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := len(p)
+	t.data = append(t.data, p...)
+	if len(t.data) > 4096 {
+		t.data = t.data[len(t.data)-4096:]
+	}
+	return n, nil
+}
+
+func (t *svcRunTail) text(key string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := strings.ReplaceAll(string(t.data), key, "[redacted]")
+	return regexp.MustCompile(`(?:fcp-h[12]\.|fsj_|fcs_)[A-Za-z0-9._-]+`).ReplaceAllString(s, "[redacted]")
 }
 
 func (t *svcRunTable) add(key string, p *svcRunProc) bool {
@@ -139,6 +166,7 @@ func (a *Agent) answerSvcRun(ctx context.Context, conn nodeLink, m control.Messa
 	}
 	setOwnGroup(cmd)
 	p := &svcRunProc{cmd: cmd, stop: make(chan struct{})}
+	cmd.Stdout, cmd.Stderr = &p.tail, &p.tail
 	if !a.svcRuns.add(key, p) {
 		no(key + " is running here already")
 		return
@@ -165,6 +193,9 @@ func (a *Agent) svcWatch(ctx context.Context, key string, req control.SvcRunStar
 	select {
 	case err := <-done:
 		log.Printf("svc run %s: ended (%v)", key, exitWord(err))
+		if err != nil {
+			a.svcFailedResult(ctx, req, p.tail.text(req.Token))
+		}
 		return
 	case <-t.C:
 		why = "past its deadline"
@@ -181,6 +212,25 @@ func (a *Agent) svcWatch(ctx context.Context, key string, req control.SvcRunStar
 		err = clean.Run()
 	}
 	log.Printf("svc run %s: %s — killed, clean: %v", key, why, exitWord(err))
+}
+
+// If the wrapper died before handing its result in, preserve its diagnostic
+// tail through the same one-time result door. A key already ended is refused.
+func (a *Agent) svcFailedResult(ctx context.Context, run control.SvcRunStart, detail string) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	body, _ := json.Marshal(map[string]any{"attempt": run.Attempt, "exit": 1, "detail": detail})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.hub()+"/v1/node/svc-runs/"+run.Run+"/result", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+run.Token)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 // answerSvcRunCancel serves one TypeSvcRunCancel: an attempt not running here

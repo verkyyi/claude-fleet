@@ -171,12 +171,13 @@ func (s *Server) SvcAlertTick(now time.Time) {
 		return
 	}
 	s.svcAlertAt = now
-	runs, err := s.Store.SvcRunsSince(now.Add(-svcAlertWindow))
+	runs, err := s.Store.SvcRunsSince(now.Add(-7 * 24 * time.Hour))
 	if err != nil {
 		log.Printf("fleet alerts: svc runs: %v", err)
 		return
 	}
 	health := svcHealthOf(runs, now)
+	svcProbeHealth(health, runs)
 	seen := map[string]bool{}
 	for p, h := range health {
 		if !h.degraded() {
@@ -201,6 +202,29 @@ func (s *Server) SvcAlertTick(now time.Time) {
 		} else if cleared {
 			log.Printf("fleet alert cleared: svc_degraded %s", p)
 		}
+	}
+}
+
+// Daily probes have a different cadence from the ordinary 30-minute window.
+// Count final runs, not engine attempts; a successful fallback breaks a streak.
+func svcProbeHealth(health map[string]*svcHealth, runs []store.SvcRun) {
+	byPrincipal := map[string][]store.SvcRun{}
+	for _, run := range runs {
+		if run.Tenant == "probe" && store.SvcRunTerminal(run.State) && run.State != store.SvcRunCancelled {
+			byPrincipal[run.Principal] = append(byPrincipal[run.Principal], run)
+		}
+	}
+	for principal, probes := range byPrincipal {
+		sort.Slice(probes, func(i, j int) bool { return probes[i].ID > probes[j].ID })
+		if len(probes) < 2 || probes[0].State == store.SvcRunSucceeded || probes[1].State == store.SvcRunSucceeded {
+			continue
+		}
+		h := health[principal]
+		if h == nil {
+			h = &svcHealth{Principal: principal, Codes: map[string]int{}}
+			health[principal] = h
+		}
+		h.Reasons = append(h.Reasons, "每日自检 probe 连续两次失败")
 	}
 }
 

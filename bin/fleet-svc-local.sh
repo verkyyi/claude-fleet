@@ -12,13 +12,13 @@
 # One login runs for many workspaces, so nothing of one run may reach the next
 # (BREAK-IT svc-run-leaks-across-runs): each attempt gets a NEW 0700 directory
 # $FLEET_SVC_RUNS_DIR/R<n>-a<k> (default ~/.fleet-svc-runs) holding its HOME,
-# work, out, tmp and the key (0600) — an existing one is refused, exit 3. Every
+# work, out and tmp (the key stays in memory) — an existing one is refused, exit 3. Every
 # process of the attempt carries FLEET_RUN_TAG; the session runs in a process
 # group of its own (its id in <dir>/pgid), killed whole when it ends. At the end
 # (and at `clean`) that group and every process of this login carrying the tag
 # are killed — one that setsid()-ed out of the group too (where ps can read its
 # environment: not a macOS platform binary) — and the directory removed. bin/fleet-svc-runner.py does the
-# run itself (fetch, then run): the session's environment never holds the key or
+# run itself (local: fetch and run in one process): the session's environment never holds the key or
 # the hub's address, and its settings deny reading the key, the pass and this
 # login's own dot directories.
 #
@@ -120,17 +120,13 @@ finish() {
 trap finish EXIT
 trap 'exit 143' TERM INT HUP
 mkdir -p "$dir/home" "$dir/work" "$dir/out" "$dir/tmp" "$dir/run"
-printf '%s\n' "$key" > "$dir/key"
-unset key
+codex_bin=${FLEET_SVC_CODEX:-}
+[ -n "$codex_bin" ] || codex_bin=$(PATH="$REAL_HOME/.local/bin:$PATH" command -v codex 2>/dev/null || true)
 
 # what the session must never read: the key, the pass, this login's own config
 deny="$dir/key,$dir/run/**"
 for d in .config .ssh .claude .ccquota .codex .local Library; do deny="$deny,$REAL_HOME/$d/**"; done
-FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" FLEET_SVC_CLAUDE="$claude_bin" \
-FLEET_SVC_WORK="$dir/work" FLEET_SVC_OUT="$dir/out" FLEET_SVC_PASS_DIR="$dir/run" FLEET_SVC_KEY_FILE="$dir/key" \
+printf '%s\n' "$key" | FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" FLEET_SVC_CLAUDE="$claude_bin" FLEET_SVC_CODEX="$codex_bin" \
+FLEET_SVC_WORK="$dir/work" FLEET_SVC_OUT="$dir/out" \
 FLEET_SVC_PGID_FILE="$dir/pgid" FLEET_SVC_DENY_EXTRA="$deny" FLEET_SVC_DENY_ROOTS="${FLEET_SVC_DENY_ROOTS-private,etc,var,tmp,opt,usr,Library,System,Volumes,Applications,cores}" \
-  python3 -I "$BIN/fleet-svc-runner.py" fetch </dev/null || exit $?
-FLEET_RUN_TAG="$tag" HOME="$dir/home" TMPDIR="$dir/tmp" FLEET_SVC_CLAUDE="$claude_bin" \
-FLEET_SVC_WORK="$dir/work" FLEET_SVC_OUT="$dir/out" FLEET_SVC_PASS_DIR="$dir/run" FLEET_SVC_KEY_FILE="$dir/key" \
-FLEET_SVC_PGID_FILE="$dir/pgid" FLEET_SVC_DENY_EXTRA="$deny" FLEET_SVC_DENY_ROOTS="${FLEET_SVC_DENY_ROOTS-private,etc,var,tmp,opt,usr,Library,System,Volumes,Applications,cores}" \
-  python3 -I "$BIN/fleet-svc-runner.py" run </dev/null
+  python3 -I "$BIN/fleet-svc-runner.py" local
