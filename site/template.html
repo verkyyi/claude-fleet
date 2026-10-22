@@ -127,8 +127,10 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .lead{margin-top:15px;text-align:center;font-size:14.5px;line-height:1.55;color:var(--fleet-ink-2)}
 html.inwx[data-j=scan] .j-scan .lead{display:none} html.inwx[data-j=scan] .wxhint{display:block}
 .flow{margin-top:14px;padding-top:12px;border-top:1px solid var(--fleet-line-2);font-size:13.5px;line-height:1.55;color:var(--fleet-ink-2);text-align:center}
-.wxbtn,.orqr,.okline,.direct{display:none}
-@media (min-width:1024px){html[data-j=scan]:not(.inwx) .direct{display:flex}}
+.wxbtn,.orqr,.okline,.direct,.tocon{display:none}
+@media (min-width:1024px){html[data-j=scan]:not(.inwx) .direct{display:flex}
+  /* signed in on a computer: the code stays (to share it, or switch account), 进入控制台 under it */
+  html[data-j=in]:not(.inwx) .j-in{display:none} html[data-j=in]:not(.inwx) .j-scan{display:block} html[data-j=in]:not(.inwx) .tocon{display:flex}}
 .wxbtn{width:100%;margin-top:16px;background:#07c160;border-color:#07c160;color:#fff}
 .wxbtn:hover{background:#06ad56;border-color:#06ad56}
 .wxbtn svg{width:22px;height:22px}
@@ -221,6 +223,7 @@ footer .disc{margin-left:auto;font-size:12.5px}
       <p class="lead">{{join_lead}}</p>
       <p class="wxhint">{{wx_follow_qr}}</p>
       <a class="btn wide direct" href="/app">{{signin_direct}}</a>
+      <a class="btn btn-p wide tocon" href="/app">{{console}}</a>
     </div>
     <div class="j j-wait"><p class="wait"><i></i>{{wx_wait}}</p></div>
     <div class="j j-member">
@@ -314,7 +317,12 @@ footer .disc{margin-left:auto;font-size:12.5px}
     if(m){root.classList.add('in');
       document.querySelectorAll('[data-out]').forEach(function(e){e.hidden=true});
       $('#to-app').hidden=false;if(m.can_logout)$('#sign-out').hidden=false;
-      if(inwx){hi(m.name);if(m.role==='trial')root.classList.add('trialme');state('member')}else state('in');return}
+      if(inwx){hi(m.name);if(m.role==='trial')root.classList.add('trialme');state('member');return}
+      state('in');
+      /* a computer ≥1024 keeps the code beside 进入控制台: drawn when the card shows it */
+      if(!phone&&window.matchMedia){var wide=matchMedia('(min-width:1024px)'),go=function(){if(wide.matches)code($('#qr'))};go();
+        if(wide.addEventListener)wide.addEventListener('change',go);else if(wide.addListener)wide.addListener(go)}
+      return}
     if(inwx)return wechat();
     if(!phone)code($('#qr'));
   });
