@@ -82,6 +82,24 @@ class QuotaSettled(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'current scheduler unknown'):
                     src.quota_settled('test', '%2', 'exact')
                 schedules.side_effect = None
+                tool = dict(type='assistant', sessionId='exact', message={'content':[
+                    dict(type='tool_use', id='network-tool', name='WebFetch', input={})]})
+                transcript.write_text(json.dumps(tool)+'\n'+json.dumps(record)+'\n')
+                with self.assertRaisesRegex(ValueError, 'unfinished tool'):
+                    src.quota_settled('test', '%2', 'exact')
+                transcript.write_text('not valid JSON\n'+json.dumps(record)+'\n')
+                with self.assertRaisesRegex(ValueError, 'unknown tool transcript'):
+                    src.quota_settled('test', '%2', 'exact')
+                transcript.write_text(json.dumps(record)+'\n')
+                observations = iter((False, True))
+                def tool_appears(*_):
+                    if next(observations):
+                        transcript.write_text(json.dumps(tool)+'\n'+json.dumps(record)+'\n')
+                    return {'ok': True}
+                with patch.object(src, 'quota_prompt_proof', side_effect=tool_appears):
+                    with self.assertRaisesRegex(ValueError, 'changed during'):
+                        src.quota_settled('test', '%2', 'exact')
+                transcript.write_text(json.dumps(record)+'\n')
                 with self.assertRaisesRegex(ValueError, 'conversation changed'):
                     src.quota_settled('test', '%2', 'other')
                 for state in ('unknown', 'draft'):

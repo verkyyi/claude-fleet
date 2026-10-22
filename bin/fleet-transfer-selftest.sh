@@ -972,6 +972,26 @@ touch "$WORK/quota-proof-refuse"
 transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'exited without live main-turn proof must refuse'
 [ "$(field claude_state)" = exited ] && kill -0 "$PID" || fail 'unknown turn proof changed source'
 rm "$WORK/quota-proof-refuse"
+python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTATOOL'
+import json,sys
+with open(sys.argv[1], 'a') as out:
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], message={'content':[
+        dict(type='tool_use', id='native-network-tool', name='WebFetch', input={})]}))+'\n')
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
+        isApiErrorMessage=True, error='rate_limit', message={'content':[
+            dict(type='text', text="You've hit your weekly limit")]}))+'\n')
+PYQUOTATOOL
+transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'unreturned network tool must hold exited source'
+kill -0 "$PID" || fail 'unfinished tool refusal exited source'
+python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTATOOLEND'
+import json,sys
+with open(sys.argv[1], 'a') as out:
+    out.write(json.dumps(dict(type='user', sessionId=sys.argv[2], message={'content':[
+        dict(type='tool_result', tool_use_id='native-network-tool', content='cancelled')]}))+'\n')
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
+        isApiErrorMessage=True, error='rate_limit', message={'content':[
+            dict(type='text', text="You've hit your weekly limit")]}))+'\n')
+PYQUOTATOOLEND
 transfer --quota-continuation --expected-session-id "$SID" --dry-run || fail 'native quota boundary dry-run'
 [ "$(field claude_state)" = exited ] && kill -0 "$PID" || fail 'quota dry-run must preserve live failed source'; ok
 TM send-keys -t "$PANE" -l 'unsent draft'

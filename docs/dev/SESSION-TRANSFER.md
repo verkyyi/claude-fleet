@@ -109,7 +109,9 @@ prompt. The controller verifies the exact quota error, native error/idle state,
 empty prompt and no live tool, background process, approval or loop twice before
 accepting this boundary. Even after native Stop-and-wait or Escape, OSC `exited`
 is not a Stop acknowledgement: the live module must independently prove no main
-turn and an empty underlying prompt through `park.v1`. Missing/expired module
+turn and an empty underlying prompt through `park.v1`. The strict tool transcript
+oracle must also confirm no unreturned `tool_use`, including tools without a child
+process; malformed/unreadable records refuse. Missing/expired module
 evidence keeps the source safely refused. It never restamps the source `done`.
 Subscription quota can instead open the native `needs` choice menu. The controller
 requires the exact quota transcript, OSC `blocked/dialog open`, fully visible known
