@@ -333,7 +333,8 @@ func TestChatSayToSession(t *testing.T) {
 
 	// a new session from the web: on the home, its first line with it
 	resp = chatDo(t, h, "POST", "/v1/chat/open", alice, page, `{"agent":"claude","text":"hello"}`)
-	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"fid":"f-new"`) {
+	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"fid":"f-new"`) ||
+		!strings.Contains(string(b), `"worker_id":"`+fuid+`/f-new"`) {
 		t.Fatalf("open: %d %s", resp.StatusCode, b)
 	}
 	// an answer / a stop with no worker is still the home conversation's own

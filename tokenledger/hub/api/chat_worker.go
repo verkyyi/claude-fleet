@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -329,4 +330,47 @@ func (s *Server) sessionParkIdle() int {
 		d = defaultSessionParkIdle
 	}
 	return int(d / time.Second)
+}
+
+// chatOpenWorker adds the new session's worker_id to /api/open's answer (task
+// PQ41): the home names its window (fid); the page talks to it by worker id,
+// <the login's fleet>/<fid> — named only when the login runs exactly one fleet
+// the hub has heard (else the page finds it on the board by its id, the fid).
+func (s *Server) chatOpenWorker(resp *http.Response, machine, login string) {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(raw))
+	resp.ContentLength = int64(len(raw))
+	var out map[string]any
+	if err != nil || json.Unmarshal(raw, &out) != nil {
+		return
+	}
+	fid, _ := out["fid"].(string)
+	if fid == "" || strings.Contains(fid, "/") {
+		return
+	}
+	rows, err := s.Store.Fleets()
+	if err != nil {
+		return
+	}
+	fleet := ""
+	for _, f := range rows {
+		if f.Present && f.Hostname == machine && f.OSUser == login {
+			if fleet != "" {
+				return // two fleets on one login: the board says which
+			}
+			fleet = f.FleetID
+		}
+	}
+	if fleet == "" {
+		return
+	}
+	out["worker_id"] = fleet + "/" + fid
+	b, err := json.Marshal(out)
+	if err != nil {
+		return
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	resp.ContentLength = int64(len(b))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
 }

@@ -504,6 +504,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 					s.chatMirrorKeepBody(person, provider, append([]byte(nil), b...), taken)
 				}}
 			}
+			if name == "open" && resp.StatusCode == http.StatusOK {
+				s.chatOpenWorker(resp, home.Machine, home.Login)
+			}
 			if refund == nil {
 				return nil
 			}
