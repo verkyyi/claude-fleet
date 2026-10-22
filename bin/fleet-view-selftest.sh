@@ -176,7 +176,7 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q '等你 1' "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '─ 排队中 1' 'Old 做完的' '⌫ 现在收起已结束的 1 个' '▸ 已收起 1 个'; do
+for want in '─ 等你 1' '─ 在干活 3' '要不要继续合并？' 'Alpha 的完整标题很长很长' '─ 待派发 / 保留 1' 'Old 做完的' '⌫ 现在收起已结束的 1 个' '▸ 已收起 1 个'; do
   grep -qF "$want" "$W/popup.txt" || st_fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
@@ -665,7 +665,7 @@ tail = [(e["kind"], e.get("target") or e.get("cmd") or e.get("sec") or e.get("gr
 assert tail == [("hdr", "queue"), ("sess", "@11"), ("sess", "@8"), ("sess", "@9"), ("cmd", "reapall"),
                 ("sec", "gone"), ("sess", "@10"), ("sess", "landed:901@o/r"), ("sess", "landed:902@o/r"), ("sess", "landed:903@o/r"),
                 ("sess", "landed:904@o/r"), ("sess", "landed:905@o/r"), ("cmd", "history")], tail
-assert q["text"] == "排队中 3", q
+assert q["text"] == "待派发 / 保留 3", q
 assert not any(e["kind"] == "hdr" and e["group"] == "ask" for e in it), it
 idle = next(e for e in it if e.get("target") == "@11")
 assert idle["group"] == "queue" and idle["tags"] == ["空闲"] and not idle.get("ended"), idle

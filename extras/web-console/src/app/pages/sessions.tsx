@@ -283,7 +283,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         {s ? <p>{[machines > 1 ? s.machine : "", s.key, r.live?.born ? tr(`开始于 ${ago(new Date(r.live.born * 1000).toISOString())}`, `started ${ago(new Date(r.live.born * 1000).toISOString())}`)
           : r.ended ? tr(`收起于 ${ago(r.ended.ended)}`, `put away ${ago(r.ended.ended)}`) : "",
           r.live?.tokens ? tr(`今天 ${fmtTokens(r.live.tokens)} tokens`, `${fmtTokens(r.live.tokens)} tokens today`) : ""].filter(Boolean).join(" · ")}</p>
-          : <p className="text-muted-foreground">{t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
+          : <p className="text-muted-foreground">{r.board?.tag === "queued" ? tr("尚未派发，尚未启动会话", "Not dispatched; no session started") : r.board?.tag === "starting" ? tr("会话正在启动", "The session is starting") : t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
       </Field>
       <div className="flex flex-wrap gap-2">
         {r.live && !cli ? onTerminal ? <Button className="flex-1" onClick={onTerminal}><TerminalSquare />{tr("终端", "Terminal")}</Button>

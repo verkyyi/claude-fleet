@@ -147,7 +147,7 @@ assert [(a["of"], a["text"]) for a in ask] == [("@2", "要不要先合 #7？")],
 tag = {e["name"]: e["tags"] for e in it if e["kind"] == "sess"}
 assert tag.pop("idle") == ["空闲"] and all(v == [] for v in tag.values()), tag
 hdr = [e["text"] for e in it if e["kind"] == "hdr"]
-assert hdr == ["等你 1", "排队中 8"], hdr
+assert hdr == ["等你 1", "待派发 / 保留 8"], hdr
 assert not [e for e in it if e["kind"] == "sec"], it
 cmd = [e for e in it if e["kind"] == "cmd"]
 assert len(cmd) == 1 and cmd[0]["cmd"] == "reapall" and cmd[0]["n"] == 2 and "sec" not in cmd[0], cmd
