@@ -55,7 +55,7 @@
 |---|---|---|
 | 执行会话（worker start hook） | 核心 | 发起人拍板 2 覆盖草稿的按需建议；按任务记录开工、正常 PR/合并流程保持，说明书按 #4325 瘦身。 |
 | 上下文连续性（`fleet-handoff` / `fleet-compact-resume` / `fleet-context` / `handoff`） | 核心 | 保留同一任务的上下文与恢复能力。 |
-| 停放定时约定与接回保护（`fleet_park_wake.py`、`fleet_wake_guard.py`） | 核心 | 进程退出后保留原会话的下一轮；复用 spinner 时钟和会话门；外壳以跨登录名额约束原生启动、保留失败原话，无新增常驻调度器。 |
+| 停放定时约定与接回保护（`fleet_park_wake.py`、`fleet_wake_guard.py`、`fleet_park_version.py`） | 核心 | 进程退出后保留原会话的下一轮；复用 spinner 时钟和会话门；外壳以跨登录名额约束原生启动、保留失败原话，无新增常驻调度器。 |
 | 会话迁移与历史（`fleet-move` / `fleet-history`） | 核心 | 支持跨节点连续工作与已关闭会话恢复。 |
 | 首次使用（`fleet-onboard`） | 核心 | 提供首次使用入口。 |
 | 安装同步（`fleet-sync-install`） | 核心 | 操作者维护版本的入口；执行会话不得自行同步在线安装。 |

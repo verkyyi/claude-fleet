@@ -86,7 +86,7 @@ class Storm(unittest.TestCase):
             try:
                 time.sleep(.3)
                 self.assertFalse((directory / 'timer').exists())
-                human = subprocess.run([sys.executable, '-c', code, str(directory / 'human'), '键盘'],
+                human = subprocess.run([sys.executable, '-c', code, str(directory / 'human'), '⌘P'],
                                        env=env, timeout=5)
                 self.assertEqual(human.returncode, 0)
                 self.assertTrue((directory / 'human').exists())
@@ -172,6 +172,7 @@ class Recovery(unittest.TestCase):
         self.assertEqual(f.opt('@fleet_id'), f.fid)
 
     def test_major_version_preflight_starts_fresh_and_keeps_words(self):
+        import fleet_park_wake as wake
         f, gate = self.fixture(preflight=True)
         project = f.root / 'projects/project'
         project.mkdir(parents=True)
@@ -180,19 +181,36 @@ class Recovery(unittest.TestCase):
                               json.dumps(dict(version='2.9.0')) + '\n')
         with patch.dict(os.environ, f.env):
             self.assertTrue(gate.park(f.fid)['ok'])
-        f.tm('send-keys', '-t', f.win, '-l', 'original after upgrade')
-        f.tm('send-keys', '-t', f.win, 'Enter')
-        f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+        new_sid = '22222222-2222-4333-8444-555555555555'
+        launch = f.root / 'launch'
+        launch.write_text(launch.read_text().replace(f.sid, new_sid))
+        with patch.dict(os.environ, f.env):
+            wake.save(wake.path_for(f.fid), dict(v=1, fid=f.fid, sid=f.sid, agent='claude',
+                phase='active', parked=True, jobs=[dict(id='timer', kind='wakeup',
+                prompt='original after upgrade', next=123, recurring=False)]))
+            wake.tick(f.fid)
+            f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+            gate.settle(f.fid)
+            wake.tick(f.fid)
+            record = json.loads(wake.path_for(f.fid).read_text())
+            self.assertEqual(record['sid'], new_sid)
+            self.assertNotIn('pending', record)
+            self.assertIsNone(record['jobs'][0]['next'])
+            self.assertEqual(gate.records(f.fid)[0]['state'], 'sent')
+            wake.tick(f.fid)
         args = json.loads((f.root / 'argv').read_text().splitlines()[-1])
         self.assertNotIn('--resume', args)
         self.assertEqual(args[-1], 'original after upgrade')
+        self.assertEqual(len((f.root / 'argv').read_text().splitlines()), 2)
         self.assertEqual(f.opt('@fleet_id'), f.fid)
-        f.wait(lambda: '"act":"fresh"' in (f.root / 'conf/logs/park.ndjson').read_text())
+        f.wait(lambda: any(json.loads(line)['act'] == 'fresh' for line in
+                           (f.root / 'conf/logs/park.ndjson').read_text().splitlines()))
         self.assertIn('2.9.0', f.opt('@park_fresh_reason'))
         self.assertIn('3.0.0', f.opt('@park_fresh_reason'))
 
     def test_memguard_rule_c_parks_idle_through_the_existing_gate(self):
         f, gate = self.fixture()
+        f.tm('rename-session', '-t', 'test', f.label)
         config = f.root / ('conf/fleets/' + f.label)
         config.mkdir(parents=True)
         (config / 'conf').touch()
@@ -203,6 +221,15 @@ class Recovery(unittest.TestCase):
         ps.chmod(0o755)
         env = dict(f.env, FLEET_MEM_PS_CMD=str(ps), FLEET_MEM_TOTAL_MB='65536',
                    FLEET_MEM_PROBE_CMD='echo 1 60 5 0', FLEET_NOTIFY_CMD='true')
+        f.wait(lambda: f.opt('@claude_state_src') == '7501')
+        f.set('@claude_needs', 'ask')
+        f.set('@claude_state', 'needs')
+        result = subprocess.run(['bash', str(BIN / 'fleet-memguard.sh'), '--once'],
+                                env=env, capture_output=True, text=True, timeout=20)
+        self.assertFalse(f.opt('@park_held'), 'memory rule must not stop a question: ' +
+                         result.stdout + result.stderr + f.opt('@claude_state') + f.opt('@claude_needs'))
+        f.set('@claude_needs', '')
+        f.set('@claude_state', 'done')
         result = subprocess.run(['bash', str(BIN / 'fleet-memguard.sh'), '--once'],
                                 env=env, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)

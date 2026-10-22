@@ -243,10 +243,20 @@ def abort(fid):
             durable.abort(fid, 'park exit refused')
 
 
-def resumed(fid):
+def resumed(fid, old_sid=None, new_sid=None):
     with locked(fid) as path:
         r = durable.read(path)
         if r:
+            # C7's explicit fresh transition moves the existing owner only;
+            # delivery IDs, rounds and the ledger's schedule remain unchanged.
+            if old_sid and new_sid and r['sid'] == old_sid:
+                if r.get('ledger'):
+                    loop = loop_module()
+                    with loop.locked(Path(r['ledger'])) as source:
+                        if source.get('park_fid') == fid and source.get('thread_id') == old_sid:
+                            source['thread_id'] = new_sid
+                            loop.save(Path(r['ledger']), source)
+                r['sid'] = new_sid
             r['parked'] = False
             save(path, r)
 
