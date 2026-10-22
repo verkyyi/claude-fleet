@@ -449,7 +449,7 @@ class ParkRelay:
         if pane():
             tmux(["set-option", "-w", "-t", pane(), "@park_relay", self.path])
 
-    def serve(self, buffer, pending_input):
+    def serve(self, buffer, pending_input, busy=False):
         try:
             client, _ = self.server.accept()
         except BlockingIOError:
@@ -462,7 +462,7 @@ class ParkRelay:
                 if op == "status":
                     reply = dict(ok=not self.exiting, generation=self.generation)
                 elif (op == "exit" and not self.exiting and not pending_input and not buffer
-                      and request.get("generation") == self.generation):
+                      and not busy and request.get("generation") == self.generation):
                     buffer.extend(b"/exit\r")
                     self.exiting = True
                     reply = dict(ok=True)
@@ -589,7 +589,7 @@ def relay(cmd, depth=0):
                     stdin_open = False
                     _killpg(pid, signal.SIGHUP)
             if control.server in rr:
-                control.serve(to_child, 0 in rr)
+                control.serve(to_child, 0 in rr, rd.last is not None and rd.last[0] not in ("done", "idle"))
             if master in ww:
                 _flush(master, to_child)
             if 1 in ww:

@@ -342,13 +342,14 @@ park_hold() {
   while :; do
     w=$(opt @park_wake)
     if [ -n "$w" ]; then
-      wset -u @park_wake
       if mv "$w" "$w.taken" 2>/dev/null; then
         park_seed=$(cat "$w.taken" 2>/dev/null)
         # First native 7501 report acknowledges this seed after the engine starts.
         wset @park_start "$w.meta"
+        wset -u @park_wake
         break
       fi
+      wset -u @park_wake
     fi
     # a person came to look at it (fleet open, ⌘P, a switch): bring it back
     if tmux list-clients -F '#{client_control_mode}	#{window_id}' 2>/dev/null \

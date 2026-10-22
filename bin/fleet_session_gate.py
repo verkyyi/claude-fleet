@@ -100,10 +100,10 @@ WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}
                      "#{@mod_alive}", "#{@session_origin}", "#{window_activity}", "#{@park_wake}",
                      "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
                      "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
-                     "#{@park_presence}", "#{@park_watched_at}"])
+                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
             "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
-            "wrap_ver", "relay", "pane_pid", "presence", "watched_at"]
+            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start"]
 
 
 def now():
@@ -603,6 +603,7 @@ def wake_try(r, w):
                 return "waking", "starting"
             return ("sent", "woken") if Path(str(seed) + ".launched").exists() else ("returned", "wake_timeout")
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+        park_log(r["fid"], "fail", "网页", now() - r.get("wake_at", now()), "wake_timeout")
         return "returned", "wake_timeout"
     seed.write_text(compose(r))
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
@@ -797,7 +798,7 @@ def park_locked(fid, why, force):
 
 def wake_request(w, seed, why):
     """Called under the fid lock: one owned seed, never replace another wake."""
-    active = w.get("park_wake")
+    active = w.get("park_wake") or w.get("park_start")
     if active:
         return dict(ok=False, why="wake_pending")
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
@@ -972,6 +973,9 @@ def answer(fid, fp, picks=None, answers=None, allow=None):
 # ---- the CLI ------------------------------------------------------------------------------
 def status(fid):
     w = window(fid)
+    if w:
+        # The web keeps this call open while its conversation page is present.
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_presence", str(int(now())))
     ok, why = can_talk(w)
     q = [dict(delivery=r["delivery"], text=r["text"], why=r.get("why") or r.get("state"), state=r.get("state"))
          for r in records(fid) if r.get("state") in ("queued", "trying", "native", "waking", "returned")]
@@ -1008,6 +1012,9 @@ def say(args):
              agent=w["agent"], state="queued", why="", tries=0)
     with lock(fid):
         save(r)
+    w = window(fid)
+    if w:
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_presence", str(int(now())))
     log("say", r)
     got = settle(fid, delivery) or r
     return out(dict(delivery=delivery, state=public(got), reason=got.get("why", "")))
