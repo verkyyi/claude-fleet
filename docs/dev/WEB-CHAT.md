@@ -490,6 +490,30 @@ peer 消息和子会话回报也通过 `fleet_agent_deliver` 调这一个唤醒�
 `@park_why`；RSS 为进程树含外壳的总量，单位 MB，采样失败或根进程缺失时清除快照。C8 只读这份快照，缺失时隐藏节省项。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
 `next` 与 `started` 为 epoch；成功 `park` 行可写 `rss_mb`（未采到为 null），用于动作记录，C8 日汇总按 act 计数和 wake secs 求分位。没有每拍的 skip 日志。
 
+**停放期间的定时任务（C3）**：停前通过 `fleet_loop_mark.py export --fid <身份>`
+读取 `@loop` 与这段会话的完整原生工具记录，保存到 `$FLEET_CONF_DIR/wake/<fid>.json`。
+每个任务保留 `next / kind / expr / prompt / until`、任务 ID、时区及会话号。
+原生进程退出且外壳确认停放后才启用；退出失败撤回准备状态，原生任务继续运行。
+spinner 每 5 秒驱动 `fleet_park_wake.py tick`，到点经会话门接回同一会话，首轮是原提示。
+唤醒仍由 `wake_request` 仲裁，7501 确认启动；`park.ndjson` 的 `why=定时`、`next`
+和 `started` 记录约定与实际请求时刻。只有确认送达才推进 cron，错过多轮只执行一轮。
+每轮使用落盘的 delivery ID，重复 tick 沿同一条门记录收据，不另发一轮。
+restore 保留约定，停放外壳先回来等待到点；已有约定的 cron 不再重建 `/loop`。
+
+durable 任务沿 `fleet_transfer_durable.py` 已验证的单一归属路径：先暂存，原生进程退出后，
+在启动闸和项目隔离证明下撤出原生表，读回一致才激活 fleet 约定。另一个会话的记录不动。
+未知原生版本、临近切换边界、不能证明归属或存在其它原生写者时拒停，返回 `wake_contract`
+及原因；不能只复制文件便让两个调度器同时执行。会话内 `CronDelete` / 停止唤醒沿现有 hook
+同步取消 fleet 约定；也可使用 `python3 bin/fleet_park_wake.py stop --fid <身份> --job <任务ID>`
+停止指定约定（省略 `--job` 停止该会话全部约定）。已开始的轮次不会被强行中断。
+
+已由 `fleet-loop.py` 管理的循环（含 Codex）继续以原账本为唯一节拍来源。
+停前写 `park_fid` 交出投递权；旧 bridge 不再投递、也不因停放退出把循环写成 stopped。
+接回同一 thread 后原有 `fleet-loop.py defer / stop` 仍有效；正在投递且收据未定的循环拒停。
+
+隔离演练：`bin/fleet-park-wake-selftest.py` 驱动停放门、外壳、定时投递及 durable 撤出，
+覆盖 3 秒后唤醒、三轮 cron、外壳恢复、退出失败保持原生任务。
+
 测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、
 `bin/fleet-idle-accept-claude-selftest.sh`（真引擎：入口边界、排队重交、Esc、草稿、竞态；CI 上无 claude 跳过）、
 `bin/fleet-webchat-selftest.mjs --only=gate`（Y：HTTP 路）、`bin/session-wrap-selftest.sh` PK（停放与接回）、

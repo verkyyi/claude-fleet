@@ -2632,6 +2632,15 @@ drill_trial_code_burst() {
   SECS=$(since "$t0")
 }
 
+drill_codex_quota_sticky() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests fleet_credproxy_selection_test.go TestCodexQuotaSelection TestCodexQuotaInputs TestCodexQuotaIncomparableCapacity TestCodexQuotaSticky TestCodexQuotaAuthorizationAndHealth TestCodexQuotaResolveExistingSession || return 1
+  go_half '^TestCodexSelection' ./shared/credproxy; case $? in 1) return 1 ;; esac
+  WHAT='Codex 双窗口、读数失效、容量不可比及 sticky 请求边界由隔离 Go fixtures 验证'
+  SECS=$(since "$t0")
+}
+
 drill_credential_quota_unbound() {
   CAP=120; local t0; GO_RAN=0
   t0=$(now)
