@@ -1250,7 +1250,7 @@ def public(r):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet_session_gate.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer"):
+    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover"):
         p = sub.add_parser(name)
         if name not in ("pending",):
             p.add_argument("--fid", required=name != "tick")
@@ -1275,16 +1275,20 @@ def main(argv=None):
             p.add_argument("--delivery")
         if name == "name":
             p.add_argument("--name", required=True)
-        if name == "quota-transfer":
+        if name in ("quota-transfer", "quota-recover"):
             p.add_argument("--source-session", required=True)
+            p.add_argument("--request-id", required=name == "quota-recover")
     a = ap.parse_args(argv)
     if getattr(a, "fid", None) and not FID_RE.match(a.fid):
         return out(dict(ok=False, why="bad_fid"), 2)
     if a.cmd == "say":
         return say(a)
     if a.cmd == "quota-transfer":
-        fallback.run(fallback_api(), a.fid, a.source_session)
+        fallback.run(fallback_api(), a.fid, a.source_session, a.request_id)
         return 0
+    if a.cmd == "quota-recover":
+        result = fallback.recover(fallback_api(), a.fid, a.source_session, a.request_id)
+        return out(result, 0 if result["ok"] else 1)
     if a.cmd == "tick":
         fids = [a.fid] if a.fid else pending_fids()
         for f in fids:

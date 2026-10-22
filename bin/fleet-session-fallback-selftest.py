@@ -48,6 +48,120 @@ class Continuation(unittest.TestCase):
         with gate.lock(FID):
             fallback.maybe_start(gate, self.w, rows or [])
 
+    def controller_run(self):
+        fallback.run(gate, FID, SID, fallback.receipt(gate, FID)['request_id'])
+
+    def test_preflight_refusal_recovers_once_with_exact_receipt(self):
+        with patch.object(fallback.subprocess, 'Popen'):
+            self.start()
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'run', return_value=subprocess_result(1)) as controller:
+            self.controller_run()
+        self.assertEqual(controller.call_count, 1)
+        self.assertIn('--dry-run', controller.call_args.args[0])
+        old = fallback.receipt(gate, FID)
+        self.assertEqual(old['why'], 'preflight_refused')
+        self.assertIs(old['controller_attempted'], False)
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'Popen') as spawn:
+            got = fallback.recover(gate, FID, SID, old['request_id'])
+            self.assertTrue(got['ok'])
+            self.assertFalse(fallback.recover(gate, FID, SID, old['request_id'])['ok'])
+            self.assertEqual(spawn.call_count, 1)
+        new = fallback.receipt(gate, FID)
+        self.assertNotEqual(old['request_id'], new['request_id'])
+        self.assertEqual(json.loads(Path(new['previous_receipt']).read_text()), old)
+        # A delayed old worker must not consume the replacement starting receipt.
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'run') as controller:
+            fallback.run(gate, FID, SID, old['request_id'])
+            controller.assert_not_called()
+
+    def test_recovery_refuses_unknown_attempts_identity_error_and_delivery_changes(self):
+        base = dict(fid=FID, source_session=SID, request_id='exact-request', state='blocked',
+                    why='preflight_refused', phase='preflight', controller_attempted=False,
+                    error_id='error-1', at=1000)
+        path = gate.fid_dir(FID) / 'quota-continuation.json'
+        for change in (dict(controller_attempted=True), dict(controller_attempted=None),
+                       dict(phase='controller'), dict(state='transferring'), dict(target_session='bound'),
+                       dict(error_id='old-error'), dict(source_session='other-source')):
+            with self.subTest(change=change):
+                gate.write_json(path, dict(base, **change))
+                with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'Popen') as spawn:
+                    self.assertFalse(fallback.recover(gate, FID, SID, 'exact-request')['ok'])
+                    spawn.assert_not_called()
+        gate.write_json(path, base)
+        for w, rows in ((dict(self.w, sid='changed'), []), (dict(self.w, agent='codex'), []),
+                        (self.w, [dict(state='native')])):
+            with patch.object(gate, 'window', return_value=w), patch.object(gate, 'records', return_value=rows):
+                self.assertFalse(fallback.recover(gate, FID, SID, 'exact-request')['ok'])
+
+    def test_preflight_cas_fences_late_worker_and_unknown_controller_completion(self):
+        with patch.object(fallback.subprocess, 'Popen'):
+            self.start()
+        def supersede(argv, **kw):
+            self.assertIn('--dry-run', argv)
+            r = fallback.receipt(gate, FID)
+            r.update(request_id='replacement', state='starting')
+            gate.write_json(gate.fid_dir(FID) / 'quota-continuation.json', r)
+            return subprocess_result(0)
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'run', side_effect=supersede) as controller:
+            self.controller_run()
+            self.assertEqual(controller.call_count, 1)
+        self.assertEqual(fallback.receipt(gate, FID)['request_id'], 'replacement')
+
+    def test_actual_attempt_failure_and_crash_are_never_recoverable(self):
+        for crash in (False, True):
+            (gate.fid_dir(FID) / 'quota-continuation.json').unlink(missing_ok=True)
+            with patch.object(fallback.subprocess, 'Popen'):
+                self.start()
+            def attempt(argv, **kw):
+                r = fallback.receipt(gate, FID)
+                if '--dry-run' in argv:
+                    self.assertIs(r['controller_attempted'], False)
+                    return subprocess_result(0)
+                self.assertIs(r['controller_attempted'], True)
+                if crash:
+                    raise RuntimeError('process died after write-ahead')
+                return subprocess_result(1)
+            with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'run', side_effect=attempt) as controller:
+                if crash:
+                    with self.assertRaises(RuntimeError):
+                        self.controller_run()
+                else:
+                    self.controller_run()
+                self.assertEqual(controller.call_count, 2)
+                r = fallback.receipt(gate, FID)
+                self.assertFalse(fallback.recover(gate, FID, SID, r['request_id'])['ok'])
+                self.controller_run()
+                self.assertEqual(controller.call_count, 2)
+
+    def test_readonly_preflight_timeout_is_explicitly_recoverable(self):
+        with patch.object(fallback.subprocess, 'Popen'):
+            self.start()
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'run', side_effect=fallback.subprocess.TimeoutExpired('preview', 90)):
+            self.controller_run()
+        r = fallback.receipt(gate, FID)
+        self.assertEqual(r['why'], 'preflight_timeout')
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'Popen'):
+            self.assertTrue(fallback.recover(gate, FID, SID, r['request_id'])['ok'])
+
+    def test_superseded_live_preview_cannot_launch_or_finish_over_recovery(self):
+        with patch.object(fallback.subprocess, 'Popen'):
+            self.start()
+        old = fallback.receipt(gate, FID)
+        def recover_during_preview(argv, **kw):
+            self.assertIn('--dry-run', argv)
+            self.assertEqual(fallback.receipt(gate, FID)['state'], 'checking')
+            with patch.object(fallback.subprocess, 'Popen'):
+                self.assertTrue(fallback.recover(gate, FID, SID, old['request_id'])['ok'])
+            return subprocess_result(0)
+        with patch.object(gate, 'window', return_value=self.w), patch.object(fallback.subprocess, 'run', side_effect=recover_during_preview) as controller:
+            self.controller_run()
+            self.assertEqual(controller.call_count, 1)
+        replacement = fallback.receipt(gate, FID)
+        self.assertNotEqual(replacement['request_id'], old['request_id'])
+        self.assertEqual(replacement['state'], 'starting')
+        fallback.finish(gate, gate.fid_dir(FID)/'quota-continuation.json', dict(old, state='blocked'), expected='checking')
+        self.assertEqual(fallback.receipt(gate, FID), replacement)
+
     def test_normal_auth_network_cancel_and_other_person_never_switch(self):
         cases = [dict(isApiErrorMessage=False), dict(error="authentication_failed"), dict(error="unknown"),
                  dict(type="user"), dict(sessionId="another-session"), dict(isSidechain=True),
@@ -71,7 +185,7 @@ class Continuation(unittest.TestCase):
         self.assertEqual(r["source_session"], SID)
         self.assertFalse(gate.can_talk(self.w)[0])
         with patch.object(gate, "window", return_value=self.w), patch.object(fallback.subprocess, "run", side_effect=OSError):
-            fallback.run(gate, FID, SID)
+            self.controller_run()
         self.assertEqual(fallback.receipt(gate, FID)["state"], "blocked")
         with patch.object(fallback.subprocess, "Popen") as spawn:
             self.start()
@@ -111,11 +225,13 @@ class Continuation(unittest.TestCase):
         calls = []
         def controller(argv, **kw):
             calls.append((argv, kw))
-            self.w.update(agent="codex", sid="target-exact")
+            if "--dry-run" not in argv:
+                self.w.update(agent="codex", sid="target-exact")
             return subprocess_result(0)
         with patch.object(gate, "window", side_effect=lambda _: dict(self.w)), patch.object(fallback.subprocess, "run", side_effect=controller):
-            fallback.run(gate, FID, SID)
-        argv, kw = calls[0]
+            self.controller_run()
+        self.assertIn("--dry-run", calls[0][0])
+        argv, kw = calls[1]
         self.assertIn("fleet-transfer.sh", " ".join(argv))
         self.assertEqual(argv[-2:], ["--expected-session-id", SID])
         self.assertFalse(any(x in argv for x in ("--force", "--durable-takeover", "--handoff", "--draft-file")))
@@ -131,8 +247,8 @@ class Continuation(unittest.TestCase):
         with patch.object(fallback.subprocess, "Popen"):
             self.start()
         with patch.object(gate, "window", return_value=self.w), patch.object(fallback.subprocess, "run", return_value=subprocess_result(1)) as run:
-            fallback.run(gate, FID, SID)
-            fallback.run(gate, FID, SID)
+            self.controller_run()
+            self.controller_run()
             self.assertEqual(run.call_count, 1)
         self.assertEqual(fallback.receipt(gate, FID)["state"], "blocked")
         other = dict(self.w, fid="99999999-2222-4333-8444-555555555555")
@@ -143,12 +259,14 @@ class Continuation(unittest.TestCase):
         with patch.object(fallback.subprocess, "Popen"):
             self.start()
         def incomplete(argv, **kw):
+            if "--dry-run" in argv:
+                return subprocess_result(0)
             self.w.update(agent="codex", sid="partially-started-target")
             return subprocess_result(1)
         with patch.object(gate, "window", side_effect=lambda _: dict(self.w)), patch.object(fallback.subprocess, "run", side_effect=incomplete) as controller:
-            fallback.run(gate, FID, SID)
-            fallback.run(gate, FID, SID)
-        self.assertEqual(controller.call_count, 1)
+            self.controller_run()
+            self.controller_run()
+        self.assertEqual(controller.call_count, 2)
         self.assertEqual(fallback.view(gate, self.w)["state"], "recovery")
         self.assertFalse(gate.can_talk(self.w)[0])
         with patch.object(fallback.subprocess, "Popen") as spawn:
@@ -188,7 +306,7 @@ class Continuation(unittest.TestCase):
         with patch.object(fallback.subprocess, "Popen"):
             self.start()
         with patch.object(gate, "window", return_value=dict(self.w, sid="replacement")), patch.object(fallback.subprocess, "run") as run:
-            fallback.run(gate, FID, SID)
+            self.controller_run()
             run.assert_not_called()
         self.assertEqual(fallback.receipt(gate, FID)["why"], "source_changed")
 

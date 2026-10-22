@@ -95,6 +95,7 @@ def maybe_start(gate, w, rows):
     waiting = why == "boundary" and not w["parked"] and gate.busy_of(w) != "asking" and gate.now() - same.get("at", gate.now()) < 30
     signal.update(at=same.get("at", gate.now()), request_id=same.get("request_id") or uuid.uuid4().hex)
     signal.update(state="waiting" if waiting else "blocked" if why else "starting", why=why, fid=w["fid"])
+    signal.update(phase='preflight', controller_attempted=False)
     path = gate.fid_dir(w["fid"]) / "quota-continuation.json"
     gate.write_json(path, signal)
     # Queued words belong to the source conversation. Return them to the
@@ -106,55 +107,134 @@ def maybe_start(gate, w, rows):
         return
     try:
         subprocess.Popen([sys.executable, str(gate.BIN / "fleet_session_gate.py"), "quota-transfer",
-                          "--fid", w["fid"], "--source-session", w["sid"]],
+                          "--fid", w["fid"], "--source-session", w["sid"], "--request-id", signal["request_id"]],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True, close_fds=True)
     except OSError:
-        signal.update(state="blocked", why="controller_unavailable")
+        signal.update(state="blocked", why="preflight_unavailable")
         gate.write_json(path, signal)
 
-def run(gate, fid, sid):
-    path = gate.fid_dir(fid) / "quota-continuation.json"
+def matching_source(gate, w, r):
+    if not w or w.get('fid') != r.get('fid') or w['agent'] != 'claude' or w['sid'] != r['source_session']:
+        return False
+    signal = quota_error(gate.claude_transcript(w['sid']), w['sid'])
+    return bool(signal and signal['error_id'] == r.get('error_id'))
+
+
+def recover(gate, fid, sid, request_id):
+    """One explicit recheck of a provably unattempted controller, never a reset."""
+    path = gate.fid_dir(fid) / 'quota-continuation.json'
+    with gate.lock(fid):
+        old = receipt(gate, fid) or {}
+        if (old.get('source_session') != sid or old.get('request_id') != request_id
+                or old.get('fid') != fid):
+            return dict(ok=False, why='receipt_changed')
+        preflight_state = (old.get('state') in ('starting', 'checking') or
+                           (old.get('state') == 'blocked' and old.get('why') in
+                            ('preflight_refused', 'preflight_timeout', 'preflight_unavailable')))
+        if (not preflight_state or old.get('phase') != 'preflight'
+                or old.get('controller_attempted') is not False or old.get('target_session')):
+            return dict(ok=False, why='completion_not_retryable')
+        if not matching_source(gate, gate.window(fid), old):
+            return dict(ok=False, why='source_changed')
+        rows = gate.records(fid)
+        if any(r.get('state') in ('trying', 'native', 'waking') for r in rows):
+            return dict(ok=False, why='delivery_unsettled')
+        new_id = uuid.uuid4().hex
+        previous = path.parent / 'quota-history' / (new_id + '.json')
+        previous.parent.mkdir(mode=0o700, exist_ok=True)
+        gate.write_json(previous, old)
+        signal = dict(old, state='starting', why='', at=gate.now(), request_id=new_id,
+                      previous_receipt=str(previous), recovered_from=request_id)
+        gate.write_json(path, signal)
+        for r in rows:
+            if r.get('state') == 'queued':
+                gate.ret(r, 'quota_continuation')
+        try:
+            subprocess.Popen([sys.executable, str(gate.BIN / 'fleet_session_gate.py'), 'quota-transfer',
+                              '--fid', fid, '--source-session', sid, '--request-id', new_id],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True, close_fds=True)
+        except OSError:
+            signal.update(state='blocked', why='preflight_unavailable')
+            gate.write_json(path, signal)
+            return dict(ok=False, why='preflight_unavailable', request_id=new_id)
+        return dict(ok=True, request_id=new_id)
+
+
+def run(gate, fid, sid, request_id):
+    path = gate.fid_dir(fid) / 'quota-continuation.json'
     with gate.lock(fid):
         r = receipt(gate, fid)
         w = gate.window(fid)
-        if not r or r.get("source_session") != sid or r.get("state") != "starting":
+        if (not request_id or not r or r.get('fid') != fid or r.get('source_session') != sid
+                or r.get('request_id') != request_id or r.get('state') != 'starting'):
             return
-        r.update(state="transferring")
-        gate.write_json(path, r)  # crash after here ⇒ recover explicitly, never launch twice
-    why = "source_changed"
-    if w and w["agent"] == "claude" and w["sid"] == sid and quota_error(gate.claude_transcript(sid), sid):
-        argv = ["bash", str(gate.BIN / "fleet-transfer.sh"), "--session", w["sock"], "--window", w["win"],
-                "--to", "codex", "--quota-continuation", "--expected-session-id", sid]
-        # Keep the controller's rollback, but no automatic relogin retry chain.
-        env = dict(os.environ, FLEET_TRANSFER_RETRYING="1")
-        env.pop("TMUX_PANE", None)
-        try:
-            with (path.parent / "quota-transfer.log").open("w") as log:
-                p = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env)
-            after = gate.window(fid)
-            if p.returncode == 0 and after and after["agent"] == "codex" and after["sid"]:
-                r.update(state="continued", target_session=after["sid"], completed_at=time.time())
-                finish(gate, path, r)
-                return
-            if after and after["agent"] == "codex" and after["sid"]:
-                # The controller may have bound the target before reporting a
-                # failed boot/cleanup. Keep that writer fenced too: neither
-                # silently accept more words nor launch another continuation.
-                r.update(state="recovery", why="transfer_incomplete", target_session=after["sid"])
-                finish(gate, path, r)
-                return
-            why = "transfer_refused"  # detailed private controller receipt is retained
-        except OSError:
-            why = "controller_unavailable"
-    r.update(state="blocked", why=why)
+        r.update(state='checking', phase='preflight', controller_attempted=False)
+        gate.write_json(path, r)
+    if not matching_source(gate, w, r):
+        r.update(state='blocked', why='source_changed')
+        finish(gate, path, r, expected='checking')
+        return
+    argv = ['bash', str(gate.BIN / 'fleet-transfer.sh'), '--session', w['sock'], '--window', w['win'],
+            '--to', 'codex', '--quota-continuation', '--expected-session-id', sid]
+    # Dry-run is read-only, including native quota cancellation. A refused
+    # preview has no uncertain writer and may be explicitly rechecked later.
+    env = dict(os.environ, FLEET_TRANSFER_RETRYING='1')
+    env.pop('TMUX_PANE', None)
+    why = ''
+    try:
+        with (path.parent / ('quota-preflight-' + request_id + '.log')).open('w') as log:
+            p = subprocess.run(argv + ['--dry-run'], stdin=subprocess.DEVNULL, stdout=log,
+                               stderr=subprocess.STDOUT, env=env, timeout=90)
+        if p.returncode:
+            why = 'preflight_refused'
+    except subprocess.TimeoutExpired:
+        why = 'preflight_timeout'
+    except OSError:
+        why = 'preflight_unavailable'
+    if why:
+        r.update(state='blocked', why=why)
+        finish(gate, path, r, expected='checking')
+        return
+    # CAS under the delivery lock, then write ahead BEFORE any mutating
+    # controller. Superseded previews and crashes cannot create a second writer.
+    with gate.lock(fid):
+        current = receipt(gate, fid) or {}
+        if current.get('request_id') != request_id or current.get('state') != 'checking':
+            return
+        if not matching_source(gate, gate.window(fid), r):
+            r.update(state='blocked', why='source_changed')
+            gate.write_json(path, r)
+            return
+        if any(x.get('state') in ('trying', 'native', 'waking') for x in gate.records(fid)):
+            r.update(state='blocked', why='preflight_refused')
+            gate.write_json(path, r)
+            return
+        r.update(state='transferring', phase='controller', controller_attempted=True)
+        gate.write_json(path, r)
+    why = 'transfer_refused'
+    try:
+        with (path.parent / 'quota-transfer.log').open('w') as log:
+            p = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env)
+        after = gate.window(fid)
+        if after and after['agent'] == 'codex' and after['sid']:
+            r.update(state='continued' if p.returncode == 0 else 'recovery',
+                     why='' if p.returncode == 0 else 'transfer_incomplete',
+                     target_session=after['sid'], completed_at=time.time())
+            finish(gate, path, r)
+            return
+    except OSError:
+        why = 'controller_unavailable'
+    r.update(state='blocked', why=why)
     finish(gate, path, r)
 
-def finish(gate, path, result):
+
+def finish(gate, path, result, expected='transferring'):
     # A late old controller cannot overwrite a newer source generation.
-    with gate.lock(result["fid"]):
+    with gate.lock(result['fid']):
         current = gate.read_json(path) or {}
-        if current.get("request_id") == result["request_id"] and current.get("state") == "transferring":
+        if current.get('request_id') == result['request_id'] and current.get('state') == expected:
             gate.write_json(path, result)
 
 def view(gate, w):
@@ -166,9 +246,9 @@ def view(gate, w):
     state = r.get("state")
     if state == "blocked" and not quota_error(gate.claude_transcript(w["sid"]), w["sid"]):
         return None  # an explicit native continuation has moved past the error
-    if (state == "waiting" and gate.now() - r.get("at", 0) >= 30) or (state in ("starting", "transferring") and gate.now() - r.get("at", 0) > 360):
+    if (state == "waiting" and gate.now() - r.get("at", 0) >= 30) or (state in ("starting", "checking", "transferring") and gate.now() - r.get("at", 0) > 360):
         state = "recovery"  # completion is unknown; never start a second writer
     return dict(state=state, to="codex", message=(
-        "Claude 额度已用完，正在换 Codex 继续。" if state in ("waiting", "starting", "transferring") else
+        "Claude 额度已用完，正在换 Codex 继续。" if state in ("waiting", "starting", "checking", "transferring") else
         "已换 Codex 继续。" if state == "continued" else
         "Claude 额度已用完，暂时无法安全接续；记录已保留，可从终端恢复或在新会话里接着说。"))

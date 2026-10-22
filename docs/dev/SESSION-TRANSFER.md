@@ -104,6 +104,25 @@ existing credentials refused by authentication, pausing or policy keep their
 original refusal. The shared session gate reads only the exact Claude transcript,
 waits at most 30 seconds for a clean boundary, and writes one continuation receipt
 per source session before starting `fleet-transfer.sh --to codex --quota-continuation`.
+It first runs a bounded read-only `--dry-run`, recorded as `phase=preflight` and
+`controller_attempted=false`. A refused or unavailable preview does not launch a
+target. After correcting the reported prerequisite, explicitly recheck the exact
+receipt (values come from its private JSON):
+
+```sh
+python3 ~/.claude/fleet/bin/fleet_session_gate.py quota-recover \
+  --fid FID --source-session SOURCE_SID --request-id REQUEST_ID
+```
+
+This archives the previous receipt and queues one new preview with a new request
+ID. Repeating the old command refuses. Source/error changes, unsettled deliveries,
+legacy receipts without evidence, and any actual/uncertain controller attempt
+refuse recovery. A queued, interrupted or still-running read-only preview may be
+superseded the same way: its old worker must pass the request-ID comparison before
+it could launch anything. Before launching the mutating controller, the worker rechecks
+identity and deliveries under the gate lock, then writes
+`controller_attempted=true`; a crash after that point never authorizes another
+launch. A late preview/worker cannot consume or overwrite a replacement request.
 Native API errors can leave OSC 7501 at `exited` while Claude is still at its
 prompt. The controller verifies the exact quota error, native error/idle state,
 empty prompt and no live tool, background process, approval or loop twice before
@@ -145,6 +164,19 @@ admitted provider. A missing team default keeps the dispatch protocol's Claude
 compatibility default; an invalid stored default refuses default admission/open.
 Provider changes retain
 the person's budget, seat, identity and resource limits.
+
+**Preserve waiting or completed tasks.** Native `done` only means a turn ended;
+it does not prove task completion or approval. An operator transferring a safely
+settled live session may explicitly add `--disposition waiting` or
+`--disposition completed` with private `--handoff FILE` describing the original
+intent and pending approval/completion. The manifest and pickup preserve that
+disposition: the target acknowledges the switch and waits for a new instruction;
+it must not execute historical requests, submit drafts or interpret migration as
+approval or GO. The default `continue` keeps normal task continuation. These
+options do not relax source/input/tool/scheduler guards: an approval dialog still
+refuses, and an active/uncertain loop must be resolved through its controller.
+Non-continuing transfers do not support after-turn, native resume, scheduling
+takeover or automatic login retries, which could otherwise lose this intent.
 
 Run from the hub, another pane or an external terminal. The source must be idle
 (`done`), with no pending `/fleet-handoff` cycle, and must have its own linked
