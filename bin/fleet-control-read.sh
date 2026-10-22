@@ -656,6 +656,10 @@ for line in sys.stdin:
   # line; its non-zero exit means nothing was sent, its stderr line says why.
   inject)
     fleet_load_conf "$sess"
+    # The controller resolves keyless identities to a window on this socket.
+    if [[ "${3:-}" =~ ^@[0-9]+$ ]]; then
+      exec bash "$BIN/fleet-peer-send.sh" -L "$(fleet_socket "$sess")" "$3" -
+    fi
     case "${3:-}" in issue-*|*:issue-*) ;; *) exit 2 ;; esac
     key_repo_split "$3"; n=${kbare#issue-}
     case "$n" in ''|*[!0-9]*) exit 2 ;; esac

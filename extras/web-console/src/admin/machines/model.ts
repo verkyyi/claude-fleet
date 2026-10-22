@@ -69,6 +69,7 @@ export type MachineView = import("./ParkSummary").ParkReading & {
 export type DesiredView = { want: number; reached: number; release?: string; want_release?: string; diff?: string };
 export type NodeView = {
   hostname: string;
+  role?: string;
   os_user?: string;
   endpoint_id?: string;
   machine_link?: boolean;
@@ -166,6 +167,7 @@ export type MachineRow = {
   seen: string | null;
   maintenance: Maintenance | null;
   eps: string[]; // endpoint ids — what 移除 retires
+  policyEps: string[]; // compute endpoints only; a client may retain an older enrollment name
   logins: string[];
   m?: MachineView;
 };
@@ -221,6 +223,7 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
         seen: m.last_heartbeat,
         maintenance: m.maintenance || null,
         eps: [...new Set(nodes.map((n) => n.endpoint_id || "").filter(Boolean))],
+        policyEps: [...new Set(nodes.filter((n) => n.role !== "client").map((n) => n.endpoint_id || "").filter(Boolean))],
         logins: [...new Set(nodes.filter((n) => !n.machine_link && n.os_user).map((n) => n.os_user!))].sort(),
         m,
       };

@@ -104,7 +104,7 @@ export function MachineDetailPage() {
 
   // The machine's identity for its subscription rule (cred-policy's
   // machineTargets): one answer from its endpoints, else none.
-  const eps = st?.row?.eps.join(" ") || "";
+  const eps = st?.row?.policyEps.join(" ") || "";
   React.useEffect(() => {
     if (!st || st.nodeId !== undefined) return;
     const list = eps ? eps.split(" ") : [];
