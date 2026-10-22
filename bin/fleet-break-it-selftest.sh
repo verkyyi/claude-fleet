@@ -6433,6 +6433,14 @@ drill_wake_loop_reenters_bridge() {
   WHAT='停放后接回清除首次桥接启动参数，保留原 manifest 与单 owner 定时约定，不重建循环'
 }
 
+drill_wake_wrong_transcript() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/dash-issue-session-prompt-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='启用 Codex 停放不能把旧项目目录里的 Claude transcript 当成它的恢复依据'
+}
+
 drill_park_old_wrapper() {
   CAP=30; local t0 out
   t0=$(now)
