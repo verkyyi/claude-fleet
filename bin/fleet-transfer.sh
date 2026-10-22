@@ -416,6 +416,51 @@ target_trust() {
   [ "$(fleet_agent_get "$TO" trust)" = codex-toml ] || return 0
   python3 "$BIN/.fleet-transfer-norepo.py" trust "${CODEX_TARGET_HOME:-${FLEET_CODEX_HOME:-${CODEX_HOME:-$HOME/.codex}}}" "$@"
 }
+# A native subscription-limit menu is not idle. Only this narrowly verified
+# controller preflight can dismiss it. The normal input/scheduler/source checks
+# below remain authoritative AFTER the native error boundary is observed.
+if [ "$QUOTA_CONTINUATION" = 1 ] && [ "$STATE" = needs ] && [ "$PREPARE" != 1 ]; then
+  [ "$SOURCE_AGENT" = claude ] && [ "$TO" = codex ] && [ "$EXPECT_SID" = "$SID" ] \
+    && [ "$AFTER" = 0 ] && [ -z "$LOOP$REQUEST" ] && [ "$TAKEOVER" = 0 ] \
+    || die 'quota dialog continuation requires the exact source and no scheduling takeover'
+  target_auth || refuse_target
+  target_support
+  [ "$NOREPO" != 1 ] || target_trust || exit 1
+  python3 "$BIN/fleet_transfer_source.py" quota-dialog-check --session "$SESS" --pane "$PANE" --sid "$SID" \
+    || die 'source is not a safely cancellable native quota dialog'
+  if [ "$DRY" = 1 ]; then
+    printf 'dry-run: cancel the verified quota dialog once, then require native error/idle, empty input and all normal transfer checks; no exit is authorized yet.\n'
+    exit 0
+  fi
+  quota_dialog_boundary() (
+    # The SAME mutex/rotation lease as cutover. A killed preflight retains its
+    # lock for inspection; a normal refusal releases it, with write-ahead proof
+    # preventing a second Escape on this source session.
+    local qlock qlease=0
+    qlock="$(fleet_rotate_lease_file "$LEASE_KEY").transfer-lock"
+    mkdir "$qlock" 2>/dev/null || die 'another transfer owns the source'
+    printf '%s\n' "$$" > "$qlock/pid"
+    qcleanup() {
+      if [ "$qlease" = 1 ]; then
+        TM set-option -wu -t "$WIN" @agent_transfer_until 2>/dev/null || :
+        fleet_rotate_lease_drop "$LEASE_KEY"
+      fi
+      rm -f "$qlock/pid"; rmdir "$qlock" 2>/dev/null || :
+    }
+    trap qcleanup EXIT
+    trap 'exit 130' INT TERM HUP
+    fleet_rotate_lease_held "$LEASE_KEY" >/dev/null && die 'source has a migration lease'
+    fleet_rotate_lease_take "$LEASE_KEY" "quota-dialog $SESS/$WIN" 120 || die 'cannot protect source quota dialog'
+    qlease=1
+    TM set-option -w -t "$WIN" @agent_transfer_until "$(( $(date +%s) + 120 ))" || die 'cannot protect quota cancellation'
+    [ "$(source_read)" = "$RESOLVED" ] && armed_cycle_free || die 'quota source changed'
+    target_auth || die "target-auth: $TARGET_AUTH_WHY"
+    python3 "$BIN/fleet_transfer_source.py" quota-dialog-stop --session "$SESS" --pane "$PANE" --sid "$SID"
+  )
+  quota_dialog_boundary || die 'quota dialog did not reach a verified safe boundary; source retained'
+  STATE=$(opt '#{@claude_state}')
+fi
+
 NATIVE_CRON=$(fleet_agent_get "$SOURCE_AGENT" native_cron)
 INPUT_VIEW=''
 if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then

@@ -13,7 +13,6 @@ import time
 import uuid
 from pathlib import Path
 
-
 def quota_error(path, sid):
     """Latest main conversation message is a native hard-quota API error."""
     if path is None:
@@ -55,9 +54,20 @@ def quota_error(path, sid):
         return None
     return dict(source_session=sid, error_id=last.get("uuid", ""), transcript=str(path))
 
-
 def receipt(gate, fid):
     return gate.read_json(gate.fid_dir(fid) / "quota-continuation.json")
+
+
+def native_quota_dialog(w):
+    # Candidate only. The controller proves the full menu, tools, schedules and
+    # normal cancellation; this never makes a generic needs/approval idle.
+    try:
+        native = json.loads(w.get('agent_status', '{}'))
+    except (ValueError, TypeError):
+        return False
+    return (w['state'] == 'needs' and not w.get('needs') and w['word'] == 'blocked'
+            and isinstance(native, dict) and native.get('app') == 'claude-code'
+            and not native.get('kind') and native.get('msg') == 'dialog open')
 
 
 def maybe_start(gate, w, rows):
@@ -65,15 +75,21 @@ def maybe_start(gate, w, rows):
     if w is None or w["agent"] != "claude" or not w["sid"]:
         return
     old = receipt(gate, w["fid"])
-    if old and old.get("source_session") == w["sid"] and old.get("state") != "waiting":
+    # The preceding release recorded needs as a boundary refusal without ever
+    # starting a controller. That source can use this newly proved boundary;
+    # an attempted/uncertain controller result is still terminal and never retried.
+    newly_supported = (old and old.get('state') == 'blocked' and old.get('why') == 'boundary'
+                       and native_quota_dialog(w))
+    if old and old.get("source_session") == w["sid"] and old.get("state") != "waiting" and not newly_supported:
         return
     signal = quota_error(gate.claude_transcript(w["sid"]), w["sid"])
     if not signal:
         return
     pending = [r for r in rows if r.get("state") in ("trying", "native", "waking")]
-    boundary = w["state"] == "done" or (w["state"] == "exited" and w["word"] == "error")
-    why = "delivery_unsettled" if pending else "boundary" if gate.busy_of(w) or w["parked"] or not boundary else ""
-    same = old if old and old.get("source_session") == w["sid"] else {}
+    dialog = native_quota_dialog(w)
+    boundary = dialog or w["state"] == "done" or (w["state"] == "exited" and w["word"] == "error")
+    why = "delivery_unsettled" if pending else "boundary" if (gate.busy_of(w) and not dialog) or w["parked"] or not boundary else ""
+    same = old if old and old.get("source_session") == w["sid"] and not newly_supported else {}
     waiting = why == "boundary" and not w["parked"] and gate.busy_of(w) != "asking" and gate.now() - same.get("at", gate.now()) < 30
     signal.update(at=same.get("at", gate.now()), request_id=same.get("request_id") or uuid.uuid4().hex)
     signal.update(state="waiting" if waiting else "blocked" if why else "starting", why=why, fid=w["fid"])
@@ -94,7 +110,6 @@ def maybe_start(gate, w, rows):
     except OSError:
         signal.update(state="blocked", why="controller_unavailable")
         gate.write_json(path, signal)
-
 
 def run(gate, fid, sid):
     path = gate.fid_dir(fid) / "quota-continuation.json"
@@ -126,14 +141,12 @@ def run(gate, fid, sid):
     r.update(state="blocked", why=why)
     finish(gate, path, r)
 
-
 def finish(gate, path, result):
     # A late old controller cannot overwrite a newer source generation.
     with gate.lock(result["fid"]):
         current = gate.read_json(path) or {}
         if current.get("request_id") == result["request_id"] and current.get("state") == "transferring":
             gate.write_json(path, result)
-
 
 def view(gate, w):
     r = receipt(gate, w["fid"]) if w else None

@@ -94,6 +94,20 @@ alarm 120;
 open(my $r, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/$$.json") or die;
 print $r encode_json({sessionId=>$sid, cwd=>getcwd(), peerToken=>'never-copy-the-registry-secret'}); close $r;
 $| = 1; print "Claude ready $sid\n"; print "❯ " if $mode eq 'norepo';
+if ($mode =~ /^quota-(dialog|draft|stuck)$/) {
+    system('stty', '-icanon', '-echo', 'min', '1', 'time', '0');
+    print "\e[2J\e[HYou've hit your weekly limit · resets tomorrow\n";
+    print "▔▔▔▔▔▔▔▔▔▔\nWhat do you want to do?\n\n";
+    print "❯ 1. Stop and wait for limit to reset\n  2. Wait here, then continue automatically at Oct 23 at 5pm\n  3. Upgrade your plan\n\nEnter to confirm · Esc to cancel\n";
+    my $key; sysread(STDIN, $key, 1);
+    open(my $keylog, '>>', "$ENV{TRANSFER_TEST_ROOT}/quota-keys"); print $keylog unpack('H*', $key)."\n"; close $keylog;
+    if ($mode eq 'quota-stuck') { sleep 30; exit 1; }
+    system('stty', 'icanon', 'echo');
+    print "\e[2J\e[H❯ "; print 'retained unsent draft' if $mode eq 'quota-draft';
+    system('tmux', 'set-option', '-w', '-t', $ENV{TMUX_PANE}, '@agent_status', '{"state":"error","app":"claude-code"}');
+    system('tmux', 'set-option', '-w', '-t', $ENV{TMUX_PANE}, '@claude_state', 'exited');
+}
+
 while (my $line = <STDIN>) {
     next unless $line =~ m{/exit};
     next if $mode eq 'stuck';
@@ -237,6 +251,21 @@ wait_request() {
   done
   OUT=$(cat "$REQUEST/state.json" "$REQUEST/wait.log")
   fail "after-turn request did not finish as $expected"
+}
+
+quota_source() {
+  spawn "$1" "${3:-issue}" "$2"
+  python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTADIALOG'
+import json,sys
+with open(sys.argv[1], 'a') as out:
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
+        isApiErrorMessage=True, error='rate_limit',
+        message={'content':[{'type':'text','text':"You've hit your weekly limit"}]}))+'\n')
+PYQUOTADIALOG
+  TM set-option -w -t "$WIN" @claude_state needs
+  TM set-option -w -t "$WIN" @claude_state_src 7501
+  TM set-option -w -t "$WIN" @agent_status '{"state":"blocked","app":"claude-code","kind":"","msg":"dialog open"}'
+  TM set-option -w -t "$WIN" @fleet_id "quota-fixture-$1"
 }
 
 # #4258: the same real isolated socket/process fixture, with a physical HOME.
@@ -647,6 +676,22 @@ PYCOMPLETE
     && [ "$(field origin)" = scratch-99 ] && [ "$(field task)" = T91 ] && [ "$(field agent_spawn)" = 1 ] || fail 'cutover lost identity/role/routing'
   [ -z "$(field worktree)" ] && [ -z "$(field raw)" ] || fail 'cutover invented a repository binding'
   ok
+  # Unified web/trial managed HOME uses the same quota-menu boundary.
+  quota_source 79 quota-dialog norepo
+  for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111179
+  TM set-option -w -t "$WIN" @task T79
+  transfer --quota-continuation --expected-session-id "$SID" --dry-run || fail 'managed HOME quota dialog preview'
+  [ "$(field claude_state)" = needs ] && [ ! -s "$WORK/quota-keys" ] || fail 'HOME quota preview wrote keys'; ok
+  transfer --quota-continuation --expected-session-id "$SID" || fail 'managed HOME quota dialog continuation'
+  [ "$(cat "$WORK/quota-keys")" = 1b ] && [ "$(field cc_agent)" = codex ] && ! fleet_pid_alive "$PID" \
+    || fail 'HOME quota dialog must retain one writer'; ok
+  [ "$(field task)" = T79 ] && [ "$(field source_session_id)" = "$SID" ] \
+    && [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111179 ] || fail 'HOME quota continuation lost identity/task'; ok
+  [ -z "$(field raw)$(field worktree)" ] || fail 'HOME quota continuation invented repo binding'; ok
+  rm -f "$WORK/quota-keys"
   # Failed target must restore the exact source once, with no second writer.
   spawn 92 norepo norepo
   for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
@@ -907,6 +952,42 @@ transfer --quota-continuation --expected-session-id "$SID" || fail 'native quota
 [ "$(field cc_agent)" = codex ] && ! fleet_pid_alive "$PID" || fail 'quota did not retain one writer'; ok
 [ "$(field issue)" = 75 ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'quota lost task or exact provenance'; ok
 transfer --quota-continuation --expected-session-id "$SID" && fail 'quota must not switch target again'; ok
+
+# The actual subscription path: native quota choice dialog, not an idle prompt.
+quota_source 76 quota-dialog
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" --dry-run || fail 'quota dialog dry-run'
+[ "$(field claude_state)" = needs ] && [ ! -s "$WORK/quota-keys" ] || fail 'dry-run touched quota menu'; ok
+printf 'reauth_required\n' > "$WORK/login-state"
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'quota target unavailable must refuse'
+[ ! -s "$WORK/quota-keys" ] && kill -0 "$PID" || fail 'unavailable target touched dialog'; ok
+rm -f "$WORK/login-state"
+TM set-option -w -t "$WIN" @loop unknown
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'quota dialog loop must refuse'
+[ ! -s "$WORK/quota-keys" ] || fail 'loop refusal dismissed dialog'; ok
+TM set-option -wu -t "$WIN" @loop
+qlock="$(fleet_rotate_lease_file "$WT").transfer-lock"; mkdir "$qlock"
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'quota dialog concurrent controller must refuse'
+[ ! -s "$WORK/quota-keys" ] || fail 'concurrent controller dismissed dialog'; ok
+rmdir "$qlock"
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" || fail 'native quota dialog cutover'
+[ "$(cat "$WORK/quota-keys")" = 1b ] && [ "$(field cc_agent)" = codex ] && ! fleet_pid_alive "$PID" \
+  || fail 'quota dialog must Escape once and leave one writer'; ok
+[ "$(field issue)" = 76 ] && [ "$(field source_session_id)" = "$SID" ] \
+  && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'quota dialog lost exact provenance'; ok
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'duplicate quota transfer must refuse'; ok
+rm -f "$WORK/quota-keys"
+quota_source 77 quota-draft
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'hidden draft must prevent cutover'
+[ "$(cat "$WORK/quota-keys")" = 1b ] && kill -0 "$PID" && [ "$(field cc_agent)" != codex ] \
+  || fail 'draft boundary lost source or sent extra key'; ok
+TM capture-pane -p -t "$PANE" | grep -q 'retained unsent draft' || fail 'hidden draft not retained'; ok
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'draft must remain refused'; ok
+rm -f "$WORK/quota-keys"
+quota_source 78 quota-stuck
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'uncertain native dismissal must refuse'
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'uncertain native dismissal must not retry'
+[ "$(cat "$WORK/quota-keys")" = 1b ] && kill -0 "$PID" && [ "$(field cc_agent)" != codex ] \
+  || fail 'uncertain stop retried or lost source'; ok
 
 fi
 
