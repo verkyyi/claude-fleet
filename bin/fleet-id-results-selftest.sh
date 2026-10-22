@@ -372,8 +372,10 @@ st_count; grep -q 'fleet_win_retire "\$target" "" reaped' "$BIN/dash-reap.sh" \
   && grep -q 'fleet_win_retire "\$wid" "\$SOCK" stopped' "$BIN/fleet-worker-stop.sh" \
   && grep -q 'fleet_win_retire "\$win" "" exited' "$BIN/session-end-hook.sh" \
   || st_miss "WIRE: the reap / cleanup / stop / exit closers end the ID"
-st_count; grep -q 'fleet_id.py" result "\$selffid"' "$BIN/fleet-report-parent.sh" && grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
-  || st_miss "WIRE: a report writes the ID result and a queued one routes by ID, no generation gate (C8)"
+st_count; grep -q 'fleet_reap_policy.py" report-finish "\$selffid"' "$BIN/fleet-report-parent.sh" \
+  && grep -q 'fleet_id.append(fid, ev)' "$BIN/fleet_reap_policy.py" \
+  && grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
+  || st_miss "WIRE: a saved report writes the ID result and a queued one routes by ID (C6/C8)"
 st_count; grep -q 'trap id_result EXIT' "$BIN/fleet-report-parent.sh" || st_miss "WIRE: a session's own report writes its result"
 
 st_done
