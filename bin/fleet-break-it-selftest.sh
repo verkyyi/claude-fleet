@@ -6614,6 +6614,14 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_launcher_no_ready() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-wake-guard-selftest.py" Recovery.test_codex_timer_launcher_failure_needs_this_launch_receipt Recovery.test_recovery_page_with_stale_sid_is_not_a_wake_receipt Recovery.test_failed_peer_wake_retry_does_not_report_already_awake 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex launcher 无 native-ready：旧 SID 和 parked 清空不算成功；原话及定时轮次保留，失败可见且只记一次'
+}
+
 drill_wake_full_card() {
   CAP=60; local t0 out
   t0=$(now)
@@ -6979,6 +6987,35 @@ drill_chat_gate_probe_unavailable() {
   webchat_part gate "Y a failed capability probe is unavailable, never a read-only verdict" \
     "Y capability failure after a writable frame recovers on the same stream" || return 1
   WHAT="能力探测失败明确暂不可达，同一流下一次成功恢复可写；只读权限不放宽"
+}
+
+drill_chat_view_stream_silent() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  [ -f "$ROOT/extras/browser-transport/session-stream.mjs" ] || { WHY='missing silent-stream browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/session-stream.mjs" 2>&1); rc=$?
+    [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+    [ "$(printf '%s\n' "$out" | grep -c '^PASS session-stream ')" = 4 ] || { WHY="missing browser cases: $out"; return 1; }
+    WHAT='真实 HTTP SSE 不结束也不再传数据：45 秒后重连原会话游标，心跳续活，草稿保留、不自动发送、只读票据仍不可写'
+  else
+    WHAT='这里没有 Playwright Chromium；browser-attachment 门运行真实 HTTP SSE 悬流演练'
+  fi
+  SECS=$(since "$t0")
+}
+
+drill_chat_view_identity_unavailable() {
+  CAP=60; local t0 out
+  t0=$(now)
+  [ -f "$ROOT/extras/browser-transport/session-write.mjs" ] || { WHY='missing identity recovery browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/session-write.mjs" 2>&1) || { WHY="$out"; return 1; }
+    printf '%s\n' "$out" | grep -q '^PASS session-write codex identity' || { WHY="missing identity recovery case: $out"; return 1; }
+    WHAT='登录身份首次503、会话能力为true：仍禁发，身份恢复后保留草稿并允许主动发送；只读票据始终禁发'
+  else
+    WHAT='这里没有 Playwright Chromium；browser-attachment 门运行身份503恢复演练'
+  fi
+  SECS=$(since "$t0")
 }
 
 drill_codex_release_shadowed() {
