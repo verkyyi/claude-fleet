@@ -14,3 +14,14 @@ assert.deepEqual(row.policyEps, ['new-managed']); // Client's old enrollment can
 assert.deepEqual(rows([client])[0].policyEps, []); // Never borrow a client's policy.
 assert.deepEqual(rows([managed, { hostname: host, endpoint_id: 'legacy' }])[0].policyEps, ['new-managed', 'legacy']);
 console.log('machine policy endpoint selection PASS');
+
+const live = { ...managed, status: 'online' };
+const old = { hostname: host, endpoint_id: 'old-login', status: 'lost', max_sessions: 30 };
+assert.equal(rows([live, old])[0].cap, null); // M5: 12 current sessions must not display /30 from October 5.
+assert.equal(rows([{ ...live, max_sessions: 4 }, old])[0].cap, 4);
+assert.equal(rows([live, { ...live, endpoint_id: 'bounded', max_sessions: 4 }])[0].cap, null);
+assert.equal(rows([{ ...live, max_sessions: 4 }, { ...live, endpoint_id: 'bounded', max_sessions: 6 }])[0].cap, 10);
+assert.equal(rows([old])[0].cap, null);
+assert.equal(rows([{ ...live, max_sessions: 4 }, { ...client, status: 'online', max_sessions: 30 },
+  { ...live, endpoint_id: 'machine-agent', machine_link: true }])[0].cap, 4);
+console.log('machine capacity excludes lost endpoints and preserves dynamic admission PASS');

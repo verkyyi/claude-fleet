@@ -205,8 +205,12 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
       const offDesired = !!desired && (desired.want !== desired.reached || !!desired.diff);
       const offStable = !!installed && /^[0-9a-f]{7,}$/i.test(installed) && stables.length > 0 && !stables.some((s) => sameVersion(installed, s));
       const status: Status = m.status === "maintenance" ? "maintenance" : m.status === "online" ? "online" : "lost";
-      const caps = nodes.map((n) => n.max_sessions || 0);
-      const cap = caps.some((c) => c > 0) ? caps.reduce((a, b) => a + b, 0) : null;
+      // A retired login's last heartbeat is history, not current capacity.
+      // A resource-admitted login has no fixed count ceiling: adding only its
+      // bounded neighbours would incorrectly present their sum as a machine cap.
+      const caps = nodes.filter((n) => n.status === "online" && n.role !== "client" && !n.machine_link)
+        .map((n) => n.max_sessions || 0);
+      const cap = caps.length > 0 && caps.every((c) => c > 0) ? caps.reduce((a, b) => a + b, 0) : null;
       return {
         id,
         host: m.hostname,
