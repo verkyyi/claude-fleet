@@ -23,7 +23,7 @@
 // module timer for the same reason: the pickup a handoff posts right after its
 // /clear must still be taken.
 //
-// Accept (issue #4618): an `idle.v1` request on the same inbox is accept.ts's —
+// Accept (issue #4618; idle.v2 task HHV0): an `idle.v1` / `idle.v2` request on the same inbox is accept.ts's —
 // the precheck and the wait run here, the submit and its entry check there.
 //
 // Where (issue #1716): the same module reads bin/fleet-client-where.sh at the
@@ -53,7 +53,7 @@ import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMo
 import { MOD_VERSION, isSupported } from './version'
 import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
 import { noteSessionBoundary, runtimeQuery, WRITE_TIMEOUT_MS } from './state'
-import { ACCEPT, acceptOutcome, acceptSessionEnded, beginAccept, parseAccept } from './accept'
+import { ACCEPT_V2, acceptOutcome, acceptSessionEnded, beginAccept, parseAccept } from './accept'
 
 export const HEARTBEAT_MS = 15_000
 
@@ -243,8 +243,9 @@ export function registerLifecycle(on: On): void {
     await setOptions($, {
       '@mod_state': state,
       '@mod_ver': MOD_VERSION,
-      // fleet_runtime.accept_if_idle offers a Claude pane only what its mod answers.
-      '@mod_accept': supported ? ACCEPT : null,
+      // the session gate (bin/fleet_session_gate.py) offers a Claude pane only
+      // what its mod answers: idle.v2 (idle.v1, still taken, needs a launch context)
+      '@mod_accept': supported ? ACCEPT_V2 : null,
       // Out of range never beats: clear one a previous load left behind.
       ...(supported ? {} : { '@mod_alive': null }),
     })

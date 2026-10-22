@@ -1068,7 +1068,7 @@ class PolicyGrammar(unittest.TestCase):
         self.assertTrue(rp.idle_owned("idle:2h"))
         self.assertEqual({o: rp.origin_default(o) for o in rp.ORIGINS},
                          {"person": "idle:2h", "dispatched": "merged", "member": "merged", "driver": "merged",
-                          "orchestrator": "keep", "decide": "idle:15m", "probe": "done:1m"})
+                          "orchestrator": "keep", "decide": "idle:15m", "probe": "done:1m", "web": "keep"})
         self.assertEqual(rp.origin_default("person", "issue"), "merged")
         self.assertEqual(rp.origin_default("dispatched", "loop"), "loop-end")
         self.assertEqual(rp.origin_default("driver", "loop"), "merged")
@@ -1736,6 +1736,62 @@ class EmptyReap(Rig):
         out = self.clean("--dry-run")
         self.assertIn("would-reap-empty:" + empty, out)
         self.assertTrue(self.alive(empty))
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class WebPark(Rig):
+    """A session the web opened (@session_origin web, task HHV0) is never closed: idle
+    FLEET_SESSION_PARK_IDLE it is PARKED through fleet_session_gate.py park (here a
+    stand-in that logs the fid); a young one is not, a parked one is left alone, 0
+    never parks, and under memory pressure only the longest idle goes early."""
+    def web(self, idle, **opts):
+        win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
+                      "-c", str(self.root), "sleep 90").strip()
+        fid = "%08x-0000-4000-8000-0000000000aa" % int(win[1:])
+        for key, value in dict({"@norepo": "1", "@fleet_id": fid, "@reap_policy": "keep", "@reap_origin": "web",
+                                "@session_origin": "web", "@claude_state": "done",
+                                "@claude_state_ts": str(int(time.time()) - idle)}, **opts).items():
+            self.tm("set-option", "-w", "-t", win, key, value)
+        return win, fid
+
+    def gate(self):
+        log = self.root / "gate.log"
+        stub = self.root / "gate-stub"
+        stub.write_text("#!/bin/sh\necho \"$*\" >> %s\necho '{\"ok\": true}'\n" % shlex.quote(str(log)))
+        stub.chmod(0o755)
+        self.env["FLEET_SESSION_GATE_CMD"] = str(stub)
+        self.env["FLEET_PARK_MEM_FREE"] = "50"
+        return log
+
+    def test_parks_after_its_idle_never_closes(self):
+        log = self.gate()
+        idle, fid = self.web(400)
+        young, yfid = self.web(30)
+        parked, pfid = self.web(4000, **{"@parked": "1"})
+        out = self.clean()
+        self.assertIn("parked-web:" + idle + " idle", out)
+        text = log.read_text() if log.exists() else ""
+        self.assertIn("park --fid " + fid + " --why idle", text)
+        self.assertNotIn(yfid, text)
+        self.assertNotIn(pfid, text)
+        for win in (idle, young, parked):
+            self.assertIn(win, self.tm("list-windows", "-t", self.label, "-F", "#{window_id}").split(),
+                          win + " was closed: " + out)
+
+    def test_zero_never_parks_and_memory_parks_the_oldest_first(self):
+        log = self.gate()
+        self.env["FLEET_SESSION_PARK_IDLE"] = "0"
+        a, afid = self.web(4000)
+        self.clean()
+        self.assertFalse(log.exists() and afid in log.read_text())
+        self.env.pop("FLEET_SESSION_PARK_IDLE")
+        self.tm("set-option", "-w", "-t", a, "@parked", "1")
+        old, ofid = self.web(200)
+        new, nfid = self.web(120)
+        self.env["FLEET_PARK_MEM_FREE"] = "5"
+        out = self.clean()
+        self.assertIn("parked-web:" + old + " memory", out)
+        self.assertNotIn(nfid, log.read_text())
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")

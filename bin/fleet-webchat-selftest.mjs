@@ -78,7 +78,11 @@
 //   X  接管 / 交回 (task VV8F): /api/takeover · /api/giveback by a window's fid — refused
 //      while the terminal answers, one of two at once (409 taking), to-web without a page,
 //      give-back by the window; done twice is 200 already
-//   --only=socket|budget|context|home|idle|trial|view|handover|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
+//   Y  the session gate (task HHV0): /api/say hands the words to bin/fleet_session_gate.py on
+//      stdin (pictures as media/ files), stop / answer with the body's fid are the gate's, a
+//      session not here is 404 with a code, /api/open opens a no-repo origin-web session with the
+//      words as its first turn, the view's state line says can_talk + the queue (no holder)
+//   --only=socket|budget|context|home|idle|trial|view|handover|gate|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
@@ -96,7 +100,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,media,links,send,pages,aside,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,media,links,send,pages,aside,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -764,6 +768,105 @@ echo "no such window" >&2; exit 2
     `V a Codex session: its rollout's lines (${JSON.stringify(items(f.evs)[0])})`);
   ok(/"ev":"view"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "V the log says view");
   await sstop(v);
+}
+// ---- Y: the session gate (task HHV0) — /api/say · stop · answer · open · view's state -----
+if (part("gate")) {
+  mkdirSync(homeOf("y"), { recursive: true });
+  SSTATE = stateOf("y"); SOCK = join(SSTATE, "chat.sock");
+  const FID = "abcdef12-1234-4234-8234-12345678aaaa", GONE = "abcdef12-1234-4234-8234-12345678bbbb";
+  const GLOG = join(HT, "gate.log"), gpy = join(HT, "gate.py"), rsh = join(HT, "raw.sh"), RLOG = join(HT, "raw.log");
+  const VID = "77777777-6666-4555-8444-33333333aaaa";
+  // bin/fleet_session_gate.py, stubbed: its argv + stdin logged, a fixed answer printed
+  writeFileSync(gpy, `import json, sys
+a = sys.argv[1:]
+data = sys.stdin.read()
+open(${JSON.stringify(GLOG)}, "a").write(json.dumps({"argv": a, "stdin": data}) + "\\n")
+fid = a[a.index("--fid") + 1] if "--fid" in a else ""
+if fid == ${JSON.stringify(GONE)}:
+    print(json.dumps({"ok": False, "why": "no_session", "state": "refused", "reason": "no_session"})); sys.exit(0)
+if a[0] == "say":
+    print(json.dumps({"delivery": "d1d1d1d1-0000-4000-8000-000000000001", "state": "queued", "reason": "busy"}))
+elif a[0] == "status":
+    print(json.dumps({"can_talk": True, "why": "", "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
+elif a[0] == "stop":
+    print(json.dumps({"ok": True, "how": "escape"}))
+elif a[0] == "answer":
+    print(json.dumps({"ok": True, "why": ""}))
+else:
+    print(json.dumps({"ok": True}))
+`);
+  // dash-raw-session.sh, stubbed: the headless receipt (window · name · worktree · fid)
+  writeFileSync(rsh, `#!/bin/bash
+echo "$*" >> ${JSON.stringify(RLOG)}
+for a in "$@"; do case "$a" in --prompt-file=*) cat "\${a#--prompt-file=}" >> ${JSON.stringify(RLOG)}; echo >> ${JSON.stringify(RLOG)} ;; esac; done
+printf '@9\\tweb-1\\t\\t%s\\n' ${FID}
+`, { mode: 0o755 });
+  const vsh = join(HT, "yview.sh");
+  writeFileSync(vsh, `#!/bin/bash
+[ "$1" = view-of ] && [ "$2" = fid:${FID} ] && { echo '{"agent":"claude","sid":"${VID}","busy":false,"state":"done","label":"web-1","holder":""}'; exit 0; }
+exit 2
+`, { mode: 0o755 });
+  const y = (await sstart(["--socket"], { ...asHome("y"), FLEET_WEBCHAT_GATE: gpy, FLEET_WEBCHAT_RAW: rsh, FLEET_WEBCHAT_HANDOFF: vsh,
+    FLEET_WEBCHAT_FLEET: "fleet", FLEET_GATE_DIR: join(HT, "gate-dir"), FLEET_WEBCHAT_VIEW_STATE_MS: "200", FLEET_WEBCHAT_VIEW_POLL_MS: "100" })).p;
+  const PAGE = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
+  const calls = () => existsSync(GLOG) ? readFileSync(GLOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  ok((await sreq("/api/say", { method: "POST", headers: { "Content-Type": "application/json" }, body: { fid: FID, text: "x" } })).status === 403,
+    "Y a sentence not from the page is 403");
+  ok((await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: "../x", text: "x" } })).status === 400, "Y a fid that is not one is 400");
+  let r = await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "  在吗  " } });
+  let j = JSON.parse(r.body);
+  ok(r.status === 200 && j.state === "queued" && j.reason === "busy" && j.delivery, `Y say: the gate's answer, verbatim (${r.body})`);
+  let c = calls().at(-1);
+  ok(c.argv.join(" ") === `say --fid ${FID}` && c.stdin === "在吗", `Y say: the words on the gate's stdin, never its argv (${JSON.stringify(c)})`);
+  // a picture rides as a file in media/, named to the gate
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  r = await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "看图", images: [{ media_type: "image/png", data: PNG }] } });
+  c = calls().at(-1);
+  ok(r.status === 200 && c.argv.includes("--image") && existsSync(c.argv[c.argv.indexOf("--image") + 1]), `Y a picture is kept in media/ and named to the gate (${JSON.stringify(c.argv)})`);
+  r = await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "x", images: [1, 2, 3, 4, 5].map(() => ({ media_type: "image/png", data: PNG })) } });
+  ok(r.status === 400, "Y a fifth picture is refused on the spot");
+  // stop / answer with the fid in the body (the entry writes it there) are the gate's
+  r = await sreq("/api/stop", { method: "POST", headers: PAGE, body: { fid: FID } });
+  ok(r.status === 200 && JSON.parse(r.body).how === "escape" && calls().at(-1).argv.join(" ") === `stop --fid ${FID}`, `Y stop by the body's fid (${r.body})`);
+  r = await sreq("/api/answer", { method: "POST", headers: PAGE, body: { fid: FID, fingerprint: "0123456789abcdef", options: ["狗"] } });
+  ok(r.status === 200 && calls().at(-1).argv.join(" ") === `answer --fid ${FID} --fp 0123456789abcdef --pick 狗`, `Y answer: the fingerprint and the option's own words (${JSON.stringify(calls().at(-1).argv)})`);
+  await sreq("/api/answer", { method: "POST", headers: PAGE, body: { fid: FID, fp: "0123456789abcdef", answers: { "猫还是狗？": "狗" } } });
+  ok(calls().at(-1).argv.join(" ") === `answer --fid ${FID} --fp 0123456789abcdef --answers-json {"猫还是狗？":"狗"}`, `Y answer: {question: label} handed on whole (${JSON.stringify(calls().at(-1).argv)})`);
+  await sreq("/api/answer", { method: "POST", headers: PAGE, body: { fid: FID, fp: "0123456789abcdef", allow: false } });
+  ok(calls().at(-1).argv.join(" ") === `answer --fid ${FID} --fp 0123456789abcdef --allow 0`, "Y answer: a permission's allow / deny");
+  ok((await sreq("/api/answer", { method: "POST", headers: PAGE, body: { fid: FID, fp: "nope", picks: ["狗"] } })).status === 400, "Y a malformed fingerprint is 400");
+  r = await sreq("/api/stop", { method: "POST", headers: PAGE, body: { fid: GONE } });
+  ok(r.status === 404 && JSON.parse(r.body).code === "no_session", `Y a session not here: 404 WITH a code (a bare 404 is an old service) (${r.body})`);
+  // a new session from the web: no-repo, origin web, its first words the start's first turn
+  r = await sreq("/api/open", { method: "POST", headers: PAGE, body: { agent: "claude", text: "开个新的" } });
+  j = JSON.parse(r.body);
+  const rl = existsSync(RLOG) ? readFileSync(RLOG, "utf8") : "";
+  ok(r.status === 200 && j.fid === FID && j.state === "sent", `Y open: the new session's fid (${r.body})`);
+  ok(/^fleet --origin hub --print --no-repo --node local --reap-origin web --agent claude --prompt-file=/m.test(rl) && rl.includes("开个新的"),
+    `Y open: a no-repo window of this login, origin web, the words its first turn (${rl})`);
+  ok((await sreq("/api/open", { method: "POST", headers: PAGE, body: { agent: "gpt", text: "x" } })).status === 400, "Y open: an unknown agent is 400");
+  // the view's state line: can_talk and the queue, no holder
+  const st = await new Promise((resolve) => {
+    const evs = [];
+    const q = http.request({ socketPath: SOCK, path: `/api/view?fid=${FID}`, headers: { Host: "webchat" } }, (res) => {
+      let buf = "";
+      const t = setTimeout(() => { q.destroy(); resolve(evs); }, 3000);
+      res.on("data", (d) => {
+        buf += d; let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const data = (buf.slice(0, i).match(/^data: (.*)$/m) || [])[1]; buf = buf.slice(i + 2);
+          if (data) evs.push(JSON.parse(data));
+        }
+        if (evs.some((e) => e.t === "state" && e.can_talk)) { clearTimeout(t); q.destroy(); resolve(evs); }
+      });
+    });
+    q.on("error", () => resolve(evs));
+    q.end();
+  });
+  const last = st.filter((e) => e.t === "state").at(-1) || {};
+  ok(last.can_talk === true && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),
+    `Y the view's state says can_talk and what waits, no holder (${JSON.stringify(last)})`);
+  await sstop(y);
 }
 // ---- X: 接管 / 交回 (task VV8F) — /api/takeover · /api/giveback by window -------------
 if (part("handover")) {

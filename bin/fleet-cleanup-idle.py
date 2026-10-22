@@ -134,6 +134,7 @@ class Cleaner:
         self.why = ""          # why the window in hand is still open (E101: @reap_why)
         self.bg_over = False   # its background job outlived bg_grace_secs(): killed with the window
         self.records = {}      # one record read a tick per task
+        self._mem = None       # HHV0: (tight, the longest-idle web window) once a pass
 
     def retire(self, window):
         """An idle reap is the fleet's close, never a kill to pull back (#1840)."""
@@ -184,7 +185,9 @@ class Cleaner:
                  # T810: handed to WebChat — the window is the way back (↵), kept
                  "@handoff_web",
                  # E101: the wrapper's one automatic retry of a temporary error
-                 "@auto_resume_at", "@auto_resumed", "@reap_why")
+                 "@auto_resume_at", "@auto_resumed", "@reap_why",
+                 # HHV0: a session the web opened, and whether it is parked
+                 "@session_origin", "@parked")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -977,7 +980,103 @@ class Cleaner:
         print("parked:%s %s%s" % (window, key, (" " + task) if task else ""))
         return True
 
+    @property
+    def mem_tight(self):
+        return self.mem_state()[0]
+
+    def mem_state(self):
+        """(tight, window): the machine's free memory under FLEET_PARK_MEM_PCT (15%)
+        — or, on a trial login, its processes at 80% of its share (the trial
+        guard's mem.tsv line) — and the web session idle the longest, the one that
+        parks first (one a pass). Read once a pass."""
+        if self._mem is not None:
+            return self._mem
+        tight = False
+        seam = os.environ.get("FLEET_PARK_MEM_FREE")
+        free = seam if seam is not None else run(
+            "bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_mem_probe | awk \'NF{print $2; exit}\'',
+            "park-mem", str(BIN))
+        pct = os.environ.get("FLEET_PARK_MEM_PCT", "15")
+        if (free or "").strip().isdigit() and pct.isdigit() and int(free.strip()) < int(pct):
+            tight = True
+        trial = os.environ.get("FLEET_TRIAL_DIR") or os.path.join(
+            os.environ.get("FLEET_NODE_STATE", "/var/db/fleet-node"), "trial")
+        try:
+            for line in Path(trial, "mem.tsv").read_text().splitlines():
+                f = line.split("\t")
+                if len(f) >= 2 and f[0] == str(os.getuid()) and f[1].isdigit() and int(f[1]) > 0:
+                    rss = sum(int(x) for x in run("ps", "-U", str(os.getuid()), "-o", "rss=").split() if x.isdigit())
+                    if rss // 1024 >= int(f[1]) * 80 // 100:
+                        tight = True
+        except OSError:
+            pass
+        oldest, at = "", None
+        if tight:
+            rows = self.tm("list-windows", "-t", self.args.session, "-F",
+                           "#{window_id}\t#{@session_origin}\t#{@parked}\t#{@claude_state_ts}")
+            for line in (rows or "").splitlines():
+                f = line.split("\t")
+                if len(f) == 4 and f[1] == "web" and not f[2] and f[3].isdigit() and (at is None or int(f[3]) < at):
+                    oldest, at = f[0], int(f[3])
+        self._mem = (tight, oldest)
+        return self._mem
+
+    def web_park(self, window, snap):
+        """A session the web opened (`@session_origin web`, task HHV0) is never closed on
+        its own: idle fleet_reap_policy.park_idle_secs() (5 min) past its last turn
+        it is PARKED in its own window — the agent's process ends, the window, its
+        ID, conversation and credential stay, and every list reads it idle — by
+        bin/fleet_session_gate.py park, which refuses while it answers, asks, has
+        words waiting or a person looks at it. Under memory pressure (free below
+        FLEET_PARK_MEM_PCT, 15%) the longest idle web session parks first, past
+        one minute. A background job keeps it open. None = not a web session."""
+        if snap["@session_origin"] != "web":
+            return None
+        if snap["@parked"]:
+            self.why = "parked"
+            return False
+        if snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1" or self.finished(snap) != "done":
+            return False
+        stamp = snap["@claude_state_ts"]
+        if not stamp.isdigit():
+            return False
+        idle = self.now - int(stamp)
+        due = fleet_reap_policy.park_idle_secs()
+        early = self.mem_tight and self.mem_state()[1] == window and idle >= 60
+        if due == 0 and not early:
+            return False                      # fleet.session.park_idle 0: never parked
+        if early:
+            due = 0
+        if idle < due:
+            self.say(window, "skip:web-idle", "park=%d" % (int(stamp) + due))
+            return False
+        if self.busy(window, snap):
+            self.why = "bg"
+            return False
+        fid = snap["@fleet_id"]
+        if not FID_RE.fullmatch(fid or ""):
+            return False
+        if self.args.dry_run:
+            print("would-park-web:" + window)
+            return False
+        why = "memory" if early and not 0 < fleet_reap_policy.park_idle_secs() <= idle else "idle"
+        gate = os.environ.get("FLEET_SESSION_GATE_CMD")       # a selftest's stand-in
+        out = run(*(gate.split() if gate else ["python3", str(BIN / "fleet_session_gate.py")]),
+                  "park", "--fid", fid, "--why", why)
+        try:
+            got = json.loads(out or "{}")
+        except ValueError:
+            got = {}
+        if got.get("ok"):
+            print("parked-web:%s %s" % (window, why))
+            return True
+        self.say(window, "skip:web-" + str(got.get("why") or "unparked"))
+        return False
+
     def road(self, window, snap):
+        road = self.web_park(window, snap)
+        if road is not None:
+            return road
         road = self.error_stop(window, snap)
         if road is not None:
             return road

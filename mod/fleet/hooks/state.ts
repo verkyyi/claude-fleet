@@ -22,6 +22,7 @@
 
 import type { EngineInterface, On } from 'claude-code'
 
+import { takeEntered } from './accept'
 import { isOpen } from './gate'
 
 /** How long one fleet-script write may take before it is abandoned. */
@@ -37,11 +38,30 @@ let runtimeObservation: { state: string; turn_id: string } | undefined
 // A session.end (a /clear, a /resume) since the last turn: that turn's id no
 // longer names the conversation a prompt would enter (accept.ts, #4618).
 let runtimeBoundary = false
+// Bumped by every session.end: an idle.v2 request (accept.ts, the session gate)
+// enters only into the conversation it was taken in.
+let runtimeGeneration = 0
 
 /** The last main turn finished as `expected` (idle), none runs, no session boundary since. */
 export function runtimeIdle(expected: string): boolean {
   return runtimeTurn === undefined && !runtimeBoundary && runtimeObservation?.turn_id === expected
     && runtimeObservation.state === 'idle'
+}
+
+/** idle.v2: no main turn runs now (and, when `expected` is given, the last one
+ * finished is that one — idle or interrupted alike: a stopped turn is idle too). */
+export function runtimeIdleNow(expected = ''): boolean {
+  return runtimeTurn === undefined && (expected === '' || runtimeObservation?.turn_id === expected)
+}
+
+/** The last main turn this module saw finish or start, '' before any. */
+export function runtimeLastTurn(): string {
+  return runtimeObservation?.turn_id ?? ''
+}
+
+/** The conversation generation: one more per session.end (a /clear, a /resume). */
+export function runtimeGen(): number {
+  return runtimeGeneration
 }
 
 /** The main turn running now, as turn.start named it. */
@@ -52,6 +72,7 @@ export function runtimeTurnNow(): string | undefined {
 /** lifecycle.ts session.end: no earlier turn is the one a prompt would follow. */
 export function noteSessionBoundary(): void {
   runtimeBoundary = true
+  runtimeGeneration++
 }
 
 /** An on-demand reply from this native module, never a renewed disk cache. */
@@ -152,6 +173,21 @@ export function registerState(on: On): void {
       await runtimeEvent($, e.isAborted || e.reason !== 'answer' ? 'interrupted' : 'idle', e.turnId)
       if (runtimeTurn === e.turnId) runtimeTurn = undefined
       await setState($, 'done')
+      // the session gate's own words, stopped (accept.ts): the engine puts them back
+      // in the box — not a draft; the person's own text in it is never touched
+      const gate = takeEntered(e.turnId)
+      if (gate !== undefined && (e.isAborted || e.reason !== 'answer')) {
+        try {
+          for (let i = 0; i < 20; i++) {
+            const box = (await $.prompt.read()).text
+            if (box.trim() === gate.trim()) { await $.prompt.fill({ text: '', mode: 'replace' }); break }
+            if (box.trim() !== '') break
+            await $.clock.sleep(50)
+          }
+        } catch {
+          // the box keeps it: the gate then reads it as typing until a person clears it
+        }
+      }
     }
     return result
   }).catch(($, e, next) => next(e))

@@ -81,9 +81,9 @@ if [ -n "$REAL_TMUX" ]; then
   # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
   # columns 24-28 are the measurement bus (issue #2431), 29 agentstatus= (#2536),
   # 30 test= (#2505), 31 orphanrep= (#3369), 32 pin= (#3517), 33 notices= (T701),
-  # 34 reapwhy= (E101), 35 origin= (PQ41) — the last (columns 31-37 went with #3118); NF - 15 keeps the count of the 20
-  st_eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 35, PQ41); 16 before it as they were" "20 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin= notices= reapwhy=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 15, $18, $19, $20, $21, $22, $23, $30, $31, $32, $33, $34 }')"
+  # 34 reapwhy= (E101), 35 origin= (PQ41), 36 cantalk= (HHV0) — the last (columns 31-37 went with #3118); NF - 16 keeps the count of the 20
+  st_eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23 (NF counts through column 36, HHV0); 16 before it as they were" "20 reap= detail= role= epic= epicstale= backfill= test= orphanrep= pin= notices= reapwhy=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 16, $18, $19, $20, $21, $22, $23, $30, $31, $32, $33, $34 }')"
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
   out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
@@ -131,11 +131,21 @@ if [ -n "$REAL_TMUX" ]; then
   st_eq "A: @session_origin web → column 35 origin=web; anything else empty (PQ41)" 'origin=web|origin=|origin=' \
      "$(printf '%s\n' "$outo" | awk -F'\t' '$10 == "draft" { d = $35 } $10 == "uncached" { u = $35 } $10 == "tabbed" { t = $35 } END { print d "|" u "|" t }')"
   T set-option -wu -t "=$S:draft" @session_origin; T set-option -wu -t "=$S:uncached" @session_origin
+  # column 36 (task HHV0): cantalk=1 when the web may say a sentence into it — a Claude
+  # whose mod takes idle.v2, a parked one; an older mod (idle.v1) or none: empty; a
+  # parked window says `parked` in column 5
+  T set-option -w -t "=$S:draft" @mod_accept idle.v2
+  T set-option -w -t "=$S:uncached" @mod_accept idle.v1
+  T set-option -w -t "=$S:tabbed" @parked 1
+  outt=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
+  st_eq "A: @mod_accept idle.v2 / @parked → column 36 cantalk=1; idle.v1 empty; parked → column 5 parked (HHV0)" 'cantalk=1|cantalk=|cantalk=1:parked' \
+     "$(printf '%s\n' "$outt" | awk -F'\t' '$10 == "draft" { d = $36 } $10 == "uncached" { u = $36 } $10 == "tabbed" { t = $36 ":" $5 } END { print d "|" u "|" t }')"
+  T set-option -wu -t "=$S:draft" @mod_accept; T set-option -wu -t "=$S:uncached" @mod_accept; T set-option -wu -t "=$S:tabbed" @parked
   # no orchq= column (issue #3118): an old seat's @orch_queue rides nowhere — the
   # row ends at orphanrep= (column 31, issue #3369), empty with no orphan report
   T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:draft" @orch_queue 3
   oq=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
-  st_eq "A: an old seat's @orch_queue → no orchq=, the row ends at origin= (issues #3118, #3369, #3517, T701, E101, PQ41)" "35|origin=" \
+  st_eq "A: an old seat's @orch_queue → no orchq=, the row ends at cantalk= (issues #3118, #3369, #3517, T701, E101, PQ41, HHV0)" "36|cantalk=" \
      "$(printf '%s\n' "$oq" | awk -F'\t' '$10 == "draft" { print NF "|" $NF }')"
   for o in @orch_queue @fleet_role; do T set-option -wu -t "=$S:draft" "$o"; done
   # column 31 (issue #3369): the login's unread orphan reports, the same cell on every row
@@ -173,7 +183,7 @@ if [ -n "$REAL_TMUX" ]; then
   st_eq "A: a scratch → its @task_line as title=" "title=试一下新的侧栏" "$(col17 "$out5" draft)"
   st_eq "A: an issue window keeps its issue's title" "title=修复侧栏：显示 issue 标题" "$(col17 "$out5" fix-sidebar-slug)"
   st_eq "A: …and the line moves no other column (34 columns, #3369, #3517, T701, E101)" "20 reap= detail= role= epic=" \
-     "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 15, $18, $19, $20, $21 }')"
+     "$(printf '%s\n' "$out5" | awk -F'\t' '$10 == "draft" { print NF - 16, $18, $19, $20, $21 }')"
   # A3 (issue #3317): a name the person gave the window beats the issue title and
   # the first sentence — both rename roads stamp @name_manual, and the inventory
   # sends it as title= while the window still wears it
@@ -259,6 +269,11 @@ p, x = inventory_row(cols + ["origin="])
 assert "origin" not in x and x["reap_why"] == "bg:1800000000", x
 p, x = inventory_row(cols + ["origin=x;rm"])
 assert "origin" not in x and x["title"] == "t", x
+# column 36 (task HHV0): cantalk=1 → can_talk True, empty → False; origin read beneath it
+p, x = inventory_row(cols + ["origin=web", "cantalk=1"])
+assert x["can_talk"] is True and x["origin"] == "web" and x["reap_why"] == "bg:1800000000", x
+p, x = inventory_row(cols + ["origin=", "cantalk="])
+assert x["can_talk"] is False and "origin" not in x, x
 # issue #2538: no report, a needs row's subtype + detail fill the pair; a report wins
 ask = base[:11] + ["perm"] + base[12:]
 p, x = inventory_row(ask + tail + ["title=t", "reap=", "detail=Bash: rm -rf build"])

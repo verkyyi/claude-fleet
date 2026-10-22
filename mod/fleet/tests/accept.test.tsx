@@ -48,6 +48,7 @@ function engine(on: On, opts: { draft?: string } = {}) {
   })
   on('fs.write', (_$, e) => { files.set(e.path, e.text); return { value: undefined } })
   on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
+  on('prompt.fill', (_$, e) => { box.text = e.mode === 'replace' ? e.text : box.text + e.text; return { isFilled: true } })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Box } = $.ui.resolve(e)
     return <Box key="engine" />
@@ -181,8 +182,75 @@ test('a wrong launch, an expired or malformed request refuses at once (ok:false)
   await $.session.start(START)
   await idleAfter($)
   for (const bad of [request({ launch: { version: 2 } }), request({ deadline: NOW - 1 }),
-    request({ delivery_id: 'x' }), request({ text: '' }), request({ accept: 'idle.v2' })]) {
+    request({ delivery_id: 'x' }), request({ text: '' }), request({ accept: 'idle.v3' })]) {
     expect((await post($, rig, bad)).ok).toBe(false)
   }
   expect(entered).toEqual([])
+})
+
+// idle.v2 (task HHV0): the session gate's road — no launch context, no turn to name.
+function v2(extra: Record<string, unknown> = {}) {
+  return { accept: 'idle.v2', nonce: 'c'.repeat(32), delivery_id: ID, text: 'from the web', deadline: NOW + 5, ...extra }
+}
+
+test('idle.v2: no launch context needed; one turn of its own after whatever finished last', async ($, on) => {
+  const rig = engine(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band() })
+  await idleAfter($, 't9')
+  const done = await post($, rig, v2())
+  expect([done.state, done.reason, done.turn_id, done.previous_turn_id]).toEqual(['accepted', 'native_entry', 't-entered-1', 't9'])
+  expect(rig.entered).toEqual([{ text: 'from the web', context: [RECEIPT_PREFIX + ID] }])
+  await ui.unmount()
+})
+
+test('idle.v2: a fresh session with no turn yet takes it; a running turn refuses it', async ($, on) => {
+  const rig = engine(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band() })
+  await $.turn.start({ text: 'go', turnId: 'r1' })
+  expect((await post($, rig, v2())).reason).toBe('precheck_not_idle')
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: 'r1', reason: 'aborted' })
+  // a stopped turn is idle for the gate: its words come next
+  expect((await post($, rig, v2({ nonce: 'd'.repeat(32) }))).state).toBe('accepted')
+  await ui.unmount()
+})
+
+test('idle.v2: a draft in the box still refuses at entry', async ($, on) => {
+  const rig = engine(on, { draft: 'typing…' })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band() })
+  await idleAfter($)
+  expect((await post($, rig, v2())).reason).toBe('draft_present')
+  expect(rig.entered).toEqual([])
+  await ui.unmount()
+})
+
+test('idle.v2: a pinned expected_turn still fences; no FLEET_LAUNCH_CONTEXT is read', async ($, on) => {
+  const rig = engine(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band() })
+  await idleAfter($, 't2')
+  expect((await post($, rig, v2({ expected_turn: 't1' }))).reason).toBe('precheck_not_idle')
+  expect((await post($, rig, v2({ expected_turn: 't2', nonce: 'e'.repeat(32) }))).state).toBe('accepted')
+  expect('error' in parseAccept(v2(), undefined, NOW)).toBe(true) // the gate is shut outside a session
+  await ui.unmount()
+})
+
+test('idle.v2 stopped: its own words put back in the box are emptied; the person\'s draft never', async ($, on) => {
+  const rig = engine(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ plugin: 'fleet', surface: 'terminal', component: 'AbovePrompt', props: band() })
+  await idleAfter($, 't9')
+  const done = await post($, rig, v2())
+  expect(done.state).toBe('accepted')
+  rig.box.text = 'from the web'                                   // the engine restores the stopped prompt
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: done.turn_id, reason: 'aborted' })
+  expect(rig.box.text).toBe('')
+  const again = await post($, rig, v2({ nonce: 'f'.repeat(32), delivery_id: '7f1c2d3e-4b5a-4c6d-8e9f-0a1b2c3d4e5f' }))
+  expect(again.state).toBe('accepted')
+  rig.box.text = 'my own words'
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: again.turn_id, reason: 'aborted' })
+  expect(rig.box.text).toBe('my own words')
+  await ui.unmount()
 })

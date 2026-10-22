@@ -168,6 +168,8 @@
 #                                                   (a task's report is its ID's result, whatever ids/.switch says)
 #   c8-old-supervisor-reopen                        bin/fleet_launch.py (the C8 shim: supervise retires @launch*
 #                                                   and goes the ordinary road), fleet-session-wrap.sh
+#   park-while-watched / wake-timeout               bin/fleet_session_gate.py (park · wake: task HHV0),
+#                                                   fleet-session-wrap.sh (park_hold), fleet-cleanup-idle.py web_park
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
 #   task-many-ids                                   bin/fleet_id.py (take_task_id, next_attempt, the reopen
@@ -6332,6 +6334,33 @@ drill_c8_old_supervisor_reopen() {
     || { WHY="fleet_launch.py supervise no longer retires the window's @launch* before the ordinary road"; return 1; }
   SECS=$(since "$t0")
   WHAT='切换前的旧启动监督窗口在 C8 版本上重开（新包装器 / 旧包装器经 fleet_launch.py supervise）：同一个窗口、同一个 ID 接着 resume，不问 hub，@launch 系列选项拿掉'
+}
+
+# A web session parked while a person is looking at it in a terminal (task HHV0):
+# its agent would exit under their eyes. The gate's park refuses while a terminal
+# client shows the window (a control-mode client — the hub's own — is nobody).
+drill_park_while_watched() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" G 2>&1) || { WHY="$out"; return 1; }
+  grep -q 'why="watched"' "$BIN/fleet_session_gate.py" \
+    || { WHY="fleet_session_gate.py park no longer refuses a watched window"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='有人在终端里看着的网页会话不停放；没人看（控制模式的客户端不算人）、闲着才停'
+}
+
+# A parked session that does not come back (task HHV0): the machine went away, the
+# resume hangs. The sentence must not wait for ever, nor turn up later as a turn
+# after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
+# back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_timeout() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" H I 2>&1) || { WHY="$out"; return 1; }
+  grep -q 'mv "$w" "$w.taken"' "$BIN/fleet-session-wrap.sh" \
+    || { WHY="fleet-session-wrap.sh park_hold no longer claims the wake seed by rename"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放的会话接回超时：这一句退回（wake_timeout），种子被收回，晚到的接回不会再带着它开一轮；按时接回的第一句随启动进去'
 }
 
 # An EPIC member whose window closed with no result while its record stayed open

@@ -532,6 +532,22 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/web-console-pack.sh`); its budget bar reads the person's own `/v1/me/usage`.
   BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` ·
   `chat-budget-bypass` · `chat-home-moved`.
+- **The web talks to SESSIONS through ONE gate: `bin/fleet_session_gate.py`** (task
+  HHV0, 会话合一 ①). A sentence from the page (`/api/say` on the home's chat
+  service, by the window's `@fleet_id`) is written to disk with its own delivery id
+  BEFORE it is handed over, and becomes the session's next turn — Claude through the
+  mod's conditional accept `idle.v2` (no turn running, no draft, no /clear since,
+  checked again at the engine's entry; mod ≥ 0.7.0, `@mod_accept idle.v2`), Codex
+  through its own queue; refused ⇒ queued and retried, unanswered ⇒ settled by its
+  receipt, never posted twice. A session the web opened (`@session_origin web`, reap
+  origin `web` = `keep`) is PARKED idle (`FLEET_SESSION_PARK_IDLE`, 5 min): its agent
+  exits in its own window, the window / ID / conversation / session credential stay
+  and it reads idle; `fleet-session-wrap.sh` `park_hold` resumes the same
+  conversation on a wake (the sentence the start's first turn, a seed claimed by
+  rename) or when a person looks at the window. Never parked while answering,
+  asking, holding a job, with words waiting or watched. Inventory col 36
+  `cantalk=`, col 5 `parked`. `fleet-session-gate-selftest.py`, BREAK-IT
+  `park-while-watched` · `wake-timeout`, docs/dev/WEB-CHAT.md «会话合一 ①».
 - **Orchestrating is a session template — no seat, no rule table, nothing keeps
   it open** (EPIC #4333; issues #3118 · #4340 · #4341 · #4790).
   `conf/agent-defaults/claude/agents/orchestrator.md` is a standard agent file

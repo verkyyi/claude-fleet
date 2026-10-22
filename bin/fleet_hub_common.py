@@ -364,9 +364,14 @@ def inventory_row(parts):
     into its card's 「为什么还没收」 line; absent when empty.
     Column 35 (task PQ41): `origin=web` — a session the person's web page opened
     (@session_origin): `origin: "web"`, the hub's list row's origin; absent on a
-    terminal's."""
+    terminal's.
+    Column 36 (task HHV0): `cantalk=1` → `can_talk: true`, else `can_talk: false`
+    (the web may only read it: an older Claude Code / mod / Codex); an older
+    node's row has none: absent."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 36 and parts[-1].startswith("cantalk="):
+        extra["can_talk"] = parts.pop()[8:] == "1"
     if len(parts) >= 35 and parts[-1].startswith("origin="):
         if parts.pop()[7:] == "web":
             extra["origin"] = "web"

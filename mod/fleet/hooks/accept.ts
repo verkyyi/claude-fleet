@@ -32,20 +32,39 @@
 // the same `plugin:fleet` origin also stamps the prompt a markdown command or
 // skill expands into when the inbox runs it with `$.command.run` (a handoff's
 // `/fleet-handoff pickup`, issue #4865), so the origin alone never decides.
+//
+// `idle.v2` (task HHV0, the session gate — bin/fleet_session_gate.py): the same
+// slot and the same entry check, with no launch context (C8 retired it — a window
+// is its ID) and no turn the caller must name. The fence is the conversation it
+// was taken in: no main turn running at the precheck and at entry, no session.end
+// (a /clear, a /resume) in between, no draft, before the deadline. A person's turn
+// that ran and finished in between does not refuse it — the gate's words are a
+// turn of their own after it, first come first in. `expected_turn`, when given,
+// still pins the last finished turn.
+//
+// Stopped (the gate's 停止 is an Esc): the engine puts an interrupted prompt back
+// in the box (verified on 2.1.295) — for the gate's own words that would be a
+// "draft" nobody typed, refusing every later sentence. When a turn this module
+// entered ends aborted, a box holding exactly its words is emptied; anything else
+// in the box is the person's and stays (state.ts's turn.complete does it: one
+// turn.complete hook a plugin).
 
 import { atom, read } from 'claude-code'
 import type { On, PromptSubmitResult } from 'claude-code'
 
 import { isOpen } from './gate'
-import { runtimeIdle, runtimeTurnNow } from './state'
+import { runtimeGen, runtimeIdle, runtimeIdleNow, runtimeLastTurn, runtimeTurnNow } from './state'
 
 export const ACCEPT = 'idle.v1'
+/** What a pane's `@mod_accept` says since task HHV0: the session gate's road. */
+export const ACCEPT_V2 = 'idle.v2'
 /** A submitted slot still unanswered this long past its deadline is unknown. */
 export const ACCEPT_GRACE_S = 3
 /** The receipt line's prefix in the hidden context. */
 export const RECEIPT_PREFIX = 'fleet idle-accept receipt delivery_id='
 
 export type AcceptRequest = {
+  version: 1 | 2
   nonce: string
   delivery_id: string
   expected_turn: string
@@ -62,13 +81,22 @@ export type AcceptOutcome = {
   previous_turn_id?: string
 }
 
-type Slot = AcceptRequest & { phase: 'queued' | 'submitted' | 'entered'; receipt: string; outcome?: AcceptOutcome }
+type Slot = AcceptRequest & { phase: 'queued' | 'submitted' | 'entered'; receipt: string; gen: number; outcome?: AcceptOutcome }
 
 /** Bumped by lifecycle.ts when a slot is queued; the band's redraw reads it. */
 const acceptKick = atom({ plugin: 'fleet', key: 'acceptKick' } as const, 0)
 
 // One slot per pane: the inbox runs one request at a time.
 let slot: Slot | undefined
+// The turns this module entered, by id → their words (a few, newest last).
+const entered = new Map<string, string>()
+
+/** state.ts's turn.complete: the words of a turn this module entered (once), else undefined. */
+export function takeEntered(turnId: string): string | undefined {
+  const t = entered.get(turnId)
+  entered.delete(turnId)
+  return t
+}
 // Texts this module passed to `$.prompt.submit` whose call has not resolved yet:
 // the only prompts the entry hook may claim (and drop).
 const handed = new Map<string, number>()
@@ -83,21 +111,25 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** A request's fields, or why it cannot run. `context` is FLEET_LAUNCH_CONTEXT. */
 export function parseAccept(request: Record<string, unknown>, context: string | undefined, now: number): AcceptRequest | { error: string } {
-  let launch: Record<string, unknown> | undefined
-  try { launch = context ? JSON.parse(context) as Record<string, unknown> : undefined } catch { launch = undefined }
-  const expected = request.launch as Record<string, unknown> | undefined
-  if (request.accept !== ACCEPT) return { error: 'unsupported accept' }
-  if (!isOpen() || !launch || !expected || typeof expected !== 'object'
-      || Object.keys(launch).length !== Object.keys(expected).length
-      || !Object.keys(launch).every(k => launch?.[k] === expected[k])) return { error: 'launch_changed' }
-  const { nonce, delivery_id: id, expected_turn: turn, text, deadline } = request
+  const version = request.accept === ACCEPT ? 1 : request.accept === ACCEPT_V2 ? 2 : 0
+  if (version === 0) return { error: 'unsupported accept' }
+  if (version === 1) {
+    let launch: Record<string, unknown> | undefined
+    try { launch = context ? JSON.parse(context) as Record<string, unknown> : undefined } catch { launch = undefined }
+    const expected = request.launch as Record<string, unknown> | undefined
+    if (!isOpen() || !launch || !expected || typeof expected !== 'object'
+        || Object.keys(launch).length !== Object.keys(expected).length
+        || !Object.keys(launch).every(k => launch?.[k] === expected[k])) return { error: 'launch_changed' }
+  } else if (!isOpen()) return { error: 'closed' }
+  const { nonce, delivery_id: id, text, deadline } = request
+  const turn = version === 2 && request.expected_turn === undefined ? '' : request.expected_turn
   if (typeof nonce !== 'string' || !/^[a-f0-9]{32}$/.test(nonce)
       || typeof id !== 'string' || !UUID.test(id)
-      || typeof turn !== 'string' || turn === '' || turn.length > 200
+      || typeof turn !== 'string' || (turn === '' && version === 1) || turn.length > 200
       || typeof text !== 'string' || text === '' || text.length > 65536
       || typeof deadline !== 'number' || !Number.isFinite(deadline)) return { error: 'invalid_request' }
   if (now >= deadline || deadline - now > 30) return { error: 'expired' }
-  return { nonce, delivery_id: id, expected_turn: turn, text, deadline }
+  return { version, nonce, delivery_id: id, expected_turn: turn, text, deadline }
 }
 
 function outcome(r: AcceptRequest, state: AcceptOutcome['state'], reason: string, turn?: string): AcceptOutcome {
@@ -117,8 +149,13 @@ export function receiptPath(inbox: string, id: string): string {
 /** lifecycle.ts: refuse before anything is queued, or take the one slot. */
 export function beginAccept(r: AcceptRequest, inbox: string): AcceptOutcome | undefined {
   if (slot !== undefined) return outcome(r, 'rejected', 'slot_busy')
-  if (!runtimeIdle(r.expected_turn)) return outcome(r, 'rejected', 'precheck_not_idle')
-  slot = { ...r, phase: 'queued', receipt: receiptPath(inbox, r.delivery_id) }
+  if (!(r.version === 2 ? runtimeIdleNow(r.expected_turn) : runtimeIdle(r.expected_turn))) {
+    return outcome(r, 'rejected', 'precheck_not_idle')
+  }
+  // v2: the turn it follows is whichever finished last ('' before any) — the
+  // entered turn is told apart from it, and it is the receipt's previous_turn_id
+  const anchor = r.version === 2 ? runtimeLastTurn() : r.expected_turn
+  slot = { ...r, expected_turn: anchor, phase: 'queued', receipt: receiptPath(inbox, r.delivery_id), gen: runtimeGen() }
   return undefined
 }
 
@@ -144,7 +181,8 @@ export function acceptSessionEnded(): void {
 export function entryRefusal(s: Slot, draft: string, now: number): string {
   if (slot !== s) return 'slot_lost'
   if (now >= s.deadline) return 'deadline_passed'
-  if (!runtimeIdle(s.expected_turn)) return 'not_idle_at_entry'
+  if (s.version === 2 && s.gen !== runtimeGen()) return 'session_changed'
+  if (!(s.version === 2 ? runtimeIdleNow() : runtimeIdle(s.expected_turn))) return 'not_idle_at_entry'
   if (draft.trim() !== '') return 'draft_present'
   return ''
 }
@@ -202,6 +240,10 @@ export function registerAccept(on: On): void {
       ? outcome(s, 'accepted', 'native_entry', turn)
       : outcome(s, 'unknown', 'turn_unobserved')
     if (o.state === 'accepted') {
+      if (o.turn_id) {
+        entered.set(o.turn_id, s.text)
+        if (entered.size > 8) entered.delete(entered.keys().next().value as string)
+      }
       try {
         await $.fs.write(s.receipt, `${JSON.stringify({ ...o, nonce: undefined, accepted_at: (await $.clock.now()) / 1000 })}\n`)
       } catch {
@@ -211,4 +253,5 @@ export function registerAccept(on: On): void {
     settle(s, o)
     return r
   }).catch(($, e, next) => (next.called ? next(e) : ours(e) ? { drop: 'fleet idle-accept: guard failed' } : next(e)))
+
 }
