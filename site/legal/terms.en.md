@@ -4,7 +4,7 @@
 
 Last updated: 21 October 2026
 
-These terms are an agreement between you and 广州二四网络科技有限公司 ("we") about your use of ClaudeFleet ("the service"). By signing in you confirm that you have read and agree to these terms and the [Privacy Policy](/en/privacy).
+These terms are an agreement between you and 广州二四网络科技有限公司 ("we") about your use of {brand} ("the service"). By signing in you confirm that you have read and agree to these terms and the [Privacy Policy](/en/privacy).
 
 ## 1. What the service is
 

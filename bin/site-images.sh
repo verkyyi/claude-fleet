@@ -1,6 +1,6 @@
 #!/bin/bash
 # site-images.sh — draw the website's PNGs once (issue #3584): the two share
-# cards (1200×630, 中文 / English), the PNG icons and favicon.ico, all from
+# cards (1200×630, 中文 / English — the brand, h1 and trust chips of site/strings.*.json), the PNG icons and favicon.ico, all from
 # extras/fleet-theme's logo.svg, colours and fonts (the one theme, issue #3924). The output is
 # committed under site/assets/; bin/site-build.sh only copies it, so the build
 # needs no browser.
@@ -31,18 +31,28 @@ const logo = fs.readFileSync(THEME + '/logo.svg', 'utf8').replace(/<title>.*?<\/
 // the theme's own @font-face rules and fleet:tokens block — no colour or family typed here
 const fonts = fs.readFileSync(THEME + '/fonts.css', 'utf8').replace(/url\(\.\/fonts\//g, `url(file://${THEME}/fonts/`)
   + fs.readFileSync(THEME + '/theme.css', 'utf8').match(/\/\* fleet:tokens \*\/([\s\S]*?)\/\* \/fleet:tokens \*\//)[1];
-const card = (lang, h1, sub, chips) => `<!doctype html><html lang="${lang}"><meta charset="utf-8"><style>${fonts}
+// The share card says what the page says (EPIC SGS6 B1): the brand, the h1 and the
+// first three trust chips with their icons — all read off site/, nothing typed here.
+const SITE = THEME + '/../../site';
+const tmpl = fs.readFileSync(SITE + '/template.html', 'utf8');
+const chipIcons = [...tmpl.matchAll(/<li>(<svg class="i"[^]*?<\/svg>)\{\{t(\d)\}\}<\/li>/g)].map(m => m[1]);
+const strings = lang => {
+  const S = JSON.parse(fs.readFileSync(`${SITE}/strings.${lang}.json`, 'utf8'));
+  for (const k of Object.keys(S)) S[k] = S[k].split('{brand}').join(S.brand);
+  return S;
+};
+const card = (lang, S) => `<!doctype html><html lang="${lang}"><meta charset="utf-8"><style>${fonts}
 *{box-sizing:border-box;margin:0}
-body{width:1200px;height:630px;background:var(--fleet-bg);color:var(--fleet-ink);font-family:var(--fleet-font-ui);position:relative;overflow:hidden;padding:84px 96px}
-body::before{content:"";position:absolute;right:-220px;top:-160px;width:900px;height:900px;background:radial-gradient(closest-side,rgba(217,118,90,.26),transparent 70%)}
-.b{display:flex;align-items:center;gap:20px;font:800 40px var(--fleet-font-display);position:relative}
-.b svg{width:76px;height:76px}
-h1{position:relative;margin-top:72px;font:800 ${lang === 'en' ? 76 : 70}px/1.12 var(--fleet-font-display);letter-spacing:${lang === 'en' ? '-.02em' : '0'}}
+body{width:1200px;height:630px;background:var(--fleet-bg);color:var(--fleet-ink);font-family:var(--fleet-font-ui);position:relative;overflow:hidden;padding:80px 96px}
+body::before{content:"";position:absolute;right:-220px;top:-160px;width:900px;height:900px;background:radial-gradient(closest-side,rgba(217,118,90,.22),transparent 70%)}
+.b{display:flex;align-items:center;gap:18px;font:750 38px var(--fleet-font-display);position:relative}
+.b svg{width:56px;height:56px;border:1px solid var(--fleet-line);border-radius:13px}
+h1{position:relative;margin-top:72px;font:800 ${lang === 'en' ? 84 : 76}px/1.12 var(--fleet-font-display);letter-spacing:${lang === 'en' ? '-.02em' : '0'}}
 h1 em{font-style:normal;color:var(--fleet-clay)}
-p{position:relative;margin-top:28px;font-size:32px;color:var(--fleet-ink-2)}
-.c{position:absolute;left:96px;bottom:72px;display:flex;gap:14px;font:500 22px var(--fleet-font-mono);color:var(--fleet-sand)}
-.c span{border:1px solid rgba(236,211,184,.3);background:rgba(236,211,184,.08);border-radius:999px;padding:8px 18px}
-</style><div class="b">${logo}ClaudeFleet</div><h1>${h1}</h1><p>${sub}</p><div class="c">${chips.map(c => `<span>${c}</span>`).join('')}</div></html>`;
+.c{position:relative;margin-top:52px;display:flex;gap:12px;font:400 22px var(--fleet-font-ui);color:var(--fleet-ink)}
+.c span{display:inline-flex;align-items:center;gap:10px;background:rgba(236,211,184,.06);border-radius:999px;padding:14px 22px}
+.c svg{width:22px;height:22px;fill:none;stroke:var(--fleet-clay);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+</style><div class="b">${logo}${S.brand}</div><h1>${S.h1}</h1><div class="c">${[1, 2, 3].map(i => `<span>${chipIcons[i - 1] || ''}${S['t' + i]}</span>`).join('')}</div></html>`;
 const icon = (size, rounded) => `<!doctype html><style>${fonts}*{margin:0}body{width:${size}px;height:${size}px;background:${rounded ? 'transparent' : 'var(--fleet-bg)'}}svg{width:${size}px;height:${size}px;display:block}</style>${rounded ? logo : logo.replace(/rx="15"/, 'rx="0"')}`;
 (async () => {
   const b = await chromium.launch();
@@ -54,8 +64,8 @@ const icon = (size, rounded) => `<!doctype html><style>${fonts}*{margin:0}body{w
     await p.screenshot({ path: out, omitBackground: !!transparent });
     await p.close();
   };
-  await shot(card('zh-CN', 'Claude Code，<br><em>已经为你配好。</em>', '电脑或手机打开就能用。', ['官方 Claude Code', '开源 MIT', '可选自带订阅']), 1200, 630, A + '/og/cover-zh.png');
-  await shot(card('en', 'Claude Code,<br><em>already set up for you.</em>', 'Open it on your laptop or phone and start working.', ['Official Claude Code', 'MIT open source', 'Own subscription optional']), 1200, 630, A + '/og/cover-en.png');
+  await shot(card('zh-CN', strings('zh')), 1200, 630, A + '/og/cover-zh.png');
+  await shot(card('en', strings('en')), 1200, 630, A + '/og/cover-en.png');
   await shot(icon(512, true), 512, 512, A + '/icon-512.png', true);
   await shot(icon(192, true), 192, 192, A + '/icon-192.png', true);
   await shot(icon(180, false), 180, 180, A + '/apple-touch-icon.png');

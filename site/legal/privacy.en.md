@@ -4,7 +4,7 @@
 
 Last updated: 21 October 2026
 
-广州二四网络科技有限公司 ("we") runs ClaudeFleet ("the service"). This policy says what we collect about you, why, how long we keep it, who can see it, and how you have it deleted. By signing in you agree to this policy.
+广州二四网络科技有限公司 ("we") runs {brand} ("the service"). This policy says what we collect about you, why, how long we keep it, who can see it, and how you have it deleted. By signing in you agree to this policy.
 
 ## 1. What we collect
 
