@@ -917,6 +917,9 @@ class Cleaner:
             # Reporting/probe rows retain their completion rules while parked.
             row = fleet_reap_policy.ORIGINS[self.origin(snap)]
             pol = self.policy(snap)
+            if row["reap"] == "batch" and not self.work_over(snap):
+                self.why = "task-open"
+                return False
             if row["reap"] in ("reported", "batch", "done") and (not pol or pol[0] != "keep"):
                 return None
             self.why = "keep"
@@ -929,7 +932,8 @@ class Cleaner:
         if not FID_RE.fullmatch(fid):
             return False
         with fleet_session_gate.lock(fid):
-            if (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
+            draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
+            if (draft.exists() and draft.stat().st_size) or (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
                     or snap.get("@migrating") or self.busy(window, snap)
                     or any(r.get("state") in ("queued", "trying", "native", "waking")
                            for r in fleet_session_gate.records(fid))):

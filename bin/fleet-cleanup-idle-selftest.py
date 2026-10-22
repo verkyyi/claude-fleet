@@ -2200,7 +2200,7 @@ class ParkTable(unittest.TestCase):
             with self.subTest(origin=origin):
                 snap = {"@reap_origin": origin, "@park_wrap_ver": "1", "@parked": "100",
                         "@park_held": "1", "@park_since": "100", "@claude_state_ts": "90"}
-                with patch.object(c, "policy", return_value=("merged", 0)):
+                with patch.object(c, "policy", return_value=("merged", 0)), patch.object(c, "work_over", return_value=True):
                     result = c.parked("@9", snap)
                 if origin in ("dispatched", "member", "driver", "probe"):
                     self.assertIsNone(result)  # completion/unreported policy still runs
