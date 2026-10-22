@@ -114,7 +114,7 @@ my ($sid, $mode) = @ARGV;
 alarm 120;
 open(my $r, '>', "$ENV{FLEET_CC_SESSIONS_DIR}/$$.json") or die;
 print $r encode_json({sessionId=>$sid, cwd=>getcwd(), peerToken=>'never-copy-the-registry-secret'}); close $r;
-$| = 1; print "Claude ready $sid\n"; print "❯ " if $mode eq 'norepo';
+$| = 1; print "Claude ready $sid\n"; print "❯ " if $mode eq 'norepo' || $mode eq 'loop-dialog-external';
 if ($mode =~ /^quota-(dialog|draft|stuck)$/) {
     system('stty', '-icanon', '-echo', 'min', '1', 'time', '0');
     print "\e[2J\e[HYou've hit your weekly limit · resets tomorrow\n";
@@ -143,15 +143,21 @@ while (my $line = <STDIN>) {
         local $/="\n"; my $confirm=<STDIN>;
         next unless defined($confirm) && $confirm =~ /^\s*$/;
     }
-    if ($mode eq 'loop-dialog') {
+    if ($mode eq 'loop-dialog' || $mode eq 'loop-dialog-external') {
         print "Background work is running\nThe following will stop when you exit:\n\n";
-        print "scheduled task · Runs once in 5m · /loop continue task\n\n";
+        my $interval = $mode eq 'loop-dialog-external' ? '30m ' : '';
+        print "scheduled task · Runs once in 5m · /loop ${interval}continue task\n\n";
         print "❯ 1. Exit and stop tasks\n2. Move to background and exit\n3. Stay\n\n";
         print "Enter to confirm · Esc to cancel\n";
         my $confirm = <STDIN>;
         next unless defined($confirm) && $confirm =~ /^\s*$/;
     }
     EXITNOW:
+    if ($mode eq 'loop-dialog-external' && -e "$ENV{TRANSFER_TEST_ROOT}/external-source-race") {
+        open(my $late, '>>', "$ENV{FLEET_CC_PROJECTS_DIR}/actual/$sid.jsonl") or die;
+        print $late encode_json({type=>'assistant',sessionId=>$sid,message=>{content=>[{type=>'text',text=>'another tick finished while exiting'}]}})."\n";
+        close $late;
+    }
     $ENV{FLEET_SESSION_END_REASON} = 'prompt_input_exit';
     system('/bin/bash', "$ENV{TRANSFER_TEST_ROOT}/install/bin/session-end-hook.sh");
     exit 0;
@@ -187,7 +193,7 @@ fi
 # issue #1669: the target's credential dies as it starts (a login prompt)
 if [ -f "$TRANSFER_TEST_ROOT/auth-dies" ]; then printf 'reauth_required\n' > "$TRANSFER_TEST_ROOT/login-state"; exit 37; fi
 if [ "${3:-}" = --codex-home ]; then export CODEX_HOME="$4"; fi
-if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ]; then
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && { [ -f "$TRANSFER_TEST_ROOT/native-plan.json" ] || [ -f "$TRANSFER_TEST_ROOT/external-loop" ]; }; then
   export LOOP_TEST_ROOT="$HOME" LOOP_TEST_SCRIPT="$TRANSFER_TEST_ROOT/install/bin/fleet-loop.py"
   export FLEET_FAKE_CODEX_SCRIPT="$TRANSFER_TEST_ROOT/codex-scenario.json"
   exec python3 "$LOOP_TEST_SCRIPT" bridge -- pickup
@@ -719,6 +725,74 @@ PYCOMPLETE
     && [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111179 ] || fail 'HOME quota continuation lost identity/task'; ok
   [ -z "$(field raw)$(field worktree)" ] || fail 'HOME quota continuation invented repo binding'; ok
   rm -f "$WORK/quota-keys"
+  # A quota-stuck model cannot export CronList. Replace the original user's
+  # ONE session loop externally, proving source death before the real bridge.
+  external_source() {
+  quota_source "$1" loop-dialog-external norepo
+  for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+  TM set-option -w -t "$WIN" @norepo 1
+  TM set-option -w -t "$WIN" @fleet_role worker
+  TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-1111111111$1
+  TM set-option -w -t "$WIN" @claude_state exited
+  TM set-option -w -t "$WIN" @agent_status '{"state":"error","app":"claude-code"}'
+  TM set-option -w -t "$WIN" @loop 'kind=wakeup next=100 ttl=60'
+  PYTHONPATH="$IBIN" python3 - "$TRANSCRIPT" "$SID" "$PID" "$WORK/external-spec.json" "$(field fleet_id)" <<'PYEXTERNAL'
+import json,sys
+from pathlib import Path
+from fleet_transfer_durable import proc_start
+transcript=Path(sys.argv[1]); rows=transcript.read_text().splitlines()
+rows.insert(0,json.dumps(dict(type='user', sessionId=sys.argv[2], uuid='user-loop',
+    message={'content':[{'type':'text','text':'/loop 30m continue task'}]})))
+transcript.write_text('\n'.join(rows)+'\n')
+Path(sys.argv[4]).write_text(json.dumps(dict(prompt='continue task',interval_seconds=1800,
+    quota_replacement=dict(version=1,fid=sys.argv[5],
+        session_id=sys.argv[2],pid=int(sys.argv[3]),proc_start=proc_start(sys.argv[3]),
+        user_message_uuid='user-loop',invocation='/loop 30m continue task'))))
+PYEXTERNAL
+  printf 'Keep original monitoring task; finished side effect receipt must not replay.\n' > "$WORK/external-handoff.md"
+  external_flags=(--quota-continuation --expected-session-id "$SID" --expected-source "$PANE:$PID:$SID"
+    --handoff "$WORK/external-handoff.md" --quota-loop-replacement "$WORK/external-spec.json")
+  }
+  external_source 86
+  transfer --quota-continuation --expected-session-id "$SID" --dry-run && fail 'automatic quota path must not take loops'
+  transfer "${external_flags[@]}" --dry-run || fail 'external quota loop preview'
+  kill -0 "$PID" || fail 'external preview exited source'; ok
+  mv "$FB/codex" "$WORK/external-codex-before"
+  cp "$BIN/fleet_codex_fake_appserver.py" "$FB/codex"; chmod +x "$FB/codex"
+  touch "$WORK/external-loop"
+  FLEET_TRANSFER_EXIT_WAIT=5 transfer "${external_flags[@]}" || fail 'external quota loop cutover'
+  ! fleet_pid_alive "$PID" && [ "$(field cc_agent)" = codex ] || fail 'external loop duplicate writer'; ok
+  python3 - "$(packet)" <<'PYEXTERNALBOUND' || fail 'external timer/provenance binding'
+import json,sys
+from pathlib import Path
+b=Path(sys.argv[1]); m=json.loads((b/'manifest.json').read_text())
+assert m['quota_loop_replacement']['mode']=='authorized-replacement'
+assert m['quota_loop_replacement']['authorization']['user_message_uuid']=='user-loop'
+assert not m.get('native_cron')
+r=json.loads((b/'loop/state.json').read_text())
+assert r['status']=='active' and r['thread_id'] and r['schedule']['interval_seconds']==1800
+assert r.get('deliveries',0)==0
+assert (b/'loop-exit-confirmation.txt').exists()
+assert 'publish-once' in (b/'source.jsonl').read_text()
+assert not (b/'rollback').exists()
+PYEXTERNALBOUND
+  ok
+  external_source 87
+  touch "$WORK/external-source-race"
+  FLEET_TRANSFER_EXIT_WAIT=5 transfer "${external_flags[@]}" && fail 'late source work must hold target'
+  ! fleet_pid_alive "$PID" || fail 'late-work source must finish normal exit'
+  [ ! -e "$(packet)/loop/state.json" ] && [ -z "$(field cc_agent)" ] || fail 'late-work target/timer was started'
+  printf '%s' "$OUT" | grep -q 'source changed while exiting' || fail 'late-work refusal must be explicit'; ok
+  rm "$WORK/external-source-race"
+  external_source 88
+  touch "$WORK/fail-target"
+  FLEET_TRANSFER_EXIT_WAIT=5 transfer "${external_flags[@]}" && fail 'external target failure must hold'
+  ! fleet_pid_alive "$PID" && ! fleet_pane_claude_pid "$PANE" "$LBL" >/dev/null 2>&1 || fail 'failed external target restarted source'
+  [ ! -e "$(packet)/loop/state.json" ] && [ ! -d "$(packet)/rollback" ] || fail 'failed external target restarted timer'
+  printf '%s' "$OUT" | grep -q 'no automatic source/timer restart' || fail 'external failure must state recovery boundary'; ok
+  rm "$WORK/fail-target"
+  rm "$WORK/external-loop" "$FB/codex"
+  mv "$WORK/external-codex-before" "$FB/codex"
   # Failed target must restore the exact source once, with no second writer.
   spawn 92 norepo norepo
   for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done

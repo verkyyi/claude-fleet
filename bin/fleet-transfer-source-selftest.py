@@ -10,6 +10,7 @@ import contextlib
 import concurrent.futures
 import importlib.util
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,125 @@ class CurrentSchedulerEvidence(unittest.TestCase):
                 self.assertTrue(cron.has_native_activity(path, 42))
                 with self.assertRaisesRegex(ValueError, 'fresh CronList'):
                     cron.live_list(path, 42, 1100)
+
+
+class ExternalQuotaLoop(unittest.TestCase):
+    def test_exact_user_authorization_and_process_not_historical_export(self):
+        import fleet_transfer_cron as cron
+        import fleet_transfer_durable as durable
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'source.jsonl'
+            row = dict(type='user', uuid='user-loop', sessionId='sid',
+                       message={'content':[dict(type='text', text='/loop 30m check task')]})
+            path.write_text(json.dumps(row)+'\n')
+            source = dict(session='test', pane='%2', pid=42, session_id='sid', transcript=str(path))
+            raw = dict(prompt='check task', interval_seconds=1800, quota_replacement=dict(
+                version=1, fid='fid', session_id='sid', pid=42, proc_start='exact-start',
+                user_message_uuid='user-loop', invocation='/loop 30m check task'))
+            plan = Path(tmp)/'replacement.json'; plan.write_text(json.dumps(raw))
+            def run(argv, **kw):
+                return 'fid' if argv[-1] == '#{@fleet_id}' else ''
+            with patch.dict(os.environ, FLEET_QUOTA_LOOP_REPLACEMENT=str(plan)), \
+                 patch.object(src, 'run', side_effect=run), \
+                 patch.object(durable, 'proc_start', return_value='exact-start'), \
+                 patch.object(cron, 'check_durable_store', return_value=None):
+                proof = src.quota_loop_replacement(source, 'kind=wakeup next=100 ttl=60')
+                self.assertEqual(proof['mode'], 'authorized-replacement')
+                self.assertEqual(proof['authorization']['user_message_uuid'], 'user-loop')
+                self.assertNotIn('native_source', proof)
+                for key, value in (('pid', 43), ('session_id','other'), ('fid','other'),
+                                   ('proc_start','reused-pid'), ('invocation','/loop 30m other')):
+                    bad = dict(raw, quota_replacement=dict(raw['quota_replacement'], **{key:value}))
+                    plan.write_text(json.dumps(bad))
+                    with self.subTest(key=key), self.assertRaises(ValueError):
+                        src.quota_loop_replacement(source, '')
+                plan.write_text(json.dumps(dict(raw, prompt='different task')))
+                with self.assertRaises(ValueError): src.quota_loop_replacement(source, '')
+                plan.write_text(json.dumps(raw))
+                with patch.object(cron, 'check_durable_store', return_value={'state':'claimed'}):
+                    with self.assertRaisesRegex(ValueError, 'durable journal'):
+                        src.quota_loop_replacement(source, '')
+                previous = Path(tmp)/'previous'; (previous/'loop').mkdir(parents=True)
+                (previous/'loop/state.json').write_text('{"status":"active"}')
+                with patch.object(src, 'run', side_effect=lambda argv, **kw:
+                                  'fid' if argv[-1]=='#{@fleet_id}' else str(previous/'manifest.json')):
+                    with self.assertRaisesRegex(ValueError, 'own controller'):
+                        src.quota_loop_replacement(source, '')
+                for mark in ('kind=cron id=abc@9999999999', 'kind=wakeup unknown=1', 'legacy-loop'):
+                    with self.subTest(mark=mark), self.assertRaises(ValueError):
+                        src.quota_loop_replacement(source, mark)
+                path.write_text(json.dumps(dict(row, type='assistant'))+'\n')
+                with self.assertRaises(ValueError): src.quota_loop_replacement(source, '')
+
+    def test_historical_spec_retains_user_command_without_claiming_live_membership(self):
+        import fleet_transfer_cron as cron
+        import fleet_transfer_durable as durable
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'source.jsonl'; plan=Path(tmp)/'replacement.json'
+            text='<command-message>example:run</command-message>\n<command-name>/example:run</command-name>'
+            inp=dict(delaySeconds=1200, noop=True, prompt='/example:run', reason='waiting for checks')
+            rows=[dict(type='user',uuid='original',message={'content':text}),
+                  dict(type='assistant',uuid='rearm',timestamp='2000-01-01T00:00:00Z',message={'content':[
+                      dict(type='tool_use',id='wake',name='ScheduleWakeup',input=inp)]}),
+                  dict(type='user',timestamp='2000-01-01T00:00:01Z',toolUseResult=dict(
+                      scheduledFor=946685000000,clampedDelaySeconds=1200,wasClamped=False),message={'content':[
+                      dict(type='tool_result',tool_use_id='wake')]})]
+            path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            raw=dict(prompt='/example:run',interval_seconds=1200,quota_replacement=dict(
+                version=1,fid='fid',session_id='sid',pid=42,proc_start='start',
+                basis='historical-wakeup-spec',invocation='/example:run',user_message_uuid='original',
+                user_message_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                schedule_message_uuid='rearm',schedule_tool_use_id='wake'))
+            plan.write_text(json.dumps(raw))
+            source=dict(session='test',pane='%2',pid=42,session_id='sid',transcript=str(path))
+            with patch.dict(os.environ,FLEET_QUOTA_LOOP_REPLACEMENT=str(plan)), \
+                 patch.object(src,'run',side_effect=lambda argv,**kw:'fid' if argv[-1]=='#{@fleet_id}' else ''), \
+                 patch.object(durable,'proc_start',return_value='start'), \
+                 patch.object(cron,'check_durable_store',return_value=None):
+                proof=src.quota_loop_replacement(source,'')
+                self.assertEqual(proof['mode'],'authorized-replacement')
+                self.assertEqual(proof['native_exit_invocations'],['/example:run'])
+                self.assertNotIn('scheduledFor',json.dumps(proof))
+                # The same historical receipt remains usable as a specification;
+                # it is never presented as a current process's live CronList.
+                with patch.object(cron,'process_start',return_value=time.time()):
+                    self.assertFalse(cron.has_native_activity(path,42))
+                    self.assertEqual(src.quota_loop_replacement(source,''),proof)
+                for change in ('bad-user-hash','unconfirmed','later-mutation'):
+                    bad=json.loads(json.dumps(raw)); changed=list(rows)
+                    if change=='bad-user-hash': bad['quota_replacement']['user_message_sha256']='wrong'
+                    if change=='unconfirmed': changed.pop()
+                    if change=='later-mutation':
+                        changed.append(dict(type='assistant',uuid='later',message={'content':[
+                            dict(type='tool_use',id='new',name='ScheduleWakeup',input=inp)]}))
+                    plan.write_text(json.dumps(bad));path.write_text(''.join(json.dumps(r)+'\n' for r in changed))
+                    with self.subTest(change=change),self.assertRaises(ValueError):
+                        src.quota_loop_replacement(source,'')
+
+    def test_competing_or_durable_owner_is_not_replaced(self):
+        # The authorization file is not permission to overwrite another timer.
+        import fleet_transfer_cron as cron
+        with patch.dict(os.environ, FLEET_QUOTA_LOOP_REPLACEMENT='/missing'), \
+             patch.object(cron, 'check_durable_store', side_effect=ValueError('durable owner')), \
+             patch.object(src, 'run', return_value='fid'):
+            with self.assertRaises(ValueError):
+                src.quota_loop_replacement(dict(pid=42, session_id='sid', session='test', pane='%2'), '')
+
+    def test_exit_dialog_must_match_authorized_invocation(self):
+        helper = module('transfer_package', '.fleet-transfer.py')
+        screen = ('Background work is running\nThe following will stop when you exit:\n'
+                  'scheduled task · Runs once in 5m · /loop 30m check task\n'
+                  '❯ 1. Exit and stop tasks\n2. Move to background and exit\n3. Stay\n'
+                  'Enter to confirm · Esc to cancel')
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp)
+            (bundle/'manifest.json').write_text(json.dumps(dict(quota_loop_replacement=dict(
+                authorization=dict(invocation='/loop 30m check task')))))
+            self.assertTrue(helper.loop_exit_confirmation(screen, bundle))
+            self.assertTrue(helper.loop_exit_confirmation(screen.replace('/loop 30m ', '/loop '), bundle))
+            self.assertFalse(helper.loop_exit_confirmation(screen.replace('check task','other task'), bundle))
+            self.assertFalse(helper.loop_exit_confirmation(screen.replace('scheduled task ·',
+                'scheduled task · Runs once in 1m · /loop extra\nscheduled task ·'), bundle))
 
 
 class QuotaSettled(unittest.TestCase):
