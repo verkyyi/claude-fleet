@@ -335,6 +335,7 @@ park_hold() {
   wset @claude_needs ''
   wset @claude_state_src wrapper
   wset @claude_state "done"
+  wset @park_state 停放中
   wset @park_held "$(date +%s)"
   printf '\n  已停放 · 发一句或按 ↵ 即接回同一个对话\n  parked · say something or press ↵ to resume the same conversation\n' 2>/dev/null
   local w k seed me t
@@ -374,6 +375,11 @@ park_hold() {
     fi
     park_act=quit; break                             # the pane's input is gone
   done
+  if [ "$park_act" = wake ] && [ -n "$(opt @park_start)" ]; then
+    wset @park_state 接回中
+  else
+    wset -u @park_state
+  fi
   wset -u @parked; wset -u @park_since; wset -u @park_why; wset -u @park_held
 }
 cmd=("$@")
@@ -492,6 +498,7 @@ while :; do
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi
   rc=$?
+  if [ "$intmux" = 1 ] && [ "$(opt @park_state)" = 接回中 ]; then wset @park_state 失败; fi
   park_seed=''
   unset FLEET_AUTHORITY_START FLEET_AUTHORITY_EXPECTED FLEET_AUTHORITY_RESUME_SID  # retired (C8): an old spawner's never rides a resume
   # Parked (task HHV0, bin/fleet_session_gate.py park): the gate stamped @parked

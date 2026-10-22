@@ -618,6 +618,7 @@ def wake_try(r, w):
                 return "waking", "starting"
             return ("sent", "woken") if Path(str(seed) + ".launched").exists() else ("returned", "wake_timeout")
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_state", "停放中")
         park_log(r["fid"], "fail", "网页", now() - r.get("wake_at", now()), "wake_timeout")
         return "returned", "wake_timeout"
     seed.write_text(compose(r))
@@ -637,10 +638,12 @@ def wake_try(r, w):
     return "waking", "waking"
 
 
-def park_log(fid, act, why, secs=0, result="ok", next_at=0, started=0):
+def park_log(fid, act, why, secs=0, result="ok", next_at=0, started=0, *, rss_mb=None):
     """Only actions, never a polling skip. One append ≤ PIPE_BUF."""
     row = dict(ts=int(now()), fid=fid, act=act, why=why, secs=round(secs, 3),
                result=result, next=next_at, started=started)
+    if act == "park":
+        row["rss_mb"] = rss_mb  # MiB; unknown remains JSON null, never zero.
     try:
         directory = conf_dir() / "logs"
         directory.mkdir(parents=True, exist_ok=True)
@@ -803,11 +806,13 @@ def park_locked(fid, why, force):
         while time.monotonic() < end:
             held = tmux(w["sock"], "display-message", "-p", "-t", w["win"], "#{@park_held}")
             if held and held.strip():
-                park_log(fid, "park", why, time.monotonic() - started)
+                park_log(fid, "park", why, time.monotonic() - started, rss_mb=saved_mb)
+                tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_state", "停放中")
                 return dict(ok=True, why=why)
             time.sleep(.1)
     for option in ("@parked", "@park_since", "@park_why", "@park_saved_mb"):
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
+    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_state", "失败")
     park_log(fid, "fail", why, time.monotonic() - started, sent.get("why") or "exit_failed")
     return dict(ok=False, why=sent.get("why") or "exit_failed")
 
@@ -820,6 +825,7 @@ def wake_request(w, seed, why):
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
                 next=(read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
     write_json(str(seed) + ".meta", meta)
+    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_state", "接回中")
     tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_wake", str(seed))
     return dict(ok=True, seed=str(seed))
 
@@ -842,6 +848,7 @@ def wake_ready(pane):
     park_log(meta.get("fid", ""), "wake", meta.get("why", ""),
              max(0, now() - meta.get("started", now())), "resumed", meta.get("next", 0), meta.get("started", 0))
     # Also clear for a wrapper already running the previous release's hold page.
+    tmux("", "set-option", "-wu", "-t", pane, "@park_state")
     tmux("", "set-option", "-wu", "-t", pane, "@park_since")
     tmux("", "set-option", "-wu", "-t", pane, "@park_start")
     Path(str(path) + ".claimed").unlink(missing_ok=True)
@@ -871,6 +878,7 @@ def wake(fid, seed_file=None, why="网页", request_only=False):
     try:
         seed.rename(str(seed) + ".cancelled")
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_state", "停放中")
     except FileNotFoundError:
         pass
     park_log(fid, "fail", why, num_env("FLEET_GATE_WAKE_SECS", 20), "wake_timeout")
