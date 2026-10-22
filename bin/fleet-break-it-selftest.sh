@@ -6587,6 +6587,14 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_full_card() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-wake-guard-selftest.py" Recovery.test_major_version_preflight_starts_fresh_and_keeps_words Recovery.test_two_failed_resumes_keep_words_and_disable_reparking Recovery.test_memguard_rule_c_parks_idle_through_the_existing_gate 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='主版本不符自动新开且原话保留、fresh 原因可查；连续失败 doctor WARN；4 GB 空闲窗口由同一门停放'
+}
+
 drill_wake_storm() {
   CAP=90; local t0 out
   t0=$(now)

@@ -86,7 +86,7 @@ class Storm(unittest.TestCase):
             try:
                 time.sleep(.3)
                 self.assertFalse((directory / 'timer').exists())
-                human = subprocess.run([sys.executable, '-c', code, str(directory / 'human'), '键盘'],
+                human = subprocess.run([sys.executable, '-c', code, str(directory / 'human'), '⌘P'],
                                        env=env, timeout=5)
                 self.assertEqual(human.returncode, 0)
                 self.assertTrue((directory / 'human').exists())
@@ -103,7 +103,7 @@ class Storm(unittest.TestCase):
 
 
 class Recovery(unittest.TestCase):
-    def fixture(self, memory=False):
+    def fixture(self, memory=False, preflight=False):
         if not shutil.which('tmux'):
             self.skipTest('tmux absent')
         spec = importlib.util.spec_from_file_location('guard_fixture', BIN / 'fleet-park-selftest.py')
@@ -117,6 +117,12 @@ class Recovery(unittest.TestCase):
             admit.write_text('#!/bin/sh\nexit 1\n')
             admit.chmod(0o755)
             f.env['FLEET_WAKE_ADMIT_CMD'] = str(admit)
+        if preflight:
+            version = f.root / 'version'
+            version.write_text('#!/bin/sh\necho 3.0.0\n')
+            version.chmod(0o755)
+            f.env['FLEET_PARK_VERSION_CMD'] = str(version)
+            f.env['FLEET_CC_PROJECTS_DIR'] = str(f.root / 'projects')
         f.fake()
         return f, module.gate
 
@@ -132,6 +138,10 @@ class Recovery(unittest.TestCase):
         f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
         f.tm('send-keys', '-t', f.win, 'Enter')
         f.wait(lambda: json.loads(health.read_text()).get('disabled'))
+        doctor = subprocess.run(['bash', str(BIN / 'fleet-doctor.sh'), '--park'],
+                                env=f.env, capture_output=True, text=True, timeout=20)
+        self.assertRegex(doctor.stdout, r'WARN\s+park-wake')
+        self.assertIn(f.fid, doctor.stdout)
         f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
         (f.root / 'fail').unlink()
         f.tm('send-keys', '-t', f.win, 'Enter')
@@ -160,6 +170,72 @@ class Recovery(unittest.TestCase):
         self.assertNotIn('--resume', args)
         self.assertEqual(args[-1], 'saved version question')
         self.assertEqual(f.opt('@fleet_id'), f.fid)
+
+    def test_major_version_preflight_starts_fresh_and_keeps_words(self):
+        import fleet_park_wake as wake
+        f, gate = self.fixture(preflight=True)
+        project = f.root / 'projects/project'
+        project.mkdir(parents=True)
+        transcript = project / (f.sid + '.jsonl')
+        transcript.write_text(json.dumps(dict(version='3.0.0')) + '\n' +
+                              json.dumps(dict(version='2.9.0')) + '\n')
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+        new_sid = '22222222-2222-4333-8444-555555555555'
+        launch = f.root / 'launch'
+        launch.write_text(launch.read_text().replace(f.sid, new_sid))
+        with patch.dict(os.environ, f.env):
+            wake.save(wake.path_for(f.fid), dict(v=1, fid=f.fid, sid=f.sid, agent='claude',
+                phase='active', parked=True, jobs=[dict(id='timer', kind='wakeup',
+                prompt='original after upgrade', next=123, recurring=False)]))
+            wake.tick(f.fid)
+            f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+            gate.settle(f.fid)
+            wake.tick(f.fid)
+            record = json.loads(wake.path_for(f.fid).read_text())
+            self.assertEqual(record['sid'], new_sid)
+            self.assertNotIn('pending', record)
+            self.assertIsNone(record['jobs'][0]['next'])
+            self.assertEqual(gate.records(f.fid)[0]['state'], 'sent')
+            wake.tick(f.fid)
+        args = json.loads((f.root / 'argv').read_text().splitlines()[-1])
+        self.assertNotIn('--resume', args)
+        self.assertEqual(args[-1], 'original after upgrade')
+        self.assertEqual(len((f.root / 'argv').read_text().splitlines()), 2)
+        self.assertEqual(f.opt('@fleet_id'), f.fid)
+        f.wait(lambda: any(json.loads(line)['act'] == 'fresh' for line in
+                           (f.root / 'conf/logs/park.ndjson').read_text().splitlines()))
+        self.assertIn('2.9.0', f.opt('@park_fresh_reason'))
+        self.assertIn('3.0.0', f.opt('@park_fresh_reason'))
+
+    def test_memguard_rule_c_parks_idle_through_the_existing_gate(self):
+        f, gate = self.fixture()
+        f.tm('rename-session', '-t', 'test', f.label)
+        config = f.root / ('conf/fleets/' + f.label)
+        config.mkdir(parents=True)
+        (config / 'conf').touch()
+        pid = f.opt('pane_pid')
+        ps = f.root / 'ps'
+        ps.write_text('#!/bin/sh\necho "' + pid + ' 1 ' + str(os.getuid()) +
+                      ' 5242880 01:00:00 claude"\n')
+        ps.chmod(0o755)
+        env = dict(f.env, FLEET_MEM_PS_CMD=str(ps), FLEET_MEM_TOTAL_MB='65536',
+                   FLEET_MEM_PROBE_CMD='echo 1 60 5 0', FLEET_NOTIFY_CMD='true')
+        f.wait(lambda: f.opt('@claude_state_src') == '7501')
+        f.set('@claude_needs', 'ask')
+        f.set('@claude_state', 'needs')
+        result = subprocess.run(['bash', str(BIN / 'fleet-memguard.sh'), '--once'],
+                                env=env, capture_output=True, text=True, timeout=20)
+        self.assertFalse(f.opt('@park_held'), 'memory rule must not stop a question: ' +
+                         result.stdout + result.stderr + f.opt('@claude_state') + f.opt('@claude_needs'))
+        f.set('@claude_needs', '')
+        f.set('@claude_state', 'done')
+        result = subprocess.run(['bash', str(BIN / 'fleet-memguard.sh'), '--once'],
+                                env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(f.opt('@park_held'), result.stdout + result.stderr)
+        self.assertEqual(f.opt('@park_why'), 'memory')
+        self.assertEqual(f.opt('@cc_session_id'), f.sid)
 
     def test_hung_start_is_stopped_before_retry_and_words_survive(self):
         f, gate = self.fixture()

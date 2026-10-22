@@ -515,6 +515,20 @@ while :; do
     # The launcher as it is, without the environment a retired layer (EPIC T497
     # C8) may have handed a session started before it — fleet_repo_authority.py's
     # --supervise did this with a Python start (T716: env -u, no start).
+    if [ -n "$park_attempt" ]; then
+      _fresh=$(python3 "$BIN/fleet_park_version.py" prepare --meta "$park_attempt" --manual "$park_new")
+      if [ -n "$_fresh" ]; then
+        _resume=$(fleet_agent_get "$(fleet_agent_or_default "$(opt @cc_agent)")" resume_flag)
+        _args=(); _skip=0
+        for a in ${cmd[@]+"${cmd[@]}"}; do
+          if [ "$_skip" = 1 ]; then _skip=0; continue; fi
+          if [ "$a" = "$_resume" ]; then _skip=1; continue; fi
+          _args+=("$a")
+        done
+        cmd=(${_args[@]+"${_args[@]}"})
+        printf '\n%s\n' "$_fresh"
+      fi
+    fi
     wake_guard=()
     [ -z "$park_attempt" ] || wake_guard=(python3 "$BIN/fleet_wake_guard.py" run --meta "$park_attempt" --)
     PATH="$SHIM_PATH" ${wake_guard[@]+"${wake_guard[@]}"} env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \

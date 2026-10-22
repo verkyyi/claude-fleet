@@ -31,7 +31,8 @@
 #   B  orphan  PPID=1, cwd a fleet anchor, RSS > FLEET_MEM_ORPHAN_MB (2048), alive
 #              > FLEET_MEM_ORPHAN_SECS (6h) → FLEET_MEM_ORPHAN_ACTION (default
 #              report). Swept every FLEET_MEM_ORPHAN_EVERY (60s).
-#   C  fat     a claude / codex SESSION at ≥ FLEET_CLAUDE_RSS_WARN_MB (4096) →
+#   C  fat     at ≥ FLEET_CLAUDE_RSS_WARN_MB (4096), park eligible idle sessions
+#              through the ordinary gate; refused/busy sessions keep the warning:
 #              its window gets `@claude_mem_warn` (e.g. `4.3G`; dash `⚠ mem 4.3G`)
 #              and FLEET_NOTIFY_CMD one message per process naming the window, with
 #              the ready `fleet-peer-send.sh … /fleet-handoff` line that moves it to
@@ -237,7 +238,7 @@ clear_marks() {
 # this pass put up is cleared. One `list-panes` per fleet socket, and only when
 # there is something to badge or to clear.
 fat_pass() {
-  local low=$(( WARN_MB * 9 / 10 )) prev='' fat pmap s hits sock win pid rss name issue gb key short
+  local low=$(( WARN_MB * 9 / 10 )) prev='' fat pmap s hits sock win pid rss name issue gb key short fid parked_reply
   [ -s "$WARNS" ] && prev="$(cat "$WARNS" 2>/dev/null)"
   fat="$(printf '%s\n' "$ROWS" | awk -F'\t' -v m="$WARN_MB" -v lo="$low" -v pv="$(printf '%s\n' "$prev" | awk -F'\t' '{printf "%s ", $3}')" '
     BEGIN { n = split(pv, a, / +/); for (i = 1; i <= n; i++) if (a[i] != "") was[a[i]] = 1 }
@@ -266,11 +267,27 @@ fat_pass() {
   while IFS="$TAB" read -r sock win pid rss name issue; do
     [ -n "$pid" ] || continue
     gb="$(awk -v m="$rss" 'BEGIN{ printf "%.1f", m/1024 }')"
-    if [ "$ONCE" = 1 ]; then
+    if [ "$ONCE" = 1 ] && [ "$DRY" = 1 ]; then
       printf 'fat\t%s\t%s\t%sMB\t-\tagent\t%s:%s %s\n' "$([ "$DRY" = 1 ] && echo would-warn || echo warn)" \
         "$pid" "$rss" "$sock" "$win" "$name"
     fi
     [ "$DRY" = 1 ] && continue
+    # C7: the ordinary park gate owns every refusal (asking, watched,
+    # drafts, background work, old wrappers and failed wakes). Never force.
+    if [ "$rss" -ge "$WARN_MB" ]; then
+      fid=$(tmux -L "$sock" display-message -p -t "$win" '#{@fleet_id}' 2>/dev/null)
+      if [ -n "$fid" ]; then
+        parked_reply=$(python3 "$BIN/fleet_session_gate.py" park --fid "$fid" --why memory 2>/dev/null)
+        case "$parked_reply" in *'"ok":true'*)
+          tmux -L "$sock" set-option -wu -t "$win" @claude_mem_warn 2>/dev/null || :
+          [ "$ONCE" != 1 ] || printf 'fat\tpark\t%s\t%sMB\t-\tagent\t%s:%s\n' "$pid" "$rss" "$sock" "$win"
+          continue ;;
+        esac
+      fi
+    fi
+    if [ "$ONCE" = 1 ]; then
+      printf 'fat\twarn\t%s\t%sMB\t-\tagent\t%s:%s %s\n' "$pid" "$rss" "$sock" "$win" "$name"
+    fi
     tmux -L "$sock" set-option -w -t "$win" @claude_mem_warn "${gb}G" 2>/dev/null || continue
     printf '%s\t%s\t%s\n' "$sock" "$win" "$pid" >> "$WARNS.t"
     key="fat:$pid:$(printf '%s' "$name" | cksum | tr -c '0-9\n' '_')"
@@ -387,7 +404,7 @@ tick() {
 $cands
 EOF
 
-  # C — a session grown fat (issue #1297): badge + one notification, never a restart
+  # C — idle sessions park through the gate; others get the existing warning
   if [ "$WARN_MB" -gt 0 ] && { [ "$ONCE" = 1 ] || [ $(( t - LAST_WARN )) -ge "$WARN_EVERY" ]; }; then
     LAST_WARN=$t
     fat_pass

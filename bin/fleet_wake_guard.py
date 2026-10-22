@@ -19,7 +19,7 @@ import uuid
 
 import fleet_session_gate as gate
 
-HUMAN = {'键盘', '网页', '回答', 'keyboard', 'web', 'answer'}
+HUMAN = {'键盘', '网页', '回答', '⌘P', 'keyboard', 'web', 'answer'}
 
 
 @lru_cache(maxsize=1)
