@@ -105,6 +105,8 @@ def _load():
 def _save(s):
     json.dump(s, open(STATE, "w"))
 def identity(pane, socket=""):
+    if "identity" in _load():
+        return _load()["identity"]
     return {"session_id": "th-1", "remote": "unix:///tmp/x.sock", "home": "/h", "owner": "1"}
 class C:
     initialized = {"userAgent": "codex_cli_rs/0.162.1 (Mac OS)"}
@@ -137,6 +139,9 @@ class C:
     def close(self):
         pass
 def client(remote):
+    if _load().get("unreachable"):
+        raise ConnectionError("not ready")
+    C.initialized = {"userAgent": _load().get("userAgent", "codex_cli_rs/0.162.1 (Mac OS)")}
     return C()
 '''
 
@@ -413,6 +418,25 @@ while time.time() < end:
         st = self.gate("status", "--fid", FID)
         self.assertTrue(st["can_talk"])
         self.assertEqual([(q["delivery"], q["text"], q["why"]) for q in st["queue"]], [(r["delivery"], "waiting", "busy")])
+
+    def test_N_cold_codex_identity(self):
+        self.window({"@cc_agent": "codex", "@cc_session_id": ""})
+        for native, why in [({"identity": {}}, "checking"),
+                            ({"identity": {"remote": ""}}, "checking"),
+                            ({"identity": {"remote": "http://other"}}, "unreachable"),
+                            ({"unreachable": True}, "unreachable"),
+                            ({"userAgent": "unknown"}, "checking"),
+                            ({"userAgent": "codex_cli_rs/0.154.0"}, "old_version")]:
+            with self.subTest(native=native):
+                (self.d / "codex.json").write_text(json.dumps(native))
+                st = self.gate("status", "--fid", FID)
+                self.assertEqual((st["can_talk"], st["why"]), (False, why))
+                r = self.say("must not submit before verified")
+                self.assertEqual((r["state"], r["reason"]), ("refused", why))
+                self.assertEqual(json.loads((self.d / "codex.json").read_text()).get("calls", []), [])
+        (self.d / "codex.json").write_text("{}")
+        st = self.gate("status", "--fid", FID)
+        self.assertEqual((st["can_talk"], st["why"]), (True, ""))
 
     def test_M_ask_cards(self):
         proj = self.d / "projects/p"

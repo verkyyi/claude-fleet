@@ -11,12 +11,12 @@ const worker = '66666666-6666-4666-8666-666666666666/77777777-7777-4777-8777-777
 const browser = await chromium.launch()
 try {
   for (const agent of ['codex', 'claude']) {
-    for (const kind of ['delayed', 'old', 'ticket', 'identity']) {
+    for (const kind of ['delayed', 'starting', 'old', 'ticket', 'identity']) {
       const context = await browser.newContext()
       try {
         const page = await context.newPage()
-        if (kind === 'delayed') await page.clock.install()
-        let capability = kind === 'delayed' ? null : kind === 'old' ? undefined : true
+        if (kind === 'delayed' || kind === 'starting') await page.clock.install()
+        let capability = kind === 'starting' ? false : kind === 'delayed' ? null : kind === 'old' ? undefined : true
         let identityReads = 0
         const sent = []
         // route.fulfill ends the response immediately. Use a real open stream:
@@ -24,9 +24,9 @@ try {
         await page.addInitScript(({ agent, kind }) => {
           const real = window.fetch.bind(window)
           const enc = new TextEncoder()
-          const test = window.__sessionView = { capability: kind === 'delayed' ? null : kind === 'old' ? undefined : true }
+          const test = window.__sessionView = { capability: kind === 'starting' ? false : kind === 'delayed' ? null : kind === 'old' ? undefined : true }
           test.emit = () => test.controller.enqueue(enc.encode(`data: ${JSON.stringify({ t: 'state', agent, session: 's1', busy: false,
-            can_talk: test.capability, talk_reason: test.capability === null ? 'checking' : '', queue: [] })}\n\n`))
+            can_talk: test.capability, talk_reason: test.capability === null || (kind === 'starting' && !test.capability) ? 'checking' : '', queue: [] })}\n\n`))
           window.fetch = async (input, init) => {
             const url = new URL(String(input), location.origin)
             if (url.pathname !== '/v1/chat/view' || url.searchParams.has('cached')) return real(input, init)
@@ -57,7 +57,7 @@ try {
             return json({ mirror: null })
           }
           if (path === '/v1/chat/say') {
-            assert(['delayed', 'identity'].includes(kind), 'read-only page must not send')
+            assert(['delayed', 'starting', 'identity'].includes(kind), 'read-only page must not send')
             assert.equal(capability, true, 'unknown permission must not send')
             sent.push(route.request().postDataJSON().text)
             return json({ delivery: `d${sent.length}`, state: 'queued' })
@@ -70,7 +70,7 @@ try {
         await page.goto(`${origin}/app/s/${encodeURIComponent(worker)}`)
         const input = page.locator('textarea.aui-composer-input')
         await input.waitFor()
-        if (kind === 'delayed') {
+        if (kind === 'delayed' || kind === 'starting') {
           await input.fill('draft survives discovery')
           assert.match(await input.getAttribute('placeholder'), /Connecting|正在连接/)
           await input.press('Enter')

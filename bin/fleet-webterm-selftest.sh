@@ -167,6 +167,19 @@ PY
 o=$(C claim --conn a); st_eq "E: an expired lease is claimable" 0 "$?"; st_eq "E: epoch 3" 3 "$(printf '%s' "$o" | jf epoch)"
 C renew --conn b --epoch 2 >/dev/null; st_eq "E: the expired one cannot renew" 1 "$?"
 C release --conn a --epoch 3 >/dev/null; st_eq "E: the controller releases" 0 "$?"
+python3 - "$BIN/fleet-webterm.py" <<'PY'
+import os, runpy, time
+from unittest.mock import patch
+g=runpy.run_path(__import__('sys').argv[1]);path=g['control_path']('personal')
+with patch('os.kill', side_effect=PermissionError('unknown owner')):
+    assert not g['server_process_gone']('12345')
+for pid in [str(os.getpid()), 'unknown', '1']:
+    g['write_json'](path,dict(target='personal',epoch=3,conn='old',ts=time.time(),
+        socket='wt-unavailable-'+str(os.getpid()),view='$1',session='unavailable',server_pid=pid))
+    _,rc=g['control_claim'](path,'personal','other','claim')
+    assert rc==4, (pid,rc)
+PY
+st_eq "E: unavailable tmux with live or unknown PID keeps the controller lease" 0 "$?"
 
 # --- F. generation -----------------------------------------------------------------
 tn respawn-pane -k -t "$HP"
@@ -175,8 +188,21 @@ o=$(WT ensure); st_eq "F: ensure waits for the user" 5 "$?"
 st_eq "F: still generation 1" 1 "$(WT status | jf generation)"
 o=$(WT ensure --renew); st_eq "F: --renew" 0 "$?"
 st_eq "F: generation 2" 2 "$(printf '%s' "$o" | jf generation)"; st_eq "F: same terminal" "$ID" "$(printf '%s' "$o" | jf id)"
+# Keep the just-disconnected browser's fresh lease, as a host-loss reconnect
+# does. No live server can own this lease after the isolated host is killed.
+tn new-session -d -t "$RS" -s "$RS@view-wt-hostgone"
+OLD_SERVER=$(tn display-message -p '#{pid}')
+OLD_VIEW=$(tn display-message -p -t "=$RS@view-wt-hostgone:" '#{session_id}')
+python3 - "$f" "$RS" "$OLD_SERVER" "$OLD_VIEW" <<'PY'
+import json, sys, time
+d=json.load(open(sys.argv[1]))
+d.update(conn="hostgone", ts=time.time(), socket=sys.argv[2], server_pid=sys.argv[3],
+         view=sys.argv[4], session=sys.argv[2]+"@view-wt-hostgone")
+json.dump(d,open(sys.argv[1],"w"))
+PY
 tn kill-server
 waitfor 3 sh -c "! '$REAL_TMUX' -L '$RS' has-session 2>/dev/null"
+o=$(C claim --conn successor); st_eq "F: a confirmed dead server cannot retain its fresh controller lease" 0 "$?"
 o=$(WT status); st_eq "F: host lost ⇒ ended" 5 "$?"; st_eq "F: says ended" ended "$(printf '%s' "$o" | jf state)"
 # RMVE: the page's one automatic renew after the host's tmux went brings the
 # fleet back (the seam stands in for fleet-up) — a new generation, same terminal

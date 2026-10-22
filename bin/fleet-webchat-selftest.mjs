@@ -820,7 +820,7 @@ if a[0] == "say":
 elif a[0] == "status":
     time.sleep(0.2)
     if os.path.exists(${JSON.stringify(GFAIL)}):
-        os.unlink(${JSON.stringify(GFAIL)}); sys.exit(1)
+        os.unlink(${JSON.stringify(GFAIL)}); time.sleep(5); sys.exit(1)
     print(json.dumps({"can_talk": True, "why": "", "continuation": {"state": "continued", "to": "codex", "message": "已换 Codex 继续。"}, "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
 elif a[0] == "stop":
     print(json.dumps({"ok": True, "how": "escape"}))
@@ -841,7 +841,7 @@ printf '@9\\tweb-1\\t\\t%s\\n' ${FID}
 exit 2
 `, { mode: 0o755 });
   const y = (await sstart(["--socket"], { ...asHome("y"), FLEET_WEBCHAT_GATE: gpy, FLEET_WEBCHAT_RAW: rsh, FLEET_WEBCHAT_HANDOFF: vsh,
-    FLEET_WEBCHAT_FLEET: "fleet", FLEET_GATE_DIR: join(HT, "gate-dir"), FLEET_WEBCHAT_GATE_STATE_MS: "100", FLEET_WEBCHAT_VIEW_STATE_MS: "200", FLEET_WEBCHAT_VIEW_POLL_MS: "100" })).p;
+    FLEET_WEBCHAT_FLEET: "fleet", FLEET_GATE_DIR: join(HT, "gate-dir"), FLEET_WEBCHAT_GATE_STATUS_TIMEOUT_MS: "1000", FLEET_WEBCHAT_GATE_STATE_MS: "100", FLEET_WEBCHAT_VIEW_STATE_MS: "200", FLEET_WEBCHAT_VIEW_POLL_MS: "100" })).p;
   const PAGE = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
   const calls = () => existsSync(GLOG) ? readFileSync(GLOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   ok((await sreq("/api/say", { method: "POST", headers: { "Content-Type": "application/json" }, body: { fid: FID, text: "x" } })).status === 403,
@@ -895,6 +895,13 @@ exit 2
     "Y probe: a name cannot replace the parent identity");
   ok((await sreq("/api/open", { method: "POST", headers: PAGE,
     body: { purpose: "anything", parent_fid: FID, text: "x" } })).status === 400, "Y probe: unknown purpose is refused");
+  const probeAt = Date.now();
+  const probes = await Promise.all([sreq(`/api/session?fid=${FID}`), sreq(`/api/session?fid=${FID}`)]);
+  ok(probes.every((r) => r.status === 503) && Date.now() - probeAt < 3000,
+    "Y hung capability probe has a bound and stays unavailable");
+  ok(calls().filter(c => c.argv[0] === "status").length === 1,
+    "Y simultaneous readers share one capability probe for the same session");
+  writeFileSync(GFAIL, "1");
   // the view's state line: can_talk and the queue, no holder
   const st = await new Promise((resolve) => {
     const evs = [];

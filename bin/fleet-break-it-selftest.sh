@@ -7054,6 +7054,14 @@ webchat_part() {
   WEBCHAT_OUT=$out
 }
 
+drill_chat_codex_identity_pending() {
+  CAP=30; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" N 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="原生身份未就绪不误判旧版，未知与不可达不投递；明确旧版本仍拒绝，同一身份就绪后恢复"
+}
+
 drill_chat_gate_cold_readonly() {
   CAP=30
   webchat_part gate "Y a cold view is checking, never read-only before the gate answers" || return 1
@@ -7063,7 +7071,9 @@ drill_chat_gate_cold_readonly() {
 drill_chat_gate_probe_unavailable() {
   CAP=30
   webchat_part gate "Y a failed capability probe is unavailable, never a read-only verdict" \
-    "Y capability failure after a writable frame recovers on the same stream" || return 1
+    "Y capability failure after a writable frame recovers on the same stream" \
+    "Y hung capability probe has a bound and stays unavailable" \
+    "Y simultaneous readers share one capability probe for the same session" || return 1
   WHAT="能力探测失败明确暂不可达，同一流下一次成功恢复可写；只读权限不放宽"
 }
 
@@ -7580,6 +7590,14 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_dead_server_lease() {
+  CAP=30; local t0
+  t0=$(now)
+  suite_holds fleet-webterm-selftest.sh 'F: a confirmed dead server cannot retain its fresh controller lease' || return 1
+  SECS=$(since "$t0")
+  WHAT="真实隔离 tmux 退出后旧控制租约仍新鲜，也不会阻止个人终端重建；活浏览器不抢"
+}
+
 drill_term_personal_renew() {
   CAP=60; local t0 out rc
   t0=$(now)

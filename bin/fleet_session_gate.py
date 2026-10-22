@@ -267,14 +267,21 @@ def can_talk(w):
     try:
         identity, client = codex_api()
         data = identity(w["pane"], w["sock"])
-        if not data or not str(data.get("remote", "")).startswith("unix://"):
-            return False, "old_version"
+        # A newly launched app-server publishes its identity after the window
+        # exists. Absence is not evidence of an old binary; keep sends refused
+        # while the view allows the person to draft through discovery.
+        if not data or not data.get("remote"):
+            return False, "checking"
+        if not str(data["remote"]).startswith("unix://"):
+            return False, "unreachable"
         c = client(data["remote"])
         try:
             v = codex_version(c)
         finally:
             c.close()
-        return (True, "") if v is not None and v[:2] >= CODEX_MIN else (False, "old_version")
+        if v is None:
+            return False, "checking"
+        return (True, "") if v[:2] >= CODEX_MIN else (False, "old_version")
     except Exception:  # noqa: BLE001 — an unreachable server is read-only for now
         return False, "unreachable"
 
