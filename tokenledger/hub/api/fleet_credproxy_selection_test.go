@@ -63,6 +63,17 @@ func TestCodexQuotaInputs(t *testing.T) {
 		opportunity bool
 	}{
 		{"healthy", func(q *model.QuotaSnapshot) {}, "usable", false},
+		{"freshness exact", func(q *model.QuotaSnapshot) { q.ObservedAt = now.Add(-10 * time.Minute) }, "usable", false},
+		{"freshness exceeded", func(q *model.QuotaSnapshot) { q.ObservedAt = now.Add(-10*time.Minute - time.Nanosecond) }, "unknown", false},
+		{"reserve exact", func(q *model.QuotaSnapshot) { q.Windows[0].UsedPercent = 80; q.Windows[1].UsedPercent = 80 }, "usable", false},
+		{"reserve below", func(q *model.QuotaSnapshot) { q.Windows[1].UsedPercent = 80.01 }, "tight", false},
+		{"5h opportunity exact", func(q *model.QuotaSnapshot) { r := now.Add(30 * time.Minute); q.Windows[0].ResetsAt = &r }, "usable", true},
+		{"5h opportunity outside", func(q *model.QuotaSnapshot) {
+			r := now.Add(30*time.Minute + time.Nanosecond)
+			q.Windows[0].ResetsAt = &r
+		}, "usable", false},
+		{"7d opportunity exact", func(q *model.QuotaSnapshot) { r := now.Add(12 * time.Hour); q.Windows[1].ResetsAt = &r }, "usable", true},
+		{"7d opportunity outside", func(q *model.QuotaSnapshot) { r := now.Add(12*time.Hour + time.Nanosecond); q.Windows[1].ResetsAt = &r }, "usable", false},
 		{"5h expiring", func(q *model.QuotaSnapshot) { r := now.Add(15 * time.Minute); q.Windows[0].ResetsAt = &r }, "usable", true},
 		{"7d expiring", func(q *model.QuotaSnapshot) { r := now.Add(time.Hour); q.Windows[1].ResetsAt = &r }, "usable", true},
 		{"weekly bottleneck", func(q *model.QuotaSnapshot) {
@@ -184,7 +195,7 @@ func TestCodexQuotaSticky(t *testing.T) {
 	if err := r.h.srv.Vault.Put(store.PoolPrincipal, credvault.Codex, "poolcx2", credvault.Secret{RefreshToken: "rt-second", AccountID: "second"}); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
+	now := time.Date(2030, 1, 2, 0, 0, 0, 0, time.UTC)
 	codexSelectionQuota(t, r, "poolcx", now, 10, 10, 4*time.Hour, 6*24*time.Hour)
 	codexSelectionQuota(t, r, "poolcx2", now, 60, 60, 15*time.Minute, 6*24*time.Hour)
 	s := r.h.srv
@@ -202,6 +213,9 @@ func TestCodexQuotaSticky(t *testing.T) {
 		want        string
 	}{
 		{"young", "auto", now, true, "poolcx"},
+		{"hold minus second", "auto", now.Add(-10*time.Minute + time.Second), true, "poolcx"},
+		{"hold exact", "auto", now.Add(-10 * time.Minute), true, "poolcx2"},
+		{"hold plus second", "auto", now.Add(-10*time.Minute - time.Second), true, "poolcx2"},
 		{"not boundary", "auto", now.Add(-time.Hour), false, "poolcx"},
 		{"manual", "operator", now.Add(-time.Hour), true, "poolcx"},
 		{"expired hold", "auto", now.Add(-time.Hour), true, "poolcx2"},
@@ -344,5 +358,42 @@ func TestCodexQuotaResolveExistingSession(t *testing.T) {
 	b, err = s.Store.SessionBindFor(wid, credvault.Codex)
 	if err != nil || b.Account != "poolcx2" || r.upCount() != n+1 {
 		t.Fatalf("existing session not moved once: %+v %v requests=%d", b, err, r.upCount()-n)
+	}
+}
+
+func TestCodexQuotaMaterialBenefit(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		currentUsed, candidateUsed   float64
+		currentReset, candidateReset time.Duration
+		want, reason                 string
+	}{
+		{"more percentage alone", 70, 10, 4 * time.Hour, 4 * time.Hour, "poolcx2", "no_material_gain"},
+		{"both opportunities", 70, 10, 15 * time.Minute, 15 * time.Minute, "poolcx2", "no_material_gain"},
+		{"unknown current", 10, 10, -time.Second, 15 * time.Minute, "poolcx2", "no_material_gain"},
+		{"other window reserve too small", 90, 81, 4 * time.Hour, 15 * time.Minute, "poolcx2", "no_known_safe_alternative"},
+		{"restore reserve at threshold", 80.01, 80, 4 * time.Hour, 4 * time.Hour, "poolcx", "restore_dual_window_reserve"},
+		{"unique opportunity", 10, 80, 4 * time.Hour, 30 * time.Minute, "poolcx", "use_before_reset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCPRig(t)
+			s := r.h.srv
+			if err := s.Vault.Put(store.PoolPrincipal, credvault.Codex, "poolcx2", credvault.Secret{RefreshToken: "fixture-second", AccountID: "second"}); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2030, 1, 2, 0, 0, 0, 0, time.UTC)
+			// Current deliberately sorts after the alternative, forcing the no-gain
+			// cases to exercise hysteresis rather than merely best_current.
+			codexSelectionQuota(t, r, "poolcx2", now, tc.currentUsed, tc.currentUsed, tc.currentReset, 6*24*time.Hour)
+			codexSelectionQuota(t, r, "poolcx", now, tc.candidateUsed, tc.candidateUsed, tc.candidateReset, 6*24*time.Hour)
+			choices, err := s.sessionBindChoices("gh:1005", "", credvault.Codex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, reason := s.codexSelect(choices, store.SessionBind{WorkerID: "benefit", Owner: store.PoolPrincipal, Account: "poolcx2", SetBy: "auto", UpdatedAt: now.Add(-10 * time.Minute)}, now, true)
+			if selected.Account != tc.want || reason != tc.reason {
+				t.Fatalf("got %s/%s, want %s/%s", selected.Account, reason, tc.want, tc.reason)
+			}
+		})
 	}
 }
