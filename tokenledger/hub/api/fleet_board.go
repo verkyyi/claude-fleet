@@ -297,7 +297,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 					r.Coordinator = parent.Short
 				}
 			}
-			if t.Title != "" {
+			if t.Title != "" && (b == nil || b.TitleSource != "manual") {
 				r.Title = t.Title
 			}
 			if r.Code == "" {
@@ -348,7 +348,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			}
 		}
 		usedID[ident] = true
-		if r.Title == "" || t == nil {
+		if (r.Title == "" || t == nil) && (b == nil || b.TitleSource != "manual") {
 			if v := wstr(w, "title"); v != "" && t == nil {
 				r.Title = v
 			}
@@ -528,6 +528,20 @@ func boardStateTag(st string) string {
 
 // finishBoard orders the rows, nests an EPIC's members, caps 已收起 and counts.
 func finishBoard(rows []BoardRow) *Board {
+	// All surfaces consume this title. Never infer historical text from a body,
+	// another window's key, a native transcript or another person's record.
+	for i := range rows {
+		r := &rows[i]
+		r.Title = store.FleetTitle(r.Title)
+		if r.Title == "" {
+			code := r.Code
+			if code == "" {
+				code = r.ID
+			}
+			r.Title = "会话 " + code
+		}
+	}
+
 	sort.SliceStable(rows, func(a, b int) bool {
 		ga, gb := boardGroupOrder[rows[a].Group], boardGroupOrder[rows[b].Group]
 		if ga != gb {

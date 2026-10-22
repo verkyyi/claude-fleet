@@ -967,7 +967,8 @@ if fleet_is_fid "$TASK_FID"; then
 fi
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # The ID's ledger opens with the spawn (EPIC T497 C1) — agent, repo, what it is for;
-# the short code lands as @task_short. Backgrounded: the hook fills a missing `opened`.
+# The local append completes before the spawn returns; only the hub push is
+# backgrounded. A hook racing it may fill a lazy opened first.
 # C4: its parent (the spawning session's ID), its prev (the ID it continues — given,
 # or the one whose segment --resume picks up) and its worktree ride along.
 # The parent is the spawning session's ID however it came (C9): a handed-over
@@ -976,10 +977,10 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 _idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
 [ -n "$_idpar" ] || _idpar=$ID_PARENT   # a continued ID keeps its parent (C18)
 _idwt=''; [ -n "${wt:-}" ] && [ "$NOREPO" != 1 ] && _idwt=$wt
-fleet_is_fid "$fid" && ( bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
+fleet_is_fid "$fid" && bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \
   ${TASK_REF:+--task "$TASK_REF"} ${ID_TASK:+--task "$ID_TASK"} ${_idpar:+--parent "$_idpar"} ${PREV_ID:+--prev "$PREV_ID"} \
-  ${RESUME_SID:+--from-native "$RESUME_SID"} ${_idwt:+--worktree "$_idwt"} >/dev/null 2>&1 & )
+  ${RESUME_SID:+--from-native "$RESUME_SID"} ${_idwt:+--worktree "$_idwt"} >/dev/null 2>&1
 # The worktree remembers its ID beside its record (C4): `fleet-id` in its git dir.
 [ -n "$_idwt" ] && fleet_is_fid "$fid" && fleet_worktree_id_mark "$_idwt" "$fid"
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)

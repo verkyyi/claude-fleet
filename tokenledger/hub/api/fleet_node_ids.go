@@ -66,6 +66,8 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case ref == "capabilities" && r.Method == http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"named": true})
 	case ref == "live" && r.Method == http.MethodPost:
 		s.nodeIDsLive(w, r, ep, owner)
 	case ref == "" && r.Method == http.MethodPost:

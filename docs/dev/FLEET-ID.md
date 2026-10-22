@@ -34,7 +34,8 @@ EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编
 
 | 事件 | 谁写 | 内容 |
 |---|---|---|
-| `opened` | 两个 spawner（`dash-issue-session.sh` / `dash-raw-session.sh`，后台）；没有时由钩子补一条 `lazy` | agent（解析后的）· window · repo · title · key · task · short |
+| `opened` | 两个 spawner（`dash-issue-session.sh` / `dash-raw-session.sh`；raw 创建返回前落账，推送后台）；没有时由钩子补一条 `lazy` | agent（解析后的）· window · repo · title · key · task · short |
+| `named` | 网页 gate、Terminal、Hub 改名和首次输入命名，共用 `fleet_id.name_window` | title（首个非空行，至多 80 字符）· source（manual / auto / recovered） |
 | `native` | SessionStart 钩子 | 新的一段（agent · 原生 id · trigger · seg），或 `compact: true` 给当前段记一次压缩 |
 | `result` | `fleet-id.sh result`（C4 接 report） | state · summary · pr |
 | `progress` | `fleet-id.sh progress`；开关 on 时 `fleet_task_control.py progress`（C12：EPIC 驱动的 tick） | state · summary · event（同一 event 不再写）。只留最新一条，不是结果、不改状态；hub 镜像存在 `fleet_ids.progress*`，`fleet-epic-tick.py status` 的 `last_tick` 读它 |
@@ -372,3 +373,24 @@ TASKCODE、`fleet-id-results-selftest.sh` NAMES、`fleet-brief-selftest.sh` CODE
 `bin/fleet-epic-code-selftest.sh` 钉住它。
 
 `bin/fleet-task-id-selftest.sh` 钉住 take / 开窗 / ↵ 新段 / 重做 / 冲突；BREAK-IT `task-many-ids`。
+
+## 会话标题持久化
+
+新建无名称会话先保存「会话 + 短码」，不从正文推断标题。首次输入沿已有的
+40 字符首句规则保存自动标题；占位窗口的自动改名仍限 30 字符。人工改名从网页、
+Terminal 或 Hub 都追加 `named`，与窗口改名在同一个 ID 账本锁内串行，人工名优先。
+同名同来源重试不追加；两次人工命名以账本序号的后者为准，时间戳不参与排序。
+`opened` 仍为首次有效值；`closed`、`moved`、`reopened` 均不清标题。
+
+Hub 的 `title_source` 与本地 fold 同规则。共享 Board 优先保留人工名，再使用同身份
+关联任务/身份标题、运行窗口标题；没有可信标题的历史显示「会话 + 短码」。不按
+空标题删除历史，不借别人的任务、回收复用的 window/key 或正文猜名称。
+
+节点推送含 `named` 的后缀前检查 `GET /v1/node/ids/capabilities` 的 `named: true`。
+旧 Hub 尚不支持时，本地保留该后缀等待正常升级重试，防止旧 Hub 跳过未知事件却
+推进序号。旧节点继续发原有事件；现有钩子入口调用新实现，无需重开会话。
+
+历史修复先只读审计：`python3 bin/fleet_id.py title-audit --board <自己的会话快照>
+--owner-proof <同票据的 me.json> --ledger-dir <原始 ids 目录>`。输出逐 FID 的分类、
+原始来源与文件摘要；它不写账本、不推送、不改任务状态。完整清单保存在仓库外，
+由操作者或指定管家复核后另行决定是否补录；无法恢复的保留短码。

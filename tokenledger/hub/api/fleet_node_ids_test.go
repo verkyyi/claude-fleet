@@ -18,6 +18,9 @@ func TestNodeIDMirrorRoad(t *testing.T) {
 		return map[string]any{"ev": kind, "id": id, "seq": seq, "ts": 1000 + seq, "agent": "claude", "title": "t " + id[:4]}
 	}
 
+	if status, caps := nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"/capabilities", nil); status != 200 || caps["named"] != true {
+		t.Fatalf("naming capability: %d %v", status, caps)
+	}
 	st, got := nodeTaskCall(t, h, v5, http.MethodPost, NodeIDsPath, map[string]any{"id": a,
 		"events": []any{ev(a, 1, "opened"), map[string]any{"ev": "native", "id": a, "seq": 2, "ts": 1, "agent": "claude", "native": "s1", "trigger": "startup"}}})
 	if st != 200 || got["short"] != "FF1W" || got["seq"] != float64(2) {

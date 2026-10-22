@@ -61,6 +61,7 @@ import subprocess
 import sys
 import time
 import uuid
+import unicodedata
 
 ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"   # Crockford base32, lowercase — the old code (compat-1v)
 DIGITS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"     # the display code: Crockford base32, uppercase
@@ -316,10 +317,19 @@ def fold(events):
             for k, v in ev.items():
                 if k in ("ev", "seq", "id", "lazy"):
                     continue
+                if k == "title":
+                    v = clean_title(v)
                 if k == "short" and not is_short(v):
                     continue   # an old `T-…` code (compat-1v): today's is recomputed from the ID
                 if v not in (None, "") and k not in rec["opened"]:
                     rec["opened"][k] = v
+        elif kind == "named":
+            title, source = clean_title(ev.get("title")), ev.get("source")
+            o = rec["opened"]
+            if title and source in ("auto", "manual", "recovered"):
+                if source == "manual" or (o.get("title_source") != "manual" and
+                                         (source != "recovered" or not o.get("title"))):
+                    o["title"], o["title_source"] = title, source
         elif kind == "native":
             if ev.get("compact"):
                 if rec["segments"]:
@@ -574,9 +584,147 @@ def record_native(fid, agent, native, source, hint=""):
     return append(fid, None, decide=lambda evs: next_native(evs, agent, native, source, hint))
 
 
+def title_audit(board_path, proof_path, directories):
+    """Read-only review manifest. Inputs must be the same person's ticket reads.
+
+    Original ledgers are matched by full FID only. No native transcript, window
+    number, task body, deleted-row heuristic, or write/apply mode is used here.
+    """
+    import hashlib
+    from pathlib import Path
+    board_bytes, proof_bytes = Path(board_path).read_bytes(), Path(proof_path).read_bytes()
+    snapshot, proof = json.loads(board_bytes), json.loads(proof_bytes)
+    if not proof.get("read_only") or not proof.get("person"):
+        raise ValueError("needs the same owner's read-only /me receipt")
+    rows = snapshot.get("board", {}).get("rows", [])
+    result = []
+    for row in rows:
+        fid = row.get("id", "")
+        if row.get("group") != "gone" or clean_title(row.get("title")) or not is_fid(fid):
+            continue
+        item = {"id": fid, "code": row.get("code"), "machine": row.get("machine"),
+                "login": row.get("login"), "task": row.get("task", ""),
+                "candidate": "", "decision": "short-code-only", "source": "unavailable",
+                "fallback": "会话 " + (row.get("code") or short_for(fid, [fid]))}
+        files = [Path(d) / (fid + ".ndjson") for d in directories if (Path(d) / (fid + ".ndjson")).is_file()]
+        if len(files) > 1:
+            item["source"] = "multiple-ledgers-review"
+        elif files:
+            raw = files[0].read_bytes()
+            item.update(ledger=str(files[0]), sha256=hashlib.sha256(raw).hexdigest())
+            try:
+                evs = [json.loads(line) for line in raw.splitlines() if line.strip()]
+                if not all(isinstance(e, dict) and e.get("id") == fid and e.get("seq") == n
+                           for n, e in enumerate(evs, 1)):
+                    raise ValueError("identity or sequence mismatch")
+                rec = fold(evs)
+                opened = [e for e in evs if e.get("ev") == "opened"]
+                item["source"] = ("hook-lazy-open" if opened[0].get("lazy") else "spawn-open-entry-unknown") if opened else "no-opened-event"
+                item["events"] = [e.get("ev") for e in evs]
+                item["closed"] = rec["closed"]
+                item["seq"] = len(evs)
+                item["facts"] = {k: rec["opened"][k] for k in ("agent", "task", "parent", "prev", "key", "origin", "reap_origin", "test_identity") if k in rec["opened"]}
+                title = clean_title(rec["opened"].get("title"))
+                if title:
+                    item.update(candidate=title, decision="review-ledger-resync", title_source=rec["opened"].get("title_source", "opened"))
+                # A lack of title never proves a web entrance or a test/probe.
+            except (ValueError, TypeError, KeyError):
+                item["source"] = "invalid-ledger-review"
+        result.append(item)
+    return {"mode": "dry-run", "writes": 0, "board_sha256": hashlib.sha256(board_bytes).hexdigest(),
+            "owner_proof_sha256": hashlib.sha256(proof_bytes).hexdigest(), "rows": result,
+            "counts": {source: sum(r["source"] == source for r in result) for source in sorted({r["source"] for r in result})}}
+
+
+def clean_title(value):
+    """One bounded display line; never derive a title from a prompt/body."""
+    if not isinstance(value, str):
+        return ""
+    line = ""
+    for raw in re.split(r"[\r\n]", value):
+        line = " ".join("".join(" " if unicodedata.category(c) == "Cc" else c for c in raw).split())
+        if line:
+            break
+    return line if len(line) <= 80 else line[:79].rstrip() + "…"
+
+
+def record_title(fid, title, source, update=None, only_default=False):
+    """A real naming event, serialized with every other event on this identity.
+
+    Manual wins over automatic forever; recovered only fills an empty title.
+    update runs under the same lock so concurrent window renames cannot invert
+    the ledger order. Repeated names still repair the window without an event.
+    """
+    title = clean_title(title)
+    if not is_fid(fid) or not title or source not in ("auto", "manual", "recovered"):
+        return None
+    def decide(evs):
+        o = fold(evs)["opened"]
+        if only_default and o.get("title_source") != "default":
+            return None
+        if source != "manual" and (o.get("title_source") == "manual" or
+                                   (source == "recovered" and o.get("title"))):
+            return None
+        if update is not None:
+            update(title)
+        if o.get("title") == title and o.get("title_source") == source:
+            return None
+        return {"ev": "named", "title": title, "source": source}
+    return append(fid, None, decide=decide)
+
+
+def name_window(window, title, source="manual", socket="", fid="", binary="tmux", rename=True):
+    """The web, Terminal, control adapter and prompt hook's one rename road."""
+    title = clean_title(title)
+    if not title:
+        raise ValueError("empty title")
+    prefix = [binary] + (["-L", socket] if socket else [])
+    def run(*args):
+        return subprocess.run(prefix + list(args), text=True, capture_output=True,
+                              timeout=10, check=True).stdout.strip()
+    def check_target():
+        fmt = "#{window_id}" if window.startswith("@") else "#{pane_id}"
+        if not window.startswith(("@", "%")) or run("display-message", "-p", "-t", window, fmt) != window:
+            raise ValueError("window or pane no longer exists")
+    check_target()
+    found = run("display-message", "-p", "-t", window, "#{@fleet_id}")
+    if fid and found != fid:
+        raise ValueError("window identity changed")
+    def update(value):
+        check_target()
+        if found and run("display-message", "-p", "-t", window, "#{@fleet_id}") != found:
+            raise ValueError("window identity changed")
+        # Old windows may have a manual stamp but no named event yet.
+        manual = run("show-options", "-wqv", "-t", window, "@name_manual")
+        if source != "manual" and manual:
+            raise ValueError("manual title already set")
+        if not rename:
+            return
+        args = ["rename-window", "-t", window, "--", value, ";",
+                "set-option", "-w", "-t", window, "automatic-rename", "off"]
+        if source == "manual":
+            args += [";", "set-option", "-w", "-t", window, "@name_manual", value]
+        run(*args)
+    if is_fid(found):
+        if not os.path.exists(ledger_path(found)):
+            open_id(found, {"window": window, "lazy": True})
+        ev = record_title(found, title, source, update)
+        if source != "manual" and fold(read(found))["opened"].get("title_source") == "manual":
+            raise ValueError("manual title already set")
+        push_later(found)
+        return ev
+    # Older unstamped windows retain their rename behavior; never mint an ID.
+    update(title)
+    return None
+
+
 def open_id(fid, fields, extra_known=()):
     """The spawn's `opened` (idempotent: a second one only fills what the first left)."""
     short = short_for(fid, known_ids(extra_known))
+    fields = dict(fields)
+    explicit_title = clean_title(fields.get("title"))
+    fields["title"] = explicit_title or "会话 " + short
+    fields.setdefault("title_source", "initial" if explicit_title else "default")
     def decide(evs):
         have = fold(evs)["opened"]
         ev = {"ev": "opened"}
@@ -589,6 +737,10 @@ def open_id(fid, fields, extra_known=()):
             return None
         return ev
     append(fid, None, decide=decide)
+    if explicit_title:
+        # A hook may have won the opening race with a default. Promote through
+        # the real naming protocol; never alter opened or overwrite a newer name.
+        record_title(fid, explicit_title, "auto", only_default=True)
     return fold(read(fid))["opened"].get("short") or short
 
 
@@ -1204,6 +1356,8 @@ def _hub_set(fid, seq):
     os.makedirs(hub_dir(), exist_ok=True)
     try:
         size = os.path.getsize(ledger_path(fid))
+        if any(e.get("seq", 0) > seq for e in read(fid)):
+            size = -1  # an unsent suffix must retry even without a new append
     except OSError:
         size = -1
     tmp = os.path.join(hub_dir(), ".%s.%d" % (fid, os.getpid()))
@@ -1391,12 +1545,23 @@ def push_one(fid, call, where=None):
     except OSError:
         return 0
     stuck = 0
+    named_supported = False
     while True:
         events = [e for e in read(fid) if isinstance(e.get("seq"), int)]
         todo = [e for e in events if e["seq"] > seq][:PUSH_BATCH]
         if not todo:
             _hub_set(fid, seq)
             return 0
+        if any(e.get("ev") == "named" for e in todo) and not named_supported:
+            cap_code, caps = call("GET", "/v1/node/ids/capabilities", None)
+            named_supported = cap_code == 200 and isinstance(caps, dict) and caps.get("named") is True
+            if not named_supported:
+                # Older hubs advance seq for unknown events. Hold the named
+                # suffix locally until the hub knows it; never silently lose it.
+                first = next(i for i, e in enumerate(todo) if e.get("ev") == "named")
+                todo = todo[:first]
+                if not todo:
+                    return 75
         code, ans = call("POST", "/v1/node/ids", {"id": fid, "events": todo})
         if code == -3:
             return 3
@@ -1564,7 +1729,7 @@ def cache_put(ans):
 def hub_fold(fid, ans):
     """A hub record (GET /v1/node/ids…) in fold()'s shape, marked src=hub."""
     o = {"short": hub_short(fid, ans.get("short", ""))}
-    for k in ("title", "parent", "prev", "task", "repo", "agent", "key", "machine", "login"):
+    for k in ("title", "title_source", "parent", "prev", "task", "repo", "agent", "key", "machine", "login"):
         if ans.get(k):
             o[k] = ans[k]
     if ans.get("opened_at"):
@@ -2000,6 +2165,23 @@ def main(argv):
         else:
             pos.append(a)
             i += 1
+    if cmd == "title-audit":
+        try:
+            report = title_audit(opts.get("board", ""), opts.get("owner-proof", ""),
+                                 opts.get("ledger-dir", ids_dir()).split(os.pathsep))
+        except (OSError, ValueError) as e:
+            print("fleet-id: audit refused: %s" % e, file=sys.stderr)
+            return 1
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    if cmd in ("name-window", "title-window"):
+        try:
+            name_window(opts.get("window", ""), opts.get("title", ""), opts.get("source", "manual"),
+                        opts.get("socket", ""), opts.get("fid", ""), rename=cmd == "name-window")
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            print("fleet-id: rename failed: %s" % e, file=sys.stderr)
+            return 1
+        return 0
     if cmd == "history":
         lv = live if "FLEET_ID_LIVE" in os.environ else None
         rows = history_rows(lv, include_open="--all" in pos)

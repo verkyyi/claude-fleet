@@ -1471,8 +1471,12 @@ def main(argv=None):
         loc = locate(a.fid)
         if loc is None or not a.name.strip() or len(a.name) > 80:
             return out(dict(ok=False, why="no_session" if loc is None else "bad_name"), 1)
-        tmux(loc[0], "rename-window", "-t", loc[1], a.name)
-        tmux(loc[0], "set-option", "-w", "-t", loc[1], "@name_manual", a.name)
+        import fleet_id
+        try:
+            fleet_id.name_window(loc[1], a.name, socket=loc[0], fid=a.fid,
+                                 binary=os.environ.get("FLEET_GATE_TMUX", "tmux"))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return out(dict(ok=False, why="rename_failed"), 1)
         return out(dict(ok=True))
     if a.cmd == "pending":
         return out(dict(fids=pending_fids()))

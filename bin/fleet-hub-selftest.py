@@ -52,7 +52,7 @@ class Sandbox:
         (repos / ".order").write_text("example-project\n")
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_park_metrics.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-client-core.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
-                         "fleet_loop_mark.py", "fleet_iso.py",
+                         "fleet_loop_mark.py", "fleet_iso.py", "fleet_id.py",
                          "fleet-reap-policy.sh", "fleet_reap_policy.py", "fleet-orphan-reports.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
@@ -69,7 +69,7 @@ if "display-message" in sys.argv and "#{socket_path}" in sys.argv:
     # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server;
     # any other display-message (a window's @repo, #1018) answers as an unset option does
     print("/tmp/fleet-hub-selftest.sock"); sys.exit(0)
-if "display-message" in sys.argv and "#{window_id} #{@fleet_id}" in sys.argv:
+if "display-message" in sys.argv and any(f in sys.argv for f in ("#{window_id} #{@fleet_id}", "#{@fleet_id}")):
     # the rename adapter's check (issue #2358): the window's @fleet_id, the tenth
     # column of workers.tsv, after the window's own id
     win=sys.argv[sys.argv.index("-t") + 1]
@@ -77,7 +77,7 @@ if "display-message" in sys.argv and "#{window_id} #{@fleet_id}" in sys.argv:
     for row in (data.read_text().splitlines() if data.exists() else []):
         cols=row.split("\\t")
         if cols[0] == win:
-            print(win + " " + (cols[9] if len(cols) > 9 else "")); sys.exit(0)
+            print((win + " " if "#{window_id} #{@fleet_id}" in sys.argv else "") + (cols[9] if len(cols) > 9 else "")); sys.exit(0)
     # real tmux: rc 0 and ANOTHER window's answer for an id that is gone
     print("@1 other"); sys.exit(0)
 if "display-message" in sys.argv and "#{window_id}" in sys.argv:
@@ -99,6 +99,8 @@ if "display-message" in sys.argv and "#{@cc_agent}" in sys.argv:
         cols=row.split("\t")
         if cols[0] == win:
             print(cols[5] if len(cols) > 5 else ""); sys.exit(0)
+    print(""); sys.exit(0)
+if "show-options" in sys.argv and "@name_manual" in sys.argv:
     print(""); sys.exit(0)
 if "display-message" in sys.argv:
     print(""); sys.exit(0)
@@ -811,6 +813,7 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident),
                           ("@4", None, True, "/fixture/project-scratch-4", "", "", str(uuid.uuid4())))
         done = self.lifecycle("worker_rename", name="登录页 · 重做 'a b'")
+        self.assertEqual(done["status"], "succeeded", done)
         self.assertEqual((done["status"], done["result"]["window"], done["result"]["name"]),
                          ("succeeded", "@12", "登录页 · 重做 'a b'"), done)
         by_id = self.lifecycle("worker_rename", ident, idem="by-identity", name="短名")

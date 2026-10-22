@@ -772,9 +772,8 @@ print(json.dumps(d))'
     nm=${nm//$'\t'/ }
     # @name_manual (issue #3317): the person's name beats the issue title — this
     # machine's inventory sends it as the row's title= while the window wears it
-    tmux -u -L "$sock" rename-window -t "$win" -- "$nm" \; set-option -w -t "$win" automatic-rename off \
-      \; set-option -w -t "$win" @name_manual "$nm" \
-      || { printf 'rename: tmux refused\n' >&2; exit 1; }
+    python3 "$BIN/fleet_id.py" name-window --window "$win" --socket "$sock" --fid "$have" --title "$nm" --source manual \
+      || { printf 'rename: persistence failed\n' >&2; exit 1; }
     printf 'renamed\n'
     ;;
   # --- pin <sess> <window_id> <fleet_id> on|off (issue #3517) -----------------
