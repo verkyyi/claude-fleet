@@ -253,6 +253,8 @@ def fetch(memory=False):
         RUN_SPEC = spec
     else:
         write(p['pass'], spec['pass'], 0o600)
+        write(os.path.join(p['work'], '.fleet-svc-spec.json'), json.dumps({
+            k: spec[k] for k in ('engine', 'attempt_timeout_s') if k in spec}))
     say('fetched the template (%d bytes) and the inputs' % len(spec['agent_md'].encode()))
     return OK
 
@@ -398,6 +400,7 @@ def session_run(cmd, cwd, cenv, timeout):
 
 
 def run():
+    global RUN_SPEC
     t0 = time.time()
     p = paths()
     try:
@@ -412,6 +415,11 @@ def run():
         else:
             with open(p['pass']) as f:
                 pass_ = f.read().strip()
+            metadata = os.path.join(p['work'], '.fleet-svc-spec.json')
+            if os.path.isfile(metadata):
+                with open(metadata, encoding='utf-8') as f:
+                    RUN_SPEC = json.load(f)
+                RUN_SPEC['pass'] = pass_
     except (OSError, ValueError) as e:
         say('no fetched spec: %s' % e)
         hand_in(INFRA)

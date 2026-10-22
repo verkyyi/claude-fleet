@@ -72,6 +72,19 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(runner.RUN_SPEC['pass'], 'test-session-pass')
                 self.assertFalse(pathlib.Path(root + '/pass').exists())
 
+    def test_legacy_split_entry_preserves_engine(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.dict(os.environ, {'FLEET_SVC_WORK': root, 'FLEET_SVC_PASS_DIR': root + '/pass'}, clear=True), \
+                    patch.object(runner, 'hub', return_value=(200, {'agent_md': 'template', 'pass': 'test-session-pass',
+                                                                  'engine': 'codex', 'attempt_timeout_s': 300})), \
+                    patch.object(runner, 'RUN_SPEC', {}), patch.object(runner, 'run_codex', return_value=0) as codex:
+                self.assertEqual(runner.fetch(), 0)
+                metadata = pathlib.Path(root + '/.fleet-svc-spec.json').read_text()
+                self.assertNotIn('test-session-pass', metadata)
+                self.assertEqual(runner.run(), 0)
+                self.assertTrue(codex.called)
+                self.assertEqual(runner.RUN_SPEC['attempt_timeout_s'], 300)
+
 
 if __name__ == '__main__':
     unittest.main()
