@@ -260,18 +260,18 @@ func TestTrialAlertSetting(t *testing.T) {
 func TestTrialSpend_English(t *testing.T) {
 	sum := TrialSpend{New: 6, Active: 14, Tokens: 18200000, BYO: 18200000, Over: 1,
 		Line:     trialAlertLine{PersonDay: 1000000, AllDay: 30000000, Daily: true},
-		Machines: []TrialSpendMachine{{Node: "macmini", LoadPct: 52}}}
+		Machines: []TrialSpendMachine{{Node: "mac-a", LoadPct: 52}}}
 	sent := time.Date(2026, 10, 21, 1, 0, 0, 0, time.UTC)
 	got := trialDailyMsg(sum, sent, true, "https://h/x")
 	for _, want := range []string{"ClaudeFleet trial daily · Oct 21", "New 6 people", "Active 14 people",
-		"Trial usage 18.2M tokens (pool 0 · own subscriptions 18.2M)", "Machines macmini load 52%",
+		"Trial usage 18.2M tokens (pool 0 · own subscriptions 18.2M)", "Machines mac-a load 52%",
 		"Watch 1 person over 1M tokens in a day", "View details https://h/x"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lacks %q:\n%s", want, got)
 		}
 	}
 	zh := trialDailyMsg(sum, sent, false, "")
-	if !strings.Contains(zh, "试用用量 1,820 万 tokens（池子 0 · 自带订阅 1,820 万）") || !strings.Contains(zh, "机器 macmini 负载 52%") ||
+	if !strings.Contains(zh, "试用用量 1,820 万 tokens（池子 0 · 自带订阅 1,820 万）") || !strings.Contains(zh, "机器 mac-a 负载 52%") ||
 		!strings.Contains(zh, "需要看 1 人单日超 100 万 tokens") {
 		t.Errorf("zh:\n%s", zh)
 	}

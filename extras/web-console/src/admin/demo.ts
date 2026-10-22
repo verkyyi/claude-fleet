@@ -141,7 +141,7 @@ const keys = (bad: boolean): ReleaseKeys => ({
 function trialSpendDemo(day: string, empty: boolean): TrialSpend {
   const yesterday = new Date(now + 8 * 3_600_000 - 86_400_000).toISOString().slice(0, 10);
   const line = { person_day: 1_000_000, all_day: 30_000_000, daily: true };
-  const base = { day: day || yesterday, line, machines: [{ node: "macmini", load_pct: 52 }, { node: "mini2", load_pct: 61 }] };
+  const base = { day: day || yesterday, line, machines: [{ node: "mac-mini", load_pct: 52 }, { node: "mac-studio", load_pct: 61 }] };
   if (empty) return { ...base, new: 0, active: 0, tokens: 0, pool: 0, byo: 0, by_source: { subscription: 0, api: 0, byo: 0 }, over: 0, all_over: false, people: [] };
   const names = ["小林", "阿杰", "Mia", "王小雨", "kevin.z", "陈默", "Lucy", "周周", "老高", "sam", "李想", "Nora", "小鹿", "Tom"];
   const tokens = [1_420_000, 960_000, 940_000, 910_000, 880_000, 850_000, 820_000, 790_000, 760_000, 730_000, 700_000, 680_000, 650_000, 610_000];
