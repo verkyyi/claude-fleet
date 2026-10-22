@@ -1,6 +1,6 @@
 # Self-host · Quickstart
 
-Goal: fleet installed on one computer of your own and your first session open, in about 10 minutes. With a hub, install from the hub; with none, this one computer works on its own. When you later want to connect several machines or create accounts for colleagues, see [Install and deploy](install.md).
+Goal: Tokenman installed on one computer of your own and your first session open, in about 10 minutes. With a hub, install from the hub; with none, this one computer works on its own. When you later want to connect several machines or create accounts for colleagues, see [Install and deploy](install.md).
 
 ## What you need
 

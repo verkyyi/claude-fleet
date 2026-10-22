@@ -10,7 +10,7 @@ Paste the line your admin sent you into the terminal and press Enter. It looks l
 curl -fsSL https://hub.example.com/i/<invite-code> | sh
 ```
 
-It asks no questions, and opens the fleet client when it is done.
+It asks no questions, and opens the Tokenman client when it is done.
 
 ## 2. Sign in
 
