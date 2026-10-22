@@ -43,10 +43,9 @@ class Timers(fixture.Park):
                  message=dict(content=[dict(type='tool_result', tool_use_id='u', content='ok')]))]) + '\n')
         import fleet_loop_mark as mark
         self.set('@loop', mark.apply('', dict(tool_name=name, tool_input=inp, tool_response=dict(id='job-1')), at))
-        launch = self.root / 'launch'
-        text = launch.read_text()
-        text = text.replace('exec python3 ', 'printf "%s\\n" "$@" >> ' + str(self.root / 'launch-args') + '\nexec python3 ', 1)
-        launch.write_text(text)
+        # The shared park fixture records every launch, including its initial
+        # empty argv. Count only subsequent resumes; do not install a second logger.
+        (self.root / 'launch-args').unlink()
 
     def tick(self, now=None):
         args = [sys.executable, str(BIN / 'fleet_park_wake.py'), 'tick', '--fid', self.fid]

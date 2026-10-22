@@ -193,9 +193,9 @@ def export(fid):
             if set(journal['records']) != {r['id'] for r in own}:
                 raise ValueError('durable process/session ownership differs')
             durable.take_gate(journal)
-            for native in journal['jobs']:
-                job = cron_job(native['id'], dict(cron=native['cron'], prompt=native['prompt'], recurring=False), at, 'durable')
-                job['next'] = native['next_run_at']
+            for durable_job in journal['jobs']:
+                job = cron_job(durable_job['id'], dict(cron=durable_job['cron'], prompt=durable_job['prompt'], recurring=False), at, 'durable')
+                job['next'] = durable_job['next_run_at']
                 known.setdefault(job['id'], job)
             record['durable'] = True
         record.update(jobs=list(known.values()), phase='prepared', parked=True)
