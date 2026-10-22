@@ -6404,10 +6404,11 @@ drill_park_reap_exceptions() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-cleanup-idle-selftest.py" \
+    ParkTable.test_finished_probe_keeps_its_one_minute_policy \
     ParkTable.test_decide_keeps_idle_policy_except_reported_waiting \
     ParkTable.test_park_refusal_reaches_doctor 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='decide 保留 idle:15m，明确 waiting 才用停放三天；拒停原因送到 doctor，不伪报过去的停放时刻'
+  WHAT='decide 保留 idle:15m，明确 waiting 才用停放三天；probe 做完一分钟仍走原回收门；拒停原因送到 doctor'
 }
 
 drill_park_drops_dialog() {

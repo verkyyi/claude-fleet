@@ -2167,6 +2167,25 @@ class ParkTable(unittest.TestCase):
     """C6: drive fleet-cleanup-idle.py and fleet_reap_policy.py for every origin.
     The E101 real tmux/history round trip below proves the close is resumable.
     """
+    def test_finished_probe_keeps_its_one_minute_policy(self):
+        args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
+                                  base="master", window_repo=False, dry_run=False)
+        c = idle.Cleaner(args)
+        c.now, c._mem = 200, (False, "")
+        with patch.object(c, "tm", return_value=""):
+            snap = c.snapshot("@9")
+        snap.update({"@reap_origin": "probe", "@reap_policy": "done:1m", "@park_wrap_ver": "1",
+                     "@claude_state": "done", "@claude_state_ts": "100",
+                     "@test_identity": "1", "@norepo": "1"})
+        with patch.object(c, "work_over", return_value=False), patch.object(c, "waiting", return_value=None), \
+                patch.object(c, "test_session", return_value=False) as reap, \
+                patch.object(idle, "run") as gate:
+            c.road("@9", snap)
+            # The official reaper, including its live / history checks, gets
+            # to decide. Five-minute parking must not delay a finished probe.
+            reap.assert_called_once_with("@9", snap)
+            gate.assert_not_called()
+
     def test_decide_keeps_idle_policy_except_reported_waiting(self):
         args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
                                   base="master", window_repo=False, dry_run=True)
