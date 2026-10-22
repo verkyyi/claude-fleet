@@ -84,6 +84,8 @@ var alertWords = map[string]string{
 	store.AlertSvcDegraded:         "服务运行告警 / service runs degraded",
 	store.AlertTrialCodeBurst:      "试用二维码暂停 / trial code paused",
 	store.AlertEntryHostKeyChanged: "入口主机钥匙换了 / entry host key changed",
+	store.AlertFleetUnderived:      "机器的会话不在 hub 名单里 / a machine's sessions are off the hub's list",
+	store.AlertPoolRelogin:         "订阅需重新登录 / a subscription needs a new login",
 }
 
 // queueLongDetail is queue_long's detail.
@@ -205,6 +207,8 @@ func alertMessage(a store.FleetAlert) string {
 				line += "：" + d.Last[n-1].Why
 			}
 		}
+	case store.AlertFleetUnderived, store.AlertPoolRelogin:
+		line = alertLine(a)
 	case store.AlertNodeLost:
 		var d struct {
 			Hostname string `json:"hostname"`

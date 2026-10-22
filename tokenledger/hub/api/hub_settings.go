@@ -184,6 +184,8 @@ var hubSettings = map[string]hubSetting{
 		check: checkIntSetting(TrialDailyKey, 0, 10000, defaultTrialDaily)},
 	TrialEgressKey: {def: "off", help: "what a trial login may reach (WACK C3): off — anything, as any login; log — anything, and what block would refuse is written to the machine's egress-deny.log; block — only conf/trial-egress.allow, the hub and DNS, mail ports 25/465/587 never. Each machine applies it within a minute (pf anchor fleet-trial); FLEET_TRIAL_EGRESS in a machine's machine.env overrides it there. 试用账号能连到哪：off 不限；log 不拦只记；block 只能连白名单",
 		check: checkTrialEgress},
+	TrialAlertKey: {def: trialAlertDefault, help: "试用花费的线 (WACK C6): person_day — one trial identity's tokens in a Beijing day, all_day — every trial identity's together; past either the admins get one 「试用用量超线」 (once per person per day, once for everyone per day; trial_spend). 0 = that line not watched; daily=off keeps the 09:00 「试用日报」 in; off = neither. Tokens count input + cache write + output, as /v1/admin/usage",
+		check: checkTrialAlert},
 	TrialOnceKey: {def: "on", help: "one trial per account (WeChat by unionid, else openid; an address; a GitHub account): a second one is told it has tried and pointed at /apply (claude-fleet#4058)",
 		check: onOff(TrialOnceKey, "on")},
 	TrialCredAllowKey: {def: `"*"`, help: "the subscriptions a trial person may use (they are never listed one by one): \"*\" every one the trial is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, [] none — trials then wait 「试用暂时没有可用订阅」; approval writes it as the new member's own list (claude-fleet#4260)",

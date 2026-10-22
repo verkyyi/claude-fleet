@@ -7,6 +7,8 @@
 // the theme's (extras/fleet-theme), read off the page's CSS variables at draw
 // time, never spelled here. The words and the layout are plain functions so
 // test/poster.mjs can hold them without a browser.
+import { BRAND } from "../shared/brand.ts";
+
 export type PosterLang = "zh" | "en";
 export const W = 1080;
 export const H = 1440;
@@ -46,7 +48,7 @@ export function posterWords(c: PosterCode, l: PosterLang, defaultTerms: string):
   const until = zeroTime(c.until) ? "" : new Date(Date.parse(c.until) + 8 * 3600_000).toISOString().slice(0, 10);
   if (l === "zh") {
     return {
-      brand: "ClaudeFleet",
+      brand: BRAND,
       badge: "免费试用",
       head: ["随时在线的", "Claude Code"],
       sub: "说一句话，它替你做完，做好了提醒你。手机上就能用。",
@@ -63,7 +65,7 @@ export function posterWords(c: PosterCode, l: PosterLang, defaultTerms: string):
     };
   }
   return {
-    brand: "ClaudeFleet",
+    brand: BRAND,
     badge: "Free trial",
     head: ["Claude Code,", "always on"],
     sub: "Say what you need — it does the work and tells you when it is done. Your phone is enough.",

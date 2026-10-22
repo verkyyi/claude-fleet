@@ -417,7 +417,7 @@ func (s *Server) wxTemplate(kind string) string {
 	switch kind {
 	case store.NotifyKindNewReq, store.NotifyKindUpgrade, store.NotifyKindQRBurst:
 		return s.WxGW.TplNewReq
-	case store.NotifyKindNotice:
+	case store.NotifyKindNotice, store.NotifyKindTrialPurge:
 		return s.WxGW.TplNotice
 	}
 	return s.WxGW.TplReview
@@ -579,6 +579,8 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 			return noticeMsg{}, false, nil // resumed already
 		}
 		return qrBurstMsg(code, en, base), true, nil
+	case store.NotifyKindTrialPurge:
+		return s.trialPurgeNoticeMsg(n, en, base)
 	}
 	return noticeMsg{}, false, errors.New("no notice of kind " + n.Kind)
 }
@@ -606,26 +608,26 @@ func reviewMsg(req *store.AccessRequest, en bool, base string) noticeMsg {
 	var head, content, advice, why string
 	switch {
 	case ok && en:
-		head, content, advice = "ClaudeFleet: your request is approved", "ClaudeFleet: your request to use it is approved", "Open ClaudeFleet and start"
+		head, content, advice = Brand+": your request is approved", Brand+": your request to use it is approved", "Open "+Brand+" and start"
 	case ok:
-		head, content, advice = "ClaudeFleet：申请已通过", "ClaudeFleet：你的使用申请已通过", "打开 ClaudeFleet 开始使用"
+		head, content, advice = Brand+"：申请已通过", Brand+"：你的使用申请已通过", "打开 "+Brand+" 开始使用"
 	case en:
-		head = "ClaudeFleet: your request was not approved"
-		content = "ClaudeFleet: your request was not approved: " + req.Reason
+		head = Brand + ": your request was not approved"
+		content = Brand + ": your request was not approved: " + req.Reason
 		advice = "You may ask again now"
 		if !req.CooldownUntil.IsZero() {
 			advice = "You may ask again from " + req.CooldownUntil.In(beijing).Format("2006-01-02")
 		}
 	default:
-		head = "ClaudeFleet：申请未通过"
-		content = "ClaudeFleet：你的使用申请未通过：" + req.Reason
+		head = Brand + "：申请未通过"
+		content = Brand + "：你的使用申请未通过：" + req.Reason
 		advice = "现在就可以再申请"
 		if !req.CooldownUntil.IsZero() {
 			advice = req.CooldownUntil.In(beijing).Format("2006-01-02") + " 起可以再申请"
 		}
 	}
 	m.Tpl = map[string]string{
-		"thing3":             ternary(en, "ClaudeFleet access", "ClaudeFleet 使用申请"),
+		"thing3":             ternary(en, Brand+" access", Brand+" 使用申请"),
 		"character_string14": wxAccount(req),
 		"thing5":             ternary(ok, ternary(en, "Approved", "已通过"), ternary(en, "Not approved", "未通过")),
 		"time6":              noticeTime(req.DecidedAt, false),
@@ -637,13 +639,13 @@ func reviewMsg(req *store.AccessRequest, en bool, base string) noticeMsg {
 		if m.Link != "" {
 			b.WriteString("\nYour request: " + m.Link + "\n")
 		}
-		why = "You got this mail because you asked to use ClaudeFleet and chose to hear the result here."
+		why = "You got this mail because you asked to use " + Brand + " and chose to hear the result here."
 	} else {
 		b.WriteString(content + "\n\n审核时间：" + when + "\n" + advice + "。\n")
 		if m.Link != "" {
 			b.WriteString("\n你的申请：" + m.Link + "\n")
 		}
-		why = "你收到这封信，是因为你申请使用 ClaudeFleet 时选了用这个邮箱接收结果。"
+		why = "你收到这封信，是因为你申请使用 " + Brand + " 时选了用这个邮箱接收结果。"
 	}
 	b.WriteString("\n" + why + "\n")
 	m.Body = b.String()
@@ -665,16 +667,16 @@ func newReqMsg(waiting []store.AccessRequest, en bool, base string) noticeMsg {
 	n := len(waiting)
 	var head, content, advice string
 	if en {
-		head = fmt.Sprintf("ClaudeFleet: %d new request(s) to review", n)
-		content = fmt.Sprintf("ClaudeFleet: %d new request(s) to review (%s", n, name)
+		head = fmt.Sprintf(Brand+": %d new request(s) to review", n)
+		content = fmt.Sprintf(Brand+": %d new request(s) to review (%s", n, name)
 		if n > 1 {
 			content += " and others"
 		}
 		content += ")"
 		advice = "Tap to review it"
 	} else {
-		head = fmt.Sprintf("ClaudeFleet：%d 条新申请待审核", n)
-		content = fmt.Sprintf("ClaudeFleet：%d 条新申请待审核（%s", n, name)
+		head = fmt.Sprintf(Brand+"：%d 条新申请待审核", n)
+		content = fmt.Sprintf(Brand+"：%d 条新申请待审核（%s", n, name)
 		if n > 1 {
 			content += " 等"
 		}
@@ -686,7 +688,7 @@ func newReqMsg(waiting []store.AccessRequest, en bool, base string) noticeMsg {
 		who = clipRunes(oneLine(firstSet(first.Display, first.Kind)), 12) + ternary(en, fmt.Sprintf(" +%d", n-1), fmt.Sprintf(" 等 %d 人", n))
 	}
 	m.Tpl = map[string]string{
-		"thing1":             "ClaudeFleet",
+		"thing1":             Brand,
 		"thing2":             clipRunes(who, 20),
 		"time6":              noticeTime(first.CreatedAt, false),
 		"character_string10": fmt.Sprint(n),
@@ -701,13 +703,13 @@ func newReqMsg(waiting []store.AccessRequest, en bool, base string) noticeMsg {
 		if m.Link != "" {
 			m.Body += "\nReview: " + m.Link + "\n"
 		}
-		m.Body += "\nYou got this mail because you are an admin of ClaudeFleet and someone asked to use it.\n"
+		m.Body += "\nYou got this mail because you are an admin of " + Brand + " and someone asked to use it.\n"
 	} else {
 		m.Body = content + "\n\n" + b.String()
 		if m.Link != "" {
 			m.Body += "\n去审核：" + m.Link + "\n"
 		}
-		m.Body += "\n你收到这封信，是因为你是 ClaudeFleet 的管理员，有人提交了使用申请。\n"
+		m.Body += "\n你收到这封信，是因为你是 " + Brand + " 的管理员，有人提交了使用申请。\n"
 	}
 	m.Text = content + "\n" + advice
 	if m.Link != "" {
@@ -726,12 +728,12 @@ func upgradeMsg(pid, name string, at time.Time, en bool, base string) noticeMsg 
 	name = clipRunes(oneLine(name), 20)
 	var head, advice string
 	if en {
-		head, advice = "ClaudeFleet: "+name+" asks to become a member", "Tap to open them and make them a member"
+		head, advice = Brand+": "+name+" asks to become a member", "Tap to open them and make them a member"
 	} else {
-		head, advice = "ClaudeFleet："+name+" 申请转正", "点开直达成员页，一键转正"
+		head, advice = Brand+"："+name+" 申请转正", "点开直达成员页，一键转正"
 	}
 	m.Tpl = map[string]string{
-		"thing1":             "ClaudeFleet",
+		"thing1":             Brand,
 		"thing2":             clipRunes(name+ternary(en, " · member", " · 转正"), 20),
 		"time6":              noticeTime(at, false),
 		"character_string10": "1",
@@ -742,13 +744,13 @@ func upgradeMsg(pid, name string, at time.Time, en bool, base string) noticeMsg 
 		if m.Link != "" {
 			m.Body += "\nOpen: " + m.Link + "\n"
 		}
-		m.Body += "\nYou got this mail because you are an admin of ClaudeFleet and a trial member asked to become a member.\n"
+		m.Body += "\nYou got this mail because you are an admin of " + Brand + " and a trial member asked to become a member.\n"
 	} else {
 		m.Body = head + "（试用中）。\n\n申请时间：" + noticeTime(at, false) + "\n"
 		if m.Link != "" {
 			m.Body += "\n去处理：" + m.Link + "\n"
 		}
-		m.Body += "\n你收到这封信，是因为你是 ClaudeFleet 的管理员，有试用成员申请转正。\n"
+		m.Body += "\n你收到这封信，是因为你是 " + Brand + " 的管理员，有试用成员申请转正。\n"
 	}
 	m.Text = head + "\n" + advice
 	if m.Link != "" {
@@ -766,12 +768,12 @@ func qrBurstMsg(code *store.TrialCode, en bool, base string) noticeMsg {
 	ch := clipRunes(oneLine(code.Channel), 20)
 	var head, advice string
 	if en {
-		head, advice = "ClaudeFleet: trial code "+ch+" paused itself", "Too many trials too fast — check it, then resume or keep it stopped"
+		head, advice = Brand+": trial code "+ch+" paused itself", "Too many trials too fast — check it, then resume or keep it stopped"
 	} else {
-		head, advice = "ClaudeFleet：试用码「"+ch+"」已自动暂停", "开通太快，像是有人在刷号——看看再决定恢复还是停用"
+		head, advice = Brand+"：试用码「"+ch+"」已自动暂停", "开通太快，像是有人在刷号——看看再决定恢复还是停用"
 	}
 	m.Tpl = map[string]string{
-		"thing1":             "ClaudeFleet",
+		"thing1":             Brand,
 		"thing2":             clipRunes(ch+ternary(en, " · paused", " · 已暂停"), 20),
 		"time6":              noticeTime(code.UpdatedAt, false),
 		"character_string10": "1",
@@ -859,7 +861,7 @@ func serviceNoticeMsg(sn *store.ServiceNotice, en bool, base string, fields [][2
 	if m.Link == "" && base != "" {
 		m.Link = base + "/app"
 	}
-	title := ternary(en, "ClaudeFleet service notice", "ClaudeFleet 服务通知")
+	title := ternary(en, Brand+" service notice", Brand+" 服务通知")
 	when := noticeTime(sn.CreatedAt, en)
 	m.Subject = title + ternary(en, ": ", "：") + clipRunes(oneLine(sn.Body), 40)
 	m.Tpl = map[string]string{}
@@ -894,10 +896,10 @@ func serviceNoticeMsg(sn *store.ServiceNotice, en bool, base string, fields [][2
 	}
 	if en {
 		b.WriteString("\nSent: " + when + "\n")
-		b.WriteString("\nYou got this mail because you are a member of ClaudeFleet; it is a service notice about your account.\n")
+		b.WriteString("\nYou got this mail because you are a member of " + Brand + "; it is a service notice about your account.\n")
 	} else {
 		b.WriteString("\n发送时间：" + when + "\n")
-		b.WriteString("\n你收到这封信，是因为你是 ClaudeFleet 的成员；这是和你的账号有关的服务通知。\n")
+		b.WriteString("\n你收到这封信，是因为你是 " + Brand + " 的成员；这是和你的账号有关的服务通知。\n")
 	}
 	m.Body = b.String()
 	m.Text = title + "\n" + sn.Body

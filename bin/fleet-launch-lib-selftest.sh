@@ -26,8 +26,9 @@
 #      and the agent's pending-id option names the thread a resume was opened for
 #   F  the credential proxy refuses alike: 404 ⇒ @launch_refused cred_unknown, any
 #      other failure ⇒ cred — exit 1, the agent never runs; a proxy that is only
-#      restarting (T904: fails, then answers within FLEET_CRED_MINT_WAIT) is waited
-#      for — said once, the agent runs on the credential minted after it came back
+#      restarting (T904: mint exit 6 «not answering», then answers within
+#      FLEET_CRED_MINT_WAIT) is waited for — said once; an answer (1, 5) never is
+#      (T914) — the agent runs on the credential minted after it came back
 #   G  the mint starts early (T683, a cold start ≤ 5 s): it runs beside the composed
 #      configuration (it sees the composer's manifest appear while it is still
 #      minting), its credential reaches the agent, its --wrap is the launcher (the
@@ -223,24 +224,32 @@ ok "E the resume spelling is the table's per agent; the pending-id option names 
 
 # ---- F: the credential proxy refuses alike ------------------------------------------------------
 rm "$INST/bin/fleet-session-cred.sh"
-for rc in 5 1; do
+for rc in 5 1 6; do
   printf '#!/bin/sh\nexit %s\n' "$rc" > "$INST/bin/fleet-session-cred.sh"; chmod +x "$INST/bin/fleet-session-cred.sh"
   want=cred; [ "$rc" = 5 ] && want=cred_unknown
+  # T914: an answer (1, 5) is refused at once — only «not answering» (6) is waited out
+  wait=30; [ "$rc" = 6 ] && wait=1
   for a in $AGENTS; do
-    fresh; launch FLEET_CRED_SID=sid-test FLEET_CRED_MINT_WAIT=1 -- --agent "$a" x
+    fresh; t0=$SECONDS; launch FLEET_CRED_SID=sid-test FLEET_CRED_MINT_WAIT=$wait -- --agent "$a" x
+    if [ "$rc" = 6 ]; then
+      grep -q 'not answering — waiting' "$WORK/err" || fail "F $a: mint rc 6 was not waited for" "$(cat "$WORK/err")"
+    else
+      [ $((SECONDS - t0)) -lt 10 ] && ! grep -q 'waiting for it' "$WORK/err" \
+        || fail "F $a: mint rc $rc (an answer) was waited for ($((SECONDS - t0)) s)" "$(cat "$WORK/err")"
+    fi
     [ "$(cat "$WORK/rc")" = 1 ] || fail "F $a: mint rc $rc ⇒ exit $(cat "$WORK/rc"), want 1" "$(cat "$WORK/err")"
     [ ! -e "$WORK/argv.$a" ] || fail "F $a: the agent ran after a refused mint"
     [ "$(stamp @launch_refused)" = "$want" ] || fail "F $a: @launch_refused [$(stamp @launch_refused)], want $want"
     grep -q "^fleet-$a: " "$WORK/err" || fail "F $a: the refusal is not said in its own name" "$(cat "$WORK/err")"
   done
 done
-ok "F a refused session credential: exit 1, @launch_refused cred / cred_unknown, the agent never runs — both agents"
+ok "F a refused session credential: exit 1, @launch_refused cred / cred_unknown, the agent never runs; an answer (1, 5) at once, «not answering» (6) after the wait — both agents"
 # T904: the proxy restarting — two failed mints, then it answers: the launch waits
 cat > "$INST/bin/fleet-session-cred.sh" <<EOF
 #!/bin/sh
 case "\$1" in
   mint) n=\$(cat "$WORK/mint.n" 2>/dev/null || echo 0); echo \$((n + 1)) > "$WORK/mint.n"
-        [ "\$n" -ge 2 ] || exit 1
+        [ "\$n" -ge 2 ] || exit 6
         printf 'direct\t4321\tfcp1.back\n' ;;
   codex-home) mkdir -p "$WORK/chome"; printf '%s\n' "$WORK/chome" ;;
   standing) exit 0 ;;

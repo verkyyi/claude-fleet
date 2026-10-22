@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BRAND } from "@/shared/brand";
 import { Logo } from "@/shared/Logo";
 import { api } from "./api";
 import { t } from "./i18n";
@@ -50,6 +51,7 @@ function useCounts(pathname: string): Record<string, number> {
 export function AdminShell() {
   const { pathname } = useLocation();
   const counts = useCounts(pathname);
+  React.useEffect(() => { document.title = `${BRAND} · ${t("brand.admin")}`; }, []);
   return (
     <TooltipProvider>
       <Search>
@@ -58,7 +60,7 @@ export function AdminShell() {
             <SidebarHeader className="px-4 pt-5 pb-3">
               <div className="flex items-center gap-2.5">
                 <Logo className="size-7" />
-                <span className="font-display text-base font-semibold text-foreground">ClaudeFleet</span>
+                <span className="font-display text-base font-semibold text-foreground">{BRAND}</span>
                 <Badge variant="outline" className="border-clay-line bg-clay-soft text-clay">
                   {t("brand.admin")}
                 </Badge>
@@ -114,7 +116,7 @@ export function AdminShell() {
           <SidebarInset className="min-w-0">
             <header className="flex h-12 items-center gap-2 border-b px-4 md:hidden">
               <SidebarTrigger />
-              <span className="font-display text-sm font-semibold whitespace-nowrap">ClaudeFleet · {t("brand.admin")}</span>
+              <span className="font-display text-sm font-semibold whitespace-nowrap">{BRAND} · {t("brand.admin")}</span>
               <SearchButton className="ml-auto w-auto" />
             </header>
             <Outlet />

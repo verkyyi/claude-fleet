@@ -142,9 +142,9 @@ func (c *smtpConf) send(ctx context.Context, to, subject, body string) error {
 // reads a reply. A mail that says who sent it and why is less often filed
 // as spam, and a person who never asked knows what to do.
 const mailFooter = "\n--\n" +
-	"为什么收到这封信：有人在 ClaudeFleet 上填了这个邮箱（登录，或接收和这个账号有关的通知）。" +
+	"为什么收到这封信：有人在 " + Brand + " 上填了这个邮箱（登录，或接收和这个账号有关的通知）。" +
 	"这封信由系统自动发出，请勿回复；如果不是你本人操作，忽略即可。\n" +
-	"Why this mail: this address was entered on ClaudeFleet (to sign in, or for notices about its account). " +
+	"Why this mail: this address was entered on " + Brand + " (to sign in, or for notices about its account). " +
 	"It was sent automatically; please don't reply. If it wasn't you, just ignore it.\n"
 
 // buildMail is one RFC 5322 message: UTF-8 text, base64, a subject encoded

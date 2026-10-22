@@ -138,7 +138,15 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 		log.Printf("node %s: heartbeat machine_id %q is not a canonical UUID; fleets not registered", ep.ID, hb.MachineID)
 		return
 	}
+	host, user := hb.Hostname, hb.OSUser
+	if host == "" {
+		host = ep.Hostname
+	}
+	if user == "" {
+		user = ep.OSUser
+	}
 	reports := make([]store.FleetReport, 0, len(hb.Fleets))
+	underived := map[string]bool{}
 	for _, f := range hb.Fleets {
 		if !fleetid.IsUUID(f.FleetID) {
 			log.Printf("node %s: fleet %q has no canonical UUID; skipped", ep.ID, f.Name)
@@ -147,7 +155,10 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 		if verify {
 			want, _ := fleetid.FleetID(hb.MachineID, f.Name, f.Repo, f.Checkout)
 			if want != f.FleetID {
-				log.Printf("node %s: fleet %s (%s) does not derive from machine %s; skipped", ep.ID, f.FleetID, f.Name, hb.MachineID)
+				// Once a window per (endpoint, fleet), and an alert: its
+				// sessions are off the hub's list (T906).
+				underived[ep.ID+"/"+f.FleetID] = true
+				s.fleetUnderived(ep, host, user, hb.MachineID, f, at)
 				continue
 			}
 		}
@@ -157,12 +168,8 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 			Repos: reportedRepos(f.Repos), State: f.State, WorkerCount: f.Count, WorkersJSON: string(workers),
 		})
 	}
-	host, user := hb.Hostname, hb.OSUser
-	if host == "" {
-		host = ep.Hostname
-	}
-	if user == "" {
-		user = ep.OSUser
+	if verify {
+		s.settleUnderived(ep, underived, reconnect, at)
 	}
 	rejected, err := s.Store.RecordFleetSnapshot(ep.ID, host, user, hb.MachineID, reports, at)
 	if err != nil {

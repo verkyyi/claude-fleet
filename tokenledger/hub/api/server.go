@@ -247,6 +247,9 @@ type Server struct {
 	// into the next (claude-fleet#4060); nil = through the person's own chat
 	// relay. Tests put a stand-in here.
 	trialConvoIO trialConvoIO
+	// trialStopHook stops one ended trial's session in a test (nil = the
+	// operator's worker_stop, claude-fleet WACK C8).
+	trialStopHook func(ctx context.Context, workerID string) error
 	// trialSlots holds which trials are being released now, and when the kept
 	// conversations were last purged (claude-fleet#4060).
 	trialSlotSt trialSlotState
@@ -486,6 +489,11 @@ type Server struct {
 	// httpStats counts this replica's requests and 5xx per minute, for the
 	// post-release watch (fleet_release_canary.go, claude-fleet#4915).
 	httpStats httpStats
+	// logQuiet keeps a repeating line to once a window per signature (T906).
+	logQuiet logQuiet
+	// underivedEPs: endpoints this replica raised fleet_underived for (T906).
+	underivedMu  sync.Mutex
+	underivedEPs map[string]bool
 }
 
 // Handler builds the router.
@@ -997,6 +1005,7 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
 	mux.Handle(AdminOverviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminOverview))))
 	mux.Handle(AdminUsagePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminUsage))))
+	mux.Handle(TrialSpendPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTrialSpend))))
 
 	// The public counter (claude-fleet#1988): the hub's one lifetime total,
 	// readable by anyone while hub.public_meter is on, so example.com's
@@ -1143,7 +1152,14 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		if strings.HasPrefix(path, InvitePath) {
 			path = InvitePath + "…"
 		}
-		line := fmt.Sprintf("%s %s %d %s", r.Method, path, sw.status, time.Since(start).Round(time.Millisecond))
+		took := time.Since(start).Round(time.Millisecond)
+		line := fmt.Sprintf("%s %s %d %s", r.Method, path, sw.status, took)
+		if sw.status == http.StatusUnauthorized || sw.status == http.StatusForbidden {
+			// A refusal names its source, once a window per source (T906).
+			if line = s.rejectedLine(r, path, sw.status, took, time.Now()); line == "" {
+				return
+			}
+		}
 		if viewer != "" {
 			line += " viewer=" + viewer
 		}

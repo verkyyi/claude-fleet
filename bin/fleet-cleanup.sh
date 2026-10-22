@@ -57,7 +57,11 @@
 #                    task session is over). Unknown (no hub answer) defers too.
 #   skip:migrating   reap refused: the window is being reopened (@migrating, issue
 #                    #2321 — a quota move, a cfg-stale / ver-stale reopen)
-#   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
+#   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2. Asking gh
+#                    about the PR (T905): error:pr-not-found only when GitHub SAYS
+#                    there is no such PR / repo; error:gh-rate-limit when it says
+#                    a limit; error:gh-failed for any other failure (network, auth,
+#                    5xx) — the daemon backs off those and tombstones the first.
 #
 # A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
 # reap on the PR state alone. #534's worker deleted its own remote branch after a
@@ -189,7 +193,16 @@ pr_fields() {
     --json state,headRefOid,headRefName,closedAt,mergedAt,closingIssuesReferences \
     --jq '[.state, .headRefOid, .headRefName, (.closedAt // "-"), (.mergedAt // "-"),
            ([.closingIssuesReferences[]? | "\(.repository.owner.login)/\(.repository.name)#\(.number)"]
-            | if length == 0 then "-" else join(",") end)] | @tsv' 2>/dev/null
+            | if length == 0 then "-" else join(",") end)] | @tsv'
+}
+
+# gh_miss_kind <stderr file> → what an EMPTY pr_fields means (T905): `absent` only
+# when GitHub said so, `rate-limit` when it said a limit, else `failed` — a
+# network / auth / 5xx failure is not proof the PR is gone.
+gh_miss_kind() {
+  if grep -qiE 'rate.?limit|HTTP 429|abuse detection' "$1" 2>/dev/null; then echo rate-limit
+  elif grep -qiE 'Could not resolve to a (PullRequest|Repository)|no pull requests? found|HTTP 404' "$1" 2>/dev/null; then echo absent
+  else echo failed; fi
 }
 
 # land_fields <branch> → the same TSV from git (issue #3601): MERGED at the landing
@@ -218,8 +231,19 @@ if [ -n "$BRANCH_ARG" ]; then
   [ "$_lf" = 2 ] && { note "fleet-cleanup: cannot fetch $REPO's $BASE — not deciding."; done_token "error:no-remote"; exit 2; }
   [ -z "$fields" ] && { note "fleet-cleanup: no branch $BRANCH_ARG in $MAIN."; done_token "skip:nothing"; exit 0; }
 else
-  fields=$(pr_fields "$PR")
-  [ -z "$fields" ] && { note "fleet-cleanup: PR #$PR not found on $REPO."; done_token "error:pr-not-found"; exit 2; }
+  _gherr=$(mktemp "${TMPDIR:-/tmp}/fleet-cleanup-gh.XXXXXX" 2>/dev/null) || _gherr=/dev/null
+  fields=$(pr_fields "$PR" 2>"$_gherr")
+  if [ -z "$fields" ]; then
+    _said=$(grep -m1 . "$_gherr" 2>/dev/null | cut -c1-200)
+    _kind=$(gh_miss_kind "$_gherr"); [ "$_gherr" = /dev/null ] || rm -f "$_gherr"
+    case "$_kind" in
+      absent) note "fleet-cleanup: PR #$PR not found on $REPO${_said:+ ($_said)}."; done_token "error:pr-not-found" ;;
+      rate-limit) note "fleet-cleanup: gh rate-limited reading PR #$PR on $REPO${_said:+: $_said}"; done_token "error:gh-rate-limit" ;;
+      *) note "fleet-cleanup: gh could not read PR #$PR on $REPO${_said:+: $_said}"; done_token "error:gh-failed" ;;
+    esac
+    exit 2
+  fi
+  [ "$_gherr" = /dev/null ] || rm -f "$_gherr"
 fi
 IFS=$'\t' read -r st oid href closed_at merged_at closes <<<"$fields"
 # BRANCH is what the teardown addresses; ISSUE stays the issue-<N> identity (the

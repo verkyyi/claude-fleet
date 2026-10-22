@@ -3,6 +3,7 @@ import path from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { BRAND } from "./src/shared/brand";
 
 // One project, one build per side — the mode is the side (EPIC #3923 rule 3):
 //   vite build --mode app     app/index.html → dist/app, served at /app/ (C3)
@@ -41,7 +42,7 @@ function homeScreen(base: string): Plugin {
         sizes, type: "image/png",
       });
       const manifest = {
-        id: "/app", name: "ClaudeFleet", short_name: "ClaudeFleet",
+        id: "/app", name: BRAND, short_name: BRAND,
         start_url: "/app", scope: "/", display: "standalone",
         background_color: bg, theme_color: bg, lang: "zh-CN",
         icons: [icon("icon-192.png", "192x192"), icon("icon-512.png", "512x512"),
@@ -58,6 +59,9 @@ function homeScreen(base: string): Plugin {
   };
 }
 
+// %BRAND% in either side's index.html is the one name, src/shared/brand.ts (SGS6 B2).
+const brandHtml: Plugin = { name: "fleet-brand", transformIndexHtml: (html) => html.replaceAll("%BRAND%", BRAND) };
+
 export default defineConfig(({ mode }) => {
   const proto = mode === "proto";
   const side = proto ? "app" : mode;
@@ -65,7 +69,7 @@ export default defineConfig(({ mode }) => {
     root: path.resolve(import.meta.dirname, side),
     base: proto ? "./" : `/${side}/`,
     envDir: import.meta.dirname,
-    plugins: [react(), tailwindcss(), ...(side === "app" && !proto ? [homeScreen(`/${side}/`)] : [])],
+    plugins: [react(), tailwindcss(), brandHtml, ...(side === "app" && !proto ? [homeScreen(`/${side}/`)] : [])],
     resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
     define: { __PROTO__: JSON.stringify(proto) },
     build: {

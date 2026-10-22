@@ -3425,6 +3425,12 @@ def serve(a):
     HANDOFF["ctl"] = ctl
 
     def bye(*_):
+        # Once: a second TERM (a pid file and a parent naming the same process)
+        # re-entered this handler inside the first's ustats.flush, blocked on its
+        # lock, and the proxy never stopped (T889).
+        if threading.current_thread() is threading.main_thread():   # tick's parent watch calls it too
+            for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM):
+                signal.signal(sig, signal.SIG_IGN)
         if Proxy.ustats:
             try:
                 Proxy.ustats.flush(final=True)

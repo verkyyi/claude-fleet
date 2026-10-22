@@ -366,6 +366,7 @@ func (s *Server) recordUsage(principal string, rep usageReport, now time.Time) e
 		if err := s.Store.AddPoolUsage(u); err != nil {
 			return err
 		}
+		s.trialSpendWrote(principal, now) // 超线提醒 (WACK C6)
 	}
 	return nil
 }
@@ -551,6 +552,7 @@ func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.trialSpendWrote(c.Principal, now) // 超线提醒 (WACK C6)
 	st, err := s.personBudgetState(c.Principal, now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

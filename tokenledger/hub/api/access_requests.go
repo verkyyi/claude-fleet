@@ -727,13 +727,13 @@ func init() {
 			return strconv.Itoa(n), ""
 		}}
 	for k, v := range map[string]i18n.Text{
-		"apply.title":      {i18n.EN: "Apply · ClaudeFleet", i18n.ZhCN: "申请使用 · ClaudeFleet"},
-		"apply.mine.title": {i18n.EN: "My request · ClaudeFleet", i18n.ZhCN: "我的申请 · ClaudeFleet"},
+		"apply.title":      {i18n.EN: "Apply · {brand}", i18n.ZhCN: "申请使用 · {brand}"},
+		"apply.mine.title": {i18n.EN: "My request · {brand}", i18n.ZhCN: "我的申请 · {brand}"},
 		"apply.h1":         {i18n.EN: "Apply to use it", i18n.ZhCN: "申请使用"},
 		"apply.h1.edit":    {i18n.EN: "Change your request", i18n.ZhCN: "修改申请"},
 		"apply.lead": {
-			i18n.EN:   "ClaudeFleet is open to a limited group for now. Tell us what you want to use it for — we usually answer within one working day.",
-			i18n.ZhCN: "ClaudeFleet 目前限定开放。说说你想用它做什么，通常 1 个工作日内答复。",
+			i18n.EN:   "{brand} is open to a limited group for now. Tell us what you want to use it for — we usually answer within one working day.",
+			i18n.ZhCN: "{brand} 目前限定开放。说说你想用它做什么，通常 1 个工作日内答复。",
 		},
 		"apply.lead.trial": {
 			i18n.EN:   "Your trial conversation is kept; once you are approved the trial becomes a full account and you carry on in that conversation.",

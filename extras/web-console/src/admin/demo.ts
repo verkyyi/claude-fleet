@@ -1,7 +1,7 @@
 // demo.ts — the prototype's hub (EPIC #3923 rule 14): the real reads' shapes
 // with made-up people, answering in memory. Only a VITE_DEMO=1 build reaches
 // it; a real build drops it (api.ts's DEMO is a build-time constant).
-import type { AccessRequest, ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, NoticeMember, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, ServiceNotice, TeamUsage, TrainRun, TrialCode, TrialCodeDetail, TrialFunnel } from "./api";
+import type { AccessRequest, ApiInit, Credential, FleetSessions, HubUser, Invite, MeUsage, MeUsageLimit, NoticeMember, Overview, PersonBudget, PolicyView, ReleaseKeys, ReleaseStats, RequestDetail, ServiceNotice, TeamUsage, TrainRun, TrialCode, TrialCodeDetail, TrialFunnel, TrialSpend, TrialSpendPerson } from "./api";
 import { demoMachines } from "./machines/demo";
 import { demoPool, poolSettings } from "./poolDemo";
 import { entryDemo } from "./demo-entry";
@@ -136,6 +136,32 @@ const keys = (bad: boolean): ReleaseKeys => ({
   revoked_version: bad ? 3 : 2,
   overlap: false,
 });
+// 试用用量 (WACK C6): the design page's people — 14 in their trial, 6 new, every
+// token on their own subscriptions, one past the per-person line.
+function trialSpendDemo(day: string, empty: boolean): TrialSpend {
+  const yesterday = new Date(now + 8 * 3_600_000 - 86_400_000).toISOString().slice(0, 10);
+  const line = { person_day: 1_000_000, all_day: 30_000_000, daily: true };
+  const base = { day: day || yesterday, line, machines: [{ node: "mac-mini", load_pct: 52 }, { node: "mac-studio", load_pct: 61 }] };
+  if (empty) return { ...base, new: 0, active: 0, tokens: 0, pool: 0, byo: 0, by_source: { subscription: 0, api: 0, byo: 0 }, over: 0, all_over: false, people: [] };
+  const names = ["小林", "阿杰", "Mia", "王小雨", "kevin.z", "陈默", "Lucy", "周周", "老高", "sam", "李想", "Nora", "小鹿", "Tom"];
+  const tokens = [1_420_000, 960_000, 940_000, 910_000, 880_000, 850_000, 820_000, 790_000, 760_000, 730_000, 700_000, 680_000, 650_000, 610_000];
+  const people: TrialSpendPerson[] = names.map((name, i) => ({
+    principal: `wx:demo${i + 1}`,
+    name,
+    kind: i % 4 === 2 ? "email" : "wechat",
+    trial_day: i < 6 ? 1 : (i % 6) + 2,
+    tokens: tokens[i],
+    pool: 0,
+    byo: tokens[i],
+    new: i < 6,
+    active: true,
+    over: tokens[i] > line.person_day,
+  }));
+  const total = tokens.reduce((a, n) => a + n, 0);
+  return { ...base, new: 6, active: 14, tokens: total, pool: 0, byo: total, by_source: { subscription: 0, api: 0, byo: total }, over: people.filter((p) => p.over).length, all_over: false,
+    people: people.sort((a, b) => Number(b.over) - Number(a.over) || b.tokens - a.tokens) };
+}
+
 // 全队用量 (C13): each person as their own /v1/me/usage says them.
 const resetIn = (h: number) => new Date(now + h * 3_600_000).toISOString();
 const lim = (week?: number, used = 0, h5?: number, used5 = 0): MeUsageLimit =>
@@ -430,9 +456,16 @@ export async function demoApi(url: string, init: ApiInit = {}): Promise<unknown>
     case "GET /v1/admin/usage": {
       const { teamUsage, personUsage } = usageDemo();
       const p = u.searchParams.get("principal");
+      if (p?.startsWith("wx:demo")) {
+        // a trial person from 试用用量's demo: their day is their week
+        const n = trialSpendDemo("", false).people.find((x) => x.principal === p)?.tokens || 0;
+        return { range: "7d", today: 0, week: n, total: n, limit: lim(), models: [{ provider: "claude", name: "claude-sonnet-5-5", tokens: n }], by_session: [] };
+      }
       if (p) return personUsage(p);
       return empty ? { people: [], models: [], machines: [] } : teamUsage;
     }
+    case "GET /v1/admin/usage/trial":
+      return trialSpendDemo(u.searchParams.get("day") || "", empty);
     case "GET /v1/admin/overview":
       return usageOverview(empty);
     case "GET /v1/admin/sessions": {

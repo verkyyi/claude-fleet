@@ -84,6 +84,8 @@ type HubQuota struct {
 
 	mu   sync.Mutex
 	last map[string]HubQuotaRead // by provider/label
+	// fails is each credential's refused reads in a row (T906).
+	fails map[string]int
 }
 
 // HubQuotaRead is the outcome of the last read of one credential — what
@@ -293,9 +295,7 @@ func (s *Server) ReadHubQuota(ctx context.Context) {
 		r := s.readHubQuotaOne(rctx, c)
 		cancel()
 		h.record(r)
-		if !r.OK {
-			log.Printf("hub quota: %s/%s: %s", c.Provider, c.Account, r.Error)
-		}
+		s.hubQuotaOutcome(r, h.now())
 	}
 }
 

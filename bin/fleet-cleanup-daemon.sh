@@ -153,6 +153,52 @@ final_prs() { # $1 = prmap file, $2 = 1 when non-issue heads are armed
     }' "$prmf" 2>/dev/null
 }
 
+# --- PRs gh could not read: backoff + tombstone (T905) -------------------------
+# `prmap.miss` beside the repo's prmap, one row per PR: pr<TAB>absent<TAB>fails
+# <TAB>next. A gh failure (limit, network, auth) is not proof the PR is gone: the
+# PR waits `next` (2^fails min, ≤ FLEET_CLEANUP_MISS_MAX_SECS) and is asked again.
+# GitHub SAYING it is gone FLEET_CLEANUP_MISS_DEAD (3) times tombstones it
+# (next=dead) — never asked again. Any other answer deletes the row, so a PR
+# that was only unreadable (a merged one too) is cleaned the usual way.
+miss_row() { awk -F'\t' -v p="$2" '$1 == p { print; exit }' "$1" 2>/dev/null; }
+miss_put() { # $1 file $2 pr [$3 row — empty = delete]
+  local f="$1" tmp="$1.$$"
+  { awk -F'\t' -v p="$2" '$1 != p' "$f" 2>/dev/null; [ -z "${3:-}" ] || printf '%s\n' "$3"; } > "$tmp" \
+    && mv -f "$tmp" "$f"
+  rm -f "$tmp"; [ -s "$f" ] || rm -f "$f"
+}
+# miss_wait <file> <pr> → rc 0 (and a word on stdout) when the PR is not to be asked now.
+miss_wait() {
+  local row nx
+  row=$(miss_row "$1" "$2"); [ -n "$row" ] || return 1
+  nx=$(printf '%s' "$row" | cut -f4)
+  [ "$nx" = dead ] && { echo dead; return 0; }
+  case "$nx" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$(now)" -lt "$nx" ] && { echo backoff; return 0; }
+  return 1
+}
+# miss_note <file> <pr> <token> → the row after this answer; prints `dead` on a new tombstone.
+miss_note() {
+  local f="$1" pr="$2" tok="$3" row ab fl nx dl cap
+  row=$(miss_row "$f" "$pr")
+  ab=$(printf '%s' "$row" | cut -f2); ab="${ab//[^0-9]/}"; ab="${ab:-0}"
+  fl=$(printf '%s' "$row" | cut -f3); fl="${fl//[^0-9]/}"; fl="${fl:-0}"
+  dl="${FLEET_CLEANUP_MISS_DEAD:-3}"; case "$dl" in ''|*[!0-9]*|0) dl=3 ;; esac
+  cap="${FLEET_CLEANUP_MISS_MAX_SECS:-3600}"; case "$cap" in ''|*[!0-9]*) cap=3600 ;; esac
+  case "$tok" in
+    error:pr-not-found) ab=$((ab + 1)) ;;
+    error:gh-failed|error:gh-rate-limit) fl=$((fl + 1)) ;;
+    *) [ -n "$row" ] && miss_put "$f" "$pr"; return 0 ;;
+  esac
+  mkdir -p "$(dirname "$f")" 2>/dev/null
+  if [ "$ab" -ge "$dl" ]; then
+    miss_put "$f" "$pr" "$(printf '%s\t%s\t%s\tdead' "$pr" "$ab" "$fl")"; echo dead; return 0
+  fi
+  nx=$(( ab + fl )); [ "$nx" -gt 12 ] && nx=12
+  nx=$(( 60 * (1 << nx) )); [ "$nx" -gt "$cap" ] && nx=$cap
+  miss_put "$f" "$pr" "$(printf '%s\t%s\t%s\t%s' "$pr" "$ab" "$fl" "$(( $(now) + nx ))")"
+}
+
 # --- the PR pass for ONE repo of a fleet --------------------------------------
 # Globals in: sess repo main slug prmf k cto. Reaps up to k of the repo's final
 # PRs with debris left, logs its summary, and leaves the slots it spent in $used.
@@ -188,6 +234,7 @@ reap_repo_prs() {
   )
 
   repo_args=(--repo "$repo")
+  missf="$prmf.miss"
   cleaned=0; considered=0; timedout=0
   while IFS=$'\t' read -r pr branch state; do
     [ -z "$pr" ] && continue
@@ -226,6 +273,9 @@ reap_repo_prs() {
            continue
          fi ;;
     esac
+    # A PR gh could not read waits out its backoff; a tombstoned one is never
+    # asked again (T905). Silent: the row says why, and the tick spends no gh.
+    if [ "$pr" != - ] && miss_wait "$missf" "$pr" >/dev/null; then continue; fi
     considered=$((considered + 1))
 
     if [ "$DRY" = 1 ]; then
@@ -256,7 +306,13 @@ reap_repo_prs() {
       [ "$((cleaned + timedout))" -ge "$k" ] && break
       continue
     fi
+    [ "$pr" = - ] || [ "$(miss_note "$missf" "$pr" "$tok")" != dead ] \
+      || log "$sess: PR #$pr — GitHub says it is not there ${FLEET_CLEANUP_MISS_DEAD:-3} times; tombstoned in $(basename "$missf"), not asked again"
     case "$tok" in
+      error:gh-rate-limit)
+        # One limited answer means every next call is too: stop this repo's pass.
+        log "$sess: PR #$pr cleanup error ($tok) — backing off, rest of $repo next tick"
+        break ;;
       cleaned:*) log "$sess: $tok  (PR #$pr, $branch)  [slot $((cleaned + timedout + 1))/$k]"; cleaned=$((cleaned + 1)) ;;
       skip:*)    log "$sess: PR #$pr ($branch) — $tok (nothing reaped)" ;;
       error:*)   log "$sess: PR #$pr cleanup error ($tok)" ;;

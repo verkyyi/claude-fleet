@@ -138,11 +138,11 @@ var notListedTmpl = template.Must(template.New("not-listed").Funcs(pageFuncs(i18
 
 func init() {
 	for k, v := range map[string]i18n.Text{
-		"nl.title": {i18n.EN: "Not on the list yet · claudefleet", i18n.ZhCN: "还不在名单上 · claudefleet"},
+		"nl.title": {i18n.EN: "Not on the list yet · {brand}", i18n.ZhCN: "还不在名单上 · {brand}"},
 		"nl.h1":    {i18n.EN: "You're not on the list yet", i18n.ZhCN: "你还不在名单上"},
 		"nl.lead": {
-			i18n.EN:   "ClaudeFleet is in limited access for now. {who}, but this {way} hasn't been invited and hasn't applied yet.",
-			i18n.ZhCN: "ClaudeFleet 目前限定开放。{who}，但这个{way}还没有被邀请，也还没有申请过。",
+			i18n.EN:   "{brand} is in limited access for now. {who}, but this {way} hasn't been invited and hasn't applied yet.",
+			i18n.ZhCN: "{brand} 目前限定开放。{who}，但这个{way}还没有被邀请，也还没有申请过。",
 		},
 		"nl.who.wechat":      {i18n.EN: "You're signed in with WeChat as “{name}”", i18n.ZhCN: "你已经用微信「{name}」登录"},
 		"nl.who.wechat.anon": {i18n.EN: "You're signed in with WeChat", i18n.ZhCN: "你已经用微信登录"},
