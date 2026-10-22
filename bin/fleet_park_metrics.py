@@ -78,8 +78,8 @@ def latest_park_rss(path):
 def census(socket, session, cache_dir):
     # Exact session, one row per window: grouped views never duplicate a pane.
     fmt = "\x1f".join(["#{window_id}", "#{pane_pid}", "#{@fleet_role}", "#{window_name}",
-                          "#{@park_state}", "#{?#{!=:#{@park_saved_mb},},#{@park_saved_mb},#{@park_rss_mb}}", "#{@park_wrap_ver}",
-                          "#{@park_since}", "#{@fleet_id}", "#{@parked}", "#{@park_held}", "#{@park_why}"])
+                          "#{@park_state}", "#{@park_saved_mb}", "#{@park_wrap_ver}",
+                          "#{@park_since}", "#{@fleet_id}", "#{@park_why}"])
     rows = command(["tmux", "-u", "-L", socket, "list-windows", "-t", "=" + session, "-F", fmt])
     clients = command(["tmux", "-L", socket, "list-clients", "-F", "#{client_control_mode}\x1f#{window_id}"])
     watched = {wid for row in clients.split("\n") for control, sep, wid in [row.replace("\\037", "\x1f").partition("\x1f")]
@@ -97,10 +97,10 @@ def census(socket, session, cache_dir):
         # Newer tmux emits the literal byte; both describe the same census row.
         fields = row.replace("\\037", "\x1f").split("\x1f")
         if len(fields) == 9:  # older census fixtures / readers
-            fields += ["", "", ""]
-        if len(fields) != 12:
+            fields += [""]
+        if len(fields) != 10:
             continue
-        wid, pid, role, name, parked, saved, wrap, _since, fid, gate_parked, held, why = fields
+        wid, pid, role, name, parked, saved, wrap, _since, fid, why = fields
         if role in ("home", "panel") or (not role and name in ("home", "dash", "plan", "backlog")):
             continue
         if not pid.isdigit():
@@ -123,11 +123,10 @@ def census(socket, session, cache_dir):
                 saved_mb = None
         except ValueError:
             saved_mb = None
-        # C1's current held-window snapshot is authoritative, including unknown.
-        # Legacy state-only windows keep C8's ledger fallback.
-        if not (gate_parked and held) and fid in saved_by_fid:
+        # The latest park action is authoritative, including an unknown sample.
+        if fid in saved_by_fid:
             saved_mb = saved_by_fid[fid]
-        result[wid] = {"state": "parked" if parked == "停放中" or (gate_parked and held) else "awake",
+        result[wid] = {"state": "parked" if parked == "停放中" else "awake",
                        "rss_mb": round(rss, 2) if known else None, "saved_mb": saved_mb,
                        "why": "watched" if wid in watched else "failed" if parked == "失败" else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
     try:
@@ -140,25 +139,51 @@ def census(socket, session, cache_dir):
     return result
 
 
+def inventory_park(reading, state, busy):
+    """Join CPU/view observations with the inventory's turn and job state.
+
+    Only these five fields cross the adapter boundary. `eligible` is the full
+    batch definition, not just a CPU observation. A sampling reason preserves
+    uncertainty about resident idle even if a viewer already blocks parking.
+    """
+    p = dict(reading)
+    quiet = p.pop("quiet", None)
+    ended = state in ("done", "looping", "needs")
+    blocked = p["why"] == "watched" or busy == "bg"
+    p["eligible"] = (False if p["state"] == "parked" or not ended or quiet is False or blocked
+                     else None if quiet is None else True)
+    if p["state"] != "parked":
+        if not ended or quiet is False:
+            p["why"] = "working"
+        elif quiet is None:
+            p["why"] = "sampling"
+        elif busy == "bg":
+            p["why"] = "background"
+    return p
+
+
 def summarize(workers):
     if any("park" not in w for w in workers):
         return None  # An older adapter cannot supply a partial, optimistic sum.
     out = dict(sessions_working=0, sessions_idle=0, sessions_parked=0,
-               idle_rss_mb=0.0, parked_saved_mb=0.0, idle_reasons={})
+               idle_rss_mb=0.0, parked_saved_mb=0.0, idle_reasons={},
+               idle_eligible=0, idle_eligible_rss_mb=0.0)
     reasons = Counter()
     sample_pending = False
     for w in workers:
         p = w["park"]
+        # compat-1v: 下一批删 — observations from the #5277 adapter used quiet.
+        if "quiet" in p:
+            p = inventory_park(p, w.get("state"), w.get("busy"))
         if p["state"] == "parked":
             out["sessions_parked"] += 1
             if p["saved_mb"] is None:
                 out["parked_saved_mb"] = None
             elif out["parked_saved_mb"] is not None:
                 out["parked_saved_mb"] += p["saved_mb"]
-        elif (w.get("state") not in ("done", "looping", "needs")
-              or p.get("quiet") is False or p["why"] == "watched" or w.get("busy") == "bg"):
+        elif w.get("state") not in ("done", "looping", "needs") or p["why"] == "working":
             out["sessions_working"] += 1
-        elif p.get("quiet") is None:
+        elif p["why"] == "sampling":
             # Until a full CPU sample, neither a zero idle count nor a working
             # count is known. Preserve that uncertainty through the heartbeat.
             out["idle_rss_mb"] = None
@@ -171,11 +196,17 @@ def summarize(workers):
             elif out["idle_rss_mb"] is not None:
                 out["idle_rss_mb"] += p["rss_mb"]
             reasons[p["why"]] += 1
+        if p["state"] != "parked":
+            if p["eligible"] is None:
+                out["idle_eligible"] = out["idle_eligible_rss_mb"] = None
+            elif p["eligible"] and out["idle_eligible"] is not None:
+                out["idle_eligible"] += 1
+                if p["rss_mb"] is None:
+                    out["idle_eligible_rss_mb"] = None
+                elif out["idle_eligible_rss_mb"] is not None:
+                    out["idle_eligible_rss_mb"] += p["rss_mb"]
     if sample_pending:
         out["sessions_idle"] = out["sessions_working"] = None
-    # compat-1v: 下一批删 — these fields shipped in #5275; one definition now.
-    out["idle_eligible"] = out["sessions_idle"]
-    out["idle_eligible_rss_mb"] = out["idle_rss_mb"]
     out["idle_reasons"] = dict(reasons)
     return out
 
@@ -234,9 +265,10 @@ def main():
                 raise RuntimeError("park metrics unavailable for " + fleet["name"])
             totals.append(stats)
         total = {k: (None if any(s[k] is None for s in totals) else sum(s[k] for s in totals))
-                 for k in ("sessions_working", "sessions_idle", "sessions_parked")}
+                 for k in ("sessions_working", "sessions_idle", "sessions_parked", "idle_eligible")}
         saved = None if any(s["parked_saved_mb"] is None for s in totals) else sum(s["parked_saved_mb"] for s in totals)
         idle_rss = None if any(s["idle_rss_mb"] is None for s in totals) else sum(s["idle_rss_mb"] for s in totals)
+        eligible_rss = None if any(s["idle_eligible_rss_mb"] is None for s in totals) else sum(s["idle_eligible_rss_mb"] for s in totals)
         reasons = Counter()
         for s in totals:
             reasons.update(s["idle_reasons"])
@@ -244,7 +276,7 @@ def main():
         if reasons:
             detail += " · " + ", ".join("%s %d" % pair for pair in sorted(reasons.items()))
         counts = {k: "unknown (needs 60s CPU sample)" if v is None else str(v) for k, v in total.items()}
-        print("working {sessions_working} · idle {sessions_idle} · parked {sessions_parked} · saved ".format(**counts) + ("unknown" if saved is None else "%.1f MB" % saved) + " · idle RSS " + ("unknown" if idle_rss is None else "%.1f MB" % idle_rss) + detail)
+        print("working {sessions_working} · idle {sessions_idle} · parked {sessions_parked} · saved ".format(**counts) + ("unknown" if saved is None else "%.1f MB" % saved) + " · idle RSS " + ("unknown" if idle_rss is None else "%.1f MB" % idle_rss) + " · eligible {idle_eligible} · eligible RSS ".format(**counts) + ("unknown" if eligible_rss is None else "%.1f MB" % eligible_rss) + detail)
 
 
 if __name__ == "__main__":

@@ -6375,7 +6375,7 @@ drill_park_census_overcounts() {
   t0=$(now)
   out=$(bash "$BIN/fleet-park-metrics-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="$out"; return 1; }
-  WHAT='观看中、后台命令、活跃 CPU 不计空闲；采样不足未知；停放按状态与最后 park RSS 计'
+  WHAT='常驻空闲与可停空闲分计，观看和后台写原因；采样不足未知；停放按状态与最后 park RSS 计'
   SECS=$(since "$t0")
 }
 

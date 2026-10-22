@@ -9,8 +9,8 @@ type ParkMetrics struct {
 	IdleRSSMB       *float64       `json:"idle_rss_mb"`
 	ParkedSavedMB   *float64       `json:"parked_saved_mb"`
 	IdleReasons     map[string]int `json:"idle_reasons"`
-	// compat-1v: 下一批删 — aliases shipped in #5275. Both now match SessionsIdle
-	// and IdleRSSMB: turn over, <0.5 CPU seconds over 60 seconds, no viewer/job.
+	// Resident idle includes viewers and background jobs. This strict subset is
+	// the batch acceptance metric: turn over, low CPU, no viewer or background job.
 	IdleEligible      *int     `json:"idle_eligible"`
 	IdleEligibleRSSMB *float64 `json:"idle_eligible_rss_mb"`
 }
