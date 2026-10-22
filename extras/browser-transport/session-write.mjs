@@ -15,6 +15,7 @@ try {
       const context = await browser.newContext()
       try {
         const page = await context.newPage()
+        if (kind === 'delayed') await page.clock.install()
         let capability = kind === 'delayed' ? null : kind === 'ticket' ? true : undefined
         const sent = []
         // route.fulfill ends the response immediately. Use a real open stream:
@@ -30,6 +31,7 @@ try {
             if (url.pathname !== '/v1/chat/view' || url.searchParams.has('cached')) return real(input, init)
             return new Response(new ReadableStream({ start(controller) {
               test.controller = controller
+              init?.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true })
               test.emit()
               controller.enqueue(enc.encode(`data: ${JSON.stringify({ t: 'items', replace: true, session: 's1', at: 10,
                 items: [{ t: 'text', d: 'first reply' }] })}\n\n`))
@@ -68,15 +70,26 @@ try {
           assert.match(await input.getAttribute('placeholder'), /Connecting|正在连接/)
           await input.press('Enter')
           assert.equal(sent.length, 0, 'Enter cannot send before the gate answers')
-          await page.evaluate(() => window.__sessionView.controller.error(new Error('controlled stream disconnect')))
-          await page.waitForFunction(() => document.querySelector('[data-testid=session-view]')?.getAttribute('data-access') === 'offline')
+          // A silent stream never ends or errors. It must still recover once
+          // three server heartbeats are missing; comments keep it alive.
+          await page.clock.fastForward(30_000)
+          await page.evaluate(() => window.__sessionView.controller.enqueue(new TextEncoder().encode(': ping\n\n')))
+          await page.clock.fastForward(30_000)
+          assert.equal(await page.locator('[data-testid=session-view]').getAttribute('data-access'), 'checking', 'a comment heartbeat keeps the stream alive')
+          await page.clock.fastForward(15_001)
+          await page.locator('[data-testid=session-view][data-access="offline"]').waitFor({ timeout: 2500 })
           assert.equal(await input.inputValue(), 'draft survives discovery')
           assert.equal(await input.isDisabled(), false, 'offline can keep drafting')
           assert.equal(await page.getByRole('button', { name: '发送', exact: true }).isDisabled(), true)
           capability = true
           await page.evaluate(() => { window.__sessionView.capability = true })
+          await page.clock.fastForward(1001)
           await page.locator('[data-testid=session-view][data-talk]').waitFor()
           assert.match(await input.inputValue(), /draft survives discovery/)
+          await page.evaluate(() => window.__sessionView.controller.error(new Error('controlled stream disconnect')))
+          await page.locator('[data-testid=session-view][data-access="offline"]').waitFor({ timeout: 2500 })
+          await page.clock.fastForward(1001)
+          await page.locator('[data-testid=session-view][data-talk]').waitFor()
           await page.getByRole('button', { name: '发送', exact: true }).click()
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')
           await input.fill('second turn')
