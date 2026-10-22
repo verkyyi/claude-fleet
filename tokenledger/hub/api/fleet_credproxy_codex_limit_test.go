@@ -11,8 +11,8 @@ import (
 // A Codex subscription whose usage limit is spent is skipped on the central
 // road too (claude-fleet#4606, the cluster half of BREAK-IT cred-sep-codex-full):
 // the session bound to it is moved by its usage-limit 429 and the same request
-// runs on the pool account with room; a new session never opens on the spent
-// one; every one spent ⇒ the 429 reaches the session after one resend.
+// is NOT replayed; the next request runs on the pool account with room. A
+// new session never opens on the spent one; every one spent passes the 429 on.
 
 const codexLimit429 = `{"error":{"type":"usage_limit_reached","message":"You've hit your usage limit.","resets_at":4102444800}}`
 
@@ -38,8 +38,11 @@ func TestSessionPickSkipsCodexAtLimit(t *testing.T) {
 	r.mu.Unlock()
 
 	credA, widA := r.issue(t, fidA)
-	if st, body := r.call(t, credvault.Codex, credA); st != 200 {
-		t.Fatalf("poolcx spent → %d %s; want the resend on poolcx2", st, body)
+	if st, body := r.call(t, credvault.Codex, credA); st != http.StatusTooManyRequests || r.upCount() != 1 {
+		t.Fatalf("poolcx spent → %d %s after %d sends; want original 429 without replay", st, body, r.upCount())
+	}
+	if st, body := r.call(t, credvault.Codex, credA); st != 200 || r.upCount() != 2 {
+		t.Fatalf("next request: %d %s", st, body)
 	}
 	if acct := codexBound(t, r, widA); acct != "poolcx2" {
 		t.Fatalf("A bound to %s after poolcx's usage limit; want poolcx2", acct)
@@ -58,7 +61,7 @@ func TestSessionPickSkipsCodexAtLimit(t *testing.T) {
 	r.full[x2] = codexLimit429
 	r.mu.Unlock()
 	n = r.upCount()
-	if st, _ := r.call(t, credvault.Codex, credB); st != http.StatusTooManyRequests || r.upCount()-n > 2 {
-		t.Fatalf("all spent → %d after %d asks; want the 429, at most one resend", st, r.upCount()-n)
+	if st, _ := r.call(t, credvault.Codex, credB); st != http.StatusTooManyRequests || r.upCount()-n != 1 {
+		t.Fatalf("all spent → %d after %d asks; want the 429, no replay", st, r.upCount()-n)
 	}
 }
