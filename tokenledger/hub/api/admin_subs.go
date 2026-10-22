@@ -26,6 +26,11 @@ const (
 	adminSubPurpose      = "admin-pool-login"
 )
 
+// A Claude pool subscription comes in one way only: the long-lived token
+// `claude setup-token` prints, pasted and probed against the messages endpoint
+// before it is saved (HXNB). The web OAuth sign-in stays Codex's.
+const errAdminClaudeWeb = "Claude 订阅请在登录该账号的电脑上运行 claude setup-token，把输出的 sk-ant-oat01-… 粘贴进来"
+
 // All mounts are viewerOnly + adminOnly. The actor seals the flow; its owner
 // is always pool. No request argument can select another owner or purpose.
 func (s *Server) adminSubRequest(w http.ResponseWriter, r *http.Request, dst any) bool {
@@ -59,6 +64,10 @@ func (s *Server) handleAdminSubsLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validAdminSub(req.Provider, req.Account) {
 		httpError(w, 400, "请选择服务并填写有效名称")
+		return
+	}
+	if req.Provider == credvault.Claude {
+		httpError(w, 400, errAdminClaudeWeb)
 		return
 	}
 	if s.OAuthExchange == nil {
@@ -100,6 +109,10 @@ func (s *Server) handleAdminSubsFinish(w http.ResponseWriter, r *http.Request) {
 	var note meSubLogin
 	if err != nil || s.Vault.OpenNote(blob, &note, actorOf(r), adminSubPurpose) != nil || time.Now().After(note.Expires) || !validAdminSub(note.Provider, note.Account) {
 		httpError(w, 410, "授权已过期或不属于本次登录，请重新授权")
+		return
+	}
+	if note.Provider == credvault.Claude { // a flow started before Claude's web sign-in was taken out
+		httpError(w, 410, errAdminClaudeWeb)
 		return
 	}
 	code, err := pastedCode(note.Provider, req.Paste, note.State)
