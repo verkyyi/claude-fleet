@@ -117,8 +117,11 @@ claude_bin() { # the login's own claude for the SDK (deps has no native binary).
   return 1
 }
 
-codex_bin() { # the login's own codex for the conversation's Codex side (task R9A2); none ⇒ Claude only
+codex_bin() { # the release pin, else the login's own codex for the conversation's Codex side (task R9A2); none ⇒ Claude only
   local d
+  # Managed services use the same verified CLI as terminal sessions. Ordinary
+  # checkouts without release tools retain their explicit override/PATH fallback.
+  [ -x "$BIN/../tools/bin/codex" ] && { printf '%s' "$BIN/../tools/bin/codex"; return 0; }
   [ -n "${FLEET_CODEX_BIN:-}" ] && [ -x "$FLEET_CODEX_BIN" ] && { printf '%s' "$FLEET_CODEX_BIN"; return 0; }
   command -v codex 2>/dev/null && return 0
   for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; do
