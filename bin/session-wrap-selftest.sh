@@ -275,7 +275,8 @@ eq "q: recycled windows read done" "done" "$(o q @claude_state)"
 # tmux server in a temp dir), so fleet_notice.py guard refuses both logs there — and
 # the test's own conf still gets its rows.
 mkdir -p "$WORK/realconf/logs"
-RG="FLEET_EXIT_CLOSE_SECS=0 FLEET_CONF_DIR=$WORK/realconf FLEET_SELFTEST_REAL_CONF=$WORK/realconf"
+# (FLEET_NOTICE_FORBID_HIT blank: these refusals are the leg, not a leak for the runner)
+RG="FLEET_EXIT_CLOSE_SECS=0 FLEET_CONF_DIR=$WORK/realconf FLEET_SELFTEST_REAL_CONF=$WORK/realconf FLEET_NOTICE_FORBID_HIT="
 WRAP_ENV="$RG" win tg 0
 mkdir -p "$WORK/tr"; printf refuse > "$WORK/tr/mode"
 WRAP_ENV="$RG" win tr 5
