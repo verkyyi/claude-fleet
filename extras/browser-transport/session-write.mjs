@@ -64,6 +64,9 @@ try {
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')
           assert.deepEqual(sent, ['draft survives discovery', 'second turn'])
         } else {
+          // The stream's state arrives after the input mounts. Wait for its
+          // verdict rather than asserting against the initial checking state.
+          await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.disabled === true)
           assert.equal(await input.isDisabled(), true, `${kind} input is read-only`)
           assert.equal(sent.length, 0)
         }
