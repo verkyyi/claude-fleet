@@ -287,6 +287,7 @@ while True:
         self.tm('select-window', '-t', self.win)
         time.sleep(1.2)
         self.assertTrue(self.opt('@park_held'), 'viewing resumed the parked agent')
+        self.assertEqual(self.opt('@park_presence'), '0', 'viewing counted as keyboard input')
         self.tm('send-keys', '-t', self.win, '-l', '接着解释 café')
         time.sleep(.4)
         self.assertTrue(self.opt('@park_held'), 'typing resumed before Enter')
