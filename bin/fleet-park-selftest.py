@@ -78,6 +78,7 @@ while True:
  if not c: break
  b+=c
  if (b'\x1b[200~/exit\x1b[201~\r' if agent=='codex' else b'/exit\r') in b: break
+ os.write(1,c)
 ''')
         launch = self.root / 'launch'
         launch.write_text('#!/bin/bash\n' +
@@ -103,6 +104,23 @@ while True:
         probe.chmod(0o755)
         self.env['FLEET_GATE_PARK_PROBE_CMD'] = str(probe)
         self.wait(lambda: self.opt('@park_relay') and self.opt('@codex_session_id' if agent == 'codex' else '@cc_session_id'))
+        if agent == 'codex':
+            native = self.root / 'native.py'
+            native.write_text('''import json
+from pathlib import Path
+def identity(pane, socket):
+ return dict(session_id=%r, remote='unix:///fake-codex.sock')
+class client:
+ def __init__(self, remote): pass
+ def close(self): pass
+ def call(self, method, params):
+  if method=='thread/read': return dict(thread=dict(id=%r,status=dict(type='idle')))
+  if method=='thread/queue/list': return dict(data=[])
+  raise ValueError(method)
+''' % (self.sid, self.sid))
+            self.env['FLEET_GATE_CODEX'] = str(native)
+            self.env.pop('FLEET_GATE_PARK_PROBE_CMD')
+            self.wait(lambda: '›' in self.tm('capture-pane', '-p', '-t', self.win))
 
     def test_codex_same_thread_and_paste_exit(self):
         self.fake('codex')
@@ -125,6 +143,31 @@ while True:
         self.assertEqual(self.opt('@fleet_id'), self.fid)
         argv = json.loads((self.root / 'argv.json').read_text())
         self.assertEqual(argv, ['--agent', 'codex', 'resume', self.sid, 'continue this conversation'])
+
+    def test_codex_old_relay_holds_without_typing(self):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env), patch.object(gate, 'relay_request', return_value=dict(ok=True, generation=0)):
+            self.assertEqual(gate.park(self.fid).get('why'), 'old_relay')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
+    def test_codex_prompt_and_native_queue_hold(self):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env):
+            w = gate.window(self.fid)
+            self.assertTrue(gate.park_proof(w).get('ok'))
+            native = Path(self.env['FLEET_GATE_CODEX'])
+            original = native.read_text()
+            for old, new in (("type='idle'", "type='active'"),
+                             ('data=[]', "data=[{'id':'queued'}]"),
+                             ("session_id=" + repr(self.sid), "session_id='different'")):
+                native.write_text(original.replace(old, new))
+                self.assertFalse(gate.park_proof(w).get('ok'), new)
+            native.write_text(original)
+            self.tm('send-keys', '-t', self.win, '-l', 'unfinished draft')
+            self.wait(lambda: 'unfinished draft' in self.tm('capture-pane', '-p', '-t', self.win))
+            self.assertEqual(gate.park_proof(w).get('why'), 'draft')
+            self.assertFalse(self.opt('@parked'))
 
     def wait(self, predicate):
         until = time.monotonic() + 6
@@ -261,6 +304,18 @@ while True:
                 patch.object(reap, 'run', return_value='{"ok":true}'):
             for origin in ('person','dispatched','member','driver','orchestrator','probe','web'):
                 self.assertTrue(r.web_park('@1', snap | {'@session_origin':origin}), origin)
+
+
+class NativeReady(unittest.TestCase):
+    def test_codex_wake_without_new_session_clock(self):
+        from types import SimpleNamespace
+        runtime = module('park_runtime', 'fleet-codex-runtime.py')
+        with patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(stdout='\t\tmeta\n')):
+            self.assertFalse(runtime.input_ready('%1'))
+        with patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(stdout='\tthread-id\tmeta\n')), \
+                patch.object(gate, 'wake_ready') as ready:
+            self.assertTrue(runtime.input_ready('%1'))
+            ready.assert_called_once_with('%1')
 
 
 if __name__ == '__main__':

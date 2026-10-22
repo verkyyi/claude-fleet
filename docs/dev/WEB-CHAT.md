@@ -464,13 +464,17 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 内存紧张（`FLEET_PARK_MEM_PCT`，15%；试用账号到份额 80%）时，按空闲最久排序，跳过不适合的窗口，
 每拍停一个，不必等普通档位。已报告完成的工作仍按原回收规则结束。
 
-停放前取得 mod 的 `park.v1` 原生证明（没有在跑的轮次、空输入框），通过 7501 中继向 pty 送 `/exit`；
+停放前按适配表 `park_probe` 取证明：Claude 用 mod 的 `park.v1`；Codex 检查原生 thread idle、
+队列为空和终端输入框为空，后台任务 / 子会话 / goal 由已有的原生 inventory 检查。无法确认就不停。
+两者通过同一个 7501 中继向 pty 送 `/exit`；`park_exit` 指定 Codex 的 bracketed paste，
+不支持该退出方式的老中继拒停，等下次正常重开后启用。
 证明以后有键盘输入就取消，绝不靠 Escape 清空草稿。窗口、ID、对话、工作区和凭据留在原处，窗口仍读作空闲。
 有定时任务时必须先交出 C3 的唤醒约定，否则保守不停。
 
 唯一唤醒接口为 `fleet_park_wake <fid> --why <理由> [--seed-file <文件>]`，转到门的 `wake`；
 包装器自己请求唤醒时使用 `--request-only` 避免等待自己。种子文件挂在 `@park_wake`，包装器 rename 成
-`.taken` 后用同一会话号 `--resume`，句子随启动进入首轮；7501 首次原生状态才写 `.launched` 确认恢复。
+`.taken` 后用同一会话号 `--resume`（Codex 为 `resume <thread id>`），句子随启动进入首轮；
+Claude 的 7501 首次原生状态、Codex 私有 runtime 的 thread 绑定分别写 `.launched` 确认恢复。
 超时收回未认领种子；已认领的种子属于当前启动，不会重投。
 有人切到窗口或在里面按 ↵ 也走这一路。C8 计量沿用 HHV0 的 `@parked` + `@park_held`，两者同时存在才计停放。`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前由 C1 写 `@park_saved_mb` 和
 `@park_why`；RSS 为进程树含外壳的总量，单位 MB，采样失败或根进程缺失时清除快照。C8 只读这份快照，缺失时隐藏节省项。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；

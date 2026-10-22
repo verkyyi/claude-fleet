@@ -36,8 +36,9 @@ Columns
                   skill = an installed `$name` skill, else the prose expansion
   seed_words      1 = the person's own words go in as the first turn and the flow rides
                   the SessionStart hook (@seed_words); 0 = the flow rides the words
-  park_resume     1 = a parked session comes back into its own conversation (its
-                  transcript beside the worktree); 0 = a fresh one
+  park_resume     1 = a parked session resumes its own conversation id
+  park_exit       typed = /exit + Enter; paste = bracketed /exit + Enter
+  park_probe      inbox = native park.v1; native-input = native idle + empty TUI
   ready_check     a fleet-lib function that says this login can run it; empty = none
   trust           where its "trust this folder?" answer is written (fleet-trust.sh):
                   claude-json (~/.claude.json, every spawn) | codex-toml (config.toml,
@@ -122,7 +123,7 @@ HERE = Path(__file__).resolve().parent
 
 COLUMNS = ("launcher", "model_env", "model_flag", "resume_flag", "fork_flag", "fork_replaces",
            "continue_flag", "preset_sid_flag", "sid_window", "sid_pending", "sid_thread",
-           "seed", "seed_words", "park_resume", "ready_check", "trust", "mcp",
+           "seed", "seed_words", "park_resume", "park_exit", "park_probe", "ready_check", "trust", "mcp",
            "deliver", "sid_source", "clear_said", "transcript", "from_pr_flag",
            "transfer_source", "home_flag", "account_env", "loop_settled", "exit_paste",
            "armed_cycle", "native_cron", "bind_proof", "account_resume",
@@ -136,6 +137,7 @@ ADAPTERS = {
         "continue_flag": "--continue", "preset_sid_flag": "--session-id",
         "sid_window": "@cc_session_id", "sid_pending": "", "sid_thread": "",
         "seed": "slash", "seed_words": "1", "park_resume": "1",
+        "park_exit": "typed", "park_probe": "inbox",
         "ready_check": "", "trust": "claude-json", "mcp": "flags",
         "deliver": "inbox",
         "sid_source": "hook", "clear_said": "1", "transcript": "project", "from_pr_flag": "--from-pr",
@@ -150,7 +152,8 @@ ADAPTERS = {
         "resume_flag": "resume", "fork_flag": "fork", "fork_replaces": "1",
         "continue_flag": "", "preset_sid_flag": "",
         "sid_window": "@codex_session_id", "sid_pending": "@codex_pending", "sid_thread": "@codex_thread_id",
-        "seed": "skill", "seed_words": "0", "park_resume": "0",
+        "seed": "skill", "seed_words": "0", "park_resume": "1",
+        "park_exit": "paste", "park_probe": "native-input",
         "ready_check": "fleet_codex_ready", "trust": "codex-toml", "mcp": "config",
         "deliver": "queue",
         "sid_source": "thread", "clear_said": "0", "transcript": "home", "from_pr_flag": "",
