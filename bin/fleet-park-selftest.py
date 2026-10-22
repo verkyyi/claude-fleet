@@ -36,7 +36,9 @@ reap = module('park_reap', 'fleet-cleanup-idle.py')
 class Park(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='fleet-park-'))
-        self.label = 'park-' + str(os.getpid())
+        # kill-server returns before the old listener has fully gone away. Each
+        # case needs its own socket so the next start cannot race that shutdown.
+        self.label = 'park-' + str(os.getpid()) + '-' + self.root.name[-8:]
         self.env = dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf'),
                         FLEET_GATE_WAKE_SECS='3', FLEET_GATE_PARK_SECS='3',
                         FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50')
