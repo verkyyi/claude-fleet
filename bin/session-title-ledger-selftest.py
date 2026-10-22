@@ -120,7 +120,7 @@ class Titles(unittest.TestCase):
                 self.assertTrue(supported[0] or e["ev"] != "named")
                 ack[0] = max(ack[0], e["seq"])
             return 200, {"seq": ack[0]}
-        self.assertEqual(ids.push_one(A, call), 75)
+        self.assertEqual(ids.push_one(A, call), 76)
         self.assertEqual(ack[0], 1)
         supported[0] = True
         self.assertEqual(ids.push_one(A, call), 0)

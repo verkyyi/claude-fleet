@@ -1561,7 +1561,7 @@ def push_one(fid, call, where=None):
                 first = next(i for i, e in enumerate(todo) if e.get("ev") == "named")
                 todo = todo[:first]
                 if not todo:
-                    return 75
+                    return 76 if cap_code > 0 else (3 if cap_code == -3 else 75)
         code, ans = call("POST", "/v1/node/ids", {"id": fid, "events": todo})
         if code == -3:
             return 3
@@ -1595,6 +1595,9 @@ def push(ids, call=None):
     rc = 0
     for fid in ids or sorted(ledger_ids()):
         r = push_one(fid, call, wins.get(fid))
+        if r == 76:
+            rc = 75  # an older hub holds only this ID, not unrelated lifecycles
+            continue
         if r in (3, 75):
             return r
         rc = rc or r

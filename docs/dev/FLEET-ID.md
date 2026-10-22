@@ -388,7 +388,7 @@ Hub 的 `title_source` 与本地 fold 同规则。共享 Board 优先保留人�
 
 节点推送含 `named` 的后缀前检查 `GET /v1/node/ids/capabilities` 的 `named: true`。
 旧 Hub 尚不支持时，本地保留该后缀等待正常升级重试，防止旧 Hub 跳过未知事件却
-推进序号。旧节点继续发原有事件；现有钩子入口调用新实现，无需重开会话。
+推进序号。暂存只挡该 ID 的后缀，其他 ID 仍正常同步。旧节点继续发原有事件；现有钩子入口调用新实现，无需重开会话。
 
 历史修复先只读审计：`python3 bin/fleet_id.py title-audit --board <自己的会话快照>
 --owner-proof <同票据的 me.json> --ledger-dir <原始 ids 目录>`。输出逐 FID 的分类、
