@@ -46,7 +46,16 @@ mkdir -p "$WORK/codex-home"
 cat > "$FB/ccquota" <<SH
 #!/bin/bash
 case "\$1 \$2" in
-  'codex list') [ -f "$WORK/login-state" ] || { echo '[]'; exit 0; }
+  'codex list')
+     if [ -f "$WORK/auth-draft" ]; then
+       read qs qp qsid < "$WORK/auth-draft"
+       for qm in "$WORK/conf/handoffs"/*-"\$qsid"-*/manifest.json; do
+         [ -f "\$qm" ] || continue
+         tmux -L "\$qs" send-keys -t "\$qp" -l 'late unsent draft'
+         break
+       done
+     fi
+     [ -f "$WORK/login-state" ] || { echo '[]'; exit 0; }
      h="$WORK/codex-home"; [ ! -f "$WORK/profile-home" ] || h=\$(cat "$WORK/profile-home")
      printf '[{"name":"work","home":"%s","account":"codex:acct:1","email":"w@example.invalid","plan":"plus","default":true,"login":{"state":"%s"}}]\n' "\$h" "\$(cat "$WORK/login-state")" ;;
   # issue #1669: the device-auth login the alert's ↵ runs — here it just succeeds
@@ -1004,6 +1013,19 @@ transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session
 transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'uncertain native dismissal must not retry'
 [ "$(cat "$WORK/quota-keys")" = 1b ] && kill -0 "$PID" && [ "$(field cc_agent)" != codex ] \
   || fail 'uncertain stop retried or lost source'; ok
+
+# A person types while the last target-auth check is running. Quota cutover
+# must reread input before /exit rather than clearing that new draft with C-u.
+quota_source 80 norepo
+TM set-option -w -t "$WIN" @claude_state exited
+TM set-option -w -t "$WIN" @agent_status '{"state":"error","app":"claude-code"}'
+printf 'valid\n' > "$WORK/login-state"
+printf '%s %s %s\n' "$LBL" "$PANE" "$SID" > "$WORK/auth-draft"
+transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" \
+  && fail 'late draft at target auth must prevent quota exit'
+kill -0 "$PID" && [ "$(field cc_agent)" != codex ] || fail 'late draft lost source writer'; ok
+TM capture-pane -p -t "$PANE" | grep -q 'late unsent draft' || fail 'late draft was cleared'; ok
+rm -f "$WORK/login-state" "$WORK/auth-draft"
 
 fi
 

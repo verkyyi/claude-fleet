@@ -669,6 +669,12 @@ fi
 # The source's confirmed CronDelete is the only native road (issue #4280): the
 # controller takes the journal over, or the source keeps running.
 [ -z "$DFID" ] || python3 "$DURABLE" claim "$DFID" "$$" || die 'durable handover is not confirmed by the source'
+# Target authentication can block long enough for new input or a new source.
+# Re-prove quota input and exact identity immediately before any clearing key.
+if [ "$QUOTA_CONTINUATION" = 1 ]; then
+  [ "$(source_read 2>/dev/null)" = "$RESOLVED" ] && armed_cycle_free \
+    && source_ready || die 'quota source or prompt changed before exit; source retained'
+fi
 EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK Escape || die 'cannot address source prompt'

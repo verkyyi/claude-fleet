@@ -114,7 +114,8 @@ quota choices, no recent terminal input, the existing native `park.v1` proof of 
 empty underlying prompt and stopped main turn, and the tool and scheduler proofs.
 Under its transfer mutex and rotation lease it records one Escape before sending it;
 then it requires the native error/idle boundary and empty input, and runs all normal
-transfer checks again. Escape preserves a hidden draft: any draft or unknown composer
+transfer checks again, including exact source and input after target authentication
+immediately before exit. Escape preserves a hidden draft: any draft or unknown composer
 holds the transfer. An approval, changed/unknown menu, armed auto-resume, scheduler
 without proof or unconfirmed cancellation remains recoverable without another keypress.
 Dry-run only previews this cancellation and conditional recheck; it never authorizes
