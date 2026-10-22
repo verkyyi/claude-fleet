@@ -5561,6 +5561,19 @@ drill_transfer_proxy_auth() {
   SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
 }
 
+drill_web_quota_continuation() {
+  CAP=120
+  local started; started=$(now)
+  python3 "$BIN/fleet-session-fallback-selftest.py" >"$WORK/web-quota.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/web-quota.out" | tr '\n' ' ')"; return 1; }
+  go_half '^Test(TrialCodex(DefaultAdmission|ContinuationBudgetIsolation)|CredProxyClaudeCapacityContinuation)$' github.com/verkyyi/claude-fleet/tokenledger/hub/api
+  case $? in
+    1) return 1 ;;
+    2|3) : ;; # the Go CI gate runs the admission and budget assertions
+  esac
+  SECS=$(since "$started"); WHAT='hard quota only; one formal transfer; unsettled delivery and approvals held; no replay or retry loop; Codex trials share the budget and gates'
+}
+
 drill_far_agent_switch() {
   CAP=15; BREAK_SOCK="$WORK/sock-fas"; local d="$WORK/fas" t0 out rc win ids i
   mkdir -p "$d/conf/fleets/fa" "$d/sb" "$d/home"

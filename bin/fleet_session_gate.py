@@ -77,6 +77,9 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
+
+import fleet_session_fallback as fallback
 
 BIN = Path(__file__).absolute().parent
 FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -92,6 +95,13 @@ TEXT_MAX = 65536
 IMAGES_MAX = 4
 KEEP_SENT = 86400          # a sent record is kept a day (the page's ✓), then pruned
 KEEP_RETURNED = 3600       # a returned one an hour (the page puts it back in the box)
+
+
+def fallback_api():
+    # Some native-engine probes load this file with runpy rather than import.
+    return SimpleNamespace(BIN=BIN, read_json=read_json, write_json=write_json, fid_dir=fid_dir,
+                           claude_transcript=claude_transcript, busy_of=busy_of, now=now,
+                           ret=ret, lock=lock, window=window)
 
 # the window's options one read gets (tab-separated, in this order)
 WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}", "#{@claude_state}",
@@ -231,6 +241,9 @@ def can_talk(w):
     """(True, '') or (False, why): may the web say a sentence into this session?"""
     if w is None:
         return False, "no_session"
+    continuation = fallback.view(fallback_api(), w)
+    if continuation and continuation["state"] != "continued":
+        return False, "quota_continuation"
     if w["agent"] not in ("claude", "codex"):
         return False, "agent"
     if w["parked"]:
@@ -522,12 +535,14 @@ def settle(fid, wait_new=None):
                (r.get("state") == "returned" and t - r.get("returned_at", t) > KEEP_RETURNED):
                 Path(r["_path"]).unlink(missing_ok=True)
         live = [r for r in rows if r.get("state") in ("queued", "trying", "native", "waking")]
-        if not live:
-            return find(rows, wait_new)
         w = window(fid)
         if w is None:
             for r in live:
                 ret(r, "no_session")
+            return find(rows, wait_new)
+        fallback.maybe_start(fallback_api(), w, rows)
+        continuation = fallback.view(fallback_api(), w)
+        if continuation and continuation["state"] != "continued":
             return find(rows, wait_new)
         for r in live:
             if r.get("sid") and w["sid"] and r["sid"] != w["sid"] and not w["parked"]:
@@ -801,7 +816,7 @@ def status(fid):
     except Exception:  # noqa: BLE001 — a card that cannot be read is no card
         ask = None
     return dict(can_talk=ok, why=why, agent=(w or {}).get("agent", ""), session=(w or {}).get("sid", ""),
-                busy=bool(w and busy_of(w)), queue=q, ask=ask)
+                busy=bool(w and busy_of(w)), queue=q, ask=ask, continuation=fallback.view(fallback_api(), w))
 
 
 def say(args):
@@ -828,6 +843,9 @@ def say(args):
     r = dict(v=1, delivery=delivery, fid=fid, text=text or "（图片）", images=images, at=now(), sid=w["sid"],
              agent=w["agent"], state="queued", why="", tries=0)
     with lock(fid):
+        known = find(records(fid), delivery)
+        if known is not None:
+            return out(dict(delivery=delivery, state=public(known), reason=known.get("why", "")))
         save(r)
     log("say", r)
     got = settle(fid, delivery) or r
@@ -842,7 +860,7 @@ def public(r):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet_session_gate.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name"):
+    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer"):
         p = sub.add_parser(name)
         if name not in ("pending",):
             p.add_argument("--fid", required=name != "tick")
@@ -864,11 +882,16 @@ def main(argv=None):
             p.add_argument("--seed-file")
         if name == "name":
             p.add_argument("--name", required=True)
+        if name == "quota-transfer":
+            p.add_argument("--source-session", required=True)
     a = ap.parse_args(argv)
     if getattr(a, "fid", None) and not FID_RE.match(a.fid):
         return out(dict(ok=False, why="bad_fid"), 2)
     if a.cmd == "say":
         return say(a)
+    if a.cmd == "quota-transfer":
+        fallback.run(fallback_api(), a.fid, a.source_session)
+        return 0
     if a.cmd == "tick":
         fids = [a.fid] if a.fid else pending_fids()
         for f in fids:

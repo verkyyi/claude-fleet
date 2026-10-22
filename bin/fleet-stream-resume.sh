@@ -81,7 +81,19 @@ tell_parent() {
 
 case "$err" in
   server_error|overloaded|unknown) : ;;
-  rate_limit) log "skip error=$err: not a transient kind"; exit 0 ;;
+  rate_limit)
+    # T943: native quota failure goes to the unified session gate, not the
+    # transient retry sender. The gate reads the exact transcript and waits
+    # for native done; no state stamp or controller refusal is overridden.
+    _quota_web=$(tmux display-message -p -t "$TMUX_PANE" '#{@session_origin}|#{@cc_agent}|#{@fleet_id}' 2>/dev/null)
+    case "$_quota_web" in
+      web\|claude\|*)
+        if [ -f "$BIN/fleet_session_fallback.py" ]; then
+          (unset TMUX_PANE; python3 "$BIN/fleet_session_gate.py" status --fid "${_quota_web##*|}") </dev/null >/dev/null 2>&1 &
+        fi
+        ;;
+    esac
+    log "skip transient resume error=$err: quota boundary belongs to session gate"; exit 0 ;;
   *) log "skip error=${err:--}: not a transient kind"; tell_parent "it is not one that is resumed by itself"; exit 0 ;;
 esac
 

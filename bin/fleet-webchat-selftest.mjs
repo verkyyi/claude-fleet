@@ -787,7 +787,7 @@ if fid == ${JSON.stringify(GONE)}:
 if a[0] == "say":
     print(json.dumps({"delivery": "d1d1d1d1-0000-4000-8000-000000000001", "state": "queued", "reason": "busy"}))
 elif a[0] == "status":
-    print(json.dumps({"can_talk": True, "why": "", "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
+    print(json.dumps({"can_talk": True, "why": "", "continuation": {"state": "continued", "to": "codex", "message": "已换 Codex 继续。"}, "queue": [{"delivery": "d1", "text": "排着的", "why": "busy", "state": "queued"}]}))
 elif a[0] == "stop":
     print(json.dumps({"ok": True, "how": "escape"}))
 elif a[0] == "answer":
@@ -867,7 +867,7 @@ exit 2
     q.end();
   });
   const last = st.filter((e) => e.t === "state").at(-1) || {};
-  ok(last.can_talk === true && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),
+  ok(last.can_talk === true && last.continuation?.state === "continued" && last.continuation.to === "codex" && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),
     `Y the view's state says can_talk and what waits, no holder (${JSON.stringify(last)})`);
   await sstop(y);
 }

@@ -136,6 +136,9 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now)
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
+		if req.Provider == credvault.Claude && errors.Is(err, errNoProviderAccount) {
+			out.Error = credproxy.ClaudePoolUnavailable
+		}
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
@@ -286,7 +289,11 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 		return b, err
 	}
 	if len(choices) == 0 {
-		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one) that this machine's and this person's subscription allowlists permit" + s.noBindWhy(principal, endpointID, provider))
+		why := errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one) that this machine's and this person's subscription allowlists permit" + s.noBindWhy(principal, endpointID, provider))
+		if s.providerInventoryEmpty(principal, provider) {
+			return b, errors.Join(errNoProviderAccount, why)
+		}
+		return b, why
 	}
 	if isSvcPrincipal(principal) {
 		// a service yields a tight pool to people (claude-fleet#4006)

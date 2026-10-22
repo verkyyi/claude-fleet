@@ -549,6 +549,18 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
     tmux "$@" \; set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
   }
   _write_state
+  # Web sessions continue at a clean boundary even after their page closes
+  # (T943). The shared gate judges the native error; this hook authorizes no
+  # exit and never waits for a transfer. Old installs without it keep working.
+  if [ "$sem" = 'done' ] && [ -f "${0%/*}/fleet_session_fallback.py" ]; then
+    _quota_web=$(tmux display-message -p -t "$TMUX_PANE" '#{@session_origin}|#{@cc_agent}|#{@fleet_id}' 2>/dev/null)
+    case "$_quota_web" in
+      web\|claude\|*)
+        _quota_fid=${_quota_web##*|}
+        (unset TMUX_PANE; python3 "${0%/*}/fleet_session_gate.py" status --fid "$_quota_fid") </dev/null >/dev/null 2>&1 &
+        ;;
+    esac
+  fi
   command -v fleet_idle_activity >/dev/null 2>&1 && fleet_idle_activity
   command -v fleet_idle_window_activity >/dev/null 2>&1 && fleet_idle_window_activity
   # Wake the spinner (issue #887). It re-reads a QUIET fleet's windows only ~1/s;
