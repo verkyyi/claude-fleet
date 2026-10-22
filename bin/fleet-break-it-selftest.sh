@@ -5580,6 +5580,14 @@ drill_web_quota_dialog() {
   SECS=$(since "$started"); WHAT='quota dialog dismissed once; native boundary re-proved; drafts, tools, schedules, approvals and changed source held'
 }
 
+drill_quota_boundary_recheck() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-session-fallback-selftest.py" Continuation.test_unattempted_refusal_rechecks_when_native_cancel_or_delivery_settles >"$WORK/quota-boundary.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-boundary.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
+}
+
 drill_web_quota_continuation() {
   CAP=120
   local started; started=$(now)
@@ -6463,7 +6471,7 @@ drill_park_census_overcounts() {
   t0=$(now)
   out=$(bash "$BIN/fleet-park-metrics-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="$out"; return 1; }
-  WHAT='常驻空闲与可停空闲分计，观看和后台写原因；采样不足未知；停放认 HHV0 双标记，节省只读 C1 快照'
+  WHAT='空闲常驻按验收口径排除观看与后台，仍显示原因；采样不足未知；停放认 HHV0 双标记，C1 快照缺戳才读账本后备'
   SECS=$(since "$t0")
 }
 
@@ -6475,6 +6483,14 @@ drill_park_while_watched() {
     || { WHY="fleet_session_gate.py park no longer refuses a watched window"; return 1; }
   SECS=$(since "$t0")
   WHAT='有人在终端里看着的网页会话不停放；没人看（控制模式的客户端不算人）、闲着才停'
+}
+
+drill_park_human_presence_lost() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_park_screen_and_keyboard_sentence 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放页的单调时钟从零附近起步：首次输入立即记录 presence，未回车不醒，原句仍带入恢复首轮'
 }
 
 # A parked session that does not come back (task HHV0): the machine went away, the
@@ -6992,6 +7008,16 @@ drill_service_orphan_shell_holds_socket() {
 # asks the old copy over its own socket (--busy /api/busy) and waits while it
 # answers; a turn cut off anyway is said on the next start with 重试; the notice
 # is one quiet line; and 新对话 mid-answer puts the turn aside instead of a 409.
+drill_webchat_helper_stale_release() {
+  CAP=20; local t0
+  t0=$(now)
+  webchat_part release "Z resident service initially calls release A gate" \
+    "Z same process calls release B gate after stable switch" \
+    "Z new session uses current release launcher after stable switch" || return 1
+  WHAT='同一网页服务跨 stable A→B，后续 gate 与新建都用当前发行版，不丢会话或重复投递'
+  SECS=$(since "$t0")
+}
+
 drill_webchat_turn_cut_by_restart() {
   CAP=60; local t0
   t0=$(now)

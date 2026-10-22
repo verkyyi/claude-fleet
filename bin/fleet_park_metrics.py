@@ -56,6 +56,25 @@ def process_trees(text):
     return tree
 
 
+def latest_park_rss(path):
+    """Missing-stamp fallback, keyed by lifelong identity, from action rows only."""
+    saved = {}
+    try:
+        with Path(path).open() as book:
+            for line in book:
+                try:
+                    row = json.loads(line)
+                    if row.get("act") != "park" or not row.get("fid"):
+                        continue
+                    rss = row.get("rss_mb")
+                    saved[row["fid"]] = float(rss) if type(rss) in (int, float) and math.isfinite(rss) and rss >= 0 else None
+                except (ValueError, TypeError, AttributeError):
+                    continue
+    except OSError:
+        pass  # No readable book: missing snapshots stay unknown.
+    return saved
+
+
 def census(socket, session, cache_dir):
     # Exact session, one row per window: grouped views never duplicate a pane.
     fmt = "\x1f".join(["#{window_id}", "#{pane_pid}", "#{@fleet_role}", "#{window_name}",
@@ -67,6 +86,7 @@ def census(socket, session, cache_dir):
     watched = {wid for row in clients.split("\n") for control, sep, wid in [row.replace("\\037", "\x1f").partition("\x1f")]
                if sep and control != "1"}
     trees = process_trees(command(["ps", "-axo", "pid=,ppid=,rss=,time=,command="]))
+    saved_by_fid = latest_park_rss(Path(cache_dir).parent / "logs/park.ndjson")
     path = Path(cache_dir) / ("park-cpu-" + session + ".json")
     try:
         previous = json.loads(path.read_text())
@@ -79,7 +99,7 @@ def census(socket, session, cache_dir):
         fields = row.replace("\\037", "\x1f").split("\x1f")
         if len(fields) != 12:
             continue
-        wid, pid, role, name, parked, saved, wrap, _since, _fid, why, held, start = fields
+        wid, pid, role, name, parked, saved, wrap, _since, fid, why, held, start = fields
         if role in ("home", "panel") or (not role and name in ("home", "dash", "plan", "backlog")):
             continue
         if not pid.isdigit():
@@ -102,6 +122,8 @@ def census(socket, session, cache_dir):
                 saved_mb = None
         except ValueError:
             saved_mb = None
+        if not saved:
+            saved_mb = saved_by_fid.get(fid)
         # HHV0's request plus confirmed holding page; C1 owns the RSS snapshot.
         is_parked = bool(parked and held)
         result[wid] = {"state": "parked" if is_parked else "awake",
@@ -121,8 +143,8 @@ def inventory_park(reading, state, busy):
     """Join CPU/view observations with the inventory's turn and job state.
 
     Only these five fields cross the adapter boundary. `eligible` is the full
-    batch definition, not just a CPU observation. A sampling reason preserves
-    uncertainty about resident idle even if a viewer already blocks parking.
+    batch definition, not just a CPU observation. A viewer or background job
+    rules out idle even while the CPU sample is pending.
     """
     p = dict(reading)
     quiet = p.pop("quiet", None)
@@ -133,10 +155,10 @@ def inventory_park(reading, state, busy):
     if p["state"] != "parked":
         if not ended or quiet is False:
             p["why"] = "working"
-        elif quiet is None:
-            p["why"] = "sampling"
         elif busy == "bg":
             p["why"] = "background"
+        elif not blocked and quiet is None:
+            p["why"] = "sampling"
     return p
 
 
@@ -159,32 +181,27 @@ def summarize(workers):
                 out["parked_saved_mb"] = None
             elif out["parked_saved_mb"] is not None:
                 out["parked_saved_mb"] += p["saved_mb"]
-        elif w.get("state") not in ("done", "looping", "needs") or p["why"] == "working":
-            out["sessions_working"] += 1
-        elif p["why"] == "sampling":
+        elif p["eligible"] is None:
             # Until a full CPU sample, neither a zero idle count nor a working
             # count is known. Preserve that uncertainty through the heartbeat.
             out["idle_rss_mb"] = None
             reasons["sampling"] += 1
             sample_pending = True
-        else:
+        elif p["eligible"]:
             out["sessions_idle"] += 1
             if p["rss_mb"] is None:
                 out["idle_rss_mb"] = None
             elif out["idle_rss_mb"] is not None:
                 out["idle_rss_mb"] += p["rss_mb"]
             reasons[p["why"]] += 1
-        if p["state"] != "parked":
-            if p["eligible"] is None:
-                out["idle_eligible"] = out["idle_eligible_rss_mb"] = None
-            elif p["eligible"] and out["idle_eligible"] is not None:
-                out["idle_eligible"] += 1
-                if p["rss_mb"] is None:
-                    out["idle_eligible_rss_mb"] = None
-                elif out["idle_eligible_rss_mb"] is not None:
-                    out["idle_eligible_rss_mb"] += p["rss_mb"]
+        else:
+            out["sessions_working"] += 1
+            if p["why"] in ("watched", "background"):
+                reasons[p["why"]] += 1
     if sample_pending:
         out["sessions_idle"] = out["sessions_working"] = None
+    out["idle_eligible"] = out["sessions_idle"]
+    out["idle_eligible_rss_mb"] = out["idle_rss_mb"]
     out["idle_reasons"] = dict(reasons)
     return out
 
