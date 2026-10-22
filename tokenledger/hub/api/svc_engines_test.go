@@ -164,3 +164,28 @@ func TestSvcCodexPlainTemplateAndSingleEngine(t *testing.T) {
 		t.Fatal("single engine must not fallback")
 	}
 }
+
+func TestSvcLegacyQueuedRunStillReplaysAndRetries(t *testing.T) {
+	h, _, tok := svcEnvRig(t)
+	req := svcReq("probe", "before-release")
+	req.DeadlineS = 900
+	inputs := string(req.Inputs)
+	run, _, err := h.srv.Store.CreateSvcRun(store.SvcRun{Principal: "svc:livepage", Tenant: req.Tenant,
+		Subject: req.Subject, Template: req.Template, Digest: req.TemplateDigest, InputsJSON: inputs,
+		IdempotencyKey: req.IdempotencyKey, RequestSHA: svcRequestSHA(req, inputs), DeadlineS: 900}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, replay := svcDo(t, h, http.MethodPost, SvcRunsPath, tok, req)
+	if st != http.StatusAccepted || replay["run_id"] != run.Ref() || replay["replayed"] != true {
+		t.Fatalf("legacy replay %d %v", st, replay)
+	}
+	_, _ = h.srv.Store.ClaimSvcRuns("svc:livepage", 4, time.Now())
+	_, _ = h.srv.SvcRunFinish(run.ID, store.SvcRunFailed, SvcErrInfra, nil, nil)
+	_, _ = h.srv.Store.ClaimSvcRuns("svc:livepage", 4, time.Now())
+	run, _ = h.srv.Store.SvcRun(run.ID)
+	_, engine, err := h.srv.svcSelectEngine(run, "svc/legacy/a2", time.Now())
+	if err != nil || engine != "claude" {
+		t.Fatalf("legacy retry %s %v", engine, err)
+	}
+}

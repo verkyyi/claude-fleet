@@ -92,7 +92,7 @@ func svcNextEngine(run store.SvcRun) string {
 // policy remains the single owner of account allowlists and service yielding.
 func (s *Server) svcSelectEngine(run store.SvcRun, worker string, now time.Time) (store.SvcTemplate, string, error) {
 	order := svcEngineOrder(run)
-	if run.Attempt > 1 {
+	if run.Attempt > 1 && run.EnginePref != "" {
 		next := svcNextEngine(run)
 		if next == "" {
 			return store.SvcTemplate{}, "", fmt.Errorf("no fallback engine remains")

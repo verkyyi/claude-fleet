@@ -350,6 +350,7 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 		svcRunError(w, http.StatusBadRequest, "", "malformed request: "+err.Error())
 		return
 	}
+	legacyRequest := req.EnginePref == "" && len(req.EngineTemplates) == 0
 	if why := svcEngineRequest(&req); why != "" {
 		svcRunError(w, http.StatusBadRequest, SvcErrTemplateInvalid, why)
 		return
@@ -416,6 +417,11 @@ func (s *Server) handleSvcRunSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if !created && run.EnginePref == "" && legacyRequest {
+		old := req
+		old.EnginePref, old.EngineTemplates = "", nil
+		sha = svcRequestSHA(old, inputs)
 	}
 	if !created && run.RequestSHA != sha {
 		svcRunError(w, http.StatusConflict, "", "idempotency_key was already used for a different run ("+run.Ref()+")")
