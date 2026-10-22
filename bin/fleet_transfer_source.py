@@ -700,9 +700,18 @@ def repair_hooks(session, pane, fid, sid, dry=False):
                     json.loads(line).get('type') in ('response_item', 'event_msg')
                     for line in data[len(before):].splitlines() if line.strip()):
                 raise ValueError('native transcript changed during exit; inspect retained evidence')
-            pid = tm('display-message','-p','-t',source['pane'],'#{pane_pid}')
-            if tm('display-message','-p','-t',source['pane'],'#{pane_dead}') != '1':
-                run(['python3', BIN/'.fleet-transfer.py', 'process', 'shell', pid])
+            # Native death can precede wrapper credential revocation/cleanup.
+            # Wait for that owner; never respawn over a still-live wrapper.
+            deadline = time.monotonic()+10
+            while tm('display-message','-p','-t',source['pane'],'#{pane_dead}') != '1':
+                pid = tm('display-message','-p','-t',source['pane'],'#{pane_pid}')
+                try:
+                    run(['python3', BIN/'.fleet-transfer.py', 'process', 'shell', pid])
+                    break
+                except (OSError, subprocess.SubprocessError):
+                    if time.monotonic() >= deadline:
+                        raise ValueError('source wrapper has not finished cleanup; no repeated launch') from None
+                    time.sleep(0.1)
             if tm('display-message','-p','-t',source['pane'],'#{@fleet_id}') != fid:
                 raise ValueError('source FID changed after exit')
             launcher = str(BIN/'fleet-session-wrap.sh')

@@ -236,6 +236,7 @@ class BrokenHookMaintenance(unittest.TestCase):
                 +'mv '+shlex.quote(str(root/'native.pid.tmp'))+' '+shlex.quote(str(root/'native.pid'))+'\n'
                 +'while IFS= read -r line; do case "$line" in */exit*) exit 0;; esac; done\n')
             original=root/'wrapper.sh';original.write_text('bash '+shlex.quote(str(child))+'\n'
+                +'sleep 0.4\n'  # Native exit precedes wrapper credential/cleanup work.
                 +'[ "$(tmux -L '+label+' display-message -p -t "$TMUX_PANE" "#{@wrap_quiet}")" = 1 ] && exit 0\n'
                 +'exec sleep 600\n')
             successor=bin_/'fleet-session-wrap.sh';successor.write_text('#!/bin/bash\nprintf "%s\n" "$@" > '
