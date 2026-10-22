@@ -116,6 +116,12 @@ FLEET_BASE_BRANCH="main"
 # never retries by itself.
 # @label=Retry a session a temporary error stopped after @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_AUTO_RESUME_SECS=300
+# A worker launch refused for want of a session credential is retried by the
+# recovery page itself (15 s, doubling): its parent is told FAILED only once the
+# refusals have gone on this many seconds — a retry that comes up says nothing
+# (T915). 0 = told at the first refusal, as before.
+# @label=Tell the parent a launch failed for no credential after @group=spawn @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_CRED_REPORT_SECS=300
 
 # Every repo your machines host, on this one too (T673, 节点选择 C): a managed login
 # reads the person's set from the hub (the union of what each of their machines

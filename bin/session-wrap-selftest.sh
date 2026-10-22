@@ -246,10 +246,25 @@ waitfor "rf: a plain fast failure on the retry is the caller's again" screen_has
 
 CHECKS=$((CHECKS + 1)); [ ! -s "$WORK/reported" ] || fail "rf: a window bound to no issue told a parent: $(cat "$WORK/reported")"
 
+# RD (T915): no credential this once — the page presses ↵ by itself and the next
+# launch usually comes up, so the parent is NOT told FAILED while the streak is
+# younger than FLEET_CRED_REPORT_SECS; a retry that runs ends the streak unreported.
+mkdir -p "$WORK/rd"; printf refuse > "$WORK/rd/mode"; printf 78 > "$WORK/rd/issue"
+WRAP_ENV="FLEET_EXIT_CLOSE_SECS=0 FLEET_CRED_REPORT_SECS=300" win rd 0
+waitfor "rd: state exited" state_is rd exited
+waitfor "rd: the refused page" screen_has rd '重试启动'
+printf rc0 > "$WORK/rd/mode"; tf send-keys -t sw:rd Enter
+waitfor "rd: ↵ relaunched" launches rd 2
+: > "$WORK/rd/go"
+waitfor "rd: the retry ran and ended" screen_has rd '会话已结束'
+sleep 0.5
+CHECKS=$((CHECKS + 1)); [ ! -s "$WORK/reported" ] || fail "rd: a refusal its retry got past told the parent FAILED: $(cat "$WORK/reported")"
+
 # RW (issue #4702): a WORKER whose launch is refused tells the session that spawned
-# it — once a streak: the retry refused again says nothing more.
+# it — once a streak: the retry refused again says nothing more. (Grace 0: the
+# streak is old enough at once — T915.)
 mkdir -p "$WORK/rw"; printf refuse > "$WORK/rw/mode"; printf 77 > "$WORK/rw/issue"
-win rw 5
+WRAP_ENV="FLEET_EXIT_CLOSE_SECS=0 FLEET_CRED_REPORT_SECS=0" win rw 5
 waitfor "rw: state exited" state_is rw exited
 waitfor "rw: the parent was told" grep -sq -- '--state failed' "$WORK/reported"
 CHECKS=$((CHECKS + 1)); grep -q -- "--state failed --win %[0-9]* --summary the session did not start: launch failed (cred)" "$WORK/reported" \
