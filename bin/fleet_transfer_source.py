@@ -35,6 +35,7 @@ BIN = Path(__file__).absolute().parent
 ACCOUNT = runpy.run_path(str(BIN / '.fleet-account.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
+RUNTIME = runpy.run_path(str(BIN / 'fleet-codex-runtime.py'))
 ATTENTION = runpy.run_path(str(BIN / 'fleet-codex-attention.py'))
 save, read = ACCOUNT['save'], ACCOUNT['read']
 background_note = TRANSFER['background_note']
@@ -592,6 +593,10 @@ def repair_target_home(source):
     return real
 
 
+def target_runtime_preflight():
+    return RUNTIME['target_preflight'](root=BIN.parent)
+
+
 def repair_loop_restore(proof, source):
     """Resume the original paused record after its old controller is gone."""
     if not proof:
@@ -639,8 +644,10 @@ def repair_hooks(session, pane, fid, sid, dry=False):
         proof = repair_check(session, pane, fid, sid, allow_menu=True)
         source = proof['source']
         home = repair_target_home(source)
+        runtime_proof = target_runtime_preflight()
         if dry:
             print(json.dumps(dict(state='ready', fid=fid, sid=sid, missing_hooks=proof['missing_hooks'],
+                                  target_runtime=runtime_proof,
                                   loop_id=(proof['loop'] or {}).get('before', {}).get('id'),
                                   action='return-model-reminder-then-revalidate' if proof.get('model_menu') else 'resume-same-thread')))
             return
@@ -654,6 +661,8 @@ def repair_hooks(session, pane, fid, sid, dry=False):
             for name, argv in [('unstaged.patch',['diff','--binary']), ('index.patch',['diff','--cached','--binary']),
                                ('git-state.txt',['status','--porcelain=v1','--branch'])]:
                 (directory/name).write_text(run(['git','-C',source['worktree'],*argv])+'\n')
+            runtime_proof = target_runtime_preflight()
+            save(directory/'target-runtime.json', runtime_proof)
             fresh = repair_check(session, pane, fid, sid, allow_menu=True)
             if fresh != proof or repair_target_home(source) != home:
                 raise ValueError('maintenance source changed during preparation')
@@ -738,9 +747,7 @@ def repair_hooks(session, pane, fid, sid, dry=False):
             rpc = RPC(target['codex_identity']['remote'], timeout=10)
             try:
                 runtime = rpc.initialized
-                version = re.search(r'/(\d+)\.(\d+)\.(\d+)', runtime.get('userAgent', ''))
-                if not version or tuple(map(int, version.groups())) < (0, 162, 0):
-                    raise ValueError('resumed runtime capability is not verified >=0.162')
+                RUNTIME['require_capability'](rpc)
                 t = rpc.call('thread/read', {'threadId': sid, 'includeTurns': False})['thread']
                 if t.get('id') != sid or Path(t['cwd']).resolve() != Path(source['worktree']).resolve():
                     raise ValueError('resumed native thread/worktree changed')

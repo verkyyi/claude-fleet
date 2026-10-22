@@ -180,6 +180,10 @@ target_auth() {
   TARGET_AUTH_WHY="the login check itself failed: $(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
   return 1
 }
+target_runtime() {
+  [ "$TO" != codex ] || TARGET_RUNTIME=$(python3 "$BIN/fleet-codex-runtime.py" target-preflight) \
+    || die 'target runtime capability preflight failed; source retained'
+}
 # retry_main <dir> — `--retry` (issue #1669, EPIC #1665 C5): run a switch a dead
 # TARGET login stopped once more, with the arguments its record kept. The target
 # is asked first — still refused ⇒ exit 3 and the record stays pending (nothing
@@ -562,6 +566,7 @@ if [ "$DRY" = 1 ]; then
     printf 'target auth: REFUSED · %s\n' "$TARGET_AUTH_WHY"
     die "target-auth: $TARGET_AUTH_WHY — a cutover would not switch; log in to the target first"
   fi
+  target_runtime
   if [ "$IN_TURN" = 1 ]; then
     printf 'dry-run (in turn): arm with --after-turn; after this turn'"'"'s Stop, save a provenance package, /exit the source, then launch %s in %s.\n' "$TO" "$PANE"
   else
@@ -693,6 +698,17 @@ fi
 # The last read before /exit (issue #1667): a login that went bad while the
 # package was written still finds the source running.
 target_auth || refuse_target
+target_runtime
+[ "$TO" != codex ] || printf '%s\n' "$TARGET_RUNTIME" > "$BUNDLE/target-runtime.json" \
+  || die 'cannot preserve target runtime proof; source retained'
+# The bounded probe may overlap a new turn. It never authorizes exiting that
+# newer source merely because its target's initialize was successful.
+[ "$(source_read 2>/dev/null)" = "$RESOLVED" ] && source_ready \
+  || die 'source changed during target runtime preflight; source retained'
+if [ "$NOREPO" = 1 ]; then
+  [ "$(python3 "$BIN/.fleet-transfer-norepo.py" readiness "$SOCK" "$PANE" "$TRANSCRIPT" "$PID" "$SID" "$LOOP" "$SOURCE_AGENT")" = "$INPUT_VIEW" ] \
+    || die 'source scheduler or unsent input changed during runtime preflight; source retained'
+fi
 python3 "$HELPER" verify "$BUNDLE" || die 'source changed while preparing the transfer'
 TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-before-exit.txt" || die 'cannot preserve source screen before exiting'
 chmod 600 "$BUNDLE/pane-before-exit.txt" || die 'cannot protect source screen snapshot'

@@ -3,11 +3,12 @@
 # All child processes are bounded fake agents; never a real Codex/model request.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-python3 - "$BIN" <<'PY'
+python3 - "$BIN" "$@" <<'PY'
 import base64, hashlib, importlib.util, json, os, pathlib, signal, socket, struct, subprocess, sys, tempfile, threading, time, unittest
 from unittest import mock
 
 BIN = pathlib.Path(sys.argv[1])
+sys.path.insert(0,str(BIN))
 RUNTIME = BIN / 'fleet-codex-runtime.py'
 spec = importlib.util.spec_from_file_location('runtime', RUNTIME)
 runtime = importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime)
@@ -19,6 +20,69 @@ rpc = importlib.util.module_from_spec(spec); spec.loader.exec_module(rpc)
 # socket's directory stands, exits CLIENT_RC; FAIL_SCENARIO's server exits 9 unbound.
 SCENARIO = dict(record='{env:RUNTIME_TEST}', server=dict(lifetime=30),
                 client=dict(hold=dict(flag='--hold', secs=20), exit='{env:CLIENT_RC:0}'))
+
+class TargetPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(prefix='target-runtime-', dir='/tmp')
+        self.addCleanup(self.tmp.cleanup)
+        self.root=pathlib.Path(self.tmp.name)
+        self.release=self.root/'release'
+        self.managed=self.release/'tools/bin/codex'
+        self.managed.parent.mkdir(parents=True)
+        self.managed.write_text('#!'+sys.executable+'\nimport sys\n'
+            'if sys.argv[1:]==["--version"]:\n print("codex-cli 0.162.1");sys.exit(0)\n'
+            'import os,json\nif os.environ.get("PROBE_ENV_OUTPUT"):\n'
+            ' with open(os.environ["PROBE_ENV_OUTPUT"],"w") as out:\n'
+            '  json.dump({"home":os.environ["CODEX_HOME"],"auth_present":"OPENAI_API_KEY" in os.environ},out)\n'
+            +(BIN/'fleet_codex_fake_appserver.py').read_text())
+        self.managed.chmod(0o755)
+        self.scenario=self.root/'scenario.json'
+
+    def probe(self, version='0.162.1', **kwargs):
+        (self.root/'record').mkdir(exist_ok=True)
+        self.scenario.write_text(json.dumps(dict(version=version, record=str(self.root/'record'))))
+        with mock.patch.dict(os.environ, FLEET_FAKE_CODEX_SCRIPT=str(self.scenario),
+                             PROBE_ENV_OUTPUT=str(self.root/'probe-env.json'),OPENAI_API_KEY='invalid-fixture-key'):
+            return runtime.target_preflight(root=self.release, **kwargs)
+
+    def test_initialize_uses_managed_binary_and_never_starts_a_thread(self):
+        result=self.probe()
+        self.assertEqual(result['binary'], str(self.managed.resolve()))
+        self.assertIn('/0.162.1 ', result['initialize']['userAgent'])
+        server=json.loads((self.root/'record/server.json').read_text())
+        with self.assertRaises(ProcessLookupError): os.kill(server['pid'],0)
+        calls=[json.loads(x) for x in (self.root/'record/requests.log').read_text().splitlines()]
+        self.assertEqual([x['method'] for x in calls], ['initialize'])
+        self.assertFalse(pathlib.Path(server['path']).parent.exists())
+        env=json.loads((self.root/'probe-env.json').read_text())
+        self.assertFalse(env['auth_present'])
+        self.assertFalse(pathlib.Path(env['home']).exists())
+
+    def test_old_and_unknown_initialize_refuse_even_with_new_version_banner(self):
+        self.assertIn('0.162.1',subprocess.check_output([str(self.managed),'--version'],text=True))
+        for version in ('0.154.0', 'unknown'):
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'capability'):
+                self.probe(version)
+        with mock.patch('fleet_session_gate.CODEX_MIN',(0,163)), self.assertRaisesRegex(ValueError,'capability'):
+            self.probe()
+
+    def test_stalled_runtime_is_bounded_and_reaped(self):
+        self.managed.write_text('#!'+sys.executable+'\nimport time\ntime.sleep(30)\n')
+        started=time.monotonic()
+        with self.assertRaisesRegex(ValueError, 'initialize'):
+            self.probe(timeout=.3)
+        self.assertLess(time.monotonic()-started, 2)
+
+    def test_no_release_tool_uses_path_and_missing_binary_refuses(self):
+        self.managed.unlink()
+        with mock.patch.dict(os.environ, PATH=str(self.root)):
+            with self.assertRaisesRegex(ValueError, 'binary'):
+                self.probe()
+            fallback=self.root/'codex'
+            fallback.write_text('#!'+sys.executable+'\n'+(BIN/'fleet_codex_fake_appserver.py').read_text())
+            fallback.chmod(0o755)
+            self.assertEqual(self.probe()['binary'],str(fallback.resolve()))
+
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
@@ -340,5 +404,5 @@ class LaunchWitnessRetiredTests(unittest.TestCase):
         self.assertNotIn('LaunchWitness', src)
         self.assertNotIn('FLEET_LAUNCH_CONTEXT', src)
 
-unittest.main(argv=['codex-runtime'],verbosity=2)
+unittest.main(argv=['codex-runtime']+sys.argv[2:],verbosity=2)
 PY
