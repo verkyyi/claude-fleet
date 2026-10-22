@@ -661,6 +661,14 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			// never sees the credential, which rides inside TLS to the provider
 			out.Header.Set("X-Fleet-Relay", pass)
 		}
+		if provider == Codex {
+			// net/http must not replay a buffered inference body on a redirect or
+			// a reused-connection retry, including requests with idempotency headers.
+			out.GetBody = nil
+			client := *p.cfg.Upstream
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			return client.Do(out)
+		}
 		return p.cfg.Upstream.Do(out)
 	}
 	if _, err := http.NewRequest(r.Method, target, nil); err != nil {
@@ -683,6 +691,13 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	defer resp.Body.Close()
+	if provider == Codex && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// Do not hand the redirect to the Agent either: its HTTP client could
+		// automatically resend the same body to the Location target.
+		a.status, _ = refuseCode(w, provider, http.StatusBadRequest, "invalid_request_error", "codex_redirect_refused", "upstream redirect refused; request was not replayed")
+		a.why = "codex_redirect_refused"
+		return
+	}
 	responseBody := io.Reader(resp.Body)
 	if router, ok := p.cfg.Resolver.(CodexRouter); provider == Codex && ok && resp.StatusCode/100 == 2 {
 		record := func(refs []string) error {

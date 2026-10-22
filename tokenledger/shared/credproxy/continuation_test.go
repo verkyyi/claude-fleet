@@ -130,3 +130,28 @@ func TestCodexContinuationOutputSources(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexContinuationNeverFollowsRedirect(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusSeeOther} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls atomic.Int64
+			h := newHarness(t, true, func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.Header().Set("Location", "/replayed")
+					w.WriteHeader(status)
+					return
+				}
+				io.WriteString(w, `{"id":"unexpected-replay"}`)
+			})
+			pass := PassPrefix + "s"
+			h.hub.set(func() { h.hub.bind[pass] = "old" })
+			req := httptest.NewRequest(http.MethodPost, "/v1/proxy/codex/responses", strings.NewReader(`{"input":"once"}`))
+			req.Header.Set("Authorization", "Bearer "+pass)
+			w := httptest.NewRecorder()
+			h.p.Handler().ServeHTTP(w, req)
+			if calls.Load() != 1 || w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" {
+				t.Fatalf("redirect replayed: calls=%d status=%d", calls.Load(), w.Code)
+			}
+		})
+	}
+}
