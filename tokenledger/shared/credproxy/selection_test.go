@@ -122,9 +122,8 @@ func TestCodexSelectionNeverReplaysAcrossAccountOn401(t *testing.T) {
 	}
 	original := &http.Response{StatusCode: 401, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"token_expired"}}`))}
 	res := Resolution{Valid: true, Owner: "pool", Account: "default", AccessToken: "old"}
-	sends := 0
-	got := p.refreshRejected(context.Background(), original, "fixture", Codex, &res, func(Resolution) (*http.Response, error) { sends++; return nil, nil })
-	if got != original || sends != 0 || res.Account != "default" || resolver.reports.Load() != 1 {
+	got := p.refreshRejected(context.Background(), original, "fixture", Codex, &res)
+	if got != original || res.Account != "default" || resolver.reports.Load() != 1 {
 		t.Fatal("401 replayed across account")
 	}
 }

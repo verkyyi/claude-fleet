@@ -37,6 +37,13 @@ func TestCredProxyExpiredAccessRefreshes(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+pass)
 	response := httptest.NewRecorder()
 	proxy.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || calls.Load() != 1 {
+		t.Fatalf("401 must not replay: status=%d calls=%d", response.Code, calls.Load())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/proxy/codex/responses", strings.NewReader("{}"))
+	request.Header.Set("Authorization", "Bearer "+pass)
+	response = httptest.NewRecorder()
+	proxy.Handler().ServeHTTP(response, request)
 	if response.Code != 200 || response.Body.String() != "OK" || calls.Load() != 2 {
 		t.Fatalf("status=%d body=%q calls=%d", response.Code, response.Body.String(), calls.Load())
 	}

@@ -67,8 +67,7 @@ func (p *Proxy) forgetAccess(provider string, previous Resolution) {
 	}
 }
 
-func (p *Proxy) refreshRejected(ctx context.Context, response *http.Response, pass, provider string, resolved *Resolution,
-	send func(Resolution) (*http.Response, error)) *http.Response {
+func (p *Proxy) refreshRejected(ctx context.Context, response *http.Response, pass, provider string, resolved *Resolution) *http.Response {
 	rejecter, supported := p.cfg.Resolver.(AccessRejecter)
 	if !supported {
 		return response
@@ -112,17 +111,8 @@ func (p *Proxy) refreshRejected(ctx context.Context, response *http.Response, pa
 	if err != nil || !refreshed.Valid || refreshed.AccessToken == "" || refreshed.AccessToken == resolved.AccessToken {
 		return response
 	}
+	// Refresh for the next independent request; never replay the body, even
+	// on the same account. The current response and lease remain unchanged.
 	p.remember(pass, provider, refreshed)
-	if refreshed.Owner != resolved.Owner || refreshed.Account != resolved.Account {
-		// An authorization change may have replaced the binding while the
-		// refusal was handled. Never replay this body on another account.
-		return response
-	}
-	again, err := send(refreshed)
-	if err != nil {
-		return response
-	}
-	_ = original.Close()
-	*resolved = refreshed
-	return again
+	return response
 }
