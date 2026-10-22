@@ -6378,6 +6378,22 @@ drill_park_old_wrapper() {
   WHAT='旧外壳没有停放页：拒停，不送退出，不动凭据和窗口'
 }
 
+drill_park_loses_loop() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_wakeup 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='进程退出后到点唤醒，同一窗口与会话的首轮是原提示，约定时刻记入动作账本'
+}
+
+drill_park_loses_cron() {
+  CAP=45; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_cron_three_rounds 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='cron 连续停放接回三次，每轮原提示一次，不重建、不叠加'
+}
+
 drill_park_census_overcounts() {
   CAP=15; local t0 out rc
   t0=$(now)
