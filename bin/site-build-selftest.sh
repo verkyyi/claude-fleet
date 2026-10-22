@@ -36,8 +36,8 @@
 #   L  the legal pages (T883, EPIC WACK C2): /terms /privacy /en/terms /en/privacy
 #      built from site/legal/, each in its language with its draft line, its
 #      twin as hreflang, and the front page's footer; both front pages' footers
-#      carry 用户协议 · 隐私政策 (Terms · Privacy), the company and the ICP number
-#      linked to beian.miit.gov.cn — every footer key in both string tables; a
+#      carry 用户协议 · 隐私政策 (Terms · Privacy) and no company name or ICP
+#      number (ZCKT) — every footer key in both string tables; a
 #      legal source missing in one language fails the build
 #   T  fleet.trial off (issue #4269): the apply/ pages and llms files offer no
 #      trial — the scan card is 申请使用 → /apply (T794), no drill seconds — and
@@ -454,7 +454,7 @@ import json, os, re, sys
 OUT, ROOT = sys.argv[1], sys.argv[2]
 bad = []
 S = {l: json.load(open(os.path.join(ROOT, 'site', 'strings.%s.json' % l), encoding='utf-8')) for l in ('zh', 'en')}
-for k in ('terms', 'privacy', 'terms_path', 'privacy_path', 'company', 'icp', 'legal_home', 'terms_desc', 'privacy_desc'):
+for k in ('terms', 'privacy', 'terms_path', 'privacy_path', 'legal_home', 'terms_desc', 'privacy_desc'):
     for l in S:
         if not S[l].get(k):
             bad.append('L strings.%s.json: no %s' % (l, k))
@@ -463,10 +463,13 @@ for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
     foot = re.search(r'<footer>.*?</footer>', p, re.S)
     foot = foot.group(0) if foot else ''
     for want in ('href="%s">%s</a>' % (S[l]['terms_path'], S[l]['terms']),
-                 'href="%s">%s</a>' % (S[l]['privacy_path'], S[l]['privacy']),
-                 S[l]['company'], 'href="https://beian.miit.gov.cn/"', '粤ICP备13087700号'):
+                 'href="%s">%s</a>' % (S[l]['privacy_path'], S[l]['privacy'])):
         if want not in foot:
             bad.append('L %s footer: no %s' % (home, want))
+    # ZCKT: the footer carries no company name and no ICP number (the operator's call)
+    for gone in ('广州二四网络科技有限公司', 'ICP备', 'beian.miit.gov.cn'):
+        if gone in foot:
+            bad.append('L %s footer: still carries %s' % (home, gone))
     for doc in ('terms', 'privacy'):
         path = S[l][doc + '_path']
         f = os.path.join(OUT, path.lstrip('/'), 'index.html')
@@ -477,7 +480,7 @@ for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
         twin = S['en' if l == 'zh' else 'zh'][doc + '_path']
         need = ['<html lang="%s">' % S[l]['lang'], '<link rel="canonical" href="__ORIGIN__%s">' % path,
                 'href="__ORIGIN__%s"' % twin, '<h1>', '草稿' if l == 'zh' else 'Draft',
-                'href="%s" aria-current="page"' % path, S[l]['company'], '粤ICP备13087700号']
+                'href="%s" aria-current="page"' % path]
         for w in need:
             if w not in q:
                 bad.append('L %s: lacks %s' % (path, w))
@@ -492,7 +495,7 @@ for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
 for x in bad:
     print('FAIL ' + x)
 if not bad:
-    print('ok   L /terms /privacy /en/terms /en/privacy built, drafts, twins · footers carry both links, the company and the ICP number')
+    print('ok   L /terms /privacy /en/terms /en/privacy built, drafts, twins · footers carry both links, no company or ICP number')
 sys.exit(1 if bad else 0)
 PY
 mkdir -p "${T:?}/lsite"; cp -R "$ROOT/site/." "${T:?}/lsite/"; rm -f "${T:?}/lsite/legal/privacy.en.md"
