@@ -3733,6 +3733,16 @@ drill_recycle_rejoins() {
 # person's scope on this machine and each live certificate naming the login on
 # the revocation list (refused within 10 s), and recycleLeftovers reds on one
 # not there.
+
+# PV4D: board-only plans keep their engine and coordination evidence.
+drill_board_plan_facts() {
+  CAP=120; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-view-board-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  _drill_go_tests 'TestBoardPlanFacts' "$ROOT/tokenledger/hub/api/fleet_board_test.go" '计划、运行证据及协调归属分别显示' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_recycle_old_cert() {
   CAP=90; local t0 f="$ROOT/tokenledger/hub/api/fleet_recycle.go"
   t0=$(now)
@@ -7597,6 +7607,16 @@ drill_term_hub_rollout() {
   t0=$(now)
   term_go 'TestDrainForgetsReplica TestStateHolderUnreachablePassedOver TestTermHealthNumbers' 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' \
     '副本关停先通知终端并删自己的行；连不上的持有者被跳过，GET 不再 503' || return 1
+  SECS=$(since "$t0")
+}
+
+# term-renew-admission-refused (T968): an admission refusal did not run renew.
+drill_term_renew_admission_refused() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(cd "$ROOT/extras/web-console" && node --experimental-strip-types test/terminal-renew.mjs 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='准入明确拒绝后仍重开同一代；答复丢失只重连确认；不重放输入'
   SECS=$(since "$t0")
 }
 

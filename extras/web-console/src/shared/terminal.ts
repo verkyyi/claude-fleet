@@ -161,9 +161,11 @@ export function connectTerminal(worker: string | null, options: {
             pendingNotice = worker === null ? "renewed" : "current";
             schedule(error, true); return;
           }
-          // A lost answer to a renew is uncertain: never renew again on a
-          // network retry — reconnect plainly; «interrupted» says if it happened.
-          if (renewing && transient.has(error)) renewing = false;
+          // Admission throttling refused the request before the node ran it:
+          // keep the pending renewal and retry with the same generation.
+          // A lost answer is uncertain: reconnect plainly; «interrupted» says
+          // whether that renewal happened, without opening another terminal.
+          if (renewing && transient.has(error) && !["rate", "too_many"].includes(error)) renewing = false;
           if (transient.has(error)) {
             // a failed door or direct path: the hub for now, the door again later (XX79, RMVE)
             if (state.mode === "direct" || state.mode === "door") relay = true;

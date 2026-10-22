@@ -280,8 +280,8 @@ fleet_ui_t() {
     en:view_grp_ask_fmt) printf 'Waiting on you %s' "${1:-}" ;;
     zh:view_grp_work_fmt) printf '在干活 %s' "${1:-}" ;;
     en:view_grp_work_fmt) printf 'Working %s' "${1:-}" ;;
-    zh:view_grp_queue_fmt) printf '排队中 %s' "${1:-}" ;;
-    en:view_grp_queue_fmt) printf 'Queued %s' "${1:-}" ;;
+    zh:view_grp_queue_fmt) printf '待派发 / 保留 %s' "${1:-}" ;;
+    en:view_grp_queue_fmt) printf 'Pending / retained %s' "${1:-}" ;;
     zh:view_stage_checking) printf '检查中' ;;
     en:view_stage_checking) printf 'checks running' ;;
     zh:view_stage_red) printf '检查红' ;;

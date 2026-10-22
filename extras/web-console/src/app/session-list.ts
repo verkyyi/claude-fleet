@@ -30,8 +30,11 @@ export const rowMachine = (r: Row) => r.board?.machine || r.live?.machine || r.e
 
 const AGENT: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
 export const rowAgent = (r: Row) => {
-  const a = r.task?.actual_agent || r.task?.resolved_agent || r.task?.agent || "";
-  return AGENT[a] || a;
+  if (r.board?.agent_words) return tr(...r.board.agent_words);
+  // An older hub's choice is not proof of the engine that actually ran.
+  const a = r.task?.actual_agent || "";
+  if (a) return AGENT[a] || a;
+  return tr("未知", "Unknown");
 };
 
 // How long it has been open: 开了 5 分钟 · 开了 3 小时 · 开了 2 天.
@@ -50,7 +53,7 @@ export function openFor(born: number, now = Date.now()): string {
 // nearly everyone has one home, and its name said nothing).
 export function rowMeta(r: Row, now = Date.now(), machines = 1): string {
   const where = r.group === "gone" ? tr("已结束", "ended") : "";
-  return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
+  return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), r.board?.context ? tr(...r.board.context) : "", where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
 }
 
 // How many machines the person's sessions run on: a name is shown only past one.
@@ -68,6 +71,7 @@ export const isTerminal = (r: Row) => (r.origin ? r.origin === "terminal" : !!r.
 // opened, its ask while it waits on them, 空闲 for any open one at rest (a
 // parked one too). `null`: the list says nothing for it.
 export function rowState(r: Row, replied = false): [string, string] {
+  if (r.board && r.group === "queue") return r.tag;
   if (r.glyph === "work") return ["回答中", "Replying"];
   if (replied) return ["新回复", "New reply"];
   if (r.group === "ask" || r.group === "gone" || r.glyph === "wait" || r.glyph === "pr") return r.tag;
@@ -75,7 +79,7 @@ export function rowState(r: Row, replied = false): [string, string] {
 }
 // what the list prints at a row's end: only what asks to be looked at
 export function listWord(r: Row, replied = false): [string, string] | null {
-  if (r.glyph === "work" || replied || r.group === "ask") return rowState(r, replied);
+  if (r.glyph === "work" || replied || r.group === "ask" || (r.board && r.group === "queue")) return rowState(r, replied);
   return null;
 }
 

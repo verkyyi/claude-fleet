@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"strconv"
 	"testing"
 	"time"
@@ -217,7 +218,7 @@ func TestBoardLiveAskedIsAsk(t *testing.T) {
 		keep.FID:                               {"ask", "waiting_you", "在等你回话 · 2 小时后停放，回话即唤醒"},
 		parked.FID:                             {"ask", "parked", "已停放 · 在等你点头，回话即唤醒"},
 		stopped.FID:                            {"ask", "stopped", "出错停住：服务端临时出错 · 4 分钟后自动重试"},
-		poster.FID:                             {"queue", "completed", "还没收：做完了，后台的活还在跑 · 18 分钟后收"},
+		poster.FID:                             {"work", "looping", ""},
 		busy.FID:                               {"work", "working", ""},
 		"0b7e8c1a-1111-4222-8333-444455556699": {"gone", "exited", ""},
 	}
@@ -325,7 +326,7 @@ func TestBoardOriginAndCanTalk(t *testing.T) {
 		talk        bool
 	}
 	for id, w := range map[string]want{
-		web: {"web", "working", true}, parked: {"web", "idle", true}, term: {"terminal", "turn_done", true},
+		web: {"web", "working", true}, parked: {"web", "session_parked", true}, term: {"terminal", "turn_done", true},
 		exited: {"terminal", "exited", false}, maint: {"terminal", "idle", false}, rec.FID: {"", "queued", false},
 		gated: {"web", "turn_done", false},
 	} {
@@ -334,12 +335,107 @@ func TestBoardOriginAndCanTalk(t *testing.T) {
 			t.Errorf("row %s = %+v; want origin %q tag %s can_talk %v", id, r, w.origin, w.tag, w.talk)
 		}
 	}
-	if got[parked].Words != got[maint].Words || got[parked].Group != "queue" {
-		t.Errorf("a parked session does not read as idle: %+v", got[parked])
+	if got[parked].Words != [2]string{"已停放", "Parked"} || got[parked].Group != "queue" {
+		t.Errorf("a parked session must be explicit: %+v", got[parked])
 	}
 	// origin and can_talk move the digest: the page redraws when a session parks or wakes
 	live[0].Worker["origin"] = ""
 	if b2, _ := s.buildBoard("gh:1", live, now); b2.Digest == b.Digest {
 		t.Error("the digest ignores origin")
+	}
+}
+
+// PV4D: a record is a plan, not evidence of a running agent or a scheduler.
+func TestBoardPlanFacts(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	parent, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "coordinator", RequestedAgent: "codex", ResolvedAgent: "codex", AuthorityVersion: 1}, "parent-plan", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "dependency words do not schedule", RequestedAgent: "codex", AuthorityVersion: 1, ResolvedAgent: "codex", ParentTask: parent.Ref}, "child-plan", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(live []FleetSession) BoardRow {
+		t.Helper()
+		b, err := s.buildBoard("gh:1", live, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range b.Rows {
+			if r.ID == child.FID {
+				return r
+			}
+		}
+		t.Fatal("missing record")
+		return BoardRow{}
+	}
+	r := read(nil)
+	if r.Agent != "codex" || r.AgentBasis != "planned" || r.Words[1] != "Not dispatched" || r.Coordinator != parent.Short || r.Parent != parent.FID {
+		data, _ := json.Marshal(r)
+		t.Fatalf("planned record: %s", data)
+	}
+	set := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := st.DB().Exec(sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("UPDATE fleet_tasks SET operation_id='op-accepted' WHERE id=?", child.ID)
+	if r = read(nil); r.Tag != "not_seen" || r.Context[0] != "" || r.AgentBasis == "planned" {
+		t.Fatalf("accepted dispatch without a worker is not undispatched: %+v", r)
+	}
+	set("UPDATE fleet_tasks SET state='starting' WHERE id=?", child.ID)
+	if r = read(nil); r.Tag != "starting" || r.AgentBasis != "planned" {
+		t.Fatalf("starting: %+v", r)
+	}
+	set("UPDATE fleet_tasks SET resolved_agent='', requested_agent='', agent='' WHERE id=?", child.ID)
+	if r = read(nil); r.Agent != "" || r.AgentWords[1] != "Unknown" {
+		t.Fatalf("unknown: %+v", r)
+	}
+	set("UPDATE fleet_tasks SET resolved_agent='codex', requested_agent='codex', state='accepted', operation_id='' WHERE id=?", child.ID)
+	set("UPDATE fleet_tasks SET worker_id='fleet/existing' WHERE id=?", child.ID)
+	if r = read(nil); r.Tag != "not_seen" || r.AgentBasis == "planned" {
+		t.Fatalf("accepted with worker but no inventory: %+v", r)
+	}
+	set("UPDATE fleet_tasks SET worker_id='' WHERE id=?", child.ID)
+	// Reserving a task stamps opened_at even though no worker has started.
+	if r = read(nil); r.Tag != "queued" || r.AgentBasis != "planned" {
+		t.Fatalf("reserved ID timestamp is not runtime evidence: %+v", r)
+	}
+	push := func(events ...map[string]any) {
+		t.Helper()
+		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep-plan", Machine: "test-machine", Login: "alice", ID: child.FID, Events: events}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := func(kind string, seq int, agent string) map[string]any {
+		return map[string]any{"ev": kind, "id": child.FID, "seq": float64(seq), "ts": float64(now.Unix()), "agent": agent, "native": "native-test"}
+	}
+	push(event("opened", 1, "codex"), event("native", 2, "claude"))
+	// The placement state may remain accepted after native startup.
+	if r = read(nil); r.Tag != "not_seen" || r.AgentBasis != "native" {
+		t.Fatalf("accepted with native startup is not undispatched: %+v", r)
+	}
+	wid := "fleet/" + child.FID
+	live := []FleetSession{{WorkerID: &wid, Availability: "online", Worker: map[string]any{"identity": child.FID, "state": "working", "agent": "codex"}}}
+	if r = read(live); r.Agent != "claude" || r.AgentBasis != "native" || r.Group != "work" {
+		t.Fatalf("native wins plan and inventory: %+v", r)
+	}
+	set("UPDATE fleet_tasks SET outcome='succeeded' WHERE id=?", child.ID)
+	if r = read(live); r.Group != "work" || r.Outcome != "succeeded" {
+		t.Fatalf("new work after result: %+v", r)
+	}
+	live[0].Worker["state"] = "idle"
+	live[0].Worker["reap_why"] = "keep"
+	if r = read(live); r.Tag != "retained_completed" || r.Words[0] != "已完成 · 保留中" || r.Why[0] != "不会自动收：你设了保留" {
+		t.Fatalf("completed retained: %+v", r)
+	}
+	push(event("closed", 3, "claude"))
+	if r = read(nil); r.Group != "gone" || r.Agent != "claude" || r.AgentBasis != "native" {
+		t.Fatalf("history: %+v", r)
 	}
 }

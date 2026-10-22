@@ -69,10 +69,10 @@ assert.equal(searchRows(rows, '').length, rows.length);
 
 // the one detail line: code · agent · how long — the machine only past one (会话合一 Y01K)
 // (node's language is the machine's: either one)
-assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · Claude Code · (开了 3 小时|open 3 h)$`));
-assert.match(rowMeta(open[0], now, 2), new RegExp(`^${open[0].code} · build-box · Claude Code · (开了 3 小时|open 3 h)$`));
+assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · (未知|Unknown) · (开了 3 小时|open 3 h)$`));
+assert.match(rowMeta(open[0], now, 2), new RegExp(`^${open[0].code} · build-box · (未知|Unknown) · (开了 3 小时|open 3 h)$`));
 assert.equal(machineCount(rows), 2, 'build-box and office');
-assert.match(rowMeta(gone[0], now), /^(已结束|ended)$/);
+assert.match(rowMeta(gone[0], now), /^(未知 · 已结束|Unknown · ended)$/);
 assert.match(openFor(now - 5 * 60e3, now), /^(开了 5 分钟|open 5 min)$/);
 assert.equal(openFor(0, now), '');
 
@@ -131,3 +131,10 @@ assert.deepEqual([pk[0].glyph, pk[0].tone, pk[0].tag[0], pk[0].why, pk[0].origin
 assert.deepEqual([pk[1].glyph, pk[1].tag[0]], ['wait', '停放'], 'a terminal\'s parked row stays as it was');
 
 console.log('ok session-list.mjs');
+
+// PV4D: shared board facts reach hover/long-press and the visible status.
+const plan = boardRows({rows:[{id:'planned', title:'plan',group:'queue',tag:'queued', words:['未派发','Not dispatched'],
+ agent_words:['Codex（计划）','Codex (planned)'], agent_basis:'planned',context:['尚未启动 · 协调负责人：AB12','Not started · Coordinator: AB12'],at:1}]},[],[])[0];
+assert.match(rowMeta(plan), /Codex/);
+assert.match(rowMeta(plan), /AB12/);
+assert.deepEqual(listWord(plan),plan.tag);

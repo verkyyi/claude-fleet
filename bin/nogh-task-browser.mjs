@@ -16,6 +16,8 @@ const base = { authority_version: 1, generation: 1, created_at: observed, update
 const tasks = [
   { ...base, id: 'T1', title: 'Retained native, explicit success', outcome: 'succeeded', live: { state: 'working' },
     worker_id: 'fixture-fleet/fixture-session', pr: 'fixture/repo#77', pr_state: 'waiting' },
+  { ...base, id: 'T5', title: 'Completed retained idle', outcome: 'succeeded', live: { state: 'idle' },
+    worker_id: 'fixture-fleet/idle-session' },
   { ...base, id: 'T2', title: 'Provider mismatch', actual_agent: 'claude' },
   { id: 'T3', title: 'Legacy absence is unknown', state: 'open', created_at: observed },
   { ...base, id: 'T4', title: 'Merged PR, still working', pr: 'fixture/repo#78', pr_state: 'merged' },
@@ -25,7 +27,9 @@ const requests = [];
 const origin = 'http://127.0.0.1:9876';
 // T1's session is still up: its record's result stands beside it (T644 C4)
 const sessions = { sessions: [{ machine_name: 'fixture-mac', worker: { worker_id: 'fixture-fleet/fixture-session', key: 'task-t1',
-  title: 'Retained native, explicit success', state: 'working', born: Date.parse(observed) / 1000 } }] };
+  title: 'Retained native, explicit success', state: 'working', born: Date.parse(observed) / 1000 } },
+  { machine_name: 'fixture-mac', worker: { worker_id: 'fixture-fleet/idle-session', key: 'task-t5',
+    title: 'Completed retained idle', state: 'idle', born: Date.parse(observed) / 1000 } }] };
 async function fixture(route) {
   const req = route.request();
   const url = new URL(req.url());
@@ -81,7 +85,15 @@ try {
     // the details: beside the list on a computer, a sheet on a phone
     const detail = viewport.width >= 1024 ? page.locator('aside') : page.getByRole('dialog');
     await row('T1').waitFor();
-    assert.match(await row('T1').innerText(), /Completed/);
+    assert.match(await row('T1').innerText(), /Working/);
+    assert.doesNotMatch(await row('T1').innerText(), /Completed/);
+    assert.match(await row('T5').innerText(), /Completed · retained/);
+    // A committed result remains true while the retained session takes new work.
+    await row('T1').click();
+    await detail.locator('summary').click();
+    assert.match(await detail.innerText(), /Task state\s*Completed/);
+    assert.match(await detail.innerText(), /Session observation\s*Working/);
+    if (viewport.width < 1024) await page.keyboard.press('Escape');
     assert.match(await row('T2').innerText(), /Agent mismatch/);
     assert.match(await row('T3').innerText(), /Unknown/);
     await row('T4').focus();
@@ -98,7 +110,8 @@ try {
     await page.getByRole('button', { name: 'Retry read', exact: true }).waitFor({ timeout: 15000 });
     assert.match(await page.locator('main').innerText(), /Stale information/);
     assert.equal(await page.locator('time').getAttribute('datetime'), observed);
-    assert.match(await row('T1').innerText(), /Completed/);
+    assert.match(await row('T1').innerText(), /Working/);
+    assert.doesNotMatch(await row('T1').innerText(), /Completed/);
     // the session list is the one way in (GR5E C2): the mark leads back to it;
     // a phone's screen other than the list wears a back bar instead (GR5E C7)
     if (viewport.width >= 768) assert.ok(await page.locator('a[href="/app"]:visible').count() > 0, 'existing navigation missing');

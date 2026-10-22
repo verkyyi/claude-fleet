@@ -65,3 +65,5 @@ assert.equal(endedStep('w', 't:1', undefined, renewed), 'reconnect');
 assert.equal(endedStep('w', 't:1', 't:1', renewed), 'leave');
 assert.equal(endedStep('w', '', undefined, renewed), 'leave');
 console.log('terminal recovery: ok');
+
+await import("./terminal-renew.mjs");

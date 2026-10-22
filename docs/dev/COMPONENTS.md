@@ -147,7 +147,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
 | 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-id.sh fleet-id-selftest* fleet-id-results-selftest* fleet-id-migrate-selftest* fleet_id.py fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
-| 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-restore-session*` | 迁移与恢复历史 |
+| 会话迁移与历史 | `fleet-move* fleet_move_codex.py fleet-history* fleet-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
@@ -158,7 +158,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 额度观察 | `fleet-quota* usage-*` | 额度与用量 |
 | 项目依赖复用 | `fleet-deps-*` | 显式依赖克隆/链接，不属于默认会话启动 |
 | 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install* fleet-dev-mode*` | 安装、版本与包 |
-| 宿主清理与保护 | `fleet-cleanup* fleet-reconcile-tick* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-park* fleet_park*` | 资源、退出与停放；停放页保留屏幕与未确认输入，回车接回同一会话 |
+| 宿主清理与保护 | `fleet-cleanup* fleet-reconcile-tick* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-park* fleet_park* fleet_wake_guard.py` | 资源、退出与停放；停放页保留屏幕与未确认输入，回车接回同一会话 |
 | 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠的一版兼容转发 |
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect*` | 收集与账本 |
 | 终端状态与节点连接 | `tmux-spinner* fleet-render-watch.py fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接；spinner 的 shell 入口加载配置后 exec Python 主循环，复用 render-watch 的常驻 control transport、可见性和有界等待 |
