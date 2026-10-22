@@ -2391,7 +2391,14 @@ STUB
 case "$*" in *fcp1.test*) echo 'token in argv'; exit 1 ;; esac
 case "$*" in *'model_provider="fleet"'*'base_url="http://127.0.0.1:18923/codex"'*'exec --skip-git-repo-check --ephemeral --sandbox read-only'*) ;; *) echo 'wrong wiring'; exit 1 ;; esac
 [ -f "$HOME/reply.fail" ] && { echo 'Codex unavailable'; exit 1; }
-echo ok
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --output-last-message ]; then
+    [ -f "$HOME/reply.empty" ] || echo ok > "$2"
+    break
+  fi
+  shift
+done
+echo 'Codex diagnostic, not a reply'
 STUB
   chmod +x "$sb/codex"
   printf 'FLEET_AGENT=codex\n' > "$sb/home/.config/claude-fleet/hub-defaults.conf"
@@ -2429,6 +2436,10 @@ PYMOCK
   : > "$sb/home/reply.fail"
   out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
   case "$out" in "ready: FAIL reply: "*"Codex unavailable"*) ;; *) WHY="Codex unavailable accepted: $out"; sr_down; return 1 ;; esac
+  rm "$sb/home/reply.fail"
+  : > "$sb/home/reply.empty"
+  out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
+  case "$out" in "ready: FAIL reply: "*"Codex answered nothing"*) ;; *) WHY="Codex diagnostics counted as reply: $out"; sr_down; return 1 ;; esac
   : > "$sb/home/mirror.fail"
   out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
   case "$out" in "ready: FAIL reply: "*"credential-free"*) ;; *) WHY="unsafe Codex home accepted: $out"; sr_down; return 1 ;; esac

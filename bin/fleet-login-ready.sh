@@ -113,11 +113,17 @@ if [ "$agent" = codex ]; then
   out=$(printf '%s' "$CRED" | as_login bash -c 'IFS= read -r tok
     unset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN
     export FLEET_CODEX_SESSION_CRED="$tok" CODEX_HOME="$4"
-    cd "$HOME" && exec perl -e "alarm shift; exec @ARGV" "$2" "$3" \
+    cd "$HOME" || exit 1
+    reply_file=$(mktemp "$CODEX_HOME/ready-reply.XXXXXX") || exit 1
+    perl -e "alarm shift; exec @ARGV" "$2" "$3" \
       -c "model_provider=\"fleet\"" \
       -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$1/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}" \
       -c "features.plugins=false" -c "features.apps=false" -c "analytics.enabled=false" \
-      exec --skip-git-repo-check --ephemeral --sandbox read-only "Reply with the single word: ok. Do not use tools." </dev/null' \
+      exec --skip-git-repo-check --ephemeral --sandbox read-only --output-last-message "$reply_file" "Reply with the single word: ok. Do not use tools." </dev/null
+    rc=$?
+    if [ "$rc" = 0 ] && [ -z "$(tr -d "[:space:]" < "$reply_file")" ]; then echo "Codex answered nothing"; rc=1; fi
+    rm -f "$reply_file"
+    exit "$rc"' \
     _ "$port" "$REPLY_SECS" "${FLEET_CODEX_BIN:-codex}" "$mirror" 2>&1); rc=$?
 else
   # shellcheck disable=SC2016 # expanded by the inner bash, as the login
