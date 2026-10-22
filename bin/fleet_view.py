@@ -2218,6 +2218,8 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
+        # Either source losing observation is enough to withhold a live glyph.
+        e["lost"] = bool(e.get("lost") or r.get("lost"))
         e["source_order"] = source_order
         # The old board's queued tag also covers reserved, undispatched tasks.
         # Only starting proves an accepted start; never infer it from no session.
@@ -2462,7 +2464,8 @@ def note_of(e):
     console card's 「为什么还没收」 line, one source). (text, red)."""
     tags = [t for t in (e.get("tags") or []) if t and t != e.get("repo")]
     red = any(say("view_tag_cfg_broken") in t for t in tags)
-    facts = [e.get("board_context"), e.get("word"), e.get("ask"),
+    facts = [("Execution status unknown" if ui_lang() == "en" else "运行情况未知") if e.get("lost") else "",
+             e.get("board_context"), e.get("word"), e.get("ask"),
              task_status_word("loop") if e.get("loop") else "",
              agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why")]
     return " · ".join([x for x in facts if x] + tags), red

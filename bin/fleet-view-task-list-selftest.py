@@ -119,6 +119,17 @@ class TaskList(unittest.TestCase):
         self.assertEqual(v.task_status(rows["starting"]), "pending")
         self.assertEqual(v.task_status(rows["loop"]), "quiet")
 
+    def test_either_observation_source_lost_hides_running(self):
+        for local_lost, hub_lost in ((False, True), (True, False)):
+            e = row("@1", fid="same", state="working", lost=local_lost)
+            groups = {g: [] for g in v.GROUPS}
+            groups["work"] = [e]
+            board = dict(rows=[dict(id="same", group="work", tag="working", state="working", running=True, lost=hub_lost)])
+            got, _ = v.board_apply(board, groups, [], [], "node", "user")
+            self.assertTrue(got["work"][0]["lost"])
+            self.assertEqual(v.task_status(got["work"][0]), "quiet")
+            self.assertIn("运行情况未知", v.note_of(got["work"][0])[0])
+
     def test_recurring_and_one_shot_marks_are_distinct(self):
         self.assertTrue(v.recurring_plan("id=job@999 cron=job@*/5_*_*_*_*", 100))
         self.assertFalse(v.recurring_plan("id=job@99 cron=job@*/5_*_*_*_*", 100))
