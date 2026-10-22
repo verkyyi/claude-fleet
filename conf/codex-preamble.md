@@ -32,14 +32,19 @@ Follow it as written, with these translations (they are the only differences):
   runs the same fleet script and returns its exit code and output unchanged.
   Never type the script yourself; only if the `fleet` server is missing from this
   session, run the script docs/dev/FLEET-MCP.md names for that tool and say so.
-- **Claude-only tools you do not have:** the `Explore`/`Task` subagents, and the
-  `Artifact` tool. `AskUserQuestion` maps to Codex's native user-input tool when
+- **Use Codex's own tool set.** Claude's `Explore` / `Task` / `Agent` names are
+  not Codex tool names. Use native subagent tools such as `spawn_agent` when
+  this session exposes them, for research or implementation within this task;
+  the task's agent owns integration and validation. If those tools are absent,
+  work inline. Claude's `Artifact` tool is also unavailable here.
+  `AskUserQuestion` maps to Codex's native user-input tool when
   it is available. Never wait on the operator — make the call yourself. Claude's
   `SendMessage` is the `fleet` tool `send` here (`to: issue:<N>`). A document, image,
   PDF or QR code the operator should SEE goes to them with the `fleet` tool `show`
   — never `open` it on this machine. Search the code with your own tools.
-- **The rails are unchanged and absolute:** edit only inside this worktree, never
-  the base checkout (a hook blocks it); never run destructive tmux; file adjacent
+- **The rails are unchanged and absolute:** edit in this task's worktree or its
+  verified native linked worktrees, never the base checkout (a hook blocks it);
+  never run destructive tmux; file adjacent
   work through the `file_issue` tool; converse through issue comments (`comment`);
   open your own PR and land it once `pr_verdict` reads `READY` (`pr_merge`); a
   real blocker is one `ask` call, then stop.

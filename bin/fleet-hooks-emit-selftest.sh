@@ -75,7 +75,7 @@ grep -q 'Edit|Write' "$WORK/codex.tsv" \
 grep -q 'artifact-guard' "$WORK/codex.tsv" \
   && st_fail "artifact-guard.py reached codex, which has no Artifact tool" "$cdx"
 grep -q 'agent-guard' "$WORK/codex.tsv" \
-  && st_fail "agent-guard.py reached codex, which has no Agent tool" "$cdx"
+  && st_fail "retired agent-guard.py reached the Codex hook table" "$cdx"
 grep -q 'classify-hook' "$WORK/codex.tsv" \
   && st_fail "the retired screen classifier (issue #2543) is still wired on Codex Stop" "$cdx"
 grep -q 'handoff-latch-reset-hook\|session-end-hook' "$WORK/codex.tsv" \
