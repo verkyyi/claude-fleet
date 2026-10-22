@@ -237,6 +237,12 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
         return subprocess.check_output(['tmux','-L',session,'show-options','-wqv','-t',pane,'@'+key],
                                        text=True, timeout=5).strip()
     mark = opt('loop')
+    if os.environ.get('FLEET_QUOTA_LOOP_REPLACEMENT'):
+        if agent != 'claude' or Path(loop).resolve() != Path(os.environ['FLEET_QUOTA_LOOP_REPLACEMENT']).resolve():
+            raise ValueError('external quota replacement must carry its exact loop specification')
+        from fleet_transfer_source import quota_loop_replacement
+        return quota_loop_replacement(dict(session=session, pane=pane, transcript=transcript,
+                                           pid=int(pid), session_id=sid), mark)
     reader = runpy.run_path(str(Path(__file__).with_name('fleet_loop_mark.py')))
     active = reader['prune'](reader['parse'](mark), int(time.time()))
     try:
@@ -291,7 +297,10 @@ def readiness(session, pane, transcript, pid, sid, loop, agent):
     if view['state'] not in ('empty','draft'):
         raise ValueError('source input is not safely exportable: ' + view.get('reason','unknown composer'))
     if agent == 'claude' and loop:
-        view['native_plan'] = verified
+        if os.environ.get('FLEET_QUOTA_LOOP_REPLACEMENT'):
+            view['quota_loop_replacement'] = verified
+        else:
+            view['native_plan'] = verified
     return view
 
 

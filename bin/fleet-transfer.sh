@@ -19,6 +19,9 @@
 # --quota-continuation  Internal web continuation: exact Claude quota failure,
 #                 empty native prompt and no live tools, approvals or loops.
 #                 Requires --expected-session-id; all normal cutover gates apply.
+# --quota-loop-replacement FILE  Explicit external single-session loop replacement;
+#                 requires quota-continuation, exact source, private handoff and
+#                 original user /loop provenance. Never a current native export.
 # --disposition   continue (default), waiting or completed. The latter two require
 #                 private --handoff context; switch agents without authorizing work.
 #
@@ -78,10 +81,10 @@ usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME=''
 TARGET_FILE='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
-QUOTA_CONTINUATION=0 DISPOSITION=continue
+QUOTA_CONTINUATION=0 DISPOSITION=continue QUOTA_LOOP_REPLACEMENT=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id|--disposition)
+    --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id|--disposition|--quota-loop-replacement)
       [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
       case "$1" in
         --session) SESS=$2 ;;
@@ -97,6 +100,7 @@ while [ "$#" -gt 0 ]; do
         --retry) RETRY=$2 ;; --expected-session-id) EXPECT_SID=$2 ;;
         --preparation-id) PREPARATION_ID=$2 ;;
         --disposition) DISPOSITION=$2 ;;
+        --quota-loop-replacement) QUOTA_LOOP_REPLACEMENT=$2 ;;
       esac
       shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -112,6 +116,16 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$DISPOSITION" in continue|waiting|completed) ;; *) die 'invalid --disposition' ;; esac
+# Only this explicit controller argument enables the external path; never an
+# ambient environment variable or the automatic web fallback.
+unset FLEET_QUOTA_LOOP_REPLACEMENT
+if [ -n "$QUOTA_LOOP_REPLACEMENT" ]; then
+  [ "$QUOTA_CONTINUATION:$AFTER:$TAKEOVER:$NATIVE:$DISPOSITION" = 1:0:0:0:continue ] \
+    && [ -n "$EXPECT" ] && [ -n "$EXPECT_SID" ] && [ -s "$NOTES" ] \
+    && [ -z "$LOOP$REQUEST$RETRY" ] || die 'external quota loop replacement requires exact source, private handoff and immediate quota continuation'
+  LOOP=$QUOTA_LOOP_REPLACEMENT
+  export FLEET_QUOTA_LOOP_REPLACEMENT=$QUOTA_LOOP_REPLACEMENT
+fi
 if [ "$DISPOSITION" != continue ]; then
   [ -s "$NOTES" ] || die 'waiting/completed disposition requires --handoff context'
   [ "$AFTER:$NATIVE:$TAKEOVER" = 0:0:0 ] && [ -z "$RETRY$LOOP$REQUEST" ] \
@@ -360,6 +374,7 @@ source_ready() {
 RETRY_NOTE=''
 record_retry() {
   local fid dir
+  [ -z "$QUOTA_LOOP_REPLACEMENT" ] || return 0 # explicit external recovery only
   [ "$DISPOSITION" = continue ] || return 0 # never lose waiting/completed intent in an old retry
   [ -z "${FLEET_TRANSFER_RETRYING:-}" ] && [ "$DRY" != 1 ] && [ "$PREPARE" != 1 ] || return 0
   fid=$(fleet_window_fid "$SESS" "$WIN" "$SOCK") || return 0
@@ -447,7 +462,7 @@ target_trust() {
 # below remain authoritative AFTER the native error boundary is observed.
 if [ "$QUOTA_CONTINUATION" = 1 ] && [ "$STATE" = needs ] && [ "$PREPARE" != 1 ]; then
   [ "$SOURCE_AGENT" = claude ] && [ "$TO" = codex ] && [ "$EXPECT_SID" = "$SID" ] \
-    && [ "$AFTER" = 0 ] && [ -z "$LOOP$REQUEST" ] && [ "$TAKEOVER" = 0 ] \
+    && [ "$AFTER" = 0 ] && [ -z "$REQUEST" ] && { [ -z "$LOOP" ] || [ -n "$QUOTA_LOOP_REPLACEMENT" ]; } && [ "$TAKEOVER" = 0 ] \
     || die 'quota dialog continuation requires the exact source and no scheduling takeover'
   target_auth || refuse_target
   target_support
@@ -702,6 +717,7 @@ if [ "$QUOTA_CONTINUATION" = 1 ] || [ "$DISPOSITION" != continue ]; then
   [ "$(source_read 2>/dev/null)" = "$RESOLVED" ] && armed_cycle_free \
     && source_ready || die 'quota source or prompt changed before exit; source retained'
   disposition_ready
+  python3 "$HELPER" verify "$BUNDLE" || die 'source or replacement changed before exit'
 fi
 EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
@@ -736,6 +752,11 @@ if fleet_pid_alive "$PID"; then
   TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-exit-timeout.txt" 2>/dev/null || :
   die "source did not exit; no replacement $TO was launched"
 fi
+if [ -n "$QUOTA_LOOP_REPLACEMENT" ]; then
+  # A native wakeup could race the final idle observation. Never start a target
+  # from a snapshot predating source-side work, even after normal source exit.
+  python3 "$HELPER" verify "$BUNDLE" || die 'source changed while exiting; source stopped, target/timer not started; reconcile the retained exact transcript before recovery'
+fi
 python3 "$HELPER" state "$BUNDLE" source_exited || die 'cannot record source exit'
 [ "$(opt '#{window_id}')" = "$WIN" ] || die 'source window was closed by an older hook; use the saved handoff to recover'
 fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'
@@ -763,6 +784,7 @@ ROLLBACK_VALS=()
 for key in "${ROLLBACK_KEYS[@]}"; do ROLLBACK_VALS+=("$(opt "#{$key}")"); done
 rollback() {
   local why=$1 st note cmd back='' got rest i _recovery=''
+  [ -z "$QUOTA_LOOP_REPLACEMENT" ] || die "$why; external quota loop paused in the retained package; inspect target before explicit recovery, no automatic source/timer restart"
   # The target's last screen + exit status, before the respawn wipes them; it is
   # private to the package (0600) and never copied into a note or an alert.
   TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
@@ -846,7 +868,7 @@ python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the tar
 for key in @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
-if [ "$NOREPO" = 1 ] && [ -n "$LOOP" ]; then TM set-option -wu -t "$WIN" @loop 2>/dev/null || :; fi
+if { [ "$NOREPO" = 1 ] || [ -n "$QUOTA_LOOP_REPLACEMENT" ]; } && [ -n "$LOOP" ]; then TM set-option -wu -t "$WIN" @loop 2>/dev/null || :; fi
 TM set-option -w -t "$WIN" @cc_agent "$TO" || die 'cannot stamp target agent'
 TM set-option -w -t "$WIN" @handoff_manifest "$BUNDLE/manifest.json" || die 'cannot stamp provenance'
 TM set-option -w -t "$WIN" @source_agent "$SOURCE_AGENT" || die 'cannot stamp source agent'

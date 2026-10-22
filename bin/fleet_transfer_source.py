@@ -95,6 +95,124 @@ def source_marks(session, pane):
         raise ValueError('quota source metadata is incomplete')
     return fields
 
+def quota_loop_replacement(source, mark):
+    """External authorization to replace ONE session timer, never a live export.
+
+    Native /exit must still destroy the old process/timer before any target.
+    Durable records use their separate single-owner road, not this permission.
+    """
+    path = os.environ.get('FLEET_QUOTA_LOOP_REPLACEMENT', '')
+    if not path:
+        raise ValueError('quota loop requires an explicit external replacement specification')
+    from fleet_transfer_cron import check_durable_store
+    from fleet_transfer_durable import proc_start
+    fid = run(['tmux', '-L', source['session'], 'display-message', '-p', '-t', source['pane'], '#{@fleet_id}'])
+    if not fid or check_durable_store(fid, source['pid']):
+        raise ValueError('external session timer replacement cannot carry a durable journal')
+    previous = run(['tmux', '-L', source['session'], 'display-message', '-p', '-t', source['pane'], '#{@handoff_manifest}'])
+    if previous and (Path(previous).parent / 'loop/state.json').exists():
+        raise ValueError('existing Fleet timer must be resolved by its own controller')
+    # The mark is only a classification hint, never current schedule evidence.
+    # Refuse lossy parsing, Cron IDs, parked ownership, or mixed/unknown kinds.
+    if mark and not re.fullmatch(r'kind=wakeup next=[0-9]+ ttl=[0-9]+', mark):
+        raise ValueError('external replacement supports only a single session wakeup; unknown/cron mark refused')
+    data = Path(path).read_bytes()
+    raw = json.loads(data)
+    if not isinstance(raw, dict) or not isinstance(raw.get('quota_replacement'), dict):
+        raise ValueError('quota replacement needs a specification and authorization object')
+    auth = raw['quota_replacement']
+    expected = dict(version=1, fid=fid, session_id=source['session_id'], pid=int(source['pid']),
+                    proc_start=proc_start(source['pid']))
+    if not expected['proc_start'] or any(auth.get(k) != v for k, v in expected.items()):
+        raise ValueError('quota replacement source identity or process fingerprint changed')
+    if 'jobs' in raw or 'native_source' in raw or 'next_run_at' in raw:
+        raise ValueError('replacement is a user specification, not a native export or replay deadline')
+    invocation = auth.get('invocation', '')
+    if not isinstance(invocation, str) or not invocation or '\n' in invocation or '\r' in invocation:
+        raise ValueError('need an exact single-line authorized loop invocation')
+    # Original user intent is provenance, not proof the old timer is still live.
+    matches = []
+    rows = Path(source['transcript']).read_text(encoding='utf-8').splitlines()
+    for line in rows:
+        row = json.loads(line)
+        if row.get('uuid') == auth.get('user_message_uuid'):
+            content = row.get('message', {}).get('content')
+            text = content if isinstance(content, str) else '\n'.join(
+                b.get('text', '') for b in (content or []) if isinstance(b, dict) and b.get('type') == 'text')
+            if row.get('type') != 'user' or row.get('isSidechain'):
+                raise ValueError('quota loop authorization is not an exact original user message')
+            matches.append((row, text))
+    if not auth.get('user_message_uuid') or len(matches) != 1:
+        raise ValueError('missing or ambiguous original user loop authorization')
+    _, text = matches[0]
+    user_index = next(i for i, line in enumerate(rows) if json.loads(line).get('uuid') == auth['user_message_uuid'])
+    for line in rows[user_index + 1:]:
+        row = json.loads(line)
+        if row.get('type') != 'assistant' or row.get('isSidechain'):
+            continue
+        content = row.get('message', {}).get('content', [])
+        for b in content if isinstance(content, list) else []:
+            if (isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'ScheduleWakeup'
+                    and isinstance(b.get('input'), dict) and b['input'].get('stop')):
+                raise ValueError('a later scheduler cancellation supersedes this authorization; reconcile task intent')
+    match = re.fullmatch(r'/loop ([1-9][0-9]*)([smhd]) ([^\r\n]+)', invocation)
+    labels = [invocation]
+    if auth.get('basis', 'user-loop') == 'user-loop':
+        if not match or text != invocation:
+            raise ValueError('need an exact user-authorized /loop interval and prompt; unknown loops refuse')
+        seconds = int(match[1]) * dict(s=1, m=60, h=3600, d=86400)[match[2]]
+        if raw.get('interval_seconds') != seconds or raw.get('prompt') != match[3]:
+            raise ValueError('replacement prompt/cadence differs from the authorized invocation')
+        labels.append('/loop ' + match[3])
+    elif auth.get('basis') == 'historical-wakeup-spec':
+        # An explicit operator replacement can retain a confirmed historical
+        # rearm specification, without presenting it as current native membership.
+        # The original slash-command user message separately supplies intent.
+        commands = re.findall(r'<command-name>([^<]+)</command-name>', text)
+        if (commands != [invocation] or raw.get('prompt') != invocation
+                or auth.get('user_message_sha256') != hashlib.sha256(text.encode()).hexdigest()
+                or not re.fullmatch(r'/[A-Za-z0-9_:-]+', invocation)):
+            raise ValueError('historical rearm must match the exact original user command and hash')
+        from fleet_loop_mark import claude_tool_results
+        calls = list(claude_tool_results(rows, ('ScheduleWakeup', 'CronCreate', 'CronDelete'), strict=True))
+        if not calls or calls[-1][0] != 'ScheduleWakeup':
+            raise ValueError('latest confirmed scheduler specification is not a session wakeup')
+        _, inp, response, _, result_at = calls[-1]
+        uses = [json.loads(line) for line in rows if json.loads(line).get('uuid') == auth.get('schedule_message_uuid')]
+        if len(uses) != 1 or uses[0].get('type') != 'assistant' or uses[0].get('isSidechain'):
+            raise ValueError('missing exact historical schedule message')
+        use_index = next(i for i, line in enumerate(rows) if json.loads(line).get('uuid') == auth['schedule_message_uuid'])
+        if user_index >= use_index:
+            raise ValueError('historical rearm predates its authorization provenance')
+        tools = [b for b in uses[0].get('message', {}).get('content', [])
+                 if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('id') == auth.get('schedule_tool_use_id')
+                 and b.get('name') == 'ScheduleWakeup']
+        mutations = [(row.get('uuid'), b.get('id')) for row in map(json.loads, rows)
+                     if row.get('type') == 'assistant' and not row.get('isSidechain')
+                     for b in row.get('message', {}).get('content', []) if isinstance(b, dict)
+                     and b.get('type') == 'tool_use' and b.get('name') in ('ScheduleWakeup', 'CronCreate', 'CronDelete')]
+        if not mutations or mutations[-1] != (auth.get('schedule_message_uuid'), auth.get('schedule_tool_use_id')):
+            raise ValueError('a later scheduler mutation superseded the selected historical specification')
+        if len(tools) != 1 or tools[0].get('input') != inp or inp.get('prompt') != invocation or inp.get('stop'):
+            raise ValueError('selected historical schedule is not the latest confirmed specification')
+        if (not isinstance(response, dict) or not result_at or not response.get('scheduledFor')
+                or response.get('clampedDelaySeconds') != raw.get('interval_seconds')):
+            raise ValueError('historical schedule has no confirmed cadence receipt')
+    else:
+        raise ValueError('unknown quota replacement authorization basis')
+    # Validate limits without inventing a next-fire timestamp in the proof.
+    runpy.run_path(str(BIN / 'fleet-loop.py'))['spec'](raw)
+    return dict(mode='authorized-replacement', authorization=auth, path=str(Path(path).resolve()),
+                sha256=hashlib.sha256(data).hexdigest(), native_exit_invocations=labels)
+
+
+def quota_pending_marks(fields):
+    if any(fields[i] for i in (3, 4, 6)):
+        return True
+    if fields[5] and not os.environ.get('FLEET_QUOTA_LOOP_REPLACEMENT'):
+        return True
+    return False
+
 def quota_marks(session, pane):
     fields = source_marks(session, pane)
     native = json.loads(fields[2] or '{}')
@@ -102,7 +220,7 @@ def quota_marks(session, pane):
         raise ValueError('quota native status is invalid')
     ended = (fields[0] in ('done', 'exited') and fields[1] in ('7501', 'hook')
              and (native.get('state') == 'error' or (fields[0] == 'done' and native.get('state') in ('idle', 'done'))))
-    if not ended or any(fields[3:]):
+    if not ended or quota_pending_marks(fields):
         raise ValueError('quota source is not a native error boundary without pending work')
     return fields
 
@@ -174,6 +292,8 @@ def quota_dialog(screen):
 
 
 def quota_schedules(source):
+    if os.environ.get('FLEET_QUOTA_LOOP_REPLACEMENT'):
+        return quota_loop_replacement(source, source_marks(source['session'], source['pane'])[5])
     return runpy.run_path(str(BIN / '.fleet-transfer-norepo.py'))['schedule_readiness'](
         source['session'], source['pane'], source['transcript'], source['pid'], source['session_id'], '', 'claude')
 
@@ -198,7 +318,7 @@ def quota_dialog_check(session, pane, sid):
     native = json.loads(marks[2] or '{}')
     if not isinstance(native, dict):
         raise ValueError('quota native status is invalid')
-    if (marks[0:2] != ['needs', '7501'] or any(marks[3:])
+    if (marks[0:2] != ['needs', '7501'] or quota_pending_marks(marks)
             or native.get('state') != 'blocked' or native.get('app') != 'claude-code'
             or native.get('kind') or native.get('msg') != 'dialog open'):
         raise ValueError('source is not a native quota dialog without pending work')

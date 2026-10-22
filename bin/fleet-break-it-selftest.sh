@@ -5592,6 +5592,16 @@ drill_quota_boundary_recheck() {
   SECS=$(since "$started"); WHAT='unattempted boundary/delivery refusals recheck once after settlement; controller attempts never repeat'
 }
 
+drill_quota_loop_replacement() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-source-selftest.py" ExternalQuotaLoop >"$WORK/quota-loop.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-loop.out" | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-loop-selftest.py" IdleDispatchTests.test_external_quota_transfer_waits_for_confirmed_controller_start >>"$WORK/quota-loop.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/quota-loop.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='external authorization is not a native export; exact source/exit match; unknown target never activates timer'
+}
+
 drill_transfer_disposition() {
   CAP=30
   local started; started=$(now)
