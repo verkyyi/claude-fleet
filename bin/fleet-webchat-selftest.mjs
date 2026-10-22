@@ -101,8 +101,10 @@ const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
 process.on("exit", () => { try { server?.kill("SIGKILL"); } catch { /* gone */ } rmSync(T, { recursive: true, force: true }); });
-setTimeout(() => { console.log("FAIL timed out"); process.exit(1); }, 90000).unref();
-const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) fails++; };
+// a timeout names the last line that passed: where it hung (task PQ41)
+let lastOk = "(none)";
+setTimeout(() => { console.log(`FAIL timed out after «${lastOk}»`); process.exit(1); }, 90000).unref();
+const ok = (c, m) => { console.log(`${c ? "ok  " : "FAIL"} ${m}`); if (!c) fails++; else lastOk = m; };
 
 // ---- the stub credential proxy: what reaches it is the pool's usage record ----
 const proxyHits = [];
@@ -328,7 +330,11 @@ function sturn(text) {
         const o = JSON.parse(l); lines.push(o);
         if (o.t === "ask") sreq("/api/answer", { method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: { rid: o.rid, answers: { "猫还是狗？": "狗" } } });
       } } });
-      res.on("end", () => { seen.push(all); resolve({ status: res.statusCode, lines }); });
+      // a stream the server dropped mid-turn (U: stopped while it answers) ends
+      // on "close" with no "end" — settle then too, never hang (task PQ41 CI)
+      let done = false;
+      const fin = () => { if (done) return; done = true; seen.push(all); resolve({ status: res.statusCode, lines }); };
+      res.on("end", fin); res.on("close", fin); res.on("error", fin);
     });
     r.on("error", reject); r.end(JSON.stringify({ text }));
   });
