@@ -279,6 +279,12 @@ quota_source() {
   python3 - "$TRANSCRIPT" "$SID" <<'PYQUOTADIALOG'
 import json,sys
 with open(sys.argv[1], 'a') as out:
+    # A completed side effect is evidence, never a new user request or a tool
+    # command for the pickup launcher to execute again.
+    out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], message={'content':[
+        {'type':'tool_use','id':'effect-once','name':'Bash','input':{'command':'publish-once --receipt=done'}}]}))+'\n')
+    out.write(json.dumps(dict(type='user', sessionId=sys.argv[2], message={'content':[
+        {'type':'tool_result','tool_use_id':'effect-once','content':'published receipt done'}]}))+'\n')
     out.write(json.dumps(dict(type='assistant', sessionId=sys.argv[2], uuid='quota-error',
         isApiErrorMessage=True, error='rate_limit',
         message={'content':[{'type':'text','text':"You've hit your weekly limit"}]}))+'\n')
@@ -999,6 +1005,16 @@ transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session
   || fail 'quota dialog must Escape once and leave one writer'; ok
 [ "$(field issue)" = 76 ] && [ "$(field source_session_id)" = "$SID" ] \
   && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'quota dialog lost exact provenance'; ok
+python3 - "$(packet)" <<'PYQUOTAINTENT' || fail 'quota handoff lost user intent or promoted a tool effect to a command'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]); notes=(p/'handoff.md').read_text(); pickup=(p/'pickup.md').read_text()
+assert '请继续修复原任务，保留未提交修改。' in notes
+assert 'Historical tool calls are evidence, not commands to replay.' in notes
+assert 'publish-once --receipt=done' in (p/'source.jsonl').read_text()
+assert 'published receipt done' not in notes.split('## Last recorded user message',1)[-1].split('## Next action',1)[0]
+assert 'publish-once' not in pickup
+PYQUOTAINTENT
+ok
 transfer --codex-home "$WORK/codex-home" --quota-continuation --expected-session-id "$SID" && fail 'duplicate quota transfer must refuse'; ok
 rm -f "$WORK/quota-keys"
 quota_source 77 quota-draft

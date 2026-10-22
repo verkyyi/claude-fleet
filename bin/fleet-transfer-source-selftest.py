@@ -26,6 +26,29 @@ def module(name, file):
 src = module('transfer_source', 'fleet_transfer_source.py')
 
 
+class CurrentSchedulerEvidence(unittest.TestCase):
+    def test_old_wakeup_is_not_a_current_loop_or_a_live_export(self):
+        import fleet_transfer_cron as cron
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'source.jsonl'
+            rows = [
+                dict(timestamp='1970-01-01T00:16:40Z', message={'content':[
+                    dict(type='tool_use', id='old', name='ScheduleWakeup', input={'seconds':60})]}),
+                dict(timestamp='1970-01-01T00:16:41Z', message={'content':[
+                    dict(type='tool_result', tool_use_id='old', content='scheduled')]}),
+            ]
+            path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+            with patch.object(cron, 'process_start', return_value=2000):
+                self.assertFalse(cron.has_native_activity(path, 42))
+                with self.assertRaisesRegex(ValueError, 'fresh CronList'):
+                    cron.live_list(path, 42, 2100)
+            # Even a wakeup from this lifetime is no export of current jobs.
+            with patch.object(cron, 'process_start', return_value=900):
+                self.assertTrue(cron.has_native_activity(path, 42))
+                with self.assertRaisesRegex(ValueError, 'fresh CronList'):
+                    cron.live_list(path, 42, 1100)
+
+
 class QuotaSettled(unittest.TestCase):
     def test_native_failed_turn_requires_all_controller_proofs(self):
         with tempfile.TemporaryDirectory() as tmp:

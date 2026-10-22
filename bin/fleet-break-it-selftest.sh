@@ -5561,6 +5561,17 @@ drill_transfer_proxy_auth() {
   SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
 }
 
+drill_trial_provider_mismatch() {
+  CAP=120
+  local started; started=$(now)
+  go_half '^TestTrial(Open|Provider)' github.com/verkyyi/claude-fleet/tokenledger/hub/api
+  case $? in
+    1) return 1 ;;
+    2|3) : ;; # the Go CI gate exercises the real route and both pools
+  esac
+  SECS=$(since "$started"); WHAT='trial open pins the admitted provider; explicit Claude cannot borrow Codex headroom; refused messages spend no trial line'
+}
+
 drill_web_quota_dialog() {
   CAP=30
   local started; started=$(now)

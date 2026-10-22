@@ -351,6 +351,9 @@ func (s *Server) qrHold(now time.Time) string {
 	if s.trialNoSub() {
 		return trialWaitNoSub
 	}
+	if _, err := s.trialDefaultAgent(); err != nil {
+		return trialWaitBusy + ":provider"
+	}
 	if left, ok := trialPoolLeft(s); ok && left < float64(s.trialQuotaFloor()) {
 		return trialWaitQuota
 	}
