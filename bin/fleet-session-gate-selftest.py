@@ -349,6 +349,52 @@ while time.time() < end:
         adds = [c for c in json.load(open(self.d / "codex.json"))["calls"] if c == "thread/queue/add"]
         self.assertEqual(len(adds), 2, "never added twice")
 
+    def missing_codex_submission(self):
+        self.window({"@cc_agent": "codex", "@codex_session_id": "th-1"})
+        (self.d / "codex.json").write_text(json.dumps({"busy": True}))
+        delivery = self.say("native client starts this once")["delivery"]
+        state = json.loads((self.d / "codex.json").read_text())
+        queued = state["queue"].pop()
+        state["busy"] = False
+        (self.d / "codex.json").write_text(json.dumps(state))
+        return delivery, queued
+
+    def test_O_codex_delayed_receipt_never_returns_or_readds(self):
+        delivery, _ = self.missing_codex_submission()
+        clock = time.time() + 1
+        for seconds in (0, 8):
+            status = self.gate("status", "--fid", FID, env={"FLEET_GATE_NOW": str(clock + seconds)})
+            self.assertEqual([(q["delivery"], q["state"]) for q in status["queue"]], [(delivery, "native")])
+        state = json.loads((self.d / "codex.json").read_text())
+        state["turns"] = [{"id": "native-turn", "status": "completed",
+                           "items": [{"type": "userMessage", "clientId": delivery}]}]
+        (self.d / "codex.json").write_text(json.dumps(state))
+        status = self.gate("status", "--fid", FID, env={"FLEET_GATE_NOW": str(clock + 9)})
+        self.assertEqual(status["queue"], [])
+        again = self.gate("say", "--fid", FID, "--delivery", delivery, text="native client starts this once")
+        self.assertEqual(again["state"], "sent")
+        calls = json.loads((self.d / "codex.json").read_text())["calls"]
+        self.assertEqual(calls.count("thread/queue/add"), 1, "uncertain delivery is never re-added")
+
+    def test_P_codex_missing_receipt_is_bounded_and_queue_resets_grace(self):
+        delivery, queued = self.missing_codex_submission()
+        clock = time.time() + 1
+        status = self.gate("status", "--fid", FID, env={"FLEET_GATE_NOW": str(clock)})
+        self.assertEqual(status["queue"][0]["state"], "native")
+        state = json.loads((self.d / "codex.json").read_text())
+        state.update(queue=[queued], busy=True)
+        (self.d / "codex.json").write_text(json.dumps(state))
+        self.gate("status", "--fid", FID, env={"FLEET_GATE_NOW": str(clock + 10)})
+        state = json.loads((self.d / "codex.json").read_text())
+        state.update(queue=[], busy=False)
+        (self.d / "codex.json").write_text(json.dumps(state))
+        status = self.gate("status", "--fid", FID, env={"FLEET_GATE_NOW": str(clock + 30)})
+        self.assertEqual(status["queue"][0]["state"], "native", "a visible queue resets the absence clock")
+        status = self.gate("status", "--fid", FID, env={"FLEET_GATE_NOW": str(clock + 51)})
+        self.assertEqual([(q["delivery"], q["why"]) for q in status["queue"]], [(delivery, "dropped")])
+        calls = json.loads((self.d / "codex.json").read_text())["calls"]
+        self.assertEqual(calls.count("thread/queue/add"), 1)
+
     def test_K_stop(self):
         self.window({"@claude_state": "working", "@agent_status": '{"state":"working"}'})
         self.assertEqual(self.gate("stop", "--fid", FID)["how"], "escape")

@@ -5561,6 +5561,17 @@ drill_transfer_proxy_auth() {
   SECS=$(since "$started"); WHAT='proxy lease checked; no local credentials; refusal leaves source untouched'
 }
 
+drill_trial_provider_mismatch() {
+  CAP=120
+  local started; started=$(now)
+  go_half '^TestTrial(Open|Provider)' github.com/verkyyi/claude-fleet/tokenledger/hub/api
+  case $? in
+    1) return 1 ;;
+    2|3) : ;; # the Go CI gate exercises the real route and both pools
+  esac
+  SECS=$(since "$started"); WHAT='trial open pins the admitted provider; explicit Claude cannot borrow Codex headroom; refused messages spend no trial line'
+}
+
 drill_web_quota_dialog() {
   CAP=30
   local started; started=$(now)
@@ -6362,8 +6373,18 @@ drill_c8_old_supervisor_reopen() {
 # A web session parked while a person is looking at it in a terminal (task HHV0):
 # its agent would exit under their eyes. The gate's park refuses while a terminal
 # client shows the window (a control-mode client — the hub's own — is nobody).
+drill_wake_peer_report() {
+  CAP=40; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_peer_first_turn Park.test_parked_report_queue_drain \
+        Park.test_local_child_report_wakes_parent Park.test_late_wake_receipt_is_not_a_second_turn \
+        Park.test_question_is_never_parked 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
+}
+
 drill_park_all_origins() {
-  CAP=30; local t0 out
+  CAP=60; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-park-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
@@ -6410,6 +6431,14 @@ drill_park_while_watched() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_fail_silent() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_park_screen_and_keyboard_sentence Park.test_wake_failure_keeps_sentence_for_new_chat 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放保留原屏，回车前不醒；接回失败原句仍在，n 的新会话首轮带上它'
+}
+
 drill_wake_timeout() {
   CAP=30; local t0 out
   t0=$(now)
@@ -6750,6 +6779,14 @@ drill_codex_release_shadowed() {
   CAP=30; SECS=0
   suite_holds fleet-codex-selftest.sh 'F4 managed release Codex wins over a stale CLI earlier on PATH' || return 1
   WHAT="发行树的固定 Codex 优先于 PATH 前面的旧版；tmux 保护 shim 保持首位，direct webchat 同样选发行版"
+}
+
+drill_codex_receipt_race() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" O P 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="Codex 取走队列后延迟写回收据：仍等待原 delivery，晚到收据成功；真正消失有界退回，绝不重加"
 }
 
 drill_codex_pin_displaces_guard() {

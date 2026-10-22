@@ -740,7 +740,8 @@ CREATE TABLE IF NOT EXISTS fleet_trial_grants (
   lang        TEXT NOT NULL DEFAULT '',
   scanned_at  INTEGER NOT NULL,
   granted_at  INTEGER NOT NULL DEFAULT 0,
-  first_at    INTEGER NOT NULL DEFAULT 0
+  first_at    INTEGER NOT NULL DEFAULT 0,
+  next_day_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_fleet_trial_grants_code ON fleet_trial_grants(code_id, state);
 CREATE INDEX IF NOT EXISTS idx_fleet_trial_grants_principal ON fleet_trial_grants(principal);

@@ -115,8 +115,8 @@ empty underlying prompt and stopped main turn, and the tool and scheduler proofs
 Under its transfer mutex and rotation lease it records one Escape before sending it;
 then it requires the native error/idle boundary and empty input, and runs all normal
 transfer checks again, including exact source and input after target authentication
-immediately before exit. Escape preserves a hidden draft: any draft or unknown composer
-holds the transfer. An approval, changed/unknown menu, armed auto-resume, scheduler
+immediately before exit. Any draft or unknown composer holds the transfer before
+Escape; input that appears during cancellation holds it again. An approval, changed/unknown menu, armed auto-resume, scheduler
 without proof or unconfirmed cancellation remains recoverable without another keypress.
 Dry-run only previews this cancellation and conditional recheck; it never authorizes
 exit from `needs`. Private evidence is in `quota-dialog-stop/<source-hash>.json`.
@@ -127,8 +127,14 @@ pending tools, schedules or target authentication; no force flag is added.
 `session-gate/<fid>/quota-continuation.json` and `quota-transfer.log` retain the
 result and controller evidence privately. Unknown completion is recovery, never
 another automatic launch. Queued unsent words return to the page; accepted words
-are never resubmitted. Codex does not automatically switch back. Trial admission
-reads the same default agent's pool as new web sessions; provider changes retain
+are never resubmitted. A controller failure after binding Codex keeps that target
+in recovery too, without a second writer. Codex does not automatically switch back.
+Trial admission reads the default agent's pool. The unified open route resolves
+and pins the trial's actual provider and checks that pool before counting a line;
+explicit Claude cannot borrow Codex headroom, and local defaults cannot change the
+admitted provider. A missing team default keeps the dispatch protocol's Claude
+compatibility default; an invalid stored default refuses default admission/open.
+Provider changes retain
 the person's budget, seat, identity and resource limits.
 
 Run from the hub, another pane or an external terminal. The source must be idle

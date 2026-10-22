@@ -341,6 +341,7 @@ export type TrialFunnel = {
   queued: number;
   pending: number;
   first: number;
+  next_day: number; // accepted message on the Beijing day after admission
   converted: number;
   p50_secs: number; // scan → first line in the chat, median (0 = none yet)
 };

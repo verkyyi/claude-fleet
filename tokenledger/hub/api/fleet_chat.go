@@ -322,6 +322,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, name, http.StatusForbidden, "forbidden", "X-Fleet-Webchat: 1 is required")
 		return
 	}
+	if name == "open" {
+		settings, err := s.Store.FleetSettings()
+		if err != nil {
+			s.chatRefuse(w, person, name, http.StatusServiceUnavailable, "trial_provider", "暂时无法开始会话，请稍后再试。")
+			return
+		}
+		// Include scanned-code / approved limited members, through the same
+		// identity rule their credential policy and isolation already use.
+		if s.trialIdentity(settings, person) && !s.trialOpenProvider(w, r, person) {
+			return
+		}
+	}
 	// The copy beside the entry (task V9DJ D) is answered here, home or not.
 	if name == "conversation" && r.URL.Query().Get("cached") == "1" {
 		s.handleChatCached(w, r, person, provider)
@@ -503,6 +515,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				resp.Body = &chatMirrorTee{ReadCloser: resp.Body, done: func(b []byte) {
 					s.chatMirrorKeepBody(person, provider, append([]byte(nil), b...), taken)
 				}}
+			}
+			if (name == "open" || name == "turn") && resp.StatusCode == http.StatusOK {
+				s.trialNextDayLine(person, time.Now())
 			}
 			if name == "open" && resp.StatusCode == http.StatusOK {
 				s.chatOpenWorker(resp, home.Machine, home.Login)
