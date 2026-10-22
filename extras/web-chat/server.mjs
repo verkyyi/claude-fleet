@@ -699,12 +699,12 @@ async function viewTail(agent, src, end) {
 }
 // ?tool=<id>: one step's whole output (as the chat shows it), the record read
 // back from its end until the line that carries it
-async function viewTool(res, fid, id) {
-  const k = viewKnown.get(fid);
+async function viewTool(res, fid, id, resolved = null) {
+  const k = resolved || viewKnown.get(fid);
   const w = k ? k.w : await viewOf(fid);
   if (w === null) return send(res, 404, { error: "这个会话不在这台机器上了", code: "no_session" });
   if (!w) return send(res, 503, { error: "could not read the session", code: "unreadable" });
-  const src = await viewSource(w.agent, w.sid);
+  const src = resolved?.src || await viewSource(w.agent, w.sid);
   if (!src) return send(res, 404, { error: "no such step", code: "no_step" });
   const find = (items) => items.find((i) => i.t === "tool_result" && i.id === id);
   if (w.agent === "codex") {
@@ -775,9 +775,41 @@ async function handover(req, res, person, how) {
     return send(res, r.rc === 2 ? 409 : 500, { error: said || "could not hand it over", code: "cannot" });
   } finally { handing.delete(fid); }
 }
+// Closed history uses the same native parsers and byte pagination, without the
+// live gate (which may wake a parked worker). Only the hub supplies this FID.
+async function historyView(res, u, fid) {
+  const r = await new Promise((resolve) => execFile("python3", [join(HELPERS, "fleet_history_read.py"), fid],
+    { env: { ...E, PYTHONDONTWRITEBYTECODE: "1" }, timeout: 30000 },
+    (err, stdout) => resolve({ rc: err ? 1 : 0, stdout })));
+  let w;
+  try { w = JSON.parse(r.stdout); } catch { w = { history_status: "offline_unknown" }; }
+  if (u.searchParams.get("status") === "1") {
+    const { transcript, codex_home, worktree, ...publicState } = w;
+    return send(res, 200, publicState);
+  }
+  if (!w.readable || !w.transcript) return send(res, 409, { code: w.history_status || "offline_unknown", error: w.reason || "History is unavailable" });
+  const src = { file: w.transcript, cwd: w.worktree || "" };
+  const size = (await fsp.stat(src.file)).size;
+  const before = u.searchParams.get("before");
+  if (before !== null && (!/^\d+$/.test(before) || !Number.isSafeInteger(Number(before)))) return send(res, 400, { code: "bad_from" });
+  if (u.searchParams.has("tool")) {
+    const id = u.searchParams.get("tool");
+    if (!TOOL_ID_RE.test(id)) return send(res, 400, { code: "bad_target" });
+    // Reuse the exact native reader; the FID is resolved again on every read.
+    return viewTool(res, fid, id, { w: { ...w, sid: w.native }, src });
+  }
+  const tail = await viewTail(w.agent, src, await viewLastLine(src.file, before === null ? size : Math.min(Number(before), size)));
+  if (before !== null) return send(res, 200, { ...tail, session: w.native });
+  res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store" });
+  res.write(`data: ${JSON.stringify({ t: "state", agent: w.agent, session: w.native, state: "ended", busy: false, can_talk: false, talk_reason: "historical", history_status: w.history_status })}\n\n`);
+  res.write(`data: ${JSON.stringify({ t: "items", replace: true, ...tail, at: size, session: w.native })}\n\n`);
+  res.end('data: {"t":"history_end"}\n\n');
+}
+
 async function viewStream(req, res, u, person) {
   const fid = u.searchParams.get("fid") || "";
   if (!FID_RE.test(fid)) return send(res, 400, { error: "not a session", code: "bad_target" });
+  if (u.searchParams.get("history") === "1") return historyView(res, u, fid);
   const num = (k) => { const v = u.searchParams.get(k); if (v == null || v === "") return null; const n = Number(v); return Number.isSafeInteger(n) && n >= 0 ? n : NaN; };
   const before = num("before");
   if (Number.isNaN(before)) return send(res, 400, { error: "before is a byte offset", code: "bad_from" });

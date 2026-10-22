@@ -920,6 +920,13 @@ print(json.dumps(d))'
     exit $?
     ;;
   resume)
+    case "${3:-}" in fid:*)
+      fid=${3#fid:}
+      fleet_is_fid "$fid" || exit 5
+      export FLEET_SESSION="$sess"
+      bash "$BIN/fleet-id.sh" reopen "$fid" --exec
+      exit $? ;;
+    esac
     # The /fleet-history resume path: verdict first (REVIEW-ONLY ⇒ 5, nothing
     # attempted), the same disk/quota gates a start pays (4), then the headless
     # dash-restore-session.sh (2 = at capacity). A resumed session is a real

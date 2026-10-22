@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -270,4 +271,20 @@ func (s *Server) handleChatMirror(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// historyMirrorSession is used only for owner-scoped cache attribution; it does
+// not expose content to the operator's cleanup endpoint or to a view-as reader.
+func (s *Server) historyMirrorSession(owner string, sealed []byte) (string, error) {
+	if s.Vault == nil {
+		return "", errors.New("history cache vault unavailable")
+	}
+	var doc chatMirrorDoc
+	if err := s.Vault.OpenPerson(sealed, &doc, owner, chatMirrorPurpose); err != nil {
+		return "", err
+	}
+	if doc.Session == "" || doc.Items == nil {
+		return "", errors.New("malformed history cache")
+	}
+	return doc.Session, nil
 }

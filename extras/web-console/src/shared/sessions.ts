@@ -54,6 +54,7 @@ export type BoardRow = {
   why?: [string, string]; why_tone?: "grey" | "orange" | "red";
   // 会话合一 (Y01K): web = a chat session the web opened, terminal = one a terminal opened
   origin?: "web" | "terminal"; can_talk?: boolean;
+  history?: { id: string; status: string; resume_id?: string };
 };
 // machines (会话合一 Y01K): how many machines the person has — one ⇒ no machine name anywhere
 export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string; machines?: number };

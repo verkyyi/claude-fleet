@@ -6911,6 +6911,14 @@ drill_start_unwitnessed() {
   SECS=$(since "$t0")
 }
 # ③ a reopen after a version update read as a new conversation (#4737)
+drill_history_recovery_placement() {
+  CAP=10; local t0
+  t0=$(now)
+  python3 "$BIN/fleet-history-recovery-selftest.py" || { WHY='history placement or identity regression'; return 1; }
+  WHAT='历史按 FID 读，迁移后的原生 SID、目录与 Codex home 一起保留'
+  SECS=$(since "$t0")
+}
+
 drill_reopen_new_segment() {
   CAP=10; local t0
   t0=$(now)

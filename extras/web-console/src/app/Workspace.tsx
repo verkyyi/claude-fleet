@@ -35,7 +35,7 @@ function useMedia(q: string) {
 
 // the worker a session's record is read by: its live window's; on the new road a
 // parked one has none, and is read (and woken) by the identity the hub names
-const workerOf = (r: Row) => r.live?.id || (r.origin ? r.board?.worker_id || r.task?.worker_id || r.ended?.wid || "" : "");
+const workerOf = (r: Row) => r.live?.id || (r.board?.history ? `fid:${r.board.history.id}` : "") || (r.origin ? r.board?.worker_id || r.task?.worker_id || r.ended?.wid || "" : "");
 
 export function Workspace({ r }: { r: Row }) {
   const [params, setParams] = useSearchParams();

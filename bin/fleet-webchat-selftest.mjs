@@ -662,7 +662,7 @@ echo "no such window" >&2; exit 2
     line({ type: "assistant", message: { content: [{ type: "text", text: "终端答了" }] } }));
   writeFileSync(VIEW, JSON.stringify({ agent: "claude", sid: VID, busy: false, state: "done", label: "scratch-7", holder: "" }));
   const CODEXH = join(HT, "codexhome");
-  const v = (await sstart(["--socket"], { ...asHome("v"), FLEET_WEBCHAT_HANDOFF: vsh, CODEX_HOME: CODEXH,
+  const v = (await sstart(["--socket"], { ...asHome("v"), FLEET_CONF_DIR: join(homeOf("v"), ".config/claude-fleet"), FLEET_WEBCHAT_HANDOFF: vsh, CODEX_HOME: CODEXH,
     FLEET_WEBCHAT_VIEW_POLL_MS: "100", FLEET_WEBCHAT_VIEW_STATE_MS: "300" })).p;
   // one view: its events as they come, until `until` says enough or it times out
   const follow = (q, until, ms = 5000) => new Promise((resolve, reject) => {
@@ -684,6 +684,23 @@ echo "no such window" >&2; exit 2
     r.on("error", (e) => (e.code === "ECONNRESET" ? null : reject(e)));
     r.end();
   });
+  // Closed FID: the real ledger reader and native parser, no window, no worktree.
+  const hf = "12345678-1234-4234-8234-123456789012";
+  const hd = join(homeOf("v"), ".config/claude-fleet/ids");
+  mkdirSync(hd, { recursive: true });
+  const hsid = "12345678-1234-4234-8234-123456789013";
+  writeFileSync(join(hd, hf + ".ndjson"), [
+    { ev: "opened", worktree: "/removed/worktree", repo: "example/app" },
+    { ev: "native", agent: "claude", native: hsid }, { ev: "closed", ts: 1 },
+  ].map((x, i) => JSON.stringify({ ...x, id: hf, seq: i + 1 })).join("\n") + "\n");
+  writeFileSync(join(vdir, hsid + ".jsonl"), line({ sessionId: hsid, type: "user", message: { role: "user", content: "kept history" } }));
+  const queriesBefore = existsSync(QUERYLOG) ? readFileSync(QUERYLOG, "utf8") : "";
+  const history = await sreq(`/api/view?fid=${hf}&history=1`);
+  ok(history.status === 200 && history.body.includes("kept history") && history.body.includes('"history_status":"readable"') &&
+    history.body.includes('"can_talk":false') && history.body.includes('"t":"history_end"'), "V closed native history reads without worktree or worker");
+  ok((existsSync(QUERYLOG) ? readFileSync(QUERYLOG, "utf8") : "") === queriesBefore, "V history launched no agent");
+  const hs = JSON.parse((await sreq(`/api/view?fid=${hf}&history=1&status=1`)).body);
+  ok(hs.readable && !hs.resumable && !hs.transcript, "V read and resume capabilities are distinct; no local path exposed");
   ok((await sreq("/api/view?fid=../x")).status === 400, "V a fid that is not one is 400");
   const nf = await sreq("/api/view?fid=00000000-0000-4000-8000-000000000000");
   ok(nf.status === 404 && JSON.parse(nf.body).code === "no_session", "V a window not on this login is 404 no_session");

@@ -715,6 +715,7 @@ func (s *Server) routes() *routeMux {
 		// One machine's page (claude-fleet#2796): its five blocks, the same cut.
 		mux.Handle(NodeDetailPrefix, s.viewerOnly(http.HandlerFunc(s.handleNodeDetail)))
 		// 任务's reads (claude-fleet#3325): the viewer's task records, T<n>.
+		mux.Handle("/v1/fleet/history-hide", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleHistoryHide))))
 		mux.Handle(FleetTasksPath, s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
 		mux.Handle(FleetTasksPath+"/", s.viewerOnly(http.HandlerFunc(s.handleFleetTasks)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))

@@ -238,9 +238,14 @@ if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
   else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
   [ "$ex" = 1 ] || { printf '%s\n' "$plan"; exit 0; }
   fields=$(printf '%s' "$plan" | python3 -c 'import json,sys; d=json.load(sys.stdin)
-print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","parent","title")))')
-  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_parent p_title <<< "$fields"
-  rargs=(--resume "$p_native" --origin hub)
+print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","parent","title","codex_home","seg")))')
+  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_parent p_title p_home p_seg <<< "$fields"
+  proof=$(python3 "$BIN/fleet_history_read.py" "$p_id" "$p_seg") || exit 1
+  printf '%s' "$proof" | python3 -c 'import json,sys; p=json.load(sys.stdin)
+if not p.get("resumable"):
+ print(p.get("reason", "Native history is not verified; nothing started"), file=sys.stderr); sys.exit(1)' || exit 1
+  rargs=(--resume "$p_native" --origin hub --strict-resume)
+  [ "$p_home" = - ] || rargs+=(--codex-home "$p_home")
   # C18: the ID it continues keeps its record and its parent — @task on the new
   # window, `task` / `parent` in its ledger — so an EPIC driver's successor still
   # finds (and is found by) its batch
