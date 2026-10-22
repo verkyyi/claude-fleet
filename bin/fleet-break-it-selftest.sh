@@ -7580,6 +7580,14 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_dead_server_lease() {
+  CAP=30; local t0
+  t0=$(now)
+  suite_holds fleet-webterm-selftest.sh 'F: a confirmed dead server cannot retain its fresh controller lease' || return 1
+  SECS=$(since "$t0")
+  WHAT="真实隔离 tmux 退出后旧控制租约仍新鲜，也不会阻止个人终端重建；活浏览器不抢"
+}
+
 drill_term_personal_renew() {
   CAP=60; local t0 out rc
   t0=$(now)

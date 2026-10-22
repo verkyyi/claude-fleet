@@ -696,6 +696,19 @@ def control_path(target):
     return os.path.join(state_dir(), "control", hashlib.sha256(target.encode()).hexdigest()[:32] + ".json")
 
 
+def server_process_gone(pid):
+    """A failed tmux read alone never proves that its controller is gone."""
+    if not str(pid).isdigit() or int(pid) <= 1:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return True
+    except OSError:  # Permission errors and other unknowns keep the lease.
+        pass
+    return False
+
+
 def control_claim(path, target, conn, op):
     L = read_json(path) or {"target": target, "epoch": 0, "conn": None, "ts": 0}
     fresh = L.get("conn") and time.time() - float(L.get("ts") or 0) < lease_secs()
@@ -705,6 +718,11 @@ def control_claim(path, target, conn, op):
         # to new controllers. Compare ids too: a same-name successor is not ours.
         pid = server_pid(L["socket"])
         if pid and pid != L["server_pid"]:
+            fresh = False
+        elif not pid and server_process_gone(L["server_pid"]):
+            # Host loss leaves a fresh lease behind. Renewal must claim before
+            # it initializes the replacement fleet, so waiting for a new tmux
+            # PID here would prevent the replacement from ever being started.
             fresh = False
         elif pid == L["server_pid"]:
             rc, sessions = tm(L["socket"], "list-sessions", "-F", "#{session_id}|#{session_name}")
