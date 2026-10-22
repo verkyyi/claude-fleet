@@ -32,11 +32,18 @@ sess=''
 if [ "${1:-}" = "--session" ]; then sess="${2:-}"; shift 2; fi
 [ "$#" -gt 0 ] || { printf 'usage: fleet-hook-conf.sh [--session <sess>] KEY [KEY…]\n' >&2; exit 2; }
 
-if [ -f "$BIN/fleet-lib.sh" ]; then
-  # shellcheck source=/dev/null
-  . "$BIN/fleet-lib.sh" >/dev/null 2>&1
+# Client packages carry the small core; a hosting machine adds its overlay.
+# shellcheck source=fleet-client-core.sh
+. "$BIN/fleet-client-core.sh"
+if fleet_host_lib >/dev/null 2>&1; then
   if [ -z "$sess" ] && [ -n "${TMUX:-}" ]; then sess=$(fleet_current_session 2>/dev/null); fi
   [ -n "$sess" ] && fleet_load_conf "$sess" >/dev/null 2>&1
+else
+  # Same global precedence on a pure client, which has no fleet overlay.
+  for conf in "$FLEET_CONF_DIR/hub-defaults.conf" "$BIN/../fleet.conf" "$FLEET_CONF_DIR/fleet.settings" "$FLEET_CONF_DIR/fleet.conf"; do
+    # shellcheck source=/dev/null
+    [ ! -f "$conf" ] || . "$conf" >/dev/null 2>&1
+  done
 fi
 
 for k in "$@"; do

@@ -2347,7 +2347,7 @@ drill_trial_pause_not_recycled() {
 # fleet-login-ready.sh as the login (a session credential from the proxy, its
 # home up, a first reply) and the hub hands only a spare whose op passed 3/3.
 drill_spare_ready_unverified() {
-  CAP=120; local t0 tl="$ROOT/tokenledger/hub" sb sess out f; GO_RAN=0
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub" sb sess out f pubpid=''; GO_RAN=0
   t0=$(now)
   sb=$(mktemp -d "${TMPDIR:-/tmp}/spare-ready.XXXXXX"); sess="sparechk$$"
   mkdir -p "$sb/root/bin" "$sb/home/.config/claude-fleet/fleets/$sess"
@@ -2359,8 +2359,9 @@ drill_spare_ready_unverified() {
   printf '#!/bin/bash\n[ "${CLAUDE_CODE_OAUTH_TOKEN:-}" = fcp1.test ] && [ "${ANTHROPIC_BASE_URL:-}" = http://127.0.0.1:18923 ] || { echo "no session credential"; exit 1; }\n[ -f "$HOME/reply.fail" ] && { echo "API Error: 403 this login holds no claude account"; exit 1; }\necho ok\n' > "$sb/claude"
   chmod +x "$sb/root/bin/fleet-session-cred.sh" "$sb/claude"
   printf 'FLEET_SESSION=%s\n' "$sess" > "$sb/home/.config/claude-fleet/fleets/$sess/conf"
-  chk() { FLEET_CLAUDE_BIN="$sb/claude" bash "$ROOT/bin/fleet-login-ready.sh" "$(id -un)" --home "$sb/home" --root "$sb/root" --wait "$1" 2>&1; }
-  sr_down() { tmux -L "$sess" kill-server 2>/dev/null; rm -rf "${sb:?}"; }
+  printf 'FLEET_AGENT=claude\n' > "$sb/home/.config/claude-fleet/fleet.conf"
+  chk() { CCQUOTA_HUB_URL='' FLEET_HUB_URL='' FLEET_AGENT='' FLEET_SKIP_GLOBAL_CONF='' FLEET_CLAUDE_BIN="$sb/claude" bash "$ROOT/bin/fleet-login-ready.sh" "$(id -un)" --home "$sb/home" --root "$sb/root" --wait "$1" 2>&1; }
+  sr_down() { [ -z "$pubpid" ] || kill "$pubpid" 2>/dev/null; tmux -L "$sess" kill-server 2>/dev/null; rm -rf "${sb:?}"; }
   # no home: the credential passed, the home did not
   out=$(chk 0)
   case "$out" in "ready: FAIL home: "*" cred_ok="[0-9]*) ;; *) WHY="no home, check said: $out"; sr_down; return 1 ;; esac
@@ -2374,6 +2375,63 @@ drill_spare_ready_unverified() {
   out=$(chk 5)
   printf '%s' "$out" | grep -Eq '^ready: cred_ok=[0-9]+ home_ok=[0-9]+ first_reply_ok=[0-9]+$' \
     || { WHY="a working login, check said: $out"; sr_down; return 1; }
+  # Codex default must not mint Claude or run it, including a fresh spare
+  # that only has the team's public default. No tokens in argv / readiness output.
+  cat > "$sb/root/bin/fleet-session-cred.sh" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$HOME/cred.calls"
+case "$1" in
+  mint) [ "$3" = codex ] || exit 1; printf 'direct\t18923\tfcp1.test\n' ;;
+  codex-home) [ -f "$HOME/mirror.fail" ] && exit 1; mkdir -p "$HOME/safe-codex"; printf '%s\n' "$HOME/safe-codex" ;;
+esac
+STUB
+  cat > "$sb/codex" <<'STUB'
+#!/bin/bash
+[ "${FLEET_CODEX_SESSION_CRED:-}" = fcp1.test ] && [ "${CODEX_HOME:-}" = "$HOME/safe-codex" ] || exit 1
+case "$*" in *fcp1.test*) echo 'token in argv'; exit 1 ;; esac
+case "$*" in *'model_provider="fleet"'*'base_url="http://127.0.0.1:18923/codex"'*'exec --skip-git-repo-check --ephemeral --sandbox read-only'*) ;; *) echo 'wrong wiring'; exit 1 ;; esac
+[ -f "$HOME/reply.fail" ] && { echo 'Codex unavailable'; exit 1; }
+echo ok
+STUB
+  chmod +x "$sb/codex"
+  printf 'FLEET_AGENT=codex\n' > "$sb/home/.config/claude-fleet/hub-defaults.conf"
+  rm "$sb/home/.config/claude-fleet/fleet.conf"
+  out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
+  printf '%s' "$out" | grep -Eq '^ready: cred_ok=[0-9]+ home_ok=[0-9]+ first_reply_ok=[0-9]+$' \
+    || { WHY="Codex default with Claude unavailable: $out"; sr_down; return 1; }
+  grep -q '^revoke --sid ready-' "$sb/home/cred.calls" \
+    || { WHY="Codex probe credential not revoked"; sr_down; return 1; }
+  # Fresh spare: no cached default yet; resolve public hub setting without auth.
+  rm "$sb/home/.config/claude-fleet/hub-defaults.conf"
+  python3 - "$sb/public-url" <<'PYMOCK' &
+import http.server,json,sys
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        assert self.path == "/v1/fleet/client-settings"
+        assert not self.headers.get("Authorization")
+        self.send_response(200); self.end_headers()
+        self.wfile.write(json.dumps({"settings":{"FLEET_AGENT":"codex"}}).encode())
+    def log_message(self,*args): pass
+server=http.server.HTTPServer(("127.0.0.1",0),Handler)
+with open(sys.argv[1],"w") as f: f.write("http://127.0.0.1:"+str(server.server_port))
+server.timeout=15
+server.handle_request()
+server.server_close()
+PYMOCK
+  pubpid=$!
+  for f in 1 2 3 4 5; do [ -s "$sb/public-url" ] && break; sleep 1; done
+  printf 'CCQUOTA_HUB_URL=%s\n' "$(cat "$sb/public-url")" > "$sb/home/.config/claude-fleet/node.env"
+  out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
+  printf '%s' "$out" | grep -Eq '^ready: cred_ok=[0-9]+ home_ok=[0-9]+ first_reply_ok=[0-9]+$' \
+    || { WHY="fresh spare ignored hub Codex default: $out"; sr_down; return 1; }
+  wait "$pubpid"; pubpid=''
+  printf 'FLEET_AGENT=codex\n' > "$sb/home/.config/claude-fleet/hub-defaults.conf"
+  : > "$sb/home/reply.fail"
+  out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
+  case "$out" in "ready: FAIL reply: "*"Codex unavailable"*) ;; *) WHY="Codex unavailable accepted: $out"; sr_down; return 1 ;; esac
+  : > "$sb/home/mirror.fail"
+  out=$(FLEET_CODEX_BIN="$sb/codex" chk 5)
+  case "$out" in "ready: FAIL reply: "*"credential-free"*) ;; *) WHY="unsafe Codex home accepted: $out"; sr_down; return 1 ;; esac
   sr_down
   grep -q 'bash "$BIN/fleet-login-ready.sh" "$LOGIN"' "$ROOT/bin/fleet-login-new.sh" 2>/dev/null \
     || { WHY="fleet-login-new.sh no longer checks the login it opened (fleet-login-ready.sh)"; return 1; }
@@ -2387,7 +2445,7 @@ drill_spare_ready_unverified() {
     || { WHY="the hub no longer keeps a create's check (applyAccountResult → recordAccountCheck)"; return 1; }
   c11_go_tests fleet_spare_test.go TestSpareHandedOnlyAfterThreeChecks TestSpareSettings || return 1
   WHAT='验收脚本当真跑：没家 → FAIL home（cred_ok 在）；家起来、首句 403 → FAIL reply（cred_ok · home_ok 在）；都好 → 三个时间戳；入口只领 3/3 的备用（测试按名核对在，Go 门跑它）'
-  [ "$GO_RAN" = 1 ] && WHAT='验收脚本当真跑三种结局；首句失败 / 旧节点没验的备用就绪 0、领号不给、名册没验过 2、审计 spare.unchecked；验过 3/3 才领得到；spare_max 只收 0–2（go test）'
+  [ "$GO_RAN" = 1 ] && WHAT='Claude/Codex 按共用默认验收（含全新 spare 公共设置）；Codex 凭证隔离/撤销、mirror 失败拒绝；首句失败 / 旧节点没验的备用就绪 0、领号不给、名册没验过 2、审计 spare.unchecked；验过 3/3 才领得到；spare_max 只收 0–2（go test）'
   SECS=$(since "$t0")
 }
 

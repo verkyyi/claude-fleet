@@ -129,6 +129,7 @@ side() {   # side <name> <cmd…> — both packages, the same answer, no fleet-l
   fi
 }
 side help         sh -c '"$R/bin/fleet" --help'
+side hook-default bash -c 'printf "FLEET_AGENT=codex\n" > "$HOME/.config/claude-fleet/hub-defaults.conf"; "$R/bin/fleet-hook-conf.sh" FLEET_AGENT'
 side host         sh -c '"$R/bin/fleet" host status'
 side conf-host    bash -c '"$R/bin/fleet-conf.sh" host --why'
 side conf-migrate bash -c '"$R/bin/fleet-conf.sh" migrate'
