@@ -7044,6 +7044,14 @@ webchat_part() {
   WEBCHAT_OUT=$out
 }
 
+drill_chat_codex_identity_pending() {
+  CAP=30; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" N 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="原生身份未就绪不误判旧版，未知与不可达不投递；明确旧版本仍拒绝，同一身份就绪后恢复"
+}
+
 drill_chat_gate_cold_readonly() {
   CAP=30
   webchat_part gate "Y a cold view is checking, never read-only before the gate answers" || return 1
@@ -7053,7 +7061,9 @@ drill_chat_gate_cold_readonly() {
 drill_chat_gate_probe_unavailable() {
   CAP=30
   webchat_part gate "Y a failed capability probe is unavailable, never a read-only verdict" \
-    "Y capability failure after a writable frame recovers on the same stream" || return 1
+    "Y capability failure after a writable frame recovers on the same stream" \
+    "Y hung capability probe has a bound and stays unavailable" \
+    "Y simultaneous readers share one capability probe for the same session" || return 1
   WHAT="能力探测失败明确暂不可达，同一流下一次成功恢复可写；只读权限不放宽"
 }
 

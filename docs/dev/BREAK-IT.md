@@ -20,6 +20,7 @@
 | Codex 已取走排队消息，回合收据稍后才可见（T944） | 已经答复却误示没送到，引导用户重发 | 收据等待有界宽限期；只观察原 delivery，不重复加入；确实消失后才退回 | `codex-receipt-race` |
 | 网页新会话进入时会话门尚未探测完成（T944） | 首条能发，进入后却显示终端只读，不能继续输入 | 未知权限单独显示连接中，保留输入草稿；仅会话门明确允许才启用发送，旧版本与只读票据仍不可写 | `chat-gate-cold-readonly` |
 |---|---|---|---|
+| Codex 新会话的原生身份尚未发布或版本握手尚未完成（T944） | 已有会话门答复仍误报旧版，阻止继续输入，直到下一次探测成功 | 缺失身份与未知版本保持探测中，连接失败明确暂不可达；只有已核实旧版本才判旧版，发送仍须明确许可 | `chat-codex-identity-pending` |
 | 存量 worker 的自动报告仍唤醒历史 parent，监督目标离线又升级到人（T946） | 接管失效、额度耗尽的旧会话被重新唤醒 | 显式身份作用域的审计委托只改 delivery；固定原来源、目标与授权链，既有队列恢复投递，routine 不因超时升级 | `report-delegation-offline` |
 | 无人值守的会话跑 `rm -f $P/*` 这类开头是变量的 rm 路径（#4637，2026-10-17 worker #4625 实见） | Claude Code 在 bypass 模式下照样弹「Dangerous rm operation on possibly-empty variable path」等人批准，没人答 30 多秒后自动拒绝：每次打断操作者，或会话干等 | bash-guard 在 PreToolUse 先拒（exit 2），理由里写好改法（`"${P:?}"/*`、非空默认值或字面路径），agent 自己改写重跑，不弹框；`${P:?}`、`${P:-/非空}`、`git rm`、单引号字面量、变量不在开头的照常放行 | `rm-empty-var-prompt` |
 | pending-tool 批量读取跨检查复用旧进程、窗口或 transcript（#4474） | 工具已开始或窗口已换代，旧的无 pending 读数仍可能清掉 needs | 每次安全核对重采集；同次共享解析，前后验证 socket/server、worker、pane 与 native birth/SID，过期或缺身份返回 unknown | `pending-observation-stale` |

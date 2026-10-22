@@ -1655,6 +1655,7 @@ const RAW = E.FLEET_WEBCHAT_RAW || join(HELPERS, "dash-raw-session.sh");
 const GATE_DIR = E.FLEET_GATE_DIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "session-gate");
 const GATE_TICK_MS = Number(E.FLEET_WEBCHAT_GATE_TICK_MS || 1500);
 const GATE_STATE_MS = Number(E.FLEET_WEBCHAT_GATE_STATE_MS || 3000);   // the view asks the gate this often
+const GATE_STATUS_TIMEOUT_MS = Number(E.FLEET_WEBCHAT_GATE_STATUS_TIMEOUT_MS || 8000);
 const GATE_LIVE = new Set(["queued", "trying", "native", "waking"]);
 function gate(args, input = "", timeout = 90000) {
   return new Promise((resolve) => {
@@ -1789,10 +1790,18 @@ async function gatePost(req, res, u, what) {
 }
 // what the gate knows of one session, for the view's state line
 const gateKnown = new Map();                               // fid → { j, at }
-async function gateStatus(fid) {
-  const r = await gate(["status", "--fid", fid], "", 30000);
-  if (r.j) { gateKnown.set(fid, { j: r.j, at: Date.now() }); if (gateKnown.size > 500) gateKnown.delete(gateKnown.keys().next().value); }
-  return r.j;
+const gateProbes = new Map();                              // fid → one in-flight read
+function gateStatus(fid) {
+  if (gateProbes.has(fid)) return gateProbes.get(fid);
+  const probe = gate(["status", "--fid", fid], "", GATE_STATUS_TIMEOUT_MS).then((r) => {
+    // A failed refresh revokes the cached capability too, including for a new
+    // reader arriving before the next retry. It never inherits a stale verdict.
+    gateKnown.set(fid, { j: r.j || { can_talk: null, why: "unreachable" }, at: Date.now() });
+    if (gateKnown.size > 500) gateKnown.delete(gateKnown.keys().next().value);
+    return r.j;
+  }).finally(() => gateProbes.delete(fid));
+  gateProbes.set(fid, probe);
+  return probe;
 }
 
 // 旧「我的对话」 (task HHV0): the one conversation becomes a session of this login
