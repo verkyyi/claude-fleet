@@ -194,5 +194,5 @@ print(m)' "$f" 2>/dev/null)
 children_send() {
   local pwin="${3:-}"
   [ -n "$pwin" ] || return 1
-  fleet_agent_deliver "$pwin" "${2:-}" "${4:-}" "${FLEET_REPORT_FROM:-fleet-report}"
+  fleet_agent_deliver "$pwin" "${2:-}" "${4:-}" "${FLEET_REPORT_FROM:-fleet-report}" "${5:-}"
 }

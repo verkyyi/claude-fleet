@@ -6365,7 +6365,9 @@ drill_c8_old_supervisor_reopen() {
 drill_wake_peer_report() {
   CAP=40; local t0 out
   t0=$(now)
-  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_peer_first_turn Park.test_parked_report_queue_drain 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_peer_first_turn Park.test_parked_report_queue_drain \
+        Park.test_local_child_report_wakes_parent Park.test_late_wake_receipt_is_not_a_second_turn \
+        Park.test_question_is_never_parked 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
 }

@@ -10224,7 +10224,7 @@ PY
   fi
 }
 
-# fleet_agent_deliver <window|pane> <socket> <text> [from-name] — THE one road a
+# fleet_agent_deliver <window|pane> <socket> <text> [from-name] [delivery-id] — THE one road a
 # message takes into a live session of ANY agent (T626, EPIC T580 C6): a child
 # report, a peer message, the peer queue's replay, a digest. What is common is
 # written here once — the journaled route of a window whose Stop hook left
@@ -10241,9 +10241,33 @@ _fad_tm() { if [ -n "$1" ]; then _fad_s=$1; shift; tmux -L "$_fad_s" "$@"; else 
 # shellcheck disable=SC2034  # FLEET_DELIVER_NOTE is read by the caller
 fleet_agent_deliver() {
   local tgt="${1:-}" sock="${2:-}" text="${3:-}" from="${4:-fleet}" agent ev pid out rc sess
+  local delivery="${5:-}" fid parked seed why gate_root
   local held="${FLEET_DELIVER_HELD:-3}" lib="${_FLEET_LIB_DIR:-}"
   FLEET_DELIVER_NOTE=""
   [ -n "$tgt" ] || { FLEET_DELIVER_NOTE="no target"; return 1; }
+  # HHV0/C1 parking is a retained window, not a missing agent. Wake by identity
+  # before the inbox/PID road. A receipt directory is checked even after wake:
+  # the original request may have timed out while the wrapper owned its seed.
+  fid=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@fleet_id}' 2>/dev/null)
+  parked=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@parked}#{@park_held}#{@park_start}' 2>/dev/null)
+  gate_root="${FLEET_GATE_DIR:-${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/session-gate}"
+  if fleet_is_fid "$fid" && { [ -n "$parked" ] || [ -d "$gate_root/$fid" ]; }; then
+    seed=$(mktemp "${TMPDIR:-/tmp}/fleet-deliver.XXXXXX") || { FLEET_DELIVER_NOTE="cannot preserve wake words"; return "$held"; }
+    printf '%s' "$text" > "$seed"
+    why=消息; [ "$from" != fleet-report ] || why=回报
+    out=$(fleet_park_wake "$fid" --why "$why" --seed-file "$seed" ${delivery:+--delivery "$delivery"} 2>/dev/null); rc=$?
+    rm -f "$seed"
+    if [ "$rc" = 0 ]; then
+      rc=$(printf '%s' "$out" | python3 -c 'import json,sys
+r=json.load(sys.stdin)
+print(4 if r.get("ok") and r.get("already") else 0 if r.get("ok") else 3)' 2>/dev/null)
+    else rc=3; fi
+    case "$rc" in
+      0) FLEET_DELIVER_NOTE="$tgt via park wake"; return 0 ;;
+      4) ;; # another wake won before us; this message still needs its own turn
+      *) FLEET_DELIVER_NOTE="wake pending for $tgt"; return "$held" ;;
+    esac
+  fi
   ev=$(_fad_tm "$sock" display-message -p -t "$tgt" '#{@sleep_evidence}' 2>/dev/null)
   if [ -n "$ev" ] && [ -f "$lib/fleet_worker_life.py" ]; then
     sess=$(_fad_tm "$sock" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)

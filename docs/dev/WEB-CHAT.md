@@ -472,6 +472,16 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 包装器自己请求唤醒时使用 `--request-only` 避免等待自己。种子文件挂在 `@park_wake`，包装器 rename 成
 `.taken` 后用同一会话号 `--resume`，句子随启动进入首轮；7501 首次原生状态才写 `.launched` 确认恢复。
 超时收回未认领种子；已认领的种子属于当前启动，不会重投。
+peer 消息和子会话回报也通过 `fleet_agent_deliver` 调这一个唤醒入口，原文成为接回后的首轮；
+发送方只有在 7501 确认接回后才看到已送达（返回 0），否则仍排队（返回 3）。
+`fleet-peer-queue.sh drain` 沿用投递编号（`--delivery`），认领后的慢启动只等原回执，
+不会在新进程的收件箱再送一次。账本原因分别为「消息」「回报」。
+
+**选择框暂不自动停放（C4）**：Claude Code 2.1.295 的原生 AskUserQuestion 演练中，
+向打开的选择框发送 `/exit` 没有退出，反而提交了当前选项。无法证明题干与选项可安全恢复，
+因此即使等过 30 分钟仍保持运行；网页、⌘P、微信继续走现有代答入口。
+权限确认也继续排除。只有取得原生空输入框证明的空闲会话才可停放。
+
 有人切到窗口或在里面按 ↵ 也走这一路。C8 计量沿用 HHV0 的 `@parked` + `@park_held`，两者同时存在才计停放。`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前由 C1 写 `@park_saved_mb` 和
 `@park_why`；RSS 为进程树含外壳的总量，单位 MB，采样失败或根进程缺失时清除快照。C8 只读这份快照，缺失时隐藏节省项。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
 `next` 与 `started` 为 epoch；成功 `park` 行可写 `rss_mb`（未采到为 null），用于动作记录，C8 日汇总按 act 计数和 wake secs 求分位。没有每拍的 skip 日志。

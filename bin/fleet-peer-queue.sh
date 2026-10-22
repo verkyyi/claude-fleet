@@ -444,7 +444,7 @@ EOF
   if [ -z "$w" ]; then mv -f "$c" "$f"; waiting=$((waiting + 1)); continue; fi
   text=$(python3 -c 'import json, sys; sys.stdout.write(json.load(open(sys.argv[1], encoding="utf-8"))["text"])' "$c" 2>/dev/null)
   from=fleet-report; [ "$kind" = message ] && from=fleet-peer
-  FLEET_REPORT_FROM="$from" children_send "$SESS" "$sock" "$w" "$text"; rc=$?
+  FLEET_REPORT_FROM="$from" children_send "$SESS" "$sock" "$w" "$text" "$rid"; rc=$?
   if [ "$rc" -eq 0 ]; then
     rm -f "$c"
     note "$rid" DELIVERED "$to" "$kind" local ""
