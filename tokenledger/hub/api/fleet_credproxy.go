@@ -53,22 +53,23 @@ const CredProxyResolvePath = "/v1/fleet/credproxy/resolve"
 
 // CredProxyResolve is resolve's answer.
 type CredProxyResolve struct {
-	CredentialID string     `json:"credential_id,omitempty"`
-	Valid        bool       `json:"valid"`
-	Reason       string     `json:"reason,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	ID           string     `json:"id,omitempty"`
-	Principal    string     `json:"principal,omitempty"`
-	WorkerID     string     `json:"worker_id,omitempty"`
-	Machine      string     `json:"machine,omitempty"`
-	Exp          int64      `json:"exp,omitempty"`
-	Provider     string     `json:"provider,omitempty"`
-	Owner        string     `json:"owner,omitempty"`
-	Account      string     `json:"account,omitempty"`
-	BindRev      int64      `json:"bind_rev,omitempty"`
-	AccessToken  string     `json:"access_token,omitempty"`
-	AccountID    string     `json:"account_id,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CodexAffinityV1 bool       `json:"codex_affinity_v1,omitempty"`
+	CredentialID    string     `json:"credential_id,omitempty"`
+	Valid           bool       `json:"valid"`
+	Reason          string     `json:"reason,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	ID              string     `json:"id,omitempty"`
+	Principal       string     `json:"principal,omitempty"`
+	WorkerID        string     `json:"worker_id,omitempty"`
+	Machine         string     `json:"machine,omitempty"`
+	Exp             int64      `json:"exp,omitempty"`
+	Provider        string     `json:"provider,omitempty"`
+	Owner           string     `json:"owner,omitempty"`
+	Account         string     `json:"account,omitempty"`
+	BindRev         int64      `json:"bind_rev,omitempty"`
+	AccessToken     string     `json:"access_token,omitempty"`
+	AccountID       string     `json:"account_id,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 passes are signed with (claude-fleet#3698):
 	// with it the proxy refuses a forged or expired pass without asking.
 	// Empty when the hub mints fcp-h1 only.
@@ -112,7 +113,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	}
 	now := time.Now()
 	v, c := s.verifySessionCred(req.Cred, "", req.Provider, false, now)
-	out := CredProxyResolve{Valid: v.Valid, Reason: v.Reason, ID: v.ID, Principal: v.Principal,
+	out := CredProxyResolve{CodexAffinityV1: req.Provider == credvault.Codex && (req.Codex != nil || req.CodexRecord != nil), Valid: v.Valid, Reason: v.Reason, ID: v.ID, Principal: v.Principal,
 		WorkerID: v.WorkerID, Machine: v.Machine, Exp: v.Exp, Provider: req.Provider, SessionPub: s.SessionPub(),
 		SessionPubPrev: s.SessionPubPrev()}
 	if !v.Valid {
@@ -133,9 +134,45 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	b, err := s.sessionBind(c.WorkerID, c.Principal, s.passEndpoint(c.ID, now), req.Provider, now, req.RequestBoundary && req.Rejected == nil)
+	endpoint := s.passEndpoint(c.ID, now)
+	if req.CodexRecord != nil {
+		record := req.CodexRecord
+		if req.Provider != credvault.Codex || req.Codex != nil || req.Rejected != nil ||
+			record.CredentialID == "" || record.AccountKey == credproxy.CodexReference("account", "") || !credproxy.ValidCodexReferences([]string{record.AccountKey}) || !credproxy.ValidCodexReferences(record.References) {
+			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation record")
+			return
+		}
+		ch, err := s.codexAffinityChoice(c.Principal, endpoint, store.CodexAffinity{Owner: record.Owner, CredentialID: record.CredentialID}, now)
+		if err != nil {
+			out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_not_authorized"
+		} else if err := s.Store.RecordCodexAffinity(c.WorkerID, record.References, store.CodexAffinity{
+			Owner: ch.PrincipalID, Account: ch.Account, CredentialID: record.CredentialID, AccountKey: record.AccountKey,
+		}, now); err != nil {
+			httpError(w, http.StatusInternalServerError, "could not record continuation source")
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	var b store.SessionBind
+	var expectedSource store.CodexAffinity
+	var err error
+	if req.Codex != nil {
+		if req.Provider != credvault.Codex || req.Rejected != nil {
+			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation route")
+			return
+		}
+		b, expectedSource, err = s.codexAffinityBind(c.WorkerID, c.Principal, endpoint, *req.Codex, now)
+	} else {
+		// The old boolean proves only a new HTTP request, never independence
+		// from account-bound provider state. Older callers retain sticky state.
+		b, err = s.sessionBind(c.WorkerID, c.Principal, endpoint, req.Provider, now)
+	}
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
+		if req.Codex != nil {
+			out.Error = credproxy.CodexContinuationUnavailable
+		}
 		if req.Provider == credvault.Claude && errors.Is(err, errNoProviderAccount) {
 			out.Error = credproxy.ClaudePoolUnavailable
 		}
@@ -143,12 +180,25 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out.Owner, out.Account, out.BindRev = b.Owner, b.Account, b.Rev
-	if req.Rejected != nil && req.Rejected.Owner == b.Owner && req.Rejected.Account == b.Account {
-		if _, err := s.Vault.RejectUpstream(b.Owner, req.Provider, b.Account, req.Rejected.Fingerprint, req.Rejected.Code, "central-proxy"); err != nil {
-			httpError(w, http.StatusInternalServerError, "could not record upstream credential rejection")
+	if req.Rejected != nil {
+		// The failed request can be a continuation on an older binding. Check
+		// current authorization for its source, not equality with today's sticky.
+		choices, choiceErr := s.sessionBindChoices(c.Principal, endpoint, req.Provider)
+		if choiceErr != nil {
+			httpError(w, http.StatusInternalServerError, "could not check rejection source")
 			return
 		}
+		for _, ch := range choices {
+			if ch.PrincipalID == req.Rejected.Owner && ch.Account == req.Rejected.Account {
+				if _, err := s.Vault.RejectUpstream(ch.PrincipalID, req.Provider, ch.Account, req.Rejected.Fingerprint, req.Rejected.Code, "central-proxy"); err != nil {
+					httpError(w, http.StatusInternalServerError, "could not record upstream credential rejection")
+					return
+				}
+				break
+			}
+		}
 	}
+
 	acc, identity, err := s.leaseIdentified(r.Context(), b.Owner, req.Provider, b.Account)
 	if err != nil {
 		if errors.Is(err, credvault.ErrLocked) {
@@ -156,6 +206,16 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		out.Valid, out.Error, out.Reason = false, "no_credential", "account "+b.Account+": "+err.Error()
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if req.Codex != nil && acc.AccountID == "" {
+		out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_id_missing"
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if expectedSource.CredentialID != "" && (expectedSource.CredentialID != identity || expectedSource.AccountKey != credproxy.CodexReference("account", acc.AccountID)) {
+		out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_credential_replaced"
 		writeJSON(w, http.StatusOK, out)
 		return
 	}

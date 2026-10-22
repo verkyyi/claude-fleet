@@ -57,7 +57,7 @@ func TestRejectedAccessRetry(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				calls.Add(1)
 				body, _ := io.ReadAll(request.Body)
-				if string(body) != "request-body" {
+				if string(body) != `{"input":"request-body"}` {
 					t.Error("request body changed on retry")
 				}
 				if request.Header.Get("Authorization") == "Bearer new" && !test.retryFails {
@@ -81,7 +81,7 @@ func TestRejectedAccessRetry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest(http.MethodPost, "/v1/proxy/codex/responses", strings.NewReader("request-body"))
+			request := httptest.NewRequest(http.MethodPost, "/v1/proxy/codex/responses", strings.NewReader(`{"input":"request-body"}`))
 			request.Header.Set("Authorization", "Bearer fcp-h1.test")
 			response := httptest.NewRecorder()
 			proxy.Handler().ServeHTTP(response, request)

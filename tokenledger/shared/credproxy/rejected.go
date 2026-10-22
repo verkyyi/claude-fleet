@@ -26,7 +26,10 @@ func (rejection AccessRejection) Valid() bool {
 }
 
 type ResolveRequest struct {
-	// Set only before a NEW request is sent, never by an auth-error refresh.
+	Codex       *CodexRoute          `json:"codex,omitempty"`
+	CodexRecord *CodexAffinityRecord `json:"codex_record,omitempty"`
+	// Compatibility field. A new HTTP request does not prove independence;
+	// the hub now requires Codex route evidence before proactive selection.
 	RequestBoundary bool             `json:"request_boundary,omitempty"`
 	Cred            string           `json:"cred"`
 	Provider        string           `json:"provider"`

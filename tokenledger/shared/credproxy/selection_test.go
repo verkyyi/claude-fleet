@@ -27,7 +27,7 @@ func TestCodexSelectionPinsInflightAcrossReplicas(t *testing.T) {
 		mu.Lock()
 		seen = append(seen, auth+" "+string(body))
 		mu.Unlock()
-		if string(body) == "first" {
+		if string(body) == `{"input":"first"}` {
 			w.Header().Set("Content-Type", "text/event-stream")
 			io.WriteString(w, "data: first\n\n")
 			w.(http.Flusher).Flush()
@@ -43,7 +43,7 @@ func TestCodexSelectionPinsInflightAcrossReplicas(t *testing.T) {
 	})
 	defer done()
 	h.hub.set(func() { h.hub.bind[PassPrefix+"s"] = "old" })
-	req, _ := http.NewRequest(http.MethodPost, h.proxy.URL+"/v1/proxy/codex/responses", strings.NewReader("first"))
+	req, _ := http.NewRequest(http.MethodPost, h.proxy.URL+"/v1/proxy/codex/responses", strings.NewReader(`{"input":"first"}`))
 	req.Header.Set("Authorization", "Bearer "+PassPrefix+"s")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -65,7 +65,7 @@ func TestCodexSelectionPinsInflightAcrossReplicas(t *testing.T) {
 	}
 	p2 := httptest.NewServer(other.Handler())
 	defer p2.Close()
-	next, _ := http.NewRequest(http.MethodPost, p2.URL+"/v1/proxy/codex/responses", strings.NewReader("second"))
+	next, _ := http.NewRequest(http.MethodPost, p2.URL+"/v1/proxy/codex/responses", strings.NewReader(`{"input":"second"}`))
 	next.Header.Set("Authorization", "Bearer "+PassPrefix+"s")
 	second, err := http.DefaultClient.Do(next.WithContext(ctx))
 	if err != nil {
@@ -83,7 +83,7 @@ func TestCodexSelectionPinsInflightAcrossReplicas(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(seen) != 2 || seen[0] != "Bearer tok-old first" || seen[1] != "Bearer tok-new second" {
+	if len(seen) != 2 || seen[0] != `Bearer tok-old {"input":"first"}` || seen[1] != `Bearer tok-new {"input":"second"}` {
 		t.Fatalf("replayed or changed body: %v", seen)
 	}
 }
@@ -109,7 +109,10 @@ func TestCodexSelectionBoundaryProtocol(t *testing.T) {
 	if _, err := h.RejectAccess(context.Background(), "fixture-pass", Codex, Resolution{Owner: "pool", Account: "a", AccessToken: "fixture-access"}, "token_expired"); err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 3 || !requests[0].RequestBoundary || requests[1].RequestBoundary || requests[2].RequestBoundary {
+	if _, err := h.ResolveCodex(context.Background(), "fixture-pass", CodexRoute{Independent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 || requests[0].RequestBoundary || requests[1].RequestBoundary || requests[2].RequestBoundary || requests[3].Codex == nil || !requests[3].Codex.Independent {
 		t.Fatalf("unsafe selection point: %+v", requests)
 	}
 }

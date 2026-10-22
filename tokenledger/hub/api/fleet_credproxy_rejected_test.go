@@ -26,7 +26,7 @@ func TestCredProxyExpiredAccessRefreshes(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"error":{"code":"token_expired"}}`)
 			return
 		}
-		_, _ = io.WriteString(writer, "OK")
+		_, _ = io.WriteString(writer, `{"ok":"OK"}`)
 	}))
 	defer upstream.Close()
 	proxy, err := credproxy.New(credproxy.Config{Resolver: &credproxy.HubResolver{URL: rig.h.http.URL, Token: cpToken}, Direct: true, CodexURL: upstream.URL, Audit: func(string) {}})
@@ -44,7 +44,7 @@ func TestCredProxyExpiredAccessRefreshes(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+pass)
 	response = httptest.NewRecorder()
 	proxy.Handler().ServeHTTP(response, request)
-	if response.Code != 200 || response.Body.String() != "OK" || calls.Load() != 2 {
+	if response.Code != 200 || response.Body.String() != `{"ok":"OK"}` || calls.Load() != 2 {
 		t.Fatalf("status=%d body=%q calls=%d", response.Code, response.Body.String(), calls.Load())
 	}
 	if rig.leased(t, store.PoolPrincipal, credvault.Codex, "poolcx") == old {

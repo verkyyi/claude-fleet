@@ -86,22 +86,23 @@ const maxBody = 64 << 20
 
 // Resolution is the hub's answer for one pass + provider (api.CredProxyResolve).
 type Resolution struct {
-	CredentialID string     `json:"credential_id,omitempty"`
-	Valid        bool       `json:"valid"`
-	Reason       string     `json:"reason,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	ID           string     `json:"id,omitempty"`
-	Principal    string     `json:"principal,omitempty"`
-	WorkerID     string     `json:"worker_id,omitempty"`
-	Machine      string     `json:"machine,omitempty"`
-	Exp          int64      `json:"exp,omitempty"`
-	Provider     string     `json:"provider,omitempty"`
-	Owner        string     `json:"owner,omitempty"`
-	Account      string     `json:"account,omitempty"`
-	BindRev      int64      `json:"bind_rev,omitempty"`
-	AccessToken  string     `json:"access_token,omitempty"`
-	AccountID    string     `json:"account_id,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CodexAffinityV1 bool       `json:"codex_affinity_v1,omitempty"`
+	CredentialID    string     `json:"credential_id,omitempty"`
+	Valid           bool       `json:"valid"`
+	Reason          string     `json:"reason,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	ID              string     `json:"id,omitempty"`
+	Principal       string     `json:"principal,omitempty"`
+	WorkerID        string     `json:"worker_id,omitempty"`
+	Machine         string     `json:"machine,omitempty"`
+	Exp             int64      `json:"exp,omitempty"`
+	Provider        string     `json:"provider,omitempty"`
+	Owner           string     `json:"owner,omitempty"`
+	Account         string     `json:"account,omitempty"`
+	BindRev         int64      `json:"bind_rev,omitempty"`
+	AccessToken     string     `json:"access_token,omitempty"`
+	AccountID       string     `json:"account_id,omitempty"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 is signed with (base64), when the hub has one.
 	SessionPub string `json:"session_pub,omitempty"`
 	// SessionPubPrev is the key a rotation retires (claude-fleet#4138).
@@ -127,7 +128,7 @@ type HubResolver struct {
 // Resolve posts {cred, provider} to the hub. A transport error or a 5xx is
 // ErrHubUnavailable; any other non-200 is a configuration error.
 func (h *HubResolver) Resolve(ctx context.Context, pass, provider string) (Resolution, error) {
-	return h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: provider, RequestBoundary: provider == Codex})
+	return h.resolveRequest(ctx, ResolveRequest{Cred: pass, Provider: provider})
 }
 
 func (h *HubResolver) resolveRequest(ctx context.Context, request ResolveRequest) (Resolution, error) {
@@ -548,7 +549,20 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			return
 		}
 	}
-	res, stale, err := p.resolve(r.Context(), pass, provider)
+	var res Resolution
+	var stale bool
+	if router, ok := p.cfg.Resolver.(CodexRouter); provider == Codex && ok {
+		// Affinity is shared by all replicas. Never use a pass-only cached answer
+		// (including stale fallback) for a request carrying provider state.
+		res, err = router.ResolveCodex(r.Context(), pass, codexRoute(r, body))
+		if err == nil {
+			p.learnPub(res)
+		}
+	} else if provider == Codex && !codexRoute(r, body).Independent {
+		res = Resolution{Error: CodexContinuationUnavailable, Reason: "affinity_protocol_unavailable"}
+	} else {
+		res, stale, err = p.resolve(r.Context(), pass, provider)
+	}
 	a.stale = stale
 	if err != nil {
 		if errors.Is(err, ErrHubUnavailable) {
@@ -571,6 +585,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		// own line, under its own code, with a status no client retries
 		a.status, _ = refuseCode(w, provider, http.StatusForbidden, "permission_error", PersonBudgetExceeded, res.Reason)
 		a.why = PersonBudgetExceeded
+		return
+	}
+	if !res.Valid && res.Error == CodexContinuationUnavailable {
+		a.status, _ = refuseCode(w, provider, http.StatusConflict, "invalid_request_error", CodexContinuationUnavailable,
+			"Cannot establish the original subscription for this continuation: "+res.Reason)
+		a.why = res.Reason
 		return
 	}
 	if !res.Valid {
@@ -624,6 +644,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		// a metered answer must be readable here (claude-fleet#3407): Claude
 		// Code asks for br / zstd, which the meter cannot open
 		out.Header.Set("Accept-Encoding", meterAccept(r.Header.Values("Accept-Encoding")))
+		if provider == Codex {
+			out.Header.Set("Accept-Encoding", "identity")
+		}
 		if provider == Claude {
 			if !contains(betas, oauthBeta) {
 				betas = append(betas, oauthBeta)
@@ -638,6 +661,14 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			// the relay's forward_auth checks the pass with the hub (C7); it
 			// never sees the credential, which rides inside TLS to the provider
 			out.Header.Set("X-Fleet-Relay", pass)
+		}
+		if provider == Codex {
+			// net/http must not replay a buffered inference body on a redirect or
+			// a reused-connection retry, including requests with idempotency headers.
+			out.GetBody = nil
+			client := *p.cfg.Upstream
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			return client.Do(out)
 		}
 		return p.cfg.Upstream.Do(out)
 	}
@@ -661,6 +692,51 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	defer resp.Body.Close()
+	if provider == Codex && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// Do not hand the redirect to the Agent either: its HTTP client could
+		// automatically resend the same body to the Location target.
+		a.status, _ = refuseCode(w, provider, http.StatusBadRequest, "invalid_request_error", "codex_redirect_refused", "upstream redirect refused; request was not replayed")
+		a.why = "codex_redirect_refused"
+		return
+	}
+	responseBody := io.Reader(resp.Body)
+	if router, ok := p.cfg.Resolver.(CodexRouter); provider == Codex && ok && resp.StatusCode/100 == 2 {
+		record := func(refs []string) error {
+			if len(refs) == 0 {
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			return router.RecordCodexAffinity(ctx, pass, res, refs)
+		}
+		var refs []string
+		for _, name := range []string{"x-codex-turn-state", "x-codex-routing-hint"} {
+			for _, value := range resp.Header.Values(name) {
+				if value != "" {
+					refs = append(refs, CodexReference("header:"+name, value))
+				}
+			}
+		}
+		err = record(refs)
+		if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+			err = errors.New("affinity_encoding_unsupported")
+		}
+		if err == nil {
+			responseBody, err = codexResponseReader(resp.Body, resp.Header.Get("Content-Type"), func(v map[string]any) error {
+				refs, err := codexOutputReferences(v)
+				if err != nil {
+					return err
+				}
+				return record(refs)
+			})
+		}
+		if err != nil {
+			a.status, _ = refuse(w, provider, http.StatusBadGateway, "api_error", "could not establish continuation source")
+			a.why = "affinity_record_unavailable"
+			return
+		}
+	}
+
 	for k, vs := range resp.Header {
 		lk := strings.ToLower(k)
 		if lk == "connection" || lk == "keep-alive" || lk == "transfer-encoding" || lk == "trailer" ||
@@ -677,7 +753,10 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	}
 	m := newMeter()
 	mw := m.decoder(resp.Header.Get("Content-Encoding"))
-	a.out = stream(w, io.TeeReader(resp.Body, mw))
+	a.out = stream(w, io.TeeReader(responseBody, mw))
+	if reader, ok := responseBody.(*codexAffinityReader); ok && reader.failed {
+		a.why = "affinity_stream_stopped"
+	}
 	mw.Close()
 	u := m.usage()
 	a.tokens = u.Tokens()
