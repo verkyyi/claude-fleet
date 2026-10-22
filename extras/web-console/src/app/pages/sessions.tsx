@@ -226,15 +226,15 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
   const asking = r.live && (r.live.state === "needs" || r.live.state === "blocked");
   const words = t ? taskWords(t) : "";
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 max-w-full space-y-5 break-words">
       <div className="space-y-1">
-        <div className="flex items-baseline gap-2">
-          {r.code ? <span className="text-clay font-mono text-sm">{r.code}</span> : null}
-          <h2 className="font-display text-xl leading-snug font-semibold break-words">{r.title}</h2>
+        <div className="flex min-w-0 max-w-full items-baseline gap-2 pe-6">
+          {r.code ? <span className="text-clay shrink-0 font-mono text-sm">{r.code}</span> : null}
+          <h2 className="font-display min-w-0 flex-1 text-xl leading-snug font-semibold [overflow-wrap:anywhere]">{r.title}</h2>
         </div>
         <p className="text-muted-foreground text-sm">{[tr(...r.tag), machine, t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
         {r.board?.agent_words ? <p className="text-sm">{tr(...r.board.agent_words)}</p> : null}
-        {r.board?.context ? <p className="text-sm">{tr(...r.board.context)}</p> : null}
+        {r.board?.context ? <p className="max-w-full text-sm [overflow-wrap:anywhere]">{tr(...r.board.context)}</p> : null}
         {r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
       </div>
       {asking && r.live ? (

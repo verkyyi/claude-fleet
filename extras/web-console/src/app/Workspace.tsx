@@ -105,7 +105,7 @@ export function Workspace({ r }: { r: Row }) {
         </DropdownMenu>
       </header>
       <div className="relative min-h-0 flex-1">
-        {pendingRecord ? <div className="space-y-2 p-4 text-sm" role="status">
+        {pendingRecord ? <div className="min-w-0 max-w-full space-y-2 p-4 text-sm [overflow-wrap:anywhere]" role="status">
           <p>{tr(...r.tag)}</p><p>{rowAgent(r)}</p>
           {r.board?.context ? <p>{tr(...r.board.context)}</p> : null}
         </div> : null}
@@ -126,13 +126,13 @@ export function Workspace({ r }: { r: Row }) {
           action={<Button size="sm" variant="outline" onClick={() => setDetails(true)}>{tr("详情", "Details")}</Button>} /></div> : null}
       </div>
       <Sheet open={details} onOpenChange={setDetails}>
-        <SheetContent side="right" className="w-full gap-0 overflow-y-auto sm:max-w-xl">
+        <SheetContent side="right" className="w-full min-w-0 max-w-full gap-0 overflow-y-auto sm:max-w-xl">
           {/* the card names the session itself; the drawer's own title is for a screen reader */}
           <SheetHeader className="sr-only">
             <SheetTitle>{r.title}</SheetTitle>
             <SheetDescription>{headMeta(r)}</SheetDescription>
           </SheetHeader>
-          <div className="px-5 pt-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+          <div className="min-w-0 max-w-full px-5 pt-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
             <RowPanel r={r} cli onOpen={(k) => { setDetails(false); go(sessionPath(k)); }}
               onTerminal={term.kind === "live" ? () => { setDetails(false); setView("term"); } : undefined} />
           </div>
