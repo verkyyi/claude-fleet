@@ -19,7 +19,7 @@ func TestMachineParkCensusAllLogins(t *testing.T) {
 		p := control.EmptyParkMetrics()
 		p.SessionsWorking = 1
 		p.SessionsParked = i + 1
-		p.ParkedSavedMB = float64((i + 1) * 1024)
+		*p.ParkedSavedMB = float64((i + 1) * 1024)
 		p.SessionsIdle = 1
 		p.IdleReasons = map[string]int{"old-shell": 1}
 		*p.IdleRSSMB = 512
@@ -31,9 +31,17 @@ func TestMachineParkCensusAllLogins(t *testing.T) {
 	})
 	_, d := getDetail(t, h, "/v1/nodes/node-a", "")
 	m := d.Machine
-	if m.ParkMetrics == nil || m.SessionsWorking != 2 || m.SessionsIdle != 2 || m.SessionsParked != 3 || m.ParkedSavedMB != 3072 || *m.IdleRSSMB != 1024 || m.IdleReasons["old-shell"] != 2 {
+	if m.ParkMetrics == nil || m.SessionsWorking != 2 || m.SessionsIdle != 2 || m.SessionsParked != 3 || m.ParkedSavedMB == nil || *m.ParkedSavedMB != 3072 || *m.IdleRSSMB != 1024 || m.IdleReasons["old-shell"] != 2 {
 		t.Fatalf("aggregate: %+v", m.ParkMetrics)
 	}
+	// A held session from an older wrapper has a count, but no pre-park RSS.
+	unknown := control.EmptyParkMetrics()
+	unknown.SessionsParked, unknown.ParkedSavedMB = 2, nil
+	send(1, unknown)
+	waitFor(t, 3*time.Second, "unknown savings are not zero", func() bool {
+		d, err := h.srv.nodeDetail(time.Now(), "node-a", nil)
+		return err == nil && d != nil && d.Machine.ParkMetrics != nil && d.Machine.ParkedSavedMB == nil
+	})
 	// One old login makes the whole census unknown, rather than a partial sum.
 	send(1, nil)
 	waitFor(t, 3*time.Second, "old login omits census", func() bool {

@@ -13,7 +13,8 @@ import (
 
 func TestFleetPartCarriesParkCensus(t *testing.T) {
 	p := control.EmptyParkMetrics()
-	p.SessionsWorking, p.SessionsIdle, p.SessionsParked, p.ParkedSavedMB = 7, 2, 4, 5900
+	p.SessionsWorking, p.SessionsIdle, p.SessionsParked = 7, 2, 4
+	*p.ParkedSavedMB = 5900
 	*p.IdleRSSMB = 2000
 	fp := fleetPart{snap: fleetSnapshot{park: p}}
 	var hb control.Heartbeat
@@ -26,7 +27,7 @@ func TestFleetPartCarriesParkCensus(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.ParkMetrics == nil || got.SessionsIdle != 2 || got.SessionsWorking != 7 || got.SessionsParked != 4 || got.ParkedSavedMB != 5900 || *got.IdleRSSMB != 2000 {
+	if got.ParkMetrics == nil || got.SessionsIdle != 2 || got.SessionsWorking != 7 || got.SessionsParked != 4 || got.ParkedSavedMB == nil || *got.ParkedSavedMB != 5900 || *got.IdleRSSMB != 2000 {
 		t.Fatalf("beat lost census: %s", b)
 	}
 	var old control.Heartbeat

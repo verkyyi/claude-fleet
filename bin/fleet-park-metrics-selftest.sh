@@ -17,7 +17,7 @@ case "$*" in
   *list-clients*) exit 0 ;;
   *list-windows*)
     case "$*" in
-      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\n@2\037200\037worker\037two\037\037\0371\037\n@3\037300\037worker\037three\037停放中\0372048\0371\037\n';;
+      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\037\037\n@2\037200\037worker\037two\037\037\0371\037\037\037\n@3\037300\037worker\037three\037停放中\0372048\0371\037\037\037\n';;
       *ctx_left*) printf '@1\t=\t=\t=\t=\t=\t=\t=\n@2\t=\t=\t=\t=\t=\t=\t=\n@3\t=\t=\t=\t=\t=\t=\t=\n';;
       *pane_current_path*) printf '@1\t/tmp/scratch-1\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@2\t/tmp/scratch-2\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@3\t/tmp/scratch-3\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n';;
       *cc_agent*loop*) exit 0 ;;
@@ -38,7 +38,7 @@ printf 'FLEET_SESSION=census\n' > "$WORK/conf/fleets/census/conf"
 printf 'test-identity\n' > "$WORK/conf/fleets/census/identity"
 export PATH="$WORK/fake:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 export PYTHONPATH="$BIN" PARK_TEST_WORK="$WORK"
-# Test the actual adapter and one parser with 36 columns, rather than making the
+# Test the actual adapter and one parser with 37 columns, rather than making the
 # controller's JSON response ourselves. Existing 34-column rows remain accepted.
 bash "$BIN/fleet-control-read.sh" workers census > "$WORK/workers"
 python3 - <<'PY' || st_fail 'production census assertion'
@@ -46,14 +46,14 @@ import json, os, time
 from pathlib import Path
 from fleet_hub_common import inventory_row
 from fleet_control import Control
-from fleet_park_metrics import daily
+from fleet_park_metrics import daily, summarize
 w = Path(os.environ['PARK_TEST_WORK'])
 lines = (w/'workers').read_text().splitlines()
 assert len(lines) == 3, lines
 for line in lines:
     parts, extra = inventory_row(line.split('\t'))
     assert 'park' in extra, line
-    assert len(line.split('\t')) == 36, line
+    assert len(line.split('\t')) == 37, line
     assert 'park' not in inventory_row(line.split('\t')[:-1])[1]
 ctl = Control()
 fleet = {'fleet_id':'test', 'name':'census', 'agent':'claude', 'repo':''}
@@ -61,6 +61,8 @@ snap = ctl.workers(fleet)
 p = snap['park_metrics']
 assert (p['sessions_working'],p['sessions_idle'],p['sessions_parked']) == (1,1,1), p
 assert p['parked_saved_mb'] == 2048 and p['idle_rss_mb'] == 201, p
+unknown = summarize([{'state':'parked', 'park':{'state':'parked','saved_mb':None}}])
+assert unknown['sessions_parked'] == 1 and unknown['parked_saved_mb'] is None, unknown
 assert p['idle_eligible'] is None, p # not yet 60 seconds: never claim eligibility
 # A second repo changes no count or identity.
 (w/'conf/fleets/census/repos/second.conf').write_text('FLEET_REPO=acme/second\n')

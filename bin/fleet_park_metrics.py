@@ -60,7 +60,7 @@ def census(socket, session, cache_dir):
     # Exact session, one row per window: grouped views never duplicate a pane.
     fmt = "\x1f".join(["#{window_id}", "#{pane_pid}", "#{@fleet_role}", "#{window_name}",
                           "#{@park_state}", "#{@park_saved_mb}", "#{@park_wrap_ver}",
-                          "#{@park_why}"])
+                          "#{@park_why}", "#{@parked}", "#{@park_held}"])
     rows = command(["tmux", "-u", "-L", socket, "list-windows", "-t", "=" + session, "-F", fmt])
     watched = set(command(["tmux", "-L", socket, "list-clients", "-F", "#{window_id}"]).split())
     trees = process_trees(command(["ps", "-axo", "pid=,ppid=,rss=,time=,command="]))
@@ -72,9 +72,9 @@ def census(socket, session, cache_dir):
     now, next_sample, result = time.time(), {}, {}
     for row in rows.split("\n"):
         fields = row.split("\x1f")
-        if len(fields) != 8:
+        if len(fields) != 10:
             continue
-        wid, pid, role, name, parked, saved, wrap, why = fields
+        wid, pid, role, name, parked, saved, wrap, why, gate_parked, held = fields
         if role in ("home", "panel") or (not role and name in ("home", "dash", "plan", "backlog")):
             continue
         if not pid.isdigit():
@@ -90,12 +90,12 @@ def census(socket, session, cache_dir):
             quiet = None
         next_sample[wid] = {"at": now, "cpu": cpu, "pid": pid, "quiet": quiet} if elapsed >= 60 or old.get("pid") != pid else old
         try:
-            saved_mb = max(0, float(saved or 0))
-            if not math.isfinite(saved_mb):
-                saved_mb = 0
+            saved_mb = max(0, float(saved)) if saved else None
+            if saved_mb is not None and not math.isfinite(saved_mb):
+                saved_mb = None
         except ValueError:
-            saved_mb = 0
-        result[wid] = {"state": "parked" if parked == "停放中" else "awake",
+            saved_mb = None
+        result[wid] = {"state": "parked" if parked == "停放中" or (gate_parked and held) else "awake",
                        "rss_mb": round(rss, 2) if known else None, "saved_mb": saved_mb,
                        "why": "watched" if wid in watched else why or ("old-shell" if not wrap else "idle-delay"), "quiet": quiet}
     try:
@@ -118,7 +118,10 @@ def summarize(workers):
         p = w["park"]
         if p["state"] == "parked":
             out["sessions_parked"] += 1
-            out["parked_saved_mb"] += p["saved_mb"]
+            if p["saved_mb"] is None:
+                out["parked_saved_mb"] = None
+            elif out["parked_saved_mb"] is not None:
+                out["parked_saved_mb"] += p["saved_mb"]
         elif w.get("state") not in ("done", "idle", "looping", "needs", "exited") or p.get("quiet") is False:
             out["sessions_working"] += 1
         else:
@@ -195,7 +198,8 @@ def main():
             if stats is None:
                 raise RuntimeError("park metrics unavailable for " + fleet["name"])
             totals.append(stats)
-        total = {k: sum(s[k] for s in totals) for k in ("sessions_working", "sessions_idle", "sessions_parked", "parked_saved_mb")}
+        total = {k: sum(s[k] for s in totals) for k in ("sessions_working", "sessions_idle", "sessions_parked")}
+        saved = None if any(s["parked_saved_mb"] is None for s in totals) else sum(s["parked_saved_mb"] for s in totals)
         idle_rss = None if any(s["idle_rss_mb"] is None for s in totals) else sum(s["idle_rss_mb"] for s in totals)
         reasons = Counter()
         for s in totals:
@@ -206,7 +210,7 @@ def main():
         detail += " / " + ("unknown" if eligible_rss is None else "%.1f MB" % eligible_rss)
         if reasons:
             detail += " · " + ", ".join("%s %d" % pair for pair in sorted(reasons.items()))
-        print("working {sessions_working} · idle {sessions_idle} · parked {sessions_parked} · saved {parked_saved_mb:.1f} MB · idle RSS ".format(**total) + ("unknown" if idle_rss is None else "%.1f MB" % idle_rss) + detail)
+        print("working {sessions_working} · idle {sessions_idle} · parked {sessions_parked} · saved ".format(**total) + ("unknown" if saved is None else "%.1f MB" % saved) + " · idle RSS " + ("unknown" if idle_rss is None else "%.1f MB" % idle_rss) + detail)
 
 
 if __name__ == "__main__":

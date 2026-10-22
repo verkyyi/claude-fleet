@@ -7,7 +7,7 @@ type ParkMetrics struct {
 	SessionsIdle    int            `json:"sessions_idle"`
 	SessionsParked  int            `json:"sessions_parked"`
 	IdleRSSMB       *float64       `json:"idle_rss_mb"`
-	ParkedSavedMB   float64        `json:"parked_saved_mb"`
+	ParkedSavedMB   *float64       `json:"parked_saved_mb"`
 	IdleReasons     map[string]int `json:"idle_reasons"`
 	// IdleEligible uses the batch definition: turn over, <0.5 CPU seconds
 	// over 60 seconds, no human watching and no background job. nil until sampled.
@@ -19,7 +19,11 @@ func (p *ParkMetrics) Add(other *ParkMetrics) {
 	p.SessionsWorking += other.SessionsWorking
 	p.SessionsIdle += other.SessionsIdle
 	p.SessionsParked += other.SessionsParked
-	p.ParkedSavedMB += other.ParkedSavedMB
+	if p.ParkedSavedMB != nil && other.ParkedSavedMB != nil {
+		*p.ParkedSavedMB += *other.ParkedSavedMB
+	} else {
+		p.ParkedSavedMB = nil
+	}
 	if p.IdleRSSMB != nil && other.IdleRSSMB != nil {
 		*p.IdleRSSMB += *other.IdleRSSMB
 	} else {
@@ -44,6 +48,6 @@ func (p *ParkMetrics) Add(other *ParkMetrics) {
 }
 
 func EmptyParkMetrics() *ParkMetrics {
-	rss, eligibleRSS, eligible := 0.0, 0.0, 0
-	return &ParkMetrics{IdleRSSMB: &rss, IdleEligible: &eligible, IdleEligibleRSSMB: &eligibleRSS, IdleReasons: map[string]int{}}
+	rss, saved, eligibleRSS, eligible := 0.0, 0.0, 0.0, 0
+	return &ParkMetrics{IdleRSSMB: &rss, ParkedSavedMB: &saved, IdleEligible: &eligible, IdleEligibleRSSMB: &eligibleRSS, IdleReasons: map[string]int{}}
 }
