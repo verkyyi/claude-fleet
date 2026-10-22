@@ -21,6 +21,9 @@ row 「✦ 消息」; fleet takes no key of its own for it.
                                                <level> — same id, same ts (a machine alert that greys
                                                instead of a second 「已恢复」, T899); rc 1 none
     fleet_notice.py cell                       the node inventory's `notices=` cell (column 33)
+    fleet_notice.py guard <path>               rc 3 (one stderr line) when this process may not write
+                                               the record at <path> — a test aiming at the login's real
+                                               conf dir (T909: session-exit.log, start-fail.log); else 0
 
 THE TIERS. error — red, on the message row until seen (opening ⌘P's 消息; a key
 clears nothing); warn — yellow, 6 s; info — grey, 3 s. The newest live one is
@@ -48,8 +51,12 @@ sets it to the login's real record, and FLEET_NOTICE_FORBID_HIT to a file the
 refusal touches so the runner reds the test), or this login's own record while
 the process talks to a hub this login does not (CCQUOTA_HUB_URL other than
 node.env / node.pub.env / fleet.conf name — T672's drill started a session against https://127.0.0.1:9 and
-its refusal reached the person's 消息), or FLEET_DRILL=1. One stderr line says
-which; nothing is written, nothing drawn.
+its refusal reached the person's 消息), or FLEET_DRILL=1. A test run by hand has
+no FLEET_NOTICE_FORBID, so a process that is a test's (`test_why`: the gate's
+environment, a pane of a `-S` tmux server in a temp dir, or a selftest file up its
+process chain) is refused any book under the login's real conf dir too (T909) —
+`guard <path>` asks the same for the wrapper's session-exit.log / start-fail.log.
+One stderr line says which; nothing is written, nothing drawn.
 
 THE MESSAGE ROW (T701). A notice the person has not seen — after the read mark
 (logs/notices.read, moved by opening the page) and not in logs/notices.readids
@@ -130,14 +137,103 @@ def _own_hubs():
     return got
 
 
+def real_conf_dirs():
+    """The login's real conf dirs: its passwd home's ~/.config/claude-fleet (never
+    HOME's) and the gate's FLEET_SELFTEST_REAL_CONF (a leg's stand-in for it)."""
+    try:
+        import pwd
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError):
+        home = os.path.expanduser("~")
+    got = [os.path.join(home, ".config", "claude-fleet")]
+    if os.environ.get("FLEET_SELFTEST_REAL_CONF"):
+        got.append(os.environ["FLEET_SELFTEST_REAL_CONF"])
+    return [os.path.realpath(d) for d in got]
+
+
+def in_real_conf(path):
+    """True when `path` lies under one of the login's real conf dirs."""
+    try:
+        p = os.path.realpath(str(path))
+    except OSError:
+        return False
+    return any(p == d or p.startswith(d + os.sep) for d in real_conf_dirs())
+
+
+_SELFTEST_ARGV = re.compile(r"[\w.-]+(?:[-_]selftest\.(?:sh|py)|_test\.py)")
+_TEST_WHY = None
+
+
+def _tmp_dirs():
+    out = ["/tmp", "/private/tmp", "/private/var/folders", "/var/folders"]
+    if os.environ.get("TMPDIR"):
+        out.append(os.path.realpath(os.environ["TMPDIR"]))
+    return [d.rstrip("/") for d in out]
+
+
+def _ps(*args):
+    try:
+        return subprocess.run(["ps"] + list(args), capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _selftest_ancestor():
+    """A process up this one's chain that runs a selftest file, as one line ("" none):
+    the chain off one cheap pid/ppid table, then each link's own command line — one
+    `ps -p` a pid (macOS' ps takes seconds on a list of them, milliseconds on one)."""
+    parent = {}
+    for line in _ps("-axo", "pid=,ppid=").splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0].isdigit() and f[1].isdigit():
+            parent[int(f[0])] = int(f[1])
+    seen, pid = set(), os.getpid()
+    while pid > 1 and pid not in seen and len(seen) < 64:
+        seen.add(pid)
+        cmd = _ps("-wwo", "command=", "-p", str(pid)).strip()
+        # the program a process runs — its first words, never a shell's -c text
+        hit = [t for t in cmd.split()[:3] if _SELFTEST_ARGV.fullmatch(os.path.basename(t))]
+        if hit:
+            return "run under a selftest (pid %d: %s)" % (pid, os.path.basename(hit[0]))
+        pid = parent.get(pid, 0)
+    return ""
+
+
+def test_why():
+    """Why this process is a test's (T909), "" when it is not: the gate's own
+    environment (FLEET_SELFTEST_ROOT, FLEET_NOTICE_FORBID); a pane on a `-S` tmux
+    server in a temp dir (a test's — a fleet is always `-L`, under tmux-<uid>); or a
+    process up the chain running a selftest file (a test run by hand, outside the gate)."""
+    global _TEST_WHY
+    if _TEST_WHY is not None:
+        return _TEST_WHY
+    why = ""
+    if os.environ.get("FLEET_SELFTEST_ROOT") or os.environ.get("FLEET_NOTICE_FORBID"):
+        why = "the selftest gate's environment"
+    sock = os.environ.get("TMUX", "").split(",")[0]
+    if not why and sock and os.path.basename(os.path.dirname(sock)) != "tmux-%d" % os.getuid():
+        rs = os.path.realpath(sock)
+        if any(rs.startswith(d + "/") for d in _tmp_dirs()):
+            why = "a pane of a test's tmux server (%s)" % sock
+    if not why:
+        why = _selftest_ancestor()
+    _TEST_WHY = why
+    return why
+
+
 def refused(path=None):
     """Why this process may not write the record at `path` (T741), "" when it may:
-    a test's (FLEET_NOTICE_FORBID names it) or a drill's (FLEET_DRILL=1, or a hub
-    other than this login's own while the book is the login's own)."""
+    a test's (FLEET_NOTICE_FORBID names it, or a test's process aims at the login's
+    real conf dir — T909) or a drill's (FLEET_DRILL=1, or a hub other than this
+    login's own while the book is the login's own)."""
     path = log_path() if path is None else path
     for f in filter(None, os.environ.get("FLEET_NOTICE_FORBID", "").split(":")):
         if _same(path, f):
             return "a selftest writes to the person's real message record (%s) — give it its own FLEET_CONF_DIR" % f
+    if in_real_conf(path):
+        tw = test_why()
+        if tw:
+            return "a test writes to the person's real record (%s): %s — give it its own FLEET_CONF_DIR" % (path, tw)
     if not _same(path, own_book()):
         return ""
     if os.environ.get("FLEET_DRILL") == "1":
@@ -1003,6 +1099,15 @@ def main(argv):
         return 0 if amend(args[0], args[1], args[2]) else 1
     if cmd == "seen":
         return 0 if args and seen(args[0]) else 1
+    if cmd == "guard":
+        if not args:
+            print("usage: fleet_notice.py guard <path>", file=sys.stderr)
+            return 2
+        why = refused(Path(args[0]))
+        if why:
+            _refuse(why)
+            return 3
+        return 0
     print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
     return 2
 

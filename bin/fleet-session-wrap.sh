@@ -201,6 +201,14 @@ read_failure() {
 # tells its parent as #4702 did. Dropped (a record's agent exited, the window on
 # the page): the word 「已掉」 on its ID only. In the background: the page, or the
 # caller's shell, never waits on it.
+# A test's process never writes the login's real logs (T909): a selftest run by hand
+# has no conf of its own, so its windows would land in the operator's
+# session-exit.log / start-fail.log — fleet_notice.py's one rule says (rc 3 = no).
+book_ok() {  # <log path>
+  python3 "$BIN/fleet_notice.py" guard "$1" 2>/dev/null
+  [ "$?" != 3 ]
+}
+
 say_start() {  # <not_started|dropped> <why, one line> <the parent's summary>
   [ "$intmux" = 1 ] || return 0
   local fid task iss why slog
@@ -209,7 +217,7 @@ say_start() {  # <not_started|dropped> <why, one line> <the parent's summary>
   why=$(printf '%s' "$2" | tr '\n\t' '  ' | cut -c1-240)
   if [ "$1" = not_started ]; then
     slog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/start-fail.log"
-    [ -d "${slog%/*}" ] && printf '%s window=%s pane=%s id=%s task=%s issue=%s why=%s\n' \
+    [ -d "${slog%/*}" ] && book_ok "$slog" && printf '%s window=%s pane=%s id=%s task=%s issue=%s why=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "${fid:--}" "${task:--}" \
       "${iss:--}" "$why" >> "$slog" 2>/dev/null
   elif [ -z "$task" ]; then
@@ -544,7 +552,7 @@ while :; do
   # status, the id, how long it ran, why a relaunch failed and the agent's last
   # words — is kept here, one line a stop
   xlog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/session-exit.log"
-  [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s agent=%s sid=%s rc=%s secs=%s failed=%s why=%s unpushed=%s detail=%s\n' \
+  [ -d "${xlog%/*}" ] && book_ok "$xlog" && printf '%s window=%s pane=%s agent=%s sid=%s rc=%s secs=%s failed=%s why=%s unpushed=%s detail=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$agent" "${sid:--}" "$rc" "$dur" \
     "${failed:--}" "${fail_why:--}" "$unp" "$(printf '%s' "${fail_line:-}" | tr '\n' ' ' | cut -c1-200)" >> "$xlog" 2>/dev/null
   # A worker that did not come up tells whoever spawned it (issue #4702) — once a
@@ -581,7 +589,7 @@ while :; do
   done
   # 14 — the countdown ran out: what q does, logged as such (issue #3170)
   if [ "$act" = 14 ]; then
-    [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s auto-close after=%ss\n' \
+    [ -d "${xlog%/*}" ] && book_ok "$xlog" && printf '%s window=%s pane=%s auto-close after=%ss\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$close_n" >> "$xlog" 2>/dev/null
     act=12
   fi
@@ -591,7 +599,7 @@ while :; do
   if [ -n "$auto" ]; then
     wset -u @auto_resume_at
     [ "$act" = 10 ] && wset @auto_resumed 1
-    [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s auto-resume act=%s\n' \
+    [ -d "${xlog%/*}" ] && book_ok "$xlog" && printf '%s window=%s pane=%s auto-resume act=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$act" >> "$xlog" 2>/dev/null
   fi
   # p — ↵ without the personal layer, for this window from now on (#1862)
