@@ -37,7 +37,7 @@ if args and (len(args) != 2 or args[0] != "--inject-key" or args[1] not in keys)
 # are explicit core exceptions; ordinary-session whats-new is deliberately absent.
 default_hooks = {
     "set-claude-state.sh", "bash-guard.py", "base-readonly-guard.py",
-    "artifact-guard.py", "agent-guard.py", "fleet_loop_mark.py",
+    "artifact-guard.py", "fleet_loop_mark.py",
     "fleet-codex-session.py", "handoff-latch-reset-hook.sh",
     "fleet-where-hook.sh", "fleet-worker-start-hook.sh", "fleet-emit.sh",
     "refocus-hook.sh", "fleet-history.sh", "precompact-hook.sh", "session-end-hook.sh",

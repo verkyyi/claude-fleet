@@ -5,9 +5,8 @@
 #   fleet-await.sh --task <code | ID | T<n>> [--timeout <secs>] [--interval <secs>]
 #                      [--parent <key>] [--repo <owner/name>] [-L <socket>]
 #
-# The one thing a subagent gave that a worker did not: a result that comes BACK.
-# #811 blocks writing subagents in every fleet pane; this is the primitive that
-# replaces them. It
+# Legacy cross-worker wait. Native subagents return through their agent's own
+# orchestration; this entry remains for existing Fleet worker callers. It
 #   1. finds #N's live worker window — or, when there is none, spawns one through
 #      the ONE spawn choke point (dash-issue-session.sh: session caps + the
 #      cross-machine claim dedup apply unchanged), with THIS pane as its parent;

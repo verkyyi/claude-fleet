@@ -56,20 +56,15 @@ one-off drill / audit records do not go in the repo (issue #3576).
   its own `scratch-<N>` / `issue-<N>` git worktree and lands via PR; the operator
   dispatches from the hub and hands implementation to a worker. Never commit to
   the base checkout.
-- **Code-writing work is a fleet WORKER, never a subagent** (issue #811,
-  hook-enforced by `hooks/agent-guard.py` on every fleet pane — hub, scratch,
-  worker). A `general-purpose` / `claude` / `fork` subagent runs outside every
-  rail above: the task list cannot see it, it has no `@claude_state`, the quota
-  migration moves *windows* so a subagent that hits the limit dies mid-edit,
-  several can write one worktree, and there is no one-worker-one-PR, no
-  `/fleet-history` row, no handoff. Hand implementation to a worker (the `task`
-  tool, which opens a hub record `T<n>` and its session; `dash-raw-session.sh
-  --repo --task`) — and when you need its result BACK the way a subagent returns
-  one, the `await` tool (`fleet-await.sh --task T<n>`) blocks on the outcome off
-  the child-report ledger (issue #812); a subagent is for READ-ONLY fan-out only —
-  `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
-  (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
-  is the operator's escape hatch.
+- **A task's agent owns its implementation and internal orchestration.** It may
+  work inline or delegate research and code changes to native subagents,
+  including native worktree isolation. Subagents remain part of that task;
+  they do not require separate Hub tasks or Fleet worker windows. The task's
+  agent integrates and validates their work. Coordinate edits when sharing a
+  worktree; the base checkout remains read-only, and nested linked worktrees
+  pass the existing Git identity checks in `hooks/base-readonly-guard.py`.
+  `hooks/agent-guard.py` is a silent compatibility entry for older sessions;
+  new hook tables do not register it. No subagent override is needed.
 - **Any session spawns, a worker too** (issue #4591 lifted #2960's
   one-level rule). The `spawn` / `task` tools and
   `fleet-await.sh` ask no seat; the session caps and the claim dedup are the only

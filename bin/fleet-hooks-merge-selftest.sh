@@ -98,6 +98,9 @@ cat > "$S2" <<'JSON'
 {
   "hooks": {
     "PreToolUse": [
+      { "matcher": "Agent", "hooks": [
+        { "type": "command", "command": "python3 ~/.claude/fleet/hooks/agent-guard.py" },
+        { "type": "command", "command": "sh ~/my-own-agent-hook.sh" } ] },
       { "matcher": "Bash", "hooks": [
         { "type": "command", "command": "/opt/homebrew/bin/python3 ~/.claude/hooks/guard.py" } ] },
       { "matcher": "Bash", "hooks": [
@@ -129,7 +132,7 @@ for want in 'duplicate  PreToolUse\[Bash\] bash-guard.py ×2' \
             'duplicate  PreToolUse\[Edit|Write|MultiEdit|NotebookEdit\] base-readonly-guard.py ×2' \
             'duplicate  PreToolUse\[Artifact\] artifact-guard.py ×2' \
             'stale      Stop\[\*\] summarize-hook.sh' \
-            'missing    PreToolUse\[Agent\] agent-guard.py'; do
+            'stale      PreToolUse\[Agent\] agent-guard.py'; do
   grep -q "^$want" "$WORK/c2" || st_fail "check did not report: $want" "$(cat "$WORK/c2")"
 done
 st_pass "check (doctor's eye): duplicates, stale and missing all named, exit 1"
@@ -140,7 +143,10 @@ all_once "$S2" || st_fail "merge left a fleet identity wired != 1 time" "$(cat "
 grep -q '^removed dup .*bash-guard.py' "$WORK/o2" \
   && grep -q '^replaced .*base-readonly-guard.py: /opt/homebrew/bin/python3' "$WORK/o2" \
   && grep -q '^removed stale .*summarize-hook.sh' "$WORK/o2" \
+  && grep -q '^removed stale .*agent-guard.py' "$WORK/o2" \
   || st_fail "merge output does not list what it removed/replaced" "$(cat "$WORK/o2")"
+grep -q 'my-own-agent-hook.sh' "$S2" \
+  || st_fail "retiring the fleet Agent hook removed the person's own Agent hook"
 st_pass "merge: changed command replaced in place, duplicates + stale removed and listed"
 
 S2="$S2" python3 - <<'PY' || st_fail "a user-owned hook was changed or dropped" "$(cat "$S2")"

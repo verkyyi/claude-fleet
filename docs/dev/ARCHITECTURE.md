@@ -527,7 +527,7 @@ launcher exported it.** Three shapes, one resolution:
 The environment is still honoured as an **explicit override** (a selftest seam,
 or an operator who exports by hand): a conf assignment overrides an inherited
 value, and a key no conf sets is left as the env had it. Operator escape hatches
-(`FLEET_ALLOW_SENDKEYS`, `FLEET_ALLOW_ARTIFACT`, `FLEET_ALLOW_SUBAGENT`, …) are
+(`FLEET_ALLOW_SENDKEYS`, `FLEET_ALLOW_ARTIFACT`, …) are
 env-only *by design* —
 they are per-command switches, not fleet configuration. `fleet-doctor.sh`
 evaluates the auto-handoff threshold through the hook's own resolver

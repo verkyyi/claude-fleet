@@ -25,12 +25,6 @@
         ]
       },
       {
-        "matcher": "Agent",
-        "hooks": [
-          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/agent-guard.py" }
-        ]
-      },
-      {
         "matcher": "mcp__fleet__fleet_status|mcp__fleet__fleet_spawn|mcp__fleet__fleet_await",
         "hooks": [
           { "type": "command", "command": "python3 ~/.claude/fleet/hooks/bash-guard.py" }
