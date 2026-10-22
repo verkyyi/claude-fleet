@@ -804,7 +804,7 @@ async function viewStream(req, res, u, person) {
   const cachedGate = gateKnown.get(fid);
   let gs = cachedGate && Date.now() - cachedGate.at < GATE_STATE_MS ? cachedGate.j : null;
   const stateOf = () => JSON.stringify({ t: "state", agent: w.agent, session: w.sid || "", busy: !!w.busy, state: w.state || "",
-    label: w.label || "", can_talk: gs ? !!gs.can_talk : null, talk_reason: gs ? gs.why || "" : "checking",
+    label: w.label || "", can_talk: typeof gs?.can_talk === "boolean" ? gs.can_talk : null, talk_reason: gs ? gs.why || "" : "checking",
     queue: (gs?.queue || []).map(({ delivery, text, why }) => ({ delivery, text, why })),
     ...(gs?.ask ? { ask: gs.ask } : {}), ...(gs?.continuation ? { continuation: gs.continuation } : {}) });
   let said = stateOf();
@@ -865,8 +865,8 @@ async function viewStream(req, res, u, person) {
     if (!gasking && Date.now() - gaskedAt >= GATE_STATE_MS) {
       gasking = gateStatus(fid).catch(() => null).then((g) => {
         gasking = null; gaskedAt = Date.now();
-        if (closed || !g) return;
-        gs = g;
+        if (closed) return;
+        gs = g || { can_talk: null, why: "unreachable" };
         const now = stateOf();
         if (now !== said) { said = now; ev(JSON.parse(now)); }
       });

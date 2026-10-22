@@ -885,16 +885,21 @@ exit 2
   // the view's state line: can_talk and the queue, no holder
   const st = await new Promise((resolve) => {
     const evs = [];
+    let failedAgain = false;
     const q = http.request({ socketPath: SOCK, path: `/api/view?fid=${FID}`, headers: { Host: "webchat" } }, (res) => {
       let buf = "";
-      const t = setTimeout(() => { q.destroy(); resolve(evs); }, 3000);
+      const t = setTimeout(() => { q.destroy(); resolve(evs); }, 5000);
       res.on("data", (d) => {
         buf += d; let i;
         while ((i = buf.indexOf("\n\n")) >= 0) {
           const data = (buf.slice(0, i).match(/^data: (.*)$/m) || [])[1]; buf = buf.slice(i + 2);
           if (data) evs.push(JSON.parse(data));
         }
-        if (evs.some((e) => e.t === "state" && e.can_talk)) { clearTimeout(t); q.destroy(); resolve(evs); }
+        const states = evs.filter((e) => e.t === "state");
+        const writable = states.findIndex((e) => e.can_talk === true);
+        if (writable >= 0 && !failedAgain) { failedAgain = true; writeFileSync(GFAIL, "1"); }
+        const lost = states.findIndex((e, i) => i > writable && e.talk_reason === "unreachable");
+        if (writable >= 0 && lost > writable && states.slice(lost + 1).some((e) => e.can_talk === true)) { clearTimeout(t); q.destroy(); resolve(evs); }
       });
     });
     q.on("error", () => resolve(evs));
@@ -903,6 +908,13 @@ exit 2
   const last = st.filter((e) => e.t === "state").at(-1) || {};
   ok(st.find((e) => e.t === "state")?.can_talk === null,
     "Y a cold view is checking, never read-only before the gate answers");
+  ok(st.some((e) => e.t === "state" && e.can_talk === null && e.talk_reason === "unreachable"),
+    "Y a failed capability probe is unavailable, never a read-only verdict");
+  const states = st.filter((e) => e.t === "state");
+  const writable = states.findIndex((e) => e.can_talk === true);
+  const lost = states.findIndex((e, i) => i > writable && e.talk_reason === "unreachable");
+  ok(writable >= 0 && lost > writable && states.slice(lost + 1).some((e) => e.can_talk === true),
+    "Y capability failure after a writable frame recovers on the same stream");
   ok(calls().filter(c => c.argv[0] === "status").length >= 2,
     "Y a delayed failed probe retries and recovers on the same stream");
   ok(last.can_talk === true && last.continuation?.state === "continued" && last.continuation.to === "codex" && last.queue?.[0]?.text === "排着的" && last.queue[0].why === "busy" && !("holder" in last),

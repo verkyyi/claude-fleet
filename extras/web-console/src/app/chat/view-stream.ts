@@ -7,9 +7,12 @@
 
 // Unknown capability is a connection in progress, not an old terminal session.
 // An older service omits can_talk; it remains read-only. Only true enables send.
-export function writeAccess(state: { can_talk?: boolean | null; talk_reason?: string } | null, allowed: boolean) {
-  if (!allowed) return "readonly";
-  if (!state || state.can_talk === null || state.talk_reason === "unreachable") return "checking";
+export type ViewConnection = "checking" | "live" | "offline";
+export function writeAccess(state: { can_talk?: boolean | null; talk_reason?: string } | null, allowed: boolean | null, connection: ViewConnection = "live") {
+  if (allowed === false) return "readonly";
+  if (allowed === null) return "checking";
+  if (connection === "offline" || state?.talk_reason === "unreachable") return "offline";
+  if (connection === "checking" || !state || state.can_talk === null || state.talk_reason === "checking") return "checking";
   return state.can_talk === true ? "writable" : "readonly";
 }
 

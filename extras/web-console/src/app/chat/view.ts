@@ -20,7 +20,7 @@ import { toMessages, type Item, type Msg } from "./chat";
 import { attachedPics, MAX_PICS, packPics } from "./pics";
 import { afterSay, askOf, bubbles, replying, settle, userLines, type Pending, type Queued, type ViewAsk } from "./talk";
 import { browserCache, mayCache, mayShow, type Layer } from "./local";
-import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame, type Held } from "./view-stream";
+import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame, type Held, type ViewConnection } from "./view-stream";
 
 // can_talk (会话合一 Y01K): the web may talk to it — absent on the old road,
 // false for an older session (read-only); queue: its lines waiting; ask: what it asks now
@@ -49,12 +49,13 @@ function markFirst(layer: Layer, since: number) {
   } catch { /* no performance API */ }
 }
 
-export function useSessionView(worker: string, allowed = true) {
+export function useSessionView(worker: string, allowed: boolean | null = true) {
   const [items, setItems] = useState<Item[]>([]);
   const [state, setState] = useState<ViewState | null>(null);
   const [gate, setGate] = useState<ViewGate>(null);
   const [loaded, setLoaded] = useState(false);
   const [live, setLive] = useState(false);       // the stream is open now
+  const [connection, setConnection] = useState<ViewConnection>("checking");
   const [layer, setLayer] = useState<Layer | null>(null);
   const [older, setOlder] = useState(0);         // >0: there is more before what is shown
   const [lead, setLead] = useState(0);           // items drawn above the first answer (ids stay put)
@@ -71,7 +72,7 @@ export function useSessionView(worker: string, allowed = true) {
     const opened = performance.now();
     held.current = NOTHING; shown.current = []; top.current = null; keeper.current = "";
     try { delete (window as unknown as { __fleetViewFirst?: unknown }).__fleetViewFirst; } catch { /* none */ }
-    setItems([]); setState(null); setGate(null); setLoaded(false); setLayer(null); setOlder(0); setLead(0);
+    setItems([]); setState(null); setGate(null); setLive(false); setConnection("checking"); setLoaded(false); setLayer(null); setOlder(0); setLead(0);
     const draw = (next: Item[], l: Layer) => {
       shown.current = next; setItems(next); setLoaded(true);
       if (top.current !== l) { top.current = l; setLayer(l); }
@@ -147,7 +148,7 @@ export function useSessionView(worker: string, allowed = true) {
                 const { data } = parseEvent(buf.slice(0, i));
                 buf = buf.slice(i + 2);
                 if (!data) continue;
-                if (data.t === "state") setState(data as unknown as ViewState);
+                if (data.t === "state") { setState(data as unknown as ViewState); setConnection("live"); }
                 else if (data.t === "items") take(data as Frame);
                 else if (data.t === "reset") held.current = { ...held.current, at: -1 };   // the next frame replaces
                 else if (data.t === "gone") { setGate({ code: "gone", msg: "" }); final = true; }
@@ -156,6 +157,7 @@ export function useSessionView(worker: string, allowed = true) {
           }
         } catch { /* dropped: come back from what we hold */ }
         setLive(false);
+        if (on) setConnection("offline");
         if (!on || final) break;
         // a hidden page waits until it is looked at again
         await sleep(document.visibilityState === "hidden" ? 60_000 : RETRY_MS[Math.min(tries++, RETRY_MS.length - 1)]);
@@ -168,7 +170,7 @@ export function useSessionView(worker: string, allowed = true) {
   }, [worker]);
 
   // 会话合一 (Y01K): talking to it — what this page said and is waiting on
-  const access = writeAccess(state, allowed);
+  const access = writeAccess(state, allowed, connection);
   const canTalk = access === "writable";
   const [pending, setPending] = useState<Pending[]>([]);
   const [answered, setAnswered] = useState<Map<string, { approved: boolean; answers?: Record<string, { optionIds: string[] }> }>>(new Map());

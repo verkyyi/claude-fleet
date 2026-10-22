@@ -69,6 +69,13 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
 			io.WriteString(w, fakePNG)
 		case "/api/view":
+			f.mu.Lock()
+			view := f.view
+			f.mu.Unlock()
+			if view != nil {
+				view(w, r)
+				return
+			}
 			// 只读 (task F481): one state, one batch of items, as the service streams them
 			w.Header().Set("Content-Type", "text/event-stream")
 			io.WriteString(w, `data: {"t":"state","agent":"claude","busy":true}`+"\n\n")
@@ -295,6 +302,7 @@ type fakeChatService struct {
 	release      chan struct{}
 	conversation func(w http.ResponseWriter)
 	turn         func(w http.ResponseWriter) // set: /api/turn answers this way instead
+	view         func(http.ResponseWriter, *http.Request)
 }
 
 func (f *fakeChatService) seen() []string {
