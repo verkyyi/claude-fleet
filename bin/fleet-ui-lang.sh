@@ -648,8 +648,8 @@ fleet_ui_t() {
     # hub's worker_switch picks the active one there
     zh:view_act_agent_fmt)      printf '换成 %s' "${1:-}" ;;
     en:view_act_agent_fmt)      printf 'Switch to %s' "${1:-}" ;;
-    # 在 WebChat 里继续 (task T810): this session's conversation goes on in the
-    # person's web chat; the terminal stops on its end page and ↵ takes it back
+    # 在网页里打开 (task PQ41; T810's 在 WebChat 里继续 before it): the session's
+    # page in the console on the person's own screen — nothing moves
     zh:view_act_webopen)        printf '在网页里打开' ;;
     en:view_act_webopen)        printf 'Open on the web' ;;
     zh:view_webopen_why_nohub)  printf '这台机器没连入口，网页里打不开' ;;
