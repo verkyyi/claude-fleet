@@ -128,6 +128,10 @@ case "\$action" in
           scratch)       printf 'MERGED\tcafe1234\tscratch-99\t-\t%s\n' "\${FAKE_MERGED_AT-}" ;;
           scratchclosed) printf 'CLOSED\tcafe1234\tscratch-99\t%s\n' "\${FAKE_CLOSED_AT:-}" ;;
           protected)     printf 'MERGED\tcafe1234\tmaster\t\n' ;;
+          # T905: what gh says when it cannot answer — the PR is gone, a limit, a network blip
+          absent)        echo 'GraphQL: Could not resolve to a PullRequest with the number of 42. (repository.pullRequest)' >&2; exit 1 ;;
+          ratelimit)     echo 'GraphQL: API rate limit exceeded for user ID 1.' >&2; exit 1 ;;
+          ghfail)        echo 'error connecting to api.github.com' >&2; exit 1 ;;
         esac ;;
       *"--json title"*) printf 'Fake PR %s\t2026-01-01T00:00:00Z\tsha-%s\n' "\$num" "\$num" ;;
     esac ;;
@@ -669,6 +673,17 @@ tok="$(run_clean open)"; err="$(cat "$WORK/err")"
 [ -s "$ORDER_LOG" ] && st_fail "3 an OPEN (not-final) PR must not be torn down" "$err"
 [ -s "$LEDGER" ]    && st_fail "3 an OPEN PR must not record a ledger row" "$err"
 st_pass "3 OPEN → skip:not-final, no teardown, no ledger"
+
+# --- 3b. gh cannot read the PR (T905): only GitHub SAYING it is gone is not-found --
+for sc in 'absent error:pr-not-found' 'ratelimit error:gh-rate-limit' 'ghfail error:gh-failed'; do
+  read -r scn want <<<"$sc"; : > "$LEDGER"
+  tok="$(run_clean "$scn")"; err="$(cat "$WORK/err")"
+  [ "$tok" = "$want" ] || st_fail "3b $scn expected $want, got '$tok'" "$err"
+  [ -s "$ORDER_LOG" ] && st_fail "3b $scn must not tear anything down" "$err"
+  [ -s "$LEDGER" ]    && st_fail "3b $scn must not record a ledger row" "$err"
+done
+printf '%s' "$err" | grep -q 'error connecting' || st_fail "3b a gh failure must say gh's own words" "$err"
+st_pass "3b gh's answer is classified: not there · rate limit · failed (none tears down)"
 
 # --- 4. already-torn-down (MERGED, no worktree/window) → skip:nothing, idempotent
 : > "$LEDGER"

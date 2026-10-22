@@ -913,6 +913,15 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # batch size x this. Default 120; 0 runs unbudgeted. See docs/dev/CLEANUP.md.
 # @label=Cleanup per-candidate timeout @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_CLEANUP_CANDIDATE_TIMEOUT=120
+# A PR gh could not read (T905): a rate limit / network / auth failure waits 2^n
+# minutes before it is asked again, at most this long (prmap.miss beside the prmap).
+# Default 3600.
+# @label=Cleanup gh-miss backoff cap @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
+#FLEET_CLEANUP_MISS_MAX_SECS=3600
+# How many times GitHub must SAY a PR is not there before cleanup tombstones it
+# and never asks again (T905). Default 3.
+# @label=Cleanup not-found tombstone @group=bridge @tier=internal @scope=fleet @edit=int @unit=times
+#FLEET_CLEANUP_MISS_DEAD=3
 # Also reap a MERGED PR whose head branch is NOT `issue-<N>` (issue #589). OFF by
 # default, and the default is the historic behavior byte for byte. The whole reap
 # chain is addressed by `issue-<N>`, so a session that started as a scratch
