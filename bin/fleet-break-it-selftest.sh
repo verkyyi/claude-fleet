@@ -6391,6 +6391,15 @@ drill_wake_peer_report() {
   WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
 }
 
+drill_park_drops_dialog() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_dialog_guard_all_park_routes \
+        Park.test_dialog_appears_after_native_proof Park.test_dialog_appears_during_timer_export 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='选择框超 30 分钟及内存紧也拒停；旧 done、loop 和证明期间出现的问题不接收 /exit，题干选项原文保持'
+}
+
 drill_park_all_origins() {
   CAP=60; local t0 out
   t0=$(now)
@@ -6461,7 +6470,7 @@ drill_park_census_overcounts() {
   t0=$(now)
   out=$(bash "$BIN/fleet-park-metrics-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="$out"; return 1; }
-  WHAT='常驻空闲与可停空闲分计，观看和后台写原因；采样不足未知；停放认 HHV0 双标记，节省只读 C1 快照'
+  WHAT='空闲常驻按验收口径排除观看与后台，仍显示原因；采样不足未知；停放认 HHV0 双标记，C1 快照缺戳才读账本后备'
   SECS=$(since "$t0")
 }
 
@@ -6473,6 +6482,14 @@ drill_park_while_watched() {
     || { WHY="fleet_session_gate.py park no longer refuses a watched window"; return 1; }
   SECS=$(since "$t0")
   WHAT='有人在终端里看着的网页会话不停放；没人看（控制模式的客户端不算人）、闲着才停'
+}
+
+drill_park_human_presence_lost() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_park_screen_and_keyboard_sentence 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放页的单调时钟从零附近起步：首次输入立即记录 presence，未回车不醒，原句仍带入恢复首轮'
 }
 
 # A parked session that does not come back (task HHV0): the machine went away, the
