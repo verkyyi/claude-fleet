@@ -24,12 +24,12 @@ spec.loader.exec_module(live)
 
 class LiveTests(unittest.TestCase):
     def probe(self, state="done", comm="claude", age="00:10", commands=None, roots="100\n", minimum=1800, hold="",
-              merged_at=None, waived=None, now=None, loop="\t", wait="", status=""):
+              merged_at=None, waived=None, now=None, loop="\t", wait="", status="", bg_over=False):
         outputs = iter([hold, loop, state + ("\t" + status if status else ""), roots, f"100 1 01:00:00 zsh\n101 100 {age} {comm}\n102 1 00:01 codex\n",
                         commands if commands is not None else f"100 zsh\n101 {comm}\n102 codex\n"])
         with patch.object(live, "read", side_effect=lambda *args: next(outputs)), \
              patch.object(live, "waiting", return_value=wait):
-            return live.live_reason("@1", minimum, None, merged_at, waived, now)
+            return live.live_reason("@1", minimum, None, merged_at, waived, now, bg_over)
 
     def test_waiting_parent_or_bg_job_retains(self):
         # Issue #1370: an unfinished sub-task / a Bash-tool job still running keeps a
@@ -42,6 +42,13 @@ class LiveTests(unittest.TestCase):
         now = int(time.time())
         self.assertEqual(self.probe(wait="bg", loop=f"kind=wakeup next={now+600} ttl=600\t"), "retained:loop")
         self.assertIsNone(self.probe(minimum=0, wait=""))
+
+    def test_old_bg_over_flag_cannot_override_real_work(self):
+        waived = []
+        self.assertEqual(self.probe(minimum=0, wait="bg", bg_over=True, waived=waived), "retained:bg")
+        wake = f"kind=wakeup next={int(time.time())+600} ttl=600\t"
+        self.assertEqual(self.probe(minimum=0, loop=wake, bg_over=True, waived=waived), "retained:loop")
+        self.assertEqual(waived, [])
 
     def test_hold_retains_any_worker(self):
         self.assertEqual(self.probe(minimum=0, hold="1"), "retained:hold")

@@ -6420,6 +6420,15 @@ drill_park_reap_table() {
   WHAT='停放与回收同表：每来源、三天期限、历史可接回，doctor 同一时刻'
 }
 
+drill_park_reap_background() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cleanup-idle-selftest.py" HoldsAndWhy.test_a_background_job_holds_a_done_task_past_old_grace 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-reap-live-selftest.py" LiveTests.test_old_bg_over_flag_cannot_override_real_work 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='任务终态、旧宽限期及旧 --bg-over 参数均不能关闭真实后台任务或待执行循环'
+}
+
 drill_park_reap_exceptions() {
   CAP=30; local t0 out
   t0=$(now)
