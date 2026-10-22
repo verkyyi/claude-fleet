@@ -8,13 +8,20 @@ words, stamp its number (T661).
         #cause · #metrics · #charter · #members · #risks · #signoff(+#open) ·
         #evidence (上线后怎么验收). The spec's strings are HTML fragments (<code>,
         <strong> welcome); the frame is this script's, never re-typed.
-  fleet-task-page.py body <page.html> [--link URL] [--nod TEXT] [--max BYTES]
-      → the task's words (markdown), BOTH layers: every fold written out. The
-        record's request is capped (16 KB with its envelope), so the words are
+  fleet-task-page.py body <page.html> [--link URL] [--nod TEXT] [--max BYTES] [--split DIR]
+      → the task's words (markdown), BOTH layers: every fold written out, at any
+        depth (NZP2: a 代码位置 fold inside a step's evidence or a card's 技术细节).
+        The record's request is capped (16 KB with its envelope), so the words are
         measured as they travel (UTF-8 JSON, fleet-task-record.sh); over
         --max (default 13000) the folds move to the page one kind at a time —
-        the cause's evidence, then 改法's 技术细节, then the rest — each replaced
-        by 「（…：见设计页）」. Still over ⇒ exit 1, nothing printed.
+        the 代码位置 folds (details.code), the cause's evidence, then 改法's 技术细节,
+        then the rest — each replaced by 「（…：见设计页）」. Still over ⇒ exit 1,
+        nothing printed, the message naming --split.
+        --split DIR: one task's words per member card (DIR/NN-<key>.md), each with
+        the link and every shared section, the other cards one line; over --max a
+        part moves the shared folds first, its own card's 技术细节 last; prints
+        「path<TAB>bytes<TAB>card」 per part. Fewer than two cards, or a part over
+        --max with every fold moved ⇒ exit 1, nothing written.
   fleet-task-page.py stamp <page.html> <task id> [-o out]
       → the eyebrow's 「任务设计」 becomes 「任务 <id>」 (idempotent).
   fleet-task-page.py compare <compare.json|->
@@ -497,9 +504,11 @@ class Words(HTMLParser):
         self.xrow = False      # inside a div.xt row (T764): its spans are cells, joined by ·
         self.xd = 0            # inside a row's own detail: its lines are indented
         self.spans = []        # open <span>s' first class
+        self.ob = ""           # the member card's key (its div.ob id, m-<key>)
+        self.cards = []        # each member card as [first line, end line, key, title] of self.out
 
     def kind(self):
-        kinds = [k for k, _ in self.stack]
+        kinds = [s[0] for s in self.stack]    # an entry is [kind, summary-pending(, "drop")]
         if "card" in kinds:
             return "tech"
         if self.section == "evidence":
@@ -526,6 +535,8 @@ class Words(HTMLParser):
             self.skip += 1; self.unskip = tag; return
         if tag == "div":
             self.divs.append(cls[0] if cls else "")
+            if self.divs[-1] == "ob":
+                self.ob = re.sub(r"^m-", "", a.get("id") or "")
             if self.divs[-1] in ("n", "k"):
                 self.buf = []
             d = self.divs[-1]
@@ -557,10 +568,19 @@ class Words(HTMLParser):
             if self.skip: self.skip += 1
             return
         if tag == "details":
-            k = "card" if "card" in cls else self.kind()
+            # a fold at any depth (NZP2): 代码位置 is folded inside a step's evidence or a
+            # card's 技术细节 — its own kind, the first to move to the page
+            k = "card" if "card" in cls else ("code" if "code" in cls and self.section != "evidence" else self.kind())
             if self.skip:
                 self.stack.append([k, False]); self.skip += 1; return
+            t = self.text()                     # a fold inside a paragraph / dd: the words before it are its own
+            if t:
+                ind = "  " if self.xd or "ev" in self.divs else ""
+                self.emit(ind + ("**%s** %s" % (self.dt, t) if self.dt else t))
+                self.dt = ""
             self.stack.append([k, True])
+            if k == "card":
+                self.cards.append([len(self.out), None, self.ob, ""])
             if k != "card" and k in self.drop:
                 self.stack[-1].append("drop")
             return
@@ -630,6 +650,8 @@ class Words(HTMLParser):
             return
         if tag == "details":
             d = self.stack.pop() if self.stack else ["", False]
+            if d[0] == "card" and d[1] and self.cards:
+                self.cards[-1][1] = len(self.out)
             if self.skip:
                 self.skip -= 1
             return
@@ -652,13 +674,15 @@ class Words(HTMLParser):
             self.rows = 0
             self.emit("")
         elif tag == "summary":
-            t = self.text()
+            t = re.sub(r"\s*（展开）$", "", self.text())   # a fold's 「（展开）」 means nothing in words
             top = self.stack[-1] if self.stack else None
             if top and top[0] == "xr":
                 self.emit("- " + t.strip(" ·"))
                 self.xrow = False
             elif top and top[0] == "card":
                 self.emit("### " + re.sub(r"^\*\*(.*?)\*\*\s*(?=.)", r"\1 — ", t))
+                if self.cards:
+                    self.cards[-1][3] = re.sub(r"^\*\*(.*?)\*\*.*", r"\1", t)
             elif top and len(top) > 2:       # a dropped fold: its name, then nothing
                 self.emit("（%s：见设计页）" % t)
                 self.skip += 1
@@ -672,7 +696,9 @@ class Words(HTMLParser):
             self.dt = self.text()
         elif tag == "dd":
             ind = "  " if "ev" in self.divs else ""     # an acceptance item's fields sit under it
-            self.emit(ind + ("**%s** %s" % (self.dt, self.text()) if self.dt else self.text()))
+            t = self.text()
+            if t or self.dt:                            # a dd whose words went out before its fold: nothing left
+                self.emit(ind + ("**%s** %s" % (self.dt, t) if self.dt else t))
             self.dt = ""
         elif tag == "h1":
             self.title = self.text()
@@ -693,11 +719,35 @@ class Words(HTMLParser):
             self.buf.append(d)
 
 
-def words(page, drop, link, nod):
+LADDER = ((), ("code",), ("code", "evidence"), ("code", "evidence", "tech"), ("code", "evidence", "tech", "other"))
+# a part of --split is ONE card's task: the shared folds go before the card's own 技术细节
+SPLIT_LADDER = ((), ("code",), ("code", "evidence"), ("code", "evidence", "other"), ("code", "evidence", "other", "tech"))
+
+
+def parse(page, drop):
     p = Words(drop)
     p.feed(page)
     p.close()
-    lines = p.out
+    return p
+
+
+def words(page, drop, link, nod, part=None):
+    """The words. part = (i, p): only member card i of p.cards, the others one line
+    saying where they are (NZP2: one task per card, the shared sections in each)."""
+    if part is None:
+        lines = parse(page, drop).out
+    else:
+        i, p = part
+        cards, lines, at = p.cards, [], 0
+        for j, (a, b, _, _) in enumerate(cards):
+            lines += p.out[at:a]
+            if j == i:
+                lines += p.out[a:b]
+            elif j == 0 or (i == 0 and j == 1):
+                lines.append("（解决方案共 %d 张成员卡；本份只做「%s」，其余 %d 张各是一份任务——见设计页）"
+                             % (len(cards), cards[i][3], len(cards) - 1))
+            at = b
+        lines += p.out[at:]
     # the eyebrow and band are the frame's; the words start at the title
     body = "\n".join(lines)
     body = re.sub(r"\n{3,}", "\n\n", body).strip() + "\n"
@@ -705,6 +755,8 @@ def words(page, drop, link, nod):
     if link:
         pre = "> 设计页：%s（私密；%s）\n\n" % (
             link, "本文是它的两层全文，标「见设计页」的几段只在页面上" if drop else "本文是它的两层全文")
+        if part is not None:
+            pre = pre.replace("本文是它的两层全文", "本文是它按成员卡拆开的第 %d/%d 份" % (part[0] + 1, len(part[1].cards)), 1)
     if nod:
         body += "\n## 拍板\n%s：全部按「需要你定的事」的建议执行，执行会话照做，不再讨论方向。\n" % nod
     return pre + body
@@ -716,11 +768,39 @@ def size(text):
 
 
 def body(page, link, nod, cap):
-    for drop in ((), ("evidence",), ("evidence", "tech"), ("evidence", "tech", "other")):
+    for drop in LADDER:
         w = words(page, set(drop), link, nod)
         if size(w) <= cap:
             return w
-    die(1, "the words stay over %d bytes with every fold on the page (%d) — shorten the page's surface" % (cap, size(w)))
+    n = len(parse(page, set()).cards)
+    die(1, "the words stay over %d bytes with every fold on the page (%d) — %s" % (
+        cap, size(w), "split them, one task per member card: body <page> --split <dir> (%d cards)" % n
+        if n > 1 else "shorten the page's surface"))
+
+
+def split(page, link, nod, cap, out):
+    """One task's words per member card, each carrying the link and every shared
+    section; each part takes the fewest folds off it needs. → [(path, bytes, title)]."""
+    n = len(parse(page, set()).cards)
+    if n < 2:
+        die(1, "nothing to split: the page has %d member card%s" % (n, "" if n == 1 else "s"))
+    parts = []
+    for i in range(n):
+        for drop in SPLIT_LADDER:
+            p = parse(page, set(drop))
+            w = words(page, set(drop), link, nod, (i, p))
+            if size(w) <= cap:
+                break
+        else:
+            die(1, "part %d (%s) stays over %d bytes (%d) — the shared sections alone are too long; shorten the page's surface"
+                % (i + 1, p.cards[i][3], cap, size(w)))
+        key = re.sub(r"[^A-Za-z0-9_-]+", "", p.cards[i][2]) or str(i + 1)
+        parts.append(("%s/%02d-%s.md" % (out, i + 1, key), w, p.cards[i][3]))
+    os.makedirs(out, exist_ok=True)
+    for path, w, _ in parts:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(w)
+    return [(path, size(w), t) for path, w, t in parts]
 
 
 # ---- shape (T869) --------------------------------------------------------------
@@ -834,13 +914,14 @@ def main(argv):
             die(1, "rendered page is broken: " + "; ".join(bad))
         write(page)
     elif cmd == "body" and rest:
-        link = nod = ""
+        link = nod = split_to = ""
         cap = 13000
         page = None
         it = iter(rest)
         for a in it:
             if a == "--link": link = next(it, "")
             elif a == "--nod": nod = next(it, "")
+            elif a == "--split": split_to = next(it, "") or die(2, "--split needs a directory")
             elif a == "--max":
                 try: cap = int(next(it, ""))
                 except ValueError: die(2, "--max needs a number")
@@ -848,7 +929,11 @@ def main(argv):
             else: die(2, "one page only")
         if page is None:
             die(2, "body <page.html>")
-        write(body(read(page), link, nod, cap))
+        if split_to:
+            for path, n, t in split(read(page), link, nod, cap, split_to):
+                print("%s\t%d\t%s" % (path, n, t))
+        else:
+            write(body(read(page), link, nod, cap))
     elif cmd == "fb-body" and len(rest) == 3:
         write(fb_body(read(rest[0]), rest[1], rest[2]))
     elif cmd == "check" and len(rest) == 1:
@@ -859,7 +944,7 @@ def main(argv):
     elif cmd == "stamp" and len(rest) == 2:
         write(stamp(read(rest[0]), rest[1]))
     else:
-        die(2, "usage: render <spec> | body <page> | stamp <page> <id> | compare <json> | fb-body <page> <table> <version> | check <page> | ids")
+        die(2, "usage: render <spec> | body <page> [--split DIR] | stamp <page> <id> | compare <json> | fb-body <page> <table> <version> | check <page> | ids")
 
 
 if __name__ == "__main__":
