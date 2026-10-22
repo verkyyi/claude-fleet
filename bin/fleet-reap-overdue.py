@@ -40,7 +40,9 @@ sys.path.insert(0, str(BIN))
 import fleet_reap_policy  # noqa: E402
 
 FIELDS = ("window_id", "@issue", "@repo", "@reap_policy", "@claude_state", "@claude_state_ts",
-          "@reap_skip", "@reap_due", "@reap_key", "@raw", "@norepo", "@fleet_role", "@cc_agent", "@worktree", "window_name")
+          "@reap_skip", "@reap_due", "@reap_key", "@raw", "@norepo", "@fleet_role", "@cc_agent", "@worktree", "window_name", "@reap_origin", "@origin", "@origin_fid", "@origin_wid",
+          "@agent_def", "@test_identity", "@session_origin", "@park_wrap_ver", "@parked", "@park_held",
+          "@park_since", "@park_waiting", "@park_presence", "@park_watched_at", "@pin", "@reap_keep_by", "@reap_why")
 FINISHED = ("done", "exited")
 
 
@@ -147,6 +149,11 @@ def due_of(w, repo, prs, landed, now):
     if w["@norepo"] == "1" or w["@fleet_role"] in ("home", "panel") \
             or w["window_name"] in ("dash", "plan", "backlog", "home"):
         return None
+    if w.get("@parked"):
+        due = fleet_reap_policy.parked_deadline(w)
+        return (due, "parked retention") if due is not None else None
+    if w.get("@park_wrap_ver") and fleet_reap_policy.ORIGINS[fleet_reap_policy.snapshot_origin(w)]["reap"] == "parked":
+        return None
     pol = fleet_reap_policy.parse(w["@reap_policy"]) if w["@reap_policy"] else None
     kind = pol[0] if pol else ("merged" if w["@issue"] else None)
     stamp = int(w["@claude_state_ts"]) if w["@claude_state_ts"].isdigit() else 0
@@ -207,6 +214,7 @@ def ago(secs):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--park-table", action="store_true", help="every window: origin, next step and deadline")
     ap.add_argument("--stuck-secs", type=int, default=1800)
     ap.add_argument("--now", type=int, default=0)
     ap.add_argument("--if-fleet", action="store_true", help="print nothing on a computer that runs no fleet")
@@ -214,6 +222,13 @@ def main():
     now = a.now or int(time.time())
     found = fleets()
     if a.if_fleet and not found[1]:
+        return 0
+    if a.park_table:
+        for sock, _ in found[1]:
+            for w in windows(sock):
+                if w.get("@fleet_role") in ("home", "panel"):
+                    continue
+                print("%s %s · %s" % (sock, w["window_id"], fleet_reap_policy.explain(w, now)))
         return 0
     rows = collect(now, a.stuck_secs, found)
     stuck = sum(1 for r in rows if r["stuck"])

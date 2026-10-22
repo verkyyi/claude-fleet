@@ -228,3 +228,6 @@ func hub_relay_ok                               T606  bin/
 # G1YC C8 follows HHV0 markers; snapshot-only savings (T940).
 text @park_state T940 bin/
 func latest_park_rss T940 bin/
+
+# C6: waiting uses the one parker, no separate E101 close timer.
+func park_secs T952 bin/fleet-cleanup-idle.py

@@ -462,7 +462,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 `fleet.session.park_idle_unattended`（本次缓存实测未完整复用前缀，默认保守退回 5 分钟，可设 1 分钟）。
 `fleet.session.park_presence` 默认 15 分钟：键盘输入和网页在场更新时间，缺少证明时按有人处理。
 内存紧张（`FLEET_PARK_MEM_PCT`，15%；试用账号到份额 80%）时，按空闲最久排序，跳过不适合的窗口，
-每拍停一个，不必等普通档位。已报告完成的工作仍按原回收规则结束。
+每拍停一个，不必等普通档位。派发工作已报告完成仍按原回收规则结束。C6 的 `fleet_reap_policy.py ORIGINS` 同表维护停放和回收：person / decide 及等待回复的任务停放后 `fleet.session.reap_parked`（默认 3d）无动静才回收；先验证历史可接回，常驻与显式 keep 不回收。`fleet doctor --park` 的每窗口行读同一截止时间。
 
 停放前取得 mod 的 `park.v1` 原生证明（没有在跑的轮次、空输入框），通过 7501 中继向 pty 送 `/exit`；
 证明以后有键盘输入就取消，绝不靠 Escape 清空草稿。窗口、ID、对话、工作区和凭据留在原处，窗口仍读作空闲。

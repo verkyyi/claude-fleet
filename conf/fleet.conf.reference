@@ -328,6 +328,11 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_SESSION_PARK_IDLE_UNATTENDED=300
 # @label=Human presence remains recent for @group=janitor @tier=advanced @scope=fleet @edit=str
 #FLEET_SESSION_PARK_PRESENCE=900
+# Inactive parked person / decision / waiting conversations close only after
+# this retention and a verified resumable history row. Keep/pin and permanent
+# origins do not expire. Hub: fleet.session.reap_parked (default 3d).
+# @label=Reap an inactive parked conversation after @group=janitor @tier=advanced @scope=fleet @edit=str
+#FLEET_SESSION_REAP_PARKED=259200
 # @label=Park early under memory pressure below @group=janitor @tier=advanced @scope=fleet @edit=int @unit=percent
 #FLEET_PARK_MEM_PCT=15
 # A sentence the web said waits this long for its session to be free, then goes
@@ -919,11 +924,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # it. A session still working is never touched. Default 1800 (30 min).
 # @label=A finished session's background job holds it for @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_BG_GRACE=1800
-# A finished session waiting on its person (its ID's result `waiting` / `blocked`,
-# or its record asked them) is parked after this many seconds past its last turn
-# (E101): the window closes, the conversation, worktree and record stay, the list
-# keeps its row in 等你 and 接回 brings it back. Default 14400 (4 h).
-# @label=Park a session waiting on you after @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
+# compat-1v: 下一批删 — previous releases read this E101 timer. Current cleanup
+# uses C1 parking tiers and FLEET_SESSION_REAP_PARKED; this key is ignored.
+# @label=Legacy waiting timer (ignored) @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_PARK_SECS=14400
 # Comma-separated native MCP server names whose volatile state may be discarded
 # when a session is continued on a fresh process (a native continuation, a quota

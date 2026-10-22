@@ -126,15 +126,24 @@ With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a sess
 
 ## Reaping: when a session closes
 
-A finished session is reaped automatically — no clean-up by hand. Before it goes its history is recorded and its copy of the code kept, and you can ↵ restore it any time from "Folded away" in the panel. The default rules:
+Parking releases an idle agent process while keeping its window, identity, conversation and worktree. Speaking resumes the same conversation. Reaping closes the window only after recording resumable history; the worktree stays.
 
-| Session | Closes by default |
-|---|---|
-| Repository task, PR merged | About 10 minutes after the merge |
-| Repository task, done but no PR | After 2 hours idle |
-| Blank session | After 15 minutes idle |
+| Origin | Parking | Reaping |
+|---|---|---|
+| Person | Idle tier | 3 inactive days parked |
+| Dispatched task | Idle tier | About 1 minute after its result; without a result, remind after 30 idle minutes, close after another 30 |
+| Batch member | Idle tier | Same as dispatched, including failed results |
+| Batch driver | Idle tier | When the batch ends; retained between ticks |
+| Orchestrator | Idle tier | Never automatically |
+| Waiting for a decision | Idle tier | 3 inactive days parked |
+| Probe or drill | Idle tier | About 1 minute after finishing |
+| Web conversation | Idle tier | Keeps the existing web policy: never automatically |
 
-To change it: pick the row, Tab → "Reap policy…", and choose **closes after merge**, **closes when done** (optionally after a while), **closes when its loop stops**, **closes at a time**, or **never closed by itself**. A session that is working, or waiting for your answer, is never reaped.
+A dispatched task that reported waiting or blocked also gets 3 days parked. Missing resume proof keeps the window. A pin or your explicit keep policy prevents reaping, but permits parking. Old wrappers cannot park; waiting conversations stay open until their wrapper is updated.
+
+Settings: `fleet.session.park_idle` **5m**, `park_idle_unattended` **5m** (the conservative cache-measurement fallback; **1m** is configurable), `park_presence` **15m**, and `fleet.session.reap_parked` **3d**. Memory pressure may park earlier. Watched windows, drafts, active turns, open choice dialogs and background work hold parking. `fleet doctor --park` lists each window's origin, park/reap rule, next UTC deadline and hold reason.
+
+Pick the row, Tab → "Reap policy…" to change its policy. Person and decision conversations on new wrappers use the parked retention above; an explicit keep still holds.
 
 ## Quota and usage
 
