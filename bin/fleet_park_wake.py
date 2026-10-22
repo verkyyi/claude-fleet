@@ -431,7 +431,8 @@ def tick(fid, at=None):
                 if r and r.get('pending', {}).get('delivery') == pending['delivery'] and not r.get('attention'):
                     r['attention'] = delivery.get('why') or 'delivery_returned'
                     save(path, r)
-                    gate.park_log(fid, 'fail', '定时', result=r['attention'], next_at=pending['next'])
+                    if not Path(str(gate.wake_path(fid, pending['delivery'])) + '.meta.failed').exists():
+                        gate.park_log(fid, 'fail', '定时', result=r['attention'], next_at=pending['next'])
         return
     with locked(fid) as path:
         r = durable.read(path)

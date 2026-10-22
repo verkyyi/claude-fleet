@@ -122,7 +122,7 @@ _ad="$BIN/fleet-agent-adapter.sh"
 wset() { tmux set-option -w -t "$TMUX_PANE" "$@" 2>/dev/null; }
 # C1: only a running wrapper with this holding page is eligible for parking.
 if [ "$intmux" = 1 ]; then
-  wset @park_wrap_ver 2
+  wset @park_wrap_ver 3
   [ -n "$(opt @park_presence)" ] || wset @park_presence 0
 fi
 
@@ -356,7 +356,7 @@ park_hold() {
         if [ -f "$w.meta" ]; then
           # First native 7501 report acknowledges a new gate's owned seed.
           wset @park_start "$w.meta"
-          [ "$park_keyboard" != 1 ] || park_attempt="$w.meta"
+          park_attempt="$w.meta"
         else
           # HHV0 callers handed a seed directly, before metadata existed.
           : > "$w.launched" 2>/dev/null
@@ -369,7 +369,7 @@ park_hold() {
     fi
     page_args=(--screen "$screen" --draft "$draft")
     [ "$park_failed" != 1 ] || page_args+=(--failed)
-    python3 "$BIN/fleet-park-page.py" ${page_args[@]+"${page_args[@]}"}
+    FLEET_PARK_ERROR="$(opt @park_error)" python3 "$BIN/fleet-park-page.py" ${page_args[@]+"${page_args[@]}"}
     page_rc=$?
     case "$page_rc" in
       12) continue ;;  # external seed, claimed by the same rename above
@@ -515,7 +515,9 @@ while :; do
     # The launcher as it is, without the environment a retired layer (EPIC T497
     # C8) may have handed a session started before it — fleet_repo_authority.py's
     # --supervise did this with a Python start (T716: env -u, no start).
-    PATH="$SHIM_PATH" env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \
+    wake_guard=()
+    [ -z "$park_attempt" ] || wake_guard=(python3 "$BIN/fleet_wake_guard.py" run --meta "$park_attempt" --)
+    PATH="$SHIM_PATH" ${wake_guard[@]+"${wake_guard[@]}"} env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \
       -u FLEET_LAUNCH_WORKTREE -u FLEET_LAUNCH_CREATE -u FLEET_LAUNCH_DELIVERY -u FLEET_AUTHORITY_CONTEXT \
       -u FLEET_AUTHORITY_ADMISSION -u FLEET_AUTHORITY_START -u FLEET_AUTHORITY_EXPECTED \
       -u FLEET_AUTHORITY_RESUME_SID -u FLEET_ID_DISPATCH "$LAUNCH" ${cmd[@]+"${cmd[@]}"} ${park_seed:+"$park_seed"}

@@ -3,7 +3,7 @@
 
 /Users/Shared/claude-fleet (/var/tmp/claude-fleet off macOS) holds what every
 login on the box shares: heavy/ (fleet-heavy.sh's machine-wide slots, #1295) and
-sessions/ (each login's live session count, #1301). (gh/<repo>/, the GitHub reads
+sessions/ (each login's live session count, #1301), and wake/ (C7 startup slots). (gh/<repo>/, the GitHub reads
 the logins shared per repo, #3529, left with issue #4899.) All stay 1777 — any login
 may add its own file, the sticky bit keeps the others' — but that only holds
 when nobody but root OWNS the dirs (a sticky dir's owner may delete anything in
@@ -19,6 +19,8 @@ This is the root half, the node supervisor's `shared-dirs` task (every 60 s):
     only flocks it (flock works on a read-only fd) — nobody can delete, replace,
     chmod or write them. A slot another login made (an older version, or before
     this task first ran) is replaced by root's own;
+  * wake/slot-0..slot-31 are root's 0644 files too. Their inode stays in place
+    when root takes ownership, so an occupied startup slot cannot be bypassed;
   * a squatter is swept: heavy/{hold,wait}.<login>.<pid> and events.<login>.log,
     sessions/<login> — any such file not owned by <login> (or not a regular
     file) is removed, and a hold/wait whose pid is gone with it.
@@ -212,12 +214,29 @@ def main(argv):
     root = root.rstrip("/") or "/"
     ps = Pass(check)
     heavy, sessions = os.path.join(root, "heavy"), os.path.join(root, "sessions")
-    for d in (root, heavy, sessions):
+    wake = os.path.join(root, "wake")
+    for d in (root, heavy, sessions, wake):
         ps.ensure_dir(d)
     if os.path.isdir(heavy):
         for k in range(1, slots + 1):
             ps.ensure_slot(os.path.join(heavy, "slot-%d" % k))
         ps.sweep_heavy(heavy)
+    if os.path.isdir(wake):
+        for k in range(32):
+            path = os.path.join(wake, "slot-%d" % k)
+            try:
+                st = os.lstat(path)
+            except FileNotFoundError:
+                st = None
+            if st is not None and stat.S_ISREG(st.st_mode) and ps.root:
+                # Keep the inode: a login may already hold this wake slot.
+                # Replacing an occupied file would create a second free slot.
+                if st.st_uid != 0 or st.st_gid != 0:
+                    ps.act("chown root " + path, os.chown, path, 0, 0)
+                if stat.S_IMODE(st.st_mode) != 0o644:
+                    ps.act("chmod 644 " + path, os.chmod, path, 0o644)
+            else:
+                ps.ensure_slot(path)
     if os.path.isdir(sessions):
         ps.sweep_sessions(sessions)
     for n in ps.notes:

@@ -60,6 +60,16 @@ def paint(screen, words, failed=False, pos=None, waking=False):
     if failed:
         hint = ('Resume failed · Enter/r retry · n new chat' if en else
                 '接回失败 · 回车/r 重试 · n 新会话')
+    if failed:
+        reason = os.environ.get('FLEET_PARK_ERROR', '')
+        labels = {
+            'wake_timeout': ('接回超时', 'Resume timed out'),
+            'wake_queue_timeout': ('接回排队超时，请重试', 'Wake queue timed out; retry'),
+            'version_mismatch': ('版本不兼容，按 n 带原话新开对话', 'Incompatible version; n starts a new chat with your words'),
+            'wake_guard': ('接回名额不可用', 'Wake slots unavailable'),
+        }
+        if reason in labels:
+            hint = labels[reason][int(en)] + ' · ' + hint
     if waking:
         hint = '· resuming…' if en else '· 接回中…'
     footer = lines(hint, width)
@@ -179,8 +189,39 @@ def failure(meta_path):
     for option, value in (('@parked', str(int(time.time()))), ('@park_since', str(int(time.time())))):
         gate.tmux('', 'set-option', '-w', '-t', pane, option, value)
     gate.tmux('', 'set-option', '-wu', '-t', pane, '@park_start')
-    gate.park_log(meta.get('fid', ''), 'fail', meta.get('why', ''),
-                  max(0, time.time() - meta.get('started', time.time())), 'launch_failed')
+    seed = meta.get('seed', '')
+    if meta.get('deferred'):
+        # No process was launched. Timers keep their original delivery and retry
+        # after the deferral; no error page, no failure streak, no stolen draft.
+        Path(seed + '.taken').unlink(missing_ok=True)
+        gate.tmux('', 'set-option', '-w', '-t', pane, '@park_error', meta['deferred'])
+        return 0 if meta.get('why') == '键盘' else 3
+    error = gate.read_json(seed + '.error') or {}
+    reason = error.get('reason', 'launch_failed')
+    import re
+    from fleet_agent_adapter import ADAPTERS, DEFAULT
+    agent = (gate.tmux('', 'display-message', '-p', '-t', pane, '#{@cc_agent}') or '').strip()
+    pattern = ADAPTERS.get(agent or DEFAULT, {}).get('park_incompatible')
+    screen = gate.tmux('', 'capture-pane', '-p', '-t', pane, '-S', '-40') or ''
+    if pattern and re.search(pattern, screen, re.I):
+        reason = 'version_mismatch'
+    meta['failure'] = reason
+    gate.write_json(str(path) + '.failed', meta)
+    gate.tmux('', 'set-option', '-w', '-t', pane, '@park_error', reason)
+    fid = meta.get('fid', '')
+    if fid:
+        with gate.lock(fid):
+            health_path = gate.fid_dir(fid) / 'park-health.json'
+            health = gate.read_json(health_path) or {}
+            health['failures'] = health.get('failures', 0) + 1
+            health['disabled'] = health.get('disabled', False) or health['failures'] >= 2
+            gate.write_json(health_path, health)
+        draft = gate.fid_dir(fid) / 'park-input.txt'
+        if not draft.exists() or not draft.stat().st_size:
+            words = read(Path(seed + '.taken')) or read(Path(seed))
+            save(draft, words)
+    gate.park_log(fid, 'fail', meta.get('why', ''),
+                  max(0, time.time() - meta.get('started', time.time())), reason)
     return 0
 
 

@@ -6579,6 +6579,14 @@ drill_park_human_presence_lost() {
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
 # back by the same rename the wrapper claims it with, and returns the sentence.
+drill_wake_storm() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-loadgen.sh" 4 300 -- python3 "$BIN/fleet-wake-guard-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="十个 fake 会话跨登录共享名额，接回同时最多三个、60 秒内全醒；$out"
+}
+
 drill_wake_fail_silent() {
   CAP=30; local t0 out
   t0=$(now)

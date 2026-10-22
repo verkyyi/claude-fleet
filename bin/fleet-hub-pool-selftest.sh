@@ -126,4 +126,14 @@ fetch --force 2>/dev/null
 [ "$(reads FLEET_SESSION_REAP_PARKED)" = - ] \
   && st_ok_all "H invalid retention is refused" || st_miss "H invalid retention kept"
 
+# C7: wake capacity follows the same validated hub -> login settings path.
+printf '{"pool":{"FLEET_SESSION_WAKE_SLOTS":"4"}}\n' > "$HUBD/v1/fleet/client-settings"
+fetch --force
+[ "$(reads FLEET_SESSION_WAKE_SLOTS)" = 4 ] \
+  && st_ok_all "I wake capacity reaches node settings" || st_miss "I capacity dropped"
+printf '{"pool":{"FLEET_SESSION_WAKE_SLOTS":"0"}}\n' > "$HUBD/v1/fleet/client-settings"
+fetch --force 2>/dev/null
+[ "$(reads FLEET_SESSION_WAKE_SLOTS)" = - ] \
+  && st_ok_all "I invalid wake capacity is refused" || st_miss "I invalid capacity kept"
+
 st_done

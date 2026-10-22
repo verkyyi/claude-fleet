@@ -569,7 +569,8 @@ def settle(fid, wait_new=None):
                     continue
             if r.get("sid") and w["sid"] and r["sid"] != w["sid"] and not w["parked"]:
                 ret(r, "session_changed")       # a /clear or another conversation: never into it
-            elif r.get("state") == "queued" and t - r.get("at", t) > queue_secs:
+            elif (r.get("state") == "queued" and t - r.get("at", t) > queue_secs
+                  and not (r.get('wake_why') == '定时' and r.get('wake_retry_at'))):
                 ret(r, "expired")
         live = [r for r in live if r.get("state") in ("queued", "trying", "native", "waking")]
         if not live:
@@ -602,7 +603,7 @@ def find(rows, delivery):
 
 def deliver(r, w):
     """(state, why) after one attempt: sent · queued · trying · native · waking · returned."""
-    if r.get("state") == "waking" or w["parked"]:
+    if r.get("state") == "waking" or w["parked"] or r.get("wake_retry_at"):
         return wake_try(r, w)
     b = busy_of(w)
     if b == "asking" and r.get("state") == "queued":
@@ -623,21 +624,41 @@ def wake_try(r, w):
     wake_secs = num_env("FLEET_GATE_WAKE_SECS", 20)
     seed = wake_path(r["fid"], r["delivery"])
     if r.get("state") == "waking":
+        deferred = read_json(str(seed) + ".deferred")
+        if deferred:
+            r['wake_retry_at'] = deferred['retry_at']
+            return "queued", deferred['deferred']
+        failed = read_json(str(seed) + ".meta.failed")
+        if failed:
+            return "returned", failed.get('failure', 'launch_failed')
         if Path(str(seed) + ".launched").exists():
             return "sent", "woken"
-        if now() - r.get("wake_at", now()) <= wake_secs:
+        # New wrappers queue for at most 60s BEFORE the native start deadline.
+        admitted = Path(str(seed) + '.admitted')
+        if admitted.exists():
+            age = now() - (read_json(admitted) or {}).get('at', now())
+        else:
+            age = now() - r.get('wake_at', now()) - (60 if (read_json(str(seed) + '.meta') or {}).get('guarded') else 0)
+        if age <= wake_secs:
             return "waking", "waking"
         # not up in time: take the seed back (the wrapper claims it by the same
         # rename, so one side wins) — taken = it is starting, wait for it
         try:
             seed.rename(str(seed) + ".cancelled")
         except FileNotFoundError:
-            if Path(str(seed) + ".taken").exists() and now() - r.get("wake_at", now()) <= wake_secs * 3:
+            if Path(str(seed) + ".taken").exists() and age <= wake_secs * 3:
                 return "waking", "starting"
             return ("sent", "woken") if Path(str(seed) + ".launched").exists() else ("returned", "wake_timeout")
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
         park_log(r["fid"], "fail", "网页", now() - r.get("wake_at", now()), "wake_timeout")
         return "returned", "wake_timeout"
+    if now() < r.get('wake_retry_at', 0):
+        return "queued", r.get('why', 'deferred')
+    if r.get('wake_retry_at') and not w['parked']:
+        return 'queued', 'wake_pending'
+    for suffix in ('.deferred', '.meta.failed', '.error', '.admitted'):
+        Path(str(seed) + suffix).unlink(missing_ok=True)
+    r.pop('wake_retry_at', None)
     seed.write_text(compose(r))
     r.update(state="waking", wake_at=now(), method="wake", tries=r.get("tries", 0) + 1)
     save(r)
@@ -822,6 +843,9 @@ def park_locked(fid, why, force):
         return dict(ok=True, already=True)
     if not w.get("wrap_ver", "").isdigit() or int(w["wrap_ver"]) < 1:
         return dict(ok=False, why="old_wrapper")
+    health = read_json(fid_dir(fid) / 'park-health.json') or {}
+    if health.get('disabled') and not force:
+        return dict(ok=False, why='wake_failures')
     adapter = fleet_agent_adapter.ADAPTERS.get(w["agent"], {})
     if adapter.get("park_resume") != "1" or not w["sid"]:
         return dict(ok=False, why="not_resumable")
@@ -933,6 +957,7 @@ def wake_request(w, seed, why, next_at=None):
     if active:
         return dict(ok=False, why="wake_pending")
     meta = dict(fid=w["fid"], why=why, started=now(), seed=str(seed),
+                guarded=w.get("wrap_ver") == "3",
                 next=next_at if next_at is not None else
                 (read_json(conf_dir() / "wake" / (w["fid"] + ".json")) or {}).get("next", 0))
     if why == "键盘":
@@ -960,6 +985,14 @@ def wake_ready(pane):
     if seed:
         Path(seed + ".launched").touch()
         Path(seed + ".taken").unlink(missing_ok=True)
+    # Publish the receipt before taking the delivery lock: settle waits for
+    # that receipt while holding it. Health bookkeeping cannot delay readiness.
+    if meta.get('fid'):
+        with lock(meta['fid']):
+            health_path = fid_dir(meta['fid']) / 'park-health.json'
+            health = read_json(health_path) or {}
+            health['failures'] = 0
+            write_json(health_path, health)
     if meta.get("draft"):
         Path(meta["draft"]).unlink(missing_ok=True)
     park_log(meta.get("fid", ""), "wake", meta.get("why", ""),
@@ -982,7 +1015,7 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
         w = window(fid)
         if w is None:
             return dict(ok=False, why="no_session")
-        owned = delivery and (Path(str(seed) + '.taken').exists() or
+        owned = delivery and not Path(str(seed) + '.meta.failed').exists() and not Path(str(seed) + '.deferred').exists() and (Path(str(seed) + '.taken').exists() or
                               w.get('park_wake') == str(seed) or w.get('park_start') == str(seed) + '.meta')
         if owned:
             result = dict(ok=True, seed=str(seed))
@@ -991,6 +1024,8 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
                 return dict(ok=False, why="wake_pending")
             if not w["parked"]:
                 return dict(ok=True, already=True)
+            for suffix in ('.deferred', '.meta.failed', '.error', '.admitted'):
+                Path(str(seed) + suffix).unlink(missing_ok=True)
             seed.write_text(Path(seed_file).read_text() if seed_file else "")
             result = wake_request(w, seed, why)
             if not result.get("ok"):
@@ -998,8 +1033,12 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
                 return result
     if request_only:
         return result
-    end = time.monotonic() + num_env("FLEET_GATE_WAKE_SECS", 20)
+    end = time.monotonic() + (60 if w.get("wrap_ver") == "3" else 0) + num_env("FLEET_GATE_WAKE_SECS", 20)
     while time.monotonic() < end:
+        deferred = read_json(str(seed) + '.deferred')
+        failed = read_json(str(seed) + '.meta.failed')
+        if deferred or failed:
+            return dict(ok=False, why=(deferred or failed).get('deferred') or failed.get('failure', 'launch_failed'), seed=str(seed))
         if Path(str(seed) + ".launched").exists():
             return dict(ok=True)
         time.sleep(.1)
