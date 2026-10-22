@@ -16,6 +16,11 @@ import time
 # server), never who asked. So every thread THIS client starts is booked beside the
 # server's socket, and the window's thread follower never follows one of them.
 STARTS = ('thread/start', 'thread/fork')
+MESSAGE_BYTES = 4 * 1024 * 1024
+# Full native histories include tool output as well as conversation text. Keep
+# their larger allowance local to an explicit includeTurns read, not event polls
+# or unrelated RPCs. The bound applies across WebSocket continuation frames.
+HISTORY_BYTES = 64 * 1024 * 1024
 
 
 def ledger(remote):
@@ -104,7 +109,7 @@ class Client:
         self.socket.close()
 
     def read(self, count):
-        data = b''
+        data = bytearray()
         while len(data) < count:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
@@ -113,8 +118,8 @@ class Client:
             chunk = self.socket.recv(count - len(data))
             if not chunk:
                 raise EOFError('Codex RPC connection closed')
-            data += chunk
-        return data
+            data.extend(chunk)
+        return bytes(data)
 
     def frame(self, payload, opcode=1):
         length = len(payload)
@@ -131,8 +136,8 @@ class Client:
     def send(self, value):
         self.frame(json.dumps(value, separators=(',', ':')).encode())
 
-    def receive(self, nonblocking=False):
-        chunks = b''
+    def receive(self, nonblocking=False, max_bytes=MESSAGE_BYTES):
+        chunks = bytearray()
         fragmented = False
         while True:
             if nonblocking and not fragmented and not select.select([self.socket], [], [], 0)[0]:
@@ -143,8 +148,8 @@ class Client:
                 length = struct.unpack('!H', self.read(2))[0]
             elif length == 127:
                 length = struct.unpack('!Q', self.read(8))[0]
-            if length + len(chunks) > 4 * 1024 * 1024:
-                raise ValueError('Codex RPC frame exceeds 4 MiB')
+            if length + len(chunks) > max_bytes:
+                raise ValueError('Codex RPC message exceeds %d MiB' % (max_bytes // (1024 * 1024)))
             mask = self.read(4) if second & 128 else None
             payload = self.read(length)
             if mask:
@@ -158,7 +163,7 @@ class Client:
                 continue
             if opcode not in (0, 1):
                 raise ValueError('unexpected Codex RPC frame')
-            chunks += payload
+            chunks.extend(payload)
             if first & 128:
                 return json.loads(chunks)
             fragmented = True
@@ -195,7 +200,10 @@ class Client:
         sequence = self.sequence
         self.send({'id': sequence, 'method': method, 'params': params})
         while True:
-            data = self.receive()
+            if method == 'thread/read' and isinstance(params, dict) and params.get('includeTurns') is True:
+                data = self.receive(max_bytes=HISTORY_BYTES)
+            else:
+                data = self.receive()
             if data.get('id') != sequence or 'method' in data:
                 # Rejoining a loaded thread replays pending server requests.
                 # Preserve them for native question/approval clients.

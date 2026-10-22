@@ -190,6 +190,59 @@ class RuntimeTests(unittest.TestCase):
         finally:
             client.close();peer.close()
 
+    def test_full_history_can_exceed_four_mib_without_widening_next_call(self):
+        connection,peer=socket.socketpair()
+        client=rpc.Client.__new__(rpc.Client)
+        client.socket=connection;client.timeout=5;client.sequence=0;client.events=[];client.remote=''
+        text='x'*(5*1024*1024)
+        payload=json.dumps({'id':1,'result':{'thread':{'turns':[{'text':text}]}}}).encode()
+        errors=[]
+        def serve():
+            try:
+                peer.settimeout(5)
+                def read(n):
+                    data=b''
+                    while len(data)<n:
+                        part=peer.recv(n-len(data))
+                        if not part:raise EOFError('client closed')
+                        data+=part
+                    return data
+                def request():
+                    _,second=read(2);size=second&127
+                    if size==126:size=struct.unpack('!H',read(2))[0]
+                    elif size==127:size=struct.unpack('!Q',read(8))[0]
+                    if second&128:read(4)
+                    read(size)
+                request()
+                peer.sendall(b'\x81\x7f'+struct.pack('!Q',len(payload))+payload)
+                request()  # metadata-only read must regain the normal cap
+                peer.sendall(b'\x81\x7f'+struct.pack('!Q',len(payload)))
+            except Exception as exc:errors.append(exc)
+        thread=threading.Thread(target=serve);thread.start()
+        try:
+            result=client.call('thread/read',{'threadId':'large','includeTurns':True})
+            self.assertEqual(result['thread']['turns'][0]['text'],text)
+            with self.assertRaisesRegex(ValueError,'exceeds 4 MiB'):
+                client.call('thread/read',{'threadId':'large','includeTurns':False})
+        finally:
+            client.close();thread.join(timeout=6);peer.close()
+        self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
+
+    def test_history_cap_rejects_oversized_and_fragmented_messages_before_body(self):
+        for fragmented in (False,True):
+            with self.subTest(fragmented=fragmented):
+                connection,peer=socket.socketpair()
+                client=rpc.Client.__new__(rpc.Client)
+                client.socket=connection;client.deadline=time.monotonic()+1
+                try:
+                    if fragmented:peer.sendall(b'\x01\x04null')
+                    size=rpc.HISTORY_BYTES+(1 if not fragmented else -3)
+                    peer.sendall(bytes([0x80 if fragmented else 0x81,0x7f])+struct.pack('!Q',size))
+                    with self.assertRaisesRegex(ValueError,'exceeds 64 MiB'):
+                        client.receive(max_bytes=rpc.HISTORY_BYTES)
+                finally:
+                    client.close();peer.close()
+
     def test_rpc_unix_websocket_frames_and_errors(self):
         path=str(self.root/'rpc.sock')
         listener=socket.socket(socket.AF_UNIX);listener.bind(path);listener.listen(1);listener.settimeout(3)
