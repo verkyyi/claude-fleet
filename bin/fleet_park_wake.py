@@ -294,6 +294,59 @@ def restore(fid, sid, owned=False):
     return bool(r and r['sid'] == sid and (owned or r.get('parked')) and ledger_due(r))
 
 
+def pending_current(record, pending):
+    """A queued prompt is a snapshot, not another schedule authority."""
+    if record.get('phase') != 'active':
+        return False
+    if record.get('ledger'):
+        source = durable.read(record['ledger'])
+        if (not source or source.get('park_fid') != record['fid']
+                or source.get('thread_id') != record['sid']
+                or source.get('status') not in ('active', 'waiting-quota')):
+            return False
+        schedule = source['schedule']
+        if 'jobs' in schedule:
+            jobs = {j['id']: j for j in schedule['jobs']}
+            return bool(pending.get('due_ids')) and all(
+                ident in jobs and jobs[ident]['next_run_at'] is not None
+                for ident in pending['due_ids'])
+        return (schedule.get('next_run_at') == pending['ledger_due']
+                and schedule.get('prompt') == pending['prompt'])
+    jobs = {j['id']: j for j in record['jobs']}
+    return bool(pending.get('rounds')) and all(
+        ident in jobs and jobs[ident]['next'] == due for ident, due in pending['rounds'])
+
+
+def retire_cancelled(row, w):
+    """Under the gate fid lock: revoke only a timer the engine has not claimed.
+    The same check serves an independent gate sweep and the timer's retry.
+    A taken/launched seed (or native submission) keeps its original receipt.
+    """
+    if row.get('wake_why') != '定时' or row['state'] not in ('queued', 'waking', 'returned'):
+        return False
+    with locked(row['fid']) as path:
+        record = durable.read(path)
+        pending = (record or {}).get('pending') or {}
+        same = pending.get('delivery') == row['delivery']
+        if same and pending_current(record, pending):
+            return False
+        if row['state'] == 'waking':
+            seed = gate.wake_path(row['fid'], row['delivery'])
+            try:
+                seed.rename(str(seed) + '.cancelled')
+            except FileNotFoundError:
+                if Path(str(seed) + '.taken').exists() or Path(str(seed) + '.launched').exists():
+                    return False
+            if w and w.get('park_wake') == str(seed):
+                gate.tmux(w['sock'], 'set-option', '-wu', '-t', w['win'], '@park_wake')
+        if row['state'] != 'returned':
+            gate.ret(row, 'timer_cancelled')
+        if same:
+            record.pop('pending', None)
+            save(path, record)
+        return True
+
+
 def tick(fid, at=None):
     at = time.time() if at is None else at
     w = gate.window(fid)
@@ -311,6 +364,21 @@ def tick(fid, at=None):
                 held = gate.tmux(w['sock'], 'display-message', '-p', '-t', w['win'], '#{@park_held}')
                 if held and held.strip():
                     activate(fid)  # died after exit, before held acknowledgement
+    if prepared and prepared.get('pending'):
+        # Lock order is the parker's: gate -> contract. Never take the gate
+        # while holding a contract lock. Stop may race the write-ahead record
+        # before a gate row exists, or a queued row after it exists.
+        with gate.lock(fid):
+            row = gate.find(gate.records(fid), prepared['pending']['delivery'])
+            if row:
+                retire_cancelled(row, gate.window(fid))
+            else:
+                with locked(fid) as path:
+                    record = durable.read(path)
+                    pending = (record or {}).get('pending')
+                    if pending and not pending_current(record, pending):
+                        record.pop('pending', None)
+                        save(path, record)
     with locked(fid) as path:
         r = durable.read(path)
         if not r or r['sid'] != w['sid'] or r['agent'] != w['agent']:
@@ -327,8 +395,12 @@ def tick(fid, at=None):
                     return
                 if not pending:
                     due_ids = [j['id'] for j in fleet_cron.pending(source['schedule'], at)] if 'jobs' in source['schedule'] else []
-                    pending = dict(delivery=str(uuid.uuid5(uuid.UUID(fid), 'ledger:' + str(next_at))),
-                                   next=next_at, prompt=loop.wakeup_prompt(source['schedule'], at), rounds=[],
+                    prompt = loop.wakeup_prompt(source['schedule'], at)
+                    # Cancelling one of several jobs due together retires the
+                    # old combined prompt. The surviving subset has its own ID.
+                    key = json.dumps(['ledger', next_at, due_ids, prompt])
+                    pending = dict(delivery=str(uuid.uuid5(uuid.UUID(fid), key)),
+                                   next=next_at, prompt=prompt, rounds=[],
                                    ledger_due=next_at, due_ids=due_ids)
                     r['pending'] = pending
                     durable.atomic(path, r)

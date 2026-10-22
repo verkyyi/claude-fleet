@@ -510,9 +510,15 @@ durable 任务沿 `fleet_transfer_durable.py` 已验证的单一归属路径：�
 已由 `fleet-loop.py` 管理的循环（含 Codex）继续以原账本为唯一节拍来源。
 停前写 `park_fid` 交出投递权；旧 bridge 不再投递、也不因停放退出把循环写成 stopped。
 接回同一 thread 后原有 `fleet-loop.py defer / stop` 仍有效；正在投递且收据未定的循环拒停。
+显式 stop、取消任务或改期后，定时 tick 与独立会话门清扫都会重新核对原计划，
+撤销尚未被外壳或原生领取的旧提示。同一时刻的多个任务取消其中一个时，
+旧的合并提示作废，其余任务以新的 delivery ID 投递一次，原账本与 owner 代次不变。
+已被领取的当前轮次保留原收据，不强行中断；收据确认不会把 stopped 的账本重新激活。
 
 隔离演练：`bin/fleet-park-wake-selftest.py` 驱动停放门、外壳、定时投递及 durable 撤出，
-覆盖 3 秒后唤醒、三轮 cron、外壳恢复、退出失败保持原生任务。
+覆盖 3 秒后唤醒、三轮 cron、外壳恢复、退出失败保持原生任务，以及 Claude/Codex
+原 ledger 的同会话投递、owner 不变和停止不复活。BREAK-IT `park-stopped-timer-revives`
+还驱动显式停止、单任务取消及未取消任务的保留。
 
 测试：`bin/fleet-session-gate-selftest.py`（假 tmux、假 mod、假 Codex，A–M）、
 `bin/fleet-idle-accept-claude-selftest.sh`（真引擎：入口边界、排队重交、Esc、草稿、竞态；CI 上无 claude 跳过）、

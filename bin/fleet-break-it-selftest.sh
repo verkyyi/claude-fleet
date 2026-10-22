@@ -6445,7 +6445,7 @@ drill_park_stopped_timer_revives() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-park-wake-selftest.py" test_codex_stopped_loop_never_rearms \
     test_codex_stopped_pending_loop_never_rearms test_codex_cancelled_pending_job_keeps_sibling \
-    test_cancelled_native_cron_pending_never_wakes 2>&1) || { WHY="$out"; return 1; }
+    test_codex_cancelled_pending_job_keeps_due_sibling test_cancelled_native_cron_pending_never_wakes 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='显式停止或取消后，旧定时队列不再接回；未取消的任务保留同一账本和会话'
 }
