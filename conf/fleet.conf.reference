@@ -339,11 +339,12 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_GATE_WAKE_SECS=20
 # Simultaneous parked native starts across ALL logins on this machine. Hub key
 # fleet.session.wake_slots; queue at most 60s, human submissions take priority.
-# @label=同时接回名额 @group=session @type=int @tier=advanced
+# @label=Simultaneous parked starts per machine @group=janitor @tier=advanced @scope=global @edit=int
 #FLEET_SESSION_WAKE_SLOTS=3
 # Shared flock directory; all managed logins must use the SAME directory.
 # Linux defaults to /var/tmp/claude-fleet/wake.
-#FLEET_WAKE_SLOT_DIR=/Users/Shared/claude-fleet/wake
+# @label=Machine shared wake slot directory @group=janitor @tier=advanced @scope=global @edit=str
+#FLEET_WAKE_SLOT_DIR=
 
 
 # --- Rotation lease TTL (issue #550) -------------------------------------------
