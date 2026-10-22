@@ -907,6 +907,8 @@ func refuse(ctx context.Context, wire nodeWire, opID, code, msg string) {
 
 // NodeView is one node as the roster API presents it.
 type NodeView struct {
+	// The same heartbeat supplies both the roster count and detail rows. Never serialized.
+	heartbeat *control.Heartbeat
 	*control.ParkMetrics
 
 	EndpointID    string     `json:"endpoint_id"`
@@ -1496,11 +1498,16 @@ func nodeView(n store.Node, now time.Time) NodeView {
 	}
 	var hb control.Heartbeat
 	if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil {
+		v.heartbeat = &hb
 		v.ParkMetrics = hb.ParkMetrics
 		v.Load1, v.NCPU = hb.Load1, hb.NCPU
 		v.CPUBusy, v.MaxCPUBusy = hb.CPUBusy, hb.MaxCPUBusy
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
 		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
+		if hb.FleetError != "" {
+			v.Sessions = nil
+			v.SessionsUnknown = append(v.SessionsUnknown, hb.FleetError)
+		}
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion

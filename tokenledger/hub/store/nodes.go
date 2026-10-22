@@ -271,7 +271,9 @@ func (s *Store) Nodes() ([]Node, error) {
 	rows, err := s.read.Query(`
 		SELECT endpoint_id, hostname, os_user, machine_id, proto, heartbeat_ms,
 		       agent_version, connected_at, last_heartbeat, status_json
-		  FROM nodes ORDER BY hostname, os_user, endpoint_id`)
+		  FROM nodes WHERE NOT EXISTS
+		  (SELECT 1 FROM endpoints e WHERE e.endpoint_id = nodes.endpoint_id AND e.retired_at IS NOT NULL)
+		 ORDER BY hostname, os_user, endpoint_id`)
 	if err != nil {
 		return nil, err
 	}

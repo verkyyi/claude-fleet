@@ -30,6 +30,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Subscription pool behavior
         run: node --experimental-strip-types src/admin/pool.test.mjs
+      - name: Machine counts, history and login isolation
+        run: node test/machine-policy.mjs
       - name: Subscription identity join
         run: node test/pool.mjs
       - name: Task outcome and stale reads

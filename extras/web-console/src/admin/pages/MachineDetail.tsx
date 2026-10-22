@@ -46,6 +46,8 @@ import {
   firstLabel,
   gb,
   machineRows,
+  machineSessionGroups,
+  type FleetSession,
   runtimeVersions,
   serviceRows,
   sessionState,
@@ -695,62 +697,54 @@ function DoorCard({ d, row, runner }: { d: NodeDetail; row: MachineRow | null; r
 }
 
 function SessionsCard({ d }: { d: NodeDetail }) {
-  const rows = (d.sessions || []).map((s) => {
-    const w = s.worker || {};
-    return { key: w.key || w.name || "—", title: w.title || w.name || "", repo: w.repo || "", state: sessionState(w.state), person: s.os_user || "", born: Number(w.born) || 0 };
-  });
-  const dot: Record<string, string> = { working: "bg-ok", needs: "bg-warn", done: "bg-muted-foreground/50", idle: "bg-muted-foreground/50", unknown: "bg-muted-foreground/30" };
-  return (
+  const g = machineSessionGroups(d);
+  return <div className="space-y-4">
     <Card className="gap-0 pb-0">
       <CardHeader className="border-b pb-4">
-        <CardTitle className="font-display text-base">
-          {tm("d.sessions")} <span className="ml-1 font-mono text-sm font-normal text-muted-foreground">{rows.length}</span>
-        </CardTitle>
-        <CardAction>
-          <Fresh at={d.sessions_at} />
-        </CardAction>
+        <CardTitle className="font-display text-base">{tm("d.sessions")} <span className="ml-1 font-mono text-sm font-normal text-muted-foreground">{g.count == null ? tm("d.sessionUnknown") : g.count}</span></CardTitle>
+        <CardDescription>{tm("d.sessionsMeaning")}{g.partial && ` · ${tm("d.sessionsPartial", { n: g.current.length })}`}</CardDescription>
+        <CardAction><Fresh at={d.sessions_at} /></CardAction>
       </CardHeader>
-      {rows.length ? (
-        <div className="max-h-96 overflow-y-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="h-10 px-4">{tm("d.session")}</TableHead>
-                <TableHead className="h-10 px-4">{tm("d.state")}</TableHead>
-                <TableHead className="h-10 px-4">{tm("d.person")}</TableHead>
-                <TableHead className="h-10 px-4 text-right">{tm("d.started")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => (
-                <TableRow key={r.key + i} className="hover:bg-transparent">
-                  <TableCell className="px-4">
-                    <p className="font-mono text-xs font-medium">{r.key}</p>
-                    <p className="max-w-md truncate text-xs text-muted-foreground">{r.title || r.repo || "—"}</p>
-                  </TableCell>
-                  <TableCell className="px-4">
-                    <span className="inline-flex items-center gap-2 text-sm">
-                      <span className={cn("size-2 rounded-full", dot[r.state])} />
-                      {tm(`sess.${r.state}` as MKey)}
-                    </span>
-                  </TableCell>
-                  <TableCell className="px-4 font-mono text-xs">{r.person || "—"}</TableCell>
-                  <TableCell className="px-4 text-right font-mono text-xs text-muted-foreground tabular-nums">
-                    {r.born ? new Date(r.born * (r.born < 1e12 ? 1000 : 1)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      ) : (
-        <CardContent className="py-8 text-center text-sm text-muted-foreground">{tm("d.noSessions")}</CardContent>
-      )}
+      <MachineSessionRows sessions={g.current} />
+      {!g.current.length && <CardContent className="py-8 text-center text-sm text-muted-foreground">{tm(g.count == null ? "d.sessionUnknown" : g.partial ? "d.sessionsPartial" : "d.noSessions", { n: 0 })}</CardContent>}
     </Card>
-  );
+    {!!g.pending.length && <Card className="gap-0 pb-0">
+      <CardHeader className="border-b pb-4"><CardTitle className="font-display text-base">{tm("d.sessionsPending")} · {g.pending.length}</CardTitle><CardDescription>{tm("d.sessionsPendingHelp")}</CardDescription></CardHeader>
+      <MachineSessionRows sessions={g.pending} />
+    </Card>}
+    {!!g.history.length && <details className="rounded-xl border">
+      <summary className="cursor-pointer px-6 py-4 text-sm">{tm("d.sessionsHistory")} · {g.history.length}</summary>
+      <MachineSessionRows sessions={g.history} />
+    </details>}
+  </div>;
 }
 
-// ---- the two writes ------------------------------------------------------------
+function MachineSessionRows({ sessions }: { sessions: FleetSession[] }) {
+  if (!sessions.length) return null;
+  const dot: Record<string, string> = { working: "bg-ok", needs: "bg-warn", done: "bg-muted-foreground/50", idle: "bg-muted-foreground/50", unknown: "bg-muted-foreground/30" };
+  return <div className="max-h-96 overflow-y-auto"><Table>
+    <TableHeader><TableRow className="hover:bg-transparent">
+      <TableHead className="h-10 px-4">{tm("d.session")}</TableHead>
+      <TableHead className="h-10 px-4">{tm("d.state")}</TableHead>
+      <TableHead className="h-10 px-4">{tm("d.person")}</TableHead>
+      <TableHead className="h-10 px-4 text-right">{tm("d.started")}</TableHead>
+      <TableHead className="h-10 px-4 text-right">{tm("d.sessionObserved")}</TableHead>
+    </TableRow></TableHeader>
+    <TableBody>{sessions.map((s, i) => {
+      const w = s.worker || {};
+      const state = sessionState(w.state);
+      const born = Number(w.born) || 0;
+      const old = s.availability === "lost" || s.availability === "unknown" || s.availability === "historical";
+      return <TableRow key={`${s.fleet_id || ""}/${s.worker_id || w.key || i}`} className="hover:bg-transparent">
+        <TableCell className="px-4"><p className="font-mono text-xs font-medium">{w.key || w.name || "—"}</p><p className="max-w-md truncate text-xs text-muted-foreground">{w.title || w.name || w.repo || "—"}</p></TableCell>
+        <TableCell className="px-4"><span className="inline-flex items-center gap-2 text-sm"><span className={cn("size-2 rounded-full", old ? dot.unknown : dot[state])} />{old ? tm(s.availability === "lost" ? "d.sessionLost" : s.availability === "historical" ? "d.sessionsHistory" : "d.sessionUnknown") : tm(`sess.${state}` as MKey)}</span></TableCell>
+        <TableCell className="px-4 font-mono text-xs">{s.os_user || "—"}</TableCell>
+        <TableCell className="px-4 text-right font-mono text-xs text-muted-foreground tabular-nums">{born ? new Date(born * (born < 1e12 ? 1000 : 1)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</TableCell>
+        <TableCell className="px-4 text-right text-xs text-muted-foreground" title={s.observed_at ? new Date(s.observed_at).toLocaleString() : undefined}>{s.observed_at ? ago(s.observed_at) : "—"}</TableCell>
+      </TableRow>;
+    })}</TableBody>
+  </Table></div>;
+}
 
 function MaintButton({
   id,

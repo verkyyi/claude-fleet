@@ -51,6 +51,7 @@ func (s *Server) retireNode(ep *store.Endpoint, actor, reason string, now time.T
 	out := NodeRetireResponse{NodeRevokeResponse: NodeRevokeResponse{EndpointID: ep.ID, Label: ep.Label}}
 	// Identity first: the roster row it reads from is about to go.
 	out.Hostname, out.OSUser = s.nodeIdentity(ep)
+	hadRow := s.nodeRow(ep.ID) != nil
 	res, err := s.Store.RetireEndpointAs(ep.ID, actor, reason, now)
 	if err != nil {
 		return out, err
@@ -58,7 +59,7 @@ func (s *Server) retireNode(ep *store.Endpoint, actor, reason string, now time.T
 	out.Already, out.Passes = !res.Retired, res.Passes
 	out.Starts, out.Leases = res.Settled.Starts, len(res.Settled.Leases)
 	out.Relay, out.LinkClosed = s.revokeNodeRest(ep, now, true)
-	if s.nodeRow(ep.ID) != nil {
+	if hadRow {
 		if err := s.Store.DeleteNode(ep.ID); err != nil {
 			log.Printf("node %s: retire: drop roster row: %v", ep.ID, err)
 		} else {

@@ -64,6 +64,18 @@ func detailRig(t *testing.T) *harness {
 			Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(w)}}, now); err != nil {
 			t.Fatal(err)
 		}
+		// The node heartbeat carries both the count and rows in production.
+		node := h.srv.nodeRow("ep_" + l)
+		var hb control.Heartbeat
+		if err := json.Unmarshal([]byte(node.StatusJSON), &hb); err != nil {
+			t.Fatal(err)
+		}
+		hb.Sessions = 1
+		hb.Fleets = []control.Fleet{{FleetID: fid, Name: "fleet", Count: 1, Workers: w, State: "running"}}
+		raw, _ := json.Marshal(hb)
+		if err := h.srv.Store.NodeHeartbeat(node.EndpointID, node.Hostname, l, node.MachineID, control.Proto, string(raw), now); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return h
 }
