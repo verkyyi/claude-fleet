@@ -60,7 +60,7 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 func TestFleetUnderivedOnceAndAlert(t *testing.T) {
 	h := newFleetHarness(t)
 	buf, mu := quietCaptureLog(t)
-	ep := store.Endpoint{ID: "ep_mac", Hostname: "verkys-mac.local", OSUser: "verkyyi"}
+	ep := store.Endpoint{ID: "ep_mac", Hostname: "mac-x.local", OSUser: "frank"}
 	good := fakeFleet(t, machineA, "fleet", "", "")
 	bad := good
 	bad.FleetID = fakeFleet(t, machineB, "fleet", "", "").FleetID
@@ -74,7 +74,7 @@ func TestFleetUnderivedOnceAndAlert(t *testing.T) {
 	if n := strings.Count(out, "does not derive"); n != 1 {
 		t.Fatalf("logged %d times, want 1:\n%s", n, out)
 	}
-	if !strings.Contains(out, "verkyyi@verkys-mac") {
+	if !strings.Contains(out, "frank@mac-x") {
 		t.Fatalf("the line does not name the machine: %s", out)
 	}
 	subject := ep.ID + "/" + bad.FleetID
