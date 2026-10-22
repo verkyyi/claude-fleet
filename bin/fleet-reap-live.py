@@ -215,8 +215,14 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     tmux = ["tmux"] + (["-L", socket_name] if socket_name is not None else [])
     # A HOLD (issue #1244) is the operator's "keep this one" — e.g. a sleeper
     # parked on post-release verification. It retains any worker.
-    if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_hold}").strip() == "1":
+    hold = read(*tmux, "display-message", "-p", "-t", target,
+                "#{@reap_hold}\t#{@reap_report_pending}\t#{@fleet_id}").rstrip("\n").split("\t")
+    if hold[0] == "1":
         return "retained:hold"
+    from fleet_reap_policy import report_hold
+    if len(hold) == 3 and report_hold(hold[2], hold[1]):
+        return "retained:report"
+
     # A pending LOOP (issue #1331) — the agent scheduled its own next round
     # (ScheduleWakeup / CronCreate → @loop) or a fleet-loop.py ledger holds one.
     # The window is idle between rounds, not finished: reaping it would take the
@@ -226,18 +232,10 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
                "#{@loop}\t#{@handoff_manifest}").rstrip("\n")
     value, _, manifest = raw.partition("\t")
     if (value or manifest) and LOOPMARK["status"](value, manifest)[0] == "active":
-        if not bg_over:
-            return "retained:loop"
-        if waived is not None:
-            waived.append("loop")
+        return "retained:loop"
+    # `bg_over` remains accepted for launchers from older installs. A terminal
+    # report and elapsed grace never waive real work (C6 / T965).
     why = waiting(target, socket_name)
-    # Work over past its background grace (E101, --bg-over — the idle reaper's
-    # word): a pending round or a Bash-tool job no longer holds it; a sub-task
-    # still open or a fleet tool call in flight still does.
-    if why == "bg" and bg_over:
-        if waived is not None:
-            waived.append("bg")
-        why = ""
     # A worker whose PR merged (merged_at, the merged gate's own probe) has shipped:
     # a sub-task it spawned and that is still open — a repro session left at its
     # prompt — does not keep it (issue #4822). The child stays; its reports climb
@@ -333,7 +331,7 @@ def main():
                         help="print the state a reaper judges the target by (issue #2540) and exit 0")
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
     parser.add_argument("--bg-over", action="store_true",
-                        help="its work is over past its background grace (E101): a pending loop / bg job no longer holds it")
+                        help="compatibility flag; real background work and loops remain protected")
     args = parser.parse_args()
     raw = os.environ.get("FLEET_REAP_MIN_AGE", str(DEFAULT_MIN_AGE))
     minimum = int(raw) if re.fullmatch(r"\d+", raw) else DEFAULT_MIN_AGE

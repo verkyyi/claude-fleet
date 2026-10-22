@@ -88,7 +88,7 @@ PARK_IDLE_MIN = 60
 
 # The park gate owns eligibility; the reaper only carries its refusal to the
 # same explanation line. In particular, a background PARK hold has no close
-# countdown (the existing `bg:<epoch>` is a different, completed-work policy).
+# countdown (`bg:<epoch>` is still readable for notices from older installs).
 PARK_HOLDS = {"watched": "watched", "draft": "draft", "typing": "draft",
               "bg": "park-bg", "asking": "asking", "old_wrapper": "old-wrapper"}
 
@@ -174,7 +174,9 @@ def explain(snap, now=None):
     row = ORIGINS[origin]
     reap = row["reap"] if uses_park_retention(snap) or not snap.get("@reap_policy") else snap["@reap_policy"]
     prefix = "origin=%s park=%s reap=%s" % (origin, row["park"], reap)
-    why = snap.get("@reap_why") or "pending-check"
+    why = report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")) or snap.get("@reap_why") or "pending-check"
+    if why in ("report-pending", "report-unknown"):
+        return prefix + " next=after-report-saved why=" + why
     if snap.get("@parked") and snap.get("@park_held"):
         due = parked_deadline(snap)
         if due is not None:
@@ -406,11 +408,110 @@ def idle_owned(policy, now=None):
     return False
 
 
+def report_path(fid):
+    """Read-only path; policy parsing/doctor need no node runtime imports."""
+    import os
+    from pathlib import Path
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+        return None
+    conf = Path(os.environ.get("FLEET_CONF_DIR") or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "claude-fleet")
+    return Path(os.environ.get("FLEET_GATE_DIR") or conf / "session-gate") / fid / "report.json"
+
+
+def report_proof(fid):
+    """Local completion evidence, beside the existing identity gate's receipts.
+
+    A missing record is a legacy session. Unreadable evidence always holds it.
+    This is not a parked state, nor a second delivery queue.
+    """
+    import json
+    path = report_path(fid)
+    if path is None:
+        return {}
+    try:
+        rec = json.loads(path.read_text())
+        if not isinstance(rec, dict):
+            return {"phase": "unknown"}
+        if rec.get("phase") == "complete" and (
+                report_path(str(rec.get("token", ""))) is None
+                or not isinstance(rec.get("result_seq"), int) or rec["result_seq"] < 1):
+            return {"phase": "unknown"}
+        return rec
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return {"phase": "unknown"}
+
+
+def report_hold(fid, pending=""):
+    phase = report_proof(fid).get("phase", "")
+    if pending or phase == "pending":
+        return "report-pending"
+    return "report-unknown" if phase not in ("", "complete") else ""
+
+
+def write_report_proof(fid, proof):
+    import os
+    from fleet_session_gate import fid_dir, write_json
+    folder = fid_dir(fid)
+    write_json(folder / "report.json", proof)
+    fd = os.open(str(folder), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def report_begin(fid, task):
+    import uuid
+    from fleet_session_gate import lock
+    token = str(uuid.uuid4())
+    with lock(fid):
+        write_report_proof(fid, dict(phase="pending", token=token, task=task, at=time.time()))
+    return token
+
+
+def report_finish(fid, token, state, summary, agent, pr):
+    """Publish completion only after the caller saved the required report.
+
+    rc 3 (durably queued) is as reliable as rc 0. A failed write leaves the
+    pending proof intact, including when an older result or task was terminal.
+    """
+    from fleet_session_gate import lock
+    import fleet_id
+    with lock(fid):
+        proof = report_proof(fid)
+        if proof.get("phase") != "pending" or proof.get("token") != token:
+            return False
+        ev = dict(ev="result", state=state, summary=summary, agent=agent)
+        if pr:
+            ev["pr"] = pr
+        got = fleet_id.append(fid, ev)
+        proof.update(phase="complete", result_seq=got["seq"])
+        write_report_proof(fid, proof)
+    fleet_id.push_later(fid)
+    return True
+
+
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(__doc__)
         return 2
     cmd, args = argv[1], argv[2:]
+    if cmd in ("report-begin", "report-finish", "report-ready"):
+        if not args or report_path(args[0]) is None:
+            return 2
+        try:
+            if cmd == "report-begin" and len(args) == 2:
+                print(report_begin(*args))
+                return 0
+            if cmd == "report-finish" and len(args) == 6:
+                return 0 if report_finish(*args) else 1
+            if cmd == "report-ready":
+                return 1 if report_hold(args[0]) else 0
+        except (OSError, ValueError):
+            return 1
+        return 2
     if cmd == "norm":
         out = norm(args[0] if args else "")
         if out is None:

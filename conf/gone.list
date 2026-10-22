@@ -234,3 +234,6 @@ key FLEET_REAP_PARK_SECS T952
 key FLEET_TASK_PARK_CMD T952
 # Looking at a parked window must not wake its agent (G1YC C2).
 re --why\s+切换 T948 bin/fleet-session-wrap.sh
+
+# C6 / T965: a terminal result never expires real background work protection.
+key FLEET_REAP_BG_GRACE T952

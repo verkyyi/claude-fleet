@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
-# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_only_its_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
+# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_past_old_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
 # selftest-part: 6 ParkTable.test_finished_probe_keeps_its_one_minute_policy PolicyGrammar.test_origin_table_and_the_policy_in_force RoundTrip.test_real_close_and_restore
 # selftest-part: 7 PinIsOrder.test_dry_run_migrates_nothing ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
 # selftest-part: 8 ParkTable.test_activity_and_keep_hold_expiration RoundTrip.test_codex_unknown_or_active_native_turn_is_kept TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
@@ -1305,8 +1305,7 @@ class TaskSession(Rig):
 
 
 class HoldsAndWhy(TaskSession):
-    """E101: a finished task's background job holds its window only
-    FLEET_REAP_BG_GRACE past its last turn; a session waiting on its person is
+    """C6 / T965: real background work always holds its window; a session waiting on its person is
     parked by the common gate and reaped after three days with resumable history;
     a window its agent's error stopped is never closed; and every window the pass
     leaves open carries why (@reap_why), cleared once it is working."""
@@ -1332,8 +1331,8 @@ class HoldsAndWhy(TaskSession):
     def why(self):
         return self.tm("display-message", "-p", "-t", self.win, "#{@reap_why}").strip()
 
-    def test_a_background_job_holds_a_done_task_only_its_grace(self):
-        """Y794: a preview server kept a closed task's window 12 hours."""
+    def test_a_background_job_holds_a_done_task_past_old_grace(self):
+        """A closed task does not authorize dropping its pending work."""
         self.answer.write_text("0\n")
         self.set("@loop", "kind=wakeup next=%d ttl=600" % (int(time.time()) + 6000))   # its job still pending
         self.set("@claude_state_ts", str(int(time.time()) - 1000))
@@ -1341,16 +1340,16 @@ class HoldsAndWhy(TaskSession):
         self.assertIn("skip:bg-job " + self.win, out)
         self.assertNotIn("reaped", out)
         self.assertTrue(self.exists())
-        self.assertRegex(self.why(), r"^bg:\d+$")
-        self.assertAlmostEqual(int(self.why()[3:]), int(time.time()) - 1000 + 1800, delta=60)
+        self.assertEqual(self.why(), "bg")
         self.answer.write_text("1\n")                    # work not over: the job holds it, as before
         self.set("@claude_state_ts", str(int(time.time()) - 4000))
         self.assertNotIn("reaped", self.due())
         self.assertEqual(self.why(), "task-open")
-        self.answer.write_text("0\n")                    # over, 30 min past its turn: closed, job and all
+        self.answer.write_text("0\n")                    # a terminal task never overrides real pending work
         out = self.due()
-        self.assertIn("reaped-task:" + self.win + " T42 bg-over", out)
-        self.assertFalse(self.exists())
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
+        self.assertEqual(self.why(), "bg")
         self.assertTrue(self.wt.is_dir())
 
     def test_every_open_window_says_why_and_a_working_one_nothing(self):

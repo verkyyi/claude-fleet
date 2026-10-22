@@ -7305,12 +7305,22 @@ w = os.environ.get("FLEET_WORKER_ASSERT", "").strip()
 if w:
     r["worker"] = w
 print(json.dumps(r, ensure_ascii=False, separators=(",", ":")))
+sys.stdout.flush()
+os.fsync(sys.stdout.fileno())
 PY
   then rm -f "$tmp"; return 1; fi
   # The name sorts oldest-first (the agent sends in name order); the suffix keeps
   # two relays of one second apart.
   f="$d/$(date -u +%Y%m%dT%H%M%SZ)-$$-${tmp##*.}.json"
   mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  python3 - "$d" <<'PYSYNC' || return 1
+import os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PYSYNC
   printf '%s' "$f"
 }
 
@@ -9575,6 +9585,9 @@ fleet_cfg_restart_why() {
 # (fleet_task_closed rc 0); else rc 1 — open, unknown or nothing to ask.
 fleet_cfg_work_over() {
   local t="${1:-}" f="${2:-}" w
+  if fleet_is_fid "$f"; then
+    python3 "$_FLEET_LIB_DIR/fleet_reap_policy.py" report-ready "$f" || return 1
+  fi
   if fleet_is_fid "$f" && [ -f "${FLEET_ID_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids}/$f.ndjson" ]; then
     w=$(env -u FLEET_ID_LIVE python3 "$_FLEET_LIB_DIR/fleet_id.py" status "$f" 2>/dev/null \
           | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' 2>/dev/null)
