@@ -58,7 +58,7 @@ def root():
 
 
 def shared_file(path):
-    fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644)
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise OSError('wake slot is not a regular file')
@@ -152,7 +152,7 @@ def run(meta_path, cmd):
         lease = acquire(meta_path, meta)
         if lease is None:
             return 75
-        Path(str(seed) + '.admitted').write_text(str(time.time()))
+        gate.write_json(str(seed) + '.admitted', dict(at=time.time()))
         # Inherit the lease into the launch: SIGKILL of this guard must not
         # free capacity while its child is still starting. LOCK_UN on the shared
         # open description releases both copies only after native readiness.

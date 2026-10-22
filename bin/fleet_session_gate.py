@@ -631,7 +631,7 @@ def wake_try(r, w):
         # New wrappers queue for at most 60s BEFORE the native start deadline.
         admitted = Path(str(seed) + '.admitted')
         if admitted.exists():
-            age = now() - float(admitted.read_text())
+            age = now() - (read_json(admitted) or {}).get('at', now())
         else:
             age = now() - r.get('wake_at', now()) - (60 if (read_json(str(seed) + '.meta') or {}).get('guarded') else 0)
         if age <= wake_secs:
