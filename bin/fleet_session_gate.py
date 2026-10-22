@@ -846,13 +846,6 @@ def park_locked(fid, why, force):
     proof = park_proof(w)
     if not proof.get("ok"):
         return dict(ok=False, why=proof.get("why") or proof.get("error") or "not_idle")
-    # Recheck after the native proof: a client / queued turn may have arrived.
-    current = window(fid)
-    if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
-            or current["state"] in ("working", "needs", "exited") or watched(current)):
-        return dict(ok=False, why="changed")
-    if park_dialog(current):
-        return dict(ok=False, why="asking")
     # Save physical rows with their SGR colours BEFORE /exit tears down the UI.
     # Refuse if capture failed: a blank holding page cannot preserve the screen.
     screen = tmux(w["sock"], "capture-pane", "-p", "-e", "-t", w["pane"])
@@ -873,6 +866,15 @@ def park_locked(fid, why, force):
     started = time.monotonic()
     since = str(int(now()))
     saved_mb = park_saved_mb(w)
+    # Snapshot, timer export and RSS sampling can take time. Recheck AFTER all
+    # of them, before marking parked or sending exit: a question/turn may have
+    # appeared since the native proof. Export alone has not handed off timers.
+    current = window(fid)
+    if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
+            or current["state"] in ("working", "needs", "exited") or watched(current)):
+        return dict(ok=False, why="changed")
+    if park_dialog(current):
+        return dict(ok=False, why="asking")
     # Do not retain the previous park's RSS when this sample is unavailable.
     if saved_mb is None:
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_saved_mb")

@@ -339,6 +339,22 @@ class client:
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
 
+    def test_dialog_appears_during_timer_export(self):
+        import fleet_park_wake
+        self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        transcript = self.root / 'question.jsonl'
+        with patch.dict(os.environ, self.env), \
+                patch.object(gate, 'claude_transcript', return_value=transcript), \
+                patch.object(gate, 'relay_request', return_value={'ok': True, 'generation': 1}) as relay, \
+                patch.object(fleet_park_wake, 'export', side_effect=lambda fid: self.dialog_transcript()):
+            result = gate.park(self.fid, why='memory')
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(any(c.args[1]['op'] == 'exit' for c in relay.call_args_list),
+                         '/exit reached a question opened while exporting timers')
+        self.assertFalse(self.opt('@parked'))
+        self.assertTrue(self.opt('@park_relay'))
+
     def test_local_child_report_wakes_parent(self):
         # fleet-report-parent.sh must reach the gate before its missing-PID
         # fallback. This drives the report producer, not only queue replay.
