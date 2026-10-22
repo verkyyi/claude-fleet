@@ -12,12 +12,16 @@ mkdir -p "$WORK/bin" "$WORK/conf/fleets/census/repos" "$WORK/conf/logs" "$WORK/f
 # The adapter sources its real libraries; only the observation commands are fake.
 cat > "$WORK/fake/tmux" <<'SH'
 #!/bin/sh
+fixture_dir=$(dirname "$0")
+control=1; state=停放中
+[ ! -f "$fixture_dir/control" ] || control=$(cat "$fixture_dir/control")
+[ ! -f "$fixture_dir/state" ] || state=$(cat "$fixture_dir/state")
 case "$*" in
   *has-session*) exit 0 ;;
-  *list-clients*) exit 0 ;;
+  *list-clients*) printf '%s\037@2\n' "$control" ;;
   *list-windows*)
     case "$*" in
-      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "${PARK_TEST_STATE-停放中}";;
+      *park_state*) printf '@1\037100\037worker\037one\037\037\0371\037\037fid1\n@2\037200\037worker\037two\037\037\0371\037\037fid2\n@3\037300\037worker\037three\037%s\0379999\0371\037\037fid3\n' "$state";;
       *ctx_left*) printf '@1\t=\t=\t=\t=\t=\t=\t=\n@2\t=\t=\t=\t=\t=\t=\t=\n@3\t=\t=\t=\t=\t=\t=\t=\n';;
       *pane_current_path*) printf '@1\t/tmp/scratch-1\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@2\t/tmp/scratch-2\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n@3\t/tmp/scratch-3\t\tclaude\t\t1\tkeep\t\t\t\t\t\t\t\t\n';;
       *cc_agent*loop*) exit 0 ;;
@@ -87,10 +91,15 @@ q=ctl.workers(fleet)['park_metrics']
 assert q['sessions_idle'] == q['idle_eligible'] == 1 and q['idle_rss_mb'] == q['idle_eligible_rss_mb'] == 201, q
 assert q['sessions_working'] == 1 and q['sessions_parked'] == 1, q
 assert ctl.workers(fleet)['park_metrics'] == q
+# A collector's control client is not a viewer; an attached human is.
+(w/'fake/control').write_text('0')
+viewed = ctl.workers(fleet)['park_metrics']
+assert (viewed['sessions_idle'], viewed['sessions_working'], viewed['idle_rss_mb']) == (0,2,0), viewed
+(w/'fake/control').unlink()
 # Before C1 stamps @park_state, even a saved RSS value never invents parking.
-os.environ['PARK_TEST_STATE'] = ''
+(w/'fake/state').write_text('')
 assert ctl.workers(fleet)['park_metrics']['sessions_parked'] == 0
-os.environ.pop('PARK_TEST_STATE')
+(w/'fake/state').unlink()
 book = w/'conf/logs/park.ndjson'
 book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T12:00:00Z','fid':'fid3','act':'park','rss_mb':2048},

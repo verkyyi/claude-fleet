@@ -1,8 +1,8 @@
 import * as React from "react";
 
 export type ParkReading = {
-  sessions_working?: number;
-  sessions_idle?: number;
+  sessions_working?: number | null;
+  sessions_idle?: number | null;
   sessions_parked?: number;
   idle_rss_mb?: number | null;
   parked_saved_mb?: number | null;

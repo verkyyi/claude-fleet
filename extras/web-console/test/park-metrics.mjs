@@ -15,6 +15,7 @@ const draw = (reading, lang = 'zh') => renderToStaticMarkup(React.createElement(
 const r = { sessions_working: 7, sessions_idle: 0, sessions_parked: 4, parked_saved_mb: 5939.2, idle_rss_mb: 0 };
 assert.equal(draw({}), ''); // Old node stays quiet.
 assert.equal(draw({ sessions_working: 7 }), ''); // Partial report is unknown.
+assert.equal(draw({ ...r, sessions_idle: null, sessions_working: null }), ''); // Full CPU sample pending.
 const zh = draw(r);
 for (const text of ['会话 11 个 · 在算 7', '已停放 4 · 省 5.8 GB', '空闲常驻 0']) assert.ok(zh.includes(text), text);
 const en = draw(r, 'en');
