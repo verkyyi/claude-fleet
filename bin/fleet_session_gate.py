@@ -91,6 +91,7 @@ ACCEPT_GRACE = 3.0         # the mod's ACCEPT_GRACE_S
 ACCEPT_POLL = 2.0          # the inbox poll (INBOX_MS) and one tmux round
 RECEIPT_PREFIX = "fleet idle-accept receipt delivery_id="
 CODEX_MIN = (0, 162)
+CODEX_RECEIPT_GRACE = 20.0  # native UI may consume a queue entry before its turn is readable
 CODEX_NOT_IDLE = "thread already has an active or pending turn"
 TEXT_MAX = 65536
 IMAGES_MAX = 4
@@ -497,13 +498,24 @@ def codex_try(r, w):
         if v is None or v[:2] < CODEX_MIN:
             return "returned", "old_version"
         if r.get("state") in ("trying", "native"):
-            if codex_receipt(client, sid, r["delivery"]):
+            receipt = codex_receipt(client, sid, r["delivery"])
+            if receipt:
                 return "sent", "receipt"
             qid = codex_queued(client, sid, r["delivery"])
             if qid is not None:
+                if r.pop("codex_receipt_pending_since", None) is not None:
+                    save(r)
                 return start_queued(client, sid, qid, r)
             if r.get("state") == "native":
-                return "returned", "dropped"   # gone from Codex's queue, never run
+                # The native client can take the queue entry between these two
+                # reads, before thread/turns/list exposes its clientId. Absence
+                # alone does not prove it was dropped. Observe the same delivery
+                # for a bounded interval; never add an uncertain one again.
+                missing_since = r.setdefault("codex_receipt_pending_since", now())
+                if receipt is False and now() - missing_since >= CODEX_RECEIPT_GRACE:
+                    return "returned", "dropped"
+                save(r)
+                return "native", "busy"
         r.update(state="trying", tries=r.get("tries", 0) + 1, method="thread/queue", last=now(), sid=r.get("sid") or sid)
         save(r)
         try:

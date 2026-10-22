@@ -6743,6 +6743,14 @@ drill_codex_release_shadowed() {
   WHAT="发行树的固定 Codex 优先于 PATH 前面的旧版；tmux 保护 shim 保持首位，direct webchat 同样选发行版"
 }
 
+drill_codex_receipt_race() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" O P 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="Codex 取走队列后延迟写回收据：仍等待原 delivery，晚到收据成功；真正消失有界退回，绝不重加"
+}
+
 drill_codex_pin_displaces_guard() {
   CAP=30; SECS=0
   suite_holds fleet-codex-selftest.sh 'F4 managed release Codex wins over a stale CLI earlier on PATH' || return 1

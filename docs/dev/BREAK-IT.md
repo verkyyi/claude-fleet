@@ -17,6 +17,7 @@
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | 托管发行树已带新版 Codex，但 PATH 前面的 Homebrew/npm 仍是旧版（T944） | 网页新建首条可发，私有 app-server 却是旧版；后续输入被会话门判 old_version 拒绝 | Codex 启动器优先发行树的 tools/bin，私有服务与终端客户端使用同一固定版本，tmux 保护 shim 仍在首位；没有发行工具的普通安装沿用 PATH | `codex-release-shadowed` |
 | Codex 发行工具目录前置遮蔽 tmux-shim（T944） | agent 子进程可绕过 tmux 保护入口 | 发行版 Codex 优先时仍保持 tmux-shim 在 PATH 首位；直接 webchat 同样选发行版 | `codex-pin-displaces-guard` |
+| Codex 已取走排队消息，回合收据稍后才可见（T944） | 已经答复却误示没送到，引导用户重发 | 收据等待有界宽限期；只观察原 delivery，不重复加入；确实消失后才退回 | `codex-receipt-race` |
 | 网页新会话进入时会话门尚未探测完成（T944） | 首条能发，进入后却显示终端只读，不能继续输入 | 未知权限单独显示连接中，保留输入草稿；仅会话门明确允许才启用发送，旧版本与只读票据仍不可写 | `chat-gate-cold-readonly` |
 |---|---|---|---|
 | 存量 worker 的自动报告仍唤醒历史 parent，监督目标离线又升级到人（T946） | 接管失效、额度耗尽的旧会话被重新唤醒 | 显式身份作用域的审计委托只改 delivery；固定原来源、目标与授权链，既有队列恢复投递，routine 不因超时升级 | `report-delegation-offline` |
