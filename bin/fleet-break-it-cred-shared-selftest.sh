@@ -521,6 +521,20 @@ PY
 drill_cred_upstream_unseen() {
   CAP=20   # 3 resets + 1 hang (the proxy's 1 s timeout) + 2 × 529 + 32 ok, then the readers
   cred_rig up trusted reachable || return 1
+  # Deterministic minute rollover: the small archive's FIRST line is whole,
+  # not a truncated tail. It must still contribute the three resets.
+  python3 - "$BIN" "$CD/small-stats" <<'PYTEST' || { WHY='the banner dropped a complete first minute'; return 1; }
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import fleet_upstream_stats as stats
+root = Path(sys.argv[2]); root.mkdir()
+os.environ['FLEET_UPSTREAM_STATS_DIR'] = str(root)
+(root / stats.FILE).write_text(json.dumps(dict(m=60, n=3, c={'reset':3})) + '\n')
+(root / stats.NOW).write_text(json.dumps(dict(m=120, n=5, c={'timeout':1, '529':2, 'ok':2})))
+assert stats.banner(now=125) == ('reset', 3), stats.banner(now=125)
+print('PASS small archive keeps the complete first minute across rollover')
+PYTEST
   up_fake "$CD" || { WHY="the fake upstream did not start: $(tail -2 "$CD/up.err" | tr '\n' ' ')"; return 1; }
   local up tok t0 m c js us="$CD/cred-proxy"
   up="http://127.0.0.1:$(cat "$CD/up.port")"
