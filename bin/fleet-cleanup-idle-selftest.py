@@ -2160,6 +2160,36 @@ class StuckReaps(unittest.TestCase):
             notice(tm, "@1", "merged:9:abc", 0, 600)
 
 
+
+class ParkTable(unittest.TestCase):
+    """C6: drive fleet-cleanup-idle.py and fleet_reap_policy.py for every origin.
+    The E101 real tmux/history round trip below proves the close is resumable.
+    """
+    def test_each_origin_has_a_park_and_reap_column(self):
+        rp = idle.fleet_reap_policy
+        for origin, reap in (("person", "parked"), ("dispatched", "reported"),
+                             ("member", "reported"), ("driver", "batch"),
+                             ("orchestrator", "never"), ("decide", "parked"),
+                             ("probe", "done"), ("web", "never")):
+            with self.subTest(origin=origin):
+                self.assertEqual(rp.ORIGINS[origin]["park"], "idle")
+                self.assertEqual(rp.ORIGINS[origin]["reap"], reap)
+
+    def test_park_expiry_and_doctor_share_the_deadline(self):
+        rp = idle.fleet_reap_policy
+        snap = {"@reap_origin": "person", "@park_wrap_ver": "1", "@parked": "100",
+                "@park_held": "1", "@park_since": "100", "@claude_state_ts": "90"}
+        with patch.dict(os.environ, {"FLEET_SESSION_REAP_PARKED": "3d"}):
+            self.assertEqual(rp.parked_deadline(snap), 259300)
+            self.assertIn("1970-01-04T00:01:40Z", rp.explain(snap, now=200))
+            snap["@reap_origin"] = "orchestrator"
+            self.assertIsNone(rp.parked_deadline(snap))
+            self.assertIn("keep", rp.explain(snap, now=200))
+            snap["@reap_origin"] = "person"
+            snap["@park_held"] = ""
+            self.assertIsNone(rp.parked_deadline(snap))
+
+
 if __name__ == "__main__":
     import selftest_part
     # Parts 1–3 (every case its own rig: a git repo, a tmux server, ~0.6 s of
