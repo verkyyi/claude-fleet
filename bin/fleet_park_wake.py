@@ -10,6 +10,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,24 @@ import fleet_loop_mark as mark
 import fleet_session_gate as gate
 import fleet_transfer_durable as durable
 from fleet_agent_adapter import ADAPTERS
+
+
+def loop_module():
+    spec = importlib.util.spec_from_file_location('park_loop', Path(__file__).with_name('fleet-loop.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def ledger_due(record):
+    """The existing ledger remains the schedule's only writer, including defer
+    and stop from the resumed agent. The contract is only its delivery owner."""
+    if not record.get('ledger'):
+        return record.get('next', 0)
+    r = durable.read(record['ledger'])
+    if not r or r.get('park_fid') != record['fid'] or r.get('status') not in ('active', 'waiting-quota'):
+        return 0
+    return r['schedule'].get('next_run_at') or 0
 
 
 def path_for(fid):
@@ -43,7 +62,8 @@ def locked(fid):
 
 
 def save(path, record):
-    record['next'] = min((j['next'] for j in record['jobs'] if j['next'] is not None), default=0)
+    record['next'] = ledger_due(record) if record.get('ledger') else min(
+        (j['next'] for j in record['jobs'] if j['next'] is not None), default=0)
     durable.atomic(path, record)
 
 
@@ -68,7 +88,10 @@ def native_jobs(w, at):
     exact prompts. Read the whole conversation: a long-lived cron can be older
     than the Stop hook's bounded tail. Never export a subagent or failed call.
     """
-    value = mark.prune(mark.parse(w['loop']), at)
+    value = mark.parse(w['loop'])
+    if w['loop'] and not (value['next'] or value['ids'] or value.get('park')):
+        raise ValueError('unrecognized native timer mark')
+    value = mark.prune(value, at)
     transcript = gate.claude_transcript(w['sid'])
     if transcript is None:
         if value['next'] or value['ids']:
@@ -117,8 +140,29 @@ def export(fid):
     w = gate.window(fid)
     if not w or not w['sid']:
         raise ValueError('no exact conversation to export')
+    manifest = (gate.tmux(w['sock'], 'display-message', '-p', '-t', w['win'], '#{@handoff_manifest}') or '').strip()
+    ledger = Path(manifest).parent / 'loop/state.json' if manifest else None
+    if ledger and ledger.exists():
+        loop = loop_module()
+        with locked(fid) as path, loop.locked(ledger) as source:
+            if source.get('status') == 'delivering':
+                raise ValueError('loop delivery is unsettled')
+            if source.get('status') in ('active', 'waiting-quota'):
+                if (source.get('thread_id') != w['sid'] or source.get('agent', 'codex') != w['agent']
+                        or source.get('manifest') != manifest):
+                    raise ValueError('loop ledger belongs to another conversation')
+                prior = durable.read(path)
+                if prior and prior['sid'] != w['sid']:
+                    raise ValueError('timer contract belongs to another conversation')
+                r = prior or dict(v=1, fid=fid, sid=w['sid'], agent=w['agent'], jobs=[])
+                r['previous'] = dict(prior) if prior else None
+                r.update(ledger=str(ledger), phase='prepared', parked=True, next=source['schedule']['next_run_at'])
+                durable.atomic(path, r)  # inert contract first, then stop the old dispatcher
+                source['park_fid'] = fid
+                loop.save(ledger, source)
+                return dict(ok=True, ledger=str(ledger))
     if ADAPTERS[w['agent']]['native_cron'] != '1':
-        return dict(ok=True, jobs=0)  # Fleet's existing loop owns this agent's schedule.
+        return dict(ok=True, jobs=0)
     at = time.time()
     incoming, transcript = native_jobs(w, at)
     home = Path(os.environ.get('FLEET_WAKE_NATIVE_HOME') or Path.home())
@@ -190,6 +234,11 @@ def abort(fid):
             save(path, r['previous'])
         else:
             path.unlink()
+        if r.get('ledger') and not r.get('previous'):
+            loop = loop_module()
+            with loop.locked(Path(r['ledger'])) as source:
+                source.pop('park_fid', None)
+                loop.save(Path(r['ledger']), source)
         if r.get('durable'):
             durable.abort(fid, 'park exit refused')
 
@@ -242,7 +291,7 @@ def exit_confirmation(fid, screen):
 
 def restore(fid, sid, owned=False):
     r = durable.read(path_for(fid))
-    return bool(r and r['sid'] == sid and (owned or r.get('parked')) and r.get('next'))
+    return bool(r and r['sid'] == sid and (owned or r.get('parked')) and ledger_due(r))
 
 
 def tick(fid, at=None):
@@ -251,10 +300,17 @@ def tick(fid, at=None):
     if not w:
         return  # restore owns the missing window, identity and worktree.
     prepared = durable.read(path_for(fid))
-    if prepared and prepared.get('phase') == 'prepared' and w['parked'] and not w.get('relay'):
-        held = gate.tmux(w['sock'], 'display-message', '-p', '-t', w['win'], '#{@park_held}')
-        if held and held.strip():
-            activate(fid)  # parker died after exit, before its held acknowledgement
+    if prepared and prepared.get('phase') == 'prepared':
+        with gate.lock(fid):  # a live parker finishes first; never undo its export
+            w = gate.window(fid)
+            if not w:
+                return
+            if not w['parked']:
+                abort(fid)  # parker died before requesting exit; old owner continues
+            elif not w.get('relay'):
+                held = gate.tmux(w['sock'], 'display-message', '-p', '-t', w['win'], '#{@park_held}')
+                if held and held.strip():
+                    activate(fid)  # died after exit, before held acknowledgement
     with locked(fid) as path:
         r = durable.read(path)
         if not r or r['sid'] != w['sid'] or r['agent'] != w['agent']:
@@ -262,6 +318,20 @@ def tick(fid, at=None):
         if r.get('phase') != 'active':
             return  # An exit refused by the native engine never enables timers.
         pending = r.get('pending')
+        ledger = Path(r['ledger']) if r.get('ledger') else None
+        if ledger:
+            loop = loop_module()
+            with loop.locked(ledger) as source:
+                next_at = ledger_due(r)
+                if not pending and (not next_at or next_at > at or not loop.durable_ready(source, at)):
+                    return
+                if not pending:
+                    due_ids = [j['id'] for j in fleet_cron.pending(source['schedule'], at)] if 'jobs' in source['schedule'] else []
+                    pending = dict(delivery=str(uuid.uuid5(uuid.UUID(fid), 'ledger:' + str(next_at))),
+                                   next=next_at, prompt=loop.wakeup_prompt(source['schedule'], at), rounds=[],
+                                   ledger_due=next_at, due_ids=due_ids)
+                    r['pending'] = pending
+                    durable.atomic(path, r)
         due = [j for j in r['jobs'] if j['next'] is not None and j['next'] <= at]
         if not pending and not due:
             return
@@ -295,6 +365,20 @@ def tick(fid, at=None):
         r = durable.read(path)
         if not r or r.get('pending', {}).get('delivery') != pending['delivery']:
             return
+        if r.get('ledger'):
+            loop = loop_module()
+            with loop.locked(Path(r['ledger'])) as source:
+                # defer/stop may have run in the accepted turn already. Never
+                # overwrite the owner's newer cadence with our acknowledgement.
+                if (source['schedule'].get('next_run_at') == pending['ledger_due']
+                        and source.get('status') in ('active', 'waiting-quota')):
+                    loop.delivered(source, at, pending['due_ids'], pending['delivery'], 'Park gate accepted the original prompt')
+                    loop.save(Path(r['ledger']), source)
+            r.pop('pending', None)
+            r['parked'] = False
+            r['next'] = ledger_due(r)
+            durable.atomic(path, r)
+            return
         rounds = dict(pending['rounds'])
         for job in r['jobs']:
             if job['id'] in rounds and job['next'] == rounds[job['id']]:
@@ -326,14 +410,22 @@ def main():
             with locked(a.fid) as path:
                 r = durable.read(path)
                 if r:
+                    if r.get('ledger'):
+                        raise ValueError('use fleet-loop.py stop in the owning session for this ledger')
                     for job in r['jobs']:
                         if a.job is None or job['id'] == a.job:
                             job['next'] = None
                     save(path, r)
         else:
             paths = [path_for(a.fid)] if a.fid else sorted((gate.conf_dir() / 'wake').glob('*.json'))
+            failed = False
             for path in paths:
-                tick(path.stem, a.now)
+                try:
+                    tick(path.stem, a.now)
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    print('park wake ' + path.stem + ': ' + str(error), file=sys.stderr)
+                    failed = True
+            return int(failed)
         return 0
     except (OSError, ValueError, KeyError, TypeError) as error:
         print('park wake: ' + str(error), file=sys.stderr)

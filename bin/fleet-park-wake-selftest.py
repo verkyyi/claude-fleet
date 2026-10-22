@@ -189,6 +189,39 @@ class Timers(fixture.Park):
                             screen.replace('* * * * *', '*/5 * * * *'), screen + 'normal prompt\n'):
                 self.assertFalse(wake.exit_confirmation(self.fid, altered))
 
+    def test_existing_loop_ledger_keeps_one_dispatcher_and_owner_commands(self):
+        self.setup_timer()
+        self.set('@loop', '')
+        manifest = self.root / 'transfer/manifest.json'
+        ledger = manifest.parent / 'loop/state.json'
+        ledger.parent.mkdir(parents=True)
+        manifest.write_text('{}')
+        self.set('@handoff_manifest', str(manifest))
+        ledger.write_text(json.dumps(dict(id='loop-1', status='active', thread_id=self.sid,
+                          agent='claude', manifest=str(manifest), schedule=dict(prompt=self.prompt,
+                          interval_seconds=60, next_run_at=self.due))))
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(fixture.gate.park(self.fid).get('ok'))
+            import fleet_park_wake as wake
+            # The old dispatcher sees its ownership moved and does no native I/O.
+            wake.loop_module().dispatch(ledger, now=self.due)
+        self.assertEqual(json.loads(ledger.read_text())['park_fid'], self.fid)
+        self.tick(self.due)
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertEqual((self.root / 'launch-args').read_text().count(self.prompt), 1)
+        record = json.loads(ledger.read_text())
+        self.assertEqual(record['deliveries'], 1)
+        self.assertEqual(record['schedule']['next_run_at'], self.due + 60)
+        env = dict(self.env, FLEET_LOOP_RECORD=str(ledger), TMUX=self.opt('socket_path') + ',0,0',
+                   TMUX_PANE=self.opt('pane_id'))
+        for args in (['defer', '--seconds', '120'], ['stop']):
+            p = subprocess.run([sys.executable, str(BIN / 'fleet-loop.py'), *args],
+                               env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        import fleet_loop_mark as mark
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(mark.status(self.opt('@loop'))[0], 'none')
+
 
 if __name__ == '__main__':
     names = sys.argv[1:] or [n for n in Timers.__dict__ if n.startswith('test_')]

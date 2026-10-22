@@ -493,6 +493,10 @@ durable 任务沿 `fleet_transfer_durable.py` 已验证的单一归属路径：�
 同步取消 fleet 约定；也可使用 `python3 bin/fleet_park_wake.py stop --fid <身份> --job <任务ID>`
 停止指定约定（省略 `--job` 停止该会话全部约定）。已开始的轮次不会被强行中断。
 
+已由 `fleet-loop.py` 管理的循环（含 Codex）继续以原账本为唯一节拍来源。
+停前写 `park_fid` 交出投递权；旧 bridge 不再投递、也不因停放退出把循环写成 stopped。
+接回同一 thread 后原有 `fleet-loop.py defer / stop` 仍有效；正在投递且收据未定的循环拒停。
+
 隔离演练：`bin/fleet-park-wake-selftest.py` 驱动停放门、外壳、定时投递及 durable 撤出，
 覆盖 3 秒后唤醒、三轮 cron、外壳恢复、退出失败保持原生任务。
 

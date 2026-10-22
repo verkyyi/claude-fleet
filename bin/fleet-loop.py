@@ -181,8 +181,16 @@ def command(a):
         if a.command == 'status':
             print(json.dumps(r, ensure_ascii=False, indent=2))
             return
-        current(r)
-        sid = claude_identity(r)['session_id'] if r.get('agent') == 'claude' else os.environ.get('CODEX_THREAD_ID', '')
+        if r.get('park_fid'):
+            import fleet_session_gate
+            w = fleet_session_gate.window(r['park_fid'])
+            if (not w or w['pane'] != os.environ.get('TMUX_PANE') or w['sid'] != r.get('thread_id')
+                    or w['socket_path'] != os.environ.get('TMUX', '').split(',')[0]):
+                raise ValueError('this is not the parked loop owner thread')
+            sid = w['sid']
+        else:
+            current(r)
+            sid = claude_identity(r)['session_id'] if r.get('agent') == 'claude' else os.environ.get('CODEX_THREAD_ID', '')
         if not re.fullmatch(r'[0-9a-fA-F-]{36}', sid):
             raise ValueError('CODEX_THREAD_ID is required; never guess the latest rollout')
         if r.get('thread_id') and r['thread_id'] != sid:
@@ -191,14 +199,14 @@ def command(a):
             raise ValueError('bind the owning thread before changing its loop')
         if a.command == 'bind':
             r['thread_id'] = sid
-            if r.get('agent') != 'claude':
+            if r.get('agent') != 'claude' and not r.get('park_fid'):
                 with Rpc(r['socket']) as rpc:
                     thread(r, rpc)
             if r['status'] == 'unbound':
                 r['status'] = 'active'
             elif r['status'] != 'active':
                 raise ValueError('stopped/paused loop needs explicit operator recovery')
-            if r.get('agent') != 'claude':
+            if r.get('agent') != 'claude' and not r.get('park_fid'):
                 tm(r, 'set-option', '-w', '-t', r['fleet']['window_id'], '@codex_thread_id', sid)
         elif a.command == 'defer':
             if 'jobs' in r['schedule']:
@@ -237,6 +245,8 @@ def dispatch(path, now=None):
     now = time.time() if now is None else now
     try:
         with locked(path, nonblocking=True) as r:
+            if r.get('park_fid'):
+                return  # C3 owns delivery through the same conversation's gate.
             if r['status'] == 'unbound':
                 try:
                     current(r)
@@ -445,6 +455,8 @@ def recover(session):
     for path in list(root.glob('*/loop/state.json')) + list(root.glob('*/rollback/loop/state.json')):
         try:
             with locked(path,nonblocking=True) as r:
+                if r.get('park_fid'):
+                    continue  # C3 restores identity and delivers through the gate.
                 if r.get('status') not in ('active', 'waiting-quota') or r['fleet']['session'] != session or not r.get('thread_id'):
                     continue
                 pid = r.get('controller_pid',0)
@@ -578,7 +590,7 @@ def claude_bridge(args,path,r,env):
         return code
     finally:
         with locked(path) as final:
-            if code == 0:
+            if code == 0 and not final.get('park_fid'):
                 final['status']='stopped'
             final['detail']='Claude TUI/controller ended; exact crash restore may reattach an active loop'
             save(path,final)
@@ -644,7 +656,7 @@ def bridge(args):
         return code
     finally:
         with locked(path) as final:
-            if code == 0:
+            if code == 0 and not final.get('park_fid'):
                 final['status']='stopped'
             final['detail']='Codex TUI/controller ended; exact crash restore may reattach an active loop'
             save(path,final)

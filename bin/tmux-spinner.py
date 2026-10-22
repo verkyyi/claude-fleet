@@ -192,10 +192,14 @@ class Spinner:
         for path in (self.conf / 'wake').glob('*.json'):
             try:
                 r = json.loads(path.read_text())
-                if r.get('next') and r['next'] <= time.time():
+                next_at = r.get('next')
+                if r.get('ledger'):
+                    source = json.loads(Path(r['ledger']).read_text())
+                    next_at = source['schedule'].get('next_run_at') if source.get('status') in ('active', 'waiting-quota') else 0
+                if next_at and next_at <= time.time():
                     due = True
                     break
-            except (OSError, ValueError, TypeError, AttributeError):
+            except (OSError, ValueError, TypeError, AttributeError, KeyError):
                 continue
         if not due:
             return

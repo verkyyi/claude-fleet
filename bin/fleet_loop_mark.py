@@ -446,8 +446,11 @@ def park_next(fid):
     root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
     try:
         r = json.loads((root / 'wake' / (fid + '.json')).read_text())
+        if r.get('ledger'):
+            source = json.loads(Path(r['ledger']).read_text())
+            return source['schedule'].get('next_run_at') if source.get('status') in ('active', 'waiting-quota') else 0
         return r.get('next', 0)
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, KeyError):
         return 0
 
 
