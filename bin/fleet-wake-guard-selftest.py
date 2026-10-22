@@ -103,7 +103,7 @@ class Storm(unittest.TestCase):
 
 
 class Recovery(unittest.TestCase):
-    def fixture(self, memory=False):
+    def fixture(self, memory=False, preflight=False):
         if not shutil.which('tmux'):
             self.skipTest('tmux absent')
         spec = importlib.util.spec_from_file_location('guard_fixture', BIN / 'fleet-park-selftest.py')
@@ -117,6 +117,12 @@ class Recovery(unittest.TestCase):
             admit.write_text('#!/bin/sh\nexit 1\n')
             admit.chmod(0o755)
             f.env['FLEET_WAKE_ADMIT_CMD'] = str(admit)
+        if preflight:
+            version = f.root / 'version'
+            version.write_text('#!/bin/sh\necho 3.0.0\n')
+            version.chmod(0o755)
+            f.env['FLEET_PARK_VERSION_CMD'] = str(version)
+            f.env['FLEET_CC_PROJECTS_DIR'] = str(f.root / 'projects')
         f.fake()
         return f, module.gate
 
@@ -132,6 +138,10 @@ class Recovery(unittest.TestCase):
         f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
         f.tm('send-keys', '-t', f.win, 'Enter')
         f.wait(lambda: json.loads(health.read_text()).get('disabled'))
+        doctor = subprocess.run(['bash', str(BIN / 'fleet-doctor.sh'), '--park'],
+                                env=f.env, capture_output=True, text=True, timeout=20)
+        self.assertRegex(doctor.stdout, r'WARN\s+park-wake')
+        self.assertIn(f.fid, doctor.stdout)
         f.wait(lambda: '接回失败' in f.tm('capture-pane', '-p', '-t', f.win))
         (f.root / 'fail').unlink()
         f.tm('send-keys', '-t', f.win, 'Enter')
@@ -160,6 +170,45 @@ class Recovery(unittest.TestCase):
         self.assertNotIn('--resume', args)
         self.assertEqual(args[-1], 'saved version question')
         self.assertEqual(f.opt('@fleet_id'), f.fid)
+
+    def test_major_version_preflight_starts_fresh_and_keeps_words(self):
+        f, gate = self.fixture(preflight=True)
+        project = f.root / 'projects/project'
+        project.mkdir(parents=True)
+        transcript = project / (f.sid + '.jsonl')
+        transcript.write_text(json.dumps(dict(version='3.0.0')) + '\n' +
+                              json.dumps(dict(version='2.9.0')) + '\n')
+        with patch.dict(os.environ, f.env):
+            self.assertTrue(gate.park(f.fid)['ok'])
+        f.tm('send-keys', '-t', f.win, '-l', 'original after upgrade')
+        f.tm('send-keys', '-t', f.win, 'Enter')
+        f.wait(lambda: f.opt('@park_relay') and not f.opt('@park_held'))
+        args = json.loads((f.root / 'argv').read_text().splitlines()[-1])
+        self.assertNotIn('--resume', args)
+        self.assertEqual(args[-1], 'original after upgrade')
+        self.assertEqual(f.opt('@fleet_id'), f.fid)
+        f.wait(lambda: '"act":"fresh"' in (f.root / 'conf/logs/park.ndjson').read_text())
+        self.assertIn('2.9.0', f.opt('@park_fresh_reason'))
+        self.assertIn('3.0.0', f.opt('@park_fresh_reason'))
+
+    def test_memguard_rule_c_parks_idle_through_the_existing_gate(self):
+        f, gate = self.fixture()
+        config = f.root / ('conf/fleets/' + f.label)
+        config.mkdir(parents=True)
+        (config / 'conf').touch()
+        pid = f.opt('pane_pid')
+        ps = f.root / 'ps'
+        ps.write_text('#!/bin/sh\necho "' + pid + ' 1 ' + str(os.getuid()) +
+                      ' 5242880 01:00:00 claude"\n')
+        ps.chmod(0o755)
+        env = dict(f.env, FLEET_MEM_PS_CMD=str(ps), FLEET_MEM_TOTAL_MB='65536',
+                   FLEET_MEM_PROBE_CMD='echo 1 60 5 0', FLEET_NOTIFY_CMD='true')
+        result = subprocess.run(['bash', str(BIN / 'fleet-memguard.sh'), '--once'],
+                                env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(f.opt('@park_held'), result.stdout + result.stderr)
+        self.assertEqual(f.opt('@park_why'), 'memory')
+        self.assertEqual(f.opt('@cc_session_id'), f.sid)
 
     def test_hung_start_is_stopped_before_retry_and_words_survive(self):
         f, gate = self.fixture()
