@@ -1,19 +1,9 @@
-// SessionList.tsx — the session list (GR5E C2): the computer's left column and
-// the phone's first screen. One row per session — a status glyph and its title,
-// nothing else: ⌘P's top-level entries in ⌘P's order (the hub's board, A4G2,
-// read once through work-rows.tsx), no group headings or counts, an EPIC only
-// as its parent row, the put-away ones folded under 「已结束的会话」 at the foot,
-// and the web conversation pinned as the first row. The rest — code · machine ·
-// agent · where it runs · how long — shows on hover (computer, a Tooltip) or a
-// long-press (phone, a Sheet with 对话 / 终端). The head: the mark · the limit ·
-// a search icon (a box only once tapped; it finds a code, a title, a machine) ·
-// 新建 (/app/new, GR5E C3). No filter, nothing pinned. A row opens /app/s/<ref>.
-// Stock shadcn/ui.
+// Task list: PIN, ordinary tasks, then folded earlier sessions. One status slot.
 import { createContext, useContext, useEffect, useRef, useState, type FC, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot, CircleX, Clock, GitPullRequest, Loader,
-  MessageCircle, Plus, Search, X, type LucideIcon,
+  MessageCircle, Plus, Repeat2, Search, X, type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,12 +14,12 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { isTerminal, listItem, listRows, listWord, rowMeta, rowRef, searchRows } from "./session-list";
+import { isTerminal, listItem, listRows, listStatus, listStatusLabel, rowMeta, rowRef, searchRows, type ListGroups } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
 
-const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin [animation-duration:2.4s]", className)} />;
+const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin motion-reduce:animate-none [animation-duration:2.4s]", className)} />;
 export const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
   ask: CircleAlert, fail: CircleX, work: Spin, pr: GitPullRequest, done: CircleCheck, idle: CircleDot, wait: Clock,
 };
@@ -136,11 +126,13 @@ function useLongPress(on: () => void, ms = 300) {
   };
 }
 
-// a reply the person has not opened: an orange dot in the glyph's place
-const RowGlyph: FC<{ r: Row; replied?: boolean }> = ({ r, replied }) => {
-  if (replied && r.glyph !== "work") return <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden><span className="bg-clay size-2 rounded-full" /></span>;
-  const Icon = GLYPH[r.glyph];
-  return <Icon className={cn("size-4 shrink-0", TONE[r.tone])} aria-hidden />;
+// Reserve the same slot for quiet rows; unread replies only affect title weight.
+const RowGlyph: FC<{ r: Row }> = ({ r }) => {
+  const { kind } = listStatus(r);
+  const Icon = kind === "ask" ? CircleAlert : kind === "pending" ? Clock : kind === "work" ? Spin : kind === "loop" ? Repeat2 : null;
+  return <span data-status-slot className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+    {Icon ? <Icon className={cn("size-4", kind === "ask" ? "text-clay" : "text-muted-foreground")} /> : null}
+  </span>;
 };
 
 // >_ after a terminal's session's title (会话合一 Y01K)
@@ -153,6 +145,7 @@ const RowDetail: FC<{ r: Row }> = ({ r }) => {
   return <>
     <span className="block text-sm font-semibold break-words">{r.title}</span>
     <span className="block opacity-80">{rowMeta(r, Date.now(), machines)}</span>
+    {listStatusLabel(r) ? <span className="block">{listStatusLabel(r)}</span> : null}
     <RowWhy r={r} className="mt-1 text-[13px]" />
     {r.line ? <span className="mt-0.5 block line-clamp-3">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</span> : null}
   </>;
@@ -166,15 +159,14 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
   const it = listItem(r, seen);
   const press = useLongPress(() => onPress(r));
   const isNew = !!replied[r.id] && !active;
-  const word = listWord(r, isNew);
+  const status = listStatusLabel(r);
   const body = (
-    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
-      className={cn(rowCls, variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
-      <RowGlyph r={r} replied={isNew} />
+    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-label={[it.title, status].filter(Boolean).join(" · ")} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
+      className={cn(rowCls, listStatus(r).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
+      <RowGlyph r={r} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal")}>
-        <span className="min-w-0 truncate">{it.title}</span><TermTag r={r} />
+        <span className="min-w-0 truncate">{it.title}</span>
       </span>
-      {word ? <span data-testid="row-word" className={cn("shrink-0 text-[12px] font-normal group-data-[collapsible=icon]:hidden", isNew || r.group === "ask" ? "text-clay" : "text-muted-foreground")}>{tr(...word)}</span> : null}
     </Link>
   );
   if (variant === "page") return <li>{body}</li>;
@@ -207,7 +199,7 @@ const WebChatRow: FC<{ variant: Variant; active: boolean }> = ({ variant, active
   );
 };
 
-// The long-press sheet: the same detail, and the two ways in.
+// The long-press sheet: the same detail and conversation entry.
 const PressSheet: FC<{ r: Row | null; onClose: () => void }> = ({ r, onClose }) => {
   const { markSeen, machines } = useWorkRows();
   return (
@@ -216,7 +208,7 @@ const PressSheet: FC<{ r: Row | null; onClose: () => void }> = ({ r, onClose }) 
         {r ? <>
           <SheetHeader className="gap-1 px-5 pt-5 pb-3">
             <SheetTitle className="text-base leading-snug break-words">{r.title}</SheetTitle>
-            <SheetDescription>{rowMeta(r, Date.now(), machines)}</SheetDescription>
+            <SheetDescription>{[rowMeta(r, Date.now(), machines), listStatusLabel(r)].filter(Boolean).join(" · ")}</SheetDescription>
             <RowWhy r={r} className="text-sm" />
             {r.line ? <p className="text-foreground text-sm break-words">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</p> : null}
           </SheetHeader>
@@ -247,7 +239,11 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const { ref, pathname } = useOpenRef();
   const [goneOpen, setGoneOpen] = useState(false);
   const [pressed, setPressed] = useState<Row | null>(null);
+  const previous = useRef<ListGroups | undefined>(undefined);
   if (rows === null) return failed ? <div className="px-3"><Failed what={tr("会话", "your sessions")} onRetry={reload} /></div> : <div className="px-3"><Loading /></div>;
+  const grouped = listRows(rows, previous.current);
+  previous.current = grouped;
+  const ordered = [...grouped.pin, ...grouped.open, ...grouped.gone];
   const webActive = pathname === WEB_CHAT_PATH || (!!chatHome && pathname === "/");
   const row = (r: Row) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed} />;
   const List = variant === "side" ? SidebarMenu : "ul";
@@ -255,22 +251,24 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const web = <WebChatRow key="web" variant={variant} active={webActive} />;
   let body: ReactNode;
   if (searching) {
-    const found = searchRows(rows, q);
+    const found = searchRows(ordered, q);
     const webHit = `${tr("我的对话", "My chat")} chat`.toLowerCase().includes(q.trim().toLowerCase());
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
-    const { open, gone } = listRows(rows);
-    // the web conversation is pinned on top, whatever the sessions' state (C25B)
+    const { pin, open, gone } = grouped;
+    // The old chat entry remains above the task list for older hubs.
     body = (
       <>
-        <List>{oldRoad ? web : null}{open.map(row)}</List>
+        {oldRoad ? <List>{web}</List> : null}
+        {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><List>{pin.map(row)}</List></> : null}
+        <List>{open.map(row)}</List>
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
               variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
             {goneOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("已结束的会话", "Ended sessions")}<span className="font-mono"> · {gone.length}</span></span>
+            <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("更早的会话", "Earlier sessions")}<span className="font-mono"> · {gone.length}</span></span>
           </button>
           {goneOpen ? <List>{gone.map(row)}</List> : null}
         </> : null}

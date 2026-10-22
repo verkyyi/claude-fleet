@@ -26,6 +26,9 @@ jobs:
           cache-dependency-path: extras/browser-transport/package-lock.json
       - run: npm ci --no-audit --no-fund
         working-directory: extras/browser-transport
+      - name: Dependencies for the isolated production TerminalView fixture
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: extras/web-console
       - run: npm run check
         working-directory: extras/browser-transport
       - run: node terminal-client.mjs

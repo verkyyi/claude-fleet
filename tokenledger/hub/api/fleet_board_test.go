@@ -389,6 +389,7 @@ func TestBoardPlanFacts(t *testing.T) {
 	if r = read(nil); r.Tag != "not_seen" || r.Context[0] != "" || r.AgentBasis == "planned" {
 		t.Fatalf("accepted dispatch without a worker is not undispatched: %+v", r)
 	}
+	set(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,task_owner) VALUES ('op-accepted','','worker_start','{}','gh:1','accepted-plan','pending',?,?,'gh:1')`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
 	set("UPDATE fleet_tasks SET state='starting' WHERE id=?", child.ID)
 	if r = read(nil); r.Tag != "starting" || r.AgentBasis != "planned" {
 		t.Fatalf("starting: %+v", r)
@@ -538,5 +539,81 @@ func TestBoardHistoryBeyondEndedCap(t *testing.T) {
 	other, err := s.buildBoard("gh:2", nil, now)
 	if err != nil || len(other.Rows) != 0 {
 		t.Fatalf("tenant rows=%+v err=%v", other, err)
+	}
+}
+
+// One list fact projection, without confusing a reserved record, an expired
+// start, or background activity with a recurring plan.
+func TestBoardTaskListFacts(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	task, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "queued work", AuthorityVersion: 1, RequestedAgent: "default", ResolvedAgent: "claude"}, "list-facts", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(live []FleetSession) BoardRow {
+		t.Helper()
+		b, err := s.buildBoard("gh:1", live, now)
+		if err != nil || len(b.Rows) != 1 {
+			t.Fatalf("board: %+v %v", b, err)
+		}
+		return b.Rows[0]
+	}
+	if read(nil).PendingStart {
+		t.Fatal("reserved record is not submitted execution")
+	}
+	_, err = st.DB().Exec(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,task_owner) VALUES ('start-list','','worker_start','{}','gh:1','list-start','pending',?,?,'gh:1')`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DB().Exec(`UPDATE fleet_tasks SET operation_id = 'start-list' WHERE id = ?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := read(nil); !r.PendingStart || r.Tag != "starting" {
+		t.Fatalf("accepted request: %+v", r)
+	}
+	for _, state := range []string{"failed", "succeeded", "unknown"} {
+		if err = st.UpdateFleetOperation("start-list", state, "", now); err != nil {
+			t.Fatal(err)
+		}
+		if read(nil).PendingStart {
+			t.Fatalf("%s start shown as pending", state)
+		}
+	}
+	if err = st.UpdateFleetOperation("start-list", "pending", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DB().Exec(`UPDATE fleet_tasks SET cancel_request = 'stop' WHERE id = ?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if read(nil).PendingStart {
+		t.Fatal("cancelled request shown as pending")
+	}
+	for _, c := range []struct {
+		state, wait   string
+		loop, running bool
+	}{
+		{"working", "", false, true}, {"working", "", true, true},
+		{"looping", "human", false, false}, {"looping", "children", false, false},
+		{"looping", "loop", true, false}, {"looping", "bg,tool", false, true},
+		{"idle", "", true, false}, {"needs", "human", true, false},
+	} {
+		r := read([]FleetSession{{Availability: "online", Worker: map[string]any{"identity": task.FID, "state": c.state, "native_wait": c.wait, "loop": c.loop}}})
+		if r.Running != c.running || r.Loop == nil || *r.Loop != c.loop || r.PendingStart || r.NativeWait != c.wait {
+			t.Fatalf("%+v: %+v", c, r)
+		}
+		wire, _ := json.Marshal(r)
+		var fields map[string]any
+		if err := json.Unmarshal(wire, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := fields["pending_start"]; !ok {
+			t.Fatal("false pending fact omitted")
+		}
+	}
+	old := read([]FleetSession{{Availability: "online", Worker: map[string]any{"identity": task.FID, "state": "looping"}}})
+	if old.Loop != nil || old.Running {
+		t.Fatalf("legacy looping guessed as recurring plan/activity: %+v", old)
 	}
 }

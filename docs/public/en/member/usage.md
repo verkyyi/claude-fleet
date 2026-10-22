@@ -27,25 +27,23 @@ Everything starts from one key. The tables below are generated from Tokenman's k
 
 **The top line is the session's; messages get a row of their own.** The 看台's top line says the session only: its state, title, change number and quota. Whatever Tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. An error (red ✖) and a result nobody took (yellow ✓) stay until you have seen them; a warning (yellow ▲) fades after 6 seconds, a note (grey ∙) after 3. Once you have seen everything the row folds away. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
 
-The panel looks roughly like this (sample data). The order on screen, top to bottom, is the order ↑↓ walk; ↓ at the bottom goes round to the top, ↑ at the top to the bottom. The cursor stops on indented rows; a line starting with ─ is a group heading.
+The panel looks roughly like this (sample data). ↑↓ follows the visible order. PIN is the only heading; ordinary tasks follow directly. Status updates keep the order stable during this visit.
 
 ```text
-  › Search sessions               Sessions 8
+  › Search sessions
   ✦ Messages
   + New session
   $ Shell
-─ Waiting on you 1
-  ! T128     Claude  Login page redesign         web-app
-                     keep the old redirect?
-─ Working 2
-  ↻ T131     Codex   Fix export timeout          web-app
-  ↻          Claude  Weekly report data
-─ Queued 1
-  ✓ T127     Claude  Upgrade dependencies        web-app  waiting for the release train
-  ▸ Folded away (4)
+─ PIN
+  ↻ K3F9     Codex   Fix export timeout          web-app
+  ⟳ A7P4     Claude  Check service availability  ops
+  ! B8D2     Claude  Login page redesign         web-app
+  ◷ C9W1     Codex   Add API tests               api
+    D2R6     Claude  Upgrade dependencies        web-app
+  ▸ Earlier conversations
   ⇄ Language / 语言
   ⏏ Quit Tokenman (sessions keep running)
-  ↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close
+  ↵ go  Tab act  ↑↓ pick  ? legend  esc close
 ```
 
 ### Open a session
@@ -62,25 +60,26 @@ The repository and agent chosen in the box are stored privately on this machine 
 
 The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished sessions whose window is still open count; folded-away ones do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.
 
-The panel puts sessions in five groups, by whether they need you:
+The order is **PIN → ordinary tasks → Earlier conversations**. There are no status groups, parent/child trees or member counts. Older conversations stay folded at the bottom: → expands, ← collapses, and Enter toggles the section. Search includes folded records. An agent exiting does not prove completion or automatically put a still-open window into history.
 
-| Group | Meaning | What you do |
-|---|---|---|
-| **Pinned** | Ones you pinned yourself | — |
-| **Waiting on you** | Only what waits on your hand: the session stopped to ask you something (a plan page waiting for your call included — it asks you properly, and its record keeps the "asked you" mark), is waiting for you to allow an action, or failed — or asked on its ticket and nobody has answered yet, even if it has stopped since; its words are on the next line. A session sitting idle with nothing asked is not here | Switch to it and answer, or press Tab on its row → "Answer…" |
-| **Working** | Doing it now | Nothing |
-| **Queued** | Waiting on something that is not you: it sits idle with no question open (marked "idle" at the row's end), it handed in its result and the pull request is checking, waiting to merge or ship, or it is done and about to be folded away (the row's end says which step) | Nothing; to fold the ended ones now, ↵ on the group's last row |
-| **Folded away** | Sessions whose window is closed, their conversation and copy of the code kept (the last 7 days); a session whose agent exited while its window is still up is folded here at once too (marked "exited"). Folded at the bottom as a count | → to open it, pick one, ↵ "Restore" to carry on in the same conversation |
+Rows keep the same columns: status slot · short code such as `K3F9` · agent · title · repository. Narrow terminals hide the repository first, then the agent. **All status symbols share one fixed slot on the left**:
 
-An EPIC batch's members hang under its driver's row, in whatever group the driver is in; the driver's row says done/total.
+| Symbol | Meaning |
+|---|---|
+| `!` | Needs your answer or approval; open the session to respond |
+| `◷` | A start request exists, with execution not yet confirmed |
+| `↻` | Running |
+| `⟳` | An observed recurring plan is active; a one-shot reminder is not a Loop |
 
-Every row has the same columns: state glyph · ID (the window's own short code `K3F9`, from the moment it opens until it closes) · Agent (Claude / Codex, its latest conversation's; a grey "unknown" when it cannot be read) · short name · repository (blank when it has none). The state comes from whether the window is up and the result it reported last: the newest of several wins, and a window closed without one is "exited". One conversation open in two windows makes both rows a red "waiting on you", the reason on the actions page. The glyphs: ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the agent quit, its window is still up — folded under "Folded away") · ∙ idle · ? lost; only ! and ✗ are red. Press `?` for the legend.
+When several apply, the first in this table wins; other facts remain in the selected row's details. Quiet rows leave the slot empty, without done, failed, idle or exited icons. Results and errors remain available in details. Press `?` for the legend. A reserved record without an accepted start request is not pending, and missing Loop observations from older nodes are not guessed from a state name.
 
-Ticket numbers, pull requests and machines are no longer on the row: pick a row and the second line from the bottom says how long it has been lost, whether its configuration needs a reopen (in red), its sub-task progress and its pull request's step. A ticket number is not shown but is searched — type `4539` or `#4539` and the session linked to that ticket — or dispatched with `#4539` in its words — is found, the bottom line saying "matched: linked issue #4539". When a machine cannot be reached, a red bar appears across the top of the panel and its rows turn grey with a ?; wait for it to come back — the sessions are not lost.
+Questions, native state, pull requests, machines and configuration notices appear in the footer or details. Search still finds linked ticket numbers such as `4539` or `#4539`. Lost rows are dimmed and described as unknown; an empty status slot does not prove execution stopped.
 
 ### What you can do with a session
 
-Pick a row and press **Tab** for its actions page: Enter · Open PR #n (only with a PR) · Rename… · Switch to Codex / Claude (while it runs; grey, unnumbered and saying why when this machine cannot run that agent) · Reap…. Under the items it lists the window's code, full ID, aliases (the old T number) and every conversation it went through (agent · start–end · how it began · compactions), and "not registered with the hub" while the hub has not got it yet. A digit runs an item; `[` `]` step to the previous / next session's page. A session waiting on you and one whose agent exited (under "Folded away") are both "Enter": switch to it and answer, or press ↵ on its recovery page. A shell in its directory is `⌃\`, pinning `⌃T` (or "Pin this session" at the foot of the list); a reap policy is changed by the session itself, or with the commands below.
+Pick a row and press **Tab** for its actions page: Enter, Open PR when present, Rename, Switch agent, Open in web, and **Stop (resumable)**. Unavailable actions are hidden or explain why. A digit runs an action, `[` `]` change its target, and Escape returns to the same list selection. Older conversations keep their history and restore actions; an exited agent with a window still open uses Enter to reach its recovery page. Use `⌃T` or the footer action to pin a row.
+
+Stop directly requests that the current session stop, without a reap confirmation or waiting for its PR to merge. The web task page's Stop and `fleet close` use the same stop entry point, preserving files and history. Failures are reported; acceptance does not prove the remote process has exited. A pending task with no running session cannot yet be cancelled through this entry point, and stopping does not yet guarantee cancellation of every future automatic wakeup.
 
 You can do the same from the terminal with commands (`<session>` can be part of a name or a `#ticket`; when it is not clear which one you mean, it lists the candidates rather than guess):
 
@@ -89,7 +88,7 @@ fleet ls                       # my sessions: name · ticket · machine · left 
 fleet ls --all                 # ended ones too
 fleet open login               # open the client and switch to this session
 fleet answer login keep        # answer its question without going in
-fleet close report             # close a session
+fleet close report             # request a stop; keep files and history
 fleet quit                     # quit fleet (see below)
 ```
 
@@ -103,9 +102,9 @@ Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 10
 
 ## Working in a code repository
 
-For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. You see it under "Queued" and read what changed on the PR.
+For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. Its row stays in place; read what changed on the PR.
 
-You do not have to watch it. To stop it or change direction, switch to it and say so; when it is stuck it shows up under "Waiting on you".
+You do not have to watch it. To change direction, open it and say so; to stop execution, use Stop. A question needing your answer is marked with `!`.
 
 ## Closing the computer, changing computers, watching on a phone
 
@@ -116,19 +115,20 @@ Sessions run on Tokenman's machines: close the terminal, shut the laptop, switch
 Everything you hand over on the + New session line is first written down by Tokenman, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
 
 - A task has this one number: it is yours, not a repository's. A task given a repository changes code and opens pull requests there — GitHub holds only the code and the pull requests, with no second ticket.
-- The hub's **Sessions** page lists all your task records — one line per piece of work, a task and its session on the same line, grouped by whether it needs you (Needs you · Working · Queued · Put away), a batch's members under it. A record stays after its session ends. Open a line for its details: your words, its report, the PR, the terminal. **New** at the top sends one from there.
-- **Completed** means the hub has a confirmed work result. A missing session never implies completion; old records without confirmed task status show **Unknown**. In the details, open **Technical details** to see the requested, resolved and verified agent separately from the session observation. A required PR still waiting for merge shows **Waiting for GitHub** beside the work result. If a refresh fails, the open page keeps its last confirmed view and read time, marked stale; **Retry read** only reads again and never starts work.
+- The hub's **Sessions** page uses the same PIN, ordinary tasks and Earlier conversations layout. Opening a row opens its web conversation; details keep the task description, native observations, PR and history. Task pages no longer offer a browser-terminal switch.
+- Historical results remain in details, without a completed icon in the list. A missing session is not proof of completion; unknown observations are not proof of stopping. Failed reads preserve existing content and explain the problem; retrying a read does not start work.
+- For native terminal interactions, open the task in iTerm2. The separate personal browser Shell remains available. Old task links containing `?view=term` open the same task's web conversation.
 - Tell a colleague "the T42 thing" and they can find it by its code on the Sessions page.
 
 ### A design page first, then the task
 
-With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a session (for example "batch reports never reach me"). It first writes the matter up as one design page: what happens, why (the evidence folded underneath), goal and scope, the changes, what could go wrong, what you need to decide, and the proof it shipped. The page is private and pushed to your WeChat. Say what to change and it edits the same page; nod and it opens one task from the page, stamps the task's number at the top, and the task's session works from it. For a batch of related work, `/fleet-epic-plan` writes the same kind of page.
+With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a session (for example "batch reports never reach me"). It first writes the matter up as one design page: what happens, why (the evidence folded underneath), goal and scope, the changes, what could go wrong, what you need to decide, and the proof it shipped. The page is private and pushed to your WeChat. Say what to change and it edits the same page; nod and it opens one task from the page, stamps the task's number at the top, and the task's session works from it.
 
 ## Reaping: when a session closes
 
 Parking releases an idle agent process while keeping its window, identity, conversation and worktree. Speaking resumes the same conversation. Reaping closes the window only after recording resumable history; the worktree stays.
 
-Explicit policies such as after-merge still apply. Otherwise, new wrappers use this table:
+These are background resource policies, separate from an explicit Stop request. Existing sessions keep the policies they were created with; explicit choices such as after-merge still apply:
 
 | Origin | Parking | Reaping |
 |---|---|---|
@@ -147,7 +147,7 @@ Settings: `fleet.session.park_idle` **5m**, `park_idle_unattended` **5m** (the c
 
 The window's explanation line says why parking is held: someone is looking, a draft is in the input box, background work is running, a choice dialog is open, or an older wrapper cannot park. Doctor carries the same reason instead of promising a parking time that a protection condition has blocked.
 
-Pick the row, Tab → "Reap policy…" to change its policy. Person conversations on new wrappers use the parked retention above; decision sessions retain their 15-minute idle policy unless they explicitly reported waiting. An explicit keep still holds.
+Ask the session to change its automatic reap policy; the simplified Tab page no longer lists Reap policy. Person conversations on new wrappers use the parked retention above; decision sessions retain their 15-minute idle policy unless they explicitly reported waiting. An explicit keep still holds.
 
 ## Quota and usage
 

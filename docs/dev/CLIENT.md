@@ -22,15 +22,17 @@ with ↑↓ ↵ or reached by typing a few of their words:
 
 | Row | Does | Type |
 |---|---|---|
-| ⚡ 新会话 | the 「新会话」 box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — already chosen, so ↵ opens it; nothing is typed there, the first message is said in the session (and renames its row and record) | words that hit no session |
+| + 新会话 | the 「新会话」 box (T652, EPIC T651 C1): 仓库 ‹›, Agent ‹›, 开 — already chosen, so ↵ opens it; nothing is typed there, the first message is said in the session (and renames its row and record) | words that hit no session |
 | $ 命令行 | this machine's login shell in `$HOME`, no session and no hub (EPIC T651 C3); the panel again comes back | `回家` · `home` · `shell` |
-| ◐ 语言 / Language | the interface language | `语言` · `lang` |
+| ⇄ 语言 / Language | the interface language | `语言` · `lang` |
 | ✦ 消息 | the panel's FIRST row (T701): every message in the one book `$FLEET_CONF_DIR/logs/notices.ndjson` (7 days) — a top-line notice (T675), a session asking / stuck / done (`fleet_notify.py`), an alert appearing / healing (`fleet-alerts.sh`), a result nobody took (`fleet-orphan-reports.py`'s own book) — and the other machines' (the hub caches `notices_<fleet>` / `orphanrep_<fleet>`, union by id, the latest read mark of any machine); `bin/fleet_notice.py page`, grouped, ↵ the whole text, g its session, r mark read, f hand a result nobody took to the orchestrator; ` N` while some are unseen; the 看台's message row under its top line (`status-format[1]`, `fleet-topbar.py inbox`, a click opens the page) is there only while one is live; `fleet notices` prints the same on a device | `消息` · `message` · `notice` |
-| ⏻ 退出 fleet | ends the connection, the sessions run on — after a y / n | `退出` · `quit` |
+| ⏏ 退出 fleet | ends the connection, the sessions run on — after a y / n | `退出` · `quit` |
 
-A session's Tab menu opens its shell. There is no zoom / fold row: a 看台 window
-has one pane and the panel has no list to fold. The current panel's steps and row
-actions are in [日常使用](../public/zh/member/usage.md#一个键总面板).
+A session's Tab page offers enter, PR, rename, agent switch, open in web and
+stop (resumable), with unavailable actions hidden or explained. The separate
+shell entry remains. There is no zoom / fold row: a 看台 window has one pane.
+The current panel's steps and row actions are in
+[日常使用](../public/zh/member/usage.md#一个键总面板).
 
 **The keys that went back to iTerm2 (T685; after issue #3328):** ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N
 ⌘T ⌘K ⌘Q ⌘\ are no row of the `fleet` profile any more, so iTerm2 has its own
@@ -68,17 +70,25 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
   F12 or ⌃] p.
 
-面板和网页的「待派发 / 保留」是同一份 Hub 清单的容器，各行状态分别说明：
-「未派发」表示记录已建立但没有启动证据；「正在开」表示启动中；已有会话显示
-「空闲」「已停放」「本轮结束」或「已完成 · 保留中」。计划引擎显示为
-`Codex（计划）`（窄列 `Cod·计`，英文 `Cod(P)`），不代表已经运行；真实运行及历史
-使用运行证据，缺证据仍为未知。选中行可看「尚未启动」及可核验的协调负责人短码，
-后续派发由协调方确认，界面不承诺自动启动。任务结果不会盖过会话收到新工作后的
-「在干活」；这些显示不改变回收策略。父任务关系本身不表示依赖阻塞。
+Terminal 是 iTerm2 中的 tmux 面板，Web 是网页。两者均按 PIN、无标题普通任务、
+折叠的「更早的会话」排列；旧父子关系和 EPIC 成员平铺，不显示树或成员计数。
+每行只有一个固定状态位，优先级为 `!` 需要回答/批准、`◷` 待启动、`↻` 运行、
+`⟳` Loop；普通静止行留空。详情保留原生观测和错误原因，失联行淡化，不能把空白
+解释为已经停止。面板本次浏览中的顺序不随状态刷新跳动。
+
+Hub 看板的 `pending_start`、`running` 与可选 `loop` 是事实字段，显式 false
+优先于旧状态推断。仅建立记录不算待启动；Loop 来自有效的重复计划，单次唤醒不算。
+本地旧节点回退只把 working，或带有 bg/tool 原生等待事实的 looping，视为运行；
+没有新字段时不凭 looping 名称猜 Loop。任务结果不盖过原生会话的新一轮运行。
+
+「停下（可恢复）」直接调用现有 `worker_stop`，不再经过回收确认；保留文件和历史。
+当前仍需要可定位的会话，尚未实现无会话待启动取消或覆盖全部未来唤醒的持久停止栅栏。
+请求受理不表示远端已退出，失败须显示原因。Web 任务页只提供对话，旧任务
+`?view=term` 打开同一任务的对话并提示；独立 Shell `/app/s/shell?view=term` 保留。
 
 ## 历史会话：查看、接回与撤销隐藏
 
-网页的「已收起」从会话 FID 取历史入口，不依赖另一份已结束列表的条数，也不按
+网页的「更早的会话」从会话 FID 取历史入口，不依赖另一份已结束列表的条数，也不按
 循环使用的 scratch 名称猜会话。打开对话是只读；不会启动助手，已删除工作树也
 不妨碍读取保留的原生记录。状态区分 `readable`（可读）、`resumable`（可尝试接回）、
 `offline_unknown`（目前无法核实）、`missing_confirmed`（人工核验全部副本缺失）和
@@ -105,6 +115,11 @@ scratch 名称或更新时间猜归属。无关且可归属的缓存不阻挡，
 
 ## 侧栏下线清单 — every sidebar job's new home (issue #3186, EPIC #3178 C8)
 
+**Historical acceptance record, 2026-10-11.** The table and device drills below
+describe the client at that time. Their status groups, parent/child rows, EPIC
+counts and reap menu have since been replaced by the current rules above;
+these historical screenshots are not acceptance evidence for the current UI.
+
 The old client was removed in #3008 after every row below was ✅. One row per row of the EPIC page's 「侧栏的每一件去哪」
 (17 rows covering the sidebar's 24 jobs — the 11 menu items share row 7), no more,
 no fewer; a job found later gets a row here and a member issue. Evidence lives
@@ -115,7 +130,7 @@ of the time, retired with #4898; never committed) — `panel` · `menus` · `row
 
 状态：✅ 有证据（17/17，2026-10-11 全绿）
 
-| # | 侧栏今天做的 | 在面板里怎么做 | 证据 | 状态 |
+| # | 当时侧栏做的 | 当时在面板里怎么做 | 历史证据 | 当时状态 |
 |---|---|---|---|---|
 | 1 | 一直看得见谁在干活、谁卡住 | ⌘P：分组 置顶 · 等你 · 在干活 · 等合并/等发版 · 刚落地 · 其他 · ▸已结束（#4225 按「该做什么」细分），组标题带个数；顶上一行只说**这个**会话（#3194 改了页上的「顶上一行写 N 个在等你」，同样点头） | `panel` · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
 | 2 | 「N 个在问你」，点一下跳过去 | 「等你」组排在最上；系统通知（`fleet_notify.py`）点开直达 | `fleet-view-selftest.sh`（组序） · 真机（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） | ✅ |
@@ -145,7 +160,7 @@ of the time, retired with #4898; never committed) — `panel` · `menus` · `row
 | 音量键能不能设成 F12 | 可以（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） |
 | ⌃\ 在面板里能按出（开 shell） | 可以（发起人 2026-10-11 真机演练：MacBook + iPhone 全过） |
 
-**真机演练**（MacBook iTerm2 一遍、iPhone Termius 一遍）：开面板（⌘P / ⌃空格 / F12）→ 派一件新任务 → 开 shell 并回来 → Tab 回收一个 → 回答一个 → 在别的机器上做一个 → 让列表过期看红字。每一步一张截图（当时进证据库，#4898 起附在 PR 里）。
+**当时的真机演练**（MacBook iTerm2 一遍、iPhone Termius 一遍）：开面板（⌘P / ⌃空格 / F12）→ 派一件新任务 → 开 shell 并回来 → Tab 回收一个 → 回答一个 → 在别的机器上做一个 → 让列表过期看红字。每一步一张截图（当时进证据库，#4898 起附在 PR 里）。
 
 全部 ✅ 后在 #3008 留「侧栏下线清单已全绿，可删」。
 

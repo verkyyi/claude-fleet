@@ -371,6 +371,16 @@ def inventory_row(parts):
     node's row has none: absent."""
     parts = list(parts)
     extra = {}
+    # Optional native task facts follow the park census. False is observed;
+    # absence means an older node, never evidence that no recurring plan exists.
+    if len(parts) >= 39 and parts[-1].startswith("nativewait="):
+        wait = parts.pop()[11:]
+        if re.fullmatch(r"[a-z,]*", wait):
+            extra["native_wait"] = wait
+    if len(parts) >= 38 and parts[-1].startswith("loop="):
+        value = parts.pop()[5:]
+        if value in ("0", "1"):
+            extra["loop"] = value == "1"
     # Column 37 (RBQG): read-only park census; absent from older adapters.
     if len(parts) >= 37 and parts[-1].startswith("park="):
         try:

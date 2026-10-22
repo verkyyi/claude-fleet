@@ -69,15 +69,17 @@ try {
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     // the old 任务 address with a code opens that session (GR5E C9): its
-    // workspace (C4), 详情 in a drawer: the command line that opens it, the web
-    // terminal one small backup line (会话合一 Y01K)
+    // workspace (C4), 详情 in a drawer: native terminal access is a copied
+    // command; there is no web terminal backup
     await page.goto(`${origin}/app/tasks?q=T1&lang=en`);
     await page.waitForURL(/\/app\/s\/T1\?lang=en$/);
     await page.getByRole('button', { name: 'Details' }).first().click();
     const one = page.getByRole('dialog');
     await one.getByText(/Waiting for GitHub/).first().waitFor();
     await one.getByText(/^fleet open /).first().waitFor();
-    await one.getByRole('button', { name: /^Web terminal \(backup\)$/ }).first().waitFor();
+    assert.equal(await one.getByRole('button', { name: /^Web terminal \(backup\)$/ }).count(), 0);
+    assert.equal(await page.locator('.xterm-helper-textarea').count(), 0);
+    assert.equal(await page.locator('[data-workspace=chat]').count(), 1);
     await page.keyboard.press('Escape');
     // 会话's full page holds the rest
     await page.goto(`${origin}/app/sessions?lang=en`);

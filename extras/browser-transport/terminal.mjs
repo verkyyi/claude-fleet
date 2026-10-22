@@ -18,6 +18,8 @@ await context.addCookies([{ name: cookie.slice(0, eq), value: cookie.slice(eq + 
 await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
 const page = await context.newPage()
 const failures = []
+const terminalSockets = []
+page.on('websocket', ws => { if (new URL(ws.url()).searchParams.get('service') === 'term') terminalSockets.push(ws.url()) })
 page.on('pageerror', e => failures.push(e.message))
 const received = []
 // Instrument the outgoing frame boundary without changing xterm or transport.
@@ -40,12 +42,21 @@ const bytes = async () => page.evaluate(() => new TextDecoder().decode(new Uint8
 const clear = async () => page.evaluate(() => { window.__terminalBytes = [] })
 const input = () => page.locator('.xterm-helper-textarea')
 try {
+  // Task terminal bookmarks now open the conversation, never a hidden backup.
+  await page.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
+  await page.locator('[data-workspace="chat"]').waitFor()
+  await page.waitForURL(url => !url.searchParams.has('view'))
+  assert.equal(await page.locator('.xterm-helper-textarea').count(), 0)
+  assert.equal(terminalSockets.length, 0, 'task conversation opened a terminal attachment')
+  await page.getByRole('button', { name: 'Details', exact: true }).click()
+  assert.equal(await page.getByRole('button', { name: 'Web terminal (backup)', exact: true }).count(), 0)
+  await page.keyboard.press('Escape')
+  received.push('old task terminal link opens conversation without xterm or terminal socket')
+  // The independent personal Shell still exercises the real xterm/PTY UI.
   await page.goto(`${origin}/app/sessions`)
-  await page.getByRole('link', { name: 'Terminal', exact: true }).first().click()
+  await page.getByRole('link', { name: 'My Terminal', exact: true }).last().click()
   await ready()
-  // a session's terminal is its page's 终端 view (GR5E C9)
-  assert.equal(decodeURIComponent(new URL(page.url()).pathname), `/app/s/${worker}`)
-  assert.equal(new URL(page.url()).searchParams.get('view'), 'term')
+  assert.equal(new URL(page.url()).pathname, '/app/s/shell')
   const screen = await page.locator('.xterm-screen').boundingBox()
   assert(screen)
   await page.mouse.move(screen.x + 1, screen.y + 8)

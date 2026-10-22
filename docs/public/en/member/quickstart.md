@@ -24,40 +24,28 @@ A sign-in lasts 12 hours, after which this computer renews it by itself; when it
 
 ## 3. Open your first session
 
-1. The first time, the list is empty and says `No sessions — type a name` at the bottom.
-2. Type a name, for example `hello`, and press Enter.
-3. A new session opens on the right, with Claude Code in it. Tell it something; when it replies, everything works.
+1. Open the ⌘P panel, select **+ New session**, and press Enter.
+2. Check the repository and agent; choose **No repo** when none is needed. Press Enter again to open.
+3. Tell the new session what to do. When it replies, you are ready.
 
 ## 4. Remember one key
 
 **⌘P** (iTerm2; in other terminals and on a phone **F12** or **⌃] p**) opens the panel:
 
-- every session is here — pick a row to switch to it;
+- PIN comes first, ordinary tasks follow without a heading, and older records are under Earlier conversations; search includes folded history;
 - select “+ New session” and press Enter to open its box: the repository and agent are already chosen, so Enter again opens it; then say what to do in the session;
-- when a session stops to ask you something, its row is marked; switch to it and answer.
+- one slot marks `!` needs your answer, `◷` pending start, `↻` running, or `⟳` Loop, in that priority order; quiet rows leave it empty;
+- Tab → **Stop (resumable)** directly requests a stop for the current session, keeping files and history. Pending requests without a running session cannot yet be cancelled here.
 
 Closing the terminal window does not stop your sessions; type `fleet` in a terminal next time and everything is where you left it.
 
 ## Open a terminal in a desktop browser
 
-Sign in to the portal, open Sessions, and choose **Terminal** on a running session
-to open that session directly. **My Terminal** in the sidebar and Sessions header
-opens your personal terminal. Ended sessions keep their **Resume** action.
-Your own terminal is `/app/s/shell?view=term`, a session's is `/app/s/<session>?view=term`; old `/term?worker=…` and `/app/terminal` links redirect there and keep the target.
+Sign in to the portal and open a row in **Sessions** to see its **web conversation**. The task page offers details, messaging, and Stop for the current running session. Old `/app/s/<session>?view=term` links open the same conversation and explain that native terminal interactions continue in iTerm2. There is no task browser-terminal backup mode.
 
-A dropped connection (network, a hub update, your machine restarting, a phone in the background) is never given up on: the last screen stays, input pauses, and the page tries again at once when it is back in front or the network returns — always reconnecting to the same terminal. Uncertain input is never resent.
-**Open shell** selects your persistent personal shell. Exiting a nested shell with `exit` or EOF returns to its parent. If the session you last viewed has ended, you land back in your personal terminal with a note; if the personal shell itself exited (or your machine's tmux went), the page opens a new personal terminal by itself — exited commands and workers are not restarted.
-A session's terminal whose session ended takes you to your personal terminal; a session that restarted is connected as it is now. If your machine is offline or under maintenance, the page says so and connects as soon as it is back — no refresh needed.
-The page you just opened or clicked back into uses the terminal; another page shows "open in another tab" — click it to bring it back. Only an expired login needs you to sign in again.
-Closing the page preserves the running shell and session.
+The separate **personal Shell** remains available at `/app/s/shell?view=term`. It is a command-line entry point, not another task-list view. After a network interruption it keeps the last screen, pauses input and retries the connection; uncertain input is never resent. Closing the page does not stop a running Shell or task.
 
-On nodes supporting browser terminals, **Fleet menu** or **Ctrl+] then p** opens
-the native panel. **Open shell** switches to the shell; click again to return.
-**Cmd/Ctrl+P** still prints, and **Cmd/Ctrl+W** still closes the browser tab.
-The connection shows **Direct** or **Via hub**. Input is never replayed after a
-disconnect; inspect an interrupted paste before typing it again.
-Pages sent by a session appear as clickable links. Port forwarding, file transfer
-and local sign-in callbacks require a local terminal.
+**Cmd/Ctrl+P** still prints and **Cmd/Ctrl+W** still closes the browser tab. Use iTerm2 or another local terminal for native agent terminal interactions, port forwarding, file transfer and local sign-in callbacks.
 
 ## Next
 

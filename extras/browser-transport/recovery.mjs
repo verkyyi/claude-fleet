@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { chromium } from 'playwright'
+import { mountWorkerTransport, workerTransportURL } from './terminal-view-fixture.mjs'
 
 const { FLEET_TEST_ORIGIN: origin, FLEET_TEST_COOKIE: cookie, FLEET_TEST_WORKER: worker, FLEET_TEST_FIXTURE: fixture } = process.env
 const mode = process.argv[2]
@@ -37,6 +38,7 @@ const observe = () => {
   RTCPeerConnection.prototype.createDataChannel = function(...a) { const dc = create.apply(this, a); dc.addEventListener('message', frame); return dc }
 }
 await context.addInitScript(observe)
+await mountWorkerTransport(context)
 const others = []
 const evidence = []
 const state = async () => (await context.request.get(`${fixture}/state`)).json()
@@ -51,7 +53,7 @@ const wait = async predicate => {
 try {
   for (const target of ['personal', 'worker']) {
     const page = await context.newPage()
-    const url = `${origin}/app/s/${target === 'worker' ? encodeURIComponent(worker) : 'shell'}?view=term`
+    const url = target === 'worker' ? workerTransportURL(origin, worker) : `${origin}/app/s/shell?view=term`
     await page.goto(url)
     const first = await ready(page)
     assert(first?.term && first.gen && first.epoch, 'ready must carry logical identity and controller epoch')
@@ -89,6 +91,7 @@ try {
     others.push({ context: other, target })
     await other.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
     await other.addInitScript(observe)
+    await mountWorkerTransport(other)
     await other.tracing.start({ screenshots: true, snapshots: true, sources: true })
     // RMVE: opening the page takes the terminal — no «Use here»; the page it
     // was taken from says so and does not take it back by itself.
@@ -109,7 +112,7 @@ try {
     evidence.push({ independentBrowserProfiles: true, target, first, resumed, taken, commandCount: 1, homePID: snapshot.home_pid, workerPID: snapshot.worker_pid, pairs })
     if (target === 'personal') {
       const directEntry = await context.newPage()
-      await directEntry.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
+      await directEntry.goto(workerTransportURL(origin, worker))
       await ready(directEntry)
       await second.getByText(ELSEWHERE, { exact: true }).waitFor()
       await directEntry.close()
@@ -132,7 +135,7 @@ try {
   await page.getByRole('button', { name: 'Open shell', exact: true }).click()
   await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
   const processPage = await context.newPage()
-  await processPage.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
+  await processPage.goto(workerTransportURL(origin, worker))
   const oldProcess = await ready(processPage)
   assert.equal(oldProcess.gen, evidence[1].first.gen, 'reopening the worker must keep its generation')
   await context.request.post(`${fixture}/worker-respawn`)
@@ -226,7 +229,7 @@ try {
   await page.getByRole('button', { name: 'Open shell', exact: true }).click()
   await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
   const endedWorker = await context.newPage()
-  await endedWorker.goto(`${origin}/app/s/${encodeURIComponent(worker)}?view=term`)
+  await endedWorker.goto(workerTransportURL(origin, worker))
   await ready(endedWorker)
   await command(endedWorker, 'exit')
   // RMVE: a session's terminal that ended takes you to your own, saying so

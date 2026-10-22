@@ -1,15 +1,15 @@
 #!/bin/bash
 # fleet-view-home-selftest.sh — whichever machine is the 看台's home, the panel is
 # the same (EPIC T644 C7; bin/fleet_id.py's ID cache, bin/fleet_view.py id_record /
-# far_fid / epic_tree, bin/fleet-id.sh pull, bin/fleet-hub-sessions.sh wid_ids).
+# far_fid / task_list, bin/fleet-id.sh pull, bin/fleet-hub-sessions.sh wid_ids).
 #
-# One EPIC batch runs on machine B: its driver D (task T9, @epic) and two members
-# (T10, T11). Home B sees them as its own windows, off its own ledgers; home A sees
+# Three older tasks run on machine B, retaining legacy @epic/parent stamps.
+# The list must show T9, T10 and T11 as independent, flat task rows. Home B sees them as its own windows, off its own ledgers; home A sees
 # them as another machine's rows (keyed `<fleet UUID>/<key>`, no task, no ledger),
 # off its ID cache — filled from the hub's records (GET /v1/node/ids?since=).
 #
 #   A  home A with the cache filled ⇒ every row's short code, name, group, glyph,
-#      fold under the driver and the driver's 已完成/总数 equal home B's, row by row
+#      single status slot equal home B's, row by row; no headings/tree/aggregation
 #   B  home A with nothing cached ⇒ a placeholder (the code this login computes,
 #      id_pending), the members not hung; the frame asks for exactly those IDs in
 #      the background (pull_later), and once they land the next frame equals B's
@@ -36,7 +36,8 @@ cat > "$WORK/children.json" <<'JSON'
  {"id": "T10", "title": "C1 · 账本", "state": "succeeded", "outcome": "succeeded"},
  {"id": "T11", "title": "C2 · 镜像", "state": "running", "outcome": ""}]}
 JSON
-export FLEET_VIEW_EPIC_CMD="cat '$WORK/children.json'"
+export FLEET_VIEW_BOARD=0
+export FLEET_VIEW_EPIC_CMD="echo queried >> '$WORK/children-queries'; cat '$WORK/children.json'"
 
 python3 - "$BIN" "$WORK" <<'PY' || st_fail "the panel by home"
 import importlib.util, json, os, subprocess, sys, time
@@ -140,16 +141,19 @@ def panel(h):
     out = []
     for e in fv.visible(it, "", set()):
         if e["kind"] == "sess":
-            out.append((e.get("id"), e.get("fid"), e["text"], e["group"], e["sym"], e.get("task"), e.get("tree"),
+            out.append((e.get("id"), e.get("fid"), e["text"], e["group"], fv.task_status(e), e.get("task"), e.get("tree"),
                         bool(e.get("fold")), json.dumps(e.get("epic"), sort_keys=True)))
         elif e["kind"] == "hdr":
             out.append(("hdr", e["text"]))
     return out, it
 
 want, _ = panel("B")
-assert any(r[0] == "hdr" for r in want), want
-drv = [r for r in want if r[1] == D]
-assert drv and json.loads(drv[0][8]) == {"done": 1, "total": 2, "rows": 2, "needs": 1, "fail": 0}, want
+assert not any(r[0] == "hdr" for r in want), want
+assert [r[1] for r in want] == [D, M1, M2], want
+assert [r[4] for r in want] == ["work", "quiet", "needs"], want
+assert [r[5] for r in want] == ["T9", "T10", "T11"], want
+assert all(r[6:] == (None, False, "null") for r in want), want
+assert not os.path.exists(os.path.join(W, "children-queries")), "panel queried the old child ledger"
 
 # --- B: home A, nothing cached — a placeholder, the IDs asked for in the background
 got, it = panel("A")
@@ -220,6 +224,7 @@ rec = fi.record(OLD)
 assert rec["opened"]["short"] == fi.encode(OLD)[:6], rec["opened"]
 assert rec["opened"]["title"] == "hub's title" and rec["opened"]["agent"] == "codex", rec["opened"]
 assert rec["results"][-1]["summary"] == "mine", rec["results"]
+assert not os.path.exists(os.path.join(W, "children-queries")), "a home/cache refresh queried child tasks"
 print("ok")
 PY
 

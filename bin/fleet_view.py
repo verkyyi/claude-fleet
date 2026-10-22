@@ -1857,7 +1857,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
             continue
         if len(f) < 15 or not f[0]:
             continue
-        f += [""] * (25 - len(f))
+        f += [""] * (27 - len(f))
         key = f[0]
         local = not key.startswith("wid:")
         target = key if local else key[4:]
@@ -1943,7 +1943,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
-             "today": today, "act": act,
+             "today": today, "act": act, "list_scope": fleet, "source_order": len(seen),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
@@ -1960,6 +1960,9 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         e["task"] = f[21].strip() if re.fullmatch(r"T\d+", f[21].strip()) else ""
         # field 25 (EPIC T644 C7): the row drives an EPIC — here or on another machine
         e["epic_mark"] = f[24].strip() == "1"
+        e["loop"] = recurring_plan(f[25], now)
+        e["native_wait"] = f[26].strip()
+        e["scheduled"] = bool(f[25].strip())
         # the window's own ID (EPIC T497 C3): its short code, ledger agent and result
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else far_fid(target), known)
         if not e["repo"]:
@@ -2053,9 +2056,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
     gone.sort(key=lambda e: ages.get(e["target"], 0))
     if held != held0:
         names_save(fleet, held)
-    # an EPIC's members under its driver (T507) — the hub read off the first frame
-    if fleet:
-        epic_tree(groups, ended, fleet, refresh=hub)
+    # Native agents own internal orchestration; the list never reads children.
     ended = [e for e in groups["queue"] if e.get("ended")]
     # S9: two live windows on one conversation — both to 等你
     id_conflicts([e for g in GROUPS for e in groups[g]] + shut)
@@ -2066,7 +2067,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         e["group"] = "ask"
         groups["ask"].append(e)
     for g in GROUPS:
-        if g != "ask":
+        if g not in ("ask", "pin"):
             moved = [e for e in groups[g] if e.get("conflict")]
             groups[g] = [e for e in groups[g] if not e.get("conflict")]
             for e in moved:
@@ -2081,7 +2082,6 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         groups, gone = board_apply(board, groups, shut, gone, here, me)
         shut, older = [], int(board.get("gone_more") or 0)
         ended = [e for e in groups["queue"] if e.get("ended")]
-        epic_rehang(groups, gone)
     id_display(dict(groups, shut=shut))
     multi = len(set(repos)) >= 2
     out = []
@@ -2118,6 +2118,9 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
                         "text": say("view_cmd_older_fmt", older)})
     task_cache_kick()
     id_cache_kick()
+    for e in out:
+        if e.get("kind") == "sess":
+            e["list_scope"] = fleet
     return out
 
 
@@ -2189,7 +2192,7 @@ def board_apply(board, groups, shut, gone, here, me):
     used = set()
     out = {g: [] for g in GROUPS}
     out_gone = []
-    for r in board.get("rows") or []:
+    for source_order, r in enumerate(board.get("rows") or []):
         g = r.get("group") or "queue"
         e = by_fid.get(r.get("id") or "") or by_wid.get(r.get("worker_id") or "")
         if e is not None and id(e) in used:
@@ -2215,6 +2218,19 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
+        # Either source losing observation is enough to withhold a live glyph.
+        e["lost"] = bool(e.get("lost") or r.get("lost"))
+        e["source_order"] = source_order
+        # The old board's queued tag also covers reserved, undispatched tasks.
+        # Only starting proves an accepted start; never infer it from no session.
+        e["pending_start"] = bool(r["pending_start"]) if "pending_start" in r else r.get("tag") == "starting"
+        if "running" in r:
+            e["running"] = r["running"] is True
+        if "loop" in r:
+            e["loop"] = r["loop"] is True
+        if "native_wait" in r:
+            e["native_wait"] = r["native_wait"]
+        e["needs_input"] = r.get("tag") in ("asking", "waiting_you")
         if "agent_basis" in r or "agent_words" in r:
             e["agent"] = r.get("agent") or ""
             e["agent_basis"] = r.get("agent_basis") or ""
@@ -2448,7 +2464,9 @@ def note_of(e):
     console card's 「为什么还没收」 line, one source). (text, red)."""
     tags = [t for t in (e.get("tags") or []) if t and t != e.get("repo")]
     red = any(say("view_tag_cfg_broken") in t for t in tags)
-    facts = [e.get("board_context"), e.get("word") if e.get("board") else "",
+    facts = [("Execution status unknown" if ui_lang() == "en" else "运行情况未知") if e.get("lost") else "",
+             e.get("board_context"), e.get("word"), e.get("ask"),
+             task_status_word("loop") if e.get("loop") else "",
              agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why")]
     return " · ".join([x for x in facts if x] + tags), red
 
@@ -2472,46 +2490,95 @@ def pickable(e):
     return e["kind"] in ("sess", "sec", "cmd")
 
 
+# In-process ordering survives producer/board state-group changes while this
+# panel is open. It is scoped by fleet and does not use heartbeat timestamps.
+_TASK_ORDER = {}
+TASK_GLYPHS = {"needs": "!", "pending": "◷", "work": "↻", "loop": "⟳", "quiet": " "}
+TASK_GLYPHS_ASCII = {"needs": "!", "pending": ":", "work": ">", "loop": "~", "quiet": " "}
+
+
+def recurring_plan(value, now=None):
+    """Reuse the native mark reader; a one-shot wakeup is never a Loop."""
+    from fleet_loop_mark import parse, prune
+    plan = prune(parse(value), time.time() if now is None else now)
+    return bool(plan.get("cron"))
+
+
+def task_status(e):
+    """One status slot, from observed facts; unknown/lost stays dim, not idle."""
+    if e.get("lost"):
+        return "quiet"
+    state = e.get("state")
+    if e.get("needs_input") or e.get("ask") or state in ("needs", "blocked") or e.get("conflict"):
+        return "needs"
+    if e.get("pending_start"):
+        return "pending"
+    running = e.get("running") if "running" in e else (
+        state == "working" or
+        state == "looping" and bool(set((e.get("native_wait") or "").split(",")) & {"bg", "tool"}))
+    if running:
+        return "work"
+    if e.get("loop"):
+        return "loop"
+    return "quiet"
+
+
+def task_status_word(status):
+    words = {"needs": ("需要我回答", "Needs your answer"), "pending": ("待启动", "Pending start"),
+             "work": ("运行中", "Running"), "loop": ("Loop 已开启", "Loop enabled")}
+    return words.get(status, ("", ""))[ui_lang() == "en"]
+
+
+def task_list(items):
+    """PIN / ordinary tasks / older conversations. Ignore legacy tree/group UI.
+
+    Existing history membership is preserved except where an active observation
+    requires visibility. An exited window alone is not evidence of old history.
+    """
+    rows = [dict(e, depth=0) for e in items if e.get("kind") == "sess"]
+    scope = next((e.get("list_scope") for e in rows if e.get("list_scope")), None)
+    if scope:
+        prior = _TASK_ORDER.get(scope, [])
+        identities = {e["target"] for e in rows}
+        fresh = sorted((e for e in rows if e["target"] not in prior), key=lambda e: e.get("source_order", 10**9))
+        order = [e["target"] for e in fresh] + [t for t in prior if t in identities]
+        _TASK_ORDER[scope] = order
+        ranks = {t: i for i, t in enumerate(order)}
+        rows.sort(key=lambda e: ranks[e["target"]])
+    pin, regular, history = [], [], []
+    for e in rows:
+        for k in ("epic", "epic_mark", "fold", "tree", "expanded"):
+            e.pop(k, None)
+        historical = e.get("sec") == "gone" and not e.get("shut")
+        active = task_status(e) != "quiet" or e.get("lost") or e.get("scheduled")
+        if e.get("group") == "pin":
+            e.pop("sec", None)
+            pin.append(e)
+        elif historical and not active:
+            history.append(e)
+        else:
+            e.pop("sec", None)
+            regular.append(e)
+    result = ([{"kind": "hdr", "group": "pin", "text": "PIN"}] if pin else []) + pin + regular
+    older = [e for e in items if e.get("kind") == "cmd" and e.get("cmd") == "history"]
+    if history or older:
+        result.append({"kind": "sec", "sec": "gone", "text": "Earlier conversations" if ui_lang() == "en" else "更早的会话",
+                       "n": len(history), "older": sum(e.get("n", 0) for e in older)})
+        result += history + older
+    return result
+
+
 def visible(items, query, opened):
-    """What the popup lists. No query: every group, a section's items only when it
-    is open. A query: the rows every word hits, best first, flat (each needs row
-    with its question under it)."""
-    asks = {e["of"]: e for e in items if e["kind"] == "ask"}
+    """Flat, single-line tasks; search includes folded history without opening it."""
+    items = task_list(items)
     if query.split():
         hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess"]
         toks = query.split()
-        # a typed code (EPIC T644 C4, convention 4): the unfinished first — while one
-        # of them answers, a finished row only its code would list stays out
         if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
             hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
-        out = []
-        for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1])):
-            out.append(dict(e, depth=0))
-            if e.get("target") in asks and not e.get("sec"):
-                out.append(dict(asks[e["target"]], depth=0))
-        return out
-    drivers = {e["target"]: e for e in items if epic_folds(e)}
-    hide = {e["target"] for e in items if e["kind"] == "sess" and epic_hidden(e, drivers)}
-    out = [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
-           for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)
-           and not (e["kind"] == "sess" and e.get("target") in hide)
-           and not (e["kind"] == "ask" and e.get("of") in hide)]
-    if not drivers:
-        return out
-    # the tree in the name column (T507): ├ each shown member, └ the last
-    last = {}
-    for i, e in enumerate(out):
-        if e["kind"] == "sess" and e.get("fold") in drivers:
-            last[e["fold"]] = i
-    stem = {}
-    for i, e in enumerate(out):
-        if e["kind"] == "sess" and e.get("fold") in drivers:
-            end = last[e["fold"]] == i
-            out[i] = dict(e, tree="└ " if end else "├ ")
-            stem[e["target"]] = "  " if end else "│ "
-        elif e["kind"] == "ask" and e.get("of") in stem:
-            out[i] = dict(e, tree=stem[e["of"]])
-    return out
+        return [e for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1]))]
+    return [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
+            for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)]
 
 
 def sec_fold(opened, sec, expand):
@@ -2521,9 +2588,9 @@ def sec_fold(opened, sec, expand):
 
 
 def legend():
-    """The one line `?` toggles on an empty query: every glyph and its word."""
-    gl = glyphs()
-    return "  ".join("%s %s" % (gl[k], say("view_legend_" + k)) for k in LEGEND)
+    """The four facts sharing the row's single status slot."""
+    gl = TASK_GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else TASK_GLYPHS
+    return "  ".join("%s %s" % (gl[k], task_status_word(k)) for k in ("needs", "pending", "work", "loop"))
 
 
 PUNCT = "，。；：、！？,;:!?·—)）」』"
@@ -2562,14 +2629,15 @@ def name_col(width):
 
 
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
-    """One session as plan B draws it (T486 v14 §1): glyph(1) · ID(8, bold) ·
-    Agent(7) · short name · repo(13), the repo column kept when empty. Only ! and ✗
-    are coloured (red, bold); a lost row is grey end to end; 未知 is grey."""
-    gl, col = glyphs(), color_on()
+    """One status slot · ID(8) · Agent(7) · title · repo(13).
+    Only a request for input is red/bold; lost observations dim the whole row.
+    Legacy parent/member metadata never changes title geometry.
+    """
+    gl = TASK_GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else TASK_GLYPHS
+    col = color_on()
     base = (("dim",) if e.get("lost") else ()) + (("lit",) if lit else ())
-    sym = e.get("sym") or "idle"
-    gstyle = base + (("c%d" % GLYPH_COLORS[sym], "bold") if col and sym in ROW_RED and not e.get("lost") else ())
-    indent = "  " * (e.get("depth") or 0)
+    sym = task_status(e)
+    gstyle = base + (("c1", "bold") if col and sym == "needs" else ())
     show_repo = width >= 60
     show_agent = width >= 40
     agent = agent_word(e)
@@ -2584,29 +2652,8 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     used = sum(cells(t) for t, _ in segs)
     tail = (REPO_W + 2) if show_repo else 1
     room = max(1, width - used - tail)
-    # an EPIC (T507): a member's tree, the driver's ▸ / ▾ and its 已完成/总数 —
-    # grey — then !k / ✗k in red for the members that still show folded
-    lead = e.get("tree") or indent
-    ep = e.get("epic")
-    after = []
-    if ep:
-        if epic_folds(e):
-            lead = ("▾ " if e.get("expanded") else "▸ ") + lead
-        after.append((" %d/%d" % (ep["done"], ep["total"]), base + ("dim",)))
-        red = base + ((("c%d" % GLYPH_COLORS["needs"], "bold") if col and not e.get("lost") else ()))
-        for k in ("needs", "fail"):
-            if ep.get(k):
-                after.append((" %s%d" % (gl[k], ep[k]), red))
-    extra = sum(cells(t) for t, _ in after)
-    if extra and room - extra < 8:
-        after, extra = [], 0
-    name = clip_name(lead + (e.get("text") or ""), room - extra, cells, clip)
-    if after:
-        segs.append((name, base))
-        segs += after
-        segs.append((" " * max(0, room - extra - cells(name)), base))
-    else:
-        segs.append((name + " " * max(0, room - cells(name)), base))
+    name = clip_name(e.get("text") or "", room, cells, clip)
+    segs.append((name + " " * max(0, room - cells(name)), base))
     if show_repo:
         r = ellipsis(e.get("repo") or "", REPO_W, cells, clip)
         segs.append((" " + r + " " * (REPO_W - cells(r)) + " ", base))
@@ -2725,7 +2772,7 @@ def row_gone_at(shown, at):
 
 def session_order(items):
     """The order ⌘↓ / ⌘↑ walk: every session line of the list, as it is drawn."""
-    return [e["target"] for e in items if e["kind"] == "sess" and e.get("target") and not e.get("gone")]
+    return [e["target"] for e in task_list(items) if e["kind"] == "sess" and e.get("target") and not e.get("gone")]
 
 
 def order_file(vid):
@@ -4243,13 +4290,17 @@ def menu_of(r):
 # in ACTIONS for `fleet view-act` and the command line, and are done from
 # elsewhere (进入 answers and resumes; ⌃\ the shell; ⌃T the pin). A
 # reaped session's one item is 恢复.
-PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "webopen", "reap")
+PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "webopen", "stop")
 
 
 def page_of(r, missing=None):
     """The actions page of row `r`: [(action, label, why)] in PAGE_ACTIONS order;
     `why` non-empty = shown grey, unnumbered, skipped — the switch to an agent
     this machine lacks (`missing`: grid_read's {agent: why})."""
+    if r.get("record_only"):
+        why = "No live session; pending-request cancellation is unavailable here" if ui_lang() == "en" else "暂无运行会话；此入口尚不支持撤销待启动请求"
+        a = ACTION["stop"]
+        return [(a, a["label"](r), why)]
     have = {a["id"]: (a, label) for a, label in menu_of(r)}
     out = []
     for aid in PAGE_ACTIONS:

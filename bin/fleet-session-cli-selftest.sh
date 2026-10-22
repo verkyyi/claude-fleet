@@ -16,10 +16,10 @@
 #                            policy canonical, a bad one refused before any write) ·
 #                            worker_answer (no session named = the first waiting;
 #                            y → yes); a refused write → exit 1 with why
-#   E  close                 worker_reap through fleet_hub_reap (FLEET_HUB_WRITE_CMD
-#                            fakes the hub): --yes, and no terminal without it → 2;
+#   E  close                 worker_stop, no single-row confirmation; --yes is
+#                            compatible, native activity / reap policy do not gate it;
 #                            E3 door 3 — only a `fleet login` certificate: a fake
-#                            hub on 127.0.0.1 gets a worker_reap whose signature
+#                            hub on 127.0.0.1 gets a worker_stop whose signature
 #                            checks (issue #2506)
 #   F  open                  with no home to go through (the old client's list
 #                            that took a jump went with it, issue #3008) → exit 1
@@ -34,7 +34,7 @@
 #                            renamed driver, or a scratch wearing an issue cell
 #   J  test rows (issue #2505) a test identity's session (cache field 26 = 1) is
 #                            listed 「（测试）」, ls --json says test; `close --test`
-#                            reaps every one of them and no other row; none → 0
+#                            stops every one of them and no other row; none → 0
 #   K  service / task (issue #2527) `fleet task run <名称> --now` · stop · start ·
 #                            restart · schedule → the hub's service_control on the
 #                            entry's (machine, login) off the services table; no
@@ -219,19 +219,61 @@ eq "D a refused write → exit 1" 1 "$rc"
 has "D …with the node's reason" "the session is gone" "$err"
 
 # --- E. close -----------------------------------------------------------------------
-cli close 聊聊 </dev/null >/dev/null 2>&1; eq "E close with no terminal and no --yes → 2" 2 "$?"
-out=$(FLEET_HUB_WRITE_CMD='printf "%s\n" "$1" >> '"$W/reaps"'; echo "{\"operation_id\":\"op9\",\"status\":\"succeeded\",\"result\":{\"token\":\"reaped:full\"}}"' \
-  cli close 聊聊 --yes 2>&1); rc=$?
-eq "E close --yes exits 0" 0 "$rc"
-has "E close says the token" "已回收 随便聊聊（reaped:full）" "$out"
-eq "E …through worker_reap" worker_reap "$(cat "$W/reaps" 2>/dev/null)"
-out=$(FLEET_HUB_WRITE_CMD='echo "{\"operation_id\":\"op9\",\"status\":\"failed\",\"result\":{\"error\":{\"token\":\"skip:live\",\"message\":\"it is working\"}}}"' \
-  cli close 聊聊 --yes 2>&1); rc=$?
-eq "E a reap the node skipped → exit 1" 1 "$rc"
-has "E …and says which" "skip:live" "$out"
+: > "$W/writes"
+out=$(cli close 聊聊 </dev/null 2>&1); rc=$?
+eq "E close with no terminal and no --yes → 0" 0 "$rc"
+has "E close reports the stop operation" "停止 随便聊聊：已完成" "$out"
+eq "E keep policy does not gate worker_stop" 'worker_stop {"worker_id": "F/scratch-3"}' "$(tail -1 "$W/writes")"
+cli close 13 --yes </dev/null >/dev/null; eq "E --yes stays compatible for working session" 0 "$?"
+eq "E working session → worker_stop" 'worker_stop {"worker_id": "F/issue-13"}' "$(tail -1 "$W/writes")"
+cli close '#12' -y </dev/null >/dev/null; eq "E -y stays compatible for needs-input session" 0 "$?"
+eq "E needs-input session → worker_stop" 'worker_stop {"worker_id": "F/issue-12"}' "$(tail -1 "$W/writes")"
+out=$(FAKE_REFUSE=1 cli close 聊聊 2>&1); rc=$?
+eq "E a refused stop → exit 1" 1 "$rc"
+has "E failed stop says why" "the session is gone" "$out"
+n=$(wc -l < "$W/writes")
+cli close 登录页 </dev/null >/dev/null 2>&1; eq "E ambiguous stop refuses" 4 "$?"
+cli close missing </dev/null >/dev/null 2>&1; eq "E unknown stop refuses" 3 "$?"
+eq "E bad targets sent nothing" "$n" "$(wc -l < "$W/writes")"
+
+# The exact command path: loop/keep/unmerged are not stop gates, a bulk request
+# asks once and still reaches later rows if an earlier node refuses.
+python3 - "$BIN/fleet-session-cli.py" <<'PY2'
+import contextlib
+import importlib.util
+import io
+import sys
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("session_cli", sys.argv[1])
+cli = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cli)
+rows = [dict(key="wid:F/loop", name="loop", node="node-a", state="looping", reap="keep", pr="unmerged", test=True),
+        dict(key="wid:F/answer", name="answer", node="node-b", state="needs", reap="keep", pr="", test=True)]
+with patch.object(cli, "rows", return_value=rows), patch.object(cli, "attach_bus", side_effect=lambda r: r), \
+     patch.object(cli, "table"), patch.object(cli, "ask", return_value="yes") as ask, \
+     patch.object(cli, "hub_write", side_effect=[(False, "remote stop unconfirmed"), (True, "已完成")]) as write, \
+     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    assert cli.cmd_close(["--test"]) == 1
+    assert ask.call_count == 1
+    assert [c.args for c in write.call_args_list] == [
+        ("worker_stop", {"worker_id": "F/loop"}), ("worker_stop", {"worker_id": "F/answer"})]
+with patch.object(cli, "rows", return_value=rows), patch.object(cli, "attach_bus", side_effect=lambda r: r), \
+     patch.object(cli, "table"), patch.object(cli, "ask", return_value="no"), patch.object(cli, "hub_write") as write:
+    assert cli.cmd_close(["--test"]) == 1
+    write.assert_not_called()
+with patch.object(cli, "rows", return_value=rows), patch.object(cli, "ask", side_effect=AssertionError("single stop must not confirm")), \
+     patch.object(cli, "hub_write", return_value=(True, "入口已受理，那台机器处理中")) as write, \
+     contextlib.redirect_stdout(io.StringIO()) as output:
+    assert cli.cmd_close(["wid:F/loop"]) == 0
+    write.assert_called_once_with("worker_stop", {"worker_id": "F/loop"}, wait=90)
+    assert "处理中" in output.getvalue() and "已完成" not in output.getvalue()
+print("PASS close: native activity does not gate stop; bulk confirms once, preserves refusal and continues; pending is not claimed stopped")
+PY2
+eq "E stop command contract" 0 "$?"
 
 # E3: door 3 — no FLEET_HUB_WRITE_CMD, no viewer token, only a fleet login
-# certificate: fleet-hub-write.sh signs the worker_reap itself (issue #2506 — its
+# certificate: fleet-hub-write.sh signs the worker_stop itself (issue #2506 — its
 # post_cert read $CERT_KEY that only a $(cert_state) subshell had set, so under
 # set -u every certificate write died «CERT_KEY: unbound variable»). A fake hub on
 # 127.0.0.1 records the request; the signature must check against the message.
@@ -250,7 +292,7 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         with open(os.path.join(d, "req"), "wb") as f: f.write(body)
         out = json.dumps({"operation_id": "op3", "status": "succeeded",
-                          "result": {"token": "reaped:full"}}).encode()
+                          "result": {"how": "stopped:forced"}}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
@@ -261,12 +303,13 @@ PY2
   HUBPID=$!
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$W/hub/port" ] && break; sleep 0.2; done
   out=$(CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$W/hub/port" 2>/dev/null)" FLEET_CERT="$W/cert/key" \
-    cli close 聊聊 --yes 2>&1); rc=$?
+    FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="$W/remote" FLEET_SESSION_CLI_NOW="$NOW" \
+    python3 "$BIN/fleet-session-cli.py" close 聊聊 2>&1); rc=$?
   kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null
   eq "E3 close by certificate exits 0" 0 "$rc"
-  has "E3 …says the token" "已回收 随便聊聊（reaped:full）" "$out"
+  has "E3 …says the stop result" "停止 随便聊聊：已完成 · stopped:forced" "$out"
   case "$out" in *unbound*) eq "E3 …no unbound variable" "" "$out" ;; esac
-  eq "E3 the hub got a signed worker_reap for that worker" "worker_reap F/scratch-3 cert-ok" "$(python3 - "$W/hub/req" "$W/cert" <<'PY2'
+  eq "E3 the hub got a signed worker_stop for that worker" "worker_stop F/scratch-3 cert-ok" "$(python3 - "$W/hub/req" "$W/cert" <<'PY2'
 import hashlib, json, subprocess, sys
 try:
     r = json.load(open(sys.argv[1]))
@@ -336,20 +379,19 @@ eq "I ls --json: progress + epic_url" "7/9|https://github.com/acme/web/issues/24
   printf '%s\n' "wid:F/fid-a${U}mac-b${U}online${U}${U}${U}idle${U}claude${U}test-norepo${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
   printf '%s\n' "wid:F/fid-b${U}mac-a${U}online${U}${U}${U}idle${U}claude${U}test-norepo-2${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:10m${U}${U}${U}${U}${U}${U}${U}${U}1"
 } > "$W/remote-test"
-ctst() { FLEET_SESSION_CLI_ROWS="$W/rows-test.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-test" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
+ctst() { FLEET_SESSION_CLI_WRITE="$W/write" FLEET_SESSION_CLI_ROWS="$W/rows-test.tsv" FLEET_SESSION_CLI_CACHE="$W/remote-test" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
 out=$(ctst ls)
 has "J ls: a test row says so" "test-norepo（测试）" "$out"
 case "$out" in *"登录页重做（测试）"*) eq "J ls: an ordinary row is no test" none test ;; *) eq "J ls: an ordinary row is no test" none none ;; esac
 eq "J ls --json: test" "wid:F/issue-12|False;wid:F/fid-a|True;wid:F/fid-b|True;" \
   "$(ctst ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["key"], r["test"]) for r in json.load(sys.stdin)))')"
 ctst close --test </dev/null >/dev/null 2>&1; eq "J close --test with no terminal and no --yes → 2" 2 "$?"
-: > "$W/reaps-test"
-out=$(FLEET_HUB_WRITE_CMD='printf "%s %s\n" "$1" "$2" >> '"$W/reaps-test"'; echo "{\"operation_id\":\"op9\",\"status\":\"succeeded\",\"result\":{\"token\":\"reaped:full\"}}"' \
-  ctst close --test --yes 2>&1); rc=$?
+: > "$W/writes"
+out=$(ctst close --test --yes 2>&1); rc=$?
 eq "J close --test --yes exits 0" 0 "$rc"
-has "J …reaps the first" "已回收 test-norepo（reaped:full）" "$out"
-has "J …and the second" "已回收 test-norepo-2（reaped:full）" "$out"
-eq "J …two worker_reaps, the test rows only" "2 0" "$(grep -c '^worker_reap ' "$W/reaps-test") $(grep -c 'issue-12' "$W/reaps-test")"
+has "J …stops the first" "停止 test-norepo：已完成" "$out"
+has "J …and the second" "停止 test-norepo-2：已完成" "$out"
+eq "J …two worker_stops, the test rows only" "2 0" "$(grep -c '^worker_stop ' "$W/writes") $(grep -c 'issue-12' "$W/writes")"
 out=$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="$W/remote" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" close --test 2>&1); rc=$?
 eq "J no test rows → exit 0" 0 "$rc"
 has "J …and says so" "没有测试会话" "$out"

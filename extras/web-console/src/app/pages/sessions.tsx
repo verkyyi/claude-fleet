@@ -14,10 +14,6 @@ import {
   ArrowUpRight, ChevronDown, ChevronRight,
   Layers, Loader, MessageCircle, Plus, RotateCcw, Search, Sparkles, TerminalSquare, Trash2,
 } from "lucide-react";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
-  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -171,7 +167,6 @@ const TaskFacts: FC<{ t: Task; stale: boolean }> = ({ t, stale }) => {
         <dt>{tr("运行证据", "Runtime evidence")}</dt><dd>{tr("未知 · inventory 未提供原生同源快照", "Unknown · inventory has no shared native snapshot")}</dd>
         <dt>{tr("接受/投递", "Acceptance/delivery")}</dt><dd>{tr("未知 · 缺少 controller 回执", "Unknown · controller receipt unavailable")}</dd>
         <dt>{tr("循环计划", "Loop schedule")}</dt><dd>{tr("未知 · 未提供计划证据，运行不表示已接受", "Unknown · schedule evidence unavailable; running does not mean accepted")}</dd>
-        <dt>{tr("回收保留", "Reap retention")}</dt><dd>{tr("未知 · 未提供同源 proof；不授权关闭", "Unknown · shared proof unavailable; no permission to close")}</dd>
         <dt>{tr("部署 / 现场", "Deployment / live")}</dt><dd>{tr("未知 · PR 合并不等于上线", "Unknown · PR merged does not mean deployed")}</dd>
         <dt>{tr("来源", "Source")}</dt><dd>{tr("任务：hub 权威 GET；会话：inventory（与 native runtime 独立）", "Task: authoritative hub GET; session: inventory (separate from native runtime)")}</dd>
         <dt>{tr("任务更新于", "Task updated")}</dt><dd>{t.updated_at || unknown()}</dd>
@@ -195,12 +190,8 @@ const TaskFacts: FC<{ t: Task; stale: boolean }> = ({ t, stale }) => {
 
 // One row's details: what it asks, the person's words, its report, its PR,
 // its members, its session, the ways in.
-// onTerminal (GR5E C4): inside a session's workspace its terminal is a switch
-// away — the buttons switch there instead of opening /terminal
-// 命令行接入 (会话合一 Y01K): inside a session's own page its 详情 gives the
-// line that opens it in the person's terminal and the install line; the web
-// terminal is one small line at the foot (onTerminal), never a big button.
-const CliAccess: FC<{ r: Row; onTerminal?: () => void }> = ({ r, onTerminal }) => {
+// Native terminal access stays in iTerm2 via the copied fleet command.
+const CliAccess: FC<{ r: Row }> = ({ r }) => {
   const install = useInstallLine();
   return (
     <div className="space-y-1.5" data-testid="cli-access">
@@ -209,8 +200,7 @@ const CliAccess: FC<{ r: Row; onTerminal?: () => void }> = ({ r, onTerminal }) =
       <p className="text-muted-foreground pt-1 text-xs">{tr("还没装 fleet？先在 iTerm2 里粘贴：", "No fleet yet? Paste this in iTerm2 first:")}</p>
       <CopyLine text={install} />
       <p className="text-muted-foreground text-xs">{tr("Windows 在 WSL 里粘贴同样两行。", "On Windows, paste the same two lines in WSL.")}</p>
-      {onTerminal ? <p className="pt-2 text-[12px]"><button type="button" onClick={onTerminal} data-testid="web-term"
-        className="text-muted-foreground hover:text-foreground">{tr("网页终端（备用）", "Web terminal (backup)")}</button></p> : null}
+
     </div>
   );
 };
@@ -235,7 +225,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         <p className="text-muted-foreground text-sm">{[tr(...r.tag), machine, t?.repo || s?.repo].filter(Boolean).join(" · ")}</p>
         {r.board?.agent_words ? <p className="text-sm">{tr(...r.board.agent_words)}</p> : null}
         {r.board?.context ? <p className="max-w-full text-sm [overflow-wrap:anywhere]">{tr(...r.board.context)}</p> : null}
-        {r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
+        {!cli && r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
       </div>
       {asking && r.live ? (
         <Card className="border-clay-line bg-clay-soft gap-2 py-3">
@@ -268,7 +258,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         {/^[\w.-]+\/[\w.-]+$/.test(ticket.repo) ? <a href={`https://github.com/${ticket.repo}/issues/${ticket.n}`} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>
           {ticket.repo}#{ticket.n} <ArrowUpRight className="inline size-3.5" aria-hidden /></a> : <span className="break-all">{ticket.repo}#{ticket.n}</span>}
       </Field> : null}
-      {r.kids.length ? <Field label={tr(`成员 ${r.kids.length}`, `Members ${r.kids.length}`)}>
+      {!cli && r.kids.length ? <Field label={tr(`成员 ${r.kids.length}`, `Members ${r.kids.length}`)}>
         <div className="divide-y rounded-lg border">
           {r.kids.map((k) => {
             const Icon = GLYPH[k.glyph];
@@ -290,55 +280,37 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           : <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
         {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
         {t && !cli ? <Button asChild variant="outline" className="flex-1"><Link to={`/chat?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
-        {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("回收", "Close")} title={tr("回收", "Close")}><Trash2 /></Button> : null}
+        {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("停止", "Stop")} title={tr("停止", "Stop")}><Trash2 /></Button> : null}
       </div>
-      {cli && (r.live || r.board?.worker_id) ? <CliAccess r={r} onTerminal={onTerminal} /> : null}
+      {cli && (r.live || r.board?.worker_id) ? <CliAccess r={r} /> : null}
       {t ? <TaskFacts t={t} stale={stale} /> : null}
     </div>
   );
 };
 
-// One row's details with their two writes (回收 · 接回) and what came of them —
+// One row's details with explicit stop / resume and their request acknowledgments —
 // 会话's side panel and a session's own page (/s/:ref, GR5E C2) alike.
 export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () => void; cli?: boolean }> = ({ r, onOpen, onTerminal, cli }) => {
   const { stale, reload } = useWorkRows();
-  const [confirm, setConfirm] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
-  const act = async (x: Row, tool: "worker_reap" | "worker_resume") => {
-    const id = tool === "worker_reap" ? x.live?.id : x.ended?.id;
+  const act = async (x: Row, tool: "worker_stop" | "worker_resume") => {
+    const id = tool === "worker_stop" ? x.live?.id : x.ended?.id;
     if (!id) return;
     setBusy(true);
     setNote(null);
     const why = await sessionWrite(tool, id);
     setBusy(false);
-    setConfirm(null);
-    if (why) setNote({ ok: false, text: tool === "worker_reap" ? tr(`没能回收：${why}`, `Could not close it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
-    else setNote({ ok: true, text: tool === "worker_reap" ? tr("已回收，放进「已收起」——之后还能接回。", "Closed — it is under Put away and can be resumed.")
+    if (why) setNote({ ok: false, text: tool === "worker_stop" ? tr(`没能停止：${why}`, `Could not stop it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
+    else setNote({ ok: true, text: tool === "worker_stop" ? tr("停止请求已提交，等待会话状态更新。", "Stop requested; waiting for the session observation.")
       : tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
     reload();
   };
   return (
     <>
       {note ? <p role="status" className={cn("mb-4 text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
-      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={setConfirm} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} cli={cli} />
-      <AlertDialog open={!!confirm} onOpenChange={(o) => !o && !busy && setConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{tr(`回收「${confirm?.title ?? ""}」？`, `Close “${confirm?.title ?? ""}”?`)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {tr("会话停下、腾出位置。它做过的事都留着，之后可以在「已收起」里接回。",
-                "The session stops and frees its place. Its work is kept; you can resume it from Put away.")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>{tr("先不", "Not now")}</AlertDialogCancel>
-            <AlertDialogAction disabled={busy} onClick={(e) => { e.preventDefault(); if (confirm) void act(confirm, "worker_reap"); }}>
-              {busy ? <Loader className="animate-spin" aria-hidden /> : null}{tr("回收", "Close")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={(x) => act(x, "worker_stop")} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} cli={cli} />
+
     </>
   );
 };

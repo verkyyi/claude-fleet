@@ -221,7 +221,7 @@ screen() { to capture-pane -p -t o; }
 waitfor() { local _i; for _i in $(seq 1 40); do screen | grep -qF -- "$1" && return 0; sleep 0.1; done; return 1; }
 waitfor 'Tab 操作' || st_fail "D: the list did not open: $(screen)"
 to send-keys -t o Tab
-waitfor '回收…' || st_fail "D: Tab opened no menu: $(screen)"
+waitfor '停下（可恢复）' || st_fail "D: Tab opened no menu: $(screen)"
 screen > "$W/menu.txt"
 # plan B (T493): a whole page — the row on top, a rule, numbered items
 sed -n 2p "$W/menu.txt" | grep -q 'Alpha 做完了' || st_fail "D: the page's top line is not the row: $(cat "$W/menu.txt")"
@@ -234,23 +234,12 @@ waitfor 'POPUP-CLOSED' || st_fail "D: Esc did not close the list"
 to respawn-pane -k -t o "env TMUX='$IN,0,0' ESCDELAY=25 python3 '$BIN/fleet-quickopen.py' --view fl@view-v1; echo POPUP-CLOSED; sleep 600"
 waitfor 'Tab 操作' || st_fail "D: the list did not reopen"
 screen > "$W/before.txt"
-to send-keys -t o Tab; waitfor '回收…' || st_fail "D: no menu"
+to send-keys -t o Tab; waitfor '停下（可恢复）' || st_fail "D: no menu"
 for _ in $(seq 1 20); do to send-keys -t o Down; done
-waitfor '回收…' || st_fail "D: ↓ did not reach 回收: $(screen)"
 to send-keys -t o Enter
-waitfor '回收「Alpha 做完了」？(y/n)' || st_fail "D: 回收 did not ask y/n: $(screen)"
-to send-keys -t o n
-waitfor '1 进入' || st_fail "D: n did not return to the actions page: $(screen)"
-to send-keys -t o Escape
-waitfor 'Tab 操作' || st_fail "D: Esc did not return to the list"
-[ -z "$(calls)" ] || st_fail "D: 回收 → n ran «$(calls)»"
-to send-keys -t o Tab; waitfor '回收…' || st_fail "D: no menu (2)"
-for _ in $(seq 1 20); do to send-keys -t o Down; done
-to send-keys -t o Enter; waitfor '(y/n)' || st_fail "D: no y/n (2)"
-to send-keys -t o y
 for _ in $(seq 1 40); do [ -n "$(calls)" ] && break; sleep 0.1; done
-[ "$(calls)" = "dash-reap.sh|$W1|--yes" ] || st_fail "D: 回收 → y ran «$(calls)»"
-waitfor '回收：已在后台做' || st_fail "D: the list does not say the reap is under way: $(screen)"
+[ "$(calls)" = "fleet-worker-stop.sh|fl|fid:f1" ] || st_fail "D: stop must run once without confirmation: $(calls)"
+waitfor '停下（可恢复）：已在后台做' || st_fail "D: the list does not say stop is under way: $(screen)"
 screen > "$W/after.txt"
 reset
 to send-keys -t o Tab; waitfor '改名…' || st_fail "D: no menu (3)"
@@ -275,7 +264,7 @@ if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
   { echo '--- 改动后：⌘P 选中「Alpha 做完了」· 回收前'; cat "$W/before.txt"; echo '--- Tab → 回收… → y 之后';
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
-st_ok_all "D  popup: Tab opens the row's actions page, Esc steps back and closes with nothing run; 回收 asks y/n (n back to the page, y one dash-reap.sh); 改名 asks on its page; 置顶当前会话 and ⌃T (#3517)"
+st_ok_all "D  popup: Tab opens the row's actions page, Esc steps back and closes with nothing run; Stop acts once by fid without a confirmation; 改名 asks on its page; 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
 # the sidebar's own cache (fleet-row-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)

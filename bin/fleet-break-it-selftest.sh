@@ -6986,16 +6986,16 @@ PY
 }
 
 # Home moved, panel changed (EPIC T644 C7): the operator moved the 看台's home from
-# one machine to another and the first one's sessions lost their short codes and their EPIC parent
+# one machine to another and the first one's sessions lost their short codes and cached task facts
 # — each machine's ID ledger is its own, and the panel read only this machine's.
 # Now every machine keeps the hub's records in an ID cache (fleet-id.sh pull) and
-# the panel reads that: home A shows a batch on B row by row as home B does.
+# the panel reads that: home A shows B's independent task rows exactly as home B does.
 drill_home_moved_panel_differs() {
   CAP=60; local t0 out
   t0=$(now)
   out=$(bash "$BIN/fleet-view-home-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep -v '^ok' | tail -4)"; return 1; }
   SECS=$(since "$t0")
-  WHAT='家在 A、会话在 B：短码、名字、分组、EPIC 父子与 已完成/总数 与家在 B 逐行相同；缓存没有先占位、后台补齐；hub 不答照旧缓存画'
+  WHAT='家在 A、会话在 B：短码、名字、单一状态位与平铺任务行逐行相同；缓存没有先占位、后台补齐；hub 不答照旧缓存画'
 }
 
 # ⌘P's ↑ walked its own loop (T762): it skipped ✦ 消息 and went round to ⚡, so four
