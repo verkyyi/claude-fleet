@@ -58,7 +58,16 @@ def root():
 
 
 def shared_file(path):
-    fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        try:
+            fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            fd = os.open(path, flags)
+    # Never O_CREAT on an existing root/peer-owned slot: Linux's
+    # fs.protected_regular refuses it in sticky shared directories.
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise OSError('wake slot is not a regular file')
