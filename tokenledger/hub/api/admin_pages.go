@@ -143,6 +143,8 @@ func fleetAuditKind(action string) string {
 		return auditUsers
 	case action == "session_bind" || action == "session_cred":
 		return auditSubs
+	case strings.HasPrefix(action, "emergency."): // the 紧急开关 (WACK C5)
+		return auditSettings
 	case action == "team_bundle_put" || action == "person_bundle_put":
 		return auditSettings
 	case action == "client_action" || action == "client_revoke":

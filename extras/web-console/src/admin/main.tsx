@@ -24,6 +24,7 @@ import { SettingsPage } from "./pages/Settings";
 import { RequestsPage } from "./pages/Requests";
 import { NoticesPage } from "./pages/Notices";
 import { TrialCodesPage } from "./pages/TrialCodes";
+import { EmergencyPage } from "./pages/Emergency";
 
 const routes = [
   {
@@ -49,6 +50,7 @@ const routes = [
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/:k", element: <SettingsPage /> },
       { path: "audit", element: <AuditPage /> },
+      { path: "emergency", element: <EmergencyPage /> },
       { path: "*", element: <NotFound /> },
     ],
   },

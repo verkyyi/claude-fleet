@@ -156,6 +156,8 @@ var routeAccess = map[string]string{
 	AdminNoticesPath: accessAdmin,
 	// 管理侧「试用二维码」(claude-fleet MRGB): 404 to a member, as the requests
 	AdminTrialCodesPath: accessAdmin, adminTrialCodesPrefix: accessAdmin,
+	// 紧急开关 (WACK C5): 403 to a member
+	AdminEmergencyPath: accessAdmin,
 	// A person's task authority (claude-fleet#4896): a node token or a person's own sign-in.
 	FleetAuthorityPath: accessSelf, FleetAuthorityPath + "/": accessSelf,
 	control.RoutesPath: accessSelf,

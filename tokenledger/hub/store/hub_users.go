@@ -550,3 +550,12 @@ func (s *Store) HubAuditTargetHas(action, target string) (bool, error) {
 	err := s.read.QueryRow(`SELECT COUNT(*) FROM hub_audit WHERE action = ? AND target = ?`, action, target).Scan(&n)
 	return n > 0, err
 }
+
+// HubAuditTargetsSince is how many distinct targets have a hub_audit row of
+// action with exactly detail since t.
+func (s *Store) HubAuditTargetsSince(action, detail string, since time.Time) (int, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(DISTINCT target) FROM hub_audit WHERE action = ? AND detail = ? AND created >= ?`,
+		action, detail, since.UTC().Format(rfc)).Scan(&n)
+	return n, err
+}
