@@ -167,17 +167,24 @@ class Recovery(unittest.TestCase):
         self.assertNotIn('wake', acts)
 
     def test_recovery_page_with_stale_sid_is_not_a_wake_receipt(self):
+        import fleet_park_wake as wake
         f, gate = self.fixture(agent='codex')
         with patch.dict(os.environ, f.env):
             self.assertTrue(gate.park(f.fid)['ok'])
             # Persisted shape of C5's failed old wrapper: ordinary recovery,
             # old SID present, parked/identity/start absent, no native receipt.
             f.set('@parked', '')
+            f.set('@park_held', '')
             f.set('@claude_state', 'exited')
             row = dict(v=1, fid=f.fid, delivery='dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee',
                        sid=f.sid, agent='codex', text='unaccepted words', images=[],
-                       at=time.time(), state='waking', wake_at=time.time() - 100, tries=1)
+                       at=time.time(), state='waking', wake_at=time.time() - 100, tries=1,
+                       wake_why='定时', wake_next=123, method='wake')
             gate.save(row)
+            wake.save(wake.path_for(f.fid), dict(v=1, fid=f.fid, sid=f.sid, agent='codex',
+                phase='active', parked=True, jobs=[dict(id='timer', kind='wakeup',
+                prompt=row['text'], next=123, recurring=False)], pending=dict(
+                delivery=row['delivery'], prompt=row['text'], next=123, rounds=[['timer', 123]])))
             seed = gate.wake_path(f.fid, row['delivery'])
             Path(str(seed) + '.taken').write_text(row['text'])
             gate.settle(f.fid)
@@ -185,6 +192,8 @@ class Recovery(unittest.TestCase):
             self.assertEqual((result['state'], result['why']), ('returned', 'wake_timeout'))
             self.assertEqual(result['text'], row['text'])
             self.assertFalse(gate.wake(f.fid)['ok'], 'cleared parked and stale SID are not ready')
+            wake.tick(f.fid)
+            self.assertEqual(gate.read_json(wake.path_for(f.fid))['attention'], 'wake_timeout')
             gate.settle(f.fid)
             acts = [json.loads(line)['act'] for line in (f.root / 'conf/logs/park.ndjson').read_text().splitlines()]
             self.assertEqual(acts.count('fail'), 1)

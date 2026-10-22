@@ -441,7 +441,10 @@ def tick(fid, at=None):
                 if r and r.get('pending', {}).get('delivery') == pending['delivery'] and not r.get('attention'):
                     r['attention'] = delivery.get('why') or 'delivery_returned'
                     save(path, r)
-                    if not Path(str(gate.wake_path(fid, pending['delivery'])) + '.meta.failed').exists():
+                    # The gate also owns timeout failures from older wrappers
+                    # that exited without publishing .meta.failed.
+                    if (not delivery.get('wake_failure_logged') and
+                            not Path(str(gate.wake_path(fid, pending['delivery'])) + '.meta.failed').exists()):
                         gate.park_log(fid, 'fail', '定时', result=r['attention'], next_at=pending['next'])
         return
     with locked(fid) as path:

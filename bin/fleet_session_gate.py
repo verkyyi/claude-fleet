@@ -583,7 +583,11 @@ def settle(fid, wait_new=None):
         if not live:
             return find(rows, wait_new)
         r = live[0]
-        ok, why = can_talk(w)
+        # A starting engine may have cleared parked but has no native identity
+        # yet (or has already fallen back to the ordinary recovery page). Its
+        # owned seed is settled only by this launch's receipt/failure/deadline,
+        # not by the live-message admission check or a retained conversation ID.
+        ok, why = (True, "") if r.get("state") == "waking" else can_talk(w)
         if not ok:
             for x in live:
                 ret(x, why)
@@ -655,9 +659,13 @@ def wake_try(r, w):
         except FileNotFoundError:
             if Path(str(seed) + ".taken").exists() and age <= wake_secs * 3:
                 return "waking", "starting"
-            return ("sent", "woken") if Path(str(seed) + ".launched").exists() else ("returned", "wake_timeout")
-        tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
-        park_log(r["fid"], "fail", "网页", now() - r.get("wake_at", now()), "wake_timeout")
+            if Path(str(seed) + ".launched").exists():
+                return "sent", "woken"
+        else:
+            tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+        park_log(r["fid"], "fail", r.get("wake_why", "网页"), now() - r.get("wake_at", now()),
+                 "wake_timeout", r.get("wake_next", 0))
+        r['wake_failure_logged'] = True
         return "returned", "wake_timeout"
     if now() < r.get('wake_retry_at', 0):
         return "queued", r.get('why', 'deferred')
@@ -1034,6 +1042,9 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
     with lock(fid):
         if delivery and Path(str(seed) + '.launched').exists():
             return dict(ok=True)
+        failed = read_json(str(seed) + '.meta.failed') if delivery else None
+        if failed and not failed.get('deferred'):
+            return dict(ok=False, why=failed.get('failure', 'launch_failed'), seed=str(seed))
         w = window(fid)
         if w is None:
             return dict(ok=False, why="no_session")
@@ -1045,7 +1056,8 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
             if w.get('park_wake') or w.get('park_start'):
                 return dict(ok=False, why="wake_pending")
             if not w["parked"]:
-                return dict(ok=True, already=True)
+                ok, reason = can_talk(w)
+                return dict(ok=True, already=True) if ok else dict(ok=False, why=reason)
             for suffix in ('.deferred', '.meta.failed', '.error', '.admitted', '.fresh'):
                 Path(str(seed) + suffix).unlink(missing_ok=True)
             seed.write_text(Path(seed_file).read_text() if seed_file else "")
