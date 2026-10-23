@@ -155,9 +155,10 @@ class Cleaner:
                  "@park_held", "@park_since", "@park_wake", "@park_start", "@park_waiting", "@reap_report_pending", "@reap_work_pending")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
-        # value carrying the separator (never seen) falls back to a call per name.
-        out = self.tm("display-message", "-p", "-t", window, "\x1f".join("#{" + n + "}" for n in names))
-        vals = out.split("\x1f")
+        # TAB survives display-message on older tmux, which escapes C0 separators.
+        # A value carrying TAB falls back to a call per name; never unescape values.
+        out = self.tm("display-message", "-p", "-t", window, "\t".join("#{" + n + "}" for n in names))
+        vals = out.split("\t")
         if len(vals) != len(names):
             snap = {n: option(self.tm, window, n) for n in names}
         else:
