@@ -7785,10 +7785,9 @@ drill_task_worktree_current_generation() {
 
 drill_task_history_current_generation() {
   local t0; t0=$(now); CAP=120
-  (cd "$BIN/../tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run '^TestTaskProjection' ./hub/store) >"$WORK/task-history-current-generation.log" 2>&1 || {
-    WHY="historical projection changed controlled Task: $(tail -12 "$WORK/task-history-current-generation.log")"; return 1;
-  }
-  WHAT='旧 ID/result/closed/超时补偿保留历史，不改写受控 Task 的当前代次和绑定'
+  _drill_go_tests 'TestTaskProjectionControlledGeneration TestTaskProjectionKeepsControlledIDHistory TestTaskProjectionControlledSweepsAndUndo TestTaskProjectionSnapshotRejectsAdmissionAndGenerationChange TestTaskProjectionMixedLegacyAliases' \
+    "$ROOT/tokenledger/hub/store/fleet_task_projection_test.go" \
+    '旧 ID/result/closed/超时补偿保留历史，不改写受控 Task 的当前代次和绑定' ./hub/store || return 1
   SECS=$(since "$t0")
 }
 
