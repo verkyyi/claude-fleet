@@ -71,6 +71,9 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 	}
 	t.Logf("private acceptance evidence/workspace: %s", root)
 	h := newFleetHarness(t)
+	// The default harness maps all node logins to operator. This fixture
+	// must exercise the ordinary mapped owner, never the administrator path.
+	h.srv.FleetAdmins = []string{"native-fixture-admin"}
 	owner := fmt.Sprintf("gh:%d", time.Now().UnixNano())
 	enablePeople(t, h, owner)
 	h.srv.GitHub.ClientSecret = nativeCycleRandom(t)
@@ -200,7 +203,9 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		return out
 	}
 	call("activate", map[string]any{})
-	f := control.Fleet{FleetID: info["fleet"].(string), Name: info["socket"].(string), Repo: "native/fixture", Repos: []string{"native/fixture"}, Checkout: filepath.Join(root, "repo"), Agent: "codex", State: "running", Workers: json.RawMessage(`[]`)}
+	// The node derives its Fleet ID from the canonical checkout (/private/tmp
+	// on macOS); heartbeat the exact path the real Control minted.
+	f := control.Fleet{FleetID: info["fleet"].(string), Name: info["socket"].(string), Repo: "native/fixture", Repos: []string{"native/fixture"}, Checkout: filepath.Join(info["root"].(string), "repo"), Agent: "codex", State: "running", Workers: json.RawMessage(`[]`)}
 	n := connectWriteNodeCaps(t, h, token, control.CapRead, control.CapWrite, control.CapTask, control.CapTaskExecution, control.CapTaskContinuation)
 	n.setAnswer(func(request map[string]any) (any, *control.Error) {
 		out, e := exchange(map[string]any{"action": "submit", "request": request})
@@ -256,9 +261,13 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 	if e != nil || initial.Owner != owner {
 		t.Fatal("Task not created by normal owner route")
 	}
-	awaitTurn := func(nonce string) map[string]any {
+	awaitTurn := func(nonce, operationID string) map[string]any {
 		deadline := time.Now().Add(150 * time.Second)
 		for time.Now().Before(deadline) {
+			operation := call("operation", map[string]any{"id": operationID})
+			if operation["status"] == "failed" {
+				t.Fatalf("real Control start operation failed (%s); provider result not claimed, details retained privately", operationID)
+			}
 			out := call("observe", map[string]any{"task": taskRef})
 			if replies, ok := out["nonce_replies"].(map[string]any); ok && replies[nonce] == float64(1) && out["user_turns"] == float64(1) && out["completed_turns"] == float64(1) {
 				components, _ := json.Marshal(out["components"])
@@ -272,7 +281,7 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		t.Fatal("native turn did not complete once within deadline; not provider acceptance")
 		return nil
 	}
-	first := awaitTurn(nonce1)
+	first := awaitTurn(nonce1, start["operation_id"].(string))
 	firstFID := strings.Split(first["snapshot"].(map[string]any)["execution_owner"].(string), "/")[1]
 	call("sentinel", map[string]any{"task": taskRef, "first": true})
 	var firstStop string
@@ -317,8 +326,8 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		if e != nil || current.ExecutionEndpoint != "" {
 			t.Fatal("first receipt did not release binding")
 		}
-		ownerPost("tasks/"+taskRef+"/continue", map[string]any{"idempotency_key": "native-continue", "expected_stop_operation_id": stop, "expected_generation": current.Generation, "agent": "codex"}, 202)
-		second := awaitTurn(nonce2)
+		continued := ownerPost("tasks/"+taskRef+"/continue", map[string]any{"idempotency_key": "native-continue", "expected_stop_operation_id": stop, "expected_generation": current.Generation, "agent": "codex"}, 202)
+		second := awaitTurn(nonce2, continued["operation"].(map[string]any)["operation_id"].(string))
 		if second["history"].(map[string]any)["sid"] == first["history"].(map[string]any)["sid"] || second["snapshot"].(map[string]any)["execution_owner"] == first["snapshot"].(map[string]any)["execution_owner"] {
 			t.Fatal("explicit continuation reused native session")
 		}
@@ -369,6 +378,9 @@ func nativeCycleWrite(n *writeNode, id string) map[string]any {
 // records delivery without Control/native start. No fabricated exit evidence.
 func nativeCycleOwnerSandbox(t *testing.T) {
 	h := newFleetHarness(t)
+	// The default harness maps all node logins to operator. This fixture
+	// must exercise the ordinary mapped owner, never the administrator path.
+	h.srv.FleetAdmins = []string{"native-fixture-admin"}
 	owner := fmt.Sprintf("gh:%d", time.Now().UnixNano())
 	enablePeople(t, h, owner)
 	h.srv.GitHub.ClientSecret = nativeCycleRandom(t)
@@ -406,13 +418,40 @@ func nativeCycleOwnerSandbox(t *testing.T) {
 		t.Fatalf("sandbox ordinary owner start: HTTP %d %v", code, out)
 	}
 	node.mu.Lock()
-	defer node.mu.Unlock()
-	if len(node.writes) != 1 {
+	writes := append([]map[string]any(nil), node.writes...)
+	node.mu.Unlock()
+	if len(writes) != 1 {
 		t.Fatal("sandbox expected one start")
 	}
-	ref := node.writes[0]["task_execution"].(map[string]any)["task_ref"].(string)
+	ref := writes[0]["task_execution"].(map[string]any)["task_ref"].(string)
 	task, e := h.srv.Store.FleetTask(store.ParseTaskRef(ref))
 	if e != nil || task.Owner != owner {
 		t.Fatal("sandbox owner attribution")
 	}
+	route := NodeTasksPath + "/" + ref + "/execution/start"
+	if status, metadata := nodeTaskCall(t, h, tok, http.MethodGet, route, nil); status != 200 || metadata["start"].(map[string]any)["operation_id"] != task.OperationID {
+		t.Fatalf("sandbox authenticated mapped node start read: HTTP %d", status)
+	}
+	sibling := h.enroll(t, "native-cycle-sibling")
+	siblingNode := connectWriteNodeCaps(t, h, sibling, control.CapRead, control.CapWrite, control.CapTaskExecution)
+	siblingFleet := fakeFleet(t, machineB, "native-cycle-sibling", "native/fixture", "/isolated/sibling")
+	siblingNode.beatLoad("native-cycle-sibling", "acceptance", machineB, 0, 0, siblingFleet)
+	waitFor(t, 5*time.Second, "sandbox sibling fleet", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_native-cycle-sibling", time.Now())
+		return len(hb.Fleets) == 1
+	})
+	h.srv.onPrincipalSignIn(owner, "native acceptance")
+	if status, _ := nodeTaskCall(t, h, sibling, http.MethodGet, route, nil); status != 404 {
+		t.Fatalf("different mapped node start read: HTTP %d, want 404", status)
+	}
+	anonymous, _ := http.NewRequest(http.MethodGet, h.http.URL+route, nil)
+	response, err := h.http.Client().Do(anonymous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 401 {
+		t.Fatalf("anonymous node start read: HTTP %d, want 401", response.StatusCode)
+	}
+
 }
