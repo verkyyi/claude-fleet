@@ -100,7 +100,7 @@ const STATE = join(T, "state");
 const CFG = join(T, "claude");
 const SECRET = "fcp1.SELFTEST-SECRET-" + Math.random().toString(36).slice(2);
 const SID = "11111111-2222-4333-8444-555555555555";
-const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,media,links,send,pages,aside,release,probe-contract,local").split(",");
+const ONLY = ((process.argv.find((a) => a.startsWith("--only=")) || "").slice(7) || "socket,budget,context,home,idle,trial,handoff,view,handover,gate,legacy-migration,media,links,send,pages,aside,release,probe-contract,local").split(",");
 const part = (x) => ONLY.includes(x);
 let fails = 0, server = null;
 const seen = [];                                           // every response body the test read
@@ -876,6 +876,45 @@ printf '@9\\tfixture\\t\\t${fid}\\n'
 }
 
 // ---- Y: the session gate (task HHV0) — /api/say · stop · answer · open · view's state -----
+if (part("legacy-migration")) {
+  SSTATE = join(HS, "legacy-state"); SOCK = join(SSTATE, "chat.sock");
+  mkdirSync(SSTATE, { recursive: true });
+  const a = "11111111-1111-4111-8111-111111111111", b = "22222222-2222-4222-8222-222222222222";
+  const c = "33333333-3333-4333-8333-333333333333", d = "44444444-4444-4444-8444-444444444444";
+  const ids = join(HS, "legacy-ids");
+  writeFileSync(join(SSTATE, "conversation.json"), JSON.stringify({ session: b, cwd: T, chain: [], put_away: [{ session: a, cwd: T }] }));
+  writeFileSync(join(SSTATE, "conversation-codex.json"), JSON.stringify({ thread: d, cwd: T, put_away: [{ thread: c }] }));
+  sserver = (await sstart(["--socket"], { FLEET_WEBCHAT_BIN: BIN, FLEET_ID_DIR: ids, FLEET_ID_PUSH: "0" })).p;
+  const opts = { method: "POST", headers: { "X-Fleet-Webchat": "1" } };
+  const statusBefore = JSON.parse((await sreq("/api/migration")).body);
+  ok(!statusBefore.migrated && !existsSync(ids), "migration status is a read without ledger writes");
+  // A turn may still be reading its body, before either backend sets live.
+  // Migration must not snapshot that gap and retire the conversation under it.
+  const slow = http.request({ socketPath: SOCK, path: "/api/turn", method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" } });
+  const finished = new Promise((resolve) => slow.on("response", (r) => { r.resume(); r.on("end", resolve); }));
+  slow.write('{');
+  for (let i = 0; i < 100; i++) {
+    if (JSON.parse((await sreq("/api/busy")).body).busy) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  ok(JSON.parse((await sreq("/api/migrate", opts)).body).why === "busy" && !existsSync(ids), "migration waits for a legacy request still reading its body");
+  slow.end('}'); await finished;
+  const first = await sreq("/api/migrate", opts), j = JSON.parse(first.body);
+  ok(first.status === 200 && j.ok && j.fid && j.codex_fid && j.fid !== j.codex_fid, "migration both assistants have distinct ordinary history identities");
+  const statusAfter = JSON.parse((await sreq("/api/migration")).body);
+  ok(statusAfter.migrated && statusAfter.fid === j.fid && statusAfter.codex_fid === j.codex_fid, "migration status resolves both bookmarks by identity");
+  const ledgers = readdirSync(ids).filter((f) => f.endsWith(".ndjson"));
+  ok(ledgers.length === 4 && ledgers.every((f) => /"ev":"closed"/.test(readFileSync(join(ids, f), "utf8"))), "migration current and put-away conversations are retained without starting agents");
+  const before = ledgers.map((f) => readFileSync(join(ids, f), "utf8")).join("");
+  const again = JSON.parse((await sreq("/api/migrate", opts)).body);
+  ok(again.already && again.fid === j.fid && again.codex_fid === j.codex_fid && before === ledgers.map((f) => readFileSync(join(ids, f), "utf8")).join(""), "migration retry changes no identity or history");
+  ok(JSON.parse(readFileSync(join(SSTATE, "conversation.json"))).session === b && JSON.parse(readFileSync(join(SSTATE, "conversation-codex.json"))).thread === d, "migration original conversation pointers are retained");
+  for (const provider of ["claude", "codex"]) {
+    ok((await sreq(`/api/turn?provider=${provider}`, { ...opts, body: { text: "must not execute" } })).status === 410, `migration ${provider} old execution route is retired`);
+  }
+  await sstop(sserver); sserver = null;
+}
+
 if (part("gate")) {
   mkdirSync(homeOf("y"), { recursive: true });
   SSTATE = stateOf("y"); SOCK = join(SSTATE, "chat.sock");

@@ -164,8 +164,8 @@ calls = []
 opts = {"@issue": "12", "window_name": "w a", "@claude_state": "done"}
 def tm(*a):
     calls.append(a)
-    names = [f[2:-1] for f in a[-1].split("\x1f")]
-    return "\x1f".join(opts.get(n, "") for n in names)
+    names = [f[2:-1] for f in a[-1].split("\t")]
+    return "\t".join(opts.get(n, "") for n in names)
 c = m.Cleaner.__new__(m.Cleaner); c.tm = tm
 snap = c.snapshot("@1")
 print(len(calls), snap["@issue"], snap["window_name"], snap["@claude_state"], snap["@reap_policy"] == "", len(snap))

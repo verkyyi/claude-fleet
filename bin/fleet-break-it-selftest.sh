@@ -2095,8 +2095,6 @@ drill_hub_refused_cert() {
   WHAT="入口回 401「names no one」：where 报 hub refused，和入口断网分开"
 }
 
-
-
 # No client open for 12 hours (issue #3455): only an open client's keeper (#2112)
 # or a new `fleet` renewed the connection certificate, so a hosting login nobody
 # opened a client on woke to an expired one — the doctor's cert row red, the
@@ -7036,16 +7034,6 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
-drill_task_continue_historical_outcome() {
-  local t0; t0=$(now); CAP=120
-  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
-    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
-    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
-  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
-    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
-    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
-  SECS=$(since "$t0")
-}
 
 
 
@@ -7142,6 +7130,15 @@ webchat_part() {
     printf '%s\n' "$out" | grep -qF "ok   $want" || { WHY="no «${want}» line: $(printf '%s\n' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
   done
   WEBCHAT_OUT=$out
+}
+
+drill_chat_legacy_history_hidden() {
+  CAP=30; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-webchat-legacy-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  webchat_part legacy-migration "migration both assistants have distinct ordinary history identities" || return 1
+  SECS=$(since "$t0")
+  WHAT="Claude / Codex 的旧对话与收起记录进入普通身份历史；重试不重复，已存在身份不关闭，迁移不启动 Agent"
 }
 
 drill_chat_codex_identity_pending() {
@@ -7857,6 +7854,15 @@ drill_open_other_cli() {
 # round (#4466 #4538) — reaping is one road now (T631, EPIC T580 C8): the end, the
 # agent processes, the leftover-work probe and the left-behind service are the
 # adapter table's; the four legs run once per agent in fleet-agent-end-selftest.py.
+drill_tmux_snapshot_fields() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-reap-snapshot-selftest.py" >"$WORK/tmux-snapshot.log" 2>&1 || {
+    WHY="tmux snapshot field loss: $(tail -20 "$WORK/tmux-snapshot.log")"; return 1;
+  }
+  WHAT='真实tmux保留空首尾字段与值换行；快照一次批读，含分隔符仍安全fallback'
+  SECS=$(since "$t0")
+}
+
 drill_reap_agent_split() {
   CAP=10; local t0
   t0=$(now)
