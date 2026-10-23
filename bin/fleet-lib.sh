@@ -1243,7 +1243,9 @@ fleet_worktree_repo() {
     m=$( fleet_load_repo_conf "$sess" "$r" >/dev/null 2>&1 || exit 0
          cd "${FLEET_MAIN:-/nonexistent}" 2>/dev/null && pwd -P )
     [ -n "$m" ] && [ "$m" != "$wt" ] || continue
-    git -C "$m" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $wt" || continue
+    # grep reads to the end (no -q): under a caller's pipefail an early exit
+    # SIGPIPEs git on a long list and the pipeline fails though it matched (T983).
+    git -C "$m" worktree list --porcelain 2>/dev/null | grep -Fx "worktree $wt" >/dev/null || continue
     printf '%s\t%s' "$r" "$m"; return 0
   done <<EOF
 $(fleet_repos "$sess")

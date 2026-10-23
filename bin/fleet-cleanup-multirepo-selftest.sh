@@ -141,6 +141,16 @@ got=$( fleet_load_window_conf "$S" "$wNO"; printf '%s|%s' "$?" "${FLEET_MAIN-uns
 eq "A: @norepo window refused" "$got" "1|unset"
 eq "A: worktree → repo" "$(fleet_worktree_repo "$S" "$WORK/b-issue-12")" "o/b	$WORK/main-b"
 eq "A: base checkout is no worktree" "$(fleet_worktree_repo "$S" "$WORK/main-a")" ""
+# T983: a long `worktree list` under the caller's pipefail still matches — a
+# `grep -q` exits at the first line, git takes SIGPIPE and the pipeline failed.
+# One builtin write of the whole list: the reader closing early SIGPIPEs it.
+got=$( set -o pipefail
+       big=$(yes 'worktree /elsewhere' | head -n 200000)
+       git() { if [ "${2:-}" = "$WORK/main-b" ] && [ "${3:-}" = worktree ]; then
+                 printf 'worktree %s\n%s\n' "$WORK/b-issue-12" "$big"
+               else command git "$@"; fi; }
+       fleet_worktree_repo "$S" "$WORK/b-issue-12" )
+eq "A: long worktree list under pipefail" "$got" "o/b	$WORK/main-b"
 eq "A: resolved repo ignores the sessmap" "$( fleet_load_window_conf "$S" "$wB"; fleet_resolved_repo "$S" )" o/b
 
 # --- A2. the bound-issue gate joins on (repo, issue) (issue #1156) -------------------
