@@ -1854,40 +1854,55 @@ function gateStatus(fid) {
   return probe;
 }
 
-// 旧「我的对话」 (task HHV0): the one conversation becomes a session of this login
-// (the same conversation resumed in a window, origin web); everything 新对话 put
-// away — at most 200 — is listed as 已结束的会话 (ended.json, read by /api/ended).
+// 旧「我的对话」 (task HHV0): current conversations and what 新对话 put
+// away become ordinary resumable ID history, for both
+// agents. No agent starts just to register history; native files stay in place.
 // Asked by the entry once fleet.chat.unified is on (POST /api/migrate) — before
 // that the old page still talks to it here. A failure leaves conversation.json as
 // it is and marks it pending: the next start tries again.
 const ENDED_FILE = join(STATE, "ended.json");
 let migrating = null;
+const LEGACY_WRITES = new Set(["/api/turn", "/api/new", "/api/take", "/api/adopt", "/api/import", "/api/release"]);
+let legacyRequests = 0; // includes body reads and execution checks before live is set
+function migrationStatus() {
+  const c = codex.legacy().migrated;
+  return { ok: true, migrated: !!(conv.migrated?.history_registered && c),
+    fid: conv.migrated?.fid || "", codex_fid: c?.fid || "" };
+}
 async function migrateConv() {
-  if (conv.migrated?.fid) return { ok: true, fid: conv.migrated.fid, already: true };
-  if (live || maint || aside.size) return { ok: false, why: "busy" };
+  const oldCodex = codex.legacy();
+  if (conv.migrated?.history_registered && oldCodex.migrated) {
+    return { ok: true, fid: conv.migrated.fid, codex_fid: oldCodex.migrated.fid, already: true };
+  }
+  if (legacyRequests || live || maint || aside.size || oldCodex.busy) return { ok: false, why: "busy" };
   const ended = [];
   for (const e of conv.put_away || []) {
     const ids = [...(e.chain || []), ...(e.session ? [{ id: e.session, cwd: e.cwd }] : [])];
     if (ids.length) ended.push({ agent: "claude", session: ids.at(-1).id, cwd: ids.at(-1).cwd, chain: ids.slice(0, -1), at: e.at || "" });
   }
-  let fid = "";
-  if (conv.session) {
-    const target = await firstFleet();
-    const seed = join(STATE, `migrate-${process.pid}.txt`);
-    writeFileSync(seed, "", { mode: 0o600 });
-    const r = await run(RAW, [...(target ? [target] : []), "--origin", "hub", "--print", "--no-repo", "--node", "local",
-      "--reap-origin", "web", "--agent", "claude", "--resume", conv.session, "--seed-file", seed, "--name", "我的对话"]);
-    try { unlinkSync(seed); } catch { /* gone */ }
-    const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";
-    fid = line.split("\t")[3] || "";
-    if (r.rc !== 0 || !FID_RE.test(fid)) {
-      conv.migrate_pending = true; saveConv();
-      log("migrate_failed", { rc: r.rc });
-      return { ok: false, why: "open_failed" };
-    }
-    await gate(["name", "--fid", fid, "--name", "我的对话"]);   // the title the page finds it by
-    if (conv.chain.length) ended.unshift({ agent: "claude", session: conv.chain.at(-1).id, cwd: conv.chain.at(-1).cwd, chain: conv.chain.slice(0, -1), at: "", relayed_into: fid });
+  // Register retained records through the ordinary history ledger. Never start
+  // an agent just to migrate history, and never stop an existing native owner.
+  // The current conversations remain resumable from the standard Details entry.
+  const claudeAt = conv.session ? ended.length : -1;
+  if (conv.session) ended.push({ agent: "claude", session: conv.session, cwd: conv.cwd, chain: conv.chain || [], title: "我的对话" });
+  for (const e of oldCodex.put_away || []) {
+    if (e.thread) ended.push({ agent: "codex", session: e.thread, cwd: oldCodex.cwd, codex_home: oldCodex.codex_home, at: e.at || "" });
   }
+  const codexAt = oldCodex.thread ? ended.length : -1;
+  if (oldCodex.thread) ended.push({ agent: "codex", session: oldCodex.thread, cwd: oldCodex.cwd,
+    codex_home: oldCodex.codex_home, title: "我的对话 · Codex" });
+  const imported = await new Promise((resolve) => {
+    const child = execFile("python3", [join(HELPERS, "fleet_webchat_legacy.py")], { env: E, timeout: 30000 }, (err, stdout) => {
+      try { resolve(err ? null : JSON.parse(stdout)); } catch { resolve(null); }
+    });
+    child.stdin.end(JSON.stringify(ended));
+  });
+  if (!Array.isArray(imported?.ids) || imported.ids.length !== ended.length) {
+    conv.migrate_pending = true; saveConv();
+    return { ok: false, why: "history_import_failed" };
+  }
+  const fid = claudeAt < 0 ? "" : imported.ids[claudeAt];
+  const codexFID = codexAt < 0 ? "" : imported.ids[codexAt];
   try {
     let old = [];
     try { old = JSON.parse(readFileSync(ENDED_FILE, "utf8")); } catch { /* first */ }
@@ -1895,11 +1910,13 @@ async function migrateConv() {
     renameSync(ENDED_FILE + ".tmp", ENDED_FILE);
   } catch (e) { conv.migrate_pending = true; saveConv(); return { ok: false, why: "write_failed" }; }
   closeWarm("migrated");
-  conv.migrated = { fid, at: new Date().toISOString(), ended: ended.length };
+  await codex.close();
+  codex.markMigrated(codexFID);
+  conv.migrated = { fid, at: new Date().toISOString(), ended: ended.length, history_registered: true };
   delete conv.migrate_pending;
   saveConv();
   log("migrated", { fid: !!fid, ended: ended.length });
-  return { ok: true, fid, ended: ended.length };
+  return { ok: true, fid, codex_fid: codexFID, ended: ended.length };
 }
 function migrate() { if (!migrating) migrating = migrateConv().finally(() => { migrating = null; }); return migrating; }
 if (conv.migrate_pending) setTimeout(() => migrate().catch(() => {}), 5000).unref();
@@ -1989,11 +2006,15 @@ async function handle(req, res) {
     return j ? send(res, 200, j) : send(res, 503, { error: "gate_unavailable" });
   }
   if (SOCKET && p === "/api/migrate" && req.method === "POST") return send(res, 200, await migrate());
+  if (SOCKET && p === "/api/migration" && req.method === "GET") return send(res, 200, migrationStatus());
   if (p === "/api/ended" && req.method === "GET") return endedList(res, u);
   // a migrated conversation is a session now: the old roads say where it went
-  if (conv.migrated?.fid && (u.searchParams.get("provider") || "claude") === "claude"
-      && ["/api/turn", "/api/new", "/api/take"].includes(p) && req.method === "POST") {
-    return send(res, 410, { error: "这个对话已经是一个会话了", code: "moved", fid: conv.migrated.fid });
+  const moved = u.searchParams.get("provider") === "codex" ? codex.legacy().migrated : conv.migrated;
+  if (migrating && LEGACY_WRITES.has(p) && req.method === "POST") {
+    return send(res, 409, { error: "正在整理以前的对话，请稍后重试", code: "migrating" });
+  }
+  if (moved && LEGACY_WRITES.has(p) && req.method === "POST") {
+    return send(res, 410, { error: "这个对话已经是一个会话了", code: "moved", fid: moved.fid });
   }
   // the Codex side (task R9A2): ?provider=codex; none or claude = the Claude side, as before
   const provider = u.searchParams.get("provider") || "claude";
@@ -2024,7 +2045,7 @@ async function handle(req, res) {
   if (p === "/api/conversation" && req.method === "GET") {
     // a page reading the conversation is about to talk: have the credential ready
     const owner = await ownerNow();
-    if (SDK_PATH && !live && !owner) { credFor().catch(() => {}); prewarm(); }
+    if (SDK_PATH && !live && !owner && !conv.migrated && !migrating) { credFor().catch(() => {}); prewarm(); }
     const items = await conversationItems();
     return send(res, 200, { session: conv.session, cwd: conv.cwd, busy: !!live, turn: live?.tid || "",
       ...(owner ? { owner } : {}), ...(conv.handed && !owner ? { handed: conv.handed } : {}),
@@ -2079,16 +2100,18 @@ async function handle(req, res) {
 }
 
 // idle: no turn, no compact, no connection open (a page that is watching holds one)
-const busyAny = () => !!live || aside.size > 0 || !!maint || codex.busy() || gatePending || !!migrating;
+const busyAny = () => !!live || aside.size > 0 || !!maint || codex.busy() || gatePending || !!migrating || legacyRequests > 0;
 let lastBusy = Date.now();
 function touch() { lastBusy = Date.now(); }
 const server = http.createServer((req, res) => {
   touch();
+  const legacyWrite = req.method === "POST" && LEGACY_WRITES.has((req.url || "").split("?")[0]);
+  if (legacyWrite) legacyRequests++;
   handle(req, res).catch((e) => {
     log("error", { msg: String(e?.message || e).slice(0, 300) });
     if (!res.headersSent) send(res, e.code === "native_session_required" ? 409 : 500,
       e.code === "native_session_required" ? { error: e.message, code: e.code } : { error: "internal error" }); else res.end();
-  });
+  }).finally(() => { if (legacyWrite) legacyRequests--; });
 });
 // A socket left by a server that is gone is replaced; one a live server answers
 // on is not — two servers would share one conversation.json.

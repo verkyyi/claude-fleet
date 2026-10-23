@@ -91,6 +91,9 @@ func ticketReadsSession(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
+	case ChatPathPrefix + "migration":
+		// Identity metadata only; the POST migrate route remains forbidden.
+		return true
 	case ChatPathPrefix + chatViewRoute:
 		return true
 	case ChatPathPrefix + "file":
