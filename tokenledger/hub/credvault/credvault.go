@@ -65,19 +65,20 @@ func ValidProvider(p string) bool { return p == Claude || p == Codex || p == Git
 // setup token cannot say whose it is (claude-fleet#2127). Not a secret — it
 // rides in the sealed half only so a refresh carries it along unchanged.
 type Secret struct {
-	BrowserImportFingerprint string     `json:"browser_import_fingerprint,omitempty"`
-	RefreshToken             string     `json:"refresh_token,omitempty"`
-	SetupToken               string     `json:"setup_token,omitempty"`
-	ExpiresAt                *time.Time `json:"expires_at,omitempty"`
-	IDToken                  string     `json:"id_token,omitempty"`
-	AccountID                string     `json:"account_id,omitempty"`
-	Scopes                   []string   `json:"scopes,omitempty"`
-	SubscriptionType         string     `json:"subscription_type,omitempty"`
-	RateLimitTier            string     `json:"rate_limit_tier,omitempty"` // admin-supplied with SubscriptionType (claude-fleet EEJD)
-	Token                    string     `json:"token,omitempty"`
-	User                     string     `json:"user,omitempty"`
-	AccountUUID              string     `json:"account_uuid,omitempty"`
-	MeterID                  string     `json:"meter_id,omitempty"` // internal; Put overwrites caller input, refresh preserves it
+	BrowserImportFingerprint string       `json:"browser_import_fingerprint,omitempty"`
+	RefreshToken             string       `json:"refresh_token,omitempty"`
+	SetupToken               string       `json:"setup_token,omitempty"`
+	ExpiresAt                *time.Time   `json:"expires_at,omitempty"`
+	IDToken                  string       `json:"id_token,omitempty"`
+	AccountID                string       `json:"account_id,omitempty"`
+	Scopes                   []string     `json:"scopes,omitempty"`
+	PlanEvidence             PlanEvidence `json:"plan_evidence,omitempty"`
+	SubscriptionType         string       `json:"subscription_type,omitempty"`
+	RateLimitTier            string       `json:"rate_limit_tier,omitempty"` // admin-supplied with SubscriptionType (claude-fleet EEJD)
+	Token                    string       `json:"token,omitempty"`
+	User                     string       `json:"user,omitempty"`
+	AccountUUID              string       `json:"account_uuid,omitempty"`
+	MeterID                  string       `json:"meter_id,omitempty"` // internal; Put overwrites caller input, refresh preserves it
 }
 
 // Kinds — what the long-lived half IS, kept beside the row as metadata (the
@@ -481,11 +482,23 @@ func (v *Vault) BindAccountUUID(principal, provider, account, uuid string) error
 // asked for one, so the pool page would otherwise show it as unknown and its
 // price could not be read. PlanMetadata reports it as "admin"; a plan the
 // provider itself reports (a Codex id_token) still wins. "" clears it.
-func (v *Vault) SetPlan(principal, provider, account, plan, tier string) error {
+type PlanEvidence struct {
+	Source     string    `json:"source"`
+	Confidence string    `json:"confidence"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+func (v *Vault) SetPlan(principal, provider, account, plan, tier string, evidence ...PlanEvidence) error {
 	if provider == GitHub {
 		return errors.New("a GitHub credential has no subscription plan")
 	}
-	return v.editSecret(principal, provider, account, func(s *Secret) { s.SubscriptionType, s.RateLimitTier = plan, tier })
+	return v.editSecret(principal, provider, account, func(s *Secret) {
+		s.SubscriptionType, s.RateLimitTier = plan, tier
+		s.PlanEvidence = PlanEvidence{}
+		if len(evidence) > 0 {
+			s.PlanEvidence = evidence[0]
+		}
+	})
 }
 
 // editSecret opens a credential's sealed secret, lets edit change its

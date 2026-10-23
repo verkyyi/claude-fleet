@@ -1,0 +1,832 @@
+[
+  {
+    "name": "max20-five-hour-only",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "usable",
+    "score": 10
+  },
+  {
+    "name": "max5-five-hour-only",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 5,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "usable",
+    "score": 2.5
+  },
+  {
+    "name": "weekly-full-metadata_unknown",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "metadata_unknown",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "limited",
+    "reason": "blocked_or_full_window"
+  },
+  {
+    "name": "weekly-full-observed_metadata_stale_or_missing",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "observed_metadata_stale_or_missing",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "limited",
+    "reason": "blocked_or_full_window"
+  },
+  {
+    "name": "weekly-full-metadata_conflict",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "metadata_conflict",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "limited",
+    "reason": "blocked_or_full_window"
+  },
+  {
+    "name": "weekly-full-unknown-model",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "future-model",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "limited",
+    "reason": "blocked_or_full_window"
+  },
+  {
+    "name": "past-reset-no-refill",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-22T19:59:59Z"
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "awaiting_reset_reading"
+  },
+  {
+    "name": "stale-positive",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T19:49:59Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "stale_window"
+  },
+  {
+    "name": "future",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:01Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "invalid_observation"
+  },
+  {
+    "name": "missing-percent",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "invalid_percentage"
+  },
+  {
+    "name": "out-of-range",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 101,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "invalid_percentage"
+  },
+  {
+    "name": "duplicate",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        },
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "duplicate_window"
+  },
+  {
+    "name": "model-sonnet-full",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        },
+        {
+          "id": "seven_day_sonnet",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z",
+          "model": "family:sonnet"
+        }
+      ]
+    },
+    "state": "limited",
+    "reason": "blocked_or_full_window"
+  },
+  {
+    "name": "unrelated-opus-full",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        },
+        {
+          "id": "seven_day_opus",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z",
+          "model": "family:opus"
+        }
+      ]
+    },
+    "state": "usable",
+    "score": 10
+  },
+  {
+    "name": "unknown-scope",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        },
+        {
+          "id": "fable",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z",
+          "unknown_scope": true
+        }
+      ]
+    },
+    "state": "unknown",
+    "reason": "unknown_model_scope"
+  },
+  {
+    "name": "header-wrong-model",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": false,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ],
+      "observed_model": "claude-haiku-4-5-20251001"
+    },
+    "state": "unknown",
+    "reason": "incomplete_account_observation"
+  },
+  {
+    "name": "header-exact-model",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": false,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "profile": {
+        "plan": "max",
+        "tier": "max20",
+        "pool": "claude",
+        "unit": "pro-session",
+        "basis": "official-5h",
+        "source": "official",
+        "confidence": "verified",
+        "version": "v1",
+        "five_hour_units": 20,
+        "effective_from": "2026-10-22T19:00:00Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 25,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ],
+      "observed_model": "claude-sonnet-4-6"
+    },
+    "state": "usable",
+    "score": 10
+  },
+  {
+    "name": "profile-missing-weekly-still-gates",
+    "now": "2026-10-22T20:00:00Z",
+    "model": "claude-sonnet-4-6",
+    "evidence": {
+      "account": "fixture",
+      "owner": "pool",
+      "credential_id": "cred:fixture",
+      "complete": true,
+      "refresh_healthy": true,
+      "metadata_status": "valid",
+      "plan": "max",
+      "tier": "max20",
+      "windows": [
+        {
+          "id": "five_hour",
+          "minutes": 300,
+          "used_percent": 50,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T01:00:00Z"
+        },
+        {
+          "id": "seven_day",
+          "minutes": 10080,
+          "used_percent": 100,
+          "observed_at": "2026-10-22T20:00:00Z",
+          "reset_at": "2026-10-23T20:00:00Z"
+        }
+      ]
+    },
+    "state": "limited",
+    "reason": "blocked_or_full_window"
+  }
+]

@@ -414,6 +414,7 @@ class Capacity(unittest.TestCase):
                 self.assertEqual(self.t.capacity_until,0)
         lib=Path(self.tmp.name,'isolated-lib'); lib.mkdir()
         shutil.copy2(BIN/'fleet-cred-proxy.py',lib/'fleet-cred-proxy.py')
+        shutil.copy2(BIN/'fleet_claude_capacity.py',lib/'fleet_claude_capacity.py')
         shutil.copy2(BIN/'fleet-credsep-launch.py',lib/'fleet-credsep-launch.py')
         code="import importlib.util, sys; s=importlib.util.spec_from_file_location('proxy', sys.argv[1]); p=importlib.util.module_from_spec(s); s.loader.exec_module(p); assert abs(p.iso_epoch(sys.argv[2])-1791352055.272044)<1e-6; assert 'fleet_iso' not in sys.modules"
         subprocess.run([sys.executable,'-I','-c',code,str(lib/'fleet-cred-proxy.py'),stamps[3]],cwd=str(lib),check=True)
@@ -635,7 +636,7 @@ class SharedSnapshot(unittest.TestCase):
         self.assertEqual(refresh.machine_refresh(None),0)
         stopped.assert_called_once_with(refresh.SHARED_PATH,refresh.SHARED_LABEL)
         self.assertEqual(sorted(f.name for f in lib.iterdir() if f.is_file()),
-            ['fleet-cred-proxy.py','fleet-credsep-launch.py'])
+            ['fleet-cred-proxy.py','fleet-credsep-launch.py','fleet_claude_capacity.py'])
 
     def test_legacy_machine_refresh_refusal_never_stops_old_listener(self):
         refresh,lib=self.refresh_fixture();self.reject='beta'

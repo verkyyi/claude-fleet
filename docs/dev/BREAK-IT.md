@@ -680,3 +680,4 @@
 
 | quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格；目标晚绑定仍须等待 controller 已确认 started，未知结果不启 timer | `quota-loop-replacement` |
 | 未启动记录在面板显示 Unknown / Queued，任务结果盖过会话的新工作（PV4D） | 人误以为已有 worker 或自动调度，并找不到协调归属 | Hub board 区分计划与运行证据、未派发与保留状态，终端和网页消费同一事实；协调归属只取可核验的父记录 | `board-plan-facts` |
+| Claude 套餐信息过期或周基线未知时，忽略已满周额度（T973） | 已知不可用账号进入兜底；模型限额与通用容量混算 | 先评估全部适用硬限制，再比较有证据的 5h 容量；未知窗口明确拒绝，重置到时不当作补满 | `claude-capacity-hard-limits` |

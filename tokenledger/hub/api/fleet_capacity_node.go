@@ -6,7 +6,10 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
 )
+
+const nodeClaudeCapacityPath = "/v1/node/claude-capacity"
 
 const nodeCapacityPath = "/v1/node/codex-capacity"
 
@@ -66,7 +69,11 @@ func (s *Server) handleNodeCapacity(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 403, "node subscription access refused")
 		return
 	}
-	choices, err := s.sessionBindChoices(principal, ep.ID, credvault.Codex)
+	provider := credvault.Codex
+	if r.URL.Path == nodeClaudeCapacityPath {
+		provider = credvault.Claude
+	}
+	choices, err := s.sessionBindChoices(principal, ep.ID, provider)
 	if err != nil {
 		httpError(w, 500, "subscription policy read failed")
 		return
@@ -74,6 +81,27 @@ func (s *Server) handleNodeCapacity(w http.ResponseWriter, r *http.Request) {
 	cat, err := s.Store.PlanCapacities()
 	if err != nil {
 		httpError(w, 500, "capacity catalog read failed")
+		return
+	}
+	if provider == credvault.Claude {
+		cfg := cat.Catalog.Provider("claude")
+		rows := []credproxy.ClaudeCapacityEvidence{}
+		seen := map[string]bool{}
+		paused := map[string]bool{}
+		for _, a := range pausedAccounts(settings) {
+			paused[a] = true
+		}
+		for _, c := range choices {
+			if seen[c.Account] {
+				continue
+			}
+			seen[c.Account] = true
+			e := s.claudeEvidence(c, cfg, now)
+			e.LeaseKey = s.Vault.ClaudeLeaseKey(c)
+			e.Paused = c.PrincipalID == store.PoolPrincipal && paused[c.Account]
+			rows = append(rows, e)
+		}
+		writeJSON(w, 200, map[string]any{"policy": "claude-capacity-v1", "catalog_revision": cat.Revision, "mode": cfg.Mode, "observed_at": now, "expires_at": now.Add(30 * time.Second), "accounts": rows, "mutates_bindings": false})
 		return
 	}
 	type row struct {

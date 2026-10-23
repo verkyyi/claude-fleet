@@ -375,7 +375,7 @@ def shared():
                         "log": os.path.join(logdir, login + ".log"),
                         "settings": tenant_settings(meta, run)})
     try:
-        version = hashlib.sha256(open(os.path.join(HERE, "fleet-cred-proxy.py"), "rb").read()).hexdigest()[:12]
+        version = hashlib.sha256(open(os.path.join(HERE, "fleet-cred-proxy.py"), "rb").read() + open(os.path.join(HERE, "fleet_claude_capacity.py"), "rb").read()).hexdigest()[:12]
     except OSError:
         version = ""
     tf = os.path.join(sdir, "tenants.json")

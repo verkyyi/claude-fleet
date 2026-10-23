@@ -125,3 +125,28 @@ func (v *Vault) syncAlias(owner, provider, account, identity string) error {
 	}
 	return v.saveAlias(*current, next, acc, *best.RefreshedAt)
 }
+
+// ClaudeLeaseKey pairs metadata to an actually held access token without leasing
+// or refreshing. Same digest as the node's existing pool key, never a bearer.
+func (v *Vault) ClaudeLeaseKey(c store.Credential) string {
+	if c.Provider != Claude {
+		return ""
+	}
+	sl, err := v.sealer()
+	if err != nil {
+		return ""
+	}
+	var a Access
+	if sl.Open(c.AccessSealed, &a, c.PrincipalID, c.Provider, c.Account, "access") != nil || a.AccessToken == "" {
+		var secret Secret
+		if sl.Open(c.SecretSealed, &secret, c.PrincipalID, c.Provider, c.Account, "secret") != nil {
+			return ""
+		}
+		a.AccessToken = secret.SetupToken
+	}
+	if a.AccessToken == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("claude\x00" + a.AccessToken))
+	return fmt.Sprintf("%x", sum)[:32]
+}

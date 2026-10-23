@@ -67,6 +67,7 @@ bin/fleet-daemon-lib.sh             tool
 # the credential proxy every session reaches its subscription through (#1970)
 bin/fleet-cred-proxy.sh             tool
 bin/fleet-cred-proxy.py             tool
+bin/fleet_claude_capacity.py        tool
 # its pass for the Singapore relay, minted when the relay road is configured (#1974)
 bin/fleet-relay-cred.sh             tool
 # a session on THIS computer, through that proxy (#2136 — 承载's since #4826):

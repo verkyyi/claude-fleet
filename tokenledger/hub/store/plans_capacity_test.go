@@ -153,3 +153,50 @@ func TestPlanCapacitySharedReplica(t *testing.T) {
 		t.Fatal("stale replica overwrite", err)
 	}
 }
+
+func TestClaudeCatalogIsolationLegacyPUT(t *testing.T) {
+	s := newStore(t)
+	c := testCapacityCatalog()
+	c.Mode = "active"
+	if c.Provider("claude").Mode != "off" {
+		t.Fatal("legacy active enabled Claude")
+	}
+	p := c.Profiles[0]
+	p.Pool = "claude"
+	p.Windows = []PlanCapacityWindow{{Minutes: 300, Units: 20}}
+	c.Providers = map[string]ProviderCapacityCatalog{"claude": {Mode: "shadow", Profiles: []PlanCapacityProfile{p}}}
+	first, err := s.SetPlanCapacities(c, 0, "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := testCapacityCatalog()
+	legacy.Mode = "off"
+	second, err := s.SetPlanCapacities(legacy, first.Revision, "old-client", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Catalog.Provider("claude").Mode != "shadow" || second.Catalog.Provider("codex").Mode != "off" || len(second.Catalog.Provider("claude").Profiles) != 1 {
+		t.Fatalf("legacy PUT erased provider: %+v", second)
+	}
+	for _, mode := range []string{"off", "shadow", "active"} {
+		c.Providers["claude"] = ProviderCapacityCatalog{Mode: mode, Profiles: []PlanCapacityProfile{p}}
+		if c.Profiles[0].Windows[0].Units != 10 || c.Mode != "active" || c.Validate() != nil {
+			t.Fatal("Codex semantics changed")
+		}
+	}
+}
+
+func TestClaudeWeeklyNeedsSeparateEvidence(t *testing.T) {
+	p := testCapacityCatalog().Profiles[0]
+	p.Pool = "claude"
+	p.Windows = []PlanCapacityWindow{{Minutes: 300, Units: 20}, {Minutes: 10080, Units: 20}}
+	c := PlanCapacityCatalog{Mode: "off", Providers: map[string]ProviderCapacityCatalog{"claude": {Mode: "off", Profiles: []PlanCapacityProfile{p}}}}
+	if c.Validate() == nil {
+		t.Fatal("5h source implicitly established weekly ratio")
+	}
+	p.Windows[1].Source = "separately measured weekly workload evidence"
+	c.Providers["claude"] = ProviderCapacityCatalog{Mode: "off", Profiles: []PlanCapacityProfile{p}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

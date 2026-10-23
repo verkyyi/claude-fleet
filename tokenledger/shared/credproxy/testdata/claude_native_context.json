@@ -1,0 +1,328 @@
+[
+  {
+    "model": "claude-sonnet-4-6",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "fixture prompt",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    ],
+    "system": [
+      {
+        "type": "text",
+        "text": "isolated fixture system"
+      },
+      {
+        "type": "text",
+        "text": "isolated fixture system",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      },
+      {
+        "type": "text",
+        "text": "isolated fixture system",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "Bash",
+        "description": "isolated fixture Bash",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "The command to execute",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Optional timeout in milliseconds (max 600000 for a foreground command)",
+              "type": "number"
+            },
+            "description": {
+              "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nSay what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls \u2192 \"List files in current directory\"\n- git status \u2192 \"Show working tree status\"\n- npm install \u2192 \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; \u2192 \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main \u2192 \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' \u2192 \"Fetch JSON from URL and extract data array elements\"",
+              "type": "string"
+            },
+            "dangerouslyDisableSandbox": {
+              "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "max_tokens": 32000,
+    "thinking": {
+      "type": "adaptive",
+      "display": "updates"
+    },
+    "context_management": {
+      "edits": [
+        {
+          "type": "clear_thinking_20251015",
+          "keep": "all"
+        }
+      ]
+    },
+    "output_config": {
+      "effort": "high"
+    },
+    "stream": true
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "messages": [
+      {
+        "role": "user",
+        "content": "fixture prompt"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Use the fixture tool.",
+            "signature": "fixture-signature"
+          },
+          {
+            "type": "tool_use",
+            "id": "tool_source",
+            "name": "Bash",
+            "input": {
+              "command": "printf TOOL_OK",
+              "description": "Print fixture nonce"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_source",
+            "type": "tool_result",
+            "content": "TOOL_OK",
+            "is_error": false,
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    ],
+    "system": [
+      {
+        "type": "text",
+        "text": "isolated fixture system"
+      },
+      {
+        "type": "text",
+        "text": "isolated fixture system",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      },
+      {
+        "type": "text",
+        "text": "isolated fixture system",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "Bash",
+        "description": "isolated fixture Bash",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "The command to execute",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Optional timeout in milliseconds (max 600000 for a foreground command)",
+              "type": "number"
+            },
+            "description": {
+              "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nSay what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls \u2192 \"List files in current directory\"\n- git status \u2192 \"Show working tree status\"\n- npm install \u2192 \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; \u2192 \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main \u2192 \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' \u2192 \"Fetch JSON from URL and extract data array elements\"",
+              "type": "string"
+            },
+            "dangerouslyDisableSandbox": {
+              "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "max_tokens": 32000,
+    "thinking": {
+      "type": "adaptive",
+      "display": "updates"
+    },
+    "context_management": {
+      "edits": [
+        {
+          "type": "clear_thinking_20251015",
+          "keep": "all"
+        }
+      ]
+    },
+    "output_config": {
+      "effort": "high"
+    },
+    "stream": true
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "messages": [
+      {
+        "role": "user",
+        "content": "fixture prompt"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Use the fixture tool.",
+            "signature": "fixture-signature"
+          },
+          {
+            "type": "tool_use",
+            "id": "tool_source",
+            "name": "Bash",
+            "input": {
+              "command": "printf TOOL_OK",
+              "description": "Print fixture nonce"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_source",
+            "type": "tool_result",
+            "content": "TOOL_OK",
+            "is_error": false
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "fixture prompt"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "fixture prompt",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    ],
+    "system": [
+      {
+        "type": "text",
+        "text": "isolated fixture system"
+      },
+      {
+        "type": "text",
+        "text": "isolated fixture system",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      },
+      {
+        "type": "text",
+        "text": "isolated fixture system",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "Bash",
+        "description": "isolated fixture Bash",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "The command to execute",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Optional timeout in milliseconds (max 600000 for a foreground command)",
+              "type": "number"
+            },
+            "description": {
+              "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nSay what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls \u2192 \"List files in current directory\"\n- git status \u2192 \"Show working tree status\"\n- npm install \u2192 \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; \u2192 \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main \u2192 \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' \u2192 \"Fetch JSON from URL and extract data array elements\"",
+              "type": "string"
+            },
+            "dangerouslyDisableSandbox": {
+              "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "max_tokens": 32000,
+    "thinking": {
+      "type": "adaptive",
+      "display": "updates"
+    },
+    "context_management": {
+      "edits": [
+        {
+          "type": "clear_thinking_20251015",
+          "keep": "all"
+        }
+      ]
+    },
+    "output_config": {
+      "effort": "high"
+    },
+    "stream": true
+  }
+]

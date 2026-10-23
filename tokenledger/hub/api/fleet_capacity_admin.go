@@ -93,6 +93,8 @@ func (s *Server) handleCodexPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Provider   string `json:"provider"`
+		Model      string `json:"model"`
 		WorkerID   string `json:"worker_id"`
 		NewSession bool   `json:"new_session"`
 	}
@@ -117,6 +119,17 @@ func (s *Server) handleCodexPreview(w http.ResponseWriter, r *http.Request) {
 			httpError(w, 409, "ambiguous worker scope")
 			return
 		}
+	}
+	if req.Provider == "" {
+		req.Provider = credvault.Codex
+	}
+	if req.Provider != credvault.Codex && req.Provider != credvault.Claude {
+		httpError(w, 400, "unknown provider")
+		return
+	}
+	if req.Provider == credvault.Claude {
+		s.claudePreview(w, req.WorkerID, scope.PrincipalID, scope.EndpointID, req.Model, req.NewSession, hasString(scope.Providers, credvault.Claude), now)
+		return
 	}
 	if !hasString(scope.Providers, credvault.Codex) {
 		httpError(w, 403, "worker pass does not authorize codex")
