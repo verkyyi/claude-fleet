@@ -62,7 +62,7 @@ func placeAudits(t *testing.T, h *harness) []auditRow {
 }
 
 // The completion check: mac-d's session issue-1 asks for #7, the hub places it on
-// mac-c with that session as the parent, and the audit + journal name it.
+// mac-c without a Parent link, while the audit + journal name the caller.
 func TestWorkerAssertionPlaceAudited(t *testing.T) {
 	h, macD, macC, f5, f4 := twoNodes(t)
 	macC.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
@@ -77,8 +77,8 @@ func TestWorkerAssertionPlaceAudited(t *testing.T) {
 	if macD.count() != 0 || macC.count() != 1 {
 		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
-	if p := macC.writes[0]["params"].(map[string]any); p["origin_wid"] != c.WorkerID {
-		t.Fatalf("mac-c was sent origin_wid %v; want the asserting session %s", p["origin_wid"], c.WorkerID)
+	if p := macC.writes[0]["params"].(map[string]any); p["origin_wid"] != nil {
+		t.Fatalf("mac-c was sent origin_wid %v; want no Parent; authenticated caller stays %s", p["origin_wid"], c.WorkerID)
 	}
 	a := placeAudits(t, h)
 	if len(a) != 1 || a[0].actor != "node:frank@mac-d" || a[0].worker != c.WorkerID || a[0].key != "issue-1" ||
@@ -129,7 +129,7 @@ func TestWorkerAssertionForgedRefused(t *testing.T) {
 }
 
 // Out of scope is NOT_FOUND: a session of a fleet this node does not run, or
-// a start whose parent is someone other than the asserting session.
+// a retired origin field never substitutes for the authenticated caller.
 func TestWorkerAssertionOutOfScope(t *testing.T) {
 	h, macD, macC, f5, f4 := twoNodes(t)
 	now := time.Now()
@@ -139,14 +139,21 @@ func TestWorkerAssertionOutOfScope(t *testing.T) {
 	if e, _ := out["error"].(map[string]any); st != 404 || e["code"] != "NOT_FOUND" {
 		t.Fatalf("another fleet's session: %d %v; want 404 NOT_FOUND", st, out)
 	}
+	if macD.count()+macC.count() != 0 {
+		t.Fatal("an out-of-scope assertion sent a write")
+	}
+	// Retired origin metadata does not select an identity. The signed caller
+	// remains the principal, even when an older client names another origin.
 	mine := signWorkerAssertion(assertClaims(f5.FleetID, now), HashToken(tok5))
 	st, out = placeAs(t, h, tok5, mine, map[string]any{"repo": writeRepo, "issue": 9, "worker_id": issueWID(f5.FleetID, 9),
 		"origin_wid": issueWID(f5.FleetID, 2)})
-	if e, _ := out["error"].(map[string]any); st != 404 || e["code"] != "NOT_FOUND" {
-		t.Fatalf("a start for another parent: %d %v; want 404 NOT_FOUND", st, out)
+	if st != 200 {
+		t.Fatalf("retired origin input: %d %v", st, out)
 	}
-	if macD.count()+macC.count() != 0 {
-		t.Fatal("an out-of-scope assertion sent a write")
+	for _, a := range placeAudits(t, h) {
+		if a.outcome != "refused:NOT_FOUND" && a.worker != assertClaims(f5.FleetID, now).WorkerID {
+			t.Fatalf("caller changed: %+v", a)
+		}
 	}
 	// Its own key as the parent (the alias, claude-fleet#1646) is itself.
 	if c := assertClaims(f5.FleetID, now); !c.speaksAs(issueWID(f5.FleetID, 1)) || !c.speaksAs(c.WorkerID) {

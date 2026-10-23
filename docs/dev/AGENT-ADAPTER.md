@@ -268,7 +268,21 @@ python3 bin/fleet-native-usage-cli-selftest.py --codex PATH [--meter-candidate]
 python3 bin/fleet-native-guard-install-selftest.py
 python3 bin/fleet-native-claude-worktree-selftest.py --claude PATH   # Claude 侧，只在境外环境
 python3 bin/fleet-native-claude-tui-selftest.py --claude PATH
+python3 bin/fleet-native-cancel-claude-selftest.py --claude PATH
 ```
+
+Claude 取消探针固定验证 2.1.295：mod 的 `$.tool.call` 在无模型轮次时调用原生
+`CronList` / `CronDelete` / `TaskStop`。两个原生会话共用隔离项目；只删除调用会话自己
+创建的 session-only 与 durable 计划，另一会话的 durable 记录逐字节保留。后台样本先由
+控制器核实进程身份与存活，再调用 `TaskStop`，在主会话退出前核实样本已停止。探针核查
+模型 HTTP 请求数为零，并清理自建计划、进程和独立 tmux socket。
+
+这证明原生工具可以由适配层直接调用，不代表 Fleet 已提供生产取消入口，也不是独立
+teammate、已排队的计划触发、会话恢复或整个 Task 退出的验收。`CronList` 会列出同项目
+其他会话的 durable 记录，生产适配必须先验证资源归属，不能取消列表里的全部 ID。
+现有 mod inbox 可承载有明确身份和期限的取消请求；不得绕开 Task 执行代次检查，也不得
+将原生工具返回成功写成整个 Task 已退出。Codex 的计划取消能力仍须独立验证，不能从
+`turn/interrupt` 或 `thread/archive` 推断。
 
 再交出去一块之前要过的验收：隔离与身份（主检出、伪造的 `.git`、符号链接、路径逃逸都拿不到权限）·
 数据保留（退出、中断、POD 重建都不丢未提交的改动和会话归属）· 准确恢复（resume/fork 落在同一个账号 home）·
