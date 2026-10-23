@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
-# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_past_old_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_spawned_norepo_closes_on_its_policy_after_a_finished_turn TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
+# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_past_old_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_ancestry_does_not_override_norepo_done_policy TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
 # selftest-part: 6 ParkTable.test_finished_probe_keeps_its_one_minute_policy PolicyGrammar.test_origin_table_and_the_policy_in_force RoundTrip.test_real_close_and_restore
 # selftest-part: 7 PinIsOrder.test_dry_run_migrates_nothing ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
 # selftest-part: 8 ParkTable.test_activity_and_keep_hold_expiration RoundTrip.test_codex_unknown_or_active_native_turn_is_kept TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
@@ -1058,9 +1058,7 @@ class PolicyGrammar(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
     def test_origin_table_and_the_policy_in_force(self):
-        """T694 (回收 B): ONE origin → default table, the origin read off a window,
-        and the policy in force (pin / orchestrator keep; a session's own keep
-        lapses once its work is over)."""
+        """Ordinary defaults ignore legacy origins and preserve chosen policies."""
         import fleet_reap_policy as rp
         self.assertEqual(rp.norm("idle"), "idle:2h")
         self.assertEqual(rp.parse("idle:15m"), ("idle", 900))
@@ -1068,24 +1066,23 @@ class PolicyGrammar(unittest.TestCase):
         self.assertEqual(rp.label("idle:15m"), "闲 15 分钟收起")
         self.assertTrue(rp.idle_owned("idle:2h"))
         self.assertEqual({o: rp.origin_default(o) for o in rp.ORIGINS},
-                         {"person": "idle:2h", "dispatched": "merged", "member": "merged", "driver": "merged",
-                          "orchestrator": "keep", "decide": "idle:15m", "probe": "done:1m", "web": "keep"})
-        self.assertEqual(rp.origin_default("person", "issue"), "merged")
-        self.assertEqual(rp.origin_default("dispatched", "loop"), "loop-end")
-        self.assertEqual(rp.origin_default("driver", "loop"), "merged")
+                         {"person": "idle:2h", "probe": "done:1m"})
+        self.assertEqual(rp.origin_default("person", "issue"), "idle:2h")
+        self.assertEqual(rp.origin_default("dispatched", "loop"), "idle:2h")
+        self.assertEqual(rp.origin_default("driver", "loop"), "idle:2h")
         self.assertEqual([rp.origin_of(*a) for a in (
             ("orchestrator",), ("fleet-epic:epic-driver",), ("", "", "", "1"), ("", "scratch-3"),
             ("", "hub"), ("", "", "u/f"), ("", ""), ("", "scratch-3", "", "", "decide"))],
-            ["orchestrator", "driver", "probe", "dispatched", "person", "dispatched", "person", "decide"])
+            ["person", "person", "probe", "person", "person", "person", "person", "person"])
         # Titles label sessions; only explicit provenance authorizes probe policy.
         self.assertEqual([rp.origin_of(*a) for a in (
             ("", "hub", "", "", "", "T672 放置计时 D2（空会话，可关）"), ("", "scratch-3", "", "", "", "探针：放置 4xx"),
             ("", "scratch-3", "", "", "", "C5 · 重复的故障演练合并"), ("orchestrator", "", "", "", "", "可关"))],
-            ["person", "dispatched", "dispatched", "orchestrator"])
+            ["person", "person", "person", "person"])
         self.assertEqual([rp.effective(*a) for a in (
             ("done:5m", "1"), ("", "", "orchestrator"), ("keep", "", "", "session", True),
             ("keep", "", "", "session", False), ("keep", "", "", "", True), ("merged",))],
-            ["keep", "keep", "merged", "keep", "keep", "merged"])
+            ["done:5m", "", "keep", "keep", "keep", "merged"])
         r = subprocess.run(["python3", str(BIN / "fleet_reap_policy.py"), "origin-default", "person"],
                            capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "idle:2h")
@@ -1436,10 +1433,7 @@ class HoldsAndWhy(TaskSession):
 
 
 class DispatchedSession(TaskSession):
-    """T694 (回收 B): a session another session dispatched (@origin_fid → origin
-    `dispatched`; @agent_def epic-driver → `driver`) whose `merged` is a REPORTED
-    result: over ⇒ closed after its grace; finished with no result ⇒ marked silently,
-    then closed — history first, the worktree kept."""
+    """Legacy explicit merged policies work without role privileges or nudges."""
     PARENT = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 
     def setUp(self):
@@ -1451,7 +1445,7 @@ class DispatchedSession(TaskSession):
         seam.unlink()
         seam.write_text("#!/bin/sh\nprintf '%s\\t%s\\n' \"$1\" \"$2\" >> " + shlex.quote(str(self.nudges)) + "\n")
         seam.chmod(0o755)
-        self.env["FLEET_REAP_UNREPORTED_SECS"] = "600"
+        self.set("@task_flow", "")  # exercise the generic legacy merged road
 
     test_open_or_unknown_record_keeps_the_session = None
     test_closed_record_reaps_after_grace_keeping_the_worktree = None
@@ -1469,48 +1463,24 @@ class DispatchedSession(TaskSession):
         self.assertTrue(self.exists())
         self.set("@claude_state_ts", str(int(time.time()) - 90))
         out = self.due()
-        self.assertIn("reaped-over:" + self.win + " origin=dispatched scratch-7", out)
+        self.assertIn("reaped-over:" + self.win + " scratch-7", out)
         self.assertFalse(self.exists())
         self.assertTrue(self.wt.is_dir())
         self.assertIn("its work is over", (self.root / "ledger.tsv").read_text())
 
-    def test_unreported_is_marked_without_messages_then_closed(self):
+    def test_missing_result_never_marks_reminds_or_closes(self):
         self.answer.write_text("1\n")
-        # T756 first: an ID that said `waiting` at its turn's end — the report maybe
-        # still on its way to a parent on another machine — is no 「没报结果」: no
-        # nudge, no red mark (one from before is lifted), no close. (Folded in here:
-        # a new case would regroup the explicit parts #4..#8.)
-        said = "6a7b8c9d-0e1f-4a2b-8c3d-000000000756"
-        self.call("python3", str(BIN / "fleet_id.py"), "result", said, "--state", "waiting", "--summary", "t756")
-        self.set("@fleet_id", said)
-        self.set("@claude_state_ts", str(int(time.time()) - 700))
-        self.set("@reap_unreported", str(int(time.time()) - 700))
-        out = self.due()
-        self.assertIn("skip:waiting " + self.win, out)     # E101: it waits on its person
-        self.assertNotIn("nudged", out)
-        self.assertNotIn("reaped", out)
-        self.assertFalse(self.nudges.exists())
-        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_unreported}").strip(), "")
-        self.set("@fleet_id", self.FID)
-        self.set("@claude_state_ts", str(int(time.time()) - 300))
-        self.assertNotIn("nudged", self.clean())          # idle 5 min < 10
-        self.set("@claude_state_ts", str(int(time.time()) - 700))
-        out = self.clean()
-        self.assertIn("marked-unreported:" + self.win, out)
-        self.assertFalse(self.nudges.exists())
-        self.assertTrue(self.tm("display-message", "-p", "-t", self.win, "#{@reap_unreported}").strip().isdigit())
-        out = self.due()                                  # nudged just now: its second half waits
-        self.assertNotIn("nudged", out)                   # once
-        self.assertNotIn("reaped", out)
-        self.assertTrue(self.exists())
-        self.set("@reap_unreported", str(int(time.time()) - 700))
-        out = self.due()
-        self.assertIn("reaped-unrep:" + self.win + " origin=dispatched", out)
-        self.assertFalse(self.exists())
-        self.assertIn("unreported", (self.root / "ledger.tsv").read_text())
-        self.assertFalse(self.nudges.exists())
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
+        for old_mark in ("", str(int(time.time()) - 900000)):
+            self.set("@reap_unreported", old_mark)
+            out = self.due()
+            self.assertNotIn("marked-unreported", out)
+            self.assertNotIn("reaped", out)
+            self.assertFalse(self.nudges.exists())
+            self.assertEqual(self.tm("show-option", "-wqv", "-t", self.win, "@reap_unreported").strip(), "")
+            self.assertTrue(self.exists())
 
-    def test_working_or_a_person_s_own_is_not_this_road(self):
+    def test_working_holds_but_person_uses_the_same_merged_policy(self):
         self.answer.write_text("1\n")
         self.result("merged")
         self.set("@claude_state", "working")
@@ -1520,10 +1490,9 @@ class DispatchedSession(TaskSession):
         self.tm("set-option", "-wu", "-t", self.win, "@origin_fid")
         self.set("@reap_origin", "person")                # a person's ⌘P task: its record's road
         out = self.due()
-        self.assertNotIn("reaped-over", out)
-        self.assertIn("reaped-task:" + self.win + " T42", out)
+        self.assertIn("reaped-over:" + self.win, out)
 
-    def test_a_keep_the_session_set_lapses_once_over_a_person_s_holds(self):
+    def test_existing_keep_holds_regardless_of_who_set_it(self):
         self.answer.write_text("1\n")
         self.result("merged")
         self.set("@reap_policy", "keep")
@@ -1531,31 +1500,26 @@ class DispatchedSession(TaskSession):
         self.assertTrue(self.exists())
         self.set("@reap_keep_by", "session")
         out = self.due()
-        self.assertIn("reaped-over:" + self.win, out)
-        self.assertFalse(self.exists())
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
 
-    def test_a_pin_or_an_orchestrator_is_never_closed(self):
+    def test_pin_and_role_do_not_override_explicit_merged(self):
         self.answer.write_text("0\n")
         self.result("merged")
-        for key, value in (("@pin", "1"), ("@agent_def", "orchestrator")):
-            with self.subTest(key=key):
-                self.set(key, value)
-                self.assertNotIn("reaped", self.due())
-                self.assertTrue(self.exists())
-                self.tm("set-option", "-wu", "-t", self.win, key)
+        self.set("@pin", "1")
+        self.set("@agent_def", "orchestrator")
+        self.assertIn("reaped-over:" + self.win, self.due())
+        self.assertFalse(self.exists())
 
-    def test_a_driver_goes_at_once_its_loop_end_only_when_over(self):
+    def test_driver_result_does_not_bypass_loop_end_grace(self):
         self.answer.write_text("1\n")
         self.set("@agent_def", "epic-driver")
         self.set("@reap_policy", "loop-end")
         self.set("@claude_state_ts", str(int(time.time()) - 5))
-        out = self.clean()
-        self.assertNotIn("nudged", out)                   # between two ticks: never nudged
-        self.assertNotIn("reaped-over", out)
         self.result("succeeded")
-        out = self.due()                                  # no grace: its one visible tick
-        self.assertIn("reaped-over:" + self.win + " origin=driver", out)
-        self.assertFalse(self.exists())
+        out = self.clean()
+        self.assertNotIn("reaped", out)
+        self.assertTrue(self.exists())
 
 
 class ReapPolicy(Rig):
@@ -1824,7 +1788,7 @@ class HomeReap(ReapPolicy):
         self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
         self.assertFalse(self.exists())
 
-    def test_no_policy_or_keep_or_a_pin_is_never_closed(self):
+    def test_no_policy_and_keep_hold_but_pin_is_only_order(self):
         self.set("@claude_state", "exited")
         self.set("@claude_state_ts", str(int(time.time()) - 900000))
         self.due()
@@ -1834,10 +1798,7 @@ class HomeReap(ReapPolicy):
         self.due()
         self.assertTrue(self.exists())               # keep: never
         self.policy("done:2h")
-        self.due()                                   # pinned (T694, 回收 B): never either
-        self.assertTrue(self.exists())
-        self.tm("set-option", "-wu", "-t", self.win, "@pin")
-        out = self.due()                             # unpinned, done:2h, exited long ago
+        out = self.due()                             # pin does not override done:2h
         self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
         self.assertFalse(self.exists())
 
@@ -1854,23 +1815,22 @@ class HomeReap(ReapPolicy):
         self.assertIn("reaped-idle:" + self.win + " policy=idle:2h norepo", out)
         self.assertFalse(self.exists())
 
-    def test_spawned_norepo_closes_on_its_policy_after_a_finished_turn(self):
-        # issue #2623: a no-repo session another session spawned (a batch driver,
-        # a design-page writer) is nobody's home session — done:5m closes it five
-        # minutes after its last turn; the same window with no parent stays.
+    def test_ancestry_does_not_override_norepo_done_policy(self):
         self.policy("done:5m")
         self.set("@claude_state_ts", str(int(time.time()) - 600))
-        self.due()
-        self.assertTrue(self.exists())               # no parent: #2565's exited rule
+        self.clean()
+        self.assertTrue(self.exists())
         self.set("@origin", "1f0e0000-0000-4000-8000-000000004341")
-        self.set("@claude_state_ts", str(int(time.time()) - 120))
-        self.due()
-        self.assertTrue(self.exists())               # done 120 s < 5 m: not yet
+        self.clean()
+        self.assertTrue(self.exists())               # stale parent cannot change done
         self.set("@claude_state", "working")
+        self.clean()
+        self.assertTrue(self.exists())               # a working turn is never eligible
+        self.set("@claude_state", "exited")
+        self.set("@claude_state_ts", str(int(time.time()) - 120))
+        self.clean()
+        self.assertTrue(self.exists())               # exited less than the chosen grace
         self.set("@claude_state_ts", str(int(time.time()) - 600))
-        self.due()
-        self.assertTrue(self.exists())               # still working: never
-        self.set("@claude_state", "done")
         out = self.due()
         self.assertIn("reaped-idle:" + self.win + " policy=done:5m norepo", out)
         self.assertFalse(self.exists())
@@ -1892,47 +1852,32 @@ class HomeReap(ReapPolicy):
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
 class PinIsOrder(ReapPolicy):
-    """A pin is only the list's order (issue #3119): it exempts a window from no
-    reap — `keep` does — and the windows pinned when this version first runs,
-    with no policy of their own, get `keep` once (pin-keep.done), never again."""
+    """PIN changes order only; no policy migration and no automatic keep."""
     def mark(self):
         return self.root / "conf" / "global" / "pin-keep.done"
 
-    def test_pinned_at_the_first_pass_gets_keep_once(self):
+    def test_first_pass_does_not_migrate_pin_to_keep(self):
         self.set("@pin", "1")
-        self.set("@claude_state_ts", str(int(time.time()) - 900000))
-        other = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label, "sleep 90").strip()
-        self.tm("set-option", "-w", "-t", other, "@pin", "1")
-        self.tm("set-option", "-w", "-t", other, "@reap_policy", "done:5m")
-        out = self.clean()                           # the first pass migrates
-        self.due()
-        self.assertIn("pin-keep:" + self.win, out)
-        self.assertNotIn("pin-keep:" + other, out)   # its own policy is its own
-        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_policy}").strip(), "keep")
-        self.assertEqual(self.tm("display-message", "-p", "-t", other, "#{@reap_policy}").strip(), "done:5m")
-        self.assertTrue(self.exists())               # keep: never closed
-        self.assertTrue(self.mark().exists())
-
-    def test_a_pin_set_later_keeps_its_window(self):
-        # T694 (回收 B): a pin keeps its window again — policy() reads it `keep`
-        # (fleet_reap_policy.effective); the migration still writes nothing.
-        self.clean()                                 # the first pass: nothing pinned, the mark written
-        self.assertTrue(self.mark().exists())
-        self.set("@pin", "1")
-        self.set("@claude_state_ts", str(int(time.time()) - 900000))
-        out = self.due()
+        self.set("@claude_state", "working")
+        out = self.clean()
         self.assertNotIn("pin-keep:", out)
-        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, "#{@reap_policy}").strip(), "")
-        self.assertNotIn("reaped-idle:" + self.win, out)
+        self.assertEqual(self.tm("show-option", "-wqv", "-t", self.win, "@reap_policy").strip(), "")
+        self.assertFalse(self.mark().exists())
+        self.set("@reap_policy", "keep")
+        self.set("@claude_state", "done")
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
+        self.due()
         self.assertTrue(self.exists())
-        self.set("@reap_policy", "done:5m")          # pinned beats its own policy too
+        self.assertEqual(self.tm("show-option", "-wqv", "-t", self.win, "@reap_policy").strip(), "keep")
+
+    def test_pin_does_not_override_existing_done_policy(self):
+        self.set("@pin", "1")
+        self.set("@reap_policy", "done:5m")
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
         out = self.due()
-        self.assertNotIn("reaped-idle:" + self.win, out)
-        self.assertTrue(self.exists())
-        self.tm("set-option", "-wu", "-t", self.win, "@pin")
-        out = self.due()                             # unpinned: its policy closes it
         self.assertIn("reaped-idle:" + self.win, out)
         self.assertFalse(self.exists())
+        self.assertFalse(self.mark().exists())
 
     def test_dry_run_migrates_nothing(self):
         self.set("@pin", "1")
@@ -2242,10 +2187,7 @@ class ParkTable(unittest.TestCase):
 
     def test_each_origin_has_a_park_and_reap_column(self):
         rp = idle.fleet_reap_policy
-        for origin, reap in (("person", "parked"), ("dispatched", "reported"),
-                             ("member", "reported"), ("driver", "batch"),
-                             ("orchestrator", "never"), ("decide", "idle"),
-                             ("probe", "done"), ("web", "never")):
+        for origin, reap in (("person", "parked"), ("probe", "done")):
             with self.subTest(origin=origin):
                 self.assertEqual(rp.ORIGINS[origin]["park"], "idle")
                 self.assertEqual(rp.ORIGINS[origin]["reap"], reap)
@@ -2261,8 +2203,9 @@ class ParkTable(unittest.TestCase):
             finished = {"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "looping",
                         "@agent_status": '{"state":"done"}', "@claude_state_ts": "100"}
             self.assertIn("next=park@", rp.explain(finished, now=200))
-            for opts in ({"@pin": "1"}, {"@reap_policy": "keep", "@reap_keep_by": "person"}):
-                self.assertIsNone(rp.parked_deadline(dict(snap, **opts)))
+            self.assertEqual(rp.parked_deadline(dict(snap, **{"@pin": "1"})), 3800)
+            for by in ("", "person", "session"):
+                self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "keep", "@reap_keep_by": by})))
 
     def test_driver_reads_every_origin_without_closing_early(self):
         args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
@@ -2291,8 +2234,8 @@ class ParkTable(unittest.TestCase):
             self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "merged"})))
             self.assertIsNone(rp.parked_deadline(dict(snap, **{"@reap_policy": "done:10m"})))
             snap["@reap_origin"] = "orchestrator"
-            self.assertIsNone(rp.parked_deadline(snap))
-            self.assertIn("keep", rp.explain(snap, now=200))
+            self.assertEqual(rp.parked_deadline(snap), 259300)
+            self.assertIn("1970-01-04T00:01:40Z", rp.explain(snap, now=200))
             snap["@reap_origin"] = "person"
             snap["@park_held"] = ""
             self.assertIsNone(rp.parked_deadline(snap))

@@ -189,16 +189,12 @@ while [ "$#" -gt 0 ]; do
     # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
     --print)       PRINT_WIN=1; shift ;;
     # --reap <policy> (issue #1902): when the fleet may close this session on its
-    # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
-    # the kind's default, stamped below: done:15m, or loop-end for a /loop seed.
+    # own — merged[:<dur>] | done[:<dur>] | idle:<dur> | loop-end | at:<time> | keep.
+    # None = the ordinary idle:2h default, including a /loop seed.
     --reap)        REAP="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap=*)      REAP="${1#--reap=}"; shift ;;
-    # --reap-origin <word> (T694, 回收 B): where it came from, when the spawn
-    # knows better than its own facts — decide (waits on a person's call) ·
-    # probe (a scheduled job, a drill) · person · dispatched · member · driver ·
-    # orchestrator · web (a session the web chat opened, task HHV0). None = read
-    # off the spawn (fleet_reap_origin). It picks the
-    # default policy (fleet_reap_policy.py ORIGINS) and is stamped @reap_origin.
+    # Legacy origin words remain accepted; only explicit probe selects a test
+    # default. Web also stamps its transport provenance, not a retention role.
     --reap-origin)   REAP_ORIGIN="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap-origin=*) REAP_ORIGIN="${1#--reap-origin=}"; shift ;;
     # --test-identity (issue #2505): a session the TEST identity's client placed
@@ -1045,13 +1041,8 @@ stamp_option() {
 # Every repo scratch carries its repo (issue #789).
 [ -n "$REPO_ARG" ] && stamp_option @repo "$REPO_ARG" 2>/dev/null
 [ "$PIN" = 1 ] && stamp_option @pin 1 2>/dev/null
-# When the fleet may close it on its own (issue #1902): the one asked for, else
-# where it came from decides (T694, 回收 B — fleet_reap_policy.py ORIGINS, the one
-# table): a person's own (⌘N / ⌘P) idle 2 hours, a dispatched one / a batch
-# member / a driver once its work is over, an orchestrator never (and pinned), a
-# probe (the TEST identity's, issue #2505) once done; a /loop seed until its loop
-# stops. A no-repo session's `idle` counts a finished turn; its `done` waits for
-# the agent to EXIT (issue #2565).
+# New ordinary sessions share idle:2h and safe parking, regardless of origin.
+# Explicit --reap values are preserved; explicit test identities use done:1m.
 [ "$TEST_ID" = 1 ] && stamp_option @test_identity 1 2>/dev/null
 stamp_option @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
@@ -1060,19 +1051,12 @@ stamp_option @dispatch "$DISPATCH" 2>/dev/null
   "$TEST_ID" "" "" "$NAME")
 if [ -z "$REAP" ]; then
   _rk=scratch; case "$PROMPT" in /loop|/loop[[:space:]]*) _rk=loop ;; esac
-  REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${REAP_ORIGIN:-person}" --kind "$_rk") || REAP=done:15m
+  REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${REAP_ORIGIN:-person}" --kind "$_rk") || REAP=idle:2h
   unset _rk
 fi
 [ -n "$REAP" ] && stamp_option @reap_policy "$REAP" 2>/dev/null
 [ -n "$REAP_ORIGIN" ] && stamp_option @reap_origin "$REAP_ORIGIN" 2>/dev/null
-# A `keep` a SESSION asked for when it dispatched this one lapses once the work is
-# over (T694): only a person's keep holds (fleet_reap_policy.effective).
-[ "$REAP" = keep ] && case "$REAP_ORIGIN" in dispatched|member) stamp_option @reap_keep_by session 2>/dev/null ;; esac
-# An orchestrator is pinned from its first moment (回收 B): never closed on its own.
-[ "$REAP_ORIGIN" = orchestrator ] && [ "$PIN" != 1 ] && stamp_option @pin 1 2>/dev/null
-# A session the web opened (task HHV0, `--reap-origin web`): the person's
-# conversation — never closed on its own, parked idle (fleet-cleanup-idle.py
-# web_park); its row says origin=web on every list (fleet-control-read.sh).
+# Web is transport provenance, not a retention privilege.
 [ "$REAP_ORIGIN" = web ] && stamp_option @session_origin web 2>/dev/null
 # A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
 # gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's

@@ -268,3 +268,12 @@ func task_ended T970 bin/fleet_view.py
 # T970: no new Hub task Parent binding or Parent identity gate.
 func bindTaskParentTx T970 tokenledger/hub/
 func checkTaskParentSession T970 tokenledger/hub/
+
+# T970: Task retention has no role/PIN privileges or unreported timers.
+func dispatched_session T970 bin/fleet-cleanup-idle.py
+func pin_keep_once T970 bin/fleet-cleanup-idle.py
+func unreported_secs T970 bin/fleet-cleanup-idle.py
+func id_said_at T970 bin/fleet-cleanup-idle.py
+word REPORTING T970 bin/fleet_reap_policy.py
+word KEEP_DEFS T970 bin/fleet-cleanup-idle.py
+key FLEET_REAP_UNREPORTED_SECS T970

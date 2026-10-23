@@ -858,17 +858,12 @@ esac
 fi
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
-# Where it came from (T694, 回收 B): stamped @reap_origin; it picks the default
-# policy (fleet_reap_policy.py ORIGINS) — an issue session a person or a session
-# opened keeps its historic `merged`, an orchestrator / a driver its own.
+# The same ordinary idle/park default as a raw Task; keep explicit policies.
 _rorig=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" "" \
   "" "" "$WIN_TITLE")
-[ -n "$REAP" ] || REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${_rorig:-person}" --kind issue) || REAP=merged
-_sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
+[ -n "$REAP" ] || REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${_rorig:-person}" --kind issue) || REAP=idle:2h
+_sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-idle:2h}")
 [ -n "$_rorig" ] && _sw+=(\; set-window-option -t "$win" @reap_origin "$_rorig")
-# a keep a session asked for lapses once the work is over (T694)
-[ "$REAP" = keep ] && case "$_rorig" in dispatched|member) _sw+=(\; set-window-option -t "$win" @reap_keep_by session) ;; esac
-[ "$_rorig" = orchestrator ] && _sw+=(\; set-window-option -t "$win" @pin 1)
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; set-window-option -t "$win" @task "$TASK_REF") ;; esac ;; esac
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")

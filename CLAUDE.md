@@ -396,21 +396,21 @@ one-off drill / audit records do not go in the repo (issue #3576).
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by
   `bin/fleet-reap-policy.sh` (the `set_reap` tool, the sidebar's 改回收方式…):
   `merged[:<dur>]` · `done[:<dur>]` · `idle[:<dur>]` · `loop-end` · `at:<time>` · `keep`.
-  `bin/fleet_reap_policy.py` is the ONE grammar — and the ONE origin table
-  (T694, 回收 B: `ORIGINS`): a spawner reads where the session came from
-  (`fleet_reap_origin`: person · dispatched · member · driver · orchestrator ·
-  decide · probe), stamps it `@reap_origin` and opens with the table's policy;
-  a pinned window and an orchestrator are never closed on their own, and a
-  `keep` a session set for itself (`@reap_keep_by session`, the `set_reap` tool)
-  lapses once its work is over (`effective`). A dispatched session's «done» is
-  its reported result — closed ≈1 min after, nudged once at 30 min idle
-  unreported and closed at 60 (`fleet-cleanup-idle.py dispatched_session`). `fleet-cleanup.sh` honours
-  keep / merged:<dur> and leaves the rest to `fleet-cleanup-idle.py`, which closes
-  them through the same gates (history first, worktree kept, never while working,
-  looping or holding a background job). The map
-  carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
-  `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
-  `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
+  `bin/fleet_reap_policy.py` is the one grammar. New ordinary tasks share
+  `idle:2h` and the existing safe park gate regardless of creator, agent or web
+  origin (T970); explicit test probes retain `done:1m`. Legacy origin arguments
+  remain accepted without role privileges. PIN only changes list order, never
+  writes keep, and does not alter automatic retention. Existing policies,
+  including a session-set or ambiguous old keep, remain effective until changed.
+  No missing-result reminder or closing timer is created. Controlled tasks only
+  park automatically, preserving their binding/history/worktree; acknowledged
+  parking releases native processes and running capacity. Legacy merged policies
+  still use ordinary history, native Loop/background and resumability checks,
+  without a driver bypass. User stop is independent of these automatic rules.
+  The restore map carries `REAP<TAB><fleet_id><TAB><policy>` and inventory carries
+  `reap=`. No policy retains the legacy route for that session's kind.
+  `fleet-task-retention-defaults-selftest.py`, `fleet-cleanup-idle-selftest.py`
+  and `reap-origin-selftest.sh` pin these rules.
 - **A custom session is ONE standard agent file** (issue #3122, EPIC #3111 C11).
   A spawn names it — `--as <name>` on `dash-issue-session.sh` / `dash-raw-session.sh`,
   the `spawn` tool's `agent` — and `bin/fleet-agent-def.py` (the one reader) finds
