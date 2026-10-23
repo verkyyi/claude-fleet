@@ -164,6 +164,7 @@ the screen's thread, then one hub cache --refresh, so a reaped row leaves within
 the next read. A lost row (`!`) sends nothing: 「<机器> 失联，做不了 · 正在重连」.
 """
 import curses
+import fcntl
 import getpass
 import hashlib
 import importlib.util
@@ -799,45 +800,101 @@ def gone_file(fleet):
     return dash_global() / ("view-gone." + (fleet or "-"))
 
 
-def gone_read(fleet, wait=True):
-    """Write `fleet-history.sh rows` (FLEET_VIEW_LANDED_CMD — the selftest's seam)
-    to gone_file, single-flight (a `.lock` dir; one older than 10 minutes is a dead
-    reader's). A failed read keeps the last copy. wait=False: in the background, its
-    own session. True when this call ran (or started) the read."""
-    out = gone_file(fleet)
-    lock = Path(str(out) + ".lock")
+def gone_worker(out, lock, prod, guard_fd, timeout):
+    """Own the lock until the producer and its descendants have stopped."""
+    out, lock = Path(out), Path(lock)
+    tmp = Path(str(out) + "." + str(os.getpid()))
+    child = None
+    succeeded = False
     try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        lock.mkdir()
-    except FileExistsError:
+        with tmp.open("wb") as stream:
+            child = subprocess.Popen(
+                ["sh", "-c", prod, "sh", str(Path(__file__).absolute().parent / "fleet-history.sh")],
+                stdout=stream, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                start_new_session=True, pass_fds=(int(guard_fd),))
+            try:
+                rc = child.wait(timeout=float(timeout))
+            except subprocess.TimeoutExpired:
+                rc = -1
+            finally:
+                # A shell timeout alone leaves bash and its children consuming CPU.
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+        if rc == 0:
+            os.replace(tmp, out)
+            Path(str(out) + ".attempt").unlink(missing_ok=True)
+            succeeded = True
+    finally:
+        if not succeeded:
+            Path(str(out) + ".attempt").touch()
         try:
-            if time.time() - lock.stat().st_mtime < 600:
-                return False
-            os.utime(str(lock))
-        except OSError:
-            return False
-    except OSError:
-        return False
-    prod = os.environ.get("FLEET_VIEW_LANDED_CMD") or 'bash "$1" rows'
-    script = '(%s) > "$2.$$" 2>/dev/null && mv -f "$2.$$" "$2"; rm -f "$2.$$"; rmdir "$3"' % prod
-    argv = ["sh", "-c", script, "sh", str(Path(__file__).absolute().parent / "fleet-history.sh"), str(out), str(lock)]
-    # FLEET_HISTORY_EPOCH: each row also carries its close time (issue #3731)
-    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240", FLEET_HISTORY_EPOCH="1")
-    try:
-        if wait:
-            subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=300)
-        else:
-            subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-    except subprocess.TimeoutExpired:
-        pass
-    except OSError:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
         try:
             lock.rmdir()
         except OSError:
             pass
+
+
+def gone_read(fleet, wait=True):
+    """Single-flight, bounded history refresh; failures retain the last cache.
+
+    The advisory lock survives old directory timestamps and is inherited by the
+    supervisor and producer. Never unlink its inode: concurrent callers must all
+    lock the same file. The directory also excludes older installed callers.
+    """
+    out = gone_file(fleet)
+    lock = Path(str(out) + ".lock")
+    guard = None
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        guard = open(str(out) + ".guard", "a")
+        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            lock.mkdir()
+        except FileExistsError:
+            if time.time() - lock.stat().st_mtime < 600:
+                guard.close()
+                return False
+            os.utime(lock)
+    except OSError:
+        if guard is not None:
+            guard.close()
         return False
+    prod = os.environ.get("FLEET_VIEW_LANDED_CMD") or 'bash "$1" rows'
+    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240", FLEET_HISTORY_EPOCH="1")
+    # Failures also back off: an absent cache must not start a job per keypress.
+    attempt = Path(str(out) + ".attempt")
+    try:
+        if time.time() - attempt.stat().st_mtime < fenv("FLEET_VIEW_GONE_RETRY_SECS", 300):
+            lock.rmdir()
+            guard.close()
+            return False
+    except FileNotFoundError:
+        pass
+    argv = [sys.executable, "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from fleet_view import gone_worker; gone_worker(*sys.argv[2:])",
+            str(Path(__file__).absolute().parent), str(out), str(lock), prod,
+            str(guard.fileno()), str(max(0.1, fenv("FLEET_VIEW_GONE_TIMEOUT", 60)))]
+    try:
+        attempt.touch()
+        child = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True, pass_fds=(guard.fileno(),))
+    except OSError:
+        lock.rmdir()
+        return False
+    finally:
+        guard.close()
+    if wait:
+        child.wait()
+    else:
+        threading.Thread(target=child.wait, daemon=True).start()
     return True
 
 
