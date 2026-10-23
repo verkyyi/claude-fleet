@@ -6950,6 +6950,24 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_unclaimed_stop_proof() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
+    WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
+  }
+  WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_unclaimed() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
+    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
+  }
+  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
+  SECS=$(since "$t0")
+}
+
 drill_task_continuation_start() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
@@ -7823,6 +7841,17 @@ drill_session_title_lost() {
     WHY="persistent title regression: $(tail -3 "$WORK/title-ledger.log")"; return 1;
   }
   WHAT='创建、自动/人工命名、并发顺序、回收和重开保留同一身份的标题'
+  SECS=$(since "$t0")
+}
+
+drill_task_parent_write_retired() {
+  CAP=120; local t0; t0=$(now)
+  _drill_go_tests 'TestTaskParentWriteRetired TestTaskParentHistoricalReplayPreservesBytes' \
+    "$ROOT/tokenledger/hub/store/fleet_task_parent_retirement_test.go" \
+    '新Task不写Parent，旧token重放保留原记录和非Parent冲突保护' ./hub/store || return 1
+  _drill_go_tests 'TestTaskParentNodeWriteRetired TestTaskParentOperationReplayRetired TestTaskParentWriteParamsRetired TestTaskParentAcceptedDispatchReplay' \
+    "$ROOT/tokenledger/hub/api/fleet_task_parent_retirement_test.go" \
+    '认证身份保留，Parent字段不注入、不影响旧请求重放，用户正文仍完整比较' || return 1
   SECS=$(since "$t0")
 }
 
