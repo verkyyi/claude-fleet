@@ -54,8 +54,8 @@ class Snapshot(unittest.TestCase):
 
     def test_reader_preserves_empty_columns(self):
         self.set("@probe_value", "middle")
-        fmt = "#{@missing_first}\x1f#{@probe_value}\x1f#{@missing_last}"
-        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, fmt), "\x1fmiddle\x1f")
+        fmt = "#{@missing_first}\t#{@probe_value}\t#{@missing_last}"
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.win, fmt), "\tmiddle\t")
 
     def test_reader_removes_only_its_transport_newline(self):
         self.set("@probe_value", "  first\nsecond \n")
@@ -73,14 +73,18 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(snap["@claude_state"], "done")
         self.assertEqual(snap["@reap_work_pending"], "")
 
+    def test_literal_escape_text_is_not_decoded(self):
+        self.set("@repo", r"owner/one\037part")
+        self.assertEqual(self.cleaner().snapshot(self.win)["@repo"], r"owner/one\037part")
+
     def test_embedded_separator_still_uses_safe_fallback(self):
-        self.set("@repo", "owner/one\x1fpart")
+        self.set("@repo", "owner/one\tpart")
         self.set("@reap_policy", "keep")
         c = self.cleaner()
         with patch.object(c, "tm", wraps=c.tm) as observed:
             snap = c.snapshot(self.win)
         self.assertGreater(observed.call_count, 1)
-        self.assertEqual(snap["@repo"], "owner/one\x1fpart")
+        self.assertEqual(snap["@repo"], "owner/one\tpart")
         self.assertEqual(snap["@reap_policy"], "keep")
         self.assertEqual(snap["@raw"], "")
         self.assertEqual(snap["@reap_work_pending"], "")

@@ -33,7 +33,7 @@ def tmux(socket=None):
     prefix = ["tmux"] + (["-L", socket] if socket else [])
 
     def run(*args):
-        # Strip only tmux's output terminator. str.strip() also removes \x1f,
+        # Strip only tmux's output terminator. str.strip() also removes TAB,
         # the snapshot column separator, turning empty edge fields into fallback.
         return subprocess.check_output(prefix + list(args), text=True,
                                        stderr=subprocess.DEVNULL, timeout=5).removesuffix("\n")
