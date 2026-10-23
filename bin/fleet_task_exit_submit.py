@@ -10,6 +10,41 @@ RECEIPT = "native_exit_receipt"
 BODY_LIMIT = 1 << 20
 
 
+def acknowledged_native_exit(db, exit_operation_id):
+    """Read the immutable packet and ACK in the existing stop journal.
+
+    This reader neither submits a packet nor releases any local fence. Its
+    caller holds the transaction that compares/replaces the exact old binding.
+    """
+    from fleet_task_execution import FenceRefused, validate_request
+    if not is_identity(exit_operation_id):
+        raise FenceRefused("continuation requires an acknowledged exit operation")
+    rows = db.execute("""SELECT * FROM operations WHERE action='worker_stop'
+        AND json_extract(result,'$.native_exit_receipt.operation_id')=?""", (exit_operation_id,)).fetchall()
+    if len(rows) != 1:
+        raise FenceRefused("matching acknowledged exit receipt is unavailable or ambiguous")
+    row = dict(rows[0])
+    request, result = json.loads(row['request']), json.loads(row['result'])
+    if not isinstance(request, dict) or not isinstance(result, dict):
+        raise FenceRefused('malformed original native exit journal')
+    snapshot = validate_request(request)
+    receipt = result.get(RECEIPT, {})
+    if not isinstance(receipt, dict) or not isinstance(receipt.get('payload'), dict):
+        raise FenceRefused('missing original native exit packet')
+    payload = receipt.get('payload', {})
+    proof = payload.get('proof', {})
+    if not isinstance(proof, dict) or not isinstance(proof.get('launches'), list):
+        raise FenceRefused('malformed original native exit proof')
+    if (snapshot is None or request['action'] != 'worker_stop' or row['id'] != request['operation_id']
+            or receipt.get('confirmed') is not True or receipt.get('operation_id') != exit_operation_id
+            or type(payload.get('control_version')) is not int or payload['control_version'] != 1
+            or payload.get('idempotency_key') != 'native-exit:' + hashlib.sha256(row['id'].encode()).hexdigest()
+            or proof.get('scope') != 'native_session' or proof.get('snapshot') != snapshot
+            or proof.get('provider') not in ('claude', 'codex') or not proof.get('launches')):
+        raise FenceRefused("continuation requires the original confirmed native exit proof")
+    return row, snapshot, result, receipt
+
+
 def exit_result(result):
     """Public operations carry confirmation only, never the large proof."""
     if not isinstance(result, dict):

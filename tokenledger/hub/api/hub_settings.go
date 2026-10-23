@@ -85,6 +85,7 @@ func onOff(key, def string) func(*Server, string) (string, string) {
 
 // hubSettings is every hub setting but the per-person machine login.
 var hubSettings = map[string]hubSetting{
+	PreviewLimitsKey: {def: `{"default":{}}`, help: "Private preview limits: default/accounts/nodes/groups (endpoint team). Scopes can lower V1 bounds: 3 previews, 32 connections, 7200 lease_seconds, 10485760 body_bytes; zero inherits.", check: previewPolicyCheck},
 	MeterKey: {def: "on", help: "the public counter (/meter.json)",
 		check: onOff(MeterKey, "on")},
 	PoolSkipPctKey: {def: "85", help: "a subscription at or above this % of a window is skipped (nodes: FLEET_ACCOUNT_CEILING)",

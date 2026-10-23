@@ -2579,6 +2579,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   FLEET_NODE_ALIASES     this file — hostname=label, how a machine is shown
 # The hub's own (its environment, a deploy overlay — deploy/k8s/overlays/example):
 #   CCQUOTA_FLEET_PUBLIC_URL / CCQUOTA_PUBLIC_URL   its public address
+#   CCQUOTA_PREVIEW_HUB_ALIASES   optional exact legacy Hub DNS hosts, comma-separated, same Hub site
+#   CCQUOTA_PREVIEW_BASE_DOMAIN   separate registrable DNS domain for private live
+#                              previews; unset disables. TLS terminates at ingress.
+#   fleet.preview_limits        Hub setting registry: default/accounts/nodes/groups
+#                              (endpoint team); lowers 3 previews, 32 connections,
+#                              7200 seconds, 10 MiB. Never worker concurrency.
 #   CCQUOTA_FLEET_CRED_RELAY_URL                    the relay it signs passes for
 #   CCQUOTA_METER_ORIGINS   web origins whose page may read /meter.json; unset = none
 #   CCQUOTA_FLEET_CHAT_FRAME_ORIGINS  https origins a web-chat card may frame (the
