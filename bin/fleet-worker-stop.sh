@@ -129,7 +129,9 @@ if [ -n "$FID" ]; then
   [ "$frc" = 2 ] && { printf 'refused:ambiguous\n'; exit 6; }
   [ "$frc" = 0 ] && [ -n "$found" ] || { printf 'refused:not-found\n'; exit 5; }
   [ "$(wopt "$found" '#{@hub}')" = 1 ] && { printf 'refused:not-found\n'; exit 5; }
-  case "$(wopt "$found" '#{window_name}')" in dash|plan|backlog|home) printf 'refused:not-found\n'; exit 5 ;; esac
+  # Names are editable. The shared role reader protects real home/panel
+  # windows and keeps the legacy name fallback only for unstamped windows.
+  [ "$(fleet_win_role "$found" "$SOCK")" = worker ] || { printf 'refused:not-found\n'; exit 5; }
   # Its key, when it has one, is what the ledger row is keyed on below.
   KEY=$(fleet_window_okey "$SESS" "$found"); KEY=${KEY#*:}
   count=1

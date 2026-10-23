@@ -6968,6 +6968,15 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_authority() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinue' -count=1) >"$WORK/task-continue.log" 2>&1 || {
+    WHY="explicit continuation authority regression: $(tail -8 "$WORK/task-continue.log")"; return 1;
+  }
+  WHAT='真实 Hub API 与 SQLite：停止证明、同端点、精确幂等、并发 provider、旧回执及失联节点均受新授权约束'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_replay_cleanup() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-execution-control-selftest.py" \
@@ -7754,6 +7763,15 @@ drill_reap_agent_split() {
   grep -qF 'def test_idle_persistent_mcp_is_not_work' "$BIN/fleet-codex-busy-selftest.py" \
     || { WHY="fleet-codex-busy-selftest.py no longer holds an idle resident MCP is not work"; return 1; }
   WHAT='回收一条路：结束（钩子 / 退出码）、认 Agent 进程、问还有没有活、收它留下的服务都问适配表；正常退出、被杀、后台服务还在、真有活四条腿两种 Agent 各跑一遍（fleet-agent-end-selftest.py，这里按名守住）；常驻 MCP 不算活（fleet-codex-busy-selftest.py）'
+  SECS=$(since "$t0")
+}
+
+drill_stop_renamed_worker() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
+    WHY="renamed-worker stop or panel protection failed: $(tail -12 "$WORK/stop-renamed-worker.log")"; return 1;
+  }
+  WHAT='worker改名home/dash/plan/backlog仍可按FID停止；真home/panel改名仍受保护；未标记旧窗口保留旧规则'
   SECS=$(since "$t0")
 }
 
