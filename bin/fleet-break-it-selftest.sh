@@ -7795,6 +7795,15 @@ drill_open_other_cli() {
 # round (#4466 #4538) — reaping is one road now (T631, EPIC T580 C8): the end, the
 # agent processes, the leftover-work probe and the left-behind service are the
 # adapter table's; the four legs run once per agent in fleet-agent-end-selftest.py.
+drill_tmux_snapshot_fields() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-reap-snapshot-selftest.py" >"$WORK/tmux-snapshot.log" 2>&1 || {
+    WHY="tmux snapshot field loss: $(tail -20 "$WORK/tmux-snapshot.log")"; return 1;
+  }
+  WHAT='真实tmux保留空首尾字段与值换行；快照一次批读，含分隔符仍安全fallback'
+  SECS=$(since "$t0")
+}
+
 drill_reap_agent_split() {
   CAP=10; local t0
   t0=$(now)
