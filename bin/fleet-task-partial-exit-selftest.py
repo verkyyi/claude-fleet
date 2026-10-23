@@ -256,7 +256,13 @@ e.supervise(grant,[sys.executable,'-c',native_code,sys.argv[1],str(root),stage])
                               stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
         f.children.append(proc)
         f.wait_file('initializing',proc)
-        launch=f.fence.launch('T42')
+        # The shell can touch its marker before Popen returns to the
+        # supervisor. Wait for the existing fork/registration barrier: this
+        # case proves a registered partial launch, not the missing-child
+        # crash window (which must still refuse exit proof).
+        with f.fence.admission(f.snapshot):
+            launch=f.fence.launch('T42')
+            self.assertEqual(launch['child'],_kernel_process(launch['child']['pid']))
         self.assertEqual(launch['admission_protocol'],1)
         self.assertEqual(launch['native'],[])
         stopped=f.fence.request_stop('T42','stop-initializing',generation=2)
