@@ -7811,6 +7811,14 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_history_current_generation() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskProjectionControlledGeneration TestTaskProjectionKeepsControlledIDHistory TestTaskProjectionControlledSweepsAndUndo TestTaskProjectionSnapshotRejectsAdmissionAndGenerationChange TestTaskProjectionMixedLegacyAliases' \
+    "$ROOT/tokenledger/hub/store/fleet_task_projection_test.go" \
+    '旧 ID/result/closed/超时补偿保留历史，不改写受控 Task 的当前代次和绑定' ./hub/store || return 1
+  SECS=$(since "$t0")
+}
+
 drill_task_current_view() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-current-view-selftest.py" >"$WORK/task-current-view.log" 2>&1 || {
