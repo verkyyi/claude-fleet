@@ -1,30 +1,17 @@
 #!/bin/bash
 # fleet-wait-reeval.sh — re-ask every IDLE window "are you still waiting?" (issue #1376).
 #
-# The Stop hook decides `looping` + @claude_wait (loop|children|bg|tool) once, at the
-# edge (issue #1370). An idle window never Stops again on its own, so without this a
-# parent whose children are still running reads `done` ✓ if it stopped before #1370
-# was synced, and a parent whose children all finished reads `looping` ↻ until its
-# next turn. This re-runs that one decision (fleet_window_reeval) for windows whose
-# state is `done`, or a `looping` that carries @claude_wait; it never changes
-# working/needs, and it writes nothing at all for a window waiting on nothing.
-#
-# Three callers:
-#   fleet-install-apply.sh `reeval` step   once per sync, every live fleet
-#   fleet-reconcile-tick.sh                every tick, after the #806 reconcile
-#   set-claude-state.sh (a child's Stop)   --parent-of <win>: the parent of a window
-#                                          that just stopped, so it need not wait
-#                                          for the tick
+# Re-check the current session's native loop/bg/tool/human reasons for windows
+# stamped done or looping with @claude_wait. Old children-only waits clear here;
+# working/needs and reasonless looping observations are never rewritten.
+# Called by fleet-reconcile-tick.sh and the install-apply reeval step.
 #
 # Usage: fleet-wait-reeval.sh [--dry-run] [--quiet] [--] [<session>...]
 #        fleet-wait-reeval.sh [--dry-run] --window <win> [<session>]
-#        fleet-wait-reeval.sh --parent-of <win> [<session>]
 # No session = every live fleet (fleet_sockets); inside a pane the current one.
-# Prints one `reeval: <sess>:<win> <old> -> <new>` line per change (unless --quiet)
-# and, last, `changed=<n> windows=<m> fleets=<f>`. A change cascades — a child
-# going `done` can finish its parent — so a pass that changed something is re-run,
-# at most 3 times. Changes are logged to logs/reconcile.log with `via=reeval`.
-# FLEET_WAIT_REEVAL=0 turns it off (exit 0, `changed=0 windows=0 fleets=0`).
+# Prints one reeval line per change plus changed/windows/fleets counts. Logs to
+# logs/reconcile.log with via=reeval. FLEET_WAIT_REEVAL=0 disables the pass.
+# Legacy --parent-of remains a no-op for callers started before retirement.
 # Always exits 0 except on a usage error (2).
 set -uo pipefail
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -36,9 +23,9 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --quiet) QUIET=1 ;;
     --window) WIN=${2:-}; shift ;;
-    --parent-of) PARENT_OF=${2:-}; shift ;;
+    --parent-of) PARENT_OF=1; [ "$#" -gt 1 ] && shift ;;
     --) shift; break ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     -*) printf 'fleet-wait-reeval: unknown option %s\n' "$1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -62,20 +49,15 @@ one() {   # <sess> <win> — reeval one window, print + log a change
   return 0
 }
 
-if [ -n "$WIN$PARENT_OF" ]; then
+# compat-1v: 下一批删 — old Stop hooks may invoke it, but no other Task is read.
+if [ -n "$PARENT_OF" ]; then
+  printf 'changed=0 windows=0 fleets=0\n'; exit 0
+fi
+
+if [ -n "$WIN" ]; then
   sess=${1:-}
   [ -n "$sess" ] || sess=$(fleet_current_session)
   [ -n "$sess" ] || { printf 'fleet-wait-reeval: no session\n' >&2; exit 2; }
-  if [ -n "$PARENT_OF" ]; then
-    # The parent is the live window answering to this window's @origin key.
-    origin=$(_fleet_tmux "$sess" display-message -p -t "$PARENT_OF" '#{@origin}' 2>/dev/null)
-    WIN=''
-    if [ -n "$origin" ]; then
-      if [ -n "${TMUX:-}" ]; then WIN=$(fleet_win_for_key "$origin" 2>/dev/null)
-      else WIN=$(fleet_win_for_key "$origin" "$(fleet_socket "$sess")" 2>/dev/null); fi
-    fi
-    [ -n "$WIN" ] || { printf 'changed=0 windows=0 fleets=1\n'; exit 0; }
-  fi
   windows=1 fleets=1
   one "$sess" "$WIN" || :
   printf 'changed=%s windows=%s fleets=%s\n' "$changed" "$windows" "$fleets"
@@ -99,13 +81,7 @@ for sess in $sessions; do
   done <<EOF
 $wl
 EOF
-  pass=0
-  while [ "$pass" -lt 3 ] && [ -n "$cand" ]; do
-    pass=$((pass + 1)); before=$changed
-    for wid in $cand; do one "$sess" "$wid" || :; done
-    # a dry run changes nothing, so a second pass would only repeat itself
-    [ "$changed" -gt "$before" ] && [ -z "$DRY" ] || break
-  done
+  for wid in $cand; do one "$sess" "$wid" || :; done
 done
 printf 'changed=%s windows=%s fleets=%s\n' "$changed" "$windows" "$fleets"
 exit 0

@@ -6230,7 +6230,7 @@ drill_report_parent_key_reminted() {
   o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --state waiting --summary kept 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
-  [ "$org" = "$pb|" ] || { WHY="the re-mint moved an identified child aside: @origin|@origin_retired = [$org], want [$pb|]"; return 1; }
+  [ "$org" = "acme-app:scratch-3|" ] || { WHY="retired origin logic rewrote historical bytes: @origin|@origin_retired = [$org]"; return 1; }
   case "$o1" in *RECORDED:*RETIRED:*) ;; *) WHY="reused key redirected report or lost own result: $o1"; return 1 ;; esac
   case "$o2" in *RECORDED:*RETIRED:*) ;; *) WHY="retired origin redirected report or lost own result: $o2"; return 1 ;; esac
   WHAT="旧父会话编号重领或 origin 已退役都不向祖先投递；自身历史仍保存"
@@ -7829,6 +7829,24 @@ drill_task_current_view() {
   SECS=$(since "$t0")
 }
 
+drill_parent_origin_retired() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
+    WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
+  }
+  WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
+drill_parent_wait_retired() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-wait-selftest.sh" --parent-only >"$WORK/parent-wait-retired.log" 2>&1 || {
+    WHY="old Parent relationship still affects native wait: $(tail -10 "$WORK/parent-wait-retired.log")"; return 1;
+  }
+  WHAT='旧origin关系和远端child账本不再制造looping或阻止回收；原生Loop仍保护其所属会话，历史不改写'
+  SECS=$(since "$t0")
+}
+
 drill_task_result_overrides_native() {
   local t0; t0=$(now); CAP=30
   bash "$BIN/fleet-view-id-selftest.sh" >"$WORK/task-native-display.log" 2>&1 || {
@@ -7860,6 +7878,15 @@ drill_report_delegation_offline() {
   CAP=30; local t0 out; t0=$(now)
   out=$(python3 "$BIN/fleet-report-delegation-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   WHAT='旧委托写入口立即退役；历史读取不写磁盘、不派发、不补送'
+  SECS=$(since "$t0")
+}
+
+drill_session_title_placeholder() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/task-line-selftest.sh" >"$WORK/title-placeholder.log" 2>&1 || {
+    WHY="first prompt title regression: $(tail -3 "$WORK/title-placeholder.log")"; return 1;
+  }
+  WHAT='短码任务的首句同时更新窗口和记录；中英文占位名消失，后续消息不改名'
   SECS=$(since "$t0")
 }
 

@@ -49,7 +49,11 @@ eq "A: the driver itself → driver"             "$(O fleet-epic:epic-driver "$O
 eq "A: an orchestrator → orchestrator"         "$(O orchestrator '' '' 0 '')" orchestrator
 eq "A: the TEST identity's → probe"            "$(O '' '' '' 1 '')" probe
 OLD=cccccccc-3333-4333-8333-333333333333
-python3 "$BIN/fleet_id.py" open "$OLD" --parent "$ORC" --title t >/dev/null 2>&1
+# This is pre-retirement history: current open_id intentionally drops Parent.
+PYTHONPATH="$BIN" python3 - "$OLD" "$ORC" <<'PYFIXTURE'
+import sys, fleet_id
+fleet_id.append(sys.argv[1], {"ev": "opened", "parent": sys.argv[2], "title": "historical"})
+PYFIXTURE
 eq "A: 代起 — a reopened ID whose ledger has a parent → dispatched" "$(O '' '' '' 0 '' "$OLD")" dispatched
 eq "A: …a parent-less ID stays a person's"     "$(O '' '' '' 0 '' dddddddd-4444-4444-8444-444444444444)" person
 

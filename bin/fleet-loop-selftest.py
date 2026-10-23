@@ -226,14 +226,20 @@ class LoopTests(NativeDouble, unittest.TestCase):
         with patch.dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf')):
             fence = execution.ExecutionFence()
             fence.bind(snapshot, authorized=True)
-            def authority(*args, **kwargs):
+            calls = []
+            def authority(command, *args, **kwargs):
+                calls.append(command)
                 with loop.locked(self.path, nonblocking=True):
                     pass  # authentication I/O cannot hold the schedule lock
+                if command == 'execution-list':
+                    return dict(control_version=1, task_executions=[])
+                self.assertEqual(command, 'execution-get')
                 return dict(snapshot, generation=2, cancel_request='op-stop')
             values = {'#{@fleet_id}': fid, '#{@task_execution}': json.dumps(snapshot)}
             with patch.object(loop, 'pane', side_effect=lambda _, fmt: values.get(fmt, '')):
                 with patch.object(execution, '_authority', side_effect=authority):
                     loop.dispatch(self.path, now=10000)
+            self.assertEqual(calls, ['execution-list', 'execution-get'])
             self.assertEqual(self.messages, [])
             self.assertEqual(fence.read('T72')['cancel_request'], 'op-stop')
             self.assertEqual(self.read()['schedule'], self.r['schedule'])
@@ -470,7 +476,7 @@ class IdleDispatchTests(NativeDouble, unittest.TestCase):
         self.assertEqual(len(self.messages), 1)
 
     def test_real_waits_defer_with_reason_then_deliver_once(self):
-        for waits, why in ((['bg'], 'wait:bg'), (['tool', 'children'], 'wait:tool,children'), (['unknown'], 'wait:unknown')):
+        for waits, why in ((['bg'], 'wait:bg'), (['tool', 'human'], 'wait:tool,human'), (['unknown'], 'wait:unknown')):
             self.waits = waits
             loop.dispatch(self.path, now=10000)
             self.assertEqual((self.messages, self.read()['deferred_reason']), ([], why))

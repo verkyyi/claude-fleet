@@ -189,14 +189,17 @@ json.dump({"tasks": tasks}, open(path, "w"))
 PY
 benv() { env FLEET_CONF_DIR="$WORK/b/conf" FLEET_HUB_CURL="$WORK/hub" STUB_STATE="$WORK/b/state.json" \
   FLEET_ID_LIVE_CMD="${LIVE:-:}" FLEET_ID_NOAGENT_CMD="${NOAG:-:}" PATH="$WORK/path:$PATH" "$@"; }
-FLEET_CONF_DIR="$WORK/b/conf" python3 "$BIN/fleet_id.py" open "$BFID" --task T2 --parent "$DRV" --title 'C1 · a' >/dev/null
-# the ledger was opened 12 minutes ago, like the record
-python3 - "$WORK/b/conf/ids/$BFID.ndjson" <<'PY'
-import json, sys, time
-p = sys.argv[1]; evs = [json.loads(l) for l in open(p)]
-evs[0]["ts"] = int(time.time()) - 720
-open(p, "w").write("".join(json.dumps(e) + "\n" for e in evs))
-PY
+# This section reads a legacy EPIC family. New open_id deliberately strips
+# Parent links; seed the historic opened event so B1 can actually observe this
+# member's live/no-agent evidence instead of falling back to the Task's age.
+FLEET_CONF_DIR="$WORK/b/conf" python3 - "$BIN" "$BFID" "$DRV" <<'PYOPEN'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import fleet_id as fi
+fid, parent = sys.argv[2:]
+fi.append(fid, {"ev": "opened", "task": "T2", "parent": parent, "title": "C1 · a",
+                "short": fi.short_for(fid, fi.known_ids()), "ts": int(time.time()) - 720})
+PYOPEN
 tickj() { benv python3 "$BIN/fleet-epic-tick.py" status --task T1; }
 jq_() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {"d": d}))' "$1"; }
 c1() { printf '%s' "$S" | jq_ "[m for m in d['members'] if m['key']=='C1'][0]$1"; }

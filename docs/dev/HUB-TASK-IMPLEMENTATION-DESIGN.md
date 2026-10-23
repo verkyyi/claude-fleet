@@ -25,6 +25,8 @@ EPIC plan/run/report 与 driver 保留一版本明确退役说明，旧角色启
 D2 的 Parent 回报与等待后端已实现，尚未发布：新 MCP 列表隐藏 report/await/children，旧入口明确退役；显式旧 report 仅保存自身结果与真实 PR 证据。新 child_report 被永久拒收，旧积压保留原文并结算失败，不再找 Parent、祖先、代收者，也不转为用户提醒或唤醒。Hub 进展读取保持历史纯读；普通消息与回执沿用既有通道。新会话说明不再要求 report，清理节拍不再调用旧进展协调。历史 Parent 字段、任务创建时的新关系写入与普通消息的 Parent 地址回退留在 D3；此切片不能宣称整个关系模型已经移除。
 D3 的 Hub 任务关系写入退役已实现，尚未发布：创建与派发不再写入 `parent_task/parent_session/parent_generation`，也不再向节点传递 `origin_wid`。调用者认证、跨 fleet 校验与 worker 身份审计照常执行。旧 Parent 列及其历史读接口保留；旧幂等请求仅在比较时忽略已知 Parent 传输字段，原始请求字节不变，用户正文和其它字段的变化仍返回冲突。该切片不包含本机恢复、搬迁与普通消息的 Parent 路由退役，不能据此宣称所有运行窗口已没有旧关系。
 
+本机 Parent 路由退役已实现，尚未发布：新开、恢复、搬迁、换 Agent 和拆窗均不再写入历史 origin/Parent 元数据；旧参数及 helper 保留一版本兼容，但不能重新建立关系。`send parent` 明确拒绝，缺失的 agent 地址和已关闭会话不再改投 Parent 或用户提醒。普通显式地址与真实 prev 接续保留，原始账本不改写。旧结果催报不再唤醒自身或 Parent；原有自动回收计时与角色规则仍待后续减法，不能把本片视为回收策略已统一。
+
 第一阶段已合并并发布到 `b185c9143`：[Subagent 解禁 PR #5353](https://github.com/verkyyi/claude-fleet/pull/5353) 与 [两端单状态列表 PR #5354](https://github.com/verkyyi/claude-fleet/pull/5354)。旧 Agent hook 保留静默兼容，新注册移除；原生 worktree 保护与旧配置回放通过。
 
 已发布的两端列表实现统一左侧一个状态槽，PIN/无标题普通行/更早会话，历史成员平铺；Web 任务页不再提供网页 Terminal backup，iTerm2 接入保留。Terminal、Web 与 CLI 的显式停止接入既有 `worker_stop`，不走任务回收门。这些是第一阶段改动，**不代表下面全部模型与迁移目标已落地**。

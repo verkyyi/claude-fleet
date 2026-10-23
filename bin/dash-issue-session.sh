@@ -22,8 +22,6 @@
 #   2  at capacity — the global or per-fleet session cap (retry later)
 #   3  already held — the hub's lease on (repo, issue) is another machine's
 #      (pick another, or --force over a stale lease)
-#   4  no live parent — inside tmux with no $TMUX_PANE and no --origin, or an
-#      --origin key no live session answers to (issue #1355); `--origin hub` = you
 # Every refusal ALSO prints its one-line reason on stderr, `dash-issue-session: …`,
 # beside the sticky tmux toast a human at the client sees.
 # --print (issue #2237): on 0, the window id (`@N`) it opened or found, last on
@@ -79,10 +77,7 @@ for _a in "$@"; do
     --print) PRINT_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
-    # --origin (issue #503): spawn provenance — who asked for this worker. A
-    # headless caller states it (the bridge passes `bridge`; `autofill` is the
-    # retired dispatcher's, still read on old windows — #3120); left empty it is AUTO-DETECTED from the calling pane below
-    # (a worker/scratch spawning a sibling), and empty-after-detect ≡ hub.
+    # compat-1v: 下一批删 — accepted, ignored; no Fleet Parent relationship.
     --origin) _want=origin ;;
     --origin=*) ORIGIN="${_a#--origin=}" ;;
     # --agent (issue #547): which agent CLI THIS worker runs — `claude` or `codex`
@@ -104,9 +99,7 @@ for _a in "$@"; do
     # With the module off nothing changes unless --node names another machine.
     --node) _want=node ;;
     --node=*) NODE_ARG="${_a#--node=}" ;;
-    # --origin-wid: the parent's worker_id when the parent is on ANOTHER machine
-    # (a hub-placed start, fleet-control-read.sh passes it) — stamped as the
-    # window's @origin_wid verbatim instead of being derived from --origin.
+    # compat-1v: 下一批删 — accepted, ignored; no Fleet Parent relationship.
     --origin-wid) _want=origin-wid ;;
     --origin-wid=*) ORIGIN_WID="${_a#--origin-wid=}" ;;
     # --account (issue #1540, EPIC #1529 R2): which kind of subscription THIS
@@ -215,23 +208,8 @@ fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's
 # Naming -L is correct in-session too (it resolves to the same current socket).
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
-# Spawn provenance (issue #503): detect the calling pane's own key — issue-<N> /
-# scratch-<N> when a worker or scratch is spawning this, empty (≡ hub) for the
-# dash/backlog/operator — then let fleet_origin_canon decide between it and an
-# explicit --origin: a canonical key or known literal (the bridge's `bridge`, the
-# retired dispatcher's `autofill`) is honoured, a worktree BASENAME is folded to
-# its key (a Claude that read this header passed `cd-conductor-scratch-52` and the
-# dash could not group it), garbage yields to the detected key, and a cross-fleet
-# spawn stamps the SOURCE fleet (#516 — the key would name another window on the
-# target's dash). FOREGROUND pass only: the --async tail runs under run-shell -b
-# with no caller pane, so the foreground bakes the resolved value into the tail's
-# --origin (canon is idempotent on it). Sanitized inside canon — it becomes a
-# window option and a run-shell embed.
-ORIGIN_RAW=$ORIGIN                             # pre-canon: `hub` canonicalizes to empty
-_det=''; [ "$TAIL_ONLY" != 1 ] && _det=$(fleet_origin_key)
-_src=''; [ -n "$_det" ] && [ -n "$TARGET_SESS" ] && _src=$(fleet_current_session)
-ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "$_src")
-unset _det _src
+# compat-1v: 下一批删 — old Parent arguments are accepted but inert.
+ORIGIN=''; ORIGIN_WID=''
 # POSIX single-quote a value for safe embedding in the run-shell command string
 # (the --async tail is a `sh -c` string, and an issue title can carry quotes / $ /
 # backticks). Wrap in single quotes, escaping any embedded single quote as '\''.
@@ -251,7 +229,7 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # stderr — the one channel a pipe / log / `$( )` capture can read — and the exit
 # code names the class (header: 1 infra · 2 cap · 3 claimed). stderr is the
 # record; the status line is the glance.
-RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3; RC_ORPHAN=4
+RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3
 REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
 case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
 # The toast is fleet_ui_fail's (issue #1618): the one failure line, the palette's
@@ -374,21 +352,6 @@ fi
 # must not be stopped by THIS machine's caps or headroom — that is exactly when
 # it should go elsewhere. So when placing, a cap refusal is held until placement
 # answers, and enforced only if the session opens here after all.
-case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
-# A parent on another machine still needs its KEY as @origin: the child-report
-# path (fleet-report-parent.sh) treats an empty @origin as hub-spawned and stays
-# silent; with @origin_wid beside it, it routes by worker_id, never to a local
-# window that merely shares the key (issue #1421).
-if [ -n "$ORIGIN_WID" ] && [ -z "$ORIGIN" ]; then ORIGIN=$(fleet_origin_canon "${ORIGIN_WID#*/}" '' '' ''); fi
-# The parent must be a LIVE session (issue #1355, EPIC #1645 C2): no $TMUX_PANE
-# and no --origin, or a key no window answers to, would open a worker whose
-# reports reach nobody. Foreground only — the --async tail carries the value this
-# pass already vetted.
-if [ "$TAIL_ONLY" != 1 ]; then
-  _why=$(fleet_origin_gate "$SESS" "$ORIGIN_RAW" "$ORIGIN" "$ORIGIN_WID") \
-    || { refuse "#$num: $_why"; exit "$RC_ORPHAN"; }
-  unset _why
-fi
 NODE="$NODE_ARG"
 # No --node: FLEET_SPAWN_NODE (issue #1475) — `auto` (the default), `local`, or
 # a machine name — is what every spawn on this login follows. Only read with
@@ -526,7 +489,7 @@ fi
 # offline, >0.8 load/core, <1 GiB free or at the per-person cap are out, the rest
 # scored on account headroom + load. LOCAL ⇒ carry on here exactly as before.
 # REMOTE ⇒ the hub has handed that machine's fleet the lease and sent it the start
-# (with this spawn's parent as origin_wid); nothing opens here and we exit 0. A
+# without a Parent relationship; nothing opens here and we exit 0. A
 # hub that cannot be asked, or no machine that can take it, falls back to opening
 # it here for `auto` — and refuses for a machine named explicitly, which the
 # caller asked for by name. Sync-only, like the lease.
@@ -537,37 +500,19 @@ fi
 # there is 1 too), and the lease — the hub gave it back — released by the EXIT
 # trap, so a re-send needs no --force. No final state in time ⇒ unknown: exit 1,
 # never a success, and (issue #1606) the hub gave the lease back here as well.
-# --async asks without waiting and leaves the operation id for fleet-children.sh.
-# Every REMOTE answer is written to the parent's `children/<key>.dispatch`.
-# Issue #1610: an auto send a machine declined was already tried on the next
-# one by the hub, this machine last (answered LOCAL) — the line's `after …`
-# field names the machines that said no first, each written to the dispatch
-# book as its own refused row before the answer's. Every machine declining is
-# `REFUSED ALL_DECLINED`: refused here too, the lease given back, never
-# opened here on the hub's no.
-_place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
-  case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;; *) return 0 ;; esac
-  local ck   # the child's key carries its repo in every fleet (issue #1939)
-  ck="$(fleet_okey_prefix "$SESS" "$REPO")issue-$num"
-  python3 "$BIN/fleet-children.py" dispatch \
-    --file "$(fleet_state_dir "$SESS")/children/$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._:-').dispatch" \
-    --child "$ck" --state "$1" --node "$2" --op "$3" --window "${4:-}" --exit "${5:-}" --line "${6:-}" >/dev/null 2>&1 || :
-}
+# --async leaves the accepted operation with the hub. Placement outcomes are
+# returned to this caller without creating a Parent dispatch book.
 if [ "$PLACING" = 1 ]; then
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] || [ -z "$REPO" ]; then
     if [ "$NODE" != auto ]; then
       refuse "--node $NODE needs the hub (CCQUOTA_FLEET=1) — not spawning #$num elsewhere"; exit "$RC_INFRA"
     fi
   else
-    _pw="$ORIGIN_WID"
-    if [ -z "$_pw" ] && _fleet_wid_split "$ORIGIN" >/dev/null 2>&1; then
-      _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
-    fi
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
     place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" FLEET_PLACE_AS="$PLACE_AS" \
-      fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
+      fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
       DISPATCH_TASK=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
@@ -579,11 +524,6 @@ if [ "$PLACING" = 1 ]; then
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     _after=''; case "$_why" in *$'\t'after\ *) _after=${_why##*$'\t'after }; _why=${_why%$'\t'after *} ;; esac
     if [ -n "$_after" ]; then   # <m>:<op>:<exit>,… — the machines that declined first
-      for _a in $(printf '%s' "$_after" | tr ',' ' '); do
-        IFS=: read -r _am _aop _ax <<<"$_a"
-        [ "$_aop" = - ] && _aop=''
-        _place_note refused "$_am" "$_aop" '' "$_ax" 'declined; the hub tried the next machine'
-      done
       printf 'dash-issue-session: #%s 先被 %s 拒绝，入口已换下一台\n' "$num" "$(printf '%s' "$_after" | sed 's/:[^,]*//g; s/,/、/g')" >&2
     fi
     case "$place_rc:$_pv" in
@@ -593,17 +533,14 @@ if [ "$PLACING" = 1 ]; then
         read -r _ _m _op _st _w <<<"$_pv"
         if [ "$_st" = 'done' ]; then
           printf 'dash-issue-session: #%s → %s 已开窗 %s (hub operation %s) — %s\n' "$num" "$_m" "$_w" "$_op" "$_why" >&2
-          _place_note 'done' "$_m" "$_op" "$_w" 0
         else
           printf 'dash-issue-session: #%s → %s (hub operation %s, %s) — %s\n' "$num" "$_m" "$_op" "$_st" "$_why" >&2
-          _place_note accepted "$_m" "$_op"
         fi
         exit 0 ;;   # placed: its row on the list is the answer (issue #1618)
       5:DECLINED\ *)
         # That machine's spawn refused it. The hub handed the lease back to us,
         # so the EXIT trap (LEASE_HELD=1) releases it: the next send needs no --force.
         read -r _ _m _op _x <<<"$_pv"
-        _place_note refused "$_m" "$_op" '' "$_x" "$_why"
         refuse "#$num 被 $_m 拒绝 (exit $_x): ${_why:-no reason given}"
         case "$_x" in 2) exit "$RC_CAP" ;; 3) exit "$RC_CLAIMED" ;; esac
         exit "$RC_INFRA" ;;
@@ -612,7 +549,6 @@ if [ "$PLACING" = 1 ]; then
         # The hub gave the lease back (issue #1606): the EXIT trap releases it,
         # so nothing outlives a start nobody saw open.
         read -r _ _m _op <<<"$_pv"
-        _place_note unknown "$_m" "$_op" '' '' "$_why"
         refuse "#$num 已派到 $_m (hub operation $_op)，但没等到结果 — 未知，不当成功: ${_why:-no final state}"
         exit "$RC_INFRA" ;;
       0:LOCAL\ *)
@@ -650,7 +586,7 @@ if [ "$PLACING" = 1 ]; then
           [ -n "$CAP_HELD" ] || printf 'dash-issue-session: hub 不可达 — #%s 本机兜底 (@placed fallback-local)\n' "$num" >&2
         fi ;;
     esac
-    unset _pw _u _pv _why _wait _after _a _am _aop _ax
+    unset _u _pv _why _wait _after _a _am _aop _ax
   fi
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
@@ -744,7 +680,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
   _bg="$_bg FLEET_SPAWN_WNAME=$(shq "$wname")"
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG}${TASK_REF:+ --task $(shq "$TASK_REF")}${WORDS_FILE:+ --words-file $(shq "$WORDS_FILE")} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG}${TASK_REF:+ --task $(shq "$TASK_REF")}${WORDS_FILE:+ --words-file $(shq "$WORDS_FILE")} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -904,11 +840,6 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 #   asked for, else an issue session's default — after its PR merged;
 # - @repo + @worktree (issue #789) — every worker carries both, so any consumer
 #   resolves its repo via fleet_window_repo without a git read;
-# - @origin (issue #503): WHO spawned it. Unset ≡ hub-spawned (the default,
-#   untagged in the dash); the dash groups a tagged child under its live parent,
-#   and the reapers copy it into the history ledger's origin column before the
-#   window dies. @origin_wid: a hub-placed start (issue #1425) was handed its
-#   parent's worker_id outright — the parent lives on another machine.
 _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
 # …unless it is opened for a hub task: then the task's own ID (EPIC T644 C2) — the
 # first window takes it, a redo here is its next attempt; another machine holding
@@ -931,7 +862,7 @@ _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 # policy (fleet_reap_policy.py ORIGINS) — an issue session a person or a session
 # opened keeps its historic `merged`, an orchestrator / a driver its own.
 _rorig=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" "" \
-  "$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK" 2>/dev/null)" "" "$WIN_TITLE")
+  "" "" "$WIN_TITLE")
 [ -n "$REAP" ] || REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${_rorig:-person}" --kind issue) || REAP=merged
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
 [ -n "$_rorig" ] && _sw+=(\; set-window-option -t "$win" @reap_origin "$_rorig")
@@ -941,11 +872,6 @@ _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; set-window-option -t "$win" @task "$TASK_REF") ;; esac ;; esac
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")
-[ -n "$ORIGIN" ] && _sw+=(\; set-window-option -t "$win" @origin "$ORIGIN")
-[ -n "$ORIGIN_WID" ] && _sw+=(\; set-window-option -t "$win" @origin_wid "$ORIGIN_WID")
-# …and when that worker_id names the parent by identity, the identity as @origin_fid
-# (issue #3439) — what fleet-report-parent.sh and `send parent` route by.
-fleet_is_fid "${ORIGIN_WID#*/}" && _sw+=(\; set-window-option -t "$win" @origin_fid "${ORIGIN_WID#*/}")
 # - @cc_agent: the agent asked for (issue #2403), before the node's start reads the
 #   window back to check it — the launcher's own stamp comes later, from the pane
 _sw+=(\; set-window-option -t "$win" @dispatch "$DISPATCH")
@@ -966,21 +892,16 @@ TM "${_sw[@]}" 2>/dev/null
 # worker_id — so the hub's 任务 page and `await T<n>` find it. A hub-placed start
 # is filled from the start's answer by the hub itself; no hub ⇒ fleet-task-record
 # exits 3 and nothing is sent.
-case "$TASK_REF" in T[1-9]*) [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
-  && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & ) ;; esac
+case "$TASK_REF" in T[1-9]*) ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & ) ;; esac
 [ -n "$_fid" ] || fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 # The ID's ledger opens with the spawn (EPIC T497 C1): the agent it was resolved to
 # and what it was opened for; the short code lands as @task_short. Backgrounded —
 # the SessionStart hook fills a missing `opened` itself, so a slow one costs nothing.
 _idf=$(TM show-options -wqv -t "$win" @fleet_id 2>/dev/null)
-# C4: its parent's ID, the ID whose segment a --resume picks up (its prev), its worktree.
-# The parent is the spawning session's ID however it came (C9): a handed-over
-# worker_id, a keyless parent's own ID as --origin (every `task` dispatch from an
-# orchestrator / a driver), or the ID of the window its key names.
-_idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
+# Preserve only the resumed native conversation's prev identity.
 fleet_is_fid "$_idf" && ( bash "$BIN/fleet-id.sh" open "$_idf" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" --key "issue-$num" ${REPO:+--repo "$REPO"} ${title:+--title "$title"} \
-  ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${_tprev:+--prev "$_tprev"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
+  ${TASK_REF:+--task "$TASK_REF"} ${_tprev:+--prev "$_tprev"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
   ${wt:+--worktree "$wt"} >/dev/null 2>&1 & )
 # The worktree remembers its ID beside its record (C4).
 fleet_is_fid "$_idf" && [ -n "${wt:-}" ] && fleet_worktree_id_mark "$wt" "$_idf"
@@ -991,14 +912,6 @@ unset _sw _fid _tprev
 # target is. Best-effort by design — a lock timeout or an exhausted alphabet just
 # leaves it unstamped and the dash's render-time backfill assigns one.
 fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
-# The parent's worker_id (issue #1420), the address that survives a machine
-# boundary — derived from --origin when no start handed it over (stamped above).
-# Nothing when this machine has no fleet UUID or the origin is no key.
-if [ -z "$ORIGIN_WID" ] && [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
-# …and the generation of that key it was spawned under (issue #1538), so a
-# recycled scratch number never takes this child's report as its own. A parent on
-# another machine (ORIGIN_WID) has no generation here.
-[ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
 
 # Non-invasive by default: leave the active window put — the new window and its
 # list row are the confirmation, so a success draws no line (issue #1618). Only

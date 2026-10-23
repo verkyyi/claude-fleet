@@ -25,6 +25,9 @@
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured logs).
 set -uo pipefail
+# A sandbox spawn must never inherit a real session's dispatch authority.
+export CCQUOTA_FLEET=0 FLEET_TASK_AUTHORITY='' FLEET_SKIP_GLOBAL_CONF=1
+unset FLEET_DISPATCH
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -119,7 +122,6 @@ chmod +x "$WORK/fakebin/git" "$WORK/fakebin/gh" "$WORK/fakebin/tmux"
 run_spawn() { # $@ = args to dash-issue-session.sh
   : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$RUNSHELL_LOG"
   rm -rf "$WORK/dash/.claude-dash"
-  FLEET_ORIGIN_GATE=0 \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
@@ -220,27 +222,14 @@ tmux_has '@issue 303'                   || fail "SYNC must bind @issue inline"
 runshell_has 'run-shell'                && fail "SYNC must NOT dispatch run-shell (no --async)"
 st_pass "SYNC no --async → worktree add + new-window inline (unchanged), no run-shell"
 
-# ===== ORIGIN: spawn provenance (issue #503) lands canonicalized on the sync path ===
-# A worker/scratch Claude that read this script's header and passed its worktree
-# BASENAME (`--origin cd-conductor-scratch-52`, the live #4591 case) must land as
-# the scratch KEY — the dash nests/finds parents by key only. No ORIGIN_PROBE ⇒
-# detection is empty, so the value is canonicalized from the string alone.
-CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 run_spawn 303 --origin cd-conductor-scratch-52
-[ "$(rc)" = 0 ]                         || fail "ORIGIN the spawn itself should succeed" "$(cat "$WORK/spawn.err")"
-tmux_has '@origin acme-widgets:scratch-52' || fail "ORIGIN a worktree-basename --origin must be stamped as its key (acme-widgets:scratch-52)" "$(cat "$TMUX_LOG")"
-# An UNSTAMPED scratch caller — probe: no @issue, no @worktree, cwd
-# …-scratch-5 (a fleet-restore-recreated window; the live #4594 case) — is
-# detected from its cwd, so the child groups under it instead of reading as hub.
+# ===== ORIGIN: legacy Parent flags and caller ancestry are inert ==================
+CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE='' run_spawn 303 --origin issue-999 --origin-wid old/11111111-1111-4111-8111-111111111111
+[ "$(rc)" = 0 ] || fail "ORIGIN a dead Parent and missing caller pane must not block a start" "$(cat "$WORK/spawn.err")"
+grep -qE '@origin(_fid|_wid|_gen)? ' "$TMUX_LOG" && fail "ORIGIN legacy flags must create no relationship" "$(cat "$TMUX_LOG")"
 CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 ORIGIN_PROBE="||$WORK/main-scratch-5" run_spawn 303
-grep -qE '@origin acme-widgets:scratch-5( ;|$)' "$TMUX_LOG" || fail "ORIGIN an unstamped scratch caller must still be detected from its cwd (acme-widgets:scratch-5)" "$(cat "$TMUX_LOG")"
-# Cross-fleet ISSUE spawn (#516 patched only the raw spawner): the detected key
-# names a window in the SOURCE fleet — stamp the source fleet instead.
-: > "$WORK/conf/othersess.conf"
-fx_repo "$WORK/conf" othersess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
-CLAIM_STATE=$'0\tOPEN' PR_COUNT=0 TMUX=fake TMUX_PANE=%5 ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5" run_spawn 303 othersess
-tmux_has '@origin testsess'             || fail "ORIGIN a cross-fleet issue spawn must stamp the SOURCE fleet (testsess), not scratch-5" "$(cat "$TMUX_LOG")"
-grep -qE '@origin (acme-widgets:)?scratch-5( ;|$)' "$TMUX_LOG" && fail "ORIGIN a cross-fleet issue spawn must NOT stamp the source fleet's scratch key"
-st_pass "ORIGIN --origin canonicalized to its key; unstamped scratch caller detected by cwd; cross-fleet issue spawn → source fleet"
+[ "$(rc)" = 0 ] || fail "ORIGIN the caller's session still may spawn" "$(cat "$WORK/spawn.err")"
+grep -qE '@origin(_fid|_wid|_gen)? ' "$TMUX_LOG" && fail "ORIGIN caller cwd must create no relationship" "$(cat "$TMUX_LOG")"
+st_pass "ORIGIN dead Parent flags and missing caller pane do not block; no Parent stamps"
 
 printf '\nselftest OK: %s assertions passed (non-blocking backlog spawn, issue #303)\n' "$pass"
 exit 0

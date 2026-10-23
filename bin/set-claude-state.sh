@@ -85,7 +85,7 @@ fi
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 wstate=''         # what a clean Stop WRITES when it is not `done` (issue #1331: looping)
-wwait=''          # WHY it is looping (issue #1370): @claude_wait, loop|children|bg|tool
+wwait=''          # WHY it is looping (issue #1370): @claude_wait, loop|bg|tool|human
 wprev=''          # the @claude_wait already on the window (cleared when it lapses)
 
 # @claude_needs — WHY this window is red (issues #640, #704):
@@ -212,13 +212,12 @@ case "${1:-}" in
     wprev=${handoff_prev##*|}; _dlg=${handoff_prev#*|}; _dlg=${_dlg%|*}; handoff_prev=${handoff_prev%%|*}
     # A turn that ended while the window is still WAITING on something: the pane is
     # idle but NOT finished, so it is stamped `looping` (↻) instead of `done` (✓) —
-    # the dash's k/N stops counting it and the reapers retain it. @claude_wait says
+    # the reapers retain its native activity. @claude_wait says
     # on what (bin/fleet-lib.sh fleet_window_wait):
     #   loop      a Loop is pending (issue #1331): the agent scheduled its own next
     #             round (ScheduleWakeup / CronCreate → @loop, by the PostToolUse hook;
     #             backfilled from the transcript for a session that scheduled it
     #             before the hook existed) or a fleet-loop.py ledger holds one;
-    #   children  a sub-task it spawned is not finished — the k/N its own row shows;
     #   bg        its agent still owns a Bash-tool job (a run_in_background command).
     #   tool      a fleet tool call it made is still running (issue #1880): Claude
     #             Code moves an MCP call past 120 s to a background task and the
@@ -403,10 +402,12 @@ sys.stdout.write(line if len(line) <= 30 else line[:29].rstrip() + "…")
         [ -n "$_t1" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_t1" 2>/dev/null
         _tk=$(tmux display-message -p -t "$TMUX_PANE" '#{@task}' 2>/dev/null)
         [ -n "$_t1" ] || _tk=''
-        case "$_tk" in T[1-9]*)
+        # The binding can be a display code or UUID as well as legacy T<n>.
+        # fleet-task-record.sh owns address validation and hub resolution.
+        if [ -n "$_tk" ]; then
           ( bash "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-task-record.sh" retitle "$_tk" \
-              --from "$_tp" --title "$_t1" </dev/null >/dev/null 2>&1 & ) ;;
-        esac
+              --from "$_tp" --title "$_t1" </dev/null >/dev/null 2>&1 & )
+        fi
       fi
     fi ;;
   esac
@@ -592,16 +593,6 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   # Publish after inventory invalidation too (#4357): a woken list must not
   # reuse the pre-change inventory. The same channel broadcasts to all waiters.
   tmux wait-for -S fleet-state-changed 2>/dev/null
-fi
-
-# A child that just went idle may be the last thing its parent was waiting on
-# (issue #1376): re-ask the PARENT's Stop question now, detached, rather than leave
-# it `looping` until its own next turn or the reconcile tick. One tmux read on every
-# Stop; the fork only for a window that has an @origin at all.
-if [ "$sem" = 'done' ] && [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)" ]; then
-  _rbin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-  [ -x "$_rbin/fleet-wait-reeval.sh" ] && \
-    "$_rbin/fleet-wait-reeval.sh" --quiet --parent-of "$TMUX_PANE" >/dev/null 2>&1 </dev/null &
 fi
 
 # The mod's write ends here (issue #1336): the rest belongs to the Stop hook.

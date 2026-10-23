@@ -135,9 +135,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --name=*)      NAME="${1#--name=}"; shift ;;
-    # --origin (issue #503): spawn provenance. Stated by a caller that knows it;
-    # empty → auto-detected from the calling pane in the FOREGROUND pass below
-    # (the --bg re-exec has no caller pane, so the value rides this flag through).
+    # compat-1v: 下一批删 — accepted, ignored; no Fleet Parent relationship.
     --origin)      ORIGIN="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --origin=*)    ORIGIN="${1#--origin=}"; shift ;;
     # --name-file=<f> (issue #304): the BACKGROUND spawn pass — the --bg pass staged
@@ -183,9 +181,7 @@ while [ "$#" -gt 0 ]; do
     # machine (refused). See «Which machine opens it» below.
     --node)        NODE_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --node=*)      NODE_ARG="${1#--node=}"; shift ;;
-    # --origin-wid (issue #1541): the parent's worker_id when the parent is on
-    # ANOTHER machine (a hub-placed start; fleet-control-read.sh passes it) —
-    # stamped as the window's @origin_wid verbatim, its key as @origin.
+    # compat-1v: 下一批删 — accepted, ignored; no Fleet Parent relationship.
     --origin-wid)  ORIGIN_WID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --origin-wid=*) ORIGIN_WID="${1#--origin-wid=}"; shift ;;
     # --print (issue #1541): a headless caller's receipt — once the window
@@ -233,11 +229,7 @@ while [ "$#" -gt 0 ]; do
     --prev)        PREV_ID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --prev=*)      PREV_ID="${1#--prev=}"; shift ;;
     --fid)         REOPEN_FID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
-    # --id-task T<n> / --id-parent <ID> (EPIC T497 C18): what a 「从这一段继续」
-    # carries over from the ID it continues — its record (stamped @task, written
-    # into the new ID's ledger; never a claim, an admission or @task_flow: the
-    # record is the old window's, not a new dispatch) and its parent's ID, so an
-    # EPIC driver's successor still owns its batch.
+    # --id-task keeps the continued task. --id-parent is ignored for old callers.
     --id-task)     ID_TASK="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --id-task=*)   ID_TASK="${1#--id-task=}"; shift ;;
     --id-parent)   ID_PARENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -359,8 +351,7 @@ TM() { tmux -L "$SOCK" "$@"; }
 # headless too — a script's seeded scratch, dash-enter's guarded --name-file
 # path — and a toast is on no screen that caller can read.
 # stderr is the record; the status line is the glance. Exit 2 = at capacity
-# (retry later), 1 = infrastructure, 4 = no live parent (issue #1355), matching
-# dash-issue-session.sh.
+# (retry later), 1 = infrastructure, matching dash-issue-session.sh.
 refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK fleet_ui_fail "$1"; }
 # One record, one window (T847): a record a window here still runs is answered
 # with THAT window, never a second one — a copy takes the same @fleet_id, and its
@@ -396,28 +387,9 @@ if [ -n "$TARGET_SESS" ] && [ -n "${TMUX:-}" ]; then
   fi
   unset _here
 fi
-# Spawn provenance (issue #503): detect BEFORE the --bg re-exec below — the
-# backgrounded pass runs under run-shell -b with no caller pane, so this
-# foreground detect is the only chance; the value rides --origin through.
-# issue-<N>/scratch-<N> when a worker or scratch spawned us; empty ≡ hub (⌃s,
-# the dash PROMPT line). fleet_origin_canon arbitrates it against an explicit
-# --origin (a canonical key is honoured as given; a worktree BASENAME folds to its
-# key; garbage yields to the detected key). The spawn never crosses fleets (#980,
-# refused above), so canon's #516 source-fleet rule has no source to apply here.
-# Sanitized inside canon (window option + re-exec embed).
-ORIGIN_RAW=$ORIGIN                             # pre-canon: `hub` canonicalizes to empty
-_det=$(fleet_origin_key)
-ORIGIN=$(fleet_origin_canon "$ORIGIN" "$_det" "$TARGET_SESS" "")
-unset _det
-# A parent on another machine still needs its KEY as @origin (issue #1541, as
-# dash-issue-session.sh does): the child-report path treats an empty @origin as
-# hub-spawned and stays silent; with @origin_wid beside it, it routes by worker_id.
-if [ -n "$ORIGIN_WID" ] && [ -z "$ORIGIN" ]; then ORIGIN=$(fleet_origin_canon "${ORIGIN_WID#*/}" '' '' ''); fi
-# The parent must be a LIVE session (issue #1355, EPIC #1645 C2) — exit 4, as
-# dash-issue-session.sh: no $TMUX_PANE and no --origin, or a dead parent key.
-_why=$(fleet_origin_gate "$SESS" "$ORIGIN_RAW" "$ORIGIN" "$ORIGIN_WID") \
-  || { refuse "raw: $_why"; exit 4; }
-unset _why
+# compat-1v: 下一批删 — accept old Parent arguments without making a relationship.
+# Caller credentials, repo authority and capacity checks are independent of them.
+ORIGIN=''; ORIGIN_WID=''; ID_PARENT=''
 
 # Which machine (issue #1541; the issue path's rule, #1425/#1475): --node, else —
 # with the hub module on — FLEET_SPAWN_NODE, else auto. PLACING = the hub may
@@ -596,10 +568,9 @@ if [ "$BG" = 1 ]; then
   pinarg=''; [ "$PIN" = 1 ] && pinarg=' --pin'
   # --node rides along (issue #1541): the placement itself runs in the bg pass, so
   # the keypress returns at once while the hub is asked; the pass must see the
-  # same decision whatever its environment. One sanitized token (checked above),
-  # as is --origin-wid.
+  # same decision whatever its environment. One sanitized token (checked above).
   nodearg=''; [ -n "$NODE" ] && nodearg=" --node=$NODE"
-  owarg=''; [ -n "$ORIGIN_WID" ] && owarg=" --origin-wid=$ORIGIN_WID"
+  owarg=''
   # canonical (checked above): no quote or space can be in it
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ -n "$REAP_ORIGIN" ] && owarg="$owarg --reap-origin=$REAP_ORIGIN"   # a word, checked above
@@ -613,7 +584,7 @@ if [ "$BG" = 1 ]; then
   _execution_bg=''
   if [ -n "$EXECUTION" ]; then _execution_bg="FLEET_TASK_EXECUTION=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$EXECUTION") "; fi
   [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || _execution_bg="${_execution_bg}FLEET_TASK_CONTROL_VERSION=1 "
-  fleet_bg "${_execution_bg}FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  fleet_bg "${_execution_bg}FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -626,8 +597,7 @@ fi
 # chooses among this person's machines that host the repo (offline, >0.8
 # load/core, <1 GiB free or at the per-person cap are out, the rest scored on
 # account headroom + load); the chosen machine's node runs this script headless
-# (fleet-control-read.sh start … scratch), with this scratch's name and — when a
-# worker or scratch spawned us — our worker_id as its parent; nothing opens here
+# (fleet-control-read.sh start … scratch), with this scratch's name; nothing opens here
 # and we exit 0 with the machine on stderr and the toast. No lease is involved: a
 # scratch has no issue, and its scratch-<N> is minted on the machine that opens
 # it. REMOTE is waited on (the hub's 30 s) until that machine really opened the
@@ -662,10 +632,6 @@ if [ "$PLACING" = 1 ]; then
   unset _why
 fi
 if [ "$PLACING" = 1 ]; then
-  _pw="$ORIGIN_WID"
-  if [ -z "$_pw" ] && _fleet_wid_split "$ORIGIN" >/dev/null 2>&1; then
-    _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
-  fi
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
   [ "$NOREPO" = 1 ] && _prepo=''   # no repo to place by: any of the person's machines (T742)
   python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
@@ -690,7 +656,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
     FLEET_PLACE_LOCAL_DISPATCH="${FLEET_PLACE_LOCAL_DISPATCH:-1}" \
     FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
-    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
+    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
   fleet_timing_at placed   # the hub's placement answered (T716; nothing without a ↵)
   [ -n "$_body" ] && rm -f "$_body"
   _place_note=''
@@ -761,7 +727,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
       fi
       unset _pc ;;
   esac
-  unset _pw _u _pv _why _prepo _body _place_note
+  unset _u _pv _why _prepo _body _place_note
 fi
 unset _as_here
 # Opening here after all: this machine's cap verdict, held above, now applies.
@@ -1039,17 +1005,11 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # The ID's ledger opens with the spawn (EPIC T497 C1) — agent, repo, what it is for;
 # The local append completes before the spawn returns; only the hub push is
 # backgrounded. A hook racing it may fill a lazy opened first.
-# C4: its parent (the spawning session's ID), its prev (the ID it continues — given,
-# or the one whose segment --resume picks up) and its worktree ride along.
-# The parent is the spawning session's ID however it came (C9): a handed-over
-# worker_id, a keyless parent's own ID as --origin (every `task` dispatch from an
-# orchestrator / a driver), or the ID of the window its key names.
-_idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK") || _idpar=''
-[ -n "$_idpar" ] || _idpar=$ID_PARENT   # a continued ID keeps its parent (C18)
+# Keep only this task's native-session continuity and worktree identity.
 _idwt=''; [ -n "${wt:-}" ] && [ "$NOREPO" != 1 ] && _idwt=$wt
 fleet_is_fid "$fid" && bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \
-  ${TASK_REF:+--task "$TASK_REF"} ${ID_TASK:+--task "$ID_TASK"} ${_idpar:+--parent "$_idpar"} ${PREV_ID:+--prev "$PREV_ID"} \
+  ${TASK_REF:+--task "$TASK_REF"} ${ID_TASK:+--task "$ID_TASK"} ${PREV_ID:+--prev "$PREV_ID"} \
   ${RESUME_SID:+--from-native "$RESUME_SID"} ${_idwt:+--worktree "$_idwt"} >/dev/null 2>&1
 # The worktree remembers its ID beside its record (C4): `fleet-id` in its git dir.
 [ -n "$_idwt" ] && fleet_is_fid "$fid" && fleet_worktree_id_mark "$_idwt" "$fid"
@@ -1084,7 +1044,7 @@ stamp_option @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 [ -n "$ID_TASK" ] && stamp_option @task "$ID_TASK" 2>/dev/null    # a continued ID's record (C18)
 [ -n "$REAP_ORIGIN" ] || REAP_ORIGIN=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" \
-  "$TEST_ID" "$_idpar" "${REOPEN_FID:-$PREV_ID}" "$NAME")
+  "$TEST_ID" "" "" "$NAME")
 if [ -z "$REAP" ]; then
   _rk=scratch; case "$PROMPT" in /loop|/loop[[:space:]]*) _rk=loop ;; esac
   REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${REAP_ORIGIN:-person}" --kind "$_rk") || REAP=done:15m
@@ -1107,28 +1067,18 @@ fi
 # (fleet-cleanup-idle.py `empty`) — never one resumed, seeded or given words.
 [ "$NOREPO" = 1 ] && [ -z "$PROMPT$RESUME_SID$SEED_FILE" ] && [ "$TEST_ID" = 0 ] \
   && stamp_option @prompt_track 1 2>/dev/null
-# Spawn provenance (issue #503).
-[ -n "$ORIGIN" ] && stamp_option @origin "$ORIGIN" 2>/dev/null
 TM ${window_stamps[@]+"${window_stamps[@]}"} 2>/dev/null
 unset window_stamps
 unset -f stamp_option
-# Attach only after the task and provenance stamps are visible to the reader.
+# Attach only after the task and identity stamps are visible to the reader.
 # A version-1 record refuses it (its session is named by identity — the window's
 # @fleet_id IS the record's ID, and the hub joins them by that, A4G2); the
 # answer goes to logs/task-attach.log rather than nowhere.
-[ -n "$TASK_REF" ] && [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
+[ -n "$TASK_REF" ] \
   && ( mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" 2>/dev/null
        alog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/task-attach.log"
        printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$TASK_REF" "$win" >> "$alog" 2>/dev/null
        bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>>"$alog" & )
-# The parent's worker_id (#1420): given verbatim when the parent is on another
-# machine (a hub-placed start, #1541), else derived from the key; a parent on
-# another machine has no generation here (#1538).
-if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGIN_WID" 2>/dev/null
-  # the parent's identity, when the worker_id carries one (issue #3439)
-  fleet_is_fid "${ORIGIN_WID#*/}" && TM set-window-option -t "$win" @origin_fid "${ORIGIN_WID#*/}" 2>/dev/null
-elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
-[ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
 # Window handle (issue #566). Best-effort — the dash backfills a window that ends
 # up without one. Last: its lock + scan is the dearest stamp, and nothing the
 # launch reads needs it (issue #2352).

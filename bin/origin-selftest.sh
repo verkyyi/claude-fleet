@@ -298,7 +298,7 @@ GEN="$(date +%s).7"
 printf 'scratch-6\t1.1\nscratch-6\t%s\n' "$GEN" > "$CDD/.gen"
 gNEW=$(dwin gen-new 604);  tmux set-window-option -t "$gNEW" @origin scratch-6
 ( . "$LIB"; fleet_stamp_origin_gen fleetD "$gNEW" scratch-6 fleetD )
-st_eq "gen: a spawn stamps the parent's current generation" "$GEN" "$(tmux display-message -p -t "$gNEW" '#{@origin_gen}')"
+st_eq "gen: retired stamp writes no Parent generation" "" "$(tmux display-message -p -t "$gNEW" '#{@origin_gen}')"
 st_eq "gen: fleet_key_gen reads the LAST mint" "$GEN" "$( . "$LIB"; fleet_key_gen fleetD scratch-6 )"
 
 # Historical generation books survive every old hook call byte for byte.
@@ -335,11 +335,11 @@ gID=$(dwin gen-id 605); tmux set-window-option -t "$gID" @origin scratch-6; tmux
 tmux set-window-option -t "$gID" @origin_gen "$GEN"
 gNO=$(dwin gen-noid 606); tmux set-window-option -t "$gNO" @origin scratch-6; tmux set-window-option -t "$gNO" @origin_gen "$GEN"
 ( . "$LIB"; fleet_scratch_gen_new fleetD scratch-6 "" )
-st_eq "gen(T660): an identified child keeps its parent — by ID — at the re-mint" "$gB|" \
+st_eq "gen(T660): recycling does not rewrite historical origin" "scratch-6|" \
   "$(tmux display-message -p -t "$gID" '#{@origin}|#{@origin_retired}')"
-st_eq "gen(T660): …its generation stamp goes with the key" "" "$(tmux display-message -p -t "$gID" '#{@origin_gen}')"
-contains "gen(T660): a child with no identity is still moved aside" \
-  "$(tmux display-message -p -t "$gNO" '#{@origin_retired}')" "scratch-6#$GEN"
+st_eq "gen(T660): historical generation stays readable" "$GEN" "$(tmux display-message -p -t "$gID" '#{@origin_gen}')"
+st_eq "gen(T660): recycling writes no retired Parent route" "" \
+  "$(tmux display-message -p -t "$gNO" '#{@origin_retired}')"
 out=$(bash "$RP" -L fleetD --win "$gID" --state merged --summary "batch" --dry-run 2>&1)
 contains "gen(T660): known grandparent does not enable a report" "$out" "RETIRED:"
 not_contains "gen(T660): …not the person's reminder" "$out" "would file"

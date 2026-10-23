@@ -38,7 +38,7 @@
 #
 # What actually happens, per window (issue #1067's verified-by-hand recipe,
 # reordered so every REVERSIBLE check runs before the one step that is not):
-#   1. read the window's bindings (name/@issue/@raw/@worktree/@origin/@repo/
+#   1. read the window's bindings (name/@issue/@raw/@worktree/@repo/
 #      @wid) and its session id — the registry (~/.claude/sessions/<pid>.json),
 #      falling back to the newest transcript in the cwd's project dir;
 #   2. refuse a dirty worktree, and a detached HEAD;
@@ -56,7 +56,7 @@
 #      exists) to the target's `~/.claude/projects/<encoded target cwd>/` over
 #      a tar pipe;
 #   7. ask the target to open a window in that worktree running
-#      `fleet-claude.sh --resume <sid>`, carry over @issue/@raw/@origin/@repo/
+#      `fleet-claude.sh --resume <sid>`, carry over @issue/@raw/@repo/
 #      @wid, and verify a live Claude process actually appears under the pane;
 #   8. only once that verify succeeds: close the source window (`kill-window`)
 #      — unless --keep-source, which leaves it running on purpose.
@@ -360,9 +360,9 @@ move_main() {
   # move_one_hub — the --via hub transport (issue #1426). Called from
   # move_one_body once eligibility, the dirty check and the session id passed;
   # reads its locals (name wid repo branch ahead ahead_msg wt cwd cpid sid state
-  # raw iss origin hnd) — bash's dynamic scope, the same way abort_target does.
+  # raw iss hnd) — bash's dynamic scope, the same way abort_target does.
   move_one_hub() {
-    local okey u swid line rc head reason pushed_flag='' owid tmp pdir sidecar=() m nw ncp i
+    local okey u swid line rc head reason pushed_flag='' tmp pdir sidecar=() m nw ncp i
     if [ "${state:-}" = working ]; then
       say "  – $name ($wid): mid-turn (working) — wait until it is idle — refused:busy"; return 11
     fi
@@ -397,7 +397,6 @@ move_main() {
         || { say "  ✗ $name ($wid): git push of $branch failed — failed:push"; return 7; }
       pushed_flag=--pushed
     fi
-    owid=$(wopt "$wid" '#{@origin_wid}')
     local prior_reported; prior_reported=$(wopt "$wid" '#{@reported}')
     local ldir="$wt"; fleet_rotate_lease_take "$ldir" "move $name ($wid) → $TO via hub" 2>/dev/null || :
 
@@ -423,8 +422,8 @@ move_main() {
     fid_bundle_drop
     # --- 7. hand it to the hub; wait for the target's verdict ---------------------
     line=$(fleet_hub_move send --node "$TO" --bundle "$tmp" --branch "$branch" ${pushed_flag:+"$pushed_flag"} \
-      --sid "$sid" --name "$name" --raw "${raw:-0}" ${state:+--state "$state"} ${origin:+--origin "$origin"} \
-      ${owid:+--origin-wid "$owid"} ${hnd:+--handle "$hnd"} "$repo" "$swid"); rc=$?
+      --sid "$sid" --name "$name" --raw "${raw:-0}" ${state:+--state "$state"} \
+      ${hnd:+--handle "$hnd"} "$repo" "$swid"); rc=$?
     rm -f "$tmp"; fleet_rotate_lease_drop "$ldir"
     IFS=$'\t' read -r head reason <<<"$line"
     case "$rc" in
@@ -483,7 +482,7 @@ move_main() {
     }
     launch=$(ssh_run "$REMOTE_BIN" launch --agent codex --codex-home "$home" --wt "$twt" --sid "$sid" --name "$name" \
       --raw "${raw:-0}" --state "${state:-done}" --fleet "$rfleet" \
-      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} ${origin:+--origin "$origin"} --repo "$repo") || {
+      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} --repo "$repo") || {
       say "    failed:verify — target returned ${launch:-no receipt}; source window/transcript retained"; return 10;
     }
     IFS=$'\t' read -r nw ncp _ <<< "$launch"
@@ -497,13 +496,13 @@ move_main() {
   )
 
   move_one_body() {
-    local wid="$1" name cwd state raw iss wt origin hnd norepo hub
+    local wid="$1" name cwd state raw iss wt hnd norepo hub
     name=$(wopt "$wid" '#{window_name}')
     [ -n "$name" ] || { say "  ✗ $wid: no such window — refused:not-found"; return 3; }
     hub=$(wopt "$wid" '#{@hub}'); cwd=$(wopt "$wid" '#{pane_current_path}')
     state=$(wopt "$wid" '#{@claude_state}'); raw=$(wopt "$wid" '#{@raw}')
     iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
-    origin=$(wopt "$wid" '#{@origin}'); norepo=$(wopt "$wid" '#{@norepo}')
+    norepo=$(wopt "$wid" '#{@norepo}')
     hnd=$(wopt "$wid" '#{@wid}')
 
     if ! move_eligible "$name" "$hub"; then
@@ -614,7 +613,7 @@ move_main() {
     # --- 7. target: open the window, resume, verify ------------------------------
     local launch; launch=$(ssh_run "$REMOTE_BIN" launch --wt "$twt" --sid "$sid" --name "$name" \
       --raw "${raw:-0}" --state "${state:-done}" --fleet "$rfleet" \
-      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} ${origin:+--origin "$origin"} ${repo:+--repo "$repo"})
+      ${hnd:+--wid "$hnd"} ${iss:+--issue "$iss"} ${repo:+--repo "$repo"})
     local nw ncp
     IFS=$'\t' read -r nw ncp _ <<<"$launch"
     fleet_rotate_lease_drop "$ldir"
