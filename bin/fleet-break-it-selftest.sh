@@ -6962,6 +6962,13 @@ drill_task_stop_replay_cleanup() {
   SECS=$(since "$t0")
 }
 
+drill_private_preview_isolation() {
+  CAP=180; local t0; t0=$(now)
+  term_go 'TestPreviewHostsCookiesAndReturn TestPreviewAuthFlow TestPreviewSignedOutOAuthReturn TestPreviewTrialAndDisabled TestPreviewReplicas TestPreviewIdentityAndGeneration TestPreviewHTTPStreamAndWebSocket TestPreviewSocketPaths' './hub/api ./hub/store ./e2e ./agent' \
+    '私人实时预览：Host / cookie / callback / OAuth 返回 / 重放 / 双副本租约 / UID helper / POST / SSE / WS 撤销' || return 1
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
 
 
