@@ -6230,7 +6230,7 @@ drill_report_parent_key_reminted() {
   o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --state waiting --summary kept 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
-  [ "$org" = "$pb|" ] || { WHY="the re-mint moved an identified child aside: @origin|@origin_retired = [$org], want [$pb|]"; return 1; }
+  [ "$org" = "acme-app:scratch-3|" ] || { WHY="retired origin logic rewrote historical bytes: @origin|@origin_retired = [$org]"; return 1; }
   case "$o1" in *RECORDED:*RETIRED:*) ;; *) WHY="reused key redirected report or lost own result: $o1"; return 1 ;; esac
   case "$o2" in *RECORDED:*RETIRED:*) ;; *) WHY="retired origin redirected report or lost own result: $o2"; return 1 ;; esac
   WHAT="旧父会话编号重领或 origin 已退役都不向祖先投递；自身历史仍保存"
@@ -6753,6 +6753,15 @@ drill_mcp_release_path_pinned() {
 # per agent (Claude's SessionStart payload, Codex's runtime against the one fake
 # app-server): held here by name, not run twice.
 # ① a dispatched Codex task never read as started (#4972)
+drill_codex_internal_thread_hook() {
+  CAP=15; local t0
+  t0=$(now)
+  python3 "$BIN/fleet-agent-witness-selftest.py" WitnessTests.test_codex_internal_thread_hooks_preserve_root \
+    || { WHY='internal native SessionStart changed the root identity or ledger'; return 1; }
+  WHAT='隔离 tmux 与私有 RPC 下，临时线程、子线程及未知线程的两个钩子均不改主会话身份，真实 root 新会话仍可登记'
+  SECS=$(since "$t0")
+}
+
 drill_start_unwitnessed() {
   CAP=10; local t0
   t0=$(now)
@@ -6925,6 +6934,15 @@ drill_restore_execution_identity() {
   SECS=$(since "$t0")
 }
 
+drill_native_cancel_before_signal() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-native-stop-order-selftest.py" >"$WORK/native-stop-order.log" 2>&1 || {
+    WHY="native cancel ordering regression: $(tail -8 "$WORK/native-stop-order.log")"; return 1;
+  }
+  WHAT='本地无 journal 停止同事务固定双时钟，重放不延长，共同入口只取消一次，未知或外部强停不阻挡退出'
+  SECS=$(since "$t0")
+}
+
 drill_native_exit_identity() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-session-exit-selftest.py" \
@@ -6950,12 +6968,51 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continue-entry-selftest.py" >"$WORK/task-continue-entry.log" 2>&1 || {
+    WHY="task continue entry regression: $(tail -10 "$WORK/task-continue-entry.log")"; return 1;
+  }
+  WHAT='明确继续同一 Task：owner 凭据、停止版本围栏、丢响应原包重发；历史只读，不降级 resume/spawn'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
+drill_task_stop_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {
+    WHY="task stop entry regression: $(tail -10 "$WORK/task-stop-entry.log")"; return 1;
+  }
+  WHAT='Task stop 跨 Web/tmux/CLI 持久撤销，离线可受理，未知不降级，普通关闭不冒充原生退出'
+  SECS=$(since "$t0")
+}
+
 drill_task_unclaimed_stop_proof() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
     WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
   }
   WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
+  SECS=$(since "$t0")
+}
+
+
+drill_task_continue_unclaimed() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
+    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
+  }
+  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
   SECS=$(since "$t0")
 }
 
@@ -6979,6 +7036,19 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
+
+
 drill_codex_no_daemon_fence() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-codex-no-daemon-fence-selftest.py" >"$WORK/codex-no-daemon-fence.log" 2>&1 || {
@@ -6997,14 +7067,6 @@ drill_task_unclaimed_node() {
   SECS=$(since "$t0")
 }
 
-drill_task_continue_unclaimed() {
-  local t0; t0=$(now); CAP=120
-  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
-    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
-  }
-  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
-  SECS=$(since "$t0")
-}
 
 drill_task_continue_authority() {
   local t0; t0=$(now); CAP=120
@@ -7820,6 +7882,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_parent_origin_retired() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
+    WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
+  }
+  WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
 drill_task_worktree_current_generation() {
   local t0; t0=$(now); CAP=10
   suite_holds worktree-autoclean-scratch-selftest.sh \
@@ -7910,6 +7981,15 @@ drill_task_parent_write_retired() {
 }
 
 # ================================================================ run ====}
+
+drill_release_oidc_runtime() {
+  local t0; t0=$(now); CAP=120
+  bash "$BIN/fleet-release-publish-selftest.sh" >"$WORK/release-oidc-runtime.log" 2>&1 || {
+    WHY="release OIDC regression: $(tail -8 "$WORK/release-oidc-runtime.log")"; return 1;
+  }
+  WHAT='隔离 loopback：OIDC 暂错有界重试，401/403和坏身份立即拒绝，不泄漏响应或token，不跳签名发布门'
+  SECS=$(since "$t0")
+}
 
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"

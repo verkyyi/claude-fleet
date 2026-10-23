@@ -21,7 +21,7 @@ BIN = Path(__file__).resolve().parent
 NATIVE = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
 TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
-OPTIONS = ('@fleet_id', '@born', '@task', '@task_id', '@origin_wid', '@agent_def',
+OPTIONS = ('@fleet_id', '@born', '@task', '@task_id', '@agent_def',
            '@model', '@effort', '@cc_model', '@reap_policy', '@reported')
 LIMIT = 256 * 1024 * 1024
 
@@ -109,6 +109,8 @@ def pack(record, output):
     if len(data) > LIMIT:
         raise ValueError('Codex rollout exceeds move limit')
     manifest = {k: record[k] for k in ('format', 'agent', 'sid', 'turns', 'metadata')}
+    manifest['metadata'] = {k: v for k, v in manifest['metadata'].items()
+                            if k not in ('@origin', '@origin_fid', '@origin_wid', '@origin_gen', '@origin_retired')}
     manifest['sha256'] = hashlib.sha256(data).hexdigest()
     with tarfile.open(fileobj=output, mode='w|') as tar:
         for name, raw in [('move.json', json.dumps(manifest).encode()), ('rollout.jsonl', data)]:

@@ -207,8 +207,24 @@ FixtureControl(sys.argv[2]).execute(sys.argv[4])
             receipt = self.control.submit(stop_request())
         self.assertEqual(receipt["status"], "accepted")
         self.assertEqual(self.fence.read("T42")["cancel_request"], STOP_ID)
-        self.control.submit(stop_request())
+        spawned = []
+        real_popen = subprocess.Popen
+        def launch(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            spawned.append(child)
+            return child
+        def cleanup():
+            for child in spawned:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=3)
+        self.addCleanup(cleanup)
+        with patch("fleet_control.subprocess.Popen", side_effect=launch):
+            self.control.submit(stop_request())
         self.wait_stop(lambda: self.control.get_operation(STOP_ID)["status"] == "succeeded", "accepted stop did not retry")
+        # Succeeded precedes the executor's exit-receipt attempt. Reap our real
+        # fixture process before TemporaryDirectory removes its SQLite files.
+        spawned[0].wait(timeout=5)
 
     def test_stop_replay_does_not_run_parallel_cleanup_and_recovers_executor_death(self):
         root = self.stop_executor_fixture()

@@ -190,6 +190,10 @@ spawn() {  # <name> <runner> <sid> <cwd> → window id (a claude-bearing window 
   TM set-window-option -t "$w" @raw 1; TM set-window-option -t "$w" @worktree "$4"
   TM set-window-option -t "$w" @claude_state working
   TM set-window-option -t "$w" @origin scratch-9; TM set-window-option -t "$w" @cc_account acctA
+  TM set-window-option -t "$w" @origin_fid 22222222-2222-4222-8222-222222222222
+  TM set-window-option -t "$w" @origin_wid old/22222222-2222-4222-8222-222222222222
+  TM set-window-option -t "$w" @origin_gen 3
+  TM set-window-option -t "$w" @origin_retired scratch-8#2
   printf '%s' "$w"
 }
 w1=$(spawn w1 runner-hook sid-1111 "$WORK/wt1")
@@ -273,8 +277,11 @@ nw1=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="w1
 ok; [ -n "$nw1" ] && [ "$nw1" != "$w1" ] || fail "w1 must be re-opened as a NEW window — $out $(diag)"
 # (physical path: macOS reports /private/var/… for a /var/… mktemp dir)
 ok; [ "$(cd "$(TM display-message -p -t "$nw1" '#{pane_current_path}')" && pwd -P)" = "$(cd "$WORK/wt1" && pwd -P)" ] || fail "new w1 must run in the same cwd (got $(TM display-message -p -t "$nw1" '#{pane_current_path}'))"
-for opt in @raw=1 @worktree="$WORK/wt1" @origin=scratch-9 @claude_state=working; do
+for opt in @raw=1 @worktree="$WORK/wt1" @claude_state=working; do
   ok; [ "$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")" = "${opt#*=}" ] || fail "new w1 must carry ${opt%%=*}=${opt#*=} (got $(TM display-message -p -t "$nw1" "#{${opt%%=*}}"))"
+done
+for key in origin origin_fid origin_wid origin_gen origin_retired; do
+  ok; [ -z "$(TM display-message -p -t "$nw1" "#{@$key}")" ] || fail "migration restored retired @$key"
 done
 for opt in @fleet_role=worker @reap_policy=merged '@epic=acme/repo#7'; do
   ok; [ "$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")" = "${opt#*=}" ] || fail "#2970: new w1 must carry ${opt%%=*}=${opt#*=} (got '$(TM display-message -p -t "$nw1" "#{${opt%%=*}}")')"

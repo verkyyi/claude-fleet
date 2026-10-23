@@ -296,6 +296,19 @@ rm -f "$ANS"
 out=$(env -u FLEET_HUB_CURL FLEET_CONF_DIR="$FLEET_CONF_DIR" HOME="$WORK" bash "$R" code T5 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$out" = FF1W ] && ok "F code off the book needs no hub" || st_miss "F book without hub: rc=$rc [$out]"
 
+# H: stop uses the authenticated task road and accepts its durable 202 receipt.
+: > "$CURL_LOG"
+echo 202 > "$CODE"
+echo '{"stop_requested":true,"execution_exit_confirmed":false}' > "$ANS"
+out=$(printf '%s' '{"idempotency_key":"stop-test","evidence":"operator"}' | bash "$R" stop T5)
+rc=$?
+[ "$rc" = 0 ] && [ "$out" = '{"stop_requested":true,"execution_exit_confirmed":false}' ] && \
+  grep -q '^argv: .*-X POST .*/v1/node/tasks/T5/stop$' "$CURL_LOG" \
+  && ok "H durable Task stop accepts 202 on the authenticated node route" || st_miss "H stop: rc=$rc [$out]"
+: > "$CURL_LOG"
+printf '%s' '{}' | bash "$R" stop 5 >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && [ ! -s "$CURL_LOG" ] && ok "H stop rejects a guessed Task number" || st_miss "H invalid stop sent request"
+rm -f "$ANS" "$CODE"
 # Parent transport is retired even when an old Task still carries its columns.
 : > "$CURL_LOG"
 bash "$R" dispatch --title 'independent task' >/dev/null 2>"$WORK/err" && \

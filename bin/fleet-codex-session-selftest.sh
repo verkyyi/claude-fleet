@@ -285,7 +285,7 @@ class SessionTests(unittest.TestCase):
         # launch (fleet-codex.sh) unset the WHOLE measurement bus — @ctx_left /
         # @ctx_ts / @ctx_src too, or the top line reads the old agent's numbers.
         bus = ['@ctx_pct', '@ctx_limit', '@ctx_band', '@ctx_left', '@ctx_ts', '@ctx_src', '@model', '@effort']
-        for script, marker in (('fleet-transfer.sh', 'for key in @cc_account'), ('fleet-codex.sh', 'for _opt in @codex_identity')):
+        for script, marker in (('fleet-transfer.sh', 'for key in @origin'), ('fleet-codex.sh', 'for _opt in @codex_identity')):
             line = next(l.strip() for l in (BIN / script).read_text().splitlines() if l.strip().startswith(marker))
             for name in bus:
                 self.assertIn(' ' + name + ' ', line, script + ' must unset ' + name)
@@ -442,7 +442,7 @@ class SessionTests(unittest.TestCase):
         registration = conf / 'fleets' / label / 'conf'
         registration.parent.mkdir(parents=True)
         registration.touch()
-        saved = {k: os.environ.get(k) for k in ('TMUX', 'TMUX_PANE', 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_ID_DIR', 'FLEET_ID_PUSH', 'FLEET_CONF_DIR')}
+        saved = {k: os.environ.get(k) for k in ('TMUX', 'TMUX_PANE', 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_ID_DIR', 'FLEET_ID_PUSH', 'FLEET_CONF_DIR', 'FLEET_CODEX_REMOTE')}
         try:
             call('new-session', '-d', '-s', label, '-n', 'parent', 'sleep 60')
             pane = call('display-message', '-p', '#{pane_id}')
@@ -467,7 +467,7 @@ class SessionTests(unittest.TestCase):
             p = peer('before clear'); self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(queued()[-1][4], old_t)
             os.environ.update(TMUX=socket + ',1,0', TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234',
-                              FLEET_ID_DIR=str(ids), FLEET_ID_PUSH='0', FLEET_CONF_DIR=str(conf))
+                              FLEET_ID_DIR=str(ids), FLEET_ID_PUSH='0', FLEET_CONF_DIR=str(conf), FLEET_CODEX_REMOTE=server.remote)
             follower = cx.Follow(dict(TMUX_PANE=pane, FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_REMOTE=server.remote))
             self.assertEqual(follower.tick(), '')   # connected, nothing started yet
             # T572: fleet's own RPC starting a thread on this server is never followed —

@@ -12,13 +12,13 @@
 #                                                  → allocate + land a worktree
 #   receive  --dest <encoded-dir-name>            → tar -x a transcript from stdin
 #   launch   --wt <dir> --sid <uuid> [--name <n>] [--wid <h>] [--issue <n>]
-#            [--raw 0|1] [--origin <o>] [--repo <o/n>] [--state <s>]
+#            [--raw 0|1] [--repo <o/n>] [--state <s>]
 #            [--fleet <sess>]                     → open + resume + verify
 #   discard  --wt <dir> --branch <br> --repo <o/n> [--fleet <sess>]
 #                                                  → undo a failed provision
 #   movein   --fleet <sess> --bundle <tar> --repo <o/n> --branch <br> --sid <uuid>
 #            [--pushed] [--name <n>] [--wid <h>] [--issue <n>] [--raw 0|1]
-#            [--origin <o>] [--origin-wid <w>] [--state <s>]
+#            [--state <s>]
 #                                                  → provision + receive + launch
 #                                                    in ONE call, from a bundle
 #                                                    file (issue #1426)
@@ -168,7 +168,7 @@ case "$cmd" in
 
   launch)
     agent=claude cxhome=''
-    wt='' sid='' fleetw='' name='moved' wid='' issue='' raw=0 origin='' repo='' state='done'
+    wt='' sid='' fleetw='' name='moved' wid='' issue='' raw=0 repo='' state='done'
     while [ $# -gt 0 ]; do case "$1" in
       --agent) agent="${2:-}"; shift 2 ;;
       --codex-home) cxhome="${2:-}"; shift 2 ;;
@@ -179,7 +179,8 @@ case "$cmd" in
       --wid) wid="${2:-}"; shift 2 ;;
       --issue) issue="${2:-}"; shift 2 ;;
       --raw) raw="${2:-0}"; shift 2 ;;
-      --origin) origin="${2:-}"; shift 2 ;;
+      # Old Parent flags are accepted for older callers; never stamped.
+      --origin) shift 2 ;;
       --repo) repo="${2:-}"; shift 2 ;;
       --state) state="${2:-done}"; shift 2 ;;
       *) die "launch: unknown arg $1" ;;
@@ -237,7 +238,6 @@ PY_LAUNCH
     done
     TM set-window-option -t "$nw" @raw "$raw" 2>/dev/null
     [ -n "$issue" ] && TM set-window-option -t "$nw" @issue "$issue" 2>/dev/null
-    [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
     [ -n "$repo" ] && TM set-window-option -t "$nw" @repo "$repo" 2>/dev/null
     [ -n "$wid" ] && fleet_wid_stamp "$nw" "$SOCK" "$wid" >/dev/null 2>&1
     # Carried, not said (issue #2537): only until the new agent's first OSC 7501.
@@ -290,7 +290,7 @@ PY_META
     ;;
 
   movein)
-    fleetw='' bundle='' repo='' branch='' sid='' pushed='' name='moved' wid='' issue='' raw=0 origin='' owid='' state='done'
+    fleetw='' bundle='' repo='' branch='' sid='' pushed='' name='moved' wid='' issue='' raw=0 state='done'
     while [ $# -gt 0 ]; do case "$1" in
       --fleet) fleetw="${2:-}"; shift 2 ;;
       --bundle) bundle="${2:-}"; shift 2 ;;
@@ -302,8 +302,9 @@ PY_META
       --wid) wid="${2:-}"; shift 2 ;;
       --issue) issue="${2:-}"; shift 2 ;;
       --raw) raw="${2:-0}"; shift 2 ;;
-      --origin) origin="${2:-}"; shift 2 ;;
-      --origin-wid) owid="${2:-}"; shift 2 ;;
+      # Old Parent flags are accepted for older callers; never stamped.
+      --origin) shift 2 ;;
+      --origin-wid) shift 2 ;;
       --state) state="${2:-done}"; shift 2 ;;
       *) die "movein: unknown arg $1" ;;
     esac; done
@@ -318,11 +319,9 @@ PY_META
       exit 8
     fi
     launch=$(bash "$0" launch --wt "$twt" --sid "$sid" --name "$name" --raw "$raw" --state "$state" --fleet "$rfleet" \
-      ${wid:+--wid "$wid"} ${issue:+--issue "$issue"} ${origin:+--origin "$origin"} --repo "$repo") || exit 10
+      ${wid:+--wid "$wid"} ${issue:+--issue "$issue"} --repo "$repo") || exit 10
     IFS=$'\t' read -r nw ncp _ <<<"$launch"
-    if [ -n "$nw" ] && [ -n "$owid" ]; then
-      tmux -L "$(fleet_socket "$rfleet")" set-window-option -t "$nw" @origin_wid "$owid" 2>/dev/null
-    fi
+
     printf '%s\t%s\t%s\n' "$nw" "$ncp" "$twt"
     [ -n "$ncp" ] || exit 10
     ;;

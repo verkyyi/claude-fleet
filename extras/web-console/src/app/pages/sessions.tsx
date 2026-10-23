@@ -21,6 +21,9 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { fmtTokens, tr } from "@/shared/i18n";
+import { useMe } from '@/shared/api';
+import { canStopRow } from '../task-stop';
+import { stopRow, stopAcknowledgment } from '../task-stop-api';
 import { sessionWrite } from "@/shared/sessions";
 import { terminalLink } from "@/shared/terminal";
 import { viewAs } from "@/shared/viewAs";
@@ -282,7 +285,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           : <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
         {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
         {t && !cli ? <Button asChild variant="outline" className="flex-1"><Link to={`/chat?about=${encodeURIComponent(writtenCode(t))}`}><MessageCircle />{tr("在对话里说", "Talk about it")}</Link></Button> : null}
-        {r.live ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("停止", "Stop")} title={tr("停止", "Stop")}><Trash2 /></Button> : null}
+        {canStopRow(r) ? <Button variant="outline" size="icon" disabled={busy || !!viewAs} onClick={() => onReap(r)} aria-label={tr("停止", "Stop")} title={tr("停止", "Stop")}><Trash2 /></Button> : null}
       </div>
       {cli && (r.live || r.board?.worker_id) ? <CliAccess r={r} /> : null}
       {t ? <TaskFacts t={t} stale={stale} /> : null}
@@ -294,24 +297,37 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
 // 会话's side panel and a session's own page (/s/:ref, GR5E C2) alike.
 export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () => void; cli?: boolean }> = ({ r, onOpen, onTerminal, cli }) => {
   const { stale, reload } = useWorkRows();
+  const { me } = useMe();
+  const readOnly = !me || !!me.read_only || !!me.view_as || !!viewAs;
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const act = async (x: Row, tool: "worker_stop" | "worker_resume") => {
-    const id = tool === "worker_stop" ? x.live?.id : x.ended?.id;
+    if (busy || readOnly) return;
+    if (tool === 'worker_stop') {
+      if (!canStopRow(x) || busy || viewAs) return;
+      setBusy(true); setNote(null);
+      try {
+        const result = await stopRow(x);
+        setNote(result.ok ? { ok:true,text:stopAcknowledgment(result) }
+          : { ok:false,text:tr(`没能停止：${result.error}`,`Could not stop: ${result.error}`) });
+        reload();
+      } finally { setBusy(false); }
+      return;
+    }
+    const id = x.ended?.id;
     if (!id) return;
     setBusy(true);
     setNote(null);
     const why = await sessionWrite(tool, id);
     setBusy(false);
-    if (why) setNote({ ok: false, text: tool === "worker_stop" ? tr(`没能停止：${why}`, `Could not stop it: ${why}`) : tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
-    else setNote({ ok: true, text: tool === "worker_stop" ? tr("停止请求已提交，等待会话状态更新。", "Stop requested; waiting for the session observation.")
-      : tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
+    if (why) setNote({ ok: false, text: tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
+    else setNote({ ok: true, text: tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });
     reload();
   };
   return (
     <>
       {note ? <p role="status" className={cn("mb-4 text-sm", note.ok ? "text-muted-foreground" : "text-destructive")}>{note.text}</p> : null}
-      <Detail r={r} stale={stale} busy={busy} onOpen={onOpen} onReap={(x) => act(x, "worker_stop")} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} cli={cli} />
+      <Detail r={r} stale={stale} busy={busy || readOnly} onOpen={onOpen} onReap={(x) => act(x, "worker_stop")} onResume={(x) => act(x, "worker_resume")} onTerminal={onTerminal} cli={cli} />
 
     </>
   );

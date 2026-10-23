@@ -91,7 +91,8 @@ wc=$(tf new-window -d -P -F '#{window_id}' -n kid -c "$WORK" 'while :; do sleep 
 tf set-window-option -t "$wc" @issue 101 \; set-window-option -t "$wc" @repo acme/app \; \
    set-window-option -t "$wc" @origin "$F" \; set-window-option -t "$wc" @claude_state 'done'
 lib '' '' fleet_stamp_origin_wid "$L" "$wc" "$F" "$L" >/dev/null 2>&1
-r=$(tf display-message -p -t "$wc" '#{@origin_fid}');      st_count; [ "$r" = "$F" ] || st_miss "C: the child's @origin_fid is the parent's identity" "$r"
+r=$(tf display-message -p -t "$wc" '#{@origin_fid}');      st_count; [ -z "$r" ] || st_miss "C: retired stamp writes no Parent identity" "$r"
+tf set-window-option -t "$wc" @origin_fid "$F"   # pre-retirement fixture
 r=$(lib '' '' fleet_origin_win "$L" "$wc" "$L");           st_count; [ "$r" = "$wo" ] || st_miss "C: fleet_origin_win resolves it" "$r"
 tf set-window-option -t "$wc" -u @origin_fid
 r=$(lib '' '' fleet_origin_win "$L" "$wc" "$L");           st_count; [ "$r" = "$wo" ] || st_miss "C: …and by @origin alone (an identity is an address)" "$r"
@@ -127,20 +128,18 @@ tf kill-window -t "$w2"; tf set-window-option -t "$wo" -u @agent_def
 tf set-window-option -t "$wo" @fleet_role_def orchestrator
 r=$(lib '' '' fleet_win_for_agent orchestrator "$L"); rc=$?; st_count; [ "$rc" = 1 ] || st_miss "E: a leftover role mark is no address" "$rc:$r"
 tf set-window-option -t "$wo" -u @fleet_role_def
-# none running: the sender's parent (the child wc, whose parent is wo) gets it
+# Missing named agent: refuse even with a historical Parent stamp. No silent
+# transfer to the Parent, reminder book, or alert.
 pc=$(tf display-message -p -t "$wc" '#{pane_id}')
-r=$(send agent:steward 'need a call' "$INTMUX" "$pc"); rc=$?
-st_count; case "$rc" in 0|3) ;; *) st_miss "E: none running ⇒ the sender's parent takes it" "$rc:$r $(cat "$WORK/send.err")" ;; esac
-st_count; grep -q 'parent instead' "$WORK/send.err" || st_miss "E: …said on stderr" "$(cat "$WORK/send.err")"
 ORPH="$FLEET_CONF_DIR/global/orphan-reports.ndjson"
-st_count; [ ! -s "$ORPH" ] || st_miss "E: …and no reminder filed" "$(cat "$ORPH")"
-# no parent either: the person's reminder, the alert once, exit 0
-r=$(send agent:steward 'anyone?'); rc=$?
-st_count; [ "$rc" = 0 ] || st_miss "E: no parent ⇒ the person's reminder, exit 0" "$rc:$r $(cat "$WORK/send.err")"
-st_count; case "$r" in rerouted*) ;; *) st_miss "E: …says rerouted" "$r" ;; esac
-st_count; python3 -c 'import json,sys; r=[json.loads(l) for l in open(sys.argv[1])]; assert len(r)==1 and r[0]["parent"]=="agent:steward" and r[0]["summary"]=="anyone?" and r[0]["state"]=="MESSAGE", r' "$ORPH" 2>/dev/null \
-  || st_miss "E: one reminder row naming agent:steward" "$(cat "$ORPH" 2>/dev/null)"
-st_count; [ "$(grep -c child-report "$WORK/alerted" 2>/dev/null)" = 1 ] || st_miss "E: the alert once" "$(cat "$WORK/alerted" 2>/dev/null)"
+for pane in "$pc" ''; do
+  r=$(send agent:steward 'need a call' "$INTMUX" "$pane"); rc=$?
+  st_count; [ "$rc" = 1 ] || st_miss "E: missing agent is explicitly refused" "$rc:$r $(cat "$WORK/send.err")"
+  st_count; grep -q 'automatic fallback is retired; nothing sent' "$WORK/send.err" || st_miss "E: clear refusal" "$(cat "$WORK/send.err")"
+done
+r=$(send parent 'legacy recipient' "$INTMUX" "$pc"); rc=$?
+st_count; [ "$rc" = 2 ] && grep -q 'PARENT_RETIRED' "$WORK/send.err" || st_miss "E: explicit parent is retired" "$rc:$r"
+st_count; [ ! -s "$ORPH" ] && [ ! -s "$WORK/alerted" ] || st_miss "E: refusal creates no reminder or alert"
 
 # --- F: the MCP tool's address grammar -------------------------------------------
 r=$(python3 - "$BIN" "$F" <<'PY' 2>&1

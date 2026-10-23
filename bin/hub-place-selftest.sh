@@ -16,15 +16,14 @@
 #   NOHUB   CCQUOTA_FLEET unset + --node mac-a → refused (exit 1), nothing spawned.
 #   REMOTE  the hub placed it on mac-a → exit 0, stderr names mac-a and the reason, no
 #           window, the lease NOT given back.
-#   PARENT  a worker spawning a child sends its worker_id as --origin-wid.
+#   PARENT  legacy --origin is accepted but no Parent travels with placement.
 #   LOCAL   the hub chose this machine → spawn here (no GitHub claim since #4898).
 #   HELD    the hub says another machine holds it → exit 3, no spawn.
 #   NOELIG  auto, no machine eligible → opened here, one note.
 #   NAMED   --node mac-a refused by the hub → exit 2, no spawn, lease given back.
 #   DOWN    hub unreachable → refused, no local fallback (#4392).
 #   HUBSENT a start the hub sent (fleet-control-read.sh: --origin hub --node
-#           local) → never placed again; its --origin-wid is stamped verbatim,
-#           and its key as @origin (fleet-report-parent.sh needs a key there).
+#           local) → never placed again; legacy origin arguments stamp nothing.
 #   SELF    --node local / this host's alias → never asks the hub.
 #   CAP     this machine is full → still placed on mac-a (exit 0); a LOCAL answer
 #           then refuses with the cap reason (exit 2).
@@ -34,7 +33,7 @@
 #           (connection refused, rc 11) ⇒ opened here, `@placed fallback-local`;
 #           a LOCAL answer stamps `@placed hub`; every ask says `place_ms=`.
 #   DONE    (issue #1586) the hub waited and mac-a opened it → exit 0, the window id
-#           on stderr and in the parent's children/<key>.dispatch.
+#           on stderr; no Parent dispatch ledger is created.
 #   DECLINED mac-a's spawn refused it → the same exit a refusal here gives (2 full ·
 #           3 claimed · 1 else), its reason on stderr, the lease released, nothing
 #           opened here (never the auto fallback); a re-send is granted, no --force.
@@ -46,13 +45,13 @@
 #   UNCLAIM a spawn here that failed (new-window) releases its lease; since #4898
 #           nothing is claimed on GitHub, so nothing is given back there.
 #   FALLBACK (issue #1610) the hub tried the next machine after a decline: the
-#           line's `after <m>:<op>:<exit>,…` field is a dispatch row per machine
-#           before the answer's, stripped from every message; each try's stderr
+#           line's `after <m>:<op>:<exit>,…` field is stripped from every message;
+#           it creates no Parent dispatch rows; each try's stderr
 #           line passes through; LOCAL after the others opens here; REFUSED
 #           ALL_DECLINED refuses (2 when every machine was full, else 1), never
 #           opens here, gives the lease back.
-#   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
-#           file and `fleet-children.py show --json` lists it.
+#   ASYNC   --async asks with --wait 0; no Parent dispatch is written;
+#           `fleet-children.py show --json` can still read historical dispatches.
 #   PERSONAL (issue #1721) a personal login (node.env CCQUOTA_FLEET_PERSONAL=1,
 #           compute on) opens its spawns here when nothing names a machine;
 #           FLEET_SPAWN_NODE still wins; compute off / no line ⇒ auto
@@ -71,7 +70,7 @@
 #           token anywhere is not run and says 「no node token」, not 「unreachable」 —
 #           and, never reached (T672), opens it here, @placed fallback-local.
 #   SCRATCH (issue #1541, EPIC #1529 R3) bin/dash-raw-session.sh is placed the
-#           same way, as `<repo> scratch <fleet UUID>` with its --name and parent:
+#           same way, as `<repo> scratch <fleet UUID>` with its --name:
 #           hub off ⇒ byte-identical and --node mac-a refused; REMOTE / done /
 #           LOCAL / no machine / named-refused / DECLINED / UNKNOWN / hub down
 #           branch as an issue spawn's do, with NO lease at any point; local /
@@ -79,7 +78,7 @@
 #           never travels, one bound to its record does with no repo (T742), a
 #           seeded one (--prompt) does, its words as --body-file (T672), and so
 #           does --as fleet-worker (a shipped file); a start the hub sent (--origin hub --node local
-#           --origin-wid) is never placed again, stamps the parent verbatim and
+#           --origin-wid) is never placed again, stamps no Parent metadata and
 #           prints its --print receipt; a full machine still places elsewhere;
 #           the dash's --bg hands --node to the background pass.
 set -uo pipefail
@@ -366,8 +365,10 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" 
                                                  || fail "REMOTE --as fleet-worker still asks the hub (rc=$(rc))"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin issue-77
-place_has "--origin-wid $UUID/issue-77"          || fail "PARENT the parent's worker_id rides the placement"
-ok "PARENT a worker's child carries --origin-wid <fleet UUID>/issue-77"
+[ "$(rc)" = 0 ] && place_has "--node auto --agent claude --as fleet-worker acme/widgets 258 $WID" \
+                                                 || fail "PARENT legacy --origin still permits ordinary placement"
+place_has '--origin'                             && fail "PARENT legacy metadata must not ride placement"
+ok "PARENT legacy --origin is inert; placement retains node, agent, repo and worker identity"
 
 # ===== LOCAL: the hub chose this machine ⇒ today's path ===========================
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b (score 0.9)' run_spawn 258
@@ -413,9 +414,8 @@ ok "WHY hub answered 403 → refused with its error, no fallback"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-a" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin hub --origin-wid "$MACHINE/issue-77" --node local
 [ -s "$PLACE_LOG" ]                              && fail "HUBSENT a start the hub sent is never placed again"
 tmux_has 'new-window'                            || fail "HUBSENT opens it here"
-tmux_has "@origin_wid $MACHINE/issue-77"         || fail "HUBSENT stamps the given parent worker_id"
-tmux_has "@origin issue-77"                      || fail "HUBSENT stamps the parent's key as @origin too — the report path needs it"
-ok "HUBSENT --origin hub --node local → no re-placement; @origin_wid stamped verbatim"
+tmux_has '@origin'                               && fail "HUBSENT legacy arguments must not stamp Parent metadata"
+ok "HUBSENT --origin hub --node local → no re-placement; no Parent stamps"
 
 for n in local mac-b; do
   CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" \
@@ -552,9 +552,8 @@ err_has '#258 → mac-a 已开窗 @42 (hub operation op_43)' || fail "DONE names
 place_has '--wait'                               && fail "DONE a sync spawn leaves the wait to the hub's default"
 tmux_has 'new-window'                            && fail "DONE must not open a window here"
 lease_has release                                && fail "DONE the lease is the remote's"
-grep -q '"child": "acme-widgets:issue-258".*"op": "op_43".*"state": "done".*"window": "@42"' "$DISPATCH" \
-                                                 || fail "DONE the parent's dispatch file records the window" "$(cat "$DISPATCH" 2>/dev/null)"
-ok "DONE mac-a opened it → exit 0, window @42 on stderr and in the dispatch file"
+[ -e "$DISPATCH" ]                              && fail "DONE must not create a Parent dispatch ledger"
+ok "DONE mac-a opened it → exit 0, window @42 and operation on stderr, no Parent ledger"
 
 for x in 2 3 1; do
   CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=5 \
@@ -564,7 +563,7 @@ for x in 2 3 1; do
   tmux_has 'new-window'                          && fail "DECLINED $x must not open it here (no auto fallback)"
   lease_has 'release'                            || fail "DECLINED $x releases the lease the hub gave back"
 done
-grep -q '"state": "refused"' "$DISPATCH"         || fail "DECLINED is recorded" "$(cat "$DISPATCH")"
+[ -e "$DISPATCH" ]                              && fail "DECLINED must not create a Parent dispatch ledger"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
 grep -q -- '--force' "$LEASE_LOG"                && fail "DECLINED a re-send must not need --force"
 ok "DECLINED mac-a refused → exit 2/3/1 with its reason, lease released, nothing opened"
@@ -585,7 +584,7 @@ CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=0 LEASE_ANSWER="GRANTED mac-b" PLACE_RC=5 P
 err_has '#258 被 mac-a 拒绝 (exit 1): mac-a accepted operation op_47 but never started it' || fail "SWALLOWED one line naming mac-a and the operation"
 lease_has release                                || fail "SWALLOWED releases the lease"
 gh_has '--remove-assignee'                       && fail "SWALLOWED writes nothing to GitHub (#4898: no claim to withdraw)"
-grep -q '"op": "op_47".*"state": "refused"' "$DISPATCH" || fail "SWALLOWED is recorded with its operation" "$(cat "$DISPATCH")"
+[ -e "$DISPATCH" ]                              && fail "SWALLOWED must not create a Parent dispatch ledger"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SWALLOWED the re-send opens without --force (rc=$(rc))"
 grep -q -- '--force' "$LEASE_LOG"                && fail "SWALLOWED a re-send must not need --force"
@@ -616,12 +615,7 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=0 \
 err_has '#258 → mac-a 已开窗 @61 (hub operation op_61) — chose mac-a' || fail "FALLBACK the reason stops before the after field" "$(cat "$WORK/spawn.err")"
 err_has '#258 先被 mac-d 拒绝，入口已换下一台'    || fail "FALLBACK names the machine that declined first"
 err_has 'fleet: mac-d declined (exit 1): fleet discover' || fail "FALLBACK passes each declined try through as it happened"
-grep -q '"node": "mac-d", "op": "op_60", "state": "refused"' "$DISPATCH" || fail "FALLBACK mac-d's decline is its own dispatch row" "$(cat "$DISPATCH")"
-python3 - "$DISPATCH" <<'PY' || fail "FALLBACK the book's last row for the child is mac-a's done" "$(cat "$DISPATCH")"
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-assert [r['node'] for r in rows] == ['mac-d', 'mac-a'] and rows[-1]['state'] == 'done', rows
-PY
+[ -e "$DISPATCH" ]                              && fail "FALLBACK must not create Parent dispatch rows"
 lease_has release                                && fail "FALLBACK the lease is the machine's that opened it"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b\tafter mac-d:-:1,mac-a:op_62:2' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "FALLBACK LOCAL after the others opens here (rc=$(rc))"
@@ -642,18 +636,27 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=4 \
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "ALL_DECLINED the re-send opens without --force (rc=$(rc))"
 grep -q -- '--force' "$LEASE_LOG"                && fail "ALL_DECLINED a re-send must not need --force"
-ok "FALLBACK the hub's next machine: done/LOCAL after a decline recorded per machine; ALL_DECLINED refuses, gives the lease back, no --force after"
+ok "FALLBACK the hub's next machine: done/LOCAL after a decline, no Parent ledger; ALL_DECLINED refuses, gives the lease back, no --force after"
 
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'REMOTE mac-a op_46 accepted\tchose mac-a' run_spawn 258 --origin issue-77 --async
 [ "$(rc)" = 0 ]                                  || fail "ASYNC exits 0 (rc=$(rc))"
 place_has '--wait 0 --as fleet-worker acme/widgets 258'            || fail "ASYNC asks with --wait 0"
-grep -q '"op": "op_46".*"state": "accepted"' "$DISPATCH" || fail "ASYNC leaves the operation id" "$(cat "$DISPATCH" 2>/dev/null)"
+[ -e "$DISPATCH" ]                              && fail "ASYNC must not create a Parent dispatch ledger"
+err_has 'hub operation op_46, accepted'           || fail "ASYNC the caller still receives the operation id"
+[ -e "$WORK/conf/fleets/testsess/children/acme-widgets:issue-77.dispatch" ] \
+                                                 && fail "ASYNC must not create a qualified Parent dispatch ledger either"
+# Historical books remain readable, but a new placement never updates them.
+mkdir -p "$(dirname "$DISPATCH")"
+printf '%s\n' '{"seq":1,"ts":1,"child":"acme-widgets:issue-258","node":"mac-old","op":"op_historical","state":"accepted"}' > "$DISPATCH"
+cp "$DISPATCH" "$WORK/historical-dispatch"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'REMOTE mac-a op_46 accepted\tchose mac-a' run_spawn 258 --origin issue-77 --async
+cmp -s "$DISPATCH" "$WORK/historical-dispatch"    || fail "ASYNC must preserve historical Parent dispatch bytes"
 shown=$(python3 "$BIN/fleet-children.py" show --dir "$(dirname "$DISPATCH")" --parent issue-77 --json </dev/null)
-printf '%s' "$shown" | grep -q '"dispatches": \[{.*"op": "op_46"' || fail "ASYNC fleet-children lists the dispatch" "$shown"
+printf '%s' "$shown" | grep -q '"dispatches": \[{.*"op": "op_historical"' || fail "ASYNC fleet-children still lists historical dispatches" "$shown"
 shown=$(python3 "$BIN/fleet-children.py" show --dir "$WORK/conf/none" --parent issue-77 --json </dev/null)
 printf '%s' "$shown" | grep -q dispatches         && fail "ASYNC no dispatch file → no dispatches key (unchanged answer)"
-ok "ASYNC --async → --wait 0, operation id in the dispatch file, listed by fleet-children"
+ok "ASYNC --async → --wait 0, operation id on stderr, no Parent writes; historical dispatches still readable"
 
 # ===== PERFLEET: the hub switch + FLEET_SPAWN_NODE per fleet (issue #1539) ========
 # testsess = the fleet the fake tmux answers; `other` = a second fleet on the same
@@ -765,8 +768,8 @@ if selftest_section 3; then
 # ===== SCRATCH (issue #1541, EPIC #1529 R3): a raw scratch session is placed too ===
 # The same seams (FLEET_HUB_PLACE_CMD / FLEET_HUB_LEASE_CMD, the fake git / gh /
 # tmux), the real dash-raw-session.sh + fleet-lib.sh. A scratch has no issue: the
-# hub is asked as `<repo> scratch <fleet UUID>` (+ --name, + --origin-wid for a
-# parent) and the lease command is NEVER run.
+# hub is asked as `<repo> scratch <fleet UUID>` (+ --name, no Parent metadata)
+# and the lease command is NEVER run.
 RAW="$BIN/dash-raw-session.sh"
 run_raw() { # $@ = args to dash-raw-session.sh
   : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$LEASE_LOG"; : > "$PLACE_LOG"
@@ -800,14 +803,15 @@ ok "SCRATCH OFF: hub off → no placement, byte-identical (no flag, auto, local)
 export CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_HUB_PLACE_CMD="$PLACE"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --name '试一下 侧边栏' --origin issue-77
 [ "$(rc)" = 0 ]                                  || fail "SCRATCH-REMOTE exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-place_has "--node mac-a --origin-wid $UUID/issue-77 --agent claude --name 试一下 侧边栏 acme/widgets scratch $UUID" \
-                                                 || fail "SCRATCH-REMOTE asks for mac-a as a scratch of THIS fleet, with its parent and name" "$(cat "$PLACE_LOG")"
+place_has "--node mac-a --agent claude --name 试一下 侧边栏 acme/widgets scratch $UUID" \
+                                                 || fail "SCRATCH-REMOTE asks for mac-a as a scratch of THIS fleet, with its name" "$(cat "$PLACE_LOG")"
+place_has '--origin'                             && fail "SCRATCH-REMOTE legacy Parent metadata must not ride placement"
 [ -s "$LEASE_LOG" ]                              && fail "SCRATCH-REMOTE a scratch takes no lease" "$(cat "$LEASE_LOG")"
 err_has 'scratch → mac-a (hub operation op_42, accepted)' || fail "SCRATCH-REMOTE names the machine and the operation" "$(cat "$WORK/spawn.err")"
 err_has 'mac-b excluded: load 1.00/core > 0.8'      || fail "SCRATCH-REMOTE carries the reason"
 tmux_has 'new-window'                            && fail "SCRATCH-REMOTE must not open a window here"
 grep -q 'git worktree add' "$GIT_LOG"            && fail "SCRATCH-REMOTE must not allocate a worktree here"
-ok "SCRATCH REMOTE --node mac-a → asked as «acme/widgets scratch <fleet UUID>» with --name + parent; no lease, no window, no worktree"
+ok "SCRATCH REMOTE --node mac-a → asked as «acme/widgets scratch <fleet UUID>» with --name, no Parent; no lease, no window, no worktree"
 
 PLACE_ANSWER=$'REMOTE mac-a op_43 done @42\tchose mac-a (score 0.875)' run_raw --node auto
 [ "$(rc)" = 0 ] && err_has 'scratch → mac-a 已开窗 @42 (hub operation op_43)' || fail "SCRATCH-DONE the hub waited and mac-a opened it (rc=$(rc))" "$(cat "$WORK/spawn.err")"
@@ -1018,15 +1022,14 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw testsess --origin hub --origin-wid "$MACHINE
 [ "$(rc)" = 0 ]                                  || fail "SCRATCH-HUBSENT exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-HUBSENT a start the hub sent is never placed again"
 tmux_has 'new-window'                            || fail "SCRATCH-HUBSENT opens it here"
-tmux_has "@origin_wid $MACHINE/issue-77"         || fail "SCRATCH-HUBSENT stamps the given parent worker_id verbatim" "$(cat "$TMUX_LOG")"
-tmux_has "@origin issue-77"                      || fail "SCRATCH-HUBSENT stamps the parent's key as @origin too — the report path needs it" "$(cat "$TMUX_LOG")"
+tmux_has '@origin'                               && fail "SCRATCH-HUBSENT legacy arguments must not stamp Parent metadata" "$(cat "$TMUX_LOG")"
 # the 4th column is the window's @fleet_id (issue #1873) — present, whatever this fake tmux mints
 [ "$(head -n1 "$WORK/spawn.out" | cut -f1-3)" = "$(printf '@9\t试一下\t%s/main-scratch-1' "$WORK")" ] \
   && [ "$(head -n1 "$WORK/spawn.out" | awk -F'\t' '{print NF}')" = 4 ] \
                                                  || fail "SCRATCH-HUBSENT --print prints the receipt <window_id>\\t<name>\\t<worktree>\\t<fleet_id>" "$(cat "$WORK/spawn.out")"
 run_raw testsess --origin hub --node local
 [ -s "$WORK/spawn.out" ]                         && fail "SCRATCH-HUBSENT without --print nothing is printed" "$(cat "$WORK/spawn.out")"
-ok "SCRATCH HUBSENT --origin hub --node local → no re-placement; @origin_wid verbatim + @origin key; --print receipt"
+ok "SCRATCH HUBSENT --origin hub --node local → no re-placement; no Parent stamps; --print receipt"
 
 PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --node mac-a
 [ "$(rc)" = 0 ] && err_has 'scratch → mac-a'        || fail "SCRATCH-CAP a full machine still places elsewhere (rc=$(rc))" "$(cat "$WORK/spawn.err")"
@@ -1038,19 +1041,20 @@ INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_raw --node local
 ok "SCRATCH CAP a full machine still places elsewhere; opening here keeps the cap"
 
 # The dash's ⌃s is `--bg`: the keypress returns at once and the BACKGROUND pass
-# does the asking — so --node (and --origin-wid) must ride the re-exec.
+# does the asking — --node rides the re-exec, legacy --origin-wid does not.
 PLACE_ANSWER="$REMOTE_LINE" run_raw --bg --node mac-a --origin-wid "$MACHINE/issue-77"
 [ "$(rc)" = 0 ]                                  || fail "SCRATCH-BG --bg returns 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-BG the foreground --bg pass must not ask the hub itself"
 tmux_has "run-shell"                             || fail "SCRATCH-BG hands off through run-shell -b" "$(cat "$TMUX_LOG")"
-grep -q -- "--node=mac-a --origin-wid=$MACHINE/issue-77" "$TMUX_LOG" || fail "SCRATCH-BG the re-exec carries --node and --origin-wid" "$(cat "$TMUX_LOG")"
+grep -q -- '--node=mac-a' "$TMUX_LOG"             || fail "SCRATCH-BG the re-exec carries --node" "$(cat "$TMUX_LOG")"
+grep -q -- '--origin' "$TMUX_LOG"                && fail "SCRATCH-BG the re-exec must not carry Parent metadata" "$(cat "$TMUX_LOG")"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --bg
 grep -q -- '--node=auto' "$TMUX_LOG"             || fail "SCRATCH-BG with the hub on and no flag the re-exec says --node=auto" "$(cat "$TMUX_LOG")"
 unset CCQUOTA_FLEET
 run_raw --bg
 grep -q -- '--node=' "$TMUX_LOG"                 && fail "SCRATCH-BG hub off: the re-exec carries no --node (byte for byte)" "$(cat "$TMUX_LOG")"
 export CCQUOTA_FLEET=1
-ok "SCRATCH BG --bg carries --node / --origin-wid to the background pass; hub off carries nothing"
+ok "SCRATCH BG --bg carries --node and no Parent to the background pass; hub off carries nothing"
 
 fi
 

@@ -294,7 +294,7 @@ teammate、已排队的计划触发、会话恢复或整个 Task 退出的验收
 
 Claude 2.1.295 的 mod 提供 `native.cancel.v1`：投递到现有窗格 inbox 的固定
 `native-cancel.json`，领取成 `.taken`，结果写 `.done`。独立轮询让普通命令等待 idle
-时仍能处理取消；不增加服务或对外宣布整个 Task 已可停止。当前入口尚未接入停止控制器。
+时仍能处理取消；不增加服务或对外宣布整个 Task 已可停止。受控停止由下述共同入口使用此适配器。
 
 请求必须携带完整的已停止 execution snapshot、launch UUID、原生 session UUID、
 32 位十六进制 nonce、最多 50 个具体 cron ID，以及不超过三秒的绝对 deadline。
@@ -308,9 +308,32 @@ session / PID / 启动时间 / 项目四项归属。每次删除前重验记录�
 独立 teammate 和 Codex 计划 CRUD 尚不支持；此结果不能充当 Task 或原生根退出证明。
 deadline 到达返回 `deadline_unknown`，不再发起后续调用。已进入的 `$.tool.call` 没有
 已验证的单次中止接口，仍可能稍后结束；停止控制器必须在同一个期限内结束原生根，
-不能把 Promise 超时当作原生调用已取消。本入口不改 supervisor 的停止时序。
+不能把 Promise 超时当作原生调用已取消。共同停止入口在到期后不再额外增加 TERM 等待。
 
 验证：`python3 bin/fleet-native-cancel-selftest.py`、`claude plugin test mod/fleet`；
 实际原生入口用 `python3 bin/fleet-native-cancel-adapter-selftest.py` 显式运行，使用独立
-HOME、项目和 tmux socket、零模型请求。夹具只登记自己的原生根并写停止 fence，
-不启动 supervisor；因此证明的是取消适配器及归属隔离，不是完整停止流程。
+HOME、项目和 tmux socket、零模型请求。默认模式只登记自己的原生根并写停止 fence；
+`--stop-order` 启动实际 supervisor，`--stop-race` 再并发两个 executor，验证同一次取消
+先于根终止，且同项目另一 session 的 durable 计划原始字节保持。仍不证明整个 Task 退出。
+
+### 原生根停止前的一次取消机会
+
+`fleet_native_stop.py` 在 Control 现有 `metadata` 私有键中保存一次停止清理事实，键由
+Task 和原 start operation 确定。首次停止事务在写 fence 的同时 `INSERT OR IGNORE`：
+首个 cancel request、当时 launch / 根身份、wall 与内核共享 monotonic 时钟的三秒期限。
+LOCAL `request_stop` 没有 operations journal 也走同一事务；重放或更高停止代次不刷新期限。
+Python 3.9 在 macOS 上的 `time.monotonic()` 起点是每个进程自己的，因此跨进程保存
+`clock_gettime(CLOCK_MONOTONIC)`；本地信号等待只使用换算后的剩余预算。
+
+executor 和 supervisor 的 fence 撤销路径共用 `before_signal`。一个事务 CAS 领取取消，
+其他进程仅等待同一记录的结果或同一期限；领取者崩溃也不重新给予三秒。仅当前登记的
+Claude 根、其原生 session / 项目以及完整 durable 归属可投递固定 inbox；读取、定位和等待
+都受剩余预算约束。不存在计划、归属未知、旧 stopped fence 无私有记录、数据库不可用、
+时钟回退或根身份不符时立即进入原来的信号退出，不补建机会。适配器确认后只保存窄结果，
+不生成全域停止回执、不放掉 Task 绑定，也不广告新的节点 capability。
+
+stop fence 从事务提交起就阻断 launch / wake / turn；取消机会只发生在发信号之前。
+TERM 等待也截断到同一个固定期限，随后 KILL。外部 HUP / TERM 可打断等待，崩溃 finally
+直接退出，不能因原生取消失败而形成关不掉的任务。已运行的旧 supervisor 保留其启动时加载的代码，
+不会因安装文件更新自动获得此顺序保证；不据此提升旧会话能力。验证：
+`python3 bin/fleet-native-stop-order-selftest.py`，演练 `native-cancel-before-signal`。

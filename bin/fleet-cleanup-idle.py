@@ -77,12 +77,12 @@ def done_no_pr_secs():
     return int(value) if re.fullmatch(r"\d{1,7}", value) else DONE_NO_PR_DEFAULT
 
 
-UNREPORTED_DEFAULT = 30 * 60     # 回收 B 拍板: 没报结果闲 30 分钟提醒，再 30 分钟收起
+UNREPORTED_DEFAULT = 30 * 60     # 回收 B 拍板: 没报结果闲 30 分钟标记，再 30 分钟收起
 
 
 def unreported_secs():
     """How long a dispatched session sits finished with no result before it is
-    nudged (once, and its parent told) — and again before it is closed (T694)."""
+    marked for the existing grace period before it is closed (T694)."""
     value = os.environ.get("FLEET_REAP_UNREPORTED_SECS", "")
     return int(value) if re.fullmatch(r"\d{1,7}", value) else UNREPORTED_DEFAULT
 
@@ -668,37 +668,6 @@ class Cleaner:
                                   env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, timeout=120).stdout.strip()
 
-    def nudge(self, window, snap):
-        """The one reminder an unreported session gets (T694): itself asked to
-        report, and the session that dispatched it told — fleet-peer-send.sh, or
-        the FLEET_REAP_NUDGE_CMD seam (<target> <text>). Never fatal."""
-        short = snap["@fleet_id"][:8]
-        mins = unreported_secs() // 60
-        words = {
-            "self": "fleet: 你已闲了 %d 分钟，还没报结果。做完了就用 report 工具报 outcome（succeeded / failed）；"
-                    "还要等就说一声。再闲 %d 分钟这个窗口会被收起（对话和工作树留着，面板里回车恢复）。" % (mins, mins),
-            "parent": "fleet: 你派出的会话 %s（%s）已闲了 %d 分钟没报结果；再 %d 分钟会被收起并标红。"
-                      % (snap["window_name"], short, mins, mins),
-        }
-        targets = [("self", window)]
-        par = snap.get("@origin_wid", "")
-        if par:
-            targets.append(("parent", "wid:" + par))
-        elif FID_RE.fullmatch(snap["@origin_fid"] or ""):
-            targets.append(("parent", "wid:" + snap["@origin_fid"]))
-        elif re.fullmatch(r"(?:issue|scratch)-\d+", snap["@origin"] or ""):
-            targets.append(("parent", snap["@origin"]))
-        seam = os.environ.get("FLEET_REAP_NUDGE_CMD")
-        for who, target in targets:
-            argv = ([seam, target, words[who]] if seam else
-                    ["bash", str(BIN / "fleet-peer-send.sh")]
-                    + (["-L", self.args.socket_name] if self.args.socket_name else []) + [target, words[who]])
-            try:
-                subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=30)
-            except (OSError, subprocess.SubprocessError):
-                pass
-
     def dispatched_session(self, window, snap):
         """A session another session dispatched — an orchestrator's task, a batch
         member, a batch driver (T694, 回收 B; fleet_reap_policy.REPORTING) — whose
@@ -707,7 +676,7 @@ class Cleaner:
         grace (--grace, else `merged:<dur>`, else FLEET_CLEANUP_MERGED_GRACE, 60 s;
         a driver at once, its pending /loop no hold: the batch is closed). Not over
         and finished with no result for FLEET_REAP_UNREPORTED_SECS (30 min) ⇒
-        nudged once (itself and its parent) and stamped @reap_unreported — the
+        stamped @reap_unreported without sending a message — the
         panel's red mark; as long again ⇒ closed. Every close records history
         first and keeps the worktree. None = not this road (an issue session, a
         person's own, any other policy): the ordinary roads decide."""
@@ -777,11 +746,10 @@ class Cleaner:
                 if int(stamp) + first > self.now:
                     return False
                 if self.args.dry_run:
-                    print("would-nudge-unreported:" + window)
+                    print("would-mark-unreported:" + window)
                     return False
-                self.nudge(window, snap)
                 self.tm("set-option", "-w", "-t", window, "@reap_unreported", str(self.now))
-                print("nudged-unreported:%s origin=%s" % (window, origin))
+                print("marked-unreported:%s origin=%s" % (window, origin))
                 return False
             deadline, why = max(int(stamp), int(nudged)) + first, "unrep"
             summary = "Automatically closed: idle with no result reported (%s, unreported)" % origin

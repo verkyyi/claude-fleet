@@ -37,6 +37,7 @@ from fleet_hub_common import Database, is_identity, private_dir
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS task_execution_fences (
  task_ref TEXT PRIMARY KEY,
  task_fid TEXT NOT NULL,
@@ -538,8 +539,10 @@ class ExecutionFence:
                 raise FenceRefused("Hub claim does not match the allocated session")
             return worker
 
-    def launch(self, task_ref):
+    def launch(self, task_ref, *, timeout=None):
         with self.store.connect() as db:
+            if timeout is not None:
+                db.execute("PRAGMA busy_timeout=%d" % max(0, int(timeout * 1000)))
             row = db.execute("SELECT * FROM task_execution_launches WHERE task_ref=?", (_task_ref(task_ref),)).fetchone()
             if row is None:
                 return None
@@ -709,7 +712,19 @@ class ExecutionFence:
         stopped = dict(old, generation=generation, cancel_request=old["cancel_request"] or cancel_request)
         if stopped != old:
             cls._save(db, stopped)
+        if not old["cancel_request"]:
+            cls._remember_stop(db, stopped)
         return stopped
+
+    @staticmethod
+    def _remember_stop(db, stopped):
+        # A cleanup opportunity must never make durable stop acceptance fail.
+        # The existing metadata namespace also works without a Control journal.
+        try:
+            from fleet_native_stop import remember_stop
+            remember_stop(db, stopped)
+        except (ImportError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            pass
 
     def request_stop(self, task_ref, cancel_request, *, generation=None):
         """Commit a stop before any wait for admission or runtime shutdown.
@@ -740,6 +755,7 @@ class ExecutionFence:
         old = self._read(db, incoming["task_ref"])
         if old is None:
             self._save(db, incoming)
+            self._remember_stop(db, incoming)
             return incoming
         if old["task_fid"] and old["task_fid"] != incoming["task_fid"]:
             raise FenceRefused("stop snapshot changes the known Task identity")
@@ -764,6 +780,7 @@ class ExecutionFence:
             stopped.update(task_ref=task_ref, generation=generation, binding_generation=0,
                            cancel_request=cancel_request)
             self._save(db, stopped)
+            self._remember_stop(db, stopped)
             return stopped
         return self._stop(db, old, cancel_request, generation if generation is not None else old["generation"])
 
@@ -773,8 +790,10 @@ class ExecutionFence:
             raise FenceRefused("execution is unknown, stopped or no longer current")
         return actual
 
-    def _assert_current(self, expected):
+    def _assert_current(self, expected, *, timeout=None):
         with self.store.connect() as db:
+            if timeout is not None:
+                db.execute("PRAGMA busy_timeout=%d" % max(0, int(timeout * 1000)))
             return self._assert_current_in(db, expected)
 
     @contextlib.contextmanager
@@ -1040,7 +1059,10 @@ def native_exec(argv, component):
 
 
 def _signal_registered(fence, task_ref, launch_id, sig):
-    registered = fence.launch(task_ref)
+    try:
+        registered = fence.launch(task_ref, timeout=.025)
+    except (OSError, sqlite3.Error):
+        return
     if registered is None or registered["launch_id"] != launch_id:
         return
     proofs = [item["process"] for item in registered["native"]]
@@ -1054,19 +1076,34 @@ def _signal_registered(fence, task_ref, launch_id, sig):
                 pass
 
 
-def terminate_registered(fence, task_ref):
-    """Stop the recorded native components; this is not a domain-exit proof."""
-    registered = fence.launch(task_ref)
-    if registered is None:
+def terminate_registered(fence, task_ref, *, launch_id=None, abort=lambda: False):
+    """One bounded cancel-before-signal path; still not a domain-exit proof."""
+    try:
+        registered = fence.launch(task_ref, timeout=.025)
+    except (OSError, sqlite3.Error):
         return
-    _signal_registered(fence, task_ref, registered["launch_id"], signal.SIGTERM)
+    if registered is None or launch_id is not None and registered["launch_id"] != launch_id:
+        return
+    launch_id = registered["launch_id"]
+    common_deadline = None
+    if not abort():
+        try:
+            from fleet_native_stop import before_signal
+            common_deadline = before_signal(fence, task_ref, launch_id, abort=abort)
+        except ImportError:
+            pass  # an old isolated wrapper fixture or partial install cannot hold stop
+    _signal_registered(fence, task_ref, launch_id, signal.SIGTERM)
     deadline = time.monotonic() + 2
+    if common_deadline is not None:
+        deadline = min(deadline, common_deadline)
     proofs = [item["process"] for item in registered["native"]]
     if registered["child"]:
         proofs.append(registered["child"])
     while time.monotonic() < deadline and any(_same_birth(proof) for proof in proofs):
-        time.sleep(.05)
-    _signal_registered(fence, task_ref, registered["launch_id"], signal.SIGKILL)
+        if abort():
+            break
+        time.sleep(min(.025, max(0, deadline - time.monotonic())))
+    _signal_registered(fence, task_ref, launch_id, signal.SIGKILL)
 
 
 def supervise(expected, argv):
@@ -1103,32 +1140,29 @@ def supervise(expected, argv):
             child = subprocess.Popen(argv, env=environment)
             permit.register_child(launch_id, _kernel_process(child.pid))
         while child.poll() is None:
+            revoked = False
             try:
-                fence._assert_current(expected)
-            except FenceRefused:
-                ended.append(signal.SIGTERM)
-            if ended:
-                _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGTERM)
-                try:
-                    child.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
-                _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGKILL)
+                fence._assert_current(expected, timeout=.025)
+            except (FenceRefused, OSError, sqlite3.Error):
+                revoked = True
+            if ended or revoked:
+                # Stop discovery (including sync) gets the same fixed opportunity
+                # as Control. External HUP/TERM bypasses or interrupts it.
+                terminate_registered(fence, expected["task_ref"], launch_id=launch_id,
+                                     abort=lambda: bool(ended))
                 if child.poll() is None:
                     child.kill()
                 child.wait(timeout=2)
-                return 128 + ended[0]
+                return 128 + (ended[0] if ended else signal.SIGTERM)
             time.sleep(.1)
         return child.returncode if child.returncode >= 0 else 128 - child.returncode
     finally:
         if child is not None and child.poll() is None:
-            _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGTERM)
-            try:
-                child.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGKILL)
+            # Crash/unwind cannot start another cancellation opportunity.
+            terminate_registered(fence, expected["task_ref"], launch_id=launch_id, abort=lambda: True)
+            if child.poll() is None:
                 child.kill()
-                child.wait(timeout=2)
+            child.wait(timeout=2)
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
 

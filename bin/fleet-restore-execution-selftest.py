@@ -126,6 +126,22 @@ class RestoreExecution(unittest.TestCase):
         self.assertEqual(len(self.native()), 1, 'uncontrolled offline restore must remain available')
         self.assertTrue(self.native()[0].startswith(FID + '|reopen:'), self.native())
 
+    def test_old_parent_map_is_read_without_reintroducing_routes(self):
+        self.seed()
+        rows = self.map.read_text().splitlines()
+        win = rows[2].split('\t')
+        win[8] = 'scratch-99'
+        rows[2] = '\t'.join(win)
+        rows.append('OWID\t' + FID + '\tfleet/22222222-2222-4222-8222-222222222222')
+        before = '\n'.join(rows) + '\n'
+        self.map.write_text(before)
+        self.restore()
+        self.assertEqual(len(self.native()), 1)
+        self.assertTrue(self.native()[0].startswith(FID + '|reopen:'))
+        for key in ('origin', 'origin_fid', 'origin_wid', 'origin_gen'):
+            self.assertEqual(self.tmux('show-options', '-wqv', '-t', 'oc:sample', '@' + key), '')
+        self.assertEqual(self.map.read_text(), before)
+
     def test_snapshot_keeps_explicit_contract_in_identity_row(self):
         self.seed()
         self.restore()

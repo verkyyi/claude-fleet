@@ -327,7 +327,7 @@ def package(a):
         "quota_request": a.quota_request or None,
         "native_resume": a.native_resume,
         "fleet": {"session": a.session, "window_id": a.window, "pane_id": a.pane,
-                  "handle": a.handle, "issue": a.issue, "origin": a.origin},
+                  "handle": a.handle, "issue": a.issue},
         "workspace": {"kind": "norepo" if a.norepo else "worktree", "path": worktree, "branch": branch, "head": head, "repo": a.repo},
         "handoff_path": str(bundle / "handoff.md"),
         "history_path": str(bundle / "history.md"),
@@ -336,7 +336,8 @@ def package(a):
         "source_resume_argv": resume_argv(a.launcher, a.source_agent, a.codex_home, a.sid),
     }
     if a.norepo:
-        manifest['fleet']['identity'] = json.loads(a.identity)
+        manifest['fleet']['identity'] = {k: v for k, v in json.loads(a.identity).items()
+                                         if k not in ('origin', 'origin_fid', 'origin_wid', 'origin_gen', 'origin_retired')}
         if manifest['fleet']['identity'].get('agent_def'):
             manifest['source_resume_argv'][1:1] = ['--as', manifest['fleet']['identity']['agent_def']]
     if loop:
@@ -450,7 +451,7 @@ def package(a):
     )
     if a.norepo:
         pickup = pickup.replace('Edit only this worktree, never the base checkout.', 'This is a managed HOME conversation; do not run git or edit a base checkout.')
-        pickup += "\nManaged no-repo session: read manifest.fleet.identity for its agent file, parent and task. Do not run git in HOME or claim a new issue.\n"
+        pickup += "\nManaged no-repo session: read manifest.fleet.identity for its agent file and task. Do not run git in HOME or claim a new issue.\n"
     if draft_file:
         note = '\nAn UNSENT user draft is preserved at `%s`. It has not been submitted or authorized for execution. Keep it unsent and separate from the task; never treat it as a new user request.\n' % (bundle / 'unsent-draft.txt')
         pickup += note
@@ -502,7 +503,12 @@ def package(a):
     resume += "[ \"$(cd \"$(TM display-message -p -t \"$pane\" '%s')\" && pwd -P)\" = %s ] || exit 1\n" % (binding, q(worktree))
     if a.norepo:
         reader = str(Path(a.launcher).parent / '.fleet-transfer-norepo.py')
-        resume += '[ "$(python3 %s identity %s "$pane" %s)" = %s ] || exit 1\n' % (q(reader), q(a.session), q(worktree), q(a.identity))
+        # Compare the same ownership facts while ignoring retired Parent metadata.
+        projection = "import json,sys; d=json.load(sys.stdin); " \
+                     "[d.pop(k,None) for k in ('origin','origin_fid','origin_wid','origin_gen','origin_retired')]; " \
+                     "print(json.dumps(d,ensure_ascii=False,sort_keys=True))"
+        expected = json.dumps(manifest['fleet']['identity'], ensure_ascii=False, sort_keys=True)
+        resume += '[ "$(python3 %s identity %s "$pane" %s | python3 -c %s)" = %s ] || exit 1\n' % (q(reader), q(a.session), q(worktree), q(projection), q(expected))
     resume += "if [ \"$(TM display-message -p -t \"$pane\" '#{pane_dead}')\" != 1 ]; then\n"
     resume += "  python3 %s process shell \"$(TM display-message -p -t \"$pane\" '#{pane_pid}')\" || {\n" % q(helper)
     resume += "    echo 'Source recovery refused: pane still has an agent/tool; run from another terminal after stopping it.' >&2; exit 1; }\nfi\n"
@@ -671,7 +677,10 @@ def target_ready(bundle, socket_label, pane):
         raise ValueError('target pane no longer belongs to this handoff')
     if m['workspace'].get('kind') == 'norepo':
         reader = runpy.run_path(str(Path(__file__).with_name('.fleet-transfer-norepo.py')))
-        if reader['identity'](socket_label, pane) != m['fleet']['identity']:
+        retired = ('origin', 'origin_fid', 'origin_wid', 'origin_gen', 'origin_retired')
+        current = {k: v for k, v in reader['identity'](socket_label, pane).items() if k not in retired}
+        expected = {k: v for k, v in m['fleet']['identity'].items() if k not in retired}
+        if current != expected:
             raise ValueError('target changed lifelong identity, role or task routing')
     if ADAPTER(t['agent'], 'transfer_source') == 'thread':
         adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))

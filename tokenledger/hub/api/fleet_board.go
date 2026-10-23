@@ -57,6 +57,8 @@ const (
 
 // BoardRow is one row of the list.
 type BoardRow struct {
+	CancelRequest string `json:"cancel_request,omitempty"`
+	Generation    int64  `json:"generation,omitempty"`
 	// Agent is accompanied by its evidence basis; planned never means actual.
 	Agent       string    `json:"agent,omitempty"`
 	AgentBasis  string    `json:"agent_basis,omitempty"`
@@ -65,15 +67,16 @@ type BoardRow struct {
 	Coordinator string    `json:"coordinator,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
 
-	ID     string    `json:"id"`
-	Code   string    `json:"code,omitempty"`
-	Task   string    `json:"task,omitempty"`    // the record's T<n>
-	TaskID string    `json:"task_id,omitempty"` // the record's ID
-	Title  string    `json:"title"`
-	Group  string    `json:"group"`
-	Tag    string    `json:"tag"`
-	Words  [2]string `json:"words"` // the tag in 中文 / English, the same on both sides
-	State  string    `json:"state,omitempty"`
+	ID                string    `json:"id"`
+	Code              string    `json:"code,omitempty"`
+	Task              string    `json:"task,omitempty"`               // the record's T<n>
+	TaskID            string    `json:"task_id,omitempty"`            // the record's ID
+	ExecutionEndpoint string    `json:"execution_endpoint,omitempty"` // existing Task binding; independent of live observations
+	Title             string    `json:"title"`
+	Group             string    `json:"group"`
+	Tag               string    `json:"tag"`
+	Words             [2]string `json:"words"` // the tag in 中文 / English, the same on both sides
+	State             string    `json:"state,omitempty"`
 	// Read-only facts for both lists, not a new task lifecycle. Explicit false
 	// suppresses older clients' guesses from legacy group/tag words.
 	PendingStart bool   `json:"pending_start"`
@@ -336,6 +339,8 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
+			r.ExecutionEndpoint = t.ExecutionEndpoint
+			r.CancelRequest, r.Generation = t.CancelRequest, t.Generation
 			r.Outcome = taskEnd(*t)
 			if r.Agent == "" && t.ActualAgent != "" {
 				r.Agent, r.AgentBasis = t.ActualAgent, "actual"
