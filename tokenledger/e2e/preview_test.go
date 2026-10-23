@@ -3,7 +3,10 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,10 +28,11 @@ import (
 
 // Runs the real node control channel, outbound relay and disposable UID/peer
 // helper. Only the application is a test server. No direct Hub→socket path.
-func TestPreviewHTTPStreamAndWebSocket(t *testing.T)        { previewRelayTest(t, false) }
-func TestPreviewReplicaHTTPStreamAndWebSocket(t *testing.T) { previewRelayTest(t, true) }
-func TestPreviewExpiryClosesWebSocket(t *testing.T)         { previewRelayTest(t, false, true) }
-func previewRelayTest(t *testing.T, replicas bool, expiry ...bool) {
+func TestPreviewHTTPStreamAndWebSocket(t *testing.T)        { previewRelayTest(t, false, "") }
+func TestPreviewReplicaHTTPStreamAndWebSocket(t *testing.T) { previewRelayTest(t, true, "") }
+func TestPreviewExpiryClosesWebSocket(t *testing.T)         { previewRelayTest(t, false, "expiry") }
+func TestPreviewRegistrationEndToEnd(t *testing.T)          { previewRelayTest(t, true, "registration") }
+func previewRelayTest(t *testing.T, replicas bool, mode string) {
 	if os.Geteuid() < 500 {
 		t.Skip("ordinary user required; root runs the separate two-UID test")
 	}
@@ -40,7 +44,7 @@ func previewRelayTest(t *testing.T, replicas bool, expiry ...bool) {
 		if e := h.Srv.StartReplica(); e != nil {
 			t.Fatal(e)
 		}
-		browserHub = &api.Server{Store: h.Srv.Store, Fleet: true, GitHub: h.Srv.GitHub, LiveStore: api.NewLive(), Replica: &api.Replica{Name: "front", Token: replicaTestToken}}
+		browserHub = &api.Server{Store: h.Srv.Store, Fleet: true, GitHub: h.Srv.GitHub, ViewerToken: viewerToken, LiveStore: api.NewLive(), Replica: &api.Replica{Name: "front", Token: replicaTestToken}}
 		peer := httptest.NewServer(browserHub.Handler())
 		t.Cleanup(peer.Close)
 		browserHub.Replica.URL = peer.URL
@@ -126,24 +130,86 @@ func previewRelayTest(t *testing.T, replicas bool, expiry ...bool) {
 	if e = h.Srv.Store.RedeemJoinCode("preview-code", now, "preview-node", "test", api.HashToken(token), host, me.Username); e != nil {
 		t.Fatal(e)
 	}
-	task, e := h.Srv.Store.CreateFleetTask(store.FleetTask{Owner: pAlice, Title: "Local private preview", Machine: host, Login: me.Username, WorkerID: "preview-worker"}, "preview-task", now)
+	input := store.FleetTask{Owner: pAlice, Title: "Local private preview", Machine: host, Login: me.Username, WorkerID: "preview-worker"}
+	if mode == "registration" {
+		// Reproduce the legacy rejoin and real local Task shape, without
+		// manufacturing the old Task location/worker projections.
+		if _, e = h.Srv.Store.DB().Exec(`UPDATE fleet_join_codes SET machine='',role='',label='legacy-rejoin' WHERE endpoint_id='preview-node'`); e != nil {
+			t.Fatal(e)
+		}
+		input = store.FleetTask{Owner: pAlice, Title: "Local private preview", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex"}
+	}
+	task, e := h.Srv.Store.CreateFleetTask(input, "preview-task", now)
 	if e != nil {
 		t.Fatal(e)
 	}
-	authority, e := h.Srv.Store.PreviewAuthority("preview-node")
-	if e != nil {
-		t.Fatal(e)
-	}
-	preview := store.Preview{ID: strings.Repeat("a", 32), Owner: pAlice, Endpoint: "preview-node", Machine: host, Login: me.Username, Generation: authority.Generation, TokenHash: authority.TokenHash, TaskID: task.ID, Worker: task.WorkerID, Socket: name, Expires: now.Add(time.Hour).Unix()}
-	if e = h.Srv.Store.CreatePreview(preview, 3, now); e != nil {
-		t.Fatal(e)
-	}
-	h.Srv.PreviewDomain = "preview.example.net"
-	h.Srv.FleetPublicURL = "https://hub.example.com"
+	h.Srv.PreviewDomain = "preview.test"
+	h.Srv.FleetPublicURL = "https://hub.test"
 	browserHub.PreviewDomain = h.Srv.PreviewDomain
 	browserHub.FleetPublicURL = h.Srv.FleetPublicURL
+	// Existing admin/node HTTP routes: the legacy fixture is denied, then the
+	// operator approves the exact account/endpoint, and the worker registers.
+	request := func(server *api.Server, path, body, bearer, assertion string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", path, strings.NewReader(body))
+		r.Host = "hub.test"
+		r.Header.Set("Authorization", "Bearer "+bearer)
+		r.Header.Set("X-Fleet-Worker", assertion)
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, r)
+		return w
+	}
+	bind := func(action string) string {
+		b, _ := json.Marshal(map[string]string{"action": action, "principal_id": pAlice, "hostname": host, "login": me.Username, "endpoint_id": "preview-node"})
+		return string(b)
+	}
+	var preview store.Preview
+	if mode == "registration" {
+		fleet := "11111111-2222-4333-8444-555555555555"
+		if _, e = h.Srv.Store.RecordFleetSnapshot("preview-node", host, me.Username, "preview-machine", []store.FleetReport{{FleetID: fleet, Name: "preview", State: "up"}}, now); e != nil {
+			t.Fatal(e)
+		}
+		_, e = h.Srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: pAlice, EndpointID: "preview-node", Machine: host, Login: me.Username, ID: task.FID, Events: []map[string]any{{"id": task.FID, "ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "task": task.Ref, "agent": "codex", "key": "scratch-978"}}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		raw, _ := json.Marshal(map[string]any{"v": 1, "worker_id": fleet + "/" + task.FID, "fleet_uuid": fleet, "fid": task.FID, "node": host, "iat": now.Unix(), "exp": now.Add(time.Minute).Unix()})
+		assertion := "fwa1." + base64.RawURLEncoding.EncodeToString(raw)
+		mac := hmac.New(sha256.New, []byte(api.HashToken(token)))
+		mac.Write([]byte(assertion))
+		assertion += "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+		body, _ := json.Marshal(map[string]string{"action": "register", "socket": name})
+		path := "/v1/node/previews?task=" + task.Ref
+		if w := request(h.Srv, path, string(body), token, assertion); w.Code != 403 {
+			t.Fatal("unbound", w.Code, w.Body.String())
+		}
+		if w := request(h.Srv, "/v1/fleet/accounts", bind("preview-bind"), token, ""); w.Code != 401 && w.Code != 403 {
+			t.Fatal("node self-approval", w.Code)
+		}
+		if w := request(h.Srv, "/v1/fleet/accounts", bind("preview-bind"), viewerToken, ""); w.Code != 200 {
+			t.Fatal("operator bind", w.Code, w.Body.String())
+		}
+		w := request(browserHub, path, string(body), token, assertion)
+		if w.Code != 201 {
+			t.Fatal("registration on peer", w.Code, w.Body.String())
+		}
+		if e = json.Unmarshal(w.Body.Bytes(), &preview); e != nil {
+			t.Fatal(e)
+		}
+		if len(strings.Split(strings.TrimPrefix(preview.URL, "https://"), ".")[0]) != 32 {
+			t.Fatal("preview label", preview.URL)
+		}
+	} else {
+		authority, err := h.Srv.Store.PreviewAuthority("preview-node")
+		if err != nil {
+			t.Fatal(err)
+		}
+		preview = store.Preview{ID: strings.Repeat("a", 32), Owner: pAlice, Endpoint: "preview-node", Machine: host, Login: me.Username, Generation: authority.Generation, TokenHash: authority.TokenHash, TaskID: task.ID, Worker: task.WorkerID, Socket: name, Expires: now.Add(time.Hour).Unix()}
+		if e = h.Srv.Store.CreatePreview(preview, 3, now); e != nil {
+			t.Fatal(e)
+		}
+	}
 	nodeHub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Host = "hub.example.com"
+		r.Host = "hub.test"
 		if replicas && r.URL.Path == "/v1/node/preview-data" {
 			// Node data deliberately lands on the replica without the relay.
 			browserHub.Handler().ServeHTTP(w, r)
@@ -280,7 +346,12 @@ func previewRelayTest(t *testing.T, replicas bool, expiry ...bool) {
 		}
 	}
 	// Closing from the store is what a different replica's user action does.
-	if len(expiry) > 0 && expiry[0] {
+	if mode == "registration" {
+		w := request(browserHub, "/v1/fleet/accounts", bind("preview-unbind"), viewerToken, "")
+		if w.Code != 200 {
+			t.Fatal("operator unbind", w.Code, w.Body.String())
+		}
+	} else if mode == "expiry" {
 		_, e = browserHub.Store.DB().Exec(`UPDATE fleet_previews SET expires=? WHERE id=?`, time.Now().Unix()-1, preview.ID)
 	} else {
 		e = browserHub.Store.ClosePreview(preview.ID, pAlice)

@@ -7,7 +7,7 @@ const original = await fs.readFile(source, 'utf8');
 await fs.writeFile(source, "export const message = 'HMR initial';\n");
 const browser = await chromium.launch({
   executablePath: process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true,
-  args: ['--no-proxy-server', `--host-resolver-rules=MAP hub.example.com:443 ${fixture.listen}, MAP *.preview.example.net:443 ${fixture.listen}`],
+  args: ['--no-proxy-server', `--host-resolver-rules=MAP ${new URL(fixture.hub).hostname}:443 ${fixture.listen}, MAP ${new URL(fixture.preview).hostname}:443 ${fixture.listen}`],
 });
 try {
   const context = await browser.newContext({ ignoreHTTPSErrors: true });

@@ -34,6 +34,26 @@ worker credential、node enrollment 和 Task，不能指定 owner、UID、login 
 真实 Task。仅有短聊天试用、没有这条 Task 身份路径的账号不能注册；未扩大一般 trial
 页面权限。到期或重新分配会撤销预览。
 
+历史节点若报 `managed login enrollment required`，不代表 OS 账号不存在：普通
+rejoin 登记可能没有托管账号绑定。节点后来标为 managed 也不会自动取得预览权限。
+管理员核验真实 endpoint、机器、OS login 和 active 账号归属后，可通过既有管理员
+`POST /v1/fleet/accounts` 做一次显式绑定（使用正常管理员认证及同源 CSRF 规则）：
+
+```json
+{"action":"preview-bind","principal_id":"gh:123","hostname":"mini","login":"alice","endpoint_id":"ep_example"}
+```
+
+`preview-unbind` 使用相同四个身份字段撤销历史登记绑定。绑定仅适用于当时的账号代际
+和 endpoint token；账号重新分配、删除、节点重登记后必须重新审核。两个动作都会关闭
+该账号在此 endpoint 的旧预览，重新绑定不会复活旧 URL。它们不修改 OS 权限、节点角色、
+原始 join-code 记录，不重启服务；普通用户和节点不能自行批准。由 Hub 账号操作生成的
+完整 managed enrollment 继续走原路径，`preview-unbind` 不撤销该原生登记权限。
+
+Task 注册读取已有的 execution binding（已认领的 session、endpoint、generation），
+或本机 Task 的稳定会话 ID 登记；不要求旧 `machine/login/worker_id` 投影非空。
+会话 ID 必须属于同一 owner、endpoint、login 和 fleet，尚未关闭；只预留了 Task 编号
+而没有实际会话登记不能注册。Task 执行代际变化或显式 stop 会撤销旧预览。
+
 ## 最小应用
 
 仓库的 `examples/private-preview/` 包含实际 listener 和浏览器热更新夹具。
@@ -135,7 +155,7 @@ macOS 使用 `/Users` 下临时目录，Linux 使用 `/` 下临时目录（都�
 
 ```sh
 cd examples/private-preview
-PREVIEW_SOCKET=fixture.sock PREVIEW_HOST=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.preview.example.net node server.mjs --vite
+PREVIEW_SOCKET=fixture.sock PREVIEW_HOST=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.preview.test node server.mjs --vite
 ```
 
 另一个终端从 `tokenledger/e2e`：
