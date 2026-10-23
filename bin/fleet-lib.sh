@@ -1037,12 +1037,13 @@ fleet_task_take() {
 # fleet_task_closed <T<n>> — is the record closed (收口)? rc 0 closed (its verdict
 # — SUCCEEDED / FAILED / CANCELLED / REFUSED — on stdout), 1 still open, 3 unknown
 # (no hub, no answer). Unknown never reads as closed: a reaper keeps on 3.
+# --worktree keeps controlled Task environments independently of old results.
 # FLEET_TASK_CLOSED_CMD is the seam (a selftest's answer, same contract).
 fleet_task_closed() {
   local out rc
   case "${1:-}" in T[1-9]*) case "${1#T}" in *[!0-9]*) return 3 ;; esac ;; *) return 3 ;; esac
-  if [ -n "${FLEET_TASK_CLOSED_CMD:-}" ]; then out=$("$FLEET_TASK_CLOSED_CMD" "$1" 2>/dev/null); rc=$?
-  else out=$(python3 "$_FLEET_LIB_DIR/fleet_task_control.py" closed --task "$1" 2>/dev/null); rc=$?; fi
+  if [ -n "${FLEET_TASK_CLOSED_CMD:-}" ]; then out=$("$FLEET_TASK_CLOSED_CMD" "$@" 2>/dev/null); rc=$?
+  else out=$(python3 "$_FLEET_LIB_DIR/fleet_task_control.py" closed --task "$1" "${@:2}" 2>/dev/null); rc=$?; fi
   case "$rc" in 0|1) ;; *) return 3 ;; esac
   printf '%s\n' "$out" | head -n 1
   return "$rc"
