@@ -15,6 +15,7 @@
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
+| 批量 tmux 快照有空首尾字段，strip 删除分隔符或旧 tmux 转义 C0 | 一次快照回退成几十次 tmux 子进程，close 多次复核在负载下超时 | 只移除 tmux 输出的末尾换行，使用跨版本保留的 TAB 分隔空字段；值含 TAB 时仍逐字段读取，不反转义值 | `tmux-snapshot-fields` |
 | Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
 | 发布签名前 Actions OIDC 端点短暂失败或返回合法换行 JSON | 单次 curl/sed 丢失 HTTP 原因并误报权限缺失，Hub 已部署但签名 stable 未推进 | 保留原权限和签名门；仅暂错有界重试，401/403 与无效身份立即拒绝；日志仅显示状态，不显示响应或凭据 | `release-oidc-runtime` |
 | 旧 Task Outcome 已结束，新代次待启动尚无 tmux 窗口 | autoclean 把工作树当完成垃圾删除，接续丢失环境 | 工作树专用只读判断保留 controlled Task（含空执行绑定）；读取未知 KEEP，legacy 保留原清理契约 | `task-worktree-current-generation` |
