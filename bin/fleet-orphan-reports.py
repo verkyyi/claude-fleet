@@ -234,55 +234,23 @@ def main(argv):
         return 0
     if cmd == "once":
         return 0 if args and once(args[0]) else 1
-    if cmd in ("redeliver", "clear"):
+    if cmd == "redeliver":
+        print("RETIRED: Parent report forwarding is disabled; history remains readable.")
+        return 2
+    if cmd == "clear":
         apply = "--apply" in args
-        if cmd == "redeliver":
-            to = opt(args, "--to")
-            if not (len(to) == 36 and to.count("-") == 4):
-                sys.stderr.write("fleet-orphan-reports.py redeliver --to <ID> [--since <epoch>] [--apply]\n")
-                return 2
-            since = opt(args, "--since")
-            since = int(since) if since.isdigit() else midnight()
-            done = redelivered_ids()
-            pick = [r for r in unread(10 ** 6) if r["ts"] >= since and r["id"] not in done]
-            only = opt(args, "--id")
-            if only:
-                pick = [r for r in pick if r["id"] == only]
-        else:
-            before = opt(args, "--before")
-            if not before.isdigit():
-                sys.stderr.write("fleet-orphan-reports.py clear --before <epoch> [--apply]\n")
-                return 2
-            pick = [r for r in unread(10 ** 6) if r["ts"] < int(before)]
-        rc = 0
-        for r in sorted(pick, key=lambda r: r["ts"]):
+        before = opt(args, "--before")
+        if not before.isdigit():
+            sys.stderr.write("fleet-orphan-reports.py clear --before <epoch> [--apply]\n")
+            return 2
+        for r in sorted((r for r in unread(10 ** 6) if r["ts"] < int(before)), key=lambda r: r["ts"]):
             tag = "%s\t%s\t%s\t%s\tparent=%s" % (r["id"], time.strftime("%m-%d %H:%M", time.localtime(r["ts"])),
                                                  clean(r.get("child_key", ""), 80), clean(r.get("state", ""), 16),
                                                  clean(r.get("parent", ""), 80))
-            if not apply:
-                print("would %s\t%s" % (cmd, tag))
-                continue
-            if cmd == "clear":
+            if apply:
                 mark_read([r["id"]])
-                print("cleared\t" + tag)
-                continue
-            send = os.environ.get("FLEET_ORPHAN_SEND") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                                       "fleet-peer-send.sh")
-            try:
-                ok = subprocess.run(["bash", send, "wid:" + to, envelope(r)], stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=60).returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                ok = False
-            if not ok:
-                print("FAILED\t" + tag)
-                rc = 1
-                continue
-            os.makedirs(os.path.dirname(redelivered_path()), exist_ok=True)
-            with open(redelivered_path(), "a", encoding="utf-8") as fh:
-                fh.write("%s\t%s\t%d\n" % (r["id"], to, int(time.time())))
-            mark_read([r["id"]])
-            print("redelivered\t" + tag)
-        return rc
+            print(("cleared" if apply else "would clear") + "\t" + tag)
+        return 0
     if cmd == "show":
         want = args[0] if args else ""
         for r in rows():

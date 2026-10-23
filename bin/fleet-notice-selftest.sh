@@ -40,7 +40,8 @@ SD=$(mktemp -d /tmp/nst.XXXXXX) || exit 2
 RT=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux || :)
 cleanup() { [ -n "$RT" ] && "$RT" -S "$SD/s" kill-server 2>/dev/null; rm -rf "$WORK" "$SD"; }
 trap cleanup EXIT
-export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh NO_COLOR=1
+export FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh NO_COLOR=1 FLEET_STATUS_G="$WORK/g"
+mkdir -p "$FLEET_STATUS_G"  # no real remote notice cache in the first fixture
 unset TMUX TMUX_PANE FLEET_NOTICE_TAG
 
 # --- A. the record -------------------------------------------------------------------

@@ -26,7 +26,7 @@ import { isWhereRun } from '../hooks/where'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: false } as const
 
-/** What `fleet-mcp.py --spec status spawn await` prints (the service's own specs). */
+/** What `fleet-mcp.py --spec status spawn` prints (the service's own specs). */
 const SPECS = JSON.stringify([
   { name: 'status', description: 'Read-only. This fleet window…', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   {
@@ -39,16 +39,7 @@ const SPECS = JSON.stringify([
       additionalProperties: false,
     },
   },
-  {
-    name: 'await',
-    description: 'Hand an issue to a worker…',
-    inputSchema: {
-      type: 'object',
-      properties: { issue: { type: 'integer', minimum: 1 }, repo: { type: 'string' }, timeout: { type: 'integer' } },
-      required: ['issue'],
-      additionalProperties: false,
-    },
-  },
+
 ])
 
 function ran(exitCode: number, stdout = '', stderr = ''): ProcessRunResult {
@@ -90,7 +81,7 @@ function textOf(r: { deny?: string; result?: unknown }): string {
 test('pure: bin/ beside mod/, the --spec and --call argv, the timeouts, the specs, the retreat', () => {
   expect(binDir('/i/mod/fleet')).toBe('/i/mod/fleet/../../bin')
   expect(binDir('/i/mod/fleet/.claude-plugin')).toBe('/i/mod/fleet/../../bin')
-  expect(specArgv('/b')).toEqual(['python3', '/b/fleet-mcp.py', '--spec', 'status', 'spawn', 'await'])
+  expect(specArgv('/b')).toEqual(['python3', '/b/fleet-mcp.py', '--spec', 'status', 'spawn'])
   expect(callArgv('/b', 'spawn', { issue: 42, repo: 'acme/lib' })).toEqual([
     'python3', '/b/fleet-mcp.py', '--call', 'spawn', '{"issue":42,"repo":"acme/lib"}',
   ])
@@ -106,7 +97,7 @@ test('pure: bin/ beside mod/, the --spec and --call argv, the timeouts, the spec
   expect(timeoutFor('await', { timeout: 570 })).toBe(RUN_MAX_MS)
   // The service's specs become fleet_<name>, schema untouched, a fallback note first.
   const specs = fallbackSpecs(SPECS)
-  expect(specs.map(s => s.name)).toEqual(['fleet_status', 'fleet_spawn', 'fleet_await'])
+  expect(specs.map(s => s.name)).toEqual(['fleet_status', 'fleet_spawn'])
   expect(specs.map(s => s.name)).toEqual(FALLBACK.map(n => `fleet_${n}`))
   expect((specs[1]?.inputSchema as { required: string[] }).required).toEqual(['issue'])
   expect((specs[1]?.inputSchema as { properties: Record<string, unknown> }).properties).toHaveProperty('reap')
@@ -121,18 +112,18 @@ test('pure: bin/ beside mod/, the --spec and --call argv, the timeouts, the spec
   expect(msg).toContain('/fleet-handoff')
   expect(msg).toContain('claude --resume')
   expect(msg).toContain('~/.claude/fleet/bin/dash-issue-session.sh <N> --repo <owner/name>')
-  expect(unreachable('mcp__fleet__fleet_await', 'await', 'x')).toContain('fleet-await.sh <N>')
-  expect(unreachable('mcp__fleet__fleet_status', 'status', 'x')).toContain('fleet-children.sh')
+  expect(unreachable('mcp__fleet__fleet_await', 'await', 'x')).toContain('RETIRED')
+  expect(unreachable('mcp__fleet__fleet_status', 'status', 'x')).toContain('fleet-mcp.py --call status')
 })
 
-test('no tool service (FLEET_MCP_SERVER unset): the three are registered at session.start, from the service\'s specs', async ($, on) => {
+test('no tool service (FLEET_MCP_SERVER unset): only status and spawn are registered at session.start, from the service\'s specs', async ($, on) => {
   const { registered, service, runs } = engine(on)
   await $.session.start(START)
   expect(service().length).toBe(1)
   expect(service()[0]?.[0]).toBe('python3')
   expect(service()[0]?.[1]?.endsWith('/bin/fleet-mcp.py')).toBe(true)
-  expect(service()[0]?.slice(2)).toEqual(['--spec', 'status', 'spawn', 'await'])
-  expect(registered.map(r => r.name)).toEqual(['fleet_status', 'fleet_spawn', 'fleet_await'])
+  expect(service()[0]?.slice(2)).toEqual(['--spec', 'status', 'spawn'])
+  expect(registered.map(r => r.name)).toEqual(['fleet_status', 'fleet_spawn'])
   expect((registered[1]?.inputSchema as { additionalProperties: boolean }).additionalProperties).toBe(false)
   // Everything else still starts: the heartbeat is written.
   expect(runs.some(a => a.includes('@mod_alive'))).toBe(true)
@@ -178,7 +169,7 @@ test('fleet_spawn forwards to fleet-mcp.py --call spawn <json>, once; the servic
   expect(textOf(r)).toBe('exit 2 · dash-issue-session.sh\nspawned issue-42\n[stderr]\nat capacity (8/8)')
 })
 
-test('fleet_await and fleet_status forward with their own arguments; the reserved call fields never travel', async ($, on) => {
+test('cached fleet_await and fleet_status forward with their own arguments; the reserved call fields never travel', async ($, on) => {
   const { service } = engine(on)
   await $.session.start(START)
   await $.tool.call({ tool: 'mcp__fleet__fleet_await', issue: 9, timeout: 60 })
@@ -188,6 +179,16 @@ test('fleet_await and fleet_status forward with their own arguments; the reserve
     ['await', '{"issue":9,"timeout":60}'],
     ['status', '{}'],
   ])
+})
+
+test('cached await receives the retirement refusal and is never newly registered', async ($, on) => {
+  const { registered } = engine(on, {}, argv =>
+    argv[2] === '--call' && argv[3] === 'await' ? ran(1, 'RETIRED: Parent await is disabled. View each Task directly.\n') : undefined,
+  )
+  await $.session.start(START)
+  expect(registered.map(r => r.name)).toEqual(['fleet_status', 'fleet_spawn'])
+  const r = await $.tool.call({ tool: 'mcp__fleet__fleet_await', issue: 9 })
+  expect(r.deny).toBe('RETIRED: Parent await is disabled. View each Task directly.')
 })
 
 test('the service refuses (exit 1): its reason is the deny, nothing of ours is added', async ($, on) => {
@@ -213,13 +214,13 @@ test('the forward itself fails (B): a usage exit, no python3, a silent exit 1 �
   stubs.await = ran(127, '', 'python3: command not found')
   r = await $.tool.call({ tool: 'mcp__fleet__fleet_await', issue: 5 })
   expect(textOf(r)).toContain('exited 127 (python3: command not found)')
-  expect(textOf(r)).toContain('fleet-await.sh <N>')
+  expect(textOf(r)).toContain('RETIRED')
   // exit 1 with nothing printed is not a refusal with a reason: the retreat too.
   stubs.status = ran(1, '', '')
   r = await $.tool.call({ tool: 'mcp__fleet__fleet_status' })
   expect(r.deny).toBe(undefined)
   expect(textOf(r)).toContain('exited 1')
-  expect(textOf(r)).toContain('fleet-children.sh')
+  expect(textOf(r)).toContain('fleet-mcp.py --call status')
 })
 
 test('the forward throws (the run never started): the retreat, never a hang', async ($, on) => {

@@ -8,7 +8,7 @@
 # to land). A long worker gets auto-compacted, and the summary that replaces its
 # history is free to drop that opening brief — after which the session drifts
 # out of scope, or forgets to ship the fleet's way (PR → verdict → merge →
-# report-parent). SessionStart(source=compact) fires on the SAME pane right after
+# final response). SessionStart(source=compact) fires on the SAME pane right after
 # the summary lands, so this hook hands the charter back as
 # `hookSpecificOutput.additionalContext`, which Claude Code adds to the very next
 # turn's context.
@@ -182,12 +182,7 @@ title=''
 issues="$FLEET_C/fleets/$slug/issues"
 [ -f "$issues" ] && title=$(LC_ALL=C awk -F'\t' -v n="#$issue" '$2 == n { print $4; exit }' "$issues" 2>/dev/null)
 
-origin=$(tmux display-message -p -t "$TMUX_PANE" '#{@origin}' 2>/dev/null)
-origin=$(printf '%s' "$origin" | tr -cd 'A-Za-z0-9._:-')
-case "$origin" in
-  *issue-*|*scratch-*) origin_line="spawned by $origin — when you finish, report the outcome: fleet-report-parent.sh --state merged|blocked --pr <PR> --summary '…'" ;;
-  *)                   origin_line="no live parent (fleet-report-parent.sh still runs on ship; it exits 0 silently)" ;;
-esac
+origin_line="This Task owns its work; use native subagents for internal orchestration."
 
 map=''
 if [ -n "$compact_check$native" ]; then
@@ -224,11 +219,11 @@ lines += [
         % (e("REFOCUS_CWD"), e("REFOCUS_BRANCH"), e("REFOCUS_BASE"), e("REFOCUS_PR")),
     "- One task, one worktree, one PR: work ONLY on #%s here. Adjacent work → "
     "the fleet tool `task` (a new record; add spawn to start it now), never in this worktree." % n,
-    "- Base checkout %s is read-only; nothing is written to the issue — ask / report / send." % e("REFOCUS_MAIN"),
+    "- Base checkout %s is read-only; nothing is written to the issue — ask / send." % e("REFOCUS_MAIN"),
     "- Done = verify → push → PR with `Closes #%s` → fleet-pr-verdict.sh <PR> "
     "(--wait in background) → on READY `gh pr merge --%s --delete-branch` → "  # no-gh-ok: a message
-    "confirm MERGED → report → stop. Never /fleet-sync-install." % (n, e("REFOCUS_MERGE")),
-    "- Blocked → the fleet tool `ask`, then report (state: blocked), stop.",
+    "confirm MERGED → final response with PR and validation → stop. Never /fleet-sync-install." % (n, e("REFOCUS_MERGE")),
+    "- Blocked → the fleet tool `ask` for the missing decision.",
     "- %s" % e("REFOCUS_ORIGIN"),
     "- Full brief: the fleet tool `brief`.",
 ]

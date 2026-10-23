@@ -97,15 +97,18 @@ tf set-window-option -t "$wc" -u @origin_fid
 r=$(lib '' '' fleet_origin_win "$L" "$wc" "$L");           st_count; [ "$r" = "$wo" ] || st_miss "C: …and by @origin alone (an identity is an address)" "$r"
 tf set-window-option -t "$wc" @origin_fid "$F"
 
-# --- D: the report reaches a parent with no role mark (condition 2) ---------------
-r=$(bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state merged --pr 501 --summary landed --dry-run 2>&1)
-st_count; case "$r" in *"($wo"*) ;; *) st_miss "D: the dry run names the parent's window" "$r" ;; esac
-bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state merged --pr 501 --summary landed >/dev/null 2>&1
+# --- D: historical identity never enables a retired report ---------------------
 LEDGER="$FLEET_CONF_DIR/fleets/$L/children/$F.ndjson"
-st_count; grep -q '"acme-app:issue-101"' "$LEDGER" 2>/dev/null || st_miss "D: the report is booked under the parent's identity" "$(find "$FLEET_CONF_DIR" -name '*.ndjson' 2>/dev/null)"
+mkdir -p "${LEDGER%/*}"
+printf '%s\n' '{"child":"acme-app:issue-101","state":"MERGED","summary":"historical result"}' > "$LEDGER"
+cp "$LEDGER" "$WORK/history"
+r=$(bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state merged --pr 501 --summary landed --dry-run 2>&1)
+st_count; case "$r" in RETIRED:*) ;; *) st_miss "D: keyless parent report is retired" "$r" ;; esac
+bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state merged --pr 501 --summary landed >/dev/null 2>&1
+st_count; cmp -s "$LEDGER" "$WORK/history" || st_miss "D: report does not mutate historical identity ledger"
 r=$(TMUX="$INTMUX" TMUX_PANE="$po" bash "$BIN/fleet-children.sh" -L "$L" 2>&1); rc=$?
-st_count; [ "$rc" = 0 ] || st_miss "D: fleet-children.sh in the parent's pane needs no key" "$rc:$r"
-st_count; case "$r" in *acme-app:issue-101*MERGED*|*MERGED*acme-app:issue-101*) ;; *) st_miss "D: …and lists the child, merged" "$r" ;; esac
+st_count; [ "$rc" = 2 ] || st_miss "D: old children entry returns retirement" "$rc:$r"
+st_count; case "$r" in RETIRED:*) cmp -s "$LEDGER" "$WORK/history" || st_miss "D: children changed history" ;; *) st_miss "D: children explains retirement" "$r" ;; esac
 
 # --- E: the agent address (condition 1) ------------------------------------------
 send() { printf '%s\n' "$2" | TMUX="${3:-}" TMUX_PANE="${4:-}" bash "$BIN/fleet-peer-send.sh" -L "$L" "$1" - 2>"$WORK/send.err"; }

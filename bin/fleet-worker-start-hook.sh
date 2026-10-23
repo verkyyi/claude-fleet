@@ -11,7 +11,7 @@
 #   systemMessage      one grey line for the person —
 #                      「fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合」
 #   additionalContext  the agent's instruction: read the `brief`, then the flow —
-#                      implement, PR, pr_verdict / pr_merge, report (issue #4898:
+#                      implement, PR, pr_verdict / pr_merge, final response (issue #4898:
 #                      no claim skill, nothing written to the issue).
 #
 # fleet-worker's body is empty on purpose (a body replaces Claude Code's own
@@ -21,7 +21,7 @@
 #
 # A development task with no issue (issue #4897) is stamped `@task T<n>` +
 # `@task_flow 1` instead: its context is the task flow — read the record with the
-# `brief` tool, implement, PR, merge on green, `report merged` (closes the record)
+# `brief` tool, implement, PR, merge on green, a final response with the PR and validation
 # — and it never names a GitHub issue.
 #
 # Only on `startup`: a resume / compact already has the conversation. A window
@@ -84,7 +84,6 @@ if os.environ["SW_MODE"] == "task":
             "It is bound to the hub task record %s (repo %s) — NOT to a GitHub issue. The first user "
             "message is the person\x27s own words: the request that record holds.\n") % (task, repo)
     names = "its body names %s and carries no `Closes #N`" % task
-    closes = "that closes %s and tells whoever dispatched it" % task
 else:
     line = ("%s · %s · #%s · opens a PR when done, merges itself once the gate is green" if en
             else "%s · %s · 单 #%s · 做完开 PR，门绿了自己合") % (agent, name, num)
@@ -92,7 +91,6 @@ else:
             "It was opened on issue #%s of %s. The first user message is the person\x27s own words "
             "(or the issue\x27s title) — the request that issue records.\n") % (num, repo or "this repo")
     names = "its body carries `Closes #%s`" % num
-    closes = "that tells whoever spawned you"
 ctx = head + (
     "Before anything else, call the fleet tool `brief` with no arguments (it prints the fleet, repo, "
     "base, merge method, origin and the request). Then:\n"
@@ -100,18 +98,16 @@ ctx = head + (
     "2. Commit, push this branch, open the PR (`gh pr create --fill`); %s.\n"  # no-gh-ok: a message
     "3. Land it: the fleet tool `pr_verdict` (`wait: true` while PENDING), then `pr_merge` on "
     "READY; never merge red.\n"
-    "4. Report: the fleet tool `report` (`state: merged`, `pr`, `summary`) right after the merge — "
-    "%s. Blocked: `ask`, then `report` (`state: blocked`). Then stop.\n"
-    "The summary\x27s FIRST line, ≤120 characters, carries the result · the PR · what the person must do "
-    "(or 无需操作) · where the screenshots / evidence are; detail goes on the lines after it — the "
-    "parent\x27s envelope keeps ≤200 characters a line and points at the full text.\n"
+    "4. Give the person a final response with the result, PR, validation and any action needed. "
+    "If blocked, use `ask` for the missing decision. Parent reports and Fleet await are retired; "
+    "use native subagents for internal orchestration.\n"
     "If the task has a design page whose 上线后怎么验收 card you fill: after the switch shoot each "
     "item you mark done / passed on PRODUCTION (Playwright on the live URL, phone 390 + desktop "
     "1440, its `screenshots`), publish them with the page to the same 活页, and run "
-    "`epic-page-surface.sh --lint` on it — a `task-evidence-shot` WARN must be fixed before you report.\n"
+    "`epic-page-surface.sh --lint` on it — a `task-evidence-shot` WARN must be fixed before the final response.\n"
     "Never claim, comment on or close a GitHub issue yourself, and never file one: the fleet keeps "
     "no issue state (issue #4898). Do it yourself; never ask the person to run anything."
-) % (names, closes)
+) % names
 print(json.dumps({"systemMessage": line,
                   "hookSpecificOutput": {"hookEventName": "SessionStart",
                                          "additionalContext": ctx}}, ensure_ascii=False))

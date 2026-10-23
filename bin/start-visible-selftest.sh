@@ -8,10 +8,9 @@
 #      A1 the first launch dies in its first seconds ("task authority unavailable",
 #         C1 / R8's road) → the caller's bare shell as before, AND the ID's progress
 #         word reads 「未起来：启动 N 秒就退出（rc 3）：…」 (state not_started), one
-#         line in logs/start-fail.log, the parent told once (fleet-report-parent.sh
-#         --state failed --win …)
+#         line in logs/start-fail.log, no Parent delivery
 #      A2 the same cause again (another seconds count) → SAME: no second word, no
-#         second report
+#         Parent report
 #      A3 the agent's first SessionStart (fleet_id.py hook) answers 「起来了」
 #      A4 a record's agent that ran and went down → 「已掉」 on its ID, no report
 #      A5 a window with no record and no issue → the log line only
@@ -24,7 +23,7 @@
 #      B2 no window here, no native segment past FLEET_START_GRACE → stalled
 #      B3 the hub's read says it started → running
 #      B4 the wrapper's word on the ID → stalled, with its words
-#      B5 `await --task` answers NOT-STARTED at once (exit 1), with the hint
+#      B5 `await --task` answers RETIRED at once (exit 2), without delivery
 #      B6 `fleet-task-record.sh respawn` reopens it on the same record: --task T2,
 #         --repo, --prev <ID>, the record's words as the prompt (FLEET_TASK_RESPAWN)
 #
@@ -56,6 +55,7 @@ waitfor() {  # <what> <command…> — up to 15 s
 mkdir -p "$WORK/conf/logs" "$WORK/wbin"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 FLEET_MCP=0 FLEET_CRED_PROXY=0
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_ID_LIVE FLEET_ID_LIVE_CMD FLEET_ID_NOAGENT FLEET_ID_NOAGENT_CMD
+unset FLEET_CODEX_LAUNCHER_PID CLAUDE_CODE_ENTRYPOINT FLEET_ID_HOOK
 for f in "$BIN"/*; do ln -s "$f" "$WORK/wbin/${f##*/}"; done
 rm -f "$WORK/wbin/fleet-report-parent.sh"
 cat > "$WORK/wbin/fleet-report-parent.sh" <<EOF
@@ -98,7 +98,7 @@ win() {  # <name> <mode> [env…] — a window running the wrapper as the spawne
 state_is() { [ "$(tf display-message -p -t "sv:$1" '#{@claude_state}' 2>/dev/null)" = "$2" ]; }
 screen_has() { tf capture-pane -p -t "sv:$1" | grep -qF -- "$2"; }
 word_is() { [ "$(prog "$1" state)" = "$2" ]; }
-reports() { grep -c -- '--state failed' "$WORK/reported" 2>/dev/null || true; }
+reports() { if [ -f "$WORK/reported" ]; then grep -c -- '--state failed' "$WORK/reported" || true; else printf '0\n'; fi; }
 
 # A1 — the first launch dies at once: the caller's shell, and the miss is SAID.
 win a1 fast "BIND_TASK=T7 BIND_FID=$FID FLEET_CONF_DIR='$WORK/conf'"
@@ -106,9 +106,7 @@ waitfor "A1: the wrapper returned the launch's status" screen_has a1 'WRAP_RC=3'
 waitfor "A1: the ID says 未起来" word_is "$FID" not_started
 has "A1: the word names the cause" "$(prog "$FID" summary)" '未起来：启动'
 has "A1: … and what the launcher said" "$(prog "$FID" summary)" 'task authority unavailable'
-waitfor "A1: the parent was told" grep -sq -- '--state failed' "$WORK/reported"
-N=$((N + 1)); grep -q -- "--state failed --win %[0-9]* --summary the session did not start: the agent exited" "$WORK/reported" \
-  || fail "A1: the report" "$(cat "$WORK/reported")"
+eq "A1: no Parent report" 0 "$(reports)"
 has "A1: the local log" "$(cat "$WORK/conf/logs/start-fail.log")" 'task=T7'
 
 # A2 — the same cause again is not said twice.
@@ -116,7 +114,7 @@ win a2 fast "BIND_TASK=T7 BIND_FID=$FID FLEET_CONF_DIR='$WORK/conf'"
 waitfor "A2: the wrapper returned" screen_has a2 'WRAP_RC=3'
 sleep 1.5
 eq "A2: one word for one cause" 1 "$(nwords "$FID")"
-eq "A2: one report for one cause" 1 "$(reports)"
+eq "A2: no report for repeated cause" 0 "$(reports)"
 eq "A2: … but each miss is in the local log" 2 "$(grep -c 'task=T7' "$WORK/conf/logs/start-fail.log")"
 
 # A3 — the agent comes up: its first SessionStart answers 「起来了」.
@@ -133,7 +131,7 @@ waitfor "A4: on the page" state_is a4 exited
 waitfor "A4: the ID says 已掉" word_is "$FID" dropped
 has "A4: the word" "$(prog "$FID" summary)" '已掉：agent 退出（rc 1'
 sleep 1
-eq "A4: a drop tells no parent" 1 "$(reports)"
+eq "A4: a drop tells no parent" 0 "$(reports)"
 
 # A5 — no record, no issue: the log only.
 FID5=$(uid)
@@ -143,7 +141,7 @@ waitfor "A5: the wrapper returned" screen_has a5 'WRAP_RC=3'
 waitfor "A5: the local log" grep -sq "id=$FID5 task=- issue=-" "$WORK/conf/logs/start-fail.log"
 sleep 1
 eq "A5: no word on an ID with no record" "" "$(prog "$FID5" state)"
-eq "A5: nobody told" 1 "$(reports)"
+eq "A5: nobody told" 0 "$(reports)"
 tf kill-server 2>/dev/null
 
 # ------------------------------------------------------------ B: the readers ----
@@ -245,9 +243,9 @@ has "B4: with its words" "$(c1 "['stall']['why']")" 'task authority unavailable'
 # B5 — await answers at once.
 t0=$SECONDS
 out=$(LIVE="echo $BFID" benv python3 "$BIN/fleet_task_control.py" await --task T2 --timeout 60 --interval 5); rc=$?
-eq "B5: await's exit" 1 "$rc"
-has "B5: the verdict" "$out" 'NOT-STARTED'
-has "B5: the hint" "$out" 'respawn T2'
+eq "B5: await retired" 2 "$rc"
+has "B5: the verdict" "$out" 'RETIRED'
+has "B5: independent Task hint" "$out" 'view each Task directly'
 N=$((N + 1)); [ $((SECONDS - t0)) -lt 30 ] || fail "B5: await waited $((SECONDS - t0)) s on a session that never came up"
 
 # B6 — respawn: the same record, its words, the next baton.

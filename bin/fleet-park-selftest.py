@@ -260,23 +260,63 @@ class client:
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
         self.assertEqual(rows[-1]['why'], '消息')
 
-    def test_parked_report_queue_drain(self):
-        # Drive fleet-peer-queue.sh drain -> children_send -> the same gate.
+    def test_retired_report_queue_never_wakes(self):
+        # Both a newly attempted report and an old on-disk report are retired
+        # before the parked recipient's gate, with their payloads preserved.
         self.parked()
+        args = (self.root / 'launch-args').read_bytes()
+        log = self.root / 'conf/logs/park.ndjson'
+        before = log.read_bytes()
         queue = ['bash', str(BIN / 'fleet-peer-queue.sh')]
         p = subprocess.run(queue + ['put', '-L', self.label, '--kind', 'report',
                             '--rid', 'fixture:report', '--to-fid', self.fid],
-                           input='child result: complete', env=self.env, capture_output=True, text=True)
+                           input='child result: complete', env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn('RETIRED', p.stdout)
+        directory = self.root / 'conf/fleets' / self.label / 'peer-queue'
+        backlog = {'rid': 'fixture:old-report', 'kind': 'report',
+                   'to_fid': self.fid, 'to_key': '', 'to': self.fid,
+                   'created': int(time.time()), 'text': 'old result: preserved'}
+        (directory / 'old.json').write_text(json.dumps(backlog))
+        p = subprocess.run(queue + ['drain', '-L', self.label], env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('delivered 0', p.stdout)
+        self.assertFalse(list(directory.glob('*.json')))
+        preserved = [json.loads(f.read_text()) for f in directory.glob('*.retired')]
+        self.assertEqual({r['text'] for r in preserved},
+                         {'child result: complete', 'old result: preserved'})
+        book = self.root / 'conf/fleets' / self.label / 'delivery.ndjson'
+        rows = [json.loads(line) for line in book.read_text().splitlines()]
+        self.assertEqual({r['rid'] for r in rows}, {'fixture:report', 'fixture:old-report'})
+        self.assertTrue(all(r['state'] == 'FAILED' and 'RETIRED' in r['detail'] for r in rows))
+        self.assertEqual((self.root / 'launch-args').read_bytes(), args)
+        self.assertEqual(log.read_bytes(), before)
+        self.assertTrue(self.opt('@parked'))
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
+
+    def test_parked_message_queue_drain(self):
+        # Ordinary queued messages still wake the same native conversation.
+        self.parked()
+        queue = ['bash', str(BIN / 'fleet-peer-queue.sh')]
+        p = subprocess.run(queue + ['put', '-L', self.label, '--kind', 'message',
+                            '--rid', 'fixture:message', '--to-fid', self.fid],
+                           input='ordinary message: continue', env=self.env,
+                           capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr)
         p = subprocess.run(queue + ['drain', '-L', self.label], env=self.env,
                            capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('delivered 1', p.stdout)
-        self.assertIn('child result: complete', (self.root / 'launch-args').read_text())
+        self.assertIn('ordinary message: continue', (self.root / 'launch-args').read_text())
         book = self.root / 'conf/fleets' / self.label / 'delivery.ndjson'
         self.assertEqual(json.loads(book.read_text().splitlines()[-1])['state'], 'DELIVERED')
         rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
-        self.assertEqual(rows[-1]['why'], '回报')
+        self.assertEqual(rows[-1]['why'], '消息')
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
 
     def test_question_is_never_parked(self):
         self.fake()
@@ -393,10 +433,12 @@ class client:
         self.assertFalse(self.opt('@parked'))
         self.assertTrue(self.opt('@park_relay'))
 
-    def test_local_child_report_wakes_parent(self):
-        # fleet-report-parent.sh must reach the gate before its missing-PID
-        # fallback. This drives the report producer, not only queue replay.
+    def test_local_child_report_never_wakes_parent(self):
+        # Old --win hook calls are inert, even with a live historical parent.
         self.parked()
+        args = (self.root / 'launch-args').read_bytes()
+        log = self.root / 'conf/logs/park.ndjson'
+        before = log.read_bytes()
         self.tm('rename-session', '-t', 'test', self.label)
         self.set('@issue', '42')
         child = self.tm('new-window', '-d', '-P', '-F', '#{window_id}', 'sleep 60')
@@ -406,26 +448,28 @@ class client:
                             '--win', child, '--state', 'blocked', '--summary', 'fixture child result'],
                            env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn('reported →', p.stdout)
-        self.assertIn('fixture child result', (self.root / 'launch-args').read_text())
-        rows = [json.loads(l) for l in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
-        self.assertEqual(rows[-1]['why'], '回报')
+        self.assertIn('RETIRED', p.stdout)
+        self.assertEqual((self.root / 'launch-args').read_bytes(), args)
+        self.assertEqual(log.read_bytes(), before)
+        self.assertTrue(self.opt('@parked'))
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertEqual(self.opt('@fleet_id'), self.fid)
 
     def test_late_wake_receipt_is_not_a_second_turn(self):
         # A wrapper has taken the seed, but its native ready report arrives
         # after the sender's wait. The queue retries the SAME delivery id.
         self.fake()
-        delivery = 'fixture:late-report'
+        delivery = 'fixture:late-message'
         with patch.dict(os.environ, self.env):
             seed = gate.wake_path(self.fid, 'peer-' + hashlib.sha256(delivery.encode()).hexdigest())
-            Path(str(seed) + '.taken').write_text('late report')
+            Path(str(seed) + '.taken').write_text('late message')
             with patch.object(gate.time, 'sleep', side_effect=lambda _: Path(str(seed) + '.launched').touch()):
-                result = gate.wake(self.fid, why='回报', delivery=delivery)
+                result = gate.wake(self.fid, why='消息', delivery=delivery)
             self.assertTrue(result['ok'], result)
             self.assertFalse(result.get('already'), 'awake is not a delivery receipt')
-            self.assertTrue(gate.wake(self.fid, why='回报', delivery=delivery)['ok'])
+            self.assertTrue(gate.wake(self.fid, why='消息', delivery=delivery)['ok'])
         self.assertFalse(self.opt('@park_wake'))
-        self.assertNotIn('late report', (self.root / 'launch-args').read_text())
+        self.assertNotIn('late message', (self.root / 'launch-args').read_text())
 
     def wait(self, predicate):
         until = time.monotonic() + 6

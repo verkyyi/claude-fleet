@@ -25,21 +25,11 @@
 #                                                                     FLEET_PEER_QUEUE_DEAD_SECS (86400)
 #                                                                     is undeliverable: EXPIRED in the book,
 #                                                                     one line in logs/peer-queue-dead.log,
-#                                                                     never said (again) — a REPORT is
-#                                                                     HANDED to the person instead (T887,
-#                                                                     bin/fleet-peer-hand.py)
+#                                                                     never said (again).
 #
-# A child's report or a message whose recipient is on THIS machine but cannot take
-# it right now — a window with no live Claude under it, an inbox that will not
-# answer — used to be `not reported` on stderr and exit 0: the sender ended
-# normally and nobody knew (EPIC #1645 ③④). Now it is QUEUED, addressed by the
-# recipient's lifelong identity (@fleet_id, issue #1646) — never a key another
-# window may answer to later — and delivered by `drain`: the cleanup daemon's tick
-# (60 s) runs it. Delivery is the one path every report takes (children_send:
-# the journaled delivery, the Codex queue, the peer inbox). A recipient that never comes back: after FLEET_PEER_QUEUE_TTL
-# (7 days, the hub's relay TTL) the item is dropped and the book says EXPIRED — a
-# report is HANDED to the person instead (T887): the reminder (global/orphan-reports.ndjson,
-# ⌘P 消息), a note on its task record, one notice 「有 N 份回报没人收」. Never quietly gone.
+# Ordinary messages retain the existing durable delivery queue. Parent reports
+# are retired: old payloads stay byte-for-byte in .retired archives; pending
+# records become FAILED once, while settled history remains unchanged.
 #
 # The DELIVERY BOOK, $FLEET_CONF_DIR/fleets/<sess>/delivery.ndjson, is the sender's
 # record of what became of each queued send, local or through the hub:
@@ -87,12 +77,13 @@ TTL="${FLEET_PEER_QUEUE_TTL:-604800}"; case "$TTL" in ''|*[!0-9]*) TTL=604800 ;;
 DEAD="${FLEET_PEER_QUEUE_DEAD_SECS:-86400}"; case "$DEAD" in ''|*[!0-9]*) DEAD=86400 ;; esac
 DEADLOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/peer-queue-dead.log"
 
-# note <rid> <state> <to> <kind> <via> <detail> [<report json>] — one row, one write
-# (O_APPEND). A report's words ride its QUEUED row (`report`, T887): what the person
-# is handed if nobody ever takes it (bin/fleet-peer-hand.py).
+# note <rid> <state> <to> <kind> <via> <detail> [<report json>]
+# All report retirement writers share the delivery-book lock.
 note() {
-  python3 - "$BOOK" "$@" <<'PY' 2>/dev/null
+  python3 - "$BIN" "$BOOK" "$@" <<'PY' 2>/dev/null
 import json, sys, time
+sys.path.insert(0, sys.argv.pop(1))
+from fleet_peer_queue_retirement import append_record
 book, rid, state, to, kind, via, detail = sys.argv[1:8]
 row = {"ts": int(time.time()), "rid": rid, "kind": kind, "to": to, "state": state.upper(), "via": via}
 if detail:
@@ -105,18 +96,17 @@ if len(sys.argv) > 8 and sys.argv[8]:
     if isinstance(rep, dict):
         row["report"] = {k: (v[:2000] if isinstance(v, str) else v) for k, v in rep.items()
                          if k in ("child", "state", "pr", "summary", "title", "repo", "task")}
-with open(book, "a", encoding="utf-8") as f:
-    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+append_record(book, row)
 PY
 }
 
-# hand <rid>... — a report nobody will take goes to the person (T887): the reminder,
-# its task record, one HANDED row. Prints `handed N`; nothing printed = not a report
-# this book knows (the caller writes its EXPIRED as before).
-hand() {
-  local a=() r
-  for r in "$@"; do a+=(--rid "$r"); done
-  python3 "$BIN/fleet-peer-hand.py" hand --book "$BOOK" ${a[@]+"${a[@]}"} ${DETAIL:+--why "$DETAIL"} 2>/dev/null
+archive() {
+  python3 - "$BIN" "$1" "$2" <<'PYARCHIVE'
+import sys
+sys.path.insert(0, sys.argv[1])
+from fleet_peer_queue_retirement import archive
+print(archive(sys.argv[2], sys.argv[3]))
+PYARCHIVE
 }
 
 case "$ACT" in
@@ -125,19 +115,6 @@ case "$ACT" in
     case "$KIND" in report|message|delegated_report) ;; *) die 2 "put needs --kind report|message" ;; esac
     if [ -n "$FID" ]; then fleet_is_fid "$FID" || die 2 "--to-fid '$FID' is not a fleet_id"; fi
     [ -n "$FID$TKEY" ] || die 2 "put needs --to-fid or --to-key"
-    if [ "$KIND" = delegated_report ]; then
-      [ -n "$DELEGATION" ] || die 2 'delegated_report needs --delegation'
-      _existing=$(python3 - "$BOOK" "$RID" <<'PYDONE'
-import json, sys
-try:
-    rows = [json.loads(line) for line in open(sys.argv[1])]
-except FileNotFoundError:
-    rows = []
-print(int(any(r.get('rid') == sys.argv[2] and r.get('state') == 'DELIVERED' for r in rows)))
-PYDONE
-) || die 1 'cannot read delivery receipts'
-      [ "$_existing" = 1 ] && { printf 'delivered\n'; exit 0; }
-    fi
     text=$(cat); [ -n "$text" ] || die 2 "empty message"
     mkdir -p "$Q" 2>/dev/null || die 1 "cannot create $Q"
     tmp=$(mktemp "$Q/.put.XXXXXX") || die 1 "cannot write in $Q"
@@ -150,17 +127,15 @@ sys.stdout.flush()
 os.fsync(sys.stdout.fileno())' \
       "$RID" "$KIND" "$FID" "$TKEY" "${TO:-${TKEY:-$FID}}" "$DELEGATION" > "$tmp" 2>/dev/null || { rm -f "$tmp"; die 1 "cannot encode the item"; }
     f="$Q/$(date -u +%Y%m%dT%H%M%SZ)-$$-${tmp##*.}.json"
-    if [ "$KIND" = delegated_report ]; then
-      _hash=$(printf '%s' "$RID" | shasum -a 256 | cut -d ' ' -f 1)
-      f="$Q/delegated-$_hash.json"
-      # Link is create-if-absent: concurrent replay never replaces a pending item.
-      if [ -f "$f.sending" ] || ! ln "$tmp" "$f" 2>/dev/null; then
-        rm -f "$tmp"; printf '%s\n' "$f"; exit 0
-      fi
-      rm -f "$tmp"
-    else
-      mv -f "$tmp" "$f" || { rm -f "$tmp"; die 1 "cannot write in $Q"; }
-    fi
+    case "$KIND" in
+      report|delegated_report)
+        # Preserve the exact old payload, outside the runnable queue glob.
+        archived=$(archive "$tmp" "$f.retired") || die 1 "cannot preserve retired report"
+        note "$RID" FAILED "${TO:-${TKEY:-$FID}}" "$KIND" local 'RETIRED: Parent reports are disabled' || die 1 "cannot record retired report"
+        printf 'RETIRED: Parent report retained at %s; not delivered.\n' "$archived"
+        exit 2 ;;
+    esac
+    mv -f "$tmp" "$f" || { rm -f "$tmp"; die 1 "cannot write in $Q"; }
     python3 - "$Q" <<'PYSYNC' || die 1 "cannot persist delivery directory"
 import os, sys
 fd = os.open(sys.argv[1], os.O_RDONLY)
@@ -177,24 +152,6 @@ PYSYNC
 
   note)
     [ -n "$RID" ] && [ -n "$STATE" ] || die 2 "note needs --rid and --state"
-    # A delegated report retains its queue policy when a hub receipt arrives.
-    # Receipt kind is child_report on the wire; the producer's book owns policy.
-    if python3 - "$BOOK" "$RID" <<'PYKIND'
-import json, sys
-try:
-    found = any((r.get('rid') == sys.argv[2] and r.get('kind') == 'delegated_report')
-                for r in (json.loads(line) for line in open(sys.argv[1])))
-except FileNotFoundError:
-    found = False
-sys.exit(0 if found else 1)
-PYKIND
-    then KIND=delegated_report; fi
-    # The hub's EXPIRED receipt for a report (its relay TTL ran out): the person is
-    # handed it instead (T887) — HANDED is its last row, never EXPIRED.
-    case "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]'):$KIND" in
-      EXPIRED:report|EXPIRED:child_report)
-        [ -n "$(hand "$RID")" ] && exit 0 ;;
-    esac
     note "$RID" "$STATE" "$TO" "$KIND" "${VIA:-local}" "$DETAIL" "$REPORT" || die 1 "cannot write $BOOK"
     exit 0 ;;
 
@@ -302,6 +259,8 @@ PY
 import json, os, subprocess, sys, time
 book, alerted, secs, ttl, bindir = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 dead_secs, deadlog = int(sys.argv[6]), sys.argv[7]
+sys.path.insert(0, bindir)
+from fleet_peer_queue_retirement import append_record
 last, first = {}, {}
 try:
     for line in open(book, encoding="utf-8"):
@@ -330,25 +289,14 @@ def since(r):
 # items stay the drain's (their window may still come back).
 dead = [r for rid, r in last.items() if dead_secs > 0 and r.get("state") == "QUEUED"
         and r.get("via") != "local" and since(r) > dead_secs and r.get("kind") != "delegated_report"]
-# A REPORT nobody took is the person's (T887): handed (the reminder, its task
-# record, a HANDED row) — never EXPIRED. Then every report an older version let
-# expire within the reminder's window, once.
-gone = [r for r in dead if r.get("kind") in ("report", "child_report")]
-dead = [r for r in dead if r not in gone]
-hand_runs = [[]]
-if gone:
-    hand_runs.insert(0, [a for r in gone for a in ("--rid", r["rid"])]
-                     + ["--why", "nobody took it in %dh" % (dead_secs // 3600)])
-for args in hand_runs:
-    try:
-        out = subprocess.run(["python3", bindir + "/fleet-peer-hand.py", "hand", "--book", book] + args,
-                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             universal_newlines=True, timeout=120).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        out = ""
-    if out:
-        print("peer-queue: " + out + " undeliverable report(s) to the person")
-done.update(r["rid"] for r in gone)
+# Retired reports never become reminders, notices or fresh delivery attempts.
+retired = [r for r in last.values() if r.get("kind") in ("report", "child_report", "delegated_report")]
+for r in retired:
+    if r.get("state") == "QUEUED":
+        append_record(book, dict(r, ts=int(now), state="FAILED", detail="RETIRED: Parent reports are disabled"))
+retired_ids = {r["rid"] for r in retired}
+done.update(retired_ids)
+dead = [r for r in dead if r["rid"] not in retired_ids]
 if dead:
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     with open(book, "a", encoding="utf-8") as f:
@@ -426,24 +374,21 @@ print("\x1f".join(str(d.get(k, "")).replace("\x1f", " ").replace("\n", " ") for 
 $meta
 EOF
   [ -n "$FID" ] && [ "$fid" != "$FID" ] && { mv -f "$c" "$f"; continue; }
-  if [ "$kind" = delegated_report ]; then
-    bash "$BIN/fleet-report-delivery.sh" drain "$c" "$SESS"; _rc=$?
-    if [ "$_rc" = 0 ]; then
-      if note "$rid" DELIVERED "$to" "$kind" local ''; then
-        rm -f "$c"; sent=$((sent + 1))
+  case "$kind" in
+    report|child_report|delegated_report)
+      if note "$rid" FAILED "$to" "$kind" local 'RETIRED: Parent reports are disabled' && archive "$c" "$f.retired" >/dev/null; then
+        expired=$((expired + 1))
       else
-        mv -f "$c" "$f"; waiting=$((waiting + 1))
+        mv "$c" "$f" 2>/dev/null || :
+        waiting=$((waiting + 1))
       fi
-    else
-      mv -f "$c" "$f"; waiting=$((waiting + 1))
-    fi
-    continue
-  fi
+      continue ;;
+  esac
   case "$created" in ''|*[!0-9]*) created=0 ;; esac
   if [ $((now - created)) -gt "$TTL" ]; then
     rm -f "$c"
     _w="the recipient took nothing for $((TTL / 86400)) days"
-    if [ "$kind" != report ] || [ -z "$(DETAIL="$_w" hand "$rid")" ]; then note "$rid" EXPIRED "$to" "$kind" local "$_w"; fi
+    note "$rid" EXPIRED "$to" "$kind" local "$_w"
     expired=$((expired + 1)); continue
   fi
   # The recipient by IDENTITY when the item names one — never the key's current

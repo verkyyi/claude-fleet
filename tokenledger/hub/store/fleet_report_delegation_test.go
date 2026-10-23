@@ -5,10 +5,9 @@ import (
 	"time"
 )
 
-// A supervisor being offline is not authority to hand routine reports back to
-// the person. The existing durable relay retains these until the exact target
-// takes them. Ordinary reports and messages keep their existing expiry policy.
-func TestDelegatedReportSurvivesRelayTTL(t *testing.T) {
+// Report backlog is settled explicitly by the retirement dispatcher, never
+// silently expired by another endpoint's periodic TTL sweep. Messages still expire.
+func TestReportBacklogExcludedFromRelayTTL(t *testing.T) {
 	s := newStore(t)
 	if err := s.ensureFleetRelays(); err != nil {
 		t.Fatal(err)
@@ -29,11 +28,11 @@ func TestDelegatedReportSurvivesRelayTTL(t *testing.T) {
 		}
 	}
 	n, err := s.ExpireFleetRelays(time.Hour, now)
-	if err != nil || n != 2 {
+	if err != nil || n != 1 {
 		t.Fatalf("expiry: n=%d err=%v", n, err)
 	}
 	rows, err := s.PendingFleetRelays("target")
-	if err != nil || len(rows) != 1 || rows[0].ID != "delegated" {
+	if err != nil || len(rows) != 2 || rows[0].ID != "delegated" || rows[1].ID != "ordinary" {
 		t.Fatalf("retained: %+v %v", rows, err)
 	}
 	if err := s.FinishFleetRelay("delegated", RelayDelivered, "", now); err != nil {

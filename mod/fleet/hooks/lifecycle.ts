@@ -207,10 +207,9 @@ async function registerFallbackTools($: EngineInterface): Promise<void> {
 async function onReady($: EngineInterface): Promise<void> {
   // The fallback tools (tools.ts, issue #2057) — only for a fleet session the
   // launcher did not give the tool service: FLEET_MCP_SERVER=1 says it did (issue
-  // #1807), and then status / spawn / await are the service's and the mod
-  // registers nothing (#1812). Without it — a pane launched before #1828, whose
-  // tool list still carries the mod's three — register them from the service's
-  // own specs, so a reload of this code never leaves a listed tool unanswered.
+  // #1807), and then the mod registers nothing (#1812). Without it, advertise
+  // status and spawn from the service's schemas. The tools.ts handler still
+  // answers cached await calls with the service's explicit retirement refusal.
   if (pane !== undefined && (await $.env.get('FLEET_MCP_SERVER')) !== '1') await registerFallbackTools($)
   await beat($)
   timer?.cancel()

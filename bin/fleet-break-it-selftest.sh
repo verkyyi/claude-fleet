@@ -3207,7 +3207,7 @@ drill_tmpdir_shared_root() {
   case "$lib" in /tmp/.claude-dash|/tmp/.claude-dash/) WHY="no TMPDIR still reads the shared /tmp/.claude-dash"; return 1 ;; esac
   [ "$lib" = "$want" ] || { WHY="no TMPDIR reads $lib, not this login's own $want (the daemons' dir)"; return 1; }
   # the later login opens a worker: its dash cache is its own and writable
-  out=$(noenv bash -c ". '$BIN/fleet-lib.sh'; mkdir -p \"\$FLEET_C\" && [ -w \"\$FLEET_C\" ] && [ -O \"\$FLEET_C\" ] && echo ok") 
+  out=$(noenv bash -c ". '$BIN/fleet-lib.sh'; mkdir -p \"\$FLEET_C\" && [ -w \"\$FLEET_C\" ] && [ -O \"\$FLEET_C\" ] && echo ok")
   [ "$out" = ok ] || { WHY="this login cannot write its own dash cache $lib"; return 1; }
   # a server started with no TMPDIR: fleet-up / the move's launch stamp it, so a
   # server-side spawn (run-shell, a bind, a hook) reads the same directory
@@ -4244,16 +4244,14 @@ drill_task_report_fence() {
   t0=$(now)
   out=$(bash "$BIN/fleet-task-control-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='排着的子回报按父 ID 送达（关了交接班 / 上一级，没人才进提醒）；同一事件重连不重投；任务记录读不到是 UNKNOWN，不伪造完成或取消'
+  WHAT='旧 receive/await/children 明确退役；任务记录读不到仍为 UNKNOWN，不伪造完成或取消'
 }
 
 drill_accepted_await_by_number() {
-  CAP=60; local t0
-  t0=$(now)
-  suite_holds fleet-await-selftest.sh 'a hub-authority login: no spawn by issue number (exit 5)' \
-    '…and nothing spawned' || return 1
+  CAP=30; local t0 out; t0=$(now)
+  out=$(bash "$BIN/fleet-await-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='hub 权威的登录不按单号派（NO-WORKER，指向 task 工具）；legacy 登录照旧（fleet-await-selftest.sh 真跑，这里按名守住）'
+  WHAT='旧 await 按单号或 Task 均立即退役，不启动会话、不写队列'
 }
 
 drill_dispatch_identity_fallback() {
@@ -4577,98 +4575,12 @@ drill_cross_send_refused_unseen() {
 # it, the child must say `reported` within 10 s; with the hub silent the child says
 # queued and the next tick says so in ⌘P 消息.
 drill_cross_report_queued_unseen() {
-  CAP=20; local d="$WORK/xr" t0 ua ub pw cw cp pid out rc ipid pump
-  local pf=0f1e2d3c-4b5a-4978-8a9b-000000000756 cf=1a2b3c4d-5e6f-4a7b-8c9d-000000000756
-  mkdir -p "$d/a/conf/fleets/xa" "$d/b/conf/fleets/xb" "$d/a/bin" "$d/b/bin" "$d/b/sessions"
-  : > "$d/a/conf/fleets/xa/conf"; : > "$d/b/conf/fleets/xb/conf"
-  fx_repo "$d/a/conf" xa acme/app FLEET_MAIN="$d/a/main"
-  fx_repo "$d/b/conf" xb acme/app FLEET_MAIN="$d/b/main"
-  local m
-  for m in a b; do
-    printf '#!/bin/sh\n[ "$1" != -L ] || shift 2\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$d/$m/sock" > "$d/$m/bin/tmux"; chmod +x "$d/$m/bin/tmux"
-  done
-  # side <a|b> <cmd…> — this machine's conf dir, tmux server and (b) its Claude registry
-  side() { local m=$1; shift
-    env PATH="$d/$m/bin:$PATH" FLEET_CONF_DIR="$d/$m/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 \
-      FLEET_CC_SESSIONS_DIR="$d/$m/sessions" FLEET_CLAUDE_COMM=FLEETFAKECLAUDE FLEET_PEER_RECEIPT_SECS=0 \
-      FLEET_ID_PUSH=0 FLEET_ID_DIR="$d/$m/ids" "$@"; }
-  side a tmux -f /dev/null new-session -d -s xa -n home 'exec sleep 600' || { WHY="cannot start machine A's tmux server"; return 1; }
-  side b tmux -f /dev/null new-session -d -s xb -n home 'exec sleep 600' || { WHY="cannot start machine B's tmux server"; return 1; }
-  for m in a b; do
-    (cd "$BIN" && side "$m" python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/$m/conf") >/dev/null 2>&1
-  done
-  ua=$(side a bash -c '. "$1/fleet-lib.sh"; fleet_uuid xa' _ "$BIN"); ub=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_uuid xb' _ "$BIN")
-  [ -n "$ua" ] && [ -n "$ub" ] && [ "$ua" != "$ub" ] || { WHY="no two fleet UUIDs ([$ua] [$ub])"; return 1; }
-  # machine B: the orchestrator (keyless — its key is its identity), a fake Claude with an inbox
-  pw=$(side b tmux new-window -d -P -F '#{window_id}' -t xb -n orch "bash -c ': FLEETFAKECLAUDE; while :; do sleep 300; done'")
-  side b tmux set-option -w -t "$pw" @norepo 1 \; set-option -w -t "$pw" @fleet_id "$pf" \; set-option -w -t "$pw" @cc_agent claude
-  until_ok 5 sh -c "[ -n \"\$(env PATH='$d/b/bin:$PATH' FLEET_CLAUDE_COMM=FLEETFAKECLAUDE bash -c '. \"\$1/fleet-lib.sh\"; fleet_pane_claude_pid \"\$2\"' _ '$BIN' '$pw')\" ]" \
-    || { WHY="rig: no fake Claude under the parent's pane"; return 1; }
-  pid=$(side b bash -c '. "$1/fleet-lib.sh"; fleet_pane_claude_pid "$2"' _ "$BIN" "$pw")
-  python3 -c 'import json, sys; d, pid, s = sys.argv[1:4]
-open("%s/%s.json" % (d, pid), "w").write(json.dumps(dict(pid=int(pid), sessionId="5c4b3a29-1807-4f6e-8d5c-4b3a29180756", cwd="/x", messagingSocketPath=s, name="orch")))
-open("%s/%s.k.key" % (d, pid), "w").write(json.dumps(dict(peerToken="tok-756")))' "$d/b/sessions" "$pid" "$d/b/inbox.sock"
-  python3 -c 'import os, socket, sys, time
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(4); s.settimeout(0.5); end = time.time() + 60
-while time.time() < end:
-    try:
-        c, _ = s.accept()
-    except OSError:
-        continue
-    c.settimeout(2); buf = b""
-    try:
-        while True:
-            b = c.recv(65536)
-            if not b: break
-            buf += b
-    except OSError:
-        pass
-    open(sys.argv[2], "ab").write(buf); c.close()' "$d/b/inbox.sock" "$d/b/inbox.got" & ipid=$!
-  # machine A: the child, placed here by the orchestrator over there
-  cw=$(side a tmux new-window -d -P -F '#{window_id}' -t xa -n kid 'exec sleep 600')
-  cp=$(side a tmux display-message -p -t "$cw" '#{pane_id}')
-  side a tmux set-option -w -t "$cw" @norepo 1 \; set-option -w -t "$cw" @fleet_id "$cf" \; \
-    set-option -w -t "$cw" @origin "$pf" \; set-option -w -t "$cw" @origin_fid "$pf" \; set-option -w -t "$cw" @origin_wid "$ub/$pf"
-  printf '%s/%s\tmac-b\t\n%s/%s\tmac-a\t%s/%s\n' "$ub" "$pf" "$ua" "$cf" "$ub" "$pf" > "$d/a/conf/control/hub-workers.tsv"
-  mkdir -p "$d/a/conf/control/hub-outbox"
-  # the hub and both agents: A's relay → B's deliver; B's answer → a receipt on A
-  hubpump() { ( local end=$(( $(date +%s) + 30 )) g err rc2
-    while [ "$(date +%s)" -lt "$end" ]; do
-      g=$(ls "$d/a/conf/control/hub-outbox"/*.json 2>/dev/null | head -1)
-      if [ -z "$g" ]; then sleep 0.1; continue; fi
-      python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); r["from_node"] = "mac-a"; print(json.dumps(r))' "$g" > "$d/relay.json"
-      err=$(side b bash "$BIN/fleet-hub-node.sh" deliver < "$d/relay.json" 2>&1 >/dev/null); rc2=$?
-      rm -f "$g"
-      [ "$rc2" = 0 ] || continue          # «not now»: the hub would hold it
-      python3 -c 'import json, sys; r = json.load(open(sys.argv[1]))
-print(json.dumps(dict(id=r["id"], kind="receipt", **{"from": r["to"]}, to=r["from"], from_node="mac-b",
-                      payload=dict(rid=r["id"], kind=r["kind"], to=r["to"], status="delivered", detail=sys.argv[2]))))' \
-        "$d/relay.json" "$err" | side a bash "$BIN/fleet-hub-node.sh" deliver >/dev/null 2>&1
-      exit 0
-    done ) & pump=$!; }
-  t0=$(now)
-  hubpump
-  out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" bash "$BIN/fleet-report-parent.sh" --state waiting \
-    --summary 'plan ready, waiting for your nod' 2>&1 </dev/null); rc=$?
-  wait "$pump" 2>/dev/null
-  case "$rc|$out" in "0|"*'reported → '*'(delivered)'*) ;;
-    *) kill "$ipid" 2>/dev/null; WHY="the child's waiting report ended $rc: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1 ;; esac
-  le "$(since "$t0")" 10 || { kill "$ipid" 2>/dev/null; WHY="reported, but only after $(since "$t0")s (want ≤10 s)"; return 1; }
-  until_ok 5 sh -c "grep -q 'WAITING' '$d/b/inbox.got' 2>/dev/null" \
-    || { kill "$ipid" 2>/dev/null; WHY="the parent's window never got the report (inbox: $(head -c 200 "$d/b/inbox.got" 2>/dev/null))"; return 1; }
-  grep -q 'waiting for your nod' "$d/b/inbox.got" || { kill "$ipid" 2>/dev/null; WHY="the parent got the report without its summary"; return 1; }
+  CAP=30; local t0 out; t0=$(now)
+  out=$(python3 "$BIN/fleet-parent-retirement-selftest.py" \
+    RetirementTests.test_old_hub_queue_and_receipts_never_become_reminders \
+    RetirementTests.test_old_queue_payload_preserved_and_failed_once 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  # the hub says nothing: queued, and the tick says it in ⌘P 消息
-  out=$(side a env TMUX="$d/a/sock,0,0" TMUX_PANE="$cp" FLEET_HUB_SENT_WAIT=1 FLEET_HUB_RECEIPT_WAIT=1 \
-    bash "$BIN/fleet-report-parent.sh" --state waiting --summary 'second word' 2>&1 </dev/null); rc=$?
-  kill "$ipid" 2>/dev/null
-  [ "$rc" = 3 ] || { WHY="with no hub answer the report ended $rc, want 3 (queued): $out"; return 1; }
-  sleep 1.2
-  side a bash "$BIN/fleet-peer-queue.sh" stale -L xa --secs 1 >/dev/null 2>&1
-  grep -q '"source":"peer-queue".*"kind":"alert"' "$d/a/conf/logs/notices.ndjson" 2>/dev/null \
-    || { WHY="a report queued past the alert bound left no ⌘P 消息: $(tail -1 "$d/a/conf/logs/notices.ndjson" 2>/dev/null)"; return 1; }
-  side a tmux kill-server 2>/dev/null; side b tmux kill-server 2>/dev/null
-  WHAT="另一台机器上的子会话 report waiting：经入口送进父窗口、≤10 s 回 reported；入口不答时 exit 3、排队过时在 ⌘P 消息里说"
+  WHAT='跨机旧回报积压永久结算 FAILED，原文保留，迟到回执不复活、不转提醒，重试不重复结算'
 }
 
 # A migrate opened the new window with its identity but not its @fleet_role /
@@ -5153,125 +5065,35 @@ rp_rig() {
 rp_env() { env PATH="$WORK/tbin:$d/shim:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
              CCQUOTA_FLEET=1 FLEET_HUB_RECEIPT_WAIT=0 FLEET_ORPHAN_ALERT_CMD="${RP_ALERT:-true}" FLEET_PEER_RECEIPT_SECS=0 "$@"; }
 
-# report-parent-gone's first leg — a child's report whose parent is gone (issue #3117, EPIC #3111 C6): a scratch spawned
-# a worker and was closed; the worker merged and its report went nowhere — a silent
-# exit 0. Now it is the person's: one row in global/orphan-reports.ndjson and one
-# alert, never twice (the reaper's --only-once backstop, a re-run), and a hub-spawned
-# child (@origin empty) still files nothing.
-rp_gone_leg() {
-  local d w wh t0 f n a out
-  rp_rig rpg || { WHY="cannot start the isolated tmux server"; return 1; }
-  printf '#!/bin/sh\ncase "$*" in *pulls/*) echo "true closed false" ;; esac\nexit 0\n' > "$d/shim/gh"
-  printf '#!/bin/sh\necho "$*" >> "%s/alerted"\n' "$d" > "$d/alert"
-  chmod +x "$d/shim/gh" "$d/alert"
-  # the worker the closed scratch-7 spawned; scratch-7's window is gone
-  w=$(nt new-window -d -P -F '#{window_id}' -t rpg -n kid 'exec sleep 600')
-  nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; \
-     set-option -w -t "$w" @origin scratch-7 \; set-option -w -t "$w" @claude_state 'done'
-  wh=$(nt new-window -d -P -F '#{window_id}' -t rpg -n hubkid 'exec sleep 600')
-  nt set-option -w -t "$wh" @issue 42 \; set-option -w -t "$wh" @repo acme/app \; set-option -w -t "$wh" @claude_state 'done'
-  rpg() { RP_ALERT="$d/alert" rp_env env -u CCQUOTA_FLEET bash "$BIN/fleet-report-parent.sh" -L rpg "$@"; }
-  f="$d/conf/global/orphan-reports.ndjson"
-  t0=$(now)
-  out=$(rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' 2>&1)
-  case "$out" in orphaned*) ;; *) WHY="a report whose parent is gone said [$out], want orphaned → …"; return 1 ;; esac
-  RP_SECS=$(since "$t0")
-  python3 - "$f" <<'PYR' || { WHY="orphan-reports.ndjson is not one MERGED row for issue-41: $(cat "$f" 2>/dev/null)"; return 1; }
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1])]
-assert len(rows) == 1, rows
-r = rows[0]
-assert r["child_key"].endswith("issue-41") and r["state"] == "MERGED" and r["pr"] == "77" and r["summary"] == "landed the fix", r
-assert isinstance(r["ts"], int), r
-PYR
-  a=$(grep -c 'child-report' "$d/alerted" 2>/dev/null); a=${a:-0}
-  [ "$a" = 1 ] || { WHY="the person got $a alert(s) for it, want 1"; return 1; }
-  # the reaper's backstop, then a re-run of the same report: no second row, no second alert
-  rpg --win "$w" --state reaped --verdict merged --only-once >/dev/null 2>&1
-  rpg --win "$w" --state merged --pr 77 --summary 'landed the fix' >/dev/null 2>&1
-  n=$(grep -c . "$f"); a=$(grep -c 'child-report' "$d/alerted")
-  [ "$n:$a" = 1:1 ] || { WHY="a repeat filed rows:alerts=$n:$a, want 1:1"; return 1; }
-  # hub-spawned: nobody spawned it, nothing to file
-  rpg --win "$wh" --state merged --pr 78 >/dev/null 2>&1
-  n=$(grep -c . "$f")
-  [ "$n" = 1 ] || { WHY="a hub-spawned child's report was filed for the person ($n rows)"; return 1; }
-}
-
-# report-parent-gone's second leg — the parent on another machine (#3514): the report
-# goes to the hub's outbox by @origin_wid; a lost address is never a silent success.
-rp_remote_leg() {
-  local d w wl t0 out rc f U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
-  rp_rig rpr || { WHY="cannot start the isolated tmux server"; return 1; }
-  rpr() { rp_env env -u FLEET_PEER_RECEIPT_SECS "$@"; }
-  # this machine's fleet UUID (the control db mints it), as on any hub node
-  (cd "$BIN" && rpr python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
-  U=$(rpr bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpr' _ "$BIN")
-  [ -n "$U" ] || { WHY="no fleet UUID could be minted"; return 1; }
-  # the child the hub placed here: what dash-issue-session stamps from --origin-wid
-  w=$(nt new-window -d -P -F '#{window_id}' -t rpr -n kid 'exec sleep 600')
-  out=$(rpr bash -c '. "$1/fleet-lib.sh"; fleet_origin_canon "$2" "" "" ""' _ "$BIN" "$PF")
-  [ "$out" = "$PF" ] || { WHY="the parent's identity was stamped as [$out], want it whole"; return 1; }
-  nt set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app \; set-option -w -t "$w" @origin "$out" \; \
-     set-option -w -t "$w" @origin_wid "$F/$PF" \; set-option -w -t "$w" @origin_fid "$PF" \; set-option -w -t "$w" @claude_state 'done'
-  printf '%s/%s\tmac-a\t\n' "$F" "$PF" > "$d/conf/control/hub-workers.tsv"
-  t0=$(now)
-  out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$w" --state blocked --summary 'need a decision' 2>&1); rc=$?
-  RP_SECS=$(python3 -c 'import sys; print(float(sys.argv[1]) + float(sys.argv[2]))' "$RP_SECS" "$(since "$t0")")
-  [ "$rc" = 3 ] || { WHY="a report to a parent on another machine exited $rc [$out], want 3 (queued at the hub)"; return 1; }
-  f=$(ls "$d/conf/control/hub-outbox/"*.json 2>/dev/null | head -1)
-  python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["to"]==sys.argv[2] and r["kind"]=="child_report" else 1)' "$f" "$F/$PF" 2>/dev/null \
-    || { WHY="no child_report relay to $F/$PF in the outbox: $(cat "$f" 2>/dev/null)"; return 1; }
-  # a window whose address is lost (cut identity, no @origin_wid) is never a silent success
-  wl=$(nt new-window -d -P -F '#{window_id}' -t rpr -n lost 'exec sleep 600')
-  nt set-option -w -t "$wl" @issue 42 \; set-option -w -t "$wl" @repo acme/app \; \
-     set-option -w -t "$wl" @origin "$(printf '%s' "$PF" | cut -c1-32)" \; set-option -w -t "$wl" @claude_state 'done'
-  out=$(rpr bash "$BIN/fleet-report-parent.sh" -L rpr --win "$wl" --state blocked --summary 'stuck' 2>/dev/null); rc=$?
-  [ "$rc" = 1 ] && case "$out" in "undelivered → "*) true ;; *) false ;; esac \
-    || { WHY="a report with a lost parent address said [$out] rc=$rc, want undelivered → … exit 1"; return 1; }
-}
-
-# report-parent-gone's third leg — the parent is right here and online, and still every relay to it answered «not
-# now» (issue #3520): a session with no issue / scratch key of its own (once a role
-# holder; since issue #4341 any keyless session, keyed by its @fleet_id), and `fleet-hub-node.sh deliver` found it by identity, asked
-# fleet_window_okey for its key, got nothing and exited 75 — the hub pushed it
-# again forever and the child read the endless retry as «its machine is offline».
-# (The hub half — an admin login and the same person's managed login are one relay
-# owner — is TestRelayOwnerAdminIsAlsoAPerson.)
-rp_online_leg() {
-  local d w t0 out rc U F=11111111-2222-3333-4444-555555555555 PF=0dbf19b9-aaaa-4bbb-8ccc-0123456789ab
-  rp_rig rpoq || { WHY="cannot start the isolated tmux server"; return 1; }
-  rpoq() { rp_env "$@"; }
-  (cd "$BIN" && rpoq python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
-  U=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpoq' _ "$BIN")
-  [ -n "$U" ] || { WHY="no fleet UUID could be minted"; return 1; }
-  # a keyless session: no role mark at all, binds no issue, its cwd no scratch
-  w=$(nt new-window -d -P -F '#{window_id}' -t rpoq -n orch -c "$WORK/home" 'exec sleep 600')
-  nt set-option -w -t "$w" @fleet_role worker \; set-option -w -t "$w" @norepo 1 \; \
-     set-option -w -t "$w" @fleet_id "$PF" \; set-option -w -t "$w" @claude_state 'done'
-  out=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_window_okey rpoq "$2"' _ "$BIN" "$w")
-  [ "$out" = "$PF" ] || { WHY="the keyless session's own key read [$out], want its identity $PF"; return 1; }
-  t0=$(now)
-  out=$(printf '{"id":"%s/acme-app:issue-41#1.1","kind":"child_report","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"child":"acme-app:issue-41","state":"merged","pr":"7","summary":"done","tier":"loud","msg":"[child-report] issue-41 merged"}}' \
-          "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
-  [ "$rc" = 0 ] || { WHY="a child report to the online keyless parent by identity exited $rc [$out], want 0 (never «not now» for a window that is here)"; return 1; }
-  [ -s "$d/conf/fleets/rpoq/children/$PF.ndjson" ] \
-    || { WHY="the report was not booked under the parent's identity: $(ls "$d/conf/fleets/rpoq/children" 2>&1)"; return 1; }
-  out=$(printf '{"id":"%s/acme-app:issue-41#2.1","kind":"message","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"text":"a question"}}' \
-          "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
-  RP_SECS=$(python3 -c 'import sys; print(float(sys.argv[1]) + float(sys.argv[2]))' "$RP_SECS" "$(since "$t0")")
-  [ "$rc" = 0 ] || { WHY="a message to the online keyless parent by identity exited $rc [$out], want 0"; return 1; }
-}
-
-# report-parent-gone — a child's report always reaches someone: the parent gone (the
-# person's orphan book), on another machine (the hub's outbox), or online here with
-# no key of its own (delivered by identity). Three legs, one rig (rp_rig).
+# Parent delivery is retired for every old address: absent, remote or live.
+# Explicit old own-session calls still preserve their own result history.
 drill_report_parent_gone() {
-  CAP=60; local RP_SECS=0
-  rp_gone_leg || { WHY="gone: $WHY"; return 1; }
-  rp_remote_leg || { WHY="remote: $WHY"; return 1; }
-  rp_online_leg || { WHY="online: $WHY"; return 1; }
-  SECS=$RP_SECS
-  WHAT="派单的会话不在：报告进 orphan-reports.ndjson 一行 + 一条提醒，重报 / 回收不重复，hub 派的不写；父会话在另一台：按 @origin_wid 进 hub 发件箱（queued，exit 3），地址丢了说 undelivered、exit 1；在线的不绑单会话按身份收 hub 推来的回报和消息：exit 0、记在它身份的账本，不再 75 让 hub 无限重推"
+  CAP=30; local d w p out mode t0 fid=11111111-2222-4333-8444-555555555555
+  rp_rig rpg || { WHY="cannot start isolated tmux"; return 1; }
+  w=$(nt new-window -d -P -F '#{window_id}' -t rpg -n own 'exec sleep 120')
+  p=$(nt display-message -p -t "$w" '#{pane_id}')
+  nt set-option -w -t "$w" @fleet_id "$fid"
+  t0=$(now)
+  for mode in gone remote online; do
+    nt set-option -w -t "$w" @origin "$mode"
+    nt set-option -w -t "$w" @origin_wid "other-fleet/$mode"
+    out=$(rp_env env TMUX="$BREAK_SOCK,0,0" TMUX_PANE="$p" FLEET_ID_PUSH=0 \
+      bash "$BIN/fleet-report-parent.sh" -L rpg --state waiting --summary "$mode history" 2>&1) || {
+      WHY="own result failed for $mode: $out"; return 1;
+    }
+    case "$out" in *RECORDED:*RETIRED:*) ;; *) WHY="unexpected delivery for $mode: $out"; return 1 ;; esac
+  done
+  out=$(rp_env python3 "$BIN/fleet_id.py" get "$fid" --json)
+  python3 -c 'import json,sys; r=json.loads(sys.argv[1])["results"]; assert [x["summary"] for x in r] == [x+" history" for x in ("gone","remote","online")],r' "$out" || {
+    WHY='own result history lost across old Parent addresses'; return 1;
+  }
+  [ ! -e "$d/conf/global/orphan-reports.ndjson" ] && [ ! -d "$d/conf/control/hub-outbox" ] || {
+    WHY='retired report created orphan notification or relay'; return 1;
+  }
+  out=$(rp_env bash "$BIN/fleet-report-parent.sh" -L rpg --win "$w" --state reaped 2>&1)
+  case "$out" in RETIRED:*) ;; *) WHY="old hook not retired: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT='旧父地址消失、跨机或在线均不投递；自身结果仍保存，旧hook不写回报或通知'
 }
 
 drill_cred_migration_client() {
@@ -6332,8 +6154,8 @@ drill_stop_bare_path() {
 # A parent that /clear-ed (or handed off, or was re-launched) lost its children's
 # reports (EPIC T497 C4): the accepted-task road gated delivery on the parent's
 # task generation and its native process, both of which a clear / handoff / restart
-# change. The parent is its window's ID now: a report after the parent's /clear
-# names the same window, and a parent ID that closed hands it to its successor.
+# change. With Parent delivery retired, neither clear nor succession may restore
+# delivery. The old explicit caller retains only its own result history.
 drill_report_parent_cleared() {
   CAP=20; local d="$WORK/rpc" L="rpc$$" sp spid pa ch su wpa pch wch wsu t0 out1 out2
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
@@ -6355,27 +6177,26 @@ drill_report_parent_cleared() {
   rpe python3 "$BIN/fleet_id.py" native "$pa" --native p0001 --source startup >/dev/null
   rpe python3 "$BIN/fleet_id.py" native "$pa" --native p0002 --source clear >/dev/null   # the parent clears
   t0=$(now)
-  out1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary finished 2>&1)
+  out1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --state waiting --summary finished 2>&1)
   rpe bash -c '. "$1/fleet-lib.sh"; fleet_win_retire "$2" "$3" exited' _ "$BIN" "$wpa" "$L"; rtm kill-window -t "$wpa"
   wsu=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); rtm set-option -w -t "$wsu" @fleet_id "$su"
   rpe python3 "$BIN/fleet_id.py" open "$su" --prev "$pa" >/dev/null
-  out2=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary finished 2>&1)
+  out2=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --state waiting --summary finished 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
-  case "$out1" in *"($wpa"*) ;; *) WHY="after the parent's /clear the report names [$out1], want its window $wpa"; return 1 ;; esac
-  case "$out2" in *"($wsu"*) ;; *) WHY="a closed parent ID's report went to [$out2], want its successor $wsu"; return 1 ;; esac
+  case "$out1" in *RECORDED:*RETIRED:*) ;; *) WHY="clear lost own result or delivered: $out1"; return 1 ;; esac
+  case "$out2" in *RECORDED:*RETIRED:*) ;; *) WHY="successor received report or own history lost: $out2"; return 1 ;; esac
   grep -q 'parent_matches(r, parent)' "$BIN/fleet_task_control.py" \
     && { WHY="the accepted-task road still gates delivery on the parent's generation"; return 1; }
-  WHAT="父会话 /clear 后子会话回报照样找到父窗口（按 ID）；父 ID 已关闭时交给接班的 ID"
+  WHAT="旧父会话 clear 或出现接班会话都不恢复投递；显式旧调用仅保存自身结果"
 }
 
 # A batch's report went to nobody (T660): orchestrator A spawned a plan-page session
 # B (scratch-3), B spawned the EPIC driver C, B closed and a new session was given
 # scratch-3. The mint moved C's @origin aside to @origin_retired, and the report's
 # earlier-generation branch filed it for the person and exited — before the
-# identity road, which knew B's parent A was alive. Now an identified child keeps
-# its parent's ID as @origin at the mint, and a report finds A by ID first —
-# a child already moved aside (D: the live @1197) as well.
+# identity road, which knew B's parent A was alive. Those legacy identities remain
+# readable, but re-minting cannot restore delivery to an ancestor or new holder.
 drill_report_parent_key_reminted() {
   CAP=20; local d="$WORK/rpk" L="rpk$$" sp spid pa pb ch dh wpa wb wch wdh pch pdh t0 o1 o2 org
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
@@ -6404,14 +6225,14 @@ drill_report_parent_key_reminted() {
   rpe bash -c '. "$1/fleet-lib.sh"; fleet_win_retire "$2" "$3" exited' _ "$BIN" "$wb" "$L"; rtm kill-window -t "$wb"
   rpe bash -c '. "$1/fleet-lib.sh"; fleet_scratch_gen_new "$2" scratch-3 ""' _ "$BIN" "$L"
   org=$(rtm display-message -p -t "$wch" '#{@origin}|#{@origin_retired}')
-  o1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary batch 2>&1)
-  o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary batch 2>&1)
+  o1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --state waiting --summary kept 2>&1)
+  o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --state waiting --summary kept 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
   [ "$org" = "$pb|" ] || { WHY="the re-mint moved an identified child aside: @origin|@origin_retired = [$org], want [$pb|]"; return 1; }
-  case "$o1" in *"($wpa"*) ;; *) WHY="the driver's report after its parent's key was re-minted went to [$o1], want the grandparent $wpa"; return 1 ;; esac
-  case "$o2" in *"($wpa"*) ;; *) WHY="an already-retired child's report went to [$o2], want the grandparent $wpa by ID"; return 1 ;; esac
-  WHAT="父会话关了、临时编号被重领：有身份的孩子不被挪开（@origin 记父 ID），回报按 ID 交给活着的祖父；已被挪开的孩子同样按 ID 送到"
+  case "$o1" in *RECORDED:*RETIRED:*) ;; *) WHY="reused key redirected report or lost own result: $o1"; return 1 ;; esac
+  case "$o2" in *RECORDED:*RETIRED:*) ;; *) WHY="retired origin redirected report or lost own result: $o2"; return 1 ;; esac
+  WHAT="旧父会话编号重领或 origin 已退役都不向祖先投递；自身历史仍保存"
 }
 
 # The hub's ID switch flipped under a running session (EPIC T497 C6): the window
@@ -6473,11 +6294,11 @@ drill_c8_old_supervisor_reopen() {
 drill_wake_peer_report() {
   CAP=40; local t0 out
   t0=$(now)
-  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_peer_first_turn Park.test_parked_report_queue_drain \
-        Park.test_local_child_report_wakes_parent Park.test_late_wake_receipt_is_not_a_second_turn \
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_parked_peer_first_turn Park.test_retired_report_queue_never_wakes Park.test_parked_message_queue_drain \
+        Park.test_local_child_report_never_wakes_parent Park.test_late_wake_receipt_is_not_a_second_turn \
         Park.test_question_is_never_parked 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='停放窗口收 peer 消息与队列子回报：同一身份、原话首轮、确认接回才报已送达'
+  WHAT='普通 peer 消息仍唤醒同一身份；旧回报队列和 hook 不唤醒停放会话'
 }
 
 drill_park_reap_table() {
@@ -6539,7 +6360,7 @@ drill_park_reap_report() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-report-durable-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='必要报告写失败不能终态回收；可靠持久排队无需等网络即时送达'
+  WHAT='自身结果写失败保留会话；写成功不等待已退役的 Parent 投递'
 }
 
 drill_park_reap_background() {
@@ -6967,7 +6788,7 @@ drill_task_start_unseen() {
   t0=$(now)
   out=$(bash "$BIN/start-visible-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep FAIL | head -3)"; return 1; }
   SECS=$(since "$t0")
-  WHAT='开局几秒就退：ID 上「未起来：<原因>」、本机日志一行、父会话收到一次；同因不重复；起来了答「起来了」；tick 判 stalled 不算在跑，await 当场 NOT-STARTED，提示 respawn 原记录'
+  WHAT='开局几秒就退：ID 上「未起来：<原因>」、本机日志一行、不向父会话发送；同因不重复；起来了答「起来了」；旧 await 明确退役'
 }
 
 # ⌘P's resident panel gone (T890): the key's popup runs the connector, which must
@@ -7917,14 +7738,19 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
-drill_report_delegation_offline() {
+drill_parent_report_retired() {
   local t0; t0=$(now); CAP=60
-  suite_holds fleet-report-delegation-selftest.py \
-    'def test_real_entry_offline_replay_identity_and_provenance' \
-    'def test_cross_machine_real_hub_receiver_and_replay' \
-    'def test_scope_chain_cycle_revoke_audit' \
-    'def test_batch_does_not_redeliver_and_revoke_keeps_pending' || return 1
-  WHAT='授权作用域、历史来源、离线恢复及重放去重，routine 不唤醒人'
+  python3 "$BIN/fleet-parent-retirement-selftest.py" >"$WORK/parent-retired.log" 2>&1 || {
+    WHY="retired parent path delivered or lost history: $(tail -8 "$WORK/parent-retired.log")"; return 1;
+  }
+  WHAT='旧报告与await入口退役；报告积压原文保留且永久失败、不转通知；普通message仍经原投递入口'
+  SECS=$(since "$t0")
+}
+
+drill_report_delegation_offline() {
+  CAP=30; local t0 out; t0=$(now)
+  out=$(python3 "$BIN/fleet-report-delegation-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  WHAT='旧委托写入口立即退役；历史读取不写磁盘、不派发、不补送'
   SECS=$(since "$t0")
 }
 

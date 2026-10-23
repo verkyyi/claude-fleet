@@ -912,7 +912,7 @@ fi
     # the hub's record T<n> and no issue. @task_flow — stamped with @task before
     # the agent starts, as dash-issue-session.sh's @seed_words — tells the
     # SessionStart hook (fleet-worker-start-hook.sh) to put the task flow on it:
-    # read the record, implement, PR, merge on green, report merged (closes it).
+    # read the record, implement, PR, merge on green, final response with PR and validation.
     [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF" @task_flow 1)"
   fi
   [ "$NOREPO" != 1 ] && [ -n "$rsid" ] && launch="$launch --resume $rsid"

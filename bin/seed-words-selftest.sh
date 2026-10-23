@@ -63,7 +63,7 @@ out=$(hook startup); rc=$?
 ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || st_fail "S no additionalContext" "$out"
 ev=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["hookEventName"]')
 [ "$ev" = SessionStart ] || st_fail "S hookEventName must be SessionStart" "$out"
-case "$ctx" in *"Before anything else"*'the fleet tool `brief`'*'Closes #3312'*'`pr_merge`'*'`state: merged`'*) ;; *) st_fail "S the context: brief first, then PR → merge → report" "$ctx" ;; esac
+case "$ctx" in *"Before anything else"*'the fleet tool `brief`'*'Closes #3312'*'`pr_merge`'*'final response'*) ;; *) st_fail "S the context: brief first, then PR → merge → final response" "$ctx" ;; esac
 case "$ctx" in *fleet-claim-*|*"claim skill"*) st_fail "S no claim skill any more (issue #4898)" "$ctx" ;; esac
 case "$ctx" in *"#3312"*"acme/tokenledger"*) ;; *) st_fail "S the context must name the issue and the repo" "$ctx" ;; esac
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
@@ -97,7 +97,7 @@ out=$(hook startup); rc=$?
 [ "$rc" = 0 ] || st_fail "K the hook must exit 0" "$out"
 ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || st_fail "K no additionalContext" "$out"
 case "$ctx" in *"T42"*"acme/tokenledger"*"NOT to a GitHub issue"*) ;; *) st_fail "K the context must name the record and the repo, and no issue" "$ctx" ;; esac
-case "$ctx" in *'the fleet tool `brief`'*'`pr_verdict`'*'`pr_merge`'*'`state: merged`'*) ;; *) st_fail "K the flow: brief → PR → pr_verdict/pr_merge → report merged" "$ctx" ;; esac
+case "$ctx" in *'the fleet tool `brief`'*'`pr_verdict`'*'`pr_merge`'*'final response'*) ;; *) st_fail "K the flow: brief → PR → pr_verdict/pr_merge → final response" "$ctx" ;; esac
 case "$ctx" in *"Closes #"[0-9]*) st_fail "K a task's PR carries no Closes" "$ctx" ;; esac
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
 [ "$line" = "fleet-worker · tokenledger · 任务 T42 · 做完开 PR，门绿了自己合" ] || st_fail "K the person's grey line" "$line"
@@ -108,6 +108,6 @@ setw @task_flow 1; setw @task bogus; [ -z "$(hook startup)" ] || st_fail "K a ma
 setw @task T42; [ -z "$(hook resume)" ] || st_fail "K resume ⇒ nothing"
 setw @issue 3312; setw @seed_words /fleet-history
 case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'Closes #3312'*) ;; *) st_fail "K an issue window that carries @task gets the issue flow" ;; esac
-ok "K a task session (@task + @task_flow, no issue): read the record, PR, merge, report merged"
+ok "K a task session (@task + @task_flow, no issue): read the record, PR, merge, final response"
 
 printf '\nselftest OK: %s assertions passed (words first ⇒ brief next)\n' "$pass"

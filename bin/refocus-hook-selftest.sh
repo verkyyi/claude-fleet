@@ -94,7 +94,7 @@ C=$(ctx) || st_fail "output must be a SessionStart hookSpecificOutput JSON objec
 case "$C" in '[fleet charter] #12 · acme/widgets — RESTATE-TITLE after compaction'*) : ;;
   *) st_fail "context must open with the [fleet charter] #12 line" "$C" ;; esac
 for want in 'branch issue-12 → base trunk' 'PR: #345 OPEN ci✓' 'work ONLY on #12' \
-            'Closes #12' 'gh pr merge --rebase' 'spawned by issue-7' 'the fleet tool `brief`' \
+            'Closes #12' 'gh pr merge --rebase' 'This Task owns its work' 'the fleet tool `brief`' \
             "Base checkout $WORK/widgets is read-only"; do
   case "$C" in *"$want"*) : ;; *) st_fail "context must carry: $want" "$C" ;; esac
 done
@@ -131,7 +131,7 @@ st_pass "OFF FLEET_REFOCUS=0 in the fleet conf → zero output"
 FAKE_AT_ISSUE=12 run "$WORK/widgets-issue-12" compact
 C=$(ctx) || st_fail "compact without a PR must still emit" "$OUT"
 case "$C" in *'PR: none yet'*) : ;; *) st_fail "no prmap row must read 'PR: none yet'" "$C" ;; esac
-case "$C" in *'no live parent'*) : ;; *) st_fail "no @origin must say no live parent" "$C" ;; esac
+case "$C" in *'This Task owns its work'*) : ;; *) st_fail "no @origin still describes independent task ownership" "$C" ;; esac
 st_pass "PR none yet + no parent when the caches know nothing"
 
 # ===== REPO: a 2-repo fleet never guesses ========================================

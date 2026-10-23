@@ -1,36 +1,7 @@
 #!/bin/bash
-# fleet-children-selftest.sh — the child-report ledger + `fleet-children.sh`
-# (issue #937, EPIC #935 C3).
-#
-# What is load-bearing, and therefore what is pinned:
-#   RECORD    every report fleet-report-parent.sh resolves a parent for is written
-#             to $FLEET_STATE/children/<parent-key>.ndjson — whether or not it is
-#             DELIVERED (the parent here runs no Claude, so nothing is delivered).
-#   DEDUP     a repeat of a child's latest (state, pr) adds no line; a real
-#             transition does, with the next seq.
-#   AGREE     fleet-children.sh's summary line is BYTE-EQUAL to the dash parent
-#             row's badge (`2/3 ✓ · 1!`) — same attribution walk (chain_v), same
-#             state ranks. The dash is run for real, on a fixture built from the
-#             same server.
-#   SURVIVE   a parent migrated onto a new window id (same key) reads the same
-#             ledger; a reaped child stays in the book, counted by its report.
-#   DEFAULT   with no argument the key is the calling pane's own (fleet_origin_key).
-#   JOIN      one row per child (issue #1351): a bare-key report, the qualified live
-#             window and a placement are one child; two repos' same number are two.
-#   ONE BOOK  (issue #1939, #982) a ONE-repo fleet keys `acme-app:scratch-7` too; a
-#             parent's old bare book (`scratch-7.ndjson`) and a child's bare
-#             @origin are read as that repo's — one book, each child once — and
-#             fleet_origin_heal rewrites the bare @origin so the dash agrees.
-#   TASK      (issue #3330) a child carrying a hub task record (@task T218) writes
-#             `task` on its rows; `--json` carries it on the child, the text view
-#             puts it before the title; a child without one is byte for byte.
-#   SUCCEEDED (T886) a task's `--outcome succeeded` report (fleet-report-parent.sh,
-#             #4989) is ledgered — it was refused as an unknown
-#             state — and reads as done: ✓, progress `succeeded`.
-#
-# Runs on a DEDICATED tmux server on its own -L label (never the live server,
-# issue #159). The dash half replays that server's window list through a PATH shim,
-# because tmux ≤3.4 vis-escapes the 0x1f separator the dash producer asks for.
+# Historical child ledgers remain readable; retired CLI/hooks never write or send.
+# Preserve parsing, dedup, task metadata, generation archives, repo joins and ID
+# resolution coverage on an isolated tmux socket with synthetic historical rows.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -55,7 +26,7 @@ unset TMUX TMUX_PANE
 out=$(bash "$CLI" --bogus 2>&1); eq "an unknown flag exits 2" 2 "$?"
 out=$(bash "$CLI" --since x issue-1 2>&1); eq "a non-numeric --since exits 2" 2 "$?"
 out=$(bash "$CLI" 2>&1); eq "no key and no pane exits 2" 2 "$?"
-has "…and says why" 'no parent key' "$out"
+has "…and says why" 'RETIRED:' "$out"
 
 F="$WORK/pure.ndjson"
 ap() { printf '%s' "$1" | python3 "$BIN/fleet-children.py" append --file "$F"; }
@@ -134,27 +105,35 @@ new_win stranger; opt "$WID" @issue 900; opt "$WID" @claude_state 'done'      # 
 
 LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/${P}scratch-7.ndjson"
 RUN() { bash "$RP" -L "$LBL" "$@" >/dev/null 2>&1; }
+mkdir -p "${LEDGER%/*}"
+# These rows predate retirement; the reader remains available for history.
+for row in \
+  '{"child":"issue-101","state":"MERGED","pr":"501","summary":"landed","title":"kid-merged"}' \
+  '{"child":"issue-102","state":"FAILED","pr":"502","summary":"CI red","title":"kid-failed","task":"T218"}' \
+  '{"child":"issue-103","state":"STOPPED","title":"kid-stopped"}'; do
+  printf '%s' "$row" | python3 "$BIN/fleet-children.py" append --file "$LEDGER" >/dev/null
+done
+cp "$LEDGER" "$WORK/history"
 RUN --win "$K1" --state merged --pr 501 --summary 'landed'
 RUN --win "$K2" --state failed --pr 502 --summary 'CI red'
 RUN --win "$K3" --state stopped
-[ -f "$LEDGER" ] || st_fail "no ledger written at $LEDGER" "$(find "$FLEET_CONF_DIR" 2>/dev/null)"
-eq "three reports ⇒ three ledger lines (recorded though the parent runs no Claude)" 3 "$(wc -l < "$LEDGER" | tr -d ' ')"
-RUN --win "$K1" --state merged --pr 501 --summary 'landed, again'
-RUN --win "$K3" --state stopped
-eq "repeat reports add no lines" 3 "$(wc -l < "$LEDGER" | tr -d ' ')"
-python3 - "$LEDGER" <<'PY' || st_fail "ledger events are not what was reported (see above)"
-import json, sys
-ev = [json.loads(l) for l in open(sys.argv[1])]
-got = [(e["seq"], e["child"], e["state"], e["pr"]) for e in ev]
-assert got == [(1, "acme-app:issue-101", "MERGED", "501"), (2, "acme-app:issue-102", "FAILED", "502"),
-               (3, "acme-app:issue-103", "STOPPED", "")], got
-assert ev[0]["title"] == "kid-merged" and ev[0]["summary"] == "landed", ev[0]
-assert ev[1]["task"] == "T218" and "task" not in ev[0] and "task" not in ev[2], ev   # TASK (#3330)
-PY
+cmp -s "$LEDGER" "$WORK/history" || st_fail "retired hooks changed history"
 CHECKS=$((CHECKS + 1))
-# --dry-run sends nothing, so it records nothing either.
+# Pure historical reader: no live Parent orchestration is reintroduced.
+history() { printf '' | python3 "$BIN/fleet-children.py" show --dir "${LEDGER%/*}" --parent "${P}scratch-7" "$@"; }
+HISTORY=$(history --json)
+python3 - "$HISTORY" <<'PYHISTORY' || st_fail "historical result/task/PR lost" "$HISTORY"
+import json, sys
+rows = {r['child']:r for r in json.loads(sys.argv[1])['children']}
+assert set(rows)=={'acme-app:issue-101','acme-app:issue-102','acme-app:issue-103'}, rows
+assert rows['acme-app:issue-101']['last']['state']=='MERGED'
+assert rows['acme-app:issue-101']['pr']=='501'
+assert rows['acme-app:issue-102']['task']=='T218'
+PYHISTORY
+CHECKS=$((CHECKS + 1))
 bash "$RP" -L "$LBL" --win "$K2" --state blocked --dry-run >/dev/null 2>&1
-eq "--dry-run writes no ledger line" 3 "$(wc -l < "$LEDGER" | tr -d ' ')"
+cmp -s "$LEDGER" "$WORK/history" || st_fail "dry run changed history"
+CHECKS=$((CHECKS + 1))
 
 # --- AGREE: the dash's own badge for the parent row, off the same server --------
 US=$(printf '\037')
@@ -168,78 +147,21 @@ dash_badge() {
     | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '[0-9]+/[0-9]+' | head -1
 }
 dash_badge_of() { dash_badge "$1"; }
-# The dash badge is the bare `k/N` since issue #1328 (no ✓, no `· n!` — a child
-# that needs you is red on its own row); this CLI's summary keeps both, so the
-# two AGREE on the count they share: the summary's leading `k/N`.
-kn() { printf '%s' "${1%% *}"; }
-summ() { bash "$CLI" -L "$LBL" "$@" 2>&1 | tail -1; }
-
-want=$(dash_badge)
-eq "the dash parent row shows the expected badge" "2/3" "$want"
-eq "fleet-children's summary == the dash parent row's badge" "$want" "$(kn "$(summ scratch-7)")"
-out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
-has "a row per child: the FAILED one is loud" '! acme-app:issue-102' "$out"
-has "…the MERGED one is done, with its PR"   'MERGED #501' "$out"
-has "…the hub task record before its title (#3330)" 'T218 kid-failed' "$out"
-case "$out" in *issue-900*) st_fail "a hub-spawned window is nobody's child" "$out" ;; esac
-CHECKS=$((CHECKS + 1))
-
-# --json: the stable machine shape.
-bash "$CLI" -L "$LBL" scratch-7 --json | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-assert d["parent"] == "acme-app:scratch-7" and d["seq"] == 3, d
-s = d["summary"]
-assert (s["total"], s["done"], s["needs"], s["text"]) == (3, 2, 1, "2/3 ✓ · 1!"), s
-k = {c["child"]: c for c in d["children"]}
-assert k["acme-app:issue-101"]["last"]["state"] == "MERGED" and k["acme-app:issue-101"]["live"], k
-assert k["acme-app:issue-102"]["task"] == "T218" and "task" not in k["acme-app:issue-101"], k   # TASK (#3330)
-' || st_fail "--json shape"
-CHECKS=$((CHECKS + 1))
-bash "$CLI" -L "$LBL" scratch-7 --json --since 2 | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-assert [c["child"] for c in d["children"]] == ["acme-app:issue-103"], d["children"]
-assert [e["seq"] for e in d["events"]] == [3], d["events"]
-assert d["summary"]["total"] == 3, d["summary"]
-' || st_fail "--since filters children + lists events, summary stays whole"
-CHECKS=$((CHECKS + 1))
-
-# --- SURVIVE: migrate the parent (new window id, same key) ----------------------
+eq "existing dashboard identity grouping remains readable" "2/3" "$(dash_badge)"
 old="$PARENT"
 TM kill-window -t "$PARENT"
 new_win '分拆方案'; PARENT="$WID"; opt "$PARENT" @raw 1; opt "$PARENT" @worktree "$WORK/repo-scratch-7"; opt "$PARENT" @claude_state idle
-[ "$PARENT" != "$old" ] || st_fail "the migrated parent must carry a NEW window id"
+[ "$PARENT" != "$old" ] || st_fail "migration needs a new window ID"
 CHECKS=$((CHECKS + 1))
-eq "after migration the summary is unchanged" "2/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…and still equals the dash badge"          "$(dash_badge)" "$(kn "$(summ scratch-7)")"
-
-# DEFAULT key: run from inside the parent's pane (bare tmux → the test socket).
-mkdir -p "$WORK/pshim"
-printf '#!/bin/sh\nexec %s -L %s "$@"\n' "$(command -v tmux)" "$LBL" > "$WORK/pshim/tmux"; chmod +x "$WORK/pshim/tmux"
-pane=$(TM display-message -p -t "$PARENT" '#{pane_id}')
-eq "no argument ⇒ the calling pane's own key" "2/3 ✓ · 1!" \
-  "$(TMUX="/tmp/x,1,0" TMUX_PANE="$pane" PATH="$WORK/pshim:$PATH" bash "$CLI" 2>&1 | tail -1)"
-
-# A REAPED child stays in the book: its MERGED report keeps it counted as done.
+eq "history survives a new window under the same key" "$HISTORY" "$(history --json)"
 TM kill-window -t "$K1"
-out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
-eq "a reaped merged child still counts" "2/3 ✓ · 1!" "$(printf '%s\n' "$out" | tail -1)"
-has "…shown as gone" 'acme-app:issue-101 gone' "$out"
-
-# QUIET IS NOT FINISHED (issue #1331): the stopped child K3 now has a /loop
-# between rounds (a live @loop on a `done` window) — not a ✓ any more; a sleeper
-# is not either. The dash's live-only badge agrees (K1 is gone from the server).
-opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) + 1800 )) ttl=1800"
-eq "a done child with a live @loop is not counted done" "1/3 ✓ · 1!" "$(summ scratch-7)"
-has "…it is reported as looping" 'looping' "$(bash "$CLI" -L "$LBL" scratch-7 2>&1)"
-eq "…and the dash badge does not count it either" "0/2" "$(dash_badge)"
-opt "$K3" @loop "kind=wakeup next=$(( $(date +%s) - 7200 )) ttl=600"
-eq "a lapsed @loop (never renewed) is done again" "2/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…on the dash too" "1/2" "$(dash_badge)"
-TM set-option -wu -t "$K3" @loop; opt "$K3" @worker_lifecycle sleeping
-eq "an old sleeping stamp is read as empty: its done counts (T548)" "2/3 ✓ · 1!" "$(summ scratch-7)"
-eq "…on the dash too" "1/2" "$(dash_badge)"
+eq "history survives the old worker being reaped" "$HISTORY" "$(history --json)"
+# Even from a real pane, the retired CLI cannot reactivate child coordination.
+pane=$(TM display-message -p -t "$PARENT" '#{pane_id}')
+socket=$(TM display-message -p '#{socket_path}')
+out=$(TMUX="$socket,1,0" TMUX_PANE="$pane" bash "$CLI" 2>&1); rc=$?
+eq "old children CLI is retired inside a pane too" 2 "$rc"
+has "old CLI explains retirement" 'RETIRED:' "$out"
 
 # --- 3. GENERATIONS (issue #1538): a recycled scratch number starts empty --------
 # fleet_scratch_alloc with the fleet's session mints the number's next generation:
@@ -255,8 +177,8 @@ printf '%s' '{"child":"issue-501","state":"MERGED","pr":"51"}' \
   | python3 "$BIN/fleet-children.py" append --file "$CD/${P}scratch-1.ndjson" >/dev/null \
   || st_fail "gen: could not seed the last holder's book"
 new_win gen-oldkid; GK="$WID"; opt "$GK" @issue 502; opt "$GK" @origin scratch-1; opt "$GK" @origin_wid "u/scratch-1"
-eq "gen: before re-allocation scratch-1 has the old book's child + the live one" 2 \
-  "$(bash "$CLI" -L "$LBL" scratch-1 --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
+eq "gen: pre-retirement historical book remains readable" 1 \
+  "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$CD" --parent "${P}scratch-1" --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
 # T660: a running child whose parent's ID the ledger knows is not moved aside —
 # its @origin becomes that ID, so the new holder never counts it and its report
 # finds the parent (or the parent's own parent) by ID.
@@ -271,7 +193,7 @@ eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/${P}scratch-1.nd
 has "gen: …and kept, readable, in its retired book" "\"child\": \"${P}issue-501\"" "$(cat "$CD/${P}scratch-1.ndjson.0" 2>/dev/null)"
 G1=$(awk -F'\t' -v k="${P}scratch-1" '$1 == k { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)
 case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) st_fail "gen: no generation minted for scratch-1" "$(cat "$CD/.gen" 2>/dev/null)" ;; esac
-NEWOUT=$(bash "$CLI" -L "$LBL" scratch-1 --json 2>&1)
+NEWOUT=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$CD" --parent "${P}scratch-1" --json)
 eq "gen: the new scratch-1 has no children" 0 \
   "$(printf '%s' "$NEWOUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
 eq "gen: a running child of the last holder no longer names scratch-1" "|${P}scratch-1#0|" \
@@ -306,9 +228,8 @@ new_win kid-201; B1="$WID"; opt "$B1" @issue 201; opt "$B1" @origin scratch-12; 
 new_win kid-202; B2="$WID"; opt "$B2" @issue 202; opt "$B2" @origin "${P}scratch-12"; opt "$B2" @claude_state working
 new_win kid-203; B3="$WID"; opt "$B3" @issue 203; opt "$B3" @origin scratch-12; opt "$B3" @claude_state working
 RUN --win "$B1" --state merged --pr 61 --summary landed
-has "bare origin: a bare-@origin child's report is booked under the qualified key" '"child": "acme-app:issue-201"' \
-  "$(tail -1 "$CD/${P}scratch-12.ndjson")"
-eq "bare origin: …never in a bare book" no "$([ -e "$CD/scratch-12.ndjson" ] && echo yes || echo no)"
+eq "bare origin: retired hook creates no qualified book" no "$([ -e "$CD/${P}scratch-12.ndjson" ] && echo yes || echo no)"
+eq "bare origin: retired hook creates no bare book" no "$([ -e "$CD/scratch-12.ndjson" ] && echo yes || echo no)"
 healed=$( . "$BIN/fleet-lib.sh"; fleet_origin_heal "$LBL" "$LBL" )
 has "bare origin: heal rewrites a bare @origin" "$B3 scratch-12 → ${P}scratch-12" "$healed"
 eq "bare origin: …every bare one" "${P}scratch-12|${P}scratch-12" \
@@ -452,8 +373,8 @@ new_win '任务父'; opt "$WID" @raw 1; opt "$WID" @worktree "$WORK/repo-scratch
 new_win kid-task; K9="$WID"; opt "$K9" @raw 1; opt "$K9" @worktree "$WORK/repo-scratch-10"; opt "$K9" @origin "${P}scratch-9"; opt "$K9" @claude_state 'done'; opt "$K9" @task T886
 bash "$RP" -L "$LBL" --win "$K9" --state waiting --outcome succeeded --summary "task done" >"$WORK/k9.out" 2>&1
 L9="$FLEET_CONF_DIR/fleets/$LBL/children/${P}scratch-9.ndjson"
-got9=$(python3 -c 'import json,sys; e=json.loads(open(sys.argv[1]).readlines()[-1]); print(e["state"], e["child"], e.get("task"))' "$L9" 2>/dev/null)
-[ "$got9" = "SUCCEEDED acme-app:scratch-10 T886" ] || st_fail "succeeded: the report lands in the parent's book" "got [$got9]; report-parent said: $(cat "$WORK/k9.out")"
+[ ! -e "$L9" ] || st_fail "succeeded hook unexpectedly created a parent book"
+has "task success hook remains inert" 'RETIRED:' "$(cat "$WORK/k9.out")"
 CHECKS=$((CHECKS + 1))
 
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

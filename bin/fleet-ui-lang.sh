@@ -1361,8 +1361,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:notice_level_warn)       printf 'warn ' ;;
     zh:notice_level_info)       printf '知道' ;;
     en:notice_level_info)       printf 'info ' ;;
-    zh:notice_detail_keys)      printf '↵ 回列表 · g 跳到会话 · r 标为已读 · f 转给编排 · q 关闭' ;;
-    en:notice_detail_keys)      printf '↵ back · g go to it · r mark read · f hand to orchestrator · q close' ;;
+    zh:notice_detail_keys)      printf '↵ 回列表 · g 跳到会话 · r 标为已读 · q 关闭' ;;
+    en:notice_detail_keys)      printf '↵ back · g go to it · r mark read · q close' ;;
     zh:notice_unseen_fmt)       printf '%s 条没看' "${1:-}" ;;
     en:notice_unseen_fmt)       printf '%s unseen' "${1:-}" ;;
     zh:notice_cls_ask)          printf '在问你' ;;
@@ -1389,10 +1389,10 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:notice_act_jumpfail)     printf 'cannot go there: that session is gone' ;;
     zh:notice_act_fwd_fmt)      printf '已转给编排 %s' "${1:-}" ;;
     en:notice_act_fwd_fmt)      printf 'handed to orchestrator %s' "${1:-}" ;;
-    zh:notice_act_fwd_none)     printf '没有编排会话在跑——先开一个 orchestrator 再转' ;;
-    en:notice_act_fwd_none)     printf 'no orchestrator is running — open one first' ;;
-    zh:notice_act_fwd_fail)     printf '没转过去，结果还在这里' ;;
-    en:notice_act_fwd_fail)     printf 'not handed on, the result is still here' ;;
+    zh:notice_act_fwd_none)     printf '自动转交已退役，历史记录仍可查看' ;;
+    en:notice_act_fwd_none)     printf 'automatic forwarding is retired; history remains readable' ;;
+    zh:notice_act_fwd_fail)     printf '自动转交已退役，历史记录仍在这里' ;;
+    en:notice_act_fwd_fail)     printf 'automatic forwarding is retired; history remains here' ;;
     zh:notice_act_fwd_only)     printf '只有没人收的结果能转给编排' ;;
     en:notice_act_fwd_only)     printf 'only a result nobody took can be handed on' ;;
     zh:notice_act_far_fmt)      printf '这条在 %s 上——到那台机器的看台上转' "${1:-}" ;;
@@ -1411,8 +1411,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:notice_none)             printf 'no messages yet' ;;
     zh:notice_page_title)       printf '消息' ;;
     en:notice_page_title)       printf 'Messages' ;;
-    zh:notice_page_keys)        printf '↑↓ 选 · ↵ 看全文 · g 跳到会话 · r 标为已读 · f 转给编排 · q 关闭' ;;
-    en:notice_page_keys)        printf '↑↓ pick · ↵ read · g go to it · r mark read · f hand to orchestrator · q close' ;;
+    zh:notice_page_keys)        printf '↑↓ 选 · ↵ 看全文 · g 跳到会话 · r 标为已读 · q 关闭' ;;
+    en:notice_page_keys)        printf '↑↓ pick · ↵ read · g go to it · r mark read · q close' ;;
     zh:topbar_upstream_fmt)     printf '上游连不上：%s（%s 次）' "${1:-}" "${2:-}" ;;
     en:topbar_upstream_fmt)     printf 'upstream unreachable: %s (%s)' "${1:-}" "${2:-}" ;;
     zh:topbar_up_refused)       printf '连接被拒' ;;

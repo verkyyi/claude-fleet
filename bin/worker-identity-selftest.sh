@@ -132,29 +132,28 @@ st_count; [ "$(opt "$C" @origin_fid)" = "$PF" ] || st_miss "B: a spawn stamps th
 rp() { out=$(env -u TMUX bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$C" --state blocked --summary "$1" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 before=$(frames)
 rp 'first: before the rename'
-st_count; [ "$rc" = 0 ] && case "$out" in "reported → ${Q}scratch-5 ($P)"*) true ;; *) false ;; esac \
-  || st_miss "B: before the rename the child reports to scratch-5" "rc=$rc out=$out err=$err"
+st_count; [ "$rc" = 0 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  || st_miss "B: report remains retired before rename" "rc=$rc out=$out err=$err"
 R1=$out
 # a re-mark: the scratch becomes the worker for #99 (its key changes).
 tf set-window-option -t "$P" @issue 99; tf set-window-option -u -t "$P" @raw
 st_count; [ "$(lib fleet_window_okey "$L" "$P")" = "${Q}issue-99" ] || st_miss "B: after the bind the parent's key is issue-99"
 rp 'second: after the rename'
-st_count; [ "$rc" = 0 ] && case "$out" in "reported → ${Q}issue-99 ($P)"*) true ;; *) false ;; esac \
-  || st_miss "B: after the rename the child STILL reports to the same window (now issue-99)" "rc=$rc out=$out err=$err"
+st_count; [ "$rc" = 0 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  || st_miss "B: report remains retired after rename" "rc=$rc out=$out err=$err"
 R2=$out
-st_count; [ "$(frames)" = $((before + 2)) ] || st_miss "B: two frames reached the parent's inbox" "$(frames) (was $before)"
-st_count; [ "$(opt "$C" @origin)" = "${Q}issue-99" ] || st_miss "B: the report re-pointed the child's @origin at the parent's current key" "$(opt "$C" @origin)"
-st_count; [ -s "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" ] && grep -q 'second: after the rename' "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" \
-  || st_miss "B: the second report is booked under the key the parent answers to now"
-st_count; grep 'second: after the rename' "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" | grep -q "\"pfid\": \"$PF\"" \
-  || st_miss "B: the book's row carries the parent's identity as pfid (issue #1955)" "$(tail -1 "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson")"
+st_count; [ "$(frames)" = "$before" ] || st_miss "B: retired reports send zero inbox frames" "$(frames) (was $before)"
+st_count; [ "$(opt "$C" @origin)" = scratch-5 ] || st_miss "B: retired report does not rewrite historical origin" "$(opt "$C" @origin)"
+st_count; [ ! -e "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" ] || st_miss "B: no new parent ledger is created"
+st_count; [ "$(lib fleet_origin_win "$L" "$C" "$L")" = "$P" ] && [ "$(opt "$C" @origin_fid)" = "$PF" ] \
+  || st_miss "B: stable identity still resolves the renamed window"
 # The contrast — a child from before #1646 (no @origin_fid) still books under the
 # name its parent wore, scratch-5: a book the parent (issue-99 now) never reads,
 # and a key the sidebar's nesting and the hub's inventory no longer know.
 C0=$(tf new-window -d -P -F '#{window_id}' -n oldkid 'while :; do sleep 300; done')
 tf set-window-option -t "$C0" @issue 601; tf set-window-option -t "$C0" @origin scratch-5
 out=$(env -u TMUX bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$C0" --state blocked --summary x --dry-run 2>&1)
-st_count; case "$out" in *"would send to ${Q}scratch-5 "*) true ;; *) false ;; esac || st_miss "B: a key-only child of a renamed parent is booked under the stale key (the contrast)" "$out"
+st_count; case "$out" in RETIRED:*) true ;; *) false ;; esac || st_miss "B: key-only stale parent cannot reactivate reporting" "$out"
 tf kill-window -t "$C0"
 printf '%s\n%s\n' "$R1" "$R2" > "$WORK/evidence.txt"
 [ -n "${WORKER_IDENTITY_EVIDENCE:-}" ] && cp "$WORK/evidence.txt" "$WORKER_IDENTITY_EVIDENCE"
@@ -168,8 +167,9 @@ tf set-window-option -t "$C3" @issue 603; tf set-window-option -t "$C3" @origin 
 tf set-window-option -t "$C3" @origin_fid 00000000-0000-4000-8000-000000000000
 hout=$(lib fleet_origin_heal "$L" "$L")
 # C3's parent is not live: its bare @origin is only spelled whole (issue #1939), gen kept.
-st_count; [ "$hout" = "healed $C2 scratch-5 → ${Q}issue-99
-healed $C3 scratch-5 → ${Q}scratch-5" ] || st_miss "C: heal re-points the one child, and spells the other's bare key whole" "$hout"
+st_count; [ "$hout" = "healed $C scratch-5 → ${Q}issue-99
+healed $C2 scratch-5 → ${Q}issue-99
+healed $C3 scratch-5 → ${Q}scratch-5" ] || st_miss "C: explicit heal updates both identity links and qualifies the missing one" "$hout"
 st_count; [ "$(opt "$C2" @origin)" = "${Q}issue-99" ] && [ -z "$(opt "$C2" @origin_gen)" ] || st_miss "C: @origin re-pointed, the old key's @origin_gen dropped" "$(opt "$C2" @origin)|$(opt "$C2" @origin_gen)"
 st_count; [ "$(opt "$C3" @origin)" = "${Q}scratch-5" ] || st_miss "C: a child whose parent is not live keeps its parent's key" "$(opt "$C3" @origin)"
 st_count; [ -z "$(lib fleet_origin_heal "$L" "$L")" ] || st_miss "C: a second heal has nothing to do"

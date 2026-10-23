@@ -26,10 +26,9 @@ Fix any drift in the map's favour of reality, then carry on with its **next step
 in this same turn. Do not stop to ask whether to continue, and do not restate the
 map back — the operator has seen it.
 
-If the map's next step was waiting on something (CI, a child worker, the
-operator), resume that wait the way the map says (e.g. `mcp__fleet__pr_verdict`
-with `wait: true`, or `mcp__fleet-orch__await` for a child where the dispatch group
-is mounted) rather than idling.
+If the next step depends on CI, use `mcp__fleet__pr_verdict` with `wait: true`.
+Use the native agent to coordinate its subagents. Parent reporting and Fleet
+await are retired; inspect an independent Task directly when its work matters.
 
 ## 排障
 

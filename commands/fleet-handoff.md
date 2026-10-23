@@ -74,7 +74,7 @@ this turn — that wakeup dies with the session, and C4 forbids the extra tool c
 anyway. §P re-arms it after the clear.
 
 **If a person is mid-step on something this session put up** (issue #2869) — a
-page or code you sent them to scan / click (`report waiting` with it), a Playwright
+page or code you sent them to scan / click, a Playwright
 browser holding a login — the clear is about to take the browser with it. Before
 anything else: write ONE line where they are looking (the same page / issue / reply
 you sent the step on) — 「会话正在交接，请稍候」 — and **put up no new code**. Then

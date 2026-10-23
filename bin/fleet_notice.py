@@ -879,17 +879,6 @@ def grouped(msgs):
     return out
 
 
-def orchestrator_fid():
-    """The live orchestrator session's identity (a window started from the agent
-    file `orchestrator`, @agent_def), '' when none runs."""
-    rc, out = tmux("", "list-windows", "-a", "-F", "#{@agent_def}\t#{@fleet_id}")
-    for line in out.splitlines() if rc == 0 else []:
-        d, _, fid = line.partition("\t")
-        if d == "orchestrator" and len(fid) == 36:
-            return fid
-    return ""
-
-
 def act(m, key, view="", client=""):
     """One of the page's actions on message `m`: (said, rc) — rc 3 = the 看台 went."""
     if key == "r":
@@ -907,25 +896,8 @@ def act(m, key, view="", client=""):
         except (OSError, subprocess.SubprocessError):
             rc = 1
         return (None, 3) if rc == 0 else (say("notice_act_jumpfail"), 0)
-    if key == "f":
-        if m["cls"] != "orphan" or not m.get("ref"):
-            return say("notice_act_fwd_only"), 0
-        if not m.get("here"):
-            return say("notice_act_far_fmt", m.get("node") or "?"), 0
-        fid = orchestrator_fid()
-        if not fid:
-            return say("notice_act_fwd_none"), 0
-        try:
-            ok = subprocess.run([sys.executable, str(BIN / "fleet-orphan-reports.py"), "redeliver", "--to", fid,
-                                 "--id", m["ref"], "--since", "0", "--apply"], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=90).stdout.startswith("redelivered")
-        except (OSError, subprocess.SubprocessError):
-            ok = False
-        if not ok:
-            return say("notice_act_fwd_fail"), 0
-        mark_read(ids=[m["id"]])
-        m["seen"] = True
-        return say("notice_act_fwd_fmt", fid[:8]), 0
+    if key == "f":  # compat-1v: old callers cannot revive Parent forwarding.
+        return say("notice_act_fwd_fail"), 0
     return "", 0
 
 
@@ -968,7 +940,7 @@ def page(args):
     """「✦ 消息」 in a popup (T701): every message of the week from the one book and
     the other machines', grouped (在问你 · 错误 · 警告 · 没人收的结果 · 做完 · 提示),
     the unseen ones bold; ↑↓ pick, ↵ the whole text, g the message's session, r mark
-    read, f hand a result nobody took to the running orchestrator, q / Esc close.
+    read, q / Esc close. Historical results remain readable.
     Opening it is seeing them: the read mark moves (the message row folds). Exit 3:
     the 看台 went to a session."""
     import shutil
@@ -1045,7 +1017,7 @@ def page(args):
                     top = max(0, top - 1)
                 elif ch in (b"\x1b[B", b"j"):
                     top += 1
-                elif ch in (b"g", b"r", b"f"):
+                elif ch in (b"g", b"r"):
                     said, rc = act(opened, ch.decode(), view, client)
                     if rc == 3:
                         break
@@ -1062,7 +1034,7 @@ def page(args):
                 at = min(len(picks) - 1, at + room) if picks else 0
             elif ch in (b"\r", b"\n") and cur is not None:
                 opened, top = cur, 0
-            elif ch in (b"g", b"r", b"f") and cur is not None:
+            elif ch in (b"g", b"r") and cur is not None:
                 said, rc = act(cur, ch.decode(), view, client)
                 if rc == 3:
                     break

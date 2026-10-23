@@ -65,16 +65,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   pass the existing Git identity checks in `hooks/base-readonly-guard.py`.
   `hooks/agent-guard.py` is a silent compatibility entry for older sessions;
   new hook tables do not register it. No subagent override is needed.
-- **Any session spawns, a worker too** (issue #4591 lifted #2960's
-  one-level rule). The `spawn` / `task` tools and
-  `fleet-await.sh` ask no seat; the session caps and the claim dedup are the only
-  bounds (`fleet_spawn_refused` is gone, #4790). The dispatch group (`fleet-orch`) mounts for EVERY
-  session (issue #4703 undid #4334's `@agent_spawn 1` gate); `@agent_spawn` gates
-  nothing, and a group-less older session sees the group on `fleet`. A grandchild reports to the worker
-  that spawned it; a reaped worker's reports climb to the nearest live ancestor
-  (`fleet_live_ancestor`, #1352), else the person's reminder (#3117).
-  `fleet-await-selftest.sh` SEAT, `fleet-mcp-selftest.sh` P,
-  `spawn-origin-gate-selftest.sh` F.
+- **Any session may start independent tasks.** The `spawn` / `task` tools
+  retain their session caps and claim dedup; they require no coordinator role.
+  Internal orchestration belongs to the native agent and its subagents.
+  Fleet Parent reporting, `await`, `children`, delegation and automatic question
+  copies are retired. New tool lists omit them; old handlers remain for one
+  version and answer explicitly without spawning, waiting or delivering.
+  Explicit legacy `report` calls preserve only the caller's own result history
+  and still verify merged PR evidence. Old `--win` hooks write nothing.
+  Pending report payloads remain readable after retirement; they never become
+  orphan reminders. Ordinary peer messages retain their existing transport.
+  Historical Parent fields and message-address fallbacks remain migration work;
+  do not introduce new Parent-dependent behavior or a replacement report bus.
 - **A fleet hosts zero or more GitHub repos** (issue #788, switched on in #795),
   **every one put the same way** (issue #1937): `fleets/<sess>/repos/<slug>.conf`,
   ordered by `repos/.order` — `fleet-up.sh` and `bin/fleet-repo.sh add` both go
@@ -353,24 +355,23 @@ one-off drill / audit records do not go in the repo (issue #3576).
   GitHub issue is opened for it (#4898) and the hub keeps no ticket layer (T477). The top bar shows `#N`, else `T<n>`; the
   hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
-  **The fleet's coordinators write the same record from a machine** (issue #3330):
+  **Agents write the same task record from a machine** (issue #3330):
   `bin/fleet-task-record.sh` (`/v1/node/tasks`, the node token on curl's stdin) —
-  the orchestrator's `task` tool opens the record FIRST, and a development task
+  the `task` tool opens the record FIRST, and a development task
   is that record alone (issue #4897, EPIC #4895 批 0): its session opens in a
   worktree of the repo bound to `T<n>` (`dash-raw-session.sh --repo --task`,
   `@task` + `@task_flow 1` before the agent starts, the worktree's git dir marked
   `fleet-task` — `fleet_worktree_task`), `fleet-worker-start-hook.sh` gives it the
-  task flow (read the record with `brief`, PR, merge on green, `report merged`
-  closes the record — no issue claimed, commented on or closed), and every reaper
+  task flow (read the record with `brief`, PR, merge on green, summarize the
+  result — no issue claimed, commented on or closed), and every reaper
   reads «over» as the record closed (`fleet_task_closed`, `fleet_task_control.py
   closed`): fleet-cleanup-idle.py's task route (`merged` = record closed),
   fleet-cleanup.sh's completion gate and worktree-autoclean.sh for any session
   that carries a record. Nothing is filed as an issue (issue #4898, 批 1): no hub ⇒
-  `fleet-task-record.sh dispatch` exits 3. A child report carries `task`, `await` takes `T<n>`, a session's
-  `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
-  and an EPIC is a parent task whose members are its child tasks (issue #4957:
-  `bin/fleet-epic-tick.py` reads the batch off the hub). No hub ⇒ the script
-  exits 3 and every caller is byte for byte as before. **A session with no issue
+  `fleet-task-record.sh dispatch` exits 3. A session's `ask` and park write
+  「问过你」 / 「停放」 on its own record. Parent/report/await coordination and
+  EPIC driver entry points are retired; existing relation fields remain readable
+  until their writers are removed. **A session with no issue
   is parked and remembered by its record** (issue #3387): a park books it as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
   `task:T<n>`) and wakes it through
   `dash-raw-session.sh --resume <sid> --seed-file … --task T<n>` (its kept scratch
@@ -385,7 +386,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `startup` only) reads the stamp and answers one grey `systemMessage` line
   (「fleet-worker · <repo> · 单 #N · 做完开 PR，门绿了自己合」) + an `additionalContext`
   with the flow: `brief`, implement, a PR carrying `Closes #N`, `pr_verdict` →
-  `pr_merge`, `report merged` — never a claim, comment or close (a task record's
+  `pr_merge`, then a summary — never a claim, comment or close (a task record's
   session gets the same flow off `@task_flow`). fleet-worker's body stays empty, so
   this is the flow's only road in. A no-repo task, a scratch, a Codex worker or
   `FLEET_SEED_WORDS=0` ⇒ no stamp: the flow rides the first turn as plain words.
@@ -429,22 +430,15 @@ one-off drill / audit records do not go in the repo (issue #3576).
   found or unreadable ⇒ the spawn refuses before any window, naming the file
   (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
   is there, else a plain session given the task. The core ships
-  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator) into
+  `conf/agent-defaults/claude/agents/` (fleet-worker) into
   `~/.claude/agents` through
   install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
   following the release while still the fleet's bytes, never touched once edited
   (the person's override) or deleted (`agents-shipped.json` remembers); one the
-  core stops shipping is retired while still the fleet's bytes. **The EPIC driver
-  is the fleet-epic plugin's** (issue #3116, C5): `plugins/fleet-epic/agents/epic-driver.md`
-  (`fleet: reap: loop-end`, every tool) beside its three commands and epic-page;
-  `/fleet-epic-plan` opens a batch as a parent hub task whose session is the driver
-  (the `task` tool, `agent: epic-driver` — issue #4957: its members are child tasks,
-  `bin/fleet-epic-tick.py` reads the batch off the hub, no GitHub issue), which
-  Claude Code finds by the bare name; no plugin ⇒ no driver, a task is a task.
-  A login an older release shipped it into gets fleet-epic (`fleet-plugins.py`
-  carry-over) before the copy is retired. The batch marks and heartbeat / floor /
-  backstop / preflight scripts stay in `bin/` — only the plugin's commands call
-  them (`fleet-plugins-selftest.sh` I). Every window may
+  core stops shipping is retired while still the fleet's bytes. **The EPIC driver and plan/run/report entry points are retired.**
+  Their one-version compatibility entries cannot start old automation; generic
+  task planning remains available. Historical batch fields and lifecycle readers
+  are being removed separately, not replaced with a coordinator. Every window may
   spawn (issues #4591, #4703) — a file's `spawn` grant (`@agent_spawn`, off
   `fleet-agent-def.py spawn-tools`) is recorded, never a gate; the old `--role`
   spelling and `@fleet_role_def` are read no more (#4790).

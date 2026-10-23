@@ -13,48 +13,11 @@
 #   fleet-hub-node.sh env [--write [--force]] [--plist <file>]
 #                                → this login's node token file (issue #1491; the
 #                                  one subcommand meant to be run by hand — see below)
-#   fleet-hub-node.sh progress [--max-age S]
-#                                → pull the hub's progress streams of this login's
-#                                  fleets into their children ledgers (issue #1648;
-#                                  the cleanup tick and fleet-children.sh run it)
+#   fleet-hub-node.sh progress → compatibility no-op (one version)
 #
-# A worker's parent, or the worker a message is for, may live on another machine.
-# The sending side drops a relay in the outbox (fleet_hub_put, bin/fleet-lib.sh);
-# the agent hands it to the hub, which stores it and pushes it down the TARGET
-# machine's control channel; that machine's agent runs `deliver` with it:
-#
-#   child_report  {child, state, pr, verdict, summary, title, tier, msg}
-#                 → appended to the PARENT's ledger here (children_append's file,
-#                   plus `node` = the child's machine and `rid` = the relay id, so a
-#                   redelivery is a no-op), then delivered to the parent exactly as a
-#                   local report would be: tier silent = ledger only; batch mode =
-#                   the digest's (a loud one flushes now); else `msg` — the envelope
-#                   the child built — into the parent's pane (children_send).
-#   message       {text[, repo][, bridge]} → fleet-peer-send.sh to the target worker,
-#                 with one `[from <key> on <node>]` line in front so it knows who to
-#                 answer — `<key>` is `operator@<login>` for the person at a login
-#                 (issue #1649). `repo` (a bare issue:<N> the sender matched by
-#                 number): refused unless the target window works it. `bridge`
-#                 {issue, cid}: an issue comment an older sender's bridge
-#                 forwarded — refused for good (the bridge left with #4899).
-#   receipt       {rid, kind, to, status, detail} — the hub telling the SENDER what
-#                 became of a relay it sent (issue #1647): one row in the sending
-#                 fleet's delivery book (fleet-peer-queue.sh note), DELIVERED /
-#                 FAILED / EXPIRED — or QUEUED when the target's machine took it
-#                 but holds it for a recipient that cannot take it yet.
-#
-# A recipient that is not live here — no window answers to its identity or key —
-# is «not now» (75), never «done»: the hub keeps the relay and pushes it again the
-# beat this machine's inventory lists that worker (issue #1647). A child report is
-# still ledgered on the first push (the parent's book is the record); a recipient
-# whose window is here but cannot take it yet (no live Claude, an inbox that will
-# not answer) gets it through this machine's peer queue (fleet-peer-queue.sh), and
-# the last stderr line — the hub's detail — starts `queued`.
-#
-# Exit: 0 applied (or already applied, or queued here) · 75 not now, push it again
-# later · anything else refused for good (the reason on stderr's last line). Never
-# touches a window that is not the relay's target: the target is a worker_id of a
-# fleet on THIS machine (fleet_wid_home), or the relay is refused.
+# message relays keep their ordinary routing, recipient checks, and receipts.
+# child_report is permanently refused before routing or writing any ledger.
+# Exit: 0 applied/queued · 75 ordinary message retry · 1 permanent refusal.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -172,111 +135,6 @@ PY
   esac
 }
 
-# --- progress: one stream per parent (issue #1648, EPIC #1645 C5) -----------------
-# The hub appends, under the PARENT's worker_id, every state of a placement it made
-# for that parent (accepted → running → done | refused | failed) and every report a
-# child on another machine relayed to it. This pulls the streams of this login's
-# fleets (GET /v1/node/progress, the node token — never in a pane's env) and merges
-# them into the ledger here, deduped on the event's rid: a report the relay push
-# already delivered is one row, a placement's later state is a new `.dispatch` row
-# (so a child never stays «accepted»), and a report the push never got here lands
-# anyway. The placements a book still holds open ride along as `ops=`: the hub asks
-# their machine once more, so an --async start reaches its final state too.
-#
-#   --max-age S   skip when the last pull is younger than S seconds (fleet-children.sh)
-#
-# Cursor + stamp: $FLEET_CONF_DIR/hub-progress/{seq,pulled}. A parent with no fleet
-# here, or whose window (identity form) is not live, is skipped — the push path holds
-# its reports. Merging only APPENDS: a pulled report goes through the same
-# `fleet-children.py append` as every other (rid dedup), never a delivery into a
-# pane — that stays the push path's. Exit: 0 pulled (or fresh enough) · 1 the hub
-# refused / did not answer · 3 not applicable: no fleet here has the hub on, no node
-# token, FLEET_HUB_PROGRESS=0, a hub that predates #1648 — nothing written, a
-# one-machine fleet reads what it always read.
-# Seams: FLEET_HUB_CURL (default curl), FLEET_HUB_TIMEOUT (default 10 s).
-progress_pull() {
-  local maxage='' pd seqf stamp since now last on s _c f ops resp rc code n=0 skip=0
-  local parent home pkey pwin book got
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --max-age) maxage="${2:-}"; maxage="${maxage//[^0-9]/}"; shift ;;
-      *) die 2 "usage: fleet-hub-node.sh progress [--max-age S]" ;;
-    esac
-    shift
-  done
-  [ "${FLEET_HUB_PROGRESS:-1}" != 0 ] || return 3
-  on=0
-  while IFS=$'\t' read -r s _c; do
-    [ -n "$s" ] && fleet_hub_on "$s" && { on=1; break; }
-  done <<EOF
-$(fleet_each_conf)
-EOF
-  [ "$on" = 1 ] || return 3
-  _fleet_hub_creds_missing >/dev/null && return 3
-  command -v python3 >/dev/null 2>&1 || return 3
-  pd="$FLEET_CONF_DIR/hub-progress"; seqf="$pd/seq"; stamp="$pd/pulled"
-  mkdir -p "$pd" 2>/dev/null || return 1
-  now=$(date +%s)
-  if [ -n "$maxage" ]; then
-    last=$(cat "$stamp" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
-    [ $((now - last)) -lt "$maxage" ] && return 0
-  fi
-  printf '%s\n' "$now" > "$stamp"
-  since=$(cat "$seqf" 2>/dev/null); case "$since" in ''|*[!0-9]*) since=0 ;; esac
-  # The placements still open in any book here (each child's last row), ≤50.
-  : > "$pd/books"
-  while IFS=$'\t' read -r s _c; do
-    [ -n "$s" ] || continue
-    for f in "$(fleet_state_dir "$s")"/children/*.dispatch; do
-      [ -f "$f" ] && printf '%s\n' "$f" >> "$pd/books"
-    done
-  done <<EOF
-$(fleet_each_conf)
-EOF
-  ops=$(python3 "$BIN/fleet-children.py" open-ops < "$pd/books" 2>/dev/null)
-  resp=$(_fleet_hub_env
-    "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -o - -w '\n%{http_code}' \
-      -H "Authorization: Bearer $CCQUOTA_TOKEN" -G --data-urlencode "since=$since" \
-      ${ops:+--data-urlencode "ops=$ops"} "${CCQUOTA_HUB_URL%/}/v1/node/progress" 2>/dev/null); rc=$?
-  if [ "$rc" -ne 0 ] || [ -z "$resp" ]; then
-    printf 'fleet-hub-node: progress: hub unreachable (curl exit %s)\n' "$rc" >&2; return 1
-  fi
-  code=$(printf '%s\n' "$resp" | tail -n 1)
-  case "$code" in
-    200) ;;
-    404|405) return 3 ;;
-    *) printf 'fleet-hub-node: progress: the hub refused (HTTP %s)\n' "$code" >&2; return 1 ;;
-  esac
-  printf '%s\n' "$resp" | sed '$d' > "$pd/last.json"
-  # Each parent the answer names, resolved ONCE to its fleet here and the key its
-  # book is filed under — an identity-form parent through its live window.
-  while IFS= read -r parent; do
-    [ -n "$parent" ] || continue
-    home=$(fleet_wid_home "wid:$parent" 2>/dev/null) || { skip=$((skip + 1)); continue; }
-    fleet_hub_on "$home" || { skip=$((skip + 1)); continue; }
-    pkey=${parent#*/}
-    if fleet_is_fid "$pkey"; then
-      pwin=$(fleet_win_for_fid "$pkey" "$(fleet_socket "$home")" 2>/dev/null) || pwin=''
-      pkey=''; [ -n "$pwin" ] && pkey=$(fleet_window_okey "$home" "$pwin" 2>/dev/null)
-      [ -n "$pkey" ] || { skip=$((skip + 1)); continue; }
-    fi
-    pkey=$(fleet_key_qualify "$home" "$pkey")   # a bare parent key is the one repo's (#1939)
-    book=$(fleet_load_conf "$home" >/dev/null 2>&1; . "$BIN/fleet-children-lib.sh"; children_file "$pkey" "$home") \
-      || { skip=$((skip + 1)); continue; }
-    got=$(python3 "$BIN/fleet-children.py" merge --file "$book" --parent "$parent" \
-      < "$pd/last.json" 2>/dev/null) || got=0
-    case "$got" in ''|*[!0-9]*) got=0 ;; esac
-    n=$((n + got))
-  done <<EOF
-$(python3 "$BIN/fleet-children.py" merge --parents < "$pd/last.json" 2>/dev/null)
-EOF
-  python3 -c 'import json, sys; print(int(json.load(open(sys.argv[1])).get("seq") or 0))' "$pd/last.json" \
-    > "$seqf.tmp" 2>/dev/null && mv -f "$seqf.tmp" "$seqf"
-  if [ "$n" -gt 0 ] || [ "$skip" -gt 0 ]; then
-    printf 'progress: %s new row(s), %s parent(s) not here\n' "$n" "$skip"
-  fi
-  return 0
-}
 
 case "${1:-}" in
   paths)
@@ -301,7 +159,8 @@ case "${1:-}" in
   execution-exit-retry) [ "$#" -eq 1 ] || die 2 "execution-exit-retry takes no arguments"
     exec python3 "$BIN/fleet-control.py" retry-native-exits ;;
   env) shift; node_env "$@"; exit $? ;;
-  progress) shift; progress_pull "$@"; exit $? ;;
+  # compat-1v: 下一批删 — progress pulling retired; old ticks do nothing.
+  progress) exit 0 ;;
   deliver) ;;
   *) die 2 "usage: fleet-hub-node.sh paths | execution-sync | execution-exit-retry | deliver < relay.json | env [--write [--force]] [--plist <file>] | progress [--max-age S]" ;;
 esac
@@ -327,7 +186,9 @@ uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 wid = re.compile(r"^" + uuid + r"/(([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}|" + uuid + r")$")
 rid, kind, frm, to = (str(r.get(k) or "") for k in ("id", "kind", "from", "to"))
 node = re.sub(r"[^A-Za-z0-9._-]", "", str(r.get("from_node") or ""))[:64]
-if kind not in ("child_report", "message", "receipt"):
+if kind == "child_report":
+    sys.exit("PARENT_REPORT_RETIRED: parent reporting has been retired")
+if kind not in ("message", "receipt"):
     sys.exit("unknown relay kind %r" % kind)
 # The person at a login (issue #1649): a message's `from`, and so the `to` of its
 # receipt — never anything else. The hub checked the login against the fleet's.
@@ -354,12 +215,7 @@ if kind == "receipt":
     open(os.path.join(work, "row"), "w").write(json.dumps(
         {"state": st.upper(), "kind": str(p.get("kind") or ""), "to": str(p.get("to") or frm), "detail": detail},
         ensure_ascii=False))
-elif kind == "child_report":
-    row = {k: p.get(k, "") for k in ("child", "state", "pr", "verdict", "summary", "title", "tier")}
-    row.update(node=node or "?", rid=rid)
-    open(os.path.join(work, "row"), "w").write(json.dumps(row, ensure_ascii=False))
-    open(os.path.join(work, "msg"), "w").write(str(p.get("msg") or ""))
-    tier = str(p.get("tier") or "")
+
 else:
     text = str(p.get("text") or "")
     if not text.strip():
@@ -381,7 +237,7 @@ for v in (kind, frm, to, node, tier, rid):
     print(v)
 PY
 ) || die 1 "${fields##*$'\n'}"
-{ read -r KIND; read -r FROM; read -r TO; read -r NODE; read -r TIER; read -r RID; } <<EOF
+{ read -r KIND; read -r FROM; read -r TO; read -r NODE; read -r _TIER; read -r RID; } <<EOF
 $fields
 EOF
 
@@ -397,52 +253,18 @@ EOF
   exit 0
 fi
 
-# Delegation affects delivery only. Its sealed envelope names the original
-# parent; do not put this worker into the supervisor's children ledger. A held
-# adapter returns retry to the hub, not a successful receipt or user fallback.
-if [ "$KIND" = child_report ] && python3 - "$WORK/in" "$WORK/delegated" <<'PYDELEGATION'
-import json, sys
-r = json.load(open(sys.argv[1]))
-p = r['payload']
-d = p.get('report_delegation')
-if not d:
-    sys.exit(1)
-if not isinstance(d, dict) or d.get('reporter') != r['from'] or d.get('target') != r['to'] or p.get('rid') != r['id']:
-    sys.exit(2)
-with open(sys.argv[2], 'w') as f:
-    json.dump(p, f)
-PYDELEGATION
-then
-  python3 "$BIN/fleet_report_delegation.py" deliver "$WORK/delegated"
-  exit $?
-else
-  _drc=$?
-  [ "$_drc" != 2 ] || die 1 'delegation envelope does not match relay identities'
-fi
-
-# Task reports are fenced against task and parent generation before any key
-# resolution or ledger delivery. The hub retains retryable delivery failures.
-if [ "$KIND" = child_report ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("payload", {}).get("task_report") else 1)' "$WORK/in"; then
-  exec python3 "$BIN/fleet_task_control.py" receive --file "$WORK/in"
-fi
-
 home=$(fleet_wid_home "wid:$TO") || die 1 "target $TO is not a fleet on this machine"
 sock=$(fleet_socket "$home")
 pkey=${TO#*/}
 fkey=${FROM#*/}
-# An identity-form target (issue #1646): the parent session by its @fleet_id, booked
-# under the key it answers to NOW — a scratch bound to an issue since it spawned
-# the child is still that child's parent. Not live here ⇒ refused below as before.
+# An identity-form recipient resolves through its stable @fleet_id.
 pfwin=''
 if fleet_is_fid "$pkey"; then
   pfwin=$(fleet_win_for_fid "$pkey" "$sock" 2>/dev/null) || pfwin=''
   # Not live here (yet): the hub holds it and pushes it again the beat this
   # machine's inventory lists that identity (issue #1647).
-  [ -n "$pfwin" ] || die 75 "not now: parent $pkey has no live window here"
-  # Live here. Booked under the key it answers to now; a window with no key at
-  # all (a no-repo session) is booked under its identity — never «not now» for a
-  # window that is right here (issue #3520: the hub re-pushed it forever, and the
-  # sender read the endless retry as its parent being offline).
+  [ -n "$pfwin" ] || die 75 "not now: recipient $pkey has no live window here"
+  # No-repo sessions may have no key; their stable identity remains usable.
   _pk=$(fleet_window_okey "$home" "$pfwin" 2>/dev/null)
   [ -n "$_pk" ] && pkey=$_pk
 fi
@@ -475,51 +297,4 @@ if [ "$KIND" = message ]; then
     *) die 75 "${out##*$'\n'}" ;;
   esac
 fi
-
-# --- child_report ----------------------------------------------------------------
-fleet_load_conf "$home"
-# shellcheck source=/dev/null
-. "$BIN/fleet-children-lib.sh"
-pkey=$(fleet_key_qualify "$home" "$pkey")   # a bare parent key is the one repo's (#1939)
-lf=$(children_file "$pkey" "$home") || die 1 "no ledger for parent $pkey"
-res=$(python3 "$BIN/fleet-children.py" append --file "$lf" < "$WORK/row" 2>&1) || die 1 "ledger refused it: ${res##*$'\n'}"
-# A relay pushed again is ledgered once; it is DELIVERED once too — the rids this
-# machine handed to their parent (or its queue) are kept beside the ledger, so a
-# push that comes back after «not now» still gets delivered (issue #1647).
-sentf="${lf%/*}/.relay-sent"
-case "$res" in dup*)
-  if grep -qxF "$RID" "$sentf" 2>/dev/null; then
-    printf 'fleet-hub-node: %s already in %s ledger\n' "$fkey" "$pkey" >&2; exit 0
-  fi ;;
-esac
-
-[ "$TIER" = silent ] && exit 0
-MODE=$(children_report_mode)
-[ "$MODE" = 0 ] && exit 0
-if [ "$MODE" = batch ]; then
-  [ "$TIER" = loud ] && [ -f "$BIN/fleet-children-flush.sh" ] \
-    && bash "$BIN/fleet-children-flush.sh" -L "$sock" --parent "$pkey" >/dev/null 2>&1
-  exit 0
-fi
-pwin=$pfwin
-[ -n "$pwin" ] || pwin=$(fleet_win_for_key "$pkey" "$sock") || pwin=''
-[ -n "$pwin" ] || die 75 "not now: parent $pkey has no window here — ledgered, delivered when it is back"
-[ -s "$WORK/msg" ] || exit 0
-children_send "$home" "$sock" "$pwin" "$(cat "$WORK/msg")" "$RID"; rc=$?
-if [ "$rc" -eq 0 ]; then
-  children_cursor_set "$pkey" "$home"
-  printf '%s\n' "$RID" >> "$sentf"
-  printf 'reported → %s (%s) from %s on %s\n' "$pkey" "$pwin" "$fkey" "${NODE:-?}" >&2
-  exit 0
-fi
-# The window is here, its inbox will not answer now: this machine's peer queue
-# holds it for the parent's identity (drained every tick).
-pfid=$(fleet_window_fid "$home" "$pwin" "$sock" 2>/dev/null) || pfid=''
-if printf '%s' "$(cat "$WORK/msg")" | bash "$BIN/fleet-peer-queue.sh" put -L "$home" --kind report \
-     --rid "$RID" --to "$pkey" ${pfid:+--to-fid "$pfid"} --to-key "$pkey" >/dev/null; then
-  printf '%s\n' "$RID" >> "$sentf"
-  printf 'queued at %s: parent %s (%s) cannot take it now — delivered when it can\n' "$(hostname -s 2>/dev/null)" "$pkey" "$pwin" >&2
-  exit 0
-fi
-die 75 "not now: parent $pkey ($pwin) has no reachable inbox"
 

@@ -81,13 +81,9 @@ func dropRelay(t *testing.T, outbox, name string, r control.Relay) string {
 	return f
 }
 
-// TestRelayIntegrationTwoAgents is the issue's 完成判据, on a local hub with two
-// real agents and claude-fleet's real fleet_control.py: a child on one machine
-// reports to its parent on the other; the parent's machine applies it exactly
-// once however often it is sent; a parent machine that is offline gets it when
-// it is back; the hub map tells each machine where the other's workers are and
-// whose children they are; and a node cannot speak for a worker it does not
-// host.
+// Two real node agents verify permanent report refusal, including a backlog
+// targeting an old receiver, while ordinary messages still deduplicate, wait
+// through disconnects, and enforce sender ownership.
 func TestRelayIntegrationTwoAgents(t *testing.T) {
 	py, err := exec.LookPath("python3")
 	if err != nil {
@@ -173,41 +169,81 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 		return false
 	})
 
-	// A report, sent twice (the outbox's resend): applied once.
 	childOutbox := filepath.Join(childHome, "outbox")
-	report := control.Relay{ID: childWID + "#1700000000.1", Kind: control.RelayChildReport, From: childWID, To: parentWID,
-		Payload: json.RawMessage(`{"child":"issue-42","state":"MERGED","pr":"7","tier":"quiet","msg":"[child-report] issue #42"}`)}
-	f1 := dropRelay(t, childOutbox, "20260101T000000Z-1-a.json", report)
+	// An old sender's report is permanently refused, never stored or sent to
+	// the recipient, even when both nodes still advertise relay capability.
+	retired := control.Relay{ID: childWID + "#retired", Kind: control.RelayChildReport, From: childWID, To: parentWID, Payload: json.RawMessage(`{"state":"MERGED"}`)}
+	retiredPath := dropRelay(t, childOutbox, "20260101T000000Z-retired.json", retired)
+	retiredSaved := filepath.Join(childOutbox, "refused", filepath.Base(retiredPath))
+	waitFor(t, 5*time.Second, "old report permanently refused", func() bool { return gone(retiredPath) && !gone(retiredSaved) })
+	if why, _ := os.ReadFile(retiredSaved + ".why"); !strings.Contains(string(why), "PARENT_REPORT_RETIRED") {
+		t.Fatalf("report refusal: %s", why)
+	}
+	if _, err := h.Srv.Store.FleetRelay(retired.ID); err == nil {
+		t.Fatal("retired report inserted")
+	}
+	if n := len(lines(filepath.Join(parentHome, "delivered"))); n != 0 {
+		t.Fatalf("retired report delivered %d times", n)
+	}
+
+	// An ordinary message, sent twice (the outbox's resend): applied once.
+	message := control.Relay{ID: childWID + "#1700000000.1", Kind: control.RelayMessage, From: childWID, To: parentWID,
+		Payload: json.RawMessage(`{"text":"ordinary message"}`)}
+	f1 := dropRelay(t, childOutbox, "20260101T000000Z-1-a.json", message)
 	delivered := filepath.Join(parentHome, "delivered")
-	waitFor(t, 10*time.Second, "the report applied on the parent's machine", func() bool { return len(lines(delivered)) == 1 })
+	waitFor(t, 10*time.Second, "the message applied on the parent's machine", func() bool { return len(lines(delivered)) == 1 })
 	waitFor(t, 5*time.Second, "the child's outbox file settled", func() bool { return gone(f1) })
 	var got control.Relay
-	if err := json.Unmarshal([]byte(lines(delivered)[0]), &got); err != nil || got.ID != report.ID || got.From != childWID ||
-		got.To != parentWID || got.FromNode == "" || !strings.Contains(string(got.Payload), `"MERGED"`) {
-		t.Fatalf("delivered %q (%v); want the report, from %s, with the hub naming the sender's machine", lines(delivered)[0], err, childWID)
+	if err := json.Unmarshal([]byte(lines(delivered)[0]), &got); err != nil || got.ID != message.ID || got.From != childWID ||
+		got.To != parentWID || got.FromNode == "" || !strings.Contains(string(got.Payload), `"ordinary message"`) {
+		t.Fatalf("delivered %q (%v); want the message, from %s, with the hub naming the sender's machine", lines(delivered)[0], err, childWID)
 	}
 	waitFor(t, 5*time.Second, "the relay recorded delivered", func() bool {
-		r, err := h.Srv.Store.FleetRelay(report.ID)
+		r, err := h.Srv.Store.FleetRelay(message.ID)
 		return err == nil && r.Status == store.RelayDelivered
 	})
-	f2 := dropRelay(t, childOutbox, "20260101T000001Z-1-b.json", report)
+	f2 := dropRelay(t, childOutbox, "20260101T000001Z-1-b.json", message)
 	waitFor(t, 5*time.Second, "the duplicate acked", func() bool { return gone(f2) })
 	time.Sleep(4 * every)
 	if n := len(lines(delivered)); n != 1 {
-		t.Fatalf("a resent report was applied %d times; want once", n)
+		t.Fatalf("a resent message was applied %d times; want once", n)
 	}
 
 	// The parent's machine is offline: the hub keeps it, and delivers on return.
 	stopParent()
-	report2 := report
-	report2.ID = childWID + "#1700000001.2"
-	f3 := dropRelay(t, childOutbox, "20260101T000002Z-1-c.json", report2)
+	// Backlog from the previous version cannot reach an old recipient after
+	// reconnect, even if it was pushed very recently and is not due for retry.
+	retiredBacklog := store.FleetRelay{ID: childWID + "#old-backlog", Kind: control.RelayChildReport, FromWID: childWID, ToWID: parentWID, FromEndpoint: "ep_mac-c", TargetEndpoint: "ep_mac-d", Payload: `{"state":"MERGED","summary":"historical payload"}`, Created: time.Now()}
+	if _, err := h.Srv.Store.InsertFleetRelay(retiredBacklog); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Srv.Store.MarkFleetRelaySent(retiredBacklog.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	message2 := message
+	message2.ID = childWID + "#1700000001.2"
+	f3 := dropRelay(t, childOutbox, "20260101T000002Z-1-c.json", message2)
 	waitFor(t, 5*time.Second, "the hub stores it while the parent is away", func() bool {
-		r, err := h.Srv.Store.FleetRelay(report2.ID)
+		r, err := h.Srv.Store.FleetRelay(message2.ID)
 		return gone(f3) && err == nil && r.Status == store.RelayPending
 	})
 	startRelayAgent(t, h, "mac-d-again", parentHome, parentTok, every)
-	waitFor(t, 10*time.Second, "the waiting report delivered on reconnect", func() bool { return len(lines(delivered)) == 2 })
+	waitFor(t, 10*time.Second, "the waiting message delivered on reconnect", func() bool { return len(lines(delivered)) == 2 })
+	waitFor(t, 5*time.Second, "old backlog settled without delivery", func() bool {
+		r, err := h.Srv.Store.FleetRelay(retiredBacklog.ID)
+		return err == nil && r.Status == store.RelayFailed && strings.Contains(r.Detail, "PARENT_REPORT_RETIRED")
+	})
+	retiredRow, err := h.Srv.Store.FleetRelay(retiredBacklog.ID)
+	if err != nil || retiredRow.Attempts != 1 || retiredRow.Payload != retiredBacklog.Payload {
+		t.Fatalf("backlog history changed: %+v %v", retiredRow, err)
+	}
+	for _, line := range lines(delivered) {
+		var r control.Relay
+		_ = json.Unmarshal([]byte(line), &r)
+		if r.Kind == control.RelayChildReport {
+			t.Fatalf("old recipient received report: %s", line)
+		}
+	}
 
 	// A node speaks only for workers it hosts: mac-c cannot forge mac-d's.
 	forged := control.Relay{ID: parentWID + "#1", Kind: control.RelayMessage, From: parentWID, To: childWID,
