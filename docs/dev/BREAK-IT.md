@@ -699,3 +699,5 @@
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
 
 | Task 停止落盘后，100ms supervisor 或并发 executor 抢先杀掉原生根，重放又重新延长取消等待 | 本 session 的 durable plan 来不及取消，或重复等待导致任务关不掉 | stop 同事务固定一次双时钟期限；executor / supervisor 共用取消机会，归属未知、旧记录或外部强停立即退出，最多三秒后不再等；不冒充全域停止 | `native-cancel-before-signal` |
+| 继续授权未 claim 就停止，再次重试；或连续多次重试、跨 Agent 选择 | 未启动任务无法继续，或把原生退出和未启动混为一体、丢失之前真实工作区 | 本人显式 continue 认可精确 canonical 未领取停止；逐代验证原生退出或未领取证明，认证读取分别给直接来源与真实工作区来源，旧授权不能重用 | `task-continue-unclaimed` |
+| 受控 Codex 的 `--no-daemon` 分支绕过原生执行登记 | 已停止任务仍进入 Codex exec，且缺少可终止的原生根记录 | 同一 native_command 边界校验停止并登记 Codex client；非受控 argv 不变，缺少 server 仍不签发完整退出证明 | `codex-no-daemon-fence` |

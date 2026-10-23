@@ -93,13 +93,19 @@ func continuedOperation(o store.FleetOperation, intent store.TaskContinuationInt
 	}
 	if o.Action != "worker_start" || !controlledExecutionRequest(o.Request) || json.Unmarshal([]byte(o.Request), &request) != nil ||
 		request.Intent == nil || !reflect.DeepEqual(*request.Intent, intent) || request.Params.Continuation == nil ||
-		request.Params.Continuation.Version != 1 || request.Params.Continuation.ExitOperationID == "" ||
+		!request.Params.Continuation.Valid() ||
 		request.Params.Dispatch.Task != intent.Task || request.Params.Dispatch.Generation != intent.ExpectedGeneration+1 ||
 		!codingAgentOK(request.Params.Agent) || request.Params.Dispatch.ResolvedAgent != request.Params.Agent {
 		return nil, fault("IDEMPOTENCY_CONFLICT", "Key was used for a different operation")
 	}
-	return map[string]any{"task": intent.Task, "operation": operationView(o), "agent": request.Params.Agent,
-		"exit_operation_id": request.Params.Continuation.ExitOperationID, "authorized_generation": request.Params.Dispatch.Generation}, nil
+	out := map[string]any{"task": intent.Task, "operation": operationView(o), "agent": request.Params.Agent,
+		"authorized_generation": request.Params.Dispatch.Generation}
+	if id := request.Params.Continuation.ExitOperationID; id != "" {
+		out["exit_operation_id"] = id
+	} else {
+		out["stop_operation_id"] = request.Params.Continuation.StopOperationID
+	}
+	return out, nil
 }
 
 func (s *Server) continueTask(ctx context.Context, p fleetPrincipal, t store.FleetTask, key string, intent store.TaskContinuationIntent) (out map[string]any, err error) {
@@ -123,7 +129,7 @@ func (s *Server) continueTask(ctx context.Context, p fleetPrincipal, t store.Fle
 	if err != nil {
 		return nil, err
 	}
-	if intent.ExpectedGeneration != source.Task.Generation || intent.ExpectedStopOperationID != source.Receipt.StopOperationID {
+	if intent.ExpectedGeneration != source.Task.Generation || intent.ExpectedStopOperationID != source.Task.CancelRequest {
 		return nil, store.ErrTaskFence
 	}
 	agent := source.Agent
@@ -134,7 +140,7 @@ func (s *Server) continueTask(ctx context.Context, p fleetPrincipal, t store.Fle
 	if err != nil {
 		return nil, err
 	}
-	if target.EndpointID != source.Receipt.ExecutionEndpoint || !target.Present {
+	if target.EndpointID != source.Endpoint || !target.Present {
 		return nil, store.ErrTaskFence
 	}
 	if err := s.checkContinueTarget(ctx, p, target, agent); err != nil {
@@ -248,7 +254,7 @@ func continuationStart(source store.TaskContinuationSource, key, agent string, i
 	params["task"], params["agent"] = source.Task.Ref, agent
 	params["dispatch"] = dispatchChoice{Version: 1, RequestID: key, RequestedAgent: agent, ResolvedAgent: agent, AgentSource: "explicit",
 		Task: source.Task.Ref, Generation: generation, AttemptID: fmt.Sprintf("task:%s:g%d", source.Task.Ref, generation)}
-	params["continuation"] = store.TaskContinuation{Version: 1, ExitOperationID: source.ExitOperationID}
+	params["continuation"] = store.TaskContinuation{Version: 1, ExitOperationID: source.ExitOperationID, StopOperationID: source.StopOperationID}
 	raw, err := json.Marshal(map[string]any{"action": "worker_start", "fleet_id": target.FleetID, "node": target.Hostname,
 		"control_version": 1, "params": params, "continuation_intent": intent})
 	return params, string(raw), err
