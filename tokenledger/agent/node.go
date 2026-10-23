@@ -432,6 +432,13 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		}
 	}()
 
+	// Per logical login connection, including a tenant on a machine lane.
+	// The reader must already be serving stop redelivery while HTTP imports
+	// its durable fences. Every actual controlled admission also imports them;
+	// this best-effort reconnect follow-up grants no execution permission.
+	executionSync := &executionStopSync{}
+	executionSync.kick(ctx, rp)
+
 	// Results the hub has not acked — from this connection or one that
 	// dropped while a script ran — go out now and on completion.
 	a.acct.attach(func(m control.Message) error {
@@ -490,6 +497,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			a.teamKick(ctx)
 			// So does a repo authority re-read (claude-fleet#4730).
 			a.authorityKick(ctx)
+			executionSync.kick(ctx, rp)
 		case <-nudge:
 			nb.arm()
 		case <-netc:

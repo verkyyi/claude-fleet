@@ -112,9 +112,10 @@ class ControlExecutionTests(unittest.TestCase):
         def call(task, body):
             calls.append((task, body))
             return dict(reservation, execution_owner=body["worker_id"])
-        claimed = claim_execution(reservation, FLEET, conf_dir=self.tmp.name, call=call)
+        read_stops = lambda: dict(control_version=1, task_executions=[])
+        claimed = claim_execution(reservation, FLEET, conf_dir=self.tmp.name, call=call, read_stops=read_stops)
         self.assertNotEqual(claimed["execution_owner"].split("/")[1], claimed["task_fid"])
-        self.assertEqual(claim_execution(reservation, FLEET, conf_dir=self.tmp.name, call=call), claimed)
+        self.assertEqual(claim_execution(reservation, FLEET, conf_dir=self.tmp.name, call=call, read_stops=read_stops), claimed)
         self.assertEqual(calls[0], calls[1])
         self.assertNotIn("execution_endpoint", calls[0][1])
         self.assertEqual(calls[0][1]["control_version"], 1)
@@ -125,7 +126,8 @@ class ControlExecutionTests(unittest.TestCase):
             self.fence.request_stop(task, STOP_ID, generation=2)
             return dict(reservation, execution_owner=body["worker_id"])
         with self.assertRaises(FenceRefused):
-            claim_execution(reservation, FLEET, conf_dir=self.tmp.name, call=call)
+            claim_execution(reservation, FLEET, conf_dir=self.tmp.name, call=call,
+                            read_stops=lambda: dict(control_version=1, task_executions=[]))
         self.assertEqual(self.fence.read("T42")["cancel_request"], STOP_ID)
 
     def test_controlled_start_never_adopts_or_closes_a_wrong_receipt(self):

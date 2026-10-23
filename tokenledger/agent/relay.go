@@ -89,6 +89,9 @@ type relayPaths struct {
 	// authoritySync: this claude-fleet answers `authority-sync <repo>`
 	// (claude-fleet#4730); false on one that predates it.
 	authoritySync bool
+	// executionSync only probes the local stop-import helper; it does not
+	// advertise support for controlled task execution to the Hub.
+	executionSync bool
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -145,6 +148,8 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			p.repoAuthority = v == "1"
 		case "repo_authority_sync":
 			p.authoritySync = v == "1"
+		case "execution_sync":
+			p.executionSync = v == "1"
 		case "task":
 			p.task = v == "1"
 		}

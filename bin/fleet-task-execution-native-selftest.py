@@ -27,7 +27,14 @@ class NativeExecutionTests(unittest.TestCase):
         for filename in ("fleet_task_execution.py", "fleet_hub_common.py", "fleet_native_proc.py",
                          "fleet-session-wrap.sh", "fleet-agent-adapter.sh"):
             shutil.copy2(BIN / filename, self.bin / filename)
-        (self.bin / "fleet-task-record.sh").write_text('cat "$AUTHORITY_FILE"\n')
+        (self.bin / "fleet-task-record.sh").write_text('''if [ "$1" = execution-list ]; then
+          printf '{"control_version":1,"task_executions":['
+          cat "$AUTHORITY_FILE"
+          printf ']}\\n'
+        else
+          cat "$AUTHORITY_FILE"
+        fi
+''')
         self.snapshot = json.loads(FIXTURE.read_text())
         self.authority = self.root / "authority.json"
         self.authority.write_text(json.dumps(self.snapshot))
