@@ -30,7 +30,7 @@ export function listStatus(r: Row): ListStatus {
   const tag = r.board?.tag;
   const state = r.live?.state || r.board?.state;
   const unknown = !!r.board?.lost || state === "unknown" || tag === "not_seen";
-  const ask = !unknown && (state === "needs" || state === "blocked" || tag === "asking" || tag === "waiting_you" || (!r.board && r.glyph === "ask"));
+  const ask = !unknown && (state === "needs" || state === "blocked");
   const status = r.task ? taskStatus(r.task) : "";
   const started = ["working", "looping", "needs", "blocked", "done"].includes(state || "");
   const pending = typeof r.board?.pending_start === "boolean" ? r.board.pending_start
@@ -49,9 +49,9 @@ export function listStatus(r: Row): ListStatus {
 }
 export const listStatusLabel = (r: Row) => listStatus(r).words.map((w) => tr(...w)).join(" · ");
 
-// The stable name a row goes by in an address (/app/s/<ref>): its task's code,
-// else its own code, else the session's identity.
-export const rowRef = (r: Row) => (r.task ? writtenCode(r.task) : r.code || r.id);
+// Task routes use the Task FID (legacy T<n> when absent). Session-only rows
+// retain their own code or identity; a continuation never changes the Task URL.
+export const rowRef = (r: Row) => (r.task?.fid || r.board?.task_id || r.task?.id || r.board?.task || r.code || r.id);
 
 export const rowMachine = (r: Row) => r.board?.machine || r.live?.machine || r.ended?.machine || r.task?.machine || "";
 
