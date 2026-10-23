@@ -133,7 +133,7 @@ func installFakeFleetControl(t *testing.T, py, src, home, session, repo string) 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"fleet_control.py", "fleet_park_metrics.py", "fleet_iso.py", "fleet_hub_common.py", "fleet_config_write.py"} {
+	for _, f := range []string{"fleet_control.py", "fleet_dispatch.py", "fleet_park_metrics.py", "fleet_iso.py", "fleet_hub_common.py", "fleet_config_write.py"} {
 		b, err := os.ReadFile(filepath.Join(src, f))
 		if err != nil {
 			t.Fatal(err)
@@ -165,6 +165,28 @@ esac
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "fleet-control-read.sh"), []byte(adapter), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The real dispatch validator reads the real test Hub's authenticated
+	// task route. Only the node-config/shell transport wrapper is replaced;
+	// no task state or authorization decision is fabricated in this fixture.
+	// Test enrollment credentials are passed in the process environment only.
+	reader := "#!/bin/sh\nexec " + shQuote(py) + ` - "$@" <<'PY'
+import os, sys, urllib.parse, urllib.request
+if len(sys.argv) != 3 or sys.argv[1] != "get":
+    raise SystemExit("fixture task reader only accepts get <task>")
+task = sys.argv[2]
+request = urllib.request.Request(
+    os.environ["FLEET_TEST_TASK_HUB_URL"] + "/v1/node/tasks/" + urllib.parse.quote(task, safe=""),
+    headers={"Authorization": "Bearer " + os.environ["FLEET_TEST_TASK_NODE_TOKEN"]})
+with urllib.request.urlopen(request, timeout=10) as response:
+    body = response.read()
+with open(os.environ["FLEET_TEST_TASK_READS"], "a") as log:
+    log.write(task + "\n")
+sys.stdout.buffer.write(body)
+PY
+`
+	if err := os.WriteFile(filepath.Join(dir, "fleet-task-record.sh"), []byte(reader), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return filepath.Join(dir, "fleet-control.py")
