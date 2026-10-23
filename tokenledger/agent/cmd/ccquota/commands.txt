@@ -15,6 +15,7 @@ lease
 move
 panel
 place
+preview-pipe
 release
 report
 stamp
