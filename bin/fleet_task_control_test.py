@@ -42,6 +42,32 @@ class TaskControlTests(unittest.TestCase):
                 self.assertEqual(control.closed("T7"), 3)
             self.assertTrue(out.getvalue().startswith("UNKNOWN\n"))
 
+    def test_worktree_read_retains_controlled_bindings_without_erasing_outcomes(self):
+        for binding in ({"execution_endpoint": "node-a", "execution_owner": "fleet/worker"},
+                        {"execution_endpoint": "node-a", "execution_owner": ""},
+                        {"execution_owner": "", "cancel_request": "stop"}):
+            for outcome in ("succeeded", "failed", "cancelled", "refused"):
+                task = dict(id="T7", short="K7W0", authority_version=1, generation=3,
+                            operation_id="next-start", state="closed", outcome=outcome, **binding)
+                with self.subTest(binding=binding, outcome=outcome), \
+                     patch.object(control, "call", return_value={"task": task}) as calls, \
+                     contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(control.closed("T7", worktree=True), 1)
+                    self.assertEqual(calls.call_count, 1)
+                    self.assertTrue(out.getvalue().startswith("WAITING\n"))
+                    self.assertEqual(control.verdict(task), outcome.upper())
+                    self.assertEqual(task["outcome"], outcome)
+        for binding in ({"execution_owner": None}, {"execution_endpoint": 1}):
+            with patch.object(control, "call", return_value={"task": dict(id="T7", short="K7W0", authority_version=1, outcome="succeeded", **binding)}), \
+                 contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(control.closed("T7", worktree=True), 3)
+                self.assertTrue(out.getvalue().startswith("UNKNOWN\n"))
+        legacy = dict(id="T7", short="K7W0", authority_version=1, generation=1, outcome="succeeded", operation_id="legacy")
+        with patch.object(control, "call", return_value={"task": legacy}), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(control.closed("T7", worktree=True), 0)
+        with patch.object(control, "call", side_effect=ValueError("unavailable")), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(control.closed("T7", worktree=True), 3)
+
     def test_shell_await_and_children_retired(self):
         for script, args in (("fleet-await.sh", ["T7", "--timeout", "7200"]), ("fleet-children.sh", ["--json"])):
             result = subprocess.run(["bash", str(control.BIN/script), *args], capture_output=True, text=True, timeout=5)
