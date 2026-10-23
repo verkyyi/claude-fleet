@@ -214,10 +214,17 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	// Backlog from the previous version cannot reach an old recipient after
 	// reconnect, even if it was pushed very recently and is not due for retry.
 	retiredBacklog := store.FleetRelay{ID: childWID + "#old-backlog", Kind: control.RelayChildReport, FromWID: childWID, ToWID: parentWID, FromEndpoint: "ep_mac-c", TargetEndpoint: "ep_mac-d", Payload: `{"state":"MERGED","summary":"historical payload"}`, Created: time.Now()}
-	if _, err := h.Srv.Store.InsertFleetRelay(retiredBacklog); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Srv.Store.MarkFleetRelaySent(retiredBacklog.ID, time.Now()); err != nil {
+	// Install the historical already-sent row atomically. The live dispatcher
+	// may retire it immediately; inserting and then MarkSent would race with
+	// retirement and leave attempts=0, never establishing the intended fixture.
+	sentAt := retiredBacklog.Created.UTC().Format(time.RFC3339Nano)
+	if _, err := h.Srv.Store.DB().Exec(`INSERT INTO fleet_relays
+		(id, kind, from_wid, to_wid, from_endpoint, target_endpoint, payload,
+		status, attempts, created, updated, sent_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		retiredBacklog.ID, retiredBacklog.Kind, retiredBacklog.FromWID, retiredBacklog.ToWID,
+		retiredBacklog.FromEndpoint, retiredBacklog.TargetEndpoint, retiredBacklog.Payload,
+		store.RelayPending, 1, sentAt, sentAt, sentAt); err != nil {
 		t.Fatal(err)
 	}
 	message2 := message
