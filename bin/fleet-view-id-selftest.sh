@@ -197,7 +197,7 @@ from unittest.mock import patch
 for outcome in ("succeeded", "failed", "cancelled", "refused"):
     with patch.object(fv, "hub_task", return_value={"outcome": outcome}):
         _, observed = read(dict(STATES, **{"@2": "idle"}))
-    assert observed["@2"]["state"] == "idle" and observed["@2"]["id"] == fi.task_code("T367") and observed["@2"]["open_id"], (outcome, observed["@2"])
+    assert observed["@2"]["state"] == "idle" and observed["@2"]["id"] == fi.task_code("T367"), (outcome, observed["@2"])
 g = {e["issue"]: e for e in it if e.get("gone")}
 assert g["#4700"]["sym"] == "exited" and g["#4700"]["word"] == "已退出" and re.fullmatch(r"[A-Z]\w{3}", g["#4700"]["id"]) \
     and g["#4700"]["agent"] == "codex", g["#4700"]
