@@ -74,18 +74,12 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
     task: t, live, ended, parent: t?.parent_task || undefined, kids: [] as Row[], quote: false, at,
     ...(live?.origin ? { origin: live.origin } : {}), ...(typeof live?.canTalk === "boolean" ? { canTalk: live.canTalk } : {}) };
   const say = (x?: string) => (x || "").trim();
-  // 等你: it asks, it failed or did not start, or the record says it waits on you
+  // A live session's current native observation stands independently of a
+  // previous task outcome. Keep the outcome on the task for history/details.
   if (s === "needs" || s === "blocked")
     return { ...base, group: "ask", tag: ["在问你", "Asking you"], glyph: "ask", tone: "ask", line: say(live?.ask?.msg), quote: true };
-  if (st === "failed" || st === "refused")
-    return { ...base, group: "ask", tag: st === "failed" ? ["没做成", "Failed"] : ["没开成", "Didn't start"], glyph: "fail", tone: "fail", line: say(t?.evidence) };
-  if (t && t.asked && taskOpen(t) && !live)
-    return { ...base, group: "ask", tag: ["在等你", "Waiting on you"], glyph: "ask", tone: "ask", line: say(t.asked), quote: true };
-  // Current work takes precedence over a previous task result.
   if (s === "working" || s === "looping")
     return { ...base, group: "work", tag: ["在干活", "Working"], glyph: "work", tone: "ok", line: say(live?.say) };
-  if (live && (st === "succeeded" || st === "cancelled"))
-    return { ...base, group: "queue", tag: st === "succeeded" ? ["已完成 · 保留中", "Completed · retained"] : ["已取消", "Cancelled"], glyph: "done", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
   // 排队中: open, waiting on something that is not you
   if (live) {
     if (pr && t?.pr_state === "waiting") return { ...base, group: "queue", tag: ["等合并", "Awaiting merge"], glyph: "pr", tone: "muted", line: say(t.evidence) };
@@ -93,6 +87,10 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
     if (s === "idle") return { ...base, group: "queue", tag: ["空闲", "Idle"], glyph: "idle", tone: "muted", line: "" };
     return { ...base, group: "queue", tag: ["状态未知", "Unknown"], glyph: "idle", tone: "muted", line: "" };
   }
+  if (st === "failed" || st === "refused")
+    return { ...base, group: "ask", tag: st === "failed" ? ["没做成", "Failed"] : ["没开成", "Didn't start"], glyph: "fail", tone: "fail", line: say(t?.evidence) };
+  if (t && t.asked && taskOpen(t))
+    return { ...base, group: "ask", tag: ["在等你", "Waiting on you"], glyph: "ask", tone: "ask", line: say(t.asked), quote: true };
   if (t && taskOpen(t)) {
     const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" && !t.operation_id && !t.worker_id ? ["未派发", "Not dispatched"]
       : st === "running" || st === "waiting" || !!t.operation_id || !!t.worker_id ? ["看不到会话", "Session not seen"] : ["还不清楚", "Unknown"];

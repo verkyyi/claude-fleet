@@ -138,9 +138,14 @@ class Control(NativeExitSubmission):
         if execution:
             env["FLEET_TASK_EXECUTION"] = json.dumps(execution, separators=(",", ":"))
         if continuation:
+            from fleet_task_continuation import validate_continuation
+            validate_continuation(continuation)
             # Only the receipt ID travels; each startup boundary derives the
             # workspace from authenticated metadata and local identity history.
-            env["FLEET_TASK_CONTINUATION"] = continuation["exit_operation_id"]
+            if 'stop_operation_id' in continuation:
+                env['FLEET_TASK_CONTINUATION_STOP'] = continuation['stop_operation_id']
+            else:
+                env["FLEET_TASK_CONTINUATION"] = continuation["exit_operation_id"]
         if task:
             # The hub's task record a start belongs to (issue #3325), validated
             # (T<n>): the window is stamped @task, a no-repo one files no desk
@@ -1011,8 +1016,12 @@ class Control(NativeExitSubmission):
                 if execution is not None:
                     try:
                         if continuation:
-                            from fleet_task_execution import continue_execution
-                            execution = continue_execution(execution, req["fleet_id"], continuation['exit_operation_id'], conf_dir=self.conf_dir)
+                            from fleet_task_execution import continue_execution, continue_unclaimed_execution
+                            if 'stop_operation_id' in continuation:
+                                execution = continue_unclaimed_execution(execution, req['fleet_id'], continuation,
+                                    params.get('dispatch'), conf_dir=self.conf_dir)
+                            else:
+                                execution = continue_execution(execution, req["fleet_id"], continuation['exit_operation_id'], conf_dir=self.conf_dir)
                         else:
                             execution = claim_execution(execution, req["fleet_id"], conf_dir=self.conf_dir)
                     except ValueError as exc:
@@ -1025,7 +1034,7 @@ class Control(NativeExitSubmission):
                 reap_arg = [params["reap"]] if params.get("reap") else []
                 # issue #2393: the files the writing area sent are on THIS machine
                 # now (the agent downloaded them) — the text names them here.
-                body = plan['seed'] if plan else self.attached_body(params)
+                body = plan['seed'] if plan and plan['seed'] is not None else self.attached_body(params)
                 if "draft" in params:
                     body = params["draft"]
                 if scratch:
