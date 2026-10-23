@@ -453,6 +453,15 @@ exit_drill() {
 # session-exit — every way an agent leaves or stops, one table: /exit (rc 0), Ctrl+C
 # (rc 130) and a kill (137) end on the recovery page (exit_drill, ≤5s each); Ctrl+Z
 # (ctrl_z_leg) is resumed within 1s.
+drill_mcp_strict_managed_wrapper() {
+  local started; started=$(now); CAP=15
+  python3 "$BIN/fleet-worker-life-selftest.py" "$BIN" \
+    McpRestartTest.test_strict_managed_wrapper_needs_install_identity_and_separate_contract \
+    McpRestartTest.test_strict_github_wrapper_keeps_package_identity_and_revocation >"$WORK/mcp-strict-managed-wrapper.log" 2>&1 \
+    || { cat "$WORK/mcp-strict-managed-wrapper.log"; WHY='strict managed MCP identity must preserve contract and child-work vetoes'; return 1; }
+  SECS=$(since "$started"); WHAT='shipped exec wrappers are identified; unknown HOME/package, absent contracts and live browser/jobs still refuse'
+}
+
 drill_transfer_target_runtime() {
   local started; started=$(now); CAP=12
   bash "$BIN/fleet-codex-runtime-selftest.sh" TargetPreflightTests >"$WORK/transfer-target-runtime.log" 2>&1 \

@@ -739,6 +739,14 @@ a proven empty composer, no pending durable admission and the existing strict
 process/MCP restartability proof. Unknown input is refused and kept unchanged.
 The normal target-auth check still runs against the verified account home.
 
+The shipped fetch/GitHub login-shell wrappers can be identified after their
+`exec` only when the measured native environment resolves the literal default
+invocation to this install's wrapper. Kernel arguments, executable and package
+entrypoints must still match. This identification grants no restartability:
+the separate MCP contract, ready inventory and no live browser/job descendants
+are required. A custom wrapper, changed HOME or changed arguments remains
+unverified. A command-scoped contract does not change persistent fleet settings.
+
 One specific native obstruction can be returned from externally: the complete
 `Approaching rate limits` model reminder with its three model choices and
 `enter select · esc back` footer. The same native idle, queue, process and auth
