@@ -6,6 +6,9 @@ quota failover planner (`.fleet-failover.py`), moved here unchanged:
 
   settled --session S --pane P          a `looping` Codex source between rounds is
                                         as settled as `done` (#786); exit 1 + why
+  interrupt-settle --fid F              after fleet-transfer.sh --interrupt stopped
+                                        a Codex turn: an idle native thread whose
+                                        last turn ended reads `done` (T983)
   background --pid N [--worktree W] [--session S]
                                         every non-infrastructure process a Claude
                                         owns, as JSON [{pid,argv,cwd,start}] (#873)
@@ -87,6 +90,43 @@ def settled(session, pane):
     codex_quiet(thread)
     if not looping_settled(source, thread):
         raise ValueError('source is not a looping Codex worker between rounds')
+
+def interrupt_settle(fid):
+    """fleet-transfer.sh --interrupt (T983): the session gate's stop sent a Codex
+    `turn/interrupt`, and an interrupt may end the turn with no Stop hook, so the
+    window can keep reading `working`. An idle native thread with no live item whose
+    last turn ended is as settled as `done`: project exactly that, only over a
+    `working`, hook-made `looping` or missing mark on a window with no @loop.
+    A Claude source settles through its own report; nothing here."""
+    import fleet_session_gate as gate
+    w = gate.window(fid)
+    if w is None:
+        raise ValueError('no such session')
+    if w['agent'] != 'codex':
+        return
+    identity, client = gate.codex_api()
+    data = identity(w['pane'], w['sock'])
+    if not data:
+        raise ValueError('source Codex is unreachable')
+    c = client(data['remote'])
+    try:
+        thread = ATTENTION['thread_read'](c, data, include_turns=True)
+    finally:
+        c.close()
+    codex_quiet(thread)
+    turns = thread.get('turns') or []
+    if not turns or turns[-1].get('status') not in ('interrupted', 'completed', 'failed'):
+        raise ValueError('source Codex turn has not ended')
+    cmds = ' ; '.join(shlex.join(c) for c in (
+        ['set-option', '-w', '-t', w['pane'], '@claude_state', 'done'],
+        ['set-option', '-w', '-t', w['pane'], '@claude_state_ts', str(int(time.time()))]))
+    # A Codex hook may mark the interrupted round `looping`, or no mark may have
+    # been written at all (a session whose hooks never reported); a window with a
+    # real fleet loop (@loop) or a question (`needs`) is never touched here.
+    test = ('#{&&:#{||:#{==:#{@claude_state},working},#{||:#{==:#{@claude_state},looping},'
+            '#{==:#{@claude_state},}}},#{==:#{@loop},}}')
+    run(['tmux', '-L', w['sock'], 'if-shell', '-F', '-t', w['pane'], test, cmds])
+
 
 def source_marks(session, pane):
     # Tabs are the shared gate's portable tmux field delimiter. Older tmux
@@ -840,6 +880,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
     q = sub.add_parser('settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
+    q = sub.add_parser('interrupt-settle'); q.add_argument('--fid', required=True)
     q = sub.add_parser('quota-settled'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
     q.add_argument('--sid', required=True)
     q = sub.add_parser('repair-hooks'); q.add_argument('--session', required=True); q.add_argument('--pane', required=True)
@@ -853,6 +894,7 @@ def main():
     q.add_argument('--worktree', default=''); q.add_argument('--session', default='')
     a = p.parse_args()
     if a.command == 'settled': settled(a.session, a.pane)
+    elif a.command == 'interrupt-settle': interrupt_settle(a.fid)
     elif a.command == 'repair-hooks': repair_hooks(a.session, a.pane, a.fid, a.sid, a.dry_run)
     elif a.command == 'quota-settled': quota_settled(a.session, a.pane, a.sid)
     elif a.command == 'quota-dialog-check': quota_dialog_check(a.session, a.pane, a.sid)

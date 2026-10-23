@@ -3,13 +3,19 @@
 #
 # Usage: fleet-transfer.sh --session <fleet> --window <handle|name|@id> --to claude|codex
 #                         [--handoff <notes.md>] [--loop <spec.json>] [--codex-home DIR]
-#                         [--dry-run | --prepare-only | --after-turn]
+#                         [--dry-run | --prepare-only | --after-turn] [--interrupt]
 #        fleet-transfer.sh --retry <retry-request-dir>
 #
 # --dry-run       Resolve exact provenance and print the plan; write nothing.
 # --prepare-only  Save the handoff package; leave Claude and tmux unchanged.
 # --after-turn    Arm from /fleet-handoff; wait for this turn's Stop before switching.
 #                 Requires --handoff. Returns after arming, without exiting Claude.
+# --interrupt     Don't wait for a running turn (T983): stop it through the session
+#                 gate's own stop (Codex turn/interrupt, Claude one Escape), wait up to
+#                 FLEET_TRANSFER_INTERRUPT_WAIT (30) seconds for the source to settle,
+#                 then cut over. The interrupted step is cut short; what it already
+#                 wrote stays in the worktree for the target. A question or approval
+#                 the source is waiting on is never answered by it. Immediate only.
 # --loop          Explicit recurring prompt + interval to continue on Codex.
 # --handoff       Optional source-agent notes. Without notes, Codex reconstructs
 #                 the task from the captured conversation and current git state.
@@ -81,7 +87,7 @@ usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME=''
 TARGET_FILE='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
 TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
-QUOTA_CONTINUATION=0 DISPOSITION=continue QUOTA_LOOP_REPLACEMENT=''
+QUOTA_CONTINUATION=0 DISPOSITION=continue QUOTA_LOOP_REPLACEMENT='' INTERRUPT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id|--disposition|--quota-loop-replacement)
@@ -108,6 +114,7 @@ while [ "$#" -gt 0 ]; do
     --from-panel) FROM_PANEL=1; shift ;;
     --prepare-only) PREPARE=1; shift ;;
     --after-turn) AFTER=1; shift ;;
+    --interrupt) INTERRUPT=1; shift ;;
     --inspect) INSPECT=1; DRY=1; shift ;;
     --native-resume) NATIVE=1; shift ;;
     --durable-takeover) TAKEOVER=1; shift ;;
@@ -116,6 +123,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$DISPOSITION" in continue|waiting|completed) ;; *) die 'invalid --disposition' ;; esac
+[ "$INTERRUPT" = 0 ] || { [ "$AFTER$PREPARE$QUOTA_CONTINUATION" = 000 ] && [ -z "$REQUEST$RETRY" ]; } \
+  || die '--interrupt is for an immediate cutover only (not --after-turn, --prepare-only, a retry or a quota continuation)'
 # Only this explicit controller argument enables the external path; never an
 # ambient environment variable or the automatic web fallback.
 unset FLEET_QUOTA_LOOP_REPLACEMENT
@@ -346,6 +355,28 @@ PY
   exit $?
 fi
 HANDLE=$(opt '#{@wid}')
+# interrupt_source — --interrupt (T983): the person chose to stop the source's
+# running turn rather than wait for it. The session gate's stop is the one road
+# (Codex turn/interrupt, Claude one Escape only while its own report says working);
+# a Codex interrupt may leave no Stop hook, so interrupt-settle projects `done`
+# from the idle native thread. Then source_ready must pass as for any cutover.
+interrupt_source() {
+  [ "$INTERRUPT" = 1 ] || return 1
+  local fid out wait i
+  fid=$(opt '#{@fleet_id}'); [ -n "$fid" ] || die '--interrupt: the window has no @fleet_id'
+  out=$(python3 "$BIN/fleet_session_gate.py" stop --fid "$fid" 2>&1) || :
+  case "$out" in *'"ok": true'*|*'"ok":true'*) ;; *) die "--interrupt: the source turn could not be stopped (${out:-no answer})" ;; esac
+  printf 'interrupt: %s\n' "$out"
+  TM set-option -w -t "$WIN" @transfer_note '已打断当前一轮，正在切换' 2>/dev/null || :
+  wait=${FLEET_TRANSFER_INTERRUPT_WAIT:-30}
+  case "$wait" in ''|*[!0-9]*) wait=30 ;; esac
+  for ((i=0; i<wait; i++)); do
+    source_ready && return 0
+    python3 "$BIN/fleet_transfer_source.py" interrupt-settle --fid "$fid" >/dev/null 2>&1 && source_ready && return 0
+    sleep 1
+  done
+  return 1
+}
 source_ready() {
     if [ "$QUOTA_CONTINUATION" = 1 ]; then
       [ "$SOURCE_AGENT" = claude ] && [ "$TO" = codex ] && [ "$EXPECT_SID" = "$SID" ] \
@@ -560,7 +591,10 @@ fi
 [ "$NOREPO" != 1 ] || target_trust || exit 1
 if [ "$DRY" = 1 ]; then
   target_support
-  [ "$IN_TURN" = 1 ] || source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
+  if [ "$IN_TURN" != 1 ] && ! source_ready; then
+    [ "$INTERRUPT" = 1 ] || die 'source is not safely idle; finish/pause its turn before transferring'
+    printf 'dry-run: the source is mid-turn; --interrupt would stop that turn first.\n'
+  fi
   # The target's login, first (issue #1667): a dry-run that says «would switch»
   # onto an account that cannot log in is the plan that lost the 10-05 session.
   if target_auth; then printf 'target auth: %s\n' "$TARGET_AUTH"
@@ -585,7 +619,7 @@ if [ "$PREPARE" != 1 ]; then
   target_auth || refuse_target
   { [ -z "$REQUEST" ] && [ "$AFTER" != 1 ]; } || rollback_hold
   if [ "$AFTER" != 1 ]; then
-    source_ready || die 'source is not safely idle; finish/pause its turn before transferring'
+    source_ready || interrupt_source || die 'source is not safely idle; finish/pause its turn before transferring'
     CALLER_TMUX="${TMUX:-}"
     [ "${TMUX_PANE:-}" != "$PANE" ] || [ "${CALLER_TMUX%%,*}" != "$(opt '#{socket_path}')" ] \
       || die 'run cutover from another pane/terminal; use --after-turn inside the source'
