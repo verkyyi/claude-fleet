@@ -7943,6 +7943,15 @@ drill_task_parent_write_retired() {
 
 # ================================================================ run ====}
 
+drill_release_oidc_runtime() {
+  local t0; t0=$(now); CAP=120
+  bash "$BIN/fleet-release-publish-selftest.sh" >"$WORK/release-oidc-runtime.log" 2>&1 || {
+    WHY="release OIDC regression: $(tail -8 "$WORK/release-oidc-runtime.log")"; return 1;
+  }
+  WHAT='隔离 loopback：OIDC 暂错有界重试，401/403和坏身份立即拒绝，不泄漏响应或token，不跳签名发布门'
+  SECS=$(since "$t0")
+}
+
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
