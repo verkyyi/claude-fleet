@@ -283,6 +283,7 @@ func taskReleasedSourceTx(tx *sql.Tx, t FleetTask) (TaskContinuationSource, erro
 		return source, ErrTaskFence
 	}
 	source.ExitOperationID, source.Receipt = ids[0], receipt
+	source.Endpoint = receipt.ExecutionEndpoint
 	source.Start, _, _, _, err = executionOperationTx(tx, receipt.StartOperationID)
 	return source, err
 }
@@ -508,7 +509,15 @@ func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperation
 	if t.Owner != o.TaskOwner || t.AuthorityVersion != TaskAuthorityVersion || t.State == TaskCancelled || t.Outcome != "" {
 		return t, ErrTaskFence
 	}
-	if exitOperationID != "" {
+	if continuation != nil {
+		if d.Generation != t.Generation+1 {
+			return t, ErrTaskFence
+		}
+		if err := validateTaskContinuationTx(tx, t, o, endpoint, *continuation); err != nil {
+			return t, err
+		}
+		t.Generation, t.AttemptID, t.CancelRequest = d.Generation, d.AttemptID, ""
+	} else if exitOperationID != "" {
 		_, receipt, err := taskSessionExitTx(tx, t, exitOperationID)
 		if err != nil {
 			return t, err
@@ -517,11 +526,6 @@ func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperation
 			t.CancelRequest != receipt.StopOperationID || t.AttemptID != receipt.AttemptID || t.Generation != receipt.Generation+1 ||
 			d.Generation != t.Generation+1 {
 			return t, ErrTaskFence
-		}
-		if continuation != nil {
-			if err := validateTaskContinuationTx(tx, t, o, endpoint, exitOperationID, *continuation); err != nil {
-				return t, err
-			}
 		}
 		if err := taskResumeHistoryTx(tx, t); err != nil {
 			return t, err
