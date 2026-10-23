@@ -572,6 +572,16 @@ drill_session_exited_transient() {
   WHAT="服务端临时出错退出：恢复页 ${SECS}s 内自动续上同一对话一次；再出错不再重试、不自动关窗，等人看"
 }
 
+drill_codex_private_group_orphan() {
+  CAP=35
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-codex-runtime-selftest.sh" GuardianGroupTests 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="私有 app-server 先退出、监督管道 EOF 或 guardian 收 TERM：仍清理忽略 TERM 的同组后代；preflight 继承调用者组也不伤兄弟，仅保证 Runtime 自建私有组"
+}
+
 # A Codex session with no recorded id: ↵ must never `resume --last` — in a shared
 # Codex home that is somebody else's conversation (#1842 ④). The window's own
 # thread (@codex_thread_id) is resumed; with none, a new conversation.

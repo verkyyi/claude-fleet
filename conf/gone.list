@@ -14,6 +14,9 @@
 # A PR that deletes a feature adds its lines here. Bringing one back on purpose
 # deletes its line, and the PR says why. A note goes on a comment line above.
 
+# A live guardian owns the private group; never return early on a dead leader.
+func stop T970 bin/fleet-codex-runtime.py
+
 # --- the old two-pane client (#4423): the thin client is the only one ---------
 path bin/fleet-shell.sh                #4423
 path bin/fleet-sidebar.sh              #4423

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run a Codex TUI and its own local app-server with one bounded lifetime.
 
-The guardian owns the server and reads a pipe held ONLY by the supervisor.
-EOF, including a SIGKILLed supervisor, tears down the server. A shell EXIT trap
-alone cannot provide that guarantee. No shared daemon or TCP port is used.
+The guardian anchors its own session/process group and reads a pipe held ONLY
+by the supervisor. EOF, including a SIGKILLed supervisor, tears down that private
+group even if the server exited first. Helpers which create another session or
+group are outside this guarantee. No shared daemon or TCP port is used.
 """
 import json
 import os
@@ -150,21 +151,83 @@ def target_preflight(root=None, timeout=8):
         shutil.rmtree(directory, ignore_errors=True)
 
 
-def stop(process):
-    if process is None or process.poll() is not None:
-        return
+def private_group_busy():
+    """Only a grace-period hint: the final signal always reaches our own group.
+
+    The ps child temporarily joins this group too. Exclude it and ourselves;
+    zombies cannot fork or do work. A failed observation never shortens grace.
+    No PID from this snapshot is ever used as a signal target.
+    """
     try:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=5)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+        query = subprocess.Popen(['ps', '-axo', 'pid=,pgid=,stat='], stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True)
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+            try:
+                output, _ = query.communicate(timeout=.5)
+            except subprocess.TimeoutExpired:
+                query.kill()
+                try:
+                    query.communicate(timeout=.5)
+                except subprocess.TimeoutExpired:
+                    pass  # final own-group KILL also covers this bounded query
+                return True
+            if query.returncode:
+                return True
+            for line in output.splitlines():
+                pid, group, state = line.split()
+                if int(group) == os.getpid() and int(pid) not in (os.getpid(), query.pid) and not state.startswith('Z'):
+                    return True
+        finally:
+            query.stdout.close()
+        return False
+    except (OSError, ValueError):
+        return True
+
+
+def stop_private_group(process, directory):
+    """Guardian-only: never signal a cached PID/PGID after its owner was reaped.
+
+    We remain the live session/group leader through the FINAL killpg syscall.
+    That also kills this guardian, so its internal exit code may be -SIGKILL.
+    The supervising runtime waits for it but preserves the TUI's exit code.
+    """
+    pid = os.getpid()
+    if os.getpgrp() != pid or os.getsid(0) != pid:
+        raise RuntimeError('guardian does not own a private session/group')
+    try:
+        # Our handler keeps the anchor alive while the server/helpers get TERM.
+        os.killpg(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if process is not None:
+                process.poll()  # reap the direct child, including early exit
+            if not private_group_busy():
+                break
+            time.sleep(.05)
+    finally:
+        # The group identity is still pinned by this executing guardian, even
+        # when the server died/reaped before stop began. Never reuse server.pid.
+        try:
+            if process is not None:
+                # Popen still owns/reaps this direct child. Do not leave its
+                # zombie to a container init which may not reap adopted children.
+                process.kill()
+                try:
+                    process.wait(timeout=.5)
+                except subprocess.TimeoutExpired:
+                    pass  # the final group signal remains bounded
+            shutil.rmtree(directory, ignore_errors=True)
+        finally:
+            os.killpg(pid, signal.SIGKILL)
 
 
 def guard(fd, directory, argv):
+    # Normal runtime already uses start_new_session; target_preflight and older
+    # callers may inherit their parent's group. Own one BEFORE starting anything.
+    if os.getsid(0) != os.getpid():
+        os.setsid()
+    if os.getpgrp() != os.getpid():
+        raise RuntimeError('guardian could not establish a private group')
     process = None
     ended = []
     for sig in (signal.SIGHUP, signal.SIGTERM):
@@ -172,16 +235,15 @@ def guard(fd, directory, argv):
     try:
         with open(Path(directory) / 'server.log', 'ab', buffering=0) as log:
             process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log,
-                                       stderr=log, start_new_session=True)
+                                       stderr=log)
         while process.poll() is None and not ended:
             ready, _, _ = select.select([fd], [], [], 0.2)
             if ready and not os.read(fd, 1):
                 break
         return 0
     finally:
-        stop(process)
         os.close(fd)
-        shutil.rmtree(directory, ignore_errors=True)
+        stop_private_group(process, directory)
 
 
 def toml_value(value):

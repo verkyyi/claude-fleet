@@ -144,7 +144,10 @@ Codex 留着不收时先区分「回报过 merged」与「现在已空闲」：�
 - **运行时。** `fleet-codex-runtime.py` 为每个窗格起一个私有的本地 `codex app-server`，
   TUI 以 `--remote unix://PATH` 连上它。socket 目录放在 `/tmp` 下，权限 0700（macOS 的 Unix 路径长度有限）。
   另有一个 guardian 守着 server，盯着一个只有 supervisor 持有的 pipe：supervisor 就算被 SIGKILL，
-  pipe 一断 server 也会退出。不起共享 daemon，不开网络监听，不改账号配置。
+  pipe 一断就清理其私有进程组。guardian 自己保持组长身份，server 先退出也不会漏掉同组后代；
+  TERM 宽限后仍存活的成员由同一个活 guardian 强制结束，避免向已回收的进程组编号发信号。
+  此约束不覆盖自行 `setsid` / `setpgid` 脱离的进程，不能代替整个 Task 的退出证明。
+  不起共享 daemon，不开网络监听，不改账号配置。
   `FLEET_CODEX_SERVER=0` 退回嵌入式启动，只用来排错；那时没有原生状态通道，也没有消息投递。
 - **身份。** SessionStart 把根会话 UUID、CODEX_HOME、rollout 路径、模型写进一个
   `@codex_identity` JSON；旧启动器的 hook 改不了新启动器的值。Codex 第一轮之前不跑 SessionStart，
