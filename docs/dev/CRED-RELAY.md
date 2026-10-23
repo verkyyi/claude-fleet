@@ -459,6 +459,14 @@ plan 与管理员登记的 tier 分开显示；登记 plan 或最新配额 plan 
 
 这是格式示例，**不是任何真实套餐的容量声明**。确认套餐档位或月费并不确认数字容量比；不从价格换算容量，也不自动填入官方倍率。运营者可明确登记低置信度相对工作量估计：`confidence: "provisional"`，`source` 写实际运营确认来源（不是未经确认的官方容量声明），`basis` 写明共同工作基准与估计性质，并登记版本、生效时间；预览保留这些字段。`verified` 只用于容量依据本身已确认的情况。
 
+可作为人工登记初始估计的官方来源（不是内置配置）：
+
+- [OpenAI 社区 Pro 100 USD 公告](https://community.openai.com/t/introducing-new-100-month-pro-tier/1378752)：2026-04-09 的首帖说明相对 Plus 的 Codex allowance 为 5 倍；临时 10 倍活动已于 2026-05-31 结束，不能继续作为基准。
+- [OpenAI DevDay 2026 recap](https://openai.com/index/devday-2026-recap/) 的「A new Pro tier」说明 Pro 500 的 allowance 为 Plus 的 25 倍。
+- [当前 Pro / Codex 使用窗口说明](https://help.openai.com/en/articles/20001516-managing-usage-with-gpt-6-astra-in-work-and-codex) 说明 Pro 100 / 200 / 500 不设五小时窗口。具体订阅仍须以完整、最新的 `account_api` 快照确认实际窗口。
+
+这些来源可支持「基于官方档位 allowance 的初始估计」，不能证明每周可用 token 或任务数精确为某个值，也不保证不同工作负载下的实测比例。把官方相对 allowance 用作实际周窗口的共同工作单位，仍是管理员明确登记的 **provisional 估计**：保留官方 URL、共同 unit / basis、版本与生效时间，并通过 shadow / 小范围 canary 验证。软件不从价格计算这个比例，不把这些资料自动映射到 provider plan，不预置账号或容量配置。`verified` 也只表示有证据支持登记依据，不表示精确 token 容量；校准仍为 1，等待匹配证据。
+
 安全预览读取当前已保存的真实 quota 快照，不请求推理或重新抓取凭据。`read_via=hub` 是读取路径，不单独证明窗口完整；仅周窗口须同时有完整 `account_api` 证据与明确的 10080 分钟 profile。没有容量 profile 时，旧 `missing_dual_window` 仍诚实显示 unknown；不因档位或月费已确认就臆造基准或缺失的五小时窗口。
 
 字段约束：
