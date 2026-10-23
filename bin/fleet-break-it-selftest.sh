@@ -4973,8 +4973,9 @@ drill_task_window_duplicate() {
   t0=$(now)
   suite_holds task-one-window-selftest.sh 'D5: no window opened' 'B2: the ID stays open while the original runs' \
     'E3: the spawner was called for a running record' 'F9: the hub'"'"'s record is back' || return 1
-  grep -q 'fleet_task_running "$TASK_REF"' "$BIN/dash-raw-session.sh" \
-    || { WHY="dash-raw-session.sh no longer asks whether the record already runs"; return 1; }
+  grep -q '_ttask=$TASK_REF' "$BIN/dash-raw-session.sh" \
+    && grep -q 'fleet_task_running "$_ttask" "$_tfid"' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh lost Task or current continuation FID duplicate checks"; return 1; }
   grep -q 'fleet_fid_shared' "$BIN/fleet-cleanup-idle.py" \
     || { WHY="the idle reaper no longer keeps an ID another window carries"; return 1; }
   SECS=$(since "$t0")
@@ -6955,6 +6956,15 @@ drill_task_stop_entry() {
     WHY="task stop entry regression: $(tail -10 "$WORK/task-stop-entry.log")"; return 1;
   }
   WHAT='Task stop 跨 Web/tmux/CLI 持久撤销，离线可受理，未知不降级，普通关闭不冒充原生退出'
+  SECS=$(since "$t0")
+}
+
+drill_task_continuation_start() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
+    WHY="continuation startup regression: $(tail -10 "$WORK/task-continuation-start.log")"; return 1;
+  }
+  WHAT='同 Task 新 FID 续做；认证原 start 与退出回执找回原工作树和历史，旧窗口不吞新启动'
   SECS=$(since "$t0")
 }
 

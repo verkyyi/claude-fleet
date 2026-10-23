@@ -610,7 +610,15 @@ def validate_write(action, params, *, task_execution=None):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
                             "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref",
-                            "as"))
+                            "as", "continuation"))
+        if "continuation" in params:
+            from fleet_task_continuation import validate_continuation
+            try:
+                validate_continuation(params["continuation"])
+                if task_execution is None or params.get("kind") not in ("scratch", "new"):
+                    raise ValueError("continuation requires a controlled task start")
+            except ValueError as exc:
+                raise Fault("INVALID_ARGUMENT", str(exc)) from exc
         # as (issue T672): the agent file the start opens as — one the release
         # ships, found here by name (FLEET_CONTROL_AS → --as); the hub's rule.
         if "as" in params and not (isinstance(params["as"], str) and AGENT_FILE_RE.fullmatch(params["as"])):
