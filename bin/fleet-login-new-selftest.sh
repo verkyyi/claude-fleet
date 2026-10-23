@@ -139,6 +139,15 @@ if [ "\$1" = -u ]; then
   shift 2; [ "\$1" = -H ] && shift
 fi
 echo "sudo \$1" >> "$LOG"
+# Exercise the staged signed-release reader even when this fixture installs
+# from local git: a fresh login cannot import helpers from the admin's tree.
+for arg in "\$@"; do
+  case "\$arg" in /tmp/fleet-login-install.*/fleet-login-install.sh)
+    python3 -c 'import runpy,sys; runpy.run_path(sys.argv[1], run_name="staged_fetch_probe")' \
+      "\${arg%/*}/fleet-release-fetch.py" || exit 1
+    ;;
+  esac
+done
 for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 700 "\$h"; done
 "\$@"; rc=\$?
 [ -n "\${FAKE_NOLOCK:-}" ] || for h in "\$FLEET_LOGIN_HOMES"/*; do [ -d "\$h" ] && chmod 000 "\$h"; done
