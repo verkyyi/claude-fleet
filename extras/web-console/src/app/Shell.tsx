@@ -30,6 +30,7 @@ import { Logo } from "@/shared/Logo";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
+import { LegacyMigrationNotice } from "./chat/legacy";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { backStep, phoneBar } from "./phone-screen";
 import { ADMIN_HREF, ME_TABS, meTab } from "./routes";
@@ -278,6 +279,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
           <ViewAsBar />
           <TopBar title={title} />
           <NetBarOf />
+          <LegacyMigrationNotice />
           <TrialBar trial={trial} onAsked={setTrial} />
           <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>

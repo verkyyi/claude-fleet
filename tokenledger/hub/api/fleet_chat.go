@@ -55,6 +55,9 @@ var chatRoutes = map[string]string{
 	// 会话合一 (task PQ41 / HHV0 ①): a new session opened from the web on the
 	// person's home, its first line with it — {agent, text, images} → {fid, …}
 	"open": http.MethodPost,
+	// Explicit migration; ordinary history identities remain the only list.
+	"migrate":   http.MethodPost,
+	"migration": http.MethodGet,
 }
 
 // chatProvider is which of the person's two conversations a request is for
@@ -295,6 +298,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != method {
 		w.Header().Set("Allow", method)
 		httpError(w, http.StatusMethodNotAllowed, method+" only")
+		return
+	}
+	if name == "migrate" && !s.chatUnified() {
+		httpError(w, http.StatusConflict, "unified chat is not enabled")
 		return
 	}
 	provider, known := chatProvider(r)
