@@ -146,12 +146,16 @@ applicable() {
 # call METHOD PATH [JSON] → the answer's body on stdout; rc 0 on HTTP 200.
 task_record_curl() {
   local body="$1" mode="$2"; shift 2
+  # Preserve the existing argv contract: URL is last, including for curl
+  # wrappers supplied by self-hosted installations and the transport fixtures.
+  local url="${!#}"
+  set -- "${@:1:$(($# - 1))}"
   if [ "$mode" = body-pipe ]; then
     # Fresh pipe on each attempt, including forwarder -> direct fallback.
     # Auth remains curl's stdin config, large proofs never enter exec argv.
-    "$@" --data-binary @/dev/fd/3 3< <(printf '%s' "$body")
+    "$@" --data-binary @/dev/fd/3 "$url" 3< <(printf '%s' "$body")
   else
-    "$@" ${body:+--data-binary "$body"}
+    "$@" ${body:+--data-binary "$body"} "$url"
   fi
 }
 call() {
