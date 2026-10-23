@@ -298,6 +298,23 @@ EXPLICIT_AGENT=$AGENT
 DISPATCH="${FLEET_DISPATCH:-}"
 EXECUTION="${FLEET_TASK_EXECUTION:-}"
 unset FLEET_TASK_EXECUTION FLEET_TASK_LAUNCH_ID
+CONTINUATION_EXIT=${FLEET_TASK_CONTINUATION:-}
+unset FLEET_TASK_CONTINUATION
+CONTINUATION_PLAN=''
+if [ -n "$CONTINUATION_EXIT" ]; then
+  [ -n "$EXECUTION" ] && [ -z "$RESUME_SID$REOPEN_FID$WT_ARG$PREV_ID" ] || {
+    printf 'dash-raw-session: continuation requires its fresh controlled start\n' >&2; exit 2;
+  }
+  [ "$BG" != 1 ] || { printf 'dash-raw-session: controlled continuation cannot redispatch in background\n' >&2; exit 2; }
+  NODE_ARG=local
+  CONTINUATION_PLAN=$(python3 "$BIN/fleet_task_continuation.py" --snapshot "$EXECUTION" --dispatch "$DISPATCH" --exit-operation-id "$CONTINUATION_EXIT") || exit 2
+  _cp_value() { python3 -c 'import json,sys; v=json.loads(sys.argv[1])[sys.argv[2]]; print(int(v) if isinstance(v,bool) else v)' "$CONTINUATION_PLAN" "$1"; }
+  [ "$(_cp_value repo)" = "$REPO_ARG" ] && [ "$(_cp_value no_repo)" = "$NOREPO" ] || {
+    printf 'dash-raw-session: continuation workspace differs from start\n' >&2; exit 2;
+  }
+  WT_ARG=$(_cp_value worktree); PREV_ID=$(_cp_value source_fid); PROMPT=$(_cp_value seed)
+  [ "$NOREPO" != 1 ] || [ "$(_cp_value cwd)" = "$HOME" ] || exit 2
+fi
 case "${FLEET_TASK_CONTROL_VERSION:-}" in ''|1) ;; *) printf 'dash-raw-session: unsupported task execution control version\n' >&2; exit 2 ;; esac
 if [ -n "$DISPATCH" ]; then
   DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
@@ -352,7 +369,12 @@ refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK
 # return; FLEET_TASK_DUP_OK=1 opens one anyway.
 if [ -n "$TASK_REF" ] && [ -z "$REOPEN_FID$RESUME_SID" ] && [ "${FLEET_TASK_DUP_OK:-0}" != 1 ]; then
   _tfid=''; case "${FLEET_TASK_FID:-}" in "$TASK_REF="*) _tfid=${FLEET_TASK_FID#"$TASK_REF="} ;; esac
-  if _run=$(fleet_task_running "$TASK_REF" "$_tfid"); then
+  _ttask=$TASK_REF
+  if [ -n "$CONTINUATION_EXIT" ]; then
+    _tfid=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["execution_owner"].split("/")[1])' "$EXECUTION") || exit 2
+    _ttask=''  # The old FID remains historical even if its window lingers.
+  fi
+  if _run=$(fleet_task_running "$_ttask" "$_tfid"); then
     _rs=${_run%%	*}; _rw=${_run#*	}
     printf 'dash-raw-session: %s 已在 %s:%s 跑 — 不再开第二个窗口\n' "$TASK_REF" "$_rs" "$_rw" >&2
     if [ "$PRINT_WIN" = 1 ]; then
@@ -360,7 +382,7 @@ if [ -n "$TASK_REF" ] && [ -z "$REOPEN_FID$RESUME_SID" ] && [ "${FLEET_TASK_DUP_
     fi
     exit 0
   fi
-  unset _tfid _run _rs _rw
+  unset _tfid _ttask _run _rs _rw
 fi
 # No spawning into ANOTHER fleet (issue #980): a caller sitting in a fleet pane may
 # name only its own fleet. A caller outside any fleet (no pane, or an ad-hoc
@@ -809,8 +831,16 @@ if [ "$NOREPO" = 1 ]; then
   slug=norepo; wt="$HOME"                        # no worktree: the agent runs in $HOME
 elif [ -n "$WT_ARG" ]; then
   # A parked scratch's own kept worktree (issue #3387): reopened, never allocated.
-  slug="scratch-${WT_ARG##*-scratch-}"
-  case "${slug#scratch-}" in ''|*[!0-9]*) refuse "raw: --worktree $WT_ARG is not a scratch worktree"; exit 1 ;; esac
+  if [ -n "$CONTINUATION_EXIT" ]; then
+    # Re-prove the receipt/worktree after placement and setup delays.
+    _verified=$(python3 "$BIN/fleet_task_continuation.py" --snapshot "$EXECUTION" --dispatch "$DISPATCH" --exit-operation-id "$CONTINUATION_EXIT") || exit 2
+    [ "$_verified" = "$CONTINUATION_PLAN" ] || { refuse 'raw: continuation workspace changed'; exit 2; }
+    # Identity was proved by its Git metadata, not its mutable branch name.
+    slug="task-$TASK_REF"
+  else
+    slug="scratch-${WT_ARG##*-scratch-}"
+    case "${slug#scratch-}" in ''|*[!0-9]*) refuse "raw: --worktree $WT_ARG is not a scratch worktree"; exit 1 ;; esac
+  fi
   [ -d "$WT_ARG" ] && [ -e "$WT_ARG/.git" ] || { refuse "raw: --worktree $WT_ARG is gone"; exit 1; }
   wt=$WT_ARG
 else
@@ -955,7 +985,7 @@ fi
   # tmux has created the pane, before credentials or a native process exist.
   _dispatch_task=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task", ""))' "$DISPATCH") || exit 2
   if [ -n "$_dispatch_task" ]; then
-    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current >/dev/null; then
+    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current ${EXECUTION:+--execution "$EXECUTION"} >/dev/null; then
       [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
       refuse "raw: accepted task start refused"; exit 2
     fi
