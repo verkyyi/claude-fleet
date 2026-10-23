@@ -57,6 +57,8 @@ const (
 
 // BoardRow is one row of the list.
 type BoardRow struct {
+	CancelRequest string `json:"cancel_request,omitempty"`
+	Generation    int64  `json:"generation,omitempty"`
 	// Agent is accompanied by its evidence basis; planned never means actual.
 	Agent       string    `json:"agent,omitempty"`
 	AgentBasis  string    `json:"agent_basis,omitempty"`
@@ -338,6 +340,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
 			r.ExecutionEndpoint = t.ExecutionEndpoint
+			r.CancelRequest, r.Generation = t.CancelRequest, t.Generation
 			r.Outcome = taskEnd(*t)
 			if r.Agent == "" && t.ActualAgent != "" {
 				r.Agent, r.AgentBasis = t.ActualAgent, "actual"

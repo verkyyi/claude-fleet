@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -71,8 +72,12 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "the body must be one JSON object: cert, sig, ts, tool, args_json")
 		return
 	}
-	if !fleetWriteTools[req.Tool] && req.Tool != "operation_get" {
+	if !fleetWriteTools[req.Tool] && req.Tool != "operation_get" && req.Tool != "task_continue" {
 		httpError(w, http.StatusBadRequest, "tool must be one of the hub's write tools, or operation_get")
+		return
+	}
+	if req.Tool == "task_continue" && (r.Header.Get("X-Fleet-Worker") != "" || strings.HasPrefix(bearer(r), "fcp-h")) {
+		httpError(w, http.StatusForbidden, "continuation requires the task owner's viewer/session credential or connection certificate")
 		return
 	}
 	args := map[string]any{}
@@ -81,6 +86,13 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&args); err != nil || args == nil {
 		httpError(w, http.StatusBadRequest, "args_json must be one JSON object of tool arguments")
 		return
+	}
+	if req.Tool == "task_continue" {
+		var extra any
+		if dec.Decode(&extra) != io.EOF {
+			httpError(w, http.StatusBadRequest, "args_json must contain exactly one object")
+			return
+		}
 	}
 	id, ok := s.sshRelayHTTPIdentity(r)
 	nodeActor := ""
@@ -120,6 +132,26 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+	}
+	if req.Tool == "task_continue" {
+		// A signed person tool, not a node/worker tool or another spawn path.
+		// Preserve the certificate's actor, including an administrator's identity.
+		p, err := s.clientPrincipal(id)
+		if err != nil {
+			taskExecutionError(w, err)
+			return
+		}
+		ref, _ := args["task"].(string)
+		if ref == "" {
+			httpError(w, http.StatusBadRequest, "task is required")
+			return
+		}
+		delete(args, "task")
+		body, _ := json.Marshal(args)
+		r = r.Clone(r.Context())
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		s.continueFleetTask(w, r, p, ref)
+		return
 	}
 	ctx := r.Context()
 	if !id.Operator {

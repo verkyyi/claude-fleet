@@ -6753,6 +6753,15 @@ drill_mcp_release_path_pinned() {
 # per agent (Claude's SessionStart payload, Codex's runtime against the one fake
 # app-server): held here by name, not run twice.
 # ① a dispatched Codex task never read as started (#4972)
+drill_codex_internal_thread_hook() {
+  CAP=15; local t0
+  t0=$(now)
+  python3 "$BIN/fleet-agent-witness-selftest.py" WitnessTests.test_codex_internal_thread_hooks_preserve_root \
+    || { WHY='internal native SessionStart changed the root identity or ledger'; return 1; }
+  WHAT='隔离 tmux 与私有 RPC 下，临时线程、子线程及未知线程的两个钩子均不改主会话身份，真实 root 新会话仍可登记'
+  SECS=$(since "$t0")
+}
+
 drill_start_unwitnessed() {
   CAP=10; local t0
   t0=$(now)
@@ -6925,6 +6934,15 @@ drill_restore_execution_identity() {
   SECS=$(since "$t0")
 }
 
+drill_native_cancel_before_signal() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-native-stop-order-selftest.py" >"$WORK/native-stop-order.log" 2>&1 || {
+    WHY="native cancel ordering regression: $(tail -8 "$WORK/native-stop-order.log")"; return 1;
+  }
+  WHAT='本地无 journal 停止同事务固定双时钟，重放不延长，共同入口只取消一次，未知或外部强停不阻挡退出'
+  SECS=$(since "$t0")
+}
+
 drill_native_exit_identity() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-session-exit-selftest.py" \
@@ -6947,6 +6965,26 @@ drill_native_exit_submit_replay() {
       WHY="native exit submission regression: $(tail -8 "$WORK/native-exit-submit.log")"; return 1;
     }
   WHAT='隔离 journal：证明持久化后崩溃、响应丢失原包重发、并发结果更新保包、未知登记不提交'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continue-entry-selftest.py" >"$WORK/task-continue-entry.log" 2>&1 || {
+    WHY="task continue entry regression: $(tail -10 "$WORK/task-continue-entry.log")"; return 1;
+  }
+  WHAT='明确继续同一 Task：owner 凭据、停止版本围栏、丢响应原包重发；历史只读，不降级 resume/spawn'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
   SECS=$(since "$t0")
 }
 
@@ -7851,6 +7889,15 @@ drill_parent_origin_retired() {
     WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
   }
   WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
+drill_parent_wait_retired() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-wait-selftest.sh" --parent-only >"$WORK/parent-wait-retired.log" 2>&1 || {
+    WHY="old Parent relationship still affects native wait: $(tail -10 "$WORK/parent-wait-retired.log")"; return 1;
+  }
+  WHAT='旧origin关系和远端child账本不再制造looping或阻止回收；原生Loop仍保护其所属会话，历史不改写'
   SECS=$(since "$t0")
 }
 

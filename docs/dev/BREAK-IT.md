@@ -16,6 +16,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | 受控 Task 带旧结果、角色策略或停放到期，自动回收直接关窗 | 未经原生退出证明丢失窗口，Hub 仍保留执行绑定 | 受控及控制证据未知的自动路径只安全停放；PR与最终关窗边界复核，保留绑定与历史，用户主动停止独立 | `task-controlled-auto-retention` |
+| Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
 | 发布签名前 Actions OIDC 端点短暂失败或返回合法换行 JSON | 单次 curl/sed 丢失 HTTP 原因并误报权限缺失，Hub 已部署但签名 stable 未推进 | 保留原权限和签名门；仅暂错有界重试，401/403 与无效身份立即拒绝；日志仅显示状态，不显示响应或凭据 | `release-oidc-runtime` |
 | 旧 Task Outcome 已结束，新代次待启动尚无 tmux 窗口 | autoclean 把工作树当完成垃圾删除，接续丢失环境 | 工作树专用只读判断保留 controlled Task（含空执行绑定）；读取未知 KEEP，legacy 保留原清理契约 | `task-worktree-current-generation` |
 | 旧会话结果、关闭事件或创建时间超时补偿落在已接续的受控 Task 上 | 新代次仍有启动绑定，却被旧事件写成 succeeded/cancelled，下一次接续被拒绝 | ID 历史照常保存；旧投影跳过受控 Task，写入对比代次及绑定快照，补偿在事务内复核 | `task-history-current-generation` |
@@ -641,6 +642,7 @@
 | 用 `fleet codex` / `--agent codex` 开会话，或在 FLEET_AGENT=codex 的 fleet 上开（T580 清单⑥，#2405） | 开出来的是 Claude：Codex 的开会话那段和 Claude 的各写一份，Claude 那边的判断改了 Codex 那边没跟上 | 开会话一条路（T620）：唯一的门 `fleet-claude.sh` 按适配表（`bin/fleet_agent_adapter.py`）开问到的那个 Agent 的启动器，共同步骤在 `bin/fleet-launch-lib.sh`；`--agent` 明说的永远赢，像续接的也一样；没说的续接仍是 Claude | `open-wrong-agent` |
 | 新开一个 fleet Codex 会话（T580 清单⑦，#4727） | 权限不全，或命令行带着权限覆盖，会话里 /resume 一律被拒：Claude 那边早修好的满权限，Codex 那边要再坏一次才补上 | 两种 Agent 开局都走同一段组装（`fleet_launch_cfg`）拿 fleet 默认的满权限；Codex 在登录自己的 config.toml 已给满权限、上面没有东西能改它时不再带命令行覆盖（`fleet-codex-posture.py check`）；同一组断言对两种 Agent 各跑一遍 | `open-partial-access` |
 | 起 Codex 会话（按 agent 文件起也一样，T580 清单⑧，#4731） | 起 Codex 时去跑 `claude plugin list`：没装 Claude、或 Claude 慢，Codex 就起不来或晚起 | 一种 Agent 的开局从不调另一种的命令行：门按适配表分派后才解析 agent 文件（`fleet_as_resolve <那个 Agent>`），派活方按表的行取 `--for`；两种 Agent 各跑一遍，假的 claude / codex 记下每一次调用 | `open-other-cli` |
+| Codex TUI 的临时结构化线程或原生子 Agent 继承主窗口环境并触发 SessionStart（T970 原生验收） | 钩子把 `@codex_identity` 与 FID 原生段改成临时线程；主会话仍在回复，历史却不可读，继续任务失去原始会话 | 两个身份写入口共用私有 app-server 的精确 thread/read 判定；拒绝 ephemeral、子线程及无法确认的线程，保留主会话身份，正常 root 新会话仍可登记 | `codex-internal-thread-hook` |
 | 用 `task` 派一个 Codex 任务，人还没开口、种子还没轮到（T580 清单①：10-19/20 的 T351 / T354 / T355 / T364，#4972） | Codex 0.162 只在线程第一轮才跑 SessionStart：窗口没记下对话、ID 没有第一段，派活方等不到「起来了」，任务一直停在「等确认」，当它没起来 | 「起来了」一条路（T629）：两种 Agent 的会话开始都走同一个见证入口 `fleet_id.hook`，只是会话编号从哪来不同——适配表（`bin/fleet_agent_adapter.py`）的 `sid_source`：Claude 是 SessionStart 钩子，Codex 是它的 runtime 从私有 app-server 见到的 TUI 线程（`fleet-codex-session.py` `witness`，只在本次启动还没记下对话时写，第一轮的钩子见同一线程不再动）；ID 有了第一段，入口的任务读数就带 `started`；同一组腿（起来、首轮前起来、/clear 后新一段、换版重开接回同一线程）对两种 Agent 各跑一遍（`fleet-agent-witness-selftest.py`） | `start-unwitnessed` |
 | 版本更新后重开一个会话（恢复页 ↵、换版重开、ver-stale 重开；T580 清单③，#4737） | 重开的 Codex 回来时 ID 记成「新」一段，或接到别的线程：换线程被当成 /new、旧线程丢了；Claude 那边早按「同一编号不加段」处理 | 认 /clear 一条路（T629）：`fleet_id.next_native` 不再问名字，问表的 `clear_said`（这个 Agent 的会话开始会不会说自己来自 /clear）；续接回来的线程是本次启动为它开的（`sid_pending` / `sid_thread`）就记 resume，和上一段同一编号就不加段；窗口当前对话编号只有一个读取口（`session_id` / `fleet_agent_session_id`，恢复页、台账同用）；两种 Agent 各跑一遍（`fleet-agent-witness-selftest.py`） | `reopen-new-segment` |
 | 迁移后的历史恢复仍取最初 worktree，关闭窗口后网页无法读原生记录 | 恢复走错目录或丢失 Codex home，已有对话无法查看 | 按 owner+FID 读取历史；恢复验证迁移收据中的 FID、原生 SID 和落点；缺目录明确拒绝 | `history-recovery-placement` |
@@ -694,6 +696,7 @@
 | quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格；目标晚绑定仍须等待 controller 已确认 started，未知结果不启 timer | `quota-loop-replacement` |
 | 未启动记录在面板显示 Unknown / Queued，任务结果盖过会话的新工作（PV4D） | 人误以为已有 worker 或自动调度，并找不到协调归属 | Hub board 区分计划与运行证据、未派发与保留状态，终端和网页消费同一事实；协调归属只取可核验的父记录 | `board-plan-facts` |
 | Hub Task 的 stop 已持久化，但节点清理失败、执行器崩溃或尚未启动；Hub 再次投递同一个 stop | 旧 failed / unknown / succeeded 回执被当成清理已经结束，后续请求不再停进程或关闭窗口 | 每次重投先持久提交同一 stop 栅栏，再用原 operation 重试清理；按 operation 的进程间锁防止并发清理，执行器死亡自动释放；成功回执仍标记 execution_exit 为 unproven | `task-stop-replay-cleanup` |
+| Terminal/CLI 继续 Task 借用节点凭据，超时重试改变停止版本，或查看历史隐式恢复 | 旧执行被重新授权或重复启动 | 仅用户凭据/连接证书调用原继续核心，严格 owner；固定 stop/generation/key 至确认，历史不调用 restore/resume，失败给精确 Web Task 链接 | `task-continue-entry` |
 | Web、tmux 或 CLI 停止受控 Task 时只关 live 窗口，离线或没有窗口的记录没有停止入口 | 旧执行授权未撤销，未来旧唤醒仍可运行；界面误称已经退出 | 同 owner 的 Task stop 先持久撤销；节点离线仍受理，受控证据缺失先核验，Hub 不可达不降级普通 worker_stop；原生退出另行证明 | `task-stop-entry` |
 | restore 先启动包装器、后补会话 FID，或快照丢失显式执行协议 | 已停止的受控 Task 被当成旧会话恢复；本地数据库丢失时绕过停止检查 | FID、恢复来源和显式协议在同一 pane 启动前写入，写失败不启动；协议随 FID 单独入快照，缺本地授权仍拒绝，未受控会话照常恢复 | `restore-execution-identity` |
 
@@ -709,6 +712,8 @@
 | 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |
 | 旧 Outcome / cancelled 投影保留在已证明停止的 Task 上，用户明确继续 | 历史完成结果永久拦住接续，用户只能另开任务 | 仅显式 continue 在完整原生退出或未领取停止链证明后忽略旧结果；首次接管与普通 resume 不放宽，历史结果不改写 | `task-continue-historical-outcome` |
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
+
+| Task 停止落盘后，100ms supervisor 或并发 executor 抢先杀掉原生根，重放又重新延长取消等待 | 本 session 的 durable plan 来不及取消，或重复等待导致任务关不掉 | stop 同事务固定一次双时钟期限；executor / supervisor 共用取消机会，归属未知、旧记录或外部强停立即退出，最多三秒后不再等；不冒充全域停止 | `native-cancel-before-signal` |
 | 继续授权未 claim 就停止，再次重试；或连续多次重试、跨 Agent 选择 | 未启动任务无法继续，或把原生退出和未启动混为一体、丢失之前真实工作区 | 本人显式 continue 认可精确 canonical 未领取停止；逐代验证原生退出或未领取证明，认证读取分别给直接来源与真实工作区来源，旧授权不能重用 | `task-continue-unclaimed` |
 | 受控 Codex 的 `--no-daemon` 分支绕过原生执行登记 | 已停止任务仍进入 Codex exec，且缺少可终止的原生根记录 | 同一 native_command 边界校验停止并登记 Codex client；非受控 argv 不变，缺少 server 仍不签发完整退出证明 | `codex-no-daemon-fence` |
 | 节点未 claim 就重试，旧 allocation 被当作运行中或已有窗口被误认成未启动 | 任务无法重试，或复活旧 FID、覆盖真实执行与工作区 | 认证未领取停止仅退休精确纯 allocation；窗口、原生、历史登记均拒绝；既有控制日志保留退休事实，新会话仍需 Hub claim | `task-unclaimed-node` |
