@@ -94,8 +94,6 @@
 17.8 fleet-answer-selftest.sh
 0.2 fleet-attach-selftest.sh
 28.7 fleet-await-selftest.sh
-28.8 fleet-await-stall-selftest.sh#1
-32.9 fleet-await-stall-selftest.sh#2
 0.2 fleet-base-branch-selftest.sh
 2.4 fleet-base-sync-selftest.sh
 13.5 fleet-bin-inventory-selftest.sh

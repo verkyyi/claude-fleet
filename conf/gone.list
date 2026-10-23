@@ -249,3 +249,9 @@ re en:view_grp_queue_fmt.*Queued T966 bin/fleet-ui-lang.sh
 # Task pages use the conversation; the independent shell keeps its terminal.
 path extras/web-console/src/app/workspace-view.ts T970
 path extras/web-console/test/workspace-view.mjs T970
+
+# T970: Parent delivery settings cannot enable the retired report/await path.
+key FLEET_CHILD_REPORT T970
+key FLEET_CHILD_REPORT_BATCH_SECS T970
+key FLEET_AWAIT_STALL_SECS T970
+func tell_parent T970 bin/fleet-stream-resume.sh

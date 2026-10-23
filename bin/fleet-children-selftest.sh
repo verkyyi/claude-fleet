@@ -68,8 +68,8 @@ eq "report_tier bands every state" \
   "$(cat "$WORK/tiers")"
 modes=$( . "$BIN/fleet-lib.sh"; . "$BIN/fleet-children-lib.sh"
   for v in '' 1 immediate batch 0 off bogus; do printf '%s ' "$(FLEET_CHILD_REPORT="$v" children_report_mode)"; done )
-eq "children_report_mode: legacy 1/unset/unknown ⇒ immediate" \
-  'immediate immediate immediate batch 0 0 immediate ' "$modes"
+eq "children_report_mode: legacy settings cannot re-enable retired delivery" \
+  '0 0 0 0 0 0 0 ' "$modes"
 F2="$WORK/tier.ndjson"
 printf '%s' '{"child":"issue-2","state":"WAITING","tier":"silent"}' | python3 "$BIN/fleet-children.py" append --file "$F2" >/dev/null
 printf '%s' '{"child":"issue-3","state":"MERGED","tier":"LOUDER"}' | python3 "$BIN/fleet-children.py" append --file "$F2" >/dev/null

@@ -112,7 +112,7 @@ MD
 cat > "$WORK/fx/clean.md" <<'MD'
 # skill
 ## 1. Ship
-Call `mcp__fleet__pr_merge` (`pr`), then `mcp__fleet__report`; wait with `mcp__fleet-orch__await`.
+Call `mcp__fleet__pr_merge` (`pr`), then summarize the result; independent work uses `mcp__fleet-orch__task`.
 ```sh
 # 排障 — a comment inside a fence is not a heading
 echo hi

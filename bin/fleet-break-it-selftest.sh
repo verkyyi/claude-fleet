@@ -1706,9 +1706,7 @@ drill_codex_clear_lost() {
     "'held is never DELIVERED'" || return 1
   suite_holds fleet-agent-deliver-selftest.py 'def test_clear_reaches_the_new_conversation' \
     "for agent in ('claude', 'codex')" "'the replay lands in the new thread'" || return 1
-  grep -q 'fleet_agent_deliver "\$pwin"' "$ROOT/bin/fleet-report-parent.sh" \
-    || { WHY="fleet-report-parent.sh no longer takes the one delivery road (fleet_agent_deliver)"; return 1; }
-  WHAT='Codex 父 /clear 后：投递先留待（不投旧线程、不写 DELIVERED），runtime 收 thread/started 立刻换到新线程、记段，留待的回报重放进新线程才算送达（fleet-codex-session-selftest.sh 真跑；同一条腿 Claude / Codex 各一遍在 fleet-agent-deliver-selftest.py，这里按名守住）'
+  WHAT='Codex clear 后普通消息暂存，不投旧线程；跟随新线程后通过原投递入口重放，Parent回报保持退役'
   SECS=$(since "$t0")
 }
 
@@ -1830,7 +1828,7 @@ PY
     "printf '\033[2J\033[H> '; python3 '$d/fleet-mcp.py' '$d/call.pid' & exec '$d/claude' 600" \
     || { WHY="cannot start the isolated tmux server"; return 1; }
   w=$(nt display-message -p -t tw:issue-9 '#{window_id}'); p=$(nt display-message -p -t "$w" '#{pane_id}')
-  nt set-option -w -t "$w" @issue 9 \; set-option -w -t "$w" @cc_agent claude \; \
+  nt set-option -w -t "$w" @fleet_id 11111111-2222-4333-8444-555555550009 \; set-option -w -t "$w" @issue 9 \; set-option -w -t "$w" @cc_agent claude \; \
      set-option -w -t "$w" @claude_state working \; set-option -w -t "$w" @claude_state_ts "$(( $(date +%s) - 300 ))"
   until_ok 10 test -s "$d/call.pid" || { WHY="the fake server never started its call"; return 1; }
   # break ①: the sleep tick's state reconcile (#806) reads the call's empty input line
@@ -1871,7 +1869,7 @@ PY
 # re-ask are the real ones; the browser is a process carrying Playwright's argv.
 hw_env() {   # <args…> — the sandbox's hooks and lib, against sock-hw
   env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
-    FLEET_CONF_DIR="$WORK/hw/conf" FLEET_SKIP_GLOBAL_CONF=1 "$@"
+    FLEET_CONF_DIR="$WORK/hw/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 "$@"
 }
 drill_human_step_reopen() {
   CAP=60; BREAK_SOCK="$WORK/sock-hw"; local d="$WORK/hw" w p t0 st why out
@@ -1883,7 +1881,7 @@ drill_human_step_reopen() {
     "python3 -c 'import time; time.sleep(600)' --remote-debugging-pipe --user-data-dir='$d/ms-playwright-mcp/mcp-chrome-1' & exec sleep 600" \
     || { WHY="cannot start the isolated tmux server"; return 1; }
   w=$(nt display-message -p -t hw:issue-9 '#{window_id}'); p=$(nt display-message -p -t "$w" '#{pane_id}')
-  nt set-option -w -t "$w" @issue 9 \; set-option -w -t "$w" @cc_agent claude \; \
+  nt set-option -w -t "$w" @fleet_id 11111111-2222-4333-8444-555555550009 \; set-option -w -t "$w" @issue 9 \; set-option -w -t "$w" @cc_agent claude \; \
      set-option -w -t "$w" @claude_state working \; set-option -w -t "$w" @claude_state_ts "$(date +%s)" \; \
      set-option -w -t "$w" @ctx_pct 90
   # the browser alone already reads as a person's step
@@ -5903,12 +5901,14 @@ drill_stuck_worker_unseen() {
   CAP=15; local t0 out
   t0=$(now)
   out=$(bash "$BIN/fleet-stream-resume-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep FAIL | head -3)"; return 1; }
-  printf '%s' "$out" | grep -q '^PASS  H the budget spent → one failed report' \
+  printf '%s' "$out" | grep -q '^PASS  H the budget spent stays local, no Parent report' \
     || { WHY="the give-up report leg did not run: $(printf '%s' "$out" | grep ' H ' | tr '\n' ' ')"; return 1; }
-  grep -q 'fleet-report-parent.sh" --state failed --win "$TMUX_PANE"' "$BIN/fleet-session-wrap.sh" \
-    || { WHY="fleet-session-wrap.sh no longer reports a refused launch"; return 1; }
+  if grep -q 'fleet-report-parent.sh" --state failed --win "$TMUX_PANE"' "$BIN/fleet-session-wrap.sh"; then
+    WHY='wrapper revived Parent reporting'; return 1
+  fi
   SECS=$(since "$t0")
-  WHAT='worker 被 API 错误停住、自动续接用完或错误不可续：给父会话报一次 failed（停在提示符、不是做完了）；rate_limit 和人的会话不报；起动被拒的 worker 一串也只报一次'
+  WHAT='原生错误续接仍有次数上限；不可重试或预算用尽只留本地原因，不再向Parent回报'
+
 }
 
 # ---- finished workers nothing closed (issue #4822, a managed Mac 2026-10-19) -------------

@@ -902,6 +902,16 @@ args = sys.argv[1:]
 auth = sys.stdin.read()
 assert 'Authorization: Bearer tok-task-fixture' in auth
 method = args[args.index('-X') + 1]
+if args[-1] == 'http://hub.test/v1/node/tasks/executions' or '/tasks/T43/execution' in args[-1]:
+    with open(os.environ['TASK_READ_LOG'], 'a') as log:
+        log.write(method+' '+args[-1].removeprefix('http://hub.test')+'\n')
+if args[-1] == 'http://hub.test/v1/node/tasks/executions':
+    assert method == 'GET'
+    if os.environ.get('PLACE_EXECUTION_SYNC_FAIL') == '1':
+        print(json.dumps({'error': 'fixture authority unavailable'})); print('503'); sys.exit(0)
+    with open(os.environ['EXECUTION_FIXTURE']) as stream:
+        snapshot=json.load(stream)
+    print(json.dumps({'control_version':1, 'task_executions':[snapshot]})); print('200'); sys.exit(0)
 if '/tasks/T43/execution' in args[-1]:
     from pathlib import Path
     path=Path(os.environ['EXECUTION_FIXTURE'])
@@ -964,11 +974,28 @@ s=json.load(open(sys.argv[1]));s.update(task_ref='T43',attempt_id='task:T43:g1',
 json.dump(s,open(sys.argv[2],'w'))
 EXECUTION
 EXECUTION_GRANT=$(cat "$WORK/execution.json")
+# A fresh authenticated stop read is mandatory before allocation/claim. This
+# stub replaces HTTP only: an unavailable authority must not downgrade to a
+# legacy start or reach the claim endpoint.
+: > "$WORK/task-read.log"
+PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T43_DISPATCH PLACE_DISPATCH=$T43_DISPATCH PLACE_EXECUTION=$EXECUTION_GRANT \
+  FLEET_TASK_CONTROL_VERSION=1 EXECUTION_FIXTURE="$WORK/execution.json" EXECUTION_FLEET="$UUID" PLACE_EXECUTION_SYNC_FAIL=1 \
+  FLEET_HUB_CURL="$WORK/fakebin/task-curl" TASK_READ_LOG="$WORK/task-read.log" run_raw --no-repo --task T43
+[ "$(rc)" != 0 ] && ! tmux_has 'new-window' && err_has 'fresh authenticated task execution authority is unavailable' \
+  && grep -qx 'GET /v1/node/tasks/executions' "$WORK/task-read.log" \
+  && ! grep -q 'POST .*execution/claim' "$WORK/task-read.log" \
+  || fail "CONTROLLED LOCAL refuses before claim/window when authenticated stop synchronization fails"
+: > "$WORK/task-read.log"
 PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T43_DISPATCH PLACE_DISPATCH=$T43_DISPATCH PLACE_EXECUTION=$EXECUTION_GRANT \
   FLEET_TASK_CONTROL_VERSION=1 EXECUTION_FIXTURE="$WORK/execution.json" EXECUTION_FLEET="$UUID" \
   FLEET_HUB_CURL="$WORK/fakebin/task-curl" TASK_READ_LOG="$WORK/task-read.log" run_raw --no-repo --task T43
 [ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has '@task_execution' && tmux_has 'FLEET_TASK_EXECUTION=' \
   || fail "CONTROLLED LOCAL claims and stamps native execution before launch (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+python3 - "$WORK/task-read.log" <<'CLAIM_ORDER' || fail "CONTROLLED LOCAL must authenticate stop synchronization before claiming"
+import sys
+rows=open(sys.argv[1]).read().splitlines()
+assert rows[:2] == ['GET /v1/node/tasks/executions', 'POST /v1/node/tasks/T43/execution/claim'], rows
+CLAIM_ORDER
 SESSION_FID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["execution_owner"].split("/")[1])' "$WORK/execution.json")
 tmux_has "@fleet_id '$SESSION_FID'" || fail "CONTROLLED LOCAL window keeps the claimed Session FID"
 PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T43_DISPATCH PLACE_DISPATCH=$T43_DISPATCH PLACE_EXECUTION=$EXECUTION_GRANT \
