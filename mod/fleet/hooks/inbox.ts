@@ -36,6 +36,8 @@ export type InboxIo = {
   query?: (request: Record<string, unknown>) => Promise<void | Record<string, unknown>>
   /** Conditional idle acceptance (accept.ts, #4618): its outcome rides the .done. */
   accept?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
+  /** Narrow, ownership-checked native cancellation; never a free-form tool call. */
+  cancel?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
 /**
@@ -72,9 +74,26 @@ export function parseMessage(text: string): InboxMessage | { error: string } {
 /** Pending seqs, oldest first (seqs start with the epoch second). */
 export function pending(names: readonly string[]): string[] {
   return names
-    .filter(n => n.endsWith('.json') && !n.startsWith('.'))
+    .filter(n => n.endsWith('.json') && !n.startsWith('.') && n !== 'native-cancel.json')
     .map(n => n.slice(0, -'.json'.length))
     .sort()
+}
+
+/** One fixed cancellation slot, independent of an idle-waiting command poll. */
+export async function pollNativeCancel(io: InboxIo, dir: string): Promise<void> {
+  const base = `${dir}/native-cancel`
+  if (!(await io.claim(`${base}.json`, `${base}.taken`))) return
+  let result: Record<string, unknown>
+  try {
+    const request: unknown = JSON.parse(await io.read(`${base}.taken`))
+    if (!io.cancel || typeof request !== 'object' || request === null || Array.isArray(request)) {
+      throw new Error('native cancellation unavailable')
+    }
+    result = await io.cancel(request as Record<string, unknown>)
+  } catch (error) {
+    result = { ok: false, state: 'refused', error: errorText(error) }
+  }
+  await io.write(`${base}.done`, `${JSON.stringify(result)}\n`)
 }
 
 function errorText(err: unknown): string {

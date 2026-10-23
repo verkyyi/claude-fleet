@@ -1207,12 +1207,6 @@ def hub_task(task):
 TASK_ENDS = ("succeeded", "failed", "cancelled", "refused")
 
 
-def task_ended(e):
-    """The row's hub task record has ended (off task_cache — never a hub call)."""
-    o = (id_record(e.get("fid") or "") or {}).get("opened") or {}
-    return bool(hub_task(e.get("task") or o.get("task") or "").get("outcome"))
-
-
 def hub_task_agent(task):
     """The hub task record's actual_agent — the Agent column's last fallback (EPIC
     T497 C17)."""
@@ -1403,11 +1397,8 @@ def id_apply(e, fid, known, live=True):
     cur = [r for r in rec.get("results") or () if r.get("attempt", 1) >= e["attempt"]]   # this attempt's (C2)
     res = cur[-1].get("state", "") if cur else ""
     st = RESULT_STATE.get(res, "")
-    if live and st and e.get("state") not in ("working", "looping", "needs", "exited") and not e.get("lost"):
-        # S2: the newest result says how a live window ended its last piece of work
-        e["state"] = st
-        e["sym"] = sym_of(st)
-        e["word"] = state_words(st)
+    # Results describe earlier work. A live row retains its native observation,
+    # including idle/unknown; a historical blocked result is not a new question.
     if not live and rec.get("closed"):
         # S7: a closed ID with no result exited; else its newest result
         e["sym"] = "exited" if not res else ("fail" if st == "failed" else "done")
@@ -1968,10 +1959,6 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else far_fid(target), known)
         if not e["repo"]:
             norepo.append(e)
-        if e["state"] == "idle" and task_ended(e):
-            # A result describes the task; current work keeps its live state.
-            e["state"], e["sym"] = "done", sym_of("done", e["lost"])
-            e["word"] = state_words("done")
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
         if grp == "shut":

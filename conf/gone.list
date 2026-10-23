@@ -262,6 +262,9 @@ key FLEET_ORPHAN_ALERT_CMD T970
 func agent_fallback T970 bin/fleet-peer-send.sh
 func _place_note T970 bin/dash-issue-session.sh
 func nudge T970 bin/fleet-cleanup-idle.py
+
+# T970: historical outcomes never overwrite a live native observation.
+func task_ended T970 bin/fleet_view.py
 # T970: no new Hub task Parent binding or Parent identity gate.
 func bindTaskParentTx T970 tokenledger/hub/
 func checkTaskParentSession T970 tokenledger/hub/

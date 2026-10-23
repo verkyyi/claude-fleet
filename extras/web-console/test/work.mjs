@@ -61,6 +61,21 @@ assert.notEqual(by('merge').group, 'gone');
 const kept = buildRows([v1({ id: 'T11', fid: fid(11), title: 'kept', outcome: 'succeeded', worker_id: `${F}/k` })], [sess('k', 'working')], []);
 assert.deepEqual([kept[0].group, kept[0].tag[1]], ['work', 'Working']);
 
+// Native observations are independent of earlier task outcomes. Keep the
+// history without inventing a new failure or question in the current row.
+for (const outcome of ['succeeded', 'failed', 'cancelled', 'refused']) {
+  for (const [state, group, word] of [
+    ['working', 'work', 'Working'], ['looping', 'work', 'Working'],
+    ['needs', 'ask', 'Asking you'], ['idle', 'queue', 'Idle'],
+    ['done', 'queue', 'Turn ended'], ['unknown', 'queue', 'Unknown'],
+  ]) {
+    const task = v1({id:'T11', fid:fid(11), outcome, asked:'old question', worker_id:`${F}/k`});
+    const [r] = buildRows([task], [sess('k', state)], []);
+    assert.deepEqual([r.group, r.tag[1]], [group, word], `${outcome} must not override native ${state}`);
+    assert.equal(r.task.outcome, outcome, 'history remains on the task');
+  }
+}
+
 // EPIC: members listed under it; nested while in its group, else in their own naming it
 const epic = by('epic');
 assert.deepEqual(epic.kids.map((k) => k.title).sort(), ['member queued', 'member working']);

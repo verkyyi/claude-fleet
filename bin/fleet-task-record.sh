@@ -588,6 +588,10 @@ case "$cmd" in
     is_tref "${1:-}" || usage
     call GET "/v1/node/tasks/$1/execution"
     exit $? ;;
+  execution-start)
+    is_tref "${1:-}" || usage
+    call GET "/v1/node/tasks/$1/execution/start"
+    exit $? ;;
   execution-claim)
     is_tref "${1:-}" || usage
     payload=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin),separators=(",",":")))') || exit 2
