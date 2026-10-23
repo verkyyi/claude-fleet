@@ -5513,7 +5513,8 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 screen.addnstr(1, 0, qo.clip(cmd_line(ban, qo.cells), width - 1), width - 1, attr(("red",)) or curses.A_BOLD)
             except curses.error:
                 pass
-        for y, segs in enumerate(paint(shown[top:top + body], at - top, width - 1, qo.cells, qo.clip) if not page else [], off):
+        # Column thresholds use physical terminal width; writes still reserve the last cell.
+        for y, segs in enumerate(paint(shown[top:top + body], at - top, width, qo.cells, qo.clip) if not page else [], off):
             x = 0
             for text, style in segs:
                 if x >= width - 1:
@@ -5532,8 +5533,6 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             if not foot:
                 foot, red = note_of(lit_e)
             fstyle = ("red",) if red else fstyle
-        if width < 48:
-            foot = say("view_narrow")
         panel.put(screen, height - 2, 0, fill(cmd_line(foot, qo.cells), width - 1, qo.cells, qo.clip) if foot else foot, width - 1, qo.clip, attr(fstyle))
         keys = say("view_keys_sending") if busy else say("view_keys_short")
         if not busy and not page and epic_folds(lit_e) and not query.split():
@@ -5547,7 +5546,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             if mode == "compose":
                 hsegs = []      # its title is row 0's (T774)
             elif head and head.get("kind") == "sess":
-                hsegs = row_segs(head, w, qo.cells, qo.clip)
+                hsegs = row_segs(head, width, qo.cells, qo.clip)
             else:
                 hsegs = [(cmd_line((head or {}).get("text") or mtitle, qo.cells), ("bold",))]
             x = 0
@@ -5713,7 +5712,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 i = top + my - off
                 if i < len(shown) and epic_folds(shown[i]) and not query.split() and \
                         buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED) and \
-                        0 <= mx - name_col(width - 1) < 2:
+                        0 <= mx - name_col(width) < 2:
                     # a click on the driver's ▸ / ▾ folds it (T507)
                     at, follow_list = i, False
                     epic_toggle(items, fleet, shown[i]["target"], not shown[i].get("expanded"))
