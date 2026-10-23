@@ -386,6 +386,9 @@ envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret
     set -euo pipefail
     cd "$repo"
     git init -q . && git config user.email t@t && git config user.name t
+    # 120 commits trip auto-gc, which detaches and writes into .git while
+    # the rm -rf below runs ("Directory not empty", release train 39981021740).
+    git config gc.auto 0 && git config maintenance.auto false
     mkdir -p deploy/k8s tokenledger/hub/store
     echo base > deploy/k8s/a.yaml; git add -A; git commit -qm base
     for i in $(seq 1 120); do echo "c$i" >> tokenledger/x; git add -A; git commit -qm "c$i"; done
