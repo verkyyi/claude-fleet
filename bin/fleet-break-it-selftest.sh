@@ -7798,6 +7798,17 @@ drill_session_title_lost() {
   SECS=$(since "$t0")
 }
 
+drill_task_parent_write_retired() {
+  CAP=120; local t0; t0=$(now)
+  _drill_go_tests 'TestTaskParentWriteRetired TestTaskParentHistoricalReplayPreservesBytes' \
+    "$ROOT/tokenledger/hub/store/fleet_task_parent_retirement_test.go" \
+    '新Task不写Parent，旧token重放保留原记录和非Parent冲突保护' ./hub/store || return 1
+  _drill_go_tests 'TestTaskParentNodeWriteRetired TestTaskParentOperationReplayRetired TestTaskParentWriteParamsRetired TestTaskParentAcceptedDispatchReplay' \
+    "$ROOT/tokenledger/hub/api/fleet_task_parent_retirement_test.go" \
+    '认证身份保留，Parent字段不注入、不影响旧请求重放，用户正文仍完整比较' || return 1
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
 
 FAILS=$LINT; PASSES=0
