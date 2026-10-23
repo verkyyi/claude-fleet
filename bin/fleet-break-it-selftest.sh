@@ -7871,6 +7871,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_retention_defaults() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-task-retention-defaults-selftest.py" >"$WORK/task-retention-defaults.log" 2>&1 || {
+    WHY="task defaults retain role/PIN privilege: $(tail -14 "$WORK/task-retention-defaults.log")"; return 1;
+  }
+  WHAT='隔离tmux不因PIN写keep；普通Task默认一致，旧角色不绕Loop/bg、不催报，历史keep不迁移'
+  SECS=$(since "$t0")
+}
+
 drill_task_controlled_auto_retention() {
   local t0; t0=$(now); CAP=60
   suite_holds fleet-cleanup-selftest.sh \

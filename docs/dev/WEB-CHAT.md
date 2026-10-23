@@ -473,7 +473,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 `fleet.session.park_idle_unattended`（本次缓存实测未完整复用前缀，默认保守退回 5 分钟，可设 1 分钟）。
 `fleet.session.park_presence` 默认 15 分钟：键盘输入和网页在场更新时间，缺少证明时按有人处理。
 内存紧张（`FLEET_PARK_MEM_PCT`，15%；试用账号到份额 80%）时，按空闲最久排序，跳过不适合的窗口，
-每拍停一个，不必等普通档位。派发工作已报告完成仍按原回收规则结束。C6 的 `fleet_reap_policy.py ORIGINS` 同表维护停放和回收：person / decide 及等待回复的任务停放后 `fleet.session.reap_parked`（默认 3d）无动静才回收；先验证历史可接回，常驻与显式 keep 不回收。`fleet doctor --park` 的每窗口行读同一截止时间。
+每拍停一个，不必等普通档位。新任务统一使用普通 `idle:2h` 默认策略，旧角色与 PIN 不改变停放、保留权限或内存压力次序。受控 Task 自动整理仅安全 park，保留绑定和历史，不从旧 Outcome 推断可归档。旧会话已有显式策略继续可读；其中普通停放保留期仍读 `fleet.session.reap_parked`（默认 3d），回收前验证历史可接回，已有 keep 不自动回收。`fleet doctor --park` 读取同一策略和截止时间。
 
 停放前按适配表 `park_probe` 取证明：Claude 用 mod 的 `park.v1`；Codex 检查原生 thread idle、
 队列为空和终端输入框为空，后台任务 / 子会话 / goal 由已有的原生 inventory 检查。无法确认就不停。
@@ -765,11 +765,11 @@ hub 在对话服务接受 `open` / `turn`，或统一会话入口接受 `say`（
 
 统一生命周期（T939 / C7）：运行容量与保留会话分开。只有新外壳已确认
 `@parked` + `@park_held`、原生 relay 已退出且没有待接回请求时，才从运行计数
-扣除；退出中、接回中和未知外壳仍占容量。窗口、身份、历史和 pin/人工 keep
+扣除；退出中、接回中和未知外壳仍占容量。窗口、身份、历史和已有 keep
 保持原样，账户/产品会话配额不改。
 
-内存准入的 `--make-room` 只安全停放，不归档；正式完成回收仍由原回收流程处理。
-安全空闲会话（含 pin/keep/管家、无仓库和等待会话）走同一个
+内存准入的 `--make-room` 只安全停放，不归档；受控 Task 保留绑定，旧会话按已有显式策略检查回收。
+安全空闲会话（含 PIN/keep、无仓库和等待会话）走同一个
 `fleet_session_gate.py park --why memory`，不强制关闭窗口。运行、输入、问题、
 真实后台及未知证据继续拒停；这条路径不使用 `--force`。报告停放前后进程树
 RSS 差值，读不到就报 unknown，不凭保留窗口数推算释放量。旧外壳或未知版本

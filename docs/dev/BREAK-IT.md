@@ -15,6 +15,7 @@
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
+| 同样原生空闲的 Task 因旧角色或 PIN 获得永久保留、立即回收或未回报催办 | 排序偏好变成权限，driver 可绕 Loop/bg，历史完成结果影响资源排序 | 新任务普通 idle/park 默认；PIN与旧角色不改策略，保留已有显式策略，真实 Loop/bg/面板/探针事实照常校验 | `task-retention-defaults` |
 | 受控 Task 带旧结果、角色策略或停放到期，自动回收直接关窗 | 未经原生退出证明丢失窗口，Hub 仍保留执行绑定 | 受控及控制证据未知的自动路径只安全停放；PR与最终关窗边界复核，保留绑定与历史，用户主动停止独立 | `task-controlled-auto-retention` |
 | Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
 | 发布签名前 Actions OIDC 端点短暂失败或返回合法换行 JSON | 单次 curl/sed 丢失 HTTP 原因并误报权限缺失，Hub 已部署但签名 stable 未推进 | 保留原权限和签名门；仅暂错有界重试，401/403 与无效身份立即拒绝；日志仅显示状态，不显示响应或凭据 | `release-oidc-runtime` |

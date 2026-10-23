@@ -137,7 +137,12 @@ class Lifecycle(unittest.TestCase):
                         self.assertTrue(c.fold(f.win))
                     self.assertEqual(f.opt('@park_waiting'), '1')
                     self.assertTrue(f.opt('@park_held'))
-                    self.assertIsNone(idle.fleet_reap_policy.parked_deadline(c.snapshot(f.win)))
+                    deadline = idle.fleet_reap_policy.parked_deadline(c.snapshot(f.win))
+                    if options.get('@reap_policy') == 'keep':
+                        self.assertIsNone(deadline)
+                    else:
+                        # PIN and old agent roles do not grant permanent retention.
+                        self.assertIsInstance(deadline, int)
                 for key, value in options.items():
                     self.assertEqual(f.opt(key), value)
                 self.assertEqual(f.opt('@fleet_id'), f.fid)

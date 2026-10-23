@@ -390,7 +390,9 @@ rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
 # ==== (b)+(e) A's PR merges → one cleanup tick ==========================================
 old=$(( $(date +%s) - 7200 )); now=$(date +%s)
+# This fixture checks repo isolation under explicit merge retention, not defaults.
 for w in "$wA" "$wB"; do
+  tmux set-option -w -t "$w" @reap_policy "merged"
   tmux set-option -w -t "$w" @claude_state "done"
   tmux set-option -w -t "$w" @claude_state_ts "$old"
 done
