@@ -6998,6 +6998,27 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_unclaimed() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
+    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
+  }
+  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
+  SECS=$(since "$t0")
+}
+
+
 drill_codex_no_daemon_fence() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-codex-no-daemon-fence-selftest.py" >"$WORK/codex-no-daemon-fence.log" 2>&1 || {
