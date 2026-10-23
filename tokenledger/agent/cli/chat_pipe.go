@@ -17,3 +17,11 @@ func runChatPipe(args []string) int {
 	}
 	return 0
 }
+
+func runPreviewPipe(args []string) int {
+	if err := agent.RunPreviewPipe(args, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "ccquota preview-pipe:", err)
+		return 1
+	}
+	return 0
+}

@@ -83,7 +83,7 @@ func main() {
 // bin/tokenledger-modules-selftest.sh holds the two lists together).
 var nodeCommands = map[string]bool{
 	"agent": true, "budget": true, "chat-pipe": true, "codex": true, "core-exec": true, "door": true,
-	"lease": true, "move": true, "panel": true, "place": true, "release": true, "report": true,
+	"lease": true, "move": true, "panel": true, "place": true, "preview-pipe": true, "release": true, "report": true,
 	"stamp": true, "term-pty": true,
 }
 
