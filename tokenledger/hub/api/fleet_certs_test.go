@@ -176,7 +176,8 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	}
 	for _, want := range []string{"# " + FleetSSHConfigVersion, "Host mac-c fleet-mac-c fleet-mac-c-public\n  HostName 203.0.113.4\n  Port 22023\n  User alice",
 		"Host fleet-mac-c-tailnet\n  HostName mac-c.example.ts.net\n  User alice", "Host mac-d fleet-mac-d fleet-mac-d-public",
-		"IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub"} {
+		"IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub",
+		"Host fleet-mac-c-tailnet\n  HostName mac-c.example.ts.net\n  User alice\n  IdentityFile ~/.ssh/fleet-cert\n  CertificateFile ~/.ssh/fleet-cert-cert.pub\n  HostKeyAlias fleet-mac-c\n  UserKnownHostsFile ~/.ssh/fleet-known-hosts ~/.ssh/known_hosts\n"} {
 		if !strings.Contains(cr.SSHConfig, want) {
 			t.Fatalf("ssh config lacks %q:\n%s", want, cr.SSHConfig)
 		}
