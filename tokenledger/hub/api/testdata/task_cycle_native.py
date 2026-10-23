@@ -90,6 +90,11 @@ class Probe:
         self.root = Path(data['root']).resolve()
         self.bin = Path(data['bin']).resolve()
         self.live = data.get('live') is True
+        self.run_mode = data.get('run_mode', 'cycle')
+        if self.run_mode not in ('cycle', 'subagent-stop'):
+            raise Refused('unknown native acceptance mode')
+        self.request_limit = 8 if self.run_mode == 'subagent-stop' else 24
+        self.subagent = None
         self.url = loopback(data['url'])
         self.token = data['token']  # temporary Hub token, never a production token
         self.fleet = str(uuid.UUID(data['fleet']))
@@ -138,7 +143,11 @@ class Probe:
         self.expected_inputs = {}
         self.manifest = dict(socket=self.socket, root=str(self.root), fleet=self.fleet,
                              machine_id=self.control.machine_id, live=False,
-                             model_requests=0, claude='blocked_by_known_quota_not_executed')
+                             model_requests=0, run_mode=self.run_mode, request_limit=self.request_limit,
+                             claude='blocked_by_known_quota_not_executed')
+        if self.run_mode == 'subagent-stop':
+            from task_cycle_subagent import SubagentSample
+            self.subagent = SubagentSample(self)
         self.save()
 
     def _git(self, *args):
@@ -211,7 +220,7 @@ class Probe:
                     self.send_error(404); return
                 with outer.lock:
                     outer.requests += 1
-                    allowed = outer.requests <= 24 and time.monotonic() < outer.deadline
+                    allowed = outer.requests <= outer.request_limit and time.monotonic() < outer.deadline
                 size = int(self.headers.get('Content-Length', '0'))
                 if not allowed or not 0 < size <= 8 * 1024 * 1024:
                     self.send_error(429); return
@@ -370,6 +379,7 @@ class Probe:
             self.manifest['first_transcript_hash'] = digest(Path(self.manifest['first_transcript']).read_bytes())
             self.save()
         return dict(confirmed=r.get('confirmed', False), operation_id=r.get('operation_id'),
+                    scope=r.get('payload', {}).get('proof', {}).get('scope'),
                     payload_hash=digest(json.dumps(r.get('payload'), sort_keys=True, separators=(',', ':')).encode()) if r.get('payload') else None)
 
     def close(self):
@@ -404,6 +414,11 @@ class Probe:
                                 cleanup_errors.append('registered native root exit unconfirmed')
                 except Exception as exc:
                     cleanup_errors.append(type(exc).__name__)
+            if self.subagent is not None:
+                try:
+                    forced = self.subagent.cleanup() or forced
+                except Exception as exc:
+                    cleanup_errors.append('subagent cleanup ' + type(exc).__name__)
             if self.tmux_started:
                 try:
                     marker = json.loads((self.root / 'native-cycle-owner.json').read_text())
@@ -435,6 +450,14 @@ class Probe:
 
     def call(self, data):
         action = data['action']
+        if action.startswith('subagent_'):
+            if self.subagent is None:
+                raise Refused('subagent sample requires explicit mode')
+            if action == 'subagent_prompt': return {'prompt': self.subagent.prompt()}
+            if action == 'subagent_observe': return self.subagent.discover(data['task'])
+            if action == 'subagent_before_stop': return self.subagent.before_stop(data['task'])
+            if action == 'subagent_after_stop': return self.subagent.after_stop(data['task'], data['stop'])
+            raise Refused('unknown subagent sample action')
         if action == 'activate': return self.activate()
         if action == 'submit': return self.submit(data['request'])
         if action == 'operation': return self.control.get_operation(data['id'])
@@ -507,6 +530,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--pane-read', action='store_true')
+    parser.add_argument('--mode', choices=('cycle', 'subagent-stop'), default='cycle')
     args = parser.parse_args()
     def interrupted(signum, frame):
         raise SystemExit(128 + signum)
@@ -519,13 +543,14 @@ def main():
         # No credential discovery or mint and no tmux/native process in dry-run.
         with tempfile.TemporaryDirectory(prefix='native-cycle-dry-') as root:
             p = Probe(dict(root=root, bin=str(Path(__file__).resolve().parents[4] / 'bin'),
-                           url='http://127.0.0.1:9', token='synthetic-dry-token', fleet=str(uuid.uuid4())))
+                           url='http://127.0.0.1:9', token='synthetic-dry-token', fleet=str(uuid.uuid4()), run_mode=args.mode))
             assert not (p.codex / 'auth.json').exists()
             assert not p.tmux_started and not p.cred_sid and p.requests == 0
             assert (p.conf / 'node.env').stat().st_mode & 0o077 == 0
             assert p.control.inventory()[0]['fleet_id'] == p.fleet
             print(json.dumps({'dry_run': True, 'model_requests': 0, 'tmux_started': False,
-                              'credentials_minted': False, 'real_control_inventory': True}))
+                              'credentials_minted': False, 'real_control_inventory': True,
+                              'run_mode': p.run_mode, 'request_limit': p.request_limit}))
         return
     p = None
     timer = None

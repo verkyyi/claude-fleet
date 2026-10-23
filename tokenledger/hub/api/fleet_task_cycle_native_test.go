@@ -38,6 +38,17 @@ func TestTaskCycleNativeTranscriptRead(t *testing.T) {
 	}
 }
 
+func TestTaskCycleSubagentOffline(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(python, "testdata/task_cycle_subagent_test.py").CombinedOutput()
+	if err != nil {
+		t.Fatalf("offline Subagent fixture: %v %s", err, out)
+	}
+}
+
 // Lazy skip by default. DRY_RUN uses isolated configuration and real Control
 // inventory, with no native processes, credentials or model requests.
 // The websocket test peer transports real business messages to Control; it
@@ -51,6 +62,13 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 	if live && dry {
 		t.Fatal("choose live or dry-run, never both")
 	}
+	mode := os.Getenv("FLEET_NATIVE_TASK_MODE")
+	if mode == "" {
+		mode = "cycle"
+	}
+	if mode != "cycle" && mode != "subagent-stop" {
+		t.Fatal("unknown native acceptance mode")
+	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)
@@ -60,13 +78,20 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 	if dry {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, python, helper, "--dry-run").CombinedOutput()
+		out, err := exec.CommandContext(ctx, python, helper, "--dry-run", "--mode", mode).CombinedOutput()
 		if err != nil {
 			t.Fatalf("structural dry-run: %v %s", err, out)
 		}
 		var facts map[string]any
 		if json.Unmarshal(out, &facts) != nil || facts["model_requests"] != float64(0) || facts["tmux_started"] != false || facts["credentials_minted"] != false || facts["real_control_inventory"] != true {
 			t.Fatal("dry-run boundaries not proven")
+		}
+		wantLimit := float64(24)
+		if mode == "subagent-stop" {
+			wantLimit = 8
+		}
+		if facts["run_mode"] != mode || facts["request_limit"] != wantLimit {
+			t.Fatal("fixture mode/budget mismatch")
 		}
 		nativeCycleOwnerSandbox(t)
 		t.Log("dry-run: real Control inventory and owner HTTP auth; zero Coding Agent starts, credential mint or model requests (tmux only with explicit PANE_CHECK)")
@@ -202,7 +227,7 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		_ = stdin.Close()
 		_ = cmd.Wait()
 	}()
-	info, e := exchange(map[string]any{"root": root, "bin": bin, "url": proxy.URL, "token": token, "fleet": machineA, "live": true})
+	info, e := exchange(map[string]any{"root": root, "bin": bin, "url": proxy.URL, "token": token, "fleet": machineA, "live": true, "run_mode": mode})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -265,6 +290,9 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		"First turn: reply with exactly the string encoded in the following JSON value. " +
 		"Output its contents only: no quotation marks, markdown, additional text, or trailing punctuation.\n" + string(exactReply) + "\n\n" +
 		"If explicitly continued in a fresh Session, read acceptance-next.txt in this worktree, then read the exact previous native transcript identified by your continuation seed and follow acceptance-next.txt. Do not repeat this first reply."
+	if mode == "subagent-stop" {
+		prompt = call("subagent_prompt", map[string]any{})["prompt"].(string)
+	}
 	start := ownerPost("worker_start", map[string]any{"kind": "scratch", "repo": "native/fixture", "fleet_id": f.FleetID, "node": "native-cycle", "idempotency_key": "native-first", "coding_agent": "codex", "control_version": 1, "body": prompt}, 200)
 	n.mu.Lock()
 	writes := append([]map[string]any(nil), n.writes...)
@@ -297,9 +325,31 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		t.Fatal("native turn did not complete once within deadline; not provider acceptance")
 		return nil
 	}
-	first := awaitTurn(nonce1, start["operation_id"].(string))
-	firstFID := strings.Split(first["snapshot"].(map[string]any)["execution_owner"].(string), "/")[1]
-	call("sentinel", map[string]any{"task": taskRef, "first": true})
+	var first map[string]any
+	var firstFID string
+	if mode == "subagent-stop" {
+		deadline := time.Now().Add(150 * time.Second)
+		ready := false
+		for time.Now().Before(deadline) {
+			if call("operation", map[string]any{"id": start["operation_id"]})["status"] == "failed" {
+				t.Fatal("subagent sample start failed")
+			}
+			if call("subagent_observe", map[string]any{"task": taskRef})["ready"] == true {
+				ready = true
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		if !ready {
+			t.Fatal("exact native child/tool not observed; not Subagent acceptance")
+		}
+		call("subagent_before_stop", map[string]any{"task": taskRef})
+	}
+	if mode == "cycle" {
+		first = awaitTurn(nonce1, start["operation_id"].(string))
+		firstFID = strings.Split(first["snapshot"].(map[string]any)["execution_owner"].(string), "/")[1]
+		call("sentinel", map[string]any{"task": taskRef, "first": true})
+	}
 	var firstStop string
 	for cycle := 0; cycle < 2; cycle++ {
 		stopped := ownerPost("tasks/"+taskRef+"/stop", map[string]any{"idempotency_key": fmt.Sprintf("native-stop-%d", cycle)}, 202)
@@ -341,6 +391,24 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		current, e := h.srv.Store.FleetTask(initial.ID)
 		if e != nil || current.ExecutionEndpoint != "" {
 			t.Fatal("first receipt did not release binding")
+		}
+		if mode == "subagent-stop" {
+			deadline = time.Now().Add(100 * time.Second)
+			var observed map[string]any
+			for time.Now().Before(deadline) {
+				observed = call("subagent_after_stop", map[string]any{"task": taskRef, "stop": stop})
+				if observed["observation_complete"] == true {
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			ack := receipt["scope"] == "native_session"
+			child := observed["child_lifecycle_confirmed"] == true
+			t.Logf("Subagent sample: native_session_ack=%v; observed_child_lifecycle=%v (separate evidence; no Teams/services claim)", ack, child)
+			if !ack || !child {
+				t.Fatal("Subagent stop evidence incomplete; private manifest retained")
+			}
+			return
 		}
 		continued := ownerPost("tasks/"+taskRef+"/continue", map[string]any{"idempotency_key": "native-continue", "expected_stop_operation_id": stop, "expected_generation": current.Generation, "agent": "codex"}, 202)
 		second := awaitTurn(nonce2, continued["operation"].(map[string]any)["operation_id"].(string))
