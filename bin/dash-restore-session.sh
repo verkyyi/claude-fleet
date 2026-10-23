@@ -147,7 +147,7 @@ kind=${verdict%%$'\t'*}
 # both the key (col 2) and the title (col 3), so pull them once here (a #PR key
 # resolves to its key too). Best-effort: a missing title falls back to a
 # resume-<key> name below; a missing key simply skips the bind.
-IFS=$'\t' read -r led_key led_title led_origin <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
+IFS=$'\t' read -r led_key led_title _ <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
 rname=""
 if [ -n "$led_title" ] && [ "$led_title" != "-" ]; then
   # an EPIC member reopens wearing its batch's 简称 (issue #2355); a scratch has none

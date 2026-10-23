@@ -229,7 +229,7 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # stderr — the one channel a pipe / log / `$( )` capture can read — and the exit
 # code names the class (header: 1 infra · 2 cap · 3 claimed). stderr is the
 # record; the status line is the glance.
-RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3; RC_ORPHAN=4
+RC_INFRA=1; RC_CAP=2; RC_CLAIMED=3
 REFUSE_MS="${FLEET_REFUSE_MS:-4000}"
 case "$REFUSE_MS" in ''|*[!0-9]*) REFUSE_MS=4000;; esac
 # The toast is fleet_ui_fail's (issue #1618): the one failure line, the palette's

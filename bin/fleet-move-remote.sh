@@ -168,7 +168,7 @@ case "$cmd" in
 
   launch)
     agent=claude cxhome=''
-    wt='' sid='' fleetw='' name='moved' wid='' issue='' raw=0 origin='' repo='' state='done'
+    wt='' sid='' fleetw='' name='moved' wid='' issue='' raw=0 repo='' state='done'
     while [ $# -gt 0 ]; do case "$1" in
       --agent) agent="${2:-}"; shift 2 ;;
       --codex-home) cxhome="${2:-}"; shift 2 ;;
@@ -180,7 +180,7 @@ case "$cmd" in
       --issue) issue="${2:-}"; shift 2 ;;
       --raw) raw="${2:-0}"; shift 2 ;;
       # Old Parent flags are accepted for older callers; never stamped.
-      --origin) origin="${2:-}"; shift 2 ;;
+      --origin) shift 2 ;;
       --repo) repo="${2:-}"; shift 2 ;;
       --state) state="${2:-done}"; shift 2 ;;
       *) die "launch: unknown arg $1" ;;
@@ -290,7 +290,7 @@ PY_META
     ;;
 
   movein)
-    fleetw='' bundle='' repo='' branch='' sid='' pushed='' name='moved' wid='' issue='' raw=0 origin='' owid='' state='done'
+    fleetw='' bundle='' repo='' branch='' sid='' pushed='' name='moved' wid='' issue='' raw=0 state='done'
     while [ $# -gt 0 ]; do case "$1" in
       --fleet) fleetw="${2:-}"; shift 2 ;;
       --bundle) bundle="${2:-}"; shift 2 ;;
@@ -303,8 +303,8 @@ PY_META
       --issue) issue="${2:-}"; shift 2 ;;
       --raw) raw="${2:-0}"; shift 2 ;;
       # Old Parent flags are accepted for older callers; never stamped.
-      --origin) origin="${2:-}"; shift 2 ;;
-      --origin-wid) owid="${2:-}"; shift 2 ;;
+      --origin) shift 2 ;;
+      --origin-wid) shift 2 ;;
       --state) state="${2:-done}"; shift 2 ;;
       *) die "movein: unknown arg $1" ;;
     esac; done

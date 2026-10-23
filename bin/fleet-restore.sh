@@ -665,7 +665,7 @@ restore() {
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
     local wname wpath wid wissue wstate wagent whome wmanifest wraw wrepo reopened=0
-    while IFS=$'\t' read -r wtag wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw _ wrepo; do
+    while IFS=$'\t' read -r wtag wname wpath wid wissue wstate _ _ _ wagent whome _ wmanifest wraw _ wrepo; do
       [ -z "$wname" ] && continue
       # A no-repo session (issue #789) lives in $HOME, not a worktree: its transcript
       # belongs to $HOME's project dir, so it resumes there whatever its cwd was.
