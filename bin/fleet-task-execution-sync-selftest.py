@@ -175,7 +175,7 @@ class SyncTests(unittest.TestCase):
     def test_shell_reconnect_command_uses_same_sync_and_only_declares_sync(self):
         scripts = self.root / "bin"
         scripts.mkdir()
-        for name in ("fleet-hub-node.sh", "fleet_task_execution.py", "fleet_hub_common.py"):
+        for name in ("fleet-hub-node.sh", "fleet_task_execution.py", "fleet_hub_common.py", "fleet_task_exit_submit.py"):
             shutil.copy2(BIN / name, scripts / name)
         (scripts / "fleet-lib.sh").write_text("""fleet_hub_outbox() { printf '/fixture/outbox'; }
 fleet_hub_cache() { printf '/fixture/workers'; }

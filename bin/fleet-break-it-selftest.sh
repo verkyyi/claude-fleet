@@ -348,7 +348,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet_task_execution.py fleet_hub_common.py fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet_task_execution.py fleet_hub_common.py fleet_task_exit_submit.py fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 mkdir -p "$WORK/wconf/logs"   # the wrapped windows' own logs (T909), never the operator's
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
@@ -7115,6 +7115,16 @@ drill_native_exit_identity() {
       WHY="native exit identity regression: $(tail -8 "$WORK/native-exit-identity.log")"; return 1;
     }
   WHAT='真实存活 PID 的时区变化或不可见 procfs 不能证明退出；内核僵尸可确认退出；历史部分启动不永久阻挡接续'
+  SECS=$(since "$t0")
+}
+
+drill_native_exit_submit_replay() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-exit-submit-selftest.py" \
+    >"$WORK/native-exit-submit.log" 2>&1 || {
+      WHY="native exit submission regression: $(tail -8 "$WORK/native-exit-submit.log")"; return 1;
+    }
+  WHAT='隔离 journal：证明持久化后崩溃、响应丢失原包重发、并发结果更新保包、未知登记不提交'
   SECS=$(since "$t0")
 }
 

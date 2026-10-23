@@ -24,7 +24,7 @@ class NativeExecutionTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for filename in ("fleet_task_execution.py", "fleet_hub_common.py", "fleet_native_proc.py",
+        for filename in ("fleet_task_execution.py", "fleet_hub_common.py", "fleet_task_exit_submit.py", "fleet_native_proc.py",
                          "fleet-session-wrap.sh", "fleet-agent-adapter.sh"):
             shutil.copy2(BIN / filename, self.bin / filename)
         (self.bin / "fleet-task-record.sh").write_text('''if [ "$1" = execution-list ]; then

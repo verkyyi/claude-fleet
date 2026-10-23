@@ -875,10 +875,11 @@ def read_request(stream):
 
 
 def operation(row):
+    from fleet_task_exit_submit import exit_result
     return {"operation_id": row["id"], "fleet_id": row["fleet_id"],
             "action": row["action"], "status": row["status"],
             "created_at": row["created"], "updated_at": row["updated"],
-            "result": json.loads(row["result"]) if row["result"] else None}
+            "result": exit_result(json.loads(row["result"])) if row["result"] else None}
 
 
 def now():

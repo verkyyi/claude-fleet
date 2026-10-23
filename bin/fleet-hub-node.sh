@@ -284,7 +284,7 @@ case "${1:-}" in
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
     # task (issue #3325): it takes the hub's task record on a start — the agent
     # lists CapTask, and only then does the hub send it
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\nexecution_sync\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\nexecution_sync\t1\nexecution_exit_retry\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   # The task-receipt journal is retired with the launch proof (EPIC T497 C8):
   # nothing to replay, nothing to report. compat-1v: 下一批删 — an older agent
@@ -298,10 +298,12 @@ case "${1:-}" in
     exec python3 "$BIN/fleet_repo_authority.py" --sync ;;
   execution-sync) [ "$#" -eq 1 ] || die 2 "execution-sync takes no arguments"
     exec python3 "$BIN/fleet_task_execution.py" sync-stops ;;
+  execution-exit-retry) [ "$#" -eq 1 ] || die 2 "execution-exit-retry takes no arguments"
+    exec python3 "$BIN/fleet-control.py" retry-native-exits ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;
   deliver) ;;
-  *) die 2 "usage: fleet-hub-node.sh paths | execution-sync | deliver < relay.json | env [--write [--force]] [--plist <file>] | progress [--max-age S]" ;;
+  *) die 2 "usage: fleet-hub-node.sh paths | execution-sync | execution-exit-retry | deliver < relay.json | env [--write [--force]] [--plist <file>] | progress [--max-age S]" ;;
 esac
 
 command -v python3 >/dev/null 2>&1 || die 75 "python3 is missing"

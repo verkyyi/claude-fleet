@@ -234,6 +234,17 @@ func TestNodeExecutionSyncMachineLanesKeepServing(t *testing.T) {
 			body += `if [ ! -f "$HOME/retry" ]; then touch "$HOME/retry"; exit 1; fi; touch "$HOME/synced"`
 		}
 		executionSyncFixture(t, a.cfg.Home, "execution_sync\\t1\\n", body)
+		// Both reconnect follow-ups stay on this login's asynchronous lane.
+		script := filepath.Join(a.cfg.Home, fleetHubNodeScript)
+		content, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content = []byte(strings.Replace(string(content), "execution_sync\\t1\\n", "execution_sync\\t1\\nexecution_exit_retry\\t1\\n", 1))
+		content = []byte(strings.Replace(string(content), "execution-sync)", `execution-exit-retry) printf '%s|%s\n' "$HOME" "$USER" > "$HOME/exit-identity" ;;`+"\nexecution-sync)", 1))
+		if err := os.WriteFile(script, content, 0755); err != nil {
+			t.Fatal(err)
+		}
 		// The real control RPC subprocess: enough to observe that reads and
 		// stop submissions reach this login while its sync subprocess waits.
 		controller := "#!/usr/bin/env python3\nimport json,sys\nr=json.load(sys.stdin)\nprint(json.dumps({'protocol':1,'machine_id':'m', 'result':{'machine_id':'m','fleets':[],'ready':True,'operation_id':'stop','status':'accepted'}}))\n"
@@ -277,6 +288,11 @@ func TestNodeExecutionSyncMachineLanesKeepServing(t *testing.T) {
 		got, err := os.ReadFile(filepath.Join(home, "sync-identity"))
 		if err != nil || string(got) != home+"|"+login+"\n" {
 			t.Fatalf("machine lane imported as the wrong login: %q, %v", got, err)
+		}
+		executionSyncWait(t, func() bool { _, err := os.Stat(filepath.Join(home, "exit-identity")); return err == nil })
+		got, err = os.ReadFile(filepath.Join(home, "exit-identity"))
+		if err != nil || string(got) != home+"|"+login+"\n" {
+			t.Fatalf("exit retry crossed login: %q %v", got, err)
 		}
 	}
 	executionSyncWait(t, func() bool { _, err := os.Stat(filepath.Join(homes["beta"], "synced")); return err == nil })

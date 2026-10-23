@@ -438,6 +438,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	// this best-effort reconnect follow-up grants no execution permission.
 	executionSync := &executionStopSync{}
 	executionSync.kick(ctx, rp)
+	exitRetry := &executionExitRetry{}
+	exitRetry.kick(ctx, rp)
 
 	// Results the hub has not acked — from this connection or one that
 	// dropped while a script ran — go out now and on completion.
@@ -498,6 +500,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			// So does a repo authority re-read (claude-fleet#4730).
 			a.authorityKick(ctx)
 			executionSync.kick(ctx, rp)
+			exitRetry.kick(ctx, rp)
 		case <-nudge:
 			nb.arm()
 		case <-netc:

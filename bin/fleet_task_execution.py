@@ -778,7 +778,8 @@ def _exited_session_root(proof):
 def prove_native_session_exit(snapshot, provider, *, conf_dir=None):
     """Return raw exit proof for an exactly stopped, registered native session.
 
-    This is NOT a release/stop receipt and is not connected to Control. It
+    This is raw evidence, not a release/stop receipt; Control persists and
+    submits it separately. It
     neither clears bindings/tombstones nor revokes plans, independent teammates,
     arbitrary development services or escaped descendants. A recovery wrapper
     may remain alive; the persisted stop continues to forbid its old execution.

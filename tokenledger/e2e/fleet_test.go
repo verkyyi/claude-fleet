@@ -133,7 +133,7 @@ func installFakeFleetControl(t *testing.T, py, src, home, session, repo string) 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"fleet_control.py", "fleet_task_execution.py", "fleet_dispatch.py", "fleet_park_metrics.py", "fleet_iso.py", "fleet_hub_common.py", "fleet_config_write.py"} {
+	for _, f := range []string{"fleet_control.py", "fleet_task_execution.py", "fleet_task_exit_submit.py", "fleet_dispatch.py", "fleet_park_metrics.py", "fleet_iso.py", "fleet_hub_common.py", "fleet_config_write.py"} {
 		b, err := os.ReadFile(filepath.Join(src, f))
 		if err != nil {
 			t.Fatal(err)
