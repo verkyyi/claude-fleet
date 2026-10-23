@@ -123,6 +123,51 @@ func TestCodexNativeContextSharedVectors(t *testing.T) {
 	}
 }
 
+// Optional receipt check against the unmodified request bodies captured by
+// Capacity.test_native_cli_tool_loopback. No inference or network is involved.
+func TestCodexNativeToolWire(t *testing.T) {
+	path := os.Getenv("FLEET_CODEX_NATIVE_WIRE")
+	if path == "" {
+		t.Skip("explicit native fixture capture only")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests []json.RawMessage
+	if err := json.Unmarshal(raw, &requests); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("want first/tool-result/resume, got %d", len(requests))
+	}
+	// Provider envelopes emitted by the Python fixture; client-generated IDs
+	// must not appear among the references, even on native resume.
+	ids := [][]string{nil, {"rs_source", "ct_source", "call_source"},
+		{"rs_source", "ct_source", "call_source", "rs_source_2", "msg_source_2"}}
+	for i, body := range requests {
+		got := codexRoute(httptest.NewRequest("POST", "/codex/responses", nil), body)
+		want := map[string]bool{}
+		for _, id := range ids[i] {
+			want[CodexReference("id", id)] = true
+		}
+		if i > 0 {
+			want[CodexReference("encrypted", "fixture-opaque")] = true
+		}
+		if i > 1 {
+			want[CodexReference("encrypted", "fixture-opaque_2")] = true
+		}
+		if got.Unknown || got.Independent != (i == 0) || len(got.References) != len(want) {
+			t.Fatalf("request %d: %+v, want %d references", i+1, got, len(want))
+		}
+		for _, ref := range got.References {
+			if !want[ref] {
+				t.Fatalf("request %d: unexpected reference %s", i+1, ref)
+			}
+		}
+	}
+}
+
 func TestCodexContinuationCommitsBeforeDelivery(t *testing.T) {
 	event := "event: response.completed\r\ndata: {\"response\":{\"id\":\"ref\"}}\r\n\r\n"
 	for _, sse := range []bool{false, true} {

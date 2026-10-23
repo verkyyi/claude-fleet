@@ -156,7 +156,8 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 			route.Unknown = true
 		}
 		// Native full client inputs carry locally minted IDs before inference.
-		// All other IDs, including assistant output, remain source affinity.
+		// Tool results identify the source by call_id; assistant/provider IDs
+		// and all opaque state remain source affinity.
 		for _, k := range []string{"id", "call_id"} {
 			if k != "id" || !codexClientInputID(m) {
 				add("id", m[k])
@@ -251,6 +252,15 @@ func codexClientInputID(m map[string]any) bool {
 			}
 		}
 		return true
+	}
+	if m["type"] == "function_call_output" || m["type"] == "custom_tool_call_output" {
+		// Native result IDs are client-minted. call_id remains mandatory source
+		// affinity; never exempt reference-only, opaque or extended outputs.
+		call, ok := m["call_id"].(string)
+		if !ok || call == "" || !only([]string{"type", "id", "call_id", "output"}, m) {
+			return false
+		}
+		return codexClientInputID(map[string]any{"id": m["id"], "role": "user", "content": m["output"]})
 	}
 	if m["type"] == "additional_tools" {
 		return m["role"] == "developer" && only([]string{"type", "id", "role", "tools"}, m) && codexToolsIndependent(m["tools"])

@@ -551,6 +551,13 @@ def codex_context(method, path, headers, body):
         # provider affinity. Extra/opaque fields cannot gain this exemption.
         if not isinstance(v.get("id"), str):
             return False
+        if v.get("type") in ("function_call_output", "custom_tool_call_output"):
+            # The result's ID is minted by the client; its call_id is the
+            # provider reference and is ALWAYS collected by the caller.
+            if (not isinstance(v.get("call_id"), str) or not v["call_id"]
+                    or set(v) - {"type", "id", "call_id", "output"}):
+                return False
+            return client_input_id(dict(id=v["id"], role="user", content=v.get("output")))
         if v.get("type") == "additional_tools":
             return (v.get("role") == "developer" and not set(v) - {"type", "id", "role", "tools"}
                     and tools(v.get("tools")))

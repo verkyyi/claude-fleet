@@ -41,6 +41,18 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
 
+drill_cred_codex_native_tool_result() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" \
+    Capacity.test_native_context_shared_vectors Capacity.test_native_tool_result_affinity \
+    Capacity.test_native_tool_result_http 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="工具结果本地 id 不作上游引用；call_id 仍回原账号，未知来源/显式 pin 冲突拒绝"
+}
+
 # Native Codex first inputs contain client IDs before any provider response.
 drill_cred_codex_native_initial() {
   CAP=10
