@@ -566,6 +566,7 @@ FLEET_TOOL_DIRS                    path: where fleet_find_tool / fleet_path_fill
 FLEET_TRANSFER_BOOT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_EXIT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_IDLE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
+FLEET_TRANSFER_INTERRUPT_WAIT      knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_ROLLBACK_HOLD       knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_RETRYING            handoff: fleet-transfer.sh --retry tells its child run not to record a retry of its own (#1669)
 FLEET_TRASH_PURGE_URGENT           handoff: the cleanup daemon marks an urgent trash purge (skips the load cap)
