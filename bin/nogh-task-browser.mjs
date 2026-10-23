@@ -16,7 +16,7 @@ const base = { authority_version: 1, generation: 1, created_at: observed, update
 const tasks = [
   { ...base, id: 'T1', title: 'Retained native, explicit success', outcome: 'succeeded', live: { state: 'working' },
     worker_id: 'fixture-fleet/fixture-session', pr: 'fixture/repo#77', pr_state: 'waiting' },
-  { ...base, id: 'T5', title: 'Completed retained idle', outcome: 'succeeded', live: { state: 'idle' },
+  { ...base, id: 'T5', title: 'Retained native idle', outcome: 'succeeded', live: { state: 'idle' },
     worker_id: 'fixture-fleet/idle-session' },
   { ...base, id: 'T2', title: 'Provider mismatch', actual_agent: 'claude' },
   { id: 'T3', title: 'Legacy absence is unknown', state: 'open', created_at: observed },
@@ -29,7 +29,7 @@ const origin = 'http://127.0.0.1:9876';
 const sessions = { sessions: [{ machine_name: 'fixture-mac', worker: { worker_id: 'fixture-fleet/fixture-session', key: 'task-t1',
   title: 'Retained native, explicit success', state: 'working', born: Date.parse(observed) / 1000 } },
   { machine_name: 'fixture-mac', worker: { worker_id: 'fixture-fleet/idle-session', key: 'task-t5',
-    title: 'Completed retained idle', state: 'idle', born: Date.parse(observed) / 1000 } }] };
+    title: 'Retained native idle', state: 'idle', born: Date.parse(observed) / 1000 } }] };
 async function fixture(route) {
   const req = route.request();
   const url = new URL(req.url());
@@ -89,7 +89,8 @@ try {
     await row('T1').waitFor();
     assert.match(await row('T1').innerText(), /Working/);
     assert.doesNotMatch(await row('T1').innerText(), /Completed/);
-    assert.match(await row('T5').innerText(), /Completed · retained/);
+    assert.match(await row('T5').innerText(), /Idle/);
+    assert.doesNotMatch(await row('T5').innerText(), /Completed/);
     // A committed result remains true while the retained session takes new work.
     await row('T1').click();
     await detail.locator('summary').click();

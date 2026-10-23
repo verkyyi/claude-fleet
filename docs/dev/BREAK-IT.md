@@ -16,6 +16,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | 同一 Task 保留的原生会话继续运行，但编号或任务记录仍有上一轮的 blocked/failed/done/merged 结果 | tmux 把空闲误示为需要回答或完成；Web 兼容列表让旧失败压住当前运行 | 当前会话只用原生观测展示状态；历史结果保留在编号和任务记录，不回填 live state；真正原生需要回答、运行、未知和历史行各自保留 | `task-result-overrides-native` |
+| 用户把 worker 改名为 home/dash/plan/backlog，或把真正面板改成普通名称 | 按 FID 主动停止时只看窗口名：真实任务关不掉，真正面板却可能被当作任务关闭 | FID 解析成功后读取既有 fleet_win_role，仅 worker 可停；名称只参与未标记旧窗口的兼容判断。隔离 socket 验证改名、keep/PIN/loop、工作树保留、旧窗口、身份歧义 | `stop-renamed-worker` |
 | Codex 私有 app-server 先退出，或收到 TERM 后先于后台同组进程退出 | guardian 只看主进程退出就结束，同组后台进程残留；事后对旧 PID 的进程组发信号又可能误伤复用该号码的进程 | guardian 自己持有独立 session/进程组，私有 app-server 继承该组；主进程退出、owner 管道 EOF、TERM 均有界清理同组成员，最后信号时仍由活 guardian 锚定身份；不声称覆盖自行 setsid 逃出的进程 | `codex-private-group-orphan` |
 | 托管发行树已带新版 Codex，但 PATH 前面的 Homebrew/npm 仍是旧版（T944） | 网页新建首条可发，私有 app-server 却是旧版；后续输入被会话门判 old_version 拒绝 | Codex 启动器优先发行树的 tools/bin，私有服务与终端客户端使用同一固定版本，tmux 保护 shim 仍在首位；没有发行工具的普通安装沿用 PATH | `codex-release-shadowed` |
 | Codex 发行工具目录前置遮蔽 tmux-shim（T944） | agent 子进程可绕过 tmux 保护入口 | 发行版 Codex 优先时仍保持 tmux-shim 在 PATH 首位；直接 webchat 同样选发行版 | `codex-pin-displaces-guard` |
@@ -690,3 +691,4 @@
 | 节点已生成原生退出证明后崩溃，或 Hub 接受证明但响应丢失，随后 stop 重投或结果更新时间 | 首次证明丢失或重生成时间戳，历史回执无法幂等重放；Hub 已释放后不再投递 stop，节点永远收不到确认 | 首次 proof 和固定幂等键保存在原 stop 操作的私有 result 中；更新结果原子保留，公开投影不带大包；heartbeat 有界扫描同一 journal，仅重发原包，不重做 stop、不清除栅栏 | `native-exit-submit-replay` |
 
 | Parent 回报入口退役后，旧工具、委托代收或积压队列仍投递报告 | 会话继续被旧协调链唤醒；或回执虚报送达、原结果丢失 | 旧报告入口明确退役；报告积压保留原文并永久失败，不转换成提醒；自身结果历史与普通消息保留 | `parent-report-retired` |
+| 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
