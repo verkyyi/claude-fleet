@@ -215,8 +215,8 @@ func TestBoardLiveAskedIsAsk(t *testing.T) {
 		order = append(order, r.Group+":"+r.Tag)
 	}
 	want := map[string][3]string{
-		asked.FID:                              {"ask", "waiting_you", "在等你回话 · 3 小时后停放，回话即唤醒"},
-		keep.FID:                               {"ask", "waiting_you", "在等你回话 · 2 小时后停放，回话即唤醒"},
+		asked.FID:                              {"queue", "turn_done", ""},
+		keep.FID:                               {"queue", "turn_done", ""},
 		parked.FID:                             {"ask", "parked", "已停放 · 在等你点头，回话即唤醒"},
 		stopped.FID:                            {"ask", "stopped", "出错停住：服务端临时出错 · 4 分钟后自动重试"},
 		poster.FID:                             {"work", "looping", ""},
@@ -240,7 +240,7 @@ func TestBoardLiveAskedIsAsk(t *testing.T) {
 		t.Fatalf("the parked row = %+v", r)
 	}
 	// 等你: the waiting rows (newest first) and the parked one, then the stopped one
-	if len(order) < 4 || order[3] != "ask:stopped" || order[0][:4] != "ask:" {
+	if len(order) < 2 || order[1] != "ask:stopped" || order[0][:4] != "ask:" {
 		t.Fatalf("order = %v", order)
 	}
 }
@@ -395,7 +395,7 @@ func TestBoardPlanFacts(t *testing.T) {
 	if r = read(nil); r.Tag != "not_seen" || r.Context[0] != "" || r.AgentBasis == "planned" {
 		t.Fatalf("accepted dispatch without a worker is not undispatched: %+v", r)
 	}
-	set(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,task_owner) VALUES ('op-accepted','','worker_start','{}','gh:1','accepted-plan','pending',?,?,'gh:1')`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+	set(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,task_owner,task_ref,task_generation) VALUES ('op-accepted','','worker_start','{}','gh:1','accepted-plan','pending',?,?,'gh:1',?,?)`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), child.Ref, child.Generation)
 	set("UPDATE fleet_tasks SET state='starting' WHERE id=?", child.ID)
 	if r = read(nil); r.Tag != "starting" || r.AgentBasis != "planned" {
 		t.Fatalf("starting: %+v", r)
@@ -569,7 +569,7 @@ func TestBoardTaskListFacts(t *testing.T) {
 	if read(nil).PendingStart {
 		t.Fatal("reserved record is not submitted execution")
 	}
-	_, err = st.DB().Exec(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,task_owner) VALUES ('start-list','','worker_start','{}','gh:1','list-start','pending',?,?,'gh:1')`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+	_, err = st.DB().Exec(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,task_owner,task_ref,task_generation) VALUES ('start-list','','worker_start','{}','gh:1','list-start','pending',?,?,'gh:1',?,?)`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), task.Ref, task.Generation)
 	if err != nil {
 		t.Fatal(err)
 	}

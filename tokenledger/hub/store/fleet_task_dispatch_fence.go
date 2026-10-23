@@ -135,3 +135,17 @@ func cancelTaskStartsTx(tx *sql.Tx, t FleetTask, at string) error {
 	}
 	return nil
 }
+
+// TaskStartPending reads the already-journalled start for this exact Task and
+// generation. Historical outcomes and operation IDs from earlier attempts do
+// not provide a pending-start observation.
+func (s *Store) TaskStartPending(t FleetTask) bool {
+	if t.OperationID == "" || t.CancelRequest != "" {
+		return false
+	}
+	var count int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE id = ? AND action = 'worker_start'
+  AND task_owner = ? AND task_ref = ? AND task_generation = ? AND status IN ('pending','sent','running')`,
+		t.OperationID, t.Owner, t.Ref, t.Generation).Scan(&count)
+	return err == nil && count == 1
+}

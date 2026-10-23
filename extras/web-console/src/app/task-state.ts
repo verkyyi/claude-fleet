@@ -8,6 +8,7 @@ export type Task = {
   issue?: string; ticket_ref?: string; parked?: string; asked?: string;
   created_at: string; updated_at?: string; authority_version?: number;
   generation?: number; outcome?: string; cancel_request?: string;
+  execution_endpoint?: string; execution_owner?: string;
   task_blockers?: { version: number; generation: number; items: TaskBlocker[] };
   requested_agent?: string; resolved_agent?: string; actual_agent?: string;
   pr?: string; pr_state?: string;
@@ -54,19 +55,10 @@ export const taskOpen = (t: Task) => !terminal.has(taskStatus(t));
 // from the hub; a record from before C1 has none and keeps its T<n>.
 export const writtenCode = (t: Task) => t.short || t.id;
 
-// What a list row shows (display_short): an unfinished task, the shortest prefix
-// (≥ 2) no other unfinished task shares — the panel's rule, the same open set; a
-// finished one, its written code (never a 2-place code an open task may take).
+// A Task's written code is stable across outcomes, continuations and changes
+// to neighboring rows. Shorter typed prefixes are resolved by the Hub.
 export function displayCodes(tasks: Task[]): Map<Task, string> {
-  const open = tasks.filter((t) => taskOpen(t) && t.fid && idCode(t.fid)).map((t) => [t, idCode(t.fid!)] as const);
-  const out = new Map<Task, string>();
-  for (const t of tasks) out.set(t, writtenCode(t));
-  for (const [t, me] of open) {
-    let n = DISPLAY_MIN;
-    while (n < 26 && open.some(([o, c]) => o !== t && c !== me && c.slice(0, n) === me.slice(0, n))) n++;
-    out.set(t, me.slice(0, n));
-  }
-  return out;
+  return new Map(tasks.map((t) => [t, writtenCode(t)]));
 }
 export function taskStatus(t: Task): string {
   if (t.authority_version === 1) {

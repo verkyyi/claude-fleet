@@ -50,6 +50,7 @@ def exit_result(result):
     if not isinstance(result, dict):
         return result
     result = dict(result)
+    result.pop('task_unclaimed_retirement', None)
     receipt = result.pop(RECEIPT, None)
     if isinstance(receipt, dict):
         confirmed = receipt.get("confirmed") is True
