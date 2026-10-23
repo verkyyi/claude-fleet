@@ -444,8 +444,12 @@ func (s *Server) handleNodePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, e := s.Store.PreviewAuthority(ep.ID)
-	if e != nil || !s.previewOwnerOK(a.Owner, a.Machine, time.Now()) {
-		http.Error(w, "managed login enrollment required", 403)
+	if e != nil {
+		http.Error(w, "managed login enrollment required; an administrator must verify and preview-bind this endpoint to its active account", 403)
+		return
+	}
+	if !s.previewOwnerOK(a.Owner, a.Machine, time.Now()) {
+		http.Error(w, "preview owner is not active or eligible on this machine", 403)
 		return
 	}
 	claims, e := verifyWorkerAssertion(r.Header.Get("X-Fleet-Worker"), a.TokenHash, time.Now())
@@ -459,7 +463,15 @@ func (s *Server) handleNodePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, e := s.Store.ResolveFleetTask(a.Owner, r.URL.Query().Get("task"))
-	if e != nil || !claims.speaksAs(task.WorkerID) || task.Machine != a.Machine || task.Login != a.Login {
+	worker := claims.WorkerID
+	if task.ExecutionOwner == "" && claims.speaksAs(task.WorkerID) {
+		worker = task.WorkerID // the signed key alias of a legacy Task
+	}
+	p := store.Preview{Owner: a.Owner, Endpoint: ep.ID, Machine: a.Machine, Login: a.Login, Generation: a.Generation, TokenHash: a.TokenHash, TaskID: task.ID, Worker: worker}
+	if e == nil {
+		p.TaskBinding, e = s.Store.PreviewTaskBinding(p)
+	}
+	if e != nil {
 		http.Error(w, "task is not this worker's", 403)
 		return
 	}
@@ -485,7 +497,7 @@ func (s *Server) handleNodePreview(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "use a socket basename in ~/.fleet-preview; TCP/URLs are unsupported", 400)
 			return
 		}
-		p := store.Preview{ID: previewRandom()[:32], Owner: a.Owner, Endpoint: ep.ID, Machine: a.Machine, Login: a.Login, Generation: a.Generation, TokenHash: a.TokenHash, TaskID: task.ID, Worker: task.WorkerID, Socket: in.Socket, Expires: time.Now().Add(2 * time.Hour).Unix()}
+		p.ID, p.Socket = previewRandom()[:32], in.Socket
 		limits := s.previewLimits(p)
 		p.Expires = time.Now().Add(limits.lease).Unix()
 		if e = s.Store.CreatePreview(p, limits.previews, time.Now()); e != nil {
@@ -500,7 +512,7 @@ func (s *Server) handleNodePreview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 201, p)
 		return
 	}
-	p, e := s.Store.Preview(in.ID, time.Now())
+	p, e = s.Store.Preview(in.ID, time.Now())
 	if e != nil || p.TaskID != task.ID || p.Endpoint != ep.ID {
 		http.NotFound(w, r)
 		return

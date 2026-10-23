@@ -7039,6 +7039,13 @@ drill_task_stop_replay_cleanup() {
   SECS=$(since "$t0")
 }
 
+drill_private_preview_registration() {
+  CAP=180; local t0; t0=$(now)
+  term_go 'TestPreviewRegisteredTask TestPreviewEnrollmentBinding TestPreviewTaskBinding TestPreviewRegistrationEndToEnd' './hub/api ./hub/store ./e2e' \
+    '真实 Task 预览：历史登记显式绑定 / 稳定会话 ID / 执行代际 / 跨副本撤销' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_private_preview_isolation() {
   CAP=180; local t0; t0=$(now)
   term_go 'TestPreviewHostsCookiesAndReturn TestPreviewAuthFlow TestPreviewSignedOutOAuthReturn TestPreviewTrialAndDisabled TestPreviewReplicas TestPreviewIdentityAndGeneration TestPreviewHTTPStreamAndWebSocket TestPreviewSocketPaths' './hub/api ./hub/store ./e2e ./agent' \

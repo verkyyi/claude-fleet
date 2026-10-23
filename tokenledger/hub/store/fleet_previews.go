@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS fleet_previews (
  socket TEXT NOT NULL, expires INTEGER NOT NULL, closed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS fleet_previews_owner ON fleet_previews(owner);
+CREATE TABLE IF NOT EXISTS fleet_preview_enrollments (
+ endpoint TEXT PRIMARY KEY, owner TEXT NOT NULL, machine TEXT NOT NULL,
+ login TEXT NOT NULL, generation TEXT NOT NULL, token_hash TEXT NOT NULL, approval TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fleet_preview_auth (
  state_hash TEXT PRIMARY KEY, preview TEXT NOT NULL, callback TEXT NOT NULL,
  expires INTEGER NOT NULL, ticket_hash TEXT NOT NULL DEFAULT '',
@@ -36,28 +40,28 @@ var ErrPreview = errors.New("preview is unavailable or not yours")
 var ErrPreviewLimit = errors.New("preview account limit reached")
 
 type Preview struct {
-	ID         string `json:"id"`
-	Owner      string `json:"-"`
-	Endpoint   string `json:"-"`
-	Machine    string `json:"machine"`
-	Login      string `json:"-"`
-	Generation string `json:"-"`
-	TokenHash  string `json:"-"`
-	TaskID     int64  `json:"-"`
-	Worker     string `json:"-"`
-	Socket     string `json:"socket"`
-	Expires    int64  `json:"expires"`
-	Closed     int    `json:"closed"`
-	URL        string `json:"url,omitempty"`
-	Online     bool   `json:"online"`
+	ID          string `json:"id"`
+	Owner       string `json:"-"`
+	Endpoint    string `json:"-"`
+	Machine     string `json:"machine"`
+	Login       string `json:"-"`
+	Generation  string `json:"-"`
+	TokenHash   string `json:"-"`
+	TaskID      int64  `json:"-"`
+	Worker      string `json:"-"`
+	TaskBinding string `json:"-"`
+	Socket      string `json:"socket"`
+	Expires     int64  `json:"expires"`
+	Closed      int    `json:"closed"`
+	URL         string `json:"url,omitempty"`
+	Online      bool   `json:"online"`
 }
 
 type PreviewAuthority struct{ Owner, Machine, Login, Generation, TokenHash string }
 
-// Only a managed login enrollment minted by the hub's account operation may
-// register. The redeemed code's machine and label are immutable hub values;
-// endpoint hostname/os_user are observations and cannot establish ownership.
-// A generic/device/manual unbound enrollment fails closed.
+// Account-operation enrollment is the default authority. A historical node
+// needs an explicit operator binding to the exact endpoint/token/account
+// generation; its observed hostname or later managed role alone grants nothing.
 func previewAuthority(q querier, endpoint string) (a PreviewAuthority, err error) {
 	err = q.QueryRow(`SELECT a.principal_id,a.hostname,a.login,a.requested_at || ':' || a.op_id || ':' || a.updated_at,e.token_hash
  FROM endpoints e JOIN fleet_join_codes j ON j.endpoint_id=e.endpoint_id
@@ -66,6 +70,16 @@ func previewAuthority(q querier, endpoint string) (a PreviewAuthority, err error
  AND j.used_at IS NOT NULL AND j.role='managed' AND e.enrolled_host=j.machine
  AND j.joined_user=a.login AND e.os_user=a.login AND e.role='managed'`, endpoint).
 		Scan(&a.Owner, &a.Machine, &a.Login, &a.Generation, &a.TokenHash)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+	err = q.QueryRow(`SELECT b.owner,b.machine,b.login,b.generation || ':' || b.approval,b.token_hash
+ FROM fleet_preview_enrollments b JOIN endpoints e ON e.endpoint_id=b.endpoint
+ JOIN fleet_accounts a ON a.principal_id=b.owner AND a.hostname=b.machine AND a.login=b.login
+ WHERE b.endpoint=? AND e.retired_at IS NULL AND e.role='managed' AND a.state='active'
+ AND e.enrolled_host=b.machine AND e.os_user=b.login AND e.token_hash=b.token_hash
+ AND a.requested_at || ':' || a.op_id || ':' || a.updated_at=b.generation`, endpoint).
+		Scan(&a.Owner, &a.Machine, &a.Login, &a.Generation, &a.TokenHash)
 	return
 }
 func (s *Store) PreviewAuthority(endpoint string) (PreviewAuthority, error) {
@@ -73,13 +87,16 @@ func (s *Store) PreviewAuthority(endpoint string) (PreviewAuthority, error) {
 }
 func (s *Store) ensureFleetPreviews() error {
 	_, e := s.write.Exec(s.d.ddl(fleetPreviewSchema))
-	return e
+	if e != nil {
+		return e
+	}
+	return s.addColumn("fleet_previews", "task_binding", "TEXT NOT NULL DEFAULT ''")
 }
 
-const previewCols = `id,owner,endpoint,machine,login,generation,token_hash,task_id,worker,socket,expires,closed`
+const previewCols = `id,owner,endpoint,machine,login,generation,token_hash,task_id,worker,socket,expires,closed,task_binding`
 
 func scanPreview(r interface{ Scan(...any) error }) (p Preview, e error) {
-	e = r.Scan(&p.ID, &p.Owner, &p.Endpoint, &p.Machine, &p.Login, &p.Generation, &p.TokenHash, &p.TaskID, &p.Worker, &p.Socket, &p.Expires, &p.Closed)
+	e = r.Scan(&p.ID, &p.Owner, &p.Endpoint, &p.Machine, &p.Login, &p.Generation, &p.TokenHash, &p.TaskID, &p.Worker, &p.Socket, &p.Expires, &p.Closed, &p.TaskBinding)
 	return
 }
 func previewValid(q querier, p Preview, now time.Time) error {
@@ -90,8 +107,8 @@ func previewValid(q querier, p Preview, now time.Time) error {
 	if e != nil || a.Owner != p.Owner || a.Machine != p.Machine || a.Login != p.Login || a.Generation != p.Generation || a.TokenHash != p.TokenHash {
 		return ErrPreview
 	}
-	var owner, worker string
-	if e = q.QueryRow(`SELECT owner,worker_id FROM fleet_tasks WHERE id=?`, p.TaskID).Scan(&owner, &worker); e != nil || owner != p.Owner || worker != p.Worker {
+	binding, e := previewTaskBinding(q, p)
+	if e != nil || (p.TaskBinding != "" && p.TaskBinding != binding) {
 		return ErrPreview
 	}
 	return nil
@@ -109,6 +126,11 @@ func (s *Store) CreatePreview(p Preview, max int, now time.Time) error {
 		return e
 	}
 	defer tx.Rollback()
+	binding, e := previewTaskBinding(tx, p)
+	if e != nil || p.TaskBinding != "" && p.TaskBinding != binding {
+		return ErrPreview
+	}
+	p.TaskBinding = binding
 	if e = s.d.lockKey(tx, "fleet_previews", "preview:"+p.Owner); e != nil {
 		return e
 	}
@@ -122,7 +144,7 @@ func (s *Store) CreatePreview(p Preview, max int, now time.Time) error {
 	if n >= max {
 		return ErrPreviewLimit
 	}
-	_, e = tx.Exec(`INSERT INTO fleet_previews (`+previewCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,0)`, p.ID, p.Owner, p.Endpoint, p.Machine, p.Login, p.Generation, p.TokenHash, p.TaskID, p.Worker, p.Socket, p.Expires)
+	_, e = tx.Exec(`INSERT INTO fleet_previews (`+previewCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?)`, p.ID, p.Owner, p.Endpoint, p.Machine, p.Login, p.Generation, p.TokenHash, p.TaskID, p.Worker, p.Socket, p.Expires, p.TaskBinding)
 	if e != nil {
 		return e
 	}

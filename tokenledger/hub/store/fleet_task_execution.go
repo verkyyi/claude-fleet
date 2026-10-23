@@ -192,7 +192,7 @@ func taskResumeHistoryTx(tx *sql.Tx, t FleetTask) error {
 
 // executionOperationTx also reads the stored task association: the normal
 // operation reader intentionally omits these write-only bookkeeping columns.
-func executionOperationTx(tx *sql.Tx, id string) (FleetOperation, string, string, int64, error) {
+func executionOperationTx(tx querier, id string) (FleetOperation, string, string, int64, error) {
 	o, err := scanFleetOperation(tx.QueryRow(`SELECT `+fleetOpCols+` FROM fleet_operations WHERE id = ?`, id))
 	if err != nil {
 		return o, "", "", 0, err
@@ -207,7 +207,7 @@ func executionOperationTx(tx *sql.Tx, id string) (FleetOperation, string, string
 // taskExecutionBindingTx distinguishes explicit new admission from pre-C8
 // archive fields. The current generation may have advanced because of stop;
 // the operation keeps the binding's original generation and attempt.
-func taskExecutionBindingTx(tx *sql.Tx, t FleetTask) (FleetOperation, int64, error) {
+func taskExecutionBindingTx(tx querier, t FleetTask) (FleetOperation, int64, error) {
 	if t.AuthorityVersion != TaskAuthorityVersion || t.OperationID == "" || t.ExecutionEndpoint == "" {
 		return FleetOperation{}, 0, ErrTaskFence
 	}

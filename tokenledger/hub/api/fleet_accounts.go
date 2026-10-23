@@ -1084,6 +1084,7 @@ type FleetAccountRequest struct {
 	PrincipalID   string `json:"principal_id"`
 	Hostname      string `json:"hostname"`
 	Login         string `json:"login,omitempty"`
+	EndpointID    string `json:"endpoint_id,omitempty"` // preview-bind/unbind: explicit admin attestation
 	DisplayName   string `json:"display_name,omitempty"`
 	ToPrincipalID string `json:"to_principal_id,omitempty"`
 	// OwnName (assign only, claude-fleet#3501): skip the machine's ready
@@ -1152,6 +1153,18 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.DisplayName != "" && !control.ValidFullName(req.DisplayName) {
 			httpError(w, http.StatusBadRequest, "display_name must be 1-64 printable characters")
+			return
+		}
+		if req.Action == "preview-bind" || req.Action == "preview-unbind" {
+			if !sameOrigin(r) {
+				httpError(w, http.StatusForbidden, "same-origin request required")
+				return
+			}
+			if err := s.Store.BindPreviewEnrollment(req.PrincipalID, req.Hostname, req.Login, req.EndpointID, actorOf(r), req.Action == "preview-bind", time.Now()); err != nil {
+				httpError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"endpoint_id": req.EndpointID, "bound": req.Action == "preview-bind"})
 			return
 		}
 		if req.Action == "relogin" {
