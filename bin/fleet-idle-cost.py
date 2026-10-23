@@ -105,8 +105,10 @@ class Sampler:
 
     def run(self, argv, check=True):
         self.own += 1
+        # ps can contain truncated/invalid UTF-8 argv; one process must not
+        # discard the entire observation window. Numeric fields stay strict.
         p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             universal_newlines=True)
+                             universal_newlines=True, errors="replace")
         self.own_pids.add(p.pid)
         try:
             out, _ = p.communicate(timeout=5)

@@ -151,11 +151,14 @@ oneline() { printf '%s' "${1:-}" | tr '\t\r\n' '   ' ; }
 # worker row, `~<N>` for a scratch one (issue #466). `~` is the one-glyph tell that
 # a row has no GitHub issue behind it, and it keeps the SAME width as `#<N>` — so
 # the dash's 5-wide key column and the CLI list stay aligned for either kind.
-key_label() {
+# The *_v variants set output variables for the full-history renderer. Avoid
+# thousands of command-substitution forks just to format keys in a large ledger.
+key_label() { key_label_v "${1:-}"; printf '%s' "$key_label_out"; }
+key_label_v() {
   case "${1:-}" in
-    scratch-*) printf '~%s' "${1#scratch-}" ;;
-    T[1-9]*)   printf '%s' "$1" ;;              # a task session's record (#4899)
-    *)         printf '#%s' "${1:-}" ;;
+    scratch-*) key_label_out="~${1#scratch-}" ;;
+    T[1-9]*)   key_label_out="$1" ;;              # a task session's record (#4899)
+    *)         key_label_out="#${1:-}" ;;
   esac
 }
 # is this ledger key a scratch (@raw) session rather than an issue-bound worker?
@@ -167,7 +170,8 @@ is_scratch_key() { case "${1:-}" in scratch-*) return 0 ;; *) return 1 ;; esac; 
 # (`issue-231`), because that is what the tmux window option carries. Every
 # parent/child lookup below crosses that boundary, so it crosses it here, once.
 # A scratch key is already in window-key form (`scratch-5`) and passes through.
-lkey_okey() { case "${1:-}" in scratch-*) printf '%s' "$1" ;; *) printf 'issue-%s' "${1:-}" ;; esac; }
+lkey_okey() { lkey_okey_v "${1:-}"; printf '%s' "$lkey_okey_out"; }
+lkey_okey_v() { case "${1:-}" in scratch-*) lkey_okey_out=$1 ;; *) lkey_okey_out="issue-${1:-}" ;; esac; }
 
 # the dash row target for a ledger row — what ⌃o / Enter hand to
 # dash-restore-session.sh, and what the fold below matches a keystroke against.
@@ -176,10 +180,11 @@ lkey_okey() { case "${1:-}" in scratch-*) printf '%s' "$1" ;; *) printf 'issue-%
 # nonexistent @issue. In a fleet hosting 2+ repos (issue #804) the target ends in
 # `@<owner/name>`, the row's own repo, so a resume lands in THAT repo — a bare
 # `landed:12` names a PR number two repos can share. One-repo fleet: no suffix.
-landed_target() { # <ledger key> <pr> [<repo>]
+landed_target() { landed_target_v "$@"; printf '%s' "$landed_target_out"; }
+landed_target_v() { # <ledger key> <pr> [<repo>] — no subshell per rendered row
   local rs=''; [ -n "${3:-}" ] && [ "$3" != - ] && rs="@$3"
-  if is_scratch_key "$1"; then printf 'landed:scratch:%s%s' "$1" "$rs"; return; fi
-  case "${2:-}" in ''|-) printf 'landed:issue:%s%s' "$1" "$rs" ;; *) printf 'landed:%s%s' "${2#\#}" "$rs" ;; esac
+  if is_scratch_key "$1"; then landed_target_out="landed:scratch:$1$rs"; return; fi
+  case "${2:-}" in ''|-) landed_target_out="landed:issue:$1$rs" ;; *) landed_target_out="landed:${2#\#}$rs" ;; esac
 }
 
 # --- the landed view's fold state --------------------------------------------
@@ -818,7 +823,7 @@ cmd_rows() {
   while IFS=$'\t' read -r lrp0 _ lk0 _ _ _ _ _ _ _ _ lorg0 _; do
     [ -n "$lk0" ] || continue
     lseq=$((lseq+1))
-    lk_o=$(lkey_okey "$lk0")
+    lkey_okey_v "$lk0"; lk_o=$lkey_okey_out
     [ "$LANDED_MERGED" = 1 ] && { lslug_v "$lrp0"; lk_o="$lslug:$lk_o"; }
     case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
     lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
@@ -910,12 +915,12 @@ cmd_rows() {
     lrow=$((lrow + 1))
     local target fzfkey okey
     fzfkey="${sid:--}"
-    okey=$(lkey_okey "$iss")
+    lkey_okey_v "$iss"; okey=$lkey_okey_out
     if [ "$LANDED_MERGED" = 1 ]; then
       lslug_v "$rrepo"; okey="$lslug:$okey"
-      target=$(landed_target "$iss" "$pr" "$rrepo")
+      landed_target_v "$iss" "$pr" "$rrepo"; target=$landed_target_out
     else
-      target=$(landed_target "$iss" "$pr")
+      landed_target_v "$iss" "$pr"; target=$landed_target_out
     fi
     # --- where this row nests ---------------------------------------------------
     # A child sorts under the ultimate root's slot (depth 1 breaks the tie, then its
@@ -954,7 +959,7 @@ cmd_rows() {
     # column stays in the ledger format unrendered.
     local dsmry="$title"
     { [ "${dsmry:--}" = "-" ] || [ -z "$dsmry" ]; } && dsmry="(untitled)"
-    dsmry="$(task_mark "$task")$dsmry"            # its hub task record, T<n> (issue #3387)
+    case "${task:-}" in T[1-9]*) dsmry="$task $dsmry" ;; esac            # its hub task record, T<n> (issue #3387)
     # activity = time since the merge (mergedAt → epoch → friendly span).
     local ep act; ep=$(fleet_epoch_from_iso "$when"); fleet_reltime "$ep" "$now"; act="${reltime_out:--}"
     # PR cell — the merged number (all landed rows merged); em-dash when PR-less.
@@ -985,7 +990,7 @@ cmd_rows() {
     # Live scratches use their task descriptions. A landed row has no live
     # window, so keep its historical key for CLI lookup and restoration.
     local issd icol=$GN
-    issd=$(key_label "$iss")
+    key_label_v "$iss"; issd=$key_label_out
     is_scratch_key "$iss" && icol=$IN
     # tree cell (issue #836): the fixed 2-cell column between issue and window, the
     # live list's own. `└` marks a nested row — only when the parent really is the
