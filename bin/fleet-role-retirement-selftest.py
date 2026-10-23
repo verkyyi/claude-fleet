@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# selftest-entry
 """D1: old role entrypoints refuse before resolution; upgrades preserve user files."""
 import hashlib
 import importlib.util

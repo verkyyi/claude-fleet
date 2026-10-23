@@ -348,7 +348,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet_task_execution.py fleet_hub_common.py fleet-session-page.py fleet-hook-personal.sh fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 mkdir -p "$WORK/wconf/logs"   # the wrapped windows' own logs (T909), never the operator's
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'

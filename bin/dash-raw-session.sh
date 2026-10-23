@@ -266,15 +266,9 @@ if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
 fi
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
-# An EPIC charter whose FIRST line is the bare `/fleet-epic-run` (every charter
-# /fleet-epic-plan wrote before T646): Claude Code reads the head of a first turn
-# as a slash command, and a plugin's command is only `/fleet-epic:fleet-epic-run`
-# — so the turn ended at 「Unknown command」 without ever reaching the model, and
-# the panel filed the new driver under 做完待收. That line becomes the words
-# /fleet-epic-plan writes now (FLEET_EPIC_RUN_LINE, plugins/fleet-epic/commands/
-# fleet-epic-plan.md §5 — KEEP IN SYNC): plain words, no namespace, Codex alike;
-# its arguments ride along. Any other seed: byte for byte.
-FLEET_EPIC_RUN_LINE='按 fleet-epic-run 的流程驱动这一批：先调用技能 fleet-epic:fleet-epic-run，本条消息下面是这一批的章程。'
+# Keep legacy charter text readable without invoking retired orchestration.
+# Only its exact leading slash command changes; arguments and body remain intact.
+FLEET_EPIC_RUN_LINE='EPIC_RETIRED：Fleet 已取消 EPIC、Batch 和专属 driver；不要执行旧编排命令。以下旧章程仅作任务背景，由当前 Task 的 Agent 按用户授权继续，必要时使用原生 Subagent 或 inline。'
 case "$PROMPT" in
   /fleet-epic-run|/fleet-epic-run[[:space:]]*)
     _er_head=${PROMPT%%"

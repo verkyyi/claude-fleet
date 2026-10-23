@@ -224,7 +224,7 @@ def daily(path, day, *, opportunities=None, as_of=None):
     events, including events that never started. An action ledger alone cannot
     prove their absence. Keep the acceptance rate unknown without that manifest.
     """
-    start = datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp()
+    start = fleet_iso.parse(day).replace(tzinfo=timezone.utc).timestamp()
     end = start + 86400
     as_of = time.time() if as_of is None else stamp(as_of)
     counts, durations, observed, starts = Counter(), [], set(), {}
@@ -400,7 +400,7 @@ def main():
         import socket
         report = daily(conf / "logs/park.ndjson", args.day,
                        opportunities=json.loads(Path(args.opportunities).read_text()) if args.opportunities else None)
-        start = datetime.fromisoformat(args.day).replace(tzinfo=timezone.utc).timestamp()
+        start = fleet_iso.parse(args.day).replace(tzinfo=timezone.utc).timestamp()
         report["observation"] = integrate_samples(sample_history(conf / "logs/park-samples.ndjson"), start, start + 86400,
             scope=args.scope or socket.gethostname() + "/" + getpass.getuser(), max_gap_secs=args.max_gap_secs)
         print(json.dumps(report))

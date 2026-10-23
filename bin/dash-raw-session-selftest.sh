@@ -376,12 +376,9 @@ grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N a blank --prompt must stil
 grep -qF -- '$(cat' "$NEWWIN_LOG"          && fail "N a blank --prompt is a PLAIN scratch — no task-file launch" "$(cat "$NEWWIN_LOG")"
 ok "N --prompt seeds the scratch via a task file (never inline), --bg stages it"
 
-# ==================== N2: an older EPIC charter starts its driver (T646) =========
-# A charter whose first line is the bare `/fleet-epic-run` (what /fleet-epic-plan
-# wrote before T646) ended its driver's first turn at Claude Code's 「Unknown
-# command」 — a plugin command is only `/fleet-epic:fleet-epic-run`. The seed's
-# first line becomes the plain words the plan writes now (its arguments kept),
-# the charter below it byte for byte; the plan's template carries the same words.
+# ==================== N2: legacy charter is context, never a driver ==========
+# Preserve its body and arguments, but the leading retired command cannot
+# instruct the new ordinary session to recreate EPIC orchestration.
 reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt $'/fleet-epic-run --task T9\n\n<!-- fleet:epic repo=o/r short=x cap=4 -->\n# EPIC: x'
 tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
@@ -389,13 +386,15 @@ want_line=$(sed -n "s/^FLEET_EPIC_RUN_LINE='\(.*\)'$/\1/p" "$BIN/dash-raw-sessio
 [ -n "$want_line" ] || fail "N2 dash-raw-session.sh must define FLEET_EPIC_RUN_LINE"
 [ "$(cat "$tf" 2>/dev/null)" = "${want_line}（参数：--task T9）"$'\n\n<!-- fleet:epic repo=o/r short=x cap=4 -->\n# EPIC: x' ] \
   || fail "N2 a legacy /fleet-epic-run first line must become the plain words, the charter kept" "$(cat "$tf" 2>/dev/null)"
-grep -qxF "   $want_line" "$BIN/../plugins/fleet-epic/commands/fleet-epic-plan.md" \
-  || fail "N2 /fleet-epic-plan's charter template must open with the same words (FLEET_EPIC_RUN_LINE)"
+printf '%s' "$want_line" | grep -qF 'EPIC_RETIRED' \
+  || fail "N2 the legacy charter must identify retired orchestration"
+grep -qF 'EPIC_RETIRED' "$BIN/../plugins/fleet-epic/commands/fleet-epic-plan.md" \
+  || fail "N2 the old plan command must remain a retirement stub"
 reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt '/fleet-epic-runner x'
 tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
 [ "$(cat "$tf" 2>/dev/null)" = '/fleet-epic-runner x' ] || fail "N2 any other seed is byte for byte" "$(cat "$tf" 2>/dev/null)"
-ok "N2 an older charter's bare /fleet-epic-run line reaches the model as words (T646)"
+ok "N2 an older charter remains readable with explicit retirement, never a driver instruction"
 
 # ============================ D: restore includes scratch @raw ==============
 out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\nlegacy-raw|%s|-|done|-|-|1\n' \

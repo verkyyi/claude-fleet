@@ -929,7 +929,7 @@ print('200')
 TASKCURL
 chmod +x "$WORK/fakebin/task-curl"
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
-PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
+PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH CLAUDE_CONFIG_DIR="$WORK/main/.claude" FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
   run_raw --no-repo --task T42 --as fleet-worker --prompt 'implement the task'
 [ "$(rc)" = 0 ] && place_has '--node auto ' && place_has "  scratch $UUID" && ! place_has 'acme/widgets' \
   && place_has '--as fleet-worker' && [ "$(cat "$WORK/place.body" 2>/dev/null)" = 'implement the task' ] \

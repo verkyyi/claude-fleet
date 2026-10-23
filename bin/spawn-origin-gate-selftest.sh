@@ -131,6 +131,9 @@ printf -- '---\nname: dispatcher\ndescription: d\ntools:\n  - Read\n  - mcp__fle
 printf '[{"id":"fleet-epic@claude-fleet","enabled":true,"installPath":"%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
 grant() { CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" python3 "$BIN/fleet-agent-def.py" spawn-tools "$1" --dir "$WORK"; }
 st_count; grant doc-only && st_miss "F: doc-only must not grant spawn"
-for a in fleet-worker epic-driver dispatcher; do st_count; grant "$a" || st_miss "F: $a grants spawn"; done
+for a in fleet-worker dispatcher; do st_count; grant "$a" || st_miss "F: $a grants spawn"; done
+
+st_count; grant epic-driver > "$WORK/retired.out" 2> "$WORK/retired.err"; retired_rc=$?
+[ "$retired_rc" = 3 ] && grep -q 'ROLE_RETIRED' "$WORK/retired.err" || st_miss "F: retired epic-driver must refuse"
 
 st_done

@@ -348,8 +348,12 @@ both() { # both <what> <argv>
 both "a plain launch" "$argv"
 argv="$( (export FLEET_MCP_ORCH=0; run /fleet-history) )"; both "a worker (FLEET_MCP_ORCH=0 inherited)" "$argv"
 mkdir -p "$WORK/ccfg/agents"
-printf -- '---\nname: epic-driver\ndescription: d\n---\nbody\n' > "$WORK/ccfg/agents/epic-driver.md"
-argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as epic-driver '/fleet-epic-run 1') )"; both "an EPIC driver" "$argv"
+printf -- '---\nname: custom-agent\ndescription: d\n---\nbody\n' > "$WORK/ccfg/agents/custom-agent.md"
+argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as custom-agent 'continue this task') )"; both "a custom agent" "$argv"
+rm -f "$WORK/argv"
+CLAUDE_CONFIG_DIR="$WORK/ccfg" bash "$WORK/bin/fleet-claude.sh" --as epic-driver > "$WORK/retired.out" 2> "$WORK/retired.err"; retired_rc=$?
+[ "$retired_rc" = 3 ] && [ ! -e "$WORK/argv" ] && grep -q 'ROLE_RETIRED' "$WORK/retired.err" \
+  || st_fail "retired EPIC driver must refuse before native launch"
 printf -- '---\nname: fleet-worker\ndescription: w\ndisallowedTools: mcp__fleet-orch__spawn\n---\nbody\n' > "$WORK/ccfg/agents/fleet-worker.md"
 argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as fleet-worker /fleet-history) )"; both "a worker file that takes spawn away" "$argv"
 for v in 0 1; do
