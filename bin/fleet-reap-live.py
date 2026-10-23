@@ -32,25 +32,21 @@ LIB = next((d / "fleet-lib.sh" for d in (_HERE, Path(__file__).resolve().parent)
 
 
 def waiting(target, socket_name=None):
-    """fleet_window_wait's other reasons (issue #1370) — '' | 'children' | 'bg' | 'tool'.
+    """The current session's native bg/tool work, independent of other Tasks.
 
-    A parent whose sub-task is not finished, whose agent still owns a Bash-tool
-    job, or whose fleet tool call is still running (issue #1880: an MCP call Claude
-    Code backgrounded past 120 s), is idle but not done: the same answer its Stop
-    hook stamps `looping` + @claude_wait from. Asked here too, because a window
-    stamped `done` before the sync (or by any writer that never asked) must not be
-    reaped out from under it."""
+    Ask again even for a done-stamped window so an older observation cannot
+    release live Bash, Subagent or MCP work. Native Loop is checked separately.
+    """
     script = ('. "$1"; t=$2; L=$3\n'
               's=$(tmux ${L:+-L "$L"} display-message -p -t "$t" "#{?#{session_group},#{session_group},#{session_name}}" 2>/dev/null)\n'
               '[ -n "$L" ] && TMUX=\n'
-              'fleet_window_waiting_children "$s" "$t" >/dev/null 2>&1 && { echo children; exit 0; }\n'
               'fleet_window_bg_busy "$s" "$t" 1 1 && { echo bg; exit 0; }\n'
               'fleet_window_tool_busy "$s" "$t" && echo tool\n'
               'exit 0\n')
     out = subprocess.run(["bash", "-c", script, "reap-live", str(LIB), target, socket_name or ""],
                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                          text=True, timeout=30).stdout.strip()
-    return out if out in ("children", "bg", "tool") else ""
+    return out if out in ("bg", "tool") else ""
 
 
 def read(*args):
@@ -242,15 +238,6 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     # `bg_over` remains accepted for launchers from older installs. A terminal
     # report and elapsed grace never waive real work (C6 / T965).
     why = waiting(target, socket_name)
-    # A worker whose PR merged (merged_at, the merged gate's own probe) has shipped:
-    # a sub-task it spawned and that is still open — a repro session left at its
-    # prompt — does not keep it (issue #4822). The child stays; its reports climb
-    # to the nearest live ancestor (fleet_live_ancestor, #1352). A running job or
-    # an in-flight tool call is this agent's own and still holds it.
-    if why == "children" and merged_at is not None:
-        if waived is not None:
-            waived.append("children")
-        why = ""
     if why:
         return "retained:" + why
     state, status, gone = split_state(read(*tmux, "display-message", "-p", "-t", target, STATE_FMT))
@@ -267,7 +254,7 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     # #1529): its own ship is done, and what holds the stamp is a round it
     # scheduled to wait for that merge. It is waived ONLY with a merge time and
     # only when the walk below finds an agent and every agent was alive at the
-    # merge — an ACTIVE @loop mark, a running child or bg job already returned above
+    # merge — an ACTIVE @loop mark or native bg/tool job already returned above
     # (#1331's ruling: a live Loop is kept), so this never takes a pending round.
     looping = state == "looping" and merged_at is not None
     # `exited` (issue #1784): the agent left and the pane holds the recovery page —
@@ -398,7 +385,7 @@ def main():
         return 1
     if waived:
         # Exit 0 still means reapable; the line only lets the caller log the waiver.
-        print("waived:" + ",".join(w if w in ("looping", "children", "loop", "bg") else "young-agent:" + w for w in waived))
+        print("waived:" + ",".join(w if w in ("looping", "loop", "bg") else "young-agent:" + w for w in waived))
     return 0
 
 

@@ -456,7 +456,7 @@ class ReapIntegration(unittest.TestCase):
                                        capture_output=True, text=True, env=env, timeout=30)
                     return r.stdout + r.stderr
                 stamp(child, '@claude_state', 'working')
-                self.assertIn('retained:children', why(parent))
+                self.assertNotIn('retained:children', why(parent))  # old @origin is not native work
                 stamp(child, '@claude_state', 'done')
                 stamp(child, '@loop', 'kind=wakeup next=%d ttl=600' % (time.time() + 600))
                 self.assertIn('retained:loop', why(child))

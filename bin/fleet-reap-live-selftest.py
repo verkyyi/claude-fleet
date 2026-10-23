@@ -31,14 +31,14 @@ class LiveTests(unittest.TestCase):
              patch.object(live, "waiting", return_value=wait):
             return live.live_reason("@1", minimum, None, merged_at, waived, now, bg_over)
 
-    def test_waiting_parent_or_bg_job_retains(self):
-        # Issue #1370: an unfinished sub-task / a Bash-tool job still running keeps a
+    def test_native_bg_job_or_tool_retains(self):
+        # Native Bash/Subagent work still running keeps a
         # `done`-stamped window — after a hold and a Loop, ahead of age and state.
         # Issue #1880: so does a fleet tool call still in flight (`tool`).
-        for wait in ("children", "bg", "tool"):
+        for wait in ("bg", "tool"):
             for state in ("done", "looping"):
                 self.assertEqual(self.probe(minimum=0, state=state, wait=wait), "retained:" + wait)
-        self.assertEqual(self.probe(hold="1", wait="children"), "retained:hold")
+        self.assertEqual(self.probe(hold="1", wait="bg"), "retained:hold")
         now = int(time.time())
         self.assertEqual(self.probe(wait="bg", loop=f"kind=wakeup next={now+600} ttl=600\t"), "retained:loop")
         self.assertIsNone(self.probe(minimum=0, wait=""))
@@ -175,17 +175,11 @@ class LiveTests(unittest.TestCase):
         # No agent under the pane: nothing shipped, the stamp stands.
         self.assertEqual(self.probe(state="looping", comm="zsh", merged_at=NOW-300, now=NOW), "state:looping")
         # An ACTIVE Loop or a bg job / tool call of its own still retain it (#1331,
-        # #1370); a sub-task still open does not, once its own PR merged (#4822:
-        # an idle repro session it spawned held @4383 for hours) — waived, said.
+        # #1370). Other Task windows do not participate in this native check.
         wake = f"kind=wakeup next={int(time.time())+1800} ttl=1800\t"
         self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, loop=wake), "retained:loop")
         for wait in ("bg", "tool"):
             self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, wait=wait), "retained:" + wait)
-        waived = []
-        self.assertIsNone(self.probe(state="looping", age="2:00:00", merged_at=NOW-300, now=NOW, wait="children", waived=waived))
-        self.assertIn("children", waived)
-        # No merge time (the idle / no-PR passes): an open sub-task still holds it.
-        self.assertEqual(self.probe(state="done", wait="children"), "retained:children")
         # Only `looping` is waived — a working agent never is.
         self.assertEqual(self.probe(state="working", age="2:00:00", merged_at=NOW-300, now=NOW), "state:working")
 

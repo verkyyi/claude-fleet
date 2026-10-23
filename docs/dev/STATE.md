@@ -259,7 +259,7 @@ such tools — its `@loop` stays empty and nothing changes for it.
 
 **Why a ↻ is waiting: `@claude_wait`** (issue #1370). A Loop is not the only way a
 quiet window is unfinished. At every Stop (and at the mod's own `done` report)
-`fleet_stop_wait` → `fleet_window_wait` asks three things and the Stop writes
+`fleet_stop_wait` → `fleet_window_wait` asks only this session's current work and the Stop writes
 `looping` + `@claude_wait=<reasons>` (comma-separated, fixed order) when any holds:
 
 - `loop` — the `@loop` answer above. A session that scheduled its wakeup BEFORE the
@@ -269,34 +269,33 @@ quiet window is unfinished. At every Stop (and at the mod's own `done` report)
   5 s timebox) through the same `apply()` and writes the mark only if it is still
   pending. `fleet-install-apply.sh`'s `loopmark` step does the same for every
   Claude window at sync time (`fleet_loop_mark.py sweep`). Only adds, never clears.
-- `children` — a sub-task it spawned is not finished: `fleet_window_waiting_children`
-  walks the live windows whose `@origin` chain climbs to this window's key (every
-  level, as the list's `k/N` does) and counts `done` with no live Loop as finished;
-  a child whose PR merged leaves the count when cleanup reaps it.
 - `bg` — its agent still owns a Bash-tool job (`fleet_window_bg_busy`: the
   `fleet_worker_life.py busy` walk behind `fleet_child_busy`'s `bg`, gated on a direct
   `…/shell-snapshots/snapshot-…` child so an idle pane pays one `ps`).
 
 `@claude_wait` only explains `looping` — no new state value — and a Stop with no
 reason removes it, so a window that waits on nothing carries exactly the options
-it always did. The reapers answer `retained:children` / `retained:bg`, and the sidebar's selected-row line
-says `等子任务 k/N` / `后台命令在跑`. When the last child lands (its child-report is
-a new turn) or the job ends (its task notification is too), the next Stop is `done`.
+it always did. Native background work and in-flight tools still retain the
+session (`retained:bg` / `retained:tool`); active cron/wakeup marks retain their
+owner as before. Fleet Parent links, remote child maps and historical reports
+are not evidence of this Task's native activity. The old
+`fleet_window_waiting_children` and `_fleet_remote_tally` entry points remain
+inert for one compatibility version; stored history is not rewritten.
 
 **Re-asked while idle** (issue #1376). A Stop decides this once, at the edge — so a
-window that stopped before #1370 was synced, a parent whose last child just went
-idle, or a job that ended without waking its agent would otherwise keep the edge's
+window with an old `children` reason, or a job that ended without waking its
+agent, would otherwise keep the edge's
 answer until its next turn. `fleet_window_reeval` re-asks `fleet_window_wait` for a
 window that is `done`, or `looping` WITH a `@claude_wait` (a reasonless `looping` —
 an older window's screen-read verdict — is left), and rewrites only `done` ↔ `looping` +
 `@claude_wait` — never `working`/`needs`, never a sleep transition, never
 `@claude_state_ts` (nothing ran in the pane); the write re-checks the state
-server-side. `bin/fleet-wait-reeval.sh` drives it from three places: every
-`fleet-reconcile-tick.sh` tick right after the #806 reconcile, the
-`fleet-install-apply.sh` `reeval:` step after `loopmark` (`N of M idle window(s)
-changed`), and a child's own Stop (`--parent-of`, detached) so the parent flips the
-moment its last child goes idle. A pass that changed something runs again (≤ 3) so
-a grandchild finishing cascades up. Changes log to `logs/reconcile.log` with
+server-side. `bin/fleet-wait-reeval.sh` runs from each reconcile tick and the
+install-apply `reeval:` step after `loopmark`. Each eligible window is read once;
+there is no Parent cascade. A Stop changes only its own window, and the legacy
+`--parent-of` option is a no-op without reading `@origin`. Old children-only
+waits clear on this existing idle pass; native work still holds the session.
+Changes log to `logs/reconcile.log` with
 `via=reeval`; `FLEET_WAIT_REEVAL=0` turns it off.
 
 What a hook cannot see and nobody recorded — a `/loop` paused between iterations
