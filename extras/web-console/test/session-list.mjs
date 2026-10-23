@@ -71,7 +71,7 @@ for (const extra of ['r.code', 'r.line', 'r.tag', 'rowMeta', 'machine', 'ago(', 
 assert.ok(drawn.includes('<RowGlyph') && drawn.includes('{it.title}'), 'a list row draws its glyph and its title');
 
 // its address: the task's code, else its own id
-assert.equal(rowRef(open[0]), 'R9A2');
+assert.equal(rowRef(open[0]), fid(30));
 assert.equal(rowRef(rows.find((r) => r.id === 'loose')), 'loose');
 
 // a search finds what the row does not show: a code, a title, a machine — a member too
@@ -125,7 +125,7 @@ assert.ok(isTerminal({ origin: 'terminal' }) && !isTerminal({ origin: 'web' }) &
 // One status slot; no pending inferred from a missing session or a draft.
 const R = (x) => ({ code: 'K7Q2', glyph: 'idle', group: 'queue', tag: ['空闲', 'Idle'], ...x });
 assert.equal(listStatus(R({ glyph: 'work', group: 'work' })).kind, 'work');
-assert.equal(listStatus(R({ glyph: 'ask', group: 'ask' })).kind, 'ask');
+assert.equal(listStatus(R({ glyph: 'ask', group: 'ask' })).kind, null, 'a historical glyph is not a current native request');
 assert.equal(listStatus(R({})).kind, null);
 assert.equal(listStatus(R({ board: { tag: 'queued' } })).kind, null);
 assert.equal(listStatus(R({ task: v1({task_state:'accepted', operation_id:'op'}) })).kind, null);

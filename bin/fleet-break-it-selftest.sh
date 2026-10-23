@@ -6959,6 +6959,24 @@ drill_task_stop_entry() {
   SECS=$(since "$t0")
 }
 
+drill_task_unclaimed_stop_proof() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
+    WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
+  }
+  WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_unclaimed() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
+    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
+  }
+  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
+  SECS=$(since "$t0")
+}
+
 drill_task_continuation_start() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
@@ -6977,6 +6995,16 @@ drill_task_local_continuation() {
   WHAT='显式新授权与原ACK证明共同接续；旧FID仍停止，同grant同分配，第二轮退出证明独立'
   SECS=$(since "$t0")
 }
+
+drill_task_unclaimed_node() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-task-unclaimed-continuation-selftest.py" >"$WORK/task-unclaimed-node.log" 2>&1 || {
+    WHY="unclaimed node regression: $(tail -10 "$WORK/task-unclaimed-node.log")"; return 1;
+  }
+  WHAT='未领取继续仅退休纯分配；真实登记拒绝，旧FID保留停止事实，新分配仍需明确授权'
+  SECS=$(since "$t0")
+}
+
 
 drill_task_continue_authority() {
   local t0; t0=$(now); CAP=120
@@ -7780,6 +7808,15 @@ drill_reap_agent_split() {
   grep -qF 'def test_idle_persistent_mcp_is_not_work' "$BIN/fleet-codex-busy-selftest.py" \
     || { WHY="fleet-codex-busy-selftest.py no longer holds an idle resident MCP is not work"; return 1; }
   WHAT='回收一条路：结束（钩子 / 退出码）、认 Agent 进程、问还有没有活、收它留下的服务都问适配表；正常退出、被杀、后台服务还在、真有活四条腿两种 Agent 各跑一遍（fleet-agent-end-selftest.py，这里按名守住）；常驻 MCP 不算活（fleet-codex-busy-selftest.py）'
+  SECS=$(since "$t0")
+}
+
+drill_task_current_view() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-current-view-selftest.py" >"$WORK/task-current-view.log" 2>&1 || {
+    WHY="current view regression: $(tail -10 "$WORK/task-current-view.log")"; return 1;
+  }
+  WHAT='历史文字不冒充原生问题，Task 代码不随会话或结果改变'
   SECS=$(since "$t0")
 }
 

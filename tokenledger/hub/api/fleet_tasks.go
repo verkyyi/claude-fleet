@@ -111,8 +111,11 @@ func (s *Server) taskAnswered(task *store.FleetTask, out *ClientPlaceResponse) {
 // live word off the inventory (empty when the session is gone or unknown).
 type taskView struct {
 	store.FleetTask
-	Live    map[string]any `json:"live,omitempty"`
-	PRState string         `json:"pr_state"`
+	// Preserve an explicitly empty controlled binding on the wire. Its absence
+	// is reserved for legacy records that still use worker_id.
+	CurrentExecutionOwner *string        `json:"execution_owner,omitempty"`
+	Live                  map[string]any `json:"live,omitempty"`
+	PRState               string         `json:"pr_state"`
 	// Progress is the current execution's newest workflow word — an EPIC
 	// driver's tick on its parent task (claude-fleet#4957); absent when none.
 	Progress *store.TaskProgress `json:"progress,omitempty"`
@@ -151,6 +154,9 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 		}
 		live := s.taskLive(&t, rows)
 		v := taskView{FleetTask: t, Live: live, PRState: "unverified"}
+		if worker, controlled := s.taskCurrentWorker(&t); controlled {
+			v.CurrentExecutionOwner = &worker
+		}
 		if t.AuthorityVersion == store.TaskAuthorityVersion {
 			key := [2]string{t.Owner, t.Repo}
 			byTask, ok := landings[key]
@@ -190,9 +196,24 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 // taskLiveFields are the inventory fields the page shows beside a record.
 var taskLiveFields = []string{"key", "state", "needs", "status_kind", "status_msg", "ctx_left", "title", "repo", "issue", "observed_at", "stale", "source"}
 
+// The existing execution binding is the only current worker of a controlled
+// Task. A released or not-yet-claimed binding must not select a historical
+// WorkerID or the original Task FID. Legacy records retain their old lookup.
+func (s *Server) taskCurrentWorker(t *store.FleetTask) (string, bool) {
+	if t.ExecutionEndpoint != "" || t.ExecutionOwner != "" {
+		return t.ExecutionOwner, true
+	}
+	if t.OperationID != "" {
+		if op, err := s.Store.FleetOperation(t.OperationID); err == nil && controlledExecutionRequest(op.Request) {
+			return "", true
+		}
+	}
+	return t.WorkerID, false
+}
+
 func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) map[string]any {
-	wid := t.WorkerID
-	if wid == "" {
+	wid, controlled := s.taskCurrentWorker(t)
+	if wid == "" && !controlled {
 		// A version-1 record's session is named by its identity (A4G2): the
 		// window's @fleet_id IS the record's ID, so its worker is <fleet>/<fid>.
 		wid = s.workerOfIdentity(t.Owner, t.FID)
@@ -225,7 +246,7 @@ func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) 
 		rows[fid] = ws
 	}
 	for _, w := range ws {
-		if id, _ := w["worker_id"].(string); id != wid && !(t.WorkerID == "" && identityOf(w) == t.FID) {
+		if id, _ := w["worker_id"].(string); id != wid && !(!controlled && t.WorkerID == "" && identityOf(w) == t.FID) {
 			continue
 		}
 		out := map[string]any{}

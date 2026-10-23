@@ -102,8 +102,8 @@ func TestResolveTaskByCodeIDOrT(t *testing.T) {
 }
 
 // Two tasks whose IDs share their first two places: the two-place code names
-// both while both are unfinished (409's candidates); once one ends, the
-// unfinished one alone answers; once both end, the whole history is ambiguous.
+// both across the whole history (409's candidates). Historical outcomes
+// cannot select a different Task for the same prefix.
 func TestResolveTaskCodeNeverGuesses(t *testing.T) {
 	st := storetest.OpenFleet(t)
 	seen := map[string]store.FleetTask{}
@@ -135,8 +135,8 @@ func TestResolveTaskCodeNeverGuesses(t *testing.T) {
 	if _, err := st.DB().Exec(`UPDATE fleet_tasks SET state = 'closed' WHERE id = ?`, x.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := st.ResolveFleetTask("operator", p); err != nil || got.ID != y.ID {
-		t.Fatalf("one unfinished under %s = %v %v; want %s", p, got.Ref, err, y.Ref)
+	if _, err := st.ResolveFleetTask("operator", p); !errors.As(err, &amb) || len(amb.Candidates) != 2 {
+		t.Fatalf("historical result must not select a prefix winner: %v", err)
 	}
 	if _, err := st.DB().Exec(`UPDATE fleet_tasks SET state = 'cancelled' WHERE id = ?`, y.ID); err != nil {
 		t.Fatal(err)
@@ -194,5 +194,31 @@ func TestBackfillTaskIDs(t *testing.T) {
 	}
 	if got, err := st.ResolveFleetTask("operator", r1.Short); err != nil || got.ID != old1.ID {
 		t.Fatalf("resolve the backfilled code = %v %v", got.Ref, err)
+	}
+}
+
+func TestResolveTaskWrittenCodeSurvivesNewPrefixAndOutcome(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	old := newLegacyTask(t, st, "operator", "stable-old")
+	next := newLegacyTask(t, st, "operator", "stable-new")
+	// A newly minted ID may extend a previously written prefix. The old short
+	// remains an exact address, independently of either task's historical state.
+	for _, row := range []struct{ id, code, short string }{{old.FID, "FDMQ6PHPNRY42YF888A0Z7K322", "FDMQ"}, {next.FID, "FDMQ6PE0000000000000000000", "FDMQ6PE"}} {
+		if _, err := st.DB().Exec(`UPDATE fleet_ids SET code = ?, short = ? WHERE id = ?`, row.code, row.short, row.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, state := range []string{"open", "closed", "failed", "cancelled"} {
+		if _, err := st.DB().Exec(`UPDATE fleet_tasks SET state = ? WHERE id = ?`, state, old.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.ResolveFleetTask("operator", "FDMQ")
+		if err != nil || got.ID != old.ID {
+			t.Fatalf("written code moved: %v %v", got, err)
+		}
+		var amb *store.TaskAmbiguity
+		if _, err := st.ResolveFleetTask("operator", "FD"); !errors.As(err, &amb) || len(amb.Candidates) != 2 {
+			t.Fatalf("prefix guessed: %v", err)
+		}
 	}
 }

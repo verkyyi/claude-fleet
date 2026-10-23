@@ -255,14 +255,16 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		idBy[ids[i].ID] = &ids[i]
 	}
 	byFID, byRef, byWID := map[string]*store.FleetTask{}, map[string]*store.FleetTask{}, map[string]*store.FleetTask{}
+	currentWorker, controlled := map[*store.FleetTask]string{}, map[*store.FleetTask]bool{}
 	for i := range ts {
 		t := &ts[i]
 		if t.FID != "" {
 			byFID[t.FID] = t
 		}
 		byRef[t.Ref] = t
-		if t.WorkerID != "" {
-			byWID[t.WorkerID] = t
+		currentWorker[t], controlled[t] = s.taskCurrentWorker(t)
+		if currentWorker[t] != "" {
+			byWID[currentWorker[t]] = t
 		}
 	}
 	taskOfID := func(b *store.BoardID) *store.FleetTask {
@@ -362,9 +364,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			if t.Title != "" && (b == nil || b.TitleSource != "manual") {
 				r.Title = t.Title
 			}
-			if r.Code == "" {
-				r.Code = t.Short
-			}
+			r.Code = t.Short
 			if r.Repo == "" {
 				r.Repo = t.Repo
 			}
@@ -382,12 +382,21 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			wid = *fs.WorkerID
 		}
 		b := idBy[ident]
-		t := taskOfID(b)
+		t := byWID[wid]
+		if t == nil {
+			t = taskOfID(b)
+		}
 		if t == nil && ident != "" {
 			t = byFID[ident]
 		}
 		if t == nil && wid != "" {
 			t = byWID[wid]
+		}
+		if t != nil && controlled[t] && (currentWorker[t] == "" || wid != currentWorker[t]) {
+			// Retained wrappers and stale inventory are history, never this Task's
+			// current execution. Its ledger remains available through history reads.
+			usedID[ident] = true
+			continue
 		}
 		lostFor := fs.Availability == "lost" && !fs.ObservedAt.IsZero() && now.Sub(fs.ObservedAt) > boardLostAfter
 		if lostFor && fs.ObservedAt.Before(since) {
@@ -469,13 +478,10 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Group, r.Tag = "queue", "retained_completed"
 		case end == store.TaskCancelled:
 			r.Group, r.Tag = "queue", "cancelled"
-		case end == "" && (code == "waiting" || (t != nil && t.Asked != "")):
-			// its turn over, it waits on you (E101: B2XT and CRFW sat in 排队中)
-			r.Group, r.Tag = "ask", "waiting_you"
 		default:
 			r.Group, r.Tag = "queue", boardStateTag(st)
 		}
-		if r.Group == "ask" || r.Group == "queue" {
+		if (r.Group == "ask" || r.Group == "queue") && code != "waiting" {
 			r.Why, r.WhyTone = boardWhy(why, now)
 		}
 		r.Origin = "terminal"
@@ -505,13 +511,19 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		// opened_at is also stamped when a task ID is merely reserved.
 		started := b != nil && (b.Seq > 0 || b.Agent != "")
 		switch {
+		case s.boardPendingStart(t):
+			r.Group, r.Tag = "queue", "starting"
+		case controlled[t]:
+			r.Group, r.Tag = "queue", "not_seen"
+			r.Lost = currentWorker[t] != ""
+			if currentWorker[t] == "" && t.ExecutionEndpoint == "" {
+				r.Group, r.Tag = "gone", "ended"
+			}
 		case end == "" && t.Parked != "":
 			// parked while it waited on you (E101): its window closed, its row stays
 			// in 等你 — 接回 brings it back where it was
 			r.Group, r.Tag = "ask", "parked"
 			r.Why, r.WhyTone = boardWhy("parked", now)
-		case end == "" && t.Asked != "":
-			r.Group, r.Tag = "ask", "waiting_you"
 		case end == "" && started && b.Closed == 0:
 			r.Group, r.Tag, r.Lost = "queue", "not_seen", true
 		case end == "" && started:
@@ -553,6 +565,14 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			}
 			if r.Group == "gone" && end == store.TaskRefused {
 				r.Tag = "refused"
+			}
+		}
+		if r.Tag == "starting" && r.Agent == "" && t.WorkerID == "" && !started {
+			for _, agent := range []string{t.ResolvedAgent, t.RequestedAgent, t.Agent} {
+				if agent == "codex" || agent == "claude" || agent == "gemini" {
+					r.Agent, r.AgentBasis = agent, "planned"
+					break
+				}
 			}
 		}
 		r.PendingStart = r.Tag == "starting"
@@ -617,11 +637,14 @@ func boardRunning(state, wait string) bool {
 // name an already failed or settled start. No-session and reserved IDs are not
 // pending requests. Live observations take precedence in buildBoard above.
 func (s *Server) boardPendingStart(t *store.FleetTask) bool {
-	if t == nil || taskEnd(*t) != "" || t.CancelRequest != "" {
+	if t == nil || t.CancelRequest != "" {
 		return false
 	}
 	if t.OperationID == "" {
-		return t.State == store.TaskStarting
+		return t.AuthorityVersion == 0 && t.State == store.TaskStarting
+	}
+	if t.AuthorityVersion != 0 {
+		return s.Store.TaskStartPending(*t)
 	}
 	op, err := s.Store.FleetOperation(t.OperationID)
 	if err != nil || op.Action != "worker_start" || (op.TaskOwner != t.Owner && op.Actor != t.Owner) {

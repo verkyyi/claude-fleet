@@ -1412,7 +1412,9 @@ def finished(e):
 
 
 def id_display(groups):
-    """The ID column shows the code that tells the UNFINISHED apart (EPIC T644 C4):
+    """Tasks keep their written code (or T alias when the code is unavailable).
+    Legacy session-only rows retain their existing abbreviated display:
+    the ID column tells the UNFINISHED sessions apart (EPIC T644 C4):
     every open row but a finished one in 排队中 (done, or the producer's 已结束 —
     回收 D) is unfinished; each of those rows shows
     fleet_id.display_short over them (2 places, one more while another unfinished one
@@ -1425,6 +1427,12 @@ def id_display(groups):
     rows = [e for g in groups.values() for e in g if fi.is_fid(e.get("fid") or "")]
     live = {e["fid"] for e in rows if not finished(e)}
     for e in rows:
+        if e.get("task"):
+            code = e.get("task_code") or fi.task_code(e["task"]) or e["task"]
+            if code:
+                e["id"] = e["code"] = code
+                e["open_id"] = False
+                continue
         e["code"] = e.get("id") or ""
         e["open_id"] = e["fid"] in live
         try:
@@ -1453,7 +1461,7 @@ def id_conflicts(rows):
             continue
         for e in es:
             e["conflict"] = ", ".join(x["id"] for x in es if x is not e)
-            e["state"], e["sym"], e["group"] = "needs", "needs", "ask"
+            e["group"] = "ask"  # warning stays in details; do not invent a native question
             e["word"] = say("view_id_conflict")
 
 
@@ -2222,7 +2230,10 @@ def board_apply(board, groups, shut, gone, here, me):
             e["loop"] = r["loop"] is True
         if "native_wait" in r:
             e["native_wait"] = r["native_wait"]
-        e["needs_input"] = r.get("tag") in ("asking", "waiting_you")
+        e["needs_input"] = (r.get("state") or e.get("state")) in ("needs", "blocked")
+        e["task"] = r.get("task") or e.get("task") or ""
+        e["task_id"] = r.get("task_id") or ""
+        e["task_code"] = (r.get("code") or "") if r.get("task") else ""
         if "agent_basis" in r or "agent_words" in r:
             e["agent"] = r.get("agent") or ""
             e["agent_basis"] = r.get("agent_basis") or ""
@@ -2501,7 +2512,7 @@ def task_status(e):
     if e.get("lost"):
         return "quiet"
     state = e.get("state")
-    if e.get("needs_input") or e.get("ask") or state in ("needs", "blocked") or e.get("conflict"):
+    if state in ("needs", "blocked"):
         return "needs"
     if e.get("pending_start"):
         return "pending"

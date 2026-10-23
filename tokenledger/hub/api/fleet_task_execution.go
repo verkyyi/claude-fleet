@@ -267,7 +267,14 @@ func (s *Server) finishTaskStop(w http.ResponseWriter, r *http.Request, stopped 
 			"scope": "native_session", "delivery": op.Status, "operation": operationView(op)})
 		return
 	}
-	snapshot, err := s.Store.TaskExecutionSnapshot(stopped.ID, stopped.Owner)
+	// A stop that won before claim can prove the start never acquired execution
+	// authority, even while the node is offline. Keep this distinct from a native
+	// exit receipt and retain the endpoint/cancellation binding for cleanup.
+	snapshot, err := s.Store.TaskUnclaimedStop(stopped.ID, stopped.Owner, op.ID)
+	neverStarted := err == nil
+	if !neverStarted {
+		snapshot, err = s.Store.TaskExecutionSnapshot(stopped.ID, stopped.Owner)
+	}
 	if err != nil || snapshot.CancelRequest != op.ID {
 		// Exit or a newer explicit start can win after stop acceptance. Keep
 		// that durable acceptance as the response; never send the old stop with
@@ -286,7 +293,11 @@ func (s *Server) finishTaskStop(w http.ResponseWriter, r *http.Request, stopped 
 		op = latest
 		delivery = latest.Status
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"stop_requested": true, "execution_exit_confirmed": false, "delivery": delivery, "operation": operationView(op), "task_execution": snapshot})
+	out := map[string]any{"stop_requested": true, "execution_exit_confirmed": false, "delivery": delivery, "operation": operationView(op), "task_execution": snapshot}
+	if neverStarted {
+		out["execution_never_started"] = true
+	}
+	writeJSON(w, http.StatusAccepted, out)
 }
 
 func taskExecutionError(w http.ResponseWriter, err error) {
