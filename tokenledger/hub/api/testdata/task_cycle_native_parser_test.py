@@ -14,7 +14,9 @@ import unittest
 HERE = Path(__file__).resolve().parent
 BIN = HERE.parents[3] / 'bin'
 sys.path.insert(0, str(BIN))
-parse = runpy.run_path(str(HERE / 'task_cycle_native.py'))['native_turns']
+reader = runpy.run_path(str(HERE / 'task_cycle_native.py'))
+parse = reader['native_turns']
+history_outputs = reader['history_read_outputs']
 text_blocks = runpy.run_path(str(BIN / '.fleet-transfer.py'))['text_blocks']
 SEED = ('This is a bounded isolated acceptance fixture. Do not use subagents, external network, git push, deployment or MCP. '
         'First turn: make no tool calls and reply exactly: first-nonce FACT=private-fact. '
@@ -68,6 +70,45 @@ class NativeTranscript(unittest.TestCase):
         rows = [r for r in self.rows if r['payload']['type'] != 'task_complete']
         self.assertEqual(self.read(rows)['completed_turns'], 0)
         self.assertEqual(self.read(rows)['nonce_replies']['first-nonce'], 0)
+
+
+class NativeHistoryOutput(unittest.TestCase):
+    path = '/fixture/exact-original-rollout.jsonl'
+
+    def rows(self, output, call_id='read-original', path=None):
+        return [dict(type='response_item', payload=dict(type='custom_tool_call', call_id='read-original',
+                    input='read ' + (self.path if path is None else path))),
+                dict(type='response_item', payload=dict(type='custom_tool_call_output', call_id=call_id, output=output))]
+
+    def proof(self, output, **kwargs):
+        return history_outputs(self.rows(output, **kwargs), self.path, 'first-nonce', 'private-fact')
+
+    def block(self, code=0, output='first-nonce private-fact'):
+        return dict(type='text', text=json.dumps(dict(exit_code=code, output=output)))
+
+    def test_native_blocks_and_legacy_string(self):
+        self.assertEqual(len(self.proof([dict(type='text', text='Script completed'), self.block()])), 1)
+        self.assertEqual(len(self.proof(self.block()['text'])), 1)
+        self.assertEqual(len(self.proof('Wall time: 0.1 seconds\nProcess exited with code 0\nFinal output:\nfirst-nonce private-fact')), 1)
+
+    def test_failed_result_cannot_quote_success(self):
+        quoted = json.dumps(dict(exit_code=0, output='first-nonce private-fact'))
+        self.assertEqual(self.proof([self.block(1, quoted)]), [])
+        self.assertEqual(self.proof('Process exited with code 1\nFinal output:\nProcess exited with code 0\nfirst-nonce private-fact'), [])
+        self.assertEqual(self.proof([dict(type='text', text=quoted[:-1])]), [], 'truncated JSON is not a receipt')
+        self.assertEqual(self.proof([self.block(False)]), [], 'boolean false is not integer exit_code zero')
+
+    def test_success_and_markers_cannot_cross_blocks(self):
+        self.assertEqual(self.proof([self.block(output='first-nonce'), self.block(output='private-fact')]), [])
+        self.assertEqual(self.proof([self.block(output='unrelated'), self.block(1)]), [])
+
+    def test_matching_call_and_exact_source_required(self):
+        self.assertEqual(self.proof([self.block()], call_id='another-call'), [])
+        self.assertEqual(self.proof([self.block()], path='/fixture/other-rollout.jsonl'), [])
+        self.assertEqual(self.proof([self.block()], path=self.path + '.unrelated'), [])
+        rows = self.rows([self.block()])
+        rows.pop(0)
+        self.assertEqual(history_outputs(rows, self.path, 'first-nonce', 'private-fact'), [])
 
 
 if __name__ == '__main__':

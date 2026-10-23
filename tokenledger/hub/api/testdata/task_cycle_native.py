@@ -84,6 +84,50 @@ def native_turns(rows, expected_input, nonces, fact, text_blocks):
                 context_fact_seen=any(a == n + ' FACT=' + fact for n in nonces for a in answers))
 
 
+def successful_tool_outputs(value):
+    """Decode the result envelope, never an exit code quoted in tool output."""
+    blocks = value if isinstance(value, list) else [value]
+    for block in blocks:
+        text = block.get('text', '') if isinstance(block, dict) else block
+        if not isinstance(text, str):
+            continue
+        try:
+            result = json.loads(text)
+        except ValueError:
+            # Older native exec transcript: status belongs to the header before
+            # Final output, so a quoted success line in file contents cannot win.
+            header, separator, output = text.partition('Final output:\n')
+            status = re.findall(r'^(?:Process exited with code|Exit code:) (-?\d+)\s*$', header, re.M)
+            if separator and status == ['0']:
+                yield output
+            continue
+        if (isinstance(result, dict) and type(result.get('exit_code')) is int
+                and result['exit_code'] == 0 and isinstance(result.get('output'), str)):
+            yield result['output']
+
+
+def history_read_outputs(rows, old_path, first_nonce, fact):
+    if not old_path or not first_nonce or not fact:
+        return []
+    source = re.compile(r'(?<![A-Za-z0-9_./~-])' + re.escape(old_path) + r'(?![A-Za-z0-9_./~-])')
+    calls = {r['payload'].get('call_id') for r in rows
+             if r.get('type') == 'response_item'
+             and r.get('payload', {}).get('type') in ('function_call', 'custom_tool_call')
+             and source.search(json.dumps(r['payload'].get('arguments', r['payload'].get('input', ''))))}
+    calls.discard(None)
+    confirmed = []
+    for row in rows:
+        item = row.get('payload', {})
+        if (row.get('type') != 'response_item'
+                or item.get('type') not in ('function_call_output', 'custom_tool_call_output')
+                or item.get('call_id') not in calls):
+            continue
+        for output in successful_tool_outputs(item.get('output', '')):
+            if first_nonce in output and fact in output:
+                confirmed.append(digest(output.encode()))
+    return confirmed
+
+
 class Probe:
     def __init__(self, data):
         self.original = dict(os.environ)
@@ -319,25 +363,8 @@ class Probe:
             fact = self.manifest.get('fact', '')
             out.update(native_turns(rows, self.expected_inputs.get(snap['operation_id'], ''),
                                     self.manifest.get('nonces', []), fact, self.text_blocks))
-            old_path = self.manifest.get('first_transcript', '')
-            calls = {r['payload'].get('call_id') for r in rows
-                     if r.get('type') == 'response_item'
-                     and r.get('payload', {}).get('type') in ('function_call', 'custom_tool_call')
-                     and old_path and old_path in json.dumps(r['payload'].get('arguments', r['payload'].get('input', '')))}
-            outputs = [r.get('payload', {}) for r in rows if r.get('type') == 'response_item'
-                       and r.get('payload', {}).get('type') in ('function_call_output', 'custom_tool_call_output')
-                       and r['payload'].get('call_id') in calls]
-            first_nonce = self.manifest.get('nonces', [''])[0]
-            confirmed = []
-            for item in outputs:
-                value = item.get('output', '')
-                text = value if isinstance(value, str) else json.dumps(value)
-                # Match the actual call_id and successful tool result containing
-                # the first turn's private markers. A path in argv or the final
-                # answer alone is not proof that history was read successfully.
-                successful = re.search(r'"exit_code"\s*:\s*0|Process exited with code 0|Exit code: 0', text)
-                if successful and first_nonce and fact and first_nonce in text and fact in text:
-                    confirmed.append(digest(text.encode()))
+            confirmed = history_read_outputs(rows, self.manifest.get('first_transcript', ''),
+                                             self.manifest.get('nonces', [''])[0], fact)
             out['exact_history_read_confirmed'] = bool(confirmed)
             out['history_read_output_hashes'] = confirmed
         with self.control.store.connect() as db:
