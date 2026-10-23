@@ -722,6 +722,10 @@ def open_id(fid, fields, extra_known=()):
     """The spawn's `opened` (idempotent: a second one only fills what the first left)."""
     short = short_for(fid, known_ids(extra_known))
     fields = dict(fields)
+    # compat-1v: 下一批删 — old callers may still pass Fleet task ancestry.
+    # Keep historical events readable; never copy their relationship to an ID.
+    for key in ("parent", "origin", "origin_fid", "origin_wid", "origin_gen", "origin_retired"):
+        fields.pop(key, None)
     explicit_title = clean_title(fields.get("title"))
     fields["title"] = explicit_title or "会话 " + short
     fields.setdefault("title_source", "initial" if explicit_title else "default")
@@ -778,11 +782,10 @@ def resolve_open(addr, open_set, extra_known=()):
 # or a native process: a result is an event on the ledger (several are fine — the
 # newest counts, S2), a window the fleet closed without one has 已退出 (S7), and a
 # native segment live in two windows at once is a conflict in both until one of
-# them closes (S9). A message or a child's report for an ID that has closed goes
-# to its successor — the newest live ID whose `prev` it is, down the chain (S8:
-# 「从这一段继续」 opens a new ID with `prev`) — else up its `parent`, else nobody
-# here: the caller hands it to the person's reminder. A /clear, /compact, handoff
-# or agent switch never changes the ID, so none of them loses a report.
+# them closes (S9). A message for a closed ID may reach its successor — the
+# newest live ID whose `prev` continues it. Historical Parent links are read-only
+# and never redirect delivery. A /clear, /compact, handoff or agent switch keeps
+# the same ID.
 #
 # `live` is the set of IDs a live window carries (fleet-id.sh scans the sockets
 # into FLEET_ID_LIVE); None = not known (no tmux to ask) — then an ID is live
@@ -893,9 +896,9 @@ def successors(fid, idx):
 
 
 def route(fid, live, idx=None):
-    """Who takes what was meant for fid → (ID, how): how = self · successor · parent ·
-    '' (nobody here: the person's reminder) · unknown (no ledger here — the caller's
-    old road, e.g. another machine's ID)."""
+    """Resolve the same conversation: self, a prev successor, or nobody.
+    Historical Parent links never redirect a message to a different task.
+    unknown means no local ledger (e.g. an ID on another machine)."""
     idx = idx if idx is not None else _index()
     if fid not in idx:
         return fid, "unknown"
@@ -914,20 +917,12 @@ def route(fid, live, idx=None):
                 return got
         return ""
 
-    cur, how = fid, "self"
-    while cur and cur not in seen:
-        seen.add(cur)
-        rec = idx.get(cur)
-        if rec is None:
-            return cur, "unknown"
-        if alive(cur, rec, live):
-            return cur, how
-        nxt = down(cur)
-        if nxt:
-            return nxt, "successor" if how == "self" else how
-        cur, how = rec["opened"].get("parent", ""), "parent"
-        if cur and not is_fid(cur):
-            cur = ""
+    seen.add(fid)
+    if alive(fid, idx[fid], live):
+        return fid, "self"
+    nxt = down(fid)
+    if nxt:
+        return nxt, "successor"
     return "", ""
 
 
@@ -972,11 +967,11 @@ def _task_parent(task):
 
 
 def parents_cmd(apply, only=()):
-    """Backfill (EPIC T497 C9): an ID opened for a task T<n> whose `opened` names no
-    parent — a `task` dispatch before C9 — takes the parent its record names. Dry
-    unless apply; an applied one is a fill-only `opened` (the hub folds it the same
-    way) and is pushed. rc 3 no hub here."""
-    n = done = 0
+    """Read old task relationships; the old backfill mutation is retired."""
+    if apply:
+        print("fleet-id: PARENT_RETIRED: Parent backfill is disabled", file=sys.stderr)
+        return 2
+    n = 0
     for fid in (only or ledger_ids()):
         o = fold(read(fid))["opened"]
         task = o.get("task", "")
@@ -995,12 +990,8 @@ def parents_cmd(apply, only=()):
         if not par or par == fid:
             print("%s  %s  -  (the record names no parent session)" % (code, task))
             continue
-        if apply:
-            open_id(fid, {"parent": par})
-            push_later(fid)
-            done += 1
-        print("%s  %s  → %s%s" % (code, task, par, "" if apply else "  (dry)"))
-    print("%d without a parent · %d %s" % (n, done, "filled" if apply else "to fill (--apply)"))
+        print("%s  %s  → %s  (historical, read only)" % (code, task, par))
+    print("%d without a parent · read only" % n)
     return 0
 
 
@@ -1305,8 +1296,7 @@ def next_attempt(fid, window=""):
 def continue_plan(fid, seg=None):
     """What 「从这一段继续」 (a new window, a new ID, prev = fid — S8) or 「恢复这个窗口」
     (the same ID, its newest segment) resumes: {native, agent, seg, worktree, repo, title,
-    task, parent} — the record and the parent ride along (C18): a driver's successor
-    still owns its batch."""
+    task}. The task and native segment continue; old task ancestry does not."""
     rec = fold(read(fid))
     segs = rec["segments"]
     if not segs:
@@ -1322,7 +1312,7 @@ def continue_plan(fid, seg=None):
         placement = landing(fid, s["native"])
     return {"id": fid, "seg": n, "native": s["native"], "agent": s["agent"], "worktree": o.get("worktree", ""),
             "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None,
-            "task": o.get("task", ""), "parent": o.get("parent", ""), **placement}
+            "task": o.get("task", ""), **placement}
 
 
 

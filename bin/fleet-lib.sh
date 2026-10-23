@@ -5589,44 +5589,8 @@ fleet_epic_parent_key() {
   return 1
 }
 
-# fleet_origin_gate <sess> <explicit> <origin> [<origin-wid>] — a spawn's parent
-# must be a LIVE session (issue #1355, EPIC #1645 C2). Run by both spawners
-# (dash-issue-session.sh, dash-raw-session.sh) after fleet_origin_canon, before any
-# window exists. rc 0 = go; rc 4 = refuse, the reason on stdout (the caller says
-# it through its own refuse/exit 4). <explicit> is the caller's RAW --origin
-# (before canon: `hub` canonicalizes to empty), <origin> the canonical value.
-#   - Inside tmux with no $TMUX_PANE (fleet_pane_lost) and no --origin: detection
-#     read nothing, so an empty @origin here is not "the hub", it is "unknown" — the
-#     orphan #1355 found (a reset hub env, rc 0, no child-report ever delivered).
-#     `--origin hub` (the operator), `--origin <key>` or a pane says who it is.
-#   - A key (`[<slug>:]issue-<N>` / `scratch-<N>`): fleet_worker_locate must place
-#     it — `local` (a window answers here) or `remote` (the hub sees it on another
-#     machine; <origin-wid> is the address then). `unknown` (closed, never was, or
-#     ambiguous) ⇒ refuse: a report to it could only be ledgered, never delivered.
-#   - <origin-wid> given: the parent is on ANOTHER machine, which placed this
-#     spawn here and ran this same gate before asking — trusted, not re-asked
-#     (a node with no hub session cache could only answer `unknown`).
-#   - Empty (hub / headless), the literals (`autofill`, `bridge`) and a free label
-#     (a #516 source-fleet name) pass: none of them is a session to report to.
-fleet_origin_gate() {
-  local sess="${1:-}" ex="${2:-}" o="${3:-}" ow="${4:-}" v
-  [ "${FLEET_ORIGIN_GATE:-1}" = 0 ] && return 0   # seam: a test whose subject is not the parent
-  [ -n "$ow" ] && return 0
-  # `--origin hub` is the operator's own word.
-  [ "$ex" = hub ] && return 0
-  if [ -z "$ex" ] && fleet_pane_lost; then
-    printf 'cannot tell who is spawning — $TMUX is set but $TMUX_PANE is not; run it from a scratch/worker pane, or pass --origin hub (you, the operator) / --origin <key>'
-    return 4
-  fi
-  case "$o" in
-    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;;
-    *) return 0 ;;
-  esac
-  v=$(fleet_worker_locate "wid:$o" "$sess" 2>/dev/null)
-  case "$v" in local\ *|remote\ *) return 0 ;; esac
-  printf '上级 %s 不是活着的会话 (parent %s is not a live session) — no window answers to it here and the hub cannot place it; pass --origin hub to spawn it as your own' "$o" "$o"
-  return 4
-}
+# Compatibility symbol for old callers. Parent identity no longer gates starts.
+fleet_origin_gate() { return 0; }
 
 # fleet_origin_canon <explicit> <detected> [<target-sess>] [<src-sess>] — the ONE
 # provenance decision both spawners make (dash-issue-session.sh, dash-raw-session.sh);
@@ -6990,37 +6954,8 @@ say("failed:unconfirmed", 5, "still %s on the node after %ss — not counted as 
   return "$rc"
 }
 
-# fleet_stamp_origin_wid <sess> <window> <origin> [<sock>] — beside the @origin key a spawn
-# stamps, record the PARENT's worker_id as @origin_wid, so a child that ends up on
-# another machine can still address its parent. Only for a key-shaped origin (not
-# empty/hub, autofill, bridge or a cross-fleet name) and only when this machine
-# has a fleet UUID; otherwise nothing is set — the one-machine case, as before.
-# Since issue #1646 the parent is named by its IDENTITY: the key is resolved to the
-# parent's window NOW, while it is fresh (fleet_win_for_key — the same rails), and
-# that window's @fleet_id is stamped as @origin_fid — with or without a fleet UUID,
-# since a rename on one machine needs no hub — and @origin_wid becomes
-# `<fleet UUID>/<fleet_id>`. A key no single live window answers to keeps the old
-# `<fleet UUID>/<key>` and no @origin_fid: resolution falls back to the key.
-fleet_stamp_origin_wid() {
-  local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" pf ow
-  [ -n "$w" ] && _fleet_wid_split "$o" >/dev/null || return 0
-  # A parent with no key of its own is named by its identity already (issue #4341):
-  # it IS @origin_fid, and the worker_id is its fleet's UUID + it — only while a
-  # window here wears it (one from elsewhere came with its own --origin-wid).
-  if fleet_is_fid "$o"; then
-    fleet_win_for_fid "$o" "$k" >/dev/null 2>&1 || return 0
-    pf=$o
-  else pf=$(_fleet_key_fid "$s" "$o" "$k") || pf=''
-  fi
-  if [ -n "$pf" ]; then
-    if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_fid "$pf" 2>/dev/null
-    else _fleet_tmux "$s" set-window-option -t "$w" @origin_fid "$pf" 2>/dev/null; fi
-  fi
-  ow=$(fleet_key_wid "$s" "$o" "$k" "$pf") || return 0
-  if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_wid "$ow" 2>/dev/null
-  else _fleet_tmux "$s" set-window-option -t "$w" @origin_wid "$ow" 2>/dev/null; fi
-  return 0
-}
+# compat-1v: 下一批删 — old hooks may call fleet_stamp_origin_wid; Parent writes are retired.
+fleet_stamp_origin_wid() { return 0; }
 
 # fleet_spawn_parent_id <sess> <origin> <origin_wid> [<sock>] → the spawning
 # session's ID, the `parent` its child's ID ledger opens with (EPIC T497 C9): the
@@ -7171,76 +7106,9 @@ fleet_restore_map_prune() {
     END { flush() }' "$mf" "$mf" 2>/dev/null
 }
 
-# fleet_origin_heal <sess> [<sock>] — keep every child's @origin the key its
-# parent answers to NOW (issue #1646). The parent is found by the child's
-# @origin_fid; when that window's key is no longer what @origin says (a scratch
-# bound to an issue by an older bind, or the dash's rebind), @origin — and its
-# @origin_gen, which belonged to the old key — are rewritten. So every reader that
-# joins on keys (the sidebar's nesting, the k/N badge, fleet-children.sh, the
-# report digest) follows the parent without learning about identities. A child
-# with no @origin_fid, or whose parent is not live here, is left alone — except a
-# BARE @origin (issue #1939), stamped before keys always carried the repo: in a
-# fleet of one repo it is that repo's, so it is rewritten `<slug>:<key>` with its
-# @origin_gen kept (the generation is the same key's, read through the alias).
-# Prints one `healed <window> <old> → <new>` line per rewrite; never fails.
-fleet_origin_heal() {
-  local sess="${1:-}" sock="${2:-}" wl line wid rest wsess f of o ids='' pw pk one=''
-  [ -n "$sess" ] || return 0
-  if [ -n "$sock" ]; then
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@fleet_id}|#{@origin_fid}|#{@origin}' tmux -L "$sock")
-  else
-    wl=$(fleet_lw '#{window_id}|#{session_name}|#{@fleet_id}|#{@origin_fid}|#{@origin}' _fleet_tmux "$sess")
-  fi
-  [ -n "$wl" ] || return 0
-  # A bare @origin anywhere ⇒ the one repo's prefix, read once (nothing in a 0/2+ repo fleet).
-  case "$wl" in *'|issue-'[0-9]*|*'|scratch-'[0-9]*)
-    one=$(fleet_key_qualify "$sess" issue-0)
-    case "$one" in ?*:issue-0) one=${one%issue-0} ;; *) one='' ;; esac ;;
-  esac
-  if [ -z "$one" ]; then
-    case "$wl" in *'|'????????-????-????-????-????????????'|'*) ;; *) return 0 ;; esac   # nobody has an @origin_fid
-  fi
-  while IFS= read -r line; do               # pass 1: identity → window, this fleet's own
-    [ -n "$line" ] || continue
-    wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
-    f=${rest%%|*}
-    [ "$wsess" = "$sess" ] && [ -n "$f" ] && ids="$ids$f $wid"$'\n'
-  done <<EOF
-$wl
-EOF
-  while IFS= read -r line; do               # pass 2: each child whose parent's key moved
-    [ -n "$line" ] || continue
-    wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
-    rest=${rest#*|}; of=${rest%%|*}; o=${rest#*|}
-    [ "$wsess" = "$sess" ] || continue
-    pk=''
-    if fleet_is_fid "$of" \
-       && pw=$(printf '%s' "$ids" | awk -v f="$of" '$1 == f { print $2; n++ } END { exit n != 1 }') \
-       && [ "$pw" != "$wid" ]; then
-      pk=$(fleet_window_okey "$sess" "$pw" 2>/dev/null)
-    fi
-    if [ -z "$pk" ] && [ -n "$one" ]; then
-      case "$o" in issue-[0-9]*|scratch-[0-9]*) pk="$one$o" ;; esac
-    fi
-    [ -n "$pk" ] && [ "$pk" != "$o" ] || continue
-    if [ -n "$sock" ]; then
-      tmux -L "$sock" set-window-option -t "$wid" @origin "$pk" 2>/dev/null || continue
-    else
-      _fleet_tmux "$sess" set-window-option -t "$wid" @origin "$pk" 2>/dev/null || continue
-    fi
-    if [ "$pk" != "$one$o" ]; then           # a new key, not the old one spelled whole
-      if [ -n "$sock" ]; then tmux -L "$sock" set-window-option -u -t "$wid" @origin_gen 2>/dev/null
-      else _fleet_tmux "$sess" set-window-option -u -t "$wid" @origin_gen 2>/dev/null; fi
-      fleet_stamp_origin_gen "$sess" "$wid" "$pk" "$sock"
-    fi
-    printf 'healed %s %s → %s\n' "$wid" "${o:--}" "$pk"
-  done <<EOF
-$wl
-EOF
-  return 0
-}
+# compat-1v: 下一批删 — old hooks may call fleet_origin_heal; Parent writes are retired.
+fleet_origin_heal() { return 0; }
 
-# ---- across machines: the hub outbox + the worker map (issue #1421, EPIC #1419 C2) --
 # A worker whose parent — or whose message's target — lives on another machine
 # reaches it through the hub, and the only door to the hub on this machine is the
 # ccquota agent's control channel. So nothing here dials the network: a relay is a
@@ -7552,39 +7420,14 @@ fleet_key_gen_stale() {
   [ "$3" != "$(fleet_key_gen "${1:-}" "${2:-}")" ]
 }
 
-# fleet_stamp_origin_gen <sess> <window> <origin> [<sock>] — beside @origin, the
-# parent key's current generation as @origin_gen. Nothing for generation 0 (no
-# `.gen` line): the window is stamped exactly as it always was.
-fleet_stamp_origin_gen() {
-  local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" g
-  [ -n "$w" ] || return 0
-  case "$o" in issue-*|scratch-*|?*:issue-*|?*:scratch-*) ;; *) return 0 ;; esac
-  g=$(fleet_key_gen "$s" "$o")
-  [ -n "$g" ] || return 0
-  if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_gen "$g" 2>/dev/null
-  else _fleet_tmux "$s" set-window-option -t "$w" @origin_gen "$g" 2>/dev/null; fi
-  return 0
-}
+# compat-1v: 下一批删 — old hooks may call fleet_stamp_origin_gen; Parent writes are retired.
+fleet_stamp_origin_gen() { return 0; }
 
-# fleet_scratch_gen_new <sess> <slug> <worktree> — mint the generation of a freshly
-# allocated scratch under the key a spawn from it will stamp as @origin
-# (fleet_origin_key): `<repo-slug>:scratch-N` in every fleet (issue #1939) — and
-# nothing when the worktree's repo cannot be told.
-#
-# A child of the RETIRED generation may still be running (its parent closed, its
-# own work did not). Every reader of @origin — the dash and sidebar nesting,
-# fleet-children.sh, the peer channel, the report — would take the new holder for
-# its parent, so its link moves aside here: `@origin_retired <key>#<old-gen>`, and
-# @origin / @origin_wid / @origin_gen are unset. It renders as a root, and its
-# report goes to the retired book (fleet-report-parent.sh). The new holder was
-# allocated a moment ago, so no window can be ITS child yet.
-# A child whose @origin_fid the ID ledger knows is NOT moved aside (T660): its
-# parent is that ID, so @origin names the ID itself (the form a keyless parent's
-# children carry) — never the new holder, never the retired book — and its report
-# finds the parent, its successor or its own parent by ID (fleet-report-parent.sh).
-# Moving it aside lost every batch report whose plan-page parent had closed.
+# fleet_scratch_gen_new <sess> <slug> <worktree> — preserve generation allocation
+# and archive an older scratch's ledger. Retired Parent metadata on live windows
+# is historical input only and is never repaired or re-pointed here.
 fleet_scratch_gen_new() {
-  local r key old sock w o of al idd
+  local r key
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
   r=$(fleet_worktree_repo "$1" "${3:-}"); r=${r%%$'\t'*}
   if [ -n "$r" ]; then key="$(fleet_slug "$r"):$2"
@@ -7592,24 +7435,8 @@ fleet_scratch_gen_new() {
   fi
   # Still bare: 2+ repos and the worktree's unknown ⇒ no key; NO repo ⇒ bare is the key.
   case "$key" in ?*:*) ;; *) [ -z "$(fleet_repos "$1")" ] || return 0 ;; esac
-  old=$(fleet_key_gen "$1" "$key"); [ -n "$old" ] || old=0
-  al=$(fleet_key_alias "$1" "$key")             # a child stamped bare before #1939 is one too
   fleet_key_gen_new "$1" "$key" >/dev/null || return 0
-  sock=$(fleet_socket "$1")
-  [ -n "$sock" ] || return 0
-  idd=${FLEET_ID_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/ids}
-  fleet_lw '#{window_id}|#{@origin}|#{@origin_fid}' tmux -L "$sock" | while IFS='|' read -r w o of; do
-    [ -n "$w" ] && { [ "$o" = "$key" ] || { [ -n "$al" ] && [ "$o" = "$al" ]; }; } || continue
-    if fleet_is_fid "$of" && [ -f "$idd/$of.ndjson" ]; then
-      tmux -L "$sock" set-window-option -t "$w" @origin "$of" \; \
-        set-window-option -u -t "$w" @origin_gen >/dev/null 2>&1
-      continue
-    fi
-    tmux -L "$sock" set-window-option -t "$w" @origin_retired "$key#$old" \; \
-      set-window-option -u -t "$w" @origin \; \
-      set-window-option -u -t "$w" @origin_wid \; \
-      set-window-option -u -t "$w" @origin_gen >/dev/null 2>&1
-  done
+  # Keep generation/history archives, without rewriting any running session.
   return 0
 }
 

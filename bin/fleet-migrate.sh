@@ -18,7 +18,7 @@
 # a shell left to type a relaunch into. This script embraces the hook instead:
 #
 #   1. read everything about the window FIRST (name, cwd, @issue/@raw/@worktree/
-#      @origin/@wid, state) and the session id off the Claude Code registry
+#      @wid, state) and the session id off the Claude Code registry
 #      (~/.claude/sessions/<pid>.json — exact, not "newest transcript");
 #   2. ask Claude to exit — `/exit` typed at the prompt after an Escape (which also
 #      cancels the "Usage limit reached · continuing automatically" wait, the very
@@ -110,11 +110,10 @@ ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
 LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: a fake launcher
 # The window options a moved session keeps besides its identity (issue #2970) —
 # what the reapers (@reap_policy, @reap_hold, @pin, @epic, @test_identity), the
-# report chain (@origin_gen, @origin_retired) and
-# the lists (@task_line, @name_manual — issue #3317) read. @fleet_role rides
+# lists (@task_line, @name_manual — issue #3317) read. @fleet_role rides
 # apart: it defaults to worker. A hub task's record (@task, @task_flow — issue
 # #4974) rides too: its reapers and top bar read it off the window.
-MIGRATE_CARRY="@reap_policy @reap_origin @reap_keep_by @reap_unreported @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @task_line @name_manual @task @task_flow"
+MIGRATE_CARRY="@reap_policy @reap_origin @reap_keep_by @reap_unreported @reap_hold @pin @epic @test_identity @task_line @name_manual @task @task_flow"
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
@@ -412,18 +411,17 @@ migrate_one() {
 }
 
 migrate_one_body() {
-  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt origin hnd wrepo norepo nsid
+  local wid="$1" cpid="$2" label="$3" name cwd state raw iss wt hnd wrepo norepo nsid
   # One display-message per field — NOT a joined format split on a control byte:
   # tmux ≤3.4 prints a 0x1f in format output as the literal text `\037` (vis
   # escaping; 3.7 emits the byte), so a separator-based parse is not portable.
   name=$(wopt "$wid" '#{window_name}') || return 1
   cwd=$(wopt "$wid" '#{pane_current_path}'); state=$(wopt "$wid" '#{@claude_state}')
   raw=$(wopt "$wid" '#{@raw}'); iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
-  origin=$(wopt "$wid" '#{@origin}')
-  # The session's lifelong identity + its parent's (issue #1646) ride the move
+  # The session's lifelong identity (issue #1646) rides the move
   # verbatim: a new window is the SAME session, never a re-mint.
-  local fid ofid owid born
-  fid=$(wopt "$wid" '#{@fleet_id}'); ofid=$(wopt "$wid" '#{@origin_fid}'); owid=$(wopt "$wid" '#{@origin_wid}')
+  local fid born
+  fid=$(wopt "$wid" '#{@fleet_id}')
   born=$(wopt "$wid" '#{?@born,#{@born},#{window_created}}')   # its place on the list (#1750)
   # The window's repo identity (issue #789) rides the move like @issue/@worktree: a
   # new window without it would load the fleet's default repo, or lose the no-repo
@@ -639,6 +637,9 @@ migrate_one_body() {
       lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): the pane is not an idle shell — not typing"; skipped=$((skipped+1)); return 0
     fi
     TM clear-history -t "$wid" 2>/dev/null || :     # drop the old limit banner (stale-banner cascade guard)
+    for _parent_opt in @origin @origin_fid @origin_wid @origin_gen @origin_retired; do
+      TM set-window-option -u -t "$wid" "$_parent_opt" 2>/dev/null || :
+    done
     migrated_stamp "$wid" "$wall"
     SK -t "$wid" -l "$cmd" 2>/dev/null; SK -t "$wid" Enter 2>/dev/null
     nw="$wid"
@@ -666,11 +667,8 @@ migrate_one_body() {
     [ -n "$iss" ] && TM set-window-option -t "$nw" @issue "$iss" 2>/dev/null
     [ "$raw" = 1 ] && TM set-window-option -t "$nw" @raw 1 2>/dev/null
     [ -n "$wt" ] && TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
-    [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
     [ -n "$fid" ] && TM set-window-option -t "$nw" @fleet_id "$fid" 2>/dev/null
     case "$born" in ''|*[!0-9]*) ;; *) TM set-window-option -t "$nw" @born "$born" 2>/dev/null ;; esac
-    [ -n "$ofid" ] && TM set-window-option -t "$nw" @origin_fid "$ofid" 2>/dev/null
-    [ -n "$owid" ] && TM set-window-option -t "$nw" @origin_wid "$owid" 2>/dev/null
     [ -n "$wrepo" ] && TM set-window-option -t "$nw" @repo "$wrepo" 2>/dev/null
     if [ "$norepo" = 1 ]; then
       TM set-window-option -t "$nw" @norepo 1 2>/dev/null

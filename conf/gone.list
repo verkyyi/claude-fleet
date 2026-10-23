@@ -255,3 +255,10 @@ key FLEET_CHILD_REPORT T970
 key FLEET_CHILD_REPORT_BATCH_SECS T970
 key FLEET_AWAIT_STALL_SECS T970
 func tell_parent T970 bin/fleet-stream-resume.sh
+# T970: retired Parent routing and automatic result reminders.
+key FLEET_ORIGIN_GATE T970
+key FLEET_REAP_NUDGE_CMD T970
+key FLEET_ORPHAN_ALERT_CMD T970
+func agent_fallback T970 bin/fleet-peer-send.sh
+func _place_note T970 bin/dash-issue-session.sh
+func nudge T970 bin/fleet-cleanup-idle.py

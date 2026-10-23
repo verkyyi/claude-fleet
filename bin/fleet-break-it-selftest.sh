@@ -7738,6 +7738,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_parent_origin_retired() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
+    WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
+  }
+  WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
 drill_parent_report_retired() {
   local t0; t0=$(now); CAP=60
   python3 "$BIN/fleet-parent-retirement-selftest.py" >"$WORK/parent-retired.log" 2>&1 || {

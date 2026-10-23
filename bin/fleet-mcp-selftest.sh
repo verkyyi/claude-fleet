@@ -219,7 +219,7 @@ import json, sys
 rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 want = {10: 'unknown argument "force"', 11: "must be an integer", 12: 'missing required argument "issue"',
         13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "RETIRED",
-        17: "takes no arguments", 18: "agent:<name>, fid:<uuid> or parent", 19: "unknown tool",
+        17: "takes no arguments", 18: "agent:<name> or fid:<uuid>", 19: "unknown tool",
         20: "must be an integer", 21: "unknown tool"}
 for i, why in want.items():
     res = rows[i]["result"]
@@ -248,7 +248,7 @@ python3 - "$WORK/c" <<'PY' || fail "C: a tool's result is wrong" "$(cat "$WORK/c
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 for i, r in rows.items():
-    if i in (31, 35):
+    if i in (31, 35, 37):
         assert r.get("isError") and "RETIRED" in r["content"][0]["text"], (i, r)
     else:
         assert not r.get("isError"), (i, r)
@@ -270,12 +270,12 @@ assert sp["stdout"] == "spawned issue-12\n" and sp["stderr"] == "cap note\n", sp
 assert rows[34]["content"][0]["text"].startswith("exit 2 · dash-issue-session.sh"), rows[34]
 assert rows[35]["isError"]
 assert rows[36]["structuredContent"]["receipt"] == "sent -> issue:99 (hello child)", rows[36]
-assert rows[37]["structuredContent"]["receipt"] == "sent -> @77 (hello parent)", rows[37]
+assert rows[37]["isError"] and "PARENT_RETIRED" in rows[37]["content"][0]["text"], rows[37]
 PY
 grep -qx 'dash-issue-session.sh 12 --repo acme/lib' "$LOG" || fail "C: spawn ran the wrong argv" "$(cat "$LOG")"
 ! grep -q '^fleet-await.sh' "$LOG" || fail 'C: retired await ran a script'
 : # child classification is historical; the retired children handler runs nothing
-grep -qx 'fleet-peer-send.sh issue:99 -' "$LOG" && grep -qx 'fleet-peer-send.sh @77 -' "$LOG" \
+grep -qx 'fleet-peer-send.sh issue:99 -' "$LOG" && ! grep -q '^fleet-peer-send.sh @77 ' "$LOG" \
   || fail "C: send ran the wrong argv" "$(cat "$LOG")"
 [ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] && [ "$(grep -c '^fleet-await.sh' "$LOG")" = 0 ] \
   || fail "C: a write tool ran more than once" "$(cat "$LOG")"
@@ -369,7 +369,7 @@ python3 - "$WORK/h" <<'PY' || fail "H: a 报问记合 tool's result is wrong" "$
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 for i, r in rows.items():
-    if i in (31, 35):
+    if i in (31, 35, 37):
         assert r.get("isError") and "RETIRED" in r["content"][0]["text"], (i, r)
     else:
         assert not r.get("isError"), (i, r)
@@ -732,7 +732,7 @@ python3 - "$WORK/j2" <<'PY' || fail "L: a C9 tool's result is wrong" "$(cat "$WO
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 for i, r in rows.items():
-    if i in (31, 35):
+    if i in (31, 35, 37):
         assert r.get("isError") and "RETIRED" in r["content"][0]["text"], (i, r)
     else:
         assert not r.get("isError"), (i, r)

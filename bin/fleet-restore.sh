@@ -903,28 +903,12 @@ restore() {
           case "$_dr" in ?*/?*) tmux -L "$sock" set-window-option -t "$nw" @desk 1 2>/dev/null
                                 tmux -L "$sock" set-window-option -t "$nw" @repo "$_dr" 2>/dev/null ;; esac ;;
         esac
-        # Its parent's worker_id (issue #3439): the map's OWID row, by identity —
-        # and the parent's identity beside it when the worker_id carries one.
-        case "$wtag" in WIN:?*)
-          _ow=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "OWID" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
-          case "$_ow" in ?*/?*)
-            case "$_ow" in *[!A-Za-z0-9._:/-]*) ;; *)
-              tmux -L "$sock" set-window-option -t "$nw" @origin_wid "$_ow" 2>/dev/null
-              fleet_is_fid "${_ow#*/}" && tmux -L "$sock" set-window-option -t "$nw" @origin_fid "${_ow#*/}" 2>/dev/null ;;
-            esac ;;
-          esac ;;
-        esac
         # Pinned (issue #3517): the map's PIN row, by identity.
         case "$wtag" in WIN:?*)
           awk -F'\t' -v f="${wtag#WIN:}" '$1 == "PIN" && $2 == f { found = 1; exit } END { exit !found }' "$mf" 2>/dev/null \
             && tmux -L "$sock" set-window-option -t "$nw" @pin 1 2>/dev/null ;;
         esac
         fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
-        # Re-stamp the spawn provenance too (issue #503) so a crash-restored
-        # worker keeps its dash grouping; old maps (pre-#503, 8-field WIN rows)
-        # leave $worigin empty → nothing stamped, exactly as before.
-        [ -n "${worigin:-}" ] && [ "$worigin" != "-" ] \
-          && tmux -L "$sock" set-window-option -t "$nw" @origin "$worigin" 2>/dev/null
         if [ "$wraw" = 1 ]; then
           tmux -L "$sock" set-window-option -t "$nw" @raw 1 2>/dev/null
           tmux -L "$sock" set-window-option -t "$nw" @worktree "$wpath" 2>/dev/null

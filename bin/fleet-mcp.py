@@ -772,6 +772,8 @@ def send_message(to, text, repo=None):
     if not isinstance(text, str) or not text.strip():
         raise Refused("text is required")
     target = to.strip()
+    if target == "parent":
+        raise Refused("PARENT_RETIRED: address the intended session explicitly; nothing sent")
     # `<slug>:issue-<N>` (issue #4761): the repo-qualified key fleet_win_for_key speaks —
     # its slug picks the repo, handed to the script as --repo.
     m = re.match(r"^([A-Za-z0-9._-]+):((?:issue|scratch)-[0-9]+)$", target)
@@ -787,11 +789,11 @@ def send_message(to, text, repo=None):
     fid = target[4:] if target.startswith("fid:") else target
     if FID_RE.match(fid):
         target = "wid:" + fid
-    if target != "parent" and not re.match(
+    if not re.match(
             r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}|[Tt]-[0-9A-Za-z]{4,26}"
             r"|#[A-Za-z][0-9A-Za-z]{3,25}|[A-Z][0-9A-Z]{3,25}"
             r"|wid:[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, an ID code (K3F9 / #K3F9), agent:<name>, fid:<uuid> or parent")
+        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, an ID code (K3F9 / #K3F9), agent:<name> or fid:<uuid>")
     is_issue = re.match(r"^(issue:|#|issue-)[0-9]+$", target) is not None
     if repo is not None:
         if not is_issue and not target.startswith("scratch-"):
@@ -801,8 +803,6 @@ def send_message(to, text, repo=None):
         # An issue number with no repo is the CALLER's repo's (issue #4761).
         r = caller_repo() if is_issue else ""
         argv_repo = ["--repo", r] if r else []
-    if target == "parent":
-        target = parent_window()
     result = run(["bash", str(BIN / "fleet-peer-send.sh")] + argv_repo + [target, "-"], input_text=text, check=False,
                  timeout=STATUS_TIMEOUT_S, env=hub_env(ASSERT_RELAY_TTL_S))
     # Exit 3 = queued (issue #1647): the peer cannot take it now; it is delivered
@@ -1338,10 +1338,10 @@ TOOLS = {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
                        "to is issue:<N> (in a fleet of several repos: narrowed by repo, else your own "
                        "window's repo), <slug>:issue-<N>, scratch-<N>, agent:<name> (the session started "
-                       "from that agent file; none running ⇒ your parent, else the person's reminder), "
+                       "from that agent file; no matching session is a refusal), "
                        "K3F9 / #k3f9 (a window by its ID's short code — bare in capitals, any case after #; the old T-<code> "
                        "for one version), "
-                       "fid:<uuid> (a session by its identity — one with no issue) or parent.",
+                       "fid:<uuid> (a session by its identity — one with no issue). Parent addressing is retired.",
         "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"},
                                                          "repo": REPO},
                         "required": ["to", "text"], "additionalProperties": False}}),

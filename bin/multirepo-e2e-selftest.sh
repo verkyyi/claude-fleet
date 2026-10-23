@@ -503,6 +503,9 @@ kP=$(inpane "$nP" fleet_origin_key)
 spawn 7 "$N" --origin "$kP" || fail "(n) spawn #7 as #12's child: $(cat "$WORK/err")"
 nC=$(tmux list-windows -t "$N" -F '#{@issue} #{window_id}' | awk '$1==7 {print $2; exit}')
 [ -n "$nC" ] && wait_rec "$nC" || fail "(n) #7 never reached claude"
+[ -z "$(opt "$nC" @origin)" ] || fail "(n) new spawn revived Parent metadata"
+# Existing historical metadata must remain unchanged when repos come and go.
+tmux set-window-option -t "$nC" @origin "$kP"
 # Seed pre-retirement history; no current report may create a parent ledger.
 nledger="$FLEET_CONF_DIR/fleets/$N/children/o-nu:issue-12.ndjson"
 mkdir -p "${nledger%/*}"

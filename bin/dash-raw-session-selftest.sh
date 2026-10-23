@@ -138,7 +138,6 @@ chmod +x "$WORK/fakebin/tmux"
 # <target-session>).
 run_raw() {
   : > "$NEWWIN_LOG"; : > "$OPTS_LOG"; : > "$DISPLAY_LOG"; : > "$SELECT_LOG"; : > "$RS_LOG"; : > "$PREFILL_LOG"
-  FLEET_ORIGIN_GATE=0 \
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR" \
   FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-0}" \
@@ -270,13 +269,13 @@ ok "L --name foo <target-session> spawns 'foo' into the target"
 
 # ==================== N: spawn provenance, and no spawning across fleets ======
 # A raw scratch spawned FROM a scratch pane (@worktree=…-scratch-5; the probe is
-# `@issue|@worktree|pane_current_path`) is stamped @origin=scratch-5.
+# `@issue|@worktree|pane_current_path`) creates no Parent relationship.
 # Spawning INTO another fleet from a fleet pane (the old cross-fleet handoff move,
 # #516) is refused since #980 — one fleet per login holds every repo. A caller whose
 # session is no fleet (no conf: an ad-hoc tmux) is headless and may name one.
 reset_scratch
 TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name same srcfleet
-grep -q 'SETOPT .*@origin scratch-5' "$OPTS_LOG" || fail "N same-fleet spawn from scratch-5 must stamp @origin scratch-5" "$(cat "$OPTS_LOG")"
+grep -qE '@origin(_fid|_wid|_gen)? ' "$OPTS_LOG" && fail "N a new session must not inherit Parent ancestry" "$(cat "$OPTS_LOG")"
 reset_scratch
 TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name adhoc dstfleet
 grep -q 'NEWWIN' "$NEWWIN_LOG" || fail "N a caller in a NON-fleet session (no conf) is headless — it may name a fleet" "$(cat "$WORK/err")"
@@ -299,14 +298,14 @@ reset_scratch
 # A caller that read the header and passed its worktree BASENAME (the live
 # `--origin cd-conductor-scratch-52` that left #4591 ungrouped on the monorepo
 # dash): canonicalized to the scratch KEY, never stamped verbatim.
-TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name typo --origin cd-conductor-scratch-5 srcfleet
-grep -qE 'SETOPT .*@origin scratch-5$' "$OPTS_LOG" || fail "N a worktree-basename --origin must canonicalize to scratch-5" "$(cat "$OPTS_LOG")"
+TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name typo --origin cd-conductor-scratch-5 --origin-wid old/11111111-1111-4111-8111-111111111111 --id-parent 11111111-1111-4111-8111-111111111111 srcfleet
+grep -qE '@origin(_fid|_wid|_gen)? ' "$OPTS_LOG" && fail "N a new session must not inherit Parent ancestry" "$(cat "$OPTS_LOG")"
 reset_scratch
 # An UNSTAMPED scratch caller (no @worktree — a fleet-restore-recreated window;
 # the live #4594 case): detected from the pane cwd alone.
 TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="||$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name bare srcfleet
-grep -qE 'SETOPT .*@origin scratch-5$' "$OPTS_LOG" || fail "N an unstamped scratch caller (cwd only) must still stamp @origin scratch-5" "$(cat "$OPTS_LOG")"
-ok "N provenance: same-fleet → scratch-N; into another fleet → refused (#980); a basename --origin canonicalizes; an unstamped caller is detected by cwd"
+grep -qE '@origin(_fid|_wid|_gen)? ' "$OPTS_LOG" && fail "N a new session must not inherit Parent ancestry" "$(cat "$OPTS_LOG")"
+ok "N legacy Parent inputs are inert; cross-fleet refusal remains"
 
 # ==================== M: dash ⌃s spawns instantly (--bg) =====================
 # ⌃s has NO name popup any more (issue #444): the keypress runs the cheap refusals

@@ -492,7 +492,6 @@ FLEET_NEEDS_PLAIN_SECS             knob: internal pacing/limit, safe in-code def
 FLEET_NEEDS_RECONCILE_SECS         knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
 FLEET_NEEDS_STRIKE_TTL             knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
 FLEET_NEEDS_TRACE                  knob: debug trace for the needs-reconcile spinner
-FLEET_ORIGIN_GATE                  seam: 0 skips the spawn's live-parent gate (fleet_origin_gate, issue #1355) — tests whose parent key has no window
 FLEET_PEER_MODE                    handoff: the sender's permission mode stamped on a cross-session message
 FLEET_PEER_QUEUE_ALERT_SECS        knob: seconds a send may read QUEUED before the cleanup tick says it in ⌘P 消息 (fleet-peer-queue.sh stale, 60; 0 = off, T756)
 FLEET_PEER_QUEUE_DEAD_SECS         knob: seconds a hub-relayed send may read QUEUED before it is called undeliverable — EXPIRED in the book, one audit line, never said again (fleet-peer-queue.sh stale / status, 86400; 0 = off, T761)
@@ -756,7 +755,6 @@ FLEET_MACOS_NOTIFY_CMD             seam: what the watcher runs instead of FLEET_
 FLEET_MACOS_WATCH_WALK             knob: internal pacing, how many of the newest runs the watcher reads jobs of looking for a macOS verdict (fleet-macos-watch.sh, default 25, #3143)
 FLEET_MACOS_BRANCH                 knob: the branch whose macOS runs the watcher reads (fleet-macos-watch.sh, default master, #2286)
 FLEET_MACOS_ALERT_CMD              seam: what the watcher runs instead of fleet-alerts.sh for its one alert (selftests, #3120)
-FLEET_ORPHAN_ALERT_CMD             seam: what fleet-report-parent.sh runs instead of fleet-alerts.sh for an orphaned report's one alert (selftests, #3117)
 FLEET_STABLE_MACOS_WORKFLOW        knob: the macOS workflow file fleet-release.sh reads for its CI line (default selftests-macos.yml, #2286)
 FLEET_RELEASE_MACHINES             knob: the machines `fleet release` waits on, comma-separated (default: /v1/nodes, else peer/machines — fleet-release.sh, #2483)
 FLEET_RELEASE_LOG                  path: the release log, one line per `fleet release` (default logs/release.log; the selftest's sandbox file, #2483)
