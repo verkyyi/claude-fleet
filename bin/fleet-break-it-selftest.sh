@@ -7109,10 +7109,12 @@ drill_native_exit_identity() {
     SessionExitTests.test_real_timezone_change_is_not_pid_reuse \
     SessionExitTests.test_real_zombie_birth_is_exit_without_executable_lookup \
     SessionExitTests.test_legally_archived_partial_epoch_can_exit \
+    SessionExitTests.test_real_live_pid_with_missing_procfs_cannot_prove_exit \
+    SessionExitTests.test_missing_kernel_record_requires_second_absence_probe \
     >"$WORK/native-exit-identity.log" 2>&1 || {
       WHY="native exit identity regression: $(tail -8 "$WORK/native-exit-identity.log")"; return 1;
     }
-  WHAT='真实存活 PID 的时区变化不能证明退出；内核僵尸可确认退出；历史部分启动不永久阻挡接续'
+  WHAT='真实存活 PID 的时区变化或不可见 procfs 不能证明退出；内核僵尸可确认退出；历史部分启动不永久阻挡接续'
   SECS=$(since "$t0")
 }
 

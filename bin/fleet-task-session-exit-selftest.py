@@ -255,6 +255,40 @@ class SessionExitTests(unittest.TestCase):
                 execution._exited_session_root(saved)
         self.assertIsNone(child.poll())
 
+    def test_real_live_pid_with_missing_procfs_cannot_prove_exit(self):
+        child = self.live_process()
+        saved = execution._kernel_process(child.pid)
+        # Exercise Linux's actual missing-/proc mapping with a real live PID;
+        # the fixture birth is Linux-shaped even when the host is Darwin.
+        linux_proof = dict(pid=child.pid, birth="Fri Oct 23 01:02:03 2026:12345")
+        with patch.object(native_proc.sys, "platform", "linux"), \
+                patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            for action in (execution._definitely_exited, execution._exited_session_root):
+                with self.subTest(action=action.__name__), self.assertRaises(FenceRefused):
+                    action(linux_proof)
+        self.assertIsNone(child.poll())
+        self.assertEqual(execution._kernel_process(child.pid), saved)
+
+    def test_missing_kernel_record_requires_second_absence_probe(self):
+        proof = self.proofs["agent"]
+        for action in (execution._definitely_exited, execution._exited_session_root):
+            for second in (None, PermissionError()):
+                # A live/reused PID or an inaccessible PID is still unknown.
+                with self.subTest(action=action.__name__, second=second), \
+                        patch.object(execution.os, "kill", side_effect=[None, second]) as probe, \
+                        patch.object(native_proc, "kernel_identity", side_effect=ProcessLookupError), \
+                        self.assertRaises(FenceRefused):
+                    action(proof)
+                self.assertEqual(probe.call_count, 2)
+            with patch.object(execution.os, "kill", side_effect=[None, ProcessLookupError()]) as probe, \
+                    patch.object(native_proc, "kernel_identity", side_effect=ProcessLookupError):
+                result = action(proof)
+            self.assertEqual(probe.call_count, 2)
+            if action is execution._definitely_exited:
+                self.assertTrue(result)
+            else:
+                self.assertEqual(result["evidence"], "pid_absent")
+
     def test_real_zombie_birth_is_exit_without_executable_lookup(self):
         child = self.live_process()
         saved = execution._kernel_process(child.pid)
@@ -343,8 +377,8 @@ class SessionExitTests(unittest.TestCase):
             with patch.object(Path, "read_text", side_effect=PermissionError), self.assertRaises(PermissionError):
                 native_proc.kernel_identity(123)
         self.register()
-        with patch.object(execution.os, "kill"), patch.object(native_proc, "kernel_identity", side_effect=ProcessLookupError):
-            self.assertEqual(self.prove()["launches"][0]["roots"][0]["evidence"], "pid_absent")
+        with patch.object(execution.os, "kill"), patch.object(native_proc, "kernel_identity", side_effect=ProcessLookupError), self.assertRaises(FenceRefused):
+            self.prove()
         with patch.object(execution.os, "kill"), patch.object(native_proc, "kernel_identity", side_effect=PermissionError), self.assertRaises(FenceRefused):
             self.prove()
 

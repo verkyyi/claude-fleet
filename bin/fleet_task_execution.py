@@ -668,7 +668,16 @@ def _session_root_exit_evidence(proof):
     try:
         current = kernel_identity(proof["pid"])
     except ProcessLookupError:
-        return dict(proof, evidence="pid_absent")
+        # Missing /proc data can mean hidden/unmounted procfs, not exit.
+        # Re-probe after the failed read; a live/reused or inaccessible PID
+        # cannot establish which registered process the missing record was.
+        try:
+            os.kill(proof["pid"], 0)
+        except ProcessLookupError:
+            return dict(proof, evidence="pid_absent")
+        except OSError as exc:
+            raise FenceRefused("native session root exit cannot be observed") from exc
+        raise FenceRefused("native session root birth/state cannot be observed")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise FenceRefused("native session root birth/state cannot be observed") from exc
     if current["birth_token"] != registered:
