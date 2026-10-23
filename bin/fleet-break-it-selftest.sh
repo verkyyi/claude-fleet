@@ -7738,6 +7738,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_result_overrides_native() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-view-id-selftest.sh" >"$WORK/task-native-display.log" 2>&1 || {
+    WHY="historical result replaced a native observation: $(tail -8 "$WORK/task-native-display.log")"; return 1;
+  }
+  WHAT='历史 blocked/failed/done/merged 与Task Outcome不改写当前原生状态；已收起会话仍保留历史结果'
+  SECS=$(since "$t0")
+}
+
 drill_parent_report_retired() {
   local t0; t0=$(now); CAP=60
   python3 "$BIN/fleet-parent-retirement-selftest.py" >"$WORK/parent-retired.log" 2>&1 || {
