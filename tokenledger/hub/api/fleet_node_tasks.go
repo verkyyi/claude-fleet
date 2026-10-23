@@ -369,7 +369,13 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v := views[0]
-		out := map[string]any{"task": v.FleetTask, "live": v.Live, "pr_state": v.PRState}
+		// Preserve the same empty controlled owner as the browser's task read.
+		// Node cleanup must not mistake a released controlled Task for legacy.
+		record := struct {
+			store.FleetTask
+			CurrentExecutionOwner *string `json:"execution_owner,omitempty"`
+		}{v.FleetTask, v.CurrentExecutionOwner}
+		out := map[string]any{"task": record, "live": v.Live, "pr_state": v.PRState}
 		if v.Progress != nil {
 			out["progress"] = v.Progress // claude-fleet#4957: a parent task's tick
 		}

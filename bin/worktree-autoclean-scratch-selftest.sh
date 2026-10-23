@@ -208,5 +208,46 @@ FLEET_TASK_CLOSED_CMD="$WORK/task-closed" run_wac >/dev/null
 [ -d "$WORK/base-scratch-11" ] || st_fail "TASK real run must KEEP the unknown task's scratch-11"
 st_pass "TASK the worktree's record decides: closed ⇒ prune (even a conversation / an open issue); open / unknown ⇒ keep"
 
+# Controlled Tasks are retained even when no native window exists yet. Exercise
+# the real record reader (copied so its relative transport is sandboxed), not
+# the legacy FLEET_TASK_CLOSED_CMD seam above.
+cp "$BIN/fleet_task_control.py" "$WORK/bin/fleet_task_control.py"
+cat > "$WORK/bin/fleet-task-record.sh" <<'TCJSON'
+#!/bin/bash
+[ "$1" = get ] || exit 9
+python3 - "$2" <<'PYJSON'
+import json,sys
+ref=sys.argv[1]
+t={"id":ref,"short":"CODE"+ref[1:],"authority_version":1,"generation":3,"state":"succeeded","outcome":"succeeded","operation_id":"new-start"}
+if ref=="T121": t.update(execution_endpoint="node-a",execution_owner="fleet/current")
+elif ref=="T131": t.update(execution_endpoint="node-a",execution_owner="",outcome="failed")
+elif ref=="T141": t.update(execution_owner="",cancel_request="stop",outcome="cancelled")
+elif ref=="T151": sys.exit(3)
+elif ref=="T161": t.update(generation=1,operation_id="legacy-start")
+elif ref=="T171": t.update(execution_owner=None)
+elif ref=="T181": t.update(execution_endpoint="node-a",execution_owner="",outcome="refused")
+else: sys.exit(3)
+print(json.dumps({"task":t}))
+PYJSON
+TCJSON
+for n in 12 13 14 15 16 17 18; do
+  git -C "$BASE" worktree add -q -b "scratch-$n" "$WORK/base-scratch-$n" >/dev/null 2>&1
+  fleet_worktree_task_mark "$WORK/base-scratch-$n" "T${n}1" || st_fail "controlled fixture mark failed"
+done
+git -C "$BASE" commit --allow-empty -qm controlled-base-advance
+out="$(run_wac --dry-run)"
+for n in 12 13 14 15 17 18; do
+  printf '%s\n' "$out" | grep -Eq "KEEP +scratch-$n " || st_fail "controlled/pending/released/unknown Task scratch-$n must KEEP" "$out"
+done
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-16 ' || st_fail "legacy closed record still permits clean scratch prune" "$out"
+run_wac >/dev/null
+for n in 12 13 14 15 17 18; do
+  [ -d "$WORK/base-scratch-$n" ] || st_fail "controlled Task worktree scratch-$n was removed"
+  git -C "$BASE" show-ref --verify -q "refs/heads/scratch-$n" || st_fail "controlled Task branch scratch-$n was removed"
+  [ "$(cat "$WORK/base-scratch-$n/f")" = seed ] || st_fail "controlled Task contents changed"
+done
+[ ! -d "$WORK/base-scratch-16" ] || st_fail "legacy Task worktree scratch-16 should still prune"
+st_pass "CONTROLLED: old outcomes cannot prune current/pending/released workspaces; unknown KEEP, legacy closed still prunes"
+
 printf '\nselftest OK: %s assertions passed (janitor scratch reap rules, #290)\n' "$pass"
 exit 0

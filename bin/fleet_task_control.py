@@ -95,25 +95,32 @@ def wait_task(_task, _timeout, _interval):
     return 2
 
 
-def closed(task):
+def closed(task, worktree=False):
     """Is the task record closed (收口, issue #4897)? ONE read, never a wait:
     SUCCEEDED / FAILED / CANCELLED / REFUSED → exit 0; WAITING (still open) →
     exit 1; the hub unreadable or the record not authoritative → UNKNOWN, exit 3. The reapers
     (fleet-cleanup-idle.py, fleet-cleanup.sh, worktree-autoclean.sh) read a task
-    session's end here — never its PR or an issue."""
+    session's end here — never its PR or an issue. With worktree=True, controlled
+    bindings (including released ones) stay retained independently of Outcome."""
     try:
         t = record(task, timeout=10)
     except (ValueError, OSError, subprocess.SubprocessError):
         print("UNKNOWN\ntask: %s" % code(None, task))
         return 3
     state = verdict(t)
+    if worktree and any(k in t for k in ("execution_owner", "execution_endpoint")):
+        # Presence, including an explicitly released empty owner, comes from
+        # the Hub's existing execution binding. Outcome is history, never
+        # permission to discard an environment a future continuation may use.
+        state = "WAITING" if all(isinstance(t[k], str) for k in
+                                  ("execution_owner", "execution_endpoint") if k in t) else "UNKNOWN"
     print("%s\ntask: %s" % (state, code(t, task)))
     # an open record's hold words (E101): the idle reaper parks a session that
     # asked its person and was not answered
     for k in ("asked", "parked"):
         if state == "WAITING" and str(t.get(k) or "").strip():
             print("%s: 1" % k)
-    return 1 if state == "WAITING" else 0
+    return 3 if state == "UNKNOWN" else 1 if state == "WAITING" else 0
 
 
 def child_summary(data):
@@ -250,6 +257,7 @@ def main():
     p.add_argument("action", choices=("children", "await", "closed", "progress", "cancel", "receive",
                                       "report", "finalize"))
     p.add_argument("--task", default="")
+    p.add_argument("--worktree", action="store_true", help="closed: retain controlled Task workspaces")
     p.add_argument("--file", default="")
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
     p.add_argument("--socket", default="")
@@ -264,7 +272,7 @@ def main():
     p.add_argument("--dry", action="store_true")
     args = p.parse_args()
     try:
-        if args.action == "closed": return closed(args.task)
+        if args.action == "closed": return closed(args.task, worktree=args.worktree)
         if args.action in ("children", "await"):
             print("RETIRED: Parent coordination and Fleet await are disabled; view each Task directly.")
             return 2
