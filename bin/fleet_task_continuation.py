@@ -13,7 +13,8 @@ import subprocess
 import sys
 
 from fleet_hub_common import is_identity
-from fleet_task_execution import ExecutionFence, FenceRefused, _snapshot
+from fleet_task_execution import (ExecutionFence, FenceRefused, _snapshot, _process_proof,
+                                  _session_exit_registrations, _match_exit_registrations)
 from fleet_task_exit_submit import acknowledged_native_exit
 
 
@@ -112,6 +113,53 @@ def _workspace(path, fid, task, successor=''):
     return path
 
 
+def _initial_start(fence, expected, stopped, receipt, past, source_fid, provider):
+    # The authenticated Hub chain only permits a root start at generation 1.
+    # SourceStart intentionally omits continuation: its absence proves nothing.
+    if stopped['binding_generation'] != 1 or stopped['generation'] != 2:
+        raise FenceRefused('interrupted continuation needs exact original history; only the initial start may begin without it')
+    if (not isinstance(past, dict) or past.get('history_status') != 'never_started'
+            or past.get('id', source_fid) != source_fid or past.get('agent', provider) != provider
+            or past.get('readable') or past.get('transcript') or past.get('native') or past.get('sid')):
+        raise FenceRefused('exact original native history is unavailable; continuation needs review')
+    with fence.store.connect() as db:
+        db.execute('BEGIN')
+        _, checked_stop, _, checked_receipt = acknowledged_native_exit(db, receipt['operation_id'])
+        if checked_stop != stopped or checked_receipt != receipt:
+            raise FenceRefused('original native exit changed while resolving first start')
+        saved = receipt.get('continuation')
+        if saved is None:
+            launches = _session_exit_registrations(db, stopped, provider)
+        else:
+            if not isinstance(saved, dict) or set(saved) != {'snapshot', 'registrations'}:
+                raise FenceRefused('first start has malformed original registration archive')
+            allocated = _snapshot(saved['snapshot'])
+            slot = db.execute('SELECT * FROM task_execution_sessions WHERE task_ref=?', (expected['task_ref'],)).fetchone()
+            if (allocated != dict(expected, execution_owner=allocated['execution_owner'])
+                    or expected['execution_owner'] not in ('', allocated['execution_owner'])
+                    or fence._read(db, expected['task_ref']) != allocated
+                    or slot is None or slot['operation_id'] != allocated['operation_id']
+                    or slot['execution_owner'] != allocated['execution_owner']):
+                raise FenceRefused('first start allocation was replaced, stopped or conflicts with this grant')
+            launches = saved['registrations']
+    if not isinstance(launches, list) or not launches:
+        raise FenceRefused('first start has no original launch registrations')
+    keys = {'task_ref', 'launch_id', 'operation_id', 'supervisor', 'wrapper', 'child', 'native', 'admission_protocol'}
+    seen = set()
+    for launch in launches:
+        if (not isinstance(launch, dict) or set(launch) != keys
+                or launch['task_ref'] != stopped['task_ref'] or launch['operation_id'] != stopped['operation_id']
+                or not isinstance(launch['launch_id'], str) or not launch['launch_id'] or launch['launch_id'] in seen
+                or type(launch['admission_protocol']) is not int or launch['admission_protocol'] != 1
+                or launch['native'] != [] or launch['wrapper'] != receipt['payload']['proof']['wrapper']):
+            raise FenceRefused('first start requires every original epoch qualified and no admitted native component')
+        seen.add(launch['launch_id'])
+        for key in ('supervisor', 'wrapper', 'child'):
+            if _process_proof(launch[key]) != launch[key]:
+                raise FenceRefused('first start has incomplete original process identity')
+    _match_exit_registrations(receipt['payload']['proof'], launches)
+
+
 def continuation_plan(snapshot, continuation, authority, *, conf_dir=None, history=None, home=None):
     expected = _snapshot(snapshot, allow_unclaimed=True)
     validate_metadata(expected, continuation, authority)
@@ -181,7 +229,14 @@ def continuation_plan(snapshot, continuation, authority, *, conf_dir=None, histo
     past = (history or local_history)(source_fid, fence.conf_dir)
     if (not isinstance(past, dict) or past.get('id') != source_fid or past.get('agent') != source['agent'] or not past.get('readable')
             or not past.get('transcript') or not Path(past['transcript']).is_file()):
-        raise FenceRefused('exact original native history is unavailable; continuation needs review')
+        _initial_start(fence, expected, stopped, receipt, past, source_fid, source['agent'])
+        seed = ('开始任务 ' + expected['task_ref'] + ' 的首次执行。\n'
+                '此前启动在 Agent 执行前已停止，没有可读取的原生会话历史。'
+                '这是用户明确发起的新原生会话，请读取本任务描述并核对当前文件后开始。\n'
+                '原会话 FID：' + source_fid + '\n原工作目录：' + cwd + '\n'
+                '保留现有工作文件和未提交修改，不恢复旧队列或定时唤醒。')
+        return dict(source_fid=source_fid, worktree=worktree, cwd=cwd, repo=source['repo'],
+                    no_repo=source['no_repo'], seed=seed)
     seed = ('继续任务 ' + expected['task_ref'] + '，这是用户明确发起的新原生会话。\n'
             '原会话 FID：' + source_fid + '\n原工作目录：' + cwd + '\n'
             '先读取原会话历史，核对最近用户要求、已完成工作、当前文件及下一步，再继续；'
