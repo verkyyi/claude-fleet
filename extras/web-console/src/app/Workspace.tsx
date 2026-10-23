@@ -1,7 +1,7 @@
 // A task opens its web conversation. Native interactions continue in iTerm2.
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { ArrowLeft, Info, MoreHorizontal, Square, TerminalSquare } from "lucide-react";
+import { ArrowLeft, Info, MoreHorizontal, Play, Square, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -16,7 +16,9 @@ import { sessionPath, TermTag } from "./SessionList";
 import { copyOpen } from "./cli";
 import { rowWorker, type Row } from "./work";
 import { toast } from "sonner";
-import { sessionWrite } from "@/shared/sessions";
+import { canStopRow } from './task-stop';
+import { stopRow, stopAcknowledgment } from './task-stop-api';
+import { canContinueRow, requestRowContinue, type ContinueAgent } from './task-continue';
 import { sendJSON, useMe } from "@/shared/api";
 import { useWorkRows } from "./work-rows";
 import { pendingStartRef } from "./task-cancel";
@@ -37,6 +39,7 @@ export function Workspace({ r }: { r: Row }) {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
   const [stopping, setStopping] = useState(false);
+  const [continuing, setContinuing] = useState(false);
   const [details, setDetails] = useState(false);
   const [head, setHead] = useState<Head>({ sync: "" });
   const onHead = useCallback((h: Head) => setHead((o) => (o.sync === h.sync && o.busy === h.busy ? o : h)), []);
@@ -44,14 +47,27 @@ export function Workspace({ r }: { r: Row }) {
   const agent = rowAgent(r);
   const open = openLine(r);
   const canOpen = !!(r.live || r.board?.worker_id) && r.group !== "gone";
+  const canContinue = canContinueRow(r);
+  const readOnly = !me || !!me.read_only || !!me.view_as || !!viewAs;
+
+  const continueTask = async (nextAgent?: ContinueAgent) => {
+    if (!canContinue || continuing || readOnly) return;
+    setContinuing(true);
+    try {
+      const result = await requestRowContinue(r, { post: (url, body) => sendJSON('POST', url, body) }, nextAgent);
+      if (result.ok) toast.info(tr('已提交继续请求。', 'Continue request submitted.'));
+      else toast.error(tr(`没能继续：${result.error}`, `Could not continue: ${result.error}`));
+      if (result.ok || result.status === 409) reload();
+    } finally { setContinuing(false); }
+  };
 
   const stop = async () => {
-    if (!r.live?.id || stopping) return;
+    if (!canStopRow(r) || stopping || !me || me.read_only || me.view_as || viewAs) return;
     setStopping(true);
     try {
-      const error = await sessionWrite("worker_stop", r.live.id);
-      if (error) toast.error(tr(`没能停止：${error}`, `Could not stop: ${error}`));
-      else toast.info(tr("停止请求已提交，等待会话状态更新。", "Stop requested; waiting for the session observation."));
+      const result = await stopRow(r);
+      if (!result.ok) toast.error(tr(`没能停止：${result.error}`, `Could not stop: ${result.error}`));
+      else { toast.info(stopAcknowledgment(result)); reload(); }
     } finally { setStopping(false); }
   };
 
@@ -86,7 +102,9 @@ export function Workspace({ r }: { r: Row }) {
           </h1>
           <p className="text-muted-foreground truncate text-xs" data-testid="ws-meta">{headMeta(r, head.busy)}</p>
         </div>
-        {r.live ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={stopping || !!viewAs} onClick={() => void stop()} aria-label={tr("停止", "Stop")}>
+        {canContinue ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={continuing || readOnly} onClick={() => void continueTask()} aria-label={tr('继续', 'Continue')}>
+          <Play className="size-4" />{tr('继续', 'Continue')}
+        </Button> : canStopRow(r) ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={stopping || readOnly} onClick={() => void stop()} aria-label={tr("停止", "Stop")}>
           <Square className="size-4" />{tr("停止", "Stop")}
         </Button> : null}
         {pendingRecord && cancelRef ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8"
@@ -104,6 +122,10 @@ export function Workspace({ r }: { r: Row }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-56">
+            {canContinue ? <>
+              <DropdownMenuItem disabled={continuing || readOnly} onSelect={() => void continueTask('claude')}><Play />{tr('用 Claude 继续', 'Continue with Claude')}</DropdownMenuItem>
+              <DropdownMenuItem disabled={continuing || readOnly} onSelect={() => void continueTask('codex')}><Play />{tr('用 Codex 继续', 'Continue with Codex')}</DropdownMenuItem>
+            </> : null}
             {canOpen ? <DropdownMenuItem onSelect={() => void copyOpen(open)} data-testid="ws-copy-open">
               <TerminalSquare />{tr(`在终端里打开 · 复制 ${open}`, `Open in terminal · copy ${open}`)}
             </DropdownMenuItem> : null}

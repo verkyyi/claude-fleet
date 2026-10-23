@@ -19,7 +19,7 @@
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
                                          issue #2358 — the key never changes)
-    fleet close <会话> [--yes]           stop its execution through worker_stop;
+    fleet close <会话> [--yes]           persist a controlled Task stop; legacy worker_stop;
                                          pending task-only rows cancel their start;
                                          no confirmation; history remains resumable
     fleet close --test [--yes]           stop every test row; one confirmation unless --yes
@@ -159,16 +159,24 @@ def pending_rows(rs):
     board = fleet_view.board_read()
     if not board:
         return rs
-    groups, _ = fleet_view.board_apply(board, {g: [] for g in fleet_view.GROUPS}, [], [], "", "")
+    groups, gone = fleet_view.board_apply(board, {g: [] for g in fleet_view.GROUPS}, [], [], "", "")
     known = {r.get("fleet_id") for r in rs if r.get("fleet_id")}
-    for group in groups.values():
+    for group in [*groups.values(), gone]:
         for r in group:
-            if not pending_start_task(r) or r.get("fid") in known:
+            matched = next((x for x in rs if (r.get('fid') and x.get('fleet_id') == r['fid'])
+                           or (r.get('worker_id') and x.get('worker_id') == r['worker_id'])), None)
+            if matched is not None:
+                matched.update(task=r.get('task') or matched.get('task') or '',
+                               execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
+                continue
+            if not (pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
                 continue
             rs.append(dict(key="id:" + r["board"], name=r["name"], title=r["text"],
                            state="starting", node=r.get("machine") or "", issue="", pr="", reap="",
                            group="", repo=r.get("repo") or "", ended="", task=r["task"],
-                           record_only=True, pending_start=True, pending_start_explicit=True,
+                           record_only=True, pending_start=r.get('pending_start',False),
+                           pending_start_explicit=r.get('pending_start_explicit',False),
+                           execution_endpoint=r.get('execution_endpoint') or '', lost=r.get('lost',False),
                            fleet_id=r.get("fid") or "",
                            code=r.get("code") or ""))
     return rs
@@ -745,17 +753,40 @@ def close_tests(yes):
             return 1
     rc = 0
     for r in rs:
-        if not remote_only(r, "停止") or stop_row(r):
+        if stop_row(r):
             rc = 1
     return rc
 
 
 def stop_row(row):
-    """Request worker_stop; the returned operation distinguishes acceptance from exit."""
+    """Task revocation first; only a verified legacy row uses worker_stop."""
     task = pending_start_task(row)
     if task:
         rc, line = cancel_pending_start(task)
         print("取消启动 %s：%s" % (row["name"], line), file=sys.stdout if rc == 0 else sys.stderr)
+        return rc
+    from fleet_task_control import stop_task, controlled_stop_task
+    row = dict(row)
+    if str(row.get('key') or '').startswith('@') and not controlled_stop_task(row):
+        # Inspect the exact local window when the Hub's older cache omitted its
+        # execution binding. A malformed/missing identity never falls through.
+        fleet = os.environ.get('FLEET_SESSION','')
+        try:
+            p = subprocess.run(['tmux', '-L', fleet, 'display-message', '-p', '-t', row['key'],
+                                '#{window_id}|#{@fleet_id}|#{@task}|#{@task_execution}'],
+                               text=True,capture_output=True,timeout=5)
+            values = p.stdout.strip().split('|')
+            if not fleet or p.returncode or len(values) != 4 or values[0] != row['key'] or not values[1]:
+                raise ValueError('本地会话身份不可核验，请刷新后重试')
+            if row.get('fleet_id') and row['fleet_id'] != values[1]:
+                raise ValueError('本地会话身份已变化，请刷新后重试')
+            row.update(fleet_id=values[1],task=values[2] or row.get('task') or '',task_execution=values[3])
+        except (ValueError,OSError,subprocess.SubprocessError) as exc:
+            say(str(exc)); return 1
+    result = stop_task(row)
+    if result is not None:
+        rc,line = result
+        print('停止 %s：%s' % (row['name'],line),file=sys.stdout if rc == 0 else sys.stderr)
         return rc
     if not remote_only(row, "停止"):
         return 1

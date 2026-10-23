@@ -6968,12 +6968,31 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_stop_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {
+    WHY="task stop entry regression: $(tail -10 "$WORK/task-stop-entry.log")"; return 1;
+  }
+  WHAT='Task stop 跨 Web/tmux/CLI 持久撤销，离线可受理，未知不降级，普通关闭不冒充原生退出'
+  SECS=$(since "$t0")
+}
+
 drill_task_unclaimed_stop_proof() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
     WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
   }
   WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
+  SECS=$(since "$t0")
+}
+
+
+drill_task_continue_unclaimed() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
+    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
+  }
+  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
   SECS=$(since "$t0")
 }
 
@@ -7015,15 +7034,6 @@ drill_task_unclaimed_node() {
   SECS=$(since "$t0")
 }
 
-
-drill_task_continue_unclaimed() {
-  local t0; t0=$(now); CAP=120
-  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
-    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
-  }
-  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
-  SECS=$(since "$t0")
-}
 
 drill_task_continue_authority() {
   local t0; t0=$(now); CAP=120
@@ -7827,6 +7837,15 @@ drill_reap_agent_split() {
   grep -qF 'def test_idle_persistent_mcp_is_not_work' "$BIN/fleet-codex-busy-selftest.py" \
     || { WHY="fleet-codex-busy-selftest.py no longer holds an idle resident MCP is not work"; return 1; }
   WHAT='回收一条路：结束（钩子 / 退出码）、认 Agent 进程、问还有没有活、收它留下的服务都问适配表；正常退出、被杀、后台服务还在、真有活四条腿两种 Agent 各跑一遍（fleet-agent-end-selftest.py，这里按名守住）；常驻 MCP 不算活（fleet-codex-busy-selftest.py）'
+  SECS=$(since "$t0")
+}
+
+drill_task_worktree_current_generation() {
+  local t0; t0=$(now); CAP=10
+  suite_holds worktree-autoclean-scratch-selftest.sh \
+    'CONTROLLED: old outcomes cannot prune current/pending/released workspaces' \
+    'legacy Task worktree scratch-16 should still prune' 'fleet_task_control.py' || return 1
+  WHAT='真实 git 工作树：旧Outcome不授权删除当前/待启动/已释放controlled目录；未知KEEP，legacy仍可清理'
   SECS=$(since "$t0")
 }
 

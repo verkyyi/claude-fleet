@@ -23,9 +23,9 @@
 #     tip is a strict ancestor of origin/<base> (equal tips need a merged PR), OR
 #     git finds its whole change on the base (squash / rebase merge, issue #3601)
 #   * for a worktree opened for a hub task record (its git dir's `fleet-task`
-#     mark, issue #4897), that record is CLOSED (收口) — the record decides, the
-#     issue is not read; a closed task's clean scratch is pruned even when a
-#     session ran in it. Open or unknown (no hub answer) KEEPs.
+#     mark, issue #4897), controlled records always KEEP; their old Outcome is
+#     not disposal permission. Legacy closed records retain the prior rule,
+#     including conversation scratches. Open or unknown (no hub answer) KEEPs.
 #   * for an `issue-<N>` worktree, the bound issue #N is no longer OPEN (issue
 #     #1156; a repo with no GitHub — FLEET_FORGE=none — has no issue to ask). A merged branch is not a finished task: a worker can ship a side-fix
 #     PR from its own branch while #N stays open. Unknown state (gh failed) KEEPs.
@@ -287,12 +287,13 @@ process_locked() {
   case "$branch" in scratch-*) is_scratch=1 ;; esac   # issue #290
   merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
   # A worktree opened for a hub task record (issue #4897): its mark names T<n>,
-  # and the RECORD says whether the work is over (收口) — never the issue. Asked
+  # controlled bindings KEEP regardless of historical Outcome; legacy records
+  # retain the old closed-result rule — never the issue. Asked
   # only once the shared gate let a candidate by (no hub read for a live / dirty one).
   local wtask="" tclosed=0 tv=""
   case "$merged" in live|dirty) ;; *)
     if wtask="$(fleet_worktree_task "$dir" 2>/dev/null)"; then
-      tv="$(fleet_task_closed "$wtask")" && tclosed=1
+      tv="$(fleet_task_closed "$wtask" --worktree)" && tclosed=1
     else wtask=""; fi ;;
   esac
   # Past FLEET_SCRATCH_MAX_IDLE? (#884) — only ever computed for a scratch, only when
