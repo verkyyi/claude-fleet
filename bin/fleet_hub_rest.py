@@ -136,7 +136,7 @@ def _via_sock(sock, req, hub):
         conn.close()
 
 
-def api(method, path, body=None, query=None, root='/v1/fleet'):
+def api(method, path, body=None, query=None, root='/v1/fleet', headers=None):
     import urllib.error
     import urllib.request
     url, tok = creds()
@@ -150,6 +150,8 @@ def api(method, path, body=None, query=None, root='/v1/fleet'):
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
     req = urllib.request.Request(full, data=data, method=method)
     req.add_header('Authorization', 'Bearer ' + tok)
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
     if data is not None:
         req.add_header('Content-Type', 'application/json')
     try:

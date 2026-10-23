@@ -25,6 +25,7 @@
 
 **会话与工具**
 
+- [PRIVATE-PREVIEWS.md](dev/PRIVATE-PREVIEWS.md) — 私人实时开发预览、Unix socket 示例、部署与验证
 - [FLEET-MCP.md](dev/FLEET-MCP.md) — 会话用的 `fleet` 工具服务
 - [STATE.md](dev/STATE.md) — 窗口上的 Claude 状态怎么刷新
 - [CLEANUP.md](dev/CLEANUP.md) · [REAP-SAFETY.md](dev/REAP-SAFETY.md) — 合并后的回收与回收安全

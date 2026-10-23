@@ -5,8 +5,8 @@ entrypoints obtain fresh snapshots through the existing authenticated node
 transport, outside all admission locks. ``authorized=True`` means a *new
 explicit grant*, not a cached @dispatch.
 Only that grant may create a binding or clear a stop tombstone with no old
-binding. Replacing an existing execution needs proof of its exit; this module
-does not yet offer that operation and refuses it even for a newer grant.
+binding. Ordinary bind never replaces an existing execution. The separate
+continuation method additionally requires the exact acknowledged exit proof.
 
 Admission is a short, task-scoped flock for local fork/registration. Never do
 network I/O while holding it. Stop writes deliberately bypass that flock, so
@@ -20,6 +20,7 @@ import contextlib
 import argparse
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -75,6 +76,30 @@ class FenceRefused(ValueError):
     """Unknown, stale, stopped or contradictory execution authorization."""
 
 
+def _historical_session_stop(db, session_fid):
+    """A replaced current slot must not turn an old controlled FID into legacy.
+
+    The existing immutable stop request remains the source of its revocation;
+    receipt ACK and cleanup status do not affect whether the session is stopped.
+    """
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'").fetchone():
+        return None
+    rows = db.execute("""SELECT id,request FROM operations WHERE action='worker_stop'
+        AND json_extract(request,'$.control_version')=1
+        AND json_extract(request,'$.task_execution.execution_owner') LIKE ?""", ('%/' + session_fid,)).fetchall()
+    found = None
+    for row in rows:
+        request = json.loads(row['request'])
+        snapshot = validate_request(request)
+        if (snapshot is None or request['action'] != 'worker_stop' or row['id'] != snapshot['cancel_request']
+                or snapshot['execution_owner'].split('/')[-1] != session_fid):
+            raise FenceRefused('historical session stop is inconsistent')
+        if found is not None and found != snapshot:
+            raise FenceRefused('session has conflicting historical stop bindings')
+        found = snapshot
+    return found
+
+
 def read_session(session_fid, *, conf_dir=None):
     """Read-only observation, including a stop; this never grants permission."""
     if not is_identity(session_fid):
@@ -89,7 +114,10 @@ def read_session(session_fid, *, conf_dir=None):
                 if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_execution_fences'").fetchone():
                     rows = db.execute("SELECT * FROM task_execution_fences WHERE execution_owner LIKE ?",
                                       ("%/" + session_fid,)).fetchall()
-        except sqlite3.Error as exc:
+                if not rows:
+                    historical = _historical_session_stop(db, session_fid)
+                    rows = [historical] if historical else []
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
             raise FenceRefused("task execution fence is unavailable") from exc
     if len(rows) > 1:
         raise FenceRefused("session has conflicting task execution bindings")
@@ -399,6 +427,25 @@ def claim_execution(snapshot, fleet_id, *, conf_dir=None, call=None, read_stops=
     return fence.bind(actual, authorized=True)
 
 
+def continue_execution(snapshot, fleet_id, exit_operation_id, *, conf_dir=None, read=None, call=None, read_stops=None):
+    """Explicit opt-in only: fresh authority before local replacement and claim.
+
+    No normal start/bind path calls this function. The callbacks replace only
+    authenticated transport for isolated tests; all validation remains active.
+    Network is outside the admission lock and SQLite transaction. A claim failure
+    retains the same durable allocation for a retry and starts no native process.
+    """
+    expected = _snapshot(snapshot, allow_unclaimed=True)
+    sync_stops(conf_dir=conf_dir, read=read_stops)
+    actual = _snapshot(read(expected['task_ref']) if read else
+                       _authority('execution-get', expected['task_ref'], conf_dir=conf_dir), allow_unclaimed=True)
+    if actual != dict(expected, execution_owner=actual['execution_owner'] if not expected['execution_owner'] else expected['execution_owner']):
+        raise FenceRefused('continuation grant is no longer the latest authenticated authority')
+    fence = ExecutionFence(conf_dir)
+    fence.continue_binding(actual, fleet_id, exit_operation_id, authorized=True)
+    return claim_execution(actual, fleet_id, conf_dir=conf_dir, call=call, read_stops=read_stops)
+
+
 class ExecutionFence:
     def __init__(self, conf_dir=None):
         self.conf_dir = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
@@ -489,14 +536,7 @@ class ExecutionFence:
                        (expected["task_ref"], expected["operation_id"], expected["execution_owner"]))
 
     def for_session(self, session_fid):
-        if not is_identity(session_fid):
-            raise FenceRefused("session lookup requires its immutable FID")
-        with self.store.connect() as db:
-            rows = db.execute("SELECT * FROM task_execution_fences WHERE execution_owner LIKE ?",
-                              ("%/" + session_fid,)).fetchall()
-        if len(rows) > 1:
-            raise FenceRefused("session has conflicting task execution bindings")
-        return dict(rows[0]) if rows else None
+        return read_session(session_fid, conf_dir=self.conf_dir)
 
     def assert_session_allowed(self, session_fid):
         row = self.for_session(session_fid)
@@ -511,8 +551,8 @@ class ExecutionFence:
         must have a strictly higher generation than any locally known stop.
         Old/same snapshots never clear stop and never change binding identity.
         A higher generation is not itself authorization to take over a task.
-        Any existing execution binding remains reserved until there is proof
-        of exit. There is no release API here yet, so replacing it is refused.
+        Any existing execution binding remains reserved; only the separate
+        explicit continuation method may replace it using acknowledged proof.
         """
         incoming = _snapshot(snapshot)
         if incoming["cancel_request"] or authorized is not True:
@@ -533,6 +573,79 @@ class ExecutionFence:
                     raise FenceRefused("execution grant changes the stable Task identity")
             self._save(db, incoming)
             return incoming
+
+    def continue_binding(self, snapshot, fleet_id, exit_operation_id, *, authorized=False):
+        """Atomically replace one proved old attempt and allocate its successor.
+
+        Like bind, the caller must obtain current authenticated authority first.
+        Unlike bind, this requires the exact confirmed old stop packet. The new
+        allocation is recorded beside that packet for crash/idempotency recovery;
+        original proof bytes and old-FID revocation remain in the stop journal.
+        No networking, process observation, signaling or launch happens here.
+        """
+        from fleet_task_exit_submit import acknowledged_native_exit, RECEIPT
+        incoming = _snapshot(snapshot, allow_unclaimed=True)
+        if authorized is not True or incoming['cancel_request'] or not is_identity(fleet_id):
+            raise FenceRefused('continuation requires an explicit current Hub grant')
+        try:
+            with self._admission_lock(incoming['task_ref']), self.store.connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                row, stopped, result, receipt = acknowledged_native_exit(db, exit_operation_id)
+                old = self._read(db, incoming['task_ref'])
+                if (stopped['task_ref'] != incoming['task_ref'] or stopped['task_fid'] != incoming['task_fid']
+                        or stopped['execution_endpoint'] != incoming['execution_endpoint']
+                        or stopped['execution_owner'].split('/')[0] != fleet_id
+                        or incoming['generation'] != stopped['generation'] + 1
+                        or stopped['generation'] != stopped['binding_generation'] + 1
+                        or incoming['operation_id'] in (stopped['operation_id'], stopped['cancel_request'])):
+                    raise FenceRefused('continuation does not match the proved Task, endpoint or generation')
+                saved = receipt.get('continuation')
+                if saved is not None:
+                    if not isinstance(saved, dict):
+                        raise FenceRefused('malformed original continuation allocation')
+                    allocated = _snapshot(saved['snapshot'])
+                    wanted = dict(incoming, execution_owner=allocated['execution_owner'])
+                    session = db.execute('SELECT * FROM task_execution_sessions WHERE task_ref=?',
+                                         (incoming['task_ref'],)).fetchone()
+                    if (allocated != wanted or old != allocated or incoming['execution_owner'] not in ('', allocated['execution_owner'])
+                            or session is None or session['operation_id'] != allocated['operation_id']
+                            or session['execution_owner'] != allocated['execution_owner']):
+                        raise FenceRefused('continuation was replaced, stopped or conflicts with its original allocation')
+                    return allocated
+                if old != stopped or incoming['execution_owner']:
+                    raise FenceRefused('continuation cannot adopt a different or already claimed execution')
+                proof = receipt['payload']['proof']
+                launches = _session_exit_registrations(db, stopped, proof['provider'])
+                _match_exit_registrations(proof, launches)
+                # These two slots are created before native launch. A missing or
+                # conflicting slot is uncertainty, not permission to reconstruct.
+                for table in ('task_execution_sessions', 'task_execution_windows'):
+                    slot = db.execute('SELECT * FROM ' + table + ' WHERE task_ref=?', (incoming['task_ref'],)).fetchone()
+                    if slot is None or slot['operation_id'] != stopped['operation_id'] or slot['execution_owner'] != stopped['execution_owner']:
+                        raise FenceRefused('continuation has missing or conflicting old session/window reservation')
+                worker = fleet_id + '/' + str(uuid.uuid4())
+                if worker == stopped['execution_owner'] or worker.split('/')[1] == incoming['task_fid']:
+                    raise FenceRefused('continuation requires a fresh Session FID')
+                allocated = dict(incoming, execution_owner=worker)
+                # Archive full registration beside the already persisted proof,
+                # then retire only the checked operation/launches from active
+                # slots. New stop proofs must not read an older operation's roots.
+                receipt['continuation'] = dict(snapshot=allocated, registrations=launches)
+                result[RECEIPT] = receipt
+                db.execute('UPDATE operations SET result=? WHERE id=?', (json.dumps(result, separators=(',', ':')), row['id']))
+                for launch in launches:
+                    db.execute('DELETE FROM task_execution_native WHERE task_ref=? AND launch_id=?', (incoming['task_ref'], launch['launch_id']))
+                    db.execute('DELETE FROM task_execution_launch_history WHERE task_ref=? AND launch_id=?', (incoming['task_ref'], launch['launch_id']))
+                db.execute('DELETE FROM task_execution_launches WHERE task_ref=? AND operation_id=?', (incoming['task_ref'], stopped['operation_id']))
+                db.execute('DELETE FROM task_execution_windows WHERE task_ref=? AND operation_id=?', (incoming['task_ref'], stopped['operation_id']))
+                db.execute('UPDATE task_execution_sessions SET operation_id=?,execution_owner=? WHERE task_ref=? AND operation_id=?',
+                           (allocated['operation_id'], worker, incoming['task_ref'], stopped['operation_id']))
+                self._save(db, allocated)
+                return allocated
+        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
+            if isinstance(exc, FenceRefused):
+                raise
+            raise FenceRefused('local continuation evidence is unavailable or inconsistent') from exc
 
     def observe(self, snapshot):
         """Apply a verified stop or confirm the exact binding; never adopt one.
@@ -765,6 +878,34 @@ def _session_exit_registrations(db, expected, provider):
     if set(native) - seen:
         raise FenceRefused("native session exit has orphan native registrations")
     return launches
+
+
+def _match_exit_registrations(proof, launches):
+    """Compare ACKed observations to every exact registration before retiring it."""
+    if (proof.get('launch_id') != launches[-1]['launch_id'] or proof.get('wrapper') != launches[-1]['wrapper']
+            or type(proof.get('observed_at')) not in (int, float)
+            or not math.isfinite(proof['observed_at']) or proof['observed_at'] <= 0
+            or len(proof['launches']) != len(launches)):
+        raise FenceRefused('acknowledged exit proof no longer matches launch registration')
+    for observation, launch in zip(proof['launches'], launches):
+        if not isinstance(observation, dict) or not isinstance(observation.get('roots'), list):
+            raise FenceRefused('acknowledged exit proof has malformed observations')
+        expected = {key: launch[key] for key in ('supervisor', 'child')}
+        expected.update({item['component']: item['process'] for item in launch['native']})
+        observed = {}
+        for root in observation['roots']:
+            if not isinstance(root, dict):
+                raise FenceRefused('acknowledged exit proof has malformed roots')
+            component = root['component']
+            if component in observed or root.get('evidence') not in ('pid_absent', 'pid_reused', 'kernel_zombie'):
+                raise FenceRefused('acknowledged exit proof has inconsistent root observations')
+            observed[component] = _process_proof(dict(pid=root['pid'], birth=root['birth']))
+            if root['evidence'] != 'pid_absent' and (not isinstance(root.get('observed_kernel_birth'), str) or not root['observed_kernel_birth']):
+                raise FenceRefused('acknowledged exit proof lacks observed kernel identity')
+            if root['evidence'] == 'kernel_zombie' and root.get('kernel_state') != 'Z':
+                raise FenceRefused('acknowledged exit proof lacks zombie evidence')
+        if observation['launch_id'] != launch['launch_id'] or observed != expected:
+            raise FenceRefused('acknowledged exit proof does not cover the current registrations')
 
 
 def _exited_session_root(proof):

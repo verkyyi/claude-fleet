@@ -249,6 +249,11 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.FleetRoutes = routes
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
+	srv.PreviewDomain = os.Getenv("CCQUOTA_PREVIEW_BASE_DOMAIN")
+	srv.PreviewHubAliases = strings.FieldsFunc(os.Getenv("CCQUOTA_PREVIEW_HUB_ALIASES"), func(r rune) bool { return r == ',' || r == ' ' })
+	if err := srv.ValidatePreviewConfig(); err != nil {
+		return err
+	}
 	srv.FleetDistDir = os.Getenv("CCQUOTA_FLEET_DIST_DIR")
 	srv.FleetJoinScriptURL = os.Getenv("CCQUOTA_FLEET_JOIN_SCRIPT_URL")
 	// The client follows stable through this hub (claude-fleet#1805). Where it

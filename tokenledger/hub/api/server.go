@@ -232,7 +232,10 @@ type Server struct {
 	// relays holds the relays in flight.
 	sshRelays sshRelayTable
 	// chatRelays holds the chat relays in flight, admitted per login.
-	chatRelays sshRelayTable
+	chatRelays        sshRelayTable
+	PreviewDomain     string
+	PreviewHubAliases []string
+	previewRelays     sshRelayTable
 	// chatGate holds each person's /v1/chat bounds (claude-fleet#3645).
 	chatGate chatGate
 
@@ -503,7 +506,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))
+	return s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes())))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is
@@ -1059,6 +1062,10 @@ func (s *Server) routes() *routeMux {
 	mux.Handle(AdminPrefix, s.adminSide())
 	mux.Handle(AdminPrefix+"/", s.adminSide())
 
+	mux.HandleFunc(previewAuthorize, s.handlePreviewAuthorize)
+	mux.HandleFunc(previewAPI, s.handlePreviewAPI)
+	mux.HandleFunc(nodePreviewAPI, s.handleNodePreview)
+	mux.HandleFunc(control.PreviewDataPath, func(w http.ResponseWriter, r *http.Request) { s.attachRelayData(w, r, &s.previewRelays) })
 	return mux
 }
 
