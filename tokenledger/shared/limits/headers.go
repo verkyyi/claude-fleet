@@ -2,6 +2,7 @@ package limits
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,6 +121,16 @@ func (c *Client) FetchForModel(ctx context.Context, token, m string) (*model.Lim
 		return nil, fmt.Errorf("%w: HTTP %d carried no rate-limit headers", ErrUnavailable, resp.StatusCode)
 	}
 	snap.ModelClaims = ModelClaimsFromHeaders(resp.Header, m, snap.ObservedAt)
+	// Preserve exact quota header values and requested model for routing. Display
+	// zero-values cannot distinguish missing/invalid observations from zero use.
+	headers := map[string][]string{}
+	for key, values := range resp.Header {
+		if strings.HasPrefix(strings.ToLower(key), unifiedPrefix) {
+			headers[strings.ToLower(key)] = values
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"fleet_claude_headers_v1": headers, "request_model": m})
+	snap.RawJSON = string(raw)
 	return snap, nil
 }
 

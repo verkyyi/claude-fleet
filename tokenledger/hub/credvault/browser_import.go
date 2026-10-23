@@ -173,3 +173,16 @@ func (v *Vault) PlanRegistration(c store.Credential) (string, string) {
 	}
 	return sec.SubscriptionType, sec.RateLimitTier
 }
+
+// RegisteredPlanEvidence is non-secret provenance, kept distinct from observed provider metadata.
+func (v *Vault) RegisteredPlanEvidence(c store.Credential) PlanEvidence {
+	sl, err := v.sealer()
+	if err != nil {
+		return PlanEvidence{}
+	}
+	var sec Secret
+	if sl.Open(c.SecretSealed, &sec, c.PrincipalID, c.Provider, c.Account, "secret") != nil {
+		return PlanEvidence{}
+	}
+	return sec.PlanEvidence
+}

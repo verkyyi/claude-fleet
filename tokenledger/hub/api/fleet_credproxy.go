@@ -53,23 +53,24 @@ const CredProxyResolvePath = "/v1/fleet/credproxy/resolve"
 
 // CredProxyResolve is resolve's answer.
 type CredProxyResolve struct {
-	CodexAffinityV1 bool       `json:"codex_affinity_v1,omitempty"`
-	CredentialID    string     `json:"credential_id,omitempty"`
-	Valid           bool       `json:"valid"`
-	Reason          string     `json:"reason,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	ID              string     `json:"id,omitempty"`
-	Principal       string     `json:"principal,omitempty"`
-	WorkerID        string     `json:"worker_id,omitempty"`
-	Machine         string     `json:"machine,omitempty"`
-	Exp             int64      `json:"exp,omitempty"`
-	Provider        string     `json:"provider,omitempty"`
-	Owner           string     `json:"owner,omitempty"`
-	Account         string     `json:"account,omitempty"`
-	BindRev         int64      `json:"bind_rev,omitempty"`
-	AccessToken     string     `json:"access_token,omitempty"`
-	AccountID       string     `json:"account_id,omitempty"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	ClaudeAffinityV1 bool       `json:"claude_affinity_v1,omitempty"`
+	CodexAffinityV1  bool       `json:"codex_affinity_v1,omitempty"`
+	CredentialID     string     `json:"credential_id,omitempty"`
+	Valid            bool       `json:"valid"`
+	Reason           string     `json:"reason,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	ID               string     `json:"id,omitempty"`
+	Principal        string     `json:"principal,omitempty"`
+	WorkerID         string     `json:"worker_id,omitempty"`
+	Machine          string     `json:"machine,omitempty"`
+	Exp              int64      `json:"exp,omitempty"`
+	Provider         string     `json:"provider,omitempty"`
+	Owner            string     `json:"owner,omitempty"`
+	Account          string     `json:"account,omitempty"`
+	BindRev          int64      `json:"bind_rev,omitempty"`
+	AccessToken      string     `json:"access_token,omitempty"`
+	AccountID        string     `json:"account_id,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 passes are signed with (claude-fleet#3698):
 	// with it the proxy refuses a forged or expired pass without asking.
 	// Empty when the hub mints fcp-h1 only.
@@ -135,6 +136,34 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	endpoint := s.passEndpoint(c.ID, now)
+	if req.ClaudeRecord != nil {
+		record := req.ClaudeRecord
+		if req.Provider != credvault.Claude || req.Claude != nil || req.Codex != nil || req.CodexRecord != nil || req.Rejected != nil || record.CredentialID == "" || !credproxy.ValidCodexReferences(record.References) {
+			sessionCredRefuse(w, 400, "invalid_argument", "invalid Claude continuation record")
+			return
+		}
+		choices, err := s.sessionBindChoices(c.Principal, endpoint, credvault.Claude)
+		found := false
+		for _, ch := range choices {
+			if ch.PrincipalID == record.Owner && ch.Account == record.Account && s.Vault.CredentialID(ch) == record.CredentialID {
+				found = true
+			}
+		}
+		if err != nil || !found {
+			out.Valid = false
+			out.Error = credproxy.ClaudeContinuationUnavailable
+			out.Reason = "source_account_not_authorized"
+		} else {
+			err = s.Store.RecordClaudeAffinity(c.WorkerID, record.References, store.ClaudeAffinity{Owner: record.Owner, Account: record.Account, CredentialID: record.CredentialID}, now)
+			if err != nil {
+				httpError(w, 500, "could not record Claude continuation source")
+				return
+			}
+		}
+		out.ClaudeAffinityV1 = true
+		writeJSON(w, 200, out)
+		return
+	}
 	if req.CodexRecord != nil {
 		record := req.CodexRecord
 		if req.Provider != credvault.Codex || req.Codex != nil || req.Rejected != nil ||
@@ -155,9 +184,23 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var b store.SessionBind
+	var claudeSource store.ClaudeAffinity
 	var expectedSource store.CodexAffinity
 	var err error
-	if req.Codex != nil {
+	if req.Claude != nil {
+		if req.Provider != credvault.Claude || req.Codex != nil || req.CodexRecord != nil || req.Rejected != nil {
+			sessionCredRefuse(w, 400, "invalid_argument", "invalid Claude route")
+			return
+		}
+		cat, catErr := s.Store.PlanCapacities()
+		if catErr != nil {
+			httpError(w, 503, "Claude capacity catalog unavailable")
+			return
+		}
+		cfg := cat.Catalog.Provider("claude")
+		out.ClaudeAffinityV1 = cfg.Mode != "off"
+		b, claudeSource, err = s.claudeRouteBind(c.WorkerID, c.Principal, endpoint, *req.Claude, now, cfg)
+	} else if req.Codex != nil {
 		if req.Provider != credvault.Codex || req.Rejected != nil {
 			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation route")
 			return
@@ -172,6 +215,12 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()
 		if req.Codex != nil {
 			out.Error = credproxy.CodexContinuationUnavailable
+		}
+		if req.Claude != nil && out.ClaudeAffinityV1 && !errors.Is(err, errClaudeAuthorization) {
+			out.Error = credproxy.ClaudeContinuationUnavailable
+		}
+		if errors.Is(err, errClaudeCapacity) {
+			out.Error = credproxy.ClaudeCapacityUnavailable
 		}
 		if req.Provider == credvault.Claude && errors.Is(err, errNoProviderAccount) {
 			out.Error = credproxy.ClaudePoolUnavailable
@@ -217,6 +266,13 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	if expectedSource.CredentialID != "" && (expectedSource.CredentialID != identity || expectedSource.AccountKey != credproxy.CodexReference("account", acc.AccountID)) {
 		out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_credential_replaced"
 		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if claudeSource.CredentialID != "" && claudeSource.CredentialID != identity {
+		out.Valid = false
+		out.Error = credproxy.ClaudeContinuationUnavailable
+		out.Reason = "source_credential_replaced"
+		writeJSON(w, 200, out)
 		return
 	}
 	out.AccessToken, out.AccountID, out.ExpiresAt = acc.AccessToken, acc.AccountID, acc.ExpiresAt
@@ -331,6 +387,15 @@ func (s *Server) noBindWhy(principal, endpointID, provider string) string {
 // binding whose account is no longer the person's to use — the
 // row was deleted, or it is another person's — is picked again.
 func (s *Server) sessionBind(workerID, principal, endpointID, provider string, now time.Time, requestBoundary ...bool) (store.SessionBind, error) {
+	if provider == credvault.Claude {
+		cat, err := s.Store.PlanCapacities()
+		if err != nil {
+			return store.SessionBind{}, err
+		}
+		if cat.Catalog.Provider("claude").Mode == "active" {
+			return store.SessionBind{}, errors.New("Claude request model and continuation evidence required")
+		}
+	}
 	choices, err := s.sessionBindChoices(principal, endpointID, provider)
 	if err != nil {
 		return store.SessionBind{}, err

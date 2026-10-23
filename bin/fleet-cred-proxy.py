@@ -181,6 +181,16 @@ token, a header or a body. bin/fleet_upstream_stats.py is the one reader (the
 doctor's 上游 row, `fleet-cred-proxy.sh upstream`, the 看台's top line).
 FLEET_CRED_UPSTREAM_STATS=0 writes nothing. Forwarding itself is untouched.
 """
+# The separated proxy runs with Python -I from a protected directory.
+import importlib.util as _capacity_import
+import os as _capacity_os
+_capacity_spec = _capacity_import.spec_from_file_location("fleet_claude_capacity", _capacity_os.path.join(_capacity_os.path.dirname(__file__), "fleet_claude_capacity.py"))
+claude_capacity = _capacity_import.module_from_spec(_capacity_spec)
+_capacity_spec.loader.exec_module(claude_capacity)
+
+class ClaudeCapacityError(ValueError):
+    pass
+
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets, zlib
 import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
 from urllib.parse import urlsplit
@@ -1453,6 +1463,14 @@ class Tenant:
         self.capacity_refresh_lock = threading.Lock()
         self.capacity_cache, self.capacity_until, self.capacity_retry = {}, 0, 0
         self.capacity_failures = 0
+        self.claude_lock = threading.RLock()
+        self.claude_refresh_lock = threading.Lock()
+        self.claude_cache, self.claude_until, self.claude_retry = {}, 0, 0
+        self.claude_failures = 0
+        claude_path = os.path.join(cfg.state, "claude-routing.json")
+        self.claude_state = read_json(claude_path, None)
+        if not isinstance(self.claude_state, dict) or not isinstance(self.claude_state.get("sessions"), dict):
+            self.claude_state = {"sessions": {}, "mode": "active" if os.path.exists(claude_path) else "off"}
         self.codex_state = read_json(os.path.join(cfg.state, "codex-routing.json"), {"sessions": {}})
         for sid, record in self.codex_state.get("sessions", {}).items():
             if record.get("account"):
@@ -1582,6 +1600,152 @@ class Tenant:
                 # Do not log exceptions containing a URL, response or credential.
                 pass
             return self.capacity_cache if now < self.capacity_until else {}
+
+    def refresh_claude_metadata(self):
+        """Node-authenticated metadata only. 30s cache, 2s timeout; never lease.
+        Expired/unreachable metadata cannot supply positive capacity evidence.
+        """
+        now = time.time()
+        with self.claude_refresh_lock:
+            if now < self.claude_retry:
+                return self.claude_cache if now < self.claude_until else {}
+            self.claude_retry = now + min(30, 5 * 2**min(self.claude_failures, 3))
+            self.claude_failures += 1
+            try:
+                ne = node_env(getattr(self.cfg, "node_env", None))
+                hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
+                token = ne.get("CCQUOTA_TOKEN", "")
+                if not hub or not token or not loopback_ok(hub):
+                    return {}
+                req = urllib.request.Request(hub_dial(hub) + "/v1/node/claude-capacity",
+                    headers={"Authorization": "Bearer " + token})
+                with urllib.request.urlopen(req, timeout=2) as res:
+                    raw = res.read(262145)
+                if len(raw) > 262144:
+                    raise ValueError("metadata too large")
+                data = json.loads(raw)
+                until = iso_epoch(data.get("expires_at", ""))
+                if data.get("policy") != "claude-capacity-v1" or not isinstance(data.get("accounts"), list) or not now < until <= now + 35:
+                    raise ValueError("invalid metadata")
+                names, identities = set(), set()
+                for row in data["accounts"]:
+                    if not isinstance(row, dict) or not isinstance(row.get("account"), str) or not isinstance(row.get("credential_id"), str) or not isinstance(row.get("windows"), list):
+                        raise ValueError("invalid account metadata")
+                    if not row["account"] or not row["credential_id"] or row["account"] in names or row["credential_id"] in identities:
+                        raise ValueError("duplicate or missing account identity")
+                    names.add(row["account"]); identities.add(row["credential_id"])
+                if data.get("mode") not in ("off", "shadow", "active"):
+                    raise ValueError("invalid mode")
+                self.claude_cache, self.claude_until = data, min(until, now + 30)
+                self.claude_failures = 0
+                with self.claude_lock:
+                    self.claude_state["mode"] = data["mode"]
+                    self.save_claude_state()
+                # Healthy refresh precedes TTL by >=10s (tick polls every5s).
+                self.claude_retry = now + min(20, max(1, (until-now)/2))
+            except (OSError, ValueError, TypeError, AttributeError):
+                # Do not log exceptions containing a URL, response or credential.
+                pass
+            return self.claude_cache if now < self.claude_until else {}
+
+    def claude_pick(self, sid, route, pin="", preview=False):
+        now = time.time()
+        data = self.claude_cache if now < self.claude_until else {}
+        mode = data.get("mode", self.claude_state.get("mode", "off"))
+        with self.claude_lock:
+            sessions = self.claude_state.get("sessions", {})
+            old = sessions.get(sid, {})
+            cur = old.get("account") or self.picks.get(("claude", sid), "")
+            rows, seen = [], set()
+            held = set(self.held("claude"))
+            idx = pool_index(self.cfg)
+            loads = {}
+            for tt in list(Proxy.tenants.values()) or [self]:
+                live = read_json(os.path.join(tt.cfg.state, "live.json"), {})
+                revoked = read_lines(os.path.join(tt.cfg.state, "revoked"))
+                for other, v in list(getattr(tt, "claude_state", {}).get("sessions", {}).items()):
+                    if tt is self and other == sid or other in revoked or other in live and not pid_alive(live[other]):
+                        continue
+                    reservations = dict(v.get("reservations", {}))
+                    if v.get("identity"):
+                        reservations[v["identity"]] = max(v.get("seen", 0), reservations.get(v["identity"], 0))
+                    for identity, at in reservations.items():
+                        if identity and at >= now - 600:
+                            loads[identity] = loads.get(identity, 0) + 1
+            for entry in data.get("accounts", []):
+                e = dict(entry)
+                a, identity = e.get("account"), e.get("credential_id")
+                if a not in held or not identity or identity in seen:
+                    continue
+                key = idx.get("claude:" + a, "")
+                # Verify the held token without leasing, migrating or writing
+                # anything. Single-login stores may still keep own copies.
+                if not key:
+                    try:
+                        with open(own_path(self.cfg, "claude", a), "rb") as source:
+                            key = pool_key("claude", source.read())
+                    except (OSError, ValueError, KeyError, TypeError):
+                        key = ""
+                if not key or key != e.get("lease_key"):
+                    e.update(complete=False, read_failed=True, ineligible_reason="leased_credential_mismatch")
+                seen.add(identity)
+                e["paused"] = e.get("paused", False) or ("claude", a) in self.paused
+                e["limited"] = e.get("limited", False) or Proxy.limited.get(("claude", a), 0) > now
+                rows.append(claude_capacity.evaluate(e, route["model"], now, loads.get(identity, 0)))
+            pick, reason = claude_capacity.choose(rows, cur, old.get("changed", now), now, pin, route["independent"])
+            if preview:
+                return dict(ok=True, provider="claude", mode=mode, catalog_revision=data.get("catalog_revision"),
+                            proposed=pick, reason=reason, inputs=rows, mutates_bindings=False)
+            if mode != "active":
+                account = pin or self.pick_account("claude", sid)
+                row = next((q for q in rows if q["account"] == account), {})
+                return dict(account=account, identity=row.get("credential_id", ""), lease_key=row.get("lease_key", ""), active=False, tracking=mode == "shadow")
+            if not data:
+                raise ClaudeCapacityError("Claude capacity metadata expired; no subscription eligibility proof")
+            if route["unknown"] or route["independent"] and route["references"]:
+                raise ValueError("Claude continuation request shape unknown")
+            if not route["independent"]:
+                origins = [old.get("refs", {}).get(ref) for ref in route["references"]]
+                if not origins or any(not v or v.get("until", 0) <= now for v in origins):
+                    raise ValueError("Claude continuation source unknown or expired")
+                ids = {v.get("identity") for v in origins}
+                if len(ids) != 1 or not next(iter(ids)):
+                    raise ValueError("Claude continuation has mixed or ambiguous sources")
+                pick = next((q for q in rows if q.get("credential_id") in ids), None)
+                if pick and pick.get("ineligible_reason") == "leased_credential_mismatch":
+                    raise ValueError("Claude continuation source credential changed")
+                if not pick or not claude_capacity.eligible(pick):
+                    raise ClaudeCapacityError("Claude continuation source quota unavailable")
+                reason = "source_affinity"
+            if not pick:
+                raise ClaudeCapacityError("No observed eligible Claude subscription; weekly and model limits apply")
+            if route["independent"]:
+                state = dict(old)
+                state.update(account=pick["account"], identity=pick["credential_id"], seen=now,
+                             changed=old.get("changed", now) if cur == pick["account"] else now)
+                self.claude_state.setdefault("sessions", {})[sid] = state
+                self.picks[("claude", sid)] = pick["account"]
+                self.save_claude_state()
+            return dict(account=pick["account"], identity=pick["credential_id"], lease_key=pick["lease_key"], active=True, reason=reason)
+
+    def save_claude_state(self):
+        write_json(os.path.join(self.cfg.state, "claude-routing.json"), self.claude_state)
+
+    def claude_record(self, sid, decision, refs):
+        identity = decision.get("identity")
+        if not identity:
+            return
+        with self.claude_lock:
+            state = self.claude_state.setdefault("sessions", {}).setdefault(sid, {})
+            book = state.setdefault("refs", {})
+            state.setdefault("reservations", {})[identity] = time.time()
+            for ref in refs:
+                prior = book.get(ref)
+                book[ref] = dict(identity=identity if prior is None or prior.get("identity") == identity else "",
+                                 until=time.time() + 30 * 86400)
+            # Expired entries remain tombstones: a reused identifier cannot
+            # acquire a new source after expiry or a concurrent collision.
+            self.save_claude_state()
 
     def save_codex_state(self):
         write_json(os.path.join(self.cfg.state, "codex-routing.json"), self.codex_state)
@@ -2186,6 +2350,7 @@ class Proxy(BaseHTTPRequestHandler):
 
     def forward(self):
         t0 = time.time()
+        self.claude_decision = None  # a keep-alive request must not inherit another route's policy
         inbound = {k.lower(): v for k, v in self.headers.items()}
         # Read the body FIRST: a refusal that leaves it unread on a keep-alive
         # connection gets it parsed as the next request (issue #1912).
@@ -2258,6 +2423,16 @@ class Proxy(BaseHTTPRequestHandler):
                 acct, self.codex_expected_source = decision["account"], decision["expected_source"]
             except ValueError as e:
                 return self.fail(409, str(e), "codex_affinity_unavailable")
+        elif provider == "claude" and (self.cfg.store or self.t.claude_cache.get("mode") in ("shadow", "active") or self.t.claude_state.get("mode") == "active"):
+            try:
+                self.claude_decision = self.t.claude_pick(sid, claude_capacity.route(self.command, path, inbound, body), acct)
+                acct = self.claude_decision["account"]
+                if not self.claude_decision.get("active") and not self.claude_decision.get("tracking"):
+                    self.claude_decision = None
+            except ClaudeCapacityError as e:
+                return self.fail(429, str(e), "claude_capacity_unavailable")
+            except ValueError as e:
+                return self.fail(409, str(e), "claude_continuation_unavailable")
         elif self.auto:
             acct = self.t.pick_account(provider, sid)
         if self.auto:
@@ -2482,6 +2657,11 @@ class Proxy(BaseHTTPRequestHandler):
             if self.codex_expected_source != getattr(self, "codex_source_identity", ""):
                 self.fail(409, "Codex continuation source identity changed", "codex_affinity_unavailable")
                 return None
+        if provider == "claude" and cred == "file" and (getattr(self, "claude_decision", None) or {}).get("lease_key"):
+            key = hashlib.sha256(("claude\0" + put["Authorization"][7:]).encode()).hexdigest()[:32]
+            if key != self.claude_decision["lease_key"]:
+                self.fail(409, "Claude source credential changed", "claude_continuation_unavailable")
+                return None
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() not in drop}
         if provider == "claude" and cred == "file":
             betas = [b.strip() for k, v in out.items() if k.lower() == "anthropic-beta"
@@ -2496,12 +2676,12 @@ class Proxy(BaseHTTPRequestHandler):
             # stream it could not open either counted nothing
             ae = meter_accept(" ".join(v for k, v in out.items() if k.lower() == "accept-encoding"))
             out = {k: v for k, v in out.items() if k.lower() != "accept-encoding"}
-            out["Accept-Encoding"] = ae
+            out["Accept-Encoding"] = "identity" if getattr(self, "claude_decision", None) else ae
         out.update(put)
         # a picked account (issue #2412) may hand a quota 429 to the next one — three times at most
-        self.rehome = getattr(self, "auto", False) and cred == "file" and hops < 3
+        self.rehome = getattr(self, "auto", False) and cred == "file" and hops < 3 and not getattr(self, "claude_decision", None)
         return self.upstream(base, upath, out, body, route, sid, acct, cred, seen, t0, provider,
-                             can_switch=nxt is not None, tried=tried)
+                             can_switch=nxt is not None and not getattr(self, "claude_decision", None), tried=tried)
 
     def ustat(self, route, acct, sid, cls, t1, what):
         """One attempt into the upstream stats (T657) — never the hub broker's."""
@@ -2571,11 +2751,19 @@ class Proxy(BaseHTTPRequestHandler):
             self.ustat(route, acct, sid, up_err_class(e), t1, type(e).__name__)
             self.fail(502, "upstream %s: %s" % (route, type(e).__name__), "api_error")
             return None
+        if provider == "claude" and getattr(self, "claude_decision", None) and 300 <= r.status < 400:
+            conn.close()
+            self.fail(400, "Claude redirect refused; request was not replayed", "claude_redirect_refused")
+            return None
         ttfb = time.time() - t0
         self.ustat(route, acct, sid, up_status_class(r.status), t1, r.status)
         if provider in ("claude", "codex"):
             self.t.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
+        if provider == "claude" and getattr(self, "claude_decision", None) and r.status == 429:
+            first = r.read(65536)
+            with Proxy.lock:
+                Proxy.limited[(provider, acct)] = limit_until(provider, r.getheaders(), first)
         if r.status == 429 and provider == "codex" and cred == "file":
             first = r.read(65536)
             with Proxy.lock:
@@ -2630,6 +2818,21 @@ class Proxy(BaseHTTPRequestHandler):
             self.t.codex_record(sid, acct, [codex_ref("header:" + k.lower(), v)
                 for k, v in r.getheaders() if k.lower() in ("x-codex-turn-state", "x-codex-routing-hint") and v],
                 getattr(self, "codex_source_identity", ""))
+        claude_stream = None
+        if provider == "claude" and cred == "file" and getattr(self, "claude_decision", None) and 200 <= r.status < 300:
+            if r.getheader("Content-Encoding", "identity") != "identity":
+                conn.close()
+                self.fail(502, "Unsupported Claude response encoding", "api_error")
+                return None
+            def record_claude(refs):
+                try:
+                    self.t.claude_record(sid, self.claude_decision, refs)
+                except OSError:
+                    # Finish this stream; absent durable references cannot
+                    # authorize a continuation after restart.
+                    self.log(ev="claude_affinity_record_unavailable", sid=sid)
+            recorder = claude_capacity.Recorder(record_claude)
+            claude_stream = claude_capacity.response_chunks(r, r.getheader("Content-Type", ""), recorder.event)
         self.send_response_only(r.status, r.reason)
         rh = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP]
         for k, v in rh:
@@ -2655,12 +2858,12 @@ class Proxy(BaseHTTPRequestHandler):
                         if meter:
                             meter.feed(d)
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(d), d)); self.wfile.flush()
-                    d = r.read1(65536)
+                    d = next(claude_stream, b"") if claude_stream is not None else r.read1(65536)
                     if not d:
                         break
                 self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
-        except OSError:
-            pass
+        except (OSError, ValueError):
+            self.close_connection = True
         conn.close()
         extra = {}
         if meter:
@@ -3436,6 +3639,8 @@ def ctl_handle(req, t):
         if not isinstance(sid, str) or not sid or len(sid) > 256:
             return {"ok": False, "err": "capacity-preview: --sid required"}
         pin = read_json(os.path.join(cfg.state, "bind.json"), {}).get(sid, "")
+        if req.get("provider") == "claude":
+            return t.claude_pick(sid, {"model": req.get("model", ""), "independent": True, "unknown": False, "references": []}, pin=pin, preview=True)
         return t.codex_pick(sid, pin=pin, preview=True, proposed=True)
     if op == "standing":
         # issue #4606, read-only: may a pick land on each account, and when does
@@ -4230,6 +4435,7 @@ def serve(a):
     def capacity_tick(t):
         while not DRAIN["on"]:
             t.refresh_capacity_metadata()
+            t.refresh_claude_metadata()
             time.sleep(5)
     for tenant in tenants:
         threading.Thread(target=capacity_tick, args=(tenant,), daemon=True).start()
@@ -4323,6 +4529,8 @@ def main():
     sub.add_parser("picks")
     cp = sub.add_parser("capacity-preview")
     cp.add_argument("--sid", required=True)
+    cp.add_argument("--provider", default="codex", choices=("codex", "claude"))
+    cp.add_argument("--model", default="")
     g = sub.add_parser("standing")
     g.add_argument("--provider", default="codex", choices=("claude", "codex"))
     u = sub.add_parser("status")
@@ -4403,7 +4611,7 @@ def main():
     elif a.cmd == "quota":
         print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
     elif a.cmd == "capacity-preview":
-        print(json.dumps(ctl_call(a.state, {"op": "capacity-preview", "sid": a.sid}), sort_keys=True))
+        print(json.dumps(ctl_call(a.state, {"op": "capacity-preview", "sid": a.sid, "provider": a.provider, "model": a.model}), sort_keys=True))
     elif a.cmd == "picks":
         res = ctl_call(a.state, {"op": "picks"})
         print(json.dumps({"picks": res["picks"], "pinned": res["pinned"]}, sort_keys=True))

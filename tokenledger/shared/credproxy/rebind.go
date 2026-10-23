@@ -37,6 +37,13 @@ type Rebinder interface {
 
 // Rebind reports a quota 429 on account for pass's session.
 func (h *HubResolver) Rebind(ctx context.Context, pass, provider, owner, account string, resetAt int64, credentialID ...string) (Resolution, error) {
+	return h.rebind(ctx, pass, provider, owner, account, resetAt, false, credentialID...)
+}
+func (h *HubResolver) NoteClaudeLimit(ctx context.Context, pass string, res Resolution, resetAt int64) error {
+	_, err := h.rebind(ctx, pass, Claude, res.Owner, res.Account, resetAt, true, res.CredentialID)
+	return err
+}
+func (h *HubResolver) rebind(ctx context.Context, pass, provider, owner, account string, resetAt int64, observeOnly bool, credentialID ...string) (Resolution, error) {
 	c := h.Client
 	if c == nil {
 		c = &http.Client{Timeout: 5 * time.Second}
@@ -46,7 +53,7 @@ func (h *HubResolver) Rebind(ctx context.Context, pass, provider, owner, account
 		identity = credentialID[0]
 	}
 	body, _ := json.Marshal(map[string]any{"cred": pass, "provider": provider, "owner": owner,
-		"account": account, "reset_at": resetAt, "credential_id": identity})
+		"account": account, "reset_at": resetAt, "credential_id": identity, "observe_only": observeOnly})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.URL, "/")+RebindPath, bytes.NewReader(body))
 	if err != nil {
 		return Resolution{}, err
@@ -161,6 +168,14 @@ func (p *Proxy) rebind(ctx context.Context, resp *http.Response, pass, provider 
 	}{io.MultiReader(bytes.NewReader(raw), orig), orig}
 	limited, resetAt := quotaLimited(provider, resp.Header, raw)
 	if !limited {
+		return resp
+	}
+	if res.ClaudeAffinityV1 {
+		if observer, ok := p.cfg.Resolver.(interface {
+			NoteClaudeLimit(context.Context, string, Resolution, int64) error
+		}); ok {
+			_ = observer.NoteClaudeLimit(ctx, pass, *res, resetAt)
+		}
 		return resp
 	}
 	nr, err := rb.Rebind(ctx, pass, provider, res.Owner, res.Account, resetAt, res.CredentialID)

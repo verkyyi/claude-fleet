@@ -682,7 +682,7 @@ def install(a):
     # 3. the code the role account runs: root's copy, never the login's checkout
     mkdir(LIB, 0o755, "root" if os.geteuid() == 0 else login)
     moved_code = False
-    for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py"):
+    for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py", "fleet_claude_capacity.py"):
         with open(os.path.join(HERE, f), "rb") as src:
             moved_code |= put_changed(os.path.join(LIB, f), src.read(), 0o755, "root" if os.geteuid() == 0 else login)
     say("code:", LIB, "(updated)" if moved_code else "(current)")
@@ -1534,7 +1534,11 @@ def shared_tenants():
 def code_version(path):
     import hashlib
     try:
-        return hashlib.sha256(open(path, "rb").read()).hexdigest()[:12]
+        data = open(path, "rb").read()
+        module = os.path.join(os.path.dirname(path), "fleet_claude_capacity.py")
+        if b"fleet_claude_capacity" in data and os.path.isfile(module):
+            data += open(module, "rb").read()
+        return hashlib.sha256(data).hexdigest()[:12]
     except OSError:
         return ""
 
@@ -2068,7 +2072,7 @@ def machine_refresh(a):
     sup = shared_supervised()
     owner = "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name
     moved = False
-    for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py"):
+    for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py", "fleet_claude_capacity.py"):
         with open(os.path.join(HERE, f), "rb") as src:
             moved |= put_changed(os.path.join(LIB, f), src.read(), 0o755, owner)
     for m in shared_tenants():

@@ -86,23 +86,24 @@ const maxBody = 64 << 20
 
 // Resolution is the hub's answer for one pass + provider (api.CredProxyResolve).
 type Resolution struct {
-	CodexAffinityV1 bool       `json:"codex_affinity_v1,omitempty"`
-	CredentialID    string     `json:"credential_id,omitempty"`
-	Valid           bool       `json:"valid"`
-	Reason          string     `json:"reason,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	ID              string     `json:"id,omitempty"`
-	Principal       string     `json:"principal,omitempty"`
-	WorkerID        string     `json:"worker_id,omitempty"`
-	Machine         string     `json:"machine,omitempty"`
-	Exp             int64      `json:"exp,omitempty"`
-	Provider        string     `json:"provider,omitempty"`
-	Owner           string     `json:"owner,omitempty"`
-	Account         string     `json:"account,omitempty"`
-	BindRev         int64      `json:"bind_rev,omitempty"`
-	AccessToken     string     `json:"access_token,omitempty"`
-	AccountID       string     `json:"account_id,omitempty"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	ClaudeAffinityV1 bool       `json:"claude_affinity_v1,omitempty"`
+	CodexAffinityV1  bool       `json:"codex_affinity_v1,omitempty"`
+	CredentialID     string     `json:"credential_id,omitempty"`
+	Valid            bool       `json:"valid"`
+	Reason           string     `json:"reason,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	ID               string     `json:"id,omitempty"`
+	Principal        string     `json:"principal,omitempty"`
+	WorkerID         string     `json:"worker_id,omitempty"`
+	Machine          string     `json:"machine,omitempty"`
+	Exp              int64      `json:"exp,omitempty"`
+	Provider         string     `json:"provider,omitempty"`
+	Owner            string     `json:"owner,omitempty"`
+	Account          string     `json:"account,omitempty"`
+	BindRev          int64      `json:"bind_rev,omitempty"`
+	AccessToken      string     `json:"access_token,omitempty"`
+	AccountID        string     `json:"account_id,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
 	// SessionPub is the key fcp-h2 is signed with (base64), when the hub has one.
 	SessionPub string `json:"session_pub,omitempty"`
 	// SessionPubPrev is the key a rotation retires (claude-fleet#4138).
@@ -558,6 +559,11 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		if err == nil {
 			p.learnPub(res)
 		}
+	} else if router, ok := p.cfg.Resolver.(ClaudeRouter); provider == Claude && ok {
+		res, stale, err = p.resolveClaude(r.Context(), router, pass, claudeRoute(r, body))
+		if err == nil {
+			p.learnPub(res)
+		}
 	} else if provider == Codex && !codexRoute(r, body).Independent {
 		res = Resolution{Error: CodexContinuationUnavailable, Reason: "affinity_protocol_unavailable"}
 	} else {
@@ -574,6 +580,16 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	a.principal, a.worker, a.pass = res.Principal, res.WorkerID, res.ID
+	if !res.Valid && res.Error == ClaudeCapacityUnavailable {
+		a.status, _ = refuseCode(w, provider, http.StatusTooManyRequests, "rate_limit_error", ClaudeCapacityUnavailable, "No observed eligible Claude subscription; weekly and model limits apply")
+		a.why = res.Reason
+		return
+	}
+	if !res.Valid && res.Error == ClaudeContinuationUnavailable {
+		a.status, _ = refuseCode(w, provider, http.StatusConflict, "invalid_request_error", ClaudeContinuationUnavailable, res.Reason)
+		a.why = res.Reason
+		return
+	}
 	if !res.Valid && provider == Claude && res.Error == ClaudePoolUnavailable {
 		a.status, _ = refuseCode(w, provider, http.StatusTooManyRequests, "rate_limit_error", ClaudePoolUnavailable,
 			"Claude subscription pool unavailable ("+ClaudePoolUnavailable+")")
@@ -644,7 +660,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		// a metered answer must be readable here (claude-fleet#3407): Claude
 		// Code asks for br / zstd, which the meter cannot open
 		out.Header.Set("Accept-Encoding", meterAccept(r.Header.Values("Accept-Encoding")))
-		if provider == Codex {
+		if provider == Codex || res.ClaudeAffinityV1 {
 			out.Header.Set("Accept-Encoding", "identity")
 		}
 		if provider == Claude {
@@ -662,7 +678,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			// never sees the credential, which rides inside TLS to the provider
 			out.Header.Set("X-Fleet-Relay", pass)
 		}
-		if provider == Codex {
+		if provider == Codex || res.ClaudeAffinityV1 {
 			// net/http must not replay a buffered inference body on a redirect or
 			// a reused-connection retry, including requests with idempotency headers.
 			out.GetBody = nil
@@ -692,11 +708,11 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	defer resp.Body.Close()
-	if provider == Codex && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+	if (provider == Codex || res.ClaudeAffinityV1) && resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		// Do not hand the redirect to the Agent either: its HTTP client could
 		// automatically resend the same body to the Location target.
-		a.status, _ = refuseCode(w, provider, http.StatusBadRequest, "invalid_request_error", "codex_redirect_refused", "upstream redirect refused; request was not replayed")
-		a.why = "codex_redirect_refused"
+		a.status, _ = refuseCode(w, provider, http.StatusBadRequest, "invalid_request_error", provider+"_redirect_refused", "upstream redirect refused; request was not replayed")
+		a.why = provider + "_redirect_refused"
 		return
 	}
 	responseBody := io.Reader(resp.Body)
@@ -737,6 +753,26 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		}
 	}
 
+	if router, ok := p.cfg.Resolver.(ClaudeRouter); provider == Claude && ok && res.ClaudeAffinityV1 && resp.StatusCode/100 == 2 {
+		if enc := resp.Header.Get("Content-Encoding"); enc != "" && enc != "identity" {
+			err = errors.New("affinity_encoding_unsupported")
+		} else {
+			responseBody, err = codexResponseReader(resp.Body, resp.Header.Get("Content-Type"), claudeOutputRecorder(func(refs []string) error {
+				ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				defer cancel()
+				if err := router.RecordClaudeAffinity(ctx, pass, res, refs); err != nil {
+					// A recording outage cannot interrupt an already-started stream.
+					// Unrecorded references remain unknown and the next request refuses.
+					a.why = "claude_affinity_record_unavailable"
+				}
+				return nil
+			}))
+		}
+		if err != nil {
+			a.status, _ = refuse(w, provider, 502, "api_error", "could not establish Claude continuation source")
+			return
+		}
+	}
 	for k, vs := range resp.Header {
 		lk := strings.ToLower(k)
 		if lk == "connection" || lk == "keep-alive" || lk == "transfer-encoding" || lk == "trailer" ||

@@ -26,8 +26,10 @@ func (rejection AccessRejection) Valid() bool {
 }
 
 type ResolveRequest struct {
-	Codex       *CodexRoute          `json:"codex,omitempty"`
-	CodexRecord *CodexAffinityRecord `json:"codex_record,omitempty"`
+	Claude       *ClaudeRoute         `json:"claude,omitempty"`
+	ClaudeRecord *CodexAffinityRecord `json:"claude_record,omitempty"`
+	Codex        *CodexRoute          `json:"codex,omitempty"`
+	CodexRecord  *CodexAffinityRecord `json:"codex_record,omitempty"`
 	// Compatibility field. A new HTTP request does not prove independence;
 	// the hub now requires Codex route evidence before proactive selection.
 	RequestBoundary bool             `json:"request_boundary,omitempty"`

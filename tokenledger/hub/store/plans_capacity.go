@@ -17,6 +17,7 @@ import (
 type PlanCapacityWindow struct {
 	Minutes int64   `json:"minutes"`
 	Units   float64 `json:"units"`
+	Source  string  `json:"source,omitempty"`
 }
 
 type PlanCapacityProfile struct {
@@ -36,6 +37,24 @@ type PlanCapacityProfile struct {
 type PlanCapacityCatalog struct {
 	Mode     string                `json:"mode"` // off, shadow (preview only), active
 	Profiles []PlanCapacityProfile `json:"profiles"`
+	// Legacy mode/profiles remain exclusively Codex. Omitted provider entries
+	// mean off on reads and preserve existing entries on a legacy PUT.
+	Providers map[string]ProviderCapacityCatalog `json:"providers,omitempty"`
+}
+
+type ProviderCapacityCatalog struct {
+	Mode     string                `json:"mode"`
+	Profiles []PlanCapacityProfile `json:"profiles"`
+}
+
+func (c PlanCapacityCatalog) Provider(provider string) ProviderCapacityCatalog {
+	if provider == "codex" {
+		return ProviderCapacityCatalog{Mode: c.Mode, Profiles: c.Profiles}
+	}
+	if p, ok := c.Providers[provider]; ok {
+		return p
+	}
+	return ProviderCapacityCatalog{Mode: "off", Profiles: []PlanCapacityProfile{}}
 }
 
 type PlanCapacityRevision struct {
@@ -51,6 +70,41 @@ var ErrCapacityConflict = errors.New("capacity catalog changed; reload before sa
 func (c PlanCapacityCatalog) Validate() error {
 	if c.Mode != "off" && c.Mode != "shadow" && c.Mode != "active" {
 		return errors.New("mode must be off, shadow or active")
+	}
+	for provider, catalog := range c.Providers {
+		if provider != "claude" {
+			return errors.New("providers supports claude; legacy mode/profiles are Codex")
+		}
+		if catalog.Mode != "off" && catalog.Mode != "shadow" && catalog.Mode != "active" {
+			return errors.New("provider mode must be off, shadow or active")
+		}
+		if len(catalog.Profiles) > 100 {
+			return errors.New("at most 100 provider profiles")
+		}
+		seen := map[string]bool{}
+		for _, p := range catalog.Profiles {
+			key := provider + "\x00" + p.Pool + "\x00" + p.Plan + "\x00" + p.Tier
+			if p.Pool != "claude" || seen[key] {
+				return errors.New("Claude profiles require unique provider/pool/plan/tier")
+			}
+			seen[key] = true
+			// Reuse numeric/evidence validation without relaxing Codex's surface.
+			copy := p
+			copy.Pool = "codex"
+			if err := (PlanCapacityCatalog{Mode: "off", Profiles: []PlanCapacityProfile{copy}}).Validate(); err != nil {
+				return err
+			}
+			five := false
+			for _, w := range p.Windows {
+				five = five || w.Minutes == 300
+				if w.Minutes == 10080 && !capacityText(w.Source, 512) {
+					return errors.New("Claude weekly units require separately evidenced window source; 5h Max multipliers do not establish weekly capacity")
+				}
+			}
+			if !five {
+				return errors.New("Claude estimates require a 5h baseline; weekly remains a separate eligibility gate")
+			}
+		}
 	}
 	if len(c.Profiles) > 100 {
 		return errors.New("at most 100 capacity profiles")
@@ -124,10 +178,6 @@ func (s *Store) SetPlanCapacities(c PlanCapacityCatalog, expected int64, actor s
 	if expected < 0 || expected > 1e12 || !capacityText(actor, 256) {
 		return PlanCapacityRevision{}, errors.New("invalid revision or actor")
 	}
-	doc, err := json.Marshal(c)
-	if err != nil {
-		return PlanCapacityRevision{}, err
-	}
 	tx, err := s.write.Begin()
 	if err != nil {
 		return PlanCapacityRevision{}, err
@@ -146,6 +196,30 @@ func (s *Store) SetPlanCapacities(c PlanCapacityCatalog, expected int64, actor s
 	}
 	if n != 1 {
 		return PlanCapacityRevision{}, ErrCapacityConflict
+	}
+	// A legacy client only knows mode/profiles. Merge provider keys while
+	// holding the same revision CAS; omission can never erase Claude config.
+	var priorDoc string
+	if err := tx.QueryRow(`SELECT document FROM subscription_capacity_revisions WHERE revision=?`, expected).Scan(&priorDoc); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return PlanCapacityRevision{}, err
+	}
+	if priorDoc != "" {
+		var prior PlanCapacityCatalog
+		if err := json.Unmarshal([]byte(priorDoc), &prior); err != nil {
+			return PlanCapacityRevision{}, err
+		}
+		if c.Providers == nil && len(prior.Providers) > 0 {
+			c.Providers = map[string]ProviderCapacityCatalog{}
+		}
+		for provider, value := range prior.Providers {
+			if _, present := c.Providers[provider]; !present {
+				c.Providers[provider] = value
+			}
+		}
+	}
+	doc, err := json.Marshal(c)
+	if err != nil {
+		return PlanCapacityRevision{}, err
 	}
 	if _, err = tx.Exec(`INSERT INTO subscription_capacity_revisions(revision,document,actor,at) VALUES(?,?,?,?)`, expected+1, string(doc), actor, at.UTC().Format(time.RFC3339Nano)); err != nil {
 		return PlanCapacityRevision{}, err

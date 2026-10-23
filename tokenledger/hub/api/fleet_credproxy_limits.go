@@ -163,6 +163,7 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		ObserveOnly  bool   `json:"observe_only"`
 		Cred         string `json:"cred"`
 		Provider     string `json:"provider"`
 		Account      string `json:"account"`
@@ -207,6 +208,10 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.ObserveOnly {
+		writeJSON(w, 200, out)
+		return
+	}
 	epID := s.passEndpoint(c.ID, now)
 	b, err := s.sessionBind(c.WorkerID, c.Principal, epID, req.Provider, now)
 	current, _ := s.Store.Credential(owner, req.Provider, req.Account)

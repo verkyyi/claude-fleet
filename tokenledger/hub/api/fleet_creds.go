@@ -455,8 +455,9 @@ type FleetCredentialRequest struct {
 	// Plan and RateLimitTier are plan's arguments (claude-fleet EEJD): the
 	// subscription an existing credential is on, as an admin says — the
 	// provider's own value (max, pro, prolite …), never a label. "" clears.
-	Plan          string `json:"plan,omitempty"`
-	RateLimitTier string `json:"rate_limit_tier,omitempty"`
+	Plan          string                 `json:"plan,omitempty"`
+	RateLimitTier string                 `json:"rate_limit_tier,omitempty"`
+	PlanEvidence  credvault.PlanEvidence `json:"plan_evidence,omitempty"`
 	// SourceClass is source's argument (WACK C1): subscription or api, for
 	// a pool row; "" clears.
 	SourceClass string `json:"source_class,omitempty"`
@@ -657,7 +658,14 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			if s.vaultLocked(w) {
 				return
 			}
-			if err := s.Vault.SetPlan(req.PrincipalID, req.Provider, req.Account, plan, tier); err != nil {
+			if req.Provider == credvault.Claude && (plan != "" || tier != "") {
+				e := req.PlanEvidence
+				if strings.TrimSpace(e.Source) == "" || len(e.Source) > 512 || strings.ContainsAny(e.Source, "\r\n\x00") || (e.Confidence != "verified" && e.Confidence != "provisional") || e.ObservedAt.IsZero() || e.ObservedAt.After(time.Now()) {
+					httpError(w, 400, "Claude registration requires source, confidence and nonfuture observed_at")
+					return
+				}
+			}
+			if err := s.Vault.SetPlan(req.PrincipalID, req.Provider, req.Account, plan, tier, req.PlanEvidence); err != nil {
 				code := http.StatusInternalServerError
 				switch {
 				case errors.Is(err, store.ErrNoCredential):

@@ -2675,6 +2675,14 @@ drill_trial_code_burst() {
   SECS=$(since "$t0")
 }
 
+drill_claude_capacity_hard_limits() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  go_half '^TestClaude(HardLimits|UnknownWindows|FiveHour)' ./shared/credproxy; case $? in 1) return 1 ;; esac
+  WHAT="Claude 硬额度先于套餐比较；未知窗口与周基线由隔离 fixtures 验证"
+  SECS=$(since "$t0")
+}
+
 drill_codex_quota_sticky() {
   CAP=120; local t0; GO_RAN=0
   t0=$(now)
