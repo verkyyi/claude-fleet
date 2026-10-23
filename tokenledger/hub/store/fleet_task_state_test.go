@@ -19,6 +19,13 @@ func newV1Task(t *testing.T, st *store.Store, token, parent string) store.FleetT
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Historical children still project their own state in the read-only view.
+	if parent != "" {
+		if _, err := st.DB().Exec(`UPDATE fleet_tasks SET parent_task=? WHERE id=?`, parent, rec.ID); err != nil {
+			t.Fatal(err)
+		}
+		rec.ParentTask = parent
+	}
 	return rec
 }
 

@@ -5,14 +5,12 @@ import (
 	"strings"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
-	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // The same node authentication and account scope as task reads. No GitHub
 // adapter, inventory inference, or new transport participates in these calls.
-// A session's result is its window's ID's (EPIC T497 C8): the record takes no
-// report; a child report travels as the parent's message (a relay), routed by
-// the parent's ID on the receiving machine.
+// Parent columns and children reads are historical compatibility only.
+// New acceptance creates no relationship and takes no Parent report.
 func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, owner, ref string) bool {
 	task, action, found := strings.Cut(ref, "/")
 	if !found {
@@ -64,25 +62,4 @@ func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, e
 		httpError(w, 404, "unknown task action")
 	}
 	return true
-}
-
-// An explicit parent session is a lifelong identity from the same account.
-// Parent task binding is then snapshotted transactionally by store.
-func (s *Server) checkTaskParentSession(owner, session string) error {
-	if session == "" {
-		return nil
-	}
-	fid, sid, err := fleetid.ParseWorkerID(session)
-	if err != nil || !fleetid.IsUUID(sid) {
-		return store.ErrTaskFence
-	}
-	fleet, err := s.Store.Fleet(fid)
-	if err != nil {
-		return store.ErrTaskFence
-	}
-	ep, err := s.Store.LiveEndpoint(fleet.EndpointID)
-	if err != nil || s.nodeTaskOwner(ep) != owner {
-		return store.ErrTaskFence
-	}
-	return nil
 }
