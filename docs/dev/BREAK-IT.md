@@ -21,7 +21,6 @@
 | 旧 Task Outcome 已结束，新代次待启动尚无 tmux 窗口 | autoclean 把工作树当完成垃圾删除，接续丢失环境 | 工作树专用只读判断保留 controlled Task（含空执行绑定）；读取未知 KEEP，legacy 保留原清理契约 | `task-worktree-current-generation` |
 | 旧会话结果、关闭事件或创建时间超时补偿落在已接续的受控 Task 上 | 新代次仍有启动绑定，却被旧事件写成 succeeded/cancelled，下一次接续被拒绝 | ID 历史照常保存；旧投影跳过受控 Task，写入对比代次及绑定快照，补偿在事务内复核 | `task-history-current-generation` |
 | 历史 Asked、结果或旧窗口覆盖当前 Task；短码随终态改变目标 | 错示需回答或打开旧会话 | 当前执行绑定、原生状态与固定 Task 代码；前缀歧义拒绝，历史保留 | `task-current-view` |
-| Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
 | 同一 Task 保留的原生会话继续运行，但编号或任务记录仍有上一轮的 blocked/failed/done/merged 结果 | tmux 把空闲误示为需要回答或完成；Web 兼容列表让旧失败压住当前运行 | 当前会话只用原生观测展示状态；历史结果保留在编号和任务记录，不回填 live state；真正原生需要回答、运行、未知和历史行各自保留 | `task-result-overrides-native` |
 | 新 Task 仍写 Parent 关系，或删字段后旧启动 token 重放冲突 | 新任务继续依赖父会话；重试可能重开任务或无法恢复原接受结果 | 新请求不写 Parent；旧接受记录原字节保留，仅比较已知传输 Parent 字段的规范化投影，任务正文差异仍拒绝 | `task-parent-write-retired` |
 | 用户把 worker 改名为 home/dash/plan/backlog，或把真正面板改成普通名称 | 按 FID 主动停止时只看窗口名：真实任务关不掉，真正面板却可能被当作任务关闭 | FID 解析成功后读取既有 fleet_win_role，仅 worker 可停；名称只参与未标记旧窗口的兼容判断。隔离 socket 验证改名、keep/PIN/loop、工作树保留、旧窗口、身份歧义 | `stop-renamed-worker` |
