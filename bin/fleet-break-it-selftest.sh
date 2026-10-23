@@ -6949,6 +6949,15 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_authority() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinue' -count=1) >"$WORK/task-continue.log" 2>&1 || {
+    WHY="explicit continuation authority regression: $(tail -8 "$WORK/task-continue.log")"; return 1;
+  }
+  WHAT='真实 Hub API 与 SQLite：停止证明、同端点、精确幂等、并发 provider、旧回执及失联节点均受新授权约束'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_replay_cleanup() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-execution-control-selftest.py" \
@@ -7744,6 +7753,15 @@ drill_parent_origin_retired() {
     WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
   }
   WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
+drill_stop_renamed_worker() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
+    WHY="renamed-worker stop or panel protection failed: $(tail -12 "$WORK/stop-renamed-worker.log")"; return 1;
+  }
+  WHAT='worker改名home/dash/plan/backlog仍可按FID停止；真home/panel改名仍受保护；未标记旧窗口保留旧规则'
   SECS=$(since "$t0")
 }
 
