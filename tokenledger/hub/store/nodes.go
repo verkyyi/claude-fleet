@@ -215,6 +215,9 @@ func (s *Store) EnsureNodes() error {
 		return err
 	}
 	// The relay audit (claude-fleet#1413).
+	if err := s.ensureFleetPreviews(); err != nil {
+		return err
+	}
 	return s.ensureFleetSSHRelays()
 }
 

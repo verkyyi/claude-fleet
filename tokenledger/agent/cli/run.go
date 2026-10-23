@@ -39,6 +39,8 @@ func Run(name string, args []string) (handled bool, code int) {
 		// The seated node program's tenant command, through the root core's
 		// exec-as (claude-fleet#3669): exits with the job's code.
 		return true, runCoreExec(args)
+	case "preview-pipe":
+		return true, runPreviewPipe(args)
 	case "chat-pipe": // agent.ChatPipeCmd
 		// A chat relay's last hop, run as the login (claude-fleet#3644):
 		// its own conversation socket on stdio, nothing else.
