@@ -2118,8 +2118,8 @@ class StuckReaps(unittest.TestCase):
 
         def tm(*argv):
             if argv[0] == "display-message":
-                # the one-call snapshot asks "#{a}\x1f#{b}…": answer each name it asked
-                return "\x1f".join(opts.get(n[2:-1], "") for n in argv[-1].split("\x1f"))
+                # the one-call snapshot asks "#{a}\t#{b}…": answer each name it asked
+                return "\t".join(opts.get(n[2:-1], "") for n in argv[-1].split("\t"))
             self.writes.append(argv)
             return ""
         c.tm = tm
