@@ -54,6 +54,7 @@
 | 组件 | 类别 | 理由 |
 |---|---|---|
 | 执行会话（worker start hook） | 核心 | 发起人拍板 2 覆盖草稿的按需建议；按任务记录开工、正常 PR/合并流程保持，说明书按 #4325 瘦身。 |
+| Task 唯一执行与停止约束（Hub Store execution / `fleet_task_execution.py`） | 核心 | 防止同一任务双跑，并保存用户停止意图；复用既有 Task、operation 与节点 control 数据库，无新业务状态、租约或常驻服务。本次为底座，实际派发、恢复和完整停止入口尚未接通；不接管旧会话。 |
 | 上下文连续性（`fleet-handoff` / `fleet-compact-resume` / `fleet-context` / `handoff`） | 核心 | 保留同一任务的上下文与恢复能力。 |
 | 停放定时约定与接回保护（`fleet_park_wake.py`、`fleet_wake_guard.py`、`fleet_park_version.py`） | 核心 | 进程退出后保留原会话的下一轮；复用 spinner 时钟和会话门；外壳以跨登录名额约束原生启动、保留失败原话，无新增常驻调度器。 |
 | 会话迁移与历史（`fleet-move` / `fleet-history`） | 核心 | 支持跨节点连续工作与已关闭会话恢复。 |

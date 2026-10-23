@@ -217,6 +217,14 @@ func (s *Store) CancelUnopenedTask(id int64, owner, evidence string, now time.Ti
 	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner != owner {
 		return FleetTask{}, ErrTaskFence
 	}
+	// Controlled execution uses RequestTaskStop even before a worker claims
+	// the endpoint. Preserve its stop operation reference and original binding;
+	// the historical cancel:T:g marker must never overwrite either.
+	if controlled, err := taskExecutionProtectedTx(tx, t); err != nil {
+		return FleetTask{}, err
+	} else if controlled {
+		return FleetTask{}, ErrTaskConflict
+	}
 	if t.Outcome == TaskCancelled && t.CancelRequest != "" {
 		return t, tx.Commit()
 	}

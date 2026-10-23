@@ -48,8 +48,33 @@ func taskStartOf(o FleetOperation) (*taskStartEnvelope, error) {
 // It does not claim execution ownership or fence already running processes.
 func (s *Store) fenceTaskStartTx(tx *sql.Tx, o FleetOperation) (string, int64, error) {
 	d, err := taskStartOf(o)
-	if err != nil || d == nil {
+	if err != nil {
 		return "", 0, err
+	}
+	if d == nil {
+		// Older clients can carry only params.task. Serialize that start with
+		// explicit admission too, while keeping all unbound legacy semantics.
+		var request struct {
+			Params struct {
+				Task string `json:"task"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(o.Request), &request) != nil || ParseTaskRef(request.Params.Task) == 0 {
+			return "", 0, nil
+		}
+		t, err := s.taskInTx(tx, ParseTaskRef(request.Params.Task))
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", 0, nil
+		}
+		if err != nil {
+			return "", 0, err
+		}
+		if controlled, err := taskExecutionProtectedTx(tx, t); err != nil {
+			return "", 0, err
+		} else if controlled {
+			return "", 0, ErrTaskConflict
+		}
+		return "", 0, nil
 	}
 	t, err := s.taskInTx(tx, ParseTaskRef(d.Task))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -62,6 +87,13 @@ func (s *Store) fenceTaskStartTx(tx *sql.Tx, o FleetOperation) (string, int64, e
 		t.Generation != d.Generation || t.AttemptID != d.AttemptID ||
 		t.CancelRequest != "" || t.State == TaskCancelled || t.Outcome == TaskCancelled {
 		return "", 0, ErrTaskFence
+	}
+	// Explicit control admission owns this task now. A legacy journal with a
+	// different key must not create a second launch beside its reserved endpoint.
+	if controlled, err := taskExecutionProtectedTx(tx, t); err != nil {
+		return "", 0, err
+	} else if controlled {
+		return "", 0, ErrTaskConflict
 	}
 	return t.Ref, t.Generation, nil
 }

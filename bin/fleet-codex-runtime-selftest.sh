@@ -3,7 +3,8 @@
 # All child processes are bounded fake agents; never a real Codex/model request.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-python3 - "$BIN" "$@" <<'PY'
+# The inherited-group regression must never share the operator's process group.
+python3 -c 'import os, sys; os.setsid(); exec(compile(sys.stdin.read(), "<stdin>", "exec"))' "$BIN" "$@" <<'PY'
 import base64, hashlib, importlib.util, json, os, pathlib, signal, socket, struct, subprocess, sys, tempfile, threading, time, unittest
 from unittest import mock
 
@@ -20,6 +21,130 @@ rpc = importlib.util.module_from_spec(spec); spec.loader.exec_module(rpc)
 # socket's directory stands, exits CLIENT_RC; FAIL_SCENARIO's server exits 9 unbound.
 SCENARIO = dict(record='{env:RUNTIME_TEST}', server=dict(lifetime=30),
                 client=dict(hold=dict(flag='--hold', secs=20), exit='{env:CLIENT_RC:0}'))
+
+class GuardianGroupTests(unittest.TestCase):
+    """Real bounded children; the private server exits before its helpers."""
+    def run_guard(self, *, inherited=False, server_exits=False, signal_guard=False):
+        import fleet_native_proc as proc
+        with tempfile.TemporaryDirectory(prefix='codex-guard-group-', dir='/tmp') as temporary:
+            root = pathlib.Path(temporary)
+            directory = root / 'endpoint'; directory.mkdir()
+            fixture = root / 'server.py'
+            fixture.write_text('''import json, os, pathlib, signal, sys, time
+sys.path.insert(0, sys.argv[1])
+import fleet_native_proc as proc
+root = pathlib.Path(sys.argv[2])
+child = os.fork()
+if child == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    (root / 'child.json').write_text(json.dumps(proc.process(os.getpid())))
+    time.sleep(30)
+    os._exit(0)
+(root / 'server.json').write_text(json.dumps(proc.process(os.getpid())))
+while not (root / 'release').exists(): time.sleep(.01)
+if sys.argv[3] == 'exit': sys.exit(0)
+time.sleep(30)
+''')
+            read_fd, write_fd = os.pipe()
+            guardian = sibling = None
+            proofs = []
+            try:
+                # Inherited mode reproduces target_preflight: its caller and
+                # sibling share a group that the guardian MUST NOT signal.
+                sibling = subprocess.Popen([sys.executable, '-c',
+                    'import pathlib,sys,time; pathlib.Path(sys.argv[1]).touch(); time.sleep(30)', str(root / 'sibling-ready')])
+                deadline = time.monotonic() + 5
+                while not (root / 'sibling-ready').exists():
+                    self.assertIsNone(sibling.poll())
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.01)
+                sibling_proof = proc.process(sibling.pid)
+                guardian = subprocess.Popen([sys.executable, str(RUNTIME), '--guard', str(read_fd),
+                    str(directory), sys.executable, str(fixture), str(BIN), str(root),
+                    'exit' if server_exits else 'hold'], pass_fds=(read_fd,),
+                    start_new_session=not inherited, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                os.close(read_fd); read_fd = -1
+                deadline = time.monotonic() + 5
+                while not all((root / (name + '.json')).exists() for name in ('server', 'child')):
+                    self.assertIsNone(guardian.poll(), 'guardian exited before starting fixture')
+                    self.assertLess(time.monotonic(), deadline, 'fixture failed to start')
+                    time.sleep(.02)
+                proofs = [json.loads((root / (name + '.json')).read_text()) for name in ('server', 'child')]
+                self.assertNotEqual(os.getpgid(proofs[0]['pid']), os.getpgrp())
+                self.assertEqual(os.getpgid(proofs[0]['pid']), guardian.pid,
+                                 'guardian must anchor the private server group')
+                self.assertEqual(os.getsid(guardian.pid), guardian.pid)
+                self.assertTrue(proc.same_process(sibling_proof))
+                (root / 'release').touch()
+                if signal_guard:
+                    guardian.send_signal(signal.SIGTERM)
+                elif not server_exits:
+                    os.close(write_fd); write_fd = -1
+                if server_exits:
+                    deadline = time.monotonic() + 3
+                    while proc.same_process(proofs[0]) and time.monotonic() < deadline:
+                        time.sleep(.02)
+                    self.assertFalse(proc.same_process(proofs[0]), 'fixture server did not exit first')
+                    self.assertIsNone(guardian.poll(), 'anchor exited before its stubborn helper')
+                guardian.wait(timeout=8)
+                deadline = time.monotonic() + 1
+                while any(proc.same_process(proof) for proof in proofs) and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertFalse(any(proc.same_process(proof) for proof in proofs),
+                                 'private group helper survived its server/guardian')
+                self.assertTrue(proc.same_process(sibling_proof), 'unrelated sibling was signalled')
+                self.assertFalse(directory.exists())
+            finally:
+                if write_fd >= 0: os.close(write_fd)
+                if read_fd >= 0: os.close(read_fd)
+                # Exact fixture birth identities only; never a cached group ID
+                # after the test guardian has been reaped, including on red.
+                for proof in proofs:
+                    if proc.same_process(proof):
+                        try: os.kill(proof['pid'], signal.SIGKILL)
+                        except ProcessLookupError: pass
+                for process in (guardian, sibling):
+                    if process is not None:
+                        if process.poll() is None: process.kill()
+                        process.wait(timeout=5)
+
+    def test_server_exits_before_term_ignoring_helper(self):
+        self.run_guard(server_exits=True)
+
+    def test_preflight_inherited_group_never_signals_caller_or_sibling(self):
+        self.run_guard(inherited=True, server_exits=True)
+
+    def test_owner_pipe_eof_reaps_helpers_after_server_exits_on_term(self):
+        self.run_guard()
+
+    def test_guard_term_preserves_sibling_and_reaps_helpers(self):
+        self.run_guard(signal_guard=True)
+
+    def test_unowned_group_is_never_signalled(self):
+        with mock.patch.object(runtime.os, 'getpgrp', return_value=-1), \
+                mock.patch.object(runtime.os, 'killpg') as send:
+            with self.assertRaisesRegex(RuntimeError, 'does not own'):
+                runtime.stop_private_group(None, '/not-our-directory')
+        send.assert_not_called()
+
+    def test_session_isolation_failure_starts_nothing(self):
+        with mock.patch.object(runtime.os, 'getsid', return_value=-1), \
+                mock.patch.object(runtime.os, 'setsid', side_effect=PermissionError('fixture')), \
+                mock.patch.object(runtime.os, 'killpg') as send, \
+                mock.patch.object(runtime.subprocess, 'Popen') as launch:
+            with self.assertRaises(PermissionError):
+                runtime.guard(-1, '/not-our-directory', ['unused'])
+        launch.assert_not_called()
+        send.assert_not_called()
+
+    def test_stalled_group_query_does_not_wait_unbounded(self):
+        query = mock.Mock()
+        query.communicate.side_effect = subprocess.TimeoutExpired('ps', .5)
+        with mock.patch.object(runtime.subprocess, 'Popen', return_value=query):
+            self.assertTrue(runtime.private_group_busy())
+        self.assertEqual(query.communicate.call_args_list, [mock.call(timeout=.5), mock.call(timeout=.5)])
+        query.kill.assert_called_once_with()
+        query.stdout.close.assert_called_once_with()
 
 class TargetPreflightTests(unittest.TestCase):
     def setUp(self):
