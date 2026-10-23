@@ -6941,6 +6941,15 @@ drill_native_cancel_before_signal() {
   SECS=$(since "$t0")
 }
 
+drill_native_partial_admission() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-partial-exit-selftest.py" >"$WORK/native-partial.log" 2>&1 || {
+    WHY="partial admission regression: $(tail -8 "$WORK/native-partial.log")"; return 1;
+  }
+  WHAT='正向启动协议与认证原 start：新 partial 逐根退出，旧历史、缺 child、活根和身份未知均拒绝'
+  SECS=$(since "$t0")
+}
+
 drill_native_exit_identity() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-session-exit-selftest.py" \
@@ -7004,6 +7013,18 @@ drill_task_unclaimed_stop_proof() {
   SECS=$(since "$t0")
 }
 
+
+drill_task_first_start() {
+  local t0; t0=$(now); CAP=120
+  python3 "$BIN/fleet-task-first-start-selftest.py" >"$WORK/task-first-start.log" 2>&1 || {
+    WHY="claimed first start regression: $(tail -10 "$WORK/task-first-start.log")"; return 1;
+  }
+  (cd "$ROOT/tokenledger" && go test ./hub/store -run '^TestTaskContinueFirstStartGenerationBoundary$' -count=1) >>"$WORK/task-first-start.log" 2>&1 || {
+    WHY="initial generation authority regression: $(tail -10 "$WORK/task-first-start.log")"; return 1;
+  }
+  WHAT='真实退出根与工作树：首次受控启动中断可首启；后续缺历史、旧协议、已有 native slot 和错身份拒绝，原文件与 ACK 保留'
+  SECS=$(since "$t0")
+}
 
 drill_task_continue_unclaimed() {
   local t0; t0=$(now); CAP=120

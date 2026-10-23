@@ -74,20 +74,31 @@ class NativeExitSubmission:
             raise ValueError("Malformed native exit journal")
         return snapshot, result, result.get(RECEIPT, {})
 
-    def prepare_native_exit(self, op_id):
-        from fleet_task_execution import FenceRefused, prove_native_session_exit
+    def read_native_exit_start(self, snapshot, *, timeout=3):
+        """Read the immutable start through the existing authenticated node API."""
+        env = self.environment()
+        env["FLEET_HUB_TIMEOUT"] = str(max(.1, timeout / 2))
+        code, out, _ = run(["bash", str(self.bin / "fleet-task-record.sh"), "execution-start", snapshot["task_ref"]],
+                           env=env, timeout=timeout)
+        if code:
+            raise Fault("UNAVAILABLE", "Hub start authority is unavailable for native exit proof")
+        return json.loads(out)
+
+    def prepare_native_exit(self, op_id, *, timeout=3):
+        from fleet_task_execution import FenceRefused, _snapshot, prove_native_session_exit
         with self.store.connect() as db:
             snapshot, _, receipt = self._exit_row(db, op_id)
         if "payload" in receipt:
             return receipt["payload"]
-        registered = self.execution.launch(snapshot["task_ref"])
-        components = {r["component"] for r in registered["native"]} if registered else set()
-        if components == {"agent"}:
-            provider = "claude"
-        elif components == {"server", "client"}:
-            provider = "codex"
-        else:
-            raise FenceRefused("native provider registration is missing or incomplete")
+        # No journal transaction or admission lock spans this authenticated GET.
+        authority = self.read_native_exit_start(snapshot, timeout=timeout)
+        if (not isinstance(authority, dict) or type(authority.get("control_version")) is not int
+                or authority["control_version"] != 1 or _snapshot(authority.get("task_execution")) != snapshot
+                or not isinstance(authority.get("start"), dict)
+                or authority["start"].get("operation_id") != snapshot["operation_id"]
+                or authority["start"].get("agent") not in ("claude", "codex")):
+            raise FenceRefused("native exit requires the authenticated original start and exact stop snapshot")
+        provider = authority["start"]["agent"]
         # Exact snapshot/history/kernel checks stay in the original proof helper.
         # Its admission barriers have ended before journal persistence/network.
         proof = prove_native_session_exit(snapshot, provider, conf_dir=self.conf_dir)
@@ -132,7 +143,10 @@ class NativeExitSubmission:
                 receipt["attempted_at"] = now()
                 result[RECEIPT], result["execution_exit"] = receipt, "unproven"
                 db.execute("UPDATE operations SET result=? WHERE id=?", (canonical(result), op_id))
-            payload = self.prepare_native_exit(op_id)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Fault("TIMEOUT", "Native exit authority deferred to next heartbeat")
+            payload = self.prepare_native_exit(op_id, timeout=min(3, remaining))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise Fault("TIMEOUT", "Native exit proof saved; submission deferred to next heartbeat")

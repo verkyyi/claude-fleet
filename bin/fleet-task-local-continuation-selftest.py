@@ -68,7 +68,10 @@ class ContinuationTests(unittest.TestCase):
     def confirm(self, stop, exit_id):
         ack = dict(control_version=1, scope='native_session', execution_exit_confirmed=True,
                    operation=dict(operation_id=exit_id, action='task_session_exit', status='succeeded'))
-        with patch.object(self.control, 'send_native_exit', return_value=ack):
+        authority = lambda snapshot, **kwargs: dict(control_version=1, task_execution=snapshot,
+            start=dict(operation_id=snapshot['operation_id'], agent='claude'))
+        with patch.object(self.control, 'read_native_exit_start', side_effect=authority), \
+                patch.object(self.control, 'send_native_exit', return_value=ack):
             self.assertTrue(self.control.submit_native_exit(stop))
 
     def journal(self, stop=STOP):
