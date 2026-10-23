@@ -7017,6 +7017,16 @@ drill_task_continue_historical_outcome() {
   SECS=$(since "$t0")
 }
 
+drill_task_unclaimed_node() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-task-unclaimed-continuation-selftest.py" >"$WORK/task-unclaimed-node.log" 2>&1 || {
+    WHY="unclaimed node regression: $(tail -10 "$WORK/task-unclaimed-node.log")"; return 1;
+  }
+  WHAT='未领取继续仅退休纯分配；真实登记拒绝，旧FID保留停止事实，新分配仍需明确授权'
+  SECS=$(since "$t0")
+}
+
+
 drill_task_continue_authority() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinue' -count=1) >"$WORK/task-continue.log" 2>&1 || {
@@ -7879,6 +7889,15 @@ drill_report_delegation_offline() {
   CAP=30; local t0 out; t0=$(now)
   out=$(python3 "$BIN/fleet-report-delegation-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   WHAT='旧委托写入口立即退役；历史读取不写磁盘、不派发、不补送'
+  SECS=$(since "$t0")
+}
+
+drill_session_title_placeholder() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/task-line-selftest.sh" >"$WORK/title-placeholder.log" 2>&1 || {
+    WHY="first prompt title regression: $(tail -3 "$WORK/title-placeholder.log")"; return 1;
+  }
+  WHAT='短码任务的首句同时更新窗口和记录；中英文占位名消失，后续消息不改名'
   SECS=$(since "$t0")
 }
 
