@@ -45,7 +45,11 @@ func (s *Server) journalTaskExecution(op store.FleetOperation, w writeRequest, e
 
 // One strict object; unknown fields cannot spoof the transport identity.
 func taskExecutionBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	return taskExecutionBodyLimit(w, r, dst, 16<<10)
+}
+
+func taskExecutionBodyLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	d.DisallowUnknownFields()
 	if d.Decode(dst) != nil {
 		httpError(w, http.StatusBadRequest, "invalid task execution request")
@@ -79,11 +83,22 @@ func (s *Server) nodeTaskExecution(w http.ResponseWriter, r *http.Request, ep *s
 		return true
 	}
 	task, route, found := strings.Cut(ref, "/")
-	if !found || (route != "execution" && route != "execution/claim") {
+	if !found || (route != "execution" && route != "execution/claim" && route != "execution/exit") {
 		return false
 	}
 	t, err := s.nodeOwnTask(owner, task)
-	if err != nil || t.ExecutionEndpoint != ep.ID {
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no task execution on this node")
+		return true
+	}
+	// An accepted exit releases the endpoint. Its retry must authenticate the
+	// original node and let the Store check the immutable receipt, not require
+	// the task to retain that old active binding (or inspect a newer one).
+	if route == "execution/exit" {
+		s.nodeTaskSessionExit(w, r, ep, owner, t)
+		return true
+	}
+	if t.ExecutionEndpoint != ep.ID {
 		httpError(w, http.StatusNotFound, "no task execution on this node")
 		return true
 	}
@@ -212,14 +227,33 @@ func (s *Server) stopFleetTask(w http.ResponseWriter, r *http.Request, p fleetPr
 	if strings.TrimSpace(in.Evidence) == "" {
 		in.Evidence = "person requested task stop"
 	}
-	_, op, err := s.Store.RequestTaskStop(t.ID, t.Owner, in.Key, in.Evidence, time.Now())
+	stopped, op, err := s.Store.RequestTaskStop(t.ID, t.Owner, in.Key, in.Evidence, time.Now())
 	if err != nil {
 		taskWriteError(w, err)
 		return
 	}
-	snapshot, err := s.Store.TaskExecutionSnapshot(t.ID, t.Owner)
-	if err != nil {
-		taskWriteError(w, err)
+	s.finishTaskStop(w, r, stopped, op)
+}
+
+// The durable acceptance has already committed when this helper runs. A node
+// may acknowledge exit (and a later explicit resume may win) before we respond.
+func (s *Server) finishTaskStop(w http.ResponseWriter, r *http.Request, stopped store.FleetTask, op store.FleetOperation) {
+	if stopped.ExecutionEndpoint == "" && stopped.ExecutionOwner == "" {
+		// RequestTaskStop accepted this released binding only after checking its
+		// exact start/stop/exit history. No active snapshot or redelivery exists.
+		// The confirmation refers to this stop, even if a later explicit resume
+		// wins immediately after the transaction; it is not current task status.
+		writeJSON(w, http.StatusAccepted, map[string]any{"stop_requested": true, "execution_exit_confirmed": true,
+			"scope": "native_session", "delivery": op.Status, "operation": operationView(op)})
+		return
+	}
+	snapshot, err := s.Store.TaskExecutionSnapshot(stopped.ID, stopped.Owner)
+	if err != nil || snapshot.CancelRequest != op.ID {
+		// Exit or a newer explicit start can win after stop acceptance. Keep
+		// that durable acceptance as the response; never send the old stop with
+		// a newer binding, nor turn successful acceptance into a snapshot 409.
+		writeJSON(w, http.StatusAccepted, map[string]any{"stop_requested": true, "execution_exit_confirmed": false,
+			"delivery": op.Status, "operation": operationView(op)})
 		return
 	}
 	// Stop remains pending while offline. Repeating any key redelivers the same
