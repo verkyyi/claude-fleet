@@ -6753,6 +6753,15 @@ drill_mcp_release_path_pinned() {
 # per agent (Claude's SessionStart payload, Codex's runtime against the one fake
 # app-server): held here by name, not run twice.
 # ① a dispatched Codex task never read as started (#4972)
+drill_codex_internal_thread_hook() {
+  CAP=15; local t0
+  t0=$(now)
+  python3 "$BIN/fleet-agent-witness-selftest.py" WitnessTests.test_codex_internal_thread_hooks_preserve_root \
+    || { WHY='internal native SessionStart changed the root identity or ledger'; return 1; }
+  WHAT='隔离 tmux 与私有 RPC 下，临时线程、子线程及未知线程的两个钩子均不改主会话身份，真实 root 新会话仍可登记'
+  SECS=$(since "$t0")
+}
+
 drill_start_unwitnessed() {
   CAP=10; local t0
   t0=$(now)
