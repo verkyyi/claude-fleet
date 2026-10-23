@@ -202,10 +202,10 @@ If the connection drops after submission, the page reloads the conversation and 
 
 The hub keeps a copy of your conversation in China (your words, the replies' text and one line per tool step; never a tool's output), encrypted and readable only by you. The chat shows this copy first, marked "Syncing", and replaces it with your home node's answer, marked "In sync"; while your node is out of reach you can still read the history ("Syncing · your machine is out of reach"). A copy not refreshed for 90 days is deleted; you can turn it off under Settings → Conversation history, which deletes it at once.
 
-## Private live development previews
+## Fleet Preview · Private live preview
 
 When enabled by the deployment, the Task details show your running HTTP/API/WebSocket
-applications under Live previews, including SSE and explicitly configured Vite HMR.
+applications under Fleet Preview, including SSE and explicitly configured Vite HMR.
 Opening a preview requires sign-in and the Task owner's identity. Disconnected nodes
 show Offline. The default lease is two hours; renew or close it in Task details.
 Closing disconnects active streams without stopping the application.

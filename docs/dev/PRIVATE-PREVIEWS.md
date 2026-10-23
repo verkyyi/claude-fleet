@@ -1,8 +1,8 @@
-# 私人实时开发预览
+# Fleet Preview · 私人实时预览
 
 ## 使用与范围
 
-Task 详情的「实时预览」访问这个 Task 正在运行的 HTTP/API/SSE/WebSocket 服务；
+Task 详情的「Fleet Preview · 私人实时预览」访问这个 Task 正在运行的 HTTP/API/SSE/WebSocket 服务；
 保存的 HTML/Markdown 继续使用 Space / 活页，没有新增 Artifact 存储。
 预览只属于 Task 所有者，管理员没有代看入口。首次打开先到 Hub 登录，再回到独立的
 预览 HTTPS origin。URL 本身不是访问密码。用户可在 Task 详情续期或关闭；关闭不停止
