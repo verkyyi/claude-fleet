@@ -234,6 +234,7 @@ func previewRelayTest(t *testing.T, replicas bool, expiry ...bool) {
 		t.Fatal("offline request", offline.StatusCode)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
 	a, e = agent.New(cfg)
 	if e != nil {
 		t.Fatal(e)
