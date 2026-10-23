@@ -6950,16 +6950,6 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
-drill_task_unclaimed_stop_proof() {
-  local t0; t0=$(now); CAP=120
-  (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
-    WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
-  }
-  WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
-  SECS=$(since "$t0")
-}
-
-
 drill_task_continue_entry() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-continue-entry-selftest.py" >"$WORK/task-continue-entry.log" 2>&1 || {
@@ -6969,15 +6959,35 @@ drill_task_continue_entry() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_entry() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {
     WHY="task stop entry regression: $(tail -10 "$WORK/task-stop-entry.log")"; return 1;
   }
   WHAT='Task stop 跨 Web/tmux/CLI 持久撤销，离线可受理，未知不降级，普通关闭不冒充原生退出'
-
   SECS=$(since "$t0")
 }
+
+drill_task_unclaimed_stop_proof() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
+    WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
+  }
+  WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
+  SECS=$(since "$t0")
+}
+
 
 drill_task_continue_unclaimed() {
   local t0; t0=$(now); CAP=120
@@ -7005,17 +7015,6 @@ drill_task_local_continuation() {
       WHY="local continuation regression: $(tail -10 "$WORK/task-local-continuation.log")"; return 1;
     }
   WHAT='显式新授权与原ACK证明共同接续；旧FID仍停止，同grant同分配，第二轮退出证明独立'
-  SECS=$(since "$t0")
-}
-
-drill_task_continue_historical_outcome() {
-  local t0; t0=$(now); CAP=120
-  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
-    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
-    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
-  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
-    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
-    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
   SECS=$(since "$t0")
 }
 
