@@ -32,6 +32,7 @@ import { shellPath } from "../legacy";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
 import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, writtenCode, type Task } from "../task-state";
 import { findTask } from "../use-tasks";
+import { Previews } from "../Previews";
 import { NewDialog, reposOf } from "../NewDialog";
 import { GLYPH, TONE } from "../SessionList";
 import { useWorkRows } from "../work-rows";
@@ -230,6 +231,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         {r.board?.context ? <p className="max-w-full text-sm [overflow-wrap:anywhere]">{tr(...r.board.context)}</p> : null}
         {!cli && r.parentTitle ? <p className="text-muted-foreground text-sm">{tr(`属于「${r.parentTitle}」`, `Part of “${r.parentTitle}”`)}</p> : null}
       </div>
+      {t ? <Previews task={t.fid || t.id} /> : null}
       {asking && r.live ? (
         <Card className="border-clay-line bg-clay-soft gap-2 py-3">
           <CardContent className="space-y-2 px-4">

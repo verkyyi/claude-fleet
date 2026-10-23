@@ -83,7 +83,7 @@ func (s *Server) nodeTaskExecution(w http.ResponseWriter, r *http.Request, ep *s
 		return true
 	}
 	task, route, found := strings.Cut(ref, "/")
-	if !found || (route != "execution" && route != "execution/claim" && route != "execution/exit") {
+	if !found || (route != "execution" && route != "execution/claim" && route != "execution/exit" && route != "execution/start") {
 		return false
 	}
 	t, err := s.nodeOwnTask(owner, task)
@@ -100,6 +100,19 @@ func (s *Server) nodeTaskExecution(w http.ResponseWriter, r *http.Request, ep *s
 	}
 	if t.ExecutionEndpoint != ep.ID {
 		httpError(w, http.StatusNotFound, "no task execution on this node")
+		return true
+	}
+	if route == "execution/start" {
+		if r.Method != http.MethodGet {
+			httpError(w, http.StatusMethodNotAllowed, "GET")
+			return true
+		}
+		current, err := s.Store.TaskExecutionStart(t.ID, owner, ep.ID)
+		if err != nil {
+			taskWriteError(w, err)
+			return true
+		}
+		writeJSON(w, http.StatusOK, current)
 		return true
 	}
 	snapshot, err := s.Store.TaskExecutionSnapshot(t.ID, owner)

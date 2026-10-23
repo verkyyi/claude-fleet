@@ -201,3 +201,23 @@ Webchat goes through the hub to your home node. The hub keeps one connection to 
 If the connection drops after submission, the page reloads the conversation and says that the message may already have arrived. Review the recovered conversation before retrying. Messages, stop requests and answers are never sent again automatically.
 
 The hub keeps a copy of your conversation in China (your words, the replies' text and one line per tool step; never a tool's output), encrypted and readable only by you. The chat shows this copy first, marked "Syncing", and replaces it with your home node's answer, marked "In sync"; while your node is out of reach you can still read the history ("Syncing · your machine is out of reach"). A copy not refreshed for 90 days is deleted; you can turn it off under Settings → Conversation history, which deletes it at once.
+
+## Private live development previews
+
+When enabled by the deployment, the Task details show your running HTTP/API/WebSocket
+applications under Live previews, including SSE and explicitly configured Vite HMR.
+Opening a preview requires sign-in and the Task owner's identity. Disconnected nodes
+show Offline. The default lease is two hours; renew or close it in Task details.
+Closing disconnects active streams without stopping the application.
+
+Ask the Agent in the Task to register a same-account Unix HTTP socket with the
+`preview` tool. The CLI supports `fleet preview register app.sock`, `list`,
+`renew <id>`, and `close <id>`. Put the service socket in your own
+`~/.fleet-preview/` (directory 0700, socket 0600). TCP-only frameworks are not
+supported yet. Each account gets up to three previews and 32 concurrent requests,
+including WebSockets, independently of Task concurrency. Without an explicit,
+separate preview domain, the feature shows as disabled.
+
+Live previews serve running applications. Saved HTML/Markdown remains accessible
+through the existing Space / LivePage entry. Trial accounts need an active managed
+login and their own Task; chat-only trials without Task identity cannot register.

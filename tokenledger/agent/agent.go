@@ -325,9 +325,11 @@ type Agent struct {
 	chatDirectRate chatRate
 	// termRelays counts the terminals open on this login, termSpent the relay
 	// ids a grant was already used for (claude-fleet#3838).
-	termRelays  relaySlots
-	termSpent   spentGrants
-	attachments attachmentRegistry
+	previewRelays relaySlots
+	previewSpent  spentGrants
+	termRelays    relaySlots
+	termSpent     spentGrants
+	attachments   attachmentRegistry
 	// svcRuns are the service run attempts running on this login (claude-fleet#4086).
 	svcRuns svcRunTable
 	// machine is the machine link this agent is a tenant of

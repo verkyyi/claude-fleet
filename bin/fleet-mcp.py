@@ -1231,6 +1231,27 @@ def tool_open(args):
     return script([str(BIN / "fleet-open.sh"), "--", args["target"]], STATUS_TIMEOUT_S)
 
 
+def tool_preview(args):
+    """The current credential's own task; no caller-supplied identity."""
+    from fleet_hub_rest import api, Fail
+    assertion = worker_assertion(ASSERT_TTL_S)
+    task = pane_task()
+    if not assertion or not task:
+        raise ToolFault("preview requires a verified worker credential and its current Hub Task")
+    SIGNED["assert"] = True
+    action = args["action"]
+    body = {"action": action}
+    for k in ("socket", "id"):
+        if k in args:
+            body[k] = args[k]
+    try:
+        return api("GET" if action == "list" else "POST", "/previews",
+                   body=None if action == "list" else body, query={"task": task},
+                   root="/v1/node", headers={"X-Fleet-Worker": assertion})
+    except Fail as exc:
+        raise ToolFault(str(exc)) from exc
+
+
 # A session's reap policy (issue #1902) — bin/fleet_reap_policy.py is the grammar;
 # the script canonicalizes or refuses (exit 2), this is only its shape.
 REAP_POLICY = {"type": "string", "maxLength": 48,
@@ -1251,6 +1272,13 @@ TASK_REF = {"type": "string",
             "description": "A task by its code (K5H0 — the task tool's `id`), its full ID, or the old T<n>."}
 
 TOOLS = {
+    "preview": (tool_preview, {
+        "description": "Register/list/renew/close a private live HTTP/WebSocket preview of this verified worker's own Task. V1: socket basename in ~/.fleet-preview (0700), same UID Unix stream socket (0600); TCP/URLs unsupported. Lease 2h. Static deliverables still use Space/活页.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["register", "list", "renew", "close"]},
+            "socket": {"type": "string", "description": "Socket basename, e.g. app.sock; register only."},
+            "id": {"type": "string", "description": "Preview ID for renew/close."}},
+            "required": ["action"], "additionalProperties": False}}),
     "status": (tool_status, {
         "description": "Read-only. This fleet window's binding and the hosted repos. Changes nothing.",
         "inputSchema": NO_ARGS}),

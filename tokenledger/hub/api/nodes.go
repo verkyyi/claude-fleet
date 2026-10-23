@@ -93,9 +93,10 @@ type nodeConn struct {
 	canTest bool
 	// canTask is the hello's CapTask: this node takes the hub's task record
 	// on a start (claude-fleet#3325).
-	canTaskExecution bool
-	canTask          bool
-	canRepoAuthority bool
+	canTaskExecution    bool
+	canTaskContinuation bool
+	canTask             bool
+	canRepoAuthority    bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
 	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
@@ -169,7 +170,8 @@ type nodeConn struct {
 	canSvcRun bool
 	// canChat is the hello's CapChat: this login's agent splices chat relays
 	// onto its conversation socket (claude-fleet#3644). Set once, before publish.
-	canChat bool
+	canChat    bool
+	canPreview bool
 	// canTerm is the hello's CapTerm: this login's agent opens browser
 	// terminals (claude-fleet#3838). Set once, before publish.
 	canTerm bool
@@ -643,9 +645,9 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), canTermRenew: hp.HasCap(control.CapTermRenew), canTermVia: hp.HasCap(control.CapTermVia), attachmentGeneration: hp.AttachmentGeneration,
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay), canEntryRelay: hp.HasCap(control.CapEntryRelay), canRelayVia: hp.HasCap(control.CapRelayVia),
-		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
+		canPreview: hp.HasCap(control.CapPreview), canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
-		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTaskExecution: hp.HasCap(control.CapTaskExecution), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTaskExecution: hp.HasCap(control.CapTaskExecution), canTaskContinuation: hp.HasCap(control.CapTaskContinuation), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:     hp.HasCap(control.CapCredsep),
 		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
 		canRecycle:     hp.HasCap(control.CapRecycle),
@@ -688,6 +690,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	defer s.sshRelays.closeNode(nc)
 	defer s.chatRelays.closeNode(nc)
 	defer s.termRelays.closeNode(nc)
+	defer s.previewRelays.closeNode(nc)
 	// So do the service logs it was following (claude-fleet#2797): each
 	// viewer is told, and its page reconnects.
 	defer s.svcLogs.closeNode(nc)
