@@ -128,7 +128,8 @@ Q=acme-app:   # every key carries the fleet's repo, one repo or five (issue #193
 C=$(tf new-window -d -P -F '#{window_id}' -n kid 'while :; do sleep 300; done')
 tf set-window-option -t "$C" @issue 600; tf set-window-option -t "$C" @origin scratch-5
 lib fleet_stamp_origin_wid "$L" "$C" scratch-5 "$L"
-st_count; [ "$(opt "$C" @origin_fid)" = "$PF" ] || st_miss "B: a spawn stamps the parent's identity as @origin_fid (no fleet UUID needed)" "$(opt "$C" @origin_fid)"
+st_count; [ -z "$(opt "$C" @origin_fid)" ] || st_miss "B: retired stamp helper writes no Parent"
+tf set-window-option -t "$C" @origin_fid "$PF"   # pre-retirement fixture
 rp() { out=$(env -u TMUX bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$C" --state blocked --summary "$1" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 before=$(frames)
 rp 'first: before the rename'
@@ -166,13 +167,10 @@ C3=$(tf new-window -d -P -F '#{window_id}' -n kid3 'while :; do sleep 300; done'
 tf set-window-option -t "$C3" @issue 603; tf set-window-option -t "$C3" @origin scratch-5
 tf set-window-option -t "$C3" @origin_fid 00000000-0000-4000-8000-000000000000
 hout=$(lib fleet_origin_heal "$L" "$L")
-# C3's parent is not live: its bare @origin is only spelled whole (issue #1939), gen kept.
-st_count; [ "$hout" = "healed $C scratch-5 → ${Q}issue-99
-healed $C2 scratch-5 → ${Q}issue-99
-healed $C3 scratch-5 → ${Q}scratch-5" ] || st_miss "C: explicit heal updates both identity links and qualifies the missing one" "$hout"
-st_count; [ "$(opt "$C2" @origin)" = "${Q}issue-99" ] && [ -z "$(opt "$C2" @origin_gen)" ] || st_miss "C: @origin re-pointed, the old key's @origin_gen dropped" "$(opt "$C2" @origin)|$(opt "$C2" @origin_gen)"
-st_count; [ "$(opt "$C3" @origin)" = "${Q}scratch-5" ] || st_miss "C: a child whose parent is not live keeps its parent's key" "$(opt "$C3" @origin)"
-st_count; [ -z "$(lib fleet_origin_heal "$L" "$L")" ] || st_miss "C: a second heal has nothing to do"
+st_count; [ -z "$hout" ] || st_miss "C: retired heal is silent" "$hout"
+st_count; [ "$(opt "$C2" @origin)" = scratch-5 ] && [ "$(opt "$C2" @origin_gen)" = 3 ] || st_miss "C: heal preserves historical stamps without rewriting them"
+st_count; [ "$(opt "$C3" @origin)" = scratch-5 ] || st_miss "C: no qualification writes a new Parent route"
+st_count; [ -z "$(lib fleet_origin_heal "$L" "$L")" ] || st_miss "C: repeated old hook remains inert"
 tf kill-window -t "$C2"; tf kill-window -t "$C3"
 
 # --- D: worker_id, both forms --------------------------------------------------------

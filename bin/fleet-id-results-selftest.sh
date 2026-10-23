@@ -85,6 +85,16 @@ closed() { python3 "$BIN/fleet_id.py" get "$1" --json | python3 -c 'import json,
 openedf() { python3 "$BIN/fleet_id.py" get "$1" --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["opened"].get(sys.argv[1],""))' "$2"; }
 mkfid() { python3 -c 'import uuid; print(uuid.uuid4())'; }
 
+# Seed genuine pre-retirement history independently of the current write API.
+old_parent() {
+  python3 - "$BIN" "$1" "$2" <<'PYOLD'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_id
+fleet_id.append(sys.argv[2], {"ev": "opened", "parent": sys.argv[3]})
+PYOLD
+}
+
 # ---- S2 · result, /clear, result -------------------------------------------------
 F2=$(mkfid)
 read -r W2 P2 <<EOF
@@ -140,18 +150,19 @@ FLEET_TEST_SPAWNED="$WORK/spawned" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue 
 st_count; tr '\n' ' ' < "$WORK/spawned" | grep -q -- "--resume dddd0002-1111-4111-8111-111111111111 .*--no-repo.*--prev $F8" \
   || st_miss "S8: --exec opens a window resuming segment 2 with --prev <ID>" "$(tr '\n' ' ' < "$WORK/spawned" 2>/dev/null)"
 st_count; ! grep -q -- '--id-task' "$WORK/spawned" || st_miss "S8: an ID with no record carries none"
-# C18: an EPIC driver's ID (its record T<n>, its parent) continued — the new
-# window carries both: @task and the ledger's task / parent
+# Continue an old task: its record and native segment remain, its Parent does not.
 F8T=$(mkfid) F8P=$(mkfid)
 read -r W8T P8T <<EOF
 $(newwin "$F8T")
 EOF
 fid open "$F8T" --window "$W8T" --socket "$L" --agent claude --title 'EPIC: driver' --task T580 --parent "$F8P" >/dev/null
+old_parent "$F8T" "$F8P"
 hook "$P8T" startup dddd0101-1111-4111-8111-111111111111
 lib fleet_win_retire "$W8T" "$L" exited; tf kill-window -t "$W8T"
 FLEET_TEST_SPAWNED="$WORK/spawned-t" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue "$F8T" --exec
-st_count; tr '\n' ' ' < "$WORK/spawned-t" | grep -q -- "--id-task T580 --id-parent $F8P .*--prev $F8T" \
-  || st_miss "S8: a driver's continue carries its record and parent (C18)" "$(tr '\n' ' ' < "$WORK/spawned-t" 2>/dev/null)"
+st_count; tr '\n' ' ' < "$WORK/spawned-t" | grep -q -- "--id-task T580 .*--prev $F8T" \
+  || st_miss "S8: continue carries its task and prev" "$(tr '\n' ' ' < "$WORK/spawned-t" 2>/dev/null)"
+st_count; ! grep -q -- '--id-parent' "$WORK/spawned-t" || st_miss "S8: continue must not carry Parent"
 G8=$(mkfid)
 read -r WG8 PG8 <<EOF
 $(newwin "$G8")
@@ -189,8 +200,10 @@ $(newwin "$PP")
 EOF
 fid open "$PP" --window "$WPP" --socket "$L" >/dev/null
 python3 "$BIN/fleet_id.py" open "$P" --parent "$PP" >/dev/null
+old_parent "$P" "$PP"
 python3 "$BIN/fleet_id.py" close "$P" --reason reaped
-st_count; [ "$(fid route "$P")" = "$PP	parent" ] || st_miss "ROUTE: a closed ID with no successor goes up its parent" "$(fid route "$P")"
+fid route "$P" >/dev/null; rc=$?
+st_count; [ "$rc" = 1 ] || st_miss "ROUTE: no successor never falls back to Parent" "$rc"
 lib fleet_win_retire "$WPP" "$L" reaped; tf kill-window -t "$WPP"
 fid route "$P" >/dev/null; rc=$?
 st_count; [ "$rc" = 1 ] || st_miss "ROUTE: nobody open up the chain ⇒ rc 1 (the person's reminder)" "$rc"
@@ -208,6 +221,7 @@ EOF
 fid open "$PA" --window "$WPA" --socket "$L" --agent claude >/dev/null
 hook "$PPA" startup ffff0001
 fid open "$CH" --window "$WCH" --socket "$L" --agent claude --parent "$PA" >/dev/null
+old_parent "$CH" "$PA"
 tf set-window-option -t "$WCH" @origin "$PA"
 tf set-window-option -t "$WCH" @origin_fid "$PA"
 hook "$PPA" clear ffff0002       # the parent clears its conversation
@@ -302,43 +316,15 @@ lib fleet_worktree_id_mark "$WORK/wt" "$F2"
 st_count; [ "$(lib fleet_worktree_id "$WORK/wt")" = "$F2" ] || st_miss "WT: a worktree remembers its ID"
 st_count; ! lib fleet_worktree_id_mark "$WORK/wt" T12 || st_miss "WT: a non-ID is refused"
 
-# ---- TASKPAR · a task dispatch's child ID names its parent (C9) --------------------
-# A keyless parent (an orchestrator, a driver) dispatches with ITS ID as --origin;
-# a hub-placed start hands a worker_id over; the hub itself names none.
+# ---- TASKPAR · old Parent input accepted but never written ------------------------
 TP=$(mkfid); TC=$(mkfid)
-read -r WTP _ <<EOF
-$(newwin "$TP")
-EOF
-fid open "$TP" --window "$WTP" --socket "$L" >/dev/null
-st_count; [ "$(lib fleet_spawn_parent_id "$L" "$TP" '' "$L")" = "$TP" ] || st_miss "TASKPAR: a keyless parent's ID as --origin is the parent"
-st_count; [ "$(lib fleet_spawn_parent_id "$L" '' "u-u-i-d/$TP" "$L")" = "$TP" ] || st_miss "TASKPAR: a handed-over worker_id's ID is the parent"
-st_count; ! lib fleet_spawn_parent_id "$L" issue-3 "u-u-i-d/issue-3" "$L" >/dev/null || st_miss "TASKPAR: a worker_id naming only a key is no parent here"
-st_count; ! lib fleet_spawn_parent_id "$L" hub '' "$L" >/dev/null && ! lib fleet_spawn_parent_id "$L" '' '' "$L" >/dev/null \
-  || st_miss "TASKPAR: the hub names no parent"
-fid open "$TC" --task T77 --parent "$(lib fleet_spawn_parent_id "$L" "$TP" '' "$L")" >/dev/null
-st_count; fid children "$TP" | grep -q '^1 children' || st_miss "TASKPAR: children lists the dispatched ID" "$(fid children "$TP")"
-# backfill: an ID opened for T78 before C9, no parent; its record names one
-TB=$(mkfid)
-python3 "$BIN/fleet_id.py" open "$TB" --task T78 --agent codex >/dev/null
-cat > "$WORK/taskget" <<EOS
-#!/bin/sh
-[ "\$1" = T78 ] && printf '{"task":{"id":"T78","parent_session":"u-u-i-d/$TP"}}\n' && exit 0
-printf '{"task":{"id":"\$1"}}\n'
-EOS
-chmod +x "$WORK/taskget"
-out=$(FLEET_ID_TASK_GET="$WORK/taskget" fid parents 2>&1)
-st_count; printf '%s' "$out" | grep -q "T78  → $TP  (dry)" && [ -z "$(openedf "$TB" parent)" ] \
-  || st_miss "TASKPAR: the backfill is dry by default" "$out"
-out=$(FLEET_ID_TASK_GET="$WORK/taskget" fid parents --apply 2>&1)
-st_count; [ "$(openedf "$TB" parent)" = "$TP" ] || st_miss "TASKPAR: --apply fills the record's parent" "$out"
-st_count; [ "$(openedf "$TB" task)" = T78 ] && [ "$(openedf "$TB" agent)" = codex ] || st_miss "TASKPAR: the fill keeps what opened said"
-st_count; fid children "$TP" | grep -q '^2 children' || st_miss "TASKPAR: the filled ID is a child" "$(fid children "$TP")"
-out=$(FLEET_ID_TASK_GET="$WORK/taskget" fid parents 2>&1)
-st_count; printf '%s' "$out" | grep -q '^0 without a parent' || st_miss "TASKPAR: a second pass finds nothing" "$out"
-printf '#!/bin/sh\nexit 3\n' > "$WORK/taskget3"; chmod +x "$WORK/taskget3"
-python3 "$BIN/fleet_id.py" open "$(mkfid)" --task T79 >/dev/null
-FLEET_ID_TASK_GET="$WORK/taskget3" fid parents >/dev/null 2>&1; rc=$?
-st_count; [ "$rc" = 3 ] || st_miss "TASKPAR: no hub here ⇒ rc 3" "$rc"
+fid open "$TC" --task T77 --parent "$TP" --agent codex >/dev/null
+st_count; [ -z "$(openedf "$TC" parent)" ] || st_miss "TASKPAR: new task ID has no Parent"
+st_count; [ "$(openedf "$TC" task)" = T77 ] && [ "$(openedf "$TC" agent)" = codex ] || st_miss "TASKPAR: task and provider remain"
+oldbook=$(cat "$FLEET_CONF_DIR/ids/$TC.ndjson")
+out=$(fid parents --apply 2>&1); rc=$?
+st_count; [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'PARENT_RETIRED' || st_miss "TASKPAR: Parent backfill refused" "$rc:$out"
+st_count; [ "$(cat "$FLEET_CONF_DIR/ids/$TC.ndjson")" = "$oldbook" ] || st_miss "TASKPAR: refused backfill leaves history unchanged"
 
 # ---- BACKFILL (C17) ---------------------------------------------------------------
 # A live window opened before C1: its ledger has only a progress word (no opened, no
@@ -370,10 +356,8 @@ st_count; printf '%s' "$out" | grep -q '^0 to backfill' && [ "$(wc -l < "$FLEET_
   || st_miss "BACKFILL: a second pass writes nothing" "$out"
 
 # ---- WIRE --------------------------------------------------------------------------
-st_count; grep -q -- '--parent "\$_idpar"' "$BIN/dash-raw-session.sh" && grep -q -- '--parent "\$_idpar"' "$BIN/dash-issue-session.sh" \
-  || st_miss "WIRE: both spawners open the ID with its parent"
-st_count; [ "$(grep -c '_idpar=$(fleet_spawn_parent_id "$SESS" "$ORIGIN" "$ORIGIN_WID" "$SOCK")' "$BIN/dash-raw-session.sh" "$BIN/dash-issue-session.sh" | grep -c ':1$')" = 2 ] \
-  || st_miss "WIRE: both spawners take the parent from --origin too, not only a handed-over worker_id (C9)"
+st_count; ! grep -qE 'fleet_spawn_parent_id|fleet_stamp_origin_(wid|gen)|fleet_origin_gate|--parent "' "$BIN/dash-raw-session.sh" "$BIN/dash-issue-session.sh" \
+  || st_miss "WIRE: spawners never infer, gate or write Parent ancestry"
 st_count; grep -q -- '--from-native "\$RESUME_SID"' "$BIN/dash-raw-session.sh" || st_miss "WIRE: a --resume spawn records prev"
 st_count; grep -q 'fleet_win_retire "\$target" "" reaped' "$BIN/dash-reap.sh" \
   && grep -q 'fleet_win_retire "\$WIN" "\$(fleet_socket "\$FLEET_SESSION")" landed' "$BIN/fleet-cleanup.sh" \

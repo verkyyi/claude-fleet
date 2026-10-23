@@ -191,19 +191,21 @@ st_count; [ "$rc" = 0 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
   || st_miss "D: explicit report --origin → retirement, never relay" "rc=$rc out=$out err=$err"
 st_count; [ "$(retired_snapshot)" = "$before" ] || st_miss "D: explicit --origin must create no report or outbox entry"
 
-# --- E: @origin_wid stamping ---------------------------------------------------------------
-lib fleet_stamp_origin_wid "$L" "$w3" issue-7 "$L"
-st_count; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/$fid7" ] || st_miss "E: a key origin stamps the parent's identity-form worker_id (#1646)" "$(tf show-options -wqv -t "$w3" @origin_wid)"
-st_count; [ "$(tf show-options -wqv -t "$w3" @origin_fid)" = "$fid7" ] || st_miss "E: …and the parent's identity as @origin_fid"
-tf set-window-option -u -t "$w3" @origin_wid; tf set-window-option -u -t "$w3" @origin_fid
+# --- E: retired origin stamping is inert -----------------------------------------------
+for origin in issue-7 issue-77 autofill; do
+  lib fleet_stamp_origin_wid "$L" "$w3" "$origin" "$L"
+  st_count; [ -z "$(tf show-options -wqv -t "$w3" @origin_wid)" ] && [ -z "$(tf show-options -wqv -t "$w3" @origin_fid)" ] \
+    || st_miss "E: retired origin [$origin] must stamp no Parent identity"
+done
+# Calling an old helper also leaves historical bytes alone.
+tf set-window-option -t "$w3" @origin_wid "$U/$fid7"
+tf set-window-option -t "$w3" @origin_fid "$fid7"
 lib fleet_stamp_origin_wid "$L" "$w3" issue-77 "$L"
-st_count; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/issue-77" ] && [ -z "$(tf show-options -wqv -t "$w3" @origin_fid)" ] \
-  || st_miss "E: a key no live window answers to keeps the key form and stamps no @origin_fid"
-tf set-window-option -u -t "$w3" @origin_wid
-lib fleet_stamp_origin_wid "$L" "$w3" autofill "$L"
-st_count; [ -z "$(tf show-options -wqv -t "$w3" @origin_wid)" ] || st_miss "E: a non-key origin stamps nothing"
+st_count; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/$fid7" ] && [ "$(tf show-options -wqv -t "$w3" @origin_fid)" = "$fid7" ] \
+  || st_miss "E: retired stamping must not rewrite historical Parent identity"
+tf set-window-option -u -t "$w3" @origin_wid; tf set-window-option -u -t "$w3" @origin_fid
 for f in dash-issue-session.sh dash-raw-session.sh dash-restore-session.sh; do
-  st_count; grep -q 'fleet_stamp_origin_wid ' "$BIN/$f" || st_miss "E: $f must stamp @origin_wid beside @origin"
+  st_count; ! grep -q 'fleet_stamp_origin_wid ' "$BIN/$f" || st_miss "E: $f must not stamp a Parent identity"
 done
 
 # --- F: ONE resolver (issue #1537) ---------------------------------------------------------

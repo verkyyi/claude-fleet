@@ -19,6 +19,7 @@
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
                                          issue #2358 — the key never changes)
+    fleet continue <Task或会话> [--agent claude|codex]  explicitly continue the same stopped Task
     fleet close <会话> [--yes]           persist a controlled Task stop; legacy worker_stop;
                                          pending task-only rows cancel their start;
                                          no confirmation; history remains resumable
@@ -109,7 +110,7 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
 from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
-VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task", "notices")
+VERBS = ("ls", "show", "open", "rename", "close", "continue", "reap", "answer", "service", "task", "notices")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
              "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地", "starting": "待启动"}
 
@@ -166,7 +167,8 @@ def pending_rows(rs):
             matched = next((x for x in rs if (r.get('fid') and x.get('fleet_id') == r['fid'])
                            or (r.get('worker_id') and x.get('worker_id') == r['worker_id'])), None)
             if matched is not None:
-                matched.update(task=r.get('task') or matched.get('task') or '',
+                matched.update(cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
+                               task=r.get('task') or matched.get('task') or '',
                                execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
                 continue
             if not (pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
@@ -177,6 +179,7 @@ def pending_rows(rs):
                            record_only=True, pending_start=r.get('pending_start',False),
                            pending_start_explicit=r.get('pending_start_explicit',False),
                            execution_endpoint=r.get('execution_endpoint') or '', lost=r.get('lost',False),
+                           cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
                            fleet_id=r.get("fid") or "",
                            code=r.get("code") or ""))
     return rs
@@ -722,6 +725,25 @@ def cmd_rename(args):
     return 0 if ok else 1
 
 
+def cmd_continue(args):
+    agent = None
+    if len(args) == 3 and args[1] == '--agent' and args[2] in ('claude', 'codex'):
+        agent = args[2]
+        args = args[:1]
+    if len(args) != 1:
+        return usage()
+    from fleet_task_control import continue_task
+    if re.fullmatch(r'T[1-9][0-9]*', args[0]):
+        row = {'task': args[0]}
+    else:
+        row, rc = one(rows(), args[0])
+        if row is None:
+            return rc
+    rc, line = continue_task(row, agent=agent) if agent else continue_task(row)
+    print(line, file=sys.stderr if rc else sys.stdout)
+    return rc
+
+
 def cmd_close(args):
     yes = "--yes" in args or "-y" in args
     rest = [a for a in args if a not in ("--yes", "-y")]
@@ -1141,7 +1163,7 @@ def main(argv):
     # every verb sees the test identity's sessions the list hides (issue #2505)
     os.environ["FLEET_ROWS_TEST"] = "1"
     return {"ls": cmd_ls, "show": cmd_show, "open": cmd_open, "rename": cmd_rename, "close": cmd_close,
-            "reap": cmd_reap, "answer": cmd_answer,
+            "continue": cmd_continue, "reap": cmd_reap, "answer": cmd_answer,
             "service": lambda a: cmd_svc("service", a), "task": lambda a: cmd_svc("task", a)}[verb](args)
 
 

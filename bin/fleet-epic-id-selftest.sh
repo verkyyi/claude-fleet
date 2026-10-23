@@ -36,6 +36,7 @@
 #      is the successor's; the line's IDs are never members.
 # Hermetic: a sandbox FLEET_CONF_DIR, no tmux, no network, gh denied.
 set -uo pipefail
+export CCQUOTA_HUB_SOCK=off # never this machine's own forwarder
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/epic-id.XXXXXX") || exit 2
@@ -126,6 +127,19 @@ json.dump(st, open(os.environ["STUB_STATE"], "w"))
 PY
 }
 
+# Historical Parent relationships must be seeded as old ledger events. The
+# production open command intentionally discards Parent fields for new Tasks.
+historical_open() {
+  python3 - "$BIN" "$@" <<'PYOPEN'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_id as fi
+fid, args = sys.argv[2], sys.argv[3:]
+fields = {args[i].removeprefix('--'): args[i + 1] for i in range(0, len(args), 2)}
+fi.append(fid, {"ev": "opened", "short": fi.short_for(fid, fi.known_ids()), **fields})
+PYOPEN
+}
+
 # --- A. plan ---------------------------------------------------------------------
 cat > "$WORK/charter" <<'EOF'
 /fleet-epic-run
@@ -161,7 +175,7 @@ has "A: the line says it" "$(tick --line)" "等依赖 1"
 # --- B. C1 fails and its window closes; its record stays open --------------------
 T_A=$(dispatch "C1 · 加一个开关" "$(printf '%s' "$S" | jq_ 'd["next"][0]["body"]')")
 ID_A=$(wid "$T_A")
-bash "$BIN/fleet-id.sh" open "$ID_A" --parent "$DRV" --task "$T_A" --title "C1 · 加一个开关" >/dev/null
+historical_open "$ID_A" --parent "$DRV" --task "$T_A" --title "C1 · 加一个开关" >/dev/null
 S=$(tick)
 eq "B: C1 runs under its ID" "running $ID_A" "$(mem C1 '["state"]') $(mem C1 '["id"]')"
 bash "$BIN/fleet-id.sh" result "$ID_A" --state failed --summary "门禁红" >/dev/null
@@ -181,7 +195,7 @@ eq "B: only for a task's words" "" "$got"
 # --- C. the redo merges by its ID alone; C2 is released by ID --------------------
 T_B=$(dispatch "C1 · 加一个开关" "$BODY")
 ID_B=$(wid "$T_B")
-bash "$BIN/fleet-id.sh" open "$ID_B" --parent "$DRV" --prev "$ID_A" --task "$T_B" --title "C1 · 加一个开关" >/dev/null
+historical_open "$ID_B" --parent "$DRV" --prev "$ID_A" --task "$T_B" --title "C1 · 加一个开关" >/dev/null
 S=$(tick)
 eq "C: the redo is C1's newest baton" "running $ID_B" "$(mem C1 '["state"]') $(mem C1 '["id"]')"
 bash "$BIN/fleet-id.sh" result "$ID_B" --state merged --pr 11 >/dev/null
@@ -265,7 +279,7 @@ T_E=$(STUB_UNCLAIMED=1 dispatch "C3 · 记录没人认领" "加在范围内")
 T_F=$(STUB_UNCLAIMED=1 dispatch "C4 · 还没开窗" "加在范围内")
 eq "H: the records carry no worker" "" "$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["STUB_STATE"]))["tasks"][sys.argv[1]]["worker_id"])' "$T_E")"
 ID_E=eeeeeeee-0000-4000-8000-00000000000e ID_F=ffffffff-0000-4000-8000-00000000000f
-bash "$BIN/fleet-id.sh" open "$ID_E" --parent "$DRV" --task "$T_E" --title "C3 · 记录没人认领" >/dev/null
+historical_open "$ID_E" --parent "$DRV" --task "$T_E" --title "C3 · 记录没人认领" >/dev/null
 S=$(tick)
 eq "H: C3 runs under the ID opened on its record" "running $ID_E" "$(mem C3 '["state"]') $(mem C3 '["id"]')"
 bash "$BIN/fleet-id.sh" result "$ID_E" --state merged --pr 13 >/dev/null
@@ -303,7 +317,7 @@ T_X=$(STUB_UNCLAIMED=1 bash "$BIN/fleet-task-record.sh" dispatch --title "C1 · 
 eq "I: the successor's child record names no parent" "" \
   "$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["STUB_STATE"]))["tasks"][sys.argv[1]]["parent_task"])' "$T_X")"
 ID_X=bbbbbbbb-0000-4000-8000-0000000000b1
-bash "$BIN/fleet-id.sh" open "$ID_X" --parent "$DRV2" --task "$T_X" --title "C1 · 接续后派的" >/dev/null
+historical_open "$ID_X" --parent "$DRV2" --task "$T_X" --title "C1 · 接续后派的" >/dev/null
 bash "$BIN/fleet-id.sh" progress "$DRV2" --summary "tick 2 · 派 C1 · report: -" >/dev/null
 S=$(tick)
 eq "I: the driver is its whole line" "$DRV1 $DRV2" "$(printf '%s' "$S" | jq_ '" ".join(d["lineage"])')"

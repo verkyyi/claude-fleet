@@ -81,6 +81,8 @@ Pick a row and press **Tab** for its actions page: Enter, Open PR when present, 
 
 Stop directly requests that the current session stop, without a reap confirmation or waiting for its PR to merge. The web task page's Stop and `fleet close` use the same stop entry point, preserving files and history. Failures are reported; acceptance does not prove the remote process has exited. For a task explicitly waiting to start that has never opened a session, choose Cancel start in the terminal action page or web page, or run `fleet close <task code>`. If a session has opened, refresh and stop that session. Cancellation does not require the target machine to be online; stopping does not yet cancel every future automatic wakeup.
 
+After stopping is confirmed, choose Continue task and then the original agent, Claude or Codex. Use `fleet continue T123` in the CLI, or explicitly select `fleet continue T123 --agent codex`. Continuation keeps the same task and history. Retry an unconfirmed request with its original agent choice; it cannot be replaced by a different start. If user credentials are missing, the command provides the task’s web link. Opening history does not start a session.
+
 You can do the same from the terminal with commands (`<session>` can be part of a name or a `#ticket`; when it is not clear which one you mean, it lists the candidates rather than guess):
 
 ```sh
@@ -89,6 +91,7 @@ fleet ls --all                 # ended ones too
 fleet open login               # open the client and switch to this session
 fleet answer login keep        # answer its question without going in
 fleet close report             # request a stop; keep files and history
+fleet continue T123 --agent codex  # explicitly continue the same task with Codex
 fleet quit                     # quit fleet (see below)
 ```
 

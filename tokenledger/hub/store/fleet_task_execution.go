@@ -506,7 +506,13 @@ func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperation
 	if err != nil {
 		return t, err
 	}
-	if t.Owner != o.TaskOwner || t.AuthorityVersion != TaskAuthorityVersion || t.State == TaskCancelled || t.Outcome != "" {
+	if t.Owner != o.TaskOwner || t.AuthorityVersion != TaskAuthorityVersion {
+		return t, ErrTaskFence
+	}
+	// Only explicit continuation may pass a historical result, after validating
+	// its complete stop/exit chain below. Ordinary admission/resume keep their
+	// existing result fence; no historical state is cleared to enable a start.
+	if continuation == nil && (t.State == TaskCancelled || t.Outcome != "") {
 		return t, ErrTaskFence
 	}
 	if continuation != nil {
