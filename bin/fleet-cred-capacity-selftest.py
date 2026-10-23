@@ -6,6 +6,7 @@ Shared numeric contract: tokenledger/shared/credproxy/testdata/capacity_policy.j
 import copy
 import importlib.util
 import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import shutil
@@ -58,6 +59,125 @@ class Capacity(unittest.TestCase):
             self.assertFalse(decision['mutates_bindings'])
         self.assertFalse(Path(self.tmp.name,'codex-routing.json').exists())
         self.assertFalse(self.t.picks)
+
+    def test_native_context_shared_vectors(self):
+        cases=json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())
+        for case in cases:
+            with self.subTest(name=case['name']):
+                independent,refs,unknown=p.codex_context(case['method'],case['path'],case['headers'],json.dumps(case['body']).encode())
+                self.assertEqual(independent,case['independent'])
+                self.assertEqual(unknown,case['unknown'])
+                self.assertEqual(refs,{p.codex_ref(ref['kind'],ref['value']) for ref in case['references']})
+
+    def native_http_fixture(self):
+        attempts=[]
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(handler):
+                raw=handler.rfile.read(int(handler.headers['Content-Length']))
+                attempts.append((handler.headers.get('chatgpt-account-id'),json.loads(raw)))
+                n=len(attempts);suffix='' if n==1 else '_'+str(n)
+                reasoning=dict(type='reasoning',id='rs_source'+suffix,summary=[],encrypted_content='fixture-opaque'+suffix)
+                message=dict(type='message',id='msg_source'+suffix,role='assistant',status='completed',phase='final_answer',
+                    content=[dict(type='output_text',text='LOCAL_OK' if n==1 else 'FIXTURE_NONCE',annotations=[])])
+                response=dict(id='resp_source'+suffix,object='response',status='completed',output=[reasoning,message],
+                    usage=dict(input_tokens=10,output_tokens=2,total_tokens=12))
+                events=[dict(type='response.created',response=dict(id=response['id'],object='response',status='in_progress',output=[]))]
+                for index,item in enumerate((reasoning,message)):
+                    events.extend([dict(type='response.output_item.added',output_index=index,item=item),
+                        dict(type='response.output_item.done',output_index=index,item=item)])
+                events.append(dict(type='response.completed',response=response))
+                data=''.join('event: '+e['type']+'\ndata: '+json.dumps(e)+'\n\n' for e in events).encode()
+                handler.send_response(200);handler.send_header('Content-Type','text/event-stream')
+                handler.send_header('Content-Length',str(len(data)));handler.end_headers();handler.wfile.write(data)
+        def server(handler):
+            srv=ThreadingHTTPServer(('127.0.0.1',0),handler)
+            thread=threading.Thread(target=srv.serve_forever);thread.start()
+            def stop():srv.shutdown();srv.server_close();thread.join(timeout=3)
+            self.addCleanup(stop)
+            return srv
+        upstream=server(Upstream)
+        self.cfg.codex_url='http://127.0.0.1:%d'%upstream.server_port
+        self.cfg.anthropic_url=self.cfg.relay_url=self.cfg.central_url=''
+        self.cfg.switch_ttl=120
+        self.t.router.candidates=lambda *args:(['direct'],'fixture')
+        for account in ('a','b'):
+            path=Path(self.cfg.codex_homes,account,'auth.json');path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(json.dumps(dict(tokens=dict(access_token='fake-token-'+account,account_id='fixture-'+account))))
+        for name,value in (('T',self.t),('tenants',{}),('sink',self.t),('fixed',None),('ustats',None)):
+            patcher=patch.object(p.Proxy,name,value);patcher.start();self.addCleanup(patcher.stop)
+        proxy=server(p.Proxy)
+        return proxy,attempts
+
+    def test_native_first_and_resume_through_http_proxy(self):
+        proxy,attempts=self.native_http_fixture()
+        vectors=json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())
+        first,resume=[case['body'] for case in vectors[:2]]
+        token=self.t.keys.mint('', 'native',86400,capacity=True)
+        self.assertEqual(self.t.keys.verify(token)[0]['capacity_policy'],2)
+        def request(body,credential=token):
+            conn=p.http.client.HTTPConnection('127.0.0.1',proxy.server_port,timeout=5)
+            try:
+                conn.request('POST','/codex/responses',json.dumps(body).encode(),{'Authorization':'Bearer '+credential,'Content-Type':'application/json'})
+                answer=conn.getresponse();return answer.status,answer.read()
+            finally:conn.close()
+        status,raw=request(first)
+        self.assertEqual(status,200,raw);self.assertIn(b'LOCAL_OK',raw)
+        self.assertEqual(self.t.picks['codex','native'],'b')
+        self.assertEqual(attempts[0][1],first)  # classify without stripping client IDs
+        # Advance at an independent boundary, then replay real provider state:
+        # continuation follows its source, even though the sticky pick is now a.
+        self.install((10,.1));self.t.codex_state['sessions']['native']['changed']=time.time()-601
+        self.assertEqual(self.t.codex_pick('native')['account'],'a')
+        status,raw=request(resume)
+        self.assertEqual(status,200,raw);self.assertIn(b'FIXTURE_NONCE',raw)
+        self.assertEqual([a for a,_ in attempts],['fixture-b','fixture-b'])
+        self.assertEqual(attempts[1][1],resume)
+        self.assertEqual(self.t.picks['codex','native'],'a')
+        status,_=request(dict(input=[dict(type='reasoning',encrypted_content='unseen-opaque')]))
+        self.assertEqual(status,409);self.assertEqual(len(attempts),2)
+        status,_=request(dict(input=[dict(type='message',id='msg_client_unseen',role='assistant',
+            content=[dict(type='output_text',text='unrecorded')])]))
+        self.assertEqual(status,409);self.assertEqual(len(attempts),2)
+        fresh=self.t.keys.mint('', 'unknown-first',86400,capacity=True)
+        status,_=request(dict(input=first['input'],opaque_state='unknown'),fresh)
+        self.assertEqual(status,409);self.assertNotIn(('codex','unknown-first'),self.t.picks)
+        self.assertEqual(len(attempts),2)
+        # Same label with changed upstream identity must still fail before send.
+        path=Path(self.cfg.codex_homes,'b','auth.json')
+        path.write_text(json.dumps(dict(tokens=dict(access_token='fake-replaced',account_id='fixture-replaced'))))
+        status,_=request(resume)
+        self.assertEqual(status,409);self.assertEqual(len(attempts),2)
+
+    @unittest.skipUnless(os.environ.get('FLEET_CODEX_NATIVE_FIXTURE'),'explicit local native CLI fixture only')
+    def test_native_cli_loopback(self):
+        proxy,attempts=self.native_http_fixture()
+        root=Path(self.tmp.name);home=root/'native-home';work=root/'native-work';home.mkdir();work.mkdir()
+        token=self.t.keys.mint('', 'native-cli',86400,capacity=True)
+        env=dict(PATH=os.environ['PATH'],HOME=str(home),CODEX_HOME=str(home),TMPDIR='/tmp',FLEET_FIXTURE_TOKEN=token)
+        base=[os.environ['FLEET_CODEX_NATIVE_FIXTURE'],'exec','--skip-git-repo-check','--ignore-user-config',
+            '-m','gpt-6.1-sol','-s','read-only','-C',str(work),'--json']
+        for config in ('model_provider="fixture"','model_providers.fixture.name="Local fixture"',
+                'model_providers.fixture.base_url="http://127.0.0.1:%d/codex"'%proxy.server_port,
+                'model_providers.fixture.env_key="FLEET_FIXTURE_TOKEN"','model_providers.fixture.wire_api="responses"',
+                'model_providers.fixture.requires_openai_auth=false','model_reasoning_effort="low"'):
+            base+=['-c',config]
+        sid=''
+        for prompt,expected in (('Remember FIXTURE_NONCE. Reply LOCAL_OK. Do not use tools.','LOCAL_OK'),
+                ('What nonce? Reply only it. Do not use tools.','FIXTURE_NONCE')):
+            command=base+(['resume',sid] if sid else [])+[prompt]
+            answer=subprocess.run(command,env=env,cwd=str(work),stdin=subprocess.DEVNULL,text=True,capture_output=True,timeout=40)
+            self.assertEqual(answer.returncode,0,(answer.stdout,answer.stderr))
+            messages=[]
+            for line in answer.stdout.splitlines():
+                event=json.loads(line)
+                if event.get('type')=='thread.started':sid=event['thread_id']
+                if event.get('item',{}).get('type')=='agent_message':messages.append(event['item']['text'])
+            self.assertEqual(''.join(messages),expected);self.assertTrue(sid)
+        self.assertEqual(len(attempts),2)
+        self.assertEqual([account for account,_ in attempts],['fixture-b','fixture-b'])
+        self.assertEqual(self.t.picks['codex','native-cli'],'b')
+        self.assertNotIn('fixture-opaque',Path(self.tmp.name,'codex-routing.json').read_text())
 
     def test_hold_material_concurrency_and_persistence(self):
         self.install((1,.5)); self.assertEqual(self.t.codex_pick('session')['account'],'a')
