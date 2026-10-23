@@ -55,13 +55,13 @@ export function CapacityPolicy() {
           <SelectItem value="off">Off · 保守策略</SelectItem><SelectItem value="shadow">Shadow · 仅预览</SelectItem><SelectItem value="active">Active · 下次独立请求生效</SelectItem>
         </SelectContent></Select>
       </Label>
-      <p className="text-xs text-muted-foreground">Only verified, effective profiles affect capacity estimates. Missing profiles or readings remain unknown. Calibration: 1, pending matched observations. Saves do not rebind sessions. / 仅确认且在有效期内的容量参与估算；保存不会批量换绑会话。</p>
+      <p className="text-xs text-muted-foreground">Effective provisional and verified profiles affect capacity estimates; confidence stays explicit. Missing profiles or readings remain unknown. Calibration: 1, pending matched observations. Saves do not rebind sessions. / 已登记且在有效期内的容量估计参与路由（保留确认程度）；保存不会批量换绑会话。</p>
       {draft.profiles.map((p, i) => <fieldset key={i} className="grid gap-3 rounded-md border p-3">
         <legend className="px-1 text-sm">{p.plan || "New plan"} / {p.tier || "unspecified tier"}</legend>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {([ ["plan", "Provider plan / 检测到的套餐"], ["tier", "Registered tier / 登记档位"], ["unit", "Comparable unit / 可比工作单位"], ["basis", "Comparison basis / 可比依据"], ["source", "Evidence source / 确认来源"], ["version", "Evidence version / 版本"], ["effective_from", "Effective from / 生效时间 (RFC3339)"], ["effective_to", "Effective until / 失效时间 (可空)"] ] as const).map(([key, label]) => <TextField key={key} label={label} value={p[key] || ""} onChange={value => update(i, { [key]: value || (key === "effective_to" ? undefined : "") })} />)}
         </div>
-        <Label className="grid gap-1">确认程度 / Confidence<Select value={p.confidence} onValueChange={confidence => update(i, { confidence })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="provisional">Provisional · 不参与路由</SelectItem><SelectItem value="verified">Verified · 已确认</SelectItem></SelectContent></Select></Label>
+        <Label className="grid gap-1">确认程度 / Confidence<Select value={p.confidence} onValueChange={confidence => update(i, { confidence })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="provisional">Provisional · 估计容量</SelectItem><SelectItem value="verified">Verified · 已确认</SelectItem></SelectContent></Select></Label>
         <p className="text-xs text-muted-foreground">Select every expected window. Weekly only requires explicit evidence. A missing expected window remains unknown. / 勾选所有应有窗口；仅周窗口必须有明确依据。</p>
         {[300, 10080].map(minutes => {
           const window = p.windows.find(w => w.minutes === minutes);

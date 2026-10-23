@@ -455,6 +455,141 @@ def meter_accept(v):
     return ", ".join(keep) or "identity"
 
 
+def codex_ref(kind, value):
+    return hashlib.sha256(("fleet-codex-affinity-v1\0" + kind + "\0" + value).encode()).hexdigest()
+
+
+def codex_output_refs(value):
+    """Provider envelopes only, never parse tool arguments or user text."""
+    refs = set()
+    def visit(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k in ("id", "call_id", "conversation", "encrypted_content") and isinstance(x, str) and x:
+                    refs.add(codex_ref("encrypted" if k == "encrypted_content" else "id", x))
+                elif isinstance(x, (list, dict)):
+                    visit(x)
+        elif isinstance(v, list):
+            for x in v:
+                visit(x)
+    v = value.get("response", value)
+    if isinstance(v, dict):
+        visit({k: v[k] for k in ("id", "output", "item", "conversation") if k in v})
+    return refs if len(refs) <= 4096 else set()
+
+
+def codex_context(method, path, headers, body):
+    """Conservative counterpart of shared/credproxy/continuation.go. Only known
+    self-contained input can move; unknown fields preserve original context.
+    References are purpose-separated hashes, never text/ciphertext on disk.
+    """
+    refs, unknown = set(), False
+    def add(kind, v):
+        nonlocal unknown
+        if v is None:
+            return
+        if not isinstance(v, str):
+            unknown = True
+        elif v:
+            refs.add(codex_ref(kind, v))
+    for name in ("x-codex-turn-state", "x-codex-routing-hint"):
+        add("header:" + name, headers.get(name))
+    if headers.get("content-encoding"):
+        unknown = True
+    if "?" in path and not (method == "GET" and path.split("?", 1)[1].startswith("client_version=") and "&" not in path.split("?", 1)[1]):
+        unknown = True
+    if method == "GET":
+        return not unknown and not refs, refs, unknown
+    def unique(pairs):
+        d = {}
+        for k, v in pairs:
+            if k in d:
+                raise ValueError("duplicate JSON key")
+            d[k] = v
+        return d
+    try:
+        root = json.loads(body, object_pairs_hook=unique)
+    except (ValueError, TypeError, RecursionError):
+        return False, refs, True
+    if not isinstance(root, dict):
+        return False, refs, True
+    allowed = set("model instructions input tools tool_choice parallel_tool_calls stream store include reasoning text temperature top_p max_output_tokens max_tool_calls truncation metadata prompt_cache_key prompt_cache_retention safety_identifier service_tier background context_management previous_response_id conversation stream_options client_metadata".split())
+    unknown |= bool(set(root) - allowed)
+    def tools(v):
+        if not isinstance(v, list):
+            return False
+        for t in v:
+            if not isinstance(t, dict):
+                return False
+            typ = t.get("type")
+            if typ == "namespace":
+                if not tools(t.get("tools")):
+                    return False
+            elif typ in ("web_search", "web_search_preview"):
+                if set(t) - set("type filters user_location search_context_size external_web_access".split()):
+                    return False
+            elif typ not in ("function", "custom"):
+                return False
+        return True
+    if root.get("tools") is not None and not tools(root["tools"]):
+        unknown = True
+    metadata = root.get("client_metadata")
+    if isinstance(metadata, dict):
+        for name in ("x-codex-turn-state", "x-codex-routing-hint"):
+            add("header:" + name, metadata.get(name))
+    add("id", root.get("previous_response_id"))
+    conv = root.get("conversation")
+    if isinstance(conv, dict):
+        add("id", conv.get("id"))
+        unknown |= set(conv) != {"id"}
+    else:
+        add("id", conv)
+    def item(v):
+        nonlocal unknown
+        if not isinstance(v, dict):
+            unknown = True
+            return
+        typ = v.get("type", "")
+        if typ not in set("message function_call function_call_output custom_tool_call custom_tool_call_output additional_tools local_shell_call web_search_call tool_search_call tool_search_output reasoning compaction item_reference".split()) | {""}:
+            unknown = True
+        for k in ("id", "call_id"):
+            add("id", v.get(k))
+        add("encrypted", v.get("encrypted_content"))
+        if v.get("tools") is not None and not tools(v["tools"]):
+            unknown = True
+        if typ in ("function_call_output", "custom_tool_call_output", "item_reference") and v.get("call_id") is None and v.get("id") is None:
+            unknown = True
+        if typ in ("reasoning", "compaction") and v.get("id") is None and v.get("encrypted_content") is None:
+            unknown = True
+        unknown |= bool(set(v) - set("type role content id call_id name namespace arguments input output status summary encrypted_content phase tools action execution".split()))
+        if isinstance(v.get("output"), list):
+            item(dict(type="message", content=v["output"]))
+        content = v.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    unknown = True
+                    continue
+                typ = part.get("type")
+                if typ in ("input_text", "output_text"):
+                    unknown |= bool(set(part) - {"type", "text", "annotations", "logprobs"})
+                elif typ == "input_image":
+                    unknown |= not isinstance(part.get("image_url"), str) or not part.get("image_url", "").startswith("data:") or bool(set(part) - {"type", "image_url", "detail"})
+                else:
+                    unknown = True
+        elif content is not None and not isinstance(content, str):
+            unknown = True
+    inp = root.get("input")
+    if isinstance(inp, list):
+        for v in inp:
+            item(v)
+    elif inp is not None and not isinstance(inp, str):
+        unknown = True
+    if len(refs) > 4096:
+        return False, set(), True
+    return not unknown and not refs, refs, unknown
+
+
 class Meter:
     """What one answer says it used: the largest value each usage field
     reached (Claude: message_start + message_delta; Codex: response.completed;
@@ -465,6 +600,8 @@ class Meter:
         self.line, self.whole, self.sse, self.f, self.model = bytearray(), bytearray(), False, {}, ""
         # a compressed answer is opened here, on the meter's copy only — the
         # client gets the upstream's bytes as they came (issue #3407)
+        self.references = set()
+        self.on_references = None
         self.enc, self.z = (encoding or "").strip().lower(), None
         if self.enc in ("gzip", "x-gzip"):
             self.z = zlib.decompressobj(16 + zlib.MAX_WBITS)
@@ -520,6 +657,11 @@ class Meter:
     def take(self, v):
         if not isinstance(v, dict):
             return
+        if len(self.references) <= 4096:
+            found = codex_output_refs(v)
+            self.references.update(found)
+            if found and self.on_references:
+                self.on_references(found)
         for u in (v.get("usage"), (v.get("message") or {}).get("usage") if isinstance(v.get("message"), dict) else None,
                   (v.get("response") or {}).get("usage") if isinstance(v.get("response"), dict) else None):
             if not isinstance(u, dict):
@@ -696,8 +838,10 @@ class Keys:
                 pass
         self.key = open(p, "rb").read()
 
-    def mint(self, account, sid, ttl, tag=LOCAL_TAG, lg=""):
+    def mint(self, account, sid, ttl, tag=LOCAL_TAG, lg="", capacity=False):
         c = {"sid": sid, "acct": account, "exp": int(time.time()) + ttl, "n": secrets.token_hex(4)}
+        if capacity:
+            c["capacity_policy"] = 2
         if lg:      # the shared proxy (issue #2217): whose key signs it — never trusted alone
             c["lg"] = lg
         payload = json.dumps(c, separators=(",", ":")).encode()
@@ -1244,9 +1388,18 @@ class Tenant:
         self.skip = {}          # sid -> {route: (until, why)}: a route that refused this session
         self.hubcreds = {}      # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
         self.quota = {}         # sid -> its newest rate-limit reading (issue #1978; memory only)
-        self.picks = {}         # (provider, sid) -> the account the proxy picked for it (issue #2412)
+        self.picks = {("codex", sid): a for sid, a in read_json(os.path.join(cfg.state, "codex-legacy-picks.json"), {}).items()} # (provider, sid) -> the account the proxy picked for it (issue #2412)
         self.paused = set()     # (provider, account) the hub paused: no new pick there (issue #3744)
         self.push_due = False
+        self.codex_reads, self.codex_limits = {}, {}
+        self.codex_lock = threading.RLock()
+        self.capacity_refresh_lock = threading.Lock()
+        self.capacity_cache, self.capacity_until, self.capacity_retry = {}, 0, 0
+        self.capacity_failures = 0
+        self.codex_state = read_json(os.path.join(cfg.state, "codex-routing.json"), {"sessions": {}})
+        for sid, record in self.codex_state.get("sessions", {}).items():
+            if record.get("account"):
+                self.picks[("codex", sid)] = record["account"]
 
     def log(self, **kv):
         log_line(self.cfg, kv)
@@ -1256,11 +1409,20 @@ class Tenant:
         if sid in ("-", "node"):
             return
         rd = rl_reading(provider, headers)
+        if provider == "codex":
+            h = {k.lower(): v for k, v in headers}
+            full = any((_num(h.get("x-codex-%s-used-percent" % w)) or 0) >= 100 for w in ("primary", "secondary"))
+            if full:
+                with Proxy.lock:
+                    Proxy.limited[(provider, acct)] = limit_until(provider, headers, b"")
+                    self.codex_limits[acct] = Proxy.limited[(provider, acct)]
         if not rd:
             return
         rd.update(provider=provider, acct=acct, route=route, ts=int(time.time()))
         with Proxy.lock:
             self.quota[sid] = rd
+            if provider == "codex":
+                self.codex_reads[acct] = rd
             if self.cfg.store and acct and acct != "-":
                 Proxy.reads[(provider, acct)] = rd   # what the account pick reads (issue #2412)
             if len(self.quota) > 4096:   # a day of dead sessions, at most: oldest out
@@ -1326,6 +1488,285 @@ class Tenant:
         u = self.used(provider, acct, now)
         return u is None or u < self.cfg.pick_ceiling
 
+    def capacity_metadata(self):
+        return self.capacity_cache if time.time() < self.capacity_until else {}
+
+    def refresh_capacity_metadata(self):
+        """Node-authenticated metadata only. 30s cache, 2s timeout; never lease.
+        Expired/unreachable metadata cannot supply positive capacity evidence.
+        """
+        now = time.time()
+        with self.capacity_refresh_lock:
+            if now < self.capacity_retry:
+                return self.capacity_cache if now < self.capacity_until else {}
+            self.capacity_retry = now + min(30, 5 * 2**min(self.capacity_failures, 3))
+            self.capacity_failures += 1
+            try:
+                ne = node_env(getattr(self.cfg, "node_env", None))
+                hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
+                token = ne.get("CCQUOTA_TOKEN", "")
+                if not hub or not token or not loopback_ok(hub):
+                    return {}
+                req = urllib.request.Request(hub_dial(hub) + "/v1/node/codex-capacity",
+                    headers={"Authorization": "Bearer " + token})
+                with urllib.request.urlopen(req, timeout=2) as res:
+                    raw = res.read(262145)
+                if len(raw) > 262144:
+                    raise ValueError("metadata too large")
+                data = json.loads(raw)
+                import datetime
+                expiry = datetime.datetime.fromisoformat(data.get("expires_at", "").replace("Z", "+00:00"))
+                until = expiry.timestamp() if expiry.tzinfo else 0
+                if data.get("policy") != "codex-capacity-v2" or not isinstance(data.get("accounts"), list) or not now < until <= now + 35:
+                    raise ValueError("invalid metadata")
+                self.capacity_cache, self.capacity_until = data, min(until, now + 30)
+                self.capacity_failures = 0
+                # Healthy refresh precedes TTL by >=10s (tick polls every5s).
+                self.capacity_retry = now + min(20, max(1, (until-now)/2))
+            except (OSError, ValueError, TypeError, AttributeError):
+                # Do not log exceptions containing a URL, response or credential.
+                pass
+            return self.capacity_cache if now < self.capacity_until else {}
+
+    def save_codex_state(self):
+        write_json(os.path.join(self.cfg.state, "codex-routing.json"), self.codex_state)
+
+    def codex_pick(self, sid, independent=True, refs=(), unknown=False, pin="", preview=False, proposed=False):
+        """Serialize per-tenant independent boundaries. References never change a
+        binding. Preview executes the same calculation without any routing writes.
+        Load is recent LOCAL session reservations (10m), not global concurrency.
+        """
+        data = self.capacity_metadata()
+        now = time.time()
+        with self.codex_lock:
+            sessions = self.codex_state.setdefault("sessions", {})
+            old = sessions.get(sid, {})
+            cur = old.get("account", "")
+            held = set(self.held("codex"))
+            entries, seen = {}, set()
+            idx = pool_index(self.cfg)
+            for a in sorted(held):
+                # Dedup held token aliases without opening any credential file.
+                key = idx.get("codex:" + a, "label:" + a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entries[a] = None
+            meta = {r["account"]: r for r in data.get("accounts", []) if isinstance(r, dict) and isinstance(r.get("account"), str)}
+            # Metadata is authority-scoped; it never adds an unheld account. A
+            # fresh answer also prevents stale, withdrawn holds from being picked.
+            if data:
+                entries = {a: meta[a] for a in entries if a in meta}
+            def state(a, proposed_policy):
+                r = entries.get(a) or {}
+                if not proposed_policy:
+                    r = r.get("conservative", r)
+                st = r.get("state", "unknown")
+                if self.codex_limits.get(a, 0) > now:
+                    return "limited"
+                # Local full evidence (even stale) survives until observed reset.
+                rd = self.codex_reads.get(a, {})
+                for pk, rk in (("rl5h", "rl_reset5"), ("rl7d", "rl_reset7")):
+                    pct, reset = _num(rd.get(pk)), _num(rd.get(rk))
+                    if pct is not None and pct >= 100 and (not reset or reset > now):
+                        return "limited"
+                return st
+            use_capacity = bool(data) and (proposed or data.get("mode") == "active")
+            diagnostics = []
+            with Proxy.lock:
+                # Activity is actually observed here; idle/dead sessions age out.
+                loads = {}
+                for tt in (list(Proxy.tenants.values()) or [self]):
+                    live = read_json(os.path.join(tt.cfg.state, "live.json"), {})
+                    revoked = read_lines(os.path.join(tt.cfg.state, "revoked"))
+                    for other, v in list(tt.codex_state.get("sessions", {}).items()):
+                        if other in revoked or other in live and not pid_alive(live[other]):
+                            continue
+                        if tt is self and other == sid:
+                            continue
+                        reservations = dict(v.get("reservations", {}))
+                        if v.get("identity"):
+                            reservations[v["identity"]] = max(v.get("seen", 0), reservations.get(v["identity"], 0))
+                        for identity, at in reservations.items():
+                            if identity and at >= now - 600:
+                                loads[identity] = loads.get(identity, 0) + 1
+            for a, row in entries.items():
+                r = dict(row or {})
+                score = _num(r.get("score")) if use_capacity else None
+                st = state(a, use_capacity)
+                if st not in ("usable", "tight") or score is not None and score < 0:
+                    score = None
+                n = loads.get(r.get("credential_id", ""), 0)
+                diagnostics.append(dict(account=a, owner=r.get("owner", "local"),
+                    identity=r.get("credential_id", ""), state=st,
+                    refresh_healthy=r.get("refresh_healthy", True),
+                    paused=r.get("paused", False) or ("codex", a) in self.paused,
+                    score=score / (1+n) if score is not None else None,
+                    capacity=r.get("capacity", {"status": "metadata_unknown", "calibration_factor": 1, "calibration_status": "pending_matched_observations"}),
+                    local_recent_reservations=n))
+            byname = {r["account"]: r for r in diagnostics}
+            reason, pick = "conservative_unknown", cur
+            if pin:
+                pick, reason = pin, "explicit_binding"
+            elif not independent:
+                # Resolve all references to one original subscription. Unknown
+                # context stays on the sole account ever used by this session;
+                # after any switch ambiguity must refuse, never guess.
+                origins = {old.get("refs", {}).get(ref) for ref in refs}
+                if refs and None not in origins and len(origins) == 1 and not unknown:
+                    origin = next(iter(origins))
+                    pick, reason = origin.split("\0", 1)[0], "source_affinity"
+                elif old.get("sole") and not refs:
+                    pick, reason = old["sole"], "unknown_context_original"
+                else:
+                    raise ValueError("Codex continuation source unknown; start an independent request")
+            else:
+                eligible = [r for r in diagnostics if not r["paused"]]
+                if not eligible:
+                    if cur in byname:
+                        pick, reason = cur, "all_paused_keep_current"
+                    else:
+                        raise ValueError("no unpaused authorized Codex subscription held")
+                else:
+                    band = {"usable": 0, "tight": 0, "unknown": 2, "limited": 3}
+                    def cohort(r):
+                        return (r["state"] == "limited", r["owner"] == "pool", not r["refresh_healthy"], band.get(r["state"], 2))
+                    best = min(cohort(r) for r in eligible)
+                    group = [r for r in eligible if cohort(r) == best]
+                    def basis(r):
+                        p = r["capacity"].get("profile") or {}
+                        return p.get("pool"), p.get("unit"), p.get("basis")
+                    comparable = all(r["score"] is not None and basis(r) == basis(group[0]) for r in group)
+                    mx = max((r["score"] or 0 for r in group), default=0)
+                    def rank(r):
+                        tie = hashlib.sha256((sid + "\0" + r["owner"] + "\0" + r["identity"]).encode()).digest()
+                        if comparable:
+                            return (0 if r["score"] >= mx*.99 else 1, 0 if r["score"] >= mx*.99 else -r["score"], bytes(255-x for x in tie))
+                        return ({"usable": 0, "tight": 1, "unknown": 2, "limited": 3}.get(r["state"], 2), bytes(255-x for x in tie))
+                    candidate = min(group, key=rank)
+                    pick = candidate["account"]
+                    reason = "estimated_capacity_reset_local_load" if comparable else "conservative_order"
+                    if cur in byname and cur != pick:
+                        current = byname[cur]
+                        same_basis = comparable and current["score"] is not None and basis(candidate) == basis(current)
+                        if now - old.get("changed", now) < 600:
+                            pick, reason = cur, "minimum_hold"
+                        elif candidate["state"] not in ("usable", "tight"):
+                            pick, reason = cur, "no_known_safe_alternative"
+                        elif current["state"] != "limited" and (candidate["owner"] != current["owner"] or not candidate["refresh_healthy"]):
+                            pick, reason = cur, "policy_boundary"
+                        elif current["state"] == "limited":
+                            reason = "restore_configured_window_reserve"
+                        elif same_basis and candidate["score"] > current["score"] * 1.25:
+                            reason = "material_capacity_advantage"
+                        elif not same_basis and current["state"] == "tight" and candidate["state"] == "usable":
+                            reason = "restore_dual_window_reserve"
+                        else:
+                            pick, reason = cur, "no_material_gain"
+            if not independent or pin:
+                # A pin may not redirect known reference context to another sub.
+                origins = {old.get("refs", {}).get(ref) for ref in refs}
+                if refs:
+                    if None in origins or len(origins) != 1 or next(iter(origins)).split("\0", 1)[0] != pick:
+                        raise ValueError("Codex continuation conflicts with subscription identity")
+                if unknown and old.get("sole") != pick:
+                    raise ValueError("Codex unknown continuation cannot change subscription")
+                if pick not in held or data and pick not in meta:
+                    raise ValueError("Codex source subscription is no longer authorized or held")
+                if state(pick, use_capacity) == "limited":
+                    raise ValueError("Codex source subscription is exhausted; continuation cannot switch")
+            expected_source = ""
+            if refs:
+                expected_source = next(iter(origins)).split("\0", 1)[1]
+            elif unknown:
+                expected_source = old.get("sole_source", "")
+                if not expected_source:
+                    raise ValueError("Codex continuation source identity unknown")
+            result = dict(ok=True, account=pick, reason=reason, inputs=diagnostics, expected_source=expected_source,
+                mode=data.get("mode", "off"), catalog_revision=data.get("catalog_revision"),
+                metadata_status="fresh" if data else "unavailable_or_stale",
+                load_basis="local session reservations observed in last 10m; not global concurrency",
+                mutates_bindings=not preview)
+            if not preview and independent and not pin and pick:
+                row = byname.get(pick, {})
+                v = dict(old, managed=True, account=pick, identity=row.get("identity", ""), seen=now,
+                         changed=old.get("changed", now) if pick == cur else now,
+                         sole=old.get("sole", pick) if not cur or cur == pick else "")
+                sessions[sid] = v
+                if len(sessions) > 4096:
+                    for key in sorted(sessions, key=lambda k: sessions[k].get("seen", 0))[:len(sessions)-4096]:
+                        del sessions[key]
+                self.save_codex_state()
+                with Proxy.lock:
+                    self.picks[("codex", sid)] = pick
+                self.log(ev="pick", provider="codex", sid=sid, acct=pick, why=reason,
+                         catalog_revision=result["catalog_revision"], mode=result["mode"], load_basis="local_recent_reservations")
+            return result
+
+    def codex_request(self, sid, enrolled, method, path, headers, body, pin=""):
+        """Capacity activation is signed at mint. Old credentials never acquire
+        new affinity assumptions. Known managed provenance survives rollback.
+        """
+        data = self.capacity_metadata()
+        if enrolled:
+            independent, refs, unknown = codex_context(method, path, headers, body)
+            has_profiles = any((r.get("capacity") or {}).get("profile") for r in data.get("accounts", []))
+            if not independent or data.get("mode") == "active" and has_profiles:
+                return self.codex_pick(sid, independent, refs, unknown, pin)
+        account = pin or self.pick_account("codex", sid)
+        if enrolled:
+            # Independent fallback uses the legacy evidence/ceiling, but records
+            # that boundary without losing references to earlier subscriptions.
+            with self.codex_lock:
+                sessions = self.codex_state.setdefault("sessions", {})
+                old = sessions.get(sid, {})
+                cur = old.get("account")
+                sessions[sid] = dict(old, managed=True, account=account, seen=time.time(),
+                    changed=old.get("changed", time.time()) if cur == account else time.time(),
+                    sole=old.get("sole", account) if not cur or cur == account else "")
+                self.save_codex_state()
+        return dict(account=account, reason="legacy_binding" if pin else "legacy_conservative_picker", expected_source="")
+
+    def codex_activity(self, sid, account):
+        with self.codex_lock:
+            sessions = self.codex_state.setdefault("sessions", {})
+            v = sessions.setdefault(sid, {"managed": False, "account": account})
+            if not v.get("managed"):
+                v["account"] = account
+            if v:
+                now = time.time()
+                row = next((r for r in self.capacity_cache.get("accounts", []) if r.get("account") == account), {})
+                identity = row.get("credential_id", "")
+                if identity:
+                    reservations = v.setdefault("reservations", {})
+                    reservations[identity] = now
+                    v["reservations"] = {k: at for k, at in reservations.items() if at >= now - 600}
+                if v.get("account") == account:
+                    v["seen"] = now
+                self.save_codex_state()
+
+    def codex_record(self, sid, account, refs, source_identity=""):
+        if not source_identity:
+            return
+        with self.codex_lock:
+            sessions = self.codex_state.setdefault("sessions", {})
+            v = sessions.setdefault(sid, {"managed": True, "account": account, "sole": account, "changed": time.time(), "seen": time.time()})
+            if v.get("account") == account:
+                row = next((r for r in self.capacity_cache.get("accounts", []) if r.get("account") == account), {})
+                if row.get("credential_id"):
+                    v["identity"] = row["credential_id"]
+            if v.get("sole") == account:
+                prior = v.get("sole_source")
+                v["sole_source"] = source_identity if not prior or prior == source_identity else ""
+            known = v.setdefault("refs", {})
+            for ref in refs:
+                # A collision is unresolved rather than silently overwritten.
+                origin = account + "\0" + source_identity
+                known[ref] = origin if ref not in known or known[ref] == origin else None
+            if len(known) > 4096:
+                v["refs"] = {} # later continuation explicitly unknown
+            self.save_codex_state()
+
     def pick_account(self, provider, sid, avoid=()):
         """-> the account this session's next request runs on ("" = none held)."""
         now = time.time()
@@ -1357,6 +1798,9 @@ class Tenant:
         if nxt != cur:
             with Proxy.lock:
                 self.picks[(provider, sid)] = nxt
+                if provider == "codex":
+                    write_json(os.path.join(self.cfg.state, "codex-legacy-picks.json"),
+                        {k[1]: a for k, a in self.picks.items() if k[0] == "codex"})
             u = self.used(provider, nxt, now)
             self.log(ev="pick", sid=sid, provider=provider, acct=nxt, frm=cur or "-",
                      why=("first" if not cur else "full" if cur not in avoid else "limited"),
@@ -1751,8 +2195,17 @@ class Proxy(BaseHTTPRequestHandler):
             # usage-limit 429 moves it; a named home (<homes>/<L>) stays its pin
             acct = ""
         self.auto = not acct and bool(self.cfg.store)
-        if self.auto:
+        self.codex_policy = provider == "codex" and self.cfg.store and claims.get("capacity_policy") == 2
+        self.codex_expected_source = ""
+        if provider == "codex" and self.cfg.store:
+            try:
+                decision = self.t.codex_request(sid, self.codex_policy, self.command, path, inbound, body, acct)
+                acct, self.codex_expected_source = decision["account"], decision["expected_source"]
+            except ValueError as e:
+                return self.fail(409, str(e), "codex_affinity_unavailable")
+        elif self.auto:
             acct = self.t.pick_account(provider, sid)
+        if self.auto:
             if not acct:
                 self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no account held")
                 return self.fail(403, no_account_why(self.cfg, provider), "permission_error")
@@ -1906,6 +2359,7 @@ class Proxy(BaseHTTPRequestHandler):
         if provider == "codex":
             path = pool_resolve(c, "codex", acct) or codex_auth_path(c, acct)
             at, aid, fp = codex_tokens(path)
+            self.codex_source_identity = codex_ref("account", aid) if aid else ""
             self.codex_seen = (os.path.dirname(path), fp)
             put["Authorization"] = "Bearer " + at
             drop.add("chatgpt-account-id")
@@ -1969,6 +2423,10 @@ class Proxy(BaseHTTPRequestHandler):
             self.log(ev="nocred", sid=sid, acct=acct, route=route, err=type(e).__name__)
             tried.append("%s: no credential for %s" % (route, acct))
             return ("nocred", (403, "no upstream credential for account %s" % acct, "permission_error"))
+        if provider == "codex" and cred == "file" and getattr(self, "codex_expected_source", ""):
+            if self.codex_expected_source != getattr(self, "codex_source_identity", ""):
+                self.fail(409, "Codex continuation source identity changed", "codex_affinity_unavailable")
+                return None
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() not in drop}
         if provider == "claude" and cred == "file":
             betas = [b.strip() for k, v in out.items() if k.lower() == "anthropic-beta"
@@ -2063,7 +2521,12 @@ class Proxy(BaseHTTPRequestHandler):
         if provider in ("claude", "codex"):
             self.t.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
-        if r.status == 429 and getattr(self, "rehome", False):
+        if r.status == 429 and provider == "codex" and cred == "file":
+            first = r.read(65536)
+            with Proxy.lock:
+                Proxy.limited[(provider, acct)] = limit_until(provider, r.getheaders(), first)
+                self.t.codex_limits[acct] = Proxy.limited[(provider, acct)]
+        if r.status == 429 and provider != "codex" and getattr(self, "rehome", False):
             first = r.read(65536)
             nxt = self.t.repick(provider, sid, acct, limit_until(provider, r.getheaders(), first))
             if nxt:
@@ -2108,6 +2571,10 @@ class Proxy(BaseHTTPRequestHandler):
             if r.status == 401:
                 first = r.read(65536)
             codex_verdict(getattr(self, "codex_seen", None), route, r.status, first)
+        if getattr(self, "codex_policy", False) and cred == "file" and 200 <= r.status < 300:
+            self.t.codex_record(sid, acct, [codex_ref("header:" + k.lower(), v)
+                for k, v in r.getheaders() if k.lower() in ("x-codex-turn-state", "x-codex-routing-hint") and v],
+                getattr(self, "codex_source_identity", ""))
         self.send_response_only(r.status, r.reason)
         rh = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP]
         for k, v in rh:
@@ -2122,6 +2589,8 @@ class Proxy(BaseHTTPRequestHandler):
         # metered here only when this login's credential was used (issue #1977):
         # the central route's answer is the cluster proxy's to count
         meter = Meter(r.getheader("Content-Encoding", "")) if cred == "file" and 200 <= r.status < 300 else None
+        if meter and getattr(self, "codex_policy", False):
+            meter.on_references = lambda refs: self.t.codex_record(sid, acct, refs, getattr(self, "codex_source_identity", ""))
         try:
             if chunked:
                 d = first
@@ -2141,6 +2610,10 @@ class Proxy(BaseHTTPRequestHandler):
         extra = {}
         if meter:
             split = meter.split()
+            if provider == "codex":
+                self.t.codex_activity(sid, acct)
+                if getattr(self, "codex_policy", False):
+                    self.t.codex_record(sid, acct, meter.references, getattr(self, "codex_source_identity", ""))
             extra["tokens"] = split["in"] + split["cache_write"] + split["out"]
             self.budget.add(provider, extra["tokens"], split, self.budget.worker(sid), acct, meter.model)
             if extra["tokens"] <= 0 and provider in ("claude", "codex") and self.command == "POST":
@@ -2670,7 +3143,10 @@ def ctl_handle(req, t):
         elif not acct or "/" in acct or acct.startswith("."):
             return {"ok": False, "err": "mint: --account LABEL"}
         sid = req.get("sid") or "s-" + secrets.token_hex(4)
-        tok = t.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl), lg=t.name)
+        existing = ("codex", sid) in t.picks or sid in read_json(os.path.join(cfg.state, "live.json"), {}) or sid in read_json(os.path.join(cfg.state, "workers.json"), {})
+        managed = t.codex_state.get("sessions", {}).get(sid, {}).get("managed", False)
+        tok = t.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl), lg=t.name,
+            capacity=req.get("provider") == "codex" and (managed or not existing and t.capacity_metadata().get("mode") == "active"))
         wid = req.get("worker") or ""
         if wid and WORKER_RE.match(wid):
             # the session's worker_id (its fleet credential's, issue #3376): its
@@ -2900,6 +3376,12 @@ def ctl_handle(req, t):
         return {"ok": True, "quota": q}
     if op == "account-quota":
         return {"ok": True, "accounts": account_quota(t)}
+    if op == "capacity-preview":
+        sid = req.get("sid")
+        if not isinstance(sid, str) or not sid or len(sid) > 256:
+            return {"ok": False, "err": "capacity-preview: --sid required"}
+        pin = read_json(os.path.join(cfg.state, "bind.json"), {}).get(sid, "")
+        return t.codex_pick(sid, pin=pin, preview=True, proposed=True)
     if op == "standing":
         # issue #4606, read-only: may a pick land on each account, and when does
         # one that is out come back — percentages and times, never a token
@@ -3438,6 +3920,25 @@ def shared_takeover(lockf, st, pid, why):
     sys.exit("fleet-cred-proxy: the stale shared proxy pid %d still holds %s/lock after %gs" % (pid, st, secs))
 
 
+def snapshot_legacy_picks(ctl_dir, shared, state):
+    """Before socket handoff, preserve the old proxy's established bindings.
+    Root/uid-gated control reads only; no history/source provenance is inferred.
+    A proxy already stopped cannot supply a snapshot: retain its persisted one.
+    """
+    for spec in (shared or {}).get("tenants", [{"state": state}]):
+        try:
+            req = {"op": "picks"}
+            if spec.get("login"):
+                req["as"] = spec["login"]
+            reply = ctl_call(ctl_dir, req)
+            picks = {k.split(":", 1)[1]: a for k, a in reply.get("picks", {}).items()
+                     if k.startswith("codex:") and isinstance(a, str) and SAFE_LABEL(a)}
+            if picks:
+                write_json(os.path.join(spec["state"], "codex-legacy-picks.json"), picks)
+        except (OSError, RuntimeError, ValueError, SystemExit):
+            pass
+
+
 def serve(a):
     cfg = a
     shared = None
@@ -3458,6 +3959,8 @@ def serve(a):
         # handed over, else (an older proxy) stopped as a stale one is
         handing = env("FLEET_CRED_HANDOFF") == "1"
         ctl0 = (shared.get("run") or st) if shared else env("FLEET_CRED_CTL_DIR", st)
+        if handing:
+            snapshot_legacy_picks(ctl0, shared, st)
         took = handoff_from(lockf, st, ctl0) if handing else None
         if took is not None:
             inherited = took
@@ -3668,6 +4171,13 @@ def serve(a):
 
     parent = os.getppid()
 
+    def capacity_tick(t):
+        while not DRAIN["on"]:
+            t.refresh_capacity_metadata()
+            time.sleep(5)
+    for tenant in tenants:
+        threading.Thread(target=capacity_tick, args=(tenant,), daemon=True).start()
+
     def tick():
         every = max(5, int(env("FLEET_CRED_PROXY_TRUST_SECS", "300")))
         bevery = max(1, int(env("FLEET_CRED_BUDGET_SECS", "15")))
@@ -3755,6 +4265,8 @@ def main():
     sub.add_parser("quota")
     sub.add_parser("account-quota")
     sub.add_parser("picks")
+    cp = sub.add_parser("capacity-preview")
+    cp.add_argument("--sid", required=True)
     g = sub.add_parser("standing")
     g.add_argument("--provider", default="codex", choices=("claude", "codex"))
     u = sub.add_parser("status")
@@ -3834,6 +4346,8 @@ def main():
         print(json.dumps(res, sort_keys=True))
     elif a.cmd == "quota":
         print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
+    elif a.cmd == "capacity-preview":
+        print(json.dumps(ctl_call(a.state, {"op": "capacity-preview", "sid": a.sid}), sort_keys=True))
     elif a.cmd == "picks":
         res = ctl_call(a.state, {"op": "picks"})
         print(json.dumps({"picks": res["picks"], "pinned": res["pinned"]}, sort_keys=True))

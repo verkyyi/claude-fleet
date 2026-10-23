@@ -110,3 +110,5 @@ section here or its doc in the same PR (CONTRIBUTING «面向用户的改动»).
 
 `~/.claude/fleet/bin/fleet-client-where.sh --json` prints the same reading as
 `mcp__fleet__where` (exit 3: nobody connected).
+
+Codex 本地容量预览：`fleet-cred-proxy.sh capacity-preview --sid <preview-sid>`（目标 login 的 control scope；只读缓存，不推理、不换绑）。策略与上线边界见 `docs/dev/CRED-RELAY.md`「套餐容量目录与安全预览（T972）」。

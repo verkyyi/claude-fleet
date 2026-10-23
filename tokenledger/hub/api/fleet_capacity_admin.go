@@ -139,7 +139,7 @@ func (s *Server) handleCodexPreview(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 500, "binding read failed")
 		return
 	}
-	if req.NewSession {
+	if errors.Is(err, store.ErrNoSessionBind) || req.NewSession {
 		b = store.SessionBind{WorkerID: req.WorkerID, Provider: credvault.Codex}
 	}
 	cat, err := s.Store.PlanCapacities()

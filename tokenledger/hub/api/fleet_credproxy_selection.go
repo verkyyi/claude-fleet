@@ -15,7 +15,7 @@ import (
 
 // These are policy reserves, not subscription sizes or plan multipliers.
 // /wham/usage supplies no absolute capacity. Only an explicitly registered,
-// verified plan profile establishes comparable estimated work units.
+// sourced plan profile establishes comparable estimated work units.
 const codexQuotaFresh = 10 * time.Minute
 const codexStickyHold = 10 * time.Minute
 const codexReservePercent = 20.0
@@ -73,6 +73,12 @@ func codexQuota(q *model.QuotaSnapshot, read *store.CredentialQuotaRead, now tim
 	}
 	full := fresh && q.Blocked
 	valid, tight, opportunity := fresh, false, false
+	// A subset of transcript/response headers cannot establish that an absent
+	// window does not exist. account_api is a complete account usage response.
+	if len(expected) == 1 && q.Observation != "account_api" {
+		valid = false
+		out.Reason = "incomplete_window_evidence"
+	}
 	seen := map[int64]bool{}
 	for _, w := range q.Windows {
 		// Model-specific pools cannot establish the general subscription's size.
@@ -191,6 +197,13 @@ func (s *Server) codexQuotaForCatalog(c store.Credential, now time.Time, cat sto
 	return out
 }
 
+func codexCohortBand(q codexQuotaInput) int {
+	if q.State == "tight" {
+		return 0
+	}
+	return codexBand(q)
+}
+
 func codexBand(q codexQuotaInput) int {
 	switch q.State {
 	case "usable":
@@ -222,7 +235,7 @@ func codexOrder(choices []store.Credential, inputs []codexQuotaInput) []int {
 		if (choices[i].RefreshError == "") != (choices[j].RefreshError == "") {
 			return choices[i].RefreshError == ""
 		}
-		return codexBand(inputs[i]) < codexBand(inputs[j])
+		return codexCohortBand(inputs[i]) < codexCohortBand(inputs[j])
 	})
 	// Rank capacity only within a complete comparable policy cohort. Pairwise
 	// comparisons across different bases would make the sort non-transitive.
@@ -231,7 +244,7 @@ func codexOrder(choices []store.Credential, inputs []codexQuotaInput) []int {
 		first := order[from]
 		for to < len(order) {
 			j := order[to]
-			if choices[first].PrincipalID != choices[j].PrincipalID || (choices[first].RefreshError == "") != (choices[j].RefreshError == "") || codexBand(inputs[first]) != codexBand(inputs[j]) {
+			if choices[first].PrincipalID != choices[j].PrincipalID || (choices[first].RefreshError == "") != (choices[j].RefreshError == "") || codexCohortBand(inputs[first]) != codexCohortBand(inputs[j]) {
 				break
 			}
 			to++
@@ -256,6 +269,9 @@ func codexOrder(choices []store.Credential, inputs []codexQuotaInput) []int {
 				if !topI && *inputs[i].Score != *inputs[j].Score {
 					return *inputs[i].Score > *inputs[j].Score
 				}
+			}
+			if !comparable && codexBand(inputs[i]) != codexBand(inputs[j]) {
+				return codexBand(inputs[i]) < codexBand(inputs[j])
 			}
 			if !comparable && inputs[i].Opportunity != inputs[j].Opportunity {
 				return inputs[i].Opportunity
@@ -296,7 +312,7 @@ func codexAutoBinding(b store.SessionBind) bool {
 
 func codexComparableCohort(choices []store.Credential, inputs []codexQuotaInput, pick int) bool {
 	for i, c := range choices {
-		if c.PrincipalID == choices[pick].PrincipalID && (c.RefreshError == "") == (choices[pick].RefreshError == "") && codexBand(inputs[i]) == codexBand(inputs[pick]) && !codexComparable(inputs[pick], inputs[i]) {
+		if c.PrincipalID == choices[pick].PrincipalID && (c.RefreshError == "") == (choices[pick].RefreshError == "") && codexCohortBand(inputs[i]) == codexCohortBand(inputs[pick]) && !codexComparable(inputs[pick], inputs[i]) {
 			return false
 		}
 	}
@@ -326,12 +342,12 @@ func codexChoose(choices []store.Credential, inputs []codexQuotaInput, b store.S
 			why = "best_current"
 		case now.Before(b.UpdatedAt.Add(codexStickyHold)):
 			why = "minimum_hold"
-		case inputs[pick].State != "usable":
+		case inputs[pick].State != "usable" && !(inputs[pick].State == "tight" && codexComparableCohort(choices, inputs, pick) && codexComparable(inputs[pick], inputs[current])):
 			why = "no_known_safe_alternative"
 		// Capacity does not cross ownership or refresh-health policy boundaries.
 		case inputs[current].State != "limited" && (choices[pick].PrincipalID != choices[current].PrincipalID || choices[pick].RefreshError != ""):
 			why = "policy_boundary"
-		case inputs[current].State == "limited" || inputs[current].State == "tight":
+		case inputs[current].State == "limited" || inputs[current].State == "tight" && !codexComparable(inputs[pick], inputs[current]):
 			why = "restore_dual_window_reserve"
 			if inputs[pick].Capacity.Profile != nil {
 				why = "restore_configured_window_reserve"

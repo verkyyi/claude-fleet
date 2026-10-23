@@ -1,0 +1,5 @@
+[
+  {"name":"larger_lower_fraction","units":[1,10],"used":[20,70],"remaining":[0.8,3],"scores":[0.8285714285714286,3.107142857142857],"states":["usable","usable"],"pick":1},
+  {"name":"tight_larger_beats_usable","units":[1,10],"used":[50,90],"remaining":[0.5,1],"scores":[0.5178571428571429,1.0357142857142858],"states":["usable","tight"],"pick":1},
+  {"name":"same_percent_tiers","units":[1,10],"used":[50,50],"remaining":[0.5,5],"scores":[0.5178571428571429,5.178571428571429],"states":["usable","usable"],"pick":1}
+]

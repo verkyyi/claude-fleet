@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -229,7 +230,7 @@ func TestCodexCapacityUnknownProfiles(t *testing.T) {
 		want   string
 	}{
 		{"missing", func(c *store.PlanCapacityCatalog) { c.Profiles = nil }, "baseline_unknown"},
-		{"unverified", func(c *store.PlanCapacityCatalog) { c.Profiles[0].Confidence = "provisional" }, "baseline_unverified"},
+
 		{"not effective", func(c *store.PlanCapacityCatalog) { c.Profiles[0].EffectiveFrom = now.Add(time.Hour) }, "baseline_outside_effective_period"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -446,5 +447,160 @@ func TestCodexCapacityKeepsSourceAffinity(t *testing.T) {
 	s.limits.mark("codex", "pool", s.Vault.CredentialID(*source), now.Add(time.Hour))
 	if _, _, err := s.codexAffinityBind("capacity-affinity", "gh:1005", "", credproxy.CodexRoute{References: []string{ref}}, now); err == nil {
 		t.Fatal("unavailable source was rerouted")
+	}
+}
+
+func TestCodexCapacityReviewBoundaries(t *testing.T) {
+	r, now, cat := registerCapacityRig(t)
+	now = now.Add(time.Second)
+	cat.Profiles[0].Confidence = "provisional"
+	cat.Profiles[1].Confidence = "provisional"
+	s := r.h.srv
+	codexSelectionQuota(t, r, "poolcx", now, 50, 50, 4*time.Hour, 6*24*time.Hour)
+	codexSelectionQuota(t, r, "poolcx2", now, 90, 90, 4*time.Hour, 6*24*time.Hour)
+	choices, _ := s.sessionBindChoices("gh:1005", "", "codex")
+	b := store.SessionBind{WorkerID: "review", Owner: "pool", Account: "poolcx", SetBy: "auto", UpdatedAt: now.Add(-time.Hour)}
+	in := s.codexSelectionInputs(choices, b, now, cat)
+	if in[1].State != "tight" || in[1].Capacity.Profile.Confidence != "provisional" {
+		t.Fatal(in)
+	}
+	pick, why := codexChoose(choices, in, b, now, true)
+	if pick != 1 || why != "material_capacity_advantage" {
+		t.Fatal(pick, why, in)
+	}
+	b.Account = "poolcx2"
+	if pick, _ := codexChoose(choices, in, b, now, true); pick != 1 {
+		t.Fatal("tight capacity churn")
+	}
+	p := capacityProfile("pro", 1, now)
+	p.Windows = p.Windows[1:]
+	q := selectionFixture(now)
+	q.Windows = q.Windows[1:]
+	q.Observation = "transcript"
+	if got := codexQuota(q, nil, now, &p); got.State != "unknown" || got.Reason != "incomplete_window_evidence" {
+		t.Fatal(got)
+	}
+	q.Observation = "app_server"
+	if got := codexQuota(q, nil, now, &p); got.State != "unknown" {
+		t.Fatal(got)
+	}
+	q = selectionFixture(now)
+	q.Windows[0].UsedPercent = 100
+	q.ObservedAt = now.Add(-20 * time.Minute)
+	if got := codexQuota(q, nil, now, &p); got.State != "limited" {
+		t.Fatal("unexpected full stale window ignored", got)
+	}
+}
+
+func TestCodexCapacitySharedVectors(t *testing.T) {
+	raw, err := os.ReadFile("../../shared/credproxy/testdata/capacity_policy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []struct {
+		Name                           string
+		Units, Used, Remaining, Scores []float64
+		States                         []string
+		Pick                           int
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, v := range vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			in := []codexQuotaInput{}
+			choices := []store.Credential{}
+			for i, u := range v.Units {
+				p := capacityProfile("vector", u, now)
+				q := selectionFixture(now)
+				for j := range q.Windows {
+					q.Windows[j].UsedPercent = v.Used[i]
+				}
+				got := codexQuota(q, nil, now, &p)
+				got.Capacity.Profile = &p
+				applyCodexCapacity(&got, p, now)
+				if got.State != v.States[i] || math.Abs(*got.Score-v.Scores[i]) > 1e-9 || math.Abs(*got.Capacity.EstimatedRemaining-v.Remaining[i]) > 1e-9 {
+					t.Fatal(got)
+				}
+				in = append(in, got)
+				choices = append(choices, store.Credential{PrincipalID: "pool", Account: fmt.Sprint(i)})
+			}
+			if got := codexOrder(choices, in)[0]; got != v.Pick {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+
+func TestCodexCapacityNodeMetadataScopedReadOnly(t *testing.T) {
+	h, tok, ref := newVaultHarness(t)
+	now := time.Now()
+	for _, owner := range []string{pAlice, "pool", "unrelated"} {
+		if err := h.srv.Vault.Put(owner, "codex", owner, credvault.Secret{RefreshToken: "fixture", AccountID: owner}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call := func(token string) (int, string) {
+		req := httptest.NewRequest("GET", nodeCapacityPath, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.srv.handleNodeCapacity(w, req)
+		return w.Code, w.Body.String()
+	}
+	if code, _ := call(""); code != 401 {
+		t.Fatal(code)
+	}
+	if _, err := h.srv.Store.SetPlanCapacities(store.PlanCapacityCatalog{Mode: "shadow"}, 0, "test", now); err != nil {
+		t.Fatal(err)
+	}
+	code, raw := call(tok)
+	if code != 200 || strings.Contains(raw, "unrelated") || strings.Contains(raw, "fixture") || !strings.Contains(raw, `"mutates_bindings":false`) {
+		t.Fatal(code, raw)
+	}
+	if ref.n.Load() != 0 {
+		t.Fatal("metadata refreshed credentials")
+	}
+	var out struct {
+		Accounts  []struct{ Account string }
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil || len(out.Accounts) != 2 || out.ExpiresAt.Sub(now) > 31*time.Second {
+		t.Fatal(out, err)
+	}
+	if err := h.srv.Store.Revoke("mac-c", pAlice, "test", now); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := call(tok); code != 403 {
+		t.Fatal("revoked node got metadata", code)
+	}
+}
+
+func TestCodexCapacityPreviewUnboundWorker(t *testing.T) {
+	r, _, _ := registerCapacityRig(t)
+	_, wid := r.issue(t, fidA)
+	w := httptest.NewRecorder()
+	r.h.srv.handleCodexPreview(w, httptest.NewRequest("POST", codexPreviewPath, strings.NewReader(fmt.Sprintf(`{"worker_id":%q}`, wid))))
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var out struct {
+		Binding  store.SessionBind
+		Proposed struct{ Account string }
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Binding.WorkerID != wid || out.Proposed.Account != "poolcx2" {
+		t.Fatal(out, err)
+	}
+	if _, err := r.h.srv.Store.SessionBindFor(wid, "codex"); err != store.ErrNoSessionBind {
+		t.Fatal("preview created binding", err)
+	}
+	choices, _ := r.h.srv.sessionBindChoices("gh:1005", "", "codex")
+	b := store.SessionBind{WorkerID: wid, Provider: "codex"}
+	// Initial selection has no opportunistic boundary, including svc principals.
+	actual, _ := r.h.srv.codexSelect(choices, b, time.Now(), false)
+	if actual.Account != out.Proposed.Account {
+		t.Fatal(actual, out)
 	}
 }

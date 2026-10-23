@@ -35,7 +35,7 @@ func (s *Server) codexCapacityProfile(c store.Credential, q *model.QuotaSnapshot
 			continue
 		}
 		meta.Profile = &p
-		if p.Confidence != "verified" {
+		if p.Confidence != "verified" && p.Confidence != "provisional" {
 			meta.Status = "baseline_unverified"
 			return meta, nil
 		}

@@ -466,18 +466,18 @@ plan 与管理员登记的 tier 分开显示；登记 plan 或最新配额 plan 
 | plan / tier / unit / version | plan、unit、version 必填；1–96 个 ASCII 字母数字及 `._:-`，首字母数字；tier 可空 |
 | pool | 仅支持已识别的主池 `codex`；不支持凭空登记模型专属池 |
 | basis / source | 必填，分别 ≤256 / ≤512 字节；无首尾空白和换行，说明可比工作负载与确认来源 |
-| confidence | `verified` 或 `provisional`；只有 verified 在有效期内可参与估算 |
+| confidence | `verified` 或 `provisional`；两者在有效期内均可参与估算，provisional 明示估计而非精确 token/tasks |
 | effective_from / effective_to | RFC3339；from 必填，to 可省略，若存在须晚于 from；区间前闭后开 |
 | windows | 列出全部预期实际窗口，1–2 项，分钟数只能为 300 / 10080，不能重复 |
 | units | 每个窗口的可比工作容量，有限正数，范围 0.000001–1000000000；不是实际 tokens |
 
-一个 profile 可明确只期待 10080 分钟窗口，不能因为某次只读到周窗口就自动认定
-5h 不存在。缺预期窗口、重复、额外主池窗口、非法值、过期、reset 尚未重新观察，
+一个 profile 可明确只期待 10080 分钟窗口，但必须有完整 `account_api` 读取支持；
+transcript / response header 的局部读取不能证明 5h 不存在。缺预期窗口、重复、额外主池窗口、非法值、过期、reset 尚未重新观察，
 仍为 unknown；已知满窗继续 limited。局部更新不替旧窗续期。其他模型池不会给主池
 增加容量。每个窗口各自保留实际观察年龄与 reset。
 
-`active` 的同一所属、refresh 健康层及 quota 状态层内，**只有整个候选组都具有
-相同 pool / unit / basis 的已确认估算**才按容量比较；混合或未知基准回退到保守的
+`active` 的同一所属、refresh 健康层及 eligible（usable + tight）层内，**只有整个候选组都具有
+相同 pool / unit / basis 的已登记估算（保留 provisional/verified）**才按容量比较；混合或未知基准回退到保守的
 状态与 reset 机会规则。每个窗口估计剩余为 `units × remaining_percent / 100 × calibration`，
 原始估计取全部窗口的最小值。容量 score 逐窗口乘
 `1 + 0.25 × (1 − clamp(reset 剩余分钟 / 窗口分钟, 0.05, 1))` 后再取最小值，
@@ -492,7 +492,7 @@ score 距该组最大值 1% 内的候选用 SHA256(worker_id, owner, credential 
 全部已满仍显示 limited，不伪造额度。
 
 自动绑定仍至少保持 10 分钟，仅独立请求边界可主动改变；可比组内还需候选 score
-严格大于当前 1.25 倍，或从 tight/limited 恢复 usable。未知当前读数不足以证明收益。
+严格大于当前 1.25 倍；limited 可恢复到已知可用账号，缺少可比估算时保留 tight → usable 的保守恢复。未知当前读数不足以证明收益。
 不批量搬迁；显式绑定保留，Codex 配额 429 也不覆盖显式绑定。来源引用及已开始的流
 仍遵守下文亲和协议，429 仍只影响将来请求，本次推理不重放。
 
@@ -521,6 +521,43 @@ endpoint。`new_session:true` 仅在计算中忽略现有 sticky，模拟首次�
 清空 profiles；已有绑定不被批量改动，后续独立请求回到保守判断。**T947 未完成的生产
 验收仍须由发布负责人在生产完成**，本任务 fixture 和预览不替代旧会话、跨副本、流、
 续接与真实发布路径的验收，也不自动标记验收通过。
+
+**可信本地代理的容量路由。** direct/relay 仍走原来的传输判定，不强制走中心代理。
+`GET /v1/node/codex-capacity` 只接受本节点认证，按租约同样的 principal、trust、
+credsep、compute、撤销及机器/人员 allowlist 限定元数据，去重后返回本节点可用账号的
+`{policy, catalog_revision, mode, observed_at, expires_at, accounts, load_basis, mutates_bindings:false}`。
+每个 account 包含上述 quota/capacity input、稳定 credential_id、paused 和 conservative
+input；不包含凭据，不 lease 或 refresh。消费者再与本 login 实际 held 账号相交，
+不会因元数据新增订阅权限。有效缓存最多 30 秒，且不延长正向配额读取或 profile 有效期。
+每 tenant 后台线程在到期前刷新（健康时最多 20 秒，5 秒 tick；失败退避 5/10/20/30 秒），
+请求和本地 preview 不访问 Hub。冷启动、off/shadow 或不可用时保留原本地 selector 的
+百分比、85% ceiling、sticky 和负载回退；未知不是无限。
+
+只有在新会话 mint 时收到 fresh active 策略的 Codex pass 才带签名 enrollment。
+已有 pass、已有 sid 的 remint 不因发布而变成新会话。升级交接在旧代理仍在线时，
+通过 uid/root 限定 control socket 快照现有 picks，再恢复原绑定；不推断历史引用来源，
+不批量重绑。没有旧进程或快照时，不能恢复其从未持久化的内存来源记录，旧 pass
+继续原兼容路径，发布负责人须验证旧会话。新 enrolled 会话则持久保存带用途的引用 hash
+→ 原标签 + **实际 upstream account identity hash**；发送时校验实际载入的凭据身份。
+同账号 token refresh 保持亲和，删后复用标签不能继承旧上下文。其已知引用在 off/shadow/
+stale 回退期间也不能跟随保守 picker 换账号，来源不明、冲突、身份变更或满额时明确拒绝。
+新独立请求才使用容量/保持期/收益规则；来源续接不改当前 sticky。所有本地 Codex 429
+只记录将来的 cooldown，原响应原样交付，本次不换订阅或重放；Claude 重试行为不变。
+
+本地 score 使用 Hub 同一 quota 计算与 profile 解析的结果，除以 `1 + local_recent_reservations`。
+后者是本机各 tenant 最近 10 分钟的去重 session 预留，实际成功续接会更新活动；
+已知死亡 wrapper、撤销或陈旧记录不计入。它不是全局实时并发，也与 Hub live-pass 绑定负载不同。
+本地引用与预留只在此 tenant 的保护状态目录持久化，不声称跨机器共享引用。
+
+安全本地预览（从目标 login 执行；root 使用已有 `FLEET_CRED_AS=<login>` scope）：
+
+```sh
+bash bin/fleet-cred-proxy.sh capacity-preview --sid t972-shadow-preview
+```
+
+返回候选输入、估计单位、source/version/confidence、所选原因与本地负载依据；
+`mutates_bindings:false`，不 mint pass、不刷新 Hub、不改变 picks、seen、绑定或引用。
+它模拟该 sid 的独立选择和保持期；使用未占用 sid 可模拟新会话。
 
 **请求边界与账号亲和。** 新 HTTP 请求不等于独立上下文。只有可识别的自包含请求
 （例如不带引用的完整文字历史）才允许按上述滞后策略重选。`previous_response_id`、
