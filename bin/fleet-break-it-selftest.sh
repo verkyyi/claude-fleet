@@ -6979,6 +6979,15 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
+drill_codex_no_daemon_fence() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-codex-no-daemon-fence-selftest.py" >"$WORK/codex-no-daemon-fence.log" 2>&1 || {
+    WHY="Codex no-daemon admission regression: $(tail -10 "$WORK/codex-no-daemon-fence.log")"; return 1;
+  }
+  WHAT='受控 no-daemon 经原生栅栏登记Codex client，停止后不exec；非受控argv不变'
+  SECS=$(since "$t0")
+}
+
 drill_task_unclaimed_node() {
   local t0; t0=$(now); CAP=60
   python3 "$BIN/fleet-task-unclaimed-continuation-selftest.py" >"$WORK/task-unclaimed-node.log" 2>&1 || {
