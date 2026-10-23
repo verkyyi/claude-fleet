@@ -37,6 +37,8 @@ jobs:
         working-directory: extras/browser-transport
       - name: Pending task cancellation, conflicts and read-only controls
         run: node extras/web-console/test/task-cancel-browser.mjs
+      - name: Explicit Task continue in the real app
+        run: node extras/web-console/test/task-continue-browser.mjs
       - name: A late transcript cannot erase a new chat turn
         run: node chat-history.mjs
         working-directory: extras/browser-transport

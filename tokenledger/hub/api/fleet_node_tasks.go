@@ -48,6 +48,10 @@ import (
 //	                              issue is closed and worker holds nothing
 //	                              (fleet_task_settle.go, claude-fleet#4867)
 //
+// POST /v1/node/tasks/<ref>/stop {idempotency_key,evidence?} persists the
+// same Task stop as the browser. Only the authenticated endpoint's exact owner
+// may write; the operator's legacy read exception grants no stop authority.
+//
 // Version 1 (opt-in; no legacy adoption):
 //
 // POST /v1/node/tasks {authority_version:1, token, title, requested_agent,
@@ -267,6 +271,20 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	owner := s.nodeTaskOwner(ep)
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeTasksPath), "/")
+	if task, route, found := strings.Cut(ref, "/"); found && route == "stop" {
+		if r.Method != http.MethodPost {
+			httpError(w, http.StatusMethodNotAllowed, "POST")
+			return
+		}
+		t, err := s.nodeOwnTask(owner, task)
+		// Do not extend the operator's legacy read exception to stop authority.
+		if err != nil || t.Owner != owner {
+			httpError(w, http.StatusNotFound, "no such task of this node's owner")
+			return
+		}
+		s.requestFleetTaskStop(w, r, t)
+		return
+	}
 	if s.nodeTaskExecution(w, r, ep, owner, ref) {
 		return
 	}
