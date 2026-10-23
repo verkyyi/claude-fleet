@@ -7811,6 +7811,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_terminal_physical_width() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-panel-overlay-selftest.py" NativeTests.test_task_physical_width_and_selected_details >"$WORK/task-terminal-physical-width.log" 2>&1 || {
+    WHY="Terminal physical width/details: $(tail -18 "$WORK/task-terminal-physical-width.log")"; return 1;
+  }
+  WHAT='隔离tmux真实面板32/40/80/120及阈值邻列：40列显示Agent、60列显示仓库，选中详情不被窄屏提示覆盖，动作返回原行'
+  SECS=$(since "$t0")
+}
+
 drill_task_history_current_generation() {
   local t0; t0=$(now); CAP=120
   _drill_go_tests 'TestTaskProjectionControlledGeneration TestTaskProjectionKeepsControlledIDHistory TestTaskProjectionControlledSweepsAndUndo TestTaskProjectionSnapshotRejectsAdmissionAndGenerationChange TestTaskProjectionMixedLegacyAliases' \

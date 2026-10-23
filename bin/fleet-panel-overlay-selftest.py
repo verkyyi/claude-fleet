@@ -37,6 +37,8 @@ def fixture(directory):
     os.environ.update(FLEET_VIEW_REFRESH="0", FLEET_CONF_DIR=str(root / "conf"), FLEET_STATUS_G=str(root / "cache"),
                       FLEET_UI_LANG="zh", FLEET_PANEL_COMMANDS="new quit", ESCDELAY="25")
     data = rows()
+    if (root / "task-width").exists():
+        data[1].update(agent="codex", ask="请选择环境", word="")
     v.entries = lambda *a, **k: data if not (root / "gone").exists() else data[2:]
     v.current = lambda *a: "@1"
     v.view_fleet = lambda *a: "isolated"
@@ -213,6 +215,30 @@ class NativeTests(unittest.TestCase):
     def actions(self):
         file = self.root / "actions"
         return [json.loads(x) for x in file.read_text().splitlines()] if file.exists() else []
+
+    def test_task_physical_width_and_selected_details(self):
+        (self.root / "task-width").touch()
+        self.start()
+        for width in (32, 39, 40, 59, 60, 80, 120):
+            with self.subTest(width=width):
+                self.tm("resize-window", "-t", "test", "-x", str(width), "-y", "30")
+                # A key clears the one-time order notice, exposing selected facts.
+                self.keys("Down", "Up")
+                before = self.wait("Tab 操作").splitlines()
+                task = next(line for line in before if "源中文" in line)
+                self.assertEqual("Codex" in task, width >= 40, task)
+                self.assertEqual("acme/web" in task, width >= 60, task)
+                self.assertIn("请选择环境", before[-2])
+                self.assertNotIn("窄屏", before[-2])
+                self.keys("Tab")
+                opened = self.wait("进入").splitlines()
+                self.assertEqual("Codex" in opened[1], width >= 40, opened[1])
+                self.assertEqual("acme/web" in opened[1], width >= 60, opened[1])
+                self.keys("Escape")
+                after = self.wait("Tab 操作").splitlines()
+                self.assertEqual(before[1:-2], after[1:-2])
+        self.assertEqual(self.actions(), [])
+        self.evidence.append("PASS physical widths 32/39/40/59/60/80/120: Agent/repo thresholds, selected facts, page return; zero actions")
 
     def test_matrix_geometry_restore_and_continuous_resize(self):
         for width in (189, 100, 80, 60, 48):
