@@ -289,5 +289,22 @@ rm -f "$ANS"
 out=$(env -u FLEET_HUB_CURL FLEET_CONF_DIR="$FLEET_CONF_DIR" HOME="$WORK" bash "$R" code T5 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$out" = FF1W ] && ok "F code off the book needs no hub" || st_miss "F book without hub: rc=$rc [$out]"
 
+# Parent transport is retired even when an old Task still carries its columns.
+: > "$CURL_LOG"
+bash "$R" dispatch --title 'independent task' >/dev/null 2>"$WORK/err" && \
+python3 - "$CURL_LOG" <<'PYRETIRE' && ok "H dispatch writes no Parent transport fields" || st_miss "H dispatch still writes Parent metadata"
+import json, sys
+b = json.loads([line[6:] for line in open(sys.argv[1]) if line.startswith("body: ")][-1])
+assert not {"parent_task", "parent_session", "origin_wid"}.intersection(b), b
+PYRETIRE
+cat > "$ANS" <<'OLDTASK'
+{"task":{"id":"T5","authority_version":1,"title":"old words","parent_task":"T3","parent_session":"aaaaaaaa-1111-4111-8111-111111111111/bbbbbbbb-2222-4222-8222-222222222222","request_payload":{"body":"kept user words"}}}
+OLDTASK
+rm -f "$WORK/calls"
+bash "$R" respawn T5 --force >/dev/null 2>"$WORK/err" && ! grep -q -- '--origin-wid' "$WORK/calls" \
+  && grep -q 'kept user words' "$WORK/calls" && ok "H respawn preserves words without restoring historical Parent" \
+  || st_miss "H respawn reused Parent metadata: $(cat "$WORK/calls" 2>/dev/null) $(cat "$WORK/err")"
+rm -f "$ANS"
+
 printf '%d checks, %d failed\n' "$CHECKS" "$FAIL"
 st_done

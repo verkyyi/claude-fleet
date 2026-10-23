@@ -360,6 +360,12 @@ func TestBoardPlanFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// This board compatibility test reads a historical relationship. New
+	// acceptance no longer binds a Parent, so seed the archived columns directly.
+	if _, err := st.DB().Exec(`UPDATE fleet_tasks SET parent_task=? WHERE id=?`, parent.Ref, child.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	read := func(live []FleetSession) BoardRow {
 		t.Helper()
 		b, err := s.buildBoard("gh:1", live, now)
