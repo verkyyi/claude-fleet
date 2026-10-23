@@ -7738,6 +7738,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_stop_renamed_worker() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
+    WHY="renamed-worker stop or panel protection failed: $(tail -12 "$WORK/stop-renamed-worker.log")"; return 1;
+  }
+  WHAT='worker改名home/dash/plan/backlog仍可按FID停止；真home/panel改名仍受保护；未标记旧窗口保留旧规则'
+  SECS=$(since "$t0")
+}
+
 drill_parent_report_retired() {
   local t0; t0=$(now); CAP=60
   python3 "$BIN/fleet-parent-retirement-selftest.py" >"$WORK/parent-retired.log" 2>&1 || {

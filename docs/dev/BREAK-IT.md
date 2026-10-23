@@ -15,6 +15,7 @@
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
+| 用户把 worker 改名为 home/dash/plan/backlog，或把真正面板改成普通名称 | 按 FID 主动停止时只看窗口名：真实任务关不掉，真正面板却可能被当作任务关闭 | FID 解析成功后读取既有 fleet_win_role，仅 worker 可停；名称只参与未标记旧窗口的兼容判断。隔离 socket 验证改名、keep/PIN/loop、工作树保留、旧窗口、身份歧义 | `stop-renamed-worker` |
 | Codex 私有 app-server 先退出，或收到 TERM 后先于后台同组进程退出 | guardian 只看主进程退出就结束，同组后台进程残留；事后对旧 PID 的进程组发信号又可能误伤复用该号码的进程 | guardian 自己持有独立 session/进程组，私有 app-server 继承该组；主进程退出、owner 管道 EOF、TERM 均有界清理同组成员，最后信号时仍由活 guardian 锚定身份；不声称覆盖自行 setsid 逃出的进程 | `codex-private-group-orphan` |
 | 托管发行树已带新版 Codex，但 PATH 前面的 Homebrew/npm 仍是旧版（T944） | 网页新建首条可发，私有 app-server 却是旧版；后续输入被会话门判 old_version 拒绝 | Codex 启动器优先发行树的 tools/bin，私有服务与终端客户端使用同一固定版本，tmux 保护 shim 仍在首位；没有发行工具的普通安装沿用 PATH | `codex-release-shadowed` |
 | Codex 发行工具目录前置遮蔽 tmux-shim（T944） | agent 子进程可绕过 tmux 保护入口 | 发行版 Codex 优先时仍保持 tmux-shim 在 PATH 首位；直接 webchat 同样选发行版 | `codex-pin-displaces-guard` |
