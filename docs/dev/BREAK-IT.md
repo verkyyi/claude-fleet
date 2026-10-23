@@ -708,4 +708,5 @@
 | 旧 Outcome / cancelled 投影保留在已证明停止的 Task 上，用户明确继续 | 历史完成结果永久拦住接续，用户只能另开任务 | 仅显式 continue 在完整原生退出或未领取停止链证明后忽略旧结果；首次接管与普通 resume 不放宽，历史结果不改写 | `task-continue-historical-outcome` |
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
 | 继续授权未 claim 就停止，再次重试；或连续多次重试、跨 Agent 选择 | 未启动任务无法继续，或把原生退出和未启动混为一体、丢失之前真实工作区 | 本人显式 continue 认可精确 canonical 未领取停止；逐代验证原生退出或未领取证明，认证读取分别给直接来源与真实工作区来源，旧授权不能重用 | `task-continue-unclaimed` |
+| 受控 Codex 的 `--no-daemon` 分支绕过原生执行登记 | 已停止任务仍进入 Codex exec，且缺少可终止的原生根记录 | 同一 native_command 边界校验停止并登记 Codex client；非受控 argv 不变，缺少 server 仍不签发完整退出证明 | `codex-no-daemon-fence` |
 | 节点未 claim 就重试，旧 allocation 被当作运行中或已有窗口被误认成未启动 | 任务无法重试，或复活旧 FID、覆盖真实执行与工作区 | 认证未领取停止仅退休精确纯 allocation；窗口、原生、历史登记均拒绝；既有控制日志保留退休事实，新会话仍需 Hub claim | `task-unclaimed-node` |

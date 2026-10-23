@@ -379,7 +379,13 @@ def run(argv, prepare=None, tick=None):
         # compat-1v: 下一批删 — only a session launched before T560 still carries FLEET_CODEX_SUBSCRIPTION
         if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
             raise ValueError('a pinned subscription requires the verified private runtime')
-        return subprocess.call(['codex', *argv])
+        command = ['codex', *argv]
+        if os.environ.get('FLEET_TASK_EXECUTION'):
+            from fleet_task_execution import native_command
+            # This is still the Codex CLI root. Do not label it Claude's agent
+            # or invent a private server just to produce a complete exit proof.
+            command = native_command(command, 'client')
+        return subprocess.call(command)
     if '--worktree' in options:
         raise ValueError('native --worktree requires a local Codex session; '
                          'Fleet private runtime uses --remote and cannot create it. '
