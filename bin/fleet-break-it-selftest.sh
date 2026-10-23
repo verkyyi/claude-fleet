@@ -7792,6 +7792,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_result_overrides_native() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-view-id-selftest.sh" >"$WORK/task-native-display.log" 2>&1 || {
+    WHY="historical result replaced a native observation: $(tail -8 "$WORK/task-native-display.log")"; return 1;
+  }
+  WHAT='历史 blocked/failed/done/merged 与Task Outcome不改写当前原生状态；已收起会话仍保留历史结果'
+  SECS=$(since "$t0")
+}
+
 drill_stop_renamed_worker() {
   local t0; t0=$(now); CAP=30
   bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
@@ -7817,12 +7826,32 @@ drill_report_delegation_offline() {
   SECS=$(since "$t0")
 }
 
+drill_session_title_placeholder() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/task-line-selftest.sh" >"$WORK/title-placeholder.log" 2>&1 || {
+    WHY="first prompt title regression: $(tail -3 "$WORK/title-placeholder.log")"; return 1;
+  }
+  WHAT='短码任务的首句同时更新窗口和记录；中英文占位名消失，后续消息不改名'
+  SECS=$(since "$t0")
+}
+
 drill_session_title_lost() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/session-title-ledger-selftest.py" >"$WORK/title-ledger.log" 2>&1 || {
     WHY="persistent title regression: $(tail -3 "$WORK/title-ledger.log")"; return 1;
   }
   WHAT='创建、自动/人工命名、并发顺序、回收和重开保留同一身份的标题'
+  SECS=$(since "$t0")
+}
+
+drill_task_parent_write_retired() {
+  CAP=120; local t0; t0=$(now)
+  _drill_go_tests 'TestTaskParentWriteRetired TestTaskParentHistoricalReplayPreservesBytes' \
+    "$ROOT/tokenledger/hub/store/fleet_task_parent_retirement_test.go" \
+    '新Task不写Parent，旧token重放保留原记录和非Parent冲突保护' ./hub/store || return 1
+  _drill_go_tests 'TestTaskParentNodeWriteRetired TestTaskParentOperationReplayRetired TestTaskParentWriteParamsRetired TestTaskParentAcceptedDispatchReplay' \
+    "$ROOT/tokenledger/hub/api/fleet_task_parent_retirement_test.go" \
+    '认证身份保留，Parent字段不注入、不影响旧请求重放，用户正文仍完整比较' || return 1
   SECS=$(since "$t0")
 }
 

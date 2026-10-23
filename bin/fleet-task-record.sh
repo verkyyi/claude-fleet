@@ -372,20 +372,13 @@ if [ "$cmd" = dispatch ]; then
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
   {
-    parent_wid=''; parent_task=''
-    task_win=$(fleet_pane_fmt '#{window_id}')
-    if [ -n "$task_win" ] && [ "$origin" != hub ]; then
-      task_sess=$(fleet_current_session)
-      parent_wid=$(fleet_worker_id "$task_sess" "$task_win")
-      parent_task=$(fleet_pane_fmt '#{@task}')
-    fi
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "" "" "$parent_wid" "$parent_task" "$via" <<'JSON'
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "" "" "$via" <<'JSON'
 import json,sys
-d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task,via=sys.argv[1:]
+d,title,body,repo,reap,template,rule,draft,note,via=sys.argv[1:]
 d=json.loads(d)
 repo=repo.lower()
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via=via, repo=repo,
-    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"], parent_session=parent_session, parent_task=parent_task,
+    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
     request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note)),
     ensure_ascii=False))   # the hub reads 16 KB: UTF-8 words, not \uXXXX (half the bytes — T661)
 JSON
@@ -494,12 +487,11 @@ lv = d.get("live") if isinstance(d.get("live"), dict) else {}
 live = "-"
 if lv and not lv.get("stale") and lv.get("state") not in ("exited", "", None):
     live = (lv.get("key") or "?") + "@" + (t.get("machine") or "?")
-psess = t.get("parent_session") or "-"
 print("\t".join([" ".join((t.get("title") or "-").split()), (p.get("repo") or t.get("repo") or "-").lower(), p.get("reap") or "-",
                  p.get("template") or "-", agent or "-", json.dumps(disp, separators=(",", ":")) if disp else "-",
-                 t.get("fid") or "-", live, psess if all(c.isalnum() or c in "/:._-" for c in psess) else "-"]))
+                 t.get("fid") or "-", live]))
 print(p.get("body") or "", end="")' "$redo") || die 1 "$t: cannot respawn"
-  IFS=$'\t' read -r r_title r_repo r_reap r_as r_agent r_disp r_fid r_live r_psess <<< "$(printf '%s\n' "$plan" | head -n 1)"
+  IFS=$'\t' read -r r_title r_repo r_reap r_as r_agent r_disp r_fid r_live <<< "$(printf '%s\n' "$plan" | head -n 1)"
   r_body=$(printf '%s\n' "$plan" | sed '1d')
   # One record, one window (T847): a record whose session still runs — a window
   # here, or the hub's live word for it on another machine — is answered with
@@ -531,11 +523,9 @@ print(p.get("body") or "", end="")' "$redo") || die 1 "$t: cannot respawn"
   [ "$r_as" = - ] || ra+=(--as "$r_as")
   [ "$r_agent" = - ] || ra+=(--agent "$r_agent")
   [ -z "$prev" ] || ra+=(--prev "$prev")
-  # The record's own parent (T847): a placement is checked against the parent the
-  # record was accepted with (409 「parent differs」), so a respawn from another
-  # session still opens the window for the record's parent — unless --origin says.
-  if [ -n "$origin" ]; then ra+=(--origin "$origin")
-  elif [ "$r_psess" != - ]; then ra+=(--origin-wid "$r_psess"); fi
+  # Explicit --origin remains a legacy spawner option for this slice; never
+  # restore a relationship from historical Task columns.
+  [ -z "$origin" ] || ra+=(--origin "$origin")
   [ -z "$pwin" ] || ra+=("$pwin")
   ra+=("--prompt-file=$pf")
   [ -z "$tsess" ] || ra+=("$tsess")

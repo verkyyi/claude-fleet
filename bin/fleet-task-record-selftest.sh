@@ -247,6 +247,13 @@ bash "$R" retitle T5 --from '新会话' --title '修一下面板读取变慢'; r
   && grep -q '"mutation": {"kind": "retitle", "idempotency_key": "retitle-T5", "from": "新会话", "title": "修一下面板读取变慢"}' "$CURL_LOG" \
   && ok "G retitle: one retitle mutation on the record, from the placeholder" || st_miss "G retitle: rc=$rc $(cat "$CURL_LOG")"
 bash "$R" retitle T5 --title x >/dev/null 2>&1; [ "$?" = 2 ] && ok "G retitle without --from is usage" || st_miss "G retitle usage"
+for ref in R123 BEXV; do
+  : > "$CURL_LOG"
+  bash "$R" retitle "$ref" --from 'New Session' --title 'Fix the panel title'; rc=$?
+  [ "$rc" = 0 ] && grep -q "^argv: .*-X POST .*/v1/node/tasks/$ref$" "$CURL_LOG" \
+    && grep -q '"from": "New Session", "title": "Fix the panel title"' "$CURL_LOG" \
+    && ok "G retitle: $ref reaches the hub resolver" || st_miss "G retitle $ref: rc=$rc $(cat "$CURL_LOG")"
+done
 
 # --- E: epic-member is gone (issue #4957): an EPIC's members are child tasks ------
 bash "$R" epic-member 3178 o/r 3330 x >/dev/null 2>&1; [ "$?" = 2 ] && ok "E epic-member is usage now" || st_miss "E epic-member still answers"
@@ -288,6 +295,23 @@ out=$(bash "$R" set T5 --note n) && [ "$out" = T5 ] && ok "F an older hub (no sh
 rm -f "$ANS"
 out=$(env -u FLEET_HUB_CURL FLEET_CONF_DIR="$FLEET_CONF_DIR" HOME="$WORK" bash "$R" code T5 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$out" = FF1W ] && ok "F code off the book needs no hub" || st_miss "F book without hub: rc=$rc [$out]"
+
+# Parent transport is retired even when an old Task still carries its columns.
+: > "$CURL_LOG"
+bash "$R" dispatch --title 'independent task' >/dev/null 2>"$WORK/err" && \
+python3 - "$CURL_LOG" <<'PYRETIRE' && ok "H dispatch writes no Parent transport fields" || st_miss "H dispatch still writes Parent metadata"
+import json, sys
+b = json.loads([line[6:] for line in open(sys.argv[1]) if line.startswith("body: ")][-1])
+assert not {"parent_task", "parent_session", "origin_wid"}.intersection(b), b
+PYRETIRE
+cat > "$ANS" <<'OLDTASK'
+{"task":{"id":"T5","authority_version":1,"title":"old words","parent_task":"T3","parent_session":"aaaaaaaa-1111-4111-8111-111111111111/bbbbbbbb-2222-4222-8222-222222222222","request_payload":{"body":"kept user words"}}}
+OLDTASK
+rm -f "$WORK/calls"
+bash "$R" respawn T5 --force >/dev/null 2>"$WORK/err" && ! grep -q -- '--origin-wid' "$WORK/calls" \
+  && grep -q 'kept user words' "$WORK/calls" && ok "H respawn preserves words without restoring historical Parent" \
+  || st_miss "H respawn reused Parent metadata: $(cat "$WORK/calls" 2>/dev/null) $(cat "$WORK/err")"
+rm -f "$ANS"
 
 printf '%d checks, %d failed\n' "$CHECKS" "$FAIL"
 st_done

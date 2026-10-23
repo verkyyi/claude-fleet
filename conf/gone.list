@@ -255,3 +255,9 @@ key FLEET_CHILD_REPORT T970
 key FLEET_CHILD_REPORT_BATCH_SECS T970
 key FLEET_AWAIT_STALL_SECS T970
 func tell_parent T970 bin/fleet-stream-resume.sh
+
+# T970: historical outcomes never overwrite a live native observation.
+func task_ended T970 bin/fleet_view.py
+# T970: no new Hub task Parent binding or Parent identity gate.
+func bindTaskParentTx T970 tokenledger/hub/
+func checkTaskParentSession T970 tokenledger/hub/

@@ -268,10 +268,49 @@ python3 bin/fleet-native-usage-cli-selftest.py --codex PATH [--meter-candidate]
 python3 bin/fleet-native-guard-install-selftest.py
 python3 bin/fleet-native-claude-worktree-selftest.py --claude PATH   # Claude 侧，只在境外环境
 python3 bin/fleet-native-claude-tui-selftest.py --claude PATH
+python3 bin/fleet-native-cancel-claude-selftest.py --claude PATH
 ```
+
+Claude 取消探针固定验证 2.1.295：mod 的 `$.tool.call` 在无模型轮次时调用原生
+`CronList` / `CronDelete` / `TaskStop`。两个原生会话共用隔离项目；只删除调用会话自己
+创建的 session-only 与 durable 计划，另一会话的 durable 记录逐字节保留。后台样本先由
+控制器核实进程身份与存活，再调用 `TaskStop`，在主会话退出前核实样本已停止。探针核查
+模型 HTTP 请求数为零，并清理自建计划、进程和独立 tmux socket。
+
+这证明原生工具可以由适配层直接调用，不代表 Fleet 已提供生产取消入口，也不是独立
+teammate、已排队的计划触发、会话恢复或整个 Task 退出的验收。`CronList` 会列出同项目
+其他会话的 durable 记录，生产适配必须先验证资源归属，不能取消列表里的全部 ID。
+现有 mod inbox 可承载有明确身份和期限的取消请求；不得绕开 Task 执行代次检查，也不得
+将原生工具返回成功写成整个 Task 已退出。Codex 的计划取消能力仍须独立验证，不能从
+`turn/interrupt` 或 `thread/archive` 推断。
 
 再交出去一块之前要过的验收：隔离与身份（主检出、伪造的 `.git`、符号链接、路径逃逸都拿不到权限）·
 数据保留（退出、中断、POD 重建都不丢未提交的改动和会话归属）· 准确恢复（resume/fork 落在同一个账号 home）·
 真实入口（面板新建 → 输入框 → 草稿未发送 → 明确发送 → 完成 → 重连，不能拿一次 `exec` 代替）·
 保护不退化（CPU / 额度 / 权限 / 凭据 / 信任 / Hub 不可用时语义不变）· 分段计时、同配置公平对照 ·
 先在工作树和 CI 验，再上 drill，最后上用户 POD，出现回归立刻停。国内 drill 只跑 Codex。
+
+### 原生 durable plan 的窄取消入口
+
+Claude 2.1.295 的 mod 提供 `native.cancel.v1`：投递到现有窗格 inbox 的固定
+`native-cancel.json`，领取成 `.taken`，结果写 `.done`。独立轮询让普通命令等待 idle
+时仍能处理取消；不增加服务或对外宣布整个 Task 已可停止。当前入口尚未接入停止控制器。
+
+请求必须携带完整的已停止 execution snapshot、launch UUID、原生 session UUID、
+32 位十六进制 nonce、最多 50 个具体 cron ID，以及不超过三秒的绝对 deadline。
+`fleet_native_cancel.py` 只读核对 Control 数据库的停止代次与启动登记、调用进程到登记根的
+祖先链和内核出生身份、原生 session 登记，以及项目 `.claude/scheduled_tasks.json` 中的
+session / PID / 启动时间 / 项目四项归属。每次删除前重验记录指纹，未知归属不调用原生工具。
+不以 `CronList` 列出的全部计划作为待删除清单；同项目其他 session 的计划必须保持。
+
+原生 `CronDelete` 成功并且表与 `CronList` 都观察到目标消失，才返回
+`scope=native_durable_plans, state=observed_absent`。session-only 计划、后台工具任务、
+独立 teammate 和 Codex 计划 CRUD 尚不支持；此结果不能充当 Task 或原生根退出证明。
+deadline 到达返回 `deadline_unknown`，不再发起后续调用。已进入的 `$.tool.call` 没有
+已验证的单次中止接口，仍可能稍后结束；停止控制器必须在同一个期限内结束原生根，
+不能把 Promise 超时当作原生调用已取消。本入口不改 supervisor 的停止时序。
+
+验证：`python3 bin/fleet-native-cancel-selftest.py`、`claude plugin test mod/fleet`；
+实际原生入口用 `python3 bin/fleet-native-cancel-adapter-selftest.py` 显式运行，使用独立
+HOME、项目和 tmux socket、零模型请求。夹具只登记自己的原生根并写停止 fence，
+不启动 supervisor；因此证明的是取消适配器及归属隔离，不是完整停止流程。
