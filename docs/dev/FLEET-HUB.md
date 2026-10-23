@@ -187,12 +187,11 @@ ccquota agent's control channel is this machine's only door to the hub.
   and a later STOPPED / IDLE / WAITING never un-lands a MERGED (nor a PR the
   prmap calls merged). Hub off, no node token, `FLEET_HUB_PROGRESS=0` or a
   hub without the endpoint ⇒ exit 3, nothing asked, nothing written.
-- **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
-  parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
-  the map drops it. `fleet-children.sh` lists a remote child as `mac-a remote` (or
-  `gone · mac-a`), and `fleet_window_waiting_children` — the reaper's
-  `retained:children` — counts a remote child until its MERGED report arrives,
-  skipping a lost node and any map older than `FLEET_HUB_RETAIN_SECS` (600 s).
+- **Parent waits are retired.** Historical child reports and remote relationships
+  can still be read, but do not hold a Task, manufacture `looping`, or defer its
+  own due Loop. `fleet_window_waiting_children` and `_fleet_remote_tally` are
+  inert compatibility entry points. Native Subagent activity, background work,
+  tool calls and schedules remain the current session's liveness evidence.
 
 Switch it on with `CCQUOTA_FLEET=1` in the fleet's conf (the agent needs the same
 variable, which it already has when it reports to a fleet hub). Off, or with no
