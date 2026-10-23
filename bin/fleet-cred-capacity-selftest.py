@@ -8,6 +8,9 @@ import importlib.util
 import io
 import json
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import threading
@@ -161,6 +164,34 @@ class Capacity(unittest.TestCase):
         Path(self.cfg.node_env).write_text('CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=fixture\n')
         with patch.object(p.urllib.request,'urlopen',side_effect=OSError('unreachable')):
             self.assertEqual(self.t.refresh_capacity_metadata(),{})
+
+    def test_metadata_timestamp_compatibility_and_isolated_lib(self):
+        # Go RFC3339Nano output must work with system Python, explicit offsets,
+        # and the protected LIB copy (no sibling fleet_iso module is shipped).
+        epoch=1791352055
+        stamps=['2026-10-07T05:47:35Z', '2026-10-07T05:47:35.2Z',
+            '2026-10-07T05:47:35.27204Z', '2026-10-07T05:47:35.272044642Z',
+            '2026-10-07T05:47:35.272044642+00:00', '2026-10-07T13:47:35.272044642+08:00',
+            '2026-10-07T00:47:35.272044642-05:00']
+        Path(self.cfg.node_env).write_text('CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=fixture\n')
+        for stamp in stamps:
+            with self.subTest(stamp=stamp):
+                data=copy.deepcopy(self.t.capacity_cache); data['expires_at']=stamp
+                self.t.capacity_retry=0
+                with patch.object(p.time,'time',return_value=epoch-25), patch.object(p.urllib.request,'urlopen',return_value=io.BytesIO(json.dumps(data).encode())):
+                    self.assertEqual(self.t.refresh_capacity_metadata()['mode'],'active')
+                    self.assertAlmostEqual(self.t.capacity_until,p.iso_epoch(stamp))
+        for stamp in ('2026-10-07T05:47:35', '2026-10-07T05:47:35+25:00',
+                '2026-10-07T05:47:35+00:60', '2026-13-07T05:47:35Z', 'junk', None):
+            self.t.capacity_cache={}; self.t.capacity_until=0; self.t.capacity_retry=0
+            with patch.object(p.time,'time',return_value=epoch-25), patch.object(p.urllib.request,'urlopen',return_value=io.BytesIO(json.dumps(dict(policy='codex-capacity-v2',accounts=[],expires_at=stamp)).encode())):
+                self.assertEqual(self.t.refresh_capacity_metadata(),{})
+                self.assertEqual(self.t.capacity_until,0)
+        lib=Path(self.tmp.name,'isolated-lib'); lib.mkdir()
+        shutil.copy2(BIN/'fleet-cred-proxy.py',lib/'fleet-cred-proxy.py')
+        shutil.copy2(BIN/'fleet-credsep-launch.py',lib/'fleet-credsep-launch.py')
+        code="import importlib.util, sys; s=importlib.util.spec_from_file_location('proxy', sys.argv[1]); p=importlib.util.module_from_spec(s); s.loader.exec_module(p); assert abs(p.iso_epoch(sys.argv[2])-1791352055.272044)<1e-6; assert 'fleet_iso' not in sys.modules"
+        subprocess.run([sys.executable,'-I','-c',code,str(lib/'fleet-cred-proxy.py'),stamps[3]],cwd=str(lib),check=True)
 
     def test_background_cache_success_scope_dedup_and_mint_boundary(self):
         import datetime

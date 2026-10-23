@@ -121,6 +121,9 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def reply(self, code, obj, hdrs=None):
         b = json.dumps(obj).encode()
+        if code == 429 and self.path.startswith("/direct-codex/"):
+            with open(os.path.join(D, "codex-429-body"), "wb") as f:
+                f.write(b)  # compare the exact upstream bytes at the session
         self.send_response(code)
         for k, v in (hdrs or {}).items():
             self.send_header(k, v)

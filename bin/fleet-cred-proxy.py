@@ -1280,11 +1280,26 @@ SPACE_TOKEN_PATH = "/v1/node/livepage-token"
 
 
 def iso_epoch(v):
-    """The hub's `until` (RFC 3339 UTC, …Z) → epoch seconds; 0 when it is not one."""
+    """Aware RFC3339 → epoch seconds; 0 on junk or a missing timezone.
+    Self-contained: protected LIB installs ship only this proxy and launcher.
+    Build datetime directly for old Python, truncating Go nanoseconds to µs.
+    """
     try:
-        import calendar
-        return calendar.timegm(time.strptime(str(v), "%Y-%m-%dT%H:%M:%SZ"))
-    except (TypeError, ValueError):
+        import datetime
+        m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})", v)
+        if not m:
+            return 0
+        year, month, day, hour, minute, second, fraction, offset = m.groups()
+        tz = datetime.timezone.utc
+        if offset not in ("Z", "z"):
+            oh, om = int(offset[1:3]), int(offset[4:6])
+            if oh > 23 or om > 59:
+                return 0
+            delta = datetime.timedelta(hours=oh, minutes=om)
+            tz = datetime.timezone(-delta if offset[0] == "-" else delta)
+        return datetime.datetime(int(year), int(month), int(day), int(hour), int(minute), int(second),
+            int((fraction or "")[:6].ljust(6, "0")), tzinfo=tz).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
         return 0
 
 
@@ -1514,9 +1529,7 @@ class Tenant:
                 if len(raw) > 262144:
                     raise ValueError("metadata too large")
                 data = json.loads(raw)
-                import datetime
-                expiry = datetime.datetime.fromisoformat(data.get("expires_at", "").replace("Z", "+00:00"))
-                until = expiry.timestamp() if expiry.tzinfo else 0
+                until = iso_epoch(data.get("expires_at", ""))
                 if data.get("policy") != "codex-capacity-v2" or not isinstance(data.get("accounts"), list) or not now < until <= now + 35:
                     raise ValueError("invalid metadata")
                 self.capacity_cache, self.capacity_until = data, min(until, now + 30)
