@@ -156,8 +156,13 @@ s.before_signal(ExecutionFence(sys.argv[1]),'T42',sys.argv[2])
         with self.fence.store.connect() as db:
             db.execute('BEGIN EXCLUSIVE')
             before=time.monotonic()
-            self.assertIsNone(stop.before_signal(self.fence,'T42',self.launch))
-            self.assertLess(time.monotonic()-before,.2)
+            with patch.object(stop.sqlite3, 'connect', wraps=stop.sqlite3.connect) as connect:
+                self.assertIsNone(stop.before_signal(self.fence,'T42',self.launch))
+            self.assertTrue(connect.called)
+            self.assertTrue(all(call.kwargs.get('timeout') == .025 for call in connect.call_args_list))
+            # Verify the actual 25ms database bound above; scheduler contention
+            # is not SQLite waiting. Still reject the old 10s/default or 3s grace.
+            self.assertLess(time.monotonic()-before,1)
 
     def test_real_root_observes_cancellation_before_term(self):
         script = """import signal,time,sys
