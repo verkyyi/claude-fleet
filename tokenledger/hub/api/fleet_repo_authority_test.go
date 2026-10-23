@@ -272,8 +272,15 @@ func TestRepoAuthorityTransitionTellsEveryHost(t *testing.T) {
 		want := control.RepoAuthority{Repo: writeRepo, Mode: st.mode, Revision: int64(i + 1)}
 		for name, n := range map[string]*writeNode{"mac-d": macD, "mac-c": macC} {
 			waitFor(t, 3*time.Second, name+" told "+st.mode, func() bool {
-				p := n.authorityPushes()
-				return len(p) == i+1 && p[i] == want
+				// The first beat's asynchronous catch-up can read this
+				// transition and repeat its notification. Require every
+				// exact revision, rather than exactly-once transport.
+				for _, got := range n.authorityPushes() {
+					if got == want {
+						return true
+					}
+				}
+				return false
 			})
 		}
 	}
