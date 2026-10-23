@@ -118,7 +118,7 @@ class Control(NativeExitSubmission):
         return env
 
     def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False, dispatch=None, as_file=None,
-                t0=None, execution=None):
+                t0=None, execution=None, continuation=None):
         env = self.environment()
         env.pop("FLEET_CONTROL_DRAFT", None)
         if t0:
@@ -137,6 +137,10 @@ class Control(NativeExitSubmission):
             env["FLEET_DISPATCH"] = json.dumps(dispatch, separators=(",", ":"))
         if execution:
             env["FLEET_TASK_EXECUTION"] = json.dumps(execution, separators=(",", ":"))
+        if continuation:
+            # Only the receipt ID travels; each startup boundary derives the
+            # workspace from authenticated metadata and local identity history.
+            env["FLEET_TASK_CONTINUATION"] = continuation["exit_operation_id"]
         if task:
             # The hub's task record a start belongs to (issue #3325), validated
             # (T<n>): the window is stamped @task, a no-repo one files no desk
@@ -993,13 +997,24 @@ class Control(NativeExitSubmission):
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 from fleet_dispatch import check_current
+                continuation = params.get("continuation")
+                plan = None
                 try:
-                    check_current(params.get("dispatch"))
-                except ValueError as exc:
+                    authority = check_current(params.get("dispatch"), execution=execution, continuation=continuation)
+                    if continuation:
+                        from fleet_task_continuation import continuation_plan
+                        plan = continuation_plan(execution, continuation, authority, conf_dir=self.conf_dir)
+                        if plan['repo'] != params.get('repo', '') or plan['no_repo'] != params.get('no_repo', False):
+                            raise ValueError('continuation workspace differs from accepted start')
+                except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
                     raise Unattempted("TASK_START_REFUSED", str(exc)) from exc
                 if execution is not None:
                     try:
-                        execution = claim_execution(execution, req["fleet_id"], conf_dir=self.conf_dir)
+                        if continuation:
+                            from fleet_task_execution import continue_execution
+                            execution = continue_execution(execution, req["fleet_id"], continuation['exit_operation_id'], conf_dir=self.conf_dir)
+                        else:
+                            execution = claim_execution(execution, req["fleet_id"], conf_dir=self.conf_dir)
                     except ValueError as exc:
                         raise Unattempted("TASK_START_REFUSED", str(exc)) from exc
                 attempted = True
@@ -1010,7 +1025,7 @@ class Control(NativeExitSubmission):
                 reap_arg = [params["reap"]] if params.get("reap") else []
                 # issue #2393: the files the writing area sent are on THIS machine
                 # now (the agent downloaded them) — the text names them here.
-                body = self.attached_body(params)
+                body = plan['seed'] if plan else self.attached_body(params)
                 if "draft" in params:
                     body = params["draft"]
                 if scratch:
@@ -1032,7 +1047,7 @@ class Control(NativeExitSubmission):
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
                                                      timeout=180, dispatch=params.get("dispatch"), task=params.get("task"), draft="draft" in params,
-                                                     as_file=params.get("as"), t0=row["created"], execution=execution)
+                                                     as_file=params.get("as"), t0=row["created"], execution=execution, continuation=continuation)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` and the title (validated above) where a scratch
@@ -1045,7 +1060,7 @@ class Control(NativeExitSubmission):
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=body.encode("utf-8"),
                                                      timeout=240, op_id=op_id, task=params.get("task"), dispatch=params.get("dispatch"),
-                                                     as_file=params.get("as"), t0=row["created"], execution=execution)
+                                                     as_file=params.get("as"), t0=row["created"], execution=execution, continuation=continuation)
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),

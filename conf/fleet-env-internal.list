@@ -137,6 +137,7 @@ FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accep
 FLEET_EXECUTION_RESULT             handoff: ccquota place writes the explicit task execution snapshot to this caller-owned temporary file
 FLEET_TASK_CONTROL_VERSION         protocol: explicit 1 requests task execution control v1; unset never enrolls legacy placement
 FLEET_TASK_EXECUTION               handoff: authenticated bound task execution snapshot through spawner/wrapper/native admission; removed before native tools run
+FLEET_TASK_CONTINUATION            handoff: acknowledged exit operation ID only; controlled raw startup re-derives the original workspace and history
 FLEET_TASK_LAUNCH_ID                handoff: one registered native epoch under the same live wrapper; removed before native tools run
 FLEET_LAUNCH                       legacy: retired with the launch proof / start reservation (EPIC T497 C8) — a session started before it still carries it; fleet_repo_authority.py strips it at a start
 FLEET_LAUNCH_CONTEXT               legacy: retired with the launch proof / start reservation (EPIC T497 C8) — a session started before it still carries it; fleet_repo_authority.py strips it at a start

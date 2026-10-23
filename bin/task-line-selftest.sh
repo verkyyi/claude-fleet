@@ -138,4 +138,23 @@ sleep 0.3
 st_eq "F: a later first prompt (no stamp) renames nothing" "修一下面板读取变慢，顺便看看为什么首帧要等 hub 才画出…|1" \
    "$(tf display-message -p -t "$PC" '#{window_name}')|$(grep -c . "$WORK/retitle.log")"
 
+# A task can be bound by its display code, not only the legacy T<number>.
+# The board reads the task record, so a local rename alone is insufficient.
+for ref in R123 BEXV; do
+  case "$ref" in R123) placeholder='New Session' ;; *) placeholder='新会话' ;; esac
+  PD=$(tf new-window -d -P -F '#{pane_id}' -t tl: -n "$placeholder" 'exec sleep 300')
+  tf set-window-option -t "$PD" @title_pending "$placeholder"
+  tf set-window-option -t "$PD" @task "$ref"
+  : > "$WORK/retitle.log"
+  hook "$PD" "$UPS" "$(ups $'Fix the panel title\nSecond line stays out')"
+  st_eq "F: $ref local title uses the first line" 'Fix the panel title|Fix the panel title|' \
+    "$(tf display-message -p -t "$PD" '#{window_name}|#{@task_line}|#{@title_pending}')"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/retitle.log" ] && break; sleep 0.2; done
+  st_eq "F: $ref synchronizes the same title to its record" \
+    "retitle $ref --from $placeholder --title Fix the panel title" "$(cat "$WORK/retitle.log")"
+  hook "$PD" "$UPS" "$(ups 'Do not rename again')"
+  st_eq "F: $ref later prompt leaves the title" 'Fix the panel title|1' \
+    "$(tf display-message -p -t "$PD" '#{window_name}')|$(grep -c . "$WORK/retitle.log")"
+done
+
 printf 'task-line selftest: PASS (%s checks)\n' "$CHECKS"
