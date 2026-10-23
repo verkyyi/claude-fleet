@@ -13,6 +13,8 @@
 #   C. the identity: FLEET_PUBLISH_TOKEN goes as a Bearer header and never on
 #      curl's argv; in Actions the runtime's OIDC token (audience
 #      ccquota-fleet-release) is fetched and sent instead; neither → exit 2;
+#      temporary OIDC errors retry at most three times; 401/403, malformed JSON
+#      and invalid tokens never publish or fall back; no response body is logged;
 #   D. the hub's answer: 409 → exit 1 with its words, 200 → exit 0; the same sha
 #      as the hub's stable sends an empty chain; --dry-run POSTs nothing;
 #   E. --train <file> (issue #3142): the release train's ledger goes as the
@@ -62,7 +64,7 @@ A=$(commit one); B=$(commit two); C=$(commit three)
 # for the audience asked; POST …/publish → each part saved under $WORK/post/<n>/,
 # the Authorization header beside them; answers $WORK/code (default 200).
 cat > "$WORK/hub.py" <<'PY'
-import email.parser, email.policy, http.server, os, sys, urllib.parse
+import email.parser, email.policy, http.server, json, os, sys, time, urllib.parse
 W = sys.argv[1]
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -84,6 +86,35 @@ class H(http.server.BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(u.query)
             if self.headers.get("Authorization") != "bearer RUNTIME-REQ":
                 return self.answer(403, "no")
+            counter = os.path.join(W, 'oidc-requests')
+            count = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
+            open(counter, 'w').write(str(count))
+            mode = open(os.path.join(W, 'oidc-mode')).read().strip() if os.path.exists(os.path.join(W, 'oidc-mode')) else ''
+            if mode == 'transport-once' and count == 1:
+                self.close_connection = True
+                return
+            if mode in ('401', '403', '503') or mode in ('429-once', '503-once') and count == 1:
+                return self.answer(int(mode.split('-')[0]), 'RUNTIME-REQ OIDC.DO.NOT.LEAK')
+            if mode == 'redirect':
+                self.send_response(302); self.send_header('Location', '/oidc?redirected=1')
+                self.send_header('Content-Length', '0'); self.end_headers(); return
+            if mode == 'drip':
+                # Continually making progress defeats a per-read socket timeout.
+                self.send_response(200); self.send_header('Content-Length', '65536'); self.end_headers()
+                try:
+                    for _ in range(65536):
+                        self.wfile.write(b' '); self.wfile.flush(); time.sleep(.1)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            if mode == 'malformed':
+                return self.answer(200, '{broken RUNTIME-REQ OIDC.DO.NOT.LEAK')
+            if mode == 'missing':
+                return self.answer(200, '{"message":"RUNTIME-REQ OIDC.DO.NOT.LEAK"}')
+            if mode == 'newline':
+                return self.answer(200, json.dumps({'value': 'OIDC.unsafe\nHEADER.TOKEN'}))
+            if mode == 'pretty':
+                return self.answer(200, '{"value"\n :\n "OIDC.pretty.TOKEN"}')
             return self.answer(200, '{"count":1,"value":"OIDC.%s.TOKEN"}' % q.get("audience", [""])[0])
         self.answer(404, "")
     def do_POST(self):
@@ -155,6 +186,53 @@ hasnt "C: the OIDC token never on argv" "$(cat "$WORK/argv")" "OIDC."
 before=$(posts)
 run "$PUB" "$C" --hub "$HUB" --dir "$REPO"
 eq "C: no identity → exit 2" 2 "$RC"; has "C: says so" "$OUT" "no identity"; eq "C: nothing POSTed" "$before" "$(posts)"
+
+# --- C2. runtime errors are not permission evidence; bounded authenticated retry
+for mode in 503-once 429-once transport-once pretty 401 403 503 malformed missing newline redirect; do
+  printf '%s\n' "$mode" > "$WORK/oidc-mode"
+  rm -f "$WORK/oidc-requests"
+  before=$(posts)
+  run env ACTIONS_ID_TOKEN_REQUEST_URL="$HUB/oidc?api-version=2.0" ACTIONS_ID_TOKEN_REQUEST_TOKEN=RUNTIME-REQ \
+    FLEET_PUBLISH_TOKEN=DO-NOT-FALLBACK "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+  case "$mode" in
+    503-once|429-once|transport-once|pretty)
+      eq "C2 $mode: publishes" 0 "$RC"
+      eq "C2 $mode: exactly one publish" "$((before + 1))" "$(posts)"
+      if [ "$mode" = pretty ]; then expected=1; else expected=2; fi
+      eq "C2 $mode: bounded request count" "$expected" "$(cat "$WORK/oidc-requests")"
+      ;;
+    *)
+      eq "C2 $mode: refuses" 2 "$RC"
+      eq "C2 $mode: no fallback or publish" "$before" "$(posts)"
+      if [ "$mode" = 503 ]; then expected=3; else expected=1; fi
+      eq "C2 $mode: exact retry bound" "$expected" "$(cat "$WORK/oidc-requests")"
+      case "$mode" in 401|403|503) has "C2 $mode: diagnostic HTTP code" "$OUT" "HTTP $mode" ;; esac
+      ;;
+  esac
+  hasnt "C2 $mode: runtime token hidden" "$OUT" RUNTIME-REQ
+  hasnt "C2 $mode: response body hidden" "$OUT" OIDC.DO.NOT.LEAK
+  hasnt "C2 $mode: fallback hidden" "$OUT" DO-NOT-FALLBACK
+done
+rm -f "$WORK/oidc-mode" "$WORK/oidc-requests"
+hasnt 'C2: runtime credential never on argv' "$(cat "$WORK/argv")" RUNTIME-REQ
+hasnt 'C2: identity never on argv' "$(cat "$WORK/argv")" OIDC.
+before=$(posts)
+run env ACTIONS_ID_TOKEN_REQUEST_URL=INVALID-RUNTIME-URL-SECRET ACTIONS_ID_TOKEN_REQUEST_TOKEN=RUNTIME-REQ \
+  "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+eq 'C2 bad runtime URL: refuses' 2 "$RC"
+eq 'C2 bad runtime URL: no publish' "$before" "$(posts)"
+hasnt 'C2 bad runtime URL: URL is not diagnostic output' "$OUT" INVALID-RUNTIME-URL-SECRET
+printf 'drip\n' > "$WORK/oidc-mode"; rm -f "$WORK/oidc-requests"
+before=$(posts); started=$SECONDS
+run env ACTIONS_ID_TOKEN_REQUEST_URL="$HUB/oidc" ACTIONS_ID_TOKEN_REQUEST_TOKEN=RUNTIME-REQ \
+  "$PUB" "$C" --hub "$HUB" --dir "$REPO"
+elapsed=$((SECONDS - started))
+eq 'C2 drip: total-budget refusal' 2 "$RC"
+eq 'C2 drip: never publishes' "$before" "$(posts)"
+eq 'C2 drip: no fresh request after budget' 1 "$(cat "$WORK/oidc-requests")"
+has 'C2 drip: clear total-budget diagnostic' "$OUT" '30s total budget'
+if [ "$elapsed" -ge 28 ] && [ "$elapsed" -le 40 ]; then ok; else bad "C2 drip: bounded 30s budget took ${elapsed}s"; fi
+rm -f "$WORK/oidc-mode" "$WORK/oidc-requests"
 
 # --- D. answers ------------------------------------------------------------------------
 echo 409 > "$WORK/code"
@@ -243,8 +321,12 @@ eq "H: … and no ledger" "" "$(part train)"
 eq "H: the stage keeps sha + prev" "$C $A" "$(cat "$ST/sha") $(cat "$ST/prev")"
 has "H: … and the 202" "$(cat "$ST/answer.json")" '"unsigned"'
 before=$(posts)
-run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$C" --hub "$HUB" --dir "$REPO" --commit "$ST" --train "$WORK/train.json"
+printf '503-once\n' > "$WORK/oidc-mode"; rm -f "$WORK/oidc-requests"
+run env ACTIONS_ID_TOKEN_REQUEST_URL="$HUB/oidc" ACTIONS_ID_TOKEN_REQUEST_TOKEN=RUNTIME-REQ FLEET_RELEASE_SIGN_KEY="$KEY" \
+  "$PUB" "$C" --hub "$HUB" --dir "$REPO" --commit "$ST" --train "$WORK/train.json"
 eq "H: commit → exit 0" 0 "$RC"; has "H: says staged, signed" "$OUT" "staged, signed by the train"
+eq "H: staged commit retries temporary OIDC GET once" 2 "$(cat "$WORK/oidc-requests")"
+rm -f "$WORK/oidc-mode" "$WORK/oidc-requests"
 eq "H: one POST" "$((before + 1))" "$(posts)"
 eq "H: no tree" "" "$(part tree)"
 eq "H: the ledger rides the signature" '{"run_id":"77","merges":[]}' "$(part train)"
