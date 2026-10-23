@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
+import { pendingStartRef } from '../src/app/task-cancel.ts';
 import { headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
@@ -14,6 +15,19 @@ const F = '5b1e0000-0000-4000-8000-00000000f001';
 const fid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const v1 = (x) => ({ authority_version: 1, generation: 1, created_at: new Date().toISOString(), title: 'x', ...x });
 const now = Date.now();
+// A start cancellation needs a real pending request and a task identity. Missing
+// telemetry, historical idle sessions and live workers must not get this action.
+const pending = { id: 'T900', board: { task: 'T900', pending_start: true, tag: 'queued' } };
+assert.equal(pendingStartRef(pending), 'T900');
+assert.equal(pendingStartRef({ ...pending, task: { fid: fid(900), id: 'T900' } }), fid(900));
+for (const changed of [
+  { ...pending, live: { id: 'fleet/live' } },
+  { ...pending, board: { ...pending.board, pending_start: false } },
+  { ...pending, board: { ...pending.board, pending_start: undefined } },
+  { ...pending, board: { ...pending.board, tag: 'idle' } },
+  { ...pending, board: { ...pending.board, tag: 'ended', history: { id: 'old' } } },
+  { id: 'not-a-task', board: { pending_start: true, tag: 'queued' } },
+]) assert.equal(pendingStartRef(changed), '');
 const sess = (id, state, x = {}) => ({ id: `${F}/${id}`, key: id, title: id, repo: '', machine: 'build-box', state, group: 'run',
   ask: null, born: (now - 3 * 3600e3) / 1000, ended: '', tokens: 0, say: '', ...x });
 

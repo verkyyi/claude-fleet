@@ -112,6 +112,15 @@ done
 
 intmux=0; [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && intmux=1
 opt()  { tmux display-message -p -t "$TMUX_PANE" "#{$1}" 2>/dev/null; }
+# Only the initial spawn carries this request, not history's @dispatch metadata.
+# Existing sessions keep their normal offline resume/transfer behaviour. Do not
+# let the request escape into native children or their subsequent restores.
+unset _dispatch
+_dispatch=${FLEET_START_DISPATCH:-}
+if [ -n "$_dispatch" ]; then
+  unset FLEET_START_DISPATCH
+  python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current >/dev/null || exit 2
+fi
 # The agent adapter table (T620, EPIC T580 C4) — which option holds a window's
 # conversation id, how a resume is spelled — beside this script, else beside its
 # link's target (the generated shell copy: no lib, no python, between pane and agent).
@@ -505,6 +514,24 @@ while :; do
     launch_agent=claude; prev=''
     for a in ${cmd[@]+"${cmd[@]}"}; do [ "$prev" = --agent ] && launch_agent=$a; prev=$a; done
     [ "$launch_agent" != claude ] || python3 "$BIN/fleet_transfer_durable.py" gate-wait "$PWD" || :
+  fi
+  # Initialization (including the durable-transfer gate) may have waited since
+  # admission. Recheck only this initial spawn, then discard the envelope so a
+  # later resume/park wake keeps its existing offline behaviour.
+  if [ -n "${_dispatch:-}" ]; then
+    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current >/dev/null; then
+      if [ -n "${FLEET_WORKER_CRED:-}" ]; then
+        python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
+        unset FLEET_WORKER_CRED
+      fi
+      if [ -n "${FLEET_CRED_SID:-}" ]; then
+        bash "$BIN/fleet-session-cred.sh" revoke --sid "$FLEET_CRED_SID" >/dev/null 2>&1
+        [ "$intmux" = 1 ] && { wset -u @cred_sid; wset -u @cred_route; }
+        unset FLEET_CRED_SID
+      fi
+      exit 2
+    fi
+    unset _dispatch
   fi
   if [ "$intmux" = 1 ]; then
     # A window stamped @launch before the ID switch reopens as itself (EPIC T497

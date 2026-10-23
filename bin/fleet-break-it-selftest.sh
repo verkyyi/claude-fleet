@@ -7046,6 +7046,15 @@ PY
   SECS=$(since "$t0")
 }
 
+drill_task_cancel_start_race() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-dispatch-current-selftest.py" >"$WORK/task-cancel-start.log" 2>&1 || {
+    WHY="cancelled dispatch reached launch: $(tail -4 "$WORK/task-cancel-start.log")"; return 1;
+  }
+  WHAT='取消后的旧派发不能通过节点与包装器启动前检查；未知授权拒绝启动'
+  SECS=$(since "$t0")
+}
+
 # ================================================================ run ====}
 
 

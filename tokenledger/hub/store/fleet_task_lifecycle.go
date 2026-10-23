@@ -217,15 +217,22 @@ func (s *Store) CancelUnopenedTask(id int64, owner, evidence string, now time.Ti
 	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner != owner {
 		return FleetTask{}, ErrTaskFence
 	}
-	if t.Outcome == TaskCancelled {
+	if t.Outcome == TaskCancelled && t.CancelRequest != "" {
 		return t, tx.Commit()
 	}
-	if err = s.unopenedCancelAllowed(tx, t); err != nil {
-		return FleetTask{}, err
+	if t.Outcome != TaskCancelled {
+		if err = s.unopenedCancelAllowed(tx, t); err != nil {
+			return FleetTask{}, err
+		}
 	}
 	t.State, t.Outcome, t.Evidence, t.UpdatedAt = TaskCancelled, TaskCancelled, evidence, now.UTC()
-	if _, err = tx.Exec(`UPDATE fleet_tasks SET state = ?, outcome = ?, evidence = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
-		t.State, t.Outcome, t.Evidence, now.UTC().Format(rfc), t.ID, t.Owner); err != nil {
+	t.Generation++
+	t.CancelRequest = fmt.Sprintf("cancel:%s:g%d", t.Ref, t.Generation)
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET state = ?, outcome = ?, evidence = ?, updated_at = ?, generation = ?, cancel_request = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
+		t.State, t.Outcome, t.Evidence, now.UTC().Format(rfc), t.Generation, t.CancelRequest, t.ID, t.Owner); err != nil {
+		return FleetTask{}, err
+	}
+	if err = cancelTaskStartsTx(tx, t, now.UTC().Format(rfc)); err != nil {
 		return FleetTask{}, err
 	}
 	return t, tx.Commit()

@@ -894,6 +894,11 @@ class Control:
                                   "the ticket; reach a worker with worker_message" % req["action"])
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
+                from fleet_dispatch import check_current
+                try:
+                    check_current(params.get("dispatch"))
+                except ValueError as exc:
+                    raise Unattempted("TASK_START_REFUSED", str(exc)) from exc
                 attempted = True
                 scratch = params.get("kind") == "scratch"
                 filed = params.get("kind") == "new"

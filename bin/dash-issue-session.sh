@@ -856,6 +856,12 @@ if [ -n "$TASK_REF" ]; then
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
+if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current >/dev/null; then
+  [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
+  refuse "accepted task start refused for #$num"; exit "$RC_INFRA"
+fi
+pend="FLEET_START_DISPATCH=$(shq "$DISPATCH") $pend"
+stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
