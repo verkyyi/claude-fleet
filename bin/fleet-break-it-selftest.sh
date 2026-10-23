@@ -7094,6 +7094,15 @@ drill_task_claim_historical_identity() {
   SECS=$(since "$t0")
 }
 
+drill_restore_execution_identity() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-restore-execution-selftest.py" >"$WORK/restore-execution.log" 2>&1 || {
+    WHY="restore bypassed execution identity: $(tail -6 "$WORK/restore-execution.log")"; return 1;
+  }
+  WHAT='隔离 tmux：停止记录、缺失数据库、损坏协议及写身份失败均不启动；旧会话恢复不变，协议随 FID 入快照'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_replay_cleanup() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-execution-control-selftest.py" \

@@ -13,7 +13,8 @@ network I/O while holding it. Stop writes deliberately bypass that flock, so
 a busy launcher cannot delay durable stop acceptance. A permit must recheck
 before each side effect; a stop can still arrive just after a recheck. Runtime
 integration must therefore reconcile and terminate any in-flight execution.
-This helper neither proves execution-domain exit nor upgrades old sessions.
+The opt-in read-only proof below covers registered native-session roots only,
+not execution-domain exit; it does not upgrade old sessions.
 """
 import contextlib
 import argparse
@@ -666,6 +667,140 @@ def _definitely_exited(proof):
         except ProcessLookupError:
             return True
         raise FenceRefused("previous native process exit is unproven") from exc
+
+
+def _session_exit_registrations(db, expected, provider):
+    """Read a complete registration set; an empty launch is not exit evidence."""
+    actual = ExecutionFence._read(db, expected["task_ref"])
+    if actual is None or _snapshot(actual) != expected or not actual["cancel_request"]:
+        raise FenceRefused("native session exit requires the exact persisted stop snapshot")
+    task = expected["task_ref"]
+    current = db.execute("SELECT * FROM task_execution_launches WHERE task_ref=?", (task,)).fetchone()
+    if current is None:
+        raise FenceRefused("native session exit has no launch registration; never-started is unproven")
+    current = dict(current)
+    for key in ("supervisor", "wrapper", "child"):
+        current[key] = json.loads(current[key]) if current[key] else None
+    native = {}
+    for row in db.execute("SELECT * FROM task_execution_native WHERE task_ref=? ORDER BY launch_id,component", (task,)):
+        native.setdefault(row["launch_id"], []).append(dict(component=row["component"], process=json.loads(row["process"])))
+    current["native"] = native.get(current["launch_id"], [])
+    launches = []
+    for row in db.execute("SELECT * FROM task_execution_launch_history WHERE task_ref=? ORDER BY launch_id", (task,)):
+        old = json.loads(row["registration"])
+        if not isinstance(old, dict) or old.get("launch_id") != row["launch_id"]:
+            raise FenceRefused("native session exit has inconsistent launch history")
+        launches.append(old)
+    launches.append(current)
+    seen = set()
+    required = {"server", "client"} if provider == "codex" else {"agent"}
+    keys = {"task_ref", "launch_id", "operation_id", "supervisor", "wrapper", "child", "native"}
+    for launch in launches:
+        if (set(launch) != keys or launch["task_ref"] != task
+                or launch["operation_id"] != expected["operation_id"]
+                or launch["launch_id"] in seen):
+            raise FenceRefused("native session exit has conflicting launch identity")
+        _token(launch["launch_id"], "launch id")
+        seen.add(launch["launch_id"])
+        for key in ("supervisor", "wrapper", "child"):
+            if _process_proof(launch[key]) != launch[key]:
+                raise FenceRefused("native session exit has malformed process registration")
+        if launch["wrapper"] != current["wrapper"] or not isinstance(launch["native"], list):
+            raise FenceRefused("native session exit has conflicting wrapper or native registration")
+        components = set()
+        for item in launch["native"]:
+            if (not isinstance(item, dict) or set(item) != {"component", "process"}
+                    or item["component"] in components
+                    or _process_proof(item["process"]) != item["process"]):
+                raise FenceRefused("native session exit has malformed native registration")
+            components.add(item["component"])
+        # A previous launch may have used another provider. It must still have
+        # that provider's complete roots, never an empty/partially-started set.
+        if components not in ({"agent"}, {"server", "client"}) or (launch is current and components != required):
+            raise FenceRefused("native session exit is missing required native component registrations")
+        if sorted(launch["native"], key=lambda item: item["component"]) != native.get(launch["launch_id"], []):
+            raise FenceRefused("native session exit history disagrees with registered roots")
+    if set(native) != seen:
+        raise FenceRefused("native session exit has orphan native registrations")
+    return launches
+
+
+def _exited_session_root(proof):
+    """Absence or a different kernel birth proves only this registered root gone."""
+    try:
+        os.kill(proof["pid"], 0)
+    except ProcessLookupError:
+        return dict(proof, evidence="pid_absent")
+    except OSError as exc:
+        raise FenceRefused("native session root exit cannot be observed") from exc
+    try:
+        current = _kernel_process(proof["pid"])
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # Permission errors, zombies without readable birth and races are
+        # unproven. A later read can establish absence; no permissive fallback.
+        raise FenceRefused("native session root birth cannot be observed") from exc
+    if current["birth"] == proof["birth"]:
+        raise FenceRefused("registered native session root is still alive")
+    return dict(proof, evidence="pid_reused", observed_birth=current["birth"])
+
+
+def prove_native_session_exit(snapshot, provider, *, conf_dir=None):
+    """Return raw exit proof for an exactly stopped, registered native session.
+
+    This is NOT a release/stop receipt and is not connected to Control. It
+    neither clears bindings/tombstones nor revokes plans, independent teammates,
+    arbitrary development services or escaped descendants. A recovery wrapper
+    may remain alive; the persisted stop continues to forbid its old execution.
+    Missing/partial registrations (including stop-before-start), busy admission,
+    corrupt state and unobservable processes raise FenceRefused, never success.
+
+    Existing admission locks are acquired non-blockingly around two read-only
+    snapshots. Process/kernel reads happen BETWEEN these short barriers. The
+    final exact match ensures no registration was in flight or changed while
+    it was observed. No files, schemas or locks are created, and no networking,
+    signaling beyond kill(pid, 0), or runtime mutations occur. The result names
+    its exact snapshot; it is not authorization for a later replacement start.
+    """
+    expected = _snapshot(snapshot)
+    if not expected["cancel_request"] or provider not in ("claude", "codex"):
+        raise FenceRefused("native session exit requires a stopped snapshot and known provider")
+    root = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
+    lock_path = root / "control/task-admission" / (expected["task_ref"] + ".lock")
+    path = root / "control/state.sqlite3"
+
+    def read():
+        # Do not instantiate ExecutionFence: its constructor installs schemas
+        # and directories. A missing lock is missing evidence, not a new lock.
+        fd = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise FenceRefused("native session admission lock is not a regular file")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with contextlib.closing(sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro",
+                                                   uri=True, timeout=.05)) as db:
+                db.row_factory = sqlite3.Row
+                db.execute("BEGIN")
+                return _session_exit_registrations(db, expected, provider)
+        finally:
+            os.close(fd)
+
+    try:
+        launches = read()
+        observations = []
+        for launch in launches:
+            roots = [(key, launch[key]) for key in ("supervisor", "child")]
+            roots.extend((item["component"], item["process"]) for item in launch["native"])
+            observations.append(dict(launch_id=launch["launch_id"], roots=[
+                dict(component=component, **_exited_session_root(process)) for component, process in roots]))
+        if read() != launches:
+            raise FenceRefused("native session registrations changed during exit observation")
+        return dict(scope="native_session", snapshot=expected, provider=provider,
+                    launch_id=launches[-1]["launch_id"], launches=observations,
+                    wrapper=launches[-1]["wrapper"], observed_at=time.time())
+    except (OSError, sqlite3.Error, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        if isinstance(exc, FenceRefused):
+            raise
+        raise FenceRefused("native session exit evidence is unavailable or inconsistent") from exc
 
 
 def native_command(argv, component, env=None):

@@ -2,7 +2,8 @@ package store
 
 // Explicit task execution admission. Existing InsertFleetOperation callers do
 // not acquire this authority. No timeout or operation result releases a binding;
-// a later change must supply verified execution-domain exit before replacement.
+// replacement requires a trusted node's receipt for the stopped native session.
+// This is not a claim that arbitrary background services have stopped.
 
 import (
 	"crypto/rand"
@@ -18,6 +19,34 @@ import (
 // task_stop_alias is an immutable idempotency receipt, never an executable
 // worker_stop. Its succeeded status means only that the key was registered.
 const taskStopAliasAction = "task_stop_alias"
+
+const taskSessionExitAction = "task_session_exit"
+
+// TaskSessionExitReceipt identifies the exact native session a trusted node has
+// verified exited. Evidence retains its root-component PID/birth exit evidence;
+// the Store audits that JSON, it cannot verify a remote kernel. API callers must
+// authenticate the node and validate the evidence before calling the Store.
+// Scope deliberately excludes independently launched services and external work.
+type TaskSessionExitReceipt struct {
+	TaskFID           string          `json:"task_fid"`
+	Task              string          `json:"task"`
+	Owner             string          `json:"owner"`
+	ExecutionOwner    string          `json:"execution_owner"`
+	ExecutionEndpoint string          `json:"execution_endpoint"`
+	Generation        int64           `json:"generation"`
+	AttemptID         string          `json:"attempt_id"`
+	StartOperationID  string          `json:"start_operation_id"`
+	StopOperationID   string          `json:"stop_operation_id"`
+	LaunchID          string          `json:"launch_id"`
+	Scope             string          `json:"scope"`
+	Evidence          json.RawMessage `json:"evidence"`
+}
+
+type taskSessionExitRequest struct {
+	Version int                    `json:"control_version"`
+	Action  string                 `json:"action"`
+	Receipt TaskSessionExitReceipt `json:"receipt"`
+}
 
 func taskExecutionOperationID() (string, error) {
 	var id [16]byte
@@ -99,6 +128,68 @@ func taskPriorStartTx(tx *sql.Tx, t FleetTask) (bool, error) {
 	return false, rows.Err()
 }
 
+// Only explicit resume can look past historical starts. Every start associated
+// with this task, including old unindexed envelopes, needs its own accepted
+// receipt. Ordinary AuthorizeTaskExecution retains the stricter no-history gate.
+func taskResumeHistoryTx(tx *sql.Tx, t FleetTask) error {
+	rows, err := tx.Query(`SELECT id, task_ref, request FROM fleet_operations WHERE action = 'worker_start' AND (task_ref = ? OR task_ref = '')`, t.Ref)
+	if err != nil {
+		return err
+	}
+	starts := map[string]bool{}
+	for rows.Next() {
+		var id, ref, request string
+		if err = rows.Scan(&id, &ref, &request); err != nil {
+			rows.Close()
+			return err
+		}
+		var r struct {
+			Params struct {
+				Task     string             `json:"task"`
+				Dispatch *taskStartEnvelope `json:"dispatch"`
+			} `json:"params"`
+		}
+		if ref == t.Ref || json.Unmarshal([]byte(request), &r) == nil &&
+			(r.Params.Task == t.Ref || r.Params.Dispatch != nil && r.Params.Dispatch.Task == t.Ref) {
+			starts[id] = true
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	rows, err = tx.Query(`SELECT id FROM fleet_operations WHERE action = ? AND task_ref = ?`, taskSessionExitAction, t.Ref)
+	if err != nil {
+		return err
+	}
+	var receipts []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		receipts = append(receipts, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range receipts {
+		_, receipt, err := taskSessionExitTx(tx, t, id)
+		if err != nil {
+			return err
+		}
+		delete(starts, receipt.StartOperationID)
+	}
+	if len(starts) != 0 {
+		return ErrTaskConflict
+	}
+	return nil
+}
+
 // executionOperationTx also reads the stored task association: the normal
 // operation reader intentionally omits these write-only bookkeeping columns.
 func executionOperationTx(tx *sql.Tx, id string) (FleetOperation, string, string, int64, error) {
@@ -152,12 +243,169 @@ func insertExecutionOperationTx(tx *sql.Tx, o FleetOperation, ref string, genera
 	return nil
 }
 
+// taskSessionExitTx reads only receipts accepted by this protocol. Re-check the
+// immutable start and canonical stop associations, not an operation's status
+// alone. It also works after the task has acquired a later execution binding.
+func taskSessionExitTx(tx *sql.Tx, t FleetTask, id string) (FleetOperation, TaskSessionExitReceipt, error) {
+	o, owner, ref, generation, err := executionOperationTx(tx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return o, TaskSessionExitReceipt{}, ErrTaskFence
+	}
+	if err != nil {
+		return o, TaskSessionExitReceipt{}, err
+	}
+	var request taskSessionExitRequest
+	if json.Unmarshal([]byte(o.Request), &request) != nil || request.Version != 1 || request.Action != taskSessionExitAction ||
+		o.Action != taskSessionExitAction || o.Status != "succeeded" || o.Result != `{"released":true}` {
+		return o, request.Receipt, ErrTaskFence
+	}
+	r := request.Receipt
+	if owner != t.Owner || ref != t.Ref || r.Owner != t.Owner || r.Task != t.Ref || r.TaskFID != t.FID ||
+		generation != r.Generation || o.WorkerID != r.ExecutionOwner || r.Scope != "native_session" || r.LaunchID == "" {
+		return o, r, ErrTaskFence
+	}
+	if err := taskSessionExitOperationsTx(tx, t, r, o.FleetID); err != nil {
+		return o, r, err
+	}
+	return o, r, nil
+}
+
+func taskSessionExitOperationsTx(tx *sql.Tx, t FleetTask, r TaskSessionExitReceipt, fleet string) error {
+	start, owner, ref, generation, err := executionOperationTx(tx, r.StartOperationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTaskFence
+	}
+	if err != nil {
+		return err
+	}
+	d, err := taskStartOf(start)
+	if err != nil || d == nil || !taskExecutionVersion(start.Request) || owner != t.Owner || ref != t.Ref ||
+		generation != r.Generation || d.Task != t.Ref || d.Generation != r.Generation || d.AttemptID != r.AttemptID || start.FleetID != fleet {
+		return ErrTaskFence
+	}
+	stop, owner, ref, generation, err := executionOperationTx(tx, r.StopOperationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTaskFence
+	}
+	if err != nil {
+		return err
+	}
+	var request struct {
+		Params struct {
+			Task             string `json:"task"`
+			WorkerID         string `json:"worker_id"`
+			Endpoint         string `json:"execution_endpoint"`
+			StartOperationID string `json:"start_operation_id"`
+			Generation       int64  `json:"generation"`
+			AttemptID        string `json:"attempt_id"`
+		} `json:"params"`
+	}
+	if json.Unmarshal([]byte(stop.Request), &request) != nil || !taskExecutionVersion(stop.Request) || stop.Action != "worker_stop" ||
+		stop.FleetID != fleet || owner != t.Owner || ref != t.Ref || generation != r.Generation || request.Params.Task != t.Ref ||
+		request.Params.StartOperationID != start.ID || request.Params.WorkerID != r.ExecutionOwner || request.Params.Endpoint != r.ExecutionEndpoint ||
+		request.Params.Generation != r.Generation || request.Params.AttemptID != r.AttemptID {
+		return ErrTaskFence
+	}
+	return nil
+}
+
+// RecordTaskSessionExit consumes a trusted node's native-session exit receipt.
+// A durable stop must precede it. Only the execution binding is released; the
+// task's historical session fields, start operation and stop fence survive.
+// Replaying the same key returns its historical receipt without touching any
+// newer binding. This method never authorizes a new native launch.
+func (s *Store) RecordTaskSessionExit(r TaskSessionExitReceipt, idem string, now time.Time) (FleetTask, FleetOperation, error) {
+	fleet, fid, parseErr := fleetid.ParseWorkerID(r.ExecutionOwner)
+	var evidence map[string]json.RawMessage
+	if parseErr != nil || !fleetid.IsUUID(fid) || !fleetid.IsUUID(r.TaskFID) || ParseTaskRef(r.Task) < 1 || r.Owner == "" ||
+		r.ExecutionEndpoint == "" || r.Generation < 1 || r.AttemptID == "" || r.StartOperationID == "" || r.StopOperationID == "" ||
+		r.LaunchID == "" || r.Scope != "native_session" || idem == "" || now.IsZero() ||
+		json.Unmarshal(r.Evidence, &evidence) != nil || len(evidence) == 0 {
+		return FleetTask{}, FleetOperation{}, ErrTaskInvalid
+	}
+	request, err := json.Marshal(taskSessionExitRequest{1, taskSessionExitAction, r})
+	if err != nil {
+		return FleetTask{}, FleetOperation{}, ErrTaskInvalid
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return FleetTask{}, FleetOperation{}, err
+	}
+	defer tx.Rollback()
+	if err = s.d.lockKey(tx, "fleet_operations", "task-execution:"+r.Owner+":"+idem); err != nil {
+		return FleetTask{}, FleetOperation{}, err
+	}
+	t, err := s.taskInTx(tx, ParseTaskRef(r.Task))
+	if errors.Is(err, sql.ErrNoRows) {
+		return t, FleetOperation{}, ErrTaskFence
+	}
+	if err != nil {
+		return t, FleetOperation{}, err
+	}
+	if t.Owner != r.Owner || t.FID != r.TaskFID || t.AuthorityVersion != TaskAuthorityVersion {
+		return t, FleetOperation{}, ErrTaskFence
+	}
+	var existing string
+	err = tx.QueryRow(`SELECT id FROM fleet_operations WHERE actor = ? AND idem = ?`, r.Owner, idem).Scan(&existing)
+	if err == nil {
+		o, _, err := taskSessionExitTx(tx, t, existing)
+		if err != nil || o.Request != string(request) {
+			return t, o, ErrTaskConflict
+		}
+		return t, o, tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return t, FleetOperation{}, err
+	}
+	start, generation, err := taskExecutionBindingTx(tx, t)
+	if err != nil {
+		return t, FleetOperation{}, err
+	}
+	if t.ExecutionOwner != r.ExecutionOwner || t.ExecutionEndpoint != r.ExecutionEndpoint || start.ID != r.StartOperationID ||
+		start.FleetID != fleet || generation != r.Generation || t.AttemptID != r.AttemptID || t.CancelRequest != r.StopOperationID ||
+		t.Generation != generation+1 {
+		return t, FleetOperation{}, ErrTaskFence
+	}
+	if err = taskSessionExitOperationsTx(tx, t, r, fleet); err != nil {
+		return t, FleetOperation{}, err
+	}
+	id, err := taskExecutionOperationID()
+	if err != nil {
+		return t, FleetOperation{}, err
+	}
+	o := FleetOperation{ID: id, FleetID: fleet, Action: taskSessionExitAction, Actor: r.Owner, TaskOwner: r.Owner,
+		Idem: idem, WorkerID: r.ExecutionOwner, Status: "succeeded", Request: string(request), Result: `{"released":true}`, Created: now.UTC(), Updated: now.UTC()}
+	if err = insertExecutionOperationTx(tx, o, t.Ref, generation); err != nil {
+		return t, o, err
+	}
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET execution_owner = '', execution_endpoint = '', updated_at = ? WHERE id = ?`, now.UTC().Format(rfc), t.ID); err != nil {
+		return t, o, err
+	}
+	t.ExecutionOwner, t.ExecutionEndpoint, t.UpdatedAt = "", "", now.UTC()
+	return t, o, tx.Commit()
+}
+
 // AuthorizeTaskExecution atomically reserves one task's endpoint and journals
 // the start. Actor is the authenticated actor; TaskOwner is its API-authorized
 // delegation (empty means Actor), exactly as with InsertFleetOperation.
 // The task's accepted generation/attempt becomes executable only here. A second
 // key cannot acquire it, even if the first start has failed or succeeded.
 func (s *Store) AuthorizeTaskExecution(o FleetOperation, endpoint string) (FleetTask, error) {
+	return s.authorizeTaskExecution(o, endpoint, "")
+}
+
+// ResumeTaskExecution is a new explicit dispatch, never an automatic retry.
+// The caller supplies the accepted session-exit operation and a fresh start
+// idempotency key. Its envelope must name the generation AFTER the durable stop
+// (current task generation + 1), with that generation's new attempt ID.
+func (s *Store) ResumeTaskExecution(o FleetOperation, endpoint, exitOperationID string) (FleetTask, error) {
+	if exitOperationID == "" {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	return s.authorizeTaskExecution(o, endpoint, exitOperationID)
+}
+
+func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperationID string) (FleetTask, error) {
 	if o.TaskOwner == "" {
 		o.TaskOwner = o.Actor
 	}
@@ -196,33 +444,52 @@ func (s *Store) AuthorizeTaskExecution(o FleetOperation, endpoint string) (Fleet
 	if err != nil {
 		return t, err
 	}
-	if t.Owner != o.TaskOwner || t.AuthorityVersion != TaskAuthorityVersion || t.Generation != d.Generation || t.AttemptID != d.AttemptID ||
-		t.CancelRequest != "" || t.State == TaskCancelled || t.Outcome != "" {
+	if t.Owner != o.TaskOwner || t.AuthorityVersion != TaskAuthorityVersion || t.State == TaskCancelled || t.Outcome != "" {
 		return t, ErrTaskFence
 	}
-	if t.ExecutionOwner != "" || t.ExecutionEndpoint != "" || t.OperationID != "" {
-		if _, _, err = taskExecutionBindingTx(tx, t); err != nil {
+	if exitOperationID != "" {
+		_, receipt, err := taskSessionExitTx(tx, t, exitOperationID)
+		if err != nil {
 			return t, err
 		}
-		return t, ErrTaskConflict
-	}
-	if t.WorkerID != "" || t.SessionKey != "" || t.State != TaskAccepted {
-		return t, ErrTaskFence
-	}
-	if carried, _, e := idCarrying(tx, t.Owner, t.Ref); e != nil {
-		return t, e
-	} else if carried {
-		return t, ErrTaskFence
-	}
-	if prior, e := taskPriorStartTx(tx, t); e != nil {
-		return t, e
-	} else if prior {
-		return t, ErrTaskConflict
+		if t.ExecutionOwner != "" || t.ExecutionEndpoint != "" || t.OperationID != receipt.StartOperationID ||
+			t.CancelRequest != receipt.StopOperationID || t.AttemptID != receipt.AttemptID || t.Generation != receipt.Generation+1 ||
+			d.Generation != t.Generation+1 {
+			return t, ErrTaskFence
+		}
+		if err := taskResumeHistoryTx(tx, t); err != nil {
+			return t, err
+		}
+		t.Generation, t.AttemptID, t.CancelRequest = d.Generation, d.AttemptID, ""
+	} else {
+		if t.Generation != d.Generation || t.AttemptID != d.AttemptID || t.CancelRequest != "" {
+			return t, ErrTaskFence
+		}
+		if t.ExecutionOwner != "" || t.ExecutionEndpoint != "" || t.OperationID != "" {
+			if _, _, err = taskExecutionBindingTx(tx, t); err != nil {
+				return t, err
+			}
+			return t, ErrTaskConflict
+		}
+		if t.WorkerID != "" || t.SessionKey != "" || t.State != TaskAccepted {
+			return t, ErrTaskFence
+		}
+		if carried, _, e := idCarrying(tx, t.Owner, t.Ref); e != nil {
+			return t, e
+		} else if carried {
+			return t, ErrTaskFence
+		}
+		if prior, e := taskPriorStartTx(tx, t); e != nil {
+			return t, e
+		} else if prior {
+			return t, ErrTaskConflict
+		}
 	}
 	if err = insertExecutionOperationTx(tx, o, t.Ref, t.Generation); err != nil {
 		return t, err
 	}
-	if _, err = tx.Exec(`UPDATE fleet_tasks SET execution_endpoint = ?, operation_id = ?, updated_at = ? WHERE id = ?`, endpoint, o.ID, o.Updated.UTC().Format(rfc), t.ID); err != nil {
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET execution_endpoint = ?, operation_id = ?, generation = ?, attempt_id = ?, cancel_request = ?, updated_at = ? WHERE id = ?`,
+		endpoint, o.ID, t.Generation, t.AttemptID, t.CancelRequest, o.Updated.UTC().Format(rfc), t.ID); err != nil {
 		return t, err
 	}
 	t.ExecutionEndpoint, t.OperationID, t.UpdatedAt = endpoint, o.ID, o.Updated.UTC()
@@ -266,6 +533,18 @@ func (s *Store) ClaimTaskExecution(taskID int64, owner, operationID, endpoint, w
 	}
 	var other int64
 	err = tx.QueryRow(`SELECT id FROM fleet_tasks WHERE (execution_owner LIKE ? OR worker_id LIKE ? OR fid = ?) AND id <> ? LIMIT 1`, "%/"+fid, "%/"+fid, fid, t.ID).Scan(&other)
+	if err == nil {
+		return t, ErrTaskConflict
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return t, err
+	}
+	// Exit may precede the first inventory/ID ledger write. Its immutable audit
+	// still owns the Session FID after execution_owner is released, including
+	// after a fleet move changes the worker ID prefix.
+	var historicalTask string
+	err = tx.QueryRow(`SELECT task_ref FROM fleet_operations WHERE action = ? AND worker_id LIKE ? AND task_ref <> ? LIMIT 1`,
+		taskSessionExitAction, "%/"+fid, t.Ref).Scan(&historicalTask)
 	if err == nil {
 		return t, ErrTaskConflict
 	}
