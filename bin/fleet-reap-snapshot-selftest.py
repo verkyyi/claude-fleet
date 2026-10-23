@@ -45,6 +45,13 @@ class Snapshot(unittest.TestCase):
         return idle.Cleaner(argparse.Namespace(socket_name=self.sock, session=self.sock,
                              main="", repo="", base="master", window_repo=False, dry_run=True))
 
+    def test_tab_transport_is_literal_on_this_tmux(self):
+        self.set("@probe_value", "middle")
+        actual = self.tm("display-message", "-p", "-t", self.win,
+                         "#{@missing_first}\t#{@probe_value}\t#{@missing_last}")
+        self.assertEqual(actual, "\tmiddle\t")
+        print("PASS literal TAB transport:", subprocess.check_output(["tmux", "-V"], text=True).strip(), repr(actual), flush=True)
+
     def test_reader_preserves_empty_columns(self):
         self.set("@probe_value", "middle")
         fmt = "#{@missing_first}\x1f#{@probe_value}\x1f#{@missing_last}"
