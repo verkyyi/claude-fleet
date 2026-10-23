@@ -94,12 +94,56 @@ trap 'rm -rf "$work"' EXIT
 identity() {
   [ ! -s "$work/auth.cfg" ] || return 0
   local tok=""
-  ( umask 077; : > "$work/auth.cfg"; : > "$work/oidc.cfg" )
+  ( umask 077; : > "$work/auth.cfg" )
   if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
-    printf 'header = "Authorization: bearer %s"\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$work/oidc.cfg"
-    tok=$(curl -sS -m 30 -K "$work/oidc.cfg" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=${FLEET_PUBLISH_AUDIENCE:-ccquota-fleet-release}" |
-      sed -n 's/.*"value": *"\([^"]*\)".*/\1/p') || tok=""
-    [ -n "$tok" ] || die "no OIDC token from the Actions runtime (permissions: id-token: write?)"
+    # Identity GET only: never retry a publish/signature POST or replace failed
+    # Actions identity with a fallback bearer. No response body or URL is logged.
+    tok=$(python3 - <<'PY'
+import http.client, json, os, re, signal, sys, time, urllib.error, urllib.parse, urllib.request
+def expired(signum, frame):
+    print('fleet-release-publish: Actions OIDC request exceeded 30s total budget', file=sys.stderr)
+    sys.exit(1)
+signal.signal(signal.SIGALRM, expired)
+signal.setitimer(signal.ITIMER_REAL, 30)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+url = os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']
+url += ('&' if '?' in url else '?') + urllib.parse.urlencode({'audience': os.environ.get('FLEET_PUBLISH_AUDIENCE', 'ccquota-fleet-release')})
+try:
+    request = urllib.request.Request(url, headers={'Authorization': 'bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+except ValueError:
+    print('fleet-release-publish: invalid Actions OIDC request URL', file=sys.stderr)
+    sys.exit(1)
+opener = urllib.request.build_opener(NoRedirect())
+for attempt in range(3):
+    retry = False
+    try:
+        with opener.open(request, timeout=8) as response:
+            if response.status != 200:
+                print('fleet-release-publish: Actions OIDC unexpected HTTP %d' % response.status, file=sys.stderr)
+                sys.exit(1)
+            body = response.read(65537)
+        value = json.loads(body) if len(body) <= 65536 else None
+        token = value.get('value') if isinstance(value, dict) else None
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', token):
+            raise ValueError('invalid identity')
+        print(token)
+        sys.exit(0)
+    except urllib.error.HTTPError as exc:
+        reason = 'HTTP %d' % exc.code
+        retry = exc.code == 429 or 500 <= exc.code < 600
+        exc.close()
+    except (urllib.error.URLError, http.client.HTTPException, OSError):
+        reason, retry = 'transport failure', True
+    except (ValueError, TypeError):
+        reason = 'invalid token JSON (HTTP 200)'
+    if not retry or attempt == 2:
+        print('fleet-release-publish: Actions OIDC %s after %d attempt(s)' % (reason, attempt + 1), file=sys.stderr)
+        sys.exit(1)
+    time.sleep(.25 * (attempt + 1))
+PY
+    ) || die "could not obtain an Actions OIDC identity"
   elif [ -n "${FLEET_PUBLISH_TOKEN:-}" ]; then
     tok="$FLEET_PUBLISH_TOKEN"
   else

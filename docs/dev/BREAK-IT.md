@@ -16,6 +16,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | Terminal 按扣除末列后的宽度选择列，窄屏提示覆盖详情 | 物理 40/60 列隐藏本应显示的 Agent/仓库，32/40 列看不到选中任务的问题 | 按物理宽度选择列，输出仍裁掉末列；保留选中详情，真实隔离 tmux 校验列表与动作页 | `task-terminal-physical-width` |
+| 发布签名前 Actions OIDC 端点短暂失败或返回合法换行 JSON | 单次 curl/sed 丢失 HTTP 原因并误报权限缺失，Hub 已部署但签名 stable 未推进 | 保留原权限和签名门；仅暂错有界重试，401/403 与无效身份立即拒绝；日志仅显示状态，不显示响应或凭据 | `release-oidc-runtime` |
 | 旧 Task Outcome 已结束，新代次待启动尚无 tmux 窗口 | autoclean 把工作树当完成垃圾删除，接续丢失环境 | 工作树专用只读判断保留 controlled Task（含空执行绑定）；读取未知 KEEP，legacy 保留原清理契约 | `task-worktree-current-generation` |
 | 旧会话结果、关闭事件或创建时间超时补偿落在已接续的受控 Task 上 | 新代次仍有启动绑定，却被旧事件写成 succeeded/cancelled，下一次接续被拒绝 | ID 历史照常保存；旧投影跳过受控 Task，写入对比代次及绑定快照，补偿在事务内复核 | `task-history-current-generation` |
 | 历史 Asked、结果或旧窗口覆盖当前 Task；短码随终态改变目标 | 错示需回答或打开旧会话 | 当前执行绑定、原生状态与固定 Task 代码；前缀歧义拒绝，历史保留 | `task-current-view` |
