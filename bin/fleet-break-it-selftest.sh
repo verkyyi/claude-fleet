@@ -6229,7 +6229,7 @@ drill_report_parent_key_reminted() {
   o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --state waiting --summary kept 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
-  [ "$org" = "$pb|" ] || { WHY="the re-mint moved an identified child aside: @origin|@origin_retired = [$org], want [$pb|]"; return 1; }
+  [ "$org" = "acme-app:scratch-3|" ] || { WHY="retired origin logic rewrote historical bytes: @origin|@origin_retired = [$org]"; return 1; }
   case "$o1" in *RECORDED:*RETIRED:*) ;; *) WHY="reused key redirected report or lost own result: $o1"; return 1 ;; esac
   case "$o2" in *RECORDED:*RETIRED:*) ;; *) WHY="retired origin redirected report or lost own result: $o2"; return 1 ;; esac
   WHAT="旧父会话编号重领或 origin 已退役都不向祖先投递；自身历史仍保存"
@@ -6946,6 +6946,15 @@ drill_native_exit_submit_replay() {
       WHY="native exit submission regression: $(tail -8 "$WORK/native-exit-submit.log")"; return 1;
     }
   WHAT='隔离 journal：证明持久化后崩溃、响应丢失原包重发、并发结果更新保包、未知登记不提交'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_authority() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinue' -count=1) >"$WORK/task-continue.log" 2>&1 || {
+    WHY="explicit continuation authority regression: $(tail -8 "$WORK/task-continue.log")"; return 1;
+  }
+  WHAT='真实 Hub API 与 SQLite：停止证明、同端点、精确幂等、并发 provider、旧回执及失联节点均受新授权约束'
   SECS=$(since "$t0")
 }
 
@@ -7753,6 +7762,15 @@ drill_parent_wait_retired() {
     WHY="old Parent relationship still affects native wait: $(tail -10 "$WORK/parent-wait-retired.log")"; return 1;
   }
   WHAT='旧origin关系和远端child账本不再制造looping或阻止回收；原生Loop仍保护其所属会话，历史不改写'
+  SECS=$(since "$t0")
+}
+
+drill_stop_renamed_worker() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
+    WHY="renamed-worker stop or panel protection failed: $(tail -12 "$WORK/stop-renamed-worker.log")"; return 1;
+  }
+  WHAT='worker改名home/dash/plan/backlog仍可按FID停止；真home/panel改名仍受保护；未标记旧窗口保留旧规则'
   SECS=$(since "$t0")
 }
 

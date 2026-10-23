@@ -235,43 +235,56 @@ func taskStopBindingTx(tx *sql.Tx, t FleetTask) (FleetOperation, int64, error) {
 	if t.ExecutionEndpoint != "" || t.ExecutionOwner != "" || t.CancelRequest == "" {
 		return taskExecutionBindingTx(tx, t)
 	}
+	source, err := taskReleasedSourceTx(tx, t)
+	return source.Start, source.Receipt.Generation, err
+}
+
+// A released source remains tied to the exact retained start and stop. This is
+// shared by stop replay and explicit continuation; no inventory inference.
+func taskReleasedSourceTx(tx *sql.Tx, t FleetTask) (TaskContinuationSource, error) {
+	var source TaskContinuationSource
+	source.Task = t
+	if t.ExecutionEndpoint != "" || t.ExecutionOwner != "" || t.CancelRequest == "" {
+		return source, ErrTaskFence
+	}
 	if t.AuthorityVersion != TaskAuthorityVersion || t.OperationID == "" || t.Generation < 2 {
-		return FleetOperation{}, 0, ErrTaskFence
+		return source, ErrTaskFence
 	}
 	rows, err := tx.Query(`SELECT id FROM fleet_operations WHERE action = ? AND task_owner = ? AND task_ref = ? AND task_generation = ?`,
 		taskSessionExitAction, t.Owner, t.Ref, t.Generation-1)
 	if err != nil {
-		return FleetOperation{}, 0, err
+		return source, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err = rows.Scan(&id); err != nil {
 			rows.Close()
-			return FleetOperation{}, 0, err
+			return source, err
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return FleetOperation{}, 0, err
+		return source, err
 	}
 	// RecordTaskSessionExit releases once; duplicates replay that same journal
 	// row. More than one receipt for a binding is inconsistent, not a guess.
 	if len(ids) != 1 {
-		return FleetOperation{}, 0, ErrTaskFence
+		return source, ErrTaskFence
 	}
 	_, receipt, err := taskSessionExitTx(tx, t, ids[0])
 	if err != nil {
-		return FleetOperation{}, 0, err
+		return source, err
 	}
 	if receipt.StartOperationID != t.OperationID || receipt.StopOperationID != t.CancelRequest ||
 		receipt.AttemptID != t.AttemptID || receipt.Generation != t.Generation-1 {
-		return FleetOperation{}, 0, ErrTaskFence
+		return source, ErrTaskFence
 	}
-	start, _, _, generation, err := executionOperationTx(tx, receipt.StartOperationID)
-	return start, generation, err
+	source.ExitOperationID, source.Receipt = ids[0], receipt
+	source.Start, _, _, _, err = executionOperationTx(tx, receipt.StartOperationID)
+	return source, err
 }
 
 func insertExecutionOperationTx(tx *sql.Tx, o FleetOperation, ref string, generation int64) error {
@@ -439,7 +452,7 @@ func (s *Store) RecordTaskSessionExit(r TaskSessionExitReceipt, idem string, now
 // The task's accepted generation/attempt becomes executable only here. A second
 // key cannot acquire it, even if the first start has failed or succeeded.
 func (s *Store) AuthorizeTaskExecution(o FleetOperation, endpoint string) (FleetTask, error) {
-	return s.authorizeTaskExecution(o, endpoint, "")
+	return s.authorizeTaskExecution(o, endpoint, "", nil)
 }
 
 // ResumeTaskExecution is a new explicit dispatch, never an automatic retry.
@@ -450,10 +463,10 @@ func (s *Store) ResumeTaskExecution(o FleetOperation, endpoint, exitOperationID 
 	if exitOperationID == "" {
 		return FleetTask{}, ErrTaskInvalid
 	}
-	return s.authorizeTaskExecution(o, endpoint, exitOperationID)
+	return s.authorizeTaskExecution(o, endpoint, exitOperationID, nil)
 }
 
-func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperationID string) (FleetTask, error) {
+func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperationID string, continuation *TaskContinuationIntent) (FleetTask, error) {
 	if o.TaskOwner == "" {
 		o.TaskOwner = o.Actor
 	}
@@ -504,6 +517,11 @@ func (s *Store) authorizeTaskExecution(o FleetOperation, endpoint, exitOperation
 			t.CancelRequest != receipt.StopOperationID || t.AttemptID != receipt.AttemptID || t.Generation != receipt.Generation+1 ||
 			d.Generation != t.Generation+1 {
 			return t, ErrTaskFence
+		}
+		if continuation != nil {
+			if err := validateTaskContinuationTx(tx, t, o, endpoint, exitOperationID, *continuation); err != nil {
+				return t, err
+			}
 		}
 		if err := taskResumeHistoryTx(tx, t); err != nil {
 			return t, err
