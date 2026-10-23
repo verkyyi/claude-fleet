@@ -164,7 +164,7 @@ snapshot_unchanged() {
   local sdir n=0 kept='' every="${FLEET_RESTORE_SNAPSHOT_EVERY:-5}"
   case "$every" in ''|*[!0-9]*) every=5 ;; esac
   sdir="$(fleet_state_dir "$1")"
-  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
+  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}||#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@task_execution}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
   [ -n "$SNAP_KEY" ] && [ -f "$sdir/restore.map" ] || return 1
   { IFS= read -r n; IFS= read -r -d '' kept; } < "$sdir/.snapshot-key" 2>/dev/null
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -327,6 +327,25 @@ snapshot() {
     # window ⇒ no row, the map byte for byte.
     tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@agent_def}' 2>/dev/null \
       | awk -F'|' '$1 != "" && $2 ~ /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/ { printf "AGENTDEF\t%s\t%s\n", $1, $2 }' >> "$tmp"
+    # Explicit execution metadata is a restriction, never a new grant. Keep it
+    # in its own identity-keyed row so a lost local DB cannot turn a controlled
+    # restore into legacy. Base64 keeps even malformed/multiline metadata from
+    # becoming MAP fields or shell syntax; the wrapper validates it on entry.
+    local exrows exwin exfid exraw exencoded exfailed=0
+    exrows=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_id}|#{@fleet_id}' 2>/dev/null) || exfailed=1
+    while IFS='|' read -r exwin exfid; do
+      [ -n "$exwin" ] || continue
+      exraw=$(tmux -L "$sock" show-options -wqv -t "$exwin" @task_execution 2>/dev/null) || { exfailed=1; break; }
+      [ -n "$exraw" ] || continue
+      fleet_is_fid "$exfid" || { exfailed=1; break; }
+      exencoded=$(printf '%s' "$exraw" | python3 -c 'import base64,sys; print(base64.b64encode(sys.stdin.buffer.read()).decode("ascii"))') || { exfailed=1; break; }
+      printf 'EXECUTION\t%s\t%s\n' "$exfid" "$exencoded" >> "$tmp"
+    done <<< "$exrows"
+    if [ "$exfailed" = 1 ]; then
+      log "snapshot $sess: execution metadata unavailable — keeping prior map"
+      rm -f "$tmp"
+      continue
+    fi
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -548,7 +567,7 @@ pullback_run() {
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
-    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN" || $1 == "AGENTDEF"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676), remote parents (#3439), pins (#3517) and agent files (#4760) ride along
+    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN" || $1 == "AGENTDEF" || $1 == "EXECUTION"' "$mf" >> "$keep" 2>/dev/null   # identity-keyed metadata rides along, including explicit execution restrictions
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
     log "pullback: $sess — reopening $n killed session window(s)"
@@ -569,6 +588,20 @@ pullback_run() {
 }
 
 # ----------------------------------------------------------------- restore ----
+# Decode and validate metadata without authorizing it. The caller retains an
+# invalid explicit row as {} so the existing wrapper refuses, never legacy.
+restore_execution_snapshot() {
+  python3 - "$BIN" "$1" "$2" <<'PY'
+import base64,json,sys
+sys.path.insert(0, sys.argv[1])
+from fleet_task_execution import _snapshot
+row = _snapshot(json.loads(base64.b64decode(sys.argv[2], validate=True)))
+if row['execution_owner'].rsplit('/', 1)[-1] != sys.argv[3]:
+    raise ValueError('restore execution belongs to another session')
+print(json.dumps(row, separators=(',', ':')))
+PY
+}
+
 restore() {
   local dry="${1:-}"
   mkdir -p "$RDIR"
@@ -827,6 +860,23 @@ restore() {
       # A session that binds no issue (a scratch, a no-repo one — its desk ticket is
       # not a binding) may spawn (issue #4334): its @agent_spawn back before its launcher mounts the dispatch group.
       { [ "${wraw:-}" = 1 ] || [ "${wrepo:-}" = - ]; } && stamp="$stamp$(fleet_win_stamp_cmd @agent_spawn 1)"
+      # The wrapper must see its lifelong identity and explicit restriction
+      # before its very first instruction. Parent-side writes after new-window
+      # race the launch and can bypass a durable stop as a seemingly old session.
+      case "$wtag" in WIN:?*)
+        local wf="${wtag#WIN:}" identity_stamp execution_row execution_snapshot
+        fleet_is_fid "$wf" || { log "skip $sess/$wname: invalid restore identity"; continue; }
+        identity_stamp=$(fleet_win_stamp_cmd @fleet_id "$wf")
+        stamp="$stamp${identity_stamp%; } || exit 2; "
+        identity_stamp=$(fleet_win_stamp_cmd @id_next_trigger "reopen:$(date +%s)")
+        stamp="$stamp${identity_stamp%; } || exit 2; "
+        execution_row=$(awk -F'\t' -v f="$wf" '$1 == "EXECUTION" && $2 == f { print "present:" $3 }' "$mf")
+        if [ -n "$execution_row" ]; then
+          execution_snapshot=$(restore_execution_snapshot "${execution_row#present:}" "$wf" 2>/dev/null) || execution_snapshot='{}'
+          identity_stamp=$(fleet_win_stamp_cmd @task_execution "$execution_snapshot")
+          stamp="$stamp${identity_stamp%; } || exit 2; "
+        fi ;;
+      esac
       cmd="$stamp$cmd"
       if [ -z "$dry" ]; then
         # Capture the new window-id and target every follow-up option-set through
@@ -838,12 +888,7 @@ restore() {
         [ -z "$nw" ] && nw="$sess:$wname"   # fall back to name if -P yielded nothing
         [ -n "$wissue" ] && [ "$wissue" != "-" ] \
           && tmux -L "$sock" set-window-option -t "$nw" @issue "$wissue" 2>/dev/null
-        # The session's lifelong identity (issue #1646), as the snapshot saw it —
-        # never re-minted: its children's @origin_fid still names it.
-        # …and its start is a new segment of that ID (EPIC T644 C2: `reopen`, read by
-        # its SessionStart hook even on the same conversation id)
-        case "$wtag" in WIN:?*) tmux -L "$sock" set-window-option -t "$nw" @fleet_id "${wtag#WIN:}" 2>/dev/null
-                                tmux -L "$sock" set-window-option -t "$nw" @id_next_trigger "reopen:$(date +%s)" 2>/dev/null ;; esac
+        # @fleet_id and @id_next_trigger were stamped by the pane before launch.
         # When the fleet may close it (issue #1902): the map's `REAP<TAB><fleet_id>
         # <TAB><policy>` row, keyed by that identity. No row (an older map, a
         # window with no policy) stamps nothing — its kind decides, as before.

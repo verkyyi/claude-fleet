@@ -55,6 +55,7 @@ REAL_TMUX="$(command -v tmux 2>/dev/null)"
 # silences restore()'s `say` (we assert on that output); the FLEET_*/HUB_*
 # knobs would override the per-fleet conf / launch command we set up below.
 unset QUIET FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_HUB_CMD HUB_CMD HUB_RESUME_ID HUB_SESSION HUB_CWD
+unset RESTORE_UNFINISHED RESTORE_KEEP_DONE RESTORE_ONLY_MAP
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fr-selftest.XXXXXX")" || exit 2
 # Resolve to the physical path: tmux reports pane_current_path with symlinks
@@ -86,6 +87,8 @@ exec /bin/sh
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/claude"
 export PATH="$WORK/bin:$PATH"
+# Restore tests exercise the real wrapper, with no credential/proxy bootstrap.
+export FLEET_WRAP_LAUNCH="$WORK/bin/claude"
 
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -241,8 +244,8 @@ printf '%s\n' "$WINS" | grep -q "^WIN:$FID9	issue-9	" \
   || fail "restore: fleet_restore_wins must tag issue-9's row WIN:<fleet_id> (got: $WINS)"
 [ "$(printf '%s\n' "$WINS" | sed 's/^WIN:[^	]*	/WIN	/')" = "$(awk -F'\t' '$1=="WIN"' "$MAP")" ] \
   || fail "restore: apart from the tag, fleet_restore_wins must be the map's WIN rows byte for byte"
-grep -q '@fleet_id "${wtag#WIN:}"' "$RESTORE" \
-  || fail "restore: a reopened window must be stamped with the FID row's @fleet_id"
+# Launch-time FID and execution restrictions are exercised against a real pane
+# by fleet-restore-execution-selftest.py, including a delayed parent-side stamp.
 
 # restore() must IGNORE the HUB row: the hub is dash-only, so there is no Claude
 # session to bring back. --dry-run exercises the parse+wiring without spawning

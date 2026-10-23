@@ -23,6 +23,385 @@ func executionOp(t FleetTask, key string) FleetOperation {
 	return o
 }
 
+func executionExit(t *testing.T, s *Store, key string) (FleetTask, TaskSessionExitReceipt) {
+	t.Helper()
+	task := acceptedTask(t, s, key, "")
+	o := executionOp(task, key+"-start")
+	if _, err := s.AuthorizeTaskExecution(o, "node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimTaskExecution(task.ID, task.Owner, o.ID, "node-a", executionWorker, task.Generation, task.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	stopped, stop, err := s.RequestTaskStop(task.ID, task.Owner, key+"-stop", "explicit stop", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stopped, TaskSessionExitReceipt{TaskFID: task.FID, Task: task.Ref, Owner: task.Owner,
+		ExecutionOwner: executionWorker, ExecutionEndpoint: "node-a", Generation: task.Generation, AttemptID: task.AttemptID,
+		StartOperationID: o.ID, StopOperationID: stop.ID, LaunchID: "native-launch-1", Scope: "native_session",
+		Evidence: json.RawMessage(`{"roots":[{"component":"agent","pid":123,"birth":"kernel-start-1","exited":true}]}`)}
+}
+
+func executionResumeOp(task FleetTask, key string) FleetOperation {
+	task.Generation++
+	task.AttemptID = fmt.Sprintf("task:%s:g%d", task.Ref, task.Generation)
+	return executionOp(task, key)
+}
+
+func TestTaskSessionExitAndExplicitResume(t *testing.T) {
+	s := taskStore(t)
+	task, receipt := executionExit(t, s, "resume")
+	// These are historical associations, not the execution binding being freed.
+	if _, err := s.write.Exec(`UPDATE fleet_tasks SET worker_id = ?, session_key = 'scratch-old', state = ? WHERE id = ?`, executionWorker, TaskRunning, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	released, exit, err := s.RecordTaskSessionExit(receipt, "exit-key", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released.ExecutionOwner != "" || released.ExecutionEndpoint != "" || released.OperationID != receipt.StartOperationID ||
+		released.CancelRequest != receipt.StopOperationID || released.AttemptID != receipt.AttemptID || released.Generation != task.Generation ||
+		released.WorkerID != executionWorker || released.SessionKey != "scratch-old" || released.State != TaskRunning || released.Outcome != "" {
+		t.Fatalf("release erased history or invented task outcome: %+v", released)
+	}
+	if exit.Action != taskSessionExitAction || exit.Status != "succeeded" || exit.Result != `{"released":true}` {
+		t.Fatalf("receipt %+v", exit)
+	}
+	for _, status := range []string{"running", "failed", "unknown", "succeeded"} {
+		if err := s.UpdateFleetOperation(exit.ID, status, `{"replacement":true}`, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unchanged, err := s.FleetOperation(exit.ID)
+	if err != nil || unchanged.Status != exit.Status || unchanged.Result != exit.Result || unchanged.Request != exit.Request || !unchanged.Updated.Equal(exit.Updated) {
+		t.Fatalf("ordinary operation update changed immutable exit receipt: %+v %v", unchanged, err)
+	}
+	forged := exit
+	forged.ID, forged.Idem = "forged-session-exit", "forged-session-exit"
+	if err := s.InsertFleetOperation(forged); !errors.Is(err, ErrTaskInvalid) {
+		t.Fatalf("generic insert accepted session exit receipt: %v", err)
+	}
+	if _, err := s.CancelUnopenedTask(task.ID, task.Owner, "legacy close", time.Now()); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("release removed legacy protection: %v", err)
+	}
+	if _, err := s.AuthorizeTaskExecution(executionResumeOp(released, "automatic"), "node-b"); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("ordinary authorization resumed stopped task: %v", err)
+	}
+	sameGeneration := released
+	sameGeneration.AttemptID = fmt.Sprintf("task:%s:g%d", released.Ref, released.Generation)
+	if _, err := s.ResumeTaskExecution(executionOp(sameGeneration, "same-generation"), "node-b", exit.ID); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("resume reused stop generation: %v", err)
+	}
+	// Even with a fresh envelope, an old start idempotency key cannot authorize.
+	if _, err := s.ResumeTaskExecution(executionResumeOp(released, "resume-start"), "node-b", exit.ID); !errors.Is(err, ErrIdemTaken) {
+		t.Fatalf("old idem revived start: %v", err)
+	}
+	o := executionResumeOp(released, "explicit-resume")
+	resumed, err := s.ResumeTaskExecution(o, "node-b", exit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Generation != task.Generation+1 || resumed.AttemptID == receipt.AttemptID || resumed.OperationID != o.ID ||
+		resumed.ExecutionEndpoint != "node-b" || resumed.ExecutionOwner != "" || resumed.CancelRequest != "" ||
+		resumed.WorkerID != executionWorker || resumed.SessionKey != "scratch-old" || resumed.State != TaskRunning {
+		t.Fatalf("resume %+v", resumed)
+	}
+	worker := executionFleet + "/33333333-3333-4333-8333-333333333333"
+	if _, err := s.ClaimTaskExecution(task.ID, task.Owner, o.ID, "node-b", worker, resumed.Generation, resumed.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	// A duplicate receipt remains an audit replay, even after the new claim.
+	again, oldExit, err := s.RecordTaskSessionExit(receipt, "exit-key", time.Now())
+	if err != nil || oldExit.ID != exit.ID || again.ExecutionOwner != worker || again.OperationID != o.ID {
+		t.Fatalf("late replay changed newer binding: %+v %+v %v", again, oldExit, err)
+	}
+	if _, _, err := s.RecordTaskSessionExit(receipt, "new-key-old-exit", time.Now()); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("late fresh key released newer binding: %v", err)
+	}
+	if _, err := s.ClaimTaskExecution(task.ID, task.Owner, receipt.StartOperationID, "node-a", executionWorker, receipt.Generation, receipt.AttemptID); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("old claim revived: %v", err)
+	}
+	original := task
+	original.Generation = receipt.Generation
+	if _, err := s.AuthorizeTaskExecution(executionOp(original, "resume-start"), "node-a"); !errors.Is(err, ErrIdemTaken) {
+		t.Fatalf("ordinary old-idem semantics changed: %v", err)
+	}
+	var count int
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = ?`, taskSessionExitAction).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("duplicate exit audit: %d %v", count, err)
+	}
+}
+
+func TestTaskSessionExitRejectsMismatchedAuthority(t *testing.T) {
+	cases := map[string]func(*TaskSessionExitReceipt){
+		"task-fid": func(r *TaskSessionExitReceipt) { r.TaskFID = "44444444-4444-4444-8444-444444444444" },
+		"owner":    func(r *TaskSessionExitReceipt) { r.Owner = "other" },
+		"session": func(r *TaskSessionExitReceipt) {
+			r.ExecutionOwner = executionFleet + "/33333333-3333-4333-8333-333333333333"
+		},
+		"endpoint":   func(r *TaskSessionExitReceipt) { r.ExecutionEndpoint = "node-b" },
+		"generation": func(r *TaskSessionExitReceipt) { r.Generation++ },
+		"attempt":    func(r *TaskSessionExitReceipt) { r.AttemptID = "another-attempt" },
+		"start":      func(r *TaskSessionExitReceipt) { r.StartOperationID = "another-start" },
+		"stop":       func(r *TaskSessionExitReceipt) { r.StopOperationID = "another-stop" },
+		"scope":      func(r *TaskSessionExitReceipt) { r.Scope = "all_processes" },
+		"launch":     func(r *TaskSessionExitReceipt) { r.LaunchID = "" },
+		"evidence":   func(r *TaskSessionExitReceipt) { r.Evidence = json.RawMessage(`{}`) },
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := taskStore(t)
+			task, receipt := executionExit(t, s, name)
+			change(&receipt)
+			if _, _, err := s.RecordTaskSessionExit(receipt, "bad-exit", time.Now()); !errors.Is(err, ErrTaskFence) && !errors.Is(err, ErrTaskInvalid) {
+				t.Fatalf("bad receipt accepted: %v", err)
+			}
+			got, _ := s.FleetTask(task.ID)
+			if got.ExecutionOwner != task.ExecutionOwner || got.ExecutionEndpoint != task.ExecutionEndpoint || got.OperationID != task.OperationID {
+				t.Fatalf("mismatch changed binding: %+v", got)
+			}
+			var count int
+			if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = ?`, taskSessionExitAction).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("rejected receipt journalled: %d %v", count, err)
+			}
+		})
+	}
+}
+
+func TestTaskSessionExitNeedsCanonicalStopAndExactReplay(t *testing.T) {
+	s := taskStore(t)
+	task, receipt := executionExit(t, s, "canonical")
+	if _, _, err := s.RequestTaskStop(task.ID, task.Owner, "stop-alias", "repeat", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var alias string
+	if err := s.read.QueryRow(`SELECT id FROM fleet_operations WHERE actor = ? AND idem = ?`, task.Owner, "stop-alias").Scan(&alias); err != nil {
+		t.Fatal(err)
+	}
+	wrong := receipt
+	wrong.StopOperationID = alias
+	if _, _, err := s.RecordTaskSessionExit(wrong, "exit", time.Now()); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("alias replaced canonical stop: %v", err)
+	}
+	// Ordinary worker_stop completion is not an exit receipt.
+	if err := s.UpdateFleetOperation(receipt.StopOperationID, "succeeded", `{"ok":true}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResumeTaskExecution(executionResumeOp(task, "premature"), "node-b", receipt.StopOperationID); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("ordinary stop result resumed: %v", err)
+	}
+	if _, _, err := s.RecordTaskSessionExit(receipt, "exit", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	wrong = receipt
+	wrong.LaunchID = "different-launch"
+	if _, _, err := s.RecordTaskSessionExit(wrong, "exit", time.Now()); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("changed proof replayed: %v", err)
+	}
+}
+
+func TestTaskSessionExitCannotReplaceStop(t *testing.T) {
+	s := taskStore(t)
+	task, receipt := executionExit(t, s, "missing-stop")
+	// Model a node presenting its own stop ID before Hub persisted that intent.
+	if _, err := s.write.Exec(`UPDATE fleet_tasks SET cancel_request = '', generation = ? WHERE id = ?`, receipt.Generation, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RecordTaskSessionExit(receipt, "early-exit", time.Now()); !errors.Is(err, ErrTaskFence) {
+		t.Fatalf("exit manufactured stop authorization: %v", err)
+	}
+	got, _ := s.FleetTask(task.ID)
+	if got.ExecutionOwner != executionWorker || got.CancelRequest != "" || got.Generation != receipt.Generation {
+		t.Fatalf("early exit mutated task: %+v", got)
+	}
+}
+
+func TestTaskSessionExitStopReplayAfterRelease(t *testing.T) {
+	s := taskStore(t)
+	task, receipt := executionExit(t, s, "released-stop")
+	if _, _, err := s.RequestTaskStop(task.ID, task.Owner, "old-alias", "repeat before exit", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	released, exit, err := s.RecordTaskSessionExit(receipt, "exit", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"released-stop-stop", "old-alias", "new-alias", "new-alias"}
+	for _, key := range keys {
+		again, stop, err := s.RequestTaskStop(task.ID, task.Owner, key, "repeat after exit", time.Now().Add(time.Hour))
+		if err != nil || stop.ID != receipt.StopOperationID || again.Generation != released.Generation ||
+			again.OperationID != released.OperationID || again.CancelRequest != released.CancelRequest ||
+			again.ExecutionOwner != "" || again.ExecutionEndpoint != "" || !again.UpdatedAt.Equal(released.UpdatedAt) {
+			t.Fatalf("released stop replay %s changed intent: %+v %+v %v", key, again, stop, err)
+		}
+	}
+	var stops, aliases int
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = 'worker_stop'`).Scan(&stops); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = ?`, taskStopAliasAction).Scan(&aliases); err != nil || stops != 1 || aliases != 2 {
+		t.Fatalf("duplicate deliverable stop or alias: stops=%d aliases=%d err=%v", stops, aliases, err)
+	}
+	resumed, err := s.ResumeTaskExecution(executionResumeOp(released, "resume"), "node-b", exit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if _, _, err := s.RequestTaskStop(task.ID, task.Owner, key, "late old stop", time.Now()); !errors.Is(err, ErrTaskConflict) {
+			t.Fatalf("old stop %s reached new binding: %v", key, err)
+		}
+	}
+	got, _ := s.FleetTask(task.ID)
+	if got.Generation != resumed.Generation || got.CancelRequest != "" || got.ExecutionEndpoint != "node-b" || got.OperationID != resumed.OperationID {
+		t.Fatalf("old stop changed resumed task: %+v", got)
+	}
+}
+
+func TestTaskSessionExitStopReplayNeedsMatchingExitHistory(t *testing.T) {
+	for _, mutation := range []string{"missing-exit", "wrong-stop", "wrong-start", "wrong-generation", "wrong-task-fid"} {
+		t.Run(mutation, func(t *testing.T) {
+			s := taskStore(t)
+			task, receipt := executionExit(t, s, "history-stop")
+			_, exit, err := s.RecordTaskSessionExit(receipt, "exit", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mutation == "missing-exit" {
+				_, err = s.write.Exec(`DELETE FROM fleet_operations WHERE id = ?`, exit.ID)
+			} else {
+				var request taskSessionExitRequest
+				if err := json.Unmarshal([]byte(exit.Request), &request); err != nil {
+					t.Fatal(err)
+				}
+				switch mutation {
+				case "wrong-stop":
+					request.Receipt.StopOperationID = "other-stop"
+				case "wrong-start":
+					request.Receipt.StartOperationID = "other-start"
+				case "wrong-generation":
+					request.Receipt.Generation++
+				case "wrong-task-fid":
+					request.Receipt.TaskFID = "44444444-4444-4444-8444-444444444444"
+				}
+				raw, _ := json.Marshal(request)
+				_, err = s.write.Exec(`UPDATE fleet_operations SET request = ? WHERE id = ?`, string(raw), exit.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"history-stop-stop", "new-alias"} {
+				if _, _, err := s.RequestTaskStop(task.ID, task.Owner, key, "repeat", time.Now()); !errors.Is(err, ErrTaskFence) {
+					t.Fatalf("unproved released binding accepted stop replay %s: %v", key, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTaskSessionExitResumeRejectsUnprovedHistory(t *testing.T) {
+	for _, indexed := range []bool{true, false} {
+		t.Run(fmt.Sprint(indexed), func(t *testing.T) {
+			s := taskStore(t)
+			task, receipt := executionExit(t, s, "history")
+			released, exit, err := s.RecordTaskSessionExit(receipt, "exit", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An earlier start may have reached a node; a later proven session
+			// cannot erase that uncertainty, even for an unindexed old journal.
+			tx, err := s.write.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := ""
+			if indexed {
+				ref = task.Ref
+			}
+			err = insertExecutionOperationTx(tx, executionOp(task, "unproved"), ref, task.Generation)
+			if err != nil {
+				tx.Rollback()
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ResumeTaskExecution(executionResumeOp(released, "new"), "node-b", exit.ID); !errors.Is(err, ErrTaskConflict) {
+				t.Fatalf("unproved start ignored: %v", err)
+			}
+			got, _ := s.FleetTask(task.ID)
+			if got.Generation != released.Generation || got.CancelRequest != released.CancelRequest || got.ExecutionEndpoint != "" {
+				t.Fatalf("failed resume mutated fence: %+v", got)
+			}
+		})
+	}
+}
+
+func TestTaskSessionExitConcurrentResumeAndRepeatedCycles(t *testing.T) {
+	s := taskStore(t)
+	task, receipt := executionExit(t, s, "cycles")
+	for cycle := 0; cycle < 3; cycle++ {
+		released, exit, err := s.RecordTaskSessionExit(receipt, fmt.Sprintf("exit-%d", cycle), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		gate := make(chan struct{})
+		results := make(chan error, 8)
+		for i := 0; i < cap(results); i++ {
+			go func(i int) {
+				<-gate
+				_, err := s.ResumeTaskExecution(executionResumeOp(released, fmt.Sprintf("resume-%d-%d", cycle, i)), "node-b", exit.ID)
+				results <- err
+			}(i)
+		}
+		close(gate)
+		winners := 0
+		for i := 0; i < cap(results); i++ {
+			if err := <-results; err == nil {
+				winners++
+			} else if !errors.Is(err, ErrTaskFence) {
+				t.Fatal(err)
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("%d resume winners", winners)
+		}
+		resumed, _ := s.FleetTask(task.ID)
+		worker := fmt.Sprintf("%s/33333333-3333-4333-8333-%012d", executionFleet, cycle+1)
+		if _, err := s.ClaimTaskExecution(task.ID, task.Owner, resumed.OperationID, "node-b", worker, resumed.Generation, resumed.AttemptID); err != nil {
+			t.Fatal(err)
+		}
+		_, stop, err := s.RequestTaskStop(task.ID, task.Owner, fmt.Sprintf("stop-%d", cycle), "explicit stop", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt.Generation, receipt.AttemptID, receipt.StartOperationID = resumed.Generation, resumed.AttemptID, resumed.OperationID
+		receipt.ExecutionOwner, receipt.ExecutionEndpoint, receipt.StopOperationID = worker, "node-b", stop.ID
+		receipt.LaunchID = fmt.Sprintf("native-launch-%d", cycle+2)
+	}
+}
+
+func TestTaskSessionExitRetainsSessionIdentityBeforeInventory(t *testing.T) {
+	s := taskStore(t)
+	_, receipt := executionExit(t, s, "before-inventory")
+	_, exit, err := s.RecordTaskSessionExit(receipt, "exit", time.Now())
+	if err != nil || exit.WorkerID != executionWorker {
+		t.Fatalf("missing historical session identity: %+v %v", exit, err)
+	}
+	for _, fleet := range []string{executionFleet, "44444444-4444-4444-8444-444444444444"} {
+		task := acceptedTask(t, s, "new-task-"+fleet, "")
+		o := executionOp(task, "start-"+fleet)
+		o.FleetID = fleet
+		if _, err := s.AuthorizeTaskExecution(o, "node-b"); err != nil {
+			t.Fatal(err)
+		}
+		worker := fleet + "/22222222-2222-4222-8222-222222222222"
+		if _, err := s.ClaimTaskExecution(task.ID, task.Owner, o.ID, "node-b", worker, task.Generation, task.AttemptID); !errors.Is(err, ErrTaskConflict) {
+			t.Fatalf("released session identity adopted by another task/fleet: %v", err)
+		}
+	}
+}
+
 // taskStore runs the same transactions on SQLite and the CI Postgres leg.
 func TestTaskExecutionConcurrentAuthorization(t *testing.T) {
 	for _, sameKey := range []bool{false, true} {

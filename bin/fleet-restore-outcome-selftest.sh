@@ -25,6 +25,7 @@ command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 absent — SKI
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 unset QUIET
+unset RESTORE_UNFINISHED RESTORE_KEEP_DONE RESTORE_ONLY_MAP
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fro-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
@@ -49,6 +50,8 @@ esac
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/claude"
 export PATH="$WORK/bin:$PATH"
+# The wrapper's existing seam bypasses real credential/proxy startup entirely.
+export FLEET_WRAP_LAUNCH="$WORK/bin/claude"
 
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
