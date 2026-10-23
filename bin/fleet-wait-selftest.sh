@@ -2,15 +2,14 @@
 # fleet-wait-selftest.sh — an idle window that is still WAITING is not done (issue #1370).
 #
 # Three things made a finished-looking ✓ out of a window that was not finished:
-# an EPIC parent waiting on its sub-tasks, a session whose Bash-tool job was still
-# running, and a session that scheduled its Loop before the @loop hook (#1331) was
+# a session whose Bash-tool job was still running and a session that scheduled
+# its Loop before the @loop hook (#1331) was
 # synced. This pins all three on an ISOLATED tmux socket (PATH-shim, never the live
 # server), with a fake `claude` (a bash script, FLEET_CLAUDE_COMM) and transcript
 # fixtures — no live Claude, no gh:
-#   A. children  — a parent with an unfinished child (at any depth) Stops `looping`
-#                  + @claude_wait=children, fleet_window_waiting_children says k/N,
-#                  fleet-reap-live.py answers retained:children even over a `done`;
-#                  once every child is finished the next Stop is `done` again
+#   A. Parent    — old local/remote relationships never hold this Task or mark it
+#                  looping; compatibility functions are inert, history stays;
+#                  --parent-only runs this regression without native-work legs.
 #   B. bg        — a Bash-tool shell still under the agent → `looping` + bg, and
 #                  retained:bg; an agent with no such child → done
 #   C. backfill  — a pre-hook ScheduleWakeup still pending in the transcript → the
@@ -113,56 +112,61 @@ stop() {  # <win> [payload] [extra args] — the Stop hook, as Claude Code runs 
 reap() { python3 "$BIN/fleet-reap-live.py" "$1" --socket-name "$SESS"; }
 . "$BIN/fleet-lib.sh"
 
-# --- A. children ------------------------------------------------------------------
+# --- A. retired Parent waits ------------------------------------------------------
+# These are real independent tmux windows carrying pre-retirement metadata.
+# Neither another Task's native activity nor its Loop is this Task's work.
 K1=$(win kid1 101 issue-100)
 tf set-window-option -t "$K1" @claude_state working
 stop "$PAR"
-st_eq "A: a parent with a working child Stops looping" looping "$(opt "$PAR" @claude_state)"
-st_eq "A: …and says why" children "$(opt "$PAR" @claude_wait)"
+st_eq "A: another Task's work cannot turn this Stop into looping" 'done' "$(opt "$PAR" @claude_state)"
+st_eq "A: no Parent wait reason is stamped" '' "$(opt "$PAR" @claude_wait)"
 out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-st_eq "A: fleet_window_waiting_children → k/N" "0 0/1" "$rc $out"
-tf set-window-option -t "$PAR" @claude_state 'done'      # stamped by anyone who never asked
+st_eq "A: old waiting_children entry is inert" "1 " "$rc $out"
 out=$(reap "$PAR"); rc=$?
-st_eq "A: reap-live retains a waiting parent over a done stamp" "1 retained:children" "$rc $out"
-# a grandchild is part of the subtree (the dash's k/N counts every level)
-tf set-window-option -t "$K1" @claude_state 'done'
+st_eq "A: no Parent relationship holds the idle task" "0 " "$rc $out"
+out=$(python3 - "$BIN" "$SESS" "$PAR" <<'PYLOOP'
+import runpy, sys
+loop = runpy.run_path(sys.argv[1] + '/fleet-loop.py')
+print(','.join(loop['wait_reasons']({'fleet': {'session': sys.argv[2], 'window_id': sys.argv[3]}})))
+PYLOOP
+)
+st_eq "A: a due Loop does not wait for another Task" '' "$out"
 K2=$(win kid2 102 issue-101)
-tf set-window-option -t "$K2" @claude_state needs
-out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-st_eq "A: an unfinished grandchild keeps the parent waiting" "0 1/2" "$rc $out"
-# a `done` child whose Loop is still pending is not finished either (#1331)
-tf set-window-option -t "$K2" @claude_state 'done'
+for state in working needs 'done'; do
+  tf set-window-option -t "$K2" @claude_state "$state"
+  stop "$PAR"
+  st_eq "A: a distant legacy Task in $state does not affect Stop" 'done ' "$(opt "$PAR" @claude_state) $(opt "$PAR" @claude_wait)"
+done
 tf set-window-option -t "$K2" @loop "kind=wakeup next=$(( $(date +%s) + 900 )) ttl=900"
-out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-st_eq "A: a done child with a live @loop is unfinished" "0 1/2" "$rc $out"
-# the mod's own report (`--via mod done`) takes the same decision
 stop "$PAR" '' '--via mod'
-st_eq "A: the mod's done report also stamps looping" "looping children" "$(opt "$PAR" @claude_state) $(opt "$PAR" @claude_wait)"
-tf set-window-option -u -t "$K2" @loop
-stop "$PAR"
-st_eq "A: every child finished → done" 'done' "$(opt "$PAR" @claude_state)"
-hasopt "$PAR" @claude_wait && st_fail "A: a lapsed reason must be removed, not left behind" "$(tf show-options -w -t "$PAR")"
-CHECKS=$((CHECKS+1))
-out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-st_eq "A: …and the helper agrees" "1 " "$rc $out"
-out=$(reap "$PAR"); rc=$?
-case "$out" in retained:*) st_fail "A: a parent with all children finished must not be retained" "$out" ;; esac
-CHECKS=$((CHECKS+1))
-# a reaped child leaves the count; its orphaned grandchild counts toward nobody
-tf kill-window -t "$K1"
-tf set-window-option -t "$K2" @claude_state working
-out=$(fleet_window_waiting_children "$SESS" "$PAR"); rc=$?
-st_eq "A: a child's reaped window leaves the count (its orphan counts toward nobody)" "1 " "$rc $out"
-tf kill-window -t "$K2"
-# a scratch parent keys off its worktree, like the dash
-mkdir -p "$WORK/r-scratch-7"
-SCR=$(tf new-window -d -P -F '#{window_id}' -t "$SESS" -n scr -c "$WORK/r-scratch-7" "exec sleep 300")
-tf set-window-option -t "$SCR" @worktree "$WORK/r-scratch-7"
-K3=$(win kid3 103 scratch-7)
-tf set-window-option -t "$K3" @claude_state looping
-out=$(fleet_window_waiting_children "$SESS" "$SCR"); rc=$?
-st_eq "A: a scratch parent finds its children by scratch key" "0 0/1" "$rc $out"
-tf kill-window -t "$K3"; tf kill-window -t "$SCR"
+st_eq "A: another Task's Loop does not affect mod done" 'done ' "$(opt "$PAR" @claude_state) $(opt "$PAR" @claude_wait)"
+out=$(reap "$K2"); rc=$?
+st_eq "A: its own native Loop still protects the actual owner" "1 retained:loop" "$rc $out"
+# Old looping(children) observations clear on the existing idle re-evaluation.
+tf set-window-option -t "$PAR" @claude_state looping
+tf set-window-option -t "$PAR" @claude_wait children
+fleet_window_reeval "$SESS" "$PAR" >/dev/null
+st_eq "A: stale children-only wait clears without touching the other Task" 'done ' "$(opt "$PAR" @claude_state) $(opt "$PAR" @claude_wait)"
+st_eq "A: independent Task is untouched" working "$(opt "$K1" @claude_state)"
+tf kill-window -t "$K2"; tf kill-window -t "$K1"
+# Both retained function names are inert, including for a former remote child.
+# A deliberately observable legacy reader must never be consulted for liveness.
+mkdir -p "$FLEET_CONF_DIR/fleets/$SESS/children"
+ledger="$FLEET_CONF_DIR/fleets/$SESS/children/issue-100.ndjson"
+printf '%s\n' '{"child":"issue-501","state":"WAITING","summary":"historic"}' > "$ledger"
+cp "$ledger" "$WORK/ledger-before"
+fleet_remote_children() { printf 'called\n' >> "$WORK/remote-read"; printf 'issue-501\tworking\n'; }
+out=$(_fleet_remote_tally "$SESS" issue-100); rc=$?
+st_eq "A: old remote tally is inert" "1 " "$rc $out"
+out=$(fleet_window_wait "$SESS" "$PAR"); rc=$?
+st_eq "A: ordinary wait ignores legacy remote relationships" "1 " "$rc $out"
+[ ! -e "$WORK/remote-read" ] || st_fail "A: liveness must not read the old remote map"
+cmp -s "$ledger" "$WORK/ledger-before" || st_fail "A: history bytes changed"
+CHECKS=$((CHECKS+2))
+if [ "${1:-}" = --parent-only ]; then
+  printf 'fleet-wait-selftest: OK (%d Parent retirement checks)\n' "$CHECKS"
+  exit 0
+fi
 
 # --- B. bg ----------------------------------------------------------------------------
 BGW=$(win bgw 110 '' "exec bash $FAKE bg")

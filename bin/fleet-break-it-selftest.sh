@@ -7747,6 +7747,15 @@ drill_parent_origin_retired() {
   SECS=$(since "$t0")
 }
 
+drill_parent_wait_retired() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-wait-selftest.sh" --parent-only >"$WORK/parent-wait-retired.log" 2>&1 || {
+    WHY="old Parent relationship still affects native wait: $(tail -10 "$WORK/parent-wait-retired.log")"; return 1;
+  }
+  WHAT='旧origin关系和远端child账本不再制造looping或阻止回收；原生Loop仍保护其所属会话，历史不改写'
+  SECS=$(since "$t0")
+}
+
 drill_parent_report_retired() {
   local t0; t0=$(now); CAP=60
   python3 "$BIN/fleet-parent-retirement-selftest.py" >"$WORK/parent-retired.log" 2>&1 || {
