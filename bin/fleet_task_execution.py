@@ -1141,7 +1141,7 @@ def qualified_launch(argv, environment):
         index = len(prefix)
     if index >= len(argv):
         return argv, 0
-    owned = Path(__file__).resolve().parent / "fleet-claude.sh"
+    owned = Path(__file__).resolve().parent / "fleet-claude.sh"  # wrap-ok: identify the wrapper's native child for protocol qualification; no direct spawn
     if not Path(argv[index]).is_absolute() or Path(argv[index]).resolve() != owned:
         return argv, 0
     agent, want = None, None
