@@ -4973,8 +4973,9 @@ drill_task_window_duplicate() {
   t0=$(now)
   suite_holds task-one-window-selftest.sh 'D5: no window opened' 'B2: the ID stays open while the original runs' \
     'E3: the spawner was called for a running record' 'F9: the hub'"'"'s record is back' || return 1
-  grep -q 'fleet_task_running "$TASK_REF"' "$BIN/dash-raw-session.sh" \
-    || { WHY="dash-raw-session.sh no longer asks whether the record already runs"; return 1; }
+  grep -q '_ttask=$TASK_REF' "$BIN/dash-raw-session.sh" \
+    && grep -q 'fleet_task_running "$_ttask" "$_tfid"' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh lost Task or current continuation FID duplicate checks"; return 1; }
   grep -q 'fleet_fid_shared' "$BIN/fleet-cleanup-idle.py" \
     || { WHY="the idle reaper no longer keeps an ID another window carries"; return 1; }
   SECS=$(since "$t0")
@@ -6949,6 +6950,15 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continuation_start() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
+    WHY="continuation startup regression: $(tail -10 "$WORK/task-continuation-start.log")"; return 1;
+  }
+  WHAT='同 Task 新 FID 续做；认证原 start 与退出回执找回原工作树和历史，旧窗口不吞新启动'
+  SECS=$(since "$t0")
+}
+
 drill_task_local_continuation() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-local-continuation-selftest.py" \
@@ -7804,6 +7814,15 @@ drill_report_delegation_offline() {
   CAP=30; local t0 out; t0=$(now)
   out=$(python3 "$BIN/fleet-report-delegation-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   WHAT='旧委托写入口立即退役；历史读取不写磁盘、不派发、不补送'
+  SECS=$(since "$t0")
+}
+
+drill_session_title_placeholder() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/task-line-selftest.sh" >"$WORK/title-placeholder.log" 2>&1 || {
+    WHY="first prompt title regression: $(tail -3 "$WORK/title-placeholder.log")"; return 1;
+  }
+  WHAT='短码任务的首句同时更新窗口和记录；中英文占位名消失，后续消息不改名'
   SECS=$(since "$t0")
 }
 

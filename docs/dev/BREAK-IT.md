@@ -81,6 +81,7 @@
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784）；tmux ≤ 3.4 忙时会漏掉 shell 退出的信号、窗格停在死状态，diskguard 节拍的 `home_watch` 补救重开（#1801） | `last-window` |
 | 改窗口名（`prefix ,`、`rename-window`）：把 home 改成别的名字，或把执行会话改叫 `home`、改掉它恢复时用的名字 | fleet 按名字认窗口：改名后的 home 漏了 SIGCHLD 时节拍不再补救、整个 fleet 不再被认作 fleet（上限计数归零）；改叫 `home` 的执行会话不算进上限；恢复认不出改名的会话，再开一个重复的 | 认窗口只看窗口自己的 `@fleet_role`（home / panel / worker，开窗时打上，读一律经 `fleet_win_role`），没打过的老窗口才按名字；恢复先按 `@fleet_id` 认活着的会话（#1844） | `window-renamed` |
 | 会话创建没名称，或命名只改窗口后被回收 | 已结束列表出现空白行，人工标题丢失 | 创建持久缺省名；正式 `named` 事件，人工名优先；共享 Board 按身份取标题及短码兜底 | `session-title-lost` |
+| 新会话用短码绑定任务，首句改名却只同步旧式 T 数字编号（T979） | 顶部已是首句，面板仍显示 New Session / 新会话 | 非空任务地址交给任务记录入口统一校验、解析和改名，保留占位标题比较与一次性命名 | `session-title-placeholder` |
 | 编排会话给别的机器上的 worker 发话（`fleet-peer-send.sh`；当时还有评论转达，#4898 去掉） | relay 的 `from` 是 `<uuid>/orchestrator`，入口按 worker_id 语法拒收（INVALID_ARGUMENT），agent 挪进 outbox 的 `refused/` ；发送端只看见文件不见了，报「queued · not delivered yet」，账本永远 QUEUED——2026-10-09 编排对 mac-d 的四个 worker 发了几小时没一条送到 | 没有自己键的会话（当年的编排 / 管家窗口）用身份 `<uuid>/<fleet_id>` 发——它的键就是身份（#2729、#4341），入口认、worker 断言也对得上；被拒的 relay 由 `fleet_hub_refused` 读出原因：退出 1、原因上 stderr、账本记 FAILED；仍在排队的，`FLEET_PEER_RECEIPT_SECS`（60 s）后没回执就在发送会话里说出来 | `cross-send-refused-unseen` |
 | 旧跨机回报积压或迟到回执（T756） | 升级后继续排队、补送或提醒，恢复已删除的 Parent 协调 | 回报永久结算 FAILED，保留完整原文；迟到回执不能复活，不转无主提醒，重复清理不重复结算 | `cross-report-queued-unseen` |
 | 派单 `--as <name>` 指的 agent 文件写坏（frontmatter 读不出）或找不到（项目 `.claude/agents`、`~/.claude/agents`、已装插件里都没有） | 自定义会话就是一份标准 agent 文件（#3122）：照开的话，Claude Code 要么悄悄退回默认会话、要么开出一个没有说明的执行会话——不是你要的那种，也没人知道 | 派单在开任何窗口之前就拒（exit 1），stderr 写出是哪个文件、或在哪几处找过（`fleet-agent-def.py`）；没写 `--as`、自带的 `fleet-worker` 又被你删了不算错：照常开一个收到单子的普通会话 | `agent-file-broken` |
@@ -695,4 +696,5 @@
 
 | Parent 回报入口退役后，旧工具、委托代收或积压队列仍投递报告 | 会话继续被旧协调链唤醒；或回执虚报送达、原结果丢失 | 旧报告入口明确退役；报告积压保留原文并永久失败，不转换成提醒；自身结果历史与普通消息保留 | `parent-report-retired` |
 | 用户停止后明确接续，节点覆盖当前 Task 绑定但旧 FID 丢失停止事实，或前轮启动登记混入新一轮退出证明 | 旧会话被当作 legacy 复活；重复接续分配多个会话；第二次停止无法证明退出 | 仅显式最新授权与已确认原 proof 共同允许原子接续；同 grant 复用分配，原 stop journal 保留旧 FID 停止事实和原 proof，按原 operation 精确退休注册，第二轮启动停止独立验证 | `task-local-continuation` |
+| 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
