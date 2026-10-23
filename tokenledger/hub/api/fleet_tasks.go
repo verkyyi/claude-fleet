@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -28,6 +29,8 @@ import (
 //	                                     off the inventory; ?all=1 an admin's view
 //	                                     of everyone's
 //	GET  /v1/fleet/tasks/<T>             one of them
+//	POST /v1/fleet/tasks/<T>/cancel      {} cancels a not-yet-opened v1 task;
+//	                                     200 record, repeatable; 409 if opened
 const (
 	FleetTasksPath = "/v1/fleet/tasks"
 	TasksPagePath  = "/tasks"
@@ -257,6 +260,10 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, FleetTasksPath), "/")
 	if rest != "" {
 		ref, what, _ := strings.Cut(rest, "/")
+		if what == "cancel" {
+			s.cancelFleetTask(w, r, p, ref)
+			return
+		}
 		if what == "" && r.Method == http.MethodGet {
 			t, err := s.ownTask(p, ref)
 			var amb *store.TaskAmbiguity
@@ -297,6 +304,51 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	out["observed_at"] = time.Now().UTC().Format(time.RFC3339)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// cancelFleetTask persists pending-start cancellation without contacting a
+// runtime. This is deliberately not the active-session stop route. The outer
+// viewerOnly, readOnlyGate and viewAsGuard are the same as for other writes.
+func (s *Server) cancelFleetTask(w http.ResponseWriter, r *http.Request, p fleetPrincipal, ref string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST with {}")
+		return
+	}
+	t, err := s.ownTask(p, ref)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			httpError(w, http.StatusNotFound, "no such task of yours")
+			return
+		}
+		taskRefError(w, ref, err)
+		return
+	}
+	var body map[string]json.RawMessage
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	if err := decoder.Decode(&body); err != nil || body == nil || len(body) != 0 {
+		httpError(w, http.StatusBadRequest, "cancel body must be {}")
+		return
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF {
+		httpError(w, http.StatusBadRequest, "cancel body must be one JSON object")
+		return
+	}
+	if t.AuthorityVersion != store.TaskAuthorityVersion {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "TASK_CANCEL_UNAVAILABLE", "error": "this legacy task has no pending-start cancellation; stop its session instead"})
+		return
+	}
+	rec, err := s.Store.CancelUnopenedTask(t.ID, t.Owner, "person cancelled pending start", time.Now())
+	if errors.Is(err, store.ErrIDSwitch) || errors.Is(err, store.ErrTaskConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "TASK_ALREADY_STARTED", "error": "this task has an opened session or recorded result; stop its session instead"})
+		return
+	}
+	if err != nil {
+		taskWriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
 }
 
 // tasksBody is the list's body for owner ("" = everyone's): the records,

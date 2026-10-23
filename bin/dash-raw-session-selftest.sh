@@ -522,5 +522,20 @@ WINS=plan FLEET_MAX_SESSIONS=0 FLEET_CODEX_HOME="$codex_home" run_raw --no-repo 
 grep -q -- "--resume $sid" "$NEWWIN_LOG" && fail "R resumed unrelated rollout metadata"
 ok "R Codex resumes its exact native rollout; unrelated metadata never resumes"
 
+# S: a cancellation while setup ran must not open a window or leave the new
+# scratch tree behind. The authenticated reader is replaced only in this fixture.
+reset_scratch
+cat > "$WORK/bin/fleet-task-record.sh" <<'SH'
+#!/bin/sh
+printf '%s\n' '{"task":{"id":"T17","authority_version":1,"generation":2,"attempt_id":"task:T17:g1","resolved_agent":"codex","cancel_request":"cancel:T17:g2","state":"cancelled"}}'
+SH
+dispatch='{"version":1,"request_id":"cancel-test","requested_agent":"codex","resolved_agent":"codex","agent_source":"explicit","task":"T17","generation":1,"attempt_id":"task:T17:g1"}'
+FLEET_DISPATCH="$dispatch" WINS=plan FLEET_MAX_SESSIONS=0 run_raw --node local
+[ ! -s "$NEWWIN_LOG" ] || fail "S cancelled dispatch opened a window"
+grep -q 'authorization changed or cancelled' "$WORK/err" || fail "S did not reach the current authorization check" "$(cat "$WORK/err")"
+[ ! -d "$WORK/main-scratch-1" ] || fail "S cancelled dispatch left its newly allocated worktree"
+git -C "$MAIN" show-ref --verify -q refs/heads/scratch-1 && fail "S cancelled dispatch left its newly allocated branch"
+ok "S cancelled dispatch opens nothing and releases its newly allocated scratch tree"
+
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

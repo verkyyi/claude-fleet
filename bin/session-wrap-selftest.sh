@@ -13,6 +13,8 @@
 #      fast launch failure return the status with no page (and stamps @wrap_gone);
 #      a launch the LAUNCHER refused (@launch_refused, #2404) stops on the page
 #      even the first time, ↵ retrying it; q → session-end-hook --recycle
+#      old @dispatch metadata does not turn an existing conversation's resume
+#      into a new Hub-authorized start; an offline Hub is never read for it
 #   PK a parked session (task HHV0): @parked before the exit ⇒ no page, the window
 #      reads done, the credential is kept; @park_wake + a seed file ⇒ the same
 #      conversation resumed with the seed as its first turn, the seed claimed once
@@ -107,7 +109,7 @@ grep -q '^    restore_watch' "$BIN/fleet-diskguard.sh" || fail "A: the diskguard
 
 # --------------------------------------------- B: the wrapper, on a real tmux ----
 mkdir -p "$WORK/wbin"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet-park-page.py fleet_session_gate.py fleet_session_fallback.py fleet_repo_authority.py fleet_notice.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet-park-page.py fleet_session_gate.py fleet_session_fallback.py fleet_repo_authority.py fleet_notice.py fleet_dispatch.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 # every window writes its logs into the test's own conf (T909: a run by hand once
 # put SID-1 / CX-9 rows into the operator's session-exit.log)
 mkdir -p "$WORK/conf/logs"
@@ -154,7 +156,7 @@ win() {
   mkdir -p "$WORK/$1"; : > "$WORK/$1/argv"
   local cmd="env CTL='$WORK/$1' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=$2 FLEET_UI_LANG=zh FLEET_CONF_DIR='$WORK/conf' ${WRAP_ENV:-FLEET_EXIT_CLOSE_SECS=0}"
   local wa="--agent claude 'the seed prompt'"; [ -n "${WRAP_ARGS:-}" ] && wa=$WRAP_ARGS
-  cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' $wa; echo WRAP_RC=\$?; exec sleep 600"
+  cmd="${WRAP_PREFIX:-}$cmd '$WORK/wbin/fleet-session-wrap.sh' $wa; echo WRAP_RC=\$?; exec sleep 600"
   if tf has-session -t sw 2>/dev/null; then tf new-window -d -t sw: -n "$1" "$cmd"
   else tf -f /dev/null new-session -d -s sw -n "$1" -x 100 -y 30 "$cmd" || fail "cannot start the isolated tmux server"; fi
 }
@@ -199,6 +201,34 @@ waitfor "w/quiet: the wrapper returned" screen_has w 'WRAP_RC=0'
 CHECKS=$((CHECKS + 1)); [ "$(o w @claude_state)" != exited ] || fail "w/quiet: a fleet exit drew the recovery page"
 eq "w/quiet: no relaunch" "$n" "$(grep -c . "$WORK/w/argv")"
 eq "w/quiet: the marker is consumed" "" "$(o w @wrap_quiet)"
+
+# OFFLINE: a restore/transfer starts a fresh wrapper in a window which already
+# carries its historical accepted dispatch. That metadata is not a new start.
+# Exercise both wrapper entry with --resume and the page's subsequent Enter.
+cat > "$WORK/wbin/fleet-task-record.sh" <<EOF
+#!/bin/sh
+printf 'read\n' >> "$WORK/offline-hub-reads"
+exit 3
+EOF
+_old_dispatch='{"version":1,"request_id":"historical","requested_agent":"claude","resolved_agent":"claude","agent_source":"explicit","task":"T17","generation":1,"attempt_id":"task:T17:g1"}'
+WRAP_PREFIX="tmux set-option -w -t \"\$TMUX_PANE\" @dispatch '$_old_dispatch'; "
+WRAP_ENV="FLEET_EXIT_CLOSE_SECS=0 FLEET_START_DISPATCH=''"
+WRAP_ARGS="--agent claude --resume SID-1"
+win offline 0
+unset WRAP_PREFIX WRAP_ENV WRAP_ARGS
+waitfor "offline: old dispatch permits same-conversation resume without Hub" launches offline 1
+eq "offline: the accepted dispatch stays historical metadata" "$_old_dispatch" "$(o offline @dispatch)"
+eq "offline: initial resume retains the native id" "--agent claude --resume SID-1" "$(sed -n 1p "$WORK/offline/argv")"
+printf rc0 > "$WORK/offline/mode"; : > "$WORK/offline/go"
+waitfor "offline: recovery page is ready" screen_has offline '会话已结束'
+tf send-keys -t sw:offline Enter
+waitfor "offline: Enter resumes again without Hub" launches offline 2
+eq "offline: Enter retains the same native id" "--agent claude --resume SID-1" "$(sed -n 2p "$WORK/offline/argv")"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/offline-hub-reads" ] || fail "offline: history metadata caused a Hub authorization read"
+tf set-option -w -t sw:offline @wrap_quiet 1
+printf rc0 > "$WORK/offline/mode"; : > "$WORK/offline/go"
+waitfor "offline: fixture exits quietly" screen_has offline 'WRAP_RC=0'
+unset _old_dispatch
 
 # PK (task HHV0): a parked session — the gate stamped @parked before its /exit. No
 # page: the window reads idle (done), holds the same conversation, and a wake
@@ -594,8 +624,10 @@ EOF
   printf 'WIN\tissue-3\t%s\tsid-3\t3\texited\t-\t-\n'  "$WORK/wt-3"
 } > "$WORK/econf/fleets/oc/restore.map"
 auto() {
+  # The launcher is a local fake. A managed caller's proxy setting would make
+  # this sandbox request a real subscription credential before reaching it.
   env PATH="$WORK/tbin:$PATH" HOME="$WORK" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
-    SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 "$@" bash "$WORK/inst/bin/fleet-restore.sh" --auto
+    FLEET_CRED_PROXY=0 SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 "$@" bash "$WORK/inst/bin/fleet-restore.sh" --auto
 }
 up() { tf has-session -t oc 2>/dev/null; }
 # a busy machine: the tick never calls --auto (the admission gate is restore_watch's)

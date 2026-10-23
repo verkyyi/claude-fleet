@@ -17,6 +17,9 @@ import { copyOpen } from "./cli";
 import type { Row } from "./work";
 import { toast } from "sonner";
 import { sessionWrite } from "@/shared/sessions";
+import { sendJSON, useMe } from "@/shared/api";
+import { useWorkRows } from "./work-rows";
+import { pendingStartRef } from "./task-cancel";
 
 // the worker a session's record is read by: its live window's; on the new road a
 // parked one has none, and is read (and woken) by the identity the hub names
@@ -32,6 +35,11 @@ export function Workspace({ r }: { r: Row }) {
     toast.info(tr("已打开网页对话。原生终端操作请在 iTerm2 中继续。", "Opened the conversation. Continue native terminal interactions in iTerm2."));
   }, [params, setParams]);
   const pendingRecord = !r.live && !!r.board && ["queued", "starting", "not_seen"].includes(r.board.tag);
+  const cancelRef = pendingStartRef(r);
+  const { reload } = useWorkRows();
+  const { me } = useMe();
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState("");
   const [stopping, setStopping] = useState(false);
   const [details, setDetails] = useState(false);
   const [head, setHead] = useState<Head>({ sync: "" });
@@ -51,6 +59,25 @@ export function Workspace({ r }: { r: Row }) {
     } finally { setStopping(false); }
   };
 
+  const cancelStart = async () => {
+    if (!cancelRef || cancelling || !me || me.read_only || me.view_as || viewAs) return;
+    setCancelling(true);
+    setCancelError("");
+    try {
+      const result = await sendJSON("POST", `/v1/fleet/tasks/${encodeURIComponent(cancelRef)}/cancel`, {});
+      if (result.ok) {
+        toast.info(tr("已撤销启动请求。", "Start request cancelled."));
+        reload();
+      } else {
+        const message = result.status === 409
+          ? tr("会话可能已经启动。请刷新后停止运行会话。", "The session may have started. Refresh and stop the running session.")
+          : tr("没能取消启动", "Could not cancel start");
+        setCancelError(`${message}${result.error ? ` · ${result.error}` : result.status ? ` (HTTP ${result.status})` : tr(" · 网络连接失败", " · Network unavailable")}`);
+        if (result.status === 409) reload();
+      }
+    } finally { setCancelling(false); }
+  };
+
   return (
     <div data-workspace="chat" className="bg-background flex h-full min-h-0 flex-col">
       <header className={cn("border-border/70 flex shrink-0 items-center gap-2 border-b", cn("px-3 pb-2 md:px-4 md:pt-2", viewAs ? "pt-1" : "pt-[calc(env(safe-area-inset-top)+0.25rem)]"))}>
@@ -65,6 +92,11 @@ export function Workspace({ r }: { r: Row }) {
         </div>
         {r.live ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={stopping || !!viewAs} onClick={() => void stop()} aria-label={tr("停止", "Stop")}>
           <Square className="size-4" />{tr("停止", "Stop")}
+        </Button> : null}
+        {pendingRecord && cancelRef ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8"
+          disabled={cancelling || !me || !!me.read_only || !!me.view_as || !!viewAs}
+          onClick={() => void cancelStart()} aria-label={tr("取消启动", "Cancel start")}>
+          <Square className="size-4" />{tr("取消启动", "Cancel start")}
         </Button> : null}
         <Button variant="outline" size="sm" className="h-11 min-w-11 shrink-0 md:h-8 md:min-w-0" aria-label={tr("详情", "Details")} onClick={() => setDetails(true)}>
           <Info className="md:hidden" /><span className="hidden md:inline">{tr("详情", "Details")}</span>
@@ -84,6 +116,7 @@ export function Workspace({ r }: { r: Row }) {
         </DropdownMenu>
       </header>
       <div className="relative min-h-0 flex-1">
+        {cancelError ? <p role="alert" className="px-4 pt-4 text-sm text-destructive">{cancelError}</p> : null}
         {pendingRecord ? <div className="min-w-0 max-w-full space-y-2 p-4 text-sm [overflow-wrap:anywhere]" role="status">
           <p>{tr(...r.tag)}</p><p>{rowAgent(r)}</p>
           {r.board?.context ? <p>{tr(...r.board.context)}</p> : null}

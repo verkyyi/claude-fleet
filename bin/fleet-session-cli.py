@@ -20,6 +20,7 @@
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
                                          issue #2358 — the key never changes)
     fleet close <会话> [--yes]           stop its execution through worker_stop;
+                                         pending task-only rows cancel their start;
                                          no confirmation; history remains resumable
     fleet close --test [--yes]           stop every test row; one confirmation unless --yes
     fleet reap <会话> <方式>             its reap policy — merged[:<dur>] ·
@@ -110,7 +111,7 @@ sys.path.insert(0, str(BIN))
 from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
 VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task", "notices")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
-             "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地"}
+             "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地", "starting": "待启动"}
 
 
 def lib(name, file):
@@ -122,6 +123,18 @@ def lib(name, file):
 
 def say(text):
     print("fleet · " + text, file=sys.stderr)
+
+
+def pending_start_task(row):
+    # Task control lives on the home machine, outside the thin client package.
+    # Keep import-time/help/services and forwarding free of server dependencies.
+    from fleet_task_control import pending_start_task as resolve
+    return resolve(row)
+
+
+def cancel_pending_start(task):
+    from fleet_task_control import cancel_pending_start as cancel
+    return cancel(task)
 
 
 # --- the rows ------------------------------------------------------------------------
@@ -137,7 +150,28 @@ def rows():
     if HOME[0]:
         hub_freshen()
     got = qo.full_rows(os.environ.get("FLEET_SESSION", ""), timeout=15)
-    return own_ids(own_node(got or []))
+    return pending_rows(own_ids(own_node(got or [])))
+
+
+def pending_rows(rs):
+    """Home-only row expansion, after main() has forwarded a thin client."""
+    import fleet_view
+    board = fleet_view.board_read()
+    if not board:
+        return rs
+    groups, _ = fleet_view.board_apply(board, {g: [] for g in fleet_view.GROUPS}, [], [], "", "")
+    known = {r.get("fleet_id") for r in rs if r.get("fleet_id")}
+    for group in groups.values():
+        for r in group:
+            if not pending_start_task(r) or r.get("fid") in known:
+                continue
+            rs.append(dict(key="id:" + r["board"], name=r["name"], title=r["text"],
+                           state="starting", node=r.get("machine") or "", issue="", pr="", reap="",
+                           group="", repo=r.get("repo") or "", ended="", task=r["task"],
+                           record_only=True, pending_start=True, pending_start_explicit=True,
+                           fleet_id=r.get("fid") or "",
+                           code=r.get("code") or ""))
+    return rs
 
 
 def hub_ok_age():
@@ -497,6 +531,9 @@ def resolve(all_rows, query):
     by_key = [r for r in all_rows if r["key"] == q]
     if by_key:
         return by_key, "key"
+    by_task = [r for r in all_rows if q in (r.get("task"), r.get("code"))]
+    if by_task:
+        return by_task, "task"
     if re.fullmatch(r"#?\d+", q):
         return [r for r in all_rows if r["issue"] == q.lstrip("#")], "issue"
     low = q.casefold()
@@ -609,7 +646,7 @@ def cmd_ls(args):
     rs = attach_bus(rs)
     if "--json" in args:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test",
-                "worker_id", "fleet_id", "ended")
+                "worker_id", "fleet_id", "ended", "task", "code", "pending_start", "record_only")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"), ("ask_kind", "ask_kind"), ("ask", "ask"))
@@ -687,8 +724,6 @@ def cmd_close(args):
     row, rc = one(rows(), rest[0])
     if row is None:
         return rc
-    if not remote_only(row, "停止"):
-        return 1
     # --yes / -y remain accepted for scripts written for the former reap flow.
     # A person's explicit stop does not wait for a result, loop or reap policy.
     return stop_row(row)
@@ -717,6 +752,13 @@ def close_tests(yes):
 
 def stop_row(row):
     """Request worker_stop; the returned operation distinguishes acceptance from exit."""
+    task = pending_start_task(row)
+    if task:
+        rc, line = cancel_pending_start(task)
+        print("取消启动 %s：%s" % (row["name"], line), file=sys.stdout if rc == 0 else sys.stderr)
+        return rc
+    if not remote_only(row, "停止"):
+        return 1
     ok, line = hub_write("worker_stop", {"worker_id": worker_id(row)}, wait=90)
     print("停止 %s：%s" % (row["name"], line), file=sys.stdout if ok else sys.stderr)
     return 0 if ok else 1

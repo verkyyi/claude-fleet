@@ -344,6 +344,33 @@ PY
 )"
 
 # --- H. through bin/fleet and the client server's environment ---------------------------
+# The installed thin client deliberately has neither task control nor the tmux
+# panel. Import and forward before trying to resolve any local task rows.
+out=$(python3 - "$BIN" <<'PY'
+import importlib.abc, importlib.util, os, sys
+from unittest.mock import patch
+
+class NoServerModules(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in ("fleet_task_control", "fleet_view"):
+            raise ModuleNotFoundError("server-only import before forwarding: " + fullname)
+
+sys.meta_path.insert(0, NoServerModules())
+spec = importlib.util.spec_from_file_location("cli", sys.argv[1] + "/fleet-session-cli.py")
+cli = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cli)
+for args in (["ls"], ["show", "T17"], ["close", "T17"]):
+    with patch.dict(os.environ, {"FLEET_SESSION_CLI_ROWS": ""}), \
+            patch.object(cli, "road", return_value="home"), \
+            patch.object(cli, "over_home", return_value=0) as forwarded, \
+            patch.object(cli, "home_setup", side_effect=AssertionError("local home setup")):
+        assert cli.main(args) == 0
+        forwarded.assert_called_once_with(args[0], args[1:])
+print("forwarded without server modules")
+PY
+); rc=$?
+eq "H thin client imports no server modules before forwarding" 0 "$rc"
+eq "H ls/show/close forward before task rows are read" "forwarded without server modules" "$out"
 # no fleet here (issue #3004): the home over fleet-thin.py --run — none reachable says so
 err=$(FLEET_SESSION_CLI_ROAD=home FLEET_THIN_ARGV_CMD=false FLEET_THIN_LOG="$W/thin.log" bash "$BIN/fleet" ls 2>&1 >/dev/null); rc=$?
 eq "H no client, no home reachable → exit 1" 1 "$rc"
