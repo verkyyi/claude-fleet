@@ -689,3 +689,4 @@
 | 节点已生成原生退出证明后崩溃，或 Hub 接受证明但响应丢失，随后 stop 重投或结果更新时间 | 首次证明丢失或重生成时间戳，历史回执无法幂等重放；Hub 已释放后不再投递 stop，节点永远收不到确认 | 首次 proof 和固定幂等键保存在原 stop 操作的私有 result 中；更新结果原子保留，公开投影不带大包；heartbeat 有界扫描同一 journal，仅重发原包，不重做 stop、不清除栅栏 | `native-exit-submit-replay` |
 
 | Parent 回报入口退役后，旧工具、委托代收或积压队列仍投递报告 | 会话继续被旧协调链唤醒；或回执虚报送达、原结果丢失 | 旧报告入口明确退役；报告积压保留原文并永久失败，不转换成提醒；自身结果历史与普通消息保留 | `parent-report-retired` |
+| Hub 尚未授予 claim 就已停止，节点离线导致用户永远等退出；或 claim 响应丢失、历史 stop 被误认未启动 | 未开始的任务无法确认停止，或未知活进程被当成已退出 | 同一 Task 行锁下的 canonical stop 与精确 start/代/attempt/endpoint 关联证明从未 claim；单独返回未启动事实，保留取消绑定，不伪造原生退出，不改结果 | `task-unclaimed-stop-proof` |
