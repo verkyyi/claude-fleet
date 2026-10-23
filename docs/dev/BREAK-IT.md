@@ -16,6 +16,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
+| 旧会话结果、关闭事件或创建时间超时补偿落在已接续的受控 Task 上 | 新代次仍有启动绑定，却被旧事件写成 succeeded/cancelled，下一次接续被拒绝 | ID 历史照常保存；旧投影跳过受控 Task，写入对比代次及绑定快照，补偿在事务内复核 | `task-history-current-generation` |
 | 历史 Asked、结果或旧窗口覆盖当前 Task；短码随终态改变目标 | 错示需回答或打开旧会话 | 当前执行绑定、原生状态与固定 Task 代码；前缀歧义拒绝，历史保留 | `task-current-view` |
 | 同一 Task 保留的原生会话继续运行，但编号或任务记录仍有上一轮的 blocked/failed/done/merged 结果 | tmux 把空闲误示为需要回答或完成；Web 兼容列表让旧失败压住当前运行 | 当前会话只用原生观测展示状态；历史结果保留在编号和任务记录，不回填 live state；真正原生需要回答、运行、未知和历史行各自保留 | `task-result-overrides-native` |
 | 新 Task 仍写 Parent 关系，或删字段后旧启动 token 重放冲突 | 新任务继续依赖父会话；重试可能重开任务或无法恢复原接受结果 | 新请求不写 Parent；旧接受记录原字节保留，仅比较已知传输 Parent 字段的规范化投影，任务正文差异仍拒绝 | `task-parent-write-retired` |
@@ -703,4 +704,5 @@
 | 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
 | 继续授权未 claim 就停止，再次重试；或连续多次重试、跨 Agent 选择 | 未启动任务无法继续，或把原生退出和未启动混为一体、丢失之前真实工作区 | 本人显式 continue 认可精确 canonical 未领取停止；逐代验证原生退出或未领取证明，认证读取分别给直接来源与真实工作区来源，旧授权不能重用 | `task-continue-unclaimed` |
+| 受控 Codex 的 `--no-daemon` 分支绕过原生执行登记 | 已停止任务仍进入 Codex exec，且缺少可终止的原生根记录 | 同一 native_command 边界校验停止并登记 Codex client；非受控 argv 不变，缺少 server 仍不签发完整退出证明 | `codex-no-daemon-fence` |
 | 节点未 claim 就重试，旧 allocation 被当作运行中或已有窗口被误认成未启动 | 任务无法重试，或复活旧 FID、覆盖真实执行与工作区 | 认证未领取停止仅退休精确纯 allocation；窗口、原生、历史登记均拒绝；既有控制日志保留退休事实，新会话仍需 Hub claim | `task-unclaimed-node` |
