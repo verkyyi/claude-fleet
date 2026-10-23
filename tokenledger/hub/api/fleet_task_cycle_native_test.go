@@ -57,7 +57,7 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 			t.Fatal("dry-run boundaries not proven")
 		}
 		nativeCycleOwnerSandbox(t)
-		t.Log("dry-run: real Control inventory and owner HTTP auth; zero tmux/native starts, credentials or model requests")
+		t.Log("dry-run: real Control inventory and owner HTTP auth; zero Coding Agent starts, credential mint or model requests (tmux only with explicit PANE_CHECK)")
 		return
 	}
 	// macOS Unix socket paths are limited to 104 bytes. Its default
@@ -452,6 +452,46 @@ func nativeCycleOwnerSandbox(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != 401 {
 		t.Fatalf("anonymous node start read: HTTP %d, want 401", response.StatusCode)
+	}
+
+	if os.Getenv("FLEET_NATIVE_TASK_PANE_CHECK") == "1" {
+		root, err := os.MkdirTemp("/tmp", "t970-native-pane-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if !t.Failed() {
+				_ = os.RemoveAll(root)
+			} else {
+				t.Logf("pane diagnostic evidence retained: %s", root)
+			}
+		}()
+		helper, _ := filepath.Abs("testdata/task_cycle_native.py")
+		bin, _ := filepath.Abs("../../../bin")
+		payload, _ := json.Marshal(map[string]any{"root": root, "bin": bin, "url": h.http.URL, "token": tok, "fleet": f.FleetID, "task": ref, "operation_id": task.OperationID})
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "python3", helper, "--pane-read")
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = 10 * time.Second
+		cmd.Stdin = bytes.NewReader(payload)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("isolated no-model pane read: %v", err)
+		}
+		var result struct {
+			ModelRequests     int  `json:"model_requests"`
+			CredentialsMinted bool `json:"credentials_minted"`
+			Reads             []struct {
+				Enabled bool `json:"hub_enabled"`
+				Exit    int  `json:"read_exit"`
+				Same    bool `json:"same_start"`
+			} `json:"pane_reads"`
+		}
+		if json.Unmarshal(out, &result) != nil || result.ModelRequests != 0 || result.CredentialsMinted || len(result.Reads) != 2 || result.Reads[0].Exit != 3 || result.Reads[1].Exit != 0 || !result.Reads[1].Same {
+			t.Fatal("pane red/green authority evidence invalid")
+		}
+		t.Log("isolated real pane: Hub-off exit3 -> Hub-on exact authenticated start; zero native/model/credential mint")
 	}
 
 }

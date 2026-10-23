@@ -108,7 +108,7 @@ class Probe:
         fleetdir = self.conf / 'fleets' / self.socket
         (fleetdir / 'repos').mkdir(parents=True)
         (fleetdir / 'identity').write_text(self.fleet + '\n')
-        (fleetdir / 'conf').write_text('FLEET_MAX_SESSIONS=2\nCCQUOTA_FLEET=0\nFLEET_AGENT=codex\n')
+        (fleetdir / 'conf').write_text('FLEET_MAX_SESSIONS=2\nCCQUOTA_FLEET=1\nFLEET_AGENT=codex\n')
         (fleetdir / 'repos' / '.order').write_text('native-fixture\n')
         (fleetdir / 'repos' / 'native-fixture.conf').write_text(
             'FLEET_REPO=native/fixture\nFLEET_MAIN=' + shlex.quote(str(self.repo)) + '\nFLEET_BASE_BRANCH=main\n')
@@ -392,10 +392,63 @@ class Probe:
         raise Refused('unknown fixture action')
 
 
+
+def pane_read(data):
+    """Real isolated tmux reader, never a Coding Agent launch or credential mint."""
+    data['live'] = False
+    p = Probe(data)
+    try:
+        p.tmux('new-session', '-d', '-s', p.socket, '-n', 'home', '-c', str(p.home))
+        p.tmux_started = True
+        p.tmux('set-option', '-g', 'exit-empty', 'off')
+        p.tmux('set-option', '-w', '-t', p.socket + ':home', '@fleet_role', 'home')
+        conf = p.conf / 'fleets' / p.socket / 'conf'
+        enabled = conf.read_text()
+        answers = []
+        for hub_on in (False, True):
+            conf.write_text(enabled if hub_on else enabled.replace('CCQUOTA_FLEET=1', 'CCQUOTA_FLEET=0'))
+            output = p.root / ('pane-start-%d.json' % hub_on)
+            status = p.root / ('pane-status-%d.txt' % hub_on)
+            command = shlex.join(['bash', str(p.bin / 'fleet-task-record.sh'), 'execution-start', data['task']])
+            script = command + ' > ' + shlex.quote(str(output)) + ' 2>/dev/null; printf "%s" "$?" > ' + shlex.quote(str(status))
+            p.tmux('new-window', '-d', '-t', p.socket, '-n', 'reader', 'bash', '-c', script)
+            deadline = time.monotonic() + 12
+            while not status.exists() and time.monotonic() < deadline:
+                time.sleep(.025)
+            if not status.exists(): raise Refused('isolated pane read deadline')
+            code = int(status.read_text())
+            if not hub_on:
+                if code != 3: raise Refused('disabled fixture Hub did not reproduce pane refusal')
+                answers.append({'hub_enabled': False, 'read_exit': 3})
+            else:
+                if code != 0: raise Refused('enabled fixture Hub still refused authenticated pane read')
+                authority = json.loads(output.read_text())
+                if authority['start']['operation_id'] != data['operation_id']:
+                    raise Refused('pane read returned a different immutable start')
+                answers.append({'hub_enabled': True, 'read_exit': 0, 'same_start': True})
+            # Wait for the short reader shell to exit, not just its status write.
+            deadline = time.monotonic() + 2
+            while 'reader' in p.tmux('list-windows', '-t', '=' + p.socket, '-F', '#{window_name}').splitlines() and time.monotonic() < deadline:
+                time.sleep(.025)
+        return {'pane_reads': answers, 'model_requests': p.requests, 'credentials_minted': bool(p.cred_sid)}
+    finally:
+        result = p.close()
+        if not result['closed'] or result['fixture_forced_cleanup']:
+            raise Refused('isolated pane cleanup not confirmed')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--pane-read', action='store_true')
     args = parser.parse_args()
+    def interrupted(signum, frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    if args.pane_read:
+        print(json.dumps(pane_read(json.load(sys.stdin))))
+        return
     if args.dry_run:
         # No credential discovery or mint and no tmux/native process in dry-run.
         with tempfile.TemporaryDirectory(prefix='native-cycle-dry-') as root:
@@ -410,10 +463,6 @@ def main():
         return
     p = None
     timer = None
-    def interrupted(signum, frame):
-        raise SystemExit(128 + signum)
-    signal.signal(signal.SIGTERM, interrupted)
-    signal.signal(signal.SIGINT, interrupted)
     try:
         data = json.loads(sys.stdin.readline())
         p = Probe(data)
