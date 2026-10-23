@@ -183,7 +183,6 @@ from pathlib import Path
 if str(Path(__file__).absolute().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).absolute().parent))
 import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
-from fleet_task_control import pending_start_task, cancel_pending_start
 
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -2219,14 +2218,12 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
-        e["worker_id"] = r.get("worker_id") or ""
         # Either source losing observation is enough to withhold a live glyph.
         e["lost"] = bool(e.get("lost") or r.get("lost"))
         e["source_order"] = source_order
         # The old board's queued tag also covers reserved, undispatched tasks.
         # Only starting proves an accepted start; never infer it from no session.
         e["pending_start"] = bool(r["pending_start"]) if "pending_start" in r else r.get("tag") == "starting"
-        e["pending_start_explicit"] = r.get("pending_start") is True
         if "running" in r:
             e["running"] = r["running"] is True
         if "loop" in r:
@@ -4155,9 +4152,6 @@ def far_live(r):
 # Each entry: id · label · when · local · far · ask (+ prompt / choices / slow: run
 # in the background from the popup — a stop, a reap, a move take seconds).
 ACTIONS = [
-    {"id": "cancelstart", "label": lambda r: "Cancel start" if ui_lang() == "en" else "取消启动",
-     "when": lambda r: bool(pending_start_task(r)), "local": lambda r, a, f: "cancelstart",
-     "far": lambda r, a, f: "cancelstart", "ask": None, "slow": True, "thread": True},
     # 进入
     {"id": "enter", "label": lambda r: say("view_act_enter"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: "go", "far": lambda r, a, f: "go", "ask": None},
@@ -4279,8 +4273,7 @@ def act_row(fleet, e):
 def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
     if r.get("record_only"):
-        a = ACTION["cancelstart"]
-        return [(a, a["label"](r))] if pending_start_task(r) else []
+        return []     # a record with no session yet (A4G2): nothing to act on here
     out = []
     for a in ACTIONS:
         if a.get("rowless") or (a["far"] if r.get("far") else a["local"]) is None:
@@ -4297,7 +4290,7 @@ def menu_of(r):
 # in ACTIONS for `fleet view-act` and the command line, and are done from
 # elsewhere (进入 answers and resumes; ⌃\ the shell; ⌃T the pin). A
 # reaped session's one item is 恢复.
-PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "webopen", "stop", "cancelstart")
+PAGE_ACTIONS = ("resume", "enter", "pr", "rename", "agent", "webopen", "stop")
 
 
 def page_of(r, missing=None):
@@ -4305,10 +4298,7 @@ def page_of(r, missing=None):
     `why` non-empty = shown grey, unnumbered, skipped — the switch to an agent
     this machine lacks (`missing`: grid_read's {agent: why})."""
     if r.get("record_only"):
-        if pending_start_task(r):
-            a = ACTION["cancelstart"]
-            return [(a, a["label"](r), "")]
-        why = "No live session or confirmed pending start; refresh to check" if ui_lang() == "en" else "暂无运行会话或已确认的待启动请求；请刷新核对"
+        why = "No live session; pending-request cancellation is unavailable here" if ui_lang() == "en" else "暂无运行会话；此入口尚不支持撤销待启动请求"
         a = ACTION["stop"]
         return [(a, a["label"](r), why)]
     have = {a["id"]: (a, label) for a, label in menu_of(r)}
@@ -4352,11 +4342,6 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     fn = a["far"] if r.get("far") else a["local"]
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
-    if argv == "cancelstart":
-        task = pending_start_task(r)
-        rc, said = cancel_pending_start(task, ui_lang())
-        hub_reread(fleet)
-        return rc, said, False
     if argv == "pr-unknown":
         return 1, pr_label(r), False
     if argv in ("go", "shell") and lost_msg(r):

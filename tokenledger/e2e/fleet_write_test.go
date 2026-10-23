@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
 // End to end through a real agent and the REAL fleet-control.py: the hub's
@@ -32,13 +31,8 @@ func TestFleetWriteIntegrationRealFleetControl(t *testing.T) {
 	h := newFleetHarness(t)
 	home := t.TempDir()
 	installFakeFleetControl(t, py, bin, home, "fleet-alpha", writeRepo)
-	token := h.Enroll(t, "mac-c")
-	reads := filepath.Join(home, "task-reads")
-	t.Setenv("FLEET_TEST_TASK_HUB_URL", h.HTTP.URL)
-	t.Setenv("FLEET_TEST_TASK_NODE_TOKEN", token)
-	t.Setenv("FLEET_TEST_TASK_READS", reads)
 	a, err := agent.New(agent.Config{
-		HubURL: h.HTTP.URL, Token: token, Home: home,
+		HubURL: h.HTTP.URL, Token: h.Enroll(t, "mac-c"), Home: home,
 		StateDir: filepath.Join(home, "state"), SessionsDir: filepath.Join(home, "sessions"),
 		Sources: "claude", LiveInterval: 150 * time.Millisecond, ScanInterval: time.Hour, LimitsInterval: time.Hour,
 		Fleet: true, Version: "it-write",
@@ -89,42 +83,6 @@ func TestFleetWriteIntegrationRealFleetControl(t *testing.T) {
 	cmd.Stdin = bytes.NewReader(get)
 	if out, err = cmd.Output(); err != nil || !strings.Contains(string(out), `"status":"succeeded"`) {
 		t.Fatalf("the node's own journal for %s: %s (%v)", id, out, err)
-	}
-	if _, err := os.Stat(reads); !os.IsNotExist(err) {
-		t.Fatalf("legacy start must not read task authority: %v", err)
-	}
-	// An explicit provider creates an accepted task. The same real controller
-	// must now fetch that record over authenticated HTTP before its adapter runs.
-	accepted := postFleet(t, h, "worker_start", map[string]any{
-		"issue": 42, "fleet_id": fid, "idempotency_key": "it-42-accepted", "coding_agent": "claude",
-	}, 200)
-	acceptedID := accepted["operation_id"].(string)
-	waitFor(t, 15*time.Second, "accepted task executor outcome", func() bool {
-		final = getFleet(t, h, "/v1/fleet/operation_get?operation_id="+acceptedID, 200)
-		return final["status"] == "succeeded" || final["status"] == "failed"
-	})
-	if final["status"] != "succeeded" {
-		t.Fatalf("accepted task operation = %v; want succeeded", final)
-	}
-	journal, err := h.Srv.Store.FleetOperation(acceptedID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var request struct {
-		Params struct {
-			Task string `json:"task"`
-		} `json:"params"`
-	}
-	if err := json.Unmarshal([]byte(journal.Request), &request); err != nil || request.Params.Task == "" {
-		t.Fatalf("accepted request missing task: %s (%v)", journal.Request, err)
-	}
-	record, err := h.Srv.Store.FleetTask(store.ParseTaskRef(request.Params.Task))
-	if err != nil || record.AuthorityVersion != 1 {
-		t.Fatalf("accepted record: %+v %v", record, err)
-	}
-	readLog, err := os.ReadFile(reads)
-	if err != nil || strings.TrimSpace(string(readLog)) != request.Params.Task {
-		t.Fatalf("controller did not read its real Hub task: %q %v", readLog, err)
 	}
 }
 

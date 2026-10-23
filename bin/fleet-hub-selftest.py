@@ -52,7 +52,7 @@ class Sandbox:
         (repos / ".order").write_text("example-project\n")
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_park_metrics.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-client-core.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
-                         "fleet_loop_mark.py", "fleet_iso.py", "fleet_id.py", "fleet_dispatch.py",
+                         "fleet_loop_mark.py", "fleet_iso.py", "fleet_id.py",
                          "fleet-reap-policy.sh", "fleet_reap_policy.py", "fleet-orphan-reports.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"

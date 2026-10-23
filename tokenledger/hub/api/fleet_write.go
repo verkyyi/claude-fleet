@@ -858,16 +858,6 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	if err := s.authorize(p, fleetScopeOf[tool], w.configKey); err != nil {
 		return nil, err
 	}
-	// Replaying an existing operation never authorizes another launch, even
-	// when its task has since been cancelled.
-	if o, err := s.Store.FleetOperationByIdem(p.Actor, idem); err == nil {
-		if tool == "worker_start" {
-			return replayDispatch(o, w)
-		}
-		return replayed(o, w)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
 	if tool == "worker_start" {
 		if err := s.acceptDispatch(p, &w); err != nil {
 			return nil, err
@@ -979,9 +969,6 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		op.Placement = string(b)
 	}
 	if err := s.Store.InsertFleetOperation(op); err != nil {
-		if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskInvalid) {
-			return nil, fault("INVALID_STATE", "task start authorization is no longer valid; nothing was sent")
-		}
 		if errors.Is(err, store.ErrIdemTaken) {
 			// A concurrent call with the same key journalled first: it
 			// is the one that runs.

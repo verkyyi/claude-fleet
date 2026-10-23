@@ -135,7 +135,6 @@ FLEET_DEPS_SHARE_LOG               path: state/log location override (fleet-deps
 FLEET_DEPS_SHARE_TIMEOUT           knob: wall-clock budget for one worktree's share pass (fleet-lib.sh fleet_worktree_deps_share, 60)
 FLEET_DISPATCH_AGENTS_HERE         seam: the agents installed here, comma-separated, for ⌘T's agent step (fleet-quick-dispatch.py, #3004)
 FLEET_DISPATCH                     handoff: resolved coding provider and accepted request/task identity across spawn adapters (#4392)
-FLEET_START_DISPATCH               handoff: accepted task start checked only by the initial wrapper, discarded before native launch; never used for history resume (NV03)
 FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accepted dispatch to this caller-owned temporary file (#4392)
 FLEET_LAUNCH                       legacy: retired with the launch proof / start reservation (EPIC T497 C8) — a session started before it still carries it; fleet_repo_authority.py strips it at a start
 FLEET_LAUNCH_CONTEXT               legacy: retired with the launch proof / start reservation (EPIC T497 C8) — a session started before it still carries it; fleet_repo_authority.py strips it at a start

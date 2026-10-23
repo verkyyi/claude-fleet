@@ -13,12 +13,10 @@ import fcntl
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 import subprocess
 import sys
 import time
-import uuid
 
 BIN = Path(__file__).resolve().parent
 TERMINAL = ("succeeded", "failed", "cancelled", "refused")
@@ -221,49 +219,6 @@ def cancel(task, event):
                               evidence="explicit cancel request; no window ever opened it"))
     print("CANCELLED\ntask: %s\nnote: no window opened it; nothing to stop" % code(t, task))
     return 2
-
-
-def pending_start_task(row):
-    """Only an explicit pending, record-only row may cancel a task's start."""
-    task = row.get("task") or ""
-    if (row.get("pending_start") is True and row.get("pending_start_explicit") is True
-            and row.get("record_only") is True
-            and not any(row.get(k) for k in ("worker_id", "running", "lost", "gone", "ended"))
-            and isinstance(task, str) and re.fullmatch(r"T[1-9][0-9]*", task)):
-        return task
-    return ""
-
-
-def cancel_pending_start(task, lang="zh"):
-    """The panel/CLI cancellation road; owner authorization stays in the node API.
-
-    Re-read the authoritative record, then let the mutation transaction refuse
-    any session opened in between. Never fall through to stopping another ID.
-    """
-    en = lang == "en"
-    changed = ("Task changed or a session opened; refresh the list and stop the live session if present."
-               if en else "任务已变化或会话已打开；请刷新列表，若已有会话请对该会话执行停止。")
-    try:
-        if not re.fullmatch(r"T[1-9][0-9]*", task or ""):
-            return 1, changed
-        t, view = record_view(task)
-        if ((t.get("task") or t.get("id")) != task or t.get("worker_id")
-                or t.get("session_key") or view.get("started") or view.get("live")):
-            return 1, changed
-        if t.get("state") != "cancelled" and t.get("outcome") != "cancelled":
-            if (t.get("outcome") or t.get("state") not in ("accepted", "starting")
-                    or type(t.get("generation")) is not int or t["generation"] < 1):
-                return 1, changed
-            got = call("mutate", task, dict(kind="transition", idempotency_key="cancel-start:" + str(uuid.uuid4()),
-                       generation=t["generation"], expected_worker="", state="cancelled",
-                       evidence="operator cancelled pending start; no session observed"))
-            if (not isinstance(got, dict) or (got.get("task") or got.get("id")) != task
-                    or (got.get("state") != "cancelled" and got.get("outcome") != "cancelled")):
-                return 1, ("Cancellation not confirmed; refresh before retrying." if en else "取消启动尚未确认；请刷新后核对。")
-    except (ValueError, OSError, subprocess.SubprocessError, AttributeError, TypeError):
-        return 1, (("Cancellation not confirmed. " if en else "取消启动未确认。") + changed)
-    return 0, ("Start cancelled; this does not confirm any remote process has exited." if en else
-               "已取消启动；这不表示已确认远端进程退出。")
 
 
 def orphan(r, why):

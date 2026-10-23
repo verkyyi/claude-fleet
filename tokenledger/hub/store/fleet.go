@@ -341,41 +341,23 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 		return err
 	}
 	defer tx.Rollback()
-	var taskRef string
-	var taskGeneration int64
 	if o.Action == "worker_start" {
 		// Every start is its owner's, whatever repo it names — or none
 		// (claude-fleet#4896): the gate reads that person's authority only.
 		if o.TaskOwner == "" {
 			o.TaskOwner = o.Actor
 		}
-		if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
-			return err
-		}
 		_, accepted := repoOfStart(o)
 		if err = s.ownerStartTx(tx, o.TaskOwner, accepted); err != nil {
 			return err
 		}
-		// Replay is not a fresh authorization, even after cancellation.
-		var existing string
-		err = tx.QueryRow(`SELECT id FROM fleet_operations WHERE actor = ? AND idem = ?`, o.Actor, o.Idem).Scan(&existing)
-		if err == nil {
-			return ErrIdemTaken
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		taskRef, taskGeneration, err = s.fenceTaskStartTx(tx, o)
-		if err != nil {
-			return err
-		}
 	}
 	res, err := tx.Exec(`INSERT INTO fleet_operations
-		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id, task_owner, task_ref, task_generation)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?)
+		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id, task_owner)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
 		ON CONFLICT(actor, idem) DO NOTHING`,
 		o.ID, o.FleetID, o.Action, o.Request, o.Actor, o.Idem, o.Status,
-		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement, o.WorkerID, o.TaskOwner, taskRef, taskGeneration)
+		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement, o.WorkerID, o.TaskOwner)
 	if err != nil {
 		return err
 	}
@@ -387,10 +369,8 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 
 // UpdateFleetOperation records a newer status and result for an operation.
 func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ?
-		AND NOT (action = 'worker_start' AND status = 'failed' AND COALESCE(result, '') = ?)
-		AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'task_blocker', 'task_blocker_event', 'repo_local_start', 'repo_authority')`,
-		status, resultJSON, at.UTC().Format(rfc), id, taskStartCancelledResult)
+	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'task_blocker', 'task_blocker_event', 'repo_local_start', 'repo_authority')`,
+		status, resultJSON, at.UTC().Format(rfc), id)
 	return err
 }
 

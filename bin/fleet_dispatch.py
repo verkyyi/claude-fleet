@@ -6,10 +6,7 @@ by the authority; neither labels nor destination defaults may rewrite it.
 """
 import argparse
 import json
-import os
-from pathlib import Path
 import re
-import subprocess
 import sys
 import uuid
 
@@ -80,42 +77,6 @@ def placement_check(value, task, code):
         raise ValueError("dispatch placement did not succeed; no local fallback")
 
 
-def read_current(task):
-    """Use the existing authenticated task reader, with no local status cache."""
-    result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), "get", task],
-                            capture_output=True, text=True, timeout=15,
-                            env=dict(os.environ, FLEET_HUB_TIMEOUT="10"))
-    if result.returncode:
-        raise ValueError("dispatch task authorization unavailable; start refused")
-    response = json.loads(result.stdout)
-    return response.get("task") if isinstance(response, dict) else None
-
-
-def check_current(value, *, read=None):
-    """Refuse a cancelled/stale accepted start, without adopting legacy input.
-
-    This read is a last-moment fence, not a claim that a process has exited or
-    a substitute for atomic launch/stop execution-domain admission.
-    """
-    if value is None:
-        return
-    validate(value)
-    if not value.get("task"):
-        return
-    try:
-        record = (read or read_current)(value["task"])
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        raise ValueError("dispatch task authorization unavailable; start refused") from exc
-    if (not isinstance(record, dict) or record.get("authority_version") != 1
-            or (record.get("task") or record.get("id")) != value["task"]
-            or record.get("generation") != value["generation"]
-            or record.get("attempt_id") != value["attempt_id"]
-            or record.get("resolved_agent") != value["resolved_agent"]
-            or record.get("cancel_request")
-            or record.get("state") == "cancelled" or record.get("outcome") == "cancelled"):
-        raise ValueError("dispatch task authorization changed or cancelled; start refused")
-
-
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--agent", action="append", default=[])
@@ -127,15 +88,12 @@ def main():
     p.add_argument("--placement-code", type=int)
     p.add_argument("--task", default="")
     p.add_argument("--with-agent", action="store_true", help="print the resolved agent before the JSON envelope")
-    p.add_argument("--check-current", action="store_true", help="refuse a cancelled/stale accepted task before starting")
     a = p.parse_args()
     try:
         value = resolve(a.agent, a.template, a.label, a.default,
                         json.loads(a.accepted) if a.accepted else None, a.request_id)
         if a.placement_code is not None:
             placement_check(value, a.task, a.placement_code)
-        if a.check_current:
-            check_current(value)
     except (ValueError, TypeError) as e:
         p.error(str(e))
     if a.with_agent:

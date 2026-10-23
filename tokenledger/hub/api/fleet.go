@@ -788,13 +788,6 @@ func (s *Server) OperationGet(req *http.Request, opID string) (map[string]any, e
 	var reconcileErr error
 	if o.Status != "succeeded" && o.Status != "failed" {
 		reconcileErr = s.reconcileOperation(ctx, &o)
-		if reconcileErr != nil {
-			// Cancellation can commit while an offline node read is pending.
-			// Its durable result wins over that read's transport error.
-			if latest, err := s.Store.FleetOperation(o.ID); err == nil && (latest.Status == "failed" || latest.Status == "succeeded") {
-				o, reconcileErr = latest, nil
-			}
-		}
 	}
 	out := operationView(o)
 	if reconcileErr != nil {
@@ -821,9 +814,7 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 		if err := s.Store.UpdateFleetOperation(o.ID, "failed", string(b), now); err != nil {
 			return err
 		}
-		if *o, err = s.Store.FleetOperation(o.ID); err != nil {
-			return err
-		}
+		o.Status, o.Result, o.Updated = "failed", string(b), now
 		s.progressOp(*o)
 		return nil
 	}
@@ -850,11 +841,8 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	if err := s.Store.UpdateFleetOperation(o.ID, remote.Status, string(remote.Result), now); err != nil {
 		return err
 	}
-	previous := o.Status
-	if *o, err = s.Store.FleetOperation(o.ID); err != nil {
-		return err
-	}
-	changed := previous != o.Status
+	changed := o.Status != remote.Status
+	o.Status, o.Result, o.Updated = remote.Status, string(remote.Result), now
 	if settled, err := s.settleNeverAppeared(o, now); err != nil {
 		return err
 	} else if settled {

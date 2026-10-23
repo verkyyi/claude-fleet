@@ -4,8 +4,6 @@
 No live hub, tmux server, credentials or agent processes are used.
 """
 import importlib.util
-import contextlib
-import io
 import os
 from pathlib import Path
 import sys
@@ -16,14 +14,10 @@ from unittest.mock import patch
 BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(BIN))
 import fleet_view as v
-import fleet_task_control as task_control
 
 spec = importlib.util.spec_from_file_location("quickopen", BIN / "fleet-quickopen.py")
 qo = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qo)
-spec = importlib.util.spec_from_file_location("session_cli", BIN / "fleet-session-cli.py")
-cli = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cli)
 
 
 def row(target, **facts):
@@ -169,98 +163,7 @@ class TaskList(unittest.TestCase):
         pending = row("id:pending", record_only=True, pending_start=True)
         a, _, why = v.page_of(pending)[0]
         self.assertEqual(a["id"], "stop")
-        self.assertIn("请刷新核对", why)
-
-    def pending(self, **facts):
-        return row("id:reserved-fid", task="T17", record_only=True, pending_start=True,
-                   pending_start_explicit=True, **facts)
-
-    def test_cancel_start_only_for_explicit_pending_records(self):
-        e = self.pending()
-        a, label, why = v.page_of(e)[0]
-        self.assertEqual((a["id"], label, why), ("cancelstart", "取消启动", ""))
-        self.assertEqual(v.menu_of(e)[0][0]["id"], "cancelstart")
-        for changed in (dict(task=""), dict(task="id:T17"), dict(task=17), dict(record_only=False),
-                        dict(pending_start=False), dict(pending_start_explicit=False),
-                        dict(worker_id="fleet/fid"), dict(lost=True), dict(gone=True), dict(running=True)):
-            with self.subTest(changed=changed):
-                r = dict(e, **changed)
-                self.assertEqual(task_control.pending_start_task(r), "")
-                self.assertNotIn("cancelstart", [a["id"] for a, _, why in v.page_of(r) if not why])
-
-    def test_cli_reuses_board_projection_without_guessing_task_from_key(self):
-        pending = dict(id="reserved-fid", task="T17", code="AB12", title="Queued work",
-                       group="queue", tag="starting", pending_start=True, running=False)
-        board = dict(rows=[pending, dict(pending, id="legacy", task="T18", pending_start=False),
-                          dict(pending, id="live", task="T19", worker_id="fleet/live"),
-                          dict(pending, id="id:T20", task=""),
-                          {k: val for k, val in dict(pending, id="old", task="T21").items() if k != "pending_start"}])
-        with patch.object(v, "board_read", return_value=board):
-            rs = cli.pending_rows([])
-        self.assertEqual([r["task"] for r in rs], ["T17"])
-        self.assertEqual(cli.resolve(rs, "T17")[0], rs)
-        self.assertEqual(cli.resolve(rs, "AB12")[0], rs)
-        with patch.object(v, "board_read", return_value=board):
-            known = [dict(key="@1", fleet_id="reserved-fid")]
-            self.assertEqual(cli.pending_rows(known), known)
-        with patch.object(v, "board_read", return_value=None):
-            self.assertEqual(cli.pending_rows([]), [])
-
-    def test_pending_mutation_uses_fresh_generation_and_owner_scoped_reader(self):
-        t = dict(id="T17", authority_version=1, generation=4, state="starting")
-        with patch.object(task_control, "call", side_effect=[{"task": t}, {"id": "T17", "state": "cancelled"}]) as call:
-            rc, said = task_control.cancel_pending_start("T17")
-        self.assertEqual(rc, 0)
-        self.assertIn("不表示已确认远端进程退出", said)
-        self.assertEqual(call.call_args_list[0].args[:2], ("get", "T17"))
-        action, task, body = call.call_args_list[1].args
-        self.assertEqual((action, task, body["generation"], body["expected_worker"], body["state"]),
-                         ("mutate", "T17", 4, "", "cancelled"))
-        self.assertTrue(body["idempotency_key"].startswith("cancel-start:"))
-        self.assertNotIn("owner", body)  # Never substitute an owner supplied by a cached row.
-
-    def test_opened_or_failed_cancellation_never_claims_stop(self):
-        base = dict(id="T17", authority_version=1, generation=1, state="starting")
-        for view in ({"task": dict(base, worker_id="fleet/fid")}, {"task": base, "started": {"segments": 1}},
-                     {"task": base, "live": {"state": "idle"}}, {"task": dict(base, outcome="succeeded")},
-                     {"task": dict(base, state="running")}, {"task": dict(base, authority_version=0)}):
-            with self.subTest(view=view), patch.object(task_control, "call", return_value=view) as call:
-                rc, said = task_control.cancel_pending_start("T17")
-                self.assertEqual(rc, 1)
-                self.assertIn("刷新", said)
-                self.assertEqual(call.call_count, 1)
-        # The session can open after GET: the mutation's 409 is not a stop receipt.
-        with patch.object(task_control, "call", side_effect=[{"task": base}, ValueError("409 ID_SWITCH")]):
-            rc, said = task_control.cancel_pending_start("T17")
-            self.assertEqual(rc, 1)
-            self.assertIn("取消启动未确认", said)
-            self.assertIn("执行停止", said)
-        with patch.object(task_control, "call", side_effect=OSError("offline")):
-            self.assertEqual(task_control.cancel_pending_start("T17")[0], 1)
-        with patch.object(task_control, "call", side_effect=[{"task": base}, {"id": "T18", "state": "cancelled"}]):
-            self.assertEqual(task_control.cancel_pending_start("T17")[0], 1)
-        with patch.object(task_control, "call", return_value={"task": dict(base, state="cancelled")}) as call:
-            self.assertEqual(task_control.cancel_pending_start("T17")[0], 0)
-            self.assertEqual(call.call_count, 1)
-
-    def test_panel_and_cli_share_cancel_action_while_live_rows_still_stop(self):
-        pending = self.pending(far=True)
-        with patch.object(v, "cancel_pending_start", return_value=(0, "cancelled")) as cancel, \
-                patch.object(v, "hub_reread"):
-            self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["cancelstart"], pending, ""),
-                             (0, "cancelled", False))
-            cancel.assert_called_once_with("T17", "zh")
-        with patch.object(cli, "cancel_pending_start", return_value=(0, "cancelled")) as cancel, \
-                patch.object(cli, "hub_write", side_effect=AssertionError("must not stop a guessed session")), \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(cli.stop_row(pending), 0)
-            cancel.assert_called_once_with("T17")
-        live = dict(key="wid:fleet/fid", name="live", task="T17", state="idle", pending_start=True)
-        with patch.object(cli, "cancel_pending_start", side_effect=AssertionError("live task cannot cancel start")), \
-                patch.object(cli, "hub_write", return_value=(True, "accepted")) as stop, \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(cli.stop_row(live), 0)
-            stop.assert_called_once_with("worker_stop", {"worker_id": "fleet/fid"}, wait=90)
+        self.assertIn("尚不支持撤销待启动请求", why)
 
 
 if __name__ == "__main__":

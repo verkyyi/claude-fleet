@@ -126,7 +126,6 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		// A repo is one repo whatever its case (claude-fleet T672): the record
 		// keeps it lower-cased, a start names it as the fleet registered it.
 		if err != nil || t.Owner != owner || store.NormRepo(t.Repo) != store.NormRepo(w.repo) || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
-			t.CancelRequest != "" || t.State == store.TaskCancelled || t.Outcome == store.TaskCancelled ||
 			t.RequestedAgent != d.RequestedAgent || t.ResolvedAgent != d.ResolvedAgent || t.AttemptID != d.AttemptID {
 			return fault("INVALID_STATE", "accepted dispatch task owner, generation or provider does not match")
 		}
@@ -205,9 +204,6 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		case err != nil:
 			return fault("IDEMPOTENCY_CONFLICT", "dispatch conflicts with its accepted request")
 		}
-		if t.CancelRequest != "" || t.State == store.TaskCancelled || t.Outcome == store.TaskCancelled {
-			return fault("INVALID_STATE", "accepted dispatch was cancelled")
-		}
 		d.Task, d.Generation, d.AttemptID = t.Ref, t.Generation, t.AttemptID
 	}
 	w.params["dispatch"], w.params["task"] = d, d.Task
@@ -216,34 +212,6 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 	b, _ := json.Marshal(map[string]any{"action": w.action, "fleet_id": w.fleetID, "node": w.node, "params": w.params})
 	w.canonical = string(b)
 	return nil
-}
-
-// replayDispatch restores only the task identity added by acceptDispatch on
-// the first request. All original request/provider fields must still match.
-func replayDispatch(o store.FleetOperation, w writeRequest) (map[string]any, error) {
-	var original struct {
-		Params struct {
-			Dispatch *dispatchChoice `json:"dispatch"`
-		} `json:"params"`
-	}
-	if json.Unmarshal([]byte(o.Request), &original) != nil || original.Params.Dispatch == nil || original.Params.Dispatch.Task == "" || w.params["dispatch"] == nil {
-		return replayed(o, w)
-	}
-	d, err := resolveDispatch("", asString(w.params["agent"]), w.params["dispatch"], "")
-	if err != nil {
-		return nil, err
-	}
-	if d.Task == "" {
-		old := original.Params.Dispatch
-		d.Task, d.Generation, d.AttemptID = old.Task, old.Generation, old.AttemptID
-	}
-	w.params["dispatch"] = d
-	if asString(w.params["task"]) == "" {
-		w.params["task"] = d.Task
-	}
-	b, _ := json.Marshal(map[string]any{"action": w.action, "fleet_id": w.fleetID, "node": w.node, "params": w.params})
-	w.canonical = string(b)
-	return replayed(o, w)
 }
 
 // Avoid a typed nil interface decoding as a non-empty envelope.

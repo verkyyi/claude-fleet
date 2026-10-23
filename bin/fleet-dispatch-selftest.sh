@@ -1,7 +1,6 @@
 #!/bin/bash
 # Accepted provider envelopes and the MCP/controller boundary (#4392).
 set -uo pipefail
-python3 "$(dirname "$0")/fleet-dispatch-current-selftest.py" || exit 1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 PYTHONDONTWRITEBYTECODE=1 python3 - "$BIN" <<'PY'
 import importlib.util

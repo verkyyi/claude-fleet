@@ -35,8 +35,6 @@ jobs:
         working-directory: extras/browser-transport
       - run: npx playwright install --with-deps chromium
         working-directory: extras/browser-transport
-      - name: Pending task cancellation, conflicts and read-only controls
-        run: node extras/web-console/test/task-cancel-browser.mjs
       - name: A late transcript cannot erase a new chat turn
         run: node chat-history.mjs
         working-directory: extras/browser-transport

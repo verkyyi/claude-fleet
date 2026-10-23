@@ -1462,35 +1462,8 @@ task leases it pinned, the `task_attempt` history, `launchContract` /
 C13's cancel of a record no window ever opened (`CancelUnopenedTask`); `children`
 lists a parent's records with their ID's summary. For one version (compat-1v) a
 node still lists `launch_v1` and accepts — and ignores — a `params.launch` from a
-hub before C8. A record's `execution_owner` stays archival; `generation` also
-fences cancellation of starts whose session has never opened.
-
-The owner can `POST /v1/fleet/tasks/<ref>/cancel` with `{}`; success and replay
-return 200 with the task record. Other owners receive 404; an opened session or
-recorded result returns 409 `TASK_ALREADY_STARTED`, and a legacy record returns
-409 `TASK_CANCEL_UNAVAILABLE`. Existing read-only and impersonation protections
-apply. Web uses this endpoint; the tmux panel and CLI use the authenticated node
-task mutation. Both require an explicit pending-start row with no session and
-never turn a cancellation conflict into an automatic session stop.
-
-Cancelling such a record advances its
-generation and persists `cancel_request` in the same transaction as revoking its
-unfinished start operations. Operation insertion locks and rechecks the task;
-late old envelopes cannot enter the journal. Revocation uses the existing
-`failed` operation status with `TASK_CANCELLED`, and late node results cannot
-overwrite it. Repeating the original key returns that operation without another
-start. The executor, spawner and initial wrapper check the current record before
-starting; an unavailable record refuses that new start. A historical `@dispatch`
-does not add a Hub dependency to an existing session's resume or transfer.
-The wrapper checks again after initialization waits and discards the initial
-envelope before launch. This protection requires the updated node executor,
-spawner and wrapper; a Hub-only rollout cannot revoke a request already queued
-in an older executor. Verify the running node service version during rollout.
-
-This is not execution-domain stop confirmation: cancellation after the final
-read can still race native creation. Active sessions, native queues and schedules,
-and cross-node exclusivity require the
-remaining [execution-control implementation](HUB-TASK-IMPLEMENTATION-DESIGN.md).
+hub before C8. A record's `execution_owner` / `generation` columns stay, read only
+as an archive (a parent bound before C8, the ID migration).
 
 Remote configuration writes are limited to:
 

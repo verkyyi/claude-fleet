@@ -247,7 +247,6 @@ printf '%s\n' "\$*" >> "$PLACE_LOG"
 printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/place.env"
 # the seed a scratch carries (T672): --body-file's contents, before the caller removes it
 prev=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$WORK/place.body"; prev=\$a; done
-[ -z "\${PLACE_DISPATCH:-}" ] || printf '%s\n' "\$PLACE_DISPATCH" > "\$FLEET_DISPATCH_RESULT"
 [ -n "\${PLACE_ANSWER:-}" ] && printf '%s\n' "\$PLACE_ANSWER"
 [ -n "\${PLACE_STDERR:-}" ] && printf '%s\n' "\$PLACE_STDERR" >&2
 exit "\${PLACE_RC:-0}"
@@ -890,25 +889,6 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw --no-repo
 # --body-file, a plugin's shipped agent file (epic-driver) with it.
 rm -f "$WORK/place.body"
 T42_DISPATCH='{"version":1,"request_id":"t42-req","requested_agent":"default","resolved_agent":"claude","agent_source":"default","task":"T42","generation":1,"attempt_id":"task:T42:g1"}'
-# An accepted local start re-reads the node task endpoint before opening. Keep
-# the real authenticated reader and stub only its HTTP transport/protocol.
-printf 'CCQUOTA_HUB_URL=http://hub.test\nCCQUOTA_TOKEN=tok-task-fixture\n' > "$WORK/conf/node.env"
-chmod 600 "$WORK/conf/node.env"
-cat > "$WORK/fakebin/task-curl" <<'TASKCURL'
-#!/usr/bin/env python3
-import json, os, sys
-args = sys.argv[1:]
-auth = sys.stdin.read()
-assert 'Authorization: Bearer tok-task-fixture' in auth
-assert args[args.index('-X') + 1] == 'GET'
-assert args[-1] == 'http://hub.test/v1/node/tasks/T42'
-with open(os.environ['TASK_READ_LOG'], 'a') as log:
-    log.write('GET /v1/node/tasks/T42\n')
-print(json.dumps({'task': {'id': 'T42', 'authority_version': 1, 'generation': 1,
-                         'attempt_id': 'task:T42:g1', 'resolved_agent': 'claude', 'state': 'starting'}}))
-print('200')
-TASKCURL
-chmod +x "$WORK/fakebin/task-curl"
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
 PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
   run_raw --no-repo --task T42 --as epic-driver --prompt 'drive the batch'
@@ -919,24 +899,9 @@ tmux_has 'new-window'                            && fail "SCRATCH-NOREPO-TASK pl
 PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH run_raw --node mac-a --no-repo --task T42
 [ "$(rc)" = 0 ] && place_has '--node mac-a ' && err_has 'scratch → mac-a' \
                                                  || fail "SCRATCH-NOREPO-TASK a named machine takes a no-repo task (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T42_DISPATCH \
-  FLEET_HUB_CURL="$WORK/fakebin/task-curl" TASK_READ_LOG="$WORK/task-read.log" run_raw --no-repo --task T42
+PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T42_DISPATCH run_raw --no-repo --task T42
 [ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has '@norepo' \
                                                  || fail "SCRATCH-NOREPO-TASK LOCAL opens it here, still no repo (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-grep -qx 'GET /v1/node/tasks/T42' "$WORK/task-read.log" \
-                                                 || fail "SCRATCH-NOREPO-TASK LOCAL re-reads the accepted task authorization"
-tmux_has 'FLEET_START_DISPATCH=' && tmux_has '@dispatch' \
-                                                 || fail "SCRATCH-NOREPO-TASK LOCAL carries its checked envelope into the wrapper"
-# An issue placement can acquire its accepted task only in the hub's answer.
-# The spawner must refresh DISPATCH_TASK after that answer before its early gate.
-: > "$WORK/task-read.log"
-CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' \
-  PLACE_DISPATCH=$T42_DISPATCH FLEET_HUB_CURL="$WORK/fakebin/task-curl" TASK_READ_LOG="$WORK/task-read.log" run_spawn 258
-[ "$(rc)" = 0 ] && tmux_has 'FLEET_START_DISPATCH=' && tmux_has '@dispatch' \
-                                                 || fail "ISSUE-TASK a newly accepted placement carries its envelope (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-grep -qx 'GET /v1/node/tasks/T42' "$WORK/task-read.log" \
-                                                 || fail "ISSUE-TASK refreshes its task identity after placement and checks authorization"
-rm -f "$WORK/conf/node.env"
 ok "SCRATCH a seeded scratch, the shipped fleet-worker and a no-repo task travel; a record-less no-repo one stays here"
 
 PLACE_ANSWER="$REMOTE_LINE" run_raw testsess --origin hub --origin-wid "$MACHINE/issue-77" --node local --print --name '试一下'

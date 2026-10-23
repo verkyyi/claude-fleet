@@ -566,8 +566,7 @@ if [ "$PLACING" = 1 ]; then
       fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
-      DISPATCH_TASK=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
-      TASK_REF=$DISPATCH_TASK
+      TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
     fi
     rm -f "$_dispatch_result"
 
@@ -857,14 +856,6 @@ if [ -n "$TASK_REF" ]; then
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
-if [ -n "$DISPATCH_TASK" ]; then
-  if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current >/dev/null; then
-    [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
-    refuse "accepted task start refused for #$num"; exit "$RC_INFRA"
-  fi
-  pend="FLEET_START_DISPATCH=$(shq "$DISPATCH") $pend"
-  stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
-fi
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
