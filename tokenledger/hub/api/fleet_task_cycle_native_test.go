@@ -260,7 +260,11 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 	}
 	nonce1, nonce2, fact := nativeCycleRandom(t), nativeCycleRandom(t), nativeCycleRandom(t)
 	call("seed", map[string]any{"nonces": []string{nonce1, nonce2}, "fact": fact})
-	prompt := "This is a bounded isolated acceptance fixture. Do not use subagents, external network, git push, deployment or MCP. First turn: make no tool calls and reply exactly: " + nonce1 + " FACT=" + fact + ". If explicitly continued in a fresh Session, read acceptance-next.txt in this worktree, then read the exact previous native transcript identified by your continuation seed and follow acceptance-next.txt. Do not repeat this first reply."
+	exactReply, _ := json.Marshal(nonce1 + " FACT=" + fact)
+	prompt := "This is a bounded isolated acceptance fixture. Do not use subagents, external network, git push, deployment or MCP. " +
+		"First turn: reply with exactly the string encoded in the following JSON value. " +
+		"Output its contents only: no quotation marks, markdown, additional text, or trailing punctuation.\n" + string(exactReply) + "\n\n" +
+		"If explicitly continued in a fresh Session, read acceptance-next.txt in this worktree, then read the exact previous native transcript identified by your continuation seed and follow acceptance-next.txt. Do not repeat this first reply."
 	start := ownerPost("worker_start", map[string]any{"kind": "scratch", "repo": "native/fixture", "fleet_id": f.FleetID, "node": "native-cycle", "idempotency_key": "native-first", "coding_agent": "codex", "control_version": 1, "body": prompt}, 200)
 	n.mu.Lock()
 	writes := append([]map[string]any(nil), n.writes...)

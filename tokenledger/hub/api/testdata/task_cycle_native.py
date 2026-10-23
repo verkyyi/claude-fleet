@@ -352,7 +352,9 @@ class Probe:
             (wt / 'acceptance-next.txt').write_text(
                 'Read the exact previous native transcript named by your continuation seed. '
                 'Recall the private FACT from its first user message. Do not modify any files. '
-                'Your final answer must be exactly: ' + self.manifest['nonces'][1] + ' FACT=<the recalled fact>.\n')
+                'Reply using the following JSON string template, replacing <recalled fact> with the exact private FACT read from that history. '
+                'Output its contents only: no quotation marks, angle brackets, markdown, additional text, or trailing punctuation.\n'
+                + json.dumps(self.manifest['nonces'][1] + ' FACT=<recalled fact>') + '\n')
             self.manifest['git_diff_hash'] = digest(self._git('-C', str(wt), 'status', '--porcelain=v1').encode())
             self.save()
         return {'workspace_preserved': str(wt) == self.manifest['first_worktree'] and gd == self.manifest['first_gitdir'],
