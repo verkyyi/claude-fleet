@@ -63,6 +63,8 @@ class SubagentSample:
         self.nonce = uuid.uuid4().hex
         self.observed = None
         self.stop_at = None
+        self.history_after_exit = None
+        self.history_changed_after_exit = False
 
     def prompt(self):
         if self.script.exists():
@@ -161,6 +163,7 @@ class SubagentSample:
                 raise SampleRefused('child transcript identity mismatch')
             self.observed = dict(task=ref, operation_id=snap['operation_id'], root_sid=root_sid,
                                  child_sid=child_sid, child_parent=child['parentThreadId'], tool=tool,
+                                 root_native_status=root['status'], child_native_status=child['status'],
                                  tool_process=process, native_roots=roots, child_transcript=str(transcript),
                                  observe_until=time.monotonic() + 95)
             p.manifest['subagent'] = dict(self.observed, exact_child_ownership=True)
@@ -198,10 +201,16 @@ class SubagentSample:
         # Preserve exact child history separately, without resuming that thread.
         transcript = Path(self.observed['child_transcript'])
         result['child_history_sha256'] = hashlib.sha256(transcript.read_bytes()).hexdigest()
+        if all(roots.values()):
+            if self.history_after_exit is None:
+                self.history_after_exit = result['child_history_sha256']
+            self.history_changed_after_exit |= self.history_after_exit != result['child_history_sha256']
+        result['child_history_changed_after_root_exit'] = self.history_changed_after_exit
         if exited and 'tool_exit_observed_seconds' not in self.probe.manifest['subagent']:
             self.probe.manifest['subagent']['tool_exit_observed_seconds'] = time.monotonic() - self.stop_at
         result['child_lifecycle_confirmed'] = bool(result['observation_complete'] and exited
-                                                  and all(roots.values()) and not result['finished_marker'])
+                                                  and all(roots.values()) and not result['finished_marker']
+                                                  and not self.history_changed_after_exit)
         self.probe.manifest['subagent'].update(result)
         self.probe.save()
         return result

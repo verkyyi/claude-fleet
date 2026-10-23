@@ -102,6 +102,16 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaises(SampleRefused): self.sample.after_stop('T1','different-stop')
         with self.assertRaises(SampleRefused): self.sample.before_stop('T1')
 
+    def test_child_history_write_after_root_exit_is_not_quiet(self):
+        self.sample.before_stop('T1')
+        self.proc.kill(); self.proc.wait(timeout=3)
+        self.sample.after_stop('T1', 'stop')
+        Path(self.sample.observed['child_transcript']).write_text('late output')
+        self.sample.observed['observe_until'] = time.monotonic()-1
+        out = self.sample.after_stop('T1', 'stop')
+        self.assertTrue(out['child_history_changed_after_root_exit'])
+        self.assertFalse(out['child_lifecycle_confirmed'])
+
     def test_stale_birth_never_authorizes_cleanup(self):
         self.sample.observed['tool_process'] = dict(self.proof, birth='invalid')
         with self.assertRaises((FenceRefused, ValueError)): self.sample.cleanup()
