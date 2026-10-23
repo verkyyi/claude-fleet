@@ -128,6 +128,44 @@ def history_read_outputs(rows, old_path, first_nonce, fact):
     return confirmed
 
 
+def replay_old_stop(control, request):
+    """Old ACKs are idempotent; an old stop must be refused before cleanup."""
+    from fleet_hub_common import canonical
+    from fleet_task_execution import FenceRefused, _same_birth
+    if not isinstance(request, dict) or request.get('action') != 'worker_stop':
+        raise Refused('canonical old stop request missing')
+    operation_id = request.get('operation_id')
+    with control.store.connect() as db:
+        row = db.execute('SELECT request,result FROM operations WHERE id=?', (operation_id,)).fetchone()
+    if not row or row['request'] != canonical(request):
+        raise Refused('old stop differs from its accepted canonical request')
+    ref = request['task_execution']['task_ref']
+    before = control.execution.read(ref)
+    if (not before or before['binding_generation'] <= request['task_execution']['binding_generation']
+            or before['operation_id'] == request['task_execution']['operation_id']):
+        raise Refused('old stop replay needs a distinct successor binding')
+    launch = control.execution.launch(ref)
+    roots = [r['process'] for r in launch.get('native', [])] if launch else []
+    live_before = [_same_birth(p) for p in roots]
+    try:
+        control.submit(request)
+    except FenceRefused as exc:
+        if str(exc) != 'stop snapshot conflicts with the known execution target':
+            raise
+    else:
+        raise Refused('old stop was accepted against its successor')
+    with control.store.connect() as db:
+        after = db.execute('SELECT request,result FROM operations WHERE id=?', (operation_id,)).fetchone()
+    unchanged = (before == control.execution.read(ref) and launch == control.execution.launch(ref)
+                 and row['request'] == after['request'] and row['result'] == after['result'])
+    if not unchanged:
+        raise Refused('old stop changed successor binding, native registration or old receipt')
+    return dict(refused_as_stale=True, canonical_request=True, node_binding_preserved=True,
+                old_receipt_preserved=True,
+                native_roots_preserved=bool(roots) and all(live_before)
+                    and live_before == [_same_birth(p) for p in roots])
+
+
 class Probe:
     def __init__(self, data):
         self.original = dict(os.environ)
@@ -487,6 +525,7 @@ class Probe:
             raise Refused('unknown subagent sample action')
         if action == 'activate': return self.activate()
         if action == 'submit': return self.submit(data['request'])
+        if action == 'replay_old_stop': return replay_old_stop(self.control, data['request'])
         if action == 'operation': return self.control.get_operation(data['id'])
         if action == 'observe': return self.observe(data['task'])
         if action == 'sentinel': return self.sentinel(data['task'], data.get('first', False))

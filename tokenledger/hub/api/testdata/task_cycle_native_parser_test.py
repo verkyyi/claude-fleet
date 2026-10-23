@@ -10,6 +10,7 @@ from pathlib import Path
 import runpy
 import sys
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 BIN = HERE.parents[3] / 'bin'
@@ -109,6 +110,48 @@ class NativeHistoryOutput(unittest.TestCase):
         rows = self.rows([self.block()])
         rows.pop(0)
         self.assertEqual(history_outputs(rows, self.path, 'first-nonce', 'private-fact'), [])
+
+
+class NativeOldStopReplay(unittest.TestCase):
+    def setUp(self):
+        # Reuse the production continuation journal fixture; this creates no
+        # Coding Agent and its process witnesses are disposable local sleepers.
+        fixture = runpy.run_path(str(BIN / 'fleet-task-local-continuation-selftest.py'))
+        self.case = fixture['ContinuationTests']()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        self.case.fence.continue_binding(self.case.next, fixture['FLEET'], fixture['EXIT'], authorized=True)
+        with self.case.control.store.connect() as db:
+            self.request = json.loads(db.execute('SELECT request FROM operations WHERE id=?',
+                                                (fixture['STOP'],)).fetchone()[0])
+
+    def replay(self, request=None):
+        return reader['replay_old_stop'](self.case.control, self.request if request is None else request)
+
+    def test_canonical_old_stop_is_refused_without_cleanup(self):
+        with patch('fleet_control.subprocess.Popen', side_effect=AssertionError('old stop must not start cleanup')):
+            out = self.replay()
+        self.assertTrue(out['refused_as_stale'])
+        self.assertTrue(out['node_binding_preserved'])
+        self.assertTrue(out['old_receipt_preserved'])
+        self.assertFalse(out['native_roots_preserved'], 'offline fixture cannot claim live successor roots')
+
+    def test_missing_or_changed_request_is_not_a_stale_success(self):
+        with self.assertRaisesRegex(reader['Refused'], 'missing'):
+            reader['replay_old_stop'](self.case.control, None)
+        changed = dict(self.request, actor='different')
+        with self.assertRaisesRegex(reader['Refused'], 'canonical'):
+            self.replay(changed)
+
+    def test_other_errors_and_unexpected_acceptance_fail(self):
+        from fleet_task_execution import FenceRefused
+        for error in (ValueError('unexpected'), FenceRefused('different fence reason')):
+            with patch.object(self.case.control, 'submit', side_effect=error):
+                with self.assertRaises(type(error)):
+                    self.replay()
+        with patch.object(self.case.control, 'submit', return_value={}):
+            with self.assertRaisesRegex(reader['Refused'], 'was accepted'):
+                self.replay()
 
 
 if __name__ == '__main__':

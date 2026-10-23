@@ -427,9 +427,18 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		if call("old", map[string]any{"fid": firstFID, "stop": firstStop})["old_stopped"] != true {
 			t.Fatal("old FID escaped stop")
 		}
-		call("retry", map[string]any{"id": firstStop})
-		if _, e := exchange(map[string]any{"action": "submit", "request": nativeCycleWrite(n, firstStop)}); e != nil {
-			t.Fatal("canonical old stop replay refused")
+		if call("retry", map[string]any{"id": firstStop})["sent"] != true {
+			t.Fatal("old exit ACK replay was not idempotently accepted")
+		}
+		oldStop := nativeCycleWrite(n, firstStop)
+		if oldStop == nil || oldStop["operation_id"] != firstStop {
+			t.Fatal("canonical old stop was not captured from node delivery")
+		}
+		replayed := call("replay_old_stop", map[string]any{"request": oldStop})
+		for _, key := range []string{"refused_as_stale", "canonical_request", "node_binding_preserved", "old_receipt_preserved", "native_roots_preserved"} {
+			if replayed[key] != true {
+				t.Fatal("old stop replay: " + key + " not proven")
+			}
 		}
 		after, e := h.srv.Store.FleetTask(initial.ID)
 		if e != nil || after.FID != initial.FID || after.CancelRequest != "" || after.OperationID == start["operation_id"] {
