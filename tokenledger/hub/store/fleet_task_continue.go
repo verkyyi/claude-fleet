@@ -6,11 +6,12 @@ import (
 	"errors"
 )
 
-// TaskContinuation is the only extra node transport input. All source
-// identities come from the original, acknowledged exit receipt.
+// TaskContinuation names exactly one immutable proof. A never-claimed stop is
+// not a native exit; its workspace ancestry is read separately from the Hub.
 type TaskContinuation struct {
 	Version         int    `json:"version"`
-	ExitOperationID string `json:"exit_operation_id"`
+	ExitOperationID string `json:"exit_operation_id,omitempty"`
+	StopOperationID string `json:"stop_operation_id,omitempty"`
 }
 
 // TaskContinuationIntent is immutable journal metadata, not a node argument.
@@ -36,13 +37,23 @@ type TaskExecutionStart struct {
 	TaskExecution TaskExecutionSnapshot `json:"task_execution"`
 	Start         TaskStartMetadata     `json:"start"`
 	// LOCAL starts may never enter the node control journal. This is the
-	// original immutable start selected by the accepted exit receipt.
-	SourceStart *TaskStartMetadata `json:"source_start,omitempty"`
+	// immediate immutable start selected by the stop or accepted exit proof.
+	SourceStart     *TaskStartMetadata     `json:"source_start,omitempty"`
+	SourceStop      *TaskExecutionSnapshot `json:"source_stop,omitempty"`
+	WorkspaceSource *TaskWorkspaceSource   `json:"workspace_source,omitempty"`
+}
+
+type TaskWorkspaceSource struct {
+	// Workspace/history provenance only; never this generation's exit proof.
+	ExitOperationID string            `json:"exit_operation_id"`
+	Start           TaskStartMetadata `json:"start"`
 }
 
 type TaskContinuationSource struct {
 	Task            FleetTask
 	ExitOperationID string
+	StopOperationID string
+	Endpoint        string
 	Receipt         TaskSessionExitReceipt
 	Start           FleetOperation
 	Agent           string
@@ -58,7 +69,7 @@ func taskStartMetadata(o FleetOperation) (TaskStartMetadata, *TaskContinuationIn
 			Dispatch struct {
 				Agent string `json:"resolved_agent"`
 			} `json:"dispatch"`
-			Continuation *TaskContinuation `json:"continuation"`
+			Continuation json.RawMessage `json:"continuation"`
 		} `json:"params"`
 	}
 	var m TaskStartMetadata
@@ -66,10 +77,18 @@ func taskStartMetadata(o FleetOperation) (TaskStartMetadata, *TaskContinuationIn
 		(r.Params.Agent != "claude" && r.Params.Agent != "codex") || r.Params.Agent != r.Params.Dispatch.Agent || r.Params.NoRepo && r.Params.Repo != "" {
 		return m, nil, ErrTaskFence
 	}
-	if c := r.Params.Continuation; c != nil && (c.Version != 1 || c.ExitOperationID == "") {
+	var continuation *TaskContinuation
+	if len(r.Params.Continuation) != 0 {
+		var c TaskContinuation
+		if json.Unmarshal(r.Params.Continuation, &c) != nil {
+			return m, nil, ErrTaskFence
+		}
+		continuation = &c
+	}
+	if continuation == nil && r.Intent != nil {
 		return m, nil, ErrTaskFence
 	}
-	m = TaskStartMetadata{OperationID: o.ID, Agent: r.Params.Agent, Repo: r.Params.Repo, NoRepo: r.Params.NoRepo, Continuation: r.Params.Continuation}
+	m = TaskStartMetadata{OperationID: o.ID, Agent: r.Params.Agent, Repo: r.Params.Repo, NoRepo: r.Params.NoRepo, Continuation: continuation}
 	return m, r.Intent, nil
 }
 
@@ -89,7 +108,7 @@ func (s *Store) TaskContinuationSource(taskID int64, owner string) (TaskContinua
 	if owner == "" || t.Owner != owner || t.State == TaskCancelled || t.Outcome != "" {
 		return source, ErrTaskFence
 	}
-	source, err = taskReleasedSourceTx(tx, t)
+	source, err = taskContinuationSourceTx(tx, t)
 	if err != nil {
 		return source, err
 	}
@@ -114,15 +133,15 @@ func (s *Store) ContinueTaskExecution(o FleetOperation, endpoint string) (FleetT
 	return s.authorizeTaskExecution(o, endpoint, m.Continuation.ExitOperationID, intent)
 }
 
-func validateTaskContinuationTx(tx *sql.Tx, t FleetTask, o FleetOperation, endpoint, exitID string, intent TaskContinuationIntent) error {
+func validateTaskContinuationTx(tx *sql.Tx, t FleetTask, o FleetOperation, endpoint string, intent TaskContinuationIntent) error {
 	if intent.Task != t.Ref || intent.ExpectedGeneration != t.Generation || intent.ExpectedStopOperationID != t.CancelRequest {
 		return ErrTaskFence
 	}
-	source, err := taskReleasedSourceTx(tx, t)
+	source, err := taskContinuationSourceTx(tx, t)
 	if err != nil {
 		return err
 	}
-	if source.ExitOperationID != exitID || source.Receipt.ExecutionEndpoint != endpoint || source.Start.FleetID != o.FleetID {
+	if source.Endpoint != endpoint || source.Start.FleetID != o.FleetID {
 		return ErrTaskFence
 	}
 	previous, _, err := taskStartMetadata(source.Start)
@@ -132,6 +151,9 @@ func validateTaskContinuationTx(tx *sql.Tx, t FleetTask, o FleetOperation, endpo
 	next, _, err := taskStartMetadata(o)
 	if err != nil {
 		return err
+	}
+	if next.Continuation == nil || next.Continuation.ExitOperationID != source.ExitOperationID || next.Continuation.StopOperationID != source.StopOperationID {
+		return ErrTaskFence
 	}
 	if next.Repo != previous.Repo || next.NoRepo != previous.NoRepo || intent.RequestedAgent == nil && next.Agent != previous.Agent {
 		return ErrTaskFence
@@ -167,32 +189,16 @@ func (s *Store) TaskExecutionStart(taskID int64, owner, endpoint string) (TaskEx
 	if err != nil {
 		return result, err
 	}
-	var intent *TaskContinuationIntent
-	result.Start, intent, err = taskStartMetadata(op)
+	result.Start, _, err = taskStartMetadata(op)
 	if err != nil {
 		return result, err
 	}
-	if continuation := result.Start.Continuation; continuation != nil {
-		_, receipt, e := taskSessionExitTx(tx, t, continuation.ExitOperationID)
+	if result.Start.Continuation != nil || result.TaskExecution.BindingGeneration > 1 {
+		chain, e := taskContinuationChainTx(tx, t, op, endpoint)
 		if e != nil {
 			return result, e
 		}
-		if receipt.ExecutionEndpoint != endpoint || receipt.Generation+2 != result.TaskExecution.BindingGeneration ||
-			intent == nil || intent.Task != t.Ref || intent.ExpectedGeneration != receipt.Generation+1 || intent.ExpectedStopOperationID != receipt.StopOperationID {
-			return result, ErrTaskFence
-		}
-		original, _, _, _, e := executionOperationTx(tx, receipt.StartOperationID)
-		if e != nil {
-			return result, e
-		}
-		source, _, e := taskStartMetadata(original)
-		if e != nil {
-			return result, e
-		}
-		// The previous generation's own continuation is not an instruction for
-		// this one. Return only the original provider/workspace facts.
-		source.Continuation = nil
-		result.SourceStart = &source
+		result.SourceStart, result.SourceStop, result.WorkspaceSource = chain.SourceStart, chain.SourceStop, chain.WorkspaceSource
 	}
 	result.Version = 1
 	return result, tx.Commit()
