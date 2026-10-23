@@ -62,6 +62,7 @@
 #   fleet-id.sh continue <ID> [--seg N] [--exec]   「从这一段继续」: a NEW window, a new
 #                                            ID whose prev is this one (S8)
 #   fleet-id.sh reopen <ID> [--exec]         「恢复这个窗口」: the SAME ID, its newest segment
+#                                            (either: --check = `ok` or why not, nothing opened)
 #   fleet-id.sh push [<ID>…]                 hand the ledgers (all, or these) to the hub's
 #                                            mirror in (ID, seq) order from where it is
 #                                            (EPIC T497 C2, fleet_id.py push): rc 0 · 3 no
@@ -229,12 +230,16 @@ fi
 # 「从这一段继续」/「恢复这个窗口」 (EPIC T497 C4, design §4.4): the plan is the
 # ledger's (fleet_id.py continue / reopen); --exec opens the window through the one
 # spawner, dash-raw-session.sh — a new ID with --prev, or the same one with --fid.
+# --check walks the same road and stops before the spawn: `ok` (rc 0), or the one
+# reason it would refuse on stderr (rc 1) — the panel's 恢复 asks it first.
 if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
   ex=0; pargs=()
-  for a in "$@"; do if [ "$a" = --exec ]; then ex=1; else pargs+=("$a"); fi; done
+  for a in "$@"; do
+    case "$a" in --exec) ex=1 ;; --check) ex=2 ;; *) pargs+=("$a") ;; esac
+  done
   if [ -n "$scanned" ]; then plan=$(FLEET_ID_LIVE="$live" python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1
   else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
-  [ "$ex" = 1 ] || { printf '%s\n' "$plan"; exit 0; }
+  [ "$ex" = 0 ] && { printf '%s\n' "$plan"; exit 0; }
   fields=$(printf '%s' "$plan" | python3 -c 'import json,sys; d=json.load(sys.stdin)
 print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","title","codex_home","seg")))')
   IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_title p_home p_seg <<< "$fields"
@@ -256,6 +261,7 @@ if not p.get("resumable"):
     exit 1
   fi
   if [ "$cmd" = continue ]; then rargs+=(--prev "$p_id"); else rargs+=(--fid "$p_id"); fi
+  [ "$ex" = 2 ] && { printf 'ok\n'; exit 0; }
   exec bash "${FLEET_ID_SPAWN:-$BIN/dash-raw-session.sh}" "${rargs[@]}"
 fi
 # A final result starts its window's close (T680, fleet_reap_soon): written first,
