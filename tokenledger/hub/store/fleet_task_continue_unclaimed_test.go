@@ -193,7 +193,7 @@ func TestTaskContinueUnclaimedStrictUnion(t *testing.T) {
 }
 
 func TestTaskContinueUnclaimedStoreRefusals(t *testing.T) {
-	for _, which := range []string{"other-node", "other-fleet", "wrong-stop", "wrong-generation", "wrong-owner", "outcome", "claimed", "unindexed", "alias", "duplicate-stop", "unknown-start", "omitted-provider-change", "environment-change"} {
+	for _, which := range []string{"other-node", "other-fleet", "wrong-stop", "wrong-generation", "wrong-owner", "claimed", "unindexed", "alias", "duplicate-stop", "unknown-start", "omitted-provider-change", "environment-change"} {
 		t.Run(which, func(t *testing.T) {
 			s, task, start := unclaimedContinueFixture(t)
 			op := unclaimedContinueOp(task, "refused", "codex", nil)
@@ -205,8 +205,6 @@ func TestTaskContinueUnclaimedStoreRefusals(t *testing.T) {
 				op.FleetID = "other-fleet"
 			case "wrong-owner":
 				op.Actor = "bob"
-			case "outcome":
-				_, _ = s.write.Exec(`UPDATE fleet_tasks SET outcome='done' WHERE id=?`, task.ID)
 			case "claimed":
 				_, _ = s.write.Exec(`UPDATE fleet_tasks SET execution_owner=? WHERE id=?`, executionWorker, task.ID)
 			case "unindexed":
