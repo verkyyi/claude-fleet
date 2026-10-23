@@ -157,7 +157,7 @@ class Cleaner:
                  "@reap_policy", "@loop", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
-                 "@task", "@task_flow", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid",
+                 "@task", "@task_flow", "@task_execution", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid",
                  # T694 (回收 B): where it came from, and what keeps it
                  "@reap_keep_by", "@reap_origin", "@origin_wid", "@reap_unreported",
                  # T810: handed to WebChat — the window is the way back (↵), kept
@@ -234,6 +234,12 @@ class Cleaner:
     def origin(self, snap):
         """Where the session came from (T694): its @reap_origin, else read off it."""
         return fleet_reap_policy.snapshot_origin(snap)
+
+    @staticmethod
+    def automatic_close_held(snap):
+        from fleet_task_execution import automatic_close_held
+        return automatic_close_held(snap.get("@fleet_id", ""), snap.get("@task_execution", ""),
+                                    snap.get("@task", ""))
 
     def work_over(self, snap):
         """«做完» (T680's one rule): its ID's newest result is final, or its task
@@ -363,7 +369,7 @@ class Cleaner:
                 return False
             with fleet_session_gate.lock(fid):
                 current = self.snapshot(window)
-                if (self.moved(window, snap) or current.get("@reap_work_pending")
+                if (self.automatic_close_held(current) or self.moved(window, snap) or current.get("@reap_work_pending")
                         or (snap.get("@parked") and not current.get("@park_held"))
                         or current.get("@park_wake") or current.get("@park_start")
                         or fleet_session_gate.close_hold(fid)):
@@ -385,7 +391,7 @@ class Cleaner:
         try:
             if (fleet_reap_policy.report_hold(snap.get("@fleet_id", ""))
                     or self.moved(window, snap) or not recheck() or not self.final_live(window)
-                    or self.moved(window, snap)):
+                    or self.moved(window, snap) or self.automatic_close_held(self.snapshot(window))):
                 return False
             other = self.shared(window, snap["@fleet_id"])
             if other:
@@ -654,13 +660,14 @@ class Cleaner:
         if not FID_RE.fullmatch(fid):
             return ""
         with fleet_session_gate.lock(fid):
-            if (snap.get("@reap_work_pending") or fleet_session_gate.close_hold(fid) or self.moved(window, snap)
+            if (self.automatic_close_held(self.snapshot(window)) or snap.get("@reap_work_pending") or fleet_session_gate.close_hold(fid) or self.moved(window, snap)
                     or self.busy(window, snap)):
                 return ""
             pol = self.policy(snap)
             if pol and pol[0] in ("done", "merged", "loop-end") and fleet_reap_policy.completion_hold(fid, snap.get("@task", "")):
                 return ""
-            if not self.final_live(window) or self.moved(window, snap):
+            if (not self.final_live(window) or self.moved(window, snap)
+                    or self.automatic_close_held(self.snapshot(window))):
                 return ""
             self.retire(window)
             return subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
@@ -881,6 +888,8 @@ class Cleaner:
         if not snap.get("@parked"):
             return None
         self.why = "parked"
+        if self.automatic_close_held(snap):
+            return False
         if not snap.get("@park_held") or not snap.get("@park_wrap_ver") or self.theirs(snap):
             return False
         row = fleet_reap_policy.ORIGINS[self.origin(snap)]
@@ -984,8 +993,9 @@ class Cleaner:
             return False
         if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) != "done":
             return None if snap.get("@session_origin") != "web" else False
-        # Work already reported over still closes by its existing policy.
-        if (fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] != "never"
+        controlled = self.automatic_close_held(snap)
+        # Only legacy work may bypass safe parking for its old completion policy.
+        if (not controlled and fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] != "never"
                 and not fleet_reap_policy.uses_park_retention(snap)
                 and "@task" in snap and self.work_over(snap)):
             return None
@@ -995,7 +1005,7 @@ class Cleaner:
         # A completed probe's one-minute policy precedes the five-minute park
         # tier. Return to the existing reaper; its live/history checks still
         # decide whether it may close. Explicit waiting reports park instead.
-        pol = self.policy(snap) if fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] == "done" else None
+        pol = self.policy(snap) if not controlled and fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] == "done" else None
         if (pol and pol[0] == "done" and self.deadline(snap, pol) <= self.now
                 and not self.is_waiting(snap)):
             return None
@@ -1042,6 +1052,14 @@ class Cleaner:
         return False
 
     def road(self, window, snap):
+        # Existing automatic archive does not obtain a controlled stop/exit
+        # receipt. Retain the binding/history; the same safe park releases native
+        # resources and capacity. Unknown control metadata cannot become legacy.
+        if self.automatic_close_held(snap):
+            self.why = "parked" if snap.get("@parked") else "keep"
+            if not snap.get("@parked") and not getattr(self.args, "skip_park", False):
+                return bool(self.web_park(window, snap))
+            return False
         hold = ("input-pending" if snap.get("@reap_work_pending") else
                 fleet_reap_policy.report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")))
         if hold:

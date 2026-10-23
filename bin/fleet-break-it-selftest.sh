@@ -7803,6 +7803,18 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_controlled_auto_retention() {
+  local t0; t0=$(now); CAP=60
+  suite_holds fleet-cleanup-selftest.sh \
+    'controlled or malformed execution marker blocks automatic PR archive' \
+    'PR teardown rechecks late control admission and unknown control data' || return 1
+  python3 "$BIN/fleet-controlled-auto-retention-selftest.py" >"$WORK/task-controlled-auto-retention.log" 2>&1 || {
+    WHY="controlled automatic close: $(tail -12 "$WORK/task-controlled-auto-retention.log")"; return 1;
+  }
+  WHAT='真实隔离tmux保留受控窗口与历史；旧结果/角色/到期只安全park，关窗前重读控制绑定'
+  SECS=$(since "$t0")
+}
+
 drill_task_worktree_current_generation() {
   local t0; t0=$(now); CAP=10
   suite_holds worktree-autoclean-scratch-selftest.sh \
