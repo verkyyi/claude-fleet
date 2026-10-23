@@ -673,5 +673,618 @@
         "value": "msg_client"
       }
     ]
+  },
+  {
+    "name": "native-custom_tool_call_output-text",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": "TOOL_OK"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-custom_tool_call_output-inline",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": [
+            {
+              "type": "input_text",
+              "text": "TOOL_OK"
+            }
+          ]
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-function_call_output-text",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "function_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": "TOOL_OK"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-function_call_output-inline",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "function_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": [
+            {
+              "type": "input_text",
+              "text": "TOOL_OK"
+            }
+          ]
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-empty-call",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "",
+          "output": "TOOL_OK"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-null-call",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": null,
+          "output": "TOOL_OK"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-malformed-call",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": 123,
+          "output": "TOOL_OK"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": true,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-opaque-output",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": "TOOL_OK",
+          "encrypted_content": "opaque"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      },
+      {
+        "kind": "id",
+        "value": "call_source"
+      },
+      {
+        "kind": "encrypted",
+        "value": "opaque"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-extra-output-field",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": "TOOL_OK",
+          "future_state": "opaque"
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": true,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      },
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-reference-output",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": [
+            {
+              "type": "input_file",
+              "file_id": "file"
+            }
+          ]
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": true,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      },
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-result-malformed-output",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "input": [
+        {
+          "type": "custom_tool_call_output",
+          "id": "client-result",
+          "call_id": "call_source",
+          "output": {
+            "reference": "opaque"
+          }
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "client-result"
+      },
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-roundtrip-captured",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "input": [
+        {
+          "type": "additional_tools",
+          "id": "at_client_definition",
+          "role": "developer",
+          "tools": [
+            {
+              "type": "namespace",
+              "name": "functions",
+              "tools": [
+                {
+                  "type": "custom",
+                  "name": "exec",
+                  "description": "Fixture tool",
+                  "format": {
+                    "type": "text"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_instructions",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Fixture instructions"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_environment",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Fixture environment"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_prompt",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Remember FIXTURE_NONCE. Reply LOCAL_OK. Do not use tools."
+            }
+          ]
+        },
+        {
+          "type": "reasoning",
+          "id": "rs_source",
+          "summary": [],
+          "content": null,
+          "encrypted_content": "fixture-opaque"
+        },
+        {
+          "type": "custom_tool_call",
+          "id": "ct_source",
+          "call_id": "call_source",
+          "name": "exec",
+          "input": "text(\"TOOL_OK\");"
+        },
+        {
+          "type": "custom_tool_call_output",
+          "id": "ctco_client_generated",
+          "call_id": "call_source",
+          "output": [
+            {
+              "type": "input_text",
+              "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+            },
+            {
+              "type": "input_text",
+              "text": "TOOL_OK"
+            }
+          ]
+        }
+      ],
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "effort": "low",
+        "context": "all_turns"
+      },
+      "store": false,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "fixture-session",
+      "text": {
+        "verbosity": "low"
+      },
+      "client_metadata": {
+        "session_id": "fixture-session",
+        "x-codex-turn-metadata": "{\"history_initialization\":\"new\",\"request_kind\":\"turn\"}"
+      }
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "rs_source"
+      },
+      {
+        "kind": "encrypted",
+        "value": "fixture-opaque"
+      },
+      {
+        "kind": "id",
+        "value": "ct_source"
+      },
+      {
+        "kind": "id",
+        "value": "call_source"
+      }
+    ]
+  },
+  {
+    "name": "native-tool-resume-captured",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "input": [
+        {
+          "type": "additional_tools",
+          "id": "at_client_definition",
+          "role": "developer",
+          "tools": [
+            {
+              "type": "namespace",
+              "name": "functions",
+              "tools": [
+                {
+                  "type": "custom",
+                  "name": "exec",
+                  "description": "Fixture tool",
+                  "format": {
+                    "type": "text"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_instructions",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Fixture instructions"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_environment",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Fixture environment"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_prompt",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Remember FIXTURE_NONCE. Reply LOCAL_OK. Do not use tools."
+            }
+          ]
+        },
+        {
+          "type": "reasoning",
+          "id": "rs_source",
+          "summary": [],
+          "content": null,
+          "encrypted_content": "fixture-opaque"
+        },
+        {
+          "type": "custom_tool_call",
+          "id": "ct_source",
+          "call_id": "call_source",
+          "name": "exec",
+          "input": "text(\"TOOL_OK\");"
+        },
+        {
+          "type": "custom_tool_call_output",
+          "id": "ctco_client_generated",
+          "call_id": "call_source",
+          "output": [
+            {
+              "type": "input_text",
+              "text": "Script completed\nWall time 0.0 seconds\nOutput:\n"
+            },
+            {
+              "type": "input_text",
+              "text": "TOOL_OK"
+            }
+          ]
+        },
+        {
+          "type": "reasoning",
+          "id": "rs_source_2",
+          "summary": [],
+          "content": null,
+          "encrypted_content": "fixture-opaque_2"
+        },
+        {
+          "type": "message",
+          "status": "completed",
+          "id": "msg_source_2",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "FIXTURE_NONCE",
+              "annotations": []
+            }
+          ],
+          "phase": "final_answer"
+        },
+        {
+          "type": "message",
+          "id": "msg_client_resume",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "What nonce?"
+            }
+          ]
+        }
+      ],
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "effort": "low",
+        "context": "all_turns"
+      },
+      "store": false,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "fixture-session",
+      "text": {
+        "verbosity": "low"
+      },
+      "client_metadata": {
+        "session_id": "fixture-session",
+        "x-codex-turn-metadata": "{\"history_initialization\":\"new\",\"request_kind\":\"turn\"}"
+      }
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "rs_source"
+      },
+      {
+        "kind": "encrypted",
+        "value": "fixture-opaque"
+      },
+      {
+        "kind": "id",
+        "value": "ct_source"
+      },
+      {
+        "kind": "id",
+        "value": "call_source"
+      },
+      {
+        "kind": "id",
+        "value": "rs_source_2"
+      },
+      {
+        "kind": "encrypted",
+        "value": "fixture-opaque_2"
+      },
+      {
+        "kind": "id",
+        "value": "msg_source_2"
+      }
+    ]
   }
 ]

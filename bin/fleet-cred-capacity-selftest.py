@@ -69,7 +69,7 @@ class Capacity(unittest.TestCase):
                 self.assertEqual(unknown,case['unknown'])
                 self.assertEqual(refs,{p.codex_ref(ref['kind'],ref['value']) for ref in case['references']})
 
-    def native_http_fixture(self):
+    def native_http_fixture(self, tool=False):
         attempts=[]
         class Upstream(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
@@ -80,10 +80,14 @@ class Capacity(unittest.TestCase):
                 reasoning=dict(type='reasoning',id='rs_source'+suffix,summary=[],encrypted_content='fixture-opaque'+suffix)
                 message=dict(type='message',id='msg_source'+suffix,role='assistant',status='completed',phase='final_answer',
                     content=[dict(type='output_text',text='LOCAL_OK' if n==1 else 'FIXTURE_NONCE',annotations=[])])
-                response=dict(id='resp_source'+suffix,object='response',status='completed',output=[reasoning,message],
+                items=[reasoning,message]
+                if tool and n == 1:
+                    items=[reasoning,dict(type='custom_tool_call',id='ct_source',call_id='call_source',
+                        name='exec',input='text("TOOL_OK");')]
+                response=dict(id='resp_source'+suffix,object='response',status='completed',output=items,
                     usage=dict(input_tokens=10,output_tokens=2,total_tokens=12))
                 events=[dict(type='response.created',response=dict(id=response['id'],object='response',status='in_progress',output=[]))]
-                for index,item in enumerate((reasoning,message)):
+                for index,item in enumerate(items):
                     events.extend([dict(type='response.output_item.added',output_index=index,item=item),
                         dict(type='response.output_item.done',output_index=index,item=item)])
                 events.append(dict(type='response.completed',response=response))
@@ -166,7 +170,10 @@ class Capacity(unittest.TestCase):
         for prompt,expected in (('Remember FIXTURE_NONCE. Reply LOCAL_OK. Do not use tools.','LOCAL_OK'),
                 ('What nonce? Reply only it. Do not use tools.','FIXTURE_NONCE')):
             command=base+(['resume',sid] if sid else [])+[prompt]
-            answer=subprocess.run(command,env=env,cwd=str(work),stdin=subprocess.DEVNULL,text=True,capture_output=True,timeout=40)
+            try:
+                answer=subprocess.run(command,env=env,cwd=str(work),stdin=subprocess.DEVNULL,text=True,capture_output=True,timeout=40)
+            except subprocess.TimeoutExpired as e:
+                self.fail(str((e.stdout,e.stderr)))
             self.assertEqual(answer.returncode,0,(answer.stdout,answer.stderr))
             messages=[]
             for line in answer.stdout.splitlines():
@@ -178,6 +185,99 @@ class Capacity(unittest.TestCase):
         self.assertEqual([account for account,_ in attempts],['fixture-b','fixture-b'])
         self.assertEqual(self.t.picks['codex','native-cli'],'b')
         self.assertNotIn('fixture-opaque',Path(self.tmp.name,'codex-routing.json').read_text())
+
+    @unittest.skipUnless(os.environ.get('FLEET_CODEX_NATIVE_FIXTURE'),'explicit local native CLI fixture only')
+    def test_native_cli_tool_loopback(self):
+        proxy,attempts=self.native_http_fixture(tool=True)
+        wire=[]
+        original=self.t.codex_request
+        def capture(sid,enrolled,method,path,headers,body,pin=""):
+            wire.append(json.loads(body))
+            if os.environ.get('FLEET_CODEX_NATIVE_WIRE'):
+                Path(os.environ['FLEET_CODEX_NATIVE_WIRE']).write_text(json.dumps(wire,indent=2))
+            return original(sid,enrolled,method,path,headers,body,pin)
+        self.t.codex_request=capture
+        root=Path(self.tmp.name);home=root/'native-home';work=root/'native-work';home.mkdir();work.mkdir()
+        token=self.t.keys.mint('', 'native-cli',86400,capacity=True)
+        env=dict(PATH=os.environ['PATH'],HOME=str(home),CODEX_HOME=str(home),TMPDIR='/tmp',FLEET_FIXTURE_TOKEN=token,NO_PROXY='*',no_proxy='*')
+        base=[os.environ['FLEET_CODEX_NATIVE_FIXTURE'],'exec','--skip-git-repo-check','--ignore-user-config',
+            '-m','gpt-6.1-sol','-s','danger-full-access','-C',str(work),'--json']
+        for config in ('model_provider="fixture"','model_providers.fixture.name="Local fixture"',
+                'model_providers.fixture.base_url="http://127.0.0.1:%d/codex"'%proxy.server_port,
+                'model_providers.fixture.env_key="FLEET_FIXTURE_TOKEN"','model_providers.fixture.wire_api="responses"',
+                'model_providers.fixture.requires_openai_auth=false','model_reasoning_effort="high"',
+                'features.daemon_auto_start=false','approval_policy="never"','features.hooks=true','features.plugins=false','features.apps=false',
+                'analytics.enabled=false','check_for_update_on_startup=false',
+                'model_providers.fixture.request_max_retries=0','model_providers.fixture.stream_max_retries=0'):
+            base+=['-c',config]
+        sid=''
+        for prompt,expected in (('Use exec to print TOOL_OK, then reply FIXTURE_NONCE.','FIXTURE_NONCE'),
+                ('What nonce? Reply only it. Do not use tools.','FIXTURE_NONCE')):
+            command=base+(['resume',sid] if sid else [])+[prompt]
+            try:
+                answer=subprocess.run(command,env=env,cwd=str(work),stdin=subprocess.DEVNULL,text=True,capture_output=True,timeout=40)
+            except subprocess.TimeoutExpired as e:
+                self.fail(str((e.stdout,e.stderr)))
+            self.assertEqual(answer.returncode,0,(answer.stdout,answer.stderr))
+            messages=[]
+            for line in answer.stdout.splitlines():
+                event=json.loads(line)
+                if event.get('type')=='thread.started':sid=event['thread_id']
+                if event.get('item',{}).get('type')=='agent_message':messages.append(event['item']['text'])
+            self.assertEqual(''.join(messages),expected);self.assertTrue(sid)
+        self.assertEqual(len(attempts),3)
+        self.assertEqual([account for account,_ in attempts],['fixture-b']*3)
+        self.assertEqual(self.t.picks['codex','native-cli'],'b')
+        self.assertNotIn('fixture-opaque',Path(self.tmp.name,'codex-routing.json').read_text())
+
+        result=next(item for item in wire[1]['input'] if item.get('type')=='custom_tool_call_output')
+        self.assertEqual(result['call_id'],'call_source')
+        self.assertNotEqual(result['id'],'ct_source')
+        self.assertIn('TOOL_OK',json.dumps(result['output']))
+        self.assertEqual([body for _,body in attempts],wire)
+
+    def test_native_tool_result_http(self):
+        proxy,attempts=self.native_http_fixture(tool=True)
+        token=self.t.keys.mint('', 'native-tool-http',86400,capacity=True)
+        def request(body):
+            conn=p.http.client.HTTPConnection('127.0.0.1',proxy.server_port,timeout=5)
+            try:
+                conn.request('POST','/codex/responses',json.dumps(body).encode(),
+                    {'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+                answer=conn.getresponse();return answer.status,answer.read()
+            finally:conn.close()
+        self.assertEqual(request(dict(input='Run the fixture tool'))[0],200)
+        self.install((10,.1));self.t.codex_state['sessions']['native-tool-http']['changed']=time.time()-601
+        self.assertEqual(self.t.codex_pick('native-tool-http')['account'],'a')
+        result=dict(type='custom_tool_call_output',id='client-result',call_id='call_source',output='TOOL_OK')
+        body=dict(input=[result])
+        self.assertEqual(request(body)[0],200)
+        self.assertEqual(request(dict(input=[result,dict(role='user',content='Resume')]))[0],200)
+        self.assertEqual([account for account,_ in attempts],['fixture-b']*3)
+        self.assertEqual(attempts[1][1],body)
+        self.assertEqual(request(dict(input=[dict(result,call_id='unseen')]))[0],409)
+        self.assertEqual(len(attempts),3)
+
+    def test_native_tool_result_affinity(self):
+        self.install((1,.5)); self.t.codex_pick('s')
+        self.t.codex_record('s','a',p.codex_output_refs(dict(output=[dict(
+            type='custom_tool_call',id='ct_source',call_id='call_source')])),p.codex_ref('account','fixture-a'))
+        self.install((.5,3)); self.t.codex_state['sessions']['s']['changed']=time.time()-601
+        self.assertEqual(self.t.codex_pick('s')['account'],'b')
+        body=dict(input=[dict(type='custom_tool_call_output',id='client-result',call_id='call_source',output='TOOL_OK')])
+        route=p.codex_context('POST','/codex/responses',{},json.dumps(body).encode())
+        self.assertEqual(self.t.codex_pick('s',*route)['account'],'a')
+        for change in (dict(call_id='unseen'),dict(call_id=''),dict(call_id=None),
+                       dict(encrypted_content='opaque'),dict(output=[dict(type='input_file',file_id='file')])):
+            altered=copy.deepcopy(body);altered['input'][0].update(change)
+            route=p.codex_context('POST','/codex/responses',{},json.dumps(altered).encode())
+            with self.assertRaises(ValueError):self.t.codex_pick('s',*route)
+        with self.assertRaises(ValueError):self.t.codex_pick('s',*p.codex_context(
+            'POST','/codex/responses',{},json.dumps(body).encode()),pin='b')
+        # A collision between two provider identities remains unresolved.
+        self.t.codex_record('s','b',[p.codex_ref('id','call_source')],p.codex_ref('account','fixture-b'))
+        with self.assertRaises(ValueError):self.t.codex_pick('s',*p.codex_context(
+            'POST','/codex/responses',{},json.dumps(body).encode()))
 
     def test_hold_material_concurrency_and_persistence(self):
         self.install((1,.5)); self.assertEqual(self.t.codex_pick('session')['account'],'a')
