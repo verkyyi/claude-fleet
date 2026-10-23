@@ -333,7 +333,7 @@ case $cmd in
     exit 3 ;;
   # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
-  ls|show|open|rename|close|reap|answer|notices)
+  ls|show|open|rename|close|continue|reap|answer|notices)
     exec python3 "$here/fleet-session-cli.py" "$@" ;;
   # a background service / scheduled task, on whichever machine holds it — the
   # hub's service_control (issue #2527); add · rm · ls · logs · cred stay the

@@ -9531,7 +9531,7 @@ fleet_window_bg_busy() {
 # flight, and an idle server has none. Walked from the pane pid, so a Codex
 # session's server counts the same. The server's own `--probe` of a new version
 # (a few seconds, no call) and the wrapper's `--cred` are not calls. The fourth
-# fleet_window_wait reason beside loop / children / bg; `looping` + @claude_wait=tool
+# fleet_window_wait reason beside loop / bg; `looping` + @claude_wait=tool
 # at the Stop, back to `done` on the first re-ask after the call returns. One ps.
 # FLEET_TOOL_WAIT=0 turns the reason off (never busy) — and is how the BREAK-IT
 # drill `tool-wait-idle` shows the red it was written against.
@@ -9685,148 +9685,16 @@ fleet_window_okey() {
   return 0
 }
 
-# fleet_window_waiting_children <session> <win> — is <win> waiting on a sub-task it
-# spawned (issue #1370)? Prints `k/N` (finished/total of its live subtree) and exits
-# 0 while k < N; prints nothing and exits 1 otherwise. The SAME count the dash's
-# k/N badge draws (tmux-dashboard-rows.sh pass A2): every live window whose @origin
-# chain climbs to <win>'s key, at any depth; finished = `done` with no live @loop.
-# A child whose PR merged or whose issue closed is reaped by cleanup and leaves the
-# count — it is "done" by leaving, as on the dash. One list-windows when <win> has
-# no live direct child — the common case on every Stop.
-fleet_window_waiting_children() {
-  local sess="${1:-}" t="${2:-}" key all line ws wid st loop iss wt repo norepo origin pth name
-  local tab='' pre slug k tot=0 dn=0 bin direct=0 zero='' 
-  [ -n "$t" ] || return 1
-  [ -n "$sess" ] || sess=$(fleet_current_session)
-  key=$(fleet_window_okey "$sess" "$t"); [ -n "$key" ] || return 1
-  all=$(fleet_lw '#{session_name}|#{window_id}|#{@claude_state}|#{@loop}|#{@issue}|#{@worktree}|#{@repo}|#{@norepo}|#{@origin}|#{pane_current_path}|#{window_name}' _fleet_tmux "$sess")
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    ws=${line%%|*}; [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
-    line=${line#*|}; wid=${line%%|*}; line=${line#*|}; st=${line%%|*}; line=${line#*|}
-    loop=${line%%|*}; line=${line#*|}; iss=${line%%|*}; line=${line#*|}
-    wt=${line%%|*}; line=${line#*|}; repo=${line%%|*}; line=${line#*|}
-    norepo=${line%%|*}; line=${line#*|}; origin=${line%%|*}
-    [ "$origin" = "$key" ] && [ "$wid" != "$t" ] && { direct=1; break; }
-  done <<EOF
-$all
-EOF
-  # Children on another machine (issue #1421) count too: the hub map's, not lost,
-  # finished once their last report here says MERGED. Off without CCQUOTA_FLEET=1.
-  local rem='' rdn=0 rtot=0
-  rem=$(_fleet_remote_tally "$sess" "$key") && { rdn=${rem%% *}; rtot=${rem##* }; }
-  if [ "$direct" != 1 ]; then
-    [ "$rtot" -gt "$rdn" ] 2>/dev/null || return 1
-    printf '%s/%s\n' "$rdn" "$rtot"; return 0
-  fi
-  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  # every window that could be in the subtree (a key-shaped @origin) → key/origin/finished
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    ws=${line%%|*}; [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
-    line=${line#*|}; wid=${line%%|*}; line=${line#*|}; st=${line%%|*}; line=${line#*|}
-    loop=${line%%|*}; line=${line#*|}; iss=${line%%|*}; line=${line#*|}
-    wt=${line%%|*}; line=${line#*|}; repo=${line%%|*}; line=${line#*|}
-    norepo=${line%%|*}; line=${line#*|}; origin=${line%%|*}; line=${line#*|}
-    pth=${line%%|*}; name=${line#*|}
-    [ "$wid" = "$t" ] && continue
-    case "$name" in dash|plan|backlog|home) continue ;; esac
-    case "$origin" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
-    # The window's repo slug (issue #1939: every fleet); unknown → `?:`, a key no
-    # @origin names — bare in a fleet hosting no repo (_fleet_key_prefix's rule).
-    [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
-    slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
-    pre="${slug:-?}:"
-    if [ -z "$slug" ]; then
-      [ -n "$zero" ] || { zero=n; [ -z "$(fleet_repos "$sess")" ] && zero=y; }
-      [ "$zero" = y ] && pre=''
-    fi
-    case "$iss" in
-      ''|*[!0-9]*) k=$(fleet_scratch_key "$wt"); [ -n "$k" ] || k=$(fleet_scratch_key "$pth")
-                   [ -n "$k" ] && k="$pre$k" ;;
-      *) k="${pre}issue-$iss" ;;
-    esac
-    [ -n "$k" ] || continue
-    if [ "$st" = 'done' ] && ! { [ -n "$loop" ] \
-         && python3 "$bin/fleet_loop_mark.py" status --value "$loop" >/dev/null 2>&1; }; then
-      st=1
-    else st=0; fi
-    tab="$tab$k	$origin	$st
-"
-  done <<EOF
-$all
-EOF
-  # chain_v's walk (CHAIN_MAX 16): a row counts toward <win> when its @origin chain,
-  # climbed through live keyed windows (first match wins), reaches <win>'s key.
-  # One awk over the whole table, however deep or wide the subtree.
-  line=$(printf '%s' "$tab" | awk -F '\t' -v key="$key" '
-    NF >= 3 { n++; r[n] = $2; f[n] = $3; if (!($1 in o)) o[$1] = $2 }
-    END {
-      for (i = 1; i <= n; i++) {
-        c = r[i]
-        for (h = 0; h < 16; h++) {
-          if (c == key) { t++; if (f[i] == 1) d++; break }
-          if (!(c in o)) break
-          c = o[c]
-        }
-      }
-      print d + 0, t + 0
-    }')
-  dn=${line%% *}; tot=${line##* }
-  case "$dn$tot" in ''|*[!0-9]*) return 1 ;; esac
-  dn=$((dn + rdn)); tot=$((tot + rtot))
-  [ "$tot" -gt "$dn" ] || return 1
-  printf '%s/%s\n' "$dn" "$tot"
-}
-
-# _fleet_remote_tally <sess> <parent-key> → `<finished> <total>` of the parent's
-# children on OTHER machines (issue #1421): every row of the hub map naming this
-# parent's worker_id, minus those on a lost node (EPIC #1419 rule 5: a lost machine
-# is marked, never waited on), finished = its last report in this parent's ledger
-# is MERGED (or REAPED as merged). rc 1 (nothing) when there are none — or the hub
-# is off, or its map is stale: then the parent is the one-machine parent it was.
-_fleet_remote_tally() {
-  local rows f d al
-  rows=$(fleet_remote_children "${1:-}" "${2:-}") || return 1
-  d="$(fleet_state_dir "${1:-}")/children"
-  f=$(printf '%s/%s.ndjson' "$d" "$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')")
-  al=$(fleet_key_alias "${1:-}" "${2:-}")      # its bare book, read first (issue #1939)
-  printf '%s\n' "$rows" | python3 -c '
-import json, sys
-last = {}
-for path in sys.argv[2:] + sys.argv[1:2]:
-    try:
-        for l in open(path, encoding="utf-8"):
-            try:
-                e = json.loads(l)
-            except ValueError:
-                continue
-            if isinstance(e, dict) and e.get("child") and e.get("type") != "wake":
-                last[e["child"]] = e
-    except OSError:
-        pass
-dn = tot = 0
-for line in sys.stdin:
-    p = line.rstrip("\n").split("\t")
-    if len(p) < 2 or not p[0] or p[1].endswith(":lost"):
-        continue
-    tot += 1
-    e = last.get(p[0])
-    if e is None:   # one key, two spellings: bare `issue-N` / `<slug>:issue-N` (#1351)
-        alt = [k for k in last if k.endswith(":" + p[0])] if ":" not in p[0] else [p[0].split(":", 1)[1]]
-        e = last.get(alt[0]) if len(alt) == 1 else None
-    e = e or {}
-    if e.get("state") == "MERGED" or (e.get("state") == "REAPED" and str(e.get("verdict") or "").startswith("merged")):
-        dn += 1
-print(dn, tot)
-sys.exit(0 if tot else 1)' "$f" ${al:+"$d/$al.ndjson"} 2>/dev/null
-}
+# compat-1v: 下一批删 — old installed callers may still ask these names.
+# Fleet Parent relationships no longer represent this session's native work.
+# Keep the entry points inert: do not scan windows, remote maps or child ledgers.
+fleet_window_waiting_children() { return 1; }
+_fleet_remote_tally() { return 1; }
 
 # fleet_window_wait <session> <win> — WHY an idle <win> is not finished (issue
 # #1370). Prints the reasons it holds, comma-separated, in a fixed order, and
 # exits 0 when there is at least one; prints nothing and exits 1 otherwise:
 #   loop      a Loop is pending (fleet_window_loop: @loop / a fleet-loop ledger)
-#   children  a sub-task it spawned is not finished (fleet_window_waiting_children)
 #   bg        its agent still owns a Bash-tool job (fleet_window_bg_busy, quick)
 #   tool      a fleet tool call it made is still running (fleet_window_tool_busy,
 #             issue #1880) — an MCP call Claude Code backgrounded past 120 s
@@ -9834,14 +9702,13 @@ sys.exit(0 if tot else 1)' "$f" ${al:+"$d/$al.ndjson"} 2>/dev/null
 #             issue #2869) — a `report waiting` with a page, or its Playwright
 #             browser still open — for FLEET_HUMAN_WAIT_SECS
 # The Stop hook writes `looping` + @claude_wait from this; fleet-reap-live.py
-# retains on it. A window with none of the five pays one list-windows, three tmux
-# reads and three ps.
+# retains on its native work. Old Parent trees and child-report ledgers are not
+# consulted; each Task owns only its own observed activity.
 fleet_window_wait() {
   local sess="${1:-}" t="${2:-}" out=''
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   fleet_window_loop "$sess" "$t" >/dev/null 2>&1 && out=loop
-  fleet_window_waiting_children "$sess" "$t" >/dev/null 2>&1 && out="${out:+$out,}children"
   fleet_window_bg_busy "$sess" "$t" 1 && out="${out:+$out,}bg"
   fleet_window_tool_busy "$sess" "$t" && out="${out:+$out,}tool"
   fleet_window_human "$sess" "$t" >/dev/null && out="${out:+$out,}human"
@@ -9873,8 +9740,8 @@ fleet_stop_wait() {
 
 # fleet_window_reeval <session> <win> [dry] — ask an IDLE window the Stop hook's
 # question again, now (issue #1376). The Stop hook decides `looping` + @claude_wait
-# once, at the edge; a child that finishes, a background job that ends, or a window
-# that stopped before #1370 was synced stays as that edge left it until its next
+# once, at the edge; a background job that ends, or a window with an old
+# children-only reason stays as that edge left it until its next
 # Stop. This re-asks fleet_window_wait and rewrites ONLY the two things the Stop
 # decision owns: `done` ↔ `looping` and @claude_wait. It never touches
 # working/needs, or a `looping` with no

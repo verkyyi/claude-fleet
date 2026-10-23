@@ -5,6 +5,8 @@ Parent coordination, await and receive keep one-version refusal handlers.
 None proves native exit or grants execution authority.
 """
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -15,6 +17,102 @@ import uuid
 
 BIN = Path(__file__).resolve().parent
 TERMINAL = ("succeeded", "failed", "cancelled", "refused")
+
+
+def task_web_link(task):
+    """The existing exact Task route; reading it never authorizes execution."""
+    hub = os.environ.get('CCQUOTA_HUB_URL') or os.environ.get('FLEET_HUB_URL') or ''
+    if not hub:
+        root = Path(os.environ.get('FLEET_CONF_DIR') or Path.home() / '.config/claude-fleet')
+        try:
+            hub = json.loads((root / 'hub.json').read_text()).get('url') or ''
+        except (OSError, ValueError, AttributeError):
+            pass
+    return str(hub).rstrip('/') + '/app/s/' + (task if isinstance(task, str) and re.fullmatch(r'T[1-9][0-9]*', task) else '')
+
+
+def continue_task(row, lang='zh', *, bin_dir=None, agent=None):
+    """Explicit owner action. Persist the exact request until acknowledged.
+
+    The cache is only a retry envelope, never execution authority. The Hub
+    checks current stop/generation, ownership and native exit evidence.
+    """
+    task = row.get('task') or ''
+    en = lang == 'en'
+    try:
+        if not isinstance(task, str) or not re.fullmatch(r'T[1-9][0-9]*', task):
+            raise ValueError('An exact Task reference is required')
+        if agent not in (None, 'claude', 'codex'):
+            raise ValueError('Choose Claude, Codex or the original agent explicitly')
+        root = Path(os.environ.get('FLEET_CONF_DIR') or Path.home() / '.config/claude-fleet') / 'task-continue'
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with (root / (task + '.lock')).open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            pending = root / (task + '.json')
+            if pending.exists():
+                payload = json.loads(pending.read_text())
+                if payload.get('task') != task:
+                    raise ValueError('Saved continuation identity does not match')
+                if payload.get('agent') != agent:
+                    raise ValueError('An earlier continuation is not confirmed; retry its original agent choice (' + str(payload.get('agent') or 'same') + ') first')
+            else:
+                view = call('get', task, bin_dir=bin_dir)
+                t = view.get('task') if isinstance(view, dict) else None
+                if (not isinstance(t, dict) or (t.get('task') or t.get('id')) != task
+                        or not t.get('execution_endpoint') or not t.get('cancel_request')
+                        or type(t.get('generation')) is not int or t['generation'] < 2):
+                    raise ValueError('No current stopped Task authorization; refresh and inspect the Task')
+                if ('cancel_request' in row and row['cancel_request'] != t['cancel_request']
+                        or 'generation' in row and row['generation'] != t['generation']):
+                    raise ValueError('Task changed since selection; refresh before continuing')
+                seed = '%s:%s:%s:%s' % (task, t['cancel_request'], t['generation'], agent or 'same')
+                payload = dict(task=task, expected_stop_operation_id=t['cancel_request'],
+                               expected_generation=t['generation'],
+                               idempotency_key='task-continue:' + hashlib.sha256(seed.encode()).hexdigest())
+                if agent is not None:
+                    payload['agent'] = agent
+                tmp = pending.with_suffix('.tmp')
+                with tmp.open('w') as f:
+                    json.dump(payload, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                tmp.replace(pending)
+            writer = Path(bin_dir or BIN) / 'fleet-hub-write.sh'
+            result = subprocess.run(['bash', str(writer), 'task_continue', json.dumps(payload)],
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=50)
+            try:
+                answer = json.loads(result.stdout)
+            except ValueError:
+                raise ValueError(result.stderr.strip() or 'Owner credential or Hub response unavailable')
+            if isinstance(answer, dict) and 'error' in answer:
+                # A definite refusal grants nothing. A later explicit action
+                # may read a newer stop; a missing/malformed answer stays pinned.
+                pending.unlink()
+                raise ValueError(str(answer['error']))
+            operation = answer.get('operation', {})
+            def proof_id(value):
+                return isinstance(value, str) and bool(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', value))
+            native = proof_id(answer.get('exit_operation_id'))
+            unclaimed = proof_id(answer.get('stop_operation_id'))
+            if (answer.get('task') != task or answer.get('authorized_generation') != payload['expected_generation'] + 1
+                    or answer.get('agent') not in ('claude', 'codex')
+                    or agent is not None and answer.get('agent') != agent
+                    or native == unclaimed or native and 'stop_operation_id' in answer
+                    or unclaimed and ('exit_operation_id' in answer or answer['stop_operation_id'] != payload['expected_stop_operation_id'])
+                    or operation.get('action') != 'worker_start'
+                    or not isinstance(operation.get('operation_id'), str)
+                    or str(uuid.UUID(operation['operation_id'])) != operation['operation_id']):
+                raise ValueError('Continuation acknowledgment is not confirmed')
+            # Even a refused/unknown launch is a recorded authorization. Do not
+            # turn it into a fresh start by silently minting another request.
+            pending.unlink()
+            status = operation.get('status')
+            if status not in ('accepted', 'pending', 'running', 'succeeded'):
+                raise ValueError('Continuation recorded; inspect operation ' + operation['operation_id'] + ' (' + str(status) + ')')
+            return 0, (('Continuation accepted for the same Task with ' if en else '已受理继续同一任务，使用 ') + answer['agent'].capitalize() + '。')
+    except (ValueError, OSError, subprocess.SubprocessError, TypeError, AttributeError, KeyError) as exc:
+        lead = 'Continuation not confirmed: ' if en else '继续尚未确认：'
+        return 1, lead + str(exc) + (' · Open Task: ' if en else ' · 查看任务：') + task_web_link(task)
 
 
 def call(action, task, payload=None, timeout=15, *, bin_dir=None):

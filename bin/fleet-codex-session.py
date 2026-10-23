@@ -197,6 +197,8 @@ def hook():
     if current != "codex|" + owner:
         return
     if payload.get("hook_event_name") == "SessionStart":
+        if not session_start_root(payload["session_id"]):
+            return
         data = {"session_id": payload["session_id"], "owner": owner,
                 "home": str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()),
                 "transcript": payload.get("transcript_path", ""),
@@ -383,6 +385,36 @@ def tui_root(thread, own=()):
     initialize's clientInfo name, 'claude_fleet' — whoever opened the thread."""
     return (isinstance(thread, dict) and valid_id(thread.get("id")) and not thread.get("parentThreadId")
             and not thread.get("ephemeral") and thread.get("id") not in own)
+
+
+def session_start_root(sid):
+    """A SessionStart may come from native background work in the same pane.
+
+    Codex's temporary structured threads and subagents inherit launcher env,
+    so the pane/PID alone is not an identity witness. Ask that launch's private
+    server for the exact thread, using the follower's root predicate. Unknown
+    metadata leaves both identity writers unchanged; it never guesses a file.
+    """
+    remote = os.environ.get("FLEET_CODEX_REMOTE", "")
+    if not remote:
+        # compat-1v: older direct CLI launches have no private RPC endpoint.
+        return True
+    if not valid_id(sid) or not remote.startswith("unix:///"):
+        return False
+    client = None
+    try:
+        rpc = rpc_module()
+        client = rpc['Client'](remote, timeout=2)
+        thread = (client.call('thread/read', {'threadId': sid}) or {}).get('thread')
+        own, _ = rpc['own_threads'](remote)
+        return (isinstance(thread, dict) and thread.get('id') == sid
+                and thread.get('ephemeral') is False and 'parentThreadId' in thread
+                and tui_root(thread, own))
+    except (OSError, ValueError, TypeError, KeyError, EOFError, TimeoutError):
+        return False
+    finally:
+        if client is not None:
+            client.close()
 
 
 def current_thread(client, sid, own=()):

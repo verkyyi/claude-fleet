@@ -187,12 +187,11 @@ ccquota agent's control channel is this machine's only door to the hub.
   and a later STOPPED / IDLE / WAITING never un-lands a MERGED (nor a PR the
   prmap calls merged). Hub off, no node token, `FLEET_HUB_PROGRESS=0` or a
   hub without the endpoint ⇒ exit 3, nothing asked, nothing written.
-- **Waiting and holding.** `fleet-await.sh wid:<child elsewhere>` (a child whose
-  parent is you) waits on your ledger, which the hub feeds, and calls it GONE when
-  the map drops it. `fleet-children.sh` lists a remote child as `mac-a remote` (or
-  `gone · mac-a`), and `fleet_window_waiting_children` — the reaper's
-  `retained:children` — counts a remote child until its MERGED report arrives,
-  skipping a lost node and any map older than `FLEET_HUB_RETAIN_SECS` (600 s).
+- **Parent waits are retired.** Historical child reports and remote relationships
+  can still be read, but do not hold a Task, manufacture `looping`, or defer its
+  own due Loop. `fleet_window_waiting_children` and `_fleet_remote_tally` are
+  inert compatibility entry points. Native Subagent activity, background work,
+  tool calls and schedules remain the current session's liveness evidence.
 
 Switch it on with `CCQUOTA_FLEET=1` in the fleet's conf (the agent needs the same
 variable, which it already has when it reports to a fleet hub). Off, or with no
@@ -512,6 +511,21 @@ certificate's person: their own workers only (`FleetScope`; another person's is
 takes `operation_get`, so the shell reads its outcome with no token anywhere. A
 local row's items are untouched, and with the hub off none of this exists: the
 menu offers these only on `wid:` rows, which only the hub's cache produces.
+
+**Explicit Task continuation.** Terminal’s “继续任务” and `fleet continue T<n>`
+offer the original agent, Claude or Codex (`--agent claude|codex` in the CLI), then
+call `fleet-hub-write.sh task_continue` through `/v1/fleet/write`, using only the
+Task owner’s viewer/session credential or signed connection certificate. This
+special signed action is not a general Worker tool: node tokens, Worker assertions
+and coding-session credentials are refused; the operator’s read scope does not
+grant ownership of someone else’s Task. The body is `task`, `idempotency_key`,
+`expected_stop_operation_id`, `expected_generation`, and optional `agent`; it uses
+the existing Task continuation parser and transaction. The panel’s selected
+stop/generation must still match. A local retry envelope retains exactly the same
+request, including the explicitly chosen agent, after a lost reply; a different
+choice cannot replace an unconfirmed request. The cache grants no execution authority. Missing credentials
+or unavailable evidence returns the reason and `/app/s/T<n>`, never `worker_resume`,
+spawn or a new Task. Opening retained history only reads its details/list.
 
 **The client on your own computer** (#3008). `bin/fleet` opens
 `fleet-thin.py`: one foreground loop and one connection to the home machine.

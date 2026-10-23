@@ -393,13 +393,12 @@ def wait_reasons(r):
     """The Stop hook's wait reasons asked FRESH, minus `loop` (issue #4431).
 
     fleet_window_wait's loop half is this very ledger's pending wakeup: it must
-    not hold its own due delivery. children / bg / tool / human still hold it.
+    not hold its own due delivery. Its own bg / tool / human work still holds it.
     An answer that cannot be read is `unknown`, which holds too.
     """
     lib = str(Path(__file__).with_name('fleet-lib.sh'))
     try:
         out = subprocess.run(['bash', '-c', '. "$1"; s=$2; w=$3; '
-                              'fleet_window_waiting_children "$s" "$w" >/dev/null 2>&1 && echo children; '
                               'fleet_window_bg_busy "$s" "$w" 1 && echo bg; '
                               'fleet_window_tool_busy "$s" "$w" && echo tool; '
                               'fleet_window_human "$s" "$w" >/dev/null && echo human; echo ok',

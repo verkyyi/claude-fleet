@@ -15,6 +15,7 @@
 # (session_id / fleet_agent_session_id) reads the same chain in Python and shell.
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 import json
+import io
 import os
 from pathlib import Path
 import shutil
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
@@ -37,7 +39,7 @@ spec.loader.exec_module(cx)
 
 TMUX = shutil.which('tmux')
 ENV_KEYS = ('TMUX', 'TMUX_PANE', 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_ID_DIR', 'FLEET_ID_PUSH',
-            'FLEET_CONF_DIR', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_HOME', 'FLEET_ID_HOOK')
+            'FLEET_CONF_DIR', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_HOME', 'FLEET_ID_HOOK', 'FLEET_CODEX_REMOTE')
 
 
 class TableTests(unittest.TestCase):
@@ -143,6 +145,43 @@ class WitnessTests(unittest.TestCase):
         follower = cx.Follow(dict(TMUX_PANE=self.pane, FLEET_CODEX_LAUNCHER_PID=owner,
                                   FLEET_CODEX_REMOTE=server.remote, CODEX_HOME=str(self.tmp / 'codex')))
         return server, follower
+
+    def test_codex_internal_thread_hooks_preserve_root(self):
+        # Native 0.162.1 reports ephemeral=true/path=null from start, started
+        # and read. Its temporary structured turn still runs SessionStart with
+        # the same launcher/pane. Both hook entries must ask native metadata.
+        now = int(time.time() * 1000)
+        root = fake.uuid7(now)
+        server, follower = self.codex_launch('1234', [root])
+        self.addCleanup(follower.close)
+        os.environ['FLEET_CODEX_REMOTE'] = server.remote
+        self.assertEqual(self.tick_until(follower, root), root)
+        original_identity = self.call('show-options', '-wv', '-t', self.pane, '@codex_identity')
+        original_ledger = fleet_id.read(self.fid)
+        for entry in ('identity', 'ledger'):
+            for kind, attrs in (('ephemeral', {'ephemeral': True, 'path': None}),
+                                ('subagent', {'parentThreadId': root}),
+                                ('unconfirmed', None)):
+                with self.subTest(entry=entry, kind=kind):
+                    sid = fake.uuid7(now + 100)
+                    if attrs is not None: server.add(fake.tui_thread(sid, **attrs))
+                    payload = json.dumps({'hook_event_name': 'SessionStart', 'session_id': sid, 'source': 'startup'})
+                    if entry == 'identity':
+                        with patch.object(sys, 'stdin', io.StringIO(payload)):
+                            cx.hook()
+                        self.assertEqual(self.call('show-options', '-wv', '-t', self.pane, '@codex_identity'), original_identity)
+                    else:
+                        fleet_id.hook(payload)
+                        self.assertEqual(fleet_id.read(self.fid), original_ledger)
+        # A real new top-level thread remains a valid start for both paths.
+        next_root = fake.uuid7(now + 200)
+        server.add(fake.tui_thread(next_root))
+        payload = json.dumps({'hook_event_name': 'SessionStart', 'session_id': next_root, 'source': 'startup'})
+        with patch.object(sys, 'stdin', io.StringIO(payload)):
+            cx.hook()
+        fleet_id.hook(payload)
+        self.assertEqual(json.loads(self.call('show-options', '-wv', '-t', self.pane, '@codex_identity'))['session_id'], next_root)
+        self.assertEqual(self.segments(), [(root, 'startup'), (next_root, 'new')])
 
     def tick_until(self, follower, want):
         got = ''

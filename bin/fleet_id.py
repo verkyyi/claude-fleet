@@ -57,6 +57,7 @@ import fcntl
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import time
@@ -1999,6 +2000,12 @@ def hook(stdin):
     agent = hook_agent(pane)
     if agent is None:
         return
+    if agent == "codex":
+        # Same authority check as @codex_identity's writer. Native background
+        # SessionStart inherits our launcher and pane, but owns neither identity.
+        native_reader = runpy.run_path(os.path.join(os.path.dirname(__file__), "fleet-codex-session.py"))
+        if not native_reader['session_start_root'](native):
+            return
     fid = window_fid(pane)
     if not fid:
         return
