@@ -7789,6 +7789,15 @@ drill_report_delegation_offline() {
   SECS=$(since "$t0")
 }
 
+drill_session_title_placeholder() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/task-line-selftest.sh" >"$WORK/title-placeholder.log" 2>&1 || {
+    WHY="first prompt title regression: $(tail -3 "$WORK/title-placeholder.log")"; return 1;
+  }
+  WHAT='短码任务的首句同时更新窗口和记录；中英文占位名消失，后续消息不改名'
+  SECS=$(since "$t0")
+}
+
 drill_session_title_lost() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/session-title-ledger-selftest.py" >"$WORK/title-ledger.log" 2>&1 || {
