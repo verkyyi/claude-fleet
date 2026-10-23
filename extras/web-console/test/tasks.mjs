@@ -89,4 +89,4 @@ assert.equal(displayCodes([a, { ...b, outcome: 'cancelled' }]).get(a), 'FDMQ'); 
 assert.equal(writtenCode(a), 'FDMQ');
 assert.equal(taskOpen(done), false);
 assert.equal(taskOpen(a), true);
-console.log('PASS task codes: encode vectors, display among the unfinished, written code for the finished and the old');
+console.log('PASS task codes: encode vectors, stable written codes across current and historical outcomes');
