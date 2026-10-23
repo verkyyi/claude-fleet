@@ -144,6 +144,16 @@ applicable() {
 }
 
 # call METHOD PATH [JSON] → the answer's body on stdout; rc 0 on HTTP 200.
+task_record_curl() {
+  local body="$1" mode="$2"; shift 2
+  if [ "$mode" = body-pipe ]; then
+    # Fresh pipe on each attempt, including forwarder -> direct fallback.
+    # Auth remains curl's stdin config, large proofs never enter exec argv.
+    "$@" --data-binary @/dev/fd/3 3< <(printf '%s' "$body")
+  else
+    "$@" ${body:+--data-binary "$body"}
+  fi
+}
 call() {
   local m="$1" p="$2" body="${3:-}" pair url tok resp rc code why
   pair=$(fleet_node_pair) || die 3 "no node token here"
@@ -156,14 +166,14 @@ call() {
   local sock=''; case "$url" in https://*) sock=$(fleet_hub_sock) ;; esac
   if [ -n "$sock" ]; then
     resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
-      "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' --unix-socket "$sock" \
-        -H "X-Fleet-Hub: $url" -H "Host: $(printf '%s' "${url#*://}" | cut -d/ -f1)" -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} \
+      task_record_curl "$body" "${4:-}" "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' --unix-socket "$sock" \
+        -H "X-Fleet-Hub: $url" -H "Host: $(printf '%s' "${url#*://}" | cut -d/ -f1)" -X "$m" -H 'Content-Type: application/json' \
         "http://${url#*://}$p" 2>/dev/null); rc=$?   # plain on the socket: the agent holds the TLS
     case "$rc:$resp" in 7:*|0:hubfwd:\ this\ forwarder*|0:hubfwd:\ not\ a\ path*) sock='' ;; esac
   fi
   [ -n "$sock" ] || { resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
-    "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
-      -X "$m" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} "$url$p" 2>/dev/null); rc=$?; }
+    task_record_curl "$body" "${4:-}" "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
+      -X "$m" -H 'Content-Type: application/json' "$url$p" 2>/dev/null); rc=$?; }
   [ "$rc" -eq 0 ] && [ -n "$resp" ] || { printf 'fleet-task-record: hub unreachable (curl exit %s)\n' "$rc" >&2; return 1; }
   code=$(printf '%s\n' "$resp" | tail -n 1)
   printf '%s\n' "$resp" | sed '$d'
@@ -588,6 +598,14 @@ case "$cmd" in
     is_tref "${1:-}" || usage
     payload=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin),separators=(",",":")))') || exit 2
     call POST "/v1/node/tasks/$1/execution/claim" "$payload"
+    exit $? ;;
+  execution-exit)
+    is_tref "${1:-}" || usage
+    payload=$(python3 -c 'import json,sys
+raw=sys.stdin.buffer.read((1<<20)+1)
+if len(raw)>(1<<20) or not isinstance(json.loads(raw),dict): sys.exit(2)
+sys.stdout.buffer.write(raw)') || exit 2
+    call POST "/v1/node/tasks/$1/execution/exit" "$payload" body-pipe
     exit $? ;;
   children)
     is_task_ref "${1:-}" || usage

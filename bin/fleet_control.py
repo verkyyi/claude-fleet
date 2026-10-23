@@ -17,6 +17,7 @@ import uuid
 
 from fleet_park_metrics import summarize as park_summary
 from fleet_config_write import revision, write
+from fleet_task_exit_submit import NativeExitSubmission, RECEIPT
 from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
                               parse_worker_id, is_identity, private_dir, read_request, repo_named, run, tool_path, validate_gh_read,
@@ -79,7 +80,7 @@ class Refused(Fault):
         return dict(super().as_dict(), exit=self.exit_code, stderr1=self.line, **self.extra)
 
 
-class Control:
+class Control(NativeExitSubmission):
     def __init__(self, conf_dir=None, bin_dir=BIN):
         self.conf_dir = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
         self.bin = Path(bin_dir).absolute()
@@ -500,8 +501,14 @@ class Control:
                     # Re-delivery schedules the SAME stop again, including after
                     # executor death or a failed close. execute() serializes its
                     # cleanup across processes without blocking stop persistence.
-                    db.execute("UPDATE operations SET status='accepted',updated=?,result=NULL WHERE id=?",
-                               (now(), op_id))
+                    previous = json.loads(old["result"]) if old["result"] else {}
+                    if "payload" not in previous.get(RECEIPT, {}):
+                        db.execute("UPDATE operations SET status='accepted',updated=? WHERE id=?",
+                                   (now(), op_id))
+                    # Once exit evidence exists, replay only that immutable
+                    # packet. Preserve cleanup status and its original clock:
+                    # an interrupted accepted/running cleanup still ages to
+                    # unknown through get_operation's existing recovery rule.
                 else:
                     return operation(old)
             else:
@@ -532,6 +539,16 @@ class Control:
 
     def finish(self, op_id, state, result):
         with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute("SELECT result FROM operations WHERE id=?", (op_id,)).fetchone()
+            previous = json.loads(old[0]) if old and old[0] else {}
+            result = dict(result)
+            result.pop(RECEIPT, None)
+            if RECEIPT in previous:
+                result[RECEIPT] = previous[RECEIPT]
+                result["execution_exit"] = "confirmed" if previous[RECEIPT].get("confirmed") is True else "unproven"
+            if isinstance(previous.get("timing"), dict):
+                result["timing"] = dict(previous["timing"], **result.get("timing", {}))
             db.execute("UPDATE operations SET status=?,result=?,updated=? WHERE id=?",
                        (state, canonical(result), now(), op_id))
             row = db.execute("SELECT action FROM operations WHERE id=?", (op_id,)).fetchone()
@@ -552,6 +569,7 @@ class Control:
         (issue #2238) — its status and every other field untouched. False when
         the operation is unknown or has no result yet (still running)."""
         with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT result FROM operations WHERE id=?", (op_id,)).fetchone()
             if row is None or not row["result"]:
                 return False
@@ -903,6 +921,11 @@ class Control:
         controlled_stop = row["action"] == "worker_stop" and request.get("control_version") == 1
         if not controlled_stop:
             return self._execute_once(op_id)
+        with self.store.connect() as db:
+            _, _, receipt = self._exit_row(db, op_id)
+        if "payload" in receipt:
+            self.submit_native_exit(op_id)
+            return
         # Only cleanup takes this lock. submit() commits the stop first and never
         # waits for it. A crashed executor releases the kernel lock automatically;
         # duplicate deliveries cannot concurrently stop a target or revoke work.
@@ -918,6 +941,10 @@ class Control:
             self._execute_once(op_id)
         finally:
             os.close(fd)
+
+        # A missing window/failed close can still have a proved native exit.
+        # Cleanup, admission, FID and SQLite locks are all released before send.
+        self.submit_native_exit(op_id)
 
     def _execute_once(self, op_id):
         with self.store.connect() as db:
@@ -1218,12 +1245,19 @@ def refusal_line(err):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--conf-dir")
-    parser.add_argument("command", choices=("rpc", "execute"))
+    parser.add_argument("command", choices=("rpc", "execute", "retry-native-exits"))
     parser.add_argument("operation_id", nargs="?")
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.command == "retry-native-exits":
+            conf = Path(args.conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet"))
+            if not (conf / "control/state.sqlite3").is_file():
+                return 0
         controller = Control(args.conf_dir)
+        if args.command == "retry-native-exits":
+            controller.retry_native_exits()
+            return 0
         if args.command == "execute":
             controller.execute(args.operation_id)
             return 0

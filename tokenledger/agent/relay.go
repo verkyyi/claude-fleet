@@ -92,6 +92,8 @@ type relayPaths struct {
 	// executionSync only probes the local stop-import helper; it does not
 	// advertise support for controlled task execution to the Hub.
 	executionSync bool
+	// Local pending exit journal retry only; never a Hub execution capability.
+	executionExitRetry bool
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -150,6 +152,8 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			p.authoritySync = v == "1"
 		case "execution_sync":
 			p.executionSync = v == "1"
+		case "execution_exit_retry":
+			p.executionExitRetry = v == "1"
 		case "task":
 			p.task = v == "1"
 		}
