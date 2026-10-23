@@ -97,6 +97,12 @@ def paint(screen, words, failed=False, pos=None, waking=False):
 def editor(screen, draft, failed):
     import fleet_session_gate as gate
     words = read(draft)
+    # Older editors persisted DEL on Backspace at column zero. Only that
+    # control-only artifact is empty; whitespace, Unicode and text containing
+    # DEL remain the person's unsent draft and keep the external-wake guard.
+    if words and not words.strip('\x7f'):
+        words = ''
+        save(draft, words)
     pos = len(words)
     decoder = codecs.getincrementaldecoder('utf-8')('replace')
     esc = ''
@@ -157,9 +163,10 @@ def editor(screen, draft, failed):
                 save(draft, words)
                 paint(screen, words, pos=pos, waking=True)
                 return 11 if failed and char == 'n' else 10
-            if char in ('\x7f', '\b') and pos:
-                words = words[:pos-1] + words[pos:]
-                pos -= 1
+            if char in ('\x7f', '\b'):
+                if pos:
+                    words = words[:pos-1] + words[pos:]
+                    pos -= 1
             elif char in ('\x03', '\x15'):
                 words = ''; pos = 0
             elif char == '\x01': pos = 0
