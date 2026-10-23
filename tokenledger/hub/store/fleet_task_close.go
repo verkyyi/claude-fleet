@@ -84,6 +84,10 @@ func noResultEvidence(reason string) string {
 // endTasks cancels owner's unfinished version-1 records matching where, each
 // with observation prefix + its old state and evidence when it had none.
 func endTasks(tx *sql.Tx, owner, where string, args []any, prefix, evidence string, now time.Time) (int64, error) {
+	where, args, err := legacyTaskProjection(tx, owner, where, args)
+	if err != nil {
+		return 0, err
+	}
 	q := `UPDATE fleet_tasks SET observation = CAST(? AS TEXT) || state, state = ?, outcome = ?,
 		evidence = CASE WHEN evidence = '' THEN ? ELSE evidence END, updated_at = ?
 		WHERE owner = ? AND authority_version = ? AND outcome = '' AND state NOT IN (?, ?, ?, ?, ?) AND ` + where
@@ -98,10 +102,13 @@ func endTasks(tx *sql.Tx, owner, where string, args []any, prefix, evidence stri
 // reopenTasksOnID puts back the records an ID's close ended, when the same ID
 // goes on (`reopened`, or a hub-closed ID taken after all).
 func reopenTasksOnID(tx *sql.Tx, owner, id string, now time.Time) error {
-	_, err := tx.Exec(`UPDATE fleet_tasks SET state = SUBSTR(observation, CAST(? AS INTEGER)), outcome = '',
+	where, args, err := legacyTaskProjection(tx, owner, "observation LIKE ? AND state = ?", []any{ObsIDClosed + id + ":%", TaskCancelled})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE fleet_tasks SET state = SUBSTR(observation, CAST(? AS INTEGER)), outcome = '',
 		evidence = CASE WHEN evidence LIKE ? THEN '' ELSE evidence END, observation = '', updated_at = ?
-		WHERE owner = ? AND observation LIKE ? AND state = ?`,
-		len(ObsIDClosed+id+":")+1, TaskEndedNoResult+"%", now.UTC().Format(rfc), owner, ObsIDClosed+id+":%", TaskCancelled)
+		WHERE owner = ? AND `+where, append([]any{len(ObsIDClosed+id+":") + 1, TaskEndedNoResult + "%", now.UTC().Format(rfc), owner}, args...)...)
 	return err
 }
 
@@ -134,6 +141,13 @@ func (s *Store) ReconcileClosedTasks(owner string, apply bool, now time.Time) (T
 		return out, err
 	}
 	for _, t := range all {
+		protected, err := taskProjectionProtected(s.read, t)
+		if err != nil {
+			return out, err
+		}
+		if protected {
+			continue
+		}
 		if taskFinished(t.State) {
 			continue
 		}

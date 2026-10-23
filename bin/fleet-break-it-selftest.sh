@@ -6968,6 +6968,7 @@ drill_task_unclaimed_stop_proof() {
   SECS=$(since "$t0")
 }
 
+
 drill_task_continue_unclaimed() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
@@ -6976,6 +6977,7 @@ drill_task_continue_unclaimed() {
   WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
   SECS=$(since "$t0")
 }
+
 
 drill_task_continuation_start() {
   local t0; t0=$(now); CAP=30
@@ -6993,6 +6995,15 @@ drill_task_local_continuation() {
       WHY="local continuation regression: $(tail -10 "$WORK/task-local-continuation.log")"; return 1;
     }
   WHAT='显式新授权与原ACK证明共同接续；旧FID仍停止，同grant同分配，第二轮退出证明独立'
+  SECS=$(since "$t0")
+}
+
+drill_codex_no_daemon_fence() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-codex-no-daemon-fence-selftest.py" >"$WORK/codex-no-daemon-fence.log" 2>&1 || {
+    WHY="Codex no-daemon admission regression: $(tail -10 "$WORK/codex-no-daemon-fence.log")"; return 1;
+  }
+  WHAT='受控 no-daemon 经原生栅栏登记Codex client，停止后不exec；非受控argv不变'
   SECS=$(since "$t0")
 }
 
@@ -7808,6 +7819,14 @@ drill_reap_agent_split() {
   grep -qF 'def test_idle_persistent_mcp_is_not_work' "$BIN/fleet-codex-busy-selftest.py" \
     || { WHY="fleet-codex-busy-selftest.py no longer holds an idle resident MCP is not work"; return 1; }
   WHAT='回收一条路：结束（钩子 / 退出码）、认 Agent 进程、问还有没有活、收它留下的服务都问适配表；正常退出、被杀、后台服务还在、真有活四条腿两种 Agent 各跑一遍（fleet-agent-end-selftest.py，这里按名守住）；常驻 MCP 不算活（fleet-codex-busy-selftest.py）'
+  SECS=$(since "$t0")
+}
+
+drill_task_history_current_generation() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskProjectionControlledGeneration TestTaskProjectionKeepsControlledIDHistory TestTaskProjectionControlledSweepsAndUndo TestTaskProjectionSnapshotRejectsAdmissionAndGenerationChange TestTaskProjectionMixedLegacyAliases' \
+    "$ROOT/tokenledger/hub/store/fleet_task_projection_test.go" \
+    '旧 ID/result/closed/超时补偿保留历史，不改写受控 Task 的当前代次和绑定' ./hub/store || return 1
   SECS=$(since "$t0")
 }
 
