@@ -7056,8 +7056,6 @@ drill_task_local_continuation() {
 }
 
 
-
-
 drill_codex_no_daemon_fence() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-codex-no-daemon-fence-selftest.py" >"$WORK/codex-no-daemon-fence.log" 2>&1 || {
@@ -7900,6 +7898,27 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_retention_defaults() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-task-retention-defaults-selftest.py" >"$WORK/task-retention-defaults.log" 2>&1 || {
+    WHY="task defaults retain role/PIN privilege: $(tail -14 "$WORK/task-retention-defaults.log")"; return 1;
+  }
+  WHAT='隔离tmux不因PIN写keep；普通Task默认一致，旧角色不绕Loop/bg、不催报，历史keep不迁移'
+  SECS=$(since "$t0")
+}
+
+drill_task_controlled_auto_retention() {
+  local t0; t0=$(now); CAP=60
+  suite_holds fleet-cleanup-selftest.sh \
+    'controlled or malformed execution marker blocks automatic PR archive' \
+    'PR teardown rechecks late control admission and unknown control data' || return 1
+  python3 "$BIN/fleet-controlled-auto-retention-selftest.py" >"$WORK/task-controlled-auto-retention.log" 2>&1 || {
+    WHY="controlled automatic close: $(tail -12 "$WORK/task-controlled-auto-retention.log")"; return 1;
+  }
+  WHAT='真实隔离tmux保留受控窗口与历史；旧结果/角色/到期只安全park，关窗前重读控制绑定'
+  SECS=$(since "$t0")
+}
+
 drill_parent_origin_retired() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
@@ -7943,6 +7962,8 @@ drill_task_current_view() {
   WHAT='历史文字不冒充原生问题，Task 代码不随会话或结果改变'
   SECS=$(since "$t0")
 }
+
+
 
 drill_task_result_overrides_native() {
   local t0; t0=$(now); CAP=30

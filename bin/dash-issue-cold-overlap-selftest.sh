@@ -226,7 +226,7 @@ st_pass "OVERLAP the agent starts beside the checkout: accepted → ready ${took
 
 # ===== STAMPS =================================================================
 opts=$(TM show-options -w -t "$win" 2>/dev/null)
-for o in '@issue 11' '@fleet_role worker' '@reap_policy merged' '@repo acme/widgets' '@born' '@fleet_id' '@worktree'; do
+for o in '@issue 11' '@fleet_role worker' '@reap_policy idle:2h' '@repo acme/widgets' '@born' '@fleet_id' '@worktree'; do
   printf '%s\n' "$opts" | grep -q "^$o" || fail "STAMPS the window carries $o" "$opts"
 done
 st_pass "STAMPS one batched call stamps every plain option"

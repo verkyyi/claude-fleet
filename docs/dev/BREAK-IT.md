@@ -15,6 +15,8 @@
 表和脚本互相校验：表里的 `id` 没有演练、或演练不在表里，测试直接红。
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
+| 同样原生空闲的 Task 因旧角色或 PIN 获得永久保留、立即回收或未回报催办 | 排序偏好变成权限，driver 可绕 Loop/bg，历史完成结果影响资源排序 | 新任务普通 idle/park 默认；PIN与旧角色不改策略，保留已有显式策略，真实 Loop/bg/面板/探针事实照常校验 | `task-retention-defaults` |
+| 受控 Task 带旧结果、角色策略或停放到期，自动回收直接关窗 | 未经原生退出证明丢失窗口，Hub 仍保留执行绑定 | 受控及控制证据未知的自动路径只安全停放；PR与最终关窗边界复核，保留绑定与历史，用户主动停止独立 | `task-controlled-auto-retention` |
 | 批量 tmux 快照有空首尾字段，strip 删除分隔符或旧 tmux 转义 C0 | 一次快照回退成几十次 tmux 子进程，close 多次复核在负载下超时 | 只移除 tmux 输出的末尾换行，使用跨版本保留的 TAB 分隔空字段；值含 TAB 时仍逐字段读取，不反转义值 | `tmux-snapshot-fields` |
 | Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
 | 发布签名前 Actions OIDC 端点短暂失败或返回合法换行 JSON | 单次 curl/sed 丢失 HTTP 原因并误报权限缺失，Hub 已部署但签名 stable 未推进 | 保留原权限和签名门；仅暂错有界重试，401/403 与无效身份立即拒绝；日志仅显示状态，不显示响应或凭据 | `release-oidc-runtime` |
@@ -707,6 +709,7 @@
 
 | 已退役的 Parent 关系经恢复、移机、迁移或拆窗重新写入运行窗口 | 旧关系重新影响路由、分组或新会话元数据 | 新开与续接窗口不写 Parent；历史账本仍可读，FID、原生会话及 prev 连续身份保留；旧 Parent 消息拒绝，普通显式目标及 prev 接续照常 | `parent-origin-retired` |
 | Hub 尚未授予 claim 就已停止，节点离线导致用户永远等退出；或 claim 响应丢失、历史 stop 被误认未启动 | 未开始的任务无法确认停止，或未知活进程被当成已退出 | 同一 Task 行锁下的 canonical stop 与精确 start/代/attempt/endpoint 关联证明从未 claim；单独返回未启动事实，保留取消绑定，不伪造原生退出，不改结果 | `task-unclaimed-stop-proof` |
+
 | 用户停止后明确接续，节点覆盖当前 Task 绑定但旧 FID 丢失停止事实，或前轮启动登记混入新一轮退出证明 | 旧会话被当作 legacy 复活；重复接续分配多个会话；第二次停止无法证明退出 | 仅显式最新授权与已确认原 proof 共同允许原子接续；同 grant 复用分配，原 stop journal 保留旧 FID 停止事实和原 proof，按原 operation 精确退休注册，第二轮启动停止独立验证 | `task-local-continuation` |
 | 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |
 | 旧 Outcome / cancelled 投影保留在已证明停止的 Task 上，用户明确继续 | 历史完成结果永久拦住接续，用户只能另开任务 | 仅显式 continue 在完整原生退出或未领取停止链证明后忽略旧结果；首次接管与普通 resume 不放宽，历史结果不改写 | `task-continue-historical-outcome` |

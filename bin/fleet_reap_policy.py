@@ -3,37 +3,28 @@
 
 One window option says when the fleet may close a session on its own:
 
-    merged[:<dur>]   after its work is over (+ the fleet's grace, or <dur>) — the
-                     default for an issue session and a task session. Over is
+    merged[:<dur>]   after its work is over (+ the fleet's grace, or <dur>) — a
+                     retained legacy policy. Over is
                      the hub task record CLOSED (收口: succeeded / failed /
                      cancelled) for a session that carries one (@task T<n> — a
                      development task with no issue, issue #4897; or an issue
                      worker's accepted task); else its PR merged and the issue
                      closed, the historic rule
     done[:<dur>]     its turn is over and it has sat idle <dur> (default 15m), no
-                     /loop pending, no background job — a scratch's default
+                     /loop pending, no background job
     idle:<dur>       its turn is over and it has sat idle <dur> — whether or not
-                     its work is (T694, 回收 B): a person's own session (2h), one
-                     waiting for a person's decision (15m). For a no-repo session
+                     its work is; new ordinary sessions default to 2h. For a no-repo session
                      a finished turn counts (`done` there waits for the agent to exit)
     loop-end         the /loop it was opened with has stopped (then idle 10 min)
     at:<when>        at a moment (ISO-8601 UTC `2026-10-06T18:00:00Z`, or an
                      epoch), once its turn is over
     keep             never closed automatically
 
-Where it came from decides the default (T694, 回收 B) — ONE table, ORIGINS
-below, read by every spawner (`origin` + `origin-default`) and by the reapers
-(`effective`): person (⌘N / ⌘P, a person's shell) · dispatched (an orchestrator's
-or any session's task) · member (a batch member) · driver (an EPIC driver) ·
-orchestrator · decide (a session waiting on a person's call) · probe (a test
-identity, a scheduled job, a drill). The spawner stamps `@reap_origin` beside
-`@reap_policy`; a window with none has its origin read off its stamps
-(origin_of). A pinned window and an orchestrator are never closed
-automatically; a `keep` the session set for itself (`@reap_keep_by session`)
-lapses once its work is over — only a person's `keep` holds.
-
-No option at all = the session's kind decides, exactly as before #1902 (an old
-window behaves byte for byte as it did). Every automatic close still goes
+New tasks share idle:2h and the existing safe parking gate. Legacy origin
+arguments remain readable but grant no role or PIN privileges. Explicit test
+identities retain their probe policy. Existing stamped policies, including keep,
+are preserved; a pin only changes list order.
+No option at all = retain the legacy route for that session's kind. Every automatic close still goes
 through the same gates: history recorded and resumable first, a dirty or
 unpushed worktree kept on disk, a working window never closed.
 
@@ -65,23 +56,13 @@ MAX_SECS = 366 * 86400
 
 IDLE_DEFAULT = 2 * 3600          # 回收 B 拍板: 你自己开的会话闲置 2 小时收起
 
-# Where a session came from → when it may be closed (T694, 回收 B 拍板). The ONE
-# table: a spawner stamps it, the reapers read it. `merged` here is «its work is
-# over» — the record closed, or its ID carries a final result (T680) — then the
-# fleet's grace (≈1 minute); a driver goes at once.
+# Ordinary tasks share one default. Old origin words are normalized by origin_of;
+# stored policy values are never rewritten. Probes require explicit provenance.
 ORIGINS = {
-    # `default` is also the compatibility policy stamped by old spawners.
-    # `reap` governs new park-capable wrappers; every origin parks by C1 tiers.
-    "person":       dict(default="idle:2h", park="idle", reap="parked"),
-    "dispatched":   dict(default="merged", park="idle", reap="reported"),
-    "member":       dict(default="merged", park="idle", reap="reported"),
-    "driver":       dict(default="merged", park="idle", reap="batch"),
-    "orchestrator": dict(default="keep", park="idle", reap="never"),
-    "decide":       dict(default="idle:15m", park="idle", reap="idle"),
-    "probe":        dict(default="done:1m", park="idle", reap="done"),
-    "web":          dict(default="keep", park="idle", reap="never"),
+    "person": dict(default="idle:2h", park="idle", reap="parked"),
+    "probe": dict(default="done:1m", park="idle", reap="done"),
 }
-# Web lifecycle follows HHV0; keep remains keep. C1's measured cache fallback
+# Existing keep remains keep. C1's measured cache fallback
 # keeps unattended parking at 5m unless explicitly configured to 1m.
 PARK_IDLE_DEFAULT = 5 * 60
 PARK_IDLE_MIN = 60
@@ -142,13 +123,11 @@ def uses_park_retention(snap):
 
 def parked_deadline(snap):
     """The shared C6 clock: only an acknowledged park, no wake in flight.
-    A person's keep/pin and permanent origins have no automatic expiration.
+    An explicit keep has no automatic expiration; PIN changes list order only.
     Waiting reports use the same retention as a person's conversation.
     """
-    row = ORIGINS[snapshot_origin(snap)]
     if (not snap.get("@park_wrap_ver") or not snap.get("@parked") or not snap.get("@park_held")
-            or row["reap"] == "never" or snap.get("@pin") == "1"
-            or (snap.get("@reap_policy") == "keep" and snap.get("@reap_keep_by") != "session")):
+            or snap.get("@reap_policy") == "keep"):
         return None
     if not uses_park_retention(snap):
         return None
@@ -182,10 +161,9 @@ def explain(snap, now=None):
         if due is not None:
             return prefix + " next=reap@" + iso(due) + " why=" + why
         code, _, epoch = why.partition(":")
-        if epoch.isdigit() and code in ("timer", "unreported", "bg"):
-            return prefix + " next=" + ("remind@" if code == "unreported" else "reap@") + iso(int(epoch)) + " why=" + why
-        return prefix + " next=" + ("keep" if row["reap"] == "never" or snap.get("@reap_policy") == "keep"
-                                    or snap.get("@pin") == "1" else "result/policy") + " why=" + why
+        if epoch.isdigit() and code in ("timer", "bg"):
+            return prefix + " next=reap@" + iso(int(epoch)) + " why=" + why
+        return prefix + " next=" + ("keep" if snap.get("@reap_policy") == "keep" else "result/policy") + " why=" + why
     if not snap.get("@park_wrap_ver"):
         return prefix + " next=legacy-policy (old wrapper) why=" + why
     if why in set(PARK_HOLDS.values()) | {"park-gate"}:
@@ -201,11 +179,6 @@ def explain(snap, now=None):
     return prefix + " next=after-turn why=" + why
 
 
-# The origins whose «done» is a reported result — the dispatched road
-# (fleet-cleanup-idle.py dispatched_session): over ⇒ closed, unreported ⇒ nudged.
-REPORTING = tuple(origin for origin, row in ORIGINS.items() if row["reap"] in ("reported", "batch"))
-
-
 # A probe by its words (BCYB): a session a person or a session opened to measure
 # or try something — never work to keep. The same pattern as the hub's
 # store.IsProbeTitle (its reconcile closes one as hub:probe).
@@ -217,44 +190,21 @@ def is_probe_title(title):
 
 
 def origin_of(agent_def="", origin="", origin_wid="", test_identity="", stamp="", title=""):
-    """The origin word: the stamped `@reap_origin` when it is one, else read off
-    the window — its agent file (orchestrator · epic-driver), a test identity, a
-    parent session (@origin other than the hub, @origin_fid, @origin_wid), else a
-    person's own."""
-    if stamp in ORIGINS:
-        return stamp
-    name = (agent_def or "").rsplit(":", 1)[-1]
-    if name == "orchestrator":
-        return "orchestrator"
-    if name == "epic-driver":
-        return "driver"
-    if test_identity == "1":
-        return "probe"
-    if (origin and origin != "hub") or origin_wid:
-        return "dispatched"
-    return "person"
+    """Compatibility inputs do not turn agent files or ancestry into privileges.
+
+    Old stamps remain on disk; only explicit probe provenance affects defaults.
+    """
+    return "probe" if test_identity == "1" or stamp == "probe" else "person"
 
 
 def origin_default(origin, kind=""):
-    """The policy a session of <origin> opens with. An issue session dispatched
-    keeps its historic `merged`; a /loop seed its `loop-end` unless a driver."""
-    if kind == "loop" and origin not in ("driver", "orchestrator", "probe"):
-        return "loop-end"
-    if kind == "issue" and origin in ("person", "dispatched", "member"):
-        return "merged"            # an issue session's historic rule: its PR merged
-    return ORIGINS.get(origin, {}).get("default", "")
+    """Every ordinary new task, including loop seeds, shares safe idle/park."""
+    return ORIGINS[origin_of(stamp=origin)]["default"]
 
 
 def effective(policy, pin="", agent_def="", keep_by="", over=False):
-    """The policy in force: a pin or an orchestrator is `keep`, whatever is
-    stamped; a `keep` the session set for itself lapses to `merged` once its work
-    is over (only a person's keep holds)."""
-    if pin == "1" or (agent_def or "").rsplit(":", 1)[-1] == "orchestrator":
-        return "keep"
-    p = (policy or "").strip()
-    if p == "keep" and keep_by == "session" and over:
-        return "merged"
-    return p
+    """Read the chosen policy unchanged; legacy arguments are inert."""
+    return (policy or "").strip()
 
 
 def dur_secs(text):
@@ -337,6 +287,7 @@ def norm(policy):
 
 
 def default(kind):
+    """Legacy CLI values; spawners use origin_default for all new sessions."""
     return {"issue": "merged", "task": "merged", "scratch": "done:15m", "loop": "loop-end"}.get(kind, "")
 
 

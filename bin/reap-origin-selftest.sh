@@ -1,18 +1,7 @@
 #!/bin/bash
-# reap-origin-selftest.sh — where a session came from decides when it may be
-# closed (T694, 回收 B): bin/fleet_reap_policy.py's ORIGINS table, read by the
-# spawners through fleet_reap_origin (bin/fleet-lib.sh) and stamped @reap_origin
-# beside @reap_policy; a `keep` a session sets for itself is marked (lapses once
-# its work is over — fleet-cleanup-idle-selftest.py DispatchedSession closes it).
-#
-#   A  fleet_reap_origin: person · dispatched · member (its parent window runs the
-#      EPIC driver) · driver · orchestrator · probe; a reopened / continued ID
-#      with a parent in its ledger (代起 / 恢复) keeps «dispatched»
-#   B  each origin's default (origin-default) — the table the spawners stamp
-#   C  fleet-reap-policy.sh set keep --by session stamps @reap_keep_by session;
-#      a person's keep (the default) or any other policy clears it
-#   D  both spawners derive the origin and stamp @reap_origin + the table's
-#      default; an orchestrator is pinned; a session's keep is marked
+# Ordinary sessions share one idle/park default. Legacy origin arguments and
+# keep provenance remain readable but confer no role or PIN privileges.
+# Explicit probe identities retain their test policy.
 #
 # Real tmux on an isolated socket under a private TMUX_TMPDIR.
 set -uo pipefail
@@ -41,12 +30,12 @@ w=$(T new-window -d -P -F '#{window_id}' -t "$SOCK" "sleep 600")
 T set-option -w -t "$w" @fleet_id "$ORC"; T set-option -w -t "$w" @agent_def orchestrator
 eq "A: no parent, no agent file → person"     "$(O '' '' '' 0 '')" person
 eq "A: the hub as origin → person"             "$(O '' hub '' 0 '')" person
-eq "A: a session's key → dispatched"           "$(O '' scratch-3 '' 0 '')" dispatched
-eq "A: another machine's parent → dispatched"  "$(O '' '' u/$ORC 0 '')" dispatched
-eq "A: the orchestrator's child → dispatched"  "$(O '' "$ORC" '' 0 "$ORC")" dispatched
-eq "A: the EPIC driver's child → member"       "$(O '' "$DRV" '' 0 "$DRV")" member
-eq "A: the driver itself → driver"             "$(O fleet-epic:epic-driver "$ORC" '' 0 "$ORC")" driver
-eq "A: an orchestrator → orchestrator"         "$(O orchestrator '' '' 0 '')" orchestrator
+eq "A: a session's key → person"           "$(O '' scratch-3 '' 0 '')" person
+eq "A: another machine's parent → person"  "$(O '' '' u/$ORC 0 '')" person
+eq "A: the orchestrator's child → person"  "$(O '' "$ORC" '' 0 "$ORC")" person
+eq "A: the EPIC driver's child → person"       "$(O '' "$DRV" '' 0 "$DRV")" person
+eq "A: the driver itself → person"             "$(O fleet-epic:epic-driver "$ORC" '' 0 "$ORC")" person
+eq "A: an orchestrator → person"         "$(O orchestrator '' '' 0 '')" person
 eq "A: the TEST identity's → probe"            "$(O '' '' '' 1 '')" probe
 OLD=cccccccc-3333-4333-8333-333333333333
 # This is pre-retirement history: current open_id intentionally drops Parent.
@@ -54,17 +43,17 @@ PYTHONPATH="$BIN" python3 - "$OLD" "$ORC" <<'PYFIXTURE'
 import sys, fleet_id
 fleet_id.append(sys.argv[1], {"ev": "opened", "parent": sys.argv[2], "title": "historical"})
 PYFIXTURE
-eq "A: 代起 — a reopened ID whose ledger has a parent → dispatched" "$(O '' '' '' 0 '' "$OLD")" dispatched
+eq "A: 代起 — a reopened ID whose ledger has a parent → person" "$(O '' '' '' 0 '' "$OLD")" person
 eq "A: …a parent-less ID stays a person's"     "$(O '' '' '' 0 '' dddddddd-4444-4444-8444-444444444444)" person
 
 eq "A: a title is not explicit probe provenance" "$(python3 "$BIN/fleet_reap_policy.py" origin --title 'probe 可关')" person
 # ---- B ------------------------------------------------------------------------
 D() { python3 "$BIN/fleet_reap_policy.py" origin-default "$@"; }
-eq "B: person idle 2h · dispatched/member/driver merged · orchestrator keep · decide idle 15m · probe done 1m" \
+eq "B: ordinary origins idle 2h · explicit probe done 1m" \
   "$(for o in person dispatched member driver orchestrator decide probe; do D "$o"; done | tr '\n' ' ')" \
-  "idle:2h merged merged merged keep idle:15m done:1m "
-eq "B: an issue session a person opened keeps merged" "$(D person --kind issue)" merged
-eq "B: a /loop seed keeps loop-end, a driver's goes when the batch does" "$(D dispatched --kind loop)|$(D driver --kind loop)" "loop-end|merged"
+  "idle:2h idle:2h idle:2h idle:2h idle:2h idle:2h done:1m "
+eq "B: an issue session uses ordinary idle" "$(D person --kind issue)" idle:2h
+eq "B: loop seeds share ordinary idle, native timers remain protected" "$(D dispatched --kind loop)|$(D driver --kind loop)" "idle:2h|idle:2h"
 
 # ---- C ------------------------------------------------------------------------
 w=$(T new-window -d -P -F '#{window_id}' -t "$SOCK" "sleep 600")
@@ -83,11 +72,11 @@ eq "C: …and refuses anything else (nothing stamped)" "$(R @reap_policy)" "idle
 # ---- D ------------------------------------------------------------------------
 for f in dash-raw-session.sh dash-issue-session.sh; do
   grep -q 'fleet_reap_origin "\$SOCK"' "$BIN/$f" && grep -q 'fleet_reap_policy.py" origin-default' "$BIN/$f" \
-    && grep -q '@reap_origin' "$BIN/$f" && grep -q '@reap_keep_by session' "$BIN/$f"
-  eq "D: $f derives the origin, stamps it and the table's default, marks a session's keep" "$?" 0
+    && grep -q '@reap_origin' "$BIN/$f"
+  eq "D: $f uses the shared ordinary default" "$?" 0
 done
 grep -q '\[ "\$REAP_ORIGIN" = orchestrator \] && \[ "\$PIN" != 1 \] && stamp_option @pin 1' "$BIN/dash-raw-session.sh"
-eq "D: dash-raw-session.sh pins an orchestrator" "$?" 0
+eq "D: dash-raw-session.sh does not automatically pin an orchestrator" "$?" 1
 grep -q '"--by", "session"' "$BIN/fleet-mcp.py"
 eq "D: the set_reap tool sets as the session" "$?" 0
 grep -q '@reap_origin @reap_keep_by @reap_unreported' "$BIN/fleet-migrate.sh"

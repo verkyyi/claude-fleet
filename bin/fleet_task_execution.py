@@ -150,6 +150,24 @@ def read_task(task_ref, *, conf_dir=None):
         raise FenceRefused("task execution fence is unavailable") from exc
 
 
+def automatic_close_held(session_fid, marker="", task_ref="", *, conf_dir=None):
+    """Only legacy sessions may use automatic kill/ID-close archival.
+
+    A marker alone (even damaged) is enough to refuse legacy teardown. Read
+    existing bindings/stops without creating a database or asking the Hub;
+    unknown local control evidence retains the window. This is not a user
+    stop gate and never grants launch, wake, or execution-owner release.
+    """
+    if marker:
+        return True
+    try:
+        if session_fid and read_session(session_fid, conf_dir=conf_dir) is not None:
+            return True
+        return bool(task_ref and read_task(task_ref, conf_dir=conf_dir) is not None)
+    except (FenceRefused, OSError, ValueError, TypeError):
+        return True
+
+
 def check_session(session_fid, *, conf_dir=None, expected=None, controlled=False):
     """Read-only ingress check: legacy missing state is inert, controlled isn't."""
     if expected is not None:
@@ -1235,6 +1253,10 @@ def main():
     refresh.add_argument("--session-fid", required=True)
     refresh.add_argument("--expected")
     refresh.add_argument("--controlled", action="store_true")
+    close = commands.add_parser("automatic-close-ready")
+    close.add_argument("--session-fid", default="")
+    close.add_argument("--marker", default="")
+    close.add_argument("--task", default="")
     commands.add_parser("sync-stops")
     history = commands.add_parser("check-history")
     history.add_argument("--task-ref", required=True)
@@ -1253,6 +1275,8 @@ def main():
     native.add_argument("argv", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
+        if args.command == "automatic-close-ready":
+            return 1 if automatic_close_held(args.session_fid, args.marker, args.task) else 0
         if args.command in ("check-session", "refresh-session"):
             action = refresh_session if args.command == "refresh-session" else check_session
             result = action(args.session_fid, expected=json.loads(args.expected) if args.expected else None,
