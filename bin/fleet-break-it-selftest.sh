@@ -7747,6 +7747,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_current_view() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-current-view-selftest.py" >"$WORK/task-current-view.log" 2>&1 || {
+    WHY="current view regression: $(tail -10 "$WORK/task-current-view.log")"; return 1;
+  }
+  WHAT='历史文字不冒充原生问题，Task 代码不随会话或结果改变'
+  SECS=$(since "$t0")
+}
+
 drill_task_result_overrides_native() {
   local t0; t0=$(now); CAP=30
   bash "$BIN/fleet-view-id-selftest.sh" >"$WORK/task-native-display.log" 2>&1 || {

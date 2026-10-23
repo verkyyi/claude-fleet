@@ -166,9 +166,9 @@ func (s *Store) giveTaskID(t FleetTask, now time.Time) (FleetTask, error) {
 
 // ResolveFleetTask is the ONE reader of a task reference (EPIC T644 §4): a
 // code (≥ 2 places, NormTaskCode), the task's full ID, or the alias T<n> (a bare
-// number too). A code is matched among owner's UNFINISHED tasks first; one ⇒
-// that task, several ⇒ *TaskAmbiguity (ErrTaskAmbiguous) with them; none
-// unfinished ⇒ the same over the whole history. Never a guess. owner "" reads
+// number too). An exact written code stays on its Task; otherwise a prefix
+// is matched across the owner's whole history. Multiple matches return
+// *TaskAmbiguity, regardless of historical outcome. owner "" reads
 // anyone's (the operator's door). A full ID that is a window's, not a task's,
 // answers the task it belongs to (fleet_ids.task_id). sql.ErrNoRows when
 // nothing answers. T followed by digits is the alias when such a record exists,
@@ -213,7 +213,7 @@ func (s *Store) ResolveFleetTask(owner, ref string) (FleetTask, error) {
 		id int64
 		c  TaskCandidate
 	}
-	var open, all []hit
+	var all []hit
 	for rows.Next() {
 		var h hit
 		if err := rows.Scan(&h.id, &h.c.Short, &h.c.Title, &h.c.State); err != nil {
@@ -222,17 +222,22 @@ func (s *Store) ResolveFleetTask(owner, ref string) (FleetTask, error) {
 		}
 		h.c.Task = TaskRef(h.id)
 		all = append(all, h)
-		if !taskFinished(h.c.State) {
-			open = append(open, h)
-		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return FleetTask{}, err
 	}
-	pick := open
-	if len(pick) == 0 {
-		pick = all
+	// A written code is a stable address even if a later ID shares its prefix.
+	// Prefixes range over history as well: old outcomes never select a winner.
+	pick := all
+	var exact []hit
+	for _, h := range all {
+		if h.c.Short == code {
+			exact = append(exact, h)
+		}
+	}
+	if len(exact) > 0 {
+		pick = exact
 	}
 	switch len(pick) {
 	case 0:
