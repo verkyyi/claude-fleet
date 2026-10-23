@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	. "github.com/verkyyi/claude-fleet/tokenledger/hub/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 
 	"bufio"
@@ -106,6 +107,9 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 		case "/api/new":
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"ok":true}`)
+		case "/api/migrate", "/api/migration":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ok":true,"migrated":true,"fid":"legacy-claude","codex_fid":"legacy-codex"}`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -113,6 +117,55 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
 	return f
+}
+
+func TestChatLegacyMigration(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	setChatHome(t, h, pAlice, host, login)
+	alice := personCookie(pAlice, "alice")
+	header := map[string]string{"X-Fleet-Webchat": "1"}
+	if r := chatDo(t, h, "POST", "/v1/chat/migrate", alice, header, ""); r.StatusCode != http.StatusConflict {
+		t.Fatalf("migration while off: %d", r.StatusCode)
+	}
+	if err := h.Srv.Store.SetFleetSetting("fleet.chat.unified", "on", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ro := &http.Cookie{Name: authz.CookieName, Value: authz.SignReadOnly(store.IdentityGitHub, pAlice, "alice", RoleUserForTest,
+		(&GitHubAuth{ClientSecret: testGitHubSecret}).SessionKeyForTest(), time.Now(), time.Hour)}
+	for _, tc := range []struct {
+		name, path string
+		cookie     *http.Cookie
+		hdr        map[string]string
+		want       int
+	}{
+		{"unsigned", "/v1/chat/migrate", nil, header, 401},
+		{"csrf", "/v1/chat/migrate", alice, nil, 403},
+		{"read-only ticket", "/v1/chat/migrate", ro, header, 403},
+		{"another person", "/v1/chat/migrate?principal=" + pBob, alice, header, 403},
+	} {
+		if r := chatDo(t, h, "POST", tc.path, tc.cookie, tc.hdr, ""); r.StatusCode != tc.want {
+			t.Errorf("%s: %d", tc.name, r.StatusCode)
+		}
+	}
+	if hits := svc.seen(); len(hits) != 0 {
+		t.Fatalf("refused requests reached home: %v", hits)
+	}
+	for _, route := range []struct {
+		method, path string
+		cookie       *http.Cookie
+	}{
+		{"POST", "/v1/chat/migrate", alice}, {"GET", "/v1/chat/migration", ro},
+	} {
+		r := chatDo(t, h, route.method, route.path, route.cookie, header, "")
+		b, _ := io.ReadAll(r.Body)
+		if r.StatusCode != 200 || !strings.Contains(string(b), `"codex_fid":"legacy-codex"`) {
+			t.Fatalf("%s: %d %s", route.path, r.StatusCode, b)
+		}
+	}
+	hits := svc.seen()
+	if len(hits) != 2 || hits[0] != "POST /api/migrate person="+pAlice+" cookie=" || hits[1] != "GET /api/migration person="+pAlice+" cookie=" {
+		t.Fatalf("own home identity and credentials: %v", hits)
+	}
 }
 
 // fakePNG is what the fake service answers /api/file with.

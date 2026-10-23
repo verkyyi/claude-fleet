@@ -48,6 +48,8 @@ jobs:
         run: node --experimental-strip-types test/new-session.mjs
       - name: Old addresses land where their page lives now (GR5E C9)
         run: node --experimental-strip-types test/legacy.mjs
+      - name: Legacy chat migration — identity, retries and read-only tickets
+        run: node --experimental-strip-types test/chat-migration.mjs
       - name: Phone screens — list, whole-screen session, back steps back (GR5E C7)
         run: node --experimental-strip-types test/phone-screen.mjs
       - name: Weak network band, back from the background re-reads (GR5E C8)

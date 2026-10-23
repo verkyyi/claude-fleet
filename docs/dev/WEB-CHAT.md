@@ -412,6 +412,9 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - **停放**：`fleet.session.park_idle`（默认 `5m`，`1m`–`24h` 或 `off`）随 `/v1/fleet/client-settings` 的 `pool` 下发为
   `FLEET_SESSION_PARK_IDLE`（秒，0 = 不停放），只管网页开的会话。
 - **旧书签**：`/chat`、`/chat/` → 301 `/app/chat`（「我的对话」——旧对话迁出的那个会话的地址，页面认它）。
+  页面通过 `GET /v1/chat/migration` 读取 Claude / Codex 的准确身份，不按标题猜测。
+  本人登录后，统一入口首次加载会调用 `POST /v1/chat/migrate`；只读票据与代看不触发迁移。
+  家机离线或版本不足时显示可重试提示，旧记录保留；正在回复则等回复结束后重试。
 - 测试：e2e `TestChatSayToSession`、`TestChatPage`；`TestBoardOriginAndCanTalk`；`session-title-selftest.sh`（第 35 列）；
   `fleet-view-board-selftest.py`（网页开的一行）；`fleet-view-actions-selftest.sh`（`webopen`）。
 
@@ -431,7 +434,13 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 | `POST /api/ack` `{fid, delivery}` | 页面把退回的一句放回输入框后，门里删掉它 |
 | `GET /api/session?fid=` | `{can_talk, queue:[{delivery,text,why}], ask?}` |
 | `GET /api/view?fid=` | 读记录的流（F481 那条）；`{t:"state"}` 不再有 holder，带 `can_talk`、`queue`、`ask` |
-| `POST /api/migrate` · `GET /api/ended` | 旧「我的对话」变成一个会话（同一对话 resume，窗口名「我的对话」）；收起过的 ≤200 段进「已结束的会话」 |
+| `POST /api/migrate` · `GET /api/migration` | 将 Claude / Codex 当前与各自收起过的 ≤200 段登记进标准会话历史；GET 只读迁移状态及两段当前对话的 FID |
+| `GET /api/ended` | 上一版的迁移记录兼容读取；标准列表使用 ID ledger，而非这个文件 |
+
+迁移不启动 Agent：当前对话与收起记录都出现在已结束的会话中，可从详情页读取原记录、恢复后继续。
+Claude 的接续链保留为同一身份的分段，Codex 保留原生 thread 和 CODEX_HOME；原始对话文件、原生记录均不删除。
+已有原生身份归属时复用该身份，不关闭正在使用它的窗口。重复或部分失败后的迁移使用同一身份，
+登记成功才退役旧的启动入口；生产开关须在 Hub、网页和家机这三条路均已发布后开启。
 
 没有 `fid` 的 `/api/turn|new|take|stop|answer` 还是旧的 SDK 对话，直到入口的 `fleet.chat.unified`
 打开（PQ41）；迁移过的对话再走旧路回 410 `moved`（带 fid）。

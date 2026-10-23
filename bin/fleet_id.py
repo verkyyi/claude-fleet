@@ -1320,9 +1320,11 @@ def continue_plan(fid, seg=None):
     if s["agent"] == "codex":
         from fleet_history_read import landing
         placement = landing(fid, s["native"])
-    return {"id": fid, "seg": n, "native": s["native"], "agent": s["agent"], "worktree": o.get("worktree", ""),
+    return {"id": fid, "seg": n, "native": s["native"], "agent": s["agent"],
+            "worktree": (o.get("legacy_cwds") or {}).get(s["native"], o.get("worktree", "")),
             "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None,
-            "task": o.get("task", ""), "parent": o.get("parent", ""), **placement}
+            "task": o.get("task", ""), "parent": o.get("parent", ""),
+            **({"codex_home": o["codex_home"]} if o.get("codex_home") else {}), **placement}
 
 
 

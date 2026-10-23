@@ -81,7 +81,7 @@
 | 组件 | 类别 | 理由 |
 |---|---|---|
 | Hub（`tokenledger`） | 核心 | 接入、计量与任务调度。 |
-| Web 接入（web-chat / web-console） | 核心 | 产品近期的网页使用入口。 |
+| Web 接入（web-chat / web-console） | 核心 | 产品近期的网页使用入口；`fleet_webchat_legacy.py` 将旧网页记录登记进标准会话历史，迁移不启动 Agent。 |
 | 私人实时开发预览 | 按需 | 显式独立域开启；复用节点 outbound relay，每连接短时 UID 助手，访问 Task 正在运行的 Unix HTTP/WS 服务；成果仍归 Space / 活页。 |
 | 承载节点（managed-node） | 核心 | 提供任务执行环境；托管镜像候选沿用版本暂存、种子复制与回退，在既有 staged 元数据内保存未启用的原生守卫预览。既有 image stager 增加显式 root-only 守卫安装入口，保留现存策略、冲突拒绝，不自动激活。个人 POD 使用镜像种子，不把可写 PVC 当管理层代码；原生权限 CI 和线上生命周期独立验收。 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
@@ -165,7 +165,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect*` | 收集与账本 |
 | 终端状态与节点连接 | `tmux-spinner* fleet-render-watch.py fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接；spinner 的 shell 入口加载配置后 exec Python 主循环，复用 render-watch 的常驻 control transport、可见性和有界等待 |
 | Hub（ | `fleet-hub* fleet_hub* fleet-login* fleet-logout* fleet-relogin* fleet-users* fleet-tenant* fleet-admin* fleet_admin* hub-session* fleet-route* fleet-connect* fleet-task-record* fleet_cluster_ticket* fleet_managed.py xssh-sync*` | Hub、账号接入及任务记录 |
-| Web 接入 | `fleet-preview* fleet-webchat* fleet-webterm* web-console* site-* fleet-convo-lock* fleet-console-ticket* fleet-web-open* fleet_session_gate* fleet_session_fallback.py fleet-session-gate*` | 网页与站点 |
+| Web 接入 | `fleet-preview* fleet-webchat* fleet_webchat_legacy.py fleet-webterm* web-console* site-* fleet-convo-lock* fleet-console-ticket* fleet-web-open* fleet_session_gate* fleet_session_fallback.py fleet-session-gate*` | 网页与站点 |
 | 承载节点 | `fleet-node* fleet_node* fleet-spotlight* fleet-evacuate* fleet-provisioner* fleet-host* fleet-machine* fleet-svc* fleet-service* fleet-services* fleet-job* fleet_job* fleet-daemon* fleet-launchd* fleet-wallpaper* fleet-trial-guard* fleet_trial*` | 节点与宿主服务；服务报告 runner 的双引擎执行与受控只读网页抓取 |
 | 接入中继 | `fleet-relay* fleet-peer-cert* fleet-trust* fleet_ed25519* fleet_tls*` | 中继与节点信任 |
 | 配置与插件装配 | `fleet-conf* fleet_config* fleet-config* fleet-settings* fleet-hook* fleet-agent-bundle* fleet-agent-team* fleet-agent-def* fleet_agent_allow* fleet-plugins* fleet-codex-plugins* fleet-cfg-restart* mcp-fetch* mcp-github*` | 配置与插件注册 |

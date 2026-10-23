@@ -663,6 +663,8 @@ export function codexSide(d) {
     return { items: out, cwd: r.cwd };
   }
   function close() { clearTimeout(idleT); srv?.kill(); const c = cred; cred = null; return revoke(c); }
-  return { checkExecution, available, conversation, turn, stop, answer, newConversation, close, state, release, adopt, viewFile, viewItems,
+  const legacy = () => ({ ...conv, busy: !!live, codex_home: d.E.CODEX_HOME || join(d.E.HOME || "", ".codex") });
+  const markMigrated = (fid) => { conv.migrated = { fid, at: new Date().toISOString() }; save(); };
+  return { checkExecution, available, conversation, turn, stop, answer, newConversation, close, state, release, adopt, viewFile, viewItems, legacy, markMigrated,
     busy: () => !!live, last: () => conv.last, side: () => ({ busy: !!live, last: conv.last }) };
 }

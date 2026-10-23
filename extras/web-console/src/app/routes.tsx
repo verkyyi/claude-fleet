@@ -15,7 +15,7 @@
 // the phone's first screen (/) are the list, a row opens /s/<ref>, and the web
 // conversation is a row of it at /chat — on a computer / still shows it beside
 // the list, and a phone's /?about= (a link into the conversation) opens it too.
-import { lazy, useEffect, useState, type ComponentType } from "react";
+import { lazy, useEffect, useRef, useState, type ComponentType } from "react";
 import { Navigate, useLocation } from "react-router";
 import { Gauge, Layers, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
@@ -24,6 +24,7 @@ import ChatPage from "./pages/chat";
 import { SessionListPage, sessionPath } from "./SessionList";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
+import { migrateLegacy } from "./chat/legacy";
 import { LEGACY, legacyTarget } from "./legacy";
 
 // The front page: the list on a phone, the conversation beside the list on a
@@ -45,14 +46,31 @@ function Home() {
 
 // /chat: the old road's one conversation; on the new one it became a session
 // named 「我的对话」 — opened as any session, else the list.
-const MY_CHAT = ["我的对话", "My chat"];
 function ChatRoute() {
   const unified = useUnified();
-  const { rows } = useWorkRows();
+  const { rows, reload } = useWorkRows();
+  const refresh = useRef(reload);
+  refresh.current = reload;
+  const { search } = useLocation();
+  const [legacy, setLegacy] = useState<Awaited<ReturnType<typeof migrateLegacy>> | null>(null);
+  useEffect(() => {
+    if (!unified) return;
+    let live = true;
+    const read = () => { void migrateLegacy().then((r) => { if (live) { setLegacy(r); if (r.ok) refresh.current(); } }); };
+    read();
+    const timer = setInterval(read, 5000);
+    return () => { live = false; clearInterval(timer); };
+  }, [unified]);
   if (unified === false) return <ChatPage />;
   if (unified === null || !rows) return null;
-  const mine = rows.find((r) => r.origin === "web" && MY_CHAT.includes(r.title));
-  return <Navigate to={mine ? sessionPath(mine) : "/"} replace />;
+  const codex = new URLSearchParams(search).get("provider") === "codex";
+  const fid = codex ? legacy?.codex_fid : legacy?.fid;
+  const mine = fid ? rows.find((r) => r.id === fid || r.board?.history?.id === fid || r.live?.ident === fid) : undefined;
+  if (mine) return <Navigate to={sessionPath(mine)} replace />;
+  if (legacy?.ok && !fid) return <Navigate to="/" replace />;
+  if (legacy?.readOnly) return <p role="status" className="p-4 text-sm">{tr("旧对话尚未整理，请用本人的账号登录后继续。", "Your previous chat has not been migrated yet. Sign in with your own account to continue.")}</p>;
+  if (legacy && !legacy.ok && legacy.why !== "busy") return <p role="status" className="p-4 text-sm">{tr("暂时无法读取以前的对话，正在重试…", "Could not read your previous chat yet. Retrying…")}</p>;
+  return <p role="status" className="p-4 text-sm">{tr("正在把以前的对话加入会话列表…", "Adding your previous chat to the session list…")}</p>;
 }
 
 // Moved: an old address, sent on to where legacy.ts says it lives now — or,

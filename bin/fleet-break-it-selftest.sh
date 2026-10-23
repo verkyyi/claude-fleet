@@ -7073,6 +7073,15 @@ webchat_part() {
   WEBCHAT_OUT=$out
 }
 
+drill_chat_legacy_history_hidden() {
+  CAP=30; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-webchat-legacy-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  webchat_part legacy-migration "migration both assistants have distinct ordinary history identities" || return 1
+  SECS=$(since "$t0")
+  WHAT="Claude / Codex 的旧对话与收起记录进入普通身份历史；重试不重复，已存在身份不关闭，迁移不启动 Agent"
+}
+
 drill_chat_codex_identity_pending() {
   CAP=30; local out t0
   t0=$(now)
