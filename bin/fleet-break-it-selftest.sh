@@ -6925,6 +6925,15 @@ drill_restore_execution_identity() {
   SECS=$(since "$t0")
 }
 
+drill_native_cancel_before_signal() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-native-stop-order-selftest.py" >"$WORK/native-stop-order.log" 2>&1 || {
+    WHY="native cancel ordering regression: $(tail -8 "$WORK/native-stop-order.log")"; return 1;
+  }
+  WHAT='本地无 journal 停止同事务固定双时钟，重放不延长，共同入口只取消一次，未知或外部强停不阻挡退出'
+  SECS=$(since "$t0")
+}
+
 drill_native_exit_identity() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-session-exit-selftest.py" \

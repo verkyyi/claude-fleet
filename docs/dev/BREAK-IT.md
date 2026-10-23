@@ -695,3 +695,5 @@
 | 用户停止后明确接续，节点覆盖当前 Task 绑定但旧 FID 丢失停止事实，或前轮启动登记混入新一轮退出证明 | 旧会话被当作 legacy 复活；重复接续分配多个会话；第二次停止无法证明退出 | 仅显式最新授权与已确认原 proof 共同允许原子接续；同 grant 复用分配，原 stop journal 保留旧 FID 停止事实和原 proof，按原 operation 精确退休注册，第二轮启动停止独立验证 | `task-local-continuation` |
 | 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
+
+| Task 停止落盘后，100ms supervisor 或并发 executor 抢先杀掉原生根，重放又重新延长取消等待 | 本 session 的 durable plan 来不及取消，或重复等待导致任务关不掉 | stop 同事务固定一次双时钟期限；executor / supervisor 共用取消机会，归属未知、旧记录或外部强停立即退出，最多三秒后不再等；不冒充全域停止 | `native-cancel-before-signal` |

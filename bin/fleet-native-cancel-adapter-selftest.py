@@ -2,8 +2,9 @@
 # bin-inventory: 人工入口 — opt-in 原生取消适配器验证，docs/dev/AGENT-ADAPTER.md
 """Opt-in real native.cancel inbox test; isolated HOME/project/socket, no model.
 
-Uses the production mod and verifier. Seeds a stopped fixture fence without a
-supervisor; the root remains alive so this does not test whole-Task stop ordering.
+Uses the production mod and verifier. Default mode seeds a stopped fixture fence;
+--stop-order uses the real supervisor, --stop-race adds concurrent executors.
+Neither mode proves termination of independent teammates or the whole Task.
 """
 import argparse
 import http.server
@@ -28,6 +29,13 @@ MODULE = r'''export function register(on) {
     const root = await $.env.get('T970_CANCEL_ROOT');
     const role = await $.env.get('T970_CANCEL_ROLE');
     const session = await $.session.id();
+    if (role === 'primary' && await $.env.get('T970_STOP_ORDER') === '1') {
+      const pane = await $.env.get('TMUX_PANE');
+      for (const [key,value] of [['@fleet_id','66666666-6666-4666-8666-666666666666'],
+          ['@task','T970'],['@cc_agent','claude'],['@cc_session_id',session]]) {
+        await $.process.run(['tmux','set-option','-w','-t',pane,key,value], {timeoutMs:500});
+      }
+    }
     async function save(phase, extra = {}) {
       await $.fs.write(`${root}/${role}.json`, JSON.stringify({phase, session, ...extra}));
     }
@@ -78,7 +86,10 @@ def same_process(proof):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--claude', default='claude')
+    parser.add_argument('--stop-order', action='store_true', help='exercise real supervisor cancel-before-signal')
+    parser.add_argument('--stop-race', action='store_true', help='race two executors against the real supervisor')
     args = parser.parse_args()
+    args.stop_order = args.stop_order or args.stop_race
     executable = shutil.which(args.claude)
     if not executable or not shutil.which('tmux'):
         parser.error('native Claude and tmux are required')
@@ -135,7 +146,7 @@ def main():
                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_AUTOUPDATER': '1',
                 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
                 'T970_CANCEL_ROOT': str(root), 'FLEET_CONF_DIR': str(root / 'conf'),
-                'FLEET_MCP_SERVER': '1',
+                'FLEET_MCP_SERVER': '1', 'T970_STOP_ORDER': '1' if args.stop_order else '0',
             }
             version = subprocess.check_output([binary, '--version'], env=environment,
                                                text=True, timeout=10).strip()
@@ -146,11 +157,31 @@ def main():
                 return subprocess.run(['tmux', '-S', str(socket), *argv], env=environment,
                                       capture_output=True, text=True, timeout=5)
 
+            grant = dict(task_ref='T970', task_fid='44444444-4444-4444-8444-444444444444',
+                generation=1, binding_generation=1, attempt_id='task:T970:g1', operation_id='start-fixture',
+                execution_endpoint='fixture', execution_owner='55555555-5555-4555-8555-555555555555/'
+                + '66666666-6666-4666-8666-666666666666', cancel_request='')
+            fence = ExecutionFence(root / 'conf')
+            fence.bind(grant, authorized=True)
+            fixture_bin = root/'bin'
+            if args.stop_order:
+                fixture_bin.mkdir()
+                for name in ('fleet_task_execution.py','fleet_native_stop.py','fleet_native_cancel.py',
+                             'fleet_native_proc.py','fleet_hub_common.py','fleet_task_exit_submit.py'):
+                    shutil.copy2(Path(__file__).parent/name,fixture_bin/name)
+                (root/'authority.json').write_text(json.dumps(grant))
+                (fixture_bin/'fleet-task-record.sh').write_text('if [ "$1" = execution-list ]; then\nprintf \'{"control_version":1,"task_executions":[\'\ncat "$T970_CANCEL_ROOT/authority.json"\nprintf \']}\\n\'\nelse cat "$T970_CANCEL_ROOT/authority.json"; fi\n')
+
             def start(role):
-                command = shlex.join(['env', 'T970_CANCEL_ROLE=' + role, binary,
+                native_command = [binary,
                     '--setting-sources', '', '--strict-mcp-config', '--plugin-dir', str(plugin),
                     '--plugin-dir', str(Path(__file__).resolve().parent.parent / 'mod/fleet'),
-                    '--debug-file', str(root / (role + '.debug'))])
+                    '--debug-file', str(root / (role + '.debug'))]
+                if args.stop_order and role == 'primary':
+                    native_command = [sys.executable,str(fixture_bin/'fleet_task_execution.py'),
+                        'run','--snapshot',json.dumps(grant),'--',sys.executable,
+                        str(fixture_bin/'fleet_task_execution.py'),'native','--component','agent','--',*native_command]
+                command = shlex.join(['env','T970_CANCEL_ROLE='+role,*native_command])
                 if role == 'other':
                     result = tm('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture',
                                 '-n', role, '-x', '120', '-y', '32', '-c', str(project), command)
@@ -174,6 +205,7 @@ def main():
                 screen = tm('capture-pane', '-p', '-t', 'fixture:' + role).stdout
                 raise AssertionError(role + ' did not reach ' + phase + ': ' + screen[-4000:])
 
+            contenders = []
             try:
                 start('other')
                 other = wait_phase('other', 'holding')
@@ -187,21 +219,26 @@ def main():
                 check(primary['session'] != other['session'], 'two actual native session identities')
                 native = process(own_record['createdByPid'])
                 launch = '33333333-3333-4333-8333-333333333333'
-                grant = dict(task_ref='T970', task_fid='44444444-4444-4444-8444-444444444444',
-                    generation=1, binding_generation=1, attempt_id='task:T970:g1', operation_id='start-fixture',
-                    execution_endpoint='fixture', execution_owner='55555555-5555-4555-8555-555555555555/'
-                    + '66666666-6666-4666-8666-666666666666', cancel_request='')
-                fence = ExecutionFence(root / 'conf')
-                fence.bind(grant, authorized=True)
-                with fence.admission(grant) as permit:
-                    permit.reserve_launch(launch, native)
-                    permit.register_child(launch, native)
-                    permit.register_native(launch, 'agent', native)
+                if args.stop_order:
+                    launch = fence.launch('T970')['launch_id']
+                else:
+                    with fence.admission(grant) as permit:
+                        permit.reserve_launch(launch, native)
+                        permit.register_child(launch, native)
+                        permit.register_native(launch, 'agent', native)
                 stopped = dict(grant, generation=2, cancel_request='stop-fixture')
+                stop_started = time.monotonic()
                 fence.apply_stop(stopped)
                 pane = tm('display-message', '-p', '-t', 'fixture:primary', '#{pane_id}').stdout.strip()
                 inbox = root / 'conf/global/mod-inbox' / socket.name / pane[1:]
                 inbox.mkdir(parents=True, exist_ok=True)
+                if args.stop_race:
+                    contender_env = dict(environment, PYTHONPATH=str(Path(__file__).resolve().parent),
+                                         TMUX=str(socket)+',0,0', TMUX_PANE=pane)
+                    for _ in range(2):
+                        contenders.append(subprocess.Popen([sys.executable,'-c',
+                            'from fleet_task_execution import ExecutionFence,terminate_registered; '
+                            'terminate_registered(ExecutionFence(),"T970")'],env=contender_env))
                 def cancel(ids, nonce):
                     slot = inbox / 'native-cancel.json'
                     done = inbox / 'native-cancel.done'
@@ -222,24 +259,46 @@ def main():
                             pass
                         time.sleep(.02)
                     raise AssertionError('no cancel receipt: ' + tm('capture-pane', '-p', '-t', 'fixture:primary').stdout)
-                foreign = cancel([other['plan_id']], 'a')
-                check(foreign['state'] == 'refused', 'real verifier refuses another session plan in same project')
-                check(raw_record(table, other['plan_id'])[0] == original_bytes,
-                      'foreign plan preserved after refused cancellation')
-                owned = cancel([primary['plan_id']], 'b')
-                check(owned['state'] == 'observed_absent', 'production inbox/verifier/native tools confirm own plan absent: ' + str(owned))
-                check(owned['cancelled_ids'] == [primary['plan_id']], 'receipt covers only the exact requested plan')
-                check(raw_record(table, other['plan_id'])[0] == original_bytes,
-                      'same-project foreign plan preserved byte for byte after own cancellation')
-                check(same_process(native), 'native root still alive: this is plan cancellation, not a root-exit proof')
-                for role in ('other', 'primary'):
-                    (root / ('cleanup-' + role)).write_text('creator cleans fixture plan\n')
-                    wait_phase(role, 'cleaned')
+                if args.stop_order:
+                    until = time.monotonic()+4
+                    while same_process(native) and time.monotonic()<until:
+                        time.sleep(.025)
+                    check(not same_process(native), 'actual supervisor/executor ended exact native root')
+                    for contender in contenders:
+                        check(contender.wait(timeout=2) == 0, 'concurrent executor completed the same bounded stop')
+                    check(time.monotonic()-stop_started < 3.6, 'shared stop deadline bounds native root exit')
+                    ids = [job['id'] for job in json.loads(table.read_text())['tasks']]
+                    check(primary['plan_id'] not in ids, 'actual supervisor cancelled own durable plan before root exit')
+                    check(raw_record(table,other['plan_id'])[0] == original_bytes,
+                          'other native session durable plan survives supervised stop byte for byte')
+                    owned = json.loads((inbox/'native-cancel.done').read_text())
+                    check(owned.get('state') == 'observed_absent', 'actual production mod confirmed absence before signal')
+                    foreign = {'scope':'native_durable_plans','state':'untargeted'}
+                    (root/'cleanup-other').touch()
+                    wait_phase('other','cleaned')
+                else:
+                    foreign = cancel([other['plan_id']], 'a')
+                    check(foreign['state'] == 'refused', 'real verifier refuses another session plan in same project')
+                    check(raw_record(table, other['plan_id'])[0] == original_bytes,
+                          'foreign plan preserved after refused cancellation')
+                    owned = cancel([primary['plan_id']], 'b')
+                    check(owned['state'] == 'observed_absent', 'production inbox/verifier/native tools confirm own plan absent: ' + str(owned))
+                    check(owned['cancelled_ids'] == [primary['plan_id']], 'receipt covers only the exact requested plan')
+                    check(raw_record(table, other['plan_id'])[0] == original_bytes,
+                          'same-project foreign plan preserved byte for byte after own cancellation')
+                    check(same_process(native), 'native root still alive: this is plan cancellation, not a root-exit proof')
+                    for role in ('other', 'primary'):
+                        (root / ('cleanup-' + role)).write_text('creator cleans fixture plan\n')
+                        wait_phase(role, 'cleaned')
                 check(json.loads(table.read_text())['tasks'] == [], 'fixture creators cleaned every durable plan')
                 check(requests == [], 'no model HTTP requests')
                 print(json.dumps(dict(version=version, checks=checks, receipts=[foreign, owned],
                     model_requests=len(requests), scope='native durable plans only'), ensure_ascii=False, indent=2))
             finally:
+                for contender in contenders:
+                    if contender.poll() is None:
+                        contender.kill()
+                    contender.wait(timeout=2)
                 # The socket was created under this fresh, marked directory.
                 roots = []
                 for pid in tm('list-panes', '-a', '-F', '#{pane_pid}').stdout.splitlines():
