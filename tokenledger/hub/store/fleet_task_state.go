@@ -77,8 +77,12 @@ func writeTaskResult(tx *sql.Tx, owner, id, taskID string, refs []int64, state, 
 	for _, n := range refs {
 		where, args = append(where, "id = ?"), append(args, n)
 	}
+	projection, args, err := legacyTaskProjection(tx, owner, strings.Join(where, " OR "), args)
+	if err != nil {
+		return 0, err
+	}
 	q := `UPDATE fleet_tasks SET state = ?, outcome = ?, pr = CASE WHEN pr = '' THEN ? ELSE pr END,
-		observation = ?, evidence = CASE WHEN evidence LIKE ? THEN '' ELSE evidence END, updated_at = ? WHERE owner = ? AND (` + strings.Join(where, " OR ") + `)
+		observation = ?, evidence = CASE WHEN evidence LIKE ? THEN '' ELSE evidence END, updated_at = ? WHERE owner = ? AND (` + projection + `)
 		AND (((outcome = '' OR observation LIKE ?) AND state NOT IN (?, ?, ?)) OR observation LIKE ? OR observation LIKE ?)`
 	// an end its session's close wrote (A4G2: id_closed / never_started) gives way to a real result
 	res, err := tx.Exec(q, append([]any{out, out, pr, ObsIDResult + id + "#" + strconv.Itoa(seq), TaskEndedNoResult + "%",
@@ -141,6 +145,13 @@ func (s *Store) ReconcileTaskStates(owner string, before int64, apply bool, now 
 		return out, err
 	}
 	for _, t := range all {
+		protected, err := taskProjectionProtected(s.read, t)
+		if err != nil {
+			return out, err
+		}
+		if protected {
+			continue
+		}
 		if taskFinished(t.State) {
 			continue
 		}
@@ -228,14 +239,26 @@ func (s *Store) UndoReconcileCancel(owner string, now time.Time) (int64, error) 
 	}
 	var n int64
 	for _, u := range todo {
-		res, err := s.write.Exec(`UPDATE fleet_tasks SET state = ?, outcome = '', observation = '', updated_at = ?
-			WHERE id = ? AND observation = ? AND state = ?`, strings.TrimPrefix(u.obs, ObsReconcileCancel),
-			now.UTC().Format(rfc), u.id, u.obs, TaskCancelled)
+		task, err := s.FleetTask(u.id)
 		if err != nil {
 			return n, err
 		}
-		k, _ := res.RowsAffected()
-		n += k
+		var changed int64
+		err = s.reconcileWrite(task, func(tx *sql.Tx) (int64, error) {
+			res, err := tx.Exec(`UPDATE fleet_tasks SET state = ?, outcome = '', observation = '', updated_at = ?
+				WHERE id = ? AND observation = ? AND state = ?`, strings.TrimPrefix(u.obs, ObsReconcileCancel),
+				now.UTC().Format(rfc), u.id, u.obs, TaskCancelled)
+			if err != nil {
+				return 0, err
+			}
+			k, err := res.RowsAffected()
+			changed = k
+			return k, err
+		})
+		if err != nil {
+			return n, err
+		}
+		n += changed
 	}
 	return n, nil
 }
@@ -248,6 +271,17 @@ func (s *Store) reconcileWrite(t FleetTask, write func(*sql.Tx) (int64, error)) 
 	defer tx.Rollback()
 	if err := s.d.claimWrites(tx, "fleet_tasks"); err != nil {
 		return err
+	}
+	current, err := s.taskInTx(tx, t.ID)
+	if err != nil {
+		return err
+	}
+	protected, err := taskProjectionProtected(tx, current)
+	if err != nil {
+		return err
+	}
+	if protected || !sameTaskProjection(t, current) {
+		return nil
 	}
 	if _, err := write(tx); err != nil {
 		return fmt.Errorf("reconcile %s: %w", t.Ref, err)
