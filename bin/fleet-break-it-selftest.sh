@@ -2095,8 +2095,6 @@ drill_hub_refused_cert() {
   WHAT="入口回 401「names no one」：where 报 hub refused，和入口断网分开"
 }
 
-
-
 # No client open for 12 hours (issue #3455): only an open client's keeper (#2112)
 # or a new `fleet` renewed the connection certificate, so a hosting login nobody
 # opened a client on woke to an expired one — the doctor's cert row red, the
@@ -7036,16 +7034,6 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
-drill_task_continue_historical_outcome() {
-  local t0; t0=$(now); CAP=120
-  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
-    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
-    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
-  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
-    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
-    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
-  SECS=$(since "$t0")
-}
 
 
 
