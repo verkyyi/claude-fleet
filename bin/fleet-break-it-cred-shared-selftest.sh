@@ -41,6 +41,18 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
 
+# Native Codex first inputs contain client IDs before any provider response.
+drill_cred_codex_native_initial() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" \
+    Capacity.test_native_context_shared_vectors Capacity.test_native_first_and_resume_through_http_proxy 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="原生首轮完整客户端消息/tools ID 可独立选订阅；assistant/opaque 续接仍回原源，未知源和身份复用在上游前拒绝"
+}
+
 # Shared rollout must preserve native picks before root drops, or legacy
 # launchd bootout kills the only in-memory source. Exercise the real uid-gated
 # control handler without request peer_uid seams; socket and file I/O are real.

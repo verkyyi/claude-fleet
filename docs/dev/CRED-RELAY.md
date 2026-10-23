@@ -558,8 +558,13 @@ input；不包含凭据，不 lease 或 refresh。消费者再与本 login 实�
 不能恢复其从未持久化的内存来源记录，旧 pass
 继续原兼容路径，发布负责人须验证旧会话。新 enrolled 会话则持久保存带用途的引用 hash
 → 原标签 + **实际 upstream account identity hash**；发送时校验实际载入的凭据身份。
-同账号 token refresh 保持亲和，删后复用标签不能继承旧上下文。其已知引用在 off/shadow/
-stale 回退期间也不能跟随保守 picker 换账号，来源不明、冲突、身份变更或满额时明确拒绝。
+同账号 token refresh 保持亲和，删后复用标签不能继承旧上下文。
+原生 Codex 的完整 user/developer/system 输入消息和完整 developer `additional_tools`
+声明可附带客户端 ID；限定字段、inline 内容或无服务器状态的工具定义齐全时，这些局部 ID
+不算 provider 引用，可以独立选订阅。此判断不依赖 ID 前缀、`history_initialization` 或
+其它客户端 metadata；assistant output ID、调用 ID、`previous_response_id`、加密 reasoning、
+compaction 和 reference-only 内容仍需已知原源。未知字段/opaque 内容不获得局部 ID 豁免。
+其已知引用在 off/shadow/stale 回退期间也不能跟随保守 picker 换账号，来源不明、冲突、身份变更或满额时明确拒绝。
 新独立请求才使用容量/保持期/收益规则；来源续接不改当前 sticky。所有本地 Codex 429
 只记录将来的 cooldown，原响应原样交付，本次不换订阅或重放；Claude 重试行为不变。
 

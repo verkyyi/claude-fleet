@@ -544,16 +544,51 @@ def codex_context(method, path, headers, body):
         unknown |= set(conv) != {"id"}
     else:
         add("id", conv)
+    def client_input_id(v):
+        # Native Codex assigns IDs before inference to full client messages and
+        # tool declarations. Never use an ID prefix or client metadata as proof;
+        # assistant items, calls, encrypted state and reference-only items stay
+        # provider affinity. Extra/opaque fields cannot gain this exemption.
+        if not isinstance(v.get("id"), str):
+            return False
+        if v.get("type") == "additional_tools":
+            return (v.get("role") == "developer" and not set(v) - {"type", "id", "role", "tools"}
+                    and tools(v.get("tools")))
+        if v.get("type", "") not in ("", "message") or v.get("role") not in ("user", "developer", "system"):
+            return False
+        if set(v) - {"type", "id", "role", "content"}:
+            return False
+        content = v.get("content")
+        if isinstance(content, str):
+            return True
+        if not isinstance(content, list) or not content:
+            return False
+        for part in content:
+            if not isinstance(part, dict):
+                return False
+            if part.get("type") == "input_text":
+                if not isinstance(part.get("text"), str) or set(part) - {"type", "text"}:
+                    return False
+            elif part.get("type") == "input_image":
+                if not isinstance(part.get("image_url"), str) or not part["image_url"].startswith("data:") or set(part) - {"type", "image_url", "detail"}:
+                    return False
+            else:
+                return False
+        return True
+
     def item(v):
         nonlocal unknown
         if not isinstance(v, dict):
             unknown = True
             return
         typ = v.get("type", "")
+        if not isinstance(typ, str):
+            unknown, typ = True, ""
         if typ not in set("message function_call function_call_output custom_tool_call custom_tool_call_output additional_tools local_shell_call web_search_call tool_search_call tool_search_output reasoning compaction item_reference".split()) | {""}:
             unknown = True
         for k in ("id", "call_id"):
-            add("id", v.get(k))
+            if k != "id" or not client_input_id(v):
+                add("id", v.get(k))
         add("encrypted", v.get("encrypted_content"))
         if v.get("tools") is not None and not tools(v["tools"]):
             unknown = True
