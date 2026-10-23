@@ -105,7 +105,9 @@ func (s *Store) TaskContinuationSource(taskID int64, owner string) (TaskContinua
 	if err != nil {
 		return source, err
 	}
-	if owner == "" || t.Owner != owner || t.State == TaskCancelled || t.Outcome != "" {
+	// Historical State/Outcome do not authorize or forbid explicit continuation.
+	// The exact stopped binding and its immutable proof chain below do.
+	if owner == "" || t.Owner != owner {
 		return source, ErrTaskFence
 	}
 	source, err = taskContinuationSourceTx(tx, t)

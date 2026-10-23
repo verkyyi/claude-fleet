@@ -226,6 +226,13 @@ func (s *Server) stopFleetTask(w http.ResponseWriter, r *http.Request, p fleetPr
 		}
 		return
 	}
+	s.requestFleetTaskStop(w, r, t)
+}
+
+// Both owner-authenticated entry points persist and deliver through this one
+// road. A node may request its owner's stop from any of that owner's logins;
+// the reserved execution endpoint still decides where the stop is delivered.
+func (s *Server) requestFleetTaskStop(w http.ResponseWriter, r *http.Request, t store.FleetTask) {
 	var in struct {
 		Key      string `json:"idempotency_key"`
 		Evidence string `json:"evidence"`

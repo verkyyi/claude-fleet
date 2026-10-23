@@ -162,7 +162,7 @@ func TestTaskContinueAPIRequiresProofAndExpectedBinding(t *testing.T) {
 			t.Fatal("unconfirmed exit dispatched")
 		}
 	})
-	for _, change := range []string{"wrong-stop", "old-generation", "outcome"} {
+	for _, change := range []string{"wrong-stop", "old-generation"} {
 		t.Run(change, func(t *testing.T) {
 			h, node, task, snapshot, _ := continueFixture(t)
 			body := continueBody(snapshot, "invalid-binding")
@@ -171,10 +171,6 @@ func TestTaskContinueAPIRequiresProofAndExpectedBinding(t *testing.T) {
 				body["expected_stop_operation_id"] = "native-stop-alias"
 			case "old-generation":
 				body["expected_generation"] = snapshot.Generation + 1
-			case "outcome":
-				if _, err := h.srv.Store.DB().Exec("UPDATE fleet_tasks SET outcome='done' WHERE id=?", task.ID); err != nil {
-					t.Fatal(err)
-				}
 			}
 			postFleet(t, h, "tasks/"+task.Ref+"/continue", body, 409)
 			if node.count() != 0 {

@@ -53,6 +53,7 @@ export type BoardRow = {
   loop?: boolean; // explicit recurring plan, never inferred from looping observation
   running?: boolean; // native execution/background activity observation
   pending_start?: boolean; // accepted execution request with no confirmed native start
+  execution_endpoint?: string; // existing Task binding, independent of node visibility
   // why it is still open (E101): the card's third line, 中文 / English, and its tone
   why?: [string, string]; why_tone?: "grey" | "orange" | "red";
   // 会话合一 (Y01K): web = a chat session the web opened, terminal = one a terminal opened
