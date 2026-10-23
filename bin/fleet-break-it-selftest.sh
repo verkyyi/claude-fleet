@@ -6949,6 +6949,16 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_local_continuation() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-local-continuation-selftest.py" \
+    >"$WORK/task-local-continuation.log" 2>&1 || {
+      WHY="local continuation regression: $(tail -10 "$WORK/task-local-continuation.log")"; return 1;
+    }
+  WHAT='显式新授权与原ACK证明共同接续；旧FID仍停止，同grant同分配，第二轮退出证明独立'
+  SECS=$(since "$t0")
+}
+
 drill_task_continue_authority() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinue' -count=1) >"$WORK/task-continue.log" 2>&1 || {
