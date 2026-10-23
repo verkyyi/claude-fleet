@@ -6949,6 +6949,15 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continuation_start() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
+    WHY="continuation startup regression: $(tail -10 "$WORK/task-continuation-start.log")"; return 1;
+  }
+  WHAT='同 Task 新 FID 续做；认证原 start 与退出回执找回原工作树和历史，旧窗口不吞新启动'
+  SECS=$(since "$t0")
+}
+
 drill_task_local_continuation() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-local-continuation-selftest.py" \
