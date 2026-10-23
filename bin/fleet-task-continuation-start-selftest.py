@@ -234,11 +234,23 @@ class ContinuationStartTests(unittest.TestCase):
 
     def test_real_raw_spawner_keeps_workspace_history_and_only_deduplicates_new_fid(self):
         import fleet_task_execution as execution
-        claimed = execution.continue_execution(self.grant,FLEET,EXIT,conf_dir=self.root,
-            read=lambda _:self.grant,read_stops=lambda:dict(control_version=1,task_executions=[]),
-            call=lambda _,body:dict(self.grant,execution_owner=body['worker_id']))
+        continuation_proof = self.authority['start']['continuation']
+        envelope = getattr(self, 'envelope', ENVELOPE)
+        if 'stop_operation_id' in continuation_proof:
+            if getattr(self, 'raw_local_unclaimed', False):
+                claimed = self.base.fence.continue_unclaimed(self.grant, FLEET, self.authority['source_stop'], authorized=True)
+            else:
+                claimed = execution.continue_unclaimed_execution(self.grant,FLEET,continuation_proof,envelope,
+                    conf_dir=self.root,read_start=lambda _:self.authority,
+                    read_stops=lambda:dict(control_version=1,task_executions=[]),
+                    call=lambda _,body:dict(self.grant,execution_owner=body['worker_id']))
+        else:
+            claimed = execution.continue_execution(self.grant,FLEET,EXIT,conf_dir=self.root,
+                read=lambda _:self.grant,read_stops=lambda:dict(control_version=1,task_executions=[]),
+                call=lambda _,body:dict(self.grant,execution_owner=body['worker_id']))
         new_fid = claimed['execution_owner'].split('/')[1]
-        self.authority['task_execution'] = claimed
+        transport = self.grant if getattr(self, 'raw_local_unclaimed', False) else claimed
+        self.authority['task_execution'] = transport
         self.git('-C', str(self.wt), 'branch', '-m', 'user-renamed-branch')
         native_id = 'cccccccc-4444-4444-8444-cccccccccccc'
         with self.ledger.open('a') as stream:
@@ -257,11 +269,12 @@ case "$1" in
  execution-start) cat "$FIXTURE_START" ;;
  execution-get) cat "$FIXTURE_GRANT" ;;
  execution-list) printf '{"control_version":1,"task_executions":[]}' ;;
+ execution-claim) python3 -c 'import json,os,sys; x=json.load(sys.stdin); p=os.environ["FIXTURE_GRANT"]; g=json.load(open(p)); g["execution_owner"]=x["worker_id"]; json.dump(g,open(p,"w")); p=os.environ["FIXTURE_START"]; a=json.load(open(p)); a["task_execution"]=g; json.dump(a,open(p,"w")); print(json.dumps(g))' ;;
  *) exit 3 ;;
 esac
 ''')
         start_file=self.root/'start.json'; start_file.write_text(json.dumps(self.authority))
-        grant_file=self.root/'grant.json'; grant_file.write_text(json.dumps(claimed))
+        grant_file=self.root/'grant.json'; grant_file.write_text(json.dumps(transport))
         tools = self.root/'tools'; tools.mkdir()
         tmux = tools/'tmux'
         tmux.write_text('''#!/usr/bin/env python3
@@ -297,32 +310,46 @@ elif cmd=='list-windows':
              and k not in ('TMUX','TMUX_PANE','CLAUDE_CONFIG_DIR','CLAUDE_PROJECTS_DIR')}
         env.update(HOME=str(self.root),PATH=str(tools)+os.pathsep+os.environ['PATH'],TMPDIR=str(self.root),
             FLEET_CONF_DIR=str(self.root), FLEET_SKIP_GLOBAL_CONF='1',FLEET_ORIGIN_GATE='0',
-            FLEET_TASK_EXECUTION=json.dumps(claimed), FLEET_TASK_CONTINUATION=EXIT,
-            FLEET_DISPATCH=json.dumps(ENVELOPE),FLEET_ID_PUSH='0',CCQUOTA_FLEET='0',
+            FLEET_TASK_EXECUTION=json.dumps(transport),
+            FLEET_DISPATCH=json.dumps(envelope),FLEET_ID_PUSH='0',CCQUOTA_FLEET='0',
             FLEET_GLOBAL_MAX_SESSIONS='0',FLEET_MACHINE_MAX_SESSIONS='0',
             FLEET_ADMIT_MEM_READING='65536 65536', FLEET_ADMIT_CPU_READING='-',
             CLAUDE_PROJECTS_DIR=str(projects.parent),FIXTURE_START=str(start_file),FIXTURE_GRANT=str(grant_file),
             FIXTURE_TMUX_LOG=str(log),FIXTURE_OLD_FID=OLD_FID,FIXTURE_NEW_FID=new_fid,FIXTURE_DUP=str(duplicate),
             FIXTURE_WORKTREE=str(self.wt))
+        env['FLEET_TASK_CONTINUATION_STOP' if 'stop_operation_id' in continuation_proof else 'FLEET_TASK_CONTINUATION'] = \
+            continuation_proof.get('stop_operation_id', continuation_proof.get('exit_operation_id'))
         args=['bash',str(fakebin/'dash-raw-session.sh'),'fixture','--repo','owner/repo','--task','T42',
               '--agent','codex','--origin','hub','--node','local','--print']
+        if getattr(self, 'raw_fresh', False):
+            args += ['--prompt', 'original user task, first actual run']
         result=subprocess.run(args,env=env,text=True,capture_output=True,timeout=35)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn(new_fid,result.stdout)
-        self.assertIn(str(self.wt),result.stdout)
         new_ledger=self.root/'ids'/(new_fid+'.ndjson')
         events=[json.loads(line) for line in new_ledger.read_text().splitlines()]
         opening=next(e for e in events if e['ev']=='opened')
-        self.assertEqual(opening['prev'],OLD_FID)
         self.assertEqual(opening['task'],'T42')
-        self.assertEqual(opening['worktree'],str(self.wt))
         self.assertEqual(self.ledger.read_bytes(),before)
-        self.assertEqual((self.gd/'fleet-id').read_text().strip(),new_fid)
+        if getattr(self, 'raw_fresh', False):
+            self.assertFalse(opening.get('prev'))
+            self.assertNotEqual(opening['worktree'], str(self.wt))
+            self.assertEqual((self.wt/'existing.txt').read_text(), 'unfinished user work\n')
+            self.assertEqual((self.gd/'fleet-id').read_text().strip(), OLD_FID)
+            self.assertTrue(Path(opening['worktree']).is_dir())
+        else:
+            self.assertIn(str(self.wt),result.stdout)
+            self.assertEqual(opening['prev'],OLD_FID)
+            self.assertEqual(opening['worktree'],str(self.wt))
+            self.assertEqual((self.gd/'fleet-id').read_text().strip(),new_fid)
         commands=[json.loads(line) for line in log.read_text().splitlines()]
         launches=[a for a in commands if 'new-window' in a]
         self.assertEqual(len(launches),1)
         self.assertNotIn('--resume',json.dumps(launches))
-        self.assertIn(str(self.wt),json.dumps(launches))
+        self.assertIn(opening['worktree'],json.dumps(launches))
+        if getattr(self, 'raw_fresh', False):
+            seeds = [p.read_text() for p in self.root.rglob('task_*.txt') if p.is_file()]
+            self.assertTrue(any('original user task, first actual run' in seed for seed in seeds))
         duplicate.touch()
         result=subprocess.run(args,env=env,text=True,capture_output=True,timeout=35)
         self.assertEqual(result.returncode,0,result.stderr)
