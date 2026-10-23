@@ -7783,6 +7783,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_result_overrides_native() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-view-id-selftest.sh" >"$WORK/task-native-display.log" 2>&1 || {
+    WHY="historical result replaced a native observation: $(tail -8 "$WORK/task-native-display.log")"; return 1;
+  }
+  WHAT='历史 blocked/failed/done/merged 与Task Outcome不改写当前原生状态；已收起会话仍保留历史结果'
+  SECS=$(since "$t0")
+}
+
 drill_stop_renamed_worker() {
   local t0; t0=$(now); CAP=30
   bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
@@ -7805,6 +7814,15 @@ drill_report_delegation_offline() {
   CAP=30; local t0 out; t0=$(now)
   out=$(python3 "$BIN/fleet-report-delegation-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   WHAT='旧委托写入口立即退役；历史读取不写磁盘、不派发、不补送'
+  SECS=$(since "$t0")
+}
+
+drill_session_title_placeholder() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/task-line-selftest.sh" >"$WORK/title-placeholder.log" 2>&1 || {
+    WHY="first prompt title regression: $(tail -3 "$WORK/title-placeholder.log")"; return 1;
+  }
+  WHAT='短码任务的首句同时更新窗口和记录；中英文占位名消失，后续消息不改名'
   SECS=$(since "$t0")
 }
 

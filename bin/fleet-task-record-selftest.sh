@@ -247,6 +247,13 @@ bash "$R" retitle T5 --from '新会话' --title '修一下面板读取变慢'; r
   && grep -q '"mutation": {"kind": "retitle", "idempotency_key": "retitle-T5", "from": "新会话", "title": "修一下面板读取变慢"}' "$CURL_LOG" \
   && ok "G retitle: one retitle mutation on the record, from the placeholder" || st_miss "G retitle: rc=$rc $(cat "$CURL_LOG")"
 bash "$R" retitle T5 --title x >/dev/null 2>&1; [ "$?" = 2 ] && ok "G retitle without --from is usage" || st_miss "G retitle usage"
+for ref in R123 BEXV; do
+  : > "$CURL_LOG"
+  bash "$R" retitle "$ref" --from 'New Session' --title 'Fix the panel title'; rc=$?
+  [ "$rc" = 0 ] && grep -q "^argv: .*-X POST .*/v1/node/tasks/$ref$" "$CURL_LOG" \
+    && grep -q '"from": "New Session", "title": "Fix the panel title"' "$CURL_LOG" \
+    && ok "G retitle: $ref reaches the hub resolver" || st_miss "G retitle $ref: rc=$rc $(cat "$CURL_LOG")"
+done
 
 # --- E: epic-member is gone (issue #4957): an EPIC's members are child tasks ------
 bash "$R" epic-member 3178 o/r 3330 x >/dev/null 2>&1; [ "$?" = 2 ] && ok "E epic-member is usage now" || st_miss "E epic-member still answers"
