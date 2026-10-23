@@ -216,6 +216,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			caps = append(caps, control.CapRelayVia)
 		}
 	}
+	caps = append(caps, control.CapPreview)
 	if a.cfg.FleetChat {
 		caps = append(caps, control.CapChat, control.CapChatAttachment)
 	}
@@ -381,6 +382,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				if a.cfg.FleetSSHRelay {
 					go a.openSSHRelay(ctx, m)
 				}
+			case control.TypePreviewOpen:
+				go a.openPreviewRelay(ctx, m, attachmentGeneration)
 			case control.TypeChatRelayOpen:
 				// Same binding as the SSH relay; an agent that did not
 				// offer CapChat ignores it (claude-fleet#3644).

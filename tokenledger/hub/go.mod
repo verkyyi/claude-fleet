@@ -8,6 +8,7 @@ require (
 	github.com/pion/webrtc/v4 v4.2.23
 	github.com/verkyyi/claude-fleet/tokenledger/shared v0.0.0
 	golang.org/x/crypto v0.52.0
+	golang.org/x/net v0.54.0
 	modernc.org/sqlite v1.57.0
 	rsc.io/qr v0.2.0
 )
@@ -37,7 +38,6 @@ require (
 	github.com/pion/turn/v5 v5.1.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
