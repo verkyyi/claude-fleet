@@ -4973,8 +4973,9 @@ drill_task_window_duplicate() {
   t0=$(now)
   suite_holds task-one-window-selftest.sh 'D5: no window opened' 'B2: the ID stays open while the original runs' \
     'E3: the spawner was called for a running record' 'F9: the hub'"'"'s record is back' || return 1
-  grep -q 'fleet_task_running "$TASK_REF"' "$BIN/dash-raw-session.sh" \
-    || { WHY="dash-raw-session.sh no longer asks whether the record already runs"; return 1; }
+  grep -q '_ttask=$TASK_REF' "$BIN/dash-raw-session.sh" \
+    && grep -q 'fleet_task_running "$_ttask" "$_tfid"' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh lost Task or current continuation FID duplicate checks"; return 1; }
   grep -q 'fleet_fid_shared' "$BIN/fleet-cleanup-idle.py" \
     || { WHY="the idle reaper no longer keeps an ID another window carries"; return 1; }
   SECS=$(since "$t0")
