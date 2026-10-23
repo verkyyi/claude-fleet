@@ -877,3 +877,4 @@ FLEET_START_GRACE                  knob: seconds a task record may go with no na
 FLEET_TASK_RESPAWN                 seam: the spawner fleet-task-record.sh respawn runs (default bin/dash-raw-session.sh; T642)
 FLEET_GATE_DIR                    seam: gate fixture root shared by shell delivery and Python wake receipts (C4)
 FLEET_PEER_DELIVERY_ID            handoff: hub relay's stable delivery id for the local peer sender and queue (C4)
+FLEET_TASK_CONTINUATION_STOP       handoff: canonical never-claimed stop ID; mutually exclusive with native exit continuation

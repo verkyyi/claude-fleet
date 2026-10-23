@@ -18,11 +18,46 @@ from fleet_task_exit_submit import acknowledged_native_exit
 
 
 def validate_continuation(value):
-    if (not isinstance(value, dict) or set(value) != {'version', 'exit_operation_id'}
+    if (not isinstance(value, dict) or set(value) not in ({'version', 'exit_operation_id'}, {'version', 'stop_operation_id'})
             or type(value.get('version')) is not int or value['version'] != 1
-            or not is_identity(value.get('exit_operation_id'))):
-        raise FenceRefused('continuation requires version 1 and an exact exit operation ID')
+            or not is_identity(value.get('exit_operation_id', value.get('stop_operation_id')))):
+        raise FenceRefused('continuation requires version 1 and exactly one exit or unclaimed stop operation ID')
     return value
+
+
+def validate_metadata(expected, continuation, authority):
+    """Both transports read the same strict immutable start union."""
+    validate_continuation(continuation)
+    start, source = authority.get('start'), authority.get('source_start')
+    if (not isinstance(start, dict) or start.get('continuation') != continuation
+            or start.get('operation_id') != expected['operation_id']
+            or start.get('agent') not in ('claude', 'codex')
+            or not isinstance(start.get('repo'), str) or type(start.get('no_repo')) is not bool
+            or bool(start['repo']) == start['no_repo']):
+        raise FenceRefused('invalid immutable continuation start')
+
+    def check_source(value):
+        if (not isinstance(value, dict) or set(value) != {'operation_id', 'agent', 'repo', 'no_repo'}
+                or not isinstance(value['operation_id'], str) or not value['operation_id']
+                or value['agent'] not in ('claude', 'codex')
+                or not isinstance(value['repo'], str) or type(value['no_repo']) is not bool
+                or value['repo'] != start['repo'] or value['no_repo'] != start['no_repo']):
+            raise FenceRefused('invalid immutable continuation source')
+    check_source(source)
+    if 'exit_operation_id' in continuation:
+        if 'source_stop' in authority or 'workspace_source' in authority:
+            raise FenceRefused('native continuation cannot carry unclaimed stop metadata')
+        return
+    from fleet_task_unclaimed import source_stop
+    stopped = source_stop(authority.get('source_stop'), expected)
+    if stopped['cancel_request'] != continuation['stop_operation_id'] or source['operation_id'] != stopped['operation_id']:
+        raise FenceRefused('immutable unclaimed source names another stop or start')
+    if 'workspace_source' in authority:
+        workspace = authority['workspace_source']
+        if (not isinstance(workspace, dict) or set(workspace) != {'exit_operation_id', 'start'}
+                or not is_identity(workspace['exit_operation_id'])):
+            raise FenceRefused('invalid immutable workspace source')
+        check_source(workspace['start'])
 
 
 def managed_home():
@@ -79,25 +114,45 @@ def _workspace(path, fid, task, successor=''):
 
 def continuation_plan(snapshot, continuation, authority, *, conf_dir=None, history=None, home=None):
     expected = _snapshot(snapshot, allow_unclaimed=True)
-    validate_continuation(continuation)
+    validate_metadata(expected, continuation, authority)
     actual = _snapshot(authority.get('task_execution'), allow_unclaimed=True)
     if actual != dict(expected, execution_owner=actual['execution_owner'] if not expected['execution_owner'] else expected['execution_owner']):
         raise FenceRefused('current start snapshot differs from continuation')
+    expected = actual
     fence = ExecutionFence(conf_dir)
+    start, source = authority['start'], authority['source_start']
+    unclaimed = 'stop_operation_id' in continuation
+    workspace = authority.get('workspace_source') if unclaimed else None
+    if unclaimed and workspace is None:
+        # First actual run: no manufactured history or guessed preclaim path.
+        return dict(source_fid='', worktree='', cwd=(home or managed_home)() if source['no_repo'] else '',
+                    repo=source['repo'], no_repo=source['no_repo'], seed=None)
+    exit_id = workspace['exit_operation_id'] if workspace else continuation['exit_operation_id']
+    if workspace:
+        source = workspace['start']
     # Read only: no filesystem or authenticated network calls inside SQLite.
     with fence.store.connect() as db:
-        row, stopped, result, receipt = acknowledged_native_exit(db, continuation['exit_operation_id'])
-    start, source = authority.get('start'), authority.get('source_start')
-    if (not isinstance(start, dict) or start.get('continuation') != continuation
-            or start.get('operation_id') != expected['operation_id']
-            or not isinstance(source, dict) or set(source) != {'operation_id', 'agent', 'repo', 'no_repo'}
-            or source['operation_id'] != stopped['operation_id']
+        row, stopped, result, receipt = acknowledged_native_exit(db, exit_id)
+        allocation = receipt.get('continuation', {}).get('snapshot')
+        if unclaimed and expected['execution_owner']:
+            from fleet_task_unclaimed import RETIREMENT, retirement
+            rows = db.execute("""SELECT * FROM operations WHERE action=?
+                AND json_extract(request,'$.source_stop.cancel_request')=?""",
+                (RETIREMENT, continuation['stop_operation_id'])).fetchall()
+            if len(rows) != 1:
+                raise FenceRefused('current workspace successor allocation is unavailable or ambiguous')
+            saved_stop, allocation, _ = retirement(rows[0])
+            if saved_stop != authority['source_stop']:
+                raise FenceRefused('workspace successor names another unclaimed stop')
+    distance = expected['generation'] - stopped['generation']
+    if (source['operation_id'] != stopped['operation_id']
             or source['agent'] != receipt['payload']['proof']['provider']
             or not isinstance(source['repo'], str) or type(source['no_repo']) is not bool
             or source['repo'] != start.get('repo') or source['no_repo'] != start.get('no_repo')
             or expected['task_ref'] != stopped['task_ref'] or expected['task_fid'] != stopped['task_fid']
             or expected['execution_endpoint'] != stopped['execution_endpoint']
-            or expected['generation'] != stopped['generation'] + 1 or expected['cancel_request']):
+            or (distance < 3 or distance % 2 != 1 if unclaimed else distance != 1)
+            or expected['cancel_request']):
         raise FenceRefused('original start and acknowledged exit do not authorize this continuation')
     source_fid = stopped['execution_owner'].split('/')[1]
     opened = _opened(fence.conf_dir, source_fid)
@@ -112,7 +167,6 @@ def continuation_plan(snapshot, continuation, authority, *, conf_dir=None, histo
         if not source['repo']:
             raise FenceRefused('original start did not explicitly identify a workspace')
         successor = ''
-        allocation = receipt.get('continuation', {}).get('snapshot')
         if allocation and expected['execution_owner'] and allocation == expected:
             candidate = expected['execution_owner'].split('/')[1]
             try:
@@ -144,12 +198,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--snapshot', required=True)
     parser.add_argument('--dispatch', required=True)
-    parser.add_argument('--exit-operation-id', required=True)
+    proof = parser.add_mutually_exclusive_group(required=True)
+    proof.add_argument('--exit-operation-id')
+    proof.add_argument('--stop-operation-id')
     args = parser.parse_args()
     try:
         from fleet_dispatch import check_current
         snapshot = json.loads(args.snapshot)
-        continuation = dict(version=1, exit_operation_id=args.exit_operation_id)
+        continuation = dict(version=1, **({'exit_operation_id': args.exit_operation_id} if args.exit_operation_id
+                                        else {'stop_operation_id': args.stop_operation_id}))
         authority = check_current(json.loads(args.dispatch), execution=snapshot, continuation=continuation)
         print(json.dumps(continuation_plan(snapshot, continuation, authority), ensure_ascii=False))
     except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError) as exc:
