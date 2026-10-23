@@ -1,12 +1,10 @@
 package credproxy
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -71,52 +69,6 @@ func TestCodexContinuationClassification(t *testing.T) {
 			for _, ref := range got.References {
 				if len(ref) != 64 {
 					t.Fatalf("raw state in protocol: %q", ref)
-				}
-			}
-		})
-	}
-}
-
-// Sanitized native exec/resume shapes captured against a loopback fake token
-// server; the same vectors are exercised by the Python local proxy.
-func TestCodexNativeContextSharedVectors(t *testing.T) {
-	raw, err := os.ReadFile("testdata/codex_native_context.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cases []struct {
-		Name        string            `json:"name"`
-		Method      string            `json:"method"`
-		Path        string            `json:"path"`
-		Headers     map[string]string `json:"headers"`
-		Body        json.RawMessage   `json:"body"`
-		Independent bool              `json:"independent"`
-		Unknown     bool              `json:"unknown"`
-		References  []struct {
-			Kind  string `json:"kind"`
-			Value string `json:"value"`
-		} `json:"references"`
-	}
-	if err := json.Unmarshal(raw, &cases); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range cases {
-		t.Run(tc.Name, func(t *testing.T) {
-			r := httptest.NewRequest(tc.Method, tc.Path, nil)
-			for k, v := range tc.Headers {
-				r.Header.Set(k, v)
-			}
-			got := codexRoute(r, tc.Body)
-			want := map[string]bool{}
-			for _, ref := range tc.References {
-				want[CodexReference(ref.Kind, ref.Value)] = true
-			}
-			if got.Independent != tc.Independent || got.Unknown != tc.Unknown || len(got.References) != len(want) {
-				t.Fatalf("classification %+v, expected independent=%v unknown=%v refs=%d", got, tc.Independent, tc.Unknown, len(want))
-			}
-			for _, ref := range got.References {
-				if !want[ref] {
-					t.Fatalf("unexpected reference %q", ref)
 				}
 			}
 		})

@@ -146,21 +146,15 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 			route.Unknown = true
 			return
 		}
-		typ, typeOK := m["type"].(string)
-		if _, present := m["type"]; present && !typeOK {
-			route.Unknown = true
-		}
+		typ, _ := m["type"].(string)
 		switch typ {
 		case "", "message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "additional_tools", "local_shell_call", "web_search_call", "tool_search_call", "tool_search_output", "reasoning", "compaction", "item_reference":
 		default:
 			route.Unknown = true
 		}
-		// Native full client inputs carry locally minted IDs before inference.
-		// All other IDs, including assistant output, remain source affinity.
+		// All IDs are conservative account affinity, including fully expanded items.
 		for _, k := range []string{"id", "call_id"} {
-			if k != "id" || !codexClientInputID(m) {
-				add("id", m[k])
-			}
+			add("id", m[k])
 		}
 		add("encrypted", m["encrypted_content"])
 		if m["tools"] != nil && !codexToolsIndependent(m["tools"]) {
@@ -235,60 +229,6 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 	}
 	route.Independent = !route.Unknown && len(refs) == 0
 	return route
-}
-
-// codexClientInputID recognizes full, self-contained client input, never by
-// ID prefix or metadata. Extra or opaque fields cannot acquire the exemption.
-// Keep this surface aligned with fleet-cred-proxy.py and the shared vectors.
-func codexClientInputID(m map[string]any) bool {
-	if _, ok := m["id"].(string); !ok {
-		return false
-	}
-	only := func(keys []string, obj map[string]any) bool {
-		for key := range obj {
-			if !contains(keys, key) {
-				return false
-			}
-		}
-		return true
-	}
-	if m["type"] == "additional_tools" {
-		return m["role"] == "developer" && only([]string{"type", "id", "role", "tools"}, m) && codexToolsIndependent(m["tools"])
-	}
-	typ, ok := m["type"].(string)
-	if _, present := m["type"]; present && !ok {
-		return false
-	}
-	role, _ := m["role"].(string)
-	if (typ != "" && typ != "message") || !contains([]string{"user", "developer", "system"}, role) || !only([]string{"type", "id", "role", "content"}, m) {
-		return false
-	}
-	if _, ok := m["content"].(string); ok {
-		return true
-	}
-	content, ok := m["content"].([]any)
-	if !ok || len(content) == 0 {
-		return false
-	}
-	for _, value := range content {
-		part, ok := value.(map[string]any)
-		if !ok {
-			return false
-		}
-		switch part["type"] {
-		case "input_text":
-			if _, ok := part["text"].(string); !ok || !only([]string{"type", "text"}, part) {
-				return false
-			}
-		case "input_image":
-			if url, ok := part["image_url"].(string); !ok || !strings.HasPrefix(url, "data:") || !only([]string{"type", "image_url", "detail"}, part) {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // Called on provider JSON only, never on user input or a tool schema. Missing

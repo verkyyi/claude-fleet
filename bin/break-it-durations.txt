@@ -131,7 +131,6 @@
 0.2 cred-sep-sudo-root
 7.4 cred-session-expire
 3.1 cred-shared-down
-1.1 cred-codex-native-initial
 1.6 cred-shared-picks-upgrade
 1.1 cred-shared-restart-loop
 0.8 cred-upstream-tenant-override
