@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 # selftest-entry
-"""C6: fleet-report-parent.sh must persist reports before terminal reaping.
+"""Own result history is durable; retired Parent delivery cannot block it.
 
-Real report/ID/queue scripts, sandbox config and a private tmux socket. No live
-agent or hub: the sleeping parent's durable queue is the delivery contract.
+Real result/ID scripts on a private tmux socket, without a live agent or Hub.
 """
 import importlib.util
 import json
@@ -55,60 +54,88 @@ class DurableReport(unittest.TestCase):
     def tm(self, *args, check=True):
         return self.run_cmd("tmux", "-L", self.sock, *args, check=check).stdout
 
-    def report(self):
-        return self.run_cmd("bash", str(BIN / "fleet-report-parent.sh"), "-L", self.sock,
-                            "--state", "stopped", "--outcome", "succeeded", "--summary", "durable result", check=False)
+    def report(self, *extra, bindir=BIN):
+        return self.run_cmd("bash", str(bindir / "fleet-report-parent.sh"), "-L", self.sock,
+                            "--state", "stopped", "--outcome", "succeeded", "--summary", "durable result", *extra, check=False)
 
     def terminal(self):
         p = self.run_cmd("python3", str(BIN / "fleet_id.py"), "status", self.fid)
         return json.loads(p.stdout)["state"] in ("done", "failed")
 
-    def test_durable_queue_does_not_require_network_delivery(self):
-        p = self.report()
-        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
-        self.assertTrue(list((self.fleet / "peer-queue").glob("*.json")))
-        self.assertTrue(self.terminal())
-
-    def test_failed_queue_does_not_finalize(self):
-        (self.fleet / "peer-queue").write_text("not a directory")
-        p = self.report()
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertFalse(self.terminal(), "report persistence failed, but ID became terminal")
-        import sys
-        sys.path.insert(0, str(BIN))
-        spec = importlib.util.spec_from_file_location("idle", BIN / "fleet-cleanup-idle.py")
-        idle = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(idle)
-        cleaner = idle.Cleaner.__new__(idle.Cleaner)
-        cleaner.id_over = lambda fid: True  # an older terminal result must not bypass the failed report
-        cleaner.task_closed = lambda task: 0
-        with patch.dict(os.environ, self.env, clear=True):
-            self.assertFalse(cleaner.work_over({"@fleet_id": self.fid, "@task": "T42"}))
-            row = idle.fleet_reap_policy.explain({"@fleet_id": self.fid, "@parked": "1",
-                                                "@park_held": "1", "@park_since": "1"})
-            self.assertIn("next=after-report-saved why=report-pending", row)
-            self.assertNotIn("next=reap@", row)
-
-
-    def test_failed_batch_ledger_does_not_finalize(self):
-        (self.fleet / "conf").write_text("FLEET_CHILD_REPORT=batch\n")
-        (self.fleet / "children").write_text("not a directory")
-        p = self.report()
-        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertFalse(self.terminal(), "batch delivery ledger failed, but ID became terminal")
-
-    def test_failed_orphan_ledger_does_not_finalize(self):
-        self.tm("set-option", "-w", "-t", self.child, "@origin", "scratch-999")
-        path = self.conf / "global" / "orphan-reports.ndjson"
-        path.mkdir(parents=True)
-        p = self.report()
-        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertFalse(self.terminal(), "orphan report not saved, but ID became terminal")
-
-    def test_hub_spawned_session_has_no_required_parent_delivery(self):
-        self.tm("set-option", "-w", "-t", self.child, "@origin", "")
+    def test_result_saved_without_parent_delivery(self):
         p = self.report()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("RETIRED", p.stdout)
+        self.assertIn("RECORDED", p.stdout)
+        self.assertTrue(self.terminal())
+        self.assertFalse((self.fleet / "peer-queue").exists())
+        self.assertFalse((self.fleet / "children").exists())
+        self.assertFalse((self.conf / "global" / "orphan-reports.ndjson").exists())
+
+    def test_broken_old_delivery_stores_do_not_block_own_history(self):
+        (self.fleet / "peer-queue").write_text("not a directory")
+        (self.fleet / "children").write_text("not a directory")
+        self.tm("set-option", "-w", "-t", self.child, "@origin", "scratch-999")
+        (self.conf / "global" / "orphan-reports.ndjson").mkdir(parents=True)
+        p = self.report()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue(self.terminal())
+
+    def test_failed_self_evidence_does_not_finalize(self):
+        gate = self.conf / "session-gate" / self.fid
+        gate.mkdir(parents=True, exist_ok=True)
+        (gate / "report.json").mkdir()
+        p = self.report()
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(self.terminal())
+        self.assertEqual(self.tm("display-message", "-p", "-t", self.child,
+                                 "#{@reap_report_pending}").strip(), "1")
+
+    def test_hook_retired_without_result_or_parent_mutation(self):
+        before = (self.conf / "ids" / (self.fid + ".ndjson")).read_bytes()
+        p = self.run_cmd("bash", str(BIN / "fleet-report-parent.sh"), "-L", self.sock,
+                         "--win", self.child, "--state", "stopped", "--only-once")
+        self.assertIn("RETIRED", p.stdout)
+        self.assertEqual((self.conf / "ids" / (self.fid + ".ndjson")).read_bytes(), before)
+        self.assertFalse((self.fleet / "children").exists())
+
+    def shadow(self):
+        shadow = self.root / "bin"
+        shadow.mkdir()
+        for f in BIN.iterdir():
+            (shadow/f.name).symlink_to(f)
+        return shadow
+
+    def test_merged_result_retains_real_merge_gate(self):
+        shadow = self.shadow()
+        (shadow/"fleet-lib.sh").unlink()
+        (shadow/"fleet-lib.sh").write_text('. "'+str(BIN/'fleet-lib.sh')+'"\n'
+            'fleet_window_repo() { printf "acme/widgets\\n"; }\n'
+            'fleet_pr_merge_state() { printf "%s\\n" "$D2_PR_STATE"; }\n')
+        for state, expected in (("merged", "merged"), ("armed", "waiting"), ("open", "waiting"),
+                                ("closed", "failed"), ("unknown", "idle")):
+            with self.subTest(state=state):
+                self.env["D2_PR_STATE"] = state
+                p = self.report("--state", "merged", "--pr", "77", bindir=shadow)
+                self.assertEqual(p.returncode, 0, p.stdout+p.stderr)
+                rows = [json.loads(l) for l in (self.conf/"ids"/(self.fid+".ndjson")).read_text().splitlines()]
+                self.assertEqual([r for r in rows if r.get("ev") == "result"][-1]["state"], expected)
+        self.assertFalse((self.fleet/"peer-queue").exists())
+
+    def test_failed_finish_keeps_pending_until_own_result_saved(self):
+        shadow = self.shadow()
+        (shadow/"fleet_reap_policy.py").unlink()
+        (shadow/"fleet_reap_policy.py").write_text('import runpy,sys\n'
+            'if sys.argv[1] == "report-finish": sys.exit(1)\n'
+            'runpy.run_path('+repr(str(BIN/'fleet_reap_policy.py'))+', run_name="__main__")\n')
+        p = self.report(bindir=shadow)
+        self.assertNotEqual(p.returncode, 0, p.stdout+p.stderr)
+        proof = self.conf/"session-gate"/self.fid/"report.json"
+        self.assertEqual(json.loads(proof.read_text())["phase"], "pending")
+        self.assertFalse(self.terminal())
+        p = self.report()
+        self.assertEqual(p.returncode, 0, p.stdout+p.stderr)
+        self.assertEqual(json.loads(proof.read_text())["phase"], "complete")
         self.assertTrue(self.terminal())
 
 

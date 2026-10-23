@@ -80,8 +80,7 @@ sleep 3
 [ "$(sent)" = 3 ] && grep -q "a later failure booked its own" "$W/conf/logs/stream-resume.log" \
   && pass "F returns at once; a later failure's mark drops the earlier resume" || fail "F: sent $(sent)"
 
-# H — a WORKER that stays stopped tells its parent, once per budget window (issue
-# #4702); rate_limit never; a person's own window (no @issue) never (legs B, D above)
+# H — stopped workers retain local failure visibility; old report seams stay unused.
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/told"\n' "$W" > "$W/report"; chmod +x "$W/report"
 told() { [ -f "$W/told" ] && wc -l < "$W/told" | tr -d ' ' || echo 0; }
 "$REAL_TMUX" -S "$SOCK" set-option -w -t "$PANE" @issue 42
@@ -93,12 +92,11 @@ hook rate_limit FLEET_STREAM_RESUME_REPORT_CMD="$W/report"
 hook authentication_failed FLEET_STREAM_RESUME_REPORT_CMD="$W/report"
 sleep 1   # a later second: the first give-up opened the budget window it is in
 hook billing_error FLEET_STREAM_RESUME_REPORT_CMD="$W/report"
-[ "$(told)" = 1 ] && grep -q "^--state failed --win $PANE --summary its turn ended on an API error (authentication_failed) and it is not one that is resumed by itself — the session is idle at its prompt, not done" "$W/told" \
-  && pass "H a worker on a non-transient error → ONE failed report to its parent" || fail "H non-transient: $(cat "$W/told" 2>/dev/null)"
+[ "$(told)" = 0 ] && pass "H a non-transient error stays local, no Parent report" || fail "H non-transient revived reporting"
+
 "$REAL_TMUX" -S "$SOCK" set-option -wu -t "$PANE" @stream_told
 for e in unknown unknown unknown unknown unknown; do hook "$e" FLEET_STREAM_RESUME_REPORT_CMD="$W/report"; done
-[ "$(told)" = 2 ] && tail -1 "$W/told" | grep -q "(unknown) and 3 automatic resumes in 30 min did not get it going" \
-  && pass "H the budget spent → one failed report, not one per failure" || fail "H budget: told $(told): $(tail -1 "$W/told")"
+[ "$(told)" = 0 ] && pass "H the budget spent stays local, no Parent report" || fail "H budget revived reporting"
 
 # G — wired: the hook table runs it on StopFailure; Codex says why it has none
 python3 - "$ROOT" <<'PY' && pass "G settings-hooks.json StopFailure → fleet-stream-resume.sh; codex-map names it" || fail "G not wired"

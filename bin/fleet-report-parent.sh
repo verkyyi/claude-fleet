@@ -1,141 +1,38 @@
 #!/bin/bash
-# fleet-report-parent.sh — a finished child worker PUSHES its outcome to the
-# session that SPAWNED it (issue #574), instead of leaving that session to poll.
-#
-#   fleet-report-parent.sh --state merged|blocked|failed|reaped|stopped|waiting|idle|degenerate [options]
-#
-# The parent/child link has existed since #503: every spawn stamps `@origin` on
-# the new window (`issue-<N>` / `scratch-<N>`, empty ≡ the hub), canonicalised by
-# fleet_origin_canon. But every consumer of it was DISPLAY or ARCHIVE — the dash's
-# `↳#483` tag and its grouping, the ledger/history provenance column. Nothing ever
-# used it as an ADDRESS, so a `--spawn`ed follow-up could merge and be reaped
-# without the worker that filed it ever hearing. This is the missing step, and it
-# adds NO new window state to keep in sync across migrate/restore: `@origin` is
-# already there, already canonical, and already true for a scratch parent too.
-#
-# The channel is the one the fleet already uses to talk to live sessions:
-# fleet_peer_send (#513) — the SendMessage tool's local inbox socket. Queued while
-# the parent is mid-turn, delivered as its next turn. NEVER tmux send-keys (#437).
-#
-#   --state <s>     merged | blocked | failed | reaped | stopped | waiting | idle |
-#                   degenerate (required). A `stopped` whose child is still busy (issue #864)
-#                   is re-filed here as `waiting` (bg job / open PR) or `idle` (the
-#                   PR gate could not be read) — see TIERS below. That re-file and the
-#                   `not done` / handoff / loop rails are the Stop FALLBACK's (--win);
-#                   a session's own `stopped` is sent as said (issue #4757).
-#   --pr <N>        the PR number, for a merged or failed report. A `merged` report
-#                   is checked against GitHub's `.merged` (issue #1247): an armed
-#                   auto-merge / open PR is re-filed WAITING, a closed-unmerged one
-#                   FAILED, an unreadable one IDLE — never sent as MERGED.
-#   --verdict <v>   the reap verdict, for a `reaped` report (unmerged, dirty, …)
-#   --summary <t>   1–3 lines of what happened (the parent's whole payoff)
-#   --rows <n> / --sample <unit>   a `degenerate` report (issue #1557, filed by
-#                   bin/fleet-degenerate.sh after it interrupted the child): how many
-#                   screen rows were the one unit, and the unit. Ledger fields
-#                   `lines` / `sample`; tier silent — recorded, never sent.
-#   --win <target>  the CHILD window; default: the window $TMUX_PANE sits in.
-#                   A REAPER passes this — it runs in its own pane, not the child's.
-#   --origin <key>  override the child's @origin read (a reaper that already read it);
-#                   `wid:<worker_id>` names the parent by its durable identity
-#   --issue <N> / --title <t> / --branch <b>   override what is read off the window
-#   --key <k>       override the CHILD's own key (`issue-<N>` / `scratch-<N>`) —
-#                   for a reaper running outside the child's pane, whose window may
-#                   carry no @worktree to derive a scratch key from
-#   -L <socket>     tmux socket label, for a caller with no $TMUX (a daemon/selftest)
-#   --only-once     skip if this window already reported (@reported 1). THE REAPER
-#                   FLAG: the ship path reports first, and a blunter reap-time
-#                   report for the same session would be pure duplicate context.
-#   --dry-run       print the resolved target + the exact envelope; send nothing
-#   -h              this header
-#
-# THREE OUTCOMES (issue #1647, EPIC #1645 rule 3): `reported → …` exit 0 — it reached
-# the parent; `queued → …` exit 3 — the parent cannot take it now (offline machine,
-# a stale hub map, a sleeper at a full fleet, a window with no live Claude, an inbox
-# that will not answer), so it waits — on the hub for the parent's identity, or in
-# this machine's peer queue (bin/fleet-peer-queue.sh) — and is delivered when the
-# parent can take it, or — nobody ever took it — HANDED to the person (T887: the
-# reminder and the task record, bin/fleet-peer-hand.py), never a quiet EXPIRED; and
-# exit 1 — refused: nothing reached anyone and nothing waits. Never `reported`
-# without a delivery. A queued report stamps @reported like a sent one: it WILL
-# arrive, and the reaper's backstop must not queue a second.
-#
-# NOBODY TO TAKE IT (issue #3117, EPIC #3111 C6): a report that would wake its parent
-# (tier loud / quiet) whose parent is gone — its window closed with no live ancestor
-# above it in the ledger, or its key now held by a later generation — is no longer
-# dropped. It becomes the PERSON's: one row in $FLEET_CONF_DIR/global/orphan-reports.ndjson
-# ({ts, child_key, state, pr, summary}, deduped on the child's last row) and one
-# `fleet-alerts.sh event child-report` (FLEET_ORPHAN_ALERT_CMD is the test seam), and
-# `orphaned → …` exit 0. A hub-spawned child (@origin empty) still sends nothing.
-#
-# EXIT 0 IS THE RULE for "nothing to send": no parent (hub-spawned / cross-fleet),
-# the parent window already reaped with no live ancestor above it in the ledger
-# (a reaped parent WITH one relays there, issue #1352 — see `relay` below), no
-# live Claude under it, or the fleet has
-# FLEET_CHILD_REPORT=0 — every one of those is a success (silent for a hook /
-# reaper; a session's own call prints the reason — never blank, issue #4757). This runs on the
-# child's SHIP path and must never block it or turn a landed PR into an error.
-# Exit 2 is reserved for a usage mistake (bad/missing --state, unknown flag).
-#
-# THE PARENT ACROSS MACHINES (issues #1420, #1421). A spawn also stamps the
-# parent's worker_id as `@origin_wid`. On THIS machine (or none) all runs as before.
-# On another machine's fleet the report goes to the hub's OUTBOX (CCQUOTA_FLEET=1),
-# and the parent's machine ledgers + delivers it (bin/fleet-hub-node.sh) — never a
-# local window that merely carries the same key. No hub: ledgered here, not sent —
-# `undelivered → …` exit 1 (issue #3439). The parent is named by IDENTITY since
-# #1646 (`<fleet UUID>/<fleet_id>`, @origin its fleet_id, @origin_fid beside it):
-# rail 1 takes that as an address, never as a daemon's label. A parent whose address
-# is lost (an identity cut short by a spawn before #3439, no @origin_wid) is
-# `undelivered` exit 1 too, and the person's reminder (orphan, below).
-# The hub routes on the parent's fleet UUID, so a stale map (no node for it) still
-# hands it over; the hub holds it until the parent's machine lists it live.
-#
-#
-# On a delivered report the child's window is stamped `@reported 1`, which is what
-# stops the reaper fallback (session-end-hook.sh / dash-reap.sh) sending a second,
-# blunter report for the same session a minute later.
-#
-# TIERS (issue #938): every report is banded by report_tier (fleet-children-lib.sh)
-# and the band is written into the ledger event. loud = someone must act (BLOCKED,
-# FAILED not being fixed, REAPED unmerged/dirty, a true STOPPED, a child in
-# `needs`); quiet = worth knowing (MERGED, FAILED while fixing, other reaps);
-# silent = a turn boundary (WAITING, IDLE) — RECORDED, never sent, never stamped;
-# a session's OWN `waiting` (no --win) is its word to the parent and goes quiet (T756).
-# FLEET_CHILD_REPORT=immediate (the default; legacy `1`) delivers loud + quiet one
-# by one, exactly as before. `batch` (C5, #939) only RECORDS a quiet report; the
-# digest (bin/fleet-children-flush.sh) delivers it later, merged with its siblings
-# into one `[children-digest]`, and a loud report flushes that digest at once.
-# Accepted task only: --outcome succeeded|failed explicitly finalizes work
-# (summary required), independently of native exit. --state alone is progress
-# except merged, which requires a confirmed PR. Legacy calls stay unchanged.
+# fleet-report-parent.sh — compat-1v: 下一批删 — Parent delivery is retired.
+# Existing own-session calls save only that session's result and PR evidence.
+# --state merged|blocked|failed|stopped|waiting [--outcome succeeded|failed]
+# [--summary text] [--pr N] [-L socket] [--dry-run]
+# Old --win hook/reaper calls do nothing. No parent, ancestor, queue or reminder.
+# A saved result is history, not proof that the native process has exited.
 set -uo pipefail
-
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-OUTCOME='' STATE='' PR='' VERDICT='' SUMMARY='' DROWS='' DSAMPLE='' WIN='' ORIGIN='' ISSUE='' TITLE='' BRANCH='' KEY='' SOCK='' DRY=0 ONCE=0
+OUTCOME='' STATE='' PR='' SUMMARY='' WIN='' BRANCH='' KEY='' SOCK='' DRY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --outcome)  shift; OUTCOME="${1:-}" ;;
     --state)    shift; STATE="${1:-}" ;;
     --pr)       shift; PR="${1:-}" ;;
-    --verdict)  shift; VERDICT="${1:-}" ;;
+    --verdict) shift ;; # retired delivery metadata
     --summary)  shift; SUMMARY="${1:-}" ;;
-    --rows)     shift; DROWS="${1:-}" ;;
-    --sample)   shift; DSAMPLE="${1:-}" ;;
+    --rows) shift ;; # retired delivery metadata
+    --sample) shift ;; # retired delivery metadata
     --win)      shift; WIN="${1:-}" ;;
-    --origin)   shift; ORIGIN="${1:-}" ;;
-    --issue)    shift; ISSUE="${1:-}" ;;
-    --title)    shift; TITLE="${1:-}" ;;
+    --origin) shift ;; # retired delivery metadata
+    --issue) shift ;; # retired delivery metadata
+    --title) shift ;; # retired delivery metadata
     --branch)   shift; BRANCH="${1:-}" ;;
     --key)      shift; KEY="${1:-}" ;;
     -L)         shift; SOCK="${1:-}" ;;
     -L*)        SOCK="${1#-L}" ;;
-    --only-once) ONCE=1 ;;
+    --only-once) : ;; # old hook dedup option; hooks are inert
     --dry-run)  DRY=1 ;;
-    -h|--help)  sed -n '2,96p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          printf 'fleet-report-parent: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -148,81 +45,56 @@ case "$STATE" in
   *)  printf 'fleet-report-parent: unknown --state %s (%s)\n' "$STATE" "$STATES" >&2; exit 2 ;;
 esac
 
-# quiet <msg> — the "nothing to do, and that is fine" exit. Silent in production so
-# a ship path prints nothing; --dry-run says WHY it would send nothing.
-# A session's OWN call (no --win: the report tool, a person's shell) is never
-# answered with a blank exit 0 (issues #3439, #4757): the caller reads the reason
-# off stdout. A hook / reaper (--win) stays silent unless --dry-run.
-quiet() { { [ "$DRY" = 1 ] || [ -z "$WIN" ]; } && printf 'fleet-report-parent: %s — nothing to send\n' "$1"; exit 0; }
 
+# Old installed hooks still name this path for one version.
+if [ -n "$WIN" ]; then
+  printf 'RETIRED: Parent reports are disabled; this hook saved no result and delivered nothing.\n'
+  exit 0
+fi
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
-
-# --- the child window: one tmux read for everything off it ---------------------
-# window_name rides LAST: it is free text (a rename can put anything in it) and the
-# fields are `|`-separated — a tab/0x1f separator prints as a literal `\037` on the
-# tmux 3.4 that CI ships.
-target="${WIN:-${TMUX_PANE:-}}"
-[ -n "$target" ] || quiet 'no child window (no --win and no $TMUX_PANE)'
-row=$(TM display-message -p -t "$target" \
-        '#{window_id}|#{@origin}|#{@issue}|#{@reported}|#{@worktree}|#{@claude_state}|#{@origin_wid}|#{@origin_gen}|#{@origin_retired}|#{@origin_fid}|#{@fleet_id}|#{@task}|#{@cc_agent}|#{window_name}' 2>/dev/null)
-[ -n "$row" ] || quiet "child window '$target' is gone"
-selfwin=${row%%|*};  row=${row#*|}
-worigin=${row%%|*};  row=${row#*|}
-wissue=${row%%|*};   row=${row#*|}
-wreported=${row%%|*}; row=${row#*|}
-wworktree=${row%%|*}; row=${row#*|}
-wstate=${row%%|*};   row=${row#*|}
-owid=${row%%|*};     row=${row#*|}
-wogen=${row%%|*};    row=${row#*|}
-wretired=${row%%|*}; row=${row#*|}
-ofid=${row%%|*};     row=${row#*|}
-selffid=${row%%|*};  row=${row#*|}
-wtask=${row%%|*};    row=${row#*|}     # the hub's task record (issue #3330), T<n> or ''
-wagent=${row%%|*};   wname=${row#*|}   # its agent (T493): claude / codex; blank = Claude
+target="${TMUX_PANE:-}"
+[ -n "$target" ] || { printf 'RETIRED: Parent reports are disabled; no own session to save.\n'; exit 2; }
+row=$(TM display-message -p -t "$target" '#{window_id}|#{@fleet_id}|#{@task}|#{@cc_agent}|#{@issue}|#{@worktree}' 2>/dev/null)
+[ -n "$row" ] || { printf 'result: own session unavailable\n' >&2; exit 1; }
+selfwin=${row%%|*}; row=${row#*|}
+selffid=${row%%|*}; row=${row#*|}
+wtask=${row%%|*}; row=${row#*|}
+wagent=${row%%|*}; row=${row#*|}
+wissue=${row%%|*}; wworktree=${row#*|}
+fleet_is_fid "$selffid" || { printf 'result: own session has no stable ID\n' >&2; exit 1; }
 case "$wagent" in codex|codex:*) wagent=codex ;; *) wagent=claude ;; esac
 case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
-
-# A task's report is a result of the window's ID (EPIC T497 C8: the record takes
-# no fenced report — the gate is «the window has an ID»).
-idswitch=0
-[ -n "$wtask" ] && idswitch=1
-if [ "$idswitch" = 1 ] && [ -n "$OUTCOME" ]; then
-  # The record's explicit outcome is the ID's result state (merged stays merged:
-  # it is checked against the PR below).
+if [ -n "$OUTCOME" ]; then
+  case "$OUTCOME" in succeeded|failed) ;; *) printf 'result: invalid outcome\n' >&2; exit 2 ;; esac
+  [ -n "$wtask" ] && [ -n "$SUMMARY" ] || { printf 'result: outcome requires task and summary\n' >&2; exit 2; }
   [ "$STATE" = merged ] || STATE=$OUTCOME
-  OUTCOME=''
 fi
+sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
+[ -n "$sess" ] && fleet_load_conf "$sess"
+selfkey="$KEY"
+if [ -z "$selfkey" ]; then
+  case "$wissue" in ''|*[!0-9]*) selfkey=$(fleet_scratch_key "$wworktree") ;; *) selfkey="issue-$wissue" ;; esac
+fi
+[ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 
-[ -z "$OUTCOME" ] || { printf 'fleet-report-parent: --outcome requires an accepted task\n' >&2; exit 2; }
-
-# --- the result on the ID (EPIC T497 C4, S2) -------------------------------------
-# A session's OWN report (no --win: not a reaper's backstop) is a result of its ID:
-# several are fine, the newest counts; a window the fleet closes without one reads
-# 已退出 (S7). Written as this script exits — whatever road it took (a hub-spawned
-# session has no parent to tell, and still has a result) — with the state the
-# checks below settled on, so an unmerged PR is never recorded as merged. Beside
-# the old record (双写). Failed persistence holds the window and returns an error;
-# durable queued delivery (exit 3) counts as a saved report.
+# Keep persistence protection independent of any retired delivery destination.
 report_token=''
-if [ -z "$WIN" ] && [ "$DRY" != 1 ] && fleet_is_fid "$selffid"; then
-  # Stamp before disk IO: even an unwritable proof directory cannot leave an old
-  # terminal result free to close this window. Never touch a person's keep/hold.
+if [ "$DRY" != 1 ]; then
   TM set-window-option -t "$selfwin" @reap_report_pending 1 2>/dev/null || exit 1
   report_token=$(python3 "$BIN/fleet_reap_policy.py" report-begin "$selffid" "$wtask") || {
-    printf 'fleet-report-parent: cannot preserve report evidence; session retained\n' >&2
-    exit 1
+    printf 'result: cannot preserve evidence; session retained\n' >&2; exit 1;
   }
 fi
 id_result() {
   local rc=$?
-  if [ -n "$report_token" ] && { [ "$rc" = 0 ] || [ "$rc" = 3 ]; }; then
+  if [ -n "$report_token" ] && [ "$rc" = 0 ]; then
     if python3 "$BIN/fleet_reap_policy.py" report-finish "$selffid" "$report_token" \
-         "$STATE" "$SUMMARY" "$wagent" "${PR//[^0-9]/}" >/dev/null 2>&1; then
+        "$STATE" "$SUMMARY" "$wagent" "${PR//[^0-9]/}" >/dev/null 2>&1; then
       TM set-window-option -t "$selfwin" -u @reap_report_pending 2>/dev/null
       fleet_reap_soon "$selffid" "$STATE"
+      printf 'RECORDED: own session result saved. RETIRED: Parent reports are disabled; nothing was delivered.\n'
     else
-      printf 'fleet-report-parent: result not safely recorded; session retained\n' >&2
-      rc=1
+      printf 'result: not safely recorded; session retained\n' >&2; rc=1
     fi
   fi
   trap - EXIT
@@ -230,308 +102,16 @@ id_result() {
 }
 trap id_result EXIT
 
-case "$ORIGIN" in
-  wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''
-         # an identity-form worker_id (issue #1646) names its session, not a key
-         fleet_is_fid "$worigin" && { ofid=$worigin; worigin=$(TM display-message -p -t "$target" '#{@origin}' 2>/dev/null); } ;;
-  ?*)    worigin="$ORIGIN"; ofid=''; [ "${owid#*/}" = "$ORIGIN" ] || owid='' ;;
-esac
-[ -n "$ISSUE" ]  && wissue="${ISSUE//[^0-9]/}"
-[ -n "$TITLE" ]  && wname="$TITLE"
-# The title is rendered inside "…" and the whole frame inside a
-# <cross-session-message> envelope, so strip the two characters that could close
-# either. A window name is operator-renameable free text (⌃e) — never trusted markup.
-wname=$(printf '%s' "$wname" | tr -d '"<>')
-
-# A person's step (issue #2869): the agent's OWN `waiting` report (no --win: not a
-# reaper's, not a re-filed stopped/merged) that names something to scan / click — a
-# URL, an image / page file, a code — stamps @human_wait (the epoch); any other
-# report of its own writes `off`: the step is done. fleet_window_human reads it: until the step is done
-# (its next report) or FLEET_HUMAN_WAIT_SECS pass, no idle reopen, sleep, park or
-# auto-handoff takes the process — and the browser and the login it holds.
-if [ -z "$WIN" ] && [ "$DRY" != 1 ]; then
-  if [ "$STATE" = waiting ] && printf '%s' "$SUMMARY" \
-       | grep -qiE 'https?://|\.(png|jpe?g|gif|svg|pdf|html?)([^a-z]|$)|扫|二维码|确认码|验证码|点击|点一下|\bqr\b|scan|click'; then
-    TM set-window-option -t "$selfwin" @human_wait "$(date +%s)" 2>/dev/null
-  else
-    TM set-window-option -t "$selfwin" @human_wait off 2>/dev/null
-  fi
-fi
-
-# The ship path reports and stamps; a reaper passes --only-once so its blunter
-# reap-time line is a BACKSTOP for the sessions that never got there (a crash, a
-# never-shipped worker, a hand ⌃x) rather than a second report for every child.
-[ "$ONCE" = 1 ] && [ "$wreported" = 1 ] && quiet "already reported (@reported 1)"
-
-# The Stop fallback reports a stopped TURN, never a claim that an unfinished PR
-# landed. Transfer/loop pauses are not completion and must not wake the parent.
-# Only the fallback (--win: the Stop hook, a reaper) is held to these rails: a
-# session that says `stopped` ITSELF does so mid-turn (@claude_state working), and
-# the old `not done` gate dropped that report with a blank exit 0 (issue #4757).
-if [ "$STATE" = stopped ] && [ -n "$WIN" ]; then
-  [ "$wstate" = "done" ] || quiet 'not done'
-  [ "$(TM display-message -p -t "$target" '#{@handoff_armed}')" != 1 ] || quiet 'handoff pending'
-  manifest=$(TM display-message -p -t "$target" '#{@handoff_manifest}')
-  if [ -n "$manifest" ] && ! python3 - "$manifest" <<'PYLOOP'
-import json, pathlib, sys
-try:
-    p = pathlib.Path(sys.argv[1]).parent / 'loop/state.json'
-    active = p.exists() and json.loads(p.read_text()).get('status') not in ('stopped', 'complete', 'cancelled')
-except (OSError, ValueError):
-    active = True
-sys.exit(1 if active else 0)
-PYLOOP
-  then quiet 'active loop'; fi
-fi
-
-# --- the switch: per-fleet conf, default ON ------------------------------------
-# Read through fleet_load_conf, never off the environment: nothing exports FLEET_*
-# into a hook or a run-shell job (#561), so an env read would silently see the
-# default forever.
-sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
-[ -n "$sess" ] && fleet_load_conf "$sess"
-
-# The PR goes on the task record (issue #4902): ⌘P's row reads a session's PR
-# off its hub record T<n>.pr, never a PR map. Detached, before the report's own
-# gates — a report the parent cannot take still names its PR there. No record,
-# no PR, a dry run or no hub (exit 3) ⇒ nothing.
-if [ -n "$wtask" ] && [ "$DRY" != 1 ]; then
-  _prn="${PR//[^0-9]/}"
-  if [ -n "$_prn" ]; then
-    _prrepo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
-    [ -n "$_prrepo" ] && ( bash "$BIN/fleet-task-record.sh" set "$wtask" --pr "$_prrepo#$_prn" >/dev/null 2>&1 & )
-  fi
-fi
-# shellcheck source=/dev/null
-[ -f "$BIN/fleet-children-lib.sh" ] && . "$BIN/fleet-children-lib.sh"
-if command -v children_report_mode >/dev/null 2>&1; then
-  MODE=$(children_report_mode)
-else   # a half-synced install without the lib: the historic switch
-  case "${FLEET_CHILD_REPORT:-1}" in 0|no|off|false) MODE=0 ;; *) MODE=immediate ;; esac
-fi
-[ "$MODE" = 0 ] && quiet 'FLEET_CHILD_REPORT=0 for this fleet'
-
-# --- rail 1: is there a parent at all? ----------------------------------------
-# Empty ≡ hub (the operator spawned it — they have the dash). The literals
-# `autofill` / `bridge` are daemons with no session to talk to, and a bare fleet
-# NAME is #516's cross-fleet stamp — that parent lives on another socket, which
-# this fleet's tmux server cannot reach. All of them: nothing to send.
-# A child whose parent's key was allocated again while it ran (issue #1538) had its
-# @origin moved to @origin_retired `<key>#<gen>`: it still has a parent — a retired
-# one, whose book takes the report below — and is never hub-spawned.
-RETIRED_GEN=''
-if [ -z "$worigin" ] && [ -z "$ORIGIN" ] && [ -n "$wretired" ]; then
-  worigin=${wretired%#*}; RETIRED_GEN=${wretired##*#}; owid=''
-fi
-# A parent named by IDENTITY (issue #3439): a hub-placed start hands over the
-# parent's worker_id `<fleet UUID>/<fleet_id>`, and the spawn kept its tail as
-# @origin. Before, rail 1 read that as "not a window key" and quit with exit 0 and
-# nothing printed — every child on another machine reported to nobody. The
-# identity is an address: the parent's machine is found by @origin_wid below.
-if [ -z "$RETIRED_GEN" ] && [ -n "$owid" ] && fleet_is_fid "${owid#*/}"; then
-  [ -n "$ofid" ] || ofid=${owid#*/}
-  case "$worigin" in
-    issue-*|scratch-*|?*:issue-*|?*:scratch-*) ;;
-    *) worigin=${owid#*/} ;;
-  esac
-fi
-LOSTADDR=''
-case "$worigin" in
-  issue-*|scratch-*) ;;
-  ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
-  '') quiet 'hub-spawned (@origin empty)' ;;
-  *)  if fleet_is_fid "$worigin"; then
-        [ -n "$ofid" ] || ofid=$worigin
-      elif printf '%s' "$worigin" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}'; then
-        # A parent identity cut to 32 characters by a spawn before #3439, with no
-        # @origin_wid beside it (a restore before #3439 dropped it): somebody spawned
-        # this session and nothing can address them. Not a silent success —
-        # undelivered, and the person's reminder (below, once the tier is known).
-        LOSTADDR=1
-      else
-        quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)"
-      fi ;;
-esac
-# A bare @origin (stamped before issue #1939) is the fleet's one repo's: booked and
-# sent under the key's one spelling, `<slug>:<key>`.
-[ -n "$sess" ] && worigin=$(fleet_key_qualify "$sess" "$worigin")
-
-# Report supervision is scoped to the producer's lifelong ID and original parent.
-# Read before the historic key-healing path: delegation never rewrites @origin.
-DELEGATION=''
-if [ -f "$FLEET_CONF_DIR/report-delegation/audit.ndjson" ]; then
-  _duuid=$(fleet_uuid "$sess" --read-only) || _duuid=''
-  _dparent=$owid
-  # An older spawn may carry a key-form worker_id beside the exact parent fid.
-  if [ -n "$_dparent" ] && ! fleet_is_fid "${_dparent#*/}" && fleet_is_fid "$ofid"; then
-    _dparent="${_dparent%%/*}/$ofid"
-  fi
-  [ -n "$_dparent" ] || { [ -z "$ofid" ] || _dparent="$_duuid/$ofid"; }
-  DELEGATION=$(python3 "$BIN/fleet_report_delegation.py" resolve --worker "$_duuid/$selffid" --parent "$_dparent")
-  _drc=$?
-  # Missing scope is the only fallback. A damaged journal fails closed, never
-  # silently waking the old parent after supervision was authorized.
-  case "$_drc" in 0|4) ;; *) exit 1 ;; esac
-fi
-
-# --- the parent by IDENTITY (issue #1646) ----------------------------------------
-# A spawn records the parent's @fleet_id as @origin_fid. The key in @origin is only
-# the NAME the parent wore at spawn time — a scratch bound to an issue since answers
-# to `issue-<N>`, and the key-only lookup below lost every report to it. Found by
-# identity on this fleet's socket, the parent's CURRENT key becomes the one this
-# report is booked and sent under, and the child's @origin follows it (so the dash
-# nests it and fleet-children.sh counts it there). Its generation check is moot —
-# the identity IS the session. Not found here ⇒ the key path below, as before.
-PFOUND=''
-if [ -z "$DELEGATION" ] && [ -z "$RETIRED_GEN" ] && fleet_is_fid "$ofid"; then
-  if _pw=$(fleet_win_for_fid "$ofid" "$SOCK" 2>/dev/null) && [ -n "$_pw" ]; then
-    _pk=$(fleet_window_okey "$sess" "$_pw" 2>/dev/null)
-    # A parent with no key of its own (a session that took a role, issue #3439) is
-    # still found by its identity; only a key moves @origin.
-    PFOUND=$_pw
-    if [ -n "$_pk" ]; then
-      if [ "$_pk" != "$worigin" ]; then
-        [ "$DRY" = 1 ] || TM set-window-option -t "$selfwin" @origin "$_pk" 2>/dev/null
-        worigin=$_pk; wogen=''
-      fi
-    fi
-  fi
-fi
-
-# --- the child's own identity, for the envelope --------------------------------
-selfkey="$KEY"
-if [ -z "$selfkey" ]; then
-  case "$wissue" in
-    ''|*[!0-9]*) selfkey=$(fleet_scratch_key "$wworktree") ;;
-    *)           selfkey="issue-$wissue" ;;
-  esac
-fi
-# cwd is the LAST resort, and only useful in the child's own pane — a reaper runs
-# elsewhere, which is what --key is for.
-[ -n "$selfkey" ] || selfkey=$(fleet_scratch_key "$(pwd -P 2>/dev/null)")
-# A child with neither (a no-repo session — a batch driver, a design-page writer,
-# issue #2623) is booked under its identity, the key fleet_win_for_key answers to
-# and fleet-children.sh lists it by.
-[ -n "$selfkey" ] || ! fleet_is_fid "$selffid" || selfkey=$selffid
-# The label is the name the person sees — never the repo slug the key carries
-# internally (issue #1939).
-case "${selfkey#*:}" in
-  issue-*)   label="issue #${selfkey##*issue-}" ;;
-  scratch-*) label="scratch ~${selfkey##*scratch-}" ;;
-  *)         label="session ${wname:-?}" ;;
-esac
-# Name the child's repo (issue #789), since a parent can have children in several —
-# in every fleet, so adding a repo changes no report (issue #1943); the branch
-# itself stays the bare key.
-case "$label" in
-  issue\ *|scratch\ *)
-    if [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
-      _cr=$(fleet_window_repo "$sess" "$selfwin"); [ -n "$_cr" ] && label="$_cr $label"
-    fi ;;
-esac
-# The child is named by ONE code first (EPIC T644 C3): its task's (`#K5H0 · <label>`
-# — the book fleet-task-record.sh keeps, else the hub), else its window's ID's (EPIC
-# T497 C11). The record's `T<n>` is never on the header.
-_idc=''
-[ -n "${wtask:-}" ] && _idc=$(FLEET_HUB_TIMEOUT=3 bash "$BIN/fleet-task-record.sh" code "$wtask" 2>/dev/null | head -n 1)
-if [ -z "$_idc" ] && fleet_is_fid "$selffid"; then _idc=$(bash "$BIN/fleet-id.sh" short "$selffid" 2>/dev/null) || _idc=''; fi
-[ -n "$_idc" ] && label="#$_idc · $label"
-branch_arg="$BRANCH"
-[ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
-# The ledger spells the child the way its window and its placement do (issue
-# #1351): `<slug>:issue-N` (every fleet, issue #1939), so fleet-children.sh joins the
-# three into ONE row. The child's own repo, off its window — unknown ⇒ the bare key,
-# which the reader then reads in the parent's repo.
-ledkey="$selfkey"
-case "$ledkey" in
-  issue-*|scratch-*)
-    if [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
-      _lp=$(_fleet_key_prefix "$sess" "$selfwin" 2>/dev/null) || _lp=''
-      ledkey="$_lp$ledkey"
-    fi ;;
-esac
-
-# --- generations (issue #1538) ---------------------------------------------------
-# A scratch child's OWN generation rides its rows (`child_gen`, under the key a
-# spawn from it stamps as @origin — `child_key` when that is repo-qualified), so
-# the parent map can tell this scratch-3 from the one before it. Nothing for an
-# issue child or a generation-0 key: the row is the one it always was.
-selfgkey='' selfgen=''
-case "$selfkey" in
-  scratch-*|?*:scratch-*)
-    selfgkey="$selfkey"
-    if [ "${selfkey#*:}" = "$selfkey" ] && [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
-      _gp=$(_fleet_key_prefix "$sess" "$selfwin" 2>/dev/null) || _gp=''
-      selfgkey="$_gp$selfkey"
-    fi
-    [ -n "$sess" ] && selfgen=$(fleet_key_gen "$sess" "$selfgkey") ;;
-esac
-# row_json <child> <state> <pr> <verdict> <summary> <title> <tier> [<relayed_from>]
-# → one ledger row. `gen` is the parent generation the child was spawned under
-# (@origin_gen); a relayed row is filed in someone else's book and carries none.
-# `fid` is the child's own @fleet_id (issue #1351) — its identity, never its name;
-# `pfid` the parent's (@origin_fid), so a book can say which session it was
-# (issue #1955: fleet-history.sh drafts leaves out the writing area's). `task` the
-# child's hub task record (issue #3330) — only when it has one.
-row_json() {
-  RJ_AGENT="$wagent" RJ_TASK="$wtask" RJ_PFID="$ofid" RJ_FID="$selffid" RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
-d = dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))
-for f in ("lines", "sample"):   # a DEGENERATE row (issue #1557); every other row is unchanged
-    if os.environ.get("RJ_" + f.upper()):
-        d[f] = os.environ["RJ_" + f.upper()]
-if os.environ.get("RJ_FID"):
-    d["fid"] = os.environ["RJ_FID"]
-if os.environ.get("RJ_TASK"):
-    d["task"] = os.environ["RJ_TASK"]
-if os.environ.get("RJ_AGENT"):
-    d["agent"] = os.environ["RJ_AGENT"]   # T493: a report names its agent, the window gone or not
-if os.environ.get("RJ_PFID") and "relayed_from" not in d:
-    d["pfid"] = os.environ["RJ_PFID"]
-if os.environ.get("RJ_GEN") and "relayed_from" not in d:
-    d["gen"] = os.environ["RJ_GEN"]
-if os.environ.get("RJ_CGEN"):
-    d["child_gen"] = os.environ["RJ_CGEN"]
-k = os.environ.get("RJ_CKEY") or ""
-if os.environ.get("RJ_CGEN") and k and k != d.get("child"):
-    d["child_key"] = k
-print(json.dumps(d))' "$@" 2>/dev/null
-}
-
-# --- a turn boundary is not a stop (issue #864) -------------------------------
-# The Stop fallback fires on EVERY done turn of a child that has not reported. A
-# child that opened its PR and parked a gate waiter in the background (or left a
-# test running) ended its turn, not its work — two monorepo EPICs saw 15/15 such
-# STOPPED reports, every one of them false. So a busy child is re-filed: WAITING
-# (bg job / open PR) or IDLE (gh could not read the gate — undetermined). Both are
-# tier silent: the ledger records the transition, nothing is sent, nothing is
-# stamped, so a later Stop that finds the child genuinely idle still reports once.
-# Before the ledger (it must record the RIGHT state), after the cheap rails: this
-# walks processes and may ask GitHub.
-# The session's own `stopped` (no --win) is its word, not a turn boundary — and it
-# is mid tool call, so the busy probe would always re-file it silent (issue #4757).
-busy=''
-if [ "$STATE" = stopped ] && [ -n "$WIN" ] && busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg"); then
-  case "$busy" in pr-unknown) STATE=idle ;; *) STATE=waiting ;; esac
-  VERDICT="$busy"
-fi
-
-# --- MERGED means merged, not armed (issue #1247) ----------------------------
-# A child that arms auto-merge and reports MERGED while the checks still run sends
-# its parent straight into the endgame (EPIC #9447: a hub closed out on a PR that
-# landed 40 minutes later). So a merged report is checked against GitHub's own
-# `.merged` first. Not merged ⇒ it is re-filed, never sent as MERGED: WAITING
-# (armed / open — silent, unstamped, so the re-run after the real merge, or the
-# reaper's backstop, still reports), FAILED (closed unmerged — loud), IDLE (gh
-# could not answer — undetermined, silent). The caller is told on stderr either way.
-# Only with a --pr and a known repo: without one there is nothing to check.
-# A repo with no GitHub (FLEET_FORGE=none, issue #3601) has no PR to name: there the
-# branch is checked instead, by git — and so is any PR GitHub could not answer for.
 _mforge=github
 if [ "$STATE" = merged ] && [ -z "${PR//[^0-9]/}" ] && [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
   _mr=$(fleet_window_repo "$sess" "$selfwin")
   [ -n "$_mr" ] && _mforge=$(fleet_repo_forge "$_mr" "$sess")
   # A repo the fleet lands itself (FLEET_LAND=fleet, issue #3602) has no PR either.
   [ -n "$_mr" ] && [ "$(fleet_repo_land "$_mr" "$sess")" = fleet ] && _mforge=none
+fi
+if [ "$STATE" = merged ] && [ -z "${PR//[^0-9]/}" ] && [ "$_mforge" != none ]; then
+  STATE=idle
+  printf 'result: merged requires verifiable PR evidence; saved as idle.\n' >&2
 fi
 if [ "$STATE" = merged ] && { [ -n "${PR//[^0-9]/}" ] || [ "$_mforge" = none ]; }; then
   _prepo=''
@@ -543,493 +123,37 @@ if [ "$STATE" = merged ] && { [ -n "${PR//[^0-9]/}" ] || [ "$_mforge" = none ]; 
       case "$_pms" in
         merged) ;;
         armed|open)
-          STATE=waiting; VERDICT="pr-$_pms"
-          [ "$_pms" = armed ] && VERDICT=auto-merge-armed ;;
+          STATE=waiting
+          ;;
         closed)
-          STATE=failed; VERDICT=pr-closed-unmerged
+          STATE=failed
           SUMMARY="PR #${PR//[^0-9]/} was closed WITHOUT merging${SUMMARY:+ — $SUMMARY}" ;;
         *)
-          STATE=idle; VERDICT=pr-unknown ;;
+          STATE=idle ;;
       esac
       if [ "$_pms" != merged ] && [ "$_mforge" = none ]; then
         printf 'fleet-report-parent: NOT reporting MERGED — %s branch %s is %s (its work is not on the base, per git); filed as %s. Re-run once it has really landed.\n' \
           "$_prepo" "$BRANCH" "$_pms" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" >&2
       elif [ "$_pms" != merged ]; then printf 'fleet-report-parent: NOT reporting MERGED — %s PR #%s is %s on GitHub (.merged != true); filed as %s. Re-run once it has really merged.\n' \
         "$_prepo" "${PR//[^0-9]/}" "$_pms" "$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')" >&2; fi ;;
+    *) STATE=idle; printf 'result: cannot resolve PR repo; saved as idle.\n' >&2 ;;
   esac
 fi
 
-# --- the tier (issue #938): does this report need to wake anyone? ---------------
-if command -v report_tier >/dev/null 2>&1; then
-  TIER=$(report_tier "$STATE" "$SUMMARY" "$VERDICT" "$wstate")
-else
-  TIER=loud
-fi
-UST=$(printf '%s' "$STATE" | tr '[:lower:]' '[:upper:]')
-# A session's OWN `waiting` (no --win: the report tool, a person's shell) is its word
-# to the parent — «方案好了，等你点头» — not a turn boundary a hook filed (issue T756:
-# an orchestrator never saw a dispatched child's waiting, here or across machines,
-# because silent is ledger only). It is delivered as quiet; a parent that is gone
-# still makes it no reminder of the person's (OWNWAIT keeps orphan() silent for it).
-OWNWAIT=''
-if [ -z "$WIN" ] && [ "$STATE" = waiting ] && [ "$TIER" = silent ]; then
-  TIER=quiet; OWNWAIT=1
-fi
 
-# orphan <why> — nobody can take this report (issue #3117): the parent is gone and no
-# live ancestor stands in. A report that would wake someone becomes the person's
-# reminder — a row in global/orphan-reports.ndjson (what the sidebar / entry read,
-# through bin/fleet-orphan-reports.py — issue #3369)
-# plus one alert on the fleet's existing channel. Silent: as before, nothing.
-orphan() {
-  { [ "$TIER" = silent ] || [ -n "$OWNWAIT" ]; } && quiet "$1 (tier=$TIER${OWNWAIT:+ · own waiting} · $UST — ledger only)"
-  local f="$FLEET_CONF_DIR/global/orphan-reports.ndjson" sockl="${SOCK:-}" prn="${PR//[^0-9]/}" new
-  if [ "$DRY" = 1 ]; then
-    printf 'fleet-report-parent: %s — would file %s for the person (%s) and raise one alert
-' "$1" "$UST" "$f"
-    exit 0
-  fi
-  mkdir -p "${f%/*}" 2>/dev/null
-  # its repo too (issue #3369): the sidebar files the row under that repo's heading
-  local orepo=''
-  [ -n "$sess" ] && [ -n "${selfwin:-}" ] && orepo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
-  [ -n "$orepo" ] || orepo="${FLEET_REPO:-}"
-  new=$(OR_CHILD="$ledkey" OR_STATE="$UST" OR_PR="$prn" OR_SUM="$SUMMARY" OR_TITLE="$wname" OR_PARENT="$worigin" OR_REPO="$orepo" OR_AGENT="$wagent" OR_ISSUE="${wissue//[^0-9]/}" \
-    python3 -c 'import json, os, sys, time
-f = sys.argv[1]
-e = os.environ
-row = {"ts": int(time.time()), "child_key": e["OR_CHILD"], "state": e["OR_STATE"],
-       "pr": e["OR_PR"], "summary": e["OR_SUM"][:600]}
-if e.get("OR_TITLE"):
-    row["title"] = e["OR_TITLE"]
-if e.get("OR_PARENT"):
-    row["parent"] = e["OR_PARENT"]
-if e.get("OR_REPO"):
-    row["repo"] = e["OR_REPO"]
-for k in ("agent", "issue"):     # T493: which agent, which issue — after the window is gone
-    if e.get("OR_" + k.upper()):
-        row[k] = e["OR_" + k.upper()]
-last = None
-try:
-    with open(f, encoding="utf-8") as fh:
-        for line in fh:
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            if r.get("child_key") == row["child_key"]:
-                last = r
-except OSError:
-    pass
-if last and (last.get("state"), last.get("pr")) == (row["state"], row["pr"]):
-    print("dup")
-    sys.exit(0)
-with open(f, "a", encoding="utf-8") as fh:
-    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-    fh.flush()
-    os.fsync(fh.fileno())
-import hashlib     # the row id, as bin/fleet-orphan-reports.py row_id hashes it
-print("new " + hashlib.sha1(("%s|%s|%s|%s" % (row["ts"], row["child_key"], row["state"], row["pr"])).encode("utf-8")).hexdigest()[:12])
-' "$f" 2>/dev/null) || { printf 'fleet-report-parent: cannot save orphan report; session retained\n' >&2; exit 1; }
-  if [ "${new%% *}" = new ]; then
-    [ -n "$sockl" ] || sockl=$(fleet_socket "$sess" 2>/dev/null)
-    local otext="$label${wname:+ \"$wname\"} $UST${prn:+ (PR #$prn)} — 派它的会话 $worigin 已不在，结果交给你${SUMMARY:+: $(printf '%s' "$SUMMARY" | head -1 | cut -c1-160)}"
-    bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report "fleet: $otext" \
-      >/dev/null 2>&1 || printf 'fleet-report-parent: filed for the person, but the alert failed\n' >&2
-    # …and ONE message in the book (T701, bin/fleet_notice.py — kind orphan, the row's
-    # id): the 看台's message row opens on every client of the fleet, ⌘P's 消息 lists
-    # it until it is read or handed on (the old FLEET_NOTIFY_CMD push went with it)
-    python3 "${FLEET_ORPHAN_NOTICE_CMD:-$BIN/fleet_notice.py}" notify warn "$otext" --all --kind orphan \
-      --ref "${new#new }" --source "orphan:$worigin" ${sockl:+--sock "$sockl"} </dev/null >/dev/null 2>&1 \
-      || printf 'fleet-report-parent: filed for the person, but the message failed\n' >&2
-  fi
-  # Stamped like a delivered one: the reaper's --only-once backstop must not file a second.
-  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-  if [ "${ORPHAN_RC:-0}" != 0 ]; then
-    printf 'undelivered → 你的提醒 (%s): %s — %s\n' "$f" "$UST${prn:+ (PR #$prn)}" "$1"
-    exit "$ORPHAN_RC"
-  fi
-  printf 'orphaned → 你的提醒 (%s): %s — %s\n' "$f" "$UST${prn:+ (PR #$prn)}" "$1"
-  exit 0
-}
-
-# The parent's address was lost (rail 1, issue #3439): never a silent success. The
-# person takes the report (orphan's book + alert) and the caller hears it was not
-# delivered — exit 1.
-if [ -n "$LOSTADDR" ]; then
-  { [ "$TIER" = silent ] || [ -n "$OWNWAIT" ]; } && quiet "parent address '$worigin' lost (tier=silent · $UST — not sent)"
-  ORPHAN_RC=1 orphan "parent '$worigin' cannot be addressed (its identity was cut short and no @origin_wid names its machine)"
-fi
-
-# --- the envelope: FIXED shape, 4 lines typical, 6 at its widest ---------------
-# envelope → $msg + $st. A function (issue #1421): a parent on another machine gets
-# the same envelope, built here and carried there by the hub.
-envelope() {
-  # Fixed because it is read by two audiences with opposite needs: the parent model,
-  # which must be able to judge it at a glance and get straight back to its OWN
-  # issue, and whatever later wants to parse it. `no reply needed` is load-bearing —
-  # without it a fan-out of five children costs the parent five REPLIES on top of
-  # five interrupts, and a parent near its handoff can least afford them.
-  case "$STATE" in
-    merged)  st="MERGED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-    succeeded) st="SUCCEEDED${PR:+ (PR #${PR//[^0-9]/})}" ;;   # a task's outcome on the ID road (T497 C6)
-    blocked) st="BLOCKED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-    failed)  st="FAILED${PR:+ (PR #${PR//[^0-9]/})}" ;;
-    stopped) st="STOPPED (no ship report)" ;;
-    reaped)  st="REAPED${VERDICT:+ ($VERDICT)}" ;;
-    # only reached when a `needs` child lifts a silent state to loud (report_tier)
-    waiting) st="WAITING${VERDICT:+ ($VERDICT)}" ;;
-    idle)    st="IDLE${VERDICT:+ ($VERDICT)}" ;;
-  esac
-  msg="[child-report] $label${wname:+ \"$wname\"}"$'\n'"state: $st · branch $BRANCH"
-  # the stand-in note rides the state line: the envelope's size is the point of it
-  [ -n "${RELAY_FROM:-}" ] && msg="$msg · 原 parent $RELAY_FROM 已回收，代收"
-  if [ -n "$SUMMARY" ]; then
-    # ≤3 lines, ≤200 chars each: the cap is the point of the envelope, not a
-    # formatting nicety — every line here is context the parent did not choose to
-    # spend. header + state + summary + `no reply needed` ⇒ 4 lines for the usual
-    # one-line summary, 6 at the absolute widest.
-    # Cut by CHARACTER at a sentence end (bin/fleet_report_clip.py, T803 — `cut -c`
-    # counted bytes on a Mac and split Chinese mid-character); a cut summary ends
-    # with 「（全文：fleet-id.sh get <code>）」 when this session's own result (id_result,
-    # below) records the whole text. `<`/`>` stripped for the same reason the title
-    # is: a summary is model-written text and must not close the peer envelope.
-    _code=''
-    if [ -z "$WIN" ] && fleet_is_fid "$selffid"; then
-      _code=$(bash "$BIN/fleet-id.sh" short "$selffid" 2>/dev/null) || _code=''
-    fi
-    sum=$(printf '%s' "$SUMMARY" | python3 "$BIN/fleet_report_clip.py" "$_code" 2>/dev/null) \
-      || sum=$(printf '%s' "$SUMMARY" | tr -d '<>' | head -3 | cut -c1-200)   # no clipper: the old cut
-    [ -n "$sum" ] && msg="$msg"$'\n'"summary: $sum"
-  fi
-  # The language rule (issue #620) rides ON the `no reply needed` line rather than
-  # taking a fifth: the envelope's size is the point of the envelope, and a parent
-  # near its handoff can least afford an extra line. `no reply needed` still LEADS
-  # the line, which is what both audiences read first.
-  msg="$msg"$'\n'"no reply needed${FLEET_LANG_RULE_NOTICE:+ — $FLEET_LANG_RULE_NOTICE}"
-}
-
-# A delegated report is sealed once at its producer. All real hook callers of
-# this entry share the same route; the receiver never delegates it again.
-if [ -n "$DELEGATION" ]; then
-  envelope
-  _drow=$(row_json "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")
-  _ddry=''; [ "$DRY" != 1 ] || _ddry=--dry-run
-  _sealed=$(printf '%s' "$msg" | python3 "$BIN/fleet_report_delegation.py" seal \
-    --route "$DELEGATION" --row "$_drow" --origin "$worigin" ${_ddry:+"$_ddry"}) || exit 1
-  { read -r _dto; read -r _drid; } <<EOF
-$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["report_delegation"]["target"]); print(d["rid"])' "$_sealed")
-EOF
-  if [ "$DRY" = 1 ]; then printf '%s\n' "$_sealed"; exit 0; fi
-  # Archive by ORIGINAL parent identity on the producer. A historical key may
-  # now belong to another generation; never write into that holder's book.
-  children_append "${_dparent#*/}" "$_sealed" "$sess" || exit 1
-  [ "$TIER" = silent ] && quiet 'delegated · tier=silent — ledger only'
-  _queued=$(printf '%s' "$msg" | bash "$BIN/fleet-peer-queue.sh" put -L "$sess" \
-    --kind delegated_report --rid "$_drid" --to "$_dto" --to-fid "${_dto#*/}" \
-    --delegation "$_sealed") || exit 1
-  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-  if [ "$_queued" = delivered ]; then printf 'reported → %s (replay): %s\n' "$_dto" "$st"; exit 0; fi
-  # Existing cleanup drains this queue. Try it now too; offline is still QUEUED.
-  bash "$BIN/fleet-peer-queue.sh" drain -L "$sess" --fid "${_dto#*/}" >/dev/null 2>&1
-  if bash "$BIN/fleet-peer-queue.sh" wait -L "$sess" --rid "$_drid" --secs 0 >/dev/null 2>&1; then
-    printf 'reported → %s (delegated): %s\n' "$_dto" "$st"; exit 0
-  fi
-  printf 'queued → %s (delegated; original parent preserved): %s\n' "$_dto" "$st"
-  exit 3
-fi
-
-# --- a parent on ANOTHER machine (issues #1420, #1421) ----------------------------
-# The parent's book lives on ITS machine, so the report is not ledgered here — a
-# same-key window of this fleet may be someone else entirely. It goes to the hub
-# instead, through this machine's agent (the outbox, fleet_hub_put): every tier,
-# silent included, since the parent's ledger is the record; the parent's machine
-# applies the tier and the delivery mode exactly as a local report would. The id
-# is `<this child's worker_id>#<epoch>.<n>` — the hub's idempotency key, so the
-# agent's resends are one delivery. No hub (CCQUOTA_FLEET off, no fleet UUID, no
-# outbox) ⇒ C1's answer: ledgered here, not sent, said on stderr.
-if [ -z "$PFOUND" ] && [ -n "$owid" ] && ! fleet_wid_home "$owid" "$sess" >/dev/null 2>&1; then
-  _loc=$(fleet_worker_locate "$owid" "$sess" 2>/dev/null)
-  _self=''
-  # `from` is the readable `<fleet UUID>/<key>` (issue #1646): a label + the
-  # relay's idempotency prefix, never an address.
-  [ -n "${selfwin:-}" ] && _self=$(fleet_worker_id_key "$sess" "$selfwin" 2>/dev/null)
-  # A stale map says `unknown`, but a full worker_id names the parent's fleet, and
-  # that is all the hub routes on (issue #1647): hand it over all the same.
-  _node=''; case "$_loc" in remote\ *) _node=${_loc#remote } ;; esac
-  if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ "$_loc" = unknown ]; then
-    case "$owid" in ?*/?*) _loc="remote ?" ;; esac
-  fi
-  case "$_loc" in
-    remote\ *)
-      if [ -n "$_self" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
-        envelope
-        _payload=$(python3 -c 'import json,sys; print(json.dumps(dict(zip(("child","state","pr","verdict","summary","title","tier","msg"), sys.argv[1:])), ensure_ascii=False))' \
-          "$selfkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$msg" 2>/dev/null)
-        if [ "$DRY" = 1 ]; then
-          printf 'fleet-report-parent: would relay to %s on %s via the hub, tier=%s\n--- envelope ---\n%s\n' \
-            "$owid" "${_node:-? (no fresh map)}" "$TIER" "$msg"
-          exit 0
-        fi
-        _n=$(TM display-message -p -t "$selfwin" '#{@hub_report_seq}' 2>/dev/null); case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
-        _n=$((_n + 1)); TM set-window-option -t "$selfwin" @hub_report_seq "$_n" 2>/dev/null
-        _suf="$(date +%s).$_n"
-        if _f=$(fleet_hub_put child_report "$_self" "$owid" "$_suf" "$_payload"); then
-          [ "$TIER" = silent ] || TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-          # Reported only on the hub's receipt that the parent's machine delivered
-          # it — the outbox emptied, the receipt within FLEET_HUB_RECEIPT_WAIT (10 s:
-          # the round trip through the hub is 4–7 s on a loaded pair of machines,
-          # and the old 4 s queued most of them — issue T756). Every tier waits: a
-          # silent report's receipt says it reached the parent's ledger, and that is
-          # «reported» exactly as the local ledger-only answer is (it used to print
-          # «queued», exit 3, unconditionally). A stale map or a lost node is asked
-          # too — the hub routes on the fleet UUID, and a receipt is the only word.
-          # Anything less is queued, and says so.
-          _rid="$_self#$_suf"; _how=''
-          if fleet_hub_wait_sent "$_f" "${FLEET_HUB_SENT_WAIT:-3}"; then
-            if _why=$(fleet_hub_refused "$_f"); then
-              bash "$BIN/fleet-peer-queue.sh" note -L "$sess" --rid "$_rid" --state FAILED --to "$owid" \
-                --kind report --via hub --detail "refused by the hub: $_why" 2>/dev/null || :
-              printf 'undelivered → %s: %s — the hub refused it: %s\n' "${owid#*/}" "$st" "$_why"
-              exit 1
-            fi
-            if bash "$BIN/fleet-peer-queue.sh" wait -L "$sess" --rid "$_rid" \
-                 --secs "${FLEET_HUB_RECEIPT_WAIT:-10}" >/dev/null 2>&1; then
-              if [ "$TIER" = silent ]; then
-                printf 'reported → %s on %s (in its ledger — tier=silent, not sent to its window): %s\n' \
-                  "${owid#*/}" "${_node:-its machine}" "$st"
-              else
-                printf 'reported → %s on %s (delivered): %s\n' "${owid#*/}" "${_node:-its machine}" "$st"
-              fi
-              exit 0
-            fi
-            case "$_node" in
-              '') _how='its machine is not in a fresh hub map' ;;
-              *:lost) _how='its machine is offline' ;;
-              *) _how='not delivered yet' ;;
-            esac
-          else
-            _how='the hub is not reachable from here; this machine sends it when it is'
-          fi
-          # The report's words ride its QUEUED row (T887): a parent that never takes
-          # it leaves it to the person — the reminder and the task record — not to an
-          # EXPIRED row nobody reads (bin/fleet-peer-hand.py).
-          _hrep=$(python3 -c 'import json,sys; print(json.dumps({k: v for k, v in zip(("child","state","pr","summary","title","repo","task"), sys.argv[1:]) if v}, ensure_ascii=False))' \
-            "$selfkey" "$UST" "${PR//[^0-9]/}" "$SUMMARY" "$wname" "$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)" "${wtask:-}" 2>/dev/null)
-          bash "$BIN/fleet-peer-queue.sh" note -L "$sess" --rid "$_rid" --state QUEUED --to "$owid" \
-            --kind report --via hub --detail "$_how" ${_hrep:+--report "$_hrep"} 2>/dev/null || :
-          # Which one it is in that parent's queue (issue #3520) — the hub pushes
-          # them again the beat the parent is live, and each receipt turns its row
-          # DELIVERED in this book.
-          _qn=$(bash "$BIN/fleet-peer-queue.sh" pending -L "$sess" --to "$owid" 2>/dev/null)
-          case "$_qn" in ''|*[!0-9]*|0) _qn='' ;; esac
-          printf 'queued → %s%s（已排队%s，对方能收时自动补送 · %s）: %s\n' "${owid#*/}" "${_node:+ on ${_node%:lost}}" \
-            "${_qn:+，第 ${_qn} 条}" "$_how" "$st"
-          exit 3
-        fi
-      fi
-      _why="lives on ${_node:-another machine} — the hub outbox is not available (CCQUOTA_FLEET=1 and a running ccquota agent carry it)" ;;
-    *) _why="is not on this machine and the hub cannot place it" ;;
-  esac
-  if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-    children_append "$worigin" "$(row_json \
-      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || exit 1
-  fi
-  _how='ledgered, not sent'; [ "$DRY" = 1 ] && _how='not sent (dry run)'
-  printf 'fleet-report-parent: parent %s %s; %s\n' "$owid" "$_why" "$_how" >&2
-  # Reaching here nothing reached the parent and nothing waits for it (no worker_id
-  # of our own, the outbox unwritable, no hub to carry it): exit 1 and say so on
-  # stdout — never exit 0 with nothing printed (issue #3439).
-  [ "$DRY" = 1 ] && exit 0
-  printf 'undelivered → %s: %s — %s\n' "${owid#*/}" "${UST}${PR:+ (PR #${PR//[^0-9]/})}" "$_why"
-  exit 1
-fi
-
-# --- an earlier generation's child (issue #1538) ----------------------------------
-# The parent key has been allocated again since this child was spawned (its
-# @origin_gen is not the key's current generation, or the mint moved its @origin
-# to @origin_retired): the session that spawned it is gone, and the one now
-# answering to the key never heard of it. The report goes to the RETIRED book
-# (`<key>.ndjson.<gen>`, where that generation's other reports were moved) and
-# nowhere else — not to the new holder, and not up the new holder's ancestry.
-# By the parent's ID FIRST (T660): a parent that closed while this child ran is
-# exactly the session whose key gets allocated again, and the ID ledger still knows
-# who stands in for it (its successor, else its own parent). Resolved here, before
-# the generation check — the side effects (its book row, the reminder when nobody
-# is there) stay where they always were, below.
-SENDKEY="$worigin" RELAY_FROM='' pwin=$PFOUND IDTAKE='' IDGONE=''
-if [ -z "$pwin" ] && fleet_is_fid "$ofid"; then
-  _take=$(fleet_id_take "$ofid"); _trc=$?
-  case "$_trc" in
-    0) IFS=$'\t' read -r _tid _thow _tsock pwin <<< "$_take"
-       # who takes it must be on THIS fleet's socket: asked there, not by the first
-       # socket that answers
-       if [ -n "$SOCK" ] && [ "$_tsock" != "$SOCK" ]; then pwin=$(fleet_win_for_fid "$_tid" "$SOCK" 2>/dev/null) || pwin=''; fi
-       if [ -n "$pwin" ]; then
-         SENDKEY=$(fleet_window_okey "$sess" "$pwin" 2>/dev/null); [ -n "$SENDKEY" ] || SENDKEY=$_tid
-         RELAY_FROM="$worigin ($_thow)"; IDTAKE=1
-       fi ;;
-    1) IDGONE=1 ;;
-  esac
-fi
-
-if [ -n "$RETIRED_GEN" ] || { [ -z "$PFOUND" ] && [ -n "$sess" ] && fleet_key_gen_stale "$sess" "$worigin" "$wogen"; }; then
-  RETIRED_GEN=${RETIRED_GEN:-${wogen:-0}}
-  if [ "$DRY" != 1 ] && command -v children_append_retired >/dev/null 2>&1; then
-    children_append_retired "$worigin" "$RETIRED_GEN" "$(row_json \
-      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER")" "$sess" || exit 1
-  fi
-  # Someone takes it by ID (T660): the retired book holds that generation's row, the
-  # new holder's live book none, and the report is delivered below with the stand-in
-  # note — never the person's reminder. Nobody by ID ⇒ as before.
-  if [ -z "$IDTAKE" ]; then
-    printf 'fleet-report-parent: parent %s is a later generation than the one that spawned this session (%s ≠ %s) — filed in its retired book, not sent\n' \
-      "$worigin" "$RETIRED_GEN" "$(fleet_key_gen "$sess" "$worigin")" >&2
-    # The session that spawned it is gone (issue #3117): the person takes the report.
-    orphan "parent $worigin (generation $RETIRED_GEN) is gone"
-    exit 0
-  fi
-fi
-
-# --- the ledger (issue #937): every report is RECORDED, delivered or not --------
-# Written here — a parent key is known, nothing is sent yet — so a report the rails
-# below drop (parent reaped, no live Claude, no reachable inbox) still lands in the
-# parent's book, and `fleet-children.sh` can answer "what are my children doing"
-# without a `gh pr` + capture-pane per child. Keyed by the parent's KEY, not its
-# window id, so a migrated/restored parent reads the same file. Deduped on
-# (child, state, pr) against that child's latest event; never fails, prints nothing.
-# A retired generation's row is already in its retired book (above): the key's new
-# holder never hears of this child.
-if [ "$DRY" != 1 ] && [ -z "$RETIRED_GEN" ] && command -v children_append >/dev/null 2>&1; then
-  children_append "$worigin" "$(row_json \
-    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" 2>/dev/null)" "$sess" || exit 1
-fi
-
-# silent = ledger only, in every mode: a parent is never woken for a turn boundary.
-# The `child busy (<reason>)` wording is #864's, kept for whoever greps for it.
-[ "$TIER" = silent ] && quiet "tier=silent · $UST${busy:+ · child busy ($busy)} — ledger only"
-
-# --- relay (issue #1352): a reaped parent's report goes to its nearest live ------
-# ancestor. A parent that merged is reaped minutes later whatever its children are
-# doing (an idle session costs 0.4-0.9 GB), so a grandchild's outcome used to land
-# in a dead parent's book and reach nobody. The ledger above still records it under
-# the original parent; here the climb (fleet_live_ancestor — the parent links the
-# same ledger already holds) finds who is still alive, the report goes THERE, with
-# the envelope saying who it is standing in for, and the receiver's book gets a
-# `relayed_from` row so `fleet-children.sh` there shows it too. Nobody alive above
-# (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
-# By the parent's ID first (EPIC T497 C4, design §4.3 — resolved above, T660): its
-# window carries the same ID through /clear, /compact, a handoff or an agent switch,
-# so none of them loses a report; a parent ID that has closed hands it to its
-# successor (down the prev chain), else up its own parent; nobody ⇒ the person's
-# reminder. An ID this machine's ledger does not know keeps the old road (the key,
-# the live ancestor).
-if [ -n "$IDTAKE" ] && [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-  children_append "$SENDKEY" "$(row_json \
-    "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$worigin" 2>/dev/null)" "$sess" || exit 1
-fi
-[ -n "$IDGONE" ] && orphan "parent ID $(bash "$BIN/fleet-id.sh" short "$ofid" 2>/dev/null || printf '%s' "$ofid") has closed, with no successor or parent open"
-[ -n "$pwin" ] || pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
-if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
-  SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"
-  if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
-    children_append "$SENDKEY" "$(row_json \
-      "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$RELAY_FROM" 2>/dev/null)" "$sess" || exit 1
-  fi
-fi
-
-# --- nobody to take it (issue #3117) ----------------------------------------------
-# No parent window and no live ancestor: before this a silent success, so a closed
-# scratch's children merged into nobody's turn. In batch mode too — the digest would
-# find no window to flush to.
-[ -n "$pwin" ] || orphan "parent $worigin has no window on this fleet (closed or reaped), and no live ancestor in the ledger"
-
-# --- batch (issue #939): the ledger IS the delivery queue -----------------------
-# A relay is delivered at once, never batched: the digest is per-parent and would
-# lose the stand-in note.
-# FLEET_CHILD_REPORT=batch hands delivery to the digest (bin/fleet-children-flush.sh,
-# run on the cleanup daemon's 60s tick): a quiet report stops here, recorded; a loud
-# one flushes NOW, and the digest it sends carries the quiet news queued ahead of it.
-# The child is stamped @reported once its report is in the book — the reaper's
-# backstop exists for sessions that never reported, and this one did.
-if [ "$MODE" = batch ] && [ -z "$RELAY_FROM" ]; then
-  if [ "$DRY" = 1 ]; then
-    printf 'fleet-report-parent: batch · tier=%s · %s — ledgered for the %s digest\n' \
-      "$TIER" "$UST" "$worigin"
-    exit 0
-  fi
-  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-  if [ "$TIER" = loud ] && [ -f "$BIN/fleet-children-flush.sh" ]; then
-    bash "$BIN/fleet-children-flush.sh" -L "${SOCK:-$sess}" --parent "$worigin" 2>/dev/null
-  fi
-  exit 0
-fi
-
-# --- rail 2: the parent window, and a live Claude under it ---------------------
-# Defensive: a window whose @origin names ITSELF would otherwise message its own
-# pane and wake the child that is about to stop.
-[ "$pwin" = "$selfwin" ] && quiet "@origin $worigin resolves to this very window"
-
-parent_agent=$(TM display-message -p -t "$pwin" '#{@cc_agent}' 2>/dev/null)
-ppid=''
-parent_evidence=$(TM display-message -p -t "$pwin" '#{@sleep_evidence}' 2>/dev/null)
-parent_parked=$(TM display-message -p -t "$pwin" '#{@parked}#{@park_held}#{@park_start}' 2>/dev/null)
-noclaude=''
-# Only an agent taken over its process's inbox needs that process now (the adapter's
-# deliver column, T626); a thread queue holds its own conversation.
-if [ "$(fleet_agent_get "$(fleet_agent_or_default "$parent_agent" 2>/dev/null)" deliver 2>/dev/null)" != queue ] \
-   && [ -z "$parent_evidence$parent_parked" ]; then
-  ppid=$(fleet_pane_claude_pid "$pwin" "$SOCK" 2>/dev/null) || ppid=''
-  [ -n "$ppid" ] || noclaude=1
-fi
-
-envelope
 if [ "$DRY" = 1 ]; then
-  if [ -n "$noclaude" ]; then
-    printf 'fleet-report-parent: would queue for %s (%s): no live Claude under it, tier=%s\n--- envelope ---\n%s\n' \
-      "$SENDKEY" "$pwin" "$TIER" "$msg"
-  else
-    printf 'fleet-report-parent: would send to %s (%s, pid %s) tier=%s\n--- envelope ---\n%s\n' \
-      "$SENDKEY" "$pwin" "$ppid" "$TIER" "$msg"
-  fi
+  printf 'RETIRED: Parent reports are disabled; would save own result %s.\n' "$STATE"
   exit 0
 fi
-
-# queue_local <why> — the parent is here but cannot take it now (issue #1647): this
-# fleet's peer queue holds it for the parent's IDENTITY, and the cleanup tick
-# delivers it. Exit 3 `queued`; exit 1 only if even that failed.
-delivery_id="local:${selfkey:-?}#$(date +%s).$$.${RANDOM:-0}"
-queue_local() {
-  local pfid
-  pfid=$(fleet_window_fid "$sess" "$pwin" "$SOCK" 2>/dev/null) || pfid=''
-  if printf '%s' "$msg" | bash "$BIN/fleet-peer-queue.sh" put -L "$sess" --kind report --rid "$delivery_id" \
-       --to "$SENDKEY" ${pfid:+--to-fid "$pfid"} --to-key "$SENDKEY" >/dev/null; then
-    TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-    printf 'queued → %s (%s): %s — %s; delivered when it can take it\n' "$SENDKEY" "$pwin" "$st" "$1"
-    exit 3
-  fi
-  printf 'fleet-report-parent: parent %s (%s) %s, and the peer queue refused it — not reported\n' \
-    "$SENDKEY" "$pwin" "$1" >&2
-  exit 1
-}
-[ -n "$noclaude" ] && queue_local 'no live Claude under it'
-
-# The one road into a live session of any agent (fleet_agent_deliver, T626): held =
-# nobody there to take it now (a Codex parent not on the thread its window names —
-# a /clear not followed yet, T540; a Claude whose inbox will not answer) — queued
-# for its identity and replayed, never «reported».
-fleet_agent_deliver "$pwin" "$SOCK" "$msg" "${FLEET_REPORT_FROM:-fleet-report}" "$delivery_id"; src=$?
-if [ "$src" -eq 0 ]; then
-  # The stamp is what keeps the reaper fallback from sending a second, blunter
-  # report for the same session ~a minute later.
-  TM set-window-option -t "$selfwin" @reported 1 2>/dev/null
-  # Keep the digest cursor current (issue #939): this report reached the parent, so
-  # a later switch to batch must not replay it.
-  command -v children_cursor_set >/dev/null 2>&1 && children_cursor_set "$SENDKEY" "$sess"
-  printf 'reported → %s (%s): %s%s\n' "$SENDKEY" "$pwin" "$st" "${RELAY_FROM:+ (relayed for reaped $RELAY_FROM)}"
-  exit 0
+# Preserve the old caller's own human-step hold until it reports again.
+if [ "$STATE" = waiting ] && printf '%s' "$SUMMARY" | grep -qiE 'https?://|\.(png|jpe?g|gif|svg|pdf|html?)([^a-z]|$)|扫|二维码|确认码|验证码|点击|点一下|\bqr\b|scan|click'; then
+  TM set-window-option -t "$selfwin" @human_wait "$(date +%s)" 2>/dev/null
+else
+  TM set-window-option -t "$selfwin" @human_wait off 2>/dev/null
 fi
-[ "$src" -eq "${FLEET_DELIVER_HELD:-3}" ] && queue_local "cannot take it now: $FLEET_DELIVER_NOTE"
-# A parent that is alive but unreachable (no registry record / no key / no socket):
-# queued for it, never dropped.
-queue_local "has no reachable inbox${ppid:+ (pid $ppid)}"
+# PR annotation belongs to this task; it conveys no report or control authority.
+if [ -n "$wtask" ] && [ -n "${PR//[^0-9]/}" ]; then
+  _prrepo=$(fleet_window_repo "$sess" "$selfwin" 2>/dev/null)
+  [ -z "$_prrepo" ] || bash "$BIN/fleet-task-record.sh" set "$wtask" --pr "$_prrepo#${PR//[^0-9]/}" >/dev/null 2>&1 || :
+fi
+exit 0

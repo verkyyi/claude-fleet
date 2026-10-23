@@ -315,20 +315,18 @@ waitfor "rd: the retry ran and ended" screen_has rd '会话已结束'
 sleep 0.5
 CHECKS=$((CHECKS + 1)); [ ! -s "$WORK/reported" ] || fail "rd: a refusal its retry got past told the parent FAILED: $(cat "$WORK/reported")"
 
-# RW (issue #4702): a WORKER whose launch is refused tells the session that spawned
-# it — once a streak: the retry refused again says nothing more. (Grace 0: the
-# streak is old enough at once — T915.)
+# RW: a refused launch remains visible on its recovery page and local log.
+# Parent reporting stays retired even with the old zero-grace setting.
 mkdir -p "$WORK/rw"; printf refuse > "$WORK/rw/mode"; printf 77 > "$WORK/rw/issue"
 WRAP_ENV="FLEET_EXIT_CLOSE_SECS=0 FLEET_CRED_REPORT_SECS=0" win rw 5
 waitfor "rw: state exited" state_is rw exited
-waitfor "rw: the parent was told" grep -sq -- '--state failed' "$WORK/reported"
-CHECKS=$((CHECKS + 1)); grep -q -- "--state failed --win %[0-9]* --summary the session did not start: launch failed (cred)" "$WORK/reported" \
-  || fail "rw: the report: $(cat "$WORK/reported")"
+waitfor "rw: local failure was recorded" grep -sq ' window=rw ' "$WORK/conf/logs/start-fail.log"
+CHECKS=$((CHECKS + 1)); [ ! -s "$WORK/reported" ] || fail "rw: retired Parent hook was invoked"
 tf send-keys -t sw:rw Enter
 waitfor "rw: ↵ relaunched" launches rw 2
 waitfor "rw: refused again" screen_has rw '重试启动'
 sleep 0.5
-eq "rw: the same streak reports once" 1 "$(grep -c -- '--state failed' "$WORK/reported")"
+CHECKS=$((CHECKS + 1)); [ ! -s "$WORK/reported" ] || fail "rw: retry revived Parent reporting"
 
 # q: recycle through the SessionEnd hook.
 win q 0

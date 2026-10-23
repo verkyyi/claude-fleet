@@ -546,20 +546,6 @@ if [ "$DRY" != 1 ]; then
   done
 fi
 
-# --- the children digest (issue #939) --------------------------------------------
-# FLEET_CHILD_REPORT=batch parks quiet child reports in the parent's ledger; this
-# tick is what delivers them, merged into one `[children-digest]` (no daemon of its
-# own, EPIC #935). Before the disk gate: it writes a cursor, not a worktree, and a
-# full disk is no reason to leave a parent in the dark. A fleet not in batch mode is
-# a conf read and nothing else.
-if [ -f "$BIN/fleet-children-flush.sh" ]; then
-  flush_args=(); [ "$DRY" = 1 ] && flush_args=(--dry-run)
-  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
-    fout=$(fleet_timebox 30 bash "$BIN/fleet-children-flush.sh" "$s" ${flush_args[@]+"${flush_args[@]}"})
-    [ -z "$fout" ] || log "$s: $fout"
-  done
-fi
-
 # --- the peer queue (issue #1647) ---------------------------------------------------
 # A report or message whose recipient could not take it (no live Claude, an inbox
 # that would not answer, a failed wake) waits in fleets/<sess>/peer-queue for the
@@ -580,16 +566,6 @@ if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-peer-queue.sh" ]; then
   done
 fi
 
-# --- the hub's progress streams (issue #1648) --------------------------------------
-# Every placement this login's fleets asked the hub for, and every report a child on
-# another machine relayed here, merged into the parents' books (rid-deduped) — so a
-# placement does not stay «accepted» and a report the push missed still lands. One
-# bounded call per tick for the whole login; exit 3 (hub off, no node token) is the
-# one-machine case and says nothing.
-if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-hub-node.sh" ]; then
-  pout=$(fleet_timebox 30 bash "$BIN/fleet-hub-node.sh" progress 2>&1)
-  [ -z "$pout" ] || log "$pout"
-fi
 
 # --- the hub's ID mirror (EPIC T497 C2) ---------------------------------------------
 # Every window's ID ledger handed to the hub from where the hub is: a window opened,

@@ -817,54 +817,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=New-session machine @group=accounts @tier=internal @scope=fleet @edit=str
 #FLEET_SPAWN_NODE=auto
 
-# --- Child → parent outcome reports (bin/fleet-report-parent.sh, issue #574) -----
-# ON by default. When a worker that was SPAWNED BY ANOTHER SESSION (`@origin` names
-# an `issue-<N>` / `scratch-<N>` window — a spawned follow-up,
-# a scratch escalation) merges its PR, hits a blocker, or is reaped, it PUSHES a
-# fixed four-line report to that session over the peer channel (fleet_peer_send, the
-# SendMessage inbox socket — never send-keys). Before this, the parent's only option
-# was to poll: the dash, `gh pr view`, ListAgents.
-#
-# COST, and why the switch exists: the report WAKES the parent for one turn, and the
-# context it spends is context that session did not choose to spend. A fan-out of
-# five children is five interrupts, and a parent near its handoff threshold can least
-# afford them — which is why the envelope is capped at five lines and ends
-# `no reply needed`. Hub-spawned work is unaffected either way (no parent ⇒ nothing
-# is ever sent), so turn this off only if you fan out widely AND find the interrupts
-# cost more than the polling they replace.
-#
-# TIERS (issue #938): not every report wakes the parent. Each is banded by
-# report_tier (bin/fleet-children-lib.sh) and the band is written into the
-# children ledger: loud (BLOCKED, FAILED not being fixed, REAPED unmerged/dirty, a
-# true STOPPED, a child in `needs`) and quiet (MERGED, FAILED while fixing, other
-# reaps) are delivered; silent (WAITING / IDLE — a child that ended its turn on an
-# open PR or a background job) is ledger-only, never sent.
-#   immediate (default; the legacy `1`) — loud + quiet delivered one by one.
-#   batch     — the digest mode (issue #939): quiet reports are only recorded, and
-#               the cleanup daemon's 60s tick (bin/fleet-children-flush.sh) delivers
-#               them merged into ONE `[children-digest] 3/5 ✓ · 1 ⏳ · 1 !` — when a
-#               loud report arrives (at once, carrying the queued quiet news), when
-#               every child is terminal, when the parent is idle, or when the oldest
-#               has waited FLEET_CHILD_REPORT_BATCH_SECS.
-#   0         — off: nothing is sent and nothing is ledgered.
-# @label=Child reports outcome to parent @group=spawn @tier=advanced @scope=fleet @edit=enum
-#FLEET_CHILD_REPORT=immediate
-
-# How long a quiet child report may wait for its digest in FLEET_CHILD_REPORT=batch
-# (issue #939), in seconds. The digest goes out earlier on a loud report, when every
-# child is done, or when the parent is idle; this is the ceiling. Default 300.
-# @label=Child-report digest max wait @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
-#FLEET_CHILD_REPORT_BATCH_SECS=300
-
-# How long a child awaited by bin/fleet-await.sh may sit without progress before
-# its STALL LADDER climbs a rung (issue #1268), in seconds: wake it, wake it again,
-# re-send its task, tell its parent, then raise a `● #N · stalled` alert — one rung
-# per this interval, each a `wake` row in the parent's children ledger. A new
-# report or a change in the child's worktree resets it; an unknown state, or
-# `working` with a busy process tree, never counts. 0 = off. Default 1200.
-# @label=Stalled child escalation interval @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
-#FLEET_AWAIT_STALL_SECS=1200
-
 # --- Cleanup daemon (bin/fleet-cleanup-daemon.sh, com.claude-fleet.cleanup) ------
 # ON by default. THE FLEET NEVER MERGES — /fleet-ship arms GitHub auto-merge and
 # GitHub (or a human on the web, or a collaborator) does the merge; the cleanup

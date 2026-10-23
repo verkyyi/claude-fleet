@@ -464,8 +464,8 @@ ok; TM display-message -p -t "$w8" '#{pane_pid}' >/dev/null 2>&1 || fail "the an
 ok; ! grep -q 'sid-8888' "$WORK/launched" 2>/dev/null || fail "the ancestry refusal must launch nothing"
 
 # --- --force-self: detached, waits for the turn, survives SessionEnd. self9 lives
-# in a SCRATCH-keyed worktree and has a child (kid, @origin scratch-7) so the
-# children's parent pointer can be checked after the move (part 3 of #1474).
+# in a SCRATCH-keyed worktree. A historical @origin on another window must not
+# restore Parent delivery after the move (part 3 of #1474).
 kid=$(spawn kid runner-stuck sid-kid "$WORK/wt-kid"); TM set-window-option -t "$kid" @origin scratch-7
 w9=$(spawn_self self9 sid-9999 "$WORK/x-scratch-7" "$FB/self-force")
 : > "$WORK/launched"
@@ -499,14 +499,19 @@ ok; grep -q -- '--resume sid-9999' "$WORK/launched" 2>/dev/null || fail "the det
 ok; [ "$(TM display-message -p -t "$nw9" '#{@worktree}')" = "$WORK/x-scratch-7" ] || fail "the new window must carry the worktree binding"
 ok; grep -q '✓ self9 .*acctA → own login' "$LOG" 2>/dev/null || fail "the detached move must log its verified result: $(cat "$LOG" 2>/dev/null)"
 ok; grep -q 'turn ended after' "$LOG" 2>/dev/null || fail "the detached move must log that it waited for the turn to end: $(cat "$LOG" 2>/dev/null)"
-# part 3: the children's parent pointer. @origin is the KEY (scratch-7), never a
-# window id, so the resumed window — same worktree, new id — IS the parent again:
-# the dash's grouping, fleet_win_for_key and a child's report all resolve to it.
+# The stable key still resolves after migration. Historical @origin metadata
+# grants no delivery route to the resumed session.
 ok; [ "$(fleet_win_for_key scratch-7 "$LBL")" = "$nw9" ] \
   || fail "fleet_win_for_key scratch-7 must resolve to the resumed window $nw9 (got '$(fleet_win_for_key scratch-7 "$LBL")')"
-rp=$(bash "$BIN/fleet-report-parent.sh" -L "$LBL" --win "$kid" --state blocked --summary 'kid is stuck' --dry-run 2>&1)
-ok; printf '%s' "$rp" | grep -q "would send to scratch-7 ($nw9," \
-  || fail "a child's report must address the RESUMED parent window $nw9: $rp"
+pane_before=$(TM capture-pane -p -t "$nw9")
+rp=$(bash "$BIN/fleet-report-parent.sh" -L "$LBL" --win "$kid" --state blocked --summary 'kid is stuck' 2>&1)
+rp_rc=$?
+ok; [ "$rp_rc" = 0 ] && printf '%s' "$rp" | grep -q 'RETIRED: Parent reports are disabled' \
+  || fail "a historical report hook must retire without delivery: $rp"
+ok; [ "$(TM capture-pane -p -t "$nw9")" = "$pane_before" ] \
+  || fail "a historical report must not inject text into the resumed session"
+ok; [ -z "$(TM display-message -p -t "$kid" '#{@reported}')" ] \
+  || fail "a historical report hook must not mark its caller reported"
 
 fi
 

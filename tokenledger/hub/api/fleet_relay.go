@@ -21,16 +21,12 @@ import (
 
 // Node-to-node relays (claude-fleet#1421, EPIC #1419 C2).
 //
-// A worker's parent, or the worker a message is for, may live on another
-// machine. Neither machine can reach the other; both reach the hub. So the
-// sending node hands the relay to the hub over its own control channel, the
-// hub STORES it (keyed by the sender's idempotency id, so a resend is a no-op)
-// and acks, and only then pushes it down the target node's channel. The
-// target's agent applies it through claude-fleet's own script — a child
-// report lands in the parent's ledger on the parent's machine and wakes the
-// parent; a message lands in the worker's inbox — and answers. A target that
-// is not connected gets it when it reconnects; nothing is ever pushed twice
-// within relayResendAfter, and an applied relay is never pushed again.
+// A message recipient may live on another machine. Both nodes reach the hub:
+// the sender hands over a message, the hub stores and acknowledges it, then
+// delivers through the recipient's node. Duplicate IDs do not redeliver;
+// ordinary messages wait through disconnects and respect relayResendAfter.
+// Parent reporting is retired: new child_report relays are refused and old
+// pending reports are settled failed without delivery. Settled history remains.
 //
 // Who may relay to whom: the sender's worker_id must belong to a fleet on the
 // SENDING node (the hub checks, a node's claim is not enough) — or, for a
@@ -51,8 +47,8 @@ import (
 // hub pushes it again (a lost frame, a node that restarted mid-apply).
 var relayResendAfter = newDurKnob(60 * time.Second)
 
-// relayTTL is how long a relay may wait for its target node; past it the
-// relay is expired, never delivered late.
+// relayTTL bounds ordinary messages waiting for their target node. Parent
+// reports are settled explicitly as retired, rather than expired.
 var relayTTL = newDurKnob(7 * 24 * time.Hour)
 
 // workersPushEvery bounds the worker-map push to one per node per interval:
@@ -179,7 +175,6 @@ func (s *Server) acceptRelay(ctx context.Context, wire nodeWire, ep store.Endpoi
 	}
 	if inserted {
 		_ = s.Store.FleetAuditWorker("node:"+ep.ID, wk.id(), wk.label(), "relay:"+r.Kind, fleetOf(r.ToWID), "stored", r.ID, time.Now())
-		s.progressReport(r) // the parent's stream (claude-fleet#1648)
 	}
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -224,7 +219,9 @@ func (s *Server) checkRelay(ep store.Endpoint, m control.Message) (store.FleetRe
 		return store.FleetRelay{}, fault(control.CodeBadMessage, "malformed relay")
 	}
 	switch in.Kind {
-	case control.RelayChildReport, control.RelayMessage:
+	case control.RelayChildReport:
+		return store.FleetRelay{}, fault("PARENT_REPORT_RETIRED", "parent reporting has been retired")
+	case control.RelayMessage:
 	default:
 		return store.FleetRelay{}, fault("INVALID_ARGUMENT", "unknown relay kind "+in.Kind)
 	}
@@ -286,9 +283,8 @@ func (s *Server) relayLock(endpointID string) *sync.Mutex {
 	return l.(*sync.Mutex)
 }
 
-// dispatchRelays pushes every pending relay for endpointID down its channel,
-// except one pushed less than relayResendAfter ago. Without an open,
-// relay-capable channel it does nothing: the relays wait for the next hello.
+// dispatchRelays retires old parent reports even while their target is offline.
+// Ordinary messages wait for a relay-capable channel and respect resend delays.
 func (s *Server) dispatchRelays(endpointID string) {
 	l := s.relayLock(endpointID)
 	if !l.TryLock() {
@@ -302,10 +298,33 @@ func (s *Server) dispatchRelays(endpointID string) {
 			log.Printf("fleet relay: %d expired undelivered after %s", n, relayTTL.Get())
 		}
 	}
+	// Retire before checking node availability, resend delays, or forwarding
+	// to another replica: an older recipient must never see this backlog.
+	rels, err := s.Store.PendingFleetRelays(endpointID)
+	if err != nil {
+		log.Printf("fleet relay: read pending for %s: %v", endpointID, err)
+		return
+	}
+	messages := rels[:0]
+	for _, r := range rels {
+		if r.Kind == control.RelayChildReport {
+			if err := s.Store.FinishFleetRelay(r.ID, store.RelayFailed, "PARENT_REPORT_RETIRED: parent reporting has been retired", now); err != nil {
+				log.Printf("fleet relay %s: retire: %v", r.ID, err)
+				return
+			}
+			continue
+		}
+		messages = append(messages, r)
+	}
+	rels = messages
 	c := s.nodes.get(endpointID)
 	if c == nil {
 		// Held by another replica (claude-fleet#2124): it pushes them now
 		// rather than at the node's next beat.
+		receipts, err := s.Store.DueFleetRelayReceipts(endpointID, relayResendAfter.Get(), now)
+		if err != nil || (len(rels) == 0 && len(receipts) == 0) {
+			return
+		}
 		if peer, ok := s.peerOf(context.Background(), endpointID); ok && peer.HasCap(control.CapRelay) {
 			if _, err := s.forward(context.Background(), peer, nodeForward{Kind: "relays", Endpoint: endpointID}, 5*time.Second); err != nil {
 				log.Printf("fleet relay: hand %s's relays to replica %s: %v (its next beat sends them)", endpointID, peer.Replica, err)
@@ -316,17 +335,11 @@ func (s *Server) dispatchRelays(endpointID string) {
 	if !c.canRelay {
 		return
 	}
-	rels, err := s.Store.PendingFleetRelays(endpointID)
-	if err != nil {
-		log.Printf("fleet relay: read pending for %s: %v", endpointID, err)
-		return
-	}
 	nodeOf := map[string]string{}
 	live := map[string]map[string]bool{}
 	for _, r := range rels {
-		// The first push always goes: a child report is ledgered on the
-		// parent's machine even when the parent itself is not there. A
-		// relay already pushed waits for its RECIPIENT (claude-fleet#1647):
+		// The first push always goes. A relay already pushed waits for
+		// its recipient (claude-fleet#1647):
 		// it goes again only once the target fleet's inventory — every
 		// heartbeat — lists that worker live, by key or by identity.
 		if !r.SentAt.IsZero() && (now.Sub(r.SentAt) < relayResendAfter.Get() || !s.relayTargetLive(r.ToWID, live)) {
@@ -445,6 +458,9 @@ func (s *Server) relayResult(endpointID string, m control.Message) {
 	}
 	status := store.RelayFailed
 	switch {
+	case r.Kind == control.RelayChildReport:
+		// A late answer from an old node cannot revive a retired report.
+		res.Detail = "PARENT_REPORT_RETIRED: parent reporting has been retired"
 	case res.OK:
 		status = store.RelayDelivered
 	case res.Retry:

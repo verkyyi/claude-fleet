@@ -83,21 +83,16 @@ f once scratch-4; eq "G: once — another batch pushes" 0 "$RC"
 FLEET_ORPHAN_NOTIFY_SECS=0 f once scratch-3; eq "G: once — past the window it pushes again" 0 "$RC"
 TO=178b03b8-8fee-4762-b3f3-93bf497fe632
 printf '#!/bin/sh\nprintf "%%s\\n---\\n" "$*" >> "%s"\n' "$WORK/sent" > "$WORK/send.sh"
-f redeliver --to "$TO" --since $((NOW - 10)); has "G: redeliver lists first" "$OUT" "would redeliver"
-has "G: …today's row" "$OUT" "scratch-9"
-case "$OUT" in *issue-42*) bad "G: an older row is not redelivered" ;; *) ok ;; esac
-eq "G: …and sends nothing" no "$([ -e "$WORK/sent" ] && echo yes || echo no)"
+f redeliver --to "$TO" --since $((NOW - 10)); eq "G: redeliver retired" 2 "$RC"
+has "G: retirement is explicit" "$OUT" RETIRED
 FLEET_ORPHAN_SEND="$WORK/send.sh" f redeliver --to "$TO" --since $((NOW - 10)) --apply
-has "G: --apply delivers" "$OUT" "redelivered"
-has "G: …to the ID" "$(cat "$WORK/sent")" "wid:$TO"
-has "G: …as a child-report envelope" "$(cat "$WORK/sent")" "[child-report] scratch-9"
-FLEET_ORPHAN_SEND="$WORK/send.sh" f redeliver --to "$TO" --since $((NOW - 10)) --apply
-eq "G: never twice" 1 "$(grep -c 'child-report' "$WORK/sent")"
-f list; case "$OUT" in *scratch-9*) bad "G: a redelivered row still listed" ;; *) ok ;; esac
-f redeliver --to nope; eq "G: a bad ID → exit 2" 2 "$RC"
+eq "G: --apply also retired" 2 "$RC"
+eq "G: no delivery" no "$([ -e "$WORK/sent" ] && echo yes || echo no)"
+f list; has "G: historical row remains unread" "$OUT" "scratch-9"
+f redeliver --to nope; eq "G: an old malformed request also retires" 2 "$RC"
 f clear --before $((NOW - 10)); has "G: clear lists first" "$OUT" "would clear"
 f clear --before $((NOW - 10)) --apply; has "G: clear --apply" "$OUT" "cleared"
-f count; eq "G: nothing left unread" 0 "$OUT"
+f count; eq "G: newest historical row remains unread" 1 "$OUT"
 
 printf '%d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" = 0 ]

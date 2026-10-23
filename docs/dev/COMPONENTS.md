@@ -36,7 +36,7 @@
 | 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
 | Codex 上下文计量适配（`fleet-codex-session.py` Meter / `conf/statusline.sh`） | 核心 | 将原生读数投影到既有计量总线；显式候选复用注意力连接，收到有效事件时暂停重复 rollout 轮询，失联回退。不新增常驻服务、不默认启用，不改变其他 collector 的待定类别。 |
 | Fleet MCP（status / where / context / open / show） | 核心 | 代理读取状态和向操作者送达内容的统一接口。 |
-| 执行会话与跨会话协作 MCP（brief / task / spawn / await / children / send / report / ask / pr_verdict / pr_merge） | 核心 | 发起人明确保留跨会话协作基础设施；每个会话都挂载派发组（#4703）。任务只认 hub 的任务记录 `T<n>`，不认领、不评论 GitHub issue（EPIC #4895）。 |
+| 执行会话与跨会话协作 MCP（brief / task / spawn / send / ask / pr_verdict / pr_merge） | 核心 | 独立 Task 与普通消息保留；Parent 回报、等待和委托入口只留一版本退役兼容。每个会话都挂载任务工具组（#4703）。任务只认 hub 的任务记录 `T<n>`，不认领、不评论 GitHub issue（EPIC #4895）。 |
 | 编排 MCP 挂载组（`conf/mcp-orch.json`） | 核心 | 每个会话都挂载（#4703 撤掉了 #4334 的 `@agent_spawn` 门）；底层协作接口，和编排模板无关。 |
 
 ## 可选插件
@@ -152,7 +152,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
-| 任务设计与历史 EPIC 兼容 | `fleet-epic* epic-page* fleet-role-retirement*` | 设计页、退役入口与历史读取 |
+| 任务设计页 | `fleet-epic* epic-page* fleet-role-retirement*` | 设计页、退役入口与历史读取 |
 | 浏览器 | `fleet-browser*` | 浏览器插件 |
 | 操作者终端集成 | `fleet-iterm* fleet-tcc*` | 设备集成 |
 | 凭据代理 | `fleet-cred-proxy* fleet-proxy-quota* fleet_upstream_stats* fleet_cred_ctl*` | 订阅代理 |
@@ -170,7 +170,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 配置与插件装配 | `fleet-conf* fleet_config* fleet-config* fleet-settings* fleet-hook* fleet-agent-bundle* fleet-agent-team* fleet-agent-def* fleet_agent_allow* fleet-plugins* fleet-codex-plugins* fleet-cfg-restart* mcp-fetch* mcp-github*` | 配置与插件注册 |
 | 账号与代理启动 | `fleet-account* .fleet-account* fleet_agent_argv* fleet_agent_mcp* fleet-codex* fleet_codex* fleet-claude* fleet_dispatch.py fleet_launch.py fleet-launch-lib* fleet-agent-adapter* fleet_agent_adapter* fleet_native_proc.py fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang* fleet-tool-yield* fleet-pool-run*` | 代理、账号与凭据；投递及会话启动入口通过 fleet_dispatch 解析、校验已接受的代理选择 |
 | Fleet MCP（ | `fleet-mcp* fleet-doctor* fleet-control* fleet_control* fleet_mcp_gateway* mcp-space*` | 工具读写与诊断 |
-| 执行会话与跨会话协作 MCP | `fleet_worker_life* fleet-answer* fleet-await* fleet-children* fleet-brief* fleet-pr-* fleet-report-parent* fleet-report-delivery* fleet_report_delegation* fleet-peer-send* fleet-clear-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet_ticket_url* fleet-task* fleet_task_control.py fleet-wait-reeval* fleet-land* fleet-gate-check* fleet-workflow-perms* fleet_local_refs* fleet_report_clip* fleet-peer-hand*` | 任务与协作、PR 和合并；brief 读任务记录（#4898 起不再认领 issue），await/children 通过 fleet_task_control.py 读任务记录，回报是窗口 ID 的结果（fleet-report-parent.sh）；可选监督委托只改 delivery，按身份清单授权、审计、撤销，复用既有队列 |
+| 执行会话与跨会话协作 MCP | `fleet_worker_life* fleet-answer* fleet-await* fleet-children* fleet-brief* fleet-pr-* fleet-report-parent* fleet-report-delivery* fleet_report_delegation* fleet-peer-send* fleet-clear-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet_ticket_url* fleet-task* fleet_task_control.py fleet_task_execution.py fleet_task_exit_submit.py fleet_peer_queue_retirement.py fleet-wait-reeval* fleet-land* fleet-gate-check* fleet-workflow-perms* fleet_local_refs* fleet_report_clip* fleet-peer-hand*` | 任务与协作、PR 和合并；brief 读任务记录（#4898 起不再认领 issue），原生执行停止复用 Task 与 operation；旧 await/children/report 及委托只保留一版本退役入口，自身结果和历史队列可读，不再沿 Parent 投递 |
 | 执行会话（ | `fleet-worker-start-hook* fleet-worktree* fleet-session-wrap* fleet-session-command* fleet-session-shell-agent* fleet-run* dash-issue-session* dash-raw-session* scratch-prefill* fleet-home-session* fleet-home-template* fleet-lib.sh fleet_iso.py session-shell/* fleet-degenerate*` | 执行会话与共用运行库 |
 | 终端看台与薄客户端 | `fleet fleet-entry* fleet-up* fleet-down* fleet-attach* fleet-term* fleet-thin* fleet_thin* fleet-client* fleet_clientlog* fleet-session-cli* fleet-session-page* fleet-view* fleet_view* fleet-remote-view* fleet-topbar* fleet-list* fleet-keys* fleet_keys* fleet-door* fleet-input* fleet-compose* fleet-quick* fleet-ui-* fleet-palette* fleet-panel* fleet_panel* fleet-pane* fleet-popup* fleet-pending-tool* fleet_pending_tool.py fleet-human-menu* fleet-window-carry* fleet-alerts* fleet_notify* fleet_needs_detail* fleet_sidefx* dash-* tmux-* .tmux-* reapply-tmux* fleet-notice* fleet_notice* fleet-shell* fleet_client_events* fleet-board-diff*` | 看台、交互与窗口；pending-tool 壳、spinner 和回收观察共用 fleet_pending_tool.py |
 | 构建与验证 | `*-selftest* selftest-* run-selftests* ci-* tokenledger-* go-test-* go-ci-cache* client-e2e* docs-* fleet-bin-inventory* fleet-break-it* break-it-durations.txt fleet-ci-* fleet-shard* fleet-train* fleet-durations-drift* fleet-macos-watch* fleet-oldcfg* oss-scan* nogh-task-acceptance.py nogh-task-boundary-test.py nogh-task-browser.mjs nogh-task-deny-probe.py nogh_live_* fleet-nightly-report*` | 盘点、构建、回归与发布检查；task-acceptance 工作流调用 nogh-task-acceptance.py，后者执行 PR 边界、浏览器与拒绝探针三个隔离验收程序；nogh_live_* 是 C9（#4562）默认关闭的隔离观测验收模块，由 nogh-live-selftest 与 task-acceptance 调用；go-test-shard.sh · go-test-durations.sh · go-ci-cache.py 是 Go 测试的按耗时分片、耗时表与缓存读数（#4817） |

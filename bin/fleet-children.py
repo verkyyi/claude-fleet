@@ -27,7 +27,7 @@ carries it on the child, the text view puts it before the title.)
 That shape, `children_append`, and `fleet-children.sh`'s text + `--json` output are
 a stable interface (C4/C5/C6/R1 of EPIC #935 build on it): add fields, never rename.
 
-The DIGEST (issue #939, FLEET_CHILD_REPORT=batch) reads the same file against a
+The historical digest projection (issue #939) reads the same file against a
 cursor beside it — `<parent-key>.cursor`, the highest seq already delivered — and
 decides whether this is the moment to wake the parent (see cmd_digest).
 
@@ -641,7 +641,7 @@ def cmd_digest(a):
                quiet news queued ahead of it
       barrier  every child under the parent is in a terminal bucket (✓ ! –):
                the batch is over, wake it once
-      age      the oldest undelivered news has waited FLEET_CHILD_REPORT_BATCH_SECS
+      age      the oldest undelivered historical news has reached the wait ceiling
       idle     the parent itself is idle (done) — nothing to interrupt
     News older than a day is history: never flushed (and so a reaped parent's
     file, or a pre-batch ledger, never turns into a surprise digest)."""

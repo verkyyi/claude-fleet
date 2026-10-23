@@ -114,7 +114,7 @@ fakein() { # fakein <name> <body>
   fake "$1" "case \" \$* \" in *' - '*) printf '<<<%s>\\n' \"\$(cat)\" >> \"$LOG\" ;; esac
 $2"
 }
-fake fleet-report-parent.sh 'echo "queued → parent issue-77"; exit 3'
+fake fleet-report-parent.sh 'echo "RECORDED: own result; RETIRED: Parent delivery"; exit 0'
 fake set-claude-state.sh 'exit 0'
 fakein fleet-handoff-file.sh 'echo "/h/$1"; [ "$1" = check ] && exit 3; exit 0'
 fake fleet-pr-verdict.sh 'echo PENDING; exit 1'
@@ -183,20 +183,20 @@ assert rows[0]["result"]["serverInfo"]["name"] == "fleet", rows[0]
 assert rows[0]["result"]["protocolVersion"] == "2025-06-18", rows[0]
 tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
 assert set(tools) == {"status", "repos", "agents",
-                      "report", "ask", "handoff", "pr_verdict", "pr_merge",
+                      "ask", "handoff", "pr_verdict", "pr_merge",
                       "brief", "context", "transfer", "where", "show", "open",
                       "set_reap"}, sorted(tools)
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
 assert tools["ask"]["inputSchema"]["required"] == ["question"]
-for n in ("report", "handoff"):
+for n in ("handoff",):
     assert len(tools[n]["inputSchema"]["required"]) == 1, n
 for n in ("pr_verdict", "pr_merge"):       # pr is optional since #3602 (FLEET_LAND=fleet)
     assert "required" not in tools[n]["inputSchema"], n
     assert tools[n]["inputSchema"]["properties"]["pr"]["minimum"] == 1, n
 PY
-ok "A server \`fleet\`, the fifteen core tools, every schema closed"
+ok "A server \`fleet\`, the fourteen core tools, every schema closed"
 
 # --- B: refusals — nothing runs -----------------------------------------------
 : > "$LOG"
@@ -218,7 +218,7 @@ python3 - "$WORK/b" <<'PY' || fail "B: a bad call was not refused with its reaso
 import json, sys
 rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 want = {10: 'unknown argument "force"', 11: "must be an integer", 12: 'missing required argument "issue"',
-        13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "acme/app, acme/lib",
+        13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "RETIRED",
         17: "takes no arguments", 18: "agent:<name>, fid:<uuid> or parent", 19: "unknown tool",
         20: "must be an integer", 21: "unknown tool"}
 for i, why in want.items():
@@ -248,14 +248,16 @@ python3 - "$WORK/c" <<'PY' || fail "C: a tool's result is wrong" "$(cat "$WORK/c
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 for i, r in rows.items():
-    assert not r.get("isError"), (i, r)
+    if i in (31, 35):
+        assert r.get("isError") and "RETIRED" in r["content"][0]["text"], (i, r)
+    else:
+        assert not r.get("isError"), (i, r)
 st = rows[30]["structuredContent"]
 assert st["window"].startswith("window issue-1807 · issue=1807"), st
-assert st["children"]["exit"] == 0 and "1/1" in st["children"]["stdout"], st
+assert st["children"]["exit"] == 0 and st["children"]["stdout"] == "", st
 assert st["repos"] == ["acme/app", "acme/lib"], st
 assert "acme/lib" in rows[30]["content"][0]["text"]
-ch = rows[31]["structuredContent"]
-assert ch["exit"] == 0 and json.loads(ch["stdout"])["children"][0]["child"] == "issue-99", ch
+assert rows[31]["isError"]
 assert rows[32]["structuredContent"]["repos"] == ["acme/app", "acme/lib"]
 agents = rows[33]["structuredContent"]["agents"]
 assert {a["key"] for a in agents} == {"issue-1807", "issue-77", "issue-99"}, agents
@@ -266,19 +268,18 @@ sp = rows[34]["structuredContent"]
 assert (sp["command"], sp["exit"]) == ("dash-issue-session.sh", 2), sp           # exit code passes through
 assert sp["stdout"] == "spawned issue-12\n" and sp["stderr"] == "cap note\n", sp
 assert rows[34]["content"][0]["text"].startswith("exit 2 · dash-issue-session.sh"), rows[34]
-aw = rows[35]["structuredContent"]
-assert (aw["exit"], aw["stdout"]) == (0, "MERGED #12 pr=42\n"), aw
+assert rows[35]["isError"]
 assert rows[36]["structuredContent"]["receipt"] == "sent -> issue:99 (hello child)", rows[36]
 assert rows[37]["structuredContent"]["receipt"] == "sent -> @77 (hello parent)", rows[37]
 PY
 grep -qx 'dash-issue-session.sh 12 --repo acme/lib' "$LOG" || fail "C: spawn ran the wrong argv" "$(cat "$LOG")"
-grep -qx 'fleet-await.sh 12 --timeout 60' "$LOG" || fail "C: await ran the wrong argv" "$(cat "$LOG")"
-grep -qx 'fleet-children.sh --json' "$LOG" || fail "C: children did not run fleet-children.sh --json" "$(cat "$LOG")"
+! grep -q '^fleet-await.sh' "$LOG" || fail 'C: retired await ran a script'
+: # child classification is historical; the retired children handler runs nothing
 grep -qx 'fleet-peer-send.sh issue:99 -' "$LOG" && grep -qx 'fleet-peer-send.sh @77 -' "$LOG" \
   || fail "C: send ran the wrong argv" "$(cat "$LOG")"
-[ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] && [ "$(grep -c '^fleet-await.sh' "$LOG")" = 1 ] \
+[ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] && [ "$(grep -c '^fleet-await.sh' "$LOG")" = 0 ] \
   || fail "C: a write tool ran more than once" "$(cat "$LOG")"
-ok "C status · children · repos · agents · spawn · await · send each ran its script once; exit code + output pass through"
+ok "C status/repos/agents/spawn/send work; legacy children/await refuse without executing"
 
 # --- D: degenerate — no hub, every tool available -----------------------------
 : > "$LOG"
@@ -290,12 +291,12 @@ ok "C status · children · repos · agents · spawn · await · send each ran i
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 15, rows[1]
+assert len(rows[1]["tools"]) == 14, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
-assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
+assert rows[41]["isError"] and "RETIRED" in rows[41]["content"][0]["text"], rows[41]
 PY
-grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
-ok "D no hub configured: all fifteen core tools listed, spawn/await run locally (await default 540s)"
+! grep -q '^fleet-await.sh' "$LOG" || fail 'D: retired await ran a script'
+ok "D no hub configured: fourteen core tools listed; spawn works and legacy await refuses immediately"
 
 # --- F: the Codex mount, from the one definition ------------------------------
 m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex) || fail "F: --mount codex failed"
@@ -368,18 +369,19 @@ python3 - "$WORK/h" <<'PY' || fail "H: a 报问记合 tool's result is wrong" "$
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 for i, r in rows.items():
-    assert not r.get("isError"), (i, r)
+    if i in (31, 35):
+        assert r.get("isError") and "RETIRED" in r["content"][0]["text"], (i, r)
+    else:
+        assert not r.get("isError"), (i, r)
 def sc(i): return rows[i]["structuredContent"]
-assert (sc(80)["command"], sc(80)["exit"]) == ("fleet-report-parent.sh", 3), sc(80)     # queued is data
-assert rows[80]["content"][0]["text"].startswith("exit 3 · fleet-report-parent.sh\nqueued"), rows[80]
+assert (sc(80)["command"], sc(80)["exit"]) == ("fleet-report-parent.sh", 0), sc(80)     # queued is data
+assert rows[80]["content"][0]["text"].startswith("exit 0 · fleet-report-parent.sh\nRECORDED"), rows[80]
 a = sc(81)
 assert (a["command"], a["exit"]) == ("ask", 0), a          # no record: no script, no GitHub comment
 assert a["body"] == "⛔ blocked: which repo owns this?", a
 assert (a["state"]["command"], a["state"]["exit"]) == ("set-claude-state.sh", 0), a
 assert "set-claude-state.sh" in rows[81]["content"][0]["text"], rows[81]
-# the parent gets a copy (issue #4337): sent over send to: parent, the receipt in the result
-assert a["parent"]["delivered"] and a["parent"]["receipt"].startswith("sent -> @77 ([ask] issue #1807 — ⛔ blocked: which repo owns this?"), a
-assert "parent: sent -> @77" in rows[81]["content"][0]["text"], rows[81]
+assert "parent" not in a
 assert sc(82)["body"] == "⛔ blocked — needs authorization: push to prod?", sc(82)
 assert sc(91)["exit"] == 3, sc(91)                                                     # check findings = data
 assert (sc(92)["exit"], sc(92)["stdout"]) == (1, "PENDING\n"), sc(92)
@@ -388,9 +390,7 @@ PY
 cat > "$WORK/h.want" <<'EOF'
 fleet-report-parent.sh --state merged --pr 42 --summary landed it
 set-claude-state.sh blocked
-fleet-peer-send.sh @77 -
 set-claude-state.sh blocked
-fleet-peer-send.sh @77 -
 fleet-handoff-file.sh path --slug c6
 fleet-handoff-file.sh check - --issue 1808
 <<<# handoff
@@ -420,7 +420,7 @@ SH
 chmod +x "$R/bin/"* "$R/gh/gh"
 real() { # real <log> <cmd…> — no tmux, no hub, a sandbox conf; gh records
   log=$1; shift
-  env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_REPO -u CF_REPO \
+  env -u TMUX -u TMUX_PANE -u FLEET_WORKER_CRED -u FLEET_WORKER_ASSERT -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_REPO -u CF_REPO \
     FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$R/conf" GH_LOG="$log" PATH="$R/gh:$PATH" "$@"
 }
 # The report: a child window with a parent, on an ISOLATED tmux server (-S, never
@@ -433,19 +433,20 @@ trap 'tmux -S "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 tmux -S "$SOCK" set-window-option -t tf:issue-77 @issue 77
 tmux -S "$SOCK" set-window-option -t tf:issue-1808 @issue 1808
 tmux -S "$SOCK" set-window-option -t tf:issue-1808 @origin issue-77
+tmux -S "$SOCK" set-window-option -t tf:issue-1808 @fleet_id 12345678-1234-4234-8234-123456789012
 CP=$(tmux -S "$SOCK" display-message -p -t tf:issue-1808 '#{pane_id}')
 # real() unsets TMUX; this leg puts the isolated pane back.
 hand=$(real /dev/null sh -c 'TMUX=$0 TMUX_PANE=$1; export TMUX TMUX_PANE; shift 2; exec "$@"' \
   "$SOCK,1,0" "$CP" bash "$R/bin/fleet-report-parent.sh" --state blocked --summary 'need a token' --dry-run 2>&1; echo "rc=$?")
-case "$hand" in *'[child-report] issue #1808'*'summary: need a token'*) : ;;
+case "$hand" in *'RETIRED: Parent reports are disabled; would save own result blocked.'*) : ;;
   *) fail "I: the real report dry run did not resolve the parent" "$hand" ;; esac
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"report","arguments":{"state":"blocked","summary":"need a token","dry_run":true}}}' \
   | real /dev/null sh -c 'TMUX=$0 TMUX_PANE=$1; export TMUX TMUX_PANE; shift 2; exec "$@"' \
       "$SOCK,1,0" "$CP" python3 "$R/bin/fleet-mcp.py" > "$R/report.out"
 tool=$(python3 -c 'import json,sys; d=json.loads(open(sys.argv[1]).read())["result"]["structuredContent"]; print(d["stdout"]+d["stderr"]+"rc=%d" % d["exit"])' "$R/report.out")
 [ "$hand" = "$tool" ] || fail "I: report --dry-run differs between the script and the tool" "by hand: $hand
-by tool: $tool"
-ok "I the same inputs: real report --dry-run (isolated tmux, parent resolved) prints the same envelope by hand and by tool"
+by tool: $tool $(cat "$R/report.out")"
+ok "I the same inputs: real result --dry-run (isolated tmux, no parent delivery) prints the same result by hand and by tool"
 # --- J: the worker credential (issue #1809) -----------------------------------
 G="$WORK/cred"; mkdir -p "$G/conf" "$G/sbin"
 cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
@@ -624,15 +625,15 @@ kcalls() {
 CRED=$(CRED='' gcred mint) || fail "K: --cred mint failed"
 rm -f "$G/conf/node.env"; : > "$K/asserts"; : > "$K/net"; : > "$G/calls.log"
 kcalls | ksrv "$K/d"
-[ "$(grep -c ' none$' "$K/asserts")" = 3 ] || fail "K: with no hub a script was handed an assertion" "$(cat "$K/asserts")"
+[ "$(grep -c ' none$' "$K/asserts")" = 2 ] || fail "K: with no hub a script was handed an assertion" "$(cat "$K/asserts")"
 [ ! -s "$K/net" ] || fail "K: with no hub something opened the network" "$(cat "$K/net")"
 grep -q 'hub=' "$G/calls.log" && fail "K: with no hub the call log says an assertion went out" "$(cat "$G/calls.log")"
-ok "K no hub: spawn/await/send run with no assertion and not one network request (server, scripts, curl, ccquota)"
+ok "K no hub: spawn/send run with no assertion and not one network request (server, scripts, curl, ccquota)"
 
 # The fleet runs with the hub but this node has no token: still nothing.
 : > "$K/asserts"
 kcalls | ksrv "$K/t" 1
-[ "$(grep -c ' none$' "$K/asserts")" = 3 ] || fail "K: no node token, yet an assertion" "$(cat "$K/asserts")"
+[ "$(grep -c ' none$' "$K/asserts")" = 2 ] || fail "K: no node token, yet an assertion" "$(cat "$K/asserts")"
 ok "K hub on, no node token: no assertion"
 
 # Hub on + node token: each of the three gets one, signed for THIS node, naming the session.
@@ -642,7 +643,7 @@ kcalls | ksrv "$K/h" 1
 python3 - "$K/asserts" "$FID" <<'PY2' || fail "K: the assertion is wrong" "$(cat "$K/asserts")"
 import base64, hashlib, hmac, json, sys, time
 rows = [l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines()]
-assert [r[0] for r in rows] == ["dash-issue-session.sh", "fleet-await.sh", "fleet-peer-send.sh"], rows
+assert [r[0] for r in rows] == ["dash-issue-session.sh", "fleet-peer-send.sh"], rows
 key = hashlib.sha256(b"ccq_selftest").hexdigest().encode()
 for script, a in rows:
     head, sig = a.rsplit(".", 1)
@@ -657,13 +658,13 @@ for script, a in rows:
     assert abs(c["iat"] - time.time()) < 60, c
 PY2
 [ ! -s "$K/net" ] || fail "K: the server itself opened the network" "$(cat "$K/net")"
-[ "$(grep -c 'via=cred .* hub=asserted' "$G/calls.log")" = 3 ] || fail "K: the call log does not say an assertion went out" "$(cat "$G/calls.log")"
-ok "K hub on: spawn/await/send each handed an assertion — HMAC(HashToken(node token)), the session's worker_id/key/repo/issue/origin, 10 min (a message: 24h)"
+[ "$(grep -c 'via=cred .* hub=asserted' "$G/calls.log")" = 2 ] || fail "K: the call log does not say an assertion went out" "$(cat "$G/calls.log")"
+ok "K hub on: spawn/send each handed an assertion — HMAC(HashToken(node token)), the session's worker_id/key/repo/issue/origin, 10 min (a message: 24h)"
 
 # No credential (or one that does not hold): never an assertion, even with the hub on.
 : > "$K/asserts"
 kcalls | CRED='' ksrv "$K/n" 1
-[ "$(grep -c ' none$' "$K/asserts")" = 3 ] || fail "K: a call with no credential was handed an assertion" "$(cat "$K/asserts")"
+[ "$(grep -c ' none$' "$K/asserts")" = 2 ] || fail "K: a call with no credential was handed an assertion" "$(cat "$K/asserts")"
 ok "K hub on, no credential: no assertion (the node speaks for itself, as before)"
 
 # The real fleet_hub_put carries it as the relay's `worker`; absent = byte for byte as before.
@@ -731,7 +732,10 @@ python3 - "$WORK/j2" <<'PY' || fail "L: a C9 tool's result is wrong" "$(cat "$WO
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 for i, r in rows.items():
-    assert not r.get("isError"), (i, r)
+    if i in (31, 35):
+        assert r.get("isError") and "RETIRED" in r["content"][0]["text"], (i, r)
+    else:
+        assert not r.get("isError"), (i, r)
 def sc(i): return rows[i]["structuredContent"]
 assert (sc(133)["command"], sc(133)["exit"]) == ("fleet-client-where.sh", 3), sc(133)   # nobody connected = data
 assert sc(137)["command"] == "fleet-handoff-cycle.sh" and sc(137)["exit"] == 0 and sc(137)["pid"] > 0, sc(137)
@@ -764,9 +768,9 @@ ok "L brief · context · transfer · where · show · open · handoff arm: refu
 
 # --- M: a new version, taken between calls (issue #1898) --------------------------
 M="$WORK/reload"; mkdir -p "$M/tmp"
-mkver() { # mkver <name> <children-script body> [python appended to fleet-mcp.py]
+mkver() { # mkver <name> <context-script body> [python appended to fleet-mcp.py]
   mkdir -p "$M/$1/logs"; cp -R "$WORK/bin" "$M/$1/bin"
-  printf '#!/bin/sh\n%s\n' "$2" > "$M/$1/bin/fleet-children.sh"; chmod +x "$M/$1/bin/fleet-children.sh"
+  printf '#!/bin/sh\n%s\n' "$2" > "$M/$1/bin/fleet-context.sh"; chmod +x "$M/$1/bin/fleet-context.sh"
   [ -n "${3:-}" ] && python3 - "$M/$1/bin/fleet-mcp.py" "$3" <<'PYX'
 import sys
 p, extra = sys.argv[1], sys.argv[2]
@@ -777,10 +781,10 @@ open(p, "w").write(s.replace(anchor, "\n" + extra + "\n" + anchor, 1))
 PYX
   return 0
 }
-mkver v1 'sleep 2; echo v1-children'
-mkver v2 'echo "v2-children exec=${FLEET_MCP_EXEC:-none}"' 'TOOLS["zz_new"] = (tool_context, dict(TOOLS["context"][1]))'
-mkver v3 'echo v3-children' 'this is not python ('
-mkver v4 'echo v4-children' 'TOOLS["zz_quiet"] = (tool_context, dict(TOOLS["context"][1]))'
+mkver v1 'sleep 2; echo v1-context'
+mkver v2 'echo "v2-context exec=${FLEET_MCP_EXEC:-none}"' 'TOOLS["zz_new"] = (tool_context, dict(TOOLS["context"][1]))'
+mkver v3 'echo v3-context' 'this is not python ('
+mkver v4 'echo v4-context' 'TOOLS["zz_quiet"] = (tool_context, dict(TOOLS["context"][1]))'
 ln -s "$M/v1" "$M/home"
 CRED=$(CRED='' gcred mint) || fail "M: --cred mint failed"
 cat > "$M/drive.py" <<'PYX'
@@ -816,26 +820,26 @@ check(init["result"]["capabilities"]["tools"].get("listChanged") is True, "initi
 req(2, "tools/list"); first = names(get())
 check("zz_new" not in first and "status" in first, "v1 lists %s" % first)
 if mode == "off":
-    switch("v2"); call(3, "children"); m = get()
-    check(m.get("id") == 3 and "v1-children" in text(m), "with FLEET_MCP_RELOAD=0 the call left v1: %s" % m)
+    switch("v2"); call(3, "context"); m = get()
+    check(m.get("id") == 3 and "v1-context" in text(m), "with FLEET_MCP_RELOAD=0 the call left v1: %s" % m)
     req(4, "tools/list"); m = get(); check(names(m) == first, "with FLEET_MCP_RELOAD=0 the list changed: %s" % names(m))
     print("off-ok"); sys.exit(0)
 # a call in flight when the link moves: it finishes on v1, the next request execs v2
-call(3, "children"); time.sleep(0.6); switch("v2"); call(4, "children")
-m = get(); check(m.get("id") == 3 and "v1-children" in text(m), "the in-flight call was not finished by v1: %s" % m)
+call(3, "context"); time.sleep(0.6); switch("v2"); call(4, "context")
+m = get(); check(m.get("id") == 3 and "v1-context" in text(m), "the in-flight call was not finished by v1: %s" % m)
 m = get(); check(m.get("method") == "notifications/tools/list_changed", "no list_changed after the switch: %s" % m)
-m = get(); check(m.get("id") == 4 and "v2-children exec=none" in text(m), "the queued call was not served by v2 (or the handover leaked): %s" % m)
+m = get(); check(m.get("id") == 4 and "v2-context exec=none" in text(m), "the queued call was not served by v2 (or the handover leaked): %s" % m)
 req(5, "tools/list"); m = get(); check("zz_new" in names(m), "v2's new tool is not listed: %s" % names(m))
 call(6, "zz_new"); m = get(); check(m.get("id") == 6 and not m["result"].get("isError"), "the new tool does not run: %s" % m)
 check(proc.poll() is None, "the server process ended")
 # a broken new version: refused, v2 keeps serving, no list_changed
-switch("v3"); call(7, "children"); m = get()
-check(m.get("id") == 7 and "v2-children" in text(m), "a broken version was not refused: %s" % m)
+switch("v3"); call(7, "context"); m = get()
+check(m.get("id") == 7 and "v2-context" in text(m), "a broken version was not refused: %s" % m)
 # a quiet client: the poll takes the new version with nothing asked
 switch("v4"); m = get(10)
 check(m.get("method") == "notifications/tools/list_changed", "a quiet server did not reload on the poll: %s" % m)
 req(8, "tools/list"); m = get(); check("zz_quiet" in names(m) and "zz_new" not in names(m), "v4's list is wrong: %s" % names(m))
-call(9, "children"); m = get(); check("v4-children" in text(m), "v4 does not serve: %s" % m)
+call(9, "context"); m = get(); check("v4-context" in text(m), "v4 does not serve: %s" % m)
 print("pid=%d" % proc.pid)
 proc.stdin.close(); proc.wait(10)
 PYX
@@ -852,7 +856,7 @@ grep -q "tool=(reload) via=- who=pid$pid verdict=exec " "$M/calls.log" \
   || fail "M: the exec + resume are not logged under the server's one pid ($pid)" "$(cat "$M/calls.log")"
 grep -q "verdict=refused why=\"new version failed its probe" "$M/calls.log" \
   || fail "M: the broken version's refusal is not logged" "$(cat "$M/calls.log")"
-[ "$(grep -c 'tool=children via=cred .*verdict=exit=0' "$M/calls.log")" = 4 ] && grep -q 'tool=zz_new via=cred .*verdict=exit=0' "$M/calls.log" \
+[ "$(grep -c 'tool=context via=cred .*verdict=exit=0' "$M/calls.log")" = 4 ] && grep -q 'tool=zz_new via=cred .*verdict=exit=0' "$M/calls.log" \
   || fail "M: the credential did not hold across the exec" "$(cat "$M/calls.log")"
 [ -z "$(ls -A "$M/tmp")" ] || fail "M: the carry file was left behind" "$(ls -la "$M/tmp")"
 grep -rqF "$CRED" "$M/calls.log" "$M/tmp" && fail "M: the credential leaked into the call log"
@@ -889,12 +893,12 @@ def answer(i):
 def switch(to):
     tmp = link + ".tmp"; os.symlink(to, tmp); os.replace(tmp, link)
 send(1, "initialize", {"protocolVersion": "2025-06-18"}); answer(1)
-send(2, "tools/call", {"name": "children", "arguments": {}}); text, seen = answer(2)
-if "new-children" not in text or "notifications/tools/list_changed" not in seen:
+send(2, "tools/call", {"name": "context", "arguments": {}}); text, seen = answer(2)
+if "new-context" not in text or "notifications/tools/list_changed" not in seen:
     sys.exit("M2: launched by the old release's path, the call was not served by the live one: %r %s" % (text, seen))
 switch(os.environ["M2_NEXT"])
-send(3, "tools/call", {"name": "children", "arguments": {}}); text, seen = answer(3)
-if "next-children" not in text:
+send(3, "tools/call", {"name": "context", "arguments": {}}); text, seen = answer(3)
+if "next-context" not in text:
     sys.exit("M2: the next release was not taken through the link: %r %s" % (text, seen))
 print("ok"); proc.stdin.close(); proc.wait(10)
 PYX
@@ -905,16 +909,16 @@ m2run() { # m2run <link> <server path> <next>
 }
 for leg in managed versions; do
   if [ "$leg" = managed ]; then R="$M/root-$leg"; L="$R/current"; else R="$M/home-$leg/.claude/fleet.versions"; L="$M/home-$leg/.claude/fleet"; fi
-  mkver "${R#"$M"/}/aaaaaaa1" 'echo old-children'
-  mkver "${R#"$M"/}/bbbbbbb2" 'echo new-children'
-  mkver "${R#"$M"/}/ccccccc3" 'echo next-children'
+  mkver "${R#"$M"/}/aaaaaaa1" 'echo old-context'
+  mkver "${R#"$M"/}/bbbbbbb2" 'echo new-context'
+  mkver "${R#"$M"/}/ccccccc3" 'echo next-context'
   ln -s "$R/bbbbbbb2" "$L"
   out=$(m2run "$L" "$R/aaaaaaa1/bin/fleet-mcp.py" "$R/ccccccc3") && [ "$out" = ok ] \
     || fail "M2 ($leg): a server launched by a release's own path stayed on it" "$out
 $(cat "$M/m2.log" 2>/dev/null)"
 done
 # not a release tree (no version link beside it): launched as is, nothing followed
-mkver plain 'echo plain-children'
+mkver plain 'echo plain-context'
 out=$(python3 - "$M/plain/bin/fleet-mcp.py" "$M/root-managed/aaaaaaa1/bin/fleet-mcp.py" <<'PYX'
 import importlib.util, os, sys
 for p, want in ((sys.argv[1], sys.argv[1]), (sys.argv[2], sys.argv[2].rsplit("/aaaaaaa1/", 1)[0] + "/current/bin/fleet-mcp.py")):
@@ -950,14 +954,17 @@ spec = json.load(open(sys.argv[1]))
 listed = {t["name"]: t for f in sys.argv[2:4] for t in json.loads(open(f).readline())["result"]["tools"]}
 assert [s["name"] for s in spec] == ["status", "spawn", "await"], spec
 for s in spec:
-    assert s == listed[s["name"]], (s, listed[s["name"]])
+    if s["name"] == "await":
+        assert "await" not in listed and "RETIRED" in s["description"]
+    else:
+        assert s == listed[s["name"]], (s, listed[s["name"]])
     assert s["inputSchema"]["additionalProperties"] is False, s
 PY2
 cli "$WORK/n.bad" --spec status nope; rc=$?
 [ "$rc" = 2 ] && grep -q 'unknown tool nope' "$WORK/n.bad.err" || fail "N: --spec of an unknown tool: exit $rc, want 2 naming it" "$(cat "$WORK/n.bad.err")"
 cli "$WORK/n.bad" --spec; rc=$?
 [ "$rc" = 2 ] || fail "N: a bare --spec exited $rc, want 2"
-ok "N --spec status spawn await = the tools/list entries byte for byte, closed schemas; an unknown name exits 2"
+ok "N --spec preserves retired await schema; active status/spawn match the tool list; an unknown name exits 2"
 
 # --call spawn: the script ran once with exactly the MCP argv; the text is the MCP
 # text; exit 0 even though the script exited 2 (that exit is IN the text).
@@ -975,7 +982,7 @@ assert cli == mcp + "\n", (cli, mcp)
 assert cli.startswith("exit 2 · dash-issue-session.sh\nspawned issue-12\n[stderr]\ncap note"), cli
 PY2
 cli "$WORK/n.aw" --call await '{"issue":12}'; rc=$?
-[ "$rc" = 0 ] && grep -qx 'fleet-await.sh 12 --timeout 540' "$LOG" || fail "N: --call await did not run fleet-await.sh 12 --timeout 540 (exit $rc)" "$(cat "$LOG")"
+[ "$rc" = 1 ] && grep -q RETIRED "$WORK/n.aw" || fail "N: await did not retire" "$(cat "$WORK/n.aw")"
 cli "$WORK/n.st" --call status '{}'; rc=$?
 [ "$rc" = 0 ] && grep -q '^window: window issue-1807 · issue=1807' "$WORK/n.st" && grep -q 'acme/lib' "$WORK/n.st" \
   || fail "N: --call status did not print the status text (exit $rc)" "$(cat "$WORK/n.st" "$WORK/n.st.err")"
@@ -1031,16 +1038,12 @@ assert sc(120)["body"] == "⛔ blocked: which repo owns this?", sc(120)
 b = sc(121)["body"]
 assert b == "⛔ blocked: 20 or 50?\n\n- 建议：20\n- 没人答时：20（仅提示，不会自动执行）\n- 希望在此前答复：90m", b
 assert "fleet:ask" not in b, b
-r = sc(121)["parent"]["receipt"]
-assert r.startswith("sent -> @77 ([ask] issue #1807 — ⛔ blocked: 20 or 50?") and "- 建议：20" in r, r
-p = sc(122)["parent"]
-assert not rows[122].get("isError") and p["delivered"] is False and "not a live session" in p["why"], sc(122)
+assert "parent" not in sc(121) and "parent" not in sc(122)
 assert sc(122)["exit"] == 0 and sc(122)["state"]["exit"] == 0, sc(122)
-assert "parent: not told" in rows[122]["content"][0]["text"] and "waits for the person" in rows[122]["content"][0]["text"], rows[122]
 PY
 rm -f "$WORK/bin/fleet-ui-lang.sh"
-[ "$(grep -c '^fleet-peer-send.sh @77 -$' "$LOG")" = 3 ] || fail "O: each ask told the parent once" "$(cat "$LOG")"
-ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the bare question; the parent gets a copy; an unreachable parent is said, not fatal"
+[ "$(grep -c '^fleet-peer-send.sh @77 -$' "$LOG")" = 0 ] || fail "O: ask must not send a parent copy" "$(cat "$LOG")"
+ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the bare question; the question waits on its own Task without a Parent copy"
 
 # --- R: the hub task record (issue #3330) -------------------------------------
 # ask in a window with a record ⇒ the question on the RECORD (no comment, issue
@@ -1068,25 +1071,20 @@ assert sc(130)["state"]["command"] == "set-claude-state.sh" and "issue" not in s
 assert (sc(131)["command"], sc(131)["task"]) == ("fleet-task-record.sh", "T7"), sc(131)
 assert (sc(132)["command"], sc(132)["exit"]) == ("ask", 0) and "task" not in sc(132), sc(132)
 assert sc(133)["stdout"] == "T7\n", sc(133)
-assert sc(134)["command"] == "fleet-await.sh", sc(134)
-for i in (135, 136):
-    assert rows[i].get("isError") and "exactly one" in rows[i]["content"][0]["text"], rows[i]
+for i in (134, 135, 136):
+    assert rows[i].get("isError") and "RETIRED" in rows[i]["content"][0]["text"], rows[i]
 PY
 cat > "$WORK/r.want" <<'EOF'
 fleet-task-record.sh set T7 --asked ⛔ blocked: which one?
 set-claude-state.sh blocked
-fleet-peer-send.sh @77 -
 fleet-task-record.sh set T7 --asked ⛔ blocked: push?
 set-claude-state.sh blocked
-fleet-peer-send.sh @77 -
 set-claude-state.sh blocked
-fleet-peer-send.sh @77 -
 fleet-task-record.sh dispatch --title 看看风扇 --body-file - --spawn
 <<<为什么一直转>
-fleet-await.sh --task T7 --timeout 30
 EOF
 diff "$WORK/r.want" "$LOG" > "$WORK/r.diff" || fail "R: the task record's tools ran the wrong argv" "$(cat "$WORK/r.diff")"
-ok "R ask → the record, else the red stamp alone (no comment); task → dispatch, words on stdin; await by T<n>"
+ok "R ask → the record, else the red stamp alone (no comment); task → dispatch, words on stdin; legacy await refused"
 
 # --- R2: one code (EPIC T644 C3) ----------------------------------------------
 # task answers the task's code as `id` (stdout: code, then T<n>), T<n> only the
@@ -1126,13 +1124,11 @@ for bad in ("7", "K;7", "T-", ""):
     assert not re.match(pat, bad), bad
 assert "T<n>" in m.TASK_REF["description"] and "code" in m.TASK_REF["description"]
 PY
-printf '%s\n' 'fleet-task-record.sh dispatch --title 看看风扇 --body-file -' '<<<>' \
-  'fleet-await.sh --task K7W0 --timeout 30' 'fleet-await.sh --task k7 --timeout 30' \
-  'fleet-await.sh --task K7W0 --timeout 30' "fleet-await.sh $LIDC --timeout 30" > "$WORK/r5.want"
+printf '%s\n' 'fleet-task-record.sh dispatch --title 看看风扇 --body-file -' '<<<>' > "$WORK/r5.want"
 diff "$WORK/r5.want" "$LOG" > "$WORK/r5.diff" || fail "R2: the argv" "$(cat "$WORK/r5.diff")"
 rm -f "$WORK/bin/fleet_id.py"; unset FLEET_ID_DIR
 fakein fleet-task-record.sh 'echo T7'
-ok "R2 one code: task answers its code as id (T<n> the alias); await task/id take it (fleet-await.sh --task); a local ID's code stays the ID road"
+ok "R2 one code: task answers its code as id (T<n> the alias); legacy await task/id refuse without running a script"
 
 # --- P: any seat spawns, a worker's too (issue #4591 lifted #2960) ----------
 # Even a lib whose fleet_spawn_refused still refused (an older one) gates nothing:
@@ -1160,18 +1156,18 @@ import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 assert rows[1]["serverInfo"]["name"] == "fleet-orch", rows[1]
 tools = {t["name"]: t for t in rows[2]["tools"]}
-assert sorted(tools) == ["answer_dialog", "await", "children", "clear", "send", "spawn", "task"], sorted(tools)
+assert sorted(tools) == ["answer_dialog", "clear", "send", "spawn", "task"], sorted(tools)
 assert tools["clear"]["inputSchema"]["required"] == ["id"]   # T592
 assert tools["task"]["inputSchema"]["required"] == ["title"]   # issue #3330
-assert "required" not in tools["await"]["inputSchema"]          # issue or task (#3330)
+assert "await" not in tools and "children" not in tools
 assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
 assert tools["send"]["inputSchema"]["required"] == ["to", "text"]
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 15 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task|clear' "$WORK/q.l0" \
-  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children clear send spawn task " ] \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 14 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task|clear' "$WORK/q.l0" \
+  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog clear send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
 # An old session (its list had spawn) calls it on `fleet`: answered, logged road=legacy.
@@ -1181,7 +1177,7 @@ python3 - "$WORK/q2" <<'PY' || fail "Q: fleet no longer answers a dispatch-group
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 assert rows[140]["structuredContent"]["command"] == "dash-issue-session.sh" and not rows[140].get("isError"), rows[140]
-assert rows[141]["structuredContent"]["command"] == "fleet-children.sh", rows[141]
+assert rows[141].get("isError") and "RETIRED" in rows[141]["content"][0]["text"], rows[141]
 PY
 grep -qx 'dash-issue-session.sh 8' "$LOG" || fail "Q: the legacy spawn did not run its script" "$(cat "$LOG")"
 grep -q 'tool=spawn .*road=legacy' "$WORK/q.log" && grep -q 'tool=children .*road=legacy' "$WORK/q.log" \
@@ -1208,10 +1204,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [22, 15, 22, 22], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four, + clear (T592)
+assert [len(x) for x in lists] == [19, 14, 19, 19], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four, + clear (T592)
 assert "spawn" in {t["name"] for t in lists[0]}
 names = {t["name"] for t in lists[3]}
-assert {"spawn", "await", "children", "answer_dialog", "send", "task", "clear"} <= names, sorted(names)
+assert {"spawn", "answer_dialog", "send", "task", "clear"} <= names, sorted(names)
 PY
 grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
   && grep -q 'SELF\] + sys.argv\[1:\]' "$WORK/bin/fleet-mcp.py" \
@@ -1286,7 +1282,8 @@ FID=0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
 python3 - "$WORK/s1" <<'PY' || fail "S: a two-repo send / spawn / await answered wrong" "$(cat "$WORK/s1")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-for i in range(170, 178):
+assert rows[177].get("isError") and "RETIRED" in rows[177]["content"][0]["text"]
+for i in range(170, 177):
     assert not rows[i].get("isError"), (i, rows[i])
 for i, why in {178: "names no repo this fleet hosts", 179: "but repo is", 180: "issue:<N> / scratch-<N> target only"}.items():
     assert rows[i].get("isError") and why in rows[i]["content"][0]["text"], (i, rows[i])
@@ -1299,12 +1296,11 @@ fleet-peer-send.sh wid:$FID -
 fleet-peer-send.sh wid:$FID -
 fleet-peer-send.sh scratch-3 -
 dash-issue-session.sh 5 --repo acme/app
-fleet-await.sh 5 --timeout 5 --repo acme/app
 EOF
 )
 got=$(grep -v '^fleet-repo.sh list$' "$LOG")
 [ "$got" = "$want" ] || fail "S: the scripts ran with the wrong argv" "$(printf 'want:\n%s\ngot:\n%s\n' "$want" "$got")"
-ok "S two repos: issue:<N> takes repo, a <slug>: key, else the caller's repo; fid:<uuid> → wid:; spawn/await take the caller's repo"
+ok "S two repos: issue:<N> takes repo, a <slug>: key, else the caller's repo; fid:<uuid> → wid:; spawn takes the caller's repo; legacy await refuses"
 # A caller with no repo of its own, or a fleet of one repo: no --repo is invented.
 for leg in norepo onerepo; do
   : > "$LOG"

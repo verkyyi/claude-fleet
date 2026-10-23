@@ -3,7 +3,7 @@
 # `# selftest-parts:` / `# selftest-part:` headers run-selftests.sh reads (T525).
 # Reads fleet-break-it-selftest.sh, fleet-break-it-node-selftest.sh,
 # fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.py,
-# fleet-hub-selftest.py, fleet-await-stall-selftest.sh,
+# fleet-hub-selftest.py and the retired fleet-await-stall-selftest.sh alias,
 # fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
 # Also covers fleet-break-it-cred-sep-selftest.sh and fleet-break-it-hub-selftest.sh
 # (issue #3884; fleet-sleep-selftest.sh went with hibernation, T548).
@@ -35,7 +35,6 @@ families = {
     'fleet-break-it-thin-selftest.sh': 'BREAK_PART',
     'fleet-cleanup-idle-selftest.py': 'SELFTEST_PART',
     'fleet-hub-selftest.py': 'SELFTEST_PART',
-    'fleet-await-stall-selftest.sh': 'SELFTEST_PART',
     'fleet-break-it-cred-sep-selftest.sh': 'BREAK_PART',
     'fleet-break-it-hub-selftest.sh': 'BREAK_PART',
 }
@@ -135,24 +134,15 @@ for name, var in families.items():
               % (base, regroup, n, len(ex), len(want)))
     print('PASS %s: %d discovered cases, %d parts, every case once; growth covered' % (base, len(cases), n))
 
-# Execute the actual shell dispatch with harmless groups, so all/default and
-# automatic discovery cannot silently diverge from the metadata above.
-for base in ('fleet-await-stall',):
-    source = (root / (base + '-selftest.sh')).read_text()
-    dispatch = source[source.index('# Discover groups,'):]
-    groups = re.findall(r'^(test_[a-z0-9_]+)\(\) *\{', source, re.M) + ['test_new_case_2']
-    import tempfile
-    with tempfile.TemporaryDirectory() as tmp:
-        script = Path(tmp) / 'probe.sh'
-        script.write_text('CHECKS=0\npart=$1\nBIN=$2\n' +
-                          ''.join('%s() { echo CASE:%s; }\n' % (g, g) for g in groups) + dispatch)
-        def run(part):
-            out = subprocess.check_output(['bash', str(script), part, str(root)], text=True)
-            return re.findall(r'^CASE:(.*)$', out, re.M)
-        n = header(source)[0]
-        assert run('all') == groups
-        assert [g for k in range(1, n + 1) for g in run('%d/%d' % (k, n))] == groups
-        assert subprocess.run(['bash', str(script), '0/2', str(root)],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 2
-    print('PASS %s: direct all, sliced dispatch, growth and invalid part' % base)
+# The old await-stall family is retired, not partitioned. Its single retained
+# entry runs the real no-delivery compatibility test; stale shard IDs must not
+# cause the runner to silently miss it or schedule two obsolete halves.
+name = 'fleet-await-stall-selftest.sh'
+source = (root / name).read_text()
+assert header(source) == (0, '', {}), 'retired alias must not declare old parts'
+assert [i for i in ids if i.split('#')[0] == name] == [name], 'retired alias has one runnable ID'
+result = subprocess.run(['bash', str(root / name)], text=True, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, timeout=30)
+assert result.returncode == 0 and 'Ran 1 test' in result.stdout and 'OK' in result.stdout, result.stdout
+print('PASS fleet-await-stall: one unpartitioned ID executes the real retired-entrypoint regression')
 PY

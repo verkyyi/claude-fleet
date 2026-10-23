@@ -229,12 +229,9 @@ read_failure() {
 # down — is SAID, never left for a reader to guess (T642). Not started: one line in
 # logs/start-fail.log whatever the window; on a window bound to a record (@task)
 # also the progress word 「未起来：<why>」 on its ID (fleet_id.py start-word, mirrored
-# to the hub: the record's read, the EPIC tick and `await` see it — the agent's
-# next SessionStart answers 「起来了」), and when that word is new — once a cause —
-# a child report to whoever dispatched it; a window with an issue and no record
-# tells its parent as #4702 did. Dropped (a record's agent exited, the window on
-# the page): the word 「已掉」 on its ID only. In the background: the page, or the
-# caller's shell, never waits on it.
+# to the hub: the record's read sees it, and the agent's next SessionStart
+# answers 「起来了」. Parent delivery is retired; only this session's history
+# and local failure log are updated, without delaying the recovery page.
 # A test's process never writes the login's real logs (T909): a selftest run by hand
 # has no conf of its own, so its windows would land in the operator's
 # session-exit.log / start-fail.log — fleet_notice.py's one rule says (rc 3 = no).
@@ -243,9 +240,7 @@ book_ok() {  # <log path>
   [ "$?" != 3 ]
 }
 
-say_start() {  # <not_started|dropped> <why, one line> <the parent's summary> [word|force]
-  # 4th: word = the record's word and the log line only, no child report (a refusal
-  # the page retries by itself — T915); force = the report even when the word is not new
+say_start() {  # <not_started|dropped> <why>; old summary/word arguments are ignored
   [ "$intmux" = 1 ] || return 0
   local fid task iss why slog
   fid=$(opt @fleet_id); task=$(opt @task); iss=$(opt @issue)
@@ -260,15 +255,8 @@ say_start() {  # <not_started|dropped> <why, one line> <the parent's summary> [w
     return 0
   fi
   [ -n "$task" ] || [ -n "$iss" ] || return 0
-  ( told=''
-    if [ -n "$task" ] && [ -n "$fid" ] \
-       && [ "$(python3 "$BIN/fleet_id.py" start-word "$fid" --word "$1" --why "$why" 2>/dev/null)" = WRITTEN ]; then
-      told=1
-    fi
-    [ "$1" = not_started ] || exit 0
-    [ "${4:-}" = word ] && exit 0
-    [ "${4:-}" = force ] || [ -n "$told" ] || { [ -z "$task" ] && [ -n "$iss" ]; } || exit 0
-    bash "$BIN/fleet-report-parent.sh" --state failed --win "$TMUX_PANE" --summary "$3" ) </dev/null >/dev/null 2>&1 &
+  ( [ -z "$task" ] || [ -z "$fid" ] ||
+    python3 "$BIN/fleet_id.py" start-word "$fid" --word "$1" --why "$why" ) </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null
   return 0
 }

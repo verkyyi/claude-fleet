@@ -503,7 +503,11 @@ kP=$(inpane "$nP" fleet_origin_key)
 spawn 7 "$N" --origin "$kP" || fail "(n) spawn #7 as #12's child: $(cat "$WORK/err")"
 nC=$(tmux list-windows -t "$N" -F '#{@issue} #{window_id}' | awk '$1==7 {print $2; exit}')
 [ -n "$nC" ] && wait_rec "$nC" || fail "(n) #7 never reached claude"
-inpane "$nC" bash "$BIN/fleet-report-parent.sh" --state blocked --summary 'n: a report on the ledger' >/dev/null 2>&1
+# Seed pre-retirement history; no current report may create a parent ledger.
+nledger="$FLEET_CONF_DIR/fleets/$N/children/o-nu:issue-12.ndjson"
+mkdir -p "${nledger%/*}"
+printf '%s\n' '{"child":"o-nu:issue-7","state":"BLOCKED","summary":"historical result"}' > "$nledger"
+inpane "$nC" bash "$BIN/fleet-report-parent.sh" --state blocked --summary 'n: own result only' >/dev/null 2>&1
 settle() {   # wait out a collector tick the add/remove kicked, then one tick of our own
   local _
   for _ in $(seq 1 300); do [ -s "$TMPDIR/.claude-dash/global/collect.pid" ] || break; sleep 0.1; done
@@ -519,14 +523,14 @@ nsnap() {   # everything a session is known by; an age (12s, 3m) is not identity
   done
   bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
   printf 'map=%s\n' "$(awk -F'\t' '$1=="WIN"' "$FLEET_CONF_DIR/fleets/$N/restore.map" 2>/dev/null)"
-  printf 'ledger=%s\n' "$(inpane "$nP" bash "$BIN/fleet-children.sh" 2>/dev/null)"
+  printf 'ledger=%s\n' "$(cat "$nledger")"
 }
 nnorm() { sed -E 's/[0-9]+[smhd]//g' | tr -s ' '; }   # an age's column width goes with it
 settle; before=$(nsnap | nnorm)
 case "$before" in *"key=o-nu:issue-12 "*"key=o-nu:issue-7 "*) ok "(n) setup: two sessions, repo-carrying keys" ;;
   *) fail "(n) setup: $before" ;; esac
 case "$before" in *"origin=o-nu:issue-12"*) ok "(n) setup: #7 is #12's child" ;; *) fail "(n) setup: #7's origin: $before" ;; esac
-case "$before" in *"ledger="*"o-nu:issue-7"*BLOCKED*) ok "(n) setup: the child's report is on #12's ledger" ;; *) fail "(n) setup: ledger: $before" ;; esac
+case "$before" in *"ledger="*"o-nu:issue-7"*BLOCKED*) ok "(n) setup: pre-retirement history remains readable" ;; *) fail "(n) setup: ledger: $before" ;; esac
 out=$(bash "$BIN/fleet-repo.sh" add --session "$N" o/two "$MT" --base master 2>"$WORK/add.err")
 [ "$out" = "added:o-two" ] && ok "(n) a second repo added" || fail "(n) add: $out $(cat "$WORK/add.err")"
 settle; after=$(nsnap | nnorm)

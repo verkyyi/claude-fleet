@@ -301,27 +301,23 @@ gNEW=$(dwin gen-new 604);  tmux set-window-option -t "$gNEW" @origin scratch-6
 st_eq "gen: a spawn stamps the parent's current generation" "$GEN" "$(tmux display-message -p -t "$gNEW" '#{@origin_gen}')"
 st_eq "gen: fleet_key_gen reads the LAST mint" "$GEN" "$( . "$LIB"; fleet_key_gen fleetD scratch-6 )"
 
+# Historical generation books survive every old hook call byte for byte.
+printf '%s\n' '{"child":"issue-600","state":"MERGED","summary":"old generation"}' > "$CDD/scratch-6.ndjson.1.1"
+printf '%s\n' '{"child":"issue-599","state":"BLOCKED","summary":"current history"}' > "$CDD/scratch-6.ndjson"
+cp "$CDD/scratch-6.ndjson.1.1" "$WORK/old-book"
+cp "$CDD/scratch-6.ndjson" "$WORK/current-book"
 rp() { bash "$RP" -L fleetD --win "$1" --state blocked --summary "gen leg" 2>&1; }
-out=$(rp "$gOLD")
-contains "gen: a previous generation's child is told why" "$out" "later generation"
-contains "gen: …its report lands in the retired book" "$(cat "$CDD/scratch-6.ndjson.1.1" 2>/dev/null)" '"child": "issue-601"'
-out=$(rp "$gRET")
-contains "gen: an @origin_retired child is not hub-spawned — it files to its book" "$(cat "$CDD/scratch-6.ndjson.1.1" 2>/dev/null)" '"child": "issue-602"'
-out=$(rp "$gUNS")
-contains "gen: an unstamped child is taken as it always was" "$(cat "$CDD/scratch-6.ndjson" 2>/dev/null)" '"child": "issue-603"'
-out=$(rp "$gNEW")
-not_contains "gen: the current generation's child is not turned away" "$out" "later generation"
-cur=$(cat "$CDD/scratch-6.ndjson" 2>/dev/null)
-contains "gen: …it lands in the live book" "$cur" '"child": "issue-604"'
-contains "gen: …tagged with the generation it was filed under" "$cur" "\"gen\": \"$GEN\""
-for k in 601 602; do not_contains "gen: the live book never takes issue-$k" "$cur" "issue-$k"; done
-# Degenerate: no `.gen` at all ⇒ a report row carries no generation field.
+for win in "$gOLD" "$gRET" "$gUNS" "$gNEW"; do
+  out=$(rp "$win")
+  contains "gen: every generation receives retirement" "$out" 'RETIRED:'
+  st_eq "gen: retired book unchanged" "$(cat "$WORK/old-book")" "$(cat "$CDD/scratch-6.ndjson.1.1")"
+  st_eq "gen: current history unchanged" "$(cat "$WORK/current-book")" "$(cat "$CDD/scratch-6.ndjson")"
+done
 mv "$CDD/.gen" "$CDD/.gen.off"
 tmux set-window-option -u -t "$gNEW" @origin_gen
 out=$(bash "$RP" -L fleetD --win "$gNEW" --state merged 2>&1)
-last=$(tail -1 "$CDD/scratch-6.ndjson")
-not_contains "gen: (no .gen) the row has no gen field" "$last" '"gen"'
-not_contains "gen: (no .gen) …nor child_gen" "$last" 'child_gen'
+contains "gen: no generation metadata still cannot report" "$out" 'RETIRED:'
+st_eq "gen: legacy call preserves historical book" "$(cat "$WORK/current-book")" "$(cat "$CDD/scratch-6.ndjson")"
 mv "$CDD/.gen.off" "$CDD/.gen"
 
 # T660: the parent closed, its key was given to a new session, the grandparent is
@@ -345,14 +341,14 @@ st_eq "gen(T660): …its generation stamp goes with the key" "" "$(tmux display-
 contains "gen(T660): a child with no identity is still moved aside" \
   "$(tmux display-message -p -t "$gNO" '#{@origin_retired}')" "scratch-6#$GEN"
 out=$(bash "$RP" -L fleetD --win "$gID" --state merged --summary "batch" --dry-run 2>&1)
-contains "gen(T660): …its report reaches the live grandparent by ID" "$out" "($gpA"
+contains "gen(T660): known grandparent does not enable a report" "$out" "RETIRED:"
 not_contains "gen(T660): …not the person's reminder" "$out" "would file"
 gRT=$(dwin gen-rt 607); tmux set-window-option -t "$gRT" @origin_retired "scratch-6#$GEN"; tmux set-window-option -t "$gRT" @origin_fid "$gB"
 out=$(bash "$RP" -L fleetD --win "$gRT" --state merged --summary "batch" 2>&1)
-contains "gen(T660): a child moved aside before the fix reaches the grandparent by ID too" "$out" "($gpA"
-contains "gen(T660): …and still leaves its row in the retired book" "$(cat "$CDD/scratch-6.ndjson.$GEN" 2>/dev/null)" '"child": "issue-607"'
+contains "gen(T660): moved-aside identity does not enable a report" "$out" "RETIRED:"
+st_eq "gen(T660): archived history is preserved" "$(cat "$WORK/current-book")" "$(cat "$CDD/scratch-6.ndjson.$GEN")"
 out=$(bash "$RP" -L fleetD --win "$gNO" --state merged --summary "batch" 2>&1)
-contains "gen(T660): the identity-less child's report lands in the retired book" "$(cat "$CDD/scratch-6.ndjson.$GEN" 2>/dev/null)" '"child": "issue-606"'
+contains "gen(T660): identity-less report also retired" "$out" "RETIRED:"
 for k in 605 606 607; do not_contains "gen(T660): the new holder's live book never takes issue-$k" "$(cat "$CDD/scratch-6.ndjson" 2>/dev/null)" "issue-$k"; done
 GEN=$( . "$LIB"; fleet_key_gen fleetD scratch-6 )
 rm -f "$FLEET_CONF_DIR/fleets/fleetD/conf"

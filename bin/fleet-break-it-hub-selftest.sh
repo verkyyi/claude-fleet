@@ -487,12 +487,14 @@ drill_report_expired_unseen() {
     --report '{"child":"scratch-56","state":"MERGED","summary":"合了 PR #5150","task":"T761"}' >/dev/null 2>&1
   rex note --rid "$rid" --state EXPIRED --kind child_report --via hub --detail 'no node took it within the relay TTL' >/dev/null 2>&1
   SECS=$(since "$t0")
-  grep -q '"state": "EXPIRED"' "$d/conf/fleets/rx/delivery.ndjson" && { WHY="the book still says EXPIRED"; return 1; }
-  tail -1 "$d/conf/fleets/rx/delivery.ndjson" | grep -q '"state": "HANDED"' || { WHY="the book's last word is not HANDED: $(tail -1 "$d/conf/fleets/rx/delivery.ndjson")"; return 1; }
-  grep -q '合了 PR #5150' "$d/conf/global/orphan-reports.ndjson" 2>/dev/null || { WHY="no reminder row carries the report's words"; return 1; }
-  grep -q 'set T761 --note' "$d/task.log" 2>/dev/null || { WHY="its task record was not written"; return 1; }
-  grep -q '有 1 份回报没人收' "$d/notice.log" 2>/dev/null || { WHY="no notice 「有 N 份回报没人收」"; return 1; }
-  WHAT="上层不在、hub 回执 EXPIRED 的回报：进了你的提醒（带原话）、任务记录记一笔、一条「有 1 份回报没人收」，账本最后一行 HANDED、没有 EXPIRED"
+  tail -1 "$d/conf/fleets/rx/delivery.ndjson" | grep -q '"state": "FAILED"' || { WHY='retired report not failed'; return 1; }
+  grep -q '合了 PR #5150' "$d/conf/fleets/rx/delivery.ndjson" || { WHY='original words lost'; return 1; }
+  [ "$(wc -l < "$d/conf/fleets/rx/delivery.ndjson" | tr -d ' ')" = 1 ] || { WHY='late receipt appended a second terminal record'; return 1; }
+  [ ! -e "$d/conf/global/orphan-reports.ndjson" ] && [ ! -e "$d/task.log" ] && [ ! -e "$d/notice.log" ] || {
+    WHY='retired report generated an orphan, task write or notice'; return 1;
+  }
+  WHAT='旧report及迟到EXPIRED只结算一次FAILED，原话保留，不转提醒、不改任务、不叫醒任何会话'
+
 }
 
 # A separated node's where (issue #2665): node.env is the role account's, the

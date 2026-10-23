@@ -103,8 +103,8 @@ func TestRelayRetryAndRefusal(t *testing.T) {
 		}
 	}()
 	send := func(id string) {
-		m, _ := control.New(control.TypeRelay, control.Relay{ID: id, Kind: control.RelayChildReport, From: cw, To: pw,
-			Payload: json.RawMessage(`{"child":"issue-2","state":"BLOCKED"}`)})
+		m, _ := control.New(control.TypeRelay, control.Relay{ID: id, Kind: control.RelayMessage, From: cw, To: pw,
+			Payload: json.RawMessage(`{"text":"blocked"}`)})
 		m.OpID = id
 		if err := wsjson.Write(context.Background(), cn.conn, m); err != nil {
 			t.Fatal(err)
@@ -321,8 +321,8 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 		}
 	}
 	send := func(id string) {
-		m, _ := control.New(control.TypeRelay, control.Relay{ID: id, Kind: control.RelayChildReport, From: from, To: to,
-			Payload: json.RawMessage(`{"child":"issue-2","state":"MERGED"}`)})
+		m, _ := control.New(control.TypeRelay, control.Relay{ID: id, Kind: control.RelayMessage, From: from, To: to,
+			Payload: json.RawMessage(`{"text":"result available"}`)})
 		m.OpID = id
 		if err := wsjson.Write(context.Background(), cn.conn, m); err != nil {
 			t.Fatal(err)

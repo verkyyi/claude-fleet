@@ -18,12 +18,10 @@
 #         the other
 #   ROUTE a closed ID with no successor goes up its parent; nobody ⇒ rc 1; an ID
 #         this ledger does not know is `unknown` (the caller's old road)
-#   CLEAR a child's report after its parent's /clear (a new native segment) still
-#         names the parent's window — by its ID — and a parent closed with a
-#         successor hands it there (fleet-report-parent.sh --dry-run)
-#   AWAIT fleet-await.sh <code> (K3F9, #k3f9): a result answers (rc 0 merged / 1 failed), a
-#         close with none is EXITED (4), nothing is TIMEOUT (3)
-#   KIDS  fleet-children.sh --ids lists the IDs whose parent it is
+#   CLEAR historical parent links and successors never receive a report; /clear
+#         and the session identity remain recorded. Dry runs save nothing.
+#   AWAIT old await aliases return RETIRED without consulting or changing history
+#   KIDS  the old children entry returns RETIRED and preserves the historical ID
 #   TASKPAR a task dispatch's child ID names its parent however the parent came
 #         (a keyless parent's ID as --origin, a handed-over worker_id; the hub none),
 #         children lists it, and `fleet-id.sh parents` backfills an older one from
@@ -33,9 +31,9 @@
 #   WT    a worktree remembers its ID beside its T record (fleet_worktree_id)
 #   WIRE  the spawners open with --parent / --from-native / --worktree; the reap,
 #         cleanup, stop and exit closers pass a why; a report writes the ID's
-#         result and a queued one routes by ID (C8: no generation / native gate)
-#   NAMES (C11, EPIC T644 C3) a child report's header is `#CODE · …` — its task's
-#         code when the book holds one, else its ID's short code; never a T<n>
+#         result; the retired receive path cannot route a queued parent report
+#   NAMES stable short codes and task tool aliases remain readable; result dry
+#         runs create no child-report envelope, with or without a task code
 # tmux / python3 / git absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -214,24 +212,27 @@ tf set-window-option -t "$WCH" @origin "$PA"
 tf set-window-option -t "$WCH" @origin_fid "$PA"
 hook "$PPA" clear ffff0002       # the parent clears its conversation
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
-st_count; printf '%s' "$out" | grep -q "($WPA" || st_miss "CLEAR: after the parent's /clear the report still names its window" "$out"
-# NAMES (C11, EPIC T644 C3): the envelope names the child by ONE code first — its
-# task's (the book), else its ID's; a T<n> is never on the header
+st_count; case "$out" in *'RETIRED: Parent reports are disabled; would save own result '*) true ;; *) false ;; esac \
+  && ! printf '%s' "$out" | grep -Fq "$WPA" || st_miss "CLEAR: parent /clear does not enable report delivery" "$out"
+# NAMES: ID and task codes remain usable independently of retired report envelopes.
 chc=$(fid short "$CH")
-st_count; printf '%s' "$out" | grep -q "^\[child-report\] #$chc · " || st_miss "NAMES: the child-report header leads with #CODE" "$out"
+st_count; [ -n "$chc" ] && [ "$(fid short "$CH")" = "$chc" ] && ! printf '%s' "$out" | grep -q '^\[child-report\]' \
+  || st_miss "NAMES: stable ID code remains, report envelope is retired" "$out"
 tf set-window-option -t "$WCH" @task T777
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
-st_count; printf '%s' "$out" | grep "^\[child-report\] #$chc · " | grep -vq "T777" \
-  || st_miss "NAMES: a task window with no code known: its ID's code, no T<n>" "$out"
+st_count; printf '%s' "$out" | grep -q 'RETIRED: Parent reports are disabled' \
+  && ! printf '%s' "$out" | grep -q '^\[child-report\]' && [ "$(fid short "$CH")" = "$chc" ] \
+  || st_miss "NAMES: task without a known code cannot produce a parent report" "$out"
 BOOK="${FLEET_ID_DIR:-$FLEET_CONF_DIR/ids}/task-codes.tsv"; mkdir -p "${BOOK%/*}"
 printf 'T777\tK7W0\t%s\n' "$CH" > "$BOOK"
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
-st_count; printf '%s' "$out" | grep "^\[child-report\] #K7W0 · " | grep -vq "T777" \
-  || st_miss "NAMES: a task window is named by its task's code (the book)" "$out"
+st_count; printf '%s' "$out" | grep -q 'RETIRED: Parent reports are disabled' \
+  && ! printf '%s' "$out" | grep -q '^\[child-report\]' \
+  || st_miss "NAMES: known task code cannot restore a report envelope" "$out"
 st_count; ! printf '%s' "$out" | grep -q "^\[child-report\].*T777" || st_miss "NAMES: T<n> never on the header" "$out"
 tf set-window-option -u -t "$WCH" @task
-# a report queued before C8 (fleet_task_control.py receive) and the `task` tool's
-# answer name the session the same way: its code, the record only the alias
+# Historical labels and the task tool still name sessions by code, with the
+# record retained as an alias. This formatting cannot deliver a parent report.
 r=$(python3 - "$BIN" "$CH" "$chc" <<'PY' 2>&1
 import importlib.util, sys
 sys.path.insert(0, sys.argv[1])
@@ -258,7 +259,7 @@ PY
 )
 st_count; [ "$r" = ok ] || st_miss "NAMES: receive's header and the task tool's answer lead with the code" "$r"
 rm -f "$BOOK"
-# the parent closes; a successor continues it — the report goes there
+# A historical parent closes and a successor continues it; neither gets reports.
 lib fleet_win_retire "$WPA" "$L" exited; tf kill-window -t "$WPA"
 SU=$(mkfid)
 read -r WSU _ <<EOF
@@ -266,10 +267,13 @@ $(newwin "$SU")
 EOF
 fid open "$SU" --window "$WSU" --socket "$L" --agent claude --prev "$PA" >/dev/null
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
-st_count; printf '%s' "$out" | grep -q "($WSU" || st_miss "CLEAR: a closed parent's report goes to its successor's window" "$out"
+st_count; printf '%s' "$out" | grep -q 'RETIRED: Parent reports are disabled' \
+  && ! printf '%s' "$out" | grep -Fq "$WSU" || st_miss "CLEAR: historical successor receives no report" "$out"
 lib fleet_win_retire "$WSU" "$L" exited; tf kill-window -t "$WSU"
 out=$(env "$INT" TMUX_PANE="$PCH" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary 'kid done' 2>&1)
-st_count; printf '%s' "$out" | grep -q "would file MERGED for the person" || st_miss "CLEAR: nobody to take it ⇒ the person's reminder" "$out"
+st_count; printf '%s' "$out" | grep -q 'RETIRED: Parent reports are disabled' \
+  && ! printf '%s' "$out" | grep -q 'would file' && [ "$(nres "$CH")" = 0 ] \
+  || st_miss "CLEAR: no parent creates neither a reminder nor a dry-run result" "$out"
 # the ledger fold: the parent ID's segments say clear, the ID did not change
 st_count; python3 "$BIN/fleet_id.py" get "$PA" --json | grep -q '"trigger": "clear"' || st_miss "CLEAR: the parent's /clear is a segment of the same ID"
 
@@ -279,19 +283,18 @@ python3 "$BIN/fleet_id.py" open "$A1" >/dev/null; python3 "$BIN/fleet_id.py" res
 python3 "$BIN/fleet_id.py" open "$A2" >/dev/null; python3 "$BIN/fleet_id.py" close "$A2" --reason reaped
 python3 "$BIN/fleet_id.py" open "$A3" >/dev/null; python3 "$BIN/fleet_id.py" result "$A3" --state waiting
 c1=$(python3 "$BIN/fleet_id.py" short "$A1")
-out=$(env "$INT" bash "$BIN/fleet-await.sh" "$c1" --timeout 5 --interval 1); rc=$?
-st_count; [ "$rc" = 0 ] && printf '%s' "$out" | head -1 | grep -qx MERGED && printf '%s' "$out" | grep -q 'pr: #9' \
-  || st_miss "AWAIT: a merged result answers MERGED (0)" "$rc · $out"
-out=$(env "$INT" bash "$BIN/fleet-await.sh" "#$(printf '%s' "$c1" | tr 'A-Z' 'a-z')" --timeout 5 --interval 1); rc=$?
-st_count; [ "$rc" = 0 ] && printf '%s' "$out" | head -1 | grep -qx MERGED || st_miss "AWAIT: #code in any case is the same ID (C11)" "$rc · $out"
-out=$(env "$INT" bash "$BIN/fleet-await.sh" "fid:$A2" --timeout 5 --interval 1); rc=$?
-st_count; [ "$rc" = 4 ] && printf '%s' "$out" | head -1 | grep -qx EXITED || st_miss "AWAIT: closed with no result is EXITED (4)" "$rc · $out"
-out=$(env "$INT" bash "$BIN/fleet-await.sh" "$A3" --timeout 2 --interval 1); rc=$?
-st_count; [ "$rc" = 3 ] || st_miss "AWAIT: a turn boundary (waiting) is no answer — TIMEOUT (3)" "$rc · $out"
+for ref in "$c1" "#$(printf '%s' "$c1" | tr 'A-Z' 'a-z')" "fid:$A2" "$A3"; do
+  out=$(env "$INT" bash "$BIN/fleet-await.sh" "$ref" --timeout 5 --interval 1); rc=$?
+  st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+    || st_miss "AWAIT: historical ID/code alias returns retirement immediately" "$rc · $out"
+done
+st_count; [ "$(nres "$A1")" = 1 ] && [ "$(closed "$A2")" = yes ] && [ "$(nres "$A3")" = 1 ] \
+  || st_miss "AWAIT: completed, closed and waiting historical records remain"
 
 # ---- KIDS --------------------------------------------------------------------------
-out=$(env "$INT" bash "$BIN/fleet-children.sh" --ids "$PA")
-st_count; printf '%s' "$out" | grep -q '^1 children' || st_miss "KIDS: the parent ID lists its one child" "$out"
+out=$(env "$INT" bash "$BIN/fleet-children.sh" --ids "$PA"); rc=$?
+st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  && [ "$(openedf "$CH" parent)" = "$PA" ] || st_miss "KIDS: retired command leaves historical parent metadata intact" "$rc · $out"
 
 # ---- WT ----------------------------------------------------------------------------
 git init -q "$WORK/wt" 2>/dev/null
@@ -379,8 +382,8 @@ st_count; grep -q 'fleet_win_retire "\$target" "" reaped' "$BIN/dash-reap.sh" \
   || st_miss "WIRE: the reap / cleanup / stop / exit closers end the ID"
 st_count; grep -q 'fleet_reap_policy.py" report-finish "\$selffid"' "$BIN/fleet-report-parent.sh" \
   && grep -q 'fleet_id.append(fid, ev)' "$BIN/fleet_reap_policy.py" \
-  && grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
-  || st_miss "WIRE: a saved report writes the ID result and a queued one routes by ID (C6/C8)"
+  && ! grep -q 'fleet_id_take' "$BIN/fleet_task_control.py" \
+  || st_miss "WIRE: own result remains recorded; retired receive cannot route by ID"
 st_count; grep -q 'trap id_result EXIT' "$BIN/fleet-report-parent.sh" || st_miss "WIRE: a session's own report writes its result"
 
 st_done

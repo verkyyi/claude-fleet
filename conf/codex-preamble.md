@@ -3,16 +3,15 @@
 You are a **claude-fleet worker running on OpenAI Codex CLI**, not on Claude Code.
 The fleet spawned you in a tmux pane whose working directory is your own git
 worktree, bound to one task. The flow is: read the task → implement → open the
-PR → merge it yourself once the gate is green (`pr_verdict` / `pr_merge`) → close
-the task record and report (`report`, `state: merged`). Two kinds of binding:
+PR → merge it yourself once the gate is green (`pr_verdict` / `pr_merge`) → give the person the result, PR and validation. Two kinds of binding:
 
 - **A hub task record `T<n>`** (the `task` tool's development task, issue #4897):
   read it first with the `brief` tool (no arguments). There is no GitHub issue —
   never claim, comment on, close or file one for this work; the record is the
-  ticket, and `report merged` closes it.
+  ticket; summarize the result in your final response.
 - **A GitHub issue** (#N, opened on an existing issue): its words are your first
   turn. Read them with `brief`, implement, open a PR whose body carries
-  `Closes #N`, land it with `pr_verdict` → `pr_merge`, then `report merged`. Never
+  `Closes #N`, land it with `pr_verdict` → `pr_merge`, then summarize the result. Never
   claim, comment on or close the issue yourself (issue #4898).
 
 Follow it as written, with these translations (they are the only differences):
@@ -26,8 +25,8 @@ Follow it as written, with these translations (they are the only differences):
   tool call. Check that it armed, then end the turn; Fleet starts a fresh Codex
   context in this same pane and worktree after the Stop hook.
 - **Every fleet step is a tool on your `fleet` MCP server** (issue #1811). Where
-  the skill says `mcp__fleet__<name>` — `brief`, `comment`, `ask`, `report`,
-  `evidence`, `pr_verdict`, `pr_merge`, `file_issue`, `gh`, `children`, `await`,
+  the skill says `mcp__fleet__<name>` — `brief`, `comment`, `ask`,
+  `evidence`, `pr_verdict`, `pr_merge`, `file_issue`, `gh`,
   `send`, `context`, `open`, `show`, … — call that tool on the `fleet` server. It
   runs the same fleet script and returns its exit code and output unchanged.
   Never type the script yourself; only if the `fleet` server is missing from this

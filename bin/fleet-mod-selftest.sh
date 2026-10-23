@@ -24,13 +24,13 @@
 #      off session.measure, model + effort off turn.step, a /model off the model
 #      poll — all through conf/statusline.sh --from mod (tests/usage.test.ts,
 #      issues #1338 / #1459).
-#   E  the three tools are the FALLBACK only, with ONE implementation (issue
+#   E  the advertised tools are the FALLBACK only, with ONE implementation (issue
 #      #2057; retired as the primary road in #1812): lifecycle registers them
 #      only when FLEET_MCP_SERVER is not 1 (a session launched before the tool
 #      service was mounted), from `fleet-mcp.py --spec`; tools.ts forwards every
 #      call to `fleet-mcp.py --call` and carries no schema, no argument check
-#      and no script of its own; `--spec status spawn await` answers with the
-#      service's three closed schemas; register.ts wires every feature — static
+#      and no script of its own; `--spec status spawn` answers with the
+#      service's two closed schemas; register.ts wires every feature — static
 #      + the python CLI, so it runs in CI where D cannot.
 #
 # Hermetic for A-C: a temp bin with the real launcher + lib symlinked, fake
@@ -179,16 +179,16 @@ grep -q -- "'--spec'" "$T" && grep -q -- "'--call'" "$T" || st_fail "E: tools.ts
 hits=$(grep -nE 'inputSchema: \{|required: \[|checkArgs|parseRepoList|dash-issue-session\.sh|fleet-await\.sh|fleet-children\.sh' "$T" \
        | grep -vE '^[0-9]+:[[:space:]]*//' | grep -vE "<N>|'fleet-children\.sh'$")
 [ -z "$hits" ] || st_fail "E: tools.ts carries a schema, an argument check or a script of its own — the service has the one copy" "$hits"
-# --spec: the service's three, closed, in the fallback's order (python3 is what the mod runs).
-spec=$(python3 "$BIN/fleet-mcp.py" --spec status spawn await 2>&1) || st_fail "E: fleet-mcp.py --spec status spawn await failed" "$spec"
+# --spec: the service's two, closed, in the fallback's order (python3 is what the mod runs).
+spec=$(python3 "$BIN/fleet-mcp.py" --spec status spawn 2>&1) || st_fail "E: fleet-mcp.py --spec status spawn failed" "$spec"
 printf '%s' "$spec" | python3 -c '
 import json, sys
 rows = json.load(sys.stdin)
-assert [r["name"] for r in rows] == ["status", "spawn", "await"], rows
+assert [r["name"] for r in rows] == ["status", "spawn"], rows
 for r in rows:
     assert r["description"] and r["inputSchema"]["additionalProperties"] is False, r
 assert set(rows[1]["inputSchema"]["required"]) == {"issue"} and "reap" in rows[1]["inputSchema"]["properties"], rows[1]
-' || st_fail "E: --spec did not print the three closed schemas" "$spec"
+' || st_fail "E: --spec did not print the two closed schemas" "$spec"
 python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] || st_fail "E: --spec of an unknown tool exited $rc, want 2"
 for f in Lifecycle Usage State Compose Tools Accept; do

@@ -13,22 +13,21 @@
 #   C  the hub branch: off unless CCQUOTA_FLEET=1 (the degenerate case — a cache
 #      on disk changes nothing); fresh cache → `remote <node>`; stale with no
 #      refresher → `unknown` + one stderr note; FLEET_HUB_STATUS_CMD refreshes it.
-#   D  the four scripts take `wid:`: a local worker_id behaves byte-for-byte like
+#   D  ordinary message/answer scripts take `wid:`: a local worker_id behaves byte-for-byte like
 #      today's target for the same window (fleet-peer-send.sh), a remote/unknown
 #      one refuses with the reason and never touches the same-numbered local
-#      window (fleet-peer-send.sh, fleet-await.sh, fleet-answer.sh; a remote
-#      parent is relayed by fleet-report-parent.sh since #1421 — never to that
-#      window), and fleet-await.sh maps this fleet's wid to <N>.
+#      window (fleet-peer-send.sh, fleet-answer.sh). Retired await/report hooks
+#      neither deliver, spawn nor adopt, regardless of their historical target.
 #   E  @origin_wid: fleet_stamp_origin_wid stamps the parent's worker_id for a key
 #      origin — its identity form + @origin_fid when a live window answers to the
 #      key (issue #1646), else the key form — nothing for a non-key origin or a
 #      machine with no fleet UUID; the
 #      spawn sites (dash-issue-session.sh, dash-raw-session.sh,
-#      dash-restore-session.sh, fleet-await.sh) call it.
+#      dash-restore-session.sh) call it for compatibility metadata.
 #   F  ONE resolver (issue #1537, EPIC #1529 E8) — fleet_win_for_key is the only
 #      way a key becomes a window, and it refuses rather than guesses: a stamped @worktree is never second-guessed by the pane
 #      cwd; two windows for one key → rc 2 AMBIGUOUS; a bare issue key in a 2+ repo
-#      fleet → rc 2, and fleet-await --repo B waits on B's #N, never A's; a
+#      fleet → rc 2, and retired fleet-await adopts neither repo's worker; a
 #      `<sess>:<idx>` position and a window NAME are refused by fleet-peer-send.sh,
 #      fleet-answer.sh, fleet-permission.sh and fleet_worker_locate (exit 2); inside
 #      tmux with no TMUX_PANE a script reads its pane through fleet_pane_fmt, and the
@@ -146,38 +145,51 @@ run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$U/issue-8" hi
 st_count; [ "$rc" = 1 ] && case "$err" in *"no live worker"*) true ;; *) false ;; esac || st_miss "D: peer-send unknown wid → exit 1" "rc=$rc $err"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:bogus" hi
 st_count; [ "$rc" = 2 ] || st_miss "D: peer-send malformed wid → exit 2" "rc=$rc $err"
-# await
+# Retired entry points leave both window metadata and durable state untouched.
+retired_snapshot() {
+  tf list-windows -t "$L" -F '#{window_id}|#{@fleet_id}|#{@origin}|#{@origin_fid}|#{@origin_wid}|#{@reported}'
+  python3 - "$FLEET_CONF_DIR" <<'PY'
+import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for path in sorted(root.rglob('*')):
+    if path.is_file():
+        print(path.relative_to(root), hashlib.sha256(path.read_bytes()).hexdigest())
+PY
+}
+before=$(retired_snapshot)
+# await: every historical address is explicitly retired, not resolved or adopted.
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-7" -L "$L" --parent issue-1 --timeout 5 --interval 1
-st_count; [ "$rc" = 5 ] && [ "$(printf '%s\n' "$out" | head -1)" = NO-WORKER ] && case "$out" in *"lives on mac-a"*) true ;; *) false ;; esac \
-  || st_miss "D: await remote wid → NO-WORKER (5), says mac-a" "rc=$rc $out / $err"
+st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  || st_miss "D: await remote wid → explicit retirement" "rc=$rc $out / $err"
 run bash "$BIN/fleet-await.sh" "wid:$U/issue-8" -L "$L" --parent issue-1 --no-spawn --timeout 5 --interval 1
-st_count; [ "$rc" = 5 ] && case "$out" in *"#8 has no live worker (--no-spawn)"*) true ;; *) false ;; esac \
-  || st_miss "D: await own wid → #8 through today's path" "rc=$rc $out / $err"
+st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  || st_miss "D: await own wid → explicit retirement" "rc=$rc $out / $err"
 run bash "$BIN/fleet-await.sh" "wid:$U/scratch-3" -L "$L" --parent issue-1 --timeout 5
-st_count; [ "$rc" = 2 ] || st_miss "D: await scratch wid → usage refusal" "rc=$rc $err"
+st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  || st_miss "D: await scratch wid → explicit retirement" "rc=$rc $out $err"
+st_count; [ "$(retired_snapshot)" = "$before" ] || st_miss "D: retired await must not spawn, adopt or write a delivery"
 # answer
 run bash "$BIN/fleet-answer.sh" -L "$L" --show "wid:$F/issue-7"
 st_count; [ "$rc" = 1 ] && case "$err" in *"lives on mac-a"*) true ;; *) false ;; esac || st_miss "D: answer remote wid → exit 1" "rc=$rc $err"
 run bash "$BIN/fleet-answer.sh" -L "$L" --show "wid:$U/issue-8"
 st_count; [ "$rc" = 1 ] && case "$err" in *"no live worker"*) true ;; *) false ;; esac || st_miss "D: answer unknown wid → exit 1" "rc=$rc $err"
-# report-parent: a child whose parent key issue-7 is ALSO a local window
+# report-parent: historical origin keys cannot regain a delivery route.
 wc=$(tf new-window -d -P -F '#{window_id}' -n issue-20 'while :; do sleep 300; done')
 tf set-window-option -t "$wc" @issue 20; tf set-window-option -t "$wc" @origin issue-7
-run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --summary x --dry-run; base="$out"
-tf set-window-option -t "$wc" @origin_wid "$U/issue-7"
-run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --summary x --dry-run
-st_count; [ "$out" = "$base" ] && case "$out" in *"$w7"*) true ;; *) false ;; esac \
-  || st_miss "D: report-parent with a local @origin_wid behaves as before" "[$out] vs [$base]"
-tf set-window-option -t "$wc" @origin_wid "$F/issue-7"
-# A remote parent is relayed through the hub since #1421 (hub-relay-selftest.sh
-# pins the relay); here: never the local issue-7.
-run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --summary x --dry-run
-st_count; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7 on mac-a"*) true ;; *) false ;; esac \
-  && case "$out" in *"$w7"*) false ;; *) true ;; esac \
-  || st_miss "D: report-parent with a remote parent → relayed to it, never the local issue-7" "rc=$rc out=$out err=$err"
-run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --origin "wid:$F/issue-7" --state blocked --summary x --dry-run
-st_count; [ "$rc" = 0 ] && case "$out" in *"would relay to $F/issue-7"*) true ;; *) false ;; esac \
-  || st_miss "D: report-parent --origin wid:<remote> → relayed" "rc=$rc out=$out err=$err"
+for origin in '' "$U/issue-7" "$F/issue-7"; do
+  tf set-window-option -t "$wc" @origin_wid "$origin"
+  before=$(retired_snapshot); pane_before=$(tf capture-pane -p -t "$w7")
+  run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --state blocked --summary x
+  st_count; [ "$rc" = 0 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+    || st_miss "D: historical report origin [$origin] → explicit retirement" "rc=$rc out=$out err=$err"
+  st_count; [ "$(retired_snapshot)" = "$before" ] && [ "$(tf capture-pane -p -t "$w7")" = "$pane_before" ] \
+    || st_miss "D: historical report origin [$origin] must not write, mark or inject"
+done
+before=$(retired_snapshot)
+run bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wc" --origin "wid:$F/issue-7" --state blocked --summary x
+st_count; [ "$rc" = 0 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac \
+  || st_miss "D: explicit report --origin → retirement, never relay" "rc=$rc out=$out err=$err"
+st_count; [ "$(retired_snapshot)" = "$before" ] || st_miss "D: explicit --origin must create no report or outbox entry"
 
 # --- E: @origin_wid stamping ---------------------------------------------------------------
 lib fleet_stamp_origin_wid "$L" "$w3" issue-7 "$L"
@@ -190,7 +202,7 @@ st_count; [ "$(tf show-options -wqv -t "$w3" @origin_wid)" = "$U/issue-77" ] && 
 tf set-window-option -u -t "$w3" @origin_wid
 lib fleet_stamp_origin_wid "$L" "$w3" autofill "$L"
 st_count; [ -z "$(tf show-options -wqv -t "$w3" @origin_wid)" ] || st_miss "E: a non-key origin stamps nothing"
-for f in dash-issue-session.sh dash-raw-session.sh dash-restore-session.sh fleet-await.sh; do
+for f in dash-issue-session.sh dash-raw-session.sh dash-restore-session.sh; do
   st_count; grep -q 'fleet_stamp_origin_wid ' "$BIN/$f" || st_miss "E: $f must stamp @origin_wid beside @origin"
 done
 
@@ -215,7 +227,7 @@ st_count; [ "$rc" = 1 ] && case "$err" in *ambiguous*) true ;; *) false ;; esac 
 tf kill-window -t "$w7x"
 
 # F4 a 2+ repo fleet: a bare issue key is refused; the repo-qualified one resolves;
-#    fleet-await --repo B waits on B's #7, never A's
+#    retired fleet-await --repo B adopts neither B's #7 nor A's
 mkdir -p "$FLEET_CONF_DIR/fleets/$L/repos"
 printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$L/repos/acme-app.conf"
 printf 'FLEET_REPO=acme/lib\n' > "$FLEET_CONF_DIR/fleets/$L/repos/acme-lib.conf"
@@ -228,12 +240,14 @@ wfk acme-lib:issue-7 "$L"; st_count; [ "$out" = "$w7b" ] || st_miss "F4: the qua
 wfk scratch-3 "$L"; st_count; [ "$out" = "$w3" ] || st_miss "F4: a scratch key needs no repo (its number is fleet-wide)" "$out / $err"
 run bash "$BIN/fleet-peer-send.sh" -L "$L" issue:7 hi
 st_count; [ "$rc" = 1 ] && case "$err" in *ambiguous*--repo*) true ;; *) false ;; esac || st_miss "F4: peer-send issue:7 without --repo → refused, says --repo" "rc=$rc $err"
+before=$(retired_snapshot)
 run bash "$BIN/fleet-await.sh" 7 -L "$L" --parent scratch-3 --repo acme/lib --no-spawn --timeout 2 --interval 1
-st_count; case "$err" in *"#7 is live ($w7b)"*) true ;; *) false ;; esac || st_miss "F4: fleet-await --repo acme/lib waits on B's #7, never A's" "rc=$rc out=$out err=$err"
-st_count; [ "$(tf show-options -wqv -t "$w7b" @origin)" = scratch-3 ] && [ -z "$(tf show-options -wqv -t "$w7" @origin)" ] \
-  || st_miss "F4: fleet-await adopted B's #7 only" "A=[$(tf show-options -wqv -t "$w7" @origin)] B=[$(tf show-options -wqv -t "$w7b" @origin)]"
+st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac || st_miss "F4: fleet-await --repo acme/lib is retired" "rc=$rc out=$out err=$err"
+st_count; [ -z "$(tf show-options -wqv -t "$w7b" @origin)" ] && [ -z "$(tf show-options -wqv -t "$w7" @origin)" ] \
+  || st_miss "F4: retired await must adopt neither repo's #7" "A=[$(tf show-options -wqv -t "$w7" @origin)] B=[$(tf show-options -wqv -t "$w7b" @origin)]"
 run bash "$BIN/fleet-await.sh" 7 -L "$L" --parent scratch-3 --no-spawn --timeout 2 --interval 1
-st_count; [ "$rc" = 2 ] && case "$err" in *"--repo"*) true ;; *) false ;; esac || st_miss "F4: fleet-await without --repo in a 2+ repo fleet → usage refusal" "rc=$rc $err"
+st_count; [ "$rc" = 2 ] && case "$out" in RETIRED:*) true ;; *) false ;; esac || st_miss "F4: fleet-await without --repo is also retired" "rc=$rc $out $err"
+st_count; [ "$(retired_snapshot)" = "$before" ] || st_miss "F4: retired await must not mutate either repo's worker or durable state"
 tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"; tf set-window-option -u -t "$w7" @repo
 
 # F6 (issue #1939) one spelling: a ONE-repo fleet keys acme-app:issue-7 too; the

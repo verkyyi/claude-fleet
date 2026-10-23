@@ -72,7 +72,7 @@ if [ "${1:-}" = --brief ]; then
   if [ -n "$issue" ]; then
     printf '[fleet compact-resume] worker #%s\n' "$issue"
     printf 'The fleet compacted you in place to avoid a handoff. CHECK FIRST: compare your recovery map with `git status`, `git log -3` and the PR; fix any drift, then resume its next step.\n'
-    printf 'One issue, one worktree, one PR: work ONLY on #%s. Done = verify → push → PR (Closes #%s) → fleet-pr-verdict.sh → fleet-pr-merge.sh → fleet-report-parent.sh → stop.\n' "$issue" "$issue"
+    printf 'One issue, one worktree, one PR: work ONLY on #%s. Done = verify → push → PR (Closes #%s) → fleet-pr-verdict.sh → fleet-pr-merge.sh → final response with PR and validation → stop.\n' "$issue" "$issue"
   elif [ "$raw" = 1 ]; then
     printf '[fleet compact-resume] scratch\n'
     printf 'The fleet compacted you in place to avoid a handoff. CHECK FIRST: compare this recovery map with `git status`, `git log -3` and any PR it names; fix any drift, then resume its next step.\n'

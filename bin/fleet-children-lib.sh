@@ -16,9 +16,8 @@
 #                                        → `<level> <epoch>` the ladder resumes from
 #   report_tier <STATE> [summary] [verdict] [child @claude_state]
 #                                        → loud | quiet | silent (issue #938)
-#   children_report_mode [value]         → immediate | batch | 0 — the
-#                                          FLEET_CHILD_REPORT switch, normalised
-#   children_batch_secs                  → FLEET_CHILD_REPORT_BATCH_SECS (300)
+#   children_report_mode [value]         → 0 (retired compatibility helper)
+#   children_batch_secs                  → 300 (retired compatibility helper)
 #   children_cursor_set <parent-key> <sess> [seq]
 #                                        → the digest cursor (issue #939): the
 #                                          highest seq delivered; default = the
@@ -136,26 +135,10 @@ report_tier() {
   esac
 }
 
-# children_report_mode — FLEET_CHILD_REPORT (or $1) as one of immediate|batch|0.
-# The legacy `1` (and unset, and anything unrecognised) is `immediate`: the switch
-# fails toward the historic per-report delivery, never toward silence.
-children_report_mode() {
-  case "${1-${FLEET_CHILD_REPORT:-}}" in
-    0|no|off|false) printf '0\n' ;;
-    batch)          printf 'batch\n' ;;
-    *)              printf 'immediate\n' ;;
-  esac
-}
-
-# children_batch_secs — how long a quiet digest item may wait (issue #939). The EPIC
-# #935 decision is 5 minutes; a non-number falls back to it rather than to 0 (which
-# would turn batch into per-tick delivery).
-children_batch_secs() {
-  case "${FLEET_CHILD_REPORT_BATCH_SECS:-}" in
-    ''|*[!0-9]*) printf '300\n' ;;
-    *)           printf '%s\n' "$FLEET_CHILD_REPORT_BATCH_SECS" ;;
-  esac
-}
+# compat-1v: old sourced callers may still ask for these helpers. Delivery is
+# retired regardless of the caller's old setting; no environment key can enable it.
+children_report_mode() { printf '0\n'; }
+children_batch_secs() { printf '300\n'; }
 
 # children_cursor_set <parent-key> <sess> [seq] — record that everything up to seq
 # reached the parent. The cursor sits BESIDE the ledger (EPIC #935 rule 4: no new

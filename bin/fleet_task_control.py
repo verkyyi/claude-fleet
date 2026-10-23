@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-"""A hub task record, read from a machine — and a child report routed to its parent.
+"""Legacy task reads and cancellation, plus own-session progress history.
 
-The record is the ticket (issue #4897); the session is its window's ID (EPIC T497
-C8): nothing here claims a record, holds it, fences a report on a generation or
-proves a native process. A session's report is a result of its ID
-(fleet-report-parent.sh, fleet_id.py); this reads whether a record is over, waits
-on it, lists its children, writes an EPIC driver's progress word on its ID, cancels
-a record no window ever opened, and delivers a child report a relay carried here.
+Parent coordination, await and receive keep one-version refusal handlers.
+None proves native exit or grants execution authority.
 """
 import argparse
-import fcntl
-import hashlib
 import json
 import os
 import re
 from pathlib import Path
 import subprocess
 import sys
-import time
 import uuid
 
 BIN = Path(__file__).resolve().parent
@@ -97,27 +90,9 @@ def start_word(task, view):
         sys.path.pop(0)
 
 
-def wait_task(task, timeout, interval):
-    end = time.monotonic() + timeout
-    while True:
-        left = end - time.monotonic()
-        try:
-            t, got = record_view(task, timeout=max(0.1, min(15, left)))
-        except (ValueError, OSError, subprocess.SubprocessError):
-            print("UNKNOWN\ntask: %s\nnote: task record unavailable" % code(None, task))
-            return 3
-        state = verdict(t)
-        # an open record whose agent never came up / went down is no wait (T642):
-        # said at once, with how to start it again on the same record
-        w = start_word(task, got) if state == "WAITING" else {}
-        if w:
-            print("%s\ntask: %s\nnote: %s\nhint: %s" % ("NOT-STARTED" if w["word"] == "not_started" else "DROPPED",
-                                                       code(t, task), w["why"], w["hint"]))
-            return 1
-        if state != "WAITING" or time.monotonic() >= end:
-            print("%s\ntask: %s" % (state, code(t, task)))
-            return {"SUCCEEDED": 0, "FAILED": 1, "CANCELLED": 2, "REFUSED": 2}.get(state, 3)
-        time.sleep(min(interval, max(0, end - time.monotonic())))
+def wait_task(_task, _timeout, _interval):
+    print("RETIRED: Fleet await is disabled; view each Task directly.")
+    return 2
 
 
 def closed(task):
@@ -154,34 +129,9 @@ def child_summary(data):
     return s
 
 
-def children(task, as_json):
-    data = call("children", task)
-    data["summary"] = child_summary(data)
-    # an open child is judged by its agent too (T642): `start` = {word, why, hint}
-    for child in data.get("children") or []:
-        if child.get("outcome") or not str(child.get("id") or "").startswith("T"):
-            continue
-        try:
-            _, got = record_view(child["id"], timeout=10)
-        except (ValueError, OSError, subprocess.SubprocessError):
-            continue
-        w = start_word(child["id"], got)
-        if w:
-            child["start"] = w
-    if as_json:
-        print(json.dumps(data, ensure_ascii=False))
-        return 0
-    print("children of %s" % code(data.get("task"), task))
-    for child in data.get("children") or []:
-        st = child.get("start")
-        word = ("NOT-STARTED" if st["word"] == "not_started" else "DROPPED") if st else verdict(child)
-        print("%s %s %s %s%s" % (code(child), word, child.get("ticket_ref", ""), child.get("title", ""),
-                                 ("  — %s → %s" % (st["why"], st["hint"])) if st else ""))
-    sm = data["summary"]
-    print("%d children · open %d · succeeded %d · failed %d · cancelled %d · refused %d" % (
-        len(data.get("children") or []), sm.get("open", 0), sm.get("succeeded", 0), sm.get("failed", 0),
-        sm.get("cancelled", 0), sm.get("refused", 0)))
-    return 0
+def children(_task, _as_json):
+    print("RETIRED: Parent coordination is disabled; view each Task directly.")
+    return 2
 
 
 def option(pane, key, socket=""):
@@ -266,22 +216,6 @@ def cancel_pending_start(task, lang="zh"):
                "已取消启动；这不表示已确认远端进程退出。")
 
 
-def orphan(r, why):
-    root = Path(os.environ.get("FLEET_CONF_DIR", str(Path.home() / ".config/claude-fleet")))
-    path = root / "global/orphan-reports.ndjson"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        stream.seek(0)
-        rows = [json.loads(line) for line in stream if line.strip()]
-        if not any(row.get("event_id") == r["event_id"] and row.get("task") == r["task"] for row in rows):
-            row = dict(ts=int(time.time()), child_key=r["task"], task=r["task"],
-                       event_id=r["event_id"], state=(r["outcome"].upper() or "WAITING"), summary=r["summary"],
-                       parent=r["parent_session"], reason=why)
-            stream.write(json.dumps(row) + "\n")
-    print("orphaned → task %s event %s: %s" % (r["task"], r["event_id"], why))
-
-
 def child_label(r):
     """A child named by ONE code (EPIC T644 C3): its task's (`#K5H0`, the book), else
     its window's ID's (the worker_id's second half, EPIC T497 C11) — never a T<n> beside
@@ -304,73 +238,9 @@ def child_label(r):
     return r["task"]
 
 
-def receive(file):
-    """A child report a relay carried here (a session that reported before EPIC
-    T497 C8 still has one queued on the hub). The parent by its ID (design §4.3):
-    the window carrying it, whatever native session it runs now; one that has
-    closed hands the report to its successor (down the prev chain), else up its
-    parent (fleet_id_take); nobody ⇒ the person's reminder."""
-    envelope = json.loads(Path(file).read_text())
-    r = envelope["payload"]["task_report"]
-    if envelope["from"] != r["worker_id"] or envelope["to"] != r["parent_session"]:
-        raise ValueError("relay task identity mismatch")
-    r.setdefault("outcome", "")
-    r.setdefault("summary", "")
-    cmd = r''' . "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"
-task_home=$(fleet_wid_home "wid:$2") || exit 75
-sock=$(fleet_socket "$task_home")
-tmux -L "$sock" has-session -t "=$task_home" 2>/dev/null || exit 75
-win=$(fleet_win_for_fid "${2#*/}" "$sock"); task_rc=$?
-how=self
-if [ "$task_rc" = 1 ]; then
-  take=$(fleet_id_take "${2#*/}"); trc=$?
-  [ "$trc" = 2 ] && exit 76
-  [ "$trc" = 0 ] || exit 77
-  IFS=$'\t' read -r _id how sock win <<< "$take"
-  task_rc=0
-fi
-[ "$task_rc" = 0 ] || exit 75
-dir=$(children_dir "$task_home") || exit 75
-printf "%s\n%s\n%s\n%s\n" "$sock" "$win" "$dir" "$how"
-'''
-    located = subprocess.run(["bash", "-c", cmd, "task-receive", str(BIN), r["parent_session"]],
-                             capture_output=True, text=True, timeout=20)
-    if located.returncode == 76:
-        orphan(r, "parent session retired on its known fleet"); return 0
-    if located.returncode == 77:
-        orphan(r, "parent ID closed, with no successor or parent open"); return 0
-    if located.returncode:
-        return 75
-    socket, pane, directory, how = located.stdout.strip().splitlines()
-    # The child ledger directory; the parent task (else its ID) names the file,
-    # as the report's producer named it.
-    path = Path(directory) / ((r.get("parent_task") or r["parent_session"].split("/")[1])
-                              + "-g%d.ndjson" % int(r.get("parent_generation") or 0))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_suffix(".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        entries = []
-        if path.exists():
-            entries = [json.loads(line) for line in path.read_text().splitlines() if line]
-        if not any(e.get("event_id") == r["event_id"] and e.get("task") == r["task"] for e in entries):
-            with path.open("a") as stream:
-                stream.write(json.dumps(dict(r, rid=envelope["id"])) + "\n")
-        sentfile = Path(directory) / ".relay-sent"
-        sent_key = "task-report:" + hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
-        if sentfile.exists() and sent_key in sentfile.read_text().splitlines():
-            print("already delivered"); return 0
-        msg = "[child-report] %s\nstate: %s%s\nsummary: %s\nno reply needed" % (
-            child_label(r), (r["outcome"].upper() or "WAITING"),
-            "" if how == "self" else " · 原 parent 已关闭，代收 (%s)" % how, r["summary"])
-        argv = ["bash", "-c", '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_send "" "$2" "$3" "$(cat)"',
-                "task", str(BIN), socket, pane]
-        delivered = subprocess.run(argv, input=msg, capture_output=True, text=True, timeout=20)
-        if delivered.returncode:
-            return 75
-        with sentfile.open("a") as stream:
-            stream.write(sent_key + "\n")
-    print("reported task %s event %s" % (r["task"], r["event_id"]))
-    return 0
+def receive(_file):
+    print("RETIRED: Parent report delivery is disabled; nothing was delivered.")
+    return 2
 
 
 def main():
@@ -395,8 +265,9 @@ def main():
     args = p.parse_args()
     try:
         if args.action == "closed": return closed(args.task)
-        if args.action == "children": return children(args.task, args.json)
-        if args.action == "await": return wait_task(args.task, max(1, args.timeout), max(1, args.interval))
+        if args.action in ("children", "await"):
+            print("RETIRED: Parent coordination and Fleet await are disabled; view each Task directly.")
+            return 2
         if args.action == "progress": return progress(args.pane, args.summary, args.state, args.event, args.socket)
         if args.action == "receive": return receive(args.file)
         if args.action == "finalize": return 0

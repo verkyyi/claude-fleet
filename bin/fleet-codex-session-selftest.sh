@@ -336,7 +336,7 @@ class SessionTests(unittest.TestCase):
             subprocess.run(tm + ['kill-server'], capture_output=True)
 
     @unittest.skipUnless(shutil.which('tmux'), 'tmux unavailable')
-    def test_hooks_cache_queue_and_parent_end_to_end(self):
+    def test_hooks_cache_queue_and_retired_parent_end_to_end(self):
         label = 'codex-session-test-' + str(os.getpid())
         tm = ['tmux', '-L', label]
         def call(*args):
@@ -400,10 +400,13 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(home, str(self.home.resolve()))
             child = call('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'child', 'sleep 60')
             call('set-option', '-w', '-t', child, '@origin', 'issue-42')
+            queue_before = (self.root / 'queue.json').read_bytes()
             p = subprocess.run(['bash', str(BIN / 'fleet-report-parent.sh'), '-L', label, '--win', child, '--state', 'merged', '--key', 'issue-43', '--summary', 'done'], env=env, capture_output=True, text=True)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertEqual(call('show-options', '-wv', '-t', child, '@reported'), '1')
-            self.assertIn('[child-report]', json.loads((self.root / 'queue.json').read_text())[0][-1])
+            self.assertIn('RETIRED: Parent reports are disabled', p.stdout)
+            self.assertEqual(call('display-message', '-p', '-t', child, '#{@reported}'), '')
+            self.assertEqual((self.root / 'queue.json').read_bytes(), queue_before,
+                             'retired hooks must not inject a parent report into the native queue')
             env['QUEUE_FAIL'] = '1'
             self.assertNotEqual(send().returncode, 0)
             env.pop('QUEUE_FAIL')
@@ -434,8 +437,8 @@ class SessionTests(unittest.TestCase):
         old_t, new_t = fake_server.uuid7(now - 60000), fake_server.uuid7(now)
         server.add(fake_server.tui_thread(old_t))
         conf = self.root / 'conf'; ids = self.root / 'ids'
-        # Report admission re-resolves the window by fleet ID. Register this
-        # isolated fleet so that the test reaches the native /clear guard.
+        # Ordinary message admission re-resolves the window by fleet ID. Register
+        # this isolated fleet so that the test reaches the native /clear guard.
         registration = conf / 'fleets' / label / 'conf'
         registration.parent.mkdir(parents=True)
         registration.touch()
@@ -492,20 +495,23 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(call('show-options', '-wv', '-t', pane, '@codex_session_id'), old_t)
             # /clear: the TUI's new thread is loaded beside the old one, not yet followed
             server.add(fake_server.tui_thread(new_t))
-            p = peer('child report while cleared')
+            p = peer('ordinary message while cleared')
             self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
             self.assertIn('queued', p.stdout)
             self.assertIn(new_t, p.stdout, 'the hold names the thread the window moved to')
             self.assertEqual(len(queued()), 1, 'nothing was queued into the old thread')
             self.assertFalse([r for r in rows() if r.get('state') == 'DELIVERED'], 'held is never DELIVERED')
             self.assertEqual([r.get('state') for r in rows()], ['QUEUED'])
+            delivery_before = rows()
             child = call('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'child', 'sleep 60')
             call('set-option', '-w', '-t', child, '@origin', 'issue-42')
             p = subprocess.run(['bash', str(BIN / 'fleet-report-parent.sh'), '-L', label, '--win', child,
                                 '--state', 'merged', '--key', 'issue-43', '--summary', 'done'], env=env, capture_output=True, text=True)
-            self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
-            self.assertIn('new Codex thread', p.stdout)
-            self.assertEqual(len(queued()), 1, "the child's report did not go into the old thread")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn('RETIRED: Parent reports are disabled', p.stdout)
+            self.assertEqual(call('display-message', '-p', '-t', child, '#{@reported}'), '')
+            self.assertEqual(len(queued()), 1, 'retired reports must not reach the old thread')
+            self.assertEqual(rows(), delivery_before, 'retired reports must not enter the delivery ledger')
             # the server's broadcast: the window follows at once, not at the first turn
             server.broadcast({'method': 'thread/started', 'params': {'thread': server.threads[new_t]}})
             moved = ''
@@ -522,9 +528,9 @@ class SessionTests(unittest.TestCase):
             # the held items replay INTO the new thread, and only then read DELIVERED
             p = subprocess.run(['bash', str(BIN / 'fleet-peer-queue.sh'), 'drain', '-L', label], env=env, capture_output=True, text=True)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertEqual([q[4] for q in queued()[1:]], [new_t, new_t])
-            self.assertTrue(any('child report while cleared' in q[-1] for q in queued()[1:]))
-            self.assertEqual(sorted(r['state'] for r in rows() if r.get('state') != 'QUEUED'), ['DELIVERED', 'DELIVERED'])
+            self.assertEqual([q[4] for q in queued()[1:]], [new_t])
+            self.assertEqual(queued()[-1][-1], 'ordinary message while cleared')
+            self.assertEqual([r['state'] for r in rows() if r.get('state') != 'QUEUED'], ['DELIVERED'])
             p = peer('after follow'); self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(queued()[-1][4], new_t)
             # an older thread starting again is not a /clear: never followed backwards

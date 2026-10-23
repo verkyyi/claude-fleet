@@ -1,31 +1,7 @@
-// The fleet's three in-session tools, kept as the FALLBACK for a session launched
-// before the fleet tool service (issue #2057; the tools: issue #1340, retired as
-// the primary road in #1812).
-//
-//   mcp__fleet__fleet_status / mcp__fleet__fleet_spawn / mcp__fleet__fleet_await
-//
-// bin/fleet-claude.sh mounts bin/fleet-mcp.py as the MCP server `fleet` on every
-// new session and exports FLEET_MCP_SERVER=1 (issue #1807): there the mod registers
-// NOTHING — status / spawn / await are the service's own tools. A session launched
-// before that (`--plugin-dir` only, no `--mcp-config`) has no service, and its tool
-// list — registered once at ITS start — still carries the mod's three: a hot reload
-// swaps the code, never the list. Mod 0.4.0 dropped the handler, so every such call
-// died with «no tool.call hook answered». Hence, one implementation, two roads:
-//
-//   - registration (lifecycle.ts onReady, FLEET_MCP_SERVER not 1 — the engine
-//     follows `$` only within one file, so the run lives there and the argv and
-//     the parse live here): the three are registered from the SERVICE's own specs
-//     — `fleet-mcp.py --spec status spawn await` — so a schema lives once; a
-//     re-register on a reload costs nothing;
-//   - serving (the tool.call hook below): every call is forwarded to `fleet-mcp.py
-//     --call <tool> <json>` — the same identity check, argument check, repo check,
-//     script run and call log (road=call) as a tools/call. This file knows the
-//     argv and the timeout, no more: nothing here parses an argument or names a
-//     script;
-//   - the retreat (the issue's B): when the FORWARD itself fails — no python3, the
-//     install's bin/ gone, a usage exit, a timeout — the answer is one actionable
-//     message: reopen the session (/fleet-handoff, or `claude --resume`) so it
-//     mounts the service, or run the script by hand meanwhile.
+// Fallback tools for sessions launched before the fleet MCP service.
+// New sessions advertise status and spawn only. The cached await name remains
+// handled for one version and forwards to the service's explicit RETIRED refusal.
+// The service owns schemas, identity checks and call handling.
 
 import type { On, ToolSpec } from 'claude-code'
 
@@ -38,7 +14,7 @@ export const PLUGIN = 'fleet'
 // this version registers», TOOL_RE «the names the tool.call hook answers». Rename
 // either and teach the replay the new spelling, or the release gate goes red.
 /** The service's tools the fallback carries, in registration order. */
-export const FALLBACK = ['status', 'spawn', 'await'] as const
+export const FALLBACK = ['status', 'spawn'] as const
 export type Fallback = (typeof FALLBACK)[number]
 
 /** Every tool this file serves, as the model calls it. */
@@ -65,7 +41,7 @@ function service(bin: string): string[] {
   return ['python3', `${bin}/fleet-mcp.py`]
 }
 
-/** The argv that prints the three specs. */
+/** The argv that prints the currently advertised fallback specs. */
 export function specArgv(bin: string): string[] {
   return [...service(bin), '--spec', ...FALLBACK]
 }
@@ -110,13 +86,12 @@ export function fallbackSpecs(stdout: string): ToolSpec[] {
 
 /** The one message when the forward itself cannot run (the issue's B). */
 export function unreachable(full: string, tool: string, detail: string): string {
-  const script =
-    tool === 'spawn' ? 'dash-issue-session.sh <N> --repo <owner/name>'
-    : tool === 'await' ? 'fleet-await.sh <N> --repo <owner/name>'
-    : 'fleet-children.sh'
+  if (tool === 'await') return `${full}: RETIRED: Parent await is disabled. View each Task directly. (${detail})`
+  const script = tool === 'spawn' ? 'dash-issue-session.sh <N> --repo <owner/name>'
+    : `fleet-mcp.py --call status '{}'`
   return [
     `${full}: 这个会话启动于 fleet 工具服务（bin/fleet-mcp.py）之前，mod 的兜底转调失败：${detail}。`,
-    '请 /fleet-handoff，或退出后用 `claude --resume` 重开 — 新会话挂上 fleet 工具服务（mcp__fleet__status / spawn / await）。',
+    '请 /fleet-handoff，或退出后用 `claude --resume` 重开 — 新会话挂上 fleet 工具服务（mcp__fleet__status / spawn）。',
     `临时可以用 Bash 调 ~/.claude/fleet/bin/${script}。`,
   ].join('\n')
 }
@@ -136,7 +111,7 @@ export function registerTools(on: On): void {
     const full = String(e.tool)
     const m = TOOL_RE.exec(full)
     if (!isOpen() || m === null) return next(e)
-    const tool = m[1] as Fallback
+    const tool = m[1] as Fallback | 'await'
     const args = argsOf(e as unknown as Record<string, unknown>)
     try {
       const r = await $.process.run(callArgv(binDir($.plugin.root), tool, args), { timeoutMs: timeoutFor(tool, args) })

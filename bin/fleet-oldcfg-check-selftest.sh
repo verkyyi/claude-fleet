@@ -12,7 +12,7 @@
 # doctor and the idle reopen. Pinned:
 #
 #   A  manifest   — a Claude launch prints `manifest <path>`; the file holds the
-#                   fleet's hook table, the mod's three tools, the fleet server and
+#                   fleet's hook table, the mod's advertised tools, the fleet server and
 #                   the fp; two launches of one start share the file; checked
 #                   against its own tree it is `ok`; a Codex launch records no
 #                   tools (null), never «new tools» for it
@@ -80,7 +80,7 @@ FP1=$(printf '%s\n' "$out" | awk -F'\t' '$1 == "fp" { print $2 }')
 case "$M1" in "$WORK/conf/agentcfg/"*.json) ;; *) st_fail "A: the manifest is not under \$FLEET_CONF_DIR/agentcfg/" "$M1" ;; esac
 st_eq "A: the manifest records the fingerprint it was launched with" "$FP1" \
    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fp"])' "$M1")"
-st_eq "A: …the mod's three tools" "mcp__fleet__fleet_await mcp__fleet__fleet_spawn mcp__fleet__fleet_status" \
+st_eq "A: …the mod advertises status and spawn, never retired await" "mcp__fleet__fleet_spawn mcp__fleet__fleet_status" \
    "$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["tools"])))' "$M1")"
 st_has "A: …the fleet tool service among its MCP servers" \
     "$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["mcp"])))' "$M1")" "fleet"
@@ -92,6 +92,20 @@ st_eq "A: two launches of one start share one manifest (content-addressed)" "$M1
 r=$(bash "$SUT" "$M1" --new-dir "$ROOT" 2>&1); rc=$?
 st_eq "A: checked against its own tree the launch is ok" "ok" "$(printf '%s\n' "$r" | head -1)" "$r"
 st_eq "A: …exit 0" 0 "$rc"
+# A cached tool is no longer advertised but must still have a compatibility
+# handler. The real install accepts the old manifest; B below still catches a
+# handler that is genuinely missing from a replacement install.
+python3 - "$M1" "$WORK/cached-await.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    manifest = json.load(f)
+manifest['tools'].append('mcp__fleet__fleet_await')
+with open(sys.argv[2], 'w') as f:
+    json.dump(manifest, f)
+PY
+r=$(bash "$SUT" "$WORK/cached-await.json" --new-dir "$ROOT" 2>&1); rc=$?
+st_eq "A: a cached await still has a handler in the real install" ok "$(printf '%s\n' "$r" | head -1)" "$r"
+st_eq "A: …cached handler compatibility exits 0" 0 "$rc"
 MC=$(compose codex | awk -F'\t' '$1 == "manifest" { print $2 }')
 [ -n "$MC" ] && [ -f "$MC" ] || st_fail "A: a Codex launch prints no manifest"
 st_eq "A: a Codex session has no mod — tools null, never «new tools» for it" "None" \

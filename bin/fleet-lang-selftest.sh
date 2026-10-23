@@ -137,10 +137,16 @@ carries bin/fleet-restore.sh      FLEET_LANG_RULE_RESUME 'nudge="The tmux server
         'crash-restore resume nudge'
 carries bin/set-claude-state.sh   FLEET_LANG_RULE_RESUME '"decision":"block"' \
         'auto-handoff Stop-hook directive'
-carries bin/fleet-report-parent.sh FLEET_LANG_RULE_NOTICE '^  msg=.*no reply needed' \
-        'child-report envelope'
-carries bin/fleet-children-flush.sh FLEET_LANG_RULE_NOTICE '^  msg=.*no reply needed' \
-        'children-digest envelope'
+# Retired report/digest hooks no longer inject any envelope. They therefore need
+# no language suffix, and must not regain an injection path while staying named
+# in the hook table of an older session.
+for f in fleet-report-parent.sh fleet-children-flush.sh; do
+  grep -q 'RETIRED:' "$BIN/$f" || st_fail "$f must explicitly retire Parent delivery"
+  if grep -Eq 'fleet[-_]peer[-_]send|send-keys|fleet-children-append|fleet-hub-relay|fleet-orphan-reports|no reply needed' "$BIN/$f"; then
+    st_fail "$f must not inject a retired report/digest into another session"
+  fi
+  st_pass "$f has no retired report/digest injection path"
+done
 # The brief's language section is a heading + the rule beneath it, so the check is
 # a small window rather than one line: the heading must exist AND the rule must be
 # printed under it. (fleet-brief-selftest.sh pins the REAL rendered output;

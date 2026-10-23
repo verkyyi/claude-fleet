@@ -859,7 +859,7 @@ def tool_status(_args):
     task = pane_task()
     if window and task:
         window += " task=" + task_code(task)   # the task's code (EPIC T644 C3), else T<n>
-    kids = script([str(BIN / "fleet-children.sh")], STATUS_TIMEOUT_S)
+    kids = {"exit": 0, "stdout": "", "stderr": ""}  # compat shape, no child lookup
     repos, listed = hosted_repos()
     claims = CALLER["claims"]
     identity = ({"worker_id": worker_id(claims), "via": "credential",
@@ -870,7 +870,7 @@ def tool_status(_args):
 
 
 def tool_children(_args):
-    return script([str(BIN / "fleet-children.sh"), "--json"], STATUS_TIMEOUT_S)
+    raise Refused("RETIRED: Parent/child coordination is disabled; view each Task directly.")
 
 
 def tool_repos(_args):
@@ -894,30 +894,8 @@ def tool_set_reap(args):
     return script([str(BIN / "fleet-reap-policy.sh"), "set", args["policy"], "--by", "session"], STATUS_TIMEOUT_S)
 
 
-def tool_await(args):
-    if sum(k in args for k in ("issue", "task", "id")) != 1:
-        raise Refused("await takes issue, id (a session's or a task's code K3F9) or task (a task's code, ID or T<n>) — exactly one")
-    if ("task" in args or "id" in args) and "repo" in args:
-        raise Refused("a task record or an ID names its own repo — drop repo")
-    t = args.get("timeout", AWAIT_DEFAULT_S)
-    if "id" in args:
-        # A session by its ID (EPIC T497 C11): fleet-await.sh hands it to fleet-id.sh await.
-        code = str(args["id"]).lstrip("#")
-        if not (FID_RE.match(code) or re.match(r"^(?:[Tt]-)?[A-Za-z0-9]{4,26}$", code)):
-            raise Refused("id is a session's short code (K3F9) or its full ID")
-        # One code for both (EPIC T644 C3): a code no window's ID here answers to is
-        # a task's — the task tool's `id` — and is waited on as one.
-        if not local_id(code):
-            return script([str(BIN / "fleet-await.sh"), "--task", code, "--timeout", str(t)], t + AWAIT_SLACK_S,
-                          env=hub_env(ASSERT_TTL_S))
-        return script([str(BIN / "fleet-await.sh"), code, "--timeout", str(t)], t + AWAIT_SLACK_S,
-                      env=hub_env(ASSERT_TTL_S))
-    if "task" in args:
-        # a task's code, its ID or T<n> (one more version) — fleet-task-record.sh resolve reads it
-        return script([str(BIN / "fleet-await.sh"), "--task", str(args["task"]).lstrip("#"), "--timeout", str(t)]
-                      + check_repo(args), t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
-    return script([str(BIN / "fleet-await.sh"), str(args["issue"]), "--timeout", str(t)] + repo_or_caller(args),
-                  t + AWAIT_SLACK_S, env=hub_env(ASSERT_TTL_S))
+def tool_await(_args):
+    raise Refused("RETIRED: Fleet await is disabled. Use the native agent for subagents; view each Task directly.")
 
 
 def local_id(code):
@@ -1073,21 +1051,9 @@ def ask_hints(args):
     return ["- " + ui_t("ask_hint_" + k, args[k]) for k in ("suggest", "default", "due") if args.get(k)]
 
 
-def ask_parent(where, head, hints):
-    """A copy of the question for the session that spawned this one (issue #4337),
-    over `send` to: parent (fid first). No parent, or it cannot be reached ⇒ said in
-    the result; the question is on the record and the window is red either way."""
-    text = "\n".join(["[ask] %s — %s" % (where, head)] + hints
-                     + ["Answer it there (a reply on it, or send to this session), or tell the person."])
-    try:
-        return send_message("parent", text)
-    except (Refused, ToolFault) as e:
-        return {"delivered": False, "why": str(e)}
-
-
 def tool_ask(args):
     # The question goes on this window's hub task record (「问过你」, issue #3330);
-    # with no record it is the red stamp and the parent's copy alone — the fleet
+    # with no record it is the red stamp alone — the fleet
     # writes no GitHub comment (issue #4898). `issue` is accepted from old callers
     # and unused.
     task = pane_task()
@@ -1105,9 +1071,7 @@ def tool_ask(args):
     # stdin pinned shut — `blocked` reads no hook payload.
     red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
     red["command"] = "set-claude-state.sh"
-    iss = "" if task else pane_issue()
-    where = ("task " + task) if task else ("issue #" + iss) if iss else "this session"
-    out.update(state=red, parent=ask_parent(where, head, hints))
+    out.update(state=red)
     return out
 
 
@@ -1288,8 +1252,7 @@ TASK_REF = {"type": "string",
 
 TOOLS = {
     "status": (tool_status, {
-        "description": "Read-only. This fleet window's binding (issue, repo, state, origin), every child session "
-                       "it spawned (bin/fleet-children.sh) and the repos this fleet hosts. Changes nothing.",
+        "description": "Read-only. This fleet window's binding and the hosted repos. Changes nothing.",
         "inputSchema": NO_ARGS}),
     "children": (tool_children, {
         "description": "Read-only. Every child session this one spawned — ledger outcome, live state, PR — "
@@ -1308,8 +1271,8 @@ TOOLS = {
                        "nothing claims or comments on the issue, issue #4898). New work: the task tool. Runs "
                        "bin/dash-issue-session.sh, so the session caps apply. Exit 0 spawned (or the window "
                        "already exists), 2 at capacity, 3 closed or already has a PR, 1 infrastructure. "
-                       "Returns at once — await waits for it. "
-                       "Any session may spawn, a worker too (issue #4591); the child reports back to this one.",
+                       "Returns at once. "
+                       "Any session may start an independent task; use native subagents for internal orchestration.",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; overrides template, labels and fleet defaults."},
@@ -1334,10 +1297,7 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {"policy": REAP_POLICY},
                         "required": ["policy"], "additionalProperties": False}}),
     "await": (tool_await, {
-        "description": "Hand an issue to a worker (spawning one if none is live) and BLOCK until it lands, "
-                       "blocks or is reaped; prints the verdict (MERGED / BLOCKED / FAILED / TIMEOUT / REAPED / "
-                       "NO-WORKER), PR and summary. Runs bin/fleet-await.sh. TIMEOUT (exit 3) means still "
-                       "running — call again to keep waiting (nothing spawns twice).",
+        "description": "RETIRED: Fleet await returns immediately without spawning or waiting. Use native subagents and view independent Tasks directly.",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "id": {"type": "string", "pattern": "^#?[A-Za-z0-9-]{4,40}$",
@@ -1356,10 +1316,10 @@ TOOLS = {
     "task": (tool_task, {
         "description": "派 — dispatch a piece of work RECORD FIRST (issue #3330, bin/fleet-task-record.sh "
                        "dispatch): the hub writes the task record and the answer names it by ONE code, `id` "
-                       "(K3F9 — the first stdout line; await / send / get take it); with repo — a "
+                       "(K3F9 — the first stdout line; send / get take it); with repo — a "
                        "development task — the record is its ticket, no issue (issue #4897): + spawn, its "
                        "session opens in a worktree of that repo bound to the task, reads the record, opens its "
-                       "PR, merges it on a green gate and closes the record with its report; without repo + "
+                       "PR, merges it on a green gate and summarizes the result; without repo + "
                        "spawn a no-repo session is opened with the words. No hub here: exit 3, nothing made "
                        "(issue #4898). The old T<n> rides only as `alias` (one more version).",
         "inputSchema": {"type": "object", "properties": {
@@ -1386,15 +1346,7 @@ TOOLS = {
                                                          "repo": REPO},
                         "required": ["to", "text"], "additionalProperties": False}}),
     "report": (tool_report, {
-        "description": "报 — tell the session that SPAWNED this one how it ended (bin/fleet-report-parent.sh). "
-                       "Exit 0 reported (or no parent to tell — a hub-spawned session; or `orphaned`: the "
-                       "parent is gone, so the report becomes the person's reminder), 3 queued: the parent "
-                       "cannot take it now and it is delivered when it can (do not resend), 1 refused or "
-                       "`undelivered` (nothing reached the parent and nothing waits — say so). A merged "
-                       "report is checked against the PR's real state: report merged only after pr_merge says "
-                       "MERGED. A waiting report whose summary names a page / code for a person to scan or click "
-                       "holds every automatic reopen and handoff of this session until your next report "
-                       "(issue #2869).",
+        "description": "RETIRED compatibility entry. Saves only the caller session result; no Parent delivery or queue. A merged result still requires PR evidence.",
         "inputSchema": {"type": "object", "properties": {
             "state": {"type": "string", "enum": ["merged", "blocked", "failed", "stopped", "waiting"],
                       "description": "Workflow status; failed alone is progress, not terminal failure."},
@@ -1410,8 +1362,8 @@ TOOLS = {
                        "record (「问过你」, bin/fleet-task-record.sh — issue #3330) and turns this window red on "
                        "the dash (set-claude-state.sh blocked) until the next prompt arrives; no GitHub comment "
                        "is written (issue #4898). The answer comes back as "
-                       "your next turn, by the existing channels. A copy goes to the session that spawned this "
-                       "one (send to: parent, issue #4337); no parent ⇒ the question waits for the person. Then "
+                       "your next turn, by the existing channels. The question stays on this Task and waits "
+                       "for the person. Then "
                        "end your turn — do not spin. suggest / default / due are written under the question as "
                        "hints; nobody answers at a deadline by itself (EPIC #4333).",
         "inputSchema": {"type": "object", "properties": {
@@ -1580,19 +1532,18 @@ ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
 SERVING = {"list_all": False}
 
 
+RETIRED_TOOLS = {"await", "children", "report"}
+
+
 def listing(table, served=False):
     """What a server lists. `fleet` served to a session that has no `fleet-orch` beside
     it (FLEET_MCP_ORCH is not 1 — one launched before issue #4703, when the group was
     mounted only on @agent_spawn 1) lists the dispatch group too, so that session can
     spawn after the next takeover's tools/list_changed, no reopen. `--list` stays the
     static core list."""
-    if table is TOOLS:
-        if SERVING["list_all"]:
-            return TOOLS
-        if served and os.environ.get("FLEET_MCP_ORCH") != "1":
-            return TOOLS
-        return CORE
-    return table
+    if table is TOOLS and not (SERVING["list_all"] or served and os.environ.get("FLEET_MCP_ORCH") != "1"):
+        table = CORE
+    return {name: item for name, item in table.items() if name not in RETIRED_TOOLS}
 
 
 def check_args(schema, args):
@@ -1643,14 +1594,7 @@ def report(data):
 
 
 def ask_text(data):
-    text = report(data) + "\n\n" + report(data["state"])
-    p = data.get("parent")
-    if p is not None:
-        text += "\n\nparent: " + (p.get("receipt") or ("sent" if p.get("delivered") else "queued")
-                                   if p.get("delivered") or p.get("queued") else
-                                   "not told — " + (p.get("receipt") or p.get("why") or "?")
-                                   + " (the question waits for the person)")
-    return text
+    return report(data) + "\n\n" + report(data["state"])
 
 
 def status_text(data):
