@@ -109,7 +109,6 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
 from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
-from fleet_task_control import pending_start_task, cancel_pending_start
 VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task", "notices")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
              "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地", "starting": "待启动"}
@@ -124,6 +123,18 @@ def lib(name, file):
 
 def say(text):
     print("fleet · " + text, file=sys.stderr)
+
+
+def pending_start_task(row):
+    # Task control lives on the home machine, outside the thin client package.
+    # Keep import-time/help/services and forwarding free of server dependencies.
+    from fleet_task_control import pending_start_task as resolve
+    return resolve(row)
+
+
+def cancel_pending_start(task):
+    from fleet_task_control import cancel_pending_start as cancel
+    return cancel(task)
 
 
 # --- the rows ------------------------------------------------------------------------
@@ -143,7 +154,7 @@ def rows():
 
 
 def pending_rows(rs):
-    """Add only the panel's explicit pending task rows; TSV has no task identity."""
+    """Home-only row expansion, after main() has forwarded a thin client."""
     import fleet_view
     board = fleet_view.board_read()
     if not board:

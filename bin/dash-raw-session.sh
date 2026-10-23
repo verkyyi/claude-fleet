@@ -939,13 +939,16 @@ fi
   esac
   # Re-read after worktree/setup delays. The wrapper repeats this check after
   # tmux has created the pane, before credentials or a native process exist.
-  if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current >/dev/null; then
-    [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
-    refuse "raw: accepted task start refused"; exit 2
+  _dispatch_task=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task", ""))' "$DISPATCH") || exit 2
+  if [ -n "$_dispatch_task" ]; then
+    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current >/dev/null; then
+      [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+      refuse "raw: accepted task start refused"; exit 2
+    fi
+    _start_dispatch=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
+    launch="FLEET_START_DISPATCH=$_start_dispatch $launch"
+    stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
   fi
-  _start_dispatch=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
-  launch="FLEET_START_DISPATCH=$_start_dispatch $launch"
-  stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          # Say WHY when it is the server (issue #2477): the line rides into
