@@ -3946,8 +3946,7 @@ def snapshot_legacy_picks(ctl_dir, shared, state):
             reply = ctl_call(ctl_dir, req)
             picks = {k.split(":", 1)[1]: a for k, a in reply.get("picks", {}).items()
                      if k.startswith("codex:") and isinstance(a, str) and SAFE_LABEL(a)}
-            if picks:
-                write_json(os.path.join(spec["state"], "codex-legacy-picks.json"), picks)
+            write_json(os.path.join(spec["state"], "codex-legacy-picks.json"), picks)
         except (OSError, RuntimeError, ValueError, SystemExit):
             pass
 
@@ -3972,8 +3971,10 @@ def serve(a):
         # handed over, else (an older proxy) stopped as a stale one is
         handing = env("FLEET_CRED_HANDOFF") == "1"
         ctl0 = (shared.get("run") or st) if shared else env("FLEET_CRED_CTL_DIR", st)
-        if handing:
-            snapshot_legacy_picks(ctl0, shared, st)
+        if handing and not shared:
+            # Shared snapshots are root's job in the launcher, BEFORE it drops
+            # to the service role (which the old control correctly refuses).
+            snapshot_legacy_picks(ctl0, None, st)
         took = handoff_from(lockf, st, ctl0) if handing else None
         if took is not None:
             inherited = took

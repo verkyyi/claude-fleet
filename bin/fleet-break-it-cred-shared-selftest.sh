@@ -41,6 +41,19 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
 
+# Shared rollout must preserve native picks before root drops, or legacy
+# launchd bootout kills the only in-memory source. Exercise the real uid-gated
+# control handler without request peer_uid seams; socket and file I/O are real.
+drill_cred_shared_picks_upgrade() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" SharedSnapshot 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="共享接替降权前、旧 launchd refresh 停服前由 root 快照；role-owned0600、空结果覆盖、失败保留旧 listener；service role 无新增 control 权限"
+}
+
 drill_cred_shared_down() {
   CAP=10   # kill -9 → both logins' sessions answered again: the service's own restart delay + a python start
   local sb me uid gid port ta tb pid1 t0 thr sup

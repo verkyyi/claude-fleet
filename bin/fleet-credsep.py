@@ -2016,10 +2016,24 @@ def shared_restart():
     (issue #2981, the definition retired by the daemon's sweep), the daemon's: a
     stamp in LIB, which that child's `reload` watches, starts it again on the
     daemon's next tick. Never a definition beside the daemon's child."""
+    if DRY:
+        say("    would snapshot old shared Codex picks as root before restarting the proxy")
+        return
     if shared_supervised():
         put(os.path.join(LIB, ".restart"), "%f\n" % time.time(), 0o644,
             "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
         return
+    # launchd/systemd stops the old listener before the launcher can run. Take
+    # the same root-authorized snapshot here, while it can still answer. The
+    # protected LIB already ships this launcher and proxy; no extra helper file.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fleet_credsep_snapshot", os.path.join(LIB, "fleet-credsep-launch.py"))
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    role = (shared_rec() or {}).get("user") or ROLE
+    tenants = [{"login": m["login"], "state": os.path.join(ROOT_BASE, m["login"], "cred-proxy")}
+               for m in shared_tenants()]
+    launcher.snapshot_previous_shared_picks(ROOT_BASE, SHARED_RUN, tenants, pwd.getpwnam(role))
     load_daemon(SHARED_PATH, SHARED_LABEL)
 
 

@@ -547,8 +547,13 @@ input；不包含凭据，不 lease 或 refresh。消费者再与本 login 实�
 
 只有在新会话 mint 时收到 fresh active 策略的 Codex pass 才带签名 enrollment。
 已有 pass、已有 sid 的 remint 不因发布而变成新会话。升级交接在旧代理仍在线时，
-通过 uid/root 限定 control socket 快照现有 picks，再恢复原绑定；不推断历史引用来源，
-不批量重绑。没有旧进程或快照时，不能恢复其从未持久化的内存来源记录，旧 pass
+通过 uid/root 限定 control socket 快照现有 picks，再恢复原绑定。共享代理由 root launcher
+在降权到 service role **之前**快照；旧 launchd/systemd 的 `machine refresh` 则复用保护 LIB
+中同一 launcher helper，在停止旧服务**之前**快照，避免 bootout 后丢失内存绑定。
+快照写入各 tenant 的 role-owned 0600 文件，确认空 picks 会清除旧快照；在线旧代理拒绝、
+返回不完整或失败时中止接替/重启，保留旧 listener。冷启动没有旧 listener 时保留已存快照。
+不扩大 service role 的 control 权限，不推断历史引用来源，不批量重绑。没有旧进程或快照时，
+不能恢复其从未持久化的内存来源记录，旧 pass
 继续原兼容路径，发布负责人须验证旧会话。新 enrolled 会话则持久保存带用途的引用 hash
 → 原标签 + **实际 upstream account identity hash**；发送时校验实际载入的凭据身份。
 同账号 token refresh 保持亲和，删后复用标签不能继承旧上下文。其已知引用在 off/shadow/

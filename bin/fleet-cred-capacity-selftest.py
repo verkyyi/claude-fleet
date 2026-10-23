@@ -10,6 +10,8 @@ import json
 import os
 import shutil
 import subprocess
+import socket
+import stat
 import sys
 from pathlib import Path
 import tempfile
@@ -110,6 +112,9 @@ class Capacity(unittest.TestCase):
         self.assertNotIn('capacity_policy',claims)
         active_pass=upgraded.keys.mint('', 'new',86400,capacity=True)
         self.assertEqual(upgraded.keys.verify(active_pass)[0]['capacity_policy'],2)
+        with patch.object(p,'ctl_call',return_value=dict(picks={})):
+            p.snapshot_legacy_picks(self.tmp.name,None,self.tmp.name)
+        self.assertEqual(json.loads(Path(self.tmp.name,'codex-legacy-picks.json').read_text()),{})
 
     def test_managed_affinity_survives_off_stale_and_label_reuse(self):
         self.install((1,.5)); self.t.codex_pick('s')
@@ -252,6 +257,198 @@ class Capacity(unittest.TestCase):
             self.assertIn(b'usage_limit_reached',h.wfile.getvalue())
             result=h.upstream('http://127.0.0.1:1','/messages',{},b'{}','direct','s','a','file',[],time.time(),'claude',True)
             self.assertEqual(result,('acct','b'));repick.assert_called_once()
+
+class SharedSnapshot(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name); self.run=self.root/'run'/'.shared'; self.run.mkdir(parents=True)
+        self.db=self.root/'db'; self.db.mkdir()
+        self.role_uid=os.getuid() or 65534; self.role_gid=os.getgid()
+        self.uid=0  # model the launcher's root -> service-role boundary, not peer_uid request seams
+        self.requests=[]; self.reject=''; self.original_handle=p.ctl_handle
+        spec=importlib.util.spec_from_file_location('launcher',BIN/'fleet-credsep-launch.py')
+        self.launcher=importlib.util.module_from_spec(spec); spec.loader.exec_module(self.launcher)
+        self.patch(self.launcher,'TEST',False)
+        self.role=SimpleNamespace(pw_uid=self.role_uid,pw_gid=self.role_gid,pw_dir=self.tmp.name)
+        (self.db/'.shared.json').write_text(json.dumps(dict(user='fixture-role',port=18923)))
+        tenants={}
+        for i,name in enumerate(('alpha','beta','newtenant')):
+            state=self.db/name/'cred-proxy'; state.mkdir(parents=True)
+            conf=self.root/('conf-'+name); conf.mkdir()
+            (state.parent/'meta.json').write_text(json.dumps(dict(login=name,mode='shared',conf_dir=str(conf))))
+            (state/'codex-legacy-picks.json').write_text('{"stale":"stale-account"}')
+            if name!='newtenant':
+                tenants[name]=SimpleNamespace(name=name,cfg=SimpleNamespace(uid=self.role_uid+100+i,state=str(state)),
+                    picks={('codex','old-native'):'source-a',('claude','claude-session'):'ignored'} if name=='alpha' else {})
+        manifest=self.db/'.shared'; manifest.mkdir()
+        (manifest/'tenants.json').write_text(json.dumps(dict(tenants=[dict(login=n) for n in tenants])))
+        self.patch(p.Proxy,'tenants',tenants)
+        self.patch(p.Proxy,'log_any',lambda **kw:None)
+        self.patch(p,'peer_uid',lambda conn:self.uid)
+        self.patch(p,'ctl_handle',self.handle)
+        self.env=dict(FLEET_CREDSEP_ROOT_BASE=str(self.db),FLEET_CREDSEP_RUN_BASE=str(self.root/'run'),
+            FLEET_CREDSEP_LOG_BASE=str(self.root/'log'),FLEET_CRED_HANDOFF='1',FLEET_CRED_SHARED_TEST='0',FLEET_CREDSEP_TEST='0')
+        env=patch.dict(os.environ,self.env); env.start(); self.addCleanup(env.stop)
+        for key in ('FLEET_CRED_TEST_PEER_UID','FLEET_CRED_AS','FLEET_CRED_CTL_DIR'):
+            os.environ.pop(key,None)
+        self.server=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+        self.server.bind(str(self.run/'ctl.sock')); self.server.listen(8); self.server.settimeout(.1)
+        self.done=threading.Event()
+        def serve():
+            while not self.done.is_set():
+                try:conn,_=self.server.accept()
+                except socket.timeout:continue
+                except OSError:break
+                p.ctl_conn(conn,None)
+        self.thread=threading.Thread(target=serve); self.thread.start()
+        self.addCleanup(self.stop_server)
+
+    def patch(self,obj,name,value):
+        patcher=patch.object(obj,name,value); result=patcher.start(); self.addCleanup(patcher.stop)
+        return result
+
+    def stop_server(self):
+        self.done.set(); self.server.close(); self.thread.join(timeout=3)
+
+    def handle(self,req,tenant):
+        self.requests.append((self.uid,dict(req)))
+        if tenant.name==self.reject:raise ValueError('fixture snapshot refused')
+        return self.original_handle(req,tenant)
+
+    def saved(self,name):
+        return self.db/name/'cred-proxy'/'codex-legacy-picks.json'
+
+    def test_control_auth_distinguishes_service_root_tenant_without_seam(self):
+        for uid,who,allowed in ((0,'alpha',True),(self.role_uid,'alpha',False),
+                (self.role_uid+100,'alpha',True),(self.role_uid+100,'beta',False),(0,'arbitrary-as',False)):
+            self.uid=uid
+            tenant,why=p.ctl_tenant(None,dict(op='picks',**{'as':who,'peer_uid':0}))
+            self.assertEqual(tenant is not None,allowed,(uid,who,why))
+
+    def run_launcher(self,drop):
+        l=self.launcher
+        with patch.object(l.os,'geteuid',side_effect=lambda:self.uid), patch.object(l.pwd,'getpwnam',return_value=self.role), \
+                patch.object(l,'getpw',side_effect=lambda name:SimpleNamespace(pw_uid=self.role_uid+100+('alpha','beta','newtenant').index(name))), \
+                patch.object(l,'copy_probe'), patch.object(l,'tenant_settings',return_value={}), \
+                patch.object(l,'drop_to',side_effect=drop) as dropped, patch.object(l.os,'umask'), \
+                patch.object(l.os,'chdir'), patch.object(l.os,'execve',side_effect=RuntimeError('fixture-exec')) as executed:
+            try:l.shared()
+            except RuntimeError as e:
+                if str(e)!='fixture-exec':raise
+            return dropped,executed
+
+    def test_service_role_cannot_snapshot_without_test_seams(self):
+        self.uid=self.role_uid
+        with patch.object(self.launcher.os,'geteuid',return_value=self.role_uid):
+            with self.assertRaises(SystemExit):
+                self.launcher.snapshot_shared_picks(str(self.run),
+                    [dict(login='alpha',state=str(self.saved('alpha').parent))],self.role)
+        self.assertEqual(self.requests,[])
+        self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
+
+    def test_shared_snapshot_before_drop_actual_mode_owner_and_empty(self):
+        def drop(role):
+            self.assertEqual(role,'fixture-role'); self.assertEqual(self.uid,0)
+            for name,expected in (('alpha',{'old-native':'source-a'}),('beta',{})):
+                saved=self.saved(name); info=saved.stat()
+                self.assertEqual(json.loads(saved.read_text()),expected)
+                self.assertEqual(stat.S_IMODE(info.st_mode),0o600)
+                self.assertEqual((info.st_uid,info.st_gid),(self.role_uid,self.role_gid))
+            # A newly joining tenant was not present at the old daemon: no arbitrary-as request.
+            self.assertEqual(json.loads(self.saved('newtenant').read_text()),{'stale':'stale-account'})
+            self.uid=self.role_uid
+        dropped,executed=self.run_launcher(drop)
+        dropped.assert_called_once(); executed.assert_called_once()
+        self.assertEqual([r['as'] for _,r in self.requests],['alpha','beta'])
+        self.assertTrue(all(uid==0 and 'peer_uid' not in req for uid,req in self.requests))
+        with self.assertRaises(SystemExit):p.ctl_call(str(self.run),{'op':'picks','as':'alpha'})
+
+    def test_active_snapshot_failure_aborts_before_drop_keeps_listener_and_state(self):
+        self.reject='beta'; inode=(self.run/'ctl.sock').stat().st_ino
+        old_manifest=(self.db/'.shared'/'tenants.json').read_bytes()
+        drop=self.patch(self.launcher,'drop_to',unittest.mock.Mock())
+        with self.assertRaises(SystemExit):self.run_launcher(drop)
+        drop.assert_not_called()
+        for name in ('alpha','beta'):
+            self.assertEqual(json.loads(self.saved(name).read_text()),{'stale':'stale-account'})
+        self.assertEqual((self.db/'.shared'/'tenants.json').read_bytes(),old_manifest)
+        self.assertEqual((self.run/'ctl.sock').stat().st_ino,inode)
+        self.reject=''
+        self.assertEqual(p.ctl_call(str(self.run),{'op':'picks','as':'alpha'})['picks']['codex:old-native'],'source-a')
+
+    def refresh_fixture(self,supervised=False):
+        spec=importlib.util.spec_from_file_location('credsep',BIN/'fleet-credsep.py')
+        refresh=importlib.util.module_from_spec(spec); spec.loader.exec_module(refresh)
+        lib=self.root/'lib';lib.mkdir()
+        self.patch(refresh,'LIB',str(lib))
+        self.patch(refresh,'shared_supervised',lambda:supervised)
+        self.patch(refresh,'settings_conf',lambda *a:False)
+        self.patch(refresh,'shared_service',lambda:False)
+        self.patch(refresh,'shared_record',lambda *a:None)
+        self.patch(refresh,'relog_agent',lambda *a:None)
+        self.patch(refresh,'shared_unserved',lambda *a:([],[]))
+        self.patch(refresh,'unserved_tried',lambda *a:[])
+        self.patch(refresh,'say',lambda *a:None)
+        self.patch(refresh.os,'geteuid',lambda:self.uid)
+        self.patch(refresh.pwd,'getpwnam',lambda name:self.role)
+        def copy_changed(path,content,*args):
+            Path(path).write_bytes(content);return True
+        self.patch(refresh,'put_changed',copy_changed)
+        return refresh,lib
+
+    def assert_snapshots(self):
+        for name,expected in (('alpha',{'old-native':'source-a'}),('beta',{})):
+            info=self.saved(name).stat()
+            self.assertEqual(json.loads(self.saved(name).read_text()),expected)
+            self.assertEqual(stat.S_IMODE(info.st_mode),0o600)
+            self.assertEqual((info.st_uid,info.st_gid),(self.role_uid,self.role_gid))
+
+    def test_legacy_machine_refresh_snapshots_before_service_stop(self):
+        refresh,lib=self.refresh_fixture()
+        inode=(self.run/'ctl.sock').stat().st_ino
+        def stop(*args):
+            self.assertEqual(self.uid,0);self.assert_snapshots()
+            self.assertEqual((self.run/'ctl.sock').stat().st_ino,inode)
+            self.assertEqual([r['as'] for _,r in self.requests],['alpha','beta'])
+            self.assertTrue(all(uid==0 and 'peer_uid' not in req for uid,req in self.requests))
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock(side_effect=stop))
+        self.assertEqual(refresh.machine_refresh(None),0)
+        stopped.assert_called_once_with(refresh.SHARED_PATH,refresh.SHARED_LABEL)
+        self.assertEqual(sorted(f.name for f in lib.iterdir() if f.is_file()),
+            ['fleet-cred-proxy.py','fleet-credsep-launch.py'])
+
+    def test_legacy_machine_refresh_refusal_never_stops_old_listener(self):
+        refresh,lib=self.refresh_fixture();self.reject='beta'
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
+        with self.assertRaises(SystemExit):refresh.machine_refresh(None)
+        stopped.assert_not_called()
+        for name in ('alpha','beta'):
+            self.assertEqual(json.loads(self.saved(name).read_text()),{'stale':'stale-account'})
+        self.reject=''
+        self.assertEqual(p.ctl_call(str(self.run),{'op':'picks','as':'alpha'})['picks']['codex:old-native'],'source-a')
+
+    def test_dry_restart_never_snapshots_or_stops_old_listener(self):
+        refresh,lib=self.refresh_fixture()
+        self.patch(refresh,'DRY',True)
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
+        refresh.shared_restart()
+        stopped.assert_not_called();self.assertEqual(self.requests,[])
+        self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
+
+    def test_supervised_restart_defers_snapshot_to_root_launcher(self):
+        refresh,lib=self.refresh_fixture(supervised=True)
+        stamped=self.patch(refresh,'put',unittest.mock.Mock())
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
+        refresh.shared_restart()
+        stamped.assert_called_once();stopped.assert_not_called()
+        self.assertEqual(self.requests,[])
+        self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
+
+    def test_cold_start_no_listener_retains_persisted_state(self):
+        self.stop_server(); (self.run/'ctl.sock').unlink()
+        self.launcher.snapshot_shared_picks(str(self.run),[dict(login='alpha',state=str(self.saved('alpha').parent))],self.role)
+        self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
+
 
 
 if __name__=='__main__':unittest.main()
