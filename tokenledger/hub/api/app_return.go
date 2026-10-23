@@ -22,6 +22,9 @@ const appReturnMax = 512
 // appReturnOK says whether v is a console address the sign-in may send a
 // browser back to.
 func appReturnOK(v string) bool {
+	if strings.HasPrefix(v, previewAuthorize+"?") {
+		return previewReturnOK(v)
+	}
 	if len(v) > appReturnMax || !strings.HasPrefix(v, AppPrefix+"/") ||
 		strings.Contains(v, "//") || strings.Contains(v, `\`) {
 		return false
