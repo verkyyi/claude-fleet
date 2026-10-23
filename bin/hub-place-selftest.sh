@@ -927,6 +927,11 @@ if '/tasks/T43/execution' in args[-1]:
         path.write_text(json.dumps(snapshot))
     else:
         assert method=='GET'
+        if args[-1].endswith('/start'):
+            print(json.dumps({'control_version':1, 'task_execution':snapshot,
+                              'start':{'operation_id':snapshot['operation_id'],
+                                       'agent':'claude', 'repo':'', 'no_repo':True}}))
+            print('200');sys.exit(0)
     print(json.dumps(snapshot));print('200');sys.exit(0)
 assert method == 'GET'
 assert args[-1] in ('http://hub.test/v1/node/tasks/T42','http://hub.test/v1/node/tasks/T43')
