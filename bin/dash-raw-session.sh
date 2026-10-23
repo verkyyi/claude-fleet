@@ -299,20 +299,28 @@ DISPATCH="${FLEET_DISPATCH:-}"
 EXECUTION="${FLEET_TASK_EXECUTION:-}"
 unset FLEET_TASK_EXECUTION FLEET_TASK_LAUNCH_ID
 CONTINUATION_EXIT=${FLEET_TASK_CONTINUATION:-}
-unset FLEET_TASK_CONTINUATION
+CONTINUATION_STOP=${FLEET_TASK_CONTINUATION_STOP:-}
+unset FLEET_TASK_CONTINUATION FLEET_TASK_CONTINUATION_STOP
+[ -z "$CONTINUATION_EXIT" ] || [ -z "$CONTINUATION_STOP" ] || {
+  printf 'dash-raw-session: ambiguous continuation proof\n' >&2; exit 2;
+}
+CONTINUATION_ID=${CONTINUATION_EXIT:-$CONTINUATION_STOP}
+CONTINUATION_ARGS=(--exit-operation-id "$CONTINUATION_EXIT")
+[ -z "$CONTINUATION_STOP" ] || CONTINUATION_ARGS=(--stop-operation-id "$CONTINUATION_STOP")
 CONTINUATION_PLAN=''
-if [ -n "$CONTINUATION_EXIT" ]; then
+if [ -n "$CONTINUATION_ID" ]; then
   [ -n "$EXECUTION" ] && [ -z "$RESUME_SID$REOPEN_FID$WT_ARG$PREV_ID" ] || {
     printf 'dash-raw-session: continuation requires its fresh controlled start\n' >&2; exit 2;
   }
   [ "$BG" != 1 ] || { printf 'dash-raw-session: controlled continuation cannot redispatch in background\n' >&2; exit 2; }
   NODE_ARG=local
-  CONTINUATION_PLAN=$(python3 "$BIN/fleet_task_continuation.py" --snapshot "$EXECUTION" --dispatch "$DISPATCH" --exit-operation-id "$CONTINUATION_EXIT") || exit 2
+  CONTINUATION_PLAN=$(python3 "$BIN/fleet_task_continuation.py" --snapshot "$EXECUTION" --dispatch "$DISPATCH" "${CONTINUATION_ARGS[@]}") || exit 2
   _cp_value() { python3 -c 'import json,sys; v=json.loads(sys.argv[1])[sys.argv[2]]; print(int(v) if isinstance(v,bool) else v)' "$CONTINUATION_PLAN" "$1"; }
   [ "$(_cp_value repo)" = "$REPO_ARG" ] && [ "$(_cp_value no_repo)" = "$NOREPO" ] || {
     printf 'dash-raw-session: continuation workspace differs from start\n' >&2; exit 2;
   }
-  WT_ARG=$(_cp_value worktree); PREV_ID=$(_cp_value source_fid); PROMPT=$(_cp_value seed)
+  WT_ARG=$(_cp_value worktree); PREV_ID=$(_cp_value source_fid)
+  [ -z "$PREV_ID" ] || PROMPT=$(_cp_value seed)
   [ "$NOREPO" != 1 ] || [ "$(_cp_value cwd)" = "$HOME" ] || exit 2
 fi
 case "${FLEET_TASK_CONTROL_VERSION:-}" in ''|1) ;; *) printf 'dash-raw-session: unsupported task execution control version\n' >&2; exit 2 ;; esac
@@ -350,6 +358,11 @@ esac
 SESS="${TARGET_SESS:-$(fleet_current_session)}"
 [ -z "$SESS" ] && { printf 'dash-raw-session: no target tmux session\n' >&2; fleet_ui_fail "raw: no target tmux session"; exit 1; }
 fleet_load_conf "$SESS"                       # multi-fleet: target THIS fleet's checkout
+if [ -n "$CONTINUATION_ID" ]; then
+  _proof_field=exit_operation_id; [ -z "$CONTINUATION_STOP" ] || _proof_field=stop_operation_id
+  _proof=$(python3 -c 'import json,sys; print(json.dumps({"version":1,sys.argv[1]:sys.argv[2]}))' "$_proof_field" "$CONTINUATION_ID") || exit 2
+  EXECUTION=$(python3 "$BIN/fleet_task_execution.py" prepare --snapshot "$EXECUTION" --fleet-id "$(fleet_uuid "$SESS")" --continuation "$_proof" --dispatch "$DISPATCH") || exit 2
+fi
 # Each fleet is its OWN tmux server on a named socket (== session name, issue
 # #159). Route EVERY tmux call through TM() so it names the target fleet's socket
 # explicitly — correct in-session ($TMUX set) and headless alike.
@@ -370,7 +383,7 @@ refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK
 if [ -n "$TASK_REF" ] && [ -z "$REOPEN_FID$RESUME_SID" ] && [ "${FLEET_TASK_DUP_OK:-0}" != 1 ]; then
   _tfid=''; case "${FLEET_TASK_FID:-}" in "$TASK_REF="*) _tfid=${FLEET_TASK_FID#"$TASK_REF="} ;; esac
   _ttask=$TASK_REF
-  if [ -n "$CONTINUATION_EXIT" ]; then
+  if [ -n "$CONTINUATION_ID" ]; then
     _tfid=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["execution_owner"].split("/")[1])' "$EXECUTION") || exit 2
     _ttask=''  # The old FID remains historical even if its window lingers.
   fi
@@ -831,9 +844,9 @@ if [ "$NOREPO" = 1 ]; then
   slug=norepo; wt="$HOME"                        # no worktree: the agent runs in $HOME
 elif [ -n "$WT_ARG" ]; then
   # A parked scratch's own kept worktree (issue #3387): reopened, never allocated.
-  if [ -n "$CONTINUATION_EXIT" ]; then
+  if [ -n "$CONTINUATION_ID" ]; then
     # Re-prove the receipt/worktree after placement and setup delays.
-    _verified=$(python3 "$BIN/fleet_task_continuation.py" --snapshot "$EXECUTION" --dispatch "$DISPATCH" --exit-operation-id "$CONTINUATION_EXIT") || exit 2
+    _verified=$(python3 "$BIN/fleet_task_continuation.py" --snapshot "$EXECUTION" --dispatch "$DISPATCH" "${CONTINUATION_ARGS[@]}") || exit 2
     [ "$_verified" = "$CONTINUATION_PLAN" ] || { refuse 'raw: continuation workspace changed'; exit 2; }
     # Identity was proved by its Git metadata, not its mutable branch name.
     slug="task-$TASK_REF"
