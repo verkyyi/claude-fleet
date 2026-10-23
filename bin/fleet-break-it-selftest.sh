@@ -7845,6 +7845,15 @@ drill_task_controlled_auto_retention() {
   SECS=$(since "$t0")
 }
 
+drill_parent_origin_retired() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
+    WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
+  }
+  WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
 drill_task_worktree_current_generation() {
   local t0; t0=$(now); CAP=10
   suite_holds worktree-autoclean-scratch-selftest.sh \
@@ -7871,14 +7880,6 @@ drill_task_current_view() {
   SECS=$(since "$t0")
 }
 
-drill_parent_origin_retired() {
-  local t0; t0=$(now); CAP=30
-  python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
-    WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
-  }
-  WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
-  SECS=$(since "$t0")
-}
 
 drill_parent_wait_retired() {
   local t0; t0=$(now); CAP=30
@@ -7953,6 +7954,15 @@ drill_task_parent_write_retired() {
 }
 
 # ================================================================ run ====}
+
+drill_release_oidc_runtime() {
+  local t0; t0=$(now); CAP=120
+  bash "$BIN/fleet-release-publish-selftest.sh" >"$WORK/release-oidc-runtime.log" 2>&1 || {
+    WHY="release OIDC regression: $(tail -8 "$WORK/release-oidc-runtime.log")"; return 1;
+  }
+  WHAT='隔离 loopback：OIDC 暂错有界重试，401/403和坏身份立即拒绝，不泄漏响应或token，不跳签名发布门'
+  SECS=$(since "$t0")
+}
 
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
