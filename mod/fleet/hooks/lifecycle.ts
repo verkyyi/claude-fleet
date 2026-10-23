@@ -45,15 +45,16 @@ import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
-import { INBOX_MS, inboxDir, pollInbox } from './inbox'
+import { INBOX_MS, inboxDir, pollInbox, pollNativeCancel } from './inbox'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
 import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
 import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
 import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
-import { noteSessionBoundary, runtimeQuery, runtimeIdleNow, WRITE_TIMEOUT_MS } from './state'
+import { noteSessionBoundary, runtimeQuery, runtimeIdleNow, runtimeGen, WRITE_TIMEOUT_MS } from './state'
 import { ACCEPT_V2, acceptOutcome, acceptSessionEnded, beginAccept, parseAccept } from './accept'
+import { cancelNative } from './native-cancel'
 
 export const HEARTBEAT_MS = 15_000
 
@@ -71,6 +72,7 @@ let modelTimer: Timer | undefined
 let whereTimer: Timer | undefined
 let whereBusy = false
 let inboxBusy = false
+let cancelBusy = false
 let pane: string | undefined
 let inbox: string | undefined
 
@@ -99,6 +101,31 @@ function inboxIo($: EngineInterface): InboxIo {
     },
     run: async (command, args) => {
       await $.command.run({ command, args })
+    },
+    cancel: async request => {
+      // No capability is advertised. Stop orchestration must still preserve
+      // the root long enough to use this bounded, opt-in durable-plan road.
+      if (!isOpen() || (await $.session.version()).version !== '2.1.295') {
+        return { ok: false, state: 'refused', reason: 'unsupported_native_version' }
+      }
+      return cancelNative({
+        now: async () => (await $.clock.now()) / 1000,
+        sleep: milliseconds => $.clock.sleep(milliseconds),
+        session: () => $.session.id(),
+        generation: runtimeGen,
+        verify: async (req, ids, expected) => {
+          const payload = { request: req, ids, expected,
+            session_id: await $.session.id(), project: await $.session.cwd() }
+          const remaining = req.deadline * 1000 - await $.clock.now()
+          if (remaining <= 0) throw new Error('cancel deadline expired')
+          const result = await $.process.run(['python3', `${$.plugin.root}/../../bin/fleet_native_cancel.py`], {
+            stdin: JSON.stringify(payload), timeoutMs: Math.max(1, Math.min(500, remaining)),
+          })
+          if (result.exitCode !== 0) throw new Error('durable ownership unavailable or changed')
+          return JSON.parse(result.stdout)
+        },
+        call: async input => await $.tool.call(input) as Record<string, unknown>,
+      }, request)
     },
     query: async request => {
       if (request.query === 'park.v1') {
@@ -181,6 +208,18 @@ async function pollOnce($: EngineInterface): Promise<void> {
   }
 }
 
+async function pollCancelOnce($: EngineInterface): Promise<void> {
+  if (cancelBusy || inbox === undefined) return
+  cancelBusy = true
+  try {
+    await pollNativeCancel(inboxIo($), inbox)
+  } catch {
+    // A missing request is normal; failed receipt writes remain unconfirmed.
+  } finally {
+    cancelBusy = false
+  }
+}
+
 // The fallback tools (tools.ts explains them; the run is here because the engine
 // follows `$` only within one file): the specs from the service itself; a spec
 // read that fails registers nothing (an old session's list already carries them),
@@ -235,6 +274,7 @@ async function onReady($: EngineInterface): Promise<void> {
   inbox = inboxDir(conf, tmux, pane)
   inboxTimer?.cancel()
   inboxTimer = inbox === undefined ? undefined : $.clock.every(INBOX_MS, () => {
+    void pollCancelOnce($)
     void pollOnce($)
   })
 }
