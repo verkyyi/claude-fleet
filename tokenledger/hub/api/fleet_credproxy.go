@@ -374,6 +374,7 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 		}
 	}
 	if provider == credvault.Codex {
+		b.WorkerID = workerID
 		candidate, _ := s.codexSelect(choices, b, now, false)
 		// b may refer to an account removed from the authorized choices.
 		choices = []store.Credential{candidate}

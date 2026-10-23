@@ -760,3 +760,15 @@ CREATE TABLE IF NOT EXISTS fleet_trial_scans (
 );
 CREATE INDEX IF NOT EXISTS idx_fleet_trial_scans_code ON fleet_trial_scans(code_id, at);
 CREATE INDEX IF NOT EXISTS idx_fleet_trial_scans_who ON fleet_trial_scans(openid, code_id, at);
+
+-- Subscription plan capacity evidence, independent of subscription prices.
+CREATE TABLE IF NOT EXISTS subscription_capacity_head (
+  id INTEGER PRIMARY KEY,
+  revision BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS subscription_capacity_revisions (
+  revision BIGINT PRIMARY KEY,
+  document TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  at TEXT NOT NULL
+);

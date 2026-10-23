@@ -555,9 +555,7 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 			row := credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c), CredentialID: s.Vault.CredentialID(c), Limits: view, Plan: plan, PlanSource: source, PlanAt: planAt, Source: c.Source()}
-			if source == "admin" {
-				row.PlanTier = s.Vault.PlanTier(c)
-			}
+			row.PlanTier = s.Vault.PlanTier(c)
 			priced := plan
 			if priced == "" {
 				priced = acctPlan[row.AccountUUID]

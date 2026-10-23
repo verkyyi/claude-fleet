@@ -15,7 +15,11 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
 )
 
-func TestCodexSelection429Contract(t *testing.T) {
+func TestCodexSelection429Contract(t *testing.T) { testCodexSelection429Contract(t, false) }
+
+func TestCodexCapacity429NoReplay(t *testing.T) { testCodexSelection429Contract(t, true) }
+
+func testCodexSelection429Contract(t *testing.T, active bool) {
 	for _, quota := range []bool{false, true} {
 		t.Run(fmt.Sprint("quota=", quota), func(t *testing.T) {
 			r := newCPRig(t)
@@ -58,6 +62,18 @@ func TestCodexSelection429Contract(t *testing.T) {
 			defer proxy.Close()
 			codexSelectionQuota(t, r, "poolcx", now, 10, 10, 4*time.Hour, 6*24*time.Hour)
 			codexSelectionQuota(t, r, "poolcx2", now, 10, 10, 4*time.Hour, 6*24*time.Hour)
+			if active {
+				first, second := capacityProfile("fixture-plan", 10, now), capacityProfile("fixture-plan", 1, now)
+				first.Tier, second.Tier = "large", "small"
+				for label, tier := range map[string]string{"poolcx": "large", "poolcx2": "small"} {
+					if err := s.Vault.SetPlan("pool", "codex", label, "fixture-plan", tier); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := s.Store.SetPlanCapacities(store.PlanCapacityCatalog{Mode: "active", Profiles: []store.PlanCapacityProfile{first, second}}, 0, "fixture-admin", now); err != nil {
+					t.Fatal(err)
+				}
+			}
 			call := func(body string) (int, string, string) {
 				t.Helper()
 				req, _ := http.NewRequest(http.MethodPost, proxy.URL+"/v1/proxy/codex/responses", strings.NewReader(body))

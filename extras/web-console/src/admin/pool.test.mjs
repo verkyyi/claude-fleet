@@ -83,3 +83,10 @@ console.log("PASS managed inventory, historical re-report, personal isolation, u
   const [row] = subscriptions({ creds: { credentials: [c] } });
   assert.equal(stateOf(row, 85), "reauth");
 }
+
+// A provider plan can carry its own separately registered tier. Historical
+// account metadata must not override the credential's current registration.
+const detectedTier = subscriptions({ accounts: [{ account_uuid: "codex:fixture", rate_limit_tier: "obsolete" }], creds: { credentials: [{ principal_id: "pool", provider: "codex", account: "example", account_uuid: "codex:fixture", plan: "pro", plan_source: "provider", plan_tier: "verified-tier" }] } })[0];
+assert.equal(detectedTier.planTier, "verified-tier");
+const clearedTier = subscriptions({ accounts: [{ account_uuid: "codex:fixture", rate_limit_tier: "obsolete" }], creds: { credentials: [{ principal_id: "pool", provider: "codex", account: "example", account_uuid: "codex:fixture", plan: "pro", plan_source: "provider" }] } })[0];
+assert.equal(clearedTier.planTier, "");

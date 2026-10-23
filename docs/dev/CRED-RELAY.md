@@ -382,14 +382,14 @@ sudo grep -rEc 'sk-ant-|eyJhbGci|Bearer ' /var/log/caddy/ /etc/caddy/ ; sudo gre
 `account/rateLimits/read` / 局部更新），并读取独立保存的最近读取失败与 429 cooldown。
 局部更新保留各窗口原来的观察时间，不能用新快照的时间替旧窗口续命。
 
-**容量不可精确比较。** 当前协议只有 `used_percent`、窗口时长、reset、套餐名与
+**未登记容量时不可精确比较。** 上游协议只有 `used_percent`、窗口时长、reset、套餐名与
 credits 标志，没有可跨订阅比较的绝对 token / 请求容量，也没有可信的换算系数。
 套餐名相同不证明容量相同；不同套餐也不套倍率。credits 的余额 / unlimited 不被当作
 5h 或 7d 订阅容量。因此不按「剩余百分比最大」排序，不声称最大化真实吞吐；诊断明确写
-`comparability=no_absolute_capacity`。未来若有可信绝对容量，须另加来源、单位、有效期
-和双窗口换算的验证，不能只填一个套餐权重。
+`comparability=no_absolute_capacity`。下节的套餐容量目录可登记经过确认的可比工作单位；
+未登记时仍按本节保守规则运行，不从套餐名、价格或旧倍率推导容量。
 
-当前保守规则如下（常数是策略阈值，不是套餐容量）：
+未启用容量目录时的保守规则如下（常数是策略阈值，不是套餐容量）：
 
 - 授权、暂停、reauth 和凭据去重仍由 `sessionBindChoices` 过滤。自有优先于共享，
   同一所属内 refresh 健康优先；已满账号才按原行为让给其他获授权的未满账号。
@@ -417,6 +417,110 @@ credits 标志，没有可跨订阅比较的绝对 token / 请求容量，也没
 或两者都有保护带但仅候选临近 reset；百分比多一点、双方都有机会、未知变已知均不足以
 单独触发主动换绑。假时钟测试固定保持期前一秒、恰好到期、后一秒，另测新鲜度、
 20% 保护带与两个机会窗口的阈值内外。后续调参需要正常业务的脱敏证据另行评估。
+
+### 套餐容量目录与安全预览（T972）
+
+管理员在「订阅池 → Codex 容量路由 / Capacity」登记套餐与档位容量，在订阅详情的
+「Register tier / 登记档位」关联该订阅的确认档位。没有账号优先级。provider 检测到的
+plan 与管理员登记的 tier 分开显示；登记 plan 或最新配额 plan 与检测 plan 不符时，
+诊断为 `plan_mismatch`，不套用容量。明确确认某 plan 不分档时才可登记空 tier；
+`prolite` / `promax` 只是 provider 值，没有内置历史倍率。订阅价格与 API 标价均不参与容量。
+
+目录在共享数据库的 `subscription_capacity_head` / `subscription_capacity_revisions`
+保存，是 `subscription_plans` 价格目录旁独立的容量证据。保存用 expected revision CAS，
+冲突返回 409；同一事务保留完整目录、actor 和时间，跨副本读取同一 revision。
+清除某 profile 即移除它后保存；恢复是载入某历史目录，再以当前 revision 保存，
+不会抹去审计记录。旧二进制忽略新增表，无需破坏性数据库回滚。
+
+`GET /v1/fleet/plans/capacity` 返回 `{current, history}`，current 与 history 每项为
+`{revision, catalog, actor, at}`。`PUT` body 为：
+
+```json
+{
+  "expected_revision": 0,
+  "catalog": {
+    "mode": "shadow",
+    "profiles": [{
+      "plan": "example-plan",
+      "tier": "confirmed-tier",
+      "pool": "codex",
+      "unit": "reference-work",
+      "basis": "same confirmed workload and allowance basis v1",
+      "source": "https://example.com/verified-capacity-evidence",
+      "version": "v1",
+      "confidence": "provisional",
+      "effective_from": "2026-10-01T00:00:00Z",
+      "effective_to": "2027-01-01T00:00:00Z",
+      "windows": [{"minutes": 10080, "units": 1}]
+    }]
+  }
+}
+```
+
+这是格式示例，**不是任何真实套餐的容量声明**。字段约束：
+
+| 字段 | 约束 / 含义 |
+| --- | --- |
+| mode | `off`（默认、原保守选择）、`shadow`（实际请求同 off，仅预览新策略）、`active` |
+| profiles | 最多 100 项；精确 `(plan, tier)` 唯一，名称大小写敏感 |
+| plan / tier / unit / version | plan、unit、version 必填；1–96 个 ASCII 字母数字及 `._:-`，首字母数字；tier 可空 |
+| pool | 仅支持已识别的主池 `codex`；不支持凭空登记模型专属池 |
+| basis / source | 必填，分别 ≤256 / ≤512 字节；无首尾空白和换行，说明可比工作负载与确认来源 |
+| confidence | `verified` 或 `provisional`；只有 verified 在有效期内可参与估算 |
+| effective_from / effective_to | RFC3339；from 必填，to 可省略，若存在须晚于 from；区间前闭后开 |
+| windows | 列出全部预期实际窗口，1–2 项，分钟数只能为 300 / 10080，不能重复 |
+| units | 每个窗口的可比工作容量，有限正数，范围 0.000001–1000000000；不是实际 tokens |
+
+一个 profile 可明确只期待 10080 分钟窗口，不能因为某次只读到周窗口就自动认定
+5h 不存在。缺预期窗口、重复、额外主池窗口、非法值、过期、reset 尚未重新观察，
+仍为 unknown；已知满窗继续 limited。局部更新不替旧窗续期。其他模型池不会给主池
+增加容量。每个窗口各自保留实际观察年龄与 reset。
+
+`active` 的同一所属、refresh 健康层及 quota 状态层内，**只有整个候选组都具有
+相同 pool / unit / basis 的已确认估算**才按容量比较；混合或未知基准回退到保守的
+状态与 reset 机会规则。每个窗口估计剩余为 `units × remaining_percent / 100 × calibration`，
+原始估计取全部窗口的最小值。容量 score 逐窗口乘
+`1 + 0.25 × (1 − clamp(reset 剩余分钟 / 窗口分钟, 0.05, 1))` 后再取最小值，
+再除以 `1 + live_pass_bindings`。reset 加成最多 23.75%，不使用会趋向无穷的倒数。
+负载是其他 worker 中持有未过期、未撤销 Codex pass 且仍有该账号绑定的去重人数；
+当前 worker 排除，不将其称为正在推理的请求数或实际吞吐。负载查询失败禁用容量排序。
+
+score 距该组最大值 1% 内的候选用 SHA256(worker_id, owner, credential identity)
+的稳定 rendezvous 选择，消除微小时间差和字母序偏置；相同输入不会随机翻转。
+更大容量自然取得更多新会话，已有活跃 pass 的绑定数则降低它的分配 score。
+这里不承诺套餐倍率等于最终会话比例，也不修改授权、自有/共享、健康、暂停与去重边界。
+全部已满仍显示 limited，不伪造额度。
+
+自动绑定仍至少保持 10 分钟，仅独立请求边界可主动改变；可比组内还需候选 score
+严格大于当前 1.25 倍，或从 tight/limited 恢复 usable。未知当前读数不足以证明收益。
+不批量搬迁；显式绑定保留，Codex 配额 429 也不覆盖显式绑定。来源引用及已开始的流
+仍遵守下文亲和协议，429 仍只影响将来请求，本次推理不重放。
+
+**校准状态诚实保留。** 当前没有证明配额下降与同账号、同池、同窗口计量相匹配的样本，
+所以 factor 固定为 1、confidence 为 none、samples 为 0，状态
+`pending_matched_observations`。没有自动学习、人工校准系数或跨账号计量推断。
+后续若引入学习，须先实现可信窗口前后观察与全部消耗匹配、重置/并发隔离、最小样本及
+有界置信度；本次不声称具备该能力。
+
+`POST /v1/fleet/credproxy/preview` body：
+
+```json
+{"worker_id":"<fleet UUID>/<session UUID>","new_session":false}
+```
+
+只允许管理员，使用真实在线 worker 的 principal、endpoint 和 Codex pass 权限；
+不存在/过期 worker 返回 404，矛盾身份 409。不能通过 body 指定别人的 principal 或
+endpoint。`new_session:true` 仅在计算中忽略现有 sticky，模拟首次分配。
+返回目录 revision、模式、proposed、current_policy、窗口与容量 inputs、所用负载依据，
+以及 `mutates_bindings:false`。两种结果都使用 resolve 的同一 chooser；proposed 使用
+已保存的 profiles，current_policy 遵守 mode。此接口不 lease、不刷新、不推理、不写
+绑定或 affinity，也不会使 profile 生效。显式绑定、保持期与不足收益会显示对应原因。
+
+建议先保存 shadow（或 off）目录，安全预览真实元数据，确认真实套餐和档位的来源、版本、
+窗口与单位，再保存 active 做限定会话 canary。回滚保存 mode off，或用最新 revision
+清空 profiles；已有绑定不被批量改动，后续独立请求回到保守判断。**T947 未完成的生产
+验收仍须由发布负责人在生产完成**，本任务 fixture 和预览不替代旧会话、跨副本、流、
+续接与真实发布路径的验收，也不自动标记验收通过。
 
 **请求边界与账号亲和。** 新 HTTP 请求不等于独立上下文。只有可识别的自包含请求
 （例如不带引用的完整文字历史）才允许按上述滞后策略重选。`previous_response_id`、

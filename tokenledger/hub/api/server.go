@@ -876,6 +876,8 @@ func (s *Server) routes() *routeMux {
 		// their tokens are an admin's.
 		mux.Handle(SvcPrefix, s.svcMux())
 		mux.Handle(SvcAdminPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSvcAdmin))))
+		mux.Handle(planCapacitiesPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handlePlanCapacities))))
+		mux.Handle(codexPreviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCodexPreview))))
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.

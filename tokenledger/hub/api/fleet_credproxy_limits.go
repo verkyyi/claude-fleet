@@ -211,14 +211,15 @@ func (s *Server) handleCredProxyRebind(w http.ResponseWriter, r *http.Request) {
 	b, err := s.sessionBind(c.WorkerID, c.Principal, epID, req.Provider, now)
 	current, _ := s.Store.Credential(owner, req.Provider, req.Account)
 	same := current != nil && (req.CredentialID == "" || req.CredentialID == s.Vault.CredentialID(*current))
-	if err == nil && same && b.Owner == owner && b.Account == req.Account {
+	if err == nil && same && b.Owner == owner && b.Account == req.Account && (req.Provider != credvault.Codex || codexAutoBinding(b)) {
 		var choices []store.Credential
 		if choices, err = s.sessionBindChoices(c.Principal, epID, req.Provider); err == nil {
 			if req.Provider == credvault.Codex {
-				inputs := make([]codexQuotaInput, len(choices))
-				for i, ch := range choices {
-					inputs[i] = s.codexQuotaFor(ch, now)
+				cat, cerr := s.Store.PlanCapacities()
+				if cerr != nil || cat.Catalog.Mode != "active" {
+					cat.Catalog = store.PlanCapacityCatalog{Mode: "off"}
 				}
+				inputs := s.codexSelectionInputs(choices, b, now, cat.Catalog)
 				ranked := make([]store.Credential, 0, len(choices))
 				for _, i := range codexOrder(choices, inputs) {
 					ranked = append(ranked, choices[i])
