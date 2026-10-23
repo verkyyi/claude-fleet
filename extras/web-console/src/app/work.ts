@@ -89,8 +89,6 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
   }
   if (st === "failed" || st === "refused")
     return { ...base, group: "ask", tag: st === "failed" ? ["没做成", "Failed"] : ["没开成", "Didn't start"], glyph: "fail", tone: "fail", line: say(t?.evidence) };
-  if (t && t.asked && taskOpen(t))
-    return { ...base, group: "ask", tag: ["在等你", "Waiting on you"], glyph: "ask", tone: "ask", line: say(t.asked), quote: true };
   if (t && taskOpen(t)) {
     const tag: [string, string] = st === "starting" ? ["正在开", "Starting"] : st === "accepted" && !t.operation_id && !t.worker_id ? ["未派发", "Not dispatched"]
       : st === "running" || st === "waiting" || !!t.operation_id || !!t.worker_id ? ["看不到会话", "Session not seen"] : ["还不清楚", "Unknown"];
@@ -99,6 +97,22 @@ export function rowOf(t: Task | undefined, live: SessionRow | undefined, ended: 
   // 已收起: the record closed, or a session put away
   const tag: [string, string] = st === "succeeded" ? ["已完成", "Completed"] : st === "cancelled" ? ["已取消", "Cancelled"] : ["已收起", "Put away"];
   return { ...base, group: "gone", tag, glyph: st === "succeeded" ? "done" : "idle", tone: st === "succeeded" ? "ok" : "muted", line: say(t?.evidence) };
+}
+
+// Explicit controlled bindings never fall back to an earlier WorkerID. A
+// controlled API record includes execution_owner even after release (empty);
+// historical worker references remain useful only for read-only history.
+const controlledTask = (t: Task) => !!t.execution_endpoint || typeof t.execution_owner === "string";
+const currentWorker = (t: Task) => controlledTask(t) ? t.execution_owner || "" : t.worker_id || "";
+
+// Session reads follow the current binding, or an explicitly identified
+// historical session. Never reconnect a controlled Task's old WorkerID.
+export function rowWorker(r: Row): string {
+  if (r.task && controlledTask(r.task)) {
+    return r.task.execution_owner || (r.board?.history ? `fid:${r.board.history.id}` : r.ended?.wid || "");
+  }
+  return r.live?.id || (r.board?.history ? `fid:${r.board.history.id}` : "")
+    || (r.origin ? r.board?.worker_id || r.task?.worker_id || r.ended?.wid || "" : "");
 }
 
 // The one list: every task joined to its session by identity, every session no
@@ -111,9 +125,11 @@ export function buildRows(tasks: Task[], live: SessionRow[], ended: SessionRow[]
   const endedBy = new Map(ended.filter((r) => r.wid).map((r) => [r.wid!, r]));
   const used = new Set<string>();
   const rows: Row[] = tasks.map((t) => {
-    const l = t.worker_id ? liveBy.get(t.worker_id) : undefined;
+    const worker = currentWorker(t);
+    const l = worker ? liveBy.get(worker) : undefined;
     const e = !l && t.worker_id ? endedBy.get(t.worker_id) : undefined;
-    if (t.worker_id) used.add(t.worker_id);
+    if (worker) used.add(worker);
+    if (controlledTask(t) && t.worker_id) used.add(t.worker_id);
     return rowOf(t, l, e, codes.get(t) || writtenCode(t));
   });
   for (const l of live) if (!used.has(l.id)) rows.push(rowOf(undefined, l, undefined, ""));
@@ -147,9 +163,21 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ende
   const byFID = new Map(tasks.filter((t) => t.fid).map((t) => [t.fid!, t]));
   const byRef = new Map(tasks.map((t) => [t.id, t]));
   const liveBy = new Map(live.map((l) => [l.id, l]));
-  const rows: Row[] = board.rows.map((b: BoardRow) => {
+  const rows: Row[] = board.rows.map((original: BoardRow) => {
+    let b = original;
     const t = (b.task_id && byFID.get(b.task_id)) || (b.task && byRef.get(b.task)) || undefined;
-    const l = b.worker_id ? liveBy.get(b.worker_id) : undefined;
+    const worker = t && controlledTask(t) ? currentWorker(t) : b.worker_id;
+    const l = worker ? liveBy.get(worker) : undefined;
+    if (t && controlledTask(t) && (b.worker_id || "") !== worker) {
+      // A cached board may still attach this Task to its old wrapper. Use the
+      // exact current worker's observation; absent observation stays unknown.
+      const state = l?.state || "";
+      const tag = state === "needs" || state === "blocked" ? "asking"
+        : state === "working" ? "working" : l ? "idle" : "not_seen";
+      b = { ...b, worker_id: worker || undefined, state, tag,
+        running: state === "working", loop: false, pending_start: false,
+        lost: !l, can_talk: !!l && l.canTalk !== false, history: undefined };
+    }
     // The hub resolves the closed generation by FID, never by a recycled key.
     const h = !l ? b.history : undefined;
     const e: SessionRow | undefined = h?.resume_id ? {
@@ -157,8 +185,9 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ende
       repo: b.repo || "", machine: b.machine || "", state: "ended", group: "ended",
       ask: null, born: 0, ended: new Date(b.at * 1000).toISOString(), tokens: 0,
     } : undefined;
-    const asking = b.tag === "asking" || b.tag === "waiting_you";
-    const line = asking ? (l?.ask?.msg || t?.asked || "").trim() : b.group === "work" ? (l?.say || "").trim() : (t?.evidence || "").trim();
+    const state = l?.state || b.state;
+    const asking = state === "needs" || state === "blocked";
+    const line = asking ? (l?.ask?.msg || "").trim() : b.group === "work" ? (l?.say || "").trim() : (t?.evidence || "").trim();
     const why = Array.isArray(b.why) && b.why.length === 2 ? b.why : undefined;
     const origin = b.origin || l?.origin;
     const canTalk = typeof b.can_talk === "boolean" ? b.can_talk : l?.canTalk;
@@ -166,7 +195,7 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ende
     // any idle one — no mark of its own; a word to it brings it back
     const quiet = b.tag === "parked" && origin === "web";
     return {
-      id: b.id, code: t ? codes.get(t) || writtenCode(t) : b.code || "", title: b.title, group: b.group,
+      id: t?.fid || b.id, code: t ? codes.get(t) || writtenCode(t) : b.code || "", title: b.title, group: b.group,
       tag: quiet ? ["空闲", "Idle"] : b.words, glyph: quiet ? "idle" : GLYPH_OF[b.tag] || "idle", tone: quiet ? "muted" : TONE_OF[b.tag] || "muted",
       line, quote: asking && !!line,
       task: t, live: l, ended: e, parent: b.parent || undefined, kids: [], at: b.at * 1000, board: b,
@@ -179,7 +208,8 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ende
     const p = r.parent ? byID.get(r.parent) : undefined;
     if (p && p !== r) { r.parentTitle = p.title; p.kids.push(r); } else r.parent = undefined;
   }
-  return rows;
+  const current = new Set(rows.filter((r) => r.task && r.live).map((r) => r.live!.id));
+  return rows.filter((r) => r.task || !r.live || !current.has(r.live.id));
 }
 
 // A group's rows, top level: a member nested under its parent leaves the top.
@@ -197,8 +227,12 @@ export function findRow(rows: Row[], ref: string): Row | undefined {
   const q = ref.trim().replace(/^#/, "");
   if (!q) return undefined;
   const up = q.toUpperCase();
-  return rows.find((r) => r.id === q || r.code.toUpperCase() === up || (r.task && (writtenCode(r.task).toUpperCase() === up || r.task.id === q))
+  const taskMatches = rows.filter((r) => r.task && (r.task.fid === q || r.task.id === q
+    || writtenCode(r.task).toUpperCase() === up || r.code.toUpperCase() === up));
+  if (taskMatches.length) return taskMatches.length === 1 ? taskMatches[0] : undefined;
+  const matches = rows.filter((r) => r.id === q || r.code.toUpperCase() === up
     || r.live?.id === q || r.live?.ident === q || r.ended?.wid === q || (!!r.board?.worker_id && r.board.worker_id === q));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 // ✦ 消息: what this page holds for the person to hear — asks, failures, and

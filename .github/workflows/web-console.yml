@@ -42,6 +42,8 @@ jobs:
         run: node --experimental-strip-types test/work.mjs
       - name: The session list — status and title only, ⌘P's top level and order (GR5E C2)
         run: node --experimental-strip-types test/session-list.mjs
+      - name: Current Task binding, native status and stable codes
+        run: node --experimental-strip-types test/task-current-view.mjs
       - name: New session — chat or terminal, five starts (GR5E C3)
         run: node --experimental-strip-types test/new-session.mjs
       - name: Old addresses land where their page lives now (GR5E C9)

@@ -97,6 +97,12 @@ def _historical_session_stop(db, session_fid):
         if found is not None and found != snapshot:
             raise FenceRefused('session has conflicting historical stop bindings')
         found = snapshot
+    from fleet_task_unclaimed import historical_stop
+    retired = historical_stop(db, session_fid)
+    if retired is not None:
+        if found is not None and found != retired:
+            raise FenceRefused('session has conflicting historical stop bindings')
+        found = retired
     return found
 
 
@@ -446,6 +452,27 @@ def continue_execution(snapshot, fleet_id, exit_operation_id, *, conf_dir=None, 
     return claim_execution(actual, fleet_id, conf_dir=conf_dir, call=call, read_stops=read_stops)
 
 
+def continue_unclaimed_execution(snapshot, fleet_id, continuation, dispatch, *, conf_dir=None,
+                                 read_start=None, call=None, read_stops=None):
+    """Fresh authenticated immediate stop, pure local replacement, then Hub claim."""
+    from fleet_dispatch import check_current
+    from fleet_task_continuation import validate_continuation
+    expected = _snapshot(snapshot, allow_unclaimed=True)
+    validate_continuation(continuation)
+    if 'stop_operation_id' not in continuation:
+        raise FenceRefused('unclaimed continuation requires its stop proof branch')
+    sync_stops(conf_dir=conf_dir, read=read_stops)
+    try:
+        authority = check_current(dispatch, execution=expected, continuation=continuation, read_start=read_start)
+    except ValueError as exc:
+        raise FenceRefused(str(exc)) from exc
+    if authority is None:
+        raise FenceRefused('unclaimed continuation requires its authenticated start')
+    actual = _snapshot(authority['task_execution'], allow_unclaimed=True)
+    ExecutionFence(conf_dir).continue_unclaimed(actual, fleet_id, authority['source_stop'], authorized=True)
+    return claim_execution(actual, fleet_id, conf_dir=conf_dir, call=call, read_stops=read_stops)
+
+
 class ExecutionFence:
     def __init__(self, conf_dir=None):
         self.conf_dir = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
@@ -646,6 +673,11 @@ class ExecutionFence:
             if isinstance(exc, FenceRefused):
                 raise
             raise FenceRefused('local continuation evidence is unavailable or inconsistent') from exc
+
+    def continue_unclaimed(self, snapshot, fleet_id, source_stop, *, authorized=False):
+        """Separate explicit entry: never infer native exit from an empty claim."""
+        from fleet_task_unclaimed import replace_unclaimed
+        return replace_unclaimed(self, snapshot, fleet_id, source_stop, authorized=authorized)
 
     def observe(self, snapshot):
         """Apply a verified stop or confirm the exact binding; never adopt one.
@@ -1118,6 +1150,8 @@ def main():
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--snapshot", required=True)
     prepare.add_argument("--fleet-id", required=True)
+    prepare.add_argument("--continuation", default="")
+    prepare.add_argument("--dispatch", default="")
     window = commands.add_parser("reserve-window")
     window.add_argument("--snapshot", required=True)
     run = commands.add_parser("run")
@@ -1143,10 +1177,19 @@ def main():
             return 0
         if args.command == "prepare":
             expected = _snapshot(json.loads(args.snapshot), allow_unclaimed=True)
+            continuation = None
+            if args.continuation:
+                from fleet_task_continuation import validate_continuation
+                continuation = validate_continuation(json.loads(args.continuation))
             if expected["execution_owner"]:
                 if expected["execution_owner"].split("/")[0] != args.fleet_id:
                     raise FenceRefused("execution is allocated to another fleet")
                 expected = refresh_session(expected["execution_owner"].split("/")[1], expected=expected)
+            elif continuation:
+                if 'stop_operation_id' in continuation:
+                    expected = continue_unclaimed_execution(expected, args.fleet_id, continuation, json.loads(args.dispatch))
+                else:
+                    expected = continue_execution(expected, args.fleet_id, continuation['exit_operation_id'])
             else:
                 expected = claim_execution(expected, args.fleet_id)
             print(json.dumps(expected, separators=(",", ":")))

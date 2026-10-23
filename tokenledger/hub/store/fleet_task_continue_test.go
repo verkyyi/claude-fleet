@@ -17,7 +17,7 @@ func continueProviderOp(task FleetTask, key, agent string, intent *TaskContinuat
 	p["dispatch"].(map[string]any)["resolved_agent"] = agent
 	if intent != nil {
 		request["continuation_intent"] = intent
-		p["continuation"] = TaskContinuation{1, exitID}
+		p["continuation"] = TaskContinuation{Version: 1, ExitOperationID: exitID}
 	}
 	raw, _ := json.Marshal(request)
 	op.Request = string(raw)
