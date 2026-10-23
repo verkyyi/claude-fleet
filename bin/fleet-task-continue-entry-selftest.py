@@ -21,7 +21,7 @@ spec.loader.exec_module(cli)
 STOP = '22222222-2222-4222-8222-222222222222'
 OP = '33333333-3333-4333-8333-333333333333'
 RECORD = {'task': dict(id='T42', execution_endpoint='ep', cancel_request=STOP, generation=2)}
-ANSWER = dict(task='T42', authorized_generation=3,
+ANSWER = dict(task='T42', authorized_generation=3, agent='codex', exit_operation_id=OP,
               operation=dict(operation_id=OP, action='worker_start', status='succeeded'))
 
 class ContinueEntryTests(unittest.TestCase):
@@ -47,6 +47,38 @@ class ContinueEntryTests(unittest.TestCase):
         self.assertEqual(sent[0]['expected_stop_operation_id'], STOP)
         self.assertEqual(sent[0]['expected_generation'], 2)
         self.assertFalse((Path(self.tmp.name)/'task-continue/T42.json').exists())
+
+    def test_provider_choice_is_frozen_through_lost_reply(self):
+        sent=[]
+        def writer(argv,**kwargs):
+            sent.append(json.loads(argv[-1]))
+            if len(sent)==1: raise subprocess.TimeoutExpired(argv,50)
+            return subprocess.CompletedProcess(argv,0,json.dumps(dict(ANSWER,agent='claude')),'')
+        with patch.object(control,'call',return_value=RECORD) as read, patch.object(control.subprocess,'run',side_effect=writer):
+            self.assertEqual(control.continue_task({'task':'T42'},agent='claude')[0],1)
+            self.assertEqual(control.continue_task({'task':'T42'},agent='codex')[0],1)
+            self.assertEqual(control.continue_task({'task':'T42'},agent='claude')[0],0)
+        self.assertEqual(sent[0],sent[1]); self.assertEqual(sent[0]['agent'],'claude')
+        self.assertEqual(read.call_count,1)
+
+    def test_reply_agent_and_proof_must_match_intent(self):
+        for reply in (dict(ANSWER,agent='claude'),dict(ANSWER,stop_operation_id=STOP),
+                      dict(ANSWER,exit_operation_id='invalid')):
+            with patch.object(control,'call',return_value=RECORD), patch.object(control.subprocess,'run',return_value=subprocess.CompletedProcess([],0,json.dumps(reply),'')):
+                self.assertEqual(control.continue_task({'task':'T42'},agent='codex')[0],1)
+        unclaimed=dict(ANSWER,stop_operation_id=STOP);del unclaimed['exit_operation_id']
+        with patch.object(control,'call',return_value=RECORD),patch.object(control.subprocess,'run',return_value=subprocess.CompletedProcess([],0,json.dumps(unclaimed),'')):
+            self.assertEqual(control.continue_task({'task':'T42'},agent='codex')[0],0)
+
+    def test_explicit_provider_choices_reach_shared_helper(self):
+        with patch.object(control,'continue_task',return_value=(0,'accepted')) as action, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.cmd_continue(['T42','--agent','claude']),0)
+            action.assert_called_once_with({'task':'T42'},agent='claude')
+        row=dict(task='T42',execution_endpoint='ep',cancel_request=STOP,record_only=True)
+        with patch.object(view,'continue_task',return_value=(0,'accepted')) as action,patch.object(view,'hub_reread'):
+            self.assertEqual(view.act_run(None,'v','fleet',view.ACTION['continue'],row,'codex')[0],0)
+            self.assertEqual(action.call_args.kwargs['agent'],'codex')
+        self.assertEqual([x[0] for x in view.ACTION['continue']['choices'](row,'fleet')],['same','claude','codex'])
 
     def test_invalid_reference_refuses_without_io(self):
         with patch.object(control,'call') as read, patch.object(control.subprocess,'run') as write:

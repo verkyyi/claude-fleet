@@ -19,7 +19,7 @@
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
                                          issue #2358 — the key never changes)
-    fleet continue <Task或会话>          explicitly continue the same stopped Task
+    fleet continue <Task或会话> [--agent claude|codex]  explicitly continue the same stopped Task
     fleet close <会话> [--yes]           persist a controlled Task stop; legacy worker_stop;
                                          pending task-only rows cancel their start;
                                          no confirmation; history remains resumable
@@ -726,6 +726,10 @@ def cmd_rename(args):
 
 
 def cmd_continue(args):
+    agent = None
+    if len(args) == 3 and args[1] == '--agent' and args[2] in ('claude', 'codex'):
+        agent = args[2]
+        args = args[:1]
     if len(args) != 1:
         return usage()
     from fleet_task_control import continue_task
@@ -735,7 +739,7 @@ def cmd_continue(args):
         row, rc = one(rows(), args[0])
         if row is None:
             return rc
-    rc, line = continue_task(row)
+    rc, line = continue_task(row, agent=agent) if agent else continue_task(row)
     print(line, file=sys.stderr if rc else sys.stdout)
     return rc
 

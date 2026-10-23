@@ -4160,7 +4160,10 @@ def far_live(r):
 ACTIONS = [
     {"id": "continue", "label": lambda r: "Continue task" if ui_lang() == "en" else "继续任务",
      "when": lambda r: bool(controlled_stop_task(r)) and bool(r.get("cancel_request")) and not r.get("running") and not pending_start_task(r),
-     "local": lambda r, a, f: "taskcontinue", "far": lambda r, a, f: "taskcontinue", "ask": None,
+     "local": lambda r, a, f: "taskcontinue", "far": lambda r, a, f: "taskcontinue", "ask": "choice",
+     "choices": lambda r, f: [("same", "Continue with original agent" if ui_lang() == "en" else "沿用原 Agent 继续"),
+                                ("claude", "Continue with Claude" if ui_lang() == "en" else "用 Claude 继续"),
+                                ("codex", "Continue with Codex" if ui_lang() == "en" else "用 Codex 继续")],
      "slow": True, "thread": True},
     {"id": "cancelstart", "label": lambda r: "Cancel start" if ui_lang() == "en" else "取消启动",
      "when": lambda r: bool(pending_start_task(r)), "local": lambda r, a, f: "cancelstart",
@@ -4365,7 +4368,10 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
     if argv == 'taskcontinue':
-        rc, said = continue_task(r, ui_lang(), bin_dir=act_bin())
+        if ans not in ('', 'same', 'claude', 'codex'):
+            return 1, 'Choose the continuation agent explicitly', False
+        options = {'agent': ans} if ans in ('claude', 'codex') else {}
+        rc, said = continue_task(r, ui_lang(), bin_dir=act_bin(), **options)
         hub_reread(fleet)
         return rc, said, False
     if argv == "cancelstart":

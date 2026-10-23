@@ -514,6 +514,7 @@ local row's items are untouched, and with the hub off none of this exists: the
 menu offers these only on `wid:` rows, which only the hub's cache produces.
 
 **Explicit Task continuation.** Terminal’s “继续任务” and `fleet continue T<n>`
+offer the original agent, Claude or Codex (`--agent claude|codex` in the CLI), then
 call `fleet-hub-write.sh task_continue` through `/v1/fleet/write`, using only the
 Task owner’s viewer/session credential or signed connection certificate. This
 special signed action is not a general Worker tool: node tokens, Worker assertions
@@ -522,7 +523,8 @@ grant ownership of someone else’s Task. The body is `task`, `idempotency_key`,
 `expected_stop_operation_id`, `expected_generation`, and optional `agent`; it uses
 the existing Task continuation parser and transaction. The panel’s selected
 stop/generation must still match. A local retry envelope retains exactly the same
-request after a lost reply; it grants no execution authority. Missing credentials
+request, including the explicitly chosen agent, after a lost reply; a different
+choice cannot replace an unconfirmed request. The cache grants no execution authority. Missing credentials
 or unavailable evidence returns the reason and `/app/s/T<n>`, never `worker_resume`,
 spawn or a new Task. Opening retained history only reads its details/list.
 
