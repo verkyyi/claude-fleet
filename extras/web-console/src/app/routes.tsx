@@ -20,7 +20,7 @@ import { Navigate, useLocation } from "react-router";
 import { Gauge, Layers, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
-import ChatPage from "./pages/chat";
+import ChatPage, { ChatThread } from "./pages/chat";
 import { SessionListPage, sessionPath } from "./SessionList";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
@@ -67,6 +67,10 @@ function ChatRoute() {
   const fid = codex ? legacy?.codex_fid : legacy?.fid;
   const mine = fid ? rows.find((r) => r.id === fid || r.board?.history?.id === fid || r.live?.ident === fid) : undefined;
   if (mine) return <Navigate to={sessionPath(mine)} replace />;
+  // Closed records age out of the board; the owner's FID stays readable through
+  // the normal authenticated history reader, even before its first board push.
+  if (legacy?.ok && fid) return <ChatThread source={{ kind: "session", worker: `fid:${fid}`,
+    machine: "", key: "", agent: codex ? "codex" : "claude" }} />;
   if (legacy?.ok && !fid) return <Navigate to="/" replace />;
   if (legacy?.readOnly) return <p role="status" className="p-4 text-sm">{tr("旧对话尚未整理，请用本人的账号登录后继续。", "Your previous chat has not been migrated yet. Sign in with your own account to continue.")}</p>;
   if (legacy && !legacy.ok && legacy.why !== "busy") return <p role="status" className="p-4 text-sm">{tr("暂时无法读取以前的对话，正在重试…", "Could not read your previous chat yet. Retrying…")}</p>;
