@@ -256,12 +256,19 @@ func (p *chatPipe) Close() error {
 }
 
 func startChatPipe(ctx context.Context) (io.ReadWriteCloser, error) {
+	return startSocketPipe(ctx, ChatPipeCmd)
+}
+
+func startSocketPipe(ctx context.Context, command string, args ...string) (io.ReadWriteCloser, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
 	// No argument but the subcommand: the helper derives the one path itself.
-	cmd := exec.Command(self, ChatPipeCmd)
+	cmd := exec.Command(self, append([]string{command}, args...)...)
+	if command == "preview-pipe" {
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	}
 	if err := prepCmd(ctx, cmd); err != nil {
 		return nil, err
 	}
