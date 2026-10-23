@@ -6959,6 +6959,26 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continue-entry-selftest.py" >"$WORK/task-continue-entry.log" 2>&1 || {
+    WHY="task continue entry regression: $(tail -10 "$WORK/task-continue-entry.log")"; return 1;
+  }
+  WHAT='明确继续同一 Task：owner 凭据、停止版本围栏、丢响应原包重发；历史只读，不降级 resume/spawn'
+  SECS=$(since "$t0")
+}
+
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_entry() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {

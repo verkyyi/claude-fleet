@@ -693,6 +693,7 @@
 | quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格；目标晚绑定仍须等待 controller 已确认 started，未知结果不启 timer | `quota-loop-replacement` |
 | 未启动记录在面板显示 Unknown / Queued，任务结果盖过会话的新工作（PV4D） | 人误以为已有 worker 或自动调度，并找不到协调归属 | Hub board 区分计划与运行证据、未派发与保留状态，终端和网页消费同一事实；协调归属只取可核验的父记录 | `board-plan-facts` |
 | Hub Task 的 stop 已持久化，但节点清理失败、执行器崩溃或尚未启动；Hub 再次投递同一个 stop | 旧 failed / unknown / succeeded 回执被当成清理已经结束，后续请求不再停进程或关闭窗口 | 每次重投先持久提交同一 stop 栅栏，再用原 operation 重试清理；按 operation 的进程间锁防止并发清理，执行器死亡自动释放；成功回执仍标记 execution_exit 为 unproven | `task-stop-replay-cleanup` |
+| Terminal/CLI 继续 Task 借用节点凭据，超时重试改变停止版本，或查看历史隐式恢复 | 旧执行被重新授权或重复启动 | 仅用户凭据/连接证书调用原继续核心，严格 owner；固定 stop/generation/key 至确认，历史不调用 restore/resume，失败给精确 Web Task 链接 | `task-continue-entry` |
 | Web、tmux 或 CLI 停止受控 Task 时只关 live 窗口，离线或没有窗口的记录没有停止入口 | 旧执行授权未撤销，未来旧唤醒仍可运行；界面误称已经退出 | 同 owner 的 Task stop 先持久撤销；节点离线仍受理，受控证据缺失先核验，Hub 不可达不降级普通 worker_stop；原生退出另行证明 | `task-stop-entry` |
 | restore 先启动包装器、后补会话 FID，或快照丢失显式执行协议 | 已停止的受控 Task 被当成旧会话恢复；本地数据库丢失时绕过停止检查 | FID、恢复来源和显式协议在同一 pane 启动前写入，写失败不启动；协议随 FID 单独入快照，缺本地授权仍拒绝，未受控会话照常恢复 | `restore-execution-identity` |
 
