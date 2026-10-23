@@ -6934,6 +6934,15 @@ drill_native_cancel_before_signal() {
   SECS=$(since "$t0")
 }
 
+drill_native_partial_admission() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-partial-exit-selftest.py" >"$WORK/native-partial.log" 2>&1 || {
+    WHY="partial admission regression: $(tail -8 "$WORK/native-partial.log")"; return 1;
+  }
+  WHAT='正向启动协议与认证原 start：新 partial 逐根退出，旧历史、缺 child、活根和身份未知均拒绝'
+  SECS=$(since "$t0")
+}
+
 drill_native_exit_identity() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-session-exit-selftest.py" \

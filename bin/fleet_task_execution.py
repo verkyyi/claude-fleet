@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS task_execution_windows (
 );
 CREATE TABLE IF NOT EXISTS task_execution_launches (
  task_ref TEXT PRIMARY KEY, launch_id TEXT NOT NULL, operation_id TEXT NOT NULL,
- supervisor TEXT NOT NULL, wrapper TEXT NOT NULL, child TEXT NOT NULL DEFAULT ''
+ supervisor TEXT NOT NULL, wrapper TEXT NOT NULL, child TEXT NOT NULL DEFAULT '',
+ admission_protocol INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS task_execution_native (
  task_ref TEXT NOT NULL, launch_id TEXT NOT NULL, component TEXT NOT NULL,
@@ -300,9 +301,11 @@ class Admission:
             raise FenceRefused("execution admission permit has been released")
         return self._fence._assert_current(self._expected)
 
-    def reserve_launch(self, launch_id, supervisor, *, wrapper=None):
+    def reserve_launch(self, launch_id, supervisor, *, wrapper=None, admission_protocol=0):
         """Consume this grant once, durably, before fork; never replay on doubt."""
         self.assert_current()
+        if type(admission_protocol) is not int or admission_protocol not in (0, 1):
+            raise FenceRefused("unknown native admission protocol")
         _token(launch_id, "launch id")
         supervisor = _process_proof(supervisor)
         wrapper = _process_proof(wrapper or supervisor)
@@ -325,8 +328,8 @@ class Admission:
                 db.execute("INSERT INTO task_execution_launch_history VALUES (?,?,?)",
                            (self._expected["task_ref"], previous["launch_id"], json.dumps(previous)))
                 db.execute("DELETE FROM task_execution_launches WHERE task_ref=?", (self._expected["task_ref"],))
-            db.execute("INSERT INTO task_execution_launches (task_ref,launch_id,operation_id,supervisor,wrapper) VALUES (?,?,?,?,?)",
-                       (self._expected["task_ref"], launch_id, self._expected["operation_id"], json.dumps(supervisor), json.dumps(wrapper)))
+            db.execute("INSERT INTO task_execution_launches (task_ref,launch_id,operation_id,supervisor,wrapper,admission_protocol) VALUES (?,?,?,?,?,?)",
+                       (self._expected["task_ref"], launch_id, self._expected["operation_id"], json.dumps(supervisor), json.dumps(wrapper), admission_protocol))
 
     def register_child(self, launch_id, child):
         self.assert_current()
@@ -479,6 +482,13 @@ class ExecutionFence:
         self.conf_dir = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
         # Add a table to Control's database, not another journal or state file.
         self.store = Database(self.conf_dir / "control", SCHEMA)
+        # Older launches are deliberately unqualified; never infer a protocol
+        # from their surviving roots or upgrade their archived registrations.
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(task_execution_launches)")}
+            if "admission_protocol" not in columns:
+                db.execute("ALTER TABLE task_execution_launches ADD COLUMN admission_protocol INTEGER NOT NULL DEFAULT 0")
         self._locks = private_dir(self.store.root / "task-admission")
 
     @contextlib.contextmanager
@@ -900,7 +910,7 @@ def _session_exit_registrations(db, expected, provider):
     required = {"server", "client"} if provider == "codex" else {"agent"}
     keys = {"task_ref", "launch_id", "operation_id", "supervisor", "wrapper", "child", "native"}
     for launch in launches:
-        if (set(launch) != keys or launch["task_ref"] != task
+        if (set(launch) not in (keys, keys | {"admission_protocol"}) or launch["task_ref"] != task
                 or launch["operation_id"] != expected["operation_id"]
                 or launch["launch_id"] in seen):
             raise FenceRefused("native session exit has conflicting launch identity")
@@ -918,11 +928,16 @@ def _session_exit_registrations(db, expected, provider):
                     or _process_proof(item["process"]) != item["process"]):
                 raise FenceRefused("native session exit has malformed native registration")
             components.add(item["component"])
-        # reserve_launch can archive an interrupted initialization with a
-        # registered child and only some/no native roots. Verify those recorded
-        # roots; do not invent missing ones. A missing child remains unknown.
-        if (not components <= {"agent", "server", "client"} or "agent" in components and len(components) != 1
-                or launch is current and components != required):
+        protocol = launch.get("admission_protocol", 0)
+        if type(protocol) is not int or protocol not in (0, 1):
+            raise FenceRefused("native session exit has unknown admission protocol")
+        # Only a positively qualified entry can prove an interrupted native
+        # initialization. Legacy partial history remains unknown forever.
+        complete = components in ({"agent"}, {"server", "client"})
+        if (not components <= {"agent", "server", "client"}
+                or "agent" in components and len(components) != 1
+                or not complete and protocol != 1
+                or launch is current and not components <= required):
             raise FenceRefused("native session exit is missing required native component registrations")
         if sorted(launch["native"], key=lambda item: item["component"]) != native.get(launch["launch_id"], []):
             raise FenceRefused("native session exit history disagrees with registered roots")
@@ -1106,6 +1121,47 @@ def terminate_registered(fence, task_ref, *, launch_id=None, abort=lambda: False
     _signal_registered(fence, task_ref, launch_id, signal.SIGKILL)
 
 
+def qualified_launch(argv, environment):
+    """Pin only this release's explicitly Claude standard entry before fork.
+
+    Config-selected agents, Codex profiles and arbitrary wrapper overrides have
+    no positive protocol evidence. They keep their existing behavior and 0.
+    """
+    argv = list(argv)
+    if not argv or environment.get("FLEET_WRAP_LAUNCH"):
+        return argv, 0
+    index = 0
+    unset = ("FLEET_LAUNCH", "FLEET_LAUNCH_CONTEXT", "FLEET_LAUNCH_SUPERVISOR",
+             "FLEET_LAUNCH_NATIVE", "FLEET_LAUNCH_WORKTREE", "FLEET_LAUNCH_CREATE",
+             "FLEET_LAUNCH_DELIVERY", "FLEET_AUTHORITY_CONTEXT", "FLEET_AUTHORITY_ADMISSION",
+             "FLEET_AUTHORITY_START", "FLEET_AUTHORITY_EXPECTED", "FLEET_AUTHORITY_RESUME_SID",
+             "FLEET_ID_DISPATCH")
+    prefix = ["env"] + [word for name in unset for word in ("-u", name)]
+    if argv[:len(prefix)] == prefix:
+        index = len(prefix)
+    if index >= len(argv):
+        return argv, 0
+    owned = Path(__file__).resolve().parent / "fleet-claude.sh"
+    if not Path(argv[index]).is_absolute() or Path(argv[index]).resolve() != owned:
+        return argv, 0
+    agent, want = None, None
+    for arg in argv[index+1:]:
+        if want:
+            if want == "agent":
+                agent = arg
+            want = None
+        elif arg in ("--agent", "--as"):
+            want = arg[2:]
+        elif arg.startswith("--agent="):
+            agent = arg.split("=", 1)[1]
+    if agent != "claude" or want:
+        return argv, 0
+    argv[index] = str(owned)
+    if index:
+        argv[0] = "/usr/bin/env"  # the known prefix, never a PATH-selected wrapper
+    return argv, 1
+
+
 def supervise(expected, argv):
     """One controlled wrapper launch. Registration survives crashes and exit.
 
@@ -1126,6 +1182,7 @@ def supervise(expected, argv):
         wrapper = _kernel_process(wrapper_pid)
     environment = dict(os.environ, FLEET_TASK_EXECUTION=json.dumps(expected, separators=(",", ":")),
                        FLEET_TASK_LAUNCH_ID=launch_id)
+    argv, protocol = qualified_launch(argv, environment)
     ended = []
     handlers = {}
     child = None
@@ -1135,7 +1192,7 @@ def supervise(expected, argv):
         for sig in (signal.SIGINT, signal.SIGQUIT):
             handlers[sig] = signal.signal(sig, lambda value, frame: None)
         with fence.admission(expected) as permit:
-            permit.reserve_launch(launch_id, supervisor, wrapper=wrapper)
+            permit.reserve_launch(launch_id, supervisor, wrapper=wrapper, admission_protocol=protocol)
             permit.assert_current()
             child = subprocess.Popen(argv, env=environment)
             permit.register_child(launch_id, _kernel_process(child.pid))

@@ -88,11 +88,11 @@ func (p taskNativeExitProof) validShape() bool {
 		if i == len(p.Launches)-1 {
 			switch p.Provider {
 			case "claude":
-				if !components["agent"] {
+				if components["server"] || components["client"] {
 					return false
 				}
 			case "codex":
-				if !components["server"] || !components["client"] {
+				if components["agent"] {
 					return false
 				}
 			}

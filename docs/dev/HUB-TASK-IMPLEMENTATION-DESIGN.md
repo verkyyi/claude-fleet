@@ -87,7 +87,7 @@ operation 中固定的 `control_version=1` 仅标识新协议，与历史归档�
 
 恢复窗口在启动 wrapper 之前写入真实 Session FID，并在恢复快照中保留显式执行协议元数据。元数据损坏、身份写入失败或本地执行账本缺失时拒绝启动，不能降级为旧会话绕过停止；历史不受控会话保留原恢复路径。
 
-节点新增只读 `native_session` 退出证明函数：匹配已持久保存的停止快照，核验已登记原生根组件的 PID 与内核出生标记，显示时区变化不视为 PID 复用。匹配身份的僵尸进程可证明已退出；历史启动中断只核验已登记组件，缺失 child 的启动仍保持未确认。当前原生会话登记不完整或内核信息读不到也保持未确认。Store 复用 operation 保存不可变的会话退出回执；核对原 Task、Session、端点、attempt、启动和停止操作后才释放绑定。显式接续用新的幂等键和停止之后的新 generation；旧回执重放不能清除新绑定。释放绑定后重复停止仍返回原结果，接续之后的旧停止请求不能影响新绑定。历史 Session 身份仍保留，不能改投另一 Task。
+节点新增只读 `native_session` 退出证明函数：匹配已持久保存的停止快照，核验已登记原生根组件的 PID 与内核出生标记，显示时区变化不视为 PID 复用。匹配身份的僵尸进程可证明已退出；启动中断的部分登记仅在启动时已写入正向 admission 协议时核验；旧 epoch 不升级，缺失 child 或内核信息读不到仍保持未确认（范围见下文 D1）。Store 复用 operation 保存不可变的会话退出回执；核对原 Task、Session、端点、attempt、启动和停止操作后才释放绑定。显式接续用新的幂等键和停止之后的新 generation；旧回执重放不能清除新绑定。释放绑定后重复停止仍返回原结果，接续之后的旧停止请求不能影响新绑定。历史 Session 身份仍保留，不能改投另一 Task。
 
 恢复保护、重连同步与退出回执 HTTP 接口已发布；节点回执自动提交 #5366 已合并、待发布，范围见下。**用户继续/换 Agent API、节点新授权接续与原生持久计划撤销尚未完成。** 不能据此启用 `task_execution_v1` 或声称用户停后接续已交付。默认能力保持关闭，普通会话不被自动接管。
 
@@ -117,9 +117,19 @@ operation 中固定的 `control_version=1` 仅标识新协议，与历史归档�
 
 ### 节点退出回执提交（本切片，待发布）
 
-受控 stop 清理结束后独立尝试证明顶层原生会话退出，即使 tmux 窗口已不存在也不跳过。provider 只从当前完整原生组件登记确定；未领取、未启动、缺少登记、活进程或无法确认内核身份均保持未证明。首次完整 proof 和固定幂等键在原 stop 的 `operations.result.native_exit_receipt.payload` 中原子保存，再经既有节点认证提交；网络不持有数据库、admission、FID 或清理锁。并发结果更新、stop 重投和进程崩溃不会替换原包，公开 operation 只显示确认摘要，不携带大包。退出确认不冒充窗口清理成功，原 cleanup 状态保留。
+受控 stop 清理结束后独立尝试证明顶层原生会话退出，即使 tmux 窗口已不存在也不跳过。provider 来自节点认证的原 `execution/start`，精确匹配当前停止快照与原 start operation；不从组件名称推测。未领取、未启动、缺少必需登记、活进程或无法确认内核身份均保持未证明。首次完整 proof 和固定幂等键在原 stop 的 `operations.result.native_exit_receipt.payload` 中原子保存，再经既有节点认证提交；网络不持有数据库、admission、FID 或清理锁。并发结果更新、stop 重投和进程崩溃不会替换原包，公开 operation 只显示确认摘要，不携带大包。退出确认不冒充窗口清理成功，原 cleanup 状态保留。
 
 Hub 接受后即使响应丢失，也不依赖再次投递 stop：既有节点 heartbeat/reconnect 异步扫描同一 journal，默认每轮最多 8 条、12 秒预算；证明保存后按剩余预算发送，网络最长 8 秒，连接内至少间隔 30 秒；外层 helper 受 20 秒取消边界约束。重试只提交原包，不重做 stop、不清除栅栏，也不触碰后来绑定。`execution_exit_retry` 仅是本地命令探针，不是执行能力或新的 Task 状态。仍未提供未领取任务的退出证明、新授权接续、resume API 或原生计划取消，`task_execution_v1` 保持关闭。
+
+### D1：启动中断后的原生会话退出证明（本切片，待审）
+
+既有 launch 登记新增内部 `admission_protocol`，在 `Popen` 前写入，默认 0；老数据库和缺字段的历史 epoch 不补章。只有同一代码 bundle 的标准 `fleet-claude.sh`，且实际参数明确指定 `--agent claude`，才登记协议 1；固定的标准 `env -u` 前缀可通过。配置默认 Agent、任意 `FLEET_WRAP_LAUNCH`、wakeguard、未知／旧入口和全部 Codex 入口维持 0。Codex 的配置可能转交外部 profile wrapper，本片不改变该功能，也不为其猜测安全资格。
+
+协议 1 允许当前／历史 epoch 的合法部分原生组件集合，但 supervisor 和 child 的进程身份始终必需；`Popen` 后未完成 child 登记的崩溃窗口仍为未知。所有实际登记根必须已退出，双重 admission／数据库检查仍覆盖期间变化。协议 0 的当前和历史 epoch 均需要完整拓扑，不因后来的完整启动洗掉旧 partial 历史。direct Codex 改登记 `client`，不再误标 Claude `agent`；由于未取得正协议，其单 client 仍不能签发退出证明。
+
+首次证明前在所有本地锁外认证读取原 start，超时纳入既有提交预算；离线或快照不符保持未确认。首次 proof 包含该 provider 并原子存入原 stop receipt，ACK 丢失后重发同一包，不重新 GET、不推测 provider。Hub 仅接受既有 `native_session` 证明结构中的合法 subset，仍验证根身份、拓扑、原绑定和原操作；不新增 Task 状态或能力。
+
+本片不证明全任务后代已清空，不恢复缺失 child，不保证工作区或历史已生成，也不处理未启动任务的继续。旧进程不会因安装更新获得新协议；已经加载旧 Python 的 supervisor 保持旧行为。
 
 ### 节点退出回执 API（#5365 已发布）
 

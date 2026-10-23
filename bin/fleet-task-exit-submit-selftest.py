@@ -52,6 +52,10 @@ class ExitSubmitTests(unittest.TestCase):
             return self.control.submit(request())
 
     def register(self, components=("server", "client"), live=False):
+        provider = "claude" if components == ("agent",) else "codex"
+        self.control.read_native_exit_start = lambda snapshot, **kwargs: dict(
+            control_version=1, task_execution=snapshot,
+            start=dict(operation_id=snapshot["operation_id"], agent=provider))
         self.control.execution.bind(GRANT, authorized=True)
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         def cleanup():
@@ -77,7 +81,7 @@ class ExitSubmitTests(unittest.TestCase):
     def test_crash_after_proof_and_lost_ack_replay_exact_original_payload(self):
         self.register()
         crashed = subprocess.run([sys.executable, "-c", "import os,sys; sys.path.insert(0,sys.argv[1]); "
-                                  "from fleet_control import Control; Control(sys.argv[2]).prepare_native_exit(sys.argv[3]); os._exit(9)",
+                                  "from fleet_control import Control; c=Control(sys.argv[2]); c.read_native_exit_start=lambda snapshot, **kw: dict(control_version=1,task_execution=snapshot,start=dict(operation_id=snapshot['operation_id'],agent='codex')); c.prepare_native_exit(sys.argv[3]); os._exit(9)",
                                   str(BIN), str(self.root), STOP], timeout=5, capture_output=True)
         self.assertEqual(crashed.returncode, 9, crashed.stderr)
         payload = self.private()["native_exit_receipt"]["payload"]

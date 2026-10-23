@@ -317,13 +317,16 @@ func TestTaskSessionExitAPIEpochComponents(t *testing.T) {
 		duplicateLaunch  bool
 		want             int
 	}{
-		{"missing-native", "codex", []string{"supervisor", "child"}, nil, false, 400},
-		{"missing-server", "codex", []string{"supervisor", "child", "client"}, nil, false, 400},
-		{"missing-client", "codex", []string{"supervisor", "child", "server"}, nil, false, 400},
+		{"missing-native", "codex", []string{"supervisor", "child"}, nil, false, 200},
+		{"missing-server", "codex", []string{"supervisor", "child", "client"}, nil, false, 200},
+		{"missing-client", "codex", []string{"supervisor", "child", "server"}, nil, false, 200},
+		{"current-missing-supervisor", "codex", []string{"child", "client"}, nil, false, 400},
+		{"current-missing-child", "codex", []string{"supervisor", "client"}, nil, false, 400},
+		{"codex-wrong-agent", "codex", []string{"supervisor", "child", "agent"}, nil, false, 400},
 		{"unknown", "codex", []string{"supervisor", "child", "server", "client", "other"}, nil, false, 400},
 		{"duplicate-component", "codex", []string{"supervisor", "child", "server", "client", "client"}, nil, false, 400},
 		{"mixed-native", "codex", []string{"supervisor", "child", "server", "client", "agent"}, nil, false, 400},
-		{"claude-missing-agent", "claude", []string{"supervisor", "child"}, nil, false, 400},
+		{"claude-missing-agent", "claude", []string{"supervisor", "child"}, nil, false, 200},
 		{"claude-wrong-native", "claude", []string{"supervisor", "child", "server", "client"}, nil, false, 400},
 		{"history-missing-supervisor", "codex", nil, []string{"child", "server"}, false, 400},
 		{"history-missing-child", "codex", nil, []string{"supervisor", "server"}, false, 400},

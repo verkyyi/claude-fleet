@@ -703,3 +703,5 @@
 | 继续授权未 claim 就停止，再次重试；或连续多次重试、跨 Agent 选择 | 未启动任务无法继续，或把原生退出和未启动混为一体、丢失之前真实工作区 | 本人显式 continue 认可精确 canonical 未领取停止；逐代验证原生退出或未领取证明，认证读取分别给直接来源与真实工作区来源，旧授权不能重用 | `task-continue-unclaimed` |
 | 受控 Codex 的 `--no-daemon` 分支绕过原生执行登记 | 已停止任务仍进入 Codex exec，且缺少可终止的原生根记录 | 同一 native_command 边界校验停止并登记 Codex client；非受控 argv 不变，缺少 server 仍不签发完整退出证明 | `codex-no-daemon-fence` |
 | 节点未 claim 就重试，旧 allocation 被当作运行中或已有窗口被误认成未启动 | 任务无法重试，或复活旧 FID、覆盖真实执行与工作区 | 认证未领取停止仅退休精确纯 allocation；窗口、原生、历史登记均拒绝；既有控制日志保留退休事实，新会话仍需 Hub claim | `task-unclaimed-node` |
+
+| 部分原生启动未登记全部组件，或 direct Codex 的 agent slot 被误判为 Claude | 有完整退出事实却无法确认，或旧缺失登记被误当未启动并错误释放 | 仅启动时正向 admission 协议允许合法 partial 集合，supervisor/child 必需；认证原 start 决定 provider；旧 partial 历史不升级，逐根退出证据与双重栅栏保留 | `native-partial-admission` |
