@@ -403,10 +403,12 @@ sys.stdout.write(line if len(line) <= 30 else line[:29].rstrip() + "…")
         [ -n "$_t1" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_t1" 2>/dev/null
         _tk=$(tmux display-message -p -t "$TMUX_PANE" '#{@task}' 2>/dev/null)
         [ -n "$_t1" ] || _tk=''
-        case "$_tk" in T[1-9]*)
+        # The binding can be a display code or UUID as well as legacy T<n>.
+        # fleet-task-record.sh owns address validation and hub resolution.
+        if [ -n "$_tk" ]; then
           ( bash "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-task-record.sh" retitle "$_tk" \
-              --from "$_tp" --title "$_t1" </dev/null >/dev/null 2>&1 & ) ;;
-        esac
+              --from "$_tp" --title "$_t1" </dev/null >/dev/null 2>&1 & )
+        fi
       fi
     fi ;;
   esac

@@ -116,13 +116,13 @@ def check_current(value, *, read=None, execution=None, continuation=_UNSPECIFIED
         return
     if execution is not None:
         from fleet_task_execution import _snapshot
-        from fleet_task_continuation import validate_continuation
+        from fleet_task_continuation import validate_metadata
         expected = _snapshot(execution, allow_unclaimed=True)
         try:
             record = (read_start or read_execution_start)(value["task"])
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             raise ValueError("current immutable start authorization unavailable") from exc
-        if (not isinstance(record, dict) or set(record) - {"control_version", "task_execution", "start", "source_start"}
+        if (not isinstance(record, dict) or set(record) - {"control_version", "task_execution", "start", "source_start", "source_stop", "workspace_source"}
                 or type(record.get("control_version")) is not int or record["control_version"] != 1):
             raise ValueError("invalid immutable start authorization")
         actual = _snapshot(record.get("task_execution"), allow_unclaimed=True)
@@ -137,7 +137,9 @@ def check_current(value, *, read=None, execution=None, continuation=_UNSPECIFIED
                 or expected["attempt_id"] != value["attempt_id"]):
             raise ValueError("immutable start authorization changed or cancelled")
         if "continuation" in start:
-            validate_continuation(start["continuation"])
+            validate_metadata(expected, start["continuation"], record)
+        elif 'source_stop' in record or 'workspace_source' in record:
+            raise ValueError('ordinary start cannot carry continuation metadata')
         if ("continuation" in start) != ("source_start" in record):
             raise ValueError("immutable start source metadata is incomplete")
         if continuation is not _UNSPECIFIED and start.get("continuation") != continuation:
