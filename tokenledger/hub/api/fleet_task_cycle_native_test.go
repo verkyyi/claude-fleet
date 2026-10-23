@@ -60,7 +60,9 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 		t.Log("dry-run: real Control inventory and owner HTTP auth; zero tmux/native starts, credentials or model requests")
 		return
 	}
-	root, err := os.MkdirTemp("", "t970-native-cycle-")
+	// macOS Unix socket paths are limited to 104 bytes. Its default
+	// /var/folders TMPDIR plus the tmux socket name exceeds that boundary.
+	root, err := os.MkdirTemp("/tmp", "t970-native-cycle-")
 	if err != nil {
 		t.Fatal(err)
 	}
