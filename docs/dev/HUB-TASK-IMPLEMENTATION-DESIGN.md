@@ -47,7 +47,7 @@ EPIC plan/run/report 与 driver 保留一版本明确退役说明，旧角色启
 
 ### 执行控制：已发布的基础与当前接线
 
-Hub Store 事务与节点持久停止栅栏已通过 [PR #5360](https://github.com/verkyyi/claude-fleet/pull/5360) 发布。派发、原生启动、输入、唤醒与停止接线已随 [PR #5362](https://github.com/verkyyi/claude-fleet/pull/5362) 发布为 `07d4dc0c5`；正式 CI 全绿，Hub、stable 和 macmini/verky、mini2/verky 安装关键文件均已核验。**节点尚未声明 `task_execution_v1` 能力，普通派发默认不启用新协议；不能据此宣称全链路唯一执行或完整 Task stop 已上线。** 旧会话不自动接管，历史 `@dispatch` 也不会变成恢复时的在线依赖。
+Hub Store 事务与节点持久停止栅栏已通过 [PR #5360](https://github.com/verkyyi/claude-fleet/pull/5360) 发布。派发、原生启动、输入、唤醒与停止接线已随 [PR #5362](https://github.com/verkyyi/claude-fleet/pull/5362) 发布为 `07d4dc0c5`；正式 CI 全绿，Hub、stable 和两处受控执行登录的安装关键文件均已核验。**节点尚未声明 `task_execution_v1` 能力，普通派发默认不启用新协议；不能据此宣称全链路唯一执行或完整 Task stop 已上线。** 旧会话不自动接管，历史 `@dispatch` 也不会变成恢复时的在线依赖。
 
 | 代码职责 | 约束 |
 | --- | --- |
