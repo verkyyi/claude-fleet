@@ -457,7 +457,11 @@ plan 与管理员登记的 tier 分开显示；登记 plan 或最新配额 plan 
 }
 ```
 
-这是格式示例，**不是任何真实套餐的容量声明**。字段约束：
+这是格式示例，**不是任何真实套餐的容量声明**。确认套餐档位或月费并不确认数字容量比；不从价格换算容量，也不自动填入官方倍率。运营者可明确登记低置信度相对工作量估计：`confidence: "provisional"`，`source` 写实际运营确认来源（不是未经确认的官方容量声明），`basis` 写明共同工作基准与估计性质，并登记版本、生效时间；预览保留这些字段。`verified` 只用于容量依据本身已确认的情况。
+
+安全预览读取当前已保存的真实 quota 快照，不请求推理或重新抓取凭据。`read_via=hub` 是读取路径，不单独证明窗口完整；仅周窗口须同时有完整 `account_api` 证据与明确的 10080 分钟 profile。没有容量 profile 时，旧 `missing_dual_window` 仍诚实显示 unknown；不因档位或月费已确认就臆造基准或缺失的五小时窗口。
+
+字段约束：
 
 | 字段 | 约束 / 含义 |
 | --- | --- |
@@ -466,7 +470,7 @@ plan 与管理员登记的 tier 分开显示；登记 plan 或最新配额 plan 
 | plan / tier / unit / version | plan、unit、version 必填；1–96 个 ASCII 字母数字及 `._:-`，首字母数字；tier 可空 |
 | pool | 仅支持已识别的主池 `codex`；不支持凭空登记模型专属池 |
 | basis / source | 必填，分别 ≤256 / ≤512 字节；无首尾空白和换行，说明可比工作负载与确认来源 |
-| confidence | `verified` 或 `provisional`；两者在有效期内均可参与估算，provisional 明示估计而非精确 token/tasks |
+| confidence | `verified` 或 `provisional`；两者在有效期内均可参与估算，provisional 是低置信度运营估计，不代表官方倍率或实际 token/tasks |
 | effective_from / effective_to | RFC3339；from 必填，to 可省略，若存在须晚于 from；区间前闭后开 |
 | windows | 列出全部预期实际窗口，1–2 项，分钟数只能为 300 / 10080，不能重复 |
 | units | 每个窗口的可比工作容量，有限正数，范围 0.000001–1000000000；不是实际 tokens |

@@ -17,6 +17,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 func capacityProfile(plan string, units float64, now time.Time) store.PlanCapacityProfile {
@@ -603,4 +604,92 @@ func TestCodexCapacityPreviewUnboundWorker(t *testing.T) {
 	if actual.Account != out.Proposed.Account {
 		t.Fatal(actual, out)
 	}
+}
+
+// Snapshot shape supplied by the operator: complete Hub account API reads with
+// only a primary weekly window. Units below are arbitrary test inputs, never a
+// claim about actual subscription sizes or a ratio derived from monthly price.
+func TestCodexCapacityWeeklyOperatorEstimatePreview(t *testing.T) {
+	r, now, _ := registerCapacityRig(t)
+	now = time.Now()
+	s := r.h.srv
+	_, wid := r.issue(t, fidA)
+	labels := []string{"poolcx", "poolcx2"}
+	plans := []string{"promax", "prolite"}
+	tiers := []string{"operator-confirmed-a", "operator-confirmed-b"}
+	remaining := []float64{89, 15}
+	cat := store.PlanCapacityCatalog{Mode: "shadow"}
+	for i, label := range labels {
+		if err := s.Vault.SetPlan("pool", "codex", label, plans[i], tiers[i]); err != nil {
+			t.Fatal(err)
+		}
+		c, err := s.Store.Credential("pool", "codex", label)
+		if err != nil || c == nil {
+			t.Fatal(err)
+		}
+		reset := now.Add(6 * 24 * time.Hour)
+		q := model.QuotaSnapshot{Source: "codex", AccountUUID: s.Vault.CredentialID(*c), EndpointID: HubQuotaEndpoint,
+			ObservedAt: now, Observation: "account_api", Plan: plans[i],
+			Pools:   []model.QuotaPool{{LimitID: "codex"}},
+			Windows: []model.QuotaWindow{{ID: "codex:primary", LimitID: "codex", Minutes: 10080, UsedPercent: 100 - remaining[i], ResetsAt: &reset}}}
+		if err := s.Store.InsertQuota(q); err != nil {
+			t.Fatal(err)
+		}
+		unknown := s.codexQuotaForCatalog(*c, now.Add(time.Second), store.PlanCapacityCatalog{Mode: "off"})
+		if unknown.State != "unknown" || unknown.Reason != "missing_dual_window" || unknown.Score != nil || unknown.Capacity.Status != "baseline_unknown" {
+			t.Fatal(unknown)
+		}
+		p := capacityProfile(plans[i], 1, now)
+		p.Tier, p.Confidence = tiers[i], "provisional"
+		p.Source, p.Basis = "operator:explicit-low-confidence-estimate", "low-confidence normalized fixture work; no official ratio"
+		p.Windows = p.Windows[1:]
+		if i == 0 {
+			p.Windows[0].Units = 2
+		}
+		cat.Profiles = append(cat.Profiles, p)
+	}
+	if _, err := s.Store.SetPlanCapacities(cat, 1, "fixture-operator", now); err != nil {
+		t.Fatal(err)
+	}
+	preview := func(want float64) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.handleCodexPreview(w, httptest.NewRequest("POST", codexPreviewPath, strings.NewReader(fmt.Sprintf(`{"worker_id":%q,"new_session":true}`, wid))))
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		var out struct {
+			Mode    string
+			Mutates bool `json:"mutates_bindings"`
+			Inputs  []codexQuotaInput
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Mode != "shadow" || out.Mutates || len(out.Inputs) != 2 {
+			t.Fatal(w.Body.String())
+		}
+		for _, input := range out.Inputs {
+			if len(input.Windows) != 1 || input.Windows[0].Minutes != 10080 || input.Capacity.Status != "estimated" || input.Capacity.Profile.Confidence != "provisional" || input.Capacity.Profile.Source != cat.Profiles[0].Source {
+				t.Fatal(input)
+			}
+			estimate := .15
+			if input.Account == labels[0] {
+				estimate = want
+			}
+			if input.Capacity.EstimatedRemaining == nil || math.Abs(*input.Capacity.EstimatedRemaining-estimate) > 1e-9 {
+				t.Fatal(input)
+			}
+		}
+		if _, err := s.Store.SessionBindFor(wid, "codex"); err != store.ErrNoSessionBind {
+			t.Fatal("preview wrote binding", err)
+		}
+	}
+	preview(1.78)
+	cat.Profiles[0].Windows[0].Units = 3
+	cat.Profiles[0].Version = "operator-edit-v2"
+	if _, err := s.Store.SetPlanCapacities(cat, 2, "fixture-operator", now); err != nil {
+		t.Fatal(err)
+	}
+	preview(2.67)
 }
