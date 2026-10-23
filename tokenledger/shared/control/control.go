@@ -204,6 +204,10 @@ const CapTask = "task"
 // advertise this until launch, delivery, recovery and stop enforce the fence.
 const CapTaskExecution = "task_execution_v1"
 
+// CapTaskContinuation requires the complete explicit continuation launch path.
+// Defining it does not advertise it; nodes must remain off until fully wired.
+const CapTaskContinuation = "task_continuation_v1"
+
 // CapLaunch was the launch proof's (retired with EPIC T497 C8): a node still says
 // it for one version so a hub from before C8 keeps placing accepted tasks on it;
 // the hub asks for it no more. compat-1v: 下一批删

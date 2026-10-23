@@ -1099,6 +1099,9 @@ func (s *Server) sendWrite(ctx context.Context, target store.FleetRow, op store.
 	c, err := s.writableConn(target.EndpointID)
 	if err != nil {
 		if peer, ok := s.peerOf(ctx, target.EndpointID); ok {
+			if continuationRequest(op.Request) && !peer.HasCap(control.CapTaskContinuation) {
+				return "failed", errResult("UNAVAILABLE", "replacement node cannot enforce task continuation")
+			}
 			if controlledExecutionRequest(op.Request) && !peer.HasCap(control.CapTaskExecution) {
 				return "failed", errResult("UNAVAILABLE", "replacement node cannot enforce task execution control")
 			}
@@ -1106,6 +1109,9 @@ func (s *Server) sendWrite(ctx context.Context, target store.FleetRow, op store.
 		}
 		e := errorObject(err)
 		return "failed", errResult(e["code"], "before the write was sent: "+e["message"])
+	}
+	if continuationRequest(op.Request) && !c.canTaskContinuation {
+		return "failed", errResult("UNAVAILABLE", "replacement node cannot enforce task continuation")
 	}
 	if controlledExecutionRequest(op.Request) && !c.canTaskExecution {
 		return "failed", errResult("UNAVAILABLE", "replacement node cannot enforce task execution control")

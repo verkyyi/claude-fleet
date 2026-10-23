@@ -6949,6 +6949,15 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_authority() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinue' -count=1) >"$WORK/task-continue.log" 2>&1 || {
+    WHY="explicit continuation authority regression: $(tail -8 "$WORK/task-continue.log")"; return 1;
+  }
+  WHAT='真实 Hub API 与 SQLite：停止证明、同端点、精确幂等、并发 provider、旧回执及失联节点均受新授权约束'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_replay_cleanup() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-execution-control-selftest.py" \
