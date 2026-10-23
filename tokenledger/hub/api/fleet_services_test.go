@@ -56,6 +56,11 @@ func TestMachineLinkServicesReachTheRosterAndAlert(t *testing.T) {
 		t.Fatalf("a stranger sees %+v", snap.Machines)
 	}
 
+	// The roster is published before serviceAlerts finishes its database writes.
+	// Wait for both alerts, not just for the register to become visible.
+	waitFor(t, 3*time.Second, "both service alerts raised", func() bool {
+		return len(openAlerts(t, h, store.AlertServiceFailed)) == 2
+	})
 	// The two failed entries are alerts; the running one is not.
 	open := openAlerts(t, h, store.AlertServiceFailed)
 	subjects := map[string]bool{}
