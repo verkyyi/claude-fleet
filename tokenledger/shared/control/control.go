@@ -205,6 +205,8 @@ const CapTask = "task"
 const CapTaskExecution = "task_execution_v1"
 
 // CapTaskContinuation requires the complete explicit continuation launch path.
+// Both the native-exit and never-claimed-stop proof branches, including exact
+// workspace ancestry after unclaimed retries, must be enforced before advertising.
 // Defining it does not advertise it; nodes must remain off until fully wired.
 const CapTaskContinuation = "task_continuation_v1"
 
