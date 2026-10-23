@@ -2019,21 +2019,22 @@ def shared_restart():
     if DRY:
         say("    would snapshot old shared Codex picks as root before restarting the proxy")
         return
-    if shared_supervised():
-        put(os.path.join(LIB, ".restart"), "%f\n" % time.time(), 0o644,
-            "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
-        return
-    # launchd/systemd stops the old listener before the launcher can run. Take
-    # the same root-authorized snapshot here, while it can still answer. The
-    # protected LIB already ships this launcher and proxy; no extra helper file.
+    # The running CLI and its adjacent launcher are one release; protected LIB
+    # may still be old (join/purge do not necessarily run machine refresh).
+    # Snapshot before service stop OR a supervised restart stamp, so an older
+    # protected launcher cannot bypass preservation. No extra shipped helper.
     import importlib.util
-    spec = importlib.util.spec_from_file_location("fleet_credsep_snapshot", os.path.join(LIB, "fleet-credsep-launch.py"))
+    spec = importlib.util.spec_from_file_location("fleet_credsep_snapshot", os.path.join(HERE, "fleet-credsep-launch.py"))
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
     role = (shared_rec() or {}).get("user") or ROLE
     tenants = [{"login": m["login"], "state": os.path.join(ROOT_BASE, m["login"], "cred-proxy")}
                for m in shared_tenants()]
     launcher.snapshot_previous_shared_picks(ROOT_BASE, SHARED_RUN, tenants, pwd.getpwnam(role))
+    if shared_supervised():
+        put(os.path.join(LIB, ".restart"), "%f\n" % time.time(), 0o644,
+            "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
+        return
     load_daemon(SHARED_PATH, SHARED_LABEL)
 
 

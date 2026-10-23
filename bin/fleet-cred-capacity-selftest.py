@@ -427,6 +427,43 @@ class SharedSnapshot(unittest.TestCase):
         self.reject=''
         self.assertEqual(p.ctl_call(str(self.run),{'op':'picks','as':'alpha'})['picks']['codex:old-native'],'source-a')
 
+    def test_legacy_restart_snapshots_with_missing_or_old_protected_launcher(self):
+        refresh,lib=self.refresh_fixture()
+        old=lib/'fleet-credsep-launch.py'
+        for kind in ('missing','old'):
+            with self.subTest(kind=kind):
+                if kind=='old':old.write_text('raise RuntimeError("old protected launcher must not be imported")\n')
+                original=old.read_bytes() if old.exists() else None
+                self.requests.clear()
+                for name in ('alpha','beta'):self.saved(name).write_text('{"stale":"stale-account"}')
+                def stop(*args):
+                    self.assert_snapshots()
+                    self.assertEqual([r['as'] for _,r in self.requests],['alpha','beta'])
+                with patch.object(refresh,'load_daemon',side_effect=stop) as stopped:
+                    refresh.shared_restart()
+                stopped.assert_called_once()
+                self.assertEqual(old.read_bytes() if old.exists() else None,original)
+
+    def test_old_protected_launcher_does_not_bypass_live_snapshot_refusal(self):
+        refresh,lib=self.refresh_fixture()
+        (lib/'fleet-credsep-launch.py').write_text('# old launcher without snapshot helper\n')
+        self.reject='beta'
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
+        with self.assertRaises(SystemExit):refresh.shared_restart()
+        stopped.assert_not_called()
+        for name in ('alpha','beta'):
+            self.assertEqual(json.loads(self.saved(name).read_text()),{'stale':'stale-account'})
+        self.reject=''
+        self.assertEqual(p.ctl_call(str(self.run),{'op':'picks','as':'alpha'})['picks']['codex:old-native'],'source-a')
+
+    def test_missing_protected_launcher_cold_start_retains_saved_picks(self):
+        refresh,lib=self.refresh_fixture()
+        self.stop_server();(self.run/'ctl.sock').unlink()
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
+        refresh.shared_restart()
+        stopped.assert_called_once()
+        self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
+
     def test_dry_restart_never_snapshots_or_stops_old_listener(self):
         refresh,lib=self.refresh_fixture()
         self.patch(refresh,'DRY',True)
@@ -435,14 +472,25 @@ class SharedSnapshot(unittest.TestCase):
         stopped.assert_not_called();self.assertEqual(self.requests,[])
         self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
 
-    def test_supervised_restart_defers_snapshot_to_root_launcher(self):
+    def test_supervised_restart_snapshots_before_stamp_with_old_protected_launcher(self):
         refresh,lib=self.refresh_fixture(supervised=True)
-        stamped=self.patch(refresh,'put',unittest.mock.Mock())
+        (lib/'fleet-credsep-launch.py').write_text('# old launcher without snapshot helper\n')
+        def stamp(*args):
+            self.assert_snapshots()
+            self.assertEqual([r['as'] for _,r in self.requests],['alpha','beta'])
+        stamped=self.patch(refresh,'put',unittest.mock.Mock(side_effect=stamp))
         stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
         refresh.shared_restart()
         stamped.assert_called_once();stopped.assert_not_called()
-        self.assertEqual(self.requests,[])
-        self.assertEqual(json.loads(self.saved('alpha').read_text()),{'stale':'stale-account'})
+
+    def test_supervised_snapshot_refusal_never_stamps_restart(self):
+        refresh,lib=self.refresh_fixture(supervised=True);self.reject='beta'
+        stamped=self.patch(refresh,'put',unittest.mock.Mock())
+        stopped=self.patch(refresh,'load_daemon',unittest.mock.Mock())
+        with self.assertRaises(SystemExit):refresh.shared_restart()
+        stamped.assert_not_called();stopped.assert_not_called()
+        self.reject=''
+        self.assertEqual(p.ctl_call(str(self.run),{'op':'picks','as':'alpha'})['picks']['codex:old-native'],'source-a')
 
     def test_cold_start_no_listener_retains_persisted_state(self):
         self.stop_server(); (self.run/'ctl.sock').unlink()
