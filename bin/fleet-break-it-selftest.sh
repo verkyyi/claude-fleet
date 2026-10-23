@@ -7820,6 +7820,15 @@ drill_task_terminal_physical_width() {
   SECS=$(since "$t0")
 }
 
+drill_task_worktree_current_generation() {
+  local t0; t0=$(now); CAP=10
+  suite_holds worktree-autoclean-scratch-selftest.sh \
+    'CONTROLLED: old outcomes cannot prune current/pending/released workspaces' \
+    'legacy Task worktree scratch-16 should still prune' 'fleet_task_control.py' || return 1
+  WHAT='真实 git 工作树：旧Outcome不授权删除当前/待启动/已释放controlled目录；未知KEEP，legacy仍可清理'
+  SECS=$(since "$t0")
+}
+
 drill_task_history_current_generation() {
   local t0; t0=$(now); CAP=120
   _drill_go_tests 'TestTaskProjectionControlledGeneration TestTaskProjectionKeepsControlledIDHistory TestTaskProjectionControlledSweepsAndUndo TestTaskProjectionSnapshotRejectsAdmissionAndGenerationChange TestTaskProjectionMixedLegacyAliases' \
