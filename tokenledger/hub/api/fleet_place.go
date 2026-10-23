@@ -26,8 +26,8 @@ import (
 // machines of the person this login belongs to. When the answer is the
 // asking fleet, the node opens the session itself, as it always has; when it
 // is another machine, the hub hands that machine's fleet the lease and sends
-// it the start as a journalled worker_start, carrying the parent's worker_id
-// (origin_wid) so the new window records whom to report to.
+// it the start as a journalled worker_start. Caller identity stays in the
+// authenticated principal and audit; no Parent relationship is transmitted.
 //
 // Authenticated by the node's own enrollment token, like /v1/node/lease, and
 // only for a fleet that endpoint's heartbeats registered: one node cannot
@@ -55,7 +55,7 @@ type placeRequest struct {
 	Name string `json:"name"`
 	// Node is "auto" (default) or one roster machine.
 	Node string `json:"node"`
-	// OriginWID is the worker that asked for this one, if any.
+	// OriginWID is accepted and ignored for one version of old clients.
 	OriginWID   string          `json:"origin_wid"`
 	Agent       string          `json:"agent"`
 	CodingAgent string          `json:"coding_agent"`
@@ -348,8 +348,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	// A session's own call (claude-fleet#1810): the node vouches for which of
 	// its sessions asked. A statement that does not verify is refused (401),
 	// never read as the node's own call; one naming a session of another
-	// fleet, or a start whose parent is not that session, is NOT_FOUND — a
-	// session opens work as itself the parent, nothing else.
+	// fleet is NOT_FOUND. Retired origin metadata never selects the caller.
 	if a := r.Header.Get(workerAssertHeader); a != "" {
 		c, err := verifyWorkerAssertion(a, tokHash, now)
 		if err != nil {
@@ -357,15 +356,12 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": errorObject(err)})
 			return
 		}
-		if c.FleetUUID != fleetID || (req.OriginWID != "" && !c.speaksAs(req.OriginWID)) {
+		if c.FleetUUID != fleetID {
 			p.Worker = c
 			s.placeAudit(p, fleetID, "refused:NOT_FOUND", now)
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "NOT_FOUND",
 				"message": "no such session on this node"}})
 			return
-		}
-		if req.OriginWID == "" {
-			req.OriginWID = c.WorkerID
 		}
 		p.Worker = c
 	}
@@ -395,9 +391,6 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			input["issue"] = float64(req.Issue)
-		}
-		if req.OriginWID != "" {
-			input["origin_wid"] = req.OriginWID
 		}
 		if req.Reap != "" {
 			input["reap"] = req.Reap
@@ -599,9 +592,6 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Dispatch != nil {
 			args["dispatch"] = req.Dispatch
-		}
-		if req.OriginWID != "" {
-			args["origin_wid"] = req.OriginWID
 		}
 		if accountClassBinds(req.AccountClass) {
 			args["account_class"] = req.AccountClass

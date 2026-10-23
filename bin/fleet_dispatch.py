@@ -91,7 +91,19 @@ def read_current(task):
     return response.get("task") if isinstance(response, dict) else None
 
 
-def check_current(value, *, read=None):
+def read_execution_start(task):
+    result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), "execution-start", task],
+                            capture_output=True, text=True, timeout=15,
+                            env=dict(os.environ, FLEET_HUB_TIMEOUT="10"))
+    if result.returncode:
+        raise ValueError("current immutable start authorization unavailable")
+    return json.loads(result.stdout)
+
+
+_UNSPECIFIED = object()
+
+
+def check_current(value, *, read=None, execution=None, continuation=_UNSPECIFIED, read_start=None):
     """Refuse a cancelled/stale accepted start, without adopting legacy input.
 
     This read is a last-moment fence, not a claim that a process has exited or
@@ -102,6 +114,35 @@ def check_current(value, *, read=None):
     validate(value)
     if not value.get("task"):
         return
+    if execution is not None:
+        from fleet_task_execution import _snapshot
+        from fleet_task_continuation import validate_continuation
+        expected = _snapshot(execution, allow_unclaimed=True)
+        try:
+            record = (read_start or read_execution_start)(value["task"])
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            raise ValueError("current immutable start authorization unavailable") from exc
+        if (not isinstance(record, dict) or set(record) - {"control_version", "task_execution", "start", "source_start"}
+                or type(record.get("control_version")) is not int or record["control_version"] != 1):
+            raise ValueError("invalid immutable start authorization")
+        actual = _snapshot(record.get("task_execution"), allow_unclaimed=True)
+        wanted = dict(expected, execution_owner=actual["execution_owner"] if not expected["execution_owner"] else expected["execution_owner"])
+        start = record.get("start")
+        if (actual != wanted or actual["cancel_request"] or not isinstance(start, dict)
+                or set(start) - {"operation_id", "agent", "repo", "no_repo", "continuation"}
+                or start.get("operation_id") != expected["operation_id"]
+                or start.get("agent") != value["resolved_agent"]
+                or not isinstance(start.get("repo"), str) or type(start.get("no_repo")) is not bool
+                or expected["task_ref"] != value["task"] or expected["generation"] != value["generation"]
+                or expected["attempt_id"] != value["attempt_id"]):
+            raise ValueError("immutable start authorization changed or cancelled")
+        if "continuation" in start:
+            validate_continuation(start["continuation"])
+        if ("continuation" in start) != ("source_start" in record):
+            raise ValueError("immutable start source metadata is incomplete")
+        if continuation is not _UNSPECIFIED and start.get("continuation") != continuation:
+            raise ValueError("continuation differs from immutable start")
+        return record
     try:
         record = (read or read_current)(value["task"])
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -128,6 +169,7 @@ def main():
     p.add_argument("--task", default="")
     p.add_argument("--with-agent", action="store_true", help="print the resolved agent before the JSON envelope")
     p.add_argument("--check-current", action="store_true", help="refuse a cancelled/stale accepted task before starting")
+    p.add_argument("--execution", default="", help="controlled execution grant for current-start authorization")
     a = p.parse_args()
     try:
         value = resolve(a.agent, a.template, a.label, a.default,
@@ -135,7 +177,7 @@ def main():
         if a.placement_code is not None:
             placement_check(value, a.task, a.placement_code)
         if a.check_current:
-            check_current(value)
+            check_current(value, execution=json.loads(a.execution) if a.execution else None)
     except (ValueError, TypeError) as e:
         p.error(str(e))
     if a.with_agent:

@@ -1,51 +1,11 @@
 package store
 
 import (
-	"database/sql"
-	"errors"
 	"strings"
 	"time"
 )
 
-// The task graph: a child record names its parent record and the session that
-// dispatched it. Neither a local issue key nor a transport acknowledgement is a
-// task result — a session's result is its window's ID's (EPIC T497 C8).
-
-// bindTaskParentTx names a child's parent record. The parent is the dispatching
-// session — its ID (parent_session, checked to be this account's by the caller,
-// EPIC T497 C16) — and parent_task only names that session's record; no record is
-// asked for an executor. A parent_session alone names a record only through a
-// pre-C8 record's archived executor (a session a launch proof ran, still
-// dispatching its batch on the C8 release).
-func (s *Store) bindTaskParentTx(tx *sql.Tx, child *FleetTask) error {
-	var parent FleetTask
-	var err error
-	if child.ParentTask != "" {
-		parent, err = s.taskInTx(tx, ParseTaskRef(child.ParentTask))
-	} else if child.ParentSession != "" {
-		var id int64
-		err = tx.QueryRow(`SELECT id FROM fleet_tasks WHERE owner = ? AND authority_version = 1 AND execution_owner = ? ORDER BY id DESC LIMIT 1`, child.Owner, child.ParentSession).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err == nil {
-			parent, err = s.taskInTx(tx, id)
-		}
-	} else {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if parent.Owner != child.Owner {
-		return ErrTaskFence
-	}
-	if parent.AuthorityVersion == 0 {
-		return nil
-	}
-	child.ParentTask, child.ParentGeneration = parent.Ref, parent.Generation
-	return nil
-}
+// Historical Parent columns remain available to read-only compatibility views.
 
 // FleetTaskChildren lists the records that name parent as theirs.
 func (s *Store) FleetTaskChildren(owner, parent string) ([]FleetTask, error) {

@@ -4973,8 +4973,9 @@ drill_task_window_duplicate() {
   t0=$(now)
   suite_holds task-one-window-selftest.sh 'D5: no window opened' 'B2: the ID stays open while the original runs' \
     'E3: the spawner was called for a running record' 'F9: the hub'"'"'s record is back' || return 1
-  grep -q 'fleet_task_running "$TASK_REF"' "$BIN/dash-raw-session.sh" \
-    || { WHY="dash-raw-session.sh no longer asks whether the record already runs"; return 1; }
+  grep -q '_ttask=$TASK_REF' "$BIN/dash-raw-session.sh" \
+    && grep -q 'fleet_task_running "$_ttask" "$_tfid"' "$BIN/dash-raw-session.sh" \
+    || { WHY="dash-raw-session.sh lost Task or current continuation FID duplicate checks"; return 1; }
   grep -q 'fleet_fid_shared' "$BIN/fleet-cleanup-idle.py" \
     || { WHY="the idle reaper no longer keeps an ID another window carries"; return 1; }
   SECS=$(since "$t0")
@@ -6949,6 +6950,15 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_continuation_start() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
+    WHY="continuation startup regression: $(tail -10 "$WORK/task-continuation-start.log")"; return 1;
+  }
+  WHAT='同 Task 新 FID 续做；认证原 start 与退出回执找回原工作树和历史，旧窗口不吞新启动'
+  SECS=$(since "$t0")
+}
+
 drill_task_local_continuation() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-local-continuation-selftest.py" \
@@ -7804,6 +7814,17 @@ drill_session_title_lost() {
     WHY="persistent title regression: $(tail -3 "$WORK/title-ledger.log")"; return 1;
   }
   WHAT='创建、自动/人工命名、并发顺序、回收和重开保留同一身份的标题'
+  SECS=$(since "$t0")
+}
+
+drill_task_parent_write_retired() {
+  CAP=120; local t0; t0=$(now)
+  _drill_go_tests 'TestTaskParentWriteRetired TestTaskParentHistoricalReplayPreservesBytes' \
+    "$ROOT/tokenledger/hub/store/fleet_task_parent_retirement_test.go" \
+    '新Task不写Parent，旧token重放保留原记录和非Parent冲突保护' ./hub/store || return 1
+  _drill_go_tests 'TestTaskParentNodeWriteRetired TestTaskParentOperationReplayRetired TestTaskParentWriteParamsRetired TestTaskParentAcceptedDispatchReplay' \
+    "$ROOT/tokenledger/hub/api/fleet_task_parent_retirement_test.go" \
+    '认证身份保留，Parent字段不注入、不影响旧请求重放，用户正文仍完整比较' || return 1
   SECS=$(since "$t0")
 }
 
