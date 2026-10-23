@@ -10,8 +10,8 @@
 #   B  Agent: the newest native segment's (S4: a transfer reads Codex), else the one
 #      it was opened with, else the window's @cc_agent (a window opened before C1 —
 #      EPIC T497 C17), else the hub record's actual_agent, else 未知 (grey)
-#   C  results: the newest wins on a live idle window (S2: done then failed ⇒ ✗ 等你);
-#      a working window keeps ↻; a reaped row whose ledger closed with no result is
+#   C  results never replace a live native state (including idle and unknown);
+#      a reaped row whose ledger closed with no result is
 #      ◌ 已退出 (S7), with one is its result
 #   D  conflict (S9): two live windows on one native segment are both red 「等你」,
 #      the other's code as the reason; close one and the other recovers
@@ -146,6 +146,7 @@ def read(states, wins=None):
     fv.produce = lambda fleet, **kw: rows(states)
     it = fv.entries("v1")
     return it, {e["target"]: e for e in it if e["kind"] == "sess"}
+open(fi.task_codes_path(), "w").write("T367\t" + fi.short_for(F["@2"], fi.known_ids()) + "\t" + F["@2"] + "\n")
 it, by = read(STATES)
 assert by["@9"]["agent"] == "" and SPAWNED and "T901" in SPAWNED[-1], (by["@9"], SPAWNED)   # not waited for
 fv.task_cache_fill(SPAWNED[-1])
@@ -177,10 +178,26 @@ assert by["@8"]["agent"] == "codex", by["@8"]   # C17: no segment, no opened age
 assert by["@9"]["agent"] == "codex", by["@9"]   # C17: nor a window word ⇒ the hub record's actual_agent
 
 # --- C: results
-assert by["@3"]["state"] == "failed" and by["@3"]["sym"] == "fail" and by["@3"]["group"] == "ask", by["@3"]
+assert by["@3"]["state"] == "idle" and by["@3"]["sym"] == "idle" and by["@3"]["group"] == "queue", by["@3"]
 assert by["@6"]["sym"] == "work", by["@6"]         # working keeps ↻ over a done result
 it2, by2 = read(dict(STATES, **{"@6": "idle"}))
-assert by2["@6"]["sym"] == "done" and by2["@6"]["group"] == "queue", by2["@6"]
+assert by2["@6"]["sym"] == "idle" and by2["@6"]["group"] == "queue", by2["@6"]
+# A historical blocked result is not a new question. Exercise the real ledger
+# and producer read path; the stored result remains available as history.
+for result in ("blocked", "failed", "done", "merged"):
+    ev(F["@3"], ev="result", state=result)
+    for native in ("idle", "working", "looping", "needs", "exited", "unknown"):
+        _, observed = read(dict(STATES, **{"@3": native}))
+        e = observed["@3"]
+        assert e["state"] == native, (result, native, e)
+        assert fv.task_status(e) == {"working": "work", "needs": "needs"}.get(native, "quiet"), (result, native, e)
+assert fi.fold(fi.read(F["@3"]))["results"][-1]["state"] == "merged"
+# The separately cached Hub outcome must not turn a live idle row into done.
+from unittest.mock import patch
+for outcome in ("succeeded", "failed", "cancelled", "refused"):
+    with patch.object(fv, "hub_task", return_value={"outcome": outcome}):
+        _, observed = read(dict(STATES, **{"@2": "idle"}))
+    assert observed["@2"]["state"] == "idle" and observed["@2"]["id"] == fi.task_code("T367"), (outcome, observed["@2"])
 g = {e["issue"]: e for e in it if e.get("gone")}
 assert g["#4700"]["sym"] == "exited" and g["#4700"]["word"] == "已退出" and re.fullmatch(r"[A-Z]\w{3}", g["#4700"]["id"]) \
     and g["#4700"]["agent"] == "codex", g["#4700"]
@@ -189,9 +206,9 @@ assert g["#4701"]["sym"] == "done", g["#4701"]
 # --- D: conflict
 for w, other in (("@1", "@5"), ("@5", "@1")):
     e = by[w]
-    assert e["group"] == "ask" and e["sym"] == "needs" and e["conflict"] == code(other), (w, e)
+    assert e["group"] == "ask" and e["sym"] == "idle" and fv.task_status(e) == "quiet" and e["conflict"] == code(other), (w, e)
 red = fv.row_segs(by["@1"], 100, qo.cells, qo.clip)[1]
-assert red[0] == "!" and any(s.startswith("c") for s in red[1]), red
+assert red[0].strip() == "", red  # conflict is a detail warning, not a native question
 _, by3 = read({w: s for w, s in STATES.items() if w != "@5"})
 assert not by3["@1"].get("conflict") and by3["@1"]["sym"] == "idle", by3["@1"]      # idle: 等你 by itself (回收 D), not red
 
@@ -320,8 +337,8 @@ print("   read with %d closed rows: %.0f ms (best of 3)" % (len(bh), min(runs)))
 PY
 st_ok_all "A  ID column: 4 uppercase, letter first (5 when two share), blank without an ID, T<n> and the old T- code aliases, far rows too"
 st_ok_all "B  Agent: newest segment (transfer → Codex), else opened, else @cc_agent, else the hub's actual_agent, else 未知 (grey)"
-st_ok_all "C  results: newest wins (done → failed = ✗ 等你), working keeps ↻, reaped without one = ◌ 已退出"
-st_ok_all "D  conflict: two live windows on one segment both red 等你; closing one clears it"
+st_ok_all "C  results stay historical: native idle/working/looping/needs/exited/unknown survive; closed rows retain their results"
+st_ok_all "D  conflict: two live windows retain native state and conflict detail; closing one clears the warning"
 st_ok_all "E  search: 4539 / #4539 via the ID's issues, not 45390; code and alias find their row"
 st_ok_all "F  actions page: code + ID, aliases, segments, 未登记到 hub / refusal red, conflict reason"
 st_ok_all "G  repo: an EPIC driver's charter repo= (its relay too), a record's repo, none ⇒ blank; a closed row by its conversation, a closed ID alone is its own row (T593)"
@@ -391,7 +408,7 @@ assert all(len(by[f]["code"]) >= 4 and by[f]["code"].startswith(by[f]["id"]) for
 assert any(t.strip().startswith("编号 " + by[ids[1]]["code"]) for t, _ in fv.id_page(by[ids[1]], 100)), fv.id_page(by[ids[1]], 100)
 # A past result does not hide new work (PV4D); its live identity stays addressable.
 d = by[DONE_T]
-assert d["group"] == "work" and d["sym"] == "work" and d["open_id"] and len(d["id"]) >= 2, d
+assert d["group"] == "work" and d["sym"] == "work" and not d["open_id"] and d["id"] == "T950", d
 assert fi.open_ids() == set(ids + [CLASH, DONE_T]), len(fi.open_ids())
 # typing 2: both unfinished ones, never a pick; 3 is the one
 sess = lambda q: [W.get(e["target"]) for e in fv.visible(it, q, set()) if e["kind"] == "sess"]
@@ -402,7 +419,7 @@ assert fi.resolve_open(A[:3], fi.open_ids()) == (0, [ids[0]])
 # a finished row's 2 places stay out while an unfinished one answers them
 dd = fi.encode(DONE_T)[:2]
 if not any(fi.encode(f).startswith(dd) for f in ids + [CLASH]):
-    assert sess(dd) == [DONE_T], sess(dd)
+    assert sess("T950") == [DONE_T], sess("T950")
 # the top bar and the notification title: the same 2 or 3
 assert tb.ticket("", "T950", ids[3]) == by[ids[3]]["id"] and tb.ticket("", "", CLASH) == C[:3], tb.ticket("", "", CLASH)
 assert tb.ticket("4539", "", ids[3]) == "#4539" and tb.ticket("", "T12", "") == "T12"

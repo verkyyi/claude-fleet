@@ -1207,12 +1207,6 @@ def hub_task(task):
 TASK_ENDS = ("succeeded", "failed", "cancelled", "refused")
 
 
-def task_ended(e):
-    """The row's hub task record has ended (off task_cache — never a hub call)."""
-    o = (id_record(e.get("fid") or "") or {}).get("opened") or {}
-    return bool(hub_task(e.get("task") or o.get("task") or "").get("outcome"))
-
-
 def hub_task_agent(task):
     """The hub task record's actual_agent — the Agent column's last fallback (EPIC
     T497 C17)."""
@@ -1403,11 +1397,8 @@ def id_apply(e, fid, known, live=True):
     cur = [r for r in rec.get("results") or () if r.get("attempt", 1) >= e["attempt"]]   # this attempt's (C2)
     res = cur[-1].get("state", "") if cur else ""
     st = RESULT_STATE.get(res, "")
-    if live and st and e.get("state") not in ("working", "looping", "needs", "exited") and not e.get("lost"):
-        # S2: the newest result says how a live window ended its last piece of work
-        e["state"] = st
-        e["sym"] = sym_of(st)
-        e["word"] = state_words(st)
+    # Results describe earlier work. A live row retains its native observation,
+    # including idle/unknown; a historical blocked result is not a new question.
     if not live and rec.get("closed"):
         # S7: a closed ID with no result exited; else its newest result
         e["sym"] = "exited" if not res else ("fail" if st == "failed" else "done")
@@ -1421,7 +1412,9 @@ def finished(e):
 
 
 def id_display(groups):
-    """The ID column shows the code that tells the UNFINISHED apart (EPIC T644 C4):
+    """Tasks keep their written code (or T alias when the code is unavailable).
+    Legacy session-only rows retain their existing abbreviated display:
+    the ID column tells the UNFINISHED sessions apart (EPIC T644 C4):
     every open row but a finished one in 排队中 (done, or the producer's 已结束 —
     回收 D) is unfinished; each of those rows shows
     fleet_id.display_short over them (2 places, one more while another unfinished one
@@ -1434,6 +1427,12 @@ def id_display(groups):
     rows = [e for g in groups.values() for e in g if fi.is_fid(e.get("fid") or "")]
     live = {e["fid"] for e in rows if not finished(e)}
     for e in rows:
+        if e.get("task"):
+            code = e.get("task_code") or fi.task_code(e["task"]) or e["task"]
+            if code:
+                e["id"] = e["code"] = code
+                e["open_id"] = False
+                continue
         e["code"] = e.get("id") or ""
         e["open_id"] = e["fid"] in live
         try:
@@ -1462,7 +1461,7 @@ def id_conflicts(rows):
             continue
         for e in es:
             e["conflict"] = ", ".join(x["id"] for x in es if x is not e)
-            e["state"], e["sym"], e["group"] = "needs", "needs", "ask"
+            e["group"] = "ask"  # warning stays in details; do not invent a native question
             e["word"] = say("view_id_conflict")
 
 
@@ -1968,10 +1967,6 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else far_fid(target), known)
         if not e["repo"]:
             norepo.append(e)
-        if e["state"] == "idle" and task_ended(e):
-            # A result describes the task; current work keeps its live state.
-            e["state"], e["sym"] = "done", sym_of("done", e["lost"])
-            e["word"] = state_words("done")
         if e["state"] != state:
             grp = e["group"] = group_of(e["state"], section == "pin", landed, section == "ended", bool(pend), stage)
         if grp == "shut":
@@ -2233,7 +2228,10 @@ def board_apply(board, groups, shut, gone, here, me):
             e["loop"] = r["loop"] is True
         if "native_wait" in r:
             e["native_wait"] = r["native_wait"]
-        e["needs_input"] = r.get("tag") in ("asking", "waiting_you")
+        e["needs_input"] = (r.get("state") or e.get("state")) in ("needs", "blocked")
+        e["task"] = r.get("task") or e.get("task") or ""
+        e["task_id"] = r.get("task_id") or ""
+        e["task_code"] = (r.get("code") or "") if r.get("task") else ""
         if "agent_basis" in r or "agent_words" in r:
             e["agent"] = r.get("agent") or ""
             e["agent_basis"] = r.get("agent_basis") or ""
@@ -2512,7 +2510,7 @@ def task_status(e):
     if e.get("lost"):
         return "quiet"
     state = e.get("state")
-    if e.get("needs_input") or e.get("ask") or state in ("needs", "blocked") or e.get("conflict"):
+    if state in ("needs", "blocked"):
         return "needs"
     if e.get("pending_start"):
         return "pending"

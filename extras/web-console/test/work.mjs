@@ -46,7 +46,7 @@ assert.equal(by('failed').ended.key, 'f', 'an ended session joins its record by 
 assert.equal(by('asks').group, 'ask');
 assert.equal(by('asks').line, 'which colour?');
 assert.equal(by('failed').group, 'ask');
-assert.equal(by('waits on you').group, 'ask');
+assert.equal(by('waits on you').group, 'queue');
 assert.equal(by('epic').group, 'work');
 assert.equal(by('merge').group, 'queue');
 assert.deepEqual(by('merge').tag, ['等合并', 'Awaiting merge']);
@@ -60,6 +60,21 @@ assert.notEqual(by('merge').group, 'gone');
 // a record closed as succeeded stays so while its window still runs (T644 C4)
 const kept = buildRows([v1({ id: 'T11', fid: fid(11), title: 'kept', outcome: 'succeeded', worker_id: `${F}/k` })], [sess('k', 'working')], []);
 assert.deepEqual([kept[0].group, kept[0].tag[1]], ['work', 'Working']);
+
+// Native observations are independent of earlier task outcomes. Keep the
+// history without inventing a new failure or question in the current row.
+for (const outcome of ['succeeded', 'failed', 'cancelled', 'refused']) {
+  for (const [state, group, word] of [
+    ['working', 'work', 'Working'], ['looping', 'work', 'Working'],
+    ['needs', 'ask', 'Asking you'], ['idle', 'queue', 'Idle'],
+    ['done', 'queue', 'Turn ended'], ['unknown', 'queue', 'Unknown'],
+  ]) {
+    const task = v1({id:'T11', fid:fid(11), outcome, asked:'old question', worker_id:`${F}/k`});
+    const [r] = buildRows([task], [sess('k', state)], []);
+    assert.deepEqual([r.group, r.tag[1]], [group, word], `${outcome} must not override native ${state}`);
+    assert.equal(r.task.outcome, outcome, 'history remains on the task');
+  }
+}
 
 // EPIC: members listed under it; nested while in its group, else in their own naming it
 const epic = by('epic');
@@ -81,7 +96,7 @@ assert.equal(taskWords(by('legacy').task), 'legacy');
 
 // ✦ 消息: asks, failures, what finished today
 const kinds = messagesOf(rows).map((m) => `${m.kind}:${m.row.title}`).sort();
-assert.deepEqual(kinds, ['ask:asks', 'ask:waits on you', 'done:done', 'fail:failed']);
+assert.deepEqual(kinds, ['ask:asks', 'done:done', 'fail:failed']);
 
 console.log('ok work.mjs');
 
