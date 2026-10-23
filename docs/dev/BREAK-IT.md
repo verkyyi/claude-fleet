@@ -684,3 +684,5 @@
 | 未启动记录在面板显示 Unknown / Queued，任务结果盖过会话的新工作（PV4D） | 人误以为已有 worker 或自动调度，并找不到协调归属 | Hub board 区分计划与运行证据、未派发与保留状态，终端和网页消费同一事实；协调归属只取可核验的父记录 | `board-plan-facts` |
 | Hub Task 的 stop 已持久化，但节点清理失败、执行器崩溃或尚未启动；Hub 再次投递同一个 stop | 旧 failed / unknown / succeeded 回执被当成清理已经结束，后续请求不再停进程或关闭窗口 | 每次重投先持久提交同一 stop 栅栏，再用原 operation 重试清理；按 operation 的进程间锁防止并发清理，执行器死亡自动释放；成功回执仍标记 execution_exit 为 unproven | `task-stop-replay-cleanup` |
 | restore 先启动包装器、后补会话 FID，或快照丢失显式执行协议 | 已停止的受控 Task 被当成旧会话恢复；本地数据库丢失时绕过停止检查 | FID、恢复来源和显式协议在同一 pane 启动前写入，写失败不启动；协议随 FID 单独入快照，缺本地授权仍拒绝，未受控会话照常恢复 | `restore-execution-identity` |
+
+| 原生组件登记后时区改变，或退出后仍是僵尸，或历史启动中断只登记部分组件 | 显示日期变化被误认为 PID 复用，可能错误释放；反过来僵尸和历史部分启动会永久阻挡接续 | 退出判断只比较内核出生标记与状态；历史已登记组件全部核验，缺失 child 保持未知；不按可执行文件是否可读推断退出 | `native-exit-identity` |
