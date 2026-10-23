@@ -43,7 +43,7 @@ func TestTaskRecordIsATicket(t *testing.T) {
 		t.Fatalf("a task lease: %d %v", n, err)
 	}
 	// A legacy (v0) record keeps its update road; a hub ticket is no backend
-	// (claude-fleet#4898, T477); a parent of another account is not adoptable.
+	// (claude-fleet#4898, T477); retired Parent input grants no relationship.
 	legacy, err := s.CreateFleetTask(FleetTask{Owner: "alice", Title: "legacy"}, "legacy", now)
 	if err != nil {
 		t.Fatal(err)
@@ -56,8 +56,8 @@ func TestTaskRecordIsATicket(t *testing.T) {
 		t.Fatalf("hub ticket: %v", err)
 	}
 	input.TicketRef, input.Owner, input.ParentTask = "", "bob", legacy.Ref
-	if _, err = s.CreateFleetTask(input, "foreign-parent", now); !errors.Is(err, ErrTaskFence) {
-		t.Fatalf("foreign parent: %v", err)
+	if rec, err := s.CreateFleetTask(input, "foreign-parent", now); err != nil || rec.ParentTask != "" || rec.Owner != "bob" {
+		t.Fatalf("ignored foreign Parent metadata: %+v %v", rec, err)
 	}
 }
 

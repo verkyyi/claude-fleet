@@ -587,18 +587,10 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		if w.node, err = argString(args, "node"); err != nil {
 			break
 		}
-		// origin_wid (claude-fleet#1425): the worker that asked for this one,
-		// on another machine — the new window records it as its parent.
-		var owid string
-		if owid, err = argString(args, "origin_wid"); err != nil {
+		// Compat-1v: accept the retired origin_wid spelling, but do not
+		// bind or forward it. Authentication comes from the principal.
+		if _, err = argString(args, "origin_wid"); err != nil {
 			break
-		}
-		if owid != "" {
-			if _, _, perr := fleetid.ParseWorkerID(owid); perr != nil {
-				err = fault("INVALID_ARGUMENT", "origin_wid must be a worker_id (<fleet UUID>/<key>)")
-				break
-			}
-			w.params["origin_wid"] = owid
 		}
 		// account_class (claude-fleet#1540): the kind of subscription the
 		// session runs on — local / pool bind the node's pick, any / absent
@@ -1045,7 +1037,12 @@ func opensSession(tool string) bool {
 // replayed answers a repeated idempotency key: the first operation, if the
 // request is the same; a refusal if the key now asks for something else.
 func replayed(o store.FleetOperation, w writeRequest) (map[string]any, error) {
-	if o.Request != w.canonical {
+	original, current := o.Request, w.canonical
+	if o.Action == "worker_start" && w.action == "worker_start" {
+		original = store.NormalizeTaskDispatchRequest(original)
+		current = store.NormalizeTaskDispatchRequest(current)
+	}
+	if original != current {
 		return nil, fault("IDEMPOTENCY_CONFLICT", "Key was used for a different operation")
 	}
 	return operationView(o), nil

@@ -87,8 +87,8 @@ func TestNodePlaceBusyNodeHandsStartToIdleOne(t *testing.T) {
 		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
 	params := macC.writes[0]["params"].(map[string]any)
-	if params["issue"].(float64) != 7 || params["origin_wid"] != parent || params["repo"] != writeRepo {
-		t.Fatalf("mac-c was sent %v; want issue 7 with the parent's worker_id", params)
+	if params["issue"].(float64) != 7 || params["origin_wid"] != nil || params["repo"] != writeRepo {
+		t.Fatalf("mac-c was sent %v; want issue 7 without Parent transport", params)
 	}
 	if macC.writes[0]["actor"] != "node:frank@mac-d" {
 		t.Fatalf("actor = %v; want the asking node", macC.writes[0]["actor"])
@@ -598,8 +598,8 @@ func TestNodePlaceScratchHandsStartWithoutLease(t *testing.T) {
 		t.Fatalf("writes: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
 	}
 	params := macC.writes[0]["params"].(map[string]any)
-	if params["kind"] != "scratch" || params["name"] != "试一下 侧边栏" || params["origin_wid"] != parent || params["repo"] != writeRepo {
-		t.Fatalf("mac-c was sent %v; want a scratch start with its name and parent", params)
+	if params["kind"] != "scratch" || params["name"] != "试一下 侧边栏" || params["origin_wid"] != nil || params["repo"] != writeRepo {
+		t.Fatalf("mac-c was sent %v; want a scratch start with its name and no Parent transport", params)
 	}
 	if _, has := params["issue"]; has {
 		t.Fatalf("a scratch start carried an issue: %v", params)
