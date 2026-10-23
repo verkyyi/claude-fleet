@@ -6978,6 +6978,18 @@ drill_task_unclaimed_stop_proof() {
 }
 
 
+drill_task_first_start() {
+  local t0; t0=$(now); CAP=120
+  python3 "$BIN/fleet-task-first-start-selftest.py" >"$WORK/task-first-start.log" 2>&1 || {
+    WHY="claimed first start regression: $(tail -10 "$WORK/task-first-start.log")"; return 1;
+  }
+  (cd "$ROOT/tokenledger" && go test ./hub/store -run '^TestTaskContinueFirstStartGenerationBoundary$' -count=1) >>"$WORK/task-first-start.log" 2>&1 || {
+    WHY="initial generation authority regression: $(tail -10 "$WORK/task-first-start.log")"; return 1;
+  }
+  WHAT='真实退出根与工作树：首次受控启动中断可首启；后续缺历史、旧协议、已有 native slot 和错身份拒绝，原文件与 ACK 保留'
+  SECS=$(since "$t0")
+}
+
 drill_task_continuation_start() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-continuation-start-selftest.py" >"$WORK/task-continuation-start.log" 2>&1 || {
