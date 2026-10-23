@@ -1124,6 +1124,9 @@ ph_agentcfg() {
 # not change is rewritten only every few ticks.
 ph_snapshot() {
   bash "$BIN/fleet-restore.sh" --snapshot --if-changed >/dev/null 2>&1 || true
+  # One content-free count per existing minute tick, including zero-session
+  # logins. The helper appends/rotates only; historical integration is on demand.
+  python3 "$BIN/fleet_park_metrics.py" sample --record >/dev/null 2>&1 || true
 }
 
 # --- the other machines' sessions (issue #1423) -----------------------------------

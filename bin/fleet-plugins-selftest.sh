@@ -262,7 +262,7 @@ has "installed fleet-browser@claude-fleet" "$out" "D carry-over: a login with th
 hasnt "fleet-epic@" "$out" "D carry-over: fleet-epic's command was not installed here — no fleet-epic"
 echo x > "$CD/commands/fleet-epic-run.md"
 out=$(ens --gone "$WORK/gone")
-has "installed fleet-epic@claude-fleet" "$out" "D carry-over: the epic command installed → fleet-epic"
+hasnt "installed fleet-epic@claude-fleet" "$out" "D carry-over: an old epic command cannot reinstall automation"
 hasnt "installed fleet-browser" "$out" "D carry-over: an installed plugin is not re-installed"
 
 # carry-over of an agent file the core shipped (issue #3116): epic-driver left
@@ -275,7 +275,7 @@ out=$(ens --gone "$WORK/gone")
 hasnt "fleet-epic@" "$out" "D carry-over: no shipped epic-driver here — no fleet-epic"
 mkdir -p "$CD/agents"; echo x > "$CD/agents/epic-driver.md"
 out=$(ens --gone "$WORK/gone")
-has "installed fleet-epic@claude-fleet" "$out" "D carry-over: the shipped epic-driver here → fleet-epic"
+hasnt "installed fleet-epic@claude-fleet" "$out" "D carry-over: an old driver cannot reinstall automation"
 
 # behind → update
 python3 - "$ST/installed.json" <<'PY'
@@ -337,25 +337,23 @@ for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-e
          skills/epic-page/SKILL.md skills/epic-page/template.html agents/epic-driver.md; do
   [ -f "$EP/$f" ] && st_count || fail "I fleet-epic carries no $f"
 done
-grep -qF -- '`agent` `epic-driver`' "$EP/commands/fleet-epic-plan.md" && st_count \
-  || fail "I the plan's parent task does not start the epic-driver (issue #4957)"
-# (the core ships no epic-driver, no plugin says --role epic-driver, fleet-epic hands
-# nothing to the steward / the orchestrate plugin — #3116, #4338: conf/gone.list)
-sed -n '/^---$/,/^---$/p' "$EP/agents/epic-driver.md" | grep -qx '  - fleet-orch' && st_count \
-  || fail "I epic-driver does not mount the dispatch group fleet-orch itself (#4338)"
+for name in plan run report; do
+  has "EPIC_RETIRED" "$(cat "$EP/commands/fleet-epic-$name.md")" "I $name explicitly retires without dispatch"
+done
+has "ROLE_RETIRED" "$(cat "$EP/agents/epic-driver.md")" "I direct native driver explains retirement"
+has "tools: []" "$(cat "$EP/agents/epic-driver.md")" "I driver grants no dispatch tools"
 AE=$(mktemp -d "$WORK/ae.XXXXXX")
 adef() { env HOME="$AE" CLAUDE_CONFIG_DIR="$AE/.claude" FLEET_CONF_DIR="$AE/conf" \
            FLEET_AGENT_PLUGINS_CMD="cat '$AE/plugins.json'" python3 "$BIN/fleet-agent-def.py" "$@" 2>&1; }
 printf '[{"id":"fleet-epic@claude-fleet","enabled":true,"installPath":"%s"}]\n' "$EP" > "$AE/plugins.json"
-out=$(adef launch epic-driver --dir "$AE")
-has "file	$EP/agents/epic-driver.md" "$out" "I installed: epic-driver resolves to fleet-epic's file"
-has "reap	loop-end" "$out" "I epic-driver's fleet.reap is loop-end"
-has "spawn	1" "$out" "I epic-driver grants spawn (a driver dispatches)"
-has "arg	--agent
-arg	epic-driver" "$out" "I the launch says --agent epic-driver (the bare name Claude Code finds)"
+for role in epic-driver fleet-epic:epic-driver orchestrator; do
+  out=$(adef launch "$role" --dir "$AE"); rc=$?
+  [ "$rc" = 3 ] && st_count || fail "I retired role must fail distinctly (rc=$rc)" "$out"
+  has "ROLE_RETIRED" "$out" "I $role gives its migration explanation"
+done
 printf '[]\n' > "$AE/plugins.json"; rm -rf "$AE/conf/agents/plugins.json"
 out=$(adef launch epic-driver --dir "$AE"); rc=$?
-[ "$rc" = 1 ] && st_count || fail "I not installed: there is no epic-driver (rc=$rc)" "$out"
+[ "$rc" = 3 ] && st_count || fail "I uninstall cannot downgrade retirement to plain-session fallback (rc=$rc)" "$out"
 
 # ---- J: a retired plugin (issue #4904) ---------------------------------------------
 FB=fleet-feedback@claude-fleet

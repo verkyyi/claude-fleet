@@ -199,6 +199,11 @@ const CapTestIdentity = "test_identity"
 // the unknown field, and its start opens as before.
 const CapTask = "task"
 
+// CapTaskExecution is explicit admission to the persistent task execution
+// protocol. CapTask and CapRepoAuthority alone do not imply it. Nodes must not
+// advertise this until launch, delivery, recovery and stop enforce the fence.
+const CapTaskExecution = "task_execution_v1"
+
 // CapLaunch was the launch proof's (retired with EPIC T497 C8): a node still says
 // it for one version so a hub from before C8 keeps placing accepted tasks on it;
 // the hub asks for it no more. compat-1v: 下一批删

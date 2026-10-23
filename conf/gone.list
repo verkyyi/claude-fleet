@@ -35,6 +35,7 @@ path bin/hub-zoom.sh                   #3732
 path bin/fleet-task-pick.sh            #3732
 path bin/fleet-trace-lib.sh            #3732
 # --- the orchestrator seat and its rule table (#4340), the steward (#4339) -----
+path conf/agent-defaults/claude/agents/orchestrator.md T970
 path bin/fleet-role.py                 #4340
 path bin/fleet-role-take.sh            #4340
 path bin/fleet-role-windows.sh         #4340

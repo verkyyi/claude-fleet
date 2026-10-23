@@ -1,10 +1,16 @@
 {
   "name": "fleet-epic",
-  "version": "0.4.20",
-  "description": "claude-fleet EPIC batches: /fleet-epic-plan turns a theme into a confirmed batch — a parent hub task — and /fleet-epic-run drives its child tasks to done, /fleet-epic-report writes what it did — on one shared page frame; /fleet-task-plan gives one task the same design page (T661). Its driver dispatches with the core's tools (issue #4334). Not installed by default (EPIC #3111).",
-  "author": { "name": "verkyyi", "url": "https://github.com/verkyyi" },
+  "version": "0.5.0",
+  "description": "Task design pages via /fleet-task-plan. Historical fleet-epic naming remains for compatibility; EPIC plan/run/report and the driver are retired.",
+  "author": {
+    "name": "verkyyi",
+    "url": "https://github.com/verkyyi"
+  },
   "homepage": "https://github.com/verkyyi/claude-fleet",
   "repository": "https://github.com/verkyyi/claude-fleet",
   "license": "MIT",
-  "keywords": ["claude-fleet", "epic"]
+  "keywords": [
+    "claude-fleet",
+    "task-design"
+  ]
 }

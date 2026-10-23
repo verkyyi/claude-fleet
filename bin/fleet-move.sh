@@ -509,6 +509,9 @@ move_main() {
     if ! move_eligible "$name" "$hub"; then
       say "  – $name ($wid): not eligible (panel/hub) — refused:not-eligible"; return 4
     fi
+    if ! fleet_task_relocation_allowed "$(wopt "$wid" '#{@fleet_id}')" "$(wopt "$wid" '#{@task_execution}')"; then
+      say "  – $name ($wid): task execution needs exit confirmation — refused:task-execution"; return 4
+    fi
     if [ "$norepo" = 1 ]; then
       say "  – $name ($wid): a no-repo (\$HOME) session cannot be moved — refused:not-eligible"; return 4
     fi

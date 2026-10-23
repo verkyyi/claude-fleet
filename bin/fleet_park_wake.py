@@ -54,10 +54,10 @@ def path_for(fid):
 
 
 @contextmanager
-def locked(fid):
+def locked(fid, *, nonblocking=False):
     path = path_for(fid)
     with path.with_suffix('.lock').open('a') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+        fcntl.flock(f, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
         yield path
 
 
@@ -277,6 +277,35 @@ def cancel(fid, payload):
         save(path, r)
 
 
+def cancel_all(fid):
+    """Revoke Fleet-owned schedules after durable Task stop; retain history."""
+    try:
+        return _cancel_all(fid)
+    except BlockingIOError:
+        return False  # input/timer ticks retry; never delay a person's stop
+
+
+def _cancel_all(fid):
+    with locked(fid, nonblocking=True) as path:
+        record = durable.read(path)
+        if not record:
+            return True
+        for job in record.get('jobs', []):
+            job['next'] = None
+        if record.get('ledger'):
+            loop = loop_module()
+            with loop.locked(Path(record['ledger']), nonblocking=True) as source:
+                if source.get('park_fid') == fid:
+                    source['status'] = 'stopped'
+                    source['schedule']['next_run_at'] = None
+                    loop.save(Path(record['ledger']), source)
+        record.pop('pending', None)
+        record['next'] = 0
+        record['attention'] = 'task_execution_refused'
+        save(path, record)
+        return True
+
+
 def exit_confirmation(fid, screen):
     """Only the native exit dialog for exactly the timers staged by this park.
     Its selected action, footer and every listed task must match. The relay
@@ -360,6 +389,15 @@ def retire_cancelled(row, w):
 def tick(fid, at=None):
     at = time.time() if at is None else at
     w = gate.window(fid)
+    if gate.execution_reason(w, fid):
+        from fleet_task_execution import read_session, FenceRefused
+        try:
+            stopped = read_session(fid, conf_dir=gate.conf_dir())
+        except (FenceRefused, OSError):
+            return
+        if stopped and stopped['cancel_request']:
+            gate.revoke_task_work(fid)
+        return  # unknown authority holds; only a durable stop revokes schedules
     if not w:
         return  # restore owns the missing window, identity and worktree.
     prepared = durable.read(path_for(fid))

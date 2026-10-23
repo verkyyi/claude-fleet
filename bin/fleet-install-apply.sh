@@ -1335,14 +1335,9 @@ if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/bin/fleet-codex-plugins.py" ] && command -v 
     fail codex-plugins "fleet-codex-plugins.py sync: $(printf '%s\n' "$out" | grep '^FAIL' | head -1)"
   fi
 fi
-# The agent files the core ships (issue #3122, EPIC #3111 C11): fleet-worker — the
-# issue-bound session a spawn starts as by default — and orchestrator (steward
-# left with #4900), into ~/.claude/agents. Written once, kept up while
-# still the fleet's bytes, never touched once the person edits (their override) or
-# deletes one (a spawn is then a plain session). One the core no longer ships
-# (epic-driver rides the fleet-epic plugin — issue #3116) is retired while still
-# the fleet's bytes; the plugins pass above installed fleet-epic first on a login
-# that had it.
+# The core ships fleet-worker. Retired orchestrator/driver templates are removed
+# only while byte-for-byte fleet-owned; user edits and deleted templates remain
+# untouched. Retiring a template never auto-installs the old EPIC automation.
 if [ -d "$ROOT/conf/agent-defaults/claude/agents" ] && [ -f "$ROOT/bin/fleet-agent-def.py" ]; then
   if out=$(CLAUDE_CONFIG_DIR="$CDIR" python3 "$ROOT/bin/fleet-agent-def.py" ship ${DRYFLAG:+--check} 2>&1); then
     w=$(printf '%s\n' "$out" | grep -E '^(wrote|would write)' | awk '{print $NF}' | paste -sd' ' -)

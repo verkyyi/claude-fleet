@@ -234,6 +234,9 @@ def guard(fd, directory, argv):
         signal.signal(sig, lambda signum, frame: ended.append(signum))
     try:
         with open(Path(directory) / 'server.log', 'ab', buffering=0) as log:
+            if os.environ.get("FLEET_TASK_EXECUTION"):
+                from fleet_task_execution import native_command
+                argv = native_command(argv, "server")
             process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log,
                                        stderr=log)
         while process.poll() is None and not ended:
@@ -453,6 +456,9 @@ def run(argv, prepare=None, tick=None):
             except Exception as exc:
                 print('fleet-codex-runtime: could not pre-trust the fleet hooks: ' + str(exc), file=sys.stderr)
         command = ['codex', '--remote', remote, *argv]
+        if env.get("FLEET_TASK_EXECUTION"):
+            from fleet_task_execution import native_command
+            command = native_command(command, "client", env)
         # The same pty owner as Claude: keyboard generation protects drafts and
         # park_exit is submitted only after the gate's native idle proof.
         relay = Path(__file__).with_name('fleet-status-7501.py')

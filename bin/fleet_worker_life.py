@@ -237,8 +237,10 @@ def codex_idle_turn(client, source):
             or Path(thread['path']).resolve() != Path(source['transcript']).resolve()):
         raise ValueError('Codex native worktree/history does not match this worker')
     turns = thread.get('turns') or []
-    if not turns or turns[-1].get('status') != 'completed':
-        raise ValueError('no completed Codex turn')
+    # Native interruption/failure ends a turn without making the task successful.
+    # Parking needs quiescence, with the tool/goal/child proofs below still held.
+    if not turns or turns[-1].get('status') not in ('completed', 'interrupted', 'failed'):
+        raise ValueError('no settled Codex turn')
     last = turns[-1]
     if any(item.get('status') not in (None, 'completed', 'failed', 'declined', 'interrupted')
            for item in last.get('items', [])):
@@ -413,7 +415,7 @@ def child_busy(session,target,pid=0,reap=False):
         client=RPC(source['codex_identity']['remote'],timeout=5)
         try:
             turn=codex_idle_turn(client,source)
-            if not turn.get('id'):raise ValueError('no completed Codex turn identity')
+            if not turn.get('id'):raise ValueError('no settled Codex turn identity')
             quiet_processes(source,config_home,background=background,strict=False)
             # No cached idle or stale launch can waive the process gate. A turn
             # starting or a replacement session during classification vetoes.

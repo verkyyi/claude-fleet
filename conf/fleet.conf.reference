@@ -406,8 +406,8 @@ FLEET_CTX_WINDOW=200000
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
-# An orchestrator is a session template (EPIC #4333): spawn agent:orchestrator to
-# open one; nothing opens, reopens or keeps one, and no setting here names it.
+# Old orchestrator/driver entrypoints are retired. Ordinary task sessions use
+# native Subagents or inline work; no setting enables a coordination role.
 
 # Keys (issue #3185, EPIC #3178 C7; T685): a new install takes ONE key — the panel;
 # 新会话 · 命令行 · 退出 fleet are rows of it.

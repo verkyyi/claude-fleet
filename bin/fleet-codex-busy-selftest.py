@@ -257,6 +257,27 @@ class NativeBusy(CodexBusy):
         self.assertEqual(self.native_busy(), [])
         self.assertEqual(self.reads, 2)
 
+    def test_settled_interrupted_turn_can_be_idle_without_success(self):
+        for status in ('interrupted', 'failed'):
+            with self.subTest(status=status):
+                self.reads = 0
+                self.thread['turns'][-1]['status'] = status
+                self.assertEqual(self.native_busy(), [])
+                self.assertEqual(self.reads, 2)
+                self.assertEqual(self.thread['turns'][-1]['status'], status)
+
+    def test_interrupted_turn_keeps_work_and_unknown_proofs(self):
+        self.thread['turns'][-1]['status'] = 'interrupted'
+        self.goal = {'status': 'active'}
+        with self.assertRaisesRegex(ValueError, 'goal'): self.native_busy()
+        self.goal = None
+        self.thread['turns'][-1]['items'] = [dict(type='mcpToolCall', status='inProgress')]
+        with self.assertRaisesRegex(ValueError, 'tool'): self.native_busy()
+        self.thread['turns'][-1]['items'] = []
+        for status in ('inProgress', 'unknown', None):
+            self.thread['turns'][-1]['status'] = status
+            with self.assertRaisesRegex(ValueError, 'settled'): self.native_busy()
+
     def test_stop_checks_jobs_before_native_turn_completes(self):
         self.thread['status']['type'] = 'active'
         self.assertEqual(LIB['child_busy']('isolated', '@1'), [])

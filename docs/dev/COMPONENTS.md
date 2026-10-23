@@ -41,11 +41,11 @@
 
 ## 可选插件
 
-编排是普通会话模板（`spawn agent:orchestrator`），不是插件；下表的可选插件新装都不带。`fleet` 核心包和 `mod/fleet` 不属于下表的可选插件计数。
+旧 orchestrator/driver 平台角色入口已退役，默认安装不再提供；复杂任务由普通会话的 Agent 使用原生 Subagent 或 inline 完成。下表的可选插件新装都不带。`fleet` 核心包和 `mod/fleet` 不属于下表的可选插件计数。
 
 | 组件 | 类别 | 理由 |
 |---|---|---|
-| EPIC 批次（`fleet-epic`） | 按需 | 用户选择才安装；一个 EPIC 是 hub 的父任务，成员是子任务（#4957），不碰 GitHub issue。 |
+| 任务设计页（历史包名 `fleet-epic`） | 按需 | 保留 `/fleet-task-plan` 与页面模板；旧 EPIC 命令返回退役说明，不创建集合或 driver。旧安装不触发自动重装。 |
 | 浏览器（`fleet-browser`） | 按需 | 用户选择浏览器能力后安装，不进入普通默认。 |
 | 基础设施运维（`fleet-infra`） | 按需 | 运维人员主动安装；既有代码明确拒绝把它列为托管默认。 |
 
@@ -54,7 +54,7 @@
 | 组件 | 类别 | 理由 |
 |---|---|---|
 | 执行会话（worker start hook） | 核心 | 发起人拍板 2 覆盖草稿的按需建议；按任务记录开工、正常 PR/合并流程保持，说明书按 #4325 瘦身。 |
-| Task 唯一执行与停止约束（Hub Store execution / `fleet_task_execution.py`） | 核心 | 防止同一任务双跑，并保存用户停止意图；复用既有 Task、operation 与节点 control 数据库，无新业务状态、租约或常驻服务。本次为底座，实际派发、恢复和完整停止入口尚未接通；不接管旧会话。 |
+| Task 唯一执行与停止约束（Hub Store execution / `fleet_task_execution.py`） | 核心 | 防止同一任务双跑，并保存用户停止意图；复用既有 Task、operation 与节点 control 数据库，无新业务状态、租约或常驻服务。当前分支接入显式协议的派发、原生启动、输入、唤醒和停止；能力默认未启用，不接管旧会话。全量重连屏障、全执行域退出证明及后续接续仍待完成。 |
 | 上下文连续性（`fleet-handoff` / `fleet-compact-resume` / `fleet-context` / `handoff`） | 核心 | 保留同一任务的上下文与恢复能力。 |
 | 停放定时约定与接回保护（`fleet_park_wake.py`、`fleet_wake_guard.py`、`fleet_park_version.py`） | 核心 | 进程退出后保留原会话的下一轮；复用 spinner 时钟和会话门；外壳以跨登录名额约束原生启动、保留失败原话，无新增常驻调度器。 |
 | 会话迁移与历史（`fleet-move` / `fleet-history`） | 核心 | 支持跨节点连续工作与已关闭会话恢复。 |
@@ -152,7 +152,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
-| EPIC 批次 | `fleet-epic* epic-page*` | 批次工作流 |
+| 任务设计与历史 EPIC 兼容 | `fleet-epic* epic-page* fleet-role-retirement*` | 设计页、退役入口与历史读取 |
 | 浏览器 | `fleet-browser*` | 浏览器插件 |
 | 操作者终端集成 | `fleet-iterm* fleet-tcc*` | 设备集成 |
 | 凭据代理 | `fleet-cred-proxy* fleet-proxy-quota* fleet_upstream_stats* fleet_cred_ctl*` | 订阅代理 |

@@ -811,7 +811,7 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	}
 	res, _, err := s.NodeRead(ctx, r.EndpointID, "operation_get", map[string]any{"operation_id": o.ID})
 	var nf *FleetFault
-	if errors.As(err, &nf) && nf.Code == "NOT_FOUND" && time.Since(o.Created) > orphanOpGrace {
+	if errors.As(err, &nf) && nf.Code == "NOT_FOUND" && time.Since(o.Created) > orphanOpGrace && !controlledExecutionRequest(o.Request) {
 		// The node that answers for the fleet says it never accepted this
 		// operation: it never ran there and never will (claude-fleet#4864).
 		// Past the grace, so a write still in flight is not cut short.
@@ -871,7 +871,7 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 // worker never appeared — store.SettleNeverAppearedStart re-reads them in the
 // write (claude-fleet#4932). o is updated when it settles.
 func (s *Server) settleNeverAppeared(o *store.FleetOperation, now time.Time) (bool, error) {
-	if o.Action != "worker_start" || o.Status != "unknown" || time.Since(o.Created) < neverAppearedGrace {
+	if controlledExecutionRequest(o.Request) || o.Action != "worker_start" || o.Status != "unknown" || time.Since(o.Created) < neverAppearedGrace {
 		return false, nil
 	}
 	var res struct {

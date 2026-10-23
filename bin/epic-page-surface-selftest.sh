@@ -185,11 +185,11 @@ for gone in '技术细节' '共同约定' '预检原文' '⟨R1 · 已有 #N⟩'
   CHECKS=$((CHECKS + 1))
   printf '%s\n' "$TS" | grep -q -F -- "$gone" && st_fail "template surface leaks fold content: $gone"
 done
-for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"; do
+for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-task-plan.md"; do
   CHECKS=$((CHECKS + 1))
   grep -q -F 'epic-page-surface.sh' "$f" || st_fail "${f#"$ROOT"/} does not point at epic-page-surface.sh"
 done
-for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md" "$T"; do
+for f in "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md" "$ROOT/plugins/fleet-epic/commands/fleet-task-plan.md" "$T"; do
   CHECKS=$((CHECKS + 1))
   grep -q -F '改前 / 改后' "$f" || st_fail "${f#"$ROOT"/} does not carry the 改前 / 改后 rule (issue #1754, T699)"
   grep -q -F '▶ 打开可交互原型' "$f" && st_fail "${f#"$ROOT"/} still asks for a separate prototype page (T699)"

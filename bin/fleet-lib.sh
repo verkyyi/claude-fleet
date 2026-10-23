@@ -10271,6 +10271,23 @@ PY
 # FLEET_DELIVER_NOTE: who took it (`pid <n>` / `codex <thread>` / `<win> via
 # delivery`), else why not — so call it bare, never in $( ).
 _fad_tm() { if [ -n "$1" ]; then _fad_s=$1; shift; tmux -L "$_fad_s" "$@"; else shift; tmux "$@"; fi; }
+
+# Until relocation can carry a matching exit proof, the legacy move/transfer
+# roads must not detach a controlled session from its persistent execution fence.
+# This does not restrict the person's stop action or an unbound legacy session.
+fleet_task_relocation_allowed() {
+  local fid="${1:-}" marker="${2:-}" snapshot lib="${_FLEET_LIB_DIR:-}"
+  local control_db="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/control/state.sqlite3"
+  [ -n "$marker" ] || [ -f "$control_db" ] || return 0
+  if [ -z "$marker" ] && ! fleet_is_fid "$fid"; then return 0; fi
+  snapshot=$(python3 "$lib/fleet_task_execution.py" check-session --session-fid "$fid" \
+    ${marker:+--expected "$marker"}) || return 1
+  if [ "$snapshot" != null ]; then
+    printf 'fleet: this task requires execution exit confirmation before move or agent transfer; its current session is retained\n' >&2
+    return 1
+  fi
+}
+
 # shellcheck disable=SC2034  # FLEET_DELIVER_NOTE is read by the caller
 fleet_agent_deliver() {
   local tgt="${1:-}" sock="${2:-}" text="${3:-}" from="${4:-fleet}" agent ev pid out rc sess

@@ -257,6 +257,9 @@ fi
 # the table's `end` column, run by fleet_launch_end.
 fleet_launch_settle                          # nothing early left behind for the agent to inherit
 runner=(codex)
+if [ -n "${FLEET_TASK_EXECUTION:-}" ]; then
+  runner=(python3 "$BIN/fleet_task_execution.py" native --component agent -- codex)
+fi
 if [ -n "${FLEET_LOOP_SPEC:-}" ]; then
   runner=(python3 "$BIN/fleet-loop.py" bridge --)
 elif [ -n "${TMUX:-}" ] && [ "${FLEET_CODEX_SERVER:-1}" != 0 ] && [ -z "$FLEET_CODEX_REMOTE" ] \

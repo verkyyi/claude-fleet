@@ -271,7 +271,12 @@ export function codexSide(d) {
     d.liveCreds.delete(c.mint.cred);
   }
 
-  function start() {
+  async function checkExecution() {
+    try { await d.checkSdkExecution("codex", conv); }
+    catch (e) { srv?.kill(); throw e; }
+  }
+  async function start() {
+    await checkExecution();
     if (srv && !srv.dead) return Promise.resolve(srv);
     if (srvP) return srvP;
     srvP = (async () => {
@@ -289,6 +294,7 @@ export function codexSide(d) {
         // a trial person's `space` (task XA4R): the bridge to the proxy, attached only for a trial
         if (d.spaceCodexArgs) args.push(...await d.spaceCodexArgs(cred.mint));
       }
+      await checkExecution();
       const s = new AppServer(d.CODEX, [...args, "app-server"], env, conv.cwd && existsSync(conv.cwd) ? conv.cwd : d.CWD, onMsg, (code) => {
         d.log("codex_exit", { code });
         if (srv === s) srv = null;
@@ -534,6 +540,7 @@ export function codexSide(d) {
   }
   // body: the parsed request (text, model, images as Claude's blocks already checked)
   async function turn(res, { text, model, images, person }) {
+    await checkExecution();
     if (live) return d.send(res, 409, { error: "还在回复上一句" });
     if (!available()) return d.send(res, 503, { error: "这台机器上没有 Codex" });
     if (conv.thread && d.holder(conv.thread) === "terminal") return d.send(res, 409, { error: "这段对话在终端里", code: "terminal" });
@@ -559,6 +566,7 @@ export function codexSide(d) {
     live.kept.push({ t: "user", text, ...(pics.length ? { images: pics } : {}) });
     try {
       const s = await start();
+      await checkExecution();
       const opts = { approvalPolicy: "on-request", sandbox: "workspace-write", ...(model ? { model } : {}) };
       if (conv.thread && THREAD_RE.test(conv.thread)) {
         try { await s.call("thread/resume", { threadId: conv.thread, ...opts, excludeTurns: true }, 60000); }
@@ -576,6 +584,7 @@ export function codexSide(d) {
       if (model) conv.model = model;
       if (conv.handed) delete conv.handed;               // said once: the first turn here ends it
       save();
+      await checkExecution();
       const r = await s.call("turn/start", { threadId: conv.thread, input, ...(model ? { model } : {}) }, 60000);
       if (live?.tid === tid) live.turnId = live.turnId || String(r?.turn?.id || "");
       if (live?.tid === tid && live.stopping) s.call("turn/interrupt", { threadId: live.thread, turnId: live.turnId }, 10000).catch(() => {});
@@ -599,7 +608,8 @@ export function codexSide(d) {
     }
     return true;
   }
-  function answer(body) {
+  async function answer(body) {
+    await checkExecution();
     const a = live?.asks.get(String(body.rid || ""));
     if (!a) return false;
     if (a.ask.kind === "question") a.done(true, body.answers || {}); else a.done(!!body.allow);
@@ -609,7 +619,7 @@ export function codexSide(d) {
   function newConversation() {
     if (live) return false;
     if (conv.thread) conv.put_away = [...(conv.put_away || []), { thread: conv.thread, at: new Date().toISOString() }].slice(-200);
-    conv.thread = ""; conv.last = "";
+    conv.thread = ""; conv.last = ""; delete conv.fleet_session_fid;
     save();
     d.log("new_conversation", { provider: "codex" });
     return true;
@@ -622,7 +632,8 @@ export function codexSide(d) {
   }
   // 在 WebChat 里继续: the terminal's thread becomes this side's conversation; the
   // one it had is put away and kept (新对话's rule) → [code, msg, why?]
-  function adopt(body) {
+  async function adopt(body) {
+    await d.checkSdkExecution("codex", body);
     const id = String(body?.session || "");
     if (!THREAD_RE.test(id)) return [400, "not a thread id"];
     if (live) return [409, "还在回复上一句", "busy"];
@@ -633,7 +644,7 @@ export function codexSide(d) {
     try { cwd = rolloutRead(readFileSync(rf, "utf8")).cwd; } catch { /* the home then */ }
     if (conv.thread) conv.put_away = [...(conv.put_away || []), { thread: conv.thread, at: new Date().toISOString() }].slice(-200);
     const label = String(body?.label || "").slice(0, 80);
-    conv = { ...conv, thread: id, cwd: cwd || d.CWD, last: "", handed: { from: "terminal", label, at: new Date().toISOString() } };
+    conv = { ...conv, thread: id, fleet_session_fid: body.fid || "", cwd: cwd || d.CWD, last: "", handed: { from: "terminal", label, at: new Date().toISOString() } };
     save();
     if (srv && !live) srv.kill();                        // the next turn resumes it in its own directory
     d.log("adopted", { provider: "codex", label, machine: String(body?.machine || "").slice(0, 60) });
@@ -652,6 +663,6 @@ export function codexSide(d) {
     return { items: out, cwd: r.cwd };
   }
   function close() { clearTimeout(idleT); srv?.kill(); const c = cred; cred = null; return revoke(c); }
-  return { available, conversation, turn, stop, answer, newConversation, close, state, release, adopt, viewFile, viewItems,
+  return { checkExecution, available, conversation, turn, stop, answer, newConversation, close, state, release, adopt, viewFile, viewItems,
     busy: () => !!live, last: () => conv.last, side: () => ({ busy: !!live, last: conv.last }) };
 }

@@ -182,6 +182,9 @@ esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
 DISPATCH="${FLEET_DISPATCH:-}"
+EXECUTION="${FLEET_TASK_EXECUTION:-}"
+unset FLEET_TASK_EXECUTION FLEET_TASK_LAUNCH_ID
+case "${FLEET_TASK_CONTROL_VERSION:-}" in ''|1) ;; *) printf 'dash-issue-session: unsupported task execution control version\n' >&2; exit 2 ;; esac
 if [ -n "$DISPATCH" ]; then
   DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
   AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
@@ -268,6 +271,7 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
 # A start already known to be Codex never asks the Claude CLI for plugins (#4726).
 AS_FOR=$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")
 if [ -n "$AS_ARG" ] && [ -z "$REPO_ARG" ]; then
+  python3 "$BIN/fleet-agent-def.py" check-role "$AS_ARG" || exit 3
   REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
 fi
@@ -562,14 +566,15 @@ if [ "$PLACING" = 1 ]; then
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" FLEET_PLACE_AS="$PLACE_AS" \
+    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" FLEET_PLACE_AS="$PLACE_AS" \
       fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
       DISPATCH_TASK=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
       TASK_REF=$DISPATCH_TASK
     fi
-    rm -f "$_dispatch_result"
+    if [ -s "$_dispatch_result.execution" ]; then EXECUTION=$(cat "$_dispatch_result.execution"); fi
+    rm -f "$_dispatch_result" "$_dispatch_result.execution"
 
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     _after=''; case "$_why" in *$'\t'after\ *) _after=${_why##*$'\t'after }; _why=${_why%$'\t'after *} ;; esac
@@ -726,6 +731,8 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
   _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH")"
+  [ -z "$EXECUTION" ] || _bg="$_bg FLEET_TASK_EXECUTION=$(shq "$EXECUTION")"
+  [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || _bg="$_bg FLEET_TASK_CONTROL_VERSION=1"
   [ -n "$PLACED" ] && _bg="$_bg FLEET_PLACED=$PLACED"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
@@ -856,6 +863,16 @@ if [ -n "$TASK_REF" ]; then
   fleet_worktree_task_mark "$wt" "$TASK_REF" || :
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
+if [ -z "$EXECUTION" ]; then
+  [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || { refuse 'controlled task start has no execution grant'; exit 2; }
+  [ -z "$TASK_REF" ] || python3 "$BIN/fleet_task_execution.py" check-history --task-ref "$TASK_REF" || exit 2
+fi
+if [ -n "$EXECUTION" ]; then
+  EXECUTION=$(python3 "$BIN/fleet_task_execution.py" prepare --snapshot "$EXECUTION" --fleet-id "$(fleet_uuid "$SESS")") || exit 2
+  _execution_fid=$(python3 -c 'import json,sys; x=json.loads(sys.argv[1]); assert x["task_ref"]==sys.argv[2]; print(x["execution_owner"].split("/")[1])' "$EXECUTION" "$TASK_REF") || exit 2
+  pend="FLEET_TASK_EXECUTION=$(shq "$EXECUTION") $pend"
+  stamp="$stamp$(fleet_win_stamp_cmd @task_execution "$EXECUTION" @fleet_id "$_execution_fid")"
+fi
 fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
 if [ -n "$DISPATCH_TASK" ]; then
   if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current >/dev/null; then
@@ -864,6 +881,9 @@ if [ -n "$DISPATCH_TASK" ]; then
   fi
   pend="FLEET_START_DISPATCH=$(shq "$DISPATCH") $pend"
   stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
+fi
+if [ -n "$EXECUTION" ]; then
+  python3 "$BIN/fleet_task_execution.py" reserve-window --snapshot "$EXECUTION" || exit 2
 fi
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
@@ -894,6 +914,7 @@ _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
 # first window takes it, a redo here is its next attempt; another machine holding
 # it ⇒ the minted one, the task's ID its prev.
 _tprev=''
+if [ -n "$EXECUTION" ]; then _fid=$_execution_fid; else
 case "$TASK_REF" in T[1-9]*)
   _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?
   if [ "$_ttrc" = 0 ]; then
@@ -903,6 +924,7 @@ case "$TASK_REF" in T[1-9]*)
   elif [ "$_ttrc" = 2 ]; then _tprev=${_tt%%	*}; fi
   unset _tt _ttrc ;;
 esac
+fi
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 # Where it came from (T694, 回收 B): stamped @reap_origin; it picks the default

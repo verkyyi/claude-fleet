@@ -482,6 +482,9 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 证明以后有键盘输入就取消，绝不靠 Escape 清空草稿。窗口、ID、对话、工作区和凭据留在原处，窗口仍读作空闲。
 有定时任务时必须先交出 C3 的唤醒约定，否则保守不停。
 Codex 的 Fleet loop 轮间即使没有 Claude mod 状态，也由同一原生证明判断是否可停。
+Codex 中断后，原生 idle 会清除仍滞留的运行提示，明确待答与 Loop 保持原样。
+空闲检查认可原生 `completed`、`interrupted` 或 `failed` 回合，但仍核对工具、goal、
+子线程与当前进程身份；这里只判断能否停放，不把中断或失败记成任务成功。
 迁移循环停放后，外壳接回时移除首次桥接启动参数，保留原 manifest 与 ledger；不再创建控制器，定时投递继续归已交接的 gate owner。
 
 唯一唤醒接口为 `fleet_park_wake <fid> --why <理由> [--seed-file <文件>]`，转到门的 `wake`；
@@ -509,6 +512,21 @@ peer 消息和子会话回报也通过 `fleet_agent_deliver` 调这一个唤醒�
 有人切到窗口或在里面按 ↵ 也走这一路。C8 计量沿用 HHV0 的 `@parked` + `@park_held`，两者同时存在才计停放。`@park_since` 为本次停放开始的 epoch，接回或停放失败时清除。停前由 C1 写 `@park_saved_mb` 和
 `@park_why`；RSS 为进程树含外壳的总量，单位 MB，采样失败或根进程缺失时清除快照。C8 优先读这份快照，缺戳时才按同一 fid 取最后一次 park 动作的 rss_mb 后备，两者都缺失则隐藏节省项。只在动作发生时追加 `logs/park.ndjson`：`ts, fid, act, why, secs, result, next, started`；
 `next` 与 `started` 为 epoch；成功 `park` 行可写 `rss_mb`（未采到为 null），用于动作记录，C8 日汇总按 act 计数和 wake secs 求分位。没有每拍的 skip 日志。
+
+日汇总不能把成功唤醒次数当作调度机会分母。`fleet_park_metrics.py daily` 的
+`observed_scheduled` 只统计已看到的到期事件；没有调度器提供的完整机会清单时，
+`scheduled` 和 `on_time_rate` 为 null。`--opportunities` 接受 JSON：
+`{coverage_start, coverage_end, complete, opportunities:[{fid,due}]}`，时间为 epoch；
+覆盖完整 UTC 日且清单包含所有已观察事件后才算准时率，失败及从未开始的机会仍入分母，
+同一 `(fid,due)` 的重试不重复计数。没有机会时准时率仍为 null。
+
+已有每登录一分钟 collector 的 `ph_snapshot` 调用 `sample --record`，每拍只追加
+`ts, scope(host/login), idle_count, fleet_count`，不记录提示、凭据或会话内容。
+`logs/park-samples.ndjson` 使用既有轮转函数，8 MiB 加一份 `.1`；采样不读取历史。
+`daily` 的 `observation` 与 `history --samples <path> --start <ISO> --end <ISO> --scope <host/login>`
+只在同一登录、两端读数已知且间隔最多 120 秒的区间做梯形积分，输出已观察的
+空闲会话小时估计、覆盖秒数及缺测秒数。零会话写 0，未知写 null；缺测、轮转丢失、
+尚未经历的时间都不能补零或外推，不能据此提前通过真实 72 小时或七天验收。
 
 **停放期间的定时任务（C3）**：停前通过 `fleet_loop_mark.py export --fid <身份>`
 读取 `@loop` 与这段会话的完整原生工具记录，保存到 `$FLEET_CONF_DIR/wake/<fid>.json`。

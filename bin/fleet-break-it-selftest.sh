@@ -5788,6 +5788,16 @@ drill_codex_hook_retired_root() {
   SECS=$(since "$t0"); WHAT='安装 Hook 走稳定入口；独立 checkout 不借用其他安装'
 }
 
+drill_codex_interrupt_idle() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" NativeBusy.test_settled_interrupted_turn_can_be_idle_without_success NativeBusy.test_interrupted_turn_keeps_work_and_unknown_proofs 2>&1) \
+    || { WHY="Codex 中断后的空闲证明: $out"; return 1; }
+  out=$(python3 "$BIN/fleet-codex-attention-selftest.py" 2>&1) \
+    || { WHY="Codex 原生空闲投影: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='原生中断后清除运行提示；停放仍核对工具、goal、身份和原生子线程，不把中断当成功'
+}
+
 drill_codex_mcp_busy() {
   CAP=30; local t0 out
   t0=$(now)
@@ -7072,6 +7082,28 @@ drill_task_cancel_start_race() {
     WHY="cancelled dispatch reached launch: $(tail -4 "$WORK/task-cancel-start.log")"; return 1;
   }
   WHAT='取消后的旧派发不能通过节点与包装器启动前检查；未知授权拒绝启动'
+  SECS=$(since "$t0")
+}
+
+drill_task_claim_historical_identity() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/store -run '^TestTaskExecutionClaimRejectsHistoricalIdentity$' -count=1) >"$WORK/task-claim-history.log" 2>&1 || {
+    WHY="historical worker identity was claimed: $(tail -8 "$WORK/task-claim-history.log")"; return 1;
+  }
+  WHAT='旧 worker、Task FID 与会话账本归属不能被新任务领取覆盖'
+  SECS=$(since "$t0")
+}
+
+drill_task_stop_replay_cleanup() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-execution-control-selftest.py" \
+    ControlExecutionTests.test_canonical_stop_redelivery_retries_failed_and_successful_cleanup \
+    ControlExecutionTests.test_stop_replay_does_not_run_parallel_cleanup_and_recovers_executor_death \
+    ControlExecutionTests.test_stop_survives_executor_launch_failure_and_retries \
+    >"$WORK/task-stop-replay.log" 2>&1 || {
+      WHY="canonical stop replay failed: $(tail -5 "$WORK/task-stop-replay.log")"; return 1;
+    }
+  WHAT='真实 detached executor：清理失败重投、重复投递不并发、SIGKILL 后重试及启动失败恢复；回执不冒充全域退出'
   SECS=$(since "$t0")
 }
 

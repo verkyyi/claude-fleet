@@ -1,15 +1,10 @@
 ---
 name: epic-driver
-description: fleet 的批次驱动——一个 EPIC 父任务的会话，父任务的编号（K5H0）就是它的编号，把它无人值守地推到做完：把成员派成子任务（各一个编号）、答能答的、重试一次（重做不换编号：同一条记录的第 2 次）、到头写报告（种子 /fleet-epic-run 是完整循环，不碰 GitHub issue）。
-model: opus
-# 不列 tools = 全部工具，其中有派单组的 spawn：批次驱动能派单。
-# 正文故意留空：`claude --agent` 的正文会顶替 Claude Code 自己的系统提示，空正文则原样保留。
-# fleet-epic 插件带着它（issue #3116, EPIC #3111 C5）：没装这个插件，就没有批次驱动。
-# 派单组 fleet-orch（spawn · await · children · send · answer_dialog）由这里授予，随核心发
-# （#4334），不靠编排插件：只装 fleet-epic 也能跑完一批（EPIC #4333 C5, issue #4338）。
-mcpServers:
-  - fleet
-  - fleet-orch
-fleet:
-  reap: loop-end
+description: Retired Fleet role; retained for one version to explain migration.
+tools: []
 ---
+
+ROLE_RETIRED：Fleet 不再提供 EPIC driver。不要执行传入的旧批次章程，
+不要派发任务、启动循环或向 Parent 回报。只说明该入口已退役：
+由普通 Task 的负责 Agent 使用原生 Subagent 或 inline 完成工作。
+本文件仅供旧原生 --agent 引用获得明确说明，不授予编排工具。

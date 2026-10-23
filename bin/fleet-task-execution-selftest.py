@@ -3,12 +3,13 @@
 """Local Task execution fences persist before runtime admission can finish."""
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import tempfile
 import unittest
 
 from fleet_hub_common import Database
-from fleet_task_execution import ExecutionFence, FenceRefused
+from fleet_task_execution import ExecutionFence, FenceRefused, check_session
 
 
 FID = "22222222-2222-4222-8222-222222222222"
@@ -151,6 +152,53 @@ class ExecutionFenceTests(unittest.TestCase):
         with self.assertRaises(FenceRefused):
             self.fence.request_stop("T42", "stop-before-start")
         self.assertIsNone(self.fence.read("T42"))
+
+    def test_readonly_session_check_never_creates_legacy_state(self):
+        absent = self.conf / "never-created"
+        self.assertIsNone(check_session(FID, conf_dir=absent))
+        self.assertFalse(absent.exists())
+        with self.assertRaises(FenceRefused):
+            check_session(FID, conf_dir=absent, controlled=True)
+        self.assertFalse(absent.exists())
+        self.fence.bind(grant(), authorized=True)
+        self.assertEqual(check_session(FID, conf_dir=self.conf, expected=grant()), self.fence.read("T42"))
+        self.fence.request_stop("T42", "stop", generation=2)
+        with self.assertRaises(FenceRefused):
+            check_session(FID, conf_dir=self.conf)
+
+    def test_stop_uses_the_callers_existing_transaction_and_rolls_back_with_it(self):
+        self.fence.bind(grant(), authorized=True)
+        with self.assertRaises(RuntimeError), self.fence.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.fence.request_stop_in_transaction(db, "T42", "stop", generation=2)
+            raise RuntimeError("receipt failed")
+        self.assertEqual(self.fence.read("T42")["cancel_request"], "")
+        with self.fence.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.fence.request_stop_in_transaction(db, "T42", "stop", generation=2)
+        self.assertEqual(self.fence.read("T42")["cancel_request"], "stop")
+
+    def test_same_grant_cannot_reserve_two_serial_native_launches(self):
+        self.fence.bind(grant(), authorized=True)
+        proof = dict(pid=os.getpid(), birth="fixture-supervisor")
+        with self.fence.admission(grant()) as permit:
+            permit.reserve_launch("first", proof)
+        for launch_id in ("first", "second"):
+            with self.assertRaises(FenceRefused), self.fence.admission(grant()) as permit:
+                permit.reserve_launch(launch_id, proof)
+        with self.fence.admission(grant()) as permit:
+            permit.register_native("first", "agent", proof)
+        with self.assertRaises(FenceRefused), self.fence.admission(grant()) as permit:
+            permit.register_native("first", "agent", proof)
+        self.assertEqual(ExecutionFence(self.conf).launch("T42")["launch_id"], "first")
+
+    def test_worker_allocation_is_persistent_and_not_the_task_identity(self):
+        reservation = grant(execution_owner="")
+        worker = self.fence.allocate_worker(reservation, FLEET)
+        self.assertNotEqual(worker.split("/")[1], TASK_FID)
+        self.assertEqual(ExecutionFence(self.conf).allocate_worker(reservation, FLEET), worker)
+        with self.assertRaises(FenceRefused):
+            self.fence.allocate_worker(dict(reservation, operation_id="second"), FLEET)
 
     def test_late_snapshot_cannot_clear_stop_or_replace_binding(self):
         self.fence.bind(grant(), authorized=True)

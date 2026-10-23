@@ -5,9 +5,60 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPlaceControlledLocalCarriesExecutionSnapshot(t *testing.T) {
+	fixture, err := os.ReadFile("../../hub/store/testdata/task_execution.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := filepath.Join(t.TempDir(), "execution.json")
+	t.Setenv("FLEET_TASK_CONTROL_VERSION", "1")
+	t.Setenv("FLEET_EXECUTION_RESULT", result)
+	t.Setenv("FLEET_DISPATCH", "")
+	withGrant := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ask map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&ask); err != nil {
+			t.Fatal(err)
+		}
+		if ask["control_version"] != float64(1) || ask["coding_agent"] != "codex" {
+			t.Errorf("request lost protocol: %v", ask)
+		}
+		answer := map[string]any{"local": true, "placement": map[string]any{"machine": "node-a"}}
+		if withGrant {
+			answer["control_version"] = 1
+			answer["task_execution"] = json.RawMessage(fixture)
+		}
+		_ = json.NewEncoder(w).Encode(answer)
+	}))
+	defer server.Close()
+	var out, stderr bytes.Buffer
+	args := []string{"--hub", server.URL, "--token", "fixture", "--agent", "codex", "o/r", "scratch", "11111111-1111-4111-8111-111111111111"}
+	if code, err := place(args, &out, &stderr); code != 0 || err != nil {
+		t.Fatalf("code=%d err=%v", code, err)
+	}
+	actual, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want, got any
+	_ = json.Unmarshal(fixture, &want)
+	_ = json.Unmarshal(actual, &got)
+	w, _ := json.Marshal(want)
+	g, _ := json.Marshal(got)
+	if !bytes.Equal(w, g) {
+		t.Fatalf("snapshot changed: %s", actual)
+	}
+	withGrant = false
+	if code, err := place(args, &out, &stderr); code == 0 || err == nil {
+		t.Fatal("controlled local fell back to legacy")
+	}
+}
 
 // ccquota place's one-line, one-exit-code contract (claude-fleet#1425) — what
 // dash-issue-session.sh branches on.

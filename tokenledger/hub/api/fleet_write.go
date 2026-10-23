@@ -375,7 +375,8 @@ func targetKey(key string, target store.FleetRow, repo string) string {
 // writeRequest is one validated write: what the node is sent, and what the
 // journal compares a retry against.
 type writeRequest struct {
-	action string
+	controlVersion int
+	action         string
 	// fleetID is the target fleet, "" for a worker_start the hub places.
 	fleetID string
 	// node is worker_start's machine choice: "auto" or a roster hostname.
@@ -407,8 +408,15 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref", "as"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref", "as", "control_version"); err != nil {
 			break
+		}
+		if v, present := args["control_version"]; present {
+			b, _ := json.Marshal(v)
+			if string(b) != "1" {
+				return w, idem, fault("INVALID_ARGUMENT", "control_version must be 1")
+			}
+			w.controlVersion = 1
 		}
 		// as (claude-fleet T672): the agent file the session starts as — the
 		// opening node finds it by name (dash-*-session.sh --as).
@@ -816,9 +824,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	}
 	// The whole request, minus the key itself: a retry must ask for the
 	// same thing to get the same operation back.
-	whole := map[string]any{"action": tool, "fleet_id": w.fleetID, "node": w.node, "params": w.params}
-	b, _ := json.Marshal(whole)
-	w.canonical = string(b)
+	w.canonicalize()
 	return w, idem, nil
 }
 
@@ -967,6 +973,9 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 			return nil, fault("UNAVAILABLE", "selected node cannot enforce task authority; nothing was sent")
 		}
 	}
+	if w.controlVersion == 1 && !s.canTaskExecution(ctx, target.EndpointID) {
+		return nil, fault("UNAVAILABLE", "selected node cannot enforce task execution control; nothing was sent")
+	}
 	now := time.Now()
 	op := store.FleetOperation{ID: newOperationID(), FleetID: target.FleetID, Action: tool,
 		Request: w.canonical, Actor: p.Actor, Idem: idem, Status: "pending", Created: now, Updated: now,
@@ -978,8 +987,8 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		b, _ := json.Marshal(placement)
 		op.Placement = string(b)
 	}
-	if err := s.Store.InsertFleetOperation(op); err != nil {
-		if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskInvalid) {
+	if err := s.journalTaskExecution(op, w, target.EndpointID); err != nil {
+		if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskInvalid) || errors.Is(err, store.ErrTaskConflict) {
 			return nil, fault("INVALID_STATE", "task start authorization is no longer valid; nothing was sent")
 		}
 		if errors.Is(err, store.ErrIdemTaken) {
@@ -996,6 +1005,13 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 
 	envelope := map[string]any{"operation_id": op.ID, "fleet_id": target.FleetID, "action": tool,
 		"params": w.params, "actor": p.Actor}
+	if w.controlVersion == 1 {
+		snapshot, err := s.Store.TaskExecutionSnapshot(store.ParseTaskRef(asString(w.params["task"])), p.taskOwner())
+		if err != nil {
+			return nil, err
+		}
+		envelope["control_version"], envelope["task_execution"] = 1, snapshot
+	}
 	var noted uint64
 	if opensSession(tool) {
 		// Counted before the node's beat shows it (claude-fleet#2077), so a
@@ -1083,10 +1099,16 @@ func (s *Server) sendWrite(ctx context.Context, target store.FleetRow, op store.
 	c, err := s.writableConn(target.EndpointID)
 	if err != nil {
 		if peer, ok := s.peerOf(ctx, target.EndpointID); ok {
+			if controlledExecutionRequest(op.Request) && !peer.HasCap(control.CapTaskExecution) {
+				return "failed", errResult("UNAVAILABLE", "replacement node cannot enforce task execution control")
+			}
 			return s.forwardWrite(ctx, peer, target, op, envelope)
 		}
 		e := errorObject(err)
 		return "failed", errResult(e["code"], "before the write was sent: "+e["message"])
+	}
+	if controlledExecutionRequest(op.Request) && !c.canTaskExecution {
+		return "failed", errResult("UNAVAILABLE", "replacement node cannot enforce task execution control")
 	}
 	ch := c.pending.add(msg.OpID)
 	defer c.pending.remove(msg.OpID)

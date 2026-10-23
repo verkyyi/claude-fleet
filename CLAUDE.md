@@ -547,17 +547,15 @@ one-off drill / audit records do not go in the repo (issue #3576).
   road. `logs/park.ndjson` records actions only. Inventory col 36
   `cantalk=`, col 5 `parked`. `fleet-session-gate-selftest.py`, BREAK-IT
   `park-while-watched` · `wake-timeout`, docs/dev/WEB-CHAT.md «会话合一 ①».
-- **Orchestrating is a session template — no seat, no rule table, nothing keeps
-  it open** (EPIC #4333; issues #3118 · #4340 · #4341 · #4790).
-  `conf/agent-defaults/claude/agents/orchestrator.md` is a standard agent file
-  shipped into `~/.claude/agents` like fleet-worker; a person opens one with
-  `spawn agent:orchestrator` (`--as`, above). Its body is the session's system
-  prompt — a compaction or a resume keeps it — and its few dispatch rules live
-  there and nowhere else. Several may run at once; each looks after what it
-  dispatched. Nothing opens, reopens, revives or renews one (not fleet-up, not
-  the diskguard tick, not the hub, no setting); closed is closed, and nothing
-  patrols. `@fleet_role orchestrator|steward` is never written; a window still
-  wearing it is an ordinary row, never an address. **The shared parts know no role**: a session with no
+- **Orchestrator / EPIC driver platform entrypoints are retired.** The core
+  installs only fleet-worker. `fleet-agent-def.py check-role` / `launch` refuse
+  old platform role names with `ROLE_RETIRED` (exit 3); callers must not fall back
+  to a plain session that executes an old driver seed. Old EPIC commands retain
+  one-version retirement explanations. Ordinary Task agents use native
+  Subagents or inline work; `/fleet-task-plan` preserves the design page. User
+  edits to old agent files are retained, and existing session history is not
+  removed. Historical addressing remains during D/E migration:
+  **The shared parts know no role**: a session with no
   key of its own (a template opened bare, a person's no-repo session) answers to
   its IDENTITY — `fleet_origin_key` / `fleet_window_okey` print its `@fleet_id`
   (home and the panels: nothing), so its children report to it;

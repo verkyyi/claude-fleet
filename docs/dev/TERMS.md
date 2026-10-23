@@ -46,13 +46,10 @@ nests three levels, and this is where the confusing vocabulary starts:
   the subscription pool, task records, placement, the console. (A tmux pane marked
   `@hub=1` — `bin/hub-session.sh` — is an older, local meaning: a plain operator
   session in the base checkout.)
-- **Orchestrator** (编排会话) — a session TEMPLATE, not a seat or a window the fleet
-  keeps: `spawn agent:orchestrator` (or `claude --agent orchestrator`) opens one bound
-  to no task; it talks a request through with you and then dispatches it (a quick
-  task, an EPIC), never writing code itself (issues #1957, #4335). Several
-  may run at once, each looking after what it dispatched; nothing opens or reopens one
-  (issue #3118), and there is no role to take (issue #4340). Instructions: the
-  template, [`conf/agent-defaults/claude/agents/orchestrator.md`](../../conf/agent-defaults/claude/agents/orchestrator.md).
+- **Orchestrator / EPIC driver** — retired platform roles. Existing task descriptions
+  and session history remain readable; new role launches return `ROLE_RETIRED`.
+  An ordinary Task's Agent handles its own work using native Subagents or inline
+  execution. See [the migration design](HUB-TASK-IMPLEMENTATION-DESIGN.md).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

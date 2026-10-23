@@ -21,6 +21,7 @@ A Codex session reads the same file: the body becomes its instructions
 (`-c model_instructions_file=<a content-addressed copy of the body>`), the model
 is `fleet.codex_model`; the tool list does not carry over (Codex has none).
 
+  check-role <name>               exit 3 ROLE_RETIRED for old platform roles, else 0
   find <name> [--dir D] [--for claude|codex]
                                   the file's path (exit 1: none — stderr says where it looked)
   launch <name> [--dir D] [--agent claude|codex] [--no-agent-flag]
@@ -51,16 +52,16 @@ The dispatch group (the `spawn` tool) is mounted only when the file grants it
 `disallowedTools` entry taking it away. The shipped `fleet-worker` grants it
 (issue #4591); no session is refused a spawn by its seat.
 
-«ship»: the core ships `fleet-worker` (the issue-bound execution session — the
-spawn's default) and `orchestrator` (`steward` left with issue #4900). Each is
+«ship»: the core ships `fleet-worker`, the default task execution session. It is
 written into ~/.claude/agents once, kept up with the release while it is still
 byte for byte what the fleet wrote, and never touched again once the person
 edits it (their override) or deletes it (then a spawn is a plain session given
 the ticket). What the fleet wrote is recorded in
 $FLEET_CONF_DIR/agents-shipped.json (name → sha). A file the core no longer
-ships (`epic-driver` moved into the fleet-epic plugin — issue #3116) is retired:
-removed while it is still the fleet's bytes, so the plugin's copy answers (and
-no plugin, no such agent); an edited one stays, the person's own.
+ships is retired while it is still the fleet's bytes; an edited one stays, the
+person's own. Retired platform role names return ROLE_RETIRED (exit 3) on launch
+or spawn-tools. Callers must not fall back to starting their old seed as a plain
+session. find remains available for reading old definitions.
 """
 import hashlib
 import json
@@ -77,6 +78,20 @@ NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$')
 
 class AgentError(Exception):
     pass
+
+
+class RoleRetired(AgentError):
+    pass
+
+
+# compat-1v: old role names fail distinctly instead of launching a plain agent
+# with an old driver seed. Reading old definitions remains available via find.
+RETIRED_ROLES = frozenset(('orchestrator', 'steward', 'epic-driver', 'fleet-epic:epic-driver'))
+
+
+def reject_retired_role(name):
+    if name in RETIRED_ROLES:
+        raise RoleRetired('ROLE_RETIRED: %s no longer starts a Fleet role; continue the task as a normal session and use native Subagents when needed' % name)
 
 
 def conf_dir():
@@ -303,6 +318,7 @@ def body_copy(d):
 
 
 def launch(name, start=None, agent='claude', agent_flag=True, for_agent=None):
+    reject_retired_role(name)
     d = load(find(name, start, for_agent or agent))
     fr, fl = d['front'], d['fleet']
     model = str(fr.get('model') or '')
@@ -430,7 +446,9 @@ def main(argv):
         for_agent = opts.get('--for')
         if for_agent not in (None, 'claude', 'codex'):
             raise AgentError('--for must be claude|codex')
-        if cmd == 'find' and len(pos) == 1:
+        if cmd == 'check-role' and len(pos) == 1:
+            reject_retired_role(pos[0])
+        elif cmd == 'find' and len(pos) == 1:
             print(find(pos[0], opts.get('--dir'), for_agent or 'claude'))
         elif cmd == 'launch' and len(pos) == 1:
             agent = opts.get('--agent', 'claude')
@@ -440,6 +458,7 @@ def main(argv):
                                'codex' if agent == 'codex' else for_agent):
                 print('%s\t%s' % (k, v))
         elif cmd == 'spawn-tools' and len(pos) == 1:
+            reject_retired_role(pos[0])
             return 0 if grants_spawn(load(find(pos[0], opts.get('--dir'), for_agent or 'claude'))['front']) else 1
         elif cmd == 'ship' and not pos:
             for ln in ship(opts.get('--dir'), opts.get('--check', False)):
@@ -447,6 +466,9 @@ def main(argv):
         else:
             print(__doc__, file=sys.stderr)
             return 2
+    except RoleRetired as e:
+        print('fleet-agent-def: %s' % e, file=sys.stderr)
+        return 3
     except AgentError as e:
         print('fleet-agent-def: %s' % e, file=sys.stderr)
         return 1

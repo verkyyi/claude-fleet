@@ -1122,6 +1122,14 @@ cmd_resume() {
   [ -z "$row" ] && { printf 'REVIEW-ONLY\tno ledger row for %s\n' "$key"; return 0; }
   local iss pr sha wt tdir sid agent chome ctrans
   IFS=$'\t' read -r _ iss _ pr sha wt tdir sid _ _ _ agent chome ctrans _ <<<"$row"
+  local record_task; record_task=$(printf '%s\n' "$row" | awk -F'\t' '{print $15}')
+  case "$record_task" in
+    T[1-9]*)
+      if ! python3 "$BIN/fleet_task_execution.py" check-history --task-ref "$record_task"; then
+        printf 'REVIEW-ONLY\ttask execution needs exit confirmation before history resume; original transcript retained\n'
+        return 0
+      fi ;;
+  esac
   local where; where=$(fleet_agent_get "$(fleet_agent_or_default "$agent")" transcript 2>/dev/null)
   if [ "$where" = home ]; then
     ctrans=$(python3 "$BIN/fleet-codex-session.py" locate --session "$sid" --home "$chome" --transcript "$ctrans" 2>/dev/null) || ctrans=''

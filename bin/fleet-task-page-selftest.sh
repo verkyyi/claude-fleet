@@ -168,7 +168,7 @@ st_has "dispatch sends UTF-8" "$(cat "$BIN/fleet-task-record.sh")" 'ensure_ascii
 
 # ---- E ------------------------------------------------------------------------
 ST_LEG=E
-for s in fleet-task-page.py epic-page-surface.sh task-page.example.json 'fleet-task-record.sh dispatch' push_to_wechat; do
+for s in fleet-task-page.py epic-page-surface.sh task-page.example.json 'fleet-task-record.sh authority' '原生 Subagent'; do
   st_has "command names $s" "$(cat "$CMD")" "$s"
 done
 st_has "skill names the task page" "$(cat "$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md")" 'fleet-task-page.py'

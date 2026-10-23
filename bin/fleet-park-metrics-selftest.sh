@@ -154,7 +154,7 @@ book.write_text('\n'.join(json.dumps(r) for r in [
  {'ts':'2026-10-21T14:00:01Z','act':'deferred'},
  {'ts':'2026-10-20T14:00:01Z','act':'wake','secs':100,'result':'ok'}])+'\ninvalid\n')
 d=daily(book,'2026-10-21')
-assert (d['park'],d['wake'],d['fail'],d['deferred'],d['p50'],d['p95'],d['scheduled'],d['on_time_rate']) == (1,3,1,1,3,5,2,.5),d
+assert (d['park'],d['wake'],d['fail'],d['deferred'],d['p50'],d['p95'],d['scheduled'],d['on_time_rate']) == (1,3,1,1,3,5,None,None),d
 PY
 # Drive doctor's real --park entry using the real Control inventory and adapter.
 row=$(sh "$BIN/fleet-doctor.sh" --park)

@@ -206,7 +206,7 @@ class LoopTests(NativeDouble, unittest.TestCase):
         self.real_current = loop.current
         self.patches = [patch.object(loop, 'Rpc', lambda _: self.codex.client()),
                         patch.object(loop, 'current'),
-                        patch.object(loop, 'pane', side_effect=lambda _, fmt: self.state if fmt == '#{@claude_state}' else self.transfer if fmt == '#{@agent_transfer_request}' else self.handoff),
+                        patch.object(loop, 'pane', side_effect=lambda _, fmt: self.state if fmt == '#{@claude_state}' else self.transfer if fmt == '#{@agent_transfer_request}' else self.handoff if fmt == '#{@handoff_armed}' else ''),
                         patch.object(loop, 'tm', side_effect=lambda *_: self.clients),
                         patch.object(loop, 'wait_reasons', return_value=[])]
         for p in self.patches: p.start()
@@ -214,6 +214,29 @@ class LoopTests(NativeDouble, unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
 
     def read(self): return json.loads(self.path.read_text())
+
+    def test_fresh_task_stop_before_loop_lock_prevents_turn(self):
+        import fleet_task_execution as execution
+        fid = '22222222-2222-4222-8222-222222222222'
+        snapshot = dict(task_ref='T72', task_fid='33333333-3333-4333-8333-333333333333',
+                        generation=1, binding_generation=1, attempt_id='task:T72:g1',
+                        operation_id='op-start', execution_endpoint='node-a',
+                        execution_owner='44444444-4444-4444-8444-444444444444/' + fid,
+                        cancel_request='')
+        with patch.dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf')):
+            fence = execution.ExecutionFence()
+            fence.bind(snapshot, authorized=True)
+            def authority(*args, **kwargs):
+                with loop.locked(self.path, nonblocking=True):
+                    pass  # authentication I/O cannot hold the schedule lock
+                return dict(snapshot, generation=2, cancel_request='op-stop')
+            values = {'#{@fleet_id}': fid, '#{@task_execution}': json.dumps(snapshot)}
+            with patch.object(loop, 'pane', side_effect=lambda _, fmt: values.get(fmt, '')):
+                with patch.object(execution, '_authority', side_effect=authority):
+                    loop.dispatch(self.path, now=10000)
+            self.assertEqual(self.messages, [])
+            self.assertEqual(fence.read('T72')['cancel_request'], 'op-stop')
+            self.assertEqual(self.read()['schedule'], self.r['schedule'])
 
     def test_two_cron_jobs_deliver_independently_once_and_preserve_expiry(self):
         now = 1792022400
@@ -290,7 +313,7 @@ class LoopTests(NativeDouble, unittest.TestCase):
 
     def test_new_tui_thread_invalidates_old_loaded_thread(self):
         expected = '|'.join(['isolated', '@2', '42', 'codex', self.r['manifest'], str(self.root)])
-        with patch.object(loop, 'pane', side_effect=[expected, '0', json.dumps({'session_id': 'new-thread'})]):
+        with patch.object(loop, 'pane', side_effect=[expected, '0', '', '', json.dumps({'session_id': 'new-thread'})]):
             with self.assertRaisesRegex(ValueError, 'TUI switched'):
                 self.real_current(self.r)
 
@@ -521,7 +544,7 @@ if a[2:3]==['display-message']:
  if f=='#{pane_pid}':print('42')
  elif f=='#{pane_dead}':print('0')
  elif f=='#{@claude_state}':print('done')
- elif f in ('#{@agent_transfer_request}','#{@handoff_armed}','#{@quota_failover}','#{@agent_transfer_until}','#{@launch}'):print('')
+ elif f in ('#{@agent_transfer_request}','#{@handoff_armed}','#{@quota_failover}','#{@agent_transfer_until}','#{@launch}','#{@fleet_id}','#{@task_execution}'):print('')
  elif f=='#{cursor_x} #{cursor_y} #{pane_width}':print('2 0 80')
  elif f=='#{@codex_identity}':print(json.dumps({'session_id':'12345678-1234-1234-1234-123456789abc'}))
  else:print('isolated|@2|42|codex|'+r+'/manifest.json|'+r)

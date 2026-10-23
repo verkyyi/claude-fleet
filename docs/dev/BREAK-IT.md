@@ -30,6 +30,7 @@
 | 无人值守的会话跑 `rm -f $P/*` 这类开头是变量的 rm 路径（#4637，2026-10-17 worker #4625 实见） | Claude Code 在 bypass 模式下照样弹「Dangerous rm operation on possibly-empty variable path」等人批准，没人答 30 多秒后自动拒绝：每次打断操作者，或会话干等 | bash-guard 在 PreToolUse 先拒（exit 2），理由里写好改法（`"${P:?}"/*`、非空默认值或字面路径），agent 自己改写重跑，不弹框；`${P:?}`、`${P:-/非空}`、`git rm`、单引号字面量、变量不在开头的照常放行 | `rm-empty-var-prompt` |
 | pending-tool 批量读取跨检查复用旧进程、窗口或 transcript（#4474） | 工具已开始或窗口已换代，旧的无 pending 读数仍可能清掉 needs | 每次安全核对重采集；同次共享解析，前后验证 socket/server、worker、pane 与 native birth/SID，过期或缺身份返回 unknown | `pending-observation-stale` |
 | 已注册的 GitHub 仓库名含大写（#4495） | 面板新建误报冻结，规范化后的迁移清单又找不到原 overlay | Hub 身份规范化，本地按注册身份定位原 overlay；实际冻结、输入、认证及入口故障保留各自原因 | `repo-authority-case` |
+| Codex 已原生中断并 idle，但没有 Stop hook，或末轮为 interrupted / failed | 面板持续显示运行中，已空闲会话无法停放 | 原生 idle 更新运行提示，保留明确审批与 Loop；停放认可已结束的原生回合，仍核对工具、goal、子线程与进程身份，不把中断当成功 | `codex-interrupt-idle` |
 | 空闲 Codex 的 MCP/helper 常驻进程被算成后台任务（#4318、T965：默认 GitHub/fetch 的登录 shell 包装器 exec 后已不在进程树） | 做完仍 retained:bg；反过来整棵 MCP 子树豁免会漏掉在途任务，查询失败也可能被当作空闲 | 按本次启动身份、原生配置与精确入口排除常驻服务；默认包装器核对实际服务入口，工具/任务后代、活动 loop、未完子任务、身份未知继续拒绝回收 | `codex-mcp-busy` |
 | Codex 启动时把 Hook 固定到物理版本目录，升级清掉旧版本后每轮被旧路径阻断（T965） | 对话仍在，Hook 却找不到入口；静态 manifest 的稳定路径无法揭示运行时路径 | 安装启动时发出稳定入口，独立 checkout 保留自身路径；切换并删除旧版本后验证入口仍有效 | `codex-hook-retired-root` |
 | Codex 恢复入口查 Claude 的 project 转录目录（T965） | 原对话完好却静默开启新对话，置顶身份相同也丢失上下文接续 | 按 adapter 的 transcript 列寻找原生历史，Codex 校验 UUID 和 rollout 元数据再 resume | `codex-resume-history` |
@@ -647,6 +648,7 @@
 | 已合并或已终态的会话收到新任务/消息，旧结果仍授权关闭（C6 / T965） | 新工作被旧回收结论覆盖；旧报告在消息之后提交又恢复终态 | 完成证据绑定当前任务和工作代次；报告提交复检，后续输入使旧证据失效 | `park-reap-current-work` |
 | 消息在自动关闭最终复检期间到达，普通窗口或无仓库路径未拿共同身份锁（C6 / T965） | 消息已接收却关窗，或关闭后仍按锁外旧窗口接收消息 | 普通/停放/无仓库关闭与消息准入按同一身份锁排序，锁内复读身份、队列和完成证据 | `park-reap-admission` |
 | 未启动任务取消后，旧派发请求才到达操作队列或原生启动入口 | 已取消的工作仍被迟到请求启动，迟到结果还覆盖取消记录 | 取消推进原代次并撤销排队操作；操作入库与任务复检同事务，节点执行、开窗与包装器启动前读取当前授权。已进入原生创建阶段的停止另由执行域控制处理，不把此检查当作完整停止确认 | `task-cancel-start-race` |
+| 新任务领取另一条历史任务的会话身份，旧记录尚无 execution_owner | 新旧任务指向同一个会话，唯一绑定检查被历史字段绕过 | 领取同时检查旧 worker_id、Task FID 及会话账本的任务归属；发现已有归属拒绝领取，保留历史 | `task-claim-historical-identity` |
 | 临时网页验收继承普通 web 的永久保留，或仅凭标题/native idle 判完成（C6 / T965） | 临时实例常驻，普通会话被错误归入 probe | 正式创建入口显式 probe + 父身份；真正完成结果后按原一分钟规则收尾，普通 web/keep 不变 | `park-web-owned-probe` |
 | 更新 helper 后旧驻留网页服务仍健康，却忽略新加的 probe 字段（C6 / T952） | 返回 200 并创建普通 web，临时会话没有父归属且永久保留 | 临时创建使用 `/api/open/probe`，旧服务不认识路由就 404 且零创建；复用正式创建器验证父身份，不降级重试普通 open，不重标已开窗口 | `park-web-probe-old-api` |
 | 子回报队列或批量账本写失败，EXIT 钩子仍记录终态（C6 / T965） | 结果未可靠保存仍进入约一分钟回收；旧终态或 closed task 兜底绕过失败 | 结果与必要报告可靠保存后才放行；持久待投递队列满足合同，写失败保留窗口并给出原因 | `park-reap-report` |
@@ -680,3 +682,4 @@
 
 | quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格；目标晚绑定仍须等待 controller 已确认 started，未知结果不启 timer | `quota-loop-replacement` |
 | 未启动记录在面板显示 Unknown / Queued，任务结果盖过会话的新工作（PV4D） | 人误以为已有 worker 或自动调度，并找不到协调归属 | Hub board 区分计划与运行证据、未派发与保留状态，终端和网页消费同一事实；协调归属只取可核验的父记录 | `board-plan-facts` |
+| Hub Task 的 stop 已持久化，但节点清理失败、执行器崩溃或尚未启动；Hub 再次投递同一个 stop | 旧 failed / unknown / succeeded 回执被当成清理已经结束，后续请求不再停进程或关闭窗口 | 每次重投先持久提交同一 stop 栅栏，再用原 operation 重试清理；按 operation 的进程间锁防止并发清理，执行器死亡自动释放；成功回执仍标记 execution_exit 为 unproven | `task-stop-replay-cleanup` |

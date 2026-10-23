@@ -32,7 +32,7 @@
 //      terminal a turn is refused 409 and the conversation names the owner;
 //      /api/take, /api/state, /api/release ?provider=codex are the Codex side's
 //   J  the credential appears in no response, no log, no file of the state dir
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import os from "node:os";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, mkdirSync, statSync } from "node:fs";
@@ -178,7 +178,7 @@ process.stdin.on("data", (d) => {
 // ---- the server in the socket mode ------------------------------------------------------
 function start(extra = {}) {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env, FLEET_WEBCHAT_STATE: STATE, FLEET_WEBCHAT_SESSION_CRED: credSh, FLEET_WEBCHAT_CWD: T,
+    const env = { ...process.env, FLEET_CONF_DIR: join(T, "fence"), FLEET_WEBCHAT_STATE: STATE, FLEET_WEBCHAT_SESSION_CRED: credSh, FLEET_WEBCHAT_CWD: T,
       CLAUDE_CONFIG_DIR: join(T, "claude"), FLEET_WEBCHAT_IDLE_SECS: "0", FLEET_WEBCHAT_CODEX_BIN: fake,
       CODEX_HOME: CXHOME, FLEET_WEBCHAT_HANDOFF: handoff, FLEET_WEBCHAT_LOCKDIR: LOCKS, ...extra };
     delete env.FLEET_WEBCHAT_LOCAL; delete env.FLEET_WEBCHAT_SDK;
@@ -369,6 +369,23 @@ for (const [text, allow, want] of [["ask a", true, "accept"], ["ask b", false, "
   ok((await req("/api/release?provider=codex", { method: "POST", body: { session: TERM_THREAD } })).status === 200, "L /api/release?provider=codex answers");
   const t2 = await turn("now here");
   ok(t2.status === 200 && rpc().some((m) => m.method === "thread/resume" && m.params.threadId === TERM_THREAD), "L the next turn resumes the terminal's thread");
+  const callsBeforeFence = rpc().filter((m) => ["thread/resume", "thread/start", "turn/start"].includes(m.method)).length;
+  writeFileSync(join(LOCKS, `codex-${TERM_THREAD}.json`), JSON.stringify({ holder: "webchat", window_fid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
+  const bound = spawnSync("python3", ["-c", `import sys
+sys.path.insert(0, sys.argv[1])
+from fleet_task_execution import ExecutionFence
+f=ExecutionFence(sys.argv[2])
+f.bind(dict(task_ref="T42",task_fid="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",generation=1,
+ attempt_id="task:T42:g1",operation_id="start-42",execution_endpoint="node-a",
+ execution_owner="11111111-1111-4111-8111-111111111111/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",cancel_request=""),authorized=True)
+`, BIN, join(T, "fence")], { encoding: "utf8" });
+  ok(bound.status === 0, "L bind a Task after the existing Codex provider starts");
+  for (const path of ["/api/turn", "/api/take", "/api/answer"]) {
+    const denied = await req(path + "?provider=codex", { method: "POST", body: { text: "must not run" } });
+    ok(denied.status === 409 && denied.j.code === "native_session_required", `L existing Codex provider ${path} refuses controlled Task`);
+  }
+  ok(rpc().filter((m) => ["thread/resume", "thread/start", "turn/start"].includes(m.method)).length === callsBeforeFence,
+    "L refusal sends no resume, start or turn to the existing provider");
 }
 
 // ---- K: no codex here ---------------------------------------------------------------------
