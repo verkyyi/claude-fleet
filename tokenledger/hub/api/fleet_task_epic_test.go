@@ -39,6 +39,15 @@ func TestTaskEpicParentProgressAndChildrenSummary(t *testing.T) {
 		if code != 200 {
 			t.Fatalf("accept %s: %d %v", token, code, rec)
 		}
+		// Historical view fixture: acceptance no longer writes these columns.
+		if rec["parent_task"] != nil || rec["parent_session"] != nil {
+			t.Fatal("new acceptance bound a Parent")
+		}
+		if parentTask != "" || parentSession != "" {
+			if _, err := h.srv.Store.DB().Exec(`UPDATE fleet_tasks SET parent_task=?, parent_session=? WHERE id=?`, parentTask, parentSession, store.ParseTaskRef(rec["id"].(string))); err != nil {
+				t.Fatal(err)
+			}
+		}
 		return rec["id"].(string)
 	}
 	const fidP, fidA, fidB = "aaaaaaaa-1111-4111-8111-111111111111", "bbbbbbbb-2222-4222-8222-222222222222", "cccccccc-3333-4333-8333-333333333333"

@@ -56,11 +56,15 @@ func taskTicket(ref string) (repo string, number int64, err error) {
 // The opaque payload carries the complete dispatch input for later consumers.
 type acceptedTaskInput struct {
 	Title, Via, Device, Repo, Agent, RequestedAgent, ResolvedAgent string
-	TicketRef, ParentTask, ParentSession                           string
+	TicketRef                                                      string
+	ParentTask                                                     string `json:",omitempty"`
+	ParentSession                                                  string `json:",omitempty"`
 	Payload                                                        json.RawMessage
 }
 
 func taskAcceptedInput(t *FleetTask) (string, error) {
+	// Compat-1v: ignore retired relationship inputs; new records are independent.
+	t.ParentTask, t.ParentSession, t.ParentGeneration = "", "", 0
 	if t.AuthorityVersion != TaskAuthorityVersion || t.Owner == "" || t.Title == "" || t.RequestedAgent == "" || t.ResolvedAgent == "" ||
 		(t.State != "" && t.State != TaskAccepted) || t.WorkerID != "" || t.ActualAgent != "" || t.Generation != 0 {
 		return "", ErrTaskInvalid
@@ -76,9 +80,6 @@ func taskAcceptedInput(t *FleetTask) (string, error) {
 			return "", ErrTaskInvalid
 		}
 		t.Repo = r
-	}
-	if t.ParentTask != "" && ParseTaskRef(t.ParentTask) == 0 {
-		return "", ErrTaskInvalid
 	}
 	if t.RequestPayload == "" {
 		t.RequestPayload = "{}"
@@ -96,7 +97,8 @@ func taskAcceptedInput(t *FleetTask) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t.RequestPayload = string(b)
+	t.RequestPayload = NormalizeTaskDispatchRequest(string(b))
+	b = []byte(t.RequestPayload)
 	input := acceptedTaskInput{t.Title, t.Via, t.Device, t.Repo, t.Agent, t.RequestedAgent, t.ResolvedAgent,
 		t.TicketRef, t.ParentTask, t.ParentSession, b}
 	b, err = json.Marshal(input)
@@ -137,19 +139,13 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 	if err = s.ownerStartTx(tx, t.Owner, true); err != nil {
 		return FleetTask{}, err
 	}
-	if t.ParentTask != "" {
-		var owner string
-		if err = tx.QueryRow(`SELECT owner FROM fleet_tasks WHERE id = ?`, ParseTaskRef(t.ParentTask)).Scan(&owner); err != nil || owner != t.Owner {
-			return FleetTask{}, ErrTaskFence
-		}
-	}
 	ts := now.UTC().Format(rfc)
 	res, err := tx.Exec(`INSERT INTO fleet_tasks (token, owner, title, via, device, repo, agent, state,
-  authority_version, generation, requested_agent, resolved_agent, parent_task, parent_session, ticket_ref,
+  authority_version, generation, requested_agent, resolved_agent, ticket_ref,
   request_payload, accepted_request, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(token) DO NOTHING`, token, t.Owner, t.Title, t.Via, t.Device, t.Repo, t.Agent, TaskAccepted,
-		t.RequestedAgent, t.ResolvedAgent, t.ParentTask, t.ParentSession, t.TicketRef, t.RequestPayload, input, ts, ts)
+		t.RequestedAgent, t.ResolvedAgent, t.TicketRef, t.RequestPayload, input, ts, ts)
 	if err != nil {
 		return FleetTask{}, err
 	}
@@ -164,7 +160,7 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 	if rec.Owner != t.Owner {
 		return FleetTask{}, ErrTaskFence
 	}
-	if rec.acceptedRequest != input || rec.AuthorityVersion != TaskAuthorityVersion {
+	if normalizedAcceptedTaskRequest(rec.acceptedRequest) != normalizedAcceptedTaskRequest(input) || rec.AuthorityVersion != TaskAuthorityVersion {
 		return FleetTask{}, ErrTaskConflict
 	}
 	n, err := res.RowsAffected()
@@ -175,16 +171,11 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		// The same token again: the same record, as it stands now.
 		return rec, tx.Commit()
 	}
-	// The parent named on the first acceptance only: replaying the request never
-	// re-parents the child.
-	if err = s.bindTaskParentTx(tx, &rec); err != nil {
-		return FleetTask{}, err
-	}
 	// attempt_id names the one dispatch the envelope carries (`task:T<n>:g1`) —
 	// a name a node's dispatch check still reads, not an attempt journal.
 	rec.AttemptID = fmt.Sprintf("task:%s:g%d", rec.Ref, rec.Generation)
-	if _, err = tx.Exec(`UPDATE fleet_tasks SET parent_task = ?, parent_session = ?, parent_generation = ?, attempt_id = ? WHERE id = ?`,
-		rec.ParentTask, rec.ParentSession, rec.ParentGeneration, rec.AttemptID, rec.ID); err != nil {
+	if _, err = tx.Exec(`UPDATE fleet_tasks SET attempt_id = ? WHERE id = ?`,
+		rec.AttemptID, rec.ID); err != nil {
 		return FleetTask{}, err
 	}
 	// EPIC T644 C1: the task's ID, minted with the record — one transaction.

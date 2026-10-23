@@ -6,11 +6,9 @@ import (
 	"time"
 )
 
-// The task graph after EPIC T497 C8: a child names its parent record directly,
-// or — a session a pre-C8 launch proof ran — through that record's archived
-// executor; children are the records that name the parent, whichever session
-// dispatched them. Nothing claims, fences a generation or takes a report.
-func TestTaskChildrenNameTheirParent(t *testing.T) {
+// Historical Parent columns remain readable. Fixtures write old columns
+// directly; new acceptance must not reconstruct a relationship.
+func TestTaskHistoricalChildrenRemainReadable(t *testing.T) {
 	s := taskStore(t)
 	now := time.Now()
 	parent := acceptedTask(t, s, "parent", "")
@@ -20,6 +18,15 @@ func TestTaskChildrenNameTheirParent(t *testing.T) {
 			RequestedAgent: "codex", ResolvedAgent: "codex", ParentTask: parentTask, ParentSession: session}, token, now)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if parentTask != "" {
+			if _, err := s.write.Exec(`UPDATE fleet_tasks SET parent_task=?, parent_session=?, parent_generation=? WHERE id=?`, parentTask, session, parent.Generation, rec.ID); err != nil {
+				t.Fatal(err)
+			}
+			rec, err = s.FleetTask(rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 		return rec
 	}
@@ -37,16 +44,16 @@ func TestTaskChildrenNameTheirParent(t *testing.T) {
 	}
 
 	// A pre-C8 parent: its record holds the executor a launch proof claimed;
-	// a child that names only that session finds the record through it.
+	// a new task must not recover a Parent from that archived executor.
 	old := acceptedTask(t, s, "old-parent", "")
 	if _, err := s.write.Exec(fmt.Sprintf(`UPDATE fleet_tasks SET state = 'running', execution_owner = 'fleet-z/old-window', worker_id = 'fleet-z/old-window' WHERE id = %d`, old.ID)); err != nil {
 		t.Fatal(err)
 	}
 	c := child("child-of-old", "", "fleet-z/old-window")
-	if c.ParentTask != old.Ref {
+	if c.ParentTask != "" || c.ParentSession != "" {
 		t.Fatalf("archived executor: %+v", c)
 	}
-	if kids, err := s.FleetTaskChildren("alice", old.Ref); err != nil || len(kids) != 1 {
+	if kids, err := s.FleetTaskChildren("alice", old.Ref); err != nil || len(kids) != 0 {
 		t.Fatalf("old parent's children: %+v %v", kids, err)
 	}
 	// A session alone that no record ever named names no record.
