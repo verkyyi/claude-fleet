@@ -49,7 +49,8 @@ func TestTaskCycleSubagentOffline(t *testing.T) {
 	}
 }
 
-// Lazy skip by default. DRY_RUN uses isolated configuration and real Control
+// Unset, it passes having run nothing: never t.Skip, the Postgres leg keeps
+// skips at 0 (claude-fleet#2121). DRY_RUN uses isolated configuration and real Control
 // inventory, with no native processes, credentials or model requests.
 // The websocket test peer transports real business messages to Control; it
 // is not the production connector and proves no production reconnect SLO.
@@ -57,7 +58,8 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 	live := os.Getenv("FLEET_NATIVE_TASK_CYCLE") == "1"
 	dry := os.Getenv("FLEET_NATIVE_TASK_CYCLE_DRY_RUN") == "1"
 	if !live && !dry {
-		t.Skip("opt-in native acceptance; no credentials inspected")
+		t.Log("opt-in native acceptance not requested; no credentials inspected")
+		return
 	}
 	if live && dry {
 		t.Fatal("choose live or dry-run, never both")
