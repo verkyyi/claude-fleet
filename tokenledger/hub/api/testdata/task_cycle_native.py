@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shlex
 import shutil
 import signal
@@ -38,6 +39,49 @@ def loopback(value):
     if u.scheme != 'http' or u.hostname != '127.0.0.1' or not u.port or u.username or u.password:
         raise Refused('temporary Hub must use explicit IPv4 loopback HTTP')
     return value.rstrip('/')
+
+
+def native_turns(rows, expected_input, nonces, fact, text_blocks):
+    """Count native turn boundaries, not injected user-role context or mirrors.
+
+    File identity is resolved by fleet_history_read; text decoding is the same
+    reader used by transfer snapshots. This probe requires exact delivery and
+    final text, preserving duplicate evidence rather than deduplicating it away.
+    """
+    turns, active = [], None
+    for row in rows:
+        p = row.get('payload', {})
+        kind = p.get('type')
+        if row.get('type') == 'event_msg' and kind == 'task_started':
+            active = dict(id=p.get('turn_id'), users=[], inputs=[], answers=[], completions=[])
+            turns.append(active)
+        elif active is not None and row.get('type') == 'response_item' and kind == 'message':
+            text = text_blocks(p.get('content', []))
+            if p.get('role') == 'user':
+                active['inputs'].append(text)
+            elif p.get('role') == 'assistant' and p.get('phase') == 'final_answer':
+                active['answers'].append(text)
+        elif active is not None and row.get('type') == 'event_msg':
+            if p.get('turn_id') != active['id']:
+                continue
+            if kind == 'item_completed' and p.get('item', {}).get('type') == 'UserMessage':
+                active['users'].append(text_blocks(p['item'].get('content', [])))
+            elif kind == 'user_message':
+                active['users'].append(p.get('message', ''))
+            elif kind == 'task_complete':
+                active['completions'].append(p)
+                active = None
+    valid = [t for t in turns if t['id'] and expected_input
+             and t['users'] == [expected_input] and t['inputs'].count(expected_input) == 1]
+    completed = [t for t in valid if len(t['completions']) == 1]
+    answers = [a for t in completed for a in t['answers']]
+    completion_count = sum(r.get('type') == 'event_msg'
+                           and r.get('payload', {}).get('type') == 'task_complete' for r in rows)
+    return dict(started_turns=len(turns), user_turns=len(valid),
+                completed_turns=completion_count if completed else 0,
+                final_answers=len(answers), answer_hashes=[digest(a.encode()) for a in answers],
+                nonce_replies={n: sum(a == n + ' FACT=' + fact for a in answers) for n in nonces},
+                context_fact_seen=any(a == n + ' FACT=' + fact for n in nonces for a in answers))
 
 
 class Probe:
@@ -90,6 +134,8 @@ class Probe:
         self._git('-C', str(self.repo), 'add', 'README.md')
         self._git('-C', str(self.repo), '-c', 'user.name=Native acceptance',
                   '-c', 'user.email=native-acceptance@example.invalid', 'commit', '-m', 'fixture')
+        self.text_blocks = runpy.run_path(str(self.bin / '.fleet-transfer.py'))['text_blocks']
+        self.expected_inputs = {}
         self.manifest = dict(socket=self.socket, root=str(self.root), fleet=self.fleet,
                              machine_id=self.control.machine_id, live=False,
                              model_requests=0, claude='blocked_by_known_quota_not_executed')
@@ -226,6 +272,21 @@ class Probe:
         if req['action'] == 'worker_start' and req['params'].get('agent') != 'codex':
             raise Refused('Claude quota blocked; this opt-in runner executes Codex only')
         self.tasks.add(ref)
+        if req['action'] == 'worker_start' and req['operation_id'] not in self.expected_inputs:
+            params = req['params']
+            seed = self.control.attached_body(params)
+            if params.get('continuation'):
+                # Reuse the production read-only plan before native start; do
+                # not infer the expected input from the transcript under test.
+                from fleet_dispatch import check_current
+                from fleet_task_continuation import continuation_plan
+                authority = check_current(params.get('dispatch'), execution=snap,
+                                          continuation=params['continuation'])
+                plan = continuation_plan(snap, params['continuation'], authority, conf_dir=self.conf)
+                if plan['seed'] is not None: seed = plan['seed']
+            self.expected_inputs[req['operation_id']] = params.get('draft', seed)
+            self.manifest['expected_input_hashes'] = {k: digest(v.encode()) for k, v in self.expected_inputs.items()}
+            self.save()
         return self.control.submit(req)
 
     def observe(self, ref):
@@ -246,14 +307,9 @@ class Probe:
             for line in path.read_text().splitlines():
                 try: rows.append(json.loads(line))
                 except ValueError: continue
-            events = [r.get('payload', {}) for r in rows if r.get('type') == 'event_msg']
-            out['user_turns'] = sum(e.get('type') == 'user_message' for e in events)
-            out['completed_turns'] = sum(e.get('type') == 'task_complete' for e in events)
-            answers = [e.get('message', '') for e in events if e.get('type') == 'agent_message']
-            out['answer_hashes'] = [digest(a.encode()) for a in answers]
-            out['nonce_replies'] = {n: sum(n in a for a in answers) for n in self.manifest.get('nonces', [])}
             fact = self.manifest.get('fact', '')
-            out['context_fact_seen'] = bool(fact and any(fact in a for a in answers))
+            out.update(native_turns(rows, self.expected_inputs.get(snap['operation_id'], ''),
+                                    self.manifest.get('nonces', []), fact, self.text_blocks))
             old_path = self.manifest.get('first_transcript', '')
             calls = {r['payload'].get('call_id') for r in rows
                      if r.get('type') == 'response_item'
@@ -326,6 +382,14 @@ class Probe:
                 try:
                     snapshot = self.control.execution.read(ref)
                     stop = snapshot.get('cancel_request', '') if snapshot else ''
+                    deadline = time.monotonic() + 30
+                    while stop and time.monotonic() < deadline:
+                        receipt = self.receipt(stop)
+                        if receipt['confirmed']: break
+                        if receipt['payload_hash']:
+                            from fleet_control import Control
+                            Control(self.conf, bin_dir=self.bin).submit_native_exit(stop)
+                        time.sleep(.2)
                     forced = forced or not stop or not self.receipt(stop)['confirmed']
                     from fleet_task_execution import terminate_registered, _definitely_exited
                     registration = self.control.execution.launch(ref)

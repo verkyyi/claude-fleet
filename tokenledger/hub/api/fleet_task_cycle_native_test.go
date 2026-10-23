@@ -26,6 +26,18 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
+// Offline current native schema regression; never creates a Probe or starts a model.
+func TestTaskCycleNativeTranscriptRead(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(python, "testdata/task_cycle_native_parser_test.py").CombinedOutput()
+	if err != nil {
+		t.Fatalf("native transcript regression: %v %s", err, out)
+	}
+}
+
 // Lazy skip by default. DRY_RUN uses isolated configuration and real Control
 // inventory, with no native processes, credentials or model requests.
 // The websocket test peer transports real business messages to Control; it
@@ -269,7 +281,7 @@ func TestTaskCycleNativeOptIn(t *testing.T) {
 				t.Fatalf("real Control start operation failed (%s); provider result not claimed, details retained privately", operationID)
 			}
 			out := call("observe", map[string]any{"task": taskRef})
-			if replies, ok := out["nonce_replies"].(map[string]any); ok && replies[nonce] == float64(1) && out["user_turns"] == float64(1) && out["completed_turns"] == float64(1) {
+			if replies, ok := out["nonce_replies"].(map[string]any); ok && replies[nonce] == float64(1) && out["user_turns"] == float64(1) && out["completed_turns"] == float64(1) && out["started_turns"] == float64(1) && out["final_answers"] == float64(1) {
 				components, _ := json.Marshal(out["components"])
 				if string(components) != `["client","server"]` {
 					t.Fatal("private runtime server/client not both registered")
