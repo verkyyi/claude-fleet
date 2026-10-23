@@ -7764,6 +7764,15 @@ drill_reap_agent_split() {
   SECS=$(since "$t0")
 }
 
+drill_task_history_current_generation() {
+  local t0; t0=$(now); CAP=120
+  (cd "$BIN/../tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run '^TestTaskProjection' ./hub/store) >"$WORK/task-history-current-generation.log" 2>&1 || {
+    WHY="historical projection changed controlled Task: $(tail -12 "$WORK/task-history-current-generation.log")"; return 1;
+  }
+  WHAT='旧 ID/result/closed/超时补偿保留历史，不改写受控 Task 的当前代次和绑定'
+  SECS=$(since "$t0")
+}
+
 drill_stop_renamed_worker() {
   local t0; t0=$(now); CAP=30
   bash "$BIN/fleet-worker-stop-selftest.sh" --role-only >"$WORK/stop-renamed-worker.log" 2>&1 || {
