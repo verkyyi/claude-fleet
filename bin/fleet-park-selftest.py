@@ -526,6 +526,75 @@ class client:
         self.assertEqual(args[-1], '接着解释 café')
         self.assertIn(self.sid, args)
 
+    def test_backspace_at_empty_and_line_start_preserves_wake(self):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+            draft = gate.fid_dir(self.fid) / 'park-input.txt'
+        # DEL is >= ASCII space; it must not fall through to text insertion
+        # when there is no preceding character to delete.
+        self.tm('send-keys', '-t', self.win, 'BSpace')
+        self.wait(draft.exists)
+        self.assertEqual(draft.read_bytes(), b'')
+        self.tm('send-keys', '-t', self.win, 'C-h')
+        self.tm('send-keys', '-t', self.win, '-l', '中文 café')
+        self.wait(lambda: draft.read_text() == '中文 café')
+        self.tm('send-keys', '-t', self.win, 'Home', 'BSpace')
+        time.sleep(.2)
+        self.assertEqual(draft.read_text(), '中文 café')
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(gate.wake(self.fid, why='网页', request_only=True).get('why'), 'draft')
+        self.tm('send-keys', '-t', self.win, 'End', 'BSpace')
+        self.wait(lambda: draft.read_text() == '中文 caf')
+        self.tm('send-keys', '-t', self.win, 'C-u')
+        self.wait(lambda: draft.read_bytes() == b'')
+        seed = self.root / 'web-owner-seed'
+        seed.write_text('one submitted web message')
+        with patch.dict(os.environ, self.env):
+            result = gate.wake(self.fid, seed_file=str(seed), why='网页')
+        self.assertTrue(result.get('ok'), result)
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        launches = [json.loads(line) for line in (self.root / 'argv').read_text().splitlines()]
+        self.assertEqual(sum('one submitted web message' in args for args in launches), 1)
+
+    def test_saved_del_only_draft_does_not_block_new_editor(self):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env):
+            draft = gate.fid_dir(self.fid) / 'park-input.txt'
+            draft.write_bytes(b'\x7f\x7f')
+            self.assertTrue(gate.park(self.fid)['ok'])
+        self.wait(lambda: self.opt('@park_held'))
+        self.assertEqual(draft.read_bytes(), b'')
+        seed = self.root / 'pending-web-message'
+        seed.write_text('original queued message')
+        with patch.dict(os.environ, self.env):
+            result = gate.wake(self.fid, seed_file=str(seed), why='网页')
+        self.assertTrue(result.get('ok'), result)
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        self.assertEqual(self.opt('@codex_session_id'), self.sid)
+        launches = [json.loads(line) for line in (self.root / 'argv').read_text().splitlines()]
+        self.assertEqual(sum('original queued message' in args for args in launches), 1)
+
+    def protected_saved_draft(self, words):
+        self.fake('codex')
+        with patch.dict(os.environ, self.env):
+            draft = gate.fid_dir(self.fid) / 'park-input.txt'
+            draft.write_text(words)
+            self.assertTrue(gate.park(self.fid)['ok'])
+        self.wait(lambda: self.opt('@park_held'))
+        self.assertEqual(draft.read_text(), words)
+        with patch.dict(os.environ, self.env):
+            self.assertEqual(gate.wake(self.fid, why='网页', request_only=True).get('why'), 'draft')
+        self.assertFalse(self.opt('@park_relay'))
+        self.assertEqual(draft.read_text(), words)
+
+    def test_saved_text_with_del_remains_protected(self):
+        self.protected_saved_draft('\x7f 中文 café \t\n')
+
+    def test_saved_whitespace_remains_protected(self):
+        self.protected_saved_draft(' \t\n')
+
     def test_wake_failure_keeps_sentence_for_new_chat(self):
         self.fake()
         with patch.dict(os.environ, self.env):

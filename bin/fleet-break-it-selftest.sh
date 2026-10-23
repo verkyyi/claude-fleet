@@ -6694,6 +6694,16 @@ drill_park_human_presence_lost() {
   WHAT='停放页的单调时钟从零附近起步：首次输入立即记录 presence，未回车不醒，原句仍带入恢复首轮'
 }
 
+drill_park_backspace_ghost_draft() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_backspace_at_empty_and_line_start_preserves_wake \
+    Park.test_saved_del_only_draft_does_not_block_new_editor Park.test_saved_text_with_del_remains_protected \
+    Park.test_saved_whitespace_remains_protected 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='真实停放页空输入与行首退格不产生 DEL 草稿；真实 Unicode 草稿仍阻止外部接回，清空后同 SID 接回原句一次'
+}
+
 # A parked session that does not come back (task HHV0): the machine went away, the
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed
