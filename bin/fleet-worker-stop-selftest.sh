@@ -32,6 +32,8 @@
 #      agent's own OSC 7501 word (issue #2540) outranks the stamp — blocked keeps,
 #      done stops — and no word, no state, no agent process stops as exited
 #  12. a bare PATH (ssh / the peerlink: no tmux on it) still finds the window (#4822)
+#  13. renamed workers stop by FID; home/panel protection follows the role,
+#      with the old name fallback only for an unstamped window.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -114,6 +116,50 @@ run_stop() { out=$(bash "$BIN/fleet-worker-stop.sh" "$@" 2>"$WORK/err"); rc=$?; 
 bg_stop() { local t="$1"; shift; ( "$@" >"$WORK/$t.out" 2>"$WORK/$t.err"; echo $? >"$WORK/$t.rc" ) & eval "BG_$t=\$!"; }
 bg_read() { eval "wait \$BG_$1"; out=$(cat "$WORK/$1.out"); rc=$(cat "$WORK/$1.rc"); }
 ledger_has() { [ -f "$FLEET_HISTORY_LEDGER" ] && awk -F'\t' -v k="$1" '$2==k{f=1} END{exit !f}' "$FLEET_HISTORY_LEDGER"; }
+
+# --- 13. a person's name cannot grant or remove stop permission ---------------
+role_fid=99999999-9999-4999-8999-999999999999
+mkdir -p "$WORK/role-code"
+printf 'unfinished local changes\n' > "$WORK/role-code/keep.txt"
+for name in home dash plan backlog; do
+  wr=$(mkwin "renamed-worker" 'sleep 300' -)
+  tf set-option -w -t "$wr" @fleet_role worker
+  tf set-option -w -t "$wr" @fleet_id "$role_fid"
+  tf set-option -w -t "$wr" @reap_policy keep
+  tf set-option -w -t "$wr" @pin 1
+  tf set-option -w -t "$wr" @claude_state looping
+  tf set-option -w -t "$wr" @worktree "$WORK/role-code"
+  tf rename-window -t "$wr" "$name"
+  run_stop fleetS "fid:$role_fid"
+  [ "$rc:$out" = 0:stopped:shell ] || st_miss "13: renamed worker $name must stop despite keep/PIN/loop" "rc=$rc out=$out"
+  has_win "$wr" && st_miss "13: renamed worker $name survived its stop"
+  # Keep failed assertions independent: all cleanup is on this isolated socket.
+  tf kill-window -t "$wr" 2>/dev/null || :
+done
+for role in home panel; do
+  wr=$(mkwin "ordinary-task-title" 'sleep 300' -)
+  tf set-option -w -t "$wr" @fleet_role "$role"
+  tf set-option -w -t "$wr" @fleet_id "$role_fid"
+  run_stop fleetS "fid:$role_fid"
+  [ "$rc:$out" = 5:refused:not-found ] || st_miss "13: renamed $role must stay protected" "rc=$rc out=$out"
+  has_win "$wr" || st_miss "13: renamed $role was closed"
+  tf kill-window -t "$wr" 2>/dev/null || :
+done
+for name in home dash plan backlog ordinary-legacy-worker; do
+  wr=$(mkwin "$name" 'sleep 300' -)
+  tf set-option -w -t "$wr" @fleet_id "$role_fid"
+  run_stop fleetS "fid:$role_fid"
+  if [ "$name" = ordinary-legacy-worker ]; then
+    [ "$rc:$out" = 0:stopped:shell ] || st_miss "13: legacy ordinary worker must stop" "rc=$rc out=$out"
+    has_win "$wr" && st_miss "13: legacy worker survived its stop"
+  else
+    [ "$rc:$out" = 5:refused:not-found ] || st_miss "13: legacy $name must stay protected" "rc=$rc out=$out"
+    has_win "$wr" || st_miss "13: legacy $name was closed"
+  fi
+  tf kill-window -t "$wr" 2>/dev/null || :
+done
+[ "$(cat "$WORK/role-code/keep.txt")" = 'unfinished local changes' ] || st_miss "13: stop changed the retained worktree"
+if [ "${1:-}" = --role-only ]; then st_done; exit $?; fi
 
 # --- 1. stop by key: exits that agent, closes that window, neighbour untouched --
 w1=$(mkwin one "$SHELLED" 1); w2=$(mkwin two "$SHELLED" 2)

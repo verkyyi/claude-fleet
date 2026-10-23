@@ -260,6 +260,10 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, FleetTasksPath), "/")
 	if rest != "" {
 		ref, what, _ := strings.Cut(rest, "/")
+		if what == "continue" {
+			s.continueFleetTask(w, r, p, ref)
+			return
+		}
 		if what == "stop" {
 			s.stopFleetTask(w, r, p, ref)
 			return
