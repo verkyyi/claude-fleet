@@ -8,6 +8,7 @@ ancestry, which provider a binary is, a linked worktree's git identity.
 Nothing here grants or records an execution; a caller decides what a read means.
 """
 import ctypes
+import errno
 import json
 import os
 from pathlib import Path
@@ -64,6 +65,103 @@ def stamp(pane, key, value):
     tmux("set-option", "-w", "-t", pane, key, json.dumps(value, separators=(",", ":")))
 
 
+class _BSDInfo(ctypes.Structure):
+    _fields_ = [("ids", ctypes.c_uint32 * 12), ("comm", ctypes.c_char * 16),
+                ("name", ctypes.c_char * 32), ("info", ctypes.c_uint32 * 6),
+                ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64)]
+
+
+def _darwin_zombie_identity(pid):
+    """KERN_PROC_PID retains zombie birth when libproc reports ESRCH.
+
+    Read only the public extern_proc prefix (sys/proc.h), at the start of
+    kinfo_proc (sys/sysctl.h); no executable/name inference or full ABI layout.
+    """
+    class Timeval(ctypes.Structure):
+        _fields_ = [("sec", ctypes.c_long), ("usec", ctypes.c_int)]
+
+    class Prefix(ctypes.Structure):
+        _fields_ = [("start", Timeval), ("vmspace", ctypes.c_void_p), ("sigacts", ctypes.c_void_p),
+                    ("flag", ctypes.c_int), ("state", ctypes.c_uint8), ("pid", ctypes.c_int)]
+
+    lib = ctypes.CDLL(None, use_errno=True)
+    mib = (ctypes.c_int * 4)(1, 14, 1, pid)  # CTL_KERN, KERN_PROC, KERN_PROC_PID
+    size = ctypes.c_size_t()
+    if lib.sysctl(mib, 4, None, ctypes.byref(size), None, 0) != 0:
+        raise OSError(ctypes.get_errno() or errno.EIO, "kernel process state unavailable")
+    if size.value == 0:
+        raise ProcessLookupError(errno.ESRCH, "kernel process identity absent")
+    if size.value < ctypes.sizeof(Prefix) or size.value > 65536:
+        raise ValueError("unexpected kernel process record size")
+    buf = ctypes.create_string_buffer(size.value)
+    if lib.sysctl(mib, 4, buf, ctypes.byref(size), None, 0) != 0:
+        raise OSError(ctypes.get_errno() or errno.EIO, "kernel process state unavailable")
+    if size.value == 0:
+        raise ProcessLookupError(errno.ESRCH, "kernel process identity absent")
+    if size.value < ctypes.sizeof(Prefix):
+        raise ValueError("incomplete kernel process record")
+    info = Prefix.from_buffer(buf)
+    if info.pid != pid or info.start.sec <= 0 or not 0 <= info.start.usec < 1000000 or not info.state:
+        raise ValueError("invalid kernel process identity")
+    return dict(pid=pid, birth_token="%d:%d" % (info.start.sec, info.start.usec),
+                state="Z" if info.state == 5 else str(info.state))
+
+
+def birth_token(birth, *, platform=None):
+    """Extract only the kernel suffix of an existing process() birth.
+
+    The lstart prefix is display text: TZ/locale changes cannot prove PID reuse.
+    Old births lacking the platform's kernel suffix are unprovable, not reusable.
+    No boot identity was stored, so equal tokens across boots remain conservative.
+    """
+    platform = sys.platform if platform is None else platform
+    if not isinstance(birth, str):
+        raise ValueError("missing kernel birth suffix")
+    pattern = r".+\s[0-9]{4}:([1-9][0-9]*):([0-9]+)" if platform == "darwin" else r".+\s[0-9]{4}:([1-9][0-9]*)"
+    if platform != "darwin" and not platform.startswith("linux"):
+        raise ValueError("unsupported kernel birth platform")
+    match = re.fullmatch(pattern, birth)
+    if match is None or platform == "darwin" and int(match[2]) >= 1000000:
+        raise ValueError("missing or invalid kernel birth suffix")
+    return ":".join(str(int(value)) for value in match.groups())
+
+
+def kernel_identity(pid):
+    """One raw PID/birth/state observation, including zombies; no exe or ps.
+
+    Darwin PROC_PIDTBSDINFO and Linux /proc/PID/stat expose birth and state in
+    the same kernel record. Permission/parse errors are not process absence.
+    """
+    if type(pid) is not int or pid <= 1:
+        raise ValueError("invalid kernel PID")
+    if sys.platform == "darwin":
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        info = _BSDInfo()
+        ctypes.set_errno(0)
+        n = lib.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if n != ctypes.sizeof(info):
+            code = ctypes.get_errno() or errno.EIO
+            if code == errno.ESRCH:
+                return _darwin_zombie_identity(pid)
+            raise OSError(code, "kernel process identity unavailable")
+        if info.ids[3] != pid or not info.start_sec or info.start_usec >= 1000000 or not info.ids[1]:
+            raise ValueError("invalid kernel process identity")
+        return dict(pid=pid, ppid=int(info.ids[4]), birth_token="%d:%d" % (info.start_sec, info.start_usec),
+                    state="Z" if info.ids[1] == 5 else str(info.ids[1]))
+    if not sys.platform.startswith("linux"):
+        raise ValueError("unsupported kernel process platform")
+    try:
+        raw = Path("/proc/%d/stat" % pid).read_text()
+    except FileNotFoundError as exc:
+        raise ProcessLookupError(errno.ESRCH, "kernel process identity absent") from exc
+    prefix, tail = raw.rsplit(")", 1)
+    fields = tail.split()
+    if (int(prefix.split("(", 1)[0]) != pid or len(fields) < 20 or not re.fullmatch("[A-Za-z]", fields[0])
+            or not fields[19].isdigit() or int(fields[19]) < 1):
+        raise ValueError("invalid kernel process identity")
+    return dict(pid=pid, ppid=int(fields[1]), birth_token=str(int(fields[19])), state=fields[0])
+
+
 def process(pid, *, ps_row=None):
     """Kernel executable + birth. ps_row reuses one observation's ppid/lstart.
 
@@ -84,11 +182,7 @@ def process(pid, *, ps_row=None):
         executable = os.fsdecode(buf.value)
         # proc_bsdinfo carries microsecond birth time; ps lstart alone permits
         # a reused PID from the same second to impersonate a stopped native.
-        class BSDInfo(ctypes.Structure):
-            _fields_ = [("ids", ctypes.c_uint32 * 12), ("comm", ctypes.c_char * 16),
-                        ("name", ctypes.c_char * 32), ("info", ctypes.c_uint32 * 6),
-                        ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64)]
-        info = BSDInfo()
+        info = _BSDInfo()
         if lib.proc_pidinfo(int(pid), 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
             raise ValueError("native process birth unavailable")
         row[1] += ":%d:%d" % (info.start_sec, info.start_usec)

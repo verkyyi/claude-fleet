@@ -166,8 +166,18 @@ mkdir -p "$NPD"; printf '{"type":"user","message":{"content":"work"}}\n' > "$NPD
 nt set-window-option -t oc:issue-1 @reap_policy merged:48h
 # a pinned session (issue #3517): its pin comes back with it
 nt set-window-option -t oc:issue-2 @pin 1
-# a template session (issue #4760): it started as an agent file
-nt set-window-option -t oc:scratch-3 @agent_def orchestrator
+# A custom agent session (issue #4760): use a real user definition, not a
+# retired Fleet role (orchestrator/steward/epic-driver deliberately refuse).
+mkdir -p "$WORK/home/.claude/agents"
+cat > "$WORK/home/.claude/agents/snapshot-reviewer.md" <<'EOF'
+---
+name: snapshot-reviewer
+description: Snapshot restore selftest agent
+model: inherit
+---
+Review the current task.
+EOF
+nt set-window-option -t oc:scratch-3 @agent_def snapshot-reviewer
 
 # ---- A. save ---------------------------------------------------------------
 out=$(ss save) || fail "A: save exited non-zero ($out)"
@@ -185,7 +195,7 @@ grep -q $'^WIN\tissue-2\t' "$WORK/conf/global/sessions.snapshot.d/oc.map" || fai
 grep -qx $'PIN\tf0000000-0000-4000-8000-000000000002' "$WORK/conf/global/sessions.snapshot.d/oc.map" \
   || fail "A: the pinned session has no PIN row in the map ($(grep -v '^WIN' "$WORK/conf/global/sessions.snapshot.d/oc.map"))"
 [ "$(grep -c '^PIN' "$WORK/conf/global/sessions.snapshot.d/oc.map")" = 1 ] || fail "A: an unpinned session got a PIN row"
-grep -qx $'AGENTDEF\tf0000000-0000-4000-8000-000000000003\torchestrator' "$WORK/conf/global/sessions.snapshot.d/oc.map" \
+grep -qx $'AGENTDEF\tf0000000-0000-4000-8000-000000000003\tsnapshot-reviewer' "$WORK/conf/global/sessions.snapshot.d/oc.map" \
   || fail "A: the template session has no AGENTDEF row in the map (#4760)"
 [ "$(grep -c '^AGENTDEF' "$WORK/conf/global/sessions.snapshot.d/oc.map")" = 1 ] || fail "A: a plain session got an AGENTDEF row"
 
@@ -212,8 +222,10 @@ cwd=$(nt display-message -p -t "oc:我的会话" '#{pane_current_path}' 2>/dev/n
 [ -z "$(nt show-window-options -v -t oc:issue-1 @pin 2>/dev/null)" ] || fail "B: an unpinned session came back pinned"
 until_ok 15 grep -q -- '--resume sid-1' "$WORK/claude-argv" || fail "B: issue-1 not resumed on sid-1 ($(cat "$WORK/claude-argv"))"
 until_ok 15 grep -q -- '--resume sid-3' "$WORK/claude-argv" || fail "B: scratch-3 not resumed on sid-3"
-nt display-message -p -t oc:scratch-3 '#{pane_start_command}' | grep -q -- "--as 'orchestrator' --resume 'sid-3'" \
+nt display-message -p -t oc:scratch-3 '#{pane_start_command}' | grep -q -- "--as 'snapshot-reviewer' --resume 'sid-3'" \
   || fail "B: the template session was resumed without --as (#4760): $(nt display-message -p -t oc:scratch-3 '#{pane_start_command}')"
+grep -- '--resume sid-3' "$WORK/claude-argv" | grep -q -- '--agent snapshot-reviewer' \
+  || fail "B: the custom agent definition was not passed to Claude"
 nt display-message -p -t oc:issue-1 '#{pane_start_command}' | grep -q -- '--as' \
   && fail "B: a plain session was resumed with --as"
 until_ok 15 grep -q -- '--resume 70000000-0000-4000-8000-000000000007' "$WORK/claude-argv" || fail "B: the no-repo session not resumed on its sid ($(cat "$WORK/claude-argv"))"

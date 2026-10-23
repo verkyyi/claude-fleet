@@ -217,6 +217,88 @@ func TestTaskSessionExitCannotReplaceStop(t *testing.T) {
 	}
 }
 
+func TestTaskSessionExitStopReplayAfterRelease(t *testing.T) {
+	s := taskStore(t)
+	task, receipt := executionExit(t, s, "released-stop")
+	if _, _, err := s.RequestTaskStop(task.ID, task.Owner, "old-alias", "repeat before exit", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	released, exit, err := s.RecordTaskSessionExit(receipt, "exit", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"released-stop-stop", "old-alias", "new-alias", "new-alias"}
+	for _, key := range keys {
+		again, stop, err := s.RequestTaskStop(task.ID, task.Owner, key, "repeat after exit", time.Now().Add(time.Hour))
+		if err != nil || stop.ID != receipt.StopOperationID || again.Generation != released.Generation ||
+			again.OperationID != released.OperationID || again.CancelRequest != released.CancelRequest ||
+			again.ExecutionOwner != "" || again.ExecutionEndpoint != "" || !again.UpdatedAt.Equal(released.UpdatedAt) {
+			t.Fatalf("released stop replay %s changed intent: %+v %+v %v", key, again, stop, err)
+		}
+	}
+	var stops, aliases int
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = 'worker_stop'`).Scan(&stops); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = ?`, taskStopAliasAction).Scan(&aliases); err != nil || stops != 1 || aliases != 2 {
+		t.Fatalf("duplicate deliverable stop or alias: stops=%d aliases=%d err=%v", stops, aliases, err)
+	}
+	resumed, err := s.ResumeTaskExecution(executionResumeOp(released, "resume"), "node-b", exit.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if _, _, err := s.RequestTaskStop(task.ID, task.Owner, key, "late old stop", time.Now()); !errors.Is(err, ErrTaskConflict) {
+			t.Fatalf("old stop %s reached new binding: %v", key, err)
+		}
+	}
+	got, _ := s.FleetTask(task.ID)
+	if got.Generation != resumed.Generation || got.CancelRequest != "" || got.ExecutionEndpoint != "node-b" || got.OperationID != resumed.OperationID {
+		t.Fatalf("old stop changed resumed task: %+v", got)
+	}
+}
+
+func TestTaskSessionExitStopReplayNeedsMatchingExitHistory(t *testing.T) {
+	for _, mutation := range []string{"missing-exit", "wrong-stop", "wrong-start", "wrong-generation", "wrong-task-fid"} {
+		t.Run(mutation, func(t *testing.T) {
+			s := taskStore(t)
+			task, receipt := executionExit(t, s, "history-stop")
+			_, exit, err := s.RecordTaskSessionExit(receipt, "exit", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mutation == "missing-exit" {
+				_, err = s.write.Exec(`DELETE FROM fleet_operations WHERE id = ?`, exit.ID)
+			} else {
+				var request taskSessionExitRequest
+				if err := json.Unmarshal([]byte(exit.Request), &request); err != nil {
+					t.Fatal(err)
+				}
+				switch mutation {
+				case "wrong-stop":
+					request.Receipt.StopOperationID = "other-stop"
+				case "wrong-start":
+					request.Receipt.StartOperationID = "other-start"
+				case "wrong-generation":
+					request.Receipt.Generation++
+				case "wrong-task-fid":
+					request.Receipt.TaskFID = "44444444-4444-4444-8444-444444444444"
+				}
+				raw, _ := json.Marshal(request)
+				_, err = s.write.Exec(`UPDATE fleet_operations SET request = ? WHERE id = ?`, string(raw), exit.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"history-stop-stop", "new-alias"} {
+				if _, _, err := s.RequestTaskStop(task.ID, task.Owner, key, "repeat", time.Now()); !errors.Is(err, ErrTaskFence) {
+					t.Fatalf("unproved released binding accepted stop replay %s: %v", key, err)
+				}
+			}
+		})
+	}
+}
+
 func TestTaskSessionExitResumeRejectsUnprovedHistory(t *testing.T) {
 	for _, indexed := range []bool{true, false} {
 		t.Run(fmt.Sprint(indexed), func(t *testing.T) {

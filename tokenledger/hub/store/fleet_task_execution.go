@@ -226,6 +226,54 @@ func taskExecutionBindingTx(tx *sql.Tx, t FleetTask) (FleetOperation, int64, err
 	return o, generation, nil
 }
 
+// taskStopBindingTx permits stop replay after a verified session exit released
+// the endpoint. This is deliberately NOT a general binding/admission reader:
+// only the exact retained start, canonical stop, attempt and generation may be
+// recovered from their accepted exit receipt. A succeeded stop alone proves
+// nothing, and a prior receipt cannot stand in for a newer execution binding.
+func taskStopBindingTx(tx *sql.Tx, t FleetTask) (FleetOperation, int64, error) {
+	if t.ExecutionEndpoint != "" || t.ExecutionOwner != "" || t.CancelRequest == "" {
+		return taskExecutionBindingTx(tx, t)
+	}
+	if t.AuthorityVersion != TaskAuthorityVersion || t.OperationID == "" || t.Generation < 2 {
+		return FleetOperation{}, 0, ErrTaskFence
+	}
+	rows, err := tx.Query(`SELECT id FROM fleet_operations WHERE action = ? AND task_owner = ? AND task_ref = ? AND task_generation = ?`,
+		taskSessionExitAction, t.Owner, t.Ref, t.Generation-1)
+	if err != nil {
+		return FleetOperation{}, 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return FleetOperation{}, 0, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return FleetOperation{}, 0, err
+	}
+	// RecordTaskSessionExit releases once; duplicates replay that same journal
+	// row. More than one receipt for a binding is inconsistent, not a guess.
+	if len(ids) != 1 {
+		return FleetOperation{}, 0, ErrTaskFence
+	}
+	_, receipt, err := taskSessionExitTx(tx, t, ids[0])
+	if err != nil {
+		return FleetOperation{}, 0, err
+	}
+	if receipt.StartOperationID != t.OperationID || receipt.StopOperationID != t.CancelRequest ||
+		receipt.AttemptID != t.AttemptID || receipt.Generation != t.Generation-1 {
+		return FleetOperation{}, 0, ErrTaskFence
+	}
+	start, _, _, generation, err := executionOperationTx(tx, receipt.StartOperationID)
+	return start, generation, err
+}
+
 func insertExecutionOperationTx(tx *sql.Tx, o FleetOperation, ref string, generation int64) error {
 	res, err := tx.Exec(`INSERT INTO fleet_operations
 		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id, task_owner, task_ref, task_generation)
@@ -617,7 +665,7 @@ func (s *Store) RequestTaskStop(taskID int64, owner, idem, evidence string, now 
 	if t.Owner != owner {
 		return t, FleetOperation{}, ErrTaskFence
 	}
-	start, generation, err := taskExecutionBindingTx(tx, t)
+	start, generation, err := taskStopBindingTx(tx, t)
 	if err != nil {
 		return t, FleetOperation{}, err
 	}

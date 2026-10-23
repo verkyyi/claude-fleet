@@ -640,33 +640,42 @@ def _kernel_process(pid):
 
 
 def _same_birth(proof):
+    from fleet_native_proc import birth_token, kernel_identity
     try:
-        return _kernel_process(proof["pid"]) == proof
+        return kernel_identity(proof["pid"])["birth_token"] == birth_token(proof["birth"])
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
 
 
 def _definitely_exited(proof):
+    return _session_root_exit_evidence(proof) is not None
+
+
+def _session_root_exit_evidence(proof):
+    """One exit predicate shared by launch recovery and read-only session proof."""
+    from fleet_native_proc import birth_token, kernel_identity
+    proof = _process_proof(proof)
+    try:
+        registered = birth_token(proof["birth"])
+    except ValueError as exc:
+        raise FenceRefused("registered kernel birth is unavailable") from exc
     try:
         os.kill(proof["pid"], 0)
     except ProcessLookupError:
-        return True
-    except PermissionError as exc:
-        raise FenceRefused("cannot verify the previous native process exit") from exc
+        return dict(proof, evidence="pid_absent")
+    except OSError as exc:
+        raise FenceRefused("native session root exit cannot be observed") from exc
     try:
-        return _kernel_process(proof["pid"])["birth"] != proof["birth"]
+        current = kernel_identity(proof["pid"])
+    except ProcessLookupError:
+        return dict(proof, evidence="pid_absent")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        # A zombie has exited but may still await its parent's waitpid. Unknown
-        # process observations are never evidence that a launch slot is free.
-        result = subprocess.run(["ps", "-p", str(proof["pid"]), "-o", "stat="],
-                                text=True, capture_output=True, timeout=2)
-        if result.returncode == 0 and result.stdout.strip().startswith("Z"):
-            return True
-        try:
-            os.kill(proof["pid"], 0)
-        except ProcessLookupError:
-            return True
-        raise FenceRefused("previous native process exit is unproven") from exc
+        raise FenceRefused("native session root birth/state cannot be observed") from exc
+    if current["birth_token"] != registered:
+        return dict(proof, evidence="pid_reused", observed_kernel_birth=current["birth_token"])
+    if current["state"] == "Z":
+        return dict(proof, evidence="kernel_zombie", observed_kernel_birth=current["birth_token"], kernel_state="Z")
+    return None
 
 
 def _session_exit_registrations(db, expected, provider):
@@ -714,34 +723,25 @@ def _session_exit_registrations(db, expected, provider):
                     or _process_proof(item["process"]) != item["process"]):
                 raise FenceRefused("native session exit has malformed native registration")
             components.add(item["component"])
-        # A previous launch may have used another provider. It must still have
-        # that provider's complete roots, never an empty/partially-started set.
-        if components not in ({"agent"}, {"server", "client"}) or (launch is current and components != required):
+        # reserve_launch can archive an interrupted initialization with a
+        # registered child and only some/no native roots. Verify those recorded
+        # roots; do not invent missing ones. A missing child remains unknown.
+        if (not components <= {"agent", "server", "client"} or "agent" in components and len(components) != 1
+                or launch is current and components != required):
             raise FenceRefused("native session exit is missing required native component registrations")
         if sorted(launch["native"], key=lambda item: item["component"]) != native.get(launch["launch_id"], []):
             raise FenceRefused("native session exit history disagrees with registered roots")
-    if set(native) != seen:
+    if set(native) - seen:
         raise FenceRefused("native session exit has orphan native registrations")
     return launches
 
 
 def _exited_session_root(proof):
-    """Absence or a different kernel birth proves only this registered root gone."""
-    try:
-        os.kill(proof["pid"], 0)
-    except ProcessLookupError:
-        return dict(proof, evidence="pid_absent")
-    except OSError as exc:
-        raise FenceRefused("native session root exit cannot be observed") from exc
-    try:
-        current = _kernel_process(proof["pid"])
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        # Permission errors, zombies without readable birth and races are
-        # unproven. A later read can establish absence; no permissive fallback.
-        raise FenceRefused("native session root birth cannot be observed") from exc
-    if current["birth"] == proof["birth"]:
+    """Prove this registered root gone, using the launch-recovery predicate."""
+    result = _session_root_exit_evidence(proof)
+    if result is None:
         raise FenceRefused("registered native session root is still alive")
-    return dict(proof, evidence="pid_reused", observed_birth=current["birth"])
+    return result
 
 
 def prove_native_session_exit(snapshot, provider, *, conf_dir=None):
