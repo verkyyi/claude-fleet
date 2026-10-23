@@ -66,6 +66,7 @@ import {
   type Window,
 } from "../pool";
 import { monthlyLabel, planName } from "../plan";
+import { CapacityPolicy, RegisterPlanTier } from "./CapacityPolicy";
 import { AddSubscriptionDialog } from "./AddSubscriptionDialog";
 
 const POLICY = "/v1/fleet/cred-policy";
@@ -374,6 +375,7 @@ export function PoolPage() {
                 {t("pool.settings")}
               </Link>
             </Button>
+            <CapacityPolicy />
             <AddSubscriptionDialog known={rows.filter((r) => r.cred && !r.owner).map((r) => `${r.cred!.provider}/${r.cred!.account}`)} onAdded={reload} />
           </>
           );
@@ -479,7 +481,7 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
           </Alert>
         )}
         <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2.5 text-sm">
-          <Field k="pool.plan.raw">{r.plan || "—"}{r.planTier && ` · ${r.planTier}`}</Field>
+          <Field k="pool.plan.raw">{r.plan || "—"}{r.planTier && ` · ${r.planTier}`} <RegisterPlanTier sub={r} reload={reload} /></Field>
           <Field k="pool.plan.monthly">{priceOf(r) || t("pool.plan.none")}</Field>
           <Field k="pool.plan.source">{t(!r.plan ? "pool.plan.none" : r.planSource === "provider" ? "pool.plan.provider" : r.planSource === "admin" ? "pool.plan.admin" : "pool.plan.legacy")}</Field>
           <Field k="pool.plan.observed">{r.planAt ? when(r.planAt) : t("pool.plan.none")}</Field>

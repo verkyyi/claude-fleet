@@ -49,6 +49,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | the session's shell | `docs/public/zh/member/usage.md` § 「一个会话能做的事」 (Tab → 「在它的目录开 shell」; open the panel again to return to the session) |
 | leaving, quitting, coming back to a session | `docs/dev/CLIENT.md` § 「放到后台 and 退出 fleet」 · `docs/dev/CLIENT.md` § 「会话结束了」 |
 | copying text out of a session | `docs/dev/CLIENT.md` § 「复制」 |
+| registering Codex subscription capacity profiles or tiers, previewing routing, disabling or restoring capacity policy | `docs/dev/CRED-RELAY.md` § 「套餐容量目录与安全预览」 |
 | quota and usage | `docs/dev/CLIENT.md` § 「额度和用量在哪看」 |
 | cannot connect | `docs/dev/CLIENT.md` § 「连不上」 |
 | Chinese shows as `_` or boxes | `docs/dev/CLIENT.md` § 「中文乱码」 |
@@ -109,3 +110,5 @@ section here or its doc in the same PR (CONTRIBUTING «面向用户的改动»).
 
 `~/.claude/fleet/bin/fleet-client-where.sh --json` prints the same reading as
 `mcp__fleet__where` (exit 3: nobody connected).
+
+Codex 本地容量预览：`fleet-cred-proxy.sh capacity-preview --sid <preview-sid>`（目标 login 的 control scope；只读缓存，不推理、不换绑）。策略与上线边界见 `docs/dev/CRED-RELAY.md`「套餐容量目录与安全预览（T972）」。

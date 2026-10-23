@@ -263,7 +263,7 @@ case "$cmd" in
     esac
     exec bash "$BIN/fleet-cred-rollout.sh" status "$@"
     ;;
-  route|mint|rebind|revoke|attach|quota|account-quota|picks|standing|pass|machine|relay-probe|credential-inspect)
+  route|mint|rebind|revoke|attach|quota|account-quota|picks|standing|capacity-preview|pass|machine|relay-probe|credential-inspect)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
     ;;
   doctor)

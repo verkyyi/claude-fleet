@@ -154,7 +154,7 @@ export function subscriptions(p: {
     return { id, label, prov, plan: lim?.plan || c?.plan || meta?.subscription_type || "",
       planSource: lim?.plan ? "provider" : c?.plan_source || "legacy",
       planAt: lim?.plan ? lim.observed_at || "" : c?.plan_at || "",
-      planTier: meta?.rate_limit_tier || c?.plan_tier || "",
+      planTier: c ? c.plan_tier || "" : meta?.rate_limit_tier || "",
       monthly: c?.monthly_cost ?? null, currency: c?.currency || "USD", h5: w.h5, h7: w.h7,
       available: !!lim && lim.available !== false, reason: lim?.reason || "",
       sessions: (p.live?.sessions || []).filter(s => s.account === id).length,

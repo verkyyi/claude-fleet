@@ -15,7 +15,7 @@
 #                       #2412): a quota 429 moves the same request to the account with room
 #   cred-sep-codex-full bin/fleet-cred-proxy.py held / standing / limit_until + the default
 #                       home unpinned (issue #4606), bin/fleet-session-cred.sh mint / standing:
-#                       a Codex session skips the account whose usage limit is spent
+#                       Codex forwards the original429 once; only future work skips a spent account
 #   cred-pool-dup       bin/fleet-cred-proxy.py pool_held / pool_resolve / store, bin/fleet-credsep.py
 #                       machine pooldup (issue #2849): a token held twice — the pool's and a
 #                       login's own accounts/<label>.hub — is seen, and folds back to ONE
@@ -40,6 +40,19 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
+
+# Shared rollout must preserve native picks before root drops, or legacy
+# launchd bootout kills the only in-memory source. Exercise the real uid-gated
+# control handler without request peer_uid seams; socket and file I/O are real.
+drill_cred_shared_picks_upgrade() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" SharedSnapshot 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="共享接替降权前、旧 launchd refresh 停服前由 root 快照；role-owned0600、空结果覆盖、失败保留旧 listener；service role 无新增 control 权限"
+}
 
 drill_cred_shared_down() {
   CAP=10   # kill -9 → both logins' sessions answered again: the service's own restart delay + a python start
@@ -186,15 +199,10 @@ drill_cred_sep_acct_full() {
   WHAT="会话所在的 $first 周限满（429）：代理把它标到重置、同一请求改走 $other 直接 200，会话凭据不变、不退出不续；后续请求留在 $other"
 }
 
-# cred-sep-codex-full (issue #4606): two Codex subscriptions on a separated login,
-# `default` with its weekly usage limit spent, `JoyGao` with room. Before, every
-# Codex session was minted for the account its HOME is — the default home, so
-# `default` — and opened onto «You've hit your usage limit … Oct 23rd» while
-# JoyGao sat idle; nothing moved it. Now the default home's session is the
-# proxy's to place, like a Claude one: the usage-limit 429 marks `default` out
-# until its reset and the SAME request runs on JoyGao; a session minted after
-# (or one minted for `default` before #4606) never touches the spent account;
-# every account out ⇒ `fleet-session-cred.sh standing` names when each is back.
+# cred-sep-codex-full (#4606, T972): Codex never replays current inference.
+# A usage-limit429 is forwarded exactly once, byte for byte, retaining the
+# current subscription. Only a later independent request can pick a healthy
+# account. Claude's same-request replay remains in cred-sep-acct-full above.
 drill_cred_sep_codex_full() {
   CAP=10
   local s0 s1 s2 code t0 n out rc full_hits
@@ -215,12 +223,23 @@ drill_cred_sep_codex_full() {
   [ -z "$(acct_of "$s0")" ] || { fail "the default home's credential names $(acct_of "$s0")"; return 1; }
   [ "$(creq "$s0" "$SB/r")" = 200 ] && grep -q tok-JoyGao "$SB/r" || { fail "s0: $(cat "$SB/r")"; return 1; }
   s1=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --provider codex --sid s1 2>&1)
+  n=$(wc -l < "$CD/codex-hits")
   t0=$(now)
   code=$(creq "$s1" "$SB/r")
   SECS=$(since "$t0")
-  [ "$code" = 200 ] && grep -q tok-JoyGao "$SB/r" \
-    || { fail "the spent account's usage limit reached the session ($code): $(cat "$SB/r")"; return 1; }
-  grep -q '"ev": "acct_switch"' "$SB/log/alpha.log" || { fail "no acct_switch in the log"; return 1; }
+  [ "$code" = 429 ] && [ $(( $(wc -l < "$CD/codex-hits") - n )) = 1 ] \
+    || { fail "Codex must forward429 after one attempt, got $code after $(( $(wc -l < "$CD/codex-hits") - n )) asks"; return 1; }
+  cmp -s "$SB/r" "$CD/codex-429-body" || { fail "Codex changed the original429 body"; return 1; }
+  FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" picks > "$SB/picks.json"
+  python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["picks"]["codex:s1"] == "default"; assert not p["pinned"]' "$SB/picks.json" \
+    || { fail "current request rebound after429: $(cat "$SB/picks.json")"; return 1; }
+  if grep -q '"ev": "acct_switch"' "$SB/log/alpha.log"; then fail "Codex switched accounts within the current request"; return 1; fi
+  full_hits=$(grep -c '^tok-default$' "$CD/codex-hits")
+  n=$(wc -l < "$CD/codex-hits")
+  [ "$(creq "$s1" "$SB/r")" = 200 ] && grep -q tok-JoyGao "$SB/r" \
+    && [ $(( $(wc -l < "$CD/codex-hits") - n )) = 1 ] \
+    && [ "$(grep -c '^tok-default$' "$CD/codex-hits")" = "$full_hits" ] \
+    || { fail "later independent request did not choose the healthy account once: $(cat "$SB/r")"; return 1; }
   # a credential the old launcher minted for the default home: the proxy's to place too
   s2=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account default --sid s2 2>&1)
   full_hits=$(grep -c '^tok-default$' "$CD/codex-hits")
@@ -234,16 +253,20 @@ drill_cred_sep_codex_full() {
     || { fail "the default home was bound to an account: $(cat "$CA/cred-proxy/sessions/s3")"; return 1; }
   out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" standing --provider codex); rc=$?
   [ "$rc" = 0 ] && [ -z "$out" ] || { fail "standing with JoyGao free said rc $rc: $out"; return 1; }
-  # both spent: the 429 reaches the session after ONE resend, and standing says when each is back
+  # Both spent: one original429, no resend/rebind; standing names each reset.
   printf '{"tok-default":{"u7":100,"full":true,"back":518400},"tok-JoyGao":{"u7":100,"full":true,"back":7200}}' > "$CD/accts.json"
   n=$(wc -l < "$CD/codex-hits")
   code=$(creq "$s0" "$SB/r")
-  [ "$code" = 429 ] && [ $(( $(wc -l < "$CD/codex-hits") - n )) -le 2 ] || { fail "all spent: $code after $(( $(wc -l < "$CD/codex-hits") - n )) asks"; return 1; }
+  [ "$code" = 429 ] && [ $(( $(wc -l < "$CD/codex-hits") - n )) = 1 ] || { fail "all spent: $code after $(( $(wc -l < "$CD/codex-hits") - n )) asks"; return 1; }
+  cmp -s "$SB/r" "$CD/codex-429-body" || { fail "all spent: original429 body changed"; return 1; }
+  FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" picks > "$SB/picks.json"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["picks"]["codex:s0"] == "JoyGao"' "$SB/picks.json" \
+    || { fail "all spent: current request rebound"; return 1; }
   out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" standing --provider codex); rc=$?
   [ "$rc" = 1 ] && case "$out" in *"default back "[0-9]*"JoyGao back "[0-9]*|*"JoyGao back "[0-9]*"default back "[0-9]*) true ;; *) false ;; esac \
     || { fail "all spent: standing rc $rc: $out"; return 1; }
   shared_down
-  WHAT="隔离登录两个 Codex 号、default 周限用完：default home 的会话由代理挑号，撞 usage limit 的 429 当场换 JoyGao 重发 200；之后新开的、旧式绑 default 的会话都不再碰 default；全用完时 standing 说「${out}」"
+  WHAT="Codex usage limit：原始429逐字节返回、仅一次上游请求、不当场换绑或重发；之后独立请求才选健康号；旧式 default 凭据也跳过已满号；全满仍一次429且 standing 说「${out}」；Claude 同请求重发另有演练"
 }
 
 # cred-pool-dup (issue #2849): a login's own accounts/<label>.hub beside the

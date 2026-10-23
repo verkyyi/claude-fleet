@@ -109,7 +109,7 @@ export function AdminTablePage<T>(p: AdminTablePageProps<T>) {
           </h1>
           {p.lead && <p className="mt-1 text-sm text-muted-foreground">{p.lead}</p>}
         </div>
-        {p.actions && <div className="flex gap-2">{p.actions(reload, rows || [])}</div>}
+        {p.actions && <div className="flex max-w-full flex-wrap gap-2">{p.actions(reload, rows || [])}</div>}
       </div>
 
       {p.nav}

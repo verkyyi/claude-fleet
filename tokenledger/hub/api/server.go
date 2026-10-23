@@ -630,6 +630,7 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/join", s.handleNodeJoin)
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
+		mux.HandleFunc(nodeCapacityPath, s.handleNodeCapacity)
 		// The public gate (claude-fleet#3574): the hub's own items for a
 		// machine's doctor; the operator reads every item and machine.
 		mux.HandleFunc("/v1/node/gate", s.handleNodeGate)
@@ -876,6 +877,8 @@ func (s *Server) routes() *routeMux {
 		// their tokens are an admin's.
 		mux.Handle(SvcPrefix, s.svcMux())
 		mux.Handle(SvcAdminPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSvcAdmin))))
+		mux.Handle(planCapacitiesPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handlePlanCapacities))))
+		mux.Handle(codexPreviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCodexPreview))))
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.

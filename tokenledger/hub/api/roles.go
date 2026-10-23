@@ -94,6 +94,7 @@ var routeAccess = map[string]string{
 	// a throwaway Job, the caller's own pod (claude-fleet#3552); a service run's Job, its own one-time key (#4005)
 	NodeJobsPath: accessSelf, NodeJobsPath + "/": accessSelf, NodeSvcRunsPath + "/": accessSelf,
 	"/v1/node/credentials": accessSelf,
+	nodeCapacityPath:       accessSelf,
 	NodeKeyPath:            accessSelf, // a node's signing key (claude-fleet#3699)
 	AdminTokenNodePath:     accessSelf, // the admin role account's token (claude-fleet#3724)
 	// The direct door (claude-fleet#3068): a machine's own list and record.
@@ -177,10 +178,11 @@ var routeAccess = map[string]string{
 	NodeRevokePath:                accessAdmin,
 	NodeRolePath:                  accessAdmin, // claude-fleet#4886
 	"/v1/fleet/credentials/audit": accessAdmin,
-	CredPolicyPath:                accessAdmin,
-	MachinePolicyPath:             accessAdmin,
-	"/v1/fleet/ssh-relays":        accessAdmin,
-	"/v1/accounts":                accessAdmin, "/v1/accounts/label": accessAdmin,
+	planCapacitiesPath:            accessAdmin, codexPreviewPath: accessAdmin,
+	CredPolicyPath:         accessAdmin,
+	MachinePolicyPath:      accessAdmin,
+	"/v1/fleet/ssh-relays": accessAdmin,
+	"/v1/accounts":         accessAdmin, "/v1/accounts/label": accessAdmin,
 	"/v1/me/quota":   accessAdmin, // the pool's windows (claude-fleet#3227)
 	"/v1/collectors": accessAdmin, "/v1/account-usage": accessAdmin,
 	"/v1/limits": accessAdmin, "/v1/limits/history": accessAdmin, "/v1/quota/history": accessAdmin,

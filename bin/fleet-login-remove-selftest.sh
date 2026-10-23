@@ -13,12 +13,14 @@
 # (FLEET_LOGIN_TEST_EUID) with FLEET_LOGIN_ADMIN_DIR — no sudo but the drops.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/login-remove-selftest.XXXXXX") || exit 2
+# The credsep purge now contacts its Unix control socket. macOS TMPDIR can
+# make that path exceed sockaddr_un.sun_path; production /var/run is short.
+WORK=$(mktemp -d "/tmp/login-remove-selftest.XXXXXX") || exit 2
 WORK=$(cd "$WORK" && pwd -P)   # one spelling of the path: $PWD is compared against it (#1216)
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 REAL_TAR=$(command -v tar) || exit 2
 mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/shim-tar-fails" "$WORK/shim-tar-warns" "$WORK/homes" "$WORK/LaunchDaemons" "$WORK/ds/groups"
-cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$BIN/fleet-credsep.py" "$WORK/bin/"
+cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$BIN/fleet-credsep.py" "$BIN/fleet-credsep-launch.py" "$WORK/bin/"
 cat > "$WORK/bin/fleet-restore.sh" <<'EOF'
 #!/bin/sh
 exit 0

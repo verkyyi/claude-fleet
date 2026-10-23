@@ -30,7 +30,7 @@ bin/fleet-credsep.sh installs; never from a login's own checkout.
 and FLEET_CREDSEP_LOG_BASE). Not root ⇒ nothing is dropped and the run is
 refused unless FLEET_CREDSEP_TEST=1 (a sandbox, where the login is yourself).
 """
-import json, os, pwd, re, shutil, signal, subprocess, sys, time
+import errno, json, os, pwd, re, shutil, signal, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROLE = "_fleetcred" if sys.platform == "darwin" else "fleetcred"
@@ -248,6 +248,86 @@ def copy_probe(conf, probe, pw_role):
         pass
 
 
+def snapshot_shared_picks(run, tenants, pw_role):
+    """Root reads the old uid-gated control BEFORE drop/handoff, never as role.
+    No listener is a cold start. An active listener's refusal/error aborts the
+    successor, leaving that daemon serving. Gather all replies before writes.
+    Only the two installed files (launcher + proxy) and stdlib are needed.
+    """
+    active, snapshots = False, []
+    try:
+        for tenant in tenants:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                conn.settimeout(2)
+                try:
+                    conn.connect(os.path.join(run, "ctl.sock"))
+                except OSError as e:
+                    if not active and e.errno in (errno.ENOENT, errno.ECONNREFUSED):
+                        return False  # retain persisted picks, including after a crash
+                    raise
+                active = True
+                req = {"op": "picks", "as": tenant["login"]}
+                if os.geteuid() != 0:
+                    if not TEST:
+                        raise PermissionError("shared snapshot requires root before drop")
+                    # Existing sandbox-only control seam, ignored by production
+                    # proxies. Auth regression runs with both TEST flags off.
+                    req["peer_uid"] = 0
+                # No caller credential/as override; tenant names are root-derived.
+                conn.sendall((json.dumps(req) + "\n").encode())
+                raw = b""
+                while b"\n" not in raw and len(raw) <= 1048576:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    raw += chunk
+                if b"\n" not in raw or len(raw) > 1048576:
+                    raise ValueError("incomplete snapshot")
+                reply = json.loads(raw.split(b"\n", 1)[0])
+                if not isinstance(reply, dict) or reply.get("ok") is not True or not isinstance(reply.get("picks"), dict):
+                    raise ValueError("snapshot refused")
+                picks = {}
+                for key, account in reply["picks"].items():
+                    if not isinstance(key, str):
+                        raise ValueError("invalid snapshot key")
+                    if key.startswith("codex:"):
+                        if not key[6:] or not isinstance(account, str) or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}", account):
+                            raise ValueError("invalid snapshot binding")
+                        picks[key[6:]] = account
+                snapshots.append((tenant["state"], picks))
+        for state, picks in snapshots:
+            fd, tmp = tempfile.mkstemp(prefix=".codex-legacy-picks-", dir=state)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    os.fchmod(f.fileno(), 0o600)
+                    os.fchown(f.fileno(), pw_role.pw_uid, pw_role.pw_gid)
+                    json.dump(picks, f)  # a confirmed empty answer clears stale picks
+                os.replace(tmp, os.path.join(state, "codex-legacy-picks.json"))
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        return active
+    except (OSError, ValueError, TypeError, KeyError):
+        die("cannot snapshot old shared Codex picks before restart/drop; old proxy retained")
+
+
+def snapshot_previous_shared_picks(rbase, run, tenants, pw_role):
+    """Shared by the root launcher and legacy service restart before bootout."""
+    tf = os.path.join(rbase, ".shared", "tenants.json")
+    # The old daemon read the prior manifest once. New tenants have no old
+    # bindings and cannot be addressed through that daemon's uid gate. Reuse
+    # only its login names; all destination paths come from today's root store.
+    previous_logins = None
+    try:
+        previous = json.load(open(tf))
+        if isinstance(previous, dict) and isinstance(previous.get("tenants"), list):
+            previous_logins = {t["login"] for t in previous["tenants"] if isinstance(t, dict) and isinstance(t.get("login"), str)}
+    except (OSError, ValueError):
+        pass
+    old_tenants = [t for t in tenants if previous_logins is None or t["login"] in previous_logins]
+    snapshot_shared_picks(run, old_tenants, pw_role)
+
+
 def shared():
     """The machine's one proxy (issue #2217): a tenant per joined login."""
     import hashlib
@@ -299,6 +379,7 @@ def shared():
     except OSError:
         version = ""
     tf = os.path.join(sdir, "tenants.json")
+    snapshot_previous_shared_picks(rbase, run, tenants, pw_role)
     tmp = tf + ".%d" % os.getpid()
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:

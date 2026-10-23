@@ -150,15 +150,26 @@ func (v *Vault) PlanMetadata(c store.Credential) (plan, source string) {
 
 // PlanTier is the rate-limit tier an admin recorded beside the plan
 // (claude-fleet EEJD: Max 5× or Max 20×), "" when none was. Only meaningful
-// with an "admin" plan — a provider-read plan names no tier here.
+// when its separately registered plan still matches the detected provider plan.
 func (v *Vault) PlanTier(c store.Credential) string {
+	registered, tier := v.PlanRegistration(c)
+	plan, _ := v.PlanMetadata(c)
+	if registered != plan {
+		return ""
+	}
+	return tier
+}
+
+// PlanRegistration exposes the explicit administrator registration separately
+// from provider detection, so a mismatch is visible rather than silently used.
+func (v *Vault) PlanRegistration(c store.Credential) (string, string) {
 	sl, err := v.sealer()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var sec Secret
 	if sl.Open(c.SecretSealed, &sec, c.PrincipalID, c.Provider, c.Account, "secret") != nil {
-		return ""
+		return "", ""
 	}
-	return sec.RateLimitTier
+	return sec.SubscriptionType, sec.RateLimitTier
 }
