@@ -6949,6 +6949,15 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_stop_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {
+    WHY="task stop entry regression: $(tail -10 "$WORK/task-stop-entry.log")"; return 1;
+  }
+  WHAT='Task stop 跨 Web/tmux/CLI 持久撤销，离线可受理，未知不降级，普通关闭不冒充原生退出'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_replay_cleanup() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-execution-control-selftest.py" \

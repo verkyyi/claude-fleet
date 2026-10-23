@@ -8,6 +8,7 @@ export type Task = {
   issue?: string; ticket_ref?: string; parked?: string; asked?: string;
   created_at: string; updated_at?: string; authority_version?: number;
   generation?: number; outcome?: string; cancel_request?: string;
+  execution_endpoint?: string; execution_owner?: string;
   task_blockers?: { version: number; generation: number; items: TaskBlocker[] };
   requested_agent?: string; resolved_agent?: string; actual_agent?: string;
   pr?: string; pr_state?: string;

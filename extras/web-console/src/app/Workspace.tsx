@@ -16,7 +16,8 @@ import { sessionPath, TermTag } from "./SessionList";
 import { copyOpen } from "./cli";
 import type { Row } from "./work";
 import { toast } from "sonner";
-import { sessionWrite } from "@/shared/sessions";
+import { canStopRow } from './task-stop';
+import { stopRow, stopAcknowledgment } from './task-stop-api';
 import { sendJSON, useMe } from "@/shared/api";
 import { useWorkRows } from "./work-rows";
 import { pendingStartRef } from "./task-cancel";
@@ -50,12 +51,12 @@ export function Workspace({ r }: { r: Row }) {
   const canOpen = !!(r.live || r.board?.worker_id) && r.group !== "gone";
 
   const stop = async () => {
-    if (!r.live?.id || stopping) return;
+    if (!canStopRow(r) || stopping || !me || me.read_only || me.view_as || viewAs) return;
     setStopping(true);
     try {
-      const error = await sessionWrite("worker_stop", r.live.id);
-      if (error) toast.error(tr(`没能停止：${error}`, `Could not stop: ${error}`));
-      else toast.info(tr("停止请求已提交，等待会话状态更新。", "Stop requested; waiting for the session observation."));
+      const result = await stopRow(r);
+      if (!result.ok) toast.error(tr(`没能停止：${result.error}`, `Could not stop: ${result.error}`));
+      else { toast.info(stopAcknowledgment(result)); reload(); }
     } finally { setStopping(false); }
   };
 
@@ -90,7 +91,7 @@ export function Workspace({ r }: { r: Row }) {
           </h1>
           <p className="text-muted-foreground truncate text-xs" data-testid="ws-meta">{headMeta(r, head.busy)}</p>
         </div>
-        {r.live ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={stopping || !!viewAs} onClick={() => void stop()} aria-label={tr("停止", "Stop")}>
+        {canStopRow(r) ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={stopping || !me || !!me.read_only || !!me.view_as || !!viewAs} onClick={() => void stop()} aria-label={tr("停止", "Stop")}>
           <Square className="size-4" />{tr("停止", "Stop")}
         </Button> : null}
         {pendingRecord && cancelRef ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8"
