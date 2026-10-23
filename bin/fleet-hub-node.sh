@@ -8,6 +8,8 @@
 #                                  writes the worker map, and downloads a session
 #                                  moved here through the hub (issue #1426)
 #   fleet-hub-node.sh deliver    (a relay the hub pushed, JSON on stdin) → apply it
+#   fleet-hub-node.sh execution-sync → import this login's authoritative stops
+#                                  on reconnect; never grants execution authority
 #   fleet-hub-node.sh env [--write [--force]] [--plist <file>]
 #                                → this login's node token file (issue #1491; the
 #                                  one subcommand meant to be run by hand — see below)
@@ -282,7 +284,7 @@ case "${1:-}" in
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
     # task (issue #3325): it takes the hub's task record on a start — the agent
     # lists CapTask, and only then does the hub send it
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\nexecution_sync\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   # The task-receipt journal is retired with the launch proof (EPIC T497 C8):
   # nothing to replay, nothing to report. compat-1v: 下一批删 — an older agent
@@ -294,10 +296,12 @@ case "${1:-}" in
   # No repo = a host that hosts none yet (T490): the person's mode all the same.
   authority-sync) if [ -n "${2:-}" ]; then exec python3 "$BIN/fleet_repo_authority.py" "$2" --sync; fi
     exec python3 "$BIN/fleet_repo_authority.py" --sync ;;
+  execution-sync) [ "$#" -eq 1 ] || die 2 "execution-sync takes no arguments"
+    exec python3 "$BIN/fleet_task_execution.py" sync-stops ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;
   deliver) ;;
-  *) die 2 "usage: fleet-hub-node.sh paths | deliver < relay.json | env [--write [--force]] [--plist <file>] | progress [--max-age S]" ;;
+  *) die 2 "usage: fleet-hub-node.sh paths | execution-sync | deliver < relay.json | env [--write [--force]] [--plist <file>] | progress [--max-age S]" ;;
 esac
 
 command -v python3 >/dev/null 2>&1 || die 75 "python3 is missing"

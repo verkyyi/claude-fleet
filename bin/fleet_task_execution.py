@@ -137,18 +137,31 @@ def _authority(command, task_ref="", *, conf_dir=None):
     env = dict(os.environ, FLEET_HUB_TIMEOUT="10")
     if conf_dir is not None:
         env["FLEET_CONF_DIR"] = str(conf_dir)
-    result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), command,
-                             *([task_ref] if task_ref else [])], text=True, capture_output=True, timeout=15, env=env)
+    try:
+        result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), command,
+                                 *([task_ref] if task_ref else [])], text=True, capture_output=True, timeout=15, env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise FenceRefused("fresh authenticated task execution authority is unavailable") from exc
     if result.returncode:
         raise FenceRefused("fresh authenticated task execution authority is unavailable")
     return json.loads(result.stdout)
 
 
-def refresh_session(session_fid, *, conf_dir=None, expected=None, controlled=False, read=None):
-    """Fresh authority BEFORE FID/admission locks; a stopped response commits first."""
+def refresh_session(session_fid, *, conf_dir=None, expected=None, controlled=False, read=None, read_stops=None):
+    """Sync stops then read fresh authority BEFORE FID/admission/queue/wake locks.
+
+    The independent read_stops/read callbacks replace transport only; neither
+    omits validation or persistence. Legacy sessions never need either read.
+    """
     current = check_session(session_fid, conf_dir=conf_dir, expected=expected, controlled=controlled)
     if current is None:
         return None
+    sync_stops(conf_dir=conf_dir, read=read_stops)
+    # Sync may revoke this session. Do not let a subsequent/cached active GET
+    # override its tombstone or proceed using the pre-sync observation.
+    current = check_session(session_fid, conf_dir=conf_dir, expected=expected, controlled=controlled)
+    if current is None:
+        raise FenceRefused("controlled session lost its local execution fence during synchronization")
     response = (read(current["task_ref"]) if read else
                 _authority("execution-get", current["task_ref"], conf_dir=conf_dir))
     actual = _snapshot(response, allow_unclaimed=True)
@@ -171,12 +184,18 @@ def sync_stops(*, conf_dir=None, read=None):
             or response["control_version"] != 1 or not isinstance(response.get("task_executions"), list)):
         raise FenceRefused("invalid task execution synchronization response")
     snapshots = [_snapshot(item, allow_unclaimed=True) for item in response["task_executions"]]
-    fence = ExecutionFence(conf_dir)
-    stopped = []
-    for snapshot in snapshots:
-        if snapshot["cancel_request"]:
-            stopped.append(fence.apply_stop(snapshot))
-    return stopped
+    try:
+        fence = ExecutionFence(conf_dir)
+        stopped = []
+        for snapshot in snapshots:
+            if snapshot["cancel_request"]:
+                stopped.append(fence.apply_stop(snapshot))
+        return stopped
+    except (OSError, sqlite3.Error) as exc:
+        # Controlled callers have not allocated or started anything yet. A
+        # failed local stop import refuses admission; it is not an unknown
+        # start outcome and must not leak past their normal refusal handling.
+        raise FenceRefused("local task stop synchronization is unavailable") from exc
 
 
 def _task_ref(value):
@@ -351,9 +370,12 @@ def validate_request(request):
     return expected
 
 
-def claim_execution(snapshot, fleet_id, *, conf_dir=None, call=None):
-    """Allocate, authenticate claim remotely, then bind; no lock spans Hub I/O."""
+def claim_execution(snapshot, fleet_id, *, conf_dir=None, call=None, read_stops=None):
+    """Sync stops before allocation, then authenticate claim and bind, lock-free I/O."""
     expected = _snapshot(snapshot, allow_unclaimed=True)
+    if expected["cancel_request"] or not is_identity(fleet_id):
+        raise FenceRefused("cannot allocate a stopped or unidentified execution")
+    sync_stops(conf_dir=conf_dir, read=read_stops)
     fence = ExecutionFence(conf_dir)
     worker = fence.allocate_worker(expected, fleet_id)
     body = dict(control_version=1, operation_id=expected["operation_id"], worker_id=worker,
