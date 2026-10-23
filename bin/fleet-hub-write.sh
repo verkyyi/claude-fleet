@@ -14,7 +14,7 @@
 #   fleet-hub-write.sh operation_get <operation_id>
 #   fleet-hub-write.sh --identity                 who this login writes as (no network)
 #
-#   <tool>       worker_message · worker_stop · worker_resume · worker_answer ·
+#   <tool>       task_continue (owner credential/certificate only) · worker_message · worker_stop · worker_resume · worker_answer ·
 #                worker_reap · worker_switch · worker_rename · worker_reap_policy · worker_pin · worker_transfer ·
 #                worker_start · gh_comment · config_set · service_control — the hub's
 #                write tools; anything else is refused here before a byte goes out.
@@ -76,7 +76,7 @@ _fcd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 [ -f "$_fcd/fleet.conf" ] && . "$_fcd/fleet.conf"
 
 WRITE_NS="fleet-write@claude-fleet"
-WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_transfer worker_start gh_comment config_set service_control "
+WRITE_TOOLS=" task_continue worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_transfer worker_start gh_comment config_set service_control "
 
 usage() { sed -n '/^#   fleet-hub-write.sh <tool>/,/^# nothing was sent/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 note() { [ "$QUIET" = 1 ] || printf 'fleet-hub-write: %s\n' "$*" >&2; }
@@ -140,6 +140,7 @@ token_source() {
 # node_door → rc 0 when this login would write by its node token (no network:
 # the broker pair is minted only by node_pair, at send time).
 node_door() {
+  [ "${TOOL:-}" != task_continue ] || return 1
   [ "${FLEET_HUB_WRITE_NODE_TOKEN:-1}" != 0 ] || return 1
   local f="$_fcd/node.env"
   if [ -r "$f" ]; then grep -q '^CCQUOTA_TOKEN=.' "$f" 2>/dev/null; return; fi
@@ -226,6 +227,12 @@ post_token() {
     local id; id=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id",""))')
     code=$(curl -sS -m 25 -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOK" \
            "$url/v1/fleet/operation_get?operation_id=$id" 2>/dev/null)
+  elif [ "$tool" = task_continue ]; then
+    local req
+    req=$(python3 -c 'import json,sys; print(json.dumps({"tool":sys.argv[1],"args_json":sys.argv[2]}))' "$tool" "$body") || return 1
+    code=$(printf 'header = "Authorization: Bearer %s"\n' "$TOK" |
+           curl -K - -sS -m 40 -o "$out" -w '%{http_code}' -X POST \
+             -H 'Content-Type: application/json' --data-binary "$req" "$url/v1/fleet/write" 2>/dev/null)
   else
     code=$(curl -sS -m 40 -o "$out" -w '%{http_code}' -X POST -H "Authorization: Bearer $TOK" \
            -H 'Content-Type: application/json' --data-binary "$body" "$url/v1/fleet/$tool" 2>/dev/null)
@@ -293,6 +300,10 @@ send() {
   fi
   if token_source >/dev/null; then post_token "$url" "$tool" "$body"; return; fi
   case "$(cert_state)" in ok\ *) post_cert "$url" "$tool" "$body"; return ;; esac
+  if [ "$tool" = task_continue ]; then
+    note "Task continuation needs the owner's viewer/session credential or valid connection certificate (fleet login); node/session worker credentials cannot continue — nothing sent"
+    return 1
+  fi
   note "$(identity | sed 's/^none //') — nothing sent"
   return 1
 }
@@ -310,6 +321,8 @@ if "error" in o and not o.get("operation_id"):
     e = o["error"] if isinstance(o["error"], dict) else {"message": str(o["error"])}
     print("1\trefused: %s%s" % (e.get("code", "") + ": " if e.get("code") else "", e.get("message", "")))
     sys.exit(0)
+if "operation" in o and o.get("task") and o.get("authorized_generation"):
+    o = o["operation"]
 st = o.get("status", "?")
 res = o.get("result") or {}
 err = res.get("error") if isinstance(res, dict) else None

@@ -6968,6 +6968,15 @@ drill_task_continue_unclaimed() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-continue-entry-selftest.py" >"$WORK/task-continue-entry.log" 2>&1 || {
+    WHY="task continue entry regression: $(tail -10 "$WORK/task-continue-entry.log")"; return 1;
+  }
+  WHAT='明确继续同一 Task：owner 凭据、停止版本围栏、丢响应原包重发；历史只读，不降级 resume/spawn'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_entry() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {
