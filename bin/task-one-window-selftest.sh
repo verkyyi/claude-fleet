@@ -19,8 +19,8 @@
 #      stderr 「已在 <sock>:<win> 跑」, --print answers with the RUNNING window
 #   E  ① fleet-task-record.sh respawn: refused for a record a window here runs
 #      and for one the hub sees live elsewhere (the spawner never called);
-#      a record with no session is opened with --origin-wid <its parent_session>
-#      (the hub's 「parent differs」 409), and --force opens one anyway
+#      a record with no session is opened without retired Parent metadata;
+#      --force opens one anyway
 #   F  ③ fleet-task-record.sh revive: a record its ID's close ended, with a
 #      window here still carrying the ID ⇒ the ledger's `reopened` (naming that
 #      window) is pushed and the hub's record comes back; a record ended by its
@@ -186,7 +186,7 @@ N=$((N + 1))
 henv bash "$BIN/fleet-task-record.sh" respawn T4 2>"$WORK/e.err" || fail "E7: respawn of a session-less record refused" "$(cat "$WORK/e.err")"
 sp=$(cat "$WORK/spawned" 2>/dev/null)
 has "E8: on the same record" "$sp" "--task T4"
-has "E9: for the record's own parent" "$sp" "--origin-wid $PS"
+hasnt "E9: historical Parent is not propagated" "$sp" "--origin-wid"
 rm -f "$WORK/spawned"
 henv bash "$BIN/fleet-task-record.sh" respawn T5 --force 2>/dev/null || fail "E10: --force refused"
 has "E11: --force opens one anyway" "$(cat "$WORK/spawned" 2>/dev/null)" "--task T5"

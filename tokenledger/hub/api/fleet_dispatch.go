@@ -139,12 +139,9 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		if _, placed := payload["params"]; !placed {
 			// A coordinator accepted the words before filing. Only its explicit
 			// ticket attachment authorizes an issue start; it cannot substitute
-			// another issue or parent when converting those words to placement.
+			// another issue when converting those words to placement.
 			if w.params["issue"] != nil && !ticketRefMatches(t.TicketRef, w.repo, fmt.Sprint(w.params["issue"])) {
 				return fault("INVALID_STATE", "issue start requires the accepted task's linked ticket")
-			}
-			if t.ParentSession != asString(w.params["origin_wid"]) {
-				return fault("INVALID_STATE", "parent differs from accepted task")
 			}
 		}
 		if params, ok := payload["params"].(map[string]any); ok {
@@ -154,7 +151,7 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 			copyParams := func(src map[string]any) string {
 				dst := map[string]any{}
 				for k, v := range src {
-					if k != "task" && k != "dispatch" {
+					if k != "task" && k != "dispatch" && k != "origin_wid" {
 						dst[k] = v
 					}
 				}
@@ -185,21 +182,18 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		if title == "" {
 			title = fmt.Sprintf("%s dispatch", d.ResolvedAgent)
 		}
-		if err = s.checkTaskParentSession(owner, asString(w.params["origin_wid"])); err != nil {
-			return fault("INVALID_ARGUMENT", "accepted parent must be a stable session identity in this account")
-		}
 		// A task is a T<n> (claude-fleet#4896): it carries a ticket only when
 		// the caller names one; none is made up from where a repo's tickets live.
 		ref := asString(w.params["ticket_ref"])
 		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo, TicketRef: ref,
 			AuthorityVersion: 1, Agent: d.ResolvedAgent, RequestedAgent: d.RequestedAgent,
-			ResolvedAgent: d.ResolvedAgent, ParentSession: asString(w.params["origin_wid"]), RequestPayload: dispatchPayload(w)},
+			ResolvedAgent: d.ResolvedAgent, RequestPayload: dispatchPayload(w)},
 			"dispatch:"+owner+":"+d.RequestID, time.Now())
 		switch {
 		case errors.Is(err, store.ErrTaskFence):
-			// Another owner's ticket or parent task is a refusal of WHO asks,
+			// Another owner's task token is a refusal of WHO asks,
 			// not a reused key (claude-fleet#4697).
-			return fault("FORBIDDEN", "ticket_ref or parent task belongs to another owner or backend")
+			return fault("FORBIDDEN", "task token belongs to another owner")
 		case errors.Is(err, store.ErrTaskInvalid):
 			return fault("INVALID_ARGUMENT", "the accepted task is invalid (ticket_ref names no ticket)")
 		case err != nil:

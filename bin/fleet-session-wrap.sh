@@ -139,7 +139,7 @@ unset _dispatch
 _dispatch=${FLEET_START_DISPATCH:-}
 if [ -n "$_dispatch" ]; then
   unset FLEET_START_DISPATCH
-  python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current >/dev/null || exit 2
+  python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current ${_execution:+--execution "$_execution"} >/dev/null || exit 2
 fi
 # The agent adapter table (T620, EPIC T580 C4) — which option holds a window's
 # conversation id, how a resume is spelled — beside this script, else beside its
@@ -527,7 +527,7 @@ while :; do
   # admission. Recheck only this initial spawn, then discard the envelope so a
   # later resume/park wake keeps its existing offline behaviour.
   if [ -n "${_dispatch:-}" ]; then
-    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current >/dev/null; then
+    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current ${_execution:+--execution "$_execution"} >/dev/null; then
       if [ -n "${FLEET_WORKER_CRED:-}" ]; then
         python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
         unset FLEET_WORKER_CRED
