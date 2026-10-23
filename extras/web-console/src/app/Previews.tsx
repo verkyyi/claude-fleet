@@ -27,10 +27,10 @@ export function Previews({ task }: { task: string }) {
     if (response?.ok) setRead(await getJSON<Read>(url));
     setBusy("");
   }
-  return <section className="space-y-2" aria-label={tr("实时预览", "Live previews")} data-testid="task-previews">
-    <h3 className="font-medium">{tr("实时预览 · 仅自己可见", "Live previews · Only you")}</h3>
-    <p className="text-muted-foreground text-xs">{tr("访问这个任务正在运行的应用。保存的 HTML / Markdown 成果仍在 Space / 活页。", "Open this task’s running application. Saved HTML / Markdown remains in Space / LivePage.")}</p>
-    {error ? <p role="alert">{tr("暂时无法读取预览，请稍后重试。", "Previews are unavailable. Please retry shortly.")}</p> : !read ? <p>{tr("正在读取…", "Loading…")}</p> : !read.enabled ? <p>{tr("私人实时预览尚未启用。", "Private live previews are not enabled yet.")}</p> : !read.previews.length ? <p>{tr("这个任务还没有实时预览。", "This task has no live previews yet.")}</p> : read.previews.map((p) => <div key={p.id} className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
+  return <section className="space-y-2" aria-label={tr("Fleet Preview · 私人实时预览", "Fleet Preview · Private live preview")} data-testid="task-previews">
+    <h3 className="font-medium">{tr("Fleet Preview · 私人实时预览", "Fleet Preview · Private live preview")}</h3>
+    <p className="text-muted-foreground text-xs">{tr("仅自己可见，访问这个任务正在运行的应用。保存的 HTML / Markdown 成果仍在 Space / 活页。", "Only you can access this task’s running application. Saved HTML / Markdown remains in Space / LivePage.")}</p>
+    {error ? <p role="alert">{tr("暂时无法读取预览，请稍后重试。", "Previews are unavailable. Please retry shortly.")}</p> : !read ? <p>{tr("正在读取…", "Loading…")}</p> : !read.enabled ? <p>{tr("Fleet Preview 尚未启用。", "Fleet Preview is not enabled yet.")}</p> : !read.previews.length ? <p>{tr("这个任务还没有实时预览。", "This task has no live previews yet.")}</p> : read.previews.map((p) => <div key={p.id} className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
       <span className="min-w-0 flex-1 break-all">{p.socket} · {p.online ? tr("在线", "Online") : tr("离线", "Offline")}</span>
       <span className="text-muted-foreground text-xs">{tr("到期", "Expires")} {new Date(p.expires * 1000).toLocaleTimeString()}</span>
       {p.online ? <Button asChild size="sm"><a href={p.url} target="_blank" rel="noopener noreferrer">{tr("打开预览", "Open preview")}</a></Button> : null}
