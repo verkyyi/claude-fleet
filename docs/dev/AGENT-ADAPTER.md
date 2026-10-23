@@ -289,3 +289,28 @@ teammate、已排队的计划触发、会话恢复或整个 Task 退出的验收
 真实入口（面板新建 → 输入框 → 草稿未发送 → 明确发送 → 完成 → 重连，不能拿一次 `exec` 代替）·
 保护不退化（CPU / 额度 / 权限 / 凭据 / 信任 / Hub 不可用时语义不变）· 分段计时、同配置公平对照 ·
 先在工作树和 CI 验，再上 drill，最后上用户 POD，出现回归立刻停。国内 drill 只跑 Codex。
+
+### 原生 durable plan 的窄取消入口
+
+Claude 2.1.295 的 mod 提供 `native.cancel.v1`：投递到现有窗格 inbox 的固定
+`native-cancel.json`，领取成 `.taken`，结果写 `.done`。独立轮询让普通命令等待 idle
+时仍能处理取消；不增加服务或对外宣布整个 Task 已可停止。当前入口尚未接入停止控制器。
+
+请求必须携带完整的已停止 execution snapshot、launch UUID、原生 session UUID、
+32 位十六进制 nonce、最多 50 个具体 cron ID，以及不超过三秒的绝对 deadline。
+`fleet_native_cancel.py` 只读核对 Control 数据库的停止代次与启动登记、调用进程到登记根的
+祖先链和内核出生身份、原生 session 登记，以及项目 `.claude/scheduled_tasks.json` 中的
+session / PID / 启动时间 / 项目四项归属。每次删除前重验记录指纹，未知归属不调用原生工具。
+不以 `CronList` 列出的全部计划作为待删除清单；同项目其他 session 的计划必须保持。
+
+原生 `CronDelete` 成功并且表与 `CronList` 都观察到目标消失，才返回
+`scope=native_durable_plans, state=observed_absent`。session-only 计划、后台工具任务、
+独立 teammate 和 Codex 计划 CRUD 尚不支持；此结果不能充当 Task 或原生根退出证明。
+deadline 到达返回 `deadline_unknown`，不再发起后续调用。已进入的 `$.tool.call` 没有
+已验证的单次中止接口，仍可能稍后结束；停止控制器必须在同一个期限内结束原生根，
+不能把 Promise 超时当作原生调用已取消。本入口不改 supervisor 的停止时序。
+
+验证：`python3 bin/fleet-native-cancel-selftest.py`、`claude plugin test mod/fleet`；
+实际原生入口用 `python3 bin/fleet-native-cancel-adapter-selftest.py` 显式运行，使用独立
+HOME、项目和 tmux socket、零模型请求。夹具只登记自己的原生根并写停止 fence，
+不启动 supervisor；因此证明的是取消适配器及归属隔离，不是完整停止流程。
