@@ -16,6 +16,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 | Parent 回报退役后，旧窗口仍带 origin 或远端 child ledger | 已空闲 Task 因另一个 Task 尚在运行而显示 looping、阻塞原生回收或到期 Loop；旧 children 印记持续存在 | Stop、回收、Loop 到期检查只问当前会话的原生工作，不扫描旧 Parent 树；兼容入口无副作用，闲置重评清理旧 children 理由，真实原生 Subagent/bg/tool/cron 仍保护 | `parent-wait-retired` |
+| 新 Task 仍写 Parent 关系，或删字段后旧启动 token 重放冲突 | 新任务继续依赖父会话；重试可能重开任务或无法恢复原接受结果 | 新请求不写 Parent；旧接受记录原字节保留，仅比较已知传输 Parent 字段的规范化投影，任务正文差异仍拒绝 | `task-parent-write-retired` |
 | 用户把 worker 改名为 home/dash/plan/backlog，或把真正面板改成普通名称 | 按 FID 主动停止时只看窗口名：真实任务关不掉，真正面板却可能被当作任务关闭 | FID 解析成功后读取既有 fleet_win_role，仅 worker 可停；名称只参与未标记旧窗口的兼容判断。隔离 socket 验证改名、keep/PIN/loop、工作树保留、旧窗口、身份歧义 | `stop-renamed-worker` |
 | Codex 私有 app-server 先退出，或收到 TERM 后先于后台同组进程退出 | guardian 只看主进程退出就结束，同组后台进程残留；事后对旧 PID 的进程组发信号又可能误伤复用该号码的进程 | guardian 自己持有独立 session/进程组，私有 app-server 继承该组；主进程退出、owner 管道 EOF、TERM 均有界清理同组成员，最后信号时仍由活 guardian 锚定身份；不声称覆盖自行 setsid 逃出的进程 | `codex-private-group-orphan` |
 | 托管发行树已带新版 Codex，但 PATH 前面的 Homebrew/npm 仍是旧版（T944） | 网页新建首条可发，私有 app-server 却是旧版；后续输入被会话门判 old_version 拒绝 | Codex 启动器优先发行树的 tools/bin，私有服务与终端客户端使用同一固定版本，tmux 保护 shim 仍在首位；没有发行工具的普通安装沿用 PATH | `codex-release-shadowed` |

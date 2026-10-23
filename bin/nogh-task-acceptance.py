@@ -28,11 +28,11 @@ GO_DIRS = {"agent": ROOT/"tokenledger/agent"}
 # task-receipt journal it exercised (EPIC T497 C8).
 ROWS = {
     "A1": ("forge-none explicit Codex", ["baseline", "dispatch", "provider"]),
-    "A3": ("remote child, wait and report", ["children", "collaboration"]),
+    "A3": ("independent tasks and historical relationships", ["children", "collaboration"]),
     "A4": ("GitHub repo, blocked then restored PR gate", ["cutover", "landing", "pr-gate"]),
     "A5": ("stale labels and defaults", ["dispatch", "provider"]),
     "A6": ("duplicate requests and lost ack", ["authority", "dispatch"]),
-    "A7": ("late report and ownership transfer", ["authority", "collaboration", "children"]),
+    "A7": ("historical replay and ownership transfer", ["authority", "collaboration", "children"]),
     "A8": ("same issue number and foreign owner", ["authority", "collaboration"]),
     "A9": ("hub outage and bounded journal", ["outbox", "projection", "browser"]),
     "A10": ("cancel/recover race with partition", ["collaboration"]),
@@ -283,9 +283,11 @@ class Harness:
         self.go("dispatch", "api", "TestAcceptedCodingAgentDispatch", "TestCodingAgentRejectsBeforeWork", "TestNodeCodingAgentAcceptedBeforeLocalOrRemote")
         self.run("provider", ["bash", ROOT/"bin/fleet-dispatch-selftest.sh"])
         self.python("children", "fleet_task_control_test.py")
-        # C8 (EPIC T497): a record is a ticket, its window an ID — no claim,
-        # generation fence or receipt journal left to exercise.
-        self.go("collaboration", "store", "TestTaskChildrenNameTheirParent", "TestUnclaimedParentDispatches", "TestIDSwitchCancelsDeadRecords")
+        # New tasks are independent; historical relationships remain readable.
+        # Require every renamed test plus the new write/replay retirement contracts.
+        self.go("collaboration", "store", "TestTaskHistoricalChildrenRemainReadable",
+                "TestUnclaimedSessionDispatchesIndependentTasks", "TestIDSwitchCancelsDeadRecords",
+                "TestTaskParentWriteRetired", "TestTaskParentHistoricalReplayPreservesBytes")
         self.go("authority", "store", "TestTaskRecordIsATicket", "TestTaskAuthorityAdditiveColumns")
         self.go("outbox", "agent", "TestRelayDeliverExitCodes", "TestRelayWorkersWritesTheCache")
         self.go("migration", "store", "TestOwnerAuthorityDryRunAndPerOwnerCutover", "TestRepoAuthorityPausedAfterFinalGate", "TestRepoAuthorityStopBoundToCurrentNative", "TestRepoAuthorityFreezeSerializesClaim")

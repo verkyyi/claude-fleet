@@ -421,6 +421,9 @@ FLEET_CRED_RELAY_URL=$RELAY
 FLEET_CRED_CENTRAL_URL=http://127.0.0.1:9/central
 FLEET_CRED_CODEX_HOMES=$WORK/codex-homes
 FLEET_CRED_PROXY_LOG=$WORK/proxy.log
+# Keep the explicitly blocked fixture probe; a minted fake relay pass must
+# not re-probe the real runner network and replace it with a direct route.
+FLEET_CRED_REPROBE_CMD=:
 CONF
 unset FLEET_CRED_RELAY_TOKEN FLEET_HUB_CURL
 PPORT=$(bash "$BIN/fleet-cred-proxy.sh" ensure --max-seconds 120 2>"$WORK/ensure.err") || st_fail "I: proxy ensure: $(cat "$WORK/ensure.err")"
