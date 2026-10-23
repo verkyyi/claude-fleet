@@ -56,8 +56,8 @@ import (
 //
 // POST /v1/node/tasks {authority_version:1, token, title, requested_agent,
 //
-//	resolved_agent, ticket_ref?:"gh:org/repo#7"|"hub:repo#7", parent_task?,
-//	parent_session?, request_payload?:{...}} accepts a durable request.
+//	resolved_agent, ticket_ref?:"gh:org/repo#7", request_payload?:{...}}
+//	accepts a durable request. Old parent_task/parent_session inputs are ignored.
 //
 // POST /v1/node/tasks/<T> {authority_version:1, mutation:{kind,
 //
@@ -218,9 +218,6 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 		if in.Mutation == nil && (!codingAgentOK(in.ResolvedAgent) || (in.RequestedAgent != "default" && (!codingAgentOK(in.RequestedAgent) || in.RequestedAgent != in.ResolvedAgent))) {
 			return "invalid or contradictory requested/resolved coding agent"
 		}
-		if err := s.checkTaskParentSession(s.nodeTaskOwner(ep), in.ParentSession); err != nil {
-			return "parent_session requires a stable session UUID in this account"
-		}
 		if in.Mutation != nil {
 			if in.Title != "" || in.RequestedAgent != "" || in.ResolvedAgent != "" || in.TicketRef != "" || in.ParentTask != "" || in.ParentSession != "" || len(in.RequestPayload) != 0 || in.Repo != "" || in.Token != "" || in.Via != "" {
 				return "mutation cannot amend the accepted request"
@@ -325,6 +322,7 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		in.ParentTask, in.ParentSession = "", ""
 		if why := in.check(s, ep); why != "" {
 			httpError(w, http.StatusBadRequest, why)
 			return
@@ -340,15 +338,6 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		if in.Mutation != nil {
 			httpError(w, http.StatusBadRequest, "mutation requires a task ID")
 			return
-		}
-		if in.ParentTask != "" && store.ParseTaskRef(in.ParentTask) == 0 {
-			// a parent named by its code or ID (EPIC T644 C1): the record keeps T<n>
-			p, err := s.nodeOwnTask(owner, in.ParentTask)
-			if err != nil {
-				taskRefError(w, in.ParentTask, err)
-				return
-			}
-			in.ParentTask = p.Ref
 		}
 		title := clipText(in.Title, taskTitleMax)
 		if in.AuthorityVersion != 0 {
@@ -372,7 +361,7 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		if in.AuthorityVersion != 0 {
 			t = store.FleetTask{Owner: owner, Title: title, Via: in.Via, Repo: in.Repo,
 				Agent: in.ResolvedAgent, AuthorityVersion: in.AuthorityVersion, RequestedAgent: in.RequestedAgent, ResolvedAgent: in.ResolvedAgent,
-				TicketRef: in.TicketRef, ParentTask: in.ParentTask, ParentSession: in.ParentSession, RequestPayload: string(in.RequestPayload)}
+				TicketRef: in.TicketRef, RequestPayload: string(in.RequestPayload)}
 		}
 		rec, err := s.Store.CreateFleetTask(t, "node:"+owner+":"+in.Token, now)
 		if err != nil {

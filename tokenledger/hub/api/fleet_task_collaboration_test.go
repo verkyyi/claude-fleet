@@ -9,8 +9,8 @@ import (
 )
 
 // The task graph's node API after EPIC T497 C8: children name their parent
-// record (no claim, no fenced report); a fenced report an older node posts is
-// answered ID_SWITCH; a parent session must be a stable session of this account.
+// record in historical fixtures; a fenced report an older node posts is
+// answered ID_SWITCH. New writes do not bind a Parent.
 func TestTaskCollaborationAPIAuthority(t *testing.T) {
 	h, _, nodes := peerHarness(t)
 	h.srv.FleetAdmins = []string{"frank"}
@@ -28,6 +28,15 @@ func TestTaskCollaborationAPIAuthority(t *testing.T) {
 		if code != 200 {
 			t.Fatalf("accept: %d %v", code, rec)
 		}
+		// Historical view fixture: acceptance no longer writes these columns.
+		if rec["parent_task"] != nil || rec["parent_session"] != nil {
+			t.Fatal("new acceptance bound a Parent")
+		}
+		if parentTask != "" || parentSession != "" {
+			if _, err := h.srv.Store.DB().Exec(`UPDATE fleet_tasks SET parent_task=?, parent_session=? WHERE id=?`, parentTask, parentSession, store.ParseTaskRef(rec["id"].(string))); err != nil {
+				t.Fatal(err)
+			}
+		}
 		return rec["id"].(string)
 	}
 	parent := accept("verk5", "parent", "", "", "gh:one/repo#7")
@@ -43,10 +52,5 @@ func TestTaskCollaborationAPIAuthority(t *testing.T) {
 	}
 	if code, _ = nodeTaskCall(t, h, nodes["bob4"].token, http.MethodGet, path, nil); code != 404 {
 		t.Fatalf("foreign owner: %d", code)
-	}
-	for _, session := range []string{wrFleetM5 + "/scratch-7", "99999999-9999-4999-8999-999999999999/" + wrFid} {
-		if err := h.srv.checkTaskParentSession("operator", session); err == nil {
-			t.Fatalf("invalid/foreign parent accepted: %s", session)
-		}
 	}
 }
