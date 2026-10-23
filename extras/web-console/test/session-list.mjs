@@ -171,7 +171,7 @@ assert.equal(listStatus(plan).kind,null, 'planned allocation alone is not accept
 const workspace = readFileSync(new URL('../src/app/Workspace.tsx', import.meta.url), 'utf8');
 assert.ok(!workspace.includes('TerminalView') && !workspace.includes('termOn'), 'task workspace cannot mount terminal backup');
 assert.ok(workspace.includes('p.delete("view")') && workspace.includes('toast.info'), 'old terminal links go to conversation with explanation');
-assert.ok(workspace.includes('sessionWrite("worker_stop"'), 'explicit stop bypasses gated reap');
+assert.ok(workspace.includes('await stopRow(r)'), 'explicit stop uses the shared Task-aware route');
 
 const original = listRows(rows);
 const changed = rows.map(r => ({...r, at: r.id==='idle'?999999:r.at}));

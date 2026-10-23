@@ -165,7 +165,7 @@ class TaskList(unittest.TestCase):
         stop, why = page["stop"]
         self.assertFalse(why)
         self.assertIsNone(v.act_ask(stop, e))
-        self.assertEqual(stop["local"](e, "", "fixture")[-2:], ["fixture", "fid:test-id"])
+        self.assertEqual(stop["local"](e, "", "fixture"), "taskstop")
         pending = row("id:pending", record_only=True, pending_start=True)
         a, _, why = v.page_of(pending)[0]
         self.assertEqual(a["id"], "stop")
@@ -256,7 +256,8 @@ class TaskList(unittest.TestCase):
             self.assertEqual(cli.stop_row(pending), 0)
             cancel.assert_called_once_with("T17")
         live = dict(key="wid:fleet/fid", name="live", task="T17", state="idle", pending_start=True)
-        with patch.object(cli, "cancel_pending_start", side_effect=AssertionError("live task cannot cancel start")), \
+        with patch.object(task_control, "call", return_value={"task": {"id": "T17"}}), \
+                patch.object(cli, "cancel_pending_start", side_effect=AssertionError("live task cannot cancel start")), \
                 patch.object(cli, "hub_write", return_value=(True, "accepted")) as stop, \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.stop_row(live), 0)

@@ -10,7 +10,7 @@ const origin = 'http://fleet-cancel.invalid';
 const fid = '00000000-0000-4000-8000-000000000900';
 const worker = `00000000-0000-4000-8000-000000000001/${fid}`;
 
-async function scenario({ status = 200, readonly = false, pending = true, tag = 'queued', live = false } = {}) {
+async function scenario({ status = 200, readonly = false, pending = true, tag = 'queued', live = false, controlled = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 850 } });
   const page = await context.newPage();
   const writes = [];
@@ -27,6 +27,7 @@ async function scenario({ status = 200, readonly = false, pending = true, tag = 
     if (u.pathname === '/v1/me') body = { role: 'user', person: 'test-owner', name: 'Test', pages: ['app'], entry: true, read_only: readonly };
     if (u.pathname === '/v1/chat/home') body = { machine: 'test', login: 'test', state: 'ok', unified: false };
     if (u.pathname === '/v1/fleet/tasks') body = { tasks: [] };
+    if (u.pathname === '/v1/fleet/tasks/T900') body = { id: 'T900', fid, ...(controlled ? { execution_endpoint: 'fixture-node' } : {}) };
     if (u.pathname === '/v1/fleet/sessions') {
       reads++;
       body = { sessions: live ? [{ machine_name: 'test', worker: { worker_id: worker, key: 'scratch-900', state: 'working', title: 'Controlled task' } }] : [],
@@ -40,6 +41,7 @@ async function scenario({ status = 200, readonly = false, pending = true, tag = 
         if (status === 200) cancelled = true;
         return route.fulfill({ status, json: status === 200 ? { cancelled: true } : { error: status === 409 ? 'session_already_started' : 'controlled_failure' } });
       }
+      if (u.pathname === '/v1/fleet/tasks/T900/stop') return route.fulfill({ status: 202, json: { stop_requested: true, execution_exit_confirmed: false, operation: { operation_id: '00000000-0000-4000-8000-000000000901', action: 'worker_stop' } } });
       body = { status: 'accepted' };
     }
     return route.fulfill({ json: body });
@@ -63,6 +65,13 @@ try {
     assert.equal(s.writes.filter((w) => w.path.endsWith('/cancel')).length, 0);
     await s.context.close();
   }
+  const controlled = await scenario({ live: true, pending: false, controlled: true });
+  await controlled.page.getByRole('button', { name: /^(停止|Stop)$/ }).click();
+  await controlled.page.waitForFunction(() => document.querySelector('[data-sonner-toast]'));
+  assert.equal(controlled.writes.length, 1);
+  assert.equal(controlled.writes[0].path, '/v1/fleet/tasks/T900/stop');
+  assert.ok(controlled.writes[0].body.idempotency_key);
+  await controlled.context.close();
   const ro = await scenario({ readonly: true });
   assert.equal(await ro.page.getByRole('button', { name: /^(取消启动|Cancel start)$/ }).isDisabled(), true);
   assert.equal(ro.writes.length, 0);

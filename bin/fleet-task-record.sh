@@ -27,6 +27,7 @@
 #                       login's book first (ids/task-codes.tsv — every answer that
 #                       carries one writes it down), else the hub; rc 1 when no
 #                       code is known (an older hub)
+#   fleet-task-record.sh stop <T<n>>      ← {idempotency_key,evidence?} on stdin; durable Task stop
 #   fleet-task-record.sh children <ref>    → the record's children
 #   fleet-task-record.sh mutate <ref>      ← a cancel of a record no window ever
 #                       opened (fleet_task_control.py cancel, EPIC T497 C13), JSON on stdin
@@ -182,7 +183,7 @@ call() {
   code=$(printf '%s\n' "$resp" | tail -n 1)
   printf '%s\n' "$resp" | sed '$d'
   case "$code" in
-    200) return 0 ;;
+    200|202) return 0 ;;
     404|405) printf 'fleet-task-record: the hub said %s (%s)\n' "$code" "$p" >&2; return 1 ;;
     *) # The ID switch (EPIC T497 C6): the hub reads sessions by ID — the caller
        # takes the ID road, and this node writes the hub's word down.
@@ -581,6 +582,11 @@ if [ "$cmd" = authority ]; then
   exit 0
 fi
 case "$cmd" in
+  stop)
+    is_tref "${1:-}" || usage
+    payload=$(python3 -c 'import json,sys; x=json.load(sys.stdin); assert isinstance(x,dict); print(json.dumps(x,separators=(",",":")))') || exit 2
+    call POST "/v1/node/tasks/$1/stop" "$payload"
+    exit $? ;;
   execution-list)
     call GET /v1/node/tasks/executions
     exit $? ;;
