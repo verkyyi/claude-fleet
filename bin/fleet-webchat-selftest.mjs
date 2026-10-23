@@ -893,7 +893,10 @@ if (part("legacy-migration")) {
   const slow = http.request({ socketPath: SOCK, path: "/api/turn", method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" } });
   const finished = new Promise((resolve) => slow.on("response", (r) => { r.resume(); r.on("end", resolve); }));
   slow.write('{');
-  await new Promise((r) => setTimeout(r, 30));
+  for (let i = 0; i < 100; i++) {
+    if (JSON.parse((await sreq("/api/busy")).body).busy) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
   ok(JSON.parse((await sreq("/api/migrate", opts)).body).why === "busy" && !existsSync(ids), "migration waits for a legacy request still reading its body");
   slow.end('}'); await finished;
   const first = await sreq("/api/migrate", opts), j = JSON.parse(first.body);
