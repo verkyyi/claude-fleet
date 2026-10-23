@@ -1,3 +1,4 @@
+# T970: 51 drills added since the last refresh, PASS wall times from green CI run 39977941560 (Ubuntu); release train 39980272536 shard 14 was cut at 156 s twice with them costed at the median.
 # T943: missing main drill costs also measured in green Ubuntu PR runs 39800805459 (#5329) and 39802872260 (#5328); only PASS wall observations, existing rows retained.
 # T943: main/admin/node PASS wall times from release train 39802904925, Linux shard14 job119909464379; the shard was cut at159s twice, not a passing whole-run duration. Newly recorded drills rebalance the slices without changing caps.
 # T532 (EPIC T516 C6): every row refreshed from PR #5010's run 39362569881 (Ubuntu, all 504 drills, 930.3 s), after the held-by-name drills stopped re-running whole selftests.
@@ -38,10 +39,13 @@
 4.2 authority-owner-cutover
 0.1 authority-retired-endpoint-blocks
 0.1 authority-superseded-fleet-row
+0.2 board-plan-facts
 0.5 bootstrap-abroad
 3.0 bootstrap-reaches-github
 0.9 break-pane
 0.3 brew-keg-700
+1.5 broken-hook-maintenance
+0.6 broken-hook-model-menu
 0.1 browser-import-access-crossed
 0.1 burst-lands-on-one
 1.1 c8-old-supervisor-reopen
@@ -50,6 +54,7 @@
 0.2 cfg-reopen-loop
 0.5 chat-budget-bypass
 0.1 chat-claude-bare-path
+1.8 chat-codex-identity-pending
 0.1 chat-copy-order
 0.1 chat-direct-admission
 0.4 chat-file-escape
@@ -58,6 +63,7 @@
 1.9 chat-gate-probe-unavailable
 5.7 chat-home-moved
 0.1 chat-late-history
+0.4 chat-legacy-history-hidden
 0.1 chat-mirror-other-person
 0.1 chat-relay-replica-hop
 0.1 chat-relay-wrong-person
@@ -82,9 +88,13 @@
 0.1 codex-helper-missing
 1.1 codex-home-trust
 0.6 codex-hook-retired-root
+0.3 codex-internal-thread-hook
+0.3 codex-interrupt-idle
 3.0 codex-mcp-busy
+2.7 codex-no-daemon-fence
 1.9 codex-no-id
 0.0 codex-pin-displaces-guard
+21.3 codex-private-group-orphan
 1.3 codex-receipt-race
 0.2 codex-release-shadowed
 19.3 codex-resume-history
@@ -96,6 +106,7 @@
 0.4 cred-central-down
 8.1 cred-central-failover-pin
 0.1 cred-central-trusted-pod
+1.1 cred-codex-native-initial
 0.6 cred-codex-path-open
 0.5 cred-enforce-fails-no-lease
 0.5 cred-existing-unseparated
@@ -131,7 +142,6 @@
 0.2 cred-sep-sudo-root
 7.4 cred-session-expire
 3.1 cred-shared-down
-1.1 cred-codex-native-initial
 1.6 cred-shared-picks-upgrade
 1.1 cred-shared-restart-loop
 0.8 cred-upstream-tenant-override
@@ -185,6 +195,7 @@
 2.4 guide-retry-forever
 1.5 guide-spare-login
 0.1 heartbeat-sys-blocked
+0.1 history-recovery-placement
 0.5 home-moved-panel-differs
 0.2 home-pool-claim-unkeyed
 2.7 home-template-leak
@@ -264,6 +275,10 @@
 1.4 mirror-private-unlisted
 1.0 module-skip-wrong
 2.2 module-split-digest
+9.2 native-cancel-before-signal
+0.3 native-exit-identity
+1.5 native-exit-submit-replay
+6.0 native-partial-admission
 4.8 native-resume-default-permissions
 1.0 new-login-first-run-dialog
 0.5 new-login-unseparated
@@ -316,7 +331,11 @@
 0.3 oss-internal-name-committed
 0.2 panel-order-split
 1.2 panel-server-dead
+0.3 parent-origin-retired
+3.7 parent-report-retired
+1.6 parent-wait-retired
 24.5 park-all-origins
+4.5 park-backspace-ghost-draft
 2.4 park-census-overcounts
 0.8 park-codex-loop-idle
 1.5 park-codex-new-thread
@@ -326,6 +345,7 @@
 1.5 park-loop-rebootstrap
 3.7 park-loses-cron
 5.6 park-loses-loop
+1.2 park-memory-no-archive
 0.2 park-old-wrapper
 0.5 park-reap-admission
 5.3 park-reap-background
@@ -336,6 +356,7 @@
 11.6 park-runtime-capacity
 5.9 park-stopped-timer-revives
 3.6 park-web-owned-probe
+0.3 park-web-probe-old-api
 2.5 park-while-watched
 4.8 peer-window-left-behind
 4.7 peer-window-ssh-killed
@@ -373,6 +394,7 @@
 0.1 pr-ack-down
 0.6 pretrust-norepo
 0.6 preview-no-code
+0.1 private-preview-isolation
 0.8 probe-ignores-relay
 0.5 probe-stale-after-release
 3.5 provisioner-off-template
@@ -396,6 +418,7 @@
 4.6 release-key-outside-train
 0.9 release-key-revoked
 2.8 release-key-status-chain
+35.2 release-oidc-runtime
 0.3 release-push-lost
 0.1 release-tampered
 8.5 release-unverified
@@ -411,6 +434,7 @@
 1.5 report-parent-key-reminted
 0.2 restart-done-not-pinned
 3.5 restore-conversation-twice
+9.5 restore-execution-identity
 4.1 restore-peer-window
 1.1 restore-role-lost
 3.7 resume-fails-fast
@@ -446,6 +470,8 @@
 2.4 session-exit
 6.0 session-exited-transient
 1.4 session-takes-client
+0.3 session-title-lost
+2.2 session-title-placeholder
 0.2 shared-dir-foreign-write
 0.6 shell-kill-fleet
 1.4 shift-enter-sends
@@ -476,6 +502,7 @@
 0.4 status-question-lost
 0.8 stop-bare-path
 4.6 stop-no-exit-hangs
+1.8 stop-renamed-worker
 4.9 stream-cut-stays
 4.9 stuck-worker-unseen
 2.1 svc-run-leaks-across-runs
@@ -484,14 +511,35 @@
 0.1 svc-usage-crosses-tenant
 0.4 sweep-admin-agent
 2.0 switch-no-session-save
+0.6 task-cancel-start-race
+5.5 task-claim-historical-identity
+4.2 task-continuation-start
+6.0 task-continue-authority
+0.4 task-continue-entry
+0.0 task-continue-historical-outcome
+3.6 task-continue-unclaimed
+6.1 task-controlled-auto-retention
+0.2 task-current-view
 2.3 task-fail-silent
+7.9 task-first-start
+0.0 task-history-current-generation
+0.9 task-local-continuation
 0.1 task-many-ids
+0.0 task-parent-write-retired
 1.7 task-report-fence
 1.7 task-rerun-root-only
+1.4 task-result-overrides-native
+1.0 task-retention-defaults
 12.2 task-start-unseen
 0.0 task-state-behind-result
+0.2 task-stop-entry
+0.7 task-stop-replay-cleanup
+3.5 task-terminal-physical-width
+8.9 task-unclaimed-node
+15.5 task-unclaimed-stop-proof
 0.0 task-window-duplicate
 0.1 task-window-never-reaped
+0.0 task-worktree-current-generation
 0.1 tcc-disclaim-sigpipe
 2.8 tcc-prompt-wedge
 0.6 tenant-admin-adopted
@@ -500,11 +548,13 @@
 3.1 term-browser-gives-up
 0.2 term-closed-lease
 0.1 term-controller-ready
+0.0 term-dead-server-lease
 0.1 term-hub-rollout
 2.8 term-last-worker-reaped
 0.1 term-other-person
 3.3 term-personal-renew
 0.1 term-relay-orphan
+0.1 term-renew-admission-refused
 1.2 term-view-auto-select
 0.2 term-view-kills-session
 0.5 thin-control-socket
@@ -522,6 +572,7 @@
 0.6 thin-upload-blocks-input
 8.4 thin-view-lost-on-drop
 0.3 tmpdir-shared-root
+0.4 tmux-snapshot-fields
 0.9 tool-wait-idle
 0.2 train-ack-down
 2.2 train-ack-reclaimed
@@ -552,6 +603,7 @@
 0.4 transfer-preparation-retry
 3.8 transfer-proxy-auth
 7.7 transfer-proxy-home
+6.0 transfer-target-runtime
 0.1 trial-dirty-handout
 6.0 trial-egress-stuck
 0.1 trial-host-no-spare
