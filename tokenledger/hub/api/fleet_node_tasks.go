@@ -270,6 +270,9 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	owner := s.nodeTaskOwner(ep)
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeTasksPath), "/")
+	if s.nodeTaskExecution(w, r, ep, owner, ref) {
+		return
+	}
 	if ref == nodeTaskSettleRef {
 		s.nodeTaskSettle(w, r, owner)
 		return

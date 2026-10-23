@@ -606,7 +606,7 @@ TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 AGENT_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 
 
-def validate_write(action, params):
+def validate_write(action, params, *, task_execution=None):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
                             "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref",
@@ -719,7 +719,9 @@ def validate_write(action, params):
         check_repo(params)
         check_text(params["body"], "body")
     elif action in WORKER_ACTIONS:
-        if action == "worker_answer":
+        if action == "worker_stop" and task_execution is not None:
+            fields(params, ("worker_id", "task", "start_operation_id", "generation", "attempt_id", "execution_endpoint"))
+        elif action == "worker_answer":
             fields(params, ("worker_id", "answer"))
         elif action == "worker_rename":
             fields(params, ("worker_id", "name"))
@@ -748,7 +750,8 @@ def validate_write(action, params):
                 raise Fault("INVALID_ARGUMENT", "account must be an account label")
         else:
             fields(params, ("worker_id",), ("text",) if action == "worker_message" else ())
-        parse_worker_id(params["worker_id"])
+        if params["worker_id"] or not (action == "worker_stop" and task_execution is not None):
+            parse_worker_id(params["worker_id"])
         if action == "worker_message":
             check_text(params.get("text"))
         if action == "worker_answer":

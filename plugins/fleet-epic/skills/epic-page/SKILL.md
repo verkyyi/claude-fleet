@@ -1,23 +1,18 @@
 ---
 name: epic-page
 description: >-
-  The one HTML frame both EPIC pages render into — the design page
-  /fleet-epic-plan hosts before the operator confirms a batch, and the batch
-  report /fleet-epic-report hosts after it ends — so the operator reads the pair
-  as one document. Use when either command builds its page: copy template.html,
-  keep the <style> and the section ids, fill the ⟨slots⟩, open it on the operator's computer.
+  Shared HTML frame for an ordinary Task's design and implementation evidence.
+  Use with /fleet-task-plan. The historical epic-page name remains for existing
+  pages; it creates no EPIC, batch, parent task or driver.
 ---
 
-# epic-page — the shared frame for the EPIC trio's pages
+# epic-page — 通用任务设计页模板
 
 <!-- fleet skill -->
 
-Two of the three EPIC commands render a page for the operator: `/fleet-epic-plan`
-puts a **design page** in front of them before the batch's parent task is opened (issue #809), and
-`/fleet-epic-report` renders the **batch report** after the run ends. Both are
-model-authored HTML, and without a shared source they came out looking like two
-different products — the first two reports on this machine did. This skill is the
-shared source: one `template.html`, one `<style>`, one set of section ids.
+一个 Task 的设计与实施证据共用 `template.html`、样式和章节锚点。
+历史文件名和已发布页面保持可读；页面中的 members/cards 是实施说明，
+不创建集合、子任务或协调者。复杂工作由当前 Task 的 Agent 负责。
 
 ## Use
 
@@ -58,9 +53,8 @@ The page has two readers, and the layers keep them from crowding each other out:
   `prod-3a229eb80` is fold material too.
 - **下层 — the people doing the work.** Every technical field, inside
   `<details class="fold">`, **default closed and complete**. The fold changes the
-  visible ORDER, never the content: the write-back into the parent task's
-  charter carries **both** layers, so a member's session gets a field-for-field
-  superset of what the page shows.
+  visible ORDER, never the content: the task description carries **both** layers,
+  so its Agent can read every implementation detail on the page.
 
 The fold's `<summary>` is a real tap target on a phone, and the `@media print`
 block force-opens every `<details>` (both the `::details-content` path and the
@@ -69,8 +63,8 @@ legacy `display:none` one), so nothing is lost to paper.
 ## The decider's view (issue #881)
 
 Six rounds of 发起人 feedback on EPIC #883's page, fixed into the frame so the
-next page starts where that one ended. `/fleet-epic-plan` step 4 lists them as
-numbered rules; the frame's comment block and slots already follow them:
+next page starts where that one ended. The frame's comment block and slots
+already follow these rules:
 
 - **Plain words** — the number band reads 要做的事 / 有空再做 / 要看的指标 /
   开跑前要处理; 范围 and 风险 are short plain sentences (「会出什么事 — 我们怎么兜住」).
@@ -93,7 +87,7 @@ The folds change the page, never the charter — write-back is unchanged.
 The frame gives every slot; it does not say what a good slot holds. On
 2026-09-22 a design page filled every slot of this frame and was still sent back
 (「可读性还差很多」) — and every miss was on the surface. These rules are the
-difference; `/fleet-epic-plan` step 4 numbers them 0 and 16–23, same wording.
+difference; they apply directly to each ordinary Task design page.
 
 0. **动笔前先读一份已批的样例页 — its SURFACE.** Pick one the 发起人 approved in
    the new format and read it with every fold closed, before you write a word:
@@ -129,7 +123,7 @@ difference; `/fleet-epic-plan` step 4 numbers them 0 and 16–23, same wording.
   backlog, however cheap; the 「更多风险与拆分理由」 fold names what was left out
   and why, so leaving it out reads as a choice.
 - **A visual member carries its 改前 / 改后 in its card** (issue #1754, T699; rule 24
-  in `/fleet-epic-plan`). A member that changes something the user sees — dash /
+  in the task design). A member that changes something the user sees — dash /
   侧栏 rows, 状态栏 / 顶栏, 弹出菜单, 网页, 小程序 pages, a report page's 样式 — gets
   the frame's `div.cmp` block in its card's **upper layer** (under 怎么算成功, never
   in the fold): 改前 from today, 改后 high fidelity — the look and the words that
@@ -283,18 +277,12 @@ is highlighted), a 「有意见」 under each step (`cause-<step>`) and card
   rows the owning session writes with `set_data`) and marks the item 已采纳 / 未采纳
   without a new version; the spec's `replies_done` renders the same mark statically.
 
-**The orchestrator's rule** (its agent file, 「方案页的意见表」): every plan page's
-`replies` table is read in its routine poll — `list_data_rows` `since` the last
-cursor — and each item's last row handed to the session that made the page. A
-withdraw is handed on too; if that session already acted on the item, it says
-whether it can go back and either does or reports why not.
-
-What the 活页 does not give yet (asked of the 活页 team): a row's server time / id in
-`GET` (hence the page's own `at`), which member wrote it (`_author` is a flag),
-the author's own held rows, a reader deleting their own row (hence `withdraw`
-rows). The 活页's own comment box (bottom right, a selected sentence) reaches the
-orchestrator too: `list_feedback` returns the sentence, `reply_feedback` answers on
-the page.
+**The Task owner's responsibility:** the Agent responsible for this design reads
+its page's feedback when continuing the work, applies authorized changes and marks
+`replies_done`. A withdrawn decision is checked against work already performed;
+the Agent explains whether it can be reversed. No separate coordinator, timer,
+subscription or parent-directed report is created. The page's comments can be
+read with `list_feedback` and answered with `reply_feedback` when authorized.
 
 ## The sections
 
@@ -302,7 +290,7 @@ the page.
 |---|---|---|
 | `#delivered` | report | **first section**: what a user can do now that they could not before — capabilities in the reader's words, not PR counts, no keys |
 | `#metrics` | both | 目标 — the metric rows 指标 / 现在 / 目标 (report: 之前 / 现在 / 目标, `xt c4`), numbers only; each row opens on ITS 成员 / 多久能读出来 / 读数口径 (T764); the plan's 范围 (做 / 不做) follows under the rows. The plan writes it from the theme's diagnosis (「本批不量」 when there is none, never blank, never invented); the report fills 现在 row by row (「⟨date⟩ 再看」 / 「本批未声明指标」, never back-filled) |
-| `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded); 共同约定 folded — verbatim into the parent body. 范围 moved under `#metrics` (T764) |
+| `#charter` | plan | 先回答 (optional — only when the theme is a question: 别人怎么做 / 我们怎么做 table + 我们的价值, sources folded); 共同约定 folded — verbatim into the task description. 范围 moved under `#metrics` (T764) |
 | `#members` | both | 解决方案 — one `.ob` per member, `id="m-<key>"`, wrapping a `<details class="card">` that is ONE line (名称 + 一句) until tapped, grouped by theme (`h3.grp`), 有空再做 last. Tap 1: 目标 / 为谁 / 解决什么 / 怎么算成功 (+ the report's `.proof` grid); a visual member adds its `div.cmp` 改前 / 改后 block here (`fleet-task-page.py compare`); tap 2, `<details class="fold">`: 编号 / 来源 · 方案 · 接口·约定 · 依赖 · 完成判据 · **上线证据** — the card IS the member's charter section, both layers |
 | `#gaps` | report | **还差什么 · 下一步** (issue #929) — one two-column table 还差什么 / 建议下一步, one row per gap, one short clause per cell; an empty kind (待部署, 要人做的) is no row; the next-batch suggestion is a row (「下一批主题：…」); no lede, no trailing note, no 这批不做. Carries the `#next` anchor. The band's 还差什么 = its row count |
 | `#risks` | plan | 可能出的问题 — one plain sentence each; technical risks + why this split in the fold |
@@ -325,6 +313,5 @@ a URL to screenshot, a command whose output to keep, a pane to `capture-pane`.
 Write it so both can act on it without asking.
 
 Artifact publishing is hook-blocked inside fleet sessions (issue #526); the page
-goes to 活页, private, and the parent task keeps what must outlive it — the plan
-writes the page's content into the charter, the report's closing summary goes on
-the parent's record (issue #4957).
+goes to 活页, private, and the ordinary Task keeps its description, page reference and implementation
+evidence. No parent record or report-routing mechanism is required.

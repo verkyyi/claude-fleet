@@ -242,9 +242,9 @@ func (s *Store) ClaimTaskExecution(taskID int64, owner, operationID, endpoint, w
 		return FleetTask{}, err
 	}
 	defer tx.Rollback()
-	// Different tasks have different row locks; the worker identity lock also
-	// serializes competing claims across tasks. Stop does not release it.
-	if err = s.d.lockKey(tx, "fleet_tasks", "task-execution-worker:"+workerID); err != nil {
+	// A Session FID survives moves between fleets. Serialize on that immutable
+	// identity, not its current fleet prefix. Stop does not release it.
+	if err = s.d.lockKey(tx, "fleet_tasks", "task-execution-session:"+fid); err != nil {
 		return FleetTask{}, err
 	}
 	t, err := s.taskInTx(tx, taskID)
@@ -265,11 +265,36 @@ func (s *Store) ClaimTaskExecution(taskID int64, owner, operationID, endpoint, w
 		return t, ErrTaskFence
 	}
 	var other int64
-	err = tx.QueryRow(`SELECT id FROM fleet_tasks WHERE execution_owner = ? AND id <> ? LIMIT 1`, workerID, t.ID).Scan(&other)
+	err = tx.QueryRow(`SELECT id FROM fleet_tasks WHERE (execution_owner LIKE ? OR worker_id LIKE ? OR fid = ?) AND id <> ? LIMIT 1`, "%/"+fid, "%/"+fid, fid, t.ID).Scan(&other)
 	if err == nil {
 		return t, ErrTaskConflict
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
+		return t, err
+	}
+	// A pre-protocol session may have no execution_owner anywhere. Its ledger
+	// still owns its identity, including aliases retained after migration. A
+	// closed ledger is history, not authorization to move that identity to a
+	// different task. The node must allocate a fresh session identity instead.
+	var idOwner, idTask, idTaskFID, idAliases string
+	err = tx.QueryRow(`SELECT owner, task, task_id, aliases FROM fleet_ids WHERE id = ?`, fid).Scan(&idOwner, &idTask, &idTaskFID, &idAliases)
+	if err == nil {
+		if idOwner != owner || idTask != "" && idTask != t.Ref || idTaskFID != "" && idTaskFID != t.FID {
+			return t, ErrTaskConflict
+		}
+		if t.ExecutionOwner == "" && fid != t.FID && idTask != t.Ref && idTaskFID != t.FID {
+			return t, ErrTaskConflict // an unassigned old session is not a fresh identity
+		}
+		var aliases []string
+		if json.Unmarshal([]byte(idAliases), &aliases) != nil {
+			return t, ErrTaskConflict
+		}
+		for _, ref := range aliases {
+			if ParseTaskRef(ref) > 0 && ref != t.Ref {
+				return t, ErrTaskConflict
+			}
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return t, err
 	}
 	if t.ExecutionOwner != "" {

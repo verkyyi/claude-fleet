@@ -38,7 +38,8 @@ import (
 
 // placeRequest is the node's question.
 type placeRequest struct {
-	Repo string `json:"repo"`
+	ControlVersion int    `json:"control_version"`
+	Repo           string `json:"repo"`
 	// Kind is what opens: "" / "issue" (a worker on an issue — the lease's
 	// holder asks) or "scratch" (claude-fleet#1541: a raw scratch session, which
 	// has no issue and takes no lease; its scratch-<N> is minted by the machine
@@ -373,6 +374,11 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusConflict, errorObject(err)["message"])
 		return
 	}
+	if req.ControlVersion != 0 && (req.ControlVersion != 1 || req.Dispatch == nil) {
+		httpError(w, http.StatusBadRequest, "control_version 1 requires an accepted dispatch")
+		return
+	}
+	var executionWrite writeRequest
 	taskOwnsIssueLease := false
 	if req.Dispatch != nil {
 		input := map[string]any{"node": req.Node, "idempotency_key": req.Dispatch.RequestID,
@@ -405,6 +411,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		if accountClassBinds(req.AccountClass) {
 			input["account_class"] = req.AccountClass
 		}
+		if req.ControlVersion == 1 {
+			input["control_version"] = 1
+		}
 		accepted, _, e := parseWrite("worker_start", input)
 		if e == nil {
 			e = s.acceptDispatch(p, &accepted)
@@ -413,6 +422,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusConflict, errorObject(e)["message"])
 			return
 		}
+		executionWrite = accepted
 		req.Dispatch = accepted.params["dispatch"].(*dispatchChoice)
 		req.Idem = req.Dispatch.RequestID
 		task, e := s.Store.FleetTask(store.ParseTaskRef(req.Dispatch.Task))
@@ -438,6 +448,15 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pl.FleetID == fleetID && (req.Dispatch == nil || req.LocalDispatch) {
+		if req.ControlVersion == 1 {
+			out, e := s.authorizeLocalTask(r.Context(), p, executionWrite, req.Idem, pl)
+			if e != nil {
+				taskExecutionError(w, e)
+			} else {
+				writeJSON(w, http.StatusOK, out)
+			}
+			return
+		}
 		s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine), now)
 		writeJSON(w, http.StatusOK, map[string]any{"local": true, "placement": pl, "dispatch": req.Dispatch})
 		return
@@ -490,7 +509,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	next := func(a placeAttempt) (done bool, ok bool) {
 		// An accepted dispatch is tried on the next machine too (claude-fleet
 		// T672): each try its own operation (retryIdem), the same work.
-		if req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
+		if req.ControlVersion == 1 || req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
 			return false, false
 		}
 		attempts = append(attempts, a)
@@ -559,6 +578,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			idem = retryIdem(baseIdem, try) // a new start, not the declined one again
 		}
 		args := map[string]any{"fleet_id": pl.FleetID, "node": req.Node, "idempotency_key": idem}
+		if req.ControlVersion == 1 {
+			args["control_version"] = 1
+		}
 		if noRepo {
 			args["no_repo"] = true
 		} else {
@@ -616,7 +638,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			var heard error
 			op, heard = s.awaitOperation(r.Context(), op, time.Now().Add(tw))
 			oc := outcomeOf(op, m)
-			if oc.State == "unknown" {
+			if oc.State == "unknown" && req.ControlVersion == 0 {
 				oc = neverStarted(op, heard, oc, tw)
 			}
 			resp["outcome"] = oc

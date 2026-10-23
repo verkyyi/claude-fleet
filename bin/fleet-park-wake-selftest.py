@@ -84,6 +84,35 @@ class Timers(fixture.Park):
         self.assertGreaterEqual(wakes[0]['ts'], self.due)
         self.assertLessEqual(wakes[0]['ts'], self.due + 15)
 
+    def test_task_stop_revokes_due_wake_without_losing_words(self):
+        from fleet_task_execution import ExecutionFence
+        import fleet_park_wake as wake
+        self.setup_timer(cron=True)
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(fixture.gate.park(self.fid).get('ok'))
+            fence = ExecutionFence()
+            snapshot = dict(task_ref='T72', task_fid='33333333-3333-4333-8333-333333333333',
+                            generation=1, binding_generation=1, attempt_id='task:T72:g1',
+                            operation_id='op-start', execution_endpoint='node-a',
+                            execution_owner='44444444-4444-4444-8444-444444444444/' + self.fid,
+                            cancel_request='')
+            fence.bind(snapshot, authorized=True)
+            fence.request_stop('T72', 'op-stop', generation=2)
+        self.set('@task_execution', json.dumps(snapshot))
+        contract_path = self.root / 'conf/wake' / (self.fid + '.json')
+        due = json.loads(contract_path.read_text())['next']
+        with patch.dict(os.environ, self.env):
+            fixture.gate.revoke_task_work(self.fid)
+        self.tick(due)
+        self.tick(due + 60)
+        contract = json.loads(contract_path.read_text())
+        self.assertEqual(contract['next'], 0)
+        self.assertTrue(all(j['next'] is None for j in contract['jobs']))
+        self.assertEqual(contract['jobs'][0]['prompt'], self.prompt)
+        self.assertTrue(self.opt('@parked'))
+        self.assertFalse((self.root / 'launch-args').exists())
+        self.assertFalse(self.opt('@park_wake'))
+
     def test_cron_three_rounds(self):
         self.setup_timer(cron=True)
         for _ in range(3):
@@ -248,7 +277,8 @@ class Timers(fixture.Park):
                                                      'active_record', 'active_generation')}
         ledger.write_text(json.dumps(record))
         with patch.dict(os.environ, self.env):
-            self.assertTrue(fixture.gate.park(self.fid).get('ok'))
+            result = fixture.gate.park(self.fid)
+            self.assertTrue(result.get('ok'), result)
             # The old dispatcher sees its ownership moved and does no native I/O.
             wake.loop_module().dispatch(ledger, now=self.due)
         self.assertEqual(json.loads(ledger.read_text())['park_fid'], self.fid)

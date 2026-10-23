@@ -115,7 +115,11 @@ class Client:
             if remaining <= 0:
                 raise TimeoutError('Codex RPC deadline exceeded')
             self.socket.settimeout(remaining)
-            chunk = self.socket.recv(count - len(data))
+            try:
+                chunk = self.socket.recv(count - len(data))
+            except socket.timeout as exc:
+                # Python 3.9 still gives socket.timeout its own OSError type.
+                raise TimeoutError('Codex RPC deadline exceeded') from exc
             if not chunk:
                 raise EOFError('Codex RPC connection closed')
             data.extend(chunk)

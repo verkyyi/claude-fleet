@@ -103,9 +103,9 @@ got=$(lib fleet_task_take nope); rc=$?
 st_eq "LIB: not a record — rc 1" " 1" "$got $rc"
 
 # ---- OPEN: the spawner's block, as dash-raw-session.sh runs it -----------------
-sed -n '/^# A task.s window goes by the task.s own ID/,/^fi$/p' "$BIN/dash-raw-session.sh" > "$WORK/open.sh"
+sed -n '/^# A task.s window goes by the task.s own ID/,/^# Spawn non-invasive/{ /^# Spawn non-invasive/d; p; }' "$BIN/dash-raw-session.sh" > "$WORK/open.sh"
 st_count; [ -s "$WORK/open.sh" ] || st_miss "OPEN: dash-raw-session.sh has the task-ID block"
-run_open() { FLEET_TASK_FID="$1" TASK_REF="$2" PREV_ID="$3" REOPEN_FID='' bash -c '. "$1/fleet-lib.sh"; . "$2"; printf "%s|%s|%s" "$TASK_FID" "$TASK_TAKE" "$PREV_ID"' _ "$BIN" "$WORK/open.sh"; }
+run_open() { FLEET_TASK_FID="$1" TASK_REF="$2" PREV_ID="$3" REOPEN_FID='' bash -c 'BIN="$1"; . "$BIN/fleet-lib.sh"; . "$2"; printf "%s|%s|%s" "$TASK_FID" "$TASK_TAKE" "$PREV_ID"' _ "$BIN" "$WORK/open.sh"; }
 st_eq "OPEN: a redo here goes by the task's ID, no prev to itself" "$TF|here|" "$(run_open "T9=$TF" T9 "$TF")"
 st_eq "OPEN: another machine's ID — a new one after it" "||$OTHER" "$(run_open "T5=$OTHER" T5 '')"
 st_eq "OPEN: no task — nothing" "||" "$(run_open '' '' '')"

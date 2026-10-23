@@ -1,220 +1,102 @@
 ---
-description: One task's design page — 问题与原因 · 目标 · 解决方案 · 风险 · 需要你定的事 · 上线后怎么验收 — answered on the page, and the task opened from it only after you say yes.
+description: Design one ordinary Task — explain the problem, intended behavior, implementation and acceptance on a shared page.
 ---
 
-# /fleet-task-plan — one task, one design page, then the task
+# /fleet-task-plan — 一个 Task 的设计页
 
-<!-- fleet skill · owner: hub -->
+<!-- fleet skill · owner: task -->
 
-`/fleet-epic-plan`'s little sibling (T661). An EPIC is a batch; this is ONE piece
-of work — most often a problem someone has to explain: what goes wrong, why, what
-we change, where it stops. You name the **subject**; this writes **one design
-page** the operator reads on their phone, publishes it to 活页 privately and pushes
-it to their WeChat, and — **only after they nod** — opens ONE hub task (`T<n>`)
-whose words are the page, both layers, and whose session implements it.
+把用户的目标写成可直接实施的设计方案。复杂工作仍是一个 Task，由负责它的
+Agent 自行使用原生 Subagent 或 inline 完成；不创建 EPIC、Batch、Parent–Child
+关系或专属 driver。`fleet-epic` 包名和 `epic-page` 文件路径暂留兼容旧安装，
+它们只提供通用页面模板，不代表新的任务集合。
 
-**Argument** (`$ARGUMENTS`): the subject in the operator's words — *"批次报告送不到
-你手里"*, *"新会话开得慢"*. Required: with none, ask for one and stop.
-`--repo <owner/name>` names the repo the change lands in (else the pane's own,
-else ask — the same resolution as `/fleet-epic-plan` step 0).
+`$ARGUMENTS` 是用户的主题，可带 `--repo <owner/name>`。已有当前任务与主题时
+直接沿用；信息缺失时先读上下文并完成不依赖答案的调查。
 
-**Why it lives in the fleet-epic plugin.** It renders into the SAME frame as the
-EPIC pages (`skills/epic-page`: one `<style>`, one two-layer rule, one lint), so
-the operator reads an EPIC page and a task page as one family, and a change to
-the frame changes both. The core keeps the parts any caller can use — the page
-script `bin/fleet-task-page.py` and the lint `bin/epic-page-surface.sh`; the
-command is the plugin's, like its siblings. No plugin ⇒ no command; the `task`
-tool still opens a task from plain words.
+## 1. 读取现状与任务环境
 
-## 0. Resolve the fleet, the repo and the hub (FIRST, every time)
+先读现有界面、实现、任务正文和用户约束。方案中的原因须有可核验的代码、日志、
+原生事件或复现证据；新功能说明当前行为及预期变化。不要为了写方案创建新会话。
 
-Run `/fleet-epic-plan`'s step 0 block verbatim (fleet, `fleet_target_repo`,
-`fleet-task-record.sh authority`). `RC=4` ⇒ ask which repo; `RC=1` ⇒ abort; no
-hub ⇒ say so in one line and stop: a task is a hub record (issue #4898) and there
-is nowhere else to put it.
+需要确定仓库时使用现有 resolver；变量只在当前 shell 调用中有效：
 
-## 1. Find out what is true
+```sh
+source ~/.claude/fleet/bin/fleet-lib.sh
+TASK_FLEET=$(fleet_current_session)
+fleet_load_conf "$TASK_FLEET"
+TASK_REPO=$(fleet_target_repo "$TASK_FLEET" "<explicit repo or empty>")
+TASK_REPO_RC=$?
+```
 
-Read before you write. A cause on the page is a claim the operator will act on:
+`TASK_REPO_RC=4` 表示需用户选择仓库，`1` 表示该仓库不在 Fleet 中；不要猜测。
+只写设计页不要求 Hub 在线。确需新建独立 Task 时，再读取
+`fleet-task-record.sh authority` 验证 Hub；失败时保留方案，不改用 GitHub issue。
 
-- **现象** — what the person sees, counted, one fact a line (「3 个批次的完成通知一个都没到」).
-- **原因** — reproduce it, then walk it step by step in plain words; keep the
-  **证据** — code lines (`file:line`), log lines, the live state (tmux options,
-  ledger rows, a command's output) — each on the step it proves (T764).
-- No cause to find (a plain new feature) ⇒ the spec's `"kind": "feature"`: the
-  section is 「现在的样子与为什么要做」 (`lede` + `points`).
+## 2. 制作方案与最终效果
 
-Exclude what someone is already doing (`mcp__fleet__status`, ask the person).
-
-## 2. Write the spec, render the page
-
-Copy the example and fill it — `plugins/fleet-epic/skills/epic-page/task-page.example.json`
-is a whole, approved page (the orchestrator's first one, 2026-10-20):
+使用同一页面的两层阅读结构：表层为用户展示问题、目标、最终行为、风险与必要选择；
+展开后完整提供技术方案、文件位置、接口约束、实施顺序及验收方法。
 
 ```sh
 cp ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/task-page.example.json <scratchpad>/task-<slug>.json
-# … edit …
 python3 ~/.claude/fleet/bin/fleet-task-page.py render <scratchpad>/task-<slug>.json -o <scratchpad>/task-<slug>.html
 ```
 
-The script owns the frame (epic-page's `<head>` + the task layout); you own the
-words. Top to bottom:
+填入本次任务内容，不沿用示例的事实。界面变化使用「改前 / 改后」：
+`compare: {"before": {"html": "…"}, "states": [{"label": "运行中", "html": "…"}]}`
+可表达多个最终状态。渲染器和
+`plugins/fleet-epic/skills/epic-page/SKILL.md` 管理公共样式。核心字段：
 
-| part | spec key | what goes there |
-|---|---|---|
-| 标题 + 副题 | `title` · `sub` | the subject in **≤ 16 字**; the subtitle ONE sentence **≤ 30 字**, no brackets, only where it stops (「…0 份丢失就停」) |
-| 数字条 | `band` | 根本原因数 / 要改的地方 / 影响面 (e.g. 已经丢的回报 15) |
-| `#problem` 问题与原因 | `problem` | the symptom first: ONE sentence (a string, ≤ 40 字), or a few facts — one a line, **≤ 25 字**, the number first, no reasons |
-| ↳ `#cause` (anchor) | `cause.lede` · `cause.steps[]` · `cause.other[]` | one-sentence lede; the walk `{step, what, evidence [li]}` — **each step opens on ITS evidence** (file:line, the log, the scene); a step with none is a plain row, no ▸. What fits no step / metric / card goes in `other` `{kind: code·log·scene·ref, title, ref (file:line), excerpt (a line or two), text}` — grouped by kind, a title each |
-| `#metrics` 目标 | `metrics[]` | `{name, now, target, how}` — numbers only on the row; **each row opens on how IT is measured** |
-| ↳ `#charter` (anchor) | `charter.do` · `charter.dont` | 做 / 不做 under the metric rows, short plain items |
-| `#members` 解决方案 | `members[]` | one card per place we change: `name` + `line` (one line until tapped), `what` (做什么, plain), `tech` [[方案 …], [完成判据 …]] folded; a visual change adds `compare` (改前 / 改后, below). A card with nothing past its line has no ▸ |
-| `#risks` | `risks` · `risks_tech` | 「会出什么事 — 我们怎么兜住」 |
-| `#signoff` 需要你定的事 | `signoff` | `{q, rec, default, options}` — 事项, 建议, the DEFAULT (what counts when nobody picks; old `[事项, 建议]` rows default to 按建议) and the other options; the line under it says 「点头即全部按建议」 |
-| `#evidence` 上线后怎么验收 | `evidence[]` · `phase` | one item per proof `{what, where, pass, status, proof}`: 是什么 · 在哪取 · 通过标准. The plan (`phase` plan, the default) shows only those three; the worker renders `phase: build` and fills each `status` (pending · done · passed · failed), `proof` ({img · text · url · html, caption}) and, on every done / passed item, `screenshots` (the production page, phone 390 + desktop 1440 — below) — the filled card is the report's 已上线 |
-| 页内反馈 | `feedback` · `replies_done` | `{table: "replies", version: "v<N>", poll: "12 分钟"}` — below |
+| 内容 | 字段与要求 |
+| --- | --- |
+| 问题与原因 | `problem`、`cause.steps`；证据跟随其支持的原因，未知写明未知 |
+| 新功能 | `kind: feature`；说明现在的行为与为什么需要调整 |
+| 目标与范围 | `metrics`、`charter.do/dont`；每个指标有现状、目标及测量方法 |
+| 解决方案 | `members` 是页面里的实施项，不是 Hub 子任务；每项写最终行为与技术细节 |
+| 界面变化 | 实施项的 `compare` 放当前真实界面及最终落地原型，覆盖相关尺寸与状态 |
+| 风险 | `risks`、`risks_tech`；具体失败方式及处理办法 |
+| 需要决定 | `signoff` 只列真正未决且阻止相应工作的选择；已有授权不再请求确认 |
+| 验收 | `evidence` 写场景、证据来源和通过标准；完成状态必须有实际验证证据 |
 
-**Nothing to open, no ▸** (T764): a step, a metric row or a card with no detail
-renders as a plain line — never an arrow onto nothing (lint `empty-fold`). An old
-spec (`steps` [[…]] + `cause.evidence`, `metrics` [[…]] + `metrics_how`, a one-line
-`evidence`) still renders, and the lint asks to migrate it (`fold-row`, `accept`).
-
-**页内反馈** (T764): the page is a live page, so the operator answers ON it, each
-item on its own: every 需要你定的事 row lays its options out in the row — the default
-first, marked 「默认」 and drawn as what counts while nobody picked, then the others,
-then 「改成…」 (a note); a tap posts that pick, a non-default pick is highlighted —
-「有意见」 on every 原因 step and card, one 「全部按建议」 — each opens or posts THAT item
-only. A submit POSTs `{item, choice, note, version, at}` to the page's own table —
-`item` is `signoff-<n>` · `cause-<step>` · `card-<key>` · `nod`; a withdraw is the same
-item with `choice` `withdraw`. On load the page reads the table back (`GET
-./_data/replies.json` returns the reviewed rows; rows this device sent that are not
-back yet come from localStorage, marked 待同步) and draws each item's LAST row — what
-was chosen, when, 改 · 撤回; a done 全部按建议 hides its button. Make the tables once,
-right after the first publish:
-`mcp__space__set_data` `replies` (`revision` 0, `rows` [], `columns` [item, choice,
-note, version, at] — a column the table lacks is dropped from a row, `append_open`
-true, `members_only` true) and `replies_done` (`columns` [item, state, note],
-`append_open` false). The orchestrator reads `replies` (its 「方案页的意见表」 rule)
-and hands each item's last row to the session that owns the page; that session marks
-it by writing `replies_done` (`{item, state: adopted | declined, note}` — the page
-shows it at once, no new version) — `replies_done` in the spec renders the same mark
-into the page itself.
-
-The **two-layer rules are epic-page's** (`skills/epic-page/SKILL.md`, rules 0 and
-16–24 of `/fleet-epic-plan` step 4): plain words, no keys, file names or
-implementation nouns on the surface; every technical field one tap down, complete.
-**A visual change carries its 改前 / 改后 in its card** (rule 24, T699): the
-member's `compare` — `{"before": {"html"|"img": …, "note": "…"}, "after": {…}}`, or
-`"states": [{"label": "…", "html"|"img": …, "note": "…"}, …]` for several 改后
-scenarios the reader switches with buttons. 改前 is taken from today (a real
-capture); 改后 is high fidelity — the look and the words that will go live, not a
-sketch. A pane's own look goes in the spec's `css`; an `img` is a path beside the
-page. No separate prototype page: `proto` still renders for an old spec, and the
-lint WARNs it (`compare`). The task's words carry the block as text — one line per
-state (`- 改后 · <标签>：<说明>`), never its HTML.
-
-## 3. Self-check
+标题、摘要、状态标记尽量简短。无额外信息的行不要显示展开箭头。不要把技术字段
+直接堆在界面表层。原型按最终实现设计，保留当前产品的交互惯例。
 
 ```sh
 ~/.claude/fleet/bin/epic-page-surface.sh --lint <scratchpad>/task-<slug>.html
 ```
 
-The surface as the operator reads it, plus a `WARN` per machine-visible miss —
-epic-page's rules, and the task page's own: `task-section` (a section missing),
-`task-evidence` (a 原因 with no folded 证据), `task-signoff` (no 「点头即全部按建议」), and epic-page's `compare` (a visual change
-with no 改前 / 改后, or a link to a separate prototype page), `brevity` (标题 > 16 字,
-副题 > 30 字 or bracketed, a 现象 line > 25 字), `fold-row` (the old shared 证据 /
-怎么量 folds), `accept` (上线证据 still one line, or an item with no 通过标准),
-`empty-fold` (an arrow onto nothing), `task-evidence-shot` (an item marked done /
-passed with no production screenshots, phone 390 + desktop 1440 — below).
-A WARN is a question, not a verdict; fix what is real.
+检查 lint 的每项提示，修复实际问题。生产验收截图须来自实际部署并记录版本、时间、
+页面或会话身份；设计原型、模拟 API 和本地构建只能作为各自阶段的证据。
+Web 通常检查 390 与 1440 宽度；tmux 面板按真实 iTerm2 显示验证，不以网页 Terminal
+截图替代。需要登录的只读截图使用现有 `fleet-console-ticket.sh` 路径。
 
-**线上真实截图 (A300)**: every item the worker marks `done` / `passed` carries
-`screenshots` `[{url, mobile, desktop, caption?, at?}]` — the PRODUCTION page shot
-AFTER the switch, never a local build or a mock: Playwright against the live URL,
-once at 390 wide (phone) and once at 1440 (desktop), a full-page PNG each
-(`page.setViewportSize({width: 390, height: 844})` → `screenshot({fullPage: true})`,
-then 1440 × 900). Keep them beside the page (`shots/<n>-390.png`, `shots/<n>-1440.png`)
-and reference them by relative path, or by a file of the same live page; they are
-published WITH the page to the same 活页 (`publish_file` `files`: the page plus each
-`shots/…`; a picture over the text limit goes by `url` or `create_upload_link`). The
-page draws each as a thumbnail that opens full size. A done / passed item without
-both is the lint's `task-evidence-shot` — a must-fix before the worker reports.
+## 3. 交付页面与接收修改
 
-**登录后的页面 (T844)**: a page behind a sign-in — production's console `/app` — is
-shot signed in as the person who dispatched the session, read-only, never by a
-sign-in of the session's own and never with a person's browser state. Run
-`~/.claude/fleet/bin/fleet-console-ticket.sh --next /app/<page>`: the hub hands
-THIS session a one-time link (good for 2 minutes, opened once) into its login
-owner's `/app`; `browser_navigate` to it in the browser that shoots, then take
-both widths in that same browser (the session lasts 15 minutes, `--ttl` up to
-1800; past it, ask for a new link). It is a member's view and reads only — a write,
-a websocket or the conversation answers 403 (只读票据), an admin's ticket opens no
-admin page — so shoot the state, do not drive it. The link is a credential: give
-it to the browser only, never to a page, a record or a log. Exit 1 (a login no
-person owns, a person off the list) or 3/4 (no hub, not a fleet session) ⇒ that
-item's signed-in shot is the person's: say so in its `proof`.
+用户要求发布到 Space 时，`publish_file` 默认私密，更新同一个 `proposal_id`。
+只有用户已授权通知或推送时才发送；避免重复通知。没有 Space 工具时，使用
+`doc-preview` / Fleet `open` 将页面交给用户，不在远端机器直接运行 `open`。
 
-## 4. Publish privately, push, wait
+需要页内反馈可使用 `replies` 与 `replies_done` 表。**当前 Task 的 Agent**读取和
+处理意见，记录采纳或未采纳原因，不安排独立协调者、周期轮询或订阅回报系统。
 
-1. `mcp__space__publish_file` — `title` 「任务设计：<标题>」, `filename`
-   `task-<slug>.html`, `content` the page (with pictures: `files`, each by its
-   relative path). New pages start **private**; never widen that yourself. Keep
-   the `proposal_id` and link.
-2. **Make sure it reaches their WeChat exactly once** (T765): the publish receipt's `notify.self` is `true` ⇒ the workspace's automatic push already sends it to them — do NOT call `mcp__space__push_to_wechat` (it would arrive twice); say 已自动推送. No such field? Ask `mcp__space__set_publish_notify` (no arguments: `auto_push` + `include_me`; with the `proposal_id`: `page_notify` off overrides) — both on ⇒ the same. Otherwise call `mcp__space__push_to_wechat` once — that `proposal_id`, `to` omitted (the operator only). A `quiet` update is never pushed, by hand or otherwise.
-3. One sentence: *"任务设计页 <link>（已推到你微信，仅你可见）— 根本原因 n · 要改 m 处 ·
-   需要你定 k 件。改哪条直接说；点头即全部按建议，开任务。"*
+没有未决批准事项且用户已授权实施时继续做；不能把沉默、计时器到期或默认选项
+当作新的批准。修改写回同一方案和同一页面，不另建第二份真相。
 
-No 活页 tools (`mcp__space__*` not mounted)? Serve it on loopback
-(`python3 -m http.server --bind 127.0.0.1 <port>` in the scratchpad, dies with the
-session) and open it with the fleet `open` tool.
+## 4. 在当前 Task 实施，或按授权创建独立 Task
 
-Then **stop and wait**. A revision edits the spec, re-renders, and publishes to
-the SAME page (`publish_file` with its `proposal_id`) — one link, they reload it.
+已有当前 Task 时直接使用这份方案继续工作。需要完整文字版时：
 
-## 5. After the nod — open the task from the page
+```sh
+python3 ~/.claude/fleet/bin/fleet-task-page.py body <scratchpad>/task-<slug>.html \
+  --link <page-link> > <scratchpad>/task-<slug>.md
+```
 
-The page is the source: never re-draft the task from the chat.
+保留两个阅读层的内容。正文超过接口限制时保留目标、约束和验收，并引用完整方案；
+不要仅因页面卡片多或正文长就自动拆成多个 Task。
 
-1. Anything changed in the chat goes into the spec first; re-render.
-2. **The words** — both layers, every fold written out, the nod recorded:
+只有用户授权且确需独立环境或交付边界时，使用 `task` 工具创建普通 Task，提供
+标题、正文和仓库；不指定 Parent、driver 或集合。记录新 Task 与设计页的对应关系。
 
-   ```sh
-   python3 ~/.claude/fleet/bin/fleet-task-page.py body <scratchpad>/task-<slug>.html \
-     --link <活页 link> --nod "<operator> YYYY-MM-DD" > <scratchpad>/task-<slug>.md
-   ```
-
-   It measures the words as they travel (UTF-8 JSON; the hub reads 16 KB with the
-   envelope) and, over `--max` (13000), moves folds to the page one kind at a time
-   — the 代码位置 folds, the steps' evidence, then 解决方案's 技术细节 — each line saying 「见设计页」;
-   the 上线后怎么验收 items always stay. Page controls (buttons, forms) are never words.
-   Folds nest to any depth and every layer is written out. Exit 1 = even the surface
-   is too long — for a page with several cards, split it instead, one task per card:
-
-   ```sh
-   python3 ~/.claude/fleet/bin/fleet-task-page.py body <page.html> --link <活页 link> \
-     --nod "<operator> YYYY-MM-DD" --split <scratchpad>/task-<slug>-parts
-   # → one line per part: <dir>/NN-<card key>.md <TAB> bytes <TAB> card name
-   ```
-
-   Each part carries the link and every shared section (问题与原因 · 目标 · 风险 ·
-   需要你定的事 · 上线后怎么验收) plus ONE card; open one task per part (step 3).
-3. **Open the task** — the `task` tool (`mcp__fleet-orch__task`: `title` the page's
-   title, `body` the file's content, `repo`, `spawn: true`), which is
-   `fleet-task-record.sh dispatch --title … --body-file <md> --repo <owner/name> --spawn`.
-   Its first stdout line is the task's ID; the session opens in a worktree of that
-   repo bound to it, implements, opens its PR and merges on a green gate.
-4. **Stamp the page** — `fleet-task-page.py stamp <page.html> <ID> -o <page.html>`
-   (「任务设计」 → 「任务 <ID>」) and publish it to the same page.
-
-## 6. Report
-
-One line: the task's ID, the page link, that its session is running. Stopped at
-step 0 (no hub) or step 4 (waiting for the nod — the link is the whole report)?
-Say that.
-
----
-
-Rails: the page's source lives in your scratchpad, never the repo; it goes to 活页
-privately (never the Artifact tool, hook-blocked in fleet sessions — issue #526).
-Nothing here writes to GitHub, edits code or merges: the task's own session does.
+结束时说明方案地址、已完成内容、验证结果及剩余阻塞。任务产物和原生会话历史保留，
+不建立额外的完成回报通道。

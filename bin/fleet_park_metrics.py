@@ -1,11 +1,13 @@
-# fleet_park_metrics.py — shared read-only session census and action summaries
-"""Read-only park census shared by inventory, heartbeat and doctor (RBQG).
+# fleet_park_metrics.py — shared session census and bounded observation summaries
+"""Park census shared by inventory, heartbeat and doctor (RBQG).
 
 RSS is the pane's complete process tree, including its wrapper. No observations
 are written to the action ledger. CPU eligibility needs two readings >=60s apart.
+The existing collector alone appends a content-free sample with sample --record.
 """
 import argparse
 from collections import Counter, defaultdict
+import fcntl
 from datetime import datetime, timezone
 import json
 import math
@@ -206,49 +208,202 @@ def summarize(workers):
     return out
 
 
-def daily(path, day):
-    counts, durations, scheduled, timely = Counter(), [], 0, 0
+def stamp(value):
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a timestamp")
+    result = float(value) if isinstance(value, (float, int)) else fleet_iso.parse(value, utc=True).timestamp()
+    if not math.isfinite(result):
+        raise ValueError("invalid timestamp")
+    return result
+
+
+def daily(path, day, *, opportunities=None, as_of=None):
+    """Successful wakes are observations, never the scheduling denominator.
+
+    A complete opportunity manifest must come from the scheduler's durable due
+    events, including events that never started. An action ledger alone cannot
+    prove their absence. Keep the acceptance rate unknown without that manifest.
+    """
+    start = fleet_iso.parse(day).replace(tzinfo=timezone.utc).timestamp()
+    end = start + 86400
+    as_of = time.time() if as_of is None else stamp(as_of)
+    counts, durations, observed, starts = Counter(), [], set(), {}
     for line in Path(path).read_text().splitlines() if Path(path).exists() else []:
         try:
             row = json.loads(line)
-            ts = row["ts"]
-            stamp = datetime.fromtimestamp(ts, timezone.utc) if isinstance(ts, (float, int)) else fleet_iso.parse(ts, utc=True)
-            if stamp.astimezone(timezone.utc).date().isoformat() != day:
-                continue
+            when = stamp(row["ts"])
             act = row.get("act")
             if act not in ("park", "wake", "fail", "deferred", "fresh"):
                 continue
-            counts[act] += 1
-            if act == "wake" and row.get("result") in ("ok", "已接回", "resumed"):
-                secs = float(row["secs"])
-                if math.isfinite(secs) and secs >= 0:
-                    durations.append(secs)
-                if row.get("next") is not None and row.get("started") is not None:
-                    due, started = float(row["next"]), float(row["started"])
-                    if math.isfinite(due) and math.isfinite(started) and due > 0 and started > 0:
-                        scheduled += 1
-                        timely += 0 <= started - due <= 30
-        except (ValueError, TypeError, KeyError, OverflowError):
+            success = act == "wake" and row.get("result") in ("ok", "已接回", "resumed")
+            if start <= when < end:
+                counts[act] += 1
+                if success:
+                    secs = float(row["secs"])
+                    if math.isfinite(secs) and secs >= 0:
+                        durations.append(secs)
+            due = stamp(row.get("next", row.get("next_at", 0)))
+            fid = row.get("fid")
+            if isinstance(fid, str) and fid and start <= due < end:
+                key = (fid, due)
+                observed.add(key)
+                if success:
+                    began = stamp(row.get("started", 0))
+                    if due <= began <= as_of:
+                        starts[key] = min(starts.get(key, began), began)
+        except (ValueError, TypeError, KeyError, OverflowError, AttributeError):
             continue
+    complete, expected = False, set()
+    if opportunities is not None:
+        # Reject malformed manifests rather than silently shrinking a denominator.
+        if not isinstance(opportunities, dict) or not isinstance(opportunities.get("opportunities"), list):
+            raise ValueError("scheduled opportunities require a coverage manifest")
+        coverage_start = stamp(opportunities["coverage_start"])
+        coverage_end = stamp(opportunities["coverage_end"])
+        if coverage_end < coverage_start:
+            raise ValueError("opportunity coverage is reversed")
+        complete = (opportunities.get("complete") is True and coverage_start <= start
+                    and coverage_end >= end and as_of >= end)
+        for row in opportunities["opportunities"]:
+            fid, due = row.get("fid"), stamp(row["due"])
+            if not isinstance(fid, str) or not fid:
+                raise ValueError("opportunity requires an immutable session identity")
+            if start <= due < end:
+                expected.add((fid, due))
+        # A manifest missing an observed due event is demonstrably incomplete.
+        complete = complete and observed.issubset(expected)
+    timely = sum(key in starts and starts[key] - key[1] <= 30 for key in expected)
     durations.sort()
     percentile = lambda p: durations[max(0, math.ceil(len(durations) * p) - 1)] if durations else None
     return dict(day=day, timezone="UTC", **{k: counts[k] for k in ("park", "wake", "fail", "deferred", "fresh")},
-                p50=percentile(.5), p95=percentile(.95), scheduled=scheduled,
-                on_time_rate=timely / scheduled if scheduled else None)
+                p50=percentile(.5), p95=percentile(.95), wake_samples=len(durations),
+                observed_scheduled=len(observed), scheduled_complete=complete,
+                scheduled=len(expected) if complete else None,
+                on_time_rate=timely / len(expected) if complete and expected else None)
+
+
+def integrate_samples(samples, start, end, *, scope, max_gap_secs=120):
+    """Trapezoidal estimate only across bounded, known observations in one scope.
+
+    Missing boundaries, unknown readings and long gaps remain uncovered. Never
+    extrapolate the first or last sample, or turn absent collection into zero.
+    """
+    start, end = stamp(start), stamp(end)
+    if end <= start or not math.isfinite(max_gap_secs) or max_gap_secs <= 0:
+        raise ValueError("a positive observation interval and max gap are required")
+    readings = {}
+    for row in samples:
+        if row.get("scope") != scope:
+            continue
+        ts = stamp(row["ts"])
+        value = row.get("idle_count")
+        if type(value) is not int or value < 0:
+            value = None
+        # Conflicting duplicate timestamps are unknown, not whichever came last.
+        readings[ts] = value if ts not in readings or readings[ts] == value else None
+    ordered = sorted(readings.items())
+    covered, hours = 0.0, 0.0
+    for (left, nleft), (right, nright) in zip(ordered, ordered[1:]):
+        a, b = max(start, left), min(end, right)
+        if b <= a or right - left > max_gap_secs or nleft is None or nright is None:
+            continue
+        # Linear interpolation clips a partial boundary interval consistently.
+        slope = (nright - nleft) / (right - left)
+        first, last = nleft + slope * (a - left), nleft + slope * (b - left)
+        covered += b - a
+        hours += (first + last) / 2 * (b - a) / 3600
+    duration = end - start
+    return dict(scope=scope, start=start, end=end, samples=len(ordered),
+                covered_seconds=covered, uncovered_seconds=duration - covered,
+                coverage=covered / duration, complete=covered == duration,
+                observed_idle_session_hours=hours if covered else None,
+                method="trapezoidal estimate on bounded observed intervals; no extrapolation",
+                max_gap_seconds=max_gap_secs)
+
+
+def sample():
+    """One content-free reading for the existing collector's scheduled tick."""
+    import getpass
+    import socket
+    from fleet_control import Control
+    ctl = Control()
+    fleets = ctl.inventory()
+    values = [ctl.workers(fleet)["park_metrics"]["sessions_idle"] for fleet in fleets]
+    return dict(ts=time.time(), scope=socket.gethostname() + "/" + getpass.getuser(),
+                idle_count=None if any(v is None for v in values) else sum(values),
+                fleet_count=len(fleets))
+
+
+def record_sample(conf, row):
+    """One append per collector tick; reuse the existing size rotation helper.
+
+    Eight MiB plus one previous file keeps well over a week of minute readings.
+    Reports still disclose missing coverage after rotation; retention is not
+    evidence of elapsed observation. No history is parsed during collection.
+    """
+    from fleet_clientlog import rotate
+    directory = Path(conf) / "logs"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / "park-samples.ndjson"
+    lock = os.open(str(path) + ".lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rotate(str(path), limit=8 * 1024 * 1024)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, (json.dumps(row, separators=(",", ":")) + "\n").encode())
+        finally:
+            os.close(fd)
+    finally:
+        os.close(lock)
+
+
+def sample_history(path):
+    rows = []
+    for source in (Path(str(path) + ".1"), Path(path)):
+        if source.exists():
+            rows.extend(json.loads(line) for line in source.read_text().splitlines() if line.strip())
+    return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("census", "doctor", "daily"))
+    parser.add_argument("mode", choices=("census", "doctor", "daily", "sample", "history"))
     parser.add_argument("--socket")
     parser.add_argument("--session")
     parser.add_argument("--day", default=datetime.now(timezone.utc).date().isoformat())
+    parser.add_argument("--opportunities", help="scheduler's complete due-event coverage manifest")
+    parser.add_argument("--samples", help="NDJSON from sample, recorded by the existing collector")
+    parser.add_argument("--start")
+    parser.add_argument("--end")
+    parser.add_argument("--scope")
+    parser.add_argument("--max-gap-secs", type=float, default=120)
+    parser.add_argument("--record", action="store_true", help="append one sample for the existing collector")
     args = parser.parse_args()
     conf = Path(os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet"))
-    if args.mode == "census":
+    if args.mode == "sample":
+        row = sample()
+        if args.record:
+            record_sample(conf, row)
+        else:
+            print(json.dumps(row))
+    elif args.mode == "history":
+        if not all((args.samples, args.start, args.end, args.scope)):
+            parser.error("history requires --samples, --start, --end and --scope")
+        rows = sample_history(args.samples)
+        print(json.dumps(integrate_samples(rows, args.start, args.end, scope=args.scope,
+                                          max_gap_secs=args.max_gap_secs)))
+    elif args.mode == "census":
         print(json.dumps(census(args.socket, args.session, conf / "global"), separators=(",", ":")))
     elif args.mode == "daily":
-        print(json.dumps(daily(conf / "logs/park.ndjson", args.day)))
+        import getpass
+        import socket
+        report = daily(conf / "logs/park.ndjson", args.day,
+                       opportunities=json.loads(Path(args.opportunities).read_text()) if args.opportunities else None)
+        start = fleet_iso.parse(args.day).replace(tzinfo=timezone.utc).timestamp()
+        report["observation"] = integrate_samples(sample_history(conf / "logs/park-samples.ndjson"), start, start + 86400,
+            scope=args.scope or socket.gethostname() + "/" + getpass.getuser(), max_gap_secs=args.max_gap_secs)
+        print(json.dumps(report))
     else:
         from fleet_control import Control
         ctl = Control()
@@ -277,6 +432,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, KeyError) as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)

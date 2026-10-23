@@ -67,18 +67,19 @@ type ClientPlaceEnvelope struct {
 
 // clientPlaceRequest is the signed payload.
 type clientPlaceRequest struct {
-	Action string `json:"action"` // place | status
-	TS     int64  `json:"ts"`
-	Repo   string `json:"repo"`
-	Kind   string `json:"kind"` // issue | scratch | restore | new
-	Issue  int    `json:"issue"`
-	Key    string `json:"key"`
-	Name   string `json:"name"`
-	Node   string `json:"node"`
-	Title  string `json:"title"`
-	Body   string `json:"body"` // kind=new: the issue's body (claude-fleet#1953); kind=scratch: its seed (#1956)
-	Draft  string `json:"draft"`
-	NoRepo bool   `json:"no_repo"`
+	ControlVersion int    `json:"control_version"`
+	Action         string `json:"action"` // place | status
+	TS             int64  `json:"ts"`
+	Repo           string `json:"repo"`
+	Kind           string `json:"kind"` // issue | scratch | restore | new
+	Issue          int    `json:"issue"`
+	Key            string `json:"key"`
+	Name           string `json:"name"`
+	Node           string `json:"node"`
+	Title          string `json:"title"`
+	Body           string `json:"body"` // kind=new: the issue's body (claude-fleet#1953); kind=scratch: its seed (#1956)
+	Draft          string `json:"draft"`
+	NoRepo         bool   `json:"no_repo"`
 	// Home / New: a HOME session (`fleet claude`, claude-fleet#2564) — a
 	// no-repo scratch that first goes back to the person's current one
 	// (fleet_home.go); New opens another anyway and makes it the current.
@@ -351,7 +352,14 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		req.Dispatch = d
 		req.Agent = d.ResolvedAgent
 	}
+	if req.ControlVersion != 0 && (req.ControlVersion != 1 || d == nil || req.Kind == "restore" || req.Home || req.Draft != "") {
+		httpError(w, http.StatusBadRequest, "control_version 1 requires a fresh accepted task start")
+		return
+	}
 	args := map[string]any{"node": node, "idempotency_key": idem}
+	if req.ControlVersion == 1 {
+		args["control_version"] = 1
+	}
 	if d != nil {
 		args["dispatch"] = d
 	}

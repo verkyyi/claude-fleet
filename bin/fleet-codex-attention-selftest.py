@@ -136,7 +136,7 @@ class MonitorEvents(unittest.TestCase):
         self.now=100
         self.data=dict(DATA)
         self.native=Fake(state='idle')
-        self.options='working||'
+        self.options='done||'
         self.writes=[]
         self.monitor=a.Monitor(DATA['remote'],{'TMUX_PANE':'%fixture','FLEET_CODEX_LAUNCHER_PID':'123'})
         def tmux(arguments):
@@ -170,6 +170,33 @@ class MonitorEvents(unittest.TestCase):
         self.assertFalse(self.writes)
         self.monitor.close()
         self.assertTrue(self.native.closed)
+
+    def test_native_idle_clears_working_after_interrupt_without_stop_hook(self):
+        self.options='working|||17'
+        self.native.events.append(self.status('idle'))
+        self.tick()
+        self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertIn('#{==:#{@claude_state},working}',self.writes[-1][-2])
+        self.assertIn('#{==:#{@claude_state_ts},17}',self.writes[-1][-2])
+        self.assertNotIn('thread/resume',[method for method,_ in self.native.calls])
+
+    def test_queued_old_idle_cannot_demote_a_new_native_turn_in_same_second(self):
+        self.options='working|||17'
+        self.native.codex.threads[SID]['status']={'type':'active','activeFlags':[]}
+        self.tick()
+        self.monitor.reconcile_at=self.now+30
+        self.native.events.append(self.status('idle'))
+        self.tick()
+        self.assertFalse(self.writes)
+        self.assertEqual(self.monitor.reconcile_at,0)
+
+    def test_native_idle_never_clears_explicit_blocked_or_loop_state(self):
+        for state in ('needs|blocked||17', 'looping|||17'):
+            self.options=state
+            self.monitor.reconcile_at=0
+            self.native.events.append(self.status('idle'))
+            self.tick()
+        self.assertFalse(self.writes)
 
     def test_unproven_stream_keeps_original_snapshot_cadence(self):
         for _ in range(3):self.tick()

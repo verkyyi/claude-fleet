@@ -2,7 +2,7 @@
 """fleet-plugins.py — this repo IS a Claude Code plugin marketplace (issue #3112,
 EPIC #3111 C1).
 
-EPIC batches and the other optional parts are standard plugins under plugins/
+Task design pages and other optional parts are standard plugins under plugins/
 (fleet-epic · fleet-browser · …), listed beside the core
 `fleet` plugin in .claude-plugin/marketplace.json. Installing, uninstalling,
 enabling and disabling them is Claude Code's own `/plugin` (or `claude plugin
@@ -184,6 +184,8 @@ def carried(root, plugs, gone, cdir):
         if part is None or not os.path.exists(have):
             continue
         for name, d in plugs.items():
+            if name == "fleet-epic":
+                continue  # retired automation must never be resurrected by carry-over
             if os.path.exists(os.path.join(root, d, sub)):
                 want.add(name)
     return sorted(want)

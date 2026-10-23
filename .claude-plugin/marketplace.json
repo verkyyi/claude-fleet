@@ -14,7 +14,7 @@
     {
       "name": "fleet-epic",
       "source": "./plugins/fleet-epic",
-      "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report), and one task's design page (/fleet-task-plan)."
+      "description": "Task design pages (/fleet-task-plan); old EPIC commands explain their retirement. Optional, never installed by migration."
     },
     {
       "name": "fleet-browser",

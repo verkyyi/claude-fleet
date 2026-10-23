@@ -1,8 +1,9 @@
 """Node-local execution fence in the existing control database.
 
-This module does no Hub I/O and authenticates no remote data. Its caller must
-verify the Hub response and map it to the fields below before bind/observe.
-``authorized=True`` means a *new explicit grant*, not a cached @dispatch.
+Pure fence operations accept only already-verified snapshots. The runtime
+entrypoints obtain fresh snapshots through the existing authenticated node
+transport, outside all admission locks. ``authorized=True`` means a *new
+explicit grant*, not a cached @dispatch.
 Only that grant may create a binding or clear a stop tombstone with no old
 binding. Replacing an existing execution needs proof of its exit; this module
 does not yet offer that operation and refuses it even for a newer grant.
@@ -15,11 +16,20 @@ integration must therefore reconcile and terminate any in-flight execution.
 This helper neither proves execution-domain exit nor upgrades old sessions.
 """
 import contextlib
+import argparse
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from urllib.parse import quote
 
 from fleet_hub_common import Database, is_identity, private_dir
 
@@ -36,6 +46,24 @@ CREATE TABLE IF NOT EXISTS task_execution_fences (
  execution_owner TEXT NOT NULL,
  cancel_request TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_execution_sessions (
+ task_ref TEXT PRIMARY KEY, operation_id TEXT NOT NULL, execution_owner TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_execution_windows (
+ task_ref TEXT PRIMARY KEY, operation_id TEXT NOT NULL, execution_owner TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_execution_launches (
+ task_ref TEXT PRIMARY KEY, launch_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+ supervisor TEXT NOT NULL, wrapper TEXT NOT NULL, child TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS task_execution_native (
+ task_ref TEXT NOT NULL, launch_id TEXT NOT NULL, component TEXT NOT NULL,
+ process TEXT NOT NULL, PRIMARY KEY (task_ref, launch_id, component)
+);
+CREATE TABLE IF NOT EXISTS task_execution_launch_history (
+ task_ref TEXT NOT NULL, launch_id TEXT NOT NULL, registration TEXT NOT NULL,
+ PRIMARY KEY (task_ref, launch_id)
+);
 """
 FIELDS = ("task_ref", "task_fid", "generation", "binding_generation", "attempt_id",
           "operation_id", "execution_endpoint", "execution_owner", "cancel_request")
@@ -44,6 +72,110 @@ BINDING_FIELDS = ("task_fid", "binding_generation", "attempt_id", "operation_id"
 
 class FenceRefused(ValueError):
     """Unknown, stale, stopped or contradictory execution authorization."""
+
+
+def read_session(session_fid, *, conf_dir=None):
+    """Read-only observation, including a stop; this never grants permission."""
+    if not is_identity(session_fid):
+        raise FenceRefused("session lookup requires its immutable FID")
+    root = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
+    path = root / "control/state.sqlite3"
+    rows = []
+    if path.exists():
+        try:
+            with contextlib.closing(sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True, timeout=2)) as db:
+                db.row_factory = sqlite3.Row
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_execution_fences'").fetchone():
+                    rows = db.execute("SELECT * FROM task_execution_fences WHERE execution_owner LIKE ?",
+                                      ("%/" + session_fid,)).fetchall()
+        except sqlite3.Error as exc:
+            raise FenceRefused("task execution fence is unavailable") from exc
+    if len(rows) > 1:
+        raise FenceRefused("session has conflicting task execution bindings")
+    return dict(rows[0]) if rows else None
+
+
+def read_task(task_ref, *, conf_dir=None):
+    """Read a Task's local binding/tombstone without creating state or authorizing."""
+    task_ref = _task_ref(task_ref)
+    root = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
+    path = root / "control/state.sqlite3"
+    if not path.exists():
+        return None
+    try:
+        with contextlib.closing(sqlite3.connect("file:" + quote(str(path), safe="/") + "?mode=ro", uri=True, timeout=2)) as db:
+            db.row_factory = sqlite3.Row
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_execution_fences'").fetchone():
+                return None
+            row = db.execute("SELECT * FROM task_execution_fences WHERE task_ref=?", (task_ref,)).fetchone()
+            return dict(row) if row else None
+    except sqlite3.Error as exc:
+        raise FenceRefused("task execution fence is unavailable") from exc
+
+
+def check_session(session_fid, *, conf_dir=None, expected=None, controlled=False):
+    """Read-only ingress check: legacy missing state is inert, controlled isn't."""
+    if expected is not None:
+        expected = _snapshot(expected)
+        controlled = True
+        if expected["execution_owner"].rsplit("/", 1)[-1] != session_fid:
+            raise FenceRefused("execution metadata names another session")
+    row = read_session(session_fid, conf_dir=conf_dir)
+    if row is None:
+        if controlled:
+            raise FenceRefused("controlled session has no local execution fence")
+        return None
+    if row["cancel_request"]:
+        raise FenceRefused("task stop forbids further launch, wake or turn delivery")
+    if expected is not None and row != expected:
+        raise FenceRefused("execution metadata no longer matches the local fence")
+    return row
+
+
+def _authority(command, task_ref="", *, conf_dir=None):
+    env = dict(os.environ, FLEET_HUB_TIMEOUT="10")
+    if conf_dir is not None:
+        env["FLEET_CONF_DIR"] = str(conf_dir)
+    result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), command,
+                             *([task_ref] if task_ref else [])], text=True, capture_output=True, timeout=15, env=env)
+    if result.returncode:
+        raise FenceRefused("fresh authenticated task execution authority is unavailable")
+    return json.loads(result.stdout)
+
+
+def refresh_session(session_fid, *, conf_dir=None, expected=None, controlled=False, read=None):
+    """Fresh authority BEFORE FID/admission locks; a stopped response commits first."""
+    current = check_session(session_fid, conf_dir=conf_dir, expected=expected, controlled=controlled)
+    if current is None:
+        return None
+    response = (read(current["task_ref"]) if read else
+                _authority("execution-get", current["task_ref"], conf_dir=conf_dir))
+    actual = _snapshot(response, allow_unclaimed=True)
+    if actual["task_ref"] != current["task_ref"] or actual["task_fid"] != current["task_fid"]:
+        raise FenceRefused("authority response names a different task")
+    fence = ExecutionFence(conf_dir)
+    if actual["cancel_request"]:
+        fence.apply_stop(actual)
+        raise FenceRefused("task stop forbids further launch, wake or turn delivery")
+    if actual != current:
+        raise FenceRefused("execution authority no longer matches the local session")
+    fence.observe(actual)
+    return actual
+
+
+def sync_stops(*, conf_dir=None, read=None):
+    """Reconnect barrier: import every verified endpoint stop before any starts."""
+    response = read() if read else _authority("execution-list", conf_dir=conf_dir)
+    if (not isinstance(response, dict) or type(response.get("control_version")) is not int
+            or response["control_version"] != 1 or not isinstance(response.get("task_executions"), list)):
+        raise FenceRefused("invalid task execution synchronization response")
+    snapshots = [_snapshot(item, allow_unclaimed=True) for item in response["task_executions"]]
+    fence = ExecutionFence(conf_dir)
+    stopped = []
+    for snapshot in snapshots:
+        if snapshot["cancel_request"]:
+            stopped.append(fence.apply_stop(snapshot))
+    return stopped
 
 
 def _task_ref(value):
@@ -66,7 +198,7 @@ def _token(value, label, *, empty=False):
     return value
 
 
-def _snapshot(value):
+def _snapshot(value, *, allow_unclaimed=False):
     if not isinstance(value, dict) or set(value) - set(FIELDS):
         raise FenceRefused("execution snapshot contains unsupported fields")
     row = {key: value.get(key, "") for key in FIELDS}
@@ -91,7 +223,7 @@ def _snapshot(value):
     if not (stopping and row["task_fid"] == "") and not is_identity(row["task_fid"]):
         raise FenceRefused("execution snapshot requires a stable Hub Task FID")
     worker = row["execution_owner"]
-    if not (stopping and worker == ""):
+    if not ((stopping or allow_unclaimed) and worker == ""):
         parts = worker.split("/") if isinstance(worker, str) else []
         if len(parts) != 2 or not all(is_identity(part) for part in parts):
             raise FenceRefused("execution worker identity requires fleet UUID/session UUID")
@@ -112,6 +244,136 @@ class Admission:
         if not self._active:
             raise FenceRefused("execution admission permit has been released")
         return self._fence._assert_current(self._expected)
+
+    def reserve_launch(self, launch_id, supervisor, *, wrapper=None):
+        """Consume this grant once, durably, before fork; never replay on doubt."""
+        self.assert_current()
+        _token(launch_id, "launch id")
+        supervisor = _process_proof(supervisor)
+        wrapper = _process_proof(wrapper or supervisor)
+        previous = self._fence.launch(self._expected["task_ref"])
+        if previous:
+            if previous["wrapper"] != wrapper or not _same_birth(wrapper):
+                raise FenceRefused("another wrapper incarnation owns this task grant")
+            proofs = [previous["supervisor"], *([previous["child"]] if previous["child"] else []),
+                      *(item["process"] for item in previous["native"])]
+            if not all(_definitely_exited(proof) for proof in proofs):
+                raise FenceRefused("the previous native launch has not verifiably exited")
+        with self._fence.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._fence._assert_current_in(db, self._expected)
+            current = db.execute("SELECT launch_id FROM task_execution_launches WHERE task_ref=?",
+                                 (self._expected["task_ref"],)).fetchone()
+            if (current is None) != (previous is None) or (current and current[0] != previous["launch_id"]):
+                raise FenceRefused("native launch registration changed during admission")
+            if previous:
+                db.execute("INSERT INTO task_execution_launch_history VALUES (?,?,?)",
+                           (self._expected["task_ref"], previous["launch_id"], json.dumps(previous)))
+                db.execute("DELETE FROM task_execution_launches WHERE task_ref=?", (self._expected["task_ref"],))
+            db.execute("INSERT INTO task_execution_launches (task_ref,launch_id,operation_id,supervisor,wrapper) VALUES (?,?,?,?,?)",
+                       (self._expected["task_ref"], launch_id, self._expected["operation_id"], json.dumps(supervisor), json.dumps(wrapper)))
+
+    def register_child(self, launch_id, child):
+        self.assert_current()
+        child = _process_proof(child)
+        with self._fence.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._fence._assert_current_in(db, self._expected)
+            row = db.execute("SELECT * FROM task_execution_launches WHERE task_ref=?",
+                             (self._expected["task_ref"],)).fetchone()
+            if row is None or row["launch_id"] != launch_id or row["child"]:
+                raise FenceRefused("launch child was already registered or its reservation changed")
+            db.execute("UPDATE task_execution_launches SET child=? WHERE task_ref=?",
+                       (json.dumps(child), self._expected["task_ref"]))
+
+    def register_native(self, launch_id, component, proof):
+        """Consume one actual native component slot immediately before exec."""
+        self.assert_current()
+        if component not in ("agent", "server", "client"):
+            raise FenceRefused("unknown native execution component")
+        proof = _process_proof(proof)
+        with self._fence.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._fence._assert_current_in(db, self._expected)
+            row = db.execute("SELECT * FROM task_execution_launches WHERE task_ref=?",
+                             (self._expected["task_ref"],)).fetchone()
+            if row is None or row["launch_id"] != launch_id or row["operation_id"] != self._expected["operation_id"]:
+                raise FenceRefused("native launch has no matching reservation")
+            prior = db.execute("SELECT component FROM task_execution_native WHERE task_ref=? AND launch_id=?",
+                               (self._expected["task_ref"], launch_id)).fetchall()
+            components = {item[0] for item in prior}
+            if component in components or (component == "agent" and components) or "agent" in components:
+                raise FenceRefused("native execution component was already consumed")
+            db.execute("INSERT INTO task_execution_native VALUES (?,?,?,?)",
+                       (self._expected["task_ref"], launch_id, component, json.dumps(proof)))
+
+
+def _process_proof(value):
+    if (not isinstance(value, dict) or type(value.get("pid")) is not int or value["pid"] <= 1
+            or not isinstance(value.get("birth"), str) or not value["birth"]):
+        raise FenceRefused("process registration requires kernel PID and birth identity")
+    # Executable changes on exec; birth, rather than its former executable path,
+    # identifies the same process after the final native admission.
+    return dict(pid=value["pid"], birth=value["birth"])
+
+
+def validate_request(request):
+    """Cross-check the authenticated control envelope before journalling it."""
+    if "control_version" not in request and "task_execution" not in request:
+        return None
+    if type(request.get("control_version")) is not int or request["control_version"] != 1:
+        raise FenceRefused("unsupported task execution control protocol")
+    expected = _snapshot(request.get("task_execution"), allow_unclaimed=True)
+    params = request["params"]
+    owner = expected["execution_owner"]
+    if owner and owner.split("/")[0] != request["fleet_id"]:
+        raise FenceRefused("execution owner belongs to another fleet")
+    if params.get("task") != expected["task_ref"]:
+        raise FenceRefused("operation and execution snapshot name different tasks")
+    if request["action"] == "worker_start":
+        dispatch = params.get("dispatch") or {}
+        if (expected["cancel_request"] or request["operation_id"] != expected["operation_id"]
+                or dispatch.get("task") != expected["task_ref"]
+                or dispatch.get("generation") != expected["generation"]
+                or dispatch.get("attempt_id") != expected["attempt_id"]):
+            raise FenceRefused("start operation does not match its execution grant")
+    elif request["action"] == "worker_stop":
+        if (not expected["cancel_request"] or request["operation_id"] != expected["cancel_request"]
+                or params.get("start_operation_id") != expected["operation_id"]
+                or params.get("generation") != expected["binding_generation"]
+                or params.get("attempt_id") != expected["attempt_id"]
+                or params.get("execution_endpoint") != expected["execution_endpoint"]
+                or params.get("worker_id", "") != owner):
+            raise FenceRefused("stop operation does not match its execution fence")
+    else:
+        raise FenceRefused("task execution envelope only supports start or stop")
+    return expected
+
+
+def claim_execution(snapshot, fleet_id, *, conf_dir=None, call=None):
+    """Allocate, authenticate claim remotely, then bind; no lock spans Hub I/O."""
+    expected = _snapshot(snapshot, allow_unclaimed=True)
+    fence = ExecutionFence(conf_dir)
+    worker = fence.allocate_worker(expected, fleet_id)
+    body = dict(control_version=1, operation_id=expected["operation_id"], worker_id=worker,
+                generation=expected["generation"], attempt_id=expected["attempt_id"])
+    if call is None:
+        result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")),
+                                 "execution-claim", expected["task_ref"]], input=json.dumps(body),
+                                text=True, capture_output=True, timeout=15,
+                                env=dict(os.environ, FLEET_CONF_DIR=str(fence.conf_dir), FLEET_HUB_TIMEOUT="10"))
+        if result.returncode:
+            raise FenceRefused("authenticated task execution claim was unavailable or refused")
+        actual = json.loads(result.stdout)
+    else:
+        actual = call(expected["task_ref"], body)
+    actual = _snapshot(actual)
+    wanted = dict(expected, execution_owner=worker)
+    if actual != wanted:
+        if actual["task_ref"] == expected["task_ref"] and actual["cancel_request"]:
+            fence.apply_stop(actual)
+        raise FenceRefused("Hub claim changed the accepted execution authorization")
+    return fence.bind(actual, authorized=True)
 
 
 class ExecutionFence:
@@ -153,6 +415,71 @@ class ExecutionFence:
     def snapshot(self):
         with self.store.connect() as db:
             return [dict(row) for row in db.execute("SELECT * FROM task_execution_fences ORDER BY task_ref")]
+
+    def allocate_worker(self, snapshot, fleet_id):
+        """Allocate a real session identity once before authenticated Hub claim."""
+        incoming = _snapshot(snapshot, allow_unclaimed=True)
+        if incoming["cancel_request"] or not is_identity(fleet_id):
+            raise FenceRefused("cannot allocate a stopped or unidentified execution")
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = self._read(db, incoming["task_ref"])
+            if old and (old["cancel_request"] or old["generation"] != incoming["generation"]):
+                raise FenceRefused("allocation conflicts with the local execution fence")
+            row = db.execute("SELECT * FROM task_execution_sessions WHERE task_ref=?", (incoming["task_ref"],)).fetchone()
+            if row:
+                if row["operation_id"] != incoming["operation_id"] or not row["execution_owner"].startswith(fleet_id + "/"):
+                    raise FenceRefused("another operation already allocated this task session")
+                worker = row["execution_owner"]
+            else:
+                worker = fleet_id + "/" + str(uuid.uuid4())
+                if incoming["execution_owner"]:
+                    raise FenceRefused("cannot adopt a claimed worker without its local allocation")
+                db.execute("INSERT INTO task_execution_sessions VALUES (?,?,?)",
+                           (incoming["task_ref"], incoming["operation_id"], worker))
+            if incoming["execution_owner"] and incoming["execution_owner"] != worker:
+                raise FenceRefused("Hub claim does not match the allocated session")
+            return worker
+
+    def launch(self, task_ref):
+        with self.store.connect() as db:
+            row = db.execute("SELECT * FROM task_execution_launches WHERE task_ref=?", (_task_ref(task_ref),)).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            for key in ("supervisor", "wrapper", "child"):
+                result[key] = json.loads(result[key]) if result[key] else None
+            result["native"] = [dict(component=item["component"], process=json.loads(item["process"]))
+                                for item in db.execute("SELECT * FROM task_execution_native WHERE task_ref=? AND launch_id=?",
+                                                       (task_ref, result["launch_id"]))]
+            return result
+
+    def reserve_window(self, expected):
+        """Reserve the one new window before tmux; uncertainty is not retry permission."""
+        expected = _snapshot(expected)
+        with self.admission(expected), self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._assert_current_in(db, expected)
+            if db.execute("SELECT 1 FROM task_execution_windows WHERE task_ref=?", (expected["task_ref"],)).fetchone():
+                raise FenceRefused("task window was already reserved; do not create a second session")
+            db.execute("INSERT INTO task_execution_windows VALUES (?,?,?)",
+                       (expected["task_ref"], expected["operation_id"], expected["execution_owner"]))
+
+    def for_session(self, session_fid):
+        if not is_identity(session_fid):
+            raise FenceRefused("session lookup requires its immutable FID")
+        with self.store.connect() as db:
+            rows = db.execute("SELECT * FROM task_execution_fences WHERE execution_owner LIKE ?",
+                              ("%/" + session_fid,)).fetchall()
+        if len(rows) > 1:
+            raise FenceRefused("session has conflicting task execution bindings")
+        return dict(rows[0]) if rows else None
+
+    def assert_session_allowed(self, session_fid):
+        row = self.for_session(session_fid)
+        if row is not None and row["cancel_request"]:
+            raise FenceRefused("task stop forbids further launch, wake or turn delivery")
+        return row
 
     def bind(self, snapshot, *, authorized=False):
         """Install a verified explicit grant; repeated identical grants are inert.
@@ -226,28 +553,61 @@ class ExecutionFence:
         tombstone even when stop arrives before its binding. Never infer a
         generation or an execution target from a legacy @dispatch.
         """
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self.request_stop_in_transaction(db, task_ref, cancel_request, generation=generation)
+
+    def apply_stop(self, snapshot):
+        """Persist a verified stopped snapshot, including a previously unknown target."""
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self.apply_stop_in_transaction(db, snapshot)
+
+    def apply_stop_in_transaction(self, db, snapshot):
+        if not db.in_transaction:
+            raise FenceRefused("stop persistence requires an explicit caller transaction")
+        incoming = _snapshot(snapshot, allow_unclaimed=True)
+        if not incoming["cancel_request"]:
+            raise FenceRefused("stop synchronization requires a stop request")
+        old = self._read(db, incoming["task_ref"])
+        if old is None:
+            self._save(db, incoming)
+            return incoming
+        if old["task_fid"] and old["task_fid"] != incoming["task_fid"]:
+            raise FenceRefused("stop snapshot changes the known Task identity")
+        for key in BINDING_FIELDS:
+            if incoming[key] and old[key] and incoming[key] != old[key]:
+                raise FenceRefused("stop snapshot conflicts with the known execution target")
+        return self._stop(db, old, incoming["cancel_request"], incoming["generation"])
+
+    def request_stop_in_transaction(self, db, task_ref, cancel_request, *, generation=None):
+        """Control may persist its receipt and stop in ONE existing transaction."""
+        if not db.in_transaction:
+            raise FenceRefused("stop persistence requires an explicit caller transaction")
         task_ref = _task_ref(task_ref)
         cancel_request = _token(cancel_request, "cancel request")
         if generation is not None:
             _generation(generation)
-        with self.store.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            old = self._read(db, task_ref)
-            if old is None:
-                if generation is None:
-                    raise FenceRefused("stop for an unknown task requires its verified Hub generation")
-                stopped = dict.fromkeys(FIELDS, "")
-                stopped.update(task_ref=task_ref, generation=generation, binding_generation=0,
-                               cancel_request=cancel_request)
-                self._save(db, stopped)
-                return stopped
-            return self._stop(db, old, cancel_request, generation if generation is not None else old["generation"])
+        old = self._read(db, task_ref)
+        if old is None:
+            if generation is None:
+                raise FenceRefused("stop for an unknown task requires its verified Hub generation")
+            stopped = dict.fromkeys(FIELDS, "")
+            stopped.update(task_ref=task_ref, generation=generation, binding_generation=0,
+                           cancel_request=cancel_request)
+            self._save(db, stopped)
+            return stopped
+        return self._stop(db, old, cancel_request, generation if generation is not None else old["generation"])
 
-    def _assert_current(self, expected):
-        actual = self.read(expected["task_ref"])
+    def _assert_current_in(self, db, expected):
+        actual = self._read(db, expected["task_ref"])
         if actual is None or actual["cancel_request"] or actual != expected:
             raise FenceRefused("execution is unknown, stopped or no longer current")
         return actual
+
+    def _assert_current(self, expected):
+        with self.store.connect() as db:
+            return self._assert_current_in(db, expected)
 
     @contextlib.contextmanager
     def admission(self, expected):
@@ -271,3 +631,231 @@ class ExecutionFence:
         """One short admission check; use admission() to cover fork/registration."""
         with self.admission(expected) as permit:
             return permit.assert_current()
+
+
+def _kernel_process(pid):
+    from fleet_native_proc import process
+    return _process_proof(process(pid))
+
+
+def _same_birth(proof):
+    try:
+        return _kernel_process(proof["pid"]) == proof
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _definitely_exited(proof):
+    try:
+        os.kill(proof["pid"], 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError as exc:
+        raise FenceRefused("cannot verify the previous native process exit") from exc
+    try:
+        return _kernel_process(proof["pid"])["birth"] != proof["birth"]
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        # A zombie has exited but may still await its parent's waitpid. Unknown
+        # process observations are never evidence that a launch slot is free.
+        result = subprocess.run(["ps", "-p", str(proof["pid"]), "-o", "stat="],
+                                text=True, capture_output=True, timeout=2)
+        if result.returncode == 0 and result.stdout.strip().startswith("Z"):
+            return True
+        try:
+            os.kill(proof["pid"], 0)
+        except ProcessLookupError:
+            return True
+        raise FenceRefused("previous native process exit is unproven") from exc
+
+
+def native_command(argv, component, env=None):
+    """Prefix the actual native argv, inside any relay, priority or loop wrapper."""
+    env = os.environ if env is None else env
+    if not env.get("FLEET_TASK_EXECUTION"):
+        return list(argv)
+    return [sys.executable, str(Path(__file__).resolve()), "native", "--component", component, "--", *argv]
+
+
+def native_exec(argv, component):
+    """Final native boundary: consume the component slot, then exec under flock."""
+    from fleet_native_proc import descendant
+    expected = _snapshot(json.loads(os.environ["FLEET_TASK_EXECUTION"]))
+    launch_id = _token(os.environ.get("FLEET_TASK_LAUNCH_ID", ""), "launch id")
+    fence = ExecutionFence()
+    refresh_session(expected["execution_owner"].split("/")[1], expected=expected)
+    registered = fence.launch(expected["task_ref"])
+    if (registered is None or registered["launch_id"] != launch_id
+            or not _same_birth(registered["supervisor"])
+            or not descendant(os.getpid(), registered["supervisor"]["pid"])):
+        raise FenceRefused("native command has no live owning launch supervisor")
+    proof = _kernel_process(os.getpid())
+    environment = dict(os.environ)
+    # The root's admission token must not enroll its native Subagents or tools.
+    environment.pop("FLEET_TASK_EXECUTION", None)
+    environment.pop("FLEET_TASK_LAUNCH_ID", None)
+    with fence.admission(expected) as permit:
+        permit.register_native(launch_id, component, proof)
+        permit.assert_current()
+        os.execvpe(argv[0], argv, environment)
+
+
+def _signal_registered(fence, task_ref, launch_id, sig):
+    registered = fence.launch(task_ref)
+    if registered is None or registered["launch_id"] != launch_id:
+        return
+    proofs = [item["process"] for item in registered["native"]]
+    if registered["child"]:
+        proofs.append(registered["child"])
+    for proof in proofs:
+        if _same_birth(proof):
+            try:
+                os.kill(proof["pid"], sig)
+            except ProcessLookupError:
+                pass
+
+
+def terminate_registered(fence, task_ref):
+    """Stop the recorded native components; this is not a domain-exit proof."""
+    registered = fence.launch(task_ref)
+    if registered is None:
+        return
+    _signal_registered(fence, task_ref, registered["launch_id"], signal.SIGTERM)
+    deadline = time.monotonic() + 2
+    proofs = [item["process"] for item in registered["native"]]
+    if registered["child"]:
+        proofs.append(registered["child"])
+    while time.monotonic() < deadline and any(_same_birth(proof) for proof in proofs):
+        time.sleep(.05)
+    _signal_registered(fence, task_ref, registered["launch_id"], signal.SIGKILL)
+
+
+def supervise(expected, argv):
+    """One controlled wrapper launch. Registration survives crashes and exit.
+
+    The monitor stops its registered processes when stop commits. It does not
+    prove that escaped descendants are gone, and never releases the binding.
+    """
+    expected = _snapshot(expected)
+    fence = ExecutionFence()
+    refresh_session(expected["execution_owner"].split("/")[1], expected=expected)
+    launch_id = str(uuid.uuid4())
+    supervisor = _kernel_process(os.getpid())
+    wrapper = supervisor
+    if os.environ.get("FLEET_SESSION_WRAP"):
+        from fleet_native_proc import descendant
+        wrapper_pid = int(os.environ["FLEET_SESSION_WRAP"])
+        if not descendant(os.getpid(), wrapper_pid):
+            raise FenceRefused("native supervisor is not owned by the supplied wrapper")
+        wrapper = _kernel_process(wrapper_pid)
+    environment = dict(os.environ, FLEET_TASK_EXECUTION=json.dumps(expected, separators=(",", ":")),
+                       FLEET_TASK_LAUNCH_ID=launch_id)
+    ended = []
+    handlers = {}
+    child = None
+    try:
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            handlers[sig] = signal.signal(sig, lambda value, frame: ended.append(value))
+        for sig in (signal.SIGINT, signal.SIGQUIT):
+            handlers[sig] = signal.signal(sig, lambda value, frame: None)
+        with fence.admission(expected) as permit:
+            permit.reserve_launch(launch_id, supervisor, wrapper=wrapper)
+            permit.assert_current()
+            child = subprocess.Popen(argv, env=environment)
+            permit.register_child(launch_id, _kernel_process(child.pid))
+        while child.poll() is None:
+            try:
+                fence._assert_current(expected)
+            except FenceRefused:
+                ended.append(signal.SIGTERM)
+            if ended:
+                _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGTERM)
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGKILL)
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=2)
+                return 128 + ended[0]
+            time.sleep(.1)
+        return child.returncode if child.returncode >= 0 else 128 - child.returncode
+    finally:
+        if child is not None and child.poll() is None:
+            _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGTERM)
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                _signal_registered(fence, expected["task_ref"], launch_id, signal.SIGKILL)
+                child.kill()
+                child.wait(timeout=2)
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check-session")
+    check.add_argument("--session-fid", required=True)
+    check.add_argument("--expected")
+    check.add_argument("--controlled", action="store_true")
+    refresh = commands.add_parser("refresh-session")
+    refresh.add_argument("--session-fid", required=True)
+    refresh.add_argument("--expected")
+    refresh.add_argument("--controlled", action="store_true")
+    commands.add_parser("sync-stops")
+    history = commands.add_parser("check-history")
+    history.add_argument("--task-ref", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("--snapshot", required=True)
+    prepare.add_argument("--fleet-id", required=True)
+    window = commands.add_parser("reserve-window")
+    window.add_argument("--snapshot", required=True)
+    run = commands.add_parser("run")
+    run.add_argument("--snapshot", required=True)
+    run.add_argument("argv", nargs=argparse.REMAINDER)
+    native = commands.add_parser("native")
+    native.add_argument("--component", required=True, choices=("agent", "server", "client"))
+    native.add_argument("argv", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    try:
+        if args.command in ("check-session", "refresh-session"):
+            action = refresh_session if args.command == "refresh-session" else check_session
+            result = action(args.session_fid, expected=json.loads(args.expected) if args.expected else None,
+                            controlled=args.controlled)
+            print(json.dumps(result, separators=(",", ":")))
+            return 0
+        if args.command == "sync-stops":
+            print(json.dumps(sync_stops(), separators=(",", ":")))
+            return 0
+        if args.command == "check-history":
+            if read_task(args.task_ref) is not None:
+                raise FenceRefused("controlled task history is review-only; explicit execution authorization is required")
+            return 0
+        if args.command == "prepare":
+            expected = _snapshot(json.loads(args.snapshot), allow_unclaimed=True)
+            if expected["execution_owner"]:
+                if expected["execution_owner"].split("/")[0] != args.fleet_id:
+                    raise FenceRefused("execution is allocated to another fleet")
+                expected = refresh_session(expected["execution_owner"].split("/")[1], expected=expected)
+            else:
+                expected = claim_execution(expected, args.fleet_id)
+            print(json.dumps(expected, separators=(",", ":")))
+            return 0
+        if args.command == "reserve-window":
+            ExecutionFence().reserve_window(json.loads(args.snapshot))
+            return 0
+        argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+        if not argv:
+            raise FenceRefused("native launch needs an executable")
+        if args.command == "native":
+            native_exec(argv, args.component)
+        return supervise(json.loads(args.snapshot), argv)
+    except (FenceRefused, OSError, KeyError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+        print("fleet-task-execution: " + str(exc), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

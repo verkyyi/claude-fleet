@@ -87,8 +87,10 @@ _fc_as_sha=''; _fc_as_model=''; _fc_as_spawn=0; as_flag=()
 fleet_as_resolve() {   # <claude|codex> [--no-agent-flag]
   _fc_as_sha=''; _fc_as_model=''; _fc_as_spawn=0; as_flag=()
   [ -n "$_fc_as" ] || return 0
-  local k v out
+  local k v out rc
   out=$(python3 "$BIN/fleet-agent-def.py" launch "$_fc_as" --agent "$@" 2>&1) || {
+    rc=$?
+    if [ "$rc" = 3 ]; then printf 'fleet-claude: %s\n' "${out##*fleet-agent-def: }" >&2; exit 3; fi
     printf 'fleet-claude: %s — starting a plain session\n' "${out##*fleet-agent-def: }" >&2; return 1; }
   while IFS=$'\t' read -r k v; do
     case "$k" in
@@ -316,9 +318,13 @@ unset _fc_ty
 # out of its environment (a dispatch it makes starts a clock of its own).
 fleet_timing_at exec
 unset FLEET_TIMING_T0 FLEET_TIMING_WHAT
+_fc_native=()
+if [ -n "${FLEET_TASK_EXECUTION:-}" ]; then
+  _fc_native=(python3 "$BIN/fleet_task_execution.py" native --component agent --)
+fi
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
   # shellcheck disable=SC2154  # fleet_launch_yield sets _fl_yield
-  exec python3 "$BIN/fleet-loop.py" bridge -- ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+  exec python3 "$BIN/fleet-loop.py" bridge -- ${_fl_yield[@]+"${_fl_yield[@]}"} ${_fc_native[@]+"${_fc_native[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
 fi
 # The agent's own report (issue #2536, EPIC #2535 C1): Claude Code ≥ 2.1.295 says
 # working / blocked / done as OSC 7501, but only to a terminal that answers its
@@ -334,4 +340,4 @@ if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && [ "${FLEET_STATUS_7501:-1}" 
   _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --)
 fi
 # shellcheck disable=SC2154  # fleet_launch_yield sets _fl_yield
-exec ${_fc_relay[@]+"${_fc_relay[@]}"} ${_fl_yield[@]+"${_fl_yield[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+exec ${_fc_relay[@]+"${_fc_relay[@]}"} ${_fl_yield[@]+"${_fl_yield[@]}"} ${_fc_native[@]+"${_fc_native[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${as_flag[@]+"${as_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"

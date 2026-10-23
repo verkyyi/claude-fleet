@@ -49,6 +49,7 @@ H="$BIN/fleet-history.sh"
 st_sandbox "${TMPDIR:-/tmp}/fleet-history-selftest.XXXXXX"
 
 export FLEET_HISTORY_LEDGER="$WORK/landed.tsv"
+export FLEET_CONF_DIR="$WORK/conf" FLEET_AGENT=claude
 export CLAUDE_PROJECTS_DIR="$WORK/projects"
 export TMPDIR="$WORK"                       # so the dash summary cache lands under $WORK
 mkdir -p "$CLAUDE_PROJECTS_DIR"
@@ -690,6 +691,15 @@ contains "task: rows still target the session key" "$(run rows)" "landed:scratch
 contains "task: resume still by the session key" "$(run resume --main /w/main scratch-12)" "sess-task"
 CHECKS=$((CHECKS + 1))
 case "$(run resume --main /w/main scratch-12)" in *T41*) st_fail "task: col 15 leaked into resume's verdict";; esac
+export FLEET_CONF_DIR="$WORK/task-control"
+python3 - "$BIN" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from fleet_task_execution import ExecutionFence
+ExecutionFence().request_stop('T41', 'stop-history', generation=2)
+PY
+contains "task: controlled history cannot bypass its stop" "$(run resume --main /w/main scratch-12 2>/dev/null)" "REVIEW-ONLY"
+st_eq "task: refused resume preserves transcript" "yes" "$([ -f "$TTDIR/sess-task.jsonl" ] && echo yes)"
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --key scratch-12 --worktree "$TWT" --title 'a named scratch' --task T41 --task-line 'words' >/dev/null
 st_eq "task: a real title wins over the words" "a named scratch" "$(cut -f3 "$FLEET_HISTORY_LEDGER")"

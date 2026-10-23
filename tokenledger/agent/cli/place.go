@@ -199,6 +199,11 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	if os.Getenv("FLEET_DISPATCH") != "" && os.Getenv("FLEET_PLACE_LOCAL_DISPATCH") == "1" {
 		ask["local_dispatch"] = true
 	}
+	if version := os.Getenv("FLEET_TASK_CONTROL_VERSION"); version != "" && version != "1" {
+		return 2, errors.New("unsupported task execution control version")
+	} else if version == "1" {
+		ask["control_version"] = 1
+	}
 	if *bodyFile != "" {
 		if rest[1] != "scratch" {
 			return 2, errors.New("--body-file is for a scratch start")
@@ -255,9 +260,11 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	var out struct {
-		Local     *bool           `json:"local"`
-		Dispatch  json.RawMessage `json:"dispatch"`
-		Placement struct {
+		Local          *bool           `json:"local"`
+		Dispatch       json.RawMessage `json:"dispatch"`
+		ControlVersion int             `json:"control_version"`
+		TaskExecution  json.RawMessage `json:"task_execution"`
+		Placement      struct {
 			Machine string `json:"machine"`
 			Reason  string `json:"reason"`
 		} `json:"placement"`
@@ -298,8 +305,17 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		// why every task of one repo failed): the caller's note quotes them.
 		return 1, fmt.Errorf("hub answered HTTP %d: %s", resp.StatusCode, text)
 	}
+	if os.Getenv("FLEET_TASK_CONTROL_VERSION") == "1" && out.Local != nil && *out.Local &&
+		(out.ControlVersion != 1 || len(out.TaskExecution) == 0 || string(out.TaskExecution) == "null") {
+		return 1, errors.New("controlled LOCAL placement omitted its execution grant; no legacy fallback")
+	}
 	if path := os.Getenv("FLEET_DISPATCH_RESULT"); path != "" && len(out.Dispatch) > 0 && string(out.Dispatch) != "null" {
 		if err := os.WriteFile(path, out.Dispatch, 0600); err != nil {
+			return 1, err
+		}
+	}
+	if path := os.Getenv("FLEET_EXECUTION_RESULT"); path != "" && out.ControlVersion == 1 && len(out.TaskExecution) > 0 && string(out.TaskExecution) != "null" {
+		if err := os.WriteFile(path, out.TaskExecution, 0600); err != nil {
 			return 1, err
 		}
 	}

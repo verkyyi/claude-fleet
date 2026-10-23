@@ -213,8 +213,7 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 	w.params["dispatch"], w.params["task"] = d, d.Task
 	// Include the accepted identity in the dispatch journal as well as C1's
 	// separate attempt journal. Repeating acceptance yields this same identity.
-	b, _ := json.Marshal(map[string]any{"action": w.action, "fleet_id": w.fleetID, "node": w.node, "params": w.params})
-	w.canonical = string(b)
+	w.canonicalize()
 	return nil
 }
 
@@ -241,8 +240,7 @@ func replayDispatch(o store.FleetOperation, w writeRequest) (map[string]any, err
 	if asString(w.params["task"]) == "" {
 		w.params["task"] = d.Task
 	}
-	b, _ := json.Marshal(map[string]any{"action": w.action, "fleet_id": w.fleetID, "node": w.node, "params": w.params})
-	w.canonical = string(b)
+	w.canonicalize()
 	return replayed(o, w)
 }
 

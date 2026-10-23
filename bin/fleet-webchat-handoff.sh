@@ -139,6 +139,8 @@ to_web() {
   local fid=${addr#fid:}
   fleet_is_fid "$fid" || die "usage: fleet-webchat-handoff.sh to-web fid:<fleet_id> [--no-open]" 2
   find_win "$fid" || die "$(fleet_ui_t webchat_gone)" 2
+  python3 "$BIN/fleet-webchat-execution.py" "$fid" || exit 2
+  [ -z "$(wopt @task)$(wopt @task_execution)" ] || die "请在统一会话中继续此任务；旧 WebChat 不能启动第二个执行会话。" 2
   local agent sid label machine
   agent=$(fleet_agent_or_default "$(wopt @cc_agent)")
   sid=$(fleet_agent_session_id "$agent" wopt window)
@@ -208,7 +210,9 @@ webchat_take() {
   holder=$(jval "$rec" holder)
   [ "$holder" = terminal ] || { echo ok; return 0; }
   fid=$(jval "$rec" window_fid)
+  if [ -n "$fid" ]; then python3 "$BIN/fleet-webchat-execution.py" "$fid" || exit 2; fi
   if fleet_is_fid "$fid" && find_win "$fid"; then
+    [ -z "$(wopt @task)$(wopt @task_execution)" ] || die "请在统一会话中继续此任务；旧 WebChat 不能启动第二个执行会话。" 2
     term_busy && die "$(fleet_ui_t webchat_term_busy)" 3
     if [ "$(wopt @claude_state)" != exited ]; then
       python3 "$LOCK" set --agent "$AGENT" --sid "$SID" --holder webchat --if-holder terminal >/dev/null \

@@ -112,10 +112,10 @@ WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}
                      "#{@mod_alive}", "#{@session_origin}", "#{window_activity}", "#{@park_wake}",
                      "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
                      "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
-                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}"])
+                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}", "#{@task_execution}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
             "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
-            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task"]
+            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task", "task_execution"]
 
 
 def now():
@@ -249,10 +249,33 @@ def codex_version(client):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+def execution_reason(w=None, fid=None, *, fresh=False):
+    """Local stop admission, including sessions whose window has disappeared.
+
+    Old sessions do not gain a Hub dependency. An explicit protocol marker
+    cannot fall back to legacy behavior when its local binding is missing.
+    """
+    from fleet_task_execution import check_session, refresh_session, FenceRefused
+    raw = (w or {}).get("task_execution")
+    try:
+        expected = json.loads(raw) if raw else None
+        if raw and not isinstance(expected, dict):
+            return "task_execution_refused"
+        check = refresh_session if fresh else check_session
+        check(fid or (w or {}).get("fid", ""), conf_dir=conf_dir(),
+              expected=expected, controlled=bool(raw))
+        return ""
+    except (FenceRefused, OSError, ValueError):
+        return "task_execution_refused"
+
+
 def can_talk(w):
     """(True, '') or (False, why): may the web say a sentence into this session?"""
     if w is None:
         return False, "no_session"
+    why = execution_reason(w)
+    if why:
+        return False, why
     continuation = fallback.view(fallback_api(), w)
     if continuation and continuation["state"] != "continued":
         return False, "quota_continuation"
@@ -318,9 +341,24 @@ def save(r):
     r["_path"] = path
 
 
-def lock(fid):
+def lock(fid, *, timeout=None):
     f = (fid_dir(fid) / ".lock").open("a")
-    fcntl.flock(f, fcntl.LOCK_EX)
+    try:
+        if timeout is None:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        else:
+            until = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= until:
+                        raise TimeoutError("session input cleanup is still busy")
+                    time.sleep(.02)
+    except BaseException:
+        f.close()
+        raise
     return f
 
 
@@ -349,8 +387,16 @@ def legacy_deliver(a):
     delivery = str(uuid.uuid5(uuid.NAMESPACE_URL, "fleet:legacy:" + a.delivery)) if a.delivery else str(uuid.uuid4())
     if not text:
         return 1
+    why = execution_reason(window(a.fid), a.fid, fresh=True)
+    if why:
+        print(why)
+        return 1
     with lock(a.fid):
         w = window(a.fid)
+        why = execution_reason(w, a.fid)
+        if why:
+            print(why)
+            return 1
         if w is None:
             print("session closed before message admission")
             return 3
@@ -529,6 +575,9 @@ def claude_try(r, w):
     r.update(state="trying", nonce=request["nonce"], deadline=request["deadline"], tries=r.get("tries", 0) + 1,
              method="mod/idle.v2", last=now())
     save(r)
+    refused = execution_reason(w, r["fid"])
+    if refused:
+        return "returned", refused
     done = claude_post(directory, request, ACCEPT_WINDOW + ACCEPT_GRACE + ACCEPT_POLL)
     st, why = done.get("state"), str(done.get("reason") or "")
     if st == "accepted" and done.get("turn_id"):
@@ -598,7 +647,7 @@ def codex_try(r, w):
             if qid is not None:
                 if r.pop("codex_receipt_pending_since", None) is not None:
                     save(r)
-                return start_queued(client, sid, qid, r)
+                return start_queued(client, sid, qid, r, w)
             if r.get("state") == "native":
                 # The native client can take the queue entry between these two
                 # reads, before thread/turns/list exposes its clientId. Absence
@@ -611,17 +660,29 @@ def codex_try(r, w):
                 return "native", "busy"
         r.update(state="trying", tries=r.get("tries", 0) + 1, method="thread/queue", last=now(), sid=r.get("sid") or sid)
         save(r)
+        refused = execution_reason(w, r["fid"])
+        if refused:
+            return "returned", refused
         try:
             q = client.call("thread/queue/add", dict(threadId=sid, clientUserMessageId=r["delivery"],
                                                      input=[dict(type="text", text=compose(r))]))["queuedSubmission"]
         except ValueError:
             return "queued", "native_add_refused"
-        return start_queued(client, sid, q.get("id"), r)
+        return start_queued(client, sid, q.get("id"), r, w)
     finally:
         client.close()
 
 
-def start_queued(client, sid, qid, r):
+def start_queued(client, sid, qid, r, w=None):
+    refused = execution_reason(w or window(r["fid"]), r["fid"])
+    if refused:
+        # This exact entry belongs to this delivery. A stop during queue/add
+        # must not leave it waiting for the native UI's next automatic start.
+        try:
+            client.call("thread/queue/delete", dict(threadId=sid, queuedSubmissionId=qid))
+        except (OSError, ValueError, TimeoutError):
+            pass  # runtime termination still owns cleanup; never claim exit
+        return "returned", refused
     try:
         turn = client.call("thread/queue/start", dict(threadId=sid, queuedSubmissionId=qid))["turn"]
     except ValueError as e:
@@ -636,6 +697,10 @@ def settle(fid, wait_new=None):
     """Deliver what is due for one session: the oldest live record only. Returns the
     record that was `wait_new` (by delivery id) after the pass, if given."""
     queue_secs = num_env("FLEET_GATE_QUEUE_SECS", 1800)
+    # Network refresh precedes the FID lock; stop never waits behind it. Idle
+    # status reads with no pending input do not need an authority round trip.
+    pending = any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid))
+    refresh_error = execution_reason(window(fid), fid, fresh=True) if pending else ""
     with lock(fid):
         rows = records(fid)
         t = now()
@@ -645,6 +710,13 @@ def settle(fid, wait_new=None):
                 Path(r["_path"]).unlink(missing_ok=True)
         live = [r for r in rows if r.get("state") in ("queued", "trying", "native", "waking")]
         w = window(fid)
+        why = execution_reason(w, fid)
+        if why:
+            for r in live:
+                ret(r, why)
+            return find(rows, wait_new)
+        if refresh_error:
+            return find(rows, wait_new)  # offline is not delivery or cancellation
         if w is None:
             for r in live:
                 ret(r, "no_session")
@@ -707,6 +779,9 @@ def find(rows, delivery):
 
 def deliver(r, w):
     """(state, why) after one attempt: sent · queued · trying · native · waking · returned."""
+    why = execution_reason(w, r["fid"])
+    if why:
+        return "returned", why
     if r.get("state") == "waking" or w["parked"] or r.get("wake_retry_at"):
         return wake_try(r, w)
     b = busy_of(w)
@@ -1062,6 +1137,9 @@ def park_locked(fid, why, force):
 
 def wake_request(w, seed, why, next_at=None, queued_at=None):
     """Called under the fid lock: one owned seed, never replace another wake."""
+    refused = execution_reason(w)
+    if refused:
+        return dict(ok=False, why=refused)
     # An unsubmitted terminal draft is not a message to send with a peer wake.
     # Callers keep their words queued; the keyboard's own Enter submits its draft.
     draft = fid_dir(w["fid"]) / "park-input.txt"
@@ -1139,15 +1217,21 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
     # The sender and peer queue carry the same id. A slow native startup owns
     # its seed after .taken: a retry observes that receipt, never posts it again
     # to the now-live inbox. Bare / keyboard wakes retain their existing path.
+    refused = execution_reason(window(fid), fid, fresh=True)
+    if refused:
+        return dict(ok=False, why=refused)
     token = 'peer-' + hashlib.sha256(delivery.encode()).hexdigest() if delivery else uuid.uuid4().hex
     seed = wake_path(fid, token)
     with lock(fid):
+        w = window(fid)
+        refused = execution_reason(w, fid)
+        if refused:
+            return dict(ok=False, why=refused)
         if delivery and Path(str(seed) + '.launched').exists():
             return dict(ok=True)
         failed = read_json(str(seed) + '.meta.failed') if delivery else None
         if failed and not failed.get('deferred'):
             return dict(ok=False, why=failed.get('failure', 'launch_failed'), seed=str(seed))
-        w = window(fid)
         if w is None:
             return dict(ok=False, why="no_session")
         owned = delivery and not Path(str(seed) + '.meta.failed').exists() and not Path(str(seed) + '.deferred').exists() and (Path(str(seed) + '.taken').exists() or
@@ -1190,6 +1274,32 @@ def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
 
 
 # ---- stop -------------------------------------------------------------------------------
+def revoke_task_work(fid, *, timeout=2):
+    """After durable Task stop, return inputs and revoke local wake contracts.
+
+    This is cleanup, not exit proof. Native queues/engines remain the runtime's
+    responsibility. Preserve words and all existing sent receipts.
+    """
+    try:
+        held = lock(fid, timeout=timeout)
+    except TimeoutError:
+        return False  # the durable fence remains; the next tick retries cleanup
+    with held:
+        for row in records(fid):
+            if row.get("state") in ("queued", "trying", "native", "waking"):
+                ret(row, "task_execution_refused")
+        for seed in fid_dir(fid).glob("wake-*.txt"):
+            try:
+                seed.rename(str(seed) + ".cancelled")
+            except FileNotFoundError:
+                pass  # the launcher owns it; its fence still forbids execution
+        w = window(fid)
+        if w:
+            tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_wake")
+        import fleet_park_wake
+        return fleet_park_wake.cancel_all(fid)
+
+
 def stop(fid):
     w = window(fid)
     if w is None:
@@ -1270,6 +1380,9 @@ def answer(fid, fp, picks=None, answers=None, allow=None):
     if loc is None:
         return dict(ok=False, why="no_session")
     w = window(fid)
+    why = execution_reason(w, fid, fresh=True)
+    if why:
+        return dict(ok=False, why=why)
     card = ask_card(w)
     if card is None or card["fp"] != fp:
         return dict(ok=False, why="changed")       # answered meanwhile, or another question now
@@ -1333,10 +1446,18 @@ def say(args):
         return out(dict(state="refused", reason="bad_delivery"), 2)
     with lock(fid):
         known = find(records(fid), delivery)
+        refused = execution_reason(window(fid), fid)
+        if refused and (known is None or known.get("state") != "sent"):
+            if known is not None:
+                ret(known, refused)
+            return out(dict(delivery=delivery, state="refused", reason=refused))
     if known is not None:
         # the same sentence again (a retry after a dropped answer): never twice
         return out(dict(delivery=delivery, state=public(known), reason=known.get("why", "")))
     w = window(fid)
+    refused = execution_reason(w, fid, fresh=True)
+    if refused:
+        return out(dict(delivery=delivery, state="refused", reason=refused))
     ok, why = can_talk(w)
     if not ok:
         return out(dict(delivery=delivery, state="refused", reason=why))

@@ -118,22 +118,23 @@ python3 "$BIN/fleet-agent-def.py" ship >/dev/null
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$ROOT/plugins/fleet-epic" > "$WORK/plugins.json"
 rm -f "$FLEET_CONF_DIR/agents/plugins.json"
 eq "C: --as fleet-worker" "$(fc bash "$BIN/fleet-claude.sh" --as fleet-worker x)" "--model opus --agent fleet-worker x"
-eq "C: --as=epic-driver" "$(fc bash "$BIN/fleet-claude.sh" --as=epic-driver x)" "--model opus --agent epic-driver x"
-eq "C: --as epic-driver (fleet-epic installed) ⇒ --agent epic-driver, the bare name Claude Code finds" \
-  "$(fc bash "$BIN/fleet-claude.sh" --as epic-driver '/fleet-epic-run 1')" "--model opus --agent epic-driver /fleet-epic-run 1"
-eq "C: …its fleet.reap is loop-end" "$(kv epic-driver --dir "$WORK" | field reap)" loop-end
-eq "C: --as orchestrator" "$(fc bash "$BIN/fleet-claude.sh" --as orchestrator x)" "--model fable --agent orchestrator x"
-eq "C: --as steward (no longer shipped, issue #4900) ⇒ a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as steward x)" "--model opus x"
+for role in epic-driver orchestrator steward fleet-epic:epic-driver; do
+  result=$(fc bash "$BIN/fleet-claude.sh" --as "$role" '/fleet-epic-run 1'); rc=$?
+  [ "$rc" = 3 ] && [ -z "$result" ] && grep -q ROLE_RETIRED "$WORK/fc.err" \
+    && st_ok "C: $role refuses without starting a plain native session" \
+    || st_miss "C: retired $role launched [$result], rc=$rc"
+done
 eq "C: a file gone at launch ⇒ a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as gone-now x)" "--model opus x"
 orch() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY -u FLEET_MCP_CONFIG FLEET_CLAUDE_BIN="$WORK/claude" \
            FLEET_AGENT_CFG=0 FLEET_MOD=0 FLEET_STATUS_7501=0 FLEET_AGENT=claude FLEET_PRETRUST=0 \
            bash "$BIN/fleet-claude.sh" "$@" 2>/dev/null | grep -c 'conf/mcp-orch.json$'; }
-eq "C: an agent file that grants spawn (epic-driver) mounts the dispatch group" "$(orch --as epic-driver x)" 1
+eq "C: a retired driver mounts no dispatch group" "$(orch --as epic-driver x)" 0
 eq "C: …so does fleet-worker (it may spawn too, issue #4591)" "$(orch --as fleet-worker x)" 1
 eq "C: …and a file that grants no spawn, and a plain launch (any session may spawn, issue #4703)" "$(orch --as doc-only x)$(orch x)" 11
 grep -q "no agent file 'gone-now'.*starting a plain session" "$WORK/fc.err" && st_ok "C: …and one stderr line says so" || st_miss "C: no stderr line: $(cat "$WORK/fc.err")"
 printf '[]\n' > "$WORK/plugins.json"; rm -f "$FLEET_CONF_DIR/agents/plugins.json"
-eq "C: fleet-epic not installed ⇒ no epic-driver: a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as epic-driver x)" "--model opus x"
+result=$(fc bash "$BIN/fleet-claude.sh" --as epic-driver x); rc=$?
+[ "$rc" = 3 ] && [ -z "$result" ] && st_ok "C: absent plugin still refuses retired role" || st_miss "C: absent plugin bypassed retirement"
 
 # --- D a Claude Code with no --agent -------------------------------------------------
 agent "$HOME/.claude/agents/ro.md" ro 'model: sonnet' 'tools: Read, Grep' 'disallowedTools:' '  - Edit'
@@ -164,15 +165,17 @@ eq "E: no --as ⇒ nothing added for Codex" "$(env -u TMUX -u TMUX_PANE FLEET_FA
 # --- F ship -------------------------------------------------------------------------
 export CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_CONF_DIR="$WORK/conf2"
 out=$(AD ship); n=$(ls "$WORK/cc/agents" 2>/dev/null | wc -l | tr -d ' ')
-[ "$n" -ge 2 ] && [ ! -e "$WORK/cc/agents/epic-driver.md" ] && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
+[ "$n" = 1 ] && [ ! -e "$WORK/cc/agents/epic-driver.md" ] && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
   && st_ok "F: ship writes the core's agent files ($n)" || st_miss "F: first ship [$out]"
 eq "F: a second ship changes nothing" "$(AD ship | grep -c '^wrote')" 0
 [ ! -e "$WORK/cc/agents/steward.md" ] && st_ok "F: no steward is shipped (issue #4900)" || st_miss "F: a steward agent file was shipped"
-printf '\nextra: 1\n' >> "$WORK/cc/agents/orchestrator.md"
+[ ! -e "$WORK/cc/agents/orchestrator.md" ] && st_ok "F: no orchestrator is shipped" || st_miss "F: orchestrator installed"
+printf '\nextra: 1\n' >> "$WORK/cc/agents/fleet-worker.md"
+out=$(AD ship)
+printf '%s\n' "$out" | grep -q '^theirs   fleet-worker' && grep -q '^extra: 1' "$WORK/cc/agents/fleet-worker.md" \
+  && st_ok "F: an edited file is the person's — kept" || st_miss "F: edited [$out]"
 rm -f "$WORK/cc/agents/fleet-worker.md"
 out=$(AD ship)
-printf '%s\n' "$out" | grep -q '^theirs   orchestrator' && grep -q '^extra: 1' "$WORK/cc/agents/orchestrator.md" \
-  && st_ok "F: an edited file is the person's — kept" || st_miss "F: edited [$out]"
 printf '%s\n' "$out" | grep -q '^deleted  fleet-worker' && [ ! -f "$WORK/cc/agents/fleet-worker.md" ] \
   && st_ok "F: a deleted one stays deleted" || st_miss "F: deleted [$out]"
 # a login an older release shipped epic-driver into (issue #3116): retired
@@ -219,11 +222,10 @@ grep -q -- "\${AS_ARG:+ --as \$AS_ARG}" "$BIN/dash-issue-session.sh" && grep -q 
 pol=$(sed -n '/^policy=(); want=/,/^done/p' "$BIN/fleet-session-wrap.sh")
 case "$pol" in *'|--as)'*'--as=*'*) st_ok "G: the wrapper's resume keeps --as" ;; *) st_miss "G: the wrapper's resume drops --as" ;; esac
 grep -q '"--as", args\["agent"\]' "$BIN/fleet-mcp.py" && st_ok "G: the spawn tool's agent ⇒ --as" || st_miss "G: the spawn tool does not pass --as"
-for f in conf/agent-defaults/claude/agents/fleet-worker.md plugins/fleet-epic/agents/epic-driver.md; do
-  b=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import importlib; m = importlib.import_module("fleet-agent-def"); print(repr(m.parse(open(sys.argv[2]).read())[1]))' \
-        "$BIN" "$ROOT/$f")
-  eq "G: the shipped $f has an empty body (Claude Code keeps its own system prompt)" "$b" "''"
-done
+f=conf/agent-defaults/claude/agents/fleet-worker.md
+b=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import importlib; m = importlib.import_module("fleet-agent-def"); print(repr(m.parse(open(sys.argv[2]).read())[1]))' \
+      "$BIN" "$ROOT/$f")
+eq "G: the shipped $f has an empty body (Claude Code keeps its own system prompt)" "$b" "''"
 # (the core ships no epic-driver — fleet-epic carries it, #3116: conf/gone.list)
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("agents") == [] else 1)' "$ROOT/.claude-plugin/plugin.json" \
   && st_ok "G: plugin.json still says \"agents\": []" || st_miss "G: .claude-plugin/plugin.json must say \"agents\": []"

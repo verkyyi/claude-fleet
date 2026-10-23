@@ -586,7 +586,7 @@ case "$1" in
   to-webchat-take) [ -f ${JSON.stringify(TBUSY)} ] && { echo "正在终端里回答，答完再试" >&2; exit 3; }; echo ok ;;
 esac
 `, { mode: 0o755 });
-  const hs = (await sstart(["--socket"], { ...asHome("h"), FLEET_WEBCHAT_HANDOFF: hsh, FLEET_WEBCHAT_LOCKDIR: LOCKD })).p;
+  const hs = (await sstart(["--socket"], { ...asHome("h"), FLEET_CONF_DIR: join(HT, "h-fence"), FLEET_WEBCHAT_HANDOFF: hsh, FLEET_WEBCHAT_LOCKDIR: LOCKD })).p;
   ok((await sturn("网页里先说一句")).lines.at(-1)?.t === "done", "T the page's own conversation first");
   // the terminal's session: its transcript where Claude Code keeps it, cwd on every line
   const TID = "99999999-8888-4777-8666-555555555555", TCWD = join(homeOf("h"), "proj");
@@ -606,7 +606,7 @@ esac
   ok(cx.status === 409 && JSON.parse(cx.body).code === "no_codex", "T a Codex session is refused until the page has Codex");
   ok((await adopt({ agent: "claude", session: "../etc" })).status === 400, "T a bad session id is refused 400");
   ok((await adopt({ agent: "claude", session: "00000000-0000-4000-8000-000000000000" })).status === 404, "T a session with no transcript here is 404");
-  const ad = await adopt({ agent: "claude", session: TID, label: "scratch-20", machine: "mm", fid: "f" });
+  const ad = await adopt({ agent: "claude", session: TID, label: "scratch-20", machine: "mm", fid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   ok(ad.status === 200, `T adopt the terminal's session (${ad.status} ${ad.body})`);
   let c = JSON.parse((await sreq("/api/conversation")).body);
   ok(c.session === TID && c.cwd === TCWD, `T the page's conversation is the terminal's session, in its cwd (${c.session} ${c.cwd})`);
@@ -617,7 +617,7 @@ esac
   const kept = JSON.parse(readFileSync(join(SSTATE, "conversation.json"), "utf8")).put_away || [];
   ok(kept.length === 1 && kept[0].session === SID, "T the page's own conversation is put away and kept (新对话's rule), not lost");
   // the terminal holds it: the page reads along, a turn is refused
-  writeFileSync(join(LOCKD, `claude-${TID}.json`), JSON.stringify({ holder: "terminal", window_fid: "f" }));
+  writeFileSync(join(LOCKD, `claude-${TID}.json`), JSON.stringify({ holder: "terminal", window_fid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
   writeFileSync(OWNER, JSON.stringify({ holder: "terminal", busy: true, label: "scratch-20", machine: "mm" }));
   c = JSON.parse((await sreq("/api/conversation")).body);
   ok(c.owner?.where === "terminal" && c.owner.busy === true && c.owner.label === "scratch-20" && !c.handed,
@@ -631,7 +631,7 @@ esac
   unlinkSync(TBUSY);
   ok((await sreq("/api/take", { method: "POST", headers: H, body: {} })).status === 200, "T 在这里继续 once it is idle");
   ok(readFileSync(HLOG, "utf8").includes(`to-webchat-take --agent claude --sid ${TID}`), "T take goes through fleet-webchat-handoff.sh");
-  writeFileSync(join(LOCKD, `claude-${TID}.json`), JSON.stringify({ holder: "webchat", window_fid: "f" }));
+  writeFileSync(join(LOCKD, `claude-${TID}.json`), JSON.stringify({ holder: "webchat", window_fid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
   ok((await sturn("网页接着说")).lines.at(-1)?.t === "done" && JSON.parse(readFileSync(ENVLOG, "utf8")).resume === TID,
     "T the page holds it again: the next turn resumes the terminal's session");
   c = JSON.parse((await sreq("/api/conversation")).body);
@@ -639,6 +639,23 @@ esac
   const st = JSON.parse((await sreq("/api/state")).body);
   ok(st.busy === false && st.session === TID, "T /api/state: not answering, this session");
   ok(/"ev":"adopted"/.test(readFileSync(join(SSTATE, "server.log"), "utf8")), "T the log says adopted");
+  // Existing SDK conversation is not authorization after its native FID gains
+  // a Task binding. The check reads SQLite again; no provider restart needed.
+  const bind = spawnSync("python3", ["-c", `import sys
+sys.path.insert(0, sys.argv[1])
+from fleet_task_execution import ExecutionFence
+f=ExecutionFence(sys.argv[2])
+f.bind(dict(task_ref="T42",task_fid="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",generation=1,
+ attempt_id="task:T42:g1",operation_id="start-42",execution_endpoint="node-a",
+ execution_owner="11111111-1111-4111-8111-111111111111/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",cancel_request=""),authorized=True)
+`, BIN, join(HT, "h-fence")], { encoding: "utf8" });
+  ok(bind.status === 0, "T real local Task fence is installed after SDK adoption");
+  for (const path of ["/api/turn", "/api/take", "/api/answer"]) {
+    const r = await sreq(path, { method: "POST", headers: H, body: { text: "must not run" } });
+    ok(r.status === 409 && JSON.parse(r.body).code === "native_session_required", `T existing SDK ${path} refuses controlled Task`);
+  }
+  const denied = await adopt({ agent: "claude", session: TID, fid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  ok(denied.status === 409, "T controlled Task cannot be re-adopted into legacy SDK");
   await sstop(hs);
 }
 // ---- V: 只读 — a terminal session followed from the web (task F481) ------------------------
@@ -829,7 +846,7 @@ printf '@9\\tfixture\\t\\t${fid}\\n'
   // Retain the real server/auth/body parser, remove only the new API dispatch.
   // This models the resident's fixed route table, independent of helper version.
   const oldDir = join(HT, "old-probe-api"); mkdirSync(oldDir);
-  for (const f of ["lib.mjs", "codex.mjs"]) symlinkSync(join(dirname(APP), f), join(oldDir, f));
+  for (const f of ["lib.mjs", "codex.mjs", "execution.mjs"]) symlinkSync(join(dirname(APP), f), join(oldDir, f));
   const oldApp = join(oldDir, "server.mjs");
   writeFileSync(oldApp, readFileSync(APP, "utf8").split("\n")
     .filter((l) => !l.includes('if (p === "/api/open/probe"')).join("\n"));

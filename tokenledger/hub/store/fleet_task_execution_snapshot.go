@@ -42,6 +42,15 @@ func (s *Store) TaskExecutionSnapshot(taskID int64, owner string) (TaskExecution
 	if err != nil {
 		return snapshot, err
 	}
+	snapshot, err = taskExecutionSnapshotTx(tx, t, owner)
+	if err != nil {
+		return snapshot, err
+	}
+	return snapshot, tx.Commit()
+}
+
+func taskExecutionSnapshotTx(tx *sql.Tx, t FleetTask, owner string) (TaskExecutionSnapshot, error) {
+	var snapshot TaskExecutionSnapshot
 	if owner == "" || t.Owner != owner {
 		return snapshot, ErrTaskFence
 	}
@@ -63,5 +72,64 @@ func (s *Store) TaskExecutionSnapshot(taskID int64, owner string) (TaskExecution
 	snapshot = TaskExecutionSnapshot{TaskRef: t.Ref, TaskFID: t.FID, Generation: t.Generation,
 		BindingGeneration: generation, AttemptID: t.AttemptID, OperationID: t.OperationID,
 		ExecutionEndpoint: t.ExecutionEndpoint, ExecutionOwner: t.ExecutionOwner, CancelRequest: t.CancelRequest}
-	return snapshot, tx.Commit()
+	return snapshot, nil
+}
+
+// TaskExecutionSnapshots is the reconnect synchronization view. There is no
+// presentation limit: a stop outside a UI's first page must still reach its
+// endpoint. Legacy journal entries do not enroll old sessions. Corrupt explicit
+// bindings fail the read instead of returning a seemingly complete partial set.
+func (s *Store) TaskExecutionSnapshots(owner, endpoint string) ([]TaskExecutionSnapshot, error) {
+	if owner == "" || endpoint == "" {
+		return nil, ErrTaskInvalid
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id FROM fleet_tasks WHERE owner = ? AND execution_endpoint = ? ORDER BY id`, owner, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TaskExecutionSnapshot, 0, len(ids))
+	for _, id := range ids {
+		t, err := s.taskInTx(tx, id)
+		if err != nil {
+			return nil, err
+		}
+		if t.Owner != owner || t.ExecutionEndpoint != endpoint {
+			return nil, ErrTaskFence
+		}
+		if t.OperationID == "" {
+			continue // historical archive fields have no execution authority
+		}
+		o, _, _, _, err := executionOperationTx(tx, t.OperationID)
+		if err != nil {
+			return nil, err
+		}
+		if !taskExecutionVersion(o.Request) {
+			continue
+		}
+		snapshot, err := taskExecutionSnapshotTx(tx, t, owner)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, snapshot)
+	}
+	return result, tx.Commit()
 }

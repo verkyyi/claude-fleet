@@ -63,6 +63,7 @@ import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCoo
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
   CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType, WEB_NOTE_V, webNoteBlock, NOTE_RE } from "./lib.mjs";
 import { codexSide } from "./codex.mjs";
+import { sdkExecutionGuard } from "./execution.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const E = process.env;
@@ -103,6 +104,11 @@ const CARRY = join(STATE, "transcripts");
 // reads whether the terminal is answering). No record = never handed over.
 const HANDOFF = E.FLEET_WEBCHAT_HANDOFF || join(HELPERS, "fleet-webchat-handoff.sh");
 const LOCK_DIR = E.FLEET_WEBCHAT_LOCKDIR || join(E.FLEET_CONF_DIR || join(E.XDG_CONFIG_HOME || join(E.HOME || "", ".config"), "claude-fleet"), "convo-lock");
+const checkSdkExecution = sdkExecutionGuard({ helpers: HELPERS, env: E, lockDir: LOCK_DIR });
+async function checkClaudeExecution(c = conv) {
+  try { await checkSdkExecution("claude", c); }
+  catch (e) { closeWarm("task execution refused"); live?.ac.abort(); throw e; }
+}
 // The page is the built UI (issue #3637): ui/dist, made by `npm run build` in
 // extras/web-chat/ui and committed — served from here, every byte local.
 const UI = E.FLEET_WEBCHAT_UI || join(HERE, "ui", "dist");
@@ -579,6 +585,7 @@ async function adoptConv(body) {
   const agent = String(body?.agent || "claude"), id = String(body?.session || "");
   if (agent === "codex") return codex.available() ? codex.adopt(body) : [409, "WebChat has no Codex here", "no_codex"];
   if (agent !== "claude") return [400, "unknown agent"];
+  await checkSdkExecution(agent, body);
   if (!SID_RE.test(id)) return [400, "not a session id"];
   if (live || maint) return [409, "还在回复上一句", "busy"];
   if (id === conv.session) return [200, "already"];
@@ -590,7 +597,7 @@ async function adoptConv(body) {
   const putAway = [...(conv.put_away || []), ...(conv.session || conv.chain.length
     ? [{ session: conv.session, cwd: conv.cwd, chain: conv.chain, at: new Date().toISOString() }] : [])].slice(-200);
   const label = String(body?.label || "").slice(0, 80);
-  conv = { session: id, cwd: t.cwd, chain: [], seed: "", ctx: { used: 0, window: conv.ctx.window }, home: E.HOME || "", ctxKey: "",
+  conv = { session: id, fleet_session_fid: body.fid || "", cwd: t.cwd, chain: [], seed: "", ctx: { used: 0, window: conv.ctx.window }, home: E.HOME || "", ctxKey: "",
     note: "", last: "", put_away: putAway, handed: { from: "terminal", label, at: new Date().toISOString() } };
   saveConv();
   carryOut();
@@ -763,6 +770,7 @@ async function handover(req, res, person, how) {
     if (w.agent === "codex" && !codex.available()) return send(res, 409, { error: "这台机器上没有 Codex", code: "no_codex" });
     const ok = (extra = {}) => send(res, 200, { ok: true, agent: w.agent, session: w.sid || "", ...extra });
     if (how === "take") {
+      await checkSdkExecution(w.agent, { fid });
       if (w.holder === "webchat") return ok({ already: true });
       if (w.busy) return send(res, 409, { error: "正在终端里回答，等它说完", code: "terminal_busy" });
     } else if (w.holder !== "webchat") return ok({ already: true });
@@ -1029,6 +1037,7 @@ async function runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers
   const cred = await credFor();
   log("query", { cred_sid: cred.sid, route: cred.route, model, resume: !!resume });
   try {
+    await checkClaudeExecution(c);
     const q = S.query({ prompt, options: {
       cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
       ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources], canUseTool,
@@ -1093,6 +1102,7 @@ async function openWarm({ model, cwd, resume, c = conv }) {
   const cred = await credFor();
   const w = { input: inputStream(), ac: new AbortController(), cwd, resume: resume || "", session: resume || "", model,
     cur: null, details: null, canUse: null, idle: null, closed: false, conv: c };
+  await checkClaudeExecution(c);
   w.q = S.query({ prompt: w.input, options: {
     cwd, resume: resume || undefined, model, env: agentEnv(E, cred.mint), includePartialMessages: true,
     ...PERMISSIONS, settingSources: [...PERMISSIONS.settingSources],
@@ -1143,6 +1153,7 @@ function prewarm() {
 // One turn on the warm agent (runQuery's contract: onMsg sees every message of
 // this turn; resolves on its result, throws on an error or the stop key).
 async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details, c = conv }, onMsg) {
+  await checkClaudeExecution(c);
   lastModel = model;
   if (!WARM_IDLE_MS) return runQuery(prompt, { model, resume, cwd, ac, canUseTool, mcpServers: await chatTools(await sdk(), details), c }, onMsg);
   if (warmOpening) await warmOpening;
@@ -1170,6 +1181,7 @@ async function warmQuery(prompt, { model, resume, cwd, ac, canUseTool, details, 
   // the stop key pressed while the agent was still opening: its abort came before this listener
   if (ac.signal.aborted) { ac.signal.removeEventListener("abort", stop); stop(); throw new Error("aborted"); }
   try {
+    await checkClaudeExecution(c);
     await new Promise((resolve, reject) => {
       w.cur = { onMsg, resolve, reject };
       if (w.session) onMsg({ type: "system", subtype: "init", session_id: w.session });
@@ -1408,6 +1420,7 @@ async function turnBody(req, res) {
 }
 
 async function turn(req, res, person) {
+  await checkClaudeExecution();
   const tb = await turnBody(req, res);
   if (!tb) return;
   const { body, text, images } = tb;
@@ -1567,7 +1580,8 @@ async function turn(req, res, person) {
   }
 }
 
-function answer(body) {
+async function answer(body) {
+  await checkClaudeExecution();
   const a = live?.asks.get(String(body.rid || ""));
   if (!a) return false;
   if (a.name === "AskUserQuestion") {
@@ -1632,7 +1646,7 @@ async function importConv(body) {
 // ---- routes -------------------------------------------------------------------
 // ---- the Codex side (task R9A2): its own conversation on the same home ------------
 const codex = codexSide({ E, STATE, CWD, CODEX, SESSION_CRED, MEDIA, IMAGE_EXT_MIME, IMAGES_PER_REPLY, ASK_TIMEOUT_MS, WARM_IDLE_MS,
-  run, log, parseMint, liveCreds, newSecret, send, touch,
+  run, log, parseMint, liveCreds, newSecret, send, touch, checkSdkExecution,
   redactLine: (o) => redact(JSON.stringify(o), [...liveCreds, ADMIN]),
   keepImage, imageItems, capImages, filesOf, saveRefs, pageItem, pageTarget, pageShown, spaceCodexArgs,
   budgetRefusal, setBudget, budgetView, budget: () => budget,
@@ -1990,12 +2004,13 @@ async function handle(req, res) {
     if (p === "/api/conversation" && req.method === "GET") return send(res, 200, { ...await codex.conversation(), providers: sd.providers, others: { claude: sd.claude } });
     if (p === "/api/turn" && req.method === "POST") return codexTurn(req, res, person);
     if (p === "/api/stop" && req.method === "POST") { const ok = await codex.stop(String((await readJson(req)).turn || "")); return send(res, ok ? 200 : 404, { ok }); }
-    if (p === "/api/answer" && req.method === "POST") { const ok = codex.answer(await readJson(req)); return send(res, ok ? 200 : 404, { ok }); }
+    if (p === "/api/answer" && req.method === "POST") { const ok = await codex.answer(await readJson(req)); return send(res, ok ? 200 : 404, { ok }); }
     if (p === "/api/new" && req.method === "POST") { const ok = codex.newConversation(); return send(res, ok ? 200 : 409, ok ? { ok } : { error: "还在回复上一句" }); }
     // the terminal ⇄ this page (task T810), the Codex side's thread
     if (SOCKET && p === "/api/state" && req.method === "GET") return send(res, 200, codex.state());
     if (SOCKET && p === "/api/release" && req.method === "POST") { codex.release(String((await readJson(req)).session || "")); ownerSeen = {}; return send(res, 200, { ok: true }); }
     if (p === "/api/take" && req.method === "POST") {
+      await codex.checkExecution();
       const sid = codex.state().session;
       if (!sid) return send(res, 404, { error: "no conversation" });
       const r = await run(HANDOFF, ["to-webchat-take", "--agent", "codex", "--sid", sid]);
@@ -2043,6 +2058,7 @@ async function handle(req, res) {
     return send(res, 200, { ok: true });
   }
   if (p === "/api/take" && req.method === "POST") {
+    await checkClaudeExecution();
     if (!conv.session) return send(res, 404, { error: "no conversation" });
     const r = await run(HANDOFF, ["to-webchat-take", "--agent", "claude", "--sid", conv.session]);
     ownerSeen = {};
@@ -2056,7 +2072,7 @@ async function handle(req, res) {
     return send(res, ok ? 200 : 404, { ok });
   }
   if (p === "/api/answer" && req.method === "POST") {
-    const ok = answer(await readJson(req));
+    const ok = await answer(await readJson(req));
     return send(res, ok ? 200 : 404, { ok });
   }
   return send(res, 404, { error: "not found" });
@@ -2070,7 +2086,8 @@ const server = http.createServer((req, res) => {
   touch();
   handle(req, res).catch((e) => {
     log("error", { msg: String(e?.message || e).slice(0, 300) });
-    if (!res.headersSent) send(res, 500, { error: "internal error" }); else res.end();
+    if (!res.headersSent) send(res, e.code === "native_session_required" ? 409 : 500,
+      e.code === "native_session_required" ? { error: e.message, code: e.code } : { error: "internal error" }); else res.end();
   });
 });
 // A socket left by a server that is gone is replaced; one a live server answers

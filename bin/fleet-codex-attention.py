@@ -270,6 +270,10 @@ class Monitor:
             if data.get('owner') != self.owner or data.get('remote') != self.remote:
                 self.close()
                 return
+            tm = session['tmux']
+            observed_state = tm(['display-message', '-p', '-t', self.pane,
+                                 '#{@claude_state}|#{@claude_needs}|#{@codex_attention}|#{@claude_state_ts}']).split('|', 3)
+            state, why, before, state_ts = (observed_state + [''] * 4)[:4]
             binding = tuple(data.get(key) for key in ('owner', 'session_id', 'home', 'remote'))
             if binding != self.binding:
                 self.close()
@@ -312,9 +316,6 @@ class Monitor:
             if thread is None:
                 return
             subtype = kind(thread)
-            tm = session['tmux']
-            state, why, before = tm(['display-message', '-p', '-t', self.pane,
-                                     '#{@claude_state}|#{@claude_needs}|#{@codex_attention}']).split('|', 2)
             cmds = []
             if subtype:
                 if (state, why, before) == ('needs', subtype, subtype): return
@@ -327,6 +328,22 @@ class Monitor:
                           '@claude_state_ts':str(int(time.time()))}
             elif before:
                 values = {'@codex_attention':''}
+            elif not why and state in ('working', 'done') and thread.get('status', {}).get('type') in ('active', 'idle'):
+                # Interrupts may emit native idle without a Stop hook. Project
+                # the loaded thread directly; this says nothing about Task completion.
+                native_state = 'working' if thread['status']['type'] == 'active' else 'done'
+                if state == native_state: return
+                if native_state == 'done':
+                    # A queued idle event may precede a new turn whose working
+                    # hook has the same second timestamp. Read the native thread
+                    # now, then drain any newer status before demoting the row.
+                    latest = thread_read(self.client, data)
+                    newer = self.events(data['session_id'])
+                    if latest.get('status', {}).get('type') != 'idle' or (newer is not None and
+                            newer.get('status', {}).get('type') != 'idle'):
+                        self.reconcile_at = 0
+                        return
+                values = {'@claude_state': native_state, '@claude_state_ts': str(int(time.time()))}
             else: return
             for name, value in values.items(): cmds.append(['set-option','-w','-t',self.pane,name,value])
             test = '#{&&:#{==:#{@cc_launcher_pid},' + self.owner + '},#{==:#{@codex_session_id},' + data['session_id'] + '}}'
@@ -334,7 +351,8 @@ class Monitor:
             # Clearing only the native attention subtype cannot erase an explicit
             # blocked declaration that arrived during the RPC.
             if not subtype:
-                test = '#{&&:' + test + ',#{==:#{@claude_needs},' + why + '}}'
+                for name, value in (('@claude_needs', why), ('@claude_state', state), ('@claude_state_ts', state_ts)):
+                    test = '#{&&:' + test + ',#{==:#{' + name + '},' + value + '}}'
             tm(['if-shell','-F','-t',self.pane,test,' ; '.join(shlex.join(c) for c in cmds)])
             if subtype and before != subtype:
                 try:

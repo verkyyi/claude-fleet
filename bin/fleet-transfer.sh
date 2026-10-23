@@ -276,6 +276,8 @@ PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
 # all unsupported and none could leave a walled account (issue #2102).
 [ "$(opt "$FLEET_SESSION_FMT")" = "$SESS" ] || die 'window belongs to a different session'
 case "$(fleet_win_role "$WIN" "$SOCK")" in panel|home) die 'panel windows cannot be transferred' ;; esac
+fleet_task_relocation_allowed "$(opt '#{@fleet_id}')" "$(opt '#{@task_execution}')" \
+  || die 'task execution cannot use the legacy transfer path; source retained'
 _source_meta=$(opt '#{@hub}|#{@cc_agent}|#{@norepo}|#{@issue}|#{@raw}|#{@worktree}') || die 'source metadata unavailable'
 [ "${_source_meta%%|*}" != 1 ] || die 'the hub cannot be transferred'
 _source_meta=${_source_meta#*|}

@@ -577,6 +577,18 @@ if [ "$cmd" = authority ]; then
   exit 0
 fi
 case "$cmd" in
+  execution-list)
+    call GET /v1/node/tasks/executions
+    exit $? ;;
+  execution-get)
+    is_tref "${1:-}" || usage
+    call GET "/v1/node/tasks/$1/execution"
+    exit $? ;;
+  execution-claim)
+    is_tref "${1:-}" || usage
+    payload=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin),separators=(",",":")))') || exit 2
+    call POST "/v1/node/tasks/$1/execution/claim" "$payload"
+    exit $? ;;
   children)
     is_task_ref "${1:-}" || usage
     call GET "/v1/node/tasks/${1#\#}/children"

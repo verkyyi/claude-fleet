@@ -248,6 +248,7 @@ printf '%s\n' "\${CCQUOTA_TOKEN:-<unset>}" > "$WORK/place.env"
 # the seed a scratch carries (T672): --body-file's contents, before the caller removes it
 prev=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$WORK/place.body"; prev=\$a; done
 [ -z "\${PLACE_DISPATCH:-}" ] || printf '%s\n' "\$PLACE_DISPATCH" > "\$FLEET_DISPATCH_RESULT"
+[ -z "\${PLACE_EXECUTION:-}" ] || printf '%s\n' "\$PLACE_EXECUTION" > "\$FLEET_EXECUTION_RESULT"
 [ -n "\${PLACE_ANSWER:-}" ] && printf '%s\n' "\$PLACE_ANSWER"
 [ -n "\${PLACE_STDERR:-}" ] && printf '%s\n' "\$PLACE_STDERR" >&2
 exit "\${PLACE_RC:-0}"
@@ -887,7 +888,7 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw --no-repo
                                                  || fail "SCRATCH-NOREPO with no record (⌘N) opens here, never asking (rc=$(rc))" "$(cat "$PLACE_LOG")"
 # A no-repo session bound to its task record is the hub's to place (T742): no repo
 # to place by (an empty repo argument — any machine of the person's), its words as
-# --body-file, a plugin's shipped agent file (epic-driver) with it.
+# --body-file, an ordinary shipped agent file (fleet-worker) with it.
 rm -f "$WORK/place.body"
 T42_DISPATCH='{"version":1,"request_id":"t42-req","requested_agent":"default","resolved_agent":"claude","agent_source":"default","task":"T42","generation":1,"attempt_id":"task:T42:g1"}'
 # An accepted local start re-reads the node task endpoint before opening. Keep
@@ -900,20 +901,38 @@ import json, os, sys
 args = sys.argv[1:]
 auth = sys.stdin.read()
 assert 'Authorization: Bearer tok-task-fixture' in auth
-assert args[args.index('-X') + 1] == 'GET'
-assert args[-1] == 'http://hub.test/v1/node/tasks/T42'
+method = args[args.index('-X') + 1]
+if '/tasks/T43/execution' in args[-1]:
+    from pathlib import Path
+    path=Path(os.environ['EXECUTION_FIXTURE'])
+    snapshot=json.loads(path.read_text())
+    if method=='POST':
+        assert args[-1].endswith('/claim')
+        body=json.loads(args[args.index('--data-binary')+1])
+        assert body['control_version']==1 and body['operation_id']==snapshot['operation_id']
+        assert body['attempt_id']==snapshot['attempt_id']
+        assert body['worker_id'].startswith(os.environ['EXECUTION_FLEET']+'/')
+        assert body['worker_id'].split('/')[1]!=snapshot['task_fid']
+        snapshot['execution_owner']=body['worker_id']
+        path.write_text(json.dumps(snapshot))
+    else:
+        assert method=='GET'
+    print(json.dumps(snapshot));print('200');sys.exit(0)
+assert method == 'GET'
+assert args[-1] in ('http://hub.test/v1/node/tasks/T42','http://hub.test/v1/node/tasks/T43')
 with open(os.environ['TASK_READ_LOG'], 'a') as log:
     log.write('GET /v1/node/tasks/T42\n')
-print(json.dumps({'task': {'id': 'T42', 'authority_version': 1, 'generation': 1,
-                         'attempt_id': 'task:T42:g1', 'resolved_agent': 'claude', 'state': 'starting'}}))
+task_ref=args[-1].split('/')[-1]
+print(json.dumps({'task': {'id': task_ref, 'authority_version': 1, 'generation': 1,
+                         'attempt_id': 'task:'+task_ref+':g1', 'resolved_agent': 'claude', 'state': 'starting'}}))
 print('200')
 TASKCURL
 chmod +x "$WORK/fakebin/task-curl"
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
-PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
-  run_raw --no-repo --task T42 --as epic-driver --prompt 'drive the batch'
+PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH CLAUDE_CONFIG_DIR="$WORK/main/.claude" FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" \
+  run_raw --no-repo --task T42 --as fleet-worker --prompt 'implement the task'
 [ "$(rc)" = 0 ] && place_has '--node auto ' && place_has "  scratch $UUID" && ! place_has 'acme/widgets' \
-  && place_has '--as epic-driver' && [ "$(cat "$WORK/place.body" 2>/dev/null)" = 'drive the batch' ] \
+  && place_has '--as fleet-worker' && [ "$(cat "$WORK/place.body" 2>/dev/null)" = 'implement the task' ] \
                                                  || fail "SCRATCH-NOREPO-TASK a no-repo task asks the hub with no repo (rc=$(rc))" "$(cat "$PLACE_LOG"; cat "$WORK/spawn.err")"
 tmux_has 'new-window'                            && fail "SCRATCH-NOREPO-TASK placed elsewhere must not open here too"
 PLACE_ANSWER="$REMOTE_LINE" FLEET_DISPATCH=$T42_DISPATCH run_raw --node mac-a --no-repo --task T42
@@ -936,6 +955,30 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\t
                                                  || fail "ISSUE-TASK a newly accepted placement carries its envelope (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 grep -qx 'GET /v1/node/tasks/T42' "$WORK/task-read.log" \
                                                  || fail "ISSUE-TASK refreshes its task identity after placement and checks authorization"
+# Controlled LOCAL uses the same authenticated claim and spawner, with a real
+# Session FID allocated independently of the Task FID before the window opens.
+T43_DISPATCH=${T42_DISPATCH//T42/T43}
+python3 - "$BIN/../tokenledger/hub/store/testdata/task_execution.json" "$WORK/execution.json" <<'EXECUTION'
+import json,sys
+s=json.load(open(sys.argv[1]));s.update(task_ref='T43',attempt_id='task:T43:g1',execution_owner='')
+json.dump(s,open(sys.argv[2],'w'))
+EXECUTION
+EXECUTION_GRANT=$(cat "$WORK/execution.json")
+PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T43_DISPATCH PLACE_DISPATCH=$T43_DISPATCH PLACE_EXECUTION=$EXECUTION_GRANT \
+  FLEET_TASK_CONTROL_VERSION=1 EXECUTION_FIXTURE="$WORK/execution.json" EXECUTION_FLEET="$UUID" \
+  FLEET_HUB_CURL="$WORK/fakebin/task-curl" TASK_READ_LOG="$WORK/task-read.log" run_raw --no-repo --task T43
+[ "$(rc)" = 0 ] && tmux_has 'new-window' && tmux_has '@task_execution' && tmux_has 'FLEET_TASK_EXECUTION=' \
+  || fail "CONTROLLED LOCAL claims and stamps native execution before launch (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+SESSION_FID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["execution_owner"].split("/")[1])' "$WORK/execution.json")
+tmux_has "@fleet_id '$SESSION_FID'" || fail "CONTROLLED LOCAL window keeps the claimed Session FID"
+PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T43_DISPATCH PLACE_DISPATCH=$T43_DISPATCH PLACE_EXECUTION=$EXECUTION_GRANT \
+  FLEET_TASK_CONTROL_VERSION=1 EXECUTION_FIXTURE="$WORK/execution.json" EXECUTION_FLEET="$UUID" \
+  FLEET_HUB_CURL="$WORK/fakebin/task-curl" TASK_READ_LOG="$WORK/task-read.log" run_raw --no-repo --task T43
+[ "$(rc)" != 0 ] && ! tmux_has 'new-window' || fail "CONTROLLED LOCAL duplicate grant cannot open a second window"
+PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' FLEET_DISPATCH=$T43_DISPATCH PLACE_DISPATCH=$T43_DISPATCH \
+  FLEET_TASK_CONTROL_VERSION=1 run_raw --no-repo --task T43
+[ "$(rc)" != 0 ] && ! tmux_has 'new-window' || fail "CONTROLLED LOCAL missing snapshot cannot downgrade to legacy"
+ok "CONTROLLED LOCAL claims a unique Session FID, fences duplicate windows and refuses missing authorization"
 rm -f "$WORK/conf/node.env"
 ok "SCRATCH a seeded scratch, the shipped fleet-worker and a no-repo task travel; a record-less no-repo one stays here"
 

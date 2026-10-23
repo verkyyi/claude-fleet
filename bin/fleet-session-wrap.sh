@@ -112,6 +112,26 @@ done
 
 intmux=0; [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && intmux=1
 opt()  { tmux display-message -p -t "$TMUX_PANE" "#{$1}" 2>/dev/null; }
+# Explicitly controlled windows retain this contract across every wrapper
+# entry. Historical @dispatch never enrolls a session. The existing local
+# fence, not window metadata, is authority; missing/mismatched state refuses.
+_execution=${FLEET_TASK_EXECUTION:-}
+unset FLEET_TASK_EXECUTION FLEET_TASK_LAUNCH_ID
+if [ -z "$_execution" ] && [ "$intmux" = 1 ]; then _execution=$(opt @task_execution); fi
+if [ -z "$_execution" ] && [ "$intmux" = 1 ]; then
+  _known_fid=$(opt @fleet_id)
+  if printf '%s' "$_known_fid" | grep -qE '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'; then
+    _known_execution=$(python3 "$BIN/fleet_task_execution.py" check-session --session-fid "$_known_fid") || exit 2
+    [ "$_known_execution" = null ] || _execution=$_known_execution
+  fi
+fi
+if [ -n "$_execution" ]; then
+  _execution_fid=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["execution_owner"].split("/")[1])' "$_execution") || exit 2
+  if [ "$intmux" = 1 ] && [ "$(opt @fleet_id)" != "$_execution_fid" ]; then
+    printf 'fleet-task-execution: wrapper session differs from its execution owner\n' >&2; exit 2
+  fi
+  python3 "$BIN/fleet_task_execution.py" check-session --session-fid "$_execution_fid" --expected "$_execution" >/dev/null || exit 2
+fi
 # Only the initial spawn carries this request, not history's @dispatch metadata.
 # Existing sessions keep their normal offline resume/transfer behaviour. Do not
 # let the request escape into native children or their subsequent restores.
@@ -558,12 +578,18 @@ while :; do
     fi
     wake_guard=()
     [ -z "$park_attempt" ] || wake_guard=(python3 "$BIN/fleet_wake_guard.py" run --meta "$park_attempt" --)
-    PATH="$SHIM_PATH" ${wake_guard[@]+"${wake_guard[@]}"} env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \
+    task_guard=()
+    [ -z "$_execution" ] || task_guard=(python3 "$BIN/fleet_task_execution.py" run --snapshot "$_execution" --)
+    PATH="$SHIM_PATH" ${task_guard[@]+"${task_guard[@]}"} ${wake_guard[@]+"${wake_guard[@]}"} env -u FLEET_LAUNCH -u FLEET_LAUNCH_CONTEXT -u FLEET_LAUNCH_SUPERVISOR -u FLEET_LAUNCH_NATIVE \
       -u FLEET_LAUNCH_WORKTREE -u FLEET_LAUNCH_CREATE -u FLEET_LAUNCH_DELIVERY -u FLEET_AUTHORITY_CONTEXT \
       -u FLEET_AUTHORITY_ADMISSION -u FLEET_AUTHORITY_START -u FLEET_AUTHORITY_EXPECTED \
       -u FLEET_AUTHORITY_RESUME_SID -u FLEET_ID_DISPATCH "$LAUNCH" ${cmd[@]+"${cmd[@]}"} ${park_seed:+"$park_seed"}
   else
-    PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+    if [ -n "$_execution" ]; then
+      PATH="$SHIM_PATH" python3 "$BIN/fleet_task_execution.py" run --snapshot "$_execution" -- "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+    else
+      PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+    fi
   fi
   rc=$?
   # A keyboard wake owns its words until a native report claims the metadata.

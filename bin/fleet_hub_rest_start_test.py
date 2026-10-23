@@ -35,7 +35,7 @@ class CredentialStartTests(unittest.TestCase):
         (fleet / 'conf').write_text('FLEET_REPO="org/a"\n')
         self.install = self.root / 'bin'
         self.install.mkdir()
-        for name in ('fleet-session-wrap.sh', 'fleet-lib.sh', 'fleet-client-core.sh', 'usage-lib.sh', 'fleet-lang.sh',
+        for name in ('fleet-session-wrap.sh', 'fleet_task_execution.py', 'fleet_hub_common.py', 'fleet-lib.sh', 'fleet-client-core.sh', 'usage-lib.sh', 'fleet-lang.sh',
                      'fleet_repo_authority.py', 'fleet_hub_rest.py', 'fleet_launch.py', 'fleet_native_proc.py'):
             shutil.copy2(BIN / name, self.install / name)
         self.requests = []

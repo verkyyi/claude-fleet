@@ -266,15 +266,9 @@ if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
 fi
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
-# An EPIC charter whose FIRST line is the bare `/fleet-epic-run` (every charter
-# /fleet-epic-plan wrote before T646): Claude Code reads the head of a first turn
-# as a slash command, and a plugin's command is only `/fleet-epic:fleet-epic-run`
-# — so the turn ended at 「Unknown command」 without ever reaching the model, and
-# the panel filed the new driver under 做完待收. That line becomes the words
-# /fleet-epic-plan writes now (FLEET_EPIC_RUN_LINE, plugins/fleet-epic/commands/
-# fleet-epic-plan.md §5 — KEEP IN SYNC): plain words, no namespace, Codex alike;
-# its arguments ride along. Any other seed: byte for byte.
-FLEET_EPIC_RUN_LINE='按 fleet-epic-run 的流程驱动这一批：先调用技能 fleet-epic:fleet-epic-run，本条消息下面是这一批的章程。'
+# Keep legacy charter text readable without invoking retired orchestration.
+# Only its exact leading slash command changes; arguments and body remain intact.
+FLEET_EPIC_RUN_LINE='EPIC_RETIRED：Fleet 已取消 EPIC、Batch 和专属 driver；不要执行旧编排命令。以下旧章程仅作任务背景，由当前 Task 的 Agent 按用户授权继续，必要时使用原生 Subagent 或 inline。'
 case "$PROMPT" in
   /fleet-epic-run|/fleet-epic-run[[:space:]]*)
     _er_head=${PROMPT%%"
@@ -302,6 +296,9 @@ esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 EXPLICIT_AGENT=$AGENT
 DISPATCH="${FLEET_DISPATCH:-}"
+EXECUTION="${FLEET_TASK_EXECUTION:-}"
+unset FLEET_TASK_EXECUTION FLEET_TASK_LAUNCH_ID
+case "${FLEET_TASK_CONTROL_VERSION:-}" in ''|1) ;; *) printf 'dash-raw-session: unsupported task execution control version\n' >&2; exit 2 ;; esac
 if [ -n "$DISPATCH" ]; then
   DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
   AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
@@ -476,6 +473,7 @@ MAIN="${FLEET_MAIN:-}"
 # The agent file it starts as (issue #3122), looked for from where it will run.
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
+  python3 "$BIN/fleet-agent-def.py" check-role "$AS_ARG" || exit 3
   _asdir=$HOME; [ "$NOREPO" != 1 ] && [ -n "$MAIN" ] && _asdir=$MAIN
   # A file shipped with the release is on every machine (issue T672): it travels;
   # a file only here opens here.
@@ -590,7 +588,10 @@ if [ "$BG" = 1 ]; then
   case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
     *) owarg="$owarg --worktree='$WT_ARG'" ;; esac
   _dispatch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
-  fleet_bg "FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  _execution_bg=''
+  if [ -n "$EXECUTION" ]; then _execution_bg="FLEET_TASK_EXECUTION=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$EXECUTION") "; fi
+  [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || _execution_bg="${_execution_bg}FLEET_TASK_CONTROL_VERSION=1 "
+  fleet_bg "${_execution_bg}FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -664,7 +665,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   # FLEET_PLACE_LOCAL_DISPATCH (T716): an accepted dispatch the hub places HERE
   # is answered LOCAL and opened by this run, not sent back through this
   # machine's node (a second run of this script, a 1 s poll)
-  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
+  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
     FLEET_PLACE_LOCAL_DISPATCH="${FLEET_PLACE_LOCAL_DISPATCH:-1}" \
     FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
     fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
@@ -680,7 +681,8 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
     DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
     TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
   fi
-  rm -f "$_dispatch_result"
+  if [ -s "$_dispatch_result.execution" ]; then EXECUTION=$(cat "$_dispatch_result.execution"); fi
+  rm -f "$_dispatch_result" "$_dispatch_result.execution"
 
   _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
   # Issue #1610: machines that declined first (the hub tried the next one).
@@ -839,7 +841,14 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
 # otherwise mint one). Another machine holding it, or a hub that cannot say ⇒ a
 # new ID whose prev is the task's (the old road); a record with no ID ⇒ as before.
 TASK_FID=''; TASK_TAKE=''
-if [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
+if [ -z "$EXECUTION" ]; then
+  [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || { refuse 'controlled task start has no execution grant'; exit 2; }
+  [ -z "$TASK_REF" ] || python3 "$BIN/fleet_task_execution.py" check-history --task-ref "$TASK_REF" || exit 2
+fi
+if [ -n "$EXECUTION" ]; then
+  EXECUTION=$(python3 "$BIN/fleet_task_execution.py" prepare --snapshot "$EXECUTION" --fleet-id "$(fleet_uuid "$SESS")") || exit 2
+  TASK_FID=$(python3 -c 'import json,sys; x=json.loads(sys.argv[1]); assert x["task_ref"]==sys.argv[2]; print(x["execution_owner"].split("/")[1])' "$EXECUTION" "$TASK_REF") || exit 2
+elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
   _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?
   case "$_ttrc" in
     0) TASK_FID=${_tt%%	*}; TASK_TAKE=${_tt#*	}
@@ -927,6 +936,11 @@ fi
   # starts, so the new window's first segment is that attempt's (`reopened`, which
   # the hub reads too)
   [ -n "$TASK_FID" ] && stamp="$stamp$(fleet_win_stamp_cmd @fleet_id "$TASK_FID")"
+  if [ -n "$EXECUTION" ]; then
+    _execution_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$EXECUTION") || exit 2
+    launch="FLEET_TASK_EXECUTION=$_execution_q $launch"
+    stamp="$stamp$(fleet_win_stamp_cmd @task_execution "$EXECUTION")"
+  fi
   [ "$TASK_TAKE" = here ] && python3 "$BIN/fleet_id.py" attempt "$TASK_FID" >/dev/null 2>&1
   # a new session is clocked from its ↵ (T684, fleet_timing.py): the window
   # carries it so the agent's start (fleet_id.hook) writes `ready` and its first
@@ -948,6 +962,9 @@ fi
     _start_dispatch=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
     launch="FLEET_START_DISPATCH=$_start_dispatch $launch"
     stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
+  fi
+  if [ -n "$EXECUTION" ]; then
+    python3 "$BIN/fleet_task_execution.py" reserve-window --snapshot "$EXECUTION" || exit 2
   fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"

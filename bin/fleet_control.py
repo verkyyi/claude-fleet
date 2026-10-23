@@ -1,11 +1,13 @@
 """Versioned JSON bridge. Invoked locally or as a fixed command over SSH."""
 
 import argparse
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -17,7 +19,7 @@ from fleet_park_metrics import summarize as park_summary
 from fleet_config_write import revision, write
 from fleet_hub_common import (CONFIG_KEYS, GH_READS, PROTOCOL, WORKER_ACTIONS, Database, Fault,
                               canonical, fields, identifier, name, now, operation,
-                              parse_worker_id, is_identity, read_request, repo_named, run, tool_path, validate_gh_read,
+                              parse_worker_id, is_identity, private_dir, read_request, repo_named, run, tool_path, validate_gh_read,
                               validate_write, worker_identity, worker_key, inventory_row)
 
 BIN = Path(__file__).absolute().parent
@@ -82,6 +84,8 @@ class Control:
         self.conf_dir = Path(conf_dir or os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")).absolute()
         self.bin = Path(bin_dir).absolute()
         self.store = Database(self.conf_dir / "control", SCHEMA)
+        from fleet_task_execution import ExecutionFence
+        self.execution = ExecutionFence(self.conf_dir)
         with self.store.connect() as db:
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('machine_id', ?)", (str(uuid.uuid4()),))
             self.machine_id = db.execute("SELECT value FROM metadata WHERE key='machine_id'").fetchone()[0]
@@ -113,7 +117,7 @@ class Control:
         return env
 
     def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False, dispatch=None, as_file=None,
-                t0=None):
+                t0=None, execution=None):
         env = self.environment()
         env.pop("FLEET_CONTROL_DRAFT", None)
         if t0:
@@ -130,6 +134,8 @@ class Control:
             env["FLEET_CONTROL_DRAFT"] = "1"
         if dispatch:
             env["FLEET_DISPATCH"] = json.dumps(dispatch, separators=(",", ":"))
+        if execution:
+            env["FLEET_TASK_EXECUTION"] = json.dumps(execution, separators=(",", ":"))
         if task:
             # The hub's task record a start belongs to (issue #3325), validated
             # (T<n>): the window is stamped @task, a no-repo one files no desk
@@ -468,27 +474,46 @@ class Control:
         return result
 
     def submit(self, request):
-        fields(request, ("operation_id", "fleet_id", "action", "params", "actor"))
+        fields(request, ("operation_id", "fleet_id", "action", "params", "actor"), ("control_version", "task_execution"))
         op_id, fleet_id = identifier(request["operation_id"]), identifier(request["fleet_id"])
-        validate_write(request["action"], request["params"])
+        from fleet_task_execution import validate_request, FenceRefused
+        try:
+            execution = validate_request(request)
+        except FenceRefused as exc:
+            raise Fault("INVALID_ARGUMENT", str(exc)) from exc
+        validate_write(request["action"], request["params"], task_execution=execution)
         if not isinstance(request["actor"], str) or not 1 <= len(request["actor"]) <= 200:
             raise Fault("INVALID_ARGUMENT", "Invalid audit actor")
         encoded = canonical(request)
+        controlled_stop = execution is not None and request["action"] == "worker_stop"
+        if not controlled_stop:
+            self.fleet(fleet_id)
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT * FROM operations WHERE id=?", (op_id,)).fetchone()
             if old:
                 if old["request"] != encoded:
                     raise Fault("IDEMPOTENCY_CONFLICT", "Operation ID was used for a different request")
-                return self.get_operation(op_id)
-            self.fleet(fleet_id)
-            timestamp = now()
-            db.execute("INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,NULL)",
-                       (op_id, fleet_id, request["action"], encoded, request["actor"], "accepted", timestamp, timestamp))
+                if controlled_stop:
+                    self.execution.apply_stop_in_transaction(db, execution)
+                    # A receipt confirms durable intent, not successful cleanup.
+                    # Re-delivery schedules the SAME stop again, including after
+                    # executor death or a failed close. execute() serializes its
+                    # cleanup across processes without blocking stop persistence.
+                    db.execute("UPDATE operations SET status='accepted',updated=?,result=NULL WHERE id=?",
+                               (now(), op_id))
+                else:
+                    return operation(old)
+            else:
+                timestamp = now()
+                db.execute("INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,NULL)",
+                           (op_id, fleet_id, request["action"], encoded, request["actor"], "accepted", timestamp, timestamp))
+                if controlled_stop:
+                    self.execution.apply_stop_in_transaction(db, execution)
         self.oplog(op_id, request["action"], "accepted from %s %s" % (request["actor"], describe(request)))
         # Commit acceptance BEFORE launching. The detached executor survives an
-        # SSH disconnect. A crash in this gap stays accepted/unknown, never
-        # silently re-executes a potentially completed side effect.
+        # SSH disconnect. A crash in this gap stays accepted/unknown. Only an
+        # explicit canonical stop replay retries cleanup; starts are never replayed.
         try:
             with open(os.devnull, "wb") as sink:
                 process = subprocess.Popen([sys.executable, str(self.bin / "fleet-control.py"),
@@ -499,7 +524,10 @@ class Control:
                 # normally if an SSH request process exits first.
                 threading.Thread(target=process.wait, daemon=True).start()
         except OSError:
-            self.finish(op_id, "failed", {"error": {"code": "UNAVAILABLE", "message": "Cannot start executor"}})
+            # Another replay may already be cleaning this stop. Do not overwrite
+            # its result; accepted intent survives until a later delivery retries.
+            if not controlled_stop:
+                self.finish(op_id, "failed", {"error": {"code": "UNAVAILABLE", "message": "Cannot start executor"}})
         return self.get_operation(op_id)
 
     def finish(self, op_id, state, result):
@@ -866,6 +894,32 @@ class Control:
         return {"window": window, "pid": pid, "worktree": worktree, "worker_key": key, "observed_at": now()}
 
     def execute(self, op_id):
+        op_id = identifier(op_id)
+        with self.store.connect() as db:
+            row = db.execute("SELECT action,request FROM operations WHERE id=?", (op_id,)).fetchone()
+        if row is None:
+            return
+        request = json.loads(row["request"])
+        controlled_stop = row["action"] == "worker_stop" and request.get("control_version") == 1
+        if not controlled_stop:
+            return self._execute_once(op_id)
+        # Only cleanup takes this lock. submit() commits the stop first and never
+        # waits for it. A crashed executor releases the kernel lock automatically;
+        # duplicate deliveries cannot concurrently stop a target or revoke work.
+        directory = private_dir(self.store.root / "stop-execution")
+        fd = os.open(directory / (op_id + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise Fault("UNAVAILABLE", "Stop execution lock is not a regular file")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            self._execute_once(op_id)
+        finally:
+            os.close(fd)
+
+    def _execute_once(self, op_id):
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM operations WHERE id=?", (identifier(op_id),)).fetchone()
@@ -882,10 +936,27 @@ class Control:
         self.oplog(op_id, row["action"], "running")
         attempted = False
         try:
-            fleet = self.fleet(req["fleet_id"])
             params = req["params"]
+            from fleet_task_execution import validate_request, claim_execution, terminate_registered
+            execution = validate_request(req)
+            if execution is not None and req["action"] == "worker_stop":
+                # Durability comes first, before a FID gate, transfer, inventory
+                # or process wait. Replay also keeps the same stop barrier.
+                self.execution.apply_stop(execution)
+                worker = execution["execution_owner"]
+                terminate_registered(self.execution, execution["task_ref"])
+                if worker:
+                    from fleet_session_gate import revoke_task_work
+                    revoke_task_work(worker.split("/")[1])
+                if not worker:
+                    self.finish(op_id, "succeeded", {"stop_requested": execution["cancel_request"],
+                                                     "execution_exit": "unproven"})
+                    return
+            fleet = self.fleet(req["fleet_id"])
             if req["action"] in WORKER_ACTIONS:
                 result = self.execute_worker(fleet, req["action"], params, req.get("actor", ""))
+                if execution is not None and req["action"] == "worker_stop":
+                    result["execution_exit"] = "unproven"
             elif req["action"] == "gh_comment":
                 # The fleet writes no GitHub issue or comment any more (issue
                 # #4898): the hub task record is the only ticket. An older hub
@@ -899,6 +970,11 @@ class Control:
                     check_current(params.get("dispatch"))
                 except ValueError as exc:
                     raise Unattempted("TASK_START_REFUSED", str(exc)) from exc
+                if execution is not None:
+                    try:
+                        execution = claim_execution(execution, req["fleet_id"], conf_dir=self.conf_dir)
+                    except ValueError as exc:
+                        raise Unattempted("TASK_START_REFUSED", str(exc)) from exc
                 attempted = True
                 scratch = params.get("kind") == "scratch"
                 filed = params.get("kind") == "new"
@@ -929,7 +1005,7 @@ class Control:
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
                                                      timeout=180, dispatch=params.get("dispatch"), task=params.get("task"), draft="draft" in params,
-                                                     as_file=params.get("as"), t0=row["created"])
+                                                     as_file=params.get("as"), t0=row["created"], execution=execution)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` and the title (validated above) where a scratch
@@ -942,13 +1018,13 @@ class Control:
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=body.encode("utf-8"),
                                                      timeout=240, op_id=op_id, task=params.get("task"), dispatch=params.get("dispatch"),
-                                                     as_file=params.get("as"), t0=row["created"])
+                                                     as_file=params.get("as"), t0=row["created"], execution=execution)
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), *([""] + reap_arg if reap_arg else []),
                                                      timeout=180, task=params.get("task"), dispatch=params.get("dispatch"),
-                                                     as_file=params.get("as"), t0=row["created"])
+                                                     as_file=params.get("as"), t0=row["created"], execution=execution)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     # 7 = a new start with no task record (issue #4898): nothing was opened.
@@ -979,8 +1055,14 @@ class Control:
                 # HOME start came back UNKNOWN with its window left open.
                 fid = receipt[3].strip() if len(receipt) > 3 else ""
                 fid = fid if is_identity(fid) else ""
+                if execution is not None and fid != execution["execution_owner"].split("/")[1]:
+                    # A malformed receipt is not authority to adopt or close a
+                    # different worker, even if its window is visible.
+                    raise Fault("UNKNOWN_OUTCOME", "Spawn receipt does not name the authorized execution owner")
 
                 def started(snapshot):
+                    if execution is not None:
+                        return [w for w in snapshot["workers"] if w.get("identity") == fid]
                     if scratch or filed:
                         if fid:
                             return [w for w in snapshot["workers"] if w.get("identity") == fid]

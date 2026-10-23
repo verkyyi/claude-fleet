@@ -33,6 +33,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
@@ -218,6 +219,83 @@ class Gate(unittest.TestCase):
         self.assertEqual(r["state"], "sent")
         self.assertEqual([p["text"] for p in self.posts()], ["hello"])
         self.assertEqual(self.posts()[0]["accept"], "idle.v2")
+
+    def controlled_task(self):
+        from fleet_task_execution import ExecutionFence
+        fence = ExecutionFence(self.d / "conf")
+        snapshot = dict(task_ref="T72", task_fid="33333333-3333-4333-8333-333333333333",
+                        generation=1, binding_generation=1, attempt_id="task:T72:g1",
+                        operation_id="op-start", execution_endpoint="node-a",
+                        execution_owner="44444444-4444-4444-8444-444444444444/" + FID,
+                        cancel_request="")
+        fence.bind(snapshot, authorized=True)
+        self.setopt(**{"@task_execution": json.dumps(snapshot)})
+        return fence
+
+    def test_task_stop_returns_queued_words_and_blocks_wake(self):
+        self.setopt(**{"@claude_state": "working"})
+        queued = self.say("retain these words")
+        self.assertEqual(queued["state"], "queued")
+        fence = self.controlled_task()
+        fence.request_stop("T72", "op-stop", generation=2)
+        self.setopt(**{"@claude_state": "done"})
+        # A queue replay and a retry of the original request both consult the
+        # durable stop. Becoming idle must not consume the waiting input.
+        again = self.gate("say", "--fid", FID, "--delivery", queued["delivery"], text="retain these words")
+        self.assertEqual(again["state"], "refused")
+        self.assertEqual(again["reason"], "task_execution_refused")
+        self.assertEqual(self.posts(), [])
+        self.setopt(**{"@parked": "1"})
+        wake = self.gate("wake", "--fid", FID)
+        self.assertFalse(wake["ok"])
+        self.assertEqual(wake["why"], "task_execution_refused")
+        self.assertFalse(self.opt("@park_wake"))
+        status = self.gate("status", "--fid", FID)
+        self.assertFalse(status["can_talk"])
+        self.assertEqual(status["queue"][0]["text"], "retain these words")
+
+    def test_controlled_marker_without_binding_refuses_legacy_fallback(self):
+        self.setopt(**{"@task_execution": "{}"})
+        refused = self.say("do not launch")
+        self.assertEqual(refused["state"], "refused")
+        self.assertEqual(refused["reason"], "task_execution_refused")
+        self.assertEqual(self.posts(), [])
+        self.assertFalse((self.d / "conf/control/state.sqlite3").exists())
+
+    def test_task_stop_during_native_query_or_queue_add(self):
+        import fleet_session_gate as gate
+        fence = self.controlled_task()
+        snapshot = fence.read("T72")
+        w = dict(fid=FID, pane="%7", sock="fleet-a", sid=SID, task_execution=json.dumps(snapshot))
+        for during in ("version", "add"):
+            # Separate fixture databases keep the two real stop races independent.
+            conf = self.d / ("race-" + during)
+            from fleet_task_execution import ExecutionFence
+            current = ExecutionFence(conf)
+            current.bind(snapshot, authorized=True)
+            calls = []
+            class Client:
+                def call(self, method, params):
+                    calls.append(method)
+                    if method == "thread/queue/add":
+                        current.request_stop("T72", "op-stop", generation=2)
+                        return {"queuedSubmission": {"id": "ours"}}
+                    if method == "thread/queue/delete":
+                        return {"deleted": True}
+                    raise AssertionError("unexpected native execution: " + method)
+                def close(self): pass
+            def version(client):
+                if during == "version":
+                    current.request_stop("T72", "op-stop", generation=2)
+                return (0, 162)
+            row = dict(fid=FID, delivery="aaaaaaaa-1111-4111-8111-111111111111", text="keep me", images=[],
+                       at=time.time(), state="queued", sid=SID)
+            api = (lambda *_: dict(remote="unix:///sample", session_id=SID), lambda *_: Client())
+            with patch.dict(os.environ, FLEET_CONF_DIR=str(conf)), patch.object(gate, 'codex_api', return_value=api), patch.object(gate, 'codex_version', side_effect=version):
+                result = gate.codex_try(row, w)
+            self.assertEqual(result, ("returned", "task_execution_refused"))
+            self.assertNotIn("thread/queue/start", calls)
+            self.assertEqual(calls, [] if during == "version" else ["thread/queue/add", "thread/queue/delete"])
 
     def test_B_busy_queues_then_in_order(self):
         self.setopt(**{"@claude_state": "working"})

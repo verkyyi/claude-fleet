@@ -217,6 +217,88 @@ func TestTaskExecutionOneWorkerCannotClaimTwoTasks(t *testing.T) {
 	}
 }
 
+func TestTaskExecutionClaimRejectsHistoricalIdentity(t *testing.T) {
+	for _, association := range []string{"worker", "task-fid", "ledger-task", "ledger-alias", "ledger-task-id", "foreign-owner", "ledger-unassigned"} {
+		t.Run(association, func(t *testing.T) {
+			s := taskStore(t)
+			a, b := acceptedTask(t, s, "new", ""), acceptedTask(t, s, "old", "")
+			fid := "22222222-2222-4222-8222-222222222222"
+			switch association {
+			case "worker":
+				_, err := s.write.Exec(`UPDATE fleet_tasks SET worker_id = ? WHERE id = ?`, executionWorker, b.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "task-fid":
+				fid = b.FID
+			default:
+				owner, task, taskID, aliases := a.Owner, "", "", "[]"
+				switch association {
+				case "ledger-task":
+					task = b.Ref
+				case "ledger-alias":
+					aliases = fmt.Sprintf(`["%s"]`, b.Ref)
+				case "ledger-task-id":
+					taskID = b.FID
+				case "foreign-owner":
+					owner = "bob"
+				}
+				_, err := s.write.Exec(`INSERT INTO fleet_ids (id, owner, code, short, endpoint_id, task, task_id, aliases, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, fid, owner, FleetIDCode(fid), "TEST", "node-a", task, taskID, aliases, time.Now().UTC().Format(rfc))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			o := executionOp(a, "claim-old")
+			if _, err := s.AuthorizeTaskExecution(o, "node-a"); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.ClaimTaskExecution(a.ID, a.Owner, o.ID, "node-a", executionFleet+"/"+fid, a.Generation, a.AttemptID)
+			if !errors.Is(err, ErrTaskConflict) {
+				t.Fatalf("claimed historical %s identity: %v", association, err)
+			}
+			got, err := s.FleetTask(a.ID)
+			if err != nil || got.ExecutionOwner != "" {
+				t.Fatalf("refused claim mutated binding: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+func TestTaskExecutionSessionIdentitySurvivesFleetMove(t *testing.T) {
+	s := taskStore(t)
+	tasks := []FleetTask{acceptedTask(t, s, "move-a", ""), acceptedTask(t, s, "move-b", "")}
+	fleets := []string{executionFleet, "55555555-5555-4555-8555-555555555555"}
+	for i, task := range tasks {
+		o := executionOp(task, "move-start-"+task.Ref)
+		o.FleetID = fleets[i]
+		if _, err := s.AuthorizeTaskExecution(o, fmt.Sprintf("node-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gate := make(chan struct{})
+	results := make(chan error, 2)
+	for i, task := range tasks {
+		go func(i int, task FleetTask) {
+			<-gate
+			_, err := s.ClaimTaskExecution(task.ID, task.Owner, "op-move-start-"+task.Ref, fmt.Sprintf("node-%d", i),
+				fleets[i]+"/22222222-2222-4222-8222-222222222222", task.Generation, task.AttemptID)
+			results <- err
+		}(i, task)
+	}
+	close(gate)
+	winners := 0
+	for range tasks {
+		if err := <-results; err == nil {
+			winners++
+		} else if !errors.Is(err, ErrTaskConflict) {
+			t.Fatal(err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("same Session FID acquired %d tasks through different fleets", winners)
+	}
+}
+
 func TestTaskExecutionRejectsLegacyAndForeign(t *testing.T) {
 	s := taskStore(t)
 	task := acceptedTask(t, s, "legacy", "")

@@ -114,6 +114,22 @@ def pane(r, fmt):
     return tm(r, 'display-message', '-p', '-t', r['fleet']['pane_id'], fmt)
 
 
+def execution_check(r, *, fresh=False):
+    from fleet_task_execution import check_session, refresh_session, FenceRefused
+    fid = pane(r, '#{@fleet_id}')
+    raw = pane(r, '#{@task_execution}')
+    if not fid and not raw:
+        return  # a pre-identity loop has no new execution authorization
+    try:
+        expected = json.loads(raw) if raw else None
+    except ValueError as exc:
+        raise FenceRefused('invalid task execution metadata') from exc
+    if raw and not isinstance(expected, dict):
+        raise FenceRefused('invalid task execution metadata')
+    check = refresh_session if fresh else check_session
+    check(fid, expected=expected, controlled=bool(raw))
+
+
 def current(r):
     f = r['fleet']
     want = '|'.join([f['session'], f['window_id'], str(r['pane_pid']), r.get('agent','codex'),
@@ -124,6 +140,7 @@ def current(r):
     got = pane(r, '#{?#{session_group},#{session_group},#{session_name}}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|' + binding)
     if got != want or pane(r, '#{pane_dead}') == '1':
         raise ValueError('pane, agent, worktree or handoff identity changed')
+    execution_check(r)
     if r.get('thread_id'):
         sid = (claude_identity(r)['session_id'] if r.get('agent') == 'claude'
                else json.loads(pane(r, '#{@codex_identity}') or '{}').get('session_id'))
@@ -244,6 +261,14 @@ def command(a):
 def dispatch(path, now=None):
     now = time.time() if now is None else now
     try:
+        # Never hold a loop/FID lock across Hub I/O. A failed refresh holds the
+        # existing schedule without claiming it was revoked or delivered.
+        preview = json.loads(Path(path).read_text())
+        if not preview.get('park_fid'):
+            execution_check(preview, fresh=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+    try:
         with locked(path, nonblocking=True) as r:
             if r.get('park_fid'):
                 return  # C3 owns delivery through the same conversation's gate.
@@ -337,6 +362,7 @@ def dispatch(path, now=None):
                     save(path, r)
                     prompt = codex_prompt(r, now)
                     due_ids = [j['id'] for j in fleet_cron.pending(r['schedule'], now)] if 'jobs' in r['schedule'] else []
+                    execution_check(r)
                     result = rpc.call('turn/start', {'threadId': r['thread_id'],
                                                     'input': [{'type': 'text', 'text': prompt}]})
                     r['last_turn_id'] = result['turn']['id']
