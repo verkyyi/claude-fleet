@@ -119,12 +119,13 @@ ok "A target→key parsing (landed:issue:N→N, landed:P→#P, landed:scratch:K�
 # The ledger row's title drives the window name (kebab, #216) — resume-9 is only
 # a fallback (case H). @issue comes from the ledger's issue column (issue #319).
 VERDICT="RESUME\t$WORK/wt\tsid-abc\tclaude --resume sid-abc --fork-session" \
-  META="9\tFix the flaky login" \
+  META="9\tFix the flaky login\tscratch-99" \
   FLEET_MAX_SESSIONS=0 FLEET_SPAWN_FOCUS=1 run_restore 'landed:issue:9'
 grep -q -- '-n fix-the-flaky-login\b' "$NEWWIN_LOG" || fail "B window not named from the ledger title" "$(cat "$NEWWIN_LOG")$(cat "$WORK/err")"
 grep -q -- "-c $WORK/wt" "$NEWWIN_LOG"       || fail "B window not opened in the reconstructed worktree" "$(cat "$NEWWIN_LOG")"
 grep -q -- '--resume sid-abc' "$NEWWIN_LOG"  || fail "B window should run claude --resume sid-abc" "$(cat "$NEWWIN_LOG")"
 grep -q 'SETOPT .*@issue 9' "$OPTS_LOG"      || fail "B resuming by issue should bind @issue 9" "$(cat "$OPTS_LOG")"
+grep -qE '@origin(_fid|_wid|_gen)? ' "$OPTS_LOG" && fail "B history restore must not revive Parent ancestry" "$(cat "$OPTS_LOG")"
 grep -q 'SETOPT .*@restored 1' "$OPTS_LOG"   || fail "B a restored window should be marked @restored 1" "$(cat "$OPTS_LOG")"
 grep -q 'SELECT .*@9' "$SELECT_LOG"          || fail "B FLEET_SPAWN_FOCUS=1 should jump to the restored window" "$(cat "$SELECT_LOG")"
 # The reconstruct+spawn must be BACKGROUNDED (issue #304): dispatched via run-shell

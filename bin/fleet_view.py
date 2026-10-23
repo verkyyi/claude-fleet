@@ -183,7 +183,7 @@ from pathlib import Path
 if str(Path(__file__).absolute().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).absolute().parent))
 import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
-from fleet_task_control import pending_start_task, cancel_pending_start
+from fleet_task_control import pending_start_task, cancel_pending_start, controlled_stop_task, stop_task
 
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -2215,6 +2215,8 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
         e["worker_id"] = r.get("worker_id") or ""
+        e["task"] = r.get("task") or e.get("task") or ""
+        e["execution_endpoint"] = r.get("execution_endpoint") or e.get("execution_endpoint") or ""
         # Either source losing observation is enough to withhold a live glyph.
         e["lost"] = bool(e.get("lost") or r.get("lost"))
         e["source_order"] = source_order
@@ -4048,13 +4050,14 @@ def facts(fleet, e):
     if not t.startswith("@"):
         return {}
     rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|"
-                 "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}|#{@task}")
-    f = (out.split("|") + [""] * 9)[:9] if rc == 0 else [""] * 9
+                 "#{@cc_agent}|#{@claude_needs}|#{@fleet_id}|#{window_name}|#{@wrap_exit_rc}|#{pane_id}|#{@task}|#{@task_execution}")
+    f = (out.split("|") + [""] * 10)[:10] if rc == 0 else [""] * 10
     if f[0] != t:     # tmux answers a gone id with another window's format
         return {"gone": True}
     pr, pr_url = task_pr(fleet, f[8])
     return {"pin": f[1] == "1", "agent": f[2] or "claude", "needs": f[3],
-            "fid": f[4], "wname": f[5], "page": f[6] != "", "pane": f[7], "pr": pr, "pr_url": pr_url}
+            "fid": f[4], "wname": f[5], "page": f[6] != "", "pane": f[7], "pr": pr, "pr_url": pr_url,
+            "task": f[8] or e.get('task') or '', "task_execution": f[9]}
 
 
 PR_REF = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$")
@@ -4189,9 +4192,9 @@ ACTIONS = [
      "local": reappol_local, "far": far("reappol"), "ask": "choice", "choices": reap_choices,
      "then": {"at": ("text", lambda r: say("view_ask_at"))}},
     {"id": "stop", "label": lambda r: say("view_act_stop"),
-     "when": lambda r: (live(r) and bool(r.get("fid"))) or far_live(r),
-     "local": lambda r, a, f: sh("fleet-worker-stop.sh", f, "fid:" + r["fid"]), "far": far("stop"), "ask": None,
-     "slow": True},
+     "when": lambda r: not pending_start_task(r) and (bool(controlled_stop_task(r)) or (live(r) and bool(r.get("fid"))) or far_live(r)),
+     "local": lambda r, a, f: "taskstop", "far": lambda r, a, f: "taskstop", "ask": None,
+     "slow": True, "thread": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
      "when": lambda r: (r.get("gone") and not r.get("ledger")) or (r.get("state") == "exited" and (r.get("far") or r.get("page"))),
      "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
@@ -4277,8 +4280,8 @@ def act_row(fleet, e):
 def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
     if r.get("record_only"):
-        a = ACTION["cancelstart"]
-        return [(a, a["label"](r))] if pending_start_task(r) else []
+        a = ACTION["cancelstart"] if pending_start_task(r) else ACTION["stop"]
+        return [(a, a["label"](r))] if pending_start_task(r) or controlled_stop_task(r) else []
     out = []
     for a in ACTIONS:
         if a.get("rowless") or (a["far"] if r.get("far") else a["local"]) is None:
@@ -4306,6 +4309,9 @@ def page_of(r, missing=None):
         if pending_start_task(r):
             a = ACTION["cancelstart"]
             return [(a, a["label"](r), "")]
+        if controlled_stop_task(r):
+            a = ACTION['stop']
+            return [(a,a['label'](r),'')]
         why = "No live session or confirmed pending start; refresh to check" if ui_lang() == "en" else "暂无运行会话或已确认的待启动请求；请刷新核对"
         a = ACTION["stop"]
         return [(a, a["label"](r), why)]
@@ -4355,6 +4361,12 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         rc, said = cancel_pending_start(task, ui_lang())
         hub_reread(fleet)
         return rc, said, False
+    if argv == 'taskstop':
+        result = stop_task(r,ui_lang(),bin_dir=act_bin())
+        if result is not None:
+            hub_reread(fleet)
+            return result[0],result[1],False
+        argv = far('stop')(r,ans,fleet) if r.get('far') else sh('fleet-worker-stop.sh',fleet,'fid:'+r['fid'])
     if argv == "pr-unknown":
         return 1, pr_label(r), False
     if argv in ("go", "shell") and lost_msg(r):

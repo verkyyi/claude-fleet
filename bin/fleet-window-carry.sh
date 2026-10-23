@@ -31,7 +31,10 @@ fi
 name=$(tmux display-message -p -t "$S" '#{window_name}' 2>/dev/null)
 tmux show-options -w -t "$S" 2>/dev/null | while IFS= read -r line; do
   o=${line%% *}
-  case "$o" in @*) ;; *) continue ;; esac
+  case "$o" in
+    @origin|@origin_fid|@origin_wid|@origin_gen|@origin_retired) continue ;;
+    @*) ;; *) continue ;;
+  esac
   v=$(tmux show-options -wqv -t "$S" "$o" 2>/dev/null)
   tmux set-option -w -t "$W" "$o" "$v" 2>/dev/null && tmux set-option -wu -t "$S" "$o" 2>/dev/null
 done

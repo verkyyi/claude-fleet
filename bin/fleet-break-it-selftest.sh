@@ -6230,7 +6230,7 @@ drill_report_parent_key_reminted() {
   o2=$(rpe env TMUX_PANE="$pdh" bash "$BIN/fleet-report-parent.sh" --state waiting --summary kept 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
-  [ "$org" = "$pb|" ] || { WHY="the re-mint moved an identified child aside: @origin|@origin_retired = [$org], want [$pb|]"; return 1; }
+  [ "$org" = "acme-app:scratch-3|" ] || { WHY="retired origin logic rewrote historical bytes: @origin|@origin_retired = [$org]"; return 1; }
   case "$o1" in *RECORDED:*RETIRED:*) ;; *) WHY="reused key redirected report or lost own result: $o1"; return 1 ;; esac
   case "$o2" in *RECORDED:*RETIRED:*) ;; *) WHY="retired origin redirected report or lost own result: $o2"; return 1 ;; esac
   WHAT="旧父会话编号重领或 origin 已退役都不向祖先投递；自身历史仍保存"
@@ -6950,12 +6950,31 @@ drill_native_exit_submit_replay() {
   SECS=$(since "$t0")
 }
 
+drill_task_stop_entry() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-stop-entry-selftest.py" >"$WORK/task-stop-entry.log" 2>&1 || {
+    WHY="task stop entry regression: $(tail -10 "$WORK/task-stop-entry.log")"; return 1;
+  }
+  WHAT='Task stop 跨 Web/tmux/CLI 持久撤销，离线可受理，未知不降级，普通关闭不冒充原生退出'
+  SECS=$(since "$t0")
+}
+
 drill_task_unclaimed_stop_proof() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/store ./hub/api -run '^TestTaskUnclaimedStop' -count=1) >"$WORK/task-unclaimed-stop.log" 2>&1 || {
     WHY="unclaimed stop proof failed: $(tail -8 "$WORK/task-unclaimed-stop.log")"; return 1;
   }
   WHAT='未领取启动的 canonical stop 独立确认；真实 claim/stop 竞态、丢 ACK、历史与伪造关联均不误报原生退出'
+  SECS=$(since "$t0")
+}
+
+
+drill_task_continue_unclaimed() {
+  local t0; t0=$(now); CAP=120
+  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
+    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
+  }
+  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
   SECS=$(since "$t0")
 }
 
@@ -6979,6 +6998,19 @@ drill_task_local_continuation() {
   SECS=$(since "$t0")
 }
 
+drill_task_continue_historical_outcome() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \
+    "$ROOT/tokenledger/hub/store/fleet_task_continue_outcome_test.go" \
+    '历史结果只在已证明的本人显式继续路径放行' ./hub/store || return 1
+  _drill_go_tests 'TestTaskContinueHistoricalOutcomeAPI' \
+    "$ROOT/tokenledger/hub/api/fleet_task_continue_outcome_test.go" \
+    '本人继续保留历史结果；停止链、代次、幂等和首次接管限制保持' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
+
+
 drill_codex_no_daemon_fence() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-codex-no-daemon-fence-selftest.py" >"$WORK/codex-no-daemon-fence.log" 2>&1 || {
@@ -6997,14 +7029,6 @@ drill_task_unclaimed_node() {
   SECS=$(since "$t0")
 }
 
-drill_task_continue_unclaimed() {
-  local t0; t0=$(now); CAP=120
-  (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
-    WHY="unclaimed continuation regression: $(tail -8 "$WORK/task-continue-unclaimed.log")"; return 1;
-  }
-  WHAT='未 claim 的明确继续：严格停止证明、逐代历史与工作区来源；并发幂等不重复授权，原生退出与未启动不混用'
-  SECS=$(since "$t0")
-}
 
 drill_task_continue_authority() {
   local t0; t0=$(now); CAP=120
@@ -7817,6 +7841,15 @@ drill_task_terminal_physical_width() {
     WHY="Terminal physical width/details: $(tail -18 "$WORK/task-terminal-physical-width.log")"; return 1;
   }
   WHAT='隔离tmux真实面板32/40/80/120及阈值邻列：40列显示Agent、60列显示仓库，选中详情不被窄屏提示覆盖，动作返回原行'
+  SECS=$(since "$t0")
+}
+
+drill_parent_origin_retired() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
+    WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
+  }
+  WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
   SECS=$(since "$t0")
 }
 

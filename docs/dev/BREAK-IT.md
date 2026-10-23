@@ -692,15 +692,19 @@
 | quota 源不能再执行 CronList，历史 wakeup 被冒充当前导出或替换错循环（T943） | 迁移永远等待耗尽源，或丢调度、重复 timer | 显式外部接管核对原用户 loop 规格、精确 PID/启动时间/FID/SID、实时空 prompt 与工具证据；durable 和竞争控制器拒绝；正常退出并销毁源 timer 后才启动一个替代 timer，原生退出框必须匹配授权规格；目标晚绑定仍须等待 controller 已确认 started，未知结果不启 timer | `quota-loop-replacement` |
 | 未启动记录在面板显示 Unknown / Queued，任务结果盖过会话的新工作（PV4D） | 人误以为已有 worker 或自动调度，并找不到协调归属 | Hub board 区分计划与运行证据、未派发与保留状态，终端和网页消费同一事实；协调归属只取可核验的父记录 | `board-plan-facts` |
 | Hub Task 的 stop 已持久化，但节点清理失败、执行器崩溃或尚未启动；Hub 再次投递同一个 stop | 旧 failed / unknown / succeeded 回执被当成清理已经结束，后续请求不再停进程或关闭窗口 | 每次重投先持久提交同一 stop 栅栏，再用原 operation 重试清理；按 operation 的进程间锁防止并发清理，执行器死亡自动释放；成功回执仍标记 execution_exit 为 unproven | `task-stop-replay-cleanup` |
+| Web、tmux 或 CLI 停止受控 Task 时只关 live 窗口，离线或没有窗口的记录没有停止入口 | 旧执行授权未撤销，未来旧唤醒仍可运行；界面误称已经退出 | 同 owner 的 Task stop 先持久撤销；节点离线仍受理，受控证据缺失先核验，Hub 不可达不降级普通 worker_stop；原生退出另行证明 | `task-stop-entry` |
 | restore 先启动包装器、后补会话 FID，或快照丢失显式执行协议 | 已停止的受控 Task 被当成旧会话恢复；本地数据库丢失时绕过停止检查 | FID、恢复来源和显式协议在同一 pane 启动前写入，写失败不启动；协议随 FID 单独入快照，缺本地授权仍拒绝，未受控会话照常恢复 | `restore-execution-identity` |
 
 | 原生组件登记后时区改变、procfs 不可见，或退出后仍是僵尸，或历史启动中断只登记部分组件 | 显示日期变化被误认为 PID 复用，或 procfs 缺失被误认为进程退出，可能错误释放；反过来僵尸和历史部分启动会永久阻挡接续 | 退出判断只比较内核出生标记与状态；内核记录缺失后再次 kill(0)，仅 ESRCH 证明 PID 消失，存活或权限未知拒绝；历史已登记组件全部核验，缺失 child 保持未知；不按可执行文件是否可读推断退出 | `native-exit-identity` |
 | 节点已生成原生退出证明后崩溃，或 Hub 接受证明但响应丢失，随后 stop 重投或结果更新时间 | 首次证明丢失或重生成时间戳，历史回执无法幂等重放；Hub 已释放后不再投递 stop，节点永远收不到确认 | 首次 proof 和固定幂等键保存在原 stop 操作的私有 result 中；更新结果原子保留，公开投影不带大包；heartbeat 有界扫描同一 journal，仅重发原包，不重做 stop、不清除栅栏 | `native-exit-submit-replay` |
 
 | Parent 回报入口退役后，旧工具、委托代收或积压队列仍投递报告 | 会话继续被旧协调链唤醒；或回执虚报送达、原结果丢失 | 旧报告入口明确退役；报告积压保留原文并永久失败，不转换成提醒；自身结果历史与普通消息保留 | `parent-report-retired` |
+
+| 已退役的 Parent 关系经恢复、移机、迁移或拆窗重新写入运行窗口 | 旧关系重新影响路由、分组或新会话元数据 | 新开与续接窗口不写 Parent；历史账本仍可读，FID、原生会话及 prev 连续身份保留；旧 Parent 消息拒绝，普通显式目标及 prev 接续照常 | `parent-origin-retired` |
 | Hub 尚未授予 claim 就已停止，节点离线导致用户永远等退出；或 claim 响应丢失、历史 stop 被误认未启动 | 未开始的任务无法确认停止，或未知活进程被当成已退出 | 同一 Task 行锁下的 canonical stop 与精确 start/代/attempt/endpoint 关联证明从未 claim；单独返回未启动事实，保留取消绑定，不伪造原生退出，不改结果 | `task-unclaimed-stop-proof` |
 | 用户停止后明确接续，节点覆盖当前 Task 绑定但旧 FID 丢失停止事实，或前轮启动登记混入新一轮退出证明 | 旧会话被当作 legacy 复活；重复接续分配多个会话；第二次停止无法证明退出 | 仅显式最新授权与已确认原 proof 共同允许原子接续；同 grant 复用分配，原 stop journal 保留旧 FID 停止事实和原 proof，按原 operation 精确退休注册，第二轮启动停止独立验证 | `task-local-continuation` |
 | 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |
+| 旧 Outcome / cancelled 投影保留在已证明停止的 Task 上，用户明确继续 | 历史完成结果永久拦住接续，用户只能另开任务 | 仅显式 continue 在完整原生退出或未领取停止链证明后忽略旧结果；首次接管与普通 resume 不放宽，历史结果不改写 | `task-continue-historical-outcome` |
 | 用户在停止确认后并发继续或换 Agent，重放旧幂等键，或原节点能力丢失 | 双重授权、误换节点、旧停止证明释放新绑定或旧节点绕过接续栅栏 | 本人严格 continue；可信退出回执及同端点事务核验；精确幂等重放和单一新 generation；发送前重新检查窄能力，保留旧历史 | `task-continue-authority` |
 | 继续授权未 claim 就停止，再次重试；或连续多次重试、跨 Agent 选择 | 未启动任务无法继续，或把原生退出和未启动混为一体、丢失之前真实工作区 | 本人显式 continue 认可精确 canonical 未领取停止；逐代验证原生退出或未领取证明，认证读取分别给直接来源与真实工作区来源，旧授权不能重用 | `task-continue-unclaimed` |
 | 受控 Codex 的 `--no-daemon` 分支绕过原生执行登记 | 已停止任务仍进入 Codex exec，且缺少可终止的原生根记录 | 同一 native_command 边界校验停止并登记 Codex client；非受控 argv 不变，缺少 server 仍不签发完整退出证明 | `codex-no-daemon-fence` |

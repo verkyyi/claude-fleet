@@ -17,9 +17,9 @@ BIN = Path(__file__).resolve().parent
 TERMINAL = ("succeeded", "failed", "cancelled", "refused")
 
 
-def call(action, task, payload=None, timeout=15):
+def call(action, task, payload=None, timeout=15, *, bin_dir=None):
     env = dict(os.environ, FLEET_HUB_TIMEOUT=str(max(1, min(10, int(timeout)))))
-    result = subprocess.run(["bash", str(BIN / "fleet-task-record.sh"), action, task],
+    result = subprocess.run(["bash", str(Path(bin_dir or BIN) / "fleet-task-record.sh"), action, task],
                             input=json.dumps(payload) if payload is not None else None,
                             text=True, capture_output=True, timeout=timeout, env=env)
     if result.returncode:
@@ -221,6 +221,79 @@ def cancel_pending_start(task, lang="zh"):
         return 1, (("Cancellation not confirmed. " if en else "取消启动未确认。") + changed)
     return 0, ("Start cancelled; this does not confirm any remote process has exited." if en else
                "已取消启动；这不表示已确认远端进程退出。")
+
+
+def controlled_stop_task(row):
+    """A current binding is a stop target even without a live window."""
+    task = row.get('task')
+    if (isinstance(task, str) and re.fullmatch(r'T[1-9][0-9]*', task)
+            and (row.get('execution_endpoint') or row.get('task_execution'))):
+        return task
+    return ''
+
+
+def stop_task(row, lang='zh', *, bin_dir=None):
+    """Return (rc, acknowledgment), or None only for a verified legacy route.
+
+    Local durable execution records and explicit window markers take precedence
+    over an older Hub list. Unknown authority never authorizes worker_stop.
+    """
+    en = lang == 'en'
+    def request(*args):
+        return call(*args, bin_dir=bin_dir) if bin_dir is not None else call(*args)
+    try:
+        from fleet_task_execution import read_session, _snapshot
+        from fleet_hub_common import is_identity
+        task = row.get('task') or ''
+        marker = row.get('task_execution')
+        fid = row.get('fid') or row.get('fleet_id') or str(row.get('worker_id') or '').rpartition('/')[2]
+        known = bool(row.get('execution_endpoint'))
+        snapshots = []
+        if marker:
+            snapshots.append(_snapshot(json.loads(marker) if isinstance(marker,str) else marker))
+        if is_identity(fid):
+            local = read_session(fid)
+            if local is not None:
+                snapshots.append(local)
+        for snapshot in snapshots:
+            if (task and task != snapshot['task_ref']) or (fid and snapshot['execution_owner'].split('/')[-1] != fid):
+                raise ValueError('Task/session identity changed; refresh before stopping')
+            task, known = snapshot['task_ref'], True
+        if not task:
+            if known:
+                raise ValueError('Controlled session has no exact Task identity')
+            return None
+        if not re.fullmatch(r'T[1-9][0-9]*', task):
+            raise ValueError('Task identity is invalid')
+        if not known:
+            view = request('get', task)
+            record = view.get('task') if isinstance(view,dict) else None
+            if not isinstance(record,dict) or (record.get('task') or record.get('id')) != task:
+                raise ValueError('Task authority is unavailable')
+            known = bool(record.get('execution_endpoint') or record.get('cancel_request'))
+        if not known:
+            return None
+        got = request('stop',task,dict(idempotency_key='task-stop:'+str(uuid.uuid4()),
+                                   evidence='operator requested Task stop from Fleet'))
+        operation = got.get('operation',{}) if isinstance(got,dict) else {}
+        if (not isinstance(got,dict) or got.get('stop_requested') is not True
+                or type(got.get('execution_exit_confirmed')) is not bool
+                or not isinstance(operation,dict) or not is_identity(operation.get('operation_id'))
+                or operation.get('action') != 'worker_stop'):
+            raise ValueError('Task stop acceptance is not confirmed')
+        if got['execution_exit_confirmed']:
+            if got.get('scope') != 'native_session':
+                raise ValueError('Native session exit scope is not confirmed')
+            return 0, ('Stop recorded; the original native session exit is confirmed.' if en else
+                       '停止请求已保存；原生会话退出已确认。')
+        if got.get('execution_never_started') is True:
+            return 0, ('Stop recorded; the original session never started.' if en else
+                       '停止请求已保存；已确认原会话尚未启动。')
+        return 0, ('Stop recorded; waiting for native session exit confirmation.' if en else
+                   '停止请求已保存，等待原生会话退出确认。')
+    except (ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,AttributeError) as exc:
+        return 1, (('Stop not confirmed; no legacy stop was sent. ' if en else
+                    '停止尚未确认，未降级关闭会话。') + str(exc))
 
 
 def child_label(r):

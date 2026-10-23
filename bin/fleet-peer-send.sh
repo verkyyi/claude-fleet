@@ -18,7 +18,7 @@
 #             K3F9 / #K3F9                              → the window whose ID's short code it is
 #                                                         (any case; the old T-<code> for one version)
 #             agent:<name>                              → the session started from that agent file
-#                                                         (none here ⇒ your parent, else your person's reminder)
+#                                                         (none here ⇒ refused; name an explicit recipient)
 #   <text>    the message; `-` or omitted → read stdin (multi-line ok)
 #   -L        tmux socket label for a tmux target when run outside the fleet
 #             ($TMUX unset); inside a pane bare tmux is already the right server.
@@ -129,6 +129,7 @@ done
 case "$EXPECT" in ''|[0-9]*) ;; *) die 2 "--expect-issue wants an issue number, got '$EXPECT'" ;; esac
 case "$EXPECT" in *[!0-9]*) die 2 "--expect-issue wants an issue number, got '$EXPECT'" ;; esac
 tgt="${1:-}"; [ -n "$tgt" ] || usage
+[ "$tgt" != parent ] || die 2 "PARENT_RETIRED: address the intended session explicitly; nothing sent"
 shift
 if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 [ -n "$text" ] || die 2 "empty message"
@@ -310,10 +311,8 @@ case "$idcode" in
 $socks
 EOF_IDS
     if [ -z "$w" ]; then
-      # Closed here (EPIC T497 C4, design §4.3): what was meant for it goes to its
-      # successor (down the prev chain), else up its parent — said on stderr and in
-      # the text; nobody ⇒ the person's reminder. An ID this ledger does not know
-      # keeps the old road: wherever it lives.
+      # A closed conversation may continue through prev; historical Parent
+      # fields never transfer a message to another task.
       take=$(fleet_id_take "$fid"); trc=$?
       case "$trc" in
         0) IFS=$'\t' read -r _tid _thow _tsock w <<< "$take"
@@ -330,21 +329,9 @@ $text"; }
     elif [ -n "${idclosed:-}" ]; then tgt="id-closed:$fid"
     else tgt="wid:$fid"; fi ;;   # not live here: wherever it lives
 esac
-# A closed ID nobody takes over (C4): the person's reminder, never exit 0 unheld.
+# No implicit recipient takes over a closed conversation.
 case "$tgt" in
-  id-closed:*)
-    f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/orphan-reports.ndjson"
-    mkdir -p "${f%/*}" 2>/dev/null
-    row=$(OR_TO="$idclosed" OR_SUM="$text" python3 -c 'import json, os, time
-e = os.environ
-print(json.dumps({"ts": int(time.time()), "child_key": "message", "state": "MESSAGE", "pr": "",
-                  "summary": e["OR_SUM"][:600], "parent": e["OR_TO"]}, ensure_ascii=False))' 2>/dev/null) \
-      && printf '%s\n' "$row" >> "$f" 2>/dev/null \
-      || die 1 "$idclosed has closed, nobody took over, and the person's reminder could not be written; nothing sent"
-    bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event child-report \
-      "fleet: 发给 $idclosed 的消息——它已关闭、没有接班，交给你: $(printf '%s' "$text" | head -1 | cut -c1-160)" >/dev/null 2>&1 || :
-    printf 'rerouted → 你的提醒 (%s): %s has closed with no successor or parent open\n' "$f" "$idclosed"
-    exit 0 ;;
+  id-closed:*) die 1 "$idclosed has closed with no live successor; nothing sent" ;;
 esac
 
 # --- worker_id → where it lives (issue #1420) -------------------------------------
@@ -378,39 +365,6 @@ case "$tgt" in
         hub_send "$full" "$node" ;;
     esac ;;
 esac
-
-# --- an agent address with nobody running it (issue #4341) ------------------------
-# agent_fallback <name> — `agent:<name>` and no session runs that agent file here:
-# the message is never dropped with exit 0. It goes to the SENDER's parent
-# (fleet_parent_addr: identity first), said on stderr and in the text; with no
-# parent, to the person's reminder (global/orphan-reports.ndjson — what the sidebar
-# and the entry read) plus one alert. Exit 0 either way: somebody has it.
-agent_fallback() {
-  local a="$1" ms='' p='' f row me='' sockl
-  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
-    ms=$(fleet_current_session 2>/dev/null)
-    [ -n "$ms" ] && p=$(fleet_parent_addr "$ms" "$TMUX_PANE" 2>/dev/null) || p=''
-    [ -n "$ms" ] && me=$(fleet_window_okey "$ms" "$TMUX_PANE" 2>/dev/null)
-  fi
-  if [ -n "$p" ]; then
-    printf 'fleet-peer-send: no session runs agent:%s — sent to your parent instead\n' "$a" >&2
-    exec bash "$0" ${SOCK:+-L "$SOCK"} "$p" "[发给 agent:$a 的消息——没有会话在跑它，转给你]
-$text"
-  fi
-  f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/orphan-reports.ndjson"
-  mkdir -p "${f%/*}" 2>/dev/null
-  row=$(OR_CHILD="${me:-operator}" OR_TO="agent:$a" OR_SUM="$text" python3 -c 'import json, os, time
-e = os.environ
-print(json.dumps({"ts": int(time.time()), "child_key": e["OR_CHILD"], "state": "MESSAGE", "pr": "",
-                  "summary": e["OR_SUM"][:600], "parent": e["OR_TO"]}, ensure_ascii=False))' 2>/dev/null) \
-    && printf '%s\n' "$row" >> "$f" 2>/dev/null \
-    || die 1 "no session runs agent:$a, and the person's reminder could not be written; nothing sent"
-  sockl="$SOCK"; [ -n "$sockl" ] || [ -z "$ms" ] || sockl=$(fleet_socket "$ms" 2>/dev/null)
-  bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report \
-    "fleet: 发给 agent:$a 的消息没有会话收，交给你: $(printf '%s' "$text" | head -1 | cut -c1-160)" >/dev/null 2>&1 || :
-  printf 'rerouted → 你的提醒 (%s): no session runs agent:%s\n' "$f" "$a"
-  exit 0
-}
 
 # --- identity → one live window (issues #1046, #1537) -----------------------------
 # ONE resolver, fleet_win_for_key: issue:<N> / #<N> / issue-<N> → the key
@@ -463,7 +417,7 @@ EOF
     # through the hub, its repo checked on arrival; ENDED, it says when and how.
     # `-L` pins one fleet of THIS machine (the hub's own inject, a node's deliver,
     # a script that named its socket): no detour for it.
-    case "$key" in agent:*) agent_fallback "${key#agent:}" ;; esac
+    case "$key" in agent:*) die 1 "no session runs $key; automatic fallback is retired; nothing sent" ;; esac
     if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -z "$SOCK" ]; then
       full=$(fleet_hub_wid "" "$key" 2>/dev/null)         || { [ "${key#*:}" != "$key" ] && full=$(fleet_hub_wid "" "${key#*:}" 2>/dev/null); } || full=''
       if [ -n "$full" ] && ! fleet_wid_home "wid:$full" >/dev/null 2>&1; then
