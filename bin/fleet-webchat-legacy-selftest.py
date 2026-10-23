@@ -32,7 +32,8 @@ class LegacyHistory(unittest.TestCase):
         claude = fleet_id.fold(fleet_id.read(first[0]))
         self.assertEqual([x['native'] for x in claude['segments']], [a, b])
         self.assertIsNotNone(claude['closed'])
-        self.assertEqual(claude['opened']['origin'], 'web')
+        self.assertTrue(claude['opened']['legacy_webchat'])
+        self.assertNotIn('origin', claude['opened'])
         self.assertEqual(fleet_id.continue_plan(first[0], 1)['worktree'], '/home/alice/previous')
         self.assertEqual(fleet_id.continue_plan(first[1])['codex_home'], '/home/alice/.codex')
 

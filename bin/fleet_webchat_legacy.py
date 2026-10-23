@@ -41,7 +41,7 @@ def import_entries(entries):
             if own and own[0] != fid:
                 out.append(own[0])
                 continue
-            fields = dict(agent=row['agent'], origin='web', worktree=row.get('cwd') or os.path.expanduser('~'),
+            fields = dict(agent=row['agent'], worktree=row.get('cwd') or os.path.expanduser('~'),
                           title=row.get('title') or ('历史对话 · ' + row['agent'] + ' · ' + ids[-1][:8]),
                           legacy_webchat=True, legacy_at=row.get('at', ''),
                           legacy_cwds={x['id']: x['cwd'] for x in (row.get('chain') or []) if x.get('cwd')},

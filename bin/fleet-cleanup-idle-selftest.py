@@ -1438,8 +1438,8 @@ class HoldsAndWhy(TaskSession):
 class DispatchedSession(TaskSession):
     """T694 (回收 B): a session another session dispatched (@origin_fid → origin
     `dispatched`; @agent_def epic-driver → `driver`) whose `merged` is a REPORTED
-    result: over ⇒ closed after its grace; finished with no result ⇒ nudged once
-    (itself and its parent), then closed — history first, the worktree kept."""
+    result: over ⇒ closed after its grace; finished with no result ⇒ marked silently,
+    then closed — history first, the worktree kept."""
     PARENT = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
 
     def setUp(self):
@@ -1447,10 +1447,10 @@ class DispatchedSession(TaskSession):
         self.set("@origin_fid", self.PARENT)
         self.set("@fleet_id", self.FID)
         self.nudges = self.root / "nudges"
-        seam = self.root / "nudge"
+        seam = self.ibin / "fleet-peer-send.sh"
+        seam.unlink()
         seam.write_text("#!/bin/sh\nprintf '%s\\t%s\\n' \"$1\" \"$2\" >> " + shlex.quote(str(self.nudges)) + "\n")
         seam.chmod(0o755)
-        self.env["FLEET_REAP_NUDGE_CMD"] = str(seam)
         self.env["FLEET_REAP_UNREPORTED_SECS"] = "600"
 
     test_open_or_unknown_record_keeps_the_session = None
@@ -1474,7 +1474,7 @@ class DispatchedSession(TaskSession):
         self.assertTrue(self.wt.is_dir())
         self.assertIn("its work is over", (self.root / "ledger.tsv").read_text())
 
-    def test_unreported_is_nudged_once_then_closed(self):
+    def test_unreported_is_marked_without_messages_then_closed(self):
         self.answer.write_text("1\n")
         # T756 first: an ID that said `waiting` at its turn's end — the report maybe
         # still on its way to a parent on another machine — is no 「没报结果」: no
@@ -1496,9 +1496,8 @@ class DispatchedSession(TaskSession):
         self.assertNotIn("nudged", self.clean())          # idle 5 min < 10
         self.set("@claude_state_ts", str(int(time.time()) - 700))
         out = self.clean()
-        self.assertIn("nudged-unreported:" + self.win, out)
-        said = self.nudges.read_text().splitlines()
-        self.assertEqual([l.split("\t")[0] for l in said], [self.win, "wid:" + self.PARENT])
+        self.assertIn("marked-unreported:" + self.win, out)
+        self.assertFalse(self.nudges.exists())
         self.assertTrue(self.tm("display-message", "-p", "-t", self.win, "#{@reap_unreported}").strip().isdigit())
         out = self.due()                                  # nudged just now: its second half waits
         self.assertNotIn("nudged", out)                   # once
@@ -1509,7 +1508,7 @@ class DispatchedSession(TaskSession):
         self.assertIn("reaped-unrep:" + self.win + " origin=dispatched", out)
         self.assertFalse(self.exists())
         self.assertIn("unreported", (self.root / "ledger.tsv").read_text())
-        self.assertEqual(len(self.nudges.read_text().splitlines()), 2)
+        self.assertFalse(self.nudges.exists())
 
     def test_working_or_a_person_s_own_is_not_this_road(self):
         self.answer.write_text("1\n")

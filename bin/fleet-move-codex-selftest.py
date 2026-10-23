@@ -54,6 +54,15 @@ class Move(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'bound Codex UUID'):
             self.bundle()
 
+    def test_legacy_move_metadata_does_not_create_parent(self):
+        self.record['metadata']['@origin_wid'] = 'fleet/' + SID
+        before = self.rollout.read_bytes()
+        home = Path(move.unpack(self.bundle(), SID, '/new', self.root))
+        metadata = json.loads((home / 'move.json').read_text())['metadata']
+        self.assertNotIn('@origin_wid', metadata)
+        self.assertEqual(metadata['@fleet_id'], OTHER)
+        self.assertEqual(self.rollout.read_bytes(), before)
+
     def test_import_home_uses_only_target_default_pool(self):
         home = Path(move.unpack(self.bundle(), SID, '/new', self.root))
         self.assertEqual(move.account_home(home, self.root), 'default')

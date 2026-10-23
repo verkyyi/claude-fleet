@@ -187,7 +187,7 @@ FLEET_ID_PUSH=0 python3 "$BIN/fleet_id.py" open "$GIF" >/dev/null
 new_win gen-idkid; GI="$WID"; opt "$GI" @issue 505; opt "$GI" @origin scratch-1; opt "$GI" @origin_fid "$GIF"
 alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
 eq "gen: the free number is allocated" scratch-1 "${alloc%%$'\t'*}"
-eq "gen(T660): an identified child keeps its parent by ID, never retired" "$GIF|" \
+eq "gen(T660): reallocation does not rewrite historical origin" "scratch-1|" \
   "$(TM display-message -p -t "$GI" '#{@origin}|#{@origin_retired}')"
 eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/${P}scratch-1.ndjson" ] && echo yes || echo no)"
 has "gen: …and kept, readable, in its retired book" "\"child\": \"${P}issue-501\"" "$(cat "$CD/${P}scratch-1.ndjson.0" 2>/dev/null)"
@@ -196,7 +196,7 @@ case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) st_fail "gen: no gener
 NEWOUT=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$CD" --parent "${P}scratch-1" --json)
 eq "gen: the new scratch-1 has no children" 0 \
   "$(printf '%s' "$NEWOUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
-eq "gen: a running child of the last holder no longer names scratch-1" "|${P}scratch-1#0|" \
+eq "gen: reallocation does not mutate historical running metadata" "scratch-1||u/scratch-1" \
   "$(TM display-message -p -t "$GK" '#{@origin}|#{@origin_retired}|#{@origin_wid}')"
 # Evidence (issue #1538 上线证据): fleet-children.sh on the recycled number + the archive.
 if [ -n "${GEN_EVIDENCE:-}" ]; then
@@ -230,11 +230,12 @@ new_win kid-203; B3="$WID"; opt "$B3" @issue 203; opt "$B3" @origin scratch-12; 
 RUN --win "$B1" --state merged --pr 61 --summary landed
 eq "bare origin: retired hook creates no qualified book" no "$([ -e "$CD/${P}scratch-12.ndjson" ] && echo yes || echo no)"
 eq "bare origin: retired hook creates no bare book" no "$([ -e "$CD/scratch-12.ndjson" ] && echo yes || echo no)"
+badge_before_heal=$(dash_badge_of "$OB")
 healed=$( . "$BIN/fleet-lib.sh"; fleet_origin_heal "$LBL" "$LBL" )
-has "bare origin: heal rewrites a bare @origin" "$B3 scratch-12 → ${P}scratch-12" "$healed"
-eq "bare origin: …every bare one" "${P}scratch-12|${P}scratch-12" \
+eq "bare origin: retired heal writes nothing" "" "$healed"
+eq "bare origin: historical stamps remain unchanged" "scratch-12|scratch-12" \
   "$(TM display-message -p -t "$B1" '#{@origin}')|$(TM display-message -p -t "$B3" '#{@origin}')"
-eq "bare origin: after the heal the dash nests them all" "1/3" "$(dash_badge_of "$OB")"
+eq "bare origin: retired heal does not alter historical view" "$badge_before_heal" "$(dash_badge_of "$OB")"
 TM kill-window -t "$B1"; TM kill-window -t "$B2"; TM kill-window -t "$B3"; TM kill-window -t "$OB"
 
 # --- 4. ONE ROW PER CHILD (issue #1351): three sources, one key -----------------
