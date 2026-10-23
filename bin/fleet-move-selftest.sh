@@ -211,6 +211,9 @@ spawn_source() {
   TSRC set-window-option -t "$w" @repo o/n      # stamped at spawn, as every worker is (#789)
   TSRC set-window-option -t "$w" @claude_state "$state"
   TSRC set-window-option -t "$w" @wid "$hnd"
+  TSRC set-window-option -t "$w" @origin scratch-99
+  TSRC set-window-option -t "$w" @origin_fid 22222222-2222-4222-8222-222222222222
+  TSRC set-window-option -t "$w" @origin_wid old/22222222-2222-4222-8222-222222222222
   printf '%s' "$w"
 }
 # put a session's transcript on disk at the path fleet-move.sh will look for
@@ -250,6 +253,9 @@ out=$(HOME="$WORK/src-home" FLEET_MOVE_EXIT_WAIT=10 FLEET_MOVE_CLOSE_WAIT=6 \
 win_alive TSRC "$w1" && st_fail "source window must be closed after a verified move: $out"
 nw=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==42{print $1; exit}')
 [ -n "$nw" ] || st_fail "no target window carries @issue=42 after the move: $out"
+for key in origin origin_fid origin_wid origin_gen origin_retired; do
+  [ -z "$(TDST display-message -p -t "$nw" "#{@$key}")" ] || st_fail "move restored retired @$key"
+done
 dwt=$(TDST display-message -p -t "$nw" '#{@worktree}')
 [ -d "$dwt" ] || st_fail "target window's @worktree does not exist: $dwt"
 [ "$(git -C "$dwt" branch --show-current)" = issue-42 ] || st_fail "target worktree is not on branch issue-42"

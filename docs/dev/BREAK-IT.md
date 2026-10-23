@@ -698,6 +698,8 @@
 | 节点已生成原生退出证明后崩溃，或 Hub 接受证明但响应丢失，随后 stop 重投或结果更新时间 | 首次证明丢失或重生成时间戳，历史回执无法幂等重放；Hub 已释放后不再投递 stop，节点永远收不到确认 | 首次 proof 和固定幂等键保存在原 stop 操作的私有 result 中；更新结果原子保留，公开投影不带大包；heartbeat 有界扫描同一 journal，仅重发原包，不重做 stop、不清除栅栏 | `native-exit-submit-replay` |
 
 | Parent 回报入口退役后，旧工具、委托代收或积压队列仍投递报告 | 会话继续被旧协调链唤醒；或回执虚报送达、原结果丢失 | 旧报告入口明确退役；报告积压保留原文并永久失败，不转换成提醒；自身结果历史与普通消息保留 | `parent-report-retired` |
+
+| 已退役的 Parent 关系经恢复、移机、迁移或拆窗重新写入运行窗口 | 旧关系重新影响路由、分组或新会话元数据 | 新开与续接窗口不写 Parent；历史账本仍可读，FID、原生会话及 prev 连续身份保留；旧 Parent 消息拒绝，普通显式目标及 prev 接续照常 | `parent-origin-retired` |
 | Hub 尚未授予 claim 就已停止，节点离线导致用户永远等退出；或 claim 响应丢失、历史 stop 被误认未启动 | 未开始的任务无法确认停止，或未知活进程被当成已退出 | 同一 Task 行锁下的 canonical stop 与精确 start/代/attempt/endpoint 关联证明从未 claim；单独返回未启动事实，保留取消绑定，不伪造原生退出，不改结果 | `task-unclaimed-stop-proof` |
 | 用户停止后明确接续，节点覆盖当前 Task 绑定但旧 FID 丢失停止事实，或前轮启动登记混入新一轮退出证明 | 旧会话被当作 legacy 复活；重复接续分配多个会话；第二次停止无法证明退出 | 仅显式最新授权与已确认原 proof 共同允许原子接续；同 grant 复用分配，原 stop journal 保留旧 FID 停止事实和原 proof，按原 operation 精确退休注册，第二轮启动停止独立验证 | `task-local-continuation` |
 | 接续从首句重跑、误选另一工作树，或按 Task 查重误认旧窗口为新启动 | 已有改动丢失或续做未发生；原生旧队列被错误恢复 | 原退出回执、认证原 start、精确 FID 账本与 gitdir 标记一致才接续；新会话读取原历史，只按新 FID 查重 | `task-continuation-start` |

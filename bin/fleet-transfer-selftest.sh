@@ -711,7 +711,7 @@ PYCOMPLETE
   ok
   kill -0 "$PID" 2>/dev/null && fail 'source must exit before target starts'
   [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111191 ] && [ "$(field fleet_role_def)" = orchestrator ] \
-    && [ "$(field origin)" = scratch-99 ] && [ "$(field task)" = T91 ] && [ "$(field agent_spawn)" = 1 ] || fail 'cutover lost identity/role/routing'
+    && [ -z "$(field origin)" ] && [ "$(field task)" = T91 ] && [ "$(field agent_spawn)" = 1 ] || fail 'cutover lost identity/role/routing'
   [ -z "$(field worktree)" ] && [ -z "$(field raw)" ] || fail 'cutover invented a repository binding'
   ok
   # Unified web/trial managed HOME uses the same quota-menu boundary.
@@ -987,7 +987,7 @@ TM set-option -wu -t "$WIN" @handoff_armed
 transfer --handoff "$WORK/notes.md" || fail 'actual issue-worker cutover'
 BUNDLE=$(packet)
 ok; ! fleet_pid_alive "$PID" || fail 'source process must exit'
-ok; [ "$(field issue)" = 41 ] && [ "$(field wid)" = a1 ] && [ "$(field origin)" = scratch-99 ] || fail 'window bindings changed'
+ok; [ "$(field issue)" = 41 ] && [ "$(field wid)" = a1 ] && [ -z "$(field origin)" ] || fail 'window bindings changed'
 ok; [ "$(field cc_agent)" = codex ] && [ "$(field source_session_id)" = "$SID" ] && [ "$(field source_transcript)" = "$TRANSCRIPT" ] || fail 'target provenance stamps missing'
 ok; [ "$(field worktree)" = "$WT" ] || fail 'issue-worker cutover must record verified worktree'
 ok; [ -n "$(field migrated_at)" ] && [ -z "$(field migrated_banner)" ] || fail 'cutover must stamp @migrated_at, and no @migrated_banner off a wall-free source (#870)'

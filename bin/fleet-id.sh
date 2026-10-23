@@ -5,7 +5,7 @@
 #   fleet-id.sh hook                         SessionStart (both agents): add the native
 #                                            segment this start is, by §4.2's rules
 #   fleet-id.sh open <ID> [--agent a] [--window @w [--socket L]] [--repo o/r] [--title t] [--key k]
-#                         [--task Tn] [--parent ID] [--prev ID]
+#                         [--task Tn] [--prev ID] (legacy --parent is ignored)
 #                                            the spawn's `opened`; prints the short code
 #                                            and stamps it on --window as @task_short
 #   fleet-id.sh native <ID> --agent a --native <sid> --source startup|resume|clear|compact [--hint handoff]
@@ -37,17 +37,15 @@
 #                                            reader shows (EPIC T497 C4 — S2 / S7 / S9)
 #   fleet-id.sh route <ID | code>          who takes what was meant for it: `<ID>\t<how>`,
 #                                            how = self · successor (down the prev chain) ·
-#                                            parent · unknown (no ledger here); rc 1 nobody
+#                                            unknown (no ledger here); rc 1 nobody
 #   fleet-id.sh children <ID | code> [--json]   the IDs it spawned (their `parent`)
 #   fleet-id.sh family <ID | code> [<member ID>…]   JSON: the IDs it spawned (and
 #                                            the members named), every ID that
 #                                            continued one of them down `prev` (a redo),
 #                                            this machine's ledgers + the hub mirror's
 #                                            (EPIC T497 C5 — an EPIC driver's batch)
-#   fleet-id.sh parents [--apply] [<ID>…]   backfill (EPIC T497 C9): an ID opened for a
-#                                            task T<n> with no `parent` takes the one its
-#                                            hub record's parent_session names (dry unless
-#                                            --apply; pushed); rc 3 no hub here
+#   fleet-id.sh parents [<ID>…]           read historical task relationships only
+#                                            (--apply refuses PARENT_RETIRED)
 #   fleet-id.sh backfill [--apply] [<ID>…]  backfill (EPIC T497 C17): a live window opened
 #                                            before C1 whose ledger lacks `opened` or a native
 #                                            segment gets them off its options (@cc_agent,
@@ -238,19 +236,16 @@ if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
   else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
   [ "$ex" = 1 ] || { printf '%s\n' "$plan"; exit 0; }
   fields=$(printf '%s' "$plan" | python3 -c 'import json,sys; d=json.load(sys.stdin)
-print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","parent","title","codex_home","seg")))')
-  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_parent p_title p_home p_seg <<< "$fields"
+print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","title","codex_home","seg")))')
+  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_title p_home p_seg <<< "$fields"
   proof=$(python3 "$BIN/fleet_history_read.py" "$p_id" "$p_seg") || exit 1
   printf '%s' "$proof" | python3 -c 'import json,sys; p=json.load(sys.stdin)
 if not p.get("resumable"):
  print(p.get("reason", "Native history is not verified; nothing started"), file=sys.stderr); sys.exit(1)' || exit 1
-  rargs=(--resume "$p_native" --origin hub --strict-resume)
+  rargs=(--resume "$p_native" --strict-resume)
   [ "$p_home" = - ] || rargs+=(--codex-home "$p_home")
-  # C18: the ID it continues keeps its record and its parent — @task on the new
-  # window, `task` / `parent` in its ledger — so an EPIC driver's successor still
-  # finds (and is found by) its batch
+  # Continue the task and native segment, without old Parent ancestry.
   [ "$p_task" = - ] || rargs+=(--id-task "$p_task")
-  [ "$p_parent" = - ] || rargs+=(--id-parent "$p_parent")
   [ "$p_agent" = codex ] && rargs+=(--agent codex)
   [ "$p_title" = - ] || rargs+=(--name "$p_title")
   if [ "$p_repo" != - ] && [ "$p_wt" != - ] && [ -d "$p_wt" ]; then rargs+=(--repo "$p_repo" --worktree "$p_wt")

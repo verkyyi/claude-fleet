@@ -10,7 +10,7 @@
 #      table's data rows and empty rows, a separator, a repeated log line, 11 rows
 #      — no hit
 #   B  pass 1 arms, pass 2 sends ONE Escape: @degenerate_ts stamped, the pane shows
-#      the interrupt, a DEGENERATE row (lines + sample) in the parent's ledger,
+#      the interrupt, a local log (lines + sample), no Parent ledger,
 #      `⟲` at the end of the sidebar row; a STALE strike table is not "pass 1"
 #   C  the cooldown: the screen still degenerate, the window still `working` — no
 #      second Escape until @degenerate_ts is FLEET_DEGENERATE_COOLDOWN_SECS old
@@ -97,8 +97,8 @@ until [ "$(TM capture-pane -p -t w-br | grep -c '<br><br>')" -ge 20 ] && TM capt
   i=$((i + 1)); [ "$i" -lt 100 ] || { st_miss 'fixture: the fake panes never filled'; break; }; sleep 0.1
 done
 
-STRIKE_F="$BIN/../logs/.degenerate-strikes"
-mkdir -p "$BIN/../logs"
+STRIKE_F="$FLEET_CONF_DIR/logs/.degenerate-strikes"
+mkdir -p "$FLEET_CONF_DIR/logs"
 one_pass() { sh "$SPINNER" --degenerate-check >/dev/null 2>&1; }
 escs() { LC_ALL=C tr -cd '\033' < "$1" | wc -c | tr -d ' '; }
 dts() { TM display-message -p -t "$1" '#{@degenerate_ts}'; }
@@ -114,10 +114,9 @@ check '[ "$(escs "$WORK/keys-br")" = 1 ]' 'B: pass 2 agreeing with pass 1 sends 
 check '[ -n "$(dts w-br)" ]' 'B: the interrupt stamps @degenerate_ts'
 i=0; until TM capture-pane -p -t w-br | grep -q 'Request interrupted'; do i=$((i + 1)); [ "$i" -lt 50 ] || break; sleep 0.1; done
 check 'TM capture-pane -p -t w-br | grep -q "Request interrupted"' 'B: the pane shows the interrupt after the Escape'
-LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/acme-degen:issue-77.ndjson"   # keys carry the repo (#1939)
-check 'grep -q "\"state\": \"DEGENERATE\"" "$LEDGER" 2>/dev/null' 'B: a DEGENERATE row lands in the parent (issue-77) ledger' "$(cat "$LEDGER" 2>/dev/null)"
-check 'python3 -c "import json,sys; e=json.loads(open(sys.argv[1]).read().splitlines()[-1]); sys.exit(0 if e[\"child\"]==\"acme-degen:issue-1557\" and int(e[\"lines\"])>=12 and e[\"sample\"]==\"‹br›\" and e[\"tier\"]==\"silent\" else 1)" "$LEDGER" 2>/dev/null' \
-  'B: the row carries child / lines / sample and is tier silent' "$(tail -1 "$LEDGER" 2>/dev/null)"
+check '[ ! -e "$FLEET_CONF_DIR/fleets/$LBL/children/acme-degen:issue-77.ndjson" ]' 'B: a historical origin must not receive a DEGENERATE report'
+check 'grep -Eq "rows=[1-9][0-9]+ unit=<br>" "$FLEET_CONF_DIR/logs/degenerate.log"' \
+  'B: the local interrupt log retains rows and sample' "$(cat "$FLEET_CONF_DIR/logs/degenerate.log" 2>/dev/null)"
 # The sidebar row ends in ⟲ (the producer reads the window through $TMUX).
 SOCKP="$TMUX_TMPDIR/tmux-$(id -u)/$LBL"
 srow=$(TMUX="$SOCKP,0,0" FLEET_SESSION="$LBL" bash "$BIN/tmux-dashboard-rows.sh" --rows 2>/dev/null | grep -a "$WBR" | head -1)

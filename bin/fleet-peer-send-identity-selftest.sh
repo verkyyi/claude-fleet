@@ -170,6 +170,38 @@ send -L "$L" issue:abc "x"
 st_count; [ "$rc" = 2 ] || st_miss "issue:abc → usage exit 2" "rc=$rc"
 one_line "bad issue"
 
+# --- Parent retirement: old ancestry never reroutes; prev continuation still does --
+export FLEET_ID_PUSH=0 FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=0
+mkdir -p "$FLEET_CONF_DIR/fleets/$L"
+: > "$FLEET_CONF_DIR/fleets/$L/conf"
+old=11111111-1111-4111-8111-111111111111
+par=22222222-2222-4222-8222-222222222222
+next=33333333-3333-4333-8333-333333333333
+tf set-window-option -t "$wA" @fleet_id "$par"
+tf set-window-option -t "$wC" @fleet_id "$next"
+python3 - "$BIN" "$old" "$par" <<'PYOLD'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fleet_id
+fleet_id.append(sys.argv[2], {"ev": "opened", "parent": sys.argv[3], "agent": "claude"})
+fleet_id.append(sys.argv[2], {"ev": "closed", "reason": "exited"})
+fleet_id.open_id(sys.argv[3], {"agent": "claude"})
+PYOLD
+cp "$FLEET_CONF_DIR/ids/$old.ndjson" "$WORK/old-history"
+code=$(bash "$BIN/fleet-id.sh" short "$old")
+send -L "$L" "#$code" m-no-parent
+st_count; [ "$rc" = 1 ] && [ -z "$out" ] && case "$err" in *'no live successor; nothing sent'*) true ;; *) false ;; esac \
+  || st_miss "closed ID refuses despite a live historical Parent" "$rc:$out:$err"
+sleep 0.2
+st_count; ! grep -q m-no-parent "$WORK/got" && [ ! -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] \
+  || st_miss "closed-ID refusal writes no inbox frame or implicit reminder"
+python3 "$BIN/fleet_id.py" open "$next" --agent claude --prev "$old" >/dev/null
+send -L "$L" "#$code" m-prev-successor
+st_count; [ "$rc" = 0 ] && landed "$wC" m-prev-successor || st_miss "closed conversation reaches its real prev successor" "$rc:$out:$err"
+send -L "$L" "wid:$par" m-explicit-fid
+st_count; [ "$rc" = 0 ] && landed "$wA" m-explicit-fid || st_miss "explicit FID still reaches the requested session" "$rc:$out:$err"
+st_count; cmp -s "$WORK/old-history" "$FLEET_CONF_DIR/ids/$old.ndjson" || st_miss "routing preserves historical Parent bytes"
+
 # --- 5. the formerly silent journaled-delivery path now echoes ---------------------
 SB="$WORK/sbin"; mkdir -p "$SB"
 ln -s "$BIN/fleet-peer-send.sh" "$SB/fleet-peer-send.sh"; ln -s "$BIN/fleet-lib.sh" "$SB/fleet-lib.sh"
