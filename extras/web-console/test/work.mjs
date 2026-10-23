@@ -46,7 +46,7 @@ assert.equal(by('failed').ended.key, 'f', 'an ended session joins its record by 
 assert.equal(by('asks').group, 'ask');
 assert.equal(by('asks').line, 'which colour?');
 assert.equal(by('failed').group, 'ask');
-assert.equal(by('waits on you').group, 'ask');
+assert.equal(by('waits on you').group, 'queue');
 assert.equal(by('epic').group, 'work');
 assert.equal(by('merge').group, 'queue');
 assert.deepEqual(by('merge').tag, ['等合并', 'Awaiting merge']);
@@ -96,7 +96,7 @@ assert.equal(taskWords(by('legacy').task), 'legacy');
 
 // ✦ 消息: asks, failures, what finished today
 const kinds = messagesOf(rows).map((m) => `${m.kind}:${m.row.title}`).sort();
-assert.deepEqual(kinds, ['ask:asks', 'ask:waits on you', 'done:done', 'fail:failed']);
+assert.deepEqual(kinds, ['ask:asks', 'done:done', 'fail:failed']);
 
 console.log('ok work.mjs');
 

@@ -14,16 +14,12 @@ import { useBack } from "./Shell";
 import { headMeta, isTerminal, openLine, rowAgent, rowMachine } from "./session-list";
 import { sessionPath, TermTag } from "./SessionList";
 import { copyOpen } from "./cli";
-import type { Row } from "./work";
+import { rowWorker, type Row } from "./work";
 import { toast } from "sonner";
 import { sessionWrite } from "@/shared/sessions";
 import { sendJSON, useMe } from "@/shared/api";
 import { useWorkRows } from "./work-rows";
 import { pendingStartRef } from "./task-cancel";
-
-// the worker a session's record is read by: its live window's; on the new road a
-// parked one has none, and is read (and woken) by the identity the hub names
-const workerOf = (r: Row) => r.live?.id || (r.board?.history ? `fid:${r.board.history.id}` : "") || (r.origin ? r.board?.worker_id || r.task?.worker_id || r.ended?.wid || "" : "");
 
 export function Workspace({ r }: { r: Row }) {
   const [params, setParams] = useSearchParams();
@@ -122,7 +118,7 @@ export function Workspace({ r }: { r: Row }) {
           {r.board?.context ? <p>{tr(...r.board.context)}</p> : null}
         </div> : null}
         {!pendingRecord ? <div className="h-full">
-          <ChatThread source={{ kind: "session", machine: rowMachine(r), key: r.live?.key || r.ended?.key || "", agent, worker: workerOf(r),
+          <ChatThread source={{ kind: "session", machine: rowMachine(r), key: r.live?.key || r.ended?.key || "", agent, worker: rowWorker(r),
             ...(isTerminal(r) && canOpen ? { open } : {}) }}
             last={r.line} onHead={onHead} />
         </div> : null}

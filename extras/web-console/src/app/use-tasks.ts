@@ -28,8 +28,8 @@ export function useTasks() {
 }
 
 // A typed code goes to the hub's one resolver (EPIC T644 C1, convention 4: a
-// code, the task's ID or the old T<n>; unfinished first, then the whole
-// history; never a guess): one task, the candidates when it names several (409),
+// code, the task's ID or the old T<n>; exact written code, otherwise a prefix
+// over the whole history; never a guess): one task, the candidates when it names several (409),
 // or none. The page never matches a prefix itself.
 export type TaskCandidate = { id: string; short: string; task?: string; title: string; state: string };
 export type TaskFind =

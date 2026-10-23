@@ -80,13 +80,13 @@ const legacy = { id: 'T12', title: 'old', created_at: '2026-10-01T00:00:00Z', st
 assert.equal(idCode(b.fid).slice(0, 2), idCode(a.fid).slice(0, 2));
 const codes = displayCodes([a, b, c, done, legacy]);
 const n = [...idCode(a.fid)].findIndex((ch, i) => ch !== idCode(b.fid)[i]) + 1;
-assert.equal(codes.get(a), idCode(a.fid).slice(0, n)); // two open ones sharing a prefix both grow
-assert.equal(codes.get(b), idCode(b.fid).slice(0, n));
-assert.equal(codes.get(c), 'XK'); // a finished neighbour does not make it grow
+assert.equal(codes.get(a), 'FDMQ'); // Task written code stays stable
+assert.equal(codes.get(b), 'FDMP');
+assert.equal(codes.get(c), 'XKFR');
 assert.equal(codes.get(done), 'XKFP'); // a finished task shows its written code
 assert.equal(codes.get(legacy), 'T12'); // a record with no ID yet keeps its number
-assert.equal(displayCodes([a, { ...b, outcome: 'cancelled' }]).get(a), 'FD'); // its neighbour ended: back to 2
+assert.equal(displayCodes([a, { ...b, outcome: 'cancelled' }]).get(a), 'FDMQ'); // history cannot rename neighbors
 assert.equal(writtenCode(a), 'FDMQ');
 assert.equal(taskOpen(done), false);
 assert.equal(taskOpen(a), true);
-console.log('PASS task codes: encode vectors, display among the unfinished, written code for the finished and the old');
+console.log('PASS task codes: encode vectors, stable written codes across current and historical outcomes');
