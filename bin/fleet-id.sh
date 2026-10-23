@@ -62,7 +62,8 @@
 #   fleet-id.sh continue <ID> [--seg N] [--exec]   「从这一段继续」: a NEW window, a new
 #                                            ID whose prev is this one (S8)
 #   fleet-id.sh reopen <ID> [--exec]         「恢复这个窗口」: the SAME ID, its newest segment
-#                                            (either: --check = `ok` or why not, nothing opened)
+#                                            (either: --check = `ok` or why not, nothing opened;
+#                                            --rebuild = make a reaped scratch worktree again)
 #   fleet-id.sh push [<ID>…]                 hand the ledgers (all, or these) to the hub's
 #                                            mirror in (ID, seq) order from where it is
 #                                            (EPIC T497 C2, fleet_id.py push): rc 0 · 3 no
@@ -232,10 +233,14 @@ fi
 # spawner, dash-raw-session.sh — a new ID with --prev, or the same one with --fid.
 # --check walks the same road and stops before the spawn: `ok` (rc 0), or the one
 # reason it would refuse on stderr (rc 1) — the panel's 恢复 asks it first.
+# --rebuild: a conversation that is whole but whose scratch worktree was reaped is
+# reopened in that worktree made again AT THE SAME PATH (so the agent finds its own
+# transcript), on a `restore-<ID>` branch off its old branch when origin still has
+# it, else off the repo's base — said on stderr; --check answers `ok rebuild <from>`.
 if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
-  ex=0; pargs=()
+  ex=0; rb=0; pargs=()
   for a in "$@"; do
-    case "$a" in --exec) ex=1 ;; --check) ex=2 ;; *) pargs+=("$a") ;; esac
+    case "$a" in --exec) ex=1 ;; --check) ex=2 ;; --rebuild) rb=1 ;; *) pargs+=("$a") ;; esac
   done
   if [ -n "$scanned" ]; then plan=$(FLEET_ID_LIVE="$live" python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1
   else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
@@ -244,9 +249,47 @@ if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
 print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","title","codex_home","seg")))')
   IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_title p_home p_seg <<< "$fields"
   proof=$(python3 "$BIN/fleet_history_read.py" "$p_id" "$p_seg") || exit 1
-  printf '%s' "$proof" | python3 -c 'import json,sys; p=json.load(sys.stdin)
-if not p.get("resumable"):
- print(p.get("reason", "Native history is not verified; nothing started"), file=sys.stderr); sys.exit(1)' || exit 1
+  # resumable · gone (readable, its worktree reaped: <the branch it was on>) · else the reason
+  pst=$(printf '%s' "$proof" | python3 -c 'import json,sys; p=json.load(sys.stdin)
+if p.get("resumable"): print("resumable"); sys.exit()
+if p.get("readable") and p.get("repo") and p.get("worktree"):
+ br = ""
+ with open(p["transcript"], errors="replace") as f:
+  for line in f:
+   try: d = json.loads(line)
+   except ValueError: continue
+   if not isinstance(d, dict): continue
+   g = d.get("payload") if isinstance(d.get("payload"), dict) else {}
+   br = d.get("gitBranch") or ((g.get("git") or {}).get("branch") if isinstance(g.get("git"), dict) else "") or br
+ print("gone\t%s\t%s" % (br, p.get("reason", ""))); sys.exit()
+print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing started"))')
+  case "$pst" in
+    resumable) ;;
+    gone$'\t'*) [ "$rb" = 1 ] || { printf '%s\n' "${pst##*$'\t'}" >&2; exit 1; } ;;
+    *) printf '%s\n' "${pst##*$'\t'}" >&2; exit 1 ;;
+  esac
+  if [ "$pst" != resumable ]; then
+    # --rebuild: the scratch worktree made again where it was (see above)
+    o_br=${pst#gone$'\t'}; o_br=${o_br%%$'\t'*}
+    r_slug="scratch-${p_wt##*-scratch-}"
+    case "${r_slug#scratch-}" in ''|*[!0-9]*)
+      printf 'fleet-id: %s was not a scratch worktree — it cannot be made again\n' "$p_wt" >&2; exit 1 ;; esac
+    r_sess=${FLEET_SESSION:-$(fleet_current_session 2>/dev/null)}
+    r_repo=$(fleet_target_repo "$r_sess" "$p_repo" 2>/dev/null) && fleet_load_repo_conf "$r_sess" "$r_repo" 2>/dev/null \
+      && [ -d "${FLEET_MAIN:-}/.git" ] \
+      || { printf 'fleet-id: %s is not a repo this fleet hosts any more — its worktree cannot be made again\n' "$p_repo" >&2; exit 1; }
+    r_main=$FLEET_MAIN; r_from=${FLEET_BASE_BRANCH:-master}
+    [ "$(fleet_worktree_dir "$r_main" "$r_slug")" = "$p_wt" ] \
+      || { printf 'fleet-id: %s is no longer where %s keeps its worktrees — it cannot be made again\n' "$p_wt" "$p_repo" >&2; exit 1; }
+    if [ -n "$o_br" ] && git -C "$r_main" ls-remote --exit-code --heads origin "$o_br" >/dev/null 2>&1; then r_from=$o_br; fi
+    [ "$ex" = 2 ] && { printf 'ok rebuild %s\n' "$r_from"; exit 0; }
+    r_br="restore-${p_id%%-*}"
+    fleet_fetch_bounded "$r_main" "$r_from"
+    fleet_worktree_create "$r_main" "$r_slug" "$r_from" --branch "$r_br" --reuse \
+      || { printf 'fleet-id: could not make %s again off origin/%s\n' "$p_wt" "$r_from" >&2; exit 1; }
+    printf 'fleet-id: %s made again off origin/%s on branch %s — the conversation is whole; what was not pushed from it before is not\n' \
+      "$p_wt" "$r_from" "$r_br" >&2
+  fi
   rargs=(--resume "$p_native" --strict-resume)
   [ "$p_home" = - ] || rargs+=(--codex-home "$p_home")
   # Continue the task and native segment, without old Parent ancestry.
