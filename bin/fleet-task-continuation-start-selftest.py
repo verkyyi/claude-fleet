@@ -220,7 +220,11 @@ class ContinuationStartTests(unittest.TestCase):
         self.assertNotEqual(kwargs['execution']['execution_owner'], GRANT['execution_owner'])
         self.assertEqual(kwargs['execution']['task_fid'], GRANT['task_fid'])
         self.assertEqual(kwargs['continuation'], CONTINUATION)
-        self.assertIn(str(self.transcript).encode(), kwargs['payload'])
+        if getattr(self, 'claimed_first_start', False):
+            self.assertIn('首次执行'.encode(), kwargs['payload'])
+            self.assertNotIn(str(self.transcript).encode(), kwargs['payload'])
+        else:
+            self.assertIn(str(self.transcript).encode(), kwargs['payload'])
         self.assertNotIn(b'DO NOT REPLAY', kwargs['payload'])
         self.assertNotIn('--resume', args)
         self.assertEqual((self.wt / 'existing.txt').read_text(), 'unfinished user work\n')
@@ -253,8 +257,9 @@ class ContinuationStartTests(unittest.TestCase):
         self.authority['task_execution'] = transport
         self.git('-C', str(self.wt), 'branch', '-m', 'user-renamed-branch')
         native_id = 'cccccccc-4444-4444-8444-cccccccccccc'
-        with self.ledger.open('a') as stream:
-            stream.write(json.dumps(dict(ev='native',id=OLD_FID,seq=2,agent='claude',native=native_id,trigger='startup'))+'\n')
+        if not getattr(self, 'claimed_first_start', False):
+            with self.ledger.open('a') as stream:
+                stream.write(json.dumps(dict(ev='native',id=OLD_FID,seq=2,agent='claude',native=native_id,trigger='startup'))+'\n')
         projects = self.root / 'projects' / 'repo'; projects.mkdir(parents=True)
         (projects / (native_id + '.jsonl')).write_text(json.dumps(dict(sessionId=native_id,type='user',message={'content':'continue existing work'}))+'\n')
         before = self.ledger.read_bytes()
@@ -350,6 +355,10 @@ elif cmd=='list-windows':
         if getattr(self, 'raw_fresh', False):
             seeds = [p.read_text() for p in self.root.rglob('task_*.txt') if p.is_file()]
             self.assertTrue(any('original user task, first actual run' in seed for seed in seeds))
+        if getattr(self, 'claimed_first_start', False):
+            seeds = [p.read_text() for p in self.root.rglob('task_*.txt') if p.is_file()]
+            self.assertTrue(any('首次执行' in seed for seed in seeds))
+            self.assertFalse(any('先读取原会话历史' in seed for seed in seeds))
         duplicate.touch()
         result=subprocess.run(args,env=env,text=True,capture_output=True,timeout=35)
         self.assertEqual(result.returncode,0,result.stderr)

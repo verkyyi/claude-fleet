@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,7 +113,7 @@ func TestTaskSessionExitRealNodeLostAckAndNewBinding(t *testing.T) {
 			http.Error(w, "fixture response read", 502)
 			return
 		}
-		if response.StatusCode == http.StatusOK {
+		if response.StatusCode == http.StatusOK && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/execution/exit") {
 			var receipt struct {
 				Operation struct {
 					ID string `json:"operation_id"`

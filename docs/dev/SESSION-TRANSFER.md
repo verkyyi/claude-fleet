@@ -200,6 +200,23 @@ bin/fleet-transfer.sh --session my-fleet --window b3 --to codex --dry-run
 bin/fleet-transfer.sh --session my-fleet --window b3 --to codex
 ```
 
+A source in the middle of a turn is refused unless the person chooses not to
+wait: `--interrupt` (T983, immediate cutover only) stops that turn through the
+session gate's own stop — Codex `turn/interrupt`, Claude one Escape while its own
+report says `working` — waits up to `FLEET_TRANSFER_INTERRUPT_WAIT` (30) seconds
+for the source to settle, then cuts over as usual. A Codex interrupt can end the
+turn with no Stop hook, so `fleet_transfer_source.py interrupt-settle` reads the
+native thread: idle, no live item, last turn ended ⇒ `done`, written only over a
+`working`, hook-made `looping` or missing mark on a window with no `@loop`. The
+interrupted step is cut short (a command may stop half-way); what it already wrote
+stays in the worktree and the git evidence of the packet. A question or approval
+the source is waiting on is never answered: it still refuses. `--dry-run
+--interrupt` only says the turn would be stopped.
+
+```sh
+bin/fleet-transfer.sh --session my-fleet --window b3 --to claude --interrupt
+```
+
 `--window` accepts a fleet handle, window name or tmux window ID. The command
 always addresses the named fleet's socket; it never scans a shared default
 server. Install/sync the script and its companion hook changes together before

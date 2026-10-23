@@ -6941,6 +6941,15 @@ drill_native_cancel_before_signal() {
   SECS=$(since "$t0")
 }
 
+drill_native_partial_admission() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-task-partial-exit-selftest.py" >"$WORK/native-partial.log" 2>&1 || {
+    WHY="partial admission regression: $(tail -8 "$WORK/native-partial.log")"; return 1;
+  }
+  WHAT='正向启动协议与认证原 start：新 partial 逐根退出，旧历史、缺 child、活根和身份未知均拒绝'
+  SECS=$(since "$t0")
+}
+
 drill_native_exit_identity() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-session-exit-selftest.py" \
@@ -7005,6 +7014,18 @@ drill_task_unclaimed_stop_proof() {
 }
 
 
+drill_task_first_start() {
+  local t0; t0=$(now); CAP=120
+  python3 "$BIN/fleet-task-first-start-selftest.py" >"$WORK/task-first-start.log" 2>&1 || {
+    WHY="claimed first start regression: $(tail -10 "$WORK/task-first-start.log")"; return 1;
+  }
+  (cd "$ROOT/tokenledger" && go test ./hub/store -run '^TestTaskContinueFirstStartGenerationBoundary$' -count=1) >>"$WORK/task-first-start.log" 2>&1 || {
+    WHY="initial generation authority regression: $(tail -10 "$WORK/task-first-start.log")"; return 1;
+  }
+  WHAT='真实退出根与工作树：首次受控启动中断可首启；后续缺历史、旧协议、已有 native slot 和错身份拒绝，原文件与 ACK 保留'
+  SECS=$(since "$t0")
+}
+
 drill_task_continue_unclaimed() {
   local t0; t0=$(now); CAP=120
   (cd "$ROOT/tokenledger" && go test ./hub/api ./hub/store -run '^TestTaskContinueUnclaimed' -count=1) >"$WORK/task-continue-unclaimed.log" 2>&1 || {
@@ -7033,8 +7054,6 @@ drill_task_local_continuation() {
   WHAT='显式新授权与原ACK证明共同接续；旧FID仍停止，同grant同分配，第二轮退出证明独立'
   SECS=$(since "$t0")
 }
-
-
 
 
 drill_codex_no_daemon_fence() {
@@ -7888,6 +7907,27 @@ drill_task_terminal_physical_width() {
   SECS=$(since "$t0")
 }
 
+drill_task_retention_defaults() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/fleet-task-retention-defaults-selftest.py" >"$WORK/task-retention-defaults.log" 2>&1 || {
+    WHY="task defaults retain role/PIN privilege: $(tail -14 "$WORK/task-retention-defaults.log")"; return 1;
+  }
+  WHAT='隔离tmux不因PIN写keep；普通Task默认一致，旧角色不绕Loop/bg、不催报，历史keep不迁移'
+  SECS=$(since "$t0")
+}
+
+drill_task_controlled_auto_retention() {
+  local t0; t0=$(now); CAP=60
+  suite_holds fleet-cleanup-selftest.sh \
+    'controlled or malformed execution marker blocks automatic PR archive' \
+    'PR teardown rechecks late control admission and unknown control data' || return 1
+  python3 "$BIN/fleet-controlled-auto-retention-selftest.py" >"$WORK/task-controlled-auto-retention.log" 2>&1 || {
+    WHY="controlled automatic close: $(tail -12 "$WORK/task-controlled-auto-retention.log")"; return 1;
+  }
+  WHAT='真实隔离tmux保留受控窗口与历史；旧结果/角色/到期只安全park，关窗前重读控制绑定'
+  SECS=$(since "$t0")
+}
+
 drill_parent_origin_retired() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-parent-origin-retirement-selftest.py" >"$WORK/parent-origin-retired.log" 2>&1 || {
@@ -7931,6 +7971,8 @@ drill_task_current_view() {
   WHAT='历史文字不冒充原生问题，Task 代码不随会话或结果改变'
   SECS=$(since "$t0")
 }
+
+
 
 drill_task_result_overrides_native() {
   local t0; t0=$(now); CAP=30

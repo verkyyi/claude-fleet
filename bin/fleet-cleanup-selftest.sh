@@ -167,6 +167,13 @@ case "\${1:-}" in
   display-message)
     case "\${!#}" in
       '#{@fleet_id}') echo '00000042-0000-4000-8000-000000000042'; exit 0 ;;
+      '#{@task_execution}')
+        if [ -n "\${FAKE_TASK_EXECUTION_AFTER:-}" ]; then
+          n=0; [ ! -f "$WORK/control-reads" ] || read n < "$WORK/control-reads"
+          n=\$(( n + 1 )); echo "\$n" > "$WORK/control-reads"
+          [ "\$n" -ge "\$FAKE_TASK_EXECUTION_AFTER" ] || exit 0
+        fi
+        printf '%s\n' "\${FAKE_TASK_EXECUTION:-}"; exit 0 ;;
       *'#{@reap_hold}'*'#{@fleet_id}') printf '%s\t\t00000042-0000-4000-8000-000000000042\n' "\${FAKE_HOLD:-}"; exit 0 ;;
       *'#{@mod_accept}'*)
         python3 - "\${!#}" <<'PYFIELDS'
@@ -271,7 +278,7 @@ make_transcript() {  # $1 = seconds ago the session last spoke, or "none"
 run_clean() {
   local scenario="$1"; shift
   : > "$ORDER_LOG"; : > "$PULL_LOG"
-  rm -f "$WORK/resumed"
+  rm -f "$WORK/resumed" "$WORK/control-reads"
   make_transcript "${FAKE_TX_AGE:-3600}"
   # A REAL worktree dir (issue #586): teardown no longer shells out to
   # `git worktree remove` — it RENAMES the tree into a sibling .fleet-trash/, so the
@@ -291,7 +298,7 @@ run_clean() {
   FAKE_TIP="${FAKE_TIP:-deadbeef}" \
   FLEET_CLEANUP_SCRATCH_HEADS="${FLEET_CLEANUP_SCRATCH_HEADS:-0}" \
   TMUX="${FAKE_TMUX:-}" TMUX_PANE="${FAKE_PANE:-}" PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" \
-  FLEET_CONF_DIR="$WORK/conf" FLEET_SESSION="testsess" \
+  FLEET_CONF_DIR="$WORK/conf" FLEET_SESSION="testsess" FLEET_TASK_AUTHORITY="" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
   FLEET_HISTORY_LEDGER="$LEDGER" \
   LAND_LEASE_DIR="$WORK/leases" LAND_POLL=0 LAND_QUEUE_TIMEOUT=2 \
@@ -413,6 +420,27 @@ st_pass 'young agent, failed probes and missing window/pid all fail closed'
 }
 
 lane_2() {
+# Controlled windows never enter the PR archive road, including unreadable marks.
+for marker in '{"control_version":1}' '{unknown' null; do
+  : > "$LEDGER"
+  tok="$(FAKE_TASK_EXECUTION="$marker" run_clean merged --auto)"
+  [ "$tok" = skip:controlled ] || st_fail "controlled PR cleanup escaped: $tok" "$(cat "$WORK/err")"
+  [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+    && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail 'controlled PR cleanup mutated history or worktree'
+done
+st_pass 'controlled or malformed execution marker blocks automatic PR archive'
+: > "$LEDGER"
+tok="$(FAKE_TASK_EXECUTION='{late-control' FAKE_TASK_EXECUTION_AFTER=3 run_clean merged --auto)"
+[ "$tok" = skip:controlled ] && ! grep -qE 'kill-window|trash|branch -D' "$ORDER_LOG" \
+  && [ -f "$WORK/wt-issue-42/keep.txt" ] || st_fail "control admitted during PR cleanup escaped: $tok"
+mkdir -p "$WORK/conf/control"
+printf 'unreadable control database' > "$WORK/conf/control/state.sqlite3"
+tok="$(run_clean merged --auto)"
+[ "$tok" = skip:controlled ] && [ ! -s "$ORDER_LOG" ] || st_fail "unknown control data allowed PR archive: $tok"
+rm "$WORK/conf/control/state.sqlite3"
+st_pass 'PR teardown rechecks late control admission and unknown control data'
+
+
 # Issue #1329: a short worker that merged its OWN PR (mergedAt after the agent
 # started) is reaped after the grace, not after FLEET_REAP_MIN_AGE; one spawned
 # onto an already-merged branch (agent started after the merge) keeps #565.

@@ -1243,7 +1243,9 @@ fleet_worktree_repo() {
     m=$( fleet_load_repo_conf "$sess" "$r" >/dev/null 2>&1 || exit 0
          cd "${FLEET_MAIN:-/nonexistent}" 2>/dev/null && pwd -P )
     [ -n "$m" ] && [ "$m" != "$wt" ] || continue
-    git -C "$m" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $wt" || continue
+    # grep reads to the end (no -q): under a caller's pipefail an early exit
+    # SIGPIPEs git on a long list and the pipeline fails though it matched (T983).
+    git -C "$m" worktree list --porcelain 2>/dev/null | grep -Fx "worktree $wt" >/dev/null || continue
     printf '%s\t%s' "$r" "$m"; return 0
   done <<EOF
 $(fleet_repos "$sess")
@@ -6977,32 +6979,10 @@ fleet_spawn_parent_id() {
   printf '%s' "$f"
 }
 
-# fleet_reap_origin <sock> <agent-def> <origin> <origin-wid> <test-id> <parent-id>
-#   [<prev-id>] [<title>] → where a session came from (T694, 回收 B): the word
-# fleet_reap_policy.py origin reads off the spawn's own facts — person ·
-# dispatched · member · driver · orchestrator · probe — and the spawners stamp as
-# @reap_origin beside the policy ORIGINS gives it. A spawn with a parent ID is
-# dispatched (a reopen / a continued ID: its ledger's parent, <prev-id>), and one
-# whose parent window runs the EPIC driver is a batch member; a <title> that says
-# it is a probe (「可关」「探针」「空会话」…, BCYB) is a probe whoever opened it.
-# <sock> empty = bare tmux (a pane's own server).
+# Compatibility argv for old spawners. Ancestry and agent names no longer pick
+# retention defaults; only an explicit test identity asks for probe policy.
 fleet_reap_origin() {
-  local sk="${1:-}" ad="${2:-}" o="${3:-}" ow="${4:-}" ti="${5:-}" par="${6:-}" prev="${7:-}" ttl="${8:-}" w pad
-  [ "$ti" = 1 ] || ti=''
-  if ! fleet_is_fid "$par" && fleet_is_fid "$prev"; then
-    par=$(python3 "$_FLEET_LIB_DIR/fleet_id.py" get "$prev" --json 2>/dev/null \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("opened", {}).get("parent", ""))' 2>/dev/null)
-  fi
-  w=$(python3 "$_FLEET_LIB_DIR/fleet_reap_policy.py" origin --agent-def "$ad" --origin "$o" \
-        --origin-wid "$ow" --test-identity "$ti" --title "$ttl" 2>/dev/null) || w=person
-  if [ "$w" = person ] && fleet_is_fid "$par"; then w=dispatched; fi
-  if [ "$w" = dispatched ] && fleet_is_fid "$par"; then
-    if [ -n "$sk" ]; then pad=$(fleet_lw '#{@fleet_id} #{@agent_def}' tmux -L "$sk")
-    else pad=$(fleet_lw '#{@fleet_id} #{@agent_def}'); fi
-    pad=$(printf '%s\n' "$pad" | awk -v f="$par" '$1 == f { print $2; exit }')
-    case "${pad##*:}" in epic-driver) w=member ;; esac
-  fi
-  printf '%s\n' "${w:-person}"
+  python3 "$_FLEET_LIB_DIR/fleet_reap_policy.py" origin --test-identity "${5:-}" 2>/dev/null
 }
 
 # _fleet_key_fid <sess> <key> [<sock>] → the @fleet_id of the ONE live window that

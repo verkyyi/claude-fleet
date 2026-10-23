@@ -328,6 +328,24 @@ if [ -n "$EXPECTED_BINDING" ] && [ "$CLEANUP_BINDING" != "$EXPECTED_BINDING" ]; 
   done_token skip:binding; exit 0
 fi
 
+# Legacy automatic kill/drop cannot release controlled execution ownership.
+# This is separate from explicit user stop; only --auto uses this conservative
+# read. Repeat at teardown, including after native liveness checks.
+automatic_control_gate() {
+  [ "$AUTO" = 1 ] || return 0
+  [[ "$WIN" =~ ^@[0-9]+$ ]] || return 0
+  local control_fid control_mark control_task
+  control_fid=$(ftmux display-message -p -t "$WIN" '#{@fleet_id}') || { done_token skip:live; return 1; }
+  control_mark=$(ftmux display-message -p -t "$WIN" '#{@task_execution}') || { done_token skip:live; return 1; }
+  control_task=$(ftmux display-message -p -t "$WIN" '#{@task}') || { done_token skip:live; return 1; }
+  if ! python3 "$BIN/fleet_task_execution.py" automatic-close-ready \
+      --session-fid "$control_fid" --marker "$control_mark" --task "$control_task"; then
+    note "  automatic cleanup retains controlled execution; idle resources use safe parking."
+    done_token skip:controlled; return 1
+  fi
+}
+automatic_control_gate || exit 0
+
 # --- the bound-issue gate (issue #1156) ---------------------------------------
 # "A PR from branch issue-<N> merged" is NOT "task #N is done": a research worker
 # on issue-9206 shipped side-fix PR #9208 (closing #9207), and --auto reaped the
@@ -408,9 +426,8 @@ issue_open_gate || exit 0
 # never closed here; done / loop-end / at belong to the idle pass
 # (fleet-cleanup-idle.py), never to this merged rule; `merged:<dur>` is its own
 # grace. No @reap_policy, or a plain `merged`: the historic rule, byte for byte.
-# The policy IN FORCE (T694, 回收 B — fleet_reap_policy.py effective): a pinned
-# window or an orchestrator is `keep`; a keep the session set for itself
-# (@reap_keep_by session) lapses once its PR merged.
+# effective preserves the chosen policy. Legacy PIN/agent/keep-by arguments
+# remain accepted for old callers but no longer grant retention privileges.
 if [ "$AUTO" = 1 ] && [[ "$WIN" =~ ^@[0-9]+$ ]]; then
   _rp=$(ftmux display-message -p -t "$WIN" '#{@reap_policy}|#{@pin}|#{@agent_def}|#{@reap_keep_by}' 2>/dev/null)
   _ov=0; [ "$st" = MERGED ] && _ov=1
@@ -631,6 +648,7 @@ fi
 # Run before history/pull and again after the lease/pull wait, just before kill.
 auto_cleanup_gate() {
   [ "$AUTO" = 1 ] || return 0
+  automatic_control_gate || return 1
   [ -n "$WT" ] || [ -n "$WIN" ] || return 0
   if [[ "$WIN" =~ ^@[0-9]+$ ]]; then
     local gate_fid gate_task
@@ -804,6 +822,7 @@ teardown() (
   auto_cleanup_gate || return 1
   current=$(cleanup_binding) || { done_token skip:binding; return 1; }
   [ "$current" = "$CLEANUP_BINDING" ] || { done_token skip:binding; return 1; }
+  automatic_control_gate || return 1
   note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
   # Ordering is load-bearing: kill the window FIRST so the worker process dies and

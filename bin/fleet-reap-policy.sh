@@ -11,9 +11,8 @@
 #       (fleet_pane_fmt — never "the pane the operator is looking at").
 #       Prints `reap_policy=<canonical> · <label>`; exit 2 = not a policy,
 #       1 = no window. --by session (the fleet tool `set_reap`, T694): a `keep`
-#       the session sets for ITSELF is stamped @reap_keep_by session and lapses
-#       once its work is over (fleet_reap_policy.effective) — only a person's
-#       keep (the default --by person: the sidebar, a shell) holds.
+#       the session sets for ITSELF retains @reap_keep_by provenance.
+#       Existing keep policies hold until explicitly changed, whoever set them.
 #   fleet-reap-policy.sh get [--win <@id> --session <sess>]
 #       the stamped policy, or `default` when none is (the kind decides).
 #   fleet-reap-policy.sh menu <sess> <@id> [<client>]
@@ -76,7 +75,7 @@ case "$sub" in
     fi
     canon=$(python3 "$BIN/fleet_reap_policy.py" norm "$pol") || exit 2
     _tm set-option -w -t "$WIN" @reap_policy "$canon" 2>/dev/null || die 1 "could not stamp $WIN"
-    # Who chose a keep (T694): a session's own lapses when its work is over.
+    # Retain who chose keep for compatibility; it no longer changes retention.
     if [ "$canon" = keep ] && [ "$BY" = session ]; then
       _tm set-option -w -t "$WIN" @reap_keep_by session 2>/dev/null
     else

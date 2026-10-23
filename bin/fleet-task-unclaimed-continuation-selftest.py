@@ -105,7 +105,7 @@ class UnclaimedTests(unittest.TestCase):
     def test_any_registration_refuses_and_preserves_evidence(self):
         for table, values in (
             ('task_execution_windows', ('T42', FIRST['operation_id'], GRANT['execution_owner'])),
-            ('task_execution_launches', ('T42', 'launch', FIRST['operation_id'], '{}', '{}', '')),
+            ('task_execution_launches', ('T42', 'launch', FIRST['operation_id'], '{}', '{}', '', 0)),
             ('task_execution_native', ('T42', 'launch', 'agent', '{}')),
             ('task_execution_launch_history', ('T42', 'launch', '{}'))):
             with self.subTest(table=table):

@@ -310,7 +310,7 @@ class SessionExitTests(unittest.TestCase):
 
     def test_legally_archived_partial_epoch_can_exit(self):
         with self.fence.admission(self.grant) as permit:
-            permit.reserve_launch("old-empty", self.proofs["supervisor"], wrapper=self.wrapper)
+            permit.reserve_launch("old-empty", self.proofs["supervisor"], wrapper=self.wrapper, admission_protocol=1)
             permit.register_child("old-empty", self.proofs["child"])
         # reserve_launch already permits this recovery: the old supervisor is
         # gone with its registered child before a native component started.
@@ -321,7 +321,7 @@ class SessionExitTests(unittest.TestCase):
 
     def test_archived_one_native_component_still_must_exit(self):
         with self.fence.admission(self.grant) as permit:
-            permit.reserve_launch("old-server", self.proofs["supervisor"], wrapper=self.wrapper)
+            permit.reserve_launch("old-server", self.proofs["supervisor"], wrapper=self.wrapper, admission_protocol=1)
             permit.register_child("old-server", self.proofs["child"])
             permit.register_native("old-server", "server", self.proofs["server"])
         with self.absent():

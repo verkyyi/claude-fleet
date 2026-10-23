@@ -131,26 +131,15 @@ With the fleet-epic plugin installed, say `/fleet-task-plan <subject>` in a sess
 
 Parking releases an idle agent process while keeping its window, identity, conversation and worktree. Speaking resumes the same conversation. Reaping closes the window only after recording resumable history; the worktree stays.
 
-These are background resource policies, separate from an explicit Stop request. Existing sessions keep the policies they were created with; explicit choices such as after-merge still apply:
+Background resource policies are separate from your explicit Stop request. New tasks use the same ordinary idle/park default (`idle:2h`), regardless of creator, interface or agent. PIN only orders the list. A missing result no longer triggers reminders or automatic closure.
 
-| Origin | Parking | Reaping |
-|---|---|---|
-| Person | Idle tier | 3 inactive days parked |
-| Dispatched task | Idle tier | About 1 minute after its result; without a result, remind after 30 idle minutes, close after another 30 |
-| Batch member | Idle tier | Same as dispatched, including failed results |
-| Batch driver | Idle tier | When the batch ends; retained between ticks |
-| Orchestrator | Idle tier | Never automatically |
-| Waiting for a decision | Idle tier | After 15 idle minutes, under the existing close conditions |
-| Probe or drill | Idle tier; check reaping first once its close time is due | About 1 minute after finishing |
-| Web conversation | Idle tier | Keeps the existing web policy: never automatically |
-
-A session that explicitly reported waiting or blocked also gets 3 days parked, including a decision session. The decide origin alone is not a waiting report. Missing resume proof keeps the window. A pin or your explicit keep policy prevents reaping, but permits parking. Old wrappers cannot park; waiting conversations stay open until their wrapper is updated.
+For Hub-controlled tasks, automatic cleanup only parks safely: the task binding, window, history and worktree remain, while an acknowledged park releases the native process and running capacity. Existing policies such as `keep` and `merged` are preserved without bulk migration. Keep prevents automatic archival, allows safe parking, and never prevents your Stop request. Legacy parked retention still requires resumable history before closing a window. Older wrappers that cannot park do not count as released capacity. Explicit test probes retain their dedicated policy; title words never make an ordinary task a probe.
 
 Settings: `fleet.session.park_idle` **5m**, `park_idle_unattended` **5m** (the conservative cache-measurement fallback; **1m** is configurable), `park_presence` **15m**, and `fleet.session.reap_parked` **3d**. Memory pressure may park earlier. Watched windows, drafts, active turns, open choice dialogs and background work hold parking. `fleet doctor --park` lists each window's origin, park/reap rule, next UTC deadline and hold reason.
 
 The window's explanation line says why parking is held: someone is looking, a draft is in the input box, background work is running, a choice dialog is open, or an older wrapper cannot park. Doctor carries the same reason instead of promising a parking time that a protection condition has blocked.
 
-Ask the session to change its automatic reap policy; the simplified Tab page no longer lists Reap policy. Person conversations on new wrappers use the parked retention above; decision sessions retain their 15-minute idle policy unless they explicitly reported waiting. An explicit keep still holds.
+Ask the session to change its automatic reap policy; the simplified Tab page no longer lists Reap policy. An existing keep remains effective, including after a historical result.
 
 ## Quota and usage
 

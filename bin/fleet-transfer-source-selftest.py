@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 
@@ -756,6 +757,63 @@ class Settled(unittest.TestCase):
             for other in (dict(source, state='working'), dict(source, agent='claude')):
                 src.inspect.return_value = other
                 with self.assertRaisesRegex(ValueError, 'between rounds'): src.settled('test', '%2')
+
+
+class InterruptSettle(unittest.TestCase):
+    """fleet-transfer.sh --interrupt (T983): after the gate's stop, an ended Codex
+    turn on an idle native thread is projected `done`, guarded on the mark."""
+
+    def settle(self, agent='codex', status='idle', last='interrupted', items=(), data=True):
+        thread = dict(status={'type': status}, turns=[dict(status=last, items=list(items))]) if last else \
+            dict(status={'type': status}, turns=[])
+        client = unittest.mock.MagicMock()
+        gate = unittest.mock.MagicMock()
+        gate.window.return_value = dict(agent=agent, pane='%2', sock='test')
+        gate.codex_api.return_value = (lambda pane, sock: dict(remote='r', session_id='s') if data else None,
+                                       lambda remote: client)
+        with patch.dict('sys.modules', fleet_session_gate=gate), \
+             patch.dict(src.ATTENTION, thread_read=lambda c, d, include_turns=False: thread), \
+             patch.object(src, 'run') as run:
+            src.interrupt_settle('fid')
+        return run
+
+    def test_an_ended_turn_on_an_idle_thread_reads_done_only_over_a_live_mark(self):
+        for last in ('interrupted', 'completed', 'failed'):
+            run = self.settle(last=last)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[:6], ['tmux', '-L', 'test', 'if-shell', '-F', '-t'])
+            self.assertIn('#{==:#{@claude_state},working}', argv[7])
+            self.assertIn('#{==:#{@claude_state},looping}', argv[7])
+            self.assertIn('#{==:#{@loop},}', argv[7])
+            self.assertNotIn('needs', argv[7])
+            self.assertIn('@claude_state done', argv[8])
+
+    def test_a_running_or_unended_turn_is_never_projected(self):
+        for kw, why in ((dict(status='active'), 'still active'),
+                        (dict(items=[dict(status='inProgress')]), 'tool is still active'),
+                        (dict(last='inProgress'), 'not ended'),
+                        (dict(last=None), 'not ended'),
+                        (dict(data=False), 'unreachable')):
+            with self.assertRaisesRegex(ValueError, why):
+                self.settle(**kw)
+
+    def test_a_claude_source_settles_by_its_own_report(self):
+        self.settle(agent='claude').assert_not_called()
+
+    def test_fleet_transfer_interrupts_only_an_immediate_cutover(self):
+        script = Path(__file__).with_name('fleet-transfer.sh')
+        for extra in (['--after-turn'], ['--prepare-only'], ['--quota-continuation']):
+            p = subprocess.run(['bash', str(script), '--session', 'x', '--window', '@1', '--to', 'claude',
+                                '--interrupt'] + extra, capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ, PATH='/usr/bin:/bin'))
+            self.assertEqual(p.returncode, 1, extra)
+            self.assertIn('--interrupt is for an immediate cutover only', p.stderr)
+        text = script.read_text()
+        # The cutover asks the gate's stop only after the source proved not ready,
+        # and a dry-run says what --interrupt would do instead of doing it.
+        self.assertIn("source_ready || interrupt_source || die", text)
+        self.assertIn("fleet_session_gate.py\" stop --fid", text)
+        self.assertIn("--interrupt would stop that turn first", text)
 
 
 class Background(unittest.TestCase):
