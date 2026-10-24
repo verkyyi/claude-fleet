@@ -107,6 +107,7 @@
 8.1 cred-central-failover-pin
 0.1 cred-central-trusted-pod
 1.1 cred-codex-native-initial
+0.5 cred-codex-refs-overflow
 0.6 cred-codex-path-open
 0.5 cred-enforce-fails-no-lease
 0.5 cred-existing-unseparated
