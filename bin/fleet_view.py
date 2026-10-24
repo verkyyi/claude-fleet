@@ -2625,12 +2625,13 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
             if e["target"] not in protected:
                 room -= 1
         else:
+            e["list_folded"] = e.get("sec") != "gone"
             e["sec"] = "gone"
             history.append(e)
     out = []
     total = sum(bool(needs_attention(e)) for e in rows)
     if total:
-        out.append({"kind": "sec", "sec": "attention", "text": "Needs attention" if ui_lang() == "en" else "待处理", "n": total})
+        out.append({"kind": "sec", "sec": "attention", "text": ("Needs attention" if ui_lang() == "en" else "待处理") + " · %d" % total, "n": total})
         for i, e in enumerate(attention):
             e.pop("sec", None)
             if i >= preview:
@@ -2642,7 +2643,7 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
         running = sum(task_status(e) == "work" for e in history)
-        label = "More sessions" if ui_lang() == "en" else "更多会话"
+        label = ("More sessions" if ui_lang() == "en" else "更多会话") + " · %d" % len(history)
         if running:
             label += (" · %d running" if ui_lang() == "en" else " · %d 个运行中") % running
         out.append({"kind": "sec", "sec": "gone", "text": label, "n": len(history), "older": sum(e.get("n", 0) for e in older)})
@@ -4185,7 +4186,7 @@ def live(r):
 
 
 def ended(r):
-    return bool(r.get("ended")) or r.get("sec") == "gone"
+    return bool(r.get("ended") or r.get("gone")) or (r.get("sec") == "gone" and not r.get("list_folded"))
 
 
 def other_agent(r):
@@ -5432,6 +5433,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         cur = vsh.split(":", 1)[1]
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), order_notice(), False
+    last_input, pending_items = 0.0, None
     msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
@@ -5549,7 +5551,8 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             return r
         if r.get("gone"):
             return None
-        e = next((e for e in items if e.get("kind") == "sess" and e.get("target") == r["target"]
+        latest = pending_items if pending_items is not None else items
+        e = next((e for e in latest if e.get("kind") == "sess" and e.get("target") == r["target"]
                   and bool(e.get("far")) == bool(r.get("far")) and not e.get("gone")), None)
         if e is None or e.get("lost"):
             return None
@@ -5633,7 +5636,6 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         at = bolt_at()
         compose(shown[at])
 
-    last_input, pending_items = 0.0, None
     while True:
         if msg_until and time.time() > msg_until:
             msg, msg_until = "", 0

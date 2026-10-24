@@ -107,6 +107,17 @@ class TaskList(unittest.TestCase):
         self.assertNotIn("▸", rendered)
         self.assertEqual(v.visible([row("plain")], "", set())[0]["kind"], "sess")
 
+    def test_folded_running_session_keeps_live_actions(self):
+        items = [row(str(i), state="working", activity_at=100-i) for i in range(12)]
+        folded = [e for e in v.compact_task_list(items, now=200) if e.get("target") == "11"][0]
+        self.assertEqual(folded["sec"], "gone")
+        self.assertTrue(v.live(folded))
+        self.assertFalse(v.ended(folded), "list overflow is not lifecycle completion")
+        self.assertFalse(items[-1].get("sec"))
+        history = row("history", sec="gone", gone=True, state="done")
+        current = [e for e in v.compact_task_list([history], current="history") if e["kind"] == "sess"][0]
+        self.assertTrue(v.ended(current), "viewing history never makes it live")
+
     def test_shared_compact_policy(self):
         # Shared with extras/web-console/test/session-list.mjs.
         fixtures = BIN.parent / "extras/web-console/test/fixtures/session-list-policy.json"
@@ -128,7 +139,7 @@ class TaskList(unittest.TestCase):
                  row("loop", loop=True, sec="gone"), row("lost", lost=True, sec="gone")]
         closed = v.visible(items, "", set())
         self.assertEqual([e["target"] for e in closed if e["kind"] == "sess"], ["exited", "loop", "lost"])
-        self.assertEqual(closed[-1]["text"], "更多会话")
+        self.assertEqual(closed[-1]["text"], "更多会话 · 1")
         self.assertEqual([e["target"] for e in v.visible(items, "old", set())], ["old"])
         self.assertEqual(v.visible(items, "", set())[-1]["closed"], True)
         self.assertIn("old", [e.get("target") for e in v.visible(items, "", {"gone"})])

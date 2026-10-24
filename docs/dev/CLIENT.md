@@ -70,7 +70,7 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
   F12 or ⌃] p.
 
-Terminal 是 iTerm2 中的 tmux 面板，Web 是网页。两者均按 PIN、无标题普通任务、
+Terminal 是 iTerm2 中的 tmux 面板，Web 是网页。两者均按待处理入口、PIN、无标题普通任务、
 折叠的「更多会话」排列；旧父子关系和 EPIC 成员平铺，不显示树或成员计数。
 每行只有一个固定状态位，优先级为 `!` 需要回答/批准、`◷` 待启动、`↻` 运行、
 `⟳` Loop；普通静止行留空。详情保留原生观测和错误原因，失联行淡化，不能把空白
