@@ -77,7 +77,11 @@ class Timers(fixture.Park):
         self.assertIn(self.prompt, (self.root / 'launch-args').read_text())
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         self.tick()
-        rows = [json.loads(x) for x in (self.root / 'conf/logs/park.ndjson').read_text().splitlines()]
+        log = self.root / 'conf/logs/park.ndjson'
+        # wake_ready publishes readiness before health bookkeeping and its audit
+        # append. A running relay is not proof that the wake row is written yet.
+        self.wait(lambda: any(json.loads(x)['act'] == 'wake' for x in log.read_text().splitlines()))
+        rows = [json.loads(x) for x in log.read_text().splitlines()]
         wakes = [r for r in rows if r['act'] == 'wake']
         self.assertEqual(len(wakes), 1)
         self.assertEqual(wakes[0]['next'], self.due)
