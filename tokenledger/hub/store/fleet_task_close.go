@@ -242,14 +242,14 @@ type BoardID struct {
 	TitleSource                                                  string
 	Agent                                                        string
 	Seq                                                          int
-	Opened, Closed                                               int64
+	Opened, Closed, ActivityAt                                   int64
 }
 
 // BoardIDs lists owner's IDs ("" = everyone's) that are open, or closed at or
 // after since (epoch seconds).
 func (s *Store) BoardIDs(owner string, since int64) ([]BoardID, error) {
 	q := `SELECT id, short, machine, login, title, task, task_id, repo, close_reason, seq, opened_at, closed_at,
- COALESCE((SELECT agent FROM fleet_id_natives n WHERE n.id = fleet_ids.id AND native != '' ORDER BY n.n DESC LIMIT 1), ''), title_source
+ COALESCE((SELECT agent FROM fleet_id_natives n WHERE n.id = fleet_ids.id AND native != '' ORDER BY n.n DESC LIMIT 1), ''), title_source, activity_at
 		FROM fleet_ids WHERE (closed_at = 0 OR closed_at >= ?)`
 	args := []any{since}
 	if owner != "" {
@@ -264,7 +264,7 @@ func (s *Store) BoardIDs(owner string, since int64) ([]BoardID, error) {
 	for rows.Next() {
 		var b BoardID
 		if err := rows.Scan(&b.ID, &b.Short, &b.Machine, &b.Login, &b.Title, &b.Task, &b.TaskID, &b.Repo, &b.Reason,
-			&b.Seq, &b.Opened, &b.Closed, &b.Agent, &b.TitleSource); err != nil {
+			&b.Seq, &b.Opened, &b.Closed, &b.Agent, &b.TitleSource, &b.ActivityAt); err != nil {
 			return nil, err
 		}
 		out = append(out, b)

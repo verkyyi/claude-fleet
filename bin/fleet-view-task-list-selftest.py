@@ -43,6 +43,19 @@ class TaskList(unittest.TestCase):
     def tearDown(self):
         self.env.stop()
 
+    def test_turn_activity_reorders_live_and_history_but_not_pin(self):
+        items = [row("pin-a", group="pin", activity_at=1), row("pin-b", group="pin", activity_at=99),
+                 row("a", activity_at=10, list_scope="turns"), row("b", activity_at=20, list_scope="turns"),
+                 row("old-a", sec="gone", activity_at=30), row("old-b", sec="gone", activity_at=5)]
+        targets = lambda rows: [e["target"] for e in v.task_list(rows) if e["kind"] == "sess"]
+        self.assertEqual(targets(items), ["pin-a", "pin-b", "b", "a", "old-a", "old-b"])
+        items[2]["activity_at"] = 40
+        self.assertEqual(targets(items), ["pin-a", "pin-b", "a", "b", "old-a", "old-b"])
+        items[3]["state"] = "needs"
+        self.assertEqual(targets(items), ["pin-a", "pin-b", "a", "b", "old-a", "old-b"])
+        items[2]["activity_at"] = 20
+        self.assertEqual(targets(items), ["pin-a", "pin-b", "a", "b", "old-a", "old-b"])
+
     def test_one_slot_priority_and_quiet_states(self):
         examples = [
             (dict(state="needs", pending_start=True, loop=True), "needs"),
@@ -157,6 +170,11 @@ class TaskList(unittest.TestCase):
         self.assertEqual(facts["native_wait"], "bg,loop")
         self.assertIs(inventory_row(old + ["loop=0", "nativewait="])[1]["loop"], False)
         self.assertNotIn("loop", inventory_row(old + ["loop=unknown", "nativewait="])[1])
+        _, facts = inventory_row(old + ["loop=0", "nativewait=", "activity=1792800000"])
+        self.assertEqual(facts["activity_at"], 1792800000)
+        self.assertIs(facts["loop"], False)
+        for value in ("", "0", "-1", "NaN", "999999999999999"):
+            self.assertNotIn("activity_at", inventory_row(old + ["loop=0", "nativewait=", "activity=" + value])[1])
 
     def test_stop_uses_identity_without_reap_confirmation(self):
         e = row("@1", fid="test-id", far=False, gone=False, state="working")

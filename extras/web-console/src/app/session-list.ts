@@ -1,4 +1,4 @@
-// Task-list presentation: one status slot, stable PIN/ordinary/history ordering.
+// Task-list presentation: one status slot, PIN/ordinary/history ordered by recent conversation activity.
 // Native facts stay in the shared board; old-hub fallbacks never invent a request.
 import { tr } from "../shared/i18n.ts"; // .ts: the test runs this file as it is
 import { taskStatus, writtenCode } from "./task-state.ts";
@@ -8,10 +8,12 @@ import type { Glyph, Row, Tone } from "./work.ts";
 export type ListItem = { ref: string; glyph: Glyph; tone: Tone; title: string; bold: boolean };
 
 // PIN is the only group heading. Old board group ordering must not move a
-// task when its observation changes. Older parent/member records are flat too.
+// task solely because its status changes. New turn activity reorders ordinary
+// rows; older parent/member records are flat too.
 export type ListGroups = { pin: Row[]; open: Row[]; gone: Row[] };
 export function listRows(rows: Row[], previous?: ListGroups): ListGroups {
-  const stable = [...rows].sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
+  const activity = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+  const recent = [...rows].sort((a, b) => activity(b) - activity(a) || a.id.localeCompare(b.id));
   const older = (r: Row) => r.group === "gone" && !r.live && !listStatus(r).kind && !listStatus(r).unknown;
   const keep = (next: Row[], before: Row[] = []) => {
     const byID = new Map(next.map((r) => [r.id, r]));
@@ -19,8 +21,8 @@ export function listRows(rows: Row[], previous?: ListGroups): ListGroups {
     return [...next.filter((r) => !known.has(r.id)), ...before.flatMap((r) => byID.has(r.id) ? [byID.get(r.id)!] : [])];
   };
   return { pin: keep(rows.filter((r) => r.group === "pin"), previous?.pin),
-    open: keep(stable.filter((r) => r.group !== "pin" && !older(r)), previous?.open),
-    gone: keep(stable.filter(older), previous?.gone) };
+    open: recent.filter((r) => r.group !== "pin" && !older(r)),
+    gone: recent.filter(older) };
 }
 
 export type ListStatus = { kind: "ask" | "pending" | "work" | "loop" | null; words: [string, string][]; unknown: boolean };
