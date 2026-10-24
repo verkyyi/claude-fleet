@@ -25,6 +25,8 @@
 #                           link (the fast path below). Exit 3 when the worker is
 #                           not live here; 5 when <view> is a home's far 看台
 #                           (`*-via-*`, C4) not here yet.
+#   deliver <worker_id>     (ON <node>, T992) — a new session's stub's words
+#                           (JSON on stdin) handed to its agent here, see below.
 #   cur / notify-jump       (the server's [78] / [79] hooks, in a @view_thin
 #                           session) — see each below.
 #   shell-here <worker id>  (ON <node>) — the session's own shell (⌃\), below.
@@ -865,6 +867,22 @@ open|run|serve|watch|back|reconcile|restore)
   # peer window
   note '已删除：看台走 fleet / attach --thin'
   exit 2
+  ;;
+
+# ---------------------------------------------------------------------------------
+deliver)
+  # ON <node> (T992): a new session's stub's words for <worker_id> — the home
+  # machine's ⌘P opened the stub there, the hub placed the session here. JSON on
+  # stdin ({"queued": [...], "unsent": "..."}), handed to the agent here once it
+  # keeps a paste (bin/fleet_stub.py deliver: the queued lines submitted, the
+  # unsent one left in its input). Exit 3 not live here, 4 never ready (the home
+  # keeps the words as a notice).
+  loc=$(fleet_worker_locate "wid:${1#wid:}" 2>/dev/null)
+  case "$loc" in local\ *) ;; *) note "${1#*/} is not live on $(hostname -s)"; exit 3 ;; esac
+  set -- $loc; sock=$(fleet_socket "$3")
+  pane=$(T display-message -p -t "$2" '#{pane_id}' 2>/dev/null)
+  case "$pane" in %*) ;; *) exit 3 ;; esac
+  exec python3 "$BIN/fleet_stub.py" deliver --socket "$sock" --pane "$pane"
   ;;
 
 # ---------------------------------------------------------------------------------

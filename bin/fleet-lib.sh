@@ -8149,6 +8149,14 @@ fleet_fetch_bounded() {
      && git -C "$main" show-ref --verify --quiet "refs/remotes/origin/$base" 2>/dev/null; then
     now=$(date +%s); at=$(stat -f %m "$gd/FETCH_HEAD" 2>/dev/null || stat -c %Y "$gd/FETCH_HEAD" 2>/dev/null)
     case "$at" in ''|*[!0-9]*) ;; *) [ $((now - at)) -lt "$fresh" ] && return 0 ;; esac
+    # stale, but origin/<base> is there (T992): a new session does not wait on
+    # the network — it starts off the base it has (base-sync's, ≤ a minute or
+    # two old) and this fetch goes on behind it for the next one.
+    # FLEET_FETCH_BLOCKING=1 is the old wait.
+    if [ "${FLEET_FETCH_BLOCKING:-0}" != 1 ]; then
+      ( FLEET_FETCH_BLOCKING=1 FLEET_FETCH_FRESH_SECS=0 fleet_fetch_bounded "$main" "$base" ) </dev/null >/dev/null 2>&1 &
+      return 0
+    fi
   fi
   lk=''
   if [ -n "$gd" ]; then
@@ -8184,7 +8192,7 @@ fleet_fetch_bounded() {
 # With <sess>, the number's next GENERATION is minted (issue #1538): whatever the
 # last scratch-<N> left in the child ledger is retired, never inherited.
 fleet_scratch_alloc() {
-  local main="$1" base="$2" sess="${3:-}" cand cwt n=1 gd ck
+  local main="$1" base="$2" sess="${3:-}" cand cwt n=1 gd ck taken
   fleet_fetch_bounded "$main" "$base"
   # A number is CLAIMED before its worktree is made (T716): concurrent starts
   # (a batch of four, ⌘P pressed again) each take the next free one at once
@@ -8193,8 +8201,16 @@ fleet_scratch_alloc() {
   # one older than a minute is a crashed start's and is taken over.
   gd=$(git -C "$main" rev-parse --git-common-dir 2>/dev/null)
   case "$gd" in '') ;; /*) ;; *) gd="$main/$gd" ;; esac
+  # every scratch branch in ONE read (T992): a probe per N — show-ref, then the
+  # worktree dir's basename/cksum/rev-parse — cost ~0.1 s a number, 7.9 s on a
+  # repo with 111 of them before its first free one. A number listed here is
+  # skipped without a fork; one that is not is checked as before (a racing
+  # start's branch since the read is still caught: show-ref, then `-b`).
+  taken=" $(git -C "$main" for-each-ref --format='%(refname:lstrip=2)' 'refs/heads/scratch-*' 2>/dev/null | tr '\n' ' ') "
   while [ "$n" -le 999 ]; do
-    cand="scratch-$n"; cwt="$(fleet_worktree_dir "$main" "$cand")"
+    cand="scratch-$n"
+    case "$taken" in *" $cand "*) n=$((n + 1)); continue ;; esac
+    cwt="$(fleet_worktree_dir "$main" "$cand")"
     if git -C "$main" show-ref --verify --quiet "refs/heads/$cand" 2>/dev/null || [ -e "$cwt" ]; then
       n=$((n + 1)); continue
     fi
@@ -8213,7 +8229,11 @@ fleet_scratch_alloc() {
     fi
     # No --reuse: `-b` failing on a branch a racing caller just took is the signal
     # to move on to the next N. Silent on both streams (#446).
-    if fleet_worktree_create "$main" "$cand" "$base" >/dev/null; then
+    # FLEET_SCRATCH_NOCHECKOUT=1 (T992, dash-raw-session.sh's cold overlap): the
+    # worktree and its branch with only what an agent reads as it starts
+    # (fleet_worktree_boot) — the caller fills the rest beside the agent's start
+    if fleet_worktree_create "$main" "$cand" "$base" ${FLEET_SCRATCH_NOCHECKOUT:+--no-checkout} >/dev/null; then
+      [ -n "${FLEET_SCRATCH_NOCHECKOUT:-}" ] && fleet_worktree_boot "$cwt"
       [ -n "$ck" ] && rmdir "$ck" 2>/dev/null
       [ -n "$sess" ] && fleet_scratch_gen_new "$sess" "$cand" "$cwt"
       printf '%s\t%s\n' "$cand" "$cwt"; return 0

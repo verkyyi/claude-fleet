@@ -3652,7 +3652,9 @@ fi
 
 # --- timing: ⌘P → 面板 and ⌘N / ⚡ → 能打字 (issue #3551, EPIC #3500 C6) ---------
 # fleet_timing.py's `check`: ⌘P's 九成五 over its last 50 runs against
-# FLEET_TIMING_PANEL_MS (100, T890), the session's median of 10 against
+# FLEET_TIMING_PANEL_MS (100, T890), ⌘P 「新会话」's window on the screen (`shown`,
+# the stub's first frame, T992) by its 九成五 against FLEET_TIMING_SHOWN_MS (100),
+# the session's median of 10 against
 # FLEET_TIMING_SESSION_MS (8000; a session judged
 # by its `input` — the agent's input box, T716 — else its `total`; a `cold` run
 # from before the warm pool left, T495, is counted apart). Nothing measured ⇒ no row.
@@ -3661,7 +3663,7 @@ if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [
   _tmsg=$(printf '%s\n' "$_tm" | awk '{
     split("", v)
     for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
-    w = ($1 == "panel" ? "⌘P → 面板" : ($1 == "session" ? "新会话 → 能打字" : $1))
+    w = ($1 == "panel" ? "⌘P → 面板" : ($1 == "session" ? "新会话 → 能打字" : ($1 == "shown" ? "新会话 → 上屏" : $1)))
     if ("p95" in v) s = w " 九成五 " (v["p95"] == "—" ? "—" : sprintf("%.2fs", v["p95"] / 1000)) " · p50 " (v["p50"] == "—" ? "—" : sprintf("%.2fs", v["p50"] / 1000)) " (" v["n"] " 次"
     else s = w " p50 " (v["p50"] == "—" ? "—" : sprintf("%.2fs", v["p50"] / 1000)) " (" v["n"] " 次"
     if (v["cold"] > 0) s = s "，冷启 " v["cold"]
@@ -3683,8 +3685,8 @@ if _sp=$(python3 "$(dirname "$0")/fleet_timing.py" p90 session --hours 24 2>/dev
   info spawn-time "$(printf '%s\n' "$_sp" | awk '{
     for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
     s = "新建耗时 近 24 小时 " v["n"] " 次 · 九成"
-    split("record placed window wrap exec switched ready input", k, " "); split("记任务|hub 结论|开窗|启动脚本|agent 启动|切过去|agent 就绪|能打字", w, "|")
-    for (j = 1; j <= 8; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
+    split("shown record placed window wrap exec switched ready input", k, " "); split("上屏|记任务|hub 结论|开窗|启动脚本|agent 启动|切过去|agent 就绪|能打字", w, "|")
+    for (j = 1; j <= 9; j++) if (k[j] in v) s = s " · " w[j] " " sprintf("%.1fs", v[k[j]] / 1000)
     print s }') — fleet_timing.py table session shows each run's stages"
 fi
 

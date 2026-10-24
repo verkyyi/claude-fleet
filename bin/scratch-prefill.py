@@ -183,11 +183,46 @@ def prefill(socket, pane, draft, warm):
     # A name is one input line. Drop terminal control bytes (especially CR/LF,
     # Escape and DEL) before pasting, so even unusual CLI names cannot submit or
     # end bracketed paste. Keep Unicode, spaces, #, quotes and the entire name.
-    text = "".join(c for c in draft if ord(c) >= 32 and not 127 <= ord(c) < 160)
+    text = clean(draft)
     if not text.strip():
         return
+    native = wait_input(tm, pane, warm, record, note)
+    if native is None:
+        return
+    paste(tm, pane, text, record)
+    if native and not warm:
+        repaste_if_swallowed(tm, pane, text, record)
+    # Deliberately no Enter, no seed argument.
+
+
+def clean(text, newlines=False):
+    """Terminal control bytes out (CR, Escape, DEL — nothing can submit or end a
+    bracketed paste); `newlines` keeps LF, for a paste that is meant to hold lines."""
+    return "".join(c for c in text if (ord(c) >= 32 or newlines and c == "\n") and not 127 <= ord(c) < 160)
+
+
+def repaste_if_swallowed(tm, pane, text, record):
+    """The agent's word can land a beat before its input is mounted; a swallowed
+    paste leaves the prompt EMPTY. Re-paste only then: any text there (ours or the
+    person's) is never pasted over."""
+    time.sleep(RECHECK)
+    try:
+        cx, cy = tm("display-message", "-p", "-t", pane, META).decode().strip("\n").split("\t")[2:4]
+        after = tm("capture-pane", "-p", "-e", "-t", pane).decode("utf-8", "replace")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+    if input_status(after, int(cx), int(cy)) == "empty":
+        paste(tm, pane, text, record)
+        record("delivered unsent (second paste)")
+
+
+def wait_input(tm, pane, warm, record, note, timeout=TIMEOUT):
+    """Block until the agent in `pane` owns an EMPTY input that keeps a paste:
+    True / False — ready, and whether the agent said so itself (OSC 7501) —
+    or None when it never will (`note` has said why). The one readiness rule,
+    for the scratch name and the new-session stub's handoff (T992) alike."""
     record("waiting for input")
-    deadline = time.monotonic() + TIMEOUT
+    deadline = time.monotonic() + timeout
     appeared = unchanged = None
     previous = None
     while time.monotonic() < deadline:
@@ -199,12 +234,12 @@ def prefill(socket, pane, draft, warm):
             continue
         if len(meta) != 7 or meta[0] != "0":
             record("pane is unavailable")
-            return
+            return None
         command, cx, cy, state, mode, status_raw = meta[1:]
         native = agent_says_idle(status_raw, state)
         if state in ("working", "busy", "needs", "looping") or mode != "0":
             note("session is already in use")
-            return
+            return None
         # Native Claude releases may report their version as the process name;
         # npm installs run as node. In particular, never paste into a shell left
         # behind by a failed/exited agent, even if its old prompt is still visible.
@@ -225,7 +260,7 @@ def prefill(socket, pane, draft, warm):
         status = input_status(screen, int(cx), int(cy))
         if status == "busy":
             note("input already contains text")
-            return
+            return None
         now = time.monotonic()
         if status == "empty":
             if appeared is None:
@@ -234,26 +269,13 @@ def prefill(socket, pane, draft, warm):
                 unchanged = now
             if (warm or (native and previous == screen)
                     or (now - appeared >= SETTLE and now - unchanged >= STABLE)):
-                paste(tm, pane, text, record)
-                if native and not warm:
-                    # The agent's word can land a beat before its input is mounted;
-                    # a swallowed paste leaves the prompt EMPTY. Re-paste only then:
-                    # any text there (ours or the person's) is never pasted over.
-                    time.sleep(RECHECK)
-                    try:
-                        cx, cy = tm("display-message", "-p", "-t", pane, META).decode().strip("\n").split("\t")[2:4]
-                        after = tm("capture-pane", "-p", "-e", "-t", pane).decode("utf-8", "replace")
-                    except (OSError, ValueError, subprocess.SubprocessError):
-                        return
-                    if input_status(after, int(cx), int(cy)) == "empty":
-                        paste(tm, pane, text, record)
-                        record("delivered unsent (second paste)")
-                return  # Deliberately no Enter, no seed argument.
+                return bool(native)
         else:
             appeared = unchanged = None
         previous = screen
         time.sleep(POLL)
     note("input did not become ready")
+    return None
 
 
 def main():

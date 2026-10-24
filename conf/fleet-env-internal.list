@@ -94,6 +94,7 @@ FLEET_CONTROL_AS                   handoff: the agent file a hub-placed start op
 FLEET_CLIENT_REHOMED               handoff: the home the thin loop gave up on (换家), set on the attach command for the new home, whose top line says so (fleet-thin.py → fleet-remote-view.sh, T690)
 FLEET_DELIVER_HELD                 handoff: the one held delivery code, from the generated agent adapter table (bin/fleet-agent-adapter.sh, T626)
 FLEET_DRILL                        handoff: this process is a drill against the live install — fleet_notice.py writes nothing to the person's record (T741)
+FLEET_FETCH_BLOCKING               knob: 1 = a stale base is fetched before a start goes on (the old wait); default 0 starts off origin/<base> as it is and fetches behind it (fleet_fetch_bounded, T992)
 FLEET_HUB_CLIENT_VERSION           seam: the hub's client_version in place of asking /version (fleet-client-behind.py, #3826)
 FLEET_HUB_PAUSE_RETRY_SECS         test seam: pause between the three label reads of fleet-hub-pause.sh (3 s; the drill sets 0, #4621)
 FLEET_ID_HUB_POST                  seam: the hub transport `fleet-id.sh push` calls (METHOD PATH, body on stdin → code + body; the selftest's stand-in hub; EPIC T497 C2)
@@ -132,9 +133,13 @@ FLEET_DEPS_SHARE_LOG               path: state/log location override (fleet-deps
 FLEET_DEPS_SHARE_TIMEOUT           knob: wall-clock budget for one worktree's share pass (fleet-lib.sh fleet_worktree_deps_share, 60)
 FLEET_DISPATCH_AGENTS_HERE         seam: the agents installed here, comma-separated, for ⌘T's agent step (fleet-quick-dispatch.py, #3004)
 FLEET_DISPATCH                     handoff: resolved coding provider and accepted request/task identity across spawn adapters (#4392)
+FLEET_SCRATCH_NOCHECKOUT           handoff: 1 = fleet_scratch_alloc makes the worktree --no-checkout + fleet_worktree_boot; its caller fills it (dash-raw-session.sh's cold overlap, T992)
 FLEET_START_DISPATCH               handoff: accepted task start checked only by the initial wrapper, discarded before native launch; never used for history resume (NV03)
 FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accepted dispatch to this caller-owned temporary file (#4392)
 FLEET_EXECUTION_RESULT             handoff: ccquota place writes the explicit task execution snapshot to this caller-owned temporary file
+FLEET_STUB_COLS                    handoff: the stub window's width at its first frame, so it forks nothing before drawing (fleet_stub.py → fleet-stub.sh, T992)
+FLEET_STUB_DIR                     handoff: a new session's stub (its state dir) from ⌘P's ↵ to fleet_view.go's handoff (T992)
+FLEET_STUB_READY_SECS              knob: how long the stub's handoff waits for the agent to keep a paste before it goes there anyway (fleet_stub.py, default 90, T992)
 FLEET_TASK_CONTROL_VERSION         protocol: explicit 1 requests task execution control v1; unset never enrolls legacy placement
 FLEET_TASK_EXECUTION               handoff: authenticated bound task execution snapshot through spawner/wrapper/native admission; removed before native tools run
 FLEET_TASK_CONTINUATION            handoff: acknowledged exit operation ID only; controlled raw startup re-derives the original workspace and history
