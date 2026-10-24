@@ -7104,6 +7104,16 @@ drill_private_preview_registration() {
   SECS=$(since "$t0")
 }
 
+# fleet preview dev forwards the preview's Unix socket to a dev server's loopback TCP
+# port — a port any login on the machine may hold. A listener outside the command's
+# own process tree (taken before it, or after it let go) must never be forwarded to.
+drill_preview_bridge_foreign_port() {
+  local started; started=$(now); CAP=30
+  python3 "$BIN/fleet-preview-dev-selftest.py" ForeignPort >"$WORK/preview-bridge-foreign-port.log" 2>&1 \
+    || { cat "$WORK/preview-bridge-foreign-port.log"; WHY='fleet preview dev forwarded to a listener its command does not own'; return 1; }
+  SECS=$(since "$started"); WHAT='a foreign listener on the handed / let-go port gets 503, never a byte; a held --port refuses before registering'
+}
+
 drill_private_preview_isolation() {
   CAP=180; local t0; t0=$(now)
   term_go 'TestPreviewHostsCookiesAndReturn TestPreviewAuthFlow TestPreviewSignedOutOAuthReturn TestPreviewTrialAndDisabled TestPreviewReplicas TestPreviewIdentityAndGeneration TestPreviewHTTPStreamAndWebSocket TestPreviewSocketPaths' './hub/api ./hub/store ./e2e ./agent' \

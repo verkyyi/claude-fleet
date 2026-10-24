@@ -197,18 +197,33 @@ The hub keeps a copy of your conversation in China (your words, the replies' tex
 ## Private live development previews
 
 When enabled by the deployment, the Task details show your running HTTP/API/WebSocket
-applications under Live previews, including SSE and explicitly configured Vite HMR.
+applications under Live previews, including SSE and hot reload (HMR).
 Opening a preview requires sign-in and the Task owner's identity. Disconnected nodes
 show Offline. The default lease is two hours; renew or close it in Task details.
 Closing disconnects active streams without stopping the application.
 
-Ask the Agent in the Task to register a same-account Unix HTTP socket with the
-`preview` tool. The CLI supports `fleet preview register app.sock`, `list`,
-`renew <id>`, and `close <id>`. Put the service socket in your own
-`~/.fleet-preview/` (directory 0700, socket 0600). TCP-only frameworks are not
-supported yet. Each account gets up to three previews and 32 concurrent requests,
-including WebSockets, independently of Task concurrency. Without an explicit,
-separate preview domain, the feature shows as disabled.
+The usual way is to ask the Agent in the Task: "start the dev server and give me a
+preview link". It calls the `preview` tool with `action: dev` and your dev command
+(`npm run dev`, `next dev`, `uvicorn …`). The command runs in the background, and the
+Agent hands you the URL once the server answers. The lease renews while it runs, and
+`action: stop` ends both the server and the preview. From your own shell on that
+machine, the same thing is `fleet preview dev -- npm run dev`, stopped with Ctrl+C.
+
+The dev server keeps its usual loopback port. The preview forwards to that port only
+while one of the command's own processes listens on it; a port held by anything else on
+the machine gets a "not listening yet" answer instead. Vite and Next.js work as they
+are, hot reload included. Frameworks that check the Host header (Django, Rails,
+webpack-dev-server) need the preview's host name allowed. It is in the
+`FLEET_PREVIEW_HOST` environment variable, and the `fleet-preview` skill gives each
+framework's one line.
+
+A server that opens its own Unix socket instead can be registered directly:
+`fleet preview register app.sock`, `list`, `renew <id>`, `close <id>`, with the socket
+in your own `~/.fleet-preview/` (directory 0700, socket 0600).
+
+Each account gets up to three previews and 32 concurrent requests, including
+WebSockets, independently of Task concurrency. Without an explicit, separate preview
+domain, the feature shows as disabled.
 
 Live previews serve running applications. Saved HTML/Markdown remains accessible
 through the existing Space / LivePage entry. Trial accounts need an active managed

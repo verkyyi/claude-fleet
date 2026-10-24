@@ -89,6 +89,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -1238,6 +1239,8 @@ def tool_preview(args):
     task = pane_task()
     if not assertion or not task:
         raise ToolFault("preview requires a verified worker credential and its current Hub Task")
+    if args["action"] in ("dev", "stop"):
+        return preview_dev(args) if args["action"] == "dev" else preview_stop(args)
     SIGNED["assert"] = True
     action = args["action"]
     body = {"action": action}
@@ -1250,6 +1253,95 @@ def tool_preview(args):
                    root="/v1/node", headers={"X-Fleet-Worker": assertion})
     except Fail as exc:
         raise ToolFault(str(exc)) from exc
+
+
+# `dev` / `stop`: a dev server run by bin/fleet-preview.py dev in the background — it
+# opens the socket, forwards to the command's own loopback listener, registers and
+# renews the preview (through `--call preview`, as this session) and closes it when the
+# command ends. One run per name; its pid, log and command in $FLEET_CONF_DIR/preview/.
+PREVIEW_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,34}$")
+PREVIEW_DEV_WAIT_S = 30
+
+
+def preview_rec(name):
+    if not PREVIEW_NAME_RE.match(name):
+        raise ToolFault('"name" must be letters, digits, - and _ (at most 35), got %s' % json.dumps(name))
+    d = conf_dir() / "preview"
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return d / (name + ".json"), d / (name + ".log")
+
+
+def preview_running(rec):
+    try:
+        pid = json.loads(rec.read_text())["pid"]
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def preview_seen(log, limit=4000):
+    try:
+        text = log.read_text(errors="replace")
+    except OSError:
+        return {"output": ""}
+    m = re.search(r"(?:registered|reusing) (\S+) \((\w*)\)", text)
+    return {"url": m.group(1) if m else None, "id": m.group(2) if m else None,
+            "ready": "fleet preview: ready:" in text, "output": text[-limit:]}
+
+
+def preview_dev(args):
+    name = args.get("name") or "dev"
+    rec, log = preview_rec(name)
+    cmd = args.get("command")
+    if not cmd:
+        raise ToolFault('dev needs "command": the dev server, as you would type it (e.g. "npm run dev")')
+    if preview_running(rec):
+        raise ToolFault('a dev preview named "%s" is already running; stop it first, or pick another "name"' % name)
+    cwd = args.get("cwd") or os.getcwd()
+    if not os.path.isdir(cwd):
+        raise ToolFault('"cwd" is not a directory: %s' % cwd)
+    argv = [sys.executable, str(BIN / "fleet-preview.py"), "dev", "--name", name]
+    argv += ["--port", str(args["port"])] if args.get("port") else []
+    argv += ["--unix"] if args.get("unix") else []
+    argv += ["--keep"] if args.get("keep") else []
+    with open(log, "w") as fh:
+        p = subprocess.Popen(argv + ["--", "/bin/sh", "-c", cmd], cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+    threading.Thread(target=p.wait, daemon=True).start()
+    rec.write_text(json.dumps({"pid": p.pid, "log": str(log), "cwd": cwd, "command": cmd}))
+    end = time.time() + PREVIEW_DEV_WAIT_S
+    while time.time() < end and p.poll() is None and not preview_seen(log)["ready"]:
+        time.sleep(0.25)
+    out = dict(preview_seen(log), name=name, pid=p.pid, log=str(log), running=p.poll() is None)
+    if p.poll() is not None:
+        out["exit"] = p.returncode
+    out["next"] = ("give the person the url — it opens after they sign in as the task's owner; "
+                   "stop with action stop, name %s" % name if out["running"] else "it ended; read output")
+    return out
+
+
+def preview_stop(args):
+    name = args.get("name") or "dev"
+    rec, log = preview_rec(name)
+    pid = preview_running(rec)
+    if not pid:
+        return dict(preview_seen(log, 1000), name=name, running=False, stopped="nothing was running")
+    for sig, secs in ((signal.SIGTERM, 10), (signal.SIGKILL, 2)):
+        try:
+            os.killpg(pid, sig)
+        except OSError:
+            pass
+        end = time.time() + secs
+        while time.time() < end and preview_running(rec):
+            time.sleep(0.2)
+        if not preview_running(rec):
+            break
+    seen = preview_seen(log, 1000)
+    if "preview closed" not in seen["output"] and "kept" not in seen["output"] and seen.get("id"):
+        script([sys.executable, str(BIN / "fleet-mcp.py"), "--call", "preview",
+                json.dumps({"action": "close", "id": seen["id"]})], WRITE_TIMEOUT_S)
+    return dict(seen, name=name, running=bool(preview_running(rec)), stopped="sent SIGTERM to pid %d" % pid)
 
 
 # A session's reap policy (issue #1902) — bin/fleet_reap_policy.py is the grammar;
@@ -1273,9 +1365,22 @@ TASK_REF = {"type": "string",
 
 TOOLS = {
     "preview": (tool_preview, {
-        "description": "Register/list/renew/close a private live HTTP/WebSocket preview of this verified worker's own Task. V1: socket basename in ~/.fleet-preview (0700), same UID Unix stream socket (0600); TCP/URLs unsupported. Lease 2h. Static deliverables still use Space/活页.",
+        "description": "A private live HTTP/WebSocket preview of this verified worker's own Task, opened by its owner after sign-in. "
+                       "dev: run a dev server (npm run dev, next dev, vite, uvicorn …) in the background and preview it — "
+                       "its loopback TCP port is forwarded only while the command's own processes hold it, HMR included; "
+                       "the lease renews while it runs and closes when it ends; returns url, log, output. stop: end it. "
+                       "register/list/renew/close: a Unix socket you serve yourself (basename in ~/.fleet-preview 0700, socket 0600). "
+                       "Lease 2h. Static deliverables still use Space/活页.",
         "inputSchema": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["register", "list", "renew", "close"]},
+            "action": {"type": "string", "enum": ["dev", "stop", "register", "list", "renew", "close"]},
+            "command": {"type": "string", "description": "dev: the dev server command, run by /bin/sh in cwd. "
+                                                         "It gets PORT and HOST=127.0.0.1; {port} in it is replaced."},
+            "name": {"type": "string", "description": "dev/stop: which run (default dev); one socket ~/.fleet-preview/<name>.sock."},
+            "cwd": {"type": "string", "description": "dev: directory to run in (default this session's)."},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535,
+                     "description": "dev: the port it listens on when it ignores PORT (default: found from its processes)."},
+            "unix": {"type": "boolean", "description": "dev: it listens on $FLEET_PREVIEW_SOCKET itself (uvicorn --uds, gunicorn unix:)."},
+            "keep": {"type": "boolean", "description": "dev: keep the preview at exit so the next run with this name gets the same URL."},
             "socket": {"type": "string", "description": "Socket basename, e.g. app.sock; register only."},
             "id": {"type": "string", "description": "Preview ID for renew/close."}},
             "required": ["action"], "additionalProperties": False}}),

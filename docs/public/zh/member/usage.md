@@ -200,13 +200,26 @@ Codex 会话自行交接时会核对并沿用当前账号，临时代理目录�
 ## 私人实时开发预览
 
 部署启用后，Task 详情的「实时预览」可打开自己正在开发的 HTTP/API/WebSocket 应用，
-包括 SSE 和显式适配的 Vite HMR。首次打开先登录，只有任务所有者可访问。节点离线时
+包括 SSE 和热更新（HMR）。首次打开先登录，只有任务所有者可访问。节点离线时
 显示离线。默认租约 2 小时，可在详情中续期或关闭；关闭也会断开已有长连接，不停止应用。
 
-让任务里的 Agent 使用 `preview` 工具注册同账号的 Unix HTTP socket；CLI 同样支持
-`fleet preview register app.sock`、`list`、`renew <id>`、`close <id>`。
-服务放在账号自己的 `~/.fleet-preview/`（目录 0700、socket 0600），暂不支持只监听
-TCP 端口的框架。每账号最多 3 个预览、32 个并发请求（包括 WebSocket），与任务并发数独立。
+平常的用法是对任务里的 Agent 说「把开发服务起起来，给我一个预览链接」。它用
+`preview` 工具的 `action: dev` 加上你的开发命令（`npm run dev`、`next dev`、
+`uvicorn …`）在后台启动，服务能应答后把链接给你。运行期间租约自动续期；
+`action: stop` 同时停掉服务和预览。在那台机器自己的终端里，同一件事是
+`fleet preview dev -- npm run dev`，Ctrl+C 停止。
+
+开发服务照常监听本机回环端口。只有当命令自己的进程在监听那个端口时，预览才把请求转过去；
+机器上任何别的进程占着那个端口，预览一律回答「还没起来」。Vite 和 Next.js 原样可用，
+热更新也能用。会检查 Host 头的框架（Django、Rails、webpack-dev-server）需要放行预览的
+主机名。主机名在环境变量 `FLEET_PREVIEW_HOST` 里，`fleet-preview` 技能给出每个框架
+要加的那一行。
+
+自己开 Unix socket 的服务也可以直接注册：`fleet preview register app.sock`、`list`、
+`renew <id>`、`close <id>`，socket 放在账号自己的 `~/.fleet-preview/`（目录 0700、
+socket 0600）。
+
+每账号最多 3 个预览、32 个并发请求（包括 WebSocket），与任务并发数独立。
 没有配置独立预览域名时，页面显示尚未启用。
 
 实时预览用于运行中的服务；保存的 HTML/Markdown 成果仍从原有 Space / 活页入口打开。

@@ -11,7 +11,8 @@ Worker 或应用。节点断线显示离线，连接失败返回 502/503。
 V1 只接受同一托管账号的 Unix domain SOCK_STREAM HTTP 服务：
 `~/.fleet-preview` 必须属于实际 UID、权限 0700；socket 属于该 UID、权限 0600。
 注册只传 socket basename（例如 `app.sock`），不接受 URL、IP、TCP 端口、CONNECT
-或 SOCKS。只有 TCP listener 的框架暂不支持。PF、SSH DisableForwarding 和凭据网关
+或 SOCKS。只有 TCP listener 的框架走 `fleet preview dev`（下节），它在本账号这边
+把 socket 接到命令自己的回环端口上，预览的边界不变。PF、SSH DisableForwarding 和凭据网关
 没有例外变化，也不依赖 `ssh -L`。
 
 Agent 在自己的已验证 Task 会话中使用：
@@ -53,6 +54,27 @@ Task 注册读取已有的 execution binding（已认领的 session、endpoint�
 或本机 Task 的稳定会话 ID 登记；不要求旧 `machine/login/worker_id` 投影非空。
 会话 ID 必须属于同一 owner、endpoint、login 和 fleet，尚未关闭；只预留了 Task 编号
 而没有实际会话登记不能注册。Task 执行代际变化或显式 stop 会撤销旧预览。
+
+## 开发服务：`fleet preview dev`
+
+`bin/fleet-preview.py dev [--name N] [--port P] [--unix] [--keep] -- <命令>`，以及 MCP
+`preview` 的 `action: dev`（后台运行，pid / 日志在 `$FLEET_CONF_DIR/preview/<name>.*`）
+与 `action: stop`：
+
+1. 建 `~/.fleet-preview`（0700），清掉上次异常退出留下的死 socket（还有人应答的不动，
+   拒绝），以 0600 监听 `<name>.sock`。
+2. 列出本 Task 的预览：同一 socket 名的旧登记属于已死的上一轮，`--keep` 续期复用（同一
+   URL），否则关掉以免占名额；然后 register。
+3. 启动命令：`PORT`（空闲回环端口）、`HOST=127.0.0.1`、`FLEET_PREVIEW_URL/HOST/ID/SOCKET`、
+   `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`；命令里的 `{port}` `{host}` `{socket}` 替换。
+4. 转发：只认**命令进程树内**的 TCP 监听（macOS `lsof -p`，Linux `/proc/<pid>/fd` +
+   `/proc/net/tcp*`），每 2 s 重扫；每个连接前再核对该进程仍占着该地址（Linux 每次核对，
+   连上后再核一次；macOS 一次核对管 0.5 s）。不归命令的监听一律回 503「还没起来」；
+   `--port` 在命令启动前已被占则拒绝、不登记。字节原样双向转发，WebSocket/SSE 不解析。
+5. 租约到一半时续期；命令退出（或 SIGTERM/SIGHUP 转给它）后关闭预览、删 socket。
+
+已在本机验证：Vite 8（零配置 HMR，页面同源地址）与 Next.js 15（Fast Refresh）。
+BREAK-IT `preview-bridge-foreign-port`，`bin/fleet-preview-dev-selftest.py`。
 
 ## 最小应用
 
