@@ -310,7 +310,7 @@ def validate(b, layer="team"):
     layer (#1857) has the team's allow-list plus `hook_scripts` (C4's)."""
     if not isinstance(b, dict):
         return "bundle is not an object"
-    allowed = ALLOWED + (("hook_scripts", "ui_lang") if layer == "personal" else ())
+    allowed = ALLOWED + (("hook_scripts", "ui_lang", "session_list") if layer == "personal" else ())
     for k in b:
         if layer == "personal" and k in RETIRED:
             return "bundle.%s is retired — a personal configuration no longer holds it" % k
@@ -353,6 +353,10 @@ def validate(b, layer="team"):
         if not (scalar(v) or isinstance(v, list) and all(scalar(x) for x in v)):
             return "bundle.codex_config.%s must be a scalar or a list of them" % k
     # the person's interface language (#3329, EPIC #3178 D7) — the hub's rule
+    if "session_list" in b:
+        prefs = b["session_list"]
+        if set(prefs) != {"max_visible", "idle_hours"} or any(type(v) is not int for v in prefs.values()) or prefs["max_visible"] not in (5, 10, 15) or prefs["idle_hours"] not in (0, 12, 24, 72):
+            return "bundle.session_list: max_visible must be 5/10/15; idle_hours must be 0/12/24/72"
     if "ui_lang" in b and b["ui_lang"] not in ("zh", "en"):
         return 'bundle.ui_lang must be "zh" or "en" (leave it out to follow the system)'
     p = secret_in("bundle", b)

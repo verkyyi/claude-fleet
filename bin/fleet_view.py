@@ -2245,6 +2245,8 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent_basis"] = r.get("agent_basis") or ""
             e["agent_words"] = r.get("agent_words")
         e["activity_at"] = r.get("activity_at") or r.get("at") or 0
+        e["list_preferences"] = board.get("session_list")
+        e["attention_error"] = r.get("why_tone") == "red" or r.get("tag") in ("failed", "refused")
         e["board_context"] = board_words({"words": r.get("context") or ["", ""]})
         # 会话合一 (task PQ41): where the session was opened — web / terminal
         e["origin"] = r.get("origin") or ""
@@ -2578,15 +2580,80 @@ def task_list(items):
     result = ([{"kind": "hdr", "group": "pin", "text": "PIN"}] if pin else []) + pin + regular
     older = [e for e in items if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
-        result.append({"kind": "sec", "sec": "gone", "text": "Earlier conversations" if ui_lang() == "en" else "更早的会话",
+        result.append({"kind": "sec", "sec": "gone", "text": "More sessions" if ui_lang() == "en" else "更多会话",
                        "n": len(history), "older": sum(e.get("n", 0) for e in older)})
         result += history + older
     return result
 
 
-def visible(items, query, opened):
+def list_preferences(value=None):
+    value = value if isinstance(value, dict) else {}
+    return {"max_visible": value.get("max_visible") if type(value.get("max_visible")) is int and value["max_visible"] in (5, 10, 15) else 10,
+            "idle_hours": value.get("idle_hours") if type(value.get("idle_hours")) is int and value["idle_hours"] in (0, 12, 24, 72) else 24}
+
+
+def needs_attention(e):
+    return task_status(e) == "needs" or (not e.get("lost") and not e.get("gone") and
+           (e.get("state") == "failed" or e.get("attention_error")))
+
+
+def compact_task_list(items, current="", preferences=None, now=None, selected=""):
+    """Presentation only: no lifecycle flags change when a live row is folded."""
+    ordered = task_list(items)
+    rows = [dict(e) for e in ordered if e["kind"] == "sess"]
+    prefs = list_preferences(preferences if preferences is not None else
+                             next((e.get("list_preferences") for e in rows if e.get("list_preferences")), None))
+    now = time.time() if now is None else now
+    pin = [e for e in rows if e.get("group") == "pin"]
+    recent = [e for e in rows if e.get("group") != "pin"]
+    if any(e.get("activity_at") for e in recent):
+        recent.sort(key=lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"]))
+    protected = {e["target"] for e in recent if e["target"] in (current, selected)}
+    attention = [e for e in recent if needs_attention(e) and e["target"] not in protected]
+    room = max(0, prefs["max_visible"] - len(pin) - len(protected))
+    preview = min(3, room, len(attention))
+    room -= preview
+    ordinary, history = [], []
+    for e in recent:
+        if e in attention:
+            continue
+        at = e.get("activity_at") or 0
+        expired = prefs["idle_hours"] and at and now - at >= prefs["idle_hours"] * 3600 and task_status(e) not in ("work", "pending")
+        if e["target"] in protected or (e.get("sec") != "gone" and not expired and room > 0):
+            e.pop("sec", None)
+            ordinary.append(e)
+            if e["target"] not in protected:
+                room -= 1
+        else:
+            e["list_folded"] = e.get("sec") != "gone"
+            e["sec"] = "gone"
+            history.append(e)
+    out = []
+    total = sum(bool(needs_attention(e)) for e in rows)
+    if total:
+        out.append({"kind": "sec", "sec": "attention", "text": ("Needs attention" if ui_lang() == "en" else "待处理") + " · %d" % total, "n": total})
+        for i, e in enumerate(attention):
+            e.pop("sec", None)
+            if i >= preview:
+                e["sec"] = "attention"
+            out.append(e)
+    if pin:
+        out += [{"kind": "hdr", "group": "pin", "text": "PIN"}] + pin
+    out += ordinary
+    older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
+    if history or older:
+        running = sum(task_status(e) == "work" for e in history)
+        label = ("More sessions" if ui_lang() == "en" else "更多会话") + " · %d" % len(history)
+        if running:
+            label += (" · %d running" if ui_lang() == "en" else " · %d 个运行中") % running
+        out.append({"kind": "sec", "sec": "gone", "text": label, "n": len(history), "older": sum(e.get("n", 0) for e in older)})
+        out += history + older
+    return out
+
+
+def visible(items, query, opened, current="", selected=""):
     """Flat, single-line tasks; search includes folded history without opening it."""
-    items = task_list(items)
+    items = compact_task_list(items, current, selected=selected)
     if query.split():
         hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess"]
         toks = query.split()
@@ -4119,7 +4186,7 @@ def live(r):
 
 
 def ended(r):
-    return bool(r.get("ended")) or r.get("sec") == "gone"
+    return bool(r.get("ended") or r.get("gone")) or (r.get("sec") == "gone" and not r.get("list_folded"))
 
 
 def other_agent(r):
@@ -5066,7 +5133,7 @@ def bolt_cells(st, query):
     return cells, note
 
 
-def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
+def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur="", selected=""):
     """The full-width list projection. Composer controls belong to the overlay,
     never inserted rows; search words may seed an empty draft on explicit open.
     `busy` is retained for the command-line projection; the popup keeps its list
@@ -5075,7 +5142,7 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur=""):
     if "landed" in words:
         items = landed_first(items)
     q = query.strip()
-    rows = visible(items, query, opened)
+    rows = visible(items, query, opened, cur, selected)
     # ONE order (T762): what is drawn top to bottom is what ↓ walks and ↑ walks
     # back — ✦ 消息 · ⚡ 新会话 · $ 命令行 on top, the sessions, then 置顶 · ◐ · ⏻
     top, bottom = [], []
@@ -5366,6 +5433,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         cur = vsh.split(":", 1)[1]
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), order_notice(), False
+    last_input, pending_items = 0.0, None
     msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
@@ -5382,8 +5450,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     # thread to run — tens of ms on a busy machine, before anything was drawn)
     loader = threading.Thread(target=grid_load, daemon=True)
 
+    selected_target = land_at
     def listing():
-        return panel_rows(items, query, opened, cmds, bolt, busy, cur)
+        return panel_rows(items, query, opened, cmds, bolt, busy, cur, selected_target)
 
     key_of = panel.key_of
 
@@ -5482,7 +5551,8 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             return r
         if r.get("gone"):
             return None
-        e = next((e for e in items if e.get("kind") == "sess" and e.get("target") == r["target"]
+        latest = pending_items if pending_items is not None else items
+        e = next((e for e in latest if e.get("kind") == "sess" and e.get("target") == r["target"]
                   and bool(e.get("far")) == bool(r.get("far")) and not e.get("gone")), None)
         if e is None or e.get("lost"):
             return None
@@ -5583,9 +5653,15 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             shown = listing()
         new = fresh.poll() if clock.written else None
         if new is not None:
-            # the list read again: the lit row stays the lit row (by its key)
-            lit = key_of(shown[at]) if 0 <= at < len(shown) else (None, None)
-            items, items_at = new, time.time()
+            pending_items = new
+        if pending_items is not None and time.monotonic() - last_input >= 1.2 and not page:
+            # Defer structural updates during typing/clicking. Keep the selected
+            # identity visible after applying the newest pending snapshot.
+            lit_row = shown[at] if 0 <= at < len(shown) else {}
+            selected_target = lit_row.get("target", "") if lit_row.get("kind") == "sess" else ""
+            lit = key_of(lit_row) if lit_row else (None, None)
+            items, items_at = pending_items, time.time()
+            pending_items = None
             shown = listing()
             at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
                       row_gone_at(shown, at))
@@ -5750,6 +5826,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             continue
         if ch is None:
             continue
+        last_input = time.monotonic()
         if isinstance(ch, tuple) and ch[0] == "paste":
             if page:
                 if mode == "ask" and ask_focus == 0 and pend[3] == "text":

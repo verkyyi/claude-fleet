@@ -1,0 +1,351 @@
+[
+  {
+    "name": "cap counts current and PIN",
+    "rows": [
+      {
+        "id": "s00",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      },
+      {
+        "id": "s01",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999940
+      },
+      {
+        "id": "s02",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999880
+      },
+      {
+        "id": "s03",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999820
+      },
+      {
+        "id": "s04",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999760
+      },
+      {
+        "id": "s05",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999700
+      },
+      {
+        "id": "s06",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999640
+      },
+      {
+        "id": "s07",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999580
+      },
+      {
+        "id": "s08",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999520
+      },
+      {
+        "id": "s09",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999460
+      },
+      {
+        "id": "s10",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999400
+      },
+      {
+        "id": "s11",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799999340
+      }
+    ],
+    "current": "s10",
+    "visible": [
+      "s11",
+      "s00",
+      "s01",
+      "s02",
+      "s03",
+      "s04",
+      "s05",
+      "s06",
+      "s07",
+      "s10"
+    ],
+    "more": [
+      "s08",
+      "s09"
+    ],
+    "attention": [],
+    "now": 1800000000
+  },
+  {
+    "name": "24 hour boundary and running exception",
+    "rows": [
+      {
+        "id": "fresh",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799913601
+      },
+      {
+        "id": "old",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799913600
+      },
+      {
+        "id": "running",
+        "group": "queue",
+        "state": "working",
+        "activity_at": 1799910000
+      },
+      {
+        "id": "unknown",
+        "group": "queue",
+        "state": "unknown",
+        "activity_at": 1799910000
+      }
+    ],
+    "visible": [
+      "fresh",
+      "running"
+    ],
+    "more": [
+      "old",
+      "unknown"
+    ],
+    "attention": [],
+    "now": 1800000000
+  },
+  {
+    "name": "attention overflow remains discoverable",
+    "rows": [
+      {
+        "id": "a0",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799910000
+      },
+      {
+        "id": "a1",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909999
+      },
+      {
+        "id": "a2",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909998
+      },
+      {
+        "id": "a3",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909997
+      },
+      {
+        "id": "a4",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909996
+      },
+      {
+        "id": "idle",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      }
+    ],
+    "visible": [
+      "a0",
+      "a1",
+      "a2",
+      "idle"
+    ],
+    "more": [],
+    "attention": [
+      "a0",
+      "a1",
+      "a2",
+      "a3",
+      "a4"
+    ],
+    "now": 1800000000
+  },
+  {
+    "name": "disabled age filter",
+    "preferences": {
+      "max_visible": 5,
+      "idle_hours": 0
+    },
+    "rows": [
+      {
+        "id": "old",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799800000
+      }
+    ],
+    "visible": [
+      "old"
+    ],
+    "more": [],
+    "attention": [],
+    "now": 1800000000
+  },
+  {
+    "name": "unknown activity is retained",
+    "rows": [
+      {
+        "id": "unknown-time",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 0
+      }
+    ],
+    "visible": [
+      "unknown-time"
+    ],
+    "more": [],
+    "attention": [],
+    "now": 1800000000
+  },
+  {
+    "name": "selected history stays visible",
+    "rows": [
+      {
+        "id": "history",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799910000
+      },
+      {
+        "id": "new",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      }
+    ],
+    "current": "history",
+    "visible": [
+      "new",
+      "history"
+    ],
+    "more": [],
+    "attention": [],
+    "now": 1800000000
+  },
+  {
+    "name": "many pins are explicit exceptions",
+    "rows": [
+      {
+        "id": "p0",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799800000
+      },
+      {
+        "id": "p1",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799999
+      },
+      {
+        "id": "p2",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799998
+      },
+      {
+        "id": "p3",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799997
+      },
+      {
+        "id": "p4",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799996
+      },
+      {
+        "id": "p5",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799995
+      },
+      {
+        "id": "p6",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799994
+      },
+      {
+        "id": "p7",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799993
+      },
+      {
+        "id": "p8",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799992
+      },
+      {
+        "id": "p9",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799991
+      },
+      {
+        "id": "p10",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799799990
+      },
+      {
+        "id": "other",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      }
+    ],
+    "visible": [
+      "p0",
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6",
+      "p7",
+      "p8",
+      "p9",
+      "p10"
+    ],
+    "more": [
+      "other"
+    ],
+    "attention": [],
+    "now": 1800000000
+  }
+]
