@@ -79,6 +79,15 @@ fi
 if [ -z "${TMPDIR:-}" ] && [ "$(uname -s 2>/dev/null)" = Darwin ]; then
   TMPDIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$TMPDIR" ] && export TMPDIR || unset TMPDIR
 fi
+# No ssh the session starts asks on its pane: ssh opens /dev/tty for an unknown
+# host's yes/no or a passphrase whatever its stdio, so an MCP server, a hook or a
+# Bash-tool `ssh` painted the question over the agent and ate the person's keys.
+# Every such question goes to bin/fleet-ssh-askpass.sh, which answers no. A
+# person's own SSH_ASKPASS_REQUIRE is kept.
+if [ -z "${SSH_ASKPASS_REQUIRE:-}" ] && [ -x "$BIN/fleet-ssh-askpass.sh" ]; then
+  SSH_ASKPASS="$BIN/fleet-ssh-askpass.sh"; SSH_ASKPASS_REQUIRE=force
+  export SSH_ASKPASS SSH_ASKPASS_REQUIRE
+fi
 # The agent's `tmux` is the fleet's shim (issue #1841): every shell the session
 # opens — the Bash tool, `bash -c`, Codex's, Claude's `!` — finds bin/tmux-shim
 # first, and a delete aimed at a fleet's server is refused there. Only the agent

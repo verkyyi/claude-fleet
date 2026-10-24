@@ -61,6 +61,9 @@ const (
 	FleetCertPath = "~/.ssh/fleet-cert-cert.pub"
 	// FleetSSHConfigPath is the generated ssh_config snippet.
 	FleetSSHConfigPath = "~/.ssh/fleet-ssh-config"
+	// FleetKnownHostsPath is where `fleet connect` writes each machine's host
+	// keys under fleet-<alias> (claude-fleet#2983) and the host CA (T743).
+	FleetKnownHostsPath = "~/.ssh/fleet-known-hosts"
 	// FleetSSHConfigVersion heads the snippet; bump it when its shape changes.
 	FleetSSHConfigVersion = "fleet-ssh-config v1"
 )
@@ -458,6 +461,12 @@ func (s *Server) sshConfigFor(login string, hosts map[string]bool, byHost map[st
 				fmt.Fprintf(&b, "  User %s\n", u)
 			}
 			fmt.Fprintf(&b, "  IdentityFile %s\n  CertificateFile %s\n", FleetKeyPath, FleetCertPath)
+			// The host key is checked under the machine's name, never the
+			// route's address (as `fleet connect` does): a route whose address
+			// changed — a new DHCP lease — would otherwise be an unknown host,
+			// and ssh's yes/no lands on the tty of whatever ran it, a session's
+			// pane included.
+			fmt.Fprintf(&b, "  HostKeyAlias fleet-%s\n  UserKnownHostsFile %s ~/.ssh/known_hosts\n", a, FleetKnownHostsPath)
 		}
 	}
 	return b.String()

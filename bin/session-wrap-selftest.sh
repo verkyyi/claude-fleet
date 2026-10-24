@@ -502,6 +502,35 @@ eq "x1: the exit revoked the session record" no "$([ -e "$WORK/xconf1/cred-proxy
 eq "x1: @cred_sid / @cred_route are gone" "" "$(o x1 @cred_sid)$(o x1 @cred_route)"
 eq "x0: nothing written under cred-proxy/" no "$([ -e "$WORK/xconf0/cred-proxy" ] && echo yes || echo no)"
 
+# S: no ssh the session starts asks on its pane — ssh opens /dev/tty whatever its
+# stdio, so every question goes to bin/fleet-ssh-askpass.sh, which answers no on
+# stderr only. A person's own SSH_ASKPASS_REQUIRE is kept.
+mkdir -p "$WORK/sbin"
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet_notice.py fleet-session-page.py fleet-ssh-askpass.sh; do
+  ln -s "$BIN/$f" "$WORK/sbin/$f"
+done
+cat > "$WORK/ssh-launch" <<'EOF'
+#!/bin/bash
+printf 'req=%s pass=%s\n' "${SSH_ASKPASS_REQUIRE:-}" "${SSH_ASKPASS##*/}" > "$CTL/env"
+if [ -n "${SSH_ASKPASS:-}" ]; then
+  out=$("$SSH_ASKPASS" "Are you sure you want to continue connecting (yes/no/[fingerprint])?" 2> "$CTL/err"); rc=$?
+  printf 'rc=%s out=%s\n' "$rc" "$out" >> "$CTL/env"
+fi
+while [ ! -e "$CTL/go" ]; do sleep 0.05; done
+EOF
+chmod +x "$WORK/ssh-launch"
+for sw in s0 s1; do
+  mkdir -p "$WORK/$sw"
+  pre=''; [ "$sw" = s1 ] && pre='SSH_ASKPASS_REQUIRE=never'
+  tf new-window -d -t sw: -n "$sw" "env $pre CTL='$WORK/$sw' FLEET_WRAP_LAUNCH='$WORK/ssh-launch' FLEET_WRAP_FAST_FAIL=0 \
+    FLEET_CONF_DIR='$WORK/kconf' FLEET_EXIT_CLOSE_SECS=0 FLEET_MCP=0 '$WORK/sbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+  waitfor "$sw: the launch ran" test -s "$WORK/$sw/env"
+done
+eq "s0: every ssh question goes to the fleet's askpass" "req=force pass=fleet-ssh-askpass.sh rc=1 out=" "$(tr '\n' ' ' < "$WORK/s0/env" | sed 's/ $//')"
+CHECKS=$((CHECKS + 1)); grep -q '^fleet: ssh asked Are you sure' "$WORK/s0/err" || fail "s0: the askpass does not say what ssh asked on stderr" "$(cat "$WORK/s0/err")"
+eq "s1: a person's own SSH_ASKPASS_REQUIRE is kept" "req=never pass=" "$(cat "$WORK/s1/env")"
+for sw in s0 s1; do tf set-option -w -t "sw:$sw" @wrap_quiet 1; : > "$WORK/$sw/go"; waitfor "$sw: the wrapper returned" screen_has "$sw" 'WRAP_RC=0'; done
+
 # ------------------------------------------- C: the SessionEnd hook's gate -----
 # A pane stands in for the wrapper (its pid on @session_wrap); the hook's trace
 # shows whether it went on to resolve the fleet (= the close-on-exit path).
