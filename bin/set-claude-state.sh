@@ -535,20 +535,8 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   # In particular, a typing hold must not let a later stale `done` stamp reuse it.
   _write_state() {
     set --
-  # Conversation recency is separate from lifecycle/classifier stamps: closing
-  # or parking a window must not move it above a more recent conversation. And
-  # only a CHANGE of state is a turn's activity (task NFVN): a per-tool
-  # `working` re-stamp mid-turn bumped it every few seconds, so sessions working
-  # at once kept swapping places at the top of the list. Judged by tmux on the
-  # value before this write (first in the chain), no extra fork.
-    if [ "$src" != classifier ]; then
-      case "$sem" in working|done|needs)
-        set -- if-shell -F -t "$TMUX_PANE" "#{!=:#{@claude_state},${wstate:-$sem}}" \
-               "set-window-option -t $TMUX_PANE @turn_activity_at $(date +%s)" \; ;;
-      esac
-    fi
     if [ "$sem" != "done" ]; then
-      set -- "$@" set-window-option -qu -t "$TMUX_PANE" @agent_transfer_ready \; \
+      set -- set-window-option -qu -t "$TMUX_PANE" @agent_transfer_ready \; \
              set-window-option -qu -t "$TMUX_PANE" @sleep_evidence \;
     fi
     set -- "$@" set-window-option -t "$TMUX_PANE" @claude_state "${wstate:-$sem}"
@@ -570,6 +558,19 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
     if [ "$sem" = 'done' ]; then
       if [ -n "$wwait" ]; then set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_wait "$wwait"
       elif [ -n "$wprev" ]; then set -- "$@" \; set-window-option -qu -t "$TMUX_PANE" @claude_wait; fi
+    fi
+  # Conversation recency is separate from lifecycle/classifier stamps: closing
+  # or parking a window must not move it above a more recent conversation. And
+  # only a CHANGE of state is a turn's activity (task NFVN): a per-tool
+  # `working` re-stamp mid-turn bumped it every few seconds, so sessions working
+  # at once kept swapping places at the top of the list. tmux compares against
+  # the state last stamped (@turn_activity_state), in the same call — no fork.
+    if [ "$src" != classifier ]; then
+      case "$sem" in working|done|needs)
+        _ta=${wstate:-$sem}; _tn=$(date +%s)
+        set -- "$@" \; if-shell -F -t "$TMUX_PANE" "#{!=:#{@turn_activity_state},$_ta}" \
+          "set-window-option -t $TMUX_PANE @turn_activity_at $_tn ; set-window-option -t $TMUX_PANE @turn_activity_state $_ta" ;;
+      esac
     fi
   # last-activity stamp (drives the dashboard's "Nm ago" column).
     tmux "$@" \; set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
