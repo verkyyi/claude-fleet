@@ -31,6 +31,9 @@
 #                          closed — bin/fleet-popup-lib.sh's freeze follows the client,
 #                          not one wide glyph of the new window reaches the terminal;
 #                          the node conf keeps DECSLRM margins off (#2362, lost in #4423)
+#   view-popup-top-edge    the 看台's two status lines where rv_thin_dress puts them, ⌘P
+#                          open, whole repaints (set-option): the pane behind never
+#                          draws over the frame's top edge (tmux 3.7c, task NFVN)
 #   notice-test-into-real-book  bin/fleet_notice.py's refused() (T741): a selftest whose
 #                          FLEET_CONF_DIR is the person's (run-selftests.sh's
 #                          FLEET_NOTICE_FORBID), and a drill run against the live install
@@ -45,9 +48,10 @@
 #   view-far-reaped        bin/fleet_view.py hub_fresh + bin/fleet-hub-sessions.sh
 #                          (issue #3079): a worker reaped on another machine while
 #                          this one's copy of the hub's list had stopped
-#   notice-flash-gone      bin/fleet_notice.py (T675, T701): ⌘N's refusal opens the
-#                          message row of the 看台 that pressed it, stays until seen
-#                          (keys clear nothing), recorded for ⌘P's ✦ 消息; seen, it folds
+#   notice-flash-gone      bin/fleet_notice.py (T675, T701, NFVN): ⌘N's refusal opens the
+#                          message row of the 看台 that pressed it, stays its hold
+#                          (keys clear nothing) then folds by itself, recorded for ⌘P's
+#                          ✦ 消息; seen, it folds at once
 #   inbox-orphan-unreachable  bin/fleet_notice.py (T701): a result nobody took, here
 #                          and on another machine — every 看台's message row, both in
 #                          ⌘P's 消息, the top line no longer counting what ⌘P lacks
@@ -135,7 +139,7 @@ PY
       > "$B/conf/remote-views/$v"
   done
 }
-th_done() { "$RT" -S "$B/s/fl" kill-server 2>/dev/null; }
+th_done() { unset FLEET_NOTICE_STICKY_SECS; "$RT" -S "$B/s/fl" kill-server 2>/dev/null; }
 osc9_in() { grep -aq $'\033]9;' "$B/out-$1"; }
 
 drill_thin_notify_two_views() {
@@ -426,6 +430,75 @@ drill_view_popup_window_moves() {
   WHAT="面板开着（45 列手机、140 列；顶栏下的消息行开开合合），看台的窗口在它底下换了（⚡ 的 go、背后的窗口关了 tmux 把客户端挪走）：冻结跟着客户端走，新窗口一个宽字也没送到终端；节点 conf 关着左右边距；弹窗 ≤${SECS}s 画出来，关掉后退出 copy-mode、接着刷"
 }
 
+# view-popup-top-edge — tmux 3.7c checks a popup against the WINDOW's rows when it
+# repaints a pane, the terminal's when it draws the popup (screen_redraw_draw_pane:
+# tty_check_overlay_range gets wy, not py). With the 看台's two status lines on top
+# that is two rows off: every whole repaint (any set-option on the server — the
+# fleet sets them all the time) drew the pane over the ⌘P frame's top edge and first
+# row, then the popup again; the operator saw the top edge flicker (task NFVN). The
+# 看台 is dressed as rv_thin_dress spells it; a real terminal records every byte.
+drill_view_popup_top_edge() {
+  CAP=6   # popup open → its frame on the terminal
+  local t0 pos cl
+  B=$(mktemp -d /tmp/thb.XXXXXX); printf '%s\n' "$B" >> "$WORK/thin-boxes"
+  mkdir -p "$B/s"
+  TT() { "$RT" -S "$B/s/fl" "$@"; }
+  pos=$(sed -n '/^rv_thin_dress()/,/^}/p' "$BIN/fleet-remote-view.sh" | grep -o 'status-position [a-z]*' | head -n 1 | awk '{ print $2 }')
+  [ -n "$pos" ] || { WHY="rv_thin_dress sets no status-position"; return 1; }
+  TT -f /dev/null new-session -d -s fl -x 160 -y 40 "while :; do printf 'behind %s\\n' \$RANDOM; sleep 0.2; done"
+  TT set -g status 2 \; set -g status-position "$pos" \; set -g 'status-format[1]' 'message row'
+  cat > "$B/term.py" <<'PY2'
+import os, pty, select, sys, time, fcntl, termios, struct
+tmux, sock, out = sys.argv[1:4]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"; os.environ["LANG"] = "en_US.UTF-8"
+    os.execvp(tmux, [tmux, "-u", "-S", sock, "attach", "-t", "fl"])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 160, 0, 0))
+o, end = open(out, "ab", buffering=0), time.time() + 20
+while time.time() < end:
+    if select.select([fd], [], [], 0.05)[0]:
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            break
+        if not d:
+            break
+        o.write(d)
+os.kill(pid, 9)
+PY2
+  python3 "$B/term.py" "$RT" "$B/s/fl" "$B/out" & printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 5 sh -c '[ -n "$("$1" -S "$2" list-clients -F x)" ]' _ "$RT" "$B/s/fl" || { WHY="the terminal did not attach"; th_done; return 1; }
+  cl=$(TT list-clients -F '#{client_name}' | head -n 1)
+  t0=$(now)
+  TT display-popup -c "$cl" -b rounded -T ' panel ' -w 90% -h 80% -E 'sleep 6' &
+  until_ok "$CAP" grep -aq '╭' "$B/out" || { WHY="the popup never drew its frame"; th_done; return 1; }
+  SECS=$(since "$t0")
+  wc -c < "$B/out" > "$B/at"
+  # whole repaints, as the fleet's own option writes cause them
+  for k in 1 2 3 4 5; do TT set -g @nfvn_tick "$k"; sleep 0.2; done
+  sleep 0.5
+  WHY=$(python3 - "$B/out" "$(cat "$B/at")" <<'PY2'
+import re, sys
+raw = open(sys.argv[1], "rb").read()
+s = re.sub(rb"\x1b\[[0-9;:]*m", b"", raw).decode("utf-8", "replace")
+m = re.search(r"\x1b\[(\d+);(\d+)H╭", s)
+if not m:
+    print("no frame"); sys.exit()
+top, left = int(m.group(1)), int(m.group(2))
+tail = re.sub(rb"\x1b\[[0-9;:]*m", b"", raw[int(sys.argv[2]):]).decode("utf-8", "replace")
+for row in (top, top + 1):
+    for w in re.finditer(r"\x1b\[%d;1H([^\x1b]*)" % row, tail):
+        if len(w.group(1)) >= left:
+            print("a whole repaint drew the pane over the frame's row %d (%d cells from column 1; the popup starts at %d)"
+                  % (row, len(w.group(1)), left)); sys.exit()
+PY2
+)
+  th_done
+  [ -z "$WHY" ] || return 1
+  WHAT="看台两行状态栏（rv_thin_dress 的位置：${pos}）、⌘P 面板开着，服务器上连着 5 次 set-option 整屏重画：面板上沿和第一行一次也没被背后的窗格盖掉（tmux 3.7c 弹窗按窗口行算遮挡），弹窗 ≤${SECS}s 画出来"
+}
+
 # notice-test-into-real-book — 2026-10-20 18:18 PDT a worker ran a drill by hand on
 # the live fleet (CCQUOTA_HUB_URL=https://127.0.0.1:9 bash dash-raw-session.sh …):
 # its refusal went through fleet_ui_fail into the person's record and their ⌘P 消息
@@ -525,9 +598,12 @@ th_dress() {
 }
 rows_of() { TT show -qv -t "fl@view-$1:" status; }
 drill_notice_flash_gone() {
-  CAP=20   # past the old 10 s floor, a key, the 1 s status interval
+  CAP=50   # past the old 10 s floor, a key, its own hold (25 s here), the 1 s status interval
   local t0 ca i
   th_box || { WHY="the two 看台 terminals did not attach"; th_done; return 1; }
+  # every notice goes by itself (task NFVN): an unseen error holds the row for
+  # FLEET_NOTICE_STICKY_SECS (30 s; 25 here, so the drill stays short), no longer for good
+  TT set-environment -g FLEET_NOTICE_STICKY_SECS 25; export FLEET_NOTICE_STICKY_SECS=25
   th_dress
   ca=$(TT list-clients -F '#{client_session} #{client_name}' | awk '$1 == "fl@view-a" { print $2 }')
   : > "$B/out-a"; : > "$B/out-b"; t0=$(now)
@@ -537,22 +613,29 @@ drill_notice_flash_gone() {
     FLEET_UI_LANG=zh FLEET_UI_SOCK=fl FLEET_UI_CLIENT=$ca fleet_ui_fail '暂停开新：内存紧张' '关掉一个会话再试' )
   [ "$(rows_of a)" = 2 ] || { WHY="the refusal did not open 看台 a's message row (status $(rows_of a))"; th_done; return 1; }
   until_ok 3 grep -aq '暂停开新' "$B/out-a" || { WHY="看台 a's terminal never drew the refusal"; th_done; return 1; }
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    [ "$i" = 4 ] && printf 'x' > "$B/ctl-a"; [ "$i" = 11 ] && printf 'y' > "$B/ctl-a"   # keys clear nothing
+  for i in 1 2 3 4 5 6 7 8; do
+    [ "$i" = 3 ] && printf 'x' > "$B/ctl-a"; [ "$i" = 7 ] && printf 'y' > "$B/ctl-a"   # keys clear nothing
     sleep 1
-    [ "$(rows_of a)" = 2 ] || { WHY="${i}s after the refusal, unseen, the message row folded"; th_done; return 1; }
+    [ "$(rows_of a)" = 2 ] || { WHY="$(since "$t0")s after the refusal (its hold 25 s), unseen, the message row folded"; th_done; return 1; }
   done
   [ "$(rows_of b)" = 2 ] || [ "$(rows_of b)" = on ] || { WHY="看台 b's rows: $(rows_of b)"; th_done; return 1; }
   [ "$(python3 "$BIN/fleet_notice.py" unread)" = 1 ] || { WHY="⌘P 消息 does not count it unseen: $(python3 "$BIN/fleet_notice.py" unread)"; th_done; return 1; }
   python3 "$BIN/fleet_notice.py" list | grep -q '暂停开新：内存紧张 — 关掉一个会话再试' \
     || { WHY="消息's record has no row for it: $(python3 "$BIN/fleet_notice.py" list)"; th_done; return 1; }
-  # the page opening is the seeing: the read mark moves, every 看台's row folds
+  # unseen past its hold: the row folds by itself, the message stays unseen in 消息
+  until_ok 25 sh -c '[ "$("$1" -S "$2" show -qv -t "fl@view-a:" status)" = on ]' _ "$RT" "$B/s/fl" \
+    || { WHY="25 s on, unseen, the message row never folded by itself (status $(rows_of a))"; th_done; return 1; }
+  [ "$(python3 "$BIN/fleet_notice.py" unread)" = 1 ] || { WHY="folded, ⌘P 消息 lost it: $(python3 "$BIN/fleet_notice.py" unread)"; th_done; return 1; }
+  # the page opening is the seeing: a new refusal's row folds at once when read
+  ( PATH="$B/bin:$PATH"; . "$BIN/fleet-ui-lang.sh"
+    FLEET_UI_LANG=zh FLEET_UI_SOCK=fl FLEET_UI_CLIENT=$ca fleet_ui_fail '会话已不在' )
+  [ "$(rows_of a)" = 2 ] || { WHY="the second refusal did not open the row (status $(rows_of a))"; th_done; return 1; }
   python3 "$BIN/fleet_notice.py" read
   until_ok 4 sh -c '[ "$("$1" -S "$2" show -qv -t "fl@view-a:" status)" = on ]' _ "$RT" "$B/s/fl" \
     || { WHY="seen, the message row did not fold (status $(rows_of a))"; th_done; return 1; }
   SECS=$(since "$t0")
   th_done
-  WHAT="⌘N 的拒绝（fleet_ui_fail）打开按键那个看台顶栏下的消息行：没看过就一直在（按键不清，过了 10 秒也在），⌘P「✦ 消息」记着原文、没看 1 条；看过（打开消息）后两个看台的消息行都收起"
+  WHAT="⌘N 的拒绝（fleet_ui_fail）打开按键那个看台状态栏下的消息行：按键不清，留满自己的时长（这里 25 秒，默认 30 秒）后自己收起，⌘P「✦ 消息」仍记着、没看 1 条；看过（打开消息）立刻收起"
 }
 drill_inbox_orphan_unreachable() {
   CAP=10

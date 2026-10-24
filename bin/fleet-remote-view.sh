@@ -599,7 +599,13 @@ rv_thin_dress() {
     return 0 ;;
   esac
   bar=$(rv_thin_bar "$v" "$s")
-  T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
+  # The bar sits at the BOTTOM (task NFVN): with status lines on top, tmux 3.7c
+  # checks the ⌘P popup against the window's rows instead of the terminal's when
+  # it repaints a pane (screen_redraw_draw_pane: tty_check_overlay_range gets wy,
+  # not py), so every whole repaint — any set-option on the server — drew the pane
+  # over the popup's top two rows and the frame's top edge flickered. Bottom ⇒
+  # the two coincide. Back on top once the pinned tmux carries the fix.
+  T set-option -t "$gid" status on \; set-option -t "$gid" status-position bottom \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" status-format[1] "$(rv_thin_inbox)" \; \
     set-option -t "$gid" @view_inbox 1 \; set-option -t "$gid" destroy-unattached off \; \

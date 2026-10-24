@@ -182,7 +182,7 @@ waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$(vs dev1)' 2>/dev/null"
 waitfor 5 sh -c "[ -s '$FLEET_CONF_DIR/remote-views/dev1' ]" || st_miss "A: no registry row"
 V="=$(vs dev1):"
 st_eq "A: status on" "on" "$(tn show-options -qv -t "$V" status)"
-st_eq "A: at the top" "top" "$(tn show-options -qv -t "$V" status-position)"
+st_eq "A: at the bottom (tmux 3.7c popup overlay, task NFVN)" "bottom" "$(tn show-options -qv -t "$V" status-position)"
 st_eq "A: every 2 s" "2" "$(tn show-options -qv -t "$V" status-interval)"
 st_has "A: its line is fleet-topbar.py render --node" "$(tn show-options -qv -t "$V" 'status-format[0]')" "fleet-topbar.py' render --node view=dev1"
 st_eq "A: no destroy-unattached" "off" "$(tn show-options -qv -t "$V" destroy-unattached)"
@@ -247,11 +247,12 @@ L9=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W7" | sed 's/#\[[^]]*\]//g')
 st_has "B: no hub line yet: its key off its own stamps" "$L9" "#7"
 st_hasnt "B: …no ‹ i/n › (#3194)" "$L9" "‹"
-# the screen itself: the client's first line is that top line
+# the screen itself: the client's bottom lines carry that line (the bar sits at the
+# bottom since task NFVN; the message row, when open, under it)
 tn select-window -t "$V$W7" 2>/dev/null   # no client switch: tmux redraws the 看台 anyway
-waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin1' -S 0 -E 0 | grep -q '剩余 62%'" \
-  || st_miss "B: the client's first line is the top line" "$(tt capture-pane -p -t "=$TL:thin1" -S 0 -E 1)"
-st_has "B: …at the top, with its key" "$(tt capture-pane -p -t "=$TL:thin1" -S 0 -E 0)" "#7"
+waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin1' | tail -n 2 | grep -q '剩余 62%'" \
+  || st_miss "B: the client's bottom line is the bar" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)"
+st_has "B: …at the bottom, with its key" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)" "#7"
 
 # ============================================================================
 # C. cur= follows the window
@@ -304,7 +305,7 @@ st_eq "D: prune within the keep window keeps it" "$GID" "$(tn display-message -p
 st_eq "D: …and its row" "$U/fid-8" "$(rowget dev1 cur)"
 term thin2 "--thin --view dev1 --resume --device $DEV --route relay --token t1k"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' display-message -p -t '$V' '#{session_attached}')\" = 1 ]" || st_miss "D: --resume never attached"
-waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin2' -S 0 -E 0 | grep -q 'm9 经中转'" || st_miss "D: the resumed client has no top line"
+waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin2' | tail -n 2 | grep -q 'm9 经中转'" || st_miss "D: the resumed client has no bar"
 st_eq "D: --resume: the same 看台" "$GID" "$(tn display-message -p -t "$V" '#{session_id}')"
 st_eq "D: …on the same window" "$W8" "$(vcur dev1)"
 waitfor 5 sh -c "[ \"\$(tr '\t' '\n' < '$FLEET_CONF_DIR/remote-views/dev1' | sed -n 's/^token=//p')\" = t1k ]" || st_miss "D: the row is the new connection's"
