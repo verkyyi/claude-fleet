@@ -18,6 +18,7 @@ import { Alert } from "@/components/ui/alert";
 import { useFleetChat, PROVIDERS, type Gate, type PageCard, type Provider } from "@/app/chat/chat";
 import { useHome, whenLocal, type Home } from "@/app/chat/home";
 import { useSessionView } from "@/app/chat/view";
+import { syncRaw } from "@/app/chat/view-stream";
 import { handover, stageOf, SURE_MS, type Mine } from "@/app/chat/handover";
 import { failWords } from "@/app/chat/talk";
 import { cn } from "@/lib/utils";
@@ -650,7 +651,7 @@ const SessionView: FC<SessionProps> = (props) => {
     return () => clearTimeout(t);
   }, [mine]);
   const stage = stageOf(v.state, mine, Date.now());
-  const raw: SyncWord = v.gate?.code === "home_down" || v.access === "offline" ? "offline" : !v.live || v.access === "checking" || (v.gate && v.count) || (v.layer && v.layer !== "home") ? "syncing" : "";
+  const raw: SyncWord = syncRaw(v);
   const sync = useSyncWord(raw);
   const busy = v.state ? v.busy : undefined;
   useEffect(() => { onHead?.({ sync, busy }); }, [sync, busy, onHead]);

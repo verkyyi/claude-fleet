@@ -362,6 +362,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		home.Person = person
 		_, _, dest, status, code, msg := s.termTarget(url.Values{"worker": {r.URL.Query().Get("worker")}}, home)
+		// a closed session's history (a migrated conversation's too) names
+		// files on the login it ran on, which must still be the person's own
+		if code != "" {
+			if _, hdest, ok := s.closedHistory(person, r.URL.Query().Get("worker")); ok {
+				if hdest.Machine == home.Machine && hdest.Login == home.Login {
+					dest, code = hdest, ""
+				} else if own, err := s.ownScope(person); err == nil && own(hdest.Machine, hdest.Login) {
+					dest, code = hdest, ""
+				}
+			}
+		}
 		if code != "" {
 			s.chatRefuse(w, person, name, status, code, msg)
 			return

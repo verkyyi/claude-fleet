@@ -60,6 +60,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
   const [gate, setGate] = useState<ViewGate>(null);
   const [loaded, setLoaded] = useState(false);
   const [live, setLive] = useState(false);       // the stream is open now
+  const [read, setRead] = useState(false);       // a history read to its end: nothing more is coming
   const [connection, setConnection] = useState<ViewConnection>("checking");
   const [layer, setLayer] = useState<Layer | null>(null);
   const [older, setOlder] = useState(0);         // >0: there is more before what is shown
@@ -77,7 +78,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     const opened = performance.now();
     held.current = NOTHING; shown.current = []; top.current = null; keeper.current = "";
     try { delete (window as unknown as { __fleetViewFirst?: unknown }).__fleetViewFirst; } catch { /* none */ }
-    setItems([]); setState(null); setGate(null); setLive(false); setConnection("checking"); setLoaded(false); setLayer(null); setOlder(0); setLead(0);
+    setItems([]); setState(null); setGate(null); setLive(false); setRead(false); setConnection("checking"); setLoaded(false); setLayer(null); setOlder(0); setLead(0);
     const draw = (next: Item[], l: Layer) => {
       shown.current = next; setItems(next); setLoaded(true);
       if (top.current !== l) { top.current = l; setLayer(l); }
@@ -177,7 +178,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
                 if (data.t === "state") { setState(data as unknown as ViewState); setConnection("live"); }
                 else if (data.t === "items") take(data as Frame);
                 else if (data.t === "reset") held.current = { ...held.current, at: -1 };   // the next frame replaces
-                else if (data.t === "history_end") { final = true; }
+                else if (data.t === "history_end") { final = true; setRead(true); }
                 else if (data.t === "gone") { setGate({ code: "gone", msg: "" }); final = true; }
               }
             }
@@ -344,6 +345,6 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     ...(canTalk ? { onCancel: onStop, onRespondToToolApproval: onAnswer, queue: lane, adapters: { attachments: attach } } : {}),
   });
   const failed = pending.filter((p) => p.state === "failed");
-  return { runtime, state, gate, loaded, live, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
+  return { runtime, state, gate, loaded, live, read, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
     busy: !!state?.busy || (canTalk && sending) };
 }
