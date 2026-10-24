@@ -123,7 +123,7 @@ case "$TURN_AT" in ''|*[!0-9]*) printf 'missing native turn activity\n' >&2; exi
 tf set-window-option -t "$TEST_PANE" @turn_activity_at 1700000000
 hook "$POST" '{"hook_event_name":"PostToolUse"}'
 same 'a working re-stamp keeps the turn timestamp' "$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')" 1700000000
-hook done
+hook "done"
 TURN_AT=$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')
 case "$TURN_AT" in 1700000000|''|*[!0-9]*) printf 'turn end did not stamp activity: %s\n' "$TURN_AT" >&2; exit 1 ;; esac
 # Lifecycle exit leaves the last conversation time intact.
