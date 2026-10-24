@@ -25,6 +25,59 @@ export function listRows(rows: Row[], previous?: ListGroups): ListGroups {
     gone: recent.filter(older) };
 }
 
+export type SessionListPreferences = { max_visible: number; idle_hours: number };
+export const DEFAULT_LIST_PREFERENCES: SessionListPreferences = { max_visible: 10, idle_hours: 24 };
+export function listPreferences(value?: Partial<SessionListPreferences> | null): SessionListPreferences {
+  return { max_visible: [5, 10, 15].includes(value?.max_visible ?? 0) ? value!.max_visible! : 10,
+    idle_hours: [0, 12, 24, 72].includes(value?.idle_hours ?? -1) ? value!.idle_hours! : 24 };
+}
+export const needsAttention = (r: Row) => listStatus(r).kind === "ask" ||
+  (!listStatus(r).unknown && r.group !== "gone" &&
+    ((r.live?.state || r.board?.state) === "failed" || r.board?.why_tone === "red" || r.board?.tag === "failed" || r.board?.tag === "refused"));
+export type CompactGroups = ListGroups & { attention: Row[]; attentionVisible: number };
+export function compactRows(rows: Row[], options: { current?: string; preferences?: Partial<SessionListPreferences>;
+  now?: number; previous?: CompactGroups; interacting?: boolean } = {}): CompactGroups {
+  const { current = "", now = Date.now(), previous, interacting = false } = options;
+  const prefs = listPreferences(options.preferences);
+  const base = listRows(rows, previous);
+  const isCurrent = (r: Row) => rowRef(r) === current;
+  const pin = base.pin;
+  const recent = [...base.open, ...base.gone].sort((a, b) =>
+    (b.board?.activity_at ? b.board.activity_at * 1000 : b.at) - (a.board?.activity_at ? a.board.activity_at * 1000 : a.at) || a.id.localeCompare(b.id));
+  const attention = recent.filter((r) => needsAttention(r) && !isCurrent(r));
+  const selected = recent.filter(isCurrent);
+  const room = Math.max(0, prefs.max_visible - pin.length - selected.length);
+  const attentionVisible = Math.min(3, room, attention.length);
+  const remaining = Math.max(0, room - attentionVisible);
+  const candidates = recent.filter((r) => !isCurrent(r) && !needsAttention(r));
+  const old = new Set(base.gone.map((r) => r.id));
+  const eligible = candidates.filter((r) => {
+    if (old.has(r.id)) return false;
+    const at = r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+    const status = listStatus(r);
+    return !prefs.idle_hours || !at || status.kind === "work" || status.kind === "pending" || now - at < prefs.idle_hours * 3600000;
+  });
+  const visible = new Set([...selected, ...eligible.slice(0, remaining)].map((r) => r.id));
+  const next: CompactGroups = { pin, attention, attentionVisible,
+    open: recent.filter((r) => visible.has(r.id)), gone: candidates.filter((r) => !visible.has(r.id)) };
+  // Keep row positions and membership while someone is pointing or navigating.
+  // Refresh facts by identity, including removals; new rows wait in More.
+  if (interacting && previous && (!current || [...previous.pin, ...previous.open, ...previous.attention.slice(0, previous.attentionVisible)].some(isCurrent))) {
+    const byID = new Map(rows.map((r) => [r.id, r]));
+    const used = new Set<string>();
+    const refresh = (before: Row[]) => before.flatMap((r) => {
+      const fresh = byID.get(r.id);
+      if (!fresh) return [];
+      used.add(r.id); return [fresh];
+    });
+    const stable = { pin: refresh(previous.pin), attention: refresh(previous.attention),
+      open: refresh(previous.open), gone: refresh(previous.gone), attentionVisible: previous.attentionVisible };
+    stable.gone.push(...recent.filter((r) => !used.has(r.id)));
+    return stable;
+  }
+  return next;
+}
+
 export type ListStatus = { kind: "ask" | "pending" | "work" | "loop" | null; words: [string, string][]; unknown: boolean };
 // One fixed slot, priority: answer > accepted execution > running > Loop.
 // No-session is never evidence of a pending execution request.

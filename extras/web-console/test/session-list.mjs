@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
+import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -143,7 +143,7 @@ const pinned = {...rows[0], id:'pinned',group:'pin'};
 assert.deepEqual(listRows([...rows,pinned]).pin.map(r=>r.id), ['pinned']);
 assert.deepEqual(listRows(rows.map(r=>({...r,group:r.group==='gone'?'gone':'queue'}))).open.map(r=>r.id), open.map(r=>r.id), 'state changes do not reorder rows');
 assert.equal(listRows([{...rows[0],group:'gone'}]).gone.length,0, 'attention stays outside history');
-assert.ok(src.includes('更早的会话') && src.includes('>PIN</div>'));
+assert.ok(src.includes('更多会话') && src.includes('>PIN</div>'));
 assert.deepEqual(rowState(R({ glyph: 'done', tag: ['本轮结束', 'Turn ended'] })), ['空闲', 'Idle'], 'a turn ended is idle to the person');
 // the head: code and state, no machine; its own stream's word wins
 assert.match(headMeta(R({ glyph: 'work', group: 'work' })), /^K7Q2 · (回答中|Replying)$/);
@@ -202,3 +202,24 @@ assert.deepEqual(listRows([exitedWindow]).open.map(r=>r.id),['exited-window'], '
 assert.equal(listRows([exitedWindow]).gone.length,0);
 assert.deepEqual(listRows([{...exitedWindow,live:undefined}]).gone.map(r=>r.id),['exited-window'], 'closed window remains in earlier sessions');
 console.log('ok session-list.mjs');
+
+// The same policy fixtures are consumed by fleet-view-task-list-selftest.py.
+const policyCases = JSON.parse(readFileSync(new URL('./fixtures/session-list-policy.json', import.meta.url), 'utf8'));
+for (const c of policyCases) {
+  const input = c.rows.map((r) => R({ ...r, code: r.id, at: r.activity_at * 1000,
+    board: { ...r, running: r.state === 'working', lost: r.state === 'unknown' },
+    live: r.group === 'gone' ? undefined : { state: r.state } }));
+  const groups = compactRows(input, { current: c.current, preferences: c.preferences, now: c.now * 1000 });
+  assert.deepEqual([...groups.attention.slice(0, groups.attentionVisible), ...groups.pin, ...groups.open].map(r => r.id), c.visible, c.name);
+  assert.deepEqual(groups.gone.map(r => r.id), c.more, c.name);
+  assert.deepEqual(groups.attention.map(r => r.id), c.attention, c.name);
+  assert.equal(new Set([...groups.pin, ...groups.open, ...groups.attention, ...groups.gone].map(r => r.id)).size, input.length);
+  assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.attention, ...groups.gone], '').length, input.length);
+}
+const freshRows = Array.from({length:12}, (_,i) => R({id:`fresh${i}`, code:`fresh${i}`, at:now-i*1000}));
+const initial = compactRows(freshRows, {now});
+const changedRows = freshRows.map(r => r.id==='fresh11' ? {...r,at:now+1000} : r);
+const frozen = compactRows(changedRows, {now,previous:initial,interacting:true});
+assert.deepEqual(frozen.open.map(r=>r.id), initial.open.map(r=>r.id), 'interaction keeps row positions');
+assert.equal(compactRows(changedRows,{now,previous:frozen}).open[0].id,'fresh11', 'new Turn returns a folded session');
+assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,current:'fresh10'}).open.some(r=>r.id==='fresh10'),true,'opening hidden session protects it immediately');

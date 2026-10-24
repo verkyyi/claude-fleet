@@ -52,6 +52,8 @@ itself stays in fleet-agent-team.py, which it imports — no second set of rules
         the person's next request is refused「已达个人额度」(person_budget_exceeded);
         nobody else is touched. PERSON is a principal (gh:<id>) or a display
         name `people` prints.
+  session-list [5|10|15 0|12|24|72]
+        session list size and inactivity hours for web and terminal (0 = off).
   lang [zh|en|auto]
         your interface language (issue #3329, EPIC #3178 D7): zh / en is kept as
         your personal layer's `ui_lang` and wins over what any client's locale
@@ -465,6 +467,18 @@ def person_here(a):
         return
     subprocess.run([sys.executable, os.path.join(HERE, "fleet-agent-team.py"), "person"],
                    capture_output=True, text=True)
+
+
+def session_list(a):
+    """fleet config session-list [5|10|15 0|12|24|72]; 0 disables age folding."""
+    if not a.args:
+        b = (T.read_json_quiet(T.PERSON_CACHE) or {}).get("bundle") or {}
+        print(json.dumps(b.get("session_list") or {"max_visible": 10, "idle_hours": 24}))
+        return 0
+    if len(a.args) != 2 or a.args[0] not in ("5", "10", "15") or a.args[1] not in ("0", "12", "24", "72"):
+        die("session-list 要展开数量 5/10/15 和收起小时数 0/12/24/72（0 关闭）")
+    prefs = dict(max_visible=int(a.args[0]), idle_hours=int(a.args[1]))
+    return put_personal(a, lambda b: b.update(session_list=prefs), a.note or "session list preferences", after=person_here)
 
 
 def lang(a):
@@ -975,7 +989,7 @@ def main():
     ap = argparse.ArgumentParser(prog="fleet config", description=__doc__.split("\n")[0])
     ap.add_argument("action", nargs="?", default="show",
                     choices=("show", "add", "set", "rm", "promote", "history", "restore", "people",
-                             "export", "import", "budget", "lang"))
+                             "export", "import", "budget", "lang", "session-list"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--personal", action="store_true")
@@ -994,7 +1008,7 @@ def main():
         die("--person 只用于 history / restore（操作者只能帮人退回到他自己的某一版）")
     return {"show": show, "add": edit, "set": edit, "rm": edit, "promote": promote,
             "history": history, "restore": restore, "people": people, "export": export,
-            "import": import_, "budget": budget, "lang": lang}[a.action](a)
+            "import": import_, "budget": budget, "lang": lang, "session-list": session_list}[a.action](a)
 
 
 if __name__ == "__main__":

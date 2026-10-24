@@ -123,12 +123,12 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		if personal && personRetiredKeys[k] {
 			return "", fmt.Errorf("bundle: %q is retired — a personal configuration no longer holds it (nothing ever read it); leave it out", k)
 		}
-		if personal && (k == "hook_scripts" || k == "ui_lang") {
+		if personal && (k == "hook_scripts" || k == "ui_lang" || k == "session_list") {
 			continue
 		}
 		if !teamBundleKeys[k] {
 			if personal {
-				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, ui_lang)", k)
+				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, ui_lang, session_list)", k)
 			}
 			return "", fmt.Errorf("bundle: %q is not something a team hands out (only mcp, hooks, skills, claude_settings, codex_config)", k)
 		}
@@ -247,6 +247,17 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	if v, ok := all["ui_lang"]; ok {
 		if s, _ := v.(string); s != "zh" && s != "en" {
 			return "", errors.New(`bundle.ui_lang must be "zh" or "en" (leave it out to follow the system)`)
+		}
+	}
+	if v, ok := all["session_list"]; ok {
+		prefs, valid := v.(map[string]any)
+		if !valid || len(prefs) != 2 {
+			return "", errors.New("bundle.session_list requires max_visible and idle_hours")
+		}
+		max, maxOK := prefs["max_visible"].(json.Number)
+		hours, hoursOK := prefs["idle_hours"].(json.Number)
+		if !maxOK || !hoursOK || (max != "5" && max != "10" && max != "15") || (hours != "0" && hours != "12" && hours != "24" && hours != "72") {
+			return "", errors.New("bundle.session_list: max_visible must be 5/10/15; idle_hours must be 0/12/24/72")
 		}
 	}
 	if path := secretIn("bundle", all); path != "" {

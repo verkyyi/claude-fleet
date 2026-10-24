@@ -27,7 +27,7 @@ Everything starts from one key. The tables below are generated from Tokenman's k
 
 **The top line is the session's; messages get a row of their own.** The 看台's top line says the session only: its state, title, change number and quota. Whatever Tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. An error (red ✖) and a result nobody took (yellow ✓) stay until you have seen them; a warning (yellow ▲) fades after 6 seconds, a note (grey ∙) after 3. Once you have seen everything the row folds away. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
 
-The panel looks roughly like this (sample data). ↑↓ follows the visible order. PIN is the only heading; ordinary tasks follow directly. Ordinary and earlier conversations each sort by their latest turn activity, newest first. A new reply moves an older conversation up within its section. PIN keeps its pinned order; status refreshes alone do not reorder rows.
+The panel looks roughly like this (sample data). ↑↓ follows the visible order. Needs attention has its own entry; PIN keeps pinned sessions above ordinary tasks. Ordinary and earlier conversations each sort by their latest turn activity, newest first. A new reply moves an older conversation up within its section. PIN keeps its pinned order; status refreshes alone do not reorder rows.
 
 ```text
   › Search sessions
@@ -40,7 +40,7 @@ The panel looks roughly like this (sample data). ↑↓ follows the visible orde
   ! B8D2     Claude  Login page redesign         web-app
   ◷ C9W1     Codex   Add API tests               api
     D2R6     Claude  Upgrade dependencies        web-app
-  ▸ Earlier conversations
+  ▸ More sessions
   ⇄ Language / 语言
   ⏏ Quit Tokenman (sessions keep running)
   ↵ go  Tab act  ↑↓ pick  ? legend  esc close
@@ -60,7 +60,9 @@ The repository and agent chosen in the box are stored privately on this machine 
 
 The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished sessions whose window is still open count; folded-away ones do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.
 
-The order is **PIN → ordinary tasks → Earlier conversations**. There are no status groups, parent/child trees or member counts. Older conversations stay folded at the bottom: → expands, ← collapses, and Enter toggles the section. Search includes folded records. An agent exiting does not prove completion or automatically put a still-open window into history.
+The list initially shows **10 sessions**, including the current session and PIN. Ordinary sessions fold after **24 hours without Turn activity while not executing**. Current and pinned sessions remain visible; explicit pins may exceed the limit. “Needs attention (N)” previews up to 3 sessions; expand it to see the rest. “More sessions (N)” includes the running count: → expands, ← collapses, and Enter toggles it. Search includes folded sessions. Folding only changes presentation: it never stops, parks or deletes a session; background resource policies operate independently.
+
+In the web app, **Settings → Session list** offers 5 / 10 / 15 visible sessions and 12 hours / 24 hours / 3 days / Off. These preferences follow your account to web and terminal. You can also run `fleet config session-list 10 24`; the second number is hours, with `0` disabling age folding. New Turn activity competes for visible places again. Reordering pauses during interaction, and refreshing never closes an expanded More section.
 
 Rows keep the same columns: status slot · short code such as `K3F9` · agent · title · repository. Narrow terminals hide the repository first, then the agent. **All status symbols share one fixed slot on the left**:
 
@@ -118,7 +120,7 @@ Sessions run on Tokenman's machines: close the terminal, shut the laptop, switch
 Everything you hand over on the + New session line is first written down by Tokenman, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
 
 - A task has this one number: it is yours, not a repository's. A task given a repository changes code and opens pull requests there — GitHub holds only the code and the pull requests, with no second ticket.
-- The hub's **Sessions** page uses the same PIN, ordinary tasks and Earlier conversations layout. Opening a row opens its web conversation; details keep the task description, native observations, PR and history. Task pages no longer offer a browser-terminal switch.
+- The hub's **Sessions** page uses the same PIN, ordinary tasks and More sessions layout. Opening a row opens its web conversation; details keep the task description, native observations, PR and history. Task pages no longer offer a browser-terminal switch.
 - Historical results remain in details, without a completed icon in the list. A missing session is not proof of completion; unknown observations are not proof of stopping. Failed reads preserve existing content and explain the problem; retrying a read does not start work.
 - For native terminal interactions, open the task in iTerm2. The separate personal browser Shell remains available. Old task links containing `?view=term` open the same task's web conversation.
 - Tell a colleague "the T42 thing" and they can find it by its code on the Sessions page.
