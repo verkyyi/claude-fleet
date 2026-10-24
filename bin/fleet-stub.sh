@@ -82,7 +82,7 @@ secs() { local m=${1%.*}; case "$m" in ''|*[!0-9]*) m=0 ;; esac; said="$((m / 10
 # `seg ms` — the median of recent ones): ✓ done (its time) · ▸ now · ○ to come
 # (~its usual time). One awk a second, never before the first frame.
 progress() {
-  local tf='' rt0='' got seg ms v mark cur=0 out='' w lbl t nb seen=' '
+  local tf='' rt0='' got seg ms v cur=0 out='' w lbl t nb seen=' '
   [ -f "$dir/timing" ] && IFS= read -r tf <"$dir/timing"
   [ -f "$dir/t0" ] && IFS= read -r rt0 <"$dir/t0"
   [ -n "$tf" ] && [ -f "$tf" ] && [ -n "$rt0" ] || return 0
