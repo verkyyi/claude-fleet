@@ -371,6 +371,11 @@ def inventory_row(parts):
     node's row has none: absent."""
     parts = list(parts)
     extra = {}
+    # Native turn/state activity, never the inventory polling time.
+    if len(parts) >= 40 and parts[-1].startswith("activity="):
+        value = parts.pop()[9:]
+        if value.isdigit() and 0 < int(value) < 10**11:
+            extra["activity_at"] = int(value)
     # Optional native task facts follow the park census. False is observed;
     # absence means an older node, never evidence that no recurring plan exists.
     if len(parts) >= 39 and parts[-1].startswith("nativewait="):

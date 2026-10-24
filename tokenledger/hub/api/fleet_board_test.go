@@ -11,6 +11,28 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store/storetest"
 )
 
+func TestBoardConversationActivity(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	id := "00000000-0000-4000-8000-000000000123"
+	wid := "fleet/" + id
+	worker := map[string]any{"identity": id, "state": "done", "born": float64(now.Unix() - 100), "activity_at": float64(now.Unix() - 10)}
+	board, err := s.buildBoard("alice", []FleetSession{{WorkerID: &wid, Worker: worker, Availability: "online"}}, now)
+	if err != nil || len(board.Rows) != 1 || board.Rows[0].ActivityAt != now.Unix()-10 {
+		t.Fatalf("live activity: %+v %v", board, err)
+	}
+	worker["activity_at"] = float64(now.Unix() + 100)
+	board, err = s.buildBoard("alice", []FleetSession{{WorkerID: &wid, Worker: worker, Availability: "online"}}, now)
+	if err != nil || len(board.Rows) != 1 || board.Rows[0].ActivityAt != 0 {
+		t.Fatalf("future activity: %+v %v", board, err)
+	}
+	rows := []BoardRow{{ID: "recent-turn", Group: "gone", At: 100, ActivityAt: 300}, {ID: "recent-close", Group: "gone", At: 200, ActivityAt: 50}}
+	if got := finishBoard(rows).Rows[0].ID; got != "recent-turn" {
+		t.Fatalf("history must order and cap by latest turn, got %s", got)
+	}
+}
+
 // A4G2: the one session list. A record and the session doing it are one row
 // (joined by the session's identity, the record's own ID — the record never
 // learned a worker_id); groups, order and the count are the hub's.

@@ -176,6 +176,7 @@ class MonitorEvents(unittest.TestCase):
         self.native.events.append(self.status('idle'))
         self.tick()
         self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertIn('@turn_activity_at',self.writes[-1][-1])
         self.assertIn('#{==:#{@claude_state},working}',self.writes[-1][-2])
         self.assertIn('#{==:#{@claude_state_ts},17}',self.writes[-1][-2])
         self.assertNotIn('thread/resume',[method for method,_ in self.native.calls])
@@ -324,6 +325,7 @@ class MonitorEvents(unittest.TestCase):
         self.native.events.append(self.status('idle'))
         self.tick()
         self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertIn('@turn_activity_at',self.writes[-1][-1])
         self.assertEqual(len(self.native.calls),2)
         self.assertFalse(self.native.sent)
 
@@ -339,6 +341,7 @@ class MonitorEvents(unittest.TestCase):
         self.tick()
         self.assertEqual(self.connect.call_count,2)
         self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertIn('@turn_activity_at',self.writes[-1][-1])
         self.assertEqual(len(replacement.calls),1)
 
     def test_identity_change_closes_old_stream_before_processing_events(self):

@@ -258,7 +258,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
@@ -383,7 +383,8 @@ for raw in os.environ["TASK_FACTS"].splitlines():
     if len(cells) >= 17:
         plan = prune(parse(cells[15]), time.time())
         wait = cells[16] if re.fullmatch(r"[a-z,]*", cells[16]) else ""
-        facts[cells[0]] = (bool(plan.get("cron")), wait)
+        activity = int(cells[17]) if len(cells) > 17 and cells[17].isdigit() else 0
+        facts[cells[0]] = (bool(plan.get("cron")), wait, activity)
 census = json.loads(os.environ["PARK_CENSUS"])
 for line in sys.stdin:
     line = line.rstrip("\n")
@@ -392,7 +393,7 @@ for line in sys.stdin:
         parts, extra = inventory_row(line.split("\t"))
         p = inventory_park(p, parts[4], extra.get("busy"))
     mark = facts.get(line.split("\t", 1)[0])
-    suffix = ("\tloop=%d\tnativewait=%s" % mark) if mark is not None else ""
+    suffix = ("\tloop=%d\tnativewait=%s\tactivity=%d" % mark) if mark is not None else ""
     print(line + "\tpark=" + (json.dumps(p, separators=(",", ":")) if p else "") + suffix)'
 
     ;;

@@ -174,8 +174,13 @@ assert.ok(workspace.includes('p.delete("view")') && workspace.includes('toast.in
 assert.ok(workspace.includes('await stopRow(r)'), 'explicit stop uses the shared Task-aware route');
 
 const original = listRows(rows);
-const changed = rows.map(r => ({...r, at: r.id==='idle'?999999:r.at}));
-assert.deepEqual(listRows(changed, original).open.map(r=>r.id), original.open.map(r=>r.id), 'observed timestamp changes do not reorder an open list');
+const changed = rows.map(r => r.id === 'idle' ? {...r, board: {...r.board, activity_at: 999}} : r);
+assert.equal(listRows(changed, original).open[0].id, 'idle', 'an older conversation moves first after new turn activity');
+assert.deepEqual(listRows(rows.map(r => ({...r, glyph:'work'})), original).open.map(r=>r.id), original.open.map(r=>r.id), 'status alone does not reorder conversations');
+const histories = [10, 20].map((at, i) => ({...gone[0], id:`history-${i}`, at:at*1000, board:{...gone[0].board, activity_at:i ? 5 : 30}}));
+assert.deepEqual(listRows(histories).gone.map(r=>r.id), ['history-0', 'history-1'], 'history uses turn activity, not window closure');
+assert.deepEqual(listRows([...histories].reverse()).gone.map(r=>r.id), ['history-0', 'history-1']);
+assert.deepEqual(listRows(histories.map(r=>({...r, board:{...r.board, activity_at:30}}))).gone.map(r=>r.id), ['history-0', 'history-1'], 'equal timestamps use identity');
 assert.deepEqual(listRows([{...rows[0],id:'pin1',group:'pin',at:1},{...rows[0],id:'pin2',group:'pin',at:999}]).pin.map(r=>r.id),['pin1','pin2'], 'PIN keeps its explicit order');
 
 assert.equal(listStatus(R({board:{pending_start:true}})).kind,'pending', 'hub request observation is authoritative');

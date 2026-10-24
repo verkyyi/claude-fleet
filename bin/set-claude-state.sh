@@ -559,6 +559,13 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
       if [ -n "$wwait" ]; then set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_wait "$wwait"
       elif [ -n "$wprev" ]; then set -- "$@" \; set-window-option -qu -t "$TMUX_PANE" @claude_wait; fi
     fi
+  # Conversation recency is separate from lifecycle/classifier stamps: closing
+  # or parking a window must not move it above a more recent conversation.
+    if [ "$src" != classifier ]; then
+      case "$sem" in working|done|needs)
+        set -- "$@" \; set-window-option -t "$TMUX_PANE" @turn_activity_at "$(date +%s)" ;;
+      esac
+    fi
   # last-activity stamp (drives the dashboard's "Nm ago" column).
     tmux "$@" \; set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
   }

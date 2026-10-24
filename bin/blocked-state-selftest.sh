@@ -116,6 +116,13 @@ hook "$PROMPT" $'{\n "hook_event_name" \t : \n "UserPromptSubmit"\n}'
 same 'a new prompt clears blocked regardless of JSON whitespace' "$(state)" working/
 hook "$POST" '{"hook_event_name":"PostToolUse"}'
 same 'normal tool traffic resumes after a prompt' "$(state)" working/
+TURN_AT=$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')
+case "$TURN_AT" in ''|*[!0-9]*) printf 'missing native turn activity\n' >&2; exit 1 ;; esac
+# Lifecycle exit leaves the last conversation time intact.
+hook exited
+same 'exit preserves the latest turn timestamp' "$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')" "$TURN_AT"
+hook "$PROMPT" '{"hook_event_name":"UserPromptSubmit"}'
+
 
 # Live dialogs still own their normal lifecycle even after a declaration.
 hook blocked

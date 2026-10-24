@@ -49,7 +49,7 @@ export type BoardRow = {
   agent_words?: [string, string]; context?: [string, string]; coordinator?: string; outcome?: string;
   id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;
   words: [string, string]; state?: string; worker_id?: string; machine?: string; login?: string; repo?: string;
-  parent?: string; depth?: number; lost?: boolean; at: number;
+  parent?: string; depth?: number; lost?: boolean; at: number; activity_at?: number;
   loop?: boolean; // explicit recurring plan, never inferred from looping observation
   running?: boolean; // native execution/background activity observation
   pending_start?: boolean; // accepted execution request with no confirmed native start

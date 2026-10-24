@@ -27,7 +27,7 @@ Everything starts from one key. The tables below are generated from Tokenman's k
 
 **The top line is the session's; messages get a row of their own.** The 看台's top line says the session only: its state, title, change number and quota. Whatever Tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. An error (red ✖) and a result nobody took (yellow ✓) stay until you have seen them; a warning (yellow ▲) fades after 6 seconds, a note (grey ∙) after 3. Once you have seen everything the row folds away. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
 
-The panel looks roughly like this (sample data). ↑↓ follows the visible order. PIN is the only heading; ordinary tasks follow directly. Status updates keep the order stable during this visit.
+The panel looks roughly like this (sample data). ↑↓ follows the visible order. PIN is the only heading; ordinary tasks follow directly. Ordinary and earlier conversations each sort by their latest turn activity, newest first. A new reply moves an older conversation up within its section. PIN keeps its pinned order; status refreshes alone do not reorder rows.
 
 ```text
   › Search sessions

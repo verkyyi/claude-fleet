@@ -2244,6 +2244,7 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent"] = r.get("agent") or ""
             e["agent_basis"] = r.get("agent_basis") or ""
             e["agent_words"] = r.get("agent_words")
+        e["activity_at"] = r.get("activity_at") or r.get("at") or 0
         e["board_context"] = board_words({"words": r.get("context") or ["", ""]})
         # 会话合一 (task PQ41): where the session was opened — web / terminal
         e["origin"] = r.get("origin") or ""
@@ -2568,6 +2569,12 @@ def task_list(items):
         else:
             e.pop("sec", None)
             regular.append(e)
+    # Never use window output or inventory freshness as conversation recency.
+    # Old nodes without activity keep their source order.
+    recent = lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"])
+    if any(e.get("activity_at") for e in regular + history):
+        regular.sort(key=recent)
+        history.sort(key=recent)
     result = ([{"kind": "hdr", "group": "pin", "text": "PIN"}] if pin else []) + pin + regular
     older = [e for e in items if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:

@@ -239,6 +239,7 @@ type FleetIDRecord struct {
 	Parked      string           `json:"parked,omitempty"`
 	OpenedAt    int64            `json:"opened_at"`
 	ClosedAt    int64            `json:"closed_at,omitempty"`
+	ActivityAt  int64            `json:"activity_at,omitempty"`
 	CloseReason string           `json:"close_reason,omitempty"`
 	Seq         int              `json:"seq"`
 	Natives     []FleetIDNative  `json:"natives"`
@@ -307,6 +308,7 @@ func (s *Store) ensureFleetIDs() error {
 	for _, c := range []struct{ col, spec string }{{"progress", "TEXT NOT NULL DEFAULT ''"},
 		{"progress_state", "TEXT NOT NULL DEFAULT ''"}, {"progress_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"progress_seq", "INTEGER NOT NULL DEFAULT 0"},
+		{"activity_at", "INTEGER NOT NULL DEFAULT 0"},
 		{"title_source", "TEXT NOT NULL DEFAULT ''"},
 		// EPIC T644 C1: the task this ID belongs to, by the task's own ID
 		// (fleet_tasks.fid) — `task` keeps the T<n> for one version (compat-1v: 下一批删).
@@ -700,11 +702,11 @@ func (s *Store) FleetIDOf(owner, id string) (FleetIDRecord, error) {
 	var pg FleetIDProgress
 	err := s.read.QueryRow(`SELECT id, owner, code, short, endpoint_id, machine, login, win, title, agent, repo, issues,
 		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq,
-		progress, progress_state, progress_at, progress_seq, title_source
+		progress, progress_state, progress_at, progress_seq, title_source, activity_at
 		FROM fleet_ids WHERE id = ? AND owner = ?`, id, owner).Scan(&r.ID, &r.Owner, &r.code, &r.Short, &r.EndpointID,
 		&r.Machine, &r.Login, &r.Window, &r.Title, &r.Agent, &r.Repo, &r.issues, &r.Body, &r.Key, &r.Task,
 		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq,
-		&pg.Summary, &pg.State, &pg.At, &pg.Seq, &r.TitleSource)
+		&pg.Summary, &pg.State, &pg.At, &pg.Seq, &r.TitleSource, &r.ActivityAt)
 	if err != nil {
 		return FleetIDRecord{}, err
 	}

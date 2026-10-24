@@ -43,7 +43,8 @@ import (
 //	                machine lost past boardLostAfter — never counted
 //
 // Within a group newest first (a session's birth, a record's creation, an end's
-// time); an EPIC member right under its parent while both sit in one group.
+// time); history uses the last native activity when known. An EPIC member sits
+// right under its parent while both sit in one group.
 // count = the rows of pin · ask · work · queue on a machine not lost.
 
 const (
@@ -92,6 +93,7 @@ type BoardRow struct {
 	Depth        int    `json:"depth,omitempty"`
 	Lost         bool   `json:"lost,omitempty"`
 	At           int64  `json:"at"`
+	ActivityAt   int64  `json:"activity_at,omitempty"` // native turn/state activity, independent of inventory freshness
 	// Why it is still open (E101), 中文 / English, and its tone — grey · orange ·
 	// red: the node's reap_why turned into the card's third line, ONE source for
 	// the console and the ⌘P panel. Only on 等你 / 排队中 rows; none when nothing
@@ -324,6 +326,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r := BoardRow{}
 		if b != nil {
 			r.Code, r.Title, r.Machine, r.Login, r.Repo = b.Short, b.Title, b.Machine, b.Login, b.Repo
+			r.ActivityAt = b.ActivityAt
 			r.Agent = b.Agent
 			if r.Agent != "" {
 				r.AgentBasis = "native"
@@ -339,7 +342,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 				// A parked task can be older than either list window. Resolve
 				// its exact owner's FID directly, never a scratch key or title.
 				if rec, err := s.Store.FleetIDOf(t.Owner, ref); err == nil && rec.ClosedAt > 0 {
-					hb = &store.BoardID{ID: rec.ID, Machine: rec.Machine, Login: rec.Login, Seq: rec.Seq, Closed: rec.ClosedAt}
+					hb = &store.BoardID{ID: rec.ID, Machine: rec.Machine, Login: rec.Login, Seq: rec.Seq, Closed: rec.ClosedAt, ActivityAt: rec.ActivityAt}
 					if len(rec.Natives) > 0 {
 						hb.Agent = rec.Natives[len(rec.Natives)-1].Agent
 					}
@@ -347,6 +350,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			}
 		}
 		if hb != nil {
+			r.ActivityAt = hb.ActivityAt
 			if hb.Closed > 0 {
 				status := "offline_unknown"
 				if hb.Seq > 0 && hb.Agent == "" {
@@ -469,6 +473,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r.Lost = fs.Availability == "lost"
 		if v, ok := w["born"].(float64); ok {
 			r.At = int64(v)
+		}
+		if v, ok := w["activity_at"].(float64); ok && v > float64(r.ActivityAt) && v <= float64(now.Unix()) {
+			r.ActivityAt = int64(v)
 		}
 		end := ""
 		if t != nil {
@@ -720,6 +727,19 @@ func finishBoard(rows []BoardRow) *Board {
 			if ra, rb := boardAskRank(rows[a].Tag), boardAskRank(rows[b].Tag); ra != rb {
 				return ra < rb
 			}
+		}
+		// Cap history by conversation recency too, before either client sorts it.
+		if rows[a].Group == "gone" {
+			activity := func(r BoardRow) int64 {
+				if r.ActivityAt > 0 {
+					return r.ActivityAt
+				}
+				return r.At
+			}
+			if aa, ab := activity(rows[a]), activity(rows[b]); aa != ab {
+				return aa > ab
+			}
+			return rows[a].ID < rows[b].ID
 		}
 		if rows[a].At != rows[b].At {
 			return rows[a].At > rows[b].At

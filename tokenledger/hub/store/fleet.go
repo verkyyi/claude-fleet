@@ -215,6 +215,9 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 			f.WorkerCount, workers, ts, ts, reposJSON(f.Repos)); err != nil {
 			return nil, err
 		}
+		if err := recordSessionActivity(tx, endpointID, workers, at); err != nil {
+			return nil, err
+		}
 	}
 	return rejected, tx.Commit()
 }
@@ -222,9 +225,49 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 // UpdateFleetWorkers stores a fresher window list for one fleet (a live
 // fleet_status read), leaving its inventory fields alone.
 func (s *Store) UpdateFleetWorkers(fleetID, state string, count int, workersJSON string, at time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_fleets SET state = ?, worker_count = ?, workers_json = ?, observed_at = ?
-		WHERE fleet_id = ?`, state, count, workersJSON, at.UTC().Format(rfc), fleetID)
-	return err
+	tx, err := s.write.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE fleet_fleets SET state = ?, worker_count = ?, workers_json = ?, observed_at = ?
+        WHERE fleet_id = ?`, state, count, workersJSON, at.UTC().Format(rfc), fleetID); err != nil {
+		return err
+	}
+	var endpoint string
+	err = tx.QueryRow(`SELECT m.endpoint_id FROM fleet_fleets f JOIN fleet_machines m ON m.machine_id = f.machine_id WHERE f.fleet_id = ?`, fleetID).Scan(&endpoint)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if endpoint != "" {
+		if err := recordSessionActivity(tx, endpoint, workersJSON, at); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Preserve native conversation activity after a window leaves inventory. Replayed
+// or older snapshots cannot move it backwards; another endpoint cannot write it.
+// Polling, task edits, and closing a window do not advance this timestamp.
+func recordSessionActivity(tx *sql.Tx, endpoint, workers string, observed time.Time) error {
+	var rows []struct {
+		Identity   string `json:"identity"`
+		ActivityAt int64  `json:"activity_at"`
+	}
+	if json.Unmarshal([]byte(workers), &rows) != nil {
+		return nil
+	}
+	for _, row := range rows {
+		if !IsFleetID(row.Identity) || row.ActivityAt <= 0 || row.ActivityAt > observed.Unix() {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE fleet_ids SET activity_at = ? WHERE id = ? AND endpoint_id = ? AND activity_at < ?`,
+			row.ActivityAt, row.Identity, endpoint, row.ActivityAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const fleetCols = `f.fleet_id, f.machine_id, m.endpoint_id, m.hostname, m.os_user, f.name, f.repo,
