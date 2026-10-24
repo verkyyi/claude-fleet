@@ -13,6 +13,8 @@
 #   F  another machine (far): frozen, words carried; `fleet_stub.py deliver` there
 #      pastes them; words that never land are kept as a notice
 #   G  fleet_view: go() runs the handoff once, closes the stub, FLEET_STUB=0 = the old road
+#   H  progress: ✓ done stages with their time, ▸ now, ○ to come (~usual), the usual
+#      wait; CJK whose UTF-8 has 0x80–0x9F bytes survives a byte-wise read
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/stub-selftest.XXXXXX") || exit 2
@@ -205,6 +207,32 @@ os.environ["FLEET_STUB"] = "0"
 ok(fleet_view.bolt_stub("v1", "", ["x", "--t0", str(time.time())], "w") is False, "G FLEET_STUB=0: no stub")
 os.environ.pop("FLEET_STUB")
 ok(fleet_view.bolt_stub("wt-1", "", ["x"], "w") is False, "G a browser 看台: no stub")
+# H — progress: this start's stages from the ledger, the plan from recent starts
+tl = Path(os.environ["FLEET_CONF_DIR"]) / "timing" / "session.ndjson"
+past = time.time() - 3600
+with open(tl, "a") as f:
+    for k in range(3):
+        for seg, ms in (("record", 1400), ("worktree", 4000), ("window", 6500), ("exec", 9000), ("input", 11000)):
+            f.write(json.dumps({"ts": round(past + k, 3), "what": "session", "seg": seg, "ms": ms + k}) + "\n")
+t0 = time.time()
+w, d = fleet_stub.start(tm, G, "repo · Claude", t0)
+fleet_stub.expect(d)
+plan = fleet_stub.read(Path(d) / "expect").split()
+ok(plan[0::2] == ["record", "worktree", "window", "exec", "input"], "H expect: the usual stages in order: %r" % plan)
+with open(tl, "a") as f:
+    for seg, ms in (("record", 1234.5), ("worktree", 3456.7)):
+        f.write(json.dumps({"ts": round(t0, 3), "what": "session", "seg": seg, "ms": ms}) + "\n")
+ok(until(lambda: "✓ 记下任务" in cap(w) and "1.2s" in cap(w), 4), "H a stage done: ✓ and its time")
+ok("✓ 建好工作区" in cap(w) and "3.4s" in cap(w), "H the second one too")
+ok("▸ 开好窗口" in cap(w) and "~6.5s" in cap(w), "H the stage now: ▸ and its usual time")
+ok("○ 能打字了" in cap(w), "H what is to come: ○")
+ok("通常 11 秒左右" in cap(w), "H the usual wait, in words: %r" % cap(w).splitlines()[:4])
+# bash 3.2 reads bytes: UTF-8 continuation bytes 0x80–0x9F are text, never controls
+keys(w, "修一下登录页"); keys(w, "BSpace", lit=False)
+ok(until(lambda: "❯ 修一下登录" in cap(w)), "H CJK typed whole (一 下 登 录 carry 0x80–0x9F bytes), ⌫ takes one character")
+got = fleet_stub.freeze(tm, d)
+ok(got == ([], "修一下登录"), "H the words handed over intact: %r" % (got,))
+fleet_stub.close(tm, d)
 sys.exit(1 if fails else 0)
 PY
 rc=$?
