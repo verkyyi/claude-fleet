@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { compactRows, isTerminal, listItem, listStatus, listStatusLabel, needsAttention, rowMeta, rowRef, searchRows, type CompactGroups } from "./session-list";
+import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, rowMeta, rowRef, searchRows, type CompactGroups } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
@@ -250,7 +250,8 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   if (rows === null) return failed ? <div className="px-3"><Failed what={tr("会话", "your sessions")} onRetry={reload} /></div> : <div className="px-3"><Loading /></div>;
   const grouped = compactRows(rows, { current: ref, preferences: board?.session_list, now, previous: previous.current, interacting: pointing || focused });
   previous.current = grouped;
-  const ordered = [...grouped.pin, ...grouped.attention, ...grouped.open, ...grouped.gone];
+  const searchGroups = listRows(rows);
+  const ordered = [...searchGroups.pin, ...searchGroups.open, ...searchGroups.gone];
   const webActive = pathname === WEB_CHAT_PATH || (!!chatHome && pathname === "/");
   const row = (r: Row) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed} />;
   const List = variant === "side" ? SidebarMenu : "ul";

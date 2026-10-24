@@ -72,7 +72,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
     });
     const stable = { pin: refresh(previous.pin), attention: refresh(previous.attention),
       open: refresh(previous.open), gone: refresh(previous.gone), attentionVisible: previous.attentionVisible };
-    stable.gone.push(...recent.filter((r) => !used.has(r.id)));
+    stable.gone.push(...rows.filter((r) => !used.has(r.id)));
     return stable;
   }
   return next;
