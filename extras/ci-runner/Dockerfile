@@ -71,6 +71,12 @@ RUN set -eux; \
 # buildctl, the same version as the cluster's buildkitd (the `node image` job).
 COPY --from=buildkit /usr/bin/buildctl /usr/local/bin/buildctl
 
+# The base image leaves /home/runner mode 0777 (actions/runner images/Dockerfile).
+# A private preview's node helper refuses any world- or group-writable ancestor of
+# ~/.fleet-preview, so every preview e2e on this runner answered 502; ubuntu-latest's
+# home is 0755. The runner owns its home and is the only one writing there.
+RUN chmod 0755 /home/runner
+
 # The job gate: root's, read-only to the runner.
 COPY bin/fleet-ci-job-gate.sh /opt/fleet-ci/job-gate.sh
 RUN chown -R root:root /opt/fleet-ci && chmod 0755 /opt/fleet-ci /opt/fleet-ci/job-gate.sh

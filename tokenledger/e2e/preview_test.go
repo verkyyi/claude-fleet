@@ -58,6 +58,13 @@ func previewRelayTest(t *testing.T, replicas bool, mode string) {
 	}
 	host, _ := os.Hostname()
 	now := time.Now()
+	// The node helper refuses a group- or world-writable ancestor of the socket
+	// directory; say which one here rather than leave a bare 502 to read later.
+	for d := me.HomeDir; d != "/" && d != "."; d = filepath.Dir(d) {
+		if st, e := os.Stat(d); e == nil && st.Mode().Perm()&0022 != 0 {
+			t.Fatalf("%s is mode %#o: the preview helper refuses a group/world-writable ancestor of ~/.fleet-preview (chmod 755 it — a CI runner image's home)", d, st.Mode().Perm())
+		}
+	}
 	dir := filepath.Join(me.HomeDir, ".fleet-preview")
 	made := false
 	if _, e = os.Stat(dir); os.IsNotExist(e) {
