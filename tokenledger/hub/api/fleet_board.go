@@ -120,13 +120,19 @@ type BoardHistory struct {
 }
 
 // Board is the list: its rows in order, the count, each group's size.
+type SessionListPreferences struct {
+	MaxVisible int `json:"max_visible"`
+	IdleHours  int `json:"idle_hours"`
+}
+
 type Board struct {
-	Rows     []BoardRow     `json:"rows"`
-	Count    int            `json:"count"`
-	Groups   map[string]int `json:"groups"`
-	GoneDays int            `json:"gone_days"`
-	GoneMore int            `json:"gone_more,omitempty"` // older than the cap, not listed
-	Digest   string         `json:"digest"`
+	SessionList SessionListPreferences `json:"session_list"`
+	Rows        []BoardRow             `json:"rows"`
+	Count       int                    `json:"count"`
+	Groups      map[string]int         `json:"groups"`
+	GoneDays    int                    `json:"gone_days"`
+	GoneMore    int                    `json:"gone_more,omitempty"` // older than the cap, not listed
+	Digest      string                 `json:"digest"`
 	// Machines is how many machines the person has (task PQ41): one ⇒ the page
 	// names none (a machine's name is only in a session's details then).
 	Machines int `json:"machines"`
@@ -636,7 +642,24 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		kept = append(kept, r)
 	}
-	return finishBoard(kept), nil
+	b := finishBoard(kept)
+	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}
+	if owner != "" {
+		if personal, err := s.Store.PersonBundle(owner, 0); err == nil {
+			var data struct {
+				SessionList *SessionListPreferences `json:"session_list"`
+			}
+			if json.Unmarshal([]byte(personal.Bundle), &data) == nil && data.SessionList != nil {
+				p := *data.SessionList
+				if (p.MaxVisible == 5 || p.MaxVisible == 10 || p.MaxVisible == 15) && (p.IdleHours == 0 || p.IdleHours == 12 || p.IdleHours == 24 || p.IdleHours == 72) {
+					b.SessionList = p
+				}
+			}
+		}
+	}
+	// Preferences change the response even when no session moved.
+	b.Digest += fmt.Sprintf("-%d-%d", b.SessionList.MaxVisible, b.SessionList.IdleHours)
+	return b, nil
 }
 
 func usedIDLive(live []FleetSession, id string) bool {

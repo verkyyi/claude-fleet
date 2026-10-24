@@ -80,10 +80,10 @@ for hub in (False, True):
     assert not any(e.get("epic") or e.get("fold") for e in it)
     shown = fv.visible(it, "", set())
     targets = [e["target"] for e in shown if e["kind"] == "sess"]
-    assert targets == ["@11", "@14", "@12", "@13", "@15", "@10"], targets
+    assert targets == ["@13", "@15", "@11", "@14", "@12", "@10"], targets
     assert not any(e["kind"] in ("hdr", "ask") for e in shown), shown
     assert all(e.get("depth", 0) == 0 for e in shown)
-    text = "\n".join("".join(t for t, _ in segs) for segs in fv.paint(shown, -1, 100, qo.cells, qo.clip))
+    text = "\n".join("".join(t for t, _ in segs) for segs in fv.paint([e for e in shown if e["kind"] == "sess"], -1, 100, qo.cells, qo.clip))
     assert "3/6" not in text and "├" not in text and "▸" not in text, text
     hits = fv.visible(it, "技能", set())
     assert [e["target"] for e in hits] == ["@11"], hits

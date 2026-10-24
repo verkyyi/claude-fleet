@@ -6,6 +6,7 @@ No live hub, tmux server, credentials or agent processes are used.
 import importlib.util
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -98,7 +99,7 @@ class TaskList(unittest.TestCase):
                  dict(kind="cmd", cmd="reapall", text="legacy cleanup")]
         shown = v.visible(items, "", set())
         self.assertEqual([e["text"] for e in shown if e["kind"] == "hdr"], ["PIN"])
-        self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["driver", "member", "ask"])
+        self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["ask", "driver", "member"])
         self.assertFalse(any(e["kind"] in ("ask", "cmd") for e in shown))
         self.assertTrue(all(not e.get("depth") and not e.get("fold") and not e.get("epic") for e in shown))
         rendered = "".join(t for t, _ in v.row_segs(items[2], 80, qo.cells, qo.clip))
@@ -106,12 +107,39 @@ class TaskList(unittest.TestCase):
         self.assertNotIn("▸", rendered)
         self.assertEqual(v.visible([row("plain")], "", set())[0]["kind"], "sess")
 
+    def test_folded_running_session_keeps_live_actions(self):
+        items = [row(str(i), state="working", activity_at=100-i) for i in range(12)]
+        folded = [e for e in v.compact_task_list(items, now=200) if e.get("target") == "11"][0]
+        self.assertEqual(folded["sec"], "gone")
+        self.assertTrue(v.live(folded))
+        self.assertFalse(v.ended(folded), "list overflow is not lifecycle completion")
+        self.assertFalse(items[-1].get("sec"))
+        history = row("history", sec="gone", gone=True, state="done")
+        current = [e for e in v.compact_task_list([history], current="history") if e["kind"] == "sess"][0]
+        self.assertTrue(v.ended(current), "viewing history never makes it live")
+
+    def test_shared_compact_policy(self):
+        # Shared with extras/web-console/test/session-list.mjs.
+        fixtures = BIN.parent / "extras/web-console/test/fixtures/session-list-policy.json"
+        for c in json.loads(fixtures.read_text()):
+            with self.subTest(c["name"]):
+                items = [row(r["id"], state=r["state"], group=r["group"], activity_at=r["activity_at"],
+                             sec="gone" if r["group"] == "gone" else "", gone=r["group"] == "gone",
+                             running=r["state"] == "working", lost=r["state"] == "unknown") for r in c["rows"]]
+                projected = v.compact_task_list(items, c.get("current", ""), c.get("preferences"), c["now"])
+                sessions = [e for e in projected if e["kind"] == "sess"]
+                self.assertEqual([e["target"] for e in sessions if not e.get("sec")], c["visible"])
+                self.assertEqual([e["target"] for e in sessions if e.get("sec") == "gone"], c["more"])
+                self.assertEqual([e["target"] for e in sessions if v.needs_attention(e)], c["attention"])
+                self.assertEqual(len({e["target"] for e in sessions}), len(items))
+                self.assertEqual([e.get("sec") for e in items], ["gone" if r["group"] == "gone" else "" for r in c["rows"]], "folding never mutates source lifecycle")
+
     def test_history_and_search_preserve_fold(self):
         items = [row("old", sec="gone", gone=True), row("exited", state="exited", sec="gone", shut=True),
                  row("loop", loop=True, sec="gone"), row("lost", lost=True, sec="gone")]
         closed = v.visible(items, "", set())
         self.assertEqual([e["target"] for e in closed if e["kind"] == "sess"], ["exited", "loop", "lost"])
-        self.assertEqual(closed[-1]["text"], "更早的会话")
+        self.assertEqual(closed[-1]["text"], "更多会话 · 1")
         self.assertEqual([e["target"] for e in v.visible(items, "old", set())], ["old"])
         self.assertEqual(v.visible(items, "", set())[-1]["closed"], True)
         self.assertIn("old", [e.get("target") for e in v.visible(items, "", {"gone"})])
@@ -123,11 +151,11 @@ class TaskList(unittest.TestCase):
         self.assertEqual(targets([a, b]), ["a", "b"])
         a.update(group="queue", source_order=1)
         b.update(group="ask", source_order=0, state="needs")
-        self.assertEqual(targets([b, a]), ["a", "b"])
+        self.assertEqual(targets([b, a]), ["b", "a"])
         b["group"] = "pin"
         self.assertEqual(targets([b, a]), ["b", "a"])
         b["group"] = "queue"
-        self.assertEqual(targets([b, a]), ["a", "b"])
+        self.assertEqual(targets([b, a]), ["b", "a"])
 
     def test_board_reserved_is_not_pending_start(self):
         v._BOARD["lang"] = "zh"

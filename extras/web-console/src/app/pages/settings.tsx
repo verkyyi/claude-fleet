@@ -24,12 +24,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { lang, tr } from "@/shared/i18n";
-import { isAdmin, sendJSON, useLoad } from "@/shared/api";
+import { getJSON, isAdmin, sendJSON, useLoad } from "@/shared/api";
 import { setThemePick, themePick, type ThemePick } from "@/shared/theme";
 import { SignOut, usePage, useShell } from "../Shell";
 import { BindWeChatDialog, toastBound } from "../WeChatBind";
 import { Failed, PageHeader, ago } from "../parts";
 import { clearBrowserCache } from "../chat/local";
+
+import { listPreferences, type SessionListPreferences } from "../session-list";
+import { useWorkRows } from "../work-rows";
 
 declare const __PROTO__: boolean;
 
@@ -356,6 +359,60 @@ const MyConfig: FC = () => {
   );
 };
 
+// One personal preference travels in the board to both web and terminal.
+const SessionListSettings: FC = () => {
+  const st = useLoad<Bundle>("/v1/fleet/person-bundle");
+  const { reload } = useWorkRows();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<Note>(null);
+  const prefs = listPreferences(st.data?.bundle?.session_list as SessionListPreferences | undefined);
+  const save = async (patch: Partial<SessionListPreferences>) => {
+    setBusy(true); setNote(null);
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const latest = await getJSON<Bundle>("/v1/fleet/person-bundle");
+        if (!latest) break;
+        const session_list = { ...listPreferences(latest.bundle?.session_list as SessionListPreferences | undefined), ...patch };
+        const r = await sendJSON("PUT", "/v1/fleet/person-bundle", {
+          base: latest.version, bundle: { ...latest.bundle, session_list }, note: "session list preferences",
+        });
+        if (r.ok) {
+          setNote({ tone: "ok", text: tr("已保存，网页和终端会话列表同步使用。", "Saved for web and terminal session lists.") });
+          st.reload(); reload(); return;
+        }
+        if (r.status !== 409) break;
+      }
+      setNote({ tone: "bad", text: tr("未能保存，请重试。", "Could not save. Please try again.") });
+    } finally { setBusy(false); }
+  };
+  return <Card>
+    <CardHeader><CardTitle className="text-base">{tr("会话列表", "Session list")}</CardTitle>
+      <CardDescription>{tr("当前会话和 PIN 保持可见。收起不会停止会话，搜索仍可找到。", "Current and pinned sessions stay visible. Folding keeps sessions running and searchable.")}</CardDescription>
+    </CardHeader>
+    <CardContent className="space-y-4">
+      {st.failed ? <Failed what={tr("会话列表设置", "session list settings")} onRetry={st.reload} /> : <>
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="list-count">{tr("默认展开数量", "Visible sessions")}</Label>
+          <Select disabled={busy || !st.data} value={String(prefs.max_visible)} onValueChange={(v) => void save({ max_visible: Number(v) })}>
+            <SelectTrigger id="list-count" className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>{[5, 10, 15].map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="list-idle">{tr("无 Turn 更新后收起", "Fold after inactivity")}</Label>
+          <Select disabled={busy || !st.data} value={String(prefs.idle_hours)} onValueChange={(v) => void save({ idle_hours: Number(v) })}>
+            <SelectTrigger id="list-idle" className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>{[12, 24, 72, 0].map((n) => <SelectItem key={n} value={String(n)}>
+              {n === 0 ? tr("关闭", "Off") : n === 72 ? tr("3 天", "3 days") : tr(`${n} 小时`, `${n} hours`)}
+            </SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+      </>}
+      <NoteLine note={note} />
+    </CardContent>
+  </Card>;
+};
+
 // ── 界面 ───────────────────────────────────────────────────────────────────
 
 const Look: FC = () => {
@@ -467,7 +524,7 @@ export default function SettingsPage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-5 md:px-6 md:py-8">
       <PageHeader title={tr("设置", "Settings")} />
       <Profile />
-      {me?.person ? <><SignInWays /><MyConfig /><ChatCopyCard /><LocalCacheCard /></> : null}
+      {me?.person ? <><SignInWays /><MyConfig /><SessionListSettings /><ChatCopyCard /><LocalCacheCard /></> : null}
       <Look />
       {me?.can_logout ? (
         <SignOut>

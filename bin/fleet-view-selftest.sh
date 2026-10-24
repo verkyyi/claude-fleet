@@ -176,7 +176,7 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5; to capture-pane -p -t o:view > "$W/popup.txt"; grep -q 'Beta 要你拍板' "$W/popup.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "B: ⌘P in the 看台 opened no list: $(cat "$W/popup.txt")"
-for want in 'Beta 要你拍板' 'Alpha 的完整标题很长很长' 'Old 做完的' '▸ 更早的会话'; do
+for want in 'Beta 要你拍板' 'Alpha 的完整标题很长很长' 'Old 做完的' '▸ 更多会话'; do
   grep -qF "$want" "$W/popup.txt" || st_fail "B: the list lacks 「${want}」: $(cat "$W/popup.txt")"
 done
 # no session is special (issue #3119): no orchestrator 「新任务」 row, no 停放 / 待你动手
@@ -187,7 +187,7 @@ done
 grep -A1 '│  › ' "$W/popup.txt" | tail -1 | grep -q '✦ 消息' || st_fail "B: the first line is not ✦ 消息: $(head -4 "$W/popup.txt")"
 grep -A2 '│  › ' "$W/popup.txt" | tail -1 | grep -q '  + 新会话' || st_fail "B: the second line is not + 新会话: $(head -5 "$W/popup.txt")"
 grep -A3 '│  › ' "$W/popup.txt" | tail -1 | grep -q '  \$ 命令行' || st_fail "B: the third line is not $ 命令行: $(head -6 "$W/popup.txt")"
-grep -A4 '│  › ' "$W/popup.txt" | tail -1 | grep -q 'Alpha 的完整标题很长很长' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
+grep -A4 '│  › ' "$W/popup.txt" | tail -1 | grep -q '待处理 · 1' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
 [ "$(grep -c '+ 新会话' "$W/popup.txt")" = 1 ] && ! grep -q '⚡' "$W/popup.txt" || st_fail "B: the + 新会话 row not once: $(grep -n '新会话' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
@@ -217,12 +217,12 @@ ok=''; for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
   grep -q 'Old 收起的' "$W/fold.txt" && { ok=1; break; }
 done
 [ -n "$ok" ] || st_fail "B: → on the 已收起 heading did not open it: $(cat "$W/fold.txt")"
-grep -q '▾ 更早的会话' "$W/fold.txt" || st_fail "B: → opened 已收起 but its caret is not ▾: $(grep -F 已收起 "$W/fold.txt")"
+grep -q '▾ 更多会话' "$W/fold.txt" || st_fail "B: → opened 已收起 but its caret is not ▾: $(grep -F 已收起 "$W/fold.txt")"
 to send-keys -t o:view Right; shot
 grep -q 'Old 收起的' "$W/fold.txt" || st_fail "B: a second → shut 已收起"
 to send-keys -t o:view Left; shot
 grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: ← on the open 已收起 heading did not shut it"
-grep -q '▸ 更早的会话' "$W/fold.txt" || st_fail "B: ← shut 已收起 but its caret is not ▸"
+grep -q '▸ 更多会话' "$W/fold.txt" || st_fail "B: ← shut 已收起 but its caret is not ▸"
 to send-keys -t o:view Left; shot
 grep -q 'Old 收起的' "$W/fold.txt" && st_fail "B: a second ← opened 已收起"
 to send-keys -t o:view Enter; shot

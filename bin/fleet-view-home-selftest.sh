@@ -149,9 +149,9 @@ def panel(h):
 
 want, _ = panel("B")
 assert not any(r[0] == "hdr" for r in want), want
-assert [r[1] for r in want] == [D, M1, M2], want
-assert [r[4] for r in want] == ["work", "quiet", "needs"], want
-assert [r[5] for r in want] == ["T9", "T10", "T11"], want
+assert [r[1] for r in want] == [M2, D, M1], want
+assert [r[4] for r in want] == ["needs", "work", "quiet"], want
+assert [r[5] for r in want] == ["T11", "T9", "T10"], want
 assert all(r[6:] == (None, False, "null") for r in want), want
 assert not os.path.exists(os.path.join(W, "children-queries")), "panel queried the old child ledger"
 

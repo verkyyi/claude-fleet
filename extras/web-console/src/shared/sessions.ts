@@ -61,7 +61,8 @@ export type BoardRow = {
   history?: { id: string; status: string; resume_id?: string };
 };
 // machines (会话合一 Y01K): how many machines the person has — one ⇒ no machine name anywhere
-export type Board = { rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string; machines?: number };
+export type SessionListPreferences = { max_visible: number; idle_hours: number };
+export type Board = { session_list?: SessionListPreferences; rows: BoardRow[]; count: number; groups: Record<string, number>; gone_days: number; gone_more?: number; digest: string; machines?: number };
 
 type LiveBody = { etag?: string; sessions?: { machine_name?: string; tokens_today?: number; worker?: Record<string, unknown> }[]; board?: Board };
 type EndedBody = { sessions?: { worker_id?: string; resume_id: string; key: string; title?: string; repo?: string; machine_name?: string; ended_at?: string }[] };

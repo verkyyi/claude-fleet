@@ -201,15 +201,17 @@ class EpicOnBoard(unittest.TestCase):
     def test_all_members_visible_without_driver_expansion(self):
         items, drv = self.board_epic(["work", "work"])
         drv["expanded"] = False
-        shown = v.visible(items, "", set())
-        self.assertEqual([e["target"] for e in shown], ["@1", "@9", "@2", "@3"])
+        with patch.object(v.time, "time", return_value=0):
+            shown = v.visible(items, "", set())
+        self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["@1", "@9", "@2", "@3"])
         self.assertTrue(all(not e.get("fold") and not e.get("epic") and not e.get("depth") for e in shown))
 
     def test_members_in_other_groups_stay_independent(self):
         items, drv = self.board_epic(["ask"])
         drv["expanded"] = False
-        shown = v.visible(items, "", set())
-        self.assertEqual([e["target"] for e in shown], ["@2", "@1", "@9"])
+        with patch.object(v.time, "time", return_value=0):
+            shown = v.visible(items, "", set())
+        self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["@2", "@1", "@9"])
         self.assertTrue(all(not e.get("fold") and not e.get("epic") for e in shown))
 
 

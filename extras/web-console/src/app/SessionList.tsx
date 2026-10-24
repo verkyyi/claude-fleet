@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { isTerminal, listItem, listRows, listStatus, listStatusLabel, rowMeta, rowRef, searchRows, type ListGroups } from "./session-list";
+import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, rowMeta, rowRef, searchRows, type CompactGroups } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
@@ -231,7 +231,7 @@ function useOpenRef() {
 // The list itself. `variant` side = inside the computer's left column (shadcn
 // SidebarMenu, folds to its glyphs); page = the phone's whole screen.
 export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ variant, chatHome }) => {
-  const { rows, failed, reload } = useWorkRows();
+  const { rows, board, failed, reload } = useWorkRows();
   const { q } = useListUi();
   // 会话合一: the web's old conversation is a session of the list now (「我的对话」),
   // no row of its own — kept only on the old road
@@ -239,11 +239,19 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const { ref, pathname } = useOpenRef();
   const [goneOpen, setGoneOpen] = useState(false);
   const [pressed, setPressed] = useState<Row | null>(null);
-  const previous = useRef<ListGroups | undefined>(undefined);
+  const previous = useRef<CompactGroups | undefined>(undefined);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [pointing, setPointing] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  const keyTimer = useRef(0);
+  useEffect(() => () => clearTimeout(keyTimer.current), []);
+  useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(t); }, []);
   if (rows === null) return failed ? <div className="px-3"><Failed what={tr("会话", "your sessions")} onRetry={reload} /></div> : <div className="px-3"><Loading /></div>;
-  const grouped = listRows(rows, previous.current);
+  const grouped = compactRows(rows, { current: ref, preferences: board?.session_list, now, previous: previous.current, interacting: pointing || focused });
   previous.current = grouped;
-  const ordered = [...grouped.pin, ...grouped.open, ...grouped.gone];
+  const searchGroups = listRows(rows);
+  const ordered = [...searchGroups.pin, ...searchGroups.open, ...searchGroups.gone];
   const webActive = pathname === WEB_CHAT_PATH || (!!chatHome && pathname === "/");
   const row = (r: Row) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed} />;
   const List = variant === "side" ? SidebarMenu : "ul";
@@ -256,19 +264,29 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
-    const { pin, open, gone } = grouped;
+    const { pin, attention, attentionVisible, open, gone } = grouped;
+    const runningHidden = gone.filter((r) => listStatus(r).kind === "work").length;
+    const attentionTotal = rows.filter(needsAttention).length;
     // The old chat entry remains above the task list for older hubs.
     body = (
       <>
         {oldRoad ? <List>{web}</List> : null}
-        {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><List>{pin.map(row)}</List></> : null}
+        {attentionTotal ? <>
+          <button type="button" aria-expanded={attentionOpen} onClick={() => setAttentionOpen(!attentionOpen)}
+            className="text-clay flex min-h-8 w-full items-center gap-2 px-4 text-sm group-data-[collapsible=icon]:hidden">
+            {attentionOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+            {tr("待处理", "Needs attention")} · {attentionTotal}
+          </button>
+          <List>{(attentionOpen ? rows.filter((r) => needsAttention(r) && r.group !== "pin" && rowRef(r) !== ref) : attention.slice(0, attentionVisible)).map(row)}</List>
+        </> : null}
+        {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{pin.map(row)}</List></div></> : null}
         <List>{open.map(row)}</List>
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
               variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
             {goneOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("更早的会话", "Earlier sessions")}<span className="font-mono"> · {gone.length}</span></span>
+            <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("更多会话", "More sessions")}<span className="font-mono"> · {gone.length}</span>{runningHidden ? tr(` · ${runningHidden} 个运行中`, ` · ${runningHidden} running`) : null}</span>
           </button>
           {goneOpen ? <List>{gone.map(row)}</List> : null}
         </> : null}
@@ -276,7 +294,9 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
     );
   }
   return (
-    <div data-session-list={variant}>
+    <div data-session-list={variant} onPointerEnter={() => setPointing(true)} onPointerLeave={() => setPointing(false)}
+      onPointerCancel={() => setPointing(false)} onPointerUp={(e) => { if (e.pointerType !== "mouse") setPointing(false); }}
+      onKeyDownCapture={() => { setFocused(true); clearTimeout(keyTimer.current); keyTimer.current = window.setTimeout(() => setFocused(false), 1200); }} onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false); }}>
       <SearchBox />
       {body}
       {variant === "page" ? <PressSheet r={pressed} onClose={() => setPressed(null)} /> : null}
