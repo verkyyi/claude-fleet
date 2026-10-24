@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-break-it-sshprompt-selftest.sh — the docs/dev/BREAK-IT.md row of an ssh
-# question landing on a session's pane: on 2026-10-23 mini2's LAN address changed,
-# a login's `phone` MCP server (`ssh m4 …`, started by every Claude launch) met an
+# question landing on a session's pane: on 2026-10-23 a machine's LAN address changed,
+# a login's `phone` MCP server (`ssh <machine> …`, started by every Claude launch) met an
 # unknown host, and ssh — which opens /dev/tty for its yes/no whatever its stdio —
 # painted the question over several sessions and ate the person's keys. The drill
 # runs that ssh for real (a REAL sshd as `sshd -i` behind a ProxyCommand, a
@@ -32,11 +32,11 @@ drill_ssh_prompt_on_pane() {
   printf 'HostKey %s\nPidFile none\nStrictModes no\nUsePAM no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' "$d/host" > "$d/sshd_config"
   /usr/sbin/sshd -t -f "$d/sshd_config" >/dev/null 2>&1 || { WHAT="SKIP — sshd refuses a sandbox config here"; SECS=0; rm -rf "$d"; return 0; }
   # the machine is reached by a name its known_hosts has never seen (a new DHCP address)
-  printf 'Host m4\n  ProxyCommand /usr/sbin/sshd -i -f %s\n  GlobalKnownHostsFile /dev/null\n  UserKnownHostsFile %s\n  StrictHostKeyChecking ask\n' \
+  printf 'Host peer\n  ProxyCommand /usr/sbin/sshd -i -f %s\n  GlobalKnownHostsFile /dev/null\n  UserKnownHostsFile %s\n  StrictHostKeyChecking ask\n' \
     "$d/sshd_config" "$d/known_hosts" > "$d/ssh_config"
   : > "$d/known_hosts"
   # what the MCP server did: ssh with every stdio away from the pane
-  printf '#!/bin/bash\nssh -F %s -T m4 true </dev/null >/dev/null 2>%s; echo "rc=$?" >> %s\nwhile [ ! -e %s ]; do sleep 0.1; done\n' \
+  printf '#!/bin/bash\nssh -F %s -T peer true </dev/null >/dev/null 2>%s; echo "rc=$?" >> %s\nwhile [ ! -e %s ]; do sleep 0.1; done\n' \
     "$d/ssh_config" "$d/err" "$d/err" "$d/go" > "$d/launch"
   chmod +x "$d/launch"
   mkdir -p "$d/bin" "$d/conf"
