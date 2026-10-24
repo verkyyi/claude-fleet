@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // The ONE session list (claude-fleet A4G2): the console's 会话 and the ⌘P panel
@@ -211,6 +212,26 @@ func boardAskRank(tag string) int {
 		return 0
 	}
 	return 1
+}
+
+// controlledEnded: a controlled record whose result is in keeps its binding after
+// its session ends (T539: succeeded, its ID closed, execution_owner still set). It
+// is history once nothing runs for it — no current worker, that worker's ID
+// closed on the hub, or (its ID not listed) the record older than the board's
+// window — never 看不到会话. A worker ID still open stays not_seen.
+func controlledEnded(t *store.FleetTask, end, worker string, idBy map[string]*store.BoardID, since time.Time) bool {
+	if end == "" {
+		return false
+	}
+	if worker == "" {
+		return true
+	}
+	if _, key, err := fleetid.ParseWorkerID(worker); err == nil {
+		if b := idBy[key]; b != nil {
+			return b.Closed != 0
+		}
+	}
+	return t.UpdatedAt.Before(since)
 }
 
 var boardGroupOrder = map[string]int{"pin": 0, "ask": 1, "work": 2, "queue": 3, "gone": 4}
@@ -516,7 +537,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		switch {
 		case s.boardPendingStart(t):
 			r.Group, r.Tag = "queue", "starting"
-		case controlled[t]:
+		case controlled[t] && !controlledEnded(t, end, currentWorker[t], idBy, since):
 			r.Group, r.Tag = "queue", "not_seen"
 			r.Lost = currentWorker[t] != ""
 			if currentWorker[t] == "" && t.ExecutionEndpoint == "" {

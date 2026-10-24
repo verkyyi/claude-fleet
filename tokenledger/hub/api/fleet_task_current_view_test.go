@@ -190,3 +190,73 @@ func TestTaskCurrentAPIUsesExecutionOwner(t *testing.T) {
 		t.Fatalf("unclaimed API selected old live: %v", out)
 	}
 }
+
+// A controlled Task that delivered its result and whose session closed is
+// history (已完成), not 看不到会话 — the binding stays on the record after the
+// session ends (T539/T547: succeeded, ID closed, execution_owner kept). While its
+// current session is still open on the hub, an unseen one stays not_seen.
+func TestTaskBoardControlledEndedIsHistory(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	rec, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "先 sleep 180 秒", AuthorityVersion: 1, RequestedAgent: "default", ResolvedAgent: "claude"}, "controlled-ended", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet, worker := "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333"
+	push := func(ev string, seq int) {
+		t.Helper()
+		e := map[string]any{"ev": ev, "seq": float64(seq), "ts": float64(now.Unix()), "task": rec.Ref, "task_id": rec.FID, "agent": "claude"}
+		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: rec.Owner, EndpointID: "ep", ID: worker, Events: []map[string]any{e}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set := func(q string, args ...any) {
+		t.Helper()
+		if _, err := st.DB().Exec(q, append(args, rec.ID)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func() (BoardRow, bool) {
+		t.Helper()
+		b, err := s.buildBoard(rec.Owner, nil, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range b.Rows {
+			if r.Task == rec.Ref {
+				return r, true
+			}
+		}
+		return BoardRow{}, false
+	}
+	push("opened", 1)
+	set(`UPDATE fleet_tasks SET execution_endpoint = 'ep', execution_owner = ?, worker_id = ?, state = 'succeeded', outcome = 'succeeded' WHERE id = ?`, fleet+"/"+worker, fleet+"/"+worker)
+	if r, _ := read(); r.Tag != "not_seen" || !r.Lost {
+		t.Fatalf("result in, session still open but unseen: %+v", r)
+	}
+	push("closed", 2)
+	if r, _ := read(); r.Group != "gone" || r.Tag != "completed" || r.Lost {
+		t.Fatalf("result in, session closed: %+v", r)
+	}
+	set(`UPDATE fleet_tasks SET outcome = 'cancelled', state = 'cancelled' WHERE id = ?`)
+	if r, _ := read(); r.Group != "gone" || r.Tag != "cancelled" {
+		t.Fatalf("cancelled, session closed: %+v", r)
+	}
+	set(`UPDATE fleet_tasks SET outcome = '', state = 'running' WHERE id = ?`)
+	if r, _ := read(); r.Tag != "not_seen" {
+		t.Fatalf("no result yet stays not_seen: %+v", r)
+	}
+	set(`UPDATE fleet_tasks SET outcome = 'succeeded', state = 'succeeded', execution_owner = '' WHERE id = ?`)
+	if r, _ := read(); r.Group != "gone" || r.Tag != "completed" {
+		t.Fatalf("result in, binding released: %+v", r)
+	}
+	old := now.Add(-(boardGoneDays + 1) * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	set(`UPDATE fleet_tasks SET execution_owner = ?, updated_at = ? WHERE id = ?`, fleet+"/"+worker, old)
+	if _, err = st.DB().Exec(`UPDATE fleet_ids SET closed_at = ? WHERE id = ?`, now.Add(-(boardGoneDays+1)*24*time.Hour).Unix(), worker); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := read(); ok {
+		t.Fatalf("ended past the board's window stays listed: %+v", r)
+	}
+}
