@@ -295,8 +295,9 @@ al = bg["id:" + ALONE]
 assert al["agent"] == "codex" and al["gone"] and al["sec"] == "gone" and al["text"].startswith("5018"), al
 assert "id:" + DEAD not in bg and "id:" + DRV0 in bg and bg["id:" + DRV0]["agent"] == "claude", sorted(bg)
 assert "id:" + OLDGEN in bg and bg["id:" + OLDGEN]["agent"] == "codex", sorted(bg)
-assert not any(a[0]["id"] == "resume" for a in fv.page_of(al)) and any(a[0]["id"] == "resume" for a in fv.page_of(h42)), \
-    (fv.page_of(al), fv.page_of(h42))   # nothing to restore off a ledger alone
+# nothing to restore off a ledger alone: its 恢复 is greyed with the reason (never runnable)
+assert all(a[2] for a in fv.page_of(al) if a[0]["id"] == "resume") and any(a[0]["id"] == "resume" for a in fv.page_of(h42)), \
+    (fv.page_of(al), fv.page_of(h42))
 
 # --- H: the read path with 200 closed IDs — no process started, no hub asked, < 100 ms (T593)
 import subprocess, shutil
