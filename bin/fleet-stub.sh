@@ -30,7 +30,7 @@ trap 'exit 0' HUP TERM
 size() { local s; s=$(stty size 2>/dev/null) && cols=${s#* }; case "$cols" in ''|*[!0-9]*) cols=80 ;; esac; [ "$cols" -gt 20 ] || cols=80; }
 finish() {
   local i=0
-  for q in "${queue[@]}"; do printf '%s' "$q" >"$dir/q.$i"; i=$((i + 1)); done
+  for q in ${queue[@]+"${queue[@]}"}; do printf '%s' "$q" >"$dir/q.$i"; i=$((i + 1)); done
   printf '%s' "$buf" >"$dir/buf"
   : >"$dir/frozen"
   printf '\033[?2004l'

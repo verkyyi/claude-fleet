@@ -141,6 +141,9 @@ export HOME="$W/home" FLEET_CONF_DIR="$W/conf" FLEET_STATUS_G="$W/g" FLEET_UI_LA
   SHELL=/bin/sh FLEET_VIEW_ROWS_CMD="cat '$W/rows.txt'"
 unset TMUX TMUX_PANE FLEET_SHELL FLEET_SESSION FLEET_CLIENT
 # C7's keys are a person's to add since issue #3185 (by default only the panel)
+# the 「新会话」 box opens its stub window first (T992); the new sessions here are
+# shells, never an agent's input, so its handoff need not wait the 90 s for one
+export FLEET_STUB_READY_SECS=2
 export FLEET_KEYS_EXTRA='next=cmd+down prev=cmd+up back=cmd+[ fwd=cmd+] new=cmd+n dispatch=cmd+t quit=cmd+q shell=ctrl+\\'
 export FLEET_KEYS_PHONE_EXTRA='ctrl+]n=next ctrl+]b=prev ctrl+]c=new ctrl+]t=dispatch ctrl+]q=quit ctrl+]\\=shell'
 
@@ -233,7 +236,8 @@ for line in open(sys.argv[1]):
     r = json.loads(line)
     assert set(r) == {"ts", "what", "seg", "ms"} and r["what"] == "session", r
     runs.setdefault(r["ts"], []).append(r["seg"])
-sys.exit(0 if runs and all(v == ["switched"] for v in runs.values()) else 1)
+# `shown` too: the box's stub window on the screen (T992), before the switch
+sys.exit(0 if runs and all(sorted(v) == ["shown", "switched"] for v in runs.values()) else 1)
 PY
 rm -f "$W/g/orch_fl"
 # another machine's C4 window (made here, link up) — the S and Q legs use it
