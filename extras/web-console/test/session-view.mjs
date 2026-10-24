@@ -49,3 +49,12 @@ assert.equal(prependOlder(h, ['a'], 30, { items: ['y'], older: 0, session: 's1' 
 assert.equal(prependOlder(h, ['a'], 40, { items: ['y'], older: 0, session: 's9' }), null, 'another conversation\'s page is dropped');
 assert.equal(prependOlder(NOTHING, ['a'], 0, { items: ['y'], session: '' }), null, 'nothing from the machine yet: no page before');
 console.log('session-view: ok');
+
+// beside the title (T981): a history read to its end is in sync though its
+// stream is closed; a live stream that dropped still says 同步中, then offline
+import { syncRaw } from '../src/app/chat/view-stream.ts';
+assert.equal(syncRaw({ live: false, read: true, access: 'readonly', count: 4 }), '', 'a finished history is not 家机器暂时连不上');
+assert.equal(syncRaw({ live: false, read: false, access: 'readonly', count: 4 }), 'syncing', 'a dropped stream is not in sync');
+assert.equal(syncRaw({ live: true, access: 'writable', layer: 'home' }), '');
+assert.equal(syncRaw({ live: false, read: true, gate: { code: 'home_down' } }), 'offline', 'a down home still says so');
+assert.equal(syncRaw({ live: true, access: 'offline' }), 'offline');

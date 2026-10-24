@@ -17,6 +17,16 @@ export function writeAccess(state: { can_talk?: boolean | null; talk_reason?: st
 }
 
 // one SSE block → its id and its data (the service writes one data line per event)
+// How far the page is from the session's machine, said beside the title:
+// "" in sync · "syncing" · "offline". A history read to its end (history_end)
+// is in sync with its stream closed — never 同步中 nor 家机器暂时连不上 (T981).
+export type SyncRaw = "" | "syncing" | "offline";
+export function syncRaw(v: { gate?: { code: string } | null; access?: string; read?: boolean; live?: boolean; count?: number; layer?: string | null }): SyncRaw {
+  if (v.gate?.code === "home_down" || v.access === "offline") return "offline";
+  if (v.read) return "";
+  return !v.live || v.access === "checking" || (v.gate && v.count) || (v.layer && v.layer !== "home") ? "syncing" : "";
+}
+
 export function parseEvent(block: string): { id?: number; data?: Record<string, unknown> } {
   let id: number | undefined, data = "";
   for (const line of block.split("\n")) {
