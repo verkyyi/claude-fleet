@@ -262,14 +262,14 @@ class Bridge:
             u.close()   # it let go while we dialled: whoever answered is not the command
             u = None
         if u is None:
-            try:
-                c.sendall(STARTING)
-            except OSError:
-                pass
-            c.close()
+            refuse(c)
             return
-        threading.Thread(target=pump, args=(u, c), daemon=True).start()
+        back = threading.Thread(target=pump, args=(u, c), daemon=True)
+        back.start()
         pump(c, u)
+        back.join()
+        u.close()
+        c.close()
 
     def close(self):
         try:
@@ -279,6 +279,21 @@ class Bridge:
                 os.unlink(self.path)
             except OSError:
                 pass
+
+
+def refuse(c):
+    """503, then read the request out before closing: closing with unread bytes
+    makes Linux reset the connection, and the reset can eat the 503."""
+    try:
+        c.sendall(STARTING)
+        c.shutdown(socket.SHUT_WR)
+        c.settimeout(2)
+        while c.recv(65536):
+            pass
+    except OSError:
+        pass
+    finally:
+        c.close()
 
 
 def pump(a, b):

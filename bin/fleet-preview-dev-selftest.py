@@ -62,7 +62,8 @@ SERVERS = {
     ''',
     'dropper': '''
         import os, socket, time
-        s = socket.socket(); s.bind(('127.0.0.1', int(os.environ['PORT']))); s.listen(8)
+        s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(('127.0.0.1', int(os.environ['PORT']))); s.listen(8)
         open(os.environ['OUT'] + '/port', 'w').write(os.environ['PORT'])
         while not os.path.exists(os.environ['OUT'] + '/drop'):
             s.settimeout(0.05)
@@ -149,7 +150,15 @@ def foreign(port, word=b'FOREIGN'):
     """A listener this test owns — outside the command's process tree."""
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(('127.0.0.1', port))
+    end = time.time() + 5
+    while True:   # the port's last connections may still be closing (Linux)
+        try:
+            s.bind(('127.0.0.1', port))
+            break
+        except OSError:
+            if time.time() > end:
+                raise
+            time.sleep(0.05)
     s.listen(8)
 
     def serve():
