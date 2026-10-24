@@ -173,3 +173,48 @@ func TestChatFileOfSession(t *testing.T) {
 		t.Errorf("a refused file request reached the service")
 	}
 }
+
+// A closed session's history (task T981: a migrated 我的对话 too) names files by
+// ref: ?worker=fid:<id> reads them on the login the record says it ran on, while
+// that login is still the person's own; another person's FID is 404 not_yours.
+func TestChatFileOfClosedHistory(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	enablePeople(t, h, pCarol)
+	const fid = "55555555-5555-4555-8555-555555555555"
+	now := time.Now()
+	if _, err := h.Srv.Store.ApplyFleetIDEvents(store.FleetIDPush{Owner: pAlice, EndpointID: "ep_chat-entry", Machine: host, Login: login, ID: fid,
+		Events: []map[string]any{{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix())},
+			{"ev": "closed", "seq": float64(2), "ts": float64(now.Unix())}}}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err := h.Srv.Store.FleetIDOf(pAlice, fid); err != nil || rec.ClosedAt <= 0 || rec.Machine != host {
+		t.Fatalf("closed record: %+v %v", rec, err)
+	}
+	setChatHome(t, h, pAlice, host, login)
+	setChatHome(t, h, pCarol, "elsewhere", "carol")
+	ref := strings.Repeat("cd", 16) + ".png"
+	get := func(c *http.Cookie, q string) int {
+		req, _ := http.NewRequest("GET", h.HTTP.URL+"/v1/chat/file"+q, nil)
+		req.AddCookie(c)
+		resp, err := h.HTTP.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := get(personCookie(pAlice, "alice"), "?ref="+ref+"&worker=fid:"+fid); c != http.StatusOK {
+		t.Fatalf("alice's closed history's image: %d; want 200", c)
+	}
+	n := len(svc.seen())
+	if c := get(personCookie(pCarol, "carol"), "?ref="+ref+"&worker=fid:"+fid); c != http.StatusNotFound {
+		t.Errorf("carol reading alice's closed history's file: %d; want 404", c)
+	}
+	if c := get(personCookie(pAlice, "alice"), "?ref="+ref+"&worker=fid:scratch-3"); c != http.StatusNotFound {
+		t.Errorf("a key is not a closed history: %d; want 404", c)
+	}
+	if len(svc.seen()) != n {
+		t.Errorf("a refused file request reached the service")
+	}
+}

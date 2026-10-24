@@ -47,6 +47,25 @@ const (
 	defaultChatViewPerMinute = 30
 )
 
+// closedHistory resolves a page's worker=fid:<id> (or <fleet>/<id>) to a closed
+// session the person owns, and the login its history lives on. Only a full FID
+// is accepted; recycled keys never resolve closed history. The view and the
+// files its items name (task T981: a migrated conversation's pictures) share it.
+func (s *Server) closedHistory(person, worker string) (string, store.EntryHome, bool) {
+	ref := strings.TrimPrefix(worker, "fid:")
+	if i := strings.LastIndexByte(ref, '/'); i >= 0 {
+		ref = ref[i+1:]
+	}
+	if !store.IsFleetID(ref) {
+		return "", store.EntryHome{}, false
+	}
+	rec, err := s.Store.FleetIDOf(person, ref)
+	if err != nil || rec.ClosedAt <= 0 {
+		return "", store.EntryHome{}, false
+	}
+	return ref, store.EntryHome{Person: person, Machine: rec.Machine, Login: rec.Login}, true
+}
+
 func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -104,14 +123,9 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 	historical := false
 	// History has an owner-scoped identity even after WorkersJSON forgets it.
 	// Only a full FID is accepted; recycled keys never resolve closed history.
-	ref := strings.TrimPrefix(q.Get("worker"), "fid:")
-	if i := strings.LastIndexByte(ref, '/'); i >= 0 {
-		ref = ref[i+1:]
-	}
-	if code != "" && store.IsFleetID(ref) {
-		if rec, err := s.Store.FleetIDOf(person, ref); err == nil && rec.ClosedAt > 0 {
-			wid, target = "fid:"+ref, control.TermWorkerTarget(ref)
-			dest = store.EntryHome{Person: person, Machine: rec.Machine, Login: rec.Login}
+	if code != "" {
+		if ref, hdest, ok := s.closedHistory(person, q.Get("worker")); ok {
+			wid, target, dest = "fid:"+ref, control.TermWorkerTarget(ref), hdest
 			status, code, msg, historical = 0, "", "", true
 			fwd.Set("history", "1")
 			if r.URL.Query().Get("status") == "1" {
