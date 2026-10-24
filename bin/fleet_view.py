@@ -2190,6 +2190,8 @@ def board_apply(board, groups, shut, gone, here, me):
     out_gone = []
     for source_order, r in enumerate(board.get("rows") or []):
         g = r.get("group") or "queue"
+        if g == "gone" and probe_title(r.get("title") or ""):
+            continue   # BCYB: 已收起 lists no probe — the hub's closed rows either
         e = by_fid.get(r.get("id") or "") or by_wid.get(r.get("worker_id") or "")
         if e is not None and id(e) in used:
             e = None
@@ -2204,6 +2206,8 @@ def board_apply(board, groups, shut, gone, here, me):
                  "code": r.get("code") or "", "id": (r.get("code") or "")[:4], "fid": r.get("id")}
             if g == "gone":
                 e["gone"] = True
+                # this machine's and login's own closed ID: 恢复 reopens it here
+                e["home"] = (r.get("machine") or here) == here and (r.get("login") or me) == me
         else:
             used.add(id(e))
             if r.get("title"):
@@ -4155,6 +4159,69 @@ def far_live(r):
     return bool(r.get("far")) and r.get("state") != "exited" and not ended(r)
 
 
+def reopen_fid(r):
+    """The closed session's ID a 已收起 row reopens: the row's own, else its `id:` target."""
+    t = r.get("target") or ""
+    return r.get("fid") or (t[3:] if t.startswith("id:") else "")
+
+
+def reopen_row(r):
+    """A closed session of 已收起 that 恢复 reopens as the SAME ID through
+    fleet-id.sh reopen: one only its ledger remembers (`id:`), or a task's history
+    row (`landed:` + its task — the others keep fleet-restore-pick's road). Only
+    this machine's and login's own (a row made here, or the hub's whose machine and
+    login are these); another machine's is restored there. A task's row reopens
+    its CONVERSATION only — the record is not touched, nothing is dispatched; going
+    on with the task itself is still 继续任务 (#5396)."""
+    t = r.get("target") or ""
+    return bool(r.get("gone") and reopen_fid(r) and r.get("home", not r.get("far"))
+                and (t.startswith("id:") and r.get("ledger") or t.startswith("landed:") and r.get("task")))
+
+
+_REOPEN = {}
+
+
+def reopen_check(r):
+    """(why, from): fleet-id.sh reopen --check --rebuild, asked once per ID while the
+    popup runs — why "" = 恢复 can run, else the road's own refusal (the
+    conversation not found, a worktree that cannot be made again); from = the
+    branch a reaped worktree is made again off ("" = it is still there)."""
+    fid = reopen_fid(r)
+    if fid not in _REOPEN:
+        env = dict(os.environ)
+        env.pop("TMUX_PANE", None)
+        frm = ""
+        try:
+            p = subprocess.run(sh("fleet-id.sh", "reopen", fid, "--check", "--rebuild"), env=env,
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+            why = "" if p.returncode == 0 else one_line(((p.stderr.strip() or p.stdout.strip()).splitlines()
+                                                         or ["?"])[-1], 120)
+            if not why and p.stdout.startswith("ok rebuild "):
+                frm = p.stdout.split()[2] if len(p.stdout.split()) > 2 else "?"
+        except (OSError, subprocess.TimeoutExpired):
+            why = "?"
+        _REOPEN[fid] = (("Can't restore: " if ui_lang() == "en" else "无法恢复：") + why if why else "", frm)
+    return _REOPEN[fid]
+
+
+def reopen_why(r):
+    return reopen_check(r)[0]
+
+
+def reopen_label(r):
+    """恢复, and what it will do beyond reopening: a reaped worktree made again off
+    <branch>, a task's record left as it is."""
+    a = ACTION["resume"]
+    frm = reopen_check(r)[1]
+    en = ui_lang() == "en"
+    notes = []
+    if frm:
+        notes.append(("worktree rebuilt from %s" % frm) if en else "工作目录按 %s 重建" % frm)
+    if r.get("task"):
+        notes.append("conversation only, task unchanged" if en else "只恢复对话，任务不变")
+    return a["label"](r) + ("（%s）" % "；".join(notes) if notes and not en else " (%s)" % "; ".join(notes) if notes else "")
+
+
 # Each entry: id · label · when · local · far · ask (+ prompt / choices / slow: run
 # in the background from the popup — a stop, a reap, a move take seconds).
 ACTIONS = [
@@ -4205,8 +4272,9 @@ ACTIONS = [
      "local": lambda r, a, f: "taskstop", "far": lambda r, a, f: "taskstop", "ask": None,
      "slow": True, "thread": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
-     "when": lambda r: not r.get("task") and ((r.get("gone") and not r.get("ledger")) or (r.get("state") == "exited" and (r.get("far") or r.get("page")))),
-     "local": lambda r, a, f: "restore" if r.get("gone") else "resume", "far": far("resume"), "ask": None,
+     "when": lambda r: reopen_row(r) or (not r.get("task") and ((r.get("gone") and not r.get("ledger")) or (r.get("state") == "exited" and (r.get("far") or r.get("page"))))),
+     "local": lambda r, a, f: "reopen" if reopen_row(r) else "restore" if r.get("gone") else "resume",
+     "far": lambda r, a, f: "reopen" if reopen_row(r) else far("resume")(r, a, f), "ask": None,
      "slow": True, "keys": "yYrR"},
     # another machine's row (issue #4184): the hub's worker_transfer — the same
     # fleet-transfer.sh, run on that machine, its --dry-run's refusal said here
@@ -4288,6 +4356,9 @@ def act_row(fleet, e):
 
 def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
+    if reopen_row(r):
+        a = ACTION["resume"]
+        return [(a, a["label"](r))]
     if r.get("record_only"):
         a = ACTION["cancelstart"] if pending_start_task(r) else ACTION["stop"]
         items = [(a, a["label"](r))] if pending_start_task(r) or controlled_stop_task(r) else []
@@ -4316,6 +4387,21 @@ def page_of(r, missing=None):
     """The actions page of row `r`: [(action, label, why)] in PAGE_ACTIONS order;
     `why` non-empty = shown grey, unnumbered, skipped — the switch to an agent
     this machine lacks (`missing`: grid_read's {agent: why})."""
+    if r.get("gone") and (r.get("ledger") or r.get("task")) and not ACTION["continue"]["when"](r):
+        # 已收起's closed row: its one item is 恢复 — grey with the reason when the
+        # reopen would refuse, when it is another machine's (restored there) or
+        # when the row names no session; never a page with nothing on it
+        a = ACTION["resume"]
+        en = ui_lang() == "en"
+        if reopen_row(r):
+            why = reopen_why(r)
+            return [(a, a["label"](r) if why else reopen_label(r), why)]
+        if not r.get("home", not r.get("far")):
+            m = r.get("machine") or "?"
+            return [(a, a["label"](r), ("On %s — restore it from that machine" % m) if en
+                     else "在 %s 上：到那台机器恢复" % m)]
+        return [(a, a["label"](r), "No session is recorded for this row — nothing to reopen" if en
+                 else "这一行没有记下会话：没有可恢复的")]
     if r.get("record_only"):
         if pending_start_task(r):
             a = ACTION["cancelstart"]
@@ -4362,7 +4448,7 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     """Do one action: (rc, the line to say, went — the 看台 is on the row now).
     `wait` False runs a slow one in the background (the popup does not freeze on
     a reap)."""
-    if a.get('id') == 'resume' and r.get('task'):
+    if a.get('id') == 'resume' and r.get('task') and not reopen_row(r):
         return 1, ('Use Continue task explicitly' if ui_lang() == 'en' else '请显式选择“继续任务”'), False
     fn = a["far"] if r.get("far") else a["local"]
     argv = fn(r, ans, fleet)
@@ -4432,6 +4518,25 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         if p.returncode != 0:
             return p.returncode, say("view_act_failed_fmt", label, one_line(said, 120)), False
         return 0, say("view_act_done_fmt", label), False
+    if argv == "reopen":
+        # 已收起's closed session (reopen_row): the SAME ID reopened by the one road,
+        # fleet-id.sh reopen --exec --rebuild — its own check first (the conversation
+        # found; a reaped scratch worktree made again where it was), then
+        # dash-raw-session.sh --fid; the 看台 goes to it
+        fid = reopen_fid(r)
+        try:
+            p = subprocess.run(sh("fleet-id.sh", "reopen", fid, "--exec", "--rebuild"), env=act_env(fleet),
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, say("view_act_failed_fmt", label, ""), False
+        _REOPEN.pop(fid, None)
+        if p.returncode != 0:
+            said = ((p.stderr.strip() or p.stdout.strip()).splitlines() or [""])[-1]
+            return p.returncode, say("view_act_failed_fmt", label, one_line(said, 120)), False
+        _, wins = tm("list-windows", "-a", "-F", "#{window_id}\t#{@fleet_id}")
+        wid = next((w for w, f in (x.split("\t", 1) for x in wins.splitlines() if "\t" in x) if f == fid), "")
+        went = bool(wid) and go(qo, vid, wid, "menu", client, r) == 0
+        return 0, say("view_act_done_fmt", label), went
     if argv == "resume":
         # the wrapper's page (fleet-session-wrap.sh): ↵ resumes the same conversation
         rc, _ = tm("send-keys", "-t", r.get("pane") or r["target"], "Enter")

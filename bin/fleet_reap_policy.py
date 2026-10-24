@@ -182,7 +182,10 @@ def explain(snap, now=None):
 # A probe by its words (BCYB): a session a person or a session opened to measure
 # or try something — never work to keep. The same pattern as the hub's
 # store.IsProbeTitle (its reconcile closes one as hub:probe).
-PROBE_RE = re.compile(r"(可关|探针|空会话|放置演示|放置计时|\bprobe\b)", re.I)
+# 启动演练: bin/fleet-start-drill.sh's records; the last two: an acceptance run's
+# fixed-reply prompt, the words an agent's own test sends — nobody's work either
+PROBE_RE = re.compile(r"(可关|探针|空会话|放置演示|放置计时|启动演练|\bprobe\b"
+                      r"|^Controlled acceptance only\b|^独立验收，请只回复)", re.I)
 
 
 def is_probe_title(title):
