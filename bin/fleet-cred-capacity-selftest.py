@@ -312,6 +312,38 @@ class Capacity(unittest.TestCase):
         raw=Path(self.tmp.name,'codex-routing.json').read_text()
         self.assertNotIn('opaque',raw);self.assertNotIn('response-a',raw)
 
+    def test_long_session_past_ref_cap_stays_on_its_only_subscription(self):
+        # A Codex session resends its whole history each turn; past 4096 recorded
+        # references the table used to be wiped, and the next turn's old refs read
+        # unknown: 409 「continuation source unknown」 on a session that never left
+        # its one subscription (D3YD, T984). Evicted refs keep their one origin.
+        self.install((1,.5)); self.assertEqual(self.t.codex_pick('long')['account'],'a')
+        src=p.codex_ref('account','source-a')
+        refs=[p.codex_ref('id','item-%d'%i) for i in range(5000)]
+        for i in range(0,5000,250):
+            self.t.codex_record('long','a',refs[i:i+250],src)
+        v=self.t.codex_state['sessions']['long']
+        self.assertLessEqual(len(v['refs']),4096); self.assertEqual(v['sole'],'a')
+        for sent in (refs[:3]+refs[-3:], refs[:3]):
+            got=self.t.codex_pick('long',False,sent)
+            self.assertEqual((got['account'],got['expected_source']),('a',src))
+        self.assertEqual(self.t.codex_pick('long',False,refs[:3]+[p.codex_ref('id','never-seen')])['account'],'a')
+        # A session that ever switched has no single origin to vouch for: refuse.
+        self.t.codex_pick('moved'); self.t.codex_state['sessions']['moved'].update(sole='')
+        for i in range(0,5000,250):
+            self.t.codex_record('moved','a',refs[i:i+250],src)
+        with self.assertRaises(ValueError):self.t.codex_pick('moved',False,refs[:3])
+        # Evicted refs of two sources: no single origin either.
+        self.t.codex_pick('mixed')
+        for i in range(0,5000,250):
+            self.t.codex_record('mixed','a',refs[i:i+250],src if i<2500 else p.codex_ref('account','source-b'))
+        with self.assertRaises(ValueError):self.t.codex_pick('mixed',False,refs[:3])
+        # Below the cap an unseen ref is still refused, as before.
+        self.t.codex_pick('short'); self.t.codex_record('short','a',refs[:10],src)
+        with self.assertRaises(ValueError):self.t.codex_pick('short',False,[p.codex_ref('id','never-seen')])
+        raw=Path(self.tmp.name,'codex-routing.json').read_text()
+        self.assertNotIn('item-1',raw)
+
     def test_legacy_fallback_and_upgrade_snapshot(self):
         p.Proxy.reads={('codex','a'):dict(rl5h='95',rl7d='95'),('codex','b'):dict(rl5h='20',rl7d='20')}
         for mode in ('off','shadow','active'):

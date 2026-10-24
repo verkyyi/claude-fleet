@@ -65,6 +65,20 @@ drill_cred_codex_native_initial() {
   WHAT="原生首轮完整客户端消息/tools ID 可独立选订阅；assistant/opaque 续接仍回原源，未知源和身份复用在上游前拒绝"
 }
 
+# A long Codex session resends its whole history: past 4096 recorded references
+# the table was wiped and every next turn refused as «continuation source unknown».
+drill_cred_codex_refs_overflow() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" \
+    Capacity.test_long_session_past_ref_cap_stays_on_its_only_subscription \
+    Capacity.test_affinity_pin_encrypted_tool_and_unknown 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="超过 4096 条引用的长会话仍回它唯一的订阅；换过订阅、来源不一或没超限时查不到的引用照旧拒绝"
+}
+
 # Shared rollout must preserve native picks before root drops, or legacy
 # launchd bootout kills the only in-memory source. Exercise the real uid-gated
 # control handler without request peer_uid seams; socket and file I/O are real.

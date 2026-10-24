@@ -455,6 +455,10 @@ def meter_accept(v):
     return ", ".join(keep) or "identity"
 
 
+# Continuation refs kept per session (shared/credproxy MaxCodexReferences per request).
+CODEX_REFS_MAX = 4096
+
+
 def codex_ref(kind, value):
     return hashlib.sha256(("fleet-codex-affinity-v1\0" + kind + "\0" + value).encode()).hexdigest()
 
@@ -1586,6 +1590,17 @@ class Tenant:
     def save_codex_state(self):
         write_json(os.path.join(self.cfg.state, "codex-routing.json"), self.codex_state)
 
+    @staticmethod
+    def codex_ref_origin(old, ref):
+        """A ref's recorded origin. One evicted from a session past CODEX_REFS_MAX
+        counts as the session's only origin — never after a switch or a source
+        change (sole / sole_source), never below the cap."""
+        known = old.get("refs", {})
+        if ref in known:
+            return known[ref]
+        ev, sole, src = old.get("evicted_origin"), old.get("sole"), old.get("sole_source")
+        return ev if ev and sole and src and ev == sole + "\0" + src else None
+
     def codex_pick(self, sid, independent=True, refs=(), unknown=False, pin="", preview=False, proposed=False):
         """Serialize per-tenant independent boundaries. References never change a
         binding. Preview executes the same calculation without any routing writes.
@@ -1667,7 +1682,7 @@ class Tenant:
                 # Resolve all references to one original subscription. Unknown
                 # context stays on the sole account ever used by this session;
                 # after any switch ambiguity must refuse, never guess.
-                origins = {old.get("refs", {}).get(ref) for ref in refs}
+                origins = {self.codex_ref_origin(old, ref) for ref in refs}
                 if refs and None not in origins and len(origins) == 1 and not unknown:
                     origin = next(iter(origins))
                     pick, reason = origin.split("\0", 1)[0], "source_affinity"
@@ -1720,7 +1735,7 @@ class Tenant:
                             pick, reason = cur, "no_material_gain"
             if not independent or pin:
                 # A pin may not redirect known reference context to another sub.
-                origins = {old.get("refs", {}).get(ref) for ref in refs}
+                origins = {self.codex_ref_origin(old, ref) for ref in refs}
                 if refs:
                     if None in origins or len(origins) != 1 or next(iter(origins)).split("\0", 1)[0] != pick:
                         raise ValueError("Codex continuation conflicts with subscription identity")
@@ -1818,8 +1833,16 @@ class Tenant:
                 # A collision is unresolved rather than silently overwritten.
                 origin = account + "\0" + source_identity
                 known[ref] = origin if ref not in known or known[ref] == origin else None
-            if len(known) > 4096:
-                v["refs"] = {} # later continuation explicitly unknown
+            if len(known) > CODEX_REFS_MAX:
+                # A long session resends its whole history every turn, so the
+                # oldest refs come back. Evict them, keeping their one origin
+                # (or "" once evictions disagree): codex_pick may read an unseen
+                # ref as it only for a session that never left that origin.
+                drop = list(known)[:len(known) - CODEX_REFS_MAX]
+                gone = {known.pop(ref) for ref in drop}
+                prior = v.get("evicted_origin")
+                one = next(iter(gone)) if len(gone) == 1 else None
+                v["evicted_origin"] = one if one and prior in (None, one) else ""
             self.save_codex_state()
 
     def pick_account(self, provider, sid, avoid=()):
