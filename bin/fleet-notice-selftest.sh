@@ -8,7 +8,7 @@
 #               level + text within 10 s one row; a row older than 7 days goes on the
 #               next write; `list` newest first, `--n`; `unread` counts errors since
 #               `read` (the page opening); `seen <tag>`.
-#   B. ROW      fleet-topbar.py inbox-text: an error until seen, a warn 6 s; 「✦ N ·
+#   B. ROW      fleet-topbar.py inbox-text: an error until seen or 30 s, a warn 6 s; 「✦ N ·
 #               ⌘P」, a phone's 「✦ N」 in 45 columns; FLEET_GLYPHS=ascii; seen, it
 #               folds; the top line (fit) says no reminder at 45 / 80 / 140.
 #   D. PANEL    ⌘P's FIRST row 「✦ 消息 N」, found by the words 消息 / message; a
@@ -79,8 +79,11 @@ T0=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())
 case "$(ib 80 "$T0")" in *'▲ heads up'*'✦ 1 · ⌘P'*) ;; *) fail "B a warn is on the message row with ✦ 1 · ⌘P" "$(ib 80 "$T0")" ;; esac
 [ "$(ib 80 "$(python3 -c "print($T0 + 7)")")" = - ] || fail "B a warn folds after 6 s"
 FLEET_CONF_DIR="$B2" python3 "$NP" notify error '暂停开新：内存紧张' --next '关掉一个会话再试' --no-draw
-case "$(ib 140 "$(python3 -c "print($T0 + 1000)")")" in *'✖ 暂停开新：内存紧张 — 关掉一个会话再试'*'✦ 2 · ⌘P'*) ;;
-  *) fail "B an error stays until seen — reason · next · ✦ N" "$(ib 140 "$(python3 -c "print($T0 + 1000)")")" ;; esac
+case "$(ib 140 "$(python3 -c "print($T0 + 20)")")" in *'✖ 暂停开新：内存紧张 — 关掉一个会话再试'*'✦ 2 · ⌘P'*) ;;
+  *) fail "B an unseen error stays its 30 s — reason · next · ✦ N" "$(ib 140 "$(python3 -c "print($T0 + 20)")")" ;; esac
+# …and then goes by itself (task NFVN), still unseen in 消息
+[ "$(ib 140 "$(python3 -c "print($T0 + 40)")")" = - ] || fail "B an unseen error folds after its 30 s" "$(ib 140 "$(python3 -c "print($T0 + 40)")")"
+[ "$(FLEET_NOTICE_STICKY_SECS=60 ib 140 "$(python3 -c "print($T0 + 40)")")" != - ] || fail "B FLEET_NOTICE_STICKY_SECS=60 holds it longer"
 w=$(python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.argv[1]))' "$(ib 45 "$T0")")
 [ "$w" -le 45 ] || fail "B the row fits a 45-column phone (got $w)"
 case "$(ib 45 "$T0")" in *⌘P*) fail "B a phone's row says ✦ N, no ⌘P" "$(ib 45 "$T0")" ;; esac
@@ -91,9 +94,9 @@ for c in 45 80 140; do
   case "$(python3 "$TB" fit "$c" "$WORK/rec.json")" in *未读*|*无主*|*✦*|*✖*) fail "B the top line ($c cols) says a reminder" "$(python3 "$TB" fit "$c" "$WORK/rec.json")" ;; esac
 done
 FLEET_GLYPHS=ascii FLEET_CONF_DIR="$B2" python3 "$NP" notify error 'ascii one' --no-draw
-case "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 2000)")")" in *' x ascii one'*'* 1'*) ;;
-  *) fail "B FLEET_GLYPHS=ascii: letters" "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 2000)")")" ;; esac
-[ "$fails" = "$f0" ] && st_pass "B the message row: error until seen, warn 6 s, ✦ N · ⌘P, fits 45 columns, ascii; the top line says no reminder"
+case "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 20)")")" in *' x ascii one'*'* 1'*) ;;
+  *) fail "B FLEET_GLYPHS=ascii: letters" "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 20)")")" ;; esac
+[ "$fails" = "$f0" ] && st_pass "B the message row: error until seen or 30 s, warn 6 s, ✦ N · ⌘P, fits 45 columns, ascii; the top line says no reminder"
 
 # --- D. ⌘P's first row 「✦ 消息」 (fleet takes no key of its own for it) ------------------
 f0=$fails

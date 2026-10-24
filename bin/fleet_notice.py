@@ -26,7 +26,8 @@ row 「✦ 消息」; fleet takes no key of its own for it.
                                                conf dir (T909: session-exit.log, start-fail.log); else 0
 
 THE TIERS. error — red, on the message row until seen (opening ⌘P's 消息; a key
-clears nothing); warn — yellow, 6 s; info — grey, 3 s. The newest live one is
+clears nothing) or FLEET_NOTICE_STICKY_SECS (30 s) — nothing stays on the row for
+good (task NFVN); warn — yellow, 6 s; info — grey, 3 s. The newest live one is
 drawn, 「✦ N · ⌘P」 beside it — every one is in ⌘P's 消息.
 
 WHO SEES IT. Only the client that asked (`--client`, a bind's #{client_name};
@@ -61,8 +62,8 @@ One stderr line says which; nothing is written, nothing drawn.
 THE MESSAGE ROW (T701). A notice the person has not seen — after the read mark
 (logs/notices.read, moved by opening the page) and not in logs/notices.readids
 (one marked read) — is unseen. The row under the 看台's top line is there while
-one is LIVE: an error or a result nobody took until seen, a warn its 6 s, an info
-its 3 s; it shows the newest live one and 「✦ N · ⌘P」, N every unseen one. The
+one is LIVE: an error or a result nobody took until seen or its 30 s, a warn its
+6 s, an info its 3 s; it shows the newest live one and 「✦ N · ⌘P」, N every unseen one. The
 other machines' books come from the hub's caches (`notices_<fleet>`,
 `orphanrep_<fleet>`, bin/fleet-hub-sessions.sh — union by id) and the read mark
 is the latest of every machine's, so another home sees the same messages.
@@ -81,6 +82,16 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 LEVELS = ("error", "warn", "info")
 TIER = {"error": 10, "warn": 6, "info": 3}
+
+
+def sticky_secs():
+    """How long an unseen error / a result nobody took stays on the message row
+    (FLEET_NOTICE_STICKY_SECS, 30 s; task NFVN: every notice goes by itself — it
+    stays in ⌘P's 消息 until seen)."""
+    try:
+        return max(1, int(os.environ.get("FLEET_NOTICE_STICKY_SECS", "30")))
+    except ValueError:
+        return 30
 KEEP = 7 * 86400
 DEDUP = 10
 PAGE_N = 50
@@ -292,8 +303,8 @@ def cls_of(r):
 
 
 def sticky(r):
-    """On the message row until seen (an error, a result nobody took); every other
-    class only for its tier."""
+    """On the message row until seen or sticky_secs() (an error, a result nobody
+    took); every other class only for its tier."""
     return cls_of(r) in ("error", "orphan")
 
 
@@ -548,7 +559,7 @@ def unseen(msgs):
 
 
 def is_live(m, now):
-    return not m["seen"] and (sticky(m) or now < m["ts"] + TIER.get(m.get("level"), 3))
+    return not m["seen"] and now < m["ts"] + (sticky_secs() if sticky(m) else TIER.get(m.get("level"), 3))
 
 
 def line_state(now=None, g=None):
@@ -650,10 +661,11 @@ def encode(d):
 
 def live(n, now, acked):
     """Is notice `n` still on the line: its tier not over, or an error not yet
-    answered by a key (`acked`: a key came after its hold)."""
+    answered by a key (`acked`: a key came after its hold) within sticky_secs()."""
     if not n:
         return False
-    return now < n.get("until", 0) or (n.get("level") == "error" and not acked)
+    return now < n.get("until", 0) or (n.get("level") == "error" and not acked
+                                       and now < n.get("ts", 0) + sticky_secs())
 
 
 def targets(sock, client, everyone, view=""):
