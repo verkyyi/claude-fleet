@@ -284,7 +284,7 @@ print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing 
     if [ -n "$o_br" ] && git -C "$r_main" ls-remote --exit-code --heads origin "$o_br" >/dev/null 2>&1; then r_from=$o_br; fi
     [ "$ex" = 2 ] && { printf 'ok rebuild %s\n' "$r_from"; exit 0; }
     r_br="restore-${p_id%%-*}"
-    fleet_fetch_bounded "$r_main" "$r_from"
+    FLEET_FETCH_BLOCKING=1 fleet_fetch_bounded "$r_main" "$r_from"   # a rebuild wants the branch as pushed
     fleet_worktree_create "$r_main" "$r_slug" "$r_from" --branch "$r_br" --reuse \
       || { printf 'fleet-id: could not make %s again off origin/%s\n' "$p_wt" "$r_from" >&2; exit 1; }
     printf 'fleet-id: %s made again off origin/%s on branch %s — the conversation is whole; what was not pushed from it before is not\n' \

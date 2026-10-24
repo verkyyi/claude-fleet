@@ -57,6 +57,9 @@ seconds, ms precision), and a `total` segment for end to end. The two writers:
                          it: Claude's first OSC 7501 idle/done (fleet-status-7501.py),
                          Codex's thread up under its private runtime
                          (fleet-codex-runtime.py); = total
+               shown     ⌘P's 「新会话」 box only (T992): its window on the
+                         screen — the stub's first frame (bin/fleet_stub.py),
+                         typeable at once; judged on its own (`check`'s `shown`)
              The ↵ travels as FLEET_TIMING_T0 down the road; dash-raw-session.sh
              stamps it on the window as @timing_t0 for `ready` and `input` (the
              latter clears it). A run written before T684 carries start · go
@@ -80,7 +83,8 @@ import sys
 import time
 
 MAX_LINES = 4000
-LIMITS = {"panel": ("FLEET_TIMING_PANEL_MS", 100), "session": ("FLEET_TIMING_SESSION_MS", 8000)}
+LIMITS = {"panel": ("FLEET_TIMING_PANEL_MS", 100), "session": ("FLEET_TIMING_SESSION_MS", 8000),
+          "shown": ("FLEET_TIMING_SHOWN_MS", 100)}
 # what is judged by its 九成五 over the last P95_RUNS runs (T890: ⌘P's first frame
 # is a p95 ≤ 100 ms promise); the rest by the median of the last N
 P95 = {"panel"}
@@ -383,6 +387,16 @@ def check(last):
         print("%s n=%d p50=%s%s limit=%s over=%d cold=%d" % (what, len(rs), fmt(p50),
                                                            " p95=%s" % fmt(top) if p95 else "", lim or "-",
                                                            int(over), len(rs) - len(judged)))
+    # ⌘P's 「新会话」 ↵ → its window on the screen (T992, the stub's first frame):
+    # a 九成五 ≤ FLEET_TIMING_SHOWN_MS (100) promise over the last 50 that have one
+    shown = [r["shown"] for r in runs("session", 4 * P95_RUNS) if "shown" in r][-P95_RUNS:]
+    if shown:
+        lim = limit("shown")
+        top = pctl(shown, 0.95)
+        over = bool(lim and top is not None and top > lim)
+        over_any = over_any or over
+        print("shown n=%d p50=%s p95=%s limit=%s over=%d cold=0" % (len(shown), fmt(median(shown)), fmt(top),
+                                                                   lim or "-", int(over)))
     return 1 if over_any else 0
 
 

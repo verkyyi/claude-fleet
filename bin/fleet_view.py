@@ -183,6 +183,7 @@ from pathlib import Path
 if str(Path(__file__).absolute().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).absolute().parent))
 import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
+import fleet_stub  # noqa: E402 — a new session's window before the session (T992)
 from fleet_task_control import continue_task, pending_start_task, cancel_pending_start, controlled_stop_task, stop_task
 
 US = "\x1f"
@@ -3188,6 +3189,14 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     before = current(vid, fleet)
     meta = meta or {}
     w, far = resolve(vid, target, row, fleet)
+    stub = os.environ.pop("FLEET_STUB_DIR", "")
+    far_words = None
+    if stub:
+        went, far_words = stub_handoff(stub, w, far)
+        if not went:
+            # the person closed the stub: the session opened (it is on the list),
+            # the 看台 stays where they went instead
+            return 0
     if far and not meta.get("machine"):
         cached = order_load(vid)
         meta = (cached[1].get(target) if cached else None) or meta
@@ -3211,6 +3220,11 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         if code:
             toast(client, say("view_open_elsewhere"))
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)
+    if stub:
+        if far_words and not (far and rc == 0 and far_deliver(meta.get("machine"), meta.get("login"), target,
+                                                             far_words, fleet_stub.read(Path(stub) / "lang"))):
+            fleet_stub.keep(stub, far_words)
+        fleet_stub.close(tm, stub)
     ms = round((time.monotonic() - t0) * 1000, 1)
     rec = {"ts": round(time.time(), 3), "view": vid, "from": before, "to": target,
            "machine": meta.get("machine") or ("" if far else row.get("node") or ""),
@@ -3223,6 +3237,52 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     if rc == 0 and record:
         hist_save(qo, vid, qo.visit(hist_load(qo, vid), target if not target.startswith("@") else w))
     return rc
+
+
+def stub_handoff(stub, w, far):
+    """go()'s first word when a new session's stub is up (T992) → (go on, words
+    for another machine). Here: wait for the agent in window `w` to keep a paste,
+    then give it what the person typed in the stub. Another machine's session:
+    the stub frozen, its words carried there (far_deliver) once the 看台 is on it.
+    (False, None): the stub is gone — the person closed it."""
+    if far or not w:
+        got = fleet_stub.freeze(tm, stub)
+        return (False, None) if got is None else (True, got if any(x.strip() for x in got[0] + [got[1]]) else None)
+    _, pane = tm("display-message", "-p", "-t", w, "#{pane_id}")
+    if not pane.startswith("%"):
+        return fleet_stub.alive(tm, stub), None
+    return fleet_stub.handoff(tm, stub, pane), None
+
+
+def far_deliver(machine, login, target, got, lang=""):
+    """The stub's words to the machine the session runs on (T992): its own
+    `fleet-remote-view.sh deliver` waits for the agent there and pastes — on the
+    standing link, in a child of its own (the agent may take a minute). True when
+    it was handed on; the far end's failure keeps the words as a notice itself."""
+    if not machine or not login:
+        return False
+    pl = peerlink()
+    sock = pl.up_sock(machine, login)
+    if not sock:
+        return False
+    if os.environ.get("FLEET_STUB_DELIVER_FG") != "1" and os.fork():
+        return True
+    try:
+        cmd = "bash %s/fleet-remote-view.sh deliver %s" % (pl.remote_bin(), shlex.quote(target))
+        try:
+            rc = subprocess.run(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-l", login,
+                                                pl.link_host(machine, login), cmd],
+                                input=json.dumps({"queued": got[0], "unsent": got[1]}), text=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=fleet_stub.ready_secs() + 30).returncode
+        except (OSError, subprocess.SubprocessError):
+            rc = 255
+        if rc != 0:
+            fleet_stub.keep("", got, lang)
+    finally:
+        if os.environ.get("FLEET_STUB_DELIVER_FG") != "1":
+            os._exit(0)
+    return True
 
 
 def tell_cur(g):
@@ -3371,7 +3431,28 @@ def land(qo, vid, client=""):
     return 0 if rc == 0 else 1
 
 
-def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
+def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0="", stub=""):
+    """go_new's road with a stub (T992): the stub's window is already on the
+    screen (the panel opened it at the ↵); the road says how it goes on it, and
+    go() hands the session the stub's words. A failure stays on the stub."""
+    if not stub:
+        return go_new_road(qo, vid, client, repo, agent, prompt, draft, t0)
+    os.environ["FLEET_STUB_DIR"] = stub
+    fleet_stub.note_road(stub, os.getpid())
+    _NEW_SAID[:] = []
+    rc = go_new_road(qo, vid, client, repo, agent, prompt, draft, t0)
+    if rc != 0 and os.environ.get("FLEET_STUB_DIR"):
+        # not handed off: the reason on the stub, which stays (esc ×2 closes it)
+        said = (_NEW_SAID or [say("view_new_failed_fmt", say("view_new_exit_fmt", rc))])[-1]
+        fleet_stub.status(tm, stub, "✗ " + said.lstrip("✗ "))
+    return rc
+
+
+# the last refusal go_new_road said (its stub shows it, T992)
+_NEW_SAID = []
+
+
+def go_new_road(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
     (dash-raw-session.sh --no-repo, the hub's own origin), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names a
@@ -3448,6 +3529,7 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0=""):
     # shows `do new`'s last line, which was nothing, so the panel said no why. A
     # refusal dash-raw-session.sh already drew (its tag recorded) is not drawn again
     said = say("view_new_failed_fmt", why or say("view_new_exit_fmt", rc))
+    _NEW_SAID.append(said)
     if not notice_seen(tag):
         toast(client, said, "error")
     print(said, file=sys.stderr, flush=True)
@@ -3533,6 +3615,7 @@ def bolt_blank(vid, client, repo, agent):
         return 0
     last = ((p.stdout or "").strip().splitlines() or (p.stderr or "").strip().splitlines() or [""])[-1]
     said = last or say("view_new_failed_fmt", say("view_new_exit_fmt", p.returncode))
+    _NEW_SAID.append(said)
     toast(client, said, "error")
     print(said, file=sys.stderr, flush=True)
     return 3
@@ -5201,6 +5284,30 @@ def bolt_argv(qo, vid, client, st, query=""):
     return argv, "", " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
 
 
+def bolt_stub(vid, client, argv, where):
+    """The 「新会话」 box's ↵ with a stub (T992): its window in the 看台 at once,
+    then `do new --stub` in its own session (esc-proof, as bolt_run), and the
+    popup closes. False: no stub (FLEET_STUB=0, a browser 看台, tmux said no) —
+    the caller runs the old road."""
+    if vid.startswith("wt-") or not fleet_stub.on(conf_word("FLEET_STUB")):
+        return False
+    fleet = view_fleet(vid)
+    if not fleet:
+        return False
+    t0 = float(argv[argv.index("--t0") + 1]) if "--t0" in argv else time.time()
+    got = fleet_stub.start(tm, "%s@view-%s" % (fleet, vid), where, t0, lang=ui_lang())
+    if not got:
+        return False
+    _, d = got
+    fleet_stub.shown(tm, d, t0)
+    try:
+        subprocess.Popen(argv + ["--stub", d], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as error:
+        fleet_stub.status(tm, d, "✗ " + str(error))
+    return True
+
+
 def bolt_run(argv, done):
     """Run it in its own session (esc closes the popup; the job goes on and says
     how it ended itself) and hand (rc, its last line) to `done`. Its output goes
@@ -5986,6 +6093,10 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                         msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
                         continue
                     argv, title, where = bolt_argv(qo, vid, client, bolt)
+                    if bolt_stub(vid, client, argv, where):
+                        # the new session's window is on the screen (T992): the
+                        # road goes on behind it, the popup closes now
+                        return 0
                     busy = {"title": title, "where": where}
                     bolt_run(argv, job)
                 continue
@@ -6150,7 +6261,7 @@ def main(argv, qo):
     client = opt(argv, "--client")
     if argv[:1] == ["do"] and len(argv) >= 2:
         return do(qo, argv[1], vid, client, opt(argv, "--target"),
-                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt", "draft", "t0")})
+                  {k: opt(argv, "--" + k) for k in ("repo", "agent", "prompt", "draft", "t0", "stub")})
     if argv[:1] == ["view-peers"]:
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")

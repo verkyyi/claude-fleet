@@ -2528,6 +2528,16 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_VIEW_STALE_MARK_SECS=3
 # @label=New session limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_TIMING_SESSION_MS=8000
+# ⌘P 「新会话」 ↵ → its window on the screen (T992): the stub's first frame, by
+# the 九成五 of the last 50 (`fleet_timing.py check`'s `shown`), in ms.
+# @label=New session on screen limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_TIMING_SHOWN_MS=100
+# ⌘P 「新会话」's window first (T992, bin/fleet_stub.py): the ↵ opens a typeable
+# input line at once and the session is made behind it; what is typed there is
+# handed to the agent once it keeps a paste (↵ lines submitted). 0 = the old
+# road: the panel waits for the session and then goes to it.
+# @label=New session window first @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_STUB=1
 
 
 # How long an in-progress scratch spawn (issue #531) counts against the session cap

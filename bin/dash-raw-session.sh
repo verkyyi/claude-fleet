@@ -757,6 +757,9 @@ fi
 # spawn is never counted against itself.
 _inflight="$(fleet_inflight_mark "$SESS")"
 trap 'rm -f "$_inflight" 2>/dev/null' EXIT
+# the cold overlap's filler (T992): waited for before the worktree is rolled back
+FILL_PID='' FILL_MARK=''
+raw_fill_stop() { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; FILL_PID=''; }; return 0; }
 
 # Window name (issue #225): an optional --name wins; otherwise the auto
 # `scratch-<N>` (N == the worktree suffix, allocated below). A custom name is
@@ -819,9 +822,26 @@ elif [ -n "$WT_ARG" ]; then
   [ -d "$WT_ARG" ] && [ -e "$WT_ARG/.git" ] || { refuse "raw: --worktree $WT_ARG is gone"; exit 1; }
   wt=$WT_ARG
 else
-  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
+  # The cold overlap (T992, the issue road's #2237): the worktree is made with
+  # no files but what the agent reads as it starts, the window opens, and the
+  # rest fills in beside the agent's start — 1.6 s (this repo) to 9.6 s (a
+  # 23k-file monorepo) off every new scratch. The agent's hooks hold its first
+  # prompt and every tool call until the tree is whole (set-claude-state.sh,
+  # FLEET_WT_PENDING), and this script waits for the fill before it says the
+  # window opened: a failed fill takes the window and the worktree with it.
+  # FLEET_SPAWN_OVERLAP=0 = the old order. FLEET_SPAWN_FILL_CMD: the selftest seam.
+  _nco=''; [ "${FLEET_SPAWN_OVERLAP:-1}" != 0 ] && _nco=1
+  alloc=$(FLEET_SCRATCH_NOCHECKOUT=$_nco fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
   [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
+  if [ -n "$_nco" ]; then
+    FILL_MARK="$(fleet_cache_dir "$(fleet_slug "${REPO_ARG:-${FLEET_REPO:-$SESS}}")")/fill_$slug.pid"
+    ( if [ -n "${FLEET_SPAWN_FILL_CMD:-}" ]; then sh -c "$FLEET_SPAWN_FILL_CMD" fill "$wt"
+      else fleet_worktree_fill "$MAIN" "$wt"; fi && rm -f "$FILL_MARK" ) </dev/null >/dev/null 2>&1 &
+    FILL_PID=$!
+    printf '%s\n' "$FILL_PID" > "$FILL_MARK"
+  fi
+  unset _nco
 fi
 
 # Distinct, stable-ish window name. Default is the worktree slug `scratch-<N>` so a
@@ -881,6 +901,7 @@ fi
   # `--agent <a>` (issue #547) rides in the command when a caller chose one; the
   # launcher consumes it. Validated to claude|codex above, so bare is safe.
   launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}"
+  [ -n "$FILL_MARK" ] && launch="FLEET_WT_PENDING=$(printf '%q' "$FILL_MARK") $launch"
   # The window stamps its own repo identity BEFORE the launcher reads its conf
   # (issue #789 — see fleet_win_stamp_cmd).
   stamp=''; nsid=''
@@ -961,6 +982,7 @@ fi
   _dispatch_task=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task", ""))' "$DISPATCH") || exit 2
   if [ -n "$_dispatch_task" ]; then
     if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current ${EXECUTION:+--execution "$EXECUTION"} >/dev/null; then
+      raw_fill_stop
       [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
       refuse "raw: accepted task start refused"; exit 2
     fi
@@ -972,7 +994,8 @@ fi
     python3 "$BIN/fleet_task_execution.py" reserve-window --snapshot "$EXECUTION" || exit 2
   fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
-    || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+    || { raw_fill_stop
+         [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          # Say WHY when it is the server (issue #2477): the line rides into
          # the hub's DECLINED / UNKNOWN answer as the refusal.
          _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
@@ -1097,6 +1120,21 @@ if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
     [ -n "$df" ] && rm -f "$df"
     FLEET_UI_SOCK=$SOCK fleet_ui_fail 'raw: could not stage the scratch input' 
   fi
+fi
+
+# The tree the agent is starting in is whole before this says it opened (T992,
+# as the issue road, #2237): a fill that failed takes its window and worktree
+# with it — a session with half a checkout is no session.
+if [ -n "$FILL_PID" ]; then
+  wait "$FILL_PID" 2>/dev/null; _frc=$?
+  if [ "$_frc" != 0 ] || [ -f "$FILL_MARK" ]; then
+    fleet_win_retire "$win" "$SOCK" spawn-failed 2>/dev/null
+    TM kill-window -t "$win" 2>/dev/null
+    rm -f "$FILL_MARK"
+    fleet_scratch_free "$MAIN" "$slug" "$wt"
+    refuse "raw: could not check out the scratch worktree"; exit 1
+  fi
+  FILL_PID=''
 fi
 
 # The headless caller's receipt (issue #1541, --print): the window, its name, its
