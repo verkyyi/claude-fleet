@@ -573,8 +573,17 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			rows = append(rows, row)
 		}
 		w.Header().Set("Cache-Control", "no-store")
+		// bedrock: the Bedrock fallback's keys (task PNWW), metadata only —
+		// never a subscription row, so kept apart from credentials.
+		bedrock := []store.Credential{}
+		if q := r.URL.Query().Get("principal_id"); q == "" || q == store.PoolPrincipal {
+			if bedrock, err = s.Store.BedrockCredentials(); err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		// paused: the pool accounts an admin paused (claude-fleet#1990).
-		writeJSON(w, http.StatusOK, map[string]any{"credentials": rows, "revocations": revs, "paused": pausedAccounts(settings)})
+		writeJSON(w, http.StatusOK, map[string]any{"credentials": rows, "revocations": revs, "paused": pausedAccounts(settings), "bedrock": bedrock})
 	case http.MethodPost:
 		var req FleetCredentialRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
@@ -601,6 +610,17 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			if s.vaultLocked(w) {
 				return
 			}
+			// A Bedrock key (task PNWW) is the pool's, Claude's, and never
+			// takes a subscription's place (or a subscription its place).
+			bedrock := req.Secret.AWSAccessKeyID != "" || req.Secret.AWSSecretAccessKey != "" || req.Secret.AWSRegion != ""
+			if bedrock && (req.PrincipalID != store.PoolPrincipal || req.Provider != credvault.Claude) {
+				httpError(w, http.StatusBadRequest, "a Bedrock key (aws_access_key_id) is a pool claude credential: principal_id \"pool\", provider \"claude\"")
+				return
+			}
+			if old, err := s.Store.Credential(req.PrincipalID, req.Provider, req.Account); err == nil && (old.Kind == credvault.KindBedrock) != bedrock {
+				httpError(w, http.StatusConflict, "account "+req.Account+" is already a "+map[bool]string{true: "Bedrock key", false: "subscription"}[old.Kind == credvault.KindBedrock]+"; delete it first or pick another account name")
+				return
+			}
 			if err := s.Vault.Put(req.PrincipalID, req.Provider, req.Account, req.Secret); err != nil {
 				code := http.StatusBadRequest
 				if errors.Is(err, credvault.ErrLocked) {
@@ -610,6 +630,14 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			audit.Action = store.CredPut
+			if bedrock {
+				// a commercial API key, by definition (WACK C1's source_class)
+				if err := s.Store.SetCredentialSource(req.PrincipalID, req.Provider, req.Account, store.SourceAPI, time.Now()); err != nil {
+					httpError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				audit.Detail = "kind=bedrock · "
+			}
 		case "delete":
 			if err := s.Store.DeleteCredential(req.PrincipalID, req.Provider, req.Account); err != nil {
 				code := http.StatusInternalServerError

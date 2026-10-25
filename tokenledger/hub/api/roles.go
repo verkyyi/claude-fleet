@@ -136,7 +136,7 @@ var routeAccess = map[string]string{
 	control.RenewPath: accessSelf, control.HomePath: accessSelf, control.LoginNodePath: accessSelf,
 	"/v1/fleet/client-settings": accessSelf,
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
-	CredProxyResolvePath: accessSelf, CredProxyRebindPath: accessSelf,
+	CredProxyResolvePath: accessSelf, CredProxyRebindPath: accessSelf, CredProxyFallbackPath: accessSelf,
 	// Per-person budgets (claude-fleet#1977): each proxy reports with its own
 	// token; the list is the operator's, a user reads their own (我的用量,
 	// claude-fleet#2519).

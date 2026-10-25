@@ -30,6 +30,11 @@ type AdminUsage struct {
 	People   []AdminUsagePerson  `json:"people"`
 	Models   []MeUsageModel      `json:"models"`
 	Machines []AdminUsageMachine `json:"machines"`
+	// Sources splits the week's pool rows by where they were served —
+	// subscription or bedrock (task PNWW); Bedrock is the fallback's month
+	// against its cap.
+	Sources []store.SourceUsage `json:"sources,omitempty"`
+	Bedrock *BedrockSpend       `json:"bedrock,omitempty"`
 }
 
 // AdminUsageMachine is one machine's share of the people's rows: what ran on
@@ -147,5 +152,12 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		return out.People[i].Name < out.People[j].Name
 	})
+	// the split by source (task PNWW): the same week as the people's rows
+	if src, err := s.Store.PoolUsageBySource(newMeUsageCount(now).weekCut); err == nil {
+		out.Sources = src
+	}
+	if b, err := s.bedrockSpendView(now); err == nil {
+		out.Bedrock = b
+	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -256,11 +256,30 @@ func (s *Store) Credential(principalID, provider, account string) (*Credential, 
 	return &c, nil
 }
 
-// Credentials lists rows; principalID "" means everyone's.
+// KindBedrock is a Bedrock key pair's kind (task PNWW, credvault.KindBedrock).
+// Such a row is never a subscription: Credentials leaves it out, so no lease,
+// binding, quota read or pool page sees it; BedrockCredentials lists them.
+const KindBedrock = "bedrock"
+
+// Credentials lists rows; principalID "" means everyone's. Bedrock keys are
+// not among them (BedrockCredentials).
 func (s *Store) Credentials(principalID string) ([]Credential, error) {
-	q, args := credColumns+` ORDER BY principal_id, provider, account`, []any{}
+	return s.credentialRows(principalID, false)
+}
+
+// BedrockCredentials lists the Bedrock keys (task PNWW), by account.
+func (s *Store) BedrockCredentials() ([]Credential, error) {
+	return s.credentialRows("", true)
+}
+
+func (s *Store) credentialRows(principalID string, bedrock bool) ([]Credential, error) {
+	kind := ` kind != 'bedrock'`
+	if bedrock {
+		kind = ` kind = 'bedrock'`
+	}
+	q, args := credColumns+` WHERE`+kind+` ORDER BY principal_id, provider, account`, []any{}
 	if principalID != "" {
-		q, args = credColumns+` WHERE principal_id = ? ORDER BY provider, account`, []any{principalID}
+		q, args = credColumns+` WHERE principal_id = ? AND`+kind+` ORDER BY provider, account`, []any{principalID}
 	}
 	// Read from the writer connection: a lease reads right after a refresh
 	// committed, and must see it.
