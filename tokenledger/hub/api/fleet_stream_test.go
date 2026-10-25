@@ -162,7 +162,11 @@ func TestFleetStreamOnlyOnChange(t *testing.T) {
 	at := time.Now().Add(-time.Minute)
 	hb := control.Heartbeat{Hostname: "mac-d", OSUser: "alice", MachineID: machineA, Load1: 1.5, NCPU: 8, ObservedAt: at}
 	beat(t, a.conn, control.Proto, hb)
-	waitFor(t, 3*time.Second, "node heard", func() bool { return len(roster(t, h).Nodes) == 1 && roster(t, h).Nodes[0].LastHeartbeat != nil })
+	// the beat itself, not the hello's timestamp: a beat still on its way would be the "nothing new" event
+	waitFor(t, 3*time.Second, "node heard", func() bool {
+		r := roster(t, h)
+		return len(r.Nodes) == 1 && r.Nodes[0].LastHeartbeat != nil && r.Nodes[0].Load1 == 1.5
+	})
 
 	ch := openStream(t, h, "", "?topics=nodes,usage")
 	nextEvent(t, ch, "nodes", 3*time.Second)

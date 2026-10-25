@@ -221,6 +221,9 @@ type Server struct {
 	// ChatRelayKeepSecs keeps a person's chat relay open this long idle, for
 	// the next request to reuse (task V9DJ B; 0: one relay per request).
 	ChatRelayKeepSecs int
+	// LinkSampleSecs is how often the hub pings each node link for its record
+	// (task PNWW; 0: a minute, negative: never).
+	LinkSampleSecs int
 	// ChatLinkWaitSecs: a chat request whose home is reconnecting waits this
 	// long for its link (task PNWW; 0: chatLinkWaitDefault, negative: never).
 	ChatLinkWaitSecs int
@@ -760,6 +763,8 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(TryBeatPath, s.viewerOnly(http.HandlerFunc(s.handleTryBeat)))
 		mux.Handle(TryPausePath, s.viewerOnly(http.HandlerFunc(s.handleTryPause)))
 		mux.Handle(TryStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTryStats))))
+		// A home link's latency and drops (task PNWW): the admin's read.
+		mux.Handle(LinkStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLinkStats))))
 		// A new web session's wait, press to first reply (task PNWW): the admin's read.
 		mux.Handle(ChatTimingStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleChatTimingStats))))
 		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.

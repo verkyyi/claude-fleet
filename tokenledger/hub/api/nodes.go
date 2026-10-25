@@ -599,6 +599,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 // whole websocket, on a machine link one login's lane (claude-fleet#2333).
 func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoint, tokHash string,
 	hello control.Message, hp control.Hello) {
+	// what the hub knew of this link before this connect (task PNWW)
+	prev := s.linkBefore(ep.ID)
 	if err := s.Store.NodeConnected(ep.ID, ep.Hostname, ep.OSUser, hp.AgentVersion,
 		hello.Proto, hp.HeartbeatMS, time.Now()); err != nil {
 		log.Printf("node %s: record hello: %v", ep.ID, err)
@@ -672,6 +674,13 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			ep.ID, ep.OSUser, ep.Hostname)
 	}
 	s.nodes.put(ep.ID, nc)
+	// The link's record (task PNWW): this connect, then a ping a minute while it lasts.
+	s.linkUp(ep, prev, time.Now())
+	if p, ok := wire.(interface{ ping(context.Context) error }); ok {
+		lctx, lstop := context.WithCancel(ctx)
+		defer lstop()
+		go s.linkWatch(lctx, ep, p)
+	}
 	if nc.canTaskExecution {
 		go s.redeliverTaskStops(ep)
 	}
@@ -730,6 +739,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		m, err := wire.read(rctx)
 		cancel()
 		if err != nil {
+			s.linkDown(ctx, ep, nc, err)
 			return
 		}
 		// The token was checked once, at connect; a revoke since then
