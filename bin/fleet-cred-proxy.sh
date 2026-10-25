@@ -216,8 +216,10 @@ if [ -n "$SEP_RUN" ]; then
     route|mint)
       # the control socket's light client first (T992: the full module was ~0.3 s
       # a call, twice a start); 4 = it cannot say this one — the full CLI does
-      python3 -I "$BIN/fleet_cred_ctl.py" "$cmd" "$@"; _rc=$?
-      [ "$_rc" = 4 ] || exit "$_rc"
+      if [ -f "$BIN/fleet_cred_ctl.py" ]; then
+        python3 -I "$BIN/fleet_cred_ctl.py" "$cmd" "$@"; _rc=$?
+        [ "$_rc" = 4 ] || exit "$_rc"
+      fi
       exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
     node-token|node-hash|store|unstore|accounts|target-auth|credential-inspect)
       exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
