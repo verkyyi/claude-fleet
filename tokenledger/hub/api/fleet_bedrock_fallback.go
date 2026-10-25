@@ -20,7 +20,7 @@ import (
 //
 //	POST /v1/fleet/credproxy/fallback   Bearer CCQUOTA_FLEET_CREDPROXY_TOKEN
 //	     {cred, provider: "claude", model} → {ok, reason?, principal, worker_id,
-//	                    account, region, access_key_id, secret_access_key}
+//	                    account, region, profile, access_key_id, secret_access_key}
 //
 // ok is false, with one reason, unless every rule holds: fleet.fallback.bedrock
 // is "on" (default off — "off"); the pass verifies ("pass: …"); the person is
@@ -38,6 +38,7 @@ const CredProxyFallbackPath = credproxy.FallbackPath
 const (
 	BedrockFallbackKey    = "fleet.fallback.bedrock"
 	BedrockFallbackCapKey = "fleet.fallback.bedrock.cap_usd"
+	BedrockProfileKey     = "fleet.fallback.bedrock.profile"
 	bedrockCapDefault     = 200.0
 )
 
@@ -48,6 +49,27 @@ func init() {
 	hubSettings[BedrockFallbackCapKey] = hubSetting{def: "200",
 		help:  "the Bedrock fallback's monthly cap in US dollars (UTC month), priced at API rates; at or past it no request falls back (task PNWW). 0 = none falls back",
 		check: checkBedrockCap}
+	hubSettings[BedrockProfileKey] = hubSetting{def: credproxy.BedrockProfileGlobal,
+		help:  "which inference profile the Bedrock fallback calls (task PNWW): global — global.<model>, routed to any commercial region, the list price; geo — us./eu./apac.<model> from the key's region, kept in that geography, about 10% more",
+		check: checkBedrockProfile}
+}
+
+func checkBedrockProfile(_ *Server, v string) (string, string) {
+	switch v = strings.TrimSpace(v); v {
+	case "", credproxy.BedrockProfileGlobal:
+		return credproxy.BedrockProfileGlobal, ""
+	case credproxy.BedrockProfileGeo:
+		return v, ""
+	}
+	return "", BedrockProfileKey + " is global or geo"
+}
+
+// bedrockProfile is the profile, global when unreadable.
+func (s *Server) bedrockProfile() string {
+	if v, why := checkBedrockProfile(s, s.setting(BedrockProfileKey)); why == "" {
+		return v
+	}
+	return credproxy.BedrockProfileGlobal
 }
 
 func checkBedrockCap(_ *Server, v string) (string, string) {
@@ -185,7 +207,7 @@ func (s *Server) handleCredProxyFallback(w http.ResponseWriter, r *http.Request)
 	}
 	log.Printf("bedrock fallback: granted principal=%s worker_id=%s model=%s account=%s", c.Principal, c.WorkerID, req.Model, row.Account)
 	writeJSON(w, http.StatusOK, credproxy.Fallback{OK: true, Principal: c.Principal, WorkerID: c.WorkerID,
-		Account: row.Account, Region: key.Region, AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey})
+		Account: row.Account, Region: key.Region, Profile: s.bedrockProfile(), AccessKeyID: key.AccessKeyID, SecretAccessKey: key.SecretAccessKey})
 }
 
 // BedrockSpend is the admin's view of the fallback (task PNWW).

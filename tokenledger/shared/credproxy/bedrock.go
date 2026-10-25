@@ -48,6 +48,7 @@ type Fallback struct {
 	WorkerID        string `json:"worker_id,omitempty"`
 	Account         string `json:"account,omitempty"`
 	Region          string `json:"region,omitempty"`
+	Profile         string `json:"profile,omitempty"` // BedrockProfileGlobal ("" too) · BedrockProfileGeo
 	AccessKeyID     string `json:"access_key_id,omitempty"`
 	SecretAccessKey string `json:"secret_access_key,omitempty"`
 	SessionToken    string `json:"session_token,omitempty"`
@@ -89,8 +90,8 @@ func (h *HubResolver) Fallback(ctx context.Context, pass, provider, model string
 
 // BedrockModels maps an Anthropic model id (date suffix dropped) to its
 // Bedrock foundation-model id — the ONE table. The cross-region inference
-// profile prefix (us. / eu. / apac.) is added from the key's region, so the
-// table holds the bare ids. A model not here is never sent to Bedrock.
+// profile prefix (global., or us. / eu. / apac. from the key's region) is
+// added by BedrockModelID, so the table holds the bare ids. A model not here is never sent to Bedrock.
 var BedrockModels = map[string]string{
 	"claude-fable-5-1":  "anthropic.claude-fable-5-1",
 	"claude-fable-5":    "anthropic.claude-fable-5",
@@ -124,8 +125,17 @@ var bedrockBetas = map[string]bool{
 
 var modelDate = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2})$`)
 
-// BedrockModelID is the id a model is invoked by in region ("" = not mapped).
-func BedrockModelID(model, region string) string {
+// The inference profiles a fallback may call: global routes to any commercial
+// region at the list price; geo stays in the key's geography (us. / eu. /
+// apac.) at about 10% more.
+const (
+	BedrockProfileGlobal = "global"
+	BedrockProfileGeo    = "geo"
+)
+
+// BedrockModelID is the id a model is invoked by under profile in region
+// ("" = not mapped). Any profile but geo is global.
+func BedrockModelID(model, region, profile string) string {
 	base := modelDate.ReplaceAllString(strings.TrimSpace(model), "")
 	if i := strings.IndexByte(base, '['); i >= 0 { // a client alias like [1m]
 		base = base[:i]
@@ -133,6 +143,9 @@ func BedrockModelID(model, region string) string {
 	id, ok := BedrockModels[base]
 	if !ok {
 		return ""
+	}
+	if profile != BedrockProfileGeo {
+		return "global." + id
 	}
 	switch {
 	case strings.HasPrefix(region, "us-"):
@@ -313,7 +326,7 @@ func (p *Proxy) tryBedrock(w http.ResponseWriter, r *http.Request, pass string, 
 	if region == "" {
 		region = "us-west-2"
 	}
-	id := BedrockModelID(model, region)
+	id := BedrockModelID(model, region, g.Profile)
 	if id == "" {
 		a.fallback = "bedrock: no mapping for " + model
 		return false

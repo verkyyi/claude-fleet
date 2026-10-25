@@ -32,18 +32,21 @@ func TestSignV4Vanilla(t *testing.T) {
 
 func TestBedrockModelID(t *testing.T) {
 	for in, want := range map[string]string{
-		"claude-opus-5-5":           "us.anthropic.claude-opus-5-5",
-		"claude-opus-5-5[1m]":       "us.anthropic.claude-opus-5-5",
-		"claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"claude-opus-5-5":           "global.anthropic.claude-opus-5-5",
+		"claude-opus-5-5[1m]":       "global.anthropic.claude-opus-5-5",
+		"claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 		"claude-no-such-model":      "",
 		"gpt-5":                     "",
 	} {
-		if got := BedrockModelID(in, "us-west-2"); got != want {
+		if got := BedrockModelID(in, "us-west-2", ""); got != want {
 			t.Errorf("%s → %q; want %q", in, got, want)
 		}
 	}
-	if got := BedrockModelID("claude-opus-5-5", "eu-central-1"); got != "eu.anthropic.claude-opus-5-5" {
-		t.Errorf("eu → %q", got)
+	if got := BedrockModelID("claude-opus-5-5", "us-west-2", BedrockProfileGeo); got != "us.anthropic.claude-opus-5-5" {
+		t.Errorf("geo us → %q", got)
+	}
+	if got := BedrockModelID("claude-opus-5-5", "eu-central-1", BedrockProfileGeo); got != "eu.anthropic.claude-opus-5-5" {
+		t.Errorf("geo eu → %q", got)
 	}
 }
 
@@ -250,7 +253,7 @@ func TestBedrockReplaysA429AsStream(t *testing.T) {
 		t.Fatalf("bedrock calls %d", len(got))
 	}
 	g := got[0]
-	if g.path != "/model/us.anthropic.claude-opus-5-5/invoke-with-response-stream" {
+	if g.path != "/model/global.anthropic.claude-opus-5-5/invoke-with-response-stream" {
 		t.Errorf("path %s", g.path)
 	}
 	if !strings.HasPrefix(g.auth, "AWS4-HMAC-SHA256 Credential=AKIDTEST/") || !strings.Contains(g.auth, "/us-west-2/bedrock/aws4_request") {

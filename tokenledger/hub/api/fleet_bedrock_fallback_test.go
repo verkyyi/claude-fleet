@@ -124,7 +124,7 @@ func TestBedrockFallbackOnReplays429(t *testing.T) {
 	if st != http.StatusOK || !strings.Contains(body, "event: message_start") || !strings.Contains(body, "FROM BEDROCK") {
 		t.Fatalf("on + 429 → %d %s", st, body)
 	}
-	if b.bedrockCalls() != 1 || !strings.HasPrefix(b.calls[0], "/model/us.anthropic.claude-opus-5-5/invoke-with-response-stream AWS4-HMAC-SHA256 Credential=AKIDTEST") {
+	if b.bedrockCalls() != 1 || !strings.HasPrefix(b.calls[0], "/model/global.anthropic.claude-opus-5-5/invoke-with-response-stream AWS4-HMAC-SHA256 Credential=AKIDTEST") {
 		t.Fatalf("bedrock calls %v", b.calls)
 	}
 	var row store.PoolUsage
