@@ -174,6 +174,27 @@ rf.busy, rf.since = True, time.monotonic() - 3
 assert rf.late(2) and not rf.late(5)
 PY
 
+# --- D2 (task EQBE) -------------------------------------------------------------------
+# a panel whose terminal is gone (its popup closed, the tty revoked) ends instead of
+# spinning on curses.error for hours: tty_gone tells a dead tty from a live one,
+# never reading a waiting key
+python3 - "$BIN" <<'PY' && st_ok "D2 tty_gone: live pty no, a key waiting no (and still there), hung up yes, not a tty yes (EQBE)" || st_miss "D2 tty_gone"
+import os, pty, sys, time, tty
+sys.path.insert(0, sys.argv[1])
+import fleet_view as fv
+m, s = pty.openpty(); tty.setraw(s)
+assert not fv.tty_gone(s)
+os.write(m, b"k"); time.sleep(0.1)
+assert not fv.tty_gone(s)
+assert os.read(s, 1) == b"k"
+os.close(m)
+assert fv.tty_gone(s)
+r, w = os.pipe()
+assert fv.tty_gone(r)
+src = open(os.path.join(sys.argv[1], "fleet_view.py")).read()
+assert "fast_errs >= 50 and tty_gone()" in src, "the panel loop no longer asks tty_gone"
+PY
+
 # --- E ----------------------------------------------------------------------------
 cat > "$W/conn.sh" <<EOF
 #!/bin/sh
