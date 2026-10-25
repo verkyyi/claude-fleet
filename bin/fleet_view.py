@@ -2343,15 +2343,21 @@ class Refresh:
         self.vid, self.every = vid, fenv("FLEET_VIEW_REFRESH", 2) if every is None else every
         self.due = time.monotonic() + (self.every if first is None else first)
         self.res, self.busy = None, False
+        # what age_mark reads (task EQBE): how long the last read took, whether it
+        # failed, and since when the running one is busy — a read that is merely
+        # on its way is not 「刷新中…」, only one that is late
+        self.took, self.failed, self.since = 0.0, False, 0.0
         self.lock = threading.Lock()
 
     def _run(self):
+        t0 = time.monotonic()
         try:
             res = entries(self.vid)
         except Exception:
             res = None
         with self.lock:
             self.res, self.busy = res, False
+            self.took, self.failed = time.monotonic() - t0, res is None
             self.due = time.monotonic() + self.every
 
     def poll(self):
@@ -2359,10 +2365,16 @@ class Refresh:
             res, self.res = self.res, None
             start = self.every > 0 and not self.busy and time.monotonic() >= self.due
             if start:
-                self.busy = True
+                self.busy, self.since = True, time.monotonic()
         if start:
             threading.Thread(target=self._run, daemon=True).start()
         return res
+
+    def late(self, secs=None):
+        """A read running longer than FLEET_VIEW_REFRESH_LATE_SECS (2 s)."""
+        secs = fenv("FLEET_VIEW_REFRESH_LATE_SECS", 2) if secs is None else secs
+        with self.lock:
+            return self.busy and time.monotonic() - self.since > secs
 
     def wait_ms(self):
         return max(50, int((self.due - time.monotonic()) * 1000)) if self.every > 0 else 1000
@@ -5004,15 +5016,26 @@ def ago(secs):
 
 
 def age_mark(at, fresh=None, down=False, now=None):
-    """The words after 「会话 N」 when the list in hand is older than
-    FLEET_VIEW_STALE_MARK_SECS (3; T890): 「 · 2 分钟前 · 刷新中…」 while the popup's
-    Refresh is reading it again, 「 · 3 分钟前」 alone under the 失联 banner; "" fresh."""
+    """The words after 「会话 N」 when the list in hand is older than one refresh
+    should ever leave it (task EQBE; T890 marked anything past 3 s, and a 2 s
+    refresh whose read takes ~1 s crossed that on every cycle — the mark blinked
+    for good): FLEET_VIEW_STALE_MARK_SECS (10), at least two refreshes plus the
+    last read's own time. Then 「 · 2 分钟前」, 「 · 刷新中…」 only while a read is
+    late (Refresh.late), 「 · 刷新失败」 when the last one failed; the age alone
+    under the 失联 banner; "" fresh."""
     if not at:
         return ""
     age = (time.time() if now is None else now) - at
-    if age <= fenv("FLEET_VIEW_STALE_MARK_SECS", 3):
+    every = getattr(fresh, "every", 1) if fresh is not None else 0
+    limit = max(fenv("FLEET_VIEW_STALE_MARK_SECS", 10), 2 * max(every, 0) + getattr(fresh, "took", 0.0))
+    if age <= limit:
         return ""
-    if down or fresh is None or getattr(fresh, "every", 1) <= 0:
+    if down or fresh is None or every <= 0:
+        return say("view_age_fmt", ago(age))
+    if getattr(fresh, "failed", False):
+        return say("view_age_failed_fmt", ago(age))
+    late = getattr(fresh, "late", None)
+    if late is not None and not late():
         return say("view_age_fmt", ago(age))
     return say("view_age_refreshing_fmt", ago(age))
 
@@ -5939,7 +5962,11 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             msg = said or say("view_new_failed")
             shown = listing()
         new = fresh.poll() if clock.written else None
-        if new is not None:
+        if new is not None and new == items:
+            # the same list read again: only its age moves — no redraw of the
+            # rows, nothing held back while the person types (task EQBE)
+            items_at, pending_items = time.time(), None
+        elif new is not None:
             pending_items = new
         if pending_items is not None and time.monotonic() - last_input >= 1.2 and not page:
             # Defer structural updates during typing/clicking. Keep the selected

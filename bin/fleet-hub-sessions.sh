@@ -1426,6 +1426,13 @@ loop() {
   trap 'loop_cleanup' EXIT
   trap 'exit 0' TERM INT
   printf '%s\n' "$MAPCODE" > "$LOOPCODEF.new" 2>/dev/null && mv -f "$LOOPCODEF.new" "$LOOPCODEF"
+  # a round SIGKILLed mid-write (a --refresh cut at its timeout, a killed loop)
+  # leaves its mktemp files behind — no trap runs (task EQBE): one sweep per loop
+  # life of the ones older than an hour; the live names (hubsess.map.json, …)
+  # never match the six-letter suffix
+  find "$G" -maxdepth 1 -type f \( -name 'hubsess.hdr.??????' -o -name 'hubsess.json.??????' \
+       -o -name 'hubsess.local.??????' -o -name 'hubsess.map.??????' -o -name 'hub*.json.??????' \
+       -o -name '.hubsess.??????' \) -mmin +60 -delete 2>/dev/null || :
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     # the lock's holder is gone (SIGKILLed): the lock went with it — stop

@@ -465,6 +465,8 @@ fleet_ui_t() {
     en:view_age_fmt) printf ' · %s' "${1:-}" ;;
     zh:view_age_refreshing_fmt) printf ' · %s · 刷新中…' "${1:-}" ;;
     en:view_age_refreshing_fmt) printf ' · %s · refreshing…' "${1:-}" ;;
+    zh:view_age_failed_fmt) printf ' · %s · 刷新失败' "${1:-}" ;;
+    en:view_age_failed_fmt) printf ' · %s · refresh failed' "${1:-}" ;;
     zh:view_ago_s_fmt) printf '%s 秒前' "${1:-}" ;;
     en:view_ago_s_fmt) printf '%ss ago' "${1:-}" ;;
     zh:view_ago_m_fmt) printf '%s 分钟前' "${1:-}" ;;
