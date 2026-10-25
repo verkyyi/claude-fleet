@@ -79,7 +79,7 @@ Between two connections the terminal sends no signals: ↵ · space · ⌃C retr
 now, q (alone) leaves, s opens the home's command line; nothing is sent to the
 session. Narrower than 60 columns only the bar; no terminal, one line per change.
 The view back: 「已恢复 · 走 <route> · 断了 N 秒」 over its top row for
-FLEET_THIN_BANNER_SECS (5), then its pty one row shorter and back so the home
+FLEET_THIN_BANNER_SECS (0 = none, task EQBE), then its pty one row shorter and back so the home
 repaints it. A NetWatch thread reads the address the default route leaves from
 every FLEET_THIN_NET_SECS (1) (a UDP socket connected to TEST-NET: no packet, no
 process); a change cuts short any wait, pick or ssh, makes the next pick
@@ -155,7 +155,7 @@ metadata only, spooled and sent on a thread; FLEET_CLIENT_EVENTS=0 off).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,10"),
 FLEET_THIN_PICK_SECS (30) · FLEET_THIN_SSH_TIMEOUT (10) · FLEET_THIN_NET_SECS (1) ·
-FLEET_THIN_NET_WATCH=0 · FLEET_THIN_NET_CHECK_TMO (1.5) · FLEET_THIN_BANNER_SECS (5): the reconnect page (D4NW),
+FLEET_THIN_NET_WATCH=0 · FLEET_THIN_NET_CHECK_TMO (1.5) · FLEET_THIN_BANNER_SECS (0 = no 「已恢复」 line, EQBE): the reconnect page (D4NW),
 FLEET_THIN_ALIVE_SECS (5) × FLEET_THIN_ALIVE_MAX (3): the keepalive — a line
 silent that long is given up (#4828),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_VIEW_FAILS (3), FLEET_THIN_CRASH_SECS (60),
@@ -203,11 +203,16 @@ OSC_MAX = 4096
 START, END = b"\x1b[200~", b"\x1b[201~"
 # what a dropped connection may leave the terminal in: the alternate screen,
 # mouse reporting, bracketed paste, a hidden cursor
+# — and the keys tmux turned on (extended keys / modifyOtherKeys, the kitty
+# flags) and its cursor shape (task EQBE: a mouse moved after a drop printed
+# `^[[<35;…M` into the shell, a key arrived as `^[[27;…~`)
+KEYS_OFF = b"\x1b[>4m\x1b[<u"
 RESET = (b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l"
-         b"\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m\r\n")
+         b"\x1b[?1004l\x1b[?2004l" + KEYS_OFF + b"\x1b[0 q\x1b[?25h\x1b[0m\r\n")
 # the same minus leaving the alternate screen (T690): a drop keeps the view's
 # last picture where it was, a 「正在重连」 line written over its top row
-MOUSE_OFF = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l\x1b[0m"
+MOUSE_OFF = (b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l"
+             + KEYS_OFF + b"\x1b[0m")
 
 
 def quiet(attrs):
@@ -281,6 +286,15 @@ def tr(key, *args):
 # thin.log
 # ---------------------------------------------------------------------------
 
+def speech_log(raw):
+    """fleet-connect's lines a held view did not show (task EQBE), beside thin.log."""
+    try:
+        with open(os.path.join(os.path.dirname(log_path()), "thin-connect.log"), "ab") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S ").encode() + raw.rstrip(b"\n") + b"\n")
+    except OSError:
+        pass
+
+
 def log_path():
     return os.environ.get("FLEET_THIN_LOG") or os.path.join(
         os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"),
@@ -321,6 +335,13 @@ SSH_ENDS = (
     ("connect-timeout", re.compile(rb"Operation timed out|Connection timed out")),
     ("closed", re.compile(rb"Connection to .{0,200}closed\.")),
 )
+
+
+def ssh_goodbye(chunk):
+    """A chunk that is only ssh's own last words (SSH_ENDS, plain text, short)."""
+    if len(chunk) > 512 or b"\x1b" in chunk:
+        return False
+    return any(rx.search(chunk) for _, rx in SSH_ENDS)
 
 
 def ssh_end(tail):
@@ -385,7 +406,7 @@ def ms(t0, t1=None):
 # the home and the line — fleet-connect.py --argv (约定 4)
 # ---------------------------------------------------------------------------
 
-def pick(home="", avoid="", reconnect=False, restart=None, retest="", limit=300.0, progress="", said=None):
+def pick(home="", avoid="", reconnect=False, restart=None, retest="", limit=300.0, progress="", said=None, keep=False):
     """(fleet-connect --argv's JSON, pick_ms, why) — the certificate renewed, the
     home asked, the line picked; (None, ms, why) when there is none. restart():
     True while it runs ⇒ cut it short (the line came back — LineWatch, T690 — the
@@ -425,6 +446,13 @@ def pick(home="", avoid="", reconnect=False, restart=None, retest="", limit=300.
                 n = 0
                 for raw in iter(p.stderr.readline, b""):
                     n += 1
+                    if keep:
+                        # a view was drawn here (task EQBE): its picture stays — every
+                        # line is the page's note (the last one shows), and kept in
+                        # the log; never the terminal's again mid-reconnect
+                        speech_log(raw)
+                        said(raw.decode("utf-8", "replace").strip())
+                        continue
                     if n == 5:
                         said(None)          # a long speech: the terminal's again
                         lim["secs"] = max(lim["secs"], 300.0)
@@ -979,6 +1007,9 @@ class Thin:
         # its top row says 「正在重连」 until the view is drawn again
         self.drawn = False      # a view was drawn on this terminal (the alternate screen is up)
         self.held = False       # between connections with that picture still on screen
+        if os.environ.pop("FLEET_THIN_HELD", "") == "1" and os.isatty(1):
+            # exec'd by maybe_update over a held picture (task EQBE): still held
+            self.drawn = self.held = True
         self.watch = None       # LineWatch: is the line back?
         self.cut_back = False   # the last ssh was cut because the line came back
         self.rehomed_from = ""  # 换家: the home given up, said once on the new home's top line
@@ -1033,7 +1064,8 @@ class Thin:
         lim = env_num("FLEET_THIN_PICK_SECS", 30) if reconnect else 300.0
         return pick(self.home, self.avoid, reconnect, restart=lambda: self.cut_check(k0), retest=retest,
                     limit=lim, progress=self.progress if self.page_on else "",
-                    said=self.pick_said if self.page_on and self.page_tty else None)
+                    said=self.pick_said if (self.page_on or self.drawn) and self.page_tty else None,
+                    keep=self.drawn)
 
     def remote(self, token, route):
         rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
@@ -1457,6 +1489,12 @@ class Thin:
             or writes more than a screen's worth): ssh's 「connect … unreachable」
             never scrolls over the picture (T690)."""
             with self.out_lock:
+                if not self.held and b and self.drawn and ssh_goodbye(b):
+                    # ssh's 「Timeout, server … not responding」 / 「closed by remote
+                    # host」 over a live view (task EQBE): kept off the picture (the
+                    # tail still records it, end=<word>); its mouse reports off now
+                    write_out(MOUSE_OFF)
+                    return
                 if not self.held or not b:
                     write_out(b)
                     return
@@ -1609,6 +1647,11 @@ class Thin:
             self.attachments = None
             self.cur = None
             self.child, self.master = 0, None
+            if self.drawn and self.page_tty:
+                # the line under a drawn view is gone (task EQBE): nothing reports
+                # the mouse from here on — before the drop is recorded (≤ 5 s)
+                with self.out_lock:
+                    write_out(MOUSE_OFF)
             # cooked again, but echo stays off: the loop is between connections until
             # the next pump's setraw — a key or a mouse report in the meantime (the hub
             # probe, the next fleet-connect.py) must not print (#3061); run() restores
@@ -1669,6 +1712,13 @@ class Thin:
             self.fwd.close_all()
         if self.net is not None:
             self.net.stop()
+        if (self.drawn or self.held) and self.page_tty and n != signal.SIGHUP:
+            # told to stop with a view drawn (task EQBE): its modes go with us —
+            # never a shell left reporting the mouse as text
+            try:
+                write_out(RESET)
+            except OSError:
+                pass
         self.restore_tty()
         tlog("end", self.home, "", "", "", "", 128 + n, "signal %d" % n)
         self.ev("quit", home=self.home, rc=128 + n, reason="signal")
@@ -1856,7 +1906,12 @@ class Thin:
         text = tr("thin_page_back_fmt", getattr(self, "route_words", "") or "-", "%d" % max(1, round(secs)))
         if self.net_at and self.net_at >= time.time() - secs - 1:
             text += tr("thin_page_back_net")
-        self.banner = (text, time.time() + env_num("FLEET_THIN_BANNER_SECS", 5))
+        hold = env_num("FLEET_THIN_BANNER_SECS", 0)
+        if hold <= 0:
+            # the view is simply back (task EQBE): no line over its top row and no
+            # two resizes to draw it again — thin.log's `drawn` / the up event say it
+            return
+        self.banner = (text, time.time() + hold)
         cols = self.size()[1]
         with self.out_lock:
             write_out(b"\x1b7\x1b[1;1H\x1b[0;7m" + cut(" fleet · " + text, cols).encode("utf-8", "replace")
@@ -2040,7 +2095,13 @@ class Thin:
             args.append(self.want)
         os.environ["FLEET_CLIENT_UPDATED"] = "1"
         self.stop_watch()
-        self.unhold()
+        if self.held and self.page_tty:
+            # the picture stays through the switch (task EQBE): the new client
+            # starts holding it (FLEET_THIN_HELD), its page drawn over it
+            os.environ["FLEET_THIN_HELD"] = "1"
+            self.held = self.page_on = False
+        else:
+            self.unhold()
         if self.fwd:
             self.fwd.close_all("新版本客户端")
         self.profile(False)
@@ -2217,6 +2278,8 @@ class Thin:
                 self.net.stop()
             self.page_on = False
             self.unhold()        # ended on a held picture: leave the alternate screen
+            if self.drawn and not self.quit and self.page_tty and sys.exc_info()[0] is not None:
+                write_out(RESET)  # ended by an error on a live view: its modes off (EQBE)
             if self.fwd:
                 self.fwd.close_all()
             self.restore_tty()   # echo back, if it ended between two connections (mute)
@@ -2252,8 +2315,15 @@ class Thin:
             # exec it onto the same view; not switched ⇒ back on, held a while
             self.updating = self.staged = self.just_updated = False
             self.mute()
-            self.held = self.page_on = False
-            write_out(RESET + ("fleet · %s\r\n" % tr("thin_update_switch")).encode("utf-8", "replace"))
+            if self.drawn and self.page_tty:
+                # the picture stays through the switch (task EQBE): held, the page
+                # says it over the top row — never the shell under it
+                write_out(MOUSE_OFF)
+                self.held, self.page_on = True, False
+                self.page(phase="text", text=tr("thin_update_switch"))
+            else:
+                self.held = self.page_on = False
+                write_out(RESET + ("fleet · %s\r\n" % tr("thin_update_switch")).encode("utf-8", "replace"))
             if self.maybe_update() is False:
                 self.update_hold = time.time() + env_num("FLEET_THIN_UPDATE_HOLD", 3600)
                 tlog("update", self.home, "", "", "", "", "", "not switched: holding the next try")

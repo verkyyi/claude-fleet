@@ -892,6 +892,7 @@ FLEET_CLIENT_CAPS                  handoff: what the thin loop takes beyond open
 FLEET_THIN_DOWNLOADS               path: where fleet-thin.py saves a file a show sent (default ~/Downloads, #3541)
 FLEET_THIN_FETCH_CMD               seam: what fleet-thin.py runs to fetch a show's file instead of `fleet-show.sh --fetch` on the home; the id appended (selftest, #3541)
 FLEET_THIN_FETCH_SECS              knob: how long fleet-thin.py lets one show's fetch take (600, #3541)
+FLEET_THIN_HELD                    handoff: maybe_update tells the exec'd client a view's picture is still held — it starts held, never resetting the terminal (EQBE)
 FLEET_ID_NOAGENT_CMD               seam: a command printing the IDs whose live window holds no agent, beside FLEET_ID_LIVE_CMD (T642)
 FLEET_ID_NOAGENT                   handoff: fleet-id.sh → fleet_id.py, the live IDs whose window holds no agent (FLEET_AGENT_FMT 0; T642 start_word)
 FLEET_START_GRACE                  knob: seconds a task record may go with no native segment before start_word calls it not started (default 300; T642)
