@@ -9,6 +9,8 @@
 #   --road box       the 「新会话」 box's road: a blank task record, its session
 #                    opened (fleet-task-record.sh dispatch --spawn --blank) — the
 #                    default; no first turn, so no quota is spent
+#   --road panel     the box's own road under ⌘P (T992): the record made in-process
+#                    (bin/fleet_blank_start.py), then the spawner — no screen
 #   --road dispatch  a dispatch with words (--body-file): its first turn is a
 #                    one-line「回一句 OK」, so each run spends one short turn
 #   -n N             runs (default 20), K at once (--concurrent, default 1)
@@ -53,7 +55,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-case "$ROAD" in box|dispatch) ;; *) echo "fleet-start-drill: --road box|dispatch" >&2; exit 2 ;; esac
+case "$ROAD" in box|dispatch|panel) ;; *) echo "fleet-start-drill: --road box|dispatch|panel" >&2; exit 2 ;; esac
 case "$AGENT" in claude|codex) ;; *) echo "fleet-start-drill: --agent claude|codex" >&2; exit 2 ;; esac
 case "$NODE" in here) export FLEET_SPAWN_NODE=local ;; auto) ;; *) echo "fleet-start-drill: --node here|auto" >&2; exit 2 ;; esac
 case "$N$K$WAIT" in *[!0-9]*) echo "fleet-start-drill: -n / --concurrent / --wait take numbers" >&2; exit 2 ;; esac
@@ -80,7 +82,12 @@ one() {
   local i="$1" t0 out win
   t0=$(now); out="$WORK/run.$i"
   printf '%s\n' "$t0" > "$out.t0"
-  if [ "$ROAD" = box ]; then
+  if [ "$ROAD" = panel ]; then
+    # ⌘P 「新会话」's own road (T992): the record in-process, then the spawner
+    FLEET_TIMING_T0=$t0 python3 "$BIN/fleet_blank_start.py" start --repo "$REPO" --agent "$AGENT" \
+      --fleet "$(bash -c '. "$1/fleet-lib.sh"; fleet_current_session' _ "$BIN" 2>/dev/null)" --title "启动演练 $i" \
+      --default "$AGENT" --reap done:1m > "$out" 2> "$out.err"
+  elif [ "$ROAD" = box ]; then
     FLEET_TIMING_T0=$t0 bash "$BIN/fleet-task-record.sh" dispatch --title "启动演练 $i" --repo "$REPO" \
       --spawn --agent "$AGENT" --reap done:1m --print --blank > "$out" 2> "$out.err"
   else

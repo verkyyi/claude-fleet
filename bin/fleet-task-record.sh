@@ -496,6 +496,7 @@ EOF
     fleet_timing_at record
   }
   export FLEET_DISPATCH="$dispatch"
+  FLEET_DISPATCH_FRESH=$(date +%s); export FLEET_DISPATCH_FRESH   # made just now, by this start (T992)
   # what it was resolved from (T992): a spawner resolving it from the same three
   # (explicit agent · template · default) has nothing to resolve again
   export FLEET_DISPATCH_RESOLVED="${agent}	${template}	${FLEET_AGENT:-}"

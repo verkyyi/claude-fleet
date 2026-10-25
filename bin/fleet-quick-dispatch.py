@@ -366,6 +366,19 @@ def task_send(data, view="", client=""):
     if repo.lower() not in hosted(fleet):
         failed(data, view, "not hosted here")
         return False, tr("compose_failed_fmt", tr("dispatch_hub_elsewhere_fmt", repo, host))
+    if blank:
+        # the record in-process (T992, bin/fleet_blank_start.py): the script's bash
+        # was ~0.6 s of a start; None ⇒ that road cannot take it, the script does
+        try:
+            sys.path.insert(0, str(BIN))
+            import fleet_blank_start
+            got = fleet_blank_start.start(repo, data.get("agent") if data.get("agent") in AGENTS else None, fleet,
+                                          title, "⌘P", agent_default(fleet)) if fleet_blank_start.usable() else None
+        except Exception:  # noqa: BLE001 — never a start lost to the fast road
+            got = None
+        if got is not None:
+            rc, lines, err = got
+            return task_answer(data, view, client, repo, subprocess.CompletedProcess([], rc, "\n".join(lines), err))
     seam = os.environ.get("FLEET_DISPATCH_TASK_CMD")
     argv = (seam.split() if seam else ["bash", str(BIN / "fleet-task-record.sh")]) + ["dispatch"]
     body = None
@@ -384,6 +397,12 @@ def task_send(data, view="", client=""):
     except (OSError, subprocess.SubprocessError) as error:
         failed(data, view, str(error))
         return False, tr("compose_failed_fmt", str(error))
+    return task_answer(data, view, client, repo, out)
+
+
+def task_answer(data, view, client, repo, out):
+    """The dispatch's answer (the script's, or the in-process road's in its shape):
+    T<n> and its code, the window it opened here or the machine that took it."""
     lines = (out.stdout or "").splitlines()
     t = next((l.strip() for l in lines if l.strip()[:1] == "T" and l.strip()[1:].isdigit()), "")
     # the task's code first when the hub has one (EPIC T644 C3) — the name a person reads

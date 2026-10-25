@@ -13,6 +13,7 @@
 #   F  another machine (far): frozen, words carried; `fleet_stub.py deliver` there
 #      pastes them; words that never land are kept as a notice
 #   G  fleet_view: go() runs the handoff once, closes the stub, FLEET_STUB=0 = the old road
+#   I  the panel's ↵ (bolt_stub): stub first, the road in a fork, the words handed over
 #   H  progress: ✓ done stages with their time, ▸ now, ○ to come (~usual), the usual
 #      wait; CJK whose UTF-8 has 0x80–0x9F bytes survives a byte-wise read
 set -uo pipefail
@@ -233,6 +234,32 @@ ok(until(lambda: "❯ 修一下登录" in cap(w)), "H CJK typed whole (一 下 �
 got = fleet_stub.freeze(tm, d)
 ok(got == ([], "修一下登录"), "H the words handed over intact: %r" % (got,))
 fleet_stub.close(tm, d)
+# I — the panel's ↵ (bolt_stub): the stub's window first, the road in a fork of
+# the panel (no interpreter of its own), the session handed the queued words
+newwin = os.path.join(WORK, "newwin.sh")
+igot = os.path.join(WORK, "got.fork")
+with open(newwin, "w") as f:
+    f.write("#!/bin/bash\nw=$(tmux -L %s new-window -d -t =fleet: -P -F '#{window_id}' -e SOCK=%s -e GOT=%s -e READY_AFTER=1 %s)\n"
+            "printf '%%s\\tnew\\t\\t\\n' \"$w\"\n" % (SOCK, SOCK, igot, os.path.join(WORK, "agent.sh")))
+os.chmod(newwin, 0o755)
+os.environ.update(FLEET_VIEW_NEW_CMD=newwin, FLEET_VIEW_INPUT_WAIT="0")
+fleet_view.new_authority = lambda *a, **k: ""
+fleet_view.new_agent = lambda *a: ("", "")
+fleet_view.new_remember = lambda *a: None
+import types
+qo = types.SimpleNamespace(__file__=os.path.join(BIN, "fleet-quickopen.py"), visit=lambda h, k: h)
+t0 = time.time()
+argv = [sys.executable, qo.__file__, "do", "new", "--view", "v1", "--agent", "claude", "--t0", "%.3f" % t0]
+before = tm("list-windows", "-a", "-F", "#{window_id}")[1].split()
+ok(fleet_view.bolt_stub("v1", "", argv, "repo · Claude", {}, qo) is True, "I bolt_stub → True (the popup closes)")
+stubw = sorted({w for w in tm("list-windows", "-a", "-F", "#{window_id} #{@fleet_role}")[1].splitlines()
+                if w.split()[0] not in before and w.endswith("panel")})   # a group lists a window once a session
+ok(len(stubw) == 1, "I the stub's window, at once: %r" % stubw)
+sw = stubw[0].split()[0] if stubw else ""
+keys(sw, "from the fork"); keys(sw, "Enter", lit=False)
+ok(until(lambda: "\x1b[200~from the fork\x1b[201~\r" in (open(igot, "rb").read().decode() if os.path.exists(igot) else ""), 30),
+   "I the road ran in the fork; its session got the queued line")
+ok(until(lambda: tm("display-message", "-p", "-t", sw, "#{window_id}")[1] != sw, 10), "I the stub is gone after the handoff")
 sys.exit(1 if fails else 0)
 PY
 rc=$?

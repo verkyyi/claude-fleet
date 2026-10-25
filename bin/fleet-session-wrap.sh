@@ -150,6 +150,25 @@ _dispatch=${FLEET_START_DISPATCH:-}
 # starts, revoking what was minted for it (T992: a first copy of the same check
 # here cost a hub round trip and two interpreters on every start).
 [ -n "$_dispatch" ] && unset FLEET_START_DISPATCH
+# The spawner read it current a moment ago (FLEET_START_CHECKED_AT, its epoch s):
+# that read stands for this one while it is fresh (FLEET_START_RECHECK_SECS, 2)
+# and nothing here waited (the durable-transfer gate below) — T992.
+_cur_at=${FLEET_START_CHECKED_AT:-}; unset FLEET_START_CHECKED_AT
+case "$_cur_at" in ''|*[!0-9]*) _cur_at='' ;; esac
+# …or the spawner's read of a fresh record, made beside this window (its file:
+# `<rc> <epoch s>`, FLEET_START_CHECK_FILE — T992): a yes is read as above, a no
+# refuses here, nothing within 3 s ⇒ this wrapper reads it itself
+_cur_file=${FLEET_START_CHECK_FILE:-}; unset FLEET_START_CHECK_FILE
+if [ -n "$_cur_file" ] && [ -n "$_dispatch" ]; then
+  _i=0; while [ ! -s "$_cur_file" ] && [ "$_i" -lt 60 ]; do sleep 0.05; _i=$((_i + 1)); done
+  read -r _cur_rc _cur_t < "$_cur_file" 2>/dev/null; rm -f "$_cur_file"
+  case "${_cur_rc:-}:${_cur_t:-}" in
+    0:[0-9]*) _cur_at=$_cur_t ;;
+    [1-9]*:*) printf 'fleet: accepted task start refused\n' >&2; exit 2 ;;
+  esac
+  unset _i _cur_rc _cur_t
+fi
+unset _cur_file
 # The agent adapter table (T620, EPIC T580 C4) — which option holds a window's
 # conversation id, how a resume is spelled — beside this script, else beside its
 # link's target (the generated shell copy: no lib, no python, between pane and agent).
@@ -531,10 +550,15 @@ while :; do
     launch_agent=claude; prev=''
     for a in ${cmd[@]+"${cmd[@]}"}; do [ "$prev" = --agent ] && launch_agent=$a; prev=$a; done
     [ "$launch_agent" != claude ] || python3 "$BIN/fleet_transfer_durable.py" gate-wait "$PWD" || :
+    _cur_at=''   # it may have waited: the spawner's read is not this moment's
   fi
   # Initialization (including the durable-transfer gate) may have waited since
   # admission. Recheck only this initial spawn, then discard the envelope so a
   # later resume/park wake keeps its existing offline behaviour.
+  _recheck=${FLEET_START_RECHECK_SECS:-2}; case "$_recheck" in ''|*[!0-9]*) _recheck=2 ;; esac
+  if [ -n "${_dispatch:-}" ] && [ -z "$_execution" ] && [ -n "$_cur_at" ] && [ $(( $(date +%s) - _cur_at )) -lt "$_recheck" ]; then
+    unset _dispatch   # read current by the spawner, a moment ago
+  fi
   if [ -n "${_dispatch:-}" ]; then
     if ! python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current ${_execution:+--execution "$_execution"} >/dev/null; then
       if [ -n "${FLEET_WORKER_CRED:-}" ]; then
