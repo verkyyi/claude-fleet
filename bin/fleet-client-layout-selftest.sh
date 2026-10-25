@@ -4,8 +4,8 @@
 # #2763; its record is fleet-remote-view-thin-selftest.sh's).
 #
 #   A  pure: bin/fleet-topbar.py lays the line out at 140 / 80 / 45 columns: the
-#      left Tokenman's brand and the session's name, the same in every state
-#      (task ZDYN — the session's glyph, word, #N and question are the ⌘P panel's), the PR from 80 and
+#      left Tokenman's brand alone, the same in every state (task ZDYN — the
+#      session's glyph, word, #N and title are the ⌘P panel's), the PR from 80 and
 #      its checks from 140, the % on every width; grey while its machine is lost,
 #      reconnecting or on the relay — the only time it is named; its words
 #      fleet-ui-lang.sh's, in English too.
@@ -49,27 +49,23 @@ for cols in (140, 80, 45):
     has("%d: the brand on the left" % cols, text, " ›› Tokenman ")
     eq("%d: …and first" % cols, text.startswith(" ›› Tokenman "), True)
     has("%d: the %% never dropped" % cols, text, "62%")
-    has("%d: the name after the brand" % cols, text, " ›› Tokenman · 机器上")
-    for gone in ("↻", "#1894", "在干活", "claude-fleet", "‹", "@mac-b", "mac-b", "●", "working"):
+    for gone in ("↻", "#1894", "机器上", "在干活", "claude-fleet", "‹", "@mac-b", "mac-b", "●", "working"):
         has("%d: no %s (ZDYN: the panel's)" % (cols, gone), text, gone, False)
-eq("140: all of it", w[140].split(), ["››", "Tokenman", "·", rec["title"], "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5",
+eq("140: all of it", w[140].split(), ["››", "Tokenman", "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5",
                                       "·", "high", "·", "⌘P"])
-eq("80: PR, 62% Opus 5.5 high", w[80].split(), ["››", "Tokenman", "·", rec["title"], "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
-eq("45: the brand, the name clipped, the %", w[45].split(), ["››", "Tokenman", "·", "机器上一直有会话在忙，…", "62%"])
+eq("80: PR, 62% Opus 5.5 high", w[80].split(), ["››", "Tokenman", "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
+eq("45: the brand and the %", w[45].split(), ["››", "Tokenman", "62%"])
 t, _ = tb.fit(rec, 30, now=1060)
-eq("30: the mark alone, the name clipped", t.split(), ["››", "·", "机器上一直有会话…", "62%"]); eq("30: still the width", tb.cells(t), 30)
-t, _ = tb.fit(dict(rec, title=""), 80, now=1060)
-eq("no title: the brand alone", t.split()[:3], ["››", "Tokenman", "PR"]); eq("no title: still the width", tb.cells(t), 80)
+eq("30: the mark alone", t.split(), ["››", "62%"]); eq("30: still the width", tb.cells(t), 30)
 # every state draws the same line (ZDYN): no glyph, no word, no red
 def at(cols=80, **kw):
     return tb.fit(dict(rec, **kw), cols, now=1060)
 same = at()
 for kw in (dict(state="needs", kind="ask", q="要你确认：删掉旧分支吗？"), dict(state="needs", kind="perm", q="Bash: git push"),
            dict(state="done"), dict(state="exited"), dict(state="failed"), dict(state="idle"), dict(state="sleeping"),
-           dict(state="looping"), dict(key="")):
+           dict(state="looping"), dict(key="", title="整理周报里的发布时间线")):
     eq("%s: the line unchanged" % kw, at(**kw), same)
 has("asking: no question on the line", at(state="needs", kind="ask", q="要你确认")[0], "要你确认", False)
-has("asking: the name stays", at(state="needs", kind="ask", q="要你确认")[0], " ›› Tokenman · 机器上")
 eq("no red background left", hasattr(tb, "BG_ASK"), False)
 t, _ = at(pr="merged"); has("done: PR 已合并", t, "PR 已合并 · 62%")
 t, bg = at(lost=True)
@@ -96,8 +92,7 @@ grey = tb.paint(*tb.layout(rec, 80, route="relay", now=1060))
 has("grey: the brand keeps its clay", grey, "#[fg=#d9765a,bold]"); has("grey: on grey", grey, "#[bg=%s]" % tb.BG_DOWN)
 has("paint: the name bold", tb.paint(*tb.layout(rec, 80, now=1060)), "#[fg=#f3ede6,bold]")
 has("stand-in: the brand", tb.quick_fmt(), "››#[nobold]#[fg=#f3ede6#,bold] Tokenman")
-has("stand-in: the window's name", tb.quick_fmt(), "#{=/64/…:window_name}")
-has("stand-in: reads no state stamp", tb.quick_fmt(), "@claude_state", False)
+has("stand-in: reads no window stamp", tb.quick_fmt(), "@claude_state", False)
 os.environ["FLEET_GLYPHS"] = "ascii"
 t, _ = at(140); has("ascii: >> Tokenman", t, " >> Tokenman "); has("ascii: PR #N +", t, "PR #1885 +")
 del os.environ["FLEET_GLYPHS"]

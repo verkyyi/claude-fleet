@@ -176,8 +176,8 @@ if [ -z "$MEASURE" ]; then
   INB=$(T display-message -p -t fleet:beta-next "$L" | sed 's/#\[[^]]*\]//g')
   IND=$(T display-message -p -t fleet:delta-fourth "$L" | sed 's/#\[[^]]*\]//g')
   case "$INB" in *"›› Tokenman"*" 22"*"⌘P"*) st_ok "D: in its own window the full line" ;; *) fail "D: in its own window the full line" "$INB" ;; esac
-  case "$IND" in *"›› Tokenman · delta-fourth"*) st_ok "D: elsewhere the stand-in, the brand and that window's name" ;; *) fail "D: elsewhere the stand-in" "$IND" ;; esac
-  case "$IND" in *"22"*|*beta-next*|*"⌘P"*) fail "D: …nothing of the window it was made for" "$IND" ;; *) st_ok "D: …nothing of the window it was made for" ;; esac
+  case "$IND" in *"›› Tokenman"*) st_ok "D: elsewhere the stand-in, the brand" ;; *) fail "D: elsewhere the stand-in" "$IND" ;; esac
+  case "$IND" in *"22"*|*"⌘P"*) fail "D: …nothing of the window it was made for" "$IND" ;; *) st_ok "D: …nothing of the window it was made for" ;; esac
   # a line with the format's own characters survives the branch: , } # { (no stamp
   # reaches it free-form today — stamp_ctx keeps the model to a safe set — but a
   # word of the line may carry them)
