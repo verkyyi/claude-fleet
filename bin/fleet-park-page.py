@@ -113,6 +113,11 @@ def editor(screen, draft, failed):
     # Zero is a valid monotonic origin (macOS Python 3.9), not a prior input.
     last_presence = None
     size = None
+    # BREAK-IT park-page-copy-mode: a page started while its pane sits in tmux
+    # copy-mode (the wheel scrolled the agent's screen) would never see a key, Enter
+    # included. Only at the start: copy-mode entered later, while the person looks
+    # at the parked window, is them reading the saved screen — left alone.
+    gate.tmux('', 'if-shell', '-F', '-t', pane, '#{pane_in_mode}', 'send-keys -t %s -X cancel' % pane)
     try:
         tty.setraw(0, termios.TCSANOW)
         sys.stdout.write('\x1b[?2004h')

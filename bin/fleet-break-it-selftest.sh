@@ -6546,6 +6546,43 @@ drill_park_backspace_ghost_draft() {
   WHAT='真实停放页空输入与行首退格不产生 DEL 草稿；真实 Unicode 草稿仍阻止外部接回，清空后同 SID 接回原句一次'
 }
 
+# A parked window whose pane is stuck in tmux copy-mode (the mouse wheel scrolled it):
+# copy-mode is the PANE's, so it outlives every 看台 that looked at it, and every key
+# typed — ↵ included — goes to copy-mode, never to the park page; the session never
+# wakes. The 看台's go lets a PARKED window's pane out of copy-mode before it shows it;
+# a live window in copy-mode is someone reading: left alone. The page's own start
+# lets its pane out too (fleet-park-selftest.py Park.test_page_start_leaves_copy_mode).
+drill_park_page_copy_mode() {
+  CAP=5; local t0 s="$WORK/sock-pcm" w1 w2 got out
+  mkdir -p "$WORK/pcm/conf/remote-views/v1.d"
+  "$REAL_TMUX" -S "$s" -f /dev/null new-session -d -s fl -x 100 -y 30 -n home 'sleep 600' || { WHY="no test server"; return 1; }
+  # the parked window: its pane's program stands for the park page (what reaches it is typed)
+  w1=$("$REAL_TMUX" -S "$s" new-window -d -P -F '#{window_id}' -t fl -n parked "sh -c 'exec cat > \"$WORK/pcm/page.in\"'")
+  w2=$("$REAL_TMUX" -S "$s" new-window -d -P -F '#{window_id}' -t fl -n live "sh -c 'exec cat > \"$WORK/pcm/live.in\"'")
+  "$REAL_TMUX" -S "$s" set-option -w -t "$w1" @parked "$(date +%s)"
+  "$REAL_TMUX" -S "$s" set-option -w -t "$w1" @fleet_id f1
+  "$REAL_TMUX" -S "$s" set-option -w -t "$w2" @fleet_id f2
+  "$REAL_TMUX" -S "$s" new-session -d -t fl -s 'fl@view-v1'
+  "$REAL_TMUX" -S "$s" select-window -t "=fl@view-v1:$w2"
+  printf '%s\tfl\tthin\t%s\t%s\tcur=\troute=lan\tdevice=\ttoken=t\tfuid=U\tnode=n\n' /dev/null "$(date +%s)" "$$" > "$WORK/pcm/conf/remote-views/v1"
+  "$REAL_TMUX" -S "$s" copy-mode -t "$w1"; "$REAL_TMUX" -S "$s" copy-mode -t "$w2"
+  [ "$("$REAL_TMUX" -S "$s" display-message -p -t "$w1" '#{pane_in_mode}')" = 1 ] || { WHY="the fixture's pane is not in copy-mode"; return 1; }
+  t0=$(now)
+  out=$(TMUX="$s,0,0" FLEET_CONF_DIR="$WORK/pcm/conf" FLEET_VIEW_ROWS_CMD=true bash "$BIN/fleet-view-go.sh" v1 "$w1" 2>&1) \
+    || { WHY="the go to the parked window failed: $out"; return 1; }
+  got=$("$REAL_TMUX" -S "$s" display-message -p -t "$w1" '#{pane_in_mode}')
+  [ "$got" = 0 ] || { WHY="the parked window's pane is still in copy-mode after the go (pane_in_mode=$got): every key goes to copy-mode, not the page"; return 1; }
+  "$REAL_TMUX" -S "$s" send-keys -t "$w1" -l 'wake up'; "$REAL_TMUX" -S "$s" send-keys -t "$w1" Enter
+  until_ok 3 grep -q 'wake up' "$WORK/pcm/page.in" || { WHY="typed keys did not reach the parked page"; return 1; }
+  SECS=$(since "$t0")
+  # a live window in copy-mode is someone reading: the go leaves it as it is
+  TMUX="$s,0,0" FLEET_CONF_DIR="$WORK/pcm/conf" FLEET_VIEW_ROWS_CMD=true bash "$BIN/fleet-view-go.sh" v1 "$w2" >/dev/null 2>&1
+  got=$("$REAL_TMUX" -S "$s" display-message -p -t "$w2" '#{pane_in_mode}')
+  [ "$got" = 1 ] || { WHY="the go let a live (not parked) window out of copy-mode"; return 1; }
+  "$REAL_TMUX" -S "$s" kill-server 2>/dev/null
+  WHAT='停放窗口的窗格卡在 copy-mode：看台切过去先退出 copy-mode，打的字（含回车）进停放页；没停放的窗口在 copy-mode 里原样不动'
+}
+
 # A parked session that does not come back (task HHV0): the machine went away, the
 # resume hangs. The sentence must not wait for ever, nor turn up later as a turn
 # after the page said 没送到: past FLEET_GATE_WAKE_SECS (20) the gate takes the seed

@@ -3176,6 +3176,20 @@ def webterm_switch(vid, window):
     return r.returncode
 
 
+# BREAK-IT park-page-copy-mode: a PARKED window whose pane sits in tmux copy-mode (the
+# wheel scrolled it — copy-mode is the pane's, it outlives every 看台) would take every
+# key the person types, ↵ included, and the park page would never see one. A go lets
+# such a pane out first, in the same tmux call; a live window in copy-mode is someone
+# reading and is never touched, nor is a parked one entered while being looked at
+# (only this moment and the page's own start act).
+PARK_UNMODE_IF = "#{?#{@parked},#{pane_in_mode},0}"
+
+
+def park_unmode(w):
+    """tmux words letting window `w`'s pane out of copy-mode iff it is parked."""
+    return ["if-shell", "-F", "-t", w, PARK_UNMODE_IF, "send-keys -t %s -X cancel" % w]
+
+
 def go(qo, vid, target, how="go", client="", meta=None, record=True):
     """Switch the 看台 to `target`. rc 0 switched · 3 another machine / login whose
     link is not up yet (C4: its window shown, waiting to land there) · 4 gone ·
@@ -3214,9 +3228,11 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         method, rc = "gone", 4
         toast(client, say("view_gone"))
     else:
+        if vid.startswith("wt-"):
+            tm(*park_unmode(w))
         code = webterm_switch(vid, w)
         if code is None:
-            code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+            code, _ = tm(*park_unmode(w) + [";", "select-window", "-t", "=%s:%s" % (g, w)])
         if code:
             toast(client, say("view_open_elsewhere"))
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)

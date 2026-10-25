@@ -287,6 +287,16 @@ env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/issue-78" dev1 >/dev
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/issue-8" dev1 2>/dev/null; st_eq "S: the real key lands on its worker" "0 $W8" "$? $(vcur dev1)"
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/fid-7" dev1 2>/dev/null; st_eq "S: an identity is never looked up" "0 $W7" "$? $(vcur dev1)"
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-8" dev1-via-home >/dev/null 2>&1; st_eq "S: a far 看台 not here yet: 5" "5" "$?"
+# BREAK-IT park-page-copy-mode: a PARKED window's pane stuck in copy-mode is let out on
+# the select (fast path and slow road alike); a live one in copy-mode is left as it is
+pim() { tn display-message -p -t "$1" '#{pane_in_mode}'; }
+tn set-option -w -t "$W7" @parked 1
+tn copy-mode -t "$W7"; tn copy-mode -t "$W8"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/fid-7" dev1 2>/dev/null; st_eq "S: (fast path) a parked window in copy-mode: selected, out of copy-mode" "0 $W7 0" "$? $(vcur dev1) $(pim "$W7")"
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "wid:$U/fid-8" dev1 2>/dev/null; st_eq "S: (fast path) a live window in copy-mode stays in it" "0 $W8 1" "$? $(vcur dev1) $(pim "$W8")"
+tn set-option -w -u -t "$W7" @parked; tn set-option -w -t "$W8" @parked 1
+env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/issue-8" 2>/dev/null; st_eq "S: (slow road) a parked window in copy-mode: out of copy-mode" "0 0" "$? $(pim "$W8")"
+tn set-option -w -u -t "$W8" @parked
 env -u TMUX bash "$BIN/fleet-remote-view.sh" select "$U/fid-8" dev1 2>/dev/null
 waitfor 5 sh -c "[ \"\$(tr '\t' '\n' < '$FLEET_CONF_DIR/remote-views/dev1' | sed -n 's/^cur=//p')\" = '$U/fid-8' ]" \
   || st_miss "S: back on worker 8, cur= follows" "$(rowget dev1 cur)"
