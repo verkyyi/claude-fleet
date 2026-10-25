@@ -3438,6 +3438,11 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0="", st
     if not stub:
         return go_new_road(qo, vid, client, repo, agent, prompt, draft, t0)
     os.environ["FLEET_STUB_DIR"] = stub
+    # where the box's starts go (T992): this machine when it has room, the hub's
+    # placement only when it does not — FLEET_NEW_NODE (here-first · auto · local)
+    node = (conf_word("FLEET_NEW_NODE") or "here-first").strip()
+    if node in ("here-first", "auto", "local"):
+        os.environ["FLEET_START_NODE"] = node
     fleet_stub.note_road(stub, os.getpid())
     fleet_stub.expect(stub)   # the plan and its usual times, on the stub at its next tick
     _NEW_SAID[:] = []
@@ -5340,7 +5345,43 @@ def bolt_argv(qo, vid, client, st, query=""):
     return argv, "", " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
 
 
-def bolt_stub(vid, client, argv, where):
+def bolt_prestart(vid, st):
+    """The 「新会话」 box is open (T992): the start's steps that need no record —
+    admission, the authority's --finish, the worktree and its fill — begun now,
+    for the box's repo, held 120 s for its ↵ (dash-raw-session.sh --prestart,
+    FLEET_PRESTART_HOLD) and given back untaken. One a box: a repo changed with
+    ←→ starts none (the dispatch's own prestart, beside its record, then)."""
+    repo = bolt_repo(st)
+    if not repo or st.get("prestart") or (conf_word("FLEET_PRESTART_ON") or "1").strip() == "0":
+        return
+    fleet = view_fleet(vid)
+    if not fleet:
+        return
+    try:
+        import tempfile
+        d = tempfile.mkdtemp(prefix="fleet-prestart.")
+        node = (conf_word("FLEET_NEW_NODE") or "here-first").strip()
+        env = dict(os.environ, FLEET_PRESTART_HOLD="120",
+                   FLEET_START_NODE=node if node in ("here-first", "auto", "local") else "here-first")
+        argv = ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh"), "--prestart", d, "--repo", repo,
+                "--agent", bolt_agent(st), fleet]
+        with open(os.path.join(d, "err"), "w") as err:
+            subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
+                             start_new_session=True, env=env)
+        st["prestart"] = (repo, bolt_agent(st), d)
+    except OSError:
+        return
+
+
+def bolt_prestart_env(st):
+    """FLEET_PRESTART for the box's ↵ — the prestart made for this very repo and agent."""
+    got = st.get("prestart")
+    if got and got[0] == bolt_repo(st) and got[1] == bolt_agent(st) and os.path.isdir(got[2]):
+        return {"FLEET_PRESTART": got[2]}
+    return {}
+
+
+def bolt_stub(vid, client, argv, where, extra_env=None):
     """The 「新会话」 box's ↵ with a stub (T992): its window in the 看台 at once,
     then `do new --stub` in its own session (esc-proof, as bolt_run), and the
     popup closes. False: no stub (FLEET_STUB=0, a browser 看台, tmux said no) —
@@ -5358,7 +5399,7 @@ def bolt_stub(vid, client, argv, where):
     fleet_stub.shown(tm, d, t0)
     try:
         subprocess.Popen(argv + ["--stub", d], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+                         stderr=subprocess.DEVNULL, start_new_session=True, env=dict(os.environ, **(extra_env or {})))
     except OSError as error:
         fleet_stub.status(tm, d, "✗ " + str(error))
     return True
@@ -5614,6 +5655,12 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             authority_prefetch(fleet, vid, bolt_repo(bolt))
         except Exception:  # noqa: BLE001 — a prefetch never breaks the panel
             pass
+        # a box already open (⌘N opens it before this read lands): its prestart now
+        if mode == "compose":
+            try:
+                bolt_prestart(vid, bolt)
+            except Exception:  # noqa: BLE001
+                pass
     # started once the first frame is up (T890: a thread's start waits for the
     # thread to run — tens of ms on a busy machine, before anything was drawn)
     loader = threading.Thread(target=grid_load, daemon=True)
@@ -5709,6 +5756,8 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         # change its destination. Async grid loading is handled below.
         if bolt["ready"] and bolt["repo"] is None:
             bolt["repo"] = bolt_repo(bolt)
+        if bolt["ready"]:
+            bolt_prestart(vid, bolt)
         mode, box = "compose", 2
         page.scroll, page.follow = 0, True
 
@@ -6154,7 +6203,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                         msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
                         continue
                     argv, title, where = bolt_argv(qo, vid, client, bolt)
-                    if bolt_stub(vid, client, argv, where):
+                    if bolt_stub(vid, client, argv, where, bolt_prestart_env(bolt)):
                         # the new session's window is on the screen (T992): the
                         # road goes on behind it, the popup closes now
                         return 0

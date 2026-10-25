@@ -1060,7 +1060,11 @@ fleet_repo_authority_guard() {
   [ -n "$repo" ] || return 0
   selected=$(fleet_task_authority "$sess" "$repo")
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$selected" ]; then return 0; fi
-  result=$( { _fleet_hub_env
+  # the token: fleet_hub_rest reads it in-process (T992, fleet_node_http) — the
+  # shell road (_fleet_hub_env: a Python to ask the proxy) only for a seam or
+  # FLEET_NODE_HTTP=0
+  result=$( { if [ -n "${FLEET_HUB_AUTHORITY_CMD:-}" ] || [ "${FLEET_NODE_HTTP:-1}" = 0 ] || [ -n "${FLEET_HUB_CURL:-}" ]; then
+      _fleet_hub_env; fi
     if [ -n "${FLEET_HUB_AUTHORITY_CMD:-}" ]; then "$FLEET_HUB_AUTHORITY_CMD" "$repo" "$phase"
     else python3 "$_FLEET_LIB_DIR/fleet_repo_authority.py" "$repo" "$phase"; fi; } 2>&1 ) || {
       FLEET_AUTHORITY_ERROR=${result:-'repo authority: check failed without a diagnostic; check node/Hub availability'}

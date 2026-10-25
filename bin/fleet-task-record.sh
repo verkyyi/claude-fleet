@@ -290,6 +290,21 @@ except Exception:
   return 0
 }
 
+# prestart_drop — a dispatch that never reached its spawner gives back what its
+# prestart made (T992): the worktree and its branch; its admission's reservation
+# lapses by itself (fleet_admit_reserve).
+prestart_drop() {
+  [ -n "${PRESTART:-}" ] && [ -d "$PRESTART" ] || return 0
+  local i=0 slug wt main
+  while [ ! -f "$PRESTART/done" ] && [ "$i" -lt 300 ]; do sleep 0.05; i=$((i + 1)); done
+  slug=$(sed -n 's/^slug=//p' "$PRESTART/prep" 2>/dev/null); wt=$(sed -n 's/^wt=//p' "$PRESTART/prep" 2>/dev/null)
+  if [ -n "$slug" ] && [ -n "$wt" ]; then
+    main=$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); main=${main%/.git}
+    [ -n "$main" ] && fleet_scratch_free "$main" "$slug" "$wt"
+  fi
+  rm -rf "$PRESTART"
+}
+
 # win_of [<window>] → the window to read (the caller's own pane when none).
 win_of() {
   if [ -n "${1:-}" ]; then printf '%s' "$1"; return 0; fi
@@ -382,6 +397,23 @@ if [ "$cmd" = dispatch ]; then
                && printf '%s' "${FLEET_MAIN:-}" )
   fi
   asdir=${asdir:-$PWD}
+  # The spawner's steps that need no record (T992: admission, the authority's
+  # --finish, the worktree and its fill — ~1 s) begin NOW, beside the record
+  # (dash-raw-session.sh --prestart); its run below takes their answers
+  # (FLEET_PRESTART). The record refused ⇒ the worktree given back (prestart_drop).
+  PRESTART=''
+  if [ -n "${FLEET_PRESTART:-}" ] && [ -d "$FLEET_PRESTART" ]; then
+    :   # made ahead already (⌘P's box, T992): the spawner takes it, or starts afresh
+  elif [ -n "$repo" ] && [ "$spawn" = 1 ] && [ "${FLEET_PRESTART_ON:-1}" != 0 ]; then
+    if PRESTART=$(mktemp -d "${TMPDIR:-/tmp}/fleet-prestart.XXXXXX"); then
+      ( bash "$BIN/dash-raw-session.sh" --prestart "$PRESTART" --repo "$repo" ${agent:+--agent "$agent"} ${tsess:+"$tsess"} ) \
+        </dev/null >/dev/null 2>"$PRESTART/err" &
+      export FLEET_PRESTART="$PRESTART"
+      trap 'prestart_drop' EXIT
+    else
+      PRESTART=''
+    fi
+  fi
   kv=''
   if [ -n "$repo" ] && [ -z "$as_agent" ] && [ "$spawn" = 1 ] \
      && kv=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "$asdir" \
@@ -464,6 +496,9 @@ EOF
     fleet_timing_at record
   }
   export FLEET_DISPATCH="$dispatch"
+  # what it was resolved from (T992): a spawner resolving it from the same three
+  # (explicit agent · template · default) has nothing to resolve again
+  export FLEET_DISPATCH_RESOLVED="${agent}	${template}	${FLEET_AGENT:-}"
   # The task's own ID (EPIC T644 C1) rides to the spawner, bound to THIS record: its
   # first window goes by it (C2, fleet_task_fid) without asking the hub again.
   fleet_is_fid "$tfid" && export FLEET_TASK_FID="$t=$tfid"
@@ -481,6 +516,7 @@ EOF
       if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
       pfa="--prompt-file=$pf"
     fi
+    trap - EXIT   # its prestart is the spawner's now (FLEET_PRESTART)
     exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
       ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
   fi
