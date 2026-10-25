@@ -74,6 +74,37 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
 - **下线**：`kubectl -n new-deploy delete -k deploy/k8s/credproxy/prod`；本机代理的中心路
   随之 404，不可信机器上的会话停在「没有可用的路」——可信机器不受影响。
 
+## Bedrock 兜底（任务 PNWW，默认关）
+
+订阅池接不住一个 Claude Messages 请求时——hub 说 `claude_pool_unavailable`
+（没有可用订阅），或绑定的订阅换绑一次后仍回 429——中心代理问 hub 一次
+`POST /v1/fleet/credproxy/fallback`，hub 准了才把**同一个请求体**改投 Amazon
+Bedrock（InvokeModel / InvokeModelWithResponseStream，SigV4），把 Bedrock 的
+event-stream 译回 Anthropic SSE。没准、模型没映射、Bedrock 拒了：原来的错误原样给客户端。
+
+- **开关**：hub 设置 `fleet.fallback.bedrock`（`on` | `off`，默认 `off`；关着 hub 什么
+  都不读，代理把这个「关」记一个缓存周期，不每个 429 都问）。
+  `fleet hub set fleet.fallback.bedrock on`。
+- **谁不行**：试用身份（`trialIdentity`）、超了个人额度的人——一律原错误。
+- **月上限**：`fleet.fallback.bedrock.cap_usd`（默认 `200`，UTC 自然月）。花费 =
+  本月 `pool_usage` 里 `source=bedrock` 的行按 API 价算（和成员美元上限同一张价表、
+  同一个 `priceUsage`）；到线就不再兜底。
+- **钥匙**：存在 vault 里，`POST /v1/fleet/credentials`
+  `{"action":"put","principal_id":"pool","provider":"claude","account":"bedrock1",
+  "secret":{"aws_access_key_id":"…","aws_secret_access_key":"…","aws_region":"us-west-2"}}`
+  （region 可省，默认 `us-west-2`）。它是 kind `bedrock`、source_class `api` 的一行，
+  **不是订阅**：不出现在订阅列表、不租给机器、不绑会话（`GET` 的答案里单列在 `bedrock`）。
+- **模型**：`claude-opus-5-5` → `us.anthropic.claude-opus-5-5`——表只有一张，
+  `tokenledger/shared/credproxy/bedrock.go` 的 `BedrockModels`；跨区推理前缀按钥匙
+  的 region 加（us. / eu. / apac.）。上线前对照账号的 Bedrock 控制台核一遍 ID。
+- **计量**：Bedrock 服务的请求照样记一行 `pool_usage`，`source=bedrock`、account
+  `pool/<钥匙名>`、人是通行证的人（也算进个人额度）；其余行 `source=subscription`。
+  `GET /v1/admin/usage` 多了 `sources`（本周按来源的 token / 请求数）和 `bedrock`
+  （开没开、本月花了多少、上限）。审计行带 `fallback`（兜了，或为什么没兜）。
+- **出口**：中心代理直连 `bedrock-runtime.<region>.amazonaws.com`，不经新加坡中转；
+  `--bedrock` / `CCQUOTA_CREDPROXY_BEDROCK_URL` 可换一个端点。只有中心代理有兜底，
+  本机代理（`bin/fleet-cred-proxy.py`）没有。
+
 ## fleet-workers — 用户 pod 旁边再一份（#3547，EPIC #3500 C2）
 
 `fleet-workers/` 把同一个中心代理在 `fleet-workers` 命名空间里再起一份，名字按批次约定改成

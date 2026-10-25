@@ -63,6 +63,10 @@ type PoolUsage struct {
 	// Tenant is a service run's tenant (claude-fleet#4006): the
 	// space:ws:<id> its pass was minted for; '' on every person's row.
 	Tenant string `json:"tenant,omitempty"`
+	// Source is where the request was served (task PNWW): SourceSubscription
+	// (the pool — every row before the column) or UsageSourceBedrock (the
+	// Bedrock fallback). "" written = subscription.
+	Source string `json:"source,omitempty"`
 
 	// Read off the scan only (EventUsageSince, claude-fleet#3406): the
 	// endpoint and login that reported it, the machine it ran on, and the
@@ -85,7 +89,67 @@ func (s *Store) ensurePoolUsage() error {
 		return fmt.Errorf("create pool usage table: %w", err)
 	}
 	// A service run's tenant (claude-fleet#4006).
-	return s.addColumn("pool_usage", "tenant", "TEXT NOT NULL DEFAULT ''")
+	if err := s.addColumn("pool_usage", "tenant", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Where it was served (task PNWW): every older row is the subscription pool.
+	return s.addColumn("pool_usage", "source", "TEXT NOT NULL DEFAULT 'subscription'")
+}
+
+// UsageSourceBedrock is a pool_usage row the Bedrock fallback served (task
+// PNWW); SourceSubscription is every other.
+const UsageSourceBedrock = "bedrock"
+
+// ValidUsageSource is a source a usage row may carry ("" = subscription).
+func ValidUsageSource(v string) bool {
+	return v == "" || v == SourceSubscription || v == UsageSourceBedrock
+}
+
+// SourceModelUsageSince sums every person's rows of one source at or after
+// since, per (provider, model) — what the Bedrock cap prices (task PNWW).
+func (s *Store) SourceModelUsageSince(source string, since time.Time) ([]PersonModelUsage, error) {
+	rows, err := s.write.Query(`SELECT provider, model, SUM(tokens_in), SUM(cache_write), SUM(cache_read), SUM(tokens_out)
+		FROM pool_usage WHERE source = ? AND at_unix >= ? GROUP BY provider, model ORDER BY provider, model`,
+		source, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PersonModelUsage
+	for rows.Next() {
+		var r PersonModelUsage
+		if err := rows.Scan(&r.Provider, &r.Model, &r.In, &r.CacheWrite, &r.CacheRead, &r.Out); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SourceUsage is one source's share of the rows since some time.
+type SourceUsage struct {
+	Source   string `json:"source"`
+	Tokens   int64  `json:"tokens"`
+	Requests int64  `json:"requests"`
+}
+
+// PoolUsageBySource sums every row since since by its source (task PNWW).
+func (s *Store) PoolUsageBySource(since time.Time) ([]SourceUsage, error) {
+	rows, err := s.write.Query(`SELECT source, SUM(tokens_in + cache_write + tokens_out), SUM(requests) FROM pool_usage
+		WHERE at_unix >= ? GROUP BY source ORDER BY source`, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SourceUsage
+	for rows.Next() {
+		var u SourceUsage
+		if err := rows.Scan(&u.Source, &u.Tokens, &u.Requests); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // AddPoolUsage writes one row. A row with nothing in it is skipped.
@@ -99,11 +163,14 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 	if u.Requests <= 0 {
 		u.Requests = 1
 	}
+	if u.Source == "" {
+		u.Source = SourceSubscription
+	}
 	_, err := s.write.Exec(`INSERT INTO pool_usage (principal, worker_id, account, provider, model,
-		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.Principal, u.WorkerID, u.Account, u.Provider, u.Model,
-		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant)
+		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant, u.Source)
 	return err
 }
 
@@ -111,7 +178,7 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 // principal "" is everyone, a zero until is now and onward.
 func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUsage, error) {
 	q := `SELECT principal, worker_id, account, provider, model, tokens_in, cache_write, cache_read,
-		tokens_out, requests, at_unix, repo, issue, tenant FROM pool_usage WHERE at_unix >= ?`
+		tokens_out, requests, at_unix, repo, issue, tenant, source FROM pool_usage WHERE at_unix >= ?`
 	args := []any{since.Unix()}
 	if !until.IsZero() {
 		q += ` AND at_unix < ?`
@@ -131,7 +198,7 @@ func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUs
 		var u PoolUsage
 		var at int64
 		if err := rows.Scan(&u.Principal, &u.WorkerID, &u.Account, &u.Provider, &u.Model, &u.In, &u.CacheWrite,
-			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant); err != nil {
+			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant, &u.Source); err != nil {
 			return nil, err
 		}
 		u.At = time.Unix(at, 0).UTC()

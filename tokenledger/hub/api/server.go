@@ -921,6 +921,9 @@ func (s *Server) routes() *routeMux {
 		// …and its quota 429s (claude-fleet#2115): the hub moves the
 		// session to an account with room, once.
 		mux.HandleFunc(CredProxyRebindPath, s.handleCredProxyRebind)
+		// …and, past that, whether Bedrock may take it (task PNWW; off
+		// unless fleet.fallback.bedrock is on).
+		mux.HandleFunc(CredProxyFallbackPath, s.handleCredProxyFallback)
 		// Per-person budgets (claude-fleet#1977): what a person used,
 		// reported by both proxies, each with its own token; the list is
 		// the operator's.

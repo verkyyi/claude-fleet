@@ -39,6 +39,9 @@ type Usage struct {
 	CacheWrite int64  `json:"cache_write"`
 	CacheRead  int64  `json:"cache_read"`
 	Out        int64  `json:"out"`
+	// Source is where the request was served: "" the subscription pool,
+	// SourceBedrock the Bedrock fallback (task PNWW).
+	Source string `json:"source,omitempty"`
 }
 
 // Tokens is what a budget counts: input + cache writes + output.

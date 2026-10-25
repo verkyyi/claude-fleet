@@ -78,6 +78,12 @@ type Secret struct {
 	User                     string     `json:"user,omitempty"`
 	AccountUUID              string     `json:"account_uuid,omitempty"`
 	MeterID                  string     `json:"meter_id,omitempty"` // internal; Put overwrites caller input, refresh preserves it
+	// An Amazon Bedrock key pair (task PNWW): a pool claude row of kind
+	// bedrock, never leased to a machine or bound to a session — only the
+	// cluster proxy's Bedrock fallback is handed it, one request at a time.
+	AWSAccessKeyID     string `json:"aws_access_key_id,omitempty"`
+	AWSSecretAccessKey string `json:"aws_secret_access_key,omitempty"`
+	AWSRegion          string `json:"aws_region,omitempty"`
 }
 
 // Kinds — what the long-lived half IS, kept beside the row as metadata (the
@@ -87,7 +93,13 @@ const (
 	KindRefreshToken = "refresh_token" // refreshed by the hub, rotates on use
 	KindSetupToken   = "setup_token"   // claude setup-token: issued as is, never refreshed
 	KindToken        = "token"         // github phase one: issued as is
+	// KindBedrock is an AWS key pair for the Bedrock fallback (task PNWW):
+	// store.KindBedrock, kept out of every subscription list.
+	KindBedrock = store.KindBedrock
 )
+
+// DefaultBedrockRegion is a Bedrock key's region when none is given.
+const DefaultBedrockRegion = "us-west-2"
 
 // Kind reports s's kind for provider (after Validate).
 func (s Secret) Kind(provider string) string {
@@ -96,6 +108,8 @@ func (s Secret) Kind(provider string) string {
 		return KindToken
 	case provider == Claude && s.SetupToken != "":
 		return KindSetupToken
+	case provider == Claude && s.AWSAccessKeyID != "":
+		return KindBedrock
 	}
 	return KindRefreshToken
 }
@@ -117,7 +131,16 @@ func (s Secret) Validate(provider string) error {
 	}
 	switch provider {
 	case Claude:
+		bedrock := s.AWSAccessKeyID != "" || s.AWSSecretAccessKey != "" || s.AWSRegion != ""
 		switch {
+		case bedrock && (s.RefreshToken != "" || s.SetupToken != ""):
+			return errors.New("a Bedrock key (aws_access_key_id) takes no refresh_token or setup_token")
+		case bedrock && (s.AWSAccessKeyID == "" || s.AWSSecretAccessKey == ""):
+			return errors.New("a Bedrock key needs aws_access_key_id and aws_secret_access_key (aws_region optional, default " + DefaultBedrockRegion + ")")
+		case bedrock && s.AWSRegion != "" && !validAWSRegion(s.AWSRegion):
+			return errors.New("aws_region must look like us-west-2")
+		case bedrock:
+			return nil
 		case s.RefreshToken != "" && s.SetupToken != "":
 			return errors.New("claude takes refresh_token or setup_token, not both")
 		case s.SetupToken != "" && !strings.HasPrefix(s.SetupToken, "sk-ant-oat01-"):
@@ -137,6 +160,50 @@ func (s Secret) Validate(provider string) error {
 		return fmt.Errorf("unknown provider %q", provider)
 	}
 	return nil
+}
+
+func validAWSRegion(r string) bool {
+	if len(r) < 9 || len(r) > 32 {
+		return false
+	}
+	for _, c := range r {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return strings.Count(r, "-") >= 2
+}
+
+// BedrockKey is a Bedrock row's key, for the cluster proxy's fallback only.
+type BedrockKey struct {
+	AccessKeyID, SecretAccessKey, Region string
+}
+
+// ErrNotBedrock refuses to read a Bedrock key off any other row, and to
+// lease a Bedrock row as a subscription.
+var ErrNotBedrock = errors.New("not a Bedrock key")
+
+// BedrockKey opens a Bedrock row's key pair (task PNWW).
+func (v *Vault) BedrockKey(c store.Credential) (BedrockKey, error) {
+	if c.Kind != KindBedrock || c.Provider != Claude {
+		return BedrockKey{}, ErrNotBedrock
+	}
+	sl, err := v.sealer()
+	if err != nil {
+		return BedrockKey{}, err
+	}
+	var s Secret
+	if err := sl.Open(c.SecretSealed, &s, c.PrincipalID, c.Provider, c.Account, "secret"); err != nil {
+		return BedrockKey{}, err
+	}
+	if s.AWSAccessKeyID == "" || s.AWSSecretAccessKey == "" {
+		return BedrockKey{}, ErrNotBedrock
+	}
+	region := s.AWSRegion
+	if region == "" {
+		region = DefaultBedrockRegion
+	}
+	return BedrockKey{AccessKeyID: s.AWSAccessKeyID, SecretAccessKey: s.AWSSecretAccessKey, Region: region}, nil
 }
 
 func validAccountUUID(u string) bool {
@@ -552,6 +619,9 @@ func (v *Vault) lease(ctx context.Context, principal, provider, account string, 
 	c, err := v.Store.Credential(principal, provider, account)
 	if err != nil {
 		return Access{}, err
+	}
+	if c.Kind == KindBedrock {
+		return Access{}, fmt.Errorf("%w: a Bedrock key is never leased", ErrNotBedrock)
 	}
 	if c.ReauthRequired && provider != GitHub && c.Kind == KindSetupToken && !probe {
 		return Access{}, reauthErr(c)

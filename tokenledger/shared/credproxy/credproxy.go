@@ -198,6 +198,10 @@ type Config struct {
 	// given ⇒ learned from the hub's first answer that carries one; until then
 	// an fcp-h2 goes to the hub like any pass.
 	SessionPub ed25519.PublicKey
+	// BedrockURL replaces https://bedrock-runtime.<region>.amazonaws.com for
+	// the Bedrock fallback (task PNWW) — a test seam, or an operator's own
+	// endpoint. Whether a request falls back at all is the hub's answer.
+	BedrockURL string
 }
 
 // Proxy is the handler.
@@ -219,6 +223,9 @@ type Proxy struct {
 	// ran is learned from the hub's answer, and a forgery storm is not
 	// forwarded (claude-fleet#4138). Under mu.
 	unknownAt time.Time
+	// fbOffAt is when the hub last said the Bedrock fallback is off; it is
+	// not asked again for one CacheTTL (task PNWW). Under mu.
+	fbOffAt time.Time
 }
 
 // keyRecheck bounds how often a pass under an unknown key goes to the hub.
@@ -242,7 +249,7 @@ func New(cfg Config) (*Proxy, error) {
 	if !cfg.Direct && cfg.RelayURL == "" {
 		return nil, errors.New("credproxy: no relay URL — every request goes through the Singapore relay (or say --direct)")
 	}
-	for _, u := range []*string{&cfg.RelayURL, &cfg.AnthropicURL, &cfg.CodexURL} {
+	for _, u := range []*string{&cfg.RelayURL, &cfg.AnthropicURL, &cfg.CodexURL, &cfg.BedrockURL} {
 		*u = strings.TrimRight(*u, "/")
 	}
 	if cfg.AnthropicURL == "" {
@@ -579,6 +586,10 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	}
 	a.principal, a.worker, a.pass = res.Principal, res.WorkerID, res.ID
 	if !res.Valid && provider == Claude && res.Error == ClaudePoolUnavailable {
+		// no subscription can take it: Bedrock may, when the hub allows (PNWW)
+		if p.tryBedrock(w, r, pass, body, &a) {
+			return
+		}
 		a.status, _ = refuseCode(w, provider, http.StatusTooManyRequests, "rate_limit_error", ClaudePoolUnavailable,
 			"Claude subscription pool unavailable ("+ClaudePoolUnavailable+")")
 		a.why = ClaudePoolUnavailable
@@ -696,6 +707,13 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	defer resp.Body.Close()
+	if provider == Claude && resp.StatusCode == http.StatusTooManyRequests {
+		// still limited after the one rebind: Bedrock may take it (PNWW);
+		// otherwise the 429 below goes out unchanged
+		if p.tryBedrock(w, r, pass, body, &a) {
+			return
+		}
+	}
 	if provider == Codex && resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		// Do not hand the redirect to the Agent either: its HTTP client could
 		// automatically resend the same body to the Location target.
@@ -879,6 +897,7 @@ type audit struct {
 	principal, worker, pass string
 	account, why            string
 	rebindFrom              string
+	fallback, fallbackFrom  string
 	status                  int
 	in, out, ms, tokens     int64
 	stale                   bool
@@ -893,6 +912,12 @@ func (a audit) line() string {
 	}
 	if a.rebindFrom != "" {
 		m["rebind_from"] = a.rebindFrom // a quota 429 moved the session (claude-fleet#2115)
+	}
+	if a.fallback != "" {
+		m["fallback"] = a.fallback // the Bedrock fallback, taken or why not (PNWW)
+	}
+	if a.fallbackFrom != "" {
+		m["fallback_from"] = a.fallbackFrom
 	}
 	b, _ := json.Marshal(m)
 	return string(b)

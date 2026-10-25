@@ -32,6 +32,9 @@ import (
 //	--cache      CCQUOTA_CREDPROXY_CACHE      one hub answer's life (≤ 30s)
 //	--stale      CCQUOTA_CREDPROXY_STALE      how long to ride out a hub that cannot answer
 //	--session-pub CCQUOTA_CREDPROXY_SESSION_PUB fcp-h2's key (base64; default: the hub's answer)
+//	--bedrock    CCQUOTA_CREDPROXY_BEDROCK_URL the Bedrock fallback's endpoint (default: the key's
+//	             region, bedrock-runtime.<region>.amazonaws.com; whether it is used is the hub's
+//	             fleet.fallback.bedrock, off by default — task PNWW)
 func Main(version string, args []string) error {
 	fs := flag.NewFlagSet("credproxy", flag.ExitOnError)
 	env := func(k, d string) string {
@@ -57,6 +60,7 @@ func Main(version string, args []string) error {
 	cache := fs.Duration("cache", envDur("CCQUOTA_CREDPROXY_CACHE", MaxCacheTTL), "how long one hub answer is used (≤ 30s)")
 	stale := fs.Duration("stale", envDur("CCQUOTA_CREDPROXY_STALE", 15*time.Minute), "how long an answer outlives --cache while the hub cannot answer")
 	spub := fs.String("session-pub", env("CCQUOTA_CREDPROXY_SESSION_PUB", ""), "the key fcp-h2 passes are verified with (base64; default: learned from the hub)")
+	bedrock := fs.String("bedrock", env("CCQUOTA_CREDPROXY_BEDROCK_URL", ""), "the Bedrock fallback's endpoint (default: by the key's region)")
 	_ = fs.Parse(args)
 	pub, err := ParseSessionPub(*spub)
 	if err != nil {
@@ -83,6 +87,7 @@ func Main(version string, args []string) error {
 		StaleFor:     *stale,
 		Audit:        func(l string) { fmt.Fprintln(os.Stdout, l) },
 		SessionPub:   pub,
+		BedrockURL:   *bedrock,
 	})
 	if err != nil {
 		return err
