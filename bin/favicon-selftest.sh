@@ -28,7 +28,19 @@ while IFS= read -r f; do
     st_miss "$f inlines an icon of its own"
   fi
 done <<<"$pages"
-grep -q 'href="/favicon.svg"' "$ROOT/bin/docs-build.sh" || st_miss "bin/docs-build.sh's pages do not name /favicon.svg"
+grep -q 'href="/favicon.svg?v=@@ICONV@@"' "$ROOT/bin/docs-build.sh" || st_miss "bin/docs-build.sh's pages do not name /favicon.svg?v=<the logo's version>"
+
+# a new logo is a new icon URL (Safari keys its favicon cache by URL): every page
+# names the root icons with ?v=<sha256(logo.svg)[:8]> — the hub's AppIconV, the
+# static pages' {{icon_v}} (filled by site-build.sh), the admin page's literal
+V="$(shasum -a 256 "$ROOT/extras/fleet-theme/logo.svg" | cut -c1-8)"
+grep -q "const AppIconV = \"$V\"" "$ROOT/tokenledger/hub/api/site_serve.go" || st_miss "tokenledger/hub/api/site_serve.go: AppIconV is not $V (the logo's sha256[:8])"
+grep -q "href=\"/favicon.svg?v=$V\"" "$ROOT/extras/web-console/admin/index.html" || st_miss "extras/web-console/admin/index.html: /favicon.svg is not ?v=$V"
+for f in site/template.html site/legal.html; do
+  for i in favicon.ico favicon.svg apple-touch-icon.png; do
+    grep -q "href=\"/$i?v={{icon_v}}\"" "$ROOT/$f" || st_miss "$f: /$i carries no ?v={{icon_v}}"
+  done
+done
 grep -q 'rel="icon"[^>]*href="../../fleet-theme/logo.svg"' "$ROOT/extras/web-chat/ui/index.html" || st_miss "extras/web-chat/ui/index.html does not name the theme package's logo"
 
 st_done

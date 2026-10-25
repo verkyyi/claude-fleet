@@ -263,6 +263,12 @@ func writeSiteBody(w http.ResponseWriter, r *http.Request, b []byte, text bool) 
 // the root for; web/dist carries each, a copy of extras/fleet-theme/logo.svg
 // and site/assets
 // (claude-fleet#3946, web/embed_test.go holds the copies to it).
+// AppIconV is the first 8 hex of extras/fleet-theme/logo.svg's sha256, put on
+// every page's icon links (`/favicon.svg?v=…`) so a browser that keys its icon
+// cache by URL — Safari keeps a favicon for weeks — fetches a new icon at once.
+// The paths themselves never change; TestAppIconVersion holds it to the file.
+const AppIconV = "8ecf46d0"
+
 var appIconPaths = []string{"/favicon.svg", "/favicon.ico", "/apple-touch-icon.png"}
 
 // serveAppIcon answers one of appIconPaths from the console's own files,

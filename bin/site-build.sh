@@ -117,7 +117,7 @@ done
 [ -n "$DRILL" ] || DRILL="$SITE/drill.json"
 
 exec python3 - "$SITE" "$OUT" "$DOCS" "$DRILL" "$NOW" "$REPO" "$FONTS" <<'PY'
-import datetime, html, json, math, os, re, shutil, subprocess, sys, tempfile
+import datetime, hashlib, html, json, math, os, re, shutil, subprocess, sys, tempfile
 
 SITE, OUT, DOCS, DRILL, NOW, REPO, FONTS = sys.argv[1:8]
 LANGS = (('zh', ''), ('en', 'en'))   # language · its directory under OUT
@@ -209,7 +209,10 @@ THEME_CSS, THEME_BG = theme_css()
 tmpl = open(os.path.join(SITE, 'template.html'), encoding='utf-8').read()
 if '/*{{fleet_theme}}*/' not in tmpl:
     fail('template.html has no /*{{fleet_theme}}*/ slot for the theme')
-tmpl = tmpl.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG)
+# The icon links carry the logo's version (?v=<sha256[:8]>): Safari keys its favicon
+# cache by URL and keeps an old icon for weeks; a new logo is a new URL.
+ICON_V = hashlib.sha256(open(os.path.join(THEME, 'logo.svg'), 'rb').read()).hexdigest()[:8]
+tmpl = tmpl.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG).replace('{{icon_v}}', ICON_V)
 # The wordmark (extras/fleet-theme/wordmark.svg) as a symbol the header and the demo's sidebar <use>.
 _wm = open(os.path.join(THEME, 'wordmark.svg'), encoding='utf-8').read()
 _wm_m = re.search(r'viewBox="([^"]+)"[^>]*>(?:<title>[^<]*</title>)?(.*)</svg>', _wm, re.S)
@@ -419,7 +422,7 @@ if not os.path.isfile(LEGAL_FRAME) or not FOOTER:
     fail('site/legal.html (the legal pages\' frame) or template.html\'s <footer> is missing')
 else:
     frame = open(LEGAL_FRAME, encoding='utf-8').read()
-    frame = frame.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG)
+    frame = frame.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG).replace('{{icon_v}}', ICON_V)
     for lang, _ in LANGS:
         S = tables[lang]
         other = 'en' if lang == 'zh' else 'zh'
