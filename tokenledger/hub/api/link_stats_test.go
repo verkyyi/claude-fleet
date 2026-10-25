@@ -62,10 +62,9 @@ func TestLinkStatsRecordAConnectPingsAndADrop(t *testing.T) {
 	if code, _ := asUID(t, h, http.MethodGet, LinkStatsPath, "gh:8201", "", nil); code == http.StatusOK {
 		t.Fatalf("a member read the link stats")
 	}
-	// Off: no ping at all.
-	h.srv.LinkSampleSecs = -1
-	if h.srv.linkSample() != 0 {
-		t.Fatal("a negative period is not off")
+	// Off: no ping at all (a server of its own: the live one's watchers read the field).
+	if (&Server{LinkSampleSecs: -1}).linkSample() != 0 || (&Server{}).linkSample() != linkSampleDefault {
+		t.Fatal("the period: negative is off, zero is the default")
 	}
 }
 

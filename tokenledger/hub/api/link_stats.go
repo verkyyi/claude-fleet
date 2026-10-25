@@ -63,13 +63,8 @@ type linkPrev struct {
 // link, before this connect overwrites them.
 func (s *Server) linkBefore(endpointID string) linkPrev {
 	var p linkPrev
-	if nodes, err := s.Store.Nodes(); err == nil {
-		for _, n := range nodes {
-			if n.EndpointID == endpointID {
-				p.lastBeat, p.known = n.LastHeartbeat, true
-				break
-			}
-		}
+	if last, ok, err := s.Store.NodeLastBeat(endpointID); err == nil {
+		p.lastBeat, p.known = last, ok
 	}
 	if s.Replica != nil {
 		if c, ok, err := s.Store.NodeConnOf(endpointID); err == nil && ok {
@@ -106,8 +101,14 @@ func (s *Server) replicaName() string {
 	return s.Replica.Name
 }
 
-// linkUp books a connect.
+// linkUp books a connect, off the connect's own path: the node's first beat
+// is never held behind the record.
 func (s *Server) linkUp(ep *store.Endpoint, p linkPrev, now time.Time) {
+	go s.linkUpNow(*ep, p, now)
+}
+
+func (s *Server) linkUpNow(e store.Endpoint, p linkPrev, now time.Time) {
+	ep := &e
 	cause, gap := s.linkCause(p, now)
 	if err := s.Store.RecordLinkEvent(store.LinkEvent{At: now, Host: ep.Hostname, Login: ep.OSUser, Event: linkEventUp,
 		Cause: cause, GapMS: gap, Replica: s.replicaName()}); err != nil {

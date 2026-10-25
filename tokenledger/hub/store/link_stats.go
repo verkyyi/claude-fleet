@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -160,4 +161,17 @@ func (s *Store) PruneLinkStats(before time.Time) error {
 	}
 	_, err := s.write.Exec(`DELETE FROM fleet_link_rtt WHERE hour < ?`, before.Unix()/3600)
 	return err
+}
+
+// NodeLastBeat is an endpoint's last heartbeat, if the roster has one.
+func (s *Store) NodeLastBeat(endpointID string) (*time.Time, bool, error) {
+	var last sql.NullString
+	err := s.read.QueryRow(`SELECT last_heartbeat FROM nodes WHERE endpoint_id = ?`, endpointID).Scan(&last)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return parseNullTime(last), true, nil
 }
