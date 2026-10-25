@@ -73,9 +73,9 @@ const entryHead = `<!doctype html>
 <html lang="{{.Lang}}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<link rel="icon" href="/favicon.ico" sizes="32x32">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/favicon.ico?v=` + AppIconV + `" sizes="32x32">
+<link rel="icon" href="/favicon.svg?v=` + AppIconV + `" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=` + AppIconV + `">
 <link rel="stylesheet" href="` + themePrefix + `theme.css">
 <style>` + entryCSS + `</style>
 `

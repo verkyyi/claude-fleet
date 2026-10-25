@@ -73,7 +73,7 @@ done
 [ -d "$SRC/zh" ] || { echo "docs-build: no $SRC/zh" >&2; exit 2; }
 
 exec python3 - "$SRC" "$OUT" "$REPO" "$MODE" <<'PY'
-import html, json, os, re, shutil, subprocess, sys
+import hashlib, html, json, os, re, shutil, subprocess, sys
 
 SRC, OUT, REPO, MODE = sys.argv[1:5]
 LANGS = ('zh', 'en')
@@ -258,6 +258,8 @@ def theme_brand():
     return name, mark
 
 BRAND, MARK = theme_brand()
+# the icon links' version, as site-build.sh: a new logo is a new URL (Safari's favicon cache)
+ICON_V = hashlib.sha256(open(os.path.join(THEME, 'logo.svg'), 'rb').read()).hexdigest()[:8]
 CSS = theme_css() + """
 :root{--bg:var(--background);--panel:var(--card);--ink:var(--foreground);--ink-2:var(--foreground);--muted:var(--muted-foreground);
 --line:var(--border);--line-2:var(--code-bg);--brand:var(--link);--brand-soft:var(--accent);--term:var(--fleet-term);--term-ink:var(--fleet-ink);
@@ -331,16 +333,16 @@ def frame(lang, page, title, body, all_titles, pending=False, ld=''):
     other_url = url_prefix(other) + ('' if page == 'index' else page)
     src = os.path.basename(page) + '.md'
     head_lang = 'zh-CN' if lang == 'zh' else 'en'
-    return ('<!doctype html><html lang="%s"><head><meta charset="utf-8">'
+    return (('<!doctype html><html lang="%s"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>%s · %s</title><link rel="icon" href="/favicon.ico" sizes="32x32">'
-            '<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">'
+            '<title>%s · %s</title><link rel="icon" href="/favicon.ico?v=@@ICONV@@" sizes="32x32">'
+            '<link rel="icon" href="/favicon.svg?v=@@ICONV@@" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png?v=@@ICONV@@">'
             '<link rel="alternate" type="text/markdown" href="%s">'
             '<link rel="alternate" hreflang="%s" href="%s"><style>%s</style>%s</head><body>'
             '<header><a class="brand" href="%s" aria-label="%s">%s</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
             '<div class="wrap"><aside>%s</aside><main>%s<footer><a href="%s">%s</a></footer></main></div></body></html>\n') % (
         head_lang, html.escape(title), html.escape(BRAND), html.escape(src), 'en' if other == 'en' else 'zh-CN', other_url, CSS,
-        ld, html.escape(rel(page, 'index')), html.escape(BRAND), MARK, nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
+        ld, html.escape(rel(page, 'index')), html.escape(BRAND), MARK, nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])).replace('@@ICONV@@', ICON_V)
 
 # ---- generated blocks (issue #3580) -------------------------------------------
 GEN_RE = re.compile(r'(<!-- docs-gen:([a-z-]+) -->\n)(.*?)(<!-- /docs-gen:\2 -->)', re.S)
