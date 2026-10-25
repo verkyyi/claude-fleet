@@ -548,11 +548,17 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A replica that is going away takes no new link (task PNWW): the agent
+	// dials again and the Service hands it a replica that stays.
+	if s.refuseWhileDraining(w) {
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return // Accept has already answered the request.
 	}
 	defer conn.CloseNow()
+	defer s.links.hold(conn)()
 	conn.SetReadLimit(1 << 20)
 
 	// Detached from the request: the handler outlives nothing, but a hijacked
@@ -599,6 +605,9 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 // whole websocket, on a machine link one login's lane (claude-fleet#2333).
 func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoint, tokHash string,
 	hello control.Message, hp control.Hello) {
+	// counted until every deferred end below has run (DrainLinks waits on it)
+	s.links.enter()
+	defer s.links.leave()
 	// what the hub knew of this link before this connect (task PNWW)
 	prev := s.linkBefore(ep.ID)
 	if err := s.Store.NodeConnected(ep.ID, ep.Hostname, ep.OSUser, hp.AgentVersion,

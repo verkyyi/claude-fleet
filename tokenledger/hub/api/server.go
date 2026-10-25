@@ -431,6 +431,12 @@ type Server struct {
 	// drain is closed when this replica starts going away (RMVE): open
 	// terminals are told to come back elsewhere
 	drain drainState
+	// links is every node websocket this replica holds (task PNWW): a
+	// draining replica closes them with 1012 and waits for their sessions to
+	// end, so the cleanup runs and the agents dial a replica still up.
+	links linkSet
+	// LinkDrainSpread spreads those closes (0: linkDrainSpreadDefault).
+	LinkDrainSpread time.Duration
 	// replicaDown is the replicas that refused a connection just now (RMVE)
 	replicaDown    sync.Map
 	stateForwarded atomic.Int64

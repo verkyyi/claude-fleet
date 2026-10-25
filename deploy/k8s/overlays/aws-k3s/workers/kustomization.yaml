@@ -1,0 +1,25 @@
+# fleet-workers on the k3s box (task PNWW): what a person's own pod (u-<nonce>,
+# extras/managed-node/render.py, made by the provisioner on the hub's ticket)
+# needs and nothing it does not — the cluster credential proxy, the provisioner
+# and its admission policy, the accounts render.py names, the network rules.
+# Unlike ../../../fleet-workers there is no fleet-egress, no run egress and no
+# package caches: in us-west-2 a pod goes out directly (its own egress guard
+# still cuts the metadata address and every private range). No namespace
+# transformer here: the provisioner's policy is cluster-wide.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - serviceaccounts.yaml
+  - ../../../provisioner
+  - credproxy
+  - networkpolicy.yaml
+images:
+  - name: fleet-provisioner-image
+    newName: ecr.invalid/fleet/managed-node
+    newTag: set-by-deploy
+patches:
+  - target: {kind: Deployment, name: fleet-provisioner}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value: [{name: ecr-pull}]

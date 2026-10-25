@@ -689,6 +689,56 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(node[-1]['kind'], 'StatefulSet')
         self.assertIn('User pods', (BIN.parent / 'docs/dev/MANAGED-LINUX.md').read_text())
 
+    def test_user_pod_sized_by_the_template(self):
+        """Task PNWW: a deployment sized for fewer, bigger homes (the AWS k3s
+        overlay) names user_pod.requests and user_pod.limits in the provisioner's
+        template; create-user-pod and set-limits size the pod by them, the
+        person's text still wins, a ceiling under the new request is refused.
+        No such keys = render.py's defaults, byte for byte."""
+        prov = module('fleet-provisioner')
+
+        class API:
+            def __init__(self):
+                self.sent = []
+
+            def call(self, method, path, body=None, ctype=None):
+                self.sent.append((method, path, body))
+                if method == 'GET':
+                    return 200, {'metadata': {'labels': {'fleet/role': 'user', 'fleet/pod': 'u-drill1'}}}
+                return 201, {}
+
+        base = {'image': IMG, 'hub': 'https://hub.example', 'storage_class': 'local-path', 'cred_central': CENTRAL}
+        ticket = {'op': 'create-user-pod', 'pod': 'u-drill1', 'limits': '', 'login': 'fleetu7', 'uid': 10002,
+                  'join': 'code'}
+
+        def made(user_pod, limits=''):
+            api = API()
+            prov.act(dict(ticket, limits=limits), {'namespace': 'fleet-workers', 'user_pod': user_pod}, api)
+            by = {b['kind']: b for m, _, b in api.sent if m == 'POST'}
+            res = by['Deployment']['spec']['template']['spec']['containers'][0]['resources']
+            return res, by['PersistentVolumeClaim']['spec']['resources']['requests']['storage']
+
+        res, disk = made(base)
+        self.assertEqual((res['requests']['cpu'], res['requests']['memory'], res['limits']['memory'], disk),
+                         ('250m', '1536Mi', '6Gi', '50Gi'))
+        sized = dict(base, requests={'cpu': '500m', 'memory': '3Gi'}, limits='disk=20Gi')
+        res, disk = made(sized)
+        self.assertEqual((res['requests']['cpu'], res['requests']['memory'], res['limits']['cpu'], disk),
+                         ('500m', '3Gi', '2', '20Gi'))
+        res, disk = made(sized, 'cpu=4,disk=30Gi')
+        self.assertEqual((res['limits']['cpu'], disk), ('4', '30Gi'))
+        with self.assertRaises(prov.Refused):
+            made(sized, 'memory=2Gi')
+        with self.assertRaises(prov.Refused):
+            made(dict(base, requests={'gpu': '1'}))
+        # set-limits keeps the template's request
+        api = API()
+        prov.act({'op': 'set-limits', 'pod': 'u-drill1', 'limits': 'cpu=3'},
+                 {'namespace': 'fleet-workers', 'user_pod': sized}, api)
+        patch_ = [b for m, _, b in api.sent if m == 'PATCH'][0]
+        res = patch_['spec']['template']['spec']['containers'][0]['resources']
+        self.assertEqual((res['requests']['cpu'], res['requests']['memory'], res['limits']['cpu']), ('500m', '3Gi', '3'))
+
     def test_user_pod_table_has_no_machine_loops(self):
         """#3550: a user pod runs no machine-level loop (they are the cluster's
         one copy); its own children stay. Off = the table as before."""

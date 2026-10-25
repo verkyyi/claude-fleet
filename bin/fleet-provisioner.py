@@ -16,7 +16,10 @@ done. The ops are typed, never a manifest:
                    login uid      built for its one login (#3757), and its join
                                   Secret u-<nonce>-join (#3553); the template's
                                   user_pod.private_mirrors reach it only when
-                                  their list names that login (#4002)
+                                  their list names that login (#4002); the
+                                  template's user_pod.requests {cpu, memory}
+                                  and user_pod.limits (the default ceiling's
+                                  text) size it when set (task PNWW)
   destroy-user-pod pod             those three, each only if it is a user pod's,
                                    and the join Secret
   set-limits       pod limits      that pod's Deployment, nobody else's
@@ -365,8 +368,12 @@ def act(t, conf, api, r=None):
     if op == 'create-user-pod':
         kw = dict(conf.get('user_pod') or {})
         kw['pull_secrets'] = tuple(kw.get('pull_secrets') or ('acr-pull',))
+        # a deployment's own idle promise and default ceiling (task PNWW);
+        # absent = render.py's, byte for byte
+        default = kw.pop('limits', '')
         try:
-            objs = r.user_pod_resources(name=pod, namespace=ns, limits=r.user_pod_limits(t['limits']),
+            limits = r.user_pod_limits(t['limits'], kw.get('requests'), default)
+            objs = r.user_pod_resources(name=pod, namespace=ns, limits=limits,
                                         login=t['login'], uid=t['uid'], **kw)
         except (ValueError, TypeError) as e:
             raise Refused('cannot render the user pod: %s' % e)
@@ -415,7 +422,9 @@ def act(t, conf, api, r=None):
         return ['Job %s deleted' % name]
     if op == 'set-limits':
         try:
-            patch = r.user_pod_limits_patch(r.user_pod_limits(t['limits']))
+            up = conf.get('user_pod') or {}
+            patch = r.user_pod_limits_patch(r.user_pod_limits(t['limits'], up.get('requests'), up.get('limits', '')),
+                                            up.get('requests'))
         except ValueError as e:
             raise Refused(str(e))
         if user_pod_of(api, ns, 'Deployment', pod) is None:

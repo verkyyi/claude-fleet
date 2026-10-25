@@ -25,6 +25,9 @@
 #                                                   /readyz, preStop, PDB), tokenledger /readyz + /v1/deploy-probe
 #                                                   (go test, when a toolchain is here); the kind drill is
 #                                                   .github/workflows/hub-rolling.yml
+#   hub-release-drops-links                         tokenledger/hub/api link_drain.go (DrainLinks, the 503 while
+#                                                   draining), hub/cmd/ccquota hub.go (waits for it); go test, when a
+#                                                   toolchain is here; deploy/aws/k3s-box/rollout-drill.sh on a box
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single,
 #                                                   overlays/prod (only RWX OSS claims) when FLEET_DEPLOY_K8S lays it here
 #   hub-shape-extra-volume                          .github/actions/hub-release/release.sh shape (the data disk is
@@ -300,6 +303,29 @@ PY2
     1) return 1 ;;
     2) WHAT='探测读数对（停 ~3 秒 ≥2、一直在 0）；base 是滚动形态；入口的 Go 测试在这台没有模块缓存——Go 门跑它们' ;;
     3) WHAT='探测读数对（停 ~3 秒 ≥2、一直在 0）；base 是滚动形态；没有 go：Go 门跑 /readyz 测试' ;;
+  esac
+  SECS=$(since "$t0")
+}
+
+# ---- hub-release-drops-links (task PNWW): a node link is a hijacked
+# websocket, so http.Server.Shutdown neither waits for nor closes it — a rolling
+# release exited the replica under every link it held (EOF), its cleanup never
+# ran, and the process even returned the moment Serve did, before the grace.
+# A draining replica now closes its links with 1012, waits for their sessions'
+# own end, refuses new connects with 503, and the hub waits for its Shutdown;
+# a single hub (the sqlite shape) is untouched.
+drill_hub_release_drops_links() {
+  CAP=120; local t0 d="$ROOT/tokenledger/hub"
+  t0=$(now)
+  grep -q 'func (s \*Server) DrainLinks(' "$d/api/link_drain.go" 2>/dev/null || { WHY="the hub has no DrainLinks (api/link_drain.go)"; return 1; }
+  grep -q 'StatusServiceRestart' "$d/api/link_drain.go" || { WHY="a drained link is not closed with 1012"; return 1; }
+  grep -q 'refuseWhileDraining(w)' "$d/api/nodes.go" || { WHY="a draining replica still takes new node links"; return 1; }
+  grep -q 'srv.DrainLinks(shutdownCtx)' "$d/cmd/ccquota/hub.go" || { WHY="the hub's stop does not drain its links"; return 1; }
+  grep -q '<-stopped' "$d/cmd/ccquota/hub.go" || { WHY="the hub returns before its Shutdown is done"; return 1; }
+  WHAT='排空的副本：链接 1012 关、等每个会话自己收尾、新连接 503；进程等 Shutdown 完再退；单份入口不变（Go 门跑 TestDrainLinks*）'
+  go_half '^TestDrainLinks' ./hub/api; case $? in
+    0) WHAT='两份副本：排空的一份把两条链接 1012 关掉、等会话收尾（名册摘掉、记 hub_shutdown）、新连接 503 + Retry-After，下一次拨号落在另一份；单份入口照常接（go test）' ;;
+    1) return 1 ;;
   esac
   SECS=$(since "$t0")
 }

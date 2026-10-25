@@ -1108,14 +1108,29 @@ func runHub(args []string) error {
 	if err != nil {
 		return err
 	}
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		<-ctx.Done()
 		// open browser terminals come back at once, to a replica still up (RMVE)
 		srv.Drain()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
+		// node links are hijacked, so Shutdown neither waits for nor closes
+		// them: with another replica to take them they are handed over beside
+		// it (task PNWW, api/link_drain.go). A single hub (the sqlite shape,
+		// Recreate) has nowhere to hand them: it stops as before.
+		links := make(chan int, 1)
+		if srv.Replica != nil {
+			go func() { links <- srv.DrainLinks(shutdownCtx) }()
+		} else {
+			links <- 0
+		}
 		for _, hs := range servers {
 			_ = hs.Shutdown(shutdownCtx)
+		}
+		if n := <-links; n > 0 {
+			log.Printf("ccquota hub: drained %d node link(s)", n)
 		}
 	}()
 
@@ -1126,6 +1141,13 @@ func runHub(args []string) error {
 		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+	}
+	// Serve returns ErrServerClosed the moment Shutdown starts, not when it
+	// is done: returning here would exit under the requests the grace is for
+	// (task PNWW). A replica waits for the shutdown to finish; a single hub
+	// (Recreate: its successor waits on its exit) returns at once, as before.
+	if ctx.Err() != nil && srv.Replica != nil {
+		<-stopped
 	}
 	return nil
 }

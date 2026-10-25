@@ -1,0 +1,16 @@
+# k3s' bundled traefik, configured the k3s way (a HelmChartConfig beside its
+# HelmChart). Traefik v3 reads a request for at most 60 s by default
+# (respondingTimeouts.readTimeout) — long enough to cut a node agent's control
+# link or a browser relay that is quiet for a minute. 0 = no limit, as the ACK
+# nginx's 3600 s proxy timeouts meant in practice.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    additionalArguments:
+      - "--entryPoints.web.transport.respondingTimeouts.readTimeout=0"
+      - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=0"
+      - "--entryPoints.websecure.transport.respondingTimeouts.writeTimeout=0"

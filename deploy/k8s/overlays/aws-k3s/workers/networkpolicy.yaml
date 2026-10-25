@@ -1,0 +1,248 @@
+# fleet-workers' network rules on k3s (task PNWW). Unlike ACK's flannel, k3s
+# ENFORCES NetworkPolicy (its embedded kube-router), so these are live. Same
+# roles as ../../../../fleet-workers/networkpolicy.yaml (fleet/role = user ·
+# door · ops · provisioner · control), with one difference: no egress proxy —
+# a user pod and the door go out to the internet directly, never to the cloud
+# metadata address or a private range (the VPC, the pod and service ranges).
+# Throwaway Jobs and service runs are not set up on this box: default-deny
+# keeps any job pod closed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: fleet-workers
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# A person's pod: DNS, the credential proxy, the hub's own pods (its node link
+# and passes over the hub's Service, render.py hub_internal), the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: user-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: user
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: ops
+      ports:
+        - {protocol: TCP, port: 8788}   # fleet-credproxy
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: fleet-hub
+          podSelector:
+            matchLabels:
+              app: ccquota-hub
+      ports:
+        - {protocol: TCP, port: 8787}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: user-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: user
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 22022}
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: door
+      ports:
+        - {protocol: TCP, port: 22}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: door-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: door
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: 22022}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: door-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: door
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: user
+      ports:
+        - {protocol: TCP, port: 22}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 169.254.0.0/16
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ops-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: ops
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: user
+      ports:
+        - {protocol: TCP, port: 8788}
+---
+# The credential proxy: the providers and the hub's Service (fleet-hub), never
+# the metadata address.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ops-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: ops
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provisioner-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: provisioner
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              fleet/role: control
+      ports:
+        - {protocol: TCP, port: 8790}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}   # k3s' API server, on the node
+---
+# fleet-ops (render.py --ops): DNS, the provisioner, the hub and the API server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-out
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      fleet/role: control
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              fleet/role: provisioner
+      ports:
+        - {protocol: TCP, port: 8790}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}

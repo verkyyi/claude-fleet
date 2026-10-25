@@ -1,0 +1,21 @@
+# The hub's address and its certificate (cert-manager writes the Secret).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccquota-hub
+spec:
+  tls:
+    - hosts:
+        - core.tokenman.io
+      secretName: core-tls
+  rules:
+    - host: core.tokenman.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-hub
+                port:
+                  number: 80

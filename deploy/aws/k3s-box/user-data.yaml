@@ -1,0 +1,33 @@
+#cloud-config
+# EC2 user data for the hub's core box (task PNWW): Ubuntu 24.04 (arm64 or
+# amd64 — see deploy/aws/README.md «Architecture»), us-west-2. Fill the
+# deploy.env values below, launch, and the box installs itself. NO SECRET goes
+# in here — user data is readable by anything on the box that reaches the
+# metadata address. The Postgres URL comes from SSM Parameter Store
+# (DB_URL_SSM_PARAM) through the instance role, or is written to
+# /etc/fleet-core/secrets/db-url by hand before `bootstrap.sh` is run again.
+#
+# Re-running is safe: `sudo /opt/claude-fleet/deploy/aws/k3s-box/bootstrap.sh`.
+package_update: true
+packages: [git, curl, unzip, python3, openssl, openssh-client]
+write_files:
+  - path: /etc/fleet-core/deploy.env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      # read by bootstrap.sh (every key is described at its top)
+      HUB_IMAGE=REPLACE_ME.dkr.ecr.us-west-2.amazonaws.com/fleet/ccquota:REPLACE_TAG
+      MANAGED_NODE_IMAGE=
+      ACME_EMAIL=REPLACE_ME
+      HUB_HOST=core.tokenman.io
+      AWS_REGION=us-west-2
+      STORAGE_CLASS=local-path
+      LETSENCRYPT_SERVER=staging
+      DB_URL_SSM_PARAM=/fleet-core/db-url
+      SITE_ENV_SSM_PARAM=
+      # the repo and ref the box deploys from
+      FLEET_REPO_URL=https://github.com/verkyyi/claude-fleet.git
+      FLEET_REPO_REF=master
+runcmd:
+  - [bash, -c, 'set -a; . /etc/fleet-core/deploy.env; set +a; if [ -d /opt/claude-fleet/.git ]; then git -C /opt/claude-fleet fetch -q origin "$FLEET_REPO_REF" && git -C /opt/claude-fleet checkout -q FETCH_HEAD; else git clone -q --branch "$FLEET_REPO_REF" "$FLEET_REPO_URL" /opt/claude-fleet; fi']
+  - [bash, -c, '/opt/claude-fleet/deploy/aws/k3s-box/bootstrap.sh 2>&1 | tee -a /var/log/fleet-core-bootstrap.log']
