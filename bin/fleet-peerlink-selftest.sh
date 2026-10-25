@@ -43,6 +43,11 @@
 #                 counts it; a control file that vanishes mid-strike still rebuilds at
 #                 once (控制文件没了); FLEET_PEERLINK_CHECK_STRIKES=1 is the old rule —
 #                 one failed check rebuilds
+#   N. probe/sock — (BREAK-IT peerlink-probe-slow · peerlink-sock-slow-check) a probe
+#                 that hangs past FLEET_PEERLINK_PROBE_WAIT is a strike (phase up, same
+#                 pid, `probe_strikes`), cleared by the next; PROBE_STRIKES=1 is the old
+#                 rule; `sock` with every check late: the socket while the keeper runs,
+#                 nothing once its state is stale, nothing once the master is killed
 #
 # No network: bin/fleet-peerlink-fake-ssh.py plays ssh, a script plays
 # fleet-peer-cert.sh.
@@ -465,6 +470,54 @@ grep -q '检查没回应' "$B/run.err" && st_miss "M: FLEET_PEERLINK_CHECK_STRIK
 stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS FLEET_PEERLINK_CHECK_STRIKES
 }
 
+# ---- N. probe strikes + sock's reading (BREAK-IT peerlink-probe-slow · peerlink-sock-slow-check) --
+leg_N() {
+box n 0
+export FLEET_PEERLINK_PROBE_SECS=1 FLEET_PEERLINK_PROBE_WAIT=1 FAKESSH_HANG_SECS=20
+peers mac-a:bob:entry=203.0.113.4/22022
+# the link dials the entry route: the channels name that address
+mkdir -p "$B/fs/probehang" "$B/fs/probefail" "$B/fs/checkhang"
+lk() { python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["links"][0]; print(eval(sys.argv[2]))' "$B/conf/peerlink/state.json" "$1" 2>/dev/null; }
+start
+until_ok 10 links_is "mac-a@bob:up" || st_miss "N: the link never came up: $(links)"
+p1=$(lk 'l["pid"]')
+echo 1 > "$B/fs/probehang/203.0.113.4"
+until_ok 8 grep -q 'mac-a@bob 新通道没回应（第 1/3 次' "$B/run.err" && st_count || st_miss "N: a hung probe left no strike record: $(tail -3 "$B/run.err")"
+until_ok 6 grep -q 'mac-a@bob 新通道恢复（之前 1 次不通）' "$B/run.err" && st_count || st_miss "N: the next probe did not clear the strike: $(tail -3 "$B/run.err")"
+until_ok 3 sh -c '[ "$(python3 -c "import json,sys; l=json.load(open(sys.argv[1]))[\"links\"][0]; print(l[\"phase\"], l[\"pid\"], l[\"probe_strikes\"], l[\"err\"] or \"-\")" "$1")" = "up $2 0 -" ]' _ "$B/conf/peerlink/state.json" "$p1" \
+  && st_count || st_miss "N: across a hung probe the link reads $(lk '(l["phase"], l["pid"], l["probe_strikes"], l["err"])') — want up, pid $p1, 0, no err"
+grep -q 'mac-a@bob 重建' "$B/run.err" && st_miss "N: a hung probe tore the link down" || st_count
+# sock's reading: every check late, the master alive, the keeper running ⇒ the socket
+stop
+box n2 0
+export FLEET_PEERLINK_CHECK_SECS=1 FLEET_PEERLINK_CHECK_STRIKES=99
+unset FLEET_PEERLINK_PROBE_SECS FLEET_PEERLINK_PROBE_WAIT
+peers mac-a:bob:entry=203.0.113.4/22022
+mkdir -p "$B/fs/checkhang"
+start
+until_ok 10 links_is "mac-a@bob:up" || st_miss "N: (sock) the link never came up: $(links)"
+echo '*' > "$B/fs/checkhang/203.0.113.4"
+[ "$(python3 "$PL" sock mac-a bob)" = "$B/conf/peerlink/mac-a@bob.sock" ] && st_count || st_miss "N: sock with late checks and a live master gave no socket"
+# the keeper stops (`all`: its master stays for the next): a stale state is no word
+stop; sleep 1.5
+FLEET_PEERLINK_STALE=1 python3 "$PL" sock mac-a bob >/dev/null && st_miss "N: sock trusted a stopped keeper's state" || st_count
+p2=$(lk 'l["pid"]')
+kill -9 "$p2" 2>/dev/null
+python3 "$PL" sock mac-a bob >/dev/null && st_miss "N: sock answered for a killed master (pid $p2, file left behind)" || st_count
+unset FLEET_PEERLINK_CHECK_SECS FLEET_PEERLINK_CHECK_STRIKES
+# the old rule, by setting: one failed probe rebuilds
+box n3 0
+export FLEET_PEERLINK_PROBE_SECS=1 FLEET_PEERLINK_PROBE_STRIKES=1
+peers mac-a:bob:entry=203.0.113.4/22022
+mkdir -p "$B/fs/probefail"
+start
+until_ok 10 links_is "mac-a@bob:up" || st_miss "N: (strikes=1) the link never came up: $(links)"
+echo 1 > "$B/fs/probefail/203.0.113.4"
+until_ok 8 grep -q 'mac-a@bob 重建：新通道开不了（exit 1）' "$B/run.err" && st_count || st_miss "N: FLEET_PEERLINK_PROBE_STRIKES=1 did not rebuild on one failed probe: $(tail -3 "$B/run.err")"
+grep -q '第 1/1 次' "$B/run.err" && st_miss "N: FLEET_PEERLINK_PROBE_STRIKES=1 still counted a strike" || st_count
+stop; unset FLEET_PEERLINK_PROBE_SECS FLEET_PEERLINK_PROBE_STRIKES FAKESSH_HANG_SECS
+}
+
 group() {   # group <name> <leg>… — in the background, its result in $WORK/res.<name>
   local g="$1"; shift
   (
@@ -481,9 +534,10 @@ group 3 G I
 group 4 L
 group 5 C        # three whole fleet-doctor.sh runs
 group 6 M
+group 7 N
 leg_F; leg_J; leg_K
 for p in $GROUPS_PIDS; do wait "$p"; done
-for g in 1 2 3 4 5 6; do
+for g in 1 2 3 4 5 6 7; do
   cat "$WORK/out.$g"
   if [ -s "$WORK/res.$g" ]; then
     read -r f c < "$WORK/res.$g"; FAIL=$((FAIL + f)); CHECKS=$((CHECKS + c))

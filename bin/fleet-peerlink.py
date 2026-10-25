@@ -17,6 +17,9 @@ bad (#2987) are each ruled out by construction and drilled in docs/dev/BREAK-IT.
     did not answer while the master lives and its file is there: that is a strike
     (a loaded machine answers late), and only FLEET_PEERLINK_CHECK_STRIKES (3) in a
     row, each given FLEET_PEERLINK_CHECK_SECS (3 s), rebuild (`peerlink-check-slow`);
+    the channel probe likewise (FLEET_PEERLINK_PROBE_STRIKES · _PROBE_WAIT,
+    `peerlink-probe-slow`), and `sock` hands out a link the keeper holds up whose
+    master lives even when its own check is late (`peerlink-sock-slow-check`);
   - two keepers: `run` holds an flock on peerlink/.lock and re-checks every beat
     that the file it holds IS the path's — a second one exits at once, and one that
     lost its file to another quits (`peerlink-two-keepers`).
@@ -89,7 +92,7 @@ host key check the hub's word whatever address is dialled.
 
 state.json (peerlink/): {v, pid, ts, me, views, hub_down, links[{machine, login, host,
 route, sock, pid, phase up|connecting|verifying|down, since, last_check, rtt_ms, fails,
-err, bad_since, want_ts, strikes}], events[{ts, machine, login, what}], mode, peers_err} — C1's
+err, bad_since, want_ts, strikes, probe_strikes}], events[{ts, machine, login, what}], mode, peers_err} — C1's
 top line, the doctor and C10 read it.
 
 Seams: FLEET_PEERLINK_SSH (else FLEET_REMOTE_SSH_CMD, else ssh) · FLEET_PEERLINK_CERT_CMD
@@ -154,6 +157,13 @@ ACTIVE_SECS = fenv("FLEET_PEERLINK_ACTIVE_SECS", 60)  # how long a request / eve
 # peerlink-check-slow: a home machine at load 15 rebuilt a healthy link 3 times in an hour)
 CHECK_SECS = max(0.5, fenv("FLEET_PEERLINK_CHECK_SECS", 3))
 CHECK_STRIKES = max(1, int(fenv("FLEET_PEERLINK_CHECK_STRIKES", 3)))
+# the channel probe the same way (BREAK-IT peerlink-probe-slow): how long a probe may
+# take, and how many in a row may fail while the master lives before a rebuild. Its
+# own knob: it is a different signal on a different cadence (every PROBE_SECS, up to
+# PROBE_WAIT each) — a definite refusal of new channels may want a shorter fuse than
+# a slow `-O check`, without touching that one
+PROBE_WAIT = max(0.5, fenv("FLEET_PEERLINK_PROBE_WAIT", 10))
+PROBE_STRIKES = max(1, int(fenv("FLEET_PEERLINK_PROBE_STRIKES", 3)))
 MAX_EVENTS = 50
 
 
@@ -567,6 +577,7 @@ class Link:
         self.rebuild_why = ""
         self.last_loss = 0.0
         self.strikes = 0            # `-O check`s failed in a row while the master lived
+        self.probe_strikes = 0      # channel probes failed in a row while the master lived
 
     def name(self):
         return "%s@%s" % (self.machine, self.login)
@@ -582,7 +593,7 @@ class Link:
                 "sock": self.sock, "pid": self.pid, "phase": self.phase, "since": self.since,
                 "last_check": self.last_check, "rtt_ms": self.rtt_ms, "fails": self.fails,
                 "err": self.err, "bad_since": self.bad_since, "want_ts": self.want_ts,
-                "strikes": self.strikes}
+                "strikes": self.strikes, "probe_strikes": self.probe_strikes}
 
 
 class Keeper:
@@ -680,9 +691,16 @@ class Keeper:
         unlink(l.sock)
         l.pid = 0
         l.phase = "down"
-        l.strikes = 0
+        l.strikes = l.probe_strikes = 0
         if why:
             self.event(l, why)
+
+    def probe_good(self, l, ms):
+        """A channel probe answered: its round trip booked, a strike streak cleared."""
+        l.rtt_ms = ms
+        if l.probe_strikes:
+            self.event(l, "新通道恢复（之前 %d 次不通）" % l.probe_strikes)
+            l.probe_strikes = 0
 
     def start(self, l, now):
         l.rebuild_why = l.rebuild_why or ("rebuilt" if l.since else "built")
@@ -814,15 +832,31 @@ class Keeper:
                 l.strikes = 0
         if l.probe and not why:
             res, t0 = l.probe
+            base = detail = ""
             if res:
                 l.probe = None
                 if res[0] == 0:
-                    l.rtt_ms = res[1]
+                    self.probe_good(l, res[1])
+                elif res[0] == 124:     # ssh_run's own PROBE_WAIT ran out
+                    base = "新通道没回应"
                 else:
-                    why = "新通道开不了（exit %s）" % res[0]
-            elif now - t0 > 10:
+                    base, detail = "新通道开不了", "exit %s" % res[0]
+            elif now - t0 > PROBE_WAIT:
                 l.probe = None
-                why = "新通道没回应"
+                base = "新通道没回应"
+            if base:
+                if l.pid and l.alive() and l.probe_strikes + 1 < PROBE_STRIKES:
+                    # the master lives: one new channel that failed or answered late
+                    # (a loaded machine) is a strike — phase up, fails / err untouched;
+                    # the next probe goes at once (the event keeps the 2 s beat)
+                    l.probe_strikes += 1
+                    self.event(l, "%s（%s第 %d/%d 次；主进程还在，先不重建）" % (
+                        base, detail + "，" if detail else "", l.probe_strikes, PROBE_STRIKES))
+                    l.last_probe = now - PROBE
+                else:
+                    k = l.probe_strikes + 1
+                    bits = [b for b in (detail, "连续 %d 次" % k if k > 1 else "") if b]
+                    why = base + ("（%s）" % "，".join(bits) if bits else "")
         if why:
             # the first loss is rebuilt at once; a link that keeps falling over
             # within a minute of coming up backs off 1 → 30 s
@@ -847,7 +881,7 @@ class Keeper:
 
             def probe(res=res, cmd=cmd):
                 t = time.time()
-                rc = ssh_run(cmd, timeout=10)[0]
+                rc = ssh_run(cmd, timeout=PROBE_WAIT)[0]
                 res.extend((rc, int((time.time() - t) * 1000)))
             threading.Thread(target=probe, daemon=True).start()
             l.probe, l.last_probe = (res, now), now
@@ -1030,7 +1064,8 @@ class Keeper:
                     if any(l.probe[0][0] != 0 for l in done):
                         break
                     for l in done:
-                        l.rtt_ms, l.probe = l.probe[0][1], None
+                        ms, l.probe = l.probe[0][1], None
+                        self.probe_good(l, ms)
                     # a request (#4359)
                     if wake_mtime() != self.wake_seen:
                         break
@@ -1065,12 +1100,34 @@ def wake_mtime():
 
 # --- readers -----------------------------------------------------------------------------
 def healthy_sock(machine, login):
+    """The socket of an up link, judged the keeper's way (BREAK-IT
+    peerlink-sock-slow-check): an `-O check` that answers is the proof; one that does
+    not is tried once more, and still nothing is NOT "no link" while the file is
+    there, the master state.json names lives, the keeper is running and holds the
+    link up — tearing down is the keeper's strikes' call, not this reader's. Hard
+    evidence is "" at once: file gone, master gone, file owned by another pid, or a
+    keeper that stopped (its state is no word)."""
     st = read_json(STATE, {})
+    fresh = time.time() - float(st.get("ts") or 0) <= STALE
     for l in st.get("links") or []:
         if l.get("machine") == machine and l.get("login") == login and l.get("phase") == "up":
             s = l.get("sock") or ""
-            if s and master_check(s, l.get("host") or ssh_host(machine))[0]:
+            host = l.get("host") or ssh_host(machine)
+            try:
+                want = int(l.get("pid") or 0)
+            except (TypeError, ValueError):
+                want = 0
+            for _ in range(2):
+                if not s or not os.path.exists(s):
+                    return ""
+                rc, pid, _ = master_check_rc(s, host)
+                if rc == 0:
+                    return "" if pid and want and pid != want else s
+                if rc == -1 or not os.path.exists(s) or (want and not pid_alive(want)):
+                    return ""
+            if fresh and want and pid_alive(want) and int(l.get("strikes") or 0) < CHECK_STRIKES:
                 return s
+            return ""
     return ""
 
 

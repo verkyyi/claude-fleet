@@ -14,6 +14,12 @@
 #                          `ssh -O check` times out on a loaded machine while the master
 #                          lives and its file is there — not a teardown; only
 #                          FLEET_PEERLINK_CHECK_STRIKES checks in a row rebuild
+#   peerlink-probe-slow    bin/fleet-peerlink.py's beat (the channel probe strikes): one
+#                          probe channel fails / does not answer while the master lives —
+#                          not a teardown; only FLEET_PEERLINK_PROBE_STRIKES in a row rebuild
+#   peerlink-sock-slow-check bin/fleet-peerlink.py sock (healthy_sock): its `-O check`
+#                          times out while the master lives and the keeper holds it up —
+#                          still the socket; a vanished file is still no socket at once
 #   peerlink-two-keepers   bin/fleet-peerlink.py run (flock + the held file IS the path):
 #                          a second keeper, then one started after the lock file went
 #   peerlink-cert-expiry   bin/fleet-peerlink.py + fleet-peer-cert.sh's five-minute
@@ -188,6 +194,62 @@ drill_peerlink_check_slow() {
   kill -0 "$old" 2>/dev/null && { WHY="the old master ($old) still runs after the rebuild"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
   pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS
   WHAT="主连接活着、控制文件在，一次 ssh -O check 超时（负载高）：只记一次 检查没回应、不拆；下一拍答上就清零（检查恢复），pid 不变；连续不通才 重建：ssh -O check 不通，新主连接起来、旧的被杀"
+}
+
+drill_peerlink_probe_slow() {
+  CAP=8   # ≤ one 1 s probe gap to reach the failed probe, the next probe answers
+  local t0 old n
+  export FLEET_PEERLINK_PROBE_SECS=1
+  pl_box ps mac-a:bob
+  mkdir -p "$B/fs/probefail"
+  pl_start
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  old=$(pl_pid mac-a@bob)
+  # a loaded machine: ONE new channel on the master fails
+  echo 1 > "$B/fs/probefail/mac-a"; t0=$(now)
+  until_ok 8 grep -q 'mac-a@bob 新通道恢复' "$B/run.err" \
+    || { WHY="one failed probe: no recovery record — $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  SECS=$(since "$t0")
+  grep -q 'mac-a@bob 重建' "$B/run.err" && { WHY="one failed probe tore the link down: $(grep 'mac-a@bob 重建' "$B/run.err" | tail -1)"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  [ "$(pl_pid mac-a@bob)" = "$old" ] && pl_up mac-a@bob && kill -0 "$old" 2>/dev/null \
+    || { WHY="the master changed across one failed probe ($old → $(pl_pid mac-a@bob))"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  until_ok 3 pl_link mac-a@bob 'l.get("probe_strikes") == 0' >/dev/null || { WHY="the probe strike was not cleared: $(pl_link mac-a@bob 'l.get("probe_strikes")')"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  # new channels that keep failing: the link IS broken — rebuilt after the strikes
+  echo '*' > "$B/fs/probefail/mac-a"
+  until_ok 15 grep -q 'mac-a@bob 重建：新通道开不了' "$B/run.err" \
+    || { WHY="probes failing in a row never rebuilt: $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  n=$(grep -c 'mac-a@bob 新通道开不了（exit 1，第' "$B/run.err")
+  [ "$n" -ge 2 ] || { WHY="rebuilt after $n strike records, want the strikes first"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  rm -f "$B/fs/probefail/mac-a"
+  until_ok 10 sh -c 'python3 -c "import json,sys; l=json.load(open(sys.argv[1]))[\"links\"][0]; sys.exit(not (l[\"phase\"] == \"up\" and str(l[\"pid\"]) != sys.argv[2]))" "$1" "$2"' \
+    _ "$B/conf/peerlink/state.json" "$old" \
+    || { WHY="not back up on a new master: $(python3 "$PL" status)"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  kill -0 "$old" 2>/dev/null && { WHY="the old master ($old) still runs after the rebuild"; pl_stop; unset FLEET_PEERLINK_PROBE_SECS; return 1; }
+  pl_stop; unset FLEET_PEERLINK_PROBE_SECS
+  WHAT="主连接活着，一次新通道探测失败（负载高）：只记一次 新通道开不了（第 1/3 次）、不拆；下一次探测通了就清零（新通道恢复），pid 不变；连续失败才 重建：新通道开不了，新主连接起来、旧的被杀"
+}
+
+drill_peerlink_sock_slow_check() {
+  CAP=5   # two hung checks (1 s each) and the answer
+  local t0 out rc sock
+  # the keeper never rebuilds on checks here: this drill is the reader's half
+  export FLEET_PEERLINK_CHECK_SECS=1 FLEET_PEERLINK_CHECK_STRIKES=99 FAKESSH_HANG_SECS=20
+  pl_box sc mac-a:bob
+  sock="$B/conf/peerlink/mac-a@bob.sock"
+  mkdir -p "$B/fs/checkhang"
+  pl_start
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FLEET_PEERLINK_CHECK_STRIKES FAKESSH_HANG_SECS; return 1; }
+  # a loaded machine: no -O check answers in time; the master lives, the keeper holds it up
+  echo '*' > "$B/fs/checkhang/mac-a"; t0=$(now)
+  out=$(python3 "$PL" sock mac-a bob); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] && [ "$out" = "$sock" ] \
+    || { WHY="sock said no healthy link (rc $rc [$out]) while the master lives and the keeper holds it up"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FLEET_PEERLINK_CHECK_STRIKES FAKESSH_HANG_SECS; return 1; }
+  # hard evidence: the file goes — no socket, at once
+  rm -f "$sock"
+  python3 "$PL" sock mac-a bob >/dev/null && { WHY="sock answered for a vanished control file"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FLEET_PEERLINK_CHECK_STRIKES FAKESSH_HANG_SECS; return 1; }
+  pl_stop; unset FLEET_PEERLINK_CHECK_SECS FLEET_PEERLINK_CHECK_STRIKES FAKESSH_HANG_SECS
+  WHAT="主连接活着、管理者说已连上，sock 的 -O check 一次次超时：再试一次仍不通也照样交出 socket（不报没有健康连接）；控制文件没了立刻答没有"
 }
 
 drill_peerlink_two_keepers() {

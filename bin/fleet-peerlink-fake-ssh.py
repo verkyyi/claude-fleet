@@ -16,7 +16,11 @@ multiplexing does.
         $FAKESSH_HANG_SECS, 30, so the caller's timeout fires — a loaded machine) while
         $FAKESSH_DIR/checkhang/<host> holds `*`, or holds N > 0 (one hang per check,
         counted down): the master itself stays alive and serving. Logs `checkhang <host>`.
-  -S <sock> [...] <host> <cmd...>     a channel on the master (`id -un`, `true`, anything)
+  -S <sock> [...] <host> <cmd...>     a channel on the master (`id -un`, `true`, anything);
+        the keeper's probe channel (`true`) FAILS (rc 1) while $FAKESSH_DIR/probefail/<host>
+        holds `*` or N > 0, and HANGS ($FAKESSH_HANG_SECS) while probehang/<host> does —
+        counted down like checkhang; the master and every other channel stay fine.
+        Logs `probefail <host>` / `probehang <host>`.
 """
 import os
 import signal
@@ -80,6 +84,27 @@ def talk(sock, msg):
         buf += b
     s.close()
     return buf.decode()
+
+
+def knob(kind, host):
+    """True (and one counted off) while $FAKESSH_DIR/<kind>/<host> holds `*` or N > 0."""
+    p = d(kind, host)
+    try:
+        v = open(p).read().strip()
+    except OSError:
+        return False
+    if v != "*":
+        try:
+            n = int(v or "0")
+        except ValueError:
+            n = 0
+        if n <= 0:
+            return False
+        with open(p + ".tmp", "w") as f:
+            f.write("%d\n" % (n - 1))
+        os.replace(p + ".tmp", p)
+    log("%s %s" % (kind, host))
+    return True
 
 
 def check_hang(host):
@@ -199,6 +224,11 @@ def main():
     if not sock:
         sys.stderr.write("fake ssh: only multiplexed channels here\n")
         return 255
+    if o["cmd"] == ["true"]:
+        if knob("probehang", o.get("host", "")):
+            time.sleep(float(os.environ.get("FAKESSH_HANG_SECS") or 30))
+        if knob("probefail", o.get("host", "")):
+            return 1
     try:
         r = talk(sock, "run " + " ".join(o["cmd"]))
     except OSError as e:
