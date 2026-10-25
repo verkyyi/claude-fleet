@@ -382,6 +382,11 @@ func (s *Server) awaitChatLink(r *http.Request, host, login string, max time.Dur
 	if up || !offline || !s.chatLinkLately(host, login, time.Now()) {
 		return false
 	}
+	// its holder replica is gone (a rolling deploy): the page is told
+	// home_reconnecting at once and asks again (task V9DJ) — no wait here
+	if s.homeReconnecting(host, login) {
+		return false
+	}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		if _, flagged := maintenanceOf(host, settings); flagged {
 			return false // 维护中: not coming back by waiting
