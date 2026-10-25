@@ -58,6 +58,12 @@ func (r *cpRig) pastCache() { r.skew.Add(int64(cpCacheTTL + time.Millisecond)) }
 
 func newCPRig(t *testing.T) *cpRig {
 	t.Helper()
+	return newCPRigWith(t, nil)
+}
+
+// newCPRigWith is newCPRig with the proxy's config adjusted by mod (task PNWW).
+func newCPRigWith(t *testing.T, mod func(*credproxy.Config)) *cpRig {
+	t.Helper()
 	h, tok5, tok4, f5, f4 := sessHarness(t)
 	h.srv.CredProxyToken = cpToken
 	for _, acct := range []string{"acct1", "acct2"} {
@@ -88,13 +94,17 @@ func newCPRig(t *testing.T) *cpRig {
 		_, _ = io.WriteString(w, `{"model":"claude-opus-5-5","content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":50}}`)
 	}))
 	t.Cleanup(up.Close)
-	p, err := credproxy.New(credproxy.Config{
+	cfg := credproxy.Config{
 		Resolver: &credproxy.HubResolver{URL: h.http.URL, Token: cpToken},
 		Direct:   true, AnthropicURL: up.URL, CodexURL: up.URL,
 		CacheTTL: cpCacheTTL, StaleFor: time.Minute,
 		Now:   func() time.Time { return time.Now().Add(time.Duration(r.skew.Load())) },
 		Audit: func(l string) { r.mu.Lock(); r.audit = append(r.audit, l); r.mu.Unlock() },
-	})
+	}
+	if mod != nil {
+		mod(&cfg)
+	}
+	p, err := credproxy.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -423,6 +423,8 @@ type poolUsageReport struct {
 	CacheWrite int64  `json:"cache_write"`
 	CacheRead  int64  `json:"cache_read"`
 	Out        int64  `json:"out"`
+	// Source: "" the subscription pool, "bedrock" the Bedrock fallback (task PNWW).
+	Source string `json:"source,omitempty"`
 }
 
 // PoolUsageRefused is the usage report's refusal code: no pass, a pass this
@@ -516,8 +518,8 @@ func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rep poolUsageReport
-	if err := readOptionalJSON(r, &rep); err != nil || !hasString(sessionCredProviders, rep.Provider) {
-		httpError(w, http.StatusBadRequest, "body must be {cred, provider, in, cache_write, cache_read, out, …}")
+	if err := readOptionalJSON(r, &rep); err != nil || !hasString(sessionCredProviders, rep.Provider) || !store.ValidUsageSource(rep.Source) {
+		httpError(w, http.StatusBadRequest, "body must be {cred, provider, in, cache_write, cache_read, out, source?, …}")
 		return
 	}
 	for _, n := range []int64{rep.In, rep.CacheWrite, rep.CacheRead, rep.Out} {
@@ -544,7 +546,8 @@ func (s *Server) handleCredProxyUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := store.PoolUsage{Principal: c.Principal, WorkerID: c.WorkerID, Account: rep.Account, Provider: rep.Provider,
-		Model: rep.Model, In: rep.In, CacheWrite: rep.CacheWrite, CacheRead: rep.CacheRead, Out: rep.Out, Requests: 1, At: now}
+		Model: rep.Model, In: rep.In, CacheWrite: rep.CacheWrite, CacheRead: rep.CacheRead, Out: rep.Out, Requests: 1, At: now,
+		Source: rep.Source}
 	if rep.Owner != "" && rep.Owner != c.Principal {
 		u.Account = rep.Owner + "/" + rep.Account
 	}
