@@ -163,6 +163,9 @@
 #                                                   pass:issue, codex only, the minting token on the row and re-read at
 #                                                   verify) + fleet_credproxy.go (sessionBind: a standing pass yields at
 #                                                   every request); go test, when a toolchain is here
+#   preview-blocks-cluster-hub                      tokenledger/hub/api preview.go (previewClusterHost: in-cluster
+#                                                   Service names served as the hub with previews on); go test, when a
+#                                                   toolchain is here
 #   trial-transcript-cross                          tokenledger/hub/api fleet_try_slot.go (trialKeepConvo /
 #                                                   trialSeed: sealed per principal, opened only as the session's own)
 #                                                   + credvault SealPerson + extras/web-chat server.mjs (/api/export,
@@ -2194,6 +2197,23 @@ drill_svc_standing_pass_escapes() {
     TestSvcPassRevokedWithTokenOrPrincipal TestSvcPassMeteredAndBudgeted TestSvcPassYieldsEveryRequest || return 1
   WHAT='常驻服务通行证只认 pass:issue、只给 codex；用量记在服务名下受服务额度与让路约束；令牌吊销 / 主体停用即失效（Go 测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='没有 pass:issue 403、claude 400、无白名单 403、通行证关 503；经真凭据代理 codex 记到 svc:<名> tenant 空、claude 拒；整体到顶 resolve 403 且不再签（429）、人照常；号过 80% 下一次请求就换、全紧等、人照常；续期同一张、别的服务 404、过期在宽限内可续；吊令牌只停它签的、停用主体全停、再启用恢复（go test 六条）'
+  SECS=$(since "$t0")
+}
+
+# ---- preview-blocks-cluster-hub: with private previews on, the hub 421'd every
+# Host that was not its public one or an alias — and the cluster credential
+# proxy dials it as http://ccquota-hub, so every pass resolve failed (502 to
+# the client). The break: the real proxy through a previews-on hub by its
+# in-cluster names; a public-looking host still refused.
+drill_preview_blocks_cluster_hub() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub/api"; GO_RAN=0
+  t0=$(now)
+  grep -q '(!previewHost && previewClusterHost(r.Host))' "$tl/preview.go" 2>/dev/null \
+    || { WHY="previewHosts no longer serves in-cluster Service names as the hub (preview.go)"; return 1; }
+  c11_go_tests preview_cluster_test.go TestPreviewClusterHost TestPreviewOnServesClusterNames \
+    TestCredProxyResolvesThroughPreviewsOnHub || return 1
+  WHAT='开着预览：集群内 Service 名照常进入口、公网样子与预览域下的未知 Host 仍 421（Go 测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='开着预览：真凭据代理经 http://ccquota-hub 与 …svc.cluster.local 解析成功、codex 200；经 evil.example.com 照旧 421→502；Host 判定逐条（单标签 / ns / svc / IP / 公网 / 预览域）（go test 三条）'
   SECS=$(since "$t0")
 }
 
