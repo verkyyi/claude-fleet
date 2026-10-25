@@ -1784,7 +1784,8 @@ and its prefix are stored, as for `ccq_`.
 
 - **One door.** `/v1/svc/` answers only a live service token (`svcGate`); each
   route names its scope with `svcOnly(scope)` — `runs:write` · `runs:read` ·
-  `templates:write` — and a token without it is 403. `GET /v1/svc/whoami` needs
+  `templates:write` · `pass:issue` (the standing pass, below; granted only by
+  name) — and a token without it is 403. `GET /v1/svc/whoami` needs
   none. A service token is no viewer token, no person's session and no node
   token, so every other route treats it as no credential (BREAK-IT
   `svc-token-escalate`).
@@ -1985,6 +1986,66 @@ person's session.
 - **Audit.** `svc.run.submit` · `svc.run.start` · `svc.run.retry` · `svc.run.cancel` ·
   `svc.run.end` (with the state and code) · `svc.run.callback` (ok · retry ·
   failed) · `svc.callback`.
+
+## A service's standing pass: Codex for a service that never ends
+
+A long-running in-cluster service — first `svc:xiaoerge`, the WeCom agent in
+kf-bot (namespace `wecom`) — calls Codex through the cluster credential proxy
+with a pass bound to its OWN service principal, instead of a svc-run Job per
+request (`hub/api/svc_pass.go`).
+
+- **Codex only.** Inside the cluster the fleet's subscriptions serve Codex;
+  Claude keeps going through the Mac mini, never the cluster (the owner's rule).
+  The pass's providers are fixed to `["codex"]`; a request naming claude is
+  400, and the proxy refuses the pass on `/v1/proxy/anthropic/` (403).
+- **Mint.** `POST /v1/svc/pass` (scope `pass:issue`) `{ttl_seconds?, kind?,
+  providers?}` → `{cred, id, principal_id, worker_id, machine, providers,
+  issued_at, expires_at, renew_after}`. The pass is an ordinary session pass
+  (fcp-h2 when the hub holds the relay signing key, else fcp-h1; `kind:
+  "fcp-h1"` forces h1), life ≤ `SessionCredTTL` (4 h; `ttl_seconds` 300…14400),
+  claims `principal svc:<name>` · `worker_id svc-standing/<name>` · `machine
+  svc-standing` · `svc <name>`, no tenant, no run. Refused: passes off (503
+  `session_cred_off`), no `pass:issue` (403), no Codex subscription on the
+  service's allowlist `fleet.cred_allow.user.svc:<name>` (403 `no_credential`),
+  the service over `fleet.svc_budget.<name>` (429 `quota_exceeded`).
+- **Keep it alive.** `POST /v1/svc/pass/renew {cred}` (same scope, the pass's
+  own principal) → the same pass with a new expiry, as a node's renew: once
+  past `renew_after` (80 % of its life); a pass that lapsed is still renewable
+  for `SessionCredRenewGrace` (7 days). A renew refused 403 (revoked, past the
+  grace) ⇒ mint a new one. Many replicas may each hold one; they share one
+  account binding (the worker id is the service's).
+- **Ends with its token and its principal.** The row carries the minting
+  token's prefix (`worker_key fcs:<prefix>`); every verify re-reads that token
+  and the principal (cached ≤ 30 s; the admin road's revoke / disable clears
+  the hub's cache at once). A revoked or expired token, a disabled or deleted
+  principal ⇒ the pass fails verify and cannot be renewed; the service door
+  refuses a new mint at the next call. A token rotation: mint with the new
+  token, then revoke the old.
+- **Metered and held like a run.** The proxy reports each call with the pass;
+  the row is `svc:<name>` with tenant `""` (a run's tenant is never empty, so
+  `""` is the standing pass's alone in `GET /v1/svc/usage`). The resolve holds
+  it to `fleet.svc_budget.<name>` (`person_budget_exceeded`, not retried), and
+  `fleet.svc_tenant_budget.<name>`, when set, caps tenant `""` like any other.
+  The yield rule (`fleet.svc.<name>.yield_pct`, default 80) applies at EVERY
+  new Codex request of a standing pass, not only its first bind — a run ends,
+  a standing service does not, so it would otherwise keep a tight account for
+  good (`sessionBind`, `svcStandingWorker`). All tight ⇒ the call is refused
+  (403 `no_credential`, the pool is tight), people keep the headroom.
+- **The client's contract.** In-cluster base URL
+  `http://ccquota-credproxy.new-deploy.svc.cluster.local/v1/proxy/codex`
+  (Service port 80 → 8788), the pass as `Authorization: Bearer <cred>` (the
+  proxy also takes it in `X-Api-Key`). So the OpenAI SDK with `baseURL` = that
+  URL and `apiKey` = the pass works: it POSTs `<base>/responses`. Only `POST
+  responses`, `POST responses/compact` and `GET models` pass
+  (`credproxy.CodexAllowSpec`); the upstream is ChatGPT's Codex backend
+  (`chatgpt.com/backend-api/codex`, through the Singapore relay), so the body is
+  what Codex CLI sends — `stream: true`, `store: false`, `instructions` — not
+  every public Responses API option. The proxy rewrites `Authorization` and
+  `chatgpt-account-id`. The hub for mint / renew is
+  `http://ccquota-hub.new-deploy.svc.cluster.local` with `Authorization: Bearer
+  fcs_…` (the service token stays in the service's own Secret).
+- **Audit.** `svc.pass.issue` · `svc.pass.renew` (ok · REFUSED with the code).
+  BREAK-IT `svc-standing-pass-escapes`.
 
 ## A service run's environment: one Job, then nothing (claude-fleet#4005)
 

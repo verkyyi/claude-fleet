@@ -344,6 +344,14 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 		return false
 	}
 	b, err := s.Store.SessionBindFor(workerID, provider)
+	if err == nil && allowed(b.Owner, b.Account) && isSvcPrincipal(principal) && svcStandingWorker(workerID) &&
+		len(requestBoundary) > 0 && requestBoundary[0] && !credIn(s.svcYield(principal, choices, now), b.Owner, b.Account) {
+		// A standing service pass never ends (svc_pass.go): each new request is
+		// its "first bind" for the yield rule, or it would keep for good the
+		// account it was first bound to once that account is tight. Re-picked
+		// below, counted as a rebind; all tight ⇒ it waits.
+		allowed = func(string, string) bool { return false }
+	}
 	if err == nil && allowed(b.Owner, b.Account) {
 		if provider == credvault.Codex && !isSvcPrincipal(principal) {
 			candidate, _ := s.codexSelect(choices, b, now, len(requestBoundary) > 0 && requestBoundary[0])
@@ -387,6 +395,15 @@ func (s *Server) sessionBind(workerID, principal, endpointID, provider string, n
 		return s.Store.SetSessionBind(pick, now)
 	}
 	return s.Store.PickSessionBind(pick, now)
+}
+
+func credIn(cs []store.Credential, owner, account string) bool {
+	for _, c := range cs {
+		if c.PrincipalID == owner && c.Account == account {
+			return true
+		}
+	}
+	return false
 }
 
 // handleSessionBind is GET / PUT /v1/fleet/session-cred/bind: the operator,
