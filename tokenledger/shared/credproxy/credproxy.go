@@ -403,7 +403,7 @@ func (p *Proxy) Handler() http.Handler {
 // the provider-relative paths Codex CLI (0.162) calls on its model provider, each
 // with its methods. ONE list: bin/fleet-cred-proxy.py's CODEX_ALLOW_SPEC is the
 // same line (TestCodexAllowMatchesPython).
-const CodexAllowSpec = "POST responses, POST responses/compact, GET models"
+const CodexAllowSpec = "POST responses, POST responses/compact, POST alpha/search, GET models"
 
 var codexAllow = func() map[string]map[string]bool {
 	m := map[string]map[string]bool{}
@@ -548,6 +548,10 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			a.why = why
 			return
 		}
+	}
+	if provider == Codex && strings.HasSuffix(r.URL.Path, "/alpha/search") && !codexRoute(r, body).Independent {
+		a.status, a.why = refuse(w, provider, http.StatusConflict, "invalid_request_error", "standalone search requires self-contained search_query input")
+		return
 	}
 	var res Resolution
 	var stale bool

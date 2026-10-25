@@ -272,7 +272,7 @@ HUB_DENY = ("/v1/node/credentials",)
 # Codex CLI (0.162) calls on its model provider, each with its methods — nothing
 # else of chatgpt.com/backend-api/codex is forwarded. ONE list: the same line is
 # tokenledger/shared/credproxy CodexAllowSpec (TestCodexAllowMatchesPython).
-CODEX_ALLOW_SPEC = "POST responses, POST responses/compact, GET models"
+CODEX_ALLOW_SPEC = "POST responses, POST responses/compact, POST alpha/search, GET models"
 CODEX_ALLOW = {}
 for _m, _p in (_x.split() for _x in CODEX_ALLOW_SPEC.split(",")):
     CODEX_ALLOW.setdefault(_p, set()).add(_m)
@@ -482,6 +482,64 @@ def codex_output_refs(value):
     return refs if len(refs) <= 4096 else set()
 
 
+def codex_search_independent(root):
+    """Search-only native subscription requests; opaque browser state refuses."""
+    def only(obj, keys):
+        return isinstance(obj, dict) and not set(obj) - set(keys.split())
+    def string(v):
+        return isinstance(v, str) and bool(v)
+    def integer(v):
+        return type(v) in (int, float) and abs(v) <= 1000000000 and v == int(v)
+    if (not only(root, 'id model input commands settings max_output_tokens')
+            or not string(root.get('id')) or not string(root.get('model'))):
+        return False
+    n = root.get('max_output_tokens')
+    if not integer(n) or not 0 < n <= 100000:
+        return False
+    commands = root.get('commands')
+    if not only(commands, 'search_query response_length'):
+        return False
+    if 'response_length' in commands and commands['response_length'] not in ('short', 'medium', 'long'):
+        return False
+    queries = commands.get('search_query')
+    if not isinstance(queries, list) or not 0 < len(queries) <= 4:
+        return False
+    for q in queries:
+        if not only(q, 'q recency domains') or not string(q.get('q')):
+            return False
+        if q.get('recency') is not None and (not integer(q['recency']) or q['recency'] < 0):
+            return False
+        if q.get('domains') is not None and (not isinstance(q['domains'], list) or not all(string(d) for d in q['domains'])):
+            return False
+    settings = root.get('settings')
+    if (not only(settings, 'allowed_callers external_web_access') or type(settings.get('external_web_access')) is not bool
+            or settings.get('allowed_callers') != ['direct']):
+        return False
+    inputs = root.get('input')
+    if not isinstance(inputs, list) or not inputs:
+        return False
+    for m in inputs:
+        if (not only(m, 'type role content internal_chat_message_metadata_passthrough')
+                or m.get('type') != 'message' or m.get('role') not in ('user', 'assistant')):
+            return False
+        parts = m.get('content')
+        if not isinstance(parts, list) or not parts:
+            return False
+        for part in parts:
+            if (not only(part, 'type text') or part.get('type') not in ('input_text', 'output_text')
+                    or not isinstance(part.get('text'), str)):
+                return False
+        if 'internal_chat_message_metadata_passthrough' in m:
+            meta = m['internal_chat_message_metadata_passthrough']
+            if (not only(meta, 'turn_id create_time content_item_kinds') or not string(meta.get('turn_id'))
+                    or type(meta.get('create_time')) not in (int, float)):
+                return False
+            kinds = meta.get('content_item_kinds')
+            if not isinstance(kinds, list) or any(k not in ('user.text', 'assistant.text') for k in kinds):
+                return False
+    return True
+
+
 def codex_context(method, path, headers, body):
     """Conservative counterpart of shared/credproxy/continuation.go. Only known
     self-contained input can move; unknown fields preserve original context.
@@ -517,6 +575,9 @@ def codex_context(method, path, headers, body):
         return False, refs, True
     if not isinstance(root, dict):
         return False, refs, True
+    if path.split("?", 1)[0].endswith("/alpha/search"):
+        unknown |= not codex_search_independent(root)
+        return not unknown and not refs, refs, unknown
     allowed = set("model instructions input tools tool_choice parallel_tool_calls stream store include reasoning text temperature top_p max_output_tokens max_tool_calls truncation metadata prompt_cache_key prompt_cache_retention safety_identifier service_tier background context_management previous_response_id conversation stream_options client_metadata".split())
     unknown |= bool(set(root) - allowed)
     def tools(v):
@@ -1934,6 +1995,8 @@ class Tenant:
         """Capacity activation is signed at mint. Old credentials never acquire
         new affinity assumptions. Known managed provenance survives rollback.
         """
+        if path.split("?", 1)[0].endswith("/alpha/search") and not codex_context(method, path, headers, body)[0]:
+            raise ValueError("standalone search requires self-contained search_query input")
         data = self.capacity_metadata()
         if enrolled:
             independent, refs, unknown = codex_context(method, path, headers, body)

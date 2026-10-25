@@ -12,14 +12,18 @@ import (
 )
 
 // raw sends one request line exactly as written — no client cleans or encodes it.
-func raw(t *testing.T, h *harness, method, target, pass string) int {
+func raw(t *testing.T, h *harness, method, target, pass string, bodies ...string) int {
 	t.Helper()
 	c, err := net.Dial("tcp", strings.TrimPrefix(h.proxy.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	fmt.Fprintf(c, "%s %s HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", method, target, pass)
+	body := "{}"
+	if len(bodies) > 0 {
+		body = bodies[0]
+	}
+	fmt.Fprintf(c, "%s %s HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", method, target, pass, len(body), body)
 	res, err := http.ReadResponse(bufio.NewReader(c), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +42,7 @@ func TestCodexPathAllowList(t *testing.T) {
 		for _, c := range []struct{ m, target string }{
 			{"POST", "/v1/proxy/codex/responses"},
 			{"POST", "/v1/proxy/codex/responses/compact"},
+
 			{"GET", "/v1/proxy/codex/models?client_version=0.162.1"},
 		} {
 			if st := raw(t, h, c.m, c.target, pass); st != 200 {
@@ -47,7 +52,17 @@ func TestCodexPathAllowList(t *testing.T) {
 		if g := h.last(t); g.query != "client_version=0.162.1" {
 			t.Fatalf("query not carried: %q", g.query)
 		}
+		searchBody := `{"id":"client-search","model":"gpt-6.1-sol","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"news"}]}],"commands":{"search_query":[{"q":"news"}]},"settings":{"allowed_callers":["direct"],"external_web_access":true},"max_output_tokens":10000}`
+		if st := raw(t, h, "POST", "/v1/proxy/codex/alpha/search", pass, searchBody); st != 200 {
+			t.Fatalf("search: %d", st)
+		}
+		if st := raw(t, h, "POST", "/v1/proxy/codex/alpha/search", "invalid", searchBody); st != 401 && st != 403 {
+			t.Fatalf("unauthenticated search: %d", st)
+		}
 		before, calls := len(h.got), h.hub.count()
+		if st := raw(t, h, "POST", "/v1/proxy/codex/alpha/search", pass, strings.Replace(searchBody, `"search_query":[{"q":"news"}]`, `"open":[{"ref_id":"turn0search0"}]`, 1)); st != 409 {
+			t.Fatalf("stateful search: %d", st)
+		}
 		for _, c := range []struct{ m, target string }{
 			{"POST", "/v1/proxy/codex/../anthropic/v1/messages"},
 			{"POST", "/v1/proxy/codex/%2e%2e/%2e%2e/admin"},
@@ -60,6 +75,9 @@ func TestCodexPathAllowList(t *testing.T) {
 			{"POST", "/v1/proxy/codex/tasks/list"},
 			{"GET", "/v1/proxy/codex/responses"},
 			{"DELETE", "/v1/proxy/codex/responses"},
+			{"GET", "/v1/proxy/codex/alpha/search"},
+			{"POST", "/v1/proxy/codex/alpha/search/"},
+			{"POST", "/v1/proxy/codex/alpha%2Fsearch"},
 			{"POST", "http://chatgpt.com/v1/proxy/codex/responses"},
 		} {
 			if st := raw(t, h, c.m, c.target, pass); st != http.StatusForbidden {

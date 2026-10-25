@@ -1286,5 +1286,472 @@
         "value": "msg_source_2"
       }
     ]
+  },
+  {
+    "name": "standalone-search-native",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": true,
+    "unknown": false,
+    "references": []
+  },
+  {
+    "name": "standalone-search-browser-reference",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short",
+        "open": [
+          {
+            "ref_id": "turn0search0"
+          }
+        ]
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-opaque-state",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000,
+      "previous_response_id": "opaque"
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-input-reference",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          },
+          "id": "provider-reference"
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-metadata-extension",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ],
+            "opaque": "state"
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-bad-query",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": 42,
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-boolean-number",
+    "method": "POST",
+    "path": "/codex/alpha/search",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": true
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-wrong-endpoint",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
+  },
+  {
+    "name": "standalone-search-query-extension",
+    "method": "POST",
+    "path": "/codex/alpha/search?opaque=state",
+    "headers": {},
+    "body": {
+      "id": "client-thread",
+      "model": "gpt-6.1-sol",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Find news"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "local-turn",
+            "create_time": 1234.5,
+            "content_item_kinds": [
+              "user.text"
+            ]
+          }
+        }
+      ],
+      "commands": {
+        "search_query": [
+          {
+            "q": "news",
+            "recency": 3,
+            "domains": [
+              "example.com"
+            ]
+          }
+        ],
+        "response_length": "short"
+      },
+      "settings": {
+        "allowed_callers": [
+          "direct"
+        ],
+        "external_web_access": true
+      },
+      "max_output_tokens": 10000
+    },
+    "independent": false,
+    "unknown": true,
+    "references": []
   }
 ]

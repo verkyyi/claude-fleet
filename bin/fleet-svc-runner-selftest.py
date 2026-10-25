@@ -33,6 +33,76 @@ class RunnerTests(unittest.TestCase):
                 result = subprocess.run(prefix + ['/bin/cat', path], env=env, capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, expected, result.stderr.decode())
 
+    @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('codex'), 'native Codex sandbox requires macOS and Codex')
+    def test_native_search_and_file_tools(self):
+        """Real CLI + OS sandbox, fake loopback provider; no subscription call.
+
+        Catches absent search tools AND macOS nested sandbox_apply failures.
+        Outside reads/writes and shell credential inheritance must stay denied.
+        """
+        import http.server
+        import threading
+        requests, tool_results = [], []
+        command = ('printf "# fixture" > ../out/report.md; '
+                   'printf \'{"title":"fixture","summary":"ok"}\' > ../out/meta.json; '
+                   'if cat ../sibling; then exit 21; fi; '
+                   'if echo forbidden > ../escape; then exit 22; fi; '
+                   'test -z "${FLEET_CODEX_SESSION_CRED:-}" && echo BOUNDARY_OK')
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                requests.append((self.path, body))
+                if self.path.endswith('/alpha/search'):
+                    self.send_response(400); self.end_headers()
+                    self.wfile.write(b'offline search fixture reached'); return
+                for item in body.get('input', []):
+                    if item.get('type') == 'custom_tool_call_output': tool_results.append(item)
+                n = sum(path.endswith('/responses') for path, _ in requests)
+                if n <= 2:
+                    code = ('text(await tools.web__run({search_query:[{q:"fixture news"}],response_length:"short"}));'
+                            if n == 1 else 'text(await tools.exec_command({cmd:' + json.dumps(command) + ',login:false}));')
+                    items = [dict(type='custom_tool_call', id='ct_fixture'+str(n), call_id='call_fixture'+str(n), name='exec', input=code)]
+                else:
+                    items = [dict(type='message', id='msg_fixture', role='assistant', status='completed', phase='final_answer',
+                                  content=[dict(type='output_text', text='Fixture complete', annotations=[])])]
+                response = dict(id='resp_fixture'+str(n), object='response', status='completed', output=items,
+                                usage=dict(input_tokens=10, output_tokens=2, total_tokens=12))
+                events = [dict(type='response.created', response=dict(id=response['id'], object='response', status='in_progress', output=[]))]
+                for i, item in enumerate(items):
+                    events.extend([dict(type='response.output_item.added', output_index=i, item=item),
+                                   dict(type='response.output_item.done', output_index=i, item=item)])
+                events.append(dict(type='response.completed', response=response))
+                data = ''.join('event: '+e['type']+'\ndata: '+json.dumps(e)+'\n\n' for e in events).encode()
+                self.send_response(200); self.send_header('Content-Type','text/event-stream')
+                self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever); thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                for name in ('home','work','out','tmp'): (root/name).mkdir()
+                (root/'sibling').write_text('PRIVATE_FIXTURE')
+                (root/'work/agent.md').write_text('Offline native tool fixture only.')
+                env = dict(HOME=str(root/'home'), TMPDIR=str(root/'tmp'), PATH=os.environ['PATH'],
+                           FLEET_SVC_CODEX=shutil.which('codex'), FLEET_SVC_CENTRAL='http://127.0.0.1:%d'%server.server_port)
+                with patch.dict(os.environ, env, clear=True), patch.object(runner,'hand_in',return_value=True), patch.object(runner,'RUN_SPEC',{}):
+                    code = runner.run_codex(dict(work=str(root/'work'),out=str(root/'out'),agent=str(root/'work/agent.md')),
+                                            dict(request='offline fixture'),'fake-fixture-pass',75,runner.time.time())
+                self.assertEqual(code, runner.OK, json.dumps(tool_results))
+                self.assertFalse((root/'escape').exists())
+                self.assertEqual((root/'out/report.md').read_text(), '# fixture')
+                results = json.dumps(tool_results)
+                self.assertIn('BOUNDARY_OK', results)
+                self.assertNotIn('PRIVATE_FIXTURE', results)
+                self.assertNotIn('fake-fixture-pass', results)
+                search = [body for path,body in requests if path.endswith('/alpha/search')]
+                self.assertEqual(len(search), 1)
+                self.assertTrue(search[0]['settings']['external_web_access'])
+                self.assertEqual(search[0]['commands']['search_query'], [dict(q='fixture news')])
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=3)
+
     def test_launcher_credentials_not_inherited(self):
         with patch.dict(os.environ, {'CCQUOTA_TOKEN': 'private', 'FLEET_WORKER_CRED': 'private',
                                      'SERVICE_API_KEY': 'private', 'PATH': '/usr/bin'}, clear=True):
@@ -53,7 +123,7 @@ class RunnerTests(unittest.TestCase):
             def execute(cmd, cwd, child_env, timeout):
                 self.assertEqual(cmd[:4], ['/fake/codex', 'sandbox', '-P', 'service'])
                 inner = cmd[cmd.index('--') + 1:]
-                self.assertEqual(inner[:7], ['/fake/codex', '--search', 'exec', '--json', '--ephemeral', '-s', 'workspace-write'])
+                self.assertEqual(inner[:7], ['/fake/codex', '--search', 'exec', '--json', '--ephemeral', '-s', 'danger-full-access'])
                 self.assertNotIn('test-session-pass', ' '.join(cmd))
                 self.assertEqual(child_env['FLEET_CODEX_SESSION_CRED'], 'test-session-pass')
                 self.assertNotIn('FLEET_WORKER_CRED', child_env)
