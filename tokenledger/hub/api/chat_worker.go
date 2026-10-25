@@ -167,6 +167,7 @@ func (s *Server) handleChatWorker(w http.ResponseWriter, r *http.Request, name s
 	}
 	in["fid"] = target[len(control.TermWorkerTarget("")):]
 	where := dest.Machine + "/" + dest.Login
+	s.awaitChatLink(r, dest.Machine, dest.Login, s.chatLinkWait()) // a reconnecting home: wait for its link (task PNWW)
 	if peer, ok := s.chatRelayPeer(r, dest.Machine, dest.Login); ok {
 		if !legacy {
 			// the body was read here: the peer gets the same bytes back

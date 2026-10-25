@@ -291,9 +291,6 @@ func (ml *machineLink) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if established {
-			bo.reset()
-		}
 		msg := "machine link closed"
 		if err != nil {
 			msg = "machine link: " + err.Error()
@@ -302,7 +299,7 @@ func (ml *machineLink) run(ctx context.Context) {
 			log.Print(msg + "; reconnecting")
 			lastErr = msg
 		}
-		t := time.NewTimer(bo.next())
+		t := time.NewTimer(bo.wait(established))
 		select {
 		case <-ctx.Done():
 			t.Stop()

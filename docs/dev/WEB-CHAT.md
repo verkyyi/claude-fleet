@@ -430,6 +430,12 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - **不等列表**：`/v1/chat/open` 一答就进 `/s/<worker>`（它的页面按 worker 读），不再每 2 s 刷列表等它出现。
 - **记录找得快**：视图开着的头 60 s，还没有记录就每 0.5 s 找一次（之后 3 s），还没有会话 id 就每 1 s 问一次（之后 2 s）。
 
+- **断线不报「连不上」**（PNWW ②）：家机到入口的链接跨海，一天断 20 次上下（实测一台家机 3 天 76 次：入口换副本
+  EOF p50 5 s；路堵了 pong 超时 p50 21 s、p90 56 s）。断在这时的网页请求（home · 对话 · 只读看 · 会话说话）
+  先等链接回来，最多 `CCQUOTA_FLEET_CHAT_LINK_WAIT_SECS`（默认 20 s，home 一半；负数 = 不等）——只等最近 3 分钟
+  还连着的登录、只等 NODE_OFFLINE、维护中不等。agent 这边，一条连上过的链接断了 0.5–1 s 就重拨（不再从 5 s 起），
+  再失败才走 5 · 10 · 20 · 30 s 的梯子。
+
 **量**：页面在本标签页里计时（`src/app/start-clock.ts`，sessionStorage 按 worker），按下 → 开好回执（open_ms）
 → 会话页画出（shown_ms）→ 家机那一层第一句回复的字（ms），只发一次：`POST /v1/chat/timing {ms, open_ms, shown_ms,
 agent, tz}`。入口记 `fleet_chat_timings`（何时、多久、家机机器、助手、时区——不记是谁）；`GET /v1/fleet/chat/timing?days=7`

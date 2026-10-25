@@ -1584,6 +1584,7 @@ func sshRelayConfig(srv *api.Server) error {
 		{"CCQUOTA_FLEET_TERM_RELAY_RATE_BPS", func(n int64) { srv.TermRelayRateBPS = n }},
 		{"CCQUOTA_FLEET_CHAT_PER_MINUTE", func(n int64) { srv.ChatPerMinute = int(n) }},
 		{"CCQUOTA_FLEET_CHAT_RELAY_KEEP_SECS", func(n int64) { srv.ChatRelayKeepSecs = int(n) }},
+		{"CCQUOTA_FLEET_CHAT_LINK_WAIT_SECS", func(n int64) { srv.ChatLinkWaitSecs = int(n) }},
 	} {
 		v := os.Getenv(kv.name)
 		if v == "" {

@@ -154,6 +154,7 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	where := dest.Machine + "/" + dest.Login
+	s.awaitChatLink(r, dest.Machine, dest.Login, s.chatLinkWait()) // a reconnecting home: wait for its link (task PNWW)
 	if peer, ok := s.chatRelayPeer(r, dest.Machine, dest.Login); ok {
 		s.proxyRelay(w, r, peer, "a chat view to "+where)
 		return

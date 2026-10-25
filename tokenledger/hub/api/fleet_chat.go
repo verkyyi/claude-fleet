@@ -126,6 +126,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 	}
 	// The person's login is linked to another replica (claude-fleet#3847):
 	// that one answers, as it would for a turn.
+	s.awaitChatLink(r, home.Machine, home.Login, s.chatLinkWait()/2) // a reconnecting home: the page waits a little, then reads its state
 	if peer, ok := s.chatRelayPeer(r, home.Machine, home.Login); ok {
 		s.proxyRelay(w, r, peer, "a chat home read for "+home.Machine+"/"+home.Login)
 		return
@@ -400,6 +401,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// The login's link ends in another replica (claude-fleet#3847): hand it
 	// the whole request, before any bound or audit here — it signs the person
 	// in again, opens the relay and audits it as its own.
+	s.awaitChatLink(r, home.Machine, home.Login, s.chatLinkWait()) // a reconnecting home: wait for its link, not home_down
 	if peer, ok := s.chatRelayPeer(r, home.Machine, home.Login); ok {
 		s.proxyRelay(w, r, peer, "a chat relay to "+where)
 		return

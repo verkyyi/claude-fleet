@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -310,4 +311,96 @@ func (s *Server) peerLoginLink(host, login, cap string) (store.NodeConn, bool) {
 	}
 	sort.Slice(l, func(i, j int) bool { return l[i].EndpointID < l[j].EndpointID })
 	return l[0], true
+}
+
+// A home's link crosses the Pacific and a border, and breaks some twenty times
+// a day (task PNWW, measured on a home: a hub copy replaced on release, p50 5 s
+// back; a stalled path, p50 21 s, p90 56 s). A request that lands in that gap
+// waits for the link instead of answering home_down at once: only while the
+// login was heard from lately (a reconnect, not a machine gone), at most
+// ChatLinkWaitSecs (default chatLinkWaitDefault; negative = never), and only for
+// NODE_OFFLINE — an agent without the relay never comes back by waiting.
+const (
+	chatLinkWaitDefault = 20 * time.Second
+	chatLinkRecent      = 3 * time.Minute
+	chatLinkPoll        = 250 * time.Millisecond
+)
+
+func (s *Server) chatLinkWait() time.Duration {
+	switch {
+	case s.ChatLinkWaitSecs < 0:
+		return 0
+	case s.ChatLinkWaitSecs > 0:
+		return time.Duration(s.ChatLinkWaitSecs) * time.Second
+	}
+	return chatLinkWaitDefault
+}
+
+// chatLinkUp: login on host has a link here or on another replica that carries a chat relay.
+func (s *Server) chatLinkUp(r *http.Request, host, login string) (up, offline bool) {
+	_, _, err := s.chatRelayNode(host, login)
+	if err == nil {
+		return true, false
+	}
+	var re *sshRelayError
+	if errors.As(err, &re) && re.code != "NODE_OFFLINE" {
+		return false, false
+	}
+	if _, ok := s.chatRelayPeer(r, host, login); ok {
+		return true, false
+	}
+	return false, true
+}
+
+// chatLinkLately: the login's link was up within chatLinkRecent.
+func (s *Server) chatLinkLately(host, login string, now time.Time) bool {
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		return false
+	}
+	for _, n := range nodes {
+		if n.Hostname != host || n.OSUser != login {
+			continue
+		}
+		if n.LastHeartbeat != nil && now.Sub(*n.LastHeartbeat) < chatLinkRecent {
+			return true
+		}
+		if n.ConnectedAt != nil && now.Sub(*n.ConnectedAt) < chatLinkRecent {
+			return true
+		}
+	}
+	return false
+}
+
+// awaitChatLink holds r until login's link on host is back, the wait is over or
+// r is gone; it reports whether it waited. The caller then goes on as before.
+func (s *Server) awaitChatLink(r *http.Request, host, login string, max time.Duration) bool {
+	if max <= 0 || host == "" || login == "" {
+		return false
+	}
+	up, offline := s.chatLinkUp(r, host, login)
+	if up || !offline || !s.chatLinkLately(host, login, time.Now()) {
+		return false
+	}
+	if settings, err := s.Store.FleetSettings(); err == nil {
+		if _, flagged := maintenanceOf(host, settings); flagged {
+			return false // 维护中: not coming back by waiting
+		}
+	}
+	start := time.Now()
+	t := time.NewTicker(chatLinkPoll)
+	defer t.Stop()
+	for time.Since(start) < max {
+		select {
+		case <-r.Context().Done():
+			return true
+		case <-t.C:
+		}
+		if up, offline := s.chatLinkUp(r, host, login); up || !offline {
+			log.Printf("chat: %s/%s link back after %s; the request went on", host, login, time.Since(start).Round(100*time.Millisecond))
+			return true
+		}
+	}
+	log.Printf("chat: %s/%s link not back within %s", host, login, max)
+	return true
 }
