@@ -168,6 +168,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureChatTimings(); err != nil {
 		return err
 	}
+	// A home link's latency and drops, measured from the hub (task PNWW).
+	if err := s.ensureLinkStats(); err != nil {
+		return err
+	}
 	// Per-person usage against a person's budget (claude-fleet#1977).
 	if err := s.ensureFleetPersonUsage(); err != nil {
 		return err
