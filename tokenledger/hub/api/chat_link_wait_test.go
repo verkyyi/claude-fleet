@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -59,5 +60,29 @@ func TestChatLinkWaitsForAReconnect(t *testing.T) {
 	h.srv.ChatLinkWaitSecs = -1
 	if h.srv.chatLinkWait() != 0 {
 		t.Fatal("a negative wait is not off")
+	}
+}
+
+// The fleet a new web session's worker is named by (task PNWW): one present
+// fleet; of several, the one still reported; two fresh, none (the board says).
+func TestChatOpenFleet(t *testing.T) {
+	now := time.Now()
+	row := func(id string, present bool, ago time.Duration) store.FleetRow {
+		return store.FleetRow{FleetID: id, Hostname: "mac", OSUser: "lee", Present: present, ObservedAt: now.Add(-ago)}
+	}
+	cases := []struct {
+		rows []store.FleetRow
+		want string
+	}{
+		{[]store.FleetRow{row("a", true, time.Hour)}, "a"},
+		{[]store.FleetRow{row("a", true, time.Minute), row("b", true, 3*time.Hour)}, "a"},
+		{[]store.FleetRow{row("a", true, time.Minute), row("b", true, 2*time.Minute)}, ""},
+		{[]store.FleetRow{row("a", false, time.Minute)}, ""},
+		{[]store.FleetRow{{FleetID: "x", Hostname: "mac", OSUser: "other", Present: true, ObservedAt: now}}, ""},
+	}
+	for i, c := range cases {
+		if got := chatOpenFleet(c.rows, "mac", "lee", now); got != c.want {
+			t.Errorf("case %d: %q, want %q", i, got, c.want)
+		}
 	}
 }

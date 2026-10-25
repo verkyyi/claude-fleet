@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -426,16 +427,9 @@ func (s *Server) chatOpenWorker(resp *http.Response, machine, login string) {
 	if err != nil {
 		return
 	}
-	fleet := ""
-	for _, f := range rows {
-		if f.Present && f.Hostname == machine && f.OSUser == login {
-			if fleet != "" {
-				return // two fleets on one login: the board says which
-			}
-			fleet = f.FleetID
-		}
-	}
+	fleet := chatOpenFleet(rows, machine, login, time.Now())
 	if fleet == "" {
+		log.Printf("chat: open on %s/%s names no worker: no single fleet reported there lately", machine, login)
 		return
 	}
 	out["worker"] = fleet + "/" + fid
@@ -446,4 +440,30 @@ func (s *Server) chatOpenWorker(resp *http.Response, machine, login string) {
 	resp.Body = io.NopCloser(bytes.NewReader(b))
 	resp.ContentLength = int64(len(b))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
+}
+
+// chatOpenFleet is the one fleet a new web session on login opens in: of the
+// fleets present there, the ones reported within chatOpenFresh (a stale row a
+// gone fleet left present is not a second fleet, task PNWW); two still fresh
+// is ambiguous — the board says which — and names none.
+const chatOpenFresh = 10 * time.Minute
+
+func chatOpenFleet(rows []store.FleetRow, machine, login string, now time.Time) string {
+	var all, fresh []string
+	for _, f := range rows {
+		if !f.Present || f.Hostname != machine || f.OSUser != login {
+			continue
+		}
+		all = append(all, f.FleetID)
+		if !f.ObservedAt.IsZero() && now.Sub(f.ObservedAt) < chatOpenFresh {
+			fresh = append(fresh, f.FleetID)
+		}
+	}
+	switch {
+	case len(all) == 1:
+		return all[0]
+	case len(fresh) == 1:
+		return fresh[0]
+	}
+	return ""
 }

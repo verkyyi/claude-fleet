@@ -42,6 +42,8 @@ const AGENT_NAME: Record<"claude" | "codex", string> = { claude: "Claude Code", 
 
 // how long a chat start waits for its row before it goes back to the list
 const ROW_WAIT_MS = 15_000;
+// …and how often it looks (task PNWW: a new row is on the board within a beat)
+const ROW_POLL_MS = 1000;
 // the hub keeps a person's relay 90 s idle: warmed again inside that
 const WARM_EVERY_MS = 60_000;
 
@@ -106,7 +108,8 @@ export default function NewSession() {
   const { state: carried } = useLocation();
   const [words, setWords] = useState(() => (typeof (carried as { say?: unknown } | null)?.say === "string" ? (carried as { say: string }).say : ""));
   const [busy, setBusy] = useState(false);
-  const [waiting, setWaiting] = useState<{ fid: string; worker: string } | null>(null);   // a chat opened, until its row shows
+  // a chat opened, until its row shows; t0 / openAt: its clock (task PNWW)
+  const [waiting, setWaiting] = useState<{ fid: string; worker: string; t0: number; openAt: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
 
   const agent: "claude" | "codex" = choice.agent === "codex" ? "codex" : "claude";
@@ -128,14 +131,18 @@ export default function NewSession() {
   useEffect(() => {
     if (!waiting) return;
     const r = rowForOpen(rows, waiting.fid, waiting.worker);
-    if (r) { markSeen(r); go(sessionPath(r), { replace: true }); return; }
+    if (r) {
+      const w = r.board?.worker_id || r.live?.id || "";
+      if (w) clockOpened(w, waiting.t0, agent, undefined, waiting.openAt);
+      markSeen(r); go(sessionPath(r), { replace: true }); return;
+    }
     // not listed yet: its own page reads it by its worker all the same
     const t = window.setTimeout(() => go(waiting.worker ? `/s/${encodeURIComponent(waiting.worker)}` : "/", { replace: true }), ROW_WAIT_MS);
     return () => clearTimeout(t);
   }, [waiting, rows]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!waiting) return;
-    const t = window.setInterval(reload, 2000);
+    const t = window.setInterval(reload, ROW_POLL_MS);
     return () => clearInterval(t);
   }, [waiting, reload]);
 
@@ -174,7 +181,7 @@ export default function NewSession() {
     clockOpened(worker, t0, agent);
     // its own page reads it by its worker at once (task PNWW): no wait for the list
     if (worker) { reload(); go(`/s/${encodeURIComponent(worker)}`, { replace: true }); return; }
-    setWaiting({ fid: String(j.fid || ""), worker });
+    setWaiting({ fid: String(j.fid || ""), worker, t0, openAt: Date.now() });
     reload();
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
