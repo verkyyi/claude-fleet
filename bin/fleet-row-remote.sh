@@ -7,7 +7,10 @@
 # the node, and this script only owns the asking and the telling:
 #
 #   stop     worker_stop    — graceful /exit there; toasts the outcome
-#   resume   worker_resume  — reopen a stopped one (a live row refuses, and says so)
+#   resume   worker_resume  — reopen a stopped one (a live row refuses, and says so);
+#                             a closed one by its ID too (`wid:<fleet UUID>/<fid>`, the
+#                             看台's 恢复 on another machine's 已收起 row) — no cache row:
+#                             FLEET_REMOTE_ROW_NODE / _NAME name it in the outcome
 #   reap     worker_reap    — the confirmed reap (the menu's confirm-before ran
 #                             first, as for a local row) through fleet_hub_reap;
 #                             toasts the node's dash-reap token as a local reap does
@@ -87,8 +90,10 @@ row=$(LC_ALL=C awk -F $'\037' -v w="$wid" '$1 == w { print $2 "\037" $8 "\037" $
       "$FLEET_C/global/remote_$sess" 2>/dev/null)
 node="${row%%$'\037'*}"; rest="${row#*$'\037'}"
 name="${rest%%$'\037'*}"; needs="${rest#*$'\037'}"
-[ -n "$node" ] || node='?'
-[ -n "$name" ] || name="${worker_id##*/}"
+# a row the cache does not list (another machine's closed session, restored by
+# its ID from the 看台 — fleet_view.py's far 恢复): the caller names it
+[ -n "$node" ] || node=${FLEET_REMOTE_ROW_NODE:-?}
+[ -n "$name" ] || name=${FLEET_REMOTE_ROW_NAME:-${worker_id##*/}}
 
 PRINT=''; [ "${FLEET_REMOTE_SAY:-}" = print ] && PRINT=1
 RC=0

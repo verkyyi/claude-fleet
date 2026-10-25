@@ -631,6 +631,7 @@
 0.2 user-pod-runtime-pileup
 0.1 ver-reopen-deletes-worktree
 1.1 view-far-reaped
+4.5 view-far-restore
 1.1 view-first-frame-hub-slow
 0.5 view-mouse-stale
 4.4 view-popup-idle-redraw

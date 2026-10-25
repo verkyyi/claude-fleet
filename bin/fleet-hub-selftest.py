@@ -282,6 +282,23 @@ n="${1#landed:issue:}"
 repo=''; [ "${3:-}" = --repo ] && repo=$4
 printf '@40\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\tb2\\t\\t%s\\n' "$n" "$n" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 ''')
+        # worker_resume by identity (the 看台's 恢复 on another machine's closed row):
+        # fleet-id.sh reopen — its plan (the agent), its --check (a refusal on stderr,
+        # rc 1) and its --exec, which opens a window carrying the ID only when bare
+        # tmux names a server (dash-raw-session: no target tmux session, rc 1)
+        self.script(self.bin / "fleet-id.sh", '''#!/bin/bash
+printf '%s TMUX=%s PANE=%s\\n' "$*" "${TMUX:-}" "${TMUX_PANE:-}" >> "$FLEET_CONF_DIR/reopen.calls"
+case " $* " in
+  *" --check "*)
+    [ ! -f "$FLEET_CONF_DIR/reopen-refuse" ] || { echo 'Native file not located' >&2; exit 1; }
+    echo ok; exit 0 ;;
+  *" --exec "*)
+    [ -n "${TMUX:-}" ] || { echo 'dash-raw-session: no target tmux session' >&2; exit 1; }
+    printf '@41\\t\\t1\\t/fixture/project-scratch-3\\tdone\\tclaude\\tc3\\t\\t\\t%s\\n' "$2" >> "$FLEET_CONF_DIR/workers.tsv"
+    exit 0 ;;
+esac
+printf '{"id":"%s","agent":"claude"}\\n' "$2"
+''')
         self.controller = control.Control(self.conf, self.bin)
         self.fleet_id = self.controller.inventory()[0]["fleet_id"]
 
@@ -1033,6 +1050,36 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         gated = self.lifecycle("worker_resume", idem="resume-gated")
         self.assertEqual((gated["status"], gated["result"]["error"]["code"]), ("failed", "RESOURCE_GATE"))
         self.assertEqual(len(self.node.calls("restore")), 1)
+
+    def test_resume_by_identity_reopens_behind_the_gates(self):
+        """A closed session restored from another machine's 看台 (worker_resume on
+        `<fleet>/<fid>`): fleet-id.sh reopen --exec --rebuild — the road local 恢复
+        takes — headless, bare tmux pointed at this fleet's server; its --check's
+        refusal and the disk / quota gate refuse before anything opens."""
+        ident = str(uuid.uuid4())
+        self.node.windows()
+        with patch.dict(os.environ):
+            os.environ.pop("TMUX", None)
+            os.environ.pop("TMUX_PANE", None)
+            done = self.lifecycle("worker_resume", ident)
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertEqual(done["result"]["resumed"]["identity"], ident)
+        sock = "TMUX=/tmp/fleet-hub-selftest.sock,0,0 PANE="
+        self.assertEqual(self.node.calls("reopen"), [
+            "reopen %s --check --rebuild %s" % (ident, sock), "reopen %s %s" % (ident, sock),
+            "reopen %s --exec --rebuild %s" % (ident, sock)])
+        live = self.lifecycle("worker_resume", ident, idem="reopen-live")
+        self.assertEqual((live["status"], live["result"]["error"]["code"]), ("failed", "ALREADY_RUNNING"))
+        self.node.windows()
+        (self.node.conf / "reopen-refuse").touch()
+        refused = self.lifecycle("worker_resume", ident, idem="reopen-refused")
+        self.assertEqual((refused["status"], refused["result"]["error"]["code"]), ("failed", "NOT_RESUMABLE"))
+        self.assertEqual(refused["result"]["error"]["message"], "Native file not located")
+        (self.node.conf / "reopen-refuse").unlink()
+        (self.node.conf / "blocked").touch()
+        gated = self.lifecycle("worker_resume", ident, idem="reopen-gated")
+        self.assertEqual((gated["status"], gated["result"]["error"]["code"]), ("failed", "RESOURCE_GATE"))
+        self.assertEqual(sum("--exec" in c for c in self.node.calls("reopen")), 1)
 
     def test_stop_lost_ack_reconciles_without_a_second_exit(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"))
