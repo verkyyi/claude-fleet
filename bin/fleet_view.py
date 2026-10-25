@@ -4188,6 +4188,11 @@ def key_lines(me, extra=None, browser=False):
         popup, size(90), size(80), str(Path(me).parent / "fleet_notice.py"))
     binds[("fleet-view", "MouseDown1Status")] = "if-shell -F '#{==:#{mouse_status_range},inbox}' { %s }%s" % (
         page, " { %s }" % stock if stock else "")
+    # ⌃] x (task EQBE): the message on the 看台's line marked read, the line
+    # redrawn at once — a terminal with ⌘ and a phone alike
+    binds[("fleet-view-pfx", "x")] = (
+        "run-shell -b \"python3 '%s' dismiss >/dev/null 2>&1; tmux refresh-client -S -t '#{client_name}' "
+        ">/dev/null 2>&1 || :\"") % str(Path(me).parent / "fleet_notice.py")
     # F12 from iTerm2 (T705): its `fleet` profile sends the code, not F12 — the
     # session's key, handed on; the phone's F12 is FLEET_KEY_PHONE's, above
     for chord, _k, code in fleet_keys.ITERM_PASS:

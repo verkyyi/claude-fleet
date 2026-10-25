@@ -576,7 +576,8 @@ rv_thin_bar() {
   # this connection's language (issue #3329): what attach set; the message row
   # (T701): the line opens it (status 2) while a message not seen yet is live and
   # folds it after (ib=1 · st=#{status} · vs=#{session_id})
-  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} ib=1 st=#{status} vs='#{session_id}'"
+  # (task EQBE: `@view_inbox inline` — the message rides this line, no second row)
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} ib=#{q:@view_inbox} st=#{status} vs='#{session_id}'"
   printf '%s' "$bar up=#{q:@view_upload})"
 }
 # rv_thin_inbox — the 看台's message row (T701), as status-format[1]: drawn only
@@ -614,7 +615,8 @@ rv_thin_dress() {
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position bottom \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" status-format[1] "$(rv_thin_inbox)" \; \
-    set-option -t "$gid" @view_inbox 1 \; set-option -t "$gid" destroy-unattached off \; \
+    set-option -t "$gid" @view_inbox "$([ "${FLEET_VIEW_INBOX_ROW:-0}" = 1 ] && echo 1 || echo inline)" \; \
+    set-option -t "$gid" destroy-unattached off \; \
     set-option -t "$gid" @view_thin "$v" 2>/dev/null
   # C2's key table, once it exists — a table tmux does not have would take every key
   T list-keys -T fleet-view >/dev/null 2>&1 && T set-option -t "$gid" key-table fleet-view 2>/dev/null \

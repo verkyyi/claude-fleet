@@ -14,6 +14,8 @@ its record, switch-bar.json, went with issue #3008.)
         the message row under the line (T701) — see render_inbox below
     fleet-topbar.py inbox-text <cols> [now=] [g=<cache dir>]
         its plain text, `-` when the row is folded (selftest)
+    fleet-topbar.py inline-text <cols> [now=] [g=<cache dir>]
+        a one-line 看台's line while a message is live (task EQBE), `-` none (selftest)
 
 The left is tokenman's brand and the session's name (task ZDYN): 「tokenman ·
 修缓存」, the same in every state — the session's state, its #N and its question
@@ -506,10 +508,45 @@ def render_node(kv, cols):
     if kv.get("fl") and flu.isdigit() and time.time() < int(flu):
         print("#[fg=%s,bold] i #[nobold]#[fg=%s]%s#[default]" % (HL, FG, tmux_text(kv["fl"])))
         return 0
+    if kv.get("ib") == "inline":
+        # the message on the line itself (task EQBE): one status line, never a
+        # second row coming and going under it — the session area never moves
+        N = notice_mod()
+        m, n = N.line_state(None, kv.get("g") or None) if N is not None else (None, 0)
+        if m is not None:
+            print(paint(inline_parts(m, n, cols), None))
+            return 0
     rec, down, rr, via = node_record(kv)
     parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "")
     print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0
+
+
+def inline_parts(m, n, cols, now=None):
+    """The line while a message is live on a one-line 看台 (task EQBE): the brand
+    on the left as always, then the message — its glyph, one line of it — and on
+    the right how long it stays 「剩 12 秒」, how many more are unseen 「✦ N」 and
+    the key that dismisses it 「⌃] x 关闭」. A click on the message opens ⌘P's
+    消息 (its range is the message row's `inbox`)."""
+    N = notice_mod()
+    g = FV.msg_glyphs()
+    now = time.time() if now is None else now
+    left = brand_parts()
+    right = [(say("topbar_notice_left_fmt", N.left_secs(m, now)) if N is not None else "", DIM, "")]
+    if n > 1:
+        right += [(" · ", DIM, ""), ("%s %d" % (g["inbox"], n), WARN, "inbox")]
+    right += [(" · ", DIM, ""), (say("topbar_notice_dismiss" if cols >= MID else "topbar_notice_dismiss_short"), HL, "")]
+    right.append((" ", None, ""))
+    col = MSG_COL.get(m.get("cls"), FG)
+    glyph = " %s " % g.get(m.get("cls"), "∙")
+    text = m.get("text", "") + ((" — " + m["next"]) if m.get("next") and cols >= MID else "")
+    if m.get("node") and cols >= WIDE:
+        text += " · " + m["node"]
+    room = cols - sum(cells(t) for t, _, _ in left) - cells(glyph) - sum(cells(t) for t, _, _ in right) - 2
+    body = clip(FV.one_line(text), max(0, room))
+    pad = cols - sum(cells(t) for t, _, _ in left) - cells(glyph) - cells(body) - sum(cells(t) for t, _, _ in right)
+    return (left + [(glyph, col, "inbox"), (body, BAD if m.get("cls") in ("ask", "error") else FG, "inbox"),
+                    (" " * max(1, pad), None, "")] + right)
 
 
 # --- the message row (T701, bin/fleet_notice.py) -----------------------------------
@@ -530,12 +567,14 @@ def notice_mod():
 
 
 def settle_rows(kv):
-    if kv.get("ib") != "1" or not re.fullmatch(r"\$[0-9]+", kv.get("vs") or ""):
+    if kv.get("ib") not in ("1", "inline") or not re.fullmatch(r"\$[0-9]+", kv.get("vs") or ""):
         return
     N = notice_mod()
     if N is None:
         return
-    want = "2" if N.line_state(None, kv.get("g") or None)[0] is not None else "on"
+    # a one-line 看台 (task EQBE) never keeps a second row — one an older draw opened folds
+    want = "on" if kv.get("ib") == "inline" else (
+        "2" if N.line_state(None, kv.get("g") or None)[0] is not None else "on")
     if kv.get("st") != want and kv.get("sock"):
         subprocess.run(["tmux", "-S", kv["sock"], "set-option", "-t", kv["vs"] + ":", "status", want],
                        capture_output=True, stdin=subprocess.DEVNULL, timeout=5)
@@ -669,6 +708,14 @@ def main(argv):
         N = notice_mod()
         m, n = N.line_state(now, kv.get("g") or None) if N is not None else (None, 0)
         print("-" if m is None else "".join(t for t, _ in inbox_parts(m, n, int(argv[1]), now)))
+        return 0
+    if argv[:1] == ["inline-text"] and len(argv) >= 2:
+        # the one-line 看台's line while a message is live (task EQBE), plain
+        kv = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
+        now = float(kv["now"]) if kv.get("now") else None
+        N = notice_mod()
+        m, n = N.line_state(now, kv.get("g") or None) if N is not None else (None, 0)
+        print("-" if m is None else "".join(t for t, _, _ in inline_parts(m, n, int(argv[1]), now)))
         return 0
     print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
     return 2

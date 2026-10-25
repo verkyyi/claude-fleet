@@ -2537,6 +2537,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # row before it folds by itself (task NFVN); it stays in ⌘P's 消息 until seen.
 # @label=Message row hold for errors (s) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_NOTICE_STICKY_SECS=30
+# The 看台 keeps ONE status line: a live message takes the line right of the
+# brand, with its time left and 「⌃] x 关闭」 (task EQBE). 1 = the old second row
+# under it, which comes and goes (and moves the session area).
+# @label=Message row under the top line @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_VIEW_INBOX_ROW=0
 # @label=New session limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_TIMING_SESSION_MS=8000
 # ⌘P 「新会话」 ↵ → its window on the screen (T992): the stub's first frame, by
