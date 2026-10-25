@@ -117,6 +117,9 @@ export default function NewSession() {
   const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data);
   const canStart = !loading && !why && !busy && !waiting;
 
+  // the session page's code fetched while the person types (task PNWW): after
+  // the press it is one more download, over a slow link up to tens of seconds
+  useEffect(() => { void import("./pages/session").catch(() => {}); }, []);
   // the relay to the home dialled and kept, its service awake, while the person
   // types (task PNWW): a press then is one round trip, not a dial-back across the sea
   useEffect(() => {
