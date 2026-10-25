@@ -60,13 +60,13 @@ sudo fleet doctor --machine               # 托管机器（装了整机守护的
 
 ### 「这台是客户端，任务在托管节点上跑」
 
-- Tokenman 里的电脑分三类：**客户端**（你用的终端：连接、看、开窗）、**入口**（hub）、**托管节点**（托管机上的登录、集群里的执行 pod）。只有托管节点跑任务。
+- tokenman 里的电脑分三类：**客户端**（你用的终端：连接、看、开窗）、**入口**（hub）、**托管节点**（托管机上的登录、集群里的执行 pod）。只有托管节点跑任务。
 - 入口把这台记成了客户端，所以 `fleet-repo.sh add`、`fleet host on`、在这台开会话都会被拒。任务照常开：入口会把它派到托管节点上，你在这台看、在这台接着聊。
 - 这台确实该跑任务（比如它就是一台托管机）：请管理员在入口改它的类型。
 
 ### GitHub 连不上的时候
 
-GitHub 在 Tokenman 里只做一件事：放代码和 PR。任务、会话、订阅和看台都走入口（hub），所以 GitHub 不通时大部分照常，只有和代码交付有关的几步在等。
+GitHub 在 tokenman 里只做一件事：放代码和 PR。任务、会话、订阅和看台都走入口（hub），所以 GitHub 不通时大部分照常，只有和代码交付有关的几步在等。
 
 **照常：**
 
@@ -114,7 +114,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：Tokenman 的很多脚本要 Python 3。
+- **是什么**：tokenman 的很多脚本要 Python 3。
 - **WARN / FAIL 怎么办**：FAIL = 没装。macOS 装 Xcode 命令行工具（`xcode-select --install`）或 `brew install python`；Linux 用系统的包管理器装。
 
 #### `tmux`
@@ -221,7 +221,7 @@ fleet doctor --json
 
 来自 `fleet doctor` 和 `fleet doctor --machine`。
 
-- **是什么**：这个登录的 Tokenman 是不是稳定版、有没有本地改动；托管机器上还查它是否链到当前发布版。
+- **是什么**：这个登录的 tokenman 是不是稳定版、有没有本地改动；托管机器上还查它是否链到当前发布版。
 - **WARN / FAIL 怎么办**：落后：等自动同步，或 `fleet update`。有本地提交或分叉：说明里写着哪些提交，挪走后同步才会继续。不要在会话里手动同步安装。
 
 #### `login-tree`
@@ -355,7 +355,7 @@ fleet doctor --json
 来自 `fleet doctor`。
 
 - **是什么**：登记过的常驻服务有没有挂，有没有手写的启动项。
-- **WARN / FAIL 怎么办**：`fleet ls --services` 看是哪一个；手写的启动项删掉，改用 Tokenman 登记。
+- **WARN / FAIL 怎么办**：`fleet ls --services` 看是哪一个；手写的启动项删掉，改用 tokenman 登记。
 
 #### `daemons`
 
@@ -426,7 +426,7 @@ fleet doctor --json
 
 来自只当客户端用的电脑上的 `fleet doctor`。
 
-- **是什么**：没人在看时 Tokenman 还在后台跑的进程（旧客户端留下的、断掉的客户端留下的 ssh 主连接）有几个，以及升级后留在安装目录旁边的多余文件（超过「当前 + 上一版」的版本目录、没收尾的临时目录）有几个。三个都是 0 才 PASS。
+- **是什么**：没人在看时 tokenman 还在后台跑的进程（旧客户端留下的、断掉的客户端留下的 ssh 主连接）有几个，以及升级后留在安装目录旁边的多余文件（超过「当前 + 上一版」的版本目录、没收尾的临时目录）有几个。三个都是 0 才 PASS。
 - **WARN 怎么办**：`fleet quit` 收掉后台进程；多余文件下次打开 `fleet` 时自动清。你自己放进安装目录、或改过的文件不算多余，升级也不会删。
 
 #### `hubauth`
@@ -598,7 +598,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：状态对账每分钟探一次各个 Tokenman 实例有没有会话撞了单个模型的上限（撞了就原地换到备用模型）；这一探连续超时，撞墙的会话就没人发现。
+- **是什么**：状态对账每分钟探一次各个 tokenman 实例有没有会话撞了单个模型的上限（撞了就原地换到备用模型）；这一探连续超时，撞墙的会话就没人发现。
 - **WARN / FAIL 怎么办**：照行内的步骤名查是哪一步慢；必要时调高 `FLEET_MODELCAP_PROBE_BUDGET`。
 
 #### `cred`
@@ -633,7 +633,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：这台托管机器上每个 Tokenman 登录是不是都做了凭据隔离。机器守护每 5 分钟自己补一次（`credsep-enforce`），不用谁敲 sudo；没隔离的登录入口一份凭据都不发。
+- **是什么**：这台托管机器上每个 tokenman 登录是不是都做了凭据隔离。机器守护每 5 分钟自己补一次（`credsep-enforce`），不用谁敲 sudo；没隔离的登录入口一份凭据都不发。
 - **WARN / FAIL 怎么办**：FAIL 点名还没隔离的登录和守护最后一次的原因（比如它的会话还在直接读凭据文件）。等下一轮守护；急的话管理员执行说明里的 `fleet-credsep.sh machine install --logins <登录>`。
 
 #### `credproxy`
@@ -692,7 +692,7 @@ fleet doctor --json
 来自 `fleet doctor`。
 
 - **是什么**：系统默认的单进程打开文件上限。只报状态。
-- **WARN / FAIL 怎么办**：不用管：Tokenman 的服务会自己调高。
+- **WARN / FAIL 怎么办**：不用管：tokenman 的服务会自己调高。
 
 #### `reap`
 
@@ -726,14 +726,14 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：Claude Code 的 Tokenman 扩展装了没有。
+- **是什么**：Claude Code 的 tokenman 扩展装了没有。
 - **WARN / FAIL 怎么办**：扩展目录不在：下一次同步补上。
 
 #### `hooks`
 
 来自 `fleet doctor`。
 
-- **是什么**：Claude Code 的 `settings.json` 里 Tokenman 的钩子是否齐全。
+- **是什么**：Claude Code 的 `settings.json` 里 tokenman 的钩子是否齐全。
 - **WARN / FAIL 怎么办**：照说明里的命令合并一次（同步时也会做）。
 
 #### `settings`
@@ -768,7 +768,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：Tokenman 的斜杠命令装了没有。
+- **是什么**：tokenman 的斜杠命令装了没有。
 - **WARN / FAIL 怎么办**：下一次同步补上，或在 Claude Code 里 `/plugin install fleet@claude-fleet`。
 
 #### `skills`
@@ -782,7 +782,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：Tokenman 的 Claude Code 插件是不是最新。
+- **是什么**：tokenman 的 Claude Code 插件是不是最新。
 - **WARN / FAIL 怎么办**：`claude plugin update <插件>`，或等下一次同步。
 
 #### `mcp`
@@ -790,7 +790,7 @@ fleet doctor --json
 来自 `fleet doctor`。
 
 - **是什么**：会话启动时带哪些 MCP 服务。没写白名单时每个会话都带上你装的全部，吃内存。
-- **WARN / FAIL 怎么办**：给这个 Tokenman 实例写一份 MCP 白名单（说明里写着键名）。
+- **WARN / FAIL 怎么办**：给这个 tokenman 实例写一份 MCP 白名单（说明里写着键名）。
 
 #### `信任框`
 
@@ -831,7 +831,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：Tokenman 自己发出的提醒（报警、警告、在等你的）。
+- **是什么**：tokenman 自己发出的提醒（报警、警告、在等你的）。
 - **WARN / FAIL 怎么办**：逐条看提醒里写的事。
 
 #### `epic`
@@ -845,14 +845,14 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：Tokenman 的 tmux 服务器是不是卡在「快死」的状态（所有窗口都打不开）。
+- **是什么**：tokenman 的 tmux 服务器是不是卡在「快死」的状态（所有窗口都打不开）。
 - **WARN / FAIL 怎么办**：FAIL：照说明执行 `fleet-up.sh`，它清掉坏的 socket 并把会话拉回来。
 
 #### `tmuxconf`
 
 来自 `fleet doctor`。
 
-- **是什么**：tmux 服务器载入的 Tokenman 配置是不是当前这一版。
+- **是什么**：tmux 服务器载入的 tokenman 配置是不是当前这一版。
 - **WARN / FAIL 怎么办**：照说明里的 `fleet-ui-refresh.sh` 命令重载；同步后也会自动重载。
 
 #### `rview`
@@ -880,7 +880,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：有没有 Tokenman 的进程在局域网上开着端口（等于把目录分享给同网段的所有人）。
+- **是什么**：有没有 tokenman 的进程在局域网上开着端口（等于把目录分享给同网段的所有人）。
 - **WARN / FAIL 怎么办**：把它改成只听 `127.0.0.1`，或停掉它。
 
 #### `board`
@@ -896,7 +896,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：这个 Tokenman 实例托管了哪些仓库。托管节点上，你其它机器有而这台还缺的仓库列在行末「缺（本人其它机器有）」，这时是 WARN。
+- **是什么**：这个 tokenman 实例托管了哪些仓库。托管节点上，你其它机器有而这台还缺的仓库列在行末「缺（本人其它机器有）」，这时是 WARN。
 - **WARN / FAIL 怎么办**：缺的仓库会被自动补上（见 `跟仓库`）；加仓库用 ⌘P 的 **添加仓库…**。
 
 #### `跟仓库`
@@ -959,7 +959,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：这个仓库自己改过的设置——它那份仓库设置（`repos/<slug>.conf`）里除仓库名、检出位置、主干分支之外写下的每个键和值；覆盖了整个 Tokenman 的设置时，括号里写出原来的 `fleet:` 值。像凭据的键或值只显示 `<hidden>`。只写了身份时写「no setting of its own」。
+- **是什么**：这个仓库自己改过的设置——它那份仓库设置（`repos/<slug>.conf`）里除仓库名、检出位置、主干分支之外写下的每个键和值；覆盖了整个 tokenman 的设置时，括号里写出原来的 `fleet:` 值。像凭据的键或值只显示 `<hidden>`。只写了身份时写「no setting of its own」。
 - **WARN / FAIL 怎么办**：只报状态，不会 WARN / FAIL。要改哪个设置，就改行尾点名的那个文件。
 
 #### `emit`
@@ -997,7 +997,7 @@ fleet doctor --json
 来自 `fleet doctor`（只在托管 Mac 上出现）。
 
 - **是什么**：不接显示器的承载机还在不在跑动态（Aerial）桌面。没人看得见，却一直占着一部分 CPU。整机守护每小时检查一次，没有显示器时把每个登录换成系统自带的纯色图并关掉屏幕保护——每个登录只换一次；接了显示器的机器不碰。
-- **WARN / FAIL 怎么办**：`sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off` 立即换。行里点名「手动换回」的登录是有人特意换回去的，Tokenman 不再改；要保留动态桌面：`sudo touch /var/db/fleet-node/wallpaper.keep`。
+- **WARN / FAIL 怎么办**：`sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off` 立即换。行里点名「手动换回」的登录是有人特意换回去的，tokenman 不再改；要保留动态桌面：`sudo touch /var/db/fleet-node/wallpaper.keep`。
 
 #### `siri`
 
@@ -1024,7 +1024,7 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：macOS 给这个登录的后台服务管理（launchd）是否正常。这是系统的状态，不是 Tokenman 的。
+- **是什么**：macOS 给这个登录的后台服务管理（launchd）是否正常。这是系统的状态，不是 tokenman 的。
 - **WARN / FAIL 怎么办**：注销再登录这个账号，或重启电脑。
 
 ### 只报状态

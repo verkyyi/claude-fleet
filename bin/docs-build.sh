@@ -246,14 +246,15 @@ def theme_css():
 
 def theme_brand():
     """The name is the site's one brand key (site/strings.zh.json `brand`, EPIC SGS6
-    B1); the mark is the theme's logo.svg."""
+    B1); the header shows the theme's wordmark.svg, its letters in the header's colour."""
     try:
         name = json.load(open(os.path.join(REPO, 'site', 'strings.zh.json'), encoding='utf-8'))['brand']
     except (OSError, ValueError, KeyError):
         print('docs-build: site/strings.zh.json has no brand (the product name)', file=sys.stderr)
         sys.exit(1)
-    svg = open(os.path.join(THEME, 'logo.svg'), encoding='utf-8').read().strip()
-    mark = re.sub(r'<title>[^<]*</title>', '', svg).replace('<svg ', '<svg class="mark" aria-hidden="true" ', 1)
+    svg = open(os.path.join(THEME, 'wordmark.svg'), encoding='utf-8').read().strip()
+    mark = re.sub(r'<title>[^<]*</title>', '', svg)
+    mark = re.sub(r' color="[^"]*"', '', mark, count=1).replace('<svg ', '<svg class="mark" aria-hidden="true" ', 1)
     return name, mark
 
 BRAND, MARK = theme_brand()
@@ -266,7 +267,7 @@ CSS = theme_css() + """
 a{color:var(--brand);text-decoration:none}a:hover{text-decoration:underline}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
 header .brand{display:inline-flex;align-items:center;gap:9px;font:700 17px var(--f-display);color:var(--ink)}header .brand:hover{text-decoration:none}
-header .brand .mark{width:26px;height:26px;flex:none}
+header .brand .mark{height:20px;width:auto;flex:none}
 header nav{display:flex;flex-wrap:wrap;gap:4px}header nav a{padding:4px 10px;border-radius:7px;color:var(--ink-2);font-size:14px}
 header nav a.aux{margin-left:10px;color:var(--muted)}header nav a.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
 header .lang{margin-left:auto;font-size:14px}
@@ -336,10 +337,10 @@ def frame(lang, page, title, body, all_titles, pending=False, ld=''):
             '<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">'
             '<link rel="alternate" type="text/markdown" href="%s">'
             '<link rel="alternate" hreflang="%s" href="%s"><style>%s</style>%s</head><body>'
-            '<header><a class="brand" href="%s">%s%s</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
+            '<header><a class="brand" href="%s" aria-label="%s">%s</a><nav>%s</nav><a class="lang" href="%s">%s</a></header>'
             '<div class="wrap"><aside>%s</aside><main>%s<footer><a href="%s">%s</a></footer></main></div></body></html>\n') % (
         head_lang, html.escape(title), html.escape(BRAND), html.escape(src), 'en' if other == 'en' else 'zh-CN', other_url, CSS,
-        ld, html.escape(rel(page, 'index')), MARK, html.escape(BRAND), nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
+        ld, html.escape(rel(page, 'index')), html.escape(BRAND), MARK, nav, other_url, ui['other'], ''.join(side), body, html.escape(src), ui['source'])
 
 # ---- generated blocks (issue #3580) -------------------------------------------
 GEN_RE = re.compile(r'(<!-- docs-gen:([a-z-]+) -->\n)(.*?)(<!-- /docs-gen:\2 -->)', re.S)

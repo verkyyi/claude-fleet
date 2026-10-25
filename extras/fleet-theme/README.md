@@ -11,14 +11,15 @@ font family or a logo defined outside it.
 | `fonts.css` | `@font-face` for the three families, `url(./fonts/…)` |
 | `fonts/` | the served Latin subsets (woff2) + their OFL licences — cut, never edited |
 | `fonts-src/` | the fonts as published + `glyphs.txt`, the characters the cut keeps |
-| `logo.svg` | the mark |
+| `logo.svg` | the icon: a white Pac-Man on a clay tile — favicon, app and home-screen icons only |
+| `wordmark.svg` | the brand as people read it: 「tokenman」, lowercase, geometric, every letter one height; its o is the clay Pac-Man, the letters `currentColor` (ink when used as an image) — every header and the share card |
 
 ## How each consumer takes it
 
 - **Website** — `bin/site-build.sh` inlines `fonts.css` and the `fleet:tokens`
   block into `site/template.html`'s `/*{{fleet_theme}}*/` slot (font URLs become
   `/site/fonts/…`), fills `{{fleet_bg}}` (theme-color), and copies `fonts/` and
-  `logo.svg` out. The site is dark only and uses the `--fleet-*` variables directly.
+  `logo.svg` / `wordmark.svg` out; the header and the demo `<use>` the wordmark as a symbol. The site is dark only and uses the `--fleet-*` variables directly.
 - **Web chat, console** (Tailwind v4 + shadcn/ui) — after `@import "tailwindcss";`,
   `@import "<relative path>/extras/fleet-theme/theme.css";`. Vite bundles the
   fonts; use the shadcn classes (`bg-background`, `text-muted-foreground`, …) and
@@ -26,8 +27,7 @@ font family or a logo defined outside it.
 - **Docs** — `bin/docs-build.sh` inlines `fonts.css` (font URLs `/site/fonts/…`,
   the site's copy) and everything from `fleet:tokens` to `@theme` (the tokens, the
   shadcn light and dark blocks) into every page, maps its own variables onto them
-  (links = `--link`), and puts `logo.svg` in the header with its `<title>` as the
-  product's name.
+  (links = `--link`), and puts `wordmark.svg` in the header, its letters in the header's colour.
 - **Share cards** — `bin/site-images.sh` loads `fonts.css` and the tokens block.
 
 ## Changing it

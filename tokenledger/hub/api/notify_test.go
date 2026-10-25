@@ -543,11 +543,11 @@ func TestNotifyTemplateFields(t *testing.T) {
 	}
 	ok := &store.AccessRequest{ID: "rq-1", Kind: store.IdentityWeChat, Subject: "union-1", Display: "林晓",
 		State: store.RequestApproved, DecidedAt: at}
-	check(t, reviewMsg(ok, false, "").Tpl, map[string]string{"thing3": "Tokenman 使用申请",
+	check(t, reviewMsg(ok, false, "").Tpl, map[string]string{"thing3": "tokenman 使用申请",
 		"character_string14": "rq-1", "thing5": "已通过", "time6": "2026-10-14 09:02"})
 	no := &store.AccessRequest{ID: "rq-2", Kind: store.IdentityEmail, Subject: "a-very-long-mail-address-for-a-test@example.com",
 		Display: "lin", State: store.RequestRejected, Reason: "说明再具体一点", DecidedAt: at}
-	check(t, reviewMsg(no, true, "").Tpl, map[string]string{"thing3": "Tokenman access",
+	check(t, reviewMsg(no, true, "").Tpl, map[string]string{"thing3": "tokenman access",
 		"character_string14": "a-very-long-mail-address-for-a-t", "thing5": "Not approved", "time6": "2026-10-14 09:02"})
 	mail := &store.AccessRequest{ID: "rq-3", Kind: store.IdentityWeChat, Display: "林晓", NotifyAddr: "lx@example.com",
 		State: store.RequestApproved, DecidedAt: at}
@@ -556,12 +556,12 @@ func TestNotifyTemplateFields(t *testing.T) {
 	}
 
 	one := []store.AccessRequest{{ID: "rq-a", Display: "一个名字特别特别特别特别长的申请人啊啊啊啊", CreatedAt: at}}
-	check(t, newReqMsg(one, false, "").Tpl, map[string]string{"thing1": "Tokenman",
+	check(t, newReqMsg(one, false, "").Tpl, map[string]string{"thing1": "tokenman",
 		"thing2": "一个名字特别特别特别特别长的申请人啊啊…", "time6": "2026-10-14 09:02", "character_string10": "1"})
 	three := append(one, store.AccessRequest{ID: "rq-b", Display: "b"}, store.AccessRequest{ID: "rq-c", Display: "c"})
-	check(t, newReqMsg(three, false, "").Tpl, map[string]string{"thing1": "Tokenman",
+	check(t, newReqMsg(three, false, "").Tpl, map[string]string{"thing1": "tokenman",
 		"thing2": "一个名字特别特别特别特… 等 3 人", "time6": "2026-10-14 09:02", "character_string10": "3"})
-	check(t, newReqMsg(three, true, "").Tpl, map[string]string{"thing1": "Tokenman",
+	check(t, newReqMsg(three, true, "").Tpl, map[string]string{"thing1": "tokenman",
 		"thing2": "一个名字特别特别特别特… +2", "time6": "2026-10-14 09:02", "character_string10": "3"})
 }
 
@@ -626,7 +626,7 @@ func TestNotifyTrialUpgrade(t *testing.T) {
 	}
 
 	en := upgradeMsg("gh:42", "bob", now, true, "https://fleet.example")
-	if en.Subject != "Tokenman: bob asks to become a member" || !strings.Contains(en.Text, "https://fleet.example/admin/people/gh:42") {
+	if en.Subject != "tokenman: bob asks to become a member" || !strings.Contains(en.Text, "https://fleet.example/admin/people/gh:42") {
 		t.Fatalf("english = %+v", en)
 	}
 	for k, v := range en.Tpl {

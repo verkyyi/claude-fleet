@@ -1,7 +1,7 @@
 #!/bin/bash
 # site-images.sh — draw the website's PNGs once (issue #3584): the two share
 # cards (1200×630, 中文 / English — the brand, h1 and trust chips of site/strings.*.json), the PNG icons and favicon.ico, all from
-# extras/fleet-theme's logo.svg, colours and fonts (the one theme, issue #3924). The output is
+# extras/fleet-theme's logo.svg (icons), wordmark.svg (the card's brand), colours and fonts (the one theme, issue #3924). The output is
 # committed under site/assets/; bin/site-build.sh only copies it, so the build
 # needs no browser.
 #
@@ -28,6 +28,7 @@ const [pw, A, tmp, THEME] = process.argv.slice(2);
 const { chromium } = require(pw);
 const fs = require('fs');
 const logo = fs.readFileSync(THEME + '/logo.svg', 'utf8').replace(/<title>.*?<\/title>/, '');
+const wordmark = fs.readFileSync(THEME + '/wordmark.svg', 'utf8').replace(/<title>.*?<\/title>/, '');
 // the theme's own @font-face rules and fleet:tokens block — no colour or family typed here
 const fonts = fs.readFileSync(THEME + '/fonts.css', 'utf8').replace(/url\(\.\/fonts\//g, `url(file://${THEME}/fonts/`)
   + fs.readFileSync(THEME + '/theme.css', 'utf8').match(/\/\* fleet:tokens \*\/([\s\S]*?)\/\* \/fleet:tokens \*\//)[1];
@@ -46,13 +47,13 @@ const card = (lang, S) => `<!doctype html><html lang="${lang}"><meta charset="ut
 body{width:1200px;height:630px;background:var(--fleet-bg);color:var(--fleet-ink);font-family:var(--fleet-font-ui);position:relative;overflow:hidden;padding:80px 96px}
 body::before{content:"";position:absolute;right:-220px;top:-160px;width:900px;height:900px;background:radial-gradient(closest-side,rgba(217,118,90,.22),transparent 70%)}
 .b{display:flex;align-items:center;gap:18px;font:750 38px var(--fleet-font-display);position:relative}
-.b svg{width:56px;height:56px;border:1px solid var(--fleet-line);border-radius:13px}
+.b svg{height:46px;width:auto}
 h1{position:relative;margin-top:72px;font:800 ${lang === 'en' ? 84 : 76}px/1.12 var(--fleet-font-display);letter-spacing:${lang === 'en' ? '-.02em' : '0'}}
 h1 em{font-style:normal;color:var(--fleet-clay)}
 .c{position:relative;margin-top:52px;display:flex;gap:12px;font:400 22px var(--fleet-font-ui);color:var(--fleet-ink)}
 .c span{display:inline-flex;align-items:center;gap:10px;background:rgba(236,211,184,.06);border-radius:999px;padding:14px 22px}
 .c svg{width:22px;height:22px;fill:none;stroke:var(--fleet-clay);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-</style><div class="b">${logo}${S.brand}</div><h1>${S.h1}</h1><div class="c">${[1, 2, 3].map(i => `<span>${chipIcons[i - 1] || ''}${S['t' + i]}</span>`).join('')}</div></html>`;
+</style><div class="b">${wordmark}</div><h1>${S.h1}</h1><div class="c">${[1, 2, 3].map(i => `<span>${chipIcons[i - 1] || ''}${S['t' + i]}</span>`).join('')}</div></html>`;
 const icon = (size, rounded) => `<!doctype html><style>${fonts}*{margin:0}body{width:${size}px;height:${size}px;background:${rounded ? 'transparent' : 'var(--fleet-bg)'}}svg{width:${size}px;height:${size}px;display:block}</style>${rounded ? logo : logo.replace(/rx="15"/, 'rx="0"')}`;
 (async () => {
   const b = await chromium.launch();

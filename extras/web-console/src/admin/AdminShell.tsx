@@ -26,7 +26,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BRAND } from "@/shared/brand";
-import { Logo } from "@/shared/Logo";
+import { Wordmark } from "@/shared/Wordmark";
 import { api } from "./api";
 import { t } from "./i18n";
 import { NAV } from "./nav";
@@ -87,8 +87,7 @@ export function AdminShell() {
           <Sidebar>
             <SidebarHeader className="px-4 pt-5 pb-3">
               <div className="flex items-center gap-2.5">
-                <Logo className="size-7" />
-                <span className="font-display text-base font-semibold text-foreground">{BRAND}</span>
+                <Wordmark className="h-[18px] shrink-0 text-foreground" />
                 <Badge variant="outline" className="border-clay-line bg-clay-soft text-clay">
                   {t("brand.admin")}
                 </Badge>
@@ -144,7 +143,7 @@ export function AdminShell() {
           <SidebarInset className="min-w-0">
             <header className="flex h-12 items-center gap-2 border-b px-4 md:hidden">
               <SidebarTrigger />
-              <span className="font-display text-sm font-semibold whitespace-nowrap">{BRAND} · {t("brand.admin")}</span>
+              <span className="flex items-center gap-2 font-display text-sm font-semibold whitespace-nowrap"><Wordmark className="h-4 shrink-0" />· {t("brand.admin")}</span>
               <SearchButton className="ml-auto w-auto" />
             </header>
             <ReauthBanner pathname={pathname} />

@@ -60,18 +60,18 @@ On a computer with only the client installed (it watches sessions, runs none), `
 
 ### "This is a client; tasks run on managed nodes"
 
-- Tokenman has three kinds of computer: **clients** (the terminal you use: connect, look, open windows), the **hub**, and **managed nodes** (logins on managed machines, execution pods in the cluster). Only managed nodes run tasks.
+- tokenman has three kinds of computer: **clients** (the terminal you use: connect, look, open windows), the **hub**, and **managed nodes** (logins on managed machines, execution pods in the cluster). Only managed nodes run tasks.
 - The hub records this computer as a client, so `fleet-repo.sh add`, `fleet host on` and opening a session here are refused. Starting tasks still works: the hub sends them to a managed node, and you watch and talk to them from here.
 - If this computer really should run tasks (it is a managed machine, say), ask your admin to change its type on the hub.
 
 ### When GitHub is unreachable
 
-In Tokenman, GitHub does one thing: it hosts the code and the pull requests. Tasks, sessions, subscriptions and the view all go through the hub, so most things carry on when GitHub is down; only the steps that deliver code wait.
+In tokenman, GitHub does one thing: it hosts the code and the pull requests. Tasks, sessions, subscriptions and the view all go through the hub, so most things carry on when GitHub is down; only the steps that deliver code wait.
 
 **Carries on:**
 
 - **Tasks**: dispatching on the + New session line, the Sessions page and the T-numbered records live on the hub and are not affected.
-- **Sessions**: running sessions keep working; new sessions still open — Tokenman spends up to 20 seconds fetching the latest main branch from GitHub, and when it cannot, opens the session off the version this machine fetched last.
+- **Sessions**: running sessions keep working; new sessions still open — tokenman spends up to 20 seconds fetching the latest main branch from GitHub, and when it cannot, opens the session off the version this machine fetched last.
 - **Subscriptions and credentials**: the subscription credentials a session uses come from the hub, and so do the quota readings.
 - **The view**: the ⌘P panel, switching sessions, answering questions and following along on a phone all go through the hub and the links between machines.
 
@@ -114,7 +114,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: many of Tokenman's scripts need Python 3.
+- **What it is**: many of tokenman's scripts need Python 3.
 - **On WARN / FAIL**: FAIL = not installed. On macOS install the Xcode command line tools (`xcode-select --install`) or `brew install python`; on Linux use the system's package manager.
 
 #### `tmux`
@@ -221,7 +221,7 @@ From `fleet doctor`.
 
 From `fleet doctor` and `fleet doctor --machine`.
 
-- **What it is**: whether this login's Tokenman is stable and has no local changes; on a managed machine it also checks that it is linked to the current release.
+- **What it is**: whether this login's tokenman is stable and has no local changes; on a managed machine it also checks that it is linked to the current release.
 - **On WARN / FAIL**: behind: wait for the automatic sync, or `fleet update`. Local commits or a fork: the explanation lists which commits; move them away and the sync carries on. Never sync the install by hand from inside a session.
 
 #### `login-tree`
@@ -355,7 +355,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: whether a registered resident service is down, or there is a hand-written start-up item.
-- **On WARN / FAIL**: `fleet ls --services` shows which one; delete a hand-written start-up item and register it with Tokenman instead.
+- **On WARN / FAIL**: `fleet ls --services` shows which one; delete a hand-written start-up item and register it with tokenman instead.
 
 #### `daemons`
 
@@ -426,7 +426,7 @@ From `fleet doctor`.
 
 From `fleet doctor` on a computer used only as a client.
 
-- **What it is**: how many Tokenman processes still run in the background with nobody looking (left by the old client, or an ssh master a dropped client left), and how many extra files an update left beside the install (version folders past the current one and the one before, unfinished staging folders). PASS only when all three are 0.
+- **What it is**: how many tokenman processes still run in the background with nobody looking (left by the old client, or an ssh master a dropped client left), and how many extra files an update left beside the install (version folders past the current one and the one before, unfinished staging folders). PASS only when all three are 0.
 - **On WARN**: `fleet quit` stops the processes; the extra files go the next time you open `fleet`. A file you put into the install folder yourself, or edited, is not extra and an update never deletes it.
 
 #### `hubauth`
@@ -598,7 +598,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: once a minute the state reconcile probes each Tokenman instance for a session walled on one model's limit (and switches it in place to the fallback); when that probe keeps timing out, a walled session goes unnoticed.
+- **What it is**: once a minute the state reconcile probes each tokenman instance for a session walled on one model's limit (and switches it in place to the fallback); when that probe keeps timing out, a walled session goes unnoticed.
 - **On WARN / FAIL**: the row names the step that was slow; raise `FLEET_MODELCAP_PROBE_BUDGET` only after reading it.
 
 #### `cred`
@@ -633,7 +633,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether every Tokenman login on this managed machine has credential separation. The machine daemon separates any that does not by itself every 5 minutes (`credsep-enforce`) — nobody types a sudo; the hub leases an unseparated login nothing.
+- **What it is**: whether every tokenman login on this managed machine has credential separation. The machine daemon separates any that does not by itself every 5 minutes (`credsep-enforce`) — nobody types a sudo; the hub leases an unseparated login nothing.
 - **On WARN / FAIL**: a FAIL names each login still not separated and the daemon's last word (say, its sessions still read the credential files). Wait for the next round; if it is urgent an admin runs the explanation's `fleet-credsep.sh machine install --logins <login>`.
 
 #### `credproxy`
@@ -692,7 +692,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: the system's default per-process open-file limit. It only reports.
-- **On WARN / FAIL**: nothing to do: Tokenman's services raise it themselves.
+- **On WARN / FAIL**: nothing to do: tokenman's services raise it themselves.
 
 #### `reap`
 
@@ -726,14 +726,14 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether Tokenman's extension for Claude Code is installed.
+- **What it is**: whether tokenman's extension for Claude Code is installed.
 - **On WARN / FAIL**: the extension directory is missing: the next sync fills it in.
 
 #### `hooks`
 
 From `fleet doctor`.
 
-- **What it is**: whether Tokenman's hooks in Claude Code's `settings.json` are all there.
+- **What it is**: whether tokenman's hooks in Claude Code's `settings.json` are all there.
 - **On WARN / FAIL**: merge them once with the command in the explanation (a sync does it too).
 
 #### `settings`
@@ -768,7 +768,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether Tokenman's slash commands are installed.
+- **What it is**: whether tokenman's slash commands are installed.
 - **On WARN / FAIL**: the next sync fills them in, or `/plugin install fleet@claude-fleet` in Claude Code.
 
 #### `skills`
@@ -782,7 +782,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether Tokenman's Claude Code plugins are up to date.
+- **What it is**: whether tokenman's Claude Code plugins are up to date.
 - **On WARN / FAIL**: `claude plugin update <plugin>`, or wait for the next sync.
 
 #### `mcp`
@@ -790,7 +790,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: which MCP servers a session starts with. Without an allowlist every session starts all the ones you installed, which eats memory.
-- **On WARN / FAIL**: write an MCP allowlist for this Tokenman instance (the explanation names the key).
+- **On WARN / FAIL**: write an MCP allowlist for this tokenman instance (the explanation names the key).
 
 #### `信任框`
 
@@ -831,7 +831,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: the alerts Tokenman itself raised (alarms, warnings, waiting on you).
+- **What it is**: the alerts tokenman itself raised (alarms, warnings, waiting on you).
 - **On WARN / FAIL**: go through what each alert says.
 
 #### `epic`
@@ -845,14 +845,14 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether Tokenman's tmux server is stuck "half dead" (no window can be opened).
+- **What it is**: whether tokenman's tmux server is stuck "half dead" (no window can be opened).
 - **On WARN / FAIL**: FAIL: run `fleet-up.sh` as the explanation says; it clears the broken socket and brings the sessions back.
 
 #### `tmuxconf`
 
 From `fleet doctor`.
 
-- **What it is**: whether the Tokenman configuration the tmux server loaded is the current version.
+- **What it is**: whether the tokenman configuration the tmux server loaded is the current version.
 - **On WARN / FAIL**: reload it with the `fleet-ui-refresh.sh` command in the explanation; a sync reloads it too.
 
 #### `rview`
@@ -880,7 +880,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether a Tokenman process has a port open on the local network (which shares a directory with everyone on that network).
+- **What it is**: whether a tokenman process has a port open on the local network (which shares a directory with everyone on that network).
 - **On WARN / FAIL**: make it listen on `127.0.0.1` only, or stop it.
 
 #### `board`
@@ -896,7 +896,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: which repositories this Tokenman instance hosts. On a managed node, a repository your other machines host and this one still lacks is listed at the end as 「缺（本人其它机器有）」 ("missing, your other machines have it"), and the row is a WARN.
+- **What it is**: which repositories this tokenman instance hosts. On a managed node, a repository your other machines host and this one still lacks is listed at the end as 「缺（本人其它机器有）」 ("missing, your other machines have it"), and the row is a WARN.
 - **On WARN / FAIL**: the missing ones are added by themselves (see `跟仓库`); add a repository with ⌘P's **Add a repo…**.
 
 #### `跟仓库`
@@ -959,7 +959,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: the settings this repository changed on its own — every key and value its repository settings (`repos/<slug>.conf`) write beyond its name, checkout and base branch; when one shadows a value set for all of Tokenman, the old value follows as `fleet:` in brackets. A credential-shaped key or value shows only `<hidden>`. With only its identity it says "no setting of its own".
+- **What it is**: the settings this repository changed on its own — every key and value its repository settings (`repos/<slug>.conf`) write beyond its name, checkout and base branch; when one shadows a value set for all of tokenman, the old value follows as `fleet:` in brackets. A credential-shaped key or value shows only `<hidden>`. With only its identity it says "no setting of its own".
 - **On WARN / FAIL**: status only, never WARN / FAIL. To change a setting, edit the file named at the end of the line.
 
 #### `emit`
@@ -997,7 +997,7 @@ From `fleet doctor`.
 From `fleet doctor` (managed Macs only).
 
 - **What it is**: whether a host with no display attached still runs a dynamic (Aerial) desktop. Nobody sees it, yet it keeps using CPU. The machine daemon checks hourly and, with no display connected, switches each login to the system's solid-colour picture and turns its screen saver off — once per login; a machine with a display is left alone.
-- **On WARN / FAIL**: `sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off` changes it now. A login the row names as switched back by hand was changed back on purpose; Tokenman leaves it. To keep the dynamic desktop: `sudo touch /var/db/fleet-node/wallpaper.keep`.
+- **On WARN / FAIL**: `sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off` changes it now. A login the row names as switched back by hand was changed back on purpose; tokenman leaves it. To keep the dynamic desktop: `sudo touch /var/db/fleet-node/wallpaper.keep`.
 
 #### `siri`
 
@@ -1024,7 +1024,7 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether macOS's management of this login's background services (launchd) is healthy. This is the system's state, not Tokenman's.
+- **What it is**: whether macOS's management of this login's background services (launchd) is healthy. This is the system's state, not tokenman's.
 - **On WARN / FAIL**: sign out of this account and back in, or restart the computer.
 
 ### Reports only

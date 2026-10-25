@@ -33,7 +33,7 @@
 # Output (gitignored, built into the hub image by hub-deploy like the docs):
 #
 #   <out>/index.html  <out>/en/index.html     served at / and /en/
-#   <out>/logo.svg  favicon.ico  apple-touch-icon.png  icon-{192,512}.png
+#   <out>/logo.svg  wordmark.svg  favicon.ico  apple-touch-icon.png  icon-{192,512}.png
 #   <out>/og/cover-{zh,en}.png  <out>/fonts/*.woff2     served under /site/
 #   <out>/build.json              what the build decided: timed or not, and why
 #   <out>/apply/index.html  <out>/apply/en/index.html  <out>/apply/llms*.txt
@@ -210,6 +210,13 @@ tmpl = open(os.path.join(SITE, 'template.html'), encoding='utf-8').read()
 if '/*{{fleet_theme}}*/' not in tmpl:
     fail('template.html has no /*{{fleet_theme}}*/ slot for the theme')
 tmpl = tmpl.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG)
+# The wordmark (extras/fleet-theme/wordmark.svg) as a symbol the header and the demo's sidebar <use>.
+_wm = open(os.path.join(THEME, 'wordmark.svg'), encoding='utf-8').read()
+_wm_m = re.search(r'viewBox="([^"]+)"[^>]*>(?:<title>[^<]*</title>)?(.*)</svg>', _wm, re.S)
+if '{{fleet_wordmark}}' not in tmpl or not _wm_m:
+    fail('template.html has no {{fleet_wordmark}} slot, or extras/fleet-theme/wordmark.svg is unreadable')
+else:
+    tmpl = tmpl.replace('{{fleet_wordmark}}', '<symbol id="wm" viewBox="%s">%s</symbol>' % (_wm_m.group(1), _wm_m.group(2).strip()))
 tables = {l: json.load(open(os.path.join(SITE, 'strings.%s.json' % l), encoding='utf-8')) for l, _ in LANGS}
 keys = set(tables['zh'])
 for l, _ in LANGS:
@@ -536,8 +543,8 @@ for path, page in legal_pages.items():
         fh.write(page)
 
 A = os.path.join(SITE, 'assets')
-for name in ('logo.svg', 'favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'):
-    src = os.path.join(THEME if name == 'logo.svg' else A, name)
+for name in ('logo.svg', 'wordmark.svg', 'favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'):
+    src = os.path.join(THEME if name.endswith('.svg') else A, name)
     if os.path.isfile(src):
         shutil.copy2(src, os.path.join(OUT, name))
     else:

@@ -120,8 +120,8 @@ for lang in ('zh', 'en'):
             n += 1
             rel = os.path.relpath(os.path.join(d, f), out)
             h = open(os.path.join(d, f), encoding='utf-8').read()
-            if not re.search(r'<a class="brand" href="[^"]*"><svg class="mark"[^>]*>.*?</svg>%s</a>' % re.escape(brand), h, re.S):
-                bad.append('%s: header is not the mark + %s' % (rel, brand))
+            if not re.search(r'<a class="brand" href="[^"]*" aria-label="%s"><svg class="mark"[^>]*>.*?</svg></a>' % re.escape(brand), h, re.S):
+                bad.append('%s: header is not the wordmark, labelled %s' % (rel, brand))
             if not re.search(r'<title>[^<]* · %s</title>' % re.escape(brand), h):
                 bad.append('%s: <title> does not end in · %s' % (rel, brand))
             if '--brand:var(--link)' not in h or '--fleet-clay:' not in h:
@@ -141,7 +141,7 @@ for lang in ('zh', 'en'):
                 bad.append('%s: carries a FAQPage (only faq does)' % rel)
 for b in bad:
     print('FAIL I ' + b)
-print('ok   I %d pages: mark + %s, · %s titles, theme colours; FAQPage on faq only' % (n, brand, brand))
+print('ok   I %d pages: the wordmark labelled %s, · %s titles, theme colours; FAQPage on faq only' % (n, brand, brand))
 sys.exit(1 if bad else 0)
 PY
 

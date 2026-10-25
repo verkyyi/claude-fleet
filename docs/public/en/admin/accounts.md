@@ -1,6 +1,6 @@
 # Creating and removing accounts
 
-A person needs two things to use Tokenman: **to be able to sign in to the hub** (to be on the **Users** list), and **an account of their own on a machine** (their sessions run in it, and their files and other people's cannot see each other). Creating an account gives them both; removing it takes both back.
+A person needs two things to use tokenman: **to be able to sign in to the hub** (to be on the **Users** list), and **an account of their own on a machine** (their sessions run in it, and their files and other people's cannot see each other). Creating an account gives them both; removing it takes both back.
 
 ## Creating an account: send an invite
 
