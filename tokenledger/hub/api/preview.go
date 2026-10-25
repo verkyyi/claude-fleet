@@ -75,6 +75,50 @@ func previewNoCache(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
+// previewClusterHost is whether host (an HTTP Host, port allowed) names the hub
+// by an in-cluster Service name rather than a DNS host on the internet:
+//
+//	ccquota-hub                                  one label — the namespace's own search domain
+//	ccquota-hub.new-deploy                       <service>.<namespace>: two labels, the last no ICANN TLD
+//	ccquota-hub.new-deploy.svc[.cluster.local]   the Service's full names
+//
+// The cluster credential proxy dials the hub as http://ccquota-hub
+// (CCQUOTA_CREDPROXY_HUB_URL) and other pods as …svc.cluster.local; with
+// previews on, those got 421 and every pass resolve failed. Such a name is
+// reachable only from inside the cluster: the preview ingress forwards only
+// *.<preview domain> hosts and every public ingress rule names a real DNS host,
+// so a browser — and a preview's hostile code — can never arrive with one.
+// An IP literal and anything with a public TLD (evil.example.com) stay 421,
+// and a host under the preview domain is never this (the caller checks).
+func previewClusterHost(host string) bool {
+	h := host
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		h = hh
+	}
+	h = strings.ToLower(h)
+	if h == "" || net.ParseIP(strings.Trim(h, "[]")) != nil || strings.HasSuffix(h, ".") {
+		return false
+	}
+	labels := strings.Split(h, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || !previewLabelRE.MatchString(l) {
+			return false
+		}
+	}
+	switch {
+	case len(labels) == 1:
+		return true
+	case strings.HasSuffix(h, ".svc") || strings.HasSuffix(h, ".svc.cluster.local"):
+		return len(labels) == 3 || len(labels) == 5 // <service>.<namespace>.svc[.cluster.local]
+	case len(labels) == 2:
+		ps, icann := publicsuffix.PublicSuffix(h)
+		return !icann && ps == labels[1]
+	}
+	return false
+}
+
+var previewLabelRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+
 // This sits OUTSIDE appMount, so preview hosts never serve the Hub SPA or APIs.
 func (s *Server) previewHosts(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +128,7 @@ func (s *Server) previewHosts(next http.Handler) http.Handler {
 		}
 		u, _ := url.Parse(s.FleetPublicURL)
 		previewHost := r.Host == s.PreviewDomain || strings.HasSuffix(strings.Split(r.Host, ":")[0], "."+s.PreviewDomain)
-		hubHost := r.Host == u.Host
+		hubHost := r.Host == u.Host || (!previewHost && previewClusterHost(r.Host))
 		for _, alias := range s.PreviewHubAliases {
 			hubHost = hubHost || r.Host == alias
 		}

@@ -145,6 +145,12 @@ Linux SO_PEERCRED）。root/system、其他 UID、symlink 或非私人路径拒�
   现有 ccquota alias 若仍有客户端使用，需要显式列入，例如 `ccquota.example.com`，
   不从任意请求 Host 推导。健康探针允许非预览 Host 的 GET/HEAD `/healthz`、`/readyz`；
   现有内部 replica hop 必须带有效 replica token，预览 origin 永不进入 Hub 路由。
+  集群内的 Service 名照常进 Hub（`previewClusterHost`）：单标签（`ccquota-hub`）、
+  `<service>.<namespace>`（第二段不是 ICANN 顶级域）、`<service>.<namespace>.svc[.cluster.local]`
+  ——集群凭据代理按 `CCQUOTA_CREDPROXY_HUB_URL=http://ccquota-hub` 拨入口，别的 pod 用
+  `…svc.cluster.local`。这些名字只在集群里解析：预览 ingress 只转 `*.<preview 域>`，公网 ingress
+  的规则都是真实 DNS Host，浏览器（和预览里的代码）带不来；IP 字面量与公网样子的 Host 仍 421。
+  它们不能写进 `CCQUOTA_PREVIEW_HUB_ALIASES`（那里只收 Hub site 上的精确 DNS Host，入口拒绝启动）。
 - wildcard DNS 与证书覆盖 `*.<preview-base-domain>`；TLS 由现有 ingress/LB 终止，
   保留原 Host，支持 WS Upgrade 与流式响应，关闭缓存／响应缓冲，合理长连接超时。
   ingress/LB 的 callback access log 必须关闭 query 或脱敏 state/ticket；Hub logRequests
