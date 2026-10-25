@@ -18,8 +18,8 @@
 #                   device= token= fuid=; the fleet session's own options and the
 #                   global options / key tables untouched (only the [78] hook)
 #   B. the line   — the client's screen's first line is the top line; for a window
-#                   of this machine Tokenman's brand on the left, never its #N /
-#                   title / state (task ZDYN), and its own stamps: 剩余 62% · Opus
+#                   of this machine Tokenman's brand and its name on the left,
+#                   never its #N / state (task ZDYN), and its own stamps: 剩余 62% · Opus
 #                   5.5 · high; for one on the refresh loop's cache its ctx columns
 #                   and no red; at 40 columns (a phone, #3006) no 剩余 · model · effort
 #   C. cur=       — switching windows in the 看台 moves `cur=` (the [78] hook, gated
@@ -237,7 +237,7 @@ st_has "B: …the brand" "$L7t" " ›› Tokenman "
 tn kill-window -t "$W7t"
 L8=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W8")
-st_hasnt "B: a window on the refresh loop's cache: no title (ZDYN)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "修缓存"
+st_has "B: a window on the refresh loop's cache: its name after the brand (ZDYN)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "›› Tokenman · 修缓存"
 st_has "B: …its ctx columns" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "40% · Sonnet 5.5 · medium"
 st_hasnt "B: …a perm needs: no ! glyph (ZDYN: the panel's)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" " ! #"
 st_hasnt "B: …and no red line" "$L8" "bg=#f7768e"
