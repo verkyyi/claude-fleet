@@ -139,12 +139,16 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		record := req.CodexRecord
 		if req.Provider != credvault.Codex || req.Codex != nil || req.Rejected != nil ||
 			record.CredentialID == "" || record.AccountKey == credproxy.CodexReference("account", "") || !credproxy.ValidCodexReferences([]string{record.AccountKey}) || !credproxy.ValidCodexReferences(record.References) {
+			log.Printf("credproxy affinity: invalid record worker_id=%s owner=%s account=%s credential_id=%t account_key=%t refs=%d",
+				c.WorkerID, record.Owner, record.Account, record.CredentialID != "", record.AccountKey != credproxy.CodexReference("account", ""), len(record.References))
 			sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "invalid continuation record")
 			return
 		}
-		ch, err := s.codexAffinityChoice(c.Principal, endpoint, store.CodexAffinity{Owner: record.Owner, CredentialID: record.CredentialID}, now)
+		ch, err := s.codexAffinityChoice(c.Principal, endpoint, store.CodexAffinity{Owner: record.Owner, CredentialID: record.CredentialID}, now, false)
 		if err != nil {
-			out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_not_authorized"
+			// said out loud: a refused record is a 502 at the client
+			log.Printf("credproxy affinity: record refused worker_id=%s owner=%s account=%s reason=%v", c.WorkerID, record.Owner, record.Account, err)
+			out.Valid, out.Error, out.Reason = false, credproxy.CodexContinuationUnavailable, "source_account_not_authorized: "+err.Error()
 		} else if err := s.Store.RecordCodexAffinity(c.WorkerID, record.References, store.CodexAffinity{
 			Owner: ch.PrincipalID, Account: ch.Account, CredentialID: record.CredentialID, AccountKey: record.AccountKey,
 		}, now); err != nil {

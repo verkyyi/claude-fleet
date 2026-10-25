@@ -732,7 +732,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		}
 		if err != nil {
 			a.status, _ = refuse(w, provider, http.StatusBadGateway, "api_error", "could not establish continuation source")
-			a.why = "affinity_record_unavailable"
+			a.why = "affinity_record_unavailable: " + affinityWhy(err)
 			return
 		}
 	}
@@ -838,6 +838,19 @@ func contains(l []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// affinityWhy is a record failure's own words for the audit line: the hub's
+// refusal code and reason, or the transport's class — never a header or body.
+func affinityWhy(err error) string {
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "continuation record refused") && !strings.HasPrefix(msg, "affinity_") && !strings.HasPrefix(msg, "hub ") {
+		return errClass(err)
+	}
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	return msg
 }
 
 func errClass(err error) string {

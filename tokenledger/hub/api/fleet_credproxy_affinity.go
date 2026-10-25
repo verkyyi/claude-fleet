@@ -10,14 +10,22 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
 )
 
-func (s *Server) codexAffinityChoice(principal, endpoint string, affinity store.CodexAffinity, now time.Time) (store.Credential, error) {
+// codexAffinityChoice is the account a continuation source names, if the
+// session may still use it. route: the source is about to carry a request, so
+// it must also be available (refreshing, under its limit). A RECORD of a
+// response that already went out on the account passes route=false: its
+// provenance is a fact, and refusing to write it down only breaks the next
+// turn — the selection that sent it never asked for refresh health, so a
+// cached access token behind a failed background refresh served the request
+// and the record was refused (502 affinity_record_unavailable).
+func (s *Server) codexAffinityChoice(principal, endpoint string, affinity store.CodexAffinity, now time.Time, route bool) (store.Credential, error) {
 	choices, err := s.sessionBindChoices(principal, endpoint, credvault.Codex)
 	if err != nil {
 		return store.Credential{}, err
 	}
 	for _, ch := range choices {
 		if ch.PrincipalID == affinity.Owner && s.Vault.CredentialID(ch) == affinity.CredentialID {
-			if ch.RefreshError != "" || s.credAtLimit(ch, now) != "" {
+			if route && (ch.RefreshError != "" || s.credAtLimit(ch, now) != "") {
 				return ch, errors.New("source_account_unavailable")
 			}
 			return ch, nil
@@ -45,7 +53,7 @@ func (s *Server) codexAffinityBind(worker, principal, endpoint string, route cre
 	if err != nil {
 		return fail(err.Error())
 	}
-	ch, err := s.codexAffinityChoice(principal, endpoint, affinity, now)
+	ch, err := s.codexAffinityChoice(principal, endpoint, affinity, now, true)
 	if err != nil {
 		return fail(err.Error())
 	}

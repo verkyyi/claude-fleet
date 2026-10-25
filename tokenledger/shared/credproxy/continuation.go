@@ -50,7 +50,7 @@ func (h *HubResolver) RecordCodexAffinity(ctx context.Context, pass string, res 
 		Owner: res.Owner, Account: res.Account, CredentialID: res.CredentialID, AccountKey: CodexReference("account", res.AccountID), References: refs,
 	}})
 	if err == nil && (!answer.Valid || !answer.CodexAffinityV1) {
-		return errors.New("continuation record refused")
+		return errors.New("continuation record refused: " + answer.Error + " " + answer.Reason)
 	}
 	return err
 }
