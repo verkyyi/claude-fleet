@@ -353,6 +353,27 @@ reset; : > "$WRITES"
 out=$(qo view-act --view fl@view-v1 "$MU/far3" reap --yes 2>&1) && st_fail "E: a lost row's reap exited 0"
 [ -z "$(calls)" ] && [ ! -s "$WRITES" ] || st_fail "E: a lost row sent «$(calls) $(cat "$WRITES")»"
 case "$out" in *"mac-a 失联，做不了"*) ;; *) st_fail "E: a lost row does not say why: $out" ;; esac
+# another machine's CLOSED session (the hub's 已收起 row, `id:<fid>`): 恢复 is ONE
+# hub write there — worker_resume on <its fleet UUID>/<fid> (the hub's
+# history.resume_id), through fleet-row-remote.sh; nothing listed live in time ⇒
+# sent, «正在 mac-b 上恢复». A lost machine's sends nothing.
+FFID=77777777-7777-4777-8777-777777777777
+farboard() {  # <lost true|false>
+  printf '{"board":{"rows":[{"id":"%s","group":"gone","tag":"ended","title":"Farclosed","machine":"mac-b","login":"bob","lost":%s,"history":{"id":"%s","status":"offline_unknown","resume_id":"%s/%s"}}]}}\n' \
+    "$FFID" "$1" "$FFID" "$MU" "$FFID" > "$G/hubsess.body"
+}
+farboard false; date +%s > "$G/hub_ok"
+reset; : > "$WRITES"; : > "$HS"
+out=$(FLEET_VIEW_FAR_REOPEN_SECS=0 qo view-act --view fl@view-v1 "id:$FFID" resume 2>"$W/err") \
+  || st_fail "E: a far closed row's 恢复 failed: $out $(cat "$W/err")"
+[ "$(calls)" = "fleet-row-remote.sh|resume|fl|wid:$MU/$FFID" ] || st_fail "E: far 恢复 ran «$(calls)»"
+[ "$(grep -c . "$WRITES")" = 1 ] && [ "$(cut -f1 "$WRITES")" = worker_resume ] || st_fail "E: far 恢复 wrote «$(cat "$WRITES")»"
+case "$(cut -f2 "$WRITES")" in *"\"worker_id\":\"$MU/$FFID\""*) ;; *) st_fail "E: far 恢复 names no identity worker_id: $(cat "$WRITES")" ;; esac
+case "$out" in *"正在 mac-b 上恢复"*) ;; *) st_fail "E: far 恢复 does not say where it is restoring: $out" ;; esac
+farboard true; reset; : > "$WRITES"
+out=$(qo view-act --view fl@view-v1 "id:$FFID" resume 2>&1) && st_fail "E: a lost machine's 恢复 exited 0: $out"
+[ -z "$(calls)" ] && [ ! -s "$WRITES" ] || st_fail "E: a lost machine's 恢复 sent «$(calls) $(cat "$WRITES")»"
+rm -f "$G/hubsess.body"
 # the popup: Tab → 停 on the far row, off the screen's thread, the outcome on the bottom line
 reset; : > "$WRITES"
 # the pane is the outer server's: hand it E's environment (the hub seams, the cache)
@@ -369,5 +390,5 @@ n=$(screen | grep -o '[0-9] 换成' | cut -c1)
 to send-keys -t o "$n"
 waitfor '（在 mac-a）：已完成' || st_fail "E: the popup does not say the switch landed: $(screen)"
 [ "$(calls)" = "fleet-row-remote.sh|agent|fl|wid:$MU/far1" ] || st_fail "E: the popup's switch ran «$(calls)»"
-st_ok_all "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 换成 lands off-thread"
+st_ok_all "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; another machine's closed row 恢复 by its identity worker_id (worker_resume); the popup's 换成 lands off-thread"
 echo "PASS fleet-view-actions-selftest"

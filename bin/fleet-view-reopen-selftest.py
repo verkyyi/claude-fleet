@@ -9,10 +9,16 @@ every other closed row says why it cannot, and no probe is listed.
      grey with the reason when the check refuses
   C  恢复 runs fleet-id.sh reopen <ID> --exec, then the 看台 goes to the window
      carrying that @fleet_id; a refusal is said, nothing gone to
-  D  a task's closed row: no 恢复 (its history is read-only, #5396) — the page
-     says so instead of being empty; another machine's says where it is
+  D  a task's closed row reopens its conversation only (#5396); a row that names
+     no session says so instead of being empty
   E  board_apply: the hub's closed probe rows are left out; a closed row is
-     `home` only when its machine and login are these
+     `home` only when its machine and login are these; it carries the hub's
+     history.resume_id
+  F  another machine's closed row: 恢复（在 <machine> 上） — ONE hub write,
+     worker_resume on <its fleet UUID>/<fid> through fleet-row-remote.sh, then the
+     看台 goes to the window the hub lists for that ID; the node's refusal said
+     verbatim; nothing listed in time = sent, «restoring on <machine>»; grey when
+     the machine is lost, the hub silent, or no worker_id can be named
 """
 import json
 import os
@@ -25,6 +31,7 @@ import fleet_view as view
 
 BIN = Path(__file__).resolve().parent
 FID = '11111111-1111-4111-8111-111111111111'
+MU = '44444444-4444-4444-8444-444444444444'
 NAT = '22222222-2222-4222-8222-222222222222'
 
 
@@ -251,10 +258,7 @@ class PanelTests(unittest.TestCase):
                 self.assertEqual(view.act_run(None, 'v', 'fleet', view.ACTION['resume'], task, '')[0], 0)
             self.assertEqual(runs[0][-4:], ['reopen', FID, '--exec', '--rebuild'])
 
-    def test_D_far_and_unrecorded_rows_say_why(self):
-        far = ledger_row(home=False, machine='mac-b')
-        self.assertFalse(view.reopen_row(far))
-        self.assertEqual(view.page_of(far)[0][2], 'On mac-b — restore it from that machine')
+    def test_D_unrecorded_rows_say_why(self):
         bare = dict(ledger_row(task='T42', far=False, ledger=False), target='landed:scratch:scratch-3@o/r', fid='')
         self.assertFalse(view.reopen_row(bare))
         self.assertEqual(view.page_of(bare)[0][2], 'No session is recorded for this row — nothing to reopen')
@@ -271,6 +275,107 @@ class PanelTests(unittest.TestCase):
         groups, gone = view.board_apply(board, {g: [] for g in view.GROUPS}, [], [], 'mac-a', 'alice')
         self.assertEqual([e['fid'] for e in gone], [FID, '33333333-3333-4333-8333-333333333333'])
         self.assertEqual([e['home'] for e in gone], [True, False])
+        board['rows'][2]['history'] = dict(id=board['rows'][2]['id'], status='offline_unknown',
+                                           resume_id=MU + '/33333333-3333-4333-8333-333333333333')
+        _, gone = view.board_apply(board, {g: [] for g in view.GROUPS}, [], [], 'mac-a', 'alice')
+        self.assertEqual(gone[1]['resume_id'], MU + '/33333333-3333-4333-8333-333333333333')
+
+
+class FarRestoreTests(unittest.TestCase):
+    """F: another machine's closed session, restored from this panel."""
+
+    def setUp(self):
+        view._REOPEN.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.g = Path(self.tmp.name)
+        for p in (patch.object(view, 'ui_lang', return_value='en'),
+                  patch.object(view, 'say', lambda key, *a: ' '.join((key,) + tuple(map(str, a)))),
+                  patch.object(view, 'dash_global', return_value=self.g),
+                  patch.object(view, 'hub_stale', return_value=False),
+                  patch.dict(os.environ, FLEET_VIEW_FAR_REOPEN_SECS='0')):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def far(self, **kw):
+        row = ledger_row(home=False, machine='mac-b', login='bob', resume_wid=MU + '/' + FID)
+        row.update(kw)
+        return row
+
+    def test_page_offers_restore_on_that_machine(self):
+        row = self.far()
+        self.assertFalse(view.reopen_row(row))
+        self.assertTrue(view.far_reopen_row(row))
+        self.assertEqual([a['id'] for a, _ in view.menu_of(row)], ['resume'])
+        with patch.object(view.subprocess, 'run', side_effect=AssertionError('no remote --check')):
+            self.assertEqual([(a['id'], label, why) for a, label, why in view.page_of(row)],
+                             [('resume', 'view_act_restore (on mac-b)', '')])
+        self.assertEqual(view.page_of(self.far(lost=True))[0][2], 'view_lost_act_fmt mac-b')
+        with patch.object(view, 'hub_stale', return_value=True):
+            self.assertIn('hub is not answering', view.page_of(row)[0][2])
+        self.assertIn('restore it from that machine', view.page_of(self.far(resume_wid=''))[0][2])
+        bare = self.far(fid='', target='landed:scratch:scratch-3@o/r', task='T42')
+        self.assertFalse(view.far_reopen_row(bare))
+        self.assertEqual(view.page_of(bare)[0][2], 'No session is recorded for this row — nothing to reopen')
+
+    def test_the_worker_id_is_the_identity_form(self):
+        row = self.far(resume_wid='')
+        self.assertEqual(view.far_reopen_wid('fl', dict(row, worker_id=MU + '/' + FID)), MU + '/' + FID)
+        self.assertEqual(view.far_reopen_wid('fl', dict(row, worker_id=MU + '/issue-7', resume_id=MU + '/' + FID)),
+                         MU + '/' + FID)
+        # nothing on the row: the fleet UUID of that machine and login off the hub's rows
+        self.assertEqual(view.far_reopen_wid('fl', row), '')
+        other = '55555555-5555-4555-8555-555555555555'
+        (self.g / 'remote_fl').write_text('#ts\x1f1\n' + 'wid:%s/issue-3\x1fmac-b\n' % MU
+                                          + 'wid:%s/issue-4\x1fmac-c\n' % other)
+        (self.g / 'fleet_logins').write_text('%s\tbob\n%s\tbob\n' % (MU, other))
+        self.assertEqual(view.far_reopen_wid('fl', row), MU + '/' + FID)
+        # two fleets of that machine answer: none named, never a guess
+        (self.g / 'remote_fl').write_text('wid:%s/issue-3\x1fmac-b\nwid:%s/issue-4\x1fmac-b!\n' % (MU, other))
+        self.assertEqual(view.far_reopen_wid('fl', row), '')
+        (self.g / 'fleet_logins').write_text('%s\tbob\n%s\tcarol\n' % (MU, other))
+        self.assertEqual(view.far_reopen_wid('fl', row), MU + '/' + FID)
+
+    def run_act(self, row, proc, board=None):
+        runs = []
+
+        def run(argv, **kw):
+            runs.append((argv, kw.get('env') or {}))
+            return proc
+        with patch.object(view.subprocess, 'run', side_effect=run), \
+                patch.object(view, 'act_env', return_value={}), patch.object(view, 'hub_reread'), \
+                patch.object(view, 'board_read', return_value=board), \
+                patch.object(view, 'go', return_value=0) as go:
+            out = view.act_run(None, 'v', 'fl', view.ACTION['resume'], row, '')
+        return out, runs, go
+
+    def test_restore_sends_worker_resume_and_goes_there(self):
+        live = {'rows': [dict(id=FID, group='work', worker_id=MU + '/scratch-9', machine='mac-b', login='bob')]}
+        ok = subprocess.CompletedProcess([], 0, 'Restore hello on mac-b: done\n', '')
+        (rc, said, went), runs, go = self.run_act(self.far(task='T42'), ok, live)
+        self.assertEqual((rc, went), (0, True), said)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0][0][-3:], ['resume', 'fl', 'wid:%s/%s' % (MU, FID)])
+        self.assertTrue(runs[0][0][1].endswith('fleet-row-remote.sh'))
+        self.assertEqual((runs[0][1]['FLEET_REMOTE_SAY'], runs[0][1]['FLEET_REMOTE_ROW_NODE']), ('print', 'mac-b'))
+        self.assertEqual(go.call_args.args[2], MU + '/scratch-9')
+        self.assertEqual(go.call_args.args[5], {'machine': 'mac-b', 'login': 'bob'})
+        # not listed in time: sent, and said where it is being restored
+        (rc, said, went), _, go = self.run_act(self.far(), ok, {'rows': [dict(id=FID, group='gone')]})
+        self.assertEqual((rc, went), (0, False))
+        self.assertIn('restoring on mac-b', said)
+        go.assert_not_called()
+
+    def test_refusal_is_said_verbatim_and_lost_sends_nothing(self):
+        no = subprocess.CompletedProcess([], 1, 'Restore hello on mac-b: refused — NOT_RESUMABLE: Native file '
+                                                'not located\n', '')
+        (rc, said, went), _, go = self.run_act(self.far(), no)
+        self.assertEqual((rc, went), (1, False))
+        self.assertIn('NOT_RESUMABLE: Native file not located', said)
+        go.assert_not_called()
+        (rc, said, _), runs, _ = self.run_act(self.far(lost=True), no)
+        self.assertEqual((rc, runs), (1, []))
+        self.assertEqual(said, 'view_lost_act_fmt mac-b')
 
 
 if __name__ == '__main__':

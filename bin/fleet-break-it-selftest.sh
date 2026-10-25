@@ -8028,6 +8028,18 @@ drill_task_current_view() {
   SECS=$(since "$t0")
 }
 
+drill_view_far_restore() {
+  # 看台里另一台机器的已收起会话：恢复从这里发出（hub 的 worker_resume，
+  # <那台的 fleet UUID>/<fid>），看台切到它的新窗口；那台机器无 TMUX 也照样开窗
+  local t0 out; t0=$(now); CAP=60
+  out=$(python3 "$BIN/fleet-view-reopen-selftest.py" FarRestoreTests 2>&1) \
+    || { WHY="panel: $(printf '%s\n' "$out" | tail -12)"; return 1; }
+  out=$(python3 "$BIN/fleet-hub-selftest.py" HubTests.test_resume_by_identity_reopens_behind_the_gates 2>&1) \
+    || { WHY="node: $(printf '%s\n' "$out" | tail -12)"; return 1; }
+  WHAT='别的机器的已收起会话在这里恢复：一次 worker_resume（身份 worker_id），看台切过去；那台按 --rebuild 重开，门禁先拦'
+  SECS=$(since "$t0")
+}
+
 
 
 drill_task_result_overrides_native() {

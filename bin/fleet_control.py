@@ -656,6 +656,14 @@ class Control(NativeExitSubmission):
                 if matches:
                     raise Unattempted("ALREADY_RUNNING", "A live window already holds this identity")
                 code, output, err = self.adapter("resume", fleet["name"], "fid:" + key, timeout=180)
+                if code in (4, 5):
+                    # refused before anything opened (fleet-control-read.sh's
+                    # `resume fid:` gates and the reopen's own --check): its line
+                    raise Unattempted({4: "RESOURCE_GATE", 5: "NOT_RESUMABLE"}[code], last_line(err))
+                if code and spawner_refused(err):
+                    # the spawner's own refusal (at capacity, no session to open in):
+                    # no window was made — said as it is, not as an unknown
+                    raise Unattempted({2: "AT_CAPACITY"}.get(code, "EXECUTION_FAILED"), last_line(err))
                 if code:
                     raise Fault("UNKNOWN_OUTCOME", err.decode("utf-8", errors="replace")[-1000:] or "Exact history could not be resumed; inspect the session before retrying")
                 matches, snapshot = self.find_workers(fleet, key)
