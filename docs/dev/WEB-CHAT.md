@@ -418,6 +418,23 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
 - 测试：e2e `TestChatSayToSession`、`TestChatPage`；`TestBoardOriginAndCanTalk`；`session-title-selftest.sh`（第 35 列）；
   `fleet-view-board-selftest.py`（网页开的一行）；`fleet-view-actions-selftest.sh`（`webopen`）。
 
+### 新会话的等待：从按下到第一句回复（PNWW）
+
+一条大陆用户的新会话：浏览器 → 深圳入口 → 越过太平洋的转发 → 家机（美国的 Mac）→ 模型。家机这一段实测
+（暖的家，2026-10-25）：按下 → 开好回执 1.4 s → 第一句进 Agent 4.7 s → 回复写进记录 9.3 s（模型约 4.6 s）。
+页面上的等待叠在上面，这一版去掉其中三段：
+
+- **预热**：`/app/new` 打开就 `GET /v1/chat/warm`（之后每 60 s 一次，入口留住转发 90 s）——拨好并留住这个人的
+  转发、叫醒家机的对话服务、先问好 `firstFleet`（家机把答案留 60 s）。按下时就是一次往返，不再是一次跨海回拨。
+  老的驻留服务回 404，转发照样暖了。
+- **不等列表**：`/v1/chat/open` 一答就进 `/s/<worker>`（它的页面按 worker 读），不再每 2 s 刷列表等它出现。
+- **记录找得快**：视图开着的头 60 s，还没有记录就每 0.5 s 找一次（之后 3 s），还没有会话 id 就每 1 s 问一次（之后 2 s）。
+
+**量**：页面在本标签页里计时（`src/app/start-clock.ts`，sessionStorage 按 worker），按下 → 开好回执（open_ms）
+→ 会话页画出（shown_ms）→ 家机那一层第一句回复的字（ms），只发一次：`POST /v1/chat/timing {ms, open_ms, shown_ms,
+agent, tz}`。入口记 `fleet_chat_timings`（何时、多久、家机机器、助手、时区——不记是谁）；`GET /v1/fleet/chat/timing?days=7`
+（管理员）给每一段的 p50 / p90，全部、大陆（时区是中国的）和按家机分开。
+
 ## 会话合一 ①：会话门、停放与接回（HHV0）
 
 网页不再自己跑一段对话、也不再「接管 / 交回」：每个对话就是家机器上的一个**会话**（一个窗口、一个

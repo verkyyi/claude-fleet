@@ -380,6 +380,9 @@ if (part("socket") || part("budget") || part("context")) {
   if (lsof.error) console.log("note H: no lsof here to list TCP listeners");
   else ok(!/LISTEN/.test(lsof.stdout || ""), "H no TCP listener at all");
   ok((await sreq("/healthz")).status === 200, "H the socket answers");
+  const wm = await sreq("/api/warm");
+  ok(wm.status === 200 && JSON.parse(wm.body).ok === true, "H /api/warm answers at once (task PNWW: the new-session page warms the relay)");
+  ok((await sreq("/api/warm", { method: "POST", headers: { "X-Fleet-Webchat": "1" } })).status !== 200, "H /api/warm is GET only");
   const c0 = await sreq("/api/conversation");
   ok(c0.status === 200 && JSON.parse(c0.body).budget?.blocked === false, "H trusted on the socket: no cookie needed; budget not blocked");
   ok((await sreq("/api/turn", { method: "POST", headers: { "Content-Type": "application/json" }, body: { text: "hi" } })).status === 403, "H a POST without the page's header is still refused");

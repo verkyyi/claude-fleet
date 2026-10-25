@@ -36,11 +36,14 @@ import {
   type Agent, type Choice, type Home, type Mode,
 } from "./new-session";
 import { useWorkRows } from "./work-rows";
+import { clockOpened } from "./start-clock";
 
 const AGENT_NAME: Record<"claude" | "codex", string> = { claude: "Claude Code", codex: "Codex" };
 
 // how long a chat start waits for its row before it goes back to the list
 const ROW_WAIT_MS = 15_000;
+// the hub keeps a person's relay 90 s idle: warmed again inside that
+const WARM_EVERY_MS = 60_000;
 
 function saveChoice(c: Choice) {
   try { localStorage.setItem(CHOICE_KEY, JSON.stringify(c)); } catch { /* private mode */ }
@@ -111,6 +114,16 @@ export default function NewSession() {
   const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data);
   const canStart = !loading && !why && !busy && !waiting;
 
+  // the relay to the home dialled and kept, its service awake, while the person
+  // types (task PNWW): a press then is one round trip, not a dial-back across the sea
+  useEffect(() => {
+    if (!unified || viewAs || why || loading) return;
+    const warm = () => { void fetch("/v1/chat/warm", { cache: "no-store" }).catch(() => {}); };
+    warm();
+    const t = window.setInterval(warm, WARM_EVERY_MS);
+    return () => clearInterval(t);
+  }, [unified, why, loading]);
+
   // a chat start on the new road: once its row is in the list, open it
   useEffect(() => {
     if (!waiting) return;
@@ -145,6 +158,7 @@ export default function NewSession() {
       return;
     }
     setBusy(true);
+    const t0 = Date.now();
     const r = await fetch("/v1/chat/open", { method: "POST", cache: "no-store",
       headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify({ agent, ...(say ? { text: say } : {}) }) }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
@@ -156,7 +170,11 @@ export default function NewSession() {
       return;
     }
     setWords("");
-    setWaiting({ fid: String(j.fid || ""), worker: String(j.worker || j.worker_id || "") });
+    const worker = String(j.worker || j.worker_id || "");
+    clockOpened(worker, t0, agent);
+    // its own page reads it by its worker at once (task PNWW): no wait for the list
+    if (worker) { reload(); go(`/s/${encodeURIComponent(worker)}`, { replace: true }); return; }
+    setWaiting({ fid: String(j.fid || ""), worker });
     reload();
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {

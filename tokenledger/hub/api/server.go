@@ -757,6 +757,8 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(TryBeatPath, s.viewerOnly(http.HandlerFunc(s.handleTryBeat)))
 		mux.Handle(TryPausePath, s.viewerOnly(http.HandlerFunc(s.handleTryPause)))
 		mux.Handle(TryStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleTryStats))))
+		// A new web session's wait, press to first reply (task PNWW): the admin's read.
+		mux.Handle(ChatTimingStatsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleChatTimingStats))))
 		// 管理侧「申请」(claude-fleet#4052): a member gets the 404, as for a page.
 		mux.Handle(AdminRequestsPath, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))
 		mux.Handle(adminRequestsPrefix, s.viewerOnly(http.HandlerFunc(s.handleAdminRequests)))

@@ -58,6 +58,9 @@ var chatRoutes = map[string]string{
 	// Explicit migration; ordinary history identities remain the only list.
 	"migrate":   http.MethodPost,
 	"migration": http.MethodGet,
+	// 新会话 (task PNWW): the page opened — the person's relay dialled and kept,
+	// the home's service woken, before the first line is sent. Nothing else.
+	"warm": http.MethodGet,
 }
 
 // chatProvider is which of the person's two conversations a request is for
@@ -270,6 +273,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if name == chatHomeRoute {
 		s.handleChatHome(w, r)
+		return
+	}
+	if name == chatTimingRoute {
+		s.handleChatTiming(w, r)
 		return
 	}
 	if name == chatMirrorRoute {

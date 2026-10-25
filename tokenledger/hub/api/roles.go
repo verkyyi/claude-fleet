@@ -154,6 +154,8 @@ var routeAccess = map[string]string{
 	// The heartbeat and the pause (claude-fleet#4060): the person's own seat.
 	TryBeatPath: accessUser, TryPausePath: accessUser,
 	TryStatsPath: accessAdmin,
+	// A new web session's wait (task PNWW): the timings' spread is an admin's.
+	ChatTimingStatsPath: accessAdmin,
 	// 管理侧「申请」(claude-fleet#4052): 404 to a member, as a page is
 	AdminRequestsPath: accessAdmin, adminRequestsPrefix: accessAdmin,
 	// 管理侧「发通知」(claude-fleet#4063): 404 to a member, as the requests
