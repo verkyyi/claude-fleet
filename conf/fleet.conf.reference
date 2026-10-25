@@ -2715,4 +2715,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 (that hub's /v1/fleet/release/key), no
 #                                 _RELEASE_KEY · 可选
 #   CCQUOTA_DB_URL                postgres://… instead of SQLite · 可选 · 密钥
-#   CCQUOTA_SITE                  on = the public site at "/" · 可选 (unset = off)
+#   CCQUOTA_SITE                  on = the public site at "/"; sandbox = the same
+#                                 site with the Claude Code sandbox runtime's
+#                                 front page (English /, 中文 /zh/) · 可选 (unset = off)

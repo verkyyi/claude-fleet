@@ -869,6 +869,7 @@ func runHub(args []string) error {
 		// The public site at "/" (claude-fleet#3583): only our own hub turns
 		// it on; a self-hoster's "/" is the console.
 		Site:        siteOn(os.Getenv("CCQUOTA_SITE")),
+		SiteEdition: siteEdition(os.Getenv("CCQUOTA_SITE")),
 		SiteFS:      web.Site(),
 		DocsFS:      web.Docs(),
 		ConsoleFS:   web.Console(),
@@ -1632,13 +1633,23 @@ func migrateOnlyRun(dbFile string, out io.Writer, simulate bool) error {
 }
 
 // siteOn reads CCQUOTA_SITE (claude-fleet#3583): on / 1 / true turn the
-// public site on at "/"; anything else — unset included — is off.
+// public site on at "/", and so does an edition's name (sandbox, task PNWW);
+// anything else — unset included — is off.
 func siteOn(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "on", "1", "true", "yes":
+	case "on", "1", "true", "yes", api.SiteEditionSandbox:
 		return true
 	}
 	return false
+}
+
+// siteEdition is the front page CCQUOTA_SITE names: "sandbox" the Claude Code
+// sandbox runtime's (task PNWW), anything else the default ("").
+func siteEdition(v string) string {
+	if strings.ToLower(strings.TrimSpace(v)) == api.SiteEditionSandbox {
+		return api.SiteEditionSandbox
+	}
+	return ""
 }
 
 // recordFilePlanPrices records the --pricing file's subscription prices, as

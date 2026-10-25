@@ -29,6 +29,9 @@ import (
 //	             for search engines and AI assistants (claude-fleet#3585, C15),
 //	             each with this hub's address filled in like a page
 //
+// With CCQUOTA_SITE=sandbox (task PNWW) / and /zh/ are the sandbox edition's
+// front pages instead and /en/ is sent on to / — see SiteEditionSandbox.
+//
 // With fleet.trial off (claude-fleet#4269) a page and an llms file are the
 // build's apply/ copy — the same with no trial in it, every 「立即体验」 a
 // 「申请使用」 — when the build has one; on, the page as it always was.
@@ -42,6 +45,25 @@ const (
 	siteOrigin = "__ORIGIN__"
 	siteHost   = "__HOST__"
 )
+
+// The sandbox edition (task PNWW, CCQUOTA_SITE=sandbox): another front page,
+// the Claude Code sandbox runtime — the build's sandbox/index.html (English)
+// at /, sandbox/zh/index.html (中文) at /zh/, and /en/ sent on to /. Every
+// other path of the site is the same as the default edition's.
+const (
+	SiteEditionSandbox = "sandbox"
+	siteSandboxDir     = "sandbox/"
+)
+
+func (s *Server) siteSandbox() bool { return s.SiteEdition == SiteEditionSandbox }
+
+// siteFront is the build's front page for "/" and its language.
+func (s *Server) siteFront() (name, lang string) {
+	if s.siteSandbox() {
+		return siteSandboxDir + "index.html", "en"
+	}
+	return "index.html", "zh-CN"
+}
 
 // siteFill puts this hub's address where the build left its placeholders.
 func (s *Server) siteFill(r *http.Request, b []byte) []byte {
@@ -89,6 +111,15 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 	}
 	p := r.URL.Path
 	switch {
+	case s.siteSandbox() && (p == "/en" || p == "/en/"):
+		// the sandbox page is English at / itself
+		http.Redirect(w, r, withQuery("/", r), http.StatusMovedPermanently)
+	case s.siteSandbox() && p == "/zh":
+		http.Redirect(w, r, withQuery("/zh/", r), http.StatusMovedPermanently)
+	case s.siteSandbox() && p == "/zh/":
+		if !s.sitePage(w, r, siteSandboxDir+"zh/index.html", "zh-CN") {
+			http.NotFound(w, r)
+		}
 	case p == "/en" || p == "/docs" || p == "/en/docs":
 		http.Redirect(w, r, withQuery(p+"/", r), http.StatusMovedPermanently)
 	case p == "/en/":
@@ -176,7 +207,7 @@ func (s *Server) siteCrawlFile(w http.ResponseWriter, r *http.Request, name stri
 // /site/ is 404.
 func (s *Server) siteAsset(w http.ResponseWriter, r *http.Request, name string) {
 	ext := path.Ext(name)
-	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(name, siteApplyDir) || strings.HasPrefix(path.Base(name), ".") {
+	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(name, siteApplyDir) || strings.HasPrefix(name, siteSandboxDir) || strings.HasPrefix(path.Base(name), ".") {
 		http.NotFound(w, r)
 		return
 	}

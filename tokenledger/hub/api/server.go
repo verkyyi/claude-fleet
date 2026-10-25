@@ -105,6 +105,12 @@ type Server struct {
 	// claude-fleet#3583): a stranger reads it, someone signed in is sent to
 	// the console at /app. Off — a self-hoster's default — "/" is /app.
 	Site bool
+	// SiteEdition picks which front page the site shows (task PNWW): "" is
+	// the 中文-first page at / (and /en/); SiteEditionSandbox — the Claude
+	// Code sandbox runtime, English at / and 中文 at /zh/ — is
+	// CCQUOTA_SITE=sandbox. The legal pages, docs, assets and crawl files are
+	// the same in both.
+	SiteEdition string
 	// SiteFS is the built public site (web/site, claude-fleet#3584): / and
 	// /en/, their assets under /site/; nil = the landing page.
 	SiteFS fs.FS

@@ -637,7 +637,8 @@ func (s *Server) siteServed() bool {
 	if !s.Site || s.SiteFS == nil {
 		return false
 	}
-	_, err := fs.Stat(s.SiteFS, "index.html")
+	name, _ := s.siteFront()
+	_, err := fs.Stat(s.SiteFS, name)
 	return err == nil
 }
 
@@ -650,9 +651,11 @@ func (s *Server) serveSite(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if s.SiteFS != nil {
-		if _, err := fs.Stat(s.SiteFS, "index.html"); err == nil {
+		// the edition's front page (CCQUOTA_SITE=sandbox: the sandbox page, task PNWW)
+		name, lang := s.siteFront()
+		if _, err := fs.Stat(s.SiteFS, name); err == nil {
 			w.Header().Add("Vary", "Cookie")
-			return s.sitePage(w, r, "index.html", "zh-CN")
+			return s.sitePage(w, r, name, lang)
 		}
 	}
 	return false
