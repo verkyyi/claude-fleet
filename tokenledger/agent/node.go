@@ -84,6 +84,23 @@ func (b *nodeBackoff) next() time.Duration {
 
 func (b *nodeBackoff) reset() { b.cur = 0 }
 
+// nodeQuickRedial is the first wait after a link that had been up drops (task
+// PNWW): a hub copy replaced on release, a path that stalled — the next dial
+// usually works, and every second of the ladder's 5 s floor is a person's chat
+// answering home_down. Jittered up to 2×, so a hub restart is not met by every
+// machine at once. A dial that fails then climbs the ladder from its bottom.
+var nodeQuickRedial = 500 * time.Millisecond
+
+// wait is the delay before the next dial: quick once after a session that was
+// established, else the ladder.
+func (b *nodeBackoff) wait(established bool) time.Duration {
+	if established {
+		b.reset()
+		return nodeQuickRedial + time.Duration(rand.Int63n(int64(nodeQuickRedial)+1))
+	}
+	return b.next()
+}
+
 // runNode keeps the control channel up until ctx ends.
 func (a *Agent) runNode(ctx context.Context) {
 	var bo nodeBackoff
@@ -94,11 +111,8 @@ func (a *Agent) runNode(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if established {
-			// A session that got as far as the welcome proves the path
-			// works; the next failure starts the ladder from the bottom.
-			bo.reset()
-		}
+		// A session that got as far as the welcome proves the path works:
+		// dial again at once, and a failure then starts the ladder from the bottom.
 		msg := "control channel closed"
 		if err != nil {
 			msg = "control channel: " + err.Error()
@@ -109,7 +123,7 @@ func (a *Agent) runNode(ctx context.Context) {
 			log.Print(msg + "; reconnecting")
 			lastErr = msg
 		}
-		t := time.NewTimer(bo.next())
+		t := time.NewTimer(bo.wait(established))
 		select {
 		case <-ctx.Done():
 			t.Stop()

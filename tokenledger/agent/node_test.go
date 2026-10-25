@@ -87,9 +87,9 @@ func newFakeControlHub(t *testing.T) *fakeControlHub {
 
 func shrinkBackoff(t *testing.T) {
 	t.Helper()
-	oldMin, oldMax := nodeBackoffMin, nodeBackoffMax
-	nodeBackoffMin, nodeBackoffMax = 10*time.Millisecond, 40*time.Millisecond
-	t.Cleanup(func() { nodeBackoffMin, nodeBackoffMax = oldMin, oldMax })
+	oldMin, oldMax, oldQuick := nodeBackoffMin, nodeBackoffMax, nodeQuickRedial
+	nodeBackoffMin, nodeBackoffMax, nodeQuickRedial = 10*time.Millisecond, 40*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { nodeBackoffMin, nodeBackoffMax, nodeQuickRedial = oldMin, oldMax, oldQuick })
 }
 
 func nodeTestAgent(t *testing.T, hub string, fleet bool) *Agent {
@@ -184,6 +184,25 @@ func TestNodeBackoffDoublesCapsAndJitters(t *testing.T) {
 	b.reset()
 	if d := b.next(); d > nodeBackoffMin {
 		t.Fatalf("after reset the first delay is %s, want at most %s", d, nodeBackoffMin)
+	}
+}
+
+// After a link that was up drops (task PNWW), the next dial waits at most 2×
+// nodeQuickRedial, never the ladder's floor; a failure after it starts the
+// ladder from its bottom, and a link that never came up keeps climbing.
+func TestNodeQuickRedialAfterAnEstablishedLink(t *testing.T) {
+	var b nodeBackoff
+	for i := 0; i < 5; i++ {
+		b.next()
+	}
+	if d := b.wait(true); d < nodeQuickRedial || d > 2*nodeQuickRedial {
+		t.Fatalf("after an established link: %s, want within [%s, %s]", d, nodeQuickRedial, 2*nodeQuickRedial)
+	}
+	if d := b.wait(false); d > nodeBackoffMin {
+		t.Fatalf("the failure after it: %s, want the ladder's bottom (≤ %s)", d, nodeBackoffMin)
+	}
+	if d := b.wait(false); d <= nodeBackoffMin {
+		t.Fatalf("a second failure: %s, want the ladder climbing past %s", d, nodeBackoffMin)
 	}
 }
 

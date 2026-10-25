@@ -221,7 +221,10 @@ type Server struct {
 	// ChatRelayKeepSecs keeps a person's chat relay open this long idle, for
 	// the next request to reuse (task V9DJ B; 0: one relay per request).
 	ChatRelayKeepSecs int
-	chatPool          chatRelayPool
+	// ChatLinkWaitSecs: a chat request whose home is reconnecting waits this
+	// long for its link (task PNWW; 0: chatLinkWaitDefault, negative: never).
+	ChatLinkWaitSecs int
+	chatPool         chatRelayPool
 	// ChatGeoDB is an ip2region xdb (IPv4) the entry reads a chat request's
 	// city from, for the person's conversation (claude-fleet#4034;
 	// CCQUOTA_FLEET_CHAT_GEO_DB). "" ⇒ the address goes without a city.
