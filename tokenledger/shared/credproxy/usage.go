@@ -20,6 +20,10 @@ import (
 // PersonBudgetExceeded is the hub's refusal code for a person over budget.
 const PersonBudgetExceeded = "person_budget_exceeded"
 
+// OrgBudgetExceeded is the hub's refusal code for a member of an
+// organization over its budget (task PNWW): answered like a person's.
+const OrgBudgetExceeded = "org_budget_exceeded"
+
 // UsagePath is the hub route the proxy reports to (api.CredProxyUsagePath).
 const UsagePath = "/v1/fleet/credproxy/usage"
 

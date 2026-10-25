@@ -335,6 +335,7 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		creds = kept
 	}
+	creds = pol.Pools.order(creds) // own → organization → platform (task PNWW)
 	// A node's local pool must not count or refresh token aliases twice.
 	// Explicitly withdraw the redundant names so an older local copy is removed.
 	seenIDs := map[string]bool{}

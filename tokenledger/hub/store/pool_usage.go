@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS pool_usage (
   at_unix     INTEGER NOT NULL,
   repo        TEXT NOT NULL DEFAULT '',
   issue       INTEGER NOT NULL DEFAULT 0,
-  tenant      TEXT NOT NULL DEFAULT ''
+  tenant      TEXT NOT NULL DEFAULT '',
+  org_id      TEXT NOT NULL DEFAULT '',
+  pool_id     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS pool_usage_principal_at ON pool_usage(principal, at_unix);
 CREATE INDEX IF NOT EXISTS pool_usage_at ON pool_usage(at_unix);`
@@ -63,6 +65,12 @@ type PoolUsage struct {
 	// Tenant is a service run's tenant (claude-fleet#4006): the
 	// space:ws:<id> its pass was minted for; '' on every person's row.
 	Tenant string `json:"tenant,omitempty"`
+	// OrgID and PoolID are stamped when the row is written (task PNWW): the
+	// person's organization and the pool of the subscription the request
+	// rode, as they were then — a later move never re-files an old row.
+	// '' on every row written before the columns, and on a service run's.
+	OrgID  string `json:"org_id,omitempty"`
+	PoolID string `json:"pool_id,omitempty"`
 	// Source is where the request was served (task PNWW): SourceSubscription
 	// (the pool — every row before the column) or UsageSourceBedrock (the
 	// Bedrock fallback). "" written = subscription.
@@ -88,8 +96,13 @@ func (s *Store) ensurePoolUsage() error {
 	if _, err := s.write.Exec(s.d.ddl(poolUsageSchema)); err != nil {
 		return fmt.Errorf("create pool usage table: %w", err)
 	}
-	// A service run's tenant (claude-fleet#4006).
-	if err := s.addColumn("pool_usage", "tenant", "TEXT NOT NULL DEFAULT ''"); err != nil {
+	// A service run's tenant (claude-fleet#4006); the org and pool (task PNWW).
+	for _, c := range []string{"tenant", "org_id", "pool_id"} {
+		if err := s.addColumn("pool_usage", c, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if _, err := s.write.Exec(`CREATE INDEX IF NOT EXISTS pool_usage_org_at ON pool_usage(org_id, at_unix)`); err != nil {
 		return err
 	}
 	// Where it was served (task PNWW): every older row is the subscription pool.
@@ -166,11 +179,14 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 	if u.Source == "" {
 		u.Source = SourceSubscription
 	}
+	if err := s.stampPoolUsage(&u); err != nil {
+		return err
+	}
 	_, err := s.write.Exec(`INSERT INTO pool_usage (principal, worker_id, account, provider, model,
-		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant, org_id, pool_id, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.Principal, u.WorkerID, u.Account, u.Provider, u.Model,
-		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant, u.Source)
+		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant, u.OrgID, u.PoolID, u.Source)
 	return err
 }
 
@@ -178,7 +194,7 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 // principal "" is everyone, a zero until is now and onward.
 func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUsage, error) {
 	q := `SELECT principal, worker_id, account, provider, model, tokens_in, cache_write, cache_read,
-		tokens_out, requests, at_unix, repo, issue, tenant, source FROM pool_usage WHERE at_unix >= ?`
+		tokens_out, requests, at_unix, repo, issue, tenant, org_id, pool_id, source FROM pool_usage WHERE at_unix >= ?`
 	args := []any{since.Unix()}
 	if !until.IsZero() {
 		q += ` AND at_unix < ?`
@@ -198,7 +214,7 @@ func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUs
 		var u PoolUsage
 		var at int64
 		if err := rows.Scan(&u.Principal, &u.WorkerID, &u.Account, &u.Provider, &u.Model, &u.In, &u.CacheWrite,
-			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant, &u.Source); err != nil {
+			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant, &u.OrgID, &u.PoolID, &u.Source); err != nil {
 			return nil, err
 		}
 		u.At = time.Unix(at, 0).UTC()

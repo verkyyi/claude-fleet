@@ -64,6 +64,10 @@ export type OverviewPool = {
   sessions?: number;
   state?: string;
   limited?: string;
+  // the pool it sits in (task PNWW): id, name, owner (platform · org:<id> · person:<principal>)
+  pool?: string;
+  pool_name?: string;
+  pool_owner?: string;
 };
 
 export type Prov = "claude" | "codex";
@@ -97,6 +101,10 @@ export type Sub = {
   people: string[];
   limited: boolean;
   reauth: boolean;
+  // its pool, from /v1/admin/overview (task PNWW)
+  pool?: string;
+  poolName?: string;
+  poolOwner?: string;
 };
 
 const toMs = (v: unknown) => (typeof v === "number" ? v : Date.parse(String(v || "")));
@@ -197,6 +205,9 @@ export function withOverview(subs: Sub[], pool: OverviewPool[] | null | undefine
       people: Array.isArray(o.people) ? o.people : [],
       limited: o.state === "limited",
       reauth: o.state === "reauth",
+      pool: o.pool,
+      poolName: o.pool_name,
+      poolOwner: o.pool_owner,
     };
   });
 }

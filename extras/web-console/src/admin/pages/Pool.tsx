@@ -33,11 +33,12 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { AdminTablePage, type Filter } from "../AdminTablePage";
 import { ConfirmByName } from "../ConfirmByName";
-import { api, ApiError, type HubUser, type PolicyView, type UsersList } from "../api";
+import { api, ApiError, type HubUser, type OrgPool, type PolicyView, type UsersList } from "../api";
 import { ago, inTime, t, when, type MsgKey } from "../i18n";
 import {
   credState,
@@ -253,6 +254,20 @@ export function PoolPage() {
         ),
       },
       { id: "service", accessorFn: serviceOf, header: () => t("pool.col.service") },
+      {
+        id: "pool",
+        accessorFn: (r) => r.poolName || r.pool || "",
+        header: () => t("pool.col.pool"),
+        cell: ({ row }) =>
+          row.original.pool ? (
+            <span className="flex flex-col leading-tight">
+              <span>{row.original.poolName || row.original.pool}</span>
+              <span className="text-xs text-muted-foreground">{poolOwnerText(row.original.poolOwner)}</span>
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
       { id: "plan", accessorFn: planOf, header: () => t("pool.col.plan"), cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
       { id: "h5", accessorFn: (r) => r.h5?.p ?? undefined, sortUndefined: "last", header: () => t("pool.col.h5"), cell: ({ row }) => <Bar w={row.original.h5} skip={world.skip} /> },
       { id: "h7", accessorFn: (r) => r.h7?.p ?? undefined, sortUndefined: "last", header: () => t("pool.col.h7"), cell: ({ row }) => <Bar w={row.original.h7} skip={world.skip} /> },
@@ -502,6 +517,11 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
               {r.readNote && <span className="block text-xs text-muted-foreground">{r.readNote}</span>}
             </Field>
           )}
+          {r.pool && (
+            <Field k="pool.d.pool">
+              {r.poolName || r.pool} <span className="text-xs text-muted-foreground">· {poolOwnerText(r.poolOwner)}</span>
+            </Field>
+          )}
           <Field k="pool.d.sessions">
             <span className="font-mono tabular-nums">{r.sessions}</span>
           </Field>
@@ -510,6 +530,13 @@ function PoolDrawer({ r, world, close, reload }: { r: Row; world: World; close: 
             <span className="font-mono text-xs break-all text-muted-foreground">{uuidOf(r) || r.id}</span>
           </Field>
         </dl>
+
+        {r.managed && r.cred && (
+          <>
+            <Separator />
+            <PoolMover r={r} onDone={reload} />
+          </>
+        )}
 
         {r.managed && !r.owner && world.view && (
           <>
@@ -805,5 +832,66 @@ function RenameDialog({ r, onDone }: { r: Sub; onDone: () => void }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// poolOwnerText is who owns a pool (task PNWW): platform · org:<id> · person:<principal>.
+function poolOwnerText(owner?: string): string {
+  if (!owner) return "";
+  const [kind, ...rest] = owner.split(":");
+  const id = rest.join(":");
+  if (kind === "platform") return t("pool.owner.platform");
+  if (kind === "org") return t("pool.owner.org", { id });
+  if (kind === "person") return t("pool.owner.person", { id });
+  return owner;
+}
+
+// PoolMover moves the row's credential into another pool (task PNWW):
+// POST /v1/fleet/pools/move, audited by the hub. A person's own subscription
+// may only go to a pool that person owns; the hub refuses anything else.
+function PoolMover({ r, onDone }: { r: Row; onDone: () => void }) {
+  const [pools, setPools] = React.useState<OrgPool[] | null>(null);
+  const [to, setTo] = React.useState(r.pool || "");
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    api<{ pools: OrgPool[] }>("/v1/fleet/pools")
+      .then((b) => setPools(b.pools || []))
+      .catch(() => setPools([]));
+  }, []);
+  const usable = (pools || []).filter((p) => (r.owner ? p.owner_kind === "person" && p.owner_id === r.owner : !p.pool_id.startsWith("personal:")));
+  if (!pools || usable.length < 2) return null;
+  const move = async () => {
+    setBusy(true);
+    try {
+      await api("/v1/fleet/pools/move", { json: { owner: r.owner || "", provider: r.prov, account: r.cred!.account, pool_id: to } });
+      toast.success(t("pool.moved", { pool: to }));
+      onDone();
+    } catch (e) {
+      toast.error(t("err.action", { e: (e as Error).message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="grid gap-2">
+      <h3 className="font-display text-base font-semibold">{t("pool.move")}</h3>
+      <div className="flex items-center gap-2">
+        <Select value={to} onValueChange={setTo}>
+          <SelectTrigger className="w-64">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {usable.map((p) => (
+              <SelectItem key={p.pool_id} value={p.pool_id}>
+                {p.name} · {poolOwnerText(p.owner_kind === "platform" ? "platform" : `${p.owner_kind}:${p.owner_id}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button size="sm" disabled={busy || !to || to === r.pool} onClick={move}>
+          {t("pool.move")}
+        </Button>
+      </div>
+    </section>
   );
 }

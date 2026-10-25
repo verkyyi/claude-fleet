@@ -226,6 +226,11 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPreviews(); err != nil {
 		return err
 	}
+	// Organizations and subscription pools (task PNWW) — after the vault
+	// and the people, whose rows its bootstrap files.
+	if err := s.ensureFleetOrgs(); err != nil {
+		return err
+	}
 	return s.ensureFleetSSHRelays()
 }
 

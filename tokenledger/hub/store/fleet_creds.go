@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS fleet_credentials (
   secret_expires_at TEXT,
   reauth_required_at TEXT,
   source_class     TEXT NOT NULL DEFAULT '',
+  pool_id          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (principal_id, provider, account)
 );
 CREATE TABLE IF NOT EXISTS fleet_pool_login_used (
@@ -94,6 +95,9 @@ const (
 	// (claude-fleet#3043) — a machine's or a person's. Detail names the
 	// scope and the subscription IDs, never a secret.
 	CredPolicy = "policy"
+	// CredPool: a subscription moved into another pool (task PNWW). Detail
+	// names the pools, never a secret.
+	CredPool = "pool"
 )
 
 // PoolPrincipal is the principal_id of a SHARED-POOL credential
@@ -131,9 +135,13 @@ type Credential struct {
 	// SourceSubscription or SourceAPI; "" = not recorded (read as a
 	// subscription). A person's own row is always SourceBYO — see
 	// Credential.Source.
-	SourceClass string    `json:"source_class,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	SourceClass string `json:"source_class,omitempty"`
+	// PoolID is the subscription pool the row sits in (task PNWW, hub_pools);
+	// "" = its default: platform-default for a shared row, the owner's
+	// personal pool for a person's own — see EffectivePoolID.
+	PoolID    string    `json:"pool_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Source classes (WACK C1): where a subscription's quota comes from — the
@@ -203,6 +211,7 @@ func (s *Store) ensureFleetCreds() error {
 		{"secret_expires_at", "TEXT"},
 		{"reauth_required_at", "TEXT"},               // claude-fleet#2007
 		{"source_class", "TEXT NOT NULL DEFAULT ''"}, // WACK C1
+		{"pool_id", "TEXT NOT NULL DEFAULT ''"},      // task PNWW
 	} {
 		if err := s.addColumn("fleet_credentials", c.column, c.spec); err != nil {
 			return err
@@ -212,14 +221,14 @@ func (s *Store) ensureFleetCreds() error {
 }
 
 const credColumns = `SELECT principal_id, provider, account, secret_sealed, access_sealed, access_expires_at,
-	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at, reauth_required_at, source_class FROM fleet_credentials`
+	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at, reauth_required_at, source_class, pool_id FROM fleet_credentials`
 
 func scanCred(sc interface{ Scan(...any) error }) (Credential, error) {
 	var c Credential
 	var exp, ref, sexp, reauth sql.NullString
 	var created, updated string
 	if err := sc.Scan(&c.PrincipalID, &c.Provider, &c.Account, &c.SecretSealed, &c.AccessSealed, &exp,
-		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp, &reauth, &c.SourceClass); err != nil {
+		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp, &reauth, &c.SourceClass, &c.PoolID); err != nil {
 		return c, err
 	}
 	c.ReauthRequiredAt = parseTimePtr(reauth)

@@ -1774,6 +1774,82 @@ machine must now stop refreshing the account. Details
 and the environment table: `tokenledger/README.md`, "Credentials live at the
 entrance".
 
+## Organizations and subscription pools (task PNWW)
+
+One level above persons: every person belongs to exactly ONE organization
+(`hub_users.org_id`, with `org_role` admin | member); there is no team inside an
+organization. Subscriptions sit in pools (`fleet_credentials.pool_id` →
+`hub_pools`), each owned by the platform, one organization or one person
+(`owner_kind` platform | org | person, `priority`, `enabled`). Code:
+`tokenledger/hub/store/hub_orgs.go` (tables, bootstrap, membership),
+`api/fleet_org_pools.go` (the resolver), `api/fleet_org_budget.go`,
+`api/admin_orgs.go` (the API).
+
+**Bootstrap — additive, idempotent, nothing changes on deploy.** Each start
+creates the organizations `platform` and `trial` and the pool
+`platform-default` when missing; every shared row (`principal_id = pool`) with
+no pool goes into `platform-default`, every person's own row into that person's
+personal pool `personal:<principal>`, and everyone on the list (`hub_users`)
+into `platform`. Defaults are also READ: a row with `pool_id = ''` is in its
+default pool, a person with no `org_id` is in `trial` when they came in through
+the trial and are not on the list (the trial role's own rule), else `platform`.
+So after the bootstrap every person may use exactly the accounts they could
+before — the same rows, in the same order — under no policy and under strict
+lists alike (`TestOrgBootstrapKeepsEveryonesAccounts`).
+
+**Selection — one more scope of the one resolver.** `credPolicyFor` adds the
+person's pool reach (`credPolicy.Pools`), so the node lease (a pool out of reach
+is `withdrawn`), `sessionBindChoices` (the central proxy's resolve, an explicit
+bind, a retained binding's re-check, the 429 rebind), `noBindWhy` and the
+effective view all obey it. A person reaches, in order: the pools they own →
+their organization's → the platform's (only while the organization's
+`allow_platform_pool` is on, the default) — inside a level smaller `priority`
+first, then pool id. A disabled pool, or a disabled organization's pools and
+platform access, is reached by nobody. The allowlists (`fleet.cred_allow.*`)
+still apply on top: a pool narrows, never widens. The gate narrows only when
+some pool is out of the person's reach, so with only the bootstrap's pools
+`Restricted()` and the order are exactly as before. A machine's own scope (the
+pool manifest, `handleNodePool`) and a service principal have no pool gate.
+
+Rules a move keeps: a person's own subscription only moves among pools that
+person owns; a shared one goes to any platform / organization pool or a pool an
+admin made for one person (a dedicated subscription), never into someone's
+`personal:` pool.
+
+**Metering.** `pool_usage` rows carry `org_id` and `pool_id`, stamped when the
+row is written (`AddPoolUsage`): the person's organization then, and the pool of
+the subscription the request rode. A later move never re-files an old row; a
+row from before the columns has both empty.
+
+**Budgets.** `fleet.org_budget.<org_id>` = `5h=…,week=…,month=…` (tokens; month
+= the last 30 days; `""` removes it) sums the organization's `pool_usage` rows
+and is checked beside the person's own budget: a person over their own is
+refused `person_budget_exceeded` as before; otherwise a member of an
+organization over its budget is refused `org_budget_exceeded` (the cluster
+proxy answers both the same way: 403, never retried; a login's local proxy
+carries the hub's line under its own code). Settable through the settings PUT
+(admin) or `/v1/fleet/orgs/budget`.
+
+**API** (each a user's route in `routeAccess`; every write decided by the
+handler and audited — `hub_audit` for organizations, membership and pools,
+`fleet_cred_audit` action `pool` for a move, the settings audit for a budget):
+
+| Route | GET | POST |
+|---|---|---|
+| `/v1/fleet/orgs` | organizations (a member: their own) | `{org_id, name, kind, status, allow_platform_pool}` · `{action: delete}` — admin only |
+| `/v1/fleet/orgs/members` | members (`?org_id=`; an org admin: theirs; a member: their own row) | `{principal, org_id, org_role}` — admin: anyone anywhere; org admin: roles inside their organization |
+| `/v1/fleet/pools` | pools (platform, their org's, their own) | `{pool_id, name, owner_kind, owner_id, priority, enabled}` · `{action: delete}` (empty pools; the default pools stay) — admin: any; org admin: their org's |
+| `/v1/fleet/pools/move` | — | `{owner, provider, account, pool_id}` — admin: any; org admin: between their org's pools |
+| `/v1/fleet/orgs/budget` | the organization's standing | `{org_id, budget}` — admin, or that organization's admin |
+| `/v1/fleet/orgs/usage` | `?org_id=&days=` tokens by person and by pool (a member: their own rows) | — |
+
+An organization's admin is a member (`role` user) with `org_role` admin: they
+never pull a person in from, or push one out to, another organization, and never
+touch the platform's pools or an organization's `allow_platform_pool`. The
+admin console has an 组织 page (`/admin/orgs`), the organization column, filter
+and editor on 成员, and each subscription's pool (with 移到池) on 订阅池;
+`/admin` stays an admin's, so an organization's admin uses the API.
+
 ## Service principals: a caller that is not a person (claude-fleet#4003)
 
 A service principal is an identity for a back end that dispatches work for its

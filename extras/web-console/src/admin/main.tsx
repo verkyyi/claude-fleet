@@ -20,6 +20,7 @@ import { ReleasePage } from "./pages/Release";
 import { UsagePage } from "./pages/Usage";
 import { AuditPage } from "./pages/Audit";
 import { PeoplePage } from "./pages/People";
+import { OrgsPage } from "./pages/Orgs";
 import { SettingsPage } from "./pages/Settings";
 import { RequestsPage } from "./pages/Requests";
 import { NoticesPage } from "./pages/Notices";
@@ -34,6 +35,8 @@ const routes = [
       { index: true, element: <Navigate to="/people" replace /> },
       { path: "people", element: <PeoplePage /> },
       { path: "people/:p", element: <PeoplePage /> },
+      { path: "orgs", element: <OrgsPage /> },
+      { path: "orgs/:o", element: <OrgsPage /> },
       { path: "machines", element: <MachinesPage /> },
       { path: "machines/:host", element: <MachineDetailPage /> },
       { path: "requests", element: <RequestsPage /> },

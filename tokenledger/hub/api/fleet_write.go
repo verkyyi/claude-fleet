@@ -2166,6 +2166,16 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				body.Value = l.String()
 			}
+		case strings.HasPrefix(body.Key, OrgBudgetPrefix) && orgIDRE.MatchString(body.Key[len(OrgBudgetPrefix):]):
+			// An organization's budget (task PNWW): 5h=…,week=…,month=…; "" removes it.
+			if body.Value != "" {
+				b, err := parseOrgBudget(body.Value)
+				if err != nil {
+					httpError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				body.Value = b.String()
+			}
 		case strings.HasPrefix(body.Key, PersonBudgetPrefix) && principalKeyRE.MatchString(body.Key[len(PersonBudgetPrefix):]):
 			// A person's budget (claude-fleet#1977): 5h=<tokens>,week=<tokens>;
 			// "" removes it (= no limit).
@@ -2253,7 +2263,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()
