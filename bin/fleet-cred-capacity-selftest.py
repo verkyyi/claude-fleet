@@ -314,6 +314,11 @@ class Capacity(unittest.TestCase):
 
     def test_reopened_worker_http_continuation(self):
         proxy,attempts=self.native_http_fixture()
+        completed=threading.Event()
+        def logged(**row):
+            if row.get('ev')=='fwd':completed.set()
+        logger=patch.object(self.t,'log',side_effect=logged)
+        logger.start();self.addCleanup(logger.stop)
         vectors=json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())
         first,resume=[case['body'] for case in vectors[:2]]
         worker='11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222'
@@ -322,11 +327,16 @@ class Capacity(unittest.TestCase):
             self.assertTrue(result['ok'])
             return result['token']
         def request(token,body):
+            completed.clear()
             conn=p.http.client.HTTPConnection('127.0.0.1',proxy.server_port,timeout=5)
             try:
                 conn.request('POST','/codex/responses',json.dumps(body).encode(),
                     {'Authorization':'Bearer '+token,'Content-Type':'application/json'})
-                answer=conn.getresponse();return answer.status,answer.read()
+                answer=conn.getresponse();raw=answer.read()
+                # The terminating HTTP chunk precedes the final routing write.
+                # Wait for the real handler tail before inspecting/revoking it.
+                if answer.status==200:self.assertTrue(completed.wait(5))
+                return answer.status,raw
             finally:conn.close()
         original=mint('original')
         self.assertEqual(request(original,first)[0],200)
