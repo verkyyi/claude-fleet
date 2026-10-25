@@ -80,6 +80,8 @@ def start(tm, g, label, t0=None, cols=None, lang=""):
         shutil.rmtree(d, ignore_errors=True)
         return None
     write(d / "win", win)
+    write(d / "timing", str(Path(os.environ.get("FLEET_CONF_DIR") or os.path.join(os.path.expanduser("~"), ".config",
+                                                                                   "claude-fleet")) / "timing" / "session.ndjson"))
     write(d / "lang", lang or "zh")
     if t0:
         write(d / "t0", "%.3f" % t0)
@@ -138,6 +140,31 @@ def shown(tm, d, t0, secs=2.0):
             return ms
         time.sleep(0.005)
     return None
+
+
+# the stages a start goes through, in the order they come (fleet_timing's segs)
+STAGES = ("record", "placed", "checked", "worktree", "window", "wrap", "exec", "filled", "ready", "input")
+
+
+def expect(d, last=20):
+    """<dir>/expect: `seg ms` — the stages recent starts here went through (in at
+    least half of the last <last> that reached `input`) and each one's median, in
+    the order they come: the stub's plan and its ETA (T992). Written by the road,
+    never on the way to the first frame."""
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_timing
+        rs = [r for r in fleet_timing.runs("session", 4 * last) if "input" in r][-last:]
+    except Exception:  # noqa: BLE001 — no plan is a stub with no plan
+        return
+    if not rs:
+        return
+    rows = []
+    for seg in STAGES:
+        vals = sorted(r[seg] for r in rs if seg in r)
+        if len(vals) * 2 >= len(rs):
+            rows.append((vals[len(vals) // 2], seg))
+    write(Path(d) / "expect", "\n".join("%s %d" % (seg, ms) for ms, seg in sorted(rows)))
 
 
 def status(tm, d, text):

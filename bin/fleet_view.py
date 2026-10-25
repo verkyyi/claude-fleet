@@ -3439,6 +3439,7 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft="", t0="", st
         return go_new_road(qo, vid, client, repo, agent, prompt, draft, t0)
     os.environ["FLEET_STUB_DIR"] = stub
     fleet_stub.note_road(stub, os.getpid())
+    fleet_stub.expect(stub)   # the plan and its usual times, on the stub at its next tick
     _NEW_SAID[:] = []
     rc = go_new_road(qo, vid, client, repo, agent, prompt, draft, t0)
     if rc != 0 and os.environ.get("FLEET_STUB_DIR"):

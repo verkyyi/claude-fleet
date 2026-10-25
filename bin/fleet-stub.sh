@@ -19,10 +19,11 @@
 # bash 3.2 (a Mac's /bin/bash) is enough: builtins only on the key path.
 dir="${1:?dir}" label="${2:-}"
 case "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;; *) export LC_ALL=en_US.UTF-8 ;; esac
+utf=${LC_ALL:-${LC_CTYPE:-${LANG:-en_US.UTF-8}}}
 case "${FLEET_UI_LANG:-}" in en*) EN=1 ;; *) EN=0 ;; esac
 # say <zh> <en> → $said (printf -v: no subshell — the first frame forks nothing)
 say() { if [ "$EN" = 1 ]; then said=$2; else said=$1; fi; }
-buf='' queue=() paste=0 escs=0 t0=$SECONDS st='' said=''
+buf='' queue=() paste=0 escs=0 t0=$SECONDS st='' said='' prog='' typical=''
 cols=${FLEET_STUB_COLS:-80}
 case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
 trap 'size; draw' WINCH
@@ -48,8 +49,9 @@ draw() {
   printf -v out '\033[H\033[2J\n  \033[1m✻ %s\033[0m  \033[2m%s\033[0m\n\n' "$said" "$label"
   if [ -n "$st" ]; then printf -v out '%s  \033[%sm%s\033[0m' "$out" "$color" "$st"
   else say 启动中 Starting; printf -v out '%s  \033[2m%s\033[0m' "$out" "$said"; fi
-  case "$st" in "✗"*) ;; *) printf -v out '%s\033[2m · %ss\033[0m' "$out" "$s" ;; esac
+  case "$st" in "✗"*) ;; *) printf -v out '%s\033[2m · %ss%s\033[0m' "$out" "$s" "$typical" ;; esac
   out="$out"$'\n'
+  case "$st" in "✗"*) ;; *) out="$out$prog" ;; esac
   if [ ${#queue[@]} -gt 0 ]; then
     say "已排队 ${#queue[@]} 条，会话起来就发给它" "${#queue[@]} queued — sent the moment it is up"
     printf -v out '%s  \033[33m%s\033[0m\n' "$out" "$said"
@@ -61,6 +63,66 @@ draw() {
   # one write per frame; the cursor parked after the text (save · restore)
   # (no right edge: CJK is two columns wide, a counted edge would wander)
   printf '%s\n %s\n ❯ %s\033[s\n %s\n  \033[2m%s\033[0m\n\033[u' "$out" "$line" "$shown" "$line" "$said"
+}
+# label <seg> → $said: what a stage of the start is, in words (fleet_timing's segs)
+label() {
+  case "$1" in
+    record) say 记下任务 'Task recorded' ;;        placed) say 选好机器 'Machine chosen' ;;
+    checked) say 检查通过 'Checks passed' ;;        worktree) say 建好工作区 'Worktree made' ;;
+    window) say 开好窗口 'Window open' ;;           wrap) say 准备启动 'Launcher ready' ;;
+    exec) say '启动 agent' 'Agent launched' ;;        filled) say 文件到齐 'Files in place' ;;
+    ready) say 'agent 起来了' 'Agent up' ;;         input) say 能打字了 'Ready to type' ;;
+    *) said=$1 ;;
+  esac
+}
+# secs <ms> → $said: 1 decimal, builtins only
+secs() { local m=${1%.*}; case "$m" in ''|*[!0-9]*) m=0 ;; esac; said="$((m / 1000)).$(((m % 1000) / 100))s"; }
+# progress — this start's stages so far (its run in the timing ledger, the ↵ in
+# <dir>/t0) against the stages a start here usually goes through (<dir>/expect,
+# `seg ms` — the median of recent ones): ✓ done (its time) · ▸ now · ○ to come
+# (~its usual time). One awk a second, never before the first frame.
+progress() {
+  local tf='' rt0='' got seg ms v cur=0 out='' w lbl t nb seen=' '
+  [ -f "$dir/timing" ] && IFS= read -r tf <"$dir/timing"
+  [ -f "$dir/t0" ] && IFS= read -r rt0 <"$dir/t0"
+  [ -n "$tf" ] && [ -f "$tf" ] && [ -n "$rt0" ] || return 0
+  got=" $(awk -v t0="$rt0" 'index($0, "\"what\": \"session\"") && match($0, /"ts": [0-9.]+/) {
+      ts = substr($0, RSTART + 6, RLENGTH - 6) + 0
+      if (ts - t0 < 0.005 && t0 - ts < 0.005 && match($0, /"seg": "[a-z.]+"/)) {
+        sg = substr($0, RSTART + 8, RLENGTH - 9)
+        if (match($0, /"ms": [0-9.]+/)) printf "%s=%d ", sg, substr($0, RSTART + 6, RLENGTH - 6)
+      } }' "$tf" 2>/dev/null) "
+  row() {   # <mark> <seg> <ms> <color> <prefix>
+    label "$2"; lbl=$said; secs "$3"; t=$said
+    # padded by display width: a CJK character is three bytes and two columns
+    # (printf pads bytes; a bracket range is the locale's collation, not ASCII)
+    w=${#lbl}; LC_ALL=C; nb=${#lbl}; LC_ALL=$utf
+    w=$((14 - w - (nb - w) / 2)); [ "$w" -gt 0 ] || w=1
+    printf -v w '%s%*s' "$lbl" "$w" ''
+    printf -v out '%s    \033[%sm%s %s %s%s\033[0m\n' "$out" "$4" "$1" "$w" "$5" "$t"
+  }
+  if [ -f "$dir/expect" ]; then
+    while read -r seg ms; do
+      [ -n "$seg" ] || continue
+      case "$seg" in input) typical=$ms ;; esac
+      seen="$seen$seg "
+      case "$got" in
+        *" $seg="*) v=${got#* $seg=}; v=${v%% *}; row ✓ "$seg" "$v" 32 '' ;;
+        *) if [ "$cur" = 0 ]; then cur=1; row ▸ "$seg" "$ms" 1 '~'; else row ○ "$seg" "$ms" 2 '~'; fi ;;
+      esac
+    done <"$dir/expect"
+  else
+    for v in $got; do
+      seg=${v%%=*}
+      case "$seg" in shown|switched|total) continue ;; esac
+      row ✓ "$seg" "${v#*=}" 32 ''
+    done
+  fi
+  if [ -n "$typical" ]; then
+    secs "$typical"; v=${said%%.*}
+    if [ "$v" -gt 0 ] 2>/dev/null; then say "（通常 $v 秒左右）" " (usually about $v s)"; typical=$said; else typical=''; fi
+  fi
+  prog=$out
 }
 tick() {
   local now='' p=''
@@ -89,6 +151,7 @@ while :; do
   rc=$?
   if [ $rc -ne 0 ] && [ -z "$ch" ]; then
     tick
+    progress
     draw
     continue
   fi
@@ -117,7 +180,9 @@ while :; do
     $'\t') escs=0; buf="$buf " ;;
     *)
       escs=0
-      case "$ch" in [[:cntrl:]]) ;; *) buf="$buf$ch" ;; esac
+      # bash 3.2 reads a byte at a time: only an ASCII control is dropped — a
+      # [[:cntrl:]] would eat UTF-8 continuation bytes 0x80–0x9F (一 下 登 录 …)
+      case "$ch" in [$'\001'-$'\037']) ;; *) buf="$buf$ch" ;; esac
       ;;
   esac
   tick

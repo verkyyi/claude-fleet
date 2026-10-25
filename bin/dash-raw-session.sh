@@ -798,6 +798,7 @@ if [ "$NOREPO" != 1 ] && [ "$PLACED" != hub ]; then
   fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
     || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 fi
+fleet_timing_at checked   # the start's checks passed — the stub's progress (T992)
 win=""; slug=""; wt=""
 
 # --- allocate a scratch worktree off the base branch (issue #290) -------------
@@ -834,10 +835,11 @@ else
   alloc=$(FLEET_SCRATCH_NOCHECKOUT=$_nco fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
   [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
+  fleet_timing_at worktree   # its worktree and branch made (T992: the stub shows it)
   if [ -n "$_nco" ]; then
     FILL_MARK="$(fleet_cache_dir "$(fleet_slug "${REPO_ARG:-${FLEET_REPO:-$SESS}}")")/fill_$slug.pid"
     ( if [ -n "${FLEET_SPAWN_FILL_CMD:-}" ]; then sh -c "$FLEET_SPAWN_FILL_CMD" fill "$wt"
-      else fleet_worktree_fill "$MAIN" "$wt"; fi && rm -f "$FILL_MARK" ) </dev/null >/dev/null 2>&1 &
+      else fleet_worktree_fill "$MAIN" "$wt"; fi && rm -f "$FILL_MARK" && fleet_timing_at filled ) </dev/null >/dev/null 2>&1 &
     FILL_PID=$!
     printf '%s\n' "$FILL_PID" > "$FILL_MARK"
   fi
