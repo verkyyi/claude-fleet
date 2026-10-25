@@ -146,10 +146,10 @@ fi
 # let the request escape into native children or their subsequent restores.
 unset _dispatch
 _dispatch=${FLEET_START_DISPATCH:-}
-if [ -n "$_dispatch" ]; then
-  unset FLEET_START_DISPATCH
-  python3 "$BIN/fleet_dispatch.py" --accepted "$_dispatch" --check-current ${_execution:+--execution "$_execution"} >/dev/null || exit 2
-fi
+# Its currentness is checked ONCE here, last — below, right before the agent
+# starts, revoking what was minted for it (T992: a first copy of the same check
+# here cost a hub round trip and two interpreters on every start).
+[ -n "$_dispatch" ] && unset FLEET_START_DISPATCH
 # The agent adapter table (T620, EPIC T580 C4) — which option holds a window's
 # conversation id, how a resume is spelled — beside this script, else beside its
 # link's target (the generated shell copy: no lib, no python, between pane and agent).

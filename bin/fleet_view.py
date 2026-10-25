@@ -3473,7 +3473,7 @@ def go_new_road(qo, vid, client="", repo="", agent="", prompt="", draft="", t0="
     run = fleet_timing.Run("session", fleet_timing_t0(t0))
     os.environ["FLEET_TIMING_T0"] = "%.3f" % run.t0
     mode = new_authority(fleet, vid, repo) if repo and not prompt else ""
-    if mode in ("hub", "legacy"):
+    if mode in ("hub", "legacy") and not os.environ.get("FLEET_AUTHORITY_SEEN"):
         # asked once a start (T716): the spawner takes this answer while it is fresh
         os.environ["FLEET_AUTHORITY_SEEN"] = "%s %d" % (mode, int(time.time()))
     if mode == "hub":
@@ -3578,16 +3578,71 @@ def new_remember(repo, agent):
         pass
 
 
-def new_authority(fleet, vid, repo):
+def authority_cache():
+    return conf_dir() / "state" / "authority-seen.json"
+
+
+def authority_seen(fleet, repo, secs):
+    """A recent answer (T992): (mode, its epoch s) when it is younger than `secs`,
+    else None. The panel asks as it opens (authority_prefetch) so the ↵ does not."""
+    try:
+        mode, at = json.loads(authority_cache().read_text(encoding="utf-8"))["%s\t%s" % (fleet, repo)]
+        return (mode, float(at)) if mode in ("hub", "legacy", "frozen") and 0 <= time.time() - float(at) < secs \
+            else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def authority_keep(fleet, repo, mode):
+    if mode not in ("hub", "legacy", "frozen"):
+        return
+    path = authority_cache()
+    try:
+        seen = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        seen = {}
+    seen["%s\t%s" % (fleet, repo)] = [mode, round(time.time(), 3)]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".%d" % os.getpid())
+        tmp.write_text(json.dumps(seen), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def authority_prefetch(fleet, vid, repo):
+    """⌘P's panel, as it opens (off its first frame): the box's repo's authority,
+    asked now unless asked in the last 20 s — so the 「新会话」 ↵ finds it fresh
+    (go_new: the start's own ask was 1.4 s of its road, T992)."""
+    if repo and authority_seen(fleet, repo, 20) is None:
+        new_authority(fleet, vid, repo, cached=False)
+
+
+def new_authority(fleet, vid, repo, cached=True):
     """The task authority a start of `repo` meets (fleet-quick-dispatch.py
-    authority): hub · legacy · frozen, "" when it cannot tell — the old road."""
+    authority): hub · legacy · frozen, "" when it cannot tell — the old road.
+    `cached`: an answer the panel got within FLEET_AUTHORITY_FRESH_SECS (30 —
+    what the spawner's own gate trusts as fresh, T716) stands (T992)."""
+    if cached:
+        try:
+            fresh = float(os.environ.get("FLEET_AUTHORITY_FRESH_SECS") or 30)
+        except ValueError:
+            fresh = 30.0
+        got = authority_seen(fleet, repo, fresh) if fresh > 0 else None
+        if got:
+            # the spawner's gate reads its age, not this process's ↵
+            os.environ["FLEET_AUTHORITY_SEEN"] = "%s %d" % (got[0], int(got[1]))
+            return got[0]
     try:
         out = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"),
                               "authority", "--repo", repo, "--view", "%s@view-%s" % (fleet, vid)],
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
-    return (out.strip().splitlines() or [""])[-1].strip()
+    mode = (out.strip().splitlines() or [""])[-1].strip()
+    authority_keep(fleet, repo, mode)
+    return mode
 
 
 def bolt_task(vid, client, repo, agent, words):
@@ -5554,6 +5609,11 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         # the session in view's repo is asked here, off the first frame's road (T890)
         bolt["g"] = grid_read(vid, view_repo(vid, cur, items))
         bolt["ready"] = True
+        # the box's repo's authority, asked before its ↵ needs it (T992)
+        try:
+            authority_prefetch(fleet, vid, bolt_repo(bolt))
+        except Exception:  # noqa: BLE001 — a prefetch never breaks the panel
+            pass
     # started once the first frame is up (T890: a thread's start waits for the
     # thread to run — tens of ms on a busy machine, before anything was drawn)
     loader = threading.Thread(target=grid_load, daemon=True)

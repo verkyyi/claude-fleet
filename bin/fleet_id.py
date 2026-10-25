@@ -1369,6 +1369,26 @@ def _poster():
     -3 = no hub here. FLEET_ID_HUB_POST is the seam (a command: METHOD PATH as args,
     the body on stdin, `<code>\n<body>` out)."""
     import shlex
+    if not os.environ.get("FLEET_ID_HUB_POST"):
+        # in-process (T992, fleet_node_http): fleet-id.sh _post's bash + its two
+        # interpreters were ~1 s a call; a take is two
+        try:
+            import fleet_node_http as nh
+        except ImportError:
+            nh = None
+        if nh is not None and nh.usable() and nh.pair():
+            def direct(method, path, body=None):
+                if not nh.pair():
+                    return -3, None
+                try:
+                    code, text = nh.call(method, path, json.dumps(body, ensure_ascii=False) if body is not None else None)
+                except nh.Unreachable:
+                    return 0, None
+                try:
+                    return code, json.loads(text) if text.strip() else None
+                except ValueError:
+                    return code, None
+            return direct
     cmd = shlex.split(os.environ.get("FLEET_ID_HUB_POST", "")) or \
         ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-id.sh"), "_post"]
 
