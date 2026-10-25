@@ -66,6 +66,8 @@ FLEET_BASE_DEPS_RETRY_CAP          knob: internal pacing/limit, safe in-code def
 FLEET_BASE_SYNC                    knob: per-repo 0 opts a repo out of base-branch sync
 FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code default (fleet-base-sync.sh)
 FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
+FLEET_BLANK_ORIGIN_KEY             seam: the origin key in a blank start's request token (fleet_blank_start.py; default hub — T992)
+FLEET_BLANK_START                  knob: 0 = a blank ⌘P start's record goes through fleet-task-record.sh, not in-process (bin/fleet_blank_start.py, T992)
 FLEET_BOOTSTRAP_GIT_BASE           seam: an injectable command/path for tests (fleet-login-bootstrap.sh)
 FLEET_BOOTSTRAP_DOCTOR             knob: 0 = skip the closing doctor report (fleet-login-new.sh --recycle passes it: 29 s nobody reads, #4044)
 FLEET_BOOTSTRAP_FLEET              env handoff: 0 = check the starter out but start no fleet and mark nothing bootstrapped (fleet-home-template.py build, #4194)
@@ -92,7 +94,9 @@ FLEET_CLIENT_LEASE_CMD             seam: the client-lease command fleet-thin.py 
 FLEET_CLIENT_VER                   handoff: the thin client's .client-version version=, set on the attach command for the home (fleet-thin.py → fleet-remote-view.sh, #3826)
 FLEET_CONTROL_AS                   handoff: the agent file a hub-placed start opens as, fleet_control.py → fleet-control-read.sh --as (T672)
 FLEET_CLIENT_REHOMED               handoff: the home the thin loop gave up on (换家), set on the attach command for the new home, whose top line says so (fleet-thin.py → fleet-remote-view.sh, T690)
+FLEET_DEFER_ASKS                   knob: 0 = a fresh record's asks hold the window as every other start's do (T992)
 FLEET_DELIVER_HELD                 handoff: the one held delivery code, from the generated agent adapter table (bin/fleet-agent-adapter.sh, T626)
+FLEET_DISPATCH_FRESH               handoff: when the dispatch that made this start's record made it (epoch s): a fresh record's asks (history · take · current) go beside the window (T992)
 FLEET_DISPATCH_RESOLVED            handoff: the explicit agent · template · default a dispatch was resolved from, so its spawner does not resolve it again (T992)
 FLEET_DRILL                        handoff: this process is a drill against the live install — fleet_notice.py writes nothing to the person's record (T741)
 FLEET_FETCH_BLOCKING               knob: 1 = a stale base is fetched before a start goes on (the old wait); default 0 starts off origin/<base> as it is and fetches behind it (fleet_fetch_bounded, T992)
@@ -140,12 +144,16 @@ FLEET_DEPS_SHARE_TIMEOUT           knob: wall-clock budget for one worktree's sh
 FLEET_DISPATCH_AGENTS_HERE         seam: the agents installed here, comma-separated, for ⌘T's agent step (fleet-quick-dispatch.py, #3004)
 FLEET_DISPATCH                     handoff: resolved coding provider and accepted request/task identity across spawn adapters (#4392)
 FLEET_SCRATCH_NOCHECKOUT           handoff: 1 = fleet_scratch_alloc makes the worktree --no-checkout + fleet_worktree_boot; its caller fills it (dash-raw-session.sh's cold overlap, T992)
+FLEET_START_CHECKED_AT             handoff: when the spawner last read the accepted task current (epoch s), so the wrapper's own last read may stand on it (T992)
+FLEET_START_CHECK_FILE             handoff: the spawner's current read of a fresh record, made beside the window (`<rc> <epoch s>`), for the wrapper's last read (T992)
 FLEET_START_DISPATCH               handoff: accepted task start checked only by the initial wrapper, discarded before native launch; never used for history resume (NV03)
 FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accepted dispatch to this caller-owned temporary file (#4392)
 FLEET_EXECUTION_RESULT             handoff: ccquota place writes the explicit task execution snapshot to this caller-owned temporary file
 FLEET_START_NODE                   handoff: ⌘P 「新会话」's placement (FLEET_NEW_NODE) carried to dash-raw-session.sh, under FLEET_SPAWN_NODE (T992)
+FLEET_START_RECHECK_SECS           knob: how fresh (s, 2) a spawner's current read must be for the wrapper to skip its own; 0 = always read again (T992)
 FLEET_STUB_COLS                    handoff: the stub window's width at its first frame, so it forks nothing before drawing (fleet_stub.py → fleet-stub.sh, T992)
 FLEET_STUB_DIR                     handoff: a new session's stub (its state dir) from ⌘P's ↵ to fleet_view.go's handoff (T992)
+FLEET_STUB_FORK                    knob: 0 = the stub's road runs `do new` as an interpreter of its own, not a fork of the panel (T992)
 FLEET_STUB_READY_SECS              knob: how long the stub's handoff waits for the agent to keep a paste before it goes there anyway (fleet_stub.py, default 90, T992)
 FLEET_TASK_CONTROL_VERSION         protocol: explicit 1 requests task execution control v1; unset never enrolls legacy placement
 FLEET_TASK_EXECUTION               handoff: authenticated bound task execution snapshot through spawner/wrapper/native admission; removed before native tools run
@@ -158,6 +166,7 @@ FLEET_ROLLBACK_GH                  seam: the gh command bin/fleet-release-rollba
 FLEET_ID_DIR                       path: the ID ledgers dir ($FLEET_CONF_DIR/ids — fleet_id.py ledger_dir; fleet_cfg_work_over, T569)
 FLEET_TASK_CLOSED_CMD              seam: answers `<T<n>>` instead of fleet_task_control.py closed — 0 closed · 1 open · 3 unknown (fleet_task_closed, fleet-cleanup-idle.py, #4897)
 FLEET_PARK_RESTORE_FID             handoff: restore passes the verified identity to the holding wrapper before native resume (T949)
+FLEET_VIEW_BLANK_PROC              seam: 1 = go_new's blank start runs `fleet-quick-dispatch.py send --blank` as a process, not in-process (fleet-panel-draft-selftest.py, T992)
 FLEET_WAKE_NATIVE_HOME             seam: isolated native durable task store for parking tests (T949)
 FLEET_TASK_DUP_OK                  knob: 1 = dash-raw-session.sh opens a window for a record a window here already runs (T847 refuses by default)
 FLEET_TASK_RECORD                  seam: the task-record script fleet-brief.sh asks `get T<n>` of (#4897, #4898)

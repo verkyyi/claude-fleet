@@ -945,7 +945,21 @@ prestart_take() {
 # Nothing is opened before they answer; a refusal gives the worktree back.
 prestart_take   # the prestart's answers (or this run, again, without them)
 PRE=$(mktemp -d "${TMPDIR:-/tmp}/raw-pre.XXXXXX") || exit 2
-pre_pids=''
+pre_pids='' late_pids=''
+# A record THIS start made a moment ago (FLEET_DISPATCH_FRESH, its epoch s — the
+# dispatch that made it, T992): nothing else holds its ID and it has no history,
+# so its asks — history, take, current — need not hold the window. They run
+# beside it, late_wait reads them before this says the window opened, and a "no"
+# takes the window and its worktree back before the agent is even up. Anything
+# else (a redo, a controlled execution, an older dispatch) asks first, as before.
+DEFER=0
+case "${FLEET_DISPATCH_FRESH:-}" in ''|*[!0-9]*) ;; *)
+  [ -z "$EXECUTION" ] && [ -n "$TASK_REF" ] && [ $(( $(date +%s) - FLEET_DISPATCH_FRESH )) -lt 10 ] \
+    && [ "${FLEET_DEFER_ASKS:-1}" != 0 ] && DEFER=1 ;;
+esac
+unset FLEET_DISPATCH_FRESH
+# the wrapper's last current read stands on this one's answer (`<rc> <epoch s>`)
+CUR_FILE="${TMPDIR:-/tmp}/raw-cur.$$"; rm -f "$CUR_FILE"
 if [ "$NOREPO" != 1 ] && [ "$PLACED" != hub ] && [ "$PRE_AUTH" != 0 ]; then
   ( fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null 2>"$PRE/auth.err"
     echo $? > "$PRE/auth.rc" ) </dev/null &
@@ -954,10 +968,10 @@ fi
 if [ -z "$EXECUTION" ] && [ -n "$TASK_REF" ] && [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ]; then
   ( python3 "$BIN/fleet_task_execution.py" check-history --task-ref "$TASK_REF" >/dev/null 2>"$PRE/hist.err"
     echo $? > "$PRE/hist.rc" ) </dev/null &
-  pre_pids="$pre_pids $!"
+  if [ "$DEFER" = 1 ]; then late_pids="$late_pids $!"; else pre_pids="$pre_pids $!"; fi
   if ! fleet_is_fid "$REOPEN_FID"; then
     ( fleet_task_take "$TASK_REF" > "$PRE/take.out"; echo $? > "$PRE/take.rc" ) </dev/null &
-    pre_pids="$pre_pids $!"
+    if [ "$DEFER" = 1 ]; then late_pids="$late_pids $!"; else pre_pids="$pre_pids $!"; fi
   fi
 fi
 # The accepted task is still current (not cancelled, the same attempt): asked
@@ -968,8 +982,10 @@ fi
 case "${EXECUTION:+x}:${DISPATCH:-}" in
   :*'"task":"'*|:*'"task": "'*)
     ( python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current \
-        >/dev/null 2>"$PRE/cur.err"; echo $? > "$PRE/cur.rc" ) </dev/null &
-    pre_pids="$pre_pids $!" ;;
+        >/dev/null 2>"$PRE/cur.err"; _r=$?; echo "$_r" > "$PRE/cur.rc"
+      [ "$_r" = 0 ] && date +%s > "$PRE/cur.at"
+      printf '%s %s\n' "$_r" "$(date +%s)" > "$CUR_FILE.part" && mv -f "$CUR_FILE.part" "$CUR_FILE" ) </dev/null &
+    if [ "$DEFER" = 1 ]; then late_pids="$late_pids $!"; else pre_pids="$pre_pids $!"; fi ;;
 esac
 # pre_wait → rc 0 when every early ask said yes (its refusal said, rc 1/2)
 pre_wait() {
@@ -981,12 +997,35 @@ pre_wait() {
     [ -n "$FLEET_AUTHORITY_ERROR" ] || FLEET_AUTHORITY_ERROR='repo authority: check failed'
     refuse "$FLEET_AUTHORITY_ERROR"; return 1
   fi
+  [ "$DEFER" = 1 ] && return 0   # the record's own asks: late_wait, beside the window
+  pre_said
+}
+# pre_said → the record's asks' answers (history, current): rc 0 · their refusal said
+pre_said() {
   if [ -f "$PRE/hist.rc" ] && [ "$(cat "$PRE/hist.rc")" != 0 ]; then
     cat "$PRE/hist.err" >&2 2>/dev/null; return 2
   fi
+  [ -f "$PRE/cur.at" ] && PRE_CUR_AT=$(cat "$PRE/cur.at")
   if [ -f "$PRE/cur.rc" ] && [ "$(cat "$PRE/cur.rc")" != 0 ]; then
     cat "$PRE/cur.err" >&2 2>/dev/null
     refuse "raw: accepted task start refused"; return 2
+  fi
+  return 0
+}
+# late_wait → rc 0 when a fresh record's asks (beside the window) all said yes —
+# and its ID was this machine's to take (`here` / `first`, as assumed when the
+# window was stamped with it)
+late_wait() {
+  local p
+  [ "$DEFER" = 1 ] || return 0
+  for p in $late_pids; do wait "$p" 2>/dev/null; done
+  late_pids=''
+  pre_said || return $?
+  if [ -f "$PRE/take.rc" ] && [ -n "$TASK_FID" ]; then
+    case "$(cat "$PRE/take.rc"):$(cat "$PRE/take.out" 2>/dev/null)" in
+      0:*here|0:*first) ;;
+      *) refuse "raw: $TASK_REF's ID is held elsewhere — this start stands down"; return 2 ;;
+    esac
   fi
   return 0
 }
@@ -1081,8 +1120,11 @@ if [ -n "$EXECUTION" ]; then
   EXECUTION=$(python3 "$BIN/fleet_task_execution.py" prepare --snapshot "$EXECUTION" --fleet-id "$(fleet_uuid "$SESS")") || exit 2
   TASK_FID=$(python3 -c 'import json,sys; x=json.loads(sys.argv[1]); assert x["task_ref"]==sys.argv[2]; print(x["execution_owner"].split("/")[1])' "$EXECUTION" "$TASK_REF") || exit 2
 elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
-  if [ -f "$PRE/take.rc" ]; then _tt=$(cat "$PRE/take.out" 2>/dev/null); _ttrc=$(cat "$PRE/take.rc")
+  if [ "$DEFER" = 1 ] && _f=$(fleet_task_fid "$TASK_REF" 2>/dev/null) && fleet_is_fid "$_f"; then
+    _tt="$_f	first"; _ttrc=0   # this start's own new record: its ID is ours (late_wait reads the hub's word)
+  elif [ -f "$PRE/take.rc" ]; then _tt=$(cat "$PRE/take.out" 2>/dev/null); _ttrc=$(cat "$PRE/take.rc")
   else _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?; fi
+  unset _f
   case "$_ttrc" in
     0) TASK_FID=${_tt%%	*}; TASK_TAKE=${_tt#*	}
        [ "$PREV_ID" = "$TASK_FID" ] && PREV_ID='' ;;   # its own redo: no prev to itself
@@ -1090,7 +1132,7 @@ elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
   esac
   unset _tt _ttrc
 fi
-[ -n "${PRE:-}" ] && rm -rf "$PRE"
+[ "$DEFER" = 1 ] || { [ -n "${PRE:-}" ] && rm -rf "$PRE"; }
 [ "${PRE_USE:-0}" = 1 ] && rm -rf "$FLEET_PRESTART"   # taken: its answers are ours now
 
 # Spawn non-invasive by default (matches dash-issue-session.sh): -d creates the
@@ -1208,6 +1250,10 @@ fi
   if [ -n "$_dispatch_task" ]; then
     _q="'"; _start_dispatch="'${DISPATCH//$_q/$_q\\$_q$_q}'"; unset _q
     launch="FLEET_START_DISPATCH=$_start_dispatch $launch"
+    # when its currentness was last read (T992: the wrapper's own last read may
+    # stand on it while it is fresh — FLEET_START_RECHECK_SECS)
+    case "${PRE_CUR_AT:-}" in ''|*[!0-9]*) ;; *) launch="FLEET_START_CHECKED_AT=$PRE_CUR_AT $launch" ;; esac
+    [ "$DEFER" = 1 ] && launch="FLEET_START_CHECK_FILE=$(printf '%q' "$CUR_FILE") $launch"
     stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
   fi
   if [ -n "$EXECUTION" ]; then
@@ -1220,6 +1266,15 @@ fi
          # the hub's DECLINED / UNKNOWN answer as the refusal.
          _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
          refuse "raw: new-window failed in $SESS$_why"; exit 1; }
+# a fresh record's asks, answered beside the window (DEFER): a "no" takes it back
+if ! late_wait; then
+  fleet_win_retire "$win" "$SOCK" spawn-failed 2>/dev/null
+  TM kill-window -t "$win" 2>/dev/null
+  raw_fill_stop
+  [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+  rm -rf "$PRE" "$CUR_FILE"; exit 2
+fi
+[ "$DEFER" = 1 ] && rm -rf "$PRE"
 fleet_timing_at window   # the window is open (T716: its one writer, every road)
 fleet_admit_confirm >/dev/null   # the window is open: its admission holds on its own (#2502)
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on

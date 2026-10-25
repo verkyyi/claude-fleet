@@ -242,7 +242,7 @@ class PanelDraftTests(unittest.TestCase):
                 patch.object(fleet_view, "toast") as toast, \
                 patch.object(fleet_view.fleet_timing, "add") as add, \
                 patch.object(fleet_view.fleet_timing, "wait_seg", return_value=1250.0) as wait, \
-                patch.dict(os.environ, FLEET_VIEW_INPUT_WAIT_FG="1"), \
+                patch.dict(os.environ, FLEET_VIEW_INPUT_WAIT_FG="1", FLEET_VIEW_BLANK_PROC="1"), \
                 patch.object(fleet_view, "say", side_effect=lambda key, *a: "%s:%s" % (key, "|".join(a))), \
                 patch.object(fleet_view.subprocess, "run", side_effect=run):
             self.assertEqual(fleet_view.go_new(None, "v1", "/dev/ttys1", repo="acme/web", agent="codex",
@@ -267,6 +267,7 @@ class PanelDraftTests(unittest.TestCase):
         with patch.object(fleet_view, "view_fleet", return_value="fl"), \
                 patch.object(fleet_view, "new_authority", return_value="hub"), \
                 patch.object(fleet_view, "toast") as toast, patch.object(fleet_view.fleet_timing, "add"), \
+                patch.dict(os.environ, FLEET_VIEW_BLANK_PROC="1"), \
                 patch.object(fleet_view.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="✗ 没开成\n", stderr="")):
             self.assertEqual(fleet_view.go_new(None, "v1", "c", repo="acme/web", agent="claude"), 3)
         toast.assert_called_once_with("c", "✗ 没开成", "error")

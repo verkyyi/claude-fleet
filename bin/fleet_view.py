@@ -3661,9 +3661,41 @@ def bolt_task(vid, client, repo, agent, words):
         return 3
 
 
+_QD = []
+
+
+def quick_dispatch():
+    """fleet-quick-dispatch.py as a module, loaded once (T992: in-process, not an
+    interpreter of its own on every ⌘P start)."""
+    if not _QD:
+        spec = importlib.util.spec_from_file_location("fleet_quick_dispatch",
+                                                      str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _QD.append(mod)
+    return _QD[0]
+
+
 def bolt_blank(vid, client, repo, agent):
     """go_new's blank repo session under hub authority (T652): `send --blank` —
-    the record, then its session here, the 看台 onto it. rc as go_new."""
+    the record, then its session here, the 看台 onto it. rc as go_new.
+    In-process (T992): its task_send here, not an interpreter of its own;
+    FLEET_VIEW_BLANK_PROC=1 (a selftest's) runs it as `send --blank`."""
+    if os.environ.get("FLEET_VIEW_BLANK_PROC") != "1":
+        try:
+            qd = quick_dispatch()
+            ok, said = qd.task_send({"repo": repo, "agent": agent if agent in AGENTS else None, "blank": True,
+                                     "via": "dispatch"}, "%s@view-%s" % (view_fleet(vid), vid), client)
+        except Exception as error:  # noqa: BLE001 — never a start lost to the in-process road
+            ok, said = None, str(error)
+        if ok:
+            return 0
+        if ok is False:
+            said = said or say("view_new_failed_fmt", say("view_new_exit_fmt", 1))
+            _NEW_SAID.append(said)
+            toast(client, said, "error")
+            print(said, file=sys.stderr, flush=True)
+            return 3
     argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send", "--blank",
             "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid)] + \
         (["--agent", agent] if agent else []) + (["--client", client] if client else [])
@@ -5381,7 +5413,7 @@ def bolt_prestart_env(st):
     return {}
 
 
-def bolt_stub(vid, client, argv, where, extra_env=None):
+def bolt_stub(vid, client, argv, where, extra_env=None, qo=None):
     """The 「新会话」 box's ↵ with a stub (T992): its window in the 看台 at once,
     then `do new --stub` in its own session (esc-proof, as bolt_run), and the
     popup closes. False: no stub (FLEET_STUB=0, a browser 看台, tmux said no) —
@@ -5397,6 +5429,28 @@ def bolt_stub(vid, client, argv, where, extra_env=None):
         return False
     _, d = got
     fleet_stub.shown(tm, d, t0)
+    # The road goes on in a fork of this very process (T992: its code is loaded —
+    # `do new` as an interpreter of its own was ~0.25 s before the record);
+    # FLEET_STUB_FORK=0 (or no module handle) runs `do new` as before.
+    if qo is not None and conf_word("FLEET_STUB_FORK") != "0" and argv[2:4] == ["do", "new"]:
+        try:
+            pid = os.fork()
+        except OSError:
+            pid = -1
+        if pid == 0:
+            rc = 1
+            try:
+                os.setsid()
+                null = os.open(os.devnull, os.O_RDWR)
+                for fd in (0, 1, 2):
+                    os.dup2(null, fd)
+                os.environ.update(extra_env or {})
+                rc = main(argv[2:] + ["--stub", d], qo)
+            except BaseException:  # noqa: BLE001 — the stub says what is left to say
+                pass
+            os._exit(rc if isinstance(rc, int) else 0)
+        if pid > 0:
+            return True
     try:
         subprocess.Popen(argv + ["--stub", d], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True, env=dict(os.environ, **(extra_env or {})))
@@ -6203,7 +6257,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                         msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
                         continue
                     argv, title, where = bolt_argv(qo, vid, client, bolt)
-                    if bolt_stub(vid, client, argv, where, bolt_prestart_env(bolt)):
+                    if bolt_stub(vid, client, argv, where, bolt_prestart_env(bolt), qo):
                         # the new session's window is on the screen (T992): the
                         # road goes on behind it, the popup closes now
                         return 0
