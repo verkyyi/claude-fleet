@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<link rel="canonical" href="__ORIGIN__{{path}}">
+<link rel="alternate" hreflang="en" href="__ORIGIN__/">
+<link rel="alternate" hreflang="zh-CN" href="__ORIGIN__/zh/">
+<link rel="alternate" hreflang="x-default" href="__ORIGIN__/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{brand}}">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="__ORIGIN__{{path}}">
+<meta property="og:locale" content="{{og_locale}}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{{title}}">
+<meta name="twitter:description" content="{{description}}">
+<meta name="theme-color" content="{{fleet_bg}}">
+<link rel="icon" href="/favicon.ico?v={{icon_v}}" sizes="32x32">
+<link rel="icon" href="/favicon.svg?v={{icon_v}}" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v={{icon_v}}">
+<script type="application/ld+json">{{jsonld}}</script>
+<style>
+/*{{fleet_theme}}*/
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--fleet-bg);color:var(--fleet-ink);font:400 17px/1.6 var(--fleet-font-ui);-webkit-font-smoothing:antialiased;overflow-x:hidden;display:flex;flex-direction:column;min-height:100vh;min-height:100dvh}
+main{flex:1 0 auto}
+h1,h2,h3{font-family:var(--fleet-font-display);margin:0;text-wrap:balance}
+p{margin:0} a{color:inherit;text-decoration:none}
+code{font:500 .92em var(--fleet-font-mono);color:var(--fleet-sand)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--fleet-clay-hi);outline-offset:3px;border-radius:6px}
+.skip{position:absolute;left:12px;top:-60px;z-index:40;background:var(--fleet-clay);color:var(--fleet-on-clay);padding:10px 16px;border-radius:8px;font-weight:600}
+.skip:focus{top:12px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 32px}
+svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:52px;padding:0 26px;border-radius:999px;font:600 17px/1 var(--fleet-font-ui);border:1px solid var(--fleet-line);color:var(--fleet-ink);background:transparent;cursor:pointer;transition:.15s;white-space:nowrap}
+.btn:hover{border-color:var(--fleet-ink-2)}
+.btn-p{background:var(--fleet-clay);border-color:var(--fleet-clay);color:var(--fleet-on-clay)}
+.btn-p:hover{background:var(--fleet-clay-hi);border-color:var(--fleet-clay-hi)}
+.btn svg{width:20px;height:20px}
+[hidden]{display:none!important}
+
+.nav{position:sticky;top:0;z-index:30;background:rgba(25,24,42,.84);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--fleet-line-2)}
+.nav .wrap{display:flex;align-items:center;height:60px;gap:14px}
+.brand{display:flex;align-items:center}
+.brand .wm{height:22px;width:199px}
+.nav-r{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px}
+.nav-r a{color:var(--fleet-ink-2)} .nav-r a:hover{color:var(--fleet-ink)}
+.nav .btn{height:38px;padding:0 16px;font-size:14.5px;color:var(--fleet-on-clay)}
+
+.hero{position:relative;padding:64px 0 48px;overflow:hidden}
+.hero::before{content:"";position:absolute;left:28%;top:80px;transform:translateX(-50%);width:1000px;height:640px;background:radial-gradient(closest-side,rgba(217,118,90,.14),transparent 72%);pointer-events:none}
+.hgrid{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,560px);gap:48px;align-items:center}
+.hgrid>div{min-width:0}
+.kick{font:500 14px/1.2 var(--fleet-font-mono);color:var(--fleet-sand);letter-spacing:.01em}
+.hero h1{margin-top:14px;font-size:56px;line-height:1.06;font-weight:750;letter-spacing:-.02em}
+html[lang=zh-CN] .hero h1{font-size:50px;line-height:1.16;letter-spacing:0}
+.hero h1 em{font-style:normal;color:var(--fleet-clay)}
+.lede{margin-top:18px;max-width:560px;font-size:18.5px;line-height:1.6;color:var(--fleet-ink-2)}
+.ctas{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
+.fine{margin-top:14px;font-size:14px;color:var(--fleet-muted)}
+.chips{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:22px 0 0;padding:0}
+.chips li{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:999px;padding:6px 12px 6px 10px}
+.chips svg{width:16px;height:16px;color:var(--fleet-clay)}
+
+/* the terminal: the task list as `fleet` draws it (sample data) */
+.term{background:var(--fleet-term);border:1px solid var(--fleet-line);border-radius:14px;box-shadow:0 40px 80px -40px rgba(0,0,0,.8);overflow:hidden;font:400 13px/1.75 var(--fleet-font-mono)}
+.term .tb{display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border-bottom:1px solid var(--fleet-line-2);color:var(--fleet-muted);font-size:12px}
+.term .tb i{width:10px;height:10px;border-radius:50%;background:var(--fleet-line)}
+.term .tb span{margin-left:14px}
+.term pre{margin:0;padding:16px 18px 18px;color:var(--fleet-ink-2);white-space:pre;overflow-x:auto;font:inherit}
+.term .p{color:var(--fleet-sand)} .term .w{color:var(--fleet-blue)} .term .n{color:var(--fleet-bad);font-weight:500} .term .k{color:var(--fleet-ok)} .term .m{color:var(--fleet-muted)}
+.cap{margin-top:10px;font-size:13px;color:var(--fleet-muted)}
+
+section.band{padding:56px 0;border-top:1px solid var(--fleet-line-2)}
+.band h2{font-size:34px;line-height:1.15;font-weight:700;letter-spacing:-.01em}
+.band .sub{margin-top:10px;max-width:680px;color:var(--fleet-ink-2)}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:30px}
+.card{background:var(--fleet-surface);border:1px solid var(--fleet-line-2);border-radius:16px;padding:22px}
+.card svg{width:26px;height:26px;color:var(--fleet-clay)}
+.card h3{margin-top:12px;font-size:19px;line-height:1.3;font-weight:650}
+.card p{margin-top:8px;font-size:15.5px;line-height:1.6;color:var(--fleet-ink-2)}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:30px 0 0;padding:0;list-style:none;counter-reset:s}
+.steps li{position:relative;padding:22px 22px 22px 70px;background:var(--fleet-bg-2);border:1px solid var(--fleet-line-2);border-radius:16px;counter-increment:s}
+.steps li::before{content:counter(s);position:absolute;left:22px;top:20px;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--fleet-clay-soft);border:1px solid var(--fleet-clay-line);color:var(--fleet-clay);font:600 15px/1 var(--fleet-font-ui)}
+.steps b{display:block;font:650 17px/1.35 var(--fleet-font-display)}
+.steps span{display:block;margin-top:6px;font-size:15px;line-height:1.55;color:var(--fleet-ink-2)}
+.end{text-align:center}
+.end .ctas{justify-content:center}
+.end .sub{margin-left:auto;margin-right:auto}
+
+footer{border-top:1px solid var(--fleet-line-2);background:var(--fleet-bg-2);padding:13px 0;font-size:13.5px;color:var(--fleet-muted)}
+footer .wrap{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+footer a:hover{color:var(--fleet-ink)}
+footer .gh{display:inline-flex;gap:6px;align-items:center}
+footer .gh svg{width:16px;height:16px}
+footer .fr{margin-left:auto;display:flex;align-items:center;gap:18px;font-size:12.5px}
+@media (max-width:640px){footer .fr{margin-left:0;flex-basis:100%}}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:960px){
+  body{font-size:16px}
+  .wrap{padding:0 20px}
+  .nav .wrap{height:56px;gap:8px}
+  .nav-r{gap:16px;font-size:14px}
+  .brand .wm{height:19px;width:172px}
+  .hero{padding:36px 0 32px}
+  .hgrid{grid-template-columns:minmax(0,1fr);gap:32px}
+  .hero h1,html[lang=zh-CN] .hero h1{font-size:38px}
+  .lede{font-size:17px}
+  .cards,.steps{grid-template-columns:1fr}
+  .band h2{font-size:28px}
+  .term{font-size:12px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#top">{{skip}}</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">{{fleet_wordmark}}<symbol id="gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></symbol></svg>
+
+<header class="nav"><div class="wrap">
+  <a class="brand" href="{{path}}" aria-label="{{brand}}"><svg class="wm" aria-hidden="true"><use href="#wm"/></svg></a>
+  <div class="nav-r">
+    <a href="{{docs_path}}">{{docs}}</a>
+    <a href="/app" data-out>{{signin}}</a>
+    <a class="btn btn-p" href="/app" data-in hidden>{{console}}</a>
+  </div>
+</div></header>
+
+<main id="top">
+<section class="hero"><div class="wrap"><div class="hgrid">
+  <div>
+    <p class="kick">{{kick}}</p>
+    <h1>{{h1}}</h1>
+    <p class="lede">{{lede}}</p>
+    <div class="ctas" data-out>
+      <a class="btn btn-p" href="/auth/github/start"><svg aria-hidden="true"><use href="#gh"/></svg>{{cta_github}}</a>
+      <a class="btn" href="/apply">{{cta_apply}}</a>
+    </div>
+    <div class="ctas" data-in hidden><a class="btn btn-p" href="/app">{{console}}</a></div>
+    <p class="fine">{{fine}}</p>
+    <ul class="chips">
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>{{c1}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17l6-6-6-6M12 19h8"/></svg>{{c2}}</li>
+      <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>{{c3}}</li>
+    </ul>
+  </div>
+  <div>
+    <div class="term" role="img" aria-label="{{term_label}}">
+      <div class="tb" aria-hidden="true"><i></i><i></i><i></i><span>fleet</span></div>
+<pre aria-hidden="true"><span class="p">$</span> fleet ls
+  <span class="w">&#x21BB;</span> K3F9  Claude  {{term_1}}  api     <span class="w">{{term_working}}</span>
+  <span class="n">!</span> B8D2  Codex   {{term_2}}  web-app <span class="n">{{term_needs}}</span>
+  <span class="k">&#x2713;</span> A7P4  Claude  {{term_3}}  hub     <span class="k">PR #219 {{term_merged}}</span>
+  <span class="m">&#x25F7;</span> C9W1  Claude  {{term_4}}  api     <span class="m">{{term_parked}}</span>
+
+<span class="m"># {{term_note}}</span>
+<span class="p">$</span> fleet</pre>
+    </div>
+    <p class="cap">{{term_cap}}</p>
+  </div>
+</div></div></section>
+
+<section class="band"><div class="wrap">
+  <h2>{{f_h}}</h2>
+  <p class="sub">{{f_sub}}</p>
+  <div class="cards">
+    <div class="card"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/></svg><h3>{{f1_h}}</h3><p>{{f1_p}}</p></div>
+    <div class="card"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><h3>{{f2_h}}</h3><p>{{f2_p}}</p></div>
+    <div class="card"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><h3>{{f3_h}}</h3><p>{{f3_p}}</p></div>
+    <div class="card"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v12M13 6h3a2 2 0 0 1 2 2v7"/></svg><h3>{{f4_h}}</h3><p>{{f4_p}}</p></div>
+    <div class="card"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><h3>{{f5_h}}</h3><p>{{f5_p}}</p></div>
+    <div class="card"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 4a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 6"/></svg><h3>{{f6_h}}</h3><p>{{f6_p}}</p></div>
+  </div>
+</div></section>
+
+<section class="band"><div class="wrap">
+  <h2>{{s_h}}</h2>
+  <ol class="steps">
+    <li><b>{{s1_h}}</b><span>{{s1_p}}</span></li>
+    <li><b>{{s2_h}}</b><span>{{s2_p}}</span></li>
+    <li><b>{{s3_h}}</b><span>{{s3_p}}</span></li>
+  </ol>
+</div></section>
+
+<section class="band end"><div class="wrap">
+  <h2>{{end_h}}</h2>
+  <p class="sub">{{end_p}}</p>
+  <div class="ctas" data-out>
+    <a class="btn btn-p" href="/auth/github/start"><svg aria-hidden="true"><use href="#gh"/></svg>{{cta_github}}</a>
+    <a class="btn" href="/apply">{{cta_apply}}</a>
+  </div>
+  <div class="ctas" data-in hidden><a class="btn btn-p" href="/app">{{console}}</a></div>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <a class="gh" href="https://github.com/verkyyi/claude-fleet"><svg aria-hidden="true"><use href="#gh"/></svg>GitHub</a>
+  <a href="{{docs_path}}">{{docs}}</a>
+  <a href="{{terms_path}}">{{terms}}</a>
+  <a href="{{privacy_path}}">{{privacy}}</a>
+  <p class="fr"><a href="{{other_path}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}">{{lang_switch}}</a><span>{{disc}}</span></p>
+</div></footer>
+
+<script>
+(function(){
+  /* signed in: the way in becomes 'Open console' (the page is the same for
+     everyone and cached; who is looking is asked of /v1/me) */
+  if(!window.fetch)return;
+  fetch('/v1/me',{credentials:'same-origin',headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null}).catch(function(){return null}).then(function(m){
+    if(!m)return;
+    document.querySelectorAll('[data-out]').forEach(function(e){e.hidden=true});
+    document.querySelectorAll('[data-in]').forEach(function(e){e.hidden=false});
+  });
+})();
+</script>
+</body>
+</html>

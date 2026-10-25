@@ -39,6 +39,9 @@
 #      carry 用户协议 · 隐私政策 (Terms · Privacy) and no company name or ICP
 #      number (ZCKT) — every footer key in both string tables; a
 #      legal source missing in one language fails the build
+#   X  the sandbox edition (task PNWW): sandbox/index.html + sandbox/zh/index.html,
+#      the Claude Code sandbox runtime — built in the theme, GitHub sign-in and
+#      Request access, no WeChat / QR / mainland / trial, nothing from elsewhere
 #   T  fleet.trial off (issue #4269): the apply/ pages and llms files offer no
 #      trial — the scan card is 申请使用 → /apply (T794), no drill seconds — and
 #      the trial pages keep theirs
@@ -509,10 +512,71 @@ if out="$("$BUILD" --site "$T/lsite" --out "$T/l" --drill "$T/none.json" --now "
 elif printf '%s' "$out" | grep -q 'privacy.en.md is missing'; then st_ok_all "L a legal page missing in one language fails the build"
 else bad "L missing legal page: $out"; fi
 
+# X — the sandbox edition (task PNWW): sandbox/index.html (en, at /) and
+#     sandbox/zh/index.html (中文, at /zh/) are built in the theme, every slot
+#     filled; the way in is Sign in with GitHub → /auth/github/start and Request
+#     access → /apply; no WeChat, QR code, mainland positioning or trial; nothing
+#     loaded from elsewhere; every local link a path the hub answers — and a
+#     sandbox string saying WeChat, or a missing language, fails the build
+python3 - "$T/a" <<'PY' || fail=1
+import os, re, sys
+OUT = sys.argv[1]
+bad = []
+pages = (('en', 'sandbox/index.html', '/', '/zh/'), ('zh-CN', 'sandbox/zh/index.html', '/zh/', '/'))
+for lang, rel, path, other in pages:
+    f = os.path.join(OUT, rel)
+    if not os.path.isfile(f):
+        bad.append('X %s was not built' % rel); continue
+    p = open(f, encoding='utf-8').read()
+    if '<html lang="%s">' % lang not in p:
+        bad.append('X %s: not <html lang="%s">' % (rel, lang))
+    if '<link rel="canonical" href="__ORIGIN__%s">' % path not in p:
+        bad.append('X %s: canonical is not __ORIGIN__%s' % (rel, path))
+    if re.search(r'\{\{|\{brand\}|/\*\{\{', p):
+        bad.append('X %s: an unfilled slot' % rel)
+    if '--fleet-bg:' not in p or '<symbol id="wm"' not in p:
+        bad.append('X %s: the theme (tokens, wordmark) is not inlined' % rel)
+    if 'href="/auth/github/start"' not in p or 'href="/apply"' not in p:
+        bad.append('X %s: no Sign in with GitHub (/auth/github/start) and Request access (/apply)' % rel)
+    m = re.search(r'wechat|微信|weixin|mainland|china|大陆|中国|二四网络|qrcode|\bqr\b|扫码|/app/try|/auth/wechat|试用|trial', p, re.I)
+    if m:
+        bad.append('X %s: says %r — the sandbox page is not the China one' % (rel, m.group(0)))
+    if re.search(r'''(?:\bsrc|srcset)\s*=\s*["']?(?:https?:)?//|url\(\s*["']?(?:https?:)?//|@import''', p):
+        bad.append('X %s: loads something from elsewhere' % rel)
+    if 'href="%s"' % other not in p:
+        bad.append('X %s: no switch to the other language (%s)' % (rel, other))
+    for h in re.findall(r'(?:href|src)="(/[^"#]*)"', p):
+        h = h.split('?')[0]
+        served = (h in ('/', '/zh/', '/app', '/apply', '/auth/github/start', '/favicon.ico', '/favicon.svg', '/apple-touch-icon.png',
+                        '/terms', '/privacy', '/en/terms', '/en/privacy', '/docs/', '/en/docs/')
+                  or (h.startswith('/site/') and os.path.isfile(os.path.join(OUT, h[len('/site/'):]))))
+        if not served:
+            bad.append('X %s: links %s, which the hub does not answer' % (rel, h))
+for x in bad:
+    print('FAIL ' + x)
+if not bad:
+    print('ok   X sandbox edition: / (en) and /zh/ built in the theme, GitHub sign-in + Request access, no WeChat / QR / trial, nothing from elsewhere')
+sys.exit(1 if bad else 0)
+PY
+mkdir -p "${T:?}/xsite" && cp -RL "$ROOT/site/." "${T:?}/xsite/"
+python3 - "$T/xsite/sandbox/strings.en.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p, encoding='utf-8'))
+d['fine'] = 'Scan with WeChat to apply'
+json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False)
+PY
+out="$("$BUILD" --site "$T/xsite" --out "$T/x" --drill "$T/none.json" --now "$NOW" 2>&1)"; rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'sandbox en: says WeChat'; then st_ok_all "X a sandbox string saying WeChat fails the build"
+else bad "X the sandbox build took WeChat (rc $rc): $out"; fi
+mkdir -p "${T:?}/xsite2" && cp -RL "$ROOT/site/." "${T:?}/xsite2/" && rm -f "${T:?}/xsite2/sandbox/strings.zh.json"
+out="$("$BUILD" --site "$T/xsite2" --out "$T/x2" --drill "$T/none.json" --now "$NOW" 2>&1)"; rc=$?
+if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'sandbox/strings.zh.json is missing'; then st_ok_all "X a sandbox language missing fails the build"
+else bad "X the sandbox build went on without its 中文 strings (rc $rc): $out"; fi
+
 # I — no internal names in what the hub serves (the rule table, its #@keep words kept)
 if [ -f "$ROOT/conf/oss-scan.rules" ]; then
   hits=$(python3 - "$ROOT/conf/oss-scan.rules" "$T/a/index.html" "$T/a/en/index.html" "$T/d/index.html" \
-    "$T/a/terms/index.html" "$T/a/privacy/index.html" "$T/a/en/terms/index.html" "$T/a/en/privacy/index.html" \
+    "$T/a/sandbox/index.html" "$T/a/sandbox/zh/index.html" "$T/a/terms/index.html" "$T/a/privacy/index.html" "$T/a/en/terms/index.html" "$T/a/en/privacy/index.html" \
     "$T/a/robots.txt" "$T/a/sitemap.xml" "$T/a/llms.txt" "$T/a/llms-zh.txt" "$T/a/llms-full.txt" <<'PY2'
 import re, sys
 rules, keep = [], []

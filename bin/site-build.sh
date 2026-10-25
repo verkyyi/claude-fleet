@@ -42,6 +42,11 @@
 #                                 every 「立即体验」 is 「申请使用」 → /apply, no
 #                                 seconds, no <!--trial--> block, and each
 #                                 <key>_apply string in place of <key>
+#   <out>/sandbox/index.html  <out>/sandbox/zh/index.html
+#                                 the sandbox edition (task PNWW): the Claude Code
+#                                 sandbox runtime, from site/sandbox/template.html +
+#                                 strings.{en,zh}.json — served at / and /zh/ by a hub
+#                                 run with CCQUOTA_SITE=sandbox
 #
 # And the files for search engines and AI assistants (issue #3585, C15), served
 # at the root (/robots.txt …, site_serve.go):
@@ -450,6 +455,68 @@ else:
                 return v[m.group(1)]
             legal_pages[path] = re.sub(r'\{\{([a-z0-9_]+)\}\}', lsub, page)
 
+# --- the sandbox edition (task PNWW) -------------------------------------------
+# A hub run with CCQUOTA_SITE=sandbox shows another front page: the Claude Code
+# sandbox runtime, English at / and 中文 at /zh/ (app_mount.go, site_serve.go).
+# site/sandbox/template.html + strings.{en,zh}.json → <out>/sandbox/index.html and
+# <out>/sandbox/zh/index.html, in the same theme (the same slots), checked the same
+# way (every slot filled, keys alike, no double quotes) and more: nothing loaded
+# from anywhere else, no WeChat, no QR code, no mainland positioning, and no word
+# of the trial (fleet.trial is the China page's).
+SB = os.path.join(SITE, 'sandbox')
+SB_LANGS = (('en', 'sandbox'), ('zh', os.path.join('sandbox', 'zh')))
+sandbox_pages = {}   # lang → (its directory under OUT, page)
+SB_NO = re.compile(r'wechat|微信|weixin|mainland|china|大陆|中国|二四网络|qrcode|\bqr\b|扫码|/app/try|/auth/wechat', re.I)
+SB_LOAD = re.compile(r'''(?:\bsrc|srcset)\s*=\s*["']?(?:https?:)?//|<link\b[^>]*\brel=["']?(?:stylesheet|preload|modulepreload|prefetch)[^>]*\bhref=["']?(?:https?:)?//|url\(\s*["']?(?:https?:)?//|@import''', re.I)
+if os.path.isfile(os.path.join(SB, 'template.html')):
+    sb_tmpl = open(os.path.join(SB, 'template.html'), encoding='utf-8').read()
+    for slot in ('/*{{fleet_theme}}*/', '{{fleet_wordmark}}'):
+        if slot not in sb_tmpl:
+            fail('site/sandbox/template.html has no %s slot for the theme' % slot)
+    sb_tmpl = sb_tmpl.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG).replace('{{icon_v}}', ICON_V)
+    if _wm_m:
+        sb_tmpl = sb_tmpl.replace('{{fleet_wordmark}}', '<symbol id="wm" viewBox="%s">%s</symbol>' % (_wm_m.group(1), _wm_m.group(2).strip()))
+    sb_tables = {}
+    for l, _ in SB_LANGS:
+        f = os.path.join(SB, 'strings.%s.json' % l)
+        if not os.path.isfile(f):
+            fail('site/sandbox/strings.%s.json is missing (the sandbox page has both languages)' % l)
+            continue
+        sb_tables[l] = json.load(open(f, encoding='utf-8'))
+    if set(sb_tables) == {'en', 'zh'} and set(sb_tables['en']) != set(sb_tables['zh']):
+        fail('site/sandbox/strings.zh.json: keys differ from strings.en.json: %s'
+             % sorted(set(sb_tables['en']) ^ set(sb_tables['zh'])))
+    for l, S in sorted(sb_tables.items()):
+        for k, v in S.items():
+            if '"' in v:
+                fail('site/sandbox/strings.%s.json %s: no double quotes (it goes into attributes)' % (l, k))
+        v = {k: x.replace('{brand}', BRAND) for k, x in S.items()}
+        v['brand'] = BRAND
+        O = '__ORIGIN__'
+        ld = {'@context': 'https://schema.org', '@graph': [
+            {'@type': 'Organization', '@id': O + '/#org', 'name': BRAND, 'url': O + '/',
+             'logo': O + '/site/icon-512.png', 'sameAs': [REPO_URL]},
+            {'@type': 'SoftwareApplication', '@id': O + '/#app', 'name': BRAND,
+             'applicationCategory': 'DeveloperApplication', 'operatingSystem': 'Web, macOS, Linux, iOS, Android',
+             'description': v.get('description', ''), 'url': O + v.get('path', '/'), 'inLanguage': v.get('lang', l),
+             'publisher': {'@id': O + '/#org'},
+             'potentialAction': {'@type': 'UseAction', 'target': O + '/auth/github/start'}}]}
+        v['jsonld'] = json.dumps(ld, ensure_ascii=False, separators=(',', ':')).replace('</', '<\\/')
+
+        def sbsub(m, v=v, l=l):
+            if m.group(1) not in v:
+                fail('sandbox %s: template slot {{%s}} has no string' % (l, m.group(1)))
+                return ''
+            return v[m.group(1)]
+        page = re.sub(r'\{\{([a-z0-9_]+)\}\}', sbsub, sb_tmpl)
+        if re.search(r'\{\{|\{brand\}', page):
+            fail('sandbox %s: an unfilled slot is left on the page' % l)
+        for rx, what in ((SB_NO, 'says %s (the sandbox page is not the China one)'),
+                         (SB_LOAD, 'loads %s from elsewhere (CSP: self only)')):
+            for m in rx.finditer(page):
+                fail('sandbox %s: %s' % (l, what % m.group(0)))
+        sandbox_pages[l] = (dict(SB_LANGS)[l], page)
+
 if errs:
     for e in errs:
         print('site-build: ' + e, file=sys.stderr)
@@ -486,7 +553,7 @@ def font_range(page):
 def page_chars():
     spans = font_range(pages['en'][1])
     chars = set(range(0x20, 0x7f))   # all of printable ASCII, used or not
-    for _, page in list(pages.values()) + list(apply_pages.values()) + [('', p) for p in legal_pages.values()]:
+    for _, page in list(pages.values()) + list(apply_pages.values()) + list(sandbox_pages.values()) + [('', p) for p in legal_pages.values()]:
         chars |= {ord(c) for c in html.unescape(page)
                   if ord(c) >= 0x20 and any(a <= ord(c) <= b for a, b in spans)}
     return chars
@@ -533,7 +600,7 @@ if os.path.isdir(OUT):
     shutil.rmtree(OUT)
 os.makedirs(OUT)
 open(os.path.join(OUT, '.gitkeep'), 'w').close()
-for lang, (sub_dir, page) in list(pages.items()) + list(apply_pages.items()):
+for lang, (sub_dir, page) in list(pages.items()) + list(apply_pages.items()) + list(sandbox_pages.items()):
     d = os.path.join(OUT, sub_dir)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, 'index.html'), 'w', encoding='utf-8') as fh:
