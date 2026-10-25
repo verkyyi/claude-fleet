@@ -98,6 +98,22 @@ case "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 20)")")" in *' x asc
   *) fail "B FLEET_GLYPHS=ascii: letters" "$(FLEET_GLYPHS=ascii ib 80 "$(python3 -c "print($T0 + 20)")")" ;; esac
 [ "$fails" = "$f0" ] && st_pass "B the message row: error until seen or 30 s, warn 6 s, ✦ N · ⌘P, fits 45 columns, ascii; the top line says no reminder"
 
+# --- B2. the one-line 看台 (task EQBE): the message on the top line, its time left, ⌃] x
+f0=$fails
+B3="$WORK/b3"; mkdir -p "$B3"
+il() { FLEET_CONF_DIR="$B3" python3 "$TB" inline-text "$1" "now=$2"; }
+FLEET_CONF_DIR="$B3" python3 "$NP" notify error '暂停开新：内存紧张' --no-draw
+T3=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["ts"])' "$B3/logs/notices.ndjson")
+case "$(il 140 "$(python3 -c "print($T3 + 18)")")" in ' tokenman '*'暂停开新：内存紧张'*'剩 12 秒'*'⌃] x 关闭'*) ;;
+  *) fail "B2 the line: the brand, the message, 剩 N 秒, ⌃] x 关闭" "$(il 140 "$(python3 -c "print($T3 + 18)")")" ;; esac
+w=$(python3 -c 'import sys,unicodedata as u; print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in sys.argv[1]))' "$(il 45 "$T3")")
+[ "$w" -le 45 ] || fail "B2 the line fits a 45-column phone (got $w)"
+[ "$(il 140 "$(python3 -c "print($T3 + 40)")")" = - ] || fail "B2 past its time the line is the session's again"
+FLEET_CONF_DIR="$B3" python3 "$NP" dismiss || fail "B2 dismiss with a live message is rc 0"
+[ "$(il 140 "$T3")" = - ] || fail "B2 ⌃] x: dismissed, the line is the session's again" "$(il 140 "$T3")"
+FLEET_CONF_DIR="$B3" python3 "$NP" dismiss && fail "B2 dismiss with nothing live is rc 1"
+[ "$fails" = "$f0" ] && st_pass "B2 one line (EQBE): the brand, the message, 剩 N 秒, ⌃] x 关闭; fits 45 columns; dismiss reads it"
+
 # --- D. ⌘P's first row 「✦ 消息」 (fleet takes no key of its own for it) ------------------
 f0=$fails
 python3 "$NP" notify error 'one unread' --no-draw

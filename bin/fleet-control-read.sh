@@ -932,12 +932,32 @@ print(json.dumps(d))'
     exit $?
     ;;
   resume)
+    # A closed session by its ID (the hub's worker_resume on `<fleet>/<fid>`: the
+    # 看台's 恢复 on another machine's row) — the road local 恢复 takes,
+    # fleet-id.sh reopen <fid> --exec --rebuild (a reaped scratch worktree made
+    # again where it was), behind the gates a start pays. Before anything opens:
+    # 5 = the reopen's own refusal (its --check: the conversation not found, a
+    # worktree that cannot be made again — the line on stderr), 4 = the disk /
+    # quota gate. Headless (the node agent has no pane): bare tmux is pointed at
+    # THIS fleet's server the way reap does, or dash-raw-session finds no session.
     case "${3:-}" in fid:*)
       fid=${3#fid:}
       fleet_is_fid "$fid" || exit 5
-      export FLEET_SESSION="$sess"
-      bash "$BIN/fleet-id.sh" reopen "$fid" --exec
-      exit $? ;;
+      fleet_load_conf "$sess"
+      sp=$(tmux -L "$(fleet_socket "$sess")" display-message -p '#{socket_path}' 2>/dev/null)
+      [ -n "$sp" ] || { printf 'resume: fleet %s has no running tmux server\n' "$sess" >&2; exit 5; }
+      export FLEET_SESSION="$sess" TMUX="$sp,0,0"
+      unset TMUX_PANE
+      why=$(bash "$BIN/fleet-id.sh" reopen "$fid" --check --rebuild 2>&1 >/dev/null) \
+        || { printf '%s\n' "${why:-resume: $fid cannot be reopened}" | tail -1 >&2; exit 5; }
+      # the quota gate is a Claude / pool gate: the agent the ID last ran (its plan)
+      plan=$(bash "$BIN/fleet-id.sh" reopen "$fid" 2>/dev/null) || plan=''
+      ragent=$(printf '%s' "$plan" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("agent") or "claude")
+except ValueError: print("claude")')
+      bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
+      [ "$ragent" = codex ] || { bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4; }
+      exec bash "$BIN/fleet-id.sh" reopen "$fid" --exec --rebuild ;;
     esac
     # The /fleet-history resume path: verdict first (REVIEW-ONLY ⇒ 5, nothing
     # attempted), the same disk/quota gates a start pays (4), then the headless

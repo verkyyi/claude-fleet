@@ -299,7 +299,10 @@ export function registerLifecycle(on: On): void {
     if (supported) {
       openGate()
       await onReady($)
-      if (e.isInteractive) $.ui.toast(`fleet 扩展已加载 · v${MOD_VERSION}`)
+      // not on a wake out of a park (task EQBE): the resumed screen stays the conversation's
+      if (e.isInteractive && (await $.env.get('FLEET_PARK_RESUME')) !== '1') {
+        $.ui.toast(`fleet 扩展已加载 · v${MOD_VERSION}`)
+      }
     }
     return next(e)
   }).catch(($, e, next) => next(e))

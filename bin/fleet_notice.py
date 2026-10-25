@@ -16,6 +16,8 @@ row 「✦ 消息」; fleet takes no key of its own for it.
     fleet_notice.py unread                     how many are not seen yet (every kind, every machine)
     fleet_notice.py read [<id>…]               mark them seen: all, or those ids (an orphan's
                                                result read in its own book too)
+    fleet_notice.py dismiss                    the one on the 看台's line now marked seen (⌃] x,
+                                               task EQBE); rc 1 when none is live
     fleet_notice.py seen <tag>                 rc 0 when a notice carrying <tag> was recorded
     fleet_notice.py amend <tag> <level> <text> the newest notice carrying <tag> now says <text> at
                                                <level> — same id, same ts (a machine alert that greys
@@ -558,8 +560,31 @@ def unseen(msgs):
     return [m for m in msgs if not m["seen"]]
 
 
+def hold_secs(m):
+    """How long a message stays on the line: sticky_secs() for an error or a
+    result nobody took, else its tier's."""
+    return sticky_secs() if sticky(m) else TIER.get(m.get("level"), 3)
+
+
 def is_live(m, now):
-    return not m["seen"] and now < m["ts"] + (sticky_secs() if sticky(m) else TIER.get(m.get("level"), 3))
+    return not m["seen"] and now < m["ts"] + hold_secs(m)
+
+
+def left_secs(m, now=None):
+    """The seconds a live message has left on the line (the top line's countdown,
+    task EQBE), at least 1."""
+    now = time.time() if now is None else now
+    return max(1, int(m["ts"] + hold_secs(m) - now + 0.999))
+
+
+def dismiss(now=None, g=None):
+    """The person's dismiss key (⌃] x, task EQBE): the message on the line now is
+    marked read — the next live one, if any, takes its place. rc 1: none was."""
+    m, _ = line_state(now, g)
+    if m is None:
+        return 1
+    mark_read(ids=[m["id"]])
+    return 0
 
 
 def line_state(now=None, g=None):
@@ -736,8 +761,10 @@ def draw(level, text, nxt="", sock="", client="", everyone=False, secs=None, now
             more = (int(prev.get("more", 0)) + 1) if live(prev, now, acked) else 0
             n = {"seq": int(prev.get("seq", 0)) + 1, "level": level, "text": text, "next": nxt,
                  "ts": int(now), "until": int(now) + hold, "hold": int(now) + hold, "more": more}
-            # a 看台 with the message row (@view_inbox, T701) opens it now — the top
-            # line's own tick would in ≤ 2 s; the row reads the record, not this
+            # a 看台 with the message row (@view_inbox 1, T701) opens it now — the top
+            # line's own tick would in ≤ 2 s; the row reads the record, not this. One
+            # whose line carries the message itself (@view_inbox inline, task EQBE)
+            # never grows a row: its line is redrawn
             _, ib = tmux(sock, "show-options", "-qv", "-t", tgt(s), "@view_inbox")
             tmux(sock, "set-option", "-t", tgt(s), "@view_notice", encode(n), ";",
                  "set-option", "-t", tgt(s), "@view_notice_hold", str(n["hold"]),
@@ -1109,6 +1136,8 @@ def main(argv):
     if cmd == "read":
         mark_read(ids=args or None)
         return 0
+    if cmd == "dismiss":
+        return dismiss()
     if cmd == "cell":
         print(cell())
         return 0

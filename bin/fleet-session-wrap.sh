@@ -437,7 +437,7 @@ park_hold() {
         case "$reply" in *'"ok":true'*) park_keyboard=1 ;; *) park_failed=1 ;; esac ;;
     esac
   done
-  wset -u @parked; wset -u @park_since; wset -u @park_why; wset -u @park_held
+  wset -u @parked; wset -u @park_since; wset -u @park_why; wset -u @park_held; wset -u @park_waking
 }
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''
@@ -613,6 +613,7 @@ while :; do
     fi
   fi
   rc=$?
+  unset FLEET_PARK_RESUME
   # A keyboard wake owns its words until a native report claims the metadata.
   # A launcher exiting before that confirmation returns to the parked editor.
   if [ -n "$park_attempt" ] && python3 "$BIN/fleet-park-page.py" --fail-meta "$park_attempt"; then
@@ -668,6 +669,10 @@ while :; do
     wset @id_next_trigger "reopen:$(date +%s)"
     wset @claude_state ''
     wset @claude_state_ts "$(date +%s)"
+    # a wake out of the parked screen (task EQBE): the relay keeps that screen up
+    # until the agent draws, then clears it and its history once, so the resumed
+    # conversation stands where it stood — and the launch says nothing of its own
+    export FLEET_PARK_RESUME=1
     continue
   fi
   # Handed to WebChat (task T810, fleet-webchat-handoff.sh): the conversation goes on

@@ -542,8 +542,10 @@ class client:
         with patch.dict(os.environ, self.env):
             self.assertTrue(gate.park(self.fid)['ok'])
         after = self.tm('capture-pane', '-p', '-t', self.win).split('\n')
-        self.assertEqual(after[:-1], (before + [''] * len(after))[:len(after)-1])
-        self.assertIn('已停放', after[-1])
+        # every row as it stood — no 「已停放」 row of its own (task EQBE: the
+        # 看台's top line says it, off @parked)
+        self.assertEqual(after, (before + [''] * len(after))[:len(after)])
+        self.assertTrue(self.opt('@parked'))
         # A real terminal client (not control mode): merely selecting must not wake.
         import pty
         master, slave = pty.openpty()
@@ -681,6 +683,7 @@ class client:
 
     def narrow_hint(self, language, hint):
         self.env['FLEET_UI_LANG'] = language
+        self.env['FLEET_PARK_HINT'] = '1'   # the old footer, on request (task EQBE)
         self.fake()
         self.tm('set-option', '-w', '-t', self.win, 'window-size', 'manual')
         self.tm('resize-window', '-t', self.win, '-x', '39', '-y', '24')

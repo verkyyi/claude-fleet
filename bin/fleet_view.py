@@ -175,6 +175,7 @@ import signal
 import socket
 import subprocess
 import sys
+import termios
 import threading
 import time
 from pathlib import Path
@@ -2220,6 +2221,10 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
         e["worker_id"] = r.get("worker_id") or ""
+        # the identity worker_id a closed ID reopens under on its own machine (the
+        # hub's history.resume_id: <its fleet UUID>/<fid>) — far 恢复's address
+        h = r.get("history") if isinstance(r.get("history"), dict) else {}
+        e["resume_id"] = h.get("resume_id") or ""
         e["task"] = r.get("task") or e.get("task") or ""
         e["cancel_request"] = r.get("cancel_request") or ""
         e["generation"] = r.get("generation")
@@ -4188,6 +4193,11 @@ def key_lines(me, extra=None, browser=False):
         popup, size(90), size(80), str(Path(me).parent / "fleet_notice.py"))
     binds[("fleet-view", "MouseDown1Status")] = "if-shell -F '#{==:#{mouse_status_range},inbox}' { %s }%s" % (
         page, " { %s }" % stock if stock else "")
+    # ⌃] x (task EQBE): the message on the 看台's line marked read, the line
+    # redrawn at once — a terminal with ⌘ and a phone alike
+    binds[("fleet-view-pfx", "x")] = (
+        "run-shell -b \"python3 '%s' dismiss >/dev/null 2>&1; tmux refresh-client -S -t '#{client_name}' "
+        ">/dev/null 2>&1 || :\"") % str(Path(me).parent / "fleet_notice.py")
     # F12 from iTerm2 (T705): its `fleet` profile sends the code, not F12 — the
     # session's key, handed on; the phone's F12 is FLEET_KEY_PHONE's, above
     for chord, _k, code in fleet_keys.ITERM_PASS:
@@ -4330,7 +4340,8 @@ def facts(fleet, e):
         # permission prompt is y / n; fleet-row-remote.sh reads the rest), and
         # which agent it runs — 换 Codex / 换 Claude names the other (issue #4184)
         return {"needs": ("perm" if e.get("detail") == "perm" else "ask") if e.get("state") == "needs" else "",
-                "pin": e.get("group") == "pin", "agent": far_agent(fleet, t) or "claude"}
+                "pin": e.get("group") == "pin", "agent": far_agent(fleet, t) or "claude",
+                "resume_wid": far_reopen_wid(fleet, e) if far_reopen_row(e) else ""}
     if not t.startswith("@"):
         return {}
     rc, out = tm("display-message", "-p", "-t", t, "#{window_id}|#{@pin}|"
@@ -4448,12 +4459,88 @@ def reopen_row(r):
     fleet-id.sh reopen: one only its ledger remembers (`id:`), or a task's history
     row (`landed:` + its task — the others keep fleet-restore-pick's road). Only
     this machine's and login's own (a row made here, or the hub's whose machine and
-    login are these); another machine's is restored there. A task's row reopens
+    login are these); another machine's is far_reopen_row's. A task's row reopens
     its CONVERSATION only — the record is not touched, nothing is dispatched; going
     on with the task itself is still 继续任务 (#5396)."""
     t = r.get("target") or ""
     return bool(r.get("gone") and reopen_fid(r) and r.get("home", not r.get("far"))
                 and (t.startswith("id:") and r.get("ledger") or t.startswith("landed:") and r.get("task")))
+
+
+def far_reopen_row(r):
+    """Another machine's (or login's) closed session of 已收起 — the hub's row,
+    `id:<fid>`: 恢复 reopens it THERE, from this panel, as the hub's worker_resume
+    on its identity worker_id (far_reopen_wid); that machine runs the road local
+    恢复 runs, fleet-id.sh reopen --exec --rebuild behind its gates
+    (fleet-control-read.sh `resume fid:`). Conversation only, as reopen_row."""
+    t = r.get("target") or ""
+    return bool(r.get("gone") and r.get("far") and not r.get("home", False) and reopen_fid(r)
+                and t.startswith("id:") and r.get("ledger"))
+
+
+def far_reopen_wid(fleet, r):
+    """The worker_id far 恢复 sends: `<fleet UUID>/<fid>` — the hub row's own
+    worker_id or its history.resume_id when either is that ID's, else the fleet
+    UUID of the row's machine and login off what the hub's rows already say
+    (global/remote_<fleet>: a row of that machine, fleet_logins: its login) — one,
+    or "" (none, or two answer: never a guess)."""
+    fid = reopen_fid(r)
+    for wid in (r.get("worker_id"), r.get("resume_id")):
+        u, _, k = (wid or "").partition("/")
+        if u and k == fid:
+            return wid
+    m, l = r.get("machine") or "", r.get("login") or ""
+    if not m or not fleet:
+        return ""
+    logins, found = fleet_logins(), set()
+    try:
+        lines = (dash_global() / ("remote_" + fleet)).read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        f = line.split(US)
+        if not f[0].startswith("wid:") or len(f) < 2 or f[1].rstrip("!~") != m:
+            continue
+        u = f[0][4:].partition("/")[0]
+        if u and (not l or logins.get(u, l) == l):
+            found.add(u)
+    return "%s/%s" % (found.pop(), fid) if len(found) == 1 else ""
+
+
+def far_reopen_why(r):
+    """"" = far 恢复 can be sent; else why not: the machine lost, the hub silent
+    (fleet-row-remote.sh's own rule — it would send nothing), no worker_id to name."""
+    m = r.get("machine") or "?"
+    en = ui_lang() == "en"
+    if r.get("lost"):
+        return say("view_lost_act_fmt", m)
+    if hub_stale():
+        return "The hub is not answering — try again shortly" if en else "入口连不上，稍后再试"
+    if not r.get("resume_wid"):
+        return (("On %s — its fleet is not known here; restore it from that machine" % m) if en
+                else "在 %s 上：这里认不出它的 fleet，到那台机器恢复" % m)
+    return ""
+
+
+def far_reopen_label(r):
+    a = ACTION["resume"]
+    m = r.get("machine") or "?"
+    return a["label"](r) + (" (on %s)" % m if ui_lang() == "en" else "（在 %s 上）" % m)
+
+
+def far_reopen_wait(fleet, fid):
+    """After far 恢复 went out: the worker_id of the live window the hub lists for
+    `fid` (its board, re-read each round), or "" once FLEET_VIEW_FAR_REOPEN_SECS
+    (8 s) pass — never longer."""
+    deadline = time.monotonic() + fenv("FLEET_VIEW_FAR_REOPEN_SECS", 8)
+    while True:
+        hub_reread(fleet)
+        for row in (board_read() or {}).get("rows") or []:
+            if row.get("id") == fid and row.get("group") != "gone" and row.get("worker_id") and not row.get("lost"):
+                return row["worker_id"]
+        if time.monotonic() >= deadline:
+            return ""
+        time.sleep(0.5)
 
 
 _REOPEN = {}
@@ -4550,9 +4637,11 @@ ACTIONS = [
      "local": lambda r, a, f: "taskstop", "far": lambda r, a, f: "taskstop", "ask": None,
      "slow": True, "thread": True},
     {"id": "resume", "label": lambda r: say("view_act_restore" if ended(r) else "view_act_resume"),
-     "when": lambda r: reopen_row(r) or (not r.get("task") and ((r.get("gone") and not r.get("ledger")) or (r.get("state") == "exited" and (r.get("far") or r.get("page"))))),
+     "when": lambda r: reopen_row(r) or far_reopen_row(r) or (not r.get("task") and ((r.get("gone") and not r.get("ledger")) or (r.get("state") == "exited" and (r.get("far") or r.get("page"))))),
      "local": lambda r, a, f: "reopen" if reopen_row(r) else "restore" if r.get("gone") else "resume",
-     "far": lambda r, a, f: "reopen" if reopen_row(r) else far("resume")(r, a, f), "ask": None,
+     # another machine's closed ID (far_reopen_row): reopened there by its ID
+     "far": lambda r, a, f: "reopen" if reopen_row(r) else "farreopen" if far_reopen_row(r) else far("resume")(r, a, f),
+     "ask": None,
      "slow": True, "keys": "yYrR"},
     # another machine's row (issue #4184): the hub's worker_transfer — the same
     # fleet-transfer.sh, run on that machine, its --dry-run's refusal said here
@@ -4634,7 +4723,7 @@ def act_row(fleet, e):
 
 def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
-    if reopen_row(r):
+    if reopen_row(r) or far_reopen_row(r):
         a = ACTION["resume"]
         return [(a, a["label"](r))]
     if r.get("record_only"):
@@ -4667,14 +4756,18 @@ def page_of(r, missing=None):
     this machine lacks (`missing`: grid_read's {agent: why})."""
     if r.get("gone") and (r.get("ledger") or r.get("task")) and not ACTION["continue"]["when"](r):
         # 已收起's closed row: its one item is 恢复 — grey with the reason when the
-        # reopen would refuse, when it is another machine's (restored there) or
-        # when the row names no session; never a page with nothing on it
+        # reopen would refuse, when another machine's cannot be reached (lost, the
+        # hub silent, no worker_id to name) or when the row names no session;
+        # never a page with nothing on it. Another machine's is reopened there
+        # (far_reopen_row; no --check preview from here)
         a = ACTION["resume"]
         en = ui_lang() == "en"
         if reopen_row(r):
             why = reopen_why(r)
             return [(a, a["label"](r) if why else reopen_label(r), why)]
-        if not r.get("home", not r.get("far")):
+        if far_reopen_row(r):
+            return [(a, far_reopen_label(r), far_reopen_why(r))]
+        if reopen_fid(r) and not r.get("home", not r.get("far")):
             m = r.get("machine") or "?"
             return [(a, a["label"](r), ("On %s — restore it from that machine" % m) if en
                      else "在 %s 上：到那台机器恢复" % m)]
@@ -4726,7 +4819,7 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     """Do one action: (rc, the line to say, went — the 看台 is on the row now).
     `wait` False runs a slow one in the background (the popup does not freeze on
     a reap)."""
-    if a.get('id') == 'resume' and r.get('task') and not reopen_row(r):
+    if a.get('id') == 'resume' and r.get('task') and not reopen_row(r) and not far_reopen_row(r):
         return 1, ('Use Continue task explicitly' if ui_lang() == 'en' else '请显式选择“继续任务”'), False
     fn = a["far"] if r.get("far") else a["local"]
     argv = fn(r, ans, fleet)
@@ -4815,6 +4908,35 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         wid = next((w for w, f in (x.split("\t", 1) for x in wins.splitlines() if "\t" in x) if f == fid), "")
         went = bool(wid) and go(qo, vid, wid, "menu", client, r) == 0
         return 0, say("view_act_done_fmt", label), went
+    if argv == "farreopen":
+        # another machine's closed ID (far_reopen_row): ONE hub write, worker_resume
+        # on <its fleet UUID>/<fid> (fleet-row-remote.sh) — that machine reopens it
+        # by the road above, behind its gates; a refusal (NOT_RESUMABLE ·
+        # ALREADY_RUNNING · RESOURCE_GATE · AT_CAPACITY · its reason) said as one
+        # line. Then the 看台 goes to the window the hub lists for that ID, as a
+        # local 恢复 does — waited for a few seconds at most (far_reopen_wait)
+        why = far_reopen_why(r)
+        if why:
+            return 1, why, False
+        m = r.get("machine") or "?"
+        env = act_env(fleet)
+        env.update(FLEET_SIDEBAR_TEXT="", FLEET_REMOTE_SAY="print", FLEET_REMOTE_ROW_NODE=m,
+                   FLEET_REMOTE_ROW_NAME=r.get("text") or r.get("name") or reopen_fid(r)[:8])
+        try:
+            p = subprocess.run(sh("fleet-row-remote.sh", "resume", fleet, "wid:" + r["resume_wid"]), env=env,
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=150,
+                               start_new_session=True)
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, say("view_act_failed_fmt", label, ""), False
+        said = one_line(p.stdout.strip() or p.stderr.strip() or label, 200)
+        if p.returncode != 0:
+            hub_reread(fleet)
+            return p.returncode, "✗ " + said, False
+        wid = far_reopen_wait(fleet, reopen_fid(r))
+        if not wid:
+            return 0, "✓ " + said + (" · restoring on %s" % m if ui_lang() == "en" else " · 正在 %s 上恢复" % m), False
+        went = go(qo, vid, wid, "menu", client, {"machine": r.get("machine") or "", "login": r.get("login") or ""}) == 0
+        return 0, "✓ " + said, went
     if argv == "resume":
         # the wrapper's page (fleet-session-wrap.sh): ↵ resumes the same conversation
         rc, _ = tm("send-keys", "-t", r.get("pane") or r["target"], "Enter")
@@ -5544,6 +5666,23 @@ class Line:
             self.text += ch
 
 
+def tty_gone(fd=0):
+    """The panel's terminal is gone (task EQBE): its tty revoked or closed —
+    termios answers EIO / EBADF — or its other side hung up: select says
+    readable while not one byte is waiting (FIONREAD 0). Never reads a key."""
+    import fcntl
+    import select as _select
+    import struct
+    try:
+        termios.tcgetattr(fd)
+        if not _select.select([fd], [], [], 0)[0]:
+            return False
+        n = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+    except (termios.error, OSError, ValueError):
+        return True
+    return n == 0
+
+
 def panel_key(screen, timeout_ms, completed=None, inputs=None):
     read = screen.get_wch if inputs is None else lambda: inputs.read(screen)
     if completed is None:
@@ -5731,6 +5870,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), order_notice(), False
     last_input, pending_items = 0.0, None
+    fast_errs = 0       # key reads that failed at once in a row (tty_gone, EQBE)
     msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
@@ -6134,10 +6274,18 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             after_frame(vid, client, items, pre)
         timeout_ms = min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
                          max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000)
+        t_key = time.monotonic()
         try:
             ch = panel_key(screen, timeout_ms, job if busy else None, inputs)
         except curses.error:
+            # a read that fails at once, again and again, is a terminal that is gone
+            # (its popup closed, the tty revoked): the panel ends — it spun at 100 %
+            # CPU for hours under no one's screen (task EQBE)
+            fast_errs = fast_errs + 1 if time.monotonic() - t_key < timeout_ms / 4000.0 else 0
+            if fast_errs >= 50 and tty_gone():
+                return 1
             continue
+        fast_errs = 0
         if ch is None:
             continue
         last_input = time.monotonic()

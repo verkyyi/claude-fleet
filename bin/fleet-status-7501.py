@@ -494,6 +494,17 @@ class ParkRelay:
         shutil.rmtree(self.directory, ignore_errors=True)
 
 
+CLEAR_ALL = b"\x1b[H\x1b[2J\x1b[3J"
+ESC_SEQ = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[PX^_][^\x1b]*(?:\x1b\\)?|.)")
+
+
+def has_text(data):
+    """Whether a chunk carries something drawn — a printable byte outside escape
+    sequences (an OSC probe or a mode switch alone is not the agent's screen)."""
+    rest = ESC_SEQ.sub(b"", data)
+    return any(b >= 0x21 for b in rest)
+
+
 def relay(cmd, depth=0):
     if not cmd:
         sys.stderr.write("usage: fleet-status-7501.py relay -- <cmd> [args…]\n")
@@ -509,6 +520,10 @@ def relay(cmd, depth=0):
         size = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8)
     except OSError:
         pass
+    # a wake out of a park (task EQBE, fleet-session-wrap.sh): the saved screen
+    # stays until the agent prints its first text, which lands on a cleared screen
+    # with no history under it — never below the old picture
+    clear_first = os.environ.get("FLEET_PARK_RESUME") == "1"
     pid, master = pty.fork()
     if pid == 0:
         _guard(cmd, attrs, size)      # never returns
@@ -588,6 +603,9 @@ def relay(cmd, depth=0):
                     if probes:   # the answer goes first, ahead of anything typed
                         to_child[:0] = PROBE_REPLY * probes
                         _flush(master, to_child)
+                    if clear_first and has_text(data):
+                        clear_first = False
+                        to_out += CLEAR_ALL
                     to_out += rd.spliced(data)
             if 0 in rr:
                 try:
