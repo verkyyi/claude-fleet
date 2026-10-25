@@ -111,6 +111,7 @@ FLEET_DD_FILER                     seam: the filer fleet-durations-drift.sh runs
 FLEET_DD_PCT                       CI knob: the per-shard drift (%) past which the nightly files a durations-table refresh (default 20; #4819)
 FLEET_MODELCAP_PROBE_BUDGET        knob: seconds one fleet's model-cap probe may take on the reconcile tick (fleet-reconcile-tick.sh, 20)
 FLEET_MODELCAP_STREAK              knob: consecutive probe timeouts before fleet-doctor's modelcap row FAILs (fleet-doctor.sh, 3)
+FLEET_NODE_HTTP                    knob: 0 = the node's hub calls go through fleet-task-record.sh's bash/curl road; default 1 makes them in-process (bin/fleet_node_http.py, T992)
 FLEET_NODE_ROLE                    seam: managed|client|unknown answers fleet_node_role without asking the hub (#4886)
 FLEET_NODE_ROLE_TICK               knob: 0 stops the diskguard tick refreshing the hub's client/managed word (default 1, #4886)
 FLEET_NODE_ROLE_TIMEOUT            knob: seconds fleet_node_role waits on GET /v1/node/self (default 4, #4886)

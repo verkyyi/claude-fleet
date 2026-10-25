@@ -141,6 +141,10 @@ applicable() {
   local sess
   sess=$(fleet_current_session 2>/dev/null) || sess=''
   if [ -n "$sess" ]; then fleet_hub_on "$sess" || return 1; fi
+  # A separated login's broker pair is asked of the credential proxy (~0.25 s):
+  # its being set up is the answer here (T992) — the call itself says
+  # "no node token" (exit 3) if the proxy does not give one.
+  if [ ! -r "$(fleet_node_env_file)" ] && _fleet_node_separated; then return 0; fi
   fleet_node_pair >/dev/null 2>&1
 }
 
@@ -161,6 +165,18 @@ task_record_curl() {
 }
 call() {
   local m="$1" p="$2" body="${3:-}" pair url tok resp rc code why
+  # One interpreter for the whole call (T992, bin/fleet_node_http.py): the pair,
+  # the signature and the request in-process — this road's fleet_node_pair (a
+  # Python for the token) + fleet_node_auth (another to sign) + curl was ~1 s a
+  # call. A seam (FLEET_HUB_CURL) or FLEET_NODE_HTTP=0 keeps the road below.
+  if [ -z "${FLEET_HUB_CURL:-}" ] && [ "${FLEET_NODE_HTTP:-1}" != 0 ] && [ -f "$BIN/fleet_node_http.py" ]; then
+    resp=$(printf '%s' "$body" | python3 "$BIN/fleet_node_http.py" call "$m" "$p"); rc=$?
+    case "$rc" in
+      0) ;;
+      3) die 3 "no node token here" ;;
+      *) printf 'fleet-task-record: hub unreachable (fleet_node_http exit %s)\n' "$rc" >&2; return 1 ;;
+    esac
+  else
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
   # signed once this login has a key (issue #3710), else the token
@@ -180,6 +196,7 @@ call() {
     task_record_curl "$body" "${4:-}" "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
       -X "$m" -H 'Content-Type: application/json' "$url$p" 2>/dev/null); rc=$?; }
   [ "$rc" -eq 0 ] && [ -n "$resp" ] || { printf 'fleet-task-record: hub unreachable (curl exit %s)\n' "$rc" >&2; return 1; }
+  fi
   code=$(printf '%s\n' "$resp" | tail -n 1)
   printf '%s\n' "$resp" | sed '$d'
   case "$code" in
@@ -355,9 +372,19 @@ if [ "$cmd" = dispatch ]; then
   # it rides to the spawner (FLEET_AS_KV, keyed by FLEET_AS_KV_FOR) so
   # dash-raw-session.sh does not read it again.
   as_for=claude; [ "${agent:-${FLEET_AGENT:-claude}}" = codex ] && as_for=codex   # #4726
+  # looked for where the session will run — the repo's main checkout, as the
+  # spawner looks (T992: from $PWD the two never matched, and dash-raw-session.sh
+  # read the file a second time)
+  asdir=${FLEET_MAIN:-}
+  if [ -z "$asdir" ] && [ -n "$repo" ]; then
+    asdir=$( s=${tsess:-$(fleet_current_session 2>/dev/null)}
+             [ -n "$s" ] && fleet_load_repo_conf "$s" "$(fleet_target_repo "$s" "$repo" 2>/dev/null || printf %s "$repo")" >/dev/null 2>&1 \
+               && printf '%s' "${FLEET_MAIN:-}" )
+  fi
+  asdir=${asdir:-$PWD}
   kv=''
   if [ -n "$repo" ] && [ -z "$as_agent" ] && [ "$spawn" = 1 ] \
-     && kv=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" \
+     && kv=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "$asdir" \
           --for "$as_for" 2>/dev/null); then
     as_agent=fleet-worker
   fi
@@ -365,40 +392,71 @@ if [ "$cmd" = dispatch ]; then
   # tools/body. Explicit --agent wins. Every retry retains the full input.
   template=''
   if [ -n "$as_agent" ]; then
-    [ -n "$kv" ] || kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "${FLEET_MAIN:-$PWD}" --for "$as_for") || exit 2
+    [ -n "$kv" ] || kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "$asdir" --for "$as_for") || exit 2
     template=$(printf '%s\n' "$kv" | awk -F'\t' '$1 == "agent" {print $2; exit}')
-    FLEET_AS_KV=$kv FLEET_AS_KV_FOR="$as_agent	$as_for	${FLEET_MAIN:-$PWD}"
+    FLEET_AS_KV=$kv FLEET_AS_KV_FOR="$as_agent	$as_for	$asdir"
     export FLEET_AS_KV FLEET_AS_KV_FOR
   fi
-  dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
   {
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "" "" "$via" <<'JSON'
+    # the dispatch and the record's payload in ONE interpreter (T992: they were
+    # fleet_dispatch.py + a payload `python3 -` — two starts, ~0.2 s): line 1 the
+    # dispatch (fleet_dispatch.resolve, its CLI's own call), line 2 the payload
+    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" <<'JSON'
 import json,sys
-d,title,body,repo,reap,template,rule,draft,note,via=sys.argv[1:]
-d=json.loads(d)
+sys.path.insert(0, sys.argv[1])
+import fleet_dispatch
+agent,template,default,tok,title,body,repo,reap,as_agent,via=sys.argv[2:]
+try:
+    d=fleet_dispatch.resolve([agent] if agent else [], template, "", default, None, tok)
+except (ValueError, TypeError) as e:
+    sys.exit("fleet_dispatch: %s" % e)
 repo=repo.lower()
+print(json.dumps(d, separators=(",", ":")))
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via=via, repo=repo,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
-    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note)),
+    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=as_agent,rule="",draft="",pr_note="")),
     ensure_ascii=False))   # the hub reads 16 KB: UTF-8 words, not \uXXXX (half the bytes — T661)
 JSON
     ) || exit 2
+    dispatch=${both%%$'\n'*}; payload=${both#*$'\n'}
     accepted=$(call POST /v1/node/tasks "$payload") || exit 1
-    t=$(printf '%s' "$accepted" | field id)
-    is_tref "$t" || die 1 "the hub's answer names no accepted record"
-    dispatch=$(python3 - "$dispatch" "$accepted" <<'JSON'
-import json,sys
-d,t=map(json.loads,sys.argv[1:])
+    # the answer read in ONE interpreter (T992: `field` ×3, the contract check
+    # and `remember` were five starts, ~0.4 s): T<n>, its code, its ID, the
+    # accepted dispatch — and the code booked as `remember` books it
+    got=$(python3 - "$dispatch" "$accepted" "$CODES" <<'JSON'
+import json,os,re,sys
+d,raw,codes=sys.argv[1:]
+d=json.loads(d)
+try:
+    t=json.loads(raw)
+except ValueError:
+    t={}
+tid=t.get("id") if isinstance(t, dict) else None
+if not (isinstance(tid, str) and re.match(r"^T[1-9][0-9]{0,9}$", tid)):
+    print(""); sys.exit(0)
 if t.get("authority_version") != 1 or t.get("requested_agent") != d["requested_agent"] or t.get("resolved_agent") != d["resolved_agent"]:
     sys.exit("hub did not accept the requested provider contract")
 d.update(task=t["id"],generation=t["generation"],attempt_id=t["attempt_id"])
+short, fid = t.get("short") or "", t.get("fid") or ""
+print(tid); print(short if isinstance(short, str) else ""); print(fid if isinstance(fid, str) else "")
 print(json.dumps(d,separators=(",", ":")))
+if re.match(r"^[A-Z][0-9A-Z]{1,25}$", short or ""):
+    try:
+        have = open(codes).read().splitlines() if os.path.exists(codes) else []
+        if not any(l.split("\t")[:1] == [tid] for l in have):
+            os.makedirs(os.path.dirname(codes), exist_ok=True)
+            with open(codes, "a") as f:
+                f.write("%s\t%s\t%s\n" % (tid, short, fid))
+    except OSError:
+        pass
 JSON
     ) || exit 1
+    { IFS= read -r t; IFS= read -r short; IFS= read -r tfid; IFS= read -r dispatch; } <<EOF
+$got
+EOF
+    is_tref "$t" || die 1 "the hub's answer names no accepted record"
     # the task's code first (EPIC T644 C3), then T<n>; an older hub: T<n> alone
-    remember "$accepted"
-    short=$(printf '%s' "$accepted" | field short)
     [ -n "$short" ] && printf '%s\n' "$short"
     printf '%s\n' "$t"
     # a new session is clocked from its ↵ (T684): the hub's record is `record`
@@ -408,7 +466,6 @@ JSON
   export FLEET_DISPATCH="$dispatch"
   # The task's own ID (EPIC T644 C1) rides to the spawner, bound to THIS record: its
   # first window goes by it (C2, fleet_task_fid) without asking the hub again.
-  tfid=$(printf '%s' "$accepted" | field fid)
   fleet_is_fid "$tfid" && export FLEET_TASK_FID="$t=$tfid"
   # A development task the hub accepted is the record alone (issue #4897, EPIC
   # #4895 批 0): no GitHub issue — the session opens in its own worktree of the

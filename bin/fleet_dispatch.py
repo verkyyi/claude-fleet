@@ -80,8 +80,26 @@ def placement_check(value, task, code):
         raise ValueError("dispatch placement did not succeed; no local fallback")
 
 
+def _node_get(path):
+    """The hub read in-process (fleet_node_http, T992: the bash reader was ~1 s
+    a call — three on every start); None ⇒ take the bash road (a seam is set)."""
+    try:
+        import fleet_node_http
+    except ImportError:
+        return None
+    if not fleet_node_http.usable() or not fleet_node_http.pair():
+        return None   # a seam, or no node token here: the bash reader says what it says
+    try:
+        return fleet_node_http.get_json(path)
+    except (fleet_node_http.Unreachable, ValueError, OSError) as exc:
+        raise ValueError("dispatch task authorization unavailable; start refused (%s)" % exc)
+
+
 def read_current(task):
     """Use the existing authenticated task reader, with no local status cache."""
+    response = _node_get("/v1/node/tasks/" + task.lstrip("#"))
+    if response is not None:
+        return response.get("task") if isinstance(response, dict) else None
     result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), "get", task],
                             capture_output=True, text=True, timeout=15,
                             env=dict(os.environ, FLEET_HUB_TIMEOUT="10"))
@@ -92,6 +110,9 @@ def read_current(task):
 
 
 def read_execution_start(task):
+    response = _node_get("/v1/node/tasks/%s/execution/start" % task)
+    if response is not None:
+        return response
     result = subprocess.run(["bash", str(Path(__file__).with_name("fleet-task-record.sh")), "execution-start", task],
                             capture_output=True, text=True, timeout=15,
                             env=dict(os.environ, FLEET_HUB_TIMEOUT="10"))

@@ -124,8 +124,12 @@ set -uo pipefail
 set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside this script or its link's target, T620)
   local s=$0 d
   d=$(cd "$(dirname "$s")" && pwd); [ -f "$d/fleet_agent_adapter.py" ] || { [ -L "$s" ] && d=$(cd "$(dirname "$s")" && cd "$(dirname "$(readlink "$s")")" && pwd); }
-  python3 "$d/fleet_agent_adapter.py" known "$1" 2>/dev/null \
-    || { printf 'dash-raw-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2; }
+  # the two the table always has, without an interpreter (T992)
+  case "$1" in
+    claude|codex) ;;
+    *) python3 "$d/fleet_agent_adapter.py" known "$1" 2>/dev/null \
+         || { printf 'dash-raw-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2; } ;;
+  esac
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
@@ -313,8 +317,10 @@ if [ -n "$CONTINUATION_ID" ]; then
 fi
 case "${FLEET_TASK_CONTROL_VERSION:-}" in ''|1) ;; *) printf 'dash-raw-session: unsupported task execution control version\n' >&2; exit 2 ;; esac
 if [ -n "$DISPATCH" ]; then
-  DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
-  AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
+  # the resolved agent rides on the first line (--with-agent; T992: one
+  # interpreter, not a second to read it back)
+  DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --with-agent ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
+  AGENT=${DISPATCH%%$'\n'*}; DISPATCH=${DISPATCH#*$'\n'}
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -794,11 +800,57 @@ fi
 # A task's window is admitted by its own ID (EPIC T497 C8): nothing is claimed,
 # a --resume with --task is the same session back (its ID's ledger names the
 # conversation), and the gate below asks only the person's authority.
+# These last asks of the hub — the authority's --finish, the task's history and
+# its ID's take — run BESIDE the worktree's allocation (T992: one after another
+# they were ~1.2 s before the first git command): each writes its answer to a
+# file of its own, and pre_wait reads them before anything the window needs.
+# Nothing is opened before they answer; a refusal gives the worktree back.
+PRE=$(mktemp -d "${TMPDIR:-/tmp}/raw-pre.XXXXXX") || exit 2
+pre_pids=''
 if [ "$NOREPO" != 1 ] && [ "$PLACED" != hub ]; then
-  fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
-    || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
+  ( fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null 2>"$PRE/auth.err"
+    echo $? > "$PRE/auth.rc" ) </dev/null &
+  pre_pids="$pre_pids $!"
 fi
-fleet_timing_at checked   # the start's checks passed — the stub's progress (T992)
+if [ -z "$EXECUTION" ] && [ -n "$TASK_REF" ] && [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ]; then
+  ( python3 "$BIN/fleet_task_execution.py" check-history --task-ref "$TASK_REF" >/dev/null 2>"$PRE/hist.err"
+    echo $? > "$PRE/hist.rc" ) </dev/null &
+  pre_pids="$pre_pids $!"
+  if ! fleet_is_fid "$REOPEN_FID"; then
+    ( fleet_task_take "$TASK_REF" > "$PRE/take.out"; echo $? > "$PRE/take.rc" ) </dev/null &
+    pre_pids="$pre_pids $!"
+  fi
+fi
+# The accepted task is still current (not cancelled, the same attempt): asked
+# with the others, answered before the window (a cancelled start never opens
+# one). The wrapper asks once more, last, right before the agent's credentials.
+# A controlled execution's read keeps its place after the execution's own
+# synchronization (below, before the window): its order is the hub's contract.
+case "${EXECUTION:+x}:${DISPATCH:-}" in
+  :*'"task":"'*|:*'"task": "'*)
+    ( python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current \
+        >/dev/null 2>"$PRE/cur.err"; echo $? > "$PRE/cur.rc" ) </dev/null &
+    pre_pids="$pre_pids $!" ;;
+esac
+# pre_wait → rc 0 when every early ask said yes (its refusal said, rc 1/2)
+pre_wait() {
+  local p
+  for p in $pre_pids; do wait "$p" 2>/dev/null; done
+  pre_pids=''
+  if [ -f "$PRE/auth.rc" ] && [ "$(cat "$PRE/auth.rc")" != 0 ]; then
+    FLEET_AUTHORITY_ERROR=$(tail -n 1 "$PRE/auth.err" 2>/dev/null)
+    [ -n "$FLEET_AUTHORITY_ERROR" ] || FLEET_AUTHORITY_ERROR='repo authority: check failed'
+    refuse "$FLEET_AUTHORITY_ERROR"; return 1
+  fi
+  if [ -f "$PRE/hist.rc" ] && [ "$(cat "$PRE/hist.rc")" != 0 ]; then
+    cat "$PRE/hist.err" >&2 2>/dev/null; return 2
+  fi
+  if [ -f "$PRE/cur.rc" ] && [ "$(cat "$PRE/cur.rc")" != 0 ]; then
+    cat "$PRE/cur.err" >&2 2>/dev/null
+    refuse "raw: accepted task start refused"; return 2
+  fi
+  return 0
+}
 win=""; slug=""; wt=""
 
 # --- allocate a scratch worktree off the base branch (issue #290) -------------
@@ -861,6 +913,14 @@ existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
 name="$base"; n=2
 while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n + 1)); done
 
+# the early asks (above, beside the allocation) answer before anything else
+pre_wait; _prc=$?
+if [ "$_prc" != 0 ]; then
+  [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || { raw_fill_stop; fleet_scratch_free "$MAIN" "$slug" "$wt"; }
+  rm -rf "$PRE"; exit "$_prc"
+fi
+fleet_timing_at checked   # the start's checks passed — the stub's progress (T992)
+
 # A task's window goes by the task's own ID (EPIC T644 C2): the hub minted it with
 # the record (C1), so the first window opened for it takes that ID, and a redo
 # here — the driver's retry, a re-dispatch — is the same ID's next attempt, never a
@@ -870,13 +930,13 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
 TASK_FID=''; TASK_TAKE=''
 if [ -z "$EXECUTION" ]; then
   [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || { refuse 'controlled task start has no execution grant'; exit 2; }
-  [ -z "$TASK_REF" ] || python3 "$BIN/fleet_task_execution.py" check-history --task-ref "$TASK_REF" || exit 2
 fi
 if [ -n "$EXECUTION" ]; then
   EXECUTION=$(python3 "$BIN/fleet_task_execution.py" prepare --snapshot "$EXECUTION" --fleet-id "$(fleet_uuid "$SESS")") || exit 2
   TASK_FID=$(python3 -c 'import json,sys; x=json.loads(sys.argv[1]); assert x["task_ref"]==sys.argv[2]; print(x["execution_owner"].split("/")[1])' "$EXECUTION" "$TASK_REF") || exit 2
 elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
-  _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?
+  if [ -f "$PRE/take.rc" ]; then _tt=$(cat "$PRE/take.out" 2>/dev/null); _ttrc=$(cat "$PRE/take.rc")
+  else _tt=$(fleet_task_take "$TASK_REF"); _ttrc=$?; fi
   case "$_ttrc" in
     0) TASK_FID=${_tt%%	*}; TASK_TAKE=${_tt#*	}
        [ "$PREV_ID" = "$TASK_FID" ] && PREV_ID='' ;;   # its own redo: no prev to itself
@@ -884,6 +944,7 @@ elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
   esac
   unset _tt _ttrc
 fi
+[ -n "${PRE:-}" ] && rm -rf "$PRE"
 
 # Spawn non-invasive by default (matches dash-issue-session.sh): -d creates the
 # window WITHOUT making it current, so a user attached to $SESS is not yanked over.
@@ -979,16 +1040,26 @@ fi
     *) stamp="$stamp$(fleet_win_stamp_cmd @timing_t0 "$FLEET_TIMING_T0")"
        [ "${FLEET_TIMING_WHAT:-}" = session.node ] && stamp="$stamp$(fleet_win_stamp_cmd @timing_what session.node)" ;;
   esac
-  # Re-read after worktree/setup delays. The wrapper repeats this check after
-  # tmux has created the pane, before credentials or a native process exist.
-  _dispatch_task=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("task", ""))' "$DISPATCH") || exit 2
-  if [ -n "$_dispatch_task" ]; then
-    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current ${EXECUTION:+--execution "$EXECUTION"} >/dev/null; then
+  # Its currentness was asked with the early asks (pre_wait, before the worktree
+  # was taken — T992); the wrapper asks once more, last, right before the
+  # agent's credentials exist (fleet-session-wrap.sh).
+  # The task field and the quoting are the shell's own (T992: no interpreter):
+  # the dispatch is one JSON object whose `task` is T<n> (fleet_dispatch.py).
+  case "$DISPATCH" in
+    *'"task":"'*) _dispatch_task=${DISPATCH#*'"task":"'}; _dispatch_task=${_dispatch_task%%'"'*} ;;
+    *'"task": "'*) _dispatch_task=${DISPATCH#*'"task": "'}; _dispatch_task=${_dispatch_task%%'"'*} ;;
+    *) _dispatch_task='' ;;
+  esac
+  if [ -n "$_dispatch_task" ] && [ -n "$EXECUTION" ]; then
+    # a controlled execution's currentness, in its contract's order (see pre_wait)
+    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current --execution "$EXECUTION" >/dev/null; then
       raw_fill_stop
       [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
       refuse "raw: accepted task start refused"; exit 2
     fi
-    _start_dispatch=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
+  fi
+  if [ -n "$_dispatch_task" ]; then
+    _q="'"; _start_dispatch="'${DISPATCH//$_q/$_q\\$_q$_q}'"; unset _q
     launch="FLEET_START_DISPATCH=$_start_dispatch $launch"
     stamp="$stamp$(fleet_win_stamp_cmd @dispatch "$DISPATCH")"
   fi
