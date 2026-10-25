@@ -12,7 +12,10 @@ multiplexing does.
         past (checked ONCE, at the handshake — like sshd); answers `id -un` with
         $FAKESSH_DIR/login/<host> when that exists (a master logged in as someone
         else), else <login>. Logs `master <host> <login> <pid> <port|22>` to $FAKESSH_DIR/log.
-  -S <sock> -O check|exit <host>      ssh's control commands
+  -S <sock> -O check|exit <host>      ssh's control commands; a check HANGS (sleeps
+        $FAKESSH_HANG_SECS, 30, so the caller's timeout fires — a loaded machine) while
+        $FAKESSH_DIR/checkhang/<host> holds `*`, or holds N > 0 (one hang per check,
+        counted down): the master itself stays alive and serving. Logs `checkhang <host>`.
   -S <sock> [...] <host> <cmd...>     a channel on the master (`id -un`, `true`, anything)
 """
 import os
@@ -77,6 +80,26 @@ def talk(sock, msg):
         buf += b
     s.close()
     return buf.decode()
+
+
+def check_hang(host):
+    p = d("checkhang", host)
+    try:
+        v = open(p).read().strip()
+    except OSError:
+        return
+    if v != "*":
+        try:
+            n = int(v or "0")
+        except ValueError:
+            n = 0
+        if n <= 0:
+            return
+        with open(p + ".tmp", "w") as f:
+            f.write("%d\n" % (n - 1))
+        os.replace(p + ".tmp", p)
+    log("checkhang %s" % host)
+    time.sleep(float(os.environ.get("FAKESSH_HANG_SECS") or 30))
 
 
 def master(o):
@@ -161,6 +184,8 @@ def main():
     if "M" in o["flags"]:
         return master(o)
     if "O" in o:
+        if o["O"] == "check":
+            check_hang(o.get("host", ""))
         try:
             r = talk(sock, o["O"])
         except OSError as e:

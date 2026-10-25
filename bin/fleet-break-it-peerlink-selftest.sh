@@ -10,6 +10,10 @@
 #                          a master logged in as another login sits on the link's path
 #   peerlink-sock-deleted  bin/fleet-peerlink.py's beat (file · pid · -O check): the
 #                          control file is deleted while its master lives
+#   peerlink-check-slow    bin/fleet-peerlink.py's beat (the -O check strikes): one
+#                          `ssh -O check` times out on a loaded machine while the master
+#                          lives and its file is there — not a teardown; only
+#                          FLEET_PEERLINK_CHECK_STRIKES checks in a row rebuild
 #   peerlink-two-keepers   bin/fleet-peerlink.py run (flock + the held file IS the path):
 #                          a second keeper, then one started after the lock file went
 #   peerlink-cert-expiry   bin/fleet-peerlink.py + fleet-peer-cert.sh's five-minute
@@ -150,6 +154,40 @@ drill_peerlink_sock_deleted() {
   python3 "$PL" status | grep -q '重建：控制文件没了' || { WHY="no rebuild record in the reading"; pl_stop; return 1; }
   pl_stop
   WHAT="主连接活着、控制文件被删：一拍内发现，旧主进程被杀（不留「文件没了连接还在」），按同一路径重建（pid $old → ${new}），state.json 记一条 重建：控制文件没了"
+}
+
+drill_peerlink_check_slow() {
+  CAP=10  # ≤ a 2 s beat to reach the hung check, its 1 s timeout, the next beat answers
+  local t0 old n
+  # FAKESSH_HANG_SECS: a hung check outlives the keeper's FLEET_PEERLINK_CHECK_SECS
+  export FLEET_PEERLINK_CHECK_SECS=1 FAKESSH_HANG_SECS=20
+  pl_box cs mac-a:bob
+  mkdir -p "$B/fs/checkhang"
+  pl_start
+  until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  old=$(pl_pid mac-a@bob)
+  # yesterday's way (a home machine at load 15 on 15 cores): ONE check does not answer in time
+  echo 1 > "$B/fs/checkhang/mac-a"; t0=$(now)
+  until_ok 8 grep -q 'mac-a@bob 检查恢复' "$B/run.err" \
+    || { WHY="one slow check: no recovery record — $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  SECS=$(since "$t0")
+  grep -q 'mac-a@bob 重建' "$B/run.err" && { WHY="one slow -O check tore the link down: $(grep 'mac-a@bob 重建' "$B/run.err" | tail -1)"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  [ "$(pl_pid mac-a@bob)" = "$old" ] && pl_up mac-a@bob && kill -0 "$old" 2>/dev/null \
+    || { WHY="the master changed across one slow check ($old → $(pl_pid mac-a@bob))"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  pl_link mac-a@bob 'l.get("strikes") == 0' >/dev/null || { WHY="the strike was not cleared by the good check: $(pl_link mac-a@bob 'l.get("strikes")')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  # a master that keeps not answering IS gone: rebuilt after the strikes
+  echo '*' > "$B/fs/checkhang/mac-a"
+  until_ok 15 grep -q 'mac-a@bob 重建：ssh -O check 不通' "$B/run.err" \
+    || { WHY="checks failing in a row never rebuilt: $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  n=$(grep -c 'mac-a@bob 检查没回应' "$B/run.err")
+  [ "$n" -ge 2 ] || { WHY="rebuilt after $n strike records, want the strikes first"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  rm -f "$B/fs/checkhang/mac-a"
+  until_ok 10 sh -c '[ "$(python3 -c "import json,sys; l=json.load(open(sys.argv[1]))[\"links\"][0]; print(l[\"phase\"], l[\"pid\"])" "$1")" != "up $2" ] && python3 -c "import json,sys; sys.exit(json.load(open(sys.argv[1]))[\"links\"][0][\"phase\"] != \"up\")" "$1"' \
+    _ "$B/conf/peerlink/state.json" "$old" \
+    || { WHY="not back up on a new master: $(python3 "$PL" status)"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  kill -0 "$old" 2>/dev/null && { WHY="the old master ($old) still runs after the rebuild"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
+  pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS
+  WHAT="主连接活着、控制文件在，一次 ssh -O check 超时（负载高）：只记一次 检查没回应、不拆；下一拍答上就清零（检查恢复），pid 不变；连续不通才 重建：ssh -O check 不通，新主连接起来、旧的被杀"
 }
 
 drill_peerlink_two_keepers() {

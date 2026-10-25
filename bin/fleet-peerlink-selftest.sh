@@ -38,6 +38,11 @@
 #                 hub ask between; a `sock` request wakes it at once (beat back to
 #                 TICK, the link checked); a master that dies while quiet is rebuilt
 #                 within seconds; the links stay up throughout; the doctor stays ok
+#   M. strikes  — (BREAK-IT peerlink-check-slow) an `-O check` that does not answer while
+#                 the master lives is a strike: phase stays up, state.json's `strikes`
+#                 counts it; a control file that vanishes mid-strike still rebuilds at
+#                 once (控制文件没了); FLEET_PEERLINK_CHECK_STRIKES=1 is the old rule —
+#                 one failed check rebuilds
 #
 # No network: bin/fleet-peerlink-fake-ssh.py plays ssh, a script plays
 # fleet-peer-cert.sh.
@@ -425,6 +430,41 @@ until_ok 6 link_rebuilt "$p1" && st_count || st_miss "L: a master killed while q
 stop; unset FLEET_PEERLINK_ACTIVE_SECS FLEET_PEERLINK_PEERS_SECS; export FLEET_PEERLINK_IDLE_TICK=2
 }
 
+# ---- M. strikes (BREAK-IT peerlink-check-slow): a late -O check is not a dead master ------
+leg_M() {
+box m 0
+export FLEET_PEERLINK_CHECK_SECS=1 FAKESSH_HANG_SECS=20
+peers mac-a:bob:entry=203.0.113.4/22022
+# the link dials the entry route: `-O check` names that address
+mkdir -p "$B/fs/checkhang"
+lk() { python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["links"][0]; print(eval(sys.argv[2]))' "$B/conf/peerlink/state.json" "$1" 2>/dev/null; }
+start
+until_ok 10 links_is "mac-a@bob:up" || st_miss "M: the link never came up: $(links)"
+p1=$(lk 'l["pid"]')
+echo '*' > "$B/fs/checkhang/203.0.113.4"
+until_ok 8 grep -q 'mac-a@bob 检查没回应（超时 1s，第 1/3 次' "$B/run.err" && st_count || st_miss "M: no strike record: $(tail -3 "$B/run.err")"
+[ "$(lk '(l["phase"], l["strikes"], l["pid"], l["err"])')" = "('up', 1, $p1, '')" ] && st_count \
+  || st_miss "M: mid-strike the link reads $(lk '(l["phase"], l["strikes"], l["pid"], l["err"])') — want up, 1 strike, pid $p1, no err"
+# the control file goes mid-strike: hard evidence, rebuilt at once
+rm -f "$B/fs/checkhang/203.0.113.4" "$B/conf/peerlink/mac-a@bob.sock"
+until_ok 3 grep -q 'mac-a@bob 重建：控制文件没了' "$B/run.err" && st_count || st_miss "M: a vanished file mid-strike was not rebuilt at once: $(tail -3 "$B/run.err")"
+grep -q 'mac-a@bob 重建：ssh -O check 不通' "$B/run.err" && st_miss "M: rebuilt as a failed check, not a vanished file" || st_count
+until_ok 10 sh -c '[ "$(python3 -c "import json,sys; l=json.load(open(sys.argv[1]))[\"links\"][0]; print(l[\"phase\"], l[\"strikes\"])" "$1")" = "up 0" ]' _ "$B/conf/peerlink/state.json" \
+  && st_count || st_miss "M: not up again with the strikes cleared: $(lk '(l["phase"], l["strikes"])')"
+stop
+# the old rule, by setting: one failed check rebuilds
+box m2 0
+export FLEET_PEERLINK_CHECK_STRIKES=1
+peers mac-a:bob:entry=203.0.113.4/22022
+mkdir -p "$B/fs/checkhang"
+start
+until_ok 10 links_is "mac-a@bob:up" || st_miss "M: (strikes=1) the link never came up: $(links)"
+echo 1 > "$B/fs/checkhang/203.0.113.4"
+until_ok 8 grep -q 'mac-a@bob 重建：ssh -O check 不通' "$B/run.err" && st_count || st_miss "M: FLEET_PEERLINK_CHECK_STRIKES=1 did not rebuild on one failed check: $(tail -3 "$B/run.err")"
+grep -q '检查没回应' "$B/run.err" && st_miss "M: FLEET_PEERLINK_CHECK_STRIKES=1 still counted a strike" || st_count
+stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS FLEET_PEERLINK_CHECK_STRIKES
+}
+
 group() {   # group <name> <leg>… — in the background, its result in $WORK/res.<name>
   local g="$1"; shift
   (
@@ -440,9 +480,10 @@ group 2 H
 group 3 G I
 group 4 L
 group 5 C        # three whole fleet-doctor.sh runs
+group 6 M
 leg_F; leg_J; leg_K
 for p in $GROUPS_PIDS; do wait "$p"; done
-for g in 1 2 3 4 5; do
+for g in 1 2 3 4 5 6; do
   cat "$WORK/out.$g"
   if [ -s "$WORK/res.$g" ]; then
     read -r f c < "$WORK/res.$g"; FAIL=$((FAIL + f)); CHECKS=$((CHECKS + c))
