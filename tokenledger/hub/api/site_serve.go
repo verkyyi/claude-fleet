@@ -100,11 +100,11 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 			http.NotFound(w, r)
 		}
 	case p == "/favicon.ico" || p == "/apple-touch-icon.png":
-		s.siteAsset(w, r, strings.TrimPrefix(p, "/"))
+		s.siteIcon(w, r, strings.TrimPrefix(p, "/"))
 	case siteCrawlFiles[strings.TrimPrefix(p, "/")]:
 		s.siteCrawlFile(w, r, strings.TrimPrefix(p, "/"))
 	case p == "/favicon.svg":
-		s.siteAsset(w, r, "logo.svg")
+		s.siteIcon(w, r, "logo.svg")
 	case strings.HasPrefix(p, "/site/"):
 		s.siteAsset(w, r, strings.TrimPrefix(p, "/site/"))
 	case strings.HasPrefix(p, "/docs/"):
@@ -185,6 +185,28 @@ func (s *Server) siteAsset(w http.ResponseWriter, r *http.Request, name string) 
 		age = "604800"
 	}
 	serveFSFile(w, r, s.SiteFS, name, "public, max-age="+age)
+}
+
+// siteIcon serves a root tab icon of the site (/favicon.ico, /favicon.svg,
+// /apple-touch-icon.png) with appIconCache.
+func (s *Server) siteIcon(w http.ResponseWriter, r *http.Request, name string) {
+	if s.SiteFS == nil {
+		http.NotFound(w, r)
+		return
+	}
+	serveFSFile(w, r, s.SiteFS, name, appIconCache(r))
+}
+
+// appIconCache: a versioned icon URL (?v=AppIconV, what every page names) never
+// changes, so it is kept a year; the bare path — what a browser asks for on its
+// own, Safari first among them, and keeps for good once it has it — is fetched
+// again every time, so a new logo reaches it on the next visit. An icon is a
+// few KB.
+func appIconCache(r *http.Request) string {
+	if r.URL.Query().Get("v") != "" {
+		return "public, max-age=31536000, immutable"
+	}
+	return "no-cache"
 }
 
 // serveDoc serves the documentation page rest of lang: "" and "<dir>/" are
@@ -278,5 +300,5 @@ func (s *Server) serveAppIcon(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveFSFile(w, r, s.UI, strings.TrimPrefix(r.URL.Path, "/"), "public, max-age=86400")
+	serveFSFile(w, r, s.UI, strings.TrimPrefix(r.URL.Path, "/"), appIconCache(r))
 }
