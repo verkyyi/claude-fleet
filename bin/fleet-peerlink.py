@@ -13,7 +13,10 @@ bad (#2987) are each ruled out by construction and drilled in docs/dev/BREAK-IT.
   - a control file deleted under a live master: the file lives in
     $FLEET_CONF_DIR/peerlink/ (0700, never $TMPDIR), and every beat checks
     「file there · master alive · `ssh -O check` answers」 — any one off and the
-    master is killed and rebuilt (`peerlink-sock-deleted`);
+    master is killed and rebuilt (`peerlink-sock-deleted`) — except a check that only
+    did not answer while the master lives and its file is there: that is a strike
+    (a loaded machine answers late), and only FLEET_PEERLINK_CHECK_STRIKES (3) in a
+    row, each given FLEET_PEERLINK_CHECK_SECS (3 s), rebuild (`peerlink-check-slow`);
   - two keepers: `run` holds an flock on peerlink/.lock and re-checks every beat
     that the file it holds IS the path's — a second one exits at once, and one that
     lost its file to another quits (`peerlink-two-keepers`).
@@ -86,7 +89,7 @@ host key check the hub's word whatever address is dialled.
 
 state.json (peerlink/): {v, pid, ts, me, views, hub_down, links[{machine, login, host,
 route, sock, pid, phase up|connecting|verifying|down, since, last_check, rtt_ms, fails,
-err, bad_since, want_ts}], events[{ts, machine, login, what}], mode, peers_err} — C1's
+err, bad_since, want_ts, strikes}], events[{ts, machine, login, what}], mode, peers_err} — C1's
 top line, the doctor and C10 read it.
 
 Seams: FLEET_PEERLINK_SSH (else FLEET_REMOTE_SSH_CMD, else ssh) · FLEET_PEERLINK_CERT_CMD
@@ -145,6 +148,12 @@ BAD_WARN = fenv("FLEET_PEERLINK_BAD_WARN", 60)    # a link failing its check thi
 PEERS_SECS = fenv("FLEET_PEERLINK_PEERS_SECS", 60)  # how often the hub is asked for your logins
 IDLE_TICK = max(TICK, fenv("FLEET_PEERLINK_IDLE_TICK", 300))  # the quiet beat (#4359)
 ACTIVE_SECS = fenv("FLEET_PEERLINK_ACTIVE_SECS", 60)  # how long a request / event keeps the 2 s beat
+# an up link's `ssh -O check`: how long it may take, and how many in a row may fail
+# while the master lives and its file is there before the link is torn down — one
+# check that a loaded machine answers late is not a dead master (BREAK-IT
+# peerlink-check-slow: m5 at load 15 rebuilt a healthy link 3 times in an hour)
+CHECK_SECS = max(0.5, fenv("FLEET_PEERLINK_CHECK_SECS", 3))
+CHECK_STRIKES = max(1, int(fenv("FLEET_PEERLINK_CHECK_STRIKES", 3)))
 MAX_EVENTS = 50
 
 
@@ -450,17 +459,24 @@ def ssh_run(args, timeout=5, capture=False):
         return 127, "", str(e)
 
 
-def master_check(sock, host):
-    """`ssh -O check` → (ok, master pid or 0)."""
+def master_check_rc(sock, host):
+    """`ssh -O check` → (rc, master pid or 0, stderr); rc 124 = it did not answer
+    within CHECK_SECS, -1 = no control file."""
     if not os.path.exists(sock):
-        return False, 0
-    rc, _, err = ssh_run(["-S", sock, "-O", "check", host], timeout=3)
+        return -1, 0, ""
+    rc, _, err = ssh_run(["-S", sock, "-O", "check", host], timeout=CHECK_SECS)
     pid = 0
     if "pid=" in err:
         try:
             pid = int(err.split("pid=", 1)[1].split(")", 1)[0])
         except ValueError:
             pid = 0
+    return rc, pid, err
+
+
+def master_check(sock, host):
+    """`ssh -O check` → (ok, master pid or 0)."""
+    rc, pid, _ = master_check_rc(sock, host)
     return rc == 0, pid
 
 
@@ -550,6 +566,7 @@ class Link:
         self.last_probe = 0.0
         self.rebuild_why = ""
         self.last_loss = 0.0
+        self.strikes = 0            # `-O check`s failed in a row while the master lived
 
     def name(self):
         return "%s@%s" % (self.machine, self.login)
@@ -564,7 +581,8 @@ class Link:
         return {"machine": self.machine, "login": self.login, "host": self.host, "route": self.route, "port": self.port,
                 "sock": self.sock, "pid": self.pid, "phase": self.phase, "since": self.since,
                 "last_check": self.last_check, "rtt_ms": self.rtt_ms, "fails": self.fails,
-                "err": self.err, "bad_since": self.bad_since, "want_ts": self.want_ts}
+                "err": self.err, "bad_since": self.bad_since, "want_ts": self.want_ts,
+                "strikes": self.strikes}
 
 
 class Keeper:
@@ -662,6 +680,7 @@ class Keeper:
         unlink(l.sock)
         l.pid = 0
         l.phase = "down"
+        l.strikes = 0
         if why:
             self.event(l, why)
 
@@ -770,11 +789,29 @@ class Keeper:
         elif l.pid and not l.alive():
             why = "主进程没了"
         else:
-            ok, pid = master_check(l.sock, l.host)
-            if not ok:
-                why = "ssh -O check 不通"
+            rc, pid, err = master_check_rc(l.sock, l.host)
+            if rc != 0:
+                if not os.path.exists(l.sock):
+                    why = "控制文件没了"
+                elif l.pid and not l.alive():
+                    why = "主进程没了"
+                elif l.pid and l.strikes + 1 < CHECK_STRIKES:
+                    # the master lives and its file is there: a check that did not
+                    # answer (a loaded machine) is a strike, not a teardown — the
+                    # phase stays up, fails / err untouched; the event keeps the 2 s beat
+                    l.strikes += 1
+                    self.event(l, "检查没回应（%s，第 %d/%d 次；主进程还在，先不重建）" % (
+                        "超时 %gs" % CHECK_SECS if rc == 124 else
+                        "rc %s：%s" % (rc, (err.strip().splitlines() or ["?"])[-1][:80]),
+                        l.strikes, CHECK_STRIKES))
+                    return
+                else:
+                    why = "ssh -O check 不通" + ("（连续 %d 次）" % (l.strikes + 1) if l.strikes else "")
             elif pid and l.pid and pid != l.pid:
                 why = "控制文件换了主人（pid %s，不是 %s）" % (pid, l.pid)
+            elif l.strikes:
+                self.event(l, "检查恢复（之前 %d 次没回应）" % l.strikes)
+                l.strikes = 0
         if l.probe and not why:
             res, t0 = l.probe
             if res:
