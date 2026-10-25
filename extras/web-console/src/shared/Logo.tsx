@@ -1,11 +1,11 @@
-// Logo.tsx — ClaudeFleet's mark, drawn in the shared theme's colours
-// (extras/fleet-theme/logo.svg's shape; the colours are its variables).
+// Logo.tsx — the app icon (extras/fleet-theme/logo.svg's shape: a white Pac-Man
+// on a clay tile), drawn in the shared theme's clay. Headers wear the wordmark
+// (Wordmark.tsx); this is the square mark only.
 import type { FC } from "react";
 
 export const Logo: FC<{ className?: string }> = ({ className }) => (
   <svg viewBox="0 0 64 64" className={className} aria-hidden>
-    <rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)" />
-    <polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-    <polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+    <rect width="64" height="64" rx="15" fill="var(--fleet-clay)" />
+    <path fill="#ffffff" d="M30 32L48.71 41.53A21 21 0 1 1 48.71 22.47Z" />
   </svg>
 );

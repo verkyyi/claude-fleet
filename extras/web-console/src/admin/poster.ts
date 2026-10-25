@@ -1,6 +1,6 @@
 // poster.ts — a 试用二维码 as a poster to send a friend (claude-fleet CHZ0).
 // One picture, 1080 × 1440 (3:4 — what a WeChat chat shows whole and a phone
-// saves at full width): the mark, the product in one line, the code on a white
+// saves at full width): the wordmark, the product in one line, the code on a white
 // card with what it gives, three steps, and what to ask it. Drawn on a canvas in
 // the browser from the code's own qr.png (same origin, so the canvas stays
 // readable) — the hub builds nothing. The colours and the three families are
@@ -8,6 +8,7 @@
 // time, never spelled here. The words and the layout are plain functions so
 // test/poster.mjs can hold them without a browser.
 import { BRAND } from "../shared/brand.ts";
+import type { Wordmark } from "../shared/wordmark-parse.ts";
 
 export type PosterLang = "zh" | "en";
 export const W = 1080;
@@ -125,10 +126,12 @@ export function themeFromPage(el: Element = document.documentElement): PosterThe
 export type Ctx = Pick<CanvasRenderingContext2D,
   "fillStyle" | "strokeStyle" | "lineWidth" | "lineCap" | "lineJoin" | "font" | "textBaseline" | "textAlign" | "imageSmoothingEnabled" |
   "fillRect" | "fillText" | "measureText" | "beginPath" | "moveTo" | "lineTo" | "arc" | "roundRect" | "fill" | "stroke" | "drawImage" |
-  "save" | "restore" | "createRadialGradient" | "createLinearGradient">;
+  "save" | "restore" | "translate" | "scale" | "createRadialGradient" | "createLinearGradient">;
 
-// draw the poster; qr is the code's own picture (anything drawImage takes)
-export function drawPoster(g: Ctx, w: PosterWords, qr: CanvasImageSource | null, th: PosterTheme): void {
+// draw the poster; qr is the code's own picture (anything drawImage takes);
+// mark is the parsed wordmark (src/shared/wordmark-parse.ts) — none (the Node test,
+// which has no Path2D) draws the name as type in its place
+export function drawPoster(g: Ctx, w: PosterWords, qr: CanvasImageSource | null, th: PosterTheme, mark?: Wordmark): void {
   const font = (weight: number, px: number, fam: string) => `${weight} ${px}px ${fam}`;
   const text = (s: string, x: number, y: number, f: string, color: string) => {
     g.font = f;
@@ -158,30 +161,33 @@ export function drawPoster(g: Ctx, w: PosterWords, qr: CanvasImageSource | null,
   g.fillStyle = band;
   g.fillRect(0, 0, W, 10);
 
-  // the mark (logo.svg's shape) and the name
-  const mark = (x: number, y: number, s: number) => {
-    const k = s / 64;
-    g.fillStyle = th.surface;
-    g.beginPath();
-    g.roundRect(x, y, s, s, 15 * k);
-    g.fill();
-    g.strokeStyle = th.line;
-    g.lineWidth = 2;
-    g.stroke();
-    g.strokeStyle = th.clay;
-    g.lineCap = "round";
-    g.lineJoin = "round";
-    const poly = (pts: number[][], wd: number) => {
-      g.lineWidth = wd * k;
-      g.beginPath();
-      pts.forEach(([px, py], i) => (i ? g.lineTo(x + px * k, y + py * k) : g.moveTo(x + px * k, y + py * k)));
-      g.stroke();
-    };
-    poly([[14.4, 35.5], [21.6, 42], [14.4, 48.5]], 6);
-    poly([[35, 15], [47, 26], [35, 37]], 9);
-  };
-  mark(PAD, 72, 76);
-  text(w.brand, PAD + 76 + 24, 72 + 52, font(700, 42, th.display), th.ink);
+  // the wordmark (extras/fleet-theme/wordmark.svg): letters in ink, its o clay
+  if (mark && typeof Path2D !== "undefined") {
+    const [vx, vy, , vh] = mark.viewBox;
+    const k = 52 / vh;
+    g.save();
+    g.translate(PAD, 84);
+    g.scale(k, k);
+    g.translate(-vx, -vy);
+    g.lineCap = "butt";
+    g.lineJoin = "miter";
+    for (const p of mark.parts) {
+      const path = new Path2D(p.d);
+      const paint = (c: string) => (c === "currentColor" ? th.ink : c.toLowerCase() === "#d9765a" ? th.clay || c : c);
+      if (p.stroke && p.stroke !== "none") {
+        g.strokeStyle = paint(p.stroke);
+        g.lineWidth = p.strokeWidth ?? 1;
+        g.stroke(path);
+      }
+      if (p.fill && p.fill !== "none") {
+        g.fillStyle = paint(p.fill);
+        g.fill(path);
+      }
+    }
+    g.restore();
+  } else {
+    text(w.brand, PAD, 72 + 52, font(700, 48, th.display), th.ink);
+  }
   // the badge, top right
   g.font = font(600, 28, th.ui);
   const bw = g.measureText(w.badge).width + 48;

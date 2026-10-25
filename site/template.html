@@ -53,8 +53,8 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 /* nav — one quiet row; the language lives in the footer (T924) */
 .nav{position:sticky;top:0;z-index:30;background:rgba(25,24,42,.84);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--fleet-line-2)}
 .nav .wrap{display:flex;align-items:center;height:60px;gap:14px}
-.brand{display:flex;align-items:center;gap:10px;font:750 19px/1 var(--fleet-font-display)}
-.brand svg{width:30px;height:30px}
+.brand{display:flex;align-items:center;gap:10px;font:750 19px/1 var(--fleet-font-display);color:var(--fleet-ink)}
+.brand .wm{height:22px;width:199px}
 .brand .tag{margin-left:8px;font:500 12px/1.3 var(--fleet-font-ui);color:var(--fleet-ink-2)}
 .nav-r{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px}
 .nav-r a{color:var(--fleet-ink-2)} .nav-r a:hover{color:var(--fleet-ink)}
@@ -90,7 +90,7 @@ html[lang=zh-CN] .hero h1{font-size:54px;line-height:1.14;letter-spacing:0}
 .app{display:grid;grid-template-columns:200px minmax(0,1fr);height:calc(100% - 36px)}
 .sb{border-right:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:2px}
 .sb .bd{display:flex;align-items:center;gap:9px;padding:0 6px 10px;font:750 14px/1 var(--fleet-font-display)}
-.sb .bd svg{width:22px;height:22px}
+.sb .bd .wm{height:14px;width:127px}
 .sb .it{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sb .it.on{background:var(--accent)}
 .sb .it.end{color:var(--muted-foreground)}
@@ -182,7 +182,7 @@ footer .lang svg{width:13px;height:13px}
   .wrap{padding:0 20px}
   .nav .wrap{height:56px;gap:8px}
   .nav-r{gap:16px;font-size:14px}
-  .brand{font-size:17px} .brand svg{width:28px;height:28px}
+  .brand{font-size:17px} .brand .wm{height:19px;width:172px}
   .hero{padding:24px 0 20px}
   .grid{grid-template-columns:1fr;grid-template-areas:"say" "join" "demo"}
   .hero h1,html[lang=zh-CN] .hero h1{font-size:40px;margin-top:14px}
@@ -198,10 +198,10 @@ footer .lang svg{width:13px;height:13px}
 </head>
 <body>
 <a class="skip" href="#top">{{skip}}</a>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mk" viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)"/><polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="wxm" viewBox="0 0 24 24"><path fill="#fff" d="M9.2 4C5.2 4 2 6.7 2 10.1c0 1.9 1 3.6 2.6 4.7l-.6 2 2.3-1.2c.9.3 1.9.4 2.9.4h.6a5.4 5.4 0 0 1-.2-1.5c0-3.3 3.1-5.9 7-5.9h.6C16.6 5.9 13.2 4 9.2 4zM6.8 7.6a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm4.8 0a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zM16.6 10c-3.3 0-6 2.2-6 5s2.7 5 6 5c.7 0 1.4-.1 2-.3l1.9 1-.5-1.6c1.3-.9 2.6-2.4 2.6-4.1 0-2.8-2.7-5-6-5zm-2 2.6a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm4 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/></symbol></svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">{{fleet_wordmark}}<symbol id="wxm" viewBox="0 0 24 24"><path fill="#fff" d="M9.2 4C5.2 4 2 6.7 2 10.1c0 1.9 1 3.6 2.6 4.7l-.6 2 2.3-1.2c.9.3 1.9.4 2.9.4h.6a5.4 5.4 0 0 1-.2-1.5c0-3.3 3.1-5.9 7-5.9h.6C16.6 5.9 13.2 4 9.2 4zM6.8 7.6a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zm4.8 0a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8zM16.6 10c-3.3 0-6 2.2-6 5s2.7 5 6 5c.7 0 1.4-.1 2-.3l1.9 1-.5-1.6c1.3-.9 2.6-2.4 2.6-4.1 0-2.8-2.7-5-6-5zm-2 2.6a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm4 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/></symbol></svg>
 
 <header class="nav"><div class="wrap">
-  <a class="brand" href="{{path}}"><svg aria-hidden="true"><use href="#mk"/></svg>{{brand}}</a>
+  <a class="brand" href="{{path}}" aria-label="{{brand}}"><svg class="wm" aria-hidden="true"><use href="#wm"/></svg></a>
   <div class="nav-r">
     <a class="docs" href="{{docs_path}}">{{docs}}</a>
     <a href="/app" data-out>{{signin}}</a>
@@ -267,7 +267,7 @@ footer .lang svg{width:13px;height:13px}
       <div class="bar"><i></i><i></i><i></i><span class="url"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>__HOST__/app</span></div>
       <div class="app">
         <div class="sb">
-          <div class="bd"><svg><use href="#mk"/></svg>{{brand}}</div>
+          <div class="bd"><svg class="wm"><use href="#wm"/></svg></div>
           <div class="it on"><span class="spin" id="sb-1"></span>{{sb_1}}</div>
           <div class="it"><span class="ok">✓</span>{{sb_2}}</div>
           <div class="it"><span class="ok">✓</span>{{sb_3}}</div>

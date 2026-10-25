@@ -213,7 +213,7 @@ render() {  # <window> [extra kv…] — the line's plain text, off the 看台's
     "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$1" "${@:2}" | sed 's/#\[[^]]*\]//g'
 }
 L7=$(render "$W7")
-st_has "B: a window of this machine: the brand on the left (ZDYN)" "$L7" " ›› tokenman "
+st_has "B: a window of this machine: the brand on the left (ZDYN)" "$L7" " tokenman "
 st_hasnt "B: …no key: the session is the panel's" "$L7" "#7"
 st_has "B: …剩余 % off its own stamps" "$L7" "剩余 62%"
 st_has "B: …model · effort" "$L7" "Opus 5.5 · high"
@@ -223,7 +223,7 @@ st_has "B: …the ⌘P hint at 160" "$L7" "⌘P"
 # a phone (issue #3194, was #3006 C9): the % stays, no model
 L7n=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=40 "w=$W7" | sed 's/#\[[^]]*\]//g')
-st_has "B: 40 columns: the brand stays" "$L7n" " ›› tokenman "
+st_has "B: 40 columns: the brand stays" "$L7n" " tokenman "
 st_has "B: …the % stays on a phone (#3194)" "$L7n" "62%"
 st_hasnt "B: …no model" "$L7n" "Opus"
 # no issue, the hub's task record (issue #3325): the bar's number is T<n>
@@ -233,11 +233,11 @@ st_hasnt "B: a task record: no T number on the line (ZDYN)" "$(render "$W7t")" "
 tn set-window-option -t "$W7t" @issue 3312
 L7t=$(render "$W7t")
 st_hasnt "B: …nor an issue's #N" "$L7t" "#3312"
-st_has "B: …the brand" "$L7t" " ›› tokenman "
+st_has "B: …the brand" "$L7t" " tokenman "
 tn kill-window -t "$W7t"
 L8=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W8")
-st_has "B: a window on the refresh loop's cache: its name after the brand (ZDYN)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "›› tokenman · 修缓存"
+st_has "B: a window on the refresh loop's cache: its name after the brand (ZDYN)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "tokenman · 修缓存"
 st_has "B: …its ctx columns" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "40% · Sonnet 5.5 · medium"
 st_hasnt "B: …a perm needs: no ! glyph (ZDYN: the panel's)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" " ! #"
 st_hasnt "B: …and no red line" "$L8" "bg=#f7768e"
@@ -253,7 +253,7 @@ st_hasnt "B: …no ‹ i/n › (#3194)" "$L9" "‹"
 tn select-window -t "$V$W7" 2>/dev/null   # no client switch: tmux redraws the 看台 anyway
 waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin1' | tail -n 2 | grep -q '剩余 62%'" \
   || st_miss "B: the client's bottom line is the bar" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)"
-st_has "B: …at the bottom, with the brand" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)" "›› tokenman"
+st_has "B: …at the bottom, with the brand" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)" "tokenman"
 
 # ============================================================================
 # C. cur= follows the window

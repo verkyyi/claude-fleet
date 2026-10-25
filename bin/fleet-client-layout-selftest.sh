@@ -46,20 +46,20 @@ for cols in (140, 80, 45):
     w[cols] = text
     eq("%d: the line is exactly the width" % cols, tb.cells(text), cols)
     eq("%d: no colour while all is well" % cols, bg, None)
-    has("%d: the brand on the left" % cols, text, " ›› tokenman ")
-    eq("%d: …and first" % cols, text.startswith(" ›› tokenman "), True)
+    has("%d: the brand on the left" % cols, text, " tokenman ")
+    eq("%d: …and first" % cols, text.startswith(" tokenman "), True)
     has("%d: the %% never dropped" % cols, text, "62%")
-    has("%d: the name after the brand" % cols, text, " ›› tokenman · 机器上")
+    has("%d: the name after the brand" % cols, text, " tokenman · 机器上")
     for gone in ("↻", "#1894", "在干活", "claude-fleet", "‹", "@mac-b", "mac-b", "●", "working"):
         has("%d: no %s (ZDYN: the panel's)" % (cols, gone), text, gone, False)
-eq("140: all of it", w[140].split(), ["››", "tokenman", "·", rec["title"], "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5",
+eq("140: all of it", w[140].split(), ["tokenman", "·", rec["title"], "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5",
                                       "·", "high", "·", "⌘P"])
-eq("80: PR, 62% Opus 5.5 high", w[80].split(), ["››", "tokenman", "·", rec["title"], "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
-eq("45: the brand, the name clipped, the %", w[45].split(), ["››", "tokenman", "·", "机器上一直有会话在忙，…", "62%"])
+eq("80: PR, 62% Opus 5.5 high", w[80].split(), ["tokenman", "·", rec["title"], "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
+eq("45: the brand, the name clipped, the %", w[45].split(), ["tokenman", "·", "机器上一直有会话在忙，也照…", "62%"])
 t, _ = tb.fit(rec, 30, now=1060)
-eq("30: the mark alone, the name clipped", t.split(), ["››", "·", "机器上一直有会话…", "62%"]); eq("30: still the width", tb.cells(t), 30)
+eq("30: the brand, the name clipped", t.split(), ["tokenman", "·", "机器上一直…", "62%"]); eq("30: still the width", tb.cells(t), 30)
 t, _ = tb.fit(dict(rec, title=""), 80, now=1060)
-eq("no title: the brand alone", t.split()[:3], ["››", "tokenman", "PR"]); eq("no title: still the width", tb.cells(t), 80)
+eq("no title: the brand alone", t.split()[:2], ["tokenman", "PR"]); eq("no title: still the width", tb.cells(t), 80)
 # every state draws the same line (ZDYN): no glyph, no word, no red
 def at(cols=80, **kw):
     return tb.fit(dict(rec, **kw), cols, now=1060)
@@ -69,11 +69,11 @@ for kw in (dict(state="needs", kind="ask", q="要你确认：删掉旧分支吗�
            dict(state="looping"), dict(key="")):
     eq("%s: the line unchanged" % kw, at(**kw), same)
 has("asking: no question on the line", at(state="needs", kind="ask", q="要你确认")[0], "要你确认", False)
-has("asking: the name stays", at(state="needs", kind="ask", q="要你确认")[0], " ›› tokenman · 机器上")
+has("asking: the name stays", at(state="needs", kind="ask", q="要你确认")[0], " tokenman · 机器上")
 eq("no red background left", hasattr(tb, "BG_ASK"), False)
 t, _ = at(pr="merged"); has("done: PR 已合并", t, "PR 已合并 · 62%")
 t, bg = at(lost=True)
-eq("lost: grey", bg, tb.BG_DOWN); has("lost: the brand", t, " ›› tokenman "); has("lost: the machine", t, "· mac-b 连不上")
+eq("lost: grey", bg, tb.BG_DOWN); has("lost: the brand", t, " tokenman "); has("lost: the machine", t, "· mac-b 连不上")
 t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% mac-b 连不上", t, "62% mac-b 连不上")
 eq("lost 45: still the width", tb.cells(t), 45)
 t, bg = tb.fit(rec, 80, down="1000", now=1004)
@@ -89,20 +89,20 @@ eq("lost wins, asking or not: grey", tb.fit(dict(rec, state="needs", kind="ask",
 t, _ = at(140, pr="#7…"); has("140: checks running", t, "PR #7 …")
 t, _ = at(140, pr="#7✗"); has("140: checks red", t, "PR #7 ✗")
 t, _ = at(80, pr="#7✗"); has("80: no checks", t, "PR #7 ·")
-# the brand's colours: the logo's clay mark, the ink name, bold — kept on a grey line too
+# the brand's colours: the wordmark's — ink name, its o (the Pac-Man) clay, bold — kept on a grey line too
 brand = [p for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "brand"]
-eq("brand: clay mark, ink name", [(p[0], p[1]) for p in brand], [("››", "#d9765a"), (" tokenman", "#f3ede6")])
+eq("brand: ink name, clay o", [(p[0], p[1]) for p in brand], [("t", "#f3ede6"), ("o", "#d9765a"), ("kenman", "#f3ede6")])
 grey = tb.paint(*tb.layout(rec, 80, route="relay", now=1060))
 has("grey: the brand keeps its clay", grey, "#[fg=#d9765a,bold]"); has("grey: on grey", grey, "#[bg=%s]" % tb.BG_DOWN)
 has("paint: the name bold", tb.paint(*tb.layout(rec, 80, now=1060)), "#[fg=#f3ede6,bold]")
-has("stand-in: the brand", tb.quick_fmt(), "››#[nobold]#[fg=#f3ede6#,bold] tokenman")
+has("stand-in: the brand", tb.quick_fmt(), "t#[nobold]#[fg=#d9765a#,bold]o#[nobold]#[fg=#f3ede6#,bold]kenman")
 has("stand-in: the window's name", tb.quick_fmt(), "#{=/64/…:window_name}")
 has("stand-in: reads no state stamp", tb.quick_fmt(), "@claude_state", False)
 os.environ["FLEET_GLYPHS"] = "ascii"
-t, _ = at(140); has("ascii: >> tokenman", t, " >> tokenman "); has("ascii: PR #N +", t, "PR #1885 +")
+t, _ = at(140); has("ascii: the name as it is", t, " tokenman "); has("ascii: PR #N +", t, "PR #1885 +")
 del os.environ["FLEET_GLYPHS"]
 os.environ["NO_COLOR"] = "1"
-eq("NO_COLOR: the brand uncoloured", [p[1] for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "brand"], [None, None])
+eq("NO_COLOR: the brand uncoloured", [p[1] for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "brand"], [None, None, None])
 del os.environ["NO_COLOR"]
 eq("↻ and ∙ are one cell, as the panel counts", (tb.cells("↻"), tb.cells("∙"), tb.cells("中")), (1, 1, 2))
 # the context reading on every width (issue #2717, #3194): its three forms
@@ -129,7 +129,7 @@ import ast, re
 os.environ["FLEET_UI_LANG"] = "en"
 tb._WORDS.clear(); tb.FV._WORDS.clear()
 t, _ = tb.fit(dict(rec, state="done", pr="merged"), 140, now=1060)
-has("en: the brand", t, " ›› tokenman "); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
+has("en: the brand", t, " tokenman "); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
 has("en: PR closed", tb.fit(dict(rec, pr="closed"), 140, now=1060)[0], "PR closed")
 has("en: unreachable", tb.fit(rec, 80, down="1", now=1060, pin="direct", tries="3")[0], "mac-b unreachable · retry 3")
 has("en: via relay", tb.fit(rec, 80, route="relay", now=1060)[0], "mac-b via relay")

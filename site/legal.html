@@ -24,7 +24,7 @@ svg.i{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke
 .nav{position:sticky;top:0;z-index:30;background:rgba(25,24,42,.84);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--fleet-line-2)}
 .nav .wrap{display:flex;align-items:center;height:60px;gap:14px}
 .brand{display:flex;align-items:center;gap:10px;font:750 19px/1 var(--fleet-font-display)}
-.brand img{width:30px;height:30px}
+.brand img{height:22px;width:auto}
 .nav-r{margin-left:auto;display:flex;align-items:center;gap:22px;font-size:15px}
 .nav-r a{color:var(--fleet-ink-2)} .nav-r a:hover{color:var(--fleet-ink)}
 .lang{display:inline-flex;align-items:center;gap:5px;font:400 13px/1 var(--fleet-font-ui);color:var(--fleet-muted)!important}
@@ -61,7 +61,7 @@ footer .disc a{text-decoration:underline;text-underline-offset:2px}
 </head>
 <body>
 <header class="nav"><div class="wrap">
-  <a class="brand" href="{{path}}"><img src="/site/logo.svg" alt="">{{brand}}</a>
+  <a class="brand" href="{{path}}"><img src="/site/wordmark.svg" alt="{{brand}}"></a>
   <div class="nav-r">
     <a href="{{path}}">{{legal_home}}</a>
     <a class="lang" href="{{legal_other}}" hreflang="{{other_hreflang}}" lang="{{other_hreflang}}" aria-label="{{lang_group}}: {{other_name}}"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>{{lang_switch}}</a>

@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { TrialCode } from "../api";
 import { lang, t } from "../i18n";
+import { WORDMARK } from "@/shared/Wordmark";
 import { drawPoster, H, posterWords, themeFromPage, W, type PosterLang } from "../poster";
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -33,7 +34,7 @@ export async function renderPoster(c: TrialCode, l: PosterLang, defaultTerms: st
   const cv = document.createElement("canvas");
   cv.width = W;
   cv.height = H;
-  drawPoster(cv.getContext("2d")!, posterWords(c, l, defaultTerms), qr, th);
+  drawPoster(cv.getContext("2d")!, posterWords(c, l, defaultTerms), qr, th, WORDMARK);
   return cv.toDataURL("image/png");
 }
 

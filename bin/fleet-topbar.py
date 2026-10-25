@@ -15,7 +15,7 @@ its record, switch-bar.json, went with issue #3008.)
     fleet-topbar.py inbox-text <cols> [now=] [g=<cache dir>]
         its plain text, `-` when the row is folded (selftest)
 
-The left is tokenman's brand and the session's name (task ZDYN): 「›› tokenman ·
+The left is tokenman's brand and the session's name (task ZDYN): 「tokenman ·
 修缓存」, the same in every state — the session's state, its #N and its question
 are the ⌘P panel's, where they are seen anyway. The name is clipped with `…`. The right is the window's resources, at
 three widths: a phone (~45 columns) has 「62%」; from 80 「PR #N」 and 「62% Opus
@@ -47,9 +47,8 @@ FG, DIM, HL, OK, WARN, BAD = "#a9b1d6", "#565f89", "#7aa2f7", "#9ece6a", "#e0af6
 BG_DOWN = "#3b4261"
 # the brand on the line's left (task ZDYN): extras/web-console/src/shared/brand.ts's
 # name, extras/fleet-theme/theme.css's clay (--fleet-clay) and ink (--fleet-ink)
-BRAND, BRAND_MARK = "tokenman", "\u203a\u203a"
+BRAND = "tokenman"
 BRAND_CLAY, BRAND_INK = "#d9765a", "#f3ede6"
-BRAND_MIN = 40
 
 # the design's three widths: a phone (~45) has the %; from MID the PR, the model
 # and effort; from WIDE the PR's checks, 「剩余」 and the ⌘P hint
@@ -168,23 +167,20 @@ def upstream_text():
     return say("topbar_upstream_fmt", say("topbar_up_" + b[0]), b[1]) if b else ""
 
 
-def brand_parts(cols):
-    """The line's left: tokenman's mark and name, the same in every state (task
+def brand_parts():
+    """The line's left: tokenman's name, the same in every state and width (task
     ZDYN) — what the session is doing is the ⌘P panel's, never this line's. The
-    mark is the logo's two chevrons (extras/fleet-theme/logo.svg) in its clay;
-    under BRAND_MIN columns the mark alone. FLEET_GLYPHS=ascii: `>>`;
-    NO_COLOR: uncoloured."""
-    mark = ">>" if os.environ.get("FLEET_GLYPHS") == "ascii" else BRAND_MARK
+    wordmark's colours (extras/fleet-theme/wordmark.svg): the name in ink, bold,
+    its o — the wordmark's Pac-Man — in clay. NO_COLOR: uncoloured."""
     color = FV.color_on()
-    out = [(" ", None, ""), (mark, BRAND_CLAY if color else None, "brand")]
-    if cols >= BRAND_MIN:
-        out.append((" " + BRAND, BRAND_INK if color else None, "brand"))
-    return out + [(" ", None, "")]
+    ink, clay = (BRAND_INK, BRAND_CLAY) if color else (None, None)
+    return [(" ", None, ""), (BRAND[0], ink, "brand"), (BRAND[1], clay, "brand"),
+            (BRAND[2:], ink, "brand"), (" ", None, "")]
 
 
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
     """The line as a list of (text, colour, range) parts plus its background
-    (None / BG_DOWN): ›› tokenman · title …… PR · context (· 今天 N) (· 上游连不上)
+    (None / BG_DOWN): tokenman · title …… PR · context (· 今天 N) (· 上游连不上)
     (· machine) (· ⌘P). The left is the brand and the session's name (task
     ZDYN): its state, its #N and its question are the ⌘P panel's. Grey while its machine is
     out of reach or on the relay — a connection's trouble, not the session's.
@@ -192,7 +188,7 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
     now = int(time.time()) if now is None else now
     trouble = trouble_text(rec, down, route, via, pin, tries, cols)
     bg = BG_DOWN if trouble else None
-    left = brand_parts(cols)
+    left = brand_parts()
     title = rec.get("title") or ""
     right = []
     if rec.get("pr") and cols >= MID:
@@ -595,7 +591,7 @@ def quick_fmt():
     """The stand-in line, pure tmux format: the brand (brand_parts, task ZDYN) and
     the new window's name; its right lands with this run's line."""
     out = ""
-    for text, colour, _ in brand_parts(BRAND_MIN):
+    for text, colour, _ in brand_parts():
         out += "#[fg=%s#,bold]%s#[nobold]" % (colour, text) if colour else text
     # a #{?…} branch itself (own_window's last): its own top-level commas escaped too
     return out + "#{?window_name,#[fg=%s]· #[fg=%s]#{=/64/…:window_name},}#[default]" % (DIM, FG)

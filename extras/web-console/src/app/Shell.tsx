@@ -27,6 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BRAND } from "@/shared/brand";
 import { Logo } from "@/shared/Logo";
+import { Wordmark } from "@/shared/Wordmark";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
@@ -147,8 +148,8 @@ const Side: FC = () => (
   <Sidebar collapsible="icon" className="border-sidebar-border">
     <SidebarHeader className="flex-row items-center gap-1 px-3 pt-3 pb-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:px-2">
       <Link to="/" className="text-foreground flex min-w-0 items-center gap-2 no-underline" aria-label={BRAND}>
-        <Logo className="size-7 shrink-0" />
-        <span className="font-display truncate text-[16px] leading-none font-semibold tracking-tight group-data-[collapsible=icon]:hidden">{BRAND}</span>
+        <Logo className="hidden size-7 shrink-0 group-data-[collapsible=icon]:block" />
+        <Wordmark className="h-[15px] shrink-0 group-data-[collapsible=icon]:hidden" />
       </Link>
       <span className="ms-auto flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">
         <QuotaPillOf />
@@ -207,8 +208,7 @@ const TopBar: FC<{ title: string }> = ({ title }) => {
       viewAs ? "pt-1" : "pt-[calc(env(safe-area-inset-top)+0.25rem)]")}>
       {bar === "list" ? (
         <Link to="/" className="text-foreground flex min-h-11 items-center gap-2.5 ps-2 no-underline" aria-label={BRAND}>
-          <Logo className="size-7 shrink-0" />
-          <span className="font-display text-[17px] leading-none font-semibold tracking-tight">{BRAND}</span>
+          <Wordmark className="h-[17px] shrink-0" />
         </Link>
       ) : (
         <>

@@ -8,6 +8,7 @@ import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.a
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector.aui";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useFleetChat } from "@/chat";
+import wordmarkSvg from "../../../fleet-theme/wordmark.svg?raw";
 
 type Chat = ReturnType<typeof useFleetChat>;
 const ChatCtx = createContext<Chat | null>(null);
@@ -38,11 +39,30 @@ const ToolStep: ToolCallMessagePartComponent = (p) => {
   return <ToolFallback {...p} status={status} toolName={summary || p.toolName} />;
 };
 
+// the app icon (extras/fleet-theme/logo.svg's shape: a white Pac-Man on clay)
 const Logo: FC<{ className?: string }> = ({ className }) => (
   <svg viewBox="0 0 64 64" className={className} aria-hidden>
-    <rect width="64" height="64" rx="15" fill="var(--fleet-bg)" stroke="var(--fleet-line)" />
-    <polyline points="14.4,35.5 21.6,42 14.4,48.5" fill="none" stroke="var(--fleet-clay)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-    <polyline points="35,15 47,26 35,37" fill="none" stroke="var(--fleet-clay)" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+    <rect width="64" height="64" rx="15" fill="var(--fleet-clay)" />
+    <path fill="#ffffff" d="M30 32L48.71 41.53A21 21 0 1 1 48.71 22.47Z" />
+  </svg>
+);
+
+// the brand's text logo, read off extras/fleet-theme/wordmark.svg (the one
+// source): its letters are currentColor, so they wear the header's foreground
+const WORDMARK = (() => {
+  const vb = /viewBox="([^"]*)"/.exec(wordmarkSvg)?.[1] ?? "0 0 0 0";
+  const parts = [...wordmarkSvg.matchAll(/<path\b[^>]*>/g)].map(([tag]) => {
+    const a = (n: string) => new RegExp(`\\s${n}="([^"]*)"`).exec(tag)?.[1];
+    return { d: a("d") ?? "", fill: a("fill") ?? "currentColor", stroke: a("stroke"), sw: a("stroke-width") };
+  });
+  const [, , w, h] = vb.split(/\s+/).map(Number);
+  return { vb, parts, ratio: `${w} / ${h}` };
+})();
+const Wordmark: FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox={WORDMARK.vb} className={className} role="img" aria-label="tokenman"
+    style={{ width: "auto", aspectRatio: WORDMARK.ratio, overflow: "visible" }}>
+    <title>tokenman</title>
+    {WORDMARK.parts.map((p, i) => <path key={i} d={p.d} fill={p.fill} stroke={p.stroke} strokeWidth={p.sw} />)}
   </svg>
 );
 
@@ -118,8 +138,10 @@ export function App() {
       <TooltipProvider>
         <div className="flex flex-col overflow-hidden" style={{ height: "var(--app-h, 100dvh)" }}>
           <header className="border-border/70 bg-background/85 sticky top-0 z-20 flex items-center gap-2.5 border-b px-4 pt-[calc(env(safe-area-inset-top)+0.6rem)] pb-2.5 backdrop-blur-md">
-            <Logo className="size-7 shrink-0" />
-            <h1 className="font-display text-[17px] leading-none font-semibold tracking-tight">fleet 对话</h1>
+            <h1 className="flex items-center gap-2 leading-none">
+              <Wordmark className="h-[18px] shrink-0" />
+              <span className="text-muted-foreground font-display text-[15px] font-medium">对话</span>
+            </h1>
             {notice ? <span className="text-destructive ms-auto truncate text-sm">{notice}</span> : null}
           </header>
           <main className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
