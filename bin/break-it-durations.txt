@@ -109,6 +109,7 @@
 1.1 cred-codex-native-initial
 0.5 cred-codex-refs-overflow
 1.5 cred-codex-reopen
+1.0 cred-codex-handoff
 0.6 cred-codex-path-open
 0.5 cred-enforce-fails-no-lease
 0.5 cred-existing-unseparated

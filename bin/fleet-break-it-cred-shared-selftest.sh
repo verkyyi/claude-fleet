@@ -31,6 +31,9 @@
 #                       only the paths Codex CLI uses go on; every other path, spelling or
 #                       method is a 403 that never reaches chatgpt.com (the hub's half:
 #                       go test github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy TestCodexPathAllowList)
+#   cred-codex-handoff  bin/fleet-cred-proxy.py codex_sync / codex_merge / save_codex_state /
+#                       codex_sole_vouches: a restart's old process keeps recording refs the
+#                       new one would overwrite; a never-switched session's unseen ref stays put
 #   cred-ctl-burst      bin/fleet_cred_ctl.py connect (T903): a burst of node-token asks past the
 #                       control socket's backlog is retried, not read as «no node token»;
 #                       bin/fleet-cred-proxy.py listens with a backlog of 128 (the agent's half:
@@ -76,7 +79,23 @@ drill_cred_codex_refs_overflow() {
     Capacity.test_affinity_pin_encrypted_tool_and_unknown 2>&1) \
     || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT="超过 4096 条引用的长会话仍回它唯一的订阅；换过订阅、来源不一或没超限时查不到的引用照旧拒绝"
+  WHAT="超过 4096 条引用的长会话仍回它唯一的订阅；换过订阅或来源不一照旧拒绝"
+}
+
+# A shared-proxy restart: the old process still records its last answers' refs
+# while the new one has loaded the routing file; the new one's save overwrote
+# them and every next turn was 409 «continuation source unknown», unlogged.
+drill_cred_codex_handoff() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" \
+    Capacity.test_handoff_keeps_refs_the_old_process_records \
+    Capacity.test_unseen_ref_routes_only_a_never_switched_session \
+    Capacity.test_native_first_and_resume_through_http_proxy 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="重启交接时旧进程记下的引用合并进新进程、不再被覆盖；只用过一个订阅的会话查不到的引用回原订阅，换过订阅/来源/冲突照旧拒绝；每个 409 都记 deny"
 }
 
 drill_cred_codex_reopen() {
