@@ -8,7 +8,7 @@ import path from "node:path";
 
 const dir = path.resolve(import.meta.dirname, "../dist-proto");
 const out = path.resolve(import.meta.dirname, "out");
-const MIME = { ".woff2": "font/woff2", ".svg": "image/svg+xml", ".png": "image/png" };
+const MIME = { ".woff2": "font/woff2", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
 const dataURL = (f) => `data:${MIME[path.extname(f)]};base64,${fs.readFileSync(path.join(dir, f)).toString("base64")}`;
 
 let html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
@@ -18,7 +18,7 @@ html = html.replace(/<link rel="stylesheet"[^>]*href="\.\/([^"]+)"[^>]*>/g, (_, 
 });
 html = html.replace(/<script type="module" crossorigin src="\.\/([^"]+)"><\/script>/g, (_, f) =>
   `<script type="module">${fs.readFileSync(path.join(dir, f), "utf8").replace(/<\/script/g, "<\\/script")}</script>`);
-html = html.replace(/href="\.\/(assets\/[^"]+\.(?:svg|png))"/g, (_, f) => `href="${dataURL(f)}"`);
+html = html.replace(/href="\.\/(assets\/[^"]+\.(?:svg|png|ico))"/g, (_, f) => `href="${dataURL(f)}"`);
 if (/(src|href)="\.\//.test(html)) throw new Error("inline.mjs: an asset was left behind");
 
 const page = `<!doctype html>
