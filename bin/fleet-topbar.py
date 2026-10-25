@@ -15,18 +15,17 @@ its record, switch-bar.json, went with issue #3008.)
     fleet-topbar.py inbox-text <cols> [now=] [g=<cache dir>]
         its plain text, `-` when the row is folded (selftest)
 
-Three widths, the design's: a phone (~45 columns) has the glyph, #N, the title
-and 「62%」; from 80 the state's word, 「PR #N」 and 「62% Opus 5.5 high」; from
-140 the repo after the title, the PR's checks, 「剩余 62% · Opus 5.5 · high」 and
-「⌘P」 at the right. On every width 「今天 12.3 万」 after the context when the
-hub recorded pool tokens for the session today (issue #3377, the record's
-tokens_today — none ⇒ nothing, never 0). The title is clipped with `…`. The six glyphs and their
-colours are fleet_view.py's table (! x » ✓ ∙ ?, FLEET_GLYPHS=ascii, NO_COLOR):
-the whole line red while the session waits on you (its question in the title's
-place), grey with ? while its machine is out of reach or on the relay — the only
-time the machine is written. The line says the session and nothing else (T701):
-every reminder is the message row's, a second status line that is there only
-while a message not seen yet is live (bin/fleet_notice.py's book).
+The left is Tokenman's brand and nothing else (task ZDYN): 「›› Tokenman」, the
+same in every state — the session's state, its #N and its title are the ⌘P
+panel's, where they are seen anyway. The right is the window's resources, at
+three widths: a phone (~45 columns) has 「62%」; from 80 「PR #N」 and 「62% Opus
+5.5 high」; from 140 the PR's checks, 「剩余 62% · Opus 5.5 · high」 and 「⌘P」.
+On every width 「今天 12.3 万」 after the context when the hub recorded pool
+tokens for the session today (issue #3377, the record's tokens_today — none ⇒
+nothing, never 0). The whole line grey while its machine is out of reach or on
+the relay — the only time the machine is written. The line says the session and
+nothing else (T701): every reminder is the message row's, a second status line
+that is there only while a message not seen yet is live (bin/fleet_notice.py's book).
 """
 import json
 import base64
@@ -43,14 +42,17 @@ BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
 import fleet_view as FV   # noqa: E402 — the ⌘P panel: its glyph table is the one table (#3194)
 
-# colours: the 看台 line's own (the old client's stage palette); the glyphs' are the
-# panel's 16-colour palette numbers (FV.GLYPH_COLORS), as tmux colourN
+# colours: the 看台 line's own (the old client's stage palette)
 FG, DIM, HL, OK, WARN, BAD = "#a9b1d6", "#565f89", "#7aa2f7", "#9ece6a", "#e0af68", "#f7768e"
-BG_ASK, BG_DOWN = "#f7768e", "#3b4261"
+BG_DOWN = "#3b4261"
+# the brand on the line's left (task ZDYN): extras/web-console/src/shared/brand.ts's
+# name, extras/fleet-theme/theme.css's clay (--fleet-clay) and ink (--fleet-ink)
+BRAND, BRAND_MARK = "Tokenman", "\u203a\u203a"
+BRAND_CLAY, BRAND_INK = "#d9765a", "#f3ede6"
+BRAND_MIN = 40
 
-# the design's three widths: a phone (~45) has the glyph, #N, the title and the %;
-# from MID the state's word, the PR, the model and effort; from WIDE the repo, the
-# PR's checks, 「剩余」 and the ⌘P hint
+# the design's three widths: a phone (~45) has the %; from MID the PR, the model
+# and effort; from WIDE the PR's checks, 「剩余」 and the ⌘P hint
 MID, WIDE = 80, 140
 
 
@@ -83,22 +85,6 @@ def clip(text, room):
             break
         out, used = out + c, used + w
     return out + "…"
-
-
-def sym_of(rec, trouble=False):
-    """The record's glyph class off the panel's table: lost wins (out of reach,
-    the reading stale, on the relay), then the state."""
-    state = rec.get("state") or "idle"
-    return FV.sym_of(state, trouble)
-
-
-def state_word(rec, sym):
-    """在干活 · 做完了 · 已退出 · 失败 · 空闲 — the panel's words; ! and ? say none."""
-    if sym in ("needs", "lost"):
-        return ""
-    if sym == "fail":
-        return FV.state_words("failed" if rec.get("state") == "failed" else "exited")
-    return FV.state_words({"work": "working", "done": "done", "exited": "exited"}.get(sym, "idle"))
 
 
 # @remote_via's route word for the hub relay: fleet-connect.py route_label's, a value
@@ -182,27 +168,31 @@ def upstream_text():
     return say("topbar_upstream_fmt", say("topbar_up_" + b[0]), b[1]) if b else ""
 
 
+def brand_parts(cols):
+    """The line's left: Tokenman's mark and name, the same in every state (task
+    ZDYN) — what the session is doing is the ⌘P panel's, never this line's. The
+    mark is the logo's two chevrons (extras/fleet-theme/logo.svg) in its clay;
+    under BRAND_MIN columns the mark alone. FLEET_GLYPHS=ascii: `>>`;
+    NO_COLOR: uncoloured."""
+    mark = ">>" if os.environ.get("FLEET_GLYPHS") == "ascii" else BRAND_MARK
+    color = FV.color_on()
+    out = [(" ", None, ""), (mark, BRAND_CLAY if color else None, "brand")]
+    if cols >= BRAND_MIN:
+        out.append((" " + BRAND, BRAND_INK if color else None, "brand"))
+    return out + [(" ", None, "")]
+
+
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
     """The line as a list of (text, colour, range) parts plus its background
-    (None / BG_ASK / BG_DOWN) — the ⌘P panel's blueprint (issue #3194, EPIC #3178):
-    glyph · (word ·) #N · title (· repo) …… PR · context (· 今天 N) (· 上游连不上) (· machine) (· ⌘P).
-    The whole line red while the session waits on you (a question or an OK — the
-    question's own words take the title's place), grey while out of reach or on
-    the relay. Pure: the selftest reads `fit`."""
+    (None / BG_DOWN): ›› Tokenman …… PR · context (· 今天 N) (· 上游连不上)
+    (· machine) (· ⌘P). The left is the brand alone (task ZDYN): the session's
+    state, its #N and its title are the ⌘P panel's. Grey while its machine is
+    out of reach or on the relay — a connection's trouble, not the session's.
+    Pure: the selftest reads `fit`."""
     now = int(time.time()) if now is None else now
     trouble = trouble_text(rec, down, route, via, pin, tries, cols)
-    sym = sym_of(rec, bool(trouble))
-    bg = BG_DOWN if trouble else BG_ASK if sym == "needs" else None
-    scol = "colour%d" % FV.GLYPH_COLORS[sym] if FV.color_on() else None
-    left = [(" ", None, ""), (FV.glyphs()[sym], scol, "sym")]
-    word = state_word(rec, sym) if cols >= MID else ""
-    if word:
-        left.append((" " + word + " ·", scol, ""))
-    if rec.get("key"):
-        left += [(" ", None, ""), (rec["key"], HL, "key")]
-    left.append((" ", None, ""))
-    title = (rec.get("q") if sym == "needs" else "") or rec.get("title") or ""
-    repo = " · " + rec["repo"] if rec.get("repo") and cols >= WIDE else ""
+    bg = BG_DOWN if trouble else None
+    left = brand_parts(cols)
     right = []
     if rec.get("pr") and cols >= MID:
         right.append([pr_part(rec["pr"], cols)])
@@ -225,11 +215,7 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
     for group in right:
         rtext += ([(sep, DIM, "")] if rtext else []) + group
     rtext.append((" ", None, ""))
-    room = cols - sum(cells(t) for t, _, _ in left) - sum(cells(t) for t, _, _ in rtext) - 1
-    if repo and cells(repo) > room - 6:
-        repo = ""                 # the title's start before the repo
-    title = clip(title, max(0, room - cells(repo)))
-    parts = left + [(title, FG, "title"), (repo, DIM, "")]
+    parts = list(left)
     pad = cols - sum(cells(t) for t, _, _ in parts) - sum(cells(t) for t, _, _ in rtext)
     parts.append((" " * max(1, pad), None, ""))
     return parts + rtext, bg
@@ -254,20 +240,20 @@ def render(args, inbox=False):
 
 
 def paint(parts, bg):
-    """The (text, colour, range) parts as tmux format, on `bg`: a red line is
-    dark text throughout, a grey one plain text but for its yellow ?."""
-    fg_all = "#1a1b26" if bg == BG_ASK else FG if bg == BG_DOWN else None
+    """The (text, colour, range) parts as tmux format, on `bg`: a grey line is
+    plain text but for the brand, which keeps its own colours."""
+    fg_all = FG if bg == BG_DOWN else None
     out = "#[bg=%s]" % bg if bg else ""
     if fg_all:
         out += "#[fg=%s]" % fg_all
     for text, colour, rng in parts:
         if not text:
             continue
-        own = colour if bg == BG_DOWN and rng == "sym" else None
+        own = colour if rng == "brand" else None
         style = "fg=%s" % (own or fg_all or colour) if (colour or fg_all) else ""
-        bold = ",bold" if rng in ("key", "title") and bg != BG_DOWN else ""
+        bold = ",bold" if rng == "brand" else ""
         seg = tmux_text(text)
-        if rng and rng != "sym":
+        if rng:
             seg = "#[range=user|%s]%s#[norange]" % (rng, seg)
         if style:
             seg = "#[%s%s]%s#[nobold]" % (style, bold, seg)
@@ -598,21 +584,14 @@ def branch_text(fmt):
 
 
 def quick_fmt():
-    """The stand-in line, pure tmux format: the window's own @claude_state as the
-    panel's glyph (sym_of's classes), its #N (@issue) else T<n> (@task), its name."""
-    g, color = FV.glyphs(), FV.color_on()
-
-    def glyph(sym):
-        return ("#[fg=colour%d]%s#[default]" % (FV.GLYPH_COLORS[sym], g[sym]) if color else g[sym])
-    sym = glyph("idle")
-    for state, cls in (("done", "done"), ("landed", "done"), ("working", "work"), ("looping", "work"),
-                       ("preparing", "work"), ("waking", "work"), ("failed", "fail"), ("exited", "fail"),
-                       ("error", "fail"), ("needs", "needs")):
-        sym = "#{?#{==:#{@claude_state},%s},%s,%s}" % (state, branch_text(glyph(cls)), sym)
-    key = ("#{?#{m/r:^[0-9]+$,#{@issue}},#[fg=%s#,bold]###{@issue}#[nobold] ,"
-           "#{?#{m/r:^T[1-9][0-9]*$,#{@task}},#[fg=%s#,bold]#{@task}#[nobold] ,}}" % (HL, HL))
+    """The stand-in line, pure tmux format: the brand (brand_parts, task ZDYN) —
+    the left is the same for every window, so nothing of the new window is read;
+    its right lands with this run's line."""
+    out = ""
+    for text, colour, _ in brand_parts(BRAND_MIN):
+        out += "#[fg=%s#,bold]%s#[nobold]" % (colour, text) if colour else text
     # a #{?…} branch itself (own_window's last): its own top-level commas escaped too
-    return " %s %s#[fg=%s#,bold]#{=/64/…:window_name}#[default]" % (sym, key, FG)
+    return out + "#[default]"
 
 
 def own_window(win, line, guard=''):
@@ -670,7 +649,7 @@ def main(argv):
         text, bg = fit(rec, int(argv[1]), kv.get("down", ""), kv.get("rr", ""),
                        int(kv["now"]) if kv.get("now", "").isdigit() else None,
                        upstream=upstream_text() if kv.get("ups") == "1" else "")
-        print("%s\t%s" % ({None: "-", BG_ASK: "red", BG_DOWN: "grey"}[bg], text))
+        print("%s\t%s" % ({None: "-", BG_DOWN: "grey"}[bg], text))
         return 0
     if argv[:1] == ["inbox-text"] and len(argv) >= 2:
         kv = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
