@@ -113,6 +113,25 @@ class Capacity(unittest.TestCase):
         proxy=server(p.Proxy)
         return proxy,attempts
 
+    def test_standalone_search_http(self):
+        proxy, attempts = self.native_http_fixture()
+        token = self.t.keys.mint('', 'native-search', 86400, capacity=True)
+        vectors = json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())
+        body = next(v['body'] for v in vectors if v['name'] == 'standalone-search-native')
+        def request(value):
+            conn = p.http.client.HTTPConnection('127.0.0.1', proxy.server_port, timeout=5)
+            try:
+                conn.request('POST', '/codex/alpha/search', json.dumps(value).encode(),
+                             {'Authorization':'Bearer '+token, 'Content-Type':'application/json'})
+                answer = conn.getresponse(); answer.read(); return answer.status
+            finally:
+                conn.close()
+        self.assertEqual(request(body), 200)
+        self.assertEqual(attempts[0][1], body)
+        invalid = copy.deepcopy(body); invalid['commands']['open'] = [dict(ref_id='turn0search0')]
+        self.assertEqual(request(invalid), 409)
+        self.assertEqual(len(attempts), 1)
+
     def test_native_first_and_resume_through_http_proxy(self):
         proxy,attempts=self.native_http_fixture()
         vectors=json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())

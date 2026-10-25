@@ -1878,9 +1878,15 @@ person's session.
   The local runner keeps its key/pass and bounded stdout/stderr in memory.
   Codex gets a fresh credential-free home and the Fleet provider's environment
   credential. An outer named permissions profile permits only this run's
-  directories and required runtime libraries; the inner CLI retains
-  `workspace-write`. Unsupported profile versions fail closed. Native sandbox
-  tests verify that a sibling run cannot be read. Ephemeral execution avoids
+  directories and required runtime libraries for the entire process tree. The
+  inner CLI uses `danger-full-access` only inside that mandatory OS boundary:
+  a second Seatbelt sandbox fails on macOS before executing file tools.
+  Unsupported outer profile versions fail closed. Native CLI tool-loop tests
+  verify output writes, denied sibling reads/writes and excluded shell credentials.
+  Codex 0.162 standalone live search is explicitly enabled on the Fleet provider.
+  Its authenticated `POST /v1/proxy/codex/alpha/search` route accepts self-contained
+  text and fresh `search_query` commands only; opaque/browser-reference commands
+  remain refused. Article fetches still use the controlled helper below. Ephemeral execution avoids
   persisting Codex session transcripts. `fleet-svc-fetch.py URL` reads public HTTP(S) pages with GET only,
   no proxy/cookies, checked and pinned DNS, redirects rechecked, and a 2 MB cap.
   Failure tails are redacted before reaching the hub audit.

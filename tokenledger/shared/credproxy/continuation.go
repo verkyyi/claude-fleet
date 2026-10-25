@@ -111,6 +111,14 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 		route.Unknown = true
 		return route
 	}
+	if strings.HasSuffix(r.URL.Path, "/alpha/search") {
+		route.Unknown = route.Unknown || !codexSearchIndependent(root)
+		for ref := range refs {
+			route.References = append(route.References, ref)
+		}
+		route.Independent = !route.Unknown && len(refs) == 0
+		return route
+	}
 	allowed := strings.Fields("model instructions input tools tool_choice parallel_tool_calls stream store include reasoning text temperature top_p max_output_tokens max_tool_calls truncation metadata prompt_cache_key prompt_cache_retention safety_identifier service_tier background context_management previous_response_id conversation stream_options client_metadata")
 	for key := range root {
 		if !contains(allowed, key) {

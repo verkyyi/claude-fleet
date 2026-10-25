@@ -85,7 +85,8 @@ def codex_boundary(codex, command, p, home):
     """Outer read boundary; workspace-write alone permits reading other runs.
 
     Unsupported Codex permission profiles fail closed before model execution.
-    The inner execution keeps the requested workspace-write posture.
+    The outer profile is the OS boundary for the CLI and every child.
+    macOS forbids applying a second Seatbelt sandbox inside it.
     """
     executable = os.path.realpath(codex)
     rules = {':minimal': 'read', ':workspace_roots': 'write',
@@ -119,12 +120,15 @@ def run_codex(p, inputs, pass_, deadline, t0):
     if env('FLEET_RUN_TAG'):
         cenv['FLEET_RUN_TAG'] = env('FLEET_RUN_TAG')
     provider = {'name': 'fleet', 'base_url': env('FLEET_SVC_CENTRAL').rstrip('/') + '/v1/proxy/codex',
-                'env_key': 'FLEET_CODEX_SESSION_CRED', 'wire_api': 'responses'}
+                'env_key': 'FLEET_CODEX_SESSION_CRED', 'wire_api': 'responses', 'supports_standalone_web_search': True}
     # TOML inline table, with JSON quoting of each string value.
     provider_toml = '{' + ','.join(k + '=' + json.dumps(v) for k, v in provider.items()) + '}'
-    cmd = [codex, '--search', 'exec', '--json', '--ephemeral', '-s', 'workspace-write', '-C', p['work'],
+    # No inner sandbox: the mandatory outer service profile restricts the whole
+    # process tree, including reads. Never launch this command without that wrapper.
+    cmd = [codex, '--search', 'exec', '--json', '--ephemeral', '-s', 'danger-full-access', '-C', p['work'],
            '--skip-git-repo-check', '--add-dir', p['out'],
            '-c', 'model_provider="fleet"', '-c', 'model_providers.fleet=' + provider_toml,
+           '-c', 'features.standalone_web_search=true', '-c', 'web_search="live"',
            '-c', 'features.apps=false', '-c', 'features.plugins=false', '-c', 'analytics.enabled=false',
            '-c', 'shell_environment_policy.exclude=["FLEET_CODEX_SESSION_CRED"]',
            '-c', 'sandbox_workspace_write.network_access=true', task]
@@ -380,7 +384,7 @@ def session_run(cmd, cwd, cenv, timeout):
     import signal
     import threading
     proc = subprocess.Popen(cmd, cwd=cwd, env=cenv, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, start_new_session=True)
+                            stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, start_new_session=True)
     if env('FLEET_SVC_PGID_FILE'):
         write(env('FLEET_SVC_PGID_FILE'), '%d\n' % proc.pid, 0o600)
     tails = [bytearray(), bytearray()]
