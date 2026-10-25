@@ -456,9 +456,7 @@ if [ -z "$PRESTART_DIR" ] && [ -n "${FLEET_PRESTART:-}" ] && [ -d "$FLEET_PRESTA
 fi
 # a prestart says it is done however it ends (a refusal too): its reader waits on it
 [ -n "$PRESTART_DIR" ] && trap ': > "$PRESTART_DIR/done" 2>/dev/null' EXIT
-HERE_FIRST=0
 if [ "$NODE" = here-first ]; then
-  HERE_FIRST=1
   if fleet_session_cap_ok "$SESS" >/dev/null 2>&1; then NODE=local; HERE_ADMITTED=1
   else NODE=auto; fi
 fi
