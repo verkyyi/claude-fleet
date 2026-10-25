@@ -94,9 +94,11 @@ event-stream 译回 Anthropic SSE。没准、模型没映射、Bedrock 拒了：
   "secret":{"aws_access_key_id":"…","aws_secret_access_key":"…","aws_region":"us-west-2"}}`
   （region 可省，默认 `us-west-2`）。它是 kind `bedrock`、source_class `api` 的一行，
   **不是订阅**：不出现在订阅列表、不租给机器、不绑会话（`GET` 的答案里单列在 `bedrock`）。
-- **模型**：`claude-opus-5-5` → `us.anthropic.claude-opus-5-5`——表只有一张，
-  `tokenledger/shared/credproxy/bedrock.go` 的 `BedrockModels`；跨区推理前缀按钥匙
-  的 region 加（us. / eu. / apac.）。上线前对照账号的 Bedrock 控制台核一遍 ID。
+- **模型**：`claude-opus-5-5` → `global.anthropic.claude-opus-5-5`——表只有一张，
+  `tokenledger/shared/credproxy/bedrock.go` 的 `BedrockModels`；推理配置由 hub 设置
+  `fleet.fallback.bedrock.profile` 定：`global`（默认，全球路由，牌价）或 `geo`（按钥匙
+  的 region 加 us. / eu. / apac.，留在该地域，约贵 10%）。上线前对照账号的 Bedrock
+  控制台核一遍 ID 和配额（新账号的新模型配额可能是 0，要开 Account and billing 工单）。
 - **计量**：Bedrock 服务的请求照样记一行 `pool_usage`，`source=bedrock`、account
   `pool/<钥匙名>`、人是通行证的人（也算进个人额度）；其余行 `source=subscription`。
   `GET /v1/admin/usage` 多了 `sources`（本周按来源的 token / 请求数）和 `bedrock`
