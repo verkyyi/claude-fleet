@@ -15,9 +15,9 @@ its record, switch-bar.json, went with issue #3008.)
     fleet-topbar.py inbox-text <cols> [now=] [g=<cache dir>]
         its plain text, `-` when the row is folded (selftest)
 
-The left is Tokenman's brand and nothing else (task ZDYN): 「›› Tokenman」, the
-same in every state — the session's state, its #N and its title are the ⌘P
-panel's, where they are seen anyway. The right is the window's resources, at
+The left is Tokenman's brand and the session's name (task ZDYN): 「›› Tokenman ·
+修缓存」, the same in every state — the session's state, its #N and its question
+are the ⌘P panel's, where they are seen anyway. The name is clipped with `…`. The right is the window's resources, at
 three widths: a phone (~45 columns) has 「62%」; from 80 「PR #N」 and 「62% Opus
 5.5 high」; from 140 the PR's checks, 「剩余 62% · Opus 5.5 · high」 and 「⌘P」.
 On every width 「今天 12.3 万」 after the context when the hub recorded pool
@@ -184,15 +184,16 @@ def brand_parts(cols):
 
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
     """The line as a list of (text, colour, range) parts plus its background
-    (None / BG_DOWN): ›› Tokenman …… PR · context (· 今天 N) (· 上游连不上)
-    (· machine) (· ⌘P). The left is the brand alone (task ZDYN): the session's
-    state, its #N and its title are the ⌘P panel's. Grey while its machine is
+    (None / BG_DOWN): ›› Tokenman · title …… PR · context (· 今天 N) (· 上游连不上)
+    (· machine) (· ⌘P). The left is the brand and the session's name (task
+    ZDYN): its state, its #N and its question are the ⌘P panel's. Grey while its machine is
     out of reach or on the relay — a connection's trouble, not the session's.
     Pure: the selftest reads `fit`."""
     now = int(time.time()) if now is None else now
     trouble = trouble_text(rec, down, route, via, pin, tries, cols)
     bg = BG_DOWN if trouble else None
     left = brand_parts(cols)
+    title = rec.get("title") or ""
     right = []
     if rec.get("pr") and cols >= MID:
         right.append([pr_part(rec["pr"], cols)])
@@ -216,6 +217,13 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
         rtext += ([(sep, DIM, "")] if rtext else []) + group
     rtext.append((" ", None, ""))
     parts = list(left)
+    if title:
+        # the session's name after the brand (ZDYN): its title, clipped — never the
+        # question it asks, never its state (both the panel's)
+        room = cols - sum(cells(t) for t, _, _ in left) - sum(cells(t) for t, _, _ in rtext) - 4
+        title = clip(title, max(0, room))
+        if title:
+            parts += [("· ", DIM, ""), (title, FG, "title"), (" ", None, "")]
     pad = cols - sum(cells(t) for t, _, _ in parts) - sum(cells(t) for t, _, _ in rtext)
     parts.append((" " * max(1, pad), None, ""))
     return parts + rtext, bg
@@ -584,14 +592,13 @@ def branch_text(fmt):
 
 
 def quick_fmt():
-    """The stand-in line, pure tmux format: the brand (brand_parts, task ZDYN) —
-    the left is the same for every window, so nothing of the new window is read;
-    its right lands with this run's line."""
+    """The stand-in line, pure tmux format: the brand (brand_parts, task ZDYN) and
+    the new window's name; its right lands with this run's line."""
     out = ""
     for text, colour, _ in brand_parts(BRAND_MIN):
         out += "#[fg=%s#,bold]%s#[nobold]" % (colour, text) if colour else text
     # a #{?…} branch itself (own_window's last): its own top-level commas escaped too
-    return out + "#[default]"
+    return out + "#{?window_name,#[fg=%s]· #[fg=%s]#{=/64/…:window_name},}#[default]" % (DIM, FG)
 
 
 def own_window(win, line, guard=''):
