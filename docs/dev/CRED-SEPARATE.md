@@ -406,3 +406,11 @@ check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
 `bin/fleet-credsep-selftest.sh` · `bin/fleet-cred-shared-selftest.sh` (the
 machine's shared proxy, `machine install|refresh|join|status`,
 `fleet-credsep-launch.py shared`, `fleet-cred-proxy.py serve --shared`).
+
+### Codex 会话重开后的续接
+
+重开同一个 Worker 会产生新的代理凭据 SID。代理通过请求里的历史引用，
+在同一租户、同一 Worker 的已记录响应中找回原订阅；撤销旧凭据不会删除这份历史归属。
+只有精确记录且来源一致的引用能跨 SID 接续，不继承旧 SID 的引用淘汰兜底。
+未知引用、来源冲突、订阅不再授权或来源身份变化仍会拒绝。已有的卡住会话在代理更新后
+可在原会话重试，无须更换订阅或清空历史。

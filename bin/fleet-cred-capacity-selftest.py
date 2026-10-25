@@ -312,6 +312,80 @@ class Capacity(unittest.TestCase):
         raw=Path(self.tmp.name,'codex-routing.json').read_text()
         self.assertNotIn('opaque',raw);self.assertNotIn('response-a',raw)
 
+    def test_reopened_worker_http_continuation(self):
+        proxy,attempts=self.native_http_fixture()
+        vectors=json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())
+        first,resume=[case['body'] for case in vectors[:2]]
+        worker='11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222'
+        def mint(sid):
+            result=p.ctl_handle(dict(op='mint',provider='codex',sid=sid,worker=worker),self.t)
+            self.assertTrue(result['ok'])
+            return result['token']
+        def request(token,body):
+            conn=p.http.client.HTTPConnection('127.0.0.1',proxy.server_port,timeout=5)
+            try:
+                conn.request('POST','/codex/responses',json.dumps(body).encode(),
+                    {'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+                answer=conn.getresponse();return answer.status,answer.read()
+            finally:conn.close()
+        original=mint('original')
+        self.assertEqual(request(original,first)[0],200)
+        # Simulate an older daemon's record: ownership only in workers.json.
+        self.t.codex_state['sessions']['original'].pop('worker',None)
+        reopened=mint('reopened')
+        self.install((10,.1))  # independent requests now prefer another source
+        before=copy.deepcopy(self.t.codex_state)
+        independent,refs,unknown=p.codex_context('POST','/codex/responses',{},json.dumps(resume).encode())
+        self.assertEqual(self.t.codex_pick('reopened',independent,refs,unknown,preview=True)['account'],'b')
+        self.assertEqual(self.t.codex_state,before)
+        status,raw=request(reopened,resume)
+        self.assertEqual(status,200,raw)
+        self.assertEqual([a for a,_ in attempts],['fixture-b','fixture-b'])
+        self.assertEqual(attempts[-1][1],resume)
+        self.assertTrue(refs.issubset(self.t.codex_state['sessions']['reopened']['refs']))
+        # Revoke removes the old bearer and workers.json row, not provenance.
+        self.assertTrue(p.ctl_handle(dict(op='revoke',sid='original'),self.t)['ok'])
+        self.assertNotIn('original',p.read_json(Path(self.tmp.name,'workers.json'),{}))
+        restored=p.Tenant(self.cfg);restored.held=self.t.held
+        restored.capacity_cache=self.t.capacity_cache;restored.capacity_until=time.time()+30
+        self.assertEqual(restored.codex_pick('reopened',False,refs)['account'],'b')
+        self.assertEqual(request(reopened,resume)[0],200)
+        self.assertEqual(request(original,resume)[0],401)
+        del self.t.codex_state['sessions']['original']
+        self.assertEqual(request(mint('third'),resume)[0],200)
+        # Exact origin checks still run at the HTTP boundary after recovery.
+        source=Path(self.cfg.codex_homes,'b','auth.json')
+        source.write_text(json.dumps(dict(tokens=dict(access_token='fake-replaced',account_id='fixture-replaced'))))
+        self.assertEqual(request(reopened,resume)[0],409)
+        self.assertEqual(len(attempts),4)
+
+    def test_reopened_worker_rejects_unproven_history(self):
+        worker='11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222'
+        p.write_json(Path(self.tmp.name,'workers.json'),dict(old=worker,new=worker,conflict=worker))
+        ref=p.codex_ref('id','recorded');missing=p.codex_ref('id','unseen')
+        src=p.codex_ref('account','original-source')
+        self.t.codex_record('old','a',[ref],src)
+        for sid,refs in [('new',[ref,missing]),('other',[ref])]:
+            with self.assertRaises(ValueError):self.t.codex_pick(sid,False,refs)
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[],True)
+        # An old session's eviction fallback is never inherited by a new SID.
+        self.t.codex_state['sessions']['old']['evicted_origin']='a\0'+src
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[missing])
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[ref],pin='b')
+        self.t.codex_limits['a']=time.time()+60
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[ref])
+        self.t.codex_limits.clear()
+        self.t.held=lambda provider:['b']
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[ref])
+        self.t.held=lambda provider:['a','b']
+        self.t.codex_record('conflict','b',[ref],p.codex_ref('account','different-source'))
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[ref])
+        self.t.codex_state['sessions']['conflict']['refs'][ref]=None
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[ref])
+        del self.t.codex_state['sessions']['conflict']
+        self.t.codex_state['sessions']['new']=dict(refs={ref:None})
+        with self.assertRaises(ValueError):self.t.codex_pick('new',False,[ref])
+
     def test_long_session_past_ref_cap_stays_on_its_only_subscription(self):
         # A Codex session resends its whole history each turn; past 4096 recorded
         # references the table used to be wiped, and the next turn's old refs read
