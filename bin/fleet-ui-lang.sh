@@ -1341,6 +1341,12 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     zh:topbar_ago_fmt)          printf '%s 分钟前' "${1:-}" ;;
     en:topbar_ago_fmt)          printf '%s min ago' "${1:-}" ;;
     zh:topbar_today_fmt)        printf '今天 %s' "${1:-}" ;;
+    zh:topbar_parked)           printf '已停放' ;;
+    en:topbar_parked)           printf 'parked' ;;
+    zh:topbar_parked_wide)      printf '已停放 · 打字回车接回' ;;
+    en:topbar_parked_wide)      printf 'parked · type, Enter resumes' ;;
+    zh:topbar_waking)           printf '接回中…' ;;
+    en:topbar_waking)           printf 'resuming…' ;;
     en:topbar_today_fmt)        printf '%s today' "${1:-}" ;;
     zh:topbar_pr_merged)        printf 'PR 已合并' ;;
     en:topbar_pr_merged)        printf 'PR merged' ;;

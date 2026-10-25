@@ -201,6 +201,12 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
         # what the session used today on the pool (issue #3377): the hub's count,
         # never a 0 when none is recorded
         right.append([(say("topbar_today_fmt", FV.tokens_short(tok)), DIM, "")])
+    park = rec.get("state")
+    if park in ("parked", "waking"):
+        # the parked window's line (task EQBE) — its saved screen carries no
+        # 「已停放」 row of its own any more
+        right.insert(0, [(say("topbar_waking" if park == "waking" else
+                              "topbar_parked_wide" if cols >= MID else "topbar_parked"), HL, "park")])
     if upstream:
         right.append([(upstream, BAD, "upstream")])
     if trouble:
@@ -280,7 +286,8 @@ def paint(parts, bg):
 
 US = "\x1f"
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
-                     "#{@claude_state}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
+                     # parked (task EQBE): the park page draws no row of its own
+                     "#{?@parked,#{?@park_waking,waking,parked},#{@claude_state}}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
                      "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
                      "#{window_name}", "#{@task}"])
 TASK_RE = re.compile(r"T[1-9][0-9]{0,17}")
@@ -422,6 +429,8 @@ def node_record(kv):
                "node": pnode or here, "lost": False, "wid": wid}
     if not peer:
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
+        if p[4] in ("parked", "waking"):
+            rec["state"] = p[4]    # its own @parked beats the hub's copy (task EQBE)
         if rec["state"] == "needs":
             rec["q"] = asked(sock, win) or rec.get("q", "")
     rec["here"] = not peer     # this machine's own window: its proxy's upstream is its road (T657)

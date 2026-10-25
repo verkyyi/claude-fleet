@@ -240,7 +240,8 @@ tf set-option -w -t sw:pk @parked 1
 printf rc0 > "$WORK/pk/mode"; : > "$WORK/pk/go"
 waitfor "pk: the wrapper holds it parked" eval '[ -n "$(o pk @park_held)" ]'
 eq "pk: a parked window reads idle, never exited" "done" "$(o pk @claude_state)"
-waitfor "pk: it says how it comes back" screen_has pk '已停放'
+sleep 1; CHECKS=$((CHECKS + 1))
+screen_has pk '已停放' && fail "pk: the parked screen drew a row of its own (task EQBE: the top line says it)"
 CHECKS=$((CHECKS + 1)); eq_recycles 0 || fail "pk: parking recycled the window"
 printf '在吗？' > "$WORK/pk/seed"
 tf set-option -w -t sw:pk @park_wake "$WORK/pk/seed"

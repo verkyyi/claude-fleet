@@ -281,7 +281,8 @@ fleet_launch_cfg() {   # [composer args…]
     fi
   fi
   # where this session's configuration comes from (EPIC #1855 C6) — only with a personal layer
-  [ -n "$say" ] && fleet_launch_say "配置 $say"
+  # — never on a wake out of a park (task EQBE): the resumed screen stays the conversation's
+  [ -n "$say" ] && [ "${FLEET_PARK_RESUME:-}" != 1 ] && fleet_launch_say "配置 $say"
   [ -n "$locks" ] && fleet_launch_say "locked agent config overridden on this login: $locks (issue #1782)"
   return 0
 }
