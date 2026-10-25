@@ -16,6 +16,10 @@
 #                        (required for user pods; unset = the hub alone, WORKERS=0)
 #   ACME_EMAIL           Let's Encrypt's contact                                      (required)
 #   HUB_HOST             core.tokenman.io
+#   EXTRA_HOSTS          more names served by the same hub, space-separated, each in
+#                        the certificate extra-tls (e.g. HUB_HOST=tokenman.io
+#                        EXTRA_HOSTS="www.tokenman.io core.tokenman.io": the apex
+#                        is the address, the old one keeps answering nodes)
 #   AWS_REGION           us-west-2
 #   STORAGE_CLASS        local-path (k3s') · gp3 (EBS CSI, needs the instance role — README)
 #   LETSENCRYPT_SERVER   prod · staging
@@ -37,6 +41,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 REPO_DIR=${REPO_DIR:-$(cd "$here/../../.." && pwd)}
 OVERLAY=$REPO_DIR/deploy/k8s/overlays/aws-k3s
 HUB_HOST=${HUB_HOST:-core.tokenman.io}
+EXTRA_HOSTS=${EXTRA_HOSTS:-}
 AWS_REGION=${AWS_REGION:-us-west-2}
 STORAGE_CLASS=${STORAGE_CLASS:-local-path}
 LETSENCRYPT_SERVER=${LETSENCRYPT_SERVER:-prod}
@@ -274,6 +279,24 @@ render() {
           -e "s#https://acme-v02.api.letsencrypt.org/directory#$issuer#g" \
           -e "s#core\.tokenman\.io#$HUB_HOST#g"
   rm -rf "$tree"
+  extra_ingress
+}
+
+# EXTRA_HOSTS: one more Ingress to the same hub, its own certificate.
+extra_ingress() {
+  local h
+  [ -n "$EXTRA_HOSTS" ] || return 0
+  printf -- '---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n'
+  printf '  name: ccquota-hub-extra\n  namespace: fleet-hub\n  annotations:\n'
+  printf '    cert-manager.io/cluster-issuer: letsencrypt\n'
+  printf '    traefik.ingress.kubernetes.io/router.middlewares: fleet-hub-redirect-https@kubernetescrd\n'
+  printf 'spec:\n  ingressClassName: traefik\n  tls:\n    - secretName: extra-tls\n      hosts:\n'
+  for h in $EXTRA_HOSTS; do printf '        - %s\n' "$h"; done
+  printf '  rules:\n'
+  for h in $EXTRA_HOSTS; do
+    printf '    - host: %s\n      http:\n        paths:\n          - path: /\n            pathType: Prefix\n' "$h"
+    printf '            backend:\n              service:\n                name: ccquota-hub\n                port:\n                  number: 80\n'
+  done
 }
 
 apply_overlay() {
