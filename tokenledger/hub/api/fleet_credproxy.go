@@ -122,8 +122,13 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	}
 	// Over the person's budget (claude-fleet#1977): refused like a pass,
 	// with its own code — the proxy answers it without retrying.
+	// Over their organization's (task PNWW): org_budget_exceeded.
 	if st, err := s.personBudgetState(c.Principal, s.budgetClock()); err == nil && st.Over {
-		out.Valid, out.Error, out.Reason = false, PersonBudgetExceeded, st.Message
+		code := PersonBudgetExceeded
+		if st.Error == OrgBudgetExceeded {
+			code = OrgBudgetExceeded
+		}
+		out.Valid, out.Error, out.Reason = false, code, st.Message
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
@@ -286,7 +291,8 @@ func (s *Server) sessionBindChoices(principal, endpointID, provider string) ([]s
 		})
 		out = append(out, mine...)
 	}
-	return s.dedupCredentials(s.credPolicyFilter(out, pol)), nil
+	// the person's pools in order (task PNWW): own → organization → platform
+	return s.dedupCredentials(pol.Pools.order(s.credPolicyFilter(out, pol))), nil
 }
 
 // noBindWhy is what refused each of provider's accounts (claude-fleet#3713):

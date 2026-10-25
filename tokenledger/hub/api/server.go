@@ -927,6 +927,15 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(CredProxyUsagePath, s.handleCredProxyUsage)
 		mux.HandleFunc("/v1/node/usage", s.handleNodeUsage)
 		mux.Handle("/v1/fleet/person-usage", s.viewerOnly(http.HandlerFunc(s.handleFleetPersonUsage)))
+		// Organizations, membership, pools and an organization's budget and
+		// usage (task PNWW): a member reads their own, an organization's
+		// admin manages theirs, an admin everything — each handler decides.
+		mux.Handle(OrgsPath, s.viewerOnly(http.HandlerFunc(s.handleOrgs)))
+		mux.Handle(OrgMembersPath, s.viewerOnly(http.HandlerFunc(s.handleOrgMembers)))
+		mux.Handle(OrgBudgetPath, s.viewerOnly(http.HandlerFunc(s.handleOrgBudget)))
+		mux.Handle(OrgUsagePath, s.viewerOnly(http.HandlerFunc(s.handleOrgUsage)))
+		mux.Handle(PoolsPath, s.viewerOnly(http.HandlerFunc(s.handlePools)))
+		mux.Handle(PoolMovePath, s.viewerOnly(http.HandlerFunc(s.handlePoolMove)))
 		// 我的用量 in one answer (claude-fleet#3227): the viewer's own limit,
 		// days, models and where it went — off pool_usage, never the pool.
 		mux.Handle("/v1/me/usage", s.viewerOnly(http.HandlerFunc(s.handleMeUsage)))

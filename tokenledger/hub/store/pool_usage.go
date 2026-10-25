@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS pool_usage (
   at_unix     INTEGER NOT NULL,
   repo        TEXT NOT NULL DEFAULT '',
   issue       INTEGER NOT NULL DEFAULT 0,
-  tenant      TEXT NOT NULL DEFAULT ''
+  tenant      TEXT NOT NULL DEFAULT '',
+  org_id      TEXT NOT NULL DEFAULT '',
+  pool_id     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS pool_usage_principal_at ON pool_usage(principal, at_unix);
 CREATE INDEX IF NOT EXISTS pool_usage_at ON pool_usage(at_unix);`
@@ -63,6 +65,12 @@ type PoolUsage struct {
 	// Tenant is a service run's tenant (claude-fleet#4006): the
 	// space:ws:<id> its pass was minted for; '' on every person's row.
 	Tenant string `json:"tenant,omitempty"`
+	// OrgID and PoolID are stamped when the row is written (task PNWW): the
+	// person's organization and the pool of the subscription the request
+	// rode, as they were then — a later move never re-files an old row.
+	// '' on every row written before the columns, and on a service run's.
+	OrgID  string `json:"org_id,omitempty"`
+	PoolID string `json:"pool_id,omitempty"`
 
 	// Read off the scan only (EventUsageSince, claude-fleet#3406): the
 	// endpoint and login that reported it, the machine it ran on, and the
@@ -84,8 +92,14 @@ func (s *Store) ensurePoolUsage() error {
 	if _, err := s.write.Exec(s.d.ddl(poolUsageSchema)); err != nil {
 		return fmt.Errorf("create pool usage table: %w", err)
 	}
-	// A service run's tenant (claude-fleet#4006).
-	return s.addColumn("pool_usage", "tenant", "TEXT NOT NULL DEFAULT ''")
+	// A service run's tenant (claude-fleet#4006); the org and pool (task PNWW).
+	for _, c := range []string{"tenant", "org_id", "pool_id"} {
+		if err := s.addColumn("pool_usage", c, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	_, err := s.write.Exec(`CREATE INDEX IF NOT EXISTS pool_usage_org_at ON pool_usage(org_id, at_unix)`)
+	return err
 }
 
 // AddPoolUsage writes one row. A row with nothing in it is skipped.
@@ -99,11 +113,14 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 	if u.Requests <= 0 {
 		u.Requests = 1
 	}
+	if err := s.stampPoolUsage(&u); err != nil {
+		return err
+	}
 	_, err := s.write.Exec(`INSERT INTO pool_usage (principal, worker_id, account, provider, model,
-		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokens_in, cache_write, cache_read, tokens_out, requests, at_unix, repo, issue, tenant, org_id, pool_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.Principal, u.WorkerID, u.Account, u.Provider, u.Model,
-		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant)
+		u.In, u.CacheWrite, u.CacheRead, u.Out, u.Requests, u.At.Unix(), u.Repo, u.Issue, u.Tenant, u.OrgID, u.PoolID)
 	return err
 }
 
@@ -111,7 +128,7 @@ func (s *Store) AddPoolUsage(u PoolUsage) error {
 // principal "" is everyone, a zero until is now and onward.
 func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUsage, error) {
 	q := `SELECT principal, worker_id, account, provider, model, tokens_in, cache_write, cache_read,
-		tokens_out, requests, at_unix, repo, issue, tenant FROM pool_usage WHERE at_unix >= ?`
+		tokens_out, requests, at_unix, repo, issue, tenant, org_id, pool_id FROM pool_usage WHERE at_unix >= ?`
 	args := []any{since.Unix()}
 	if !until.IsZero() {
 		q += ` AND at_unix < ?`
@@ -131,7 +148,7 @@ func (s *Store) PoolUsageFor(principal string, since, until time.Time) ([]PoolUs
 		var u PoolUsage
 		var at int64
 		if err := rows.Scan(&u.Principal, &u.WorkerID, &u.Account, &u.Provider, &u.Model, &u.In, &u.CacheWrite,
-			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant); err != nil {
+			&u.CacheRead, &u.Out, &u.Requests, &at, &u.Repo, &u.Issue, &u.Tenant, &u.OrgID, &u.PoolID); err != nil {
 			return nil, err
 		}
 		u.At = time.Unix(at, 0).UTC()

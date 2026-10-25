@@ -59,6 +59,31 @@ export type HubUser = {
   via?: string[];
 };
 
+// Organizations and pools (task PNWW): /v1/fleet/orgs · /orgs/members · /pools
+export type Org = {
+  org_id: string;
+  name: string;
+  kind: "platform" | "trial" | "customer";
+  status: "active" | "disabled";
+  allow_platform_pool: boolean;
+  members: number;
+  pools: number;
+  budget?: string;
+  manage: boolean;
+};
+export type OrgMember = { principal: string; login: string; org_id: string; org_role: "admin" | "member"; on_list: boolean };
+export type OrgPool = {
+  pool_id: string;
+  name: string;
+  owner_kind: "platform" | "org" | "person";
+  owner_id: string;
+  priority: number;
+  enabled: boolean;
+  implicit?: boolean;
+  credentials: number;
+  manage: boolean;
+};
+
 export type DeployAdmin = { login: string; github_id?: number; pinned: boolean; logins: PersonLogin[] };
 export type UsersList = { users: HubUser[]; admins: DeployAdmin[]; added?: string; github_id?: number; removed?: string; devices_revoked?: number };
 

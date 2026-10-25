@@ -35,6 +35,9 @@ type AdminPerson struct {
 	Logins [][2]string `json:"logins"`
 	// Subs are the subscriptions the person's live passes are bound to.
 	Subs []string `json:"subs"`
+	// Org and OrgRole are the person's organization and role there (task PNWW).
+	Org     string `json:"org,omitempty"`
+	OrgRole string `json:"org_role,omitempty"`
 }
 
 // AdminDoing is a person's main task: the repo their tokens went to most, and
@@ -69,6 +72,11 @@ type AdminSub struct {
 	State string `json:"state"`
 	// Limited says which limit when State is limited: 5h · 7d · 429.
 	Limited string `json:"limited,omitempty"`
+	// Pool is the pool it sits in, PoolName its name and PoolOwner who owns
+	// that pool (platform · org:<id> · person:<principal>) — task PNWW.
+	Pool      string `json:"pool,omitempty"`
+	PoolName  string `json:"pool_name,omitempty"`
+	PoolOwner string `json:"pool_owner,omitempty"`
 }
 
 // adminSession is one open session, as fleet_sessions names it.

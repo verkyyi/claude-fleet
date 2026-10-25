@@ -90,3 +90,13 @@ const detectedTier = subscriptions({ accounts: [{ account_uuid: "codex:fixture",
 assert.equal(detectedTier.planTier, "verified-tier");
 const clearedTier = subscriptions({ accounts: [{ account_uuid: "codex:fixture", rate_limit_tier: "obsolete" }], creds: { credentials: [{ principal_id: "pool", provider: "codex", account: "example", account_uuid: "codex:fixture", plan: "pro", plan_source: "provider" }] } })[0];
 assert.equal(clearedTier.planTier, "");
+
+// A subscription's pool (task PNWW) rides the overview row onto the table row.
+{
+  const [withPool] = withOverview(rows, [{ owner: "pool", provider: "claude", account: "team", credential_id: "cred:pool",
+    pool: "acme-pro", pool_name: "Acme Pro", pool_owner: "org:acme" }]);
+  assert.equal(withPool.pool, "acme-pro");
+  assert.equal(withPool.poolName, "Acme Pro");
+  assert.equal(withPool.poolOwner, "org:acme");
+  assert.equal(rows[0].pool, undefined, "no overview, no pool");
+}

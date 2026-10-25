@@ -221,6 +221,10 @@ func (s *Server) personBudgetState(principal string, now time.Time) (PersonBudge
 	if err != nil || len(st) == 0 {
 		return PersonBudgetState{Principal: principal}, err
 	}
+	// …and their organization's (task PNWW): over it, refused with org_budget_exceeded
+	if err := s.applyOrgBudget(&st[0], now); err != nil {
+		return st[0], err
+	}
 	return st[0], nil
 }
 

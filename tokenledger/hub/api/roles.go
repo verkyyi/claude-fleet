@@ -154,6 +154,10 @@ var routeAccess = map[string]string{
 	// The heartbeat and the pause (claude-fleet#4060): the person's own seat.
 	TryBeatPath: accessUser, TryPausePath: accessUser,
 	TryStatsPath: accessAdmin,
+	// Organizations and pools (task PNWW): a member reads their own, an
+	// organization's admin manages theirs, an admin all — decided by each handler.
+	OrgsPath: accessUser, OrgMembersPath: accessUser, OrgBudgetPath: accessUser, OrgUsagePath: accessUser,
+	PoolsPath: accessUser, PoolMovePath: accessUser,
 	// A home link's latency and drops (task PNWW): an admin's.
 	LinkStatsPath: accessAdmin,
 	// A new web session's wait (task PNWW): the timings' spread is an admin's.

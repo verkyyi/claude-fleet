@@ -584,11 +584,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		a.why = ClaudePoolUnavailable
 		return
 	}
-	if !res.Valid && res.Error == PersonBudgetExceeded {
-		// the person is over their budget (claude-fleet#1977): the hub's
-		// own line, under its own code, with a status no client retries
-		a.status, _ = refuseCode(w, provider, http.StatusForbidden, "permission_error", PersonBudgetExceeded, res.Reason)
-		a.why = PersonBudgetExceeded
+	if !res.Valid && (res.Error == PersonBudgetExceeded || res.Error == OrgBudgetExceeded) {
+		// the person (or their organization, task PNWW) is over budget
+		// (claude-fleet#1977): the hub's own line, under its own code, with
+		// a status no client retries
+		a.status, _ = refuseCode(w, provider, http.StatusForbidden, "permission_error", res.Error, res.Reason)
+		a.why = res.Error
 		return
 	}
 	if !res.Valid && res.Error == CodexContinuationUnavailable {

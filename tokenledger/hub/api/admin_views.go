@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -204,7 +205,51 @@ func (s *Server) adminByPerson(w http.ResponseWriter, r *http.Request, out *Admi
 		}
 		return s.Vault.CredentialID(c)
 	})
+	if err := s.adminOrgFields(out, creds); err != nil {
+		return fail(err)
+	}
 	return true
+}
+
+// adminOrgFields fills each person's organization and each subscription's
+// pool (task PNWW).
+func (s *Server) adminOrgFields(out *AdminOverview, creds []store.Credential) error {
+	for i := range out.People {
+		org, role, err := s.Store.PersonOrg(out.People[i].Principal)
+		if err != nil {
+			return err
+		}
+		out.People[i].Org, out.People[i].OrgRole = org, role
+	}
+	type key struct{ provider, owner, account string }
+	pools := map[key]string{}
+	for _, c := range creds {
+		pools[key{c.Provider, c.PrincipalID, c.Account}] = store.EffectivePoolID(c)
+	}
+	seen := map[string]*store.Pool{}
+	for i := range out.Pool {
+		sub := &out.Pool[i]
+		id := pools[key{sub.Provider, sub.Owner, sub.Account}]
+		if id == "" {
+			continue
+		}
+		p, ok := seen[id]
+		if !ok {
+			var err error
+			if p, err = s.Store.PoolByID(id); err != nil && !errors.Is(err, store.ErrNoPool) {
+				return err
+			}
+			seen[id] = p
+		}
+		sub.Pool = id
+		if p != nil {
+			sub.PoolName, sub.PoolOwner = p.Name, p.OwnerKind
+			if p.OwnerID != "" {
+				sub.PoolOwner += ":" + p.OwnerID
+			}
+		}
+	}
+	return nil
 }
 
 // eventOwners is whose each (endpoint, login) is: every person's own cut

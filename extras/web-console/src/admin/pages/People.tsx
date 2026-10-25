@@ -17,12 +17,13 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { AdminTablePage, type Filter } from "../AdminTablePage";
 import { ConfirmByName } from "../ConfirmByName";
-import { api, type HubUser, type Invite, type NodeMachine, type PersonBudget, type UsersList } from "../api";
+import { api, type HubUser, type Invite, type NodeMachine, type Org, type OrgMember, type PersonBudget, type UsersList } from "../api";
 import { ago, t, when, type MsgKey } from "../i18n";
 import { fmtTokens } from "@/shared/i18n";
 import { NewPersonDialog } from "./NewPersonDialog";
@@ -44,6 +45,8 @@ type Row = {
   budget?: PersonBudget; // carries a trial member's limits (T796)
   user?: HubUser;
   invite?: Invite;
+  org?: string; // their organization and role there (task PNWW)
+  orgRole?: string;
 };
 
 const NEAR = 80;
@@ -157,6 +160,23 @@ const columns: ColumnDef<Row, any>[] = [
     ),
   },
   { id: "via", accessorFn: (r) => viaText(r.via), header: () => t("col.via"), cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
+  {
+    accessorKey: "org",
+    header: () => t("col.org"),
+    cell: ({ row: { original: r } }) =>
+      r.org ? (
+        <span className="flex items-center gap-1.5">
+          <span className="font-mono text-xs">{r.org}</span>
+          {r.orgRole === "admin" && (
+            <Badge variant="outline" className="font-normal text-muted-foreground">
+              {t("orgRole.admin")}
+            </Badge>
+          )}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
+  },
   { accessorKey: "home", header: () => t("col.home"), cell: ({ getValue }) => <span className="font-mono text-xs">{getValue() || "—"}</span> },
   { accessorKey: "week", header: () => t("col.week"), sortUndefined: "last", cell: ({ row }) => <WeekBar r={row.original} /> },
   {
@@ -187,18 +207,27 @@ export function PeoplePage() {
   const { p } = useParams();
   const nav = useNavigate();
   const [spares, setSpares] = React.useState<Extra | undefined>(undefined);
+  const [orgs, setOrgs] = React.useState<Org[]>([]);
 
   const fetchRows = React.useCallback(async (): Promise<Row[]> => {
-    const [users, invites, usage, nodes] = await Promise.all([
+    const [users, invites, usage, nodes, orgList, members] = await Promise.all([
       api<UsersList>("/v1/fleet/users"),
       api<{ invites: Invite[] }>("/v1/fleet/invites"),
       api<{ people: PersonBudget[] }>("/v1/fleet/person-usage").catch(() => ({ people: [] as PersonBudget[] })),
       api<{ machines?: NodeMachine[] }>("/v1/nodes").catch(() => null),
+      api<{ orgs: Org[] }>("/v1/fleet/orgs").catch(() => ({ orgs: [] as Org[] })),
+      api<{ members: OrgMember[] }>("/v1/fleet/orgs/members").catch(() => ({ members: [] as OrgMember[] })),
     ]);
+    setOrgs(orgList.orgs || []);
+    const orgOf = new Map((members.members || []).map((m) => [m.principal, m]));
     const ms = (nodes?.machines || []).filter((m) => m.spare_target != null || m.spare != null);
     setSpares(ms.length ? { spare: ms.reduce((a, m) => a + (m.spare || 0), 0), target: ms.reduce((a, m) => a + (m.spare_target || 0), 0) } : null);
     const budget = new Map((usage.people || []).map((b) => [b.principal, b]));
-    const rows = (users.users || []).map((u) => rowOf(u, budget.get(u.principal || `gh:${u.github_id}`)));
+    const rows = (users.users || []).map((u) => {
+      const r = rowOf(u, budget.get(u.principal || `gh:${u.github_id}`));
+      const m = orgOf.get(r.id);
+      return m ? { ...r, org: m.org_id, orgRole: m.org_role } : r;
+    });
     rows.sort((a, b) => Number(!!b.user?.deploy) - Number(!!a.user?.deploy) || Number(b.admin) - Number(a.admin) || a.name.localeCompare(b.name));
     return [...rows, ...(invites.invites || []).filter((i) => i.state === "active").map(inviteRow)];
   }, []);
@@ -209,8 +238,8 @@ export function PeoplePage() {
       lead={t("people.lead")}
       columns={columns}
       fetch={fetchRows}
-      filters={filters}
-      searchText={(r) => [r.name, r.id, r.home, viaText(r.via), r.user?.logins.map((l) => l.login).join(" ")].join(" ")}
+      filters={[...filters, ...orgs.map((o) => ({ key: `org:${o.org_id}`, label: o.name || o.org_id, test: (r: Row) => r.org === o.org_id }))]}
+      searchText={(r) => [r.name, r.id, r.home, r.org, viaText(r.via), r.user?.logins.map((l) => l.login).join(" ")].join(" ")}
       rowId={(r) => r.id}
       openId={p ? decodeURIComponent(p) : null}
       onOpen={(id) => nav(id ? `/people/${encodeURIComponent(id)}` : "/people")}
@@ -223,7 +252,7 @@ export function PeoplePage() {
           : { label: t("kpi.sparesOff"), value: <span className="text-muted-foreground">—</span> },
       ]}
       actions={(reload, rows) => <NewPersonDialog known={rows.filter((r) => r.user).map((r) => r.name)} onChanged={reload} />}
-      drawer={(r, ctx) => (r.invite ? <InviteDrawer r={r} {...ctx} /> : <PersonDrawer r={r} {...ctx} />)}
+      drawer={(r, ctx) => (r.invite ? <InviteDrawer r={r} {...ctx} /> : <PersonDrawer r={r} orgs={orgs} {...ctx} />)}
     />
   );
 }
@@ -237,7 +266,7 @@ function Field({ k, children }: { k: MsgKey; children: React.ReactNode }) {
   );
 }
 
-function PersonDrawer({ r, close, reload }: { r: Row; close: () => void; reload: () => void }) {
+function PersonDrawer({ r, orgs, close, reload }: { r: Row; orgs: Org[]; close: () => void; reload: () => void }) {
   const u = r.user!;
   const key = u.principal || u.login;
   return (
@@ -302,6 +331,9 @@ function PersonDrawer({ r, close, reload }: { r: Row; close: () => void; reload:
             <p className="text-sm text-muted-foreground">{t("drawer.noLogins")}</p>
           )}
         </section>
+
+        <Separator />
+        <OrgEditor r={r} orgs={orgs} reload={reload} />
 
         <Separator />
         <TrialEditor r={r} reload={reload} />
@@ -480,6 +512,66 @@ function TrialEditor({ r, reload }: { r: Row; reload: () => void }) {
             {t("drawer.trialMember")}
           </Button>
         )}
+      </div>
+    </section>
+  );
+}
+
+// A person's organization and role there (task PNWW): POST
+// /v1/fleet/orgs/members, audited by the hub. One organization each.
+function OrgEditor({ r, orgs, reload }: { r: Row; orgs: Org[]; reload: () => void }) {
+  const [org, setOrg] = React.useState(r.org || "platform");
+  const [role, setRole] = React.useState(r.orgRole || "member");
+  const [busy, setBusy] = React.useState(false);
+  if (!orgs.length) return null;
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api("/v1/fleet/orgs/members", { json: { principal: r.id, org_id: org, org_role: role } });
+      toast.success(t("drawer.orgSaved", { org }));
+      reload();
+    } catch (e) {
+      toast.error(t("err.action", { e: (e as Error).message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="grid gap-3">
+      <h3 className="font-display text-base font-semibold">{t("drawer.org")}</h3>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="grid gap-1">
+          <Label className="text-xs">{t("drawer.org")}</Label>
+          <Select value={org} onValueChange={setOrg}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {orgs.map((o) => (
+                <SelectItem key={o.org_id} value={o.org_id}>
+                  {o.name || o.org_id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-xs">{t("drawer.orgRole")}</Label>
+          <Select value={role} onValueChange={setRole}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="member">{t("orgRole.member")}</SelectItem>
+              <SelectItem value="admin">{t("orgRole.admin")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div>
+        <Button size="sm" disabled={busy || (org === r.org && role === r.orgRole)} onClick={save}>
+          {t("drawer.orgSave")}
+        </Button>
       </div>
     </section>
   );
