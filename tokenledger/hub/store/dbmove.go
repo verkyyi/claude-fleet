@@ -619,6 +619,14 @@ func moveGuard(ctx context.Context, tx pgx.Tx, overwrite bool) error {
 			// other settings (or legacy mode): they belong to a used hub.
 			query = `SELECT EXISTS (SELECT 1 FROM fleet_settings WHERE NOT (key = 'fleet.cred_policy.mode' AND value = 'strict'))`
 		}
+		// …and the organizations' bootstrap (task PNWW) only these: the two
+		// organizations and the platform's default pool.
+		switch t {
+		case "hub_orgs":
+			query = `SELECT EXISTS (SELECT 1 FROM hub_orgs WHERE org_id NOT IN ('` + OrgPlatform + `', '` + OrgTrial + `'))`
+		case "hub_pools":
+			query = `SELECT EXISTS (SELECT 1 FROM hub_pools WHERE pool_id != '` + PoolPlatformDefault + `')`
+		}
 		var held bool
 		if err := tx.QueryRow(ctx, query).Scan(&held); err != nil {
 			return err
