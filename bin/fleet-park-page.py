@@ -9,6 +9,7 @@ import argparse
 import codecs
 import os
 from pathlib import Path
+import re
 import select
 import shutil
 import sys
@@ -52,11 +53,33 @@ def save(path, value):
     tmp.replace(path)
 
 
+ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
+PROMPT = re.compile(r'^\s*[│|]?\s*[>❯›]\s?')
+
+
+def prompt_row(original):
+    """The saved screen's own input row (task EQBE): the last row that reads
+    `> …` / `❯ …` (inside the agent's box or not), as (index, column of the
+    words); None when the screen has none (a shell, a page)."""
+    for i in range(len(original) - 1, -1, -1):
+        text = ANSI.sub('', original[i])
+        m = PROMPT.match(text)
+        if m:
+            return i, sum(cells(c) for c in text[:m.end()])
+    return None
+
+
 def paint(screen, words, failed=False, pos=None, waking=False):
+    """The saved screen as it stood, every row (task EQBE: no 「已停放」 row of its
+    own — the 看台's top line says parked / resuming, off @parked · @park_waking).
+    Typed words go into the screen's own input row; a failed wake still says so
+    on the last row, since nothing else would. FLEET_PARK_HINT=1: the old footer."""
     width, height = shutil.get_terminal_size()
     en = os.environ.get('FLEET_UI_LANG') == 'en'
-    hint = ('· parked · just type — Enter resumes it (~2 s)' if en else
-            '· 已停放 · 直接打字，回车即接回（约 2 秒）')
+    hint = ''
+    if os.environ.get('FLEET_PARK_HINT') == '1':
+        hint = ('· parked · just type — Enter resumes it (~2 s)' if en else
+                '· 已停放 · 直接打字，回车即接回（约 2 秒）')
     if failed:
         hint = ('Resume failed · Enter/r retry · n new chat' if en else
                 '接回失败 · 回车/r 重试 · n 新会话')
@@ -70,28 +93,57 @@ def paint(screen, words, failed=False, pos=None, waking=False):
         }
         if reason in labels:
             hint = labels[reason][int(en)] + ' · ' + hint
-    if waking:
+    if waking and hint:
         hint = '· resuming…' if en else '· 接回中…'
-    footer = lines(hint, width)
-    if words:
+    original = screen.splitlines()
+    at = prompt_row(original[:height]) if words and not hint else None
+    footer = lines(hint, width) if hint else []
+    if words and at is None:
         footer += lines('> ' + words, width)
     footer = footer[-height:]
     # CUP each captured physical row, autowrap off: no LF at the bottom and no
     # accidental scroll when a captured line fills the final column exactly.
     out = ['\x1b[?7l\x1b[0m\x1b[H']
-    original = screen.splitlines()
     for i in range(height - len(footer)):
         out.append(f'\x1b[{i+1};1H\x1b[0m\x1b[2K' + (original[i] if i < len(original) else ''))
     for i, row in enumerate(footer, height - len(footer) + 1):
         out.append(f'\x1b[{i};1H\x1b[0m\x1b[2K\x1b[90m' + row)
-    if words and pos is not None:
+    if at is not None:
+        # the words in the agent's own input row, wrapped below it as typed
+        row0, col0 = at
+        room = max(1, width - col0)
+        typed = lines(words, room)
+        for k, part in enumerate(typed):
+            r = row0 + 1 + k
+            if r > height:
+                break
+            out.append(f'\x1b[{r};{col0 + 1}H\x1b[0m\x1b[K' + part)
+        if pos is not None:
+            prefix = lines(words[:pos], room)
+            r = min(height, row0 + len(prefix))
+            out.append(f'\x1b[{r};{min(width, col0 + 1 + sum(cells(c) for c in prefix[-1]))}H')
+    elif words and pos is not None:
         prefix = lines('> ' + words[:pos], width)
         row = height - len(lines('> ' + words, width)) + len(prefix)
         col = min(width, sum(cells(c) for c in prefix[-1]) + 1)
         out.append(f'\x1b[{max(1, row)};{col}H')
+    elif not words and not hint:
+        # the cursor where the agent's own was: its input row, else the last row
+        empty = prompt_row(original[:height])
+        if empty is not None:
+            out.append(f'\x1b[{empty[0] + 1};{min(width, empty[1] + 1)}H')
     out.append('\x1b[0m\x1b[?7h')
     sys.stdout.write(''.join(out))
     sys.stdout.flush()
+
+
+def waking_mark(pane, on):
+    """@park_waking while a sentence is on its way (the top line's 「接回中…」)."""
+    import fleet_session_gate as gate
+    if on:
+        gate.tmux('', 'set-option', '-w', '-t', pane, '@park_waking', '1')
+    else:
+        gate.tmux('', 'set-option', '-wu', '-t', pane, '@park_waking')
 
 
 def editor(screen, draft, failed):
@@ -121,6 +173,7 @@ def editor(screen, draft, failed):
     try:
         tty.setraw(0, termios.TCSANOW)
         sys.stdout.write('\x1b[?2004h')
+        waking_mark(pane, False)
         paint(screen, words, failed, pos)
         gate.tmux('', 'set-option', '-w', '-t', pane, '@park_held', str(int(time.time())))
         while True:
@@ -166,6 +219,7 @@ def editor(screen, draft, failed):
                 gate.tmux('', 'set-option', '-w', '-t', pane, '@park_presence', str(int(time.time())))
             if not pasted and (char in ('\r', '\n') or (failed and char in ('r', 'n'))):
                 save(draft, words)
+                waking_mark(pane, True)
                 paint(screen, words, pos=pos, waking=True)
                 return 11 if failed and char == 'n' else 10
             if char in ('\x7f', '\b'):

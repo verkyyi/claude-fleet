@@ -335,6 +335,10 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_SESSION_REAP_PARKED=259200
 # @label=Park early under memory pressure below @group=janitor @tier=advanced @scope=fleet @edit=int @unit=percent
 #FLEET_PARK_MEM_PCT=15
+# A parked window shows its saved screen as it stood; the 看台's top line says
+# 已停放 / 接回中. 1 = also the old 「已停放 · 直接打字…」 row at its bottom (EQBE).
+# @label=Parked screen hint row @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_PARK_HINT=0
 # A sentence the web said waits this long for its session to be free, then goes
 # back to the page's box with its reason; a parked session that does not come
 # back within FLEET_GATE_WAKE_SECS returns its sentence (「这一句没送到 · 重试」).
