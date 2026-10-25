@@ -25,6 +25,9 @@
 #   thin-net-back-slow      (T690) the network back in the middle of a long
 #                           backoff: the same view within 3 s, the screen held
 #                           (「正在重连」 over its top row, never cleared)
+#   thin-reconnect-speech   (EQBE) fleet-connect prints 6+ lines on a reconnect
+#                           (no route works): the picture stays, no line of it
+#                           scrolls, the mouse during the drop prints nothing
 #   thin-home-alone-down    (issue #4829) the home down and no other machine: the
 #                           换家 finds none, the loop goes back to the home and is
 #                           on it again once it is up — never asking forever
@@ -446,6 +449,53 @@ PY2
   grep -aq '	back	' "$R/thin.log" || { WHY="thin.log has no back line"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="退避每次 8 s、网断后又回来：线路监视看到网回来就不再等完退避，${SECS}s 内 --resume 回到 m1 同一个看台的 s1；断线期间看台原画面留着（不离开备用屏、不清屏），顶行写「正在重连」，ssh 的报错不刷屏；thin.log 记 back"
+}
+
+drill_thin_reconnect_speech() {
+  CAP=4   # (EQBE) fleet-connect says 6+ lines on a reconnect: the view's picture stays
+  local t0 n
+  tc_rig
+  cat > "$R/bin/argv-talk" <<EOF
+#!/bin/sh
+# a pick with the line down: the route table, as fleet-connect prints it when no route works
+if [ -e "$R/net.down" ]; then
+  for i in 1 2 3 4 5 6; do echo "fleet connect · SPEECHLINE-\$i" >&2; done
+fi
+exec python3 "$BIN/fleet-connect.py" --argv "\$@"
+EOF
+  chmod +x "$R/bin/argv-talk"
+  ( THIN_ENV='{"FLEET_THIN_BACKOFF": "1", "FLEET_THIN_ARGV_CMD": "'"$R"'/bin/argv-talk", "FLEET_THIN_LINE_PROBE_CMD": "sh -c \"[ ! -e '"$R"'/net.down ]\""}' \
+      THIN_ARGS='["--home", "m1", "s1"]' tc_drive rs '[["expect", "VIEW s1 ON m1"], ["await", "'"$R"'/net.down", 15],
+      ["linger", 2], ["send", "\u001b[<35;10;5M\u001b[<35;11;6M"], ["linger", 40]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.rs" || { WHY="the view never came up: $(cat "$R/res.rs")"; tc_done; return 1; }
+  n=$(wc -c < "$R/term.out")
+  touch "$R/net.down"; tc_drop_view
+  until_ok 15 sh -c '[ "$(grep -c "	connect	" "$1/thin.log")" -ge 2 ]' _ "$R" \
+    || { WHY="the loop did not try again while the network was down: $(cat "$R/thin.log")"; tc_done; return 1; }
+  sleep 1
+  rm -f "$R/net.down"; t0=$(now)
+  until_ok 8 sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="never back on s1: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  python3 - "$R/term.out" "$n" <<'PY2' || { WHY="the picture was not kept: $(cat "$R/rs.why" 2>/dev/null)"; tc_done; return 1; }
+import sys
+b = open(sys.argv[1], "rb").read()[int(sys.argv[2]):]
+gap = b[:b.find(b"VIEW s1 ON m1")]
+why = open(sys.argv[1].rsplit("/", 1)[0] + "/rs.why", "w")
+def bad(w):
+    why.write(w); sys.exit(1)
+if b"\x1b[?1049l" in gap:
+    bad("left the alternate screen on fleet-connect's speech")
+# each line may stand on the page as its note (drawn in the box, never a line of
+# its own); none is written out as terminal text that scrolls
+for i in range(1, 7):
+    if b"SPEECHLINE-%d\r\n" % i in gap or b"SPEECHLINE-%d\n" % i in gap:
+        bad("fleet-connect's line %d scrolled onto the screen" % i)
+if b"35;10;5M" in gap or b"35;11;6M" in gap:
+    bad("a mouse report during the drop reached the screen")
+PY2
+  tc_done; wait 2>/dev/null
+  WHAT="断线重连时 fleet-connect 一次说 6 行（没有一条线能连通的路由表）：看台原画面留着、不离开备用屏，这些行不刷屏（最后一句在重连页上），断线期间的鼠标上报不上屏；网回来 ${SECS}s 回到 s1"
 }
 
 drill_thin_gives_up() {
