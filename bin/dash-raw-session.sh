@@ -911,13 +911,6 @@ existing=$(TM list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null)
 name="$base"; n=2
 while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n + 1)); done
 
-# A task's window goes by the task's own ID (EPIC T644 C2): the hub minted it with
-# the record (C1), so the first window opened for it takes that ID, and a redo
-# here — the driver's retry, a re-dispatch — is the same ID's next attempt, never a
-# new ID with prev. Stamped before the agent starts (its SessionStart hook would
-# otherwise mint one). Another machine holding it, or a hub that cannot say ⇒ a
-# new ID whose prev is the task's (the old road); a record with no ID ⇒ as before.
-TASK_FID=''; TASK_TAKE=''
 # the early asks (above, beside the allocation) answer before anything else
 pre_wait; _prc=$?
 if [ "$_prc" != 0 ]; then
@@ -925,6 +918,14 @@ if [ "$_prc" != 0 ]; then
   rm -rf "$PRE"; exit "$_prc"
 fi
 fleet_timing_at checked   # the start's checks passed — the stub's progress (T992)
+
+# A task's window goes by the task's own ID (EPIC T644 C2): the hub minted it with
+# the record (C1), so the first window opened for it takes that ID, and a redo
+# here — the driver's retry, a re-dispatch — is the same ID's next attempt, never a
+# new ID with prev. Stamped before the agent starts (its SessionStart hook would
+# otherwise mint one). Another machine holding it, or a hub that cannot say ⇒ a
+# new ID whose prev is the task's (the old road); a record with no ID ⇒ as before.
+TASK_FID=''; TASK_TAKE=''
 if [ -z "$EXECUTION" ]; then
   [ "${FLEET_TASK_CONTROL_VERSION:-}" != 1 ] || { refuse 'controlled task start has no execution grant'; exit 2; }
 fi
@@ -941,7 +942,7 @@ elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
   esac
   unset _tt _ttrc
 fi
-rm -rf "$PRE"
+[ -n "${PRE:-}" ] && rm -rf "$PRE"
 
 # Spawn non-invasive by default (matches dash-issue-session.sh): -d creates the
 # window WITHOUT making it current, so a user attached to $SESS is not yanked over.

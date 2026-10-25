@@ -98,8 +98,10 @@ class DispatchCurrentTests(unittest.TestCase):
             for name in ("fleet-session-wrap.sh", "fleet_dispatch.py", "fleet-agent-adapter.sh"):
                 shutil.copy2(BIN / name, root / name)
             reader = root / "fleet-task-record.sh"
-            reader.write_text('#!/bin/sh\nif [ -f "$FLEET_TEST_READ" ]; then cat "$FLEET_TEST_CANCELLED"; '
-                              'else touch "$FLEET_TEST_READ"; cat "$FLEET_TEST_CURRENT"; fi\n')
+            # the cancel lands while the wrapper initialises: its ONE check is the
+            # last thing before the launch (T992 — an earlier copy of it went), so
+            # the reader already says cancelled when it is asked
+            reader.write_text('#!/bin/sh\ntouch "$FLEET_TEST_READ"; cat "$FLEET_TEST_CANCELLED"\n')
             for name, rec in (("current", CURRENT), ("cancelled", dict(CURRENT, cancel_request="stop-1"))):
                 (root / (name + ".json")).write_text(json.dumps({"task": rec}))
             launcher = root / "launch"
