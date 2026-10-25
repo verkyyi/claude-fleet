@@ -175,6 +175,7 @@ import signal
 import socket
 import subprocess
 import sys
+import termios
 import threading
 import time
 from pathlib import Path
@@ -5549,6 +5550,23 @@ class Line:
             self.text += ch
 
 
+def tty_gone(fd=0):
+    """The panel's terminal is gone (task EQBE): its tty revoked or closed —
+    termios answers EIO / EBADF — or its other side hung up: select says
+    readable while not one byte is waiting (FIONREAD 0). Never reads a key."""
+    import fcntl
+    import select as _select
+    import struct
+    try:
+        termios.tcgetattr(fd)
+        if not _select.select([fd], [], [], 0)[0]:
+            return False
+        n = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+    except (termios.error, OSError, ValueError):
+        return True
+    return n == 0
+
+
 def panel_key(screen, timeout_ms, completed=None, inputs=None):
     read = screen.get_wch if inputs is None else lambda: inputs.read(screen)
     if completed is None:
@@ -5736,6 +5754,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     cmds = panel_commands()
     query, opened, msg, show_legend = "", set(), order_notice(), False
     last_input, pending_items = 0.0, None
+    fast_errs = 0       # key reads that failed at once in a row (tty_gone, EQBE)
     msg_until = 0      # a line that goes by itself (the language row's, 3 s — L3)
     # the ⚡ row (issue #3327): its cells, read off the screen's thread (⌘T's rules);
     # `busy` while a ↵ runs, its outcome landing in `job`
@@ -6139,10 +6158,18 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             after_frame(vid, client, items, pre)
         timeout_ms = min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
                          max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000)
+        t_key = time.monotonic()
         try:
             ch = panel_key(screen, timeout_ms, job if busy else None, inputs)
         except curses.error:
+            # a read that fails at once, again and again, is a terminal that is gone
+            # (its popup closed, the tty revoked): the panel ends — it spun at 100 %
+            # CPU for hours under no one's screen (task EQBE)
+            fast_errs = fast_errs + 1 if time.monotonic() - t_key < timeout_ms / 4000.0 else 0
+            if fast_errs >= 50 and tty_gone():
+                return 1
             continue
+        fast_errs = 0
         if ch is None:
             continue
         last_input = time.monotonic()
