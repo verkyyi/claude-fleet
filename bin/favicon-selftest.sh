@@ -42,5 +42,10 @@ for f in site/template.html site/legal.html; do
   done
 done
 grep -q 'rel="icon"[^>]*href="../../fleet-theme/logo.svg"' "$ROOT/extras/web-chat/ui/index.html" || st_miss "extras/web-chat/ui/index.html does not name the theme package's logo"
+# Safari draws no SVG tab icon: without an .ico link it asks the root /favicon.ico
+# and keeps whatever it got there for good — every page names one of its own
+for f in extras/web-console/app/index.html extras/web-chat/ui/index.html extras/web-console/admin/index.html; do
+  grep -q 'rel="icon" href="[^"]*favicon.ico[^"]*" sizes="32x32"' "$ROOT/$f" || st_miss "$f names no favicon.ico (Safari shows no SVG icon)"
+done
 
 st_done

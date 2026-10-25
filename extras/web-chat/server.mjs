@@ -113,7 +113,8 @@ async function checkClaudeExecution(c = conv) {
 // extras/web-chat/ui and committed — served from here, every byte local.
 const UI = E.FLEET_WEBCHAT_UI || join(HERE, "ui", "dist");
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-  ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".json": "application/json", ".png": "image/png" };
+  ".svg": "image/svg+xml", ".woff2": "font/woff2", ".woff": "font/woff", ".json": "application/json", ".png": "image/png",
+  ".ico": "image/x-icon" };
 // nothing from another origin, ever: no CDN, no font service, no beacon
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
   "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
