@@ -629,6 +629,9 @@ const VIEW_READ_MAX = 8 * 1024 * 1024;                     // one read of a grow
 const VIEW_RESULT_MAX = 160;
 const TOOL_ID_RE = /^[A-Za-z0-9_.:-]{1,120}$/;
 const VIEW_LOOK_MS = 3000;                                 // a record not found yet, looked for again
+// …and sooner while the view is young (task PNWW): a session the page just
+// opened writes its record within seconds, and its first reply waits on this
+const VIEW_LOOK_FAST_MS = 500, VIEW_LOOK_FAST_FOR_MS = 60 * 1000;
 const VIEW_KNOWN_MS = 10 * 60 * 1000;                      // a window's last answer, used at once while this fresh
 const viewKnown = new Map();                               // fid → { w, at }
 const viewFiles = new Map();                               // agent:sid → { file, cwd }
@@ -852,6 +855,7 @@ async function viewStream(req, res, u, person) {
   log("view", { agent: w.agent, person, known: knew });
   if (at != null && atSid !== (w.sid || "")) at = null;      // another conversation now: from its end
   let src = null, off = 0, first = true, lookedAt = 0, nothingYet = false;
+  const viewOpened = Date.now();
   let asking = null, askedAt = knew ? 0 : Date.now(), pinged = Date.now(), next = null;
   let gasking = null, gaskedAt = 0;
   const restart = () => { src = null; off = 0; at = null; first = true; lookedAt = 0; nothingYet = false; ev({ t: "reset" }); };
@@ -866,7 +870,7 @@ async function viewStream(req, res, u, person) {
     }
     // the record, once it is there (a session that has said nothing has none):
     // looked for again every few seconds, never on every poll
-    if (!src && w.sid && Date.now() - lookedAt >= VIEW_LOOK_MS) { lookedAt = Date.now(); src = await viewSource(w.agent, w.sid); }
+    if (!src && w.sid && Date.now() - lookedAt >= (Date.now() - viewOpened < VIEW_LOOK_FAST_FOR_MS ? VIEW_LOOK_FAST_MS : VIEW_LOOK_MS)) { lookedAt = Date.now(); src = await viewSource(w.agent, w.sid); }
     if (nothingYet && src) { nothingYet = false; first = true; at = null; }    // there now: its newest stretch
     let size = -1;
     if (src) { try { size = (await fsp.stat(src.file)).size; } catch { src = null; } }
@@ -911,7 +915,8 @@ async function viewStream(req, res, u, person) {
         if (now !== said) { said = now; ev(JSON.parse(now)); }
       });
     }
-    if (!asking && Date.now() - askedAt >= VIEW_STATE_MS) {
+    // a young view with no conversation id yet asks sooner (task PNWW): the record waits on it
+    if (!asking && Date.now() - askedAt >= (!w.sid && Date.now() - viewOpened < VIEW_LOOK_FAST_FOR_MS ? VIEW_LOOK_FAST_MS * 2 : VIEW_STATE_MS)) {
       asking = viewOf(fid).then((x) => { asking = null; askedAt = Date.now(); return x; });
       asking.then((x) => {
         if (closed) return;
@@ -1714,10 +1719,22 @@ function gate(args, input = "", timeout = 90000) {
   });
 }
 // the fleet a new session opens in: this login's one fleet (its first socket)
+// the answer kept a minute (task PNWW): an open asks it on the person's wait,
+// and /api/warm asks it first while they type
+const FLEET_KEEP_MS = 60 * 1000;
+let fleetKnown = null;                                     // { at, p }
 function firstFleet() {
   if (E.FLEET_WEBCHAT_FLEET) return Promise.resolve(E.FLEET_WEBCHAT_FLEET);
-  return new Promise((resolve) => execFile("bash", ["-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_sockets 2>/dev/null | head -n 1',
-    "first-fleet", HELPERS], { env: E, timeout: 20000 }, (err, stdout) => resolve(err ? "" : String(stdout).trim())));
+  if (fleetKnown && Date.now() - fleetKnown.at < FLEET_KEEP_MS) return fleetKnown.p;
+  const k = { at: Date.now(), p: null };
+  k.p = new Promise((resolve) => execFile("bash", ["-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_sockets 2>/dev/null | head -n 1',
+    "first-fleet", HELPERS], { env: E, timeout: 20000 }, (err, stdout) => {
+    const v = err ? "" : String(stdout).trim();
+    if (!v && fleetKnown === k) fleetKnown = null;         // nothing found is never kept
+    resolve(v);
+  }));
+  fleetKnown = k;
+  return k.p;
 }
 const fidOf = (u, body) => String(u.searchParams.get("fid") || body?.fid || "");
 // words still waiting anywhere on this login: read off the files, no process
@@ -1982,6 +1999,9 @@ async function handle(req, res) {
     if (f) return sendFile(req, res, f, p.startsWith("/assets/") ? "private, max-age=31536000, immutable" : "private, max-age=3600");
     return send(res, 404, { error: "not found" });
   }
+  // 新会话 (task PNWW): the page opened — the relay that brought this is kept,
+  // and what an open asks first is asked now, while the person types
+  if (p === "/api/warm" && req.method === "GET") { firstFleet().catch(() => {}); return send(res, 200, { ok: true }); }
   // 只读 (task F481): a terminal session of this login, read along
   if (p === "/api/view" && req.method === "GET") return viewStream(req, res, u, person);
   // 接管 / 交回 (task VV8F): the same session, this page ⇄ its terminal

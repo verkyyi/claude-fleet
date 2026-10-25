@@ -20,6 +20,7 @@ import { toMessages, type Item, type Msg } from "./chat";
 import { attachedPics, MAX_PICS, packPics } from "./pics";
 import { afterSay, askOf, bubbles, replying, settle, userLines, type Pending, type Queued, type ViewAsk } from "./talk";
 import { browserCache, mayCache, mayShow, type Layer } from "./local";
+import { clockReplied, clockShown, replied, sendClock } from "../start-clock";
 import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame, type Held, type ViewConnection } from "./view-stream";
 
 // can_talk (会话合一 Y01K): the web may talk to it — absent on the old road,
@@ -345,6 +346,9 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     ...(canTalk ? { onCancel: onStop, onRespondToToolApproval: onAnswer, queue: lane, adapters: { attachments: attach } } : {}),
   });
   const failed = pending.filter((p) => p.state === "failed");
+  // 新会话's clock (task PNWW): this page drawn, then the reply's first words from the session's machine
+  useEffect(() => { if (worker) clockShown(worker); }, [worker]);
+  useEffect(() => { if (worker && layer === "home" && replied(items)) sendClock(clockReplied(worker)); }, [worker, layer, items]);
   return { runtime, state, gate, loaded, live, read, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
     busy: !!state?.busy || (canTalk && sending) };
 }

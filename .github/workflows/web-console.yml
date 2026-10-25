@@ -50,6 +50,8 @@ jobs:
         run: node --experimental-strip-types test/task-continue.mjs
       - name: New session — chat or terminal, five starts (GR5E C3)
         run: node --experimental-strip-types test/new-session.mjs
+      - name: New session's wait — press to first reply, sent once (PNWW)
+        run: node --experimental-strip-types test/start-clock.mjs
       - name: Old addresses land where their page lives now (GR5E C9)
         run: node --experimental-strip-types test/legacy.mjs
       - name: Legacy chat migration — identity, retries and read-only tickets
