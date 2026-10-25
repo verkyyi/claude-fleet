@@ -824,9 +824,11 @@ fi
 # The accepted task is still current (not cancelled, the same attempt): asked
 # with the others, answered before the window (a cancelled start never opens
 # one). The wrapper asks once more, last, right before the agent's credentials.
-case "${DISPATCH:-}" in
-  *'"task":"'*|*'"task": "'*)
-    ( python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current ${EXECUTION:+--execution "$EXECUTION"} \
+# A controlled execution's read keeps its place after the execution's own
+# synchronization (below, before the window): its order is the hub's contract.
+case "${EXECUTION:+x}:${DISPATCH:-}" in
+  :*'"task":"'*|:*'"task": "'*)
+    ( python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current \
         >/dev/null 2>"$PRE/cur.err"; echo $? > "$PRE/cur.rc" ) </dev/null &
     pre_pids="$pre_pids $!" ;;
 esac
@@ -1048,6 +1050,14 @@ fi
     *'"task": "'*) _dispatch_task=${DISPATCH#*'"task": "'}; _dispatch_task=${_dispatch_task%%'"'*} ;;
     *) _dispatch_task='' ;;
   esac
+  if [ -n "$_dispatch_task" ] && [ -n "$EXECUTION" ]; then
+    # a controlled execution's currentness, in its contract's order (see pre_wait)
+    if ! python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --check-current --execution "$EXECUTION" >/dev/null; then
+      raw_fill_stop
+      [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+      refuse "raw: accepted task start refused"; exit 2
+    fi
+  fi
   if [ -n "$_dispatch_task" ]; then
     _q="'"; _start_dispatch="'${DISPATCH//$_q/$_q\\$_q$_q}'"; unset _q
     launch="FLEET_START_DISPATCH=$_start_dispatch $launch"
