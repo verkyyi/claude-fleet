@@ -166,7 +166,7 @@ drill_peerlink_check_slow() {
   pl_start
   until_ok 8 pl_up mac-a@bob || { WHY="the link never came up: $(tail -3 "$B/run.err" | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }
   old=$(pl_pid mac-a@bob)
-  # yesterday's way (m5, load 15 on 15 cores): ONE check does not answer in time
+  # yesterday's way (a home machine at load 15 on 15 cores): ONE check does not answer in time
   echo 1 > "$B/fs/checkhang/mac-a"; t0=$(now)
   until_ok 8 grep -q 'mac-a@bob 检查恢复' "$B/run.err" \
     || { WHY="one slow check: no recovery record — $(grep mac-a@bob "$B/run.err" | tail -3 | tr '\n' ' ')"; pl_stop; unset FLEET_PEERLINK_CHECK_SECS FAKESSH_HANG_SECS; return 1; }

@@ -151,7 +151,7 @@ ACTIVE_SECS = fenv("FLEET_PEERLINK_ACTIVE_SECS", 60)  # how long a request / eve
 # an up link's `ssh -O check`: how long it may take, and how many in a row may fail
 # while the master lives and its file is there before the link is torn down — one
 # check that a loaded machine answers late is not a dead master (BREAK-IT
-# peerlink-check-slow: m5 at load 15 rebuilt a healthy link 3 times in an hour)
+# peerlink-check-slow: a home machine at load 15 rebuilt a healthy link 3 times in an hour)
 CHECK_SECS = max(0.5, fenv("FLEET_PEERLINK_CHECK_SECS", 3))
 CHECK_STRIKES = max(1, int(fenv("FLEET_PEERLINK_CHECK_STRIKES", 3)))
 MAX_EVENTS = 50
