@@ -16,7 +16,7 @@
 #   C  no server: attach execs the fallback with the keypress's --view / --client
 #      and FLEET_PANEL_T0
 #   D  the stale mark: fresh ⇒ nothing; 130 s ⇒ 「 · 2 分钟前 · 刷新中…」 (en:
-#      「 · 2 min ago · refreshing…」); under the 失联 banner the age alone
+#      「 · 2 min ago · refreshing…」 only while a read is late — EQBE); under the 失联 banner the age alone
 #   E  the key: fleet_popup_bind sources into tmux and its popup gets
 #      FLEET_PANEL_CTX (session · client · window …) and FLEET_PANEL_DIRECT=1
 #   F  dash-popup.sh --hold: @popup_open / @popup_pid while the pid lives, the
@@ -137,20 +137,41 @@ out=$(FLEET_PANEL_CTX="fl@view-nosrv|/dev/ttys9|@1|||||80" python3 "$BIN/fleet-p
   || st_miss "C fallback: $out"
 
 # --- D ----------------------------------------------------------------------------
-python3 - "$BIN" <<'PY' && st_ok "D the stale mark: fresh nothing, old 「N 前 · 刷新中…」 (zh / en), the age alone under the banner" || st_miss "D stale mark"
+python3 - "$BIN" <<'PY' && st_ok "D the stale mark: fresh nothing, two refreshes + a read never mark (EQBE), old 「N 前」, 「刷新中…」 only while a read is late, 「刷新失败」 (zh / en), the age alone under the banner" || st_miss "D stale mark"
 import os, sys, time
 sys.path.insert(0, sys.argv[1])
 import fleet_view as fv
-class R: every = 2
+class R:
+    every, took, failed, busy = 2, 0.0, False, False
+    def late(self):
+        return self.busy
 now = time.time()
 assert fv.age_mark(now - 1, R(), now=now) == "", fv.age_mark(now - 1, R(), now=now)
-got = fv.age_mark(now - 130, R(), now=now)
+# a 2 s refresh whose read takes 1.5 s lands every ~4 s: no blinking mark (EQBE)
+r = R(); r.took = 1.5
+assert fv.age_mark(now - 4, r, now=now) == ""
+# a slow read stretches the limit past the default
+r.took = 9
+assert fv.age_mark(now - 12, r, now=now) == ""
+assert fv.age_mark(now - 130, R(), now=now) == " · 2 分钟前"
+r = R(); r.busy = True
+got = fv.age_mark(now - 130, r, now=now)
 assert got == " · 2 分钟前 · 刷新中…", got
+r = R(); r.failed = True
+assert fv.age_mark(now - 130, r, now=now) == " · 2 分钟前 · 刷新失败"
 assert fv.age_mark(now - 130, R(), down=True, now=now) == " · 2 分钟前"
 os.environ["FLEET_UI_LANG"] = "en"; fv._WORDS.clear()
-got = fv.age_mark(now - 130, R(), now=now)
+r = R(); r.busy = True
+got = fv.age_mark(now - 130, r, now=now)
 assert got == " · 2 min ago · refreshing…", got
+r = R(); r.failed = True
+assert fv.age_mark(now - 130, r, now=now) == " · 2 min ago · refresh failed"
 assert fv.age_mark(0, R()) == ""
+# Refresh.late: a read on its way is not late; past the limit it is
+rf = fv.Refresh("x", every=2)
+assert not rf.late()
+rf.busy, rf.since = True, time.monotonic() - 3
+assert rf.late(2) and not rf.late(5)
 PY
 
 # --- E ----------------------------------------------------------------------------
