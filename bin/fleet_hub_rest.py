@@ -63,6 +63,17 @@ def creds():
     if tok and not url:
         raise Fail(4, '入口不通 — CCQUOTA_TOKEN requires its own CCQUOTA_HUB_URL; '
                       'refusing to choose an endpoint for an explicit identity')
+    if not (url and tok) and not url and not tok:
+        # the same pair, read in-process (T992, fleet_node_http.pair: node.env, or
+        # a separated login's broker over the proxy's control socket) — the bash
+        # road below was a shell, fleet-lib and another Python, ~0.25 s a start
+        try:
+            import fleet_node_http
+            got = fleet_node_http.pair() if fleet_node_http.usable() else None
+        except Exception:  # noqa: BLE001 — the old road decides
+            got = None
+        if got:
+            url, tok = got
     if not (url and tok):
         # A URL alone is not an authentication source. Ask the existing reader
         # for ONE complete pair, without letting it fill an inherited half from

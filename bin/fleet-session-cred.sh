@@ -133,8 +133,15 @@ hub_broker() {
 # usage under it, so the hub files it under the session's task (issue #3376).
 session_worker() {
   [ -n "${FLEET_WORKER_CRED:-}" ] || return 0
-  python3 "$BIN/fleet-mcp.py" --cred check 2>/dev/null \
-    | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("worker_id") or "")' 2>/dev/null
+  local j w
+  j=$(python3 "$BIN/fleet-mcp.py" --cred check 2>/dev/null) || return 0
+  # its worker_id read by the shell (T992: a second interpreter for one field);
+  # a shape it does not know is python's
+  case "$j" in
+    *'"worker_id": "'*) w=${j#*'"worker_id": "'}; w=${w%%'"'*}
+       case "$w" in *[!A-Za-z0-9/._:-]*) ;; *) printf '%s\n' "$w"; return 0 ;; esac ;;
+  esac
+  printf '%s' "$j" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("worker_id") or "")' 2>/dev/null
 }
 
 hub_pass() {
@@ -253,8 +260,14 @@ case "$cmd" in
       || die "the credential proxy is not running and would not start (logs/cred-proxy.log)" 6
     rt=$(bash "$PROXY" route --provider "$provider" --json 2>/dev/null); prc=$?
     case "$rt" in *'"trust": "unknown"'*) rt=$(bash "$PROXY" route --provider "$provider" --refresh --json 2>/dev/null); prc=$? ;; esac
-    route=$(printf '%s' "$rt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["route"])' 2>/dev/null) \
-      || die "the proxy did not say which route this machine takes" "$(down_rc "$prc")"
+    # the route read by the shell (T992: an interpreter for one field); a shape
+    # it does not know is python's, as before
+    route=''
+    case "$rt" in *'"route": "'*) route=${rt#*'"route": "'}; route=${route%%'"'*} ;; esac
+    case "$route" in direct|relay|central) ;; *)
+      route=$(printf '%s' "$rt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["route"])' 2>/dev/null) \
+        || die "the proxy did not say which route this machine takes" "$(down_rc "$prc")" ;;
+    esac
     wid=''; [ "$route" = central ] || wid=$(session_worker)   # central: the cluster proxy's to meter
     if [ "$route" = central ]; then
       row=$(hub_pass "$provider"); hrc=$?

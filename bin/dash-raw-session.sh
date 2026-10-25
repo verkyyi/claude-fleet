@@ -133,7 +133,8 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""
+RAW_ARGV=("$@")   # as called: a prestart that did not hold starts this run again (T992)
+PRESTART_DIR=""; NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""
 CX_HOME=""; STRICT_RESUME=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -236,6 +237,12 @@ while [ "$#" -gt 0 ]; do
     --id-parent=*) ID_PARENT="${1#--id-parent=}"; shift ;;
     --fid=*)       REOPEN_FID="${1#--fid=}"; shift ;;
     --placeholder) PLACEHOLDER=1; shift ;;
+    # --prestart <dir> (T992): fleet-task-record.sh's dispatch runs this beside
+    # its record — the steps that do not need the record (admission and where the
+    # session opens, the authority's --finish, the worktree and its fill), their
+    # answers in <dir>/prep (KEY=VALUE), then exit. The record's own run reads
+    # them (FLEET_PRESTART) instead of doing them again.
+    --prestart)    PRESTART_DIR="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -317,10 +324,20 @@ if [ -n "$CONTINUATION_ID" ]; then
 fi
 case "${FLEET_TASK_CONTROL_VERSION:-}" in ''|1) ;; *) printf 'dash-raw-session: unsupported task execution control version\n' >&2; exit 2 ;; esac
 if [ -n "$DISPATCH" ]; then
-  # the resolved agent rides on the first line (--with-agent; T992: one
-  # interpreter, not a second to read it back)
-  DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --with-agent ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
-  AGENT=${DISPATCH%%$'\n'*}; DISPATCH=${DISPATCH#*$'\n'}
+  # The envelope is validated once, below (fleet_dispatch.py --with-agent, which
+  # resolves it with the template too — T992: a first pass here was a second
+  # interpreter for the same answer); its resolved agent is read here so the
+  # agent file is looked for as that agent. A contradicting --agent is refused
+  # by that one validation.
+  case "$DISPATCH" in
+    *'"resolved_agent":"'*) _ra=${DISPATCH#*'"resolved_agent":"'}; _ra=${_ra%%'"'*} ;;
+    *) _ra='' ;;
+  esac
+  case "$_ra" in claude|codex) [ -n "$AGENT" ] || AGENT=$_ra ;; *)
+    DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --with-agent ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
+    AGENT=${DISPATCH%%$'\n'*}; DISPATCH=${DISPATCH#*$'\n'} ;;
+  esac
+  unset _ra
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -328,7 +345,9 @@ case "$REAP_ORIGIN" in ''|person|dispatched|member|driver|orchestrator|decide|pr
   *) printf 'dash-raw-session: --reap-origin takes person|dispatched|member|driver|orchestrator|decide|probe\n' >&2; exit 2 ;;
 esac
 # The reap policy, canonical or refused before anything opens (issue #1902).
-if [ -n "$REAP" ]; then
+# A policy already in its canonical form needs no interpreter (T992: norm prints
+# these back unchanged); anything else — a bare `done`, `at:<time>` — is norm's.
+if [ -n "$REAP" ] && ! [[ "$REAP" =~ ^((merged|done|idle):[1-9][0-9]{0,3}[smhd]|merged|keep|loop-end)$ ]]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
 fi
 # shellcheck source=/dev/null
@@ -413,7 +432,35 @@ ORIGIN=''; ORIGIN_WID=''; ID_PARENT=''
 NODE="$NODE_ARG"
 if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
   NODE="${FLEET_SPAWN_NODE:-$(fleet_spawn_node_default)}"   # personal machine → local (#1721)
+  # ⌘P's 「新会话」 names where its own starts go (T992: FLEET_NEW_NODE, carried
+  # as FLEET_START_NODE); an operator's FLEET_SPAWN_NODE still wins
+  [ -z "${FLEET_SPAWN_NODE:-}" ] && [ -n "${FLEET_START_NODE:-}" ] && NODE=$FLEET_START_NODE
   case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
+fi
+# here-first (T992 — ⌘P's 「新会话」, the person's choice): this machine when its
+# admission takes the session — no hub placement, no other machine's road
+# (~2–4 s) — and the hub's placement only when it does not (the verdict held as
+# CAP_HELD below, exactly as an `auto` start that this machine refused).
+# A prestart's answers (T992, beside the record — see --prestart): taken when they
+# are this start's — the same fleet and repo, written in the last 30 s, this
+# machine admitted it — else nothing, and every step below runs as before.
+# Its answers are read where they are needed (prestart_take, before the last
+# asks): until then this run does its own steps that need neither — so a
+# prestart beside the record means "this machine, admitted" here, and an answer
+# that says otherwise (full, another fleet, too old) starts this run again
+# without it, the old way (hub placement as `auto` would).
+PRE_SLUG='' PRE_WT='' PRE_FILL='' PRE_AUTH='' PRE_USE=0
+if [ -z "$PRESTART_DIR" ] && [ -n "${FLEET_PRESTART:-}" ] && [ -d "$FLEET_PRESTART" ] \
+   && case "$NODE" in here-first|local) true ;; *) false ;; esac; then
+  PRE_USE=1; NODE=local; HERE_ADMITTED=1
+fi
+# a prestart says it is done however it ends (a refusal too): its reader waits on it
+[ -n "$PRESTART_DIR" ] && trap ': > "$PRESTART_DIR/done" 2>/dev/null' EXIT
+HERE_FIRST=0
+if [ "$NODE" = here-first ]; then
+  HERE_FIRST=1
+  if fleet_session_cap_ok "$SESS" >/dev/null 2>&1; then NODE=local; HERE_ADMITTED=1
+  else NODE=auto; fi
 fi
 PLACING=0
 [ -n "$NODE" ] && ! fleet_node_is_self "$NODE" && PLACING=1
@@ -435,9 +482,13 @@ CAP_HELD=''
 # admission sees the flag; nothing the window runs inherits it.
 _admit_guide=0
 [ "$NAME" = guide ] && [ "$PIN" = 1 ] && [ "$PROMPT" = /fleet-onboard ] && _admit_guide=1
-if ! cap_msg=$(FLEET_ADMIT_GUIDE=$_admit_guide fleet_session_cap_ok "$SESS"); then
+if [ "${HERE_ADMITTED:-0}" = 1 ]; then
+  :   # admitted a moment ago, by here-first (above): one admission, one reservation
+elif ! cap_msg=$(FLEET_ADMIT_GUIDE=$_admit_guide fleet_session_cap_ok "$SESS"); then
   if [ "$PLACING" = 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then CAP_HELD=$cap_msg
   else refuse "$cap_msg"; exit 2; fi
+elif [ -n "$PRESTART_DIR" ] && [ "$PLACING" = 0 ]; then
+  HERE_ADMITTED=1   # this machine took it: the prestart's answer to hand on
 fi
 
 # Which repo (issue #789) — see the header. ONE rule, however many repos the fleet
@@ -479,6 +530,58 @@ fi
 [ "$NOREPO" = 1 ] && REPO_ARG=''
 
 MAIN="${FLEET_MAIN:-}"
+if [ -n "$PRESTART_DIR" ]; then
+  # --prestart (T992): what this start can do before its record exists — the
+  # admission ran above (here-first: this machine, or the hub's later); the
+  # rest only when it opens here
+  {
+    printf 'sess=%s\nrepo=%s\nat=%s\nadmitted=%s\nnode=%s\n' "$SESS" "$REPO_ARG" "$(date +%s)" \
+      "${HERE_ADMITTED:-0}" "$([ "${HERE_ADMITTED:-0}" = 1 ] && echo local || echo auto)"
+  } > "$PRESTART_DIR/prep.part"
+  if [ "${HERE_ADMITTED:-0}" = 1 ] && [ "$NOREPO" != 1 ] && [ -d "$MAIN/.git" ]; then
+    BASE="${FLEET_BASE_BRANCH:-master}"
+    ( fleet_fetch_bounded "$MAIN" "$BASE" ) </dev/null >/dev/null 2>&1 &
+    fleet_repo_authority_guard "$REPO_ARG" --finish "$SESS" >/dev/null 2>"$PRESTART_DIR/auth.err"
+    printf 'auth=%s\n' "$?" >> "$PRESTART_DIR/prep.part"
+    _nco=''; [ "${FLEET_SPAWN_OVERLAP:-1}" != 0 ] && _nco=1
+    alloc=$(FLEET_SCRATCH_NOCHECKOUT=$_nco fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
+    if [ -n "$alloc" ]; then
+      slug=${alloc%%	*}; wt=${alloc#*	}
+      printf 'slug=%s\nwt=%s\n' "$slug" "$wt" >> "$PRESTART_DIR/prep.part"
+      if [ -n "$_nco" ]; then
+        FILL_MARK="$(fleet_cache_dir "$(fleet_slug "${REPO_ARG:-${FLEET_REPO:-$SESS}}")")/fill_$slug.pid"
+        # the fill's own answer in <mark>.rc: the record's run is not its parent
+        ( if [ -n "${FLEET_SPAWN_FILL_CMD:-}" ]; then sh -c "$FLEET_SPAWN_FILL_CMD" fill "$wt"
+          else fleet_worktree_fill "$MAIN" "$wt"; fi; _r=$?; [ "$_r" = 0 ] && rm -f "$FILL_MARK"
+          echo "$_r" > "$FILL_MARK.rc"; [ "$_r" = 0 ] && fleet_timing_at filled ) </dev/null >/dev/null 2>&1 &
+        printf '%s\n' "$!" > "$FILL_MARK"
+        printf 'fill=%s\n' "$FILL_MARK" >> "$PRESTART_DIR/prep.part"
+      fi
+    fi
+  fi
+  mv -f "$PRESTART_DIR/prep.part" "$PRESTART_DIR/prep"
+  : > "$PRESTART_DIR/done"
+  # Made ahead of its ↵ (⌘P's 「新会话」 box, FLEET_PRESTART_HOLD seconds): held
+  # until a start takes it (`claimed`, prestart_take), else given back — the
+  # worktree, its branch, its fill — and gone.
+  _hold=${FLEET_PRESTART_HOLD:-0}; case "$_hold" in ''|*[!0-9]*) _hold=0 ;; esac
+  if [ "$_hold" -gt 0 ]; then
+    trap - EXIT
+    ( _i=0
+      while [ ! -f "$PRESTART_DIR/claimed" ] && [ -d "$PRESTART_DIR" ] && [ "$_i" -lt $((_hold * 4)) ]; do
+        sleep 0.25; _i=$((_i + 1))
+      done
+      if [ -d "$PRESTART_DIR" ] && [ ! -f "$PRESTART_DIR/claimed" ]; then
+        if [ -n "${slug:-}" ] && [ -n "${wt:-}" ]; then
+          [ -n "${FILL_MARK:-}" ] && { _j=0; while [ ! -f "$FILL_MARK.rc" ] && [ "$_j" -lt 2400 ]; do sleep 0.05; _j=$((_j + 1)); done
+                                       rm -f "$FILL_MARK" "$FILL_MARK.rc"; }
+          fleet_scratch_free "$MAIN" "$slug" "$wt"
+        fi
+        rm -rf "$PRESTART_DIR"
+      fi ) </dev/null >/dev/null 2>&1 &
+  fi
+  exit 0
+fi
 # The agent file it starts as (issue #3122), looked for from where it will run.
 AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
@@ -507,10 +610,19 @@ if [ -n "$AS_KV" ]; then
   TEMPLATE_AGENT=$(as_kv agent)
   [ -n "$AGENT" ] || AGENT=$TEMPLATE_AGENT
 fi
-DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --with-agent ${EXPLICIT_AGENT:+--agent "$EXPLICIT_AGENT"} \
-  --template "$TEMPLATE_AGENT" --default "${FLEET_AGENT:-}" --accepted "$DISPATCH") || exit 2
-AGENT=${DISPATCH%%$'\n'*}
-DISPATCH=${DISPATCH#*$'\n'}
+_ra=''
+if [ -n "$DISPATCH" ] && [ "${FLEET_DISPATCH_RESOLVED:-x}" = "${EXPLICIT_AGENT}	${TEMPLATE_AGENT}	${FLEET_AGENT:-}" ]; then
+  # resolved from these very three by the dispatch that made it (T992): its agent
+  case "$DISPATCH" in *'"resolved_agent":"'*) _ra=${DISPATCH#*'"resolved_agent":"'}; _ra=${_ra%%'"'*} ;; esac
+fi
+case "$_ra" in
+  claude|codex) AGENT=$_ra ;;
+  *) DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --with-agent ${EXPLICIT_AGENT:+--agent "$EXPLICIT_AGENT"} \
+       --template "$TEMPLATE_AGENT" --default "${FLEET_AGENT:-}" --accepted "$DISPATCH") || exit 2
+     AGENT=${DISPATCH%%$'\n'*}
+     DISPATCH=${DISPATCH#*$'\n'} ;;
+esac
+unset _ra FLEET_DISPATCH_RESOLVED
 
 if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
@@ -765,7 +877,16 @@ _inflight="$(fleet_inflight_mark "$SESS")"
 trap 'rm -f "$_inflight" 2>/dev/null' EXIT
 # the cold overlap's filler (T992): waited for before the worktree is rolled back
 FILL_PID='' FILL_MARK=''
-raw_fill_stop() { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; FILL_PID=''; }; return 0; }
+raw_fill_stop() { [ -n "$FILL_PID" ] && { raw_fill_wait; rm -f "$FILL_MARK" "$FILL_MARK.rc"; FILL_PID=''; }; return 0; }
+# raw_fill_wait → the fill's exit: our child's `wait`, or a prestart's <mark>.rc
+raw_fill_wait() {
+  if [ "$FILL_PID" = prestart ]; then
+    local i=0
+    while [ ! -f "$FILL_MARK.rc" ] && [ "$i" -lt 2400 ]; do sleep 0.05; i=$((i + 1)); done
+    return "$(cat "$FILL_MARK.rc" 2>/dev/null || echo 1)"
+  fi
+  wait "$FILL_PID" 2>/dev/null
+}
 
 # Window name (issue #225): an optional --name wins; otherwise the auto
 # `scratch-<N>` (N == the worktree suffix, allocated below). A custom name is
@@ -800,14 +921,34 @@ fi
 # A task's window is admitted by its own ID (EPIC T497 C8): nothing is claimed,
 # a --resume with --task is the same session back (its ID's ledger names the
 # conversation), and the gate below asks only the person's authority.
+# prestart_take — the prestart's answers, once it is done: this start's (the same
+# fleet + repo, this machine admitted it, < 30 s old) ⇒ its worktree, fill and
+# --finish are ours; anything else ⇒ this script again, without the prestart.
+prestart_take() {
+  [ "$PRE_USE" = 1 ] || return 0
+  local i=0 ok=0
+  while [ ! -f "$FLEET_PRESTART/done" ] && [ "$i" -lt 300 ]; do sleep 0.02; i=$((i + 1)); done
+  _pv() { sed -n "s/^$1=//p" "$FLEET_PRESTART/prep" 2>/dev/null | head -n 1; }
+  [ "$(_pv sess)" = "$SESS" ] && [ "$(_pv repo)" = "$REPO_ARG" ] && [ "$(_pv admitted)" = 1 ] \
+    && [ "$(_pv node)" = local ] && [ $(( $(date +%s) - $(_pv at) )) -lt "${FLEET_PRESTART_HOLD_MAX:-150}" ] && ok=1
+  # taken: a hold (⌘P's box made it ahead) gives nothing back now
+  [ "$ok" = 1 ] && : > "$FLEET_PRESTART/claimed"
+  if [ "$ok" != 1 ]; then
+    rm -rf "$FLEET_PRESTART"
+    exec env -u FLEET_PRESTART FLEET_START_NODE=auto bash "$0" ${RAW_ARGV[@]+"${RAW_ARGV[@]}"}
+  fi
+  PRE_SLUG=$(_pv slug); PRE_WT=$(_pv wt); PRE_FILL=$(_pv fill); PRE_AUTH=$(_pv auth); PRE_REPO=$(_pv repo)
+  unset -f _pv
+}
 # These last asks of the hub — the authority's --finish, the task's history and
 # its ID's take — run BESIDE the worktree's allocation (T992: one after another
 # they were ~1.2 s before the first git command): each writes its answer to a
 # file of its own, and pre_wait reads them before anything the window needs.
 # Nothing is opened before they answer; a refusal gives the worktree back.
+prestart_take   # the prestart's answers (or this run, again, without them)
 PRE=$(mktemp -d "${TMPDIR:-/tmp}/raw-pre.XXXXXX") || exit 2
 pre_pids=''
-if [ "$NOREPO" != 1 ] && [ "$PLACED" != hub ]; then
+if [ "$NOREPO" != 1 ] && [ "$PLACED" != hub ] && [ "$PRE_AUTH" != 0 ]; then
   ( fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null 2>"$PRE/auth.err"
     echo $? > "$PRE/auth.rc" ) </dev/null &
   pre_pids="$pre_pids $!"
@@ -884,8 +1025,15 @@ else
   # window opened: a failed fill takes the window and the worktree with it.
   # FLEET_SPAWN_OVERLAP=0 = the old order. FLEET_SPAWN_FILL_CMD: the selftest seam.
   _nco=''; [ "${FLEET_SPAWN_OVERLAP:-1}" != 0 ] && _nco=1
-  alloc=$(FLEET_SCRATCH_NOCHECKOUT=$_nco fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
-  if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
+  if [ -n "$PRE_SLUG" ] && [ "$PRE_REPO" = "$REPO_ARG" ] && [ -d "$PRE_WT" ]; then
+    # made beside the record (the prestart, T992): its fill is not our child —
+    # raw_fill_stop / the wait below read its answer from <mark>.rc
+    slug=$PRE_SLUG; wt=$PRE_WT; FILL_MARK=$PRE_FILL; [ -n "$FILL_MARK" ] && FILL_PID=prestart
+    _nco=''
+  else
+    alloc=$(FLEET_SCRATCH_NOCHECKOUT=$_nco fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
+    if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
+  fi
   [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
   fleet_timing_at worktree   # its worktree and branch made (T992: the stub shows it)
   if [ -n "$_nco" ]; then
@@ -945,6 +1093,7 @@ elif [ -n "$TASK_REF" ] && ! fleet_is_fid "$REOPEN_FID"; then
   unset _tt _ttrc
 fi
 [ -n "${PRE:-}" ] && rm -rf "$PRE"
+[ "${PRE_USE:-0}" = 1 ] && rm -rf "$FLEET_PRESTART"   # taken: its answers are ours now
 
 # Spawn non-invasive by default (matches dash-issue-session.sh): -d creates the
 # window WITHOUT making it current, so a user attached to $SESS is not yanked over.
@@ -1199,7 +1348,8 @@ fi
 # as the issue road, #2237): a fill that failed takes its window and worktree
 # with it — a session with half a checkout is no session.
 if [ -n "$FILL_PID" ]; then
-  wait "$FILL_PID" 2>/dev/null; _frc=$?
+  raw_fill_wait; _frc=$?
+  rm -f "$FILL_MARK.rc"
   if [ "$_frc" != 0 ] || [ -f "$FILL_MARK" ]; then
     fleet_win_retire "$win" "$SOCK" spawn-failed 2>/dev/null
     TM kill-window -t "$win" 2>/dev/null

@@ -2542,6 +2542,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # road: the panel waits for the session and then goes to it.
 # @label=New session window first @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_STUB=1
+# Where ⌘P 「新会话」 opens its session (T992): here-first — this machine when its
+# admission takes it (no hub placement, no other machine's road), the hub's
+# placement only when this machine is full · auto — always the hub's placement ·
+# local — this machine or not at all. FLEET_SPAWN_NODE, when set, wins.
+# @label=New session machine @group=spawn @tier=internal @scope=fleet @edit=enum
+#FLEET_NEW_NODE=here-first
 
 
 # How long an in-progress scratch spawn (issue #531) counts against the session cap

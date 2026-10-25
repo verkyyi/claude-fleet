@@ -100,7 +100,12 @@ fi
 
 SEP_RUN=''   # separated: the role account's run dir (ctl.sock, port, pid)
 if [ -f "$CONF/credsep.json" ]; then
-  SEP_RUN=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run",""))' "$CONF/credsep.json" 2>/dev/null)
+  # its "run" read by sed (T992: an interpreter for one field, ~80 ms, on every
+  # call a start makes); a value sed cannot be sure of is python's, as before
+  SEP_RUN=$(sed -n 's/.*"run"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' "$CONF/credsep.json" 2>/dev/null | head -n 1)
+  if [ -z "$SEP_RUN" ] && grep -q '"run"' "$CONF/credsep.json" 2>/dev/null; then
+    SEP_RUN=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run",""))' "$CONF/credsep.json" 2>/dev/null)
+  fi
 fi
 # The relay pass (#1974) is renewed on REQUEST, never on a clock (issue #3561,
 # EPIC #3500 C19). The proxy holds it and knows its age: it writes
@@ -208,6 +213,12 @@ if [ -n "$SEP_RUN" ]; then
     ensure|port)
       live_pid >/dev/null || { echo "fleet-cred-proxy: separated, and its service is not running ($SEP_RUN)" >&2; exit 1; }
       cat "$SEP_RUN/port"; exit 0 ;;
+    route|mint)
+      # the control socket's light client first (T992: the full module was ~0.3 s
+      # a call, twice a start); 4 = it cannot say this one — the full CLI does
+      python3 -I "$BIN/fleet_cred_ctl.py" "$cmd" "$@"; _rc=$?
+      [ "$_rc" = 4 ] || exit "$_rc"
+      exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
     node-token|node-hash|store|unstore|accounts|target-auth|credential-inspect)
       exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
     relay)   # the minted relay pass on stdin → the proxy's own state (#1974)
