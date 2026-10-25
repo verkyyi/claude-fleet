@@ -1,0 +1,18 @@
+# Let's Encrypt for the hub's address: HTTP-01, answered through k3s' traefik
+# (cert-manager's solver Ingress on port 80 — the longer path wins over the
+# hub's /, and the hub's http→https redirect never sees it). The bootstrap puts
+# the contact in; staging first is LETSENCRYPT_SERVER=staging on the bootstrap.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: acme@example.invalid
+    privateKeySecretRef:
+      name: letsencrypt-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

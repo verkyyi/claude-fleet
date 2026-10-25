@@ -1,0 +1,43 @@
+# The box's own settings. Secrets are referenced by name only (deploy/aws/README.md
+# «Secrets»): the base's ccquota · ccquota-db · ccquota-ssh-ca · ccquota-fleet-cred-key
+# (· ccquota-ssh-host-ca, optional), plus ccquota-site-env — every other
+# CCQUOTA_* the hub needs (the GitHub sign-in pair, the session-pass key, the
+# credential proxy's token), one key per variable; the account-op key that
+# signs the provisioner's tickets is a file, Secret ccquota-account-key. Who
+# administers it is ConfigMap ccquota-site (CCQUOTA_FLEET_ADMIN_USERS,
+# CCQUOTA_GITHUB_ADMINS) — names, so not in this public tree either.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: ecr-pull
+      containers:
+        - name: ccquota
+          envFrom:
+            - configMapRef:
+                name: ccquota-site
+                optional: true
+            - secretRef:
+                name: ccquota-site-env
+                optional: true
+          env:
+            - name: CCQUOTA_FLEET_PUBLIC_URL
+              value: "https://core.tokenman.io"
+            - name: CCQUOTA_PUBLIC_URL
+              value: "https://core.tokenman.io"
+            # the spare / own pods' tickets (docs/dev/MANAGED-LINUX.md «Spare pods»)
+            - name: CCQUOTA_FLEET_ACCOUNT_KEY
+              value: "/secrets/account-key/key"
+          volumeMounts:
+            - name: account-key
+              mountPath: /secrets/account-key
+              readOnly: true
+      volumes:
+        - name: account-key
+          secret:
+            secretName: ccquota-account-key
+            defaultMode: 0440

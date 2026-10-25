@@ -549,10 +549,29 @@ def _mebi(q):
     return int(q[:-2]) * _UNIT[q[-2:]]
 
 
-def user_pod_limits(text=''):
+def user_pod_requests(req=None):
+    """What an idle pod is promised: USER_POD_REQUESTS, or a deployment's own
+    (the provisioner template's user_pod.requests {cpu, memory} — a cluster
+    sized for fewer, bigger homes, task PNWW). None = the default."""
+    got = dict(USER_POD_REQUESTS)
+    for k, v in (req or {}).items():
+        if k not in got:
+            raise ValueError('user_pod.requests takes cpu and memory; not %r' % k)
+        if not re.fullmatch(_CPU_RE if k == 'cpu' else _BYTES_RE, str(v)):
+            raise ValueError('user_pod.requests %s=%r: cpu is cores or millicores, memory N{Mi,Gi,Ti}' % (k, v))
+        got[k] = str(v)
+    return got
+
+
+def user_pod_limits(text='', requests=None, default=''):
     """'cpu=2,memory=6Gi,disk=50Gi' (any subset; '' = the defaults) -> the dict.
-    A ceiling under what the pod is promised idle is refused."""
+    A ceiling under what the pod is promised idle is refused. `requests` is
+    user_pod_requests()'s; `default` is a deployment's own default ceiling (the
+    template's user_pod.limits, same text), under the person's text."""
+    requests = user_pod_requests(requests)
     got = dict(USER_POD_LIMITS)
+    if default:
+        got = user_pod_limits(default, requests)
     for part in [x.strip() for x in text.split(',') if x.strip()]:
         k, _, v = part.partition('=')
         k, v = k.strip(), v.strip()
@@ -561,11 +580,11 @@ def user_pod_limits(text=''):
         if not re.fullmatch(_CPU_RE if k == 'cpu' else _BYTES_RE, v):
             raise ValueError('--limits %s=%r: cpu is cores (2) or millicores (500m), memory/disk N{Mi,Gi,Ti}' % (k, v))
         got[k] = v
-    if _cpu_milli(got['cpu']) < _cpu_milli(USER_POD_REQUESTS['cpu']):
-        raise ValueError('--limits cpu=%s is under the idle request %s' % (got['cpu'], USER_POD_REQUESTS['cpu']))
-    if _mebi(got['memory']) < _mebi(USER_POD_REQUESTS['memory']):
+    if _cpu_milli(got['cpu']) < _cpu_milli(requests['cpu']):
+        raise ValueError('--limits cpu=%s is under the idle request %s' % (got['cpu'], requests['cpu']))
+    if _mebi(got['memory']) < _mebi(requests['memory']):
         raise ValueError('--limits memory=%s is under the idle request %s'
-                         % (got['memory'], USER_POD_REQUESTS['memory']))
+                         % (got['memory'], requests['memory']))
     if _mebi(got['disk']) < 1024:
         raise ValueError('--limits disk=%s: at least 1Gi' % got['disk'])
     return got
@@ -576,8 +595,8 @@ def _ephemeral(res, eph):
     return {k: dict(v, **{'ephemeral-storage': eph[k]}) for k, v in res.items()}
 
 
-def _user_pod_container_resources(limits):
-    return _ephemeral({'requests': dict(USER_POD_REQUESTS),
+def _user_pod_container_resources(limits, requests=None):
+    return _ephemeral({'requests': user_pod_requests(requests),
                        'limits': {'cpu': limits['cpu'], 'memory': limits['memory']}}, USER_POD_EPHEMERAL['fleet'])
 
 
@@ -637,7 +656,7 @@ def _etc_mounts(names):
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
                        cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay='',
-                       login='', uid=0, private_mirrors=(), hub_internal=''):
+                       login='', uid=0, private_mirrors=(), hub_internal='', requests=None):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
     (ReadWriteOncePod). Inside: one login, the one it was made for (--login /
@@ -693,7 +712,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
     shared = [{'name': 'tmp', 'mountPath': '/tmp'}]
     fleet = dict({
         'name': 'fleet', 'image': image, 'env': env,
-        'resources': _user_pod_container_resources(limits),
+        'resources': _user_pod_container_resources(limits, requests),
         'securityContext': {'runAsUser': uid, 'runAsGroup': uid, 'runAsNonRoot': True,
                             'allowPrivilegeEscalation': False, 'capabilities': drop(), 'seccompProfile': rt()},
         'volumeMounts': data + shared + _etc_mounts(['passwd', 'group', 'gitconfig', 'fleet-devnet.env'])
@@ -1200,11 +1219,11 @@ def user_pod_image_patch(image):
                                            for k, names in USER_POD_IMAGE_CONTAINERS}}}}
 
 
-def user_pod_limits_patch(limits):
+def user_pod_limits_patch(limits, requests=None):
     """The patch that moves one pod's ceiling (kubectl patch deploy <name>
     --type strategic): only that Deployment rolls, nobody else's."""
     return {'spec': {'template': {'spec': {'containers': [
-        {'name': 'fleet', 'resources': _user_pod_container_resources(limits)}]}}}}
+        {'name': 'fleet', 'resources': _user_pod_container_resources(limits, requests)}]}}}}
 
 
 if __name__ == '__main__':

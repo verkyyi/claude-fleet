@@ -1,0 +1,10 @@
+# http → https for the hub's Ingress (traefik skips a request already on https,
+# and cert-manager's /.well-known/acme-challenge/ solver is its own Ingress).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

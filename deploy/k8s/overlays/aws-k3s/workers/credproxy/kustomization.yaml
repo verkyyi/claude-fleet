@@ -1,0 +1,35 @@
+# The cluster credential proxy beside the user pods, as ../../../../credproxy/fleet-workers
+# makes it (fleet-credproxy:80, in-cluster only), from the environment-free base
+# so a private deploy overlay laid over credproxy/fleet-workers never reaches it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet-workers
+resources:
+  - ../../../../credproxy/base
+images:
+  - name: ccquota
+    newName: ecr.invalid/fleet/ccquota
+    newTag: set-by-deploy
+patches:
+  - path: deployment-env.yaml
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ccquota-credproxy
+  - target: {kind: Deployment, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy
+  - target: {kind: Service, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy
+  - target: {kind: PodDisruptionBudget, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy

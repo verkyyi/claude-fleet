@@ -1,0 +1,29 @@
+# Direct to the providers (no relay: us-west-2 is a region they serve), the hub
+# by its Service in fleet-hub, its token from Secret fleet-credproxy (the same
+# value as the hub's CCQUOTA_FLEET_CREDPROXY_TOKEN — deploy/aws/README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-credproxy
+spec:
+  template:
+    metadata:
+      labels:
+        fleet/role: ops
+    spec:
+      serviceAccountName: fleet-credproxy
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ecr-pull
+      containers:
+        - name: credproxy
+          env:
+            - name: CCQUOTA_CREDPROXY_HUB_URL
+              value: "http://ccquota-hub.fleet-hub.svc.cluster.local"
+            - name: CCQUOTA_FLEET_CREDPROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-credproxy
+                  key: credproxy-token
+            - name: CCQUOTA_CREDPROXY_RELAY_URL
+              value: ""

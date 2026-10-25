@@ -1,0 +1,28 @@
+# The hub's core on ONE AWS EC2 box running k3s (task PNWW): a 10-person trial
+# in us-west-2. Not production — production is the Shenzhen ACK deployment
+# (../prod, in the private deploy repo); nothing here is read by hub-deploy, and
+# nothing in ../../base changes for it.
+#
+#   hub/      namespace fleet-hub: the hub (two replicas, Postgres on RDS),
+#             traefik (k3s' own) Ingress for core.tokenman.io, cert-manager TLS
+#   workers/  namespace fleet-workers: the cluster credential proxy, the
+#             provisioner, the accounts and network rules user pods (u-<nonce>,
+#             render.py) need — direct egress, no fleet-egress / US egress
+#   cluster-issuer.yaml  Let's Encrypt, HTTP-01 through traefik
+#   traefik-config.yaml  k3s' traefik: no read timeout on websockets
+#
+# Placeholders the box's bootstrap (deploy/aws/k3s-box/bootstrap.sh) replaces in
+# the render — no account id, address or secret is committed:
+#   ecr.invalid/fleet/ccquota:set-by-deploy       the hub image (ECR)
+#   ecr.invalid/fleet/managed-node:set-by-deploy  the managed-node image, by digest
+#   acme@example.invalid                          the Let's Encrypt contact
+#   core.tokenman.io                              the address (HUB_HOST overrides)
+# Secrets are created on the box, never here: deploy/aws/README.md «Secrets».
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - cluster-issuer.yaml
+  - traefik-config.yaml
+  - hub
+  - workers

@@ -120,7 +120,7 @@ func (s *Server) linkUpNow(e store.Endpoint, p linkPrev, now time.Time) {
 func (s *Server) linkDown(ctx context.Context, ep *store.Endpoint, nc *nodeConn, err error) {
 	end := linkEndClosed
 	switch {
-	case ctx.Err() != nil:
+	case ctx.Err() != nil, s.Draining():
 		end = linkEndShutdown
 	case errors.Is(err, context.DeadlineExceeded):
 		end = linkEndTimeout
