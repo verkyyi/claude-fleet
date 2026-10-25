@@ -2,11 +2,11 @@
 
 This page is about every day: one key opens the panel, where you open sessions, see how they are doing and answer their questions; and how to say when something is wrong. Connecting from a computer or phone has its own page: [Connecting from a computer or phone](connect.md). Using it for the first time, follow [Member · Quickstart](quickstart.md) to your first session.
 
-Remember one sentence: **sessions run on Tokenman's machines, not on your computer.** Close the terminal, shut the laptop, go offline — sessions keep working; come back, type `fleet`, and everything is as you left it — you land on the session you looked at last; if it has closed, ⌘P's list opens with the cursor on your most recently active session (Enter goes back to it), and only when you have no session on any machine is a new one opened (setting `FLEET_VIEW_LAND`: `panel` default · `last` straight back to the most recent · `new` a new one every time).
+Remember one sentence: **sessions run on tokenman's machines, not on your computer.** Close the terminal, shut the laptop, go offline — sessions keep working; come back, type `fleet`, and everything is as you left it — you land on the session you looked at last; if it has closed, ⌘P's list opens with the cursor on your most recently active session (Enter goes back to it), and only when you have no session on any machine is a new one opened (setting `FLEET_VIEW_LAND`: `panel` default · `last` straight back to the most recent · `new` a new one every time).
 
 ## One key: the panel
 
-Everything starts from one key. The tables below are generated from Tokenman's key configuration, so when a default key changes, this page follows:
+Everything starts from one key. The tables below are generated from tokenman's key configuration, so when a default key changes, this page follows:
 
 <!-- docs-gen:keys -->
 | Where | Press |
@@ -22,10 +22,10 @@ Everything starts from one key. The tables below are generated from Tokenman's k
 | — | type to filter |
 | `?` | legend |
 | `esc` | close |
-| — | Rows of the panel (pick one, ↵ — or type its name): + New session · $ Shell (this machine's shell, in your home directory) · ⏏ Quit Tokenman (sessions keep running) |
+| — | Rows of the panel (pick one, ↵ — or type its name): + New session · $ Shell (this machine's shell, in your home directory) · ⏏ Quit tokenman (sessions keep running) |
 <!-- /docs-gen:keys -->
 
-**The status line carries the brand, the session's name and the quota; messages get a row of their own.** The 看台's status line, at the bottom, shows Tokenman's mark and the session's name 「›› Tokenman · fix cache」 on its left, whatever its state — the session's state, number and question are the ⌘P panel's; on its right the change number (PR), the context left and the quota. It turns grey while the machine is out of reach or on the relay. Whatever Tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. Every message goes by itself: an error (red ✖) and a result nobody took (yellow ✓) stay 30 seconds (or until you have seen them), a warning (yellow ▲) 6 seconds, a note (grey ∙) 3. Folded, it stays in ⌘P's ✦ Messages until you have seen it. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
+**The status line carries the brand, the session's name and the quota; messages get a row of their own.** The 看台's status line, at the bottom, shows tokenman's mark and the session's name 「›› tokenman · fix cache」 on its left, whatever its state — the session's state, number and question are the ⌘P panel's; on its right the change number (PR), the context left and the quota. It turns grey while the machine is out of reach or on the relay. Whatever tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. Every message goes by itself: an error (red ✖) and a result nobody took (yellow ✓) stay 30 seconds (or until you have seen them), a warning (yellow ▲) 6 seconds, a note (grey ∙) 3. Folded, it stays in ⌘P's ✦ Messages until you have seen it. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
 
 The panel looks roughly like this (sample data). ↑↓ follows the visible order. Needs attention has its own entry; PIN keeps pinned sessions above ordinary tasks. Ordinary and earlier conversations each sort by their latest turn activity, newest first. A new reply moves an older conversation up within its section. PIN keeps its pinned order; status refreshes alone do not reorder rows.
 
@@ -42,7 +42,7 @@ The panel looks roughly like this (sample data). ↑↓ follows the visible orde
     D2R6     Claude  Upgrade dependencies        web-app
   ▸ More sessions
   ⇄ Language / 语言
-  ⏏ Quit Tokenman (sessions keep running)
+  ⏏ Quit tokenman (sessions keep running)
   ↵ go  Tab act  ↑↓ pick  ? legend  esc close
 ```
 
@@ -99,11 +99,11 @@ fleet quit                     # quit fleet (see below)
 
 ## Pasting images and dropping files
 
-In the desktop Tokenman terminal, drop files or press `Ctrl+V` to paste a clipboard image. Tokenman uploads them and inserts their remote paths automatically, including multiple files. Ordinary text paste works as before.
+In the desktop tokenman terminal, drop files or press `Ctrl+V` to paste a clipboard image. tokenman uploads them and inserts their remote paths automatically, including multiple files. Ordinary text paste works as before.
 
-Output and resizing continue while Tokenman prepares and uploads attachments. The top bar shows Preparing → Uploading (received bytes and total progress) → Confirming → Uploaded. Input is paused: text, Enter and further drops are discarded, never saved for later. `Ctrl+C` cancels only the upload and restores input without interrupting remote work. Success inserts the confirmed remote paths once, without pressing Enter. Failure, switching sessions or disconnecting inserts nothing; type again after input resumes.
+Output and resizing continue while tokenman prepares and uploads attachments. The top bar shows Preparing → Uploading (received bytes and total progress) → Confirming → Uploaded. Input is paused: text, Enter and further drops are discarded, never saved for later. `Ctrl+C` cancels only the upload and restores input without interrupting remote work. Success inserts the confirmed remote paths once, without pressing Enter. Failure, switching sessions or disconnecting inserts nothing; type again after input resumes.
 
-Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. If Tokenman cannot verify the current session, attachments fail visibly while ordinary text input remains available.
+Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. If tokenman cannot verify the current session, attachments fail visibly while ordinary text input remains available.
 
 ## Working in a code repository
 
@@ -113,11 +113,11 @@ You do not have to watch it. To change direction, open it and say so; to stop ex
 
 ## Closing the computer, changing computers, watching on a phone
 
-Sessions run on Tokenman's machines: close the terminal, shut the laptop, switch to another computer or open it on a phone — it is the same set of sessions. How to connect, and how to come back after closing: [Connecting from a computer or phone](connect.md).
+Sessions run on tokenman's machines: close the terminal, shut the laptop, switch to another computer or open it on a phone — it is the same set of sessions. How to connect, and how to come back after closing: [Connecting from a computer or phone](connect.md).
 
 ## Task records: T numbers
 
-Everything you hand over on the + New session line is first written down by Tokenman, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
+Everything you hand over on the + New session line is first written down by tokenman, numbered with a **T** (for example `T42`): your own words, which machine and which session it went to, and where it stands now.
 
 - A task has this one number: it is yours, not a repository's. A task given a repository changes code and opens pull requests there — GitHub holds only the code and the pull requests, with no second ticket.
 - The hub's **Sessions** page uses the same PIN, ordinary tasks and More sessions layout. Opening a row opens its web conversation; details keep the task description, native observations, PR and history. Task pages no longer offer a browser-terminal switch.
@@ -151,7 +151,7 @@ When the context is nearly full, a repository task's session hands itself off to
 
 ## Optional: your own keys for common actions
 
-Tokenman uses one key, ⌘P (phone: `F12` or `⌃] p`); everything else is in the panel: New session, Shell and Quit Tokenman are rows of it — pick one and press ↵, or type a few letters ("shell", "quit") to land on it; quitting asks first. ⌘K (clear), ⌘T (new tab), ⌘N (new window) and ⌘Q (quit) are iTerm2's again. If you are used to the old shortcuts, add them back in `~/.config/claude-fleet/fleet.conf` on your own computer:
+tokenman uses one key, ⌘P (phone: `F12` or `⌃] p`); everything else is in the panel: New session, Shell and Quit tokenman are rows of it — pick one and press ↵, or type a few letters ("shell", "quit") to land on it; quitting asks first. ⌘K (clear), ⌘T (new tab), ⌘N (new window) and ⌘Q (quit) are iTerm2's again. If you are used to the old shortcuts, add them back in `~/.config/claude-fleet/fleet.conf` on your own computer:
 
 ```ini
 [client]
@@ -175,16 +175,16 @@ The actions you can set (this table is generated too):
 | `home` | From any screen: the home machine's command line ($HOME), no session or hub needed; again to come back | `⌘\` or `⌃\` | — |
 <!-- /docs-gen:keys-extra -->
 
-Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys never reach Tokenman; open the panel with `F12` or `⌃] p` (⌃], then p). In iTerm2, F12 does not open the panel: it stays the session's.
+Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys never reach tokenman; open the panel with `F12` or `⌃] p` (⌃], then p). In iTerm2, F12 does not open the panel: it stays the session's.
 
 ## Saying something is wrong
 
 - **Cannot connect, will not open**: first see [Troubleshooting](../troubleshooting.md). When you need someone to look, type `fleet doctor --json` in the terminal and send the output to your admin.
 - **Common questions**: [FAQ](../faq.md).
 
-A managed conversation without a repository can also switch to Codex from the list menu. Finish its current turn first. For native scheduled tasks, the panel asks the source to verify its current tasks and prepare handoff notes before switching. The source keeps running during preparation; missing sign-in, folder trust or task details are explained. Session-only patrols and one-shot reminders keep their own timing and expiry, and deleted tasks stay deleted. A durable Claude reminder in the project moves too: the source deletes it with its own scheduler only after Tokenman has saved an inactive copy, and the copy goes live once the source has exited — so the reminder arrives once, on time, in the switched conversation. If the source cannot do that itself (for example it is out of quota), the switch takes the reminder only while no other Claude could be rewriting that project's task list; otherwise it explains which process is in the way and the original conversation and reminders keep running. You do not need to find or export JSON. A trusted node fills a missing HOME trust entry while respecting explicit distrust and pre-trust opt-out. Unsent input remains a draft.
+A managed conversation without a repository can also switch to Codex from the list menu. Finish its current turn first. For native scheduled tasks, the panel asks the source to verify its current tasks and prepare handoff notes before switching. The source keeps running during preparation; missing sign-in, folder trust or task details are explained. Session-only patrols and one-shot reminders keep their own timing and expiry, and deleted tasks stay deleted. A durable Claude reminder in the project moves too: the source deletes it with its own scheduler only after tokenman has saved an inactive copy, and the copy goes live once the source has exited — so the reminder arrives once, on time, in the switched conversation. If the source cannot do that itself (for example it is out of quota), the switch takes the reminder only while no other Claude could be rewriting that project's task list; otherwise it explains which process is in the way and the original conversation and reminders keep running. You do not need to find or export JSON. A trusted node fills a missing HOME trust entry while respecting explicit distrust and pre-trust opt-out. Unsent input remains a draft.
 
-For accepted remote tasks, Tokenman verifies the selected agent before delivering the first input. If launch verification fails or the connection loses its receipt, Tokenman keeps the task for recovery instead of choosing another agent or starting it again. A resume keeps the original conversation. An explicit agent switch starts a new attempt only after the source has stopped; an uncertain switch needs recovery before another attempt.
+For accepted remote tasks, tokenman verifies the selected agent before delivering the first input. If launch verification fails or the connection loses its receipt, tokenman keeps the task for recovery instead of choosing another agent or starting it again. A resume keeps the original conversation. An explicit agent switch starts a new attempt only after the source has stopped; an uncertain switch needs recovery before another attempt.
 
 ## Webchat connections
 

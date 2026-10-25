@@ -84,7 +84,7 @@ for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，立即
         bad.append('A %s: says "%s" — access is limited (#4049)' % (rel, m.group(0)))
     # B
     head = p.split('</head>')[0]
-    need = ['<html lang="%s">' % lang, '<title>Tokenman', '<meta name="description" content="',
+    need = ['<html lang="%s">' % lang, '<title>tokenman', '<meta name="description" content="',
             '<link rel="canonical" href="__ORIGIN__%s">' % url,
             '<link rel="alternate" hreflang="zh-CN" href="__ORIGIN__/">',
             '<link rel="alternate" hreflang="en" href="__ORIGIN__/en/">',
@@ -194,7 +194,7 @@ for name in ('llms.txt', 'llms-zh.txt', 'llms-full.txt'):
     f = os.path.join(OUT, 'apply', name)
     if not os.path.isfile(f):
         bad.append('T apply/%s not built' % name); continue
-    head = '\n'.join(l for l in open(f, encoding='utf-8') if l.startswith('> ') or 'Tokenman' in l[:40])
+    head = '\n'.join(l for l in open(f, encoding='utf-8') if l.startswith('> ') or 'tokenman' in l[:40])
     if re.search(r'试 ?15|15 minutes|试用', head):
         bad.append('T apply/%s: its summary still offers the trial' % name)
 for x in bad:

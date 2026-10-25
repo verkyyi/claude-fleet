@@ -230,10 +230,10 @@ func TestAdminNotices_TemplateFields(t *testing.T) {
 	}
 	s.WxGW.TplNoticeFields = ""
 	m = serviceNoticeMsg(sn, true, "", s.noticeTplFields())
-	if m.Tpl["thing1"] != clipRunes("Tokenman service notice", 20) {
+	if m.Tpl["thing1"] != clipRunes("tokenman service notice", 20) {
 		t.Fatalf("default tpl = %+v", m.Tpl)
 	}
-	if _, ok := m.Tpl["thing2"]; !ok || m.Link != "" || !strings.Contains(m.Body, "member of Tokenman") {
+	if _, ok := m.Tpl["thing2"]; !ok || m.Link != "" || !strings.Contains(m.Body, "member of tokenman") {
 		t.Fatalf("english = %+v", m)
 	}
 }

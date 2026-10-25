@@ -4,4 +4,4 @@ package api
 // place (SGS6 B2): the way-in pages' mark, every page title, the leads that say
 // what it is. A page text writes {brand} and pageT fills it. The code, the
 // repo, the command, the package and the address keep their own names.
-const Brand = "Tokenman"
+const Brand = "tokenman"

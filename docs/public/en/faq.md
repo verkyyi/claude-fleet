@@ -6,11 +6,11 @@ Questions are written on this page only. The FAQ on the website's front page, th
 
 ### Why do I need to apply?
 <!-- faq: site -->
-Tokenman is in limited access for now: every account stands for a real machine and real quota, so we open it in batches, as many people as we can look after. To use it, apply: tell us what you want it for, and we usually answer within a working day — on your WeChat if you signed in with WeChat. An application keeps only how you signed in, what you wrote on the form and the decision.
+tokenman is in limited access for now: every account stands for a real machine and real quota, so we open it in batches, as many people as we can look after. To use it, apply: tell us what you want it for, and we usually answer within a working day — on your WeChat if you signed in with WeChat. An application keeps only how you signed in, what you wrote on the form and the decision.
 
 ### How is it different from installing Claude Code myself?
 <!-- faq: site -->
-It is the same official Claude Code; Tokenman sets up the machine, the skills and publishing, gives each task its own session, and keeps it running when you close your laptop.
+It is the same official Claude Code; tokenman sets up the machine, the skills and publishing, gives each task its own session, and keeps it running when you close your laptop.
 
 ### Can I use it without coding?
 <!-- faq: site -->
@@ -33,12 +33,12 @@ Sessions need to reach Claude's or ChatGPT's service to work; a self-hosted sing
 
 ### Is this an Anthropic product?
 <!-- faq: site -->
-No. Tokenman is an independent open-source project (MIT) that runs the unmodified official Claude Code; Claude is a trademark of Anthropic.
+No. tokenman is an independent open-source project (MIT) that runs the unmodified official Claude Code; Claude is a trademark of Anthropic.
 
 ## Using it
 
 ### How many sessions can one computer run?
-There is no fixed limit by default: before a new session starts, Tokenman checks how much memory is left and how busy the machine is, and a session that does not fit waits; running sessions are never touched. For a hard limit, set `FLEET_GLOBAL_MAX_SESSIONS` in the configuration.
+There is no fixed limit by default: before a new session starts, tokenman checks how much memory is left and how busy the machine is, and a session that does not fit waits; running sessions are never touched. For a hard limit, set `FLEET_GLOBAL_MAX_SESSIONS` in the configuration.
 
 ### If I close the terminal, do my sessions keep running?
 Yes. Sessions run on the machine, not in your terminal; type `fleet` again and everything is where you left it — you land on the session you looked at last (from any computer or phone), or on a new one if that session has been closed. `fleet quit` closes only the client.

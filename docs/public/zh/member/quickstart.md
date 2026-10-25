@@ -10,7 +10,7 @@
 curl -fsSL https://hub.example.com/i/<邀请码> | sh
 ```
 
-它不问问题，装完会自动打开 Tokenman 的客户端。
+它不问问题，装完会自动打开 tokenman 的客户端。
 
 ## 2. 登录
 

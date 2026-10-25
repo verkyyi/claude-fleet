@@ -15,7 +15,7 @@ its record, switch-bar.json, went with issue #3008.)
     fleet-topbar.py inbox-text <cols> [now=] [g=<cache dir>]
         its plain text, `-` when the row is folded (selftest)
 
-The left is Tokenman's brand and the session's name (task ZDYN): 「›› Tokenman ·
+The left is tokenman's brand and the session's name (task ZDYN): 「›› tokenman ·
 修缓存」, the same in every state — the session's state, its #N and its question
 are the ⌘P panel's, where they are seen anyway. The name is clipped with `…`. The right is the window's resources, at
 three widths: a phone (~45 columns) has 「62%」; from 80 「PR #N」 and 「62% Opus
@@ -47,7 +47,7 @@ FG, DIM, HL, OK, WARN, BAD = "#a9b1d6", "#565f89", "#7aa2f7", "#9ece6a", "#e0af6
 BG_DOWN = "#3b4261"
 # the brand on the line's left (task ZDYN): extras/web-console/src/shared/brand.ts's
 # name, extras/fleet-theme/theme.css's clay (--fleet-clay) and ink (--fleet-ink)
-BRAND, BRAND_MARK = "Tokenman", "\u203a\u203a"
+BRAND, BRAND_MARK = "tokenman", "\u203a\u203a"
 BRAND_CLAY, BRAND_INK = "#d9765a", "#f3ede6"
 BRAND_MIN = 40
 
@@ -169,7 +169,7 @@ def upstream_text():
 
 
 def brand_parts(cols):
-    """The line's left: Tokenman's mark and name, the same in every state (task
+    """The line's left: tokenman's mark and name, the same in every state (task
     ZDYN) — what the session is doing is the ⌘P panel's, never this line's. The
     mark is the logo's two chevrons (extras/fleet-theme/logo.svg) in its clay;
     under BRAND_MIN columns the mark alone. FLEET_GLYPHS=ascii: `>>`;
@@ -184,7 +184,7 @@ def brand_parts(cols):
 
 def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
     """The line as a list of (text, colour, range) parts plus its background
-    (None / BG_DOWN): ›› Tokenman · title …… PR · context (· 今天 N) (· 上游连不上)
+    (None / BG_DOWN): ›› tokenman · title …… PR · context (· 今天 N) (· 上游连不上)
     (· machine) (· ⌘P). The left is the brand and the session's name (task
     ZDYN): its state, its #N and its question are the ⌘P panel's. Grey while its machine is
     out of reach or on the relay — a connection's trouble, not the session's.

@@ -252,8 +252,8 @@ fleet_ui_t() {
     en:switch_multi)            printf 'Open the multi-session view' ;;
     zh:switch_solo)             printf '收起侧栏' ;;
     en:switch_solo)             printf 'Hide the list' ;;
-    zh:switch_quit)             printf '退出 Tokenman' ;;
-    en:switch_quit)             printf 'Quit Tokenman' ;;
+    zh:switch_quit)             printf '退出 tokenman' ;;
+    en:switch_quit)             printf 'Quit tokenman' ;;
     zh:quickopen_cmd_for_fmt)   printf '对 %s' "${1:-}" ;;
     en:quickopen_cmd_for_fmt)   printf 'on %s' "${1:-}" ;;
     zh:quickopen_cmd_none)      printf '这里没有能做的事' ;;
@@ -570,10 +570,10 @@ fleet_ui_t() {
     en:onboard_done) printf "Done! That is all there is from now on: ⌘P, write one line, Enter." ;;
     zh:onboard_more) printf '想再交代一件，随时 ⌘P；想回来找我，在 ⌘P 里选 guide 这一行。' ;;
     en:onboard_more) printf 'Anything else, any time: ⌘P. To come back to me, pick the guide row in ⌘P.' ;;
-    zh:view_cmd_quit) printf '退出 Tokenman（会话在后台继续）' ;;
-    en:view_cmd_quit) printf 'Quit Tokenman (sessions keep running)' ;;
-    zh:view_ask_quit) printf '退出 Tokenman？会话在后台继续 (y/n) ' ;;
-    en:view_ask_quit) printf 'Quit Tokenman? Sessions keep running (y/n) ' ;;
+    zh:view_cmd_quit) printf '退出 tokenman（会话在后台继续）' ;;
+    en:view_cmd_quit) printf 'Quit tokenman (sessions keep running)' ;;
+    zh:view_ask_quit) printf '退出 tokenman？会话在后台继续 (y/n) ' ;;
+    en:view_ask_quit) printf 'Quit tokenman? Sessions keep running (y/n) ' ;;
     # T774: the label is short; the row's subtitle says what it is ($ under ascii too)
     zh:view_cmd_home) printf '命令行' ;;
     en:view_cmd_home) printf 'Shell' ;;
@@ -1262,7 +1262,7 @@ message	m	发消息… — 只有别机行有：在输入行写，经入口送�
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
 clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台
-quit	z	退出 Tokenman — 只在客户端：关掉这台电脑上客户端的全部进程，远端会话照常在机器上跑（⌘Q · fleet quit）' ;;
+quit	z	退出 tokenman — 只在客户端：关掉这台电脑上客户端的全部进程，远端会话照常在机器上跑（⌘Q · fleet quit）' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
@@ -1305,8 +1305,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     # --- 我的客户端 (issue #1932): the clients open at once, fleet-client-menu.sh
     zh:menu_clients)            printf '我的客户端…' ;;
     en:menu_clients)            printf 'My clients…' ;;
-    zh:menu_quit)               printf '退出 Tokenman' ;;
-    en:menu_quit)               printf 'Quit Tokenman' ;;
+    zh:menu_quit)               printf '退出 tokenman' ;;
+    en:menu_quit)               printf 'Quit tokenman' ;;
     zh:clients_title)           printf '我的客户端' ;;
     en:clients_title)           printf 'My clients' ;;
     zh:clients_stale)           printf '入口连不上，上次的' ;;

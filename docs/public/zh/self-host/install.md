@@ -78,7 +78,7 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 
 | 键 | 例子 | 说明 |
 |---|---|---|
-| `CCQUOTA_FLEET` | `1` | 打开 Tokenman 功能 |
+| `CCQUOTA_FLEET` | `1` | 打开 tokenman 功能 |
 | `CCQUOTA_FLEET_PUBLIC_URL` | `https://hub.example.com` | 入口的公开地址，机器和客户端都用它 |
 | `CCQUOTA_PUBLIC_URL` | `https://hub.example.com` | 同上，登录回跳用 |
 | `CCQUOTA_GITHUB_ADMINS` | `alice` | 管理员的 GitHub 用户名，逗号分隔 |
@@ -465,7 +465,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://relay.example.com/v1/models    
    ```
 
 3. 它一步一行地打印：检查 · 加入 · 发布公钥 · 期望状态 · ccquota · 运行时 · 机器钥匙 · 角色用户 · ssh CA · 删号通道 · 核心 · 守护 · 入口。每行是 `✓`、`跳过`（已经好了）或 `✗`（失败，下面一行写着怎么重跑）。最后一行是 `已收敛`。
-4. 「服务节点与客户端」页上出现 `mac-a`，对话框里写「mac-a 已加入 Tokenman」。
+4. 「服务节点与客户端」页上出现 `mac-a`，对话框里写「mac-a 已加入 tokenman」。
 
 要求：macOS 自带的 `/usr/bin/python3`（没有的话先 `xcode-select --install`）、`curl`、管理员权限。
 
@@ -563,7 +563,7 @@ fleet update     # 这台电脑跑的版本和它跟的 stable
 
 ### 4.1 stable 是什么
 
-Tokenman 的每一部分——入口、机器、客户端——都跟着同一个版本号：仓库里叫 `stable` 的那个标签。`stable` 只在一个提交通过了全部检查（Linux 和 macOS 两边的测试、发版前的回放检查）之后才往前挪，所以它是「可以给别人用」的那一版，不是最新的提交。
+tokenman 的每一部分——入口、机器、客户端——都跟着同一个版本号：仓库里叫 `stable` 的那个标签。`stable` 只在一个提交通过了全部检查（Linux 和 macOS 两边的测试、发版前的回放检查）之后才往前挪，所以它是「可以给别人用」的那一版，不是最新的提交。
 
 ```sh
 fleet update stable      # 入口告诉你的 stable 提交号
