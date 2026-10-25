@@ -570,6 +570,29 @@ class client:
         self.assertEqual(args[-1], '接着解释 café')
         self.assertIn(self.sid, args)
 
+    def test_page_start_leaves_copy_mode(self):
+        # BREAK-IT park-page-copy-mode: a page that starts while its pane sits in
+        # copy-mode (the wheel scrolled the agent's screen) lets the pane out, or
+        # no key — Enter included — ever reaches it.
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+            draft = gate.fid_dir(self.fid) / 'park-input.txt'
+        self.wait(lambda: self.opt('@park_held'))
+        # the page running, the pane put in copy-mode, then the page starts again
+        # (the wrapper's loop: an external seed it could not claim, exit 12)
+        self.tm('copy-mode', '-t', self.win)
+        self.assertEqual(self.opt('pane_in_mode'), '1')
+        held = self.opt('@park_held')
+        time.sleep(1.1)   # @park_held is in whole seconds: the restart stamps a new one
+        seed = self.root / 'lost-race-seed'
+        seed.write_text('x')
+        self.set('@park_wake', str(seed) + '.gone')
+        self.wait(lambda: self.opt('@park_held') != held)
+        self.wait(lambda: self.opt('pane_in_mode') == '0')
+        self.tm('send-keys', '-t', self.win, '-l', 'reachable')
+        self.wait(lambda: draft.exists() and draft.read_text() == 'reachable')
+
     def test_backspace_at_empty_and_line_start_preserves_wake(self):
         self.fake('codex')
         with patch.dict(os.environ, self.env):
