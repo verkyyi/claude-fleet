@@ -213,6 +213,8 @@ FLEET_PLACE_TIMING                 handoff: where fleet-client-place.sh writes a
 FLEET_PUBLISH_AUDIENCE             knob: the OIDC audience fleet-release-publish.sh asks the Actions runtime for (default ccquota-fleet-release, the hub's CCQUOTA_FLEET_PUBLISH_AUDIENCE — #2772)
 FLEET_PUBLISH_TOKEN                env handoff: the hub's publish-only fallback bearer for fleet-release-publish.sh outside Actions (a secret; never a file or argv — #2772)
 FLEET_REMOTE_SAY                   handoff: `print` = fleet-row-remote.sh says its outcome on stdout + a real exit, for the 看台's Tab menu (fleet_view.py far, #3182)
+FLEET_REMOTE_ROW_NODE              handoff: the machine fleet-row-remote.sh names for a wid its cache does not list (fleet_view.py far 恢复 on another machine's closed row)
+FLEET_REMOTE_ROW_NAME              handoff: the session name fleet-row-remote.sh names for a wid its cache does not list (fleet_view.py far 恢复)
 FLEET_SERVED_FROM                  seam: the one source fc_served fetches a `served` client file from (a URL or file://), instead of the client's own .client-version (fleet-client-lib.sh, #4826)
 FLEET_SESSIONS_STATE_CMD           seam: prints OPEN/CLOSED for <repo> <issue> instead of gh (fleet-sessions-snapshot.sh restore, #2484)
 FLEET_SESSION_CLI_ROAD             seam: client | here | home — the road `fleet ls / open …` takes, instead of looking (fleet-session-cli.py, #3004)
