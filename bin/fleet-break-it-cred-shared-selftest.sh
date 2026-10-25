@@ -79,6 +79,18 @@ drill_cred_codex_refs_overflow() {
   WHAT="超过 4096 条引用的长会话仍回它唯一的订阅；换过订阅、来源不一或没超限时查不到的引用照旧拒绝"
 }
 
+drill_cred_codex_reopen() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" \
+    Capacity.test_reopened_worker_http_continuation \
+    Capacity.test_reopened_worker_rejects_unproven_history 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="重开换 SID 后按同 worker 的已记录引用回原源；撤销和重启保留来源，未知引用、跨 worker、冲突和订阅身份变更拒绝"
+}
+
 # Shared rollout must preserve native picks before root drops, or legacy
 # launchd bootout kills the only in-memory source. Exercise the real uid-gated
 # control handler without request peer_uid seams; socket and file I/O are real.

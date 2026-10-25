@@ -1601,6 +1601,34 @@ class Tenant:
         ev, sole, src = old.get("evicted_origin"), old.get("sole"), old.get("sole_source")
         return ev if ev and sole and src and ev == sole + "\0" + src else None
 
+    def codex_resume_origins(self, sid, old, refs):
+        """A reopened worker has a new credential SID, but resends provider
+        history. Recover only exact recorded refs from that worker in this
+        tenant. Neither a worker match nor an old eviction marker proves an
+        unseen ref. Local collisions remain unresolved.
+        Caller holds codex_lock; this also keeps previews read-only.
+        """
+        origins = {ref: self.codex_ref_origin(old, ref) for ref in refs}
+        missing = {ref for ref, origin in origins.items()
+                   if origin is None and ref not in old.get("refs", {})}
+        if not missing:
+            return set(origins.values())
+        workers = read_json(os.path.join(self.cfg.state, "workers.json"), {})
+        worker = workers.get(sid) or old.get("worker", "")
+        if not worker or not WORKER_RE.fullmatch(worker):
+            return set(origins.values())
+        found = {ref: set() for ref in missing}
+        for prior_sid, prior in self.codex_state.get("sessions", {}).items():
+            if prior_sid == sid or (workers.get(prior_sid) or prior.get("worker")) != worker:
+                continue
+            known = prior.get("refs", {})
+            for ref in missing.intersection(known):
+                found[ref].add(known[ref])
+        for ref, candidates in found.items():
+            if len(candidates) == 1 and None not in candidates:
+                origins[ref] = next(iter(candidates))
+        return set(origins.values())
+
     def codex_pick(self, sid, independent=True, refs=(), unknown=False, pin="", preview=False, proposed=False):
         """Serialize per-tenant independent boundaries. References never change a
         binding. Preview executes the same calculation without any routing writes.
@@ -1611,6 +1639,7 @@ class Tenant:
         with self.codex_lock:
             sessions = self.codex_state.setdefault("sessions", {})
             old = sessions.get(sid, {})
+            origins = self.codex_resume_origins(sid, old, refs)
             cur = old.get("account", "")
             held = set(self.held("codex"))
             entries, seen = {}, set()
@@ -1682,7 +1711,6 @@ class Tenant:
                 # Resolve all references to one original subscription. Unknown
                 # context stays on the sole account ever used by this session;
                 # after any switch ambiguity must refuse, never guess.
-                origins = {self.codex_ref_origin(old, ref) for ref in refs}
                 if refs and None not in origins and len(origins) == 1 and not unknown:
                     origin = next(iter(origins))
                     pick, reason = origin.split("\0", 1)[0], "source_affinity"
@@ -1735,7 +1763,6 @@ class Tenant:
                             pick, reason = cur, "no_material_gain"
             if not independent or pin:
                 # A pin may not redirect known reference context to another sub.
-                origins = {self.codex_ref_origin(old, ref) for ref in refs}
                 if refs:
                     if None in origins or len(origins) != 1 or next(iter(origins)).split("\0", 1)[0] != pick:
                         raise ValueError("Codex continuation conflicts with subscription identity")
@@ -1782,7 +1809,9 @@ class Tenant:
             independent, refs, unknown = codex_context(method, path, headers, body)
             has_profiles = any((r.get("capacity") or {}).get("profile") for r in data.get("accounts", []))
             if not independent or data.get("mode") == "active" and has_profiles:
-                return self.codex_pick(sid, independent, refs, unknown, pin)
+                decision = self.codex_pick(sid, independent, refs, unknown, pin)
+                decision["proven_refs"] = list(refs) if decision["expected_source"] else []
+                return decision
         account = pin or self.pick_account("codex", sid)
         if enrolled:
             # Independent fallback uses the legacy evidence/ceiling, but records
@@ -1821,6 +1850,9 @@ class Tenant:
         with self.codex_lock:
             sessions = self.codex_state.setdefault("sessions", {})
             v = sessions.setdefault(sid, {"managed": True, "account": account, "sole": account, "changed": time.time(), "seen": time.time()})
+            worker = read_json(os.path.join(self.cfg.state, "workers.json"), {}).get(sid)
+            if worker and WORKER_RE.fullmatch(worker):
+                v["worker"] = worker
             if v.get("account") == account:
                 row = next((r for r in self.capacity_cache.get("accounts", []) if r.get("account") == account), {})
                 if row.get("credential_id"):
@@ -2279,6 +2311,7 @@ class Proxy(BaseHTTPRequestHandler):
             try:
                 decision = self.t.codex_request(sid, self.codex_policy, self.command, path, inbound, body, acct)
                 acct, self.codex_expected_source = decision["account"], decision["expected_source"]
+                self.codex_proven_refs = decision.get("proven_refs", [])
             except ValueError as e:
                 return self.fail(409, str(e), "codex_affinity_unavailable")
         elif self.auto:
@@ -2650,8 +2683,12 @@ class Proxy(BaseHTTPRequestHandler):
                 first = r.read(65536)
             codex_verdict(getattr(self, "codex_seen", None), route, r.status, first)
         if getattr(self, "codex_policy", False) and cred == "file" and 200 <= r.status < 300:
+            # Adopt proven input history only after the source identity check
+            # and a successful upstream response, so future resumes need not
+            # depend on keeping every older SID forever.
             self.t.codex_record(sid, acct, [codex_ref("header:" + k.lower(), v)
-                for k, v in r.getheaders() if k.lower() in ("x-codex-turn-state", "x-codex-routing-hint") and v],
+                for k, v in r.getheaders() if k.lower() in ("x-codex-turn-state", "x-codex-routing-hint") and v]
+                + getattr(self, "codex_proven_refs", []),
                 getattr(self, "codex_source_identity", ""))
         self.send_response_only(r.status, r.reason)
         rh = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP]
@@ -3260,6 +3297,14 @@ def ctl_handle(req, t):
         sid = req.get("sid") or ""
         if not sid:
             return {"ok": False, "err": "revoke: --sid"}
+        # Keep historical provenance after retiring its bearer credential.
+        # Pre-upgrade records may not yet carry their worker identity.
+        with t.codex_lock:
+            old = t.codex_state.get("sessions", {}).get(sid)
+            worker = read_json(os.path.join(cfg.state, "workers.json"), {}).get(sid)
+            if old is not None and worker and WORKER_RE.fullmatch(worker):
+                old["worker"] = worker
+                t.save_codex_state()
         with Proxy.lock:
             fd = os.open(os.path.join(cfg.state, "revoked"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.write(fd, (sid + "\n").encode()); os.close(fd)
