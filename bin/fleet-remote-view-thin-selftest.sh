@@ -18,10 +18,10 @@
 #                   device= token= fuid=; the fleet session's own options and the
 #                   global options / key tables untouched (only the [78] hook)
 #   B. the line   — the client's screen's first line is the top line; for a window
-#                   of this machine its own stamps: #7 · 剩余 62% · Opus 5.5 · high ·
-#                   @<machine> · the route; for one on the refresh loop's cache its
-#                   line (title, needs kind); at 40 columns (a phone, #3006) no
-#                   剩余 · model · effort
+#                   of this machine Tokenman's brand on the left, never its #N /
+#                   title / state (task ZDYN), and its own stamps: 剩余 62% · Opus
+#                   5.5 · high; for one on the refresh loop's cache its ctx columns
+#                   and no red; at 40 columns (a phone, #3006) no 剩余 · model · effort
 #   C. cur=       — switching windows in the 看台 moves `cur=` (the [78] hook, gated
 #                   on @view_thin: a switch in the fleet session writes nothing)
 #   S. select     — `select <wid> <看台>` (a home's peer window, the fast path; a
@@ -213,7 +213,8 @@ render() {  # <window> [extra kv…] — the line's plain text, off the 看台's
     "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$1" "${@:2}" | sed 's/#\[[^]]*\]//g'
 }
 L7=$(render "$W7")
-st_has "B: a window of this machine: its key" "$L7" "#7"
+st_has "B: a window of this machine: the brand on the left (ZDYN)" "$L7" " ›› Tokenman "
+st_hasnt "B: …no key: the session is the panel's" "$L7" "#7"
 st_has "B: …剩余 % off its own stamps" "$L7" "剩余 62%"
 st_has "B: …model · effort" "$L7" "Opus 5.5 · high"
 st_hasnt "B: …no machine while it is reachable (#3194)" "$L7" "m9"
@@ -222,37 +223,37 @@ st_has "B: …the ⌘P hint at 160" "$L7" "⌘P"
 # a phone (issue #3194, was #3006 C9): the % stays, no model
 L7n=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=40 "w=$W7" | sed 's/#\[[^]]*\]//g')
-st_has "B: 40 columns: the key stays" "$L7n" "#7"
+st_has "B: 40 columns: the brand stays" "$L7n" " ›› Tokenman "
 st_has "B: …the % stays on a phone (#3194)" "$L7n" "62%"
 st_hasnt "B: …no model" "$L7n" "Opus"
 # no issue, the hub's task record (issue #3325): the bar's number is T<n>
 W7t=$(tn new-window -d -P -F '#{window_id}' -t "$RS:" -n task7 'while :; do sleep 300; done')
 tn set-window-option -t "$W7t" @task T218 \; set-window-option -t "$W7t" @norepo 1
-st_has "B: no issue, a task record: its T number" "$(render "$W7t")" "T218"
+st_hasnt "B: a task record: no T number on the line (ZDYN)" "$(render "$W7t")" "T218"
 tn set-window-option -t "$W7t" @issue 3312
 L7t=$(render "$W7t")
-st_has "B: …an issue wins over the task number" "$L7t" "#3312"
-st_hasnt "B: …and the T number goes" "$L7t" "T218"
+st_hasnt "B: …nor an issue's #N" "$L7t" "#3312"
+st_has "B: …the brand" "$L7t" " ›› Tokenman "
 tn kill-window -t "$W7t"
 L8=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$G" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W8")
-st_has "B: a window on the refresh loop's cache: its title" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "修缓存"
+st_hasnt "B: a window on the refresh loop's cache: no title (ZDYN)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "修缓存"
 st_has "B: …its ctx columns" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" "40% · Sonnet 5.5 · medium"
-st_has "B: …a perm needs is the ! glyph, no word (#3194)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" " ! #"
-st_has "B: …and a red line (waiting on you)" "$L8" "bg=#f7768e"
+st_hasnt "B: …a perm needs: no ! glyph (ZDYN: the panel's)" "$(printf '%s' "$L8" | sed 's/#\[[^]]*\]//g')" " ! #"
+st_hasnt "B: …and no red line" "$L8" "bg=#f7768e"
 # a login just opened (#3155): the hub's list has no line for this fleet yet —
 # the window's own stamps still draw it; no ‹ i/n › any more (#3194)
 mkdir -p "$TMPDIR/nocache"
 L9=$(python3 "$BIN/fleet-topbar.py" render --node view=dev1 "s=$RS" "reg=$FLEET_CONF_DIR/remote-views" "g=$TMPDIR/nocache" \
   "sock=$(tn display-message -p '#{socket_path}')" cw=160 "w=$W7" | sed 's/#\[[^]]*\]//g')
-st_has "B: no hub line yet: its key off its own stamps" "$L9" "#7"
+st_has "B: no hub line yet: its stamps still draw it" "$L9" "62%"
 st_hasnt "B: …no ‹ i/n › (#3194)" "$L9" "‹"
 # the screen itself: the client's bottom lines carry that line (the bar sits at the
 # bottom since task NFVN; the message row, when open, under it)
 tn select-window -t "$V$W7" 2>/dev/null   # no client switch: tmux redraws the 看台 anyway
 waitfor 8 sh -c "'$REAL_TMUX' -L '$TL' capture-pane -p -t '=$TL:thin1' | tail -n 2 | grep -q '剩余 62%'" \
   || st_miss "B: the client's bottom line is the bar" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)"
-st_has "B: …at the bottom, with its key" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)" "#7"
+st_has "B: …at the bottom, with the brand" "$(tt capture-pane -p -t "=$TL:thin1" | tail -n 2)" "›› Tokenman"
 
 # ============================================================================
 # C. cur= follows the window

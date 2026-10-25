@@ -3,12 +3,12 @@
 # C11), the one a thin client's 看台 wears (fleet-topbar.py render --node, issue
 # #2763; its record is fleet-remote-view-thin-selftest.sh's).
 #
-#   A  pure: bin/fleet-topbar.py lays the line out at 140 / 80 / 45 columns, the
-#      ⌘P panel's glyphs (issue #3194: ! x ↻ ✓ ∙ ?, the word from 80, the PR from
-#      80 and its checks from 140, the % on every width), red while the session
-#      waits on you (its question in the title's place), grey with ? while its
-#      machine is lost, reconnecting or on the relay — the only time it is named;
-#      its words fleet-ui-lang.sh's, in English too.
+#   A  pure: bin/fleet-topbar.py lays the line out at 140 / 80 / 45 columns: the
+#      left Tokenman's brand alone, the same in every state (task ZDYN — the
+#      session's glyph, word, #N and title are the ⌘P panel's), the PR from 80 and
+#      its checks from 140, the % on every width; grey while its machine is lost,
+#      reconnecting or on the relay — the only time it is named; its words
+#      fleet-ui-lang.sh's, in English too.
 # (The old client's list record, its phone layout, its full-screen switcher and
 # its two tmux confs — leg B — went with that client, issue #3008.)
 #
@@ -39,70 +39,65 @@ rec = {"i": 3, "n": 8, "state": "working", "kind": "", "key": "#1894",
        "slug": "verkyyi/claude-fleet", "node": "mac-b", "lost": False, "direct": False, "ask": 1,
        "ctx_left": 62, "ctx_band": "ok", "ctx_ts": 1000, "model": "Opus 5.5", "effort": "high"}
 os.environ["FLEET_UI_LANG"] = "zh"
-# the design's three widths (issue #3194): 45 · 80 · 140, the ⌘P panel's glyphs
+# the design's three widths (issue #3194): 45 · 80 · 140; the left the brand alone (task ZDYN)
 w = {}
 for cols in (140, 80, 45):
     text, bg = tb.fit(rec, cols, now=1060)
     w[cols] = text
     eq("%d: the line is exactly the width" % cols, tb.cells(text), cols)
     eq("%d: no colour while all is well" % cols, bg, None)
-    for part in ("↻", "#1894", "62%", "机器上"):
-        has("%d: never dropped" % cols, text, part)
-    for gone in ("‹", "›", "@mac-b", "mac-b", "●", "working"):
-        has("%d: no %s (#3194)" % (cols, gone), text, gone, False)
-eq("140: all of it", w[140].split(), ["↻", "在干活", "·", "#1894", rec["title"], "·", "claude-fleet",
-                                      "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5", "·", "high",
-                                      "·", "⌘P"])
-eq("80: word, PR, 62% Opus 5.5 high", w[80].split(), ["↻", "在干活", "·", "#1894", rec["title"],
-                                                     "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
-eq("45: the glyph, #N, the title clipped, the %", w[45].split(), ["↻", "#1894", "机器上一直有会话在忙，也照样更…", "62%"])
-# each state, at 80
+    has("%d: the brand on the left" % cols, text, " ›› Tokenman ")
+    eq("%d: …and first" % cols, text.startswith(" ›› Tokenman "), True)
+    has("%d: the %% never dropped" % cols, text, "62%")
+    for gone in ("↻", "#1894", "机器上", "在干活", "claude-fleet", "‹", "@mac-b", "mac-b", "●", "working"):
+        has("%d: no %s (ZDYN: the panel's)" % (cols, gone), text, gone, False)
+eq("140: all of it", w[140].split(), ["››", "Tokenman", "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5",
+                                      "·", "high", "·", "⌘P"])
+eq("80: PR, 62% Opus 5.5 high", w[80].split(), ["››", "Tokenman", "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
+eq("45: the brand and the %", w[45].split(), ["››", "Tokenman", "62%"])
+t, _ = tb.fit(rec, 30, now=1060)
+eq("30: the mark alone", t.split(), ["››", "62%"]); eq("30: still the width", tb.cells(t), 30)
+# every state draws the same line (ZDYN): no glyph, no word, no red
 def at(cols=80, **kw):
     return tb.fit(dict(rec, **kw), cols, now=1060)
-t, bg = at(state="needs", kind="ask", q="要你确认：删掉旧分支吗？")
-eq("asking: red", bg, tb.BG_ASK); has("asking: !, no word", t, " ! #1894 要你确认：删掉旧分支吗？")
-has("asking: the question takes the title's place", t, "机器上", False)
-t, bg = at(state="needs", kind="perm", q="Bash: git push")
-eq("needs OK: red too", bg, tb.BG_ASK); has("needs OK: its words", t, "! #1894 Bash: git push")
-t, _ = at(state="needs", kind="ask"); has("asking, no words: the title", t, "! #1894 机器上")
-t, bg = at(state="done", pr="merged"); eq("done: no colour", bg, None)
-has("done: ✓ 本轮结束", t, " ✓ 本轮结束 · #1894"); has("done: PR 已合并", t, "PR 已合并 · 62%")
-t, bg = at(state="exited"); eq("exited: the line unchanged", bg, None); has("exited: ◌ 已退出", t, " ◌ 已退出 · #1894")
-t, _ = at(state="failed"); has("failed: ✗ 失败", t, " ✗ 失败 · ")
-eq("exited: the glyph grey (plan B: only ! and ✗ are red)", [p[1] for p in tb.layout(dict(rec, state="exited"), 80, now=1060)[0] if p[2] == "sym"],
-   ["colour8"])
-t, _ = at(state="idle"); has("idle: ∙ 空闲", t, " ∙ 空闲 · ")
-# hibernation's words went with it (T548): an old record's `sleeping` reads idle
-t, _ = at(state="sleeping"); has("an old sleeping: ∙ 空闲", t, " ∙ 空闲 · ")
-has("looping: ↻ 在干活", at(state="looping")[0], " ↻ 在干活 · ")
+same = at()
+for kw in (dict(state="needs", kind="ask", q="要你确认：删掉旧分支吗？"), dict(state="needs", kind="perm", q="Bash: git push"),
+           dict(state="done"), dict(state="exited"), dict(state="failed"), dict(state="idle"), dict(state="sleeping"),
+           dict(state="looping"), dict(key="", title="整理周报里的发布时间线")):
+    eq("%s: the line unchanged" % kw, at(**kw), same)
+has("asking: no question on the line", at(state="needs", kind="ask", q="要你确认")[0], "要你确认", False)
+eq("no red background left", hasattr(tb, "BG_ASK"), False)
+t, _ = at(pr="merged"); has("done: PR 已合并", t, "PR 已合并 · 62%")
 t, bg = at(lost=True)
-eq("lost: grey", bg, tb.BG_DOWN); has("lost: ?, no word", t, " ? #1894 "); has("lost: the machine", t, "· mac-b 连不上")
+eq("lost: grey", bg, tb.BG_DOWN); has("lost: the brand", t, " ›› Tokenman "); has("lost: the machine", t, "· mac-b 连不上")
 t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% mac-b 连不上", t, "62% mac-b 连不上")
 eq("lost 45: still the width", tb.cells(t), 45)
 t, bg = tb.fit(rec, 80, down="1000", now=1004)
 eq("reconnecting: grey", bg, tb.BG_DOWN); has("reconnecting: 连不上", t, "mac-b 连不上")
 t, bg = tb.fit(rec, 80, route="relay", now=1060)
-eq("relay: grey", bg, tb.BG_DOWN); has("relay: ? · 经中转", t, "· mac-b 经中转"); has("relay: ?", t, " ? #1894")
+eq("relay: grey", bg, tb.BG_DOWN); has("relay: · 经中转", t, "· mac-b 经中转")
 t, bg = tb.fit(rec, 80, via="auto 中转", now=1060); has("auto relay: 经中转", t, "mac-b 经中转")
 t, bg = tb.fit(rec, 80, via="manual Tailscale", now=1060); eq("Tailscale: all well", bg, None)
 has("Tailscale: no machine", t, "mac-b", False)
 t, bg = tb.fit(rec, 80, down="1000", pin="relay", tries="3", now=1004)
 has("pinned, reconnecting: 第 N 次", t, "mac-b 连不上 · 第 3 次重连")
-eq("grey: the ? stays yellow", [p[1] for p in tb.layout(rec, 80, route="relay", now=1060)[0] if p[2] == "sym"],
-   ["colour3"])
-eq("lost wins over asking: grey", tb.fit(dict(rec, state="needs", kind="ask", lost=True), 80, now=1060)[1], tb.BG_DOWN)
-t, _ = at(key="", title="整理周报里的发布时间线"); has("no issue: the title alone", t, " ↻ 在干活 · 整理周报里的发布时间线")
+eq("lost wins, asking or not: grey", tb.fit(dict(rec, state="needs", kind="ask", lost=True), 80, now=1060)[1], tb.BG_DOWN)
 t, _ = at(140, pr="#7…"); has("140: checks running", t, "PR #7 …")
 t, _ = at(140, pr="#7✗"); has("140: checks red", t, "PR #7 ✗")
 t, _ = at(80, pr="#7✗"); has("80: no checks", t, "PR #7 ·")
-eq("glyphs: the panel's table", [tb.sym_of({"state": s}) for s in ("needs", "failed", "working", "done", "idle")],
-   ["needs", "fail", "work", "done", "idle"])
-eq("colours: the panel's table", tb.FV.GLYPH_COLORS["work"], 2)
+# the brand's colours: the logo's clay mark, the ink name, bold — kept on a grey line too
+brand = [p for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "brand"]
+eq("brand: clay mark, ink name", [(p[0], p[1]) for p in brand], [("››", "#d9765a"), (" Tokenman", "#f3ede6")])
+grey = tb.paint(*tb.layout(rec, 80, route="relay", now=1060))
+has("grey: the brand keeps its clay", grey, "#[fg=#d9765a,bold]"); has("grey: on grey", grey, "#[bg=%s]" % tb.BG_DOWN)
+has("paint: the name bold", tb.paint(*tb.layout(rec, 80, now=1060)), "#[fg=#f3ede6,bold]")
+has("stand-in: the brand", tb.quick_fmt(), "››#[nobold]#[fg=#f3ede6#,bold] Tokenman")
+has("stand-in: reads no window stamp", tb.quick_fmt(), "@claude_state", False)
 os.environ["FLEET_GLYPHS"] = "ascii"
-t, _ = at(140); has("ascii: > and +", t, " > 在干活 · #1894"); has("ascii: PR #N +", t, "PR #1885 +")
+t, _ = at(140); has("ascii: >> Tokenman", t, " >> Tokenman "); has("ascii: PR #N +", t, "PR #1885 +")
 del os.environ["FLEET_GLYPHS"]
 os.environ["NO_COLOR"] = "1"
-eq("NO_COLOR: the glyph uncoloured", [p[1] for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "sym"], [None])
+eq("NO_COLOR: the brand uncoloured", [p[1] for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "brand"], [None, None])
 del os.environ["NO_COLOR"]
 eq("↻ and ∙ are one cell, as the panel counts", (tb.cells("↻"), tb.cells("∙"), tb.cells("中")), (1, 1, 2))
 # the context reading on every width (issue #2717, #3194): its three forms
@@ -129,7 +124,7 @@ import ast, re
 os.environ["FLEET_UI_LANG"] = "en"
 tb._WORDS.clear(); tb.FV._WORDS.clear()
 t, _ = tb.fit(dict(rec, state="done", pr="merged"), 140, now=1060)
-has("en: done", t, " ✓ turn ended · #1894"); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
+has("en: the brand", t, " ›› Tokenman "); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
 has("en: PR closed", tb.fit(dict(rec, pr="closed"), 140, now=1060)[0], "PR closed")
 has("en: unreachable", tb.fit(rec, 80, down="1", now=1060, pin="direct", tries="3")[0], "mac-b unreachable · retry 3")
 has("en: via relay", tb.fit(rec, 80, route="relay", now=1060)[0], "mac-b via relay")
