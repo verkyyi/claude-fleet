@@ -114,7 +114,9 @@ $ndiff"; }
     || st_fail "8: F12 does not open the panel by default (T705): $(awk '$3 == "fleet-view" && $4 == "F12"' "$KW/node.keys")"
   grep -q 'fleet-quick-dispatch' "$KW/node.keys" && st_fail "8: a 看台 key still opens the 派一件事 popup (fleet-quick-dispatch.py, gone with #3328)"
   fv_pfx=$(awk '$3 == "fleet-view-pfx" { print $4 }' "$KW/node.keys" | sort | tr '\n' ' ')
-  [ "$fv_pfx" = "C-] p " ] || st_fail "8: by default ⌃] takes p and ⌃] only — got: $fv_pfx"
+  [ "$fv_pfx" = "C-] p x " ] || st_fail "8: by default ⌃] takes p, x (dismiss, task EQBE) and ⌃] only — got: $fv_pfx"
+  awk '$3 == "fleet-view-pfx" && $4 == "x"' "$KW/node.keys" | grep -q 'fleet_notice.py.*dismiss' \
+    || st_fail "8: ⌃] x does not dismiss the line's message (task EQBE): $(awk '$3 == "fleet-view-pfx" && $4 == "x"' "$KW/node.keys")"
   # a person's extra (the client's FLEET_KEYS_EXTRA, carried by the attach): one more code
   FLEET_KEYS_EXTRA="next=cmd+down" TMUX="$KW/node,0,0" HOME="$KW" python3 "$BIN/fleet-quickopen.py" view-keys \
     || st_fail "8: view-keys with FLEET_KEYS_EXTRA exited non-zero"
@@ -130,14 +132,14 @@ $ndiff"; }
   FLEET_KEY_PHONE=off TMUX="$KW/node,0,0" HOME="$KW" python3 "$BIN/fleet-quickopen.py" view-keys \
     || st_fail "8: view-keys with FLEET_KEY_PHONE=off exited non-zero"
   ktm node list-keys -T fleet-view | awk '$4 == "F12"' | grep -q . && st_fail "8: FLEET_KEY_PHONE=off still binds F12"
-  [ "$(ktm node list-keys | awk '$3 == "fleet-view-pfx" { print $4 }' | sort | tr '\n' ' ')" = "C-] p " ] \
+  [ "$(ktm node list-keys | awk '$3 == "fleet-view-pfx" { print $4 }' | sort | tr '\n' ' ')" = "C-] p x " ] \
     || st_fail "8: FLEET_KEY_PHONE=off dropped ⌃] p: $(ktm node list-keys | awk '$3 == "fleet-view-pfx"')"
   # FLEET_KEY_PHONE=f12 (T685's way back to F12) no longer drops ⌃] p
   FLEET_KEY_PHONE=f12 TMUX="$KW/node,0,0" HOME="$KW" python3 "$BIN/fleet-quickopen.py" view-keys \
     || st_fail "8: view-keys with FLEET_KEY_PHONE exited non-zero"
   ktm node list-keys -T fleet-view | awk '$4 == "F12"' | grep -q . || st_fail "8: FLEET_KEY_PHONE=f12 dropped F12"
   # (the whole list, filtered: tmux 3.7 prints nothing for `list-keys -T <t>` when C-] is its only key)
-  [ "$(ktm node list-keys | awk '$3 == "fleet-view-pfx" { print $4 }' | sort | tr '\n' ' ')" = "C-] p " ] \
+  [ "$(ktm node list-keys | awk '$3 == "fleet-view-pfx" { print $4 }' | sort | tr '\n' ' ')" = "C-] p x " ] \
     || st_fail "8: FLEET_KEY_PHONE=f12 dropped ⌃] p (T705: ⌃] p is always bound): $(ktm node list-keys | awk '$3 == "fleet-view-pfx"')"
   ktm node list-keys -T fleet-view | awk '$4 == "User920"' | grep -q 'do next' || st_fail "8: a later build dropped the kept FLEET_KEYS_EXTRA (User920)"
   ktm node list-keys > "$KW/node.keys"
