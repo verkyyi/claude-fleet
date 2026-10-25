@@ -22,9 +22,17 @@ type codexAffinityReader struct {
 }
 
 func codexResponseReader(source io.Reader, contentType string, record func(map[string]any) error) (io.Reader, error) {
-	if strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
-		return &codexAffinityReader{source: bufio.NewReader(source), record: record}, nil
+	br := bufio.NewReader(source)
+	// The stream is recognised by its bytes as well as its Content-Type: through
+	// the relay a streamed Codex reply has arrived without text/event-stream
+	// (prod 2026-10-25, svc:xiaoerge), and parsing it as one JSON document failed
+	// every call with affinity_response_invalid. An SSE body starts with a field
+	// name (`event:` / `data:` / `id:` / `retry:`) or a comment (`:`); a JSON body
+	// starts with `{`. Anything else still takes the JSON path and fails closed.
+	if strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") || looksLikeSSE(br) {
+		return &codexAffinityReader{source: br, record: record}, nil
 	}
+	source = br
 	raw, err := io.ReadAll(io.LimitReader(source, maxWhole+1))
 	if err != nil {
 		return nil, err
@@ -34,7 +42,7 @@ func codexResponseReader(source io.Reader, contentType string, record func(map[s
 	}
 	var v map[string]any
 	if !uniqueCodexJSON(raw) || json.Unmarshal(raw, &v) != nil || v == nil {
-		return nil, errors.New("affinity_response_invalid")
+		return nil, errors.New("affinity_response_invalid (content-type " + strconvQuote(contentType) + ")")
 	}
 	if err := record(v); err != nil {
 		return nil, err
@@ -96,4 +104,27 @@ func (r *codexAffinityReader) Read(p []byte) (n int, err error) {
 		r.pending = bytes.NewReader(frame)
 	}
 	return r.pending.Read(p)
+}
+
+// looksLikeSSE peeks (without consuming) past leading whitespace and reports
+// whether the body opens like an event stream.
+func looksLikeSSE(br *bufio.Reader) bool {
+	head, _ := br.Peek(64)
+	head = bytes.TrimLeft(head, " \t\r\n\ufeff")
+	for _, p := range []string{"event:", "data:", "id:", "retry:", ":"} {
+		if bytes.HasPrefix(head, []byte(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+func strconvQuote(s string) string {
+	if s == "" {
+		return "none"
+	}
+	if len(s) > 60 {
+		s = s[:60]
+	}
+	return s
 }

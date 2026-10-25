@@ -264,3 +264,27 @@ func TestCodexContinuationRequiresHubCapability(t *testing.T) {
 		t.Fatal("legacy hub falsely acknowledged source registration")
 	}
 }
+
+// Through the relay a streamed Codex reply has arrived without a
+// text/event-stream Content-Type (prod 2026-10-25): it must still be read as a
+// stream and recorded, not parsed as one JSON document (affinity_response_invalid).
+func TestCodexContinuationSniffsStreamWithoutContentType(t *testing.T) {
+	stream := "event: response.created\ndata: {\"response\":{\"id\":\"resp_1\"}}\n\nevent: response.output_item.done\ndata: {\"item\":{\"id\":\"fc_1\",\"call_id\":\"call_1\",\"type\":\"function_call\"}}\n\n"
+	for _, ctype := range []string{"", "application/octet-stream", "application/json", "text/plain; charset=utf-8"} {
+		for _, body := range []string{stream, ": keepalive\n\n" + stream, "\n" + stream} {
+			var seen int
+			reader, err := codexResponseReader(strings.NewReader(body), ctype, func(map[string]any) error { seen++; return nil })
+			if err != nil {
+				t.Fatalf("ctype=%q: %v", ctype, err)
+			}
+			got, err := io.ReadAll(reader)
+			if err != nil || string(got) != body || seen == 0 {
+				t.Fatalf("ctype=%q: bytes changed or nothing recorded (seen=%d err=%v)", ctype, seen, err)
+			}
+		}
+	}
+	// A body that is neither SSE nor JSON still fails closed, and says what it was labelled.
+	if _, err := codexResponseReader(strings.NewReader("<html>oops</html>"), "text/html", func(map[string]any) error { return nil }); err == nil || !strings.Contains(err.Error(), "text/html") {
+		t.Fatalf("garbage must fail closed naming its content type, got %v", err)
+	}
+}
