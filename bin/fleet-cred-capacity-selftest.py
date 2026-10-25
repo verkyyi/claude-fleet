@@ -138,8 +138,16 @@ class Capacity(unittest.TestCase):
         self.assertEqual([a for a,_ in attempts],['fixture-b','fixture-b'])
         self.assertEqual(attempts[1][1],resume)
         self.assertEqual(self.t.picks['codex','native'],'a')
+        rows=[]
+        logger=patch.object(self.t,'log',side_effect=lambda **row:rows.append(row))
+        logger.start();self.addCleanup(logger.stop)
         status,_=request(dict(input=[dict(type='reasoning',encrypted_content='unseen-opaque')]))
         self.assertEqual(status,409);self.assertEqual(len(attempts),2)
+        # A 409 is logged: its session and reason, never the ref or its content.
+        deny=[r for r in rows if r.get('ev')=='deny']
+        self.assertEqual([(r['sid'],r['provider'],r['why']) for r in deny],
+            [('native','codex','Codex continuation source unknown; start an independent request')])
+        self.assertNotIn('unseen-opaque',json.dumps(rows))
         status,_=request(dict(input=[dict(type='message',id='msg_client_unseen',role='assistant',
             content=[dict(type='output_text',text='unrecorded')])]))
         self.assertEqual(status,409);self.assertEqual(len(attempts),2)
@@ -152,6 +160,8 @@ class Capacity(unittest.TestCase):
         path.write_text(json.dumps(dict(tokens=dict(access_token='fake-replaced',account_id='fixture-replaced'))))
         status,_=request(resume)
         self.assertEqual(status,409);self.assertEqual(len(attempts),2)
+        self.assertEqual(rows[-1]['why'],'Codex continuation source identity changed')
+        self.assertEqual(rows[-1]['sid'],'native')
 
     @unittest.skipUnless(os.environ.get('FLEET_CODEX_NATIVE_FIXTURE'),'explicit local native CLI fixture only')
     def test_native_cli_loopback(self):
@@ -422,11 +432,103 @@ class Capacity(unittest.TestCase):
         for i in range(0,5000,250):
             self.t.codex_record('mixed','a',refs[i:i+250],src if i<2500 else p.codex_ref('account','source-b'))
         with self.assertRaises(ValueError):self.t.codex_pick('mixed',False,refs[:3])
-        # Below the cap an unseen ref is still refused, as before.
+        # Below the cap too, a session that never left its one origin vouches
+        # for a ref it never recorded (a restart lost it: see the handoff test).
         self.t.codex_pick('short'); self.t.codex_record('short','a',refs[:10],src)
-        with self.assertRaises(ValueError):self.t.codex_pick('short',False,[p.codex_ref('id','never-seen')])
+        got=self.t.codex_pick('short',False,[p.codex_ref('id','never-seen')])
+        self.assertEqual((got['account'],got['reason'],got['expected_source']),('a','sole_origin_unseen_ref',src))
         raw=Path(self.tmp.name,'codex-routing.json').read_text()
         self.assertNotIn('item-1',raw)
+
+    def test_unseen_ref_routes_only_a_never_switched_session(self):
+        # After a shared-proxy restart every turn of a session that only ever
+        # used one subscription was refused 「continuation source unknown」:
+        # the refs of the old process's last answers were never seen here.
+        self.install((1,.5)); self.assertEqual(self.t.codex_pick('one')['account'],'a')
+        src=p.codex_ref('account','source-a'); seen=p.codex_ref('id','seen'); lost=p.codex_ref('id','lost')
+        self.t.codex_record('one','a',[seen],src)
+        logged=[]
+        with patch.object(self.t,'log',side_effect=lambda **row:logged.append(row)):
+            got=self.t.codex_pick('one',False,[seen,lost])
+        self.assertEqual((got['account'],got['reason'],got['expected_source']),('a','sole_origin_unseen_ref',src))
+        self.assertEqual(self.t.codex_pick('one',False,[lost],pin='a')['expected_source'],src)
+        with self.assertRaises(ValueError):self.t.codex_pick('one',False,[lost],pin='b')
+        # unparseable fields alongside: kept conservative
+        with self.assertRaises(ValueError):self.t.codex_pick('one',False,[lost],True)
+        # Preview stays read-only; the decision writes no binding.
+        self.assertEqual(self.t.codex_pick('one',False,[lost],preview=True)['account'],'a')
+        self.t.codex_limits['a']=time.time()+60
+        with self.assertRaises(ValueError):self.t.codex_pick('one',False,[lost])
+        self.t.codex_limits.clear()
+        def refused(sid,refs=(lost,)):
+            with self.assertRaises(ValueError) as e:self.t.codex_pick(sid,False,list(refs))
+            self.assertIn('continuation',str(e.exception))
+        # A session that switched subscriptions has no single origin to vouch.
+        self.install((.5,3)); self.t.codex_pick('moved')
+        self.t.codex_record('moved','b',[seen],p.codex_ref('account','source-b'))
+        self.t.codex_state['sessions']['moved']['changed']=time.time()-601
+        self.install((3,.5)); self.assertEqual(self.t.codex_pick('moved')['account'],'a')
+        self.assertEqual(self.t.codex_state['sessions']['moved']['sole'],'')
+        refused('moved'); refused('moved',(seen,lost))
+        # A pinned answer on another subscription recorded under this session.
+        self.t.codex_pick('pinned'); self.t.codex_record('pinned','a',[seen],src)
+        self.t.codex_record('pinned','b',[p.codex_ref('id','on-b')],p.codex_ref('account','source-b'))
+        refused('pinned')
+        # A source identity change, a collision, a foreign eviction, an
+        # unrecorded route, another SID of its worker recording it otherwise.
+        for sid,change in [('source',dict(sole_source='')),('collide',dict(refs={seen:None})),
+                           ('evicted',dict(evicted_origin='')),('untracked',dict(untracked=True))]:
+            self.t.codex_pick(sid); self.t.codex_record(sid,'a',[seen],src)
+            self.t.codex_state['sessions'][sid].update(change); refused(sid)
+        self.t.codex_pick('route'); self.t.codex_record('route','a',[seen],src)
+        self.t.codex_untracked('route'); refused('route')
+        worker='11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222'
+        p.write_json(Path(self.tmp.name,'workers.json'),dict(mine=worker,prior=worker,prior2=worker))
+        self.t.codex_pick('mine'); self.t.codex_record('mine','a',[seen],src)
+        self.t.codex_record('prior','a',[lost],src); self.t.codex_record('prior2','b',[lost],p.codex_ref('account','source-b'))
+        refused('mine')
+        # Every refusal is logged with its session and reason, never a ref.
+        with patch.object(self.t,'log',side_effect=lambda **row:logged.append(row)):
+            self.assertEqual(self.t.codex_pick('one',False,[lost])['account'],'a')
+        self.assertFalse([r for r in logged if lost in json.dumps(r) or seen in json.dumps(r)])
+
+    def test_handoff_keeps_refs_the_old_process_records(self):
+        # A restart: the new process B loads the routing file while the old one
+        # A still streams and records the refs of its last answers. B's next
+        # save used to overwrite them, and the client's next turn resent refs
+        # nothing knew any more.
+        self.install((1,.5)); self.t.codex_pick('s')
+        src=p.codex_ref('account','source-a'); early=p.codex_ref('id','early')
+        self.t.codex_record('s','a',[early],src)
+        a=self.t
+        b=p.Tenant(self.cfg); b.held=a.held; b.capacity_cache=a.capacity_cache; b.capacity_until=a.capacity_until
+        late=[p.codex_ref('id','late-%d'%i) for i in range(3)]
+        a.codex_record('s','a',late,src)           # A's last streamed answer
+        b.codex_pick('other')                      # B saves first
+        b.codex_record('x','b',[p.codex_ref('id','on-b')],p.codex_ref('account','source-b'))
+        disk=p.read_json(Path(self.tmp.name,'codex-routing.json'),{})['sessions']
+        self.assertTrue(set(late).issubset(disk['s']['refs']))
+        self.assertIn('x',disk)
+        # Reading needs no save of B's: the next pick folds A's records in.
+        a.codex_record('s','a',[p.codex_ref('id','later')],src)
+        got=b.codex_pick('s',False,[early]+late+[p.codex_ref('id','later')])
+        self.assertEqual((got['account'],got['reason']),('a','source_affinity'))
+        # And A, still running, keeps B's sessions on its own next save.
+        a.codex_record('s','a',[p.codex_ref('id','last')],src)
+        disk=p.read_json(Path(self.tmp.name,'codex-routing.json'),{})['sessions']
+        self.assertIn('x',disk); self.assertIn('other',disk)
+        # A ref the two recorded with different origins is a collision.
+        clash=p.codex_ref('id','clash')
+        a.codex_record('s','a',[clash],src); b.codex_record('s','b',[clash],p.codex_ref('account','source-b'))
+        self.assertIsNone(p.read_json(Path(self.tmp.name,'codex-routing.json'),{})['sessions']['s']['refs'][clash])
+        with self.assertRaises(ValueError):b.codex_pick('s',False,[p.codex_ref('id','unseen')])
+        # Cheap when nothing moved: no read of the file on a quiet pick.
+        real=p.read_json
+        def read(path,dflt):
+            self.assertFalse(str(path).endswith('codex-routing.json'),'re-read on a quiet pick')
+            return real(path,dflt)
+        with patch.object(p,'read_json',side_effect=read):
+            b.codex_pick('s',False,[early]); b.codex_record('s','a',[early],src)
 
     def test_legacy_fallback_and_upgrade_snapshot(self):
         p.Proxy.reads={('codex','a'):dict(rl5h='95',rl7d='95'),('codex','b'):dict(rl5h='20',rl7d='20')}

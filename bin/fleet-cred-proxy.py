@@ -1190,6 +1190,58 @@ def read_json(p, dflt):
         return dflt
 
 
+def codex_evict(v):
+    """A long session resends its whole history every turn, so the oldest refs
+    come back. Past CODEX_REFS_MAX evict them, keeping their one origin (or ""
+    once evictions disagree): codex_pick may read an unseen ref as it only for a
+    session that never left that origin."""
+    known = v.get("refs", {})
+    if len(known) > CODEX_REFS_MAX:
+        drop = list(known)[:len(known) - CODEX_REFS_MAX]
+        gone = {known.pop(ref) for ref in drop}
+        prior = v.get("evicted_origin")
+        one = next(iter(gone)) if len(gone) == 1 else None
+        v["evicted_origin"] = one if one and prior in (None, one) else ""
+
+
+def codex_merge(mine, disk):
+    """Fold another process's codex-routing.json into ours (Tenant.codex_sync).
+    Refs are a union: one the two saw with different origins is a collision
+    (None), as in codex_record. Scalars follow the newer `seen`, but the
+    one-origin markers only ever clear: sole / sole_source / evicted_origin
+    that disagree become "", and `untracked` stays once set."""
+    def one(a, b):
+        return b if a is None else a if b is None or a == b else ""
+    sessions = mine.setdefault("sessions", {})
+    for sid, d in (disk.get("sessions") or {}).items():
+        m = sessions.get(sid)
+        if not isinstance(d, dict) or m == d:
+            continue
+        if m is None:
+            sessions[sid] = d
+            continue
+        refs = m.setdefault("refs", {})
+        for ref, origin in (d.get("refs") or {}).items():
+            refs[ref] = origin if refs.get(ref, origin) == origin else None
+        marks = {k: one(m.get(k), d.get(k)) for k in ("sole", "sole_source", "evicted_origin") if k in m or k in d}
+        res = dict(m.get("reservations") or {})
+        for identity, at in (d.get("reservations") or {}).items():
+            res[identity] = max(at, res.get(identity, 0))
+        if d.get("seen", 0) > m.get("seen", 0):
+            m.update({k: x for k, x in d.items() if k != "refs"})
+        m.update(marks)
+        if res:
+            m["reservations"] = res
+        if d.get("untracked"):
+            m["untracked"] = True
+        if d.get("worker") and not m.get("worker"):
+            m["worker"] = d["worker"]
+        codex_evict(m)
+    if len(sessions) > 4096:
+        for key in sorted(sessions, key=lambda k: sessions[k].get("seen", 0))[:len(sessions)-4096]:
+            del sessions[key]
+
+
 def live_session(state):
     """-> live(claims): an expired fcp1 whose session (its --wrap pid) still runs."""
     def live(c):
@@ -1457,6 +1509,11 @@ class Tenant:
         self.capacity_refresh_lock = threading.Lock()
         self.capacity_cache, self.capacity_until, self.capacity_retry = {}, 0, 0
         self.capacity_failures = 0
+        try:
+            st = os.stat(os.path.join(cfg.state, "codex-routing.json"))
+            self.codex_sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+        except OSError:
+            self.codex_sig = None
         self.codex_state = read_json(os.path.join(cfg.state, "codex-routing.json"), {"sessions": {}})
         for sid, record in self.codex_state.get("sessions", {}).items():
             if record.get("account"):
@@ -1587,8 +1644,45 @@ class Tenant:
                 pass
             return self.capacity_cache if now < self.capacity_until else {}
 
+    def codex_sync(self):
+        """Fold in what another proxy process wrote since our last load or save.
+        A restart hands the listener over while the old process still finishes
+        its streams and records their refs; the new one never saw them and its
+        next save overwrote them, so every later turn of that session was a 409.
+        One stat a call; the file is read only when it moved under us (our own
+        saves keep the signature). Caller holds codex_lock."""
+        p = os.path.join(self.cfg.state, "codex-routing.json")
+        try:
+            st = os.stat(p)
+        except OSError:
+            return
+        sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+        if sig == self.codex_sig:
+            return
+        disk = read_json(p, None)
+        if isinstance(disk, dict):
+            # stat before read: a write in between is only read once more
+            self.codex_sig = sig
+            codex_merge(self.codex_state, disk)
+
     def save_codex_state(self):
-        write_json(os.path.join(self.cfg.state, "codex-routing.json"), self.codex_state)
+        p = os.path.join(self.cfg.state, "codex-routing.json")
+        lk = os.open(p + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            # another process of this code merges under the same lock; an older
+            # one that does not is folded in by our next sync instead
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            self.codex_sync()
+            tmp = "%s.%d.tmp" % (p, os.getpid())
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(self.codex_state, f)
+                f.flush()
+                st = os.fstat(f.fileno())
+            os.replace(tmp, p)
+            self.codex_sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+        finally:
+            os.close(lk)
 
     @staticmethod
     def codex_ref_origin(old, ref):
@@ -1607,16 +1701,17 @@ class Tenant:
         tenant. Neither a worker match nor an old eviction marker proves an
         unseen ref. Local collisions remain unresolved.
         Caller holds codex_lock; this also keeps previews read-only.
+        -> ({ref: origin or None}, refs another SID recorded unresolved).
         """
         origins = {ref: self.codex_ref_origin(old, ref) for ref in refs}
         missing = {ref for ref, origin in origins.items()
                    if origin is None and ref not in old.get("refs", {})}
         if not missing:
-            return set(origins.values())
+            return origins, set()
         workers = read_json(os.path.join(self.cfg.state, "workers.json"), {})
         worker = workers.get(sid) or old.get("worker", "")
         if not worker or not WORKER_RE.fullmatch(worker):
-            return set(origins.values())
+            return origins, set()
         found = {ref: set() for ref in missing}
         for prior_sid, prior in self.codex_state.get("sessions", {}).items():
             if prior_sid == sid or (workers.get(prior_sid) or prior.get("worker")) != worker:
@@ -1624,10 +1719,36 @@ class Tenant:
             known = prior.get("refs", {})
             for ref in missing.intersection(known):
                 found[ref].add(known[ref])
+        contested = set()
         for ref, candidates in found.items():
             if len(candidates) == 1 and None not in candidates:
                 origins[ref] = next(iter(candidates))
-        return set(origins.values())
+            elif candidates:
+                contested.add(ref)
+        return origins, contested
+
+    @staticmethod
+    def codex_sole_vouches(old, origins, contested):
+        """-> the session's one origin when it may stand for refs this proxy
+        never recorded, else "". Only a session that never switched subscription
+        or source identity (sole + sole_source), whose every recorded ref and
+        eviction names that origin, that no unrecorded route answered
+        (`untracked`), and whose refs no other SID of its worker recorded
+        otherwise: its history has nowhere else to come from. A restart that
+        lost the old process's last records must not refuse it forever. A
+        reopened SID qualifies only after its first resume, which proved the
+        whole resent history exactly and recorded it under the new SID."""
+        sole, src = old.get("sole"), old.get("sole_source")
+        if not sole or not src or old.get("untracked") or contested:
+            return ""
+        one = sole + "\0" + src
+        if old.get("evicted_origin") not in (None, one):
+            return ""
+        if any(o is not None and o != one for o in origins.values()):
+            return ""
+        if any(o != one for o in old.get("refs", {}).values()):
+            return ""
+        return one
 
     def codex_pick(self, sid, independent=True, refs=(), unknown=False, pin="", preview=False, proposed=False):
         """Serialize per-tenant independent boundaries. References never change a
@@ -1637,9 +1758,18 @@ class Tenant:
         data = self.capacity_metadata()
         now = time.time()
         with self.codex_lock:
+            self.codex_sync()
             sessions = self.codex_state.setdefault("sessions", {})
             old = sessions.get(sid, {})
-            origins = self.codex_resume_origins(sid, old, refs)
+            by_ref, contested = self.codex_resume_origins(sid, old, refs)
+            origins = set(by_ref.values())
+            vouched = ""
+            if refs and not unknown and (None in origins or len(origins) != 1):
+                # Unrecorded refs of a session that only ever had one origin
+                # stand for it; the checks below then hold it to that origin.
+                vouched = self.codex_sole_vouches(old, by_ref, contested)
+                if vouched:
+                    origins = {vouched}
             cur = old.get("account", "")
             held = set(self.held("codex"))
             entries, seen = {}, set()
@@ -1713,7 +1843,7 @@ class Tenant:
                 # after any switch ambiguity must refuse, never guess.
                 if refs and None not in origins and len(origins) == 1 and not unknown:
                     origin = next(iter(origins))
-                    pick, reason = origin.split("\0", 1)[0], "source_affinity"
+                    pick, reason = origin.split("\0", 1)[0], "sole_origin_unseen_ref" if vouched else "source_affinity"
                 elif old.get("sole") and not refs:
                     pick, reason = old["sole"], "unknown_context_original"
                 else:
@@ -1865,17 +1995,18 @@ class Tenant:
                 # A collision is unresolved rather than silently overwritten.
                 origin = account + "\0" + source_identity
                 known[ref] = origin if ref not in known or known[ref] == origin else None
-            if len(known) > CODEX_REFS_MAX:
-                # A long session resends its whole history every turn, so the
-                # oldest refs come back. Evict them, keeping their one origin
-                # (or "" once evictions disagree): codex_pick may read an unseen
-                # ref as it only for a session that never left that origin.
-                drop = list(known)[:len(known) - CODEX_REFS_MAX]
-                gone = {known.pop(ref) for ref in drop}
-                prior = v.get("evicted_origin")
-                one = next(iter(gone)) if len(gone) == 1 else None
-                v["evicted_origin"] = one if one and prior in (None, one) else ""
+            codex_evict(v)
             self.save_codex_state()
+
+    def codex_untracked(self, sid):
+        """A 2xx this proxy could not record (another route's credential served
+        it): its refs may name any subscription, so the session's sole origin no
+        longer vouches for refs it never saw (codex_sole_vouches)."""
+        with self.codex_lock:
+            v = self.codex_state.setdefault("sessions", {}).setdefault(sid, {})
+            if not v.get("untracked"):
+                v["untracked"] = True
+                self.save_codex_state()
 
     def pick_account(self, provider, sid, avoid=()):
         """-> the account this session's next request runs on ("" = none held)."""
@@ -2313,6 +2444,9 @@ class Proxy(BaseHTTPRequestHandler):
                 acct, self.codex_expected_source = decision["account"], decision["expected_source"]
                 self.codex_proven_refs = decision.get("proven_refs", [])
             except ValueError as e:
+                # said, never silent: a refusal names the session and its reason,
+                # never a ref or a credential
+                self.log(ev="deny", provider="codex", sid=sid, path=path.split("?")[0], why=str(e))
                 return self.fail(409, str(e), "codex_affinity_unavailable")
         elif self.auto:
             acct = self.t.pick_account(provider, sid)
@@ -2536,6 +2670,8 @@ class Proxy(BaseHTTPRequestHandler):
             return ("nocred", (403, "no upstream credential for account %s" % acct, "permission_error"))
         if provider == "codex" and cred == "file" and getattr(self, "codex_expected_source", ""):
             if self.codex_expected_source != getattr(self, "codex_source_identity", ""):
+                self.log(ev="deny", provider="codex", sid=sid, acct=acct, route=route,
+                         why="Codex continuation source identity changed")
                 self.fail(409, "Codex continuation source identity changed", "codex_affinity_unavailable")
                 return None
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() not in drop}
@@ -2690,6 +2826,8 @@ class Proxy(BaseHTTPRequestHandler):
                 for k, v in r.getheaders() if k.lower() in ("x-codex-turn-state", "x-codex-routing-hint") and v]
                 + getattr(self, "codex_proven_refs", []),
                 getattr(self, "codex_source_identity", ""))
+        elif getattr(self, "codex_policy", False) and 200 <= r.status < 300:
+            self.t.codex_untracked(sid)
         self.send_response_only(r.status, r.reason)
         rh = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP]
         for k, v in rh:
