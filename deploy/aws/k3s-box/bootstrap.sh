@@ -191,19 +191,28 @@ gen() { # gen <file> <command…>: make the file once, 0600
   local f=$SECRETS_DIR/$1; shift
   [ -s "$f" ] && return 0
   say "secret: generating $(basename "$f")"
-  ( umask 077; "$@" > "$f.tmp" ) && mv "$f.tmp" "$f"
+  # no trailing newline: a Secret made --from-file keeps it, and the hub would
+  # read it as part of the token (every Bearer then 401s)
+  ( umask 077; v=$("$@") && printf '%s' "$v" > "$f.tmp" ) && mv "$f.tmp" "$f"
 }
 
 from_ssm() { # from_ssm <file> <param>: the file once, from SSM Parameter Store
   local f=$SECRETS_DIR/$1
   if [ -s "$f" ] || [ -z "$2" ]; then return 0; fi
   say "secret: $1 from SSM $2"
-  ( umask 077; aws ssm get-parameter --region "$AWS_REGION" --with-decryption --name "$2" \
-      --query Parameter.Value --output text > "$f.tmp" ) && mv "$f.tmp" "$f"
+  ( umask 077; v=$(aws ssm get-parameter --region "$AWS_REGION" --with-decryption --name "$2" \
+      --query Parameter.Value --output text) && printf '%s' "$v" > "$f.tmp" ) && mv "$f.tmp" "$f"
 }
 
 ensure_secrets() {
   install -d -m 0700 "$SECRETS_DIR"
+  # an earlier bootstrap wrote these with a trailing newline: trim it in place
+  local f
+  for f in viewer-token replica-token credproxy-token session-cred-key cred-key db-url; do
+    if [ -s "$SECRETS_DIR/$f" ] && [ "$(tail -c1 "$SECRETS_DIR/$f" | od -An -c | tr -d ' ')" = '\n' ]; then
+      ( umask 077; v=$(cat "$SECRETS_DIR/$f") && printf '%s' "$v" > "$SECRETS_DIR/$f.tmp" ) && mv "$SECRETS_DIR/$f.tmp" "$SECRETS_DIR/$f"
+    fi
+  done
   from_ssm db-url "${DB_URL_SSM_PARAM:-}"
   from_ssm site.env "${SITE_ENV_SSM_PARAM:-}"
   [ -s "$SECRETS_DIR/db-url" ] || die "no $SECRETS_DIR/db-url — the RDS Postgres URL (README «Secrets»)"
