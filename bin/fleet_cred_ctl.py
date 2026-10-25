@@ -62,6 +62,13 @@ def ctl(op, **fields):
     req = dict(fields, op=op)
     if os.environ.get("FLEET_CRED_AS"):
         req["as"] = os.environ["FLEET_CRED_AS"]
+    # the full CLI's selftest seam too (fleet-cred-proxy.py ctl_call), so a shared
+    # proxy's test sees the very request the full CLI sends
+    if os.environ.get("FLEET_CRED_TEST_PEER_UID"):
+        try:
+            req["peer_uid"] = int(os.environ["FLEET_CRED_TEST_PEER_UID"])
+        except ValueError:
+            return None, 1
     s = connect(os.path.join(run, "ctl.sock"))
     if s is None:
         return None, 3
