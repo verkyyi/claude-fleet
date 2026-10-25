@@ -401,6 +401,14 @@ func (s *Server) verifySessionCred(tok, wantPrincipal, wantProvider string, fres
 			}
 			e.revWhy += " was revoked at " + rev.RevokedAt.Format(time.RFC3339)
 		}
+		if row.Machine == svcStandingMachine && e.revWhy == "" {
+			// a service's standing pass lives no longer than the token that
+			// minted it and its principal (svc_pass.go)
+			if e.revWhy, err = s.svcStandingRevoked(row, now); err != nil {
+				v.Reason = "hub error: " + err.Error()
+				return v, c
+			}
+		}
 		mwhy, err := s.machineDeniedFor(row.EndpointID, row.Machine, row.PrincipalID)
 		if err != nil {
 			v.Reason = "hub error: " + err.Error()

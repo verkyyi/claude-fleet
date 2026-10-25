@@ -159,6 +159,10 @@
 #   svc-usage-crosses-tenant                        tokenledger/hub/api svc_usage.go (tenant on the run's pass and
 #                                                   pool_usage, fleet.svc_budget / svc_tenant_budget, svcYield,
 #                                                   GET /v1/svc/usage; go test, when a toolchain is here)
+#   svc-standing-pass-escapes                       tokenledger/hub/api svc_pass.go (POST /v1/svc/pass[/renew] behind
+#                                                   pass:issue, codex only, the minting token on the row and re-read at
+#                                                   verify) + fleet_credproxy.go (sessionBind: a standing pass yields at
+#                                                   every request); go test, when a toolchain is here
 #   trial-transcript-cross                          tokenledger/hub/api fleet_try_slot.go (trialKeepConvo /
 #                                                   trialSeed: sealed per principal, opened only as the session's own)
 #                                                   + credvault SealPerson + extras/web-chat server.mjs (/api/export,
@@ -2169,6 +2173,27 @@ drill_svc_usage_crosses_tenant() {
     TestSvcYieldsTightPool || return 1
   WHAT='服务运行的用量按通行证里的 tenant 记、人的行不带 tenant；单 tenant 到顶只挡它、整体到顶挡全部服务不挡人；池子紧时服务让；usage 接口与回调对得上（Go 测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='经真凭据代理：两 tenant 分开记（不混进人的）；ws:1 到顶 403、ws:2 与人照常；整体到顶两 tenant 都 403、人照常；派单 429 tenant_limit / quota_exceeded 不入队，队列里的派前结束，运行中超了不重试；池子紧时服务不选 ≥80% 的号、全紧就等、人照常；/v1/svc/usage 按 tenant 等于回调 usage 之和（go test 六条）'
+  SECS=$(since "$t0")
+}
+
+# ---- svc-standing-pass-escapes: a long-running service (svc:xiaoerge, the WeCom
+# agent) holds a standing pass on its own principal instead of a Job per
+# request. The break: claude through it, usage off its service's books, past
+# its budget or its yield, a pass that outlives a revoked token or a disabled
+# principal, a token without pass:issue minting one.
+drill_svc_standing_pass_escapes() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/hub/api"; GO_RAN=0
+  t0=$(now)
+  grep -q 's.svcOnly(store.SvcPassIssue' "$tl/svc_pass.go" 2>/dev/null \
+    || { WHY="the standing pass is no longer behind pass:issue (svc_pass.go)"; return 1; }
+  grep -q 'var svcStandingProviders = \[\]string{credvault.Codex}' "$tl/svc_pass.go" \
+    || { WHY="a standing pass is no longer codex only (svc_pass.go)"; return 1; }
+  grep -q 's.svcStandingRevoked(row, now)' "$tl/fleet_session_cred.go" \
+    || { WHY="verify no longer re-reads a standing pass's token and principal (fleet_session_cred.go)"; return 1; }
+  c11_go_tests svc_pass_test.go TestSvcPassScopeAndShape TestSvcPassNeedsAllowlist TestSvcPassRenew \
+    TestSvcPassRevokedWithTokenOrPrincipal TestSvcPassMeteredAndBudgeted TestSvcPassYieldsEveryRequest || return 1
+  WHAT='常驻服务通行证只认 pass:issue、只给 codex；用量记在服务名下受服务额度与让路约束；令牌吊销 / 主体停用即失效（Go 测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='没有 pass:issue 403、claude 400、无白名单 403、通行证关 503；经真凭据代理 codex 记到 svc:<名> tenant 空、claude 拒；整体到顶 resolve 403 且不再签（429）、人照常；号过 80% 下一次请求就换、全紧等、人照常；续期同一张、别的服务 404、过期在宽限内可续；吊令牌只停它签的、停用主体全停、再启用恢复（go test 六条）'
   SECS=$(since "$t0")
 }
 

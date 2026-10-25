@@ -50,10 +50,14 @@ const (
 	SvcTemplatesWrite   = "templates:write"
 	SvcRunsEval         = "runs:eval"
 	SvcTemplatesQualify = "templates:qualify"
+	// SvcPassIssue lets a long-running service hold its own standing Codex
+	// pass (claude-fleet svc pass, api/svc_pass.go). Granted only by name:
+	// no principal holds it without an admin listing it.
+	SvcPassIssue = "pass:issue"
 )
 
 // SvcScopes is every scope, in the order they print.
-var SvcScopes = []string{SvcRunsWrite, SvcRunsRead, SvcTemplatesWrite, SvcRunsEval, SvcTemplatesQualify}
+var SvcScopes = []string{SvcRunsWrite, SvcRunsRead, SvcTemplatesWrite, SvcRunsEval, SvcTemplatesQualify, SvcPassIssue}
 
 // SvcLiveTokensMax is how many unrevoked, unexpired tokens one principal may
 // hold: the current one and its replacement during a rotation.

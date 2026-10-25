@@ -167,13 +167,14 @@ func (s *Server) svcOnly(scope string, next http.Handler) http.Handler {
 	})
 }
 
-// svcMux is the service door's routes: whoami, the runs (svc_runs.go) and
-// the templates (svc_templates.go).
+// svcMux is the service door's routes: whoami, the runs (svc_runs.go), the
+// templates (svc_templates.go) and the standing pass (svc_pass.go).
 func (s *Server) svcMux() http.Handler {
 	m := http.NewServeMux()
 	m.Handle(SvcWhoamiPath, s.svcOnly("", http.HandlerFunc(s.handleSvcWhoami)))
 	s.svcRunsMux(m)
 	s.svcTemplatesMux(m)
+	s.svcPassMux(m)
 	m.Handle(SvcUsagePath, s.svcOnly(store.SvcRunsRead, http.HandlerFunc(s.handleSvcUsage)))
 	m.Handle(svcEvalRunsPath, s.svcOnly("", http.HandlerFunc(s.handleSvcEvalRun)))
 	m.Handle(svcQualificationsPath, s.svcOnly("", http.HandlerFunc(s.handleSvcQualifications)))
@@ -364,6 +365,7 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.revRecord([]store.Revocation{e}, now)
+			s.sessCred.drop("") // its standing passes end at their next verify (svc_pass.go)
 			writeJSON(w, http.StatusOK, t)
 		case "disable", "enable":
 			p, e, err := SvcSetEnabled(s.Store, req.Principal, req.Op == "enable", actor, now)
@@ -376,6 +378,7 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 			} else {
 				s.revRecord([]store.Revocation{e}, now)
 			}
+			s.sessCred.drop("") // its standing passes follow at their next verify (svc_pass.go)
 			writeJSON(w, http.StatusOK, p)
 		case "eval-policy":
 			if req.EvalPolicy == nil {
