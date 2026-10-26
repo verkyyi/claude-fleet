@@ -249,6 +249,10 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.FleetRoutes = routes
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
+	// A host's own browser-facing address (task PNWW, api/edge.go).
+	if srv.PublicHosts, err = api.ParseHostMap(os.Getenv("CCQUOTA_PUBLIC_HOSTS"), api.PublicHostOrigin); err != nil {
+		return fmt.Errorf("CCQUOTA_PUBLIC_HOSTS: %w", err)
+	}
 	srv.PreviewDomain = os.Getenv("CCQUOTA_PREVIEW_BASE_DOMAIN")
 	srv.PreviewHubAliases = strings.FieldsFunc(os.Getenv("CCQUOTA_PREVIEW_HUB_ALIASES"), func(r rune) bool { return r == ',' || r == ' ' })
 	if err := srv.ValidatePreviewConfig(); err != nil {
@@ -844,6 +848,17 @@ func runHub(args []string) error {
 		log.Printf("read-only (CCQUOTA_READONLY=1): writes answer 503 + Retry-After, reads as usual")
 	}
 
+	// A host's own site edition (task PNWW, api/edge.go); any listed host
+	// turns the site on.
+	siteHosts, err := api.ParseHostMap(os.Getenv("CCQUOTA_SITE_HOSTS"), api.SiteHostEdition)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_SITE_HOSTS: %w", err)
+	}
+	forwardedHosts, err := api.ParseForwardedHosts(os.Getenv("CCQUOTA_FORWARDED_HOSTS"))
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FORWARDED_HOSTS: %w", err)
+	}
+
 	if bad := placeholderAdmins(splitList(os.Getenv("CCQUOTA_ADMINS"))); len(bad) > 0 {
 		return fmt.Errorf("CCQUOTA_ADMINS: %s is the docs' placeholder — put an address you can receive mail at: the first admin signs in with the code sent there", strings.Join(bad, ", "))
 	}
@@ -868,13 +883,16 @@ func runHub(args []string) error {
 		ReadOnly:            readOnly,
 		// The public site at "/" (claude-fleet#3583): only our own hub turns
 		// it on; a self-hoster's "/" is the console.
-		Site:        siteOn(os.Getenv("CCQUOTA_SITE")),
+		Site:        siteOn(os.Getenv("CCQUOTA_SITE")) || len(siteHosts) > 0,
 		SiteEdition: siteEdition(os.Getenv("CCQUOTA_SITE")),
-		SiteFS:      web.Site(),
-		DocsFS:      web.Docs(),
-		ConsoleFS:   web.Console(),
-		ThemeFS:     web.Theme(),
-		FleetAdmins: splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
+		SiteHosts:   siteHosts,
+		// The hosts a trusted edge forwards (task PNWW, api/edge.go).
+		ForwardedHosts: forwardedHosts,
+		SiteFS:         web.Site(),
+		DocsFS:         web.Docs(),
+		ConsoleFS:      web.Console(),
+		ThemeFS:        web.Theme(),
+		FleetAdmins:    splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
 		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),

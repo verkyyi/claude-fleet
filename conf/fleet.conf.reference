@@ -2718,3 +2718,19 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   CCQUOTA_SITE                  on = the public site at "/"; sandbox = the same
 #                                 site with the Claude Code sandbox runtime's
 #                                 front page (English /, 中文 /zh/) · 可选 (unset = off)
+#   CCQUOTA_SITE_HOSTS            host=edition pairs (edition on | sandbox), space-
+#                                 separated: that host's own front page; any other
+#                                 host keeps CCQUOTA_SITE's; set = the site is on
+#                                 (task PNWW, api/edge.go) · 可选 (unset = CCQUOTA_SITE alone)
+#   CCQUOTA_PUBLIC_HOSTS          host=origin pairs, space-separated: the browser-facing
+#                                 address (sign-in callback, page links) of a request to
+#                                 that host; any other host, and what a machine is told
+#                                 to dial or WeChat calls back on, keeps
+#                                 CCQUOTA_FLEET_PUBLIC_URL · 可选
+#   CCQUOTA_FORWARDED_HOSTS       hosts a trusted edge proxy forwards, space-separated
+#                                 ("*.<suffix>" = any name under it): a request whose
+#                                 X-Forwarded-Host is one is taken at that host, over
+#                                 https, from the leftmost X-Forwarded-For entry. The
+#                                 front proxy must pass X-Forwarded-* on only from the
+#                                 edge (traefik forwardedHeaders.trustedIPs) · 可选
+#                                 (unset = r.Host as always)

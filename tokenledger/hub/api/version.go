@@ -73,7 +73,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		}
 		out["client_version"] = sha
 		out["stable"] = sha
-		out["client_url"] = s.hubURL(r) + "/install/stable/" + sha
+		out["client_url"] = s.nodeHubURL(r) + "/install/stable/" + sha
 	}
 	// why stable is not being followed, when the operator can fix it — GitHub's
 	// rate limit on a hub in China (claude-fleet#4009)

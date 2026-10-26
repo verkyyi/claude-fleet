@@ -25,6 +25,16 @@ spec:
                 name: ccquota-site-env
                 optional: true
           env:
+            # One hub, two audiences (task PNWW, tokenledger/hub/api/edge.go):
+            # the Shenzhen ingress proxies claudefleet / ccquota.example.com and
+            # *.preview.example.net here as Host core.tokenman.io with its
+            # X-Forwarded-Host / -For / -Proto, which traefik passes on only from
+            # the Shenzhen egress (forwardedHeaders.trustedIPs);
+            # CCQUOTA_FORWARDED_HOSTS lists those hosts, CCQUOTA_PUBLIC_HOSTS
+            # (host=origin) gives tokenman.io its own browser address and
+            # CCQUOTA_SITE_HOSTS (host=on|sandbox) its own front page — all three
+            # from ConfigMap ccquota-site. CCQUOTA_FLEET_PUBLIC_URL stays the
+            # address machines dial and WeChat calls back on.
             - name: CCQUOTA_FLEET_PUBLIC_URL
               value: "https://core.tokenman.io"
             - name: CCQUOTA_PUBLIC_URL
