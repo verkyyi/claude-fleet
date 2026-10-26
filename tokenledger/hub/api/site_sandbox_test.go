@@ -115,6 +115,15 @@ func TestSiteArchitecture(t *testing.T) {
 			t.Error("diagram must be served as SVG")
 		}
 	}
+	// A portal changes only its front pages, not the blueprint's asset path.
+	h.srv.PortalURL = "https://portal.example.com"
+	for _, path := range []string{"/architecture", "/zh/architecture"} {
+		rec := httptest.NewRecorder()
+		h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, h.srv.PortalURL+path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "SANDBOX-ARCH-") {
+			t.Errorf("portal %s: %d %q; want the architecture page", path, rec.Code, rec.Body.String())
+		}
+	}
 	delete(site, "sandbox/architecture/index.html")
 	rec := httptest.NewRecorder()
 	h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/architecture", nil))
