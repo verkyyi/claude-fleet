@@ -21,6 +21,8 @@
 #   EDGE_TRUSTED_IPS     CIDRs whose X-Forwarded-* traefik keeps (a reverse proxy in
 #                        front, e.g. the Shenzhen ingress' egress address as a /32);
 #                        unset = traefik trusts nobody's
+#   PROXY_PROTOCOL_IPS   CIDRs that send a PROXY protocol header before TLS (an accelerator
+#                        such as Aliyun GA with ProxyProtocol on); unset = none
 #   EXTRA_HOSTS          more names served by the same hub, space-separated, each in
 #                        the certificate extra-tls (e.g. HUB_HOST=tokenman.io
 #                        EXTRA_HOSTS="www.tokenman.io core.tokenman.io": the apex
@@ -48,6 +50,7 @@ OVERLAY=$REPO_DIR/deploy/k8s/overlays/aws-k3s
 HUB_HOST=${HUB_HOST:-core.tokenman.io}
 EXTRA_HOSTS=${EXTRA_HOSTS:-}
 EDGE_TRUSTED_IPS=${EDGE_TRUSTED_IPS:-}
+PROXY_PROTOCOL_IPS=${PROXY_PROTOCOL_IPS:-}
 AWS_REGION=${AWS_REGION:-us-west-2}
 STORAGE_CLASS=${STORAGE_CLASS:-local-path}
 LETSENCRYPT_SERVER=${LETSENCRYPT_SERVER:-prod}
@@ -305,11 +308,18 @@ render() {
 # EDGE_TRUSTED_IPS: traefik keeps those sources' X-Forwarded-* (the line is
 # rendered as a placeholder and dropped when unset).
 edge_trust() {
+  local e=cat p=cat
   if [ -n "$EDGE_TRUSTED_IPS" ]; then
-    sed -e "s#__EDGE_TRUSTED_IPS__#$(echo $EDGE_TRUSTED_IPS | tr ' ' ',')#g"
+    e="sed -e s#__EDGE_TRUSTED_IPS__#$(echo $EDGE_TRUSTED_IPS | tr ' ' ',')#g"
   else
-    grep -v '__EDGE_TRUSTED_IPS__'
+    e="grep -v __EDGE_TRUSTED_IPS__"
   fi
+  if [ -n "$PROXY_PROTOCOL_IPS" ]; then
+    p="sed -e s#__PROXY_PROTOCOL_IPS__#$(echo $PROXY_PROTOCOL_IPS | tr ' ' ',')#g"
+  else
+    p="grep -v __PROXY_PROTOCOL_IPS__"
+  fi
+  $e | $p
 }
 
 # The cluster credential proxy at /v1/proxy/ on every name the hub answers
