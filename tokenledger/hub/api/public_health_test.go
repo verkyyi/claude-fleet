@@ -174,3 +174,39 @@ func TestPublicHealthFiltersLegacyDiagnosticNotes(t *testing.T) {
 		t.Fatal(out.Events)
 	}
 }
+
+func TestPublicHealthStaysOnEditionHostWithPortal(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.PortalURL = "https://portal.example.com"
+	h.srv.PortalAliases = []string{"claudefleet.example.com", "tokenman.example.com"}
+	h.srv.SiteHosts = map[string]string{"tokenman.example.com": SiteEditionSandbox}
+	h.srv.ConsoleFS = fstest.MapFS{
+		"app/index.html":           {Data: []byte("PUBLIC-STATUS")},
+		"app/assets/main.js":       {Data: []byte("PUBLIC-ASSET")},
+		"app/manifest.webmanifest": {Data: []byte("{}")},
+	}
+	hd := h.srv.Handler()
+	for _, host := range h.srv.PortalAliases {
+		for _, path := range []string{"/status", PublicHealthPath, "/app/assets/main.js", AppManifestPath} {
+			w := httptest.NewRecorder()
+			hd.ServeHTTP(w, httptest.NewRequest("GET", "https://"+host+path, nil))
+			if w.Code != 200 || w.Header().Get("Location") != "" {
+				t.Fatalf("%s%s: %d %s", host, path, w.Code, w.Header().Get("Location"))
+			}
+			if path == PublicHealthPath {
+				want := `"language":"zh"`
+				if host == "tokenman.example.com" {
+					want = `"language":"en"`
+				}
+				if !strings.Contains(w.Body.String(), want) {
+					t.Fatal(w.Body.String())
+				}
+			}
+		}
+		w := httptest.NewRecorder()
+		hd.ServeHTTP(w, httptest.NewRequest("GET", "https://"+host+"/app", nil))
+		if w.Code != 301 || w.Header().Get("Location") != "https://portal.example.com/app" {
+			t.Fatal("ordinary portal redirect changed", w)
+		}
+	}
+}
