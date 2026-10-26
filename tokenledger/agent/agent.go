@@ -692,17 +692,27 @@ func (a *Agent) runLive(ctx context.Context) {
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
-	_ = a.pushLive(ctx)
+	// Faster local sampling must not amplify a hub outage into faster HTTP
+	// retries. Keep the configured retry cadence, bounded by the heartbeat.
+	retryEvery := min(max(a.cfg.LiveInterval, time.Second), time.Minute)
+	nextAttempt := time.Time{}
+	attempt := func() {
+		if time.Now().Before(nextAttempt) {
+			return
+		}
+		if err := a.pushLive(ctx); err != nil {
+			nextAttempt = time.Now().Add(retryEvery)
+		} else {
+			nextAttempt = time.Time{}
+		}
+	}
+	attempt()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := a.pushLive(ctx); err != nil {
-				// Deliberately quiet: the hub being briefly unreachable is
-				// normal and this path has nothing to preserve.
-				continue
-			}
+			attempt()
 		}
 	}
 }

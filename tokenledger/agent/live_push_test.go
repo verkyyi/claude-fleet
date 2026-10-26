@@ -126,3 +126,33 @@ func TestLivePushStableOrderAndExpiry(t *testing.T) {
 		t.Fatal("stale session was not removed")
 	}
 }
+
+func TestLiveSamplingDoesNotAccelerateFailedHTTPRetries(t *testing.T) {
+	var attempts atomic.Int64
+	first := make(chan struct{}, 1)
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		select {
+		case first <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer h.Close()
+	a := &Agent{cfg: Config{HubURL: h.URL, LiveInterval: 5 * time.Second}, http: h.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); a.runLive(ctx) }()
+	select {
+	case <-first:
+	case <-time.After(3 * time.Second):
+		t.Fatal("initial report not attempted")
+	}
+	time.Sleep(1200 * time.Millisecond) // one local sample tick, shorter than retry cadence
+	cancel()
+	<-done
+	if n := attempts.Load(); n != 1 {
+		t.Fatalf("failed HTTP retried at sample cadence: %d attempts", n)
+	}
+}
