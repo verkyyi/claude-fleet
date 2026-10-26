@@ -1112,7 +1112,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   escalate    detached-attention notifications
 #   snapshot    the crash-recovery layout snapshot
 #   hubsess     keeps the other machines' sessions refresh loop running
-#               (fleet-hub-sessions.sh --ensure; only with CCQUOTA_FLEET=1, #1423)
+#               (fleet-hub-sessions.sh --ensure; only with CCQUOTA_FLEET=1, #1423) —
+#               in the tick's fixed head beside sockets, so an overrun never skips it
 # @label=Collector sockets budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_SOCKETS_BUDGET=20
 # @label=Collector guide budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
@@ -2526,6 +2527,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_PANEL_SERVER_REFRESH=2
 # @label=⌘P resident panel idle exit (s) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_PANEL_SERVER_IDLE=1800
+# A list read (the panel's forked worker) running longer than this many seconds is
+# killed and the next one started — a hung read used to freeze the list for good.
+# @label=⌘P resident panel read limit (s) @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_PANEL_SERVER_WORKER_SECS=15
 # ⌘P's list older than this many seconds (and than two refreshes plus the last
 # read's time) says its age beside 「会话 N」; 「刷新中…」 only while a read runs
 # past FLEET_VIEW_REFRESH_LATE_SECS, 「刷新失败」 after a failed one (T890, EQBE).

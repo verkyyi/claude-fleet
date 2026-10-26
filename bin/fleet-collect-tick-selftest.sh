@@ -1,6 +1,6 @@
 #!/bin/bash
 # selftest-part: 1 guard sessmap account
-# selftest-part: 2 phases
+# selftest-part: 2 phases overrun
 # selftest-part: 3 git
 # selftest-part: 4 issues
 # selftest-part: 5 banner
@@ -16,6 +16,8 @@
 #   account  ph_banner heals @cc_account from the live process's token, never a
 #            banner (T546); fleet-context.sh reads it; fleet-account-truth.py
 #   phases   every phase budgeted, the tick budgeted, truncation rotates (#653, #725)
+#   overrun  hubsess runs in the tick's fixed head: a tick that hits its budget
+#            still stamps hubsess.want (the hub loop's life), hub off ⇒ nothing
 #   git      no `git status`, a budget, round-robin, slow-log, cache sweep (#552, #647)
 #   issues   a timed-out repo never monopolises the issues phase (#651, #1942)
 #   banner   window-scaled budget, working-first rotation, heartbeat counts (#1588)
@@ -259,6 +261,47 @@ case_phases() {
   st_ok "phases: per-phase · whole-tick clamp · rotation · heartbeat · repo queue (#653)"
 }
 
+case_overrun() {
+  # The hub's refresh loop lives LOOP_SECS past its newest --ensure; the ensure
+  # sat at the END of the rotating body, so every tick that hit its budget skipped
+  # it (31 overruns on a node at load 27-43) and the loop died under ⌘P. It runs in
+  # the tick's fixed head now: a truncated tick still stamps hubsess.want.
+  cfx_sandbox overrun; cfx_copy
+  printf '%s\n%s\n' "$WORK/wt1" "$WORK/wt2" > "$WORK/panepaths"
+  # fleet-hub-sessions.sh --ensure's one write the collector depends on: the stamp
+  cat > "$WORK/bin/fleet-hub-sessions.sh" <<'FAKE'
+#!/bin/bash
+printf '%s by=%s\n' "$*" "${FLEET_HUBSESS_BY:-}" >> "$FAKE_L/hubsess.calls"
+[ "${1:-}" = --ensure ] && date +%s > "$TMPDIR/.claude-dash/global/hubsess.want"
+exit 0
+FAKE
+  chmod +x "$WORK/bin/fleet-hub-sessions.sh"
+  order() { cfx_hb phases | tr ' ' '\n' | cut -d= -f1 | tr '\n' ' '; }
+  # the fixture's login has no live socket: keep the loop regardless (#4261's skip)
+  export FLEET_HUBSESS_IDLE_SKIP=0
+
+  CCQUOTA_FLEET=1 cfx_run || cfx_fail "1: a full tick must exit 0"
+  st_eq "1: hubsess runs in the head, right after sockets" \
+    'sockets hubsess guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot ' "$(order)"
+  [ -s "$G/hubsess.want" ] || cfx_fail "1: the head's --ensure stamped no hubsess.want"
+  st_eq "1: one --ensure, named the collector's" '--ensure by=collector' "$(cat "$L/hubsess.calls")"
+
+  rm -f "$G/hubsess.want" "$L/hubsess.calls" "$G/collect.phase.cursor"
+  CCQUOTA_FLEET=1 FAKE_GIT_HANG=/wt1 FLEET_COLLECT_GIT_BUDGET=20 FLEET_COLLECT_TICK_BUDGET=10 FLEET_COLLECT_SOCKETS_BUDGET=0 \
+    FLEET_COLLECT_SESSMAP_BUDGET=0 FLEET_COLLECT_ISSUES_BUDGET=0 cfx_run || cfx_fail "2: a truncated tick must exit 0"
+  grep -q 'tick hit its 10s budget (FLEET_COLLECT_TICK_BUDGET)' "$L/err" || cfx_fail "2: the tick did not hit its budget"
+  st_has "2: the body was cut short" " $(cfx_hb skipped) " ' snapshot '
+  st_hasnt "2: hubsess is never deferred" " $(cfx_hb skipped) " ' hubsess '
+  [ -s "$G/hubsess.want" ] || cfx_fail "2: a tick that hit its budget stamped no hubsess.want — the loop dies 70 s after the last one"
+  st_has "2: the heartbeat still reports it" " $(order)" ' hubsess '
+
+  rm -f "$G/hubsess.want" "$L/hubsess.calls" "$G/collect.phase.cursor"
+  cfx_run || cfx_fail "3: a hub-off tick must exit 0"
+  [ ! -e "$L/hubsess.calls" ] && [ ! -e "$G/hubsess.want" ] || cfx_fail "3: the hub off, yet --ensure ran"
+  st_hasnt "3: the hub off — no hubsess on the heartbeat" " $(order)" ' hubsess '
+  st_ok "overrun: hubsess in the head — a tick at its budget still stamps hubsess.want; hub off ⇒ nothing"
+}
+
 case_git() {
   # The slow worktree costs 3 calls × 3s = 9s against a 5s threshold: wide on both
   # sides of the `SECONDS` ±1s quantization (#693).
@@ -485,7 +528,7 @@ STUB
   st_ok "banner: window-scaled budget · working-first rotation · heartbeat (#1588)"
 }
 
-CASES="${*:-guard sessmap account phases git issues banner}"
+CASES="${*:-guard sessmap account phases overrun git issues banner}"
 for c in $CASES; do
   ( export ST_LEG="$c"; "case_$c" ) || exit 1
 done

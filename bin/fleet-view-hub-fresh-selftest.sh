@@ -23,16 +23,28 @@
 #   F  the first frame never waits on the hub (issue #3311) — hub_ok old, no loop,
 #      a hub that takes 6 s: the popup (a real one, on a pty) draws its list from
 #      the cache within 1.5 s, and the hub is asked right after, off the screen
+#   G  a viewer keeps the loop — no --ensure for longer than LOOP_SECS while the
+#      list is read (global/hubsess.view touched): the same loop lives on and
+#      hub_ok keeps advancing; the reads stop ⇒ gone LOOP_SECS later; a view stamp
+#      in the future extends nothing (a node at load 27-43: the collector's ticks
+#      overran, no --ensure came for 70 s, and the loop ended under a ⌘P read)
+#   H  the loop's log (logs/hubsess.log): a start line, one line per round (rc,
+#      ms, watched), and an exit line saying why — lifetime · replaced by other
+#      code · term · guard gone — with no URL in it
+#   I  hub_fresh never kills — an --ensure and a --refresh that take 3 s: the
+#      popup waits ≤ FLEET_VIEW_HUB_REFRESH_SECS + _ENSURE_SECS (1 s each) and returns, both run to
+#      their end after it; a second ask while that --refresh runs starts no
+#      second one
 #
 # `fleet-view-hub-fresh-selftest.sh B` runs one leg (docs/dev/BREAK-IT.md
-# view-far-reaped runs B). Drives bin/fleet_view.py through fleet-quickopen.py
+# view-far-reaped runs B, hubsess-viewer-keeps-loop runs G). Drives bin/fleet_view.py through fleet-quickopen.py
 # view-rows, the real fleet-hub-sessions.sh and tmux-dashboard-rows.sh; the hub is
 # FLEET_HUB_SESSIONS_CMD, tmux a shim with no windows.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-hub-fresh: python3 absent — SKIP'; exit 0; }
-LEGS="${1:-ABCDEF}"
+LEGS="${1:-ABCDEFGHI}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/vhfresh.XXXXXX") || exit 2
 cleanup() {
   local p
@@ -289,5 +301,90 @@ PY2
   [ "$r" = ok ] || st_fail "F: the popup's first frame waited on a slow hub (or never asked it)" "$r"
   stop_loop
   pass "F: hub_ok old, a 6 s hub — the popup draws the cache at once, the hub is asked behind it"
+;; esac
+case "$LEGS" in *G*)
+  stop_loop
+  printf '#!/bin/sh\necho ask >> "%s/hub.log"\ncat "%s/hub.json"\n' "$WORK" "$WORK" > "$WORK/hub.sh"
+  cp "$WORK/after.json" "$WORK/hub.json"
+  export FLEET_HUB_SESSIONS_LOOP_SECS=3 FLEET_HUB_SESSIONS_EVERY=1
+  okv() { cut -d' ' -f1 "$G/hub_ok" 2>/dev/null || echo 0; }
+  bash "$HUBS" --ensure; touch "$G/hubsess.view"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do loop_alive && break; sleep 0.3; done
+  loop_alive || st_fail "G: --ensure started no loop"
+  p0=$(bash "$HUBS" --status | awk '{ print $2 }'); touch "$G/hubsess.view"
+  ok0=$(okv)
+  # 8 s of reads and no --ensure: more than twice LOOP_SECS past the last stamp
+  # (a read every half second: a loaded box must not make the drill's own gap)
+  for _ in $(seq 1 16); do sleep 0.5; touch "$G/hubsess.view"; done
+  p1=$(bash "$HUBS" --status | awk '{ print $2 }')
+  [ "$p1" = "$p0" ] || st_fail "G: the loop ended under a viewer still reading the list (pid $p0 → ${p1:-none}, no --ensure for 8 s, LOOP_SECS 3)" "$(tail -5 "$WORK/conf/logs/hubsess.log" 2>/dev/null)"
+  ok1=$(okv)
+  [ "$ok1" -gt "$ok0" ] && [ "$ok1" -ge $(( $(date +%s) - 2 )) ] \
+    || st_fail "G: hub_ok did not keep advancing while the list was read ($ok0 → $ok1, now $(date +%s))"
+  for _ in $(seq 1 20); do loop_alive || break; sleep 0.5; done
+  loop_alive && st_fail "G: the reads stopped, yet the loop outlived the stale view stamp by more than LOOP_SECS"
+  # a stamp in the future would keep it for ever: it extends nothing
+  python3 -c 'import os, sys, time; t = time.time() + 3600; os.utime(sys.argv[1], (t, t))' "$G/hubsess.view"
+  bash "$HUBS" --ensure
+  for _ in 1 2 3 4 5 6 7 8 9 10; do loop_alive && break; sleep 0.3; done
+  for _ in $(seq 1 20); do loop_alive || break; sleep 0.5; done
+  loop_alive && st_fail "G: a view stamp an hour in the future kept the loop past LOOP_SECS"
+  touch "$G/hubsess.view"
+  unset FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_SESSIONS_EVERY
+  pass "G: a viewer reading the list keeps the loop (no --ensure for 8 s, LOOP_SECS 3) and hub_ok advancing; stale or future stamps extend nothing"
+;; esac
+case "$LEGS" in *H*)
+  stop_loop
+  printf '#!/bin/sh\necho ask >> "%s/hub.log"\ncat "%s/hub.json"\n' "$WORK" "$WORK" > "$WORK/hub.sh"
+  cp "$WORK/after.json" "$WORK/hub.json"
+  LOG="$WORK/conf/logs/hubsess.log"; rm -f "$LOG"
+  export FLEET_HUB_SESSIONS_LOOP_SECS=2 FLEET_HUB_SESSIONS_EVERY=1
+  lp() { bash "$HUBS" --status | awk '{ print $2 }'; }
+  start_loop() { bash "$HUBS" --ensure; for _ in 1 2 3 4 5 6 7 8 9 10; do loop_alive && break; sleep 0.3; done; }
+  gone() { for _ in $(seq 1 30); do loop_alive || return 0; sleep 0.3; done; return 1; }
+  start_loop; gone || st_fail "H: a 2 s loop did not end"
+  # replaced by other code: the running loop's stamp says other code, an --ensure comes
+  export FLEET_HUB_SESSIONS_LOOP_SECS=30
+  start_loop; sleep 0.5; echo other-code > "$G/hubsess.loopcode"; bash "$HUBS" --ensure; sleep 1
+  # term: a plain TERM to the loop
+  p=$(lp); kill "$p" 2>/dev/null; gone || st_fail "H: TERM did not end the loop"
+  # guard gone: the lock's parent SIGKILLed, the loop notices at its next round
+  start_loop; p=$(lp); pp=$(ps -o ppid= -p "$p" | tr -d ' ')
+  kill -9 "$pp" 2>/dev/null
+  for _ in $(seq 1 30); do kill -0 "$p" 2>/dev/null || break; sleep 0.3; done
+  kill -0 "$p" 2>/dev/null && st_fail "H: the loop outlived its lock parent"
+  unset FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_SESSIONS_EVERY
+  [ -s "$LOG" ] || st_fail "H: no logs/hubsess.log"
+  for w in 'start life=2s code=' 'round rc=200 ms=' 'watched=no' 'exit reason=lifetime up=' \
+           'ensure: no loop — starting one' 'exit reason=replaced by other code' 'exit reason=term' \
+           'exit reason=guard gone' 'want_age=' 'view_age='; do
+    grep -qF -- "$w" "$LOG" || st_fail "H: the log has no «${w}» line" "$(cat "$LOG")"
+  done
+  grep -qiE 'https?:|bearer|token' "$LOG" && st_fail "H: the log carries a URL or a credential word" "$(cat "$LOG")"
+  pass "H: logs/hubsess.log — start, every round (rc · ms · watched), exit with its reason (lifetime · replaced · term · guard gone), no URL"
+;; esac
+case "$LEGS" in *I*)
+  stop_loop
+  echo $(( $(date +%s) - 600 )) > "$G/hub_ok"
+  printf '#!/bin/sh\necho "$1 start" >> "%s/slow.log"\nsleep 3\necho "$1 end" >> "%s/slow.log"\n' "$WORK" "$WORK" > "$WORK/slowhs.sh"
+  : > "$WORK/slow.log"; rm -f "$G/hubsess.refresh.pid"
+  out=$(FLEET_VIEW_HUBSESS="$WORK/slowhs.sh" FLEET_VIEW_HUB_REFRESH_SECS=1 FLEET_VIEW_HUB_ENSURE_SECS=1 python3 - "$BIN" "$S" <<'PY2'
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("fv", sys.argv[1] + "/fleet_view.py")
+fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
+t = time.monotonic(); fv.hub_fresh(sys.argv[2]); a = time.monotonic() - t
+t = time.monotonic(); fv.hub_fresh(sys.argv[2]); b = time.monotonic() - t
+print("%.1f %.1f" % (a, b))
+PY2
+)
+  set -- $out
+  python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 and float(sys.argv[2]) < 3 else 1)' "${1:-9}" "${2:-9}" \
+    || st_fail "I: hub_fresh waited past FLEET_VIEW_HUB_REFRESH_SECS + _ENSURE_SECS on a slow --refresh / --ensure ($out)"
+  sleep 5
+  st=$(sort "$WORK/slow.log" | uniq -c | awk '{ print $2 "×" $1 "/" $3 }' | sort | tr '\n' ' ')
+  [ "$(grep -c -- '--refresh start' "$WORK/slow.log")" = 1 ] || st_fail "I: a second ask stacked a second --refresh" "$st"
+  [ "$(grep -c -- '--refresh end' "$WORK/slow.log")" = 1 ] || st_fail "I: the --refresh was killed at the popup's wait" "$st"
+  [ "$(grep -c -- '--ensure end' "$WORK/slow.log")" = 2 ] || st_fail "I: an --ensure was killed at the popup's wait" "$st"
+  pass "I: hub_fresh waits ≤1 s each on a 3 s --refresh / --ensure and kills neither; a second ask waits on the running --refresh"
 ;; esac
 echo "PASS fleet-view-hub-fresh-selftest ($LEGS)"

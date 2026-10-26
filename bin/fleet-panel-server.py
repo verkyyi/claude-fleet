@@ -36,7 +36,17 @@ global/remote_<fleet>, the hub's fleet_sessions, so it agrees with the web board
 otherwise, and once more right after each popup closes; the worker hands back the
 rows and its caches (pickle over a pipe). The child draws what the server holds
 and says how old it is when it is older than FLEET_VIEW_STALE_MARK_SECS
-(「2 分钟前 · 刷新中…」); the popup's own Refresh then reads it again.
+(「2 分钟前 · 刷新中…」); the popup's own Refresh then reads it again. A worker
+still reading after FLEET_PANEL_SERVER_WORKER_SECS (15 s) is SIGKILLed (its process
+group: the producer and the tmux calls under it) and logged, and the next one starts
+at once — a hung read used to hold `worker` for good and freeze the list.
+
+The worker reads the cache as it is (hub=False: no hub wait), so the server keeps
+the cache's refresher alive itself: on its own loop, at most every
+FLEET_PANEL_SERVER_HUB_EVERY (5 s), global/hub_ok older than FLEET_VIEW_HUB_FRESH
+(10 s) with no fleet-hub-sessions.sh loop holding its lock ⇒ one `--ensure`, started
+detached (fleet_view.hub_ensure) and never waited for. Without it each ⌘P's first
+frame came from a cache no loop was keeping.
 
 A release switch (the install's link moving) makes it start again on the new
 code (exec, same pid). It listens on one unix socket, FLEET_PANEL_SOCK_DIR (/tmp/fleet-panel-<uid>,
@@ -207,7 +217,8 @@ class Server:
         self.session = "%s@view-%s" % (self.fleet, vid) if self.fleet else ""
         self.items, self.ts, self.wkey = None, 0.0, ""   # wkey: the list's language (ui_lang)
         self.active, self.alive = True, True
-        self.worker = None          # (pid, read fd, bytes so far)
+        self.worker = None          # (pid, read fd, bytes so far, started)
+        self.hub_next = 0.0         # the next hub_keep look (FLEET_PANEL_SERVER_HUB_EVERY)
         self.due = 0.0
         self.last_conn = time.time()
         self.children = set()
@@ -228,6 +239,12 @@ class Server:
             os.close(r)
             code = 0
             try:
+                # a group of its own: the watchdog's SIGKILL takes the producer and
+                # the tmux calls under it too, never the server
+                try:
+                    os.setpgid(0, 0)
+                except OSError:
+                    pass
                 out = self.read_list()
                 data = pickle.dumps(out, protocol=pickle.HIGHEST_PROTOCOL)
                 view = memoryview(data)
@@ -240,7 +257,47 @@ class Server:
             finally:
                 os._exit(code)
         os.close(w)
-        self.worker = (pid, r, bytearray())
+        self.worker = (pid, r, bytearray(), time.time())
+
+    def worker_watch(self, now):
+        """A worker reading past FLEET_PANEL_SERVER_WORKER_SECS is hung (a wedged tmux,
+        a producer stuck on a loaded box): SIGKILL it and its group, say so, and
+        start the next read now — the list must keep moving."""
+        if not self.worker:
+            return
+        pid, r, _buf, t0 = self.worker
+        limit = fenv("FLEET_PANEL_SERVER_WORKER_SECS", 15)
+        if limit <= 0 or now - t0 <= limit:
+            return
+        for kill in (lambda: os.killpg(pid, signal.SIGKILL), lambda: os.kill(pid, signal.SIGKILL)):
+            try:
+                kill()
+                break
+            except OSError:
+                continue
+        try:
+            os.close(r)
+        except OSError:
+            pass
+        self.worker = None
+        self.due = now
+        log("worker %d read for %.0fs (FLEET_PANEL_SERVER_WORKER_SECS=%g): killed, reading again" % (pid, now - t0, limit))
+
+    def hub_keep(self, now):
+        """The cache's refresher kept alive from here (fleet_view.hub_ensure): a
+        detached --ensure when the cache is stale and no loop runs, at most every
+        FLEET_PANEL_SERVER_HUB_EVERY seconds. Never waits, never raises."""
+        if not self.fleet or now < self.hub_next:
+            return
+        self.hub_next = now + fenv("FLEET_PANEL_SERVER_HUB_EVERY", 5)
+        ensure = getattr(self.fv, "hub_ensure", None)
+        if ensure is None:
+            return
+        try:
+            if ensure(self.fleet, "panel") is not None:
+                log("hub list stale and no loop: --ensure started")
+        except Exception:   # noqa: BLE001 — a hub hiccup never takes the server down
+            log("hub_keep: " + traceback.format_exc().replace("\n", " | "))
 
     def read_list(self):
         """In the worker: the 看台's language and activity, then the list."""
@@ -271,7 +328,7 @@ class Server:
                 "lang": os.environ.get("FLEET_VIEW_LANG"), "caches": fv.caches_export()}
 
     def worker_read(self):
-        pid, r, buf = self.worker
+        pid, r, buf, _t0 = self.worker
         try:
             chunk = os.read(r, 1 << 16)
         except OSError:
@@ -436,6 +493,8 @@ class Server:
         try:
             while not self.stop and self.alive:
                 now = time.time()
+                self.worker_watch(now)
+                self.hub_keep(now)
                 if self.worker is None and now >= self.due:
                     self.start_worker()
                 rl = [lsock] + ([self.worker[1]] if self.worker else [])

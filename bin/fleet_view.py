@@ -458,60 +458,157 @@ def hub_view_request(fleet):
         tm('wait-for', '-S', 'fleet-state-changed')
 
 
+def hub_sessions_sh():
+    return os.environ.get("FLEET_VIEW_HUBSESS") or str(Path(__file__).absolute().parent / "fleet-hub-sessions.sh")
+
+
+def hub_spawn(mode, by="popup"):
+    """`fleet-hub-sessions.sh <mode>` started DETACHED — a session of its own, no
+    pipe, nothing it inherits from a curses screen — and never killed: the caller
+    only decides how long it waits (hub_wait). It used to be killed (SIGKILL of
+    its group) at its wait's end — --status 3 s, --refresh 5 s, --ensure 3 s: on a
+    node at load 27-43 a killed refresh is a round's work thrown away and a killed
+    --ensure may never start a loop, so ⌘P's other machines stood still for ~3
+    minutes. The Popen, or None when it could not start; an unwaited child is
+    reaped by subprocess's own bookkeeping (or the panel server's waitpid)."""
+    try:
+        env = dict(os.environ, FLEET_HUBSESS_BY=by)
+        return subprocess.Popen(["bash", hub_sessions_sh(), mode], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                                start_new_session=True, close_fds=True)
+    except OSError:
+        return None
+
+
+def hub_wait(p, secs):
+    """Wait at most <secs> for <p> (a Popen, or a pid another caller started) to
+    end; True when it did. Never a signal: the process runs on either way."""
+    if p is None:
+        return True
+    if not isinstance(p, int):
+        try:
+            p.wait(timeout=max(0.0, secs))
+            return True
+        except subprocess.TimeoutExpired:
+            return False
+    end = time.monotonic() + max(0.0, secs)
+    while True:
+        try:
+            os.kill(p, 0)
+        except OSError:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
+def hub_loop_alive():
+    """Is fleet-hub-sessions.sh's loop running — does someone hold
+    global/hubsess.lock (issue #2630)? The same probe as the script's lock_holder,
+    in-process: no bash, no `--status` to wait on. A loop from before the lock
+    (pid file only) reads as none: the --ensure that follows replaces it."""
+    try:
+        import fcntl
+        fd = os.open(str(dash_global() / "hubsess.lock"), os.O_RDONLY)
+    except (ImportError, OSError):
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)     # drops the probe's shared lock at once
+
+
+def hub_ok_age():
+    try:
+        ok = int((dash_global() / "hub_ok").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        ok = 0
+    return time.time() - ok
+
+
+def hub_ensure(fleet, by="panel"):
+    """The resident panel's half of hub_fresh: a cache older than
+    FLEET_VIEW_HUB_FRESH (10 s) with no loop alive ⇒ one --ensure, detached, not
+    waited for. The Popen, or None when nothing was needed. Cheap enough for the
+    panel server's main loop: two file reads and a lock probe."""
+    if not fleet or not (dash_global() / ("remote_" + fleet)).is_file():
+        return None
+    if hub_ok_age() <= fenv("FLEET_VIEW_HUB_FRESH", 10) or hub_loop_alive():
+        return None
+    return hub_spawn("--ensure", by)
+
+
+# hub_fresh's one --refresh at a time: the pid it started, in global/ beside the
+# cache. A popup's Refresh thread asks every 2 s; with a refresh that is never
+# killed any more, a slow hub would otherwise stack one per ask. A stamp older
+# than a minute, or a pid that is gone, is no refresh.
+def _refresh_running():
+    f = dash_global() / "hubsess.refresh.pid"
+    try:
+        if time.time() - f.stat().st_mtime > 60:
+            return 0
+        pid = int(f.read_text().split()[0])
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def _refresh_stamp(pid):
+    g = dash_global()
+    tmp = g / ("hubsess.refresh.pid.%d" % os.getpid())
+    try:
+        tmp.write_text("%d\n" % pid)
+        os.replace(str(tmp), str(g / "hubsess.refresh.pid"))
+    except OSError:
+        pass
+
+
 def hub_fresh(fleet):
     """The other machines' rows are only as new as global/remote_<fleet>, which
     fleet-hub-sessions.sh's loop keeps — a loop the collector's tick (re)starts. A
     collector that stopped (mac-a's node supervisor wedged, 2026-10-10) froze that
     file, and ⌘P went on listing sessions reaped since (issue #3079). So the list
     checks it on every open: hub_ok within FLEET_VIEW_HUB_FRESH (10 s) → nothing;
-    older with no loop alive → one --refresh (at most FLEET_VIEW_HUB_REFRESH_SECS,
-    5 s) before the rows, then --ensure; a loop alive but the hub silent → the rows
-    as they are (their 失联 says so). No cache file ⇒ no hub here ⇒ nothing."""
+    older with no loop alive → one --refresh (waited for at most
+    FLEET_VIEW_HUB_REFRESH_SECS, 5 s) before the rows, then --ensure (at most
+    FLEET_VIEW_HUB_ENSURE_SECS, 3 s); a loop alive
+    but the hub silent → --ensure (it stamps the loop's life; the rows as they
+    are, their 失联 says so). No cache file ⇒ no hub here ⇒ nothing.
+    Both are started detached and run to their end whatever the wait (hub_spawn):
+    the popup only stops waiting. A --refresh still running from an earlier ask is
+    waited on, not doubled."""
     g = dash_global()
     if not fleet or not (g / ("remote_" + fleet)).is_file():
         return
-    try:
-        ok = int((g / "hub_ok").read_text().split()[0])
-    except (OSError, ValueError, IndexError):
-        ok = 0
-    if time.time() - ok <= fenv("FLEET_VIEW_HUB_FRESH", 10):
+    if hub_ok_age() <= fenv("FLEET_VIEW_HUB_FRESH", 10):
         return
-    hs = os.environ.get("FLEET_VIEW_HUBSESS") or str(Path(__file__).absolute().parent / "fleet-hub-sessions.sh")
-
-    def run(mode, secs):
-        try:
-            p = subprocess.Popen(["bash", hs, mode], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-        except OSError:
-            return ""
-        try:
-            return p.communicate(timeout=secs)[0] or ""
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            p.wait()
-            return ""
-    st = run("--status", 3)
-    if st.startswith("loop none"):
-        run("--refresh", fenv("FLEET_VIEW_HUB_REFRESH_SECS", 5))
-    if st.startswith("loop "):
-        run("--ensure", 3)
+    if not hub_loop_alive():
+        secs = fenv("FLEET_VIEW_HUB_REFRESH_SECS", 5)
+        pid = _refresh_running()
+        if pid:
+            hub_wait(pid, secs)
+        else:
+            p = hub_spawn("--refresh")
+            if p is not None:
+                _refresh_stamp(p.pid)
+            hub_wait(p, secs)
+    # waited for (≤ FLEET_VIEW_HUB_ENSURE_SECS, 3 s — what it was) so the loop it
+    # starts is up when the caller looks, never killed at the wait's end
+    hub_wait(hub_spawn("--ensure"), fenv("FLEET_VIEW_HUB_ENSURE_SECS", 3))
 
 
 def hub_reread(fleet):
     """After a write to another machine's session: read the hub's rows once now
-    (fleet-hub-sessions.sh --refresh, ≤ FLEET_VIEW_HUB_REFRESH_SECS), so the next
-    list read shows it — a reaped row gone, a new name. No cache ⇒ nothing."""
+    (fleet-hub-sessions.sh --refresh, waited for ≤ FLEET_VIEW_HUB_REFRESH_SECS and
+    left to finish past it — hub_spawn), so the next list read shows it — a reaped
+    row gone, a new name. No cache ⇒ nothing."""
     if not fleet or not (dash_global() / ("remote_" + fleet)).is_file():
         return
-    hs = os.environ.get("FLEET_VIEW_HUBSESS") or str(Path(__file__).absolute().parent / "fleet-hub-sessions.sh")
-    try:
-        subprocess.run(["bash", hs, "--refresh"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=fenv("FLEET_VIEW_HUB_REFRESH_SECS", 5), start_new_session=True)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    hub_wait(hub_spawn("--refresh"), fenv("FLEET_VIEW_HUB_REFRESH_SECS", 5))
 
 
 def rows_cache(fleet):

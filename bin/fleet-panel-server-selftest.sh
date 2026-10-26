@@ -25,6 +25,14 @@
 #      removed
 #   H  a release switch: the install link the server was started through moves ⇒
 #      it starts again on the new code (same pid, «install moved» logged, answering)
+#   I  a hung read: the worker's first list read never returns ⇒ after
+#      FLEET_PANEL_SERVER_WORKER_SECS it is SIGKILLed (gone, its group with it),
+#      the kill is logged, and the next read lands — the list moves again
+#   J  the hub list kept alive from here: hub_ok old, no loop holding
+#      global/hubsess.lock ⇒ hub_keep starts one --ensure (detached, not waited
+#      for), at most once per FLEET_PANEL_SERVER_HUB_EVERY; fresh, or a loop
+#      holding the lock, or no remote cache ⇒ nothing
+# `fleet-panel-server-selftest.sh worker` runs I and J only (BREAK-IT panel-worker-hung).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -47,6 +55,140 @@ unset TMUX TMUX_PANE FLEET_VIEW_LANG FLEET_PANEL_SERVER FLEET_PANEL_CTX
 FAIL=0
 US=$'\037'
 ti() { "$REAL_TMUX" -S "$SOCK" "$@"; }
+
+# --- I ----------------------------------------------------------------------------
+# a real server loop (Server.run, its socket, select, fork) over a fake list: the
+# first read hangs for good, the second and later answer
+mkdir -p "$W/wk"; chmod 700 "$W/wk"
+cat > "$W/wk/drv.py" <<'PY'
+import os, sys, time
+import importlib.util
+BIN, W = sys.argv[1:3]
+spec = importlib.util.spec_from_file_location("ps", os.path.join(BIN, "fleet-panel-server.py"))
+ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
+calls = os.path.join(W, "wk", "calls")
+class FV:
+    @staticmethod
+    def view_fleet(vid): return ""
+    @staticmethod
+    def entries(vid, **kw):
+        with open(calls, "a") as f:
+            f.write("%d\n" % os.getpid())
+        n = sum(1 for _ in open(calls))
+        if n == 1:
+            time.sleep(3600)          # the hung read
+        return [{"kind": "sess", "text": "READ%d" % n}]
+    @staticmethod
+    def ui_lang(): return "en"
+    @staticmethod
+    def caches_export(): return {}
+    @staticmethod
+    def caches_import(c): pass
+srv = ps.Server("wk", None, FV())
+orig = srv.worker_read
+def worker_read():
+    orig()
+    if srv.items:
+        open(os.path.join(W, "wk", "items"), "w").write(srv.items[0]["text"])
+srv.worker_read = worker_read
+sys.exit(srv.run())
+PY
+python3 - "$BIN" "$W" <<'PY' && st_ok "I a hung read: the worker is SIGKILLed after FLEET_PANEL_SERVER_WORKER_SECS, logged, and the next read lands" || st_miss "I hung worker: $(tail -3 "$W/conf/logs/panel-server.log" 2>/dev/null)"
+import hashlib, os, subprocess, sys, time
+BIN, W = sys.argv[1:3]
+env = dict(os.environ, FLEET_PANEL_SOCK_DIR=os.path.join(W, "wk"), FLEET_PANEL_SERVER_WORKER_SECS="2",
+           FLEET_PANEL_SERVER_REFRESH="1")
+p = subprocess.Popen([sys.executable, os.path.join(W, "wk", "drv.py"), BIN, W], env=env, stdin=subprocess.DEVNULL)
+items, calls = os.path.join(W, "wk", "items"), os.path.join(W, "wk", "calls")
+try:
+    end = time.time() + 15
+    while time.time() < end and not os.path.exists(items):
+        time.sleep(0.1)
+    assert os.path.exists(items), "the list never moved after a hung read: calls=%r" % (
+        open(calls).read() if os.path.exists(calls) else "")
+    first = int(open(calls).read().split()[0])
+    try:
+        os.kill(first, 0)
+        alive = True
+    except OSError:
+        alive = False
+    assert not alive, "the hung worker %d still lives" % first
+    log = open(os.path.join(W, "conf", "logs", "panel-server.log")).read()
+    assert "worker %d read for" % first in log and "killed, reading again" in log, log[-400:]
+    got = open(items).read()
+    assert got.startswith("READ") and got != "READ1", got
+finally:
+    try:
+        os.unlink(os.path.join(W, "wk", hashlib.sha1(b"wk").hexdigest()[:16] + ".sock"))   # the server sees its socket go
+    except OSError:
+        pass
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill(); p.wait()
+    # a server without the watchdog leaves its hung worker behind, holding this
+    # test's stdout: never let it outlive the leg
+    for w in (open(calls).read().split() if os.path.exists(calls) else []):
+        try:
+            os.kill(int(w), 9)
+        except (OSError, ValueError):
+            pass
+PY
+
+# --- J ----------------------------------------------------------------------------
+mkdir -p "$W/hg"
+python3 - "$BIN" "$W" <<'PY' && st_ok "J stale hub list, no loop ⇒ hub_keep starts one detached --ensure, rate-limited; fresh / a loop holding the lock / no cache ⇒ nothing" || st_miss "J hub_keep"
+import fcntl, importlib.util, os, sys, time
+BIN, W = sys.argv[1:3]
+g = os.path.join(W, "hg")
+os.environ["FLEET_STATUS_G"] = g
+log = os.path.join(W, "hg.log")
+hs = os.path.join(W, "hg.sh")
+open(hs, "w").write('echo "$1 by=$FLEET_HUBSESS_BY" >> %s\n' % log)
+os.environ["FLEET_VIEW_HUBSESS"] = hs
+sys.path.insert(0, BIN)
+import fleet_view as fv
+spec = importlib.util.spec_from_file_location("ps", os.path.join(BIN, "fleet-panel-server.py"))
+ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
+class FV:
+    hub_ensure = staticmethod(fv.hub_ensure)
+    @staticmethod
+    def view_fleet(vid): return "fl"
+def lines():
+    time.sleep(0.5)
+    try:
+        return open(log).read().split("\n")[:-1]
+    except OSError:
+        return []
+srv = ps.Server("fl@view-j", None, FV())
+assert srv.fleet == "fl"
+# no remote cache: no hub here, nothing
+open(os.path.join(g, "hub_ok"), "w").write("%d\n" % (time.time() - 600))
+srv.hub_keep(time.time()); assert lines() == [], lines()
+open(os.path.join(g, "remote_fl"), "w").write("#ts\x1f0\n")
+srv.hub_next = 0
+t = time.time(); srv.hub_keep(t); took = time.time() - t
+assert took < 0.5, "hub_keep waited %.2fs" % took
+assert lines() == ["--ensure by=panel"], lines()
+srv.hub_keep(time.time()); srv.hub_keep(time.time() + 1)     # within FLEET_PANEL_SERVER_HUB_EVERY
+assert len(lines()) == 1, lines()
+srv.hub_keep(time.time() + 6)
+assert len(lines()) == 2, lines()
+# a loop holding the lock: nothing
+fd = os.open(os.path.join(g, "hubsess.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+srv.hub_next = 0; srv.hub_keep(time.time())
+assert len(lines()) == 2, lines()
+os.close(fd)
+# fresh: nothing
+open(os.path.join(g, "hub_ok"), "w").write("%d\n" % time.time())
+srv.hub_next = 0; srv.hub_keep(time.time())
+assert len(lines()) == 2, lines()
+PY
+if [ "${1:-}" = worker ]; then
+  [ "$FAIL" = 0 ] && echo "fleet-panel-server-selftest (worker): ALL PASS" || echo "fleet-panel-server-selftest (worker): FAILED"
+  exit "$FAIL"
+fi
 
 # --- A ----------------------------------------------------------------------------
 python3 - "$BIN" "$W" <<'PY' && st_ok "A one socket per 看台 (the connector's name), a foreign directory refused, no connector ⇒ nothing started" || st_miss "A socket"
