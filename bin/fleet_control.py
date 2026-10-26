@@ -660,7 +660,8 @@ class Control(NativeExitSubmission):
                 code, output, err = self.adapter("resume", fleet["name"], "fid:" + key, timeout=180)
                 if code in (4, 5):
                     # refused before anything opened (fleet-control-read.sh's
-                    # `resume fid:` gates and the reopen's own --check): its line
+                    # `resume fid:` gates, the reopen's own --check, and the
+                    # spawner's --strict-resume finding no exact transcript): its line
                     raise Unattempted({4: "RESOURCE_GATE", 5: "NOT_RESUMABLE"}[code], last_line(err))
                 if code and spawner_refused(err):
                     # the spawner's own refusal (at capacity, no session to open in):

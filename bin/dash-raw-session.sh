@@ -385,7 +385,9 @@ TM() { tmux -L "$SOCK" "$@"; }
 # headless too — a script's seeded scratch, dash-enter's guarded --name-file
 # path — and a toast is on no screen that caller can read.
 # stderr is the record; the status line is the glance. Exit 2 = at capacity
-# (retry later), 1 = infrastructure, matching dash-issue-session.sh.
+# (retry later), 1 = infrastructure, matching dash-issue-session.sh; 5 = a
+# --strict-resume whose exact transcript is not there (nothing opened — the
+# adapter's NOT_RESUMABLE, fleet-control-read.sh `resume`).
 refuse() { printf 'dash-raw-session: %s\n' "${1#raw: }" >&2; FLEET_UI_SOCK=$SOCK fleet_ui_fail "$1"; }
 # One record, one window (T847): a record a window here still runs is answered
 # with THAT window, never a second one — a copy takes the same @fleet_id, and its
@@ -1165,8 +1167,9 @@ fi
     rsid=$RESUME_SID
   fi
   if [ "$STRICT_RESUME" = 1 ] && [ -z "$rsid" ]; then
-    echo 'fleet: exact native transcript unavailable; resume refused, no fresh conversation started' >&2
-    exit 1
+    # before any window: the node reports it as NOT_RESUMABLE, not an unknown outcome
+    refuse "raw: exact $(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}") transcript $RESUME_SID unavailable; resume refused, no fresh conversation started"
+    exit 5
   fi
   if [ -n "$CX_HOME" ]; then
     _cx_q=$(printf '%s' "$CX_HOME" | python3 -c 'import shlex,sys; print(shlex.quote(sys.stdin.read()))')

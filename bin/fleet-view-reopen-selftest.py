@@ -22,6 +22,7 @@ every other closed row says why it cannot, and no probe is listed.
 """
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -42,6 +43,11 @@ def ledger_row(**kw):
     return row
 
 
+def projdir(cwd):
+    """Claude Code's project-dir name for a cwd (fleet_transcript_dir's rule)."""
+    return re.sub('[^A-Za-z0-9]', '-', str(cwd))
+
+
 class ReopenCheckTests(unittest.TestCase):
     """A: the road itself, in a sandbox (a ledger, a transcript, a fake spawner)."""
 
@@ -50,7 +56,8 @@ class ReopenCheckTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         t = Path(self.tmp.name)
         (t / 'conf/ids').mkdir(parents=True)
-        self.proj = t / 'home/.claude/projects/-tmp-x'
+        # where the spawner looks: a no-repo session ran in $HOME (Claude's own encoding)
+        self.proj = t / 'home/.claude/projects' / projdir(t / 'home')
         self.proj.mkdir(parents=True)
         (t / 'conf/ids' / (FID + '.ndjson')).write_text(''.join(json.dumps(e) + '\n' for e in (
             dict(ev='opened', agent='claude', title='hello', id=FID, seq=1, ts=1700000000),
@@ -127,7 +134,7 @@ class RebuildTests(unittest.TestCase):
             dict(ev='native', agent='claude', native=NAT, trigger='startup', source='startup', seg=1, id=FID,
                  seq=2, ts=1700000001),
             dict(ev='closed', reason='exited', id=FID, seq=3, ts=1700000100))))
-        self.proj = t / 'home/.claude/projects/-proj-repo-scratch-3'
+        self.proj = t / 'home/.claude/projects' / projdir(self.wt)
         self.proj.mkdir(parents=True)
         self.spawned = t / 'spawned'
         spawn = t / 'spawn'
