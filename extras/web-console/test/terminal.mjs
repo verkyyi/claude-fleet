@@ -49,7 +49,9 @@ console.log('term-theme: ok');
 import { retryDelay, doorRetryDelay, endedStep } from '../src/shared/terminal-retry.ts';
 assert.equal(retryDelay(0, 'connection_closed', 0.5), 500);
 assert.equal(retryDelay(50, 'home_down', 0.5), 15000);   // the 51st try still waits only 15 s
-assert(retryDelay(3, 'hub_restart', 0.99) <= 300);       // a hub that said it restarts: at once
+assert.equal(retryDelay(3, 'hub_restart', 0.5), 4000);
+assert.equal(retryDelay(50, 'hub_restart', 0), 0);
+assert.equal(retryDelay(50, 'hub_restart', 1), 30000);
 assert.equal(doorRetryDelay(1), 30000);
 assert.equal(doorRetryDelay(10), 300000);
 // ended: personal — first reconnect plainly, then renew that generation once, then stop

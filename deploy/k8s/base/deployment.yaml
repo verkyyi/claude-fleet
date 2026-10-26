@@ -5,7 +5,7 @@
 # migration this image knows; an old one leaves only after a new one is ready
 # (maxUnavailable 0, maxSurge 1). Stopping, an old pod first sleeps out of the
 # Service (preStop), then gets SIGTERM and finishes the requests it already took
-# for up to CCQUOTA_SHUTDOWN_GRACE (25 s). So a release, a node drain or a
+# for up to CCQUOTA_SHUTDOWN_GRACE (70 s). So a release, a node drain or a
 # deleted pod is 0 seconds down — hub-deploy measures it (downtime_seconds).
 # A request held longer than the grace (a stream; `ccquota place` waiting on a
 # remote start) is cut at its end; the node's one-shot calls retry a dropped
@@ -51,8 +51,8 @@ spec:
       labels:
         app: ccquota-hub
     spec:
-      # preStop 5 s + CCQUOTA_SHUTDOWN_GRACE 25 s + margin.
-      terminationGracePeriodSeconds: 40
+      # preStop 5 s + 60 s randomized handoff + 10 s HTTP finish + 5 s margin.
+      terminationGracePeriodSeconds: 80
       # One replica per node where the cluster has room: a node going away
       # takes one of them, never both.
       topologySpreadConstraints:
@@ -126,7 +126,7 @@ spec:
                   name: ccquota-db
                   key: replica-token
             - name: CCQUOTA_SHUTDOWN_GRACE
-              value: "25s"
+              value: "70s"
           lifecycle:
             # Out of the Service first: the endpoint removal reaches the
             # ingress while this pod still answers; only then SIGTERM.

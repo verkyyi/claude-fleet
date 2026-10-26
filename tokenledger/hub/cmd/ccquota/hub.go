@@ -1130,25 +1130,18 @@ func runHub(args []string) error {
 	go func() {
 		defer close(stopped)
 		<-ctx.Done()
-		// open browser terminals come back at once, to a replica still up (RMVE)
+		// Readiness first. Keep the listener serving peer hops while links wait
+		// for their slots, then shut down HTTP with the remaining grace.
 		srv.Drain()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
-		// node links are hijacked, so Shutdown neither waits for nor closes
-		// them: with another replica to take them they are handed over beside
-		// it (task PNWW, api/link_drain.go). A single hub (the sqlite shape,
-		// Recreate) has nowhere to hand them: it stops as before.
-		links := make(chan int, 1)
 		if srv.Replica != nil {
-			go func() { links <- srv.DrainLinks(shutdownCtx) }()
-		} else {
-			links <- 0
+			if n := srv.DrainLinks(shutdownCtx); n > 0 {
+				log.Printf("ccquota hub: drained %d node link(s)", n)
+			}
 		}
 		for _, hs := range servers {
 			_ = hs.Shutdown(shutdownCtx)
-		}
-		if n := <-links; n > 0 {
-			log.Printf("ccquota hub: drained %d node link(s)", n)
 		}
 	}()
 
@@ -1172,7 +1165,7 @@ func runHub(args []string) error {
 
 // shutdownGrace is how long a stopping hub lets the requests it already took
 // finish (CCQUOTA_SHUTDOWN_GRACE, a Go duration; default 10s, at most 5m).
-// A rolling release sets it to 25s (deploy/k8s/base, claude-fleet#2125): the
+// A rolling release sets it to 70s (deploy/k8s/base, claude-fleet#2125): the
 // pod's preStop has already taken it out of the Service, so every second here
 // is a request finishing, not a request refused. Long streams (the live view,
 // SSE) hold it to the end and are then cut — their clients reconnect to the

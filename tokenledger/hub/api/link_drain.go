@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -9,38 +10,28 @@ import (
 	"github.com/coder/websocket"
 )
 
-// A replica that goes away hands its node links over (task PNWW).
-//
-// A node link is a hijacked websocket: http.Server.Shutdown neither waits for
-// it nor closes it, so before this a hub copy replaced in a rolling release
-// simply exited under every link it held — the agents read EOF, and nothing of
-// the link's own end ran (nodes.drop, the link's claim, the in-flight account
-// ops marked unknown, the relays it carried closed, the drop's record).
-//
-// Now, once the pod is out of the Service (preStop) and SIGTERM has come,
-// DrainLinks closes each link with 1012 (service restart), spread over
-// LinkDrainSpread so the replica still up is not met by every machine in the
-// same instant, and waits — bounded by the shutdown grace — for every session
-// that rode them to end. The agent dials again after its quick redial
-// (0.5–1 s, agent/node.go nodeQuickRedial) and lands on a replica that is up;
-// a connect that still reaches this one while it drains is answered 503 with
-// Retry-After, never accepted. A link is still re-dialled once per release —
-// a websocket cannot move between processes — but it is ended on purpose, in
-// order, with its cleanup run, and booked as hub_shutdown.
-
-// linkDrainSpreadDefault is how long the closes are spread over.
-const linkDrainSpreadDefault = 2 * time.Second
+// A rolling replica first stops admission, then hands off randomized slots over
+// one minute. Keep its listener and peer route alive until the last slot: peers
+// still need the nodes that have not moved yet. Browser cursors belong to the
+// client (chat's session + byte offset, terminal's generation), not this hub.
+const linkDrainSpreadDefault = 60 * time.Second
 
 // linkSet counts the node websockets and the sessions riding them.
 type linkSet struct {
-	mu    sync.Mutex
-	conns map[*websocket.Conn]struct{}
-	live  int // physical links + serveNode sessions
+	mu      sync.Mutex
+	conns   map[*websocket.Conn]struct{}
+	live    int // physical links + serveNode sessions
+	closing bool
 }
 
 // hold registers a physical link; the func releases it.
 func (l *linkSet) hold(c *websocket.Conn) func() {
 	l.mu.Lock()
+	if l.closing {
+		l.mu.Unlock()
+		go c.Close(websocket.StatusServiceRestart, `{"resume":"hello"}`)
+		return func() {}
+	}
 	if l.conns == nil {
 		l.conns = map[*websocket.Conn]struct{}{}
 	}
@@ -87,10 +78,17 @@ func (s *Server) DrainLinks(ctx context.Context) int {
 	if spread <= 0 {
 		spread = linkDrainSpreadDefault
 	}
+	// Freeze admission under the same lock as hold: an upgrade that raced the
+	// draining check must not escape the snapshot.
+	s.links.mu.Lock()
+	s.links.closing = true
+	s.links.mu.Unlock()
 	conns, _ := s.links.snapshot()
+	rand.Shuffle(len(conns), func(i, j int) { conns[i], conns[j] = conns[j], conns[i] })
+	defer s.finishDrain()
 	step := time.Duration(0)
 	if len(conns) > 1 {
-		step = spread / time.Duration(len(conns))
+		step = spread / time.Duration(len(conns)-1)
 	}
 	for i, c := range conns {
 		go func(c *websocket.Conn, after time.Duration) {
@@ -104,9 +102,11 @@ func (s *Server) DrainLinks(ctx context.Context) int {
 			}
 			// Close waits up to 5 s for the agent's close frame; ctx
 			// bounds the whole drain, not each close.
-			_ = c.Close(websocket.StatusServiceRestart, "hub replica restarting; dial again")
+			_ = c.Close(websocket.StatusServiceRestart, `{"resume":"hello"}`)
 		}(c, time.Duration(i)*step)
 	}
+	beat := time.NewTicker(replicaBeatEvery)
+	defer beat.Stop()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -116,6 +116,10 @@ func (s *Server) DrainLinks(ctx context.Context) int {
 		select {
 		case <-ctx.Done():
 			return len(conns)
+		case <-beat.C:
+			if s.Replica != nil {
+				_ = s.beatReplica(time.Now())
+			}
 		case <-tick.C:
 		}
 	}

@@ -1,11 +1,9 @@
 // The browser terminal's recovery rules (RMVE), kept free of the DOM so a
 // plain node test reads them: how long to wait, and what an «ended» means.
 
-/** The wait before attempt n+1 (RMVE): never given up on, at most 15 s; a hub
- * that said it is restarting is asked again at once. */
-export function retryDelay(failures: number, error?: string, rand = Math.random()): number {
-  if (error === "hub_restart") return Math.round(rand * 300);
-  return Math.round(Math.min(15000, 500 * 2 ** Math.min(failures, 5)) * (0.75 + rand * 0.5));
+/** The wait before attempt n+1 (RMVE): never given up on, full jitter, capped at 30 s (including service restarts). */
+export function retryDelay(failures: number, _error?: string, rand = Math.random()): number {
+  return Math.round(rand * Math.min(30000, 1000 * 2 ** Math.min(failures, 5)));
 }
 /** The wait before the door is tried again after it failed: 30 s doubling to 5 min. */
 export function doorRetryDelay(fails: number): number { return Math.min(300000, 30000 * 2 ** Math.max(0, fails - 1)); }

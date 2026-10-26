@@ -277,3 +277,5 @@ func id_said_at T970 bin/fleet-cleanup-idle.py
 word REPORTING T970 bin/fleet_reap_policy.py
 word KEEP_DEFS T970 bin/fleet-cleanup-idle.py
 key FLEET_REAP_UNREPORTED_SECS T970
+
+word RETRY_MS T1110 extras/web-console/src/app/chat/view.ts

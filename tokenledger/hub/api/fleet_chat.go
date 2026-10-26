@@ -268,6 +268,11 @@ func (s *Server) chatPerson(r *http.Request) (person string, status int, code, m
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	name := strings.TrimPrefix(r.URL.Path, ChatPathPrefix)
+	if name == chatViewRoute || name == "turn" {
+		var release func()
+		r, release = s.drainRequest(r)
+		defer release()
+	}
 	if name == "connect" {
 		s.handleChatAttachment(w, r)
 		return

@@ -1,3 +1,4 @@
+import { retryDelay } from "@/shared/terminal-retry";
 // chat.ts — the one conversation (issue #3567), as assistant-ui's external store
 // (issue #3637). The server's protocol is unchanged: GET /api/conversation for
 // the whole history, POST /api/turn streams NDJSON items, /api/stop, /api/answer
@@ -310,6 +311,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   reply.current = onReply;
   const turnId = useRef<string | null>(null);
   const streaming = useRef(false);
+  const recoveryTries = useRef(0);
   const transport = useRef(new AbortController());
   const follow = useRef<number | undefined>(undefined);
   const historyRead = useRef(0);
@@ -382,18 +384,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     if (!r || !r.ok) {
       if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
       const code = String(j.code || "");
-      if (code === "home_reconnecting") {
+      if (code === "home_reconnecting" || code === "home_down" || !r || r.status >= 500) {
         // the hub moved under the home's link (a deploy): it is back in seconds
         if (hadCopy.current || hadLocal.current) setSync("syncing");
         else setNotice(tr("正在重连你的家，稍候…", "Reconnecting to your machine, one moment…"));
         setLoaded(true);
-        follow.current = window.setTimeout(load, 3000);
-        return;
-      }
-      if ((hadCopy.current || hadLocal.current) && (code === "home_down" || !r)) {
-        // the home is out of reach: the copy stays on the page, said so
-        setSync("offline");
-        setLoaded(true);
+        follow.current = window.setTimeout(load, retryDelay(recoveryTries.current++));
         return;
       }
       // this side is not on the home (no codex there, or an older home): back to Claude
@@ -403,6 +399,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       setLoaded(true);
       return;
     }
+    recoveryTries.current = 0;
     homeSeen.current = true;
     top.current = "home";
     markFirst("home");
@@ -508,6 +505,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     setBusy(true);
     let lost = false;
     let replied = false;
+    let completed = false;
     try {
       const r = await chatFetch(at(`${API}/turn`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}), origin: location.origin }) });
       if (!r.ok) {
@@ -525,7 +523,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
             case "turn": turnId.current = String(o.id); break;
             case "session": setResume({ id: String(o.id), cwd: String(o.cwd || "") }); break;
             case "ask": newAsks.push(o as unknown as Ask); break;
-            case "done": break;
+            case "done": completed = true; break;
             case "error":
               if (o.code === "budget") setBudget({ blocked: true, ...(o.msg ? { msg: String(o.msg) } : {}), ...(o.until ? { until: String(o.until) } : {}) });
               add.push(o as unknown as Item);
@@ -551,7 +549,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     if (gen !== convGen.current) return;
     // the line dropped; the turn goes on — pick it back up. A finished turn
     // reloads too: the transcript is the record, the stream was only its preview.
-    if (lost) { await load(); setNotice("连接中断，消息可能已送达。请查看对话，再决定是否重试。"); }
+    if (lost || !completed) {
+      // Recover the transcript, including output generated while disconnected.
+      // Never replay a turn: delivery may already have happened on the home.
+      setSync("syncing");
+      follow.current = window.setTimeout(load, retryDelay(recoveryTries.current++));
+    }
     else {
       setAsks([]);
       // the copy beside the entry follows the home: read the finished turn back

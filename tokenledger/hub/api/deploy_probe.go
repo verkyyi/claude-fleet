@@ -19,6 +19,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
@@ -41,6 +42,9 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	err := s.Store.Ready(ctx)
+	if s.Draining() {
+		err = errors.New("draining")
+	}
 	why := ""
 	if err != nil {
 		why = err.Error()

@@ -1,3 +1,4 @@
+import { retryDelay } from "@/shared/terminal-retry";
 // view.ts — 只读 (task F481, EPIC GR5E C5): a session running in a terminal,
 // its conversation followed from the web. GET /v1/chat/view?worker=<id> is the
 // service's Server-Sent Events (extras/web-chat/server.mjs viewStream):
@@ -33,7 +34,6 @@ export type ViewState = { agent: string; session: string; busy: boolean; state: 
 // (not_yours · old_agent · no_session · home_down · gone · …) and its words
 export type ViewGate = { code: string; msg: string } | null;
 
-const RETRY_MS = [1000, 2000, 4000, 8000, 15000];
 // viewStream sends a comment heartbeat every 15 s, even for an idle session.
 // A half-open connection may never reject read(); missing three beats is a
 // connection failure, never a capability verdict. Reconnect from the cursor.
@@ -190,7 +190,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
         if (on && !final) setConnection("offline");
         if (!on || final) break;
         // a hidden page waits until it is looked at again
-        await sleep(document.visibilityState === "hidden" ? 60_000 : RETRY_MS[Math.min(tries++, RETRY_MS.length - 1)]);
+        await sleep(document.visibilityState === "hidden" ? 60_000 : retryDelay(tries++));
       }
     })();
     return () => {

@@ -57,12 +57,17 @@ type linkPrev struct {
 	lastBeat *time.Time
 	replica  string
 	known    bool
+	shutdown bool
 }
 
 // linkBefore reads the endpoint's last beat and the replica that last held its
 // link, before this connect overwrites them.
-func (s *Server) linkBefore(endpointID string) linkPrev {
+func (s *Server) linkBefore(ep *store.Endpoint) linkPrev {
+	endpointID := ep.ID
 	var p linkPrev
+	if last, err := s.Store.LastLinkEvent(ep.Hostname, ep.OSUser); err == nil {
+		p.shutdown = last.Event == linkEventDown && last.Cause == linkEndShutdown && time.Since(last.At) < linkGapOffline
+	}
 	if last, ok, err := s.Store.NodeLastBeat(endpointID); err == nil {
 		p.lastBeat, p.known = last, ok
 	}
@@ -85,6 +90,9 @@ func (s *Server) linkCause(p linkPrev, now time.Time) (string, int64) {
 	}
 	if gap > linkGapOffline {
 		return linkCauseOffline, gap.Milliseconds()
+	}
+	if p.shutdown {
+		return linkCauseHub, gap.Milliseconds()
 	}
 	if s.Replica != nil && p.replica != "" && p.replica != s.Replica.Name {
 		if up, ok := s.replicaNamesUp(now); ok && !up[p.replica] {

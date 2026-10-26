@@ -609,7 +609,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	s.links.enter()
 	defer s.links.leave()
 	// what the hub knew of this link before this connect (task PNWW)
-	prev := s.linkBefore(ep.ID)
+	prev := s.linkBefore(ep)
 	if err := s.Store.NodeConnected(ep.ID, ep.Hostname, ep.OSUser, hp.AgentVersion,
 		hello.Proto, hp.HeartbeatMS, time.Now()); err != nil {
 		log.Printf("node %s: record hello: %v", ep.ID, err)

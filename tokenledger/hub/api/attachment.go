@@ -198,6 +198,8 @@ type attachmentAdmission struct {
 }
 
 func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attachmentAdmission) {
+	s.links.enter()
+	defer s.links.leave()
 	person, home, logical, target := a.person, a.home, a.logical, a.target
 	epID, nc, gen, previous, recheck := a.epID, a.node, a.generation, a.previous, a.recheck
 	refuse := func(status int, code, msg string) {
@@ -284,6 +286,19 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 	// why a terminal ended (RMVE): who went — the browser, the node, this hub
 	// restarting — or the node's own word; appended to the path in outcome
 	reason := ""
+	resume := a.termResume
+	restart := func() {
+		reason = "hub_restart"
+		position := map[string]string{"resume": "conversation"}
+		if a.service == "term" {
+			position = map[string]string{"resume": "client_cursor"}
+			if resume != "" {
+				position = map[string]string{"term_resume": resume}
+			}
+		}
+		b, _ := json.Marshal(position)
+		browser.Close(websocket.StatusServiceRestart, string(b))
+	}
 	defer func() {
 		if a.service == "term" {
 			if reason != "" {
@@ -318,6 +333,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 	defer ticker.Stop()
 	deadline := time.NewTimer(control.AttachmentNegotiate)
 	defer deadline.Stop()
+	drain := s.attachmentDrain(ctx)
 	selected, ready := false, false
 	doorID := ""
 	choose := func(mode, door string) error {
@@ -373,12 +389,14 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 			return
 		case <-or.ctx.Done():
 			reason = "node_closed"
+			if s.Draining() {
+				restart()
+			}
 			return
-		case <-s.drainCh():
+		case <-drain:
 			// This hub is going away (a rolling release): tell the page to come
 			// back at once — to the other replica — not to wait out a dead socket.
-			reason = "hub_restart"
-			send(control.AttachmentSignal{T: "error", Error: "hub_restart"})
+			restart()
 			return
 		case <-deadline.C:
 			if !selected {
@@ -461,6 +479,9 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 		case f := <-ac:
 			if f.err != nil {
 				reason = "node_closed"
+				if s.Draining() {
+					restart()
+				}
 				return
 			}
 			var sig control.AttachmentSignal
@@ -524,6 +545,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 						return
 					}
 					if c.T == "ready" {
+						resume = c.Gen
 						ready = true
 					}
 				} else {
