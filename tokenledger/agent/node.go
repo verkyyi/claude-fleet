@@ -337,6 +337,11 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		log.Printf("control channel: hub (proto %d, min %d) will not send writes to this node (proto %d): %s",
 			w.HubProto, w.MinProto, control.Proto, w.Reason)
 	}
+	if w.LiveReport {
+		link := &liveTransport{conn: conn}
+		a.liveLink.Store(link)
+		defer a.liveLink.CompareAndSwap(link, nil)
+	}
 	// the hub's one machine-facing address (task PNWW): followed once verified
 	a.followHub(ctx, w.HubURL)
 	dcancel()

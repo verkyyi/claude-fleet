@@ -23,13 +23,15 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/reportcache"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // Server is the hub's HTTP surface.
 type Server struct {
-	Store   *store.Store
-	Pricing *Pricing
+	idleReports reportcache.Cache
+	Store       *store.Store
+	Pricing     *Pricing
 
 	// OAuthExchange posts a member's own sign-in's code exchange
 	// (claude-fleet#4035, me_subs.go): direct, or through an admin node's

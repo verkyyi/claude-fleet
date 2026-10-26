@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
@@ -83,7 +85,14 @@ const activeWindow = 3 * time.Minute
 // heartbeat for data whose value expires in minutes. With two hub replicas
 // each holds the whole picture: a report is handed to the others
 // (fanoutLive, claude-fleet#2190).
+type liveReceipt struct {
+	body []byte
+	at   time.Time
+}
+
 type Live struct {
+	receipts map[string]liveReceipt
+
 	mu       sync.RWMutex
 	sessions map[string]*LiveSession
 	subs     map[chan []byte]struct{}
@@ -438,23 +447,90 @@ func (s *Server) handleLiveReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Sessions []LiveSession `json:"sessions"`
-		Complete bool          `json:"complete"`
-	}
+	var body liveReport
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed live report: "+err.Error())
 		return
 	}
 
+	s.acceptLiveReport(ep, body)
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(body.Sessions)})
+}
+
+type liveReport struct {
+	Sessions []LiveSession `json:"sessions"`
+	Complete bool          `json:"complete"`
+}
+
+// acceptLiveReport shares the HTTP compatibility path and the authenticated
+// control lane. Live data is memory-only. Signed HTTP authentication still
+// spends its replay nonce; the already-authenticated control lane avoids that.
+func (s *Server) acceptLiveReport(ep *store.Endpoint, body liveReport) {
 	label := ep.Label
 	if label == "" {
 		label = ep.Hostname
 	}
-	s.liveStore().report(ep.ID, label, body.Sessions, body.Complete)
-	// The other replicas' viewers see it too (claude-fleet#2190).
+	l := s.liveStore()
+	// Bound identical legacy 5s reports to one fanout/broadcast per minute.
+	// Compare content, not the status line observation clock. Preserve its actual
+	// observation time separately; receive time never manufactures fresh evidence.
+	sort.Slice(body.Sessions, func(i, j int) bool { return liveKey(body.Sessions[i]) < liveKey(body.Sessions[j]) })
+	signature := liveReport{Complete: body.Complete, Sessions: append([]LiveSession{}, body.Sessions...)}
+	for i := range signature.Sessions {
+		signature.Sessions[i].ObservedAt = time.Time{}
+	}
+	b, _ := json.Marshal(struct {
+		Label  string
+		Report liveReport
+	}{label, signature})
+	now := time.Now()
+	l.mu.Lock()
+	if l.receipts == nil {
+		l.receipts = make(map[string]liveReceipt)
+	}
+	prev, seen := l.receipts[ep.ID]
+	forward := !seen || !bytes.Equal(b, prev.body) || now.Sub(prev.at) >= time.Minute
+	// A timestamp can also change validity. Do not let the content gate hide a
+	// newly valid session or bypass report's rejection of invalid observations.
+	for _, incoming := range body.Sessions {
+		incoming.EndpointID = ep.ID
+		incoming.Source = model.UsageSource(incoming.Source)
+		if incoming.ObservedAt.After(now.Add(time.Minute)) || (!incoming.ObservedAt.IsZero() && now.Sub(incoming.ObservedAt) > activeWindow) || l.sessions[liveKey(incoming)] == nil {
+			forward = true
+		}
+	}
+	if forward {
+		l.receipts[ep.ID] = liveReceipt{b, now}
+		// Forget offline endpoints rather than keeping their snapshots forever.
+		for id, r := range l.receipts {
+			if now.Sub(r.at) > activeWindow {
+				delete(l.receipts, id)
+			}
+		}
+	} else {
+		l.lastAt = now
+		for _, incoming := range body.Sessions {
+			incoming.EndpointID = ep.ID
+			incoming.Source = model.UsageSource(incoming.Source)
+			if old := l.sessions[liveKey(incoming)]; old != nil {
+				old.SeenAt = now
+				if incoming.ObservedAt.IsZero() && incoming.Source == model.SourceClaude {
+					incoming.ObservedAt = now
+				}
+				if incoming.ObservedAt.After(old.ObservedAt) {
+					old.ObservedAt = incoming.ObservedAt
+				}
+			}
+		}
+	}
+	l.mu.Unlock()
+	if !forward {
+		return
+	}
+	l.report(ep.ID, label, body.Sessions, body.Complete)
+	// Existing relay needs no database connection/NOTIFY payload limit and works
+	// during mixed-version rollout. Heartbeats repair missed delivery/restarts.
 	s.fanoutLive(liveFanout{EndpointID: ep.ID, Label: label, Sessions: body.Sessions, Complete: body.Complete})
-	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(body.Sessions)})
 }
 
 // liveStore returns the live store, or an empty one.

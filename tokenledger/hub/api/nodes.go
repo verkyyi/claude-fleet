@@ -635,7 +635,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		s.adoptMappedLogins(time.Now())
 	}
 
-	welcome := control.Welcome{Accepted: control.Compatible(hello.Proto), HubProto: control.Proto, MinProto: control.MinProto,
+	welcome := control.Welcome{LiveReport: true, Accepted: control.Compatible(hello.Proto), HubProto: control.Proto, MinProto: control.MinProto,
 		// the hub's one machine-facing address (task PNWW): "" = none announced
 		HubURL: s.announcedNodeURL()}
 	if !welcome.Accepted {
@@ -763,6 +763,13 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			return
 		}
 		switch m.Type {
+		case control.TypeLiveReport:
+			var body liveReport
+			if len(m.Payload) > 1<<20 || json.Unmarshal(m.Payload, &body) != nil {
+				refuse(ctx, wire, m.OpID, control.CodeBadMessage, "malformed live report")
+				continue
+			}
+			s.acceptLiveReport(ep, body)
 		case control.TypeHeartbeat:
 			var hb control.Heartbeat
 			if err := json.Unmarshal(m.Payload, &hb); err != nil {

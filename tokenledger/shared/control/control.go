@@ -44,6 +44,8 @@ const (
 	TypeWelcome = "welcome"
 	// TypeHeartbeat is the node's periodic status report.
 	TypeHeartbeat = "heartbeat"
+	// TypeLiveReport carries the same snapshot as POST /v1/live/report.
+	TypeLiveReport = "live_report"
 	// TypeAck acknowledges a message by op_id.
 	TypeAck = "ack"
 	// TypeError reports a refused message by op_id.
@@ -741,6 +743,8 @@ type Result struct {
 
 // Welcome is the payload of TypeWelcome.
 type Welcome struct {
+	// LiveReport opts a node into snapshot push on this authenticated login lane.
+	LiveReport bool `json:"live_report,omitempty"`
 	// Accepted is false when the hub will not send this node writes; the
 	// connection stays up so the node is still listed and still reports.
 	Accepted bool   `json:"accepted"`

@@ -222,6 +222,28 @@ What each replica keeps in its own memory, and why that is acceptable:
 | the hero counter's cache (`counter`) | `counter.go` | each replica's own: an ingest invalidates only the replica that took it, the other recomputes within 30 s (`counterTTL`); display only |
 | a revoked node token | `fleet_node_revoke.go` | the holder closes the link at the node's next message (every message re-checks the token) |
 
+Live usage snapshots are sampled locally every second (or a shorter configured
+`--live-interval`), sent when their content changes, and refreshed at least once
+per minute. Observation timestamps alone do not count as changes. A hub that
+advertises `welcome.live_report` receives them on the authenticated control
+WebSocket, including each machine login's lane; otherwise the agent uses
+`POST /v1/live/report`. Reconnection forces a fresh snapshot. The node roster's
+heartbeat cadence remains independent and unchanged.
+
+Live snapshot data stays in memory. Signed HTTP requests still persist their
+replay-protection nonce; a push on the established control lane avoids that
+write without weakening HTTP replay protection. The hub coalesces identical reports
+from older polling agents before broadcasting and relaying them, with a minute
+heartbeat to repair a missed relay or restarted replica. The existing HTTP relay
+is retained for mixed-version deployments: Postgres LISTEN/NOTIFY would require
+a dedicated listener and payloads larger than its 8 KB limit need another
+fetch/store path. Empty, identical ingest reports coalesce for one minute on
+both agent and hub; new usage, quota readings and attribution always persist.
+The local credential proxy sends new usage on its normal budget interval but
+refreshes an idle budget only once a minute. Codex capacity is fetched on demand
+when its 30-second cache has expired (up to a 2-second fetch); failures retain
+backoff and never turn expired metadata into positive capacity evidence.
+
 **Two hubs on one Postgres** (claude-fleet#2123): each background loop — the
 daily prune, node alerts — runs only on the replica holding
 its Postgres advisory lock (`hub/leader`); the lock goes with that
