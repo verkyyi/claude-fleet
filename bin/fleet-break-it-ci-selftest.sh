@@ -56,6 +56,10 @@
 #   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
 #                       before the deploy (another sha's build, a hand push): the
 #                       deploy phase refuses it — digest and revision (#3867)
+#   train-aws-ssm-fails  FLEET_HUB_TARGET=aws-k3s and the box's release breaks: the
+#                       SSM command fails / never ends / finds two boxes or none, or
+#                       bootstrap.sh apply fails on the box — fleet-hub-aws-deploy.sh
+#                       goes red with the box's output, the box is put back (PNWW)
 #   train-node-image-stale  the node image is reused when its key is stable's (#4818):
 #                       a change to the updater, the node source, the recipe or the
 #                       pins changes the key; the rest of the release does not
@@ -852,6 +856,86 @@ IT
   case "$out" in *'reuse=false'*) ;; *) WHY="another revision's image was reused: $out"; rm -rf "$d"; return 1 ;; esac
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="测试期间预构建的入口镜像被别的提交 / 手动推送盖掉：部署段核对 digest 与 revision 不符即停、什么都不动；同一 sha 的镜像下趟直接复用，别的 revision 不复用"
+}
+
+# The hub on the AWS k3s box (task PNWW): hub-deploy.yml's deploy-aws sends the
+# release through SSM (bin/fleet-hub-aws-deploy.sh). A box command that fails,
+# never ends, or reaches two boxes / none must be red with the box's own words,
+# and a failed `bootstrap.sh apply` must leave the box on the release it had.
+drill_train_aws_ssm_fails() {
+  CAP=60
+  local t0 d out rc hd wf A B C sh
+  hd="$BIN/../.github/workflows/hub-deploy.yml" wf="$BIN/../.github/workflows/release-train.yml"
+  sh="$BIN/fleet-hub-aws-deploy.sh"
+  # the workflows: one target at a time; aws-k3s verifies the digest before the box
+  grep -q "vars.FLEET_HUB_TARGET != 'aws-k3s'" "$hd" && grep -q "vars.FLEET_HUB_TARGET == 'aws-k3s'" "$hd" \
+    || { WHY="hub-deploy.yml does not switch deploy / deploy-aws on FLEET_HUB_TARGET"; return 1; }
+  sed -n '/^  deploy-aws:/,$p' "$hd" > "${TMPDIR:-/tmp}/aws-job.$$"
+  [ "$(awk '/fleet-train-prebuild.sh verify/{print NR; exit}' "${TMPDIR:-/tmp}/aws-job.$$")" -lt \
+    "$(awk '/fleet-hub-aws-deploy.sh deploy/{print NR; exit}' "${TMPDIR:-/tmp}/aws-job.$$")" ] 2>/dev/null \
+    && grep -q 'bin/fleet-train-hub.sh "$TRAIN_SHA"' "${TMPDIR:-/tmp}/aws-job.$$" \
+    && grep -q 'fleet-hub-aws-deploy.sh rollback' "${TMPDIR:-/tmp}/aws-job.$$" \
+    || { WHY="deploy-aws does not verify the digest + the hub's commit before the box, or never rolls back"; rm -f "${TMPDIR:-/tmp}/aws-job.$$"; return 1; }
+  rm -f "${TMPDIR:-/tmp}/aws-job.$$"
+  grep -q "FLEET_HUB_URL: \${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && (vars.FLEET_HUB_URL_AWS" "$wf" \
+    || { WHY="release-train.yml's FLEET_HUB_URL does not follow FLEET_HUB_TARGET"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-aws.XXXXXX"); t0=$(now)
+  # a fake `aws`: the instances from $FAKE/ids, the invocation's status from $FAKE/status
+  cat > "$d/aws" <<'AWS'
+#!/bin/bash
+echo "$*" >> "$FAKE/calls"
+case "$*" in
+  *'ec2 describe-instances'*) cat "$FAKE/ids" ;;
+  *'ssm send-command'*) echo 0f0e0d0c-0b0a-4908-8706-050403020100 ;;
+  *'ssm get-command-invocation'*)
+    printf '{"Status":"%s","ResponseCode":%s,"StandardOutputContent":"[hub-deploy@box] apply: the box said this\\n","StandardErrorContent":""}\n' \
+      "$(cat "$FAKE/status")" "$(cat "$FAKE/code")" ;;
+  *'ssm cancel-command'*) touch "$FAKE/cancelled" ;;
+esac
+AWS
+  chmod +x "$d/aws"
+  run() { out=$(FAKE=$d FLEET_AWS="$d/aws" FLEET_SSM_POLL=0 FLEET_SSM_TIMEOUT="${TMO:-30}" AWS_BOX_INSTANCE_ID='' \
+    bash "$sh" deploy "$(printf 'a%.0s' $(seq 40))" r.example/hub:prod-aaaaaaa@sha256:"$(printf '1%.0s' $(seq 64))" 2>&1); rc=$?; }
+  : > "$d/calls"; printf 'i-0123456789abcdef0 i-0fedcba9876543210\n' > "$d/ids"; echo Success > "$d/status"; echo 0 > "$d/code"
+  run
+  [ "$rc" = 1 ] && case "$out" in *'refusing to guess'*) true ;; *) false ;; esac && ! grep -q send-command "$d/calls" \
+    || { WHY="two boxes tagged alike were not refused before any command ($rc): $out"; rm -rf "$d"; return 1; }
+  : > "$d/ids"; run
+  [ "$rc" = 1 ] && ! grep -q send-command "$d/calls" || { WHY="no box at all was not red ($rc): $out"; rm -rf "$d"; return 1; }
+  echo i-0123456789abcdef0 > "$d/ids"; echo Failed > "$d/status"; echo 1 > "$d/code"; run
+  [ "$rc" = 1 ] && case "$out" in *'the box said this'*'ended Failed (exit 1)'*) true ;; *) false ;; esac \
+    || { WHY="a failed box command was not red with the box's output ($rc): $out"; rm -rf "$d"; return 1; }
+  echo InProgress > "$d/status"; echo -1 > "$d/code"; TMO=1 run
+  [ "$rc" = 1 ] && [ -e "$d/cancelled" ] || { WHY="a box command that never ended was not cancelled and red ($rc): $out"; rm -rf "$d"; return 1; }
+  echo Success > "$d/status"; echo 0 > "$d/code"; run
+  [ "$rc" = 0 ] || { WHY="a successful box command was red ($rc): $out"; rm -rf "$d"; return 1; }
+  # the box's own script on a sandbox checkout: B deploys; C's apply fails ⇒ back on B
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q "$d/origin" && mkdir -p "$d/origin/deploy/aws/k3s-box"
+    printf '#!/bin/bash\n. "$FAKE_CONF"; echo "$HUB_IMAGE" >> "$FAKE_LOG"; exit "$(cat "$(dirname "$0")/rc")"\n' > "$d/origin/deploy/aws/k3s-box/bootstrap.sh"
+    echo 0 > "$d/origin/deploy/aws/k3s-box/rc"; git -C "$d/origin" add -A && git -C "$d/origin" commit -qm A
+    git clone -q "$d/origin" "$d/box"
+    echo 0 > "$d/origin/deploy/aws/k3s-box/rc"; echo b > "$d/origin/b"; git -C "$d/origin" add -A && git -C "$d/origin" commit -qm B
+    echo 1 > "$d/origin/deploy/aws/k3s-box/rc"; git -C "$d/origin" add -A && git -C "$d/origin" commit -qm C ) >/dev/null 2>&1
+  A=$(git -C "$d/box" rev-parse HEAD) B=$(git -C "$d/origin" rev-parse HEAD~1) C=$(git -C "$d/origin" rev-parse HEAD)
+  printf 'ACME_EMAIL=x\nHUB_IMAGE=r/hub:a\nHUB_HOST=h\n' > "$d/deploy.env"
+  box() { out=$(AWS_BOX_REPO_DIR="$d/box" AWS_BOX_CONF="$d/deploy.env" bash "$sh" script "$@" \
+    | GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null FAKE_CONF="$d/deploy.env" FAKE_LOG="$d/log" bash 2>&1); rc=$?; }
+  box deploy "$B" r/hub:b
+  [ "$rc" = 0 ] && [ "$(git -C "$d/box" rev-parse HEAD)" = "$B" ] && grep -qx 'HUB_IMAGE=r/hub:b' "$d/deploy.env" \
+    && grep -qx 'HUB_HOST=h' "$d/deploy.env" || { WHY="a good release did not land on the sandbox box ($rc): $out"; rm -rf "$d"; return 1; }
+  box deploy "$C" r/hub:c
+  [ "$rc" = 1 ] && [ "$(git -C "$d/box" rev-parse HEAD)" = "$B" ] && grep -qx 'HUB_IMAGE=r/hub:b' "$d/deploy.env" \
+    && [ "$(tail -2 "$d/log" | tr '\n' ' ')" = 'r/hub:c r/hub:b ' ] \
+    || { WHY="a failed apply did not put the box back on B ($rc, log $(tr '\n' ' ' < "$d/log")): $out"; rm -rf "$d"; return 1; }
+  # a release that went through but failed its health check: `rollback` puts B back
+  box deploy "$A" r/hub:a2
+  [ "$rc" = 0 ] && [ "$(git -C "$d/box" rev-parse HEAD)" = "$A" ] || { WHY="deploying A ($rc): $out"; rm -rf "$d"; return 1; }
+  box rollback
+  [ "$rc" = 0 ] && [ "$(git -C "$d/box" rev-parse HEAD)" = "$B" ] && grep -qx 'HUB_IMAGE=r/hub:b' "$d/deploy.env" \
+    || { WHY="rollback did not put the box back on B ($rc): $out"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="入口在 AWS k3s 盒子上（FLEET_HUB_TARGET=aws-k3s）：SSM 命令失败 / 超时（取消）/ 按标签找到两台或零台盒子：红、带盒子自己的输出，零台两台不发命令；盒子上 bootstrap.sh apply 失败：deploy.env 与检出放回上一版再 apply、红；健康检查红：rollback 放回"
 }
 
 drill_train_call_permissions() {

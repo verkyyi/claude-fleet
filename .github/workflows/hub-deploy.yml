@@ -55,6 +55,21 @@ name: hub-deploy
 # snapshot, `set image` on the credential proxy's Deployment (issue #2092) —
 # no secrets, no RBAC. The runbook is deploy/k8s/README.md.
 #
+# Where the hub runs (task PNWW): repo variable FLEET_HUB_TARGET. `ack` (unset =
+# ack) is everything above, byte for byte. `aws-k3s` is the one EC2 box running
+# k3s in us-west-2 (deploy/aws/README.md): the build phase pushes the image to
+# ECR (HUB_PUSH_REPO_AWS) on ubuntu-latest, through GitHub's OIDC token traded
+# for AWS role AWS_DEPLOY_ROLE_ARN; the `deploy` job is skipped and `deploy-aws`
+# runs instead — the same pause gate, the same "never backwards" read of the
+# hub's /version, the same fleet-train-prebuild.sh verify of the digest and
+# revision (on ECR), then bin/fleet-hub-aws-deploy.sh: AWS SSM AWS-RunShellScript
+# on the box (instance AWS_BOX_INSTANCE_ID, else the one tagged Name=tokenman-core)
+# fetches TRAIN_SHA into its checkout, pins HUB_IMAGE=<repo>:<tag>@<digest> in
+# /etc/fleet-core/deploy.env and runs `bootstrap.sh apply` (a rolling release; a
+# failed apply puts the previous release back on the box), then the same health
+# check on HUB_URLS_AWS (else FLEET_HUB_URL_AWS, else https://core.tokenman.io);
+# a red health check rolls the box back. BREAK-IT train-aws-ssm-fails.
+#
 # The `check` job (hub-deploy-check.yml, issue #4815) runs on every PR that
 # touches any of it — the PR gate calls it — and needs no credential: the
 # actions' selftests, the overlay renders, the base names no environment.
@@ -85,7 +100,7 @@ on:
     outputs:
       deployed:
         description: "success = the hub runs prod-<sha> and answers healthy; empty = nothing deployed (paused: bin/fleet-hub-pause.sh)"
-        value: ${{ jobs.deploy.outputs.deployed }}
+        value: ${{ jobs.deploy.outputs.deployed || jobs.deploy-aws.outputs.deployed }}
       digest:
         description: "phase build: the digest of prod-<sha7> — built here, or the same sha's image already there"
         value: ${{ jobs.build.outputs.digest }}
@@ -194,7 +209,8 @@ jobs:
   # the tests, and only this digest.
   build:
     if: inputs.phase == 'build'
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+    # FLEET_HUB_TARGET=aws-k3s: ECR is in us-west-2 — GitHub's runner, never the Shenzhen pool
+    runs-on: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && 'ubuntu-latest' || startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
     environment: prod
     timeout-minutes: 30
     permissions:
@@ -204,10 +220,14 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
     env:
       TRAIN_SHA: ${{ inputs.sha }}
-      ACK: ${{ contains(inputs.runs_on, 'fleet-ack') }}
+      ACK: ${{ vars.FLEET_HUB_TARGET != 'aws-k3s' && contains(inputs.runs_on, 'fleet-ack') }}
+      AWS: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' }}
+      # aws-k3s: the ECR repository (an unset variable is named, never the ACR one)
+      PUSH_REPO: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && (vars.HUB_PUSH_REPO_AWS || 'unset-HUB_PUSH_REPO_AWS') || vars.HUB_PUSH_REPO }}
+      HUB_PLATFORM: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && (vars.HUB_AWS_PLATFORM || 'linux/amd64') || 'linux/amd64' }}
       HUB_BASE_IMAGES: ${{ vars.HUB_BASE_IMAGES }}
       # the registry's VPC endpoint from inside the cluster (repo variable), else the public one
-      BUILD_REPO: ${{ contains(inputs.runs_on, 'fleet-ack') && vars.HUB_BUILD_PUSH_REPO || vars.HUB_PUSH_REPO }}
+      BUILD_REPO: ${{ vars.FLEET_HUB_TARGET != 'aws-k3s' && contains(inputs.runs_on, 'fleet-ack') && vars.HUB_BUILD_PUSH_REPO || '' }}
     steps:
       # GitHub from Shenzhen: a shallow checkout, tried twice
       - uses: actions/checkout@v4
@@ -224,11 +244,22 @@ jobs:
         run: |
           [[ "$TRAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the train's sha must be a full commit sha, got '$TRAIN_SHA'"; exit 1; }
           [ -n "$PUSH_REPO" ] || { echo "::error::repo variable HUB_PUSH_REPO is not set (the image registry/ns/name)"; exit 1; }
+          [ "$PUSH_REPO" != unset-HUB_PUSH_REPO_AWS ] || { echo "::error::FLEET_HUB_TARGET=aws-k3s but repo variable HUB_PUSH_REPO_AWS is not set (<acct>.dkr.ecr.us-west-2.amazonaws.com/tokenman/ccquota)"; exit 1; }
           [ -n "$BUILD_REPO" ] || BUILD_REPO=$PUSH_REPO
           echo "BUILD_REPO=$BUILD_REPO" >> "$GITHUB_ENV"
           echo "TAG=prod-${TRAIN_SHA:0:7}" >> "$GITHUB_ENV"
 
       - uses: ./.github/actions/hub-acr
+        if: env.AWS != 'true'
+
+      # aws-k3s (task PNWW): GitHub's OIDC token → AWS role AWS_DEPLOY_ROLE_ARN → ECR
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: env.AWS == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        if: env.AWS == 'true'
 
       - uses: docker/setup-buildx-action@v3
         if: env.ACK != 'true'
@@ -253,7 +284,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: tokenledger
-          platforms: linux/amd64
+          platforms: ${{ env.HUB_PLATFORM }}
           push: true
           provenance: false
           tags: ${{ env.PUSH_REPO }}:${{ env.TAG }}
@@ -325,10 +356,12 @@ jobs:
           echo "digest=$d" >> "$GITHUB_OUTPUT"
           how=built; [ -z "$REUSED" ] || how='reused (that sha'"'"'s image was there)'
           where=ubuntu-latest; [ "$ACK" != true ] || where='fleet-ack · buildkitd'
+          [ "$AWS" != true ] || where="ubuntu-latest · ECR · $HUB_PLATFORM"
           echo "### 入口镜像 \`$TAG\`：$how · $where · \`$d\`" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    if: github.event_name != 'pull_request' && inputs.phase != 'build' && needs.gate.outputs.go == 'true'
+    # FLEET_HUB_TARGET=aws-k3s: `deploy-aws` below instead (unset = this job, as always)
+    if: github.event_name != 'pull_request' && inputs.phase != 'build' && needs.gate.outputs.go == 'true' && vars.FLEET_HUB_TARGET != 'aws-k3s'
     needs: [check, gate]
     runs-on: ubuntu-latest
     environment: prod
@@ -961,4 +994,235 @@ jobs:
 
           \`${PREV_TAG:-（无）}\` → \`$NEW_TAG\` · 触发：$GITHUB_EVENT_NAME${TRAIN:+（发布列车）} by @$GITHUB_ACTOR
           摘要（提交列表、migration、环境变量、快照）：$RUN_URL" \
+            || echo "::warning::could not comment on issue #$ISSUE"
+
+  # FLEET_HUB_TARGET=aws-k3s (task PNWW): the hub on ONE EC2 box running k3s
+  # (deploy/aws/README.md). Same guarantees as `deploy` — the pause gate, one
+  # commit (TRAIN_SHA), never backwards, only the digest the build phase pushed —
+  # but the release is `bootstrap.sh apply` on the box, sent through AWS SSM by
+  # bin/fleet-hub-aws-deploy.sh with the job's OIDC role (no ssh, no standing
+  # key). A failed apply is put back on the box by the same command; a red health
+  # check afterwards rolls the box back (`rollback`). BREAK-IT train-aws-ssm-fails.
+  deploy-aws:
+    if: github.event_name != 'pull_request' && inputs.phase != 'build' && needs.gate.outputs.go == 'true' && vars.FLEET_HUB_TARGET == 'aws-k3s'
+    needs: [check, gate]
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      issues: write   # the release notice on $HUB_DEPLOY_NOTIFY_ISSUE, nothing else
+    outputs:
+      deployed: ${{ steps.health.outcome }}   # the release train reads it (workflow_call output)
+    env:
+      HUB_DEPLOY_SIMULATE_UNHEALTHY: ${{ github.event.inputs.simulate_unhealthy || 'false' }}
+      PUSH_REPO: ${{ vars.HUB_PUSH_REPO_AWS }}
+      HUB_PLATFORM: ${{ vars.HUB_AWS_PLATFORM || 'linux/amd64' }}
+      HUB_URLS: ${{ vars.HUB_URLS_AWS || vars.FLEET_HUB_URL_AWS || 'https://core.tokenman.io' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_BOX_INSTANCE_ID: ${{ vars.AWS_BOX_INSTANCE_ID }}
+      AWS_BOX_TAG: ${{ vars.AWS_BOX_TAG || 'tokenman-core' }}
+      AWS_BOX_REPO_DIR: ${{ vars.AWS_BOX_REPO_DIR || '/home/ubuntu/src' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
+          fetch-depth: 0   # fleet-train-hub.sh places the hub's commit against this one
+
+      - name: The deployment's settings are here
+        env:
+          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          [ -n "$PUSH_REPO" ] || { echo "::error::repo variable HUB_PUSH_REPO_AWS is not set (<acct>.dkr.ecr.us-west-2.amazonaws.com/tokenman/ccquota)"; exit 1; }
+          [ -n "$ROLE" ] || { echo "::error::repo variable AWS_DEPLOY_ROLE_ARN is not set (deploy/aws/README.md «The release train's role»)"; exit 1; }
+          echo "hub: $HUB_URLS · box: ${AWS_BOX_INSTANCE_ID:-tag Name=$AWS_BOX_TAG} · checkout $AWS_BOX_REPO_DIR · $AWS_REGION"
+
+      - name: Which image
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          TRAIN_SHA: ${{ inputs.sha }}
+          PHASE: ${{ inputs.phase }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TRAIN_SHA" ]; then
+            [[ "$TRAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the train's sha must be a full commit sha, got '$TRAIN_SHA'"; exit 1; }
+            [ "$(git rev-parse HEAD)" = "$TRAIN_SHA" ] || { echo "::error::checked out $(git rev-parse HEAD), not the train's $TRAIN_SHA"; exit 1; }
+            tag="prod-${TRAIN_SHA:0:7}" build=true
+            if [ "$PHASE" = deploy ]; then
+              [ -n "$DIGEST" ] || { echo "::error::phase deploy without the build phase's digest — nothing to deploy"; exit 1; }
+              build=false
+            fi
+          elif [ -n "$INPUT_TAG" ]; then
+            [[ "$INPUT_TAG" =~ ^prod-[0-9a-f]{7,40}$ ]] || { echo "::error::tag must look like prod-<sha7>, got '$INPUT_TAG'"; exit 1; }
+            tag=$INPUT_TAG build=false
+          else
+            tag="prod-${GITHUB_SHA:0:7}" build=true
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "commit=${tag#prod-}" >> "$GITHUB_OUTPUT"
+          # the box's checkout (its overlay): this run's commit — TRAIN_SHA, or the dispatch's
+          echo "box_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "image: $PUSH_REPO:$tag (build=$build)"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Pack the client
+        if: steps.tag.outputs.build == 'true'
+        run: bin/fleet-client-pack.sh
+      - name: Pack the new console
+        if: steps.tag.outputs.build == 'true'
+        run: bin/web-console-pack.sh
+      - name: Build the website and its docs
+        if: steps.tag.outputs.build == 'true'
+        run: bin/docs-build.sh && bin/site-build.sh
+      - name: Build and push
+        if: steps.tag.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: tokenledger
+          platforms: ${{ env.HUB_PLATFORM }}
+          push: true
+          provenance: false
+          tags: ${{ env.PUSH_REPO }}:${{ steps.tag.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ steps.tag.outputs.box_sha }}
+          build-args: |
+            VERSION=${{ steps.tag.outputs.tag }}
+            GOPROXY=https://proxy.golang.org,direct
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The image exists
+        run: docker buildx imagetools inspect "$PUSH_REPO:${{ steps.tag.outputs.tag }}" >/dev/null
+
+      # as `deploy` (BREAK-IT train-hub-backwards): a hub deployed past TRAIN_SHA
+      # since the train boarded is never rolled back
+      - name: The hub has not moved past the train
+        if: inputs.phase == 'deploy'
+        env:
+          TRAIN_SHA: ${{ inputs.sha }}
+        run: |
+          why=$(GITHUB_OUTPUT=/dev/null bin/fleet-train-hub.sh "$TRAIN_SHA" --dir . --hub "${HUB_URLS%% *}" | sed -n 's/^why=//p') || exit 1
+          echo "$why"
+          case "$why" in
+            ('hub superseded'*) echo "::error::$why — nothing deployed; the next train plans again"; exit 1 ;;
+          esac
+
+      # as `deploy` (BREAK-IT train-prebuild-wrong-sha): on ECR the tag must still
+      # name the digest the build phase reported, of TRAIN_SHA's revision
+      - name: The image is this run's build
+        if: inputs.phase == 'deploy'
+        env:
+          TRAIN_SHA: ${{ inputs.sha }}
+          DIGEST: ${{ inputs.digest }}
+        run: bin/fleet-train-prebuild.sh verify "$PUSH_REPO" "${{ steps.tag.outputs.tag }}" "$TRAIN_SHA" "$DIGEST"
+
+      # The box pulls by digest: a tag pushed over after this point changes nothing
+      - name: Pin the image by digest
+        id: pin
+        env:
+          DIGEST: ${{ inputs.digest }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          d=$DIGEST
+          [ -n "$d" ] || d=$(docker buildx imagetools inspect "$PUSH_REPO:$TAG" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin).get("digest") or "")')
+          [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $PUSH_REPO:$TAG"; exit 1; }
+          echo "image=$PUSH_REPO:$TAG@$d" >> "$GITHUB_OUTPUT"
+          echo "image: $PUSH_REPO:$TAG@$d"
+
+      - name: Start the availability probe
+        id: probe
+        run: |
+          set -euo pipefail
+          url=${HUB_URLS%% *}
+          echo "out=$RUNNER_TEMP/probe.log" >> "$GITHUB_OUTPUT"
+          nohup .github/actions/hub-release/release.sh probe "$url" "$RUNNER_TEMP/probe.stop" 3000 > "$RUNNER_TEMP/probe.log" 2>&1 &
+          echo "probing $url/healthz + POST $url/v1/deploy-probe every second (pid $!)"
+
+      # TRAIN_SHA's checkout + HUB_IMAGE on the box, `bootstrap.sh apply` (it
+      # waits for the rollout); a failed apply is put back there and goes red
+      - name: Deploy on the box (SSM)
+        id: deploy
+        run: bin/fleet-hub-aws-deploy.sh deploy "${{ steps.tag.outputs.box_sha }}" "${{ steps.pin.outputs.image }}"
+
+      - name: Health check (/healthz + /version + entry, every address)
+        id: health
+        run: .github/actions/hub-release/release.sh health "${{ steps.tag.outputs.commit }}"
+
+      - name: Roll the box back
+        id: rollback
+        if: failure() && steps.deploy.outcome == 'success'
+        run: bin/fleet-hub-aws-deploy.sh rollback
+
+      - name: Stop the availability probe
+        id: downtime
+        if: always() && steps.probe.outcome == 'success'
+        continue-on-error: true
+        env:
+          OUT: ${{ steps.probe.outputs.out }}
+        run: |
+          touch "$RUNNER_TEMP/probe.stop"
+          for _ in $(seq 1 20); do tail -1 "$OUT" | grep -q '^probes=' && break; sleep 0.5; done
+          grep '^DOWN' "$OUT" | head -40 || true
+          last=$(tail -1 "$OUT")
+          case "$last" in probes=*) ;; *) echo "::warning::the probe gave no verdict: $last"; exit 0 ;; esac
+          echo "$last"
+          for kv in $last; do echo "$kv" >> "$GITHUB_OUTPUT"; done
+
+      - name: Summary
+        id: summary
+        if: always() && steps.tag.outcome == 'success'
+        continue-on-error: true
+        env:
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+          IMAGE: ${{ steps.pin.outputs.image }}
+          DEPLOY: ${{ steps.deploy.outcome }}
+          HEALTH: ${{ steps.health.outcome }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
+          DOWN_SECS: ${{ steps.downtime.outputs.downtime_seconds }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$HEALTH" = success ]; then head="✅ 已发布 \`$NEW_TAG\`（aws-k3s）"
+          elif [ "$ROLLBACK" = success ]; then head="↩️ 已回退（\`$NEW_TAG\` 没过健康检查，盒子上放回了上一版）"
+          elif [ "$ROLLBACK" = failure ]; then head="🔥 回退失败 — 照 deploy/aws/README.md «Roll back» 手工处理"
+          elif [ "$DEPLOY" = failure ]; then head="❌ 盒子上的发布失败（apply 失败时盒子已放回上一版；盒子的输出在这次运行的日志里）"
+          else head="❌ 没部署（在盒子之前失败，线上没动）"; fi
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          {
+            echo "## hub-deploy · $head"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| 目标 | aws-k3s · ${AWS_BOX_INSTANCE_ID:-Name=$AWS_BOX_TAG} · $HUB_URLS |"
+            echo "| 镜像 | \`${IMAGE:-$NEW_TAG}\` |"
+            echo "| 盒子发布 · 健康检查 · 回退 | $DEPLOY · $HEALTH · $ROLLBACK |"
+            if [ -n "$DOWN_SECS" ]; then echo "| 发布期间不可用 | downtime_seconds=$DOWN_SECS |"
+            else echo "| 发布期间不可用 | 没测（探测没起来或没给出结果） |"; fi
+            echo
+            echo "[这次运行]($RUN_URL)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify
+        if: always() && vars.HUB_DEPLOY_NOTIFY_ISSUE != '' && steps.summary.outputs.head != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ vars.HUB_DEPLOY_NOTIFY_ISSUE }}
+          HEAD: ${{ steps.summary.outputs.head }}
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+          TRAIN: ${{ inputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "**hub-deploy** (aws-k3s) · $HEAD
+
+          → \`$NEW_TAG\` · 触发：$GITHUB_EVENT_NAME${TRAIN:+（发布列车）} by @$GITHUB_ACTOR
+          摘要：$RUN_URL" \
             || echo "::warning::could not comment on issue #$ISSUE"

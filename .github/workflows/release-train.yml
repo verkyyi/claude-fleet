@@ -173,9 +173,12 @@ permissions:
   contents: read
   actions: write    # `红灯即停` reads this run's jobs and cancels it on the first red
 
-# the hub every stage asks (precheck's gate 7, hub plan, the stage, the release)
+# the hub every stage asks (precheck's gate 7, hub plan, the stage, the release).
+# Repo variable FLEET_HUB_TARGET picks it (task PNWW): aws-k3s = the one EC2 k3s
+# box (FLEET_HUB_URL_AWS, else https://core.tokenman.io — hub-deploy.yml's
+# deploy-aws ships it); unset / ack = the Shenzhen ACK hub, as always.
 env:
-  FLEET_HUB_URL: https://claudefleet.24haowan.com  # oss-ok: the one place the train names its hub (four before #3867)
+  FLEET_HUB_URL: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && (vars.FLEET_HUB_URL_AWS || 'https://core.tokenman.io') || 'https://claudefleet.24haowan.com' }}  # oss-ok: the one place the train names its hub (four before #3867)
 
 jobs:
   board:
@@ -721,6 +724,8 @@ jobs:
       sha: ${{ needs.board.outputs.train_sha }}
       phase: build
       runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+    # FLEET_HUB_TARGET=aws-k3s: the build job may read AWS_DEPLOY_ROLE_ARN as a secret
+    secrets: inherit
 
   release-stage:
     # The release, staged BESIDE the tests (issue #3867): the tree and chain go up
