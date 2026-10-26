@@ -605,7 +605,7 @@ for rel, lang, canonical, other, docs in (
     assert 'href="%sarchitecture"' % docs in page, rel
     assert page.count('class="layer"') == 4, rel
     assert page.count('class="flow"') == 4, rel
-    assert page.count('class="badge live"') == 2, rel
+    assert page.count('class="badge live"') == 4, rel
     assert page.count('class="badge progress"') == 4, rel
     assert '@media print' in page and '@media(max-width:640px)' in page, rel
     assert not re.search(r'\{\{|docs/dev/|href="[^" ]+\.md"', page), rel

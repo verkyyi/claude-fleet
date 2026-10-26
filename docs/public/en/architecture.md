@@ -1,6 +1,6 @@
 # Tokenman architecture
 
-Tokenman runs AI coding agents on managed or personal nodes and connects people to their sessions from a browser or terminal. This is a conceptual map: the layers show responsibilities, not a deployment topology. The principles distinguish live behavior from work in progress.
+Tokenman is a runtime for native AI coding agents such as Claude Code and Codex, provided by model companies and run unmodified: it handles where they run, how they stay online, how people connect from any device, and how subscriptions are shared and metered. This is a conceptual map: the layers show responsibilities, not a deployment topology. The principles distinguish live behavior from work in progress.
 
 [Open the visual blueprint](https://tokenman.io/architecture) · [Security and isolation](security.md)
 
@@ -99,6 +99,14 @@ For isolation, credential lifetimes, revocation and compromise boundaries, read 
 <!-- blueprint:principles -->
 ## Design principles and why
 
+### Native agents, unmodified · live
+
+Sessions run the official Claude Code and Codex CLIs directly and follow upstream updates, without wrapping them in a proprietary agent. Keeping the native agents intact lets people use the capabilities and workflows their model providers deliver, while Tokenman manages the runtime around them. [Using a session](member/usage.md) describes the experience; there is no public deep-dive on upstream CLI updates yet.
+
+### Anytime, anywhere · live
+
+Sessions stay on managed nodes and continue when a laptop closes. Browser, terminal and phone access let people return to the same running work from whichever device is available. Separating a session's lifetime from its client connection makes ongoing work independent of a person's device. [Connecting to sessions](member/connect.md) describes access from each device.
+
 ### One portal · in progress
 
 One address should carry people from sign-in to their sessions without asking them to choose an entry point. It makes identity and navigation easier to understand while routing stays a service responsibility. Portal unification is in progress. [Current member journey](member/quickstart.md); there is no public deep-dive on the unified portal yet.
@@ -126,12 +134,12 @@ People should be able to tell whether a problem is theirs or the service's, usin
 <!-- blueprint:glossary -->
 ## Glossary
 
-- **Hub** — The central application that owns identity, task and session records, access decisions and subscription coordination.
+- **Hub** — The runtime control plane: it owns identity, task and session records, access decisions and subscription coordination.
 - **Node** — A machine or execution environment that runs sessions. A **managed node** is operated by the service; a **personal node** is brought and controlled by its owner.
-- **Session** — A continuing agent process and conversation on a node, reachable from supported clients.
+- **Session** — One run of a native agent process on a node, with its conversation reachable from supported clients.
 - **Subscription pool** — A set of eligible model subscriptions shared under platform, organization or personal access rules.
 - **Credential proxy** — The boundary that authorizes and forwards model requests with central model credentials, and meters their usage.
 - **Node agent** — The node-side service that connects to the hub, manages local sessions and carries state and updates.
 
 <!-- blueprint:version -->
-Blueprint v1 · Updated 2026-10-26. Status labels describe this version, not a delivery date.
+Blueprint v2 · Updated 2026-10-26. Status labels describe this version, not a delivery date.
