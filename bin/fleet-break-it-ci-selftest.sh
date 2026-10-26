@@ -63,6 +63,9 @@
 #   train-node-image-stale  the node image is reused when its key is stable's (#4818):
 #                       a change to the updater, the node source, the recipe or the
 #                       pins changes the key; the rest of the release does not
+#   train-hub-slow      the node image's hub serves 50 KB/s (or is down): every download
+#                       is bounded, says its rate, falls back to the next hub, and all
+#                       of them slow is red within the bound — never the 45-minute hang
 #   train-stage-node-changed  the release staged on the hub a deploy replaces: only
 #                       when the node source is TRAIN_SHA's (node=same, #4818)
 #   train-all-proven-skips  every test proven on its PR: no Linux shard is started,
@@ -1289,6 +1292,138 @@ drill_train_node_image_stale() {
   bash "$BIN/fleet-node-image-key.sh" "$d/co" nope >/dev/null 2>&1 && { WHY="an unreadable commit got a key"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="节点镜像键：只改发布里别的文件、hub 源、自测 ⇒ 键不变、复用 stable 的镜像只打 tag；改更新器 / 节点源 / 配方 / 钉住的工具 ⇒ 键变、发布后重新构建；读不到提交 ⇒ 没有键、不复用"
+}
+
+# The node image's downloads (BREAK-IT train-hub-slow): two trains sat out the
+# 45-minute job timeout on a hub serving 50 KB/s — no bound, no progress line,
+# one hub only — and held the train lane. Fake hubs on 127.0.0.1 that trickle
+# bytes: a hub alone too slow must be given up within the bound with an error
+# naming it and its rate; a slow hub (all of it) and a hub slow only for the
+# release are passed over for the next one, which builds.
+drill_train_hub_slow() {
+  CAP=60
+  local t0 d wf node rc out p ok hub_pids='' m f slow slowrel fast
+  wf="$BIN/../.github/workflows/release-train.yml"
+  node=$(sed -n '/^  node-image:/,/^  [a-z][a-z-]*:$/p' "$wf")
+  printf '%s\n' "$node" | grep -q '^    timeout-minutes: 20$' \
+    || { WHY="node image's timeout-minutes is not 20: one hang holds the release-train lane that long"; return 1; }
+  printf '%s\n' "$node" | grep -qF 'train-build.sh "$HUB_INTERNAL_URL $FLEET_HUB_URL $HUB_URLS"' \
+    && printf '%s\n' "$node" | grep -qF "HUB_INTERNAL_URL: \${{ vars.FLEET_HUB_TARGET != 'aws-k3s' && vars.HUB_INTERNAL_URL || '' }}" \
+    || { WHY="node image does not hand train-build.sh the in-cluster hub, the train's hub and every public name, in that order"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/hubslow.XXXXXX"); t0=$(now)
+  # the scripts under test, in a rig with a pinned root of the drill's own
+  mkdir -p "$d/rig/extras" "$d/rig/conf/release-keys" "$d/rig/bin" "$d/fakebin"
+  cp -R "$BIN/../extras/managed-node" "$d/rig/extras/managed-node" && cp "$BIN/fleet-release-verify.py" "$d/rig/bin/" \
+    || { WHY="could not build the rig"; rm -rf "$d"; return 1; }
+  # the release's ccquota-linux-amd64: a fake whose `release fetch` takes /big from its hub
+  cat > "$d/ccquota" <<'CCQ'
+#!/bin/bash
+[ "$1" = version ] && { echo "ccquota fake"; exit 0; }
+[ "$1 $2" = "release fetch" ] || exit 2
+case " $* " in *" -h "*) echo '  -progress FILE'; exit 0 ;; esac
+hub=''; prev=''; for a in "$@"; do [ "$prev" = --hub ] && hub=$a; prev=$a; done
+dest=${@: -1}; mkdir -p "$dest.dl"
+echo "  big: from $hub" >&2
+curl -fsS -o "$dest.dl/big.part" "$hub/big" & c=$!
+trap 'kill $c 2>/dev/null; exit 143' TERM
+wait $c || exit 1
+mkdir -p "$dest/.release/artifacts"
+cat > "$dest/release.json" <<'J'
+{"components": {"ccquota": {"artifact": "ccquota-{os}-{arch}"},
+ "claude": {"version": "2", "artifact": "claude-{version}-{os}-{arch}"},
+ "codex": {"version": "9", "artifact": "codex-{version}-{os}-{arch}",
+           "helpers": {"codex-code-mode-host": "codex-code-mode-host-{version}-{os}-{arch}"}},
+ "tmux": {"version": "3", "artifact": "tmux-{version}-{os}-{arch}"}}}
+J
+for n in ccquota-linux-amd64 claude-2-linux-amd64 codex-9-linux-amd64 codex-code-mode-host-9-linux-amd64 tmux-3-linux-amd64; do
+  echo x > "$dest/.release/artifacts/$n"
+done
+echo "release fake: 5 artifacts"
+CCQ
+  head -c 200000 /dev/zero >> "$d/ccquota"   # ~200 KB: a slow hub takes ~100 s at its 2 KB/s
+  head -c 400000 /dev/zero > "$d/big"
+  cat > "$d/fakebin/buildctl" <<'BCTL'
+#!/bin/bash
+m=''; p=''; for a in "$@"; do [ "$p" = --metadata-file ] && m=$a; p=$a; done
+[ -z "$m" ] || printf '{"containerimage.digest": "sha256:%s"}' "$(printf 'b%.0s' $(seq 64))" > "$m"
+BCTL
+  chmod +x "$d/fakebin/buildctl"
+  # sign the release with the drill's own root
+  SHA_T=$(printf 'c%.0s' $(seq 40))
+  python3 -I - "$BIN/fleet-release-verify.py" "$d" "$SHA_T" <<'PY' || { WHY="could not sign the drill's release"; rm -rf "$d"; return 1; }
+import base64, hashlib, importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("rv", sys.argv[1]); rv = importlib.util.module_from_spec(spec); spec.loader.exec_module(rv)
+d, sha = sys.argv[2], sys.argv[3]
+seed = hashlib.sha256(b"train-hub-slow").digest()
+open(d + "/rig/conf/release-keys/root.pub", "w").write(rv.key_line(rv.pub_of(seed)) + "\n")
+cq = open(d + "/ccquota", "rb").read()
+m = json.dumps({"schema": 1, "sha": sha, "seq": 7, "artifacts": [
+    {"name": "ccquota-linux-amd64", "sha256": hashlib.sha256(cq).hexdigest(), "size": len(cq)}]}).encode()
+open(d + "/manifest.json", "wb").write(m)
+open(d + "/manifest.sig", "w").write(base64.b64encode(rv.sign(seed, m)).decode())
+PY
+  # the fake hub: <mode> slow = every byte at 2 KB/s · slowrel = only the release (/big) · fast
+  cat > "$d/hub.py" <<'PY'
+import http.server, os, signal, sys, time
+d, mode = sys.argv[1], sys.argv[2]
+signal.alarm(170)   # never outlives the drill
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        open(os.path.join(d, mode + ".log"), "a").write(self.path + "\n")
+        hdr = {}
+        if self.path.endswith("/artifacts/ccquota-linux-amd64"): body = open(os.path.join(d, "ccquota"), "rb").read()
+        elif self.path == "/big": body = open(os.path.join(d, "big"), "rb").read()
+        elif self.path.startswith("/v1/fleet/release/"):
+            body = open(os.path.join(d, "manifest.json"), "rb").read()
+            hdr["X-Ccquota-Release-Signature"] = open(os.path.join(d, "manifest.sig")).read()
+        else: self.send_response(404); self.end_headers(); return
+        self.send_response(200); self.send_header("Content-Length", str(len(body)))
+        for k, v in hdr.items(): self.send_header(k, v)
+        self.end_headers()
+        slow = mode == "slow" or (mode == "slowrel" and self.path == "/big")
+        try:
+            if not slow: self.wfile.write(body); return
+            for i in range(0, len(body), 1024):
+                self.wfile.write(body[i:i + 1024]); self.wfile.flush(); time.sleep(0.5)
+        except (BrokenPipeError, ConnectionResetError): pass
+http.server.ThreadingHTTPServer.daemon_threads = True
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, mode + ".port"), "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+  for m in slow slowrel fast; do python3 -I "$d/hub.py" "$d" "$m" & hub_pids="$hub_pids $!"; done
+  for _ in $(seq 50); do [ -s "$d/slow.port" ] && [ -s "$d/slowrel.port" ] && [ -s "$d/fast.port" ] && break; sleep 0.1; done
+  slow="http://127.0.0.1:$(cat "$d/slow.port")" slowrel="http://127.0.0.1:$(cat "$d/slowrel.port")" fast="http://127.0.0.1:$(cat "$d/fast.port")"
+  # tb <secs> <hubs>: train-build.sh in the rig, killed at <secs> (an unbounded one would hang)
+  tb() {
+    ( exec env -u GITHUB_OUTPUT PATH="$d/fakebin:$PATH" GITHUB_ACTIONS=true BUILDKIT_HOST=tcp://127.0.0.1:1 \
+        FLEET_TRAIN_FETCH_SECS=60 FLEET_TRAIN_FETCH_CONNECT=3 FLEET_TRAIN_FETCH_FLOOR=20000 FLEET_TRAIN_FETCH_FLOOR_SECS=2 \
+        FLEET_IMAGE_FETCH_TICK=1 bash "$d/rig/extras/managed-node/train-build.sh" "$2" "$SHA_T" r.example/node r.example/node@sha256:t \
+        > "$d/out" 2>&1 ) & p=$!
+    ok=0; for _ in $(seq $(($1 * 10))); do kill -0 "$p" 2>/dev/null || { ok=1; break; }; sleep 0.1; done
+    [ "$ok" = 1 ] || kill "$p" 2>/dev/null
+    wait "$p"; rc=$?; out=$(cat "$d/out")
+  }
+  stop() { pkill -f "$d/rig/" 2>/dev/null; for p in $hub_pids; do kill "$p" 2>/dev/null; done; rm -rf "$d"; }
+  # 1. the slow hub alone: given up within the bound, red naming it and its rate
+  tb 25 "$slow"
+  [ "$ok" = 1 ] || { WHY="train-build.sh did not give up on a 2 KB/s hub within 25s (no bound): $(printf '%s' "$out" | tail -n 3 | tr '\n' '|')"; stop; return 1; }
+  [ "$rc" = 1 ] && printf '%s\n' "$out" | grep '^::error::' | grep -F "$slow" | grep -Eq '[0-9] [KM]B/s' \
+    || { WHY="a hub too slow was not red with an ::error:: naming it and its rate ($rc): $(printf '%s' "$out" | tr '\n' '|')"; stop; return 1; }
+  # 2. slow · slow for the release · fast: passed over, built from the third
+  rm -f "$d"/*.log
+  tb 40 "$slow $slowrel $fast"
+  [ "$ok" = 1 ] && [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^image=r.example/node:' \
+    || { WHY="train-build.sh did not fall back past the slow hubs and build ($rc, done=$ok): $(printf '%s' "$out" | tail -n 8 | tr '\n' '|')"; stop; return 1; }
+  printf '%s\n' "$out" | grep -qF "ccquota-linux-amd64 from $slowrel: " \
+    && printf '%s\n' "$out" | grep -qF "prepare-image.sh: $slowrel: too slow" \
+    && printf '%s\n' "$out" | grep -qF "release $SHA_T from $fast in" \
+    || { WHY="the fallback did not say which hub carried what, at what rate: $(printf '%s' "$out" | tr '\n' '|')"; stop; return 1; }
+  ! grep -qx /big "$d/slow.log" 2>/dev/null && grep -qx /big "$d/slowrel.log" && grep -qx /big "$d/fast.log" \
+    || { WHY="a hub dropped for ccquota was asked for the release again, or the release hubs were not asked in order"; stop; return 1; }
+  SECS=$(since "$t0"); stop
+  WHAT="节点镜像取发布包：每次下载有连接超时、速度下限（低于下限持续一段时间即放弃）和总时限，每个制品打出来自哪个入口、多大、多久、多快；只有一个慢入口 ⇒ 时限内放弃、::error:: 写明入口与速率；慢入口、只有发布包慢的入口依次跳过，换下一个入口照样构建（作业时限 20 分钟，不再占住列车 45 分钟）"
 }
 
 # The release staged on the running hub while a new one is built (#4818): right

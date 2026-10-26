@@ -595,6 +595,7 @@
 1.3 train-hub-stable-split
 0.1 train-macos-slow-not-hung
 0.4 train-node-image-stale
+10.0 train-hub-slow
 0.2 train-own-mac-one-shard
 3.2 train-own-runner-silent
 0.2 train-own-runners-gone

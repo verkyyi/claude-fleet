@@ -1229,13 +1229,17 @@ jobs:
     # node tools found stable's image reusable (issue #4818: the same image key)
     # ⇒ no build: on GitHub's runner, that digest is tagged <repo>:<TRAIN_SHA> —
     # seconds after the release instead of minutes.
+    # 20 minutes (45 before BREAK-IT train-hub-slow): a real build is ~2.5
+    # minutes, train-build.sh gives up on its hubs within 12 (FLEET_TRAIN_FETCH_SECS),
+    # and this job holds the one `release-train` lane — the next train waits
+    # behind it, so a hang must end soon, not when a slow hub finally finishes.
     name: node image
     needs: [board, release, node-tools]
     if: >-
       always() && needs.release.outputs.moved == 'true' &&
       needs.node-tools.result == 'success'
     runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-latest' || 'fleet-ack' }}
-    timeout-minutes: 45
+    timeout-minutes: 20
     environment: node-image
     permissions:
       contents: read
@@ -1243,7 +1247,7 @@ jobs:
       statuses: write   # the `node image` status (issue #4180)
     env:
       TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
-      HUB_URLS: ${{ vars.HUB_URLS }}   # the hub's addresses (hub-deploy's); the first is asked
+      HUB_URLS: ${{ vars.HUB_URLS }}   # the hub's public addresses (hub-deploy's): train-build.sh's fallbacks
       REPO: ${{ vars.NODE_IMAGE_REPO }}
       BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
       TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
@@ -1308,10 +1312,22 @@ jobs:
       - uses: ./.github/actions/hub-acr
         with:
           role: gha-claudefleet-node-image
+      # The hubs, asked in order (BREAK-IT train-hub-slow): the hub's in-cluster
+      # Service while it runs in this cluster (vars.HUB_INTERNAL_URL, e.g.
+      # http://<service>.<namespace>.svc.cluster.local — not with
+      # FLEET_HUB_TARGET=aws-k3s, whose hub is not here), the hub this train
+      # released to (FLEET_HUB_URL), then every public name (HUB_URLS). The
+      # transport is untrusted either way: train-build.sh and ccquota verify the
+      # manifest against the pinned root and each artifact by its signed sha256,
+      # whichever hub carried it. Each download is bounded and says its rate; a
+      # hub too slow or down is passed over, and all of them failing is red in
+      # ≤ 12 minutes with an ::error:: naming each hub and its rate.
       - name: build and push (train-build.sh)
         id: build
         if: needs.node-tools.outputs.reuse == ''
-        run: bash extras/managed-node/train-build.sh "${HUB_URLS%% *}" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST" "$BUILD_REPO@$BASE_DIGEST"
+        env:
+          HUB_INTERNAL_URL: ${{ vars.FLEET_HUB_TARGET != 'aws-k3s' && vars.HUB_INTERNAL_URL || '' }}
+        run: bash extras/managed-node/train-build.sh "$HUB_INTERNAL_URL $FLEET_HUB_URL $HUB_URLS" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST" "$BUILD_REPO@$BASE_DIGEST"
       - uses: docker/setup-buildx-action@v3
         if: needs.node-tools.outputs.reuse != ''
       # the same image key as stable's: stable's image, tagged for this release
