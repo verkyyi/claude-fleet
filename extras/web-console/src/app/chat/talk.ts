@@ -87,6 +87,10 @@ export function failWords(why = ""): { text: string; retry: boolean } {
     return { text: tr("这一句没送到：会话没能在 20 秒内回来。", "This message didn't go through: the session didn't come back within 20 s."), retry: true };
   if (why === "home_down" || why === "offline" || why === "home_reconnecting")
     return { text: tr("这一句没送到：家机器暂时连不上。", "This message didn't go through: your machine is out of reach."), retry: true };
+  if (why === "start_blocked")
+    return { text: tr("这一句没送到：这个会话没能启动，停在了一个网页里按不了的提示上。", "This message didn't go through: this session never started — it is stuck on a prompt the web cannot answer."), retry: false };
+  if (why === "unreachable")
+    return { text: tr("这一句没送到：这个会话现在没有响应。", "This message didn't go through: this session is not responding."), retry: true };
   if (why === "budget") return { text: tr("这一句没送到：额度用完了。", "This message didn't go through: the limit is used up."), retry: false };
   if (why === "old_session" || why === "old_version" || why === "old_agent" || why === "old_service" || why === "cannot_talk")
     return { text: tr("这一句没送到：这个会话还旧，网页上说不了。", "This message didn't go through: this session is too old to talk to from the web."), retry: false };

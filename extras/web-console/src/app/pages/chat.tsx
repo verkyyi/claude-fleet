@@ -604,6 +604,27 @@ const readOnlyWords = (open?: string) => open
   ? tr(`只读 · 终端会话。要接着说，在 iTerm2 里输入 ${open}（详情里可复制）`, `Read-only · terminal session. To continue, run ${open} in iTerm2 (copy it in Details)`)
   : tr("只读 · 终端会话。要接着说，到它的终端里。", "Read-only · terminal session. To continue, use its terminal.");
 const OFFLINE_BOX = () => tr("家机器连回来后才能发", "Send once your machine is back");
+// the home answered, the session did not (task YASF): its own words, never the home's
+const STALLED_BOX = (why?: string) => why === "start_blocked"
+  ? tr("这个会话没能启动，发不了 · 在新会话里接着说", "This session never started · continue in a new session")
+  : tr("这个会话现在没有响应，稍后再试", "This session is not responding; try again shortly");
+
+// A session whose agent never came up (task YASF): it waits on a prompt at its
+// start (an upgrade picker, a trust question, a sign-in) that a web page cannot
+// press. Said as that, with what its screen shows, and the way on — a new session.
+const StartBlocked: FC<{ screen?: string }> = ({ screen }) => {
+  const go = useNavigate();
+  return (
+    <div role="status" data-testid="start-blocked"
+      className="border-border bg-card mx-auto w-full max-w-xl space-y-2 rounded-2xl border px-4 py-3 text-[13px] leading-snug shadow-xs">
+      <p className="font-medium">{tr("这个会话没能启动", "This session never started")}</p>
+      <p className="text-muted-foreground">{tr("它停在了启动时的一个提示上，这个提示要在终端里按键，网页里按不了。管理员已收到提醒。",
+        "It is stuck on a prompt at its start that needs a key pressed in a terminal, which the web cannot do. The operator has been told.")}</p>
+      {screen ? <pre data-testid="start-blocked-screen" className="bg-muted max-h-40 overflow-auto rounded-lg px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">{screen}</pre> : null}
+      <button type="button" className="text-clay font-medium" onClick={() => go("/new")}>{tr("在新会话里接着说", "Continue in a new session")}</button>
+    </div>
+  );
+};
 
 // why the record cannot be followed here, in one sentence
 const VIEW_WORDS = (): Record<string, string> => ({
@@ -697,6 +718,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
   const boxWords = preview ? tr("只读 · 当前登录只能查看这个会话。", "Read-only · this sign-in can only view this session.")
     : v.state?.history_status ? tr("只读历史 · 接回请用详情中的接回入口。", "Read-only history · use Resume in Details to continue.")
     : sync === "offline" || v.access === "offline" ? OFFLINE_BOX()
+    : v.access === "stalled" ? STALLED_BOX(v.state?.talk_reason)
     : v.access === "checking" ? tr("正在连接会话，可以先写下要说的话…", "Connecting to your session; you can draft your message…")
     : talk ? composerPlaceholder(null, null) : readOnlyWords(source.open);
   // Keep the runtime and composer mounted through an empty/offline view too:
@@ -711,7 +733,7 @@ const ReadView: FC<SessionProps & { v: ReturnType<typeof useSessionView>; sync: 
       </> : <p className="text-muted-foreground text-center text-[14px]">{v.loaded ? (talk ? tr("说点什么吧。", "Say something.") : tr("它还没说话。", "Nothing said yet.")) : tr("正在读它的对话…", "Reading its conversation…")}</p>}
     </div>
   );
-  const Top: FC = () => <><FailLine v={v} />{v.state?.continuation ? <p role="status" className="text-muted-foreground px-2 text-center text-[13px]">{v.state.continuation.message}</p> : null}</>;
+  const Top: FC = () => <>{v.state?.talk_reason === "start_blocked" && !preview ? <StartBlocked screen={v.state.talk_screen} /> : null}<FailLine v={v} />{v.state?.continuation ? <p role="status" className="text-muted-foreground px-2 text-center text-[13px]">{v.state.continuation.message}</p> : null}</>;
   return (
     <ViewWorker.Provider value={props.source.worker || ""}>
     <AssistantRuntimeProvider runtime={v.runtime}>

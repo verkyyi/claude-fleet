@@ -8,10 +8,14 @@
 // Unknown capability is a connection in progress, not an old terminal session.
 // An older service omits can_talk; it remains read-only. Only true enables send.
 export type ViewConnection = "checking" | "live" | "offline";
-export function writeAccess(state: { can_talk?: boolean | null; talk_reason?: string } | null, allowed: boolean | null, connection: ViewConnection = "live") {
+export type ViewAccess = "readonly" | "checking" | "offline" | "stalled" | "writable";
+export function writeAccess(state: { can_talk?: boolean | null; talk_reason?: string } | null, allowed: boolean | null, connection: ViewConnection = "live"): ViewAccess {
   if (allowed === false) return "readonly";
   if (allowed === null) return "checking";
-  if (connection === "offline" || state?.talk_reason === "unreachable") return "offline";
+  if (connection === "offline") return "offline";
+  // the home answered but the SESSION did not (task YASF): its agent never came up
+  // (start_blocked) or its own server is not answering — never «your machine is out of reach»
+  if (state?.talk_reason === "unreachable" || state?.talk_reason === "start_blocked") return "stalled";
   if (connection === "checking" || !state || state.can_talk === null || state.talk_reason === "checking") return "checking";
   return state.can_talk === true ? "writable" : "readonly";
 }

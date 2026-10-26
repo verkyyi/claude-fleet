@@ -112,10 +112,12 @@ WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}
                      "#{@mod_alive}", "#{@session_origin}", "#{window_activity}", "#{@park_wake}",
                      "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
                      "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
-                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}", "#{@task_execution}"])
+                     "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}", "#{@task_execution}",
+                     "#{@born}", "#{window_created}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
             "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
-            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task", "task_execution"]
+            "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task", "task_execution",
+            "born", "created"]
 
 
 def now():
@@ -269,6 +271,56 @@ def execution_reason(w=None, fid=None, *, fresh=False):
         return "task_execution_refused"
 
 
+def start_blocked(w):
+    """A window the web opened whose agent never came up (task YASF): no
+    conversation id, no status word, past FLEET_GATE_START_SECS (60) since it
+    was made. The web's start always carries its first sentence, so a healthy
+    one has its conversation within seconds; nobody sits at its terminal to
+    press the prompt it waits on instead (an upgrade picker, a trust question,
+    a login page) — so it is said as that, never as "checking" forever or
+    "your machine is unreachable". A terminal's own session (no seed, a person
+    at it) is never judged."""
+    if w is None or w["origin"] != "web" or w["parked"] or w["state"] == "exited" or w["sid"] or w["word"]:
+        return False
+    if w["agent"] == "claude" and w["mod_alive"]:
+        return False
+    born = next((int(v) for v in (w.get("born", ""), w.get("created", "")) if v.isdigit()), 0)
+    return bool(born) and now() - born >= num_env("FLEET_GATE_START_SECS", 60)
+
+
+SCREEN_MAX = 600
+
+
+def screen_of(w):
+    """What the window shows, for the person and the operator: its visible
+    text, blank lines dropped, at most SCREEN_MAX characters."""
+    raw = tmux(w["sock"], "capture-pane", "-p", "-t", w["pane"] or w["win"]) or ""
+    lines = [re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", l).rstrip() for l in raw.splitlines()]
+    text = "\n".join(l for l in lines if l.strip())
+    return text[:SCREEN_MAX]
+
+
+def start_alert(w, screen):
+    """One alert per window on its login's fleet (the hub carries it on the
+    rows' notices): a prompt nobody answers is a way to break the fleet the
+    operator has to hear about, the first time."""
+    mark = fid_dir(w["fid"]) / "start-blocked"
+    if mark.exists():
+        return
+    try:
+        mark.write_text(str(int(now())))
+    except OSError:
+        return
+    first = next((l.strip() for l in screen.splitlines() if l.strip()), "")
+    msg = "%s 会话没能启动：停在「%s」上，网页里按不了" % (w["agent"], first[:80] or "一个提示")
+    try:
+        subprocess.run(["bash", os.environ.get("FLEET_GATE_ALERTS") or str(BIN / "fleet-alerts.sh"),
+                        "event", "-L", w["sock"], "breakage", msg],
+                       capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def can_talk(w):
     """(True, '') or (False, why): may the web say a sentence into this session?"""
     if w is None:
@@ -285,7 +337,11 @@ def can_talk(w):
         return True, ""          # its next start is the current agent with the current mod
     if w["state"] == "exited":
         return False, "exited"
+    if start_blocked(w):
+        return False, "start_blocked"
     if w["agent"] == "claude":
+        if w["mod_accept"] != ACCEPT and not w["sid"] and not w["word"]:
+            return False, "checking"     # not up yet: start_blocked once it has had its minute
         return (True, "") if w["mod_accept"] == ACCEPT else (False, "old_version")
     try:
         identity, client = codex_api()
@@ -1426,8 +1482,13 @@ def status(fid):
         ask = ask_card(w)
     except Exception:  # noqa: BLE001 — a card that cannot be read is no card
         ask = None
+    screen = ""
+    if why == "start_blocked":
+        screen = screen_of(w)
+        start_alert(w, screen)
     return dict(can_talk=ok, why=why, agent=(w or {}).get("agent", ""), session=(w or {}).get("sid", ""),
-                busy=bool(w and busy_of(w)), queue=q, ask=ask, continuation=fallback.view(fallback_api(), w))
+                busy=bool(w and busy_of(w)), queue=q, ask=ask, continuation=fallback.view(fallback_api(), w),
+                **({"screen": screen} if why == "start_blocked" else {}))
 
 
 def say(args):
