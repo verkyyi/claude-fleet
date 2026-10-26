@@ -936,8 +936,10 @@ print(json.dumps(d))'
     # 看台's 恢复 on another machine's row) — the road local 恢复 takes,
     # fleet-id.sh reopen <fid> --exec --rebuild (a reaped scratch worktree made
     # again where it was), behind the gates a start pays. Before anything opens:
-    # 5 = the reopen's own refusal (its --check: the conversation not found, a
-    # worktree that cannot be made again — the line on stderr), 4 = the disk /
+    # 5 = the reopen's own refusal (its --check: the conversation not found, its
+    # transcript not where the session's own agent keeps it, a worktree that
+    # cannot be made again — the line on stderr; or the spawner's --strict-resume
+    # refusing the same, before any window, through the exec), 4 = the disk /
     # quota gate. Headless (the node agent has no pane): bare tmux is pointed at
     # THIS fleet's server the way reap does, or dash-raw-session finds no session.
     case "${3:-}" in fid:*)

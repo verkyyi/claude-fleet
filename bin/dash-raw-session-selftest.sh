@@ -520,6 +520,27 @@ WINS=plan FLEET_MAX_SESSIONS=0 FLEET_CODEX_HOME="$codex_home" run_raw --no-repo 
 grep -q -- "--resume $sid" "$NEWWIN_LOG" && fail "R resumed unrelated rollout metadata"
 ok "R Codex resumes its exact native rollout; unrelated metadata never resumes"
 
+# R2: a CLAUDE session reopened on a fleet whose FLEET_AGENT is codex (fleet-id.sh
+# reopen hands --agent claude): its transcript is looked for in Claude's project
+# dir and the window resumes it. Without the agent the fleet's codex is asked, the
+# strict resume refuses before any window — exit 5, the node's NOT_RESUMABLE.
+reset_scratch
+sid=22222222-3333-4444-8555-666666666666
+export CLAUDE_PROJECTS_DIR="$WORK/claude-projects"
+hproj=$(bash -c '. "$1/fleet-lib.sh"; fleet_transcript_dir "$HOME"' _ "$BIN")
+mkdir -p "$hproj"; printf '{"sessionId":"%s"}\n' "$sid" > "$hproj/$sid.jsonl"
+WINS=plan FLEET_MAX_SESSIONS=0 FLEET_AGENT=codex run_raw --no-repo --agent claude --resume "$sid" --strict-resume; rc=$?
+[ "$rc" = 0 ] || fail "R2 a Claude session on a codex fleet was refused (rc $rc)" "$(cat "$WORK/err")"
+grep -q -- "--agent claude --resume $sid" "$NEWWIN_LOG" \
+  || fail "R2 the Claude session did not resume as Claude" "$(cat "$NEWWIN_LOG")"
+WINS=plan FLEET_MAX_SESSIONS=0 FLEET_AGENT=codex run_raw --no-repo --resume "$sid" --strict-resume; rc=$?
+[ "$rc" = 5 ] || fail "R2 a strict resume with no transcript should exit 5, got $rc" "$(cat "$WORK/err")"
+[ ! -s "$NEWWIN_LOG" ] || fail "R2 a refused strict resume opened a window" "$(cat "$NEWWIN_LOG")"
+grep -q '^dash-raw-session: exact codex transcript .* resume refused' "$WORK/err" \
+  || fail "R2 the refusal is not the spawner's own line" "$(cat "$WORK/err")"
+unset CLAUDE_PROJECTS_DIR
+ok "R2 a Claude session on a codex fleet resumes as Claude; a strict refusal is rc 5, no window"
+
 # S: a cancellation while setup ran must not open a window or leave the new
 # scratch tree behind. The authenticated reader is replaced only in this fixture.
 reset_scratch

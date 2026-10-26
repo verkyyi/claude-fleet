@@ -232,7 +232,9 @@ fi
 # ledger's (fleet_id.py continue / reopen); --exec opens the window through the one
 # spawner, dash-raw-session.sh — a new ID with --prev, or the same one with --fid.
 # --check walks the same road and stops before the spawn: `ok` (rc 0), or the one
-# reason it would refuse on stderr (rc 1) — the panel's 恢复 asks it first.
+# reason it would refuse on stderr (rc 1) — the panel's 恢复 asks it first. The
+# road includes the spawner's own transcript lookup, under the session's agent
+# (not the fleet's FLEET_AGENT), which --exec then hands it as --agent.
 # --rebuild: a conversation that is whole but whose scratch worktree was reaped is
 # reopened in that worktree made again AT THE SAME PATH (so the agent finds its own
 # transcript), on a `restore-<ID>` branch off its old branch when origin still has
@@ -268,6 +270,23 @@ print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing 
     gone$'\t'*) [ "$rb" = 1 ] || { printf '%s\n' "${pst##*$'\t'}" >&2; exit 1; } ;;
     *) printf '%s\n' "${pst##*$'\t'}" >&2; exit 1 ;;
   esac
+  # The exact transcript, read the way the spawner will read it (its strict resume,
+  # fleet_resume_transcript_exists): under the session's OWN agent — a Claude
+  # session on a FLEET_AGENT=codex fleet is still looked for in its Claude project
+  # dir — in the cwd it ran in (its worktree; $HOME for a no-repo one), so --check
+  # refuses with the reason instead of passing and the exec refusing after it.
+  # Asked after the worktree's own refusals, before anything is made again.
+  reopen_transcript_ok() {
+    local r_agent=$p_agent r_cwd=$p_wt r_home=${FLEET_CODEX_HOME:-}
+    [ "$r_agent" = - ] && r_agent=${FLEET_AGENT:-}
+    [ "$p_repo" = - ] && r_cwd=$HOME
+    [ "$p_home" = - ] || r_home=$p_home
+    [ "$r_cwd" = - ] && return 0
+    FLEET_CODEX_HOME=$r_home fleet_resume_transcript_exists "$r_agent" "$r_cwd" "$p_native" && return 0
+    printf 'fleet-id: %s has no %s transcript %s where it ran — nothing to resume\n' \
+      "$p_id" "$(fleet_agent_or_default "$r_agent")" "$p_native" >&2
+    exit 1
+  }
   if [ "$pst" != resumable ]; then
     # --rebuild: the scratch worktree made again where it was (see above)
     o_br=${pst#gone$'\t'}; o_br=${o_br%%$'\t'*}
@@ -282,6 +301,7 @@ print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing 
     [ "$(fleet_worktree_dir "$r_main" "$r_slug")" = "$p_wt" ] \
       || { printf 'fleet-id: %s is no longer where %s keeps its worktrees — it cannot be made again\n' "$p_wt" "$p_repo" >&2; exit 1; }
     if [ -n "$o_br" ] && git -C "$r_main" ls-remote --exit-code --heads origin "$o_br" >/dev/null 2>&1; then r_from=$o_br; fi
+    reopen_transcript_ok
     [ "$ex" = 2 ] && { printf 'ok rebuild %s\n' "$r_from"; exit 0; }
     r_br="restore-${p_id%%-*}"
     FLEET_FETCH_BLOCKING=1 fleet_fetch_bounded "$r_main" "$r_from"   # a rebuild wants the branch as pushed
@@ -290,11 +310,15 @@ print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing 
     printf 'fleet-id: %s made again off origin/%s on branch %s — the conversation is whole; what was not pushed from it before is not\n' \
       "$p_wt" "$r_from" "$r_br" >&2
   fi
+  [ "$pst" != resumable ] || reopen_transcript_ok
   rargs=(--resume "$p_native" --strict-resume)
   [ "$p_home" = - ] || rargs+=(--codex-home "$p_home")
   # Continue the task and native segment, without old Parent ancestry.
   [ "$p_task" = - ] || rargs+=(--id-task "$p_task")
-  [ "$p_agent" = codex ] && rargs+=(--agent codex)
+  # The session's own agent, whichever it is: a fleet whose FLEET_AGENT is codex
+  # must still bring a Claude session back as Claude (and the spawner's transcript
+  # lookup searches that agent's store, not the fleet default's).
+  if fleet_agent_known "$p_agent"; then rargs+=(--agent "$p_agent"); fi
   [ "$p_title" = - ] || rargs+=(--name "$p_title")
   if [ "$p_repo" != - ] && [ "$p_wt" != - ] && [ -d "$p_wt" ]; then rargs+=(--repo "$p_repo" --worktree "$p_wt")
   elif [ "$p_repo" = - ]; then rargs+=(--no-repo)

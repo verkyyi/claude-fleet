@@ -16,6 +16,11 @@
 #   S9    a live ID's segment resumed in another window: the new ID's prev points
 #         back, both are in conflict (等你) while both live, closing one restores
 #         the other
+#   AGENT a Claude session reopened on a FLEET_AGENT=codex fleet: --exec hands the
+#         spawner --agent claude; --check / --check --rebuild read the transcript
+#         where the spawner will (the session's own agent, its cwd) and refuse with
+#         the reason, never reaching the spawner; a Codex session is not resumed
+#         from a same-named Claude file
 #   ROUTE a closed ID with no successor goes up its parent; nobody ⇒ rc 1; an ID
 #         this ledger does not know is `unknown` (the caller's old road)
 #   CLEAR historical parent links and successors never receive a report; /clear
@@ -141,11 +146,13 @@ st_count; printf '%s' "$plan" | grep -q '"native": "dddd0002-1111-4111-8111-1111
 cat > "$WORK/spawn.sh" <<'SP'
 printf '%s\n' "$@" > "$FLEET_TEST_SPAWNED"
 SP
-# A resume must verify the exact native segment before opening a window.
+# A resume must verify the exact native segment before opening a window — where
+# the spawner looks for it: a no-repo session ran in $HOME, its project dir.
 export CLAUDE_PROJECTS_DIR="$WORK/claude-projects"
-mkdir -p "$CLAUDE_PROJECTS_DIR/project"
-printf '{"sessionId":"dddd0002-1111-4111-8111-111111111111"}\n' > "$CLAUDE_PROJECTS_DIR/project/dddd0002-1111-4111-8111-111111111111.jsonl"
-printf '{"sessionId":"dddd0101-1111-4111-8111-111111111111"}\n' > "$CLAUDE_PROJECTS_DIR/project/dddd0101-1111-4111-8111-111111111111.jsonl"
+HPROJ=$(lib fleet_transcript_dir "$HOME")
+mkdir -p "$HPROJ"
+printf '{"sessionId":"dddd0002-1111-4111-8111-111111111111"}\n' > "$HPROJ/dddd0002-1111-4111-8111-111111111111.jsonl"
+printf '{"sessionId":"dddd0101-1111-4111-8111-111111111111"}\n' > "$HPROJ/dddd0101-1111-4111-8111-111111111111.jsonl"
 FLEET_TEST_SPAWNED="$WORK/spawned" FLEET_ID_SPAWN="$WORK/spawn.sh" fid continue "$F8" --seg 2 --exec
 st_count; tr '\n' ' ' < "$WORK/spawned" | grep -q -- "--resume dddd0002-1111-4111-8111-111111111111 .*--no-repo.*--prev $F8" \
   || st_miss "S8: --exec opens a window resuming segment 2 with --prev <ID>" "$(tr '\n' ' ' < "$WORK/spawned" 2>/dev/null)"
@@ -174,6 +181,46 @@ st_count; [ "$G8" != "$F8" ] && [ "$(closed "$F8")" = yes ] || st_miss "S8: the 
 st_count; [ "$(fid route "$F8")" = "$G8	successor" ] || st_miss "S8: what was meant for the closed ID goes to its successor" "$(fid route "$F8")"
 FLEET_TEST_SPAWNED="$WORK/spawned2" FLEET_ID_SPAWN="$WORK/spawn.sh" fid reopen "$G8" --exec 2>/dev/null; rc=$?
 st_count; [ "$rc" != 0 ] && [ ! -e "$WORK/spawned2" ] || st_miss "S8: reopen refuses an ID still open in a window"
+
+# ---- AGENT · a Claude session reopened on a FLEET_AGENT=codex fleet --------------
+# The reopen hands the spawner the session's OWN agent (it used to pass --agent
+# only for codex, so a Claude session came back as the fleet's codex and the strict
+# resume found no Codex rollout); --check reads the transcript the way the spawner
+# will, so a missing one is refused there with its reason, before any window.
+FA=$(mkfid)
+read -r WA PA <<EOF
+$(newwin "$FA")
+EOF
+fid open "$FA" --window "$WA" --socket "$L" --agent claude --title 'AGENT work' >/dev/null
+hook "$PA" startup aaaa0001-1111-4111-8111-111111111111
+lib fleet_win_retire "$WA" "$L" exited; tf kill-window -t "$WA"
+printf '{"sessionId":"aaaa0001-1111-4111-8111-111111111111"}\n' > "$HPROJ/aaaa0001-1111-4111-8111-111111111111.jsonl"
+out=$(FLEET_AGENT=codex fid reopen "$FA" --check 2>&1); rc=$?
+st_count; [ "$rc" = 0 ] && [ "$out" = ok ] || st_miss "AGENT: --check passes a Claude session whose transcript is there" "rc $rc · $out"
+FLEET_AGENT=codex FLEET_TEST_SPAWNED="$WORK/spawned-a" FLEET_ID_SPAWN="$WORK/spawn.sh" fid reopen "$FA" --exec
+st_count; tr '\n' ' ' < "$WORK/spawned-a" | grep -q -- "--resume aaaa0001-1111-4111-8111-111111111111 --strict-resume .*--agent claude .*--fid $FA" \
+  || st_miss "AGENT: --exec hands the spawner --agent claude on a codex fleet" "$(tr '\n' ' ' < "$WORK/spawned-a" 2>/dev/null)"
+# Readable history, but not where the spawner will look (another project dir): the
+# check refuses it with the reason, as the exec's strict resume would.
+mkdir -p "$CLAUDE_PROJECTS_DIR/elsewhere"
+mv "$HPROJ/aaaa0001-1111-4111-8111-111111111111.jsonl" "$CLAUDE_PROJECTS_DIR/elsewhere/"
+out=$(FLEET_AGENT=codex fid reopen "$FA" --check --rebuild 2>&1); rc=$?
+st_count; [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no claude transcript aaaa0001' \
+  || st_miss "AGENT: --check --rebuild refuses a transcript the spawner would not find, with its reason" "rc $rc · $out"
+FLEET_AGENT=codex FLEET_TEST_SPAWNED="$WORK/spawned-b" FLEET_ID_SPAWN="$WORK/spawn.sh" fid reopen "$FA" --exec 2>/dev/null; rc=$?
+st_count; [ "$rc" != 0 ] && [ ! -e "$WORK/spawned-b" ] || st_miss "AGENT: --exec with no transcript never reaches the spawner"
+# A Codex session is looked for in its Codex home, never in a same-named Claude file.
+FC=$(mkfid)
+read -r WC _ <<EOF
+$(newwin "$FC")
+EOF
+fid open "$FC" --window "$WC" --socket "$L" --agent codex >/dev/null
+fid native "$FC" --agent codex --native cccc0002-1111-4111-8111-111111111111 --source startup >/dev/null
+lib fleet_win_retire "$WC" "$L" exited; tf kill-window -t "$WC"
+printf '{"sessionId":"cccc0002-1111-4111-8111-111111111111"}\n' > "$HPROJ/cccc0002-1111-4111-8111-111111111111.jsonl"
+mkdir -p "$WORK/codex-empty"
+out=$(FLEET_CODEX_HOME="$WORK/codex-empty" CODEX_HOME="$WORK/codex-empty" fid reopen "$FC" --check 2>&1); rc=$?
+st_count; [ "$rc" = 1 ] || st_miss "AGENT: a Codex session with only a Claude-named file is not resumable" "rc $rc · $out"
 
 # ---- S9 · one native segment live in two windows ---------------------------------
 F9=$(mkfid); G9=$(mkfid)

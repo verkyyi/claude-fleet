@@ -298,6 +298,8 @@ case " $* " in
     echo ok; exit 0 ;;
   *" --exec "*)
     [ -n "${TMUX:-}" ] || { echo 'dash-raw-session: no target tmux session' >&2; exit 1; }
+    [ ! -f "$FLEET_CONF_DIR/reopen-exec-refuse" ] || {
+      echo 'dash-raw-session: exact codex transcript sid-1 unavailable; resume refused, no fresh conversation started' >&2; exit 5; }
     printf '@41\\t\\t1\\t/fixture/project-scratch-3\\tdone\\tclaude\\tc3\\t\\t\\t%s\\n' "$2" >> "$FLEET_CONF_DIR/workers.tsv"
     exit 0 ;;
 esac
@@ -1103,10 +1105,18 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual((refused["status"], refused["result"]["error"]["code"]), ("failed", "NOT_RESUMABLE"))
         self.assertEqual(refused["result"]["error"]["message"], "Native file not located")
         (self.node.conf / "reopen-refuse").unlink()
+        # the spawner's strict resume refusing before any window (no exact
+        # transcript where the session's agent keeps it): rc 5 through the exec —
+        # NOT_RESUMABLE with its line, never UNKNOWN_OUTCOME
+        (self.node.conf / "reopen-exec-refuse").touch()
+        strict = self.lifecycle("worker_resume", ident, idem="reopen-strict")
+        self.assertEqual((strict["status"], strict["result"]["error"]["code"]), ("failed", "NOT_RESUMABLE"), strict)
+        self.assertIn("resume refused, no fresh conversation started", strict["result"]["error"]["message"])
+        (self.node.conf / "reopen-exec-refuse").unlink()
         (self.node.conf / "blocked").touch()
         gated = self.lifecycle("worker_resume", ident, idem="reopen-gated")
         self.assertEqual((gated["status"], gated["result"]["error"]["code"]), ("failed", "RESOURCE_GATE"))
-        self.assertEqual(sum("--exec" in c for c in self.node.calls("reopen")), 1)
+        self.assertEqual(sum("--exec" in c for c in self.node.calls("reopen")), 2)
 
     def test_stop_lost_ack_reconciles_without_a_second_exit(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"))

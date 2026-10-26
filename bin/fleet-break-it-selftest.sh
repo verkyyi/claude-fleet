@@ -8176,6 +8176,22 @@ drill_view_far_restore() {
   SECS=$(since "$t0")
 }
 
+drill_reopen_claude_on_codex_fleet() {
+  # FLEET_AGENT=codex 的 fleet 上恢复一个已收起的 Claude 会话：reopen 只在 codex 时
+  # 传 --agent，Claude 会话按 fleet 默认的 codex 启动、在 Codex home 里找转录，
+  # 严格恢复拒绝；--check 不看转录照样放行；节点把开窗前的拒绝报成 UNKNOWN_OUTCOME
+  local t0 out; t0=$(now); CAP=30
+  suite_holds fleet-id-results-selftest.sh 'AGENT: --exec hands the spawner --agent claude on a codex fleet' \
+    'AGENT: --check --rebuild refuses a transcript the spawner would not find' || return 1
+  suite_holds dash-raw-session-selftest.sh 'R2 a Claude session on a codex fleet resumes as Claude; a strict refusal is rc 5' || return 1
+  out=$(python3 "$BIN/fleet-hub-selftest.py" HubTests.test_resume_by_identity_reopens_behind_the_gates 2>&1) \
+    || { WHY="node: $(printf '%s\n' "$out" | tail -12)"; return 1; }
+  grep -qF 'reopen-exec-refuse' "$BIN/fleet-hub-selftest.py" \
+    || { WHY="fleet-hub-selftest.py no longer drives the spawner's strict refusal"; return 1; }
+  WHAT='Claude 会话按自己的 agent 恢复（--agent claude）；--check 按启动器的方式查转录并说原因；开窗前的拒绝 = NOT_RESUMABLE'
+  SECS=$(since "$t0")
+}
+
 
 
 drill_task_result_overrides_native() {
