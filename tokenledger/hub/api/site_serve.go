@@ -195,7 +195,9 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang str
 	if s.SiteFS == nil {
 		return false
 	}
-	if s.portalHost(r) && strings.HasPrefix(name, siteSandboxDir) {
+	// Only the two front pages have portal-specific builds. Shared pages such
+	// as architecture keep their edition paths on the portal host too.
+	if s.portalHost(r) && (name == siteSandboxDir+"index.html" || name == siteSandboxDir+"zh/index.html") {
 		name = "portal/" + name
 	}
 	b, err := s.siteRead(name)
