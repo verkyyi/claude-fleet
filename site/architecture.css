@@ -1,0 +1,45 @@
+/* Layout only: all colors and fonts belong to extras/fleet-theme. */
+main{max-width:1240px}
+main h1{font-size:42px}
+main h2{font-size:25px}
+main h3{font:600 18px/1.4 var(--fleet-font-display);margin:0 0 12px}
+main li{overflow-wrap:anywhere}
+.skip{position:absolute;top:-80px;left:16px;padding:12px;background:var(--fleet-bg);z-index:40}
+.skip:focus{top:8px}
+.blueprint{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:20px;align-items:start;margin-top:32px}
+.blueprint h2{margin:0 0 16px}
+.layer{display:grid;grid-template-columns:160px minmax(0,1fr);border:1px solid var(--fleet-line);border-radius:14px;margin-bottom:16px;overflow:hidden;background:var(--fleet-bg-2)}
+.layer h3{padding:18px;margin:0;color:var(--fleet-sand)}
+.layer ul{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0;padding:14px;list-style:none;background:var(--fleet-surface)}
+.layer li,.side li{margin:0;border-top:3px solid var(--fleet-clay);padding:10px 0;font-size:14px;line-height:1.65}
+.layer li strong,.side li strong{display:block;margin-bottom:4px;font-size:15px}
+.layer:nth-of-type(2) li{border-color:var(--fleet-blue)}
+.layer:nth-of-type(3) li{border-color:var(--fleet-sand)}
+.layer:nth-of-type(4) li{border-color:var(--fleet-ok)}
+.connector{text-align:center;font-size:13px;padding:0 12px 8px}
+.side{background:var(--fleet-bg-2);border:1px solid var(--fleet-line);border-radius:14px;padding:18px;margin-bottom:16px}
+.side h2{font-size:19px}
+.side ul{padding:0;list-style:none;margin:0}
+.side li{border-color:var(--fleet-muted)}
+.flow-grid,.principle-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.flow,.principle{padding:22px;border:1px solid var(--fleet-line);border-radius:14px;background:var(--fleet-surface)}
+.flow ol{padding-left:22px;margin-bottom:0}
+.principle p{margin:0}
+.badge{display:inline-block;border:1px solid currentColor;border-radius:999px;padding:2px 8px;font:500 12px/1.5 var(--fleet-font-ui);color:var(--fleet-warn);margin:0 0 12px}
+.badge.live{color:var(--fleet-ok)}
+.boundaries,.glossary{max-width:900px}
+.version{margin-top:40px;border-top:1px solid var(--fleet-line);padding-top:16px;color:var(--fleet-muted)}
+@media(max-width:900px){.blueprint{grid-template-columns:1fr}.blueprint aside{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.layer{grid-template-columns:140px minmax(0,1fr)}}
+@media(max-width:640px){main h1{font-size:30px}.layer,.layer ul,.blueprint aside,.flow-grid,.principle-grid{grid-template-columns:1fr}.layer h3{padding:14px}.side{margin:0}.flow,.principle{padding:18px}.nav-r{gap:12px}.nav .brand img{max-width:130px}}
+@media print{
+  :root{color-scheme:light}
+  body{background:var(--fleet-ink);color:var(--fleet-bg);font-size:11pt}
+  .nav,.skip,footer{display:none}
+  main{max-width:none;padding:0}
+  main p,main li,main strong,main h3,.layer h3,.version,main a{color:var(--fleet-bg)}
+  .blueprint{display:block}.blueprint aside,.flow-grid,.principle-grid{display:block}
+  .layer,.layer ul,.side,.flow,.principle{background:transparent;border-color:var(--fleet-muted)}
+  .layer,.side,.flow,.principle{break-inside:avoid;margin-bottom:12px}
+  .badge,.badge.live{color:var(--fleet-bg)}
+  h2,h3{break-after:avoid}
+}

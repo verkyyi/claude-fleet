@@ -22,3 +22,5 @@ Having trouble: [FAQ](faq.md) · [Troubleshooting](troubleshooting.md) · [When 
 ## Self-host and develop
 
 Want to run the whole thing on your own machines (entry, machines and subscriptions all yours)? This road is for self-hosting teams and developers: [Self-host · Quickstart](self-host/quickstart.md) · [Install and deploy](self-host/install.md) · [Security and isolation](security.md)
+
+[Architecture blueprint](architecture.md): layers, request flows and trust boundaries.

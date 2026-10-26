@@ -129,7 +129,7 @@ for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，立即
         u = u.split('?')[0].split('#')[0]
         if u in ('/', '/en/', '/app', '/app/try', '/apply', '/status') or u.startswith(('/docs/', '/en/docs/')):
             continue
-        if u in ('/terms', '/privacy', '/en/terms', '/en/privacy'):   # the legal pages (T883)
+        if u in ('/terms', '/privacy', '/en/terms', '/en/privacy', '/architecture', '/en/architecture'):   # the legal pages (T883)
             if not os.path.isfile(os.path.join(OUT, u.lstrip('/'), 'index.html')):
                 bad.append('H %s: %s is not in the build' % (rel, u))
             continue
@@ -252,8 +252,8 @@ for f in sys.argv[1:]:
         bad.append('%s: the replay address bar is not __HOST__/app' % f)
     if 'href="/status"' not in foot:
         bad.append('%s: footer has no public status link' % f)
-    if len(outside) != 5:
-        bad.append('%s: %d entries outside the scan card, not 5 (文档 · 登录 · language · GitHub · status): %s'
+    if len(outside) != 6:
+        bad.append('%s: %d entries outside the scan card, not 6 (文档 · 登录 · language · GitHub · architecture · status): %s'
                    % (f, len(outside), outside))
     if body.count('data-set=') != 1 or 'data-set=' not in foot or 'data-set=' in nav:
         bad.append('%s: the language switch is not once, in the footer' % f)
@@ -550,7 +550,7 @@ for lang, rel, path, other in pages:
     for h in re.findall(r'(?:href|src)="(/[^"#]*)"', p):
         h = h.split('?')[0]
         served = (h in ('/', '/zh/', '/app', '/apply', '/status', '/auth/github/start', '/favicon.ico', '/favicon.svg', '/apple-touch-icon.png',
-                        '/terms', '/privacy', '/en/terms', '/en/privacy', '/docs/', '/en/docs/')
+                        '/terms', '/privacy', '/en/terms', '/en/privacy', '/docs/', '/en/docs/', '/architecture', '/zh/architecture')
                   or (h.startswith('/site/') and os.path.isfile(os.path.join(OUT, h[len('/site/'):]))))
         if not served:
             bad.append('X %s: links %s, which the hub does not answer' % (rel, h))
@@ -588,10 +588,35 @@ out="$("$BUILD" --site "$T/xsite2" --out "$T/x2" --drill "$T/none.json" --now "$
 if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q 'sandbox/strings.zh.json is missing'; then st_ok_all "X a sandbox language missing fails the build"
 else bad "X the sandbox build went on without its 中文 strings (rc $rc): $out"; fi
 
+# Architecture uses the same Markdown as docs, with edition-specific navigation.
+python3 - "$T/a" <<'PY' || fail=1
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+for rel, lang, canonical, other, docs in (
+    ('architecture', 'zh-CN', '/architecture', '/en/architecture', '/docs/'),
+    ('en/architecture', 'en', '/en/architecture', '/architecture', '/en/docs/'),
+    ('sandbox/architecture', 'en', '/architecture', '/zh/architecture', '/en/docs/'),
+    ('sandbox/zh/architecture', 'zh-CN', '/zh/architecture', '/architecture', '/docs/'),
+):
+    page = (root / rel / 'index.html').read_text()
+    assert '<html lang="%s">' % lang in page, rel
+    assert 'rel="canonical" href="__ORIGIN__%s"' % canonical in page, rel
+    assert 'href="%s"' % other in page, rel
+    assert 'href="%sarchitecture"' % docs in page, rel
+    assert page.count('class="layer"') == 4, rel
+    assert page.count('class="flow"') == 4, rel
+    assert page.count('class="badge live"') == 2, rel
+    assert page.count('class="badge progress"') == 4, rel
+    assert '@media print' in page and '@media(max-width:640px)' in page, rel
+    assert not re.search(r'\{\{|docs/dev/|href="[^" ]+\.md"', page), rel
+    assert '--fleet-bg:' in page and 'id="content"' in page, rel
+print('ok   architecture: four layers, four flows, honest statuses, edition navigation, text alternative and print layout')
+PY
+
 # I — no internal names in what the hub serves (the rule table, its #@keep words kept)
 if [ -f "$ROOT/conf/oss-scan.rules" ]; then
   hits=$(python3 - "$ROOT/conf/oss-scan.rules" "$T/a/index.html" "$T/a/en/index.html" "$T/d/index.html" \
-    "$T/a/sandbox/index.html" "$T/a/sandbox/zh/index.html" "$T/a/terms/index.html" "$T/a/privacy/index.html" "$T/a/en/terms/index.html" "$T/a/en/privacy/index.html" \
+    "$T/a/sandbox/index.html" "$T/a/sandbox/zh/index.html" "$T/a/architecture/index.html" "$T/a/en/architecture/index.html" "$T/a/sandbox/architecture/index.html" "$T/a/sandbox/zh/architecture/index.html" "$T/a/terms/index.html" "$T/a/privacy/index.html" "$T/a/en/terms/index.html" "$T/a/en/privacy/index.html" \
     "$T/a/robots.txt" "$T/a/sitemap.xml" "$T/a/llms.txt" "$T/a/llms-zh.txt" "$T/a/llms-full.txt" <<'PY2'
 import re, sys
 rules, keep = [], []

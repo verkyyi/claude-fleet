@@ -136,5 +136,7 @@
   "privacy_path": "/privacy",
   "legal_home": "返回首页",
   "terms_desc": "{brand} 用户协议：账号、可以怎样使用、你的内容、责任与适用法律。",
-  "privacy_desc": "{brand} 隐私政策：收集什么、存多久（30 天）、谁能看、怎样删除。"
+  "privacy_desc": "{brand} 隐私政策：收集什么、存多久（30 天）、谁能看、怎样删除。",
+  "architecture": "架构蓝图",
+  "architecture_path": "/architecture"
 }

@@ -89,6 +89,8 @@ For people who use fleet rather than build it, the guides are in
 
 ## Architecture
 
+[Public architecture blueprint](https://tokenman.io/architecture) · [中文版](https://tokenman.io/zh/architecture) · [Text version](docs/public/en/architecture.md)
+
 ```
 Claude Code hooks (PreToolUse/PostToolUse/Stop/Notification)
       │  instant, semantic-blind

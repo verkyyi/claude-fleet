@@ -60,5 +60,7 @@
   "terms_path": "/en/terms",
   "service_health": "Service health",
   "privacy_path": "/en/privacy",
-  "disc": "© 2026 {brand}"
+  "disc": "© 2026 {brand}",
+  "architecture": "Architecture",
+  "architecture_path": "/architecture"
 }

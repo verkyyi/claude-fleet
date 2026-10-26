@@ -136,5 +136,7 @@
   "privacy_path": "/en/privacy",
   "legal_home": "Home",
   "terms_desc": "{brand} Terms of Service: your account, how you may use it, your content, liability and governing law.",
-  "privacy_desc": "{brand} Privacy Policy: what we collect, how long we keep it (30 days), who can see it and how to delete it."
+  "privacy_desc": "{brand} Privacy Policy: what we collect, how long we keep it (30 days), who can see it and how to delete it.",
+  "architecture": "Architecture",
+  "architecture_path": "/en/architecture"
 }

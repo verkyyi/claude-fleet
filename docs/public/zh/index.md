@@ -22,3 +22,5 @@
 ## 自托管与开发
 
 想在自己的机器上部署一整套（入口、机器、订阅都自己管）？这一路给自托管团队和开发者：[自托管 · 快速开始](self-host/quickstart.md) · [安装与部署](self-host/install.md) · [安全与隔离](security.md)
+
+[架构蓝图](architecture.md)：四层职责、请求流程与信任边界。

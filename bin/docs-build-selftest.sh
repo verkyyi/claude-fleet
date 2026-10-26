@@ -77,7 +77,7 @@ for (lang, p), state in pages.items():
     if not re.search(r'<title>[^<]+</title>', h) or not re.search(r'<h1[^>]*>[^<]+</h1>', h):
         bad.append('B %s/%s has no title' % (lang, p))
     # C
-    for href in re.findall(r'href="([^"]+)"', h):
+    for href in re.findall(r'(?:href|src)="([^"]+)"', h):
         if re.match(r'^[a-z]+:', href) or href.startswith('#'):
             continue
         # the tab icon is the hub's, at its root (issue #3946), not a docs page
@@ -106,6 +106,20 @@ for b in bad:
 print('ok   B-F %d pages read (%d zh, %d en pending)' % (len(pages), len(zh), sum(s == 'pending' for s in pages.values())))
 sys.exit(1 if bad else 0)
 PY
+
+# The blueprint image is a real built asset, with a screen-reader description.
+python3 - "$T/out" <<'PYTEST' || fail=1
+from pathlib import Path
+import sys, xml.etree.ElementTree as ET
+for lang in ('en', 'zh'):
+    root = Path(sys.argv[1]) / lang
+    page = (root / 'architecture.html').read_text()
+    assert '<img src="assets/architecture.svg" alt="' in page
+    svg = ET.parse(root / 'assets/architecture.svg').getroot()
+    ns = '{http://www.w3.org/2000/svg}'
+    assert svg.find(ns + 'title').text and svg.find(ns + 'desc').text
+print('ok   architecture: Markdown image renders; SVG is packaged with title and desc')
+PYTEST
 
 # I — the brand and the FAQ's one home (EPIC SGS6 C4)
 python3 - "$T/out" "$ROOT" <<'PY' || fail=1
