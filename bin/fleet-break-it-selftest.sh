@@ -6595,7 +6595,7 @@ drill_park_gate_killed() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-session-gate-selftest.py" Q 2>&1) || { WHY="$out"; return 1; }
-  grep -q 'timeout=PARK_TIMEOUT' "$BIN/fleet-cleanup-idle.py" \
+  grep -q 'PARK_TIMEOUT if "park" in args' "$BIN/fleet-cleanup-idle.py" \
     || { WHY="fleet-cleanup-idle.py kills the park gate before its own budget again"; return 1; }
   SECS=$(since "$t0")
   WHAT='停放门半路死掉留下的 @parked：智能体之后又报过状态、没被接住 ⇒ heal 撤掉；接住了或还没说话 ⇒ 保留'
