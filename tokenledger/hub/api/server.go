@@ -118,8 +118,11 @@ type Server struct {
 	// hosts a trusted edge forwards in X-Forwarded-Host ("*.<suffix>" allowed);
 	// empty takes no forwarded host.
 	ForwardedHosts []string
-	// PublicHosts is CCQUOTA_PUBLIC_HOSTS (task PNWW, edge.go): a host's own
-	// browser-facing origin for hubURL; any other host keeps FleetPublicURL.
+	// Optional human portal; machine addresses stay separate.
+	PortalURL       string   // CCQUOTA_PORTAL: optional canonical human HTTPS origin
+	PortalAliases   []string // exact legacy browser hosts; never preview wildcards
+	WeChatPublicURL string   // browser origin allowed inside WeChat
+	// PublicHosts is CCQUOTA_PUBLIC_HOSTS: per-host browser origin.
 	PublicHosts map[string]string
 	// SiteFS is the built public site (web/site, claude-fleet#3584): / and
 	// /en/, their assets under /site/; nil = the landing page.
@@ -534,7 +537,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.forwardedTrust(s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))))
+	return s.forwardedTrust(s.portal(s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes())))))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is

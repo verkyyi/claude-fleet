@@ -416,6 +416,9 @@ func (s *Server) certMachines(hosts map[string]bool) []CertMachine {
 // CCQUOTA_PUBLIC_HOSTS names for the host the request reached (task PNWW),
 // else nodeHubURL.
 func (s *Server) hubURL(r *http.Request) string {
+	if s.portalHost(r) {
+		return s.PortalURL
+	}
 	if o := s.publicHostURL(r); o != "" {
 		return o
 	}

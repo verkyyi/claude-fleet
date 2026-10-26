@@ -558,6 +558,19 @@ if not bad:
     print('ok   X sandbox edition: / (en) and /zh/ built in the theme, GitHub sign-in + Request access, no WeChat / QR / trial, nothing from elsewhere')
 sys.exit(1 if bad else 0)
 PY
+# Unified portal is a separate opt-in output; off keeps the sandbox pages above.
+python3 - "$T/a" <<'PYPORTAL' || fail=1
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+for suffix in ('sandbox/index.html', 'sandbox/zh/index.html'):
+    page = (root / 'portal' / suffix).read_text()
+    assert 'href="/app/signin"' in page
+    assert 'href="/apply"' in page and 'href="/app/try"' in page
+    assert 'href="/?lang=' in page
+    assert 'href="/app/try"' not in (root / 'apply/portal' / suffix).read_text()
+print('ok   portal: shared login, apply/trial and remembered language; trial-off omits trial')
+PYPORTAL
 mkdir -p "${T:?}/xsite" && cp -RL "$ROOT/site/." "${T:?}/xsite/"
 python3 - "$T/xsite/sandbox/strings.en.json" <<'PY'
 import json, sys

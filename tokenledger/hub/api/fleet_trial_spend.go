@@ -521,7 +521,7 @@ func spendWho(p TrialSpendPerson, en bool) string {
 
 // trialSpendLink is the console's 试用 view, open on pid when one is named.
 func (s *Server) trialSpendLink(day, pid string) string {
-	base := strings.TrimRight(s.FleetPublicURL, "/")
+	base := s.humanURL(nil)
 	if base == "" {
 		return ""
 	}

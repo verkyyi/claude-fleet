@@ -2727,6 +2727,16 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 separated: that host's own front page; any other
 #                                 host keeps CCQUOTA_SITE's; set = the site is on
 #                                 (task PNWW, api/edge.go) · 可选 (unset = CCQUOTA_SITE alone)
+#   CCQUOTA_PORTAL                canonical human HTTPS origin (a bare host means https);
+#                                 selects the sandbox positioning with all login methods,
+#                                 Accept-Language + remembered language · unset = unchanged
+#   CCQUOTA_PORTAL_ALIASES        exact old browser hosts, space/comma separated; GET/HEAD
+#                                 pages 301 to PORTAL with path/query intact. WeChat UA,
+#                                 auth callbacks, APIs, installers and upgrades stay local.
+#                                 No wildcard; preview hosts are never aliases · optional
+#   CCQUOTA_WECHAT_PUBLIC_URL     HTTPS origin for WeChat template/customer-service links
+#                                 and mobile sign-in; its relay callback stays registered.
+#                                 Only active with PORTAL; machine addresses never change.
 #   CCQUOTA_PUBLIC_HOSTS          host=origin pairs, space-separated: the browser-facing
 #                                 address (sign-in callback, page links) of a request to
 #                                 that host; any other host, and what a machine is told

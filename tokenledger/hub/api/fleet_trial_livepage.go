@@ -382,6 +382,12 @@ func (s *Server) handleNodeLivePageToken(w http.ResponseWriter, r *http.Request)
 	if o := livePageEntryOrigin(s.FleetPublicURL); o != "" {
 		in.EmbedOrigins = []string{o}
 	}
+	if s.PortalURL != "" {
+		in.EmbedOrigins = []string{s.PortalURL}
+		if s.WeChatPublicURL != "" {
+			in.EmbedOrigins = append(in.EmbedOrigins, s.WeChatPublicURL)
+		}
+	}
 	tok, created, err := s.LivePage.Provision(ctx, in)
 	if err != nil {
 		why := clipRunes(err.Error(), 120)
