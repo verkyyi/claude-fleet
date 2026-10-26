@@ -127,7 +127,7 @@ for lang, rel, url, tryw in (('zh-CN', 'index.html', '/', '微信扫码，立即
     # H
     for u in re.findall(r'(?:href|src)="(/[^"]*)"', p):
         u = u.split('?')[0].split('#')[0]
-        if u in ('/', '/en/', '/app', '/app/try', '/apply') or u.startswith(('/docs/', '/en/docs/')):
+        if u in ('/', '/en/', '/app', '/app/try', '/apply', '/status') or u.startswith(('/docs/', '/en/docs/')):
             continue
         if u in ('/terms', '/privacy', '/en/terms', '/en/privacy', '/architecture', '/en/architecture'):   # the legal pages (T883)
             if not os.path.isfile(os.path.join(OUT, u.lstrip('/'), 'index.html')):
@@ -210,7 +210,7 @@ PY
 # S — the hero speaks of a service (#3940): no GitHub / 开源 / open source / MIT in
 #     the header, the first section or the meta description; the app is a
 #     BusinessApplication. The page keeps only what it must (T872): the nav is
-#     文档 · 登录, the footer GitHub · the language · © (+ the legal line, leg L; T924 moved the
+#     文档 · 登录, the footer GitHub · status · the language · © (+ the legal line, leg L; T924 moved the
 #     switch down) — one language switch, one
 #     docs link, the GitHub link only in the footer, no 能交给它 / 价格 / FAQ /
 #     安全 / trademark line, and the share words name no price or trial length.
@@ -250,8 +250,10 @@ for f in sys.argv[1:]:
         bad.append('%s: the replay still shows %s' % (f, w))
     if '__HOST__/app</span>' not in s:
         bad.append('%s: the replay address bar is not __HOST__/app' % f)
-    if len(outside) != 5:
-        bad.append('%s: %d entries outside the scan card, not 5 (文档 · 登录 · language · GitHub · architecture): %s'
+    if 'href="/status"' not in foot:
+        bad.append('%s: footer has no public status link' % f)
+    if len(outside) != 6:
+        bad.append('%s: %d entries outside the scan card, not 6 (文档 · 登录 · language · GitHub · architecture · status): %s'
                    % (f, len(outside), outside))
     if body.count('data-set=') != 1 or 'data-set=' not in foot or 'data-set=' in nav:
         bad.append('%s: the language switch is not once, in the footer' % f)
@@ -268,7 +270,7 @@ for f in sys.argv[1:]:
 print('; '.join(bad))
 sys.exit(1 if bad else 0)
 PY
-)"; then st_ok_all "S the hero is a service; the page keeps only 文档 · 登录 · GitHub · the footer's one language switch"
+)"; then st_ok_all "S the hero is a service; the page keeps 文档 · 登录 · GitHub · status · the footer's one language switch"
   else bad "S $out"; fi
 else bad "S no built page from D"; fi
 
@@ -496,7 +498,7 @@ for l, home in (('zh', 'index.html'), ('en', 'en/index.html')):
             bad.append('L %s: still marked as a draft' % path)
         for u in re.findall(r'href="(/[^"]*)"', q):
             u = u.split('#')[0]
-            if u in ('/', '/en/') or u.startswith(('/favicon', '/apple-touch')):
+            if u in ('/', '/en/', '/status') or u.startswith(('/favicon', '/apple-touch')):
                 continue
             if not os.path.isfile(os.path.join(OUT, u.lstrip('/'), 'index.html')):
                 bad.append('L %s: links %s, which is not built' % (path, u))
@@ -547,7 +549,7 @@ for lang, rel, path, other in pages:
         bad.append('X %s: no switch to the other language (%s)' % (rel, other))
     for h in re.findall(r'(?:href|src)="(/[^"#]*)"', p):
         h = h.split('?')[0]
-        served = (h in ('/', '/zh/', '/app', '/apply', '/auth/github/start', '/favicon.ico', '/favicon.svg', '/apple-touch-icon.png',
+        served = (h in ('/', '/zh/', '/app', '/apply', '/status', '/auth/github/start', '/favicon.ico', '/favicon.svg', '/apple-touch-icon.png',
                         '/terms', '/privacy', '/en/terms', '/en/privacy', '/docs/', '/en/docs/', '/architecture', '/zh/architecture')
                   or (h.startswith('/site/') and os.path.isfile(os.path.join(OUT, h[len('/site/'):]))))
         if not served:
@@ -558,6 +560,19 @@ if not bad:
     print('ok   X sandbox edition: / (en) and /zh/ built in the theme, GitHub sign-in + Request access, no WeChat / QR / trial, nothing from elsewhere')
 sys.exit(1 if bad else 0)
 PY
+# Unified portal is a separate opt-in output; off keeps the sandbox pages above.
+python3 - "$T/a" <<'PYPORTAL' || fail=1
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+for suffix in ('sandbox/index.html', 'sandbox/zh/index.html'):
+    page = (root / 'portal' / suffix).read_text()
+    assert 'href="/app/signin"' in page
+    assert 'href="/apply"' in page and 'href="/app/try"' in page
+    assert 'href="/?lang=' in page
+    assert 'href="/app/try"' not in (root / 'apply/portal' / suffix).read_text()
+print('ok   portal: shared login, apply/trial and remembered language; trial-off omits trial')
+PYPORTAL
 mkdir -p "${T:?}/xsite" && cp -RL "$ROOT/site/." "${T:?}/xsite/"
 python3 - "$T/xsite/sandbox/strings.en.json" <<'PY'
 import json, sys

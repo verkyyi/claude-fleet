@@ -62,6 +62,9 @@ func (s *Server) siteSandbox(r *http.Request) bool { return s.siteEditionFor(r) 
 // siteFront is the build's front page for "/" and its language.
 func (s *Server) siteFront(r *http.Request) (name, lang string) {
 	if s.siteSandbox(r) {
+		if s.portalHost(r) && localeOfPage(r) == "zh-CN" {
+			return siteSandboxDir + "zh/index.html", "zh-CN"
+		}
 		return siteSandboxDir + "index.html", "en"
 	}
 	return "index.html", "zh-CN"
@@ -138,6 +141,9 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 	case s.siteSandbox(r) && p == "/zh":
 		http.Redirect(w, r, withQuery("/zh/", r), http.StatusMovedPermanently)
 	case s.siteSandbox(r) && p == "/zh/":
+		if s.portalHost(r) {
+			setLangCookie(w, r, "zh-CN")
+		}
 		if !s.sitePage(w, r, siteSandboxDir+"zh/index.html", "zh-CN") {
 			http.NotFound(w, r)
 		}
@@ -189,6 +195,9 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang str
 	if s.SiteFS == nil {
 		return false
 	}
+	if s.portalHost(r) && strings.HasPrefix(name, siteSandboxDir) {
+		name = "portal/" + name
+	}
 	b, err := s.siteRead(name)
 	if err != nil {
 		return false
@@ -198,6 +207,10 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang str
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Language", lang)
 	h.Set("Cache-Control", "public, max-age=300")
+	if s.portalHost(r) {
+		h.Set("Cache-Control", "private, no-cache")
+		h.Add("Vary", "Accept-Language, Cookie")
+	}
 	h.Set("Content-Security-Policy", siteCSP)
 	h.Set("X-Content-Type-Options", "nosniff")
 	writeSiteBody(w, r, b, true)
@@ -228,7 +241,7 @@ func (s *Server) siteCrawlFile(w http.ResponseWriter, r *http.Request, name stri
 // /site/ is 404.
 func (s *Server) siteAsset(w http.ResponseWriter, r *http.Request, name string) {
 	ext := path.Ext(name)
-	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(name, siteApplyDir) || strings.HasPrefix(name, siteSandboxDir) || strings.HasPrefix(path.Base(name), ".") {
+	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(name, siteApplyDir) || strings.HasPrefix(name, siteSandboxDir) || strings.HasPrefix(name, "portal/") || strings.HasPrefix(path.Base(name), ".") {
 		http.NotFound(w, r)
 		return
 	}

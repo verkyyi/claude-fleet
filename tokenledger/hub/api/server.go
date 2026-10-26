@@ -23,13 +23,15 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/reportcache"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // Server is the hub's HTTP surface.
 type Server struct {
-	Store   *store.Store
-	Pricing *Pricing
+	idleReports reportcache.Cache
+	Store       *store.Store
+	Pricing     *Pricing
 
 	// OAuthExchange posts a member's own sign-in's code exchange
 	// (claude-fleet#4035, me_subs.go): direct, or through an admin node's
@@ -118,8 +120,11 @@ type Server struct {
 	// hosts a trusted edge forwards in X-Forwarded-Host ("*.<suffix>" allowed);
 	// empty takes no forwarded host.
 	ForwardedHosts []string
-	// PublicHosts is CCQUOTA_PUBLIC_HOSTS (task PNWW, edge.go): a host's own
-	// browser-facing origin for hubURL; any other host keeps FleetPublicURL.
+	// Optional human portal; machine addresses stay separate.
+	PortalURL       string   // CCQUOTA_PORTAL: optional canonical human HTTPS origin
+	PortalAliases   []string // exact legacy browser hosts; never preview wildcards
+	WeChatPublicURL string   // browser origin allowed inside WeChat
+	// PublicHosts is CCQUOTA_PUBLIC_HOSTS: per-host browser origin.
 	PublicHosts map[string]string
 	// SiteFS is the built public site (web/site, claude-fleet#3584): / and
 	// /en/, their assets under /site/; nil = the landing page.
@@ -524,7 +529,8 @@ type Server struct {
 
 	// httpStats counts this replica's requests and 5xx per minute, for the
 	// post-release watch (fleet_release_canary.go, claude-fleet#4915).
-	httpStats httpStats
+	httpStats    httpStats
+	publicHealth publicHealthCache
 	// logQuiet keeps a repeating line to once a window per signature (T906).
 	logQuiet logQuiet
 	// underivedEPs: endpoints this replica raised fleet_underived for (T906).
@@ -534,7 +540,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.forwardedTrust(s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))))
+	return s.forwardedTrust(s.portal(s.logRequests(s.previewHosts(s.publicHealthRoutes(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is
@@ -1073,6 +1079,8 @@ func (s *Server) routes() *routeMux {
 	// readable by anyone while hub.public_meter is on, so example.com's
 	// homepage takes it straight from here instead of through a token.
 	mux.HandleFunc("/meter.json", s.handleMeter)
+	// Also intercepted before auth/trial gates: public snapshots never inspect identity.
+	mux.Handle(PublicHealthPath, s.publicHealthRoutes(http.NotFoundHandler()))
 
 	// The tab icon (claude-fleet#3946): the site's own logo, copied into
 	// web/dist, for everyone -- the sign-in page and a self-hoster's hub with

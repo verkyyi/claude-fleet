@@ -150,7 +150,8 @@ never something that can lease the subscription pool (EPIC route ④).
 PER-PERSON BUDGET (issue #1977, EPIC #1967 R2): every 2xx answer sent with a
 credential of this login (direct / relay) is metered off its own `usage`
 (input + cache writes + output — cache reads are left out) and reported to the
-hub every FLEET_CRED_BUDGET_SECS (15) as POST /v1/node/usage with the node
+hub every FLEET_CRED_BUDGET_SECS (15) when usage exists (idle standing refresh:
+once per 60s), as POST /v1/node/usage with the node
 token — one entry per (provider, session, account, model), the session named by
 the worker_id its launcher minted it for (`mint --worker`, kept in
 workers.json), with input / cache writes / cache reads / output apart and the
@@ -987,7 +988,7 @@ class Budget:
             log(ev="budget_err", why=why, pending=sum(v[0] for v in self.pending.values()))
 
     def flush(self, log=None):
-        """POST the pending usage (none = just ask); keep it on failure."""
+        """POST new usage; idle budget refresh once a minute. Keep failures pending."""
         if env("FLEET_CRED_BUDGET", "1") == "0":
             return None
         ne = node_env(getattr(self.cfg, "node_env", None))
@@ -1001,6 +1002,11 @@ class Budget:
             return None
         with self.lock:
             sent = {k: list(v) for k, v in self.pending.items()}
+            # Four normal budget ticks, capped at a minute; an explicitly
+            # shorter interval retains its faster policy/reset feedback.
+            idle_every = min(60, 4 * max(1, int(env("FLEET_CRED_BUDGET_SECS", "15"))))
+            if not sent and not self.err and self.ts and time.time() - self.ts < idle_every:
+                return self.state
         body = json.dumps({"usage": [self.entry(k, v) for k, v in sorted(sent.items())]}).encode()
         try:
             req = urllib.request.Request(hub_dial(hub) + "/v1/node/usage", data=body, method="POST",
@@ -1776,7 +1782,11 @@ class Tenant:
         return u is None or u < self.cfg.pick_ceiling
 
     def capacity_metadata(self):
-        return self.capacity_cache if time.time() < self.capacity_until else {}
+        # Demand-driven: idle logins generate no capacity traffic. The same
+        # short expiry and failure backoff still bound all positive evidence.
+        if time.time() >= self.capacity_until:
+            return self.refresh_capacity_metadata()
+        return self.capacity_cache
 
     def refresh_capacity_metadata(self):
         """Node-authenticated metadata only. 30s cache, 2s timeout; never lease.
@@ -1806,7 +1816,7 @@ class Tenant:
                     raise ValueError("invalid metadata")
                 self.capacity_cache, self.capacity_until = data, min(until, now + 30)
                 self.capacity_failures = 0
-                # Healthy refresh precedes TTL by >=10s (tick polls every5s).
+                # Throttle explicit refresh callers; demand reads also honor the full TTL.
                 self.capacity_retry = now + min(20, max(1, (until-now)/2))
             except (OSError, ValueError, TypeError, AttributeError):
                 # Do not log exceptions containing a URL, response or credential.
@@ -4607,13 +4617,6 @@ def serve(a):
             os.chmod(p, 0o644)
 
     parent = os.getppid()
-
-    def capacity_tick(t):
-        while not DRAIN["on"]:
-            t.refresh_capacity_metadata()
-            time.sleep(5)
-    for tenant in tenants:
-        threading.Thread(target=capacity_tick, args=(tenant,), daemon=True).start()
 
     def tick():
         every = max(5, int(env("FLEET_CRED_PROXY_TRUST_SECS", "300")))

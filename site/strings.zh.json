@@ -132,6 +132,7 @@
   "terms": "用户协议",
   "privacy": "隐私政策",
   "terms_path": "/terms",
+  "service_health": "服务健康",
   "privacy_path": "/privacy",
   "legal_home": "返回首页",
   "terms_desc": "{brand} 用户协议：账号、可以怎样使用、你的内容、责任与适用法律。",

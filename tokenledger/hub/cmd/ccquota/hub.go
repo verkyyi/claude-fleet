@@ -249,6 +249,9 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.FleetRoutes = routes
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
+	if err := srv.ConfigurePortal(os.Getenv("CCQUOTA_PORTAL"), os.Getenv("CCQUOTA_PORTAL_ALIASES"), os.Getenv("CCQUOTA_WECHAT_PUBLIC_URL")); err != nil {
+		return err
+	}
 	// A host's own browser-facing address (task PNWW, api/edge.go).
 	if srv.PublicHosts, err = api.ParseHostMap(os.Getenv("CCQUOTA_PUBLIC_HOSTS"), api.PublicHostOrigin); err != nil {
 		return fmt.Errorf("CCQUOTA_PUBLIC_HOSTS: %w", err)

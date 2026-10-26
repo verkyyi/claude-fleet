@@ -54,7 +54,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.ingest(ep, &batch)
+	resp, err := s.idleReports.Do(ep.ID, &batch, time.Now(), func() (*model.IngestResponse, error) { return s.ingest(ep, &batch) })
 	if err != nil {
 		log.Printf("ingest from %s: %v", ep.ID, err)
 		httpError(w, http.StatusInternalServerError, "could not store batch")

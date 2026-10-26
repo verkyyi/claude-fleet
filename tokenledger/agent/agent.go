@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/limits"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/reportcache"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/spool"
@@ -314,6 +316,13 @@ const spoolFraction = 4
 
 // Agent is a running collector.
 type Agent struct {
+	idleReports  reportcache.Cache
+	liveMu       sync.Mutex
+	liveBody     []byte
+	liveAt       time.Time
+	liveSentLink *liveTransport
+	liveLink     atomic.Pointer[liveTransport]
+
 	// clusterReadingEvery overrides control.ClusterReadingEvery (tests).
 	clusterReadingEvery time.Duration
 	cfg                 Config
@@ -676,18 +685,34 @@ func (a *Agent) backoffInterval() time.Duration {
 // arithmetic rather than a re-derivation of it. Nothing here is durable: a
 // missed heartbeat costs a few seconds of liveness and no recorded usage.
 func (a *Agent) runLive(ctx context.Context) {
-	t := time.NewTicker(a.cfg.LiveInterval)
+	// Sample within a second; the node heartbeat keeps its own cadence.
+	every := min(a.cfg.LiveInterval, time.Second)
+	if every <= 0 {
+		every = time.Second
+	}
+	t := time.NewTicker(every)
 	defer t.Stop()
+	// Faster local sampling must not amplify a hub outage into faster HTTP
+	// retries. Keep the configured retry cadence, bounded by the heartbeat.
+	retryEvery := min(max(a.cfg.LiveInterval, time.Second), time.Minute)
+	nextAttempt := time.Time{}
+	attempt := func() {
+		if time.Now().Before(nextAttempt) {
+			return
+		}
+		if err := a.pushLive(ctx); err != nil {
+			nextAttempt = time.Now().Add(retryEvery)
+		} else {
+			nextAttempt = time.Time{}
+		}
+	}
+	attempt()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := a.pushLive(ctx); err != nil {
-				// Deliberately quiet: the hub being briefly unreachable is
-				// normal and this path has nothing to preserve.
-				continue
-			}
+			attempt()
 		}
 	}
 }
@@ -700,6 +725,8 @@ func (a *Agent) runLive(ctx context.Context) {
 const liveStaleAfter = 2 * time.Minute
 
 func (a *Agent) pushLive(ctx context.Context) error {
+	a.liveMu.Lock()
+	defer a.liveMu.Unlock()
 	out := make([]liveSession, 0)
 	if a.claudeEnabled {
 		idx, err := sessions.Load(a.cfg.SessionsDir, liveStaleAfter)
@@ -739,13 +766,39 @@ func (a *Agent) pushLive(ctx context.Context) error {
 		p.mu.Unlock()
 	}
 
+	// Map iteration must not manufacture changes.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Source+"\x00"+out[i].ProfileID+"\x00"+out[i].SessionID < out[j].Source+"\x00"+out[j].ProfileID+"\x00"+out[j].SessionID
+	})
 	body, err := json.Marshal(map[string]any{"sessions": out, "complete": true})
 	if err != nil {
 		return err
 	}
+	// A fresh observation of unchanged totals is carried by the heartbeat,
+	// not treated as a content change on every status-line redraw.
+	signatureRows := append([]liveSession{}, out...)
+	for i := range signatureRows {
+		signatureRows[i].ObservedAt = time.Time{}
+	}
+	signature, err := json.Marshal(signatureRows)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	link := a.liveLink.Load()
+	if bytes.Equal(signature, a.liveBody) && now.Sub(a.liveAt) < time.Minute && link == a.liveSentLink {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
+	if link != nil {
+		m := control.Message{Type: control.TypeLiveReport, Proto: control.Proto, Payload: body}
+		if err := link.conn.write(ctx, m); err == nil {
+			a.liveBody, a.liveAt, a.liveSentLink = signature, now, link
+			return nil
+		}
+	}
+	// compat-1v: 下一批删 — old hubs advertise no live transport; HTTP stays usable.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		a.cfg.hub()+"/v1/live/report", bytes.NewReader(body))
 	if err != nil {
@@ -763,8 +816,11 @@ func (a *Agent) pushLive(ctx context.Context) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("live report: HTTP %d", resp.StatusCode)
 	}
+	a.liveBody, a.liveAt, a.liveSentLink = signature, now, link
 	return nil
 }
+
+type liveTransport struct{ conn nodeLink }
 
 // liveSession mirrors the hub's shape without importing the api package, which
 // would be a dependency cycle.
@@ -1321,7 +1377,7 @@ func (a *Agent) drain(ctx context.Context) error {
 		if !ok {
 			return nil
 		}
-		resp, err := a.push(ctx, &batch)
+		resp, err := a.idleReports.Do("", &batch, time.Now(), func() (*model.IngestResponse, error) { return a.push(ctx, &batch) })
 		if err != nil {
 			// Leave the batch queued; the next cycle retries it.
 			return err

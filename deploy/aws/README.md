@@ -324,3 +324,47 @@ resumable session layer in a separate gateway process. Neither is in this change
   a new box with the same user data, the same SSM parameter and the secrets
   directory restored comes back as the same hub. People's home disks (local-path)
   live on the box's root volume — snapshot it, or use `gp3` if they must outlive it.
+
+### One human portal (T1112)
+
+Set `CCQUOTA_PORTAL=https://portal.example.com`,
+`CCQUOTA_PORTAL_ALIASES=old.example.com quota.example.com` and
+`CCQUOTA_WECHAT_PUBLIC_URL=https://old.example.com` in the hub's `site.conf`
+(ConfigMap `ccquota-site`), then roll the hub. Leave
+`CCQUOTA_FLEET_PUBLIC_URL` and `fleet.node_url` unchanged. Unset `CCQUOTA_PORTAL`
+to restore the previous behavior. Keep the trusted-edge host lists and TLS
+routes: aliases still serve WeChat, OAuth callbacks and existing clients.
+
+The portal keeps the sandbox runtime positioning, with Sign in opening the
+existing WeChat QR / email / GitHub choices, plus request access and (when
+`fleet.trial` is on) trial. Its homepage follows the browser's language until
+the person changes the language link; the existing `cf_lang` cookie remembers
+that choice across the site and sign-in pages. The old Chinese page remains
+available inside WeChat. Redirects vary by User-Agent and are not shared-cacheable.
+Only known page paths move; unknown paths, `/auth/*`, `/fleet/*`, `/v1/*`,
+`/install*`, WebSocket upgrades and preview hosts keep their handlers.
+
+Service-account QR + polling is same-origin and needs no new OAuth target.
+Silent authorization entered from the portal inside WeChat starts on the
+configured WeChat origin **before** setting its host-only flow cookie. Keep
+workbench's existing `fleet=<WeChat origin>/auth/wechat/relay-cb` target; no new
+`WX_OAUTH_RELAY_TARGETS` entry is required for this route. Do not change `fleet`
+to the portal: that would break the retained Chinese site's cookie. A future
+independent portal relay route would need its own target and signature name.
+Email sign-in links remain on the initiating host because they are bound to
+that browser's cookie; ordinary invitations and notification emails use the
+portal. WeChat templates and customer-service text use the WeChat origin.
+
+Space must add the portal origin to `SPACE_FIRST_PARTY_EMBED_ORIGINS`, preserving
+existing origins. Provisioning now requests the portal as an additional embed
+origin. `CCQUOTA_FLEET_CHAT_FRAME_ORIGINS` is the reverse direction (origins
+allowed to frame the hub): retain the Space origins there; add a portal origin
+only if that portal itself will frame the hub.
+
+For GA's TCP + PROXY protocol route, Traefik must accept PROXY only from GA's
+configured source ranges and construct X-Forwarded-For from that source.
+The hub's client-IP readers use the rightmost public address (skipping private
+replica hops); the trusted Shenzhen forwarded-host route uses its normalized
+edge source. Verify the actual source against a probe's known egress and the
+hub request log, as well as GA DNS resolution, alias 301, WeChat 200 and API
+non-redirects, after deployment.

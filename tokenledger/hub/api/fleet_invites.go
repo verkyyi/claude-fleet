@@ -345,7 +345,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, now time.T
 		detail = "for " + email + ", until " + inv.ExpiresAt.Format(time.RFC3339)
 	}
 	_ = s.Store.HubAudit(inv.CreatedBy, "invite", inv.ID, "created", detail, now)
-	u := s.hubURL(r) + InvitePath + code
+	u := s.humanURL(r) + InvitePath + code
 	writeJSON(w, http.StatusCreated, InviteCreated{
 		inviteView: inviteView{Invite: inv, State: inv.State(now)},
 		Code:       code, URL: u, Command: "curl -fsSL " + u + " | sh",

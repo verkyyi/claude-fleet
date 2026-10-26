@@ -348,7 +348,7 @@ func (s *Server) deliverNotice(ctx context.Context, n store.Notice, now time.Tim
 	if n.Prefer != store.NotifyEmail && s.WxGW.ready() && reach.OpenID != "" && reach.Followed {
 		chat := true
 		if tpl := s.wxTemplate(n.Kind); tpl != "" {
-			err := s.WxGW.templateSend(ctx, reach.OpenID, tpl, msg.Link, msg.Tpl)
+			err := s.WxGW.templateSend(ctx, reach.OpenID, tpl, s.wechatNotice(msg.Link), msg.Tpl)
 			if err == nil {
 				finish(store.NoticeSent, viaTemplate, viaTemplate)
 				return
@@ -364,7 +364,7 @@ func (s *Server) deliverNotice(ctx context.Context, n store.Notice, now time.Tim
 			}
 		}
 		if chat && now.Sub(reach.ChatAt) < notifyChat {
-			err := s.WxGW.customSend(ctx, reach.OpenID, msg.Text)
+			err := s.WxGW.customSend(ctx, reach.OpenID, s.wechatNotice(msg.Text))
 			if err == nil {
 				finish(store.NoticeSent, viaChat, strings.Join(append(tried, viaChat), " → "))
 				return
@@ -512,7 +512,7 @@ func firstSet(v ...string) string {
 // request was withdrawn, every gathered one decided already).
 func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 	en := i18n.Normalize(n.Lang) == i18n.EN && strings.TrimSpace(n.Lang) != ""
-	base := strings.TrimRight(s.FleetPublicURL, "/")
+	base := s.humanURL(nil)
 	rq := s.Store.Requests()
 	switch n.Kind {
 	case store.NotifyKindReview:

@@ -279,3 +279,4 @@ word KEEP_DEFS T970 bin/fleet-cleanup-idle.py
 key FLEET_REAP_UNREPORTED_SECS T970
 
 word RETRY_MS T1110 extras/web-console/src/app/chat/view.ts
+func capacity_tick T1109 bin/fleet-cred-proxy.py

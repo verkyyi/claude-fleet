@@ -486,7 +486,7 @@ func (s *Server) queueAnswer(lang string, g *store.TrialGrant) trialScanAnswer {
 			ahead++
 		}
 	}
-	base := strings.TrimRight(s.FleetPublicURL, "/")
+	base := s.wechatURL(nil)
 	n := &wxNews{PicURL: base + "/site/og/cover-" + lang + ".png", URL: base + "/"}
 	if lang == "en" {
 		n.Title = Brand + " trial · in line"
@@ -500,7 +500,7 @@ func (s *Server) queueAnswer(lang string, g *store.TrialGrant) trialScanAnswer {
 
 // trialCard is the card a scan is answered with.
 func (s *Server) trialCard(lang, outcome string, code *store.TrialCode, pid string, now time.Time) *wxNews {
-	base := strings.TrimRight(s.FleetPublicURL, "/")
+	base := s.wechatURL(nil)
 	start := base + "/auth/wechat/start"
 	n := &wxNews{PicURL: base + "/site/og/cover-" + lang + ".png", URL: start}
 	en := lang == "en"
@@ -579,7 +579,7 @@ func termsWords(t trialTerms, en bool) string {
 // qrText is a scan's answer in words, for the outcomes with no card.
 func (s *Server) qrText(lang, outcome string, code *store.TrialCode) string {
 	en := lang == "en"
-	apply := strings.TrimRight(s.FleetPublicURL, "/") + ApplyPath
+	apply := s.wechatURL(nil) + ApplyPath
 	switch outcome {
 	case qrStopped:
 		return ternary(en, "This trial code has stopped. To use "+Brand+", ask here — the answer comes to this chat: "+apply,

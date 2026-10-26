@@ -617,15 +617,44 @@ class Capacity(unittest.TestCase):
         with patch.object(p,'pid_alive',return_value=False):
             self.assertEqual(sum(r['local_recent_reservations'] for r in self.t.codex_pick('preview',preview=True)['inputs']),0)
 
-    def test_metadata_cache_has_no_request_io(self):
-        with patch.object(p.urllib.request,'urlopen',side_effect=AssertionError('request did I/O')):
-            self.t.codex_pick('s',preview=True)
-            self.t.capacity_until=0
-            self.assertEqual(self.t.capacity_metadata(),{})
-        self.t.capacity_cache={}; self.t.capacity_retry=0
+    def test_metadata_is_fetched_only_on_expired_demand(self):
+        with patch.object(p.urllib.request, 'urlopen', side_effect=AssertionError('fresh cache did I/O')):
+            self.t.codex_pick('s', preview=True)
+        import datetime
+        data = copy.deepcopy(self.t.capacity_cache)
+        data['expires_at'] = (datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=25)).isoformat()
         Path(self.cfg.node_env).write_text('CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=fixture\n')
-        with patch.object(p.urllib.request,'urlopen',side_effect=OSError('unreachable')):
-            self.assertEqual(self.t.refresh_capacity_metadata(),{})
+        self.t.capacity_until = self.t.capacity_retry = 0
+        with patch.object(p.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(data).encode())) as fetch:
+            self.assertEqual(self.t.capacity_metadata()['mode'], 'active')
+            self.t.capacity_metadata()
+            self.assertEqual(fetch.call_count, 1)
+        self.t.capacity_until = self.t.capacity_retry = 0
+        with patch.object(p.urllib.request, 'urlopen', side_effect=OSError('offline')) as fetch:
+            self.assertEqual(self.t.capacity_metadata(), {})
+            self.assertEqual(self.t.capacity_metadata(), {})
+            self.assertEqual(fetch.call_count, 1)  # failure backoff, no stale evidence
+
+    def test_idle_budget_heartbeat_and_new_usage(self):
+        Path(self.cfg.node_env).write_text('CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=fixture\n')
+        budget = self.t.budget
+        def response(*args, **kwargs):
+            return io.BytesIO(b'{"over":false}')
+        with patch.object(p.time, 'time', return_value=100), patch.object(p.urllib.request, 'urlopen', side_effect=response) as fetch:
+            budget.flush()
+            budget.flush()
+            self.assertEqual(fetch.call_count, 1)
+            budget.add('codex', 5)
+            budget.flush()
+            self.assertEqual(fetch.call_count, 2)
+            self.assertFalse(budget.pending)
+        with patch.object(p.time, 'time', return_value=160), patch.object(p.urllib.request, 'urlopen', side_effect=response) as fetch:
+            budget.flush()
+            self.assertEqual(fetch.call_count, 1)
+        budget.add('codex', 7)
+        with patch.object(p.urllib.request, 'urlopen', side_effect=OSError('offline')):
+            budget.flush()
+            self.assertTrue(budget.pending)
 
     def test_metadata_timestamp_compatibility_and_isolated_lib(self):
         # Go RFC3339Nano output must work with system Python, explicit offsets,
