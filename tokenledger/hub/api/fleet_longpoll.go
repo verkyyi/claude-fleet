@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -145,16 +146,30 @@ func (s *Server) fleetSessionsWait(req *http.Request, wait time.Duration) (map[s
 			return out, nil
 		}
 		recheck := time.NewTimer(fleetSessionsRecheck)
+		waited := time.Now()
 		select {
 		case <-changed:
 		case <-recheck.C:
 		case <-deadline.C:
 			recheck.Stop()
+			addHeld(req.Context(), time.Since(waited))
 			return out, nil
 		case <-req.Context().Done():
 			recheck.Stop()
+			addHeld(req.Context(), time.Since(waited))
 			return out, nil
 		}
 		recheck.Stop()
+		addHeld(req.Context(), time.Since(waited))
+	}
+}
+
+// heldKey carries how long a long poll waited for a change out to the access
+// log, which logs it as held=<d> beside the request's total time.
+type heldKey struct{}
+
+func addHeld(ctx context.Context, d time.Duration) {
+	if p, ok := ctx.Value(heldKey{}).(*time.Duration); ok && p != nil {
+		*p += d
 	}
 }

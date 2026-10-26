@@ -16,6 +16,8 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
+	"regexp"
+	"sync"
 )
 
 // The Fleet Hub read half (claude-fleet#1409).
@@ -585,11 +587,27 @@ func TestFleetSessionsLongPoll(t *testing.T) {
 		return answer{resp.StatusCode, resp.Header.Get("ETag"), time.Now()}
 	}
 	tag := ask(http.MethodGet, "", "", "").tag
+	var logMu sync.Mutex
+	var logged []string
+	h.srv.LogWriter = func(l string) { logMu.Lock(); logged = append(logged, l); logMu.Unlock() }
+	lastLine := func() string {
+		logMu.Lock()
+		defer logMu.Unlock()
+		for i := len(logged) - 1; i >= 0; i-- {
+			if strings.Contains(logged[i], "/v1/fleet/fleet_sessions") {
+				return logged[i]
+			}
+		}
+		return ""
+	}
 
 	// Degenerate: no wait → the immediate 304 of #1481.
 	t0 := time.Now()
 	if got := ask(http.MethodGet, "", "", tag); got.status != 304 || got.at.Sub(t0) > 500*time.Millisecond {
 		t.Fatalf("no wait: %d after %v, want an immediate 304", got.status, got.at.Sub(t0))
+	}
+	if l := lastLine(); strings.Contains(l, " held=") {
+		t.Fatalf("a request that was not held logs held=: %q", l)
 	}
 	// A stale validator is answered at once, wait or not.
 	t0 = time.Now()
@@ -602,6 +620,10 @@ func TestFleetSessionsLongPoll(t *testing.T) {
 	t0 = time.Now()
 	if got := ask(http.MethodGet, "?wait=1", "", tag); got.status != 304 || got.at.Sub(t0) < 900*time.Millisecond {
 		t.Fatalf("GET wait=1, nothing new: %d after %v, want 304 after ~1 s", got.status, got.at.Sub(t0))
+	}
+	// The wait is logged apart from the work: held=<~1s> beside the total.
+	if l := lastLine(); !regexp.MustCompile(` 304 [0-9.]+m?s held=(9\d\dms|1(\.\d+)?s)`).MatchString(l) {
+		t.Fatalf("a held request's log line = %q, want held=~1s after the total", l)
 	}
 	t0 = time.Now()
 	if got := ask(http.MethodPost, "", `{"wait":1}`, tag); got.status != 304 || got.at.Sub(t0) < 900*time.Millisecond {
