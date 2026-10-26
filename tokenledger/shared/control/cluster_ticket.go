@@ -88,6 +88,32 @@ type ClusterTicket struct {
 	Exp       int64  `json:"exp"`
 }
 
+// clusterTicketWithLimits is ClusterTicket for the ops whose shape has a
+// limits field (create-user-pod, set-limits): it is written even when empty —
+// a spare pod has no owner and so no ceiling, and the provisioner refuses a
+// ticket whose fields are not exactly its op's (task PNWW).
+type clusterTicketWithLimits struct {
+	Op        string `json:"op"`
+	Cluster   string `json:"cluster"`
+	Pod       string `json:"pod,omitempty"`
+	Limits    string `json:"limits"`
+	Login     string `json:"login,omitempty"`
+	UID       int    `json:"uid,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	Ref       string `json:"ref,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Cmd       string `json:"cmd,omitempty"`
+	Join      string `json:"join,omitempty"`
+	Principal string `json:"principal,omitempty"`
+	Run       string `json:"run,omitempty"`
+	Attempt   int    `json:"attempt,omitempty"`
+	Svc       string `json:"svc,omitempty"`
+	Deadline  int    `json:"deadline,omitempty"`
+	Token     string `json:"token,omitempty"`
+	Nonce     string `json:"nonce"`
+	Exp       int64  `json:"exp"`
+}
+
 // SignClusterTicket is `c1.<payload>.<sig>`, both base64url (no padding).
 func SignClusterTicket(key ed25519.PrivateKey, t ClusterTicket) (string, error) {
 	if len(key) != ed25519.PrivateKeySize {
@@ -99,7 +125,13 @@ func SignClusterTicket(key ed25519.PrivateKey, t ClusterTicket) (string, error) 
 	default:
 		return "", errors.New("not a provisioner op: " + t.Op)
 	}
-	payload, err := json.Marshal(t)
+	var payload []byte
+	var err error
+	if t.Op == ClusterCreateUserPod || t.Op == ClusterSetLimits {
+		payload, err = json.Marshal(clusterTicketWithLimits(t))
+	} else {
+		payload, err = json.Marshal(t)
+	}
 	if err != nil {
 		return "", err
 	}

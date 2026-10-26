@@ -2,6 +2,8 @@ package control
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +97,24 @@ func TestClusterTicketRefusesForgedExpiredCrossDomain(t *testing.T) {
 	}
 	if _, err := SignClusterTicket(key, ClusterTicket{Op: "create-pod", Cluster: "x", Nonce: "n", Exp: 1}); err == nil {
 		t.Error("signed an op the provisioner has not got")
+	}
+}
+
+// A spare pod has no owner and so no ceiling: its create-user-pod still carries
+// limits (empty), the field the provisioner's exact shape asks for (task PNWW);
+// an op without it never grows one.
+func TestClusterTicketEmptyLimitsKept(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(nil)
+	for op, want := range map[string]bool{ClusterCreateUserPod: true, ClusterSetLimits: true, ClusterDestroyUserPod: false} {
+		s, err := SignClusterTicket(key, ClusterTicket{Op: op, Cluster: "c", Pod: "u-x", Login: "l", UID: PodLoginUID, Join: "fj_x", Nonce: "n", Exp: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, _ := base64.RawURLEncoding.DecodeString(strings.Split(strings.TrimPrefix(s, "c1."), ".")[0])
+		var m map[string]any
+		_ = json.Unmarshal(p, &m)
+		if _, ok := m["limits"]; ok != want {
+			t.Errorf("%s: limits present = %v, want %v (%s)", op, ok, want, p)
+		}
 	}
 }
