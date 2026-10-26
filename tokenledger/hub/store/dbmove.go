@@ -51,7 +51,7 @@ const moveLogTable = "db_move_log"
 // moveSeedTables are the tables a fresh Open writes into by itself (the
 // numbered-migration record and the rollup's version stamps). Rows there do not
 // make a target "already in use"; rows anywhere else do.
-var moveSeedTables = map[string]bool{"hub_migrations": true, "rollup_meta": true}
+var moveSeedTables = map[string]bool{"hub_migrations": true, "rollup_meta": true, "fleet_sessions_revision": true}
 
 // MoveOptions is one `ccquota db migrate`.
 type MoveOptions struct {
@@ -180,6 +180,35 @@ func MoveDatabase(ctx context.Context, o MoveOptions) (*MoveReport, error) {
 		return nil, err
 	}
 
+	// Copy the materialized session references and cache revisions verbatim.
+	// Only these projection triggers are suspended, transactionally; foreign
+	// keys and every other database constraint remain enabled.
+	type projectionTrigger struct{ table, name string }
+	var projections []projectionTrigger
+	for _, p := range plans {
+		rows, err := tx.Query(ctx, `SELECT tgname FROM pg_trigger WHERE tgrelid=$1::regclass AND tgname IN ('fleet_operation_sessions_sync','fleet_sessions_changed')`, quoteIdent(p.dstTable))
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			projections = append(projections, projectionTrigger{p.dstTable, name})
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	for _, p := range projections {
+		if _, err := tx.Exec(ctx, `ALTER TABLE `+quoteIdent(p.table)+` DISABLE TRIGGER `+quoteIdent(p.name)); err != nil {
+			return nil, err
+		}
+	}
+
 	rep := &MoveReport{}
 	srcHashes := map[string]TableCheck{}
 	fmt.Fprintf(out, "copy:\n")
@@ -210,6 +239,11 @@ func MoveDatabase(ctx context.Context, o MoveOptions) (*MoveReport, error) {
 	}
 	if _, err := tx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
 		return nil, fmt.Errorf("foreign keys: %w", err)
+	}
+	for _, p := range projections {
+		if _, err := tx.Exec(ctx, `ALTER TABLE `+quoteIdent(p.table)+` ENABLE TRIGGER `+quoteIdent(p.name)); err != nil {
+			return nil, err
+		}
 	}
 	// After the foreign keys: Postgres builds no index on a table with
 	// deferred checks still pending.

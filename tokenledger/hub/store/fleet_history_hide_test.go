@@ -76,6 +76,21 @@ func TestHistoryHideIsReversibleAndConservative(t *testing.T) {
 	if !h[idA] {
 		t.Fatal("apply did not hide")
 	}
+	// A newly queued operation must restore visibility even after review.
+	if err := st.InsertFleetOperation(store.FleetOperation{ID: "late-input", Action: "worker_message", Request: `{"params":{"worker_id":"fleet/` + idA + `"}}`, Actor: "operator", Idem: "late-input", Status: "unknown", Created: now, Updated: now}); err != nil {
+		t.Fatal(err)
+	}
+	h, err = st.HiddenHistory("operator", nil)
+	if err != nil || h[idA] {
+		t.Fatalf("in-flight input hidden: %v", err)
+	}
+	if err := st.UpdateFleetOperation("late-input", "succeeded", "{}", now); err != nil {
+		t.Fatal(err)
+	}
+	h, err = st.HiddenHistory("operator", nil)
+	if err != nil || !h[idA] {
+		t.Fatalf("settled input changed reviewed version: %v", err)
+	}
 	other, _ := st.HiddenHistory("other", nil)
 	if len(other) != 0 {
 		t.Fatal("cross-owner hide")

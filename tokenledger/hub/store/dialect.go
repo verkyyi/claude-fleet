@@ -84,7 +84,7 @@ var (
 	ddlBlob    = regexp.MustCompile(`\bBLOB\b`)
 	ddlText    = regexp.MustCompile(`\bTEXT\b`)
 	ddlComment = regexp.MustCompile(`--[^\n]*`)
-	ddlFK      = regexp.MustCompile(`\bREFERENCES\s+\w+\s*\([^)]*\)`)
+	ddlFK      = regexp.MustCompile(`\bREFERENCES\s+\w+\s*\([^)]*\)(?:\s+ON DELETE\s+(?:CASCADE|SET NULL|SET DEFAULT|RESTRICT|NO ACTION))?`)
 )
 
 // ddl is a CREATE / ALTER written for SQLite, in this dialect's column types.

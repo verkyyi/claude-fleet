@@ -201,12 +201,23 @@ login-wide `export CCQUOTA_FLEET=1`, both ways, and a conf without the line
 follows the login — see [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md) for which switch
 lives at which level.
 
+**Session-list cost and operation expiry (T1118).** List answers share a three-second
+cache per person and view; committed changes invalidate it across hub replicas.
+Hidden history checks indexed operation/session references, backfilled from legacy
+requests, and still requires the exact reviewed ledger version. The alerts leader
+reconciles abandoned node operations every minute and marks journal entries older
+than 24 hours `expired`, preserving requests/results and recording each transition
+in `fleet_audit`. Expiry ends result tracking; it does not prove execution stopped,
+release a task binding, or authorize a duplicate start. Legacy `recorded` journal
+rows also age out through this audited path. The console uses its existing SSE
+stream, with visible-page fallback polling every 30 seconds.
+
 **The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
 `CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing
 the hub's `fleet_sessions` into `global/remote_<sess>` (and the
-`control/hub-workers.tsv` cache above) — every 2 s while a client is attached to
-a fleet session on this machine (`FLEET_HUB_SESSIONS_WATCHED_EVERY`), every 10 s
-when nobody is looking (`FLEET_HUB_SESSIONS_EVERY`). `tmux-dashboard-rows.sh` only reads that
+`control/hub-workers.tsv` cache above) — at most every 10 s while a client is attached to
+a fleet session on this machine (`FLEET_HUB_SESSIONS_WATCHED_EVERY`), event-driven with a 60 s fallback
+when nobody is looking (`FLEET_HUB_SESSIONS_IDLE_EVERY`). `tmux-dashboard-rows.sh` only reads that
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is
 not this machine's — render mixed in with the local windows, nested by
 `@origin_wid` (or the issue's sub-issue parent), and **look exactly like the

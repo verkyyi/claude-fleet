@@ -485,11 +485,7 @@ func (s *Server) FleetList(req *http.Request, refresh bool) (map[string]any, err
 
 // FleetSessions flattens every visible fleet's windows into one list: "my
 // sessions", across machines. Ordered by machine, login, fleet, then key.
-func (s *Server) FleetSessions(req *http.Request) (map[string]any, error) {
-	p, err := s.FleetPrincipal(req)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) buildFleetSessions(req *http.Request, p fleetPrincipal) (map[string]any, error) {
 	now := time.Now()
 	views, rows, err := s.visibleFleets(p, now)
 	if err != nil {
@@ -786,12 +782,12 @@ func (s *Server) OperationGet(req *http.Request, opID string) (map[string]any, e
 		s.progressOp(o)
 	}
 	var reconcileErr error
-	if o.Status != "succeeded" && o.Status != "failed" {
+	if !store.FleetOperationTerminal(o.Status) {
 		reconcileErr = s.reconcileOperation(ctx, &o)
 		if reconcileErr != nil {
 			// Cancellation can commit while an offline node read is pending.
 			// Its durable result wins over that read's transport error.
-			if latest, err := s.Store.FleetOperation(o.ID); err == nil && (latest.Status == "failed" || latest.Status == "succeeded") {
+			if latest, err := s.Store.FleetOperation(o.ID); err == nil && store.FleetOperationTerminal(latest.Status) {
 				o, reconcileErr = latest, nil
 			}
 		}
@@ -818,7 +814,7 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 		b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "NOT_ACCEPTED",
 			"message": "the node has no record of this operation; it never ran there (" + nf.Message + ")"}})
 		now := time.Now()
-		if err := s.Store.UpdateFleetOperation(o.ID, "failed", string(b), now); err != nil {
+		if err := s.Store.ReconcileFleetOperation(*o, "failed", string(b), now); err != nil {
 			return err
 		}
 		if *o, err = s.Store.FleetOperation(o.ID); err != nil {
@@ -847,7 +843,7 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	}
 	remote.Status = settleRefusedStart(o.Action, remote.Status, string(remote.Result))
 	now := time.Now()
-	if err := s.Store.UpdateFleetOperation(o.ID, remote.Status, string(remote.Result), now); err != nil {
+	if err := s.Store.ReconcileFleetOperation(*o, remote.Status, string(remote.Result), now); err != nil {
 		return err
 	}
 	previous := o.Status
