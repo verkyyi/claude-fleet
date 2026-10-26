@@ -28,11 +28,24 @@ exit 1 + `flag <why>` — anything else, unreadable included: keep the flag (the
 exit 0 when the person handed Codex's own plugin marketplace back (issue #4848:
 `"codex_plugins": "on"`, or "codex_plugins:on" in the array form); else 1 and the
 launcher adds `-c features.plugins=false`.
+
+    fleet-codex-posture.py migrations <codex binary>
+
+prints one `notice.model_migrations={…}` value: every upgrade in the binary's
+bundled model catalog (`codex debug models --bundled`), marked as already
+answered. A Codex whose configured model the catalog upgrades (gpt-5.6-sol →
+gpt-6-sol) otherwise opens on «Meet GPT-6 Sol · 1. Try new model 2. Use
+existing model» before any turn — a window the web opened has nobody to press
+it, so the session never starts (task YASF). Answered = «Use existing model»:
+the person's model stays theirs. The launcher passes it as `-c`, which Codex
+merges with the person's own [notice.model_migrations]. Nothing to say (no
+catalog, no upgrades, unreadable) ⇒ no output, exit 1.
 """
 import json
 import os
 from pathlib import Path
 import runpy
+import subprocess
 import sys
 
 TOML = runpy.run_path(str(Path(__file__).with_name('fleet-agent-defaults.py')))
@@ -131,7 +144,32 @@ def plugins_on(path):
     return v is True or str(v).strip().lower() in ("on", "true", "1", "yes")
 
 
+def migrations(codex):
+    try:
+        out = subprocess.run([codex, 'debug', 'models', '--bundled'], capture_output=True,
+                             text=True, timeout=10).stdout
+        data = json.loads(out)
+    except Exception:
+        return ''
+    models = data.get('models', data) if isinstance(data, dict) else data
+    seen = {}
+    for m in models if isinstance(models, list) else []:
+        up = m.get('upgrade') if isinstance(m, dict) else None
+        slug, to = m.get('slug') if isinstance(m, dict) else None, up.get('model') if isinstance(up, dict) else None
+        if isinstance(slug, str) and isinstance(to, str) and slug and to and slug != to:
+            seen[slug] = to
+    if not seen:
+        return ''
+    return 'notice.model_migrations={' + ','.join(
+        '%s=%s' % (json.dumps(k), json.dumps(v)) for k, v in sorted(seen.items())) + '}'
+
+
 def main(args):
+    if len(args) == 2 and args[0] == 'migrations':
+        value = migrations(args[1])
+        if value:
+            print(value)
+        return 0 if value else 1
     if len(args) == 2 and args[0] == 'plugins-on':
         return 0 if plugins_on(args[1]) else 1
     if not args or args[0] != 'check':
