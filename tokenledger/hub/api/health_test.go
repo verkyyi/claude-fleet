@@ -66,7 +66,7 @@ func TestHealthPrivacyFreshnessAndNotes(t *testing.T) {
 	for _, tc := range []struct {
 		role, body string
 		want       int
-	}{{roleUser, `{}`, 403}, {roleAdmin, `{"id":"x","note_en":"http://internal.example/token"}`, 400}, {roleAdmin, `{"id":"missing","note_en":"Investigating"}`, 404}} {
+	}{{roleUser, `{}`, 403}, {roleAdmin, `{"id":"x","note_en":"http://internal.example/token"}`, 400}, {roleAdmin, `{"id":"x","note_en":"upstream 2001:db8::1"}`, 400}, {roleAdmin, `{"id":"missing","note_en":"Investigating"}`, 404}} {
 		r = httptest.NewRequest("POST", HealthPath, strings.NewReader(tc.body))
 		r.Header.Set("X-Fleet-Webchat", "1")
 		r = r.WithContext(withRole(r.Context(), tc.role))

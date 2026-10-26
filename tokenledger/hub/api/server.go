@@ -529,7 +529,8 @@ type Server struct {
 
 	// httpStats counts this replica's requests and 5xx per minute, for the
 	// post-release watch (fleet_release_canary.go, claude-fleet#4915).
-	httpStats httpStats
+	httpStats    httpStats
+	publicHealth publicHealthCache
 	// logQuiet keeps a repeating line to once a window per signature (T906).
 	logQuiet logQuiet
 	// underivedEPs: endpoints this replica raised fleet_underived for (T906).
@@ -539,7 +540,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.forwardedTrust(s.portal(s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes())))))))
+	return s.forwardedTrust(s.portal(s.logRequests(s.previewHosts(s.publicHealthRoutes(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is
@@ -1078,6 +1079,8 @@ func (s *Server) routes() *routeMux {
 	// readable by anyone while hub.public_meter is on, so example.com's
 	// homepage takes it straight from here instead of through a token.
 	mux.HandleFunc("/meter.json", s.handleMeter)
+	// Also intercepted before auth/trial gates: public snapshots never inspect identity.
+	mux.Handle(PublicHealthPath, s.publicHealthRoutes(http.NotFoundHandler()))
 
 	// The tab icon (claude-fleet#3946): the site's own logo, copied into
 	// web/dist, for everyone -- the sign-in page and a self-hoster's hub with

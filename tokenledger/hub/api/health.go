@@ -18,6 +18,8 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
+var healthIPv6 = regexp.MustCompile(`(?i)(?:[0-9a-f]{1,4}:){2,}[0-9a-f:]*`)
+
 var healthAddress = regexp.MustCompile(`[A-Za-z0-9][.][A-Za-z0-9]`)
 
 const HealthPath = "/v1/health"
@@ -204,33 +206,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 503, "Health data unavailable")
 		return
 	}
-	latest := map[string]store.HealthProbe{}
-	for _, p := range probes {
-		if _, ok := latest[p.Component]; !ok && healthKnown(p.Component) {
-			latest[p.Component] = p
-		}
-	}
-	state := "ok"
-	failed, entries := 0, 0
-	for _, k := range healthComponents {
-		p, ok := latest[k]
-		if !ok || now.UnixMilli()-p.At > 180000 {
-			p = store.HealthProbe{Component: k, State: "unknown"}
-			latest[k] = p
-		}
-		if p.State != "ok" {
-			state = "degraded"
-		}
-		if k == "claudefleet" || k == "ccquota" || k == "tokenman" {
-			entries++
-			if p.State == "failed" {
-				failed++
-			}
-		}
-	}
-	if failed == entries {
-		state = "outage"
-	}
+	state, latest := healthOverview(probes, now)
 	events, err := s.Store.HealthEvents(now.Add(-7 * 24 * time.Hour))
 	if err != nil {
 		httpError(w, 503, "Health data unavailable")
@@ -337,7 +313,7 @@ func (s *Server) annotateHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	// Public incident notes are plain explanatory text, never diagnostic dumps.
 	for _, v := range []string{in.ZH, in.EN} {
-		if strings.ContainsAny(v, "<>@/\\=") || strings.Contains(strings.ToLower(v), "token") || healthAddress.MatchString(v) {
+		if !healthNotePublic(v) {
 			httpError(w, 400, "Public explanation only; no addresses or credentials")
 			return
 		}
@@ -353,4 +329,39 @@ func (s *Server) annotateHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.Store.HubAudit(viewerOf(r.Context()), "health.note", in.ID, "updated", "public explanation", time.Now())
 	writeJSON(w, 200, map[string]bool{"saved": true})
+}
+
+func healthOverview(probes []store.HealthProbe, now time.Time) (string, map[string]store.HealthProbe) {
+	latest := map[string]store.HealthProbe{}
+	for _, p := range probes {
+		if _, ok := latest[p.Component]; !ok && healthKnown(p.Component) {
+			latest[p.Component] = p
+		}
+	}
+	state := "ok"
+	failed, entries := 0, 0
+	for _, k := range healthComponents {
+		p, ok := latest[k]
+		if !ok || now.UnixMilli()-p.At > 180000 {
+			p = store.HealthProbe{Component: k, State: "unknown"}
+			latest[k] = p
+		}
+		if p.State != "ok" {
+			state = "degraded"
+		}
+		if k == "claudefleet" || k == "ccquota" || k == "tokenman" {
+			entries++
+			if p.State == "failed" {
+				failed++
+			}
+		}
+	}
+	if failed == entries {
+		state = "outage"
+	}
+	return state, latest
+}
+
+func healthNotePublic(v string) bool {
+	return !strings.ContainsAny(v, "<>@/\\=") && !strings.Contains(strings.ToLower(v), "token") && !strings.Contains(v, "::") && !healthIPv6.MatchString(v) && !healthAddress.MatchString(v)
 }
