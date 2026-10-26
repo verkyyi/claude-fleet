@@ -24,7 +24,7 @@
 #               (/v1/limits) — or both from POST /v1/fleet/summary when the
 #               identity is a connection certificate (issue #1502) — on their own cadence, FLEET_HUB_SUMMARY_EVERY
 #               (10s), see refresh_summaries below.
-#   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (10s) while the
+#   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while the
 #               shared watcher predicate holds AND a real list read was within
 #               30s; otherwise wait on fleet-state-changed or a 60s fallback, until
 #               FLEET_HUB_SESSIONS_LOOP_SECS (70s) past the newest of
@@ -43,9 +43,9 @@
 #               under an ingress's 60 s idle timeout; curl gives up 5 s after it):
 #               the hub holds the 304 and answers the moment a heartbeat moves the
 #               validator, so a change lands in ~the node's beat, not up to 2 s
-#               later. An answer that was held, or a 200, waits until the minimum refresh interval;
+#               later. An answer that was held, or a 200, is asked again at once;
 #               an immediate 304 or a failure (an older hub ignores `wait`) falls
-#               back to the 10 s cadence. FLEET_HUB_SESSIONS_LONGPOLL=0 turns it
+#               back to the 2 s cadence. FLEET_HUB_SESSIONS_LONGPOLL=0 turns it
 #               off; without a recent list request, it is never sent.
 #   --ensure    start a detached --loop unless one is alive (one per cache: the
 #               loop holds global/hubsess.lock — issue #2630; never via nohup). The collector runs this
@@ -184,7 +184,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 G="$FLEET_C/global"
 EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=10 ;; esac
-WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-10}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=10 ;; esac
+WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
 # No real list request: events wake the loop; 60s is only discovery/fallback.
 # Preserve explicit interval overrides (including existing accelerated fixtures).
 IDLE_EVERY="${FLEET_HUB_SESSIONS_IDLE_EVERY:-${FLEET_HUB_SESSIONS_EVERY:+$EVERY}}"
@@ -1540,11 +1540,10 @@ loop() {
     # A thin client's 看台 here (issue #3005): its lease is this machine's to keep.
     thin_lease_beat
     # A long-polled answer paces itself (issue #1526): a 200 (a change) or a
-    # 304 the hub held waits until the minimum refresh interval; an immediate 304 or a failure —
-    # an older hub that ignores `wait`, or none — keeps the 10 s cadence.
+    # 304 the hub held is asked again at once; an immediate 304 or a failure —
+    # an older hub that ignores `wait`, or none — keeps the 2 s cadence.
     if [ "$LP_SENT" = 1 ] && { [ "$LAST_FETCH" = 0 ] || [ $(( $(date +%s) - t0 )) -ge "$WATCHED_EVERY" ]; }; then
-      every=$(( WATCHED_EVERY - ($(date +%s) - t0) ))
-      [ "$every" -ge 0 ] || every=0
+      every=0
     fi
     left=$(( end - $(date +%s) ))
     [ "$left" -gt 0 ] || { EXIT_WHY=lifetime; break; }

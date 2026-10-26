@@ -3,16 +3,29 @@ package store
 import (
 	"database/sql"
 	"regexp"
+	"strings"
 )
 
 // A request can name several durable sessions (for example a move). Keep all
 // UUID references, including legacy envelopes, so indexing does not weaken the
 // conservative hide rule. Parsing happens once on write, never on a list read.
-var operationSessionUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+var operationSessionUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 
 func indexOperationSessions(tx *sql.Tx, o FleetOperation) error {
-	ids := append(operationSessionUUID.FindAllString(o.Request, -1), "") // empty = backfill receipt
+	ids := append(operationSessionUUID.FindAllString(o.Request, -1), "", "casefold-v1") // empty = backfill receipt
 	for _, id := range ids {
+		// The old SQLite LIKE predicate is ASCII-case-insensitive; PostgreSQL LIKE
+		// is not. Preserve that distinction for non-canonical legacy references.
+		if lower := strings.ToLower(id); lower != id {
+			var matched bool
+			if err := tx.QueryRow(`SELECT ? LIKE ?`, o.Request, "%"+lower+"%").Scan(&matched); err != nil {
+				return err
+			}
+			if !matched {
+				continue
+			}
+			id = lower
+		}
 		if _, err := tx.Exec(`INSERT INTO fleet_operation_sessions(operation_id,session_id,status) VALUES(?,?,?) ON CONFLICT(operation_id,session_id) DO NOTHING`, o.ID, id, o.Status); err != nil {
 			return err
 		}
@@ -24,6 +37,7 @@ func (s *Store) ensureOperationSessions() error {
 	if _, err := s.write.Exec(s.d.ddl(`CREATE TABLE IF NOT EXISTS fleet_operation_sessions (
  operation_id TEXT NOT NULL REFERENCES fleet_operations(id) ON DELETE CASCADE,
  session_id TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY(operation_id,session_id));
+ CREATE INDEX IF NOT EXISTS fleet_operation_sessions_history_pending ON fleet_operation_sessions(session_id) WHERE status NOT IN ('succeeded','failed');
  CREATE INDEX IF NOT EXISTS fleet_operation_sessions_pending ON fleet_operation_sessions(session_id) WHERE status NOT IN ('succeeded','failed','expired');
  CREATE INDEX IF NOT EXISTS fleet_operations_reconcile ON fleet_operations(updated,id) WHERE status IN ('pending','accepted','running','unknown') AND fleet_id <> '';
  CREATE INDEX IF NOT EXISTS fleet_operations_unfinished_age ON fleet_operations(created) WHERE status NOT IN ('succeeded','failed','expired');`)); err != nil {
@@ -62,7 +76,11 @@ func (s *Store) ensureOperationSessions() error {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT id,request,status FROM fleet_operations o WHERE NOT EXISTS (SELECT 1 FROM fleet_operation_sessions r WHERE r.operation_id=o.id AND r.session_id='')`)
+	receipt := ""
+	if s.d != postgresDialect {
+		receipt = "casefold-v1"
+	}
+	rows, err := tx.Query(`SELECT id,request,status FROM fleet_operations o WHERE NOT EXISTS (SELECT 1 FROM fleet_operation_sessions r WHERE r.operation_id=o.id AND r.session_id=?)`, receipt)
 	if err != nil {
 		return err
 	}

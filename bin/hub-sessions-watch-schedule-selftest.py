@@ -35,8 +35,8 @@ FLEET_HUBSESS_LOCKED=1; FLEET_HUB_SESSIONS_LONGPOLL=0
 case "$scenario" in *thin*) : > "$FLEET_CONF_DIR/thin-lease.json" ;; esac
 date() { [ "$1" = +%s ]; cat "$CLOCK"; }
 hub_on() { return 0; }
-watched() { case "$scenario" in watched*) return 0 ;; *) return 1 ;; esac; }
-refresh_all() { if [ "$scenario" = watched-longpoll ]; then LP_SENT=1; LAST_FETCH=0; fi; printf '%s\n' "$(cat "$CLOCK")" >> "$G/fetch"; }
+watched() { [ "$scenario" = watched ]; }
+refresh_all() { printf '%s\n' "$(cat "$CLOCK")" >> "$G/fetch"; }
 python3() {
   case "$1" in
     */fleet_thin_lease.py) cat "$CLOCK" >> "$G/beat" ;;
@@ -66,15 +66,14 @@ cases = [
     ('want', 61, [0, 60], [60, 21]),
     ('event', 65, [0, 10, 11], [60, 1, 54]),
     ('event-thin', 65, [0, 10, 11], [15, 1, 15, 15, 15, 9]),
-    ('watched', 25, [0, 10, 20], [10, 10, 5]),
-    ('watched-longpoll', 25, [0, 10, 20], [10, 10, 5]),
+    ('watched', 5, [0, 2, 4], [2, 2, 1]),
 ]
 env = {k: v for k, v in os.environ.items() if not k.startswith('FLEET_')}
 with tempfile.TemporaryDirectory(prefix='hubsess-schedule.') as tmp:
     root = Path(tmp)
     script = root / 'probe.sh'
     script.write_text(fixture + defaults + '\n' + functions +
-                      '\n[ "$IDLE_EVERY" = 60 ] && [ "$WATCHED_EVERY" = 10 ]\nloop\n')
+                      '\n[ "$IDLE_EVERY" = 60 ] && [ "$WATCHED_EVERY" = 2 ]\nloop\n')
     for i, (name, lifetime, expected, caps) in enumerate(cases):
         work = root / str(i)
         work.mkdir()

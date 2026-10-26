@@ -280,3 +280,13 @@ key FLEET_REAP_UNREPORTED_SECS T970
 
 word RETRY_MS T1110 extras/web-console/src/app/chat/view.ts
 func capacity_tick T1109 bin/fleet-cred-proxy.py
+
+# T1118: no response TTL or unreviewed age-based operation changes.
+path tokenledger/hub/api/fleet_operation_sweep.go T1118
+path tokenledger/hub/api/fleet_operation_sweep_test.go T1118
+func operationSweep T1118 tokenledger/hub/api/
+func copySessionList T1118 tokenledger/hub/api/
+func UnfinishedFleetOperations T1118 tokenledger/hub/store/
+func TouchUnfinishedOperation T1118 tokenledger/hub/store/
+word sessionListTTL T1118 tokenledger/hub/api/
+word FleetOperationMaxAge T1118 tokenledger/hub/store/
