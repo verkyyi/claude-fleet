@@ -82,7 +82,7 @@ LANGS = ('zh', 'en')
 # these directories is shared by the using roads (faq, troubleshooting, admin/),
 # except SELF_HOST_PAGES, which sit with self-host.
 READERS = ('member', 'hosted', 'self-host')
-SELF_HOST_PAGES = ('security',)
+SELF_HOST_PAGES = ('security', 'architecture')
 UI = {
     'zh': {'readers': {'self-host': '自托管与开发', 'hosted': '管理员', 'member': '成员'},
            'common': '都会用到', 'home': '帮助首页', 'other': 'English', 'pending': '',
@@ -139,7 +139,9 @@ def inline(s):
 
 def inline_text(s):
     s = html.escape(s, quote=False)
-    s = re.sub(r'\[([^\]]+)\]\(([^)\s]+)\)',
+    s = re.sub(r'!\[([^\]]*)\]\(([^)\s]+)\)',
+               lambda m: '<img src="%s" alt="%s" loading="lazy">' % (html.escape(m.group(2), quote=True), m.group(1).replace('"', '&quot;')), s)
+    s = re.sub(r'(?<!!)\[([^\]]+)\]\(([^)\s]+)\)',
                lambda m: '<a href="%s">%s</a>' % (html.escape(link_target(m.group(2))), m.group(1)), s)
     s = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', s)
     s = re.sub(r'(?<![\w*])\*([^*\s][^*]*)\*(?!\w)', r'<em>\1</em>', s)
@@ -283,6 +285,7 @@ pre{background:var(--term);color:var(--term-ink);padding:14px 16px;border-radius
 pre code{background:none;padding:0;color:inherit}
 blockquote{margin:0 0 14px;padding:10px 14px;border-left:3px solid var(--brand);background:var(--brand-soft);border-radius:0 8px 8px 0}
 blockquote p:last-child{margin:0}
+main img{max-width:100%;height:auto}
 table{border-collapse:collapse;width:100%;margin:0 0 16px;font-size:14.5px;display:block;overflow-x:auto}
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--line-2)}
 .pending{padding:12px 16px;background:var(--warn-soft);border-radius:9px;margin:0 0 18px}
@@ -541,6 +544,13 @@ def faq_ld(l):
 
 rows = []
 for l in LANGS:
+    assets = os.path.join(SRC, l, 'assets')
+    if os.path.isdir(assets):
+        dest_assets = os.path.join(OUT, l, 'assets')
+        os.makedirs(dest_assets, exist_ok=True)
+        for name in sorted(os.listdir(assets)):
+            if name.endswith('.svg') and os.path.isfile(os.path.join(assets, name)):
+                shutil.copy2(os.path.join(assets, name), os.path.join(dest_assets, name))
     all_titles = {}
     for p in src['zh']:
         all_titles[p] = titles.get((l, p)) or titles[('zh', p)]

@@ -1,5 +1,7 @@
 # Security and isolation
 
+[Architecture blueprint](architecture.md) maps the components and the data that crosses their boundaries.
+
 This page answers the two questions asked first when evaluating tokenman — **can a session read the subscription credentials**, and **can anyone else get into my workspace** — and where the credentials are, how long each lives, and whom a compromise of each part affects.
 
 Every statement carries a status: **live** is in today's stable; **planned** is decided and under way. One marked "gate N" is row N of the [seven security gates that must be met before going public](https://github.com/verkyyi/claude-fleet/blob/master/conf/public-gate.tsv); on a machine connected to a hub, `fleet doctor`'s `gate` rows read out PASS / FAIL for each. Until all seven are green we do not promote it publicly and take on no hosted customer.

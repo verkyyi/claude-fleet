@@ -113,6 +113,25 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 	}
 	p := r.URL.Path
 	switch {
+	case p == "/architecture" || p == "/zh/architecture" || p == "/en/architecture":
+		lang, name := "zh-CN", "architecture/index.html"
+		if s.siteSandbox(r) {
+			lang, name = "en", "sandbox/architecture/index.html"
+			if p == "/zh/architecture" {
+				lang, name = "zh-CN", "sandbox/zh/architecture/index.html"
+			} else if p == "/en/architecture" {
+				http.Redirect(w, r, withQuery("/architecture", r), http.StatusMovedPermanently)
+				return true
+			}
+		} else if p == "/en/architecture" {
+			lang, name = "en", "en/architecture/index.html"
+		} else if p == "/zh/architecture" {
+			http.Redirect(w, r, withQuery("/architecture", r), http.StatusMovedPermanently)
+			return true
+		}
+		if !s.sitePage(w, r, name, lang) {
+			http.NotFound(w, r)
+		}
 	case s.siteSandbox(r) && (p == "/en" || p == "/en/"):
 		// the sandbox page is English at / itself
 		http.Redirect(w, r, withQuery("/", r), http.StatusMovedPermanently)
@@ -254,7 +273,7 @@ func (s *Server) serveDoc(w http.ResponseWriter, r *http.Request, lang, rest str
 	switch {
 	case rest == "" || strings.HasSuffix(rest, "/"):
 		name = lang + "/" + rest + "index.html"
-	case strings.HasSuffix(rest, ".md"):
+	case strings.HasSuffix(rest, ".md") || (strings.HasPrefix(rest, "assets/") && strings.HasSuffix(rest, ".svg")):
 		name = lang + "/" + rest
 	default:
 		name = lang + "/" + rest + ".html"

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 850" role="img" aria-labelledby="title desc" lang="zh">
+<title id="title">架构概览</title>
+<desc id="desc">客户端访问中枢；中枢拥有中央数据；节点主动连接中枢并运行会话；模型请求经凭据代理到达外部提供方。</desc>
+<style>:root{color-scheme:light dark}text{font-family:var(--fleet-font-ui,sans-serif);fill:CanvasText}rect{fill:Canvas;stroke:CanvasText}path{fill:none;stroke:CanvasText;stroke-width:2}</style>
+<rect x="1" y="1" width="618" height="848" rx="12"/>
+<rect x="25" y="30" width="570" height="120" rx="10"/>
+<text x="43" y="62" font-size="22">1 · 客户端</text>
+<text x="43" y="93" font-size="19">网页应用 / 命令行</text>
+<rect x="25" y="180" width="570" height="120" rx="10"/>
+<text x="43" y="212" font-size="22">2 · 应用 — 中枢</text>
+<text x="43" y="243" font-size="19">身份 / 会话 / 订阅池</text>
+<text x="43" y="274" font-size="19">凭据代理 / 资源供应 / 健康</text>
+<rect x="25" y="335" width="570" height="120" rx="10"/>
+<text x="43" y="367" font-size="22">3 · 数据 — 中央存储</text>
+<text x="43" y="398" font-size="19">数据库 / 密钥库</text>
+<text x="43" y="429" font-size="19">发布仓库 / 备份</text>
+<rect x="25" y="505" width="570" height="120" rx="10"/>
+<text x="43" y="537" font-size="22">4 · 基础设施 — 节点</text>
+<text x="43" y="568" font-size="19">托管 macOS / 托管 Linux / 个人节点</text>
+<text x="43" y="599" font-size="19">节点代理 / 会话 / 工作文件</text>
+<text x="45" y="171" font-size="16">客户端连接中枢</text>
+<path d="M310 303v26m-5-6 5 6 5-6M25 565H12V240h13m-6-5 6 5-6 5"/>
+<text x="45" y="483" font-size="18">节点主动向外连接中枢</text>
+<text x="30" y="673" font-size="20">模型请求：节点 → 代理 → 提供方</text>
+<text x="30" y="710" font-size="20">模型密钥集中保管，永不进入会话</text>
+<text x="30" y="770" font-size="18">外部：模型 / 身份 / 源码与 CI</text>
+<text x="30" y="810" font-size="18">跨层：可观测性 / 安全 / 交付</text>
+</svg>

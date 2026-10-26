@@ -1,5 +1,7 @@
 # Contributing to claude-fleet
 
+Architecture-changing PRs must update the [public blueprint](docs/public/en/architecture.md), its [Chinese version](docs/public/zh/architecture.md), and their diagrams in the same PR; the site renders these sources.
+
 ## 产品方向与设计原则
 
 后续产品设计以 [Fleet 产品方向与设计原则](docs/dev/PRODUCT-DIRECTION.md)为依据。

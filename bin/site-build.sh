@@ -467,6 +467,7 @@ SB = os.path.join(SITE, 'sandbox')
 SB_LANGS = (('en', 'sandbox'), ('zh', os.path.join('sandbox', 'zh')))
 sandbox_pages = {}   # lang → (its directory under OUT, page)
 SB_NO = re.compile(r'wechat|微信|weixin|mainland|china|大陆|中国|二四网络|qrcode|\bqr\b|扫码|/app/try|/auth/wechat', re.I)
+sb_tables = {}
 SB_LOAD = re.compile(r'''(?:\bsrc|srcset)\s*=\s*["']?(?:https?:)?//|<link\b[^>]*\brel=["']?(?:stylesheet|preload|modulepreload|prefetch)[^>]*\bhref=["']?(?:https?:)?//|url\(\s*["']?(?:https?:)?//|@import''', re.I)
 if os.path.isfile(os.path.join(SB, 'template.html')):
     sb_tmpl = open(os.path.join(SB, 'template.html'), encoding='utf-8').read()
@@ -517,6 +518,87 @@ if os.path.isfile(os.path.join(SB, 'template.html')):
                 fail('sandbox %s: %s' % (l, what % m.group(0)))
         sandbox_pages[l] = (dict(SB_LANGS)[l], page)
 
+# --- architecture: one Markdown source for the site and the text edition ---
+architecture_pages = {}
+arch_frame = open(os.path.join(SITE, 'architecture.html'), encoding='utf-8').read()
+arch_css = open(os.path.join(SITE, 'architecture.css'), encoding='utf-8').read()
+arch_frame = arch_frame.replace('/*{{fleet_theme}}*/', THEME_CSS).replace('{{fleet_bg}}', THEME_BG).replace('{{icon_v}}', ICON_V)
+arch_frame = arch_frame.replace('{{architecture_css}}', arch_css)
+for lang, _ in LANGS:
+    source = os.path.join(DOCS, lang, 'architecture.md')
+    # --docs fixtures may omit this optional page; the repository supplies both.
+    if not os.path.isfile(source):
+        continue
+    md = open(source, encoding='utf-8').read()
+    parts = re.split(r'<!-- blueprint:([a-z]+) -->', md)
+    blocks = dict(zip(parts[1::2], parts[2::2]))
+    required = {'layers', 'external', 'cross', 'flows', 'boundaries', 'principles', 'glossary', 'version'}
+    if set(blocks) != required:
+        fail('architecture %s: expected blueprint sections %s' % (lang, sorted(required)))
+        continue
+    intro = re.sub(r'^!\[.*?\]\(.*?\)\s*$', '', parts[0], flags=re.M)
+    intro = re.sub(r'^\[.*$', '', intro, flags=re.M)
+    prefix = '/en/docs/' if lang == 'en' else '/docs/'
+    def arch_render(text):
+        rendered = md_render(text)
+        return re.sub(r'href="([a-z][a-z0-9/-]*)\.md"', lambda m: 'href="%s%s"' % (prefix, m.group(1).removesuffix('/index') + ('/' if m.group(1).endswith('/index') else '')), rendered)
+    def cards(text, kind):
+        chunks = re.split(r'(?=^### )', text, flags=re.M)
+        out = arch_render(chunks[0])
+        if kind != 'layer':
+            out += '<div class="%s-grid">' % kind
+        for chunk in chunks[1:]:
+            card = arch_render(chunk)
+            card = re.sub(r' · (live|in progress)</h3>', lambda m: '</h3><span class="badge %s">%s</span>' % ('live' if m.group(1) == 'live' else 'progress', m.group(1)), card)
+            connector = ''
+            if kind == 'layer' and '</ul>\n<p>' in card:
+                card, connector = card.split('</ul>\n', 1)
+                card += '</ul>'
+            out += '<section class="%s">%s</section>' % (kind, card)
+            if connector:
+                out += '<div class="connector">%s</div>' % connector
+        return out + ('</div>' if kind != 'layer' else '')
+    title_match = re.search(r'^# (.+)$', md, re.M)
+    if not title_match:
+        fail('architecture %s: no Markdown title' % lang)
+        continue
+    title = title_match.group(1)
+    text_label = 'Text version and diagram description' if lang == 'en' else '文字版与图示说明'
+    body = arch_render(intro) + '<p><a href="%sarchitecture">%s</a></p>' % (prefix, text_label)
+    body += '<div class="blueprint"><div>' + cards(blocks['layers'], 'layer') + '</div><aside>'
+    body += ''.join('<section class="side">%s</section>' % arch_render(blocks[k]) for k in ('external', 'cross')) + '</aside></div>'
+    body += cards(blocks['flows'], 'flow')
+    body += '<section class="boundaries">%s</section>' % arch_render(blocks['boundaries'])
+    body += cards(blocks['principles'], 'principle')
+    body += '<section class="glossary">%s</section>' % arch_render(blocks['glossary'])
+    body += '<div class="version">%s</div>' % arch_render(blocks['version'])
+    for sandbox in (False, True):
+        if sandbox and lang not in sb_tables:
+            continue  # the missing-language error above must remain the build verdict
+        S = dict(sb_tables[lang] if sandbox else tables[lang])
+        zh_path = '/zh/architecture' if sandbox else '/architecture'
+        en_path = '/architecture' if sandbox else '/en/architecture'
+        path = en_path if lang == 'en' else zh_path
+        S.update(brand=BRAND, architecture_title=title, architecture_desc=title,
+                 architecture_path=path, architecture_zh=zh_path, architecture_en=en_path,
+                 architecture_other=zh_path if lang == 'en' else en_path,
+                 architecture_home='Home' if lang == 'en' else '首页',
+                 architecture_skip='Skip to content' if lang == 'en' else '跳到正文',
+                 architecture_body=body, lang_group='Language' if lang == 'en' else '语言',
+                 other_name='中文' if lang == 'en' else 'English')
+        footer_template = sb_tmpl if sandbox else tmpl
+        footer = re.search(r'<footer>.*?</footer>', footer_template, re.S).group(0)
+        # The compact frame uses the shared wordmark image, not the front page's symbols.
+        footer = re.sub(r'<svg\b.*?</svg>', '', footer, flags=re.S)
+        frame = arch_frame.replace('{{footer}}', footer)
+        def arch_sub(m):
+            if m.group(1) not in S:
+                fail('architecture %s: unfilled slot %s' % (lang, m.group(1)))
+            return S.get(m.group(1), '').replace('{brand}', BRAND)
+        page = re.sub(r'\{\{([a-z0-9_]+)\}\}', arch_sub, frame)
+        architecture_pages[('sandbox' if sandbox else '') + path] = page
+
+
 if errs:
     for e in errs:
         print('site-build: ' + e, file=sys.stderr)
@@ -553,7 +635,7 @@ def font_range(page):
 def page_chars():
     spans = font_range(pages['en'][1])
     chars = set(range(0x20, 0x7f))   # all of printable ASCII, used or not
-    for _, page in list(pages.values()) + list(apply_pages.values()) + list(sandbox_pages.values()) + [('', p) for p in legal_pages.values()]:
+    for _, page in list(pages.values()) + list(apply_pages.values()) + list(sandbox_pages.values()) + [('', p) for p in list(legal_pages.values()) + list(architecture_pages.values())]:
         chars |= {ord(c) for c in html.unescape(page)
                   if ord(c) >= 0x20 and any(a <= ord(c) <= b for a, b in spans)}
     return chars
@@ -606,7 +688,7 @@ for lang, (sub_dir, page) in list(pages.items()) + list(apply_pages.items()) + l
     with open(os.path.join(d, 'index.html'), 'w', encoding='utf-8') as fh:
         fh.write(page)
 
-for path, page in legal_pages.items():
+for path, page in list(legal_pages.items()) + list(architecture_pages.items()):
     d = os.path.join(OUT, path.strip('/'))
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, 'index.html'), 'w', encoding='utf-8') as fh:

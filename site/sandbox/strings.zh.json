@@ -59,5 +59,7 @@
   "privacy": "隐私政策",
   "terms_path": "/terms",
   "privacy_path": "/privacy",
-  "disc": "© 2026 {brand}"
+  "disc": "© 2026 {brand}",
+  "architecture": "架构蓝图",
+  "architecture_path": "/zh/architecture"
 }

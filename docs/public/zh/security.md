@@ -1,5 +1,7 @@
 # 安全与隔离
 
+[架构蓝图](architecture.md)说明各组件的职责及跨越边界的数据。
+
 这一篇回答评估 tokenman 时最先被问的两个问题——**会话能不能读到订阅凭据**、**别人能不能进我的工作区**——以及凭据放在哪、各活多久、哪一处被攻破会影响谁。
 
 每一条都标了状态：**已上线** 是今天的 stable 里就有的；**计划中** 是已经定了、正在做的。标着「门槛 N」的，对应[公开前必须先完成的七项安全门槛](https://github.com/verkyyi/claude-fleet/blob/master/conf/public-gate.tsv)里的第 N 行；在接入入口的机器上跑 `fleet doctor`，`gate` 那几行逐项读出 PASS / FAIL。七项没全绿之前，我们不对外推广、不接托管客户。

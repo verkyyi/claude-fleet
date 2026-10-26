@@ -82,3 +82,43 @@ func TestSiteSandboxEdition(t *testing.T) {
 		t.Errorf("sandbox with no sandbox page: / served the default page")
 	}
 }
+
+// Architecture follows the host edition; docs retain their established languages.
+func TestSiteArchitecture(t *testing.T) {
+	h, _, _ := rolesHarness(t)
+	h.srv.Site = true
+	site, docs := siteFixture()
+	for name, text := range map[string]string{
+		"architecture/index.html":            "ARCH-ZH",
+		"en/architecture/index.html":         "ARCH-EN",
+		"sandbox/architecture/index.html":    "SANDBOX-ARCH-EN",
+		"sandbox/zh/architecture/index.html": "SANDBOX-ARCH-ZH",
+	} {
+		site[name] = &fstest.MapFile{Data: []byte(text)}
+	}
+	docs["zh/assets/architecture.svg"] = &fstest.MapFile{Data: []byte("<svg><title>Architecture</title></svg>")}
+	h.srv.SiteFS, h.srv.DocsFS = site, docs
+	for _, c := range []struct{ edition, path, text, lang string }{
+		{"", "/architecture", "ARCH-ZH", "zh-CN"},
+		{"", "/en/architecture", "ARCH-EN", "en"},
+		{SiteEditionSandbox, "/architecture", "SANDBOX-ARCH-EN", "en"},
+		{SiteEditionSandbox, "/zh/architecture", "SANDBOX-ARCH-ZH", "zh-CN"},
+		{SiteEditionSandbox, "/docs/assets/architecture.svg", "<svg>", "zh"},
+	} {
+		h.srv.SiteEdition = c.edition
+		rec := httptest.NewRecorder()
+		h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), c.text) || rec.Header().Get("Content-Language") != c.lang {
+			t.Errorf("%s %s: %d %q (%s)", c.edition, c.path, rec.Code, rec.Body.String(), rec.Header().Get("Content-Language"))
+		}
+		if strings.HasSuffix(c.path, ".svg") && rec.Header().Get("Content-Type") != "image/svg+xml" {
+			t.Error("diagram must be served as SVG")
+		}
+	}
+	delete(site, "sandbox/architecture/index.html")
+	rec := httptest.NewRecorder()
+	h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/architecture", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("missing sandbox architecture: %d, want 404", rec.Code)
+	}
+}

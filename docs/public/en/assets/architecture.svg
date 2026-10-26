@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 850" role="img" aria-labelledby="title desc" lang="en">
+<title id="title">Architecture overview</title>
+<desc id="desc">Clients use the hub. The hub owns data. Nodes initiate connections to the hub and run sessions. Model requests pass through the credential proxy to external providers.</desc>
+<style>:root{color-scheme:light dark}text{font-family:var(--fleet-font-ui,sans-serif);fill:CanvasText}rect{fill:Canvas;stroke:CanvasText}path{fill:none;stroke:CanvasText;stroke-width:2}</style>
+<rect x="1" y="1" width="618" height="848" rx="12"/>
+<rect x="25" y="30" width="570" height="120" rx="10"/>
+<text x="43" y="62" font-size="22">1 · Clients</text>
+<text x="43" y="93" font-size="19">Web app / command line</text>
+<rect x="25" y="180" width="570" height="120" rx="10"/>
+<text x="43" y="212" font-size="22">2 · Application — hub</text>
+<text x="43" y="243" font-size="19">Identity / sessions / subscription pools</text>
+<text x="43" y="274" font-size="19">Credential proxy / provisioning / health</text>
+<rect x="25" y="335" width="570" height="120" rx="10"/>
+<text x="43" y="367" font-size="22">3 · Data — central</text>
+<text x="43" y="398" font-size="19">Database / secrets vault</text>
+<text x="43" y="429" font-size="19">Release store / backups</text>
+<rect x="25" y="505" width="570" height="120" rx="10"/>
+<text x="43" y="537" font-size="22">4 · Infrastructure — nodes</text>
+<text x="43" y="568" font-size="19">Managed macOS / managed Linux / personal</text>
+<text x="43" y="599" font-size="19">Node agent / sessions / working files</text>
+<text x="45" y="171" font-size="16">Clients connect to the hub</text>
+<path d="M310 303v26m-5-6 5 6 5-6M25 565H12V240h13m-6-5 6 5-6 5"/>
+<text x="45" y="483" font-size="18">Nodes dial out to the hub</text>
+<text x="30" y="673" font-size="20">Model requests: node → proxy → provider</text>
+<text x="30" y="710" font-size="20">Model keys stay central; never enter a session</text>
+<text x="30" y="770" font-size="18">External: model / identity / source &amp; CI</text>
+<text x="30" y="810" font-size="18">Across all layers: observability / security / delivery</text>
+</svg>
