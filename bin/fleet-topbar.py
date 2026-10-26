@@ -289,7 +289,7 @@ def paint(parts, bg):
 US = "\x1f"
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
                      # parked (task EQBE): the park page draws no row of its own
-                     "#{?@parked,#{?@park_waking,waking,parked},#{@claude_state}}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
+                     "#{?#{&&:#{@parked},#{@park_held}},#{?@park_waking,waking,parked},#{@claude_state}}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
                      "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
                      "#{window_name}", "#{@task}"])
 TASK_RE = re.compile(r"T[1-9][0-9]{0,17}")

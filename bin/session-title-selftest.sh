@@ -153,14 +153,14 @@ if [ -n "$REAL_TMUX" ]; then
   T set-option -wu -t "=$S:draft" @session_origin; T set-option -wu -t "=$S:uncached" @session_origin
   # column 36 (task HHV0): cantalk=1 when the web may say a sentence into it — a Claude
   # whose mod takes idle.v2, a parked one; an older mod (idle.v1) or none: empty; a
-  # parked window says `parked` in column 5
+  # parked window (held by its wrapper) says `parked` in column 5
   T set-option -w -t "=$S:draft" @mod_accept idle.v2
   T set-option -w -t "=$S:uncached" @mod_accept idle.v1
-  T set-option -w -t "=$S:tabbed" @parked 1
+  T set-option -w -t "=$S:tabbed" @parked 1; T set-option -w -t "=$S:tabbed" @park_held 1
   outt=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || st_fail "A: workers failed" "$(cat "$WORK/err")"
   st_eq "A: @mod_accept idle.v2 / @parked → column 36 cantalk=1; idle.v1 empty; parked → column 5 parked (HHV0)" 'cantalk=1|cantalk=|cantalk=1:parked' \
      "$(printf '%s\n' "$outt" | awk -F'\t' '$10 == "draft" { d = $36 } $10 == "uncached" { u = $36 } $10 == "tabbed" { t = $36 ":" $5 } END { print d "|" u "|" t }')"
-  T set-option -wu -t "=$S:draft" @mod_accept; T set-option -wu -t "=$S:uncached" @mod_accept; T set-option -wu -t "=$S:tabbed" @parked
+  T set-option -wu -t "=$S:draft" @mod_accept; T set-option -wu -t "=$S:uncached" @mod_accept; T set-option -wu -t "=$S:tabbed" @parked; T set-option -wu -t "=$S:tabbed" @park_held
   # no orchq= column (issue #3118): an old seat's @orch_queue rides nowhere — the
   # row ends at orphanrep= (column 31, issue #3369), empty with no orphan report
   T set-option -w -t "=$S:draft" @fleet_role orchestrator; T set-option -w -t "=$S:draft" @orch_queue 3

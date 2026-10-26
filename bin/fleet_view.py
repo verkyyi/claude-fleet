@@ -3102,6 +3102,19 @@ def fenv(k, d):
         return float(d)
 
 
+def switch_args(client, g, w):
+    """Show window w on 看台 g AS this client (task PMGT, the same rule as
+    fleet-remote-view.sh rv_select, #1933): `switch-client -c` makes it the
+    window's latest client, so under `window-size latest` the window takes THIS
+    screen's size at once — a bare select-window leaves it at whichever device
+    touched it last (blank rows under it, or cropped) until the next keypress."""
+    if client:
+        _, on = tm("display-message", "-p", "-c", client, "#{client_session}")
+        if on == g:
+            return ["switch-client", "-c", client, "-t", "=%s:%s" % (g, w)]
+    return ["select-window", "-t", "=%s:%s" % (g, w)]
+
+
 def go_far(vid, fleet, g, target, meta, client):
     """go()'s other-machine half: (method, rc, machine, login, extra)."""
     m, l = far_where(target, meta, fleet)
@@ -3117,7 +3130,7 @@ def go_far(vid, fleet, g, target, meta, client):
             toast(client, say("view_far_fmt", m))
             return "far-none", 3, m, l, {}
     if not made and pcur == "wid:" + target:
-        code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+        code, _ = tm(*switch_args(client, g, w))
         return ("peer-window", 0) + (m, l, {}) if code == 0 else ("gone", 4, m, l, {})
     sock = "" if made else peerlink().up_sock(m, l)
     extra = {}
@@ -3133,16 +3146,16 @@ def go_far(vid, fleet, g, target, meta, client):
             prc = peer_select(m, l, sock, target, vid)
         extra["peer_ms"] = round((time.monotonic() - t1) * 1000, 1)
         if prc == 0:
-            code, _ = tm("select-window", "-t", "=%s:%s" % (g, w), ";",
+            code, _ = tm(*switch_args(client, g, w) + [";",
                          "set-option", "-w", "-t", w, "@peer_cur", "wid:" + target, ";",
-                         "set-option", "-w", "-u", "-t", w, "@peer_want")
+                         "set-option", "-w", "-u", "-t", w, "@peer_want"])
             return ("peer-select", 0, m, l, extra) if code == 0 else ("gone", 4, m, l, extra)
         if prc == 3:
             toast(client, say("view_gone"))
             return "gone", 4, m, l, extra
     # the link not up (or the far 看台 not there yet): the window waits and lands there
     tm("set-option", "-w", "-t", w, "@peer_want", "wid:" + target)
-    tm("select-window", "-t", "=%s:%s" % (g, w))
+    tm(*switch_args(client, g, w))
     toast(client, say("view_peer_wait_fmt", m), "info")
     return "peer-wait", 3, m, l, extra
 
@@ -3249,7 +3262,7 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
             tm(*park_unmode(w))
         code = webterm_switch(vid, w)
         if code is None:
-            code, _ = tm(*park_unmode(w) + [";", "select-window", "-t", "=%s:%s" % (g, w)])
+            code, _ = tm(*park_unmode(w) + [";"] + switch_args(client, g, w))
         if code:
             toast(client, say("view_open_elsewhere"))
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)
@@ -3929,7 +3942,7 @@ def shell_window(qo, vid, client, fleet, g, prog, m, l, wid, name):
     for line in lst.splitlines():
         sw, sk, sv = (line.split("|") + ["", ""])[:3]
         if sk == key and sv == vid:
-            tm("select-window", "-t", "=%s:%s" % (g, sw))
+            tm(*switch_args(client, g, sw))
             return 0
     pane = "exec python3 %s view-shell %s %s %s %s --view %s" % (
         shlex.quote(os.path.abspath(qo.__file__)), prog, shlex.quote(m), shlex.quote(l), shlex.quote(wid or "-"), shlex.quote(vid))
