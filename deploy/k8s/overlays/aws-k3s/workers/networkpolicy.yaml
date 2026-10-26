@@ -153,6 +153,16 @@ spec:
               fleet/role: user
       ports:
         - {protocol: TCP, port: 8788}
+    # its public path /v1/proxy/ (bootstrap.sh's fleet-credproxy Ingress): traefik
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - {protocol: TCP, port: 8788}
 ---
 # The credential proxy: the providers and the hub's Service (fleet-hub), never
 # the metadata address.

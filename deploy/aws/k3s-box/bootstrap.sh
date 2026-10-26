@@ -371,7 +371,8 @@ apply_template() {
   cp_ip=$(k -n fleet-workers get svc fleet-credproxy -o jsonpath='{.spec.clusterIP}')
   tmp=$(mktemp -d)
   # the account key's public half, from the hub itself (its Service, from the node)
-  curl -fsS "http://$hub_ip/v1/fleet/account-key" > "$tmp/account.pub" \
+  # under its own name: a hub serving previews answers 421 to an unknown Host
+  curl -fsS -H "Host: $HUB_HOST" "http://$hub_ip/v1/fleet/account-key" > "$tmp/account.pub" \
     || die "the hub did not hand out its account key (is ccquota-account-key mounted?)"
   # k3s' defaults: pods 10.42.0.0/16, services 10.43.0.0/16, DNS 10.43.0.10;  # oss-ok: k3s documented default ranges
   # EC2's metadata address. The guard lets the two in-cluster roads through.

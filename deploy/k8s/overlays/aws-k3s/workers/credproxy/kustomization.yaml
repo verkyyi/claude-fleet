@@ -23,6 +23,10 @@ patches:
       - op: replace
         path: /metadata/name
         value: fleet-credproxy
+      # in us-west-2 the providers answer directly: no Singapore relay
+      - op: replace
+        path: /spec/template/spec/containers/0/command
+        value: ["ccquota", "credproxy", "--listen=:8788", "--direct"]
   - target: {kind: Service, name: ccquota-credproxy}
     patch: |-
       - op: replace
