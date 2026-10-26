@@ -10,6 +10,8 @@ Below, replace `https://hub.example.com` with your hub's address (the one sent t
 2. Sign in the way you registered when the hub was opened: scan with WeChat, email, or GitHub.
 3. After signing in you are in the console. The **Admin** group in the sidebar (Subscription pool, Service nodes & clients, Users…) is visible to admins only.
 
+On the tokenman.io public portal, the homepage follows your browser language. The language link in the footer remembers your choice. Sign in offers WeChat QR, email and GitHub; the homepage also offers access requests and a trial when available. Old portal bookmarks forward to the same page, while WeChat keeps its existing entry.
+
 ## 2. Install the client
 
 Creating accounts and sending invites uses the `fleet` command. In a terminal on your own computer:

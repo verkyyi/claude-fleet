@@ -182,6 +182,9 @@ func (s *Server) publicHostURL(r *http.Request) string {
 // siteEditionFor is r's site edition: CCQUOTA_SITE_HOSTS's for its host, else
 // CCQUOTA_SITE's.
 func (s *Server) siteEditionFor(r *http.Request) string {
+	if s.portalHost(r) {
+		return SiteEditionSandbox
+	}
 	if r != nil && len(s.SiteHosts) > 0 {
 		if e, ok := s.SiteHosts[reqHostname(r)]; ok {
 			return e

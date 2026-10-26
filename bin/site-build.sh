@@ -516,6 +516,18 @@ if os.path.isfile(os.path.join(SB, 'template.html')):
             for m in rx.finditer(page):
                 fail('sandbox %s: %s' % (l, what % m.group(0)))
         sandbox_pages[l] = (dict(SB_LANGS)[l], page)
+        # T1112: opt-in unified portal; the original sandbox output stays identical.
+        portal = page.replace('href="/auth/github/start"', 'href="/app/signin"')
+        portal = portal.replace(v['cta_github'], v['signin'])
+        portal = portal.replace('<svg aria-hidden="true"><use href="#gh"/></svg>' + v['signin'], v['signin'])
+        portal = portal.replace('href="' + v['other_path'] + '" hreflang=',
+                                'href="/?lang=' + ('zh-CN' if l == 'en' else 'en') + '" hreflang=')
+        trial = 'Try it' if l == 'en' else '立即体验'
+        portal = portal.replace('<a class="btn" href="/apply">',
+                                '<a class="btn" href="/app/try">' + trial + '</a><a class="btn" href="/apply">')
+        sandbox_pages['portal-' + l] = ('portal/' + dict(SB_LANGS)[l], portal)
+        sandbox_pages['portal-apply-' + l] = ('apply/portal/' + dict(SB_LANGS)[l],
+            portal.replace('<a class="btn" href="/app/try">' + trial + '</a>', ''))
 
 if errs:
     for e in errs:

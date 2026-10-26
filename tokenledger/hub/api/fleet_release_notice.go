@@ -321,7 +321,7 @@ func (s *Server) releaseDigest(rows []store.HubAuditEntry, day, end time.Time) s
 		rz, re = rz+"；没有挡着的", re+"; nothing held"
 	}
 	zh, en = append(zh, rz), append(en, re)
-	if u := strings.TrimRight(s.FleetPublicURL, "/"); u != "" {
+	if u := s.humanURL(nil); u != "" {
 		zh = append(zh, "点开看清单 › "+u+"/admin/release")
 		en = append(en, "Open the list › "+u+"/admin/release")
 	}
