@@ -743,3 +743,4 @@
 
 | 部分原生启动未登记全部组件，或 direct Codex 的 agent slot 被误判为 Claude | 有完整退出事实却无法确认，或旧缺失登记被误当未启动并错误释放 | 仅启动时正向 admission 协议允许合法 partial 集合，supervisor/child 必需；认证原 start 决定 provider；旧 partial 历史不升级，逐根退出证据与双重栅栏保留 | `native-partial-admission` |
 | 首次受控启动已领取但在 Agent 执行前停止，工作树存在而无原生历史；或后续交接缺历史 | 首次任务无法继续，或把丢失历史的后续任务误当首次执行 | 仅原 ACK 的 binding generation 1、每个 epoch 正向协议且没有 native slot、精确工作树和无 segment 共同允许首次执行；后续仍要求原历史，重试复用原登记归档 | `task-first-start` |
+| 看台的已收起列表每分钟重建一次 `fleet-history.sh rows`，账本上千行 | 逐行 fork `date`、tr/sed、perl，嵌套用二次方的 bash 字符串匹配：约 1400 行空闲 3 分钟、负载 30 时 7 分钟，上一次没完下一次又起，负载更高 | 一次 perl 渲染全部行（与 bash 循环逐字节一致，bash 循环只在无法保证一致时接手）；后台读者以 `nice -n 10` 跑，`FLEET_HISTORY_ROWS_SECS` 限时，超时保留上一份 | `history-rows-forks` |

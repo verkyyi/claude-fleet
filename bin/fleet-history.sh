@@ -778,6 +778,235 @@ rows_repo() {
   printf '%s' "$repo"
 }
 
+# rows_render_pl — cmd_rows' row loop as ONE perl process (reads cmd_rows' locals:
+# $out, the widths, $now, $prmapn/$prdir, the colours, $_budget). rc 0 = the rows
+# are printed; 3 = declined, nothing printed (the bash loop renders); 4 = over
+# FLEET_HISTORY_ROWS_SECS, nothing printed. Every rule in it is the loop's rule,
+# spelled step for step in the same order — change one, change both
+# (fleet-history-selftest.sh R diffs the two on the same ledger).
+rows_render_pl() {
+  command -v perl >/dev/null 2>&1 || return 3
+  local _u='é'; [ "${#_u}" = 1 ] || return 3            # ${#} must count UTF-8 characters
+  local _left=0
+  if [ "${_budget:-0}" -gt 0 ]; then
+    _left=$(( _budget - SECONDS )); [ "$_left" -gt 0 ] || return 4
+  fi
+  local _prog
+  IFS= read -r -d '' _prog <<'PL' || :
+use strict;
+use utf8;
+use Encode ();
+my %E = map { $_ => Encode::decode('UTF-8', $ENV{"FHR_$_"} // '') }
+  qw(US GN IN TX GY RD R PRMAPN SHORTMAP);
+my ($US, $GN, $IN, $TX, $GY, $RD, $R) = @E{qw(US GN IN TX GY RD R)};
+my ($USABLE, $LEFTW, $RIGHTW, $ACTW, $now) = map { $ENV{"FHR_$_"} // 0 } qw(USABLE LEFTW RIGHTW ACTW NOW);
+my $merged = ($ENV{FHR_MERGED} // '') eq '1';
+my $badge  = ($ENV{FHR_BADGE} // '') eq '1';
+my $epoch_col = ($ENV{FHR_EPOCH} // '') eq '1';
+my $prdir = $ENV{FHR_PRDIR} // '';          # bytes: a path
+my $foldbase = $ENV{FHR_FOLD} // '';        # bytes: landed_fold_file ''
+my ($prmapn, $shortmap) = @E{qw(PRMAPN SHORTMAP)};
+if (my $left = $ENV{FHR_LEFT}) { $SIG{ALRM} = sub { exit 4 }; alarm $left; }
+
+my $raw = do { local $/; <STDIN> } // '';
+my $in = eval { Encode::decode('UTF-8', $raw, Encode::FB_CROAK) };
+exit 3 unless defined $in;
+
+# `IFS=$'\t' read -r a b …`: tab is IFS whitespace — leading/trailing tabs go and a
+# run of tabs is ONE separator, so an empty column shifts the rest left.
+sub rd { my $l = shift; $l =~ s/^\t+//; $l =~ s/\t+\z//; return $l eq '' ? () : split /\t+/, $l, 17; }
+sub okey { my $k = shift; return $k =~ /^scratch-/ ? $k : "issue-$k"; }
+sub slug { my $s = shift; $s =~ s{/}{-}g; $s =~ s/[^[:alnum:]._-]//g; return $s; }  # lslug_v
+sub is_sess { my $o = shift // '';
+  return 1 if $o =~ /^(?:issue|scratch)-/;
+  return $merged && $o =~ /:(?:issue|scratch)-/ ? 1 : 0; }
+sub lshort { my $s = shift; my $i = index($shortmap, "\n$s\t");   # lshort_v
+  return $s if $i < 0; my $t = substr($shortmap, $i + length($s) + 2); $t =~ s/\n.*//s; return $t; }
+sub nonascii { return $_[0] =~ /[^\x00-\x7f]/ ? 1 : 0; }
+sub cw { my $o = ord shift;                 # fleet_clip_display's width table
+  return ($o >= 0x1100 && (
+      $o <= 0x115F || $o == 0x2329 || $o == 0x232A ||
+      ($o >= 0x2E80 && $o <= 0x303E) || ($o >= 0x3041 && $o <= 0x33FF) ||
+      ($o >= 0x3400 && $o <= 0x4DBF) || ($o >= 0x4E00 && $o <= 0x9FFF) ||
+      ($o >= 0xA000 && $o <= 0xA4CF) || ($o >= 0xAC00 && $o <= 0xD7A3) ||
+      ($o >= 0xF900 && $o <= 0xFAFF) || ($o >= 0xFE10 && $o <= 0xFE19) ||
+      ($o >= 0xFE30 && $o <= 0xFE6F) || ($o >= 0xFF00 && $o <= 0xFF60) ||
+      ($o >= 0xFFE0 && $o <= 0xFFE6) || ($o >= 0x1F000 && $o <= 0x1FAFF) ||
+      ($o >= 0x20000 && $o <= 0x3FFFD))) ? 2 : 1; }
+sub clip { my ($a, $s) = @_;                # fleet_clip_display → (out, width)
+  unless (nonascii($s)) { $s = substr($s, 0, $a) if length($s) > $a; return ($s, length $s); }
+  my ($w, $out) = (0, '');
+  for my $c (split //, $s) { my $x = cw($c); last if $w + $x > $a; $w += $x; $out .= $c; }
+  return ($out, $w); }
+sub fld { my ($w, $s) = @_; my $n = length $s; return $n > $w ? substr($s, 0, $w) : $s . (' ' x ($w - $n)); }
+sub win_name { my $t = shift; my $s;        # fleet_win_name
+  if (nonascii($t)) {
+    $s = lc $t; $s =~ s/[^\p{Alnum}\p{M}]+/-/g; $s =~ s/^-+//; $s =~ s/-+\z//;
+    $s = '' unless $s =~ /\p{Alnum}/;
+  } else {
+    $s = $t; $s =~ tr/A-Z/a-z/; $s =~ s/[^a-z0-9\n]/-/g; $s =~ s/-+/-/g; $s =~ s/^-//; $s =~ s/-\z//;
+  }
+  return '' if $s eq '';
+  ($s) = clip(32, $s); $s =~ s/-\z//;
+  return $s =~ /\A(?:dash|plan|backlog|home)\z/ ? '' : $s; }
+sub runout { my @cmd = @_; my $o = '';      # a command's stdout, its rc
+  my $pid = open(my $fh, '-|'); return ('', 1) unless defined $pid;
+  if (!$pid) { open STDERR, '>', '/dev/null'; exec @cmd; exit 127; }
+  { local $/; $o = <$fh> // ''; } close $fh; return ($o, $? ? 1 : 0); }
+sub epoch { my $iso = shift;                # fleet_epoch_from_iso
+  return '' if $iso eq '' || $iso eq '-';
+  if ($iso =~ /\A(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z\z/) {
+    my ($y, $m, $d, $H, $M, $S) = ($1, $2, $3, $4, $5, $6);
+    my @dim = (31, ($y % 4 == 0 && ($y % 100 != 0 || $y % 400 == 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31);
+    if ($y >= 1970 && $m >= 1 && $m <= 12 && $d >= 1 && $d <= $dim[$m - 1] && $H < 24 && $M < 60 && $S < 60) {
+      my ($yy, $mm) = $m <= 2 ? ($y - 1, $m + 9) : ($y, $m - 3);   # days from civil
+      my $era = int($yy / 400); my $yoe = $yy - $era * 400;
+      my $doy = int((153 * $mm + 2) / 5) + $d - 1;
+      my $doe = $yoe * 365 + int($yoe / 4) - int($yoe / 100) + $doy;
+      return ((($era * 146097 + $doe - 719468) * 24 + $H) * 60 + $M) * 60 + $S;
+    }
+  }
+  my $b = Encode::encode('UTF-8', $iso);    # anything else: ask date, as the lib does
+  my ($o, $rc) = runout('date', '-u', '-d', $b, '+%s');
+  unless ($rc == 0) { local $ENV{TZ} = 'UTC'; my ($o2) = runout('date', '-j', '-f', '%Y-%m-%dT%H:%M:%SZ', $b, '+%s'); $o .= $o2; }
+  $o =~ s/\n+\z//; return Encode::decode('UTF-8', $o); }
+sub reltime { my ($ts, $nw) = @_;           # fleet_reltime
+  return '' unless $ts =~ /\A[0-9]+\z/ && $nw =~ /\A[0-9]+\z/;
+  my $d = $nw - $ts; $d = 0 if $d < 0;
+  my @u = ([60, 0, ''], [3600, 60, 'min'], [86400, 3600, 'hour'], [604800, 86400, 'day'],
+           [2592000, 604800, 'wk'], [31536000, 2592000, 'mo']);
+  return 'now' if $d < 60;
+  for my $x (@u[1 .. $#u]) { if ($d < $x->[0]) { my $n = int($d / $x->[1]); return "$n $x->[2]" . ($n != 1 ? 's' : ''); } }
+  my $n = int($d / 31536000); return "$n yr" . ($n != 1 ? 's' : ''); }
+my %fold;
+sub is_open { my $k = shift; my $s = '';    # landed_is_open
+  ($s, $k) = split /:/, $k, 2 if $merged && $k =~ /:/;
+  my $f = $foldbase . ($s ne '' ? '.' . Encode::encode('UTF-8', $s) : '');
+  unless (exists $fold{$f}) {
+    my %set; if (-f $f && open(my $fh, '<', $f)) { while (my $l = <$fh>) { $l =~ s/\n\z//; $set{$l} = 1; } close $fh; }
+    $fold{$f} = \%set; }
+  return exists $fold{$f}{Encode::encode('UTF-8', $k)}; }
+sub after_tab { my $s = shift; my $i = index($s, "\t"); return $i < 0 ? $s : substr($s, $i + 1); }
+
+my @rows = map { [rd($_)] } split /\n/, $in;
+# pass A — key → (seq, origin), the first (newest) row of a key wins
+my (%seq, %org); my $n = 0;
+for my $f (@rows) {
+  my $k = $f->[2] // ''; next if $k eq '';
+  $n++; my $ko = okey($k); $ko = slug($f->[0] // '') . ":$ko" if $merged;
+  next if exists $seq{$ko};
+  my $o = $f->[11] // ''; $seq{$ko} = $n; $org{$ko} = $o eq '' ? '-' : $o;
+}
+sub lchain { my $cur = shift; my $hops = 0;
+  while ($hops < 4) {
+    return ('', 0) unless exists $seq{$cur};
+    my $o = $org{$cur};
+    if (is_sess($o)) { $cur = $o; $hops++ } else { return ($cur, $seq{$cur}) }
+  }
+  return ('', 0); }
+# pass A2 — the per-root tally
+my (%tot, %land);
+for my $f (@rows) {
+  my $k = $f->[2] // ''; next if $k eq '';
+  my $o = $f->[11] // ''; next unless is_sess($o);
+  my ($root) = lchain($o); next if $root eq '';
+  $tot{$root}++; $land{$root} += (($f->[10] // '') eq 'closed-unlanded') ? 0 : 1;
+}
+my @buf; my $lrow = 0;
+for my $f (@rows) {
+  my ($rrepo, $when, $iss, $title, $pr, $sha, undef, undef, $sid, $smry, $state, $origin, undef, undef, undef, $task)
+    = map { $_ // '' } @$f[0 .. 15];
+  next if $iss eq '';
+  $lrow++;
+  my $fzfkey = $sid eq '' ? '-' : $sid;
+  my $okey = okey($iss); my $lslug = '';
+  my $rs = '';
+  if ($merged) { $lslug = slug($rrepo); $okey = "$lslug:$okey"; $rs = ($rrepo ne '' && $rrepo ne '-') ? "\@$rrepo" : ''; }
+  my $target = $iss =~ /^scratch-/ ? "landed:scratch:$iss$rs"
+             : ($pr eq '' || $pr eq '-') ? "landed:issue:$iss$rs" : 'landed:' . ($pr =~ s/^#//r) . $rs;
+  my ($ldepth, $lgrp, $lroot) = (0, $lrow, '');
+  if (is_sess($origin)) { my ($r, $rseq) = lchain($origin); if ($r ne '') { ($ldepth, $lgrp, $lroot) = (1, $rseq, $r); } }
+  next if $ldepth > 0 && !is_open($lroot);
+  my ($glyph, $glyph_c) = $state eq 'closed-unlanded' ? ('✗', $GY) : ('✓', $IN);
+  my $wname = ($title ne '' && $title ne '-') ? win_name($title) : '';
+  if ($wname eq '') { $wname = $iss =~ /^T[1-9]/ ? "task-$iss" : $iss =~ /^scratch-/ ? $iss : "issue-$iss"; }
+  my $dsmry = ($title eq '-' || $title eq '') ? '(untitled)' : $title;
+  $dsmry = ($task =~ /^T[1-9]/ ? "$task " : '') . $dsmry;
+  my $ep = epoch($when); my $act = reltime($ep, $now); $act = '-' if $act eq '';
+  my $prcell = ($pr eq '' || $pr eq '-') ? '—' : '#' . ($pr =~ s/^#//r);
+  my ($depc, $depcol, $msha, $dst) = ('·', $GY, '', '');
+  unless ($pr eq '' || $pr eq '-') {
+    my $num = $pr =~ s/^#//r;
+    my $needle = $merged ? "\n$lslug\t#$num\t" : "\t#$num\t";
+    my $i = index($prmapn, $needle);
+    if ($i >= 0) {
+      my $l = substr($prmapn, $i + length $needle); $l =~ s/\n.*//s;
+      my $r = after_tab(after_tab($l));
+      if ($r =~ /\t/) { $msha = after_tab($r); $msha =~ s/\t.*//s; }
+    }
+  }
+  my $depdir = $merged ? "$prdir/" . Encode::encode('UTF-8', $lslug) : $prdir;
+  my $dfile = "$depdir/deploy_" . Encode::encode('UTF-8', $msha);
+  if ($msha ne '' && -f $dfile && open(my $fh, '<', $dfile)) {
+    my $l = <$fh> // ''; close $fh; $l =~ s/\n.*//s; $l =~ s/^[ \t]+//; ($dst) = split /[ \t]+/, $l; $dst //= '';
+  }
+  if    ($dst eq 'live')      { ($depc, $depcol) = ('live', $GN) }
+  elsif ($dst eq 'deploying') { ($depc, $depcol) = ('…', $TX) }
+  elsif ($dst eq 'failed')    { ($depc, $depcol) = ('✗', $RD) }
+  my $issd = $iss =~ /^scratch-/ ? '~' . substr($iss, 8) : $iss =~ /^T[1-9]/ ? $iss : "#$iss";
+  my $icol = $iss =~ /^scratch-/ ? $IN : $GN;
+  my $treed = $ldepth > 0 ? '└' : '';
+  my $f_iss = fld(5, $issd);
+  my $f_name;
+  if (nonascii($wname)) { my ($o, $w) = clip(26, $wname); $f_name = $o . (' ' x (26 - $w)); }
+  else { $f_name = fld(26, $wname); }
+  my ($f_act, $f_pr, $f_ctx) = (fld($ACTW, $act), fld(7, $prcell), fld(4, $depc));
+  my ($tagd, $tagpfx, $torg, $tpre) = ('', '', $origin, '');
+  if ($merged) {
+    if (index($torg, "$lslug:") == 0) { $torg = substr($torg, length($lslug) + 1); }
+    elsif ($torg =~ /:(?:issue|scratch)-/) { my ($s0, $rest) = split /:/, $torg, 2; $tpre = lshort($s0); $torg = $rest; }
+  }
+  if ($torg eq '' || $torg eq '-') { }
+  elsif ($torg =~ /^issue-(.*)\z/s)   { $tagd = "↳$tpre#$1" }
+  elsif ($torg =~ /^scratch-(.*)\z/s) { $tagd = "↳$tpre~$1" }
+  else { $tagd = "↳$torg" }
+  $tagd = '' if $ldepth > 0 && $lroot ne '' && $origin eq $lroot;
+  my ($carg, $kidd, $lextra) = ('', '', 0);
+  my $ltot = $tot{$okey} // 0;
+  if ($ltot > 0) {
+    $kidd = ($land{$okey} // 0) . "/$ltot ✓";
+    $carg = is_open($okey) ? '▾' : '▸';
+    $treed = $carg; $lextra = length($kidd) + 1;
+  }
+  my $repod = '';
+  if ($badge) { $repod = lshort($lslug); $repod =~ s/[^A-Za-z0-9._ ?-]//g; }
+  my $avail = $USABLE - $LEFTW - $RIGHTW - 1; $avail = 0 if $avail < 0;
+  if ($repod ne '') { $avail -= length($repod) + 1; $avail = 0 if $avail < 0; }
+  if ($tagd ne '')  { $avail -= length($tagd) + 1;  $avail = 0 if $avail < 0; }
+  $avail -= $lextra; $avail = 0 if $avail < 0;
+  my $dw; ($dsmry, $dw) = clip($avail, $dsmry);
+  if ($repod ne '') { $tagpfx = "$GY$repod$R "; $dw += length($repod) + 1; }
+  if ($tagd ne '')  { $tagpfx .= "$IN$tagd$R "; $dw += length($tagd) + 1; }
+  if ($carg ne '')  { $tagpfx .= "$GY$kidd$R "; $dw += $lextra; }
+  my $pad = $USABLE - $LEFTW - $dw - $RIGHTW; $pad = 1 if $pad < 1;
+  my $line = "$target$US$fzfkey$US$glyph_c$glyph$R $icol$f_iss$R $GY" . ($treed eq '' ? ' ' : $treed)
+    . " $R $TX$f_name$R $tagpfx$TX$dsmry$R" . (' ' x $pad) . "$GY$f_act$R $IN$f_pr$R $depcol$f_ctx$R";
+  $line .= "$US$ep" if $epoch_col;
+  push @buf, [$lgrp, $ldepth, $lrow, $line];
+}
+alarm 0;
+print Encode::encode('UTF-8', join '', map { "$_->[3]\n" } sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] || $a->[2] <=> $b->[2] } @buf);
+PL
+  FHR_US="$US" FHR_GN="$GN" FHR_IN="$IN" FHR_TX="$TX" FHR_GY="$GY" FHR_RD="$RD" FHR_R="$R" \
+  FHR_PRMAPN="$prmapn" FHR_SHORTMAP="$LANDED_SHORTMAP" FHR_PRDIR="$prdir" FHR_FOLD="$(landed_fold_file '')" \
+  FHR_USABLE="$USABLE" FHR_LEFTW="$LEFTW" FHR_RIGHTW="$RIGHTW" FHR_ACTW="$ACTW" FHR_NOW="${now:-}" \
+  FHR_MERGED="$LANDED_MERGED" FHR_BADGE="$LANDED_BADGE" FHR_EPOCH="${FLEET_HISTORY_EPOCH:-0}" FHR_LEFT="$_left" \
+    perl -e "$_prog" <<< "$out"
+  local rc=$?
+  case "$rc" in 0|4) return "$rc" ;; esac
+  return 3
+}
+
 cmd_rows() {
   local repo; repo=$(rows_repo)
   export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"   # ${#s} counts chars
@@ -802,46 +1031,7 @@ cmd_rows() {
 
   landed_scope
   local out; out=$(landed_stream "$repo")
-
-  # --- nesting (issue #503, applied to the closed list) ------------------------
-  # Ledger col 11 IS the spawning session — recorded at land/close time from the
-  # same @origin the live dash groups by — so the finished list can show the same
-  # shape the live one does: a child under the parent that spawned it, `└` indent
-  # and `↳` tag, its block folded by default.
-  #
-  # pass A — the parent table: key → seq · origin, keyed in @origin spelling.
-  # `seq` is the row's position in the newest-first list, which is this view's sort
-  # the way (rank, index) is the live one's. The ledger is append-only and a key can
-  # recur (a reopened issue, a re-landed scratch), so the FIRST row wins — newest
-  # first means the newest one, the one a reader means by that number.
-  local lkeytab='' lseq=0 lk_o lorg0 lrp0 lslug='' lshort=''
-  while IFS=$'\t' read -r lrp0 _ lk0 _ _ _ _ _ _ _ _ lorg0 _; do
-    [ -n "$lk0" ] || continue
-    lseq=$((lseq+1))
-    lk_o=$(lkey_okey "$lk0")
-    [ "$LANDED_MERGED" = 1 ] && { lslug_v "$lrp0"; lk_o="$lslug:$lk_o"; }
-    case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
-    lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
-  done <<< "$out"
-
-  # pass A2 — per-root subtree tally, the landed twin of the live badge (#624):
-  # `<landed>/<total> ✓`, i.e. how many of the block actually merged (a
-  # closed-unlanded row, the ✗ glyph, did not). Attribution is pass A's grouping
-  # verbatim — a grandchild counts toward the ultimate root, the row it renders
-  # under — so the badge always describes exactly the block beneath it, folded or
-  # not. Each record carries its own leading AND trailing newline: the counting
-  # substitutions below replace non-overlapping matches, so records sharing one
-  # separator newline would count two in a row as ONE.
-  local lkidtab='' lm
-  while IFS=$'\t' read -r _ _ lk0 _ _ _ _ _ _ _ lst0 lorg0 _; do
-    [ -n "$lk0" ] || continue
-    lorg_is_sess "${lorg0:-}" || continue
-    lchain "$lorg0"
-    [ -n "$lroot" ] || continue
-    case "$lst0" in closed-unlanded) lm=0 ;; *) lm=1 ;; esac
-    lkidtab+=$'\n'"$lroot"$'\t'"$lm"$'\n'
-  done <<< "$out"
-
+  local lslug='' lshort=''
   # deploy state per landed row (issue #541): the ledger's own sha is the pre-squash
   # worktree HEAD (never on master), so the merge sha comes from this fleet's prmap
   # (field 6, by PR number) and the verdict from the deploy_<sha> file beside it —
@@ -899,6 +1089,66 @@ cmd_rows() {
   printf '%s\n' "hdr${US}hdr${US}${E}4;38;2;86;95;137m  ${h_i}    ${h_n} title${h_gap}${h_a} ${h_p} ${h_c}${R}"
 
   [ -z "$out" ] && { printf '%s\n' "none${US}none${US}${GY}  (no landed sessions recorded yet — land a PR to populate; ⌃t=back to live)${R}"; return 0; }
+
+  # --- one perl pass renders every row (issue: a 7-minute builder) -------------
+  # The loop below is the reference; it forks per row (fleet_win_name's tr/sed or
+  # perl, fleet_epoch_from_iso's `date`, the clip's perl on a CJK title) and its
+  # nesting walks bash strings with leading-`*` patterns — quadratic in the ledger.
+  # On a ledger of ~1400 rows that was 3+ minutes idle and 7 at load 30, rebuilt
+  # every minute by the 看台's 已收起 reader. rows_render_pl computes the SAME bytes
+  # in one process (fleet-history-selftest.sh R holds the two engines to one
+  # output); it declines — rc 3, nothing printed — when it cannot promise that
+  # (no perl, ${#} not counting UTF-8 characters, a ledger that is not valid
+  # UTF-8), and the loop renders. FLEET_HISTORY_ROWS_ENGINE=bash forces the loop.
+  # FLEET_HISTORY_ROWS_SECS bounds one build's wall clock (the background reader
+  # sets it): past it the build exits 4 with nothing more printed, so the
+  # reader's `&& mv` keeps the last good copy. Unset / 0 = no bound.
+  local _rc _budget=${FLEET_HISTORY_ROWS_SECS:-0}
+  case "$_budget" in ''|*[!0-9]*) _budget=0 ;; esac
+  if [ "${FLEET_HISTORY_ROWS_ENGINE:-}" != bash ]; then
+    rows_render_pl; _rc=$?
+    case "$_rc" in 0) return 0 ;; 3) ;; *) return "$_rc" ;; esac
+  fi
+
+  # --- nesting (issue #503, applied to the closed list) ------------------------
+  # Ledger col 11 IS the spawning session — recorded at land/close time from the
+  # same @origin the live dash groups by — so the finished list can show the same
+  # shape the live one does: a child under the parent that spawned it, `└` indent
+  # and `↳` tag, its block folded by default.
+  #
+  # pass A — the parent table: key → seq · origin, keyed in @origin spelling.
+  # `seq` is the row's position in the newest-first list, which is this view's sort
+  # the way (rank, index) is the live one's. The ledger is append-only and a key can
+  # recur (a reopened issue, a re-landed scratch), so the FIRST row wins — newest
+  # first means the newest one, the one a reader means by that number.
+  local lkeytab='' lseq=0 lk_o lorg0 lrp0
+  while IFS=$'\t' read -r lrp0 _ lk0 _ _ _ _ _ _ _ _ lorg0 _; do
+    [ -n "$lk0" ] || continue
+    lseq=$((lseq+1))
+    lk_o=$(lkey_okey "$lk0")
+    [ "$LANDED_MERGED" = 1 ] && { lslug_v "$lrp0"; lk_o="$lslug:$lk_o"; }
+    case $'\n'"$lkeytab" in *$'\n'"$lk_o"$'\t'*) continue ;; esac
+    lkeytab+="$lk_o"$'\t'"$lseq"$'\t'"${lorg0:--}"$'\n'
+  done <<< "$out"
+
+  # pass A2 — per-root subtree tally, the landed twin of the live badge (#624):
+  # `<landed>/<total> ✓`, i.e. how many of the block actually merged (a
+  # closed-unlanded row, the ✗ glyph, did not). Attribution is pass A's grouping
+  # verbatim — a grandchild counts toward the ultimate root, the row it renders
+  # under — so the badge always describes exactly the block beneath it, folded or
+  # not. Each record carries its own leading AND trailing newline: the counting
+  # substitutions below replace non-overlapping matches, so records sharing one
+  # separator newline would count two in a row as ONE.
+  local lkidtab='' lm
+  while IFS=$'\t' read -r _ _ lk0 _ _ _ _ _ _ _ lst0 lorg0 _; do
+    [ -n "$lk0" ] || continue
+    lorg_is_sess "${lorg0:-}" || continue
+    lchain "$lorg0"
+    [ -n "$lroot" ] || continue
+    case "$lst0" in closed-unlanded) lm=0 ;; *) lm=1 ;; esac
+    lkidtab+=$'\n'"$lroot"$'\t'"$lm"$'\n'
+  done <<< "$out"
+
   # Rows are BUFFERED, not printed straight out (they used to be): nesting has to
   # re-order them — a child sorts under its parent rather than at its own merge
   # time — so the emit moved below the loop, behind one sort. `<<<` rather than a
@@ -907,6 +1157,10 @@ cmd_rows() {
   local lbuf='' lrow=0 ldepth lgrp lroot lrootseq
   while IFS=$'\t' read -r rrepo when iss title pr sha _ _ sid smry state origin _ _ _ task _; do
     [ -z "$iss" ] && continue
+    if [ "$_budget" -gt 0 ] && [ "$SECONDS" -ge "$_budget" ]; then
+      printf 'fleet-history: rows: over the %ss budget (FLEET_HISTORY_ROWS_SECS)\n' "$_budget" >&2
+      return 4
+    fi
     lrow=$((lrow + 1))
     local target fzfkey okey
     fzfkey="${sid:--}"

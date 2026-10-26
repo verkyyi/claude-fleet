@@ -5664,6 +5664,33 @@ drill_codex_resume_history() {
   SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
 }
 
+drill_history_rows_forks() {
+  # The 看台's 已收起 reader rebuilds `fleet-history.sh rows` every minute. Per row
+  # the old loop forked `date`, fleet_win_name's tr/sed or perl and the clip's perl
+  # (a CJK title), and nested in quadratic bash string walks: ~1400 rows took 3+
+  # minutes idle, 7 at load 30, and the next build started before it ended. One
+  # build must fork perl and `date` a fixed number of times, whatever the length.
+  CAP=60; local t0 d="$WORK/hrows" i nperl ndate
+  t0=$(now)
+  mkdir -p "$d/bin"; : > "$d/forks"
+  for i in perl date; do
+    printf '#!/bin/sh\necho %s >> "%s"\nexec %s "$@"\n' "$i" "$d/forks" "$(command -v "$i")" > "$d/bin/$i"
+    chmod +x "$d/bin/$i"
+  done
+  for i in $(seq 1 300); do
+    printf '2026-09-%02dT%02d:00:00Z\t%s\t修复 第 %s 个 看台 渲染问题\t%s\tSHA\t/w\t/nope\ts%s\t-\tlanded\t%s\n' \
+      $((i % 28 + 1)) $((i % 24)) "$i" "$i" "$i" "$i" "$( [ $((i % 3)) = 0 ] && echo "issue-$((i - 1))" || echo - )"
+  done > "$d/landed.tsv"
+  env PATH="$d/bin:$PATH" TMPDIR="$d" FLEET_CONF_DIR="$d/conf" FLEET_HISTORY_LEDGER="$d/landed.tsv" \
+    FZF_COLUMNS=200 FLEET_HISTORY_EPOCH=1 bash "$BIN/fleet-history.sh" rows > "$d/rows" 2>&1 \
+    || { WHY="rows failed: $(tail -3 "$d/rows")"; return 1; }
+  nperl=$(grep -c '^perl$' "$d/forks"); ndate=$(grep -c '^date$' "$d/forks")
+  [ "$(grep -c '^landed:' "$d/rows")" -ge 200 ] || { WHY="rows printed $(grep -c '^landed:' "$d/rows") rows of 300"; return 1; }
+  [ "$nperl" -le 2 ] && [ "$ndate" -le 2 ] \
+    || { WHY="300 rows forked perl $nperl and date $ndate times (want ≤2 each: one pass, not one per row)"; return 1; }
+  SECS=$(since "$t0"); WHAT="300 行一次构建：perl ${nperl} 次、date ${ndate} 次，与行数无关"
+}
+
 drill_codex_hook_retired_root() {
   CAP=15; local t0 out
   t0=$(now)
