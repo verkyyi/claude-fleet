@@ -196,7 +196,19 @@ endpoint a hop away. `extras/managed-node/train-build.sh` checks the release's
 manifest against the checkout's `conf/release-keys/root.pub`, takes its
 `ccquota-linux-amd64` by the signed sha256, runs `prepare-image.sh` with it and
 builds with `buildctl` (CN package mirrors; the registry's layer cache
-`:buildcache`). GitHub's release assets and dl.k8s.io crawl from there, so the
+`:buildcache`). It asks a list of hubs in order: the hub's in-cluster Service
+while the hub runs in that cluster (repo variable `HUB_INTERNAL_URL`, e.g.
+`http://<service>.<namespace>.svc.cluster.local`; ignored with
+`FLEET_HUB_TARGET=aws-k3s`), the hub the train released to (`FLEET_HUB_URL`),
+then every name in `HUB_URLS`. Which hub carries the bytes does not matter —
+the manifest verifies against the pinned root and each artifact against its
+signed sha256 — so every download is bounded instead: 10 s to connect, at least
+200 KB/s over every 60 s, 12 minutes for the whole fetch; each download prints
+its hub, size, time and rate, a hub too slow or down is passed over (a half
+fetched artifact resumes on the next one), and all of them failing is a red
+`::error::` naming each hub and its rate (BREAK-IT `train-hub-slow` — two trains
+once sat out a 45-minute job timeout on a 50 KB/s hub and held the lane; the job
+is bounded at 20 minutes now). GitHub's release assets and dl.k8s.io crawl from there, so the
 Dockerfile's `tools` stage (the sha256-pinned toolchain) is pushed separately by
 the train's `node tools` job from a GitHub-hosted runner, tagged
 `tools-<hash of the stage's text>` (`tools-tag.sh`) — once per pin change — and

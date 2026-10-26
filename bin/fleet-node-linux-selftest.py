@@ -1614,6 +1614,7 @@ class LinuxNode(unittest.TestCase):
             fake = Path(d, 'ccquota')
             fake.write_text(r'''#!/bin/bash
 [ "$1" = version ] && { echo "ccquota old-1"; exit 0; }
+case " $* " in *" -h "*) exit 0 ;; esac   # an old ccquota: no --progress
 dest=${@: -1}; mkdir -p "$dest/.release/artifacts"
 cat > "$dest/release.json" <<'J'
 {"components": {"ccquota": {"artifact": "ccquota-{os}-{arch}"},
@@ -1640,7 +1641,65 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
                 capture_output=True, text=True, check=True).stdout.split()))
             self.assertNotIn('codex-9-darwin-arm64', arts)
             self.assertEqual(len(Path(d, 'calls').read_text().splitlines()), 2)
+            self.assertNotIn('--progress', Path(d, 'calls').read_text())   # only when the ccquota knows it
             self.assertIn('docker buildx build --platform linux/amd64 --load', r.stdout)
+            self.assertFalse((ctx / 'runtime.dl').exists())
+
+    def test_prepare_image_bounded_falls_back(self):
+        """BREAK-IT train-hub-slow: a hub carrying bytes under the floor is
+        dropped for the next one (the release resumes there), naming its rate;
+        every hub too slow is red within FLEET_IMAGE_FETCH_SECS. A ccquota that
+        knows --progress prints its progress."""
+        import time
+        here = BIN.parent / 'extras/managed-node'
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d, 'ccquota')
+            fake.write_text(r'''#!/bin/bash
+case " $* " in *" -h "*) echo '  -progress FILE'; exit 0 ;; esac
+hub=''; prev=''; for a in "$@"; do [ "$prev" = --hub ] && hub=$a; prev=$a; done
+echo "$*" >> "$(dirname "$0")/calls"
+dest=${@: -1}; mkdir -p "$dest.dl"
+if [ "$hub" = http://slow.example ]; then
+  while :; do printf x >> "$dest.dl/a.part"; sleep 0.2; done
+fi
+mkdir -p "$dest/.release/artifacts"
+cat > "$dest/release.json" <<'J'
+{"components": {"ccquota": {"artifact": "ccquota-{os}-{arch}"},
+ "claude": {"version": "2", "artifact": "claude-{version}-{os}-{arch}"},
+ "codex": {"version": "9", "artifact": "codex-{version}-{os}-{arch}",
+           "helpers": {"codex-code-mode-host": "codex-code-mode-host-{version}-{os}-{arch}"}},
+ "tmux": {"version": "3", "artifact": "tmux-{version}-{os}-{arch}"}}}
+J
+for n in ccquota-linux-amd64 claude-2-linux-amd64 codex-9-linux-amd64 codex-code-mode-host-9-linux-amd64 tmux-3-linux-amd64; do
+  echo x > "$dest/.release/artifacts/$n"
+done
+''')
+            fake.chmod(0o755)
+            key = Path(d, 'release.pub')
+            key.write_text('ed25519 AAAA\n')
+            env = dict(os.environ, CCQUOTA=str(fake), FLEET_IMAGE_FETCH_SECS='20', FLEET_IMAGE_FETCH_FLOOR='10000',
+                       FLEET_IMAGE_FETCH_FLOOR_SECS='2', FLEET_IMAGE_FETCH_TICK='1', GITHUB_ACTIONS='true')
+            t0 = time.time()
+            r = subprocess.run(['bash', str(here / 'prepare-image.sh'), 'http://slow.example http://fast.example/', str(key),
+                                'a' * 40, str(Path(d, 'ctx'))], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertLess(time.time() - t0, 15)
+            self.assertIn('http://slow.example: too slow:', r.stderr)
+            self.assertRegex(r.stderr, r'too slow: \d+ KB/s for \d+s, under the floor of 10 KB/s')
+            self.assertIn('from http://fast.example in', r.stderr)
+            calls = Path(d, 'calls').read_text().splitlines()
+            self.assertEqual([c.split()[3] for c in calls], ['http://slow.example', 'http://fast.example'])
+            self.assertTrue(all('--progress -' in c for c in calls))
+            self.assertFalse(Path(d, 'ctx/runtime.dl').exists())
+            # every hub too slow: red within the bound, an ::error:: naming each hub and its rate
+            t0 = time.time()
+            r = subprocess.run(['bash', str(here / 'prepare-image.sh'), 'http://slow.example', str(key),
+                                'a' * 40, str(Path(d, 'ctx2'))], env=dict(env, FLEET_IMAGE_FETCH_SECS='6',
+                                FLEET_IMAGE_FETCH_FLOOR_SECS='60'), capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 1, r.stderr)
+            self.assertLess(time.time() - t0, 15)
+            self.assertRegex(r.stderr, r'::error::prepare-image.sh: no hub delivered release a{40} .* '
+                                       r'http://slow.example: still fetching at the 6s bound \(\d+ KB/s')
 
     # ---- #3212: the image only seeds; the disk runtime follows stable
     def stage_mod(self):
