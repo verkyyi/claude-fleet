@@ -1,0 +1,12 @@
+#cloud-config
+# User data for a box rebuilt from a snapshot of the old box's root volume
+# (deploy/aws/README.md «A lost box»). k3s names its node after the hostname,
+# and every person's home disk (local-path) is pinned to that node: a new
+# instance gets a new private IP, so cloud-init would name it differently and
+# every home pod would stay Pending. Pin the old name — read it from the
+# snapshot's `k3s-node` tag — before k3s starts. Nothing else runs: the
+# volume already holds k3s, the Secrets and the checkout.
+hostname: __K3S_NODE__
+fqdn: __K3S_NODE__.us-west-2.compute.internal
+preserve_hostname: false
+manage_etc_hosts: true

@@ -15,6 +15,7 @@ deploy/aws/k3s-box/
   user-data.yaml               EC2 user data: writes deploy.env, clones the repo, runs bootstrap
   bootstrap.sh                 k3s · cert-manager · ECR pull secret · Secrets · overlay · template (idempotent)
   rollout-drill.sh             a rolling restart with machines connected, read back from the hub
+  restore-user-data.yaml       user data for a box rebuilt from a snapshot (pins the k3s node name)
 ```
 
 ## What runs where
@@ -320,10 +321,59 @@ resumable session layer in a separate gateway process. Neither is in this change
   A migration the new image already ran stays run: take an RDS snapshot before
   a release (`aws rds create-db-snapshot`) and restore it to go back across one.
 - **The overlay**: check out the previous ref in `/opt/claude-fleet`, `bootstrap.sh apply`.
-- **The whole box**: terminate it. The state is RDS + `/etc/fleet-core/secrets`;
-  a new box with the same user data, the same SSM parameter and the secrets
-  directory restored comes back as the same hub. People's home disks (local-path)
-  live on the box's root volume — snapshot it, or use `gp3` if they must outlive it.
+- **The whole box**: see [«A lost box»](#a-lost-box) — rebuild it from its
+  latest snapshot.
+
+## A lost box
+
+What lives only on the box: `/etc/fleet-core` (the credential vault key, the
+two SSH CAs, the generated tokens — losing them means re-entering every account
+credential and re-trusting every machine), people's home disks (local-path,
+under `/var/lib/rancher/k3s/storage`) and the releases volume. RDS holds the
+rest and keeps its own 7-day point-in-time backups.
+
+| Copy | Where | Kept |
+|---|---|---|
+| The root volume | EBS snapshots by a Data Lifecycle Manager policy on volumes tagged `backup=tokenman-core-daily`: every 6 h and daily | 8 six-hourly · 14 daily |
+| `/etc/fleet-core` | an encrypted tarball in the backups bucket (`box-secrets/`, versioned, SSE-KMS) — written by hand after a secret changes: `ssh box 'sudo tar -C /etc -czf - fleet-core' \| aws s3 cp - s3://<bucket>/box-secrets/<box>-etc-fleet-core.tgz --sse aws:kms` | old versions 180 days |
+| The database | RDS automated backups | 7 days, to the second |
+
+The root volume carries the tag `k3s-node=<node name>` and the policy copies
+tags, so every snapshot says which hostname its k3s knew.
+
+**Rebuild** (needs the AWS account; the box itself is gone):
+
+1. Pick the newest snapshot of the old root volume
+   (`aws ec2 describe-snapshots --owner-ids self --filters Name=tag:project,Values=tokenman-core`).
+   Register an image from it (`aws ec2 register-image … --block-device-mappings
+   '[{"DeviceName":"/dev/sda1","Ebs":{"SnapshotId":"snap-…","VolumeType":"gp3"}}]'
+   --boot-mode uefi-preferred --ena-support`).
+2. Launch it — any zone of the region — with the old instance's profile, security
+   group and key, metadata hop limit 1, and
+   [`k3s-box/restore-user-data.yaml`](k3s-box/restore-user-data.yaml) as user
+   data with `__K3S_NODE__` replaced by the snapshot's `k3s-node` tag. Tag it
+   `Name=tokenman-core`.
+3. Move the Elastic IP to it. k3s comes up as the same node on the new private
+   IP; the hub, the proxies, the provisioner and every home pod start from the
+   volume as they were.
+4. Tag the new root volume `backup=tokenman-core-daily` and
+   `k3s-node=<node name>` so the snapshots continue.
+
+If the database is lost too, restore it first (`aws rds
+restore-db-instance-to-point-in-time --use-latest-restorable-time`), and point
+`ccquota-db`'s `db-url` (and `/etc/fleet-core/secrets*/db-url`) at the new
+endpoint before moving the Elastic IP.
+
+**Drill, 2026-10-26** — rebuilt from a snapshot into another zone, with a
+point-in-time copy of the database, both in security groups that reached
+nothing but each other (no Elastic IP, no instance profile, no egress to the
+internet), then torn down: the node came back under its old name on a new IP,
+all 4 home disks bound and mounted (~200 MB each), and the hub answered `/readyz`
+**4 min 18 s** after the image was registered, its data matching production
+(accounts, tasks, endpoints equal; usage rows within the restore point). The
+first full snapshot of the 145 GB volume took about 75 minutes; later ones are
+incremental. Without the pinned hostname every home pod would have stayed
+Pending.
 
 ### One human portal (T1112)
 
