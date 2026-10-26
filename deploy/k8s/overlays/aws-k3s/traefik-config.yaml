@@ -10,6 +10,11 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
+    # the client's own address reaches traefik (no SNAT on the box): EDGE_TRUSTED_IPS
+    # is judged against it
+    service:
+      spec:
+        externalTrafficPolicy: Local
     additionalArguments:
       - "--entryPoints.web.transport.respondingTimeouts.readTimeout=0"
       - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=0"
