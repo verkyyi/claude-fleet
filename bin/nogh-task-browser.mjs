@@ -38,7 +38,7 @@ async function fixture(route) {
   requests.push({ method: req.method(), path });
   if (path.startsWith('/v1/')) {
     if (path === '/v1/fleet/tasks' && offline) { await route.fulfill({ status: 503, json: {} }); return; }
-    // no push channel here: the page's own 10 s poll stands in (sessions.ts)
+    // no push channel here: the page's own 30 s poll stands in (sessions.ts)
     if (path === '/v1/fleet/stream') { await route.fulfill({ status: 503, json: {} }); return; }
     const data = path === '/v1/fleet/tasks' ? { tasks, observed_at: observed }
       : path === '/v1/fleet/sessions' ? (url.searchParams.get('state') === 'ended' ? { sessions: [] } : sessions)
@@ -64,6 +64,7 @@ try {
     // resolver otherwise probes Google's IPv6 DNS address even for loopback;
     // offline browser routing avoids that unrelated background probe entirely.
     const page = await browser.newPage({ viewport, locale: 'en-US', offline: true });
+    await page.clock.install();
     await page.route('**/*', fixture);
     page.setDefaultTimeout(8000);
     const errors = [];
@@ -110,6 +111,9 @@ try {
     assert.match(await detail.innerText(), /Verified actual agent/);
     if (viewport.width < 1024) await page.keyboard.press('Escape');
     offline = true;
+    // Exercise the real fallback interval without adding a minute of wall
+    // time to the desktop/mobile fixture (T1118: 30 s between reads).
+    await page.clock.fastForward(31_000);
     await page.getByRole('button', { name: 'Retry read', exact: true }).waitFor({ timeout: 15000 });
     assert.match(await page.locator('main').innerText(), /Stale information/);
     assert.equal(await page.locator('time').getAttribute('datetime'), observed);
