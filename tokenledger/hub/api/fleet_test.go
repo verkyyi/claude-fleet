@@ -18,6 +18,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 	"regexp"
 	"sync"
+	"sync/atomic"
 )
 
 // The Fleet Hub read half (claude-fleet#1409).
@@ -656,6 +657,101 @@ func TestFleetSessionsLongPoll(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("held request not answered within 3 s of a heartbeat")
+	}
+}
+
+// A held request wakes at once for a beat from a login its caller sees, and
+// re-reads for anyone else's beats at most every fleetSessionsOtherEvery
+// (task PNWW): another person's busy machines no longer rebuild it each beat.
+func TestFleetSessionsLongPollScopedWake(t *testing.T) {
+	h := newFleetHarness(t)
+	var reads atomic.Int64
+	h.srv.fleetScopeHook = func(r *http.Request) (func(string, string) bool, error) {
+		if r.Header.Get("X-Test-Principal") != "alice" {
+			return nil, nil
+		}
+		reads.Add(1)
+		return func(host, user string) bool { return host == "mac-d" && user == "alice" }, nil
+	}
+	a := connectFakeNode(t, h, "mac-d", false)
+	b := connectFakeNode(t, h, "mac-c", false)
+	fa := fakeFleet(t, machineA, "alice-fleet", "", "", 1)
+	fb := fakeFleet(t, machineB, "bob-fleet", "", "", 2)
+	a.beat("mac-d", "alice", machineA, fa)
+	b.beat("mac-c", "bob", machineB, fb)
+	waitFor(t, 3*time.Second, "registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
+	})
+	type answer struct {
+		status int
+		tag    string
+		at     time.Time
+	}
+	ask := func(query, inm string) answer {
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/fleet/fleet_sessions"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+viewerToken)
+		req.Header.Set("X-Test-Principal", "alice")
+		if inm != "" {
+			req.Header.Set("If-None-Match", inm)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return answer{resp.StatusCode, resp.Header.Get("ETag"), time.Now()}
+	}
+	tag := ask("", "").tag
+	reads.Store(0)
+	done := make(chan answer, 1)
+	go func() { done <- ask("?wait=10", tag) }()
+	// bob's machine beats every 50 ms for 1.5 s: ~30 wake-ups.
+	for i := 0; i < 30; i++ {
+		time.Sleep(50 * time.Millisecond)
+		b.beat("mac-c", "bob", machineB, fb)
+	}
+	if n := reads.Load(); n > 4 {
+		t.Fatalf("%d reads of a held request during 30 out-of-scope beats in 1.5 s, want ≤ 4 (one, then one a second)", n)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("held request answered %d on out-of-scope beats", got.status)
+	default:
+	}
+	// alice's own beat: answered at once with the new validator.
+	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs"}]`)
+	t0 := time.Now()
+	a.beat("mac-d", "alice", machineA, fa)
+	select {
+	case got := <-done:
+		if got.status != 200 || got.tag == tag {
+			t.Fatalf("after alice's beat: %d ETag=%q, want 200 with a new validator", got.status, got.tag)
+		}
+		if d := got.at.Sub(t0); d > 500*time.Millisecond {
+			t.Fatalf("in-scope beat answered after %v, want at once", d)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("held request not answered within 3 s of an in-scope beat")
+	}
+}
+
+func TestChangeBroadcastFiredSince(t *testing.T) {
+	var b changeBroadcast
+	_, seq := b.waitSeq()
+	b.fireFor(loginKey("mac-c", "bob"))
+	alice := func(k string) bool { h, u, _ := splitLoginKey(k); return h == "mac-d" && u == "alice" }
+	if b.firedSince(seq, alice) {
+		t.Fatal("bob's beat concerns alice")
+	}
+	b.fireFor(loginKey("mac-d", "alice"))
+	if !b.firedSince(seq, alice) {
+		t.Fatal("alice's beat does not concern alice")
+	}
+	_, seq = b.waitSeq()
+	b.fire()
+	if !b.firedSince(seq, alice) {
+		t.Fatal("a fire() naming nobody must concern everyone")
 	}
 }
 
