@@ -36,7 +36,7 @@ main li{overflow-wrap:anywhere}
   body{background:var(--fleet-ink);color:var(--fleet-bg);font-size:11pt}
   .nav,.skip,footer{display:none}
   main{max-width:none;padding:0}
-  main p,main li,main strong,main h3,.version,main a{color:var(--fleet-bg)}
+  main p,main li,main strong,main h3,.layer h3,.version,main a{color:var(--fleet-bg)}
   .blueprint{display:block}.blueprint aside,.flow-grid,.principle-grid{display:block}
   .layer,.layer ul,.side,.flow,.principle{background:transparent;border-color:var(--fleet-muted)}
   .layer,.side,.flow,.principle{break-inside:avoid;margin-bottom:12px}
