@@ -3024,7 +3024,7 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
     token\ *) pass hub "sidebar asks the hub with the viewer token (${_hid#token }) — the operator's view; a colleague runs \`fleet login\` for a certificate of their own" ;;
     node\ *)  pass hub "sidebar asks the hub with this login's node token (${_hid#node }) — its owner's machines, no certificate to expire (#2630)" ;;
     cmd\ *)   pass hub "sidebar reads the hub through FLEET_HUB_SESSIONS_CMD" ;;
-    *)        warn hub "sidebar cannot ask the hub: ${_hid#none } — no other machine's sessions will show (bin/fleet-hub-sessions.sh --identity)" ;;
+    *)        warn hub "command panel cannot ask the hub: ${_hid#none } — no other machine's sessions will show (bin/fleet-hub-sessions.sh --identity)" ;;
   esac
   # The refresh loop itself (issue #1596): the collector re-starts it every tick,
   # sidebar or not — a dead loop or an old cache means the other machines' rows

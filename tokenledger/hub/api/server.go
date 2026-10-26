@@ -1208,7 +1208,7 @@ func stripToken(r *http.Request) string {
 }
 
 // logRequests logs method, path, status and duration, plus who it was when a
-// signed-in identity let the request in. Query strings are omitted: they can
+// signed-in identity let the request in, and how long a long poll held it. Query strings are omitted: they can
 // carry the viewer token. So is an invite's code (claude-fleet#2261): the
 // path /i/<code> is logged as /i/….
 func (s *Server) logRequests(next http.Handler) http.Handler {
@@ -1218,7 +1218,9 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		// The gate fills this in if it grants by identity; the pointer is
 		// how a value set downstream reaches this outer layer.
 		var viewer string
-		r = r.WithContext(context.WithValue(r.Context(), viewerKey{}, &viewer))
+		var held time.Duration
+		ctx := context.WithValue(r.Context(), viewerKey{}, &viewer)
+		r = r.WithContext(context.WithValue(ctx, heldKey{}, &held))
 		next.ServeHTTP(sw, r)
 		// the post-release watch's 5xx count (claude-fleet#4915)
 		s.httpStats.add(sw.status, time.Now())
@@ -1236,6 +1238,11 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		}
 		if viewer != "" {
 			line += " viewer=" + viewer
+		}
+		if held > 0 {
+			// a long poll's wait for a change is not work: took − held is
+			// what the request cost.
+			line += " held=" + held.Round(time.Millisecond).String()
 		}
 		if s.LogWriter != nil {
 			s.LogWriter(line)

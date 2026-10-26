@@ -55,7 +55,7 @@
 #               past the newest stamp (issue #3079) — one loop for as long as the
 #               collector lives, no gap between the old loop's end and the next tick. The loop
 #               gets its own session (setsid), or launchd kills it with the tick
-#               (issue #1596) and the cache stops whenever no sidebar is drawing.
+#               (issue #1596) and the cache stops whenever no command panel is drawing.
 #               A VIEWER keeps it too: the loop's end is LOOP_SECS past the newer
 #               of hubsess.want and hubsess.view's mtime (fleet_view.py
 #               hub_view_request touches it on every real list read). On a node at
@@ -79,7 +79,7 @@
 #   --identity  WHO this login asks the hub as (issue #1475), one line, no network:
 #               `cert <cert path> <valid until>` / `token <where it came from>` /
 #               `none <why>` — exit 0 for the first two, 1 for none. fleet-doctor
-#               reads it; so does a person wondering why the sidebar shows no mac-a.
+#               reads it; so does a person wondering why the command panel shows no mac-a.
 #
 # OFF unless CCQUOTA_FLEET=1: every mode is then a silent no-op that writes nothing,
 # and the dash never looks for the cache — a one-machine fleet is byte for byte
@@ -129,7 +129,7 @@
 #   #ts<US><epoch>                                when this cache was written
 #   #me<US><label>                                this machine's label (#1475)
 #   #node<US><label><US>online|lost<US><n><US><last-seen epoch><US>via   one per OTHER
-#       machine the hub shows you (#1475): the sidebar's status line — n is your
+#       machine the hub shows you (#1475): the command panel's status line — n is your
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
@@ -172,7 +172,7 @@
 # there (fleet-control-read.sh); empty when unknown or from an older node. A
 # `read` naming `born` last must name it too. `title` (#1921, rows only) is the
 # session's issue title off its node's own issue cache (fleet-control-read.sh) —
-# what a sidebar row and a session's top bar (#1904) show instead of the window
+# what a command panel row and a session's top bar (#1904) show instead of the window
 # name's slug. APPENDED only when there is one, so a row without (a scratch, an
 # older node) is byte for byte what it was; a `read` naming `cfg` last must name
 # it too.
@@ -502,7 +502,7 @@ fetch() {
     [ "$rc" = 4 ] && rc=1
     return "$rc"
   fi
-  printf 'fleet-hub-sessions: %s — the sidebar shows no other machine\n' "$(identity | sed 's/^none //')" >&2
+  printf 'fleet-hub-sessions: %s — the command panel (⌘P) shows no other machine\n' "$(identity | sed 's/^none //')" >&2
   return 1
 }
 
@@ -1069,7 +1069,7 @@ for f in local:
         # null, #1465) is "could not read", never "no windows" (#1795): its
         # rows the answer lacks keep their last lines. A hub that blanked them
         # dropped every row of that machine for the seconds a node's read
-        # timed out — the sidebar collapsed to the one row it stood on.
+        # timed out — the command panel collapsed to the one row it stood on.
         have = {r["wid"] for r in rows}
         try:
             for line in open(path, encoding="utf-8"):
@@ -1082,7 +1082,7 @@ for f in local:
     # The batches nobody drives (issue #1916): `epicstale_<sess>` beside the cache,
     # one line per (machine, EPIC) — `<owner/name>#<N> US <machine> US <online|lost>
     # US <age s> US <title> US <local 1|0>` — off any row of that machine (every
-    # row carries its login's list). The sidebar draws each as a grey 「#N 没人在跑」
+    # row carries its login's list). The command panel draws each as a grey 「#N 没人在跑」
     # row; THIS machine's (local 1) it reads off its own marks instead.
     seen_st, st_lines = set(), []
     for r in rows:
@@ -1098,7 +1098,7 @@ for f in local:
     # The results nobody took (issue #3369): `orphanrep_<sess>`, one line per
     # (machine, report) — `<id> US <machine> US <online|lost> US <ts> US <repo> US
     # <child> US <state> US <pr> US <summary> US <local 1|0>` — off any row of that
-    # machine (every row carries its login's list). The sidebar draws each as a
+    # machine (every row carries its login's list). The command panel draws each as a
     # 「结果给你」 row; THIS machine's (local 1) it reads off its own file instead.
     seen_or, or_lines = set(), []
     for r in rows:
@@ -1165,12 +1165,12 @@ EOF
 #   $G/hub_nodes   #ts<US><epoch>, then one line per machine the hub shows:
 #     node<US>online|lost<US>load1<US>ncpu<US>mem_pct<US>sessions<US>fleet_version<US>age<US>mem_used_mb<US>mem_total_mb<US>ver_state<US>place<US>hostname
 #     (sessions `?` when the hub could not read a fleet there — #1465; place is
-#     `coord` / `maint` / '' — what the sidebar's 「开在哪」 greys, issue #1778)
+#     `coord` / `maint` / '' — what the command panel's 「开在哪」 greys, issue #1778)
 #     (/v1/nodes `machines`: one load per machine; fleet_version is its newest
 #     login's; age is seconds since its last heartbeat when written; ver_state
 #     is that version's word against the stable mark — issue #644, below)
 #   $G/hub_repos   #ts<US><epoch>, then one owner/name per line: the repos those
-#     machines' fleets host (`repos`, issue #1927) — the sidebar's candidates
+#     machines' fleets host (`repos`, issue #1927) — the command panel's candidates
 #     for a first session while its list has no repo heading; a person with no
 #     active login yet gets a `#account<US>state<US>eta_s<US>machine<US>ask<US>epoch`
 #     line after #ts (issue #2069: opening | failed | none)
@@ -1394,8 +1394,8 @@ with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(svc, f, ensure_ascii=False)
 os.replace(tmp, os.path.join(os.path.dirname(out), "hub_services"))
 # hub_repos (issue #1927): every repo a fleet on these machines hosts, the
-# sidebar's repo candidates while its list has no heading yet. A hub older
-# than `repos` sends no key: then no file, and the sidebar says what it did.
+# command panel's repo candidates while its list has no heading yet. A hub older
+# than `repos` sends no key: then no file, and the command panel says what it did.
 hub_repos = os.path.join(os.path.dirname(out), "hub_repos")
 if machines and not any(isinstance(m, dict) and "repos" in m for m in machines):
     try:
@@ -1406,7 +1406,7 @@ if machines and not any(isinstance(m, dict) and "repos" in m for m in machines):
 repos = sorted({r for m in machines if isinstance(m, dict) for r in (m.get("repos") or [])
                 if isinstance(r, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r)})
 # #account (issue #2069): a person with no active login yet — the hub's
-# `account` {state opening|failed|none, eta_s, machine, ask}. The sidebar
+# `account` {state opening|failed|none, eta_s, machine, ask}. The command panel
 # reads it beside an empty repo list: 正在为你开机器 / 该找谁. No key (a login
 # they already hold, or an older hub) = no line.
 acct = data.get("account") if isinstance(data.get("account"), dict) else None
@@ -1688,7 +1688,7 @@ loop_pid() {
 # --ensure is a launchd job, and when a job's tick exits launchd kills every
 # process left in its process group (no AbandonProcessGroup) — the `nohup … &`
 # loop died ~1 s after each start, so with no client attached to start it from
-# the sidebar, remote_<sess> stopped for 10 hours. setsid(2) takes it out of
+# the command panel, remote_<sess> stopped for 10 hours. setsid(2) takes it out of
 # that group; systemd's collect unit says KillMode=process for the same reason.
 ensure() {
   hub_on || return 0
