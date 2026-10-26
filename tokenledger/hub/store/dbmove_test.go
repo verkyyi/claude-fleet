@@ -242,7 +242,8 @@ func TestMoveDatabaseCopiesAndVerifiesEveryTable(t *testing.T) {
 		}
 	}
 
-	// One changed character in one row is a DIFF on that table, and only it.
+	// One changed character differs on its table and advances the derived
+	// session-cache revision; every other copied table stays identical.
 	if _, err := c.Exec(ctx, `UPDATE endpoints SET label = label || '!' WHERE endpoint_id = (SELECT MIN(endpoint_id) FROM endpoints)`); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestMoveDatabaseCopiesAndVerifiesEveryTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Differ) != 1 || rep.Differ[0] != "endpoints" {
+	if len(rep.Differ) != 2 || rep.Differ[0] != "endpoints" || rep.Differ[1] != "fleet_sessions_revision" {
 		t.Fatalf("verify after a tampered row: differ %v\n%s", rep.Differ, out.String())
 	}
 	t.Logf("verify after tampering:\n%s", out.String())
