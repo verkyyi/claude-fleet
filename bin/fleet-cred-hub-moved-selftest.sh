@@ -46,7 +46,8 @@ pass() { printf 'PASS %s\n' "$*"; }
 fail() { printf 'FAIL %s\n' "$*"; FAIL=1; }
 freeport() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 export FLEET_CRED_SHARED_PORT; FLEET_CRED_SHARED_PORT=$(freeport)
-export FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$(freeport)" FLEET_CRED_CODEX_URL="http://127.0.0.1:$(freeport)/codex"
+P1=$(freeport) P2=$(freeport)   # nothing listens: no provider call is made here
+export FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$P1" FLEET_CRED_CODEX_URL="http://127.0.0.1:$P2/codex"
 OLD=https://old-hub.example NEW=https://new-hub.example
 mkdir -p "$SB/daemons" "$SB/node"
 

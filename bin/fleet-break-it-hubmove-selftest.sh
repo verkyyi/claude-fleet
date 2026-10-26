@@ -110,12 +110,13 @@ drill_credproxy_hub_url_moved() {
     set -u
     old=https://old-hub.example new=https://new-hub.example me=$(id -un)
     fp() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
+    p0=$(fp) p1=$(fp) p2=$(fp)
     export FLEET_CREDSEP_ROOT_BASE="$d/db" FLEET_CREDSEP_RUN_BASE="$d/run" FLEET_CREDSEP_LOG_BASE="$d/log" \
       FLEET_CREDSEP_LIB="$d/lib" FLEET_CREDSEP_DAEMON_DIR="$d/daemons" FLEET_CREDSEP_ROLE="$me" \
       FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
       FLEET_CREDSEP_PW="$d/pw" FLEET_CREDSEP_USERS="$d/users" FLEET_CREDSEP_HOMES="$d/homes" \
-      FLEET_NODE_STATE="$d/node" FLEET_CRED_SHARED_PORT="$(fp)" CCQUOTA_HUB_SOCK="$d/hub.sock" \
-      FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$(fp)" FLEET_CRED_CODEX_URL="http://127.0.0.1:$(fp)/codex"
+      FLEET_NODE_STATE="$d/node" FLEET_CRED_SHARED_PORT="$p0" CCQUOTA_HUB_SOCK="$d/hub.sock" \
+      FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$p1" FLEET_CRED_CODEX_URL="http://127.0.0.1:$p2/codex"
     unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_CRED_SEPARATE FLEET_CRED_PROXY FLEET_CRED_AS FLEET_HUB_INTERNAL_URL
     mkdir -p "$d/daemons" "$d/node"
     cat > "$d/fwd.py" <<'PY'
