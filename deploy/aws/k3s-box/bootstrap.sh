@@ -16,6 +16,8 @@
 #                        (required for user pods; unset = the hub alone, WORKERS=0)
 #   ACME_EMAIL           Let's Encrypt's contact                                      (required)
 #   HUB_HOST             core.tokenman.io
+#   PUBLIC_ORIGIN        the hub's public URL (CCQUOTA_*PUBLIC_URL), default https://$HUB_HOST;
+#                        another name's when the hub took over another hub's address
 #   EDGE_TRUSTED_IPS     CIDRs whose X-Forwarded-* traefik keeps (a reverse proxy in
 #                        front, e.g. the Shenzhen ingress' egress 47.106.171.142/32);
 #                        unset = traefik trusts nobody's
@@ -292,6 +294,7 @@ render() {
           -e "s#ecr.invalid/fleet/managed-node:set-by-deploy#${MANAGED_NODE_IMAGE:-ecr.invalid/fleet/managed-node:set-by-deploy}#g" \
           -e "s#acme@example.invalid#$ACME_EMAIL#g" \
           -e "s#https://acme-v02.api.letsencrypt.org/directory#$issuer#g" \
+          -e "s#https://core\.tokenman\.io#${PUBLIC_ORIGIN:-https://$HUB_HOST}#g" \
           -e "s#core\.tokenman\.io#$HUB_HOST#g" \
     | edge_trust
   rm -rf "$tree"
