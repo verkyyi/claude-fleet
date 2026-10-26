@@ -73,7 +73,7 @@ done
 [ -d "$SRC/zh" ] || { echo "docs-build: no $SRC/zh" >&2; exit 2; }
 
 exec python3 - "$SRC" "$OUT" "$REPO" "$MODE" <<'PY'
-import hashlib, html, json, os, re, shutil, subprocess, sys
+import base64, hashlib, html, json, os, re, shutil, subprocess, sys
 
 SRC, OUT, REPO, MODE = sys.argv[1:5]
 LANGS = ('zh', 'en')
@@ -236,13 +236,19 @@ def render_list(lines, i, out):
 # site's brand key (site/strings.zh.json).
 THEME = os.path.join(REPO, 'extras', 'fleet-theme')
 
-def theme_css():
+def theme_css(embed_fonts=False):
     t = open(os.path.join(THEME, 'theme.css'), encoding='utf-8').read()
     a, b = t.find('/* fleet:tokens */'), t.find('@theme inline')
     if a < 0 or b < a:
         print('docs-build: extras/fleet-theme/theme.css: no fleet:tokens block before @theme', file=sys.stderr)
         sys.exit(1)
     fonts = open(os.path.join(THEME, 'fonts.css'), encoding='utf-8').read().replace('url(./fonts/', 'url(/site/fonts/')
+    if embed_fonts:
+        # An SVG used as an image cannot fetch external fonts or inherit page CSS.
+        def embedded_font(m):
+            with open(os.path.join(THEME, 'fonts', m.group(1)), 'rb') as f:
+                return 'url(data:font/woff2;base64,%s)' % base64.b64encode(f.read()).decode('ascii')
+        fonts = re.sub(r'url\(/site/fonts/([^/)]+\.woff2)\)', embedded_font, fonts)
     tidy = lambda c: re.sub(r'\s+', ' ', re.sub(r'/\*.*?\*/', '', c, flags=re.S)).strip()
     return '\n'.join(tidy(c) for c in re.findall(r'@font-face\s*\{[^}]*\}', fonts)) + '\n' + tidy(t[a:b])
 
@@ -286,6 +292,7 @@ pre code{background:none;padding:0;color:inherit}
 blockquote{margin:0 0 14px;padding:10px 14px;border-left:3px solid var(--brand);background:var(--brand-soft);border-radius:0 8px 8px 0}
 blockquote p:last-child{margin:0}
 main img{max-width:100%;height:auto}
+@media print{main img{color-scheme:light;max-height:24cm;break-inside:avoid}}
 table{border-collapse:collapse;width:100%;margin:0 0 16px;font-size:14.5px;display:block;overflow-x:auto}
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}th{background:var(--line-2)}
 .pending{padding:12px 16px;background:var(--warn-soft);border-radius:9px;margin:0 0 18px}
@@ -550,7 +557,12 @@ for l in LANGS:
         os.makedirs(dest_assets, exist_ok=True)
         for name in sorted(os.listdir(assets)):
             if name.endswith('.svg') and os.path.isfile(os.path.join(assets, name)):
-                shutil.copy2(os.path.join(assets, name), os.path.join(dest_assets, name))
+                with open(os.path.join(assets, name), encoding='utf-8') as f:
+                    svg = f.read()
+                if '/*{{fleet_theme}}*/' in svg:
+                    svg = svg.replace('/*{{fleet_theme}}*/', theme_css(embed_fonts=True))
+                with open(os.path.join(dest_assets, name), 'w', encoding='utf-8') as f:
+                    f.write(svg)
     all_titles = {}
     for p in src['zh']:
         all_titles[p] = titles.get((l, p)) or titles[('zh', p)]

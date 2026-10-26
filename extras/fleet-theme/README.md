@@ -28,6 +28,8 @@ font family or a logo defined outside it.
   the site's copy) and everything from `fleet:tokens` to `@theme` (the tokens, the
   shadcn light and dark blocks) into every page, maps its own variables onto them
   (links = `--link`), and puts `wordmark.svg` in the header, its letters in the header's colour.
+  SVG illustrations with a `/*{{fleet_theme}}*/` slot receive the same theme and
+  embedded fonts at build time: an image cannot inherit the page's CSS or load external fonts.
 - **Share cards** — `bin/site-images.sh` loads `fonts.css` and the tokens block.
 
 ## Changing it
