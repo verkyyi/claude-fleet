@@ -11,6 +11,8 @@
 
 ## 开发文档（`dev/`）
 
+- [HEALTH.md](dev/HEALTH.md) — 已登录用户健康页、启动计时与每分钟合成探测
+
 **先读**
 
 - [PRODUCT-DIRECTION.md](dev/PRODUCT-DIRECTION.md) — 产品方向与设计原则（后续设计的依据）

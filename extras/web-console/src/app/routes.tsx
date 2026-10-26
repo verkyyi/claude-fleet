@@ -97,6 +97,7 @@ export type PageDef = {
 };
 
 export const PAGES: PageDef[] = [
+  { id: "health", path: "/health", label: tr("服务健康", "Service health"), icon: Gauge, page: lazy(() => import("./pages/health")) },
   { id: "home", path: "/", label: tr("会话", "Sessions"), icon: Layers, page: Home },
   { id: "chat", path: "/chat", label: tr("我的对话", "My chat"), icon: MessageCircle, page: ChatRoute },
   // 新会话 (GR5E C3; 会话合一 Y01K: the one way to start one): 对话 | 终端, on the right of a computer, a phone's whole screen

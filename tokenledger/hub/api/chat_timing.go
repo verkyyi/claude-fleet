@@ -25,6 +25,8 @@ const (
 	chatTimingMaxMS int64 = 600 * 1000
 )
 
+var chatTimingIDRe = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+
 var chatTZRe = regexp.MustCompile(`^[A-Za-z0-9_+\-/]{1,64}$`)
 
 // cnZones are the IANA zones a browser in mainland China reports.
@@ -47,6 +49,7 @@ func (s *Server) handleChatTiming(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		ID      string `json:"id"`
 		MS      int64  `json:"ms"`
 		OpenMS  int64  `json:"open_ms"`
 		ShownMS int64  `json:"shown_ms"`
@@ -64,7 +67,11 @@ func (s *Server) handleChatTiming(w http.ResponseWriter, r *http.Request) {
 	if !chatTZRe.MatchString(in.TZ) {
 		in.TZ = ""
 	}
-	t := store.ChatTiming{At: time.Now(), MS: in.MS, OpenMS: in.OpenMS, ShownMS: in.ShownMS, Agent: in.Agent, TZ: in.TZ}
+	if in.ID != "" && !chatTimingIDRe.MatchString(in.ID) {
+		httpError(w, 400, "invalid timing id")
+		return
+	}
+	t := store.ChatTiming{ID: in.ID, At: time.Now(), MS: in.MS, OpenMS: in.OpenMS, ShownMS: in.ShownMS, Agent: in.Agent, TZ: in.TZ}
 	if home, ok, err := s.Store.EntryHomeOf(person); err == nil && ok {
 		t.Machine = home.Machine
 	}
@@ -78,10 +85,12 @@ func (s *Server) handleChatTiming(w http.ResponseWriter, r *http.Request) {
 // chatTimingStats is the admin's read: each stage's spread, for every start
 // and for the mainland's.
 type chatTimingStats struct {
-	Days     int                         `json:"days"`
-	All      chatTimingSpread            `json:"all"`
-	Mainland chatTimingSpread            `json:"mainland"`
-	Machines map[string]chatTimingSpread `json:"machines"`
+	Daily    map[string]map[string]chatTimingSpread `json:"daily"`
+	Agents   map[string]chatTimingSpread            `json:"agents"`
+	Days     int                                    `json:"days"`
+	All      chatTimingSpread                       `json:"all"`
+	Mainland chatTimingSpread                       `json:"mainland"`
+	Machines map[string]chatTimingSpread            `json:"machines"`
 }
 
 type chatTimingSpread struct {
@@ -132,8 +141,16 @@ func (s *Server) handleChatTimingStats(w http.ResponseWriter, r *http.Request) {
 
 func chatTimingStatsOf(days int, ts []store.ChatTiming) chatTimingStats {
 	var cn []store.ChatTiming
+	agents := map[string][]store.ChatTiming{}
+	daily := map[string]map[string][]store.ChatTiming{}
 	byMachine := map[string][]store.ChatTiming{}
 	for _, t := range ts {
+		agents[t.Agent] = append(agents[t.Agent], t)
+		day := t.At.UTC().Format("2006-01-02")
+		if daily[day] == nil {
+			daily[day] = map[string][]store.ChatTiming{}
+		}
+		daily[day][t.Agent] = append(daily[day][t.Agent], t)
 		if cnZones[t.TZ] {
 			cn = append(cn, t)
 		}
@@ -146,6 +163,17 @@ func chatTimingStatsOf(days int, ts []store.ChatTiming) chatTimingStats {
 	out := chatTimingStats{Days: days, All: chatSpread(ts), Mainland: chatSpread(cn), Machines: map[string]chatTimingSpread{}}
 	for m, xs := range byMachine {
 		out.Machines[m] = chatSpread(xs)
+	}
+	out.Agents = map[string]chatTimingSpread{}
+	out.Daily = map[string]map[string]chatTimingSpread{}
+	for a, xs := range agents {
+		out.Agents[a] = chatSpread(xs)
+	}
+	for d, as := range daily {
+		out.Daily[d] = map[string]chatTimingSpread{}
+		for a, xs := range as {
+			out.Daily[d][a] = chatSpread(xs)
+		}
 	}
 	return out
 }

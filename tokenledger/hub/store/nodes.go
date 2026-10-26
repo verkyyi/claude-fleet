@@ -165,6 +165,9 @@ func (s *Store) EnsureNodes() error {
 		return err
 	}
 	// A new web session's wait, press to first reply (task PNWW).
+	if err := s.ensureHealth(); err != nil {
+		return err
+	}
 	if err := s.ensureChatTimings(); err != nil {
 		return err
 	}

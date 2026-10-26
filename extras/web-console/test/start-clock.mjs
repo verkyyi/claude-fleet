@@ -42,3 +42,21 @@ assert.equal(replied([{ t: 'user', text: 'hi' }, { t: 'text', d: '  ' }]), false
 assert.equal(replied([{ t: 'user', text: 'hi' }, { t: 'text', d: 'pong' }]), true);
 
 console.log('PASS start-clock');
+
+// The list may replace a live worker address with the same session's FID.
+s = mem();
+clockOpened(W, 1000, 'codex', s, 2000);
+assert.equal(clockReplied('fid:' + W.split('/')[1], s, 4000).ms, 3000);
+
+// A failed POST stays pending; reconnect retries the same id and body.
+const { sendClock, flushClocks } = await import('../src/app/start-clock.ts');
+globalThis.sessionStorage = mem();
+const sent = []; let accept = false;
+globalThis.fetch = async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: accept }; };
+sendClock({ms: 1200, open_ms: 100, shown_ms: 200, agent: 'codex', tz: 'UTC'});
+await new Promise((r) => setImmediate(r));
+accept = true;
+await flushClocks();
+await flushClocks();
+assert.equal(sent.length, 2);
+assert.deepEqual(sent[0], sent[1], 'an ambiguous retry has the same id');

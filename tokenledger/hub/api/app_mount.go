@@ -100,7 +100,7 @@ func isMeTab(p string) bool {
 // link, a home-screen shortcut), each is the console's page, never a 404.
 func isSessionPage(p string) bool {
 	const one = AppPrefix + "/s/"
-	return p == AppPrefix+"/chat" || p == AppPrefix+"/new" || (strings.HasPrefix(p, one) && len(p) > len(one))
+	return p == AppPrefix+"/health" || p == AppPrefix+"/chat" || p == AppPrefix+"/new" || (strings.HasPrefix(p, one) && len(p) > len(one))
 }
 
 // devicesPagePath is 设备 (C7): the computer's install, the phone's way in,

@@ -1,0 +1,48 @@
+# 服务健康与首次回复计时
+
+T1111 / K2CN，PNWW R3、S4、C3。入口 `/app/health`，接口 `GET /v1/health`，必须经过 viewerOnly。归类：核心。服务稳定性、故障可见性和租户隔离属于接入层职责，不改原生 Agent 工作流，也不新增常驻服务。
+
+## 设计判断
+
+解决用户无法判断服务是否故障、运维靠手工拼日志的问题，直接支持可靠接入。复用 hub、数据库、主副本选举、微信签码、通知通道与已有延迟数据；没有新依赖。页面缺数据显示未知或降级，不承诺端到端可用性。只保留耗时、固定组件标识和公开事件说明，不保存探测响应、凭据或会话内容；成员的机器数据按自己的 EntryHome 过滤。功能是接入层的可观测性，不替代模型或 Agent 原生功能。
+
+## 计时口径与漏报
+
+`fleet_chat_timings.at` 新写入统一为 Unix 毫秒。初始化将旧秒值乘 1000；滚动发布期间读路径仍兼容旧副本写入的秒，迁移重复执行安全。
+
+原链路有四个缺口：旧版 `newChat` 没开计时；按完整 worker 地址存储导致 `<fleet>/<fid>` 切换为 `fid:<fid>` 后找不到；必须等 home 层才上报，没有按首次可见回答停止；在发送前删除时钟，网络失败就丢失。修复分别是统一旧入口计时、FID 键、首次显示文本停止、完成结果写入 sessionStorage 队列。队列每 15 秒、联网和加载时重试，hub 用随机 ID 的 receipt 表事务去重。最多保留本标签页 50 条待发结果。
+
+这解释了代码能够丢样本的路径，不宣称仅凭代码能还原历史六个样本之外的全部启动。只统计十分钟内成功完成且送达的网页会话；未收到回复、空会话和关闭页面不是成功样本。页面明确显示这个选择偏差和样本数。
+
+`GET /v1/fleet/chat/timing?days=7` 仍为管理员接口，增加 `daily`（UTC 日期 → agent → spread）与 `agents`。健康页显示相同口径的 24h / 7d p50、p90、n。阶段缺失不当作零秒。
+
+## 每分钟探测
+
+`RunHealth` 用既有 Elector 的 `health` 锁，只由一个副本跑；单机 SQLite 沿用单副本语义。组件与分钟构成唯一键，持久化连续失败状态，跨重启、滚动发布去重。每次网络请求最多 5 秒，组件上下文最多 8 秒。记录保留八天，未结束事件保留。
+
+| 标识 | 检查 |
+|---|---|
+| claudefleet / ccquota / tokenman | 从现有 PublicHosts、SiteHosts、ForwardedHosts 的已登记入口取 `/healthz`，不跟重定向 |
+| core | FleetPublicURL 的 origin `/healthz`，不通过边缘别名 |
+| wechat | 复用 WxGateway.qrCreate 的取令牌与签码路径；保留一个登录 scene 号，普通登录随机分配排除它；一分钟临时码不展示、不保存，不创建 cookie、登录、用户或通知 |
+| workbench | 绕过本地令牌缓存，读取现有 `/internal/wx/token` 并检查响应，不存响应内容 |
+| notify | FLEET_NOTIFY_KF_URL 下的 `/healthz`，只 GET，不创建通知 |
+| releases | 读取当前 stable 指针所指构建的 manifest.json |
+
+`CCQUOTA_HEALTH_TARGETS` 可覆盖 HTTP 检查的目标，是 JSON 对象，键为固定组件标识。例如 `{"claudefleet":"https://fleet.example.com/healthz","notify":"https://notify.example.com/healthz"}`。配置留在部署环境，不进健康 API。微信和发布检查始终复用已有配置。没配置的组件显示 unconfigured，不是假绿。
+
+连续 **3** 个相邻分钟失败才创建事件；中间缺一分钟、成功或未配置都会打断序列。事件首次创建调用既有 `s.notify`（FLEET_NOTIFY_CMD → ccquota notify → FLEET_NOTIFY_KF_*）；持续失败不重复通知。沿用通知器现有交付语义，不新增推送渠道。kf-notify 只入 ops 收件箱，企微策略不变。首次成功将事件 ended 写为毫秒。
+
+## 权限、状态与管理数据
+
+普通成员只读固定服务标签、时间、状态、耗时、聚合计时、公开事件，以及自己家机器的 24h RTT 汇总；机器名和 login 不序列化。管理员机器也用匿名编号。查询错误返回通用 503，不暴露 SQL 或上游错误。超过三分钟的探测是 unknown；有 failed、unknown、unconfigured 就整体降级，三个用户入口均 failed 才是故障。服务端探测不等于用户网络可用性，页面依赖 hub 本身。
+
+管理员多读最近 15 分钟探测、UTC 每日分 agent 分位数、当前与近七天发布、当前副本最近一小时请求/5xx、当前副本数据库连接池。请求不是全副本总量；DB 等待次数是进程累计，不是 RDS CPU。CPU、额度字段为 null，待 CloudWatch 接入。
+
+`POST /v1/health` 仅管理员同源请求可写事件的 `note_zh` / `note_en`，长度受限、拒绝地址形态和明显凭据内容；前端作为纯文本显示。说明是公开内容，不可粘贴诊断日志。写入记审计。站点 edition 决定页面语言（sandbox 英文，其余中文）。
+
+## 验证
+
+Store 测试覆盖秒迁移、重复迁移、混合单位、事务上报去重、故障阈值、重复分钟、缺分钟、恢复再故障。API 测试覆盖匿名拒绝、成员/管理数据边界、未知状态、说明权限、地址拒绝、WeChat 61004、重复故障通知、恢复、签码不创建用户登录 scene、重定向拒绝和 edition。浏览器计时测试覆盖 FID 地址切换、过期、首次回答与上报重试。
+
+上线后读 `/v1/health` 确认所有目标均已配置、每分钟出现新行；签码不暴露二维码。以成员和管理员打开 `/app/health`，390 和 1440 宽检查布局、中英文、样本数与权限。仅显示真实生产读数，不用测试写入污染计时。

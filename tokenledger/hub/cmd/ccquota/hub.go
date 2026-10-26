@@ -1014,6 +1014,7 @@ func runHub(args []string) error {
 		srv.PoolUsageSilentAfter = api.PoolUsageSilentAfterFromEnv()
 		// svc_degraded's notifier (claude-fleet#4007): empty ⇒ log + record only.
 		srv.NotifyCmd = api.NotifyCmdFromEnv()
+		go srv.RunHealth(ctx)
 		go srv.RunNodeAlerts(ctx)
 		// Off (srv.HubQuota nil): returns at once.
 		go srv.RunHubQuota(ctx)
