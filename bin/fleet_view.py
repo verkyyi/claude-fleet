@@ -3212,7 +3212,7 @@ def webterm_switch(vid, window):
 # such a pane out first, in the same tmux call; a live window in copy-mode is someone
 # reading and is never touched, nor is a parked one entered while being looked at
 # (only this moment and the page's own start act).
-PARK_UNMODE_IF = "#{?#{&&:#{@parked},#{@park_held}},#{pane_in_mode},0}"
+PARK_UNMODE_IF = "#{?#{@parked},#{pane_in_mode},0}"
 
 
 def park_unmode(w):

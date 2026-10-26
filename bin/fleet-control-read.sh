@@ -217,7 +217,7 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}\t=#{@reap_why}\t=#{@session_origin}\t=#{@cc_agent}:#{@mod_accept}:#{?#{&&:#{@parked},#{@park_held}},1,}:#{?@codex_identity,1,}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}\t=#{@reap_why}\t=#{@session_origin}\t=#{@cc_agent}:#{@mod_accept}:#{?@parked,1,}:#{?@codex_identity,1,}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.

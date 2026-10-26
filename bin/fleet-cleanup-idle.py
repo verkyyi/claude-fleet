@@ -34,8 +34,10 @@ class RateLimited(Exception):
     pass
 
 
-def run(*args, cwd=None, timeout=15):
+def run(*args, cwd=None):
     gh = args[:1] == ("gh",)
+    # the session gate's park gets its whole budget (PARK_TIMEOUT, task PMGT)
+    timeout = PARK_TIMEOUT if "park" in args else 15
     try:
         return subprocess.check_output(args, cwd=cwd, text=True, stderr=subprocess.PIPE,
                                        timeout=timeout).strip()
@@ -984,7 +986,7 @@ class Cleaner:
         why = "memory" if early else "idle"
         command = os.environ.get("FLEET_SESSION_GATE_CMD")
         out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
-                  "park", "--fid", fid, "--why", why, timeout=PARK_TIMEOUT)
+                  "park", "--fid", fid, "--why", why)
         try:
             got = json.loads(out or "{}")
         except ValueError:
@@ -1515,7 +1517,7 @@ class Cleaner:
         pid = snap["pane_pid"]
         command = os.environ.get("FLEET_SESSION_GATE_CMD")
         out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
-                  "park", "--fid", snap["@fleet_id"], "--why", "memory", timeout=PARK_TIMEOUT)
+                  "park", "--fid", snap["@fleet_id"], "--why", "memory")
         result = json.loads(out or "{}")
         current = self.snapshot(window)
         if (not result.get("ok") or current["@fleet_id"] != snap["@fleet_id"]
