@@ -14,6 +14,11 @@
 #      address dialed are refused (exit 3) and `follow` then writes nothing
 #   D  follow, verified: verify + rewrite in one call
 #   E  nothing names the old address: exit 0, nothing written
+#   F  a credential store rewritten on a machine running the shared credential
+#      proxy (<cred-base>/.shared.json) asks for its reload — `fleet-credsep.py
+#      machine reload`, which (the machine daemon running it) stamps
+#      <LIB>/.restart, the `reload` the daemon watches; nothing rewritten ⇒ no
+#      stamp; no shared proxy (leg B) ⇒ no reload asked
 #
 # Fake hubs are python on 127.0.0.1 (FLEET_HUB_MOVE_TEST_HTTP=1, the seam that
 # lets an http://127.0.0.1 address stand in for https), killed at the end.
@@ -87,6 +92,7 @@ printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_TOKEN=ccq_store_tok\n' "$OLD" > "$B/alice/no
 chmod 600 "$M/machine.env" "$M/logins/alice.env" "$B/alice/node.env"
 out=$(FLEET_ADMIN_UNIT_DIR="$WORK/no-units" python3 -I "$MOVE" rewrite --scope machine --from "$OLD" --to "$NEW" \
   --state "$M" --cred-base "$B" 2>&1); rc=$?
+out_b=$out
 [ "$rc" = 0 ] && ok "B rewrite machine exit 0" || fail "B rewrite machine exit $rc: $out"
 for f in machine.env logins/alice.env; do
   grep -qx "CCQUOTA_HUB_URL=$NEW" "$M/$f" && [ "$(mode_of "$M/$f")" = 0o600 ] && ok "B $f" || fail "B $f: $(cat "$M/$f")"
@@ -149,6 +155,28 @@ python3 -I "$MOVE" rewrite --scope login --from "$OLD" --to "$NEW" --conf-dir "$
 [ "$rc" = 0 ] && [ ! -e "$N/fleet.conf.hub-prev" ] && ok "E nothing names the old address: exit 0, nothing written" || fail "E rc $rc"
 python3 -I "$MOVE" rewrite --scope login --from "$OLD" >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] && ok "E usage" || fail "E usage rc $rc"
+
+# ── F: the shared credential proxy is reloaded after its store moved ───────
+grep -q '^credential proxy reload' <<<"$out_b" && fail "F leg B (no shared proxy) asked for a reload" \
+  || ok "F no shared proxy on the machine: no reload asked"
+FB="$WORK/f-cred"; FL="$WORK/f-lib"; FN="$WORK/f-node"; mkdir -p "$FB/alice" "$FL" "$FN" "$WORK/f-daemons" "$WORK/f-run"
+printf '{"user": "%s", "port": 1, "logins": ["alice"]}\n' "$(id -un)" > "$FB/.shared.json"
+printf '{"children": {"cred-proxy-shared": {"pid": 0}}}\n' > "$FN/state.json"   # the machine daemon runs it
+printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_TOKEN=ccq_store_tok\n' "$OLD" > "$FB/alice/node.env"; chmod 600 "$FB/alice/node.env"
+fmove() {
+  FLEET_CREDSEP_LIB="$FL" FLEET_NODE_STATE="$FN" FLEET_CREDSEP_DAEMON_DIR="$WORK/f-daemons" FLEET_CREDSEP_RUN_BASE="$WORK/f-run" \
+    FLEET_CREDSEP_ROLE="$(id -un)" FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SVC=0 FLEET_ADMIN_UNIT_DIR="$WORK/no-units" \
+    python3 -I "$MOVE" rewrite --scope machine --from "$OLD" --to "$NEW" --state "$WORK/f-state" --cred-base "$FB" 2>&1
+}
+out=$(fmove); rc=$?
+[ "$rc" = 0 ] && grep -qx "CCQUOTA_HUB_URL=$NEW" "$FB/alice/node.env" && [ -s "$FL/.restart" ] \
+  && printf '%s\n' "$out" | grep -q '^credential proxy reload: rc 0' \
+  && ok "F the store moved ⇒ the shared proxy's reload stamp (<LIB>/.restart) bumped" \
+  || fail "F rc $rc, stamp $(cat "$FL/.restart" 2>&1): $out"
+stamp=$(cat "$FL/.restart" 2>/dev/null)
+out=$(fmove); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$FL/.restart" 2>/dev/null)" = "$stamp" ] && ! printf '%s\n' "$out" | grep -q '^credential proxy reload' \
+  && ok "F nothing rewritten ⇒ no reload" || fail "F a second, empty move: rc $rc: $out"
 
 if [ "$FAILS" -gt 0 ]; then
   printf 'fleet-hub-move selftest: %d FAILED\n' "$FAILS" >&2

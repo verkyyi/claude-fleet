@@ -404,6 +404,8 @@ def shared():
                     if k.startswith("FLEET_CRED_") and k not in ("FLEET_CRED_PROXY_LOG",)})
         env["FLEET_CRED_SHARED_TEST"] = "1"
         env["FLEET_CREDSEP_TEST"] = "1"
+        if os.environ.get("CCQUOTA_HUB_SOCK"):   # a fake hub forwarder (the hub broker's warm road)
+            env["CCQUOTA_HUB_SOCK"] = os.environ["CCQUOTA_HUB_SOCK"]
     drop_to(role)
     os.umask(0o077)
     os.chdir("/")

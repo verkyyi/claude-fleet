@@ -35,7 +35,9 @@ login's by that login — the machine agent runs `login` through prepCmd):
           seat's admin/admin.conf `hub=` (its unit re-rendered by
           fleet_admin_seat.py agent — the one renderer), admin-agent/'s key and
           conf, the credential stores' node.env (--cred-base, default
-          $FLEET_CREDSEP_ROOT_BASE or /var/db/fleet-cred) — and machine.env
+          $FLEET_CREDSEP_ROOT_BASE or /var/db/fleet-cred; a store rewritten ⇒
+          `fleet-credsep.py machine reload`, the shared proxy started again on
+          it) — and machine.env
           LAST: the node daemon restarts the node program on its change.
 
 Credentials: the token is read on stdin by `verify` only and sent nowhere but
@@ -289,8 +291,11 @@ def rewrite_machine(a, book):
     sa = os.path.join(s, "admin-agent")
     rewrite_file(os.path.join(sa, "node.key.ok"), k, book)
     conf_dir_files(os.path.join(sa, "conf"), a.frm, a.to, book)
+    before = len(book.changed)
     for p in sorted(glob.glob(os.path.join(base, "*", "node.env"))):
         rewrite_file(p, e, book)
+    if len(book.changed) > before:
+        proxy_reload(base, book)
     for p in sorted(glob.glob(os.path.join(base, "*", "node.key.ok"))):
         rewrite_file(p, k, book)
     conf = os.path.join(s, "admin", "admin.conf")
@@ -300,6 +305,34 @@ def rewrite_machine(a, book):
         seat_agent(a.to, book)
     # last: the node daemon restarts the node program on machine.env's change
     rewrite_file(os.path.join(s, "machine.env"), e, book)
+
+
+def proxy_reload(base, book):
+    """A store's node.env now names the new hub: the machine's shared credential
+    proxy, which reads its allow-list at start, is started again on it — through
+    fleet-credsep.py machine reload, the one restart road (the machine daemon's
+    `reload` stamp <LIB>/.restart when it runs the proxy, else its service).
+    Belt and braces: the proxy also follows a changed root-owned node.env on its
+    own (fleet-cred-proxy.py follow_node_envs). No shared proxy here
+    (<base>/.shared.json) ⇒ nothing to reload."""
+    if not os.path.isfile(os.path.join(base, ".shared.json")):
+        return
+    cs = os.path.join(HERE, "fleet-credsep.py")
+    if not os.path.isfile(cs):
+        book.left.append("the shared credential proxy's reload (no %s here)" % cs)
+        return
+    envp = dict(os.environ, FLEET_CREDSEP_ROOT_BASE=base)
+    try:
+        r = subprocess.run([sys.executable, "-I", cs, "machine", "reload"], env=envp,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           universal_newlines=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        book.left.append("the shared credential proxy's reload (%s)" % e)
+        return
+    note = (r.stdout or "").strip().splitlines()
+    print("credential proxy reload: rc %d%s" % (r.returncode, (" · " + note[-1]) if note else ""))
+    if r.returncode not in (0, 3):
+        book.left.append("the shared credential proxy's reload (fleet-credsep.py machine reload rc %d)" % r.returncode)
 
 
 def seat_agent(to, book):

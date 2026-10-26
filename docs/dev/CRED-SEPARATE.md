@@ -385,6 +385,44 @@ in the selftest's sandbox (`FLEET_CREDSEP_TEST=1`). A login's own unseparated
 proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row
 `cred-upstream-tenant-override`.
 
+### The allow-list follows node.env (a moved hub)
+
+The hub hosts on that list come from root's config and from each tenant's
+node.env **in the store** (`<root>/node.env`, the path root's launcher hands the
+proxy), read at start. When the hub moves, `bin/fleet-hub-move.py rewrite --scope
+machine` rewrites those files to the new https address (docs/dev/MANAGED-NODE.md
+§27). A proxy started before that used to refuse every `/hub/v1/…` call with 403
+until it was restarted (2026-10-26: `fleet_repo_authority_guard` failed every
+session start on the node). Now:
+
+- **The proxy follows.** When an upstream's host is not on the list, the proxy
+  stats each of those node.env paths (only on a miss; an allowed host costs
+  nothing). A file whose inode, size, mtime or ctime changed is read again, and the
+  host of its https `CCQUOTA_HUB_URL` is added (`allow_follow` in the log).
+- **The trust argument.** A re-read counts only when the file and its directory
+  are owned by root or by the proxy's own account (the role account), neither is
+  group- or other-writable, and the file is opened with `O_NOFOLLOW`. That is the
+  same file, with the same writers, that a restart would trust anyway. A login
+  cannot write it (its sessions get `Permission denied` on the store), so a login
+  still cannot point the proxy at a host of its choosing. A file that fails the
+  check is not followed, and the proxy says why on stderr.
+- **Only added, never dropped.** The old hub stays allowed for the rest of the
+  process's life. Its name keeps forwarding during a move, and a request already
+  on its way is never cut. The next restart drops it.
+- **Belt and braces.** When the writer rewrote a store's node.env on a machine
+  with the shared proxy (`<base>/.shared.json`), it runs `fleet-credsep.py
+  machine reload` before `machine.env`. That is `shared_restart`: the machine
+  daemon's `reload` stamp `<LIB>/.restart` when the daemon runs the proxy, else
+  its service.
+- **What the 403 says.** The proxy now tells two cases apart: «neither https nor
+  loopback», and «https, but its host X is not on this proxy's allow-list
+  (allowed: …)». The repo-authority check sees `cred-proxy:` in a refusal and says
+  it was this machine's proxy, not the Hub, and how to reload it
+  (`sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine reload`).
+
+BREAK-IT row `credproxy-hub-url-moved`; `bin/fleet-cred-hub-moved-selftest.sh`;
+`bin/fleet-hub-move-selftest.sh` F (the writer bumps the reload stamp).
+
 ## What it does not stop
 
 - **Root.** A login with password-less sudo can `sudo cat` anything; the
