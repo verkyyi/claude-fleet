@@ -161,12 +161,13 @@ func TestBedrockFallbackNotForTrial(t *testing.T) {
 	if st, body := b.stream(t, cred); st == http.StatusOK || strings.Contains(body, "FROM BEDROCK") || b.bedrockCalls() != 0 {
 		t.Fatalf("trial → %d %s (bedrock calls %d)", st, body, b.bedrockCalls())
 	}
-	b.cpRig.mu.Lock()
-	audit := strings.Join(b.audit, "\n")
-	b.cpRig.mu.Unlock()
-	if !strings.Contains(audit, `"fallback":"bedrock: trial"`) {
-		t.Fatalf("the hub did not refuse as trial:\n%s", audit)
-	}
+	// The response can reach the client before serve's deferred audit runs.
+	// Wait for that observable completion rather than racing the handler.
+	waitFor(t, 3*time.Second, "the trial refusal audit", func() bool {
+		b.cpRig.mu.Lock()
+		defer b.cpRig.mu.Unlock()
+		return strings.Contains(strings.Join(b.audit, "\n"), `"fallback":"bedrock: trial"`)
+	})
 }
 
 func TestBedrockFallbackCap(t *testing.T) {

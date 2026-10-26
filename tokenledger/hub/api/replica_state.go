@@ -330,7 +330,7 @@ func (s *Server) fanoutLive(f liveFanout) {
 			resp, err := s.Replica.client().Do(req)
 			if err != nil {
 				// That replica's viewers miss this report; the endpoint's
-				// next one (seconds away) carries the same sessions.
+				// next change or minute heartbeat repairs the snapshot.
 				log.Printf("live: hand %s's report to replica %s: %v", f.EndpointID, peer.Name, err)
 				return
 			}
