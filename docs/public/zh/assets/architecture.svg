@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 850" role="img" aria-labelledby="title desc" lang="zh">
 <title id="title">架构概览</title>
-<desc id="desc">客户端访问中枢；中枢拥有中央数据；节点主动连接中枢并运行会话；模型请求经凭据代理到达外部提供方。</desc>
+<desc id="desc">客户端访问运行时控制面中枢；中枢拥有中央数据；节点主动连接中枢，将原样运行的原生 agent 进程作为会话；模型请求经凭据代理到达外部提供方。</desc>
 <style>:root{color-scheme:light dark}text{font-family:var(--fleet-font-ui,sans-serif);fill:CanvasText}rect{fill:Canvas;stroke:CanvasText}path{fill:none;stroke:CanvasText;stroke-width:2}</style>
 <rect x="1" y="1" width="618" height="848" rx="12"/>
 <rect x="25" y="30" width="570" height="120" rx="10"/>

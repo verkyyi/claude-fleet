@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 850" role="img" aria-labelledby="title desc" lang="en">
 <title id="title">Architecture overview</title>
-<desc id="desc">Clients use the hub. The hub owns data. Nodes initiate connections to the hub and run sessions. Model requests pass through the credential proxy to external providers.</desc>
+<desc id="desc">Clients use the hub, the runtime control plane. The hub owns data. Nodes initiate connections to the hub and run native agent processes unmodified as sessions. Model requests pass through the credential proxy to external providers.</desc>
 <style>:root{color-scheme:light dark}text{font-family:var(--fleet-font-ui,sans-serif);fill:CanvasText}rect{fill:Canvas;stroke:CanvasText}path{fill:none;stroke:CanvasText;stroke-width:2}</style>
 <rect x="1" y="1" width="618" height="848" rx="12"/>
 <rect x="25" y="30" width="570" height="120" rx="10"/>
