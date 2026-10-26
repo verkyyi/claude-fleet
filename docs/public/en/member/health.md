@@ -2,7 +2,7 @@
 
 ## Open the health page
 
-Open `/status` on your site: no sign-in is needed. The website footer and avatar menu’s **Service health** links also open it. The page refreshes every minute; shared caching may delay data by up to about a minute. ClaudeFleet uses Chinese; tokenman.io uses English.
+Open [/status](/status) on your site: no sign-in is needed. The website footer and avatar menu’s **Service health** links also open it. The page refreshes every minute; shared caching may delay data by up to about a minute. ClaudeFleet uses Chinese; tokenman.io uses English.
 
 ## Read the status
 

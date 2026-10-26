@@ -1,6 +1,6 @@
 # Tokenman architecture
 
-Tokenman is a runtime for native AI coding agents such as Claude Code and Codex, provided by model companies and run unmodified: it handles where they run, how they stay online, how people connect from any device, and how subscriptions are shared and metered. This is a conceptual map: the layers show responsibilities, not a deployment topology. The principles distinguish live behavior from work in progress.
+Tokenman is a runtime for native AI coding agents such as Claude Code and Codex, provided by model companies and run unmodified: it handles where they run, how they stay online, how people connect from any device, and how subscriptions are shared and metered. This is a conceptual map: the layers show responsibilities, not a deployment topology. All eight principles describe behavior live in production.
 
 [Open the visual blueprint](https://tokenman.io/architecture) · [Security and isolation](security.md)
 
@@ -23,7 +23,7 @@ Clients connect to the hub through an encrypted entry.
 - **Subscription pools** — Share model subscriptions within their permitted scope and meter each person's usage. [Learn more](admin/accounts.md).
 - **Credential proxy** — Authorize model requests and select an eligible subscription without giving its key to a session. [Learn more](security.md).
 - **Provisioning** — Create and recycle managed nodes for people. [Learn more](admin/machines.md).
-- **Status and telemetry** — Collect health signals and explain service state. Public health is still in progress. [Learn more](member/health.md).
+- **Status and telemetry** — Collect health signals and explain service state. The [public status page](/status) is available without signing in. [Learn more](member/health.md).
 
 ### 3 · Data
 
@@ -53,12 +53,12 @@ Nodes initiate an encrypted connection to the hub; they do not access the data l
 
 - **Observability** — Connection health, session experience and service status. [Learn more](member/health.md).
 - **Security** — Least privilege, protected credentials and verified releases. [Learn more](security.md).
-- **Delivery** — Tested changes and recoverable releases; gradual handover is still in progress. [Learn more](self-host/install.md).
+- **Delivery** — Tested changes and recoverable releases, with staged connection handover and automatic reconnection of browser streams. [Learn more](self-host/install.md).
 
 <!-- blueprint:flows -->
 ## How requests flow
 
-These paths describe responsibilities. Push delivery and smooth release handover are still being completed, as marked in the principles below.
+These paths describe the responsibilities behind live browser access, model requests, node state updates and release handover.
 
 ### Chatting with an agent
 
@@ -77,13 +77,13 @@ These paths describe responsibilities. Push delivery and smooth release handover
 
 1. The node agent initiates an encrypted outward connection to the hub.
 2. The hub delivers work and settings through that connection.
-3. The node reports state; replacing remaining polling with change notifications is in progress.
+3. The node pushes state changes to the hub; older nodes switch as they update.
 
 ### A release ships
 
 1. A change passes automated checks and merges.
 2. The release process publishes a verified release and deploys the hub.
-3. Nodes verify and apply their releases; seamless handover across the whole path is in progress.
+3. Nodes verify and apply their releases. Connections are handed over in stages during deployment, and browser streams reconnect automatically.
 
 <!-- blueprint:boundaries -->
 ## Trust boundaries and data
@@ -107,29 +107,29 @@ Sessions run the official Claude Code and Codex CLIs directly and follow upstrea
 
 Sessions stay on managed nodes and continue when a laptop closes. Browser, terminal and phone access let people return to the same running work from whichever device is available. Separating a session's lifetime from its client connection makes ongoing work independent of a person's device. [Connecting to sessions](member/connect.md) describes access from each device.
 
-### One portal · in progress
+### One portal · live
 
-One address should carry people from sign-in to their sessions without asking them to choose an entry point. It makes identity and navigation easier to understand while routing stays a service responsibility. Portal unification is in progress. [Current member journey](member/quickstart.md); there is no public deep-dive on the unified portal yet.
+Browser access converges on tokenman.io, with regional routing handled by the service and an accelerated entry for mainland China. This gives people one familiar path from sign-in to their sessions without choosing an entry point themselves. Existing access through WeChat and native clients remains available. [Member quickstart](member/quickstart.md) describes the session journey.
 
 ### Nodes dial out · live
 
 A node initiates the connection to the hub so the service can reach its sessions without requiring an inbound application port on that node. This supports both managed environments and personal machines behind ordinary network boundaries. [Self-host setup](self-host/install.md) and [Security and isolation](security.md) describe the operating and trust model.
 
-### Push, not poll · in progress
+### Push, not poll · live
 
-Changes should travel when they happen, avoiding repeated reads of unchanged state and keeping the hub's view fresh. Some paths still poll; this principle is a direction, not a claim that all polling has disappeared. [Current service health](member/health.md) describes today's behavior; a public push-transport deep-dive is not available yet.
+Nodes push state when it changes, avoiding repeated reads of unchanged state and keeping the hub's view fresh. Older nodes switch as they update. This reduces unnecessary requests while making changes visible promptly. [Node updates](self-host/install.md) covers update operations; [Service health](member/health.md) explains the health information available to readers.
 
 ### Keys stay central · live
 
 Keeping model keys out of sessions limits what an agent or a compromised working environment can take. The proxy can enforce access, select subscriptions and revoke access centrally while the session uses a scoped credential. [Security and isolation](security.md) explains the boundary; [Subscription accounts](admin/accounts.md) describes administration.
 
-### Uneventful deploys · in progress
+### Uneventful deploys · live
 
-A release should preserve ongoing work and hand connections over gradually so a routine update does not become a person's interruption. Verified releases are already part of the security model; end-to-end smooth deployment is still in progress. [Install and deploy](self-host/install.md) and [Release verification](security.md) cover current operation; there is no public handover deep-dive yet.
+Deployments hand connections over in stages, and browser streams reconnect automatically. This preserves continuity for ongoing work and reduces interruptions during routine releases. [Install and deploy](self-host/install.md) covers operation; [Release verification](security.md) explains how published releases are trusted.
 
-### Visible health · in progress
+### Visible health · live
 
-People should be able to tell whether a problem is theirs or the service's, using understandable health information rather than internal telemetry. A public view of that experience is still in progress. [Service health](member/health.md) documents the existing signed-in health page and its limitations; it is not a promise of a completed public status service.
+The [public status page](/status) shows service health and incidents without requiring sign-in. Readable health information helps people distinguish a local connection problem from a service disruption. [Service health](member/health.md) explains the indicators and their limits, along with the additional details available after signing in.
 
 <!-- blueprint:glossary -->
 ## Glossary
@@ -142,4 +142,4 @@ People should be able to tell whether a problem is theirs or the service's, usin
 - **Node agent** — The node-side service that connects to the hub, manages local sessions and carries state and updates.
 
 <!-- blueprint:version -->
-Blueprint v3 · Updated 2026-10-26. Status labels describe this version, not a delivery date.
+Blueprint v4 · Updated 2026-10-26. Status labels describe this version, not a delivery date.

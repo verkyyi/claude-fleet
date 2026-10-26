@@ -84,6 +84,9 @@ for (lang, p), state in pages.items():
         # (with the logo's ?v=<version>: a new logo is a new URL for Safari's icon cache)
         if href.split('?v=')[0] in ('/favicon.ico', '/favicon.svg', '/apple-touch-icon.png'):
             continue
+        # The public health page is served by the hub, outside the docs build.
+        if href == '/status':
+            continue
         target = resolve(urljoin('http://x' + url_of(lang, p), href))
         if target is None or not os.path.isfile(target):
             bad.append('C %s/%s: dead link %s' % (lang, p, href))
