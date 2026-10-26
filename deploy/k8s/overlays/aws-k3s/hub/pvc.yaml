@@ -1,0 +1,23 @@
+# The hub's two disks on the box (task PNWW): the release store every machine
+# updates from, and the debug drops. local-path: both replicas run on the one box.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ccquota-releases
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 80Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ccquota-debug
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi

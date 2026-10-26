@@ -36,8 +36,36 @@ spec:
             - name: account-key
               mountPath: /secrets/account-key
               readOnly: true
+            # the release store and the debug drops (CCQUOTA_FLEET_RELEASE_DIR,
+            # CCQUOTA_FLEET_DEBUG_DIR in site.env), one disk on the box
+            - name: releases
+              mountPath: /releases
+            - name: debug
+              mountPath: /debug
+            - name: debug-key
+              mountPath: /etc/ccquota-debug
+              readOnly: true
+            - name: feedback-github
+              mountPath: /etc/ccquota-feedback-github
+              readOnly: true
       volumes:
         - name: account-key
           secret:
             secretName: ccquota-account-key
             defaultMode: 0440
+        - name: releases
+          persistentVolumeClaim:
+            claimName: ccquota-releases
+        - name: debug
+          persistentVolumeClaim:
+            claimName: ccquota-debug
+        - name: debug-key
+          secret:
+            secretName: ccquota-debug-key
+            defaultMode: 0440
+            optional: true
+        - name: feedback-github
+          secret:
+            secretName: ccquota-feedback-github
+            defaultMode: 0440
+            optional: true
