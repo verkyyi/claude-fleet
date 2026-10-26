@@ -16,6 +16,11 @@
 #                        (required for user pods; unset = the hub alone, WORKERS=0)
 #   ACME_EMAIL           Let's Encrypt's contact                                      (required)
 #   HUB_HOST             core.tokenman.io
+#   PUBLIC_ORIGIN        the hub's public URL (CCQUOTA_*PUBLIC_URL), default https://$HUB_HOST;
+#                        another name's when the hub took over another hub's address
+#   EDGE_TRUSTED_IPS     CIDRs whose X-Forwarded-* traefik keeps (a reverse proxy in
+#                        front, e.g. the Shenzhen ingress' egress address as a /32);
+#                        unset = traefik trusts nobody's
 #   EXTRA_HOSTS          more names served by the same hub, space-separated, each in
 #                        the certificate extra-tls (e.g. HUB_HOST=tokenman.io
 #                        EXTRA_HOSTS="www.tokenman.io core.tokenman.io": the apex
@@ -42,6 +47,7 @@ REPO_DIR=${REPO_DIR:-$(cd "$here/../../.." && pwd)}
 OVERLAY=$REPO_DIR/deploy/k8s/overlays/aws-k3s
 HUB_HOST=${HUB_HOST:-core.tokenman.io}
 EXTRA_HOSTS=${EXTRA_HOSTS:-}
+EDGE_TRUSTED_IPS=${EDGE_TRUSTED_IPS:-}
 AWS_REGION=${AWS_REGION:-us-west-2}
 STORAGE_CLASS=${STORAGE_CLASS:-local-path}
 LETSENCRYPT_SERVER=${LETSENCRYPT_SERVER:-prod}
@@ -259,6 +265,17 @@ ensure_secrets() {
   [ -f "$S/site.conf" ] && k -n fleet-hub create configmap ccquota-site --from-env-file="$S/site.conf" \
     --dry-run=client -o yaml | k apply -f - >/dev/null
   sec fleet-workers fleet-credproxy --from-file=credproxy-token="$S/credproxy-token"
+  # optional, a hub that took over another one's state (task PNWW): its debug
+  # key, its feedback GitHub App and its price table — each only when present
+  [ -s "$S/debug-key" ] && sec fleet-hub ccquota-debug-key --from-file=debug-key="$S/debug-key"
+  if [ -d "$S/feedback-github" ]; then
+    sec fleet-hub ccquota-feedback-github --from-file="$S/feedback-github"
+  fi
+  if [ -s "$S/pricing.json" ]; then
+    k -n fleet-hub create configmap ccquota-pricing --from-file=pricing.json="$S/pricing.json" \
+      --dry-run=client -o yaml | k apply -f - >/dev/null
+  fi
+  return 0
 }
 
 # ── 5. the overlay ──────────────────────────────────────────────────────────
@@ -277,9 +294,39 @@ render() {
           -e "s#ecr.invalid/fleet/managed-node:set-by-deploy#${MANAGED_NODE_IMAGE:-ecr.invalid/fleet/managed-node:set-by-deploy}#g" \
           -e "s#acme@example.invalid#$ACME_EMAIL#g" \
           -e "s#https://acme-v02.api.letsencrypt.org/directory#$issuer#g" \
-          -e "s#core\.tokenman\.io#$HUB_HOST#g"
+          -e "s#https://core\.tokenman\.io#${PUBLIC_ORIGIN:-https://$HUB_HOST}#g" \
+          -e "s#core\.tokenman\.io#$HUB_HOST#g" \
+    | edge_trust
   rm -rf "$tree"
   extra_ingress
+  credproxy_ingress
+}
+
+# EDGE_TRUSTED_IPS: traefik keeps those sources' X-Forwarded-* (the line is
+# rendered as a placeholder and dropped when unset).
+edge_trust() {
+  if [ -n "$EDGE_TRUSTED_IPS" ]; then
+    sed -e "s#__EDGE_TRUSTED_IPS__#$(echo $EDGE_TRUSTED_IPS | tr ' ' ',')#g"
+  else
+    grep -v '__EDGE_TRUSTED_IPS__'
+  fi
+}
+
+# The cluster credential proxy at /v1/proxy/ on every name the hub answers
+# (the hub's own Ingress sends the rest of the path to the hub).
+credproxy_ingress() {
+  local h
+  [ "$WORKERS" = 0 ] && return 0
+  printf -- '---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n'
+  printf '  name: fleet-credproxy\n  namespace: fleet-workers\n  annotations:\n'
+  printf '    traefik.ingress.kubernetes.io/router.middlewares: fleet-hub-redirect-https@kubernetescrd\n'
+  printf 'spec:\n  ingressClassName: traefik\n  tls:\n    - hosts:\n'
+  for h in $HUB_HOST $EXTRA_HOSTS; do printf '        - %s\n' "$h"; done
+  printf '  rules:\n'
+  for h in $HUB_HOST $EXTRA_HOSTS; do
+    printf '    - host: %s\n      http:\n        paths:\n          - path: /v1/proxy/\n            pathType: Prefix\n' "$h"
+    printf '            backend:\n              service:\n                name: fleet-credproxy\n                port:\n                  number: 80\n'
+  done
 }
 
 # EXTRA_HOSTS: one more Ingress to the same hub, its own certificate.

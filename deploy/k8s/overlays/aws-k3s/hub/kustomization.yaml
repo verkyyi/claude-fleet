@@ -7,6 +7,7 @@ namespace: fleet-hub
 resources:
   - ../../../base
   - redirect-https.yaml
+  - pvc.yaml
 images:
   - name: ccquota
     newName: ecr.invalid/fleet/ccquota

@@ -14,3 +14,7 @@ spec:
       - "--entryPoints.web.transport.respondingTimeouts.readTimeout=0"
       - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=0"
       - "--entryPoints.websecure.transport.respondingTimeouts.writeTimeout=0"
+      # the edge in front (EDGE_TRUSTED_IPS, bootstrap.sh): its X-Forwarded-* kept,
+      # everyone else's overwritten — the hub reads the edge's host and client from them
+      - "--entryPoints.web.forwardedHeaders.trustedIPs=__EDGE_TRUSTED_IPS__"
+      - "--entryPoints.websecure.forwardedHeaders.trustedIPs=__EDGE_TRUSTED_IPS__"
