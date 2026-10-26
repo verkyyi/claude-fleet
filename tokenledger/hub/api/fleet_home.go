@@ -415,7 +415,7 @@ func (s *Server) handleFleetHome(w http.ResponseWriter, r *http.Request) {
 		req.Last = ""
 	}
 	out, err := s.homePick(pid, req.Last, now)
-	out.Hub = s.nodeHubURL(r)
+	out.Hub = s.hubURL(r)
 	if err != nil && pid != "" && !errors.Is(err, errMachineOff) {
 		// No active login (claude-fleet#2069): one being opened is "wait a
 		// minute", not "forbidden" — the client holds and asks again.
@@ -426,7 +426,7 @@ func (s *Server) handleFleetHome(w http.ResponseWriter, r *http.Request) {
 			// A login opened whose fleet has not reported yet
 			// (claude-fleet#2941) is a login all the same: home needs no fleet.
 			out, err = s.homePick(pid, req.Last, now)
-			out.Hub = s.nodeHubURL(r)
+			out.Hub = s.hubURL(r)
 		} else if st.State == "opening" {
 			w.Header().Set("Cache-Control", "no-store")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{

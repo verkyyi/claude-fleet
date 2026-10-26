@@ -55,13 +55,11 @@ const (
 	siteSandboxDir     = "sandbox/"
 )
 
-// siteSandbox: r's edition is the sandbox one — CCQUOTA_SITE_HOSTS's for its
-// host, else CCQUOTA_SITE's (edge.go).
-func (s *Server) siteSandbox(r *http.Request) bool { return s.siteEditionFor(r) == SiteEditionSandbox }
+func (s *Server) siteSandbox() bool { return s.SiteEdition == SiteEditionSandbox }
 
 // siteFront is the build's front page for "/" and its language.
-func (s *Server) siteFront(r *http.Request) (name, lang string) {
-	if s.siteSandbox(r) {
+func (s *Server) siteFront() (name, lang string) {
+	if s.siteSandbox() {
 		return siteSandboxDir + "index.html", "en"
 	}
 	return "index.html", "zh-CN"
@@ -113,12 +111,12 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 	}
 	p := r.URL.Path
 	switch {
-	case s.siteSandbox(r) && (p == "/en" || p == "/en/"):
+	case s.siteSandbox() && (p == "/en" || p == "/en/"):
 		// the sandbox page is English at / itself
 		http.Redirect(w, r, withQuery("/", r), http.StatusMovedPermanently)
-	case s.siteSandbox(r) && p == "/zh":
+	case s.siteSandbox() && p == "/zh":
 		http.Redirect(w, r, withQuery("/zh/", r), http.StatusMovedPermanently)
-	case s.siteSandbox(r) && p == "/zh/":
+	case s.siteSandbox() && p == "/zh/":
 		if !s.sitePage(w, r, siteSandboxDir+"zh/index.html", "zh-CN") {
 			http.NotFound(w, r)
 		}

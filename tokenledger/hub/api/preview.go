@@ -54,13 +54,6 @@ func (s *Server) ValidatePreviewConfig() error {
 	if e != nil || a == b {
 		return errors.New("preview base domain must use a different registrable domain from the hub")
 	}
-	// a per-host public address (CCQUOTA_PUBLIC_HOSTS, task PNWW) is the hub
-	// too, on its own site — never the preview's
-	for h := range s.PublicHosts {
-		if site, err := publicsuffix.EffectiveTLDPlusOne(h); err != nil || site == b {
-			return errors.New("preview base domain must use a different registrable domain from every public host")
-		}
-	}
 	for _, alias := range s.PreviewHubAliases {
 		site, err := publicsuffix.EffectiveTLDPlusOne(alias)
 		if err != nil || site != a || !previewDomainRE.MatchString(alias) || len(alias) > 253 {
@@ -135,7 +128,7 @@ func (s *Server) previewHosts(next http.Handler) http.Handler {
 		}
 		u, _ := url.Parse(s.FleetPublicURL)
 		previewHost := r.Host == s.PreviewDomain || strings.HasSuffix(strings.Split(r.Host, ":")[0], "."+s.PreviewDomain)
-		hubHost := r.Host == u.Host || (!previewHost && previewClusterHost(r.Host)) || (!previewHost && s.PublicHosts[strings.ToLower(r.Host)] != "")
+		hubHost := r.Host == u.Host || (!previewHost && previewClusterHost(r.Host))
 		for _, alias := range s.PreviewHubAliases {
 			hubHost = hubHost || r.Host == alias
 		}

@@ -111,16 +111,6 @@ type Server struct {
 	// CCQUOTA_SITE=sandbox. The legal pages, docs, assets and crawl files are
 	// the same in both.
 	SiteEdition string
-	// SiteHosts is CCQUOTA_SITE_HOSTS (task PNWW, edge.go): a host's own
-	// edition ("" or SiteEditionSandbox), overriding SiteEdition for it.
-	SiteHosts map[string]string
-	// ForwardedHosts is CCQUOTA_FORWARDED_HOSTS (task PNWW, edge.go): the
-	// hosts a trusted edge forwards in X-Forwarded-Host ("*.<suffix>" allowed);
-	// empty takes no forwarded host.
-	ForwardedHosts []string
-	// PublicHosts is CCQUOTA_PUBLIC_HOSTS (task PNWW, edge.go): a host's own
-	// browser-facing origin for hubURL; any other host keeps FleetPublicURL.
-	PublicHosts map[string]string
 	// SiteFS is the built public site (web/site, claude-fleet#3584): / and
 	// /en/, their assets under /site/; nil = the landing page.
 	SiteFS fs.FS
@@ -534,7 +524,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.forwardedTrust(s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))))
+	return s.logRequests(s.previewHosts(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes())))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is

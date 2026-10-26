@@ -211,7 +211,7 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out := RoutesResponse{Hub: s.nodeHubURL(r), Machines: []RouteMachine{}}
+	out := RoutesResponse{Hub: s.hubURL(r), Machines: []RouteMachine{}}
 	var hosts map[string]bool
 	loginOn := func(string) (string, bool) { return "", false }
 	if !id.Operator {

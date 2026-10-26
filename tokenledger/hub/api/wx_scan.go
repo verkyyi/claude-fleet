@@ -427,7 +427,7 @@ func mobileBrowser(r *http.Request) bool {
 func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e string) {
 	now := time.Now()
 	page := signinScanPage{pageView: newPageView(r, loc), Mode: "qr", Apply: toApply(r), Trial: s.trialAsked(r), TrialOn: s.trialOn(),
-		Email: s.Email.ready(), GitHub: s.GitHub.ready(), PageURL: s.nodeHubURL(r) + appURL("/signin")}
+		Email: s.Email.ready(), GitHub: s.GitHub.ready(), PageURL: s.hubURL(r) + appURL("/signin")}
 	purpose := wxPurposeLogin
 	if page.Trial {
 		purpose = wxPurposeTrial
