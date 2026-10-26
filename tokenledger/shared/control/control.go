@@ -747,6 +747,11 @@ type Welcome struct {
 	HubProto int    `json:"hub_proto"`
 	MinProto int    `json:"min_proto"`
 	Reason   string `json:"reason,omitempty"`
+	// HubURL is the hub's one machine-facing address (task PNWW, the
+	// fleet.node_url setting): a node that dialed another one follows it once
+	// the named address takes its own token for its own endpoint
+	// (bin/fleet-hub-move.py verify). "" (and from an older hub) = stay.
+	HubURL string `json:"hub_url,omitempty"`
 }
 
 // Heartbeat is the payload of TypeHeartbeat: what one login on one machine

@@ -635,7 +635,9 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		s.adoptMappedLogins(time.Now())
 	}
 
-	welcome := control.Welcome{Accepted: control.Compatible(hello.Proto), HubProto: control.Proto, MinProto: control.MinProto}
+	welcome := control.Welcome{Accepted: control.Compatible(hello.Proto), HubProto: control.Proto, MinProto: control.MinProto,
+		// the hub's one machine-facing address (task PNWW): "" = none announced
+		HubURL: s.announcedNodeURL()}
 	if !welcome.Accepted {
 		// Listed, never written to. The connection stays open so the roster
 		// shows the node and its version — "online, proto 7, writes refused"

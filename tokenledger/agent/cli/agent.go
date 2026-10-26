@@ -146,7 +146,13 @@ func runAgent(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return a.Run(ctx)
+	err = a.Run(ctx)
+	if to := a.HubMoved(); to != "" && err == nil {
+		// The hub moved (task PNWW): this login's configuration names the new
+		// address; the service that keeps this agent up starts it there.
+		log.Printf("ccquota agent: the hub moved to %s — exiting so this agent starts again on the rewritten configuration", to)
+	}
+	return err
 }
 
 // agentFleetConfig is the part of an agent's Config its environment sets — the

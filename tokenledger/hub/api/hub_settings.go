@@ -162,6 +162,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return v, ""
 		}},
+	NodeURLKey: {def: "", help: "the hub's one machine-facing address (moving the hub, task PNWW): every machine that dialed another one checks this one takes its own token, rewrites its configuration (bin/fleet-hub-move.py) and reconnects here. An https origin; \"\" = nothing announced",
+		check: nodeURLCheck},
 	RoutesExtraKey: {def: "", help: "more ways in, on top of CCQUOTA_FLEET_ROUTES: the same JSON array",
 		check: func(_ *Server, v string) (string, string) {
 			ms, err := ParseFleetRoutes(v)
