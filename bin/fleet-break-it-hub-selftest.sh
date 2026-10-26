@@ -1678,7 +1678,7 @@ drill_dist_publish_tampered() {
 # The page half by name (the console's sessions.ts, since the old console's
 # lib/stream.js went with claude-fleet#3939: a silent stream is dropped at 30 s
 # and opened again with a backoff, the reconnect is the catch-up, twice silent
-# or one that cannot be built polls every 30 s); the hub half's ping and scope
+# or one that cannot be built polls every 10 s); the hub half's ping and scope
 # by name (and go test with a toolchain).
 drill_hub_stream_silent() {
   CAP=120; local t0 out rc js="$ROOT/extras/web-console/src/shared/sessions.ts" tests f
@@ -1688,13 +1688,13 @@ drill_hub_stream_silent() {
   grep -q 'export const WATCHDOG_MS = 30_000;' "$js" || { WHY="sessions.ts no longer gives up on a silent stream at 30 s"; return 1; }
   grep -q 'es.addEventListener("ping", alive);' "$js" || { WHY="sessions.ts no longer takes the hub's ping as a sign of life"; return 1; }
   grep -q 'if (++silent >= 2) { startPoll(); later(60_000); return; }' "$js" \
-    || { WHY="sessions.ts no longer falls back to the 30 s poll on a stream silent twice"; return 1; }
+    || { WHY="sessions.ts no longer falls back to the 10 s poll on a stream silent twice"; return 1; }
   grep -q 'var fleetStreamPing = 20 \* time.Second' "$ROOT/tokenledger/hub/api/fleet_stream.go" \
     || { WHY="the hub no longer pings an idle stream every 20 s"; return 1; }
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
-  WHAT='页面：代理挂住的推送 30 s 断开重连（1→2→4→8→15 s）、重连即补一份；连着两次没声音或建不起来页面可见时退回 30 s 轮询（按名核对）'
+  WHAT='页面：代理挂住的推送 30 s 断开重连（1→2→4→8→15 s）、重连即补一份；连着两次没声音或建不起来退回 10 s 轮询（按名核对）'
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in 0) WHAT="${WHAT}；入口每 20 s ping、只发本人的、没变不发（go test）" ;; 1) return 1 ;; esac
   SECS=$(since "$t0")
 }
@@ -2822,12 +2822,12 @@ drill_hub_drain_waiting_links() {
   SECS=$(since "$t0")
 }
 
-# T1118: production-sized operation journal, conservative hide and expiry.
+# T1118: production-sized operation journal, unchanged hide and immediate list reads.
 drill_hub_session_list_scan() {
   CAP=120; local t0
   t0=$(now)
-  WHAT='7024 条操作仍走会话索引，旧数据回填、未知操作保留、24h 到期审计；按人缓存和副本写入失效'
-  go_half '^(TestHiddenHistoryIndexedPlan|TestOperationSessionBackfillAndExpiry|TestHistoryHideIsReversibleAndConservative|TestSessionListCacheInvalidatesAcrossServers)$' ./hub/store ./hub/api; case $? in
+  WHAT='7024 条操作仍走会话索引，旧数据回填、未审核操作原样保留；隐藏语义不变，动作与时钟变化即时可读'
+  go_half '^(TestHiddenHistoryIndexedPlan|TestOperationSessionBackfillRequiresExpiryReview|TestOperationSessionCasefoldBackfill|TestHistoryOperationPredicateMatchesLegacy|TestHistoryHideIsReversibleAndConservative|TestSessionListImmediateChanges|TestSessionListHideUndoImmediate)$' ./hub/store ./hub/api; case $? in
     1) return 1 ;;
   esac
   SECS=$(since "$t0")

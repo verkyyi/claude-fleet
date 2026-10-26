@@ -185,7 +185,7 @@ export function useSessions(onTasks?: (body: unknown) => void, pollTasks?: () =>
     let es: EventSource | null = null;
     let poll = 0, dog = 0, retry = 0, silent = 0, tries = 0, gone = false;
     const startPoll = () => {
-      if (!poll) poll = window.setInterval(() => { if (!document.hidden) { void readLive(); pollTasks?.(); } }, 30000);
+      if (!poll) poll = window.setInterval(() => { void readLive(); pollTasks?.(); }, 10000);
     };
     const stopPoll = () => { if (poll) { clearInterval(poll); poll = 0; } };
     const drop = () => { es?.close(); es = null; clearTimeout(dog); };

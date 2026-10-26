@@ -201,21 +201,26 @@ login-wide `export CCQUOTA_FLEET=1`, both ways, and a conf without the line
 follows the login — see [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md) for which switch
 lives at which level.
 
-**Session-list cost and operation expiry (T1118).** List answers share a three-second
-cache per person and view; committed changes invalidate it across hub replicas.
-Hidden history checks indexed operation/session references, backfilled from legacy
-requests, and still requires the exact reviewed ledger version. The alerts leader
-reconciles abandoned node operations every minute and marks journal entries older
-than 24 hours `expired`, preserving requests/results and recording each transition
-in `fleet_audit`. Expiry ends result tracking; it does not prove execution stopped,
-release a task binding, or authorize a duplicate start. Legacy `recorded` journal
-rows also age out through this audited path. The console uses its existing SSE
-stream, with visible-page fallback polling every 30 seconds.
+**Session-list cost (T1118).** Hidden history checks indexed operation/session
+references, backfilled from legacy requests. The predicate remains exactly
+`status NOT IN ('succeeded','failed')`: an unknown or expired journal row is not
+proof that work ended, and the exact reviewed ledger version is still required.
+List responses are rebuilt on each request, including time-based availability;
+no response TTL delays actions, questions or status updates. The console keeps
+its existing SSE and 10-second polling fallback. The sidebar keeps its original
+2-second cadence and immediately renews successful long polls.
+
+There is no automatic age-based expiry or unattended terminal-status rewrite.
+Before changing an old operation, verify no native/session activity remains and
+list any currently visible in-progress row in the PR for operator confirmation.
+The first R4 release may already have written `expired` rows; use its
+`operation_expire` audit records to review them, never guess or silently restore
+their old status. Expiry itself is not absence evidence for history hiding.
 
 **The sidebar sees every machine** (issue #1423). With `CCQUOTA_FLEET=1` and
 `CCQUOTA_HUB_URL` set, the collector keeps `bin/fleet-hub-sessions.sh` refreshing
 the hub's `fleet_sessions` into `global/remote_<sess>` (and the
-`control/hub-workers.tsv` cache above) — at most every 10 s while a client is attached to
+`control/hub-workers.tsv` cache above) — every 2 s while a client is attached to
 a fleet session on this machine (`FLEET_HUB_SESSIONS_WATCHED_EVERY`), event-driven with a 60 s fallback
 when nobody is looking (`FLEET_HUB_SESSIONS_IDLE_EVERY`). `tmux-dashboard-rows.sh` only reads that
 file: your sessions on other machines — your login, a `worker_id`, a fleet that is

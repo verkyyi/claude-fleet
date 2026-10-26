@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const historyPendingOperation = `SELECT 1 FROM fleet_operation_sessions WHERE session_id = ? AND status NOT IN ('succeeded','failed','expired')`
+const historyPendingOperation = `SELECT 1 FROM fleet_operation_sessions WHERE session_id = ? AND status NOT IN ('succeeded','failed')`
 
 const historyHideSchema = `
 CREATE TABLE IF NOT EXISTS fleet_history_hides (
