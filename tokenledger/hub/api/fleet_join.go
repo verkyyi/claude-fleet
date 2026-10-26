@@ -191,14 +191,14 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 // machine joins as itself, nothing fetched from GitHub.
 func (s *Server) joinCommand(r *http.Request, code, role string) string {
 	if role == store.NodeRoleManaged {
-		hub := s.hubURL(r)
+		hub := s.nodeHubURL(r)
 		return fmt.Sprintf("curl -fsSL %s/install/%s | sudo bash -s -- --hub %s --join %s", hub, NodeInstallScript, hub, code)
 	}
 	script := s.FleetJoinScriptURL
 	if script == "" {
-		script = s.hubURL(r) + JoinScriptPath
+		script = s.nodeHubURL(r) + JoinScriptPath
 	}
-	return fmt.Sprintf("curl -fsSL %s | bash -s -- --hub %s --token %s", script, s.hubURL(r), code)
+	return fmt.Sprintf("curl -fsSL %s | bash -s -- --hub %s --token %s", script, s.nodeHubURL(r), code)
 }
 
 func (s *Server) joinNow() time.Time {
@@ -317,7 +317,7 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 // joinResponse is the node pass for an enrolled endpoint and its token.
 func (s *Server) joinResponse(r *http.Request, id, label, tok, osUser string) *NodeJoinResponse {
 	out := &NodeJoinResponse{
-		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
+		EndpointID: id, Label: label, Token: tok, Hub: s.nodeHubURL(r),
 		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
 	}
 	if s.SSHCA != nil {

@@ -31,7 +31,7 @@ import (
 
 // InstallCommand is the line people copy, for this hub.
 func (s *Server) InstallCommand(r *http.Request) string {
-	return "curl -fsSL " + s.hubURL(r) + "/install | sh"
+	return "curl -fsSL " + s.nodeHubURL(r) + "/install | sh"
 }
 
 func (s *Server) installReady() bool {
@@ -102,7 +102,7 @@ func (s *Server) installerScript(w http.ResponseWriter, r *http.Request, invite 
 			return "", false
 		}
 	}
-	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.hubURL(r))
+	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.nodeHubURL(r))
 	return strings.ReplaceAll(body, InvitePlaceholder, invite), true
 }
 

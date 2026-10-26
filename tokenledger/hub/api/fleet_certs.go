@@ -331,7 +331,7 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 		ValidBefore: iss.ValidBefore,
 		SSHConfig:   s.sshConfigFor(p.Login, hosts, byHost),
 		Machines:    s.certMachines(hosts),
-		Hub:         s.hubURL(r),
+		Hub:         s.nodeHubURL(r),
 	}, nil
 }
 
@@ -412,8 +412,20 @@ func (s *Server) certMachines(hosts map[string]bool) []CertMachine {
 	return out
 }
 
-// hubURL is the address people know the hub by.
+// hubURL is the address people know the hub by, in a browser: the origin
+// CCQUOTA_PUBLIC_HOSTS names for the host the request reached (task PNWW),
+// else nodeHubURL.
 func (s *Server) hubURL(r *http.Request) string {
+	if o := s.publicHostURL(r); o != "" {
+		return o
+	}
+	return s.nodeHubURL(r)
+}
+
+// nodeHubURL is the hub's one configured address (CCQUOTA_FLEET_PUBLIC_URL,
+// else as this request reached us), whatever host was asked: what a machine
+// is told to dial and what WeChat calls back on — never the per-host one.
+func (s *Server) nodeHubURL(r *http.Request) string {
 	if s.FleetPublicURL != "" {
 		return strings.TrimRight(s.FleetPublicURL, "/")
 	}
@@ -498,7 +510,7 @@ type ConnectInfo struct {
 
 func (s *Server) handleFleetConnect(w http.ResponseWriter, r *http.Request) {
 	out := ConnectInfo{
-		Hub: s.hubURL(r), CAEnabled: s.SSHCA != nil, CertTTLSec: int(sshca.TTL.Seconds()),
+		Hub: s.nodeHubURL(r), CAEnabled: s.SSHCA != nil, CertTTLSec: int(sshca.TTL.Seconds()),
 		KeyPath: FleetKeyPath, CertPath: FleetCertPath, ConfigPath: FleetSSHConfigPath,
 		Machines: []FleetMachine{}, Recent: []store.FleetCert{},
 		InstallCommand: s.InstallCommand(r), InstallReady: s.installReady(),

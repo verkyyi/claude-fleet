@@ -620,7 +620,7 @@ func (s *Server) serveAppPage(w http.ResponseWriter, r *http.Request, next http.
 // front page is never a door that only leads in.
 func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 	toApp := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.siteServed() && s.serveSite(w, r) {
+		if s.siteServed(r) && s.serveSite(w, r) {
 			return
 		}
 		http.Redirect(w, r, withQuery(AppPrefix, r), http.StatusFound)
@@ -633,11 +633,11 @@ func (s *Server) serveRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 // siteServed: the site is on and this hub carries its built front page.
-func (s *Server) siteServed() bool {
+func (s *Server) siteServed(r *http.Request) bool {
 	if !s.Site || s.SiteFS == nil {
 		return false
 	}
-	name, _ := s.siteFront()
+	name, _ := s.siteFront(r)
 	_, err := fs.Stat(s.SiteFS, name)
 	return err == nil
 }
@@ -652,7 +652,7 @@ func (s *Server) serveSite(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if s.SiteFS != nil {
 		// the edition's front page (CCQUOTA_SITE=sandbox: the sandbox page, task PNWW)
-		name, lang := s.siteFront()
+		name, lang := s.siteFront(r)
 		if _, err := fs.Stat(s.SiteFS, name); err == nil {
 			w.Header().Add("Vary", "Cookie")
 			return s.sitePage(w, r, name, lang)

@@ -236,7 +236,7 @@ func (s *Server) revokeSession(r *http.Request) error {
 // the site's front page in that language (claude-fleet#3798). A fixed word,
 // never an address, so it is no open redirect.
 func (s *Server) logoutTo(r *http.Request) string {
-	if s.siteServed() {
+	if s.siteServed(r) {
 		switch r.PostFormValue("to") {
 		case "site":
 			return "/"

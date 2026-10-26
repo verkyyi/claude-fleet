@@ -135,7 +135,7 @@ func spentHash(kind, v string) string {
 }
 
 func (s *Server) wechatCallbackURL(r *http.Request) string {
-	return s.hubURL(r) + "/auth/wechat/callback"
+	return s.nodeHubURL(r) + "/auth/wechat/callback"
 }
 
 // handleWeChatStart sends the browser to WeChat: inside WeChat the service

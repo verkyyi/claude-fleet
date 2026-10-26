@@ -108,7 +108,7 @@ func (s *Server) issueAdminToken(r *http.Request, host, login string, now time.T
 	if err != nil {
 		return nil, err
 	}
-	out := &AdminTokenResponse{Login: login, Machine: firstLabel(host), Token: tok, Hub: s.hubURL(r)}
+	out := &AdminTokenResponse{Login: login, Machine: firstLabel(host), Token: tok, Hub: s.nodeHubURL(r)}
 	if id, err := s.Store.LiveEndpointOn(host, login); err == nil {
 		if err := s.Store.RotateEndpointToken(id, HashToken(tok), now, ReissueTokenGrace); err != nil {
 			return nil, err
