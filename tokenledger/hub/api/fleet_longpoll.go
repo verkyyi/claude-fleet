@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,7 +43,15 @@ type changeBroadcast struct {
 	ch      chan struct{}
 	last    time.Time
 	writing int
+	// seq counts fires; keys holds, per key fireFor named, the seq it last
+	// fired at (one entry per machine login — a few dozen). A plain fire()
+	// names no key and is everyone's (anyKey).
+	seq  uint64
+	keys map[string]uint64
 }
+
+// anyKey is the key of a fire() that names nobody: it concerns every waiter.
+const anyKey = "\x00any"
 
 // begin marks a recording in flight; every begin is paired with one end.
 func (b *changeBroadcast) begin() {
@@ -74,22 +83,62 @@ func (b *changeBroadcast) settled(ch <-chan struct{}) bool {
 }
 
 func (b *changeBroadcast) wait() <-chan struct{} {
+	ch, _ := b.waitSeq()
+	return ch
+}
+
+// waitSeq is wait() plus the fire count at that moment: firedSince(seq, …)
+// later says what fired after it.
+func (b *changeBroadcast) waitSeq() (<-chan struct{}, uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.ch == nil {
 		b.ch = make(chan struct{})
 	}
-	return b.ch
+	return b.ch, b.seq
 }
 
-func (b *changeBroadcast) fire() {
+func (b *changeBroadcast) fire() { b.fireFor(anyKey) }
+
+// fireFor wakes every waiter, remembering that the change was key's.
+func (b *changeBroadcast) fireFor(key string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.last = time.Now()
+	b.seq++
+	if b.keys == nil {
+		b.keys = map[string]uint64{}
+	}
+	b.keys[key] = b.seq
 	if b.ch != nil {
 		close(b.ch)
 		b.ch = nil
 	}
+}
+
+// firedSince reports whether a fire after seq was for a key that concerns
+// the asker (or for anyKey).
+func (b *changeBroadcast) firedSince(seq uint64, concerns func(key string) bool) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for k, at := range b.keys {
+		if at > seq && (k == anyKey || concerns(k)) {
+			return true
+		}
+	}
+	return false
+}
+
+// loginKey is a heartbeat's key on sessionsChanged: the (machine, login) its
+// rows are recorded under, the pair a principal's scope is asked about.
+func loginKey(hostname, osUser string) string { return hostname + "\x00" + osUser }
+
+func splitLoginKey(k string) (hostname, osUser string, ok bool) {
+	i := strings.IndexByte(k, 0)
+	if i < 0 {
+		return "", "", false
+	}
+	return k[:i], k[i+1:], true
 }
 
 func (b *changeBroadcast) lastFired() time.Time {
@@ -132,35 +181,80 @@ func (s *Server) fleetSessionsWait(req *http.Request, wait time.Duration) (map[s
 	if wait <= 0 || inm == "" {
 		return s.FleetSessions(req)
 	}
+	p, err := s.FleetPrincipal(req)
+	if err != nil {
+		return nil, err
+	}
+	concerns := func(k string) bool {
+		h, u, ok := splitLoginKey(k)
+		return !ok || p.sees(h, u)
+	}
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for {
 		// Subscribe before reading, so a beat between the read and the
 		// select is not missed.
-		changed := s.sessionsChanged.wait()
-		out, err := s.FleetSessions(req)
+		changed, seq := s.sessionsChanged.waitSeq()
+		out, err := s.FleetSessions(req) // scope resolved again on every read
 		if err != nil {
 			return out, err
 		}
 		if tag, _ := out["etag"].(string); tag == "" || !etagMatches(inm, tag) {
 			return out, nil
 		}
+		built := time.Now()
 		recheck := time.NewTimer(fleetSessionsRecheck)
-		waited := time.Now()
-		select {
-		case <-changed:
-		case <-recheck.C:
-		case <-deadline.C:
-			recheck.Stop()
+		// Wait for a reason to read again: a beat from a login this caller
+		// sees (at once), anyone else's beat (at most every
+		// fleetSessionsOtherEvery — what the answer holds beyond the rows,
+		// its records and tokens, still shows as soon as before), the
+		// recheck, the deadline or the asker leaving.
+		var other <-chan time.Time
+		var otherT *time.Timer
+		read := false
+		for !read {
+			waited := time.Now()
+			select {
+			case <-changed:
+				if s.sessionsChanged.firedSince(seq, concerns) {
+					read = true
+					break
+				}
+				changed, _ = s.sessionsChanged.waitSeq()
+				if otherT == nil {
+					otherT = time.NewTimer(time.Until(built.Add(fleetSessionsOtherEvery)))
+					other = otherT.C
+				}
+			case <-other:
+				read = true
+			case <-recheck.C:
+				read = true
+			case <-deadline.C:
+				recheck.Stop()
+				stopTimer(otherT)
+				addHeld(req.Context(), time.Since(waited))
+				return out, nil
+			case <-req.Context().Done():
+				recheck.Stop()
+				stopTimer(otherT)
+				addHeld(req.Context(), time.Since(waited))
+				return out, nil
+			}
 			addHeld(req.Context(), time.Since(waited))
-			return out, nil
-		case <-req.Context().Done():
-			recheck.Stop()
-			addHeld(req.Context(), time.Since(waited))
-			return out, nil
 		}
 		recheck.Stop()
-		addHeld(req.Context(), time.Since(waited))
+		stopTimer(otherT)
+	}
+}
+
+// fleetSessionsOtherEvery bounds how often a held fleet_sessions request
+// re-reads for heartbeats from logins its caller does not see (task PNWW):
+// they cannot move its rows, only what rides beside them.
+var fleetSessionsOtherEvery = time.Second
+
+func stopTimer(t *time.Timer) {
+	if t != nil {
+		t.Stop()
 	}
 }
 

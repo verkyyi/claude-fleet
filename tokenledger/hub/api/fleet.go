@@ -179,8 +179,9 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 	for _, id := range rejected {
 		log.Printf("node %s: fleet %s is registered to another machine; refused", ep.ID, id)
 	}
-	// A held fleet_sessions long poll reads again (claude-fleet#1526).
-	s.sessionsChanged.fire()
+	// A held fleet_sessions long poll reads again (claude-fleet#1526) — at
+	// once when the caller sees this login.
+	s.sessionsChanged.fireFor(loginKey(host, user))
 	// Issue leases ride the same beat (claude-fleet#1422): a session it
 	// shows renews its lease, a session it no longer shows releases it.
 	s.renewLeases(ep, host, user, reports, rejected, reconnect, s.leaseClock())
