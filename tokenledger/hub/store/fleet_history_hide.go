@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const historyPendingOperation = `SELECT 1 FROM fleet_operation_sessions WHERE session_id = ? AND status NOT IN ('succeeded','failed','expired')`
+
 const historyHideSchema = `
 CREATE TABLE IF NOT EXISTS fleet_history_hides (
  owner TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, hidden INTEGER NOT NULL,
@@ -142,25 +144,9 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 		if live {
 			return historyHideRefusal("live_identity")
 		}
-		operations, err := tx.Query(`SELECT request FROM fleet_operations WHERE status NOT IN ('succeeded','failed')`)
+		var queued bool
+		err = tx.QueryRow(`SELECT EXISTS (`+historyPendingOperation+`)`, m.ID).Scan(&queued)
 		if err != nil {
-			return err
-		}
-		queued := false
-		for operations.Next() {
-			var raw string
-			if err := operations.Scan(&raw); err != nil {
-				operations.Close()
-				return err
-			}
-			// A nonterminal write naming this durable identity may still carry
-			// input or a resume. Unknown outcomes retain the row too.
-			if strings.Contains(raw, m.ID) {
-				queued = true
-			}
-		}
-		operations.Close()
-		if err := operations.Err(); err != nil {
 			return err
 		}
 		if queued {
@@ -224,11 +210,15 @@ func (s *Store) HideHistory(m HistoryHideManifest, actor string, undo, apply boo
 	return tx.Commit()
 }
 
+func hiddenHistoryCandidatesSQL() string {
+	return `SELECT h.id,h.owner FROM fleet_history_hides h JOIN fleet_ids i ON i.id=h.id AND i.owner=h.owner WHERE h.hidden=1 AND h.seq=i.seq AND i.closed_at>0
+ AND NOT EXISTS (` + strings.Replace(historyPendingOperation, "?", "h.id", 1) + `)`
+}
+
 // HiddenHistory only hides the exact closed ledger version reviewed. A later
 // event (including reopen) automatically exposes it again; no ID/task is edited.
 func (s *Store) HiddenHistory(owner string, decode ChatMirrorSession) (map[string]bool, error) {
-	q := `SELECT h.id,h.owner FROM fleet_history_hides h JOIN fleet_ids i ON i.id=h.id AND i.owner=h.owner WHERE h.hidden=1 AND h.seq=i.seq AND i.closed_at>0
- AND NOT EXISTS (SELECT 1 FROM fleet_operations o WHERE o.status NOT IN ('succeeded','failed') AND o.request LIKE '%' || h.id || '%')`
+	q := hiddenHistoryCandidatesSQL()
 	args := []any{}
 	if owner != "" {
 		q += ` AND h.owner=?`

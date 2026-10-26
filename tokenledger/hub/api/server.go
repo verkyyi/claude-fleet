@@ -178,7 +178,9 @@ type Server struct {
 
 	// sessionsChanged fires on every recorded fleet heartbeat: a held
 	// fleet_sessions long poll (claude-fleet#1526) wakes and reads again.
-	sessionsChanged changeBroadcast
+	sessionsChanged     changeBroadcast
+	sessionListCache    sessionListCache
+	operationSweepState operationSweepState
 	// revChanged fires on every change of the revocation list: a held
 	// list request answers at once (claude-fleet#3560).
 	revChanged changeBroadcast

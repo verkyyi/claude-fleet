@@ -473,7 +473,7 @@ func (s *Server) moveStatus(w http.ResponseWriter, r *http.Request, p fleetPrinc
 		return
 	}
 	view := operationView(o)
-	if o.Status != "succeeded" && o.Status != "failed" {
+	if !store.FleetOperationTerminal(o.Status) {
 		if rerr := s.reconcileOperation(r.Context(), &o); rerr != nil {
 			view = operationView(o)
 			view["reconciliation_error"] = errorObject(rerr)

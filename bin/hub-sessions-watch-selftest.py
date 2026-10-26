@@ -92,6 +92,7 @@ def watch(observe):
                          'print((p/"sessions.json").read_text())\n')
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(('FLEET_', 'CCQUOTA_', 'SPIN_')) and k not in ('TMUX', 'TMUX_PANE', 'CODEX_HOME')}
+        env['FLEET_HUB_SESSIONS_WATCHED_EVERY'] = '2'  # accelerated; default pinned by schedule test
         env.update(HOME=str(root / 'home'), FLEET_CONF_DIR=str(root / 'conf'),
                    FLEET_SKIP_GLOBAL_CONF='1',
                    TMUX_TMPDIR=tmp, TMPDIR=tmp, CCQUOTA_FLEET='1',

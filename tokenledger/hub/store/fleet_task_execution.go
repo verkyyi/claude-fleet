@@ -302,7 +302,7 @@ func insertExecutionOperationTx(tx *sql.Tx, o FleetOperation, ref string, genera
 	} else if n == 0 {
 		return ErrIdemTaken
 	}
-	return nil
+	return indexOperationSessions(tx, o)
 }
 
 // taskSessionExitTx reads only receipts accepted by this protocol. Re-check the

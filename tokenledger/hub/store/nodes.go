@@ -234,7 +234,13 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetOrgs(); err != nil {
 		return err
 	}
-	return s.ensureFleetSSHRelays()
+	if err := s.ensureFleetSSHRelays(); err != nil {
+		return err
+	}
+	if err := s.ensureOperationSessions(); err != nil {
+		return err
+	}
+	return s.ensureSessionListRevision()
 }
 
 // NodeConnected records that endpointID opened a control channel speaking

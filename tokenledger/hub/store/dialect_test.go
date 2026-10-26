@@ -137,3 +137,10 @@ func TestPostgresFleetSpellings(t *testing.T) {
 		t.Errorf("deferForeignKeys / forUpdate = %q / %q", d.deferForeignKeys(), d.forUpdate())
 	}
 }
+
+func TestPostgresCascadeForeignKeyDDL(t *testing.T) {
+	got := postgresDialect.ddl(`CREATE TABLE child (parent TEXT REFERENCES parent(id) ON DELETE CASCADE)`)
+	if !strings.Contains(got, `REFERENCES parent(id) ON DELETE CASCADE DEFERRABLE`) {
+		t.Fatal(got)
+	}
+}

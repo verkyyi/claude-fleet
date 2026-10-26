@@ -772,7 +772,7 @@ func neverStarted(op map[string]any, heard error, oc placeOutcome, wait time.Dur
 }
 
 func operationFinal(status string) bool {
-	return status == "succeeded" || status == "failed" || status == "unknown"
+	return store.FleetOperationTerminal(status) || status == "unknown"
 }
 
 // outcomeOf reads a REMOTE start's operation as a placeOutcome.

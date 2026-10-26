@@ -430,15 +430,34 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrIdemTaken
 	}
+	if err := indexOperationSessions(tx, o); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 // UpdateFleetOperation records a newer status and result for an operation.
 func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time) error {
+	return s.updateFleetOperation(id, status, resultJSON, at, nil)
+}
+
+// ReconcileFleetOperation rejects a stale node observation if another reply
+// or expiry has already advanced the journal while the node read was in flight.
+func (s *Store) ReconcileFleetOperation(observed FleetOperation, status, resultJSON string, at time.Time) error {
+	return s.updateFleetOperation(observed.ID, status, resultJSON, at, &observed)
+}
+
+func (s *Store) updateFleetOperation(id, status, resultJSON string, at time.Time, observed *FleetOperation) error {
+	guard := ""
+	args := []any{status, resultJSON, at.UTC().Format(rfc), id, taskStartCancelledResult}
+	if observed != nil {
+		guard = " AND status=? AND updated=?"
+		args = append(args, observed.Status, observed.Updated.UTC().Format(rfc))
+	}
 	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ?
+		AND status <> 'expired'
 		AND NOT (action = 'worker_start' AND status = 'failed' AND COALESCE(result, '') = ?)
-		AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'task_blocker', 'task_blocker_event', 'task_stop_alias', 'task_session_exit', 'repo_local_start', 'repo_authority')`,
-		status, resultJSON, at.UTC().Format(rfc), id, taskStartCancelledResult)
+		AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'task_blocker', 'task_blocker_event', 'task_stop_alias', 'task_session_exit', 'repo_local_start', 'repo_authority')`+guard, args...)
 	return err
 }
 
