@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,7 +19,7 @@ import (
 //
 // Two halves live here. Drain: when this hub replica is told to stop (a
 // rolling release sends SIGTERM), every open terminal attachment is told
-// `hub_restart` — the page reconnects at once, to the replica still up —
+// `hub_restart` in separate slots — the page reconnects with jitter —
 // and this replica's fleet_replicas row goes, so the other one stops handing
 // it the in-memory state's requests. Health: GET TermHealthPath reads
 // fleet_term_sessions back as the numbers the task is judged by — how often a
@@ -29,9 +31,10 @@ const TermHealthPath = "/v1/fleet/term/health"
 
 // drainState is closed once, when the hub starts going away.
 type drainState struct {
-	once sync.Once
-	ch   chan struct{}
-	mu   sync.Mutex
+	once    sync.Once
+	ch      chan struct{}
+	mu      sync.Mutex
+	retired bool
 }
 
 func (s *Server) drainCh() <-chan struct{} { return s.drainChan() }
@@ -55,18 +58,47 @@ func (s *Server) Draining() bool {
 	}
 }
 
-// Drain tells every open terminal to come back elsewhere and drops this
-// replica's row. Called once, before the listeners shut down.
+// Drain marks readiness false before any connection is moved. The replica row
+// stays reachable while waiting links still need peer forwarding.
 func (s *Server) Drain() {
 	ch := s.drainChan()
-	s.drain.once.Do(func() {
-		close(ch)
-		if s.Replica != nil && s.Store != nil {
-			if err := s.Store.ForgetReplica(s.Replica.Name); err != nil {
-				log.Printf("fleet: replica %s: forget on drain: %v", s.Replica.Name, err)
-			}
+	s.drain.once.Do(func() { close(ch) })
+}
+
+func (s *Server) finishDrain() {
+	s.drain.mu.Lock()
+	defer s.drain.mu.Unlock()
+	s.drain.retired = true
+	if s.Replica != nil && s.Store != nil {
+		if err := s.Store.ForgetReplica(s.Replica.Name); err != nil {
+			log.Printf("fleet: replica %s: forget on drain: %v", s.Replica.Name, err)
 		}
-	})
+	}
+}
+
+// Each browser gets its own slot, including attachments routed to a node on
+// another replica. A node link ending can bring its own attachments forward.
+func (s *Server) attachmentDrain(ctx context.Context) <-chan time.Time {
+	out := make(chan time.Time, 1)
+	go func() {
+		select {
+		case <-s.drainCh():
+		case <-ctx.Done():
+			return
+		}
+		spread := s.LinkDrainSpread
+		if spread <= 0 {
+			spread = linkDrainSpreadDefault
+		}
+		timer := time.NewTimer(time.Duration(rand.Int63n(int64(spread) + 1)))
+		defer timer.Stop()
+		select {
+		case now := <-timer.C:
+			out <- now
+		case <-ctx.Done():
+		}
+	}()
+	return out
 }
 
 // termCause is the browser's word for why it connects; anything else is "".
@@ -208,4 +240,20 @@ func (s *Server) handleTermHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, termHealth(rows, since, now))
+}
+
+// HTTP streams cannot carry a WebSocket close code. Their existing SSE frames
+// carry the committed byte cursor; cancellation reconnects from that cursor.
+func (s *Server) drainRequest(r *http.Request) (*http.Request, func()) {
+	ctx, cancel := context.WithCancel(r.Context())
+	s.links.enter()
+	drain := s.attachmentDrain(ctx)
+	go func() {
+		select {
+		case <-drain:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return r.WithContext(ctx), func() { cancel(); s.links.leave() }
 }

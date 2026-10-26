@@ -85,8 +85,10 @@ func (s *Server) replicaStarted() time.Time {
 
 // beatReplica writes this replica's row.
 func (s *Server) beatReplica(now time.Time) error {
-	if s.Draining() {
-		return nil // going away: the row is gone and stays gone (RMVE)
+	s.drain.mu.Lock()
+	defer s.drain.mu.Unlock()
+	if s.drain.retired {
+		return nil
 	}
 	return s.Store.BeatReplica(store.ReplicaRow{Name: s.Replica.Name, URL: s.Replica.URL,
 		StartedAt: s.replicaStarted(), SeenAt: now})

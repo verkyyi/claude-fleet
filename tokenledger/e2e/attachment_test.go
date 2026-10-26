@@ -382,3 +382,24 @@ func (a *attachmentClient) output(t *testing.T, want string) {
 		}
 	}
 }
+
+func TestAttachmentDrainCarriesTerminalPosition(t *testing.T) {
+	r := newTermRig(t, true)
+	a := connectAttachmentTest(t, r, false)
+	r.h.Srv.LinkDrainSpread = 20 * time.Millisecond
+	r.h.Srv.Drain()
+	for {
+		select {
+		case f := <-a.signals:
+			if f.Err == nil {
+				continue
+			}
+			if websocket.CloseStatus(f.Err) != websocket.StatusServiceRestart || !strings.Contains(f.Err.Error(), "isolated:1") {
+				t.Fatalf("terminal drain lost close code or generation: %v", f.Err)
+			}
+			return
+		case <-time.After(3 * time.Second):
+			t.Fatal("terminal never received restart")
+		}
+	}
+}

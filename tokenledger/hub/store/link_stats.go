@@ -175,3 +175,13 @@ func (s *Store) NodeLastBeat(endpointID string) (*time.Time, bool, error) {
 	}
 	return parseNullTime(last), true, nil
 }
+
+// LastLinkEvent distinguishes an intentional handoff while its old replica is
+// still serving other nodes. Looking only at replica liveness calls it network.
+func (s *Store) LastLinkEvent(host, login string) (LinkEvent, error) {
+	var e LinkEvent
+	var at int64
+	err := s.read.QueryRow(`SELECT at, event, cause FROM fleet_link_events WHERE host = ? AND login = ? ORDER BY at DESC LIMIT 1`, host, login).Scan(&at, &e.Event, &e.Cause)
+	e.At = time.UnixMilli(at)
+	return e, err
+}

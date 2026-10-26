@@ -64,14 +64,16 @@ func TestDrainForgetsReplica(t *testing.T) {
 	}
 	a.srv.Drain()
 	a.srv.Drain() // twice is once
+	a.srv.finishDrain()
+	if err := a.srv.beatReplica(time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-a.srv.drainCh():
 	default:
 		t.Fatal("drain channel still open")
 	}
-	if err := a.srv.beatReplica(time.Now()); err != nil {
-		t.Fatal(err)
-	}
+
 	if h, ok := b.srv.stateHolder(time.Now()); ok {
 		t.Fatalf("hub-b still hands the state to %s after it drained", h.Name)
 	}

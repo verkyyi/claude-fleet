@@ -167,7 +167,7 @@ func TestNodeBackoffDoublesCapsAndJitters(t *testing.T) {
 	prev := time.Duration(0)
 	for i := 0; i < 12; i++ {
 		d := b.next()
-		if d < b.cur-b.cur/5 || d > b.cur {
+		if d < 0 || d > b.cur {
 			t.Fatalf("step %d: delay %s outside [%s, %s]", i, d, b.cur-b.cur/5, b.cur)
 		}
 		if b.cur > nodeBackoffMax {
@@ -195,13 +195,13 @@ func TestNodeQuickRedialAfterAnEstablishedLink(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		b.next()
 	}
-	if d := b.wait(true); d < nodeQuickRedial || d > 2*nodeQuickRedial {
+	if d := b.wait(true); d < 0 || d > 2*nodeQuickRedial {
 		t.Fatalf("after an established link: %s, want within [%s, %s]", d, nodeQuickRedial, 2*nodeQuickRedial)
 	}
 	if d := b.wait(false); d > nodeBackoffMin {
 		t.Fatalf("the failure after it: %s, want the ladder's bottom (≤ %s)", d, nodeBackoffMin)
 	}
-	if d := b.wait(false); d <= nodeBackoffMin {
+	if d := b.wait(false); b.cur != 2*nodeBackoffMin || d > b.cur {
 		t.Fatalf("a second failure: %s, want the ladder climbing past %s", d, nodeBackoffMin)
 	}
 }
@@ -217,7 +217,7 @@ func TestNodeBackoffLadder(t *testing.T) {
 		if b.cur != w*time.Second {
 			t.Fatalf("rung %d = %s, want %s", i, b.cur, w*time.Second)
 		}
-		if d > 30*time.Second || d < b.cur*4/5 {
+		if d > 30*time.Second || d < 0 {
 			t.Fatalf("rung %d: jittered wait %s outside [%s, 30s]", i, d, b.cur*4/5)
 		}
 	}

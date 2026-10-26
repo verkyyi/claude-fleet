@@ -69,7 +69,7 @@ export function connectTerminal(worker: string | null, options: {
     probe(error);
     if (!navigator.onLine || !visible()) { pending = true; return; }
     const delay = now ? 0 : retryDelay(failures, error);
-    if (!now && error !== "hub_restart") failures++;
+    if (!now) failures++;
     pending = true;
     timer = setTimeout(() => { pending = false; start(); }, delay);
   };

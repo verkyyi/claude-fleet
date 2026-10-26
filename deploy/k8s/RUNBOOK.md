@@ -19,7 +19,7 @@
 
 一份 pod 怎么走（滚动形态）：新 pod 只有 `/readyz` 说库连得上、迁移版本够了才接流量；
 旧 pod 先 `preStop` 睡 5 秒（等 ingress 把它摘掉），再收 SIGTERM，手上的请求最多再给
-`CCQUOTA_SHUTDOWN_GRACE`（25 秒）做完。发布、删 pod、节点排空都是这一条路；PDB 保证排空时
+`CCQUOTA_SHUTDOWN_GRACE`（70 秒：60 秒分批交接，余下 10 秒收尾）做完。发布、删 pod、节点排空都是这一条路；PDB 保证排空时
 至少留一份。每次发布 hub-deploy 每秒探一次 `/healthz` + 一次写，摘要里 `downtime_seconds=<n>`
 就是不可用秒数；CI 的 `hub-rolling` 在 kind 里把三次发布 + 删 pod + 回退各做一遍，必须是 0。
 

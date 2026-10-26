@@ -116,8 +116,12 @@ Once it goes, the deploy job:
 a third pod starts, gets traffic only once `/readyz` says its database answers
 and has every migration the image knows, and only then does an old one go: its
 `preStop` sleeps 5 s while the endpoint removal reaches the ingress, then
-SIGTERM and up to `CCQUOTA_SHUTDOWN_GRACE` (25 s) for the requests it already
-took. A release that never gets ready leaves both old pods serving until the
+SIGTERM and up to `CCQUOTA_SHUTDOWN_GRACE` (70 s) for the requests it already
+took. Readiness fails first; node connections close in randomized slots over
+60 s, while the listener and peer routing stay up for links awaiting their slot.
+The 80 s pod grace includes preStop and a 5 s margin. The AWS overlay inherits
+these values; Traefik has no read/write timeout on the secure entry point.
+A release that never gets ready leaves both old pods serving until the
 rollback. The PodDisruptionBudget keeps one replica through a node drain, and
 the spread puts them on two nodes. No disk, so nothing gets stuck attaching.
 The drill is [`hub-rolling`](../../.github/workflows/hub-rolling.yml) on every

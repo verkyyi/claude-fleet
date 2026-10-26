@@ -2810,6 +2810,18 @@ drill_task_record_never_closes() {
   SECS=$(since "$t0")
 }
 
+# A longer drain must keep waiting links reachable (T1110 / TV2X).
+drill_hub_drain_waiting_links() {
+  CAP=120; local t0
+  t0=$(now)
+  WHAT='readiness 先失败，等待交接的节点仍可由其他副本访问；游标续读不丢内容（Go 门验证）'
+  go_half '^(TestDrainKeepsWaitingLinksReachable|TestDrainSpreadsClosesAcrossWindow|TestDrainHandoffIsNotCountedAsNetwork|TestChatViewResumesAcrossRollingDrain|TestAttachmentDrainCarriesTerminalPosition)$' ./hub/api ./e2e; case $? in
+    0) WHAT='真实链接分散关闭、等待中的链接可达，真实 agent 换副本后网页用游标只读缺失尾部，终端收到 1012 和恢复位置（go test）' ;;
+    1) return 1 ;;
+  esac
+  SECS=$(since "$t0")
+}
+
 # This file runs part 1/3 using bin/break-it-durations.txt; the rest are its
 # part files (issue #2694). A weight change must select the whole family.
 : "${BREAK_PART:=1/3}"

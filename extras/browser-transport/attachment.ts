@@ -219,7 +219,7 @@ export class BrowserAttachment {
     this.publish({ state: 'connecting', mode: undefined, door: undefined, echo: undefined, pair: undefined, connection: undefined, error: undefined, notice: undefined })
     // Covers a failed upgrade, ICE, target startup and a lost ready handshake.
     a.timer = setTimeout(() => this.end(a, 'attachment_timeout'), 20000)
-    ws.onclose = () => this.end(a, 'connection_closed')
+    ws.onclose = (event) => this.end(a, event.code === 1012 ? 'hub_restart' : 'connection_closed', event.code === 1012)
     ws.onerror = () => this.end(a, 'connection_failed')
     ws.onmessage = event => {
       if (!this.current(a)) return

@@ -62,7 +62,7 @@ var fleetControlScript = filepath.Join(".claude", "fleet", "bin", "fleet-control
 const fleetControlTimeout = 8 * time.Second
 
 // nodeBackoff is the reconnect delay: doubling from min to max. The jitter
-// only ever SHORTENS a rung (down to 80 % of it), so a hub restart is not met
+// draws uniformly from zero to the current rung (full jitter), so a hub restart is not met
 // by every node at the same instant and the cap stays a promise — the wait is
 // never longer than nodeBackoffMax.
 type nodeBackoff struct {
@@ -78,8 +78,7 @@ func (b *nodeBackoff) next() time.Duration {
 	if b.cur > nodeBackoffMax {
 		b.cur = nodeBackoffMax
 	}
-	fifth := b.cur / 5
-	return b.cur - fifth + time.Duration(rand.Int63n(int64(fifth)+1))
+	return time.Duration(rand.Int63n(int64(b.cur) + 1))
 }
 
 func (b *nodeBackoff) reset() { b.cur = 0 }
@@ -87,7 +86,7 @@ func (b *nodeBackoff) reset() { b.cur = 0 }
 // nodeQuickRedial is the first wait after a link that had been up drops (task
 // PNWW): a hub copy replaced on release, a path that stalled — the next dial
 // usually works, and every second of the ladder's 5 s floor is a person's chat
-// answering home_down. Jittered up to 2×, so a hub restart is not met by every
+// answering home_down. Full jitter from zero to 2×, so a hub restart is not met by every
 // machine at once. A dial that fails then climbs the ladder from its bottom.
 var nodeQuickRedial = 500 * time.Millisecond
 
@@ -96,7 +95,7 @@ var nodeQuickRedial = 500 * time.Millisecond
 func (b *nodeBackoff) wait(established bool) time.Duration {
 	if established {
 		b.reset()
-		return nodeQuickRedial + time.Duration(rand.Int63n(int64(nodeQuickRedial)+1))
+		return time.Duration(rand.Int63n(int64(2*nodeQuickRedial) + 1))
 	}
 	return b.next()
 }
