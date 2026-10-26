@@ -142,4 +142,4 @@ People should be able to tell whether a problem is theirs or the service's, usin
 - **Node agent** — The node-side service that connects to the hub, manages local sessions and carries state and updates.
 
 <!-- blueprint:version -->
-Blueprint v2 · Updated 2026-10-26. Status labels describe this version, not a delivery date.
+Blueprint v3 · Updated 2026-10-26. Status labels describe this version, not a delivery date.

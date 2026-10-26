@@ -118,7 +118,12 @@ for lang in ('en', 'zh'):
     svg = ET.parse(root / 'assets/architecture.svg').getroot()
     ns = '{http://www.w3.org/2000/svg}'
     assert svg.find(ns + 'title').text and svg.find(ns + 'desc').text
-print('ok   architecture: Markdown image renders; SVG is packaged with title and desc')
+    style = svg.find(ns + 'style').text
+    assert '{{fleet_theme}}' not in style
+    assert '--fleet-bg:' in style and 'prefers-color-scheme:dark' in style.replace(' ', '')
+    assert 'url(data:font/woff2;base64,' in style
+    assert 'url(/site/fonts/' not in style  # blocked by the browser in SVG images
+print('ok   architecture: accessible SVG includes the shared theme and self-contained fonts')
 PYTEST
 
 # I — the brand and the FAQ's one home (EPIC SGS6 C4)

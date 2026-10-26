@@ -1,28 +1,102 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 850" role="img" aria-labelledby="title desc" lang="en">
-<title id="title">Architecture overview</title>
-<desc id="desc">Clients use the hub, the runtime control plane. The hub owns data. Nodes initiate connections to the hub and run native agent processes unmodified as sessions. Model requests pass through the credential proxy to external providers.</desc>
-<style>:root{color-scheme:light dark}text{font-family:var(--fleet-font-ui,sans-serif);fill:CanvasText}rect{fill:Canvas;stroke:CanvasText}path{fill:none;stroke:CanvasText;stroke-width:2}</style>
-<rect x="1" y="1" width="618" height="848" rx="12"/>
-<rect x="25" y="30" width="570" height="120" rx="10"/>
-<text x="43" y="62" font-size="22">1 · Clients</text>
-<text x="43" y="93" font-size="19">Web app / command line</text>
-<rect x="25" y="180" width="570" height="120" rx="10"/>
-<text x="43" y="212" font-size="22">2 · Application — hub</text>
-<text x="43" y="243" font-size="19">Identity / sessions / subscription pools</text>
-<text x="43" y="274" font-size="19">Credential proxy / provisioning / health</text>
-<rect x="25" y="335" width="570" height="120" rx="10"/>
-<text x="43" y="367" font-size="22">3 · Data — central</text>
-<text x="43" y="398" font-size="19">Database / secrets vault</text>
-<text x="43" y="429" font-size="19">Release store / backups</text>
-<rect x="25" y="505" width="570" height="120" rx="10"/>
-<text x="43" y="537" font-size="22">4 · Infrastructure — nodes</text>
-<text x="43" y="568" font-size="19">Managed macOS / managed Linux / personal</text>
-<text x="43" y="599" font-size="19">Node agent / sessions / working files</text>
-<text x="45" y="171" font-size="16">Clients connect to the hub</text>
-<path d="M310 303v26m-5-6 5 6 5-6M25 565H12V240h13m-6-5 6 5-6 5"/>
-<text x="45" y="483" font-size="18">Nodes dial out to the hub</text>
-<text x="30" y="673" font-size="20">Model requests: node → proxy → provider</text>
-<text x="30" y="710" font-size="20">Model keys stay central; never enter a session</text>
-<text x="30" y="770" font-size="18">External: model / identity / source &amp; CI</text>
-<text x="30" y="810" font-size="18">Across all layers: observability / security / delivery</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1432" viewBox="0 0 640 1432" role="img" aria-labelledby="title desc" lang="en">
+<title id="title">The native agent runtime</title>
+<desc id="desc">Four conceptual layers. Clients connect to the hub, the runtime control plane. Application services and central data share the hub boundary. Nodes keep native agent sessions running and connect outward to the hub. Model requests go from a node through the credential proxy to a model provider. Model keys stay at the hub, never in sessions.</desc>
+<style>/*{{fleet_theme}}*/
+/* Theme is embedded by docs-build; system colors keep the source SVG readable. */
+:root{color-scheme:light dark}
+text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground,CanvasText);font-size:22px}
+.title{font-family:var(--fleet-font-display,system-ui,sans-serif);font-size:34px;font-weight:700}
+.eyebrow{font-size:19px;letter-spacing:1.5px;font-weight:600;fill:var(--link,CanvasText)}
+.heading{font-size:26px;font-weight:600}
+.muted{fill:var(--muted-foreground,CanvasText)}
+.small{font-size:20px}
+.number{font-size:19px;font-weight:600;fill:var(--link,CanvasText);text-anchor:middle}
+.canvas{fill:var(--background,Canvas)}
+.card{fill:var(--card,Canvas);stroke:var(--border,CanvasText);stroke-width:1.5}
+.hub-boundary{fill:color-mix(in srgb,var(--fleet-blue,CanvasText) 5%,var(--background,Canvas));stroke:var(--fleet-blue,CanvasText);stroke-opacity:.55;stroke-width:1.5;stroke-dasharray:5 6}
+.chip{fill:var(--background,Canvas);stroke:var(--border,CanvasText)}
+.accent{fill:var(--link,CanvasText)}
+.hub-accent{fill:var(--fleet-blue,CanvasText)}
+.data-accent{fill:var(--fleet-sand,CanvasText)}
+.node-accent{fill:var(--fleet-ok,CanvasText)}
+.native{fill:color-mix(in srgb,var(--fleet-ok,CanvasText) 10%,var(--card,Canvas));stroke:color-mix(in srgb,var(--fleet-ok,CanvasText) 45%,var(--border,CanvasText))}
+.proxy{fill:var(--accent,Canvas);stroke:var(--link,CanvasText);stroke-width:1.5}
+.connector{fill:none;stroke:var(--muted-foreground,CanvasText);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.rule{stroke:var(--border,CanvasText);stroke-width:1}
+@media print{:root{color-scheme:light;--background:var(--fleet-ink);--card:var(--fleet-ink);--foreground:var(--fleet-bg);--muted-foreground:var(--fleet-bg);--border:var(--fleet-muted);--link:var(--fleet-clay-deep);--accent:var(--fleet-ink)}}</style>
+<rect class="canvas" x="0" y="0" width="640" height="1432" rx="24"/>
+<text x="32" y="44" class="eyebrow">TOKENMAN / ARCHITECTURE</text>
+<text x="32" y="89" class="title">The native agent runtime</text>
+<text x="32" y="124" class="muted">Official agents. Persistent sessions. Any device.</text>
+<rect class="card" x="32" y="156" width="576" height="112" rx="16"/>
+<rect class="chip" x="52" y="171" width="34" height="34" rx="10"/>
+<text x="69" y="195" class="number">01</text>
+<text x="100" y="196" class="heading">Clients</text>
+<rect class="accent" x="576" y="177" width="8" height="28" rx="4"/>
+<rect class="chip" x="52" y="215" width="172" height="36" rx="18"/>
+<text x="138" y="241" class="" text-anchor="middle">Browser</text>
+<rect class="chip" x="233" y="215" width="172" height="36" rx="18"/>
+<text x="319" y="241" class="" text-anchor="middle">Terminal</text>
+<rect class="chip" x="414" y="215" width="172" height="36" rx="18"/>
+<text x="500" y="241" class="" text-anchor="middle">Phone</text>
+<path class="connector" d="M320 279v27m-5-5 5 5 5-5"/>
+<text x="342" y="301" class="small muted">Encrypted access</text>
+<rect class="hub-boundary" x="16" y="320" width="608" height="464" rx="24"/>
+<text x="40" y="354" class="eyebrow">HUB / RUNTIME CONTROL PLANE</text>
+<rect class="card" x="32" y="374" width="576" height="226" rx="16"/>
+<rect class="chip" x="52" y="389" width="34" height="34" rx="10"/>
+<text x="69" y="413" class="number">02</text>
+<text x="100" y="414" class="heading">Application</text>
+<rect class="hub-accent" x="576" y="395" width="8" height="28" rx="4"/>
+<rect class="chip" x="52" y="434" width="258" height="42" rx="10"/>
+<text x="68" y="463" class="">Identity &amp; access</text>
+<rect class="chip" x="330" y="434" width="258" height="42" rx="10"/>
+<text x="346" y="463" class="">Sessions</text>
+<rect class="chip" x="52" y="485" width="258" height="42" rx="10"/>
+<text x="68" y="514" class="">Subscription pools</text>
+<rect class="proxy" x="330" y="485" width="258" height="42" rx="10"/>
+<text x="346" y="514" class="">Credential proxy</text>
+<rect class="chip" x="52" y="536" width="258" height="42" rx="10"/>
+<text x="68" y="565" class="">Provisioning</text>
+<rect class="chip" x="330" y="536" width="258" height="42" rx="10"/>
+<text x="346" y="565" class="">Health &amp; telemetry</text>
+<rect class="card" x="32" y="620" width="576" height="144" rx="16"/>
+<rect class="chip" x="52" y="635" width="34" height="34" rx="10"/>
+<text x="69" y="659" class="number">03</text>
+<text x="100" y="660" class="heading">Data</text>
+<rect class="data-accent" x="576" y="641" width="8" height="28" rx="4"/>
+<text x="56" y="703" class="muted">Database</text>
+<text x="334" y="703" class="muted">Secrets vault</text>
+<text x="56" y="739" class="muted">Release store</text>
+<text x="334" y="739" class="muted">Backups</text>
+<path class="connector" d="M320 844v-48m-5 5 5-5 5 5"/>
+<text x="342" y="826" class="small muted">Nodes connect outward</text>
+<rect class="card" x="32" y="856" width="576" height="226" rx="16"/>
+<rect class="chip" x="52" y="871" width="34" height="34" rx="10"/>
+<text x="69" y="895" class="number">04</text>
+<text x="100" y="896" class="heading">Infrastructure</text>
+<rect class="node-accent" x="576" y="877" width="8" height="28" rx="4"/>
+<text x="52" y="933" class="muted">Managed nodes · Personal nodes</text>
+<rect class="native" x="52" y="952" width="536" height="70" rx="12"/>
+<text x="320" y="981" class="heading" text-anchor="middle">Claude Code / Codex</text>
+<text x="320" y="1008" class="small muted" text-anchor="middle">Sessions: native agents, unmodified</text>
+<text x="320" y="1058" class="muted" text-anchor="middle">Node agent · Working files</text>
+<text x="32" y="1125" class="heading">Model requests</text>
+<text x="608" y="1125" class="small muted" text-anchor="end">Model keys never enter sessions</text>
+<rect class="card" x="32" y="1146" width="176" height="86" rx="14"/>
+<text x="120" y="1177" class="small muted" text-anchor="middle">Node</text>
+<text x="120" y="1211" class="" text-anchor="middle">Agent request</text>
+<path class="connector" d="M214 1189h12m-4-4 4 4-4 4"/>
+<rect class="proxy" x="232" y="1146" width="176" height="86" rx="14"/>
+<text x="320" y="1177" class="small muted" text-anchor="middle">Hub</text>
+<text x="320" y="1211" class="" text-anchor="middle">Credential proxy</text>
+<path class="connector" d="M414 1189h12m-4-4 4 4-4 4"/>
+<rect class="card" x="432" y="1146" width="176" height="86" rx="14"/>
+<text x="520" y="1177" class="small muted" text-anchor="middle">External</text>
+<text x="520" y="1211" class="" text-anchor="middle">Model provider</text>
+<path class="rule" d="M32 1264h576"/>
+<text x="32" y="1300" class="small muted">Also external</text>
+<text x="32" y="1332" class="">Identity providers · Source &amp; CI</text>
+<text x="32" y="1372" class="small muted">Across all layers</text>
+<text x="32" y="1404" class="">Observability · Security · Delivery</text>
 </svg>
