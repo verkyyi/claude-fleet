@@ -152,6 +152,14 @@ flags=(
 python3 "$FLEET_LAUNCH_DIR/fleet-codex-posture.py" plugins-on "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" 2>/dev/null \
   || flags+=(-c 'features.plugins=false')
 
+# A configured model the catalog upgrades opens on «Meet GPT-… · Try new model / Use
+# existing model» before any turn — nobody presses it in a window the web opened, so
+# the session never starts (task YASF): every catalog upgrade is passed as answered
+# (= keep the person's model), merged with their own [notice.model_migrations]
+_mig=$(python3 "$FLEET_LAUNCH_DIR/fleet-codex-posture.py" migrations "$(command -v codex || echo codex)" 2>/dev/null) \
+  && [ -n "$_mig" ] && flags+=(-c "$_mig")
+unset _mig
+
 # --- model: FLEET_CODEX_MODEL → -m (the table's model_env / model_flag) unless the caller chose
 launch_model=''
 if [ -n "${FLEET_CODEX_MODEL:-}" ]; then

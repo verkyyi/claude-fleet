@@ -80,6 +80,10 @@ printf '#!/bin/sh\nexit 0\n' > "$IBIN/fleet-account.sh"; chmod +x "$IBIN/fleet-a
 for agent in claude codex; do
   cat > "$WORK/fakebin/$agent" <<EOS
 #!/bin/sh
+if [ "$agent" = codex ] && [ "\${1:-}" = debug ] && [ "\${2:-}" = models ]; then
+  cat "$WORK/catalog.json" 2>/dev/null || exit 1
+  exit 0
+fi
 if [ "$agent" = codex ] && [ "\${1:-}" = debug ] && [ "\${2:-}" = prompt-input ]; then
   printf '%s\n' '<skills_instructions>'
   exit 0
@@ -308,6 +312,24 @@ hasarg 'check_for_update_on_startup=false' || fail "E a fresh CODEX_HOME opens o
 grep -q 'set-option -w -t %0 @cc_model ' "$WORK/tmuxlog" && fail "E no model → no invented @cc_model stamp" "$(cat "$WORK/tmuxlog")"
 grep -q 'set-option -wu -t %0 @cc_model' "$WORK/tmuxlog" || fail "E new launch must clear the predecessor's model"
 ok "E FLEET_CODEX_MODEL → -m + @cc_model; caller -m wins; empty defers to codex"
+
+# ============================================================================
+# E2. a catalog upgrade is passed as answered (task YASF): «Meet GPT-6 Sol · Try new
+#     model / Use existing model» never holds a window nobody looks at
+# ============================================================================
+ln -s "$BIN/fleet-codex-posture.py" "$IBIN/fleet-codex-posture.py"
+run '/fleet-history'
+argv1l | grep -q '^notice.model_migrations=' && fail "E2 no catalog → no notice override" "$(argv1l)"
+printf '%s' '{"models":[{"slug":"gpt-5.6-sol","upgrade":{"model":"gpt-6-sol","migration_markdown":"Meet GPT-6 Sol"}},{"slug":"gpt-6-sol","upgrade":null},{"slug":"gpt-5.5","upgrade":{"model":"gpt-6-sol"}}]}' > "$WORK/catalog.json"
+run '/fleet-history'
+hasarg 'notice.model_migrations={"gpt-5.5"="gpt-6-sol","gpt-5.6-sol"="gpt-6-sol"}' || fail "E2 every catalog upgrade must be passed as answered" "$(argv1l)"
+hasarg -m && fail "E2 answering the prompt never picks a model" "$(argv1l)"
+[ "$(last)" = '$fleet-history' ] || fail "E2 the prompt stays the last argument" "$(argv1l)"
+printf '%s' '{"models":[{"slug":"gpt-6-sol","upgrade":null}]}' > "$WORK/catalog.json"
+run '/fleet-history'
+argv1l | grep -q '^notice.model_migrations=' && fail "E2 a catalog with no upgrade → no override" "$(argv1l)"
+rm -f "$WORK/catalog.json" "$IBIN/fleet-codex-posture.py"
+ok "E2 catalog upgrades are passed as answered — the model-migration prompt never blocks a start (YASF)"
 
 # ============================================================================
 # F. seed skill: /fleet-history → native $fleet-history when installed, else fallback

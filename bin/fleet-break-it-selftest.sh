@@ -18,6 +18,7 @@
 #   session-exit (exit · Ctrl+C · killed · Ctrl+Z)  bin/fleet-session-wrap.sh (the page, the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
+#   codex-model-migration-prompt                    bin/fleet-codex.sh, fleet-codex-posture.py (migrations)
 #   task-start-unseen                               bin/start-visible-selftest.sh (fleet-session-wrap.sh say_start,
 #                                                   fleet_id.py start_word, fleet-epic-tick.py, fleet_task_control.py)
 #   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
@@ -628,6 +629,34 @@ drill_codex_resume_override() {
   grep -Eq '^(approval_policy|sandbox_mode)=' "$d/argv" && { WHY="a fresh launch carries a -c permission override — /resume is refused"; return 1; }
   grep -qxF -- --dangerously-bypass-hook-trust "$d/argv" || { WHY="the hook-trust bypass went missing"; return 1; }
   SECS=$(since "$t0"); WHAT="默认 config.toml 已给满权限：新开 Codex 不带会话权限覆盖，会话里的 /resume 可用"
+}
+
+# A login whose config.toml pins a model the Codex catalog upgrades (gpt-5.6-sol →
+# gpt-6-sol) opens on «Meet GPT-6 Sol · Try new model / Use existing model» before
+# any turn; a window the web opened has nobody to press it (YASF). The launch must
+# hand every catalog upgrade over as answered, and never pick a model itself.
+drill_codex_model_migration_prompt() {
+  CAP=15; local d="$WORK/cxmig" t0
+  mkdir -p "$d/bin" "$d/home" "$d/cwd" "$d/conf"
+  cat > "$d/bin/codex" <<FAKE
+#!/bin/sh
+if [ "\$1" = debug ] && [ "\$2" = models ]; then
+  printf '%s' '{"models":[{"slug":"gpt-5.6-sol","upgrade":{"model":"gpt-6-sol","migration_markdown":"Meet GPT-6 Sol"}},{"slug":"gpt-6-sol","upgrade":null}]}'
+  exit 0
+fi
+[ "\$1" = debug ] && exit 0
+for a; do printf '%s\n' "\$a"; done > "$d/argv"
+FAKE
+  chmod +x "$d/bin/codex"
+  { printf 'model = "gpt-5.6-sol"\n'; cat "$ROOT/conf/agent-defaults/codex/config.default.toml"; } > "$d/home/config.toml"
+  t0=$(now)
+  ( cd "$d/cwd" && env -i PATH="$d/bin:$PATH" HOME="$d" CODEX_HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+      FLEET_MCP=0 FLEET_AGENT_CFG=0 FLEET_CODEX_VERSION_CHECK=0 bash "$BIN/fleet-codex.sh" hi ) >"$d/out" 2>&1
+  [ -s "$d/argv" ] || { WHY="codex never ran: $(tail -n 2 "$d/out" | tr '\n' ' ')"; return 1; }
+  grep -qxF -- 'notice.model_migrations={"gpt-5.6-sol"="gpt-6-sol"}' "$d/argv" \
+    || { WHY="gpt-5.6-sol's upgrade is not passed as answered — the start waits on «Try new model / Use existing model»"; return 1; }
+  grep -qxF -- -m "$d/argv" && { WHY="answering the prompt picked a model (-m) — the person's model is theirs"; return 1; }
+  SECS=$(since "$t0"); WHAT="目录里有升级的模型：启动时当作已答「沿用现有模型」，不再停在 Meet GPT-6 Sol"
 }
 
 # ---- the recovery page's q, on the real session-end-hook (#1842 ① ②) ----------
