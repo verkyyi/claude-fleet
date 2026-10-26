@@ -199,6 +199,7 @@
 1.5 guide-spare-login
 0.1 heartbeat-sys-blocked
 0.1 history-recovery-placement
+1.5 history-rows-forks
 0.5 home-moved-panel-differs
 0.2 home-pool-claim-unkeyed
 2.7 home-template-leak

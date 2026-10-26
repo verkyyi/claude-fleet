@@ -820,11 +820,17 @@ def gone_read(fleet, wait=True):
             return False
     except OSError:
         return False
-    prod = os.environ.get("FLEET_VIEW_LANDED_CMD") or 'bash "$1" rows'
+    # Under `nice` (a background list, never ahead of a session's work) and with a
+    # wall-clock bound below the lock's 10 minutes, so one build never overlaps the
+    # next: past it `rows` exits 4 and the `&& mv` keeps the last copy. Not
+    # `taskpolicy -b`: Background QoS makes every fork dearer (the collector's
+    # note in daemon-processtype-selftest.sh), and the bash fallback forks.
+    prod = os.environ.get("FLEET_VIEW_LANDED_CMD") or 'nice -n 10 bash "$1" rows'
     script = '(%s) > "$2.$$" 2>/dev/null && mv -f "$2.$$" "$2"; rm -f "$2.$$"; rmdir "$3"' % prod
     argv = ["sh", "-c", script, "sh", str(Path(__file__).absolute().parent / "fleet-history.sh"), str(out), str(lock)]
     # FLEET_HISTORY_EPOCH: each row also carries its close time (issue #3731)
-    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240", FLEET_HISTORY_EPOCH="1")
+    env = dict(os.environ, FLEET_SESSION=fleet, FZF_COLUMNS="240", FLEET_HISTORY_EPOCH="1",
+               FLEET_HISTORY_ROWS_SECS=os.environ.get("FLEET_HISTORY_ROWS_SECS") or "120")
     try:
         if wait:
             subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

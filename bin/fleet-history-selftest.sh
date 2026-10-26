@@ -708,4 +708,105 @@ run record-closed --key scratch-12 --worktree "$TWT" --title scratch-12 --task X
 st_eq "task: a bad ref ⇒ the 11-column row, title untouched" "10|scratch-12" \
   "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')|$(cut -f3 "$FLEET_HISTORY_LEDGER")"
 
-printf 'selftest OK: fleet-history (%s assertions — record/record-closed/resumed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order/task)\n' "$CHECKS"
+# ============================================================================
+# R. rows renders in ONE perl pass, byte for byte the bash loop's output
+# ============================================================================
+# The 看台's 已收起 reader rebuilds `rows` every minute; the bash loop forked per
+# row and nested in quadratic string walks (3+ min on ~1400 rows, 7 at load 30).
+# rows_render_pl is the same rules in one process. R1/R2: the two engines
+# (FLEET_HISTORY_ROWS_ENGINE=bash forces the loop) print the same bytes on a
+# ledger that walks every branch — nesting 3 deep, an orphan, a hub origin, a
+# folded and an unfolded block, CJK / emoji / reserved / empty titles, a column
+# collapsed by an empty field, T<n> rows, a prmap + deploy verdicts, strict and
+# odd timestamps — at three widths, with and without the epoch column, and in
+# a 2-repo fleet. R3: one pass forks perl once and `date` only for the clock
+# (and a timestamp it cannot read itself). R4: a ledger that is not UTF-8 is
+# the loop's. R5: FLEET_HISTORY_ROWS_SECS bounds a build — exit 4.
+R_LEDGER="$WORK/r-landed.tsv"
+r_row() { printf '%s\t%s\t%s\t%s\tSHA\t/w/wt\t/nope\t%s\t-\t%s\t%s\t-\t-\t-\t%s\n' "$@"; }
+r_ledger() {  # when key title pr sid state origin task
+  r_row 2026-09-20T10:00:00Z 101 'Fix the parser'            '#501' s1  landed          -           -
+  r_row 2026-09-20T11:00:00Z 102 '修复 看台 的 已收起 列表 渲染很慢的问题，一行一行地 fork' 502 s2 landed issue-101 -
+  r_row 2026-09-20T12:00:00Z 103 'child of 102 ✨ emoji 🚀'   503 s3 closed-unlanded issue-102 -
+  r_row 2026-09-20T13:00:00Z 104 'grandgrandchild'            504 s4 landed          issue-103 -
+  r_row 2026-09-20T14:00:00Z scratch-7 'Home'                 -   s5 landed          issue-104 -
+  r_row 2026-09-20T15:00:00Z scratch-8 '-'                    -   s6 closed-unlanded scratch-7 -
+  r_row 2026-09-21T09:00:00Z 105 'orphan 孤儿'                505 s7 landed          issue-999 -
+  r_row 2026-09-21T10:00:00Z 106 'from the hub'               506 s8 landed          hub       -
+  r_row 2026-09-21T11:00:00Z T12 '把周报做成一页'             -   s9 closed-unlanded -         T12
+  r_row 2026-09-21T12:00:00Z scratch-9 'scratch-9'            -   -  landed          -         T41
+  r_row 2026-02-30T00:00:00Z 107 'odd date'                   507 s10 landed         -         -
+  r_row garbage               108 'garbage date'              508 s11 landed         -         -
+  r_row -                     109 'no date'                   -   s12 landed         -         -
+  printf '2026-09-22T01:00:00Z\t110\t\t510\tSHA\t/w/wt\t/nope\ts13\t-\tlanded\n'      # an empty title: the columns shift
+  r_row 2026-09-22T02:00:00Z 111 "$(printf 'A%.0s' $(seq 1 90)) long" 511 s14 landed issue-110 -
+  r_row 2026-09-22T03:00:00Z 112 'Ünïcödé ÀccÉnts – dash'     512 s15 landed         issue-101 -
+  r_row 2026-09-22T04:00:00Z 101 'Fix the parser (again)'     513 s16 landed         -         -
+}
+r_ledger > "$R_LEDGER"
+mkdir -p "$WORK/.claude-dash/global"
+printf 'issue-101\n' > "$WORK/.claude-dash/global/dash_fold_landed_default"     # 101's block open, 110's shut
+printf 'issue-1\t#501\tMERGED\tok\t\tm501\nissue-2\t#502\tMERGED\tok\tready\tm502\nissue-3\t#504\tMERGED\tok\t\tm504\n' > "$WORK/.claude-dash/prmap"
+: > "$WORK/.claude-dash/prmap.ts"
+printf 'live x\n' > "$WORK/.claude-dash/deploy_m501"; printf '  deploying\n' > "$WORK/.claude-dash/deploy_m502"; printf 'failed\n' > "$WORK/.claude-dash/deploy_m504"
+r_both() {  # <label> [VAR=val …] — the two engines on the same input
+  local l=$1; shift
+  env "$@" bash "$H" rows > "$WORK/r-pl.out" 2>"$WORK/r-pl.err"
+  env "$@" FLEET_HISTORY_ROWS_ENGINE=bash bash "$H" rows > "$WORK/r-sh.out" 2>/dev/null
+  CHECKS=$((CHECKS + 1))
+  cmp -s "$WORK/r-pl.out" "$WORK/r-sh.out" || st_fail "rows engines ($l): $(diff "$WORK/r-sh.out" "$WORK/r-pl.out" | head -6) $(cat "$WORK/r-pl.err")"
+}
+for c in 60 120 240; do for e in 0 1; do
+  r_both "cols=$c epoch=$e" FLEET_HISTORY_LEDGER="$R_LEDGER" FZF_COLUMNS=$c FLEET_HISTORY_EPOCH=$e
+done; done
+contains "rows R1: the open block shows its grandchild" "$(cat "$WORK/r-sh.out")" "grandgrandchild"
+contains "rows R1: a deploy verdict renders" "$(grep 'landed:502' "$WORK/r-sh.out")" "…"
+CHECKS=$((CHECKS + 1))
+case "$(cat "$WORK/r-sh.out")" in *AAAAAAAAAA*) st_fail "rows R1: 110's block should be folded";; esac
+
+# R2 — a fleet hosting two repos: qualified keys, badges, @<repo> targets, a
+# cross-repo parent and each repo's own prmap / fold file.
+R_CONF="$WORK/r-conf"
+mkdir -p "$R_CONF/fleets/RM/repos" "$R_CONF/logs" "$WORK/.claude-dash/fleets/o-a" "$WORK/.claude-dash/fleets/o-b"
+: > "$R_CONF/fleets/RM/conf"
+printf 'FLEET_REPO="o/a"\nFLEET_MAIN="/w/a"\nFLEET_BASE_BRANCH="main"\n' > "$R_CONF/fleets/RM/repos/o-a.conf"
+printf 'FLEET_REPO="o/b"\nFLEET_MAIN="/w/b"\nFLEET_BASE_BRANCH="main"\n' > "$R_CONF/fleets/RM/repos/o-b.conf"
+printf 'o-a\no-b\n' > "$R_CONF/fleets/RM/repos/.order"
+r_ledger > "$R_CONF/logs/landed_o-a.tsv"
+{ r_row 2026-09-20T10:30:00Z 101 'b one-oh-one' 501 b1 landed -           -
+  r_row 2026-09-20T11:30:00Z 201 'b child of a' 601 b2 landed o-a:issue-101 -
+  r_row 2026-09-20T12:30:00Z 202 'b child of b' 602 b3 closed-unlanded issue-201 -; } > "$R_CONF/logs/landed_o-b.tsv"
+printf 'issue-1\t#501\tMERGED\tok\t\tma501\n' > "$WORK/.claude-dash/fleets/o-a/prmap"
+printf 'issue-1\t#501\tMERGED\tok\t\tmb501\n' > "$WORK/.claude-dash/fleets/o-b/prmap"
+printf 'live\n' > "$WORK/.claude-dash/fleets/o-b/deploy_mb501"
+printf 'issue-101\n' > "$WORK/.claude-dash/global/dash_fold_landed_RM.o-a"
+printf 'issue-201\n' > "$WORK/.claude-dash/global/dash_fold_landed_RM.o-b"
+for c in 80 200; do
+  r_both "2 repos cols=$c" FLEET_HISTORY_LEDGER= FLEET_CONF_DIR="$R_CONF" FLEET_SESSION=RM FZF_COLUMNS=$c FLEET_HISTORY_EPOCH=1
+done
+contains "rows R2: targets carry their repo" "$(cat "$WORK/r-sh.out")" "landed:601@o/b"
+contains "rows R2: o/b's own deploy verdict" "$(grep 'b one-oh-one' "$WORK/r-sh.out")" "live"
+
+# R3 — forks: perl once, `date` once (the clock) + once per timestamp it cannot
+# read itself (107's 30 Feb, 108's garbage: GNU then BSD, so at most 2 each).
+mkdir -p "$WORK/rbin"; : > "$WORK/r-forks"
+for t in perl date; do
+  printf '#!/bin/sh\necho %s >> "%s"\nexec %s "$@"\n' "$t" "$WORK/r-forks" "$(command -v $t)" > "$WORK/rbin/$t"
+  chmod +x "$WORK/rbin/$t"
+done
+PATH="$WORK/rbin:$PATH" FLEET_HISTORY_LEDGER="$R_LEDGER" bash "$H" rows >/dev/null 2>&1
+st_eq "rows R3: one perl process for the whole list" 1 "$(grep -c '^perl$' "$WORK/r-forks")"
+CHECKS=$((CHECKS + 1))
+[ "$(grep -c '^date$' "$WORK/r-forks")" -le 5 ] || st_fail "rows R3: date forked $(grep -c '^date$' "$WORK/r-forks") times (≤5: the clock + two odd timestamps)"
+
+# R4 — not UTF-8: the perl pass declines and the loop renders the same list
+{ cat "$R_LEDGER"; r_row 2026-09-23T00:00:00Z 113 "$(printf 'bad \377 byte')" - s20 landed - -; } > "$WORK/r-bad.tsv"
+r_both "invalid UTF-8" FLEET_HISTORY_LEDGER="$WORK/r-bad.tsv" FZF_COLUMNS=120
+
+# R5 — a bounded build: past FLEET_HISTORY_ROWS_SECS the loop stops, exit 4
+for i in $(seq 1 40); do r_ledger; done > "$WORK/r-big.tsv"
+FLEET_HISTORY_ROWS_ENGINE=bash FLEET_HISTORY_ROWS_SECS=1 FLEET_HISTORY_LEDGER="$WORK/r-big.tsv" bash "$H" rows >/dev/null 2>"$WORK/r-budget.err"
+st_eq "rows R5: over the budget exits 4" 4 "$?"
+contains "rows R5: says why" "$(cat "$WORK/r-budget.err")" "FLEET_HISTORY_ROWS_SECS"
+
+printf 'selftest OK: fleet-history (%s assertions — record/record-closed/resumed/list/find/resume/reuse/meta/rows/state/scratch/busy-dir/helper-transcripts/dedup/time-order/task/rows-engine)\n' "$CHECKS"
