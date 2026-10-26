@@ -1,3 +1,4 @@
+# hubsess-viewer-keeps-loop, collect-overrun-hubsess, panel-worker-hung: first costs from local PASS wall times (a loaded Mac), until the next CI refresh.
 # T970: 51 drills added since the last refresh, PASS wall times from green CI run 39977941560 (Ubuntu); release train 39980272536 shard 14 was cut at 156 s twice with them costed at the median.
 # T943: missing main drill costs also measured in green Ubuntu PR runs 39800805459 (#5329) and 39802872260 (#5328); only PASS wall observations, existing rows retained.
 # T943: main/admin/node PASS wall times from release train 39802904925, Linux shard14 job119909464379; the shard was cut at159s twice, not a passing whole-run duration. Newly recorded drills rebalance the slices without changing caps.
@@ -101,6 +102,7 @@
 0.4 codex-resume-override
 3.0 codex-thread-lost
 1.5 cold-fill-fails
+3.0 collect-overrun-hubsess
 0.8 conf-keys-lost
 8.5 core-restart-leaks-loops
 0.4 cred-central-down
@@ -212,6 +214,7 @@
 0.4 hub-test-names-node
 2.3 hubsess-daemon-nohup
 10.4 hubsess-unwatched-poll
+17.0 hubsess-viewer-keeps-loop
 1.1 human-step-reopen
 1.1 id-switch-flip-report
 0.3 id-test-server-lazy
@@ -334,6 +337,7 @@
 0.3 oss-internal-name-committed
 0.2 panel-order-split
 1.2 panel-server-dead
+7.0 panel-worker-hung
 0.3 parent-origin-retired
 3.7 parent-report-retired
 1.6 parent-wait-retired

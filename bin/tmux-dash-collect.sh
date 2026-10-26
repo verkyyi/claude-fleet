@@ -340,11 +340,11 @@ PHASE_MIN=5     # less headroom than this left in the tick ⇒ don't start a pha
 # `issues` works off the last good queue whatever order it is reached in. $SOCKETS
 # and the shared helpers are resolved in the head below, before any of them.
 PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot)
-# hubsess (issue #1423) exists only with the cross-machine hub on (CCQUOTA_FLEET=1)
-# for at least one fleet — read per fleet since #1539 (fleet_hub_any: a fleet
-# conf's own line wins over the environment); off everywhere, the list — and so the
-# heartbeat's phases= line — is exactly what it was.
-fleet_hub_any && PHASE_LIST+=(hubsess)
+# hubsess (issue #1423) is NOT in the rotating body: it runs in the tick's fixed
+# head, right before it (ph_hubsess, below). It exists only with the cross-machine
+# hub on (CCQUOTA_FLEET=1) for at least one fleet — read per fleet since #1539
+# (fleet_hub_any: a fleet conf's own line wins over the environment); off
+# everywhere, the heartbeat's phases= line is exactly what it was.
 # views (issue #2763) exists only while a thin client's 看台 is registered here
 # (fleet-remote-view.sh attach --thin): it outlives its client for
 # FLEET_VIEW_KEEP_SECS, and with no new attach nothing else would take it after.
@@ -1141,10 +1141,29 @@ ph_snapshot() {
 # the loop for nobody. A 看台 that opens later starts it itself (fleet_view.py
 # hub_fresh), and so does the first tick that sees a session or a client.
 # FLEET_HUBSESS_IDLE_SKIP=0 keeps it running regardless (fleet_login_unused).
+#
+# It runs in the tick's fixed HEAD, after the socket probe and before the
+# rotating body — never in PHASE_LIST. Its --ensure is what keeps that loop's
+# life (LOOP_SECS, 70 s, past the newest stamp), and at the end of the body it was
+# the first phase an overrun deferred: on a node at load 27-43 the log showed 31
+# ticks hitting FLEET_COLLECT_TICK_BUDGET, each one skipping it, the gap between
+# two --ensure grew past 70 s, the loop ended and ⌘P's other machines froze for
+# ~3 minutes. One --ensure costs one bash and a lock probe; the head can afford
+# it every tick. Still budgeted (FLEET_COLLECT_HUBSESS_BUDGET) and still on the
+# heartbeat's phases= line, like `sockets`.
 ph_hubsess() {
   fleet_login_unused $SOCKETS && return 0
-  bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || true
+  FLEET_HUBSESS_BY=collector bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || true
 }
+if fleet_hub_any; then
+  hb_phase hubsess
+  fleet_timebox "$(phase_budget hubsess)" ph_hubsess
+  if [ "$?" = 124 ]; then
+    HB_OVER="${HB_OVER}${HB_OVER:+ }hubsess"
+    printf 'fleet-collect: phase hubsess hit the %ss budget (FLEET_COLLECT_HUBSESS_BUDGET) — killed; the tick runs on\n' \
+      "$(phase_budget hubsess)" >&2
+  fi
+fi
 
 # --- a thin client's 看台, kept past its client (issue #2763) -----------------------
 # rv_prune takes a row + 看台 session FLEET_VIEW_KEEP_SECS after its client left.

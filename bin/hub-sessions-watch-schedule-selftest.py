@@ -15,7 +15,7 @@ BIN = Path(__file__).resolve().parent
 source = (BIN / 'fleet-hub-sessions.sh').read_text()
 defaults = source[source.index('EVERY="'):source.index('ETAGF=')]
 functions = '\n'.join(re.search(r'^' + name + r'\(\) \{\n.*?^\}', source, re.M | re.S)[0]
-                      for name in ('loop', 'loop_cleanup', 'idle_nap', 'thin_lease_beat'))
+                      for name in ('loop', 'loop_term', 'loop_cleanup', 'idle_nap', 'thin_lease_beat'))
 
 # Only external time, fetch, view predicate and waiter IO are controlled. The
 # production loop chooses every deadline, interval, follow-up and lease beat.
@@ -26,6 +26,10 @@ FLEET_CONF_DIR=$G/conf; mkdir -p "$FLEET_CONF_DIR"
 CLOCK=$G/clock; printf '0\n' > "$CLOCK"
 unset SECONDS; SECONDS=0  # ordinary controlled variable, no real-clock drift
 PIDF=$G/pid; WANTF=$G/want; LOOPCODEF=$G/code; MAPCODE=''
+# the loop's own log and the viewer stamp (hubsess-viewer-keeps-loop) are not this
+# test's: no view stamp, no log line, no real clock read for a round's ms
+VIEWF=$G/view; REPLF=$G/replace; ROUNDS_N=0; EXIT_WHY=''; LOOP_T0=''; MS=0
+hlog() { :; }; ms_now() { MS=0; }; mtime_of() { echo 0; }
 NAP_PID=''; NAP_SOCKS=(); FOLLOWUP=0; LP_WAIT=25
 FLEET_HUBSESS_LOCKED=1; FLEET_HUB_SESSIONS_LONGPOLL=0
 case "$scenario" in *thin*) : > "$FLEET_CONF_DIR/thin-lease.json" ;; esac

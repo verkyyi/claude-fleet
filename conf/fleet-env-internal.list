@@ -637,6 +637,7 @@ FLEET_HUB_SESSIONS_IDLE_EVERY      knob: internal pacing, seconds between a NODE
 FLEET_HUB_SESSIONS_WATCHED_EVERY   knob: internal pacing, seconds between the refreshes while a client is attached to any session of this fleet — the loop sends If-None-Match so an unchanged hub answers 304 (fleet-hub-sessions.sh, 2, #1481)
 FLEET_HUB_SESSIONS_WAIT            knob: internal pacing, seconds the hub may hold a watched fleet_sessions ask (long poll) until a heartbeat moves its ETag — capped at 25, under an ingress's 60 s idle timeout (fleet-hub-sessions.sh, 25, #1526)
 FLEET_HUB_SESSIONS_LONGPOLL        knob: 0 = the watched loop never sends `wait` and keeps its fixed 2 s cadence (fleet-hub-sessions.sh, 1, #1526)
+FLEET_HUB_SESSIONS_LOG_MAX         knob: internal budget, bytes at which the refresh loop's logs/hubsess.log rotates to .1 (fleet-hub-sessions.sh, 1048576)
 FLEET_HUB_SESSIONS_STATUS_STALE    knob: seconds of hub_ok age past which `fleet-hub-sessions.sh --status` (fleet-doctor's hub-sessions row) reports the refresh stalled (fleet-hub-sessions.sh, 60, #1596)
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
 FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds of hub silence (global/hub_ok, else the cache's #ts) after which the dash reads every remote row as 失联, the bar `入口 ○`, and a remote-row action refuses — fleet_status_hub_lost in fleet-status-lib.sh (60, #1423 #1483)
@@ -802,6 +803,7 @@ FLEET_HUB_SESSIONS_NODE_TOKEN      knob: internal seam, 0 = fleet-hub-sessions.s
 FLEET_HUB_WRITE_NODE_TOKEN         knob: internal seam, 0 = fleet-hub-write.sh never writes with this login's node token (default 1, #3106)
 FLEET_HUBSESS_LOCKED               env handoff: fleet-hub-sessions.sh's lock parent (LOCK_PY) tells the --loop it runs that global/hubsess.lock is held (#2630)
 FLEET_HUBSESS_GUARD                env handoff: the lock parent's pid — the --loop stops once it is gone (#2630)
+FLEET_HUBSESS_BY                   env handoff: who asked an --ensure (collector · popup · panel), named on its logs/hubsess.log line when it starts a loop
 FLEET_DOCTOR_BASELINE              env handoff: fleet-install-sync.sh runs the NEW version's doctor before the switch with it = 1 (the one-ruler baseline, #2655)
 FLEET_DOCTOR_SINCE                 env handoff: fleet-install-sync.sh's doctor after a switch — the switch epoch; the windowed rows (state's sleep judgments, hub-sessions' cache age) count only samples from then on (#2655)
 FLEET_INSTALLS_HOMES               seam: the homes root fleet-installs.sh looks into (default /Users, /home) (#2692)

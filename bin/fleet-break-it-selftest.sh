@@ -181,6 +181,12 @@
 #                                                   line: lineage_of, task_root, adopted — C18)
 #   launch-binary-renamed                           bin/fleet_native_proc.py (same_executable / native_tool:
 #                                                   a hard-linked binary is one file, T524)
+#   hubsess-viewer-keeps-loop                       bin/fleet-hub-sessions.sh (loop: the end past hubsess.want
+#                                                   OR hubsess.view), fleet-view-hub-fresh-selftest.sh G
+#   collect-overrun-hubsess                         bin/tmux-dash-collect.sh (ph_hubsess in the tick's head),
+#                                                   fleet-collect-tick-selftest.sh overrun
+#   panel-worker-hung                               bin/fleet-panel-server.py (worker_watch, hub_keep),
+#                                                   fleet_view.hub_ensure; fleet-panel-server-selftest.sh worker
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -5597,6 +5603,33 @@ print(" ".join(a["id"] for a, _ in fv.menu_of(r)))' "$BIN" 2>&1)
   [ "$(grep -vc -- --dry-run "$d/calls")" = 1 ] && grep -qx -- "--session fa --window $win --to codex --from-panel" "$d/calls" \
     || { WHY="the transfer was not dispatched exactly once: $(cat "$d/calls")"; return 1; }
   WHAT="别的机器上的会话也能换 Codex：菜单有这一项；那台机器上回合中 / 窗口换人 / 已是该 agent 一行拒绝、什么都不派，空闲的派一次 fleet-transfer.sh"
+}
+
+# hubsess-viewer-keeps-loop: a node at load 27-43 — the collector's ticks overran,
+# no --ensure came for longer than LOOP_SECS, and the hub-sessions loop ended under
+# a ⌘P read 2 s old; the other machines' rows stood still ~3 minutes.
+drill_hubsess_viewer_keeps_loop() {
+  CAP=40; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-view-hub-fresh-selftest.sh" G 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  SECS=$(since "$t0")
+  WHAT='8 秒没有 --ensure（LOOP_SECS 3），只有人在读列表（hubsess.view）：同一个刷新循环一直活着、hub_ok 一直往前；不读了 LOOP_SECS 后退出，未来的时间戳不续命'
+}
+
+drill_collect_overrun_hubsess() {
+  CAP=40; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-collect-tick-selftest.sh" overrun 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  SECS=$(since "$t0")
+  WHAT='采集器一拍撞上 FLEET_COLLECT_TICK_BUDGET、后面的阶段延到下一拍：hubsess 在拍头先跑，hubsess.want 照样盖上；入口关着什么都不跑'
+}
+
+drill_panel_worker_hung() {
+  CAP=40; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-panel-server-selftest.sh" worker 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 -E 'FAIL|miss'); [ -n "$WHY" ] || WHY=$out; return 1; }
+  SECS=$(since "$t0")
+  WHAT='常驻面板的读列表子进程卡死：FLEET_PANEL_SERVER_WORKER_SECS 后 SIGKILL、记一行日志、马上再读，列表又动了；入口清单过期且没有循环时它自己起 --ensure（不等、限频）'
 }
 
 drill_hubsess_unwatched_poll() {

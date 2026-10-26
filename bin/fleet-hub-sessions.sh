@@ -26,9 +26,10 @@
 #               (10s), see refresh_summaries below.
 #   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while the
 #               shared watcher predicate holds AND a real list read was within
-#               30s; otherwise wait on fleet-state-changed or a 60s fallback, for
-#               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid
-#               file). The 2 s is half of the 「3 秒内看到」 budget (issue #1481);
+#               30s; otherwise wait on fleet-state-changed or a 60s fallback, until
+#               FLEET_HUB_SESSIONS_LOOP_SECS (70s) past the newest of
+#               global/hubsess.want (an --ensure) and global/hubsess.view (a real
+#               list read), then exit. One at a time (the lock, below). The 2 s is half of the 「3 秒内看到」 budget (issue #1481);
 #               the other half is the node reporting a change at once
 #               (fleet_hub_nudge). The fetch is cheap enough to ask that often
 #               because it is conditional: the hub answers fleet_sessions with an
@@ -55,6 +56,24 @@
 #               collector lives, no gap between the old loop's end and the next tick. The loop
 #               gets its own session (setsid), or launchd kills it with the tick
 #               (issue #1596) and the cache stops whenever no sidebar is drawing.
+#               A VIEWER keeps it too: the loop's end is LOOP_SECS past the newer
+#               of hubsess.want and hubsess.view's mtime (fleet_view.py
+#               hub_view_request touches it on every real list read). On a node at
+#               load 27-43 the collector's ticks overran and each one deferred
+#               this --ensure, so the loop ended while the view stamp was 2 s old
+#               and ⌘P's other machines stood still for ~3 minutes. Bounded both
+#               ways: a stamp older than LOOP_SECS extends nothing, nor does one
+#               in the future (it would keep the loop for ever). The collector
+#               runs --ensure in its tick's fixed head now (tmux-dash-collect.sh),
+#               so an overrun never skips it, and ⌘P's resident panel runs it when
+#               the cache is stale and no loop holds the lock (fleet-panel-server.py).
+#               An --ensure that STARTS a loop says so in the log, with who asked
+#               (FLEET_HUBSESS_BY): the gap between two such lines is the dark time.
+#   log         one line per loop start and exit (why: lifetime · guard gone ·
+#               replaced by other code · TERM) and per round (200 / 304 / fail,
+#               its ms, watched or not) in $FLEET_CONF_DIR/logs/hubsess.log,
+#               rotated to .1 at 1 MB — no token, no URL. The 3-minute freeze
+#               above could not be reconstructed without it.
 #   --status    `loop <pid>|none · cache <age>s|none` for fleet-doctor; rc 1 = no
 #               loop or a cache older than FLEET_HUB_SESSIONS_STATUS_STALE (60s).
 #   --identity  WHO this login asks the hub as (issue #1475), one line, no network:
@@ -195,6 +214,44 @@ PIDF="$G/hubsess.pid"
 # collector tick, the tick's --ensure used to find the loop still alive, start
 # nothing, and leave remote_<sess> unrefreshed for up to a minute once it ended.
 WANTF="$G/hubsess.want"
+# …and so does a viewer (the 3-minute freeze above): fleet_view.py
+# hub_view_request touches this on every real list read. Its MTIME is the stamp.
+VIEWF="$G/hubsess.view"
+# An --ensure that replaces a loop of other code writes the loop's pid here before
+# its TERM, so the loop's exit line says `replaced`, not `term`.
+REPLF="$G/hubsess.replace"
+
+# The loop's own record (the 3-minute freeze could not be reconstructed without
+# one): one line per start, exit and round, in the login's logs — the install is
+# read-only (issue #4668). Rotated to .1 at FLEET_HUB_SESSIONS_LOG_MAX bytes (1 MB),
+# checked at the start and every 64 lines, so a round costs one `date` and no `wc`.
+# Words only: never a token, a header or a URL.
+HLOG="$FLEET_CONF_DIR/logs/hubsess.log"
+HLOG_MAX="${FLEET_HUB_SESSIONS_LOG_MAX:-1048576}"; case "$HLOG_MAX" in ''|*[!0-9]*|0) HLOG_MAX=1048576 ;; esac
+HLOG_N=0
+hlog() {
+  local sz
+  if [ $(( HLOG_N % 64 )) = 0 ]; then
+    mkdir -p "${HLOG%/*}" 2>/dev/null || return 0
+    sz=$( { wc -c < "$HLOG"; } 2>/dev/null | tr -d ' ')
+    case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+    [ "$sz" -lt "$HLOG_MAX" ] || mv -f "$HLOG" "$HLOG.1" 2>/dev/null
+  fi
+  HLOG_N=$(( HLOG_N + 1 ))
+  { printf '%s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$$" "$*" >> "$HLOG"; } 2>/dev/null
+  return 0
+}
+# ms_now → MS: milliseconds, from bash 5's EPOCHREALTIME (no fork); bash 3.2 has
+# none, and gets the second ×1000 — a round's duration to the second there.
+MS=0
+ROUNDS_N=0; EXIT_WHY=''; LOOP_T0=''
+ms_now() {
+  local t="${EPOCHREALTIME:-}"
+  if [ -n "$t" ]; then t=${t/[.,]/}; MS=$(( t / 1000 )); else MS=$(( $(date +%s) * 1000 )); fi
+}
+# mtime_of <file> → its mtime in epoch seconds on stdout, 0 when it is absent.
+# GNU stat FIRST: `stat -f %m` on GNU means "filesystem status" and exits 0.
+mtime_of() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 # The code the running loop loaded (its MAPCODE), written at its start: an
 # --ensure of other code replaces the loop (issue #3164). The loop is kept alive
 # by every --ensure, so before this a version switch never reached it — mac-c's
@@ -351,7 +408,7 @@ curl_sessions() {
   case "$code" in
     200) etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); print $2; exit }' "$hdr" 2>/dev/null)
          rm -f "$hdr"
-         if [ -n "$etag" ]; then printf '%s\n%s\n' "$etag" "$ETAG_STAMP" > "$ETAGF.new" && mv -f "$ETAGF.new" "$ETAGF"
+         if [ -n "$etag" ]; then printf '%s\n%s\n' "$etag" "$ETAG_STAMP" > "$ETAGF.new.$$" && mv -f "$ETAGF.new.$$" "$ETAGF"
          else rm -f "$ETAGF"; fi
          return 0 ;;
     304)     rm -f "$hdr"; return 3 ;;
@@ -454,8 +511,15 @@ fetch() {
 # restamped below), never on a failed one — so its age IS the hub's silence.
 # fleet_status_hub_ok / fleet_status_hub_lost (fleet-status-lib.sh) are the
 # readers; a cache from before this file is judged by its own #ts there.
+#
+# A one-shot --refresh may run beside the loop (⌘P's hub_fresh no longer kills one
+# at its wait, so it can still be running when the loop starts): every write here
+# is a temp of its own + one rename — mktemp / mkstemp for the caches and the body,
+# `.new.<pid>` for hub_ok, hub_why and the ETag — so two writers never share a
+# half-written file. The worst a race leaves is one round's older body under a
+# newer ETag, which the hub's next heartbeat (a new validator ⇒ a 200) replaces.
 hub_ok() {
-  printf '%s\n' "$1" > "$G/hub_ok.new" 2>/dev/null && mv -f "$G/hub_ok.new" "$G/hub_ok"
+  printf '%s\n' "$1" > "$G/hub_ok.new.$$" 2>/dev/null && mv -f "$G/hub_ok.new.$$" "$G/hub_ok"
   rm -f "$G/hub_why"
   fleet_hub_auth_note hub-sessions ok
   return 0
@@ -472,7 +536,7 @@ hub_why() {
   local why="$1" detail="${2:-}" since='' w s _d
   { IFS=$'\t' read -r w s _d < "$G/hub_why"; } 2>/dev/null && [ "$w" = "$why" ] && since=$s
   case "$since" in ''|*[!0-9]*) since=$(date +%s) ;; esac
-  printf '%s\t%s\t%s\n' "$why" "$since" "$detail" > "$G/hub_why.new" 2>/dev/null && mv -f "$G/hub_why.new" "$G/hub_why"
+  printf '%s\t%s\t%s\n' "$why" "$since" "$detail" > "$G/hub_why.new.$$" 2>/dev/null && mv -f "$G/hub_why.new.$$" "$G/hub_why"
   [ "$why" = refused ] && fleet_hub_auth_note hub-sessions fail "$detail"
   return 0
 }
@@ -1411,7 +1475,7 @@ refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local end every t0 want left first=1
+  local end every t0 want view left first=1 nowt ms0 rcw wseen
   # ONE loop per cache, by a lock its holder keeps for life (issue #2630): the
   # pid file alone let two shells' --ensure race past each other (two loops on
   # one cache for hours). Not holding it yet ⇒ re-exec under the lock; someone
@@ -1423,8 +1487,10 @@ loop() {
   unset FLEET_HUBSESS_LOCKED FLEET_HUBSESS_GUARD
   INV_ON=1
   printf '%s\n' "$$" > "$PIDF"
+  EXIT_WHY=''; LOOP_T0=$(date +%s)
   trap 'loop_cleanup' EXIT
-  trap 'exit 0' TERM INT
+  trap 'loop_term' TERM INT
+  hlog "start life=${LOOP_SECS}s code=${MAPCODE%%-*}"
   printf '%s\n' "$MAPCODE" > "$LOOPCODEF.new" 2>/dev/null && mv -f "$LOOPCODEF.new" "$LOOPCODEF"
   # a round SIGKILLed mid-write (a --refresh cut at its timeout, a killed loop)
   # leaves its mktemp files behind — no trap runs (task EQBE): one sweep per loop
@@ -1432,28 +1498,41 @@ loop() {
   # never match the six-letter suffix
   find "$G" -maxdepth 1 -type f \( -name 'hubsess.hdr.??????' -o -name 'hubsess.json.??????' \
        -o -name 'hubsess.local.??????' -o -name 'hubsess.map.??????' -o -name 'hub*.json.??????' \
-       -o -name '.hubsess.??????' \) -mmin +60 -delete 2>/dev/null || :
+       -o -name '.hubsess.??????' -o -name 'hub_ok.new.*' -o -name 'hub_why.new.*' \
+       -o -name 'hubsess.etag.new.*' \) -mmin +60 -delete 2>/dev/null || :
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     # the lock's holder is gone (SIGKILLed): the lock went with it — stop
-    if [ -n "$guard" ] && ! kill -0 "$guard" 2>/dev/null; then break; fi
-    # --ensure extends our life. A long fallback must be cut at the lifetime
-    # boundary, not make the loop exit a whole minute before that boundary.
+    if [ -n "$guard" ] && ! kill -0 "$guard" 2>/dev/null; then EXIT_WHY='guard gone'; break; fi
+    # --ensure extends our life, and so does a viewer reading the list (the
+    # 3-minute freeze: the collector's ticks overran, no --ensure came for longer
+    # than LOOP_SECS, and the loop ended under a ⌘P read 2 s before). A long
+    # fallback must be cut at the lifetime boundary, not make the loop exit a
+    # whole minute before that boundary. Bounded: a view stamp older than
+    # LOOP_SECS extends nothing, nor does one in the future.
     { read -r want < "$WANTF"; } 2>/dev/null || want=0
     case "$want" in ''|*[!0-9]*) want=0 ;; esac
+    nowt=$(date +%s)
+    view=$(mtime_of "$VIEWF"); case "$view" in ''|*[!0-9]*) view=0 ;; esac
+    [ "$view" -le $(( nowt + 1 )) ] || view=0   # a future stamp would live for ever
+    [ "$view" -le "$want" ] || want=$view
     [ $(( want + LOOP_SECS )) -gt "$end" ] && end=$(( want + LOOP_SECS ))
-    [ "$first" = 1 ] || [ "$(date +%s)" -lt "$end" ] || break
+    [ "$first" = 1 ] || [ "$nowt" -lt "$end" ] || { EXIT_WHY=lifetime; break; }
     first=0
-    every=$EVERY; WAIT=''
+    every=$EVERY; WAIT=''; wseen=no
     if watched; then
-      every=$WATCHED_EVERY
+      every=$WATCHED_EVERY; wseen=yes
       [ "${FLEET_HUB_SESSIONS_LONGPOLL:-1}" = 0 ] || WAIT=$LP_WAIT
     else
       every=$IDLE_EVERY
     fi
     : > "$G/hubsess.round.start"
     t0=$(date +%s); LP_SENT=0; LAST_FETCH=1
-    refresh_all 2>/dev/null
+    ms_now; ms0=$MS
+    refresh_all 2>/dev/null; rcw=$?
+    ms_now; ROUNDS_N=$(( ROUNDS_N + 1 ))
+    if [ "$rcw" != 0 ]; then rcw=fail; elif [ "$LAST_FETCH" = 3 ]; then rcw=304; else rcw=200; fi
+    hlog "round rc=$rcw ms=$(( MS - ms0 )) watched=$wseen"
     # The node's nudge and the hub's publication are asynchronous. One bounded
     # follow-up after a local event catches a heartbeat racing the first fetch;
     # it does not keep an unseen list on a timer thereafter.
@@ -1467,15 +1546,29 @@ loop() {
       every=0
     fi
     left=$(( end - $(date +%s) ))
-    [ "$left" -gt 0 ] || break
+    [ "$left" -gt 0 ] || { EXIT_WHY=lifetime; break; }
     [ "$every" -le "$left" ] || every=$left
     [ "$every" = 0 ] || idle_nap "$every"
   done
   return 0
 }
 
+# loop_term — TERM / INT: an --ensure of other code says so first (REPLF holds our
+# pid), anything else is a plain TERM. The EXIT trap writes the line.
+loop_term() {
+  local p=''
+  { read -r p < "$REPLF"; } 2>/dev/null || p=''
+  if [ "$p" = "$$" ]; then EXIT_WHY='replaced by other code'; rm -f "$REPLF"; else EXIT_WHY=term; fi
+  exit 0
+}
+
 loop_cleanup() {
-  local p
+  local p wt vw nowt
+  nowt=$(date +%s)
+  { read -r wt < "$WANTF"; } 2>/dev/null || wt=''
+  case "$wt" in ''|*[!0-9]*) wt=never ;; *) wt="$(( nowt - wt ))s" ;; esac
+  vw=$(mtime_of "$VIEWF"); case "$vw" in ''|*[!0-9]*|0) vw=never ;; *) vw="$(( nowt - vw ))s" ;; esac
+  hlog "exit reason=${EXIT_WHY:-lifetime} up=$(( nowt - ${LOOP_T0:-$nowt} ))s rounds=${ROUNDS_N:-0} want_age=$wt view_age=$vw"
   if [ -n "$NAP_PID" ]; then
     kill "$NAP_PID" 2>/dev/null || :
     wait "$NAP_PID" 2>/dev/null || :
@@ -1608,6 +1701,8 @@ ensure() {
     # one from before this stamp (no file) — gives way to this one (issue #3164)
     { read -r code < "$LOOPCODEF"; } 2>/dev/null || code=''
     [ "$code" = "$MAPCODE" ] && return 0
+    printf '%s\n' "$p" > "$REPLF" 2>/dev/null
+    hlog "ensure: loop $p runs other code — replacing it"
     kill -TERM "$p" 2>/dev/null
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       [ -n "$(loop_pid)" ] || break
@@ -1615,6 +1710,9 @@ ensure() {
     done
     [ -z "$(loop_pid)" ] || return 0
   fi
+  # one line per loop it starts (never per call: the collector and every stale
+  # ⌘P call this) — the gap between two such lines is how long no loop ran
+  hlog "ensure: no loop — starting one (by ${FLEET_HUBSESS_BY:-?})"
   ( cd / && exec python3 -c "$LOCK_PY" "$LOCKF" 1 bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
   return 0
 }
