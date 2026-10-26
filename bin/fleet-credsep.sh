@@ -67,6 +67,9 @@
 #                                           sudo for the machine; refresh = follow
 #                                           this install's code (`machine uninstall`
 #                                           is gone, issue #4675)
+#   fleet-credsep.sh machine reload          root: start the shared proxy again on
+#                                           what it reads now (bin/fleet-hub-move.py
+#                                           runs it after a store's node.env moved hub)
 #   fleet-credsep.sh machine status [--json]  anyone: shared or per-login, as whom,
 #                                           which logins, the version
 #   fleet-credsep.sh machine proxies [--json] anyone: the doctor's `credproxy` row —
@@ -253,9 +256,9 @@ case "$cmd" in
     verb="${1:-}"
     case "$verb" in
       status|managed|proxies|enforced) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
-      install|refresh|enforce) ;;
+      install|refresh|reload|enforce) ;;
       uninstall) echo "fleet-credsep: machine uninstall is gone (issue #4675) — no login's credentials go back into its home" >&2; exit 2 ;;
-      *) echo "fleet-credsep: machine install|refresh|enforce|status|managed|proxies|enforced" >&2; exit 2 ;;
+      *) echo "fleet-credsep: machine install|refresh|reload|enforce|status|managed|proxies|enforced" >&2; exit 2 ;;
     esac
     case " $* " in
       *" --dry-run "*) [ "$(id -u)" = 0 ] || { python3 -I "$BIN/fleet-credsep.py" machine "$@"; exit $?; } ;;

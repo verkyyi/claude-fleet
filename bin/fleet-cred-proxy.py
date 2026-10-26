@@ -369,11 +369,112 @@ def loopback_ok(url, cluster=False):
     host = (u.hostname or "").lower()
     loop = u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")
     incluster = cluster and u.scheme == "http" and host.endswith(".svc.cluster.local") and host.count(".") >= 4
+    return not upstream_refusal(url, cluster)
+
+
+def upstream_refusal(url, cluster=False):
+    """Why loopback_ok refuses `url` ("" = it does not): «neither https nor
+    loopback» and «https, but its host is not on the allow-list» are two different
+    faults with two different fixes, so they are said apart (2026-10-26: a moved
+    hub's https URL was refused as «neither https nor loopback»)."""
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    loop = u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")
+    incluster = cluster and u.scheme == "http" and host.endswith(".svc.cluster.local") and host.count(".") >= 4
     if ALLOWED is None:
-        return u.scheme == "https" or loop or incluster
+        return "" if u.scheme == "https" or loop or incluster else "neither https nor loopback"
     if u.scheme == "https" or incluster:
-        return host in ALLOWED
-    return loop and env("FLEET_CREDSEP_TEST") == "1"
+        if host in ALLOWED or host in follow_node_envs():
+            return ""
+        return "https, but its host %s is not on this proxy's allow-list (allowed: %s)" % (
+            host or "?", ", ".join(sorted(ALLOWED)))
+    if loop and env("FLEET_CREDSEP_TEST") == "1":
+        return ""
+    return "neither https nor loopback"
+
+
+# The allow-list follows node.env (2026-10-26, after the hub moved — task PNWW's
+# bin/fleet-hub-move.py rewrote every tenant's root-owned node.env while this
+# proxy, started on the old address, refused every hub call until a restart).
+# ALLOWED is computed once at start from root's config and each tenant's
+# node.env; NODE_ENVS are those node.env paths. When a URL's host is not on the
+# list, each one is stat'ed (a miss only — an allowed host costs nothing), and a
+# file whose (inode, size, mtime, ctime) changed since it was last read is read
+# again: an https CCQUOTA_HUB_URL there adds its host to ALLOWED.
+#
+# Why that keeps the separated model (docs/dev/CRED-SEPARATE.md «The allow-list
+# follows node.env»): the paths are the ones root's launcher named at start
+# (the store's <root>/node.env, never the login's link), and a re-read counts only
+# when the file AND its directory are owned by root or by this proxy's own
+# account and neither is group/other-writable, read through O_NOFOLLOW — the same
+# file, the same writers, that a restart would have trusted anyway. A login cannot
+# write it (its sessions get "Permission denied" on the store), so a login still
+# cannot talk the proxy into a host of its choosing. Hosts are only ever ADDED for
+# the life of the process: the old hub stays allowed (its name keeps forwarding
+# during a move, and a request already on its way is never cut); a restart drops it.
+NODE_ENVS = []
+NODE_ENV_SEEN = {}          # path -> the stat signature last read
+NODE_ENV_LOCK = threading.Lock()
+
+
+def node_env_trusted(path):
+    """-> (the file's text, "") or (None, why): root's / this account's file,
+    in such a directory, writable by nobody else, not a link."""
+    me = os.geteuid()
+    try:
+        dst = os.stat(os.path.dirname(path) or ".")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        return None, "unreadable (%s)" % (e.strerror or e)
+    try:
+        st = os.fstat(fd)
+        for what, s in (("file", st), ("directory", dst)):
+            if s.st_uid not in (0, me):
+                return None, "its %s is owned by uid %d, not root or this proxy's" % (what, s.st_uid)
+            if s.st_mode & 0o022:
+                return None, "its %s is group/other-writable" % what
+        with os.fdopen(fd, "r", errors="replace") as f:
+            fd = None
+            return f.read(1 << 16), ""
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def follow_node_envs():
+    """The hosts ALLOWED gained from a changed node.env (see NODE_ENVS); ALLOWED
+    is replaced whole (readers never see a half-built set)."""
+    global ALLOWED
+    if ALLOWED is None or not NODE_ENVS:
+        return ()
+    added = []
+    with NODE_ENV_LOCK:
+        for p in NODE_ENVS:
+            try:
+                st = os.lstat(p)
+                sig = (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            except OSError:
+                continue
+            if NODE_ENV_SEEN.get(p) == sig:
+                continue
+            NODE_ENV_SEEN[p] = sig
+            text, why = node_env_trusted(p)
+            if text is None:
+                sys.stderr.write("fleet-cred-proxy: %s changed but is not followed: %s\n" % (p, why))
+                continue
+            hub = env_text(text).get("CCQUOTA_HUB_URL", "")
+            u = urlsplit(hub)
+            h = (u.hostname or "").lower()
+            if u.scheme == "https" and h and h not in ALLOWED:
+                ALLOWED = ALLOWED | {h}
+                added.append(h)
+                sys.stderr.write("fleet-cred-proxy: %s names hub %s: %s added to the allow-list\n" % (p, hub, h))
+    if added and getattr(Proxy, "sink", None):
+        try:
+            Proxy.sink.log(ev="allow_follow", hosts=added)
+        except Exception:  # noqa: BLE001 — a log line never fails a request
+            pass
+    return added
 
 
 # The node agent's warm road to the hub (claude-fleet T672, tokenledger/shared/
@@ -425,17 +526,23 @@ def hub_dial(hub):
 def node_env(path=None):
     """$FLEET_CONF_DIR/node.env as a dict — read here, never exported (issue #1491).
     `path`: a tenant's own (the shared proxy, issue #2217)."""
-    out = {}
     try:
-        for line in open(path or env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))):
-            line = line.strip()
-            if line.startswith("export "):
-                line = line[7:]
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip().strip('"').strip("'")
+        with open(path or env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))) as f:
+            return env_text(f.read())
     except OSError:
-        pass
+        return {}
+
+
+def env_text(text):
+    """node.env's KEY=value lines → dict (node_env's parser)."""
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:]
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip('"').strip("'")
     return out
 
 
@@ -1497,8 +1604,9 @@ class SpaceKey:
         tok = ne.get("CCQUOTA_TOKEN", "")
         if not hub or not tok:
             return 503, {"code": "no_node", "message": "no node token on this login (node.env)"}
-        if not loopback_ok(hub):
-            return 503, {"code": "no_node", "message": "the hub address is neither https nor loopback"}
+        why = upstream_refusal(hub)
+        if why:
+            return 503, {"code": "no_node", "message": "the hub address %s is refused: %s" % (hub, why)}
         req = urllib.request.Request(hub_dial(hub) + SPACE_TOKEN_PATH, data=b"{}" if method == "POST" else None,
                                      method=method, headers={"Authorization": "Bearer " + tok,
                                                              "Content-Type": "application/json"})
@@ -2555,8 +2663,10 @@ class Proxy(BaseHTTPRequestHandler):
         hub, ntok = (ne.get("CCQUOTA_HUB_URL") or "").rstrip("/"), ne.get("CCQUOTA_TOKEN", "")
         if not hub or not ntok:
             return self.fail(403, "no node token here", "permission_error")
-        if not loopback_ok(hub):
-            return self.fail(403, "hub URL is neither https nor loopback", "permission_error")
+        why = upstream_refusal(hub)
+        if why:
+            self.log(ev="deny", path="/hub" + bare, why="hub URL " + why)
+            return self.fail(403, "hub URL %s refused: %s" % (hub, why), "permission_error")
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != "authorization"}
         out["Authorization"] = "Bearer " + ntok
         # the warm road (T672): only for a remote https hub, named as the
@@ -4359,6 +4469,8 @@ def serve(a):
     global ALLOWED
     if shared or cfg.store:
         ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"), configured_urls([cfg] + everyone))
+        # …and it follows each tenant's node.env from here on (a moved hub)
+        NODE_ENVS[:] = sorted({c.node_env for c in [cfg] + everyone if getattr(c, "node_env", "")})
     for c in [cfg] + everyone:
         for name in ("anthropic_url", "codex_url", "relay_url", "central_url", "space_url"):
             v = getattr(c, name, "")

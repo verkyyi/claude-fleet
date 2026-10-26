@@ -505,7 +505,14 @@ def error_reason(exc):
         secrets.append(hubrest._CREDS[1])
     for secret in sorted(secrets, key=len, reverse=True):
         message = message.replace(secret, "[redacted]")
-    if "HTTP 401" in message or "HTTP 403" in message:
+    if "cred-proxy:" in message and ("allow-list" in message or "neither https nor loopback" in message):
+        # not the hub's answer: this machine's credential proxy refused to carry
+        # the call (2026-10-26, a hub move the proxy predated)
+        message += ("; this machine's credential proxy refused the hub address, not the Hub: it follows a "
+                    "rewritten node.env on the next call — if this repeats, reload it "
+                    "(sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine reload) and check "
+                    "CCQUOTA_HUB_URL in the store's node.env")
+    elif "HTTP 401" in message or "HTTP 403" in message:
         message += "; check this node's Hub authentication/permissions"
     elif "HTTP 5" in message:
         message += "; Hub unavailable, retry after service recovery"

@@ -2177,6 +2177,20 @@ def shared_ask(login):
     return (res.get("logins") or {}).get(login) if res.get("ok") else None
 
 
+def machine_reload(a):
+    """Start the shared proxy again on what it now reads (bin/fleet-hub-move.py
+    after it rewrote a store's node.env, 2026-10-26): the same road as every
+    other restart — shared_restart, i.e. the machine daemon's `reload` stamp
+    (<LIB>/.restart) when it runs the proxy, else its service. 3 = no shared proxy."""
+    if not shared_rec():
+        say("shared: off — nothing to reload")
+        return 3
+    shared_restart()
+    say("shared: reload asked%s" % (" — the machine daemon starts it again on its next tick (%s)"
+                                    % os.path.join(LIB, ".restart") if shared_supervised() else ""))
+    return 0
+
+
 def wait_for(fn, secs):
     end = time.time() + secs
     while True:
@@ -3153,7 +3167,7 @@ def main():
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
-    mc.add_argument("verb", choices=("install", "refresh", "status", "pooldup", "pool-sync",
+    mc.add_argument("verb", choices=("install", "refresh", "reload", "status", "pooldup", "pool-sync",
                                      "enforce", "enforced",
                                           "managed", "proxies"))
     mc.add_argument("--logins", default="all")
@@ -3207,7 +3221,7 @@ def main():
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
-        return {"install": machine_install, "refresh": machine_refresh,
+        return {"install": machine_install, "refresh": machine_refresh, "reload": machine_reload,
                 "pooldup": machine_pooldup,
                 "pool-sync": machine_pool_sync, "enforce": machine_enforce}[a.verb](a)
     if a.cmd == "install":
