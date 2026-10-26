@@ -170,7 +170,7 @@
 #                                                   (a task's report is its ID's result, whatever ids/.switch says)
 #   c8-old-supervisor-reopen                        bin/fleet_launch.py (the C8 shim: supervise retires @launch*
 #                                                   and goes the ordinary road), fleet-session-wrap.sh
-#   park-while-watched / wake-timeout               bin/fleet_session_gate.py (park · wake: task HHV0),
+#   park-while-watched / wake-timeout / park-gate-killed  bin/fleet_session_gate.py (park · wake: task HHV0),
 #                                                   fleet-session-wrap.sh (park_hold), fleet-cleanup-idle.py web_park
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
@@ -6589,6 +6589,16 @@ drill_park_while_watched() {
     || { WHY="fleet_session_gate.py park no longer refuses a watched window"; return 1; }
   SECS=$(since "$t0")
   WHAT='有人在终端里看着的网页会话不停放；没人看（控制模式的客户端不算人）、闲着才停'
+}
+
+drill_park_gate_killed() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-session-gate-selftest.py" Q 2>&1) || { WHY="$out"; return 1; }
+  grep -q 'timeout=PARK_TIMEOUT' "$BIN/fleet-cleanup-idle.py" \
+    || { WHY="fleet-cleanup-idle.py kills the park gate before its own budget again"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='停放门半路死掉留下的 @parked：智能体之后又报过状态、没被接住 ⇒ heal 撤掉；接住了或还没说话 ⇒ 保留'
 }
 
 drill_park_human_presence_lost() {

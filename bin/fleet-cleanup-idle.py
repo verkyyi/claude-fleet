@@ -23,15 +23,22 @@ def retired_dir():
 BIN = Path(__file__).absolute().parent
 
 
+# The park gate waits FLEET_GATE_PARK_SECS for the wrapper's hold AFTER its own
+# proof, snapshot and export (task PMGT): killed first, it never rolls back its
+# @parked stamp and a live session reads parked. Leave it its whole budget.
+_park_secs = os.environ.get("FLEET_GATE_PARK_SECS", "")
+PARK_TIMEOUT = (int(_park_secs) if re.fullmatch(r"\d{1,7}", _park_secs) else 15) + 45
+
+
 class RateLimited(Exception):
     pass
 
 
-def run(*args, cwd=None):
+def run(*args, cwd=None, timeout=15):
     gh = args[:1] == ("gh",)
     try:
         return subprocess.check_output(args, cwd=cwd, text=True, stderr=subprocess.PIPE,
-                                       timeout=15).strip()
+                                       timeout=timeout).strip()
     except subprocess.TimeoutExpired as exc:
         if gh:
             # GitHub not answering in 15 s — the same stop as a limit
@@ -811,6 +818,22 @@ class Cleaner:
         self.say(window, "skip:waiting", "old-wrapper" if not snap.get("@park_wrap_ver") else "park-gate")
         return False
 
+    @staticmethod
+    def dead_park(snap):
+        """@parked stamped, never held, and the agent reported after the stamp —
+        fleet_session_gate.stale_park's test, read off the snapshot first."""
+        stamp = snap.get("@parked", "")
+        if (not stamp.isdigit() or snap.get("@park_held") or snap.get("@park_start") or snap.get("@park_wake")
+                or not FID_RE.fullmatch(snap.get("@fleet_id", ""))):
+            return False
+        try:
+            st = json.loads(snap.get("@agent_status") or "{}")
+        except ValueError:
+            return False
+        ts = st.get("ts") if isinstance(st, dict) else None
+        return (st.get("state") in ("working", "blocked", "done", "idle")
+                and isinstance(ts, (int, float)) and ts > int(stamp))
+
     def parked(self, window, snap):
         """Retire only acknowledged, inactive parks, under the wake lock. History
         and resume verification precede the close; data/worktree stays in place."""
@@ -819,6 +842,15 @@ class Cleaner:
         self.why = "parked"
         if self.automatic_close_held(snap):
             return False
+        if self.dead_park(snap) and not self.args.dry_run:
+            # a park that died half-way (task PMGT): the gate rolls it back,
+            # under the fid lock, after the same check
+            command = os.environ.get("FLEET_SESSION_GATE_CMD")
+            try:
+                run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
+                    "heal", "--fid", snap["@fleet_id"])
+            except (subprocess.SubprocessError, OSError):
+                pass
         if not snap.get("@park_held") or not snap.get("@park_wrap_ver") or self.theirs(snap):
             return False
         due = fleet_reap_policy.parked_deadline(snap)
@@ -952,7 +984,7 @@ class Cleaner:
         why = "memory" if early else "idle"
         command = os.environ.get("FLEET_SESSION_GATE_CMD")
         out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
-                  "park", "--fid", fid, "--why", why)
+                  "park", "--fid", fid, "--why", why, timeout=PARK_TIMEOUT)
         try:
             got = json.loads(out or "{}")
         except ValueError:
@@ -1483,7 +1515,7 @@ class Cleaner:
         pid = snap["pane_pid"]
         command = os.environ.get("FLEET_SESSION_GATE_CMD")
         out = run(*(command.split() if command else ["python3", str(BIN / "fleet_session_gate.py")]),
-                  "park", "--fid", snap["@fleet_id"], "--why", "memory")
+                  "park", "--fid", snap["@fleet_id"], "--why", "memory", timeout=PARK_TIMEOUT)
         result = json.loads(out or "{}")
         current = self.snapshot(window)
         if (not result.get("ok") or current["@fleet_id"] != snap["@fleet_id"]

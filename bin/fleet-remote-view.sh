@@ -185,7 +185,7 @@ EOF
     if [ -n "$_w" ]; then
       # a PARKED window's pane stuck in copy-mode is let out first (BREAK-IT
       # park-page-copy-mode, the same words as fleet_view.park_unmode); a live one never
-      tmux -L "$_s" if-shell -F -t "$_w" '#{?#{@parked},#{pane_in_mode},0}' "send-keys -t $_w -X cancel" 2>/dev/null
+      tmux -L "$_s" if-shell -F -t "$_w" '#{?#{&&:#{@parked},#{@park_held}},#{pane_in_mode},0}' "send-keys -t $_w -X cancel" 2>/dev/null
       case "$_v" in wt-*) python3 "$BIN/fleet-webterm.py" switch --conn "${_v#wt-}" --window "$_w"; exit $? ;; esac
       { [ -n "$_c" ] && tmux -L "$_s" switch-client -c "$_c" -t "=$_g:$_w" 2>/dev/null; } \
         || tmux -L "$_s" select-window -t "=$_g:$_w" 2>/dev/null || exit 5
@@ -472,7 +472,7 @@ rv_select() {
   c=''; [ "$tgt" = "$s" ] || c=$(T list-clients -t "=$tgt" -F '#{client_tty}' 2>/dev/null | head -1)
   # a PARKED window's pane stuck in copy-mode is let out first (BREAK-IT
   # park-page-copy-mode, the fast path's words above); a live one never
-  T if-shell -F -t "$w" '#{?#{@parked},#{pane_in_mode},0}' "send-keys -t $w -X cancel" 2>/dev/null
+  T if-shell -F -t "$w" '#{?#{&&:#{@parked},#{@park_held}},#{pane_in_mode},0}' "send-keys -t $w -X cancel" 2>/dev/null
   case "$view" in wt-*) python3 "$BIN/fleet-webterm.py" switch --conn "${view#wt-}" --window "$w"; return $? ;; esac
   { [ -n "$c" ] && T switch-client -c "$c" -t "=$tgt:$w" 2>/dev/null; } \
     || T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }

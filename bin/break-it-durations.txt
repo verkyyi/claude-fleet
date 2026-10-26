@@ -345,6 +345,7 @@
 3.8 park-drops-dialog
 46.7 park-export-refusal-owner
 3.0 park-human-presence-lost
+3.0 park-gate-killed
 1.5 park-loop-rebootstrap
 3.7 park-loses-cron
 5.6 park-loses-loop

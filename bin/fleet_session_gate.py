@@ -15,6 +15,7 @@ and the idle reaper / memguard call its park.
     fleet_session_gate.py stop   --fid F
     fleet_session_gate.py answer --fid F --fp FP --pick LABEL…
     fleet_session_gate.py park   --fid F [--why idle|memory] [--force]
+    fleet_session_gate.py heal   --fid F   (roll back a park that died half-way)
     fleet_session_gate.py wake   --fid F [--seed-file P]
     fleet_session_gate.py pending                                (fids with words waiting)
     fleet_session_gate.py watched --fid F                        (exit 0 = a person looks at it)
@@ -113,11 +114,11 @@ WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}
                      "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
                      "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
                      "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}", "#{@task_execution}",
-                     "#{@born}", "#{window_created}"])
+                     "#{@born}", "#{window_created}", "#{@park_held}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
             "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
             "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task", "task_execution",
-            "born", "created"]
+            "born", "created", "park_held"]
 
 
 def now():
@@ -218,6 +219,7 @@ def window(fid):
     except ValueError:
         st = {}
     w["word"] = st.get("state", "") if isinstance(st, dict) else ""
+    w["word_ts"] = st.get("ts") if isinstance(st, dict) and isinstance(st.get("ts"), (int, float)) else 0
     return w
 
 
@@ -1075,11 +1077,47 @@ def park(fid, why="idle", force=False):
         return park_locked(fid, why, force)
 
 
+def stale_park(w):
+    """A park that died half-way (task PMGT): @parked stamped, never held by the
+    wrapper, and the native agent has spoken since. Only meaningful under the fid
+    lock — a park in flight holds it, so a free lock means nobody is parking."""
+    stamp = w.get("parked", "")
+    if not stamp.isdigit() or w.get("park_held") or w.get("park_start") or w.get("park_wake"):
+        return False
+    return w["word"] in ("working", "blocked", "done", "idle") and w["word_ts"] > int(stamp)
+
+
+def heal_locked(fid, w):
+    for option in ("@parked", "@park_since", "@park_why", "@park_saved_mb"):
+        tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
+    import fleet_park_wake
+    try:
+        fleet_park_wake.abort(fid)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    park_log(fid, "fail", "heal", 0, "stale_parked")
+
+
+def heal(fid):
+    """Roll back a dead park's stamps; the session reads as what it is again."""
+    with lock(fid):
+        w = window(fid)
+        if w is None or not stale_park(w):
+            return dict(ok=True, healed=False)
+        heal_locked(fid, w)
+        return dict(ok=True, healed=True)
+
+
 def park_locked(fid, why, force):
     import fleet_agent_adapter
     w = window(fid)
     if w is None:
         return dict(ok=False, why="no_session")
+    if w["parked"] and stale_park(w):
+        heal_locked(fid, w)
+        w = window(fid)
+        if w is None:
+            return dict(ok=False, why="no_session")
     if w["parked"]:
         return dict(ok=True, already=True)
     if not w.get("wrap_ver", "").isdigit() or int(w["wrap_ver"]) < 1:
@@ -1553,7 +1591,7 @@ def public(r):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet_session_gate.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover", "legacy-deliver", "prompt-input", "lock-fd", "close-ready", "wake-known"):
+    for name in ("say", "tick", "status", "ack", "stop", "answer", "park", "wake", "pending", "watched", "name", "quota-transfer", "quota-recover", "legacy-deliver", "prompt-input", "lock-fd", "close-ready", "wake-known", "heal"):
         p = sub.add_parser(name)
         if name not in ("pending", "prompt-input"):
             p.add_argument("--fid", required=name != "tick")
@@ -1646,6 +1684,8 @@ def main(argv=None):
         return out(answer(a.fid, a.fp, a.pick, answers, None if a.allow is None else a.allow == "1"))
     if a.cmd == "park":
         return out(park(a.fid, a.why, a.force))
+    if a.cmd == "heal":
+        return out(heal(a.fid))
     if a.cmd == "wake":
         return out(wake(a.fid, a.seed_file, a.why, a.request_only, a.delivery))
     if a.cmd == "name":

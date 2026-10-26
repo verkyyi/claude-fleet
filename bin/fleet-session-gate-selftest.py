@@ -25,6 +25,8 @@ steps is bin/fleet-idle-accept-claude-selftest.py's (needs claude 2.1.295 on PAT
   M  what it asks: an AskUserQuestion's card (fp · questions · options) answered by
      {question: label} through fleet-dialog-answer.sh; a permission's card answered
      allow / deny through fleet-permission.sh --by; a changed fp is refused
+  Q  a park that died half-way (task PMGT): @parked stamped, never held, the agent
+     reported since ⇒ heal / the next park roll it back; held or silent ⇒ kept
 
 Run one case: fleet-session-gate-selftest.py G
 """
@@ -372,6 +374,30 @@ class Gate(unittest.TestCase):
         # answering or asking: never parked
         self.window({"@claude_state": "needs"})
         self.assertEqual(self.gate("park", "--fid", FID)["why"], "asking")
+
+    def test_Q_heal_dead_park(self):
+        stamp = str(int(time.time()) - 600)
+        live = json.dumps({"state": "working", "ts": int(stamp) + 60})
+        # the agent said nothing since the stamp: a park still settling is kept
+        self.setopt(**{"@parked": stamp, "@park_since": stamp, "@park_why": "idle",
+                       "@agent_status": json.dumps({"state": "exited", "ts": int(stamp) + 1})})
+        self.assertFalse(self.gate("heal", "--fid", FID)["healed"])
+        # held by the wrapper: a real park, whatever the last word was
+        self.setopt(**{"@agent_status": live, "@park_held": stamp})
+        self.assertFalse(self.gate("heal", "--fid", FID)["healed"])
+        self.assertEqual(self.opt("@parked"), stamp)
+        # stamped, never held, the agent working since: the gate died mid-park
+        self.setopt(**{"@park_held": None})
+        self.assertTrue(self.gate("heal", "--fid", FID)["healed"])
+        for o in ("@parked", "@park_since", "@park_why"):
+            self.assertIsNone(self.opt(o), o)
+        rows = [json.loads(x) for x in (self.d / "conf/logs/park.ndjson").read_text().splitlines()]
+        self.assertEqual([rows[-1]["act"], rows[-1]["why"], rows[-1]["result"]], ["fail", "heal", "stale_parked"])
+        # a stale stamp no longer answers every later park «already»
+        self.setopt(**{"@parked": stamp, "@agent_status": json.dumps({"state": "done", "ts": int(stamp) + 60})})
+        r = self.gate("park", "--fid", FID)
+        self.assertNotEqual(r.get("already"), True, r)
+        self.assertIsNone(self.opt("@parked"))
 
     def test_N_old_wrapper_never_receives_exit(self):
         # C1 drives fleet_session_gate.py: an old wrapper has no holding page.
