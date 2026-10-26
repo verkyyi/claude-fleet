@@ -23,3 +23,7 @@ spec:
       # everyone else's overwritten — the hub reads the edge's host and client from them
       - "--entryPoints.web.forwardedHeaders.trustedIPs=__EDGE_TRUSTED_IPS__"
       - "--entryPoints.websecure.forwardedHeaders.trustedIPs=__EDGE_TRUSTED_IPS__"
+      # an accelerator in front (PROXY_PROTOCOL_IPS, bootstrap.sh): the client's own
+      # address arrives in a PROXY protocol header, read only from those sources
+      - "--entryPoints.web.proxyProtocol.trustedIPs=__PROXY_PROTOCOL_IPS__"
+      - "--entryPoints.websecure.proxyProtocol.trustedIPs=__PROXY_PROTOCOL_IPS__"
