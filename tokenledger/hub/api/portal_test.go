@@ -147,9 +147,9 @@ func TestPortalConfig(t *testing.T) {
 // Traefik uses the trusted GA PROXY source to build XFF before forwarding.
 func TestPortalGAClientIP(t *testing.T) {
 	s := portalServer(t)
-	for _, xff := range []string{"198.51.100.42", "198.51.100.42, 10.42.0.7"} {
+	for _, xff := range []string{"198.51.100.42", "198.51.100.42, 10.42.0.7"} { // oss-ok: synthetic private replica hop for IP selection test
 		r := httptest.NewRequest("GET", s.PortalURL+"/", nil)
-		r.RemoteAddr = "10.42.0.8:443"
+		r.RemoteAddr = "10.42.0.8:443" // oss-ok: synthetic private ingress peer for IP selection test
 		r.Header.Set("X-Forwarded-For", xff)
 		s.forwardedTrust(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if got := chatClientIP(r).String(); got != "198.51.100.42" {
