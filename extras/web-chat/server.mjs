@@ -850,7 +850,9 @@ async function viewStream(req, res, u, person) {
   const stateOf = () => JSON.stringify({ t: "state", agent: w.agent, session: w.sid || "", busy: !!w.busy, state: w.state || "",
     label: w.label || "", can_talk: typeof gs?.can_talk === "boolean" ? gs.can_talk : null, talk_reason: gs ? gs.why || "" : "checking",
     queue: (gs?.queue || []).map(({ delivery, text, why }) => ({ delivery, text, why })),
-    ...(gs?.ask ? { ask: gs.ask } : {}), ...(gs?.continuation ? { continuation: gs.continuation } : {}) });
+    ...(gs?.ask ? { ask: gs.ask } : {}), ...(gs?.continuation ? { continuation: gs.continuation } : {}),
+    // what a session that never started shows (task YASF): the prompt it waits on
+    ...(gs?.why === "start_blocked" && typeof gs.screen === "string" ? { talk_screen: gs.screen.slice(0, 600) } : {}) });
   let said = stateOf();
   res.write(`data: ${said}\n\n`);
   log("view", { agent: w.agent, person, known: knew });

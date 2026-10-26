@@ -9,7 +9,9 @@ import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess } from '../s
 
 assert.equal(writeAccess(null, true), 'checking');
 assert.equal(writeAccess({ can_talk: null }, true), 'checking');
-assert.equal(writeAccess({ can_talk: false, talk_reason: 'unreachable' }, true), 'offline');
+assert.equal(writeAccess({ can_talk: false, talk_reason: 'unreachable' }, true), 'stalled', 'the session not answering is not the home being out of reach (YASF)');
+assert.equal(writeAccess({ can_talk: false, talk_reason: 'start_blocked' }, true), 'stalled', 'a session that never started says so (YASF)');
+assert.equal(writeAccess({ can_talk: false, talk_reason: 'start_blocked' }, true, 'offline'), 'offline', 'a dropped stream is still the home');
 assert.equal(writeAccess({ can_talk: true }, null), 'checking', 'permission still loading is not a read-only login');
 assert.equal(writeAccess({ can_talk: true }, true, 'offline'), 'offline', 'a disconnected stream cannot keep a stale write capability');
 assert.equal(writeAccess({ can_talk: false }, true, 'checking'), 'checking', 'a new connection waits for its own capability frame');

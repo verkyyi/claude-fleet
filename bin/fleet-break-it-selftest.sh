@@ -19,6 +19,7 @@
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
 #   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
 #   codex-model-migration-prompt                    bin/fleet-codex.sh, fleet-codex-posture.py (migrations)
+#   web-start-blocked                               bin/fleet_session_gate.py (start_blocked · screen · one alert)
 #   task-start-unseen                               bin/start-visible-selftest.sh (fleet-session-wrap.sh say_start,
 #                                                   fleet_id.py start_word, fleet-epic-tick.py, fleet_task_control.py)
 #   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
@@ -657,6 +658,39 @@ FAKE
     || { WHY="gpt-5.6-sol's upgrade is not passed as answered — the start waits on «Try new model / Use existing model»"; return 1; }
   grep -qxF -- -m "$d/argv" && { WHY="answering the prompt picked a model (-m) — the person's model is theirs"; return 1; }
   SECS=$(since "$t0"); WHAT="目录里有升级的模型：启动时当作已答「沿用现有模型」，不再停在 Meet GPT-6 Sol"
+}
+
+# A window the web opened whose agent never came up — stuck on a startup prompt
+# nobody has seen yet — must be said as that, with its screen, and raise ONE
+# alert for the operator; never "checking" forever (YASF).
+drill_web_start_blocked() {
+  CAP=20; local d="$WORK/wsb" t0 st n
+  mkdir -p "$d/conf"
+  printf '#!/bin/sh\nprintf "fleet-x\\t@1\\n"\n' > "$d/win"
+  # display-message: the gate's WIN_FMT fields (pane agent mod parked state needs status cc_sid codex_sid
+  # mod_alive origin …) — a Codex the web opened, born at 1000, nothing reported
+  cat > "$d/tmux" <<'FAKE'
+#!/bin/sh
+for a; do last=$a; done
+case " $* " in
+  *" display-message "*) printf '%%7\tcodex\t\t\t\t\t\t\t\t\tweb\t\t\t\t\t\t1\t\t\t\t\t\t\t\t1000\t1000\n' ;;
+  *" capture-pane "*) printf '  Do you trust this new prompt?\n\n  1. Yes\n  2. No\n' ;;
+esac
+exit 0
+FAKE
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/alerts"\n' "$d" > "$d/alerts.sh"
+  printf 'def identity(pane, socket=""):\n    return {}\ndef client(remote):\n    raise ConnectionError("x")\n' > "$d/codex.py"
+  chmod +x "$d/win" "$d/tmux" "$d/alerts.sh"
+  t0=$(now)
+  for n in 1 2; do
+    st=$(env FLEET_CONF_DIR="$d/conf" FLEET_GATE_WIN_CMD="$d/win" FLEET_GATE_TMUX="$d/tmux" FLEET_GATE_CODEX="$d/codex.py" \
+      FLEET_GATE_ALERTS="$d/alerts.sh" FLEET_GATE_NOW=1100 python3 "$BIN/fleet_session_gate.py" status --fid 11111111-2222-4333-8444-555555555555 2>&1)
+  done
+  case "$st" in *'"why":"start_blocked"'*) ;; *) WHY="a web session stuck at its start reads: $(printf '%s' "$st" | tail -c 200)"; return 1 ;; esac
+  case "$st" in *'Do you trust this new prompt?'*) ;; *) WHY="the page is not told what the screen shows"; return 1 ;; esac
+  [ "$(wc -l < "$d/alerts" 2>/dev/null | tr -d ' ')" = 1 ] || { WHY="want ONE alert for the operator, got: $(cat "$d/alerts" 2>/dev/null)"; return 1; }
+  grep -q 'breakage' "$d/alerts" || { WHY="the alert is not a breakage"; return 1; }
+  SECS=$(since "$t0"); WHAT="网页开的会话卡在启动提示：说「没能启动」并带上那一屏，给管理员记一条提醒"
 }
 
 # ---- the recovery page's q, on the real session-end-hook (#1842 ① ②) ----------

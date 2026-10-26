@@ -227,6 +227,10 @@ echo "sent → pid 4242 (issue-123 · /fixture/issue-123)"
         self.script(self.bin / "fleet-worker-stop.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/stop.calls"
 [ ! -f "$FLEET_CONF_DIR/stop-hang" ] || { echo failed:no-exit; exit 7; }
+case "$2" in fid:*)
+  awk -F'\t' -v f="${2#fid:}" '$10 != f' "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
+  mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"; echo stopped:exit; exit 0 ;;
+esac
 k="${2##*:}"; n="${k#issue-}"; p=''; case "$2" in *:*) p="${2%%:*}" ;; esac
 awk -F'\t' -v n="$n" -v p="$p" '{ s = $9; gsub("/", "-", s) } !($2 == n && (p == "" || s == p || s == ""))' \
   "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
@@ -601,6 +605,29 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         # The old <fleet UUID>/<key> form still resolves (one version's alias).
         alias = self.lifecycle("worker_stop", "bare:issue-124", idem="stop-alias")
         self.assertEqual(alias["result"]["stopped"]["window_id"], "@13")
+
+    def test_keyless_session_stops_by_its_identity(self):
+        """YASF: a no-repo session (the web's) has no key; stopping it by identity
+        once resolved its key "" — every keyless window — and refused AMBIGUOUS.
+        Its address is fid:<identity>, and only that window goes."""
+        a, b = str(uuid.uuid4()), str(uuid.uuid4())
+        live = [dict(window_id="@30", key="", identity=a), dict(window_id="@31", key="", identity=b)]
+        ctl = self.node.controller
+        def workers(fleet, window="", cache=False):
+            return {"state": "up", "workers": [dict(w) for w in live], "observed_at": "now"}
+        stops = []
+        def adapter(mode, *args, **kw):
+            if mode == "stop":
+                stops.append(args[1])
+                live[:] = [w for w in live if "fid:" + w["identity"] != args[1]]
+                return 0, b"stopped:exit\n", b""
+            return 9, b"", b""
+        fleet = ctl.fleet(self.fleet)
+        with patch.object(ctl, "workers", workers), patch.object(ctl, "adapter", adapter):
+            done = ctl.execute_worker(fleet, "worker_stop", {"worker_id": self.fleet + "/" + a})
+        self.assertEqual(done["stopped"]["window_id"], "@30")
+        self.assertEqual(stops, ["fid:" + a])
+        self.assertEqual([w["window_id"] for w in live], ["@31"])
 
     def test_stop_targets_identity_never_a_window_number(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", 124, False, "/fixture/issue-124"))

@@ -19,6 +19,9 @@ steps is bin/fleet-idle-accept-claude-selftest.py's (needs claude 2.1.295 on PAT
   J  Codex: idle ⇒ started (sent); answering ⇒ in its own queue (queued), the receipt scan sends it; never added twice
   K  stop: Claude working ⇒ one Escape; idle ⇒ no key; Codex ⇒ turn/interrupt
   L  status: can_talk + the queue (what waits, why) for the page's state line
+  S  a web-opened session whose agent never came up (task YASF): checking for its
+     first minute, then start_blocked with its screen and ONE alert; a terminal's
+     own, or one that reported, is never judged
   M  what it asks: an AskUserQuestion's card (fp · questions · options) answered by
      {question: label} through fleet-dialog-answer.sh; a permission's card answered
      allow / deny through fleet-permission.sh --by; a changed fp is refused
@@ -72,6 +75,9 @@ elif cmd == "set-option":
 elif cmd == "list-clients":
     for c in st.get("clients", []):
         print("%s\t%s" % (c.get("control", "0"), c["window"]))
+elif cmd == "capture-pane":
+    t = a[a.index("-t") + 1]
+    sys.stdout.write(opts(t).get("_screen", ""))
 elif cmd == "send-keys":
     st.setdefault("keys", []).append(a[a.index("-t") + 2:])
     save()
@@ -163,6 +169,8 @@ class Gate(unittest.TestCase):
         proof = self.d / "park-proof"
         proof.write_text('#!/bin/sh\necho \'{"ok":true}\'\n')
         proof.chmod(0o755)
+        (self.d / "fleet-alerts.sh").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_ALERTS"\n')
+        (self.d / "fleet-alerts.sh").chmod(0o755)
         self.window({})
         self.plan([])
         (self.d / "accept.log").write_text("")
@@ -496,6 +504,39 @@ while time.time() < end:
         st = self.gate("status", "--fid", FID)
         self.assertTrue(st["can_talk"])
         self.assertEqual([(q["delivery"], q["text"], q["why"]) for q in st["queue"]], [(r["delivery"], "waiting", "busy")])
+
+    def test_S_start_blocked(self):
+        alerts = self.d / "alerts"
+        fake = self.d / "fleet-alerts.sh"
+        for agent, extra in (("codex", {"@codex_session_id": ""}), ("claude", {"@mod_accept": ""})):
+            with self.subTest(agent=agent):
+                screen = "  Meet GPT-6 Sol\n\n  1. Try new model\n  2. Use existing model\n"
+                self.window(dict({"@cc_agent": agent, "@cc_session_id": "", "@session_origin": "web",
+                                  "@claude_state": "", "@born": "1000", "_screen": screen}, **extra))
+                (self.d / "codex.json").write_text(json.dumps({"identity": {}}))
+                env = {"FLEET_GATE_NOW": "1030", "FLEET_GATE_ALERTS": str(fake), "FAKE_ALERTS": str(alerts)}
+                st = self.gate("status", "--fid", FID, env=env)
+                self.assertEqual((st["can_talk"], st["why"]), (False, "checking"), "its first minute is still a start")
+                self.assertNotIn("screen", st)
+                env["FLEET_GATE_NOW"] = "1100"
+                for _ in range(2):
+                    st = self.gate("status", "--fid", FID, env=env)
+                    self.assertEqual((st["can_talk"], st["why"]), (False, "start_blocked"))
+                    self.assertEqual(st["screen"], "  Meet GPT-6 Sol\n  1. Try new model\n  2. Use existing model")
+                r = self.say("hello", env=env)
+                self.assertEqual((r["state"], r["reason"]), ("refused", "start_blocked"))
+                lines = alerts.read_text().splitlines()
+                self.assertEqual(len(lines), 1, "one alert per window, however often the page asks")
+                self.assertIn("breakage", lines[0]); self.assertIn("Meet GPT-6 Sol", lines[0])
+                alerts.unlink()
+                shutil.rmtree(self.d / "conf/session-gate", ignore_errors=True)
+                self.setopt(**{"@session_origin": ""})
+                st = self.gate("status", "--fid", FID, env=env)
+                self.assertNotEqual(st["why"], "start_blocked", "a terminal's own session is never judged")
+                self.setopt(**{"@session_origin": "web", "@agent_status": '{"state":"idle"}'})
+                st = self.gate("status", "--fid", FID, env=env)
+                self.assertNotEqual(st["why"], "start_blocked", "a session that reported came up")
+                self.assertFalse(alerts.exists())
 
     def test_N_cold_codex_identity(self):
         self.window({"@cc_agent": "codex", "@cc_session_id": ""})

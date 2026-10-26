@@ -410,6 +410,8 @@ class Control(NativeExitSubmission):
         An identity (issue #1646, a worker_id's `<fleet_id>` half) matches the
         window whose @fleet_id it is, whatever key that window answers to now."""
         snapshot = self.workers(fleet)
+        if key.startswith("fid:") and is_identity(key[4:]):
+            key = key[4:]            # a keyless session's address, as fleet-worker-stop.sh takes it
         if is_identity(key):
             return [w for w in snapshot["workers"] if w.get("identity") == key], snapshot
         return [w for w in snapshot["workers"] if w["key"] == key
@@ -671,7 +673,10 @@ class Control(NativeExitSubmission):
                     raise Fault("UNKNOWN_OUTCOME", "Restore did not confirm exactly one window with this FID")
                 return {"resumed": matches[0], "observed_at": snapshot["observed_at"]}
             matches, _ = self.target(fleet, key, action)
-            key = matches[0]["key"]
+            # a no-repo session has no key (YASF: a web-opened one stuck at its start
+            # could not be stopped — "" matched every keyless window, AMBIGUOUS): its
+            # identity is its address, fid:<identity>, which the stop adapter takes
+            key = matches[0]["key"] or "fid:" + key
         if action == "worker_answer":
             return self.execute_answer(fleet, key, params["answer"], actor)
         if action == "worker_stop":

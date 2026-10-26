@@ -27,7 +27,7 @@ import { NOTHING, applyFrame, parseEvent, prependOlder, writeAccess, type Frame,
 // false for an older session (read-only); queue: its lines waiting; ask: what it asks now
 export type ViewState = { agent: string; session: string; busy: boolean; state: string; label: string; holder?: string;
   history_status?: string;
-  can_talk?: boolean | null; talk_reason?: string; queue?: Queued[]; ask?: ViewAsk | null;
+  can_talk?: boolean | null; talk_reason?: string; talk_screen?: string; queue?: Queued[]; ask?: ViewAsk | null;
   continuation?: { state: string; to: string; message: string } };
 // why there is nothing to follow: the entry's or the service's code
 // (not_yours · old_agent · no_session · home_down · gone · …) and its words
