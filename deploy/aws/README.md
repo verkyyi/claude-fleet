@@ -2,11 +2,12 @@
 
 A **10-person trial** of the hub outside China (task PNWW): one EC2 instance
 running k3s, one small RDS Postgres, one Elastic IP, the address
-`core.tokenman.io`. It is not production — production is the Shenzhen ACK
-deployment (`deploy/k8s/overlays/prod`, in the private deploy repo, released by
-the train's hub-deploy), and nothing here changes it: the overlay is new
-(`deploy/k8s/overlays/aws-k3s`), `deploy/k8s/base` is untouched, and hub-deploy
-never renders or applies this tree.
+`core.tokenman.io`. Production is the Shenzhen ACK deployment
+(`deploy/k8s/overlays/prod`, in the private deploy repo, released by the train's
+hub-deploy) until repo variable `FLEET_HUB_TARGET` says `aws-k3s` — then the
+release train ships the hub here instead ([«The release train»](#the-release-train)).
+The overlay is its own (`deploy/k8s/overlays/aws-k3s`), `deploy/k8s/base` is
+untouched, and with `FLEET_HUB_TARGET` unset hub-deploy never touches this box.
 
 ```
 deploy/k8s/overlays/aws-k3s/   the kustomize overlay (hub · workers · issuer · traefik)
@@ -84,8 +85,10 @@ by itself):
 2. **RDS**: Postgres 16, db.t4g.micro, in the box's VPC, its security group open
    to the box only. Put the URL (`postgres://user:pass@host:5432/fleet?sslmode=require`)
    in SSM Parameter Store as a SecureString, e.g. `/fleet-core/db-url`.
-3. **IAM instance role** for the box: `AmazonEC2ContainerRegistryReadOnly`, and
-   `ssm:GetParameter` + `kms:Decrypt` on that parameter. Set the instance's
+3. **IAM instance role** for the box: `AmazonEC2ContainerRegistryReadOnly`,
+   `ssm:GetParameter` + `kms:Decrypt` on that parameter, and
+   `AmazonSSMManagedInstanceCore` (the SSM agent — Ubuntu's AMIs ship it — must be
+   registered for the release train to reach the box). Set the instance's
    metadata **hop limit to 1** (IMDSv2 required): then only the host — the ECR
    refresh, the bootstrap — reaches the role, never a pod. (`STORAGE_CLASS=gp3`
    needs the EBS CSI controller to reach it too: hop limit 2 plus
@@ -162,6 +165,117 @@ local-path provisioner binds the pods' `ReadWriteOncePod` claims (if a claim
 stays Pending, use `STORAGE_CLASS=gp3`); that the HTTP-01 challenge passes
 through traefik with the redirect middleware; that render.py's pods run under
 kube-router's NetworkPolicy as they do under ACK's (which enforces none).
+
+## The release train
+
+With repo variable **`FLEET_HUB_TARGET=aws-k3s`** the release train ships the hub
+to this box instead of ACK, with the same guarantees (one commit = `TRAIN_SHA`;
+never backwards — `bin/fleet-train-hub.sh` reads this hub's `/version`; the hub
+and stable from the same commit; no redeploy when the image's source,
+`deploy/k8s/`, the site and the console are unchanged; a red stage holds the
+lane). Unset or `ack` = the ACK road, byte for byte.
+
+| Stage | aws-k3s |
+|---|---|
+| every stage's hub (`FLEET_HUB_URL` in release-train.yml) | `FLEET_HUB_URL_AWS`, else `https://core.tokenman.io` |
+| `hub build` (hub-deploy.yml phase build) | ubuntu-latest, buildx, `HUB_AWS_PLATFORM` (default `linux/amd64`), pushed to `HUB_PUSH_REPO_AWS:prod-<sha7>` labelled `org.opencontainers.image.revision=<TRAIN_SHA>`; ECR login through GitHub's OIDC token → `AWS_DEPLOY_ROLE_ARN` |
+| `hub` (phase deploy) | job `deploy-aws` (`deploy` is skipped): the pause gate · `fleet-train-hub.sh` (only forward) · `fleet-train-prebuild.sh verify` on ECR (the tag still the build's digest, revision `TRAIN_SHA`) · the image pinned `<repo>:<tag>@<digest>` · `bin/fleet-hub-aws-deploy.sh deploy` · `release.sh health` on `HUB_URLS_AWS` (else `FLEET_HUB_URL_AWS`, else `https://core.tokenman.io`) · on a red health check `fleet-hub-aws-deploy.sh rollback` |
+| the hand road (Actions → hub-deploy → Run workflow) | the same job; `tag=prod-<sha7>` deploys an image already in ECR (the rollback) |
+
+`bin/fleet-hub-aws-deploy.sh` finds the box — `AWS_BOX_INSTANCE_ID`, else the
+ONE running instance tagged `Name=tokenman-core` (`AWS_BOX_TAG`; none or two is
+refused, nothing sent) — and sends one `AWS-RunShellScript` command through SSM
+(root on the box): fetch the commit into the box's checkout (`AWS_BOX_REPO_DIR`,
+default `/home/ubuntu/src`, git run as that directory's owner), record the live
+`deploy.env` + checkout (`deploy.env.prev`, `deploy.env.prev-ref`), check out the
+commit detached, set `HUB_IMAGE` in `/etc/fleet-core/deploy.env`, run
+`bootstrap.sh apply` (it waits for the rollout). A failed apply puts the recorded
+release back and applies it again; the job waits for the command, prints the
+box's stdout / stderr, and is red on anything but Success (a command still
+running after 30 minutes is cancelled). BREAK-IT `train-aws-ssm-fails`.
+
+### Repo variables
+
+| Variable | Value |
+|---|---|
+| `FLEET_HUB_TARGET` | `aws-k3s` (the switch; unset = ACK) |
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/gha-claudefleet-hub-deploy` (a variable — an ARN is no secret; a secret of the same name is read too) |
+| `HUB_PUSH_REPO_AWS` | `<ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/tokenman/ccquota` |
+| `AWS_REGION` | optional, default `us-west-2` |
+| `AWS_BOX_INSTANCE_ID` | optional: `i-…`; unset = the one running instance tagged `Name=tokenman-core` (`AWS_BOX_TAG` changes the tag) |
+| `AWS_BOX_REPO_DIR` | optional, default `/home/ubuntu/src` (the box's checkout `bootstrap.sh` runs from) |
+| `HUB_AWS_PLATFORM` | optional, default `linux/amd64`; `linux/arm64` for a Graviton box |
+| `FLEET_HUB_URL_AWS` | optional, default `https://core.tokenman.io` (the train's stages) |
+| `HUB_URLS_AWS` | optional: the addresses the health check reads, space-separated (default `FLEET_HUB_URL_AWS`) |
+
+### The release train's role
+
+One IAM role, assumed by both hub-deploy jobs (`build` and `deploy-aws`; both run
+in environment `prod`, which only `master` may use). First add GitHub's OIDC
+provider to the account once (`token.actions.githubusercontent.com`, audience
+`sts.amazonaws.com`). Trust policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com" },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:verkyyi/claude-fleet:environment:prod"
+        }
+      }
+    }
+  ]
+}
+```
+
+Permission policy (`<INSTANCE_ID>` = the box; to follow a replaced box without
+editing the policy, use `arn:aws:ec2:us-west-2:<ACCOUNT_ID>:instance/*` with the
+condition `"StringEquals": {"ssm:resourceTag/Name": "tokenman-core"}` instead):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "EcrLogin", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*" },
+    {
+      "Sid": "EcrPushTheHub",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
+        "ecr:DescribeImages", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload", "ecr:PutImage"
+      ],
+      "Resource": "arn:aws:ecr:us-west-2:<ACCOUNT_ID>:repository/tokenman/ccquota"
+    },
+    {
+      "Sid": "RunOnTheBox",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ec2:us-west-2:<ACCOUNT_ID>:instance/<INSTANCE_ID>",
+        "arn:aws:ssm:us-west-2::document/AWS-RunShellScript"
+      ]
+    },
+    {
+      "Sid": "WatchTheCommand",
+      "Effect": "Allow",
+      "Action": ["ssm:GetCommandInvocation", "ssm:CancelCommand"],
+      "Resource": "*"
+    },
+    { "Sid": "FindTheBox", "Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*" }
+  ]
+}
+```
+
+What the role cannot do: pull or push any other repository, run any other
+document, reach any other instance, read a parameter or a secret. Whoever can
+run commands on the box is root there — keep `prod` restricted to `master`.
 
 ## Long links across a hub release
 
