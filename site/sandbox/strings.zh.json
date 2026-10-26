@@ -58,6 +58,7 @@
   "terms": "用户协议",
   "privacy": "隐私政策",
   "terms_path": "/terms",
+  "service_health": "服务健康",
   "privacy_path": "/privacy",
   "disc": "© 2026 {brand}"
 }

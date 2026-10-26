@@ -70,7 +70,8 @@ var routeAccess = map[string]string{
 	TermHealthPath:         accessAdmin,  // the browser terminals' numbers (RMVE)
 	ReleaseKeysPath:        accessAdmin,  // the signing keys' state, 404 to a member (claude-fleet#3937)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
-	"/meter.json": accessPublic,
+	"/meter.json":    accessPublic,
+	PublicHealthPath: accessPublic,
 	// The tab icon, a copy of the site's logo (claude-fleet#3946).
 	"/favicon.svg": accessPublic, "/favicon.ico": accessPublic, "/apple-touch-icon.png": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,

@@ -124,7 +124,7 @@ const PersonMenu: FC = () => {
             {ME_TABS.filter((t) => t.id !== "account").map((t) => (
               <DropdownMenuItem key={t.id} onSelect={() => go(t.path)}><t.icon />{t.label}</DropdownMenuItem>
             ))}
-            <DropdownMenuItem onSelect={() => go("/health")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => location.assign("/status")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
             {isAdmin(me) ? (
               <DropdownMenuItem asChild className="text-clay focus:text-clay [&_svg]:!text-clay">

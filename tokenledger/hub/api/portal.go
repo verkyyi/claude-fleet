@@ -62,7 +62,9 @@ func (s *Server) portalHost(r *http.Request) bool {
 // Only human page routes move. Unknown paths, APIs, upgrades, authentication
 // callbacks and install/client downloads keep their existing handlers.
 func portalPage(p string) bool {
-	if strings.HasPrefix(p, "/auth/") || strings.HasPrefix(p, "/fleet/") {
+	// Public /status uses the console assets on each edition host. Static files
+	// must stay same-origin even when ordinary human pages move to the portal.
+	if strings.HasPrefix(p, AppPrefix+"/assets/") || p == AppManifestPath || strings.HasPrefix(p, "/auth/") || strings.HasPrefix(p, "/fleet/") {
 		return false
 	}
 	for _, base := range []string{"/app", "/admin", "/apply", "/signin", "/try", "/i", "/docs", "/en", "/zh", "/terms", "/privacy", "/site"} {

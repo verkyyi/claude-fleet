@@ -1,7 +1,7 @@
 // main.tsx — the member side (/app, EPIC #3923 C3): the shell and the page
 // table, routed by react-router under /app. The review build (--mode proto)
 // runs the same app over a mock API, in memory (it lives in an iframe's srcdoc).
-import { StrictMode, Suspense, useState } from "react";
+import { StrictMode, Suspense, lazy, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, MemoryRouter, Navigate, Route, Routes } from "react-router";
 // first: a view (?as=, claude-fleet#3944) rides every read from the start
@@ -27,8 +27,14 @@ function App() {
   );
 }
 
+const PublicHealth = lazy(() => import("./pages/health"));
+
 async function start() {
   const root = createRoot(document.getElementById("root")!);
+  if (!__PROTO__ && location.pathname.replace(/\/$/, "") === "/status") {
+    root.render(<StrictMode><Suspense fallback={null}><PublicHealth publicPage /></Suspense></StrictMode>);
+    return;
+  }
   if (__PROTO__) {
     const first = await (await import("@/proto/mock")).install();
     root.render(<StrictMode><MemoryRouter initialEntries={[first]}><App /></MemoryRouter></StrictMode>);
