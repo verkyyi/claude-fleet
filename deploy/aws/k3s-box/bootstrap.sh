@@ -19,7 +19,7 @@
 #   PUBLIC_ORIGIN        the hub's public URL (CCQUOTA_*PUBLIC_URL), default https://$HUB_HOST;
 #                        another name's when the hub took over another hub's address
 #   EDGE_TRUSTED_IPS     CIDRs whose X-Forwarded-* traefik keeps (a reverse proxy in
-#                        front, e.g. the Shenzhen ingress' egress 47.106.171.142/32);
+#                        front, e.g. the Shenzhen ingress' egress address as a /32);
 #                        unset = traefik trusts nobody's
 #   EXTRA_HOSTS          more names served by the same hub, space-separated, each in
 #                        the certificate extra-tls (e.g. HUB_HOST=tokenman.io
