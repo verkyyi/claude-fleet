@@ -167,6 +167,10 @@ func runAgentMachine(args []string) error {
 		AccountState:  filepath.Join(filepath.Clean(*state), "_machine"),
 		ServiceLogin:  service,
 		LinuxTenants:  filepath.Join(filepath.Dir(filepath.Clean(*state)), "linux-tenants"),
+		// …and the one writer of the hub's address, beside this binary, for a
+		// moved hub (task PNWW) — never on the seat (root's files).
+		HubMove:        seatDrops(*core, "following a moved hub (root's files)", machineScript("fleet-hub-move.py")),
+		MachineEnvFile: *machineEnv,
 		// …and, in one person's pod, CapUserPod (claude-fleet#3550).
 		UserPod: userPod == "1",
 		Core:    *core,

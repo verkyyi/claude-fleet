@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -126,6 +127,11 @@ type MachineConfig struct {
 	Core         string
 	ServiceLogin string
 	LinuxTenants string
+	// HubMove is the root runtime's fleet-hub-move.py (task PNWW): the one
+	// writer a moved hub is followed with; "" = not followed. MachineEnvFile
+	// is machine.env, whose directory is the machine half's --state.
+	HubMove        string
+	MachineEnvFile string
 	// UserPod is a machine that is one person's pod (claude-fleet#3550,
 	// FLEET_USER_POD=1): its hello lists CapUserPod. false = as before.
 	UserPod bool
@@ -157,6 +163,11 @@ type machineLink struct {
 	// acct runs the account ops of a machine that opens its own logins
 	// (claude-fleet#3210); nil on every other machine.
 	acct *Agent
+	// hubOnce / tenants follow a moved hub (task PNWW): each address tried
+	// once; every login served, whose files are rewritten as that login.
+	hubOnce hubFollowOnce
+	runCtx  context.Context
+	tenants []*RunAs
 }
 
 // setRefused records (why != "") or clears a login's refused hello.
@@ -271,6 +282,7 @@ func (l *lane) drop() {
 
 // run keeps the machine link up until ctx ends.
 func (ml *machineLink) run(ctx context.Context) {
+	ml.runCtx = ctx
 	if ml.cfg.KeyFile != "" {
 		// the machine's own key (claude-fleet#3710): fleet node install made
 		// and registered it; this confirms it (and makes it on an older install)
@@ -364,6 +376,11 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("hub answered the machine hello with %q", reply.Type)
 	}
 	dcancel()
+	// the hub's one machine-facing address (task PNWW): followed once verified
+	var welcome control.Welcome
+	if json.Unmarshal(reply.Payload, &welcome) == nil {
+		ml.followHub(ctx, welcome.HubURL)
+	}
 
 	ml.mu.Lock()
 	ml.conn = conn
@@ -584,6 +601,7 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 		registerTenant(a.cfg.RunAs)
 		defer unregisterTenant(a.cfg.RunAs)
 		a.machine = ml
+		ml.tenants = append(ml.tenants, a.cfg.RunAs)
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)

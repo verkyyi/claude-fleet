@@ -338,6 +338,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		log.Printf("control channel: hub (proto %d, min %d) will not send writes to this node (proto %d): %s",
 			w.HubProto, w.MinProto, control.Proto, w.Reason)
 	}
+	// the hub's one machine-facing address (task PNWW): followed once verified
+	a.followHub(ctx, w.HubURL)
 	dcancel()
 
 	// The reader: the hub's messages — account ops for an admin agent

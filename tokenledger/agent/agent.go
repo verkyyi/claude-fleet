@@ -265,6 +265,9 @@ type Config struct {
 	// for the hub's service_control (claude-fleet#2527); set only in machine
 	// mode, where the agent is root — "" refuses the write.
 	ServiceCtl string
+	// HubMoveScript is the writer a plain agent follows a moved hub with
+	// (task PNWW); "" = ~/.claude/fleet/bin/fleet-hub-move.py under Home.
+	HubMoveScript string
 	// ServicesFile is the machine daemon's state.json (claude-fleet#2797): the
 	// register a tenant finds a service's log path in for the hub's
 	// service_log; set only in machine mode — "" refuses it.
@@ -317,6 +320,12 @@ type Agent struct {
 	// signer is KeyFile once the hub took it (claude-fleet#3710); nil = the
 	// bearer token.
 	signer atomic.Pointer[nodesig.Signer]
+	// hubOnce / hubMoved / quit follow a moved hub (task PNWW, hub_follow.go):
+	// each announced address tried once, the one Run ended for, and Run's end.
+	hubOnce  hubFollowOnce
+	hubMoved atomic.Pointer[string]
+	quit     context.CancelFunc
+	runCtx   context.Context
 	// svcLogs are the service-log follows open on this login's lane
 	// (claude-fleet#2797), by the hub's op_id.
 	svcLogs svcLogFollows
@@ -557,6 +566,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.cfg.Once {
 		return a.cycle(ctx)
 	}
+	// A moved hub followed (task PNWW) ends Run like a stop does.
+	ctx, quit := context.WithCancel(ctx)
+	defer quit()
+	a.quit, a.runCtx = quit, ctx
 
 	// The heartbeat runs on its own cadence: it reads a handful of small files
 	// and must stay responsive even while a first scan is grinding through a
@@ -1385,6 +1398,11 @@ func (a *Agent) authorize(req *http.Request) {
 }
 
 // authValue is the Authorization a dial to rawURL carries.
+// authValueFor is the Authorization a request to rawURL carries for s / token.
+func authValueFor(s *nodesig.Signer, token, method, rawURL string) string {
+	return nodesig.Authorization(s, token, method, rawURL)
+}
+
 func (a *Agent) authValue(method, rawURL string) string {
 	return nodesig.Authorization(a.signer.Load(), a.cfg.Token, method, rawURL)
 }
