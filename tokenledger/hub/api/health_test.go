@@ -197,3 +197,27 @@ func TestHealthReleaseReadsCurrentManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthTrialIsAlsoSignedIn(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	setHubSetting(t, h.srv, TrialKey, "on")
+	c := trialSession(t, h, "p:00000000-0000-4000-8000-000000004060")
+	r, _ := http.NewRequest("GET", h.http.URL+HealthPath, nil)
+	r.AddCookie(c)
+	resp, e := noFollow.Do(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if e = json.NewDecoder(resp.Body).Decode(&out); e != nil {
+		t.Fatal(e)
+	}
+	if resp.StatusCode != 200 || out["admin"] != nil {
+		t.Fatalf("trial: %d %v", resp.StatusCode, out)
+	}
+	if !trialRoute(AppPrefix + "/health") {
+		t.Fatal("health page is not available to trial members")
+	}
+}
