@@ -902,3 +902,6 @@ FLEET_TASK_RESPAWN                 seam: the spawner fleet-task-record.sh respaw
 FLEET_GATE_DIR                    seam: gate fixture root shared by shell delivery and Python wake receipts (C4)
 FLEET_PEER_DELIVERY_ID            handoff: hub relay's stable delivery id for the local peer sender and queue (C4)
 FLEET_TASK_CONTINUATION_STOP       handoff: canonical never-claimed stop ID; mutually exclusive with native exit continuation
+FLEET_AWS                          seam: the aws command fleet-hub-aws-deploy.sh runs (default aws; a fixture in its drill)
+FLEET_SSM_TIMEOUT                  knob: seconds fleet-hub-aws-deploy.sh waits for the box's SSM command before cancelling it red (default 1800)
+FLEET_SSM_POLL                     knob: seconds between fleet-hub-aws-deploy.sh's SSM status polls (default 5)
