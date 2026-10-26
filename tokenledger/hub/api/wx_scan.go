@@ -62,6 +62,8 @@ const (
 	wxPurposeReach = "reach"
 )
 
+const wxHealthScene = wxSceneMax - 1 // reserved for unpublished synthetic login QR codes
+
 var (
 	// wxSceneTTL is a code's life: what WeChat is asked for, and what the
 	// page says (「二维码 10 分钟内有效」).
@@ -107,7 +109,7 @@ func wxBrowserHashOf(r *http.Request) string {
 func randomScene() int64 {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	return wxSceneMin + int64(binary.BigEndian.Uint64(b[:])%uint64(wxSceneMax-wxSceneMin))
+	return wxSceneMin + int64(binary.BigEndian.Uint64(b[:])%uint64(wxHealthScene-wxSceneMin))
 }
 
 // wxScene draws a code for this browser and purpose (owner: who a bind /

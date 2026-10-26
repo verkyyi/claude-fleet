@@ -307,7 +307,7 @@ func (s *Server) trialHold(host string, now time.Time) string {
 func trialRoute(p string) bool {
 	switch p {
 	case "/", AppPrefix, AppPrefix + "/", ChatPagePath, "/v1/me", "/v1/me/usage",
-		TryPagePath, TryClaimPath, TryTimingPath, TryStatePath, TryBeatPath, TryPausePath:
+		TryPagePath, TryClaimPath, TryTimingPath, TryStatePath, TryBeatPath, TryPausePath, HealthPath, AppPrefix + "/health":
 		return true
 	case TryOwnPagePath, MeSubsPath, MeSubsLoginPath, MeSubsFinishPath, MeSubsPausePath, MeSubsDeletePath:
 		// 接上我自己的订阅 (WACK C1): with fleet.trial.sources=byo a trial

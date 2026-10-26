@@ -1,4 +1,5 @@
 import { retryDelay } from "@/shared/terminal-retry";
+import { clockOpened, clockShown, clockReplied, replied, sendClock } from "../start-clock";
 // chat.ts — the one conversation (issue #3567), as assistant-ui's external store
 // (issue #3637). The server's protocol is unchanged: GET /api/conversation for
 // the whole history, POST /api/turn streams NDJSON items, /api/stop, /api/answer
@@ -261,8 +262,9 @@ async function readLines(r: Response, onItems: (items: Record<string, unknown>[]
 // the new-session screen (GR5E C3) both go through it. code is the entry's word
 // when it refused (no_home · home_down · …), "" when it could not be asked.
 export async function newChat(p: Provider, signal?: AbortSignal): Promise<{ ok: true } | { ok: false; code: string; error: string }> {
+  const t0 = Date.now();
   const r = await chatFetch(at(`${API}/new`, p), { method: "POST", headers: H, signal, body: "{}" }).catch(() => null);
-  if (r?.ok) return { ok: true };
+  if (r?.ok) { clockOpened(`legacy:${p}`, t0, p); return { ok: true }; }
   const j = r ? await r.json().catch(() => ({})) : {};
   return { ok: false, code: String(j.code || ""), error: String(j.error || (r ? `HTTP ${r.status}` : "")) };
 }
@@ -603,6 +605,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     } catch { await load(); setNotice("无法确认回答是否送达，请查看对话后重试。"); }
   }, [asks, load]);
 
+  useEffect(() => { clockShown(`legacy:${provider}`); if (homeSeen.current && replied(items)) sendClock(clockReplied(`legacy:${provider}`)); }, [items, provider]);
   const messages = useMemo(() => toMessages(items, asks, answered), [items, asks, answered]);
 
   // a refusal with a time on it lifts by itself: read the conversation again then

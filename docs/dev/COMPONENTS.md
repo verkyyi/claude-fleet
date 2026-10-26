@@ -19,6 +19,7 @@
 
 | 组件 | 类别 | 理由 |
 |---|---|---|
+| 服务健康页与 hub 合成探测 | 核心 | T1111 / K2CN：公开服务状态与启动等待，复用 hub、已有数据和通知，保持成员数据隔离；不新增运维常驻服务。 |
 | Claude 模型与界面默认项（`effortLevel`、`outputStyle`、`theme`、`tui`） | 移除 | #4323 已从新装默认文件移除四项；用户已有值保留，回归审计逐项检测。 |
 | 免确认运行（Claude `bypassPermissions` / `skipDangerousModePermissionPrompt`；Codex `approval_policy` / `sandbox_mode`） | 待定 | 待发起人定：本批明确不改，随托管隔离环境一起决定；守卫只防手滑，不构成安全隔离。 |
 | Codex 思考档位（`model_reasoning_effort`）及其它模型设置 | 待定 | 待发起人定：当前 Codex 仍填入 `high`；本批四键指标仅指 Claude，不能把读数 0 解释成两种模型的全部设置都原生。 |

@@ -230,3 +230,6 @@ domain, the feature shows as disabled.
 Live previews serve running applications. Saved HTML/Markdown remains accessible
 through the existing Space / LivePage entry. Trial accounts need an active managed
 login and their own Task; chat-only trials without Task identity cannot register.
+
+
+See [Service health](health.md) for availability, first-reply latency and recent incidents.

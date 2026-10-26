@@ -8,7 +8,9 @@
 export type Clock = { t0: number; open?: number; shown?: number; agent?: string };
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-const KEY = (worker: string) => `fleet:start-clock:${worker}`;
+// The same session may be read as <fleet>/<fid> or fid:<fid> once its
+// history row arrives. Keep the clock under that lifelong identity.
+const KEY = (worker: string) => `fleet:start-clock:${worker.startsWith("fid:") ? worker.slice(4) : worker.includes("/") ? worker.slice(worker.lastIndexOf("/") + 1) : worker}`;
 // a clock not stopped within this long was not one sitting (the hub's bound)
 export const CLOCK_MAX_MS = 600 * 1000;
 
@@ -45,17 +47,48 @@ export function clockReplied(worker: string, s: Store | null = store(), now = Da
   s.removeItem(KEY(worker));
   const ms = now - c.t0;
   const within = (v?: number) => (typeof v === "number" && v >= 0 && v <= ms ? Math.round(v) : 0);
-  return { ms: Math.round(ms), open_ms: within(c.open), shown_ms: within(c.shown), agent: c.agent || "", tz };
+  return { ms: Math.max(1, Math.round(ms)), open_ms: within(c.open), shown_ms: within(c.shown), agent: c.agent || "", tz };
 }
 
 function zone(): string {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
 }
 
+// Keep completed clocks until acknowledged; a stable id makes an ambiguous
+// response safe to retry. No transcript or user identifier enters the queue.
+const OUTBOX = "fleet:timing-outbox";
+type Pending = NonNullable<ReturnType<typeof clockReplied>> & { id: string };
+let memory: Pending[] = [];
+let sending = false;
+function pending(): Pending[] {
+  try { return JSON.parse(store()?.getItem(OUTBOX) || "null") || memory; } catch { return memory; }
+}
+function keep(xs: Pending[]) {
+  memory = xs.slice(-50);
+  try { store()?.setItem(OUTBOX, JSON.stringify(memory)); } catch { /* memory fallback */ }
+}
+export async function flushClocks() {
+  if (sending) return;
+  sending = true;
+  try {
+    for (const body of pending()) {
+      const r = await fetch("/v1/chat/timing", { method: "POST", cache: "no-store", keepalive: true,
+        headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok && r.status !== 400 && r.status !== 413) break;
+      keep(pending().filter((x) => x.id !== body.id));
+    }
+  } catch { /* retry on the next tick, reconnect or page load */ }
+  finally { sending = false; }
+}
 export function sendClock(body: ReturnType<typeof clockReplied>) {
   if (!body) return;
-  void fetch("/v1/chat/timing", { method: "POST", cache: "no-store", keepalive: true,
-    headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+  keep([...pending(), { ...body, id: crypto.randomUUID() }]);
+  void flushClocks();
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => void flushClocks());
+  window.setInterval(() => void flushClocks(), 15000);
+  void flushClocks();
 }
 
 // a reply has begun: any assistant words in what the page holds

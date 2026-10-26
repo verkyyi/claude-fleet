@@ -348,7 +348,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
   const failed = pending.filter((p) => p.state === "failed");
   // 新会话's clock (task PNWW): this page drawn, then the reply's first words from the session's machine
   useEffect(() => { if (worker) clockShown(worker); }, [worker]);
-  useEffect(() => { if (worker && layer === "home" && replied(items)) sendClock(clockReplied(worker)); }, [worker, layer, items]);
+  useEffect(() => { if (worker && replied(items)) sendClock(clockReplied(worker)); }, [worker, layer, items]);
   return { runtime, state, gate, loaded, live, read, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
     busy: !!state?.busy || (canTalk && sending) };
 }

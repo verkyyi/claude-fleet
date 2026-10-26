@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS fleet_chat_timings (
 
 // ChatTiming is one new web session's clock.
 type ChatTiming struct {
+	ID      string
 	At      time.Time
 	MS      int64
 	OpenMS  int64
@@ -37,19 +38,41 @@ func (s *Store) ensureChatTimings() error {
 	if _, err := s.write.Exec(s.d.ddl(chatTimingsSchema)); err != nil {
 		return fmt.Errorf("create chat timings table: %w", err)
 	}
-	return nil
+	_, err := s.write.Exec(`UPDATE fleet_chat_timings SET at = at * 1000 WHERE at > 0 AND at < 100000000000`)
+	return err
 }
 
 // RecordChatTiming keeps one clock.
 func (s *Store) RecordChatTiming(t ChatTiming) error {
-	_, err := s.write.Exec(`INSERT INTO fleet_chat_timings (at, ms, open_ms, shown_ms, agent, machine, tz) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.At.Unix(), t.MS, t.OpenMS, t.ShownMS, t.Agent, t.Machine, t.TZ)
-	return err
+	tx, err := s.write.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if t.ID != "" {
+		r, e := tx.Exec(`INSERT INTO fleet_chat_receipts(id,at) VALUES(?,?) ON CONFLICT(id) DO NOTHING`, t.ID, t.At.UnixMilli())
+		if e != nil {
+			return e
+		}
+		n, e := r.RowsAffected()
+		if e != nil {
+			return e
+		}
+		if n == 0 {
+			return nil
+		}
+	}
+	_, err = tx.Exec(`INSERT INTO fleet_chat_timings (at, ms, open_ms, shown_ms, agent, machine, tz) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.At.UnixMilli(), t.MS, t.OpenMS, t.ShownMS, t.Agent, t.Machine, t.TZ)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ChatTimings are the clocks kept at or after since, oldest first.
 func (s *Store) ChatTimings(since time.Time) ([]ChatTiming, error) {
-	rows, err := s.write.Query(`SELECT at, ms, open_ms, shown_ms, agent, machine, tz FROM fleet_chat_timings WHERE at >= ? ORDER BY at`, since.Unix())
+	rows, err := s.write.Query(`SELECT at, ms, open_ms, shown_ms, agent, machine, tz FROM fleet_chat_timings WHERE (CASE WHEN at < 100000000000 THEN at * 1000 ELSE at END) >= ? ORDER BY (CASE WHEN at < 100000000000 THEN at * 1000 ELSE at END)`, since.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +84,10 @@ func (s *Store) ChatTimings(since time.Time) ([]ChatTiming, error) {
 		if err := rows.Scan(&at, &t.MS, &t.OpenMS, &t.ShownMS, &t.Agent, &t.Machine, &t.TZ); err != nil {
 			return nil, err
 		}
-		t.At = time.Unix(at, 0)
+		if at < 100000000000 {
+			at *= 1000
+		} // compat-1v: 下一批删 — old replicas still write seconds
+		t.At = time.UnixMilli(at)
 		out = append(out, t)
 	}
 	return out, rows.Err()
