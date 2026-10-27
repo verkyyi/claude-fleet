@@ -2188,9 +2188,9 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				body.Value = b.String()
 			}
 		case (strings.HasPrefix(body.Key, SvcBudgetPrefix) && svcLabelRE.MatchString(body.Key[len(SvcBudgetPrefix):])) ||
-			(strings.HasPrefix(body.Key, SvcTenantBudgetPrefix) && svcLabelRE.MatchString(body.Key[len(SvcTenantBudgetPrefix):])):
+			svcTenantBudgetKey(body.Key):
 			// A service's budget, whole or per tenant (claude-fleet#4006):
-			// day=<tokens>,week=<tokens>; "" removes it (= no limit).
+			// day=<tokens>,week=<tokens>; "" removes it (distinct tenants fall back to the uniform budget).
 			if body.Value != "" {
 				b, err := ParseSvcBudget(body.Value)
 				if err != nil {
@@ -2198,6 +2198,23 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				body.Value = b.String()
+				if body.Value == "" && strings.HasPrefix(body.Key, SvcTenantBudgetPrefix) &&
+					strings.Contains(strings.TrimPrefix(body.Key, SvcTenantBudgetPrefix), ".") {
+					body.Value = "day=0,week=0"
+				}
+			}
+		case strings.HasPrefix(body.Key, "fleet.svc.") && strings.HasSuffix(body.Key, ".tenants") &&
+			svcLabelRE.MatchString(strings.TrimSuffix(strings.TrimPrefix(body.Key, "fleet.svc."), ".tenants")):
+			if body.Value != "" {
+				tenants := strings.Split(body.Value, ",")
+				for i, tenant := range tenants {
+					tenants[i] = strings.TrimSpace(tenant)
+					if !svcTenantRE.MatchString(tenants[i]) {
+						httpError(w, http.StatusBadRequest, "tenants is a comma list of [a-z0-9-]{1,32}, or empty to disable all named tenants")
+						return
+					}
+				}
+				body.Value = strings.Join(tenants, ",")
 			}
 		case strings.HasPrefix(body.Key, "fleet.svc.") && strings.HasSuffix(body.Key, ".yield_pct") &&
 			svcLabelRE.MatchString(strings.TrimSuffix(strings.TrimPrefix(body.Key, "fleet.svc."), ".yield_pct")):
@@ -2263,7 +2280,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>[.<tenant>], fleet.svc.<svc>.tenants, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()

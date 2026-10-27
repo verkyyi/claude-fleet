@@ -420,6 +420,23 @@ func (s *Server) verifySessionCred(tok, wantPrincipal, wantProvider string, fres
 		s.sessCred.put(c.ID, e)
 	}
 	row := e.row
+	// Tenant policy is live even when the session row is cached. Run tenants
+	// retain their existing contract; only standing passes use this allowlist.
+	if row.Machine == svcStandingMachine {
+		if row.Tenant != c.Tenant {
+			v.Reason = "does not match the tenant on record"
+			return v, c
+		}
+		allowed, err := s.svcTenantAllowed(c.Principal, c.Tenant)
+		if err != nil {
+			v.Reason = "hub error: " + err.Error()
+			return v, c
+		}
+		if !allowed {
+			v.Revoked, v.Reason = true, "tenant_not_allowed: the service tenant "+c.Tenant+" is disabled"
+			return v, c
+		}
+	}
 	switch {
 	case row.PrincipalID != c.Principal || row.WorkerID != c.WorkerID || row.Machine != c.Machine:
 		v.Reason = "does not match the pass on record"

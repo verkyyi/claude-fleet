@@ -2221,6 +2221,8 @@ drill_svc_standing_pass_escapes() {
     || { WHY="verify no longer re-reads a standing pass's token and principal (fleet_session_cred.go)"; return 1; }
   c11_go_tests svc_pass_test.go TestSvcPassScopeAndShape TestSvcPassNeedsAllowlist TestSvcPassRenew \
     TestSvcPassRevokedWithTokenOrPrincipal TestSvcPassMeteredAndBudgeted TestSvcPassYieldsEveryRequest || return 1
+  c11_go_tests svc_pass_tenant_test.go TestSvcPassTenantValidation TestSvcPassTenantSettings \
+    TestSvcPassTenantRevokedMidLife TestSvcPassTenantUsageAndDistinctBudgets || return 1
   WHAT='常驻服务通行证只认 pass:issue、只给 codex；用量记在服务名下受服务额度与让路约束；令牌吊销 / 主体停用即失效（Go 测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='没有 pass:issue 403、claude 400、无白名单 403、通行证关 503；经真凭据代理 codex 记到 svc:<名> tenant 空、claude 拒；整体到顶 resolve 403 且不再签（429）、人照常；号过 80% 下一次请求就换、全紧等、人照常；续期同一张、别的服务 404、过期在宽限内可续；吊令牌只停它签的、停用主体全停、再启用恢复（go test 六条）'
   SECS=$(since "$t0")

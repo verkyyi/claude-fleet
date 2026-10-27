@@ -196,6 +196,26 @@ func svcBudgets(settings map[string]string, principal string) (whole, tenant Svc
 	return whole, tenant
 }
 
+// svcTenantBudget selects a distinct ceiling, falling back to the uniform one.
+// An empty setting removes the override; day=0,week=0 explicitly lifts it.
+func svcTenantBudget(settings map[string]string, principal, tenant string) SvcBudget {
+	key := SvcTenantBudgetPrefix + svcName(principal)
+	value := settings[key]
+	if tenant != "" && settings[key+"."+tenant] != "" {
+		value = settings[key+"."+tenant]
+	}
+	b, _ := ParseSvcBudget(value)
+	return b
+}
+
+func svcTenantBudgetKey(key string) bool {
+	if !strings.HasPrefix(key, SvcTenantBudgetPrefix) {
+		return false
+	}
+	name, tenant, distinct := strings.Cut(strings.TrimPrefix(key, SvcTenantBudgetPrefix), ".")
+	return svcLabelRE.MatchString(name) && (!distinct || svcTenantRE.MatchString(tenant))
+}
+
 // svcUsageRows is principal's metered buckets of the last week, every tenant.
 func (s *Server) svcUsageRows(principal string, now time.Time) ([]store.SvcUsageRow, error) {
 	since := store.PersonBucketStart(now.Add(-svcWindowWeek).Unix() / int64(store.PersonUsageBucket/time.Second))
@@ -224,7 +244,8 @@ func (s *Server) svcBudgetCheck(principal, tenant string, now time.Time) (SvcBud
 	if err != nil {
 		return SvcBudgetState{}, err
 	}
-	whole, per := svcBudgets(settings, principal)
+	whole, _ := svcBudgets(settings, principal)
+	per := svcTenantBudget(settings, principal, tenant)
 	if !whole.set() && !per.set() {
 		return SvcBudgetState{}, nil
 	}
@@ -463,6 +484,7 @@ func (s *Server) handleSvcUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]SvcTenantUsage, 0, len(by))
 	for _, l := range by {
+		per := svcTenantBudget(settings, p.ID, l.Tenant)
 		if per.set() {
 			st := svcBudgetState(p.ID+" tenant "+l.Tenant, per, svcRowsOf(window, l.Tenant), SvcErrTenantLimit, now)
 			l.Budget = &st

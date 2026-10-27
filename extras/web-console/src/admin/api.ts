@@ -209,7 +209,9 @@ export type MeUsageLimit = {
 export type UsagePerson = { principal: string; name: string; today: number; week: number; limit: MeUsageLimit };
 export type UsageModel = { name: string; provider: string; tokens: number };
 export type UsageMachine = { node: string; today: number; week: number; people: number };
-export type TeamUsage = { people: UsagePerson[]; models: UsageModel[]; machines: UsageMachine[] };
+export type SvcUsageBudget = { used_day: number; used_week: number; limit_day: number; limit_week: number; over: boolean };
+export type UsageService = { principal: string; tenant: string; enabled: boolean; budget: SvcUsageBudget; service_budget: SvcUsageBudget };
+export type TeamUsage = { services?: UsageService[]; people: UsagePerson[]; models: UsageModel[]; machines: UsageMachine[] };
 // /v1/admin/usage/trial: one Beijing day of the trial identities (WACK C6) —
 // the same count as /v1/admin/usage, split by where it was spent.
 export type TrialSpendPerson = {

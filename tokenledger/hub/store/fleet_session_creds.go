@@ -41,6 +41,7 @@ CREATE INDEX IF NOT EXISTS fleet_session_creds_worker ON fleet_session_creds(wor
 type SessionCred struct {
 	ID          string     `json:"id"`
 	PrincipalID string     `json:"principal_id"`
+	Tenant      string     `json:"tenant,omitempty"`
 	WorkerID    string     `json:"worker_id"`
 	WorkerKey   string     `json:"worker_key,omitempty"`
 	FleetID     string     `json:"fleet_id,omitempty"`
@@ -68,28 +69,28 @@ func (s *Store) ensureFleetSessionCreds() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetSessionCredsSchema)); err != nil {
 		return fmt.Errorf("create fleet session pass table: %w", err)
 	}
-	return nil
+	return s.addColumn("fleet_session_creds", "tenant", "TEXT NOT NULL DEFAULT ''")
 }
 
 // AddSessionCred records a newly issued pass.
 func (s *Store) AddSessionCred(c SessionCred) error {
 	_, err := s.write.Exec(`INSERT INTO fleet_session_creds (id, principal_id, worker_id, worker_key, fleet_id,
-		machine, os_user, endpoint_id, providers, issued_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.ID, c.PrincipalID, c.WorkerID, c.WorkerKey, c.FleetID,
+		machine, os_user, endpoint_id, providers, issued_at, expires_at, tenant)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.ID, c.PrincipalID, c.WorkerID, c.WorkerKey, c.FleetID,
 		c.Machine, c.OSUser, c.EndpointID, strings.Join(c.Providers, ","),
-		c.IssuedAt.UTC().Format(sessRFC), c.ExpiresAt.UTC().Format(sessRFC))
+		c.IssuedAt.UTC().Format(sessRFC), c.ExpiresAt.UTC().Format(sessRFC), c.Tenant)
 	return err
 }
 
 const sessionCredCols = `id, principal_id, worker_id, worker_key, fleet_id, machine, os_user, endpoint_id,
-	providers, issued_at, expires_at, renewed_at, revoked_at, revoked_by, reason`
+	providers, issued_at, expires_at, renewed_at, revoked_at, revoked_by, reason, tenant`
 
 func scanSessionCred(sc interface{ Scan(...any) error }) (SessionCred, error) {
 	var c SessionCred
 	var providers, issued, expires string
 	var renewed, revoked sql.NullString
 	if err := sc.Scan(&c.ID, &c.PrincipalID, &c.WorkerID, &c.WorkerKey, &c.FleetID, &c.Machine, &c.OSUser,
-		&c.EndpointID, &providers, &issued, &expires, &renewed, &revoked, &c.RevokedBy, &c.Reason); err != nil {
+		&c.EndpointID, &providers, &issued, &expires, &renewed, &revoked, &c.RevokedBy, &c.Reason, &c.Tenant); err != nil {
 		return c, err
 	}
 	if providers != "" {
