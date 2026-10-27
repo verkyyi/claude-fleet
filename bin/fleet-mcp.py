@@ -888,6 +888,17 @@ def tool_spawn(args):
                   env=hub_env(ASSERT_TTL_S))
 
 
+def tool_schedule(args):
+    if args.get("repo"):
+        check_repo(args)
+    r = run([sys.executable, str(BIN / "fleet-schedule.py")],
+            input_text=json.dumps(args), check=False, timeout=WRITE_TIMEOUT_S,
+            env=hub_env(ASSERT_TTL_S))
+    if r.returncode:
+        raise ToolFault(r.stderr.strip() or "schedule request failed")
+    return json.loads(r.stdout)
+
+
 def tool_set_reap(args):
     """When the fleet may close THIS session on its own (issue #1902)."""
     # --by session (T694, 回收 B): a `keep` the session sets for itself lapses
@@ -1364,6 +1375,25 @@ TASK_REF = {"type": "string",
             "description": "A task by its code (K5H0 — the task tool's `id`), its full ID, or the old T<n>."}
 
 TOOLS = {
+    "schedule": (tool_schedule, {
+        "description": "Manage this user's recurring Tokenman tasks on THIS login: create/list/update/pause/resume/delete/run-now/runs. "
+                       "Reuse the existing node task scheduler. Default timezone Asia/Shanghai; explain the timezone and next run. "
+                       "Never choose another user's login. list returns stable ids and revisions; send revision on edits. "
+                       "Limits: 10 tasks, minimum hourly, 24 scheduled slots and 30 total starts/day, one running at a time. "
+                       "A pending registration is not yet scheduled. Results stay private; delivery may opt into the user's own WeChat/live page.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["create", "list", "update", "pause", "resume", "delete", "run-now", "runs"]},
+            "id": {"type": "string"}, "revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": {"type": "string", "description": "Reuse the same key when retrying the same write."},
+            "adopt": {"type": "string", "description": "create only: adopt a paused, finished existing CLI task by name; preserve its exact prompt, time and timezone. No duplicate registry entry."},
+            "name": {"type": "string", "maxLength": 120}, "prompt": {"type": "string", "maxLength": 16000},
+            "at": {"type": "string", "description": "Daily local HH:MM; mutually exclusive with cron."},
+            "cron": {"type": "string", "description": "Five cron fields; minimum one-hour interval."},
+            "timezone": {"type": "string", "description": "IANA zone, default Asia/Shanghai."},
+            "repo": dict(REPO, description="Optional owner/name of a repo this login hosts; omitted runs without a repository."),
+            "delivery": {"type": "object", "properties": {"wechat": {"type": "boolean"}, "livepage": {"type": "boolean"}}, "additionalProperties": False}},
+            "required": ["action"], "additionalProperties": False}}),
+
     "preview": (tool_preview, {
         "description": "A private live HTTP/WebSocket preview of this verified worker's own Task, opened by its owner after sign-in. "
                        "dev: run a dev server (npm run dev, next dev, vite, uvicorn …) in the background and preview it — "

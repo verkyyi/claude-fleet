@@ -46,7 +46,7 @@ var appPagePaths = map[string]bool{
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 	// the new console's own pages, with no old page behind them (EPIC #3923)
-	mePagePath: true, devicesPagePath: true, settingsPagePath: true, "/terminal": true,
+	"/schedules": true, mePagePath: true, devicesPagePath: true, settingsPagePath: true, "/terminal": true,
 }
 
 // appPagePrefixes are the console's pages that carry one name under them
@@ -148,6 +148,7 @@ type consolePage struct {
 
 // consolePages is every page the console moves (EPIC #3923 «逐页去向»).
 var consolePages = []consolePage{
+	{old: AppPrefix + "/schedules", new: AppPrefix + "/schedules", side: sideMe, owner: "T1121"},
 	// 我的 — the conversation is its front page, 我的 its own (C3)
 	{old: AppPrefix, new: AppPrefix, side: sideMe, owner: "C3"},
 	// the old conversation's bookmark opens 「我的对话」, the session it became

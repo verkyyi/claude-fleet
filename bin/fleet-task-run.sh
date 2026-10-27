@@ -34,6 +34,10 @@
 # FLEET_TASK_BARK_URL (https://api.day.app).
 set -uo pipefail
 
+if [ -n "${FLEET_MANAGED_SCHEDULE:-}" ]; then
+  exec python3 "$(dirname "$0")/fleet_schedule_run.py"
+fi
+
 say() { printf '%s fleet-task %s · %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${FLEET_SERVICE:-?}" "$*"; }
 
 if [ "${1:-}" = --notify ]; then

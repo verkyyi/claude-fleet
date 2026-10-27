@@ -842,3 +842,11 @@ cfg-restart counts and the idle reopen include them; `fleet-break-it-selftest.sh
 `bin/bash-guard-selftest.sh` «direct-script rail» — the old road (above): a worker
 seat logged / blocked, the operator seat and the hatch passing, the MCP road with
 the service, the fallback without it (logged `fallback`, never blocked).
+
+### Personal schedules
+
+`schedule` adds create/list/update/pause/resume/delete/run-now/runs without changing existing tool handlers. Node identity and an optional signed worker assertion scope requests to the login's owner. Web `/v1/schedules` requires a personal session, including for administrators; the shared operator token is not a person. All edits carry an idempotency key and expected revision. Create optionally takes `adopt` to reuse a paused legacy task with identical prompt/time/timezone.
+
+The hub persists desired definitions and retries installation through the existing node control channel (`schedule_v1`). The fixed supervisor command writes the same services registry, with revision fencing and deleted tombstones. Root lanes and the single-login non-root user pod are supported. Only `fleet-node-supervisor.py` computes due slots. The hub's admission transaction serializes owner limits across nodes; it is not another timer. Replayed admissions return the same attempt before checking capacity. Runtime usage checks and the existing credential proxy charge the owner.
+
+The managed runner commits launch intent and final results locally, adopts its exact attempt window, and uploads through the authenticated node path. An unconfirmed launch retains its reservation instead of spending again. Success requires an exact native transcript final and no active background work or Loop. Failures retain the daemon's retry/service_failed route. Final results and consent snapshots feed the existing durable notification outbox; private page publishing records its receipt before polling conversion/review. Ambiguous publication is shown as unconfirmed and is never blindly repeated. Finished run records expire after 30 days; an active reservation is never silently expired.

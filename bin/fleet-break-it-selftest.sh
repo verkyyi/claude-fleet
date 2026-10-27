@@ -5700,6 +5700,14 @@ drill_codex_resume_history() {
   SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
 }
 
+drill_schedule_self_service() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-schedule-selftest.py" 2>&1) \
+    || { WHY="schedule registry/policy: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='self-service registry is login-bound and revision-fenced; recurrence is bounded'
+}
+
 drill_history_rows_forks() {
   # The 看台's 已收起 reader rebuilds `fleet-history.sh rows` every minute. Per row
   # the old loop forked `date`, fleet_win_name's tr/sed or perl and the clip's perl

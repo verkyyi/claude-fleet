@@ -185,7 +185,10 @@ tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
 assert set(tools) == {"status", "repos", "agents",
                       "ask", "handoff", "pr_verdict", "pr_merge",
                       "brief", "context", "transfer", "where", "show", "open",
-                      "set_reap", "preview"}, sorted(tools)
+                      "set_reap", "preview", "schedule"}, sorted(tools)
+schema=tools["schedule"]["inputSchema"]
+assert not ({"login","owner","env","exec","credentials"} & set(schema["properties"]))
+assert set(schema["properties"]["action"]["enum"]) == {"create","list","update","pause","resume","delete","run-now","runs"}
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
@@ -291,7 +294,7 @@ ok "C status/repos/agents/spawn/send work; legacy children/await refuse without 
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 15, rows[1]
+assert len(rows[1]["tools"]) == 16, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
 assert rows[41]["isError"] and "RETIRED" in rows[41]["content"][0]["text"], rows[41]
 PY
@@ -1166,7 +1169,7 @@ for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 15 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task|clear' "$WORK/q.l0" \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 16 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task|clear' "$WORK/q.l0" \
   && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog clear send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
@@ -1204,7 +1207,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [20, 15, 20, 20], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four, + clear (T592)
+assert [len(x) for x in lists] == [21, 16, 21, 21], [len(x) for x in lists]   # + task (#3330), − #4904's four, − #4898's four, + clear (T592)
 assert "spawn" in {t["name"] for t in lists[0]}
 names = {t["name"] for t in lists[3]}
 assert {"spawn", "answer_dialog", "send", "task", "clear"} <= names, sorted(names)

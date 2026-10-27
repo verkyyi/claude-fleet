@@ -271,6 +271,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.serviceLogCapable() {
 		// A service's log, live (claude-fleet#2797).
 		caps = append(caps, control.CapServiceLog)
+		if a.cfg.ServiceCtl != "" {
+			caps = append(caps, "schedule_v1")
+		}
 	}
 	if a.cfg.FleetAdmin {
 		// Its create hands the join code to the script (claude-fleet#3032).
@@ -878,6 +881,9 @@ func (a *Agent) answerRequest(ctx context.Context, conn nodeLink, m control.Mess
 // that is not JSON — may have come after the controller committed the
 // operation, so it goes back as UNKNOWN_OUTCOME and the hub never re-sends it.
 func (a *Agent) answerWrite(ctx context.Context, conn nodeLink, m control.Message) {
+	if a.scheduleWrite(ctx, conn, m) {
+		return
+	}
 	if a.serviceControlWrite(ctx, conn, m) {
 		return // the register's own write (claude-fleet#2527), never the controller's
 	}

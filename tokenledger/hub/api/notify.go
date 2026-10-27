@@ -313,6 +313,10 @@ type reachOf struct {
 // deliverNotice sends one claimed notice, or puts it back for a retry, or
 // gives it up: every outcome audited.
 func (s *Server) deliverNotice(ctx context.Context, n store.Notice, now time.Time) {
+	if n.Kind == "schedule_page" {
+		s.schedulePageDelivery(ctx, n, now)
+		return
+	}
 	about := n.Kind + " " + strings.Join(n.Refs, ",")
 	finish := func(state, via, detail string) {
 		if err := s.Store.FinishNotice(n.ID, state, via, now); err != nil {
@@ -428,7 +432,7 @@ func (s *Server) wxTemplate(kind string) string {
 	switch kind {
 	case store.NotifyKindNewReq, store.NotifyKindUpgrade, store.NotifyKindQRBurst, store.NotifyKindPoolReauth, store.NotifyKindPoolBack:
 		return s.WxGW.TplNewReq
-	case store.NotifyKindNotice, store.NotifyKindTrialPurge:
+	case store.NotifyKindNotice, store.NotifyKindTrialPurge, "schedule_result":
 		return s.WxGW.TplNotice
 	}
 	return s.WxGW.TplReview
@@ -515,6 +519,31 @@ func (s *Server) noticeMsg(n store.Notice) (noticeMsg, bool, error) {
 	base := s.humanURL(nil)
 	rq := s.Store.Requests()
 	switch n.Kind {
+	case "schedule_result":
+		if len(n.Refs) == 0 {
+			return noticeMsg{}, false, nil
+		}
+		run, e := s.Store.ScheduleRun(n.Owner, n.Refs[0])
+		if e != nil {
+			return noticeMsg{}, false, e
+		}
+		row, e := s.Store.Schedule(n.Owner, run.ScheduleID)
+		if e != nil {
+			return noticeMsg{}, false, e
+		}
+		if row.Spec.Deleted || !row.Spec.Delivery.WeChat {
+			return noticeMsg{}, false, nil
+		}
+		body := row.Spec.Name + " · " + run.State + "\n" + clipText(run.Summary, 180)
+		if run.Error != "" {
+			body = row.Spec.Name + " · 运行失败\n" + clipText(run.Error, 180)
+		}
+		sn := &store.ServiceNotice{Body: body, Link: base + "/app/schedules?id=" + row.Spec.ID, CreatedAt: time.Unix(run.Ended, 0)}
+		fields := [][2]string{}
+		if s.WxGW != nil {
+			fields = s.noticeTplFields()
+		}
+		return serviceNoticeMsg(sn, en, base, fields), true, nil
 	case store.NotifyKindReview:
 		if len(n.Refs) == 0 {
 			return noticeMsg{}, false, nil

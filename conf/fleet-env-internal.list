@@ -689,6 +689,8 @@ FLEET_NODE_SUPERVISOR              seam: the supervisor fleet-service.sh hands t
 FLEET_SERVICE_LOGIN                seam: the login fleet-service.sh registers for (default `id -un`, #2525)
 FLEET_SERVICE_SUDO                 seam: how fleet-service.sh becomes root (default `sudo -n`; empty = run directly, #2525)
 FLEET_SERVICE                      handoff: the register entry's name, set by com.claude-fleet.node for a service / task it runs — fleet-task-run.sh names its log lines with it (#2525, #2529)
+FLEET_MANAGED_SCHEDULE             handoff: owner-scoped schedule definition frozen for the daemon attempt; no credentials (T1121)
+FLEET_MANAGED_SLOT                 handoff: the daemon occurrence epoch or authorized manual id for durable admission (T1121)
 FLEET_TASK_PROMPT                  handoff: an agent task's prompt ({date} filled), com.claude-fleet.node → fleet-task-run.sh (#2529)
 FLEET_TASK_WINDOW                  handoff: the session's window name for this attempt (-<n> on a retry), daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_DONE_FILE               handoff: done_when.file, the output a run must leave (empty = opening the session is success), daemon → fleet-task-run.sh (#2529)

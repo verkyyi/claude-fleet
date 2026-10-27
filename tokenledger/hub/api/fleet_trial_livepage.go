@@ -225,6 +225,9 @@ func (s *Server) livePageEnd(settings map[string]string, pid string, now time.Ti
 		return livePageExpired
 	}
 	if !s.trialIdentity(settings, pid) {
+		if s.scheduleMember(pid) && s.scheduleLivePageConsent(pid) {
+			return ""
+		}
 		return livePageConverted
 	}
 	return ""

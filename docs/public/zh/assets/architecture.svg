@@ -51,7 +51,7 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <rect class="chip" x="52" y="434" width="258" height="42" rx="10"/>
 <text x="68" y="463" class="">身份与访问</text>
 <rect class="chip" x="330" y="434" width="258" height="42" rx="10"/>
-<text x="346" y="463" class="">会话</text>
+<text x="346" y="463" class="">会话 · 定时任务</text>
 <rect class="chip" x="52" y="485" width="258" height="42" rx="10"/>
 <text x="68" y="514" class="">订阅池</text>
 <rect class="proxy" x="330" y="485" width="258" height="42" rx="10"/>
@@ -80,7 +80,7 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <rect class="native" x="52" y="952" width="536" height="70" rx="12"/>
 <text x="320" y="981" class="heading" text-anchor="middle">Claude Code / Codex</text>
 <text x="320" y="1008" class="small muted" text-anchor="middle">会话：原生 agent 原样运行</text>
-<text x="320" y="1058" class="muted" text-anchor="middle">节点代理 · 工作文件</text>
+<text x="320" y="1058" class="muted" text-anchor="middle">节点代理 · 任务时钟 · 工作文件</text>
 <text x="32" y="1125" class="heading">模型请求</text>
 <text x="608" y="1125" class="small muted" text-anchor="end">模型密钥永不进入会话</text>
 <rect class="card" x="32" y="1146" width="176" height="86" rx="14"/>

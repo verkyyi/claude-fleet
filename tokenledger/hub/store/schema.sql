@@ -772,3 +772,36 @@ CREATE TABLE IF NOT EXISTS subscription_capacity_revisions (
   actor TEXT NOT NULL,
   at TEXT NOT NULL
 );
+
+-- T1121: desired installation and query projection, not a scheduling clock.
+CREATE TABLE IF NOT EXISTS fleet_schedule_owners (owner TEXT PRIMARY KEY, revision BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS fleet_schedules (
+ id TEXT PRIMARY KEY, owner TEXT NOT NULL, endpoint TEXT NOT NULL DEFAULT '',
+ hostname TEXT NOT NULL DEFAULT '', login TEXT NOT NULL DEFAULT '',
+ revision BIGINT NOT NULL, spec TEXT NOT NULL, slots INTEGER NOT NULL,
+ deleted INTEGER NOT NULL DEFAULT 0, sync_state TEXT NOT NULL DEFAULT 'pending',
+ sync_note TEXT NOT NULL DEFAULT '', observed TEXT NOT NULL DEFAULT '{}',
+ last_install BIGINT NOT NULL DEFAULT 0,
+ updated BIGINT NOT NULL, created BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fleet_schedules_owner ON fleet_schedules(owner, deleted);
+CREATE TABLE IF NOT EXISTS fleet_schedule_changes (
+ owner TEXT NOT NULL, idem TEXT NOT NULL, request TEXT NOT NULL, schedule_id TEXT NOT NULL,
+ PRIMARY KEY(owner, idem)
+);
+CREATE TABLE IF NOT EXISTS fleet_schedule_runs (
+ id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, owner TEXT NOT NULL, endpoint TEXT NOT NULL,
+ revision BIGINT NOT NULL, slot TEXT NOT NULL, attempt INTEGER NOT NULL,
+ day TEXT NOT NULL, state TEXT NOT NULL, started BIGINT NOT NULL, ended BIGINT NOT NULL DEFAULT 0,
+ summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
+ delivery TEXT NOT NULL DEFAULT '{}', notified INTEGER NOT NULL DEFAULT 0, delivery_queued INTEGER NOT NULL DEFAULT 0,
+ UNIQUE(schedule_id, slot, attempt)
+);
+CREATE INDEX IF NOT EXISTS fleet_schedule_runs_owner ON fleet_schedule_runs(owner, day, state);
+CREATE INDEX IF NOT EXISTS fleet_schedule_runs_task ON fleet_schedule_runs(schedule_id, started);
+CREATE TABLE IF NOT EXISTS fleet_schedule_manual (
+ id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, owner TEXT NOT NULL, created BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_schedule_pages (
+ schedule_id TEXT PRIMARY KEY, owner TEXT NOT NULL, proposal_id TEXT NOT NULL, url TEXT NOT NULL
+);

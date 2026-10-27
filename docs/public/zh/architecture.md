@@ -19,6 +19,7 @@ Tokenman 是原生 AI 编程 agent 的运行时：Claude Code、Codex 等由模�
 ### 2 · 应用 Application · 中枢
 
 - **身份与访问** — 登录、成员、组织与角色。[深入了解](admin/access.md)。
+- **定时任务** — 中枢保存个人定义、限额与最终结果；既有节点 daemon 按时启动会话。[使用方法](member/usage.md#定时任务)。
 - **会话** — 启动、查找会话，把对话转发到运行它的节点。[深入了解](member/usage.md)。
 - **订阅池** — 在允许的范围内共享模型订阅，按人计量使用量。[深入了解](admin/accounts.md)。
 - **凭据代理** — 授权模型请求并选择可用订阅，不把订阅密钥交给会话。[深入了解](security.md)。

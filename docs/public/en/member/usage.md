@@ -233,3 +233,15 @@ login and their own Task; chat-only trials without Task identity cannot register
 
 
 See [Service health](health.md) for availability, first-reply latency and recent incidents.
+
+## Scheduled tasks
+
+Ask in a session: “Summarize my notes every day at 7.” The agent uses the `schedule` tool to register a task under your own login. The default timezone is Asia/Shanghai; specify an IANA timezone for local time elsewhere. A pending registration is not active until your runtime acknowledges it.
+
+Open **Me → Schedules**, or `/app/schedules`. Set a daily time or five-field cron, inspect last/next runs, status, the last log line and the final answer. Pause stops future runs; an active run continues. Run now works while paused and leaves the task paused. Edits use revision checks; refresh on a conflict.
+
+Each person may save 10 tasks, including paused tasks. The minimum interval is hourly, with 24 planned daily slots across enabled tasks, 30 daily starts including manual runs and retries, and one scheduled session running at a time. Runs use your own allowance and wait when it is exhausted. A run has a one-hour deadline and two retries five minutes apart. Offline recovery catches up only the latest occurrence within six hours. Missing daylight-saving times are skipped; repeated times run once.
+
+Final answers appear in the app with an unread notification; run history is retained for 30 days. Optionally send to your own WeChat or private live page. Link your WeChat first; opting into live pages provisions your personal account on first publication. Delivery has separate pending, failed and unconfirmed states. Opening a session or producing a tool log is not success. Existing service failure alerts remain in use; failure delivery follows the final retry.
+
+To adopt an existing CLI task without duplicating it, pause it and wait for its active run to finish. In the same login, ask the agent to create a schedule with `adopt` set to that task's name and the exact existing prompt, recurrence and timezone. This retains the registry entry, completion file and history. An active, mismatched or already adopted entry is refused.

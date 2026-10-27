@@ -2178,6 +2178,10 @@ def task_slot(sched, t, direction):
             continue
         for h, m in times:
             ts = datetime.datetime(d.year, d.month, d.day, h, m, tzinfo=tz).timestamp()
+            if sched.get("managed"):
+                actual = datetime.datetime.fromtimestamp(ts, tz)
+                if (actual.date(), actual.hour, actual.minute) != (d, h, m):
+                    continue  # nonexistent local time; overlap uses fold=0 once
             if (direction > 0 and ts > t) or (direction < 0 and ts <= t):
                 return ts, d.isoformat()
     return None, None
@@ -2236,7 +2240,7 @@ def task_fill(s, day):
     return (s or "").replace("{date}", day)
 
 
-def task_entry(paths, svc, ident, day, attempt, manual=None):
+def task_entry(paths, svc, ident, day, attempt, manual=None, slot_t=None):
     """One attempt of a task as a process of the daemon (service_entry's shape): the
     runner, demoted to the login, its output appended to the task's log. A `run
     --now` (manual: its HHMM) gets a window of its own, never the slot's."""
@@ -2254,6 +2258,12 @@ def task_entry(paths, svc, ident, day, attempt, manual=None):
              FLEET_TASK_PROMPT=task_fill(svc["prompt"], day), FLEET_TASK_WINDOW=win, FLEET_TASK_DONE_FILE=done,
              FLEET_TASK_TIMEOUT=str(svc.get("timeout") or 3600), FLEET_TASK_IDLE=str(svc.get("idle") or 600),
              FLEET_TASK_FLEET=svc.get("fleet") or "", FLEET_TASK_ATTEMPT=str(attempt), FLEET_TASK_SLOT=day)
+    if svc.get("managed_schedule"):
+        e["FLEET_MANAGED_SCHEDULE"] = json.dumps(svc["managed_schedule"])
+        e["FLEET_MANAGED_SLOT"] = str(manual) if manual else str(int(slot_t or 0))
+        import hashlib
+        win = "schedule-" + hashlib.sha256((svc["managed_schedule"]["id"] + ":" + e["FLEET_MANAGED_SLOT"] + ":" + str(attempt)).encode()).hexdigest()[:24]
+        e["FLEET_TASK_WINDOW"] = win
     lg = service_log(paths, login, name)
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-task-run.sh")
     return {"name": "task:%s/%s" % (login, name), "account": login, "service": name, "window": win,
@@ -3223,15 +3233,22 @@ class Supervisor(object):
                 self.reap_agent(key, ts, svc, t)
                 if key in self.agent_running:
                     continue
+            if svc.get("managed_schedule") and ts.get("managed_snapshot") and ts.get("state") in ("waiting", "interrupted"):
+                if t >= (ts.get("next_try") or 0):
+                    ident = account_ident(login)
+                    if ident is not None:
+                        self.start_agent(key, ts, ts["managed_snapshot"], ident, t)
+                continue  # settle the admitted attempt before consuming another request
             req = os.path.join(self.p.logins, login, "run", name)
             want = os.path.exists(req)
+            request = read_json(req, {}) if want else {}
             if want:
                 try:
                     os.remove(req)
                 except OSError:
                     pass
             ident = account_ident(login)
-            if svc.get("state", "enabled") != "enabled" or ident is None:
+            if (svc.get("state", "enabled") != "enabled" and not (want and svc.get("managed_schedule") and not svc["managed_schedule"].get("deleted"))) or ident is None:
                 if want:
                     self.log("task %s: run --now ignored — %s" % (key, "stopped" if ident else "no such login"))
                 continue
@@ -3243,13 +3260,15 @@ class Supervisor(object):
             if want:
                 # run --now: a slot of its own, today's date in the task's zone
                 at = datetime.datetime.fromtimestamp(clk, task_tz(svc["schedule"]) or None)
-                self.new_slot(ts, clk, at.date().isoformat(), at.strftime("%H%M"))
+                self.new_slot(ts, clk, at.date().isoformat(), request.get("run_id") or at.strftime("%H%M"))
             elif prev and prev > (ts.get("slot_t") or 0) \
                     and prev >= max(svc.get("added") or 0, svc.get("rescheduled") or 0) \
                     and clk - prev <= catchup:
                 self.new_slot(ts, prev, day, False)
             elif ts.get("state") == "interrupted":
                 pass                                  # the same attempt again: the runner adopts its window
+            elif ts.get("state") == "waiting" and t >= (ts.get("next_try") or 0):
+                pass
             elif ts.get("state") == "retrying" and t >= (ts.get("next_try") or 0):
                 ts["attempt"] = (ts.get("attempt") or 1) + 1
             else:
@@ -3264,11 +3283,15 @@ class Supervisor(object):
             self.dirty = True
 
     def new_slot(self, ts, slot_t, day, manual):
+        ts.pop("managed_snapshot", None)
         ts.update(slot_t=slot_t, slot=day, attempt=1, manual=manual, next_try=None)
         self.dirty = True
 
     def start_agent(self, key, ts, svc, ident, t):
-        ent = task_entry(self.p, svc, ident, ts["slot"], ts["attempt"], ts.get("manual") or None)
+        if svc.get("managed_schedule"):
+            ts.setdefault("managed_snapshot", svc)
+            svc = ts["managed_snapshot"]
+        ent = task_entry(self.p, svc, ident, ts["slot"], ts["attempt"], ts.get("manual") or None, ts.get("slot_t"))
         why = account_runnable(ent, self.seated)
         if not why and ent["creds"] and not self.seated:
             missing = service_creds(self.p, ent)[1]
@@ -3304,13 +3327,17 @@ class Supervisor(object):
                 pass
 
     def reap_agent(self, key, ts, svc, t, wait=False):
-        p, t0, _ = self.agent_running[key]
+        p, t0, running_svc = self.agent_running[key]
+        if running_svc.get("managed_schedule"):
+            svc = running_svc
         rc = p.poll()
         why = None
         if rc is None and t - t0 > (svc.get("timeout") or 3600) + 300:
             # the runner keeps its own deadline; this one is for a runner that hangs
             self.kill_agent(p)
             rc, why = p.poll(), "killed after %ds" % int(t - t0)
+            if svc.get("managed_schedule"):
+                rc = 75  # resume the same admitted run; never abandon its live session
         elif rc is None:
             if not wait:
                 return
@@ -3324,6 +3351,14 @@ class Supervisor(object):
 
     def end_agent(self, key, ts, svc, rc, t, why=None):
         login, name = key.split("/", 1)
+        if rc == 74 and svc.get("managed_schedule"):
+            ts.update(state="stopped", last_error="schedule changed before admission", next_try=None, pid=None)
+            self.dirty = True
+            return
+        if rc == 75 and svc.get("managed_schedule"):
+            ts.update(state="waiting", last_error="waiting for admission or result acknowledgement", next_try=t + 60, pid=None)
+            self.dirty = True
+            return
         if rc != 0 and not why:
             why = TASK_RC.get(rc, "exit %s" % rc)
         rec = {"slot": ts.get("slot"), "attempt": ts.get("attempt"), "manual": ts.get("manual"),
@@ -8621,6 +8656,9 @@ def service_cli(paths, rest):
         return 1
     d = service_dir(paths, login)
     f = os.path.join(d, name + ".json")
+    if (read_json(f, {}) or {}).get("managed_schedule"):
+        print("fleet-node-supervisor: managed schedule — use schedule in Tokenman", file=sys.stderr)
+        return 2
     if sub == "rm":
         if not os.path.exists(f):
             print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
@@ -8978,6 +9016,9 @@ def service_move(paths, login, name, to):
     if svc is None:
         print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
         return 1
+    if svc.get("managed_schedule"):
+        print("fleet-node-supervisor: managed schedule cannot move to another login", file=sys.stderr)
+        return 2
     why = service_check(svc, login, name)
     if why:
         print("fleet-node-supervisor: %s/%s is not a valid entry (%s) — fix or rm it" % (login, name, why),
@@ -9163,6 +9204,18 @@ def main(argv):
         return install_check(paths) if "--check" in rest else install(paths, make_seat="--seat" in rest, agent=agent)
     if cmd == "uninstall":
         return uninstall(paths)
+    if cmd == "schedule":
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fleet_schedule", os.path.join(os.path.dirname(__file__), "fleet_schedule.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        try:
+            rc = mod.command(sys.modules[__name__], paths, rest)
+            seat_share(paths)
+            return rc
+        except (ValueError, OSError) as e:
+            print("schedule: %s" % e, file=sys.stderr)
+            return 2
     if cmd == "service":
         rc = service_cli(paths, rest)
         try:
