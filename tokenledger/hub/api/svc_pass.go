@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,24 +19,22 @@ import (
 // the WeCom agent in kf-bot) calls Codex through the cluster credential proxy
 // with a pass bound to its OWN service principal — no svc-run Job per request.
 //
-//	POST /v1/svc/pass         pass:issue   {ttl_seconds?, kind?, providers?} → a pass
+//	POST /v1/svc/pass         pass:issue   {ttl_seconds?, kind?, providers?, tenant?} → a pass
 //	POST /v1/svc/pass/renew   pass:issue   {cred} → the same pass, a new exp
 //
 // The pass is a session pass like every other (fcp-h1 / fcp-h2, ≤
 // SessionCredTTL, a fleet_session_creds row), with
 //
 //	principal svc:<name> · worker_id svc-standing/<name> · machine svc-standing
-//	providers ["codex"] · svc <name> · no tenant, no run
+//	providers ["codex"] · svc <name> · optional tenant, no run
 //
 // Codex ONLY, by the owner's rule: inside the cluster the fleet's subscriptions
 // serve Codex; Claude keeps going through the Mac mini, never the cluster.
 // `providers` may be left out or be exactly ["codex"]; anything else is 400.
 //
-// Its usage is metered under svc:<name> with tenant "" (svcPassTenant: no
-// tenant signed in, and the worker id names no run) — a service run always has
-// a non-empty tenant, so "" is the standing pass's alone. The whole service's
-// ceiling (fleet.svc_budget.<name>) holds it at mint and at every resolve;
-// fleet.svc_tenant_budget.<name>, when set, caps its "" tenant like any other.
+// Its usage is metered under svc:<name> and the signed tenant (empty for
+// legacy callers). The whole service and effective tenant ceiling hold at
+// mint and every resolve. Named tenants must remain on the service allowlist.
 // The yield rule (fleet.svc.<name>.yield_pct) is applied at EVERY new Codex
 // request of a standing pass, not only its first: a service that never ends
 // would otherwise keep, forever, the account it was first bound to
@@ -64,6 +63,29 @@ const (
 // svcStandingProviders is what a standing pass may cover: Codex alone.
 var svcStandingProviders = []string{credvault.Codex}
 
+var svcTenantRE = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+func svcTenantsKey(principal string) string {
+	return "fleet.svc." + svcName(principal) + ".tenants"
+}
+
+// Empty is the legacy standing pass, independent of the named app allowlist.
+func (s *Server) svcTenantAllowed(principal, tenant string) (bool, error) {
+	if tenant == "" {
+		return true, nil
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return false, err
+	}
+	for _, allowed := range strings.Split(settings[svcTenantsKey(principal)], ",") {
+		if strings.TrimSpace(allowed) == tenant {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func svcStandingWorker(workerID string) bool {
 	return strings.HasPrefix(workerID, svcStandingWorkerPrefix)
 }
@@ -83,8 +105,9 @@ func (s *Server) handleSvcPassIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	p, prefix, _ := SvcCallerOf(r.Context())
+	tenant := ""
 	refuse := func(status int, code, msg string) {
-		s.svcAudit(p.ID, "svc.pass.issue", p.ID, "REFUSED", code+": "+msg, now)
+		s.svcAudit(p.ID, "svc.pass.issue", p.ID, "REFUSED", fmt.Sprintf("tenant=%q · %s: %s", tenant, code, msg), now)
 		svcRunError(w, status, code, msg)
 	}
 	if len(s.SessionCredKey) == 0 {
@@ -95,9 +118,24 @@ func (s *Server) handleSvcPassIssue(w http.ResponseWriter, r *http.Request) {
 		Providers  []string `json:"providers"`
 		TTLSeconds int      `json:"ttl_seconds"`
 		Kind       string   `json:"kind"`
+		Tenant     *string  `json:"tenant"`
 	}
 	if err := readOptionalJSON(r, &req); err != nil {
 		svcRunError(w, http.StatusBadRequest, "invalid_argument", "body: "+err.Error())
+		return
+	}
+	if req.Tenant != nil {
+		tenant = *req.Tenant
+		if !svcTenantRE.MatchString(tenant) {
+			refuse(http.StatusBadRequest, "invalid_argument", "tenant must match [a-z0-9-]{1,32}")
+			return
+		}
+	}
+	if allowed, err := s.svcTenantAllowed(p.ID, tenant); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if !allowed {
+		refuse(http.StatusForbidden, "tenant_not_allowed", "tenant is not allowed for this service")
 		return
 	}
 	for _, pr := range req.Providers {
@@ -126,7 +164,7 @@ func (s *Server) handleSvcPassIssue(w http.ResponseWriter, r *http.Request) {
 			s.noBindWhy(p.ID, "", credvault.Codex))
 		return
 	}
-	if st, over := s.svcBudgetRefusal(p.ID, "", s.budgetClock()); over {
+	if st, over := s.svcBudgetRefusal(p.ID, tenant, s.budgetClock()); over {
 		refuse(http.StatusTooManyRequests, st.ErrorCode, "this service is over its budget")
 		return
 	}
@@ -143,15 +181,15 @@ func (s *Server) handleSvcPassIssue(w http.ResponseWriter, r *http.Request) {
 	worker := svcStandingWorkerPrefix + p.Name
 	claims := sessionCredClaims{V: v, ID: "sc_" + hex.EncodeToString(rnd[:]), Principal: p.ID, WorkerID: worker,
 		Machine: svcStandingMachine, Providers: svcStandingProviders, Iat: iat.Unix(), Exp: iat.Add(ttl).Unix(),
-		Svc: p.Name}
+		Svc: p.Name, Tenant: tenant}
 	if err := s.Store.AddSessionCred(store.SessionCred{ID: claims.ID, PrincipalID: p.ID, WorkerID: worker,
-		WorkerKey: svcStandingTokenWord + prefix, Machine: svcStandingMachine, Providers: claims.Providers,
+		Tenant: tenant, WorkerKey: svcStandingTokenWord + prefix, Machine: svcStandingMachine, Providers: claims.Providers,
 		IssuedAt: iat, ExpiresAt: time.Unix(claims.Exp, 0)}); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.svcAudit(p.ID, "svc.pass.issue", p.ID, "ok", "pass "+claims.ID+" (codex) until "+
-		time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)+" · token "+prefix, now)
+		time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)+" · token "+prefix+fmt.Sprintf(" · tenant=%q", tenant), now)
 	writeJSON(w, http.StatusOK, sessionCredAnswer(s.signSessionPass(claims), claims))
 }
 
@@ -177,12 +215,17 @@ func (s *Server) handleSvcPassRenew(w http.ResponseWriter, r *http.Request) {
 		svcRunError(w, http.StatusBadRequest, "invalid_argument", "body must be {\"cred\": \"fcp-h1.…\" | \"fcp-h2.…\"}")
 		return
 	}
+	tenant := ""
 	refuse := func(status int, code, msg string) {
-		s.svcAudit(p.ID, "svc.pass.renew", p.ID, "REFUSED", code+": "+msg, now)
+		s.svcAudit(p.ID, "svc.pass.renew", p.ID, "REFUSED", fmt.Sprintf("tenant=%q · %s: %s", tenant, code, msg), now)
 		svcRunError(w, status, code, msg)
 	}
 	at := now
-	if pc, why := s.parseSessionPass(req.Cred, now); why == "expired" && pc != nil {
+	pc, why := s.parseSessionPass(req.Cred, now)
+	if pc != nil {
+		tenant = pc.Tenant
+	}
+	if why == "expired" && pc != nil {
 		at = time.Unix(pc.Exp-1, 0) // a lapsed pass is judged as of its last second (#2012)
 	}
 	v, c := s.verifySessionCred(req.Cred, "", "", true, at)
@@ -222,7 +265,7 @@ func (s *Server) handleSvcPassRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.svcAudit(p.ID, "svc.pass.renew", p.ID, "ok", "pass "+c.ID+optional(" (lapsed)", lapsed)+" until "+
-		time.Unix(nc.Exp, 0).UTC().Format(time.RFC3339), now)
+		time.Unix(nc.Exp, 0).UTC().Format(time.RFC3339)+fmt.Sprintf(" · tenant=%q", c.Tenant), now)
 	writeJSON(w, http.StatusOK, sessionCredAnswer(s.signSessionPass(nc), nc))
 }
 

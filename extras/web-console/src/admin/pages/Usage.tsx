@@ -35,11 +35,12 @@ import {
   type TrialSpend,
   type TrialSpendPerson,
   type UsageMachine,
+ type UsageService,
   type UsageModel,
 } from "../api";
 import { ago, t, type MsgKey } from "../i18n";
 
-const TABS = ["people", "sessions", "machines", "models", "trial"] as const;
+const TABS = ["people", "services", "sessions", "machines", "models", "trial"] as const;
 type Tab = (typeof TABS)[number];
 
 type Data = { usage: TeamUsage; ov: Overview | null; ses: FleetSessions | null };
@@ -223,6 +224,8 @@ function exportTab(tab: Tab, d: Data) {
       const o = ov.get(p.principal);
       return [p.principal, p.name, p.today, p.week, p.limit.limit_week ?? "", p.limit.used_week, p.limit.remaining_week ?? "", doingText(o), o?.sessions ?? 0, o?.running ?? 0];
     }));
+  } else if (tab === "services") {
+    csv("team-usage-services", ["principal", "tenant", "enabled", "24h", "7d", "limit_day", "limit_week"], (d.usage.services || []).map((s) => [s.principal, s.tenant, String(s.enabled), s.budget.used_day, s.budget.used_week, s.budget.limit_day, s.budget.limit_week]));
   } else if (tab === "sessions") {
     csv("team-sessions", ["key", "repo", "state", "machine", "person", "agent", "tokens_today", "started"], sessionRows(d).map((r) => [
       r.key, r.repo, r.state, r.machine, r.person, r.agent, r.tokens, r.born ? new Date(r.born * 1000).toISOString() : "",
@@ -290,7 +293,7 @@ export function UsagePage() {
 
   const tabs = (
     <Tabs value={tab} onValueChange={(v) => set({ tab: v === "people" ? null : v, open: null, who: null, day: null })}>
-      <TabsList>
+      <TabsList className="h-auto max-w-full flex-wrap">
         {TABS.map((k) => (
           <TabsTrigger key={k} value={k} className="px-3">
             {t(`usage.tab.${k}` as MsgKey)}
@@ -315,6 +318,14 @@ export function UsagePage() {
     ),
   };
 
+  if (tab === "services") {
+    return <AdminTablePage<UsageService>
+      key="services" {...common} lead={t("usage.services.lead")} kpis={() => []}
+      fetch={() => load().then((d) => d.usage.services || [])}
+      columns={serviceColumns} searchText={(r) => `${r.principal} ${r.tenant}`}
+      rowId={(r) => `${r.principal}/${r.tenant}`} emptyText={t("usage.services.empty")}
+    />;
+  }
   if (tab === "trial") {
     const shown = trial?.day || day || bjDay(-1);
     const go = (d: number) => set({ day: shiftDay(shown, d), open: null });
@@ -815,4 +826,15 @@ const modelColumns: ColumnDef<ModelRow, any>[] = [
 const modelFilters: Filter<ModelRow>[] = [
   { key: "claude", label: t("usage.filter.claude"), test: (m) => m.provider !== "codex" },
   { key: "codex", label: t("usage.filter.codex"), test: (m) => m.provider === "codex" },
+];
+
+
+const serviceColumns: ColumnDef<UsageService, any>[] = [
+  { accessorKey: "principal", header: () => t("usage.services.service") },
+  { accessorKey: "tenant", header: () => t("usage.services.app"), cell: ({ getValue }) => getValue() || t("usage.services.legacy") },
+  { id: "day", accessorFn: (r) => r.budget.used_day, header: () => t("usage.services.day"), cell: ({ getValue }) => num(getValue()) },
+  { id: "week", accessorFn: (r) => r.budget.used_week, header: () => t("usage.col.week"), cell: ({ getValue }) => num(getValue()) },
+  { id: "limit", header: () => t("usage.services.limit"), cell: ({ row: { original: r } }) => <span className={cn(r.budget.over && "text-destructive")}>{r.budget.limit_day ? fmtTokens(r.budget.limit_day) : "∞"} / {r.budget.limit_week ? fmtTokens(r.budget.limit_week) : "∞"}</span> },
+  { id: "serviceLimit", header: () => t("usage.services.whole"), cell: ({ row: { original: r } }) => <span className={cn(r.service_budget.over && "text-destructive")}>{r.service_budget.limit_day ? fmtTokens(r.service_budget.limit_day) : "∞"} / {r.service_budget.limit_week ? fmtTokens(r.service_budget.limit_week) : "∞"}</span> },
+  { id: "state", header: () => t("usage.services.passState"), cell: ({ row: { original: r } }) => !r.enabled ? t("usage.services.disabled") : r.budget.over || r.service_budget.over ? t("usage.usedUp") : t("usage.services.enabled") },
 ];

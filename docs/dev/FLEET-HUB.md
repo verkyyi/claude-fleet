@@ -2097,17 +2097,28 @@ request (`hub/api/svc_pass.go`).
   The pass's providers are fixed to `["codex"]`; a request naming claude is
   400, and the proxy refuses the pass on `/v1/proxy/anthropic/` (403).
 - **Mint.** `POST /v1/svc/pass` (scope `pass:issue`) `{ttl_seconds?, kind?,
-  providers?}` → `{cred, id, principal_id, worker_id, machine, providers,
+  providers?, tenant?}` → `{cred, id, principal_id, worker_id, machine, providers,
   issued_at, expires_at, renew_after}`. The pass is an ordinary session pass
   (fcp-h2 when the hub holds the relay signing key, else fcp-h1; `kind:
   "fcp-h1"` forces h1), life ≤ `SessionCredTTL` (4 h; `ttl_seconds` 300…14400),
   claims `principal svc:<name>` · `worker_id svc-standing/<name>` · `machine
-  svc-standing` · `svc <name>`, no tenant, no run. Refused: passes off (503
+  svc-standing` · `svc <name>`, optional `tenant`, no run. Refused: passes off (503
   `session_cred_off`), no `pass:issue` (403), no Codex subscription on the
   service's allowlist `fleet.cred_allow.user.svc:<name>` (403 `no_credential`),
   the service over `fleet.svc_budget.<name>` (429 `quota_exceeded`).
+- **One service identity, separate apps.** Reuse one service token across apps;
+  each app mints its own pass with `{"tenant":"app-a"}`. The optional tenant
+  must match `[a-z0-9-]{1,32}` (400 `invalid_argument` otherwise) and be in
+  `fleet.svc.<name>.tenants`, a comma-separated allowlist (403
+  `tenant_not_allowed` otherwise). The tenant is signed and stored on the
+  session credential row. Omitting `tenant` preserves the existing empty-tenant
+  behavior; an explicitly empty string is invalid. Removing an app from the
+  allowlist stops its new mints, renewals and every subsequent hub resolve,
+  including cached passes, like a disabled principal. Other apps and passes
+  with no tenant remain unaffected. Clear the allowlist to disable all named
+  apps; re-adding an app restores its otherwise-live passes.
 - **Keep it alive.** `POST /v1/svc/pass/renew {cred}` (same scope, the pass's
-  own principal) → the same pass with a new expiry, as a node's renew: once
+  own principal) → the same pass with its tenant preserved and a new expiry, as a node's renew: once
   past `renew_after` (80 % of its life); a pass that lapsed is still renewable
   for `SessionCredRenewGrace` (7 days). A renew refused 403 (revoked, past the
   grace) ⇒ mint a new one. Many replicas may each hold one; they share one
@@ -2120,10 +2131,20 @@ request (`hub/api/svc_pass.go`).
   refuses a new mint at the next call. A token rotation: mint with the new
   token, then revoke the old.
 - **Metered and held like a run.** The proxy reports each call with the pass;
-  the row is `svc:<name>` with tenant `""` (a run's tenant is never empty, so
-  `""` is the standing pass's alone in `GET /v1/svc/usage`). The resolve holds
-  it to `fleet.svc_budget.<name>` (`person_budget_exceeded`, not retried), and
-  `fleet.svc_tenant_budget.<name>`, when set, caps tenant `""` like any other.
+  the row is `svc:<name>` with the signed app tenant (or `""` when omitted).
+  `GET /v1/svc/usage` (scope `runs:read`) separates these tenants and reports
+  each one's effective budget. The admin's **Usage → Services / apps** tab
+  (`/admin/usage?tab=services`, `/v1/admin/usage` field `services`) shows the
+  same rolling 24-hour / 7-day usage and ceilings, including revoked apps with
+  recent usage and allowed apps with zero usage.
+  `fleet.svc_tenant_budget.<name>.<tenant> = "day=…,week=…"` replaces the
+  uniform `fleet.svc_tenant_budget.<name>` for that app. An empty setting
+  removes the override (falls back to the uniform ceiling); `day=0,week=0`
+  explicitly removes both app ceilings. The service-wide
+  `fleet.svc_budget.<name>` still caps all tenants combined. Both checks apply
+  at mint (429 `tenant_limit` / `quota_exceeded`) and every resolve
+  (`person_budget_exceeded`, not retried). Settings writes validate tenant
+  names, allowlists and budget values.
   The yield rule (`fleet.svc.<name>.yield_pct`, default 80) applies at EVERY
   new Codex request of a standing pass, not only its first bind — a run ends,
   a standing service does not, so it would otherwise keep a tight account for
@@ -2142,7 +2163,8 @@ request (`hub/api/svc_pass.go`).
   `chatgpt-account-id`. The hub for mint / renew is
   `http://ccquota-hub.new-deploy.svc.cluster.local` with `Authorization: Bearer
   fcs_…` (the service token stays in the service's own Secret).
-- **Audit.** `svc.pass.issue` · `svc.pass.renew` (ok · REFUSED with the code).
+- **Audit.** `svc.pass.issue` · `svc.pass.renew` (ok · REFUSED with the code)
+  include `tenant="<app>"` (empty for legacy passes).
   BREAK-IT `svc-standing-pass-escapes`.
 
 ## A service run's environment: one Job, then nothing (claude-fleet#4005)

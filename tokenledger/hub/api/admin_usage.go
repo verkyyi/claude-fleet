@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
@@ -27,6 +29,7 @@ type AdminUsagePerson struct {
 // the largest week first; and the same rows by model and by machine over the
 // week — so each sums to the people's weeks, never a second scan.
 type AdminUsage struct {
+	Services []AdminUsageService `json:"services"`
 	People   []AdminUsagePerson  `json:"people"`
 	Models   []MeUsageModel      `json:"models"`
 	Machines []AdminUsageMachine `json:"machines"`
@@ -135,6 +138,11 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		out.People = append(out.People, AdminUsagePerson{Principal: p.ID, Name: name, Today: cnt.Today, Week: cnt.Week, Limit: lim})
 	}
+	out.Services, err = s.adminSvcUsage(now)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	out.Models = meUsageModels(week)
 	for n, m := range byNode {
 		m.People = len(nodePeople[n])
@@ -160,4 +168,55 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request) {
 		out.Bedrock = b
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// AdminUsageService keeps service/app spend separate from people's totals.
+type AdminUsageService struct {
+	Principal     string         `json:"principal"`
+	Tenant        string         `json:"tenant"`
+	Enabled       bool           `json:"enabled"` // standing-pass access; run tenants retain their own contract
+	Budget        SvcBudgetState `json:"budget"`
+	ServiceBudget SvcBudgetState `json:"service_budget"`
+}
+
+func (s *Server) adminSvcUsage(now time.Time) ([]AdminUsageService, error) {
+	ps, err := s.Store.SvcPrincipals()
+	if err != nil {
+		return nil, err
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return nil, err
+	}
+	out := []AdminUsageService{}
+	for _, p := range ps {
+		rows, err := s.svcUsageRows(p.ID, now)
+		if err != nil {
+			return nil, err
+		}
+		tenants := map[string]bool{}
+		for _, r := range rows {
+			tenants[r.Tenant] = false
+		}
+		for _, t := range strings.Split(settings[svcTenantsKey(p.ID)], ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tenants[t] = true
+			}
+		}
+		whole, _ := svcBudgets(settings, p.ID)
+		service := svcBudgetState(p.ID, whole, rows, SvcErrQuotaExceeded, now)
+		for tenant, allowed := range tenants {
+			b := svcTenantBudget(settings, p.ID, tenant)
+			out = append(out, AdminUsageService{Principal: p.ID, Tenant: tenant,
+				Enabled: p.Enabled && (tenant == "" || allowed), ServiceBudget: service,
+				Budget: svcBudgetState(p.ID+" tenant "+tenant, b, svcRowsOf(rows, tenant), SvcErrTenantLimit, now)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Principal != out[j].Principal {
+			return out[i].Principal < out[j].Principal
+		}
+		return out[i].Tenant < out[j].Tenant
+	})
+	return out, nil
 }
