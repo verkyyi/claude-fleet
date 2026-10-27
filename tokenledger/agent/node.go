@@ -272,7 +272,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		// A service's log, live (claude-fleet#2797).
 		caps = append(caps, control.CapServiceLog)
 		if a.cfg.ServiceCtl != "" {
-			caps = append(caps, "schedule_v1")
+			caps = append(caps, "schedule_v1", "schedule_agent_v1")
 		}
 	}
 	if a.cfg.FleetAdmin {

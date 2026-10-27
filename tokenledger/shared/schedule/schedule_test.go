@@ -11,6 +11,15 @@ func TestRecurrencePolicy(t *testing.T) {
 	if n, e := Validate(s); e != nil || n != 1 {
 		t.Fatal(n, e)
 	}
+	for _, agent := range []string{"", "claude", "codex", "other", "Claude", "--agent=claude"} {
+		choice := s
+		choice.Agent = agent
+		_, e := Validate(choice)
+		valid := agent == "" || agent == "claude" || agent == "codex"
+		if (e == nil) != valid {
+			t.Fatalf("agent %q: %v", agent, e)
+		}
+	}
 	for _, cron := range []string{"* * * * *", "0,30 * * * *", "0 25 * * *", "0 * * 13 *", "0 * * * 8"} {
 		bad := s
 		bad.At = ""

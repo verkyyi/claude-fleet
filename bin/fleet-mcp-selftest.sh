@@ -187,6 +187,7 @@ assert set(tools) == {"status", "repos", "agents",
                       "brief", "context", "transfer", "where", "show", "open",
                       "set_reap", "preview", "schedule"}, sorted(tools)
 schema=tools["schedule"]["inputSchema"]
+assert schema["properties"]["agent"]["enum"] == ["", "claude", "codex"]
 assert not ({"login","owner","env","exec","credentials"} & set(schema["properties"]))
 assert set(schema["properties"]["action"]["enum"]) == {"create","list","update","pause","resume","delete","run-now","runs"}
 for t in tools.values():

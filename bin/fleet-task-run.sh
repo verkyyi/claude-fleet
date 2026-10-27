@@ -25,7 +25,7 @@
 #
 # The daemon hands it everything in the environment (fleet-node-supervisor.py
 # task_entry): FLEET_TASK_PROMPT · FLEET_TASK_WINDOW · FLEET_TASK_DONE_FILE ·
-# FLEET_TASK_TIMEOUT · FLEET_TASK_IDLE · FLEET_TASK_FLEET (else the login's only
+# FLEET_TASK_AGENT (empty = fleet default) · FLEET_TASK_TIMEOUT · FLEET_TASK_IDLE · FLEET_TASK_FLEET (else the login's only
 # fleet) · FLEET_TASK_ATTEMPT · FLEET_TASK_SLOT · FLEET_SERVICE (the task's name).
 #   --notify: the entry's Bark push instead — $FLEET_TASK_NOTIFY to the key held in
 #             the credential named by $FLEET_TASK_BARK_CRED (never printed).
@@ -88,7 +88,13 @@ wid=$(win_by_name "$W")
 if [ -n "$wid" ]; then
   say "adopted the open window $wid ($W) — not opening a second"
 else
-  out=$("$SPAWN" --no-repo --origin hub --reap-origin probe --reap "$REAP" --print --name "$W" --prompt "$P" "$SESS" 2>&1)
+  agent_args=()
+  case ${FLEET_TASK_AGENT:-} in
+    '') ;;
+    claude|codex) agent_args=(--agent "$FLEET_TASK_AGENT") ;;
+    *) say "invalid task agent"; exit 10 ;;
+  esac
+  out=$("$SPAWN" --no-repo --origin hub --reap-origin probe --reap "$REAP" --print --name "$W" --prompt "$P" ${agent_args[@]+"${agent_args[@]}"} "$SESS" 2>&1)
   rc=$?
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  spawn: /'
   [ "$rc" = 0 ] || { say "the session did not open (spawner exit $rc)"; exit 11; }

@@ -5700,6 +5700,14 @@ drill_codex_resume_history() {
   SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
 }
 
+drill_schedule_agent_selection() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-schedule-selftest.py" ScheduleTests.test_agent_registry_and_runner_environment RunnerTests 2>&1) \
+    || { WHY="scheduled agent selection: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='explicit Claude/Codex reaches the spawner; omitted agent keeps the fleet default'
+}
+
 drill_schedule_self_service() {
   CAP=30; local t0 out
   t0=$(now)

@@ -105,6 +105,61 @@ func TestScheduleCreateRejectsAdministrativeFields(t *testing.T) {
 	}
 }
 
+func TestScheduleAgentCreateUpdateAndDefault(t *testing.T) {
+	h := newFleetHarness(t)
+	request := func(body string, status int) store.Schedule {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.srv.scheduleRequest(w, httptest.NewRequest("POST", SchedulesPath, bytes.NewBufferString(body)), "alice", nil)
+		if w.Code != status {
+			t.Fatalf("%d: %s", w.Code, w.Body.String())
+		}
+		var response struct {
+			Schedule store.Schedule `json:"schedule"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &response)
+		return response.Schedule
+	}
+	row := request(`{"action":"create","idempotency_key":"agent-create","name":"Brief","prompt":"Summarize","at":"07:00","agent":"claude"}`, 200)
+	if row.Spec.Agent != "claude" {
+		t.Fatal(row.Spec)
+	}
+	for i, tt := range []struct{ field, want string }{
+		{`"name":"Renamed"`, "claude"},
+		{`"agent":"codex"`, "codex"},
+		{`"agent":""`, ""},
+	} {
+		row = request(fmt.Sprintf(`{"action":"update","id":"%s","revision":%d,"idempotency_key":"agent-edit-%d",%s}`, row.Spec.ID, row.Spec.Revision, i, tt.field), 200)
+		if row.Spec.Agent != tt.want {
+			t.Fatal(row.Spec)
+		}
+	}
+	request(fmt.Sprintf(`{"action":"update","id":"%s","revision":%d,"idempotency_key":"agent-bad","agent":"other"}`, row.Spec.ID, row.Spec.Revision), 400)
+	got, err := h.srv.Store.Schedule("alice", row.Spec.ID)
+	if err != nil || got.Spec.Revision != row.Spec.Revision {
+		t.Fatal(got, err)
+	}
+}
+
+func TestScheduleAgentWaitsForCapableNode(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	row := store.Schedule{Owner: pAlice, Endpoint: "schedule-node", Hostname: "mac-c", Login: "alice", Spec: schedule.Spec{Agent: "claude"}}
+	for _, capable := range []bool{false, true} {
+		conn := &nodeConn{canSchedule: true, canScheduleAgent: capable}
+		h.srv.nodes.put(row.Endpoint, conn)
+		_, err := h.srv.scheduleTarget(context.Background(), row)
+		if (err == nil) != capable {
+			t.Fatalf("capable %v: %v", capable, err)
+		}
+		legacy := row
+		legacy.Spec.Agent = ""
+		if _, err := h.srv.scheduleTarget(context.Background(), legacy); err != nil {
+			t.Fatal(err)
+		}
+		h.srv.nodes.drop(row.Endpoint, conn)
+	}
+}
+
 func TestScheduleRequestsRuntimeWithSignInPlacementOff(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
