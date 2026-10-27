@@ -46,7 +46,7 @@ var appPagePaths = map[string]bool{
 	"/admin/sessions": true, "/admin/overview": true, "/admin/devices": true, trainsPagePath: true,
 	"/signin": true, "/logout": true,
 	// the new console's own pages, with no old page behind them (EPIC #3923)
-	mePagePath: true, devicesPagePath: true, settingsPagePath: true, "/terminal": true,
+	"/schedules": true, mePagePath: true, devicesPagePath: true, settingsPagePath: true, "/terminal": true,
 }
 
 // appPagePrefixes are the console's pages that carry one name under them
