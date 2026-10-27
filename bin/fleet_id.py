@@ -936,7 +936,7 @@ def children_of(fid, live, idx=None):
         st = status(f, live, idx)
         rows.append(dict(st, title=o["opened"].get("title", ""), prev=o["opened"].get("prev", ""),
                          opened_at=o["opened"].get("ts")))
-    return sorted(rows, key=lambda r: r.get("opened_at") or 0)
+    return sorted(rows, key=lambda r: (r.get("opened_at") or 0, r.get("id") or ""))   # a tie: never the listing order
 
 
 class NoHub(Exception):
