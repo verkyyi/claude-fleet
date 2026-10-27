@@ -9768,6 +9768,16 @@ fleet_window_reeval() {
     *) return 1 ;;
   esac
   nw=$(fleet_window_wait "$sess" "$t" 2>/dev/null) || nw=''
+  # A native-probe agent (Codex) answers `bg` for a browser beneath an MCP service
+  # until its turn is proven settled; this window is idle, so ask with that proof
+  # (the reap form) before keeping it looping — never on a Stop, which is too early.
+  case ",$nw," in
+    *,bg,*) if [ "$(fleet_agent_get "$(fleet_agent_or_default \
+                 "$(_fleet_tmux "$sess" display-message -p -t "$t" '#{@cc_agent}' 2>/dev/null)" 2>/dev/null)" \
+                 bg_probe 2>/dev/null)" = native ] && ! fleet_window_bg_busy "$sess" "$t" '' 1; then
+              nw=$(printf '%s' ",$nw," | sed 's/,bg,/,/; s/^,//; s/,$//')
+            fi ;;
+  esac
   if [ -n "$nw" ]; then ns=looping; else ns='done'; fi
   [ "$ns" = "$st" ] && [ "$nw" = "$cw" ] && return 1
   printf '%s%s -> %s%s\n' "$st" "${cw:+ ($cw)}" "$ns" "${nw:+ ($nw)}"

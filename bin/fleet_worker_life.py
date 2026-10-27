@@ -263,7 +263,7 @@ def codex_busy_binding(w, source):
             data.get('remote'), process(source['pid']))
 
 
-def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None,rpc_timeout=5):
+def quiet_processes(source,config_home=None,background=None,strict=True,remounted=None,rpc_timeout=5,settled=False):
     # background=None is hibernation's contract: any unverified child vetoes.
     # A list collects those pids instead (still walking their descendants) —
     # failover's hard-wall grace passes one (#871), and so does child_busy (#864);
@@ -276,6 +276,9 @@ def quiet_processes(source,config_home=None,background=None,strict=True,remounte
     rows=TRANSFER['process_rows']()
     pending=[source['pid']]; seen=set()
     lenient={} if strict else {'strict':False}   # hibernation's call shape unchanged
+    # settled: the caller proved Codex natively idle (child_busy --reap), so an MCP
+    # service's whole tree is infrastructure (fleet_agent_mcp.classify).
+    if settled and not strict and source['agent']=='codex': lenient['settled']=True
     if remounted:
         # The continuation's proven remount (issue #4775, fleet_agent_mcp.classify);
         # strict only, and only Codex reports the services it names.
@@ -416,7 +419,7 @@ def child_busy(session,target,pid=0,reap=False):
         try:
             turn=codex_idle_turn(client,source)
             if not turn.get('id'):raise ValueError('no settled Codex turn identity')
-            quiet_processes(source,config_home,background=background,strict=False)
+            quiet_processes(source,config_home,background=background,strict=False,settled=True)
             # No cached idle or stale launch can waive the process gate. A turn
             # starting or a replacement session during classification vetoes.
             if codex_busy_binding(w,w.inspect())!=binding:

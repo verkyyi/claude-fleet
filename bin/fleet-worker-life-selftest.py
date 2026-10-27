@@ -322,10 +322,10 @@ class McpRestartTest(unittest.TestCase):
                     functions=frozenset(k for k,v in env.items() if v.startswith('() {')),
                     stdin_socket=pid in self.socket_stdin)
 
-    def shell_classify(self,env_reader=True,strict=True):
+    def shell_classify(self,env_reader=True,strict=True,settled=False):
         return LIB['MCP']['classify'](self.source,LIB['MCP']['inventory'](self.client),self.rows,1,
                                       lambda pid:self.argv[pid],lambda pid:self.exes[pid],strict=strict,
-                                      env_reader=self.env_reader if env_reader else None)
+                                      env_reader=self.env_reader if env_reader else None,settled=settled)
 
     def test_shell_exec_launcher_is_identified_from_the_started_environment(self):
         self.shell_exec_case()
@@ -366,6 +366,45 @@ class McpRestartTest(unittest.TestCase):
             self.assertEqual(self.shell_classify(strict=False),set())
             self.argv[2][1]=str(actual); actual.unlink()
             self.assertEqual(self.shell_classify(strict=False),set())
+
+    def test_shell_exec_reload_through_the_version_link_after_a_switch(self):
+        # A long session's fleet-mcp.py reloads into <root>/current/bin — after a
+        # release switch ANOTHER file than the (since deleted) release it was
+        # launched from. It is still that configured service, not background work.
+        self.shell_exec_case()
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td); new=root/('b'*40)/'bin'; new.mkdir(parents=True)
+            (new/'fleet-mcp.py').write_text('pass\n')
+            (root/'current').symlink_to(root/('b'*40), target_is_directory=True)
+            self.env['FLEET_MCP_BIN']=str(root/('a'*40)/'bin')   # the launch release, gone
+            self.argv[2][1]=str(root/'current'/'bin'/'fleet-mcp.py')
+            self.source={'agent':'codex'}
+            self.assertEqual(self.shell_classify(strict=False),{2})
+            # Only the link that names the live release, never another tree's copy.
+            other=root/'elsewhere'/'bin'; other.mkdir(parents=True); (other/'fleet-mcp.py').write_text('pass\n')
+            self.argv[2][1]=str(other/'fleet-mcp.py')
+            self.assertEqual(self.shell_classify(strict=False),set())
+            # Not a release tree: no alias at all.
+            self.env['FLEET_MCP_BIN']=str(root/'plain'/'bin')
+            self.argv[2][1]=str(root/'current'/'bin'/'fleet-mcp.py')
+            self.assertEqual(self.shell_classify(strict=False),set())
+
+    def test_settled_codex_owns_its_services_whole_tree(self):
+        # Proven idle (child_busy --reap): Playwright's browser beneath a service,
+        # or a service whose handshake failed, is not work. Unproven, both still are.
+        self.shell_exec_case()
+        with tempfile.TemporaryDirectory() as td:
+            actual=Path(td)/'fleet-mcp.py'; actual.write_text('pass\n')
+            self.env['FLEET_MCP_BIN']=td; self.argv[2][1]=str(actual)
+            self.rows.update({3:(2,'Google Chrome'),4:(3,'Google Chrome Helper')})
+            self.argv.update({3:['/Applications/Chrome'],4:['/Applications/Helper']})
+            self.exes.update({3:Path('/Applications/Chrome'),4:Path('/Applications/Helper')})
+            self.source={'agent':'codex'}
+            self.assertEqual(self.shell_classify(strict=False),{2})
+            self.assertEqual(self.shell_classify(strict=False,settled=True),{2,3,4})
+            self.status['data'][0].update(runtimeStatus=None,toolsError='MCP startup failed')
+            self.assertEqual(self.shell_classify(strict=False),set())
+            self.assertEqual(self.shell_classify(strict=False,settled=True),{2,3,4})
 
     def test_shell_exec_identity_is_not_a_restartability_contract(self):
         self.shell_exec_case()
