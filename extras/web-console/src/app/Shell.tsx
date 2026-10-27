@@ -14,7 +14,7 @@
 // (shadcn's collapsible="icon"), the choice kept in this browser.
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type FC, type ReactNode, type Ref } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronsUpDown, CircleUserRound, Eye, LogOut, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ChevronsUpDown, CircleUserRound, Layers, Eye, LogOut, ShieldCheck } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,7 +30,7 @@ import { Logo } from "@/shared/Logo";
 import { Wordmark } from "@/shared/Wordmark";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
-import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
+import { getJSON, isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
 import { LegacyMigrationNotice } from "./chat/legacy";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { backStep, phoneBar } from "./phone-screen";
@@ -124,6 +124,7 @@ const PersonMenu: FC = () => {
             {ME_TABS.filter((t) => t.id !== "account").map((t) => (
               <DropdownMenuItem key={t.id} onSelect={() => go(t.path)}><t.icon />{t.label}</DropdownMenuItem>
             ))}
+            <DropdownMenuItem onSelect={() => go("/schedules")}><Layers />{tr("定时任务", "Schedules")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => location.assign("/status")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
             {isAdmin(me) ? (
@@ -260,6 +261,23 @@ function useSideOpen(): [boolean, (o: boolean) => void] {
   return [open, save];
 }
 
+// One persistent in-app result notice, also available without external delivery.
+const ScheduleNotice: FC = () => {
+  const { pathname } = useLocation();
+  const [unread, setUnread] = useState<{ schedule_id: string; summary: string; error: string }[]>([]);
+  useEffect(() => {
+    let live = true;
+    const read = async () => { if (document.hidden) return; const r = await getJSON<{ unread: typeof unread }>("/v1/schedules"); if (live && r) setUnread(r.unread ?? []); };
+    void read(); const timer = setInterval(() => void read(), 30000);
+    return () => { live = false; clearInterval(timer); };
+  }, [pathname]);
+  if (!unread.length || pathname === "/schedules") return null;
+  return <Link role="status" to={`/schedules?id=${encodeURIComponent(unread[0].schedule_id)}`} className="border-b bg-muted px-4 py-2 text-sm no-underline">
+    <span className="font-medium">{tr("定时任务有新结果", "New schedule results")} ({unread.length})</span>
+    <span className="ml-2 line-clamp-2 break-words">{(unread[0].summary || unread[0].error).slice(0, 160)}</span>
+  </Link>;
+};
+
 // AppShell: the frame around every member page. The page fills the space
 // between the bars; a page that scrolls scrolls inside <main>.
 export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: () => void }> = ({ children, quotaKey, bumpQuota }) => {
@@ -281,6 +299,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
           <TopBar title={title} />
           <NetBarOf />
           <LegacyMigrationNotice />
+          <ScheduleNotice />
           <TrialBar trial={trial} onAsked={setTrial} />
           <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>

@@ -126,6 +126,13 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 // person at their sign-in, the operator mapping them). It returns the login
 // it moved off an old identity (claude-fleet#2094), nil when none moved.
 func (s *Server) placePrincipal(principal, displayName, actor string) *store.RekeyResult {
+	return s.placePrincipalRuntime(principal, displayName, actor, false)
+}
+
+// A saved schedule is an explicit request for a personal runtime. Full members
+// use the existing account/spare provisioner even when sign-in auto-assign is off.
+// Trial claims and existing logins keep their original gates.
+func (s *Server) placePrincipalRuntime(principal, displayName, actor string, scheduled bool) *store.RekeyResult {
 	if !s.Fleet {
 		return nil
 	}
@@ -156,7 +163,7 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		return nil
 	}
 	hosts := s.autoAssign()
-	if len(hosts) == 0 && s.invitedPrincipal(principal) {
+	if len(hosts) == 0 && (s.invitedPrincipal(principal) || scheduled && s.scheduleMember(principal)) {
 		// Came in on an invite (claude-fleet#2261): their login is opened
 		// whatever fleet.auto_assign says — on the least-busy machine when
 		// the setting names none.

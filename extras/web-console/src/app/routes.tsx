@@ -97,6 +97,7 @@ export type PageDef = {
 };
 
 export const PAGES: PageDef[] = [
+  { id: "schedules", path: "/schedules", label: tr("定时任务", "Schedules"), icon: Gauge, page: lazy(() => import("./pages/schedules")) },
   { id: "health", path: "/health", label: tr("服务健康", "Service health"), icon: Gauge, page: lazy(() => import("./pages/health")) },
   { id: "home", path: "/", label: tr("会话", "Sessions"), icon: Layers, page: Home },
   { id: "chat", path: "/chat", label: tr("我的对话", "My chat"), icon: MessageCircle, page: ChatRoute },

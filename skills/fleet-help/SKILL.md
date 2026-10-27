@@ -44,6 +44,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | former client keys (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …), their current replacements or optional extras | `docs/dev/CLIENT.md` § 「One key + the panel」 · `docs/public/zh/member/usage.md` § 「一个键：总面板」 |
 | the phone's keys (F12 · ⌃] p, the letters you can add), tapping them in Termius or Blink | `docs/dev/CLIENT.md` § 「The keys: one, to open the panel」 · `docs/dev/CLIENT.md` § 「Termius (iPhone)」 |
 | private live development preview, HTTP/API/WebSocket/HMR, preview renew/close | `docs/dev/PRIVATE-PREVIEWS.md` § 「使用与范围」 · `docs/dev/PRIVATE-PREVIEWS.md` § 「最小应用」 |
+| recurring tasks, schedules, pause, run now, delivery and CLI adoption | `docs/public/zh/member/usage.md` § 「定时任务」 · `docs/public/en/member/usage.md` § 「Scheduled tasks」 |
 | public service status (no sign-in), first-reply speed, recent incidents | `docs/public/zh/member/health.md` § 「打开健康页」 · `docs/public/en/member/health.md` § 「Open the health page」 |
 | a new session | `docs/public/zh/member/usage.md` § 「开一个会话」 · `docs/dev/CLIENT.md` § 「A new session in one command」 |
 | 派一件事 / hand a task to a worker | `docs/public/zh/member/usage.md` § 「开一个会话」 (⚡ opens the 「新会话」 box — 仓库 · Agent · 开, already chosen, ↵ opens; the person then says the task in the session) |

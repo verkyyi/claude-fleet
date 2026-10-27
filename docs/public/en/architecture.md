@@ -19,6 +19,7 @@ Clients connect to the hub through an encrypted entry.
 ### 2 · Application · the hub
 
 - **Identity and access** — Sign-in, people, organizations and roles. [Learn more](admin/access.md).
+- **Scheduled tasks** — Personal definitions, quotas and final results live at the hub; the existing node daemon opens sessions on schedule. [Usage](member/usage.md#scheduled-tasks).
 - **Sessions** — Start, find and relay conversations to the node that runs them. [Learn more](member/usage.md).
 - **Subscription pools** — Share model subscriptions within their permitted scope and meter each person's usage. [Learn more](admin/accounts.md).
 - **Credential proxy** — Authorize model requests and select an eligible subscription without giving its key to a session. [Learn more](security.md).

@@ -5,7 +5,7 @@
 // tab is a place, not a step: switching replaces the address, so 返回 leaves
 // 我的 for the screen before it.
 import { Suspense } from "react";
-import { Navigate, useNavigate, useParams } from "react-router";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
@@ -23,6 +23,7 @@ export default function MePage() {
         <TabsList className="grid w-full grid-cols-4 max-sm:group-data-[orientation=horizontal]/tabs:h-[50px] sm:inline-flex sm:w-auto" aria-label={tr("我的", "Me")}>
           {ME_TABS.map((t) => <TabsTrigger key={t.id} value={t.id} className="px-2 max-sm:h-11"><t.icon />{t.label}</TabsTrigger>)}
         </TabsList>
+        <Link to="/schedules" className="mt-3 block text-sm underline">{tr("定时任务", "Schedules")}</Link>
       </div>
       <TabsContent value={cur.id}>
         <Suspense fallback={null}><Page /></Suspense>

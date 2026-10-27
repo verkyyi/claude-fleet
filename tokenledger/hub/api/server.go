@@ -737,6 +737,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/progress", s.handleNodeProgress)
 		// The task record's node road (claude-fleet#3330): a coordinator's
 		// record, a question or a park on one, an EPIC member's.
+		mux.HandleFunc(NodeSchedulesPath, s.handleNodeSchedules)
+		mux.HandleFunc(NodeSchedulesPath+"/", s.handleNodeSchedules)
+		mux.Handle(SchedulesPath, s.viewerOnly(http.HandlerFunc(s.handleSchedules)))
 		mux.HandleFunc(NodeTasksPath, s.handleNodeTasks)
 		mux.HandleFunc(NodeTasksPath+"/", s.handleNodeTasks)
 		// The hub's mirror of every window's ID (EPIC T497 C2).
